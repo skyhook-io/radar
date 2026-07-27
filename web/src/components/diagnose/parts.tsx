@@ -295,9 +295,11 @@ export function AgentControls({
               />
               {shownProfile === "safeguarded" ? (
                 <p className="mt-1.5 text-[11px] leading-snug text-theme-text-tertiary">
-                  {isCodex
-                    ? "Radar excludes your Codex configuration and other MCP servers. Codex’s sandboxed shell can still read files on this machine; it cannot write or reach the network."
-                    : "Radar uses this agent’s safeguarded execution profile. Review the agent’s documented restrictions before continuing."}
+                  {isClaude
+                    ? "Claude’s built-in tools are disabled, and MCP access is limited to Radar’s read-only investigation tools. Your Claude settings, hooks, and CLAUDE.md instructions still apply and are outside Radar’s control."
+                    : isCodex
+                      ? "Radar excludes your Codex configuration and other MCP servers. Codex’s sandboxed shell can still read files on this machine; it cannot write or reach the network."
+                      : "Radar uses this agent’s safeguarded execution profile. Review the agent’s documented restrictions before continuing."}
                 </p>
               ) : (
                 <div className="mt-1.5 flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-[11px] leading-snug text-theme-text-secondary">
@@ -306,10 +308,11 @@ export function AgentControls({
                     Uses your agent&apos;s normal configuration and other
                     configured tools and MCP servers. Radar cannot constrain that
                     external tooling; it may access local files or the network
-                    and may be able to change your cluster. Radar still enables
-                    the agent CLI&apos;s own sandbox, but that sandbox does not
-                    constrain external MCP servers. Choose this only when you
-                    need that setup.
+                    and may be able to change your cluster.{" "}
+                    {isClaude
+                      ? "Claude uses the permissions from your setup; Radar does not override them."
+                      : "Radar still enables the agent CLI’s own sandbox, but that sandbox does not constrain external MCP servers."}{" "}
+                    Choose this only when you need that setup.
                   </span>
                 </div>
               )}
@@ -808,17 +811,24 @@ export function ConsentCard({
                 MCP servers. They may access local files or the network and may
                 be able to change your cluster.
               </>,
-              <>
-                Radar still enables the agent CLI&apos;s own sandbox, but that
-                sandbox does not constrain external MCP servers.
-                {agent === "cursor-agent" && (
-                  <>
-                    {" "}
-                    Cursor always loads your global MCP servers; Radar cannot
-                    exclude them.
-                  </>
-                )}
-              </>,
+              agent === "claude" ? (
+                <>
+                  Claude uses the permissions from your setup; Radar does not
+                  override them.
+                </>
+              ) : (
+                <>
+                  Radar still enables the agent CLI&apos;s own sandbox, but that
+                  sandbox does not constrain external MCP servers.
+                  {agent === "cursor-agent" && (
+                    <>
+                      {" "}
+                      Cursor always loads your global MCP servers; Radar cannot
+                      exclude them.
+                    </>
+                  )}
+                </>
+              ),
             ]
       }
     />

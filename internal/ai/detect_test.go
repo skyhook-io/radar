@@ -7,7 +7,7 @@ func TestExecutionProfiles(t *testing.T) {
 		agent string
 		want  []ExecutionProfile
 	}{
-		{"claude", []ExecutionProfile{ExecutionProfileSafeguarded}},
+		{"claude", []ExecutionProfile{ExecutionProfileSafeguarded, ExecutionProfileFullLocal}},
 		{"codex", []ExecutionProfile{ExecutionProfileSafeguarded, ExecutionProfileFullLocal}},
 		{"cursor-agent", []ExecutionProfile{ExecutionProfileFullLocal}},
 		{"gemini", nil},
@@ -24,8 +24,8 @@ func TestExecutionProfiles(t *testing.T) {
 			}
 		}
 	}
-	if SupportsProfile("claude", ExecutionProfileFullLocal) {
-		t.Error("Claude must not advertise full-local until it has an intentional implementation")
+	if !SupportsProfile("claude", ExecutionProfileFullLocal) {
+		t.Error("Claude must advertise its intentional full-local implementation")
 	}
 }
 
@@ -44,10 +44,10 @@ func TestConsentSurfacesMatchTheExactAgentProfile(t *testing.T) {
 		want    string
 	}{
 		{"claude", ExecutionProfileSafeguarded, "claude:safeguarded"},
+		{"claude", ExecutionProfileFullLocal, "claude:full-local"},
 		{"codex", ExecutionProfileSafeguarded, "codex:safeguarded"},
 		{"codex", ExecutionProfileFullLocal, "codex:full-local"},
 		{"cursor-agent", ExecutionProfileFullLocal, "cursor-agent:full-local"},
-		{"claude", ExecutionProfileFullLocal, ""},
 	}
 	for _, c := range cases {
 		if got := ConsentSurfaceFor(c.agent, c.profile); got != c.want {

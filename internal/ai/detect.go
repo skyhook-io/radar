@@ -65,7 +65,7 @@ func EffectiveAgent(pick string, agents []AgentInfo) string {
 func ProfilesFor(agent string) []ExecutionProfile {
 	switch agent {
 	case "claude":
-		return []ExecutionProfile{ExecutionProfileSafeguarded}
+		return []ExecutionProfile{ExecutionProfileSafeguarded, ExecutionProfileFullLocal}
 	case "codex":
 		return []ExecutionProfile{ExecutionProfileSafeguarded, ExecutionProfileFullLocal}
 	case "cursor-agent":

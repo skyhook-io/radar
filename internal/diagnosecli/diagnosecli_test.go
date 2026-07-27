@@ -123,7 +123,7 @@ func TestExecutionProfile(t *testing.T) {
 	}{
 		{"codex", "", "safeguarded", false},
 		{"codex", "full-local", "full-local", false},
-		{"claude", "full-local", "", true},
+		{"claude", "full-local", "full-local", false},
 		{"cursor-agent", "", "full-local", false},
 		{"", "", "", true},
 	}

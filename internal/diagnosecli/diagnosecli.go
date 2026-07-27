@@ -358,9 +358,15 @@ history until cleared.
 		notice += fmt.Sprintf(`Your %s setup uses its normal configuration and other configured
 tools and MCP servers. Radar cannot constrain that external tooling; it may
 access local files or the network and may be able to change your cluster.
-Radar still enables the agent CLI's own sandbox, but that sandbox does not
-constrain external MCP servers.
 `, agentLabel)
+		if agent == "claude" {
+			notice += `Claude uses the permissions from your setup; Radar does not override them.
+`
+		} else {
+			notice += `Radar still enables the agent CLI's own sandbox, but that sandbox does not
+constrain external MCP servers.
+`
+		}
 		if agent == "cursor-agent" {
 			notice += `Cursor always loads your global MCP servers; Radar cannot exclude them.
 `
