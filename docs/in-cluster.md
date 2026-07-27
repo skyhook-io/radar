@@ -66,6 +66,27 @@ external health checks or scrapers that hit `/api/health` or `/metrics` directly
 supported together with Radar Cloud (`--cloud-url`), where the Hub owns the URL
 path.
 
+**Every URL you hand to an external system must include the prefix.** With OIDC
+that means the values you register with your identity provider:
+
+```yaml
+basePath: /radar
+auth:
+  oidc:
+    redirectURL: https://tools.your-domain.com/radar/auth/callback           # not /auth/callback
+    postLogoutRedirectURL: https://tools.your-domain.com/radar/              # not /
+```
+
+Radar's callback route lives at `{basePath}/auth/callback`, so a redirect URL
+without the prefix sends the IdP to a path the ingress doesn't route to Radar and
+login ends in a 404.
+
+**Two Radar instances behind subpaths on the same host share browser state.**
+Cookies are set at `Path=/` and `localStorage` is scoped per origin, not per path,
+so `/radar-a` and `/radar-b` on one hostname will share the session cookie and UI
+preferences (and the session cookie is also sent to unrelated apps on that
+hostname). Give each instance its own hostname if you need them isolated.
+
 ### With Basic Authentication
 
 1. **Create the auth secret:**

@@ -539,8 +539,10 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[oidc] User %s authenticated (groups: %v)", username, groups)
 
-	// Redirect to app
-	http.Redirect(w, r, "/", http.StatusFound)
+	// Redirect to the app root under its base path. A bare "/" would leave the
+	// user outside Radar on a subpath deployment, where the ingress routes only
+	// the prefix to this service.
+	http.Redirect(w, r, h.cfg.BasePath+"/", http.StatusFound)
 }
 
 // sessionIssued reports whether a CreateSessionCookie result actually

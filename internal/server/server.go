@@ -171,6 +171,9 @@ func New(cfg Config) *Server {
 	if err != nil {
 		log.Fatalf("Invalid base path %q: %v", cfg.BasePath, err)
 	}
+	// The OIDC handler redirects into the app after login, so it needs to know
+	// where the app lives. Set before NewOIDCHandler reads the config below.
+	cfg.AuthConfig.BasePath = basePath
 
 	s := &Server{
 		router:                chi.NewRouter(),
@@ -875,14 +878,45 @@ func serveFrontendIndex(w http.ResponseWriter, r *http.Request, fsys http.FileSy
 	http.ServeContent(w, r, "index.html", stat.ModTime(), bytes.NewReader(body))
 }
 
-func rewriteFrontendIndex(body []byte, basePath string) []byte {
-	html := string(body)
-	if basePath != "" {
-		html = strings.ReplaceAll(html, `href="/`, `href="`+basePath+`/`)
-		html = strings.ReplaceAll(html, `src="/`, `src="`+basePath+`/`)
+// prefixAttrPaths re-roots the href/src URLs of the served index.html under
+// basePath, turning both root-absolute ("/x") and Vite's relative ("./x") forms
+// into "{basePath}/x" — the latter matters at the root too, where basePath is
+// empty and "./x" must still become "/x" so deep client routes resolve assets.
+//
+// Protocol-relative URLs ("//cdn.example.com/x") are deliberately skipped: they
+// address another origin, and prefixing one would silently turn it into a local
+// path that 404s. Scheme-qualified URLs never match, since the character after
+// the quote isn't a slash.
+func prefixAttrPaths(html, basePath string) string {
+	for _, attr := range []string{`href="`, `src="`} {
+		var out strings.Builder
+		rest := html
+		for {
+			i := strings.Index(rest, attr)
+			if i < 0 {
+				out.WriteString(rest)
+				break
+			}
+			out.WriteString(rest[:i+len(attr)])
+			rest = rest[i+len(attr):]
+			switch {
+			case strings.HasPrefix(rest, "//"):
+				// another origin — leave untouched
+			case strings.HasPrefix(rest, "./"):
+				out.WriteString(basePath + "/")
+				rest = rest[len("./"):]
+			case strings.HasPrefix(rest, "/"):
+				out.WriteString(basePath + "/")
+				rest = rest[len("/"):]
+			}
+		}
+		html = out.String()
 	}
-	html = strings.ReplaceAll(html, `href="./`, `href="`+basePath+`/`)
-	html = strings.ReplaceAll(html, `src="./`, `src="`+basePath+`/`)
+	return html
+}
+
+func rewriteFrontendIndex(body []byte, basePath string) []byte {
+	html := prefixAttrPaths(string(body), basePath)
 	if basePath == "" {
 		return []byte(html)
 	}
