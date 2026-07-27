@@ -167,7 +167,7 @@ Flags:
 		// watching a cluster connect for 30 seconds. No server exists yet, so
 		// read/write the shared machine-scoped store (~/.radar/config.json)
 		// directly — the ephemeral server then sees it as already given.
-		effective := ai.EffectiveAgent(o.agent, ai.DetectAgents(context.Background(), false))
+		effective := standaloneEffectiveAgent(context.Background(), o.agent)
 		profile, err := executionProfile(effective, o.profile)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -326,6 +326,14 @@ func consentLabel(effective string) string {
 		return "your agent CLI"
 	}
 	return ai.AgentLabel(effective)
+}
+
+func standaloneEffectiveAgent(ctx context.Context, requested string) string {
+	diagnoser, err := ai.NewDetected(ctx)
+	if err != nil {
+		return ""
+	}
+	return diagnoser.AgentName(requested)
 }
 
 func executionProfile(agent, requested string) (ai.ExecutionProfile, error) {

@@ -1,7 +1,9 @@
 package diagnosecli
 
 import (
+	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -138,5 +140,20 @@ func TestExecutionProfile(t *testing.T) {
 		if err != nil || string(got) != tc.want {
 			t.Errorf("executionProfile(%q, %q) = %q, %v; want %q", tc.agent, tc.requested, got, err, tc.want)
 		}
+	}
+}
+
+func TestStandaloneEffectiveAgentHonorsCLIOverride(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "cursor-agent-custom")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RADAR_AI_CLI_BIN", bin)
+
+	if got := standaloneEffectiveAgent(context.Background(), ""); got != "cursor-agent" {
+		t.Fatalf("standaloneEffectiveAgent() = %q, want cursor-agent", got)
+	}
+	if got := standaloneEffectiveAgent(context.Background(), "codex"); got != "cursor-agent" {
+		t.Fatalf("unsupported explicit pick should fall back to the override, got %q", got)
 	}
 }
