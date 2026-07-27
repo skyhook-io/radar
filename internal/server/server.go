@@ -984,6 +984,12 @@ func (s *Server) ActualPort() int {
 	return s.port
 }
 
+// BasePath returns the normalized URL prefix the server mounted under, or ""
+// when it serves from the root.
+func (s *Server) BasePath() string {
+	return s.basePath
+}
+
 // ActualAddr returns the address the server is listening on (e.g. "localhost:9280").
 func (s *Server) ActualAddr() string {
 	return fmt.Sprintf("localhost:%d", s.ActualPort())

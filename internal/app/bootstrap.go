@@ -455,8 +455,11 @@ var mcpPortFileDisabled bool
 func DisableMCPPortFile() { mcpPortFileDisabled = true }
 
 // WriteMCPPortFile writes the actual server port to ~/.radar/mcp-port so MCP
-// clients can discover the running instance without hardcoding a port.
-func WriteMCPPortFile(port int) {
+// clients can discover the running instance without hardcoding a port. A
+// non-empty basePath is written as a second line: the routes it identifies sit
+// under that prefix, so the port alone is not enough to reach them. The port
+// stays on the first line so a port-only reader keeps working.
+func WriteMCPPortFile(port int, basePath string) {
 	path := mcpPortFilePath()
 	if path == "" || mcpPortFileDisabled {
 		return
@@ -465,7 +468,11 @@ func WriteMCPPortFile(port int) {
 		log.Printf("[mcp] Failed to create directory for port file: %v", err)
 		return
 	}
-	if err := os.WriteFile(path, fmt.Appendf(nil, "%d\n", port), 0o644); err != nil {
+	contents := fmt.Appendf(nil, "%d\n", port)
+	if basePath != "" {
+		contents = fmt.Appendf(contents, "%s\n", basePath)
+	}
+	if err := os.WriteFile(path, contents, 0o644); err != nil {
 		log.Printf("[mcp] Failed to write port file: %v", err)
 		return
 	}

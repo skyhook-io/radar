@@ -157,3 +157,36 @@ func TestStandaloneEffectiveAgentHonorsCLIOverride(t *testing.T) {
 		t.Fatalf("unsupported explicit pick should fall back to the override, got %q", got)
 	}
 }
+
+func TestResolveServerReadsBasePathFromDiscoveryFile(t *testing.T) {
+	tests := []struct {
+		name     string
+		contents string
+		want     string
+	}{
+		{name: "port only (older instance)", contents: "9280\n", want: "http://localhost:9280"},
+		{name: "port and base path", contents: "9280\n/radar\n", want: "http://localhost:9280/radar"},
+		{name: "nested base path", contents: "9280\n/tools/radar\n", want: "http://localhost:9280/tools/radar"},
+		{name: "trailing slash trimmed", contents: "9280\n/radar/\n", want: "http://localhost:9280/radar"},
+		{name: "no trailing newline", contents: "9280\n/radar", want: "http://localhost:9280/radar"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			if err := os.MkdirAll(filepath.Join(home, ".radar"), 0o755); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(home, ".radar", "mcp-port"), []byte(tc.contents), 0o644); err != nil {
+				t.Fatalf("write port file: %v", err)
+			}
+			got, err := resolveServer("")
+			if err != nil {
+				t.Fatalf("resolveServer: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("resolveServer() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

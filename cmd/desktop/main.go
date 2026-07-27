@@ -180,7 +180,7 @@ func main() {
 	<-ready
 
 	// Write port file so MCP clients can discover the running server
-	app.WriteMCPPortFile(srv.ActualPort())
+	app.WriteMCPPortFile(srv.ActualPort(), srv.BasePath())
 
 	// Initialize cluster in background (browser will see progress via SSE)
 	if k8sInitErr == nil {

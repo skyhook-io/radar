@@ -488,7 +488,7 @@ func startServer(srv *server.Server, startupStart time.Time) (context.Context, c
 	k8s.LogTiming(" Server listening: %v (since start)", time.Since(startupStart))
 
 	// Write port file so MCP clients can discover the running server
-	app.WriteMCPPortFile(srv.ActualPort())
+	app.WriteMCPPortFile(srv.ActualPort(), srv.BasePath())
 
 	return rootCtx, rootCancel
 }

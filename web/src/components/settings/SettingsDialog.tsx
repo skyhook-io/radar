@@ -20,6 +20,14 @@ import { AISettingsSection, type AIDraft } from '../diagnose/AISettings'
 import { MyPermissionsContent } from './MyPermissionsDialog'
 import { useDiagnose } from '../diagnose/DiagnoseContext'
 
+// The loopback URL an MCP client is told to connect to. Both the overview row
+// and the MCP section show it, and they must not drift — one of them missed the
+// base path and advertised a URL that 404s under a subpath deployment.
+function mcpLoopbackUrl(): string {
+  const port = Number(window.location.port) || 80
+  return `http://localhost:${port}${routePath('/mcp')}`
+}
+
 interface Config {
   kubeconfig?: string
   kubeconfigDirs?: string[]
@@ -842,8 +850,7 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
   const agentLabel =
     diag.agents.find((a) => a.name === diag.selectedAgent)?.label ?? diag.agents[0]?.label
   const mcpOn = capabilities.mcpEnabled
-  const port = Number(window.location.port) || 80
-  const mcpUrl = `http://localhost:${port}/mcp`
+  const mcpUrl = mcpLoopbackUrl()
 
   const rows: OverviewRow[] = [
     {
@@ -1119,7 +1126,7 @@ function MCPSection({
   const [copied, setCopied] = useState(false)
 
   const currentPort = Number(window.location.port) || 80
-  const mcpUrl = `http://localhost:${currentPort}${routePath('/mcp')}`
+  const mcpUrl = mcpLoopbackUrl()
 
   const handleCopy = () => {
     navigator.clipboard.writeText(mcpUrl)
