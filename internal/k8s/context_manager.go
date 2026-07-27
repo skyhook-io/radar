@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"k8s.io/client-go/kubernetes"
@@ -86,7 +87,8 @@ var (
 	// from running ResetAllSubsystems + InitAllSubsystems concurrently on the
 	// shared cache singletons. This mutex does — a second request waits for the
 	// first to finish rather than interleaving teardown/init.
-	contextOpMu sync.Mutex
+	contextOpMu             sync.Mutex
+	activeContextOperations atomic.Int32
 
 	// operationCtx is canceled at the start of every context switch and retry.
 	// API calls that should not survive a context switch (RBAC checks, capability
@@ -133,6 +135,16 @@ func NewOperationContext(timeout time.Duration) (context.Context, context.Cancel
 	parent := operationCtx
 	operationMu.Unlock()
 	return context.WithTimeout(parent, timeout)
+}
+
+func newOperationContextForGeneration(generation uint64, timeout time.Duration) (context.Context, context.CancelFunc, bool) {
+	operationMu.Lock()
+	defer operationMu.Unlock()
+	if operationGen != generation {
+		return nil, nil, false
+	}
+	ctx, cancel := context.WithTimeout(operationCtx, timeout)
+	return ctx, cancel, true
 }
 
 // OperationContext returns the current operation context. Callers that need
@@ -340,8 +352,12 @@ func PerformContextSwitch(newContext string) error {
 
 	// Serialize against any other in-flight switch / rescope so their teardown +
 	// init can't interleave on the shared cache. A queued request waits here.
+	activeContextOperations.Add(1)
 	contextOpMu.Lock()
-	defer contextOpMu.Unlock()
+	defer func() {
+		activeContextOperations.Add(-1)
+		contextOpMu.Unlock()
+	}()
 
 	// Under --namespace-scope, validate the new context has a usable scope target
 	// BEFORE tearing anything down. Otherwise a switch to a context with no
@@ -461,8 +477,12 @@ func PerformNamespaceRescope(namespace string) error {
 	// Serialize against any other in-flight switch / rescope (see contextOpMu).
 	// previousNamespace is read under the lock so two rescopes can't both decide
 	// the namespace changed and run teardown/init concurrently.
+	activeContextOperations.Add(1)
 	contextOpMu.Lock()
-	defer contextOpMu.Unlock()
+	defer func() {
+		activeContextOperations.Add(-1)
+		contextOpMu.Unlock()
+	}()
 	previousNamespace := GetNamespaceScopeTarget()
 	if namespace == previousNamespace {
 		return nil

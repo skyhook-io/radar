@@ -320,7 +320,8 @@ var tombstones = timeline.NewTombstoneCache(15*time.Minute, 4000)
 func InitResourceCache(ctx context.Context) error {
 	var initErr error
 	cacheOnce.Do(func() {
-		if k8sClient == nil {
+		client := GetClient()
+		if client == nil {
 			initErr = fmt.Errorf("cannot create resource cache: k8s client not initialized")
 			return
 		}
@@ -359,7 +360,7 @@ func InitResourceCache(ctx context.Context) error {
 		secretWriteTimes := newSecretDataManagerWriteIndex()
 
 		cfg := k8score.CacheConfig{
-			Client:                  k8sClient,
+			Client:                  client,
 			ResourceScopes:          scopes,
 			ResourceScopeNamespaces: permResult.ScopeNamespaces,
 			DeferredTypes:           deferredResources,

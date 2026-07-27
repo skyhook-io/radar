@@ -60,7 +60,10 @@ func SetConnectionStatus(status ConnectionStatus) {
 	connectionStatus = status
 	connectionStatusMu.Unlock()
 
-	// Notify callbacks
+	notifyConnectionChange(status)
+}
+
+func notifyConnectionChange(status ConnectionStatus) {
 	connectionCallbacksMu.RLock()
 	callbacks := make([]ConnectionChangeCallback, len(connectionCallbacks))
 	copy(callbacks, connectionCallbacks)
@@ -268,15 +271,7 @@ func UpdateConnectionProgress(msg string) {
 	connectionStatus = status
 	connectionStatusMu.Unlock()
 
-	// Notify callbacks
-	connectionCallbacksMu.RLock()
-	callbacks := make([]ConnectionChangeCallback, len(connectionCallbacks))
-	copy(callbacks, connectionCallbacks)
-	connectionCallbacksMu.RUnlock()
-
-	for _, cb := range callbacks {
-		cb(status)
-	}
+	notifyConnectionChange(status)
 }
 
 // OnConnectionChange registers a callback to be called when connection status changes

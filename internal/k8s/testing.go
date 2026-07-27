@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"sync"
+	"time"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"k8s.io/client-go/dynamic"
@@ -194,6 +195,22 @@ func ResetTestState() {
 	connectionCallbacksMu.Lock()
 	connectionCallbacks = nil
 	connectionCallbacksMu.Unlock()
+
+	runtimeAuthChecksMu.Lock()
+	runtimeAuthChecks = make(map[uint64]struct{})
+	runtimeAuthProbeAfter = make(map[uint64]time.Time)
+	runtimeAuthProbe = TestClusterConnection
+	runtimeAuthEndpointProbe = defaultRuntimeAuthEndpointProbe
+	runtimeAuthChecksMu.Unlock()
+	activeContextOperations.Store(0)
+	clientMu.Lock()
+	k8sConfig = nil
+	k8sClient = nil
+	discoveryClient = nil
+	dynamicClient = nil
+	activeClientGeneration = 0
+	kubeconfigMode = ""
+	clientMu.Unlock()
 
 	// Reset capabilities cache
 	capabilitiesMu.Lock()

@@ -40,9 +40,17 @@ class ConnectionRetryError extends Error {
 const ConnectionContext = createContext<ConnectionContextValue | null>(null)
 const AUTO_RETRY_INITIAL_DELAY_MS = 10000
 const AUTO_RETRY_MAX_DELAY_MS = 60000
+const CONNECTION_STATUS_FALLBACK_POLL_MS = 30000
 
 export function shouldAutoRetryConnection(errorType?: string): boolean {
   return errorType !== 'config' && errorType !== 'rbac'
+}
+
+export function shouldApplyPolledConnection(
+  currentState: ConnectionStateType,
+  polledState: ConnectionStateType,
+): boolean {
+  return currentState !== 'connected' || polledState !== 'connecting'
 }
 
 async function fetchConnectionStatus(): Promise<ConnectionStatusResponse> {
@@ -76,8 +84,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   })
   const [contexts, setContexts] = useState<ContextInfo[]>([])
   const [isAutoRetrying, setIsAutoRetrying] = useState(false)
-  // Track if SSE has started delivering connection_state events
-  // Once SSE is active, it becomes the authoritative source for connection state
+  // Track whether SSE has delivered connection state so retry races prefer its
+  // immediate recovery signal over an older failed request.
   const sseActiveRef = useRef(false)
   // Track whether we've reached 'connected' at least once. Distinguishes the
   // initial connect (bootstrap queries already fetched while 'connecting') from
@@ -100,32 +108,33 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   }
 
   // Fetch initial connection status
-  // Poll while connecting to get progress updates (SSE not established yet)
+  // Poll quickly while connecting and slowly otherwise so a dropped SSE state
+  // frame cannot leave the UI stuck on stale connection state.
   const { data } = useQuery<ConnectionStatusResponse>({
     queryKey: ['connection-status'],
     queryFn: fetchConnectionStatus,
     staleTime: 500, // Allow frequent refetches while connecting
-    refetchInterval: connection.state === 'connecting' ? 500 : false, // Poll every 500ms while connecting
+    refetchInterval: connection.state === 'connecting' ? 500 : CONNECTION_STATUS_FALLBACK_POLL_MS,
     refetchOnWindowFocus: false,
   })
 
   // Update state from query result
-  // Once SSE is active, only update contexts from poll (SSE handles connection state)
   useEffect(() => {
     if (data) {
-      // Always update contexts from poll data
       setContexts(data.contexts || [])
-      // Only update connection state from poll if SSE hasn't taken over
-      if (!sseActiveRef.current) {
-        setConnection({
+      setConnection(current => {
+        if (!shouldApplyPolledConnection(current.state, data.state)) {
+          return current
+        }
+        return {
           state: data.state,
           context: data.context,
           clusterName: data.clusterName,
           error: data.error,
           errorType: data.errorType,
           progressMessage: data.progressMessage,
-        })
-      }
+        }
+      })
     }
   }, [data])
 

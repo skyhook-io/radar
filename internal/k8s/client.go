@@ -289,24 +289,18 @@ func doInit(opts InitOptions) error {
 	config.QPS = 50
 	config.Burst = 100
 
+	clients, err := newSharedKubernetesClients(config)
+	if err != nil {
+		return err
+	}
+
+	clientMu.Lock()
 	k8sConfig = config
-
-	k8sClient, err = kubernetes.NewForConfig(config)
-	if err != nil {
-		return fmt.Errorf("failed to create k8s clientset: %w", err)
-	}
-
-	// Create discovery client for API resource discovery
-	discoveryClient, err = discovery.NewDiscoveryClientForConfig(config)
-	if err != nil {
-		return fmt.Errorf("failed to create discovery client: %w", err)
-	}
-
-	// Create dynamic client for CRD access
-	dynamicClient, err = dynamic.NewForConfig(config)
-	if err != nil {
-		return fmt.Errorf("failed to create dynamic client: %w", err)
-	}
+	k8sClient = clients.clientset
+	discoveryClient = clients.discovery
+	dynamicClient = clients.dynamic
+	activeClientGeneration = clients.generation
+	clientMu.Unlock()
 
 	return nil
 }
@@ -934,6 +928,12 @@ var ForceInCluster bool
 
 // IsInCluster returns true if running inside a Kubernetes cluster
 func IsInCluster() bool {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	return isInClusterLocked()
+}
+
+func isInClusterLocked() bool {
 	return ForceInCluster || (kubeconfigPath == "" && len(kubeconfigPaths) == 0)
 }
 
@@ -1126,20 +1126,9 @@ func SwitchContext(name string) error {
 	config.QPS = 50
 	config.Burst = 100
 
-	// Create new clients
-	newK8sClient, err := kubernetes.NewForConfig(config)
+	clients, err := newSharedKubernetesClients(config)
 	if err != nil {
-		return fmt.Errorf("failed to create k8s client for context %q: %w", name, err)
-	}
-
-	newDiscoveryClient, err := discovery.NewDiscoveryClientForConfig(config)
-	if err != nil {
-		return fmt.Errorf("failed to create discovery client for context %q: %w", name, err)
-	}
-
-	newDynamicClient, err := dynamic.NewForConfig(config)
-	if err != nil {
-		return fmt.Errorf("failed to create dynamic client for context %q: %w", name, err)
+		return fmt.Errorf("failed to create clients for context %q: %w", name, err)
 	}
 
 	// Update global variables atomically
@@ -1165,9 +1154,10 @@ func SwitchContext(name string) error {
 
 	clientMu.Lock()
 	k8sConfig = config
-	k8sClient = newK8sClient
-	discoveryClient = newDiscoveryClient
-	dynamicClient = newDynamicClient
+	k8sClient = clients.clientset
+	discoveryClient = clients.discovery
+	dynamicClient = clients.dynamic
+	activeClientGeneration = clients.generation
 	contextName = name
 	clusterName = ctx.Cluster
 	contextNamespace = ctx.Namespace
