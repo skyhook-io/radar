@@ -210,9 +210,11 @@ func main() {
 	}
 	// Radar Hub forwards root-relative paths over the tunnel and the ordinary
 	// listener is health-only at the literal /api/health, so a prefixed router
-	// would 404 both. Fail loudly instead of coming up broken.
-	if normalizedBasePath != "" && *cloudURL != "" {
-		log.Fatalf("--base-path is not supported with --cloud-url: Radar Hub owns the URL path when Radar runs in Cloud mode")
+	// would 404 both. Fail loudly instead of coming up broken. Both Cloud
+	// signals are checked because the chart sets them together but they are
+	// independent inputs, and either one alone is enough to break the prefix.
+	if normalizedBasePath != "" && (*cloudURL != "" || cloud.Mode()) {
+		log.Fatalf("--base-path is not supported in Radar Cloud mode (--cloud-url / RADAR_CLOUD_MODE): the Hub owns the URL path")
 	}
 	timelineMaxSizeBytes, err := config.ParseByteSize(*timelineMaxSize)
 	if err != nil {
