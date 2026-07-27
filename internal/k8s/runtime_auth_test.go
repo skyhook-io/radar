@@ -506,6 +506,53 @@ func TestRuntimeAuthFailureIgnoresActiveContextOperation(t *testing.T) {
 	}
 }
 
+func TestRuntimeAuthFailureWinsAgainstQueuedContextOperation(t *testing.T) {
+	generation := prepareRuntimeAuthTest(t)
+	setRuntimeAuthProbe(func(context.Context) error {
+		return errors.New("getting credentials: exec plugin failed")
+	})
+	endpointReached := make(chan struct{})
+	releaseEndpoint := make(chan struct{})
+	setRuntimeAuthEndpointProbe(func(context.Context, *rest.Config) error {
+		close(endpointReached)
+		<-releaseEndpoint
+		return nil
+	})
+	sessionStopped := make(chan struct{}, 1)
+	SetSessionStopper(func() { sessionStopped <- struct{}{} })
+	t.Cleanup(func() { SetSessionStopper(nil) })
+
+	contextOpMu.Lock()
+	mutexLocked := true
+	defer func() {
+		if mutexLocked {
+			contextOpMu.Unlock()
+		}
+	}()
+
+	reportRuntimeAuthFailure(generation, errors.New("getting credentials: exec plugin failed"))
+	select {
+	case <-endpointReached:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime auth endpoint probe did not start")
+	}
+	activeContextOperations.Add(1)
+	t.Cleanup(func() { activeContextOperations.Add(-1) })
+	close(releaseEndpoint)
+	contextOpMu.Unlock()
+	mutexLocked = false
+
+	select {
+	case <-sessionStopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("queued context operation prevented runtime auth teardown")
+	}
+	waitForRuntimeAuthCheck(t, generation)
+	if status := GetConnectionStatus(); status.State != StateDisconnected || status.ErrorType != "auth" {
+		t.Fatalf("connection status = %+v, want disconnected auth", status)
+	}
+}
+
 func TestRuntimeAuthFailureDoesNotTearDownRecoveredClient(t *testing.T) {
 	generation := prepareRuntimeAuthTest(t)
 	probeStarted := make(chan struct{})

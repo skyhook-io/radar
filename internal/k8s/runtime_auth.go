@@ -176,7 +176,7 @@ func confirmRuntimeAuthFailure(generation, operationGeneration uint64) {
 	contextOpMu.Lock()
 	defer contextOpMu.Unlock()
 
-	if !runtimeAuthCandidateIsCurrent(generation) || currentOperationGen() != operationGeneration {
+	if !runtimeAuthStateIsCurrent(generation) || currentOperationGen() != operationGeneration {
 		return
 	}
 	if !transitionConnectedToRuntimeAuthFailure(err) {
@@ -203,6 +203,10 @@ func runtimeAuthCandidateIsCurrent(generation uint64) bool {
 	if activeContextOperations.Load() != 0 {
 		return false
 	}
+	return runtimeAuthStateIsCurrent(generation)
+}
+
+func runtimeAuthStateIsCurrent(generation uint64) bool {
 	clientMu.RLock()
 	isInCluster := isInClusterLocked()
 	isCurrent := !isInCluster && activeClientGeneration == generation
