@@ -47,7 +47,7 @@ function buildConfigLine(cfg: {
   const parts = [agentLabelFor(cfg.agent ?? "")];
   if (cfg.profile) {
     parts.push(
-      cfg.profile === "full-local" ? "Full local setup" : "Radar safeguards",
+      cfg.profile === "full-local" ? "Your agent setup" : "Radar safeguards",
     );
   }
   if (cfg.agent === "codex") {

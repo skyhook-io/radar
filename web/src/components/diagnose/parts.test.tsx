@@ -39,7 +39,8 @@ function renderAgent(
 describe("AgentControls execution profile explanation", () => {
   it("shows Cursor's fixed full-local warning even when the stored profile is stale", () => {
     const html = renderAgent("cursor-agent", ["full-local"], "safeguarded");
-    expect(html).toContain("only supports Full local setup");
+    expect(html).toContain("must use this agent");
+    expect(html).toContain("normal setup");
     expect(html).toContain("always loads your global MCP servers");
     expect(html).toContain("still enables the agent CLI");
     expect(html).toContain("does not constrain external MCP servers");
@@ -59,10 +60,20 @@ describe("AgentControls execution profile explanation", () => {
     expect(html).not.toContain("Codex");
     expect(html).not.toContain("built-in tools are disabled");
   });
+
+  it("labels the selectable full-local profile as the user's agent setup", () => {
+    const html = renderAgent(
+      "codex",
+      ["safeguarded", "full-local"],
+      "safeguarded",
+    );
+    expect(html).toContain("Your codex setup");
+    expect(html).not.toContain("Full local setup");
+  });
 });
 
 describe("ConsentCard execution profile treatment", () => {
-  it("uses warning chrome and explicit consequences for full local setup", () => {
+  it("uses warning chrome and explicit consequences for the user's agent setup", () => {
     const html = renderToStaticMarkup(
       <ConsentCard
         agentName="Cursor Agent"
@@ -72,7 +83,8 @@ describe("ConsentCard execution profile treatment", () => {
         onCancel={noop}
       />,
     );
-    expect(html).toContain("Run with your agent’s full local setup?");
+    expect(html).toContain("Run using your Cursor Agent setup?");
+    expect(html).toContain("Continue with my agent setup");
     expect(html).toContain("border-amber-500/40");
     expect(html).toContain("text-amber-500");
     expect(html).toContain("Radar cannot constrain");

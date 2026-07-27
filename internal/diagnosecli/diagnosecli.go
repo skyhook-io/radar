@@ -77,7 +77,7 @@ func newFlagSet() (*flag.FlagSet, *options) {
 	fs.StringVar(&o.namespace, "n", "", "Namespace of the resource")
 	fs.StringVar(&o.namespace, "namespace", "", "Namespace of the resource")
 	fs.StringVar(&o.agent, "agent", "", "Agent backend to use (claude|codex|cursor-agent; default = server's pick)")
-	fs.StringVar(&o.profile, "profile", "", "Execution profile (safeguarded|full-local; default = agent's safest available profile)")
+	fs.StringVar(&o.profile, "profile", "", "Execution profile (safeguarded = Radar safeguards; full-local = your agent setup; default = safest available)")
 	fs.StringVar(&o.server, "server", "", "Radar server URL (default: discover the running instance via ~/.radar/mcp-port)")
 	fs.BoolVar(&o.jsonOut, "json", false, "Print the final verdict as JSON on stdout (progress goes to stderr)")
 	fs.BoolVar(&o.open, "open", false, "Also open the investigation in the Radar UI")
@@ -353,14 +353,14 @@ func promptConsent(agent string, profile ai.ExecutionProfile, surface string, re
 Radar sends the resource's spec, recent events, and pod logs to it (and on to
 its model provider under your account). Transcripts are kept in your local Radar
 history until cleared.
-`, agentLabel)
+	`, agentLabel)
 	if profile == ai.ExecutionProfileFullLocal {
-		notice += `Full local setup uses your agent's normal configuration and other configured
+		notice += fmt.Sprintf(`Your %s setup uses its normal configuration and other configured
 tools and MCP servers. Radar cannot constrain that external tooling; it may
 access local files or the network and may be able to change your cluster.
 Radar still enables the agent CLI's own sandbox, but that sandbox does not
 constrain external MCP servers.
-`
+`, agentLabel)
 		if agent == "cursor-agent" {
 			notice += `Cursor always loads your global MCP servers; Radar cannot exclude them.
 `

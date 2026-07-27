@@ -256,13 +256,16 @@ export function AgentControls({
   const isCodex = selectedAgent === "codex";
   const isClaude = selectedAgent === "claude";
   const isCursor = selectedAgent === "cursor-agent";
-  const profiles = agents.find((a) => a.name === selectedAgent)?.profiles ?? [];
+  const selectedAgentInfo = agents.find((a) => a.name === selectedAgent);
+  const selectedAgentLabel =
+    selectedAgentInfo?.label || selectedAgent || "agent";
+  const profiles = selectedAgentInfo?.profiles ?? [];
   const shownProfile = profiles.includes(profile)
     ? profile
     : (profiles[0] ?? profile);
   const profileLabels: Record<ExecutionProfile, string> = {
     safeguarded: "Radar safeguards",
-    "full-local": "Full local setup",
+    "full-local": `Your ${selectedAgentLabel} setup`,
   };
   return (
     <div className="space-y-3">
@@ -327,11 +330,11 @@ export function AgentControls({
             <div className="flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-[11px] leading-snug text-theme-text-secondary">
               <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" />
               <span>
-                This agent only supports Full local setup. Radar cannot constrain
-                its external tools or MCP servers; they may access local files
-                or the network and may be able to change your cluster. Radar
-                still enables the agent CLI&apos;s own sandbox, but that sandbox
-                does not constrain external MCP servers.
+                Radar must use this agent&apos;s normal setup. Radar cannot
+                constrain its external tools or MCP servers; they may access
+                local files or the network and may be able to change your
+                cluster. Radar still enables the agent CLI&apos;s own sandbox,
+                but that sandbox does not constrain external MCP servers.
                 {isCursor &&
                   " Cursor always loads your global MCP servers, so Radar cannot exclude them."}
               </span>
@@ -361,7 +364,7 @@ export function AgentControls({
             isCursor
               ? "Leave empty for your Cursor default, or enter a model slug Cursor supports."
               : shownProfile === "full-local"
-                ? "Full local setup uses your own Codex config's model; set a slug here to override it."
+                ? "Your Codex setup uses its configured model; set a slug here to override it."
                 : "Leave empty for Codex's default, or enter a model your Codex version supports."
           }
         />
@@ -748,13 +751,13 @@ export function ConsentCard({
       warning={profile === "full-local"}
       approveLabel={
         profile === "full-local"
-          ? "Continue with full local setup"
+          ? "Continue with my agent setup"
           : "Approve & investigate"
       }
       title={
         profile === "safeguarded"
           ? "Run an AI investigation with Radar safeguards?"
-          : "Run with your agent’s full local setup?"
+          : `Run using your ${agentName} setup?`
       }
       body={
         <>
