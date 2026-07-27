@@ -60,7 +60,7 @@ import { Network, List, Clock, Package, Sun, Moon, Activity, Home, Star, Search,
 import { useTheme } from './context/ThemeContext'
 import { Tooltip } from './components/ui/Tooltip'
 import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNamespacePicker'
-import { SettingsDialog } from './components/settings/SettingsDialog'
+import { SettingsDialog, type SettingsSectionId } from './components/settings/SettingsDialog'
 import type { APIResource, TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, TopologyMode, Topology, K8sEvent } from './types'
 import { kindToPlural, pluralToKind, openExternal, apiVersionToGroup, relatedResourcePath, searchHitToSelectedResource } from './utils/navigation'
 import { type OmnibarHandle } from './components/ui/Omnibar'
@@ -507,13 +507,23 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
   // Settings dialog state
   const [showSettings, setShowSettings] = useState(false)
+  const [settingsSection, setSettingsSection] = useState<SettingsSectionId>('overview')
+  const openSettings = useCallback((section: SettingsSectionId = 'overview') => {
+    setSettingsSection(section)
+    setShowSettings(true)
+  }, [])
 
   // Listen for "open-settings" DOM event (used by MCPSetupDialog etc.)
   useEffect(() => {
-    const handler = () => setShowSettings(true)
+    const handler = (event: Event) => {
+      const section =
+        (event as CustomEvent<{ section?: SettingsSectionId }>).detail?.section ??
+        'overview'
+      openSettings(section)
+    }
     window.addEventListener('radar:open-settings', handler)
     return () => window.removeEventListener('radar:open-settings', handler)
-  }, [])
+  }, [openSettings])
 
   // Listen for "open-local-terminal" DOM event — the AI surface is portaled above
   // the DockProvider, so it can't call useOpenLocalTerminal directly; it dispatches
@@ -853,7 +863,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           description: 'Open settings',
           category: 'General' as const,
           scope: 'global' as const,
-          handler: () => setShowSettings(true),
+          handler: () => openSettings(),
         }]
       : []),
   ])
@@ -1596,7 +1606,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           pinned={navRailEffectivePinned}
           onTogglePinned={toggleNavRailPinned}
           showPinToggle={!railForcedSlim}
-          onOpenSettings={() => setShowSettings(true)}
+          onOpenSettings={() => openSettings()}
           accountSlot={<UserMenu variant="rail" pinned={navRailEffectivePinned} />}
         />
       )}
@@ -2183,7 +2193,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
               navigateToResource(resource)
             }}
             onClearNamespaces={clearAllNamespaces}
-            onOpenSettings={() => setShowSettings(true)}
+            onOpenSettings={() => openSettings()}
           />
         )}
 
@@ -2414,6 +2424,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {/* Settings dialog — My permissions is rendered inline in its own section */}
       <SettingsDialog
         open={showSettings}
+        initialSection={settingsSection}
         onClose={() => setShowSettings(false)}
       />
 

@@ -139,7 +139,9 @@ export function agentLabelFor(name: string, fallbackLabel?: string): string {
 // openDiagnoseSettings opens the Settings dialog (App.tsx listens for this DOM
 // event) — the canonical home for AI-diagnosis config.
 export function openDiagnoseSettings() {
-  window.dispatchEvent(new CustomEvent("radar:open-settings"));
+  window.dispatchEvent(
+    new CustomEvent("radar:open-settings", { detail: { section: "ai" } }),
+  );
 }
 
 function readStored(key: string): string | null {
