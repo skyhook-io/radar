@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import { AlertTriangle, ArrowUpRight, Check, ExternalLink, GitBranch, Loader2, ShieldAlert, X } from 'lucide-react'
+import { AlertTriangle, ArrowUpRight, Check, ExternalLink, GitBranch, Info, Loader2, ShieldAlert, X } from 'lucide-react'
 import {
   cancelCloudInstall,
   type CloudInstallBlocked,
@@ -210,6 +210,17 @@ function PlanCard({
         )}
       </div>
 
+      {plan.advisories && plan.advisories.length > 0 && (
+        <ul className="mt-2.5 space-y-1.5">
+          {plan.advisories.map((note) => (
+            <li key={note} className="flex items-start gap-1.5 text-[11.5px] leading-snug text-theme-text-tertiary">
+              <Info className="w-3.5 h-3.5 shrink-0 mt-px text-theme-text-tertiary" />
+              {note}
+            </li>
+          ))}
+        </ul>
+      )}
+
       <label className="mt-3.5 block">
         <span className="text-[11.5px] font-medium text-theme-text-secondary">Cluster name in Radar</span>
         <input
@@ -235,7 +246,12 @@ function PlanCard({
       <div className="mt-4 flex items-center gap-4">
         <button
           onClick={() => {
-            approvalTab.current = window.open('about:blank', '_blank', 'noopener')
+            // 'noopener' in the features string makes window.open return null,
+            // which would lose the handle this pre-open exists to keep — sever
+            // opener on the handle instead.
+            const tab = window.open('about:blank', '_blank')
+            if (tab) tab.opener = null
+            approvalTab.current = tab
             start.mutate()
           }}
           disabled={startDisabled}
