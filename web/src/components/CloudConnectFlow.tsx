@@ -210,15 +210,24 @@ function PlanCard({
         )}
       </div>
 
+      {/* Advisories come from the preflight in CLI prose (long, and usually the
+          benign "namespace doesn't exist yet" note on a fresh install). Keep
+          their presence visible so nobody approves blind, but don't let the
+          wall of text bury the decision. */}
       {plan.advisories && plan.advisories.length > 0 && (
-        <ul className="mt-2.5 space-y-1.5">
-          {plan.advisories.map((note) => (
-            <li key={note} className="flex items-start gap-1.5 text-[11.5px] leading-snug text-theme-text-tertiary">
-              <Info className="w-3.5 h-3.5 shrink-0 mt-px text-theme-text-tertiary" />
-              {note}
-            </li>
-          ))}
-        </ul>
+        <details className="mt-2.5">
+          <summary className="flex items-center gap-1.5 cursor-pointer select-none text-[11.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors">
+            <Info className="w-3.5 h-3.5 shrink-0" />
+            {plan.advisories.length === 1 ? '1 preflight note' : `${plan.advisories.length} preflight notes`}
+          </summary>
+          <ul className="mt-1.5 space-y-1.5 pl-5">
+            {plan.advisories.map((note) => (
+              <li key={note} className="text-[11.5px] leading-snug text-theme-text-tertiary">
+                {note}
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
 
       <label className="mt-3.5 block">
