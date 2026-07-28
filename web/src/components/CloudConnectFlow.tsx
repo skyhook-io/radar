@@ -1,0 +1,484 @@
+import { useState } from 'react'
+import { useMutation } from '@tanstack/react-query'
+import { AlertTriangle, ArrowUpRight, Check, ExternalLink, GitBranch, Loader2, ShieldAlert, X } from 'lucide-react'
+import {
+  cancelCloudInstall,
+  type CloudInstallBlocked,
+  type CloudInstallRecoveryGuidance,
+  type CloudInstallStatus,
+  dismissCloudInstall,
+  startCloudInstall,
+} from '../api/client'
+
+// The driver-lane connect flow rendered inside the Cloud funnel modal. The
+// flow itself is server-owned (it survives modal close and page reloads);
+// this component only renders the observed status and issues transitions.
+export function CloudConnectFlow({
+  status,
+  blocked,
+  signupUrl,
+  onRefresh,
+  onExit,
+}: {
+  status: CloudInstallStatus
+  blocked: CloudInstallBlocked | null
+  signupUrl: string
+  // Re-fetch flow status after a mutation.
+  onRefresh: () => void
+  // Leave the flow view (back to the pitch, or close after dismiss).
+  onExit: () => void
+}) {
+  if (blocked) {
+    return <BlockedView blocked={blocked} signupUrl={signupUrl} onExit={onExit} />
+  }
+
+  switch (status.state) {
+    case 'preparing':
+      return (
+        <div className="px-7 py-10 flex flex-col items-center gap-3 text-center">
+          <Loader2 className="w-5 h-5 animate-spin text-emerald-600 dark:text-emerald-400" />
+          <p className="text-[13px] text-theme-text-secondary">
+            Inspecting this cluster for an existing Radar installation…
+          </p>
+        </div>
+      )
+    case 'ready':
+      return <PlanCard status={status} onRefresh={onRefresh} onExit={onExit} />
+    case 'starting':
+    case 'awaiting_approval':
+      return <ApprovalCard status={status} onRefresh={onRefresh} />
+    case 'provisioning':
+    case 'waiting_tunnel':
+      return <ProgressCard status={status} onRefresh={onRefresh} />
+    case 'connected':
+      return <ConnectedCard status={status} onRefresh={onRefresh} onExit={onExit} />
+    case 'failed':
+      return <FailedCard status={status} onRefresh={onRefresh} onExit={onExit} />
+    default:
+      return null
+  }
+}
+
+function BlockedView({
+  blocked,
+  signupUrl,
+  onExit,
+}: {
+  blocked: CloudInstallBlocked
+  signupUrl: string
+  onExit: () => void
+}) {
+  const icon =
+    blocked.reason === 'gitops' ? (
+      <GitBranch className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600 dark:text-emerald-400" />
+    ) : blocked.reason === 'preflight' ? (
+      <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5 text-amber-500" />
+    ) : (
+      <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-500" />
+    )
+  const title =
+    blocked.reason === 'gitops'
+      ? 'This install is managed by GitOps'
+      : blocked.reason === 'preflight'
+        ? 'Your Kubernetes identity can’t install this'
+        : 'This cluster can’t be connected from here'
+  return (
+    <div className="px-7 pt-6 pb-5">
+      <div className="card-inner-lg flex gap-2.5">
+        {icon}
+        <div className="min-w-0">
+          <div className="text-[13px] font-semibold text-theme-text-primary">{title}</div>
+          <p className="mt-1 text-[12px] leading-relaxed text-theme-text-secondary">{blocked.message}</p>
+          {blocked.blocking && blocked.blocking.length > 0 && (
+            <ul className="mt-2 space-y-1 text-[11.5px] text-theme-text-tertiary">
+              {blocked.blocking.map((line) => (
+                <li key={line} className="flex items-start gap-1.5">
+                  <span className="mt-[6px] w-1 h-1 rounded-full bg-amber-500 shrink-0" />
+                  {line}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+      <div className="mt-4 flex items-center gap-4">
+        <a
+          href={signupUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-[12.5px] font-semibold text-emerald-600 dark:text-emerald-400 hover:underline underline-offset-2"
+        >
+          Connect through the browser wizard instead →
+        </a>
+        <button onClick={onExit} className="text-[12.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors">
+          Back
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function PlanCard({
+  status,
+  onRefresh,
+  onExit,
+}: {
+  status: CloudInstallStatus
+  onRefresh: () => void
+  onExit: () => void
+}) {
+  const plan = status.plan
+  const [clusterName, setClusterName] = useState(plan?.defaultClusterName ?? '')
+  const [acceptAdoption, setAcceptAdoption] = useState(false)
+  const [ackUncertainty, setAckUncertainty] = useState(false)
+
+  const start = useMutation({
+    mutationFn: () =>
+      startCloudInstall({
+        flowId: status.flowId ?? '',
+        clusterName,
+        acceptAdoption,
+        acknowledgeIncompleteDiscovery: ackUncertainty,
+      }),
+    onSuccess: (st) => {
+      if (st.connectUrl) window.open(st.connectUrl, '_blank', 'noopener')
+      onRefresh()
+    },
+    meta: { errorMessage: 'Could not start the Cloud connection' },
+  })
+  const discard = useMutation({
+    mutationFn: () => cancelCloudInstall(status.flowId ?? ''),
+    onSuccess: () => {
+      onRefresh()
+      onExit()
+    },
+    meta: { errorMessage: 'Could not discard the connection plan' },
+  })
+
+  if (!plan) return null
+  const adopt = plan.mode === 'adopt'
+  const startDisabled =
+    start.isPending || (adopt && !acceptAdoption) || (!!plan.uncertainty && !ackUncertainty)
+
+  return (
+    <div className="px-7 pt-6 pb-5">
+      <h4 className="text-[15px] font-semibold text-theme-text-primary mb-3">
+        {adopt ? 'Adopt and connect this cluster' : 'Connect this cluster'}
+      </h4>
+      <div className="card-inner-lg space-y-1.5 text-[12px] text-theme-text-secondary">
+        <PlanRow label="Kubernetes context" value={plan.contextName} mono />
+        <PlanRow label="Target" value={`namespace ${plan.namespace} · release ${plan.release}`} mono />
+        {adopt ? (
+          <>
+            <PlanRow label="Action" value="Atomically upgrade and connect the existing Helm release" />
+            <PlanRow label="Chart" value={`${plan.currentChartVersion} → ${plan.targetChartVersion}`} mono />
+            <PlanRow
+              label="If anything fails"
+              value={`Helm rolls back to the pre-adoption release (revision ${plan.currentRevision})`}
+            />
+          </>
+        ) : (
+          <>
+            <PlanRow label="Action" value="Install a new connected Radar release" />
+            <PlanRow label="Chart" value={`${plan.targetChartVersion} (Radar ${plan.targetAppVersion})`} mono />
+          </>
+        )}
+        {plan.currentImageTag && (
+          <PlanRow
+            label="Note"
+            value={`Pinned image.tag "${plan.currentImageTag}" will be cleared so the chart's stable Radar runs`}
+          />
+        )}
+      </div>
+
+      <label className="mt-3.5 block">
+        <span className="text-[11.5px] font-medium text-theme-text-secondary">Cluster name in Radar</span>
+        <input
+          value={clusterName}
+          onChange={(e) => setClusterName(e.target.value)}
+          maxLength={80}
+          className="mt-1 w-full px-2.5 py-1.5 rounded-md bg-theme-elevated border border-theme-border text-[13px] text-theme-text-primary focus:outline-none focus:border-emerald-500/60"
+        />
+      </label>
+
+      {plan.uncertainty && (
+        <ConsentRow checked={ackUncertainty} onChange={setAckUncertainty} tone="amber">
+          {plan.uncertainty} Continue with this target anyway.
+        </ConsentRow>
+      )}
+      {adopt && (
+        <ConsentRow checked={acceptAdoption} onChange={setAcceptAdoption} tone="emerald">
+          Upgrade and connect the existing Radar installation. Sign-in and final approval happen in the
+          browser before anything changes.
+        </ConsentRow>
+      )}
+
+      <div className="mt-4 flex items-center gap-4">
+        <button
+          onClick={() => start.mutate()}
+          disabled={startDisabled}
+          className="px-5 py-2 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed text-emerald-950 text-[13px] font-bold transition-all"
+        >
+          {start.isPending ? 'Starting…' : 'Continue in browser'}
+        </button>
+        <button
+          onClick={() => discard.mutate()}
+          className="text-[12.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors"
+        >
+          Cancel
+        </button>
+      </div>
+      <p className="mt-2.5 text-[11px] text-theme-text-tertiary">
+        Nothing is installed yet — the browser approval creates your account, org, and this cluster in one
+        step, then Radar installs the agent.
+      </p>
+    </div>
+  )
+}
+
+function PlanRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="flex gap-2">
+      <span className="w-[130px] shrink-0 text-theme-text-tertiary">{label}</span>
+      <span className={`min-w-0 text-theme-text-primary ${mono ? 'font-mono text-[11.5px]' : ''}`}>{value}</span>
+    </div>
+  )
+}
+
+function ConsentRow({
+  checked,
+  onChange,
+  tone,
+  children,
+}: {
+  checked: boolean
+  onChange: (v: boolean) => void
+  tone: 'emerald' | 'amber'
+  children: React.ReactNode
+}) {
+  return (
+    <label className="mt-3 flex items-start gap-2 cursor-pointer">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className={tone === 'amber' ? 'mt-0.5 accent-amber-500' : 'mt-0.5 accent-emerald-500'}
+      />
+      <span className="text-[11.5px] leading-snug text-theme-text-secondary">{children}</span>
+    </label>
+  )
+}
+
+function ApprovalCard({ status, onRefresh }: { status: CloudInstallStatus; onRefresh: () => void }) {
+  const cancel = useCancelButton(status, onRefresh)
+  return (
+    <div className="px-7 pt-6 pb-5">
+      <div className="flex items-center gap-2.5 mb-3">
+        <Loader2 className="w-4 h-4 animate-spin text-emerald-600 dark:text-emerald-400" />
+        <h4 className="text-[15px] font-semibold text-theme-text-primary">Waiting for browser approval</h4>
+      </div>
+      <p className="text-[12.5px] leading-relaxed text-theme-text-secondary mb-3.5">
+        Approve connecting <b className="text-theme-text-primary">{status.clusterName}</b> in the tab that just
+        opened. Sign-in and org setup happen there too — this screen advances automatically.
+      </p>
+      {status.connectUrl && (
+        <div className="card-inner flex items-center gap-2">
+          <span className="flex-1 min-w-0 truncate font-mono text-[11px] text-theme-text-tertiary">
+            {status.connectUrl}
+          </span>
+          <button
+            onClick={() => window.open(status.connectUrl, '_blank', 'noopener')}
+            className="shrink-0 flex items-center gap-1 text-[11.5px] font-semibold text-emerald-600 dark:text-emerald-400 hover:underline underline-offset-2"
+          >
+            Open again <ExternalLink className="w-3 h-3" />
+          </button>
+        </div>
+      )}
+      <div className="mt-4">{cancel}</div>
+    </div>
+  )
+}
+
+function ProgressCard({ status, onRefresh }: { status: CloudInstallStatus; onRefresh: () => void }) {
+  const provisioning = status.state === 'provisioning'
+  const cancel = useCancelButton(status, onRefresh)
+  const steps: Array<{ label: string; state: 'done' | 'active' | 'todo' }> = [
+    { label: 'Approved in browser', state: 'done' },
+    { label: `Installing Radar (namespace ${status.plan?.namespace ?? 'radar'})`, state: provisioning ? 'active' : 'done' },
+    { label: 'Waiting for the agent to connect', state: provisioning ? 'todo' : 'active' },
+  ]
+  return (
+    <div className="px-7 pt-6 pb-5">
+      <h4 className="text-[15px] font-semibold text-theme-text-primary mb-3.5">
+        Connecting {status.clusterName}
+      </h4>
+      <ul className="space-y-2.5">
+        {steps.map((step) => (
+          <li key={step.label} className="flex items-center gap-2.5 text-[12.5px]">
+            {step.state === 'done' ? (
+              <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            ) : step.state === 'active' ? (
+              <Loader2 className="w-4 h-4 animate-spin text-emerald-600 dark:text-emerald-400" />
+            ) : (
+              <span className="w-4 h-4 grid place-items-center">
+                <span className="w-1.5 h-1.5 rounded-full bg-theme-border" />
+              </span>
+            )}
+            <span className={step.state === 'todo' ? 'text-theme-text-tertiary' : 'text-theme-text-secondary'}>
+              {step.label}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <div className="mt-4">
+        {provisioning ? (
+          <p className="text-[11px] text-theme-text-tertiary">
+            Installing — this step completes atomically and can’t be canceled midway.
+          </p>
+        ) : (
+          cancel
+        )}
+      </div>
+    </div>
+  )
+}
+
+function useCancelButton(status: CloudInstallStatus, onRefresh: () => void) {
+  const cancel = useMutation({
+    mutationFn: () => cancelCloudInstall(status.flowId ?? ''),
+    onSuccess: onRefresh,
+    meta: { errorMessage: 'Could not cancel the connection' },
+  })
+  return (
+    <button
+      onClick={() => cancel.mutate()}
+      disabled={cancel.isPending}
+      className="flex items-center gap-1 text-[12px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors disabled:opacity-50"
+    >
+      <X className="w-3.5 h-3.5" /> Cancel connection
+    </button>
+  )
+}
+
+function ConnectedCard({
+  status,
+  onRefresh,
+  onExit,
+}: {
+  status: CloudInstallStatus
+  onRefresh: () => void
+  onExit: () => void
+}) {
+  const dismiss = useDismiss(status, onRefresh, onExit)
+  const connected = status.connected
+  if (!connected) return null
+  return (
+    <div className="px-7 pt-6 pb-5">
+      <div className="flex items-center gap-2.5 mb-3">
+        <span className="w-7 h-7 rounded-full bg-emerald-500/20 grid place-items-center">
+          <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+        </span>
+        <h4 className="text-[15px] font-semibold text-theme-text-primary">
+          {status.clusterName} is connected to Radar Cloud
+        </h4>
+      </div>
+      <p className="text-[12.5px] leading-relaxed text-theme-text-secondary mb-4">
+        The in-cluster agent is live and tunneled. This local app keeps working exactly as before — the
+        cluster is now also reachable for your team at one URL.
+      </p>
+      <div className="flex items-center gap-4 mb-4">
+        <a
+          href={connected.clusterUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="px-5 py-2 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[13px] font-bold transition-all inline-flex items-center gap-1.5"
+        >
+          Open in Radar Cloud <ArrowUpRight className="w-3.5 h-3.5" />
+        </a>
+        <button onClick={dismiss} className="text-[12.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors">
+          Done
+        </button>
+      </div>
+      {connected.rollback && <GuidanceDetails title="How to undo this later" guidance={connected.rollback} />}
+    </div>
+  )
+}
+
+function FailedCard({
+  status,
+  onRefresh,
+  onExit,
+}: {
+  status: CloudInstallStatus
+  onRefresh: () => void
+  onExit: () => void
+}) {
+  const dismiss = useDismiss(status, onRefresh, onExit)
+  const failure = status.failure
+  if (!failure) return null
+  return (
+    <div className="px-7 pt-6 pb-5">
+      <div className="flex items-start gap-2.5 mb-3">
+        <AlertTriangle className="w-4 h-4 shrink-0 mt-1 text-amber-500" />
+        <h4 className="text-[14px] font-semibold leading-snug text-theme-text-primary">{failure.message}</h4>
+      </div>
+      {failure.guidance && <GuidanceBlock guidance={failure.guidance} />}
+      <div className="mt-4 flex items-center gap-4">
+        <button
+          onClick={dismiss}
+          className="px-4 py-1.5 rounded-[10px] bg-theme-elevated hover:bg-theme-hover border border-theme-border text-[12.5px] font-semibold text-theme-text-primary transition-colors"
+        >
+          {failure.retrySafe ? 'Start over' : 'Close'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function useDismiss(status: CloudInstallStatus, onRefresh: () => void, onExit: () => void) {
+  const dismiss = useMutation({
+    mutationFn: () => dismissCloudInstall(status.flowId ?? ''),
+    onSuccess: () => {
+      onRefresh()
+      onExit()
+    },
+    meta: { errorMessage: 'Could not dismiss the connection flow' },
+  })
+  return () => dismiss.mutate()
+}
+
+function GuidanceBlock({ guidance }: { guidance: CloudInstallRecoveryGuidance }) {
+  return (
+    <div className="card-inner-lg space-y-2 text-[11.5px] leading-relaxed text-theme-text-secondary">
+      {guidance.lines?.map((line) => <p key={line}>{line}</p>)}
+      {guidance.inspect && guidance.inspect.length > 0 && (
+        <pre className="p-2 rounded-md bg-theme-elevated overflow-x-auto font-mono text-[10.5px] text-theme-text-primary">
+          {guidance.inspect.join('\n')}
+        </pre>
+      )}
+      {guidance.clusterUrl && (
+        <a
+          href={guidance.clusterUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 hover:underline underline-offset-2"
+        >
+          Open in Radar Cloud <ExternalLink className="w-3 h-3" />
+        </a>
+      )}
+    </div>
+  )
+}
+
+function GuidanceDetails({ title, guidance }: { title: string; guidance: CloudInstallRecoveryGuidance }) {
+  return (
+    <details className="group">
+      <summary className="cursor-pointer text-[11.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors select-none">
+        {title}
+      </summary>
+      <div className="mt-2">
+        <GuidanceBlock guidance={guidance} />
+      </div>
+    </details>
+  )
+}
