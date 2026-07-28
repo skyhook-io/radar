@@ -584,14 +584,10 @@ func TestCloudInstallStatusJSONNeverContainsTokenField(t *testing.T) {
 // by a Helm apply: the user got a success response for the cancel.
 func TestCloudInstallCancelAcceptedBeforeProvisionBlocksTheApply(t *testing.T) {
 	fx := newManagerFixture(cloudinstall.ProvisionFresh, cloudinstall.InstallModeFresh, nil)
-	// Gate the run goroutine right where it would claim `provisioning`, so the
-	// cancel lands in the window the lock is meant to close.
-	release := make(chan struct{})
 	fx.m.backend.provision = func(context.Context, cloudInstallClients, preparedInstall, cloudinstall.ProvisionConfig) error {
 		t.Error("provision ran after the cancel was accepted")
 		return nil
 	}
-	fx.connect.beforeApprovalReturn = func() { <-release }
 
 	if _, _, err := fx.m.prepare(context.Background()); err != nil {
 		t.Fatalf("prepare: %v", err)
@@ -602,11 +598,16 @@ func TestCloudInstallCancelAcceptedBeforeProvisionBlocksTheApply(t *testing.T) {
 	}
 	waitForState(t, fx.m, cloudFlowAwaitingApproval)
 
-	fx.connect.approve <- &cloud.PollResponse{Status: "approved", ClusterID: "cl_race", Token: testToken, WSSURL: "wss://api.test.example/agent"}
-	if err := fx.m.cancelFlow(st.FlowID); err != nil {
-		t.Fatalf("cancel: %v", err)
+	// Cancel from inside the approval hook: the poll has already committed to
+	// returning an approval, so this deterministically exercises the window
+	// between "approved" and the provisioning claim rather than racing the
+	// poll's own select.
+	fx.connect.beforeApprovalReturn = func() {
+		if err := fx.m.cancelFlow(st.FlowID); err != nil {
+			t.Errorf("cancel during approval: %v", err)
+		}
 	}
-	close(release)
+	fx.connect.approve <- &cloud.PollResponse{Status: "approved", ClusterID: "cl_race", Token: testToken, WSSURL: "wss://api.test.example/agent"}
 
 	st = waitForState(t, fx.m, cloudFlowFailed)
 	if st.Failure.Kind != cloudFailCanceledApproved || st.Failure.RetrySafe {
@@ -642,7 +643,7 @@ func TestCloudInstallCancelDuringStartingDoesNotLaunchTheFlow(t *testing.T) {
 	}
 
 	got := fx.m.status()
-	if got.State != cloudFlowFailed || got.Failure.Kind != cloudFailApprovalUnknown || got.Failure.RetrySafe {
+	if got.State != cloudFlowFailed || got.Failure.Kind != cloudFailCanceled || !got.Failure.RetrySafe {
 		t.Fatalf("status = %+v", got)
 	}
 	// Approval must never have been polled.

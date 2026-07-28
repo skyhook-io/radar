@@ -70,6 +70,7 @@ const (
 	cloudFailExpired            = "expired"
 	cloudFailPickupExpired      = "pickup_expired"
 	cloudFailApprovalUnknown    = "approval_unknown"
+	cloudFailCanceled           = "canceled"
 	cloudFailCanceledApproved   = "canceled_after_approval"
 	cloudFailProvision          = "provision_failed"
 	cloudFailTunnelUnconfirmed  = "tunnel_unconfirmed"
@@ -479,12 +480,14 @@ func (m *cloudInstallManager) start(req cloudInstallStartRequest) (*cloudInstall
 	// the run goroutine — otherwise the flow would proceed to approval despite
 	// a successful cancel response.
 	if flow.canceling {
+		// Safe to retry: the approval page was never shown (the browser tab is
+		// still blank), so nobody could have approved, and an unapproved connect
+		// request expires at the Hub without creating a cluster.
 		flow.state = cloudFlowFailed
 		flow.failure = &cloudInstallFailure{
-			Kind:      cloudFailApprovalUnknown,
-			Message:   "Connection canceled while the approval request was being created. If the request reached the Hub, its approval page may still be live.",
-			Guidance:  &cloudinstall.RecoveryGuidance{Summary: "Check for a pending cluster before starting a fresh connection:", ClusterURL: cloud.ClustersURL(cr.ConnectURL)},
-			RetrySafe: false,
+			Kind:      cloudFailCanceled,
+			Message:   "Connection canceled before the approval page opened. No cluster was created.",
+			RetrySafe: true,
 		}
 		return flow, nil
 	}

@@ -319,7 +319,7 @@ function ApprovalCard({ status, onStatus }: { status: CloudInstallStatus; onStat
           </button>
         </div>
       )}
-      <div className="mt-4">{starting ? null : cancel}</div>
+      <div className="mt-4">{cancel}</div>
     </div>
   )
 }
