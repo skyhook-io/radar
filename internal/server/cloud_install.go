@@ -474,6 +474,21 @@ func (m *cloudInstallManager) start(req cloudInstallStartRequest) (*cloudInstall
 		return flow, nil
 	}
 
+	// A cancel accepted while the Hub request was in flight has no context to
+	// cancel yet (flow.cancel is nil until here), so honor it before launching
+	// the run goroutine — otherwise the flow would proceed to approval despite
+	// a successful cancel response.
+	if flow.canceling {
+		flow.state = cloudFlowFailed
+		flow.failure = &cloudInstallFailure{
+			Kind:      cloudFailApprovalUnknown,
+			Message:   "Connection canceled while the approval request was being created. If the request reached the Hub, its approval page may still be live.",
+			Guidance:  &cloudinstall.RecoveryGuidance{Summary: "Check for a pending cluster before starting a fresh connection:", ClusterURL: cloud.ClustersURL(cr.ConnectURL)},
+			RetrySafe: false,
+		}
+		return flow, nil
+	}
+
 	runCtx, cancel := context.WithCancel(context.Background())
 	flow.cancel = cancel
 	flow.connectURL = cr.ConnectURL

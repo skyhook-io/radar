@@ -51,11 +51,16 @@ type fakeConnectClient struct {
 	// beforeApprovalReturn runs just before an approval is handed back, so a
 	// test can widen the window between "approved" and the provisioning claim.
 	beforeApprovalReturn func()
+	// beforeCreateReturn runs while the Hub connect request is still in flight.
+	beforeCreateReturn func()
 }
 
 func (f *fakeConnectClient) Create(_ context.Context, _ cloud.ConnectMetadata) (*cloud.CreateResponse, error) {
 	if f.createErr != nil {
 		return nil, f.createErr
+	}
+	if f.beforeCreateReturn != nil {
+		f.beforeCreateReturn()
 	}
 	return f.cr, nil
 }
@@ -611,4 +616,39 @@ func TestCloudInstallCancelAcceptedBeforeProvisionBlocksTheApply(t *testing.T) {
 		t.Fatalf("guidance = %+v", st.Failure.Guidance)
 	}
 	assertNoTokenInStatus(t, fx.m)
+}
+
+// Cancel during `starting` has no context to cancel yet (the Hub request is in
+// flight), so it must be honored before the run goroutine is launched.
+func TestCloudInstallCancelDuringStartingDoesNotLaunchTheFlow(t *testing.T) {
+	fx := newManagerFixture(cloudinstall.ProvisionFresh, cloudinstall.InstallModeFresh, nil)
+	fx.m.backend.provision = func(context.Context, cloudInstallClients, preparedInstall, cloudinstall.ProvisionConfig) error {
+		t.Error("provision ran for a canceled start")
+		return nil
+	}
+	if _, _, err := fx.m.prepare(context.Background()); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	st := waitForState(t, fx.m, cloudFlowReady)
+
+	// Cancel lands while Create is still running.
+	fx.connect.beforeCreateReturn = func() {
+		if err := fx.m.cancelFlow(st.FlowID); err != nil {
+			t.Errorf("cancel during starting: %v", err)
+		}
+	}
+	if _, err := fx.m.start(cloudInstallStartRequest{FlowID: st.FlowID}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	got := fx.m.status()
+	if got.State != cloudFlowFailed || got.Failure.Kind != cloudFailApprovalUnknown || got.Failure.RetrySafe {
+		t.Fatalf("status = %+v", got)
+	}
+	// Approval must never have been polled.
+	select {
+	case fx.connect.approve <- &cloud.PollResponse{Status: "approved", ClusterID: "cl_x", Token: testToken}:
+	default:
+		t.Fatal("approval channel was consumed by a flow that should not have launched")
+	}
 }
