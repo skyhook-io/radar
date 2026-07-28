@@ -262,6 +262,26 @@ func main() {
 		mcpEnabled = true
 	}
 
+	// Hub origin overrides for self-hosted control planes. When only the API
+	// origin is set, the frontend origin defaults to the same host — the
+	// self-hosted stack serves web + API from one origin; the hosted pair
+	// (api./app.radarhq.io) stays the default otherwise.
+	hubAPIURL := strings.TrimSpace(os.Getenv("RADAR_HUB_URL"))
+	hubAppURL := strings.TrimSpace(os.Getenv("RADAR_HUB_APP_URL"))
+	if hubAPIURL != "" {
+		if err := cloud.ValidateHubOrigin(hubAPIURL); err != nil {
+			log.Fatalf("invalid RADAR_HUB_URL: %v", err)
+		}
+		if hubAppURL == "" {
+			hubAppURL = hubAPIURL
+		}
+	}
+	if hubAppURL != "" {
+		if err := cloud.ValidateHubOrigin(hubAppURL); err != nil {
+			log.Fatalf("invalid RADAR_HUB_APP_URL: %v", err)
+		}
+	}
+
 	cfg := app.AppConfig{
 		Kubeconfig:               *kubeconfig,
 		KubeconfigDirs:           app.ParseKubeconfigDirs(*kubeconfigDir),
@@ -295,6 +315,9 @@ func main() {
 		AIHistory:                *aiHistory,
 		AIHistoryDBPath:          fileCfg.AIHistoryDBPath,
 		Version:                  version,
+		HubAPIURL:                hubAPIURL,
+		HubAppURL:                hubAppURL,
+		CloudTunnelConfigured:    *cloudURL != "",
 		AuthConfig: auth.Config{
 			Mode:                      *authMode,
 			Secret:                    *authSecret,

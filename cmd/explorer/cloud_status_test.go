@@ -46,10 +46,10 @@ func TestDiscoveredRadarTargetsUsesExactSelection(t *testing.T) {
 	result := cloudinstall.DiscoveryResult{
 		Selected: []cloudinstall.RadarTarget{selected}, Namespace: []cloudinstall.RadarTarget{namespace}, ClusterWide: []cloudinstall.RadarTarget{clusterWide},
 	}
-	if got := discoveredRadarTargets(result, true); len(got) != 1 || got[0].DeploymentName != "selected" {
+	if got := cloudinstall.DiscoveredTargets(result, true); len(got) != 1 || got[0].DeploymentName != "selected" {
 		t.Fatalf("exact targets = %#v", got)
 	}
-	if got := discoveredRadarTargets(result, false); len(got) != 2 || got[0].DeploymentName != "namespace" || got[1].DeploymentName != "cluster-wide" {
+	if got := cloudinstall.DiscoveredTargets(result, false); len(got) != 2 || got[0].DeploymentName != "namespace" || got[1].DeploymentName != "cluster-wide" {
 		t.Fatalf("discovered targets = %#v", got)
 	}
 }

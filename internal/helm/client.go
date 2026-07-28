@@ -148,6 +148,20 @@ func GetClient() *Client {
 	return globalClient
 }
 
+// NewStandaloneClient returns a Helm client bound to an explicit rest.Config,
+// independent of the process-global client. Every action configuration it
+// builds targets exactly this config (restConfig wins in restClientGetter), so
+// a later kubeconfig context switch in the host process cannot retarget its
+// writes — the property the Cloud install flow depends on while a prepared
+// install waits for Hub approval.
+func NewStandaloneClient(restCfg *rest.Config) *Client {
+	ensureHelmWritablePaths()
+	return &Client{
+		settings:   cli.New(),
+		restConfig: rest.CopyConfig(restCfg),
+	}
+}
+
 // ResetClient clears the Helm client instance
 // This must be called before ReinitClient when switching contexts
 func ResetClient() {
