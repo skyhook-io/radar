@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-var opencodeSessionRe = regexp.MustCompile(`(?i)Session(?: ID)?:\s*([a-zA-Z0-9-]+)`)
+var opencodeSessionRe = regexp.MustCompile(`(?i)(?:session[_-]?id|session)\s*[:=]\s*"?([a-zA-Z0-9_-]+)"?`)
 
 // opencodeAgent drives the OpenCode CLI (`opencode`).
 type opencodeAgent struct{ bin string }
@@ -23,7 +23,7 @@ func (a *opencodeAgent) Name() string { return "opencode" }
 func (a *opencodeAgent) SigninCmd() string { return "opencode providers" }
 
 func (a *opencodeAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(), error) {
-	args := []string{"run"}
+	args := []string{"run", "--format", "json", "--auto"}
 
 	if s.sessionID != "" {
 		args = append(args, "--session", s.sessionID)

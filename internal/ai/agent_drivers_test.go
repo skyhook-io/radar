@@ -23,6 +23,9 @@ func TestOpencodeConfigAndCommand(t *testing.T) {
 	defer cleanup()
 
 	args := strings.Join(cmd.Args, " ")
+	if !strings.Contains(args, "--format json") || !strings.Contains(args, "--auto") {
+		t.Errorf("expected --format json and --auto in args; got %q", args)
+	}
 	if !strings.Contains(args, "--model claude-3-5-sonnet") {
 		t.Errorf("expected --model flag in args; got %q", args)
 	}
@@ -127,5 +130,17 @@ func TestPiConfigAndCommand(t *testing.T) {
 		if cfg.MCPServers["radar"].URL != url {
 			t.Errorf("config at %s radar url = %q, want %q", cfgPath, cfg.MCPServers["radar"].URL, url)
 		}
+	}
+}
+
+func TestResolveAgentPi(t *testing.T) {
+	if a := resolveAgent("pi"); a.Name() != "pi" {
+		t.Errorf("resolveAgent(pi) = %s, want pi", a.Name())
+	}
+	if a := resolveAgent("pi-coding-agent"); a.Name() != "pi" {
+		t.Errorf("resolveAgent(pi-coding-agent) = %s, want pi", a.Name())
+	}
+	if a := resolveAgent("pip"); a.Name() == "pi" {
+		t.Errorf("resolveAgent(pip) should not resolve to pi agent")
 	}
 }
