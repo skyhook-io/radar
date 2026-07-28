@@ -65,6 +65,9 @@ type AppConfig struct {
 	AIHistory                bool   // persist AI investigations across restarts
 	AIHistoryDBPath          string // "" = ~/.radar/ai-runs.db
 	AuthConfig               auth.Config
+	HubAPIURL                string // Hub API origin override ("" = hosted default)
+	HubAppURL                string // Hub frontend origin override ("" = derived)
+	CloudTunnelConfigured    bool   // --cloud-url was set on this process
 }
 
 // SetGlobals applies debug/test flags to global state.
@@ -290,6 +293,12 @@ func CreateServer(cfg AppConfig) *server.Server {
 			HasPrometheusHeaders: len(cfg.PrometheusHeaders) > 0,
 		},
 		AuthConfig: cfg.AuthConfig,
+		CloudConnect: server.CloudConnectConfig{
+			HubAPIURL:             cfg.HubAPIURL,
+			HubAppURL:             cfg.HubAppURL,
+			Kubeconfig:            cfg.Kubeconfig,
+			CloudTunnelConfigured: cfg.CloudTunnelConfigured,
+		},
 	}
 
 	// AI-history DB path: resolved here (like the timeline DB) so the server

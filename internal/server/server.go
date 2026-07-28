@@ -86,6 +86,8 @@ type Server struct {
 	permCache          *auth.PermissionCache
 	oidcHandler        *auth.OIDCHandler
 	saveFileFunc       func(defaultFilename string, data []byte) (string, error)
+	cloudConnectCfg    CloudConnectConfig
+	cloudInstall       *cloudInstallManager
 
 	// nsPreferences holds each user's active-namespace pick from the in-app
 	// switcher. Key shape: "<username>\x00<contextName>" when auth is enabled,
@@ -166,6 +168,7 @@ type Config struct {
 	EffectiveConfig    *config.Config // Running startup config for GET /api/config
 	AuthConfig         auth.Config    // Authentication configuration
 	AIHistoryDB        string         // AI run-history SQLite path ("" = memory-only runs)
+	CloudConnect       CloudConnectConfig
 }
 
 // New creates a new server instance
@@ -174,6 +177,12 @@ func New(cfg Config) *Server {
 	basePath, err := NormalizeBasePath(cfg.BasePath)
 	if err != nil {
 		log.Fatalf("Invalid base path %q: %v", cfg.BasePath, err)
+	}
+	if cfg.CloudConnect.HubAPIURL == "" {
+		cfg.CloudConnect.HubAPIURL = "https://api.radarhq.io"
+	}
+	if cfg.CloudConnect.HubAppURL == "" {
+		cfg.CloudConnect.HubAppURL = "https://app.radarhq.io"
 	}
 	s := &Server{
 		router:                chi.NewRouter(),
@@ -190,6 +199,7 @@ func New(cfg Config) *Server {
 		diagConfig:            cfg.DiagConfig,
 		effectiveConfig:       cfg.EffectiveConfig,
 		authConfig:            cfg.AuthConfig,
+		cloudConnectCfg:       cfg.CloudConnect,
 		topoMemo:              topology.NewMemoizer(5 * time.Second),
 		rbacMemo:              rbac.NewMemoizer(5 * time.Second),
 		capacityIssueMemo:     newCapacityIssueMemo(5 * time.Second),
@@ -197,6 +207,7 @@ func New(cfg Config) *Server {
 		yamlSchemaPathCache:   make(map[string]yamlSchemaPathCacheEntry),
 		yamlSchemaBundleCache: make(map[string]yamlSchemaBundleCacheEntry),
 	}
+	s.cloudInstall = newCloudInstallManager(cfg.CloudConnect)
 
 	// Resolve a local agent CLI for AI diagnosis (keyless, on the user's own
 	// subscription). nil when none is found — the feature stays disabled.
@@ -488,6 +499,14 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/capacity/pools/{name}/members", s.handleCapacityPoolMembers)
 			r.Get("/capacity/demand", s.handleCapacityDemand)
 			r.Get("/capacity/activity", s.handleCapacityActivity)
+
+			// In-product Cloud Connect driver lane; every handler re-checks
+			// the gate (local + no auth + no tunnel).
+			r.Post("/cloud/install/prepare", s.handleCloudInstallPrepare)
+			r.Post("/cloud/install/start", s.handleCloudInstallStart)
+			r.Get("/cloud/install/status", s.handleCloudInstallStatus)
+			r.Post("/cloud/install/cancel", s.handleCloudInstallCancel)
+			r.Post("/cloud/install/dismiss", s.handleCloudInstallDismiss)
 			r.Get("/topology", s.handleTopology)
 			r.Get("/gitops/tree/{kind}/{namespace}/{name}", s.handleGitOpsTree)
 			r.Get("/gitops/insights/{kind}/{namespace}/{name}", s.handleGitOpsInsights)
@@ -1164,6 +1183,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 
 	caps.MCPEnabled = s.mcpHandler != nil
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
+	caps.CloudConnect = s.cloudConnectCapability()
 	caps.Features = k8s.FeatureCapabilities{
 		YAMLReview:  true,
 		YAMLSchemas: true,
