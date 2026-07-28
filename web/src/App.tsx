@@ -50,7 +50,7 @@ import { DiagnosticsOverlay } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
 import { debugNamespaceLog, useNamespaces, useNamespaceScope, useSetActiveNamespace, useSwitchContext, useAuthMe, useAudit } from './api/client'
 import { buildAuditSeverityMap } from './utils/auditBadges'
-import { routePath, apiUrl, getAuthHeaders, getCredentialsMode } from './api/config'
+import { routePath, apiUrl, basenameRelativePath, getAuthHeaders, getCredentialsMode } from './api/config'
 import { KeyboardShortcutProvider, useRegisterShortcut, useRegisterShortcuts, useSuppressBaseShortcuts } from './hooks/useKeyboardShortcuts'
 import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
 import { useDocumentTitle } from './hooks/useDocumentTitle'
@@ -343,12 +343,15 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // Auth check — detect if auth is enabled but user is not authenticated
   const { data: authMe, isPending: authMePending } = useAuthMe()
 
-  // Restore navigation path after session-expiry re-auth redirect
+  // Restore navigation path after session-expiry re-auth redirect. The stored
+  // value is basename-relative, but sessionStorage survives the reload
+  // boundary — an older bundle may have written the full prefixed pathname —
+  // so normalize before handing it to the basename-aware navigate().
   useEffect(() => {
     const returnPath = sessionStorage.getItem('radar_return_path')
     if (returnPath) {
       sessionStorage.removeItem('radar_return_path')
-      navigate(returnPath, { replace: true })
+      navigate(basenameRelativePath(returnPath), { replace: true })
     }
   }, [navigate])
 

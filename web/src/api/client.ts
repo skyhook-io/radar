@@ -42,7 +42,14 @@ import type {
   ArgoRevisionMetadata,
 } from '../types'
 import type { GitOpsOperationResponse } from '../types/gitops'
-import { getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath } from './config'
+import {
+  basenameRelativePath,
+  getApiBase,
+  getAuthHeaders,
+  getCredentialsMode,
+  getBasename,
+  routePath,
+} from './config'
 import { pluralToKind } from '../utils/navigation'
 
 // Auto-refresh cadences (ms) — named constants for each polled hook's
@@ -74,11 +81,13 @@ export function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const authPrefix = `${getBasename()}/auth`
     if (response.status === 401 && !window.location.pathname.startsWith(authPrefix)) {
       // Save current location so user returns to where they were after re-auth.
-      // Editor draft is auto-saved by EditableYamlView via sessionStorage.
+      // Stored basename-relative: the restore replays it through the router,
+      // whose navigate() re-prepends the basename. Editor draft is auto-saved
+      // by EditableYamlView via sessionStorage.
       try {
         sessionStorage.setItem(
           'radar_return_path',
-          window.location.pathname + window.location.search,
+          basenameRelativePath(window.location.pathname) + window.location.search,
         )
       } catch {
         /* best-effort */
