@@ -44,18 +44,18 @@ The lane is advertised to the frontend as `capabilities.cloudConnect =
 flowchart TD
     A[User clicks Connect in Radar UI] --> B{Deployment mode}
     B -->|cloud / embedded| Z[Funnel hidden]
-    B -->|in-cluster| W[Hub wizard link\nexisting-install paste]
-    B -->|local| C{Auth disabled AND\nloopback listener AND\nno --cloud-url?}
+    B -->|in-cluster| W["Hub wizard link<br/>existing-install paste"]
+    B -->|local| C{"Auth disabled AND<br/>loopback listener AND<br/>no --cloud-url?"}
     C -->|no| W
-    C -->|yes| D[POST /api/cloud/install/prepare\ndiscovery → classify → chart prepare → preflight\nzero Hub contact]
-    D -->|GitOps-managed| G[Blocked: source-of-truth handoff\n→ radar cloud install]
-    D -->|multiple / conflicted /\nalready connected| G2[Blocked: classifier message\n→ CLI with explicit target]
-    D -->|preflight denied| G3[Blocked: blocking list\n→ platform operator]
-    D -->|fresh or adopt| E[Plan card: context, target,\nchart transition, consents]
-    E --> F[POST /start → Hub device flow\nbrowser approval tab]
-    F --> H[Provision: Helm + token Secret\nnon-cancelable, atomic]
-    H --> I[Wait for tunnel ≤5min]
-    I --> J[Connected: app.radarhq.io/c/id]
+    C -->|yes| D["POST /api/cloud/install/prepare<br/>discovery → classify → chart prepare → preflight<br/>zero Hub contact"]
+    D -->|GitOps-managed| G["Blocked: source-of-truth handoff<br/>→ radar cloud install"]
+    D -->|multiple / conflicted / already connected| G2["Blocked: classifier message<br/>→ CLI with explicit target"]
+    D -->|preflight denied| G3["Blocked: blocking list<br/>→ platform operator"]
+    D -->|fresh or adopt| E["Plan card: context, target,<br/>chart transition, consents"]
+    E --> F["POST /start → Hub device flow<br/>browser approval tab"]
+    F --> H["Provision: Helm + token Secret<br/>non-cancelable, atomic"]
+    H --> I["Wait for tunnel ≤5min"]
+    I --> J["Connected: app.radarhq.io/c/id"]
 ```
 
 ## Driver-lane flow states
@@ -70,7 +70,7 @@ stateDiagram-v2
     starting --> awaiting_approval: Hub connect request created
     starting --> failed: connect_failed
     awaiting_approval --> provisioning: approved
-    awaiting_approval --> failed: expired / rejected / pickup_expired /\napproval_unknown / canceled /\ncanceled_after_approval
+    awaiting_approval --> failed: terminal approval outcomes
     provisioning --> waiting_tunnel: Helm + Secret written
     provisioning --> failed: provision_failed (typed recovery)
     waiting_tunnel --> connected: tunnel confirmed

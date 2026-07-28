@@ -74,7 +74,6 @@ const (
 	cloudFailCanceledApproved   = "canceled_after_approval"
 	cloudFailProvision          = "provision_failed"
 	cloudFailTunnelUnconfirmed  = "tunnel_unconfirmed"
-	cloudFailInternal           = "internal"
 )
 
 const (

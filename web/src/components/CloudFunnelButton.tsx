@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Bell, Check, Globe, History, Sparkles, Users, X } from 'lucide-react'
 import { Tooltip } from './ui/Tooltip'
 import { CloudConnectFlow } from './CloudConnectFlow'
 import {
   cloudInstallActive,
   type CloudInstallBlocked,
+  type CloudInstallStatus,
   prepareCloudInstall,
   useCapabilities,
   useCloudInstallStatus,
@@ -41,11 +42,17 @@ export function CloudFunnelButton() {
   const flow = flowStatus.data
   const flowLive = cloudInstallActive(flow?.state) || flow?.state === 'connected' || flow?.state === 'failed'
 
+  const queryClient = useQueryClient()
+  const applyStatus = (st: CloudInstallStatus) => {
+    if (st.state !== 'blocked') queryClient.setQueryData(['cloud-install-status'], st)
+    flowStatus.invalidate()
+  }
+
   const prepare = useMutation({
     mutationFn: prepareCloudInstall,
     onSuccess: (st) => {
       if (st.state === 'blocked' && st.blocked) setBlocked(st.blocked)
-      flowStatus.invalidate()
+      else applyStatus(st)
     },
     meta: { errorMessage: 'Could not inspect this cluster for Cloud connect' },
   })
@@ -80,6 +87,11 @@ export function CloudFunnelButton() {
   }, [open])
 
   const showFlow = inFlowView && (blocked !== null || prepare.isPending || flowLive)
+  // The prepare POST can take tens of seconds (chart download + preflight);
+  // until the status poll observes the server-side flow, synthesize the
+  // preparing state so the modal never renders empty.
+  const flowForView: CloudInstallStatus | undefined =
+    prepare.isPending && !flowLive ? { state: 'preparing' } : flow
 
   return (
     <>
@@ -125,16 +137,16 @@ export function CloudFunnelButton() {
               <X className="w-4 h-4" />
             </button>
 
-            {showFlow && flow ? (
+            {showFlow && flowForView ? (
               <>
                 <div className="px-7 pt-6">
                   <Eyebrow />
                 </div>
                 <CloudConnectFlow
-                  status={flow}
+                  status={flowForView}
                   blocked={blocked}
                   signupUrl={signupUrl}
-                  onRefresh={() => flowStatus.invalidate()}
+                  onStatus={applyStatus}
                   onExit={exitFlow}
                 />
               </>

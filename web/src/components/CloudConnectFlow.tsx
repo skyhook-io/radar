@@ -17,14 +17,14 @@ export function CloudConnectFlow({
   status,
   blocked,
   signupUrl,
-  onRefresh,
+  onStatus,
   onExit,
 }: {
   status: CloudInstallStatus
   blocked: CloudInstallBlocked | null
   signupUrl: string
-  // Re-fetch flow status after a mutation.
-  onRefresh: () => void
+  // Push a mutation's status response into the shared query state.
+  onStatus: (st: CloudInstallStatus) => void
   // Leave the flow view (back to the pitch, or close after dismiss).
   onExit: () => void
 }) {
@@ -43,17 +43,17 @@ export function CloudConnectFlow({
         </div>
       )
     case 'ready':
-      return <PlanCard status={status} onRefresh={onRefresh} onExit={onExit} />
+      return <PlanCard status={status} onStatus={onStatus} onExit={onExit} />
     case 'starting':
     case 'awaiting_approval':
-      return <ApprovalCard status={status} onRefresh={onRefresh} />
+      return <ApprovalCard status={status} onStatus={onStatus} />
     case 'provisioning':
     case 'waiting_tunnel':
-      return <ProgressCard status={status} onRefresh={onRefresh} />
+      return <ProgressCard status={status} onStatus={onStatus} />
     case 'connected':
-      return <ConnectedCard status={status} onRefresh={onRefresh} onExit={onExit} />
+      return <ConnectedCard status={status} onStatus={onStatus} onExit={onExit} />
     case 'failed':
-      return <FailedCard status={status} onRefresh={onRefresh} onExit={onExit} />
+      return <FailedCard status={status} onStatus={onStatus} onExit={onExit} />
     default:
       return null
   }
@@ -120,11 +120,11 @@ function BlockedView({
 
 function PlanCard({
   status,
-  onRefresh,
+  onStatus,
   onExit,
 }: {
   status: CloudInstallStatus
-  onRefresh: () => void
+  onStatus: (st: CloudInstallStatus) => void
   onExit: () => void
 }) {
   const plan = status.plan
@@ -142,14 +142,14 @@ function PlanCard({
       }),
     onSuccess: (st) => {
       if (st.connectUrl) window.open(st.connectUrl, '_blank', 'noopener')
-      onRefresh()
+      onStatus(st)
     },
     meta: { errorMessage: 'Could not start the Cloud connection' },
   })
   const discard = useMutation({
     mutationFn: () => cancelCloudInstall(status.flowId ?? ''),
-    onSuccess: () => {
-      onRefresh()
+    onSuccess: (st) => {
+      onStatus(st)
       onExit()
     },
     meta: { errorMessage: 'Could not discard the connection plan' },
@@ -269,8 +269,8 @@ function ConsentRow({
   )
 }
 
-function ApprovalCard({ status, onRefresh }: { status: CloudInstallStatus; onRefresh: () => void }) {
-  const cancel = useCancelButton(status, onRefresh)
+function ApprovalCard({ status, onStatus }: { status: CloudInstallStatus; onStatus: (st: CloudInstallStatus) => void }) {
+  const cancel = useCancelButton(status, onStatus)
   return (
     <div className="px-7 pt-6 pb-5">
       <div className="flex items-center gap-2.5 mb-3">
@@ -299,9 +299,9 @@ function ApprovalCard({ status, onRefresh }: { status: CloudInstallStatus; onRef
   )
 }
 
-function ProgressCard({ status, onRefresh }: { status: CloudInstallStatus; onRefresh: () => void }) {
+function ProgressCard({ status, onStatus }: { status: CloudInstallStatus; onStatus: (st: CloudInstallStatus) => void }) {
   const provisioning = status.state === 'provisioning'
-  const cancel = useCancelButton(status, onRefresh)
+  const cancel = useCancelButton(status, onStatus)
   const steps: Array<{ label: string; state: 'done' | 'active' | 'todo' }> = [
     { label: 'Approved in browser', state: 'done' },
     { label: `Installing Radar (namespace ${status.plan?.namespace ?? 'radar'})`, state: provisioning ? 'active' : 'done' },
@@ -343,10 +343,10 @@ function ProgressCard({ status, onRefresh }: { status: CloudInstallStatus; onRef
   )
 }
 
-function useCancelButton(status: CloudInstallStatus, onRefresh: () => void) {
+function useCancelButton(status: CloudInstallStatus, onStatus: (st: CloudInstallStatus) => void) {
   const cancel = useMutation({
     mutationFn: () => cancelCloudInstall(status.flowId ?? ''),
-    onSuccess: onRefresh,
+    onSuccess: onStatus,
     meta: { errorMessage: 'Could not cancel the connection' },
   })
   return (
@@ -362,14 +362,14 @@ function useCancelButton(status: CloudInstallStatus, onRefresh: () => void) {
 
 function ConnectedCard({
   status,
-  onRefresh,
+  onStatus,
   onExit,
 }: {
   status: CloudInstallStatus
-  onRefresh: () => void
+  onStatus: (st: CloudInstallStatus) => void
   onExit: () => void
 }) {
-  const dismiss = useDismiss(status, onRefresh, onExit)
+  const dismiss = useDismiss(status, onStatus, onExit)
   const connected = status.connected
   if (!connected) return null
   return (
@@ -406,14 +406,14 @@ function ConnectedCard({
 
 function FailedCard({
   status,
-  onRefresh,
+  onStatus,
   onExit,
 }: {
   status: CloudInstallStatus
-  onRefresh: () => void
+  onStatus: (st: CloudInstallStatus) => void
   onExit: () => void
 }) {
-  const dismiss = useDismiss(status, onRefresh, onExit)
+  const dismiss = useDismiss(status, onStatus, onExit)
   const failure = status.failure
   if (!failure) return null
   return (
@@ -435,11 +435,11 @@ function FailedCard({
   )
 }
 
-function useDismiss(status: CloudInstallStatus, onRefresh: () => void, onExit: () => void) {
+function useDismiss(status: CloudInstallStatus, onStatus: (st: CloudInstallStatus) => void, onExit: () => void) {
   const dismiss = useMutation({
     mutationFn: () => dismissCloudInstall(status.flowId ?? ''),
-    onSuccess: () => {
-      onRefresh()
+    onSuccess: (st) => {
+      onStatus(st)
       onExit()
     },
     meta: { errorMessage: 'Could not dismiss the connection flow' },
