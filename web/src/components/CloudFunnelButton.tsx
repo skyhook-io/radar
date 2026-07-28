@@ -3,19 +3,15 @@ import { createPortal } from 'react-dom'
 import { Bell, Check, Globe, History, Sparkles, Users, X } from 'lucide-react'
 import { Tooltip } from './ui/Tooltip'
 
-// DESIGN REVIEW MOCK — OSS → Cloud funnel (SKY-1107).
-// Three modal variants behind a temporary switcher; one will ship, the
-// switcher won't. Ships dark by design: no impressions, no remote config —
-// conversion is measured on the receiving end via utm_source.
+// OSS → Cloud funnel: a quiet globe button in the top bar that opens a modal
+// pitching Radar Cloud. Ships dark by design: no impressions, no remote
+// config — conversion is measured on the receiving end via utm_source.
 const SIGNUP_URL = 'https://app.radarhq.io/signup?utm_source=radar-oss&utm_medium=app&utm_campaign=cloud-modal'
 const ABOUT_URL = 'https://www.radarhq.io/about'
 const DEMO_URL = 'https://www.radarhq.io/demo'
 
-type Variant = 'letter' | 'features' | 'postcard'
-
 export function CloudFunnelButton() {
   const [open, setOpen] = useState(false)
-  const [variant, setVariant] = useState<Variant>('features')
   const [seen, setSeen] = useState(() => localStorage.getItem('radar.cloudFunnel.seen') === 'true')
   const closeRef = useRef<HTMLButtonElement>(null)
 
@@ -30,9 +26,6 @@ export function CloudFunnelButton() {
     closeRef.current?.focus()
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false)
-      if (e.key === '1') setVariant('letter')
-      if (e.key === '2') setVariant('features')
-      if (e.key === '3') setVariant('postcard')
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -60,14 +53,14 @@ export function CloudFunnelButton() {
           would otherwise trap this fixed overlay inside the 49px bar. */}
       {open && createPortal(
         <div
-          className="fixed inset-0 z-[100] flex flex-col items-center justify-center gap-4 bg-black/60 backdrop-blur-sm p-6"
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-6"
           onClick={(e) => { if (e.target === e.currentTarget) setOpen(false) }}
         >
           <div
             role="dialog"
             aria-modal="true"
             aria-label="Radar Cloud"
-            className={`dialog relative overflow-hidden ${variant === 'postcard' ? 'w-[640px]' : 'w-[500px]'} max-w-full max-h-full overflow-y-auto`}
+            className="dialog relative overflow-hidden w-[500px] max-w-full max-h-full overflow-y-auto"
           >
             <button
               ref={closeRef}
@@ -78,36 +71,9 @@ export function CloudFunnelButton() {
               <X className="w-4 h-4" />
             </button>
 
-            {variant === 'letter' && <LetterVariant />}
-            {variant === 'features' && <FeaturesVariant />}
-            {variant === 'postcard' && <PostcardVariant />}
+            <ModalBody />
 
             <ModalFooter onLater={() => setOpen(false)} />
-          </div>
-
-          {/* Temporary design-review switcher — not part of the shipping design */}
-          <div
-            className="flex items-center gap-1 rounded-full bg-theme-surface border border-theme-border shadow-theme-lg px-2 py-1.5 font-mono text-[11px] text-theme-text-tertiary"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <span className="px-1.5 uppercase tracking-wider text-[9.5px]">Design review</span>
-            {([
-              ['letter', '1 · Letter'],
-              ['features', '2 · Features'],
-              ['postcard', '3 · Postcard'],
-            ] as const).map(([v, label]) => (
-              <button
-                key={v}
-                onClick={() => setVariant(v)}
-                className={`px-2.5 py-1 rounded-full transition-colors ${
-                  variant === v
-                    ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-300'
-                    : 'hover:bg-theme-hover hover:text-theme-text-primary'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
           </div>
         </div>,
         document.body
@@ -116,12 +82,12 @@ export function CloudFunnelButton() {
   )
 }
 
-function RadarSweep({ size = 30 }: { size?: number }) {
+function RadarSweep() {
   return (
     <div
       aria-hidden
-      className="relative rounded-full overflow-hidden shrink-0 border border-emerald-400/60 shadow-[0_0_12px_rgba(16,185,129,0.35)]"
-      style={{ width: size, height: size, background: 'radial-gradient(circle at 50% 50%, #072920 0%, #03180f 70%, #010a06 100%)' }}
+      className="relative w-[30px] h-[30px] rounded-full overflow-hidden shrink-0 border border-emerald-400/60 shadow-[0_0_12px_rgba(16,185,129,0.35)]"
+      style={{ background: 'radial-gradient(circle at 50% 50%, #072920 0%, #03180f 70%, #010a06 100%)' }}
     >
       <div className="absolute inset-[16%] rounded-full border border-emerald-600/50" />
       <div
@@ -132,17 +98,16 @@ function RadarSweep({ size = 30 }: { size?: number }) {
   )
 }
 
-function Eyebrow({ label }: { label: string }) {
+function Eyebrow() {
   return (
     <div className="flex items-center gap-2.5 mb-3.5">
       <RadarSweep />
-      <span className="font-mono text-[10.5px] tracking-[0.16em] uppercase text-emerald-600 dark:text-emerald-400">{label}</span>
+      <span className="font-mono text-[10.5px] tracking-[0.16em] uppercase text-emerald-600 dark:text-emerald-400">Radar Cloud</span>
     </div>
   )
 }
 
-function Faces({ size = 'md' }: { size?: 'sm' | 'md' }) {
-  const cls = size === 'sm' ? 'w-6 h-6 text-[10px]' : 'w-7 h-7 text-[11px]'
+function Faces() {
   return (
     <div className="flex shrink-0" aria-hidden>
       {[
@@ -152,7 +117,7 @@ function Faces({ size = 'md' }: { size?: 'sm' | 'md' }) {
       ].map(([initial, color], i) => (
         <div
           key={initial}
-          className={`${cls} ${color} rounded-full grid place-items-center font-bold border-2 border-theme-surface ${i > 0 ? '-ml-1.5' : ''}`}
+          className={`w-6 h-6 text-[10px] ${color} rounded-full grid place-items-center font-bold border-2 border-theme-surface ${i > 0 ? '-ml-1.5' : ''}`}
         >
           {initial}
         </div>
@@ -202,45 +167,10 @@ function ModalFooter({ onLater }: { onLater: () => void }) {
   )
 }
 
-// Variant 1 — a letter from the team. Most personal, feature mentions stay in prose.
-function LetterVariant() {
-  return (
-    <div className="px-7 pt-6 pb-1">
-      <Eyebrow label="A note from the Radar team" />
-      <h3 className="text-[21px] font-semibold leading-tight tracking-tight text-theme-text-primary mb-3 text-balance">
-        Hi — it's the humans behind Radar.
-      </h3>
-      <div className="space-y-3 text-[13.5px] leading-relaxed text-theme-text-secondary mb-4">
-        <p>
-          Radar is built in the open by many hands, and overseen by a small team of us. It's Apache&nbsp;2.0 and
-          it stays that way: every feature you're using ships in the open, forever. No rug pulls.
-        </p>
-        <p>
-          The way we keep the lights on is <b className="text-theme-text-primary font-semibold">Radar Cloud</b> —
-          the same Radar, plus the parts that are genuinely hard to run yourself: every cluster under one URL,
-          your team with SSO, alerts that find you at 3am, history that sticks around, and an AI agent that
-          analyzes issues and proposes the fix.
-        </p>
-        <p>
-          If it's just you and one cluster — honestly, stay right here. This app is the product, not a demo.
-          But if your team is juggling five browser tabs of Radar, we'd love to show you Cloud.
-        </p>
-      </div>
-      <div className="flex items-center gap-2.5 mb-5">
-        <Faces size="sm" />
-        <span className="text-[12px] text-theme-text-tertiary italic">
-          — the Radar team{' '}
-          <a href={ABOUT_URL} target="_blank" rel="noopener noreferrer" className="not-italic text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary">
-            meet us →
-          </a>
-        </span>
-      </div>
-    </div>
-  )
-}
-
-// Variant 2 — headline defuses the paywall fear, then a 2×2 feature grid.
-function FeaturesVariant() {
+// Headline defuses the paywall fear before anything is pitched; the grid
+// carries the concrete capabilities; the humans strip closes with the
+// anti-sell — the credibility beat that makes the sell land.
+function ModalBody() {
   const features = [
     {
       icon: Globe,
@@ -271,7 +201,7 @@ function FeaturesVariant() {
   ]
   return (
     <div className="px-7 pt-6 pb-1">
-      <Eyebrow label="Radar Cloud" />
+      <Eyebrow />
       <h3 className="text-[21px] font-semibold leading-tight tracking-tight text-theme-text-primary mb-2.5 text-balance">
         First things first: Radar stays free.
       </h3>
@@ -291,64 +221,22 @@ function FeaturesVariant() {
           </div>
         ))}
       </div>
-      <div className="flex items-center gap-2 mb-4">
-        <Faces size="sm" />
-        <p className="text-[11px] text-theme-text-tertiary">
-          Radar is built in the open by many hands, and overseen by a small team of humans — the kind you can
-          actually talk to.{' '}
-          <a href={ABOUT_URL} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary">
-            Meet us →
-          </a>
-        </p>
-      </div>
-    </div>
-  )
-}
-
-// Variant 3 — compact split postcard: emerald art panel + terse checklist.
-function PostcardVariant() {
-  return (
-    <div className="flex items-stretch">
-      <div
-        className="w-[220px] shrink-0 flex flex-col justify-between p-5 text-emerald-50"
-        style={{ background: 'radial-gradient(120% 120% at 20% 15%, #0e3b2f 0%, #072018 55%, #03180f 100%)' }}
-      >
-        <RadarSweep size={54} />
-        <div>
-          <p className="text-[15px] font-semibold leading-snug text-balance">
-            We keep Radar free. Cloud keeps our lights on.
-          </p>
-          <a
-            href={ABOUT_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="mt-2.5 inline-flex items-center gap-1.5 text-[11px] text-emerald-300/90 hover:text-emerald-200"
-          >
-            <Faces size="sm" /> meet the humans →
-          </a>
+      <div className="flex items-start gap-2.5 mb-4">
+        <div className="mt-0.5">
+          <Faces />
         </div>
-      </div>
-      <div className="flex-1 px-6 pt-6 pb-1">
-        <h3 className="text-[19px] font-semibold leading-tight tracking-tight text-theme-text-primary mb-2 text-balance">
-          Same Radar. Every cluster. One URL.
-        </h3>
-        <p className="text-[12.5px] leading-relaxed text-theme-text-secondary mb-3.5">
-          Everything here stays Apache&nbsp;2.0, forever. Cloud adds the parts that are hard to run yourself:
-        </p>
-        <ul className="space-y-2 mb-5 text-[12.5px] text-theme-text-secondary">
-          {[
-            'Fleet-wide issues, checks and search',
-            'Your team — SSO, roles, RBAC intact',
-            'Slack alerts when things break at 3am',
-            'History that sticks around',
-            'An AI agent that analyzes issues and proposes fixes',
-          ].map((line) => (
-            <li key={line} className="flex items-start gap-2">
-              <span className="mt-[7px] w-1 h-1 rounded-full bg-emerald-500 shrink-0" />
-              {line}
-            </li>
-          ))}
-        </ul>
+        <div className="min-w-0">
+          <p className="text-[12px] leading-snug text-theme-text-secondary">
+            If it's just you and one cluster — honestly, stay right here. This app is the product, not a demo.
+          </p>
+          <p className="mt-1 text-[11px] leading-snug text-theme-text-tertiary">
+            Radar is built in the open by many hands, and overseen by a small team of humans — the kind you can
+            actually talk to.{' '}
+            <a href={ABOUT_URL} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary">
+              Meet us →
+            </a>
+          </p>
+        </div>
       </div>
     </div>
   )
