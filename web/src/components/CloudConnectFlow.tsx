@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { AlertTriangle, ArrowUpRight, Check, ExternalLink, GitBranch, Loader2, ShieldAlert, X } from 'lucide-react'
 import {
@@ -47,6 +47,8 @@ export function CloudConnectFlow({
     case 'starting':
     case 'awaiting_approval':
       return <ApprovalCard status={status} onStatus={onStatus} />
+    case 'blocked':
+      return null
     case 'provisioning':
     case 'waiting_tunnel':
       return <ProgressCard status={status} onStatus={onStatus} />
@@ -132,6 +134,10 @@ function PlanCard({
   const [acceptAdoption, setAcceptAdoption] = useState(false)
   const [ackUncertainty, setAckUncertainty] = useState(false)
 
+  // The approval tab is opened synchronously by the click below (popup
+  // blockers reject window.open from an async callback) and navigated once the
+  // Hub returns the URL. A blocked or closed tab degrades to "Open again".
+  const approvalTab = useRef<Window | null>(null)
   const start = useMutation({
     mutationFn: () =>
       startCloudInstall({
@@ -141,8 +147,21 @@ function PlanCard({
         acknowledgeIncompleteDiscovery: ackUncertainty,
       }),
     onSuccess: (st) => {
-      if (st.connectUrl) window.open(st.connectUrl, '_blank', 'noopener')
+      if (st.connectUrl) {
+        if (approvalTab.current && !approvalTab.current.closed) {
+          approvalTab.current.location.href = st.connectUrl
+        } else {
+          window.open(st.connectUrl, '_blank', 'noopener')
+        }
+      } else {
+        approvalTab.current?.close()
+      }
+      approvalTab.current = null
       onStatus(st)
+    },
+    onError: () => {
+      approvalTab.current?.close()
+      approvalTab.current = null
     },
     meta: { errorMessage: 'Could not start the Cloud connection' },
   })
@@ -215,7 +234,10 @@ function PlanCard({
 
       <div className="mt-4 flex items-center gap-4">
         <button
-          onClick={() => start.mutate()}
+          onClick={() => {
+            approvalTab.current = window.open('about:blank', '_blank', 'noopener')
+            start.mutate()
+          }}
           disabled={startDisabled}
           className="px-5 py-2 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed text-emerald-950 text-[13px] font-bold transition-all"
         >
@@ -271,15 +293,18 @@ function ConsentRow({
 
 function ApprovalCard({ status, onStatus }: { status: CloudInstallStatus; onStatus: (st: CloudInstallStatus) => void }) {
   const cancel = useCancelButton(status, onStatus)
+  const starting = status.state === 'starting'
   return (
     <div className="px-7 pt-6 pb-5">
       <div className="flex items-center gap-2.5 mb-3">
         <Loader2 className="w-4 h-4 animate-spin text-emerald-600 dark:text-emerald-400" />
-        <h4 className="text-[15px] font-semibold text-theme-text-primary">Waiting for browser approval</h4>
+        <h4 className="text-[15px] font-semibold text-theme-text-primary">
+          {starting ? 'Opening the approval page…' : 'Waiting for browser approval'}
+        </h4>
       </div>
       <p className="text-[12.5px] leading-relaxed text-theme-text-secondary mb-3.5">
-        Approve connecting <b className="text-theme-text-primary">{status.clusterName}</b> in the tab that just
-        opened. Sign-in and org setup happen there too — this screen advances automatically.
+        Approve connecting <b className="text-theme-text-primary">{status.clusterName}</b> in the browser tab.
+        Sign-in and org setup happen there too — this screen advances automatically.
       </p>
       {status.connectUrl && (
         <div className="card-inner flex items-center gap-2">
@@ -294,7 +319,7 @@ function ApprovalCard({ status, onStatus }: { status: CloudInstallStatus; onStat
           </button>
         </div>
       )}
-      <div className="mt-4">{cancel}</div>
+      <div className="mt-4">{starting ? null : cancel}</div>
     </div>
   )
 }
@@ -447,9 +472,20 @@ function useDismiss(status: CloudInstallStatus, onStatus: (st: CloudInstallStatu
   return () => dismiss.mutate()
 }
 
-function GuidanceBlock({ guidance }: { guidance: CloudInstallRecoveryGuidance }) {
+function GuidanceBlock({
+  guidance,
+  showSummary,
+}: {
+  guidance: CloudInstallRecoveryGuidance
+  // Terminal failures already use the summary as their headline; suppress it
+  // there so the same sentence doesn't render twice.
+  showSummary?: boolean
+}) {
   return (
     <div className="card-inner-lg space-y-2 text-[11.5px] leading-relaxed text-theme-text-secondary">
+      {showSummary && guidance.summary && (
+        <p className="font-semibold text-theme-text-primary">{guidance.summary}</p>
+      )}
       {guidance.lines?.map((line) => <p key={line}>{line}</p>)}
       {guidance.inspect && guidance.inspect.length > 0 && (
         <pre className="p-2 rounded-md bg-theme-elevated overflow-x-auto font-mono text-[10.5px] text-theme-text-primary">
@@ -477,7 +513,7 @@ function GuidanceDetails({ title, guidance }: { title: string; guidance: CloudIn
         {title}
       </summary>
       <div className="mt-2">
-        <GuidanceBlock guidance={guidance} />
+        <GuidanceBlock guidance={guidance} showSummary />
       </div>
     </details>
   )

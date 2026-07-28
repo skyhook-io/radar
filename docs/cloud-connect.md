@@ -92,7 +92,7 @@ cluster may exist; follow the guidance first".
 | `rejected` | Explicitly rejected on the consent page | yes |
 | `pickup_expired` | Approved, but the token-pickup window lapsed | no — pending cluster exists |
 | `approval_unknown` | Lost Hub contact; approval may have committed | no — check clusters list |
-| `canceled` | Canceled before approval | yes |
+| `approval_unknown` (cancel) | Canceled; the approval page stays valid until it expires, so a cluster may still appear | no — check the clusters list |
 | `canceled_after_approval` | Cancel raced an approval; cluster exists, nothing installed | no |
 | `provision_failed` | Helm failed post-approval; adoption rolls back atomically (rollback status included) | no |
 | `tunnel_unconfirmed` | Installed, but the agent didn't attach in 5 min | no — agent may still connect |

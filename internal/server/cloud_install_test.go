@@ -48,6 +48,9 @@ type fakeConnectClient struct {
 	approve        chan *cloud.PollResponse
 	approveOnCancel *cloud.PollResponse
 	consume        chan error
+	// beforeApprovalReturn runs just before an approval is handed back, so a
+	// test can widen the window between "approved" and the provisioning claim.
+	beforeApprovalReturn func()
 }
 
 func (f *fakeConnectClient) Create(_ context.Context, _ cloud.ConnectMetadata) (*cloud.CreateResponse, error) {
@@ -63,13 +66,18 @@ func (f *fakeConnectClient) PollUntilApproved(ctx context.Context, _ *cloud.Crea
 	}
 	select {
 	case pr := <-f.approve:
+		if f.beforeApprovalReturn != nil {
+			f.beforeApprovalReturn()
+		}
 		return pr, nil
 	case <-ctx.Done():
 		if f.approveOnCancel != nil {
 			// Models finalPollAfterCancellation catching a racing approval.
 			return f.approveOnCancel, nil
 		}
-		return nil, ctx.Err()
+		// The real client wraps cancellation with an explicit "approval may
+		// have created a cluster" warning rather than returning it bare.
+		return nil, fmt.Errorf("%w: browser approval may have created a cluster in the Hub", ctx.Err())
 	}
 }
 
@@ -329,7 +337,9 @@ func TestCloudInstallApprovalTerminalOutcomes(t *testing.T) {
 	}
 }
 
-func TestCloudInstallCancelBeforeApprovalIsHarmless(t *testing.T) {
+// A cancel is never provably harmless: the Hub's approval page stays valid
+// until it expires, so an approval can commit after Radar stops polling.
+func TestCloudInstallCancelBeforeApprovalIsAmbiguous(t *testing.T) {
 	fx := newManagerFixture(cloudinstall.ProvisionFresh, cloudinstall.InstallModeFresh, nil)
 	_, _, err := fx.m.prepare(context.Background())
 	if err != nil {
@@ -344,8 +354,11 @@ func TestCloudInstallCancelBeforeApprovalIsHarmless(t *testing.T) {
 		t.Fatalf("cancel: %v", err)
 	}
 	st = waitForState(t, fx.m, cloudFlowFailed)
-	if st.Failure.Kind != cloudFailCanceled || !st.Failure.RetrySafe {
+	if st.Failure.Kind != cloudFailApprovalUnknown || st.Failure.RetrySafe {
 		t.Fatalf("failure = %+v", st.Failure)
+	}
+	if st.Failure.Guidance == nil || !strings.HasSuffix(st.Failure.Guidance.ClusterURL, "/clusters") {
+		t.Fatalf("guidance = %+v", st.Failure.Guidance)
 	}
 }
 
@@ -560,4 +573,42 @@ func TestCloudInstallStatusJSONNeverContainsTokenField(t *testing.T) {
 	if strings.Contains(strings.ToLower(fmt.Sprintf("%+v", cloudInstallStatus{})), "token") {
 		t.Fatal("cloudInstallStatus carries a token-named field")
 	}
+}
+
+// A cancel accepted while the approval poll is returning must not be followed
+// by a Helm apply: the user got a success response for the cancel.
+func TestCloudInstallCancelAcceptedBeforeProvisionBlocksTheApply(t *testing.T) {
+	fx := newManagerFixture(cloudinstall.ProvisionFresh, cloudinstall.InstallModeFresh, nil)
+	// Gate the run goroutine right where it would claim `provisioning`, so the
+	// cancel lands in the window the lock is meant to close.
+	release := make(chan struct{})
+	fx.m.backend.provision = func(context.Context, cloudInstallClients, preparedInstall, cloudinstall.ProvisionConfig) error {
+		t.Error("provision ran after the cancel was accepted")
+		return nil
+	}
+	fx.connect.beforeApprovalReturn = func() { <-release }
+
+	if _, _, err := fx.m.prepare(context.Background()); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	st := waitForState(t, fx.m, cloudFlowReady)
+	if _, err := fx.m.start(cloudInstallStartRequest{FlowID: st.FlowID}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitForState(t, fx.m, cloudFlowAwaitingApproval)
+
+	fx.connect.approve <- &cloud.PollResponse{Status: "approved", ClusterID: "cl_race", Token: testToken, WSSURL: "wss://api.test.example/agent"}
+	if err := fx.m.cancelFlow(st.FlowID); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	close(release)
+
+	st = waitForState(t, fx.m, cloudFlowFailed)
+	if st.Failure.Kind != cloudFailCanceledApproved || st.Failure.RetrySafe {
+		t.Fatalf("failure = %+v", st.Failure)
+	}
+	if st.Failure.Guidance == nil || !strings.Contains(st.Failure.Guidance.ClusterURL, "cl_race") {
+		t.Fatalf("guidance = %+v", st.Failure.Guidance)
+	}
+	assertNoTokenInStatus(t, fx.m)
 }

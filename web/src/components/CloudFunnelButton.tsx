@@ -76,6 +76,12 @@ export function CloudFunnelButton() {
     setBlocked(null)
   }
 
+  // Re-attach to a server-owned flow whenever one is observed while the modal
+  // is open — the status query may resolve after openModal ran.
+  useEffect(() => {
+    if (open && lane === 'driver' && flowLive) setInFlowView(true)
+  }, [open, lane, flowLive])
+
   useEffect(() => {
     if (!open) return
     closeRef.current?.focus()

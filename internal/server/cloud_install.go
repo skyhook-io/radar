@@ -70,7 +70,6 @@ const (
 	cloudFailExpired            = "expired"
 	cloudFailPickupExpired      = "pickup_expired"
 	cloudFailApprovalUnknown    = "approval_unknown"
-	cloudFailCanceled           = "canceled"
 	cloudFailCanceledApproved   = "canceled_after_approval"
 	cloudFailProvision          = "provision_failed"
 	cloudFailTunnelUnconfirmed  = "tunnel_unconfirmed"
@@ -177,6 +176,9 @@ type cloudInstallFlow struct {
 	connectURL        string
 	approvalExpiresAt time.Time
 	cancel            context.CancelFunc
+	// canceling is set under the manager lock the moment a cancel is accepted,
+	// so the run goroutine cannot claim the provisioning state afterwards.
+	canceling bool
 
 	connected *cloudInstallConnected
 	failure   *cloudInstallFailure
@@ -516,7 +518,15 @@ func (m *cloudInstallManager) run(ctx context.Context, flow *cloudInstallFlow, c
 				ClusterURL: clustersURL,
 			}, false)
 		case ctx.Err() != nil:
-			fail(cloudFailCanceled, "The connection was canceled before approval. No cluster was created.", nil, true)
+			// PollUntilApproved runs a final poll after cancellation and only
+			// reaches here when that poll could NOT rule out an approval (its
+			// error says so explicitly). Definitive outcomes — expired,
+			// rejected, pickup-expired — matched the cases above, so a plain
+			// cancellation is ambiguous, not harmless.
+			fail(cloudFailApprovalUnknown, "Connection canceled. If the browser approval was already completed, a pending cluster may exist — the approval page stays valid until it expires.", &cloudinstall.RecoveryGuidance{
+				Summary:    "Check for a pending cluster before starting a fresh connection:",
+				ClusterURL: clustersURL,
+			}, false)
 		default:
 			fail(cloudFailConnect, fmt.Sprintf("connect failed: %v", err), &cloudinstall.RecoveryGuidance{
 				Summary:    "Check the clusters list before retrying:",
@@ -536,6 +546,17 @@ func (m *cloudInstallManager) run(ctx context.Context, flow *cloudInstallFlow, c
 	m.mu.Lock()
 	if m.flow != flow {
 		m.mu.Unlock()
+		return
+	}
+	// Claiming the provisioning state and observing cancellation happen under
+	// the same lock cancelFlow takes, so there is no window where cancel
+	// returns success and Helm still runs: either cancel wins (canceling is
+	// set, we bail here) or this transition wins (cancelFlow then sees
+	// provisioning and refuses).
+	if flow.canceling {
+		m.mu.Unlock()
+		g := cloudinstall.CanceledAfterApprovalGuidance(pr.ClusterID, clusterURL, "Start a new connection to try again.")
+		fail(cloudFailCanceledApproved, g.Summary, &g, false)
 		return
 	}
 	flow.state = cloudFlowProvisioning
@@ -568,7 +589,10 @@ func (m *cloudInstallManager) run(ctx context.Context, flow *cloudInstallFlow, c
 	if err != nil {
 		log.Printf("[cloud-install] provisioning failed for cluster %s: %v", pr.ClusterID, err)
 		g := cloudinstall.PostApprovalProvisionGuidance(pr.ClusterID, clusterURL, recovery, err, target)
-		fail(cloudFailProvision, fmt.Sprintf("provisioning failed: %v", err), &g, false)
+		// The summary carries the "do not rerun the installer" instruction, so
+		// it must be the headline; the raw Helm error rides along as detail.
+		g.Lines = append([]string{fmt.Sprintf("Provisioning failed: %v", err)}, g.Lines...)
+		fail(cloudFailProvision, g.Summary, &g, false)
 		return
 	}
 
@@ -618,7 +642,8 @@ func (m *cloudInstallManager) cancelFlow(flowID string) error {
 	case cloudFlowReady, cloudFlowPreparing:
 		m.flow = nil
 		return nil
-	case cloudFlowAwaitingApproval, cloudFlowWaitingTunnel:
+	case cloudFlowStarting, cloudFlowAwaitingApproval, cloudFlowWaitingTunnel:
+		flow.canceling = true
 		if flow.cancel != nil {
 			flow.cancel()
 		}
