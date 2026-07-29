@@ -70,6 +70,8 @@ type AppConfig struct {
 func SetGlobals(cfg AppConfig) {
 	k8s.DebugEvents = cfg.DebugEvents
 	k8s.TimingLogs = cfg.DevMode
+	// Init-only write, before any goroutine reads it; later reads happen under
+	// clientMu and assume no concurrent mutation.
 	k8s.ForceInCluster = cfg.FakeInCluster
 	k8s.ForceDisableHelmWrite = cfg.DisableHelmWrite
 	k8s.ForceDisableExec = cfg.DisableExec

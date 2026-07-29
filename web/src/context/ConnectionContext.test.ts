@@ -3,8 +3,15 @@ import { describe, expect, it } from 'vitest'
 import { shouldApplyPolledConnection, shouldAutoRetryConnection } from './ConnectionContext'
 
 describe('shouldAutoRetryConnection', () => {
-  it('retries runtime authentication loss', () => {
-    expect(shouldAutoRetryConnection('auth')).toBe(true)
+  it('retries transient failures', () => {
+    expect(shouldAutoRetryConnection('network')).toBe(true)
+    expect(shouldAutoRetryConnection('timeout')).toBe(true)
+    expect(shouldAutoRetryConnection(undefined)).toBe(true)
+  })
+
+  it('leaves auth-shaped failures to the server-side recovery loop', () => {
+    expect(shouldAutoRetryConnection('auth')).toBe(false)
+    expect(shouldAutoRetryConnection('auth-rejected')).toBe(false)
   })
 
   it('leaves configuration and RBAC errors for the user to resolve', () => {

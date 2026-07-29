@@ -82,12 +82,16 @@ var (
 	sessionStopFunc func()
 
 	// contextOpMu serializes the destructive context-changing operations
-	// (PerformContextSwitch, PerformNamespaceRescope). operationGen only decides
-	// which operation gets to roll back / notify; it does NOT stop two operations
-	// from running ResetAllSubsystems + InitAllSubsystems concurrently on the
-	// shared cache singletons. This mutex does — a second request waits for the
-	// first to finish rather than interleaving teardown/init.
-	contextOpMu             sync.Mutex
+	// (PerformContextSwitch, PerformNamespaceRescope, and runtime auth-loss
+	// demotion). operationGen only decides which operation gets to roll back /
+	// notify; it does NOT stop two operations from running ResetAllSubsystems +
+	// InitAllSubsystems concurrently on the shared cache singletons. This mutex
+	// does — a second request waits for the first to finish rather than
+	// interleaving teardown/init.
+	contextOpMu sync.Mutex
+	// Incremented BEFORE contextOpMu is acquired — that ordering is the
+	// mechanism: it makes a queued-but-blocked operation visible to runtime
+	// auth-loss candidate intake, which a try-lock could never see.
 	activeContextOperations atomic.Int32
 
 	// operationCtx is canceled at the start of every context switch and retry.
@@ -97,10 +101,11 @@ var (
 	operationCancel context.CancelFunc
 	operationMu     sync.Mutex
 	// operationGen bumps on every CancelOngoingOperations (i.e. at the start of
-	// every context switch / rescope). An operation captures the generation it
-	// owns; if a newer operation has since started, the older one must not apply
-	// destructive side effects (e.g. a namespace-rescope rollback against the
-	// context a newer switch already moved to).
+	// every context switch / rescope, and on runtime auth-loss demotion). An
+	// operation captures the generation it owns; if a newer operation has since
+	// started, the older one must not apply destructive side effects (e.g. a
+	// namespace-rescope rollback against the context a newer switch already
+	// moved to).
 	operationGen uint64
 )
 
@@ -110,7 +115,8 @@ func init() {
 
 // CancelOngoingOperations cancels any in-flight API calls from previous
 // operations (capabilities checks, RBAC checks, etc.) and creates a fresh
-// operation context. Called at the start of context switch and retry.
+// operation context. Called at the start of context switch and retry, and by
+// runtime auth-loss demotion.
 func CancelOngoingOperations() {
 	operationMu.Lock()
 	defer operationMu.Unlock()
@@ -177,7 +183,10 @@ func stopActiveSessions() {
 // OnBeforeContextSwitch registers a callback fired at the very start of
 // PerformContextSwitch, BEFORE the client is repointed at the new cluster — for
 // teardown that must happen against the old context (e.g. cancelling in-flight
-// AI investigations so their agent can't touch the new cluster).
+// AI investigations so their agent can't touch the new cluster). Runtime
+// auth-loss demotion also fires it as a quiesce-in-place: no switch follows and
+// the argument is the CURRENT context, so callbacks must not infer "changed"
+// by comparing it against the active context name.
 func OnBeforeContextSwitch(callback ContextSwitchCallback) {
 	contextSwitchMu.Lock()
 	defer contextSwitchMu.Unlock()

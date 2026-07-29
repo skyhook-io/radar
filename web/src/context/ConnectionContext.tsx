@@ -16,7 +16,8 @@ export interface ConnectionState {
 }
 
 interface ConnectionStatusResponse extends ConnectionState {
-  contexts: ContextInfo[]
+  // Omitted when the poll asks for status only (?contexts=0)
+  contexts?: ContextInfo[]
 }
 
 interface PolledConnectionStatus extends ConnectionStatusResponse {
@@ -47,7 +48,11 @@ const AUTO_RETRY_MAX_DELAY_MS = 60000
 const CONNECTION_STATUS_FALLBACK_POLL_MS = 30000
 
 export function shouldAutoRetryConnection(errorType?: string): boolean {
-  return errorType !== 'config' && errorType !== 'rbac'
+  // Auth-shaped failures are excluded: the server runs its own backoff
+  // reconnect loop for those, and each browser retry would invoke the exec
+  // credential plugin again. Manual "Retry Connection" stays available for
+  // an immediate check.
+  return errorType !== 'config' && errorType !== 'rbac' && !errorType?.startsWith('auth')
 }
 
 export function shouldApplyPolledConnection(
@@ -60,12 +65,12 @@ export function shouldApplyPolledConnection(
     && (currentState !== 'connected' || polledState !== 'connecting')
 }
 
-async function fetchConnectionStatus(sseGenerationAtStart: number): Promise<PolledConnectionStatus> {
+async function fetchConnectionStatus(sseGenerationAtStart: number, includeContexts: boolean): Promise<PolledConnectionStatus> {
   // apiFetch handles a 401 globally (re-auth redirect). These endpoints are
   // no longer auth-exempt, so a session that expires while the connection-
   // error screen is parked open must route through that path rather than
   // surfacing as a misleading "cannot connect to cluster" error.
-  const response = await apiFetch(`${getApiBase()}/connection`)
+  const response = await apiFetch(`${getApiBase()}/connection${includeContexts ? '' : '?contexts=0'}`)
   if (!response.ok) {
     throw new Error('Failed to fetch connection status')
   }
@@ -116,48 +121,88 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     cacheWarmAtMountRef.current = queryClient.getQueryCache().getAll().length > 0
   }
 
-  // Fetch initial connection status
+  // Mirror for the poll-apply effect: it needs the current state to detect a
+  // disconnected→connected transition, which a functional updater can't
+  // surface without side effects inside the updater.
+  const connectionRef = useRef(connection)
+  connectionRef.current = connection
+
+  // Cache refresh shared by every path that lands on 'connected'.
+  const refreshCachesOnConnect = useCallback(() => {
+    const firstConnect = !hasConnectedRef.current
+    hasConnectedRef.current = true
+    // A reconnect after a drop (cache stale across the gap), or a first connect
+    // onto a client that already carried data at mount (shared across clusters),
+    // refreshes the whole cache. A clean first connect only needs to recover the
+    // bootstrap queries that 503'd while the cluster was still 'connecting'
+    // (status === 'error'); the rest already fetched fresh during 'connecting',
+    // so re-fetching the whole cache there would double-load every endpoint.
+    if (!firstConnect || cacheWarmAtMountRef.current) {
+      queryClient.invalidateQueries()
+    } else {
+      queryClient.invalidateQueries({ predicate: (q) => q.state.status === 'error' })
+    }
+  }, [queryClient])
+
   // Poll quickly while connecting and slowly otherwise so a dropped SSE state
-  // frame cannot leave the UI stuck on stale connection state.
-  const { data } = useQuery<PolledConnectionStatus>({
+  // frame cannot leave the UI stuck on stale connection state. The steady-state
+  // fallback poll skips context enumeration — on the server that walks
+  // kubeconfig files under a write lock, too costly for a perpetual 30s tick.
+  const { data, error: pollError } = useQuery<PolledConnectionStatus>({
     queryKey: ['connection-status'],
-    queryFn: () => fetchConnectionStatus(sseGenerationRef.current),
+    queryFn: () => fetchConnectionStatus(sseGenerationRef.current, connectionRef.current.state !== 'connected'),
     staleTime: 500, // Allow frequent refetches while connecting
     refetchInterval: connection.state === 'connecting' ? 500 : CONNECTION_STATUS_FALLBACK_POLL_MS,
     refetchOnWindowFocus: false,
   })
 
+  // The poll is the safety net for dropped SSE frames — if it starts failing
+  // the UI may freeze on stale state, so leave a trace.
+  useEffect(() => {
+    if (pollError) {
+      console.warn('[connection] status poll failed:', pollError)
+    }
+  }, [pollError])
+
   // Update state from query result
   useEffect(() => {
-    if (data) {
-      setContexts(data.contexts || [])
-      setConnection(current => {
-        if (!shouldApplyPolledConnection(
-          current.state,
-          data.state,
-          data.sseGenerationAtStart,
-          sseGenerationRef.current,
-        )) {
-          return current
-        }
-        return {
-          state: data.state,
-          context: data.context,
-          clusterName: data.clusterName,
-          error: data.error,
-          errorType: data.errorType,
-          progressMessage: data.progressMessage,
-        }
-      })
+    if (!data) return
+    if (data.contexts) {
+      setContexts(data.contexts)
     }
-  }, [data])
+    // A poll resolving mid-retry would flip the UI back to the error screen
+    // while the retry is still running; the retry's own result supersedes it.
+    if (manualRetryPendingRef.current || autoRetryInFlightRef.current) return
+    const current = connectionRef.current
+    if (!shouldApplyPolledConnection(
+      current.state,
+      data.state,
+      data.sseGenerationAtStart,
+      sseGenerationRef.current,
+    )) {
+      return
+    }
+    const becameConnected = current.state !== 'connected' && data.state === 'connected'
+    setConnection({
+      state: data.state,
+      context: data.context,
+      clusterName: data.clusterName,
+      error: data.error,
+      errorType: data.errorType,
+      progressMessage: data.progressMessage,
+    })
+    if (becameConnected) {
+      refreshCachesOnConnect()
+    }
+  }, [data, refreshCachesOnConnect])
 
   // Retry mutation
   const retryMutation = useMutation({
     mutationFn: retryConnection,
     onMutate: () => {
       manualRetryPendingRef.current = true
-      // Reset SSE active flag - polling can provide state until SSE reconnects
+      // Until SSE re-delivers state, a failed retry may report its own error
+      // rather than deferring to a stale "connected"
       sseActiveRef.current = false
       // Set connecting state while retrying
       setConnection(prev => ({
@@ -267,7 +312,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
 
   // Handler for SSE connection_state events
   const updateFromSSE = useCallback((status: ConnectionState) => {
-    // Mark SSE as active - it's now the authoritative source for connection state
+    // Feed the retry-race guards: a live SSE stream means retry failures must
+    // not clobber a recovery it already delivered. The generation bump lets
+    // in-flight polls detect they raced this frame.
     sseActiveRef.current = true
     sseGenerationRef.current += 1
     setConnection(prev => {
@@ -275,6 +322,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       // pod restarts and the SSE reconnects while the new pod's K8s cache is still
       // syncing. Hiding the main content here causes a flash — keep the 'connected'
       // state and wait for either 'connected' (sync done) or 'disconnected' (failure).
+      // (shouldApplyPolledConnection encodes the same suppression for the poll path.)
       if (prev.state === 'connected' && status.state === 'connecting') {
         return prev
       }
@@ -282,21 +330,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     })
 
     if (status.state === 'connected') {
-      const firstConnect = !hasConnectedRef.current
-      hasConnectedRef.current = true
-      // A reconnect after a drop (cache stale across the gap), or a first connect
-      // onto a client that already carried data at mount (shared across clusters),
-      // refreshes the whole cache. A clean first connect only needs to recover the
-      // bootstrap queries that 503'd while the cluster was still 'connecting'
-      // (status === 'error'); the rest already fetched fresh during 'connecting',
-      // so re-fetching the whole cache there would double-load every endpoint.
-      if (!firstConnect || cacheWarmAtMountRef.current) {
-        queryClient.invalidateQueries()
-      } else {
-        queryClient.invalidateQueries({ predicate: (q) => q.state.status === 'error' })
-      }
+      refreshCachesOnConnect()
     }
-  }, [queryClient])
+  }, [refreshCachesOnConnect])
 
   const value: ConnectionContextValue = {
     connection,

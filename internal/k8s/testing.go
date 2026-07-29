@@ -198,10 +198,16 @@ func ResetTestState() {
 
 	runtimeAuthChecksMu.Lock()
 	runtimeAuthChecks = make(map[uint64]struct{})
-	runtimeAuthProbeAfter = make(map[uint64]time.Time)
+	runtimeAuthCooldownGeneration = 0
+	runtimeAuthProbeNotBefore = time.Time{}
 	runtimeAuthProbe = TestClusterConnection
 	runtimeAuthEndpointProbe = defaultRuntimeAuthEndpointProbe
+	runtimeAuthReconnect = PerformContextSwitch
+	runtimeAuthRecoveryInitialInterval = defaultRuntimeAuthRecoveryInitialInterval
+	runtimeAuthRecoveryMaxInterval = defaultRuntimeAuthRecoveryMaxInterval
+	runtimeAuthRecoveryHungInterval = defaultRuntimeAuthRecoveryHungInterval
 	runtimeAuthChecksMu.Unlock()
+	runtimeAuthRecoveryActive.Store(false)
 	activeContextOperations.Store(0)
 	clientMu.Lock()
 	k8sConfig = nil

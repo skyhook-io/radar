@@ -3949,17 +3949,24 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) {
 	status := k8s.GetConnectionStatus()
-	contexts, _ := k8s.GetAvailableContexts() // Always works (reads kubeconfig)
 
-	s.writeJSON(w, map[string]any{
+	response := map[string]any{
 		"state":           status.State,
 		"context":         status.Context,
 		"clusterName":     status.ClusterName,
 		"error":           status.Error,
 		"errorType":       status.ErrorType,
 		"progressMessage": status.ProgressMsg,
-		"contexts":        contexts,
-	})
+	}
+	// Context enumeration re-reads kubeconfig files (under the client write
+	// lock in multi-file mode) — too expensive for the UI's perpetual
+	// fallback poll, which opts out via ?contexts=0.
+	if r.URL.Query().Get("contexts") != "0" {
+		contexts, _ := k8s.GetAvailableContexts() // Always works (reads kubeconfig)
+		response["contexts"] = contexts
+	}
+
+	s.writeJSON(w, response)
 }
 
 func (s *Server) handleConnectionRetry(w http.ResponseWriter, r *http.Request) {

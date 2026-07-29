@@ -382,7 +382,8 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
 
           {isAuth && (
             <p className="mt-4 text-xs text-theme-text-tertiary">
-              Radar will keep retrying after credentials are refreshed.
+              Radar re-checks in the background and reconnects once credentials are refreshed.
+              Use Retry Connection to check immediately.
             </p>
           )}
         </div>

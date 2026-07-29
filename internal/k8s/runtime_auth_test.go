@@ -106,6 +106,9 @@ func TestRuntimeAuthRoundTripperReportsUnauthorizedResponse(t *testing.T) {
 	if status := GetConnectionStatus(); status.State != StateDisconnected || status.ErrorType != "auth" {
 		t.Fatalf("connection status = %+v, want disconnected auth", status)
 	}
+	if !runtimeAuthRecoveryActive.Load() {
+		t.Fatal("demotion did not start the runtime auth recovery loop")
+	}
 }
 
 func TestSharedKubernetesClientsPreserveConfiguredTransport(t *testing.T) {
@@ -370,8 +373,12 @@ func TestRuntimeAuthFailureKeepsStateWhenEndpointIsUnreachable(t *testing.T) {
 		t.Fatalf("session stops = %d, want 0", sessionsStopped.Load())
 	}
 	runtimeAuthChecksMu.Lock()
-	nextProbe := runtimeAuthProbeAfter[generation]
+	cooldownGeneration := runtimeAuthCooldownGeneration
+	nextProbe := runtimeAuthProbeNotBefore
 	runtimeAuthChecksMu.Unlock()
+	if cooldownGeneration != generation {
+		t.Fatalf("cooldown generation = %d, want %d", cooldownGeneration, generation)
+	}
 	if remaining := time.Until(nextProbe); remaining <= 0 || remaining > runtimeAuthInconclusiveProbeCooldown {
 		t.Fatalf("next endpoint probe delay = %v, want within %v", remaining, runtimeAuthInconclusiveProbeCooldown)
 	}
@@ -644,6 +651,141 @@ func TestRuntimeAuthRecoveryRearmsThroughSwitchContext(t *testing.T) {
 	}
 }
 
+func TestRuntimeAuthCooldownExpiryReArmsDetection(t *testing.T) {
+	generation := prepareRuntimeAuthTest(t)
+	var probes atomic.Int32
+	setRuntimeAuthProbe(func(context.Context) error {
+		probes.Add(1)
+		return errors.New("dial tcp: connection refused")
+	})
+
+	reportRuntimeAuthFailure(generation, errors.New("unauthorized"))
+	waitForRuntimeAuthCheck(t, generation)
+	if probes.Load() != 1 {
+		t.Fatalf("confirmation probes = %d, want 1", probes.Load())
+	}
+
+	reportRuntimeAuthFailure(generation, errors.New("unauthorized"))
+	waitForRuntimeAuthCheck(t, generation)
+	if probes.Load() != 1 {
+		t.Fatalf("probes during cooldown = %d, want still 1", probes.Load())
+	}
+
+	runtimeAuthChecksMu.Lock()
+	runtimeAuthProbeNotBefore = time.Now().Add(-time.Second)
+	runtimeAuthChecksMu.Unlock()
+
+	reportRuntimeAuthFailure(generation, errors.New("unauthorized"))
+	waitForRuntimeAuthCheck(t, generation)
+	if probes.Load() != 2 {
+		t.Fatalf("probes after cooldown expiry = %d, want 2", probes.Load())
+	}
+}
+
+func TestRuntimeAuthRecoveryReconnectsWhenCredentialsReturn(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+	setRuntimeAuthRecoveryIntervalsForTest(2*time.Millisecond, 4*time.Millisecond)
+
+	var probes atomic.Int32
+	setRuntimeAuthProbe(func(context.Context) error {
+		if probes.Add(1) < 3 {
+			return errors.New("getting credentials: exec plugin failed")
+		}
+		return nil
+	})
+	var reconnects atomic.Int32
+	setRuntimeAuthReconnect(func(contextName string) error {
+		if contextName != "recovery-context" {
+			t.Errorf("reconnect context = %q, want %q", contextName, "recovery-context")
+		}
+		reconnects.Add(1)
+		SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: contextName})
+		return nil
+	})
+
+	SetConnectionStatus(ConnectionStatus{
+		State:     StateDisconnected,
+		Context:   "recovery-context",
+		ErrorType: "auth",
+	})
+	startRuntimeAuthRecovery("recovery-context")
+
+	deadline := time.Now().Add(2 * time.Second)
+	for reconnects.Load() == 0 || runtimeAuthRecoveryActive.Load() {
+		if time.Now().After(deadline) {
+			t.Fatalf("recovery did not reconnect: probes=%d reconnects=%d active=%v",
+				probes.Load(), reconnects.Load(), runtimeAuthRecoveryActive.Load())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if probes.Load() < 3 {
+		t.Fatalf("probes = %d, want >= 3 (failed probes back off before success)", probes.Load())
+	}
+	if reconnects.Load() != 1 {
+		t.Fatalf("reconnects = %d, want 1", reconnects.Load())
+	}
+}
+
+func TestRuntimeAuthRecoveryStopsWhenNoLongerNeeded(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+	setRuntimeAuthRecoveryIntervalsForTest(2*time.Millisecond, 4*time.Millisecond)
+
+	setRuntimeAuthProbe(func(context.Context) error {
+		return errors.New("getting credentials: exec plugin failed")
+	})
+	var reconnects atomic.Int32
+	setRuntimeAuthReconnect(func(string) error {
+		reconnects.Add(1)
+		return nil
+	})
+
+	SetConnectionStatus(ConnectionStatus{
+		State:     StateDisconnected,
+		Context:   "recovery-context",
+		ErrorType: "auth",
+	})
+	startRuntimeAuthRecovery("recovery-context")
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "recovery-context"})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for runtimeAuthRecoveryActive.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("recovery loop did not exit after connection recovered elsewhere")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if reconnects.Load() != 0 {
+		t.Fatalf("reconnects = %d, want 0", reconnects.Load())
+	}
+}
+
+func TestNextRuntimeAuthRecoveryInterval(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+
+	maxInterval := defaultRuntimeAuthRecoveryMaxInterval
+	hungInterval := defaultRuntimeAuthRecoveryHungInterval
+	if got := nextRuntimeAuthRecoveryInterval(30*time.Second, errors.New("unauthorized"), maxInterval, hungInterval); got != time.Minute {
+		t.Fatalf("interval after auth failure = %v, want %v", got, time.Minute)
+	}
+	if got := nextRuntimeAuthRecoveryInterval(4*time.Minute, errors.New("unauthorized"), maxInterval, hungInterval); got != maxInterval {
+		t.Fatalf("interval at cap = %v, want %v", got, maxInterval)
+	}
+	withContextExecAuth(t, true)
+	if got := nextRuntimeAuthRecoveryInterval(30*time.Second, errors.New("auth plugin timeout: context deadline exceeded"), maxInterval, hungInterval); got != hungInterval {
+		t.Fatalf("interval after hung plugin = %v, want %v", got, hungInterval)
+	}
+}
+
+func setRuntimeAuthRecoveryIntervalsForTest(initial, maxInterval time.Duration) {
+	runtimeAuthChecksMu.Lock()
+	runtimeAuthRecoveryInitialInterval = initial
+	runtimeAuthRecoveryMaxInterval = maxInterval
+	runtimeAuthChecksMu.Unlock()
+}
+
 func prepareRuntimeAuthTest(t *testing.T) uint64 {
 	t.Helper()
 	ResetTestState()
@@ -652,6 +794,9 @@ func prepareRuntimeAuthTest(t *testing.T) uint64 {
 	generation := clientGenerationCounter.Add(1)
 	clientMu.Lock()
 	previousPath := kubeconfigPath
+	// Without a kubeconfig path the package reads as in-cluster
+	// (isInClusterLocked), where runtimeAuthStateIsCurrent is always false and
+	// every assertion below would pass vacuously.
 	kubeconfigPath = "/tmp/radar-runtime-auth-test"
 	activeClientGeneration = generation
 	clientMu.Unlock()
