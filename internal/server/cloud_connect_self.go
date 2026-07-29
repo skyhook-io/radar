@@ -26,7 +26,7 @@ import (
 // cloudConnectSelf describes the in-cluster Radar to the funnel modal so it can
 // route the operator to the right next step.
 type cloudConnectSelf struct {
-	// Ownership is helm | gitops | unknown — which handoff applies.
+	// Ownership is helm | gitops | ambiguous | unknown — which handoff applies.
 	Ownership      string `json:"ownership"`
 	Namespace      string `json:"namespace,omitempty"`
 	Release        string `json:"release,omitempty"`
@@ -56,7 +56,7 @@ func (s *Server) handleCloudConnectSelf(w http.ResponseWriter, r *http.Request) 
 	ctx, cancel := context.WithTimeout(r.Context(), cloudConnectSelfTimeout)
 	defer cancel()
 
-	self := s.inspectSelfInstall(ctx, os.Getenv("MY_POD_NAMESPACE"))
+	self := s.inspectSelfInstall(ctx, r, os.Getenv("MY_POD_NAMESPACE"), os.Getenv("MY_DEPLOYMENT_NAME"))
 	w.Header().Set("Cache-Control", "no-store")
 	s.writeJSON(w, self)
 }
@@ -65,12 +65,13 @@ func (s *Server) handleCloudConnectSelf(w http.ResponseWriter, r *http.Request) 
 // namespace and classifies how it is managed. Every failure degrades to
 // ownership "unknown" with a generic wizard link — a wrong-but-confident
 // answer here would send an operator to a command that damages their install.
-func (s *Server) inspectSelfInstall(ctx context.Context, namespace string) cloudConnectSelf {
+func (s *Server) inspectSelfInstall(ctx context.Context, r *http.Request, namespace, deploymentName string) cloudConnectSelf {
 	generic := cloudConnectSelf{Ownership: "unknown", WizardURL: s.cloudConnectCfg.HubAppURL + "/install"}
-	if namespace == "" {
+	if namespace == "" || deploymentName == "" {
 		return generic
 	}
-	kc, dc := k8s.GetClient(), k8s.GetDynamicClient()
+	kc := s.getClientForRequest(r)
+	dc, _ := s.getDynamicClientSnapshotForRequest(r)
 	if kc == nil || dc == nil {
 		return generic
 	}
@@ -81,14 +82,21 @@ func (s *Server) inspectSelfInstall(ctx context.Context, namespace string) cloud
 	if err != nil {
 		return generic
 	}
-	targets := cloudinstall.DiscoveredTargets(result, false)
-	if len(targets) != 1 {
-		// Zero means the SA cannot see its own Deployment; more than one means
-		// this namespace holds several Radars and picking would be a guess.
+	// Match this pod's own Deployment by name. "The only Radar-labelled
+	// Deployment in my namespace" is not proof that it is the one serving this
+	// request — a sibling install would produce a confident, wrong deep link.
+	var target cloudinstall.RadarTarget
+	found := false
+	for _, candidate := range cloudinstall.DiscoveredTargets(result, false) {
+		if candidate.DeploymentName == deploymentName {
+			target, found = candidate, true
+			break
+		}
+	}
+	if !found {
 		return generic
 	}
 
-	target := targets[0]
 	self := cloudConnectSelf{
 		Namespace:      target.Namespace,
 		Release:        target.ReleaseName,
@@ -111,6 +119,11 @@ func (s *Server) inspectSelfInstall(ctx context.Context, namespace string) cloud
 			ref := target.Ownership.Controllers[0].Ref
 			self.Controller = ref.Kind + " " + ref.Namespace + "/" + ref.Name
 		}
+	case cloudinstall.OwnershipAmbiguous:
+		// Conflicting Helm and GitOps evidence: cloudinstall.ClassifyInstallPlan
+		// refuses to act on this, so neither should the handoff — an imperative
+		// upgrade could fight whatever else manages the release.
+		self.Ownership = "ambiguous"
 	default:
 		self.Ownership = "unknown"
 		self.WizardURL = generic.WizardURL

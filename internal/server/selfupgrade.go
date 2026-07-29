@@ -65,9 +65,12 @@ func (s *Server) handleSelfUpgrade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The identity vars ship on every install (read-only self-description needs
+	// them); RADAR_SELF_UPGRADE is what the chart sets alongside the RBAC that
+	// makes patching possible, so it — not their presence — is the gate.
 	ns := os.Getenv("MY_POD_NAMESPACE")
 	deployment := os.Getenv("MY_DEPLOYMENT_NAME")
-	if ns == "" || deployment == "" {
+	if os.Getenv("RADAR_SELF_UPGRADE") != "true" || ns == "" || deployment == "" {
 		s.writeError(w, http.StatusServiceUnavailable,
 			"self-upgrade not configured (set rbac.selfUpgrade=true in Helm values)")
 		return

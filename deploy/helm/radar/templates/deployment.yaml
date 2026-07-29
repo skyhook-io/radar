@@ -255,13 +255,19 @@ spec:
               value: "true"
             {{- end }}
             {{- end }}
-            {{- if .Values.rbac.selfUpgrade }}
+            # Downward-API identity. Always emitted: Radar needs to know which
+            # object it is for read-only self-description (Cloud connect
+            # handoff), which carries no RBAC implication. Whether it may
+            # actually patch itself is gated by RADAR_SELF_UPGRADE below.
             - name: MY_POD_NAMESPACE
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
             - name: MY_DEPLOYMENT_NAME
               value: {{ include "radar.fullname" . }}
+            {{- if .Values.rbac.selfUpgrade }}
+            - name: RADAR_SELF_UPGRADE
+              value: "true"
             {{- end }}
             {{- with .Values.env }}
             {{- toYaml . | nindent 12 }}

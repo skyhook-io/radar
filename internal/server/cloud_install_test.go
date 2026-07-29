@@ -722,3 +722,35 @@ func TestCloudInstallLoopbackNeedsNoSharedAcknowledgement(t *testing.T) {
 		t.Fatalf("start on loopback: %v", err)
 	}
 }
+
+// The shared-listener lane must work for the browser it exists for: a page
+// served from the same non-loopback authority is same-origin and must pass,
+// while a genuinely foreign origin must not.
+func TestSameOriginOKAcceptsTheServingAuthority(t *testing.T) {
+	cases := []struct {
+		name, host, origin string
+		want               bool
+	}{
+		{"no origin (non-browser)", "10.0.0.5:9280", "", true},
+		{"same non-loopback authority", "10.0.0.5:9280", "http://10.0.0.5:9280", true},
+		{"same loopback authority", "127.0.0.1:9280", "http://127.0.0.1:9280", true},
+		{"vite dev proxy, loopback to loopback", "localhost:9280", "http://localhost:9273", true},
+		{"foreign origin", "10.0.0.5:9280", "https://evil.example", false},
+		{"lookalike hostname", "10.0.0.5:9280", "http://localhost.evil.com", false},
+		{"different port on the same non-loopback host", "10.0.0.5:9280", "http://10.0.0.5:9999", false},
+		{"loopback origin against a non-loopback host", "10.0.0.5:9280", "http://127.0.0.1:9280", false},
+		{"unparseable origin", "10.0.0.5:9280", "://nope", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/api/cloud/install/prepare", nil)
+			r.Host = tc.host
+			if tc.origin != "" {
+				r.Header.Set("Origin", tc.origin)
+			}
+			if got := sameOriginOK(r); got != tc.want {
+				t.Fatalf("sameOriginOK(host=%q, origin=%q) = %v, want %v", tc.host, tc.origin, got, tc.want)
+			}
+		})
+	}
+}

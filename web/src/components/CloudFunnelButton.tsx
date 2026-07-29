@@ -250,12 +250,22 @@ function ModalFooter({
   onConnect: () => void
   onLater: () => void
 }) {
+  // Neither GitOps nor ambiguous ownership may receive the imperative
+  // deep link: one would be reverted, the other has conflicting management.
   const gitops = self?.ownership === 'gitops'
+  const ambiguous = self?.ownership === 'ambiguous'
   return (
     <div className="px-7 py-4 bg-theme-base border-t border-theme-border">
       {self && self.ownership !== 'unknown' && (
         <div className="mb-3 card-inner text-[11.5px] leading-snug text-theme-text-secondary">
-          {gitops ? (
+          {ambiguous ? (
+            <>
+              Radar found conflicting management metadata on this install, so it can't say whether a Helm
+              upgrade or a repository change is the right move. Run{' '}
+              <code className="font-mono text-[11px]">radar cloud install</code> from a machine with kubectl —
+              it inspects the release and refuses rather than guessing.
+            </>
+          ) : gitops ? (
             <>
               This Radar is managed by{' '}
               <b className="text-theme-text-primary">{self.controller || 'a GitOps controller'}</b>, so
@@ -293,7 +303,7 @@ function ModalFooter({
           </>
         ) : (
           <a
-            href={gitops ? signupUrl : self?.wizardUrl || signupUrl}
+            href={gitops || ambiguous ? signupUrl : self?.wizardUrl || signupUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="px-5 py-2 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[13.5px] font-bold shadow-[0_0_22px_rgba(16,185,129,0.35)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] hover:-translate-y-px transition-all"

@@ -1,6 +1,8 @@
 package server
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -46,14 +48,21 @@ func TestWizardInstallURLEscapesTarget(t *testing.T) {
 
 // Every failure path must degrade to a generic wizard link rather than a
 // confident wrong answer — a bad namespace/release would send the operator to
-// a command that targets someone else's release.
-func TestInspectSelfInstallDegradesWithoutNamespace(t *testing.T) {
+// a command that targets someone else's release. Identity comes from the
+// downward API, so a missing namespace OR deployment name is unusable.
+func TestInspectSelfInstallDegradesWithoutIdentity(t *testing.T) {
 	srv := &Server{cloudConnectCfg: CloudConnectConfig{HubAppURL: "https://app.test.example"}}
-	self := srv.inspectSelfInstall(t.Context(), "")
-	if self.Ownership != "unknown" || self.Namespace != "" || self.Release != "" {
-		t.Fatalf("self = %+v", self)
-	}
-	if self.WizardURL != "https://app.test.example/install" {
-		t.Fatalf("wizard url = %q", self.WizardURL)
+	req := httptest.NewRequest(http.MethodGet, "/api/cloud/connect/self", nil)
+
+	for _, tc := range []struct{ ns, deployment string }{
+		{"", ""}, {"radar", ""}, {"", "radar"},
+	} {
+		self := srv.inspectSelfInstall(t.Context(), req, tc.ns, tc.deployment)
+		if self.Ownership != "unknown" || self.Namespace != "" || self.Release != "" {
+			t.Fatalf("ns=%q deployment=%q → self = %+v", tc.ns, tc.deployment, self)
+		}
+		if self.WizardURL != "https://app.test.example/install" {
+			t.Fatalf("wizard url = %q", self.WizardURL)
+		}
 	}
 }

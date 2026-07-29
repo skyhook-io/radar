@@ -1648,7 +1648,7 @@ export function useCloudInstallStatus(enabled: boolean) {
 // In-cluster Radar describing its own installation, so the modal can route to
 // the right handoff instead of a generic signup link.
 export interface CloudConnectSelf {
-  ownership: 'helm' | 'gitops' | 'unknown'
+  ownership: 'helm' | 'gitops' | 'ambiguous' | 'unknown'
   namespace?: string
   release?: string
   deploymentName?: string

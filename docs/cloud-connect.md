@@ -31,7 +31,8 @@ moves to the surface that actually holds them (the terminal or the Hub).
 | 6 | local | proxy/OIDC | any | any | Driver lane disabled (server's kubeconfig ≠ authenticated user; impersonated driver is future work) → wizard link | wizard / CLI |
 | 7a | in-cluster, native Helm | any | any | itself | **Wizard, deep-linked at the real target** (`/install?existing=1&ns=…&release=…`) plus the detected layout shown in-modal. The SA cannot self-grant impersonation RBAC and a successful upgrade restarts the pod serving this UI, so the install itself happens from the Hub | wizard |
 | 7b | in-cluster, GitOps-managed | any | any | itself | Names the owning controller and routes to `radar cloud install` — the wizard's imperative command would drift or be reverted | CLI |
-| 7c | in-cluster, undetectable | any | any | itself | Generic wizard link (SA can't see its own Deployment, or several Radars share the namespace) | wizard |
+| 7c | in-cluster, ambiguous ownership | any | any | itself | Conflicting Helm/GitOps metadata — routes to `radar cloud install`, which refuses rather than guessing (same posture as `ClassifyInstallPlan`) | CLI |
+| 7d | in-cluster, undetectable | any | any | itself | Generic wizard link (SA can't read its own Deployment, or the downward-API identity is absent) | wizard |
 | 8 | in-cluster, chart-armed (future WS3) | — | — | itself | Zero-command hot-start (chart pre-provisions cloud RBAC + Secret write-back Role) — not built yet | (future) |
 | 9 | cloud / embedded (Radar Hub) | — | — | — | Funnel hidden entirely (already connected) | — |
 | 10 | any | — | — | self-hosted Hub target | Same flows against `RADAR_HUB_URL` (+ `RADAR_HUB_APP_URL`); CLI: `--hub-url`. Self-signed pilots add `--cloud-insecure-skip-verify` / `cloud.insecureSkipVerify` | any |
@@ -125,7 +126,13 @@ In-cluster (read-only, no Hub contact, never mutates):
   installation: `{ownership: helm|gitops|unknown, namespace, release,
   deploymentName, chart, controller?, wizardUrl?}`. Every failure degrades to
   `unknown` + a generic wizard link; a confidently wrong namespace/release
-  would deep-link an operator at someone else's release.
+  would deep-link an operator at someone else's release. The pod's own
+  Deployment is matched by `MY_DEPLOYMENT_NAME` — "the only Radar-labelled
+  Deployment in this namespace" is not proof it is the one serving the
+  request. Those downward-API vars ship on every install (they carry no RBAC
+  implication); `RADAR_SELF_UPGRADE` separately gates self-upgrade. Reads use
+  request-scoped clients, so with auth enabled nobody learns about a
+  Deployment their own identity cannot read.
 
 ## Security model
 
@@ -147,8 +154,11 @@ a Radar org, and on a shared listener the approver may not be the operator —
 that is a decision to make, not a warning to scroll past. Additional
 properties:
 
-- Mutating endpoints reject cross-origin browser POSTs (same `localOriginOK`
-  policy as the local-terminal endpoints).
+- Mutating endpoints reject cross-origin browser POSTs via `sameOriginOK`,
+  which compares the `Origin` against the authority the client actually used.
+  The older `localOriginOK` allowlist would have 403'd the legitimate browser
+  on a non-loopback listener — the very case this lane now supports — while
+  still admitting a scripted caller that omits the header.
 - The `rhc_` cluster token **never appears in any API response or log**; it
   travels goroutine-local from the approval poll into the `radar-cloud-config`
   Secret. A test asserts no wire struct even declares a token field.
