@@ -53,6 +53,50 @@ helm upgrade --install radar skyhook/radar \
   --set ingress.tls[0].hosts[0]=radar.example.com
 ```
 
+### With Gateway API HTTPRoute
+
+HTTPRoute is disabled by default. Empty `httpRoute.rules` creates a `/`
+`PathPrefix` route to Radar's Service. The generated rule has no timeout by
+default, so the Gateway deployment's default timeout applies. Set
+`httpRoute.defaultTimeout` to add an explicit request timeout, or set it to
+`0s` to explicitly disable timeout. Set `rules` for multiple prefixes,
+timeouts, filters, or custom backends; supplied rules replace that default and
+pass through unchanged.
+
+```yaml
+httpRoute:
+  enabled: true
+  parentRefs:
+    - name: public-gateway
+  hostnames: []
+  # Optional timeout for chart-generated default rule.
+  # defaultTimeout: 30s
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+      timeouts:
+        request: 30s
+        backendRequest: 20s
+      backendRefs:
+        - name: radar
+          port: 9280
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /admin
+      timeouts:
+        request: 2m
+      backendRefs:
+        - name: radar
+          port: 9280
+```
+
+Override `httpRoute.apiVersion` when cluster Gateway API support requires a
+different version, for example `gateway.networking.k8s.io/v1beta1`. Custom
+rules can define their own `timeouts` independently.
+
 ### Connecting to Radar Cloud
 
 To connect Radar to Radar Cloud (hosted SaaS), follow the install wizard at
@@ -113,6 +157,11 @@ lands in the Helm release state. Rotation requires a pod restart. See
 | `listPageSize` | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) on very large clusters; `0` = off, try `2000`. Only used when the apiserver lacks WatchList streaming. | `0` |
 | `ingress.enabled` | Enable ingress | `false` |
 | `ingress.className` | Ingress class name | `""` |
+| `httpRoute.enabled` | Enable Gateway API HTTPRoute | `false` |
+| `httpRoute.apiVersion` | HTTPRoute API version override | `gateway.networking.k8s.io/v1` |
+| `httpRoute.hostnames` | HTTPRoute hostnames | `[]` |
+| `httpRoute.defaultTimeout` | Optional request timeout for generated default rule; empty uses Gateway deployment default | `""` |
+| `httpRoute.rules` | HTTPRoute rules, passed through unchanged | `[]` |
 | `timeline.storage` | Timeline storage (memory/sqlite) | `memory` |
 | `timeline.retention` | SQLite retention (Go duration; `0` disables) | `168h` |
 | `timeline.maxSize` | SQLite max DB + WAL size before oldest events are pruned (`0` disables) | `800Mi` |

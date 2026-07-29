@@ -131,6 +131,35 @@ helm install radar skyhook/radar -n radar --create-namespace
 
 See the [In-Cluster Deployment Guide](docs/in-cluster.md) for ingress, authentication, and RBAC configuration.
 
+### Gateway API HTTPRoute
+
+Chart supports optional Gateway API `HTTPRoute` generation. Enable
+`httpRoute.enabled`, set `parentRefs`, and use `httpRoute.rules` for multiple
+path prefixes, per-route timeouts, filters, or custom backends. `hostnames`
+defaults to an empty list, and `apiVersion` can be overridden for older Gateway
+API installations. The generated default route has no chart-imposed timeout,
+so the Gateway deployment default applies. Set `httpRoute.defaultTimeout` for
+an explicit timeout; custom rules can define their own `timeouts`.
+
+```yaml
+httpRoute:
+  enabled: true
+  parentRefs:
+    - name: public-gateway
+  hostnames: []
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: radar
+          port: 9280
+```
+
+See the [Helm Chart README](deploy/helm/radar/README.md#with-gateway-api-httproute)
+for full configuration details and timeout examples.
+
 </details>
 
 ---

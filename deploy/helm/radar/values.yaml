@@ -214,6 +214,20 @@ ingress:
   #    hosts:
   #      - radar.example.com
 
+httpRoute:
+  enabled: false
+  apiVersion: gateway.networking.k8s.io/v1
+  annotations: {}
+  labels: {}
+  parentRefs: []
+  hostnames: []
+  # Optional request timeout for chart-generated default rule. Empty means
+  # Gateway deployment default applies. Set 0s to explicitly disable timeout.
+  defaultTimeout: ""
+  # When empty, chart emits a default / Prefix rule to Radar Service.
+  # Non-empty rules replace default and pass through unchanged.
+  rules: []
+
 resources:
   limits:
     cpu: 500m

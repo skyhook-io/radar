@@ -1,0 +1,36 @@
+{{- if .Values.httpRoute.enabled -}}
+{{- $fullName := include "radar.fullname" . -}}
+{{- $svcPort := .Values.service.port -}}
+{{- $labels := mergeOverwrite (include "radar.labels" . | fromYaml) .Values.httpRoute.labels -}}
+apiVersion: {{ .Values.httpRoute.apiVersion }}
+kind: HTTPRoute
+metadata:
+  name: {{ $fullName }}
+  labels:
+    {{- toYaml $labels | nindent 4 }}
+  {{- with .Values.httpRoute.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  parentRefs:
+    {{- toYaml .Values.httpRoute.parentRefs | nindent 4 }}
+  hostnames:
+    {{- toYaml .Values.httpRoute.hostnames | nindent 4 }}
+  rules:
+    {{- if .Values.httpRoute.rules }}
+    {{- toYaml .Values.httpRoute.rules | nindent 4 }}
+    {{- else }}
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: {{ $fullName }}
+          port: {{ $svcPort }}
+      {{- with .Values.httpRoute.defaultTimeout }}
+      timeouts:
+        request: {{ . | quote }}
+      {{- end }}
+    {{- end }}
+{{- end }}

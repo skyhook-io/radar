@@ -157,6 +157,29 @@
         }
       }
     },
+    "httpRoute": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "apiVersion": { "type": "string", "minLength": 1 },
+        "annotations": { "type": "object", "additionalProperties": { "type": "string" } },
+        "labels": { "type": "object", "additionalProperties": { "type": "string" } },
+        "parentRefs": {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": true }
+        },
+        "hostnames": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "defaultTimeout": { "type": "string" },
+        "rules": {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": true }
+        }
+      }
+    },
     "resources": { "type": "object" },
     "timeline": {
       "type": "object",

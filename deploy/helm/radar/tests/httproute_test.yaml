@@ -1,0 +1,129 @@
+suite: HTTPRoute
+templates:
+  - httproute.yaml
+tests:
+  - it: is disabled by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders default route to Radar Service with empty hostnames
+    set:
+      httpRoute:
+        enabled: true
+        parentRefs: []
+        hostnames: []
+    asserts:
+      - isKind:
+          of: HTTPRoute
+      - equal:
+          path: apiVersion
+          value: gateway.networking.k8s.io/v1
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-radar
+      - equal:
+          path: spec.hostnames
+          value: []
+      - equal:
+          path: spec.parentRefs
+          value: []
+      - equal:
+          path: spec.rules[0].matches[0].path
+          value:
+            type: PathPrefix
+            value: /
+      - equal:
+          path: spec.rules[0].backendRefs[0]
+          value:
+            name: RELEASE-NAME-radar
+            port: 9280
+      - notExists:
+          path: spec.rules[0].timeouts
+
+  - it: adds optional default timeout only when configured
+    set:
+      httpRoute:
+        enabled: true
+        defaultTimeout: 30s
+    asserts:
+      - equal:
+          path: spec.rules[0].timeouts.request
+          value: 30s
+
+  - it: supports API version override and metadata
+    set:
+      httpRoute:
+        enabled: true
+        apiVersion: gateway.networking.k8s.io/v1beta1
+        annotations:
+          example.com/owner: platform
+        labels:
+          example.com/tier: edge
+        parentRefs:
+          - name: public-gateway
+            sectionName: https
+    asserts:
+      - equal:
+          path: apiVersion
+          value: gateway.networking.k8s.io/v1beta1
+      - equal:
+          path: metadata.annotations["example.com/owner"]
+          value: platform
+      - equal:
+          path: metadata.labels["example.com/tier"]
+          value: edge
+      - equal:
+          path: spec.parentRefs[0]
+          value:
+            name: public-gateway
+            sectionName: https
+
+  - it: passes multiple custom rules through and replaces default
+    set:
+      httpRoute:
+        enabled: true
+        hostnames:
+          - radar.example.com
+        rules:
+          - matches:
+              - path:
+                  type: PathPrefix
+                  value: /api
+            timeouts:
+              request: 30s
+              backendRequest: 20s
+            backendRefs:
+              - name: radar-api
+                port: 9000
+          - matches:
+              - path:
+                  type: PathPrefix
+                  value: /admin
+            timeouts:
+              request: 2m
+            backendRefs:
+              - name: radar-admin
+                port: 9001
+    asserts:
+      - equal:
+          path: spec.hostnames
+          value:
+            - radar.example.com
+      - lengthEqual:
+          path: spec.rules
+          count: 2
+      - notEqual:
+          path: spec.rules[0].matches[0].path.value
+          value: /
+      - equal:
+          path: spec.rules[0].timeouts
+          value:
+            request: 30s
+            backendRequest: 20s
+      - equal:
+          path: spec.rules[1].timeouts.request
+          value: 2m
+      - equal:
+          path: spec.rules[1].backendRefs[0].name
+          value: radar-admin
