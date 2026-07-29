@@ -472,7 +472,12 @@ function FailedCard({
         <AlertTriangle className="w-4 h-4 shrink-0 mt-1 text-amber-500" />
         <h4 className="text-[14px] font-semibold leading-snug text-theme-text-primary">{failure.message}</h4>
       </div>
-      {failure.guidance && <GuidanceBlock guidance={failure.guidance} />}
+      {failure.guidance && (
+        <GuidanceBlock
+          guidance={failure.guidance}
+          showSummary={failure.guidance.summary !== failure.message}
+        />
+      )}
       <div className="mt-4 flex items-center gap-4">
         <button
           onClick={dismiss}
@@ -502,8 +507,8 @@ function GuidanceBlock({
   showSummary,
 }: {
   guidance: CloudInstallRecoveryGuidance
-  // Terminal failures already use the summary as their headline; suppress it
-  // there so the same sentence doesn't render twice.
+  // Suppressed where the surrounding UI already states the summary — the
+  // failure headline, or the rollback disclosure's own title.
   showSummary?: boolean
 }) {
   return (
@@ -538,7 +543,7 @@ function GuidanceDetails({ title, guidance }: { title: string; guidance: CloudIn
         {title}
       </summary>
       <div className="mt-2">
-        <GuidanceBlock guidance={guidance} showSummary />
+        <GuidanceBlock guidance={guidance} />
       </div>
     </details>
   )
