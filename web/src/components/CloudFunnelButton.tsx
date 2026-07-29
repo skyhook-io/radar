@@ -5,6 +5,7 @@ import { Bell, Check, Globe, History, Sparkles, Users, X } from 'lucide-react'
 import { Tooltip } from './ui/Tooltip'
 import { CloudConnectFlow } from './CloudConnectFlow'
 import {
+  ApiError,
   cloudInstallActive,
   type CloudInstallBlocked,
   type CloudInstallStatus,
@@ -53,6 +54,13 @@ export function CloudFunnelButton() {
     onSuccess: (st) => {
       if (st.state === 'blocked' && st.blocked) setBlocked(st.blocked)
       else applyStatus(st)
+    },
+    onError: (err) => {
+      // A single-flight 409 is not a failure: its body IS the live flow (one
+      // started in another tab, or before this tab's status cache refreshed).
+      // Attach to it rather than showing an error over a running install.
+      const live = err instanceof ApiError && err.status === 409 ? (err.data as CloudInstallStatus | undefined) : undefined
+      if (live?.state) applyStatus(live)
     },
     meta: { errorMessage: 'Could not inspect this cluster for Cloud connect' },
   })

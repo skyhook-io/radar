@@ -559,11 +559,11 @@ func printTunnelConfirmationFailure(w io.Writer, err error, clusterID, cloudURL,
 }
 
 // printGuidanceBody renders shared RecoveryGuidance below a presenter-specific
-// summary line: the cluster link, prose lines, then copyable inspect commands.
+// summary line: prose lines, copyable inspect commands, then the cluster link.
+// The link comes last so guidance that ends by pointing at it ("…an owner can
+// delete it later:") reads correctly — and so this matches the order the UI's
+// GuidanceBlock renders.
 func printGuidanceBody(w io.Writer, g cloudinstall.RecoveryGuidance) {
-	if g.ClusterURL != "" {
-		fmt.Fprintf(w, "Open: %s\n", g.ClusterURL)
-	}
 	for _, line := range g.Lines {
 		fmt.Fprintln(w, line)
 	}
@@ -572,6 +572,9 @@ func printGuidanceBody(w io.Writer, g cloudinstall.RecoveryGuidance) {
 		for _, cmd := range g.Inspect {
 			fmt.Fprintf(w, "  %s\n", cmd)
 		}
+	}
+	if g.ClusterURL != "" {
+		fmt.Fprintf(w, "Open: %s\n", g.ClusterURL)
 	}
 }
 

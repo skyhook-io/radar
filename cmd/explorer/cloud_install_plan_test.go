@@ -88,3 +88,17 @@ func TestGitOpsUnconfirmedConnectionIsRecoverableFailure(t *testing.T) {
 		t.Errorf("recovery guidance hard-codes the hosted product name:\n%s", got)
 	}
 }
+
+// The canceled-after-approval guidance ends by pointing at the cluster link,
+// so the link must print after the prose — not before it, which left a
+// dangling colon.
+func TestCanceledAfterApprovalPrintsClusterLinkLast(t *testing.T) {
+	var out bytes.Buffer
+	printCanceledAfterApproval(&out, "clus_x", "https://app.radarhq.io/c/clus_x")
+	got := out.String()
+	colon := strings.Index(got, "delete it later:")
+	link := strings.Index(got, "https://app.radarhq.io/c/clus_x")
+	if colon < 0 || link < 0 || link < colon {
+		t.Fatalf("cluster link does not follow the sentence that introduces it:\n%s", got)
+	}
+}
