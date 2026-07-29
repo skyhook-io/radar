@@ -208,6 +208,10 @@ func ResetTestState() {
 	runtimeAuthRecoveryHungInterval = defaultRuntimeAuthRecoveryHungInterval
 	runtimeAuthChecksMu.Unlock()
 	runtimeAuthRecoveryActive.Store(false)
+	select {
+	case <-runtimeAuthRecoveryNudge:
+	default:
+	}
 	activeContextOperations.Store(0)
 	clientMu.Lock()
 	k8sConfig = nil
