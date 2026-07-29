@@ -7,10 +7,12 @@ import { CloudConnectFlow } from './CloudConnectFlow'
 import {
   ApiError,
   cloudInstallActive,
+  type CloudConnectSelf,
   type CloudInstallBlocked,
   type CloudInstallStatus,
   prepareCloudInstall,
   useCapabilities,
+  useCloudConnectSelf,
   useCloudInstallStatus,
 } from '../api/client'
 
@@ -36,6 +38,12 @@ export function CloudFunnelButton() {
   const lane = capabilities.data?.cloudConnect?.lane ?? 'wizard'
   const appUrl = capabilities.data?.cloudConnect?.appUrl || FALLBACK_APP_URL
   const signupUrl = `${appUrl}/signup${SIGNUP_QUERY}`
+
+  // In-cluster Radar can't install its own connection, but it knows exactly
+  // which install it is — so the wizard link can carry the real target, and a
+  // GitOps-owned install can be told the imperative command isn't for it.
+  const inCluster = capabilities.data?.deployment?.mode === 'in-cluster'
+  const self = useCloudConnectSelf(open && inCluster)
 
   // The flow is server-owned: polling here both drives the live progress view
   // and re-attaches to an ongoing flow after a reload or modal close.
@@ -170,6 +178,7 @@ export function CloudFunnelButton() {
                 <ModalFooter
                   lane={lane}
                   signupUrl={signupUrl}
+                  self={inCluster ? self.data : undefined}
                   onConnect={startConnect}
                   onLater={() => setOpen(false)}
                 />
@@ -230,16 +239,40 @@ function Faces() {
 function ModalFooter({
   lane,
   signupUrl,
+  self,
   onConnect,
   onLater,
 }: {
   lane: 'driver' | 'wizard'
   signupUrl: string
+  // Present only in-cluster: what this Radar knows about its own install.
+  self?: CloudConnectSelf
   onConnect: () => void
   onLater: () => void
 }) {
+  const gitops = self?.ownership === 'gitops'
   return (
     <div className="px-7 py-4 bg-theme-base border-t border-theme-border">
+      {self && self.ownership !== 'unknown' && (
+        <div className="mb-3 card-inner text-[11.5px] leading-snug text-theme-text-secondary">
+          {gitops ? (
+            <>
+              This Radar is managed by{' '}
+              <b className="text-theme-text-primary">{self.controller || 'a GitOps controller'}</b>, so
+              connecting it is a values change in your repository — an imperative upgrade would be reverted.
+              Run <code className="font-mono text-[11px]">radar cloud install</code> from a machine with
+              kubectl to generate the exact snippet and token.
+            </>
+          ) : (
+            <>
+              Detected this install: namespace{' '}
+              <code className="font-mono text-[11px] text-theme-text-primary">{self.namespace}</code>, release{' '}
+              <code className="font-mono text-[11px] text-theme-text-primary">{self.release}</code>. The
+              wizard will target it directly.
+            </>
+          )}
+        </div>
+      )}
       <div className="flex items-center gap-4">
         {lane === 'driver' ? (
           <>
@@ -260,12 +293,12 @@ function ModalFooter({
           </>
         ) : (
           <a
-            href={signupUrl}
+            href={gitops ? signupUrl : self?.wizardUrl || signupUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="px-5 py-2 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[13.5px] font-bold shadow-[0_0_22px_rgba(16,185,129,0.35)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] hover:-translate-y-px transition-all"
           >
-            Try Cloud free
+            {self?.ownership === 'helm' ? 'Connect this cluster' : 'Try Cloud free'}
           </a>
         )}
         <button onClick={onLater} className="text-[12.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors">

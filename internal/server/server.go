@@ -508,6 +508,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/cloud/install/status", s.handleCloudInstallStatus)
 			r.Post("/cloud/install/cancel", s.handleCloudInstallCancel)
 			r.Post("/cloud/install/dismiss", s.handleCloudInstallDismiss)
+			r.Get("/cloud/connect/self", s.handleCloudConnectSelf)
 			r.Get("/topology", s.handleTopology)
 			r.Get("/gitops/tree/{kind}/{namespace}/{name}", s.handleGitOpsTree)
 			r.Get("/gitops/insights/{kind}/{namespace}/{name}", s.handleGitOpsInsights)

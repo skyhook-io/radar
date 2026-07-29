@@ -1645,6 +1645,27 @@ export function useCloudInstallStatus(enabled: boolean) {
   }
 }
 
+// In-cluster Radar describing its own installation, so the modal can route to
+// the right handoff instead of a generic signup link.
+export interface CloudConnectSelf {
+  ownership: 'helm' | 'gitops' | 'unknown'
+  namespace?: string
+  release?: string
+  deploymentName?: string
+  chart?: string
+  controller?: string
+  wizardUrl?: string
+}
+
+export function useCloudConnectSelf(enabled: boolean) {
+  return useQuery<CloudConnectSelf>({
+    queryKey: ['cloud-connect-self'],
+    queryFn: () => fetchJSON('/cloud/connect/self'),
+    enabled,
+    staleTime: 60000,
+  })
+}
+
 export function prepareCloudInstall(): Promise<CloudInstallStatus> {
   return fetchJSON('/cloud/install/prepare', { method: 'POST' })
 }

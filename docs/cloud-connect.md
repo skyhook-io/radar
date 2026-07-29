@@ -29,7 +29,9 @@ moves to the surface that actually holds them (the terminal or the Hub).
 | 4 | local | none | any | multiple installs / conflicted Helm state / already-connected | **Blocked with the classifier's message** → CLI with explicit `--namespace`/`--release` | CLI |
 | 5 | local | none | **0.0.0.0** | any | **Driver lane, with an exposure warning** on the plan card — `apply`/`exec` are ungated on this listener too, so gating this harder would hold the weaker capability to a higher bar | modal button |
 | 6 | local | proxy/OIDC | any | any | Driver lane disabled (server's kubeconfig ≠ authenticated user; impersonated driver is future work) → wizard link | wizard / CLI |
-| 7 | in-cluster | any | any | itself | Wizard link. The SA cannot self-grant impersonation RBAC (K8s escalation prevention), and a successful upgrade restarts the very pod serving this UI — the flow structurally cannot complete in-product. The wizard's existing-install command is the paste lane | wizard |
+| 7a | in-cluster, native Helm | any | any | itself | **Wizard, deep-linked at the real target** (`/install?existing=1&ns=…&release=…`) plus the detected layout shown in-modal. The SA cannot self-grant impersonation RBAC and a successful upgrade restarts the pod serving this UI, so the install itself happens from the Hub | wizard |
+| 7b | in-cluster, GitOps-managed | any | any | itself | Names the owning controller and routes to `radar cloud install` — the wizard's imperative command would drift or be reverted | CLI |
+| 7c | in-cluster, undetectable | any | any | itself | Generic wizard link (SA can't see its own Deployment, or several Radars share the namespace) | wizard |
 | 8 | in-cluster, chart-armed (future WS3) | — | — | itself | Zero-command hot-start (chart pre-provisions cloud RBAC + Secret write-back Role) — not built yet | (future) |
 | 9 | cloud / embedded (Radar Hub) | — | — | — | Funnel hidden entirely (already connected) | — |
 | 10 | any | — | — | self-hosted Hub target | Same flows against `RADAR_HUB_URL` (+ `RADAR_HUB_APP_URL`); CLI: `--hub-url`. Self-signed pilots add `--cloud-insecure-skip-verify` / `cloud.insecureSkipVerify` | any |
@@ -116,6 +118,14 @@ implemented in `internal/server/cloud_install.go`:
   section). Cancellation preserves the CLI's final-poll semantics, so an
   approval racing the cancel is detected and reported.
 - `POST /dismiss {flowId}` — clears a terminal flow.
+
+In-cluster (read-only, no Hub contact, never mutates):
+
+- `GET /api/cloud/connect/self` — what this Radar knows about its own
+  installation: `{ownership: helm|gitops|unknown, namespace, release,
+  deploymentName, chart, controller?, wizardUrl?}`. Every failure degrades to
+  `unknown` + a generic wizard link; a confidently wrong namespace/release
+  would deep-link an operator at someone else's release.
 
 ## Security model
 
