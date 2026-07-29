@@ -10,7 +10,7 @@ export interface ConnectionState {
   context: string
   clusterName?: string
   error?: string
-  errorType?: string // config, auth, rbac, network, timeout, tls, unknown
+  errorType?: string // config, auth, auth-rejected, auth-plugin-stuck, rbac, network, timeout, tls, unknown
   progressMessage?: string
 }
 

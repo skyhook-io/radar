@@ -107,11 +107,11 @@ func TestRuntimeAuthRoundTripperReportsUnauthorizedResponse(t *testing.T) {
 		t.Fatalf("confirmation probes = %d, want 1", probes.Load())
 	}
 	status := GetConnectionStatus()
-	if status.State != StateDisconnected || status.ErrorType != "auth" {
-		t.Fatalf("connection status = %+v, want disconnected auth", status)
+	if status.State != StateDisconnected || status.ErrorType != "auth-rejected" {
+		t.Fatalf("connection status = %+v, want disconnected auth-rejected", status)
 	}
-	if status.Error != runtimeAuthLostMessage {
-		t.Fatalf("published error = %q, want the fixed credential-loss message (raw probe errors can embed credential material)", status.Error)
+	if status.Error != runtimeAuthRejectedMessage {
+		t.Fatalf("published error = %q, want the fixed identity-rejected message (raw probe errors can embed credential material)", status.Error)
 	}
 	if !runtimeAuthRecoveryOwed.Load() {
 		t.Fatal("demotion did not record the recovery debt")
@@ -683,8 +683,8 @@ func TestRuntimeAuthRecoveryRearmsThroughSwitchContext(t *testing.T) {
 	if probes.Load() != 1 {
 		t.Fatalf("recovered generation probes = %d, want 1", probes.Load())
 	}
-	if status := GetConnectionStatus(); status.State != StateDisconnected || status.ErrorType != "auth" {
-		t.Fatalf("connection status = %+v, want disconnected auth", status)
+	if status := GetConnectionStatus(); status.State != StateDisconnected || status.ErrorType != "auth-rejected" {
+		t.Fatalf("connection status = %+v, want disconnected auth-rejected", status)
 	}
 }
 
@@ -976,8 +976,14 @@ func TestRuntimeAuthHungExecPluginDemotesWhenEndpointReachable(t *testing.T) {
 	reportRuntimeAuthFailure(generation, errors.New("Kubernetes API returned HTTP 401 Unauthorized"))
 	waitForRuntimeAuthCheck(t, generation)
 
-	if status := GetConnectionStatus(); status.State != StateDisconnected || status.ErrorType != "auth" {
-		t.Fatalf("connection status = %+v, want disconnected auth (hung plugin with reachable endpoint)", status)
+	status := GetConnectionStatus()
+	if status.State != StateDisconnected || status.ErrorType != "auth-plugin-stuck" {
+		t.Fatalf("connection status = %+v, want disconnected auth-plugin-stuck (hung plugin with reachable endpoint)", status)
+	}
+	// The evidence is a wedged plugin, not a credential rejection — saying
+	// "credentials are no longer valid" would be a guess.
+	if status.Error != runtimeAuthPluginStuckMessage {
+		t.Fatalf("published error = %q, want the plugin-stuck message", status.Error)
 	}
 }
 
@@ -1042,6 +1048,48 @@ func TestInconclusiveStreakResetsOnConclusiveOutcomes(t *testing.T) {
 	}
 	if got := nextInconclusiveCooldown(); got != runtimeAuthInconclusiveProbeCooldown {
 		t.Fatalf("cooldown after demotion = %v, want %v", got, runtimeAuthInconclusiveProbeCooldown)
+	}
+}
+
+func TestRuntimeAuthDemotionPublishesClassificationSpecificCopy(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		probeErr    error
+		wantType    string
+		wantMessage string
+	}{
+		{
+			name:        "client-side credential failure",
+			probeErr:    errors.New("getting credentials: exec: executable aws failed with exit code 255"),
+			wantType:    "auth",
+			wantMessage: runtimeAuthLostMessage,
+		},
+		{
+			name:        "server rejected the identity",
+			probeErr:    errors.New("the server has asked for the client to provide credentials"),
+			wantType:    "auth-rejected",
+			wantMessage: runtimeAuthRejectedMessage,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			generation := prepareRuntimeAuthTest(t)
+			setRuntimeAuthProbe(func(context.Context) error { return tt.probeErr })
+
+			reportRuntimeAuthFailure(generation, errors.New("Kubernetes API returned HTTP 401 Unauthorized"))
+			waitForRuntimeAuthCheck(t, generation)
+
+			status := GetConnectionStatus()
+			if status.ErrorType != tt.wantType {
+				t.Fatalf("errorType = %q, want %q", status.ErrorType, tt.wantType)
+			}
+			if status.Error != tt.wantMessage {
+				t.Fatalf("published error = %q, want %q", status.Error, tt.wantMessage)
+			}
+			// Both variants are auth-shaped: recovery must own either one.
+			if !runtimeAuthRecoveryOwed.Load() {
+				t.Fatalf("%s did not record the recovery debt", tt.wantType)
+			}
+		})
 	}
 }
 
@@ -1160,20 +1208,24 @@ func TestRuntimeAuthRecoveryYieldsToActiveContextOperation(t *testing.T) {
 	}
 }
 
-func TestSetConnectionStatusStartsRecoveryForAuthPrefixedTypes(t *testing.T) {
-	ResetTestState()
-	t.Cleanup(ResetTestState)
-	setRuntimeAuthRecoveryIntervalsForTest(time.Hour, time.Hour)
+func TestSetConnectionStatusStartsRecoveryForAuthTypes(t *testing.T) {
+	for _, errorType := range []string{"auth", "auth-rejected", "auth-plugin-stuck"} {
+		t.Run(errorType, func(t *testing.T) {
+			ResetTestState()
+			t.Cleanup(ResetTestState)
+			setRuntimeAuthRecoveryIntervalsForTest(time.Hour, time.Hour)
 
-	SetConnectionStatus(ConnectionStatus{
-		State:     StateDisconnected,
-		Context:   "some-context",
-		ErrorType: "auth-rejected",
-	})
-	if !runtimeAuthRecoveryOwed.Load() {
-		t.Fatal("auth-prefixed disconnect did not record the recovery debt")
+			SetConnectionStatus(ConnectionStatus{
+				State:     StateDisconnected,
+				Context:   "some-context",
+				ErrorType: errorType,
+			})
+			if !runtimeAuthRecoveryOwed.Load() {
+				t.Fatalf("%s disconnect did not record the recovery debt", errorType)
+			}
+			waitForRecoveryWorker(t)
+		})
 	}
-	waitForRecoveryWorker(t)
 }
 
 func TestRuntimeAuthRecoveryStaticCredentialsReconnectViaDiskReread(t *testing.T) {
@@ -1218,31 +1270,43 @@ func TestRuntimeAuthRecoveryStaticCredentialsReconnectViaDiskReread(t *testing.T
 }
 
 func TestMarkDisconnectedAuthShapedMessageRoutesThroughDemotionPipeline(t *testing.T) {
-	generation := prepareRuntimeAuthTest(t)
-	var probes atomic.Int32
-	probeReturned := make(chan struct{}, 1)
-	setRuntimeAuthProbe(func(context.Context) error {
-		probes.Add(1)
-		select {
-		case probeReturned <- struct{}{}:
-		default:
-		}
-		return errors.New("dial tcp: connection refused")
-	})
+	for _, tt := range []struct {
+		name    string
+		message string
+	}{
+		{
+			name:    "client-side credential failure",
+			message: `failed to list helm releases: Kubernetes cluster unreachable: Get "https://cluster.test/version": getting credentials: exec: executable aws failed with exit code 255`,
+		},
+		{
+			name:    "server rejected authentication",
+			message: `failed to list helm releases: Kubernetes cluster unreachable: the server has asked for the client to provide credentials`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			generation := prepareRuntimeAuthTest(t)
+			probeReturned := make(chan struct{}, 1)
+			setRuntimeAuthProbe(func(context.Context) error {
+				select {
+				case probeReturned <- struct{}{}:
+				default:
+				}
+				return errors.New("dial tcp: connection refused")
+			})
 
-	marked := MarkDisconnectedIfClusterUnreachable(
-		`failed to list helm releases: Kubernetes cluster unreachable: Get "https://cluster.test/version": getting credentials: exec: executable aws failed with exit code 255`)
-	if marked {
-		t.Fatal("auth-shaped message must not mark disconnected directly — the pipeline decides")
-	}
-	select {
-	case <-probeReturned:
-	case <-time.After(2 * time.Second):
-		t.Fatal("auth-shaped message did not reach the demotion pipeline")
-	}
-	waitForRuntimeAuthCheck(t, generation)
-	if got := GetConnectionStatus().State; got != StateConnected {
-		t.Fatalf("state = %q, want %q (pipeline dismissed the candidate; no direct publish)", got, StateConnected)
+			if MarkDisconnectedIfClusterUnreachable(tt.message) {
+				t.Fatal("auth-shaped message must not mark disconnected directly — the pipeline decides")
+			}
+			select {
+			case <-probeReturned:
+			case <-time.After(2 * time.Second):
+				t.Fatal("auth-shaped message did not reach the demotion pipeline")
+			}
+			waitForRuntimeAuthCheck(t, generation)
+			if got := GetConnectionStatus().State; got != StateConnected {
+				t.Fatalf("state = %q, want %q (pipeline dismissed the candidate; no direct publish)", got, StateConnected)
+			}
+		})
 	}
 }
 

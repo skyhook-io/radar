@@ -6,6 +6,7 @@ import { parseContextName } from '../utils/context-name'
 import { useOpenLocalTerminal, ClusterName } from '@skyhook-io/k8s-ui'
 import { useAuthMe } from '../api/client'
 import { Tooltip } from './ui/Tooltip'
+import { allShellSafe } from '../utils/shell-safe'
 
 interface ConnectionErrorViewProps {
   connection: ConnectionState
@@ -13,13 +14,21 @@ interface ConnectionErrorViewProps {
   isRetrying: boolean
 }
 
+interface CommandHint {
+  label: string
+  command: string
+  runnable?: boolean
+}
+
 interface AuthHints {
   title: string
   hints: string[]
   /** Primary auth command — usually sufficient on its own */
-  authCommand?: { label: string; command: string }
+  authCommand?: CommandHint
   /** Secondary command shown as fallback if primary doesn't resolve the issue */
-  fallbackCommand?: { label: string; command: string }
+  fallbackCommand?: CommandHint
+  /** Set when authCommand is a diagnostic rather than a re-auth — suppresses the "Authenticate in terminal" button */
+  hideAuthButton?: boolean
 }
 
 function getAuthHints(context: string): AuthHints {
@@ -32,7 +41,7 @@ function getAuthHints(context: string): AuthHints {
         hints: ['Radar could not get Google Cloud credentials for this context.'],
         authCommand: { label: 'Refresh Google Cloud credentials:', command: 'gcloud auth login' },
       }
-      if (parsed.region && parsed.account) {
+      if (parsed.region && parsed.account && allShellSafe(parsed.clusterName, parsed.region, parsed.account)) {
         const isZone = /^[a-z]+-[a-z]+\d+-[a-z]$/.test(parsed.region)
         const flag = isZone ? '--zone' : '--region'
         result.fallbackCommand = {
@@ -51,7 +60,7 @@ function getAuthHints(context: string): AuthHints {
         ],
         authCommand: { label: 'If this context uses AWS SSO, refresh credentials:', command: 'aws sso login' },
       }
-      if (parsed.region) {
+      if (parsed.region && allShellSafe(parsed.clusterName, parsed.region)) {
         result.fallbackCommand = {
           label: 'If that doesn\'t work, refresh cluster credentials:',
           command: `aws eks update-kubeconfig --name ${parsed.clusterName} --region ${parsed.region}`,
@@ -64,7 +73,7 @@ function getAuthHints(context: string): AuthHints {
         title: 'AKS Authentication Failed',
         hints: ['Radar could not get Azure credentials for this context.'],
         authCommand: { label: 'Refresh Azure credentials:', command: 'az login' },
-        fallbackCommand: { label: 'If that doesn\'t work, refresh cluster credentials:', command: 'az aks get-credentials --name <cluster> --resource-group <rg>' },
+        fallbackCommand: { label: 'If that doesn\'t work, refresh cluster credentials:', command: 'az aks get-credentials --name <cluster> --resource-group <rg>', runnable: false },
       }
     default:
       return {
@@ -74,6 +83,85 @@ function getAuthHints(context: string): AuthHints {
           'Re-authenticate with your cloud provider and try again',
         ],
       }
+  }
+}
+
+export function getAuthRejectedHints(context: string): AuthHints {
+  const parsed = parseContextName(context)
+
+  switch (parsed.provider) {
+    case 'EKS': {
+      const result: AuthHints = {
+        title: 'EKS Could Not Authenticate This Request',
+        hints: [
+          'EKS returned HTTP 401, so Kubernetes could not authenticate this request.',
+          'The AWS credential may be missing, stale, or revoked, or its IAM principal may not be mapped through an EKS access entry or the cluster\'s legacy aws-auth configuration.',
+          'If the credential is current, ask a cluster admin to verify the mapping for the IAM principal used by this context.',
+          'The diagnostic uses the terminal\'s current AWS profile. If the kubeconfig exec block pins AWS_PROFILE or --role-arn, use that profile or role instead.',
+          'API and API_AND_CONFIG_MAP modes use access entries; CONFIG_MAP mode uses the aws-auth ConfigMap.',
+        ],
+        fallbackCommand: { label: 'If this context uses the current AWS SSO profile, re-login and retry:', command: 'aws sso login' },
+      }
+      if (parsed.region && allShellSafe(parsed.clusterName, parsed.region)) {
+        result.authCommand = {
+          label: 'Inspect the caller and authentication mode for the current terminal AWS profile:',
+          command: `aws sts get-caller-identity && aws eks describe-cluster --name ${parsed.clusterName} --region ${parsed.region} --query cluster.accessConfig.authenticationMode --output text`,
+        }
+        // A diagnostic, not a re-auth — the "Authenticate in terminal" button
+        // would misrepresent what running it does.
+        result.hideAuthButton = true
+      }
+      return result
+    }
+    case 'GKE': {
+      const result: AuthHints = {
+        title: 'GKE Could Not Authenticate This Request',
+        hints: [
+          'GKE returned HTTP 401, so Kubernetes could not authenticate this request.',
+          'The credential or auth plugin may be missing or misconfigured, or the OAuth token may be stale or revoked.',
+        ],
+        authCommand: { label: 'Refresh Google Cloud credentials:', command: 'gcloud auth login' },
+      }
+      if (parsed.region && parsed.account && allShellSafe(parsed.clusterName, parsed.region, parsed.account)) {
+        const isZone = /^[a-z]+-[a-z]+\d+-[a-z]$/.test(parsed.region)
+        const flag = isZone ? '--zone' : '--region'
+        result.fallbackCommand = {
+          label: 'If that doesn\'t work, refresh cluster credentials:',
+          command: `gcloud container clusters get-credentials ${parsed.clusterName} ${flag} ${parsed.region} --project ${parsed.account}`,
+        }
+      }
+      return result
+    }
+    case 'AKS':
+      return {
+        title: 'AKS Could Not Authenticate This Request',
+        hints: [
+          'AKS returned HTTP 401, so Kubernetes could not authenticate this request.',
+          'The credential may be missing, stale, or revoked — re-authenticating usually resolves this.',
+        ],
+        authCommand: { label: 'Refresh Azure credentials:', command: 'az login' },
+        fallbackCommand: { label: 'If that doesn\'t work, refresh cluster credentials:', command: 'az aks get-credentials --name <cluster> --resource-group <rg>', runnable: false },
+      }
+    default:
+      return {
+        title: 'Kubernetes Could Not Authenticate This Request',
+        hints: [
+          'The Kubernetes API returned HTTP 401, so it could not authenticate this request.',
+          'The kubeconfig user may not have supplied a credential, or its credential may be expired or revoked.',
+          'If the cluster maps identities explicitly, the principal used by this context may not be mapped yet.',
+        ],
+      }
+  }
+}
+
+function getAuthPluginStuckHints(): AuthHints {
+  return {
+    title: 'Credential Plugin Stopped Responding',
+    hints: [
+      'The credential command configured by this kubeconfig did not return before the deadline.',
+      'Check that your cloud-provider CLI and its identity-provider or network dependencies are responsive.',
+      'Radar will keep checking in the background and reconnect when the credential command recovers.',
+    ],
   }
 }
 
@@ -91,7 +179,7 @@ function getTimeoutHints(context: string): AuthHints | null {
         hints: [...baseHints, 'If the endpoint is reachable, Google Cloud credentials may need refresh.'],
         authCommand: { label: 'If network access looks healthy, refresh Google Cloud credentials:', command: 'gcloud auth login' },
       }
-      if (parsed.region && parsed.account) {
+      if (parsed.region && parsed.account && allShellSafe(parsed.clusterName, parsed.region, parsed.account)) {
         const isZone = /^[a-z]+-[a-z]+\d+-[a-z]$/.test(parsed.region)
         const flag = isZone ? '--zone' : '--region'
         result.fallbackCommand = {
@@ -107,7 +195,7 @@ function getTimeoutHints(context: string): AuthHints | null {
         hints: [...baseHints, 'If the endpoint is reachable, AWS credentials or SSO may need refresh.'],
         authCommand: { label: 'If this context uses AWS SSO and network access looks healthy, refresh credentials:', command: 'aws sso login' },
       }
-      if (parsed.region) {
+      if (parsed.region && allShellSafe(parsed.clusterName, parsed.region)) {
         result.fallbackCommand = {
           label: 'If that does not work, refresh cluster credentials:',
           command: `aws eks update-kubeconfig --name ${parsed.clusterName} --region ${parsed.region}`,
@@ -120,7 +208,7 @@ function getTimeoutHints(context: string): AuthHints | null {
         title: 'Connection Timed Out',
         hints: [...baseHints, 'If the endpoint is reachable, Azure credentials may need refresh.'],
         authCommand: { label: 'If network access looks healthy, refresh Azure credentials:', command: 'az login' },
-        fallbackCommand: { label: 'If that does not work, refresh cluster credentials:', command: 'az aks get-credentials --name <cluster> --resource-group <rg>' },
+        fallbackCommand: { label: 'If that does not work, refresh cluster credentials:', command: 'az aks get-credentials --name <cluster> --resource-group <rg>', runnable: false },
       }
     default:
       return null
@@ -182,7 +270,7 @@ const errorHints: Record<string, { title: string; hints: string[] }> = {
   },
 }
 
-function CopyableCommand({ command, onRunInTerminal }: { command: string; onRunInTerminal?: (command: string) => void }) {
+export function CopyableCommand({ command, onRunInTerminal }: { command: string; onRunInTerminal?: (command: string) => void }) {
   const [copied, setCopied] = useState(false)
   const commandParts = command.split(/(\s+)/)
 
@@ -232,15 +320,28 @@ function CopyableCommand({ command, onRunInTerminal }: { command: string; onRunI
   )
 }
 
+export function selectConnectionHints(errorType: string | undefined, context: string): AuthHints | null {
+  switch (errorType) {
+    case 'auth':
+      return getAuthHints(context)
+    case 'auth-rejected':
+      return getAuthRejectedHints(context)
+    case 'auth-plugin-stuck':
+      return getAuthPluginStuckHints()
+    case 'timeout':
+      return getTimeoutHints(context)
+    default:
+      return null
+  }
+}
+
 export function ConnectionErrorView({ connection, onRetry, isRetrying }: ConnectionErrorViewProps) {
   // For auth errors, generate context-aware hints with a specific re-auth command
   const isAuth = connection.errorType === 'auth'
-  const isTimeout = connection.errorType === 'timeout'
-  const commandInfo = isAuth
-    ? getAuthHints(connection.context || '')
-    : isTimeout
-      ? getTimeoutHints(connection.context || '')
-      : null
+  const isAuthRejected = connection.errorType === 'auth-rejected'
+  const isAuthPluginStuck = connection.errorType === 'auth-plugin-stuck'
+  const isAuthError = isAuth || isAuthRejected || isAuthPluginStuck
+  const commandInfo = selectConnectionHints(connection.errorType, connection.context || '')
   const errorInfo = commandInfo || errorHints[connection.errorType || 'unknown'] || errorHints.unknown
   const openLocalTerminal = useOpenLocalTerminal()
   const { data: authMe } = useAuthMe()
@@ -316,8 +417,8 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
             {commandInfo?.authCommand && (
               <div className="mt-3">
                 <p className="text-xs text-theme-text-tertiary">{commandInfo.authCommand.label}</p>
-                <CopyableCommand command={commandInfo.authCommand.command} onRunInTerminal={handleRunInTerminal} />
-                {isAuth && (
+                <CopyableCommand command={commandInfo.authCommand.command} onRunInTerminal={commandInfo.authCommand.runnable === false ? undefined : handleRunInTerminal} />
+                {isAuthError && !commandInfo?.hideAuthButton && commandInfo.authCommand.runnable !== false && (
                   <button
                     onClick={handleAuthInTerminal}
                     className="mt-3 w-full inline-flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium btn-brand rounded-md"
@@ -331,7 +432,7 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
             {commandInfo?.fallbackCommand && (
               <div className="mt-4 pt-3 border-t border-theme-border/50">
                 <p className="text-xs text-theme-text-tertiary">{commandInfo.fallbackCommand.label}</p>
-                <CopyableCommand command={commandInfo.fallbackCommand.command} onRunInTerminal={handleRunInTerminal} />
+                <CopyableCommand command={commandInfo.fallbackCommand.command} onRunInTerminal={commandInfo.fallbackCommand.runnable === false ? undefined : handleRunInTerminal} />
               </div>
             )}
             {connection.error && (
@@ -381,10 +482,13 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
             {connection.errorType !== 'config' && <ContextSwitcher triggerName="Switch context" />}
           </div>
 
-          {isAuth && (
+          {isAuthError && (
             <p className="mt-4 text-xs text-theme-text-tertiary">
-              Radar re-checks in the background and reconnects once credentials are
-              refreshed. Use Retry Connection to check immediately.
+              {isAuthRejected
+                ? 'Radar re-checks in the background — access changes are picked up automatically. Use Retry Connection to check immediately.'
+                : isAuthPluginStuck
+                  ? 'Radar re-checks in the background and reconnects when the credential plugin responds. Use Retry Connection to check immediately.'
+                  : 'Radar re-checks in the background and reconnects once credentials are refreshed. Use Retry Connection to check immediately.'}
             </p>
           )}
         </div>

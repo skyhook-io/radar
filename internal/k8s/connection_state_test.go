@@ -193,6 +193,36 @@ func TestClassifyError(t *testing.T) {
 			want: "auth",
 		},
 		{
+			name: "server 401 client-go phrasing is auth-rejected",
+			err:  "failed to connect to cluster: the server has asked for the client to provide credentials",
+			want: "auth-rejected",
+		},
+		{
+			name: "bare unauthorized is auth-rejected",
+			err:  "Unauthorized",
+			want: "auth-rejected",
+		},
+		{
+			name: "http 401 authentication required is auth-rejected",
+			err:  `the server responded with the status code 401 but did not return more information: Authentication required`,
+			want: "auth-rejected",
+		},
+		{
+			name: "exec failure quoting server unauthorized stays auth",
+			err:  "getting credentials: exec: executable aws failed with exit code 255: UnauthorizedException: invalid grant",
+			want: "auth",
+		},
+		{
+			name: "unrelated provide credentials text is not a server 401 fingerprint",
+			err:  "helper failed to provide credentials",
+			want: "unknown",
+		},
+		{
+			name: "proxy authentication required is not a Kubernetes 401",
+			err:  `Get "https://cluster.example/version": Proxy Authentication Required`,
+			want: "unknown",
+		},
+		{
 			name: "plain context deadline is timeout without exec auth",
 			err:  "failed to connect to cluster: context deadline exceeded",
 			want: "timeout",
@@ -333,9 +363,9 @@ func TestClassifyErrorTypedErrors(t *testing.T) {
 		want string
 	}{
 		{
-			name: "typed unauthorized is auth",
+			name: "typed unauthorized is auth-rejected",
 			err:  apierrors.NewUnauthorized("token expired"),
-			want: "auth",
+			want: "auth-rejected",
 		},
 		{
 			name: "typed forbidden is rbac",

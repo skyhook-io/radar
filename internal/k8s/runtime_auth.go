@@ -37,7 +37,11 @@ const (
 
 	// Published instead of the raw probe error, which broadcasts to every SSE
 	// client and can embed credential material on exec-plugin failure paths.
-	runtimeAuthLostMessage = "Kubernetes credentials for this context are no longer valid; re-authenticate to reconnect"
+	runtimeAuthLostMessage     = "Kubernetes credentials for this context are no longer valid; re-authenticate to reconnect"
+	runtimeAuthRejectedMessage = "The cluster could not authenticate this request (HTTP 401)"
+	// A wedged exec plugin gets its own auth-shaped type so recovery owns it
+	// without the UI suggesting that the credentials are known to be invalid.
+	runtimeAuthPluginStuckMessage = "The credential plugin for this context stopped responding; Kubernetes requests cannot be authenticated until it recovers"
 )
 
 var (
@@ -119,6 +123,11 @@ type runtimeAuthRoundTripper struct {
 	generation uint64
 }
 
+// isAuthClassification reports whether a classification is authentication-shaped.
+func isAuthClassification(classification string) bool {
+	return classification == "auth" || classification == "auth-rejected" || classification == "auth-plugin-stuck"
+}
+
 func (rt *runtimeAuthRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := rt.next.RoundTrip(req)
 	// Two distinct shapes of credential loss: transport errors carry exec
@@ -126,11 +135,11 @@ func (rt *runtimeAuthRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 	// while an expired-but-presentable token comes back as a plain 401
 	// response — at this layer it is not an error. 403 is deliberately not a
 	// candidate: RBAC denial is not credential loss.
-	if err != nil && ClassifyError(err) == "auth" {
+	if err != nil && isAuthClassification(ClassifyError(err)) {
 		reportRuntimeAuthFailure(rt.generation, err)
 	} else if resp != nil && resp.StatusCode == http.StatusUnauthorized {
-		// This synthetic message must keep classifying as "auth"
-		// (isAuthErrorMessage matches "unauthorized") or the report gate
+		// This synthetic message must keep classifying as auth-shaped
+		// (isAuthRejectedMessage matches "unauthorized") or the report gate
 		// below drops it silently.
 		reportRuntimeAuthFailure(rt.generation, errors.New("Kubernetes API returned HTTP 401 Unauthorized"))
 	}
@@ -138,7 +147,7 @@ func (rt *runtimeAuthRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 }
 
 func reportRuntimeAuthFailure(generation uint64, candidate error) {
-	if candidate == nil || ClassifyError(candidate) != "auth" || !runtimeAuthCandidateIsCurrent(generation) {
+	if candidate == nil || !isAuthClassification(ClassifyError(candidate)) || !runtimeAuthCandidateIsCurrent(generation) {
 		return
 	}
 
@@ -185,7 +194,7 @@ func confirmRuntimeAuthFailure(generation, operationGeneration uint64) {
 	// plugin mutex.
 	hungPlugin := classification == "timeout" && err != nil && UsesExecAuth() &&
 		strings.Contains(err.Error(), "auth plugin timeout")
-	if classification != "auth" && !hungPlugin {
+	if !isAuthClassification(classification) && !hungPlugin {
 		setRuntimeAuthCooldown(generation, runtimeAuthCooldown(err), true)
 		if err == nil {
 			log.Printf("[k8s] Runtime authentication candidate dismissed for context %q: credentials accepted by a fresh probe",
@@ -230,7 +239,13 @@ func confirmRuntimeAuthFailure(generation, operationGeneration uint64) {
 	if !runtimeAuthStateIsCurrent(generation) || currentOperationGen() != operationGeneration {
 		return
 	}
-	if !transitionConnectedToRuntimeAuthFailure() {
+	// A hung plugin's classification is "timeout". Publish a distinct auth-shaped
+	// type so recovery ownership engages without showing generic re-auth guidance.
+	demotedType := classification
+	if hungPlugin {
+		demotedType = "auth-plugin-stuck"
+	}
+	if !transitionConnectedToRuntimeAuthFailure(demotedType) {
 		return
 	}
 	// Demotion is a conclusive outcome: the next episode's inconclusive
@@ -405,18 +420,27 @@ func defaultRuntimeAuthEndpointProbe(ctx context.Context, config *rest.Config) e
 	return nil
 }
 
-func transitionConnectedToRuntimeAuthFailure() bool {
+// The published Error stays fixed for each auth variant; raw probe errors can
+// embed credential material and this status broadcasts to every SSE client.
+func transitionConnectedToRuntimeAuthFailure(classification string) bool {
 	connectionStatusMu.Lock()
 	if connectionStatus.State != StateConnected {
 		connectionStatusMu.Unlock()
 		return false
 	}
+	message := runtimeAuthLostMessage
+	switch classification {
+	case "auth-plugin-stuck":
+		message = runtimeAuthPluginStuckMessage
+	case "auth-rejected":
+		message = runtimeAuthRejectedMessage
+	}
 	status := ConnectionStatus{
 		State:       StateDisconnected,
 		Context:     connectionStatus.Context,
 		ClusterName: connectionStatus.ClusterName,
-		Error:       runtimeAuthLostMessage,
-		ErrorType:   "auth",
+		Error:       message,
+		ErrorType:   classification,
 	}
 	connectionStatus = status
 	connectionStatusMu.Unlock()

@@ -104,7 +104,7 @@ func runRuntimeAuthRecovery() {
 		ctx, cancel := context.WithTimeout(context.Background(), connectionTestOperationTimeout())
 		err := getRuntimeAuthProbe()(ctx)
 		cancel()
-		if err != nil && ClassifyError(err) == "auth" && runtimeAuthCredentialsAreStatic() {
+		if err != nil && isAuthClassification(ClassifyError(err)) && runtimeAuthCredentialsAreStatic() {
 			// Probing the in-memory config can never observe new INLINE
 			// credentials (token:/client-certificate-data: are read once at
 			// connect), but a full reconnect re-reads the kubeconfig from

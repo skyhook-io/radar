@@ -27,7 +27,7 @@ type ConnectionStatus struct {
 	Context     string          `json:"context"`
 	ClusterName string          `json:"clusterName,omitempty"`
 	Error       string          `json:"error,omitempty"`
-	ErrorType   string          `json:"errorType,omitempty"` // config, auth, rbac, network, timeout, tls, unknown
+	ErrorType   string          `json:"errorType,omitempty"` // config, auth, auth-rejected, auth-plugin-stuck, rbac, network, timeout, tls, unknown
 	ProgressMsg string          `json:"progressMessage,omitempty"`
 }
 
@@ -70,7 +70,7 @@ func SetConnectionStatus(status ConnectionStatus) {
 		runtimeAuthRecoveryOwed.Store(false)
 		resetInconclusiveStreak()
 	case StateDisconnected:
-		if strings.HasPrefix(status.ErrorType, "auth") {
+		if isAuthClassification(status.ErrorType) {
 			runtimeAuthRecoveryOwed.Store(true)
 		}
 		if runtimeAuthRecoveryOwed.Load() {
@@ -95,7 +95,7 @@ func notifyConnectionChange(status ConnectionStatus) {
 // MarkDisconnectedIfClusterUnreachable updates the shared connection state when
 // a live Kubernetes request proves that the current cluster endpoint is gone.
 func MarkDisconnectedIfClusterUnreachable(message string) bool {
-	if ClassifyError(errors.New(message)) == "auth" {
+	if isAuthClassification(ClassifyError(errors.New(message))) {
 		// Credential loss must go through the demotion pipeline — it confirms
 		// with a fresh probe, gates on endpoint reachability, and quiesces
 		// cluster-backed work. Publishing disconnected directly would skip
@@ -229,10 +229,11 @@ func isTransportTimeoutMessage(lower string) bool {
 	return false
 }
 
+// isAuthErrorMessage matches client-side credential acquisition failures (exec
+// plugins, SSO sessions) — no request reached the API server, and
+// re-authenticating locally is the fix.
 func isAuthErrorMessage(lower string) bool {
 	authMarkers := []string{
-		"unauthorized",
-		"authentication required",
 		"token has expired",
 		"expired token",
 		"sso session",
@@ -240,7 +241,6 @@ func isAuthErrorMessage(lower string) bool {
 		"ssoproviderinvalidtoken",
 		"aws sso login",
 		"getting credentials",
-		"provide credentials",
 		"credentials expired",
 		"credential plugin",
 		"exec credential",
@@ -261,6 +261,27 @@ func isAuthErrorMessage(lower string) bool {
 		"read empty token from file",
 	}
 	for _, marker := range authMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// isAuthRejectedMessage matches HTTP 401 responses: the request reached the API
+// server but could not be authenticated. Checked only after isAuthErrorMessage
+// so exec-plugin stderr that quotes a server error (e.g. "UnauthorizedException")
+// still classifies as client-side auth.
+func isAuthRejectedMessage(lower string) bool {
+	if strings.Contains(lower, "proxy authentication required") {
+		return false
+	}
+	rejectedMarkers := []string{
+		"unauthorized",
+		"authentication required",
+		"the server has asked for the client to provide credentials",
+	}
+	for _, marker := range rejectedMarkers {
 		if strings.Contains(lower, marker) {
 			return true
 		}
@@ -346,7 +367,7 @@ func ClassifyError(err error) string {
 		return "rbac"
 	}
 	if apierrors.IsUnauthorized(err) {
-		return "auth"
+		return "auth-rejected"
 	}
 	if apierrors.IsTimeout(err) || apierrors.IsServerTimeout(err) || errors.Is(err, context.DeadlineExceeded) {
 		return "timeout"
@@ -369,6 +390,9 @@ func ClassifyError(err error) string {
 	}
 	if isAuthErrorMessage(errLower) {
 		return "auth"
+	}
+	if isAuthRejectedMessage(errLower) {
+		return "auth-rejected"
 	}
 
 	if isTLSCertificateError(err) || isTLSCertificateMessage(errLower) {

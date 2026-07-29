@@ -525,7 +525,7 @@ func CheckClusterAccess(ctx context.Context) error {
 			// Exception: exec auth timeouts are retryable — the first call
 			// triggers a token refresh, and the cached token is ready by retry.
 			errType := k8s.ClassifyError(lastErr)
-			if errType == "config" || errType == "auth" || errType == "rbac" || errType == "network" || errType == "tls" {
+			if errType == "config" || errType == "auth" || errType == "auth-rejected" || errType == "rbac" || errType == "network" || errType == "tls" {
 				break
 			}
 			// Don't retry if the parent context is already done
