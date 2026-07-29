@@ -118,6 +118,10 @@ type managerFixture struct {
 }
 
 func newManagerFixture(mode cloudinstall.ProvisionMode, planMode cloudinstall.InstallPlanMode, scanErr error) *managerFixture {
+	return newManagerFixtureOn(mode, planMode, scanErr, false)
+}
+
+func newManagerFixtureOn(mode cloudinstall.ProvisionMode, planMode cloudinstall.InstallPlanMode, scanErr error, shared bool) *managerFixture {
 	fx := &managerFixture{
 		connect: &fakeConnectClient{
 			cr:      testCreateResponse(),
@@ -127,7 +131,8 @@ func newManagerFixture(mode cloudinstall.ProvisionMode, planMode cloudinstall.In
 	}
 	prepared := &fakePrepared{mode: mode, namespace: "radar", release: "radar"}
 	fx.m = &cloudInstallManager{
-		cfg: CloudConnectConfig{HubAPIURL: "https://api.test.example", HubAppURL: "https://app.test.example"},
+		cfg:            CloudConnectConfig{HubAPIURL: "https://api.test.example", HubAppURL: "https://app.test.example"},
+		sharedListener: func() bool { return shared },
 		backend: cloudInstallBackend{
 			captureClients: func() (cloudInstallClients, string, error) {
 				return cloudInstallClients{}, "kind-test", nil
@@ -502,12 +507,29 @@ func TestCloudInstallEndpointGating(t *testing.T) {
 		}
 	}
 
-	t.Run("non-loopback listener is refused", func(t *testing.T) {
+	// A shared listener does NOT disable the lane: /api/resources/apply and
+	// pods/exec are ungated there too, so this would hold the weaker capability
+	// to a higher bar. The exposure is surfaced on the plan card instead.
+	t.Run("non-loopback listener still serves, flagged as shared", func(t *testing.T) {
 		srv := newSrv("0.0.0.0")
 		w := httptest.NewRecorder()
 		srv.handleCloudInstallStatus(w, httptest.NewRequest(http.MethodGet, "/api/cloud/install/status", nil))
-		if w.Code != http.StatusNotFound {
-			t.Fatalf("status = %d", w.Code)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+		}
+		if !srv.sharedListener() {
+			t.Fatal("0.0.0.0 not reported as a shared listener")
+		}
+		if loopback := newSrv("127.0.0.1"); loopback.sharedListener() {
+			t.Fatal("127.0.0.1 reported as a shared listener")
+		}
+	})
+
+	t.Run("auth enabled disables the lane", func(t *testing.T) {
+		srv := newSrv("127.0.0.1")
+		srv.authConfig.Mode = "proxy"
+		if srv.cloudConnectDriverEnabled() {
+			t.Fatal("driver lane enabled with auth on")
 		}
 	})
 
@@ -539,7 +561,8 @@ func TestCloudInstallEndpointGating(t *testing.T) {
 	})
 
 	t.Run("wizard lane capability when driver disabled", func(t *testing.T) {
-		srv := newSrv("0.0.0.0")
+		srv := newSrv("127.0.0.1")
+		srv.cloudConnectCfg.CloudTunnelConfigured = true
 		cap := srv.cloudConnectCapability()
 		if cap.Lane != "wizard" || cap.AppURL != "https://app.test.example" {
 			t.Fatalf("capability = %+v", cap)
@@ -651,5 +674,20 @@ func TestCloudInstallCancelDuringStartingDoesNotLaunchTheFlow(t *testing.T) {
 	case fx.connect.approve <- &cloud.PollResponse{Status: "approved", ClusterID: "cl_x", Token: testToken}:
 	default:
 		t.Fatal("approval channel was consumed by a flow that should not have launched")
+	}
+}
+
+// The plan card must be able to warn that anyone reachable on this listener
+// could approve the connection into their own org.
+func TestCloudInstallPlanFlagsSharedListener(t *testing.T) {
+	for _, shared := range []bool{false, true} {
+		fx := newManagerFixtureOn(cloudinstall.ProvisionFresh, cloudinstall.InstallModeFresh, nil, shared)
+		if _, _, err := fx.m.prepare(context.Background()); err != nil {
+			t.Fatalf("prepare: %v", err)
+		}
+		st := waitForState(t, fx.m, cloudFlowReady)
+		if st.Plan.SharedListener != shared {
+			t.Fatalf("sharedListener = %v, want %v", st.Plan.SharedListener, shared)
+		}
 	}
 }

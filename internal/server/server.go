@@ -208,6 +208,7 @@ func New(cfg Config) *Server {
 		yamlSchemaBundleCache: make(map[string]yamlSchemaBundleCacheEntry),
 	}
 	s.cloudInstall = newCloudInstallManager(cfg.CloudConnect)
+	s.cloudInstall.sharedListener = s.sharedListener
 
 	// Resolve a local agent CLI for AI diagnosis (keyless, on the user's own
 	// subscription). nil when none is found — the feature stays disabled.

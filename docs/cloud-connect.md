@@ -23,11 +23,11 @@ moves to the surface that actually holds them (the terminal or the Hub).
 
 | # | Deployment | Auth | Listener | Existing install | In-product result | Best path |
 |---|-----------|------|----------|------------------|-------------------|-----------|
-| 1 | local | none | loopback | none | **Driver lane**: "Connect this cluster" runs the full flow (fresh install) | modal button |
-| 2 | local | none | loopback | native Helm release | **Driver lane**: adoption plan + explicit consent, atomic upgrade w/ verified rollback | modal button |
-| 3 | local | none | loopback | GitOps-managed (Argo/Flux) | **Blocked with explanation** → run `radar cloud install` (values + token-Secret handoff for Git); imperative writes would drift or be reverted | CLI |
-| 4 | local | none | loopback | multiple installs / conflicted Helm state / already-connected | **Blocked with the classifier's message** → CLI with explicit `--namespace`/`--release` | CLI |
-| 5 | local | none | **0.0.0.0** | any | Driver lane **disabled** (shared unauthenticated listener — viewer ≠ operator) → wizard link | wizard / CLI |
+| 1 | local | none | any | none | **Driver lane**: "Connect this cluster" runs the full flow (fresh install) | modal button |
+| 2 | local | none | any | native Helm release | **Driver lane**: adoption plan + explicit consent, atomic upgrade w/ verified rollback | modal button |
+| 3 | local | none | any | GitOps-managed (Argo/Flux) | **Blocked with explanation** → run `radar cloud install` (values + token-Secret handoff for Git); imperative writes would drift or be reverted | CLI |
+| 4 | local | none | any | multiple installs / conflicted Helm state / already-connected | **Blocked with the classifier's message** → CLI with explicit `--namespace`/`--release` | CLI |
+| 5 | local | none | **0.0.0.0** | any | **Driver lane, with an exposure warning** on the plan card — `apply`/`exec` are ungated on this listener too, so gating this harder would hold the weaker capability to a higher bar | modal button |
 | 6 | local | proxy/OIDC | any | any | Driver lane disabled (server's kubeconfig ≠ authenticated user; impersonated driver is future work) → wizard link | wizard / CLI |
 | 7 | in-cluster | any | any | itself | Wizard link. The SA cannot self-grant impersonation RBAC (K8s escalation prevention), and a successful upgrade restarts the very pod serving this UI — the flow structurally cannot complete in-product. The wizard's existing-install command is the paste lane | wizard |
 | 8 | in-cluster, chart-armed (future WS3) | — | — | itself | Zero-command hot-start (chart pre-provisions cloud RBAC + Secret write-back Role) — not built yet | (future) |
@@ -45,7 +45,7 @@ flowchart TD
     A[User clicks Connect in Radar UI] --> B{Deployment mode}
     B -->|cloud / embedded| Z[Funnel hidden]
     B -->|in-cluster| W["Hub wizard link<br/>existing-install paste"]
-    B -->|local| C{"Auth disabled AND<br/>loopback listener AND<br/>no --cloud-url?"}
+    B -->|local| C{"Auth disabled AND<br/>no --cloud-url?"}
     C -->|no| W
     C -->|yes| D["POST /api/cloud/install/prepare<br/>discovery → classify → chart prepare → preflight<br/>zero Hub contact"]
     D -->|GitOps-managed| G["Blocked: source-of-truth handoff<br/>→ radar cloud install"]
@@ -124,12 +124,16 @@ The endpoints are live only when **all** of these hold (`cloudConnectDriverEnabl
 - deployment mode is `local` (not in-cluster, not cloud),
 - auth is disabled (with auth enabled, the browser identity is not the
   kubeconfig identity — see row 6),
-- the listener is loopback (`--listen-address 0.0.0.0` disables the lane),
 - no `--cloud-url` tunnel is configured.
 
-In that configuration, anyone who can reach the UI already wields the
-operator's kubeconfig through existing endpoints (apply, exec, Helm writes) —
-the lane adds no new authority. Additional properties:
+Anyone who can reach an unauthenticated Radar already wields the operator's
+kubeconfig through `/api/resources/apply` and `pods/exec` — strictly more power
+than installing a chart — so the lane adds no new authority and is **not**
+gated on the listener address: that would hold the weaker capability to a
+higher bar than the stronger ones. A non-loopback listener (`--listen-address
+0.0.0.0`) instead raises a warning on the plan card, because the one thing
+Connect adds is a durable binding to a Radar org, and on a shared listener the
+approver may not be the operator. Additional properties:
 
 - Mutating endpoints reject cross-origin browser POSTs (same `localOriginOK`
   policy as the local-terminal endpoints).

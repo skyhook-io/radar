@@ -2,10 +2,11 @@ package server
 
 // In-product Cloud Connect: the modal's "Connect this cluster" button drives
 // the same device-flow install the `radar cloud install` CLI performs, through
-// a server-side single-flight flow manager. The driver lane is deliberately
-// narrow — local deployment, auth disabled, loopback listener, no existing
-// Cloud tunnel — the one configuration where whoever reaches this UI already
-// holds the operator's kubeconfig power (parity: /api/resources/apply, exec).
+// a server-side single-flight flow manager. The driver lane runs where the UI
+// user already wields the server's kubeconfig through existing endpoints
+// (/api/resources/apply, pods/exec): a local deployment, auth disabled, no
+// existing Cloud tunnel. A non-loopback listener does not disable it — those
+// endpoints are ungated there too — but the plan card names the exposure.
 // Every other configuration routes to the Hub wizard instead (see
 // docs/cloud-connect.md for the full scenario matrix).
 //
@@ -154,6 +155,9 @@ type cloudInstallPlanSummary struct {
 	PreservedImageRepository string   `json:"preservedImageRepository,omitempty"`
 	Uncertainty              string   `json:"uncertainty,omitempty"`
 	Advisories               []string `json:"advisories,omitempty"`
+	// SharedListener is true when Radar answers beyond loopback: anyone who can
+	// open this page can approve the connection into their own Radar org.
+	SharedListener bool `json:"sharedListener,omitempty"`
 }
 
 // cloudInstallBlocked explains why the driver lane cannot serve this cluster.
@@ -196,6 +200,9 @@ type cloudInstallManager struct {
 	flow    *cloudInstallFlow
 	backend cloudInstallBackend
 	cfg     CloudConnectConfig
+	// sharedListener reports whether Radar answers beyond loopback, so the
+	// plan card can name that exposure before anyone approves.
+	sharedListener func() bool
 }
 
 func newCloudInstallManager(cfg CloudConnectConfig) *cloudInstallManager {
@@ -383,6 +390,7 @@ func (m *cloudInstallManager) runPrepare(ctx context.Context, flow *cloudInstall
 		TargetChartVersion: prepared.ChartVersion(),
 		TargetAppVersion:   prepared.AppVersion(),
 		Advisories:         pf.Advisory,
+		SharedListener:     m.sharedListener != nil && m.sharedListener(),
 	}
 	if plan.Mode == cloudinstall.InstallModeAdopt {
 		current := prepared.CurrentValues()
@@ -738,20 +746,29 @@ func (m *cloudInstallManager) statusLocked() cloudInstallStatus {
 
 // --- HTTP layer ---
 
-// cloudConnectDriverEnabled is the whole security boundary for the driver
-// lane: local process, no auth, loopback-only listener, no existing tunnel.
-// In that configuration every UI user already wields the server's kubeconfig
-// through existing endpoints (apply, exec, Helm writes).
 // cloudConnectDeploymentMode is a test seam: the test process has no
 // kubeconfig, which the detection heuristic reads as in-cluster.
 var cloudConnectDeploymentMode = deploymentMode
 
+// cloudConnectDriverEnabled is the security boundary for the driver lane: a
+// local process, no auth, and no existing tunnel. Anyone who can reach an
+// unauthenticated Radar already wields the server's kubeconfig through
+// /api/resources/apply and pods/exec — strictly more power than installing a
+// chart — so gating this lane on the listener address too would hold the
+// weaker capability to a higher bar than the stronger ones. A non-loopback
+// listener is surfaced as an exposure note on the plan card instead; mutating
+// endpoints still require a same-origin request.
 func (s *Server) cloudConnectDriverEnabled() bool {
 	return !cloudMode() &&
 		cloudConnectDeploymentMode() == k8s.DeploymentModeLocal &&
 		!s.authConfig.Enabled() &&
-		cloud.IsLoopbackHostname(s.listenAddress) &&
 		!s.cloudConnectCfg.CloudTunnelConfigured
+}
+
+// sharedListener reports whether Radar answers beyond loopback, meaning
+// someone other than the operator could reach the approval flow.
+func (s *Server) sharedListener() bool {
+	return !cloud.IsLoopbackHostname(s.listenAddress)
 }
 
 func (s *Server) requireCloudConnectDriver(w http.ResponseWriter, r *http.Request, mutating bool) bool {

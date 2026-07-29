@@ -240,6 +240,14 @@ function PlanCard({
         />
       </label>
 
+      {plan.sharedListener && (
+        <p className="mt-2.5 flex items-start gap-1.5 text-[11.5px] leading-snug text-warning-text">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
+          This Radar answers beyond localhost, so anyone who can open this page can approve the connection
+          into their own Radar organization.
+        </p>
+      )}
+
       {plan.uncertainty && (
         <ConsentRow checked={ackUncertainty} onChange={setAckUncertainty} tone="amber">
           {plan.uncertainty} Continue with this target anyway.
