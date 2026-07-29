@@ -691,3 +691,34 @@ func TestCloudInstallPlanFlagsSharedListener(t *testing.T) {
 		}
 	}
 }
+
+// A shared listener means the approver may not be the operator, and the
+// binding outlives the request — so it must be an explicit decision.
+func TestCloudInstallSharedListenerRequiresAcknowledgement(t *testing.T) {
+	fx := newManagerFixtureOn(cloudinstall.ProvisionFresh, cloudinstall.InstallModeFresh, nil, true)
+	if _, _, err := fx.m.prepare(context.Background()); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	st := waitForState(t, fx.m, cloudFlowReady)
+	if !st.Plan.SharedListener {
+		t.Fatal("plan did not flag the shared listener")
+	}
+	if _, err := fx.m.start(cloudInstallStartRequest{FlowID: st.FlowID}); err == nil || !strings.Contains(err.Error(), "acknowledgement") {
+		t.Fatalf("start without acknowledgement: %v", err)
+	}
+	if _, err := fx.m.start(cloudInstallStartRequest{FlowID: st.FlowID, AcknowledgeSharedListener: true}); err != nil {
+		t.Fatalf("start with acknowledgement: %v", err)
+	}
+}
+
+// Loopback must not demand the extra click.
+func TestCloudInstallLoopbackNeedsNoSharedAcknowledgement(t *testing.T) {
+	fx := newManagerFixtureOn(cloudinstall.ProvisionFresh, cloudinstall.InstallModeFresh, nil, false)
+	if _, _, err := fx.m.prepare(context.Background()); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	st := waitForState(t, fx.m, cloudFlowReady)
+	if _, err := fx.m.start(cloudInstallStartRequest{FlowID: st.FlowID}); err != nil {
+		t.Fatalf("start on loopback: %v", err)
+	}
+}

@@ -133,6 +133,7 @@ function PlanCard({
   const [clusterName, setClusterName] = useState(plan?.defaultClusterName ?? '')
   const [acceptAdoption, setAcceptAdoption] = useState(false)
   const [ackUncertainty, setAckUncertainty] = useState(false)
+  const [ackShared, setAckShared] = useState(false)
 
   // The approval tab is opened synchronously by the click below (popup
   // blockers reject window.open from an async callback) and navigated once the
@@ -145,6 +146,7 @@ function PlanCard({
         clusterName,
         acceptAdoption,
         acknowledgeIncompleteDiscovery: ackUncertainty,
+        acknowledgeSharedListener: ackShared,
       }),
     onSuccess: (st) => {
       if (st.connectUrl) {
@@ -177,7 +179,10 @@ function PlanCard({
   if (!plan) return null
   const adopt = plan.mode === 'adopt'
   const startDisabled =
-    start.isPending || (adopt && !acceptAdoption) || (!!plan.uncertainty && !ackUncertainty)
+    start.isPending ||
+    (adopt && !acceptAdoption) ||
+    (!!plan.uncertainty && !ackUncertainty) ||
+    (!!plan.sharedListener && !ackShared)
 
   return (
     <div className="px-7 pt-6 pb-5">
@@ -241,11 +246,10 @@ function PlanCard({
       </label>
 
       {plan.sharedListener && (
-        <p className="mt-2.5 flex items-start gap-1.5 text-[11.5px] leading-snug text-warning-text">
-          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
-          This Radar answers beyond localhost, so anyone who can open this page can approve the connection
-          into their own Radar organization.
-        </p>
+        <ConsentRow checked={ackShared} onChange={setAckShared} tone="amber">
+          This Radar answers beyond localhost, so anyone who can open this page could connect this cluster to
+          their own Radar organization. Continue anyway.
+        </ConsentRow>
       )}
 
       {plan.uncertainty && (

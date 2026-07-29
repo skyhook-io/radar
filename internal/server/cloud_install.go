@@ -428,6 +428,7 @@ type cloudInstallStartRequest struct {
 	ClusterName                    string `json:"clusterName"`
 	AcceptAdoption                 bool   `json:"acceptAdoption"`
 	AcknowledgeIncompleteDiscovery bool   `json:"acknowledgeIncompleteDiscovery"`
+	AcknowledgeSharedListener      bool   `json:"acknowledgeSharedListener"`
 }
 
 // start creates the Hub connect request and launches the manager-owned
@@ -450,6 +451,13 @@ func (m *cloudInstallManager) start(req cloudInstallStartRequest) (*cloudInstall
 	if flow.summary.Uncertainty != "" && !req.AcknowledgeIncompleteDiscovery {
 		m.mu.Unlock()
 		return nil, errors.New("incomplete installation discovery requires explicit acknowledgement")
+	}
+	// On a shared listener the person approving may not be the operator, and
+	// the binding this creates outlives the request — make it a decision
+	// rather than a warning someone scrolls past.
+	if flow.summary.SharedListener && !req.AcknowledgeSharedListener {
+		m.mu.Unlock()
+		return nil, errors.New("connecting from a non-loopback listener requires explicit acknowledgement")
 	}
 	clusterName := strings.TrimSpace(req.ClusterName)
 	if clusterName == "" {

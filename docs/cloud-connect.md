@@ -27,7 +27,7 @@ moves to the surface that actually holds them (the terminal or the Hub).
 | 2 | local | none | any | native Helm release | **Driver lane**: adoption plan + explicit consent, atomic upgrade w/ verified rollback | modal button |
 | 3 | local | none | any | GitOps-managed (Argo/Flux) | **Blocked with explanation** → run `radar cloud install` (values + token-Secret handoff for Git); imperative writes would drift or be reverted | CLI |
 | 4 | local | none | any | multiple installs / conflicted Helm state / already-connected | **Blocked with the classifier's message** → CLI with explicit `--namespace`/`--release` | CLI |
-| 5 | local | none | **0.0.0.0** | any | **Driver lane, with an exposure warning** on the plan card — `apply`/`exec` are ungated on this listener too, so gating this harder would hold the weaker capability to a higher bar | modal button |
+| 5 | local | none | **0.0.0.0** | any | **Driver lane, behind an explicit acknowledgement** — `apply`/`exec` are ungated on this listener too, so gating this harder would hold the weaker capability to a higher bar, but the approver may not be the operator and the binding outlives the request | modal button |
 | 6 | local | proxy/OIDC | any | any | Driver lane disabled (server's kubeconfig ≠ authenticated user; impersonated driver is future work) → wizard link | wizard / CLI |
 | 7a | in-cluster, native Helm | any | any | itself | **Wizard, deep-linked at the real target** (`/install?existing=1&ns=…&release=…`) plus the detected layout shown in-modal. The SA cannot self-grant impersonation RBAC and a successful upgrade restarts the pod serving this UI, so the install itself happens from the Hub | wizard |
 | 7b | in-cluster, GitOps-managed | any | any | itself | Names the owning controller and routes to `radar cloud install` — the wizard's imperative command would drift or be reverted | CLI |
@@ -141,9 +141,11 @@ kubeconfig through `/api/resources/apply` and `pods/exec` — strictly more powe
 than installing a chart — so the lane adds no new authority and is **not**
 gated on the listener address: that would hold the weaker capability to a
 higher bar than the stronger ones. A non-loopback listener (`--listen-address
-0.0.0.0`) instead raises a warning on the plan card, because the one thing
-Connect adds is a durable binding to a Radar org, and on a shared listener the
-approver may not be the operator. Additional properties:
+0.0.0.0`) instead requires an explicit acknowledgement on the plan card before
+the flow can start, because the one thing Connect adds is a durable binding to
+a Radar org, and on a shared listener the approver may not be the operator —
+that is a decision to make, not a warning to scroll past. Additional
+properties:
 
 - Mutating endpoints reject cross-origin browser POSTs (same `localOriginOK`
   policy as the local-terminal endpoints).
