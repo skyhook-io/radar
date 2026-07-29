@@ -695,12 +695,11 @@ func TestRuntimeAuthRecoveryReconnectsWhenCredentialsReturn(t *testing.T) {
 		return nil
 	})
 	var reconnects atomic.Int32
-	setRuntimeAuthReconnect(func(contextName string) error {
+	setRuntimeAuthReconnect(func(contextName string, _ uint64) error {
 		if contextName != "recovery-context" {
 			t.Errorf("reconnect context = %q, want %q", contextName, "recovery-context")
 		}
 		reconnects.Add(1)
-		SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: contextName})
 		return nil
 	})
 
@@ -709,7 +708,7 @@ func TestRuntimeAuthRecoveryReconnectsWhenCredentialsReturn(t *testing.T) {
 		Context:   "recovery-context",
 		ErrorType: "auth",
 	})
-	startRuntimeAuthRecovery("recovery-context")
+	startRuntimeAuthRecovery()
 
 	deadline := time.Now().Add(2 * time.Second)
 	for reconnects.Load() == 0 || runtimeAuthRecoveryActive.Load() {
@@ -725,6 +724,9 @@ func TestRuntimeAuthRecoveryReconnectsWhenCredentialsReturn(t *testing.T) {
 	if reconnects.Load() != 1 {
 		t.Fatalf("reconnects = %d, want 1", reconnects.Load())
 	}
+	if status := GetConnectionStatus(); status.State != StateConnected {
+		t.Fatalf("recovery did not publish connected status, got %+v", status)
+	}
 }
 
 func TestRuntimeAuthRecoveryStopsWhenNoLongerNeeded(t *testing.T) {
@@ -736,7 +738,7 @@ func TestRuntimeAuthRecoveryStopsWhenNoLongerNeeded(t *testing.T) {
 		return errors.New("getting credentials: exec plugin failed")
 	})
 	var reconnects atomic.Int32
-	setRuntimeAuthReconnect(func(string) error {
+	setRuntimeAuthReconnect(func(string, uint64) error {
 		reconnects.Add(1)
 		return nil
 	})
@@ -746,7 +748,7 @@ func TestRuntimeAuthRecoveryStopsWhenNoLongerNeeded(t *testing.T) {
 		Context:   "recovery-context",
 		ErrorType: "auth",
 	})
-	startRuntimeAuthRecovery("recovery-context")
+	startRuntimeAuthRecovery()
 	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "recovery-context"})
 
 	deadline := time.Now().Add(2 * time.Second)
@@ -758,6 +760,109 @@ func TestRuntimeAuthRecoveryStopsWhenNoLongerNeeded(t *testing.T) {
 	}
 	if reconnects.Load() != 0 {
 		t.Fatalf("reconnects = %d, want 0", reconnects.Load())
+	}
+}
+
+func TestPerformContextSwitchIfOperationCurrentAbortsWhenSuperseded(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+	var sessionsStopped atomic.Int32
+	SetSessionStopper(func() { sessionsStopped.Add(1) })
+	t.Cleanup(func() { SetSessionStopper(nil) })
+	var beforeSwitchFired atomic.Int32
+	OnBeforeContextSwitch(func(string) { beforeSwitchFired.Add(1) })
+
+	observedGen := currentOperationGen()
+	CancelOngoingOperations()
+
+	err := PerformContextSwitchIfOperationCurrent("any-context", observedGen)
+	if !errors.Is(err, ErrReconnectSuperseded) {
+		t.Fatalf("error = %v, want ErrReconnectSuperseded", err)
+	}
+	if sessionsStopped.Load() != 0 || beforeSwitchFired.Load() != 0 {
+		t.Fatalf("superseded reconnect ran teardown: sessions=%d beforeSwitch=%d",
+			sessionsStopped.Load(), beforeSwitchFired.Load())
+	}
+}
+
+func TestRuntimeAuthRecoveryContinuesWhenSuperseded(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+	setRuntimeAuthRecoveryIntervalsForTest(2*time.Millisecond, 4*time.Millisecond)
+
+	setRuntimeAuthProbe(func(context.Context) error { return nil })
+	var reconnects atomic.Int32
+	setRuntimeAuthReconnect(func(string, uint64) error {
+		if reconnects.Add(1) == 1 {
+			return ErrReconnectSuperseded
+		}
+		return nil
+	})
+
+	SetConnectionStatus(ConnectionStatus{
+		State:     StateDisconnected,
+		Context:   "recovery-context",
+		ErrorType: "auth",
+	})
+	startRuntimeAuthRecovery()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for runtimeAuthRecoveryActive.Load() {
+		if time.Now().After(deadline) {
+			t.Fatalf("recovery loop did not finish: reconnects=%d", reconnects.Load())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if reconnects.Load() != 2 {
+		t.Fatalf("reconnects = %d, want 2 (superseded attempt retried next tick)", reconnects.Load())
+	}
+	if status := GetConnectionStatus(); status.State != StateConnected {
+		t.Fatalf("recovery did not publish connected status, got %+v", status)
+	}
+}
+
+func TestRuntimeAuthRecoveryRetargetsNewEpisode(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+	setRuntimeAuthRecoveryIntervalsForTest(2*time.Millisecond, 4*time.Millisecond)
+
+	var probeOK atomic.Bool
+	setRuntimeAuthProbe(func(context.Context) error {
+		if probeOK.Load() {
+			return nil
+		}
+		return errors.New("getting credentials: exec plugin failed")
+	})
+	var reconnectedContext atomic.Value
+	setRuntimeAuthReconnect(func(contextName string, _ uint64) error {
+		reconnectedContext.Store(contextName)
+		return nil
+	})
+
+	SetConnectionStatus(ConnectionStatus{
+		State:     StateDisconnected,
+		Context:   "context-a",
+		ErrorType: "auth",
+	})
+	startRuntimeAuthRecovery()
+
+	SetConnectionStatus(ConnectionStatus{
+		State:     StateDisconnected,
+		Context:   "context-b",
+		ErrorType: "auth",
+	})
+	probeOK.Store(true)
+	startRuntimeAuthRecovery() // CAS fails; nudges the sleeping worker
+
+	deadline := time.Now().Add(2 * time.Second)
+	for runtimeAuthRecoveryActive.Load() {
+		if time.Now().After(deadline) {
+			t.Fatalf("recovery loop did not finish; reconnected=%v", reconnectedContext.Load())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if got := reconnectedContext.Load(); got != "context-b" {
+		t.Fatalf("reconnected context = %v, want context-b", got)
 	}
 }
 

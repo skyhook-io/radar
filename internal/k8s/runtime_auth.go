@@ -232,7 +232,7 @@ func confirmRuntimeAuthFailure(generation, operationGeneration uint64) {
 	CancelOngoingOperations()
 	stopActiveSessions()
 	ResetAllSubsystems()
-	startRuntimeAuthRecovery(currentContext)
+	startRuntimeAuthRecovery()
 }
 
 func setRuntimeAuthCooldown(generation uint64, cooldown time.Duration) {

@@ -202,7 +202,7 @@ func ResetTestState() {
 	runtimeAuthProbeNotBefore = time.Time{}
 	runtimeAuthProbe = TestClusterConnection
 	runtimeAuthEndpointProbe = defaultRuntimeAuthEndpointProbe
-	runtimeAuthReconnect = PerformContextSwitch
+	runtimeAuthReconnect = PerformContextSwitchIfOperationCurrent
 	runtimeAuthRecoveryInitialInterval = defaultRuntimeAuthRecoveryInitialInterval
 	runtimeAuthRecoveryMaxInterval = defaultRuntimeAuthRecoveryMaxInterval
 	runtimeAuthRecoveryHungInterval = defaultRuntimeAuthRecoveryHungInterval

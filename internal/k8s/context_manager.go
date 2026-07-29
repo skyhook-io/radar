@@ -355,7 +355,25 @@ func connectionProbeHTTPTimeout(ctx context.Context) time.Duration {
 // connected to the current cluster" and NOT mark the connection disconnected.
 var ErrContextSwitchPreflight = errors.New("context switch preflight rejected")
 
+// ErrReconnectSuperseded is returned by PerformContextSwitchIfOperationCurrent
+// when another operation started after the caller captured its generation.
+var ErrReconnectSuperseded = errors.New("reconnect superseded by a newer operation")
+
 func PerformContextSwitch(newContext string) error {
+	return performContextSwitch(newContext, 0, false)
+}
+
+// PerformContextSwitchIfOperationCurrent is the conditional variant used by
+// automatic recovery: it aborts with ErrReconnectSuperseded — before any
+// teardown — if any other operation (user switch, rescope, retry) started
+// since observedOperationGen was captured. The check runs under contextOpMu,
+// which closes the TOCTOU a check-then-switch caller would have: a user
+// switch that started mid-probe bumps the generation before this can.
+func PerformContextSwitchIfOperationCurrent(newContext string, observedOperationGen uint64) error {
+	return performContextSwitch(newContext, observedOperationGen, true)
+}
+
+func performContextSwitch(newContext string, observedOperationGen uint64, requireOperationCurrent bool) error {
 	switchStart := time.Now()
 	log.Printf("[ops] Context switch START → %q", newContext)
 
@@ -367,6 +385,10 @@ func PerformContextSwitch(newContext string) error {
 		activeContextOperations.Add(-1)
 		contextOpMu.Unlock()
 	}()
+
+	if requireOperationCurrent && currentOperationGen() != observedOperationGen {
+		return ErrReconnectSuperseded
+	}
 
 	// Under --namespace-scope, validate the new context has a usable scope target
 	// BEFORE tearing anything down. Otherwise a switch to a context with no
