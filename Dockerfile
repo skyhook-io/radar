@@ -67,6 +67,9 @@ LABEL org.opencontainers.image.title="Radar"
 LABEL org.opencontainers.image.description="Modern Kubernetes visibility — topology, traffic, and Helm management"
 LABEL org.opencontainers.image.source="https://github.com/skyhook-io/radar"
 LABEL org.opencontainers.image.vendor="Skyhook"
+# Ownership verification for the official MCP registry
+# (registry.modelcontextprotocol.io). Must match the `name` field in server.json.
+LABEL io.modelcontextprotocol.server.name="io.github.skyhook-io/radar"
 
 COPY --from=backend-builder /radar /radar
 
@@ -88,6 +91,9 @@ LABEL org.opencontainers.image.title="Radar"
 LABEL org.opencontainers.image.description="Modern Kubernetes visibility — topology, traffic, and Helm management"
 LABEL org.opencontainers.image.source="https://github.com/skyhook-io/radar"
 LABEL org.opencontainers.image.vendor="Skyhook"
+# Ownership verification for the official MCP registry
+# (registry.modelcontextprotocol.io). Must match the `name` field in server.json.
+LABEL io.modelcontextprotocol.server.name="io.github.skyhook-io/radar"
 
 ARG TARGETARCH
 COPY radar-${TARGETARCH} /radar
