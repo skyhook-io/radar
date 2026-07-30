@@ -20,9 +20,14 @@ type piAgent struct{ bin string }
 
 func (a *piAgent) Name() string { return "pi" }
 
+func (a *piAgent) Path() string { return a.bin }
+
 func (a *piAgent) SigninCmd() string { return "pi config" }
 
 func (a *piAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(), error) {
+	if s.profile != ExecutionProfileFullLocal {
+		return nil, nil, fmt.Errorf("ai: Pi does not support execution profile %q", s.profile)
+	}
 	args := []string{"-p"} // Run in non-interactive print mode and exit
 
 	if s.sessionID != "" {

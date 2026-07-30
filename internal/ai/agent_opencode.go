@@ -20,9 +20,14 @@ type opencodeAgent struct{ bin string }
 
 func (a *opencodeAgent) Name() string { return "opencode" }
 
+func (a *opencodeAgent) Path() string { return a.bin }
+
 func (a *opencodeAgent) SigninCmd() string { return "opencode providers" }
 
 func (a *opencodeAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(), error) {
+	if s.profile != ExecutionProfileFullLocal {
+		return nil, nil, fmt.Errorf("ai: OpenCode does not support execution profile %q", s.profile)
+	}
 	args := []string{"run", "--format", "json", "--auto"}
 
 	if s.sessionID != "" {

@@ -76,7 +76,7 @@ func ProfilesFor(agent string) []ExecutionProfile {
 		return []ExecutionProfile{ExecutionProfileSafeguarded, ExecutionProfileFullLocal}
 	case "codex":
 		return []ExecutionProfile{ExecutionProfileSafeguarded, ExecutionProfileFullLocal}
-	case "cursor-agent":
+	case "cursor-agent", "antigravity", "opencode", "pi":
 		return []ExecutionProfile{ExecutionProfileFullLocal}
 	default:
 		return nil

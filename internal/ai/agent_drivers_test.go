@@ -15,7 +15,7 @@ func TestOpencodeConfigAndCommand(t *testing.T) {
 	const url = "http://localhost:9280/mcp-readonly"
 
 	cmd, cleanup, err := a.command(context.Background(), turnSpec{
-		mcpURL: url, prompt: "investigate", workdir: dir, model: "claude-3-5-sonnet",
+		mcpURL: url, prompt: "investigate", workdir: dir, model: "claude-3-5-sonnet", profile: ExecutionProfileFullLocal,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -63,7 +63,7 @@ func TestAntigravityConfigAndCommand(t *testing.T) {
 	const url = "http://localhost:9280/mcp-readonly"
 
 	cmd, cleanup, err := a.command(context.Background(), turnSpec{
-		mcpURL: url, prompt: "investigate", workdir: dir,
+		mcpURL: url, prompt: "investigate", workdir: dir, profile: ExecutionProfileFullLocal,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +101,7 @@ func TestPiConfigAndCommand(t *testing.T) {
 	const url = "http://localhost:9280/mcp-readonly"
 
 	cmd, cleanup, err := a.command(context.Background(), turnSpec{
-		mcpURL: url, prompt: "investigate", workdir: dir,
+		mcpURL: url, prompt: "investigate", workdir: dir, profile: ExecutionProfileFullLocal,
 	})
 	if err != nil {
 		t.Fatal(err)

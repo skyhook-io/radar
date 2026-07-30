@@ -20,9 +20,14 @@ type antigravityAgent struct{ bin string }
 
 func (a *antigravityAgent) Name() string { return "antigravity" }
 
+func (a *antigravityAgent) Path() string { return a.bin }
+
 func (a *antigravityAgent) SigninCmd() string { return "agy auth login" }
 
 func (a *antigravityAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(), error) {
+	if s.profile != ExecutionProfileFullLocal {
+		return nil, nil, fmt.Errorf("ai: Antigravity does not support execution profile %q", s.profile)
+	}
 	args := []string{"-p"}
 
 	if s.sessionID != "" {
