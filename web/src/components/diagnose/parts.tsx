@@ -365,7 +365,7 @@ export function AgentControls({
           onChange={onSetModel}
           hint="Aliases always resolve to the latest of that tier."
         />
-      ) : isCodex || isCursor ? (
+      ) : (
         <TextField
           label="Model"
           value={model}
@@ -375,25 +375,21 @@ export function AgentControls({
               : isCodex
                 ? "Default (e.g. gpt-5-codex, o3)"
                 : selectedAgent === "antigravity"
-                  ? "Default (e.g. gemini-*-flash)"
-                  : "Default"
+                  ? "Default (e.g. gemini-2.5-flash)"
+                  : selectedAgent === "opencode"
+                    ? "Default (e.g. opencode-1.5-pro)"
+                    : "Default"
           }
           onChange={onSetModel}
           hint={
             isCursor
               ? "Leave empty for your Cursor default, or enter a model slug Cursor supports."
-              : shownProfile === "full-local"
-                ? "Your Codex setup uses its configured model; set a slug here to override it."
-                : "Leave empty for Codex's default, or enter a model your Codex version supports."
+              : isCodex
+                ? shownProfile === "full-local"
+                  ? "Your Codex setup uses its configured model; set a slug here to override it."
+                  : "Leave empty for Codex's default, or enter a model your Codex version supports."
+                : `Leave empty for ${selectedAgentLabel}'s default, or enter a supported model slug.`
           }
-        />
-      ) : (
-        <TextField
-          label="Model"
-          value={model}
-          placeholder="Default"
-          onChange={onSetModel}
-          hint="Leave empty for the agent's default, or enter a model identifier it supports."
         />
       )}
       {isCodex && (

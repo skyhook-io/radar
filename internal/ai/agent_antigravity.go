@@ -107,18 +107,57 @@ func writeAntigravityConfig(workdir, mcpURL string) error {
 	return nil
 }
 
+type antigravityEvent struct {
+	Type           string `json:"type"`
+	ConversationID string `json:"conversation_id"`
+	SessionID      string `json:"session_id"`
+	Content        string `json:"content"`
+	Text           string `json:"text"`
+}
+
 func (a *antigravityAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
 	var sb strings.Builder
 	sc := bufio.NewScanner(r)
 	buf := make([]byte, 64*1024)
 	sc.Buffer(buf, 10*1024*1024)
+	var sessionID string
+
 	for sc.Scan() {
 		line := sc.Text()
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+
+		if strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}") {
+			var ev antigravityEvent
+			if err := json.Unmarshal([]byte(trimmed), &ev); err == nil {
+				if ev.ConversationID != "" {
+					sessionID = ev.ConversationID
+				} else if ev.SessionID != "" {
+					sessionID = ev.SessionID
+				}
+
+				text := ev.Content
+				if text == "" {
+					text = ev.Text
+				}
+				if text != "" {
+					sb.WriteString(text + "\n")
+					onEvent(StreamEvent{Type: "thinking", Token: text + "\n"})
+				}
+				continue
+			}
+		}
+
 		sb.WriteString(line + "\n")
 		onEvent(StreamEvent{Type: "thinking", Token: line + "\n"})
 	}
+
 	d := diagnosisFromText(sb.String())
-	if m := antigravityConvRe.FindStringSubmatch(sb.String()); len(m) > 1 {
+	if sessionID != "" {
+		d.SessionID = sessionID
+	} else if m := antigravityConvRe.FindStringSubmatch(sb.String()); len(m) > 1 {
 		d.SessionID = m[1]
 	}
 	return d
