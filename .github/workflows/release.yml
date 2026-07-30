@@ -142,6 +142,36 @@ jobs:
           push: true
           tags: ${{ steps.tags.outputs.tags }}
 
+  mcp-registry:
+    name: MCP Registry
+    runs-on: ubuntu-latest
+    # Needs the labeled image on GHCR first — the registry validates the
+    # io.modelcontextprotocol.server.name label on the exact tag in server.json.
+    needs: [release, docker]
+    if: needs.release.outputs.is_prerelease != 'true'
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Stamp version into server.json
+        run: |
+          VERSION="${{ needs.release.outputs.version }}"
+          jq --arg v "$VERSION" --arg repo "${{ env.DOCKER_REPO }}" \
+            '.version = $v | .packages[0].identifier = $repo + ":" + $v' \
+            server.json > server.json.tmp && mv server.json.tmp server.json
+
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+      - name: Authenticate to MCP Registry
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish to MCP Registry
+        run: ./mcp-publisher publish
+
   helm:
     name: Helm Chart
     runs-on: ubuntu-latest
