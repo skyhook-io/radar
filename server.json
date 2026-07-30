@@ -20,7 +20,7 @@
           "name": "-p",
           "value": "127.0.0.1:9280:9280",
           "isRequired": true,
-          "description": "Expose Radar's HTTP server (UI + MCP) on localhost:9280 only"
+          "description": "Expose Radar's HTTP server (UI + MCP) on 127.0.0.1:9280 only"
         },
         {
           "type": "named",
@@ -47,7 +47,7 @@
       ],
       "transport": {
         "type": "streamable-http",
-        "url": "http://localhost:9280/mcp"
+        "url": "http://127.0.0.1:9280/mcp"
       }
     }
   ]
