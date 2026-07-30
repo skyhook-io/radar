@@ -18,9 +18,9 @@
         {
           "type": "named",
           "name": "-p",
-          "value": "9280:9280",
+          "value": "127.0.0.1:9280:9280",
           "isRequired": true,
-          "description": "Expose Radar's HTTP server (UI + MCP) on localhost:9280"
+          "description": "Expose Radar's HTTP server (UI + MCP) on localhost:9280 only"
         },
         {
           "type": "named",
