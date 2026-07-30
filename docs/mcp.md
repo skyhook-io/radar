@@ -176,6 +176,25 @@ Add to `~/.gemini/settings.json`:
 }
 ```
 
+## MCP Registry / Docker
+
+Radar is listed on the [official MCP registry](https://registry.modelcontextprotocol.io) as `io.github.skyhook-io/radar`, packaged as the `ghcr.io/skyhook-io/radar` Docker image. The registry-suggested invocation is:
+
+```bash
+docker run -p 127.0.0.1:9280:9280 \
+  -v ~/.kube/config:/kubeconfig:ro \
+  -e KUBECONFIG=/kubeconfig \
+  ghcr.io/skyhook-io/radar:latest
+```
+
+**Prefer the native install** (`brew install skyhook-io/tap/radar`, krew, or the install script — see the [README](../README.md)) — it uses your kubeconfig exactly as kubectl does. The Docker path has real limitations because the image is distroless (no shell, no cloud CLIs):
+
+- **Exec-plugin auth does not work.** Kubeconfigs for GKE/EKS/AKS typically call `gke-gcloud-auth-plugin`, `aws eks get-token`, or `kubelogin` — none exist inside the container. Only kubeconfigs with embedded certificates or static tokens work.
+- **Local clusters are unreachable.** kind/minikube/Docker Desktop API servers listen on the host's `127.0.0.1`, which inside the container is the container itself.
+- **File ownership matters.** On Linux hosts a `0600` kubeconfig owned by your user is unreadable by the container's `nonroot` (uid 65532) user.
+
+The Docker image's primary use is [in-cluster deployment](in-cluster.md) with a ServiceAccount, where none of these apply.
+
 ## Available Tools
 
 ### Read Tools
