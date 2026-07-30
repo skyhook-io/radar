@@ -37,10 +37,10 @@ func (a *antigravityAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, 
 	}
 
 	if s.apply {
-		args = append(args, "--mode", "accept-edits")
+		args = append(args, "--mode", "accept-edits", "--dangerously-skip-permissions")
+	} else {
+		args = append(args, "--sandbox")
 	}
-
-	args = append(args, "--dangerously-skip-permissions")
 
 	prompt := s.prompt
 	if s.systemPrompt != "" {

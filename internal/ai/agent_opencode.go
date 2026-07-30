@@ -85,18 +85,63 @@ func writeOpencodeConfig(workdir, mcpURL string) error {
 	return os.WriteFile(filepath.Join(workdir, "opencode.json"), b, 0o600)
 }
 
+type opencodeEvent struct {
+	Type      string `json:"type"`
+	SessionID string `json:"sessionID"`
+	Session   string `json:"session_id"`
+	Part      *struct {
+		Text string `json:"text"`
+	} `json:"part"`
+	Content string `json:"content"`
+	Text    string `json:"text"`
+}
+
 func (a *opencodeAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
 	var sb strings.Builder
 	sc := bufio.NewScanner(r)
 	buf := make([]byte, 64*1024)
 	sc.Buffer(buf, 10*1024*1024)
+	var sessionID string
+
 	for sc.Scan() {
 		line := sc.Text()
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+
+		if strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}") {
+			var ev opencodeEvent
+			if err := json.Unmarshal([]byte(trimmed), &ev); err == nil {
+				if ev.SessionID != "" {
+					sessionID = ev.SessionID
+				} else if ev.Session != "" {
+					sessionID = ev.Session
+				}
+
+				text := ev.Content
+				if text == "" {
+					text = ev.Text
+				}
+				if text == "" && ev.Part != nil {
+					text = ev.Part.Text
+				}
+				if text != "" {
+					sb.WriteString(text + "\n")
+					onEvent(StreamEvent{Type: "thinking", Token: text + "\n"})
+				}
+				continue
+			}
+		}
+
 		sb.WriteString(line + "\n")
 		onEvent(StreamEvent{Type: "thinking", Token: line + "\n"})
 	}
+
 	d := diagnosisFromText(sb.String())
-	if m := opencodeSessionRe.FindStringSubmatch(sb.String()); len(m) > 1 {
+	if sessionID != "" {
+		d.SessionID = sessionID
+	} else if m := opencodeSessionRe.FindStringSubmatch(sb.String()); len(m) > 1 {
 		d.SessionID = m[1]
 	}
 	return d
