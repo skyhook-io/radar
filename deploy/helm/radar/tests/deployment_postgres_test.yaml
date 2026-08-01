@@ -1,0 +1,119 @@
+suite: PostgreSQL timeline storage deployment
+templates:
+  - deployment.yaml
+tests:
+  - it: renders postgres storage arg and DSN from existingSecret
+    set:
+      timeline:
+        storage: postgres
+        retention: 720h
+        postgres:
+          existingSecret: radar-postgres
+          secretKey: dsn
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --timeline-storage=postgres
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --timeline-retention=720h
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: RADAR_TIMELINE_POSTGRES_DSN
+            valueFrom:
+              secretKeyRef:
+                name: radar-postgres
+                key: dsn
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --timeline-db=
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --timeline-max-size=
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: data
+            mountPath: /data
+          any: true
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: data
+            persistentVolumeClaim:
+              claimName: radar
+          any: true
+
+  - it: fails when postgres storage is selected without existingSecret
+    set:
+      timeline:
+        storage: postgres
+    asserts:
+      - failedTemplate:
+          errorMessage: "timeline.postgres.existingSecret is required when timeline.storage=postgres"
+
+  - it: accepts an operator-managed Secret with a custom DSN key
+    set:
+      timeline:
+        storage: postgres
+        postgres:
+          existingSecret: app-db-credentials
+          secretKey: uri
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: RADAR_TIMELINE_POSTGRES_DSN
+            valueFrom:
+              secretKeyRef:
+                name: app-db-credentials
+                key: uri
+
+  - it: does not render PVC mount or Recreate strategy for postgres
+    set:
+      timeline:
+        storage: postgres
+        postgres:
+          existingSecret: radar-postgres
+      persistence:
+        enabled: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: data
+            mountPath: /data
+          any: true
+      - isNull:
+          path: spec.strategy
+
+  - it: keeps sqlite args when storage is sqlite
+    set:
+      timeline:
+        storage: sqlite
+        dbPath: /data/timeline.db
+        retention: 168h
+        maxSize: 800Mi
+      persistence:
+        enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --timeline-storage=sqlite
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --timeline-db=/data/timeline.db
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --timeline-retention=168h
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --timeline-max-size=800Mi
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: data
+            mountPath: /data

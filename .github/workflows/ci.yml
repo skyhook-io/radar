@@ -33,6 +33,20 @@ jobs:
   backend:
     name: Backend
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: radar
+          POSTGRES_PASSWORD: radar
+          POSTGRES_DB: radar
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
     steps:
       - uses: actions/checkout@v7
 
@@ -55,6 +69,11 @@ jobs:
 
       - name: Run tests
         run: go test ./...
+
+      - name: Run PostgreSQL integration tests
+        env:
+          RADAR_TEST_POSTGRES_DSN: postgres://radar:radar@localhost:5432/radar?sslmode=disable
+        run: go test ./internal/timeline
 
       - name: Build
         run: go build -o explorer ./cmd/explorer
@@ -175,6 +194,21 @@ jobs:
             --set argocd.token=argo_deadbeef \
             --set argocd.existingSecret=my-argo-token 2>/dev/null; then
             echo "ERROR: helm template should have failed with both token and existingSecret set"
+            exit 1
+          fi
+
+      - name: Render PostgreSQL timeline storage with existingSecret
+        run: |
+          helm template radar deploy/helm/radar \
+            --set timeline.storage=postgres \
+            --set timeline.postgres.existingSecret=radar-postgres \
+            --set timeline.retention=720h > /dev/null
+
+      - name: Reject PostgreSQL storage without existingSecret
+        run: |
+          if helm template radar deploy/helm/radar \
+            --set timeline.storage=postgres 2>/dev/null; then
+            echo "ERROR: helm template should have failed with no existingSecret set"
             exit 1
           fi
 

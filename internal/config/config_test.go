@@ -4,10 +4,31 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestConfigDoesNotPersistTimelinePostgresDSN(t *testing.T) {
+	if _, ok := reflect.TypeOf(Config{}).FieldByName("TimelinePostgresDSN"); ok {
+		t.Fatal("Config must not expose a persisted TimelinePostgresDSN field")
+	}
+
+	const dsn = "postgres://radar:secret@example.test/radar"
+	var cfg Config
+	if err := json.Unmarshal([]byte(`{"timelinePostgresDSN":"`+dsn+`"}`), &cfg); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(data), dsn) {
+		t.Fatalf("serialized Config leaked PostgreSQL DSN: %s", data)
+	}
+}
 
 func TestLoadMissing(t *testing.T) {
 	// Override path to a non-existent file

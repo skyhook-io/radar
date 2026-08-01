@@ -473,16 +473,25 @@ part of the deployment boundary.
 
 4. **Network access**: Consider using NetworkPolicies to restrict which pods can reach Radar.
 
-## Timeline Storage: memory vs sqlite
+## Timeline Storage: memory vs sqlite vs postgres
 
-Radar's timeline records every cluster change. Two backends:
+Radar's timeline records every cluster change. Three backends:
 
 - **`memory`** (default): events live in-process, lost on pod restart. Lowest footprint; pick this if you only need recent activity (last few hours).
-- **`sqlite`**: events persist to a PVC across restarts. Multi-day audit trail; pick this for long-running in-cluster deployments where you care about history surviving pod cycles.
+- **`sqlite`**: events persist to a PVC across restarts. Multi-day audit trail; pick this for long-running in-cluster deployments where you care about history surviving pod cycles. Requires `persistence.enabled=true`.
+- **`postgres`**: events persist in an externally managed PostgreSQL database. Pick this for durability across restarts and rolling updates, or when you want to avoid the single-PVC constraint. The DSN must be provided via an existing Kubernetes Secret (`timeline.postgres.existingSecret`); Helm never touches the credential.
 
-Timeline volume depends on cluster size and controller churn. Tune `timeline.retention` (Go duration; `0` disables age cleanup), `timeline.maxSize`, and `persistence.size` together. Keep `timeline.maxSize` below the PVC size so Radar prunes oldest events before the volume fills.
+For SQLite, tune `timeline.retention` (Go duration; `0` disables age cleanup), `timeline.maxSize`, and `persistence.size` together. Keep `timeline.maxSize` below the PVC size so Radar prunes oldest events before the volume fills. `timeline.maxSize` is ignored for postgres and memory.
 
 Cleanup runs hourly + once at startup. Confirm it's keeping up via `/api/diagnostics` — the `timeline.maxStorageBytes`, `timeline.lastCleanupAt`, `timeline.lastCleanupDeletedRows`, `timeline.lastCleanupError`, and `timeline.storageBytes` fields surface the state without requiring `kubectl logs`.
+
+### PostgreSQL requirements
+
+- PostgreSQL 14+ (tested against 17).
+- A database and a user with DDL permissions so Radar can create/update the `radar_timeline_*` tables, indexes, and migrations on first startup.
+- `sslmode` and other TLS settings are controlled through the DSN string.
+- The DSN is read from a Secret; never put it in Helm values or `config.json`.
+- There is no built-in import path from SQLite to PostgreSQL. Migrating historical events is out of scope for the first contribution.
 
 ## Configuration Reference
 
@@ -499,11 +508,13 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `mcp.enabled` | Enable MCP server for AI tools | `true` |
 | `debug.image` | Image for ephemeral debug containers and node debug pods. In built-in restricted PodSecurity namespaces, pod debug containers may retry as the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. | `""` (busybox:latest) |
 | `listPageSize` | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) on very large clusters that fail to sync; `0` = off, try `2000`. Only used when the apiserver lacks WatchList streaming. | `0` |
-| `timeline.storage` | Event storage (memory/sqlite) | `memory` |
+| `timeline.storage` | Event storage (memory/sqlite/postgres) | `memory` |
 | `timeline.dbPath` | SQLite database path | `/data/timeline.db` |
 | `timeline.historyLimit` | Max events to retain (memory only) | `10000` |
-| `timeline.retention` | SQLite retention (Go duration; `0` disables) | `168h` |
-| `timeline.maxSize` | SQLite max DB + WAL size before oldest events are pruned (`0` disables) | `800Mi` |
+| `timeline.retention` | Retention (Go duration; `0` disables). Applies to sqlite and postgres. | `168h` |
+| `timeline.maxSize` | SQLite max DB + WAL size before oldest events are pruned (`0` disables). Not used for postgres. | `800Mi` |
+| `timeline.postgres.existingSecret` | Name of a Secret holding the PostgreSQL DSN (required when `storage=postgres`) | `""` |
+| `timeline.postgres.secretKey` | Key within the Secret holding the DSN | `dsn` |
 | `cost.source` | Cost source: `auto`, `prometheus`, or `kubecost`; controls stay editable only when this and the Kubecost URL, cluster ID, and Secret are empty | `""` (Auto) |
 | `cost.kubecost.url` | Kubecost 3 Aggregator URL; blank discovers local port 9004 and may fall back to the named SAML/OIDC bypass port 9008 without a key; required for agent-only clusters | `""` (discover local) |
 | `cost.kubecost.clusterId` | Cluster ID filter for a central Aggregator | `""` (detect literal `CLUSTER_ID`) |

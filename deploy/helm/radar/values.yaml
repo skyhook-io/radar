@@ -279,27 +279,41 @@ resources:
 #     that happened while you weren't looking, or run Radar in-cluster as a
 #     long-lived deployment. Adds operational concerns: the PVC fills if
 #     retention is unbounded; restart on a multi-GB DB is slower.
+#   postgres — events persist in an externally managed PostgreSQL database.
+#     Pick this for durability across restarts and rolling updates, or when
+#     running more than one replica. The DSN must be provided via an
+#     existing Kubernetes Secret; Helm never touches the credential.
 #
 # Timeline volume depends on cluster size and controller churn. Keep `maxSize`
 # below the PVC `size` so Radar can prune before the volume fills; tune
 # `retention`, `maxSize`, and PVC `size` together.
 timeline:
-  # Storage backend: "memory" or "sqlite"
+  # Storage backend: "memory", "sqlite", or "postgres"
   storage: memory
   # Path to SQLite database (only used when storage is "sqlite")
   # Note: Requires a PVC when using sqlite
   dbPath: /data/timeline.db
   # Maximum number of events to retain (memory store only — currently
-  # ignored by sqlite; use `retention` instead).
+  # ignored by sqlite and postgres; use `retention` instead).
   historyLimit: 10000
-  # SQLite retention: how long to keep events. Go duration (e.g. 168h, 720h).
+  # Retention: how long to keep events. Go duration (e.g. 168h, 720h).
   # "0" disables cleanup (events table grows unbounded — not recommended for
   # in-cluster deployments). Cleanup runs hourly + once at startup.
+  # Applies to sqlite and postgres.
   retention: 168h
   # SQLite max storage size. When the DB + WAL exceed this value, Radar prunes
   # oldest events until storage is back under the low-water mark. Set "0" to
-  # disable size-based pruning.
+  # disable size-based pruning. Not used for postgres or memory.
   maxSize: 800Mi
+  # PostgreSQL configuration (only used when storage is "postgres")
+  postgres:
+    # Name of an existing, same-namespace Secret containing the PostgreSQL DSN.
+    # Required when storage is "postgres". The chart creates no PostgreSQL
+    # resources, so the Secret may come from any operator or secret manager.
+    existingSecret: ""
+    # Key within existingSecret that holds the DSN value. Set this to match the
+    # producer's key, for example "uri" for an operator-managed Secret.
+    secretKey: dsn
 
 # Authentication and RBAC configuration
 auth:

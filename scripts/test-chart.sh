@@ -66,6 +66,22 @@ render "cost.currency — explicit OpenCost currency label" --set cost.currency=
 assert_contains '--opencost-currency=GBP'           "OpenCost currency flag rendered"
 echo
 
+render "timeline.storage=postgres — DSN from operator-managed Secret, no PVC mount" \
+  --set timeline.storage=postgres \
+  --set timeline.retention=720h \
+  --set timeline.postgres.existingSecret=app-db-credentials \
+  --set timeline.postgres.secretKey=uri
+assert_contains '--timeline-storage=postgres'       "postgres storage arg"
+assert_contains '--timeline-retention=720h'         "postgres retention arg"
+assert_contains 'name: RADAR_TIMELINE_POSTGRES_DSN' "DSN env injected"
+assert_contains 'name: app-db-credentials'          "DSN secret name"
+assert_contains 'key: uri'                          "DSN secret key"
+assert_not_contains 'mountPath: /data'              "no SQLite PVC mount"
+assert_not_contains 'claimName: radar'              "no SQLite PVC volume"
+assert_not_contains '--timeline-db='                "no sqlite db path arg"
+assert_not_contains '--timeline-max-size='            "no sqlite max-size arg"
+echo
+
 render "prometheusHeadersFromEnv — flag and secret env stay separate" \
   --set traffic.prometheusHeaders.X-Scope-OrgID=tenant-1 \
   --set traffic.prometheusHeadersFromEnv.Authorization=PROMETHEUS_TOKEN \

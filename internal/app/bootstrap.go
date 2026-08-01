@@ -61,6 +61,7 @@ type AppConfig struct {
 	NamespaceScope            bool
 	TimelineStorage           string
 	TimelineDBPath            string
+	TimelinePostgresDSN       string
 	TimelineRetention         time.Duration
 	TimelineMaxSizeBytes      int64
 	PrometheusURL             string
@@ -214,12 +215,16 @@ func seedNamespaceScopePick(ctxName, ns string) {
 }
 
 // BuildTimelineStoreConfig creates the timeline store configuration from app config.
-func BuildTimelineStoreConfig(cfg AppConfig) timeline.StoreConfig {
+func BuildTimelineStoreConfig(cfg AppConfig) (timeline.StoreConfig, error) {
 	storeCfg := timeline.StoreConfig{
 		Type:    timeline.StoreTypeMemory,
 		MaxSize: cfg.HistoryLimit,
 	}
-	if cfg.TimelineStorage == "sqlite" {
+
+	switch cfg.TimelineStorage {
+	case "", "memory":
+		return storeCfg, nil
+	case "sqlite":
 		storeCfg.Type = timeline.StoreTypeSQLite
 		dbPath := cfg.TimelineDBPath
 		if dbPath == "" {
@@ -229,8 +234,18 @@ func BuildTimelineStoreConfig(cfg AppConfig) timeline.StoreConfig {
 		storeCfg.Path = dbPath
 		storeCfg.RetentionAge = cfg.TimelineRetention
 		storeCfg.MaxStorageBytes = cfg.TimelineMaxSizeBytes
+		return storeCfg, nil
+	case "postgres":
+		if cfg.TimelinePostgresDSN == "" {
+			return timeline.StoreConfig{}, fmt.Errorf("PostgreSQL timeline storage requires a DSN")
+		}
+		storeCfg.Type = timeline.StoreTypePostgres
+		storeCfg.DSN = cfg.TimelinePostgresDSN
+		storeCfg.RetentionAge = cfg.TimelineRetention
+		return storeCfg, nil
+	default:
+		return timeline.StoreConfig{}, fmt.Errorf("unknown timeline storage %q", cfg.TimelineStorage)
 	}
-	return storeCfg
 }
 
 // RegisterCallbacks registers Helm, timeline, traffic, and Prometheus reset/reinit

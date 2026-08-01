@@ -119,8 +119,9 @@ func main() {
 	listPageSize := flag.Int64("list-page-size", 0, "Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) at this page size on clusters without WatchList streaming. 0 = off (single LIST). Try 2000 if a very large cluster fails to sync.")
 	namespaceScope := flag.Bool("namespace-scope", false, "Scope namespaced informer caches to a single namespace (multiple namespaces are not supported yet). Requires --namespace or a kubeconfig context namespace. Local mode can rescope by switching namespaces; auth/cloud mode locks to the startup namespace.")
 	// Timeline storage options
-	timelineStorage := flag.String("timeline-storage", fileCfg.TimelineStorageOr("memory"), "Timeline storage backend: memory or sqlite")
+	timelineStorage := flag.String("timeline-storage", fileCfg.TimelineStorageOr("memory"), "Timeline storage backend: memory, sqlite, or postgres")
 	timelineDBPath := flag.String("timeline-db", fileCfg.TimelineDBPath, "Path to timeline database file (default: ~/.radar/timeline.db)")
+	timelinePostgresDSN := app.RegisterTimelinePostgresDSNFlag(flag.CommandLine, os.Getenv)
 	timelineRetention := flag.Duration("timeline-retention", fileCfg.TimelineRetentionOr(7*24*time.Hour), "How long to retain timeline events when --timeline-storage=sqlite (e.g. 168h, 720h). 0 disables age-based cleanup.")
 	timelineMaxSize := flag.String("timeline-max-size", fileCfg.TimelineMaxSizeOr("1Gi"), "Maximum SQLite timeline storage size before pruning oldest events (e.g. 800Mi, 8Gi). 0 disables size-based pruning.")
 	// AI history (Diagnose investigations)
@@ -355,6 +356,7 @@ func main() {
 		NamespaceScope:           *namespaceScope,
 		TimelineStorage:          *timelineStorage,
 		TimelineDBPath:           *timelineDBPath,
+		TimelinePostgresDSN:      *timelinePostgresDSN,
 		TimelineRetention:        *timelineRetention,
 		TimelineMaxSizeBytes:     timelineMaxSizeBytes,
 		PrometheusURL:            *prometheusURL,
@@ -460,7 +462,10 @@ func main() {
 
 	// Build timeline config and register callbacks
 	t = time.Now()
-	timelineStoreCfg := app.BuildTimelineStoreConfig(cfg)
+	timelineStoreCfg, err := app.BuildTimelineStoreConfig(cfg)
+	if err != nil {
+		log.Fatalf("Invalid timeline configuration: %v", err)
+	}
 	app.RegisterCallbacks(cfg, timelineStoreCfg)
 	k8s.LogTiming(" Callbacks registered: %v", time.Since(t))
 

@@ -194,9 +194,11 @@ trend charts remain unavailable for Kubecost.
 | `httpRoute.hostnames` | HTTPRoute hostnames | `[]` |
 | `httpRoute.defaultTimeout` | Optional request timeout for generated default rule; empty uses Gateway deployment default | `""` |
 | `httpRoute.rules` | HTTPRoute rules, passed through unchanged | `[]` |
-| `timeline.storage` | Timeline storage (memory/sqlite) | `memory` |
-| `timeline.retention` | SQLite retention (Go duration; `0` disables) | `168h` |
-| `timeline.maxSize` | SQLite max DB + WAL size before oldest events are pruned (`0` disables) | `800Mi` |
+| `timeline.storage` | Timeline storage (memory/sqlite/postgres) | `memory` |
+| `timeline.retention` | Retention (Go duration; `0` disables). Applies to sqlite and postgres. | `168h` |
+| `timeline.maxSize` | SQLite max DB + WAL size before oldest events are pruned (`0` disables). Not used for postgres. | `800Mi` |
+| `timeline.postgres.existingSecret` | Name of a Secret holding the PostgreSQL DSN (required when `storage=postgres`) | `""` |
+| `timeline.postgres.secretKey` | Key within the Secret holding the DSN | `dsn` |
 | `persistence.enabled` | Enable PVC for SQLite | `false` |
 | `cost.source` | Cost source: `auto`, `prometheus`, or `kubecost`; controls stay editable only when this and the Kubecost URL, cluster ID, and Secret are empty | `""` |
 | `cost.currency` | Optional ISO 4217 override for OpenCost/Kubecost values; empty auto-detects, then uses USD | `""` |
@@ -217,14 +219,46 @@ trend charts remain unavailable for Kubecost.
 
 See `values.yaml` for all configuration options.
 
-### Timeline storage: memory vs sqlite
+### Timeline storage: memory vs sqlite vs postgres
 
-Radar's timeline records every cluster change so you can scrub backwards through "what happened, when." Two backends:
+Radar's timeline records every cluster change so you can scrub backwards through "what happened, when." Three backends:
 
 - **`memory`** (default): events live in-process. Lost on pod restart. Lower memory footprint per retention window than SQLite (no indexes, no WAL). Pick this if you only need recent activity (last few hours), don't care about losing history when a pod cycles, or want the simplest setup.
-- **`sqlite`**: events persist to a PVC across restarts. Pick this if you want a multi-day audit trail, need to inspect changes that happened while you weren't looking, or run Radar in-cluster long-term. Adds operational concerns: the PVC will fill if retention is unbounded; restarting on a multi-GB DB is slower (more rows to load).
+- **`sqlite`**: events persist to a PVC across restarts. Pick this if you want a multi-day audit trail, need to inspect changes that happened while you weren't looking, or run Radar in-cluster long-term. Adds operational concerns: the PVC will fill if retention is unbounded; restarting on a multi-GB DB is slower (more rows to load). Requires `persistence.enabled=true`.
+- **`postgres`**: events persist in an externally managed PostgreSQL database. Pick this for durability across restarts and rolling updates, or when you want multi-replica availability without the SQLite single-PVC constraint. The DSN must be provided via an existing Kubernetes Secret; Helm never touches the credential.
 
-**Sizing**: timeline volume depends on cluster size and controller churn. Tune `timeline.retention`, `timeline.maxSize`, and `persistence.size` together. Set `timeline.retention=0` to disable age cleanup; keep `timeline.maxSize` enabled for in-cluster deployments so Radar prunes oldest events before the PVC fills.
+**Provider-agnostic PostgreSQL setup**:
+
+The chart does not install, configure, or upgrade PostgreSQL. It creates no
+PostgreSQL workload, Service, PVC, CRD, or credential Secret. Use any managed
+database, PostgreSQL operator, or secret manager. The only requirement is a
+Secret in Radar's namespace containing a PostgreSQL DSN under the key selected
+by `timeline.postgres.secretKey`.
+
+```bash
+kubectl create secret generic radar-postgres -n radar \
+  --from-literal=dsn='postgres://radar:password@postgres.example:5432/radar?sslmode=require' \
+  --dry-run=client -o yaml | kubectl apply -f -
+helm upgrade --install radar skyhook/radar -n radar \
+  --set timeline.storage=postgres \
+  --set timeline.postgres.existingSecret=radar-postgres \
+  --set timeline.retention=720h
+```
+
+For an operator or secret manager that supplies a different key, reference that
+key instead:
+
+```yaml
+timeline:
+  storage: postgres
+  postgres:
+    existingSecret: app-db-credentials
+    secretKey: uri
+```
+
+The Secret is managed independently of Helm, so credential rotation is one `kubectl apply` — no `helm upgrade` required. The same applies to GitOps users: manage the Secret with SealedSecrets / SOPS / External Secrets and reference it via `timeline.postgres.existingSecret`.
+
+**Sizing**: timeline volume depends on cluster size and controller churn. For sqlite, tune `timeline.retention`, `timeline.maxSize`, and `persistence.size` together. Set `timeline.retention=0` to disable age cleanup; keep `timeline.maxSize` enabled for in-cluster SQLite deployments so Radar prunes oldest events before the PVC fills. `maxSize` is ignored for postgres and memory.
 
 `/api/diagnostics` surfaces `timeline.retentionAge`, `timeline.maxStorageBytes`, `timeline.lastCleanupAt`, `timeline.lastCleanupDeletedRows`, `timeline.lastCleanupError`, and `timeline.storageBytes` so you can confirm cleanup is keeping up without tailing logs.
 
