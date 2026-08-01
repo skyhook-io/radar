@@ -212,7 +212,6 @@ output) for plain text. URLs, tokens, and suggested commands remain unstyled.
 | `--timeline-storage` | `memory` | Timeline storage backend: `memory`, `sqlite`, or `postgres` |
 | `--timeline-db` | `~/.radar/timeline.db` | Path to SQLite database (when using sqlite storage) |
 | `--timeline-max-size` | `1Gi` | Maximum SQLite DB + WAL size before pruning oldest events (e.g. `800Mi`, `8Gi`; `0` disables) |
-| `--timeline-postgres-dsn` | `""` | PostgreSQL connection string for `postgres` storage (also set via `RADAR_TIMELINE_POSTGRES_DSN`; never persisted to config) |
 | `--history-limit` | `10000` | Maximum events to retain in timeline (memory only) |
 | `--disable-exec` | `false` | Disable terminal and debug shell |
 | `--disable-helm-write` | `false` | Disable Helm write operations |
