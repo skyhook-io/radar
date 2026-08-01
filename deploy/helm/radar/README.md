@@ -225,7 +225,7 @@ Radar's timeline records every cluster change so you can scrub backwards through
 
 - **`memory`** (default): events live in-process. Lost on pod restart. Lower memory footprint per retention window than SQLite (no indexes, no WAL). Pick this if you only need recent activity (last few hours), don't care about losing history when a pod cycles, or want the simplest setup.
 - **`sqlite`**: events persist to a PVC across restarts. Pick this if you want a multi-day audit trail, need to inspect changes that happened while you weren't looking, or run Radar in-cluster long-term. Adds operational concerns: the PVC will fill if retention is unbounded; restarting on a multi-GB DB is slower (more rows to load). Requires `persistence.enabled=true`.
-- **`postgres`**: events persist in an externally managed PostgreSQL database. Pick this for durability across restarts and rolling updates, or when you want multi-replica availability without the SQLite single-PVC constraint. The DSN must be provided via an existing Kubernetes Secret; Helm never touches the credential.
+- **`postgres`**: events persist in an externally managed PostgreSQL database. Pick this for durability across restarts and rolling updates, or when you want multi-replica availability without the SQLite single-PVC constraint. Use a dedicated database per Radar deployment. The DSN must be provided via an existing Kubernetes Secret; Helm never touches the credential.
 
 **Provider-agnostic PostgreSQL setup**:
 
@@ -256,7 +256,7 @@ timeline:
     secretKey: uri
 ```
 
-The Secret is managed independently of Helm, so credential rotation is one `kubectl apply` — no `helm upgrade` required. The same applies to GitOps users: manage the Secret with SealedSecrets / SOPS / External Secrets and reference it via `timeline.postgres.existingSecret`.
+The Secret is managed independently of Helm, so credential rotation does not require a Helm upgrade. Restart the Radar Deployment after updating the Secret because Kubernetes does not refresh environment variables in running containers. The same applies to GitOps users: manage the Secret with SealedSecrets / SOPS / External Secrets and reference it via `timeline.postgres.existingSecret`.
 
 **Sizing**: timeline volume depends on cluster size and controller churn. For sqlite, tune `timeline.retention`, `timeline.maxSize`, and `persistence.size` together. Set `timeline.retention=0` to disable age cleanup; keep `timeline.maxSize` enabled for in-cluster SQLite deployments so Radar prunes oldest events before the PVC fills. `maxSize` is ignored for postgres and memory.
 

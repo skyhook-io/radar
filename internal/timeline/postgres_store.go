@@ -59,6 +59,7 @@ type PostgresStore struct {
 	lastCleanupEr string
 }
 
+// NewPostgresStore opens a PostgreSQL-backed timeline store and applies migrations.
 func NewPostgresStore(dsn string) (*PostgresStore, error) {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -448,10 +449,12 @@ func (s *PostgresStore) MarkResourceSeen(clusterContext, kind, namespace, name s
 	s.seenResources[key] = true
 	s.seenMu.Unlock()
 
-	_, _ = s.db.Exec(
+	if _, err := s.db.Exec(
 		"INSERT INTO radar_timeline_seen_resources (resource_key) VALUES ($1) ON CONFLICT(resource_key) DO NOTHING",
 		[]byte(key),
-	)
+	); err != nil {
+		log.Printf("[timeline] failed to persist seen resource: %v", err)
+	}
 }
 
 // IsResourceSeen checks if a resource has been seen before in the given cluster
@@ -470,10 +473,12 @@ func (s *PostgresStore) ClearResourceSeen(clusterContext, kind, namespace, name 
 	delete(s.seenResources, key)
 	s.seenMu.Unlock()
 
-	_, _ = s.db.Exec(
+	if _, err := s.db.Exec(
 		"DELETE FROM radar_timeline_seen_resources WHERE resource_key = $1",
 		[]byte(key),
-	)
+	); err != nil {
+		log.Printf("[timeline] failed to clear seen resource: %v", err)
+	}
 }
 
 // Stats returns storage statistics.
@@ -724,7 +729,11 @@ func (s *PostgresStore) buildQuery(opts QueryOptions) (string, []any, error) {
 	return query.String(), args, nil
 }
 
-func (s *PostgresStore) scanEvent(rows *sql.Rows) (TimelineEvent, error) {
+type eventScanner interface {
+	Scan(dest ...any) error
+}
+
+func (s *PostgresStore) scanEvent(scanner eventScanner) (TimelineEvent, error) {
 	var event TimelineEvent
 	var source, eventType, healthState string
 	var apiVersion, uid, reason, message, correlationID, clusterContext sql.NullString
@@ -732,7 +741,7 @@ func (s *PostgresStore) scanEvent(rows *sql.Rows) (TimelineEvent, error) {
 	var diffJSON, labelsJSON []byte
 	var resourceCreatedAt sql.NullTime
 
-	err := rows.Scan(
+	err := scanner.Scan(
 		&event.ID,
 		&event.Timestamp,
 		&source,
@@ -803,81 +812,7 @@ func (s *PostgresStore) scanEvent(rows *sql.Rows) (TimelineEvent, error) {
 }
 
 func (s *PostgresStore) scanEventRow(row *sql.Row) (TimelineEvent, error) {
-	var event TimelineEvent
-	var source, eventType, healthState string
-	var apiVersion, uid, reason, message, correlationID, clusterContext sql.NullString
-	var ownerKind, ownerName sql.NullString
-	var diffJSON, labelsJSON []byte
-	var resourceCreatedAt sql.NullTime
-
-	err := row.Scan(
-		&event.ID,
-		&event.Timestamp,
-		&source,
-		&event.Kind,
-		&apiVersion,
-		&event.Namespace,
-		&event.Name,
-		&uid,
-		&eventType,
-		&reason,
-		&message,
-		&diffJSON,
-		&healthState,
-		&ownerKind,
-		&ownerName,
-		&labelsJSON,
-		&event.Count,
-		&correlationID,
-		&clusterContext,
-		&resourceCreatedAt,
-		&event.Seq,
-	)
-	if err != nil {
-		return event, err
-	}
-
-	event.Source = EventSource(source)
-	event.EventType = EventType(eventType)
-	event.HealthState = HealthState(healthState)
-	event.ClusterContext = clusterContext.String
-
-	if apiVersion.Valid {
-		event.APIVersion = apiVersion.String
-	}
-	if uid.Valid {
-		event.UID = uid.String
-	}
-	if reason.Valid {
-		event.Reason = reason.String
-	}
-	if message.Valid {
-		event.Message = message.String
-	}
-	if correlationID.Valid {
-		event.CorrelationID = correlationID.String
-	}
-	if resourceCreatedAt.Valid {
-		t := resourceCreatedAt.Time
-		event.CreatedAt = &t
-	}
-	if ownerKind.Valid && ownerKind.String != "" {
-		event.Owner = &OwnerInfo{
-			Kind: ownerKind.String,
-			Name: ownerName.String,
-		}
-	}
-	if len(diffJSON) > 0 {
-		var diff DiffInfo
-		if json.Unmarshal(diffJSON, &diff) == nil {
-			event.Diff = &diff
-		}
-	}
-	if len(labelsJSON) > 0 {
-		json.Unmarshal(labelsJSON, &event.Labels)
-	}
-
-	return event, nil
+	return s.scanEvent(row)
 }
 
 func (s *PostgresStore) getOrCompileFilter(presetName string) (*CompiledFilter, error) {
@@ -1007,6 +942,8 @@ func applyPostgresMigrations(
 			continue
 		}
 
+		// New migrations must remain additive while rolling upgrades can run old
+		// and new Radar pods against the same database.
 		tx, err := conn.BeginTx(ctx, nil)
 		if err != nil {
 			return fmt.Errorf("begin migration %s: %w", migration.name, err)

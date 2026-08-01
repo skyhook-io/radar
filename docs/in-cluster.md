@@ -479,7 +479,7 @@ Radar's timeline records every cluster change. Three backends:
 
 - **`memory`** (default): events live in-process, lost on pod restart. Lowest footprint; pick this if you only need recent activity (last few hours).
 - **`sqlite`**: events persist to a PVC across restarts. Multi-day audit trail; pick this for long-running in-cluster deployments where you care about history surviving pod cycles. Requires `persistence.enabled=true`.
-- **`postgres`**: events persist in an externally managed PostgreSQL database. Pick this for durability across restarts and rolling updates, or when you want to avoid the single-PVC constraint. The DSN must be provided via an existing Kubernetes Secret (`timeline.postgres.existingSecret`); Helm never touches the credential.
+- **`postgres`**: events persist in an externally managed PostgreSQL database. Pick this for durability across restarts and rolling updates, or when you want to avoid the single-PVC constraint. Use a dedicated database per Radar deployment. The DSN must be provided via an existing Kubernetes Secret (`timeline.postgres.existingSecret`); Helm never touches the credential.
 
 For SQLite, tune `timeline.retention` (Go duration; `0` disables age cleanup), `timeline.maxSize`, and `persistence.size` together. Keep `timeline.maxSize` below the PVC size so Radar prunes oldest events before the volume fills. `timeline.maxSize` is ignored for postgres and memory.
 
@@ -488,9 +488,10 @@ Cleanup runs hourly + once at startup. Confirm it's keeping up via `/api/diagnos
 ### PostgreSQL requirements
 
 - PostgreSQL 14+ (tested against 17).
-- A database and a user with DDL permissions so Radar can create/update the `radar_timeline_*` tables, indexes, and migrations on first startup.
+- A dedicated database and a user with DDL permissions so Radar can create/update the `radar_timeline_*` tables, indexes, and migrations on first startup.
 - `sslmode` and other TLS settings are controlled through the DSN string.
 - The DSN is read from a Secret; never put it in Helm values or `config.json`.
+- Restart the Radar Deployment after rotating the Secret because Kubernetes does not refresh environment variables in running containers.
 - There is no built-in import path from SQLite to PostgreSQL. Migrating historical events is out of scope for the first contribution.
 
 ## Configuration Reference
