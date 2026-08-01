@@ -64,7 +64,6 @@ func main() {
 	podShellDefault := flag.String("pod-shell-default", "", "Override the default pod exec shell command (runs as 'sh -c <value>'; empty = built-in bash -il → ash → sh cascade)")
 	timelineStorage := flag.String("timeline-storage", fileCfg.TimelineStorageOr("memory"), "Timeline storage backend: memory, sqlite, or postgres")
 	timelineDBPath := flag.String("timeline-db", fileCfg.TimelineDBPath, "Path to timeline database file (default: ~/.radar/timeline.db)")
-	timelinePostgresDSN := app.RegisterTimelinePostgresDSNFlag(flag.CommandLine, os.Getenv)
 	timelineRetention := flag.Duration("timeline-retention", fileCfg.TimelineRetentionOr(7*24*time.Hour), "How long to retain timeline events when --timeline-storage=sqlite (e.g. 168h, 720h). 0 disables age-based cleanup.")
 	timelineMaxSize := flag.String("timeline-max-size", fileCfg.TimelineMaxSizeOr("1Gi"), "Maximum SQLite timeline storage size before pruning oldest events (e.g. 800Mi, 8Gi). 0 disables size-based pruning.")
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
@@ -177,7 +176,7 @@ func main() {
 		PodShellDefault:           *podShellDefault,
 		TimelineStorage:           *timelineStorage,
 		TimelineDBPath:            *timelineDBPath,
-		TimelinePostgresDSN:       *timelinePostgresDSN,
+		TimelinePostgresDSN:       os.Getenv("RADAR_TIMELINE_POSTGRES_DSN"),
 		TimelineRetention:         *timelineRetention,
 		TimelineMaxSizeBytes:      timelineMaxSizeBytes,
 		PrometheusURL:             *prometheusURL,

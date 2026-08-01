@@ -119,6 +119,8 @@ All fields are optional — omitted fields use built-in defaults.
 | `mcp` | Enable/disable MCP server for AI tools (default: enabled) |
 | `debugImage` | Image for ephemeral debug containers and node debug pods (same as `--debug-image`). Empty = `busybox:latest`; point at a mirror for air-gapped / private-registry clusters. |
 
+The PostgreSQL DSN is **runtime-only** — set it through the `RADAR_TIMELINE_POSTGRES_DSN` environment variable. It is intentionally never written to `config.json` so credentials do not persist to disk in the settings file.
+
 For declarative deployments, `RADAR_COST_SOURCE`, `RADAR_KUBECOST_URL`,
 `RADAR_KUBECOST_CLUSTER_ID`, and `RADAR_KUBECOST_API_KEY` override these cost
 source fields. When any is set, the source controls are read-only in Settings;
