@@ -25,6 +25,7 @@ import (
 const (
 	postgresMigrationTimeout = 30 * time.Second
 	postgresUnlockTimeout    = 5 * time.Second
+	postgresOperationTimeout = 30 * time.Second
 
 	postgresMigrationLockNamespace int32 = 0x52414452
 	postgresMigrationLockID        int32 = 1
@@ -34,6 +35,13 @@ const (
 )
 
 var postgresPingTimeout = 10 * time.Second
+
+func withPostgresOperationTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, postgresOperationTimeout)
+}
 
 //go:embed migrations/postgres/*.sql
 var postgresMigrations embed.FS
@@ -174,6 +182,8 @@ func (s *PostgresStore) AppendBatch(ctx context.Context, events []TimelineEvent)
 	if len(events) == 0 {
 		return nil
 	}
+	ctx, cancel := withPostgresOperationTimeout(ctx)
+	defer cancel()
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -449,7 +459,10 @@ func (s *PostgresStore) MarkResourceSeen(clusterContext, kind, namespace, name s
 	s.seenResources[key] = true
 	s.seenMu.Unlock()
 
-	if _, err := s.db.Exec(
+	ctx, cancel := context.WithTimeout(context.Background(), postgresOperationTimeout)
+	defer cancel()
+	if _, err := s.db.ExecContext(
+		ctx,
 		"INSERT INTO radar_timeline_seen_resources (resource_key) VALUES ($1) ON CONFLICT(resource_key) DO NOTHING",
 		[]byte(key),
 	); err != nil {
@@ -473,7 +486,10 @@ func (s *PostgresStore) ClearResourceSeen(clusterContext, kind, namespace, name 
 	delete(s.seenResources, key)
 	s.seenMu.Unlock()
 
-	if _, err := s.db.Exec(
+	ctx, cancel := context.WithTimeout(context.Background(), postgresOperationTimeout)
+	defer cancel()
+	if _, err := s.db.ExecContext(
+		ctx,
 		"DELETE FROM radar_timeline_seen_resources WHERE resource_key = $1",
 		[]byte(key),
 	); err != nil {
@@ -516,6 +532,8 @@ func (s *PostgresStore) Stats() StoreStats {
 
 // Cleanup removes events older than the given duration.
 func (s *PostgresStore) Cleanup(ctx context.Context, maxAge time.Duration) (int64, error) {
+	ctx, cancel := withPostgresOperationTimeout(ctx)
+	defer cancel()
 	cutoff := time.Now().Add(-maxAge).UTC()
 	var totalDeleted int64
 	const batchSize = 1000
