@@ -1,6 +1,9 @@
 {{- if and .Values.persistence.enabled (eq .Values.timeline.storage "sqlite") (gt (int .Values.replicaCount) 1) }}
 {{- fail "replicaCount must be 1 when persistence.enabled=true and timeline.storage=sqlite: a single PVC cannot be safely shared across pods (RWO volumes won't attach to a second pod, RWX volumes risk SQLite corruption)" }}
 {{- end }}
+{{- if and (eq .Values.timeline.storage "postgres") (not .Values.timeline.postgres.existingSecret) }}
+{{- fail "timeline.postgres.existingSecret is required when timeline.storage=postgres" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -57,6 +60,11 @@ spec:
             {{- end }}
             {{- if .Values.timeline.maxSize }}
             - --timeline-max-size={{ .Values.timeline.maxSize }}
+            {{- end }}
+            {{- end }}
+            {{- if eq .Values.timeline.storage "postgres" }}
+            {{- if .Values.timeline.retention }}
+            - --timeline-retention={{ .Values.timeline.retention }}
             {{- end }}
             {{- end }}
             - --history-limit={{ .Values.timeline.historyLimit }}
@@ -211,6 +219,13 @@ spec:
             - name: RADAR_ARGOCD_INSECURE_TLS
               value: "true"
             {{- end }}
+            {{- end }}
+            {{- if eq .Values.timeline.storage "postgres" }}
+            - name: RADAR_TIMELINE_POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.timeline.postgres.existingSecret }}
+                  key: {{ .Values.timeline.postgres.secretKey }}
             {{- end }}
             {{- if .Values.rbac.selfUpgrade }}
             - name: MY_POD_NAMESPACE

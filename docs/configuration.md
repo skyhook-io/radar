@@ -63,10 +63,12 @@ All fields are optional — omitted fields use built-in defaults.
 | `port` | Server port (default 9280) |
 | `noBrowser` | Don't auto-open browser |
 | `browser` | Browser for automatic launch (same as `--browser`; on macOS, app names like `Google Chrome` are supported) |
-| `timelineStorage` | `memory` or `sqlite` |
-| `timelineDbPath` | Path to SQLite database |
-| `timelineMaxSize` | Max SQLite DB + WAL size before pruning oldest events (`0` disables) |
-| `historyLimit` | Max timeline events to retain |
+| `timelineStorage` | `memory`, `sqlite`, or `postgres` |
+| `timelineDbPath` | Path to SQLite database (sqlite only) |
+| `timelineMaxSize` | Max SQLite DB + WAL size before pruning oldest events (`0` disables; sqlite only) |
+| `historyLimit` | Max timeline events to retain (memory only) |
+
+The PostgreSQL DSN is **runtime-only** — set it via the `--timeline-postgres-dsn` CLI flag or the `RADAR_TIMELINE_POSTGRES_DSN` environment variable. It is intentionally never written to `config.json` so credentials do not persist to disk in the settings file.
 | `prometheusUrl` | Manual Prometheus/VictoriaMetrics URL — skips auto-discovery. Useful when Prometheus is not in the same cluster or uses a non-standard service name. |
 | `prometheusHeaders` | HTTP headers sent with every Prometheus request. Required for auth-protected backends — e.g. `{"X-Scope-OrgID": "my-org"}`. Equivalent CLI: `--prometheus-header Key=Value` (repeatable). Stored in plain text in `config.json` — protect the file accordingly. |
 | `argoCdUrl` | Manual argocd-server URL for the Argo CD API integration — skips auto-discovery. |

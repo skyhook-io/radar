@@ -6,14 +6,16 @@ import "time"
 type StoreType string
 
 const (
-	StoreTypeMemory StoreType = "memory"
-	StoreTypeSQLite StoreType = "sqlite"
+	StoreTypeMemory   StoreType = "memory"
+	StoreTypeSQLite   StoreType = "sqlite"
+	StoreTypePostgres StoreType = "postgres"
 )
 
 // StoreConfig holds configuration for the event store
 type StoreConfig struct {
 	Type            StoreType
 	Path            string        // For SQLite: database file path
+	DSN             string        // For PostgreSQL: runtime connection string
 	MaxSize         int           // For Memory: ring buffer size
 	RetentionAge    time.Duration // For SQLite: delete events older than this; 0 = never
 	MaxStorageBytes int64         // For SQLite: prune oldest events to stay under this size; 0 = never

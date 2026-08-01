@@ -12,8 +12,8 @@ import (
 // InitAllSubsystems initializes all subsystems in the correct order.
 // Used for both initial boot and after context switch.
 //
-// Returns an error if a critical subsystem (resource cache) fails to
-// initialize. All other subsystems log warnings and continue in degraded mode.
+// Returns an error if a critical subsystem (timeline or resource cache) fails
+// to initialize. All other subsystems log warnings and continue in degraded mode.
 //
 // External subsystem callbacks (timeline, helm, traffic, prometheus) must be
 // registered via the Register*Funcs methods before calling this function.
@@ -31,7 +31,7 @@ func InitAllSubsystems(ctx context.Context, progress func(string)) error {
 		progress("Initializing timeline...")
 		t := time.Now()
 		if err := tlReinitFn(); err != nil {
-			log.Printf("Warning: timeline init failed: %v", err)
+			return fmt.Errorf("timeline init failed: %w", err)
 		}
 		logTiming("   Timeline init: %v", time.Since(t))
 	}
