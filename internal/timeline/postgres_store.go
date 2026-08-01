@@ -296,6 +296,8 @@ func (s *PostgresStore) AppendBatch(ctx context.Context, events []TimelineEvent)
 
 // Query retrieves events matching the given options.
 func (s *PostgresStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineEvent, error) {
+	ctx, cancel := withPostgresOperationTimeout(ctx)
+	defer cancel()
 	q, args, err := s.buildQuery(opts)
 	if err != nil {
 		return nil, err
@@ -391,6 +393,8 @@ func (s *PostgresStore) QueryGrouped(ctx context.Context, opts QueryOptions) (*T
 
 // GetEvent retrieves a single event by ID.
 func (s *PostgresStore) GetEvent(ctx context.Context, id string) (*TimelineEvent, error) {
+	ctx, cancel := withPostgresOperationTimeout(ctx)
+	defer cancel()
 	query := `SELECT id, timestamp, source, kind, api_version, namespace, name, uid, event_type,
 		reason, message, diff_json, health_state, owner_kind, owner_name,
 		labels_json, count, correlation_id, cluster_context, resource_created_at, seq
@@ -409,6 +413,8 @@ func (s *PostgresStore) GetEvent(ctx context.Context, id string) (*TimelineEvent
 
 // GetChangesForOwner retrieves changes for resources owned by the given owner.
 func (s *PostgresStore) GetChangesForOwner(ctx context.Context, ownerKind, ownerNamespace, ownerName, clusterContext string, since time.Time, limit int) ([]TimelineEvent, error) {
+	ctx, cancel := withPostgresOperationTimeout(ctx)
+	defer cancel()
 	if limit <= 0 {
 		limit = 100
 	}
@@ -500,11 +506,13 @@ func (s *PostgresStore) ClearResourceSeen(clusterContext, kind, namespace, name 
 // Stats returns storage statistics.
 func (s *PostgresStore) Stats() StoreStats {
 	var stats StoreStats
+	ctx, cancel := context.WithTimeout(context.Background(), postgresOperationTimeout)
+	defer cancel()
 
-	row := s.db.QueryRow("SELECT COUNT(*) FROM radar_timeline_events")
+	row := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM radar_timeline_events")
 	row.Scan(&stats.TotalEvents)
 
-	row = s.db.QueryRow("SELECT MIN(timestamp), MAX(timestamp) FROM radar_timeline_events")
+	row = s.db.QueryRowContext(ctx, "SELECT MIN(timestamp), MAX(timestamp) FROM radar_timeline_events")
 	var oldest, newest sql.NullTime
 	row.Scan(&oldest, &newest)
 	if oldest.Valid {
@@ -514,7 +522,7 @@ func (s *PostgresStore) Stats() StoreStats {
 		stats.NewestEvent = newest.Time
 	}
 
-	stats.StorageBytes = s.storageBytes()
+	stats.StorageBytes = s.storageBytes(ctx)
 
 	s.seenMu.RLock()
 	stats.SeenResources = len(s.seenResources)
@@ -628,9 +636,9 @@ func (s *PostgresStore) runCleanup(retention time.Duration) {
 
 // storageBytes returns the total relation size for the timeline tables and
 // indexes. Errors are ignored so a size-query failure does not break Stats.
-func (s *PostgresStore) storageBytes() int64 {
+func (s *PostgresStore) storageBytes(ctx context.Context) int64 {
 	var total sql.NullInt64
-	row := s.db.QueryRow(`
+	row := s.db.QueryRowContext(ctx, `
 		SELECT pg_total_relation_size('radar_timeline_events') +
 		       pg_total_relation_size('radar_timeline_seen_resources')
 	`)
