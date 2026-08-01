@@ -139,7 +139,7 @@ radar/
 
 ## Tech stack snapshot
 
-**Backend:** Go 1.26+, client-go, chi, gorilla/websocket, helm.sh/helm/v3, cilium/cilium (Hubble), google/go-containerregistry, modernc.org/sqlite, `github.com/lib/pq` (PostgreSQL timeline storage), modelcontextprotocol/go-sdk, wailsapp/wails/v2 (desktop), `go:embed` for frontend.
+**Backend:** Go 1.26+, client-go, chi, gorilla/websocket, helm.sh/helm/v3, cilium/cilium (Hubble), google/go-containerregistry, modernc.org/sqlite, `github.com/jackc/pgx/v5` (PostgreSQL timeline storage), modelcontextprotocol/go-sdk, wailsapp/wails/v2 (desktop), `go:embed` for frontend.
 
 **Frontend:** React 19 + TypeScript, Vite, @xyflow/react + elkjs (graph), @xterm/* (terminal), @monaco-editor/react (YAML), shiki (syntax), @tanstack/react-query v5, react-router-dom, Tailwind CSS v4 + shadcn/ui (`@tailwindcss/vite` plugin), Lucide React (icons), `yaml`.
 
