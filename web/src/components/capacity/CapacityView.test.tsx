@@ -1333,6 +1333,47 @@ describe("CapacityView pool detail", () => {
     expect(html).toContain("NodePool unavailable");
   });
 
+  it("deep-links a provisioning-health issue into the pool's provision episodes", () => {
+    const html = renderCapacity("/capacity/pools/default", (client) =>
+      client.setQueryData(
+        ["capacity", "pool", "default"],
+        poolDetailResponse({
+          ...cleanPoolDetail,
+          issues: [
+            {
+              id: "reg-unhealthy",
+              severity: "warning",
+              source: "condition",
+              category: "node_provisioning_failure",
+              category_group: "capacity",
+              grouping_scope: "unknown",
+              group: "karpenter.sh",
+              kind: "NodePool",
+              name: "default",
+              reason: "NodePoolNodeRegistrationUnhealthy",
+              message: "NodeClass is in Ready=Unknown",
+            },
+            {
+              id: "nodeclass-not-ready",
+              severity: "warning",
+              source: "condition",
+              category: "node_provisioning_failure",
+              category_group: "capacity",
+              grouping_scope: "unknown",
+              group: "karpenter.k8s.aws",
+              kind: "EC2NodeClass",
+              name: "gpu",
+              reason: "NodeClassNotReady",
+              message: "Validation failed",
+            },
+          ],
+        }),
+      ),
+    );
+    const links = html.split("View provisioning episodes").length - 1;
+    expect(links).toBe(1);
+  });
+
   it("leads with the diagnosis when the pool has issues, ledger when clean", () => {
     const broken = renderCapacity("/capacity/pools/default", (client) =>
       client.setQueryData(
@@ -1599,6 +1640,73 @@ describe("CapacityView demand", () => {
     expect(html).toContain(
       "the state counts below describe all observed demand",
     );
+  });
+
+  it("headlines the dominant reason when every pool rules the group out", () => {
+    const blockedGroup = {
+      ...demandGroup,
+      poolEvaluationCounts: { declaredCompatible: 0, incompatible: 2, unknown: 0 },
+      poolEvaluations: [
+        {
+          pool: { kind: "NodePool", name: "general" },
+          result: "incompatible" as const,
+          evidence: [
+            {
+              predicate: "selector.gpu",
+              sourcePath: "spec.nodeSelector",
+              observedValues: ["gpu=true"],
+              expectedValues: [],
+              confidence: "high" as const,
+              explanation: "requires label gpu=true, which no pool requirement or template declares",
+            },
+          ],
+          evidenceMeta: boundedMeta(1),
+          unknownPredicates: [],
+          unknownPredicatesMeta: boundedMeta(0),
+        },
+        {
+          pool: { kind: "NodePool", name: "spot" },
+          result: "incompatible" as const,
+          evidence: [
+            {
+              predicate: "selector.gpu",
+              sourcePath: "spec.nodeSelector",
+              observedValues: ["gpu=true"],
+              expectedValues: [],
+              confidence: "high" as const,
+              explanation: "requires label gpu=true, which no pool requirement or template declares",
+            },
+          ],
+          evidenceMeta: boundedMeta(1),
+          unknownPredicates: [],
+          unknownPredicatesMeta: boundedMeta(0),
+        },
+      ],
+    };
+    const html = renderCapacity("/capacity/demand", (client) =>
+      client.setQueryData(
+        ["capacity", "demand", 25, undefined, undefined, undefined, undefined, undefined],
+        demandResponse({ items: [blockedGroup] }),
+      ),
+    );
+    expect(html).toContain("No pool can take this group");
+    expect(html).toContain("requires label gpu=true");
+    expect(html).toContain("(2 of 2 incompatible pools)");
+
+    const mixed = renderCapacity("/capacity/demand", (client) =>
+      client.setQueryData(
+        ["capacity", "demand", 25, undefined, undefined, undefined, undefined, undefined],
+        demandResponse({
+          items: [
+            {
+              ...blockedGroup,
+              poolEvaluationCounts: { declaredCompatible: 1, incompatible: 1, unknown: 0 },
+            },
+          ],
+        }),
+      ),
+    );
+    expect(mixed).not.toContain("No pool can take this group");
   });
 
   it("celebrates the unfiltered empty state instead of blaming inactive filters", () => {

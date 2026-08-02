@@ -78,6 +78,41 @@ export function updateDemandSearchParam(
   return next ? `?${next}` : "";
 }
 
+// demandGroupVerdict synthesizes the one-line answer for the archetypal case:
+// every evaluated pool ruled the group out. The dominant leading reason across
+// incompatible pools headlines; the predicate tables below stay the receipts.
+// Anything short of all-pools-incompatible keeps the neutral counts line —
+// declared compatibility is not a scheduling guarantee, and a synthesized
+// verdict must not overclaim past what the evidence supports.
+export function demandGroupVerdict(group: CapacityDemandGroup): {
+  explanation: string;
+  predicateCount: number;
+  poolCount: number;
+} | null {
+  const counts = group.poolEvaluationCounts;
+  if (counts.declaredCompatible > 0 || counts.incompatible === 0) return null;
+  const leading = group.poolEvaluations
+    .filter((e) => e.result === "incompatible" && e.evidence.length > 0)
+    .map((e) => e.evidence[0]);
+  if (leading.length === 0) return null;
+  const byPredicate = new Map<string, { count: number; explanation: string }>();
+  for (const item of leading) {
+    const entry = byPredicate.get(item.predicate);
+    if (entry) entry.count += 1;
+    else byPredicate.set(item.predicate, { count: 1, explanation: item.explanation });
+  }
+  let best: { count: number; explanation: string } | undefined;
+  for (const entry of byPredicate.values()) {
+    if (!best || entry.count > best.count) best = entry;
+  }
+  if (!best?.explanation) return null;
+  return {
+    explanation: best.explanation,
+    predicateCount: best.count,
+    poolCount: counts.incompatible,
+  };
+}
+
 export function CapacityDemand({
   connectionState,
   onOpenPool,
@@ -448,6 +483,7 @@ function DemandGroupCard({
   const [expanded, setExpanded] = useState(defaultExpanded);
   const counts = group.poolEvaluationCounts;
   const compatSummary = `${counts.declaredCompatible} compatible · ${counts.incompatible} incompatible · ${counts.unknown} unknown`;
+  const verdict = demandGroupVerdict(group);
 
   return (
     <article className="overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm">
@@ -538,6 +574,20 @@ function DemandGroupCard({
               </span>
             </WithTooltip>
           </div>
+
+          {verdict && (
+            <div className="px-4 pt-2 text-sm">
+              <span className="font-medium text-warning-text">
+                No pool can take this group
+              </span>{" "}
+              <span className="text-theme-text-secondary">
+                — {verdict.explanation}
+                {verdict.poolCount > 1
+                  ? ` (${verdict.predicateCount} of ${verdict.poolCount} incompatible pools)`
+                  : ""}
+              </span>
+            </div>
+          )}
 
           {group.issues.length > 0 && (
             <div className="px-4 pt-3">

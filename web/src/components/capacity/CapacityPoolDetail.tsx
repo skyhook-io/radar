@@ -537,6 +537,7 @@ function PoolSummaryTab({
       <PostureView
         pool={pool}
         onOpenResource={onOpenResource}
+        onNavigate={onNavigate}
         onOpenMembers={() =>
           onNavigate(
             `/capacity/pools/${encodeURIComponent(pool.resource.ref.name)}/members`,
@@ -882,13 +883,23 @@ function WorkloadAttribution({
   );
 }
 
+// Issue reasons whose durable evidence lives in the pool's provision episodes
+// (failed and ended launches). Their cards deep-link into Activity pre-filtered
+// — the whole diagnosis journey stays one click wide.
+const PROVISION_EPISODE_REASONS = new Set([
+  "NodePoolNodeRegistrationUnhealthy",
+  "NodeClaimProvisioningFailed",
+]);
+
 function PostureView({
   pool,
   onOpenResource,
+  onNavigate,
   onOpenMembers,
 }: {
   pool: CapacityPoolObservation;
   onOpenResource: (resource: SelectedResource) => void;
+  onNavigate: (path: string) => void;
   onOpenMembers: () => void;
 }) {
   const hasSignals =
@@ -940,6 +951,19 @@ function PostureView({
                         }
                       >
                         Inspect {subject.kind}/{subject.name} →
+                      </LinkButton>
+                    </div>
+                  )}
+                  {PROVISION_EPISODE_REASONS.has(issue.reason) && (
+                    <div className="mt-1">
+                      <LinkButton
+                        onClick={() =>
+                          onNavigate(
+                            `/capacity/activity?pool=${encodeURIComponent(pool.resource.ref.name)}&type=provision`,
+                          )
+                        }
+                      >
+                        View provisioning episodes →
                       </LinkButton>
                     </div>
                   )}
