@@ -1582,7 +1582,7 @@ func (s *Server) preflightResourceList(r *http.Request, kind, group string, name
 }
 
 func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
+	if !s.requireConnectedOrSyncing(w) {
 		return
 	}
 	kind := normalizeKind(chi.URLParam(r, "kind"))
@@ -1611,9 +1611,8 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 	}
 	namespaces = finalNamespaces
 
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")
+	cache, ok := s.gateResourceRead(w, kind, group)
+	if !ok {
 		return
 	}
 
@@ -2018,6 +2017,149 @@ func normalizeKind(kind string) string {
 	return strings.ToLower(kind)
 }
 
+// informerKeyForKind maps a normalized URL kind segment — including the
+// aliases the list/get handlers accept — to its typed informer key. Returns
+// "" for kinds outside the typed informer set (CRDs, dynamic fallthrough).
+func informerKeyForKind(kind string) string {
+	switch kind {
+	case "pods", "pod":
+		return "pods"
+	case "services", "service":
+		return "services"
+	case "deployments", "deployment":
+		return "deployments"
+	case "daemonsets", "daemonset":
+		return "daemonsets"
+	case "statefulsets", "statefulset":
+		return "statefulsets"
+	case "replicasets", "replicaset":
+		return "replicasets"
+	case "ingresses", "ingress":
+		return "ingresses"
+	case "ingressclasses", "ingressclass":
+		return "ingressclasses"
+	case "configmaps", "configmap":
+		return "configmaps"
+	case "secrets", "secret":
+		return "secrets"
+	case "events", "event":
+		return "events"
+	case "persistentvolumeclaims", "persistentvolumeclaim", "pvcs", "pvc":
+		return "persistentvolumeclaims"
+	case "persistentvolumes", "persistentvolume", "pvs", "pv":
+		return "persistentvolumes"
+	case "storageclasses", "storageclass", "sc":
+		return "storageclasses"
+	case "poddisruptionbudgets", "poddisruptionbudget", "pdbs", "pdb":
+		return "poddisruptionbudgets"
+	case "serviceaccounts", "serviceaccount":
+		return "serviceaccounts"
+	case "jobs", "job":
+		return "jobs"
+	case "cronjobs", "cronjob":
+		return "cronjobs"
+	case "hpas", "hpa", "horizontalpodautoscalers", "horizontalpodautoscaler":
+		return "horizontalpodautoscalers"
+	case "nodes", "node":
+		return "nodes"
+	case "namespaces", "namespace":
+		return "namespaces"
+	case "limitranges", "limitrange":
+		return "limitranges"
+	case "resourcequotas", "resourcequota":
+		return "resourcequotas"
+	case "networkpolicies", "networkpolicy", "netpol":
+		return "networkpolicies"
+	case "roles", "role":
+		return "roles"
+	case "clusterroles", "clusterrole":
+		return "clusterroles"
+	case "rolebindings", "rolebinding":
+		return "rolebindings"
+	case "clusterrolebindings", "clusterrolebinding":
+		return "clusterrolebindings"
+	}
+	return ""
+}
+
+// gateResourceRead enforces per-kind readiness for the typed resource read
+// handlers and picks which cache serves the request. Post-connect that is
+// the promoted singleton — readiness still gates deferred/promoted kinds
+// syncing in background, which previously could render a partial store as an
+// empty or truncated list. During initial sync it is the mid-sync handle, so
+// kinds become readable one by one instead of waiting behind the global
+// connected gate.
+//
+// Returns (cache, true) when the read may proceed; otherwise writes the
+// response and returns (nil, false). Kinds outside the typed informer set —
+// and typed kinds with no informer on this cluster (RBAC-disabled) — fall
+// through with ok=true so the handlers' existing dynamic/forbidden semantics
+// apply unchanged; the dynamic path keeps the connected gate (the dynamic
+// cache exists only after full initialization).
+func (s *Server) gateResourceRead(w http.ResponseWriter, kind, group string) (*k8s.ResourceCache, bool) {
+	key := informerKeyForKind(kind)
+	if key == "" || (group != "" && !k8s.TypedKindOwnsGroup(kind, group)) {
+		if !s.requireConnected(w) {
+			return nil, false
+		}
+		cache := k8s.GetResourceCache()
+		if cache == nil {
+			s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")
+			return nil, false
+		}
+		return cache, true
+	}
+	cache, readiness := k8s.ReadableCacheForKind(key)
+	if cache == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Not connected to cluster")
+		return nil, false
+	}
+	switch readiness {
+	case k8s.KindPending:
+		s.writeErrorCode(w, http.StatusServiceUnavailable, "kind_sync_pending",
+			fmt.Sprintf("%s are still loading, please retry shortly", key))
+		return nil, false
+	case k8s.KindFailed:
+		s.writeErrorCode(w, http.StatusServiceUnavailable, "kind_sync_failed",
+			fmt.Sprintf("%s failed to load within the sync deadline", key))
+		return nil, false
+	case k8s.KindUnavailable:
+		// No informer for a typed-vocabulary kind (RBAC-disabled). The
+		// existing forbidden semantics need the fully-initialized stack —
+		// mid-sync there is no dynamic cache to fall through to, so answer
+		// "still loading" rather than 500 off a half-built path.
+		if k8s.GetResourceCache() == nil {
+			s.writeErrorCode(w, http.StatusServiceUnavailable, "kind_sync_pending",
+				fmt.Sprintf("%s are still loading, please retry shortly", key))
+			return nil, false
+		}
+		return cache, true
+	default: // KindReady
+		return cache, true
+	}
+}
+
+// requireConnectedOrSyncing is the progressive-read variant of
+// requireConnected: during initial sync the mid-sync cache handle stands in
+// for connectedness, and per-kind readiness (gateResourceRead) does the real
+// gating. Fully disconnected states keep the exact 503 they had before.
+func (s *Server) requireConnectedOrSyncing(w http.ResponseWriter) bool {
+	if k8s.IsConnected() {
+		return true
+	}
+	// Cache handles stand in for connectedness only during startup: the
+	// mid-sync handle while Phase 1 runs, and the promoted singleton in the
+	// window where later subsystems (discovery, helm, traffic) are still
+	// initializing. A disconnected cluster keeps its 503 even though a stale
+	// handle may still exist.
+	if k8s.GetConnectionStatus().State == k8s.StateConnecting &&
+		(k8s.GetSyncingResourceCache() != nil || k8s.GetResourceCache() != nil) {
+		return true
+	}
+	s.writeError(w, http.StatusServiceUnavailable, "Not connected to cluster")
+	return false
+}
+
 // setTypeMeta sets the APIVersion and Kind fields on typed resources.
 // Delegates to k8s.SetTypeMeta.
 func setTypeMeta(resource any) {
@@ -2089,7 +2231,7 @@ func (s *Server) preflightResourceGet(r *http.Request, kind, namespace, name, gr
 }
 
 func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
+	if !s.requireConnectedOrSyncing(w) {
 		return
 	}
 	kind := normalizeKind(chi.URLParam(r, "kind"))
@@ -2116,9 +2258,8 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")
+	cache, ok := s.gateResourceRead(w, kind, group)
+	if !ok {
 		return
 	}
 
@@ -2382,12 +2523,16 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 
 	// Get relationships from cached topology. Pass the already-fetched
 	// resource so ManagedBy synthesis uses the authoritative object instead
-	// of a group-blind kind/name lookup.
+	// of a group-blind kind/name lookup. Skipped while serving from the
+	// mid-sync handle (ready singleton still nil) — relationships computed
+	// against a partially-synced cache would be silently incomplete.
 	var relationships *topology.Relationships
-	if cachedTopo, relIdx := s.broadcaster.GetCachedTopologyWithIndex(); cachedTopo != nil {
-		relationships = topology.GetRelationshipsWithObject(kind, namespace, name, resource, cachedTopo,
-			k8s.NewTopologyResourceProvider(k8s.GetResourceCache()),
-			k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), relIdx)
+	if k8s.GetResourceCache() != nil {
+		if cachedTopo, relIdx := s.broadcaster.GetCachedTopologyWithIndex(); cachedTopo != nil {
+			relationships = topology.GetRelationshipsWithObject(kind, namespace, name, resource, cachedTopo,
+				k8s.NewTopologyResourceProvider(k8s.GetResourceCache()),
+				k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), relIdx)
+		}
 	}
 
 	// Return resource with relationships
@@ -3951,7 +4096,7 @@ func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) 
 	status := k8s.GetConnectionStatus()
 	contexts, _ := k8s.GetAvailableContexts() // Always works (reads kubeconfig)
 
-	s.writeJSON(w, map[string]any{
+	resp := map[string]any{
 		"state":           status.State,
 		"context":         status.Context,
 		"clusterName":     status.ClusterName,
@@ -3959,7 +4104,22 @@ func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) 
 		"errorType":       status.ErrorType,
 		"progressMessage": status.ProgressMsg,
 		"contexts":        contexts,
-	})
+	}
+	// While the initial sync is running, expose per-kind readiness so the
+	// frontend can render the app shell progressively instead of the splash.
+	// GetSyncSnapshot is deliberately cheap (no lister walks) — this endpoint
+	// is polled sub-second during the connecting phase.
+	if status.State == k8s.StateConnecting {
+		if syncing := k8s.GetSyncingResourceCache(); syncing != nil {
+			resp["syncStatus"] = syncing.GetSyncSnapshot()
+		} else if promoted := k8s.GetResourceCache(); promoted != nil {
+			// Phase-1 done but later subsystems still initializing: keep the
+			// progressive shell up (deferred kinds keep ticking) instead of
+			// collapsing back to the splash until 'connected'.
+			resp["syncStatus"] = promoted.GetSyncSnapshot()
+		}
+	}
+	s.writeJSON(w, resp)
 }
 
 func (s *Server) handleConnectionRetry(w http.ResponseWriter, r *http.Request) {

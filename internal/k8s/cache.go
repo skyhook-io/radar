@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -304,6 +305,17 @@ var (
 	resourceCache *ResourceCache
 	cacheOnce     = new(sync.Once)
 	cacheMu       sync.Mutex
+	// syncingCache is the mid-Phase-1 handle published by OnInformersStarted:
+	// structurally complete but not synced — every read through it MUST gate on
+	// KindReadinessFor. Cleared on promotion (resourceCache assigned), on init
+	// failure, and on reset. Guarded by cacheMu.
+	syncingCache *ResourceCache
+	// cacheGeneration invalidates in-flight cache constructions: a context
+	// switch bumps it (via ResetResourceCache), and any publish/promote/clear
+	// from an older generation becomes a no-op — without this, an old
+	// cluster's construction finishing late could republish that cluster's
+	// cache over the new one. Guarded by cacheMu.
+	cacheGeneration uint64
 )
 
 // tombstones retains recently-seen resource enrichment (owner/labels/createdAt)
@@ -324,6 +336,14 @@ func InitResourceCache(ctx context.Context) error {
 			initErr = fmt.Errorf("cannot create resource cache: k8s client not initialized")
 			return
 		}
+
+		// Generation snapshot at entry — BEFORE the permission probes. A
+		// context switch during probing bumps the generation, and this
+		// construction must not adopt the new one: every publish below would
+		// otherwise install the old cluster's cache under the new identity.
+		cacheMu.Lock()
+		gen := cacheGeneration
+		cacheMu.Unlock()
 
 		// Probe per-resource list access before creating informers. The
 		// returned scope map is authoritative for both enablement and
@@ -417,27 +437,149 @@ func InitResourceCache(ctx context.Context) error {
 			IsNoisyResource: isNoisyResource,
 		}
 
-		core, err := k8score.NewResourceCache(cfg)
-		if err != nil {
-			initErr = err
-			return
-		}
-
-		initialSyncComplete = core.IsSyncComplete()
-
-		resourceCache = &ResourceCache{
-			ResourceCache:    core,
+		wrapped := &ResourceCache{
 			secretsEnabled:   scopes["secrets"].Enabled,
 			argoDrift:        newArgoDriftTracker(),
 			secretWriteTimes: secretWriteTimes,
 		}
+		// OnInformersStarted runs synchronously inside NewResourceCache, so
+		// wrapped.ResourceCache is visible-before-publication under cacheMu.
+		cfg.OnInformersStarted = func(syncing *k8score.ResourceCache) {
+			wrapped.ResourceCache = syncing
+			publishSyncingCache(wrapped, gen)
+		}
+		cfg.DebugSyncDelays = parseDebugSyncDelays(os.Getenv("RADAR_DEBUG_SYNC_DELAY"))
+
+		core, err := k8score.NewResourceCache(cfg)
+		if err != nil {
+			clearSyncingCacheForGen(gen)
+			initErr = err
+			return
+		}
+
+		// Only the no-enabled-resources path (OnInformersStarted never ran)
+		// reaches here with a nil embedded pointer; when the callback did run
+		// it already set the same core, and rewriting it would race with
+		// handlers reading the published wrapper.
+		if wrapped.ResourceCache == nil {
+			wrapped.ResourceCache = core
+		}
+
+		if !promoteCache(wrapped, gen) {
+			core.Stop()
+			initErr = fmt.Errorf("cluster changed during cache initialization")
+			return
+		}
+		initialSyncComplete = core.IsSyncComplete()
 	})
 	return initErr
+}
+
+// publishSyncingCache installs wrapped as the mid-sync handle unless the
+// cache generation moved (a context switch invalidated this construction).
+func publishSyncingCache(wrapped *ResourceCache, gen uint64) {
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+	if cacheGeneration == gen {
+		syncingCache = wrapped
+	}
+}
+
+// clearSyncingCacheForGen retires the mid-sync handle after a failed
+// construction — but only for its own generation, so a stale failure can't
+// clear a newer construction's handle.
+func clearSyncingCacheForGen(gen uint64) {
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+	if cacheGeneration == gen {
+		syncingCache = nil
+	}
+}
+
+// promoteCache installs wrapped as the ready singleton and retires the
+// mid-sync handle. Returns false when the generation moved — the caller owns
+// stopping the now-orphaned core.
+func promoteCache(wrapped *ResourceCache, gen uint64) bool {
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+	if cacheGeneration != gen {
+		return false
+	}
+	resourceCache = wrapped
+	syncingCache = nil
+	return true
+}
+
+// parseDebugSyncDelays parses RADAR_DEBUG_SYNC_DELAY — a development seam for
+// exercising the progressive-readiness window on fast clusters. Accepts a
+// bare duration ("60s", applied to pods) or per-kind pairs
+// ("pods=60s,deployments=10s"). Returns nil for empty/invalid input.
+func parseDebugSyncDelays(raw string) map[string]time.Duration {
+	if raw == "" {
+		return nil
+	}
+	delays := map[string]time.Duration{}
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		key, val, found := strings.Cut(part, "=")
+		if !found {
+			key, val = "pods", part
+		}
+		d, err := time.ParseDuration(strings.TrimSpace(val))
+		if err != nil || d <= 0 {
+			log.Printf("[cache] ignoring invalid RADAR_DEBUG_SYNC_DELAY entry %q: %v", part, err)
+			continue
+		}
+		delays[strings.TrimSpace(key)] = d
+	}
+	if len(delays) == 0 {
+		return nil
+	}
+	log.Printf("[cache] DEBUG: artificial informer sync delays active: %v", delays)
+	return delays
 }
 
 // GetResourceCache returns the singleton cache instance.
 func GetResourceCache() *ResourceCache {
 	return resourceCache
+}
+
+// KindReadiness re-exports the k8score readiness vocabulary for handler use.
+type KindReadiness = k8score.KindReadiness
+
+const (
+	KindUnavailable = k8score.KindUnavailable
+	KindPending     = k8score.KindPending
+	KindReady       = k8score.KindReady
+	KindFailed      = k8score.KindFailed
+)
+
+// GetSyncingResourceCache returns the mid-sync cache handle published by
+// OnInformersStarted, or nil when no construction is in flight. Reads through
+// it MUST gate on KindReadinessFor — its listers are incomplete by definition.
+func GetSyncingResourceCache() *ResourceCache {
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+	return syncingCache
+}
+
+// ReadableCacheForKind picks the cache a typed-kind read should serve from:
+// the promoted singleton when it exists (post-Phase-1 — readiness still
+// gates promoted/deferred kinds that are syncing in background), otherwise
+// the mid-sync handle. A nil cache means no construction has produced a
+// handle yet (probing, or disconnected) — callers respond "not ready".
+// key is an informer key (lowercase plural, e.g. "pods").
+func ReadableCacheForKind(key string) (*ResourceCache, KindReadiness) {
+	if c := GetResourceCache(); c != nil {
+		return c, c.KindReadinessFor(key)
+	}
+	if c := GetSyncingResourceCache(); c != nil {
+		return c, c.KindReadinessFor(key)
+	}
+	return nil, KindUnavailable
 }
 
 // ResetResourceCache stops and clears the resource cache so it can be
@@ -446,6 +588,14 @@ func ResetResourceCache() {
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
 
+	// Invalidate any in-flight construction: its publishes become no-ops and
+	// its core is stopped on return (see the generation check in
+	// InitResourceCache).
+	cacheGeneration++
+	if syncingCache != nil {
+		syncingCache.Stop()
+		syncingCache = nil
+	}
 	if resourceCache != nil {
 		resourceCache.Stop()
 		resourceCache = nil

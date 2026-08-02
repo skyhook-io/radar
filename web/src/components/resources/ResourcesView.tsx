@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ApiError, debugNamespaceLog, fetchJSON, isForbiddenError, useCapabilities, useNamespaceCapabilities, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAudit } from '../../api/client'
+import { ApiError, debugNamespaceLog, fetchJSON, isForbiddenError, isKindSyncPending, useCapabilities, useNamespaceCapabilities, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAudit } from '../../api/client'
 import { isBadgeWorthy } from '../../utils/auditBadges'
 import type { AuditBadgeMessage } from '@skyhook-io/k8s-ui'
 import { apiUrl, getAuthHeaders, getCredentialsMode, stripBasename } from '../../api/config'
@@ -189,7 +189,12 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const selectedCountKnown = selectedCountKey ? hasResourceCount(countsData?.counts, selectedCountKey) : false
   const selectedCountUnavailable = selectedCountKey ? countsData?.unavailable?.includes(selectedCountKey) ?? false : false
   const isSelectedKindGuarded = selectedCountKey !== '' && LARGE_RESOURCE_LIST_GUARD_KEYS.has(selectedCountKey)
-  const waitingForGuardCount = isSelectedKindGuarded && !countsData && !countsIsError
+  // While still 'connecting', /resource-counts is unavailable — its error
+  // must NOT unlatch the large-list guard, or a huge Pods list could fetch
+  // unguarded on exactly the clusters the guard protects. Counts arrive
+  // right after 'connected' and settle the guard then.
+  const syncShellActive = connection.state === 'connecting'
+  const waitingForGuardCount = isSelectedKindGuarded && !countsData && (!countsIsError || syncShellActive)
   const largeListBlocked = isSelectedKindGuarded && countsData != null && (selectedCountUnavailable || (selectedCountKnown && (selectedCount ?? 0) > LARGE_RESOURCE_LIST_LIMIT))
   const selectedKindQueryBlocked = waitingForGuardCount || largeListBlocked
   const podCount = countsData?.counts.Pod
@@ -253,8 +258,15 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     refetchInterval: 120000, // Safety net — SSE k8s_event drives near-real-time invalidation
     retry: (failureCount: number, error: Error) => {
       if (isForbiddenError(error)) return false
+      // Initial informer sync still running for this kind: keep the query in
+      // its loading state and retry until the kind becomes readable — the
+      // header's sync-progress label explains the wait. The terminal variant
+      // (kind_sync_failed) falls through to the normal error path.
+      if (isKindSyncPending(error)) return true
       return failureCount < 3
     },
+    retryDelay: (failureCount: number, error: Error) =>
+      isKindSyncPending(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
   })
 
   // Map to ResourceQueryResult shape

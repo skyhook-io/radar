@@ -2,7 +2,7 @@ import { createContext, useContext, useState, useCallback, useEffect, useRef, Re
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import type { ContextInfo } from '../types'
 import { getApiBase } from '../api/config'
-import { apiFetch } from '../api/client'
+import { apiFetch, type SyncStatusSnapshot } from '../api/client'
 
 export type ConnectionStateType = 'connected' | 'disconnected' | 'connecting'
 
@@ -13,6 +13,10 @@ export interface ConnectionState {
   error?: string
   errorType?: string // config, auth, rbac, network, timeout, tls, unknown
   progressMessage?: string
+  // Per-kind readiness while the initial informer sync runs ('connecting'
+  // with informers started). Drives the progressive app shell — absent once
+  // connected or before informers exist.
+  syncStatus?: SyncStatusSnapshot
 }
 
 interface ConnectionStatusResponse extends ConnectionState {
@@ -124,10 +128,25 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
           error: data.error,
           errorType: data.errorType,
           progressMessage: data.progressMessage,
+          syncStatus: data.syncStatus,
         })
+        // The progressive shell renders real resource lists while still
+        // 'connecting'. A query client shared across cluster mounts may hold
+        // another cluster's data under identical keys — drop it before the
+        // shell can show it (the 'connected' path repeats this for the
+        // full-refresh case).
+        if (data.state === 'connecting' && data.syncStatus && cacheWarmAtMountRef.current) {
+          cacheWarmAtMountRef.current = false
+          queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== 'connection-status' })
+        }
+      } else if (data.state === 'connecting' && data.syncStatus) {
+        // SSE owns the state fields, but connection_state frames don't carry
+        // per-kind sync progress — merge it from the poll so the progressive
+        // shell keeps ticking while still connecting.
+        setConnection(prev => prev.state === 'connecting' ? { ...prev, syncStatus: data.syncStatus } : prev)
       }
     }
-  }, [data])
+  }, [data, queryClient])
 
   // Retry mutation
   const retryMutation = useMutation({
@@ -142,6 +161,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         state: 'connecting',
         error: undefined,
         progressMessage: 'Connecting to cluster...',
+        // A retry is a fresh attempt — per-kind progress from the previous
+        // attempt would mislabel readiness until the next poll.
+        syncStatus: undefined,
       }))
     },
     onSuccess: (result) => {
@@ -253,6 +275,12 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       // state and wait for either 'connected' (sync done) or 'disconnected' (failure).
       if (prev.state === 'connected' && status.state === 'connecting') {
         return prev
+      }
+      // connection_state frames don't carry per-kind sync progress — keep the
+      // last polled snapshot while still connecting, or each SSE progress
+      // frame would flicker the progressive shell back to the splash.
+      if (status.state === 'connecting' && !status.syncStatus && prev.state === 'connecting') {
+        return { ...status, syncStatus: prev.syncStatus }
       }
       return status
     })

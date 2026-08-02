@@ -51,6 +51,17 @@ type ResourceCache struct {
 	informerMu       sync.RWMutex
 	promotedKinds    []string // set when SyncTimeout fires; empty on normal sync
 	syncStartTime    time.Time
+
+	// syncFnsByKey holds each enabled kind's live HasSynced func, keyed by
+	// informer key ("pods"). Immutable after construction — safe for
+	// concurrent reads without informerMu. Backs KindReadiness, which must
+	// answer from the informer's own state (statuses lag behind by design).
+	syncFnsByKey map[string]cache.InformerSynced
+	// backgroundKeys marks kinds that sync independently with no deadline
+	// (Events). They share deferredSynced tracking but must never classify
+	// as failed off the deferred-timeout flag — a late Events LIST on a big
+	// cluster is normal, not terminal.
+	backgroundKeys map[string]bool
 }
 
 // InformerSyncStatus tracks the sync state of a single informer.
@@ -577,15 +588,36 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 			run = inf.Run
 		}
 
+		if delay := cfg.DebugSyncDelays[s.key]; delay > 0 {
+			inner := run
+			run = func(stopCh <-chan struct{}) {
+				stdlog.Printf("DEBUG: delaying %s informer start by %v (DebugSyncDelays)", s.key, delay)
+				select {
+				case <-time.After(delay):
+				case <-stopCh:
+					return
+				}
+				inner(stopCh)
+			}
+		}
+
 		isDeferred := deferredTypes[s.key]
 		entry := informerEntry{kind: s.kind, key: s.key, deferred: isDeferred, synced: synced, run: run}
 		allEntries = append(allEntries, entry)
+		if rc.syncFnsByKey == nil {
+			rc.syncFnsByKey = map[string]cache.InformerSynced{}
+		}
+		rc.syncFnsByKey[s.key] = synced
 
 		if isDeferred && s.isEvent {
 			// Events sync independently — they can take 60s+ on large clusters
 			// and shouldn't block topology completion or warmup transition.
 			backgroundSyncFuncs = append(backgroundSyncFuncs, synced)
 			backgroundKeys = append(backgroundKeys, s.key)
+			if rc.backgroundKeys == nil {
+				rc.backgroundKeys = map[string]bool{}
+			}
+			rc.backgroundKeys[s.key] = true
 		} else if isDeferred {
 			deferredSyncFuncs = append(deferredSyncFuncs, synced)
 			deferredKeys = append(deferredKeys, s.key)
@@ -621,6 +653,7 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 		}
 	}
 
+
 	if len(backgroundKeys) > 0 {
 		stdlog.Printf("Starting resource cache: %d critical + %d deferred + %d background informers (%d total)",
 			len(criticalSyncFuncs), len(deferredSyncFuncs), len(backgroundSyncFuncs), enabledCount)
@@ -630,6 +663,15 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 	}
 	syncStart := time.Now()
 	rc.syncStartTime = syncStart
+
+	// Hand out the still-syncing handle for progressive per-kind reads.
+	// Deliberately after informer start + status registration + sync-start
+	// stamping and before the Phase-1 wait: the handle is structurally
+	// complete, only sync state is in flux, and KindReadinessFor answers
+	// that per kind.
+	if cfg.OnInformersStarted != nil {
+		cfg.OnInformersStarted(rc)
+	}
 
 	// Track per-informer sync completion in background goroutines.
 	// Each goroutine updates the InformerSyncStatus when its informer syncs.
@@ -1722,6 +1764,122 @@ func (rc *ResourceCache) isReady(key string) bool {
 	rc.deferredMu.RLock()
 	defer rc.deferredMu.RUnlock()
 	return rc.deferredSynced[key]
+}
+
+// KindReadiness classifies a typed kind's serveability. It is meaningful at
+// any point in the cache lifecycle, including during the Phase-1 sync wait
+// (via the OnInformersStarted handle).
+type KindReadiness int
+
+const (
+	// KindUnavailable: no informer for this kind (RBAC-disabled, unknown key,
+	// or not part of the typed set). Callers fall through to their existing
+	// forbidden/not-found/dynamic semantics.
+	KindUnavailable KindReadiness = iota
+	// KindPending: the informer exists but its initial LIST hasn't completed.
+	// Serving now would render a partial store as truth — callers must
+	// respond "still loading", never an incomplete list.
+	KindPending
+	// KindReady: the informer's store is complete; serve normally.
+	KindReady
+	// KindFailed: the deferred-sync deadline fired with this kind still
+	// unsynced — terminal for this cache generation. Callers should return a
+	// terminal error, not "retry shortly".
+	KindFailed
+)
+
+// KindReadinessFor reports whether key can be served from this cache right
+// now. Keys are informer keys (lowercase plural, e.g. "pods") — the same
+// vocabulary as DeferredTypes and InformerSyncStatus.Key.
+func (rc *ResourceCache) KindReadinessFor(key string) KindReadiness {
+	if rc == nil || !rc.isEnabled(key) {
+		return KindUnavailable
+	}
+	fn := rc.syncFnsByKey[key]
+	if fn == nil {
+		return KindUnavailable
+	}
+	if fn() {
+		return KindReady
+	}
+	if rc.deferredFailed.Load() && !rc.backgroundKeys[key] {
+		// The give-up deadline only covers kinds in the deferred tracking set
+		// (statically deferred + promoted criticals). A kind mid-Phase-1 is
+		// still pending even if a previous generation's flag lingers — the
+		// tracking map tells them apart. Background kinds (Events) share the
+		// tracking map but have no deadline: they stay pending, not failed.
+		rc.deferredMu.RLock()
+		_, tracked := rc.deferredSynced[key]
+		rc.deferredMu.RUnlock()
+		if tracked {
+			return KindFailed
+		}
+	}
+	return KindPending
+}
+
+// KindSyncState is one kind's live sync state in a SyncSnapshot.
+type KindSyncState struct {
+	Kind     string `json:"kind"`
+	Key      string `json:"key"`
+	Synced   bool   `json:"synced"`
+	Deferred bool   `json:"deferred"`
+}
+
+// SyncSnapshot is a lightweight progress report for connection-status
+// payloads: per-kind live sync state without the lister walks GetSyncStatus
+// does for item counts. Cheap enough for sub-second polling during sync.
+type SyncSnapshot struct {
+	Phase          SyncPhase       `json:"phase"`
+	CriticalTotal  int             `json:"criticalTotal"`
+	CriticalSynced int             `json:"criticalSynced"`
+	DeferredTotal  int             `json:"deferredTotal"`
+	DeferredSynced int             `json:"deferredSynced"`
+	Kinds          []KindSyncState `json:"kinds"`
+}
+
+// GetSyncSnapshot returns the live per-kind sync state. Unlike GetSyncStatus
+// it reads each informer's HasSynced directly (no status-goroutine lag) and
+// never touches listers.
+func (rc *ResourceCache) GetSyncSnapshot() SyncSnapshot {
+	if rc == nil {
+		return SyncSnapshot{Phase: SyncPhaseNotStarted}
+	}
+	rc.informerMu.RLock()
+	statuses := make([]InformerSyncStatus, len(rc.informerStatuses))
+	copy(statuses, rc.informerStatuses)
+	rc.informerMu.RUnlock()
+
+	snap := SyncSnapshot{Kinds: make([]KindSyncState, 0, len(statuses))}
+	for _, s := range statuses {
+		synced := false
+		if fn := rc.syncFnsByKey[s.Key]; fn != nil {
+			synced = fn()
+		}
+		snap.Kinds = append(snap.Kinds, KindSyncState{Kind: s.Kind, Key: s.Key, Synced: synced, Deferred: s.Deferred})
+		if s.Deferred {
+			snap.DeferredTotal++
+			if synced {
+				snap.DeferredSynced++
+			}
+		} else {
+			snap.CriticalTotal++
+			if synced {
+				snap.CriticalSynced++
+			}
+		}
+	}
+	switch {
+	case rc.syncStartTime.IsZero():
+		snap.Phase = SyncPhaseNotStarted
+	case !rc.syncComplete.Load():
+		snap.Phase = SyncPhaseCritical
+	case !rc.IsDeferredSynced():
+		snap.Phase = SyncPhaseDeferred
+	default:
+		snap.Phase = SyncPhaseComplete
+	}
+	return snap
 }
 
 // IsDeferredPending returns true when the resource type passed RBAC checks

@@ -237,6 +237,22 @@ type CacheConfig struct {
 	// unaffected. Zero means wait indefinitely.
 	DeferredSyncTimeout time.Duration
 
+	// OnInformersStarted is invoked once, after all critical informers have
+	// been started and per-informer tracking is registered, but before the
+	// blocking Phase-1 sync wait. It hands callers the cache while it is
+	// still syncing so they can serve per-kind progressive reads (see
+	// KindReadiness). The handle is fully constructed but NOT synced —
+	// callers must gate reads on per-kind readiness, never assume complete
+	// listers. May be nil. Not called on the no-enabled-resources path
+	// (the cache returns already-complete there).
+	OnInformersStarted func(*ResourceCache)
+
+	// DebugSyncDelays artificially delays the start of the named informers
+	// (keyed by informer key, e.g. "pods") — a development seam for
+	// exercising the progressive-readiness window on fast clusters. Never
+	// set in production paths.
+	DebugSyncDelays map[string]time.Duration
+
 	// ListPageSize, when > 0, makes high-cardinality informers fetch their
 	// initial LIST in pages of this size via a consistent (resourceVersion="")
 	// read instead of one unpaginated response. This mitigates response-read
