@@ -156,6 +156,9 @@ interface WorkloadViewProps {
   workloadPods?: WorkloadPodInfo[]
   workloadPodsLoading?: boolean
   workloadPodsError?: Error | null
+  /** Wired by the host only while this workload has pods awaiting scheduling
+   *  and Karpenter is available — absent otherwise, so no dead affordance. */
+  onEvaluateCapacity?: () => void
   /** Full objects for service/route refs related to this workload. Optional;
    *  overview falls back to relationship refs when hosts do not fetch them. */
   servingResources?: ServingResourceDetail[]
@@ -349,6 +352,7 @@ export function WorkloadView({
   workloadPods,
   workloadPodsLoading = false,
   workloadPodsError = null,
+  onEvaluateCapacity,
   servingResources,
   renderServicePortAction,
   renderServicePortPanel,
@@ -1027,6 +1031,7 @@ export function WorkloadView({
               extraContent={renderOverviewExtra && renderOverviewExtra({ kind, namespace, name })}
               introContent={overviewIntro}
               leadContent={hasOperationalIssues && renderOverviewLead ? renderOverviewLead({ kind, namespace, name }) : undefined}
+              onEvaluateCapacity={onEvaluateCapacity}
             />
         )}
         {effectiveTab === 'topology' && (
@@ -1471,6 +1476,7 @@ function InfoTab({
   extraContent,
   introContent,
   leadContent,
+  onEvaluateCapacity,
 }: {
   resource: any
   selectedResource: SelectedResource
@@ -1481,6 +1487,7 @@ function InfoTab({
   workloadPods?: WorkloadPodInfo[]
   workloadPodsLoading?: boolean
   workloadPodsError?: Error | null
+  onEvaluateCapacity?: () => void
   servingResources?: ServingResourceDetail[]
   renderServicePortAction?: (props: ServicePortRenderProps) => ReactNode
   renderServicePortPanel?: (props: ServicePortRenderProps) => ReactNode
@@ -1591,6 +1598,7 @@ function InfoTab({
       extraContent={extraContent}
       introContent={introContent}
       leadContent={leadContent}
+      onEvaluateCapacity={onEvaluateCapacity}
     />
   )
 }
@@ -1646,6 +1654,7 @@ function WorkloadOverviewTab({
   extraContent,
   introContent,
   leadContent,
+  onEvaluateCapacity,
 }: {
   resource: any
   selectedResource: SelectedResource
@@ -1655,6 +1664,7 @@ function WorkloadOverviewTab({
   workloadPods?: WorkloadPodInfo[]
   workloadPodsLoading?: boolean
   workloadPodsError?: Error | null
+  onEvaluateCapacity?: () => void
   servingResources?: ServingResourceDetail[]
   renderServicePortAction?: (props: ServicePortRenderProps) => ReactNode
   renderServicePortPanel?: (props: ServicePortRenderProps) => ReactNode
@@ -1706,6 +1716,18 @@ function WorkloadOverviewTab({
             podSummary={podSummary}
             servingSummary={showServingPath ? buildServingStripSummary(servingRelationshipGroups, servingResources) : undefined}
           />
+
+          {onEvaluateCapacity && (
+            <div>
+              <button
+                type="button"
+                onClick={onEvaluateCapacity}
+                className="text-xs font-medium text-accent-text hover:underline"
+              >
+                Evaluate pending pods against Karpenter NodePools →
+              </button>
+            </div>
+          )}
 
           <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_360px] 2xl:grid-cols-[minmax(0,1fr)_400px]">
             <div className="space-y-4">

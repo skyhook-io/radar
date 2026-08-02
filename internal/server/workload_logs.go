@@ -42,6 +42,7 @@ type WorkloadPodInfo struct {
 	Containers            []string                   `json:"containers"`
 	Ready                 bool                       `json:"ready"`
 	Phase                 string                     `json:"phase,omitempty"`
+	NodeName              string                     `json:"nodeName,omitempty"`
 	HealthLevel           string                     `json:"healthLevel,omitempty"`
 	Reason                string                     `json:"reason,omitempty"`
 	Message               string                     `json:"message,omitempty"`
@@ -631,6 +632,7 @@ func buildPodInfo(pod *corev1.Pod, now time.Time) WorkloadPodInfo {
 		Containers:            containers,
 		Ready:                 isPodReady(pod),
 		Phase:                 string(pod.Status.Phase),
+		NodeName:              pod.Spec.NodeName,
 		HealthLevel:           string(verdict.Level),
 		Reason:                verdict.Reason,
 		Message:               verdict.Message,

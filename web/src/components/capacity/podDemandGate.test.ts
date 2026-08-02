@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { podAwaitsScheduling } from "./podDemandGate";
+import { podAwaitsScheduling, workloadPodAwaitsScheduling } from "./podDemandGate";
 
 describe("podAwaitsScheduling", () => {
   it("admits a Pending pod the scheduler has not placed", () => {
@@ -27,5 +27,21 @@ describe("podAwaitsScheduling", () => {
     expect(podAwaitsScheduling({ status: { phase: "Succeeded" } })).toBe(false);
     expect(podAwaitsScheduling({})).toBe(false);
     expect(podAwaitsScheduling(undefined)).toBe(false);
+  });
+});
+
+describe("workloadPodAwaitsScheduling (flat WorkloadPodInfo shape)", () => {
+  it("admits an unscheduled Pending pod", () => {
+    expect(workloadPodAwaitsScheduling({ phase: "Pending" })).toBe(true);
+  });
+  it("rejects Pending pods already bound to a node", () => {
+    expect(
+      workloadPodAwaitsScheduling({ phase: "Pending", nodeName: "ip-10-0-0-1" }),
+    ).toBe(false);
+  });
+  it("rejects running, empty, and absent pods", () => {
+    expect(workloadPodAwaitsScheduling({ phase: "Running" })).toBe(false);
+    expect(workloadPodAwaitsScheduling({})).toBe(false);
+    expect(workloadPodAwaitsScheduling(undefined)).toBe(false);
   });
 });

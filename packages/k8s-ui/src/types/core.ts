@@ -1315,6 +1315,7 @@ export interface WorkloadPodInfo {
   containers: string[]
   ready: boolean
   phase?: string
+  nodeName?: string
   healthLevel?: HealthStatus
   reason?: string
   message?: string

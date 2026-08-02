@@ -12,3 +12,11 @@ interface PodLike {
 export function podAwaitsScheduling(pod: PodLike | undefined | null): boolean {
   return pod?.status?.phase === "Pending" && !pod?.spec?.nodeName;
 }
+
+// The workload page's pods arrive as the flattened WorkloadPodInfo wire shape
+// rather than full Pod objects — same rule, different field paths.
+export function workloadPodAwaitsScheduling(
+  pod: { phase?: string; nodeName?: string } | undefined | null,
+): boolean {
+  return pod?.phase === "Pending" && !pod?.nodeName;
+}
