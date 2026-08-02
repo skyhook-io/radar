@@ -275,12 +275,12 @@ export function CapacityActivity({
                 Window {formatTimestamp(response.observation.startedAt)} →{" "}
                 {formatTimestamp(response.observation.endedAt)}
               </span>
-              {response.observation.sources.length > 0 && (
-                <span>· {response.observation.sources.join(" · ")}</span>
-              )}
-              <span>· {retentionLabel(response.observation.retention)}</span>
               <WithTooltip
-                tip={`An observation window, not a durable audit log. ${coverageMessage(response.coverage.timeline, "Retained activity")}`}
+                tip={`${
+                  response.observation.sources.length > 0
+                    ? `Sources: ${response.observation.sources.join(", ")} · `
+                    : ""
+                }${retentionLabel(response.observation.retention)}. An observation window, not a durable audit log. ${coverageMessage(response.coverage.timeline, "Retained activity")}`}
               >
                 <span aria-label="About the observation window">ⓘ</span>
               </WithTooltip>

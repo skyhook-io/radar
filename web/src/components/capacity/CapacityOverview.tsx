@@ -468,9 +468,14 @@ export function CapacityOverview({
             certainty={coverageCertainty(coverage.pods)}
             certaintyTitle={coverageMessage(coverage.pods, "Pending demand")}
             attention={(summary.pendingPodCount ?? 0) > 0}
-            linkLabel={karpenterActive ? "Open Demand →" : undefined}
+            // Without Karpenter there is no Demand screen, but a pending count
+            // must never dead-end: Issues carries the scheduler verdicts on
+            // every cluster.
+            linkLabel={karpenterActive ? "Open Demand →" : "View issues →"}
             onClick={
-              karpenterActive ? () => onNavigate("/capacity/demand") : undefined
+              karpenterActive
+                ? () => onNavigate("/capacity/demand")
+                : () => onNavigate("/issues")
             }
           />
         )}

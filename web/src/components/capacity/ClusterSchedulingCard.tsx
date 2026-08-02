@@ -444,10 +444,12 @@ function SchedulingBarRowView({ row }: { row: SchedulingBarRow }) {
               ? resourceLabel(row.resource)
               : row.resource}
           </span>
-          <CertaintyGlyph
-            certainty={row.certainty}
-            title={rowGlyphTitle(row)}
-          />
+          {row.certainty !== "exact" && (
+            <CertaintyGlyph
+              certainty={row.certainty}
+              title={rowGlyphTitle(row)}
+            />
+          )}
         </span>
         {row.allocatable === null ? (
           <span className="text-xs text-theme-text-tertiary">

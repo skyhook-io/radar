@@ -1161,7 +1161,10 @@ export function KpiTile({
         <span className="text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
           {label}
         </span>
-        {certainty && (
+        {certainty && certainty !== "exact" && (
+          // Deviation-only: an = on every tile trains the eye to skip the one
+          // glyph that matters. Exact is the quiet default; ≥ ≤ ? announce
+          // themselves.
           <CertaintyGlyph certainty={certainty} title={certaintyTitle} />
         )}
         {attention && (

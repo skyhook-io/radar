@@ -1167,6 +1167,39 @@ describe("CapacityView overview", () => {
     }
   });
 
+  it("shows certainty glyphs only on deviation — exact is the quiet default", () => {
+    const base = overview();
+    const clean = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], base),
+    );
+    // Fully-observed tiles carry no = chip; the aria notes disappear with them.
+    expect(clean).not.toContain("Node inventory observed");
+
+    const bounded = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], {
+        ...base,
+        coverage: {
+          ...meta.coverage,
+          pods: sourceCoverage("available", undefined, "all_authorized_namespaces"),
+        },
+      }),
+    );
+    // Deviation still announces itself.
+    expect(bounded).toContain("≥");
+  });
+
+  it("the pending tile never dead-ends on a Karpenter-less cluster", () => {
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], {
+        ...overview({ poolCount: undefined, claimCount: undefined, managers: [] }),
+        state: "not_detected",
+        pools: [],
+      }),
+    );
+    expect(html).toContain("View issues");
+    expect(html).not.toContain("Open Demand");
+  });
+
   it("splits platform identity from autoscaler observation when the source was read", () => {
     const managerlessGroup: CapacityGroupSummary = {
       ...gkeGroup,
