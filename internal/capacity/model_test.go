@@ -1191,3 +1191,54 @@ func TestAcceleratorFactEchoesDeclaredRequirementsOnly(t *testing.T) {
 		t.Fatalf("azure fact = %+v", azure)
 	}
 }
+
+func TestAcceleratorFamilyRecognitionByCloudConvention(t *testing.T) {
+	instanceType := func(values ...string) capacityapi.Requirement {
+		return capacityapi.Requirement{Key: "node.kubernetes.io/instance-type", Operator: "In", Values: values}
+	}
+
+	// The live-fixture shape: GPU-ness declared purely by instance-type names.
+	fact := acceleratorFact([]capacityapi.Requirement{instanceType("g5.xlarge", "g5.2xlarge", "p3.2xlarge")})
+	if fact == nil || fact.Summary != "Declared accelerator pool — node.kubernetes.io/instance-type In [g5.xlarge, g5.2xlarge, p3.2xlarge]" {
+		t.Fatalf("AWS name-pinned pool fact = %+v", fact)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		values []string
+		want   bool
+	}{
+		{"aws mixed gpu and general", []string{"m5.large", "g4dn.xlarge"}, true},
+		{"aws general only", []string{"m5.large", "c5.large", "t3.micro", "i3.large", "d3.xlarge"}, false},
+		{"aws trainium and inferentia", []string{"trn1.2xlarge", "inf2.xlarge"}, true},
+		{"gcp accelerator-optimized", []string{"a2-highgpu-1g"}, true},
+		{"gcp l4", []string{"g2-standard-4"}, true},
+		{"gcp general", []string{"n2-standard-4", "e2-medium"}, false},
+		{"azure n-series", []string{"Standard_NC6s_v3"}, true},
+		{"azure general", []string{"Standard_D4s_v5"}, false},
+	} {
+		got := acceleratorFact([]capacityapi.Requirement{instanceType(tc.values...)}) != nil
+		if got != tc.want {
+			t.Errorf("%s: fact fired = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+
+	family := capacityapi.Requirement{Key: "karpenter.k8s.aws/instance-family", Operator: "In", Values: []string{"g5", "p4d"}}
+	if acceleratorFact([]capacityapi.Requirement{family}) == nil {
+		t.Fatal("instance-family values must be recognized by the same prefix rule")
+	}
+	category := capacityapi.Requirement{Key: "karpenter.k8s.aws/instance-category", Operator: "In", Values: []string{"g"}}
+	if acceleratorFact([]capacityapi.Requirement{category}) == nil {
+		t.Fatal("instance-category g is AWS's own accelerated-computing category")
+	}
+	// Only In is inspectable: an exclusion cannot declare what the pool IS.
+	notIn := capacityapi.Requirement{Key: "node.kubernetes.io/instance-type", Operator: "NotIn", Values: []string{"g5.xlarge"}}
+	if acceleratorFact([]capacityapi.Requirement{notIn}) != nil {
+		t.Fatal("NotIn must not fire the fact")
+	}
+	// Value lists cap at four in the summary.
+	long := acceleratorFact([]capacityapi.Requirement{instanceType("g5.xlarge", "g5.2xlarge", "g5.4xlarge", "g5.8xlarge", "g5.12xlarge", "g5.16xlarge")})
+	if long == nil || long.Summary != "Declared accelerator pool — node.kubernetes.io/instance-type In [g5.xlarge, g5.2xlarge, g5.4xlarge, g5.8xlarge, +2 more]" {
+		t.Fatalf("capped summary = %+v", long)
+	}
+}

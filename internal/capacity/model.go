@@ -645,6 +645,62 @@ var acceleratorRequirementKeys = map[string]bool{
 	"cloud.google.com/gke-accelerator":            true,
 }
 
+// acceleratorInstanceKeys are the requirement keys whose VALUES name instance
+// types, families, or categories — recognizable at family-prefix granularity.
+var acceleratorInstanceKeys = map[string]bool{
+	"node.kubernetes.io/instance-type":    true,
+	"karpenter.k8s.aws/instance-family":   true,
+	"karpenter.k8s.aws/instance-category": true,
+	"karpenter.azure.com/sku-family":      true,
+}
+
+// isAcceleratorInstanceValue recognizes accelerator instance FAMILIES by each
+// cloud's naming convention — deliberately prefix-level, never a catalogue:
+// AWS accelerated families all begin p/g/trn/inf/dl before a digit (a
+// convention stable across generations — g6 and p5 matched the day they
+// shipped), GCP's accelerator-optimized families are a2/a3/a4/g2, Azure's are
+// the N series. A family under a new letter is simply missed — a silent null,
+// never a wrong claim.
+func isAcceleratorInstanceValue(value string) bool {
+	v := strings.ToLower(strings.TrimSpace(value))
+	switch v {
+	// AWS instance-category values.
+	case "g", "p", "inf", "trn", "dl":
+		return true
+	// Azure sku-family value.
+	case "n":
+		return true
+	}
+	for _, prefix := range []string{"p", "g", "trn", "inf", "dl"} {
+		if rest, ok := strings.CutPrefix(v, prefix); ok && len(rest) > 0 && rest[0] >= '0' && rest[0] <= '9' {
+			return true
+		}
+	}
+	for _, prefix := range []string{"a2-", "a3-", "a4-", "a4x-", "g2-"} {
+		if strings.HasPrefix(v, prefix) {
+			return true
+		}
+	}
+	return strings.HasPrefix(v, "standard_n") &&
+		(strings.HasPrefix(v, "standard_nc") || strings.HasPrefix(v, "standard_nd") ||
+			strings.HasPrefix(v, "standard_ng") || strings.HasPrefix(v, "standard_nv"))
+}
+
+func requirementDeclaresAccelerator(requirement capacityapi.Requirement) bool {
+	if acceleratorRequirementKeys[requirement.Key] {
+		return true
+	}
+	if !acceleratorInstanceKeys[requirement.Key] || requirement.Operator != "In" {
+		return false
+	}
+	for _, value := range requirement.Values {
+		if isAcceleratorInstanceValue(value) {
+			return true
+		}
+	}
+	return false
+}
+
 // acceleratorFact names the accelerator a pool is FOR when its declared
 // requirements say so. A scale-to-zero or failing GPU pool has no allocatable
 // to put the accelerator on the ledger — the declaration is the only truth
@@ -653,7 +709,7 @@ var acceleratorRequirementKeys = map[string]bool{
 func acceleratorFact(requirements []capacityapi.Requirement) *capacityapi.PostureFact {
 	var matched []capacityapi.Requirement
 	for _, requirement := range requirements {
-		if acceleratorRequirementKeys[requirement.Key] {
+		if requirementDeclaresAccelerator(requirement) {
 			matched = append(matched, requirement)
 		}
 	}
@@ -663,7 +719,12 @@ func acceleratorFact(requirements []capacityapi.Requirement) *capacityapi.Postur
 	lead := matched[0]
 	summary := "Declared accelerator pool — " + lead.Key + " " + lead.Operator
 	if len(lead.Values) > 0 {
-		summary += " [" + strings.Join(lead.Values, ", ") + "]"
+		values := lead.Values
+		if len(values) > 4 {
+			summary += " [" + strings.Join(values[:4], ", ") + ", +" + strconv.Itoa(len(values)-4) + " more]"
+		} else {
+			summary += " [" + strings.Join(values, ", ") + "]"
+		}
 	}
 	if len(matched) > 1 {
 		summary += " (+" + strconv.Itoa(len(matched)-1) + " more)"
