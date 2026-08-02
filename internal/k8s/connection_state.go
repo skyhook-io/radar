@@ -68,6 +68,7 @@ func SetConnectionStatus(status ConnectionStatus) {
 	switch status.State {
 	case StateConnected:
 		runtimeAuthRecoveryOwed.Store(false)
+		resetInconclusiveStreak()
 	case StateDisconnected:
 		if strings.HasPrefix(status.ErrorType, "auth") {
 			runtimeAuthRecoveryOwed.Store(true)

@@ -1014,6 +1014,37 @@ func TestDefaultRuntimeAuthEndpointProbeTreatsTLSAlertAsReachable(t *testing.T) 
 	}
 }
 
+func TestInconclusiveStreakResetsOnConclusiveOutcomes(t *testing.T) {
+	generation := prepareRuntimeAuthTest(t)
+
+	runtimeAuthChecksMu.Lock()
+	runtimeAuthInconclusiveStreak = 8
+	runtimeAuthChecksMu.Unlock()
+
+	// A connected publish is conclusive: the next episode's first
+	// inconclusive probe must restart at the short cooldown.
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "test-context"})
+	if got := nextInconclusiveCooldown(); got != runtimeAuthInconclusiveProbeCooldown {
+		t.Fatalf("cooldown after connected publish = %v, want %v", got, runtimeAuthInconclusiveProbeCooldown)
+	}
+
+	// So is a committed demotion.
+	runtimeAuthChecksMu.Lock()
+	runtimeAuthInconclusiveStreak = 8
+	runtimeAuthChecksMu.Unlock()
+	setRuntimeAuthProbe(func(context.Context) error {
+		return errors.New("getting credentials: exec plugin failed")
+	})
+	reportRuntimeAuthFailure(generation, errors.New("unauthorized"))
+	waitForRuntimeAuthCheck(t, generation)
+	if got := GetConnectionStatus().State; got != StateDisconnected {
+		t.Fatalf("state = %q, want demoted", got)
+	}
+	if got := nextInconclusiveCooldown(); got != runtimeAuthInconclusiveProbeCooldown {
+		t.Fatalf("cooldown after demotion = %v, want %v", got, runtimeAuthInconclusiveProbeCooldown)
+	}
+}
+
 func TestRuntimeAuthCooldownIsScopedToGeneration(t *testing.T) {
 	generation := prepareRuntimeAuthTest(t)
 	var probes atomic.Int32

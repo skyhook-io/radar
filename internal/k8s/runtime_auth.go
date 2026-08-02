@@ -233,6 +233,10 @@ func confirmRuntimeAuthFailure(generation, operationGeneration uint64) {
 	if !transitionConnectedToRuntimeAuthFailure() {
 		return
 	}
+	// Demotion is a conclusive outcome: the next episode's inconclusive
+	// probes must restart from the short cooldown, not inherit this
+	// episode's escalated one.
+	resetInconclusiveStreak()
 
 	// The whole teardown below runs while holding contextOpMu: connection-change
 	// and before-switch callbacks must never take contextOpMu or trigger a
@@ -274,6 +278,12 @@ func nextInconclusiveCooldown() time.Duration {
 		runtimeAuthInconclusiveStreak++
 	}
 	return cooldown
+}
+
+func resetInconclusiveStreak() {
+	runtimeAuthChecksMu.Lock()
+	runtimeAuthInconclusiveStreak = 0
+	runtimeAuthChecksMu.Unlock()
 }
 
 func runtimeAuthCooldown(err error) time.Duration {
