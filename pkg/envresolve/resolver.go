@@ -376,17 +376,17 @@ func expand(input string, bindings map[string]binding) (string, []SourceRef, boo
 			out.WriteString(input[i : end+1])
 			runtimeDependent = true
 		} else {
+			if dep.row.State == ValueMissing && dep.row.Optional {
+				out.WriteString(input[i : end+1])
+				i = end + 1
+				continue
+			}
 			deps = append(deps, SourceRef{Kind: "Variable", Variable: name})
 			if dep.row.Source.Kind != "Direct" {
 				deps = append(deps, dep.row.Source)
 			}
 			deps = append(deps, dep.row.Dependencies...)
 			sensitive = sensitive || dep.row.Sensitive
-			if dep.row.State == ValueMissing && dep.row.Optional {
-				out.WriteString(input[i : end+1])
-				i = end + 1
-				continue
-			}
 			available = available && dep.available
 			runtimeDependent = runtimeDependent || dep.row.RuntimeDependent
 			if rankValueState(dep.row.State) > rankValueState(dependencyState) {

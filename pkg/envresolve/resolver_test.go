@@ -115,7 +115,7 @@ func TestResolvePodDoesNotTreatOptionalMissingDependencyAsBlocking(t *testing.T)
 		Spec: corev1.PodSpec{Containers: []corev1.Container{{
 			Name: "app",
 			Env: []corev1.EnvVar{
-				{Name: "FEATURE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
+				{Name: "FEATURE", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
 					LocalObjectReference: corev1.LocalObjectReference{Name: "settings"}, Key: "feature", Optional: &optional,
 				}}},
 				{Name: "MESSAGE", Value: "feature=$(FEATURE)"},
@@ -126,9 +126,9 @@ func TestResolvePodDoesNotTreatOptionalMissingDependencyAsBlocking(t *testing.T)
 		}}},
 	}
 	rows := rowsByName(ResolvePod(pod, map[SourceID]SourceData{
-		{Kind: "ConfigMap", Name: "settings"}: {Kind: "ConfigMap", Name: "settings", State: SourceAvailable},
+		{Kind: "Secret", Name: "settings"}: {Kind: "Secret", Name: "settings", State: SourceAvailable, Sensitive: true},
 	}, NodeData{}).Containers[0].Rows)
-	if rows["MESSAGE"].State != ValueResolved || rows["MESSAGE"].Value != "feature=$(FEATURE)" || rows["MESSAGE"].MissingImpact != "" {
+	if rows["MESSAGE"].State != ValueResolved || rows["MESSAGE"].Value != "feature=$(FEATURE)" || rows["MESSAGE"].Sensitive || len(rows["MESSAGE"].Dependencies) != 0 || rows["MESSAGE"].MissingImpact != "" {
 		t.Fatalf("dependent value did not preserve optional missing reference: %+v", rows["MESSAGE"])
 	}
 }

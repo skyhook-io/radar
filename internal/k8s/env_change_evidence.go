@@ -60,7 +60,7 @@ func FindPodEnvChanges(ctx context.Context, cache *ResourceCache, pod *corev1.Po
 		Namespaces:     []string{pod.Namespace},
 		Kinds:          []string{"ConfigMap", "Secret"},
 		Names:          names,
-		Since:          staleSecretEnvHistorySince([]*corev1.Pod{pod}, time.Now()),
+		Since:          podEnvEvidenceHistorySince(pod, time.Now()),
 		Sources:        []timeline.EventSource{timeline.SourceInformer},
 		EventTypes:     []timeline.EventType{timeline.EventTypeUpdate},
 		ClusterContext: ActiveClusterContext(),
@@ -88,8 +88,8 @@ func FindPodEnvChanges(ctx context.Context, cache *ResourceCache, pod *corev1.Po
 		))
 	}
 
-	statuses := staleSecretEnvContainerStatuses(pod)
-	for _, container := range staleSecretEnvContainers(pod) {
+	statuses := podEnvEvidenceContainerStatuses(pod)
+	for _, container := range podEnvEvidenceContainers(pod) {
 		status, ok := statuses[container.Name]
 		if !ok || status.State.Running == nil || status.State.Running.StartedAt.IsZero() {
 			continue
@@ -113,8 +113,8 @@ func FindPodEnvChanges(ctx context.Context, cache *ResourceCache, pod *corev1.Po
 }
 
 func appendEnvFromChanges(out *[]PodEnvChange, pod *corev1.Pod, changes map[podEnvSourceKey]podEnvSourceChange) {
-	statuses := staleSecretEnvContainerStatuses(pod)
-	for _, container := range staleSecretEnvContainers(pod) {
+	statuses := podEnvEvidenceContainerStatuses(pod)
+	for _, container := range podEnvEvidenceContainers(pod) {
 		status, ok := statuses[container.Name]
 		if !ok || status.State.Running == nil || status.State.Running.StartedAt.IsZero() {
 			continue
@@ -149,7 +149,7 @@ func appendCurrentSourceChange(out *[]PodEnvChange, changes map[podEnvSourceKey]
 
 func podEnvSourceNames(pod *corev1.Pod) []string {
 	names := make(map[string]bool)
-	for _, container := range staleSecretEnvContainers(pod) {
+	for _, container := range podEnvEvidenceContainers(pod) {
 		for _, env := range container.Env {
 			if env.ValueFrom == nil {
 				continue
@@ -174,6 +174,41 @@ func podEnvSourceNames(pod *corev1.Pod) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func podEnvEvidenceContainers(pod *corev1.Pod) []corev1.Container {
+	out := make([]corev1.Container, 0, len(pod.Spec.InitContainers)+len(pod.Spec.Containers))
+	out = append(out, pod.Spec.InitContainers...)
+	return append(out, pod.Spec.Containers...)
+}
+
+func podEnvEvidenceContainerStatuses(pod *corev1.Pod) map[string]corev1.ContainerStatus {
+	statuses := make(map[string]corev1.ContainerStatus, len(pod.Status.InitContainerStatuses)+len(pod.Status.ContainerStatuses))
+	for _, status := range pod.Status.InitContainerStatuses {
+		statuses[status.Name] = status
+	}
+	for _, status := range pod.Status.ContainerStatuses {
+		statuses[status.Name] = status
+	}
+	return statuses
+}
+
+func podEnvEvidenceHistorySince(pod *corev1.Pod, now time.Time) time.Time {
+	since := staleSecretEnvHistorySince([]*corev1.Pod{pod}, now)
+	floor := now.Add(-envHistoryContextMaxLookback)
+	for _, status := range pod.Status.InitContainerStatuses {
+		if status.State.Running == nil || status.State.Running.StartedAt.IsZero() {
+			continue
+		}
+		candidate := status.State.Running.StartedAt.Time.Add(-time.Second)
+		if candidate.Before(floor) {
+			candidate = floor
+		}
+		if candidate.Before(since) {
+			since = candidate
+		}
+	}
+	return since
 }
 
 func latestPodEnvSourceChanges(events []timeline.TimelineEvent, sources map[envresolve.SourceID]envresolve.SourceData) map[podEnvSourceKey]podEnvSourceChange {

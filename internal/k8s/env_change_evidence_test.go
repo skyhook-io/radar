@@ -77,3 +77,40 @@ func TestFindPodEnvChangesSkipsInvalidEnvFromKeys(t *testing.T) {
 		t.Fatalf("envFrom changes = %+v, want only VALID", got)
 	}
 }
+
+func TestFindPodEnvChangesIncludesRunningInitContainers(t *testing.T) {
+	startedAt := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	changes := map[podEnvSourceKey]podEnvSourceChange{
+		{kind: "ConfigMap", namespace: "shop", name: "setup", key: "MODE"}: {kind: "modified", changedAt: startedAt.Add(time.Minute)},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "shop"},
+		Spec: corev1.PodSpec{
+			InitContainers: []corev1.Container{{
+				Name: "setup",
+				EnvFrom: []corev1.EnvFromSource{{
+					ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "setup"}},
+				}},
+			}},
+			Containers: []corev1.Container{{Name: "app"}},
+		},
+		Status: corev1.PodStatus{InitContainerStatuses: []corev1.ContainerStatus{{
+			Name: "setup", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(startedAt)}},
+		}}, ContainerStatuses: []corev1.ContainerStatus{{
+			Name: "app", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(startedAt.Add(5 * time.Minute))}},
+		}}},
+	}
+
+	var got []PodEnvChange
+	appendEnvFromChanges(&got, pod, changes)
+	if len(got) != 1 || got[0].Container != "setup" || got[0].Variable != "MODE" {
+		t.Fatalf("running init changes = %+v", got)
+	}
+	names := podEnvSourceNames(pod)
+	if len(names) != 1 || names[0] != "setup" {
+		t.Fatalf("running init source names = %+v", names)
+	}
+	if since := podEnvEvidenceHistorySince(pod, startedAt.Add(10*time.Minute)); !since.Equal(startedAt.Add(-time.Second)) {
+		t.Fatalf("running init history starts at %v, want %v", since, startedAt.Add(-time.Second))
+	}
+}
