@@ -290,6 +290,9 @@ export function PodRenderer({
   const hasEnvironmentDeclarations = [...initContainers, ...containers].some(
     (container: any) => container.env?.length > 0 || container.envFrom?.length > 0,
   )
+  const hasResolvedEnvironmentRows = environment?.containers.some(
+    container => container.rows.length > 0 || container.truncated,
+  ) ?? false
 
   const namespace = data.metadata?.namespace
   const podName = data.metadata?.name
@@ -733,7 +736,7 @@ export function PodRenderer({
       </Section>
 
       {/* Environment Variables */}
-      {environment && (
+      {environment && hasResolvedEnvironmentRows && (
         <ContainerEnvironmentSection
           environment={environment}
           namespace={namespace}
@@ -756,7 +759,7 @@ export function PodRenderer({
           </div>
         </Section>
       )}
-      {!environment && !environmentLoading && !environmentError && hasEnvironmentDeclarations && (
+      {(!environment || !hasResolvedEnvironmentRows) && !environmentLoading && !environmentError && hasEnvironmentDeclarations && (
         <EnvVarsSection
           initContainers={initContainers}
           containers={containers}

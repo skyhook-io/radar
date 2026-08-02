@@ -151,6 +151,22 @@ describe('PodRenderer resolved environment', () => {
     expect(html).toContain('aria-selected="false"')
     expect(html).toContain('aria-selected="true"')
   })
+
+  it('keeps the declaration view when resolved sources contain no usable variables', () => {
+    const html = renderToString(
+      <PodRenderer
+        data={pod}
+        onCopy={() => undefined}
+        copied={null}
+        environment={{ containers: [{ name: 'api', role: 'container', rows: [] }], coverage: {} }}
+      />,
+    )
+
+    expect(html).toContain('Environment Variables')
+    expect(html).toContain('ConfigMap')
+    expect(html).toContain('Secret')
+    expect(html).toContain('(all keys)')
+  })
 })
 
 describe('PodRenderer issues banner', () => {
