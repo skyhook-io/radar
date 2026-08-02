@@ -328,13 +328,13 @@ function CompactSourceCell({
       onClick={navigate}
     >
       {compactSourceIcon(source.kind)}
-      <span className="sr-only">{source.kind}</span>
+      <span className="sr-only">{navigate ? `View ${source.kind}/${source.name}` : source.kind}</span>
     </Badge>
   )
 
   return (
-    <Tooltip content={compactSourceExplanation(row)} delay={150} position="top">
-      <span className="inline-flex" tabIndex={navigate ? undefined : 0}>{badge}</span>
+    <Tooltip content={compactSourceExplanation(row, Boolean(navigate))} delay={150} position="top">
+      <span className={clsx('inline-flex', navigate ? 'cursor-pointer' : '!cursor-help')} tabIndex={navigate ? undefined : 0}>{badge}</span>
     </Tooltip>
   )
 }
@@ -349,13 +349,16 @@ function compactSourceIcon(kind: string) {
   return <Equal className={className} aria-hidden />
 }
 
-function compactSourceExplanation(row: PodEnvironmentRow) {
+function compactSourceExplanation(row: PodEnvironmentRow, canNavigate: boolean) {
   let explanation = describeSource(row.source)
   if ((row.dependencies?.length ?? 0) > 0) {
     explanation += ' It also uses ' + formatSources(row.dependencies!) + '.'
   }
   if ((row.shadowedSources?.length ?? 0) > 0) {
     explanation += ' Overrides earlier ' + formatSources(row.shadowedSources!) + '.'
+  }
+  if (canNavigate) {
+    explanation += ` Click to view the ${row.source.kind}.`
   }
   return explanation
 }
@@ -404,11 +407,11 @@ function SourceLabel({
 }) {
   if ((source.kind === 'Secret' || source.kind === 'ConfigMap') && source.name) {
     const explanation = describeSource(source)
-    const navigationHint = onNavigate ? ` Click to inspect ${source.kind}/${source.name}.` : ''
+    const navigationHint = onNavigate ? ` Click to view the ${source.kind}.` : ''
     return (
       <span className="inline-flex min-w-0 flex-col items-start gap-0.5">
         <Tooltip content={explanation + navigationHint} position="top" wrapperClassName="min-w-0">
-          <span className="inline-flex min-w-0 max-w-full" tabIndex={onNavigate ? undefined : 0}>
+          <span className={clsx('inline-flex min-w-0 max-w-full', onNavigate ? 'cursor-pointer' : '!cursor-help')} tabIndex={onNavigate ? undefined : 0}>
             <Badge
               kind={source.kind}
               size="sm"

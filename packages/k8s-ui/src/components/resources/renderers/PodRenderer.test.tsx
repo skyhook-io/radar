@@ -128,6 +128,26 @@ describe('PodRenderer resolved environment', () => {
     expect(optional).toContain('Not set')
     expect(optional).toContain('w-[44%]')
     expect(optional).not.toContain('>Status</span>')
+    expect(optional).toContain('!cursor-help')
+    expect(optional).not.toContain('<button class="badge-sm')
+
+    const navigable = renderToString(
+      <ContainerEnvironmentSection
+        environment={{
+          ...environment,
+          containers: [{
+            ...environment.containers[0],
+            rows: [{ name: 'PUBLIC_URL', value: 'https://example.com', state: 'resolved', source: { kind: 'ConfigMap', name: 'settings', key: 'url' } }],
+          }],
+        }}
+        namespace="default"
+        onNavigate={() => undefined}
+        onCopy={() => undefined}
+        copied={null}
+      />,
+    )
+    expect(navigable).toContain('cursor-pointer')
+    expect(navigable).toContain('<button class="badge-sm')
 
     const runtime = render({
       ...environment,
