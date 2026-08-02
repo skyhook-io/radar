@@ -1593,6 +1593,55 @@ describe("CapacityView demand", () => {
     );
   });
 
+  it("celebrates the unfiltered empty state instead of blaming inactive filters", () => {
+    const html = renderCapacity("/capacity/demand", (client) =>
+      client.setQueryData(
+        ["capacity", "demand", 25, undefined, undefined, undefined, undefined, undefined],
+        demandResponse({ items: [] }),
+      ),
+    );
+    expect(html).toContain("Nothing is pending");
+    expect(html).toContain("Every pod the scheduler knows about is placed");
+    expect(html).not.toContain("match these filters");
+  });
+
+  it("claims only what it can see when pod coverage is namespace-bounded", () => {
+    const html = renderCapacity("/capacity/demand", (client) =>
+      client.setQueryData(
+        ["capacity", "demand", 25, undefined, undefined, undefined, undefined, undefined],
+        demandResponse({
+          items: [],
+          coverage: {
+            ...meta.coverage,
+            pods: sourceCoverage("available", undefined, "all_authorized_namespaces"),
+          },
+        }),
+      ),
+    );
+    expect(html).toContain("No pending demand observed");
+    expect(html).not.toContain("Every pod the scheduler knows about is placed");
+  });
+
+  it("names the state when a state filter empties the list, and success copy under pool-only", () => {
+    const stateFiltered = renderCapacity("/capacity/demand?state=blocked", (client) =>
+      client.setQueryData(
+        ["capacity", "demand", 25, undefined, "blocked", undefined, undefined, undefined],
+        demandResponse({ items: [] }),
+      ),
+    );
+    expect(stateFiltered).toContain("No groups in");
+    expect(stateFiltered).toContain("the pills above carry the counts");
+
+    const poolOnly = renderCapacity("/capacity/demand?pool=general", (client) =>
+      client.setQueryData(
+        ["capacity", "demand", 25, undefined, undefined, "general", undefined, undefined],
+        demandResponse({ items: [] }),
+      ),
+    );
+    expect(poolOnly).toContain("Nothing is pending");
+    expect(poolOnly).not.toContain("match these filters");
+  });
+
   it("lands the pod-drawer bridge on the pod's workload, filtered and labeled", () => {
     const html = renderCapacity("/capacity/demand?pod=payments%2Fcheckout-abc12", (client) =>
       client.setQueryData(

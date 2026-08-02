@@ -374,14 +374,22 @@ export function CapacityDemand({
             detail="Its pods may have scheduled since this link was created — this is a true zero across all pending demand, not a paging artifact."
           />
         ) : (
-          <InlineEmpty
-            title="No demand groups match these filters"
-            detail={
-              stateFilter
-                ? `A true zero here means every readable pending pod is excluded by the current filters — not that data is missing. No pending groups are in “${demandStateLabel(stateFilter)}”.`
-                : "A true zero here means every readable pending pod is excluded by the current filters — not that data is missing."
-            }
-          />
+          stateFilter ? (
+            <InlineEmpty
+              title={`No groups in “${demandStateLabel(stateFilter)}”`}
+              detail="Pending demand, if any, is in other states — the pills above carry the counts. A true zero, not a paging artifact."
+            />
+          ) : countsAreLowerBound ? (
+            <InlineEmpty
+              title="No pending demand observed"
+              detail="Nothing is pending in the namespaces you can read — pods outside them are not visible here."
+            />
+          ) : (
+            <InlineEmpty
+              title="Nothing is pending"
+              detail="Every pod the scheduler knows about is placed — a true zero, not a paging artifact."
+            />
+          )
         )
       ) : (
         <InlineEmpty
