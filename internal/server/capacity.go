@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -856,15 +857,31 @@ func capacityActions(model capacitymodel.Model, canonicalIssuesAvailable bool) [
 	for _, pool := range model.Pools {
 		identity := pool.Observation.Resource
 		issueActionCodes := map[string]bool{}
+		// A pool-not-ready signal whose cause is the NodeClass signal beside it
+		// is a cascade echo, not a second problem — one misconfiguration must
+		// not read as two incidents. Standalone pool-unready (a NodeClass-
+		// independent reason) keeps its signal; the rule mirrors the pool
+		// detail page's issue dedup.
+		nodeClassUnready := false
+		for _, issue := range pool.Observation.Issues {
+			if issue.Reason == issues.ReasonKarpenterNodeClassNotReady {
+				nodeClassUnready = true
+			}
+		}
 		if !canonicalIssuesAvailable {
-			if pool.Observation.Ready != nil && !*pool.Observation.Ready {
+			nodeClass := pool.Observation.NodeClass
+			nodeClassRawUnready := nodeClass != nil && nodeClass.Ready != nil && !*nodeClass.Ready
+			if pool.Observation.Ready != nil && !*pool.Observation.Ready && !nodeClassRawUnready {
 				addCapacityAction(actions, "pool_not_ready", "warning", identity)
 			}
-			if nodeClass := pool.Observation.NodeClass; nodeClass != nil && nodeClass.Ready != nil && !*nodeClass.Ready {
+			if nodeClassRawUnready {
 				addCapacityAction(actions, "nodeclass_not_ready", "warning", identity)
 			}
 		}
 		for _, issue := range pool.Observation.Issues {
+			if nodeClassUnready && issue.Reason == issues.ReasonKarpenterNodePoolNotReady && strings.Contains(issue.Message, "NodeClassReady") {
+				continue
+			}
 			if code := capacityActionCodeForIssue(issue.Reason); code != "" && !issueActionCodes[code] {
 				addCapacityAction(actions, code, string(issue.Severity), identity)
 				issueActionCodes[code] = true

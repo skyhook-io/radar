@@ -608,3 +608,28 @@ func TestNoCompatibleInstanceTypesKeepsPerOccurrenceEpisodes(t *testing.T) {
 		t.Fatalf("claim lifecycle state = %q, want failed", claimRecords[0].Episode.State)
 	}
 }
+
+func TestKarpenterEventVocabularyTailClassifiesDirect(t *testing.T) {
+	for reason, want := range map[string]struct {
+		activityType capacityapi.ActivityType
+		state        capacityapi.ActivityState
+		code         string
+	}{
+		"AwaitingVolumeDetachment":               {capacityapi.ActivityTermination, capacityapi.ActivityOpen, "awaiting_volume_detachment"},
+		"ConsolidationApproved":                  {capacityapi.ActivityDisruption, capacityapi.ActivityOpen, "consolidation_approved"},
+		"FailedConsistencyCheck":                 {capacityapi.ActivityProvision, capacityapi.ActivityObserved, "consistency_check_failed"},
+		"TerminatingOnInterruption":              {capacityapi.ActivityInterruption, capacityapi.ActivityObserved, "terminating_on_interruption"},
+		"CapacityReservationInstanceInterrupted": {capacityapi.ActivityInterruption, capacityapi.ActivityObserved, "capacity_reservation_interrupted"},
+		"ZonalShiftActive":                       {capacityapi.ActivityInterruption, capacityapi.ActivityObserved, "zonal_shift_active"},
+		"ZonalShiftCleared":                      {capacityapi.ActivityInterruption, capacityapi.ActivityObserved, "zonal_shift_cleared"},
+	} {
+		classification, ok := karpenterEventClassifications[reason]
+		if !ok {
+			t.Errorf("%s: missing from the exact table — would degrade to inferred or drop", reason)
+			continue
+		}
+		if classification.activityType != want.activityType || classification.state != want.state || classification.reasonCode != want.code {
+			t.Errorf("%s = %+v, want %+v", reason, classification, want)
+		}
+	}
+}

@@ -455,6 +455,22 @@ var karpenterEventClassifications = map[string]activityClassification{
 	"FailedDraining":                 directActivity(capacityapi.ActivityTermination, capacityapi.ActivityFailed, "draining_failed"),
 	"FailedTermination":              directActivity(capacityapi.ActivityTermination, capacityapi.ActivityFailed, "termination_failed"),
 	"TerminationGracePeriodExpiring": directActivity(capacityapi.ActivityTermination, capacityapi.ActivityOpen, "grace_period_expiring"),
+	// An open termination wait — the node cannot finish terminating until its
+	// volumes detach. Waiting, not failed.
+	"AwaitingVolumeDetachment": directActivity(capacityapi.ActivityTermination, capacityapi.ActivityOpen, "awaiting_volume_detachment"),
+
+	// The consolidation decision itself — disruption is proceeding, distinct
+	// from the blocked/rejected family above.
+	"ConsolidationApproved": directActivity(capacityapi.ActivityDisruption, capacityapi.ActivityOpen, "consolidation_approved"),
+	// A claim whose node no longer matches what was requested — claim-lifecycle
+	// evidence, folded onto the claim's provision episode without changing a
+	// terminal state.
+	"FailedConsistencyCheck": directActivity(capacityapi.ActivityProvision, capacityapi.ActivityObserved, "consistency_check_failed"),
+
+	"TerminatingOnInterruption":              directActivity(capacityapi.ActivityInterruption, capacityapi.ActivityObserved, "terminating_on_interruption"),
+	"CapacityReservationInstanceInterrupted": directActivity(capacityapi.ActivityInterruption, capacityapi.ActivityObserved, "capacity_reservation_interrupted"),
+	"ZonalShiftActive":                       directActivity(capacityapi.ActivityInterruption, capacityapi.ActivityObserved, "zonal_shift_active"),
+	"ZonalShiftCleared":                      directActivity(capacityapi.ActivityInterruption, capacityapi.ActivityObserved, "zonal_shift_cleared"),
 }
 
 func classifyKarpenterReason(event timeline.TimelineEvent) (activityClassification, bool) {
