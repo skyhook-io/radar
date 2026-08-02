@@ -39,6 +39,8 @@ type CacheProvider struct {
 	discovery *k8s.ResourceDiscovery
 }
 
+var _ cronJobOwnerProvider = (*CacheProvider)(nil)
+
 // NewCacheProvider returns a Provider over the live radar caches, or
 // nil if the typed cache isn't ready (cluster connection still pending).
 func NewCacheProvider() *CacheProvider {

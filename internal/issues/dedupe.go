@@ -3,6 +3,7 @@ package issues
 import (
 	"strings"
 
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
@@ -115,7 +116,7 @@ func rollupStuckJobsUnderSidecarCronJob(in []Issue, p Provider) []Issue {
 	out := make([]Issue, 0, len(in))
 	for _, issue := range in {
 		if issue.Source != SourceProblem || issue.Kind != "Job" || issue.Category != issuesapi.CategoryJobFailed ||
-			!strings.HasPrefix(issue.Reason, "Running for ") || !strings.HasSuffix(issue.Reason, " with no completions") {
+			!k8s.IsStuckActiveJobReason(issue.Reason) {
 			out = append(out, issue)
 			continue
 		}

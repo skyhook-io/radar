@@ -63,10 +63,7 @@ type Options struct {
 	AuditSummary  *AuditSummary
 	PolicyReports PolicyReportLookup // nil = Kyverno not installed / no findings
 	AppReferences *AppReferences
-	// RunningPastCompletion is a neutral container-split observation for CronJob
-	// resources (nil otherwise). Attached to CronJobSummary as a lead, not a verdict,
-	// and only when the caller may read the evidence Job and Pod (see the access gate
-	// at the attach site).
+	// Attached only after the evidence Job and Pod pass the access gate.
 	RunningPastCompletion *RunningPastCompletion
 
 	// Optional kind-specific lookups. ServiceBackends is used only for

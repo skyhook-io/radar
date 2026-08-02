@@ -25,10 +25,8 @@ func TestRunningPastCompletionFromShape(t *testing.T) {
 		t.Fatalf("fields not mapped through: %+v", out)
 	}
 
-	// The Note must stay a fact-only disambiguation hint: it must NOT assert the Job is
-	// blocked/cannot complete, and must NOT recommend remediation (that is the confident
-	// SidecarBlocksJobCompletion issue's job). Regression guard for the review that
-	// stripped the verdict/remediation wording.
+	// The Note must stay a fact-only disambiguation hint: causal claims and
+	// remediation belong to the time-gated issue.
 	note := strings.ToLower(out.Note)
 	for _, forbidden := range []string{"blocked", "cannot", "succeeded", "initcontainer", "restartpolicy", "kep-753", "should be"} {
 		if strings.Contains(note, forbidden) {

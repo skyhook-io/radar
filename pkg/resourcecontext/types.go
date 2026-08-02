@@ -349,14 +349,8 @@ type CronJobSummary struct {
 	RunningPastCompletion *RunningPastCompletion `json:"runningPastCompletion,omitempty"`
 }
 
-// RunningPastCompletion is a NEUTRAL, fact-only observation: an active Job of this
-// CronJob has a pod where one container finished (exit 0) while a sibling is still
-// running. It is a LEAD for an agent already inspecting the CronJob — NOT a verdict.
-// It deliberately states only the observed fact (which container finished, which is
-// still running, for how long) and how to disambiguate; it makes no "blocked" claim
-// and recommends no remediation. Whether this is a stuck sidecar or a slow-but-healthy
-// Job is for the reader to decide by inspecting the running container. The confident,
-// time-gated causal claim lives in the SidecarBlocksJobCompletion issue, not here.
+// RunningPastCompletion is a fact-only container-split observation. The running
+// container must be inspected before treating it as a stuck sidecar.
 type RunningPastCompletion struct {
 	Pod                string `json:"pod,omitempty"`
 	Job                string `json:"job,omitempty"`

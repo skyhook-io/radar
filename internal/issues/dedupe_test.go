@@ -33,6 +33,9 @@ func TestRollupStuckJobsUnderSidecarCronJob(t *testing.T) {
 	if got.Reason != "SidecarBlocksJobCompletion" {
 		t.Fatalf("grouped reason = %q, want CronJob root diagnosis", got.Reason)
 	}
+	if got.Severity != SeverityWarning {
+		t.Fatalf("grouped severity = %q, want normalized warning", got.Severity)
+	}
 	if got.Count != 2 || got.Affected.Workloads != 2 || len(got.Members) != 2 {
 		t.Fatalf("grouped affected Jobs = count %d, affected %+v, members %+v", got.Count, got.Affected, got.Members)
 	}

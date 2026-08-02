@@ -32,6 +32,7 @@ const (
 	sidecarJobMinimumStuckGrace          = 2 * time.Minute
 	sidecarJobMinimumRecentSuccessWindow = 15 * time.Minute
 	sidecarJobRecentSuccessIntervalCount = 2
+	sidecarJobUnknownZoneDSTAllowance    = time.Hour
 )
 
 type sidecarJobTimingResult struct {
@@ -152,7 +153,7 @@ func detectStuckSidecarJobs(cache *ResourceCache, namespace string, now time.Tim
 			Name:            cj.Name,
 			Severity:        "warning",
 			Reason:          "SidecarBlocksJobCompletion",
-			Message:         fmt.Sprintf("CronJob %q has %d active Jobs and no recent successful completions. In pod %q, container %q completed successfully but container %q is still running, preventing the pod and Job from reaching Succeeded.", cj.Name, len(activeJobs), evidence.podName, evidence.completedContainer, evidence.runningContainer),
+			Message:         fmt.Sprintf("CronJob %q has %d active Jobs and no recent successful completions. At least one active Job has a pod where a regular container completed successfully while another regular container is still running, preventing the pod and Job from reaching Succeeded.", cj.Name, len(activeJobs)),
 			Action:          "If the still-running container is intended as a long-lived sidecar and the cluster runs Kubernetes 1.29+ with SidecarContainers enabled, move it to initContainers with restartPolicy: Always (KEP-753; stable in Kubernetes 1.33) so Kubernetes terminates it after regular containers finish; for injected sidecars such as istio-proxy, enable the mesh's native sidecar mode instead of editing the pod spec. Then delete the accumulated stuck Jobs. Otherwise, adjust the schedule or make the remaining workload terminate.",
 			Age:             FormatAge(time.Duration(age) * time.Second),
 			AgeSeconds:      age,
@@ -164,17 +165,8 @@ func detectStuckSidecarJobs(cache *ResourceCache, namespace string, now time.Tim
 	return out
 }
 
-// RunningPastCompletionShape is a NEUTRAL, fact-only observation for a CronJob: an
-// active, never-Succeeded Job has a pod where one container finished (exit 0) while a
-// sibling is still running. It is a LEAD, never a verdict — the running container may
-// be a stuck long-lived sidecar (a bug) OR a container still doing work (a slow-but-
-// healthy Job). It deliberately does NOT reuse the confident SidecarBlocksJobCompletion
-// detector's completion-drought warmup / Job-accumulation gates; it surfaces the raw
-// container split so an agent already inspecting the CronJob can read the running
-// container's image/logs and decide. To keep the false-positive surface small it fires
-// only after the SAME cadence-aware grace the detector uses (max(2m, schedule interval)),
-// so a Job that just entered a fresh cycle is not reported, and it makes no claim of
-// "blocked" or remediation — that stays with the time-gated detection.
+// RunningPastCompletionShape is the evidence behind the neutral resource-context
+// lead. It deliberately omits the detector's accumulation and completion-drought gates.
 type RunningPastCompletionShape struct {
 	Pod                string
 	Job                string
@@ -249,13 +241,17 @@ func FindRunningPastCompletionForObject(cache *ResourceCache, obj runtime.Object
 }
 
 func sidecarTimingCacheKey(cj *batchv1.CronJob) sidecarJobTimingCacheKey {
-	timeZone := "UTC"
-	if cj.Spec.TimeZone != nil && *cj.Spec.TimeZone != "" {
+	timeZone := ""
+	if cj.Spec.TimeZone != nil {
 		timeZone = *cj.Spec.TimeZone
 	}
 	anchor := cj.CreationTimestamp.Time
-	if loc, err := time.LoadLocation(timeZone); err == nil {
-		anchor = anchor.In(loc)
+	if timeZone == "" {
+		anchor = anchor.UTC()
+	} else {
+		if loc, err := time.LoadLocation(timeZone); err == nil {
+			anchor = anchor.In(loc)
+		}
 	}
 	return sidecarJobTimingCacheKey{schedule: cj.Spec.Schedule, timeZone: timeZone, anchorYear: anchor.Year()}
 }
@@ -271,6 +267,10 @@ func sidecarJobTiming(cj *batchv1.CronJob) (time.Duration, time.Duration, bool) 
 	interval, ok := cronsched.SampledMaxInterval(cj.Spec.Schedule, timeZone, cj.CreationTimestamp.Time)
 	if !ok {
 		return 0, 0, false
+	}
+	// The controller's local zone is unknowable when spec.timeZone is omitted.
+	if timeZone == "" && interval >= 12*time.Hour {
+		interval += sidecarJobUnknownZoneDSTAllowance
 	}
 
 	// The floors absorb short status transitions. Cadence provides the actual

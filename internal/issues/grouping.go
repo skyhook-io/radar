@@ -33,13 +33,12 @@ func RelatedIssues(p Provider, opts RelatedIssueOptions, group, kind, namespace,
 // diverge from the cluster view — a stuck child Job must resolve to its
 // CronJob sidecar root on every surface, not only in RelatedIssues.
 func ComposeForRelatedIssues(p Provider, opts RelatedIssueOptions) (flat, grouped []Issue) {
-	flat = Compose(p, Filters{
+	flat, _ = composeWithStats(p, Filters{
 		Namespaces:           opts.Namespaces,
 		Limit:                NoLimit,
 		CanReadClusterScoped: opts.CanReadClusterScoped,
 		CanReadRelated:       opts.CanReadRelated,
-	})
-	flat = rollupStuckJobsUnderSidecarCronJob(flat, p)
+	}, composeOptions{rollupStuckSidecarJobs: true})
 	return flat, GroupIssues(flat)
 }
 

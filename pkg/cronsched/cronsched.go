@@ -47,8 +47,9 @@ func SampledMaxInterval(schedule, timeZone string, anchor time.Time) (time.Durat
 		return constant.Delay, constant.Delay > 0
 	}
 	anchorLocal := anchor.In(loc)
-	date := time.Date(anchorLocal.Year(), time.January, 1, 0, 0, 0, 0, loc)
-	first := parsed.Next(date.Add(-time.Second))
+	date := time.Date(anchorLocal.Year(), time.January, 1, 12, 0, 0, 0, loc)
+	sampleStart := time.Date(anchorLocal.Year(), time.January, 1, 0, 0, 0, 0, loc)
+	first := parsed.Next(sampleStart.Add(-time.Second))
 	if first.IsZero() {
 		return 0, false
 	}
@@ -148,20 +149,26 @@ func scheduledTimeOnDate(date time.Time, offset int) (time.Time, bool) {
 }
 
 func utcOffsetChangesAcrossDate(date time.Time) bool {
-	_, startOffset := date.Zone()
-	_, endOffset := date.AddDate(0, 0, 1).Zone()
+	currentNoon := time.Date(date.Year(), date.Month(), date.Day(), 12, 0, 0, 0, date.Location())
+	_, startOffset := currentNoon.Add(-12 * time.Hour).Zone()
+	_, endOffset := currentNoon.Add(12 * time.Hour).Zone()
 	return startOffset != endOffset
 }
 
 func actualScheduledDayBounds(schedule cron.Schedule, date time.Time) (time.Time, time.Time, time.Duration, bool, bool) {
 	var first, previous time.Time
 	var longest time.Duration
-	for next := schedule.Next(date.Add(-time.Second)); ; next = schedule.Next(previous) {
+	cursor := time.Date(date.Year(), date.Month(), date.Day(), 12, 0, 0, 0, date.Location()).Add(-18 * time.Hour)
+	for next := schedule.Next(cursor); ; next = schedule.Next(cursor) {
 		if next.IsZero() {
 			return time.Time{}, time.Time{}, 0, false, false
 		}
+		cursor = next
 		local := next.In(date.Location())
-		if local.Year() != date.Year() || local.Month() != date.Month() || local.Day() != date.Day() {
+		if local.Year() < date.Year() || local.Year() == date.Year() && local.YearDay() < date.YearDay() {
+			continue
+		}
+		if local.Year() != date.Year() || local.YearDay() != date.YearDay() {
 			return first, previous, longest, !first.IsZero(), true
 		}
 		if first.IsZero() {

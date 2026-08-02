@@ -103,6 +103,14 @@ func Compose(p Provider, f Filters) []Issue {
 // severity desc, then last-seen desc, then kind/ns/name for stable
 // tiebreaks.
 func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
+	return composeWithStats(p, f, composeOptions{})
+}
+
+type composeOptions struct {
+	rollupStuckSidecarJobs bool
+}
+
+func composeWithStats(p Provider, f Filters, opts composeOptions) ([]Issue, ComposeStats) {
 	// Negative Limit is the "uncapped" sentinel: callers that need the
 	// full matched set (per-resource issue indexes for /api/ai list +
 	// search summaryContext) pass NoLimit so a 5000-issue cluster
@@ -177,7 +185,7 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 	out = dedupeWorkloadDegradedOverChild(out)
 	out = dedupeConditionOverMissingRef(out)
 	out = dedupePVCPendingOverMissingRef(out)
-	if f.Grouped {
+	if f.Grouped || opts.rollupStuckSidecarJobs {
 		out = rollupStuckJobsUnderSidecarCronJob(out, p)
 	}
 

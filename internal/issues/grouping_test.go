@@ -321,6 +321,10 @@ func TestRelatedIssues_StuckJobResolvesToSidecarCronJobRoot(t *testing.T) {
 			{Kind: "Job", Group: "batch", Namespace: "ns", Name: "archive-1", Severity: "high", Reason: "Running for 2h with no completions", DurationSeconds: 7200},
 		},
 		jobCronJobOwner: map[string]Ref{"ns/archive-1": owner},
+		change: map[string]*issuesapi.ChangeContext{
+			resourceKey("batch", "CronJob", "ns", "archive"): {Changed: true, What: "cronjob-template"},
+			resourceKey("batch", "Job", "ns", "archive-1"):   {Changed: true, What: "job-template"},
+		},
 	}
 	got := RelatedIssues(p, RelatedIssueOptions{}, "batch", "Job", "ns", "archive-1")
 	if len(got) != 1 {
@@ -331,6 +335,9 @@ func TestRelatedIssues_StuckJobResolvesToSidecarCronJobRoot(t *testing.T) {
 	}
 	if got[0].Action != "fix the sidecar" {
 		t.Fatalf("root remediation was lost on the per-resource path: %+v", got[0])
+	}
+	if got[0].ChangeContext == nil || got[0].ChangeContext.What != "cronjob-template" {
+		t.Fatalf("change context = %+v, want CronJob-root enrichment", got[0].ChangeContext)
 	}
 }
 
@@ -346,11 +353,18 @@ func TestComposeForRelatedIssues_CarriesSidecarRollup(t *testing.T) {
 			{Kind: "Job", Group: "batch", Namespace: "ns", Name: "archive-1", Severity: "high", Reason: "Running for 2h with no completions", DurationSeconds: 7200},
 		},
 		jobCronJobOwner: map[string]Ref{"ns/archive-1": owner},
+		change: map[string]*issuesapi.ChangeContext{
+			resourceKey("batch", "CronJob", "ns", "archive"): {Changed: true, What: "cronjob-template"},
+			resourceKey("batch", "Job", "ns", "archive-1"):   {Changed: true, What: "job-template"},
+		},
 	}
 	flat, grouped := ComposeForRelatedIssues(p, RelatedIssueOptions{})
 	got := RelatedIssuesFrom(flat, grouped, RelatedIssueOptions{}, "batch", "Job", "ns", "archive-1")
 	if len(got) != 1 || got[0].Kind != "CronJob" || got[0].Reason != "SidecarBlocksJobCompletion" || got[0].Action != "fix the sidecar" {
 		t.Fatalf("precomposed pair lost the sidecar rollup: %+v", got)
+	}
+	if got[0].ChangeContext == nil || got[0].ChangeContext.What != "cronjob-template" {
+		t.Fatalf("precomposed change context = %+v, want CronJob-root enrichment", got[0].ChangeContext)
 	}
 }
 

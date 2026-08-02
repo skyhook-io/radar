@@ -40,7 +40,7 @@ func TestRemovedServiceEnvExposureAndPrecision(t *testing.T) {
 	if got[0].Container != "frontend" || got[0].EnvName != "CART_ADDR" || got[0].ServiceName != "cart" || got[0].ReferencedPort != 8080 || !got[0].RemovedAt.Equal(removal.Timestamp) {
 		t.Fatalf("unexpected removed Service env fact: %+v", got[0])
 	}
-	for _, detection := range detectConfigProblems(cache, "shop", now) {
+	for _, detection := range detectConfigProblems(cache, "shop", now, listPodsByNamespace(cache, "shop")) {
 		if detection.Reason == "RemovedServiceEnv" {
 			t.Fatalf("removed env must remain FYI-only, got issue detection: %+v", detection)
 		}

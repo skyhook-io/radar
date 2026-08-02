@@ -29,6 +29,7 @@ func TestSampledMaxInterval(t *testing.T) {
 		{name: "daily in fixed explicit time zone", schedule: "0 2 * * *", timeZone: "Etc/GMT-2", want: 24 * time.Hour, wantOK: true},
 		{name: "daily time skipped by daylight saving", schedule: "0 2 * * *", timeZone: "America/New_York", want: 47 * time.Hour, wantOK: true},
 		{name: "intraday daylight-saving gap", schedule: "0 */2 * * *", timeZone: "America/New_York", want: 3 * time.Hour, wantOK: true},
+		{name: "midnight daylight-saving transition", schedule: "0 0 * * *", timeZone: "America/Santiago", want: 47 * time.Hour, wantOK: true},
 		{name: "invalid schedule", schedule: "not a schedule"},
 		{name: "invalid time zone", schedule: "0 2 * * *", timeZone: "Mars/Olympus_Mons"},
 		{name: "empty schedule"},
