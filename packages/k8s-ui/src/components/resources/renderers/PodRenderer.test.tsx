@@ -88,7 +88,8 @@ describe('PodRenderer resolved environment', () => {
     expect(html).toContain('flex-wrap items-center gap-x-1.5 gap-y-0.5')
     expect(html).toContain('@container/env')
     expect(html).toContain('table-fixed')
-    expect(html).toContain('w-[44%]')
+    expect(html).toContain('w-[46%]')
+    expect(html).toContain('table-divide-subtle')
     expect(html).not.toContain('overflow-x-auto')
     expect(html).not.toContain('space-y-2.5 px-3 py-3 text-xs')
     expect(html).not.toContain('title=')
@@ -114,7 +115,7 @@ describe('PodRenderer resolved environment', () => {
     )
 
     const normal = render(environment)
-    expect(normal).toContain('w-[44%]')
+    expect(normal).toContain('w-[46%]')
     expect(normal).not.toContain('>Status</span>')
     expect(normal).toContain('lucide-equal')
     expect(normal).not.toContain('lucide-pencil')
@@ -127,7 +128,7 @@ describe('PodRenderer resolved environment', () => {
       }],
     })
     expect(optional).toContain('Not set')
-    expect(optional).toContain('w-[44%]')
+    expect(optional).toContain('w-[46%]')
     expect(optional).not.toContain('>Status</span>')
     expect(optional).toContain('!cursor-help')
     expect(optional).not.toContain('<button class="badge-sm')
@@ -158,7 +159,7 @@ describe('PodRenderer resolved environment', () => {
       }],
     })
     expect(runtime).toContain('Set at startup')
-    expect(runtime).toContain('w-[44%]')
+    expect(runtime).toContain('w-[46%]')
     expect(runtime).not.toContain('>Status</span>')
 
     const restartBlocked = render({
@@ -206,7 +207,7 @@ describe('PodRenderer resolved environment', () => {
         }],
       }],
     })
-    expect(changed).toContain('w-[40%]')
+    expect(changed).toContain('w-[42%]')
     expect(changed).toContain('>Status</span>')
   })
 

@@ -144,8 +144,8 @@ export function ContainerEnvironmentSection({
         <div className="overflow-hidden rounded-lg border border-theme-border">
           <table className="w-full table-fixed text-left text-xs">
             <colgroup>
-              <col className={showStatus ? 'w-[40%] @min-[760px]/env:w-[24%]' : 'w-[44%] @min-[760px]/env:w-[28%]'} />
-              <col className={showStatus ? 'w-[38%] @min-[760px]/env:w-[32%]' : 'w-[44%] @min-[760px]/env:w-[40%]'} />
+              <col className={showStatus ? 'w-[42%] @min-[760px]/env:w-[26%]' : 'w-[46%] @min-[760px]/env:w-[30%]'} />
+              <col className={showStatus ? 'w-[36%] @min-[760px]/env:w-[30%]' : 'w-[42%] @min-[760px]/env:w-[38%]'} />
               <col className={showStatus ? 'w-[11%] @min-[760px]/env:w-[24%]' : 'w-[12%] @min-[760px]/env:w-[32%]'} />
               {showStatus && <col className="w-[11%] @min-[760px]/env:w-[20%]" />}
             </colgroup>
@@ -165,7 +165,7 @@ export function ContainerEnvironmentSection({
                 )}
               </tr>
             </thead>
-            <tbody className="divide-y divide-theme-border">
+            <tbody className="table-divide-subtle">
               {active.rows.map(row => {
                 const key = rowKey(active.name, row.name)
                 const revealedValue = revealed[key]
