@@ -27,7 +27,7 @@ PAUSE_IMAGE="registry.k8s.io/pause:3.9"
 MAX_PARALLEL=10
 NODEPOOL_NAME="loadtest"
 NODECLASS_NAME="loadtest"  # dedicated EC2NodeClass with maxPods=110
-KARPENTER_NODE_ROLE="${KARPENTER_NODE_ROLE:-us-east-1-nonprod-us-east-1-nonprod-karpenter-node}"
+KARPENTER_NODE_ROLE="${KARPENTER_NODE_ROLE:?set KARPENTER_NODE_ROLE to your cluster's Karpenter node IAM role}"
 CLUSTER_TAG="${CLUSTER_TAG:-us-east-1-nonprod}"  # value for karpenter.sh/discovery tag
 
 # ── Naming pools ──────────────────────────────────────────────────────────────
