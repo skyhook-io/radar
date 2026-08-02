@@ -44,22 +44,24 @@ export function ContainerEnvironmentSection({
   copied,
 }: ContainerEnvironmentSectionProps) {
   const visibleContainers = environment.containers.filter(container => container.rows.length > 0 || container.truncated)
-  const [selected, setSelected] = useState(visibleContainers[0]?.name ?? '')
+  const defaultContainerName = (visibleContainers.find(container => container.role === 'container') ?? visibleContainers[0])?.name ?? ''
+  const [selected, setSelected] = useState(defaultContainerName)
   const [revealed, setRevealed] = useState<Record<string, PodEnvironmentRevealResponse>>({})
   const [revealing, setRevealing] = useState<Record<string, boolean>>({})
   const [revealErrors, setRevealErrors] = useState<Record<string, string>>({})
 
   useEffect(() => {
     if (!visibleContainers.some(container => container.name === selected))
-      setSelected(visibleContainers[0]?.name ?? '')
-  }, [selected, visibleContainers])
+      setSelected(defaultContainerName)
+  }, [defaultContainerName, selected, visibleContainers])
 
   useEffect(() => {
     setRevealed({})
     setRevealErrors({})
   }, [environment])
 
-  const active = visibleContainers.find(container => container.name === selected) ?? visibleContainers[0]
+  const active = visibleContainers.find(container => container.name === selected)
+    ?? visibleContainers.find(container => container.name === defaultContainerName)
   const total = visibleContainers.reduce(
     (sum, container) => sum + container.rows.filter(row => !row.placeholder).length,
     0,
@@ -109,17 +111,6 @@ export function ContainerEnvironmentSection({
             <span className="cursor-help border-b border-dotted border-theme-text-tertiary" tabIndex={0}>Only variables declared on the Pod are shown.</span>
           </Tooltip>
         </p>
-
-        {environment.coverage.observedSince && (
-          <p className="text-xs text-theme-text-tertiary">
-            <Tooltip content="Radar can flag ConfigMap and Secret changes recorded after this time. Earlier changes may not be available." position="right">
-              <span className="cursor-help border-b border-dotted border-theme-text-tertiary" tabIndex={0}>Changes observed</span>
-            </Tooltip>{' '}
-            since {formatObservedSince(environment.coverage.observedSince)}.
-            {environment.coverage.degraded && ' Earlier history may be unavailable.'}
-            {environment.coverage.saturated && ' Some older changes were omitted.'}
-          </p>
-        )}
 
         {visibleContainers.length > 1 && (
           <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Container">
@@ -536,9 +527,4 @@ function withoutKey<T>(record: Record<string, T>, key: string) {
   const next = { ...record }
   delete next[key]
   return next
-}
-
-function formatObservedSince(value: string) {
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
 }

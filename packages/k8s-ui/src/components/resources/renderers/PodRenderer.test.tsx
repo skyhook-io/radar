@@ -65,7 +65,7 @@ describe('PodRenderer resolved environment', () => {
           { name: 'API_TOKEN', state: 'masked', sensitive: true, source: { kind: 'Secret', name: 'shared', key: 'API_TOKEN' } },
         ],
       }],
-      coverage: {},
+      coverage: { observedSince: '2026-08-02T00:00:00Z' },
     }
 
     const html = renderToString(
@@ -83,6 +83,7 @@ describe('PodRenderer resolved environment', () => {
     expect(html).toContain('Secret values stay hidden until you reveal them.')
     expect(html).not.toContain('Value if restarted now')
     expect(html).toContain('Only variables declared on the Pod are shown.')
+    expect(html).not.toContain('Changes observed')
     expect(html).toContain('Secret<!-- -->/<!-- -->shared')
     expect(html).toContain('@container/env')
     expect(html).toContain('table-fixed')
@@ -127,6 +128,28 @@ describe('PodRenderer resolved environment', () => {
     })
     expect(changed).toContain('w-[40%]')
     expect(changed).toContain('>Status</span>')
+  })
+
+  it('selects the first regular container instead of an init container', () => {
+    const html = renderToString(
+      <ContainerEnvironmentSection
+        environment={{
+          containers: [
+            { name: 'migrate', role: 'init', rows: [{ name: 'INIT_ONLY', value: 'yes', state: 'resolved', source: { kind: 'Direct' } }] },
+            { name: 'api', role: 'container', rows: [{ name: 'API_ONLY', value: 'yes', state: 'resolved', source: { kind: 'Direct' } }] },
+          ],
+          coverage: {},
+        }}
+        namespace="default"
+        onCopy={() => undefined}
+        copied={null}
+      />,
+    )
+
+    expect(html).toContain('API_ONLY')
+    expect(html).not.toContain('INIT_ONLY')
+    expect(html).toContain('aria-selected="false"')
+    expect(html).toContain('aria-selected="true"')
   })
 })
 
