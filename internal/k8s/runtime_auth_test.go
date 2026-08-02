@@ -1343,6 +1343,9 @@ func TestNextRuntimeAuthRecoveryInterval(t *testing.T) {
 	if got := nextRuntimeAuthRecoveryInterval(30*time.Second, errors.New("auth plugin timeout: context deadline exceeded"), maxInterval, hungInterval); got != hungInterval {
 		t.Fatalf("interval after hung plugin = %v, want %v", got, hungInterval)
 	}
+	if got := nextRuntimeAuthRecoveryInterval(30*time.Second, errors.New("subsystem init failed: context deadline exceeded"), maxInterval, hungInterval); got != time.Minute {
+		t.Fatalf("interval after generic timeout under exec auth = %v, want %v (hung interval is for wedged plugins only)", got, time.Minute)
+	}
 }
 
 func setRuntimeAuthRecoveryIntervalsForTest(initial, maxInterval time.Duration) {

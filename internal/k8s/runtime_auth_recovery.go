@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -144,6 +145,15 @@ func runtimeAuthRecoveryStillOwed() bool {
 	return runtimeAuthRecoveryOwed.Load() && GetConnectionStatus().State != StateConnected
 }
 
+// RuntimeAuthRecoveryOwed reports whether the server-side reconnect loop owns
+// the current disconnect. The browser reads this to suppress its own auto-retry
+// for the whole episode — the live ErrorType can flip to non-auth values while
+// credentials are dead, and browser retries would re-invoke the exec plugin on
+// a much shorter cadence than the loop's backoff.
+func RuntimeAuthRecoveryOwed() bool {
+	return runtimeAuthRecoveryOwed.Load()
+}
+
 // Static means nothing in-process can mint fresh credentials: no exec plugin
 // to re-run, no auth provider to refresh, no token/cert file client-go
 // re-reads. Only a kubeconfig re-read (a full reconnect) can pick up new ones.
@@ -159,7 +169,13 @@ func runtimeAuthCredentialsAreStatic() bool {
 }
 
 func nextRuntimeAuthRecoveryInterval(current time.Duration, err error, maxInterval, hungInterval time.Duration) time.Duration {
-	if ClassifyError(err) == "timeout" && UsesExecAuth() {
+	// The long interval is strictly for a wedged exec plugin (its marker is
+	// the exec-specific deadline branch) — a generic timeout under exec auth,
+	// e.g. a subsystem-init deadline during a reconnect whose credentials
+	// already worked, must keep the normal backoff or a transient stall
+	// costs headless deployments half an hour.
+	if err != nil && UsesExecAuth() && ClassifyError(err) == "timeout" &&
+		strings.Contains(strings.ToLower(err.Error()), "auth plugin timeout") {
 		return hungInterval
 	}
 	return min(current*2, maxInterval)

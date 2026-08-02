@@ -999,7 +999,7 @@ func TestSmokeConnectionStatusOnly(t *testing.T) {
 	// re-reads kubeconfig files under the client write lock on every hit.
 	var body map[string]any
 	assertOK(t, get(t, "/api/connection?contexts=0"), &body)
-	assertKeys(t, body, "state", "context")
+	assertKeys(t, body, "state", "context", "authRecoveryOwed")
 	if _, present := body["contexts"]; present {
 		t.Error("contexts should be omitted when the poll asks for status only")
 	}

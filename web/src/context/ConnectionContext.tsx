@@ -14,7 +14,11 @@ export interface ConnectionState {
   progressMessage?: string
 }
 
-type ConnectionStatusResponse = ConnectionState
+interface ConnectionStatusResponse extends ConnectionState {
+  // Server-side auth recovery owns the episode: suppress browser auto-retry
+  // even when errorType has flipped to a non-auth value.
+  authRecoveryOwed?: boolean
+}
 
 interface PolledConnectionStatus extends ConnectionStatusResponse {
   sseGenerationAtStart: number
@@ -106,6 +110,10 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const autoRetryInFlightRef = useRef(false)
   const autoRetryDelayRef = useRef(AUTO_RETRY_INITIAL_DELAY_MS)
   const manualRetryPendingRef = useRef(false)
+  // Fed by the status poll only (SSE frames don't carry the field, and must
+  // not clear it): while the server's recovery loop owns the episode, browser
+  // auto-retry stands down even if errorType flips to a non-auth value.
+  const serverOwnsRecoveryRef = useRef(false)
   // Whether the QueryClient already held data when this provider mounted. A host
   // can share one client across cluster-scoped RadarApp mounts (see RadarApp's
   // `queryClient` prop); that client may carry another cluster's data under
@@ -180,6 +188,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   // would never be re-applied — a stuck error screen when SSE is down.
   useEffect(() => {
     if (!data) return
+    if (data.authRecoveryOwed !== undefined) {
+      serverOwnsRecoveryRef.current = data.authRecoveryOwed
+    }
     // A poll resolving mid-retry would flip the UI back to the error screen
     // while the retry is still running; the retry's own result supersedes it.
     if (manualRetryPendingRef.current || autoRetryInFlightRef.current) return
@@ -272,6 +283,12 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       retryTimeout = window.setTimeout(() => {
         if (stopped) return
         if (manualRetryPendingRef.current || autoRetryInFlightRef.current) {
+          scheduleRetry()
+          return
+        }
+        // Checked at fire time (not arm time): the poll may have learned
+        // mid-wait that the server's recovery loop owns this episode.
+        if (serverOwnsRecoveryRef.current) {
           scheduleRetry()
           return
         }

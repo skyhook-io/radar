@@ -3960,6 +3960,9 @@ func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) 
 		"error":           status.Error,
 		"errorType":       status.ErrorType,
 		"progressMessage": status.ProgressMsg,
+		// Lets the browser stand down its auto-retry for the whole auth-loss
+		// episode, even when the live errorType flips to non-auth values.
+		"authRecoveryOwed": k8s.RuntimeAuthRecoveryOwed(),
 	}
 	// Context enumeration re-reads kubeconfig files (under the client write
 	// lock in multi-file mode) — too expensive for the UI's perpetual
