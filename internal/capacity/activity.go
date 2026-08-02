@@ -164,22 +164,30 @@ func BuildActivityRecords(events []timeline.TimelineEvent) []ActivityRecord {
 		evidence.Refs = append(evidence.Refs, activityResourceIdentity(event, uid))
 		record.Episode.Evidence = append(record.Episode.Evidence, evidence)
 
-		// A claim deleted before ever reaching Ready is Karpenter's
-		// registration/initialization timeout path — the deletion IS the
-		// provisioning outcome. Terminalize the open provision episode so
-		// "nodes not joining" never reads as provisioning still in progress
-		// next to a completed termination.
+		// A claim deleted before ever reaching Ready ends its provision episode —
+		// "nodes not joining" must never read as provisioning still in progress
+		// next to a completed termination. The deletion terminalizes as ENDED,
+		// not failed, because the delete event carries no cause of its own.
+		//
+		// That loses nothing on the real failure paths: Karpenter records the
+		// failing stage (LaunchFailed, a Launched=Unknown/ICE condition
+		// transition) BEFORE it deletes the claim, and any such evidence has
+		// already terminalized this episode as failed — which the already-
+		// terminal guard then skips. So an episode still open when the delete
+		// arrives is precisely one where no failure was ever observed, and
+		// calling it "failed" would manufacture a diagnosis out of an absence.
 		if classification.reasonCode == "nodeclaim_deleted" {
 			provision := records[provisionCorrelationKey(event, uid)]
 			if provision != nil && provision.terminalAt != nil {
 				provision = nil
 			}
 			if provision != nil {
-				provision.Episode.State = capacityapi.ActivityFailed
+				const terminalReason = "nodeclaim_deleted_cause_unknown"
+				provision.Episode.State = capacityapi.ActivityEnded
 				provision.Episode.Type = capacityapi.ActivityProvision
 				terminalAt := event.Timestamp
 				provision.terminalAt = &terminalAt
-				provision.terminalReasonCode = "nodeclaim_deleted_before_ready"
+				provision.terminalReasonCode = terminalReason
 				// Deliberately NOT bumping provision.MaxSeq to the delete's
 				// seq: pagination cursors cut on MaxSeq alone, so two records
 				// sharing one seq would let a page boundary drop one of the
@@ -188,7 +196,7 @@ func BuildActivityRecords(events []timeline.TimelineEvent) []ActivityRecord {
 				closing := capacityapi.NewActivityEvidence()
 				closing.At = event.Timestamp
 				closing.Source = activityEvidenceSource(event.Source)
-				closing.ReasonCode = "nodeclaim_deleted_before_ready"
+				closing.ReasonCode = terminalReason
 				closing.RawReason = event.Reason
 				closing.RawMessage = event.Message
 				closing.Relationship = classification.relationship
@@ -292,6 +300,9 @@ func activityEpisodeSummary(episode capacityapi.ActivityEpisode) string {
 		}
 		if state == capacityapi.ActivityFailed {
 			return "NodeClaim provisioning failed"
+		}
+		if state == capacityapi.ActivityEnded {
+			return "NodeClaim deleted before becoming Ready — cause not recorded"
 		}
 		return "NodeClaim provisioning is in progress"
 	case capacityapi.ActivityLaunchFailure:
@@ -567,10 +578,14 @@ func activityEvidenceSource(source timeline.EventSource) capacityapi.EvidenceSou
 func activityStateRank(state capacityapi.ActivityState) int {
 	switch state {
 	case capacityapi.ActivityFailed:
-		return 5
+		return 6
 	case capacityapi.ActivityBlocked:
-		return 4
+		return 5
 	case capacityapi.ActivityCompleted:
+		return 4
+	// Ended outranks an in-progress state (the episode really is over) but never
+	// a completed one, whose outcome is actually known.
+	case capacityapi.ActivityEnded:
 		return 3
 	case capacityapi.ActivityOpen:
 		return 2

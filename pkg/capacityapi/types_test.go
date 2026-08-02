@@ -421,10 +421,10 @@ func TestActivityAggregateWireKeys(t *testing.T) {
 	}
 
 	aggregate := NewActivityAggregate()
-	aggregate.Total = 3
+	aggregate.Total = 4
 	aggregate.ByType[ActivityProvision] = ActivityTypeCounts{
-		Total:   3,
-		ByState: map[ActivityState]int{ActivityCompleted: 2, ActivityBlocked: 1},
+		Total:   4,
+		ByState: map[ActivityState]int{ActivityCompleted: 2, ActivityBlocked: 1, ActivityEnded: 1},
 	}
 	response.Aggregate = &aggregate
 
@@ -438,5 +438,34 @@ func TestActivityAggregateWireKeys(t *testing.T) {
 	byState := capacityValueAt(t, got, "aggregate", "byType", string(ActivityProvision), "byState").(map[string]any)
 	if byState[string(ActivityCompleted)] != float64(2) || byState[string(ActivityBlocked)] != float64(1) {
 		t.Fatalf("aggregate byState = %#v", byState)
+	}
+	// The frontend switches on this literal; renaming it silently drops the
+	// bucket into the default badge.
+	if byState["ended"] != float64(1) {
+		t.Fatalf("aggregate byState is missing the \"ended\" key: %#v", byState)
+	}
+}
+
+// TestActivityStateWireValues pins the exact strings the frontend switches on.
+// A Go-side rename round-trips through its own type without failing anything,
+// but silently changes what every consumer sees.
+func TestActivityStateWireValues(t *testing.T) {
+	for state, want := range map[ActivityState]string{
+		ActivityOpen:      "open",
+		ActivityCompleted: "completed",
+		ActivityFailed:    "failed",
+		ActivityObserved:  "observed",
+		ActivityBlocked:   "blocked",
+		ActivityEnded:     "ended",
+		ActivityUnknown:   "unknown",
+	} {
+		if string(state) != want {
+			t.Fatalf("activity state = %q, want %q", state, want)
+		}
+		episode := NewActivityEpisode()
+		episode.State = state
+		if got := marshalCapacityObject(t, episode)["state"]; got != want {
+			t.Fatalf("serialized state = %#v, want %q", got, want)
+		}
 	}
 }

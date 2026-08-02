@@ -2,6 +2,7 @@ package capacity
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,16 +16,22 @@ func TestAggregateActivityRecordsCountsByTypeAndState(t *testing.T) {
 		{Episode: capacityapi.ActivityEpisode{Type: capacityapi.ActivityProvision, State: capacityapi.ActivityCompleted}},
 		{Episode: capacityapi.ActivityEpisode{Type: capacityapi.ActivityProvision, State: capacityapi.ActivityFailed}},
 		{Episode: capacityapi.ActivityEpisode{Type: capacityapi.ActivityProvision, State: capacityapi.ActivityOpen}},
+		{Episode: capacityapi.ActivityEpisode{Type: capacityapi.ActivityProvision, State: capacityapi.ActivityEnded}},
 		{Episode: capacityapi.ActivityEpisode{Type: capacityapi.ActivityDisruption, State: capacityapi.ActivityBlocked}},
 	}
 	aggregate := AggregateActivityRecords(records)
-	if aggregate.Total != 4 {
-		t.Fatalf("total = %d, want 4", aggregate.Total)
+	if aggregate.Total != 5 {
+		t.Fatalf("total = %d, want 5", aggregate.Total)
 	}
 	provision := aggregate.ByType[capacityapi.ActivityProvision]
-	if provision.Total != 3 || provision.ByState[capacityapi.ActivityCompleted] != 1 ||
+	if provision.Total != 4 || provision.ByState[capacityapi.ActivityCompleted] != 1 ||
 		provision.ByState[capacityapi.ActivityFailed] != 1 || provision.ByState[capacityapi.ActivityOpen] != 1 {
 		t.Fatalf("provision counts = %+v", provision)
+	}
+	// The rollup strip must count cause-unknown endings as their own bucket —
+	// folding them into failed is the very conflation the state exists to undo.
+	if provision.ByState[capacityapi.ActivityEnded] != 1 {
+		t.Fatalf("aggregate dropped the ended bucket: %+v", provision.ByState)
 	}
 	disruption := aggregate.ByType[capacityapi.ActivityDisruption]
 	if disruption.Total != 1 || disruption.ByState[capacityapi.ActivityBlocked] != 1 {
@@ -202,28 +209,85 @@ func TestBuildActivityRecordsRecoversFailedProvisionWhenClaimBecomesReady(t *tes
 
 func TestBuildActivityRecordsDeleteClosesUnfinishedProvision(t *testing.T) {
 	now := time.Date(2026, time.July, 13, 10, 0, 0, 0, time.UTC)
-	// Karpenter's registration-timeout path: the claim never reached Ready
-	// and was deleted. The deletion is the provisioning outcome.
+	claim := func(id string, seq int64, at time.Time, eventType timeline.EventType, reason string) timeline.TimelineEvent {
+		return timeline.TimelineEvent{
+			ID: id, Seq: seq, Timestamp: at, Source: timeline.SourceInformer,
+			Kind: "NodeClaim", APIVersion: "karpenter.sh/v1", Name: "claim-a", UID: "claim-uid",
+			EventType: eventType, Reason: reason,
+		}
+	}
+	byType := func(records []ActivityRecord) map[capacityapi.ActivityType]capacityapi.ActivityEpisode {
+		out := map[capacityapi.ActivityType]capacityapi.ActivityEpisode{}
+		for _, record := range records {
+			out[record.Episode.Type] = record.Episode
+		}
+		return out
+	}
+
+	// Karpenter's registration-timeout path records the failing stage BEFORE it
+	// deletes the claim, so a real timeout still terminalizes as failed.
 	records := BuildActivityRecords([]timeline.TimelineEvent{
-		{ID: "created", Seq: 1, Timestamp: now, Source: timeline.SourceInformer, Kind: "NodeClaim", APIVersion: "karpenter.sh/v1", Name: "claim-a", UID: "claim-uid", EventType: timeline.EventTypeAdd},
-		{ID: "deleted", Seq: 2, Timestamp: now.Add(15 * time.Minute), Source: timeline.SourceInformer, Kind: "NodeClaim", APIVersion: "karpenter.sh/v1", Name: "claim-a", UID: "claim-uid", EventType: timeline.EventTypeDelete},
+		claim("created", 1, now, timeline.EventTypeAdd, ""),
+		claim("launch-failed", 2, now.Add(time.Minute), timeline.EventTypeWarning, "LaunchFailed"),
+		claim("deleted", 3, now.Add(15*time.Minute), timeline.EventTypeDelete, ""),
+	})
+	// The claim's own attempt episode is already terminal-failed on that
+	// evidence when the delete arrives, so the fleet still reads as broken.
+	failed := byType(records)[capacityapi.ActivityLaunchFailure]
+	if failed.State != capacityapi.ActivityFailed || failed.PrimaryReasonCode != "launch_failed" {
+		t.Fatalf("deletion after a recorded failure = %q/%q, want failed/launch_failed", failed.State, failed.PrimaryReasonCode)
+	}
+	if _, ended := byType(records)[capacityapi.ActivityProvision]; ended {
+		t.Fatalf("a failed attempt must not also produce a cause-unknown provision episode: %#v", records)
+	}
+
+	// The same holds for a failing lifecycle CONDITION transition, which is what
+	// the informer records on the ICE and registration-timeout paths — the real
+	// storms Codex's contest was worried about regressing.
+	conditionFailure := claim("launched-unknown", 2, now.Add(time.Minute), timeline.EventTypeUpdate, "")
+	conditionFailure.Diff = &k8score.DiffInfo{Fields: []k8score.FieldChange{{
+		Path: "status.conditions[Launched]", NewValue: "Unknown\x00InsufficientInstanceCapacity",
+	}}}
+	records = BuildActivityRecords([]timeline.TimelineEvent{
+		claim("created", 1, now, timeline.EventTypeAdd, ""),
+		conditionFailure,
+		claim("deleted", 3, now.Add(15*time.Minute), timeline.EventTypeDelete, ""),
+	})
+	ice := byType(records)[capacityapi.ActivityLaunchFailure]
+	if ice.State != capacityapi.ActivityFailed {
+		t.Fatalf("deletion after an ICE condition transition = %q, want failed", ice.State)
+	}
+	for _, record := range records {
+		if record.Episode.State == capacityapi.ActivityEnded {
+			t.Fatalf("an ICE-failed claim was softened to ended: %#v", record.Episode)
+		}
+	}
+
+	// A bare create→delete carries NO cause. The episode is over, but calling it
+	// "failed" would manufacture a diagnosis out of an absence of evidence.
+	records = BuildActivityRecords([]timeline.TimelineEvent{
+		claim("created", 1, now, timeline.EventTypeAdd, ""),
+		claim("deleted", 2, now.Add(15*time.Minute), timeline.EventTypeDelete, ""),
 	})
 	if len(records) != 2 {
 		t.Fatalf("records = %#v, want provision and termination", records)
 	}
-	byType := map[capacityapi.ActivityType]capacityapi.ActivityEpisode{}
-	for _, record := range records {
-		byType[record.Episode.Type] = record.Episode
+	provision := byType(records)[capacityapi.ActivityProvision]
+	if provision.State != capacityapi.ActivityEnded || provision.PrimaryReasonCode != "nodeclaim_deleted_cause_unknown" {
+		t.Fatalf("cause-free deletion = %q/%q, want ended/nodeclaim_deleted_cause_unknown", provision.State, provision.PrimaryReasonCode)
 	}
-	provision := byType[capacityapi.ActivityProvision]
-	if provision.State != capacityapi.ActivityFailed || provision.PrimaryReasonCode != "nodeclaim_deleted_before_ready" {
-		t.Fatalf("unfinished provision after delete = %q/%q, want failed/nodeclaim_deleted_before_ready", provision.State, provision.PrimaryReasonCode)
+	if provision.Summary != "NodeClaim deleted before becoming Ready — cause not recorded" {
+		t.Fatalf("ended provision summary = %q, must not assert a failure", provision.Summary)
 	}
+	if strings.Contains(strings.ToLower(provision.Summary), "failed") {
+		t.Fatalf("ended provision summary claims failure: %q", provision.Summary)
+	}
+	// It is still terminal: closed out with an end time and the closing evidence.
 	if provision.EndedAt == nil || !provision.EndedAt.Equal(now.Add(15*time.Minute)) || len(provision.Evidence) != 2 {
 		t.Fatalf("unfinished provision end/evidence = %v/%d", provision.EndedAt, len(provision.Evidence))
 	}
-	if byType[capacityapi.ActivityTermination].State != capacityapi.ActivityCompleted {
-		t.Fatalf("termination = %#v", byType[capacityapi.ActivityTermination])
+	if byType(records)[capacityapi.ActivityTermination].State != capacityapi.ActivityCompleted {
+		t.Fatalf("termination = %#v", byType(records)[capacityapi.ActivityTermination])
 	}
 	// Pagination cursors cut on MaxSeq alone — the closed pair must never
 	// share a sequence or a page boundary between them drops one.
@@ -237,11 +301,7 @@ func TestBuildActivityRecordsDeleteClosesUnfinishedProvision(t *testing.T) {
 		{ID: "ready", Seq: 2, Timestamp: now.Add(2 * time.Minute), Source: timeline.SourceK8sEvent, Kind: "NodeClaim", APIVersion: "karpenter.sh/v1", Name: "claim-b", UID: "claim-b-uid", EventType: timeline.EventTypeNormal, Reason: "Ready"},
 		{ID: "deleted", Seq: 3, Timestamp: now.Add(3 * time.Hour), Source: timeline.SourceInformer, Kind: "NodeClaim", APIVersion: "karpenter.sh/v1", Name: "claim-b", UID: "claim-b-uid", EventType: timeline.EventTypeDelete},
 	})
-	byType = map[capacityapi.ActivityType]capacityapi.ActivityEpisode{}
-	for _, record := range records {
-		byType[record.Episode.Type] = record.Episode
-	}
-	provision = byType[capacityapi.ActivityProvision]
+	provision = byType(records)[capacityapi.ActivityProvision]
 	if provision.State != capacityapi.ActivityCompleted || provision.PrimaryReasonCode != "nodeclaim_ready" {
 		t.Fatalf("ready-then-deleted provision = %q/%q, want completed/nodeclaim_ready", provision.State, provision.PrimaryReasonCode)
 	}

@@ -23,7 +23,13 @@ const (
 	ActivityFailed    ActivityState = "failed"
 	ActivityObserved  ActivityState = "observed"
 	ActivityBlocked   ActivityState = "blocked"
-	ActivityUnknown   ActivityState = "unknown"
+	// ActivityEnded terminalizes an episode whose outcome is known to be over
+	// but whose CAUSE was never recorded — a NodeClaim deleted before it ever
+	// reached Ready, with no failing stage in the observed window. It is
+	// deliberately distinct from ActivityFailed: the claim is gone either way,
+	// but only one of those two states asserts something went wrong.
+	ActivityEnded   ActivityState = "ended"
+	ActivityUnknown ActivityState = "unknown"
 )
 
 type EvidenceSource string
