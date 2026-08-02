@@ -169,7 +169,7 @@ func loadPodEnvironmentSources(r *http.Request, client kubernetes.Interface, pod
 			configMap, err := client.CoreV1().ConfigMaps(pod.Namespace).Get(r.Context(), id.Name, metav1.GetOptions{})
 			if err != nil {
 				source.State = sourceStateForError(err)
-				partial = true
+				partial = partial || source.State != envresolve.SourceMissing
 			} else {
 				source.Values = make(map[string]string, len(configMap.Data))
 				for key, value := range configMap.Data {
@@ -181,7 +181,7 @@ func loadPodEnvironmentSources(r *http.Request, client kubernetes.Interface, pod
 			secret, err := client.CoreV1().Secrets(pod.Namespace).Get(r.Context(), id.Name, metav1.GetOptions{})
 			if err != nil {
 				source.State = sourceStateForError(err)
-				partial = true
+				partial = partial || source.State != envresolve.SourceMissing
 			} else {
 				source.Values = make(map[string]string)
 				for key, value := range secret.Data {

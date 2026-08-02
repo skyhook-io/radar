@@ -239,6 +239,12 @@ func podFieldValue(pod *corev1.Pod, path string) (string, error) {
 		return pod.Spec.ServiceAccountName, nil
 	case "status.hostIP":
 		return pod.Status.HostIP, nil
+	case "status.hostIPs":
+		values := make([]string, 0, len(pod.Status.HostIPs))
+		for _, ip := range pod.Status.HostIPs {
+			values = append(values, ip.IP)
+		}
+		return strings.Join(values, ","), nil
 	case "status.podIP":
 		return pod.Status.PodIP, nil
 	case "status.podIPs":

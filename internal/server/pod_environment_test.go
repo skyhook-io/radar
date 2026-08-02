@@ -13,8 +13,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/envresolve"
@@ -161,6 +163,24 @@ func TestLoadPodEnvironmentSourcesMarksUninspectedSourcesUnavailable(t *testing.
 	}
 }
 
+func TestLoadPodEnvironmentSourcesTreatsMissingSourcesAsComplete(t *testing.T) {
+	pod := podEnvironmentTestPod()
+	sources, partial, truncated := loadPodEnvironmentSources(
+		httptest.NewRequest("GET", "/", nil),
+		fake.NewSimpleClientset(),
+		pod,
+		false,
+	)
+	if partial || truncated {
+		t.Fatalf("known-missing sources should be complete: partial=%v truncated=%v", partial, truncated)
+	}
+	for _, id := range []envresolve.SourceID{{Kind: "ConfigMap", Name: "app"}, {Kind: "Secret", Name: "db"}} {
+		if sources[id].State != envresolve.SourceMissing {
+			t.Fatalf("source %v = %+v, want missing", id, sources[id])
+		}
+	}
+}
+
 func TestPartialLaterEnvFromCanLeaveAnUnsafeEarlierReveal(t *testing.T) {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "shop"},
@@ -175,6 +195,10 @@ func TestPartialLaterEnvFromCanLeaveAnUnsafeEarlierReveal(t *testing.T) {
 	client := fake.NewSimpleClientset(&corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "earlier", Namespace: "shop"},
 		Data:       map[string][]byte{"TOKEN": []byte("secret-value")},
+	})
+	client.PrependReactor("get", "configmaps", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		get := action.(k8stesting.GetAction)
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "configmaps"}, get.GetName(), fmt.Errorf("denied"))
 	})
 	sources, partial, _ := loadPodEnvironmentSources(httptest.NewRequest("POST", "/", nil), client, pod, true)
 	_, _, available, found := envresolve.ResolveVariable(pod, "app", "TOKEN", sources, envresolve.NodeData{})

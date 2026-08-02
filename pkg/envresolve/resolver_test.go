@@ -22,12 +22,13 @@ func TestResolvePodPrecedenceAndSecretTaint(t *testing.T) {
 				{Name: "HOST", Value: "override"},
 				{Name: "DSN", Value: "postgres://$(PASSWORD)@$(HOST)"},
 				{Name: "TIER", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.labels['tier']"}}},
+				{Name: "HOST_IPS", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.hostIPs"}}},
 				{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"}}},
 				{Name: "POD_IPS", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIPs"}}},
 				{Name: "NODE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"}}},
 			},
 		}}},
-		Status: corev1.PodStatus{PodIP: "10.0.0.2", PodIPs: []corev1.PodIP{{IP: "10.0.0.2"}, {IP: "fd00::2"}}},
+		Status: corev1.PodStatus{HostIPs: []corev1.HostIP{{IP: "192.0.2.1"}, {IP: "2001:db8::1"}}, PodIP: "10.0.0.2", PodIPs: []corev1.PodIP{{IP: "10.0.0.2"}, {IP: "fd00::2"}}},
 	}
 	sources := map[SourceID]SourceData{
 		{Kind: "ConfigMap", Name: "base"}: {Kind: "ConfigMap", Name: "base", State: SourceAvailable, Keys: []string{"HOST"}, Values: map[string]string{"HOST": "db"}},
@@ -51,8 +52,8 @@ func TestResolvePodPrecedenceAndSecretTaint(t *testing.T) {
 	if rows["TIER"].Value != "api" || !rows["TIER"].CurrentPodValue {
 		t.Fatalf("TIER = %+v", rows["TIER"])
 	}
-	if rows["POD_IP"].Value != "10.0.0.2" || rows["POD_IPS"].Value != "10.0.0.2,fd00::2" || rows["NODE"].Value != "worker-1" {
-		t.Fatalf("field refs: POD_IP=%+v POD_IPS=%+v NODE=%+v", rows["POD_IP"], rows["POD_IPS"], rows["NODE"])
+	if rows["HOST_IPS"].Value != "192.0.2.1,2001:db8::1" || rows["POD_IP"].Value != "10.0.0.2" || rows["POD_IPS"].Value != "10.0.0.2,fd00::2" || rows["NODE"].Value != "worker-1" {
+		t.Fatalf("field refs: HOST_IPS=%+v POD_IP=%+v POD_IPS=%+v NODE=%+v", rows["HOST_IPS"], rows["POD_IP"], rows["POD_IPS"], rows["NODE"])
 	}
 }
 
