@@ -232,8 +232,9 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 		// or affected member), scoped to its namespace — so the agent sees
 		// "crashloop + missing ConfigMap" up front, not just raw logs.
 		RelatedIssues: issues.RelatedIssues(issues.NewCacheProvider(), issues.RelatedIssueOptions{
-			Namespaces:     issueNamespacesForResource(input.Namespace),
-			CanReadRelated: issueRelatedResourceAccess(ctx),
+			Namespaces:           issueNamespacesForResource(input.Namespace),
+			CanReadClusterScoped: issueClusterScopedAccess(ctx),
+			CanReadRelated:       issueRelatedResourceAccess(ctx),
 		}, canonicalGroup, canonicalKind, input.Namespace, input.Name),
 	}
 
@@ -396,8 +397,9 @@ func handleGitOpsDiagnose(ctx context.Context, input diagnoseInput, canonicalKin
 		Resource:        minified,
 		GitOpsDiagnosis: gd,
 		RelatedIssues: issues.RelatedIssues(issues.NewCacheProvider(), issues.RelatedIssueOptions{
-			Namespaces:     issueNamespacesForResource(input.Namespace),
-			CanReadRelated: issueRelatedResourceAccess(ctx),
+			Namespaces:           issueNamespacesForResource(input.Namespace),
+			CanReadClusterScoped: issueClusterScopedAccess(ctx),
+			CanReadRelated:       issueRelatedResourceAccess(ctx),
 		}, group, canonicalKind, input.Namespace, input.Name),
 		Warnings: k8score.EnrichRuntimeObjectWarnings(u),
 	}

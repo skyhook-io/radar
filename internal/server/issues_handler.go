@@ -236,8 +236,9 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 	}
 
 	related := issues.RelatedIssues(provider, issues.RelatedIssueOptions{
-		Namespaces:     namespaces,
-		CanReadRelated: s.issueRelatedResourceAccess(r),
+		Namespaces:           namespaces,
+		CanReadClusterScoped: s.issueClusterScopedAccess(r),
+		CanReadRelated:       s.issueRelatedResourceAccess(r),
 	}, group, kind, namespace, name)
 	if related == nil {
 		related = []issues.Issue{}

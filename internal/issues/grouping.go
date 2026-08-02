@@ -17,7 +17,12 @@ func RelatedIssues(p Provider, opts RelatedIssueOptions, group, kind, namespace,
 	// Compose FLAT (uncapped) then group: matching against the flat evidence —
 	// not the grouped issue's inline Members (capped at maxInlineMembers) — is
 	// what makes member #11..#N in a large fan-out resolve correctly.
-	flat := Compose(p, Filters{Namespaces: opts.Namespaces, Limit: NoLimit, CanReadRelated: opts.CanReadRelated})
+	flat := Compose(p, Filters{
+		Namespaces:           opts.Namespaces,
+		Limit:                NoLimit,
+		CanReadClusterScoped: opts.CanReadClusterScoped,
+		CanReadRelated:       opts.CanReadRelated,
+	})
 	grouped := GroupIssues(flat)
 	// Run the grouped-mode enrichment (mirrors the cluster path) so the grouped
 	// issues get coverage-gated incident_parent pointers — GroupIssues alone only

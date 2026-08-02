@@ -53,8 +53,14 @@ type Filters struct {
 // direct subject and evidence-member matches remain governed by the caller's
 // authorization of the requested resource.
 type RelatedIssueOptions struct {
-	Namespaces     []string
-	CanReadRelated func(Ref) bool
+	Namespaces []string
+	// CanReadClusterScoped mirrors Filters.CanReadClusterScoped — it gates
+	// cluster-scoped Issue rows AND the cluster-scoped state (NodePool specs)
+	// folded into per-issue signals such as capacity relevance. Omitting it here
+	// would let a caller who cannot list NodePools read that state through the
+	// per-resource path. Nil preserves auth-mode=none and internal composition.
+	CanReadClusterScoped func(kind, group string) bool
+	CanReadRelated       func(Ref) bool
 }
 
 const (

@@ -358,9 +358,12 @@ type Issue struct {
 	// exhausted, or a self-perpetuating drift loop).
 	OperationRetryCount int  `json:"operation_retry_count,omitempty"`
 	Stuck               bool `json:"stuck,omitempty"`
-	// CapacityRelevant marks an unschedulable pod that explicitly requires a
-	// Karpenter NodePool (structural signal from the pod spec, not a message
-	// parse) — the frontend links these to the Capacity/Demand view.
+	// CapacityRelevant marks an unschedulable pod Capacity can diagnose — the
+	// frontend links these to the Capacity/Demand view. Two paths set it: the
+	// pod's own spec explicitly requiring a Karpenter NodePool (structural, not
+	// a message parse), and a correlation against observed NodePool specs. The
+	// correlated path is authorized — a caller who cannot list NodePools never
+	// sees it set, since the bit would otherwise leak cluster-scoped pool state.
 	CapacityRelevant     bool               `json:"capacity_relevant,omitempty"`
 	FirstSeen            time.Time          `json:"first_seen,omitzero"`
 	LastSeen             time.Time          `json:"last_seen,omitzero"`

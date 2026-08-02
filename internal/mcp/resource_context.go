@@ -81,8 +81,9 @@ func computeMCPIssueSummary(ctx context.Context, cache *k8s.ResourceCache, group
 	// old flat-by-exact-resource match looked for Kind=Deployment rows, but the
 	// evidence is Kind=Pod), and on a pod past the inline-Members cap too.
 	matched := issues.RelatedIssues(provider, issues.RelatedIssueOptions{
-		Namespaces:     namespaces,
-		CanReadRelated: issueRelatedResourceAccess(ctx),
+		Namespaces:           namespaces,
+		CanReadClusterScoped: issueClusterScopedAccess(ctx),
+		CanReadRelated:       issueRelatedResourceAccess(ctx),
 	}, group, kind, namespace, name)
 	if len(matched) == 0 {
 		return nil
@@ -112,6 +113,15 @@ func issueNamespacesForResource(namespace string) []string {
 		return nil
 	}
 	return []string{namespace}
+}
+
+// issueClusterScopedAccess mirrors the issues_list gate so every composer entry
+// point applies the same cluster-scoped authorization — both to the rows
+// themselves and to the cluster-scoped state (NodePool specs) folded into them.
+func issueClusterScopedAccess(ctx context.Context) func(kind, group string) bool {
+	return func(kind, group string) bool {
+		return canReadClusterScopedKind(ctx, kind, group, "list")
+	}
 }
 
 func issueRelatedResourceAccess(ctx context.Context) func(issues.Ref) bool {

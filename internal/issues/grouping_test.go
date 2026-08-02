@@ -522,4 +522,23 @@ func TestComposeCapacityRelevanceCorrelationRequiresNodePoolAccess(t *testing.T)
 	if !allowed["web-1"].CapacityRelevant || !allowed["pinned-1"].CapacityRelevant {
 		t.Fatalf("authorized caller lost capacity relevance: %+v", allowed)
 	}
+
+	// The per-resource path composes its own rows, so it needs the same gate —
+	// otherwise a caller denied list-nodepools reads correlated pool state by
+	// asking about one pod at a time.
+	relatedDenied := RelatedIssues(provider, RelatedIssueOptions{
+		Namespaces:           []string{"shop"},
+		CanReadClusterScoped: denyNodePools,
+	}, "", "Pod", "shop", "web-1")
+	if len(relatedDenied) != 1 {
+		t.Fatalf("RelatedIssues denied caller: want 1 issue, got %d", len(relatedDenied))
+	}
+	if relatedDenied[0].CapacityRelevant {
+		t.Fatal("correlated capacity relevance leaked through RelatedIssues to a caller denied list-nodepools")
+	}
+
+	relatedAllowed := RelatedIssues(provider, RelatedIssueOptions{Namespaces: []string{"shop"}}, "", "Pod", "shop", "web-1")
+	if len(relatedAllowed) != 1 || !relatedAllowed[0].CapacityRelevant {
+		t.Fatalf("authorized caller lost capacity relevance through RelatedIssues: %+v", relatedAllowed)
+	}
 }
