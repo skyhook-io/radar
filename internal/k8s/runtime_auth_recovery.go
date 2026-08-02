@@ -66,9 +66,11 @@ func runRuntimeAuthRecovery() {
 			startRuntimeAuthRecovery()
 		}
 	}()
-	initialInterval, maxInterval, hungInterval := runtimeAuthRecoveryIntervals()
-	interval := initialInterval
+	interval, _, _ := runtimeAuthRecoveryIntervals()
 	for {
+		// Re-read each pass: a worker can outlive the episode that started it
+		// and adopt the next one, which must not inherit a stale scale.
+		initialInterval, maxInterval, hungInterval := runtimeAuthRecoveryIntervals()
 		select {
 		case <-time.After(interval):
 		case <-runtimeAuthRecoveryNudge:
@@ -97,6 +99,21 @@ func runRuntimeAuthRecovery() {
 		ctx, cancel := context.WithTimeout(context.Background(), connectionTestOperationTimeout())
 		err := getRuntimeAuthProbe()(ctx)
 		cancel()
+		if err != nil && runtimeAuthCredentialsAreStatic() {
+			// Probing the in-memory config can never observe new INLINE
+			// credentials (token:/client-certificate-data: are read once at
+			// connect), but a full reconnect re-reads the kubeconfig from
+			// disk. Without this, users whose re-login rewrites the file
+			// (oc login's daily tokens, a fresh k3s.yaml) never self-heal —
+			// the pre-recovery-loop browser retry re-read disk every attempt.
+			switchErr := getRuntimeAuthReconnect()(contextName, observedGen)
+			if switchErr == nil {
+				return
+			}
+			if !errors.Is(switchErr, ErrReconnectSuperseded) {
+				err = switchErr
+			}
+		}
 		if err != nil {
 			interval = nextRuntimeAuthRecoveryInterval(interval, err, maxInterval, hungInterval)
 			continue
@@ -121,6 +138,20 @@ func runRuntimeAuthRecovery() {
 
 func runtimeAuthRecoveryStillOwed() bool {
 	return runtimeAuthRecoveryOwed.Load() && GetConnectionStatus().State != StateConnected
+}
+
+// Static means nothing in-process can mint fresh credentials: no exec plugin
+// to re-run, no auth provider to refresh, no token/cert file client-go
+// re-reads. Only a kubeconfig re-read (a full reconnect) can pick up new ones.
+func runtimeAuthCredentialsAreStatic() bool {
+	config := GetConfig()
+	if config == nil {
+		return false
+	}
+	return config.ExecProvider == nil &&
+		config.AuthProvider == nil &&
+		config.BearerTokenFile == "" &&
+		config.TLSClientConfig.CertFile == ""
 }
 
 func nextRuntimeAuthRecoveryInterval(current time.Duration, err error, maxInterval, hungInterval time.Duration) time.Duration {

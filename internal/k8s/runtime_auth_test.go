@@ -1145,6 +1145,89 @@ func TestSetConnectionStatusStartsRecoveryForAuthPrefixedTypes(t *testing.T) {
 	waitForRecoveryWorker(t)
 }
 
+func TestRuntimeAuthRecoveryStaticCredentialsReconnectViaDiskReread(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+	setRuntimeAuthRecoveryIntervalsForTest(2*time.Millisecond, 4*time.Millisecond)
+
+	clientMu.Lock()
+	k8sConfig = &rest.Config{Host: "https://cluster.test", BearerToken: "expired-inline-token"}
+	clientMu.Unlock()
+
+	setRuntimeAuthProbe(func(context.Context) error {
+		return errors.New("Kubernetes API returned HTTP 401 Unauthorized")
+	})
+	var reconnects atomic.Int32
+	setRuntimeAuthReconnect(func(contextName string, _ uint64) error {
+		// First attempt: kubeconfig still holds the dead token. Second:
+		// the user re-logged in and the disk re-read picks it up.
+		if reconnects.Add(1) == 1 {
+			return errors.New("cluster connection failed: Unauthorized")
+		}
+		SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: contextName})
+		return nil
+	})
+
+	SetConnectionStatus(ConnectionStatus{
+		State:     StateDisconnected,
+		Context:   "openshift-context",
+		ErrorType: "auth",
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for runtimeAuthRecoveryActive.Load() || reconnects.Load() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("static-credential recovery did not reconnect: reconnects=%d", reconnects.Load())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if status := GetConnectionStatus(); status.State != StateConnected {
+		t.Fatalf("connection did not settle connected, got %+v", status)
+	}
+}
+
+func TestRuntimeAuthRecoveryExecCredentialsSkipDiskRereadAttempts(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+	setRuntimeAuthRecoveryIntervalsForTest(2*time.Millisecond, 4*time.Millisecond)
+
+	clientMu.Lock()
+	k8sConfig = &rest.Config{
+		Host:         "https://cluster.test",
+		ExecProvider: &clientcmdapi.ExecConfig{Command: "aws"},
+	}
+	clientMu.Unlock()
+
+	var probes atomic.Int32
+	setRuntimeAuthProbe(func(context.Context) error {
+		probes.Add(1)
+		return errors.New("getting credentials: exec plugin failed")
+	})
+	var reconnects atomic.Int32
+	setRuntimeAuthReconnect(func(string, uint64) error {
+		reconnects.Add(1)
+		return nil
+	})
+
+	SetConnectionStatus(ConnectionStatus{
+		State:     StateDisconnected,
+		Context:   "eks-context",
+		ErrorType: "auth",
+	})
+	waitForRecoveryWorker(t)
+
+	deadline := time.Now().Add(50 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if probes.Load() == 0 {
+		t.Fatal("recovery never probed")
+	}
+	if reconnects.Load() != 0 {
+		t.Fatalf("reconnects = %d, want 0 (failed probes with an exec plugin must not trigger disk-reread attempts)", reconnects.Load())
+	}
+}
+
 func TestNextRuntimeAuthRecoveryInterval(t *testing.T) {
 	ResetTestState()
 	t.Cleanup(ResetTestState)

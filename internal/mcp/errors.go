@@ -16,7 +16,7 @@ func errNotConnected() error {
 	status := k8s.GetConnectionStatus()
 	if status.State == k8s.StateDisconnected && status.Error != "" {
 		if strings.HasPrefix(status.ErrorType, "auth") {
-			return fmt.Errorf("not connected to cluster: %s. Radar re-checks in the background and usually reconnects on its own once credentials are refreshed (exec-plugin and token-file credentials self-heal; a token replaced inside the kubeconfig file needs POST /api/connection/retry)", status.Error)
+			return fmt.Errorf("not connected to cluster: %s. Radar re-checks in the background and reconnects automatically once credentials are refreshed; POST /api/connection/retry forces an immediate check", status.Error)
 		}
 		return fmt.Errorf("not connected to cluster: %s", status.Error)
 	}
