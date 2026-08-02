@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToString } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
@@ -8,9 +8,13 @@ import type {
 } from "@skyhook-io/k8s-ui";
 import { CapacityCard } from "./CapacityCard";
 
+let mockKarpenterState = "available";
 vi.mock("../../contexts/CapabilitiesContext", () => ({
-  useCapabilitiesContext: () => ({ karpenter: { state: "available" } }),
+  useCapabilitiesContext: () => ({ karpenter: { state: mockKarpenterState } }),
 }));
+beforeEach(() => {
+  mockKarpenterState = "available";
+});
 
 const generatedAt = "2026-07-13T08:00:00Z";
 
@@ -94,6 +98,46 @@ describe("CapacityCard", () => {
       ),
     );
     expect(html).toContain("≥3");
+  });
+
+  it("renders the softened truth for a denied Karpenter instead of vanishing", () => {
+    mockKarpenterState = "denied";
+    const html = renderCard({
+      ...overview({ poolCount: undefined, claimCount: undefined }),
+      state: "denied",
+    });
+    expect(html).toContain("Karpenter view unavailable");
+    expect(html).not.toContain("No active signals");
+    expect(html).toContain("NodePools");
+    expect(html).toContain("—");
+    expect(html).toContain(">6<");
+  });
+
+  it("renders a cluster card on a Karpenter-less cluster with managers", () => {
+    mockKarpenterState = "not_detected";
+    const html = renderCard({
+      ...overview({
+        poolCount: undefined,
+        claimCount: undefined,
+        managers: [
+          { manager: "gke_autoscaler", groupCount: 2, status: "healthy" },
+        ],
+      }),
+      state: "not_detected",
+    });
+    expect(html).toContain("Node groups");
+    expect(html).toContain("Managers");
+    expect(html).not.toContain("NodePools");
+    expect(html).not.toContain("NodeClaims");
+  });
+
+  it("keeps a quiet Home on a bare cluster with no capacity story", () => {
+    mockKarpenterState = "not_detected";
+    const html = renderCard({
+      ...overview({ poolCount: undefined, claimCount: undefined, managers: [] }),
+      state: "not_detected",
+    });
+    expect(html).toBe("");
   });
 
   it("renders an omitted NodePool count as unavailable, never zero", () => {

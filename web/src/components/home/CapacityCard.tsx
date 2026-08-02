@@ -4,40 +4,63 @@ import { useCapacityOverview } from '../../api/client'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
 import { coverageIsLowerBound, humanizeCode } from '../capacity/shared'
 
-// CapacityCard surfaces Karpenter fleet posture on the Home dashboard —
-// pool count, pending demand, and the worst operational signal — so morning
-// triage reaches the Capacity view without knowing it exists.
-//
-// Capability-gated twice: rendered only when the RBAC-aware Karpenter
-// capability is available, and content only when the overview responds
-// available. Numbers the backend omitted (RBAC-denied / unobserved sources)
-// render as "—", never zero.
+// CapacityCard surfaces the cluster's capacity posture on the Home dashboard
+// so morning triage reaches the Capacity view without knowing it exists. It
+// renders whenever the cluster has a capacity story: Karpenter available, a
+// Karpenter the caller is denied (softened rows, honest header — the denied
+// Overview shape carries real node/pod truth), or detected managers/groups on
+// a Karpenter-less cluster. Bare clusters with no story keep a quiet Home.
+// Numbers the backend omitted (RBAC-denied / unobserved) render as "—",
+// never zero.
 export function CapacityCard({ onNavigate }: { onNavigate: () => void }) {
-  const karpenterAvailable = useCapabilitiesContext().karpenter?.state === 'available'
-  const { data } = useCapacityOverview({ enabled: karpenterAvailable })
-  if (!karpenterAvailable || !data || data.state !== 'available') return null
+  const karpenterState = useCapabilitiesContext().karpenter?.state
+  const mayHaveStory =
+    karpenterState === 'available' || karpenterState === 'denied' || karpenterState === 'not_detected'
+  const { data } = useCapacityOverview({ enabled: mayHaveStory })
+  if (!mayHaveStory || !data) return null
+  const karpenterDenied = data.state === 'denied'
+  const karpenterless = data.state === 'not_detected'
+  if (!karpenterDenied && !karpenterless && data.state !== 'available') return null
+  if (karpenterless && (data.summary.managers?.length ?? 0) === 0 && data.groups.length === 0)
+    return null
 
   const actions = data.summary.actions ?? []
   const worst = actions.find((a) => a.highestSeverity === 'critical') ?? actions.find((a) => a.highestSeverity === 'warning')
-  const headerTone = worst
-    ? worst.highestSeverity === 'critical'
-      ? 'text-red-500'
-      : 'text-amber-400'
-    : 'text-emerald-500'
-  const headerLabel = worst ? humanizeCode(worst.code) : 'No active signals'
+  // A denied Karpenter must not read as healthy: "no signals" would be a
+  // claim about a fleet this identity cannot see.
+  const headerTone = karpenterDenied
+    ? 'text-theme-text-tertiary'
+    : worst
+      ? worst.highestSeverity === 'critical'
+        ? 'text-red-500'
+        : 'text-amber-400'
+      : 'text-emerald-500'
+  const headerLabel = karpenterDenied
+    ? 'Karpenter view unavailable'
+    : worst
+      ? humanizeCode(worst.code)
+      : 'No active signals'
 
   // Namespace-scoped pod coverage hides pending pods this identity cannot see,
   // so the count is a floor — it must not read as the cluster total.
   const pendingIsLowerBound = coverageIsLowerBound(data.coverage.pods)
-  const stats: { label: string; value: string }[] = [
-    { label: 'NodePools', value: absentAsDash(data.summary.poolCount) },
-    {
-      label: 'Pending pods',
-      value: absentAsDash(data.summary.pendingPodCount, pendingIsLowerBound ? '≥' : ''),
-    },
-    { label: 'NodeClaims', value: absentAsDash(data.summary.claimCount) },
-    { label: 'Nodes', value: absentAsDash(data.summary.nodeCount) },
-  ]
+  const pendingStat = {
+    label: 'Pending pods',
+    value: absentAsDash(data.summary.pendingPodCount, pendingIsLowerBound ? '≥' : ''),
+  }
+  const stats: { label: string; value: string }[] = karpenterless
+    ? [
+        { label: 'Node groups', value: `${data.groups.length}` },
+        pendingStat,
+        { label: 'Managers', value: `${data.summary.managers?.length ?? 0}` },
+        { label: 'Nodes', value: absentAsDash(data.summary.nodeCount) },
+      ]
+    : [
+        { label: 'NodePools', value: absentAsDash(data.summary.poolCount) },
+        pendingStat,
+        { label: 'NodeClaims', value: absentAsDash(data.summary.claimCount) },
+        { label: 'Nodes', value: absentAsDash(data.summary.nodeCount) },
+      ]
 
   return (
     <button
