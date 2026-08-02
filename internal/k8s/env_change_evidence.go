@@ -8,6 +8,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/envresolve"
@@ -101,6 +102,20 @@ func FindPodEnvChanges(ctx context.Context, cache *ResourceCache, pod *corev1.Po
 				appendCurrentSourceChange(&out, changes, pod.Namespace, container.Name, env.Name, "Secret", ref.Name, ref.Key, startedAt, true)
 			}
 		}
+	}
+	appendEnvFromChanges(&out, pod, changes)
+	sortPodEnvChanges(out)
+	return deduplicatePodEnvChanges(out), coverage
+}
+
+func appendEnvFromChanges(out *[]PodEnvChange, pod *corev1.Pod, changes map[podEnvSourceKey]podEnvSourceChange) {
+	statuses := staleSecretEnvContainerStatuses(pod)
+	for _, container := range staleSecretEnvContainers(pod) {
+		status, ok := statuses[container.Name]
+		if !ok || status.State.Running == nil || status.State.Running.StartedAt.IsZero() {
+			continue
+		}
+		startedAt := status.State.Running.StartedAt.Time
 		for _, from := range container.EnvFrom {
 			kind, name, _ := envFromIdentityForEvidence(from)
 			if name == "" {
@@ -110,12 +125,14 @@ func FindPodEnvChanges(ctx context.Context, cache *ResourceCache, pod *corev1.Po
 				if identity.kind != kind || identity.namespace != pod.Namespace || identity.name != name || (kind == "Secret" && change.kind != "added") || !startedAt.Before(change.changedAt) {
 					continue
 				}
-				out = append(out, newPodEnvChange(container.Name, from.Prefix+identity.key, kind, name, identity.key, change.kind, change.changedAt))
+				variable := from.Prefix + identity.key
+				if len(validation.IsEnvVarName(variable)) != 0 {
+					continue
+				}
+				*out = append(*out, newPodEnvChange(container.Name, variable, kind, name, identity.key, change.kind, change.changedAt))
 			}
 		}
 	}
-	sortPodEnvChanges(out)
-	return deduplicatePodEnvChanges(out), coverage
 }
 
 func appendCurrentSourceChange(out *[]PodEnvChange, changes map[podEnvSourceKey]podEnvSourceChange, namespace, container, variable, kind, name, key string, startedAt time.Time, additionsOnly bool) {

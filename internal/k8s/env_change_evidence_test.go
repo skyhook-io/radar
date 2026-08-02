@@ -6,6 +6,8 @@ import (
 
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/envresolve"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestLatestPodEnvSourceChangesUsesLatestObservedKeyChange(t *testing.T) {
@@ -47,5 +49,31 @@ func TestLatestPodEnvSourceChangesUsesLatestObservedKeyChange(t *testing.T) {
 	}
 	if len(got) != 3 {
 		t.Fatalf("unexpected changes: %+v", got)
+	}
+}
+
+func TestFindPodEnvChangesSkipsInvalidEnvFromKeys(t *testing.T) {
+	startedAt := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	changes := map[podEnvSourceKey]podEnvSourceChange{
+		{kind: "ConfigMap", namespace: "shop", name: "app", key: "VALID"}:    {kind: "removed", changedAt: startedAt.Add(time.Minute)},
+		{kind: "ConfigMap", namespace: "shop", name: "app", key: "bad=name"}: {kind: "removed", changedAt: startedAt.Add(time.Minute)},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "shop"},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "app",
+			EnvFrom: []corev1.EnvFromSource{{
+				ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "app"}},
+			}},
+		}}},
+		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+			Name: "app", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(startedAt)}},
+		}}},
+	}
+
+	var got []PodEnvChange
+	appendEnvFromChanges(&got, pod, changes)
+	if len(got) != 1 || got[0].Variable != "VALID" {
+		t.Fatalf("envFrom changes = %+v, want only VALID", got)
 	}
 }

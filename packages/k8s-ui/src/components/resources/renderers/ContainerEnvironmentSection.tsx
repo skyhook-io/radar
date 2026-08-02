@@ -301,7 +301,7 @@ function SourceLabel({
     : source.kind === 'Pod'
       ? 'Pod'
       : source.kind === 'Container resources'
-        ? 'Pod resources'
+        ? 'Container resources'
         : source.kind
   return <span className="text-theme-text-secondary">{label}</span>
 }

@@ -343,11 +343,7 @@ func expand(input string, bindings map[string]binding) (string, []SourceRef, boo
 				dependencyState = dep.row.State
 				dependencyMessage = dep.row.Message
 			}
-			if dep.available {
-				out.WriteString(dep.value)
-			} else {
-				out.WriteString(input[i : end+1])
-			}
+			out.WriteString(dep.value)
 		}
 		i = end + 1
 	}

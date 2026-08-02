@@ -65,7 +65,7 @@ func TestResolvePodSinglePassAndRuntimeDependency(t *testing.T) {
 	if !rows["A"].RuntimeDependent || rows["A"].State != ValueUnavailable {
 		t.Fatalf("A = %+v", rows["A"])
 	}
-	if !rows["B"].RuntimeDependent || rows["B"].Value != "$(A)" || rows["B"].State != ValueUnavailable {
+	if !rows["B"].RuntimeDependent || rows["B"].Value != "$(IMAGE_VAR)" || rows["B"].State != ValueUnavailable {
 		t.Fatalf("B = %+v", rows["B"])
 	}
 	if rows["C"].Value != "$(A)" {
