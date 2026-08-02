@@ -249,6 +249,11 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     },
     onSettled: () => {
       manualRetryPendingRef.current = false
+      // A poll that resolved mid-retry was deliberately dropped; refetch now
+      // rather than leaving the UI on the retry's outcome until the next
+      // 30s tick (a failed retry against a healthy server would otherwise
+      // park the error screen).
+      queryClient.invalidateQueries({ queryKey: ['connection-status'] })
     },
   })
   useEffect(() => {
@@ -307,6 +312,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
           .finally(() => {
             autoRetryInFlightRef.current = false
             setIsAutoRetrying(false)
+            // Mirror the manual-retry onSettled: re-poll so a status update
+            // dropped by the mid-retry guard isn't stranded until next tick.
+            queryClient.invalidateQueries({ queryKey: ['connection-status'] })
             if (!stopped && !recovered) {
               scheduleRetry()
             }
