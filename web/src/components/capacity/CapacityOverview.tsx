@@ -14,6 +14,7 @@ import {
   type CapacityCoverageBySource,
   type CapacityDemandState,
   type CapacityGroupSummary,
+  type CapacityIntegrationState,
   type CapacityManagerSummary,
   type CapacityOverviewResponse,
   type CapacityOverviewSummary,
@@ -137,14 +138,21 @@ export function coverageCertainty(
  * through its NodePool, so unreadable NodePools hide scale-to-zero groups
  * entirely and make the count a lower bound even when every node was observed.
  */
-export function nodeGroupsCertainty(coverage: CapacityCoverageBySource): {
+export function nodeGroupsCertainty(
+  coverage: CapacityCoverageBySource,
+  state: CapacityIntegrationState,
+): {
   certainty: CapacityCertainty;
   title: string;
 } {
   const fromNodes = coverageCertainty(coverage.nodes);
   const nodePools = coverage.nodePools;
+  // With Karpenter absent there are no NodePools to hide behind, so nothing is
+  // invisible and the count keeps the nodes' own certainty.
   const nodePoolsHidden =
-    nodePools !== undefined && !coverageHasObservations(nodePools);
+    state !== "not_detected" &&
+    nodePools !== undefined &&
+    !coverageHasObservations(nodePools);
   if (fromNodes === "unknown" || !nodePoolsHidden)
     return {
       certainty: fromNodes,
@@ -165,7 +173,7 @@ export function autoscalerDetectionFailure(
 ): string | null {
   if (!coverage) return null;
   if (coverage.status === "denied")
-    return 'Autoscaler status is hidden by permissions — this is not "none detected".';
+    return "Autoscaler status is hidden by permissions, so managers could not be detected.";
   if (coverage.status !== "unavailable" && coverage.status !== "error")
     return null;
   switch (coverage.reasonCode) {
@@ -228,6 +236,11 @@ function nodeGroupsSubline(
   if (data.groups.length === 0) {
     if (!coverageHasObservations(coverage.nodes))
       return coverageMessage(coverage.nodes, "Node inventory");
+    // Karpenter simply is not installed. That is a true observation, so it must
+    // not borrow the "unavailable" phrasing that means we tried and could not
+    // see — the server leaves this coverage reasonless precisely because there
+    // was nothing to fail at.
+    if (data.state === "not_detected") return "Karpenter not detected";
     // Unreadable NodePools cannot be summarized as "none identified" — the
     // pools may exist and simply be invisible to this identity.
     return summary.poolCount === undefined
@@ -344,7 +357,7 @@ export function CapacityOverview({
   const schedulingForBar =
     clusterScheduling ?? (karpenterActive ? summary.scheduling : undefined);
   const schedulingScope = clusterScheduling ? "cluster" : "karpenter";
-  const groupsCertainty = nodeGroupsCertainty(coverage);
+  const groupsCertainty = nodeGroupsCertainty(coverage, data.state);
 
   const signals = buildSignals(summary, { onOpenPool, onNavigate });
 
@@ -747,6 +760,11 @@ function NodeGroupsSection({
   onOpenResource: (resource: SelectedResource) => void;
 }) {
   const nodesObserved = coverageHasObservations(coverage.nodes);
+  // A group with no attributed manager means one of two very different things,
+  // and only the detection source can tell them apart.
+  const detectionFailure = autoscalerDetectionFailure(
+    coverage.autoscalerStatus,
+  );
   const poolByName = useMemo(() => {
     const map = new Map<string, CapacityPoolSummary>();
     for (const pool of pools) map.set(pool.resource.ref.name, pool);
@@ -809,6 +827,7 @@ function NodeGroupsSection({
                           ? poolByName.get(group.name)
                           : undefined
                       }
+                      detectionFailure={detectionFailure}
                       onOpenPool={onOpenPool}
                       onOpenResource={onOpenResource}
                     />
@@ -941,11 +960,15 @@ function worstChildHealth(
 function GroupRow({
   group,
   pool,
+  detectionFailure,
   onOpenPool,
   onOpenResource,
 }: {
   group: CapacityGroupSummary;
   pool?: CapacityPoolSummary;
+  /** Why manager detection could not run, when it could not. Non-null forbids
+   *  the "none detected" conclusion for a group with no attributed manager. */
+  detectionFailure: string | null;
   onOpenPool: (name: string) => void;
   onOpenResource: (resource: SelectedResource) => void;
 }) {
@@ -1056,6 +1079,12 @@ function GroupRow({
               </Badge>
               {!group.managerValidated && <UnvalidatedHint />}
             </span>
+          ) : detectionFailure ? (
+            <WithTooltip tip={detectionFailure}>
+              <span className="text-xs text-theme-text-tertiary">
+                detection unavailable
+              </span>
+            </WithTooltip>
           ) : (
             <WithTooltip tip="No manager could be attributed to this group's nodes.">
               <span className="text-xs text-theme-text-tertiary">
@@ -1462,7 +1491,13 @@ function buildSignals(
       key: "inventory:outside-pools",
       severity: "neutral",
       title: "Inventory outside live pools",
-      detail: `${parts.join("; ")}. Both may be intentional.`,
+      // "Both" only when two facts are actually listed — one orphaned-claim or
+      // one unpooled-node fact reads as a miscount otherwise.
+      detail: `${parts.join("; ")}. ${
+        parts.length > 1
+          ? "Both may be intentional."
+          : "This may be intentional."
+      }`,
     });
   }
 

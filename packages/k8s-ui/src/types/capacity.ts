@@ -605,8 +605,17 @@ export type CapacityActivityType =
   | "interruption"
   | "termination"
   | "config_change";
+/** `ended` terminalizes an episode without asserting a cause — the subject went
+ *  away before reaching its goal and no failure evidence was recorded. It is
+ *  deliberately neither `completed` nor `failed`. */
 export type CapacityActivityState =
-  "open" | "completed" | "failed" | "observed" | "blocked" | "unknown";
+  | "open"
+  | "completed"
+  | "ended"
+  | "failed"
+  | "observed"
+  | "blocked"
+  | "unknown";
 export type CapacityEvidenceSource =
   "condition" | "k8s_event" | "resource_change";
 export type CapacityEvidenceRelationship =

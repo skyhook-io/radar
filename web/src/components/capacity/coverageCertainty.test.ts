@@ -51,10 +51,10 @@ describe("coverageCertainty", () => {
 describe("nodeGroupsCertainty", () => {
   it("is exact only when nodes and NodePools were both observed", () => {
     expect(
-      nodeGroupsCertainty({
-        nodes: cov("available"),
-        nodePools: cov("available"),
-      }).certainty,
+      nodeGroupsCertainty(
+        { nodes: cov("available"), nodePools: cov("available") },
+        "available",
+      ).certainty,
     ).toBe("exact");
   });
 
@@ -65,10 +65,10 @@ describe("nodeGroupsCertainty", () => {
       "error",
       "syncing",
     ] as const) {
-      const result = nodeGroupsCertainty({
-        nodes: cov("available"),
-        nodePools: cov(status),
-      });
+      const result = nodeGroupsCertainty(
+        { nodes: cov("available"), nodePools: cov(status) },
+        "denied",
+      );
       expect(result.certainty).toBe("lower_bound");
       expect(result.title).toContain("lower bound");
     }
@@ -76,15 +76,29 @@ describe("nodeGroupsCertainty", () => {
 
   it("stays unknown when nodes themselves were not observed", () => {
     expect(
-      nodeGroupsCertainty({ nodes: cov("denied"), nodePools: cov("denied") })
-        .certainty,
+      nodeGroupsCertainty(
+        { nodes: cov("denied"), nodePools: cov("denied") },
+        "denied",
+      ).certainty,
     ).toBe("unknown");
   });
 
   it("does not hedge a cluster that simply has no NodePool source", () => {
-    expect(nodeGroupsCertainty({ nodes: cov("available") }).certainty).toBe(
-      "exact",
+    expect(
+      nodeGroupsCertainty({ nodes: cov("available") }, "not_detected")
+        .certainty,
+    ).toBe("exact");
+  });
+
+  it("does not hedge when Karpenter is absent — nothing is hidden", () => {
+    // The server reports unavailable NodePool coverage on a Karpenter-less
+    // cluster, but there are no NodePools to conceal scale-to-zero groups.
+    const result = nodeGroupsCertainty(
+      { nodes: cov("available"), nodePools: cov("unavailable") },
+      "not_detected",
     );
+    expect(result.certainty).toBe("exact");
+    expect(result.title).not.toContain("lower bound");
   });
 });
 

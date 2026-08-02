@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { renderToString } from "react-dom/server";
-import type { CapacityQuantityObservation } from "@skyhook-io/k8s-ui";
+import type {
+  CapacityActivityState,
+  CapacityQuantityObservation,
+} from "@skyhook-io/k8s-ui";
 import {
+  ActivityStateBadge,
   CertaintyGlyph,
   InventoryQuantityCell,
   QuantityInline,
@@ -143,5 +147,31 @@ describe("managerStatusRank", () => {
     expect(managerStatusRank("suspended_for_maintenance")).toBe(
       managerStatusRank("unknown"),
     );
+  });
+});
+
+describe("ActivityStateBadge", () => {
+  const render = (state: CapacityActivityState) =>
+    renderToString(<ActivityStateBadge state={state} />);
+
+  it("renders `ended` without claiming success or failure", () => {
+    const html = render("ended");
+    expect(html).toContain("ended");
+    // Terminalized with no cause recorded — the success and error palettes
+    // would both assert evidence Radar never saw.
+    expect(html).not.toContain("emerald");
+    expect(html).not.toContain("red-");
+    expect(html).toContain("text-theme-text-secondary");
+  });
+
+  it("keeps completed and failed distinctly toned", () => {
+    expect(render("completed")).toContain("emerald");
+    expect(render("failed")).toContain("red-");
+  });
+
+  it("falls back to a neutral badge for a state this build does not know", () => {
+    const html = render("superseded" as CapacityActivityState);
+    expect(html).toContain("superseded");
+    expect(html).toContain("text-theme-text-secondary");
   });
 });

@@ -686,26 +686,42 @@ export function PoolEvaluationBadge({
   );
 }
 
+const ACTIVITY_STATE_SEVERITY: Record<
+  string,
+  "error" | "warning" | "info" | "success" | "neutral"
+> = {
+  failed: "error",
+  blocked: "warning",
+  open: "info",
+  completed: "success",
+  // `ended` is deliberately toneless. The episode terminated with no evidence
+  // either way, so green would claim a success and red a failure that Radar
+  // never observed. An unrecognized future state lands on the same default.
+  ended: "neutral",
+  observed: "neutral",
+  unknown: "neutral",
+};
+
 export function ActivityStateBadge({
   state,
 }: {
   state: CapacityActivityEpisode["state"];
 }) {
-  const severity =
-    state === "failed"
-      ? "error"
-      : state === "blocked"
-        ? "warning"
-        : state === "open"
-          ? "info"
-          : state === "completed"
-            ? "success"
-            : "neutral";
   return (
-    <Badge severity={severity} size="sm">
-      {state}
-    </Badge>
+    <WithTooltip tip={activityStateTip(state)}>
+      <Badge severity={ACTIVITY_STATE_SEVERITY[state] ?? "neutral"} size="sm">
+        {state}
+      </Badge>
+    </WithTooltip>
   );
+}
+
+function activityStateTip(
+  state: CapacityActivityEpisode["state"],
+): string | undefined {
+  if (state === "ended")
+    return "Ended without a recorded cause — the subject went away before reaching its goal. Radar does not claim this failed or succeeded.";
+  return undefined;
 }
 
 export function ConditionBadge({
@@ -1341,12 +1357,15 @@ export function EmptyState({
 export function ScrollableContent({ children }: { children: ReactNode }) {
   // Expanding/collapsing cards can toggle the scrollbar; a stable gutter
   // keeps the centered column from shifting sideways when that happens.
+  // The margin (not padding — scrolled content paints over scrollport
+  // padding) keeps a constant breathing gap under the top bar while
+  // scrolled; the inner pt shrinks so the unscrolled rhythm is unchanged.
   return (
     <div
-      className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
+      className="mt-2 min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
       id="rk-scroll"
     >
-      <div className="mx-auto max-w-[1760px] space-y-5 px-5 py-5 xl:px-7">
+      <div className="mx-auto max-w-[1760px] space-y-5 px-5 pb-5 pt-3 xl:px-7">
         {children}
       </div>
     </div>

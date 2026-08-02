@@ -715,6 +715,37 @@ describe("CapacityView overview", () => {
     expect(html).toContain("Warn");
   });
 
+  it("makes the outside-pools note agree with how many facts it lists", () => {
+    const base = overview();
+    const single = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], {
+        ...base,
+        summary: {
+          ...base.summary,
+          actions: [],
+          orphanedClaimCount: 0,
+          unpooledNodeCount: 9,
+        },
+      }),
+    );
+    expect(single).toContain("9 nodes are outside Karpenter pools");
+    expect(single).toContain("This may be intentional.");
+    expect(single).not.toContain("Both may be intentional.");
+
+    const both = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], {
+        ...base,
+        summary: {
+          ...base.summary,
+          actions: [],
+          orphanedClaimCount: 2,
+          unpooledNodeCount: 9,
+        },
+      }),
+    );
+    expect(both).toContain("Both may be intentional.");
+  });
+
   it("marks pending pods unavailable — never zero — when pod access is denied", () => {
     const denied = overview({
       summary: { ...overview().summary, pendingPodCount: undefined },
@@ -967,6 +998,34 @@ describe("CapacityView overview", () => {
     expect(html).not.toContain("Operational signals");
   });
 
+  it("says Karpenter is not detected rather than calling its inventory unavailable", () => {
+    // A cluster with no Karpenter CRDs at all: nodes are fully observed and
+    // carry no group-identity labels, so there is nothing we failed to read.
+    const notDetected = overview({
+      state: "not_detected",
+      pools: [],
+      groups: [],
+      coverage: {
+        ...meta.coverage,
+        nodePools: sourceCoverage("unavailable"),
+      },
+    });
+    notDetected.summary = {
+      ...notDetected.summary,
+      poolCount: undefined,
+      claimCount: undefined,
+      claimStages: undefined,
+      scheduling: undefined,
+      nodeCount: 9,
+    };
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], notDetected),
+    );
+    expect(html).toContain("Karpenter not detected");
+    // "Unavailable" would claim we tried to look and could not.
+    expect(html).not.toContain("NodePool inventory is unavailable");
+  });
+
   it("keeps the not-detected block when the cluster exposes no observable capacity surface", () => {
     const blank = overview({
       state: "not_detected",
@@ -1051,6 +1110,86 @@ describe("CapacityView overview", () => {
       expect(html).toContain("Detection unavailable");
       expect(html).not.toContain("None detected");
     }
+  });
+
+  it("never concludes 'none detected' anywhere on the page while detection is unavailable", () => {
+    // The tile was fixed first; the group row's Manager column reached the same
+    // conclusion in lowercase. Assert over the WHOLE page, both capitalizations.
+    const managerlessGroup: CapacityGroupSummary = {
+      ...gkeGroup,
+      manager: undefined,
+      children: [],
+      childrenMeta: boundedMeta(0),
+      scaling: [
+        {
+          code: "manager_detection_unavailable",
+          summary: "manager detection unavailable",
+        },
+      ],
+    };
+    for (const coverage of [
+      sourceCoverage("denied", "Autoscaler status hidden by permissions"),
+      {
+        ...sourceCoverage("unavailable"),
+        reasonCode: "autoscaler_status_cache_scope",
+      },
+      {
+        ...sourceCoverage("unavailable"),
+        reasonCode: "autoscaler_status_cache_unavailable",
+      },
+      {
+        ...sourceCoverage("error"),
+        reasonCode: "autoscaler_status_read_failed",
+      },
+      {
+        ...sourceCoverage("unavailable"),
+        reasonCode: "autoscaler_status_parse_failed",
+      },
+    ]) {
+      const base = overview();
+      const html = renderCapacity("/capacity", (client) =>
+        client.setQueryData(["capacity", "overview"], {
+          ...base,
+          summary: { ...base.summary, managers: [] },
+          groups: [managerlessGroup],
+          coverage: { ...meta.coverage, autoscalerStatus: coverage },
+        }),
+      );
+      expect(html).not.toMatch(/none detected/i);
+      expect(html).toContain("Detection unavailable");
+      expect(html).toContain("detection unavailable");
+      // The Scaling column's server-authored fact must not contradict the
+      // Manager column beside it.
+      expect(html).toContain("manager detection unavailable");
+    }
+  });
+
+  it("still concludes 'none detected' in tile and row when the source was read", () => {
+    const managerlessGroup: CapacityGroupSummary = {
+      ...gkeGroup,
+      manager: undefined,
+      children: [],
+      childrenMeta: boundedMeta(0),
+    };
+    const base = overview();
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], {
+        ...base,
+        summary: { ...base.summary, managers: [] },
+        groups: [managerlessGroup],
+        coverage: {
+          ...meta.coverage,
+          autoscalerStatus: {
+            ...sourceCoverage("unavailable"),
+            reasonCode: "autoscaler_status_not_published",
+            namespaces: ["kube-system"],
+          },
+        },
+      }),
+    );
+    expect(html).toContain("None detected");
+    expect(html).toContain("none detected");
+    expect(html).not.toContain("detection unavailable");
   });
 
   it("says none detected only when the autoscaler was read and published nothing", () => {
