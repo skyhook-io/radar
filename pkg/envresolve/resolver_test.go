@@ -138,6 +138,35 @@ func TestResolvePodUsesNodeAllocatableForMissingLimit(t *testing.T) {
 	}
 }
 
+func TestResolvePodUsesResourceFieldRefContainerName(t *testing.T) {
+	pod := &corev1.Pod{Spec: corev1.PodSpec{NodeName: "worker-1", Containers: []corev1.Container{
+		{Name: "producer", Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("250m")}}},
+		{Name: "consumer", Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1")}}, Env: []corev1.EnvVar{
+			{Name: "PRODUCER_CPU", ValueFrom: &corev1.EnvVarSource{ResourceFieldRef: &corev1.ResourceFieldSelector{
+				ContainerName: "producer", Resource: "limits.cpu", Divisor: resource.MustParse("1m"),
+			}}},
+		}},
+	}}}
+	if PodEnvironmentNeedsNode(pod) {
+		t.Fatal("declared target-container limit should not require Node data")
+	}
+	rows := rowsByName(ResolvePod(pod, nil, NodeData{}).Containers[1].Rows)
+	if rows["PRODUCER_CPU"].Value != "250" {
+		t.Fatalf("PRODUCER_CPU = %+v", rows["PRODUCER_CPU"])
+	}
+
+	delete(pod.Spec.Containers[0].Resources.Limits, corev1.ResourceCPU)
+	if !PodEnvironmentNeedsNode(pod) {
+		t.Fatal("missing target-container limit should require Node data")
+	}
+	rows = rowsByName(ResolvePod(pod, nil, NodeData{
+		State: SourceAvailable, Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")},
+	}).Containers[1].Rows)
+	if rows["PRODUCER_CPU"].Value != "2000" {
+		t.Fatalf("PRODUCER_CPU with Node fallback = %+v", rows["PRODUCER_CPU"])
+	}
+}
+
 func rowsByName(rows []Row) map[string]Row {
 	out := make(map[string]Row, len(rows))
 	for _, row := range rows {

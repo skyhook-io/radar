@@ -163,8 +163,11 @@ func resolveExplicit(pod *corev1.Pod, container *corev1.Container, env corev1.En
 		return binding{row: Row{Name: env.Name, State: ValueResolved, Source: SourceRef{Kind: "Pod", Key: ref.FieldPath}, CurrentPodValue: true, Message: "This is the current Pod value; the container evaluated it when it started."}, value: value, available: true}
 	}
 	if ref := env.ValueFrom.ResourceFieldRef; ref != nil {
-		resourceContainer := container
-		if resourceName, ok := missingLimitResource(container, ref.Resource); ok {
+		resourceContainer, err := resourceFieldContainer(pod, container, ref.ContainerName)
+		if err != nil {
+			return unavailable(env.Name, "Container resources", err.Error())
+		}
+		if resourceName, ok := missingLimitResource(resourceContainer, ref.Resource); ok {
 			if node.State != SourceAvailable {
 				state, message := stateForSource(node.State, false, "Node", pod.Spec.NodeName)
 				return binding{row: Row{Name: env.Name, State: state, Source: SourceRef{Kind: "Container resources", Key: ref.Resource}, Message: message}}
@@ -173,7 +176,7 @@ func resolveExplicit(pod *corev1.Pod, container *corev1.Container, env corev1.En
 			if !ok {
 				return unavailable(env.Name, "Container resources", "The assigned Node does not report this resource.")
 			}
-			copy := container.DeepCopy()
+			copy := resourceContainer.DeepCopy()
 			if copy.Resources.Limits == nil {
 				copy.Resources.Limits = corev1.ResourceList{}
 			}
@@ -217,6 +220,47 @@ func missingLimitResource(container *corev1.Container, selector string) (corev1.
 	name := corev1.ResourceName(strings.TrimPrefix(selector, "limits."))
 	_, exists := container.Resources.Limits[name]
 	return name, !exists
+}
+
+func PodEnvironmentNeedsNode(pod *corev1.Pod) bool {
+	if pod == nil {
+		return false
+	}
+	containers := append([]corev1.Container(nil), pod.Spec.InitContainers...)
+	containers = append(containers, pod.Spec.Containers...)
+	for i := range containers {
+		for _, env := range containers[i].Env {
+			if env.ValueFrom == nil || env.ValueFrom.ResourceFieldRef == nil {
+				continue
+			}
+			ref := env.ValueFrom.ResourceFieldRef
+			resourceContainer, err := resourceFieldContainer(pod, &containers[i], ref.ContainerName)
+			if err != nil {
+				continue
+			}
+			if _, missing := missingLimitResource(resourceContainer, ref.Resource); missing {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func resourceFieldContainer(pod *corev1.Pod, current *corev1.Container, name string) (*corev1.Container, error) {
+	if name == "" || name == current.Name {
+		return current, nil
+	}
+	for i := range pod.Spec.InitContainers {
+		if pod.Spec.InitContainers[i].Name == name {
+			return &pod.Spec.InitContainers[i], nil
+		}
+	}
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].Name == name {
+			return &pod.Spec.Containers[i], nil
+		}
+	}
+	return nil, fmt.Errorf("container %q was not found", name)
 }
 
 func resolveKeyRef(envName, kind, name, key string, optional bool, sources map[SourceID]SourceData) binding {

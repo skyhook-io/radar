@@ -134,7 +134,7 @@ func (s *Server) handleRevealPodEnvironment(w http.ResponseWriter, r *http.Reque
 }
 
 func loadPodEnvironmentNode(r *http.Request, client kubernetes.Interface, pod *corev1.Pod) (envresolve.NodeData, bool) {
-	if !podEnvironmentNeedsNode(pod) {
+	if !envresolve.PodEnvironmentNeedsNode(pod) {
 		return envresolve.NodeData{}, false
 	}
 	if pod.Spec.NodeName == "" {
@@ -145,27 +145,6 @@ func loadPodEnvironmentNode(r *http.Request, client kubernetes.Interface, pod *c
 		return envresolve.NodeData{State: sourceStateForError(err)}, true
 	}
 	return envresolve.NodeData{State: envresolve.SourceAvailable, Allocatable: node.Status.Allocatable}, false
-}
-
-func podEnvironmentNeedsNode(pod *corev1.Pod) bool {
-	containers := append([]corev1.Container(nil), pod.Spec.InitContainers...)
-	containers = append(containers, pod.Spec.Containers...)
-	for _, container := range containers {
-		for _, env := range container.Env {
-			if env.ValueFrom == nil || env.ValueFrom.ResourceFieldRef == nil {
-				continue
-			}
-			selector := env.ValueFrom.ResourceFieldRef.Resource
-			if !strings.HasPrefix(selector, "limits.") {
-				continue
-			}
-			name := corev1.ResourceName(strings.TrimPrefix(selector, "limits."))
-			if _, exists := container.Resources.Limits[name]; !exists {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func loadPodEnvironmentSources(r *http.Request, client kubernetes.Interface, pod *corev1.Pod, includeSecretValues bool) (map[envresolve.SourceID]envresolve.SourceData, bool, bool) {
