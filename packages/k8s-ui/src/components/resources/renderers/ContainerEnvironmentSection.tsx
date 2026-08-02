@@ -1,5 +1,21 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { Copy, Eye, EyeOff, List } from 'lucide-react'
+import {
+  Box,
+  CircleAlert,
+  CircleOff,
+  Clock3,
+  Copy,
+  Cpu,
+  Eye,
+  EyeOff,
+  FileCode2,
+  History,
+  KeyRound,
+  List,
+  LockKeyhole,
+  Pencil,
+  Variable,
+} from 'lucide-react'
 import { clsx } from 'clsx'
 import type {
   PodEnvironmentResponse,
@@ -132,59 +148,24 @@ export function ContainerEnvironmentSection({
           </div>
         )}
 
-        <div className="divide-y divide-theme-border overflow-hidden rounded-lg border border-theme-border @min-[760px]/env:hidden">
-          {active.rows.map(row => {
-            const key = rowKey(active.name, row.name)
-            const revealedValue = revealed[key]
-            return (
-              <div key={row.name} className="space-y-2.5 px-3 py-3 text-xs">
-                <div className="flex min-w-0 items-start justify-between gap-3">
-                  <span className="min-w-0 break-all font-mono text-theme-text-primary">
-                    {row.placeholder ? 'All variables from this source' : row.name}
-                  </span>
-                  <div className="shrink-0">
-                    <StatusCell row={row} compact />
-                  </div>
-                </div>
-                <div className="min-w-0 font-mono text-theme-text-primary">
-                  <ValueCell
-                    row={row}
-                    revealed={revealedValue}
-                    revealing={revealing[key] === true}
-                    revealError={revealErrors[key]}
-                    onReveal={() => reveal(row)}
-                    onCopy={() => onCopy(revealedValue?.value ?? row.value ?? '', key)}
-                    copied={copied === key}
-                    revealEnabled={Boolean(onReveal)}
-                  />
-                </div>
-                <div className="flex min-w-0 items-start gap-2">
-                  <span className="shrink-0 text-theme-text-tertiary">Source</span>
-                  <SourceCell row={row} namespace={namespace} onNavigate={onNavigate} compact />
-                </div>
-              </div>
-            )
-          })}
-        </div>
-
-        <div className="hidden overflow-hidden rounded-lg border border-theme-border @min-[760px]/env:block">
+        <div className="overflow-hidden rounded-lg border border-theme-border">
           <table className="w-full table-fixed text-left text-xs">
             <colgroup>
-              <col className="w-[24%]" />
-              <col className="w-[32%]" />
-              <col className="w-[24%]" />
-              <col className="w-[20%]" />
+              <col className="w-[40%] @min-[760px]/env:w-[24%]" />
+              <col className="w-[38%] @min-[760px]/env:w-[32%]" />
+              <col className="w-[11%] @min-[760px]/env:w-[24%]" />
+              <col className="w-[11%] @min-[760px]/env:w-[20%]" />
             </colgroup>
             <thead className="bg-theme-elevated text-theme-text-tertiary">
               <tr>
-                <th className="px-3 py-2 font-medium">Variable</th>
-                <th className="px-3 py-2 font-medium">
+                <th className="px-2 py-1.5 font-medium @min-[760px]/env:px-3 @min-[760px]/env:py-2">Variable</th>
+                <th className="px-2 py-1.5 font-medium @min-[760px]/env:px-3 @min-[760px]/env:py-2">
                   <ExplainedLabel label="Value if restarted now" explanation="The value a newly started container would receive from the Pod's current configuration." />
                 </th>
-                <th className="px-3 py-2 font-medium">
+                <th className="px-1 py-1.5 text-center font-medium @min-[760px]/env:px-3 @min-[760px]/env:py-2 @min-[760px]/env:text-left">
                   <ExplainedLabel label="Source" explanation="Where this variable gets its value." />
                 </th>
-                <th className="px-3 py-2 font-medium">
+                <th className="px-1 py-1.5 text-center font-medium @min-[760px]/env:px-3 @min-[760px]/env:py-2 @min-[760px]/env:text-left">
                   <ExplainedLabel label="Status" explanation="Changes, access problems, or details that affect how to interpret this value." />
                 </th>
               </tr>
@@ -195,10 +176,10 @@ export function ContainerEnvironmentSection({
                 const revealedValue = revealed[key]
                 return (
                   <tr key={row.name} className="align-top">
-                    <td className="min-w-0 break-all px-3 py-2 font-mono text-theme-text-primary">
+                    <td className="min-w-0 break-all px-2 py-1.5 font-mono text-theme-text-primary @min-[760px]/env:px-3 @min-[760px]/env:py-2">
                       {row.placeholder ? 'All variables from this source' : row.name}
                     </td>
-                    <td className="min-w-0 px-3 py-2 font-mono text-theme-text-primary">
+                    <td className="min-w-0 px-2 py-1.5 font-mono text-theme-text-primary @min-[760px]/env:px-3 @min-[760px]/env:py-2">
                       <ValueCell
                         row={row}
                         revealed={revealedValue}
@@ -210,11 +191,21 @@ export function ContainerEnvironmentSection({
                         revealEnabled={Boolean(onReveal)}
                       />
                     </td>
-                    <td className="min-w-0 px-3 py-2">
-                      <SourceCell row={row} namespace={namespace} onNavigate={onNavigate} />
+                    <td className="min-w-0 px-1 py-1.5 @min-[760px]/env:px-3 @min-[760px]/env:py-2">
+                      <div className="flex justify-center @min-[760px]/env:hidden">
+                        <CompactSourceCell row={row} namespace={namespace} onNavigate={onNavigate} />
+                      </div>
+                      <div className="hidden @min-[760px]/env:block">
+                        <SourceCell row={row} namespace={namespace} onNavigate={onNavigate} />
+                      </div>
                     </td>
-                    <td className="min-w-0 px-3 py-2">
-                      <StatusCell row={row} />
+                    <td className="min-w-0 px-1 py-1.5 @min-[760px]/env:px-3 @min-[760px]/env:py-2">
+                      <div className="flex justify-center @min-[760px]/env:hidden">
+                        <CompactStatusCell row={row} />
+                      </div>
+                      <div className="hidden @min-[760px]/env:block">
+                        <StatusCell row={row} />
+                      </div>
                     </td>
                   </tr>
                 )
@@ -294,20 +285,75 @@ function ValueCell({
   return <span className="break-all">{row.value ?? ''}</span>
 }
 
-function SourceCell({
+function CompactSourceCell({
   row,
   namespace,
   onNavigate,
-  compact = false,
 }: {
   row: PodEnvironmentRow
   namespace: string
   onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
-  compact?: boolean
+}) {
+  const source = row.source
+  const navigate = (source.kind === 'Secret' || source.kind === 'ConfigMap') && source.name && onNavigate
+    ? () => onNavigate({ kind: source.kind, namespace, name: source.name! })
+    : undefined
+  const kind = source.kind === 'Secret' || source.kind === 'ConfigMap' || source.kind === 'Pod'
+    ? source.kind
+    : undefined
+  const badge = (
+    <Badge
+      kind={kind}
+      tone={kind ? undefined : 'structural'}
+      size="sm"
+      className="!px-1"
+      onClick={navigate}
+    >
+      {compactSourceIcon(source.kind)}
+      <span className="sr-only">{source.kind}</span>
+    </Badge>
+  )
+
+  return (
+    <Tooltip content={compactSourceExplanation(row)} delay={150} position="top">
+      <span className="inline-flex" tabIndex={navigate ? undefined : 0}>{badge}</span>
+    </Tooltip>
+  )
+}
+
+function compactSourceIcon(kind: string) {
+  const className = 'h-3.5 w-3.5'
+  if (kind === 'Secret') return <KeyRound className={className} aria-hidden />
+  if (kind === 'ConfigMap') return <FileCode2 className={className} aria-hidden />
+  if (kind === 'Pod') return <Box className={className} aria-hidden />
+  if (kind === 'Container resources') return <Cpu className={className} aria-hidden />
+  if (kind === 'Variable') return <Variable className={className} aria-hidden />
+  return <Pencil className={className} aria-hidden />
+}
+
+function compactSourceExplanation(row: PodEnvironmentRow) {
+  let explanation = describeSource(row.source)
+  if ((row.dependencies?.length ?? 0) > 0) {
+    explanation += ' It also uses ' + formatSources(row.dependencies!) + '.'
+  }
+  if ((row.shadowedSources?.length ?? 0) > 0) {
+    explanation += ' Overrides earlier ' + formatSources(row.shadowedSources!) + '.'
+  }
+  return explanation
+}
+
+function SourceCell({
+  row,
+  namespace,
+  onNavigate,
+}: {
+  row: PodEnvironmentRow
+  namespace: string
+  onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
 }) {
   const dependencies = row.dependencies ?? []
   return (
-    <div className={clsx('flex min-w-0 flex-wrap items-center gap-1.5', compact && 'leading-5')}>
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
       <SourceLabel source={row.source} namespace={namespace} onNavigate={onNavigate} />
       {dependencies.length > 0 && <span className="text-theme-text-tertiary">using</span>}
       {dependencies.map((dependency, index) => (
@@ -339,9 +385,7 @@ function SourceLabel({
   onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
 }) {
   if ((source.kind === 'Secret' || source.kind === 'ConfigMap') && source.name) {
-    const explanation = source.kind === 'Secret'
-      ? `Secret/${source.name} stores sensitive configuration. Its value stays hidden until you reveal it.`
-      : `ConfigMap/${source.name} stores non-sensitive configuration.`
+    const explanation = describeSource(source)
     const navigationHint = onNavigate ? ` Click to inspect ${source.kind}/${source.name}.` : ''
     return (
       <span className="inline-flex min-w-0 flex-col items-start gap-0.5">
@@ -375,13 +419,7 @@ function SourceLabel({
       : source.kind === 'Container resources'
         ? 'Container resources'
         : source.kind
-  const explanation = source.kind === 'Direct'
-    ? 'Set directly in this container\'s configuration.'
-    : source.kind === 'Pod'
-      ? `Comes from the Pod itself${source.key ? ` (${source.key})` : ''}, such as its name, namespace, IP, or assigned node.`
-      : source.kind === 'Container resources'
-        ? `Calculated from a container's CPU or memory request or limit${source.key ? ` (${source.key})` : ''}.`
-        : `Value source: ${source.kind}.`
+  const explanation = describeSource(source)
   return (
     <Tooltip content={explanation}>
       <span className="cursor-help border-b border-dotted border-theme-text-tertiary text-theme-text-secondary" tabIndex={0}>{label}</span>
@@ -389,25 +427,89 @@ function SourceLabel({
   )
 }
 
-function formatSources(sources: PodEnvironmentSource[]) {
-  return sources.map(source => source.kind + (source.name ? '/' + source.name : '') + (source.key ? '[' + source.key + ']' : '')).join(', ')
+function describeSource(source: PodEnvironmentSource) {
+  if (source.kind === 'Direct') return 'Set directly in this container\'s configuration.'
+  if (source.kind === 'Secret') {
+    return `Secret/${source.name} stores sensitive configuration${source.key ? `; this value uses its ${source.key} key` : ''}. The value stays hidden until you reveal it.`
+  }
+  if (source.kind === 'ConfigMap') {
+    return `ConfigMap/${source.name} stores non-sensitive configuration${source.key ? `; this value uses its ${source.key} key` : ''}.`
+  }
+  if (source.kind === 'Pod') {
+    return `Comes from the Pod itself${source.key ? ` (${source.key})` : ''}, such as its name, namespace, IP, or assigned node.`
+  }
+  if (source.kind === 'Container resources') {
+    return `Calculated from a container's CPU or memory request or limit${source.key ? ` (${source.key})` : ''}.`
+  }
+  if (source.kind === 'Variable') return `Uses the earlier ${source.variable} environment variable.`
+  return `Value source: ${source.kind}.`
 }
 
-function StatusCell({ row, compact = false }: { row: PodEnvironmentRow; compact?: boolean }) {
+function formatSources(sources: PodEnvironmentSource[]) {
+  return sources.map(source => source.kind
+    + (source.name ? '/' + source.name : source.variable ? '/' + source.variable : '')
+    + (source.key ? '[' + source.key + ']' : '')).join(', ')
+}
+
+function CompactStatusCell({ row }: { row: PodEnvironmentRow }) {
   if (row.evidence) {
     const label = row.evidence.kind === 'added'
-      ? compact ? 'Added' : 'Added after start'
+      ? 'Added after start'
       : row.evidence.kind === 'removed'
-        ? compact ? 'Removed' : 'Removed after start'
-        : compact ? 'Changed' : 'Changed after start'
+        ? 'Removed after start'
+        : 'Changed after start'
+    return <CompactStatusBadge label={label} explanation={row.evidence.message} severity="warning" icon={<History className="h-3.5 w-3.5" aria-hidden />} />
+  }
+  if (row.state === 'denied') return <CompactStatusBadge label="Access needed" explanation={row.message} severity="info" icon={<LockKeyhole className="h-3.5 w-3.5" aria-hidden />} />
+  if (row.state === 'missing') return <CompactStatusBadge label="Missing" explanation={row.message} severity="warning" icon={<CircleAlert className="h-3.5 w-3.5" aria-hidden />} />
+  if (row.state === 'unavailable') return <CompactStatusBadge label="Unavailable" explanation={row.message} severity="neutral" icon={<CircleOff className="h-3.5 w-3.5" aria-hidden />} />
+  if (row.currentPodValue) {
+    const explanation = row.message || 'Radar is showing the Pod value now. The running container read this field when it started, so it may be different.'
+    return <CompactStatusBadge label="Current Pod value" explanation={explanation} tone="note" icon={<Clock3 className="h-3.5 w-3.5" aria-hidden />} />
+  }
+  return null
+}
+
+function CompactStatusBadge({
+  label,
+  explanation,
+  severity,
+  tone,
+  icon,
+}: {
+  label: string
+  explanation?: string
+  severity?: 'warning' | 'info' | 'neutral'
+  tone?: 'note'
+  icon: ReactNode
+}) {
+  return (
+    <Tooltip content={explanation || label} delay={150} position="left">
+      <span className="inline-flex cursor-help" tabIndex={0}>
+        <Badge severity={severity} tone={tone} size="sm" className="!px-1">
+          {icon}
+          <span className="sr-only">{label}</span>
+        </Badge>
+      </span>
+    </Tooltip>
+  )
+}
+
+function StatusCell({ row }: { row: PodEnvironmentRow }) {
+  if (row.evidence) {
+    const label = row.evidence.kind === 'added'
+      ? 'Added after start'
+      : row.evidence.kind === 'removed'
+        ? 'Removed after start'
+        : 'Changed after start'
     return <StatusBadge explanation={row.evidence.message}><Badge severity="warning" size="sm">{label}</Badge></StatusBadge>
   }
-  if (row.state === 'denied') return <StatusBadge explanation={row.message}><Badge severity="info" size="sm">{compact ? 'Access' : 'Access needed'}</Badge></StatusBadge>
+  if (row.state === 'denied') return <StatusBadge explanation={row.message}><Badge severity="info" size="sm">Access needed</Badge></StatusBadge>
   if (row.state === 'missing') return <StatusBadge explanation={row.message}><Badge severity="warning" size="sm">Missing</Badge></StatusBadge>
   if (row.state === 'unavailable') return <StatusBadge explanation={row.message}><Badge severity="neutral" size="sm">Unavailable</Badge></StatusBadge>
   if (row.currentPodValue) {
     const explanation = row.message || 'Radar is showing the Pod value now. The running container read this field when it started, so it may be different.'
-    return <StatusBadge explanation={explanation}><Badge tone="note" size="sm">{compact ? 'Current' : 'Current Pod value'}</Badge></StatusBadge>
+    return <StatusBadge explanation={explanation}><Badge tone="note" size="sm">Current Pod value</Badge></StatusBadge>
   }
   return null
 }
