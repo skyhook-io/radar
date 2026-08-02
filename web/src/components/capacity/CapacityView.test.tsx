@@ -1325,6 +1325,66 @@ describe("CapacityView pool detail", () => {
     expect(html).toContain("NodePool unavailable");
   });
 
+  it("leads with the diagnosis when the pool has issues, ledger when clean", () => {
+    const broken = renderCapacity("/capacity/pools/default", (client) =>
+      client.setQueryData(
+        ["capacity", "pool", "default"],
+        poolDetailResponse({
+          ...cleanPoolDetail,
+          issues: [
+            {
+              id: "nodepool-not-ready",
+              severity: "warning",
+              source: "condition",
+              category: "node_provisioning_failure",
+              category_group: "capacity",
+              grouping_scope: "unknown",
+              group: "karpenter.sh",
+              kind: "NodePool",
+              name: "default",
+              reason: "NodePoolNotReady",
+              message: "Validation failed",
+            },
+          ],
+        }),
+      ),
+    );
+    expect(broken.indexOf("Issues &amp; conditions")).toBeGreaterThan(-1);
+    expect(broken.indexOf("Issues &amp; conditions")).toBeLessThan(
+      broken.indexOf("Capacity ledger"),
+    );
+
+    const clean = renderCapacity("/capacity/pools/default", (client) =>
+      client.setQueryData(
+        ["capacity", "pool", "default"],
+        poolDetailResponse(cleanPoolDetail),
+      ),
+    );
+    expect(clean.indexOf("Capacity ledger")).toBeLessThan(
+      clean.indexOf("Issues &amp; conditions"),
+    );
+  });
+
+  it("narrates the zero-node ledger instead of presenting a wall of zeros", () => {
+    const html = renderCapacity("/capacity/pools/default", (client) =>
+      client.setQueryData(
+        ["capacity", "pool", "default"],
+        poolDetailResponse({
+          ...cleanPoolDetail,
+          nodes: { total: 0, ready: 0, notReady: 0, cordoned: 0, terminating: 0 },
+        }),
+      ),
+    );
+    expect(html).toContain("No nodes exist in this pool right now");
+    const populated = renderCapacity("/capacity/pools/default", (client) =>
+      client.setQueryData(
+        ["capacity", "pool", "default"],
+        poolDetailResponse(cleanPoolDetail),
+      ),
+    );
+    expect(populated).not.toContain("No nodes exist in this pool right now");
+  });
+
   it("renders structured issue diagnosis in pool posture", () => {
     const html = renderCapacity("/capacity/pools/default/posture", (client) =>
       client.setQueryData(

@@ -525,13 +525,41 @@ function PoolSummaryTab({
 }) {
   const denied = coverageIsDenied(pool.coverage.pods);
   const resources = ledgerResourceKeys(pool.ledger);
+  // Overview signals label their links "Diagnose pool", so a broken pool's
+  // dominant arrival is diagnostic: lead with the diagnosis instead of a
+  // ledger of true zeros. Issues are warning-or-worse by construction;
+  // informational posture (facts on a healthy scale-to-zero pool) deliberately
+  // keeps the healthy ordering — reordering on a normal state feels unstable.
+  const diagnosisFirst = pool.issues.length > 0;
+  const scaledToZero = pool.nodes?.total === 0;
+  const issuesCard = (
+    <SectionCard title="Issues & conditions" bodyClassName="px-4 py-4">
+      <PostureView
+        pool={pool}
+        onOpenResource={onOpenResource}
+        onOpenMembers={() =>
+          onNavigate(
+            `/capacity/pools/${encodeURIComponent(pool.resource.ref.name)}/members`,
+          )
+        }
+      />
+    </SectionCard>
+  );
 
   return (
     <div className="space-y-4">
+      {diagnosisFirst && issuesCard}
       <SectionCard
         title="Capacity ledger"
         subtitle="every column is a different concept — they are never combined into one number"
       >
+        {scaledToZero && (
+          <p className="px-4 pt-3 text-xs text-theme-text-secondary">
+            No nodes exist in this pool right now — the observed columns are
+            true zeros, and Configured limit is the ceiling provisioning would
+            run against.
+          </p>
+        )}
         <div className={TABLE_WRAP}>
           <table className="w-full min-w-[1180px] text-left">
             <thead className={TABLE_HEAD}>
@@ -628,17 +656,7 @@ function PoolSummaryTab({
         </SectionCard>
       </div>
 
-      <SectionCard title="Posture" bodyClassName="px-4 py-4">
-        <PostureView
-          pool={pool}
-          onOpenResource={onOpenResource}
-          onOpenMembers={() =>
-            onNavigate(
-              `/capacity/pools/${encodeURIComponent(pool.resource.ref.name)}/members`,
-            )
-          }
-        />
-      </SectionCard>
+      {!diagnosisFirst && issuesCard}
     </div>
   );
 }
