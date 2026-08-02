@@ -127,8 +127,8 @@ func TestResolvePodDoesNotTreatOptionalMissingDependencyAsBlocking(t *testing.T)
 	rows := rowsByName(ResolvePod(pod, map[SourceID]SourceData{
 		{Kind: "ConfigMap", Name: "settings"}: {Kind: "ConfigMap", Name: "settings", State: SourceAvailable},
 	}, NodeData{}).Containers[0].Rows)
-	if !rows["MESSAGE"].Optional || rows["MESSAGE"].MissingImpact != "" || strings.Contains(rows["MESSAGE"].Message, "cannot start again") {
-		t.Fatalf("dependent value inherited blocking impact from optional key: %+v", rows["MESSAGE"])
+	if rows["MESSAGE"].State != ValueResolved || rows["MESSAGE"].Value != "feature=$(FEATURE)" || rows["MESSAGE"].MissingImpact != "" {
+		t.Fatalf("dependent value did not preserve optional missing reference: %+v", rows["MESSAGE"])
 	}
 }
 
