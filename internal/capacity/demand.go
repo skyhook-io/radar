@@ -343,12 +343,14 @@ func instanceShapeUnknowns(requests corev1.ResourceList, shapes []corev1.Resourc
 
 const observedShapeLimit = 64
 
-// ObservedMemberShapesByPool collects, per pool, the distinct member capacity
-// vectors from observed nodes (allocatable) and claims (status.capacity).
-// Claim capacity slightly overstates the schedulable figure versus
-// allocatable — acceptable here: it can only under-report shape mismatches,
-// never fabricate one. Bounded per pool; a truncated shape set can only make
-// the evaluation more conservative (more unknowns), never overclaim.
+// ObservedMemberShapesByPool collects, per pool, the distinct schedulable
+// vectors of observed members: node allocatable, and for claims the published
+// status.allocatable, falling back to status.capacity only when the claim does
+// not carry it (a claim still launching, or a v1beta1 claim). Capacity
+// overstates what the scheduler can actually place, so preferring allocatable
+// keeps a pod that fits the raw machine but not the schedulable node from
+// reading as a shape match. Bounded per pool; a truncated shape set can only
+// make the evaluation more conservative (more unknowns), never overclaim.
 func ObservedMemberShapesByPool(nodes []*corev1.Node, claims []*unstructured.Unstructured) map[string][]corev1.ResourceList {
 	shapes := map[string][]corev1.ResourceList{}
 	seen := map[string]map[string]bool{}
@@ -376,9 +378,14 @@ func ObservedMemberShapesByPool(nodes []*corev1.Node, claims []*unstructured.Uns
 		}
 	}
 	for _, claim := range claims {
-		if claim != nil {
-			record(claim.GetLabels()[karpenter.NodePoolLabelKey], karpenter.NodeClaimCapacity(claim))
+		if claim == nil {
+			continue
 		}
+		schedulable := karpenter.NodeClaimAllocatable(claim)
+		if len(schedulable) == 0 {
+			schedulable = karpenter.NodeClaimCapacity(claim)
+		}
+		record(claim.GetLabels()[karpenter.NodePoolLabelKey], schedulable)
 	}
 	return shapes
 }

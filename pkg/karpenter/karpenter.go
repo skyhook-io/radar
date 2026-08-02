@@ -213,7 +213,10 @@ var nodeClaimFailureReasons = map[string]bool{
 	"UnregisteredTaintMissing":  true,
 	// Cloud providers write their error mapping verbatim into
 	// Launched=Unknown — the AWS provider's vocabulary carries no
-	// fail/error substring for most of them.
+	// fail/error substring for most of them. This mirrors the full set the
+	// AWS provider's ToReasonMessage can return; the ones it produces that DO
+	// carry the substring (SpotSLRCreationFailed, AMIAuthorizationFailure,
+	// InternalError, LaunchFailed) are matched either way.
 	"Unauthorized":                      true,
 	"LaunchTemplateNotFound":            true,
 	"SecurityGroupSubnetVPCMismatch":    true,
@@ -222,6 +225,12 @@ var nodeClaimFailureReasons = map[string]bool{
 	"VCPULimitExceeded":                 true,
 	"InsufficientInstanceCapacity":      true,
 	"InsufficientFreeAddressesInSubnet": true,
+	"InvalidAMIID":                      true,
+	"AMINotFound":                       true,
+	"FreeTierIneligible":                true,
+	"FleetQuotaExceeded":                true,
+	"AccountPendingVerification":        true,
+	"SpotQuotaExceeded":                 true,
 }
 
 // IsFailedLifecycleCondition reports whether a NodeClaim lifecycle condition
@@ -283,6 +292,16 @@ func NodeClaimCapacity(claim *unstructured.Unstructured) corev1.ResourceList {
 		return nil
 	}
 	return resourceList(claim.Object, "status", "capacity")
+}
+
+// NodeClaimAllocatable is what the node will actually offer the scheduler once
+// it registers — capacity minus the kubelet/system reservations. karpenter.sh/v1
+// publishes it; it is absent on claims that have not been launched yet.
+func NodeClaimAllocatable(claim *unstructured.Unstructured) corev1.ResourceList {
+	if claim == nil {
+		return nil
+	}
+	return resourceList(claim.Object, "status", "allocatable")
 }
 
 func NormalizeNodePoolSpec(pool *unstructured.Unstructured) NodePoolSpec {

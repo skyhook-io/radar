@@ -448,7 +448,9 @@ func TestClassifyKarpenterExactEventVocabulary(t *testing.T) {
 		// InsufficientCapacityError previously matched no substring at all —
 		// an ICE storm was invisible except as successful-looking terminations.
 		{"InsufficientCapacityError", timeline.EventTypeWarning, capacityapi.ActivityLaunchFailure, capacityapi.ActivityFailed},
-		{"NoCompatibleInstanceTypes", timeline.EventTypeNormal, capacityapi.ActivityProvision, capacityapi.ActivityFailed},
+		// Blocked, not failed: the NodePool matches no instance type, so
+		// provisioning never started — there is no NodeClaim that failed.
+		{"NoCompatibleInstanceTypes", timeline.EventTypeNormal, capacityapi.ActivityProvision, capacityapi.ActivityBlocked},
 		// DisruptionBlocked/Unconsolidatable previously read as disruption
 		// *happening* — the opposite of their meaning.
 		{"DisruptionBlocked", timeline.EventTypeNormal, capacityapi.ActivityDisruption, capacityapi.ActivityBlocked},
@@ -485,5 +487,64 @@ func TestClassifyNodeClaimUnknownFailureConditionDiff(t *testing.T) {
 	}})
 	if len(records) != 1 || records[0].Episode.Type != capacityapi.ActivityLaunchFailure || records[0].Episode.State != capacityapi.ActivityFailed {
 		t.Fatalf("Unknown/LaunchFailed condition diff = %#v, want launch_failure/failed", records)
+	}
+}
+
+// TestNoCompatibleInstanceTypesKeepsPerOccurrenceEpisodes pins the correlation
+// boundary. The event is emitted by the NODEPOOL, so folding it into the
+// provision-by-UID bucket produced one eternal open episode summarized as a
+// NodeClaim provisioning failure — for a claim Karpenter never created.
+func TestNoCompatibleInstanceTypesKeepsPerOccurrenceEpisodes(t *testing.T) {
+	now := time.Date(2026, time.July, 13, 10, 0, 0, 0, time.UTC)
+	event := func(id string, at time.Time, seq int64) timeline.TimelineEvent {
+		return timeline.TimelineEvent{
+			ID: id, Seq: seq, Timestamp: at, Source: timeline.SourceK8sEvent,
+			Kind: "NodePool", APIVersion: "karpenter.sh/v1", Name: "gpu", UID: "gpu-uid",
+			EventType: timeline.EventTypeNormal, Reason: "NoCompatibleInstanceTypes",
+			Message: "no instance type satisfied the requirements",
+		}
+	}
+	records := BuildActivityRecords([]timeline.TimelineEvent{
+		event("attempt-1", now, 1),
+		event("attempt-2", now.Add(20*time.Minute), 2),
+	})
+	if len(records) != 2 {
+		t.Fatalf("records = %d, want one per occurrence: %#v", len(records), records)
+	}
+	for _, record := range records {
+		episode := record.Episode
+		if episode.Type != capacityapi.ActivityProvision || episode.State != capacityapi.ActivityBlocked {
+			t.Fatalf("episode = %s/%s, want provision/blocked", episode.Type, episode.State)
+		}
+		if episode.Summary != "NodePool gpu: provisioning could not start — no compatible instance types" {
+			t.Fatalf("summary = %q — it must name the NodePool and never claim a NodeClaim failed", episode.Summary)
+		}
+		if episode.Claim != nil {
+			t.Fatalf("blocked provisioning invented a NodeClaim: %#v", episode.Claim)
+		}
+		if !episode.StartedAt.Equal(episode.Evidence[0].At) {
+			t.Fatalf("startedAt = %s, want the occurrence time %s (nothing was created to backdate to)", episode.StartedAt, episode.Evidence[0].At)
+		}
+	}
+
+	// The claim-lifecycle path is untouched: every stage of ONE claim still
+	// folds into a single provision episode keyed by the claim's UID.
+	claimRecords := BuildActivityRecords([]timeline.TimelineEvent{
+		{
+			ID: "launched", Seq: 1, Timestamp: now, Source: timeline.SourceK8sEvent,
+			Kind: "NodeClaim", APIVersion: "karpenter.sh/v1", Name: "claim-a", UID: "claim-uid",
+			EventType: timeline.EventTypeNormal, Reason: "Launched",
+		},
+		{
+			ID: "failed", Seq: 2, Timestamp: now.Add(time.Minute), Source: timeline.SourceK8sEvent,
+			Kind: "NodeClaim", APIVersion: "karpenter.sh/v1", Name: "claim-a", UID: "claim-uid",
+			EventType: timeline.EventTypeWarning, Reason: "LaunchFailed",
+		},
+	})
+	if len(claimRecords) != 1 {
+		t.Fatalf("claim lifecycle records = %d, want one merged provision episode: %#v", len(claimRecords), claimRecords)
+	}
+	if claimRecords[0].Episode.State != capacityapi.ActivityFailed {
+		t.Fatalf("claim lifecycle state = %q, want failed", claimRecords[0].Episode.State)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/capacityapi"
+	"github.com/skyhook-io/radar/pkg/karpenter"
 	"github.com/skyhook-io/radar/pkg/subject"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -1291,5 +1292,52 @@ func TestDemandInstanceShapeComparesWholeVectorsNotPerResourceMaxima(t *testing.
 	group := BuildDemandGroups(DemandInput{GeneratedAt: capacityTestTime(), Pods: []*corev1.Pod{pod}, Pools: []DemandPoolInput{{NodePool: pool, ObservedMemberShapes: shapes}}})[0]
 	if group.PoolEvaluations[0].Result != capacityapi.PoolEvaluationUnknown {
 		t.Fatalf("32cpu+64Gi pod vs {48cpu/32Gi, 8cpu/128Gi} shapes = %q, want unknown", group.PoolEvaluations[0].Result)
+	}
+}
+
+// TestObservedMemberShapesPrefersClaimAllocatable pins the schedulable-vs-raw
+// distinction. status.capacity is the machine; status.allocatable is what the
+// scheduler can place on it. Reading capacity let a pod that fits the machine
+// but not the node read as a shape match.
+func TestObservedMemberShapesPrefersClaimAllocatable(t *testing.T) {
+	ready := true
+	pool := demandTestPool("general", &ready, demandPoolSpec(nil, nil, nil, nil, nil), nil)
+	claim := capacityTestClaim("claim-a", "claim-uid", pool, map[string]any{
+		"capacity":    map[string]any{"cpu": "8", "memory": "32Gi", "pods": "110"},
+		"allocatable": map[string]any{"cpu": "7", "memory": "30Gi", "pods": "110"},
+	})
+	claim.SetLabels(map[string]string{karpenter.NodePoolLabelKey: "general"})
+
+	shapes := ObservedMemberShapesByPool(nil, []*unstructured.Unstructured{claim})["general"]
+	if len(shapes) != 1 {
+		t.Fatalf("shapes = %#v, want one", shapes)
+	}
+	if got := shapes[0][corev1.ResourceCPU]; got.String() != "7" {
+		t.Fatalf("shape cpu = %s, want the allocatable 7 (capacity 8 overstates what the scheduler can place)", got.String())
+	}
+
+	// The observable consequence: a pod fitting capacity but not allocatable
+	// degrades to unknown instead of reading as declared compatible.
+	group := BuildDemandGroups(DemandInput{
+		GeneratedAt: capacityTestTime(),
+		Pods:        []*corev1.Pod{demandTestPod("between", "8")},
+		Pools:       []DemandPoolInput{{NodePool: pool, ObservedMemberShapes: shapes}},
+	})[0]
+	if group.PoolEvaluations[0].Result != capacityapi.PoolEvaluationUnknown {
+		t.Fatalf("8-CPU pod vs 7-CPU allocatable = %q, want unknown", group.PoolEvaluations[0].Result)
+	}
+
+	// A claim that has not published allocatable yet still contributes its
+	// capacity — absence must not erase the shape entirely.
+	launching := capacityTestClaim("claim-b", "claim-b-uid", pool, map[string]any{
+		"capacity": map[string]any{"cpu": "16", "memory": "64Gi", "pods": "110"},
+	})
+	launching.SetLabels(map[string]string{karpenter.NodePoolLabelKey: "general"})
+	fallback := ObservedMemberShapesByPool(nil, []*unstructured.Unstructured{launching})["general"]
+	if len(fallback) != 1 {
+		t.Fatalf("fallback shapes = %#v, want the capacity vector", fallback)
+	}
+	if got := fallback[0][corev1.ResourceCPU]; got.String() != "16" {
+		t.Fatalf("fallback shape cpu = %s, want 16", got.String())
 	}
 }

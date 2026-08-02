@@ -464,3 +464,52 @@ func objectName(obj *unstructured.Unstructured) string {
 	}
 	return obj.GetName()
 }
+
+// TestNodeClaimFailureReasonVocabulary pins the catalogue every capacity
+// surface reads: Karpenter keeps a FAILING lifecycle stage at
+// status=Unknown with a provider reason, so a reason that falls out of this
+// table silently reclassifies a dead NodeClaim as "still provisioning".
+func TestNodeClaimFailureReasonVocabulary(t *testing.T) {
+	// Every reason the AWS provider's ToReasonMessage can return, plus the
+	// Karpenter core reasons. Reasons carrying "fail"/"error" text are listed
+	// too — they must stay classified even if the substring rule changes.
+	documented := []string{
+		// karpenter core
+		"LaunchFailed", "CreateError", "InsufficientCapacityError", "NodeClassNotReady",
+		"MultipleNodesFound", "UnregisteredTaintMissing", "InsufficientInstanceCapacity",
+		// aws provider (pkg/errors ToReasonMessage)
+		"SpotSLRCreationFailed", "Unauthorized", "AMIAuthorizationFailure",
+		"SecurityGroupSubnetVPCMismatch", "InstanceProfileNameInvalid",
+		"LaunchTemplateNotFound", "InvalidAMIID", "AMINotFound", "RequestLimitExceeded",
+		"InternalError", "FreeTierIneligible", "FleetQuotaExceeded",
+		"AccountPendingVerification", "SpotQuotaExceeded", "VCPULimitExceeded",
+		"InsufficientFreeAddressesInSubnet",
+	}
+	reasons := append([]string{}, documented...)
+	for reason := range nodeClaimFailureReasons {
+		reasons = append(reasons, reason)
+	}
+
+	for _, reason := range reasons {
+		t.Run(reason, func(t *testing.T) {
+			if !IsFailureReason(reason) {
+				t.Fatalf("IsFailureReason(%q) = false — a failing stage would read as in progress", reason)
+			}
+			condition := metav1.Condition{Type: "Launched", Status: metav1.ConditionUnknown, Reason: reason}
+			if !IsFailedLifecycleCondition(condition) {
+				t.Fatalf("IsFailedLifecycleCondition(Unknown/%q) = false", reason)
+			}
+			if !IsFailedLifecycleConditionForVersion(APIVersionV1Beta1, condition) {
+				t.Fatalf("IsFailedLifecycleConditionForVersion(v1beta1, Unknown/%q) = false", reason)
+			}
+		})
+	}
+
+	// The complement: ordinary in-progress reasons must NOT be classified as
+	// failures, or every provisioning claim would render as broken.
+	for _, reason := range []string{"NodeNotFound", "StartupTaintsExist", "Launched", "Registered", ""} {
+		if IsFailureReason(reason) {
+			t.Fatalf("IsFailureReason(%q) = true — normal in-progress states must not read as failures", reason)
+		}
+	}
+}

@@ -112,9 +112,9 @@ func BuildActivityRecords(events []timeline.TimelineEvent) []ActivityRecord {
 		if uid == "" {
 			uid = uidByResource[activityResourceKey(event)]
 		}
-		correlationKey := activityCorrelationKey(event, uid, activityType)
+		correlationKey := activityCorrelationKey(event, uid, activityType, state)
 		record := records[correlationKey]
-		startedAt := activityEventStart(event, activityType)
+		startedAt := activityEventStart(event, activityType, state)
 		if record == nil {
 			episode := capacityapi.NewActivityEpisode()
 			episode.ID = stableActivityID(correlationKey)
@@ -170,7 +170,7 @@ func BuildActivityRecords(events []timeline.TimelineEvent) []ActivityRecord {
 		// "nodes not joining" never reads as provisioning still in progress
 		// next to a completed termination.
 		if classification.reasonCode == "nodeclaim_deleted" {
-			provision := records[activityCorrelationKey(event, uid, capacityapi.ActivityProvision)]
+			provision := records[provisionCorrelationKey(event, uid)]
 			if provision != nil && provision.terminalAt != nil {
 				provision = nil
 			}
@@ -227,7 +227,7 @@ func BuildActivityRecords(events []timeline.TimelineEvent) []ActivityRecord {
 				}
 			}
 		}
-		record.Episode.Summary = activityEpisodeSummary(record.Episode.Type, record.Episode.State)
+		record.Episode.Summary = activityEpisodeSummary(record.Episode)
 		record.Episode.EvidenceMeta.Total = len(record.Episode.Evidence)
 		if len(record.Episode.Evidence) > activityEvidenceLimit {
 			latest := append([]capacityapi.ActivityEvidence{}, record.Episode.Evidence[len(record.Episode.Evidence)-(activityEvidenceLimit-1):]...)
@@ -246,8 +246,24 @@ func BuildActivityRecords(events []timeline.TimelineEvent) []ActivityRecord {
 	return result
 }
 
-func activityEventStart(event timeline.TimelineEvent, activityType capacityapi.ActivityType) time.Time {
-	if activityType != capacityapi.ActivityProvision && activityType != capacityapi.ActivityLaunchFailure && activityType != capacityapi.ActivityRegistrationFailure && activityType != capacityapi.ActivityInitializationFailure {
+// activityAttemptScoped reports whether an episode is keyed per occurrence
+// rather than folded into its subject's provisioning lifecycle. The
+// provision family folds by NodeClaim UID — one claim, one episode — but a
+// BLOCKED provision is emitted by the NodePool before any claim exists, so
+// folding it would collapse every occurrence, forever, into one open episode.
+func activityAttemptScoped(activityType capacityapi.ActivityType, state capacityapi.ActivityState) bool {
+	if state == capacityapi.ActivityBlocked {
+		return true
+	}
+	switch activityType {
+	case capacityapi.ActivityProvision, capacityapi.ActivityLaunchFailure, capacityapi.ActivityRegistrationFailure, capacityapi.ActivityInitializationFailure:
+		return false
+	}
+	return true
+}
+
+func activityEventStart(event timeline.TimelineEvent, activityType capacityapi.ActivityType, state capacityapi.ActivityState) time.Time {
+	if activityAttemptScoped(activityType, state) {
 		return event.Timestamp
 	}
 	if event.CreatedAt != nil && !event.CreatedAt.IsZero() && event.CreatedAt.Before(event.Timestamp) {
@@ -256,9 +272,21 @@ func activityEventStart(event timeline.TimelineEvent, activityType capacityapi.A
 	return event.Timestamp
 }
 
-func activityEpisodeSummary(activityType capacityapi.ActivityType, state capacityapi.ActivityState) string {
-	switch activityType {
+func activityEpisodeSummary(episode capacityapi.ActivityEpisode) string {
+	state := episode.State
+	switch episode.Type {
 	case capacityapi.ActivityProvision:
+		if state == capacityapi.ActivityBlocked {
+			// Nothing was ever launched, so naming a NodeClaim would invent one.
+			subject := "Provisioning"
+			if episode.Pool != nil && episode.Pool.Ref.Name != "" {
+				subject = "NodePool " + episode.Pool.Ref.Name + ": provisioning"
+			}
+			if episode.PrimaryReasonCode == "no_compatible_instance_types" {
+				return subject + " could not start — no compatible instance types"
+			}
+			return subject + " could not start"
+		}
 		if state == capacityapi.ActivityCompleted {
 			return "NodeClaim provisioning completed"
 		}
@@ -390,7 +418,10 @@ var karpenterEventClassifications = map[string]activityClassification{
 	"LaunchFailed":              directActivity(capacityapi.ActivityLaunchFailure, capacityapi.ActivityFailed, "launch_failed"),
 	"CreateError":               directActivity(capacityapi.ActivityLaunchFailure, capacityapi.ActivityFailed, "launch_failed"),
 	"NodeClassNotReady":         directActivity(capacityapi.ActivityLaunchFailure, capacityapi.ActivityFailed, "nodeclass_not_ready"),
-	"NoCompatibleInstanceTypes": directActivity(capacityapi.ActivityProvision, capacityapi.ActivityFailed, "no_compatible_instance_types"),
+	// Emitted by the NodePool, never by a NodeClaim: Karpenter could not even
+	// create one. Blocked, not failed — and never folded into a claim's
+	// provisioning lifecycle, which has not started.
+	"NoCompatibleInstanceTypes": directActivity(capacityapi.ActivityProvision, capacityapi.ActivityBlocked, "no_compatible_instance_types"),
 	"UnregisteredTaintMissing":  directActivity(capacityapi.ActivityRegistrationFailure, capacityapi.ActivityFailed, "registration_failed"),
 
 	"DisruptionBlocked":     directActivity(capacityapi.ActivityDisruption, capacityapi.ActivityBlocked, "disruption_blocked"),
@@ -474,13 +505,13 @@ func activityResourceIdentity(event timeline.TimelineEvent, uid string) capacity
 	}
 }
 
-func activityCorrelationKey(event timeline.TimelineEvent, uid string, activityType capacityapi.ActivityType) string {
+func activityCorrelationKey(event timeline.TimelineEvent, uid string, activityType capacityapi.ActivityType, state capacityapi.ActivityState) string {
+	if !activityAttemptScoped(activityType, state) {
+		return provisionCorrelationKey(event, uid)
+	}
 	identity := uid
 	if identity == "" {
 		identity = activityResourceKey(event)
-	}
-	if activityType == capacityapi.ActivityProvision || activityType == capacityapi.ActivityLaunchFailure || activityType == capacityapi.ActivityRegistrationFailure || activityType == capacityapi.ActivityInitializationFailure {
-		return string(capacityapi.ActivityProvision) + "\x00" + identity
 	}
 	attemptID := event.CorrelationID
 	if attemptID == "" {
@@ -493,6 +524,16 @@ func activityCorrelationKey(event timeline.TimelineEvent, uid string, activityTy
 		attemptID = event.Timestamp.UTC().Format(time.RFC3339Nano)
 	}
 	return string(activityType) + "\x00" + identity + "\x00" + attemptID
+}
+
+// provisionCorrelationKey is the one bucket a NodeClaim's whole provisioning
+// lifecycle folds into, regardless of which stage reported it.
+func provisionCorrelationKey(event timeline.TimelineEvent, uid string) string {
+	identity := uid
+	if identity == "" {
+		identity = activityResourceKey(event)
+	}
+	return string(capacityapi.ActivityProvision) + "\x00" + identity
 }
 
 func activityResourceKey(event timeline.TimelineEvent) string {

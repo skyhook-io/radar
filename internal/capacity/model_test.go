@@ -621,6 +621,18 @@ func TestClaimStageRespectsConditionDialects(t *testing.T) {
 	if stage := claimStage(invariant); stage != capacityapi.ClaimStageFailed {
 		t.Fatalf("v1 invariant claim stage = %q, want failed", stage)
 	}
+
+	// The load-bearing v1 shape: a failing stage stays at Unknown carrying the
+	// cloud provider's reason verbatim. Reading it as "still launching" is what
+	// makes a dead fleet look busy.
+	for _, reason := range []string{"InsufficientInstanceCapacity", "VCPULimitExceeded", "SpotQuotaExceeded", "AMINotFound"} {
+		claim := capacityTestClaimWithConditions("cloud-"+reason, pool, []map[string]any{
+			{"type": "Launched", "status": "Unknown", "reason": reason},
+		})
+		if stage := claimStage(claim); stage != capacityapi.ClaimStageFailed {
+			t.Fatalf("Launched=Unknown/%s claim stage = %q, want failed", reason, stage)
+		}
+	}
 }
 
 func TestBuildClusterSchedulingAggregateScopesToPooledNodes(t *testing.T) {
