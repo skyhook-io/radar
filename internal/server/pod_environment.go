@@ -365,7 +365,7 @@ func (s *Server) writePodEnvironmentGetError(w http.ResponseWriter, namespace, n
 	case apierrors.IsNotFound(err):
 		s.writeError(w, http.StatusNotFound, fmt.Sprintf("%s/%s not found", kind, name))
 	default:
-		log.Printf("[environment] Failed to read %s %s/%s: %v", kind, namespace, name, err)
+		log.Printf("[environment] Failed to read %s %s/%s: %s", sanitizeForLog(kind), sanitizeForLog(namespace), sanitizeForLog(name), sanitizeForLog(err.Error()))
 		s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to read %s", kind))
 	}
 }

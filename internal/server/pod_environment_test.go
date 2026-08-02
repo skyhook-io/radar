@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -194,6 +196,28 @@ func TestPodEnvironmentReadOutcomeMatchesHTTPErrorClass(t *testing.T) {
 				t.Fatalf("outcome = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestWritePodEnvironmentGetErrorSanitizesLog(t *testing.T) {
+	var output bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&output)
+	defer log.SetOutput(previous)
+
+	recorder := httptest.NewRecorder()
+	server := &Server{}
+	server.writePodEnvironmentGetError(
+		recorder,
+		"shop\nforged-namespace",
+		"api\rforged-name",
+		"Pod",
+		fmt.Errorf("transport failed\nforged-error"),
+	)
+
+	logged := output.String()
+	if strings.Count(logged, "\n") != 1 || strings.Contains(logged, "\nforged-") || strings.Contains(logged, "\rforged-") {
+		t.Fatalf("log contains an injected line: %q", logged)
 	}
 }
 
