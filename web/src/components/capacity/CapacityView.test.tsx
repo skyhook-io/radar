@@ -1333,6 +1333,70 @@ describe("CapacityView pool detail", () => {
     expect(html).toContain("NodePool unavailable");
   });
 
+  it("collapses the NodeClass cascade to its root and tucks raw conditions behind a toggle", () => {
+    const issue = (reason: string, message: string) => ({
+      id: reason,
+      severity: "warning" as const,
+      source: "condition" as const,
+      category: "node_provisioning_failure",
+      category_group: "capacity",
+      grouping_scope: "unknown" as const,
+      group: "karpenter.sh",
+      kind: "NodePool",
+      name: "default",
+      reason,
+      message,
+    });
+    const brokenRaw = renderCapacity("/capacity/pools/default", (client) =>
+      client.setQueryData(
+        ["capacity", "pool", "default"],
+        poolDetailResponse({
+          ...cleanPoolDetail,
+          issues: [
+            issue("NodeClassNotReady", "ValidationSucceeded=False"),
+            issue("NodePoolNotReady", "NodeClassReady=False"),
+          ],
+          conditions: [
+            { type: "Ready", status: "False", reason: "UnhealthyDependents" },
+            { type: "ValidationSucceeded", status: "True" },
+          ],
+        }),
+      ),
+    );
+    const broken = brokenRaw.replace(/<!-- -->/g, "");
+    // The pool-not-ready row is a derivable echo of the NodeClass issue beside
+    // it — the header chip already carries the state, so the row disappears.
+    expect(broken).not.toContain("NodeClassReady=False");
+    expect(broken).toContain("ValidationSucceeded=False");
+    // Raw conditions collapse behind the toggle while issues cover them.
+    expect(broken).toContain("Show controller conditions (2)");
+    expect(broken).not.toContain("UnhealthyDependents");
+
+    const standaloneRaw = renderCapacity("/capacity/pools/default", (client) =>
+      client.setQueryData(
+        ["capacity", "pool", "default"],
+        poolDetailResponse({
+          ...cleanPoolDetail,
+          issues: [issue("NodePoolNotReady", "NodeClassReady=False")],
+        }),
+      ),
+    );
+    const standalone = standaloneRaw.replace(/<!-- -->/g, "");
+    // Without the NodeClass issue the pool-unready row is novel — it stays.
+    expect(standalone).toContain("NodeClassReady=False");
+
+    const healthyRaw = renderCapacity("/capacity/pools/default", (client) =>
+      client.setQueryData(
+        ["capacity", "pool", "default"],
+        poolDetailResponse(cleanPoolDetail),
+      ),
+    );
+    const healthy = healthyRaw.replace(/<!-- -->/g, "");
+    // No issues: the raw conditions ARE the content and stay visible.
+    expect(healthy).toContain("Controller conditions");
+    expect(healthy).not.toContain("Show controller conditions");
+  });
+
   it("deep-links a provisioning-health issue into the pool's provision episodes", () => {
     const html = renderCapacity("/capacity/pools/default", (client) =>
       client.setQueryData(

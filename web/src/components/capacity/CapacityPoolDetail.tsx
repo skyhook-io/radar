@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { CircleHelp, Layers3 } from "lucide-react";
 import {
   WithTooltip,
@@ -883,6 +883,22 @@ function WorkloadAttribution({
   );
 }
 
+// A NodePool-not-ready row whose stated reason is the NodeClass issue shown
+// beside it adds nothing: the header chip already carries the state, and the
+// root cause's Inspect link is exactly its "Next" step — the cascade collapses
+// to its root. A standalone pool-unready (any NodeClass-independent reason)
+// keeps its row; this narrows to the one derivable echo.
+function isNodeClassCascadeEcho(
+  issue: { reason: string; message?: string },
+  all: { reason: string }[],
+): boolean {
+  return (
+    issue.reason === "NodePoolNotReady" &&
+    (issue.message ?? "").includes("NodeClassReady") &&
+    all.some((other) => other.reason === "NodeClassNotReady")
+  );
+}
+
 // Issue reasons whose durable evidence lives in the pool's provision episodes
 // (failed and ended launches). Their cards deep-link into Activity pre-filtered
 // — the whole diagnosis journey stays one click wide.
@@ -902,9 +918,17 @@ function PostureView({
   onNavigate: (path: string) => void;
   onOpenMembers: () => void;
 }) {
+  const visibleIssues = pool.issues.filter(
+    (issue) => !isNodeClassCascadeEcho(issue, pool.issues),
+  );
+  // Raw conditions are the receipts. While issues cover them they collapse
+  // behind a toggle (the Activity provenance pattern); on a healthy pool they
+  // ARE the content and stay visible.
+  const conditionsCollapsible = visibleIssues.length > 0;
+  const [showConditions, setShowConditions] = useState(false);
   const hasSignals =
     pool.facts.length > 0 ||
-    pool.issues.length > 0 ||
+    visibleIssues.length > 0 ||
     pool.conditions.length > 0;
   if (!hasSignals)
     return (
@@ -915,9 +939,9 @@ function PostureView({
     );
   return (
     <div className="space-y-4">
-      {(pool.facts.length > 0 || pool.issues.length > 0) && (
+      {(pool.facts.length > 0 || visibleIssues.length > 0) && (
         <div className="space-y-1.5">
-          {pool.issues.map((issue) => {
+          {visibleIssues.map((issue) => {
             const subject = {
               group: issue.group,
               kind: issue.kind,
@@ -1010,27 +1034,39 @@ function PostureView({
       )}
       {pool.conditions.length > 0 && (
         <div>
-          <div className="mb-1.5 text-xs font-medium text-theme-text-tertiary">
-            Controller conditions
-          </div>
-          <div className="space-y-1.5">
-            {pool.conditions.map((condition) => (
-              <div
-                key={condition.type}
-                className="flex flex-wrap items-baseline gap-2 text-xs"
-              >
-                <ConditionBadge status={condition.status} />
-                <span className="font-medium text-theme-text-primary">
-                  {condition.type}
-                </span>
-                {condition.reason && (
-                  <span className="text-theme-text-secondary">
-                    {condition.reason}
+          {conditionsCollapsible ? (
+            <LinkButton
+              className="mb-1.5 text-xs"
+              onClick={() => setShowConditions((current) => !current)}
+            >
+              {showConditions ? "Hide" : "Show"} controller conditions (
+              {pool.conditions.length})
+            </LinkButton>
+          ) : (
+            <div className="mb-1.5 text-xs font-medium text-theme-text-tertiary">
+              Controller conditions
+            </div>
+          )}
+          {(!conditionsCollapsible || showConditions) && (
+            <div className="space-y-1.5">
+              {pool.conditions.map((condition) => (
+                <div
+                  key={condition.type}
+                  className="flex flex-wrap items-baseline gap-2 text-xs"
+                >
+                  <ConditionBadge status={condition.status} />
+                  <span className="font-medium text-theme-text-primary">
+                    {condition.type}
                   </span>
-                )}
-              </div>
-            ))}
-          </div>
+                  {condition.reason && (
+                    <span className="text-theme-text-secondary">
+                      {condition.reason}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
