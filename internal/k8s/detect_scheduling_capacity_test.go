@@ -3,9 +3,11 @@ package k8s
 import (
 	"testing"
 
+	capacitymodel "github.com/skyhook-io/radar/internal/capacity"
 	"github.com/skyhook-io/radar/pkg/karpenter"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -195,5 +197,36 @@ func TestDetectSchedulingProblems_NodePoolPinnedButScheduled(t *testing.T) {
 
 	if problems := DetectSchedulingProblems(GetResourceCache(), "prod"); len(problems) != 0 {
 		t.Fatalf("expected no scheduling detections for a scheduled pod, got %+v", problems)
+	}
+}
+
+func TestPodEvaluatedAgainstKarpenterPools(t *testing.T) {
+	pool := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "karpenter.sh/v1", "kind": "NodePool",
+		"metadata": map[string]any{"name": "pool-a"},
+	}}
+	pools := []capacitymodel.DemandPoolInput{{NodePool: pool}}
+
+	// The widened semantic: an evaluated pod qualifies REGARDLESS of the
+	// result. This pod's undeclared selector would evaluate incompatible with
+	// every pool — exactly the GPU-demand-no-pool-can-serve archetype — and
+	// that is the case where withholding the Demand link would hide the
+	// diagnosis behind the worst news.
+	rejected := unschedulablePod("rejected", corev1.PodSpec{
+		NodeSelector: map[string]string{"radar.test/undeclared": "true"},
+	})
+	if !podEvaluatedAgainstKarpenterPools(rejected, pools) {
+		t.Fatal("an evaluated-and-rejected pod must still correlate — bad news is still the answer")
+	}
+	if podEvaluatedAgainstKarpenterPools(rejected, nil) {
+		t.Fatal("no pools means no evaluation — the bit must stay unset")
+	}
+	scheduled := rejected.DeepCopy()
+	scheduled.Spec.NodeName = "n1"
+	if podEvaluatedAgainstKarpenterPools(scheduled, pools) {
+		t.Fatal("a scheduled pod builds no demand group and must not correlate")
+	}
+	if podEvaluatedAgainstKarpenterPools(nil, pools) {
+		t.Fatal("nil pod must not correlate")
 	}
 }

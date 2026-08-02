@@ -354,7 +354,7 @@ func DetectSchedulingProblems(cache *ResourceCache, namespace string) []Detectio
 				OwnerKind:                  ownerKind,
 				OwnerName:                  ownerName,
 				CapacityRelevant:           podRequiresKarpenterNodePool(pod),
-				CapacityRelevantCorrelated: podHasDeclaredCompatibleKarpenterPool(pod, karpenterPools()),
+				CapacityRelevantCorrelated: podEvaluatedAgainstKarpenterPools(pod, karpenterPools()),
 			})
 		}
 	}
@@ -707,21 +707,20 @@ func karpenterDemandPoolInputs(cache *ResourceCache) []capacitymodel.DemandPoolI
 	return inputs
 }
 
-// podHasDeclaredCompatibleKarpenterPool reports whether at least one Karpenter
-// NodePool evaluates declared-compatible for this pod's demand group — the
-// demand-correlated expansion of capacity relevance. The structural pin check
-// stays as the other qualifying path; this one covers the archetypal case
-// (plain "Insufficient cpu" pods in a dynamic-pool cluster) that the pin alone
-// never catches.
-func podHasDeclaredCompatibleKarpenterPool(pod *corev1.Pod, pools []capacitymodel.DemandPoolInput) bool {
+// podEvaluatedAgainstKarpenterPools reports whether this pod's demand group
+// was evaluated against Karpenter NodePools at all — the demand-correlated
+// expansion of capacity relevance. The structural pin check stays as the other
+// qualifying path. Deliberately NOT gated on a compatible result: an
+// evaluated-and-rejected pod (the GPU-demand-no-pool-can-serve archetype) is
+// the case where the Demand diagnosis — including its no-pool-can-take-this
+// verdict — is most valuable, and filtering it out would withhold the link
+// exactly when the answer is bad news.
+func podEvaluatedAgainstKarpenterPools(pod *corev1.Pod, pools []capacitymodel.DemandPoolInput) bool {
 	if pod == nil || len(pools) == 0 {
 		return false
 	}
 	groups := capacitymodel.BuildDemandGroupModels(capacitymodel.DemandInput{GeneratedAt: time.Now(), Pods: []*corev1.Pod{pod}})
-	if len(groups) != 1 {
-		return false
-	}
-	return capacitymodel.AnyPoolDeclaredCompatible(groups[0], pools)
+	return len(groups) == 1
 }
 
 // podRequiresKarpenterNodePool reports whether the pod STRUCTURALLY pins itself

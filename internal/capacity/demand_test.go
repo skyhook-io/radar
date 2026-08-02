@@ -1249,35 +1249,6 @@ func TestDemandInstanceShapeExceedingObservedCapacityIsUnknown(t *testing.T) {
 	}
 }
 
-func TestAnyPoolDeclaredCompatibleIsFailClosed(t *testing.T) {
-	ready := true
-	compatible := demandTestPool("compatible", &ready, demandPoolSpec(nil, nil, nil, nil, nil), nil)
-	tainted := demandTestPool("tainted", &ready, demandPoolSpec(nil, []any{map[string]any{"key": "dedicated", "effect": string(corev1.TaintEffectNoSchedule)}}, nil, nil, nil), nil)
-
-	pod := demandTestPod("worker", "500m")
-	// The real detection path only correlates pods the scheduler has rejected.
-	pod.Status.Conditions = []corev1.PodCondition{{
-		Type: corev1.PodScheduled, Status: corev1.ConditionFalse,
-		Reason: corev1.PodReasonUnschedulable, Message: "0/3 nodes are available: 3 Insufficient cpu.",
-	}}
-	models := BuildDemandGroupModels(DemandInput{GeneratedAt: capacityTestTime(), Pods: []*corev1.Pod{pod}})
-	if len(models) != 1 {
-		t.Fatalf("models = %d, want 1", len(models))
-	}
-	if !AnyPoolDeclaredCompatible(models[0], []DemandPoolInput{{NodePool: compatible}, {NodePool: tainted}}) {
-		t.Fatal("permissive pool should qualify as declared compatible")
-	}
-	if AnyPoolDeclaredCompatible(models[0], []DemandPoolInput{{NodePool: tainted}}) {
-		t.Fatal("taint-blocked pool must not qualify")
-	}
-	// A NodeClass whose readiness is unknown keeps the pool at unknown — the
-	// fail-closed floor: uncertainty never qualifies.
-	withClass := demandTestPool("with-class", &ready, demandPoolSpecWithNodeClass(), nil)
-	if AnyPoolDeclaredCompatible(models[0], []DemandPoolInput{{NodePool: withClass}}) {
-		t.Fatal("unknown NodeClass readiness must not qualify")
-	}
-}
-
 func TestDemandInstanceShapeComparesWholeVectorsNotPerResourceMaxima(t *testing.T) {
 	ready := true
 	pool := demandTestPool("general", &ready, demandPoolSpec(nil, nil, nil, nil, nil), nil)

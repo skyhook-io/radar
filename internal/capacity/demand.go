@@ -416,22 +416,6 @@ func shapeKey(resources corev1.ResourceList) string {
 	return builder.String()
 }
 
-// AnyPoolDeclaredCompatible reports whether at least one pool evaluates
-// declared-compatible for a demand group — the fail-closed correlation floor
-// for marking scheduling issues capacity-relevant. Anything short of a clean
-// declared-compatible (unknowns included) does not qualify.
-func AnyPoolDeclaredCompatible(model DemandGroupModel, pools []DemandPoolInput) bool {
-	if model.Group.State != capacityapi.DemandAwaitingCapacity {
-		return false
-	}
-	for _, pool := range sortedDemandPoolInputs(pools) {
-		if evaluateDemandPool(model.scheduling, model.requests, pool).Result == capacityapi.PoolDeclaredCompatible {
-			return true
-		}
-	}
-	return false
-}
-
 func ClassifyDemandGroupModels(models []DemandGroupModel, pools []DemandPoolInput) {
 	if pools == nil {
 		return
