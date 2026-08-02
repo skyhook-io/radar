@@ -468,6 +468,8 @@ func (s *Server) setupRoutes() {
 
 			// Pod logs (non-streaming)
 			r.Get("/pods/{namespace}/{name}/logs", s.handlePodLogs)
+			r.Get("/pods/{namespace}/{name}/environment", s.handlePodEnvironment)
+			r.Post("/pods/{namespace}/{name}/environment/reveal", s.handleRevealPodEnvironment)
 
 			// Pod debug (ephemeral container)
 			r.Post("/pods/{namespace}/{name}/debug", s.handleCreateDebugContainer)

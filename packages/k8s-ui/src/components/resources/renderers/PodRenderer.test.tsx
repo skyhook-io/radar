@@ -3,6 +3,7 @@ import { renderToString } from 'react-dom/server'
 import { PodRenderer } from './PodRenderer'
 import { resolvedEnvFromKey } from '../../../utils/env-from'
 import type { ResolvedEnvFrom } from '../../../types'
+import type { PodEnvironmentResponse } from '../../../types'
 
 const pod = {
   metadata: { name: 'api', namespace: 'default' },
@@ -49,6 +50,40 @@ describe('PodRenderer envFrom expansion', () => {
     expect(html).toContain('Secret')
     expect(html).toContain('API_TOKEN')
     expect(html).not.toContain('PUBLIC_URL<!-- -->=')
+  })
+})
+
+describe('PodRenderer resolved environment', () => {
+  it('explains Secret coverage without placing Secret values in the initial markup', () => {
+    const environment: PodEnvironmentResponse = {
+      containers: [{
+        name: 'api',
+        role: 'container',
+        rows: [
+          { name: 'PUBLIC_URL', value: 'https://example.com', state: 'resolved', source: { kind: 'ConfigMap', name: 'shared', key: 'PUBLIC_URL' } },
+          { name: 'API_TOKEN', state: 'masked', sensitive: true, source: { kind: 'Secret', name: 'shared', key: 'API_TOKEN' } },
+        ],
+      }],
+      coverage: {},
+    }
+
+    const html = renderToString(
+      <PodRenderer
+        data={pod}
+        onCopy={() => undefined}
+        copied={null}
+        environment={environment}
+        onRevealEnvironment={async () => ({ value: 'sentinel-secret-value', encoding: 'utf8' })}
+      />,
+    )
+
+    expect(html).toContain('2 variables')
+    expect(html).toContain('1 from Secrets')
+    expect(html).toContain('Secret values stay hidden until you reveal them.')
+    expect(html).toContain('Value if restarted now')
+    expect(html).toContain('Values added automatically when a container starts are not listed.')
+    expect(html).toContain('Secret<!-- -->/<!-- -->shared')
+    expect(html).not.toContain('sentinel-secret-value')
   })
 })
 

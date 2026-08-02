@@ -218,3 +218,25 @@ func AuditLog(r *http.Request, namespace, name string) {
 	log.Printf("[audit] user=%q groups=%q %s path=%q ns=%q name=%q",
 		user.Username, user.Groups, r.Method, r.URL.Path, namespace, name)
 }
+
+type AuditActionDetails struct {
+	Action    string
+	Namespace string
+	Name      string
+	Container string
+	Variable  string
+	Source    string
+	Outcome   string
+}
+
+func AuditLogAction(r *http.Request, details AuditActionDetails) {
+	username := "local-kubeconfig"
+	var groups []string
+	if user := UserFromContext(r.Context()); user != nil {
+		username = user.Username
+		groups = user.Groups
+	}
+	log.Printf("[audit] user=%q groups=%q action=%q path=%q ns=%q name=%q container=%q variable=%q source=%q outcome=%q",
+		username, groups, details.Action, r.URL.Path, details.Namespace, details.Name,
+		details.Container, details.Variable, details.Source, details.Outcome)
+}
