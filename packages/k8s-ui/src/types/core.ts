@@ -486,6 +486,8 @@ export interface PodEnvironmentRow {
   dependencies?: PodEnvironmentSource[]
   shadowedSources?: PodEnvironmentSource[]
   message?: string
+  optional?: boolean
+  missingImpact?: 'startupBlocked' | 'restartBlocked'
   runtimeDependent?: boolean
   currentPodValue?: boolean
   placeholder?: boolean

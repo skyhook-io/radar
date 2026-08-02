@@ -288,6 +288,7 @@ func truncatePodEnvironmentRows(response *envresolve.PodEnvironment, limit int) 
 
 func attachPodEnvironmentEvidence(response *envresolve.PodEnvironment, changes []k8s.PodEnvChange, sources map[envresolve.SourceID]envresolve.SourceData) {
 	byVariable := make(map[string][]k8s.PodEnvChange)
+	byContainer := make(map[string][]k8s.PodEnvChange)
 	for _, change := range changes {
 		source := sources[envresolve.SourceID{Kind: change.Source.Kind, Name: change.Source.Name}]
 		if source.State != envresolve.SourceAvailable {
@@ -295,6 +296,7 @@ func attachPodEnvironmentEvidence(response *envresolve.PodEnvironment, changes [
 		}
 		key := change.Container + "\x00" + change.Variable
 		byVariable[key] = append(byVariable[key], change)
+		byContainer[change.Container] = append(byContainer[change.Container], change)
 	}
 	for i := range response.Containers {
 		container := &response.Containers[i]
@@ -302,7 +304,7 @@ func attachPodEnvironmentEvidence(response *envresolve.PodEnvironment, changes [
 		for j := range response.Containers[i].Rows {
 			row := &container.Rows[j]
 			seen[row.Name] = true
-			for _, change := range byVariable[container.Name+"\x00"+row.Name] {
+			for _, change := range byContainer[container.Name] {
 				if !rowUsesSource(*row, change.Source) || row.Evidence != nil && !change.Evidence.ChangedAt.After(row.Evidence.ChangedAt) {
 					continue
 				}

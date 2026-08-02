@@ -245,14 +245,16 @@ func dedupePVCPendingOverMissingRef(in []Issue) []Issue {
 	return out
 }
 
-// missingConfigCausesWaiting are the by-name dangling references whose failure
+// missingConfigCausesWaiting are the required configuration references whose failure
 // surfaces as a container stuck in Waiting (CreateContainerConfigError): the
-// referenced ConfigMap/Secret/ServiceAccount/imagePullSecret doesn't exist, so
+// referenced ConfigMap/Secret/key/ServiceAccount/imagePullSecret doesn't exist, so
 // the kubelet can't build the container config. "Missing PVC" is excluded — it
 // blocks scheduling (unschedulable), not container creation.
 var missingConfigCausesWaiting = map[string]bool{
 	"Missing ConfigMap":       true,
+	"Missing ConfigMap key":   true,
 	"Missing Secret":          true,
+	"Missing Secret key":      true,
 	"Missing ServiceAccount":  true,
 	"Missing imagePullSecret": true,
 }

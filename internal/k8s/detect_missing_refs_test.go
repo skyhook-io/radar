@@ -351,6 +351,110 @@ func TestDetectMissingRefs(t *testing.T) {
 	assertProblemActionContains(t, problems, "ClusterRoleBinding", "", "crb-bad", "Missing roleRef target", "immutable")
 }
 
+func TestDetectMissingEnvKeysClassifiesCurrentImpact(t *testing.T) {
+	defer ResetTestState()
+	created := metav1.NewTime(time.Now().Add(-10 * time.Minute))
+	optional := true
+	configMap := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "settings", Namespace: "prod"},
+		Data:       map[string]string{"present": "value"},
+		BinaryData: map[string][]byte{"binary": []byte("value")},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "credentials", Namespace: "prod"},
+		Data:       map[string][]byte{"present": []byte("value")},
+	}
+	env := func(configKey, secretKey string, optionalRef bool) []corev1.EnvVar {
+		var optionalPtr *bool
+		if optionalRef {
+			optionalPtr = &optional
+		}
+		return []corev1.EnvVar{
+			{Name: "CONFIG", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "settings"}, Key: configKey, Optional: optionalPtr}}},
+			{Name: "SECRET", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "credentials"}, Key: secretKey, Optional: optionalPtr}}},
+		}
+	}
+	pod := func(name string, vars []corev1.EnvVar, status corev1.ContainerStatus) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "prod", CreationTimestamp: created},
+			Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Env: vars}}},
+			Status:     corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{status}},
+		}
+	}
+	runningStatus := corev1.ContainerStatus{Name: "app", ContainerID: "containerd://running", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}
+	waitingStatus := corev1.ContainerStatus{Name: "app", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CreateContainerConfigError"}}}
+	runningRisk := pod("running-risk", env("missing", "missing", false), runningStatus)
+	blockedNow := pod("blocked-now", env("missing", "present", false), waitingStatus)
+	blockedNow.Status.Phase = corev1.PodPending
+	optionalMissing := pod("optional-missing", env("missing", "missing", true), runningStatus)
+	binaryOnly := pod("binary-only", env("binary", "present", false), waitingStatus)
+	binaryOnly.Status.Phase = corev1.PodPending
+	crashLoop := pod("crash-loop", env("missing", "present", false), corev1.ContainerStatus{
+		Name:                 "app",
+		State:                corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+		LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1}},
+	})
+	healthy := pod("healthy", env("present", "present", false), runningStatus)
+	runningSourceRisk := pod("running-source-risk", nil, runningStatus)
+	runningSourceRisk.Spec.Containers[0].EnvFrom = []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "missing-source"}}}}
+	mixedImpact := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "mixed-impact", Namespace: "prod", CreationTimestamp: created},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{
+			{Name: "running", Env: env("missing", "present", false)[:1]},
+			{Name: "blocked", Env: env("missing", "present", false)[:1]},
+		}},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{
+			{Name: "running", ContainerID: "containerd://running", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}},
+			{Name: "blocked", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CreateContainerConfigError"}}},
+		}},
+	}
+
+	client := fake.NewClientset(configMap, secret, runningRisk, blockedNow, optionalMissing, binaryOnly, crashLoop, healthy, runningSourceRisk, mixedImpact)
+	if err := InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	cache := GetResourceCache()
+	deadline := time.Now().Add(2 * time.Second)
+	var detections []Detection
+	for time.Now().Before(deadline) {
+		detections = DetectMissingRefs(cache, "prod")
+		if len(detections) >= 5 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	want := map[string]string{
+		"running-risk/Missing ConfigMap key": "warning",
+		"running-risk/Missing Secret key":    "warning",
+		"blocked-now/Missing ConfigMap key":  "critical",
+		"binary-only/Missing ConfigMap key":  "critical",
+		"crash-loop/Missing ConfigMap key":   "critical",
+		"running-source-risk/Missing Secret": "warning",
+		"mixed-impact/Missing ConfigMap key": "critical",
+	}
+	for _, detection := range detections {
+		key := detection.Name + "/" + detection.Reason
+		severity, expected := want[key]
+		if !expected {
+			if detection.Name == "optional-missing" || detection.Name == "healthy" {
+				t.Errorf("unexpected missing environment detection: %+v", detection)
+			}
+			continue
+		}
+		if detection.Severity != severity {
+			t.Errorf("%s severity = %q, want %q: %+v", key, detection.Severity, severity, detection)
+		}
+		if detection.Cause == "" || detection.Action == "" {
+			t.Errorf("%s lacks cause/action: %+v", key, detection)
+		}
+		delete(want, key)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing environment detections: %+v; got %+v", want, detections)
+	}
+}
+
 func TestScaleTargetLookupResultDistinguishesErrors(t *testing.T) {
 	gr := schema.GroupResource{Group: "apps", Resource: "deployments"}
 

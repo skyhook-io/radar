@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -47,7 +48,9 @@ func FindPodEnvChanges(ctx context.Context, cache *ResourceCache, pod *corev1.Po
 		coverage.ObservedSince = &observedSince
 	}
 	coverage.Degraded = stats.Degraded
-	coverage.DegradedReason = stats.DegradedReason
+	if stats.Degraded {
+		coverage.DegradedReason = "Change history is limited to this Radar session."
+	}
 
 	names := podEnvSourceNames(pod)
 	if len(names) == 0 {
@@ -65,8 +68,9 @@ func FindPodEnvChanges(ctx context.Context, cache *ResourceCache, pod *corev1.Po
 		Limit:          maxPodEnvSourceHistoryEvents,
 	})
 	if err != nil {
+		log.Printf("[environment] Failed to query change history: %q", err.Error())
 		coverage.Degraded = true
-		coverage.DegradedReason = err.Error()
+		coverage.DegradedReason = "Recent changes could not be checked."
 		events = nil
 	}
 	coverage.Saturated = len(events) >= maxPodEnvSourceHistoryEvents

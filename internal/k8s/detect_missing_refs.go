@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/logsafe"
+	"github.com/skyhook-io/radar/pkg/envresolve"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
@@ -25,8 +26,8 @@ import (
 //
 //   - Pod → PVC                                  (pod won't schedule)
 //   - Pod → ServiceAccount (non-default)         (pod can't start)
-//   - Pod → ConfigMap   (when not optional)      (pod fails to start)
-//   - Pod → Secret      (when not optional)      (pod fails to start)
+//   - Pod → ConfigMap   (when not optional)      (pod can't start/restart)
+//   - Pod → Secret      (when not optional)      (pod can't start/restart)
 //   - Pod → imagePullSecret                      (ImagePullBackOff on private registry)
 //   - StatefulSet → headless serviceName         (per-pod DNS not created, peer discovery broken)
 //   - HPA → scaleTargetRef                       (HPA inert until target exists)
@@ -184,10 +185,43 @@ func detectPodMissingRefs(cache *ResourceCache, namespace string, now time.Time)
 		// issue, not 50 pod rows. Mirrors the owner resolution on the
 		// DetectProblems / scheduling pod paths.
 		ownerGroup, ownerKind, ownerName := podOwnerKindName(cache, p)
-		emit := func(reason, message, cause, action string) {
-			pr := withFix(missingRefProblem("Pod", "", p.Namespace, p.Name, reason, message, age), cause, action)
+		envMissingIndexes := make(map[string]int)
+		emitSeverity := func(severity, reason, message, cause, action string) {
+			pr := withFix(missingRefProblemSev("Pod", "", p.Namespace, p.Name, severity, reason, message, age), cause, action)
 			pr.OwnerGroup, pr.OwnerKind, pr.OwnerName = ownerGroup, ownerKind, ownerName
 			out = append(out, pr)
+		}
+		emit := func(reason, message, cause, action string) {
+			emitSeverity("critical", reason, message, cause, action)
+		}
+		emitMissingEnv := func(containerName, variable, where, kind, sourceName, key string) {
+			impact := envresolve.RequiredMissingImpact(p, containerName)
+			severity := "critical"
+			impactCause := "This prevents the container from starting."
+			if impact == envresolve.MissingImpactRestartBlocked {
+				severity = "warning"
+				impactCause = "The Pod has already started, but this container cannot start again while this required configuration is missing."
+			}
+			reason := "Missing " + kind
+			message := fmt.Sprintf("container %q %s references %s %q which does not exist", containerName, where, kind, sourceName)
+			actionTarget := fmt.Sprintf("an existing %s", kind)
+			if key != "" {
+				reason += " key"
+				message = fmt.Sprintf("container %q env var %q references key %q which is absent from %s %q", containerName, variable, key, kind, sourceName)
+				actionTarget = fmt.Sprintf("an existing key in %s %q", kind, sourceName)
+			}
+			action := fmt.Sprintf("Restore the required configuration in namespace %q, or update the pod template to reference %s, mark the reference optional, or remove it if obsolete.", p.Namespace, actionTarget)
+			identity := kind + "\x00" + sourceName + "\x00" + key
+			if index, exists := envMissingIndexes[identity]; exists {
+				if severity == "critical" && out[index].Severity != "critical" {
+					pr := withFix(missingRefProblemSev("Pod", "", p.Namespace, p.Name, severity, reason, message, age), impactCause, action)
+					pr.OwnerGroup, pr.OwnerKind, pr.OwnerName = ownerGroup, ownerKind, ownerName
+					out[index] = pr
+				}
+				return
+			}
+			envMissingIndexes[identity] = len(out)
+			emitSeverity(severity, reason, message, impactCause, action)
 		}
 
 		// Volumes: persistentVolumeClaim, configMap, secret
@@ -248,29 +282,27 @@ func detectPodMissingRefs(cache *ResourceCache, namespace string, now time.Time)
 				if ef.ConfigMapRef != nil {
 					name := ef.ConfigMapRef.Name
 					optional := ef.ConfigMapRef.Optional != nil && *ef.ConfigMapRef.Optional
-					if name == "" || optional || seen["cm:"+name] {
+					if name == "" || optional {
 						continue
 					}
-					seen["cm:"+name] = true
 					if cmLister == nil {
 						continue
 					}
-					if _, err := cmLister.ConfigMaps(p.Namespace).Get(name); err != nil {
-						emit(cmRefDiag("envFrom", name, p.Namespace))
+					if _, err := cmLister.ConfigMaps(p.Namespace).Get(name); err != nil && !seen["cm:"+name] {
+						emitMissingEnv(c.Name, "", "envFrom", "ConfigMap", name, "")
 					}
 				}
 				if ef.SecretRef != nil {
 					name := ef.SecretRef.Name
 					optional := ef.SecretRef.Optional != nil && *ef.SecretRef.Optional
-					if name == "" || optional || seen["sec:"+name] {
+					if name == "" || optional {
 						continue
 					}
-					seen["sec:"+name] = true
 					if secLister == nil {
 						continue
 					}
-					if _, err := secLister.Secrets(p.Namespace).Get(name); err != nil {
-						emit(secretRefDiag("envFrom", name, p.Namespace))
+					if _, err := secLister.Secrets(p.Namespace).Get(name); err != nil && !seen["sec:"+name] {
+						emitMissingEnv(c.Name, "", "envFrom", "Secret", name, "")
 					}
 				}
 			}
@@ -281,29 +313,41 @@ func detectPodMissingRefs(cache *ResourceCache, namespace string, now time.Time)
 				if r := e.ValueFrom.ConfigMapKeyRef; r != nil {
 					name := r.Name
 					optional := r.Optional != nil && *r.Optional
-					if name == "" || optional || seen["cm:"+name] {
+					if name == "" || r.Key == "" || optional {
 						continue
 					}
-					seen["cm:"+name] = true
 					if cmLister == nil {
 						continue
 					}
-					if _, err := cmLister.ConfigMaps(p.Namespace).Get(name); err != nil {
-						emit(cmRefDiag("env var", name, p.Namespace))
+					cm, err := cmLister.ConfigMaps(p.Namespace).Get(name)
+					if err != nil {
+						if !seen["cm:"+name] {
+							emitMissingEnv(c.Name, e.Name, "env var", "ConfigMap", name, "")
+						}
+						continue
+					}
+					if _, exists := cm.Data[r.Key]; !exists {
+						emitMissingEnv(c.Name, e.Name, "env var", "ConfigMap", name, r.Key)
 					}
 				}
 				if r := e.ValueFrom.SecretKeyRef; r != nil {
 					name := r.Name
 					optional := r.Optional != nil && *r.Optional
-					if name == "" || optional || seen["sec:"+name] {
+					if name == "" || r.Key == "" || optional {
 						continue
 					}
-					seen["sec:"+name] = true
 					if secLister == nil {
 						continue
 					}
-					if _, err := secLister.Secrets(p.Namespace).Get(name); err != nil {
-						emit(secretRefDiag("env var", name, p.Namespace))
+					secret, err := secLister.Secrets(p.Namespace).Get(name)
+					if err != nil {
+						if !seen["sec:"+name] {
+							emitMissingEnv(c.Name, e.Name, "env var", "Secret", name, "")
+						}
+						continue
+					}
+					if _, exists := secret.Data[r.Key]; !exists {
+						emitMissingEnv(c.Name, e.Name, "env var", "Secret", name, r.Key)
 					}
 				}
 			}

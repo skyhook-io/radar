@@ -1,6 +1,7 @@
 package envresolve
 
 import (
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -85,6 +86,87 @@ func TestResolvePodDeniedEnvFromDoesNotDiscloseKeys(t *testing.T) {
 	}, NodeData{})
 	if len(got.Containers[0].Rows) != 1 || !got.Containers[0].Rows[0].Placeholder || got.Containers[0].Rows[0].State != ValueDenied {
 		t.Fatalf("rows = %+v", got.Containers[0].Rows)
+	}
+}
+
+func TestResolvePodMarksOptionalMissingKey(t *testing.T) {
+	optional := true
+	pod := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+		Name: "app",
+		Env: []corev1.EnvVar{{Name: "FEATURE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: "settings"}, Key: "feature", Optional: &optional,
+		}}}},
+	}}}}
+	rows := ResolvePod(pod, map[SourceID]SourceData{
+		{Kind: "ConfigMap", Name: "settings"}: {Kind: "ConfigMap", Name: "settings", State: SourceAvailable},
+	}, NodeData{}).Containers[0].Rows
+	if len(rows) != 1 || rows[0].State != ValueMissing || !rows[0].Optional {
+		t.Fatalf("optional missing key = %+v", rows)
+	}
+	if rows[0].MissingImpact != "" {
+		t.Fatalf("optional missing key must not carry failure impact: %+v", rows[0])
+	}
+}
+
+func TestResolvePodDoesNotTreatOptionalMissingDependencyAsBlocking(t *testing.T) {
+	optional := true
+	pod := &corev1.Pod{
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "app",
+			Env: []corev1.EnvVar{
+				{Name: "FEATURE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "settings"}, Key: "feature", Optional: &optional,
+				}}},
+				{Name: "MESSAGE", Value: "feature=$(FEATURE)"},
+			},
+		}}},
+		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+			Name: "app", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+		}}},
+	}
+	rows := rowsByName(ResolvePod(pod, map[SourceID]SourceData{
+		{Kind: "ConfigMap", Name: "settings"}: {Kind: "ConfigMap", Name: "settings", State: SourceAvailable},
+	}, NodeData{}).Containers[0].Rows)
+	if !rows["MESSAGE"].Optional || rows["MESSAGE"].MissingImpact != "" || strings.Contains(rows["MESSAGE"].Message, "cannot start again") {
+		t.Fatalf("dependent value inherited blocking impact from optional key: %+v", rows["MESSAGE"])
+	}
+}
+
+func TestResolvePodClassifiesRequiredMissingImpact(t *testing.T) {
+	pod := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+		Name: "app",
+		Env: []corev1.EnvVar{{Name: "SETTING", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: "settings"}, Key: "required",
+		}}}},
+	}}}}
+	sources := map[SourceID]SourceData{
+		{Kind: "ConfigMap", Name: "settings"}: {Kind: "ConfigMap", Name: "settings", State: SourceAvailable},
+	}
+
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name: "app", ContainerID: "containerd://running", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+	}}
+	running := ResolvePod(pod, sources, NodeData{}).Containers[0].Rows[0]
+	if running.MissingImpact != MissingImpactRestartBlocked || !strings.Contains(running.Message, "cannot start again") {
+		t.Fatalf("running container impact = %+v", running)
+	}
+
+	pod.Status.ContainerStatuses[0] = corev1.ContainerStatus{
+		Name: "app", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CreateContainerConfigError"}},
+	}
+	blocked := ResolvePod(pod, sources, NodeData{}).Containers[0].Rows[0]
+	if blocked.MissingImpact != MissingImpactStartupBlocked || !strings.Contains(blocked.Message, "prevents the container from starting") {
+		t.Fatalf("blocked container impact = %+v", blocked)
+	}
+
+	pod.Status.ContainerStatuses[0] = corev1.ContainerStatus{
+		Name:                 "app",
+		State:                corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+		LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1}},
+	}
+	down := ResolvePod(pod, sources, NodeData{}).Containers[0].Rows[0]
+	if down.MissingImpact != MissingImpactStartupBlocked || !strings.Contains(down.Message, "prevents the container from starting") {
+		t.Fatalf("down container impact = %+v", down)
 	}
 }
 

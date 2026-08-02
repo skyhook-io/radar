@@ -965,9 +965,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const fastInvalidationRef = useRef<{
     changedKinds: Set<string>   // every changed kind (any op) → detail drawer
     structuralKinds: Set<string> // add/delete kinds → list membership + counts + dashboard
+    environmentNamespaces: Set<string>
     secretsChanged: boolean
     timer: number | null
-  }>({ changedKinds: new Set(), structuralKinds: new Set(), secretsChanged: false, timer: null })
+  }>({ changedKinds: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), secretsChanged: false, timer: null })
   const slowInvalidationRef = useRef<{
     updatedKinds: Set<string>    // update-only churn → throttled list + dashboard
     timer: number | null
@@ -1002,6 +1003,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     fast.changedKinds.add(kind)
     if (structural) fast.structuralKinds.add(kind)
     if (kind === 'secrets') fast.secretsChanged = true
+    if ((kind === 'configmaps' || kind === 'secrets') && event.namespace) fast.environmentNamespaces.add(event.namespace)
 
     const slow = slowInvalidationRef.current
     if (!structural) slow.updatedKinds.add(kind)
@@ -1023,11 +1025,14 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         if (f.secretsChanged) {
           queryClient.invalidateQueries({ queryKey: ['secret-cert-expiry'] })
         }
+        for (const namespace of f.environmentNamespaces) {
+          queryClient.invalidateQueries({ queryKey: ['pod-environment', namespace] })
+        }
         // GitOps behavior unchanged from before — refreshes every batch when a
         // GitOps view is mounted (Phase 2 will make this relevance-aware).
         queryClient.invalidateQueries({ queryKey: ['gitops-tree'] })
         queryClient.invalidateQueries({ queryKey: ['gitops-insights'] })
-        fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), secretsChanged: false, timer: null }
+        fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), secretsChanged: false, timer: null }
       }, 3000)
     }
 
@@ -1053,7 +1058,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     if (fastInvalidationRef.current.timer !== null) clearTimeout(fastInvalidationRef.current.timer)
     if (slowInvalidationRef.current.timer !== null) clearTimeout(slowInvalidationRef.current.timer)
     if (timelineInvalidationRef.current.timer !== null) clearTimeout(timelineInvalidationRef.current.timer)
-    fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), secretsChanged: false, timer: null }
+    fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), secretsChanged: false, timer: null }
     slowInvalidationRef.current = { updatedKinds: new Set(), timer: null }
     timelineInvalidationRef.current = { timer: null }
   }, [])
@@ -1076,7 +1081,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       if (fastInvalidationRef.current.timer !== null) clearTimeout(fastInvalidationRef.current.timer)
       if (slowInvalidationRef.current.timer !== null) clearTimeout(slowInvalidationRef.current.timer)
       if (timelineInvalidationRef.current.timer !== null) clearTimeout(timelineInvalidationRef.current.timer)
-      fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), secretsChanged: false, timer: null }
+      fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), secretsChanged: false, timer: null }
       slowInvalidationRef.current = { updatedKinds: new Set(), timer: null }
       timelineInvalidationRef.current = { timer: null }
 

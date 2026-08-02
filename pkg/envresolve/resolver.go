@@ -67,6 +67,10 @@ func resolveContainer(pod *corev1.Pod, container *corev1.Container, role string,
 	rows := make([]Row, 0, len(bindings))
 	for name, current := range bindings {
 		current.row.ShadowedSources = compactRefs(shadowed[name])
+		if current.row.State == ValueMissing && !current.row.Optional {
+			current.row.MissingImpact = RequiredMissingImpact(pod, container.Name)
+			current.row.Message = missingImpactMessage(current.row.Message, current.row.MissingImpact)
+		}
 		if !current.row.Sensitive {
 			current.row.Value = current.value
 		}
@@ -74,6 +78,41 @@ func resolveContainer(pod *corev1.Pod, container *corev1.Container, role string,
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
 	return Container{Name: container.Name, Role: role, Rows: rows}
+}
+
+func RequiredMissingImpact(pod *corev1.Pod, containerName string) MissingImpact {
+	if pod == nil {
+		return MissingImpactStartupBlocked
+	}
+	statuses := append([]corev1.ContainerStatus(nil), pod.Status.InitContainerStatuses...)
+	statuses = append(statuses, pod.Status.ContainerStatuses...)
+	for _, status := range statuses {
+		if status.Name != containerName {
+			continue
+		}
+		if status.State.Waiting != nil && status.State.Waiting.Reason == "CreateContainerConfigError" {
+			return MissingImpactStartupBlocked
+		}
+		if status.State.Waiting != nil {
+			return MissingImpactStartupBlocked
+		}
+		if status.State.Running != nil || status.State.Terminated != nil || status.LastTerminationState.Terminated != nil || status.ContainerID != "" {
+			return MissingImpactRestartBlocked
+		}
+		break
+	}
+	return MissingImpactStartupBlocked
+}
+
+func missingImpactMessage(message string, impact MissingImpact) string {
+	suffix := "This prevents the container from starting."
+	if impact == MissingImpactRestartBlocked {
+		suffix = "The Pod has already started, but this container cannot start again while this is missing."
+	}
+	if message == "" {
+		return suffix
+	}
+	return message + " " + suffix
 }
 
 func resolveBindings(pod *corev1.Pod, container *corev1.Container, sources map[SourceID]SourceData, node NodeData) (map[string]binding, map[string][]SourceRef) {
@@ -101,7 +140,7 @@ func resolveBindings(pod *corev1.Pod, container *corev1.Container, sources map[S
 			if source.Message != "" {
 				message = source.Message
 			}
-			bindings[name] = binding{row: Row{Name: name, State: state, Sensitive: kind == "Secret", Source: SourceRef{Kind: kind, Name: source.Name}, Message: message, Placeholder: true}}
+			bindings[name] = binding{row: Row{Name: name, State: state, Sensitive: kind == "Secret", Source: SourceRef{Kind: kind, Name: source.Name}, Message: message, Optional: optional, Placeholder: true}}
 			continue
 		}
 		for _, key := range keys {
@@ -118,7 +157,7 @@ func resolveBindings(pod *corev1.Pod, container *corev1.Container, sources map[S
 			if source.Sensitive {
 				state = ValueMasked
 			}
-			bindings[name] = binding{row: Row{Name: name, State: state, Sensitive: source.Sensitive, Source: ref}, value: value, available: available}
+			bindings[name] = binding{row: Row{Name: name, State: state, Sensitive: source.Sensitive, Source: ref, Optional: optional}, value: value, available: available}
 		}
 	}
 
@@ -134,7 +173,7 @@ func resolveBindings(pod *corev1.Pod, container *corev1.Container, sources map[S
 
 func resolveExplicit(pod *corev1.Pod, container *corev1.Container, env corev1.EnvVar, bindings map[string]binding, sources map[SourceID]SourceData, node NodeData) binding {
 	if env.ValueFrom == nil {
-		value, deps, sensitive, available, runtimeDependent, dependencyState, dependencyMessage := expand(env.Value, bindings)
+		value, deps, sensitive, available, runtimeDependent, dependencyState, dependencyMessage, dependencyOptional := expand(env.Value, bindings)
 		state := ValueResolved
 		if dependencyState != ValueResolved {
 			state = dependencyState
@@ -145,9 +184,9 @@ func resolveExplicit(pod *corev1.Pod, container *corev1.Container, env corev1.En
 		}
 		message := dependencyMessage
 		if runtimeDependent && message == "" {
-			message = "The final value depends on variables supplied when the container starts."
+			message = "This value is completed when the container starts because it uses another variable that is not declared on the Pod."
 		}
-		return binding{row: Row{Name: env.Name, State: state, Sensitive: sensitive, Source: SourceRef{Kind: "Direct"}, Dependencies: deps, Message: message, RuntimeDependent: runtimeDependent}, value: value, available: available && !runtimeDependent}
+		return binding{row: Row{Name: env.Name, State: state, Sensitive: sensitive, Source: SourceRef{Kind: "Direct"}, Dependencies: deps, Message: message, RuntimeDependent: runtimeDependent, Optional: dependencyOptional}, value: value, available: available && !runtimeDependent}
 	}
 	if ref := env.ValueFrom.ConfigMapKeyRef; ref != nil {
 		return resolveKeyRef(env.Name, "ConfigMap", ref.Name, ref.Key, ref.Optional != nil && *ref.Optional, sources)
@@ -274,13 +313,13 @@ func resolveKeyRef(envName, kind, name, key string, optional bool, sources map[S
 		if source.Message != "" {
 			message = source.Message
 		}
-		return binding{row: Row{Name: envName, State: state, Sensitive: kind == "Secret", Source: ref, Message: message}}
+		return binding{row: Row{Name: envName, State: state, Sensitive: kind == "Secret", Source: ref, Message: message, Optional: optional}}
 	}
 	value, ok := source.Values[key]
 	if !ok && source.Sensitive {
 		for _, candidate := range source.Keys {
 			if candidate == key {
-				return binding{row: Row{Name: envName, State: ValueMasked, Sensitive: true, Source: ref}}
+				return binding{row: Row{Name: envName, State: ValueMasked, Sensitive: true, Source: ref, Optional: optional}}
 			}
 		}
 	}
@@ -289,20 +328,20 @@ func resolveKeyRef(envName, kind, name, key string, optional bool, sources map[S
 		if optional {
 			message = fmt.Sprintf("Optional key %s is absent from %s/%s.", key, kind, name)
 		}
-		return binding{row: Row{Name: envName, State: ValueMissing, Sensitive: source.Sensitive, Source: ref, Message: message}}
+		return binding{row: Row{Name: envName, State: ValueMissing, Sensitive: source.Sensitive, Source: ref, Message: message, Optional: optional}}
 	}
 	state := ValueResolved
 	if source.Sensitive {
 		state = ValueMasked
 	}
-	return binding{row: Row{Name: envName, State: state, Sensitive: source.Sensitive, Source: ref}, value: value, available: true}
+	return binding{row: Row{Name: envName, State: state, Sensitive: source.Sensitive, Source: ref, Optional: optional}, value: value, available: true}
 }
 
-func expand(input string, bindings map[string]binding) (string, []SourceRef, bool, bool, bool, ValueState, string) {
+func expand(input string, bindings map[string]binding) (string, []SourceRef, bool, bool, bool, ValueState, string, bool) {
 	var out strings.Builder
 	var deps []SourceRef
 	sensitive, available, runtimeDependent := false, true, false
-	dependencyState, dependencyMessage := ValueResolved, ""
+	dependencyState, dependencyMessage, dependencyOptional := ValueResolved, "", false
 	for i := 0; i < len(input); {
 		if input[i] != '$' || i+1 >= len(input) {
 			out.WriteByte(input[i])
@@ -339,15 +378,18 @@ func expand(input string, bindings map[string]binding) (string, []SourceRef, boo
 			sensitive = sensitive || dep.row.Sensitive
 			available = available && dep.available
 			runtimeDependent = runtimeDependent || dep.row.RuntimeDependent
-			if rankValueState(dep.row.State) > rankValueState(dependencyState) {
+			dependencyRank := rankValueState(dep.row.State)
+			currentRank := rankValueState(dependencyState)
+			if dependencyRank > currentRank || (dependencyRank == currentRank && dependencyOptional && !dep.row.Optional) {
 				dependencyState = dep.row.State
 				dependencyMessage = dep.row.Message
+				dependencyOptional = dep.row.Optional
 			}
 			out.WriteString(dep.value)
 		}
 		i = end + 1
 	}
-	return out.String(), compactRefs(deps), sensitive, available, runtimeDependent, dependencyState, dependencyMessage
+	return out.String(), compactRefs(deps), sensitive, available, runtimeDependent, dependencyState, dependencyMessage, dependencyOptional
 }
 
 func rankValueState(state ValueState) int {

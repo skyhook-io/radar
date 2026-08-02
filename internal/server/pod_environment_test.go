@@ -95,6 +95,7 @@ func TestAttachPodEnvironmentEvidenceHonorsEffectiveSourceAndAccess(t *testing.T
 	response := envresolve.PodEnvironment{Containers: []envresolve.Container{{Name: "app", Rows: []envresolve.Row{
 		{Name: "OVERRIDDEN", State: envresolve.ValueResolved, Source: envresolve.SourceRef{Kind: "Direct"}},
 		{Name: "ACTIVE", State: envresolve.ValueResolved, Source: envresolve.SourceRef{Kind: "ConfigMap", Name: "app", Key: "ACTIVE"}},
+		{Name: "DEPENDENT", State: envresolve.ValueResolved, Source: envresolve.SourceRef{Kind: "Direct"}, Dependencies: []envresolve.SourceRef{{Kind: "Variable", Variable: "ACTIVE"}, {Kind: "ConfigMap", Name: "app", Key: "ACTIVE"}}},
 	}}}}
 	changes := []k8s.PodEnvChange{
 		{Container: "app", Variable: "OVERRIDDEN", Source: envresolve.SourceRef{Kind: "ConfigMap", Name: "app", Key: "OVERRIDDEN"}, Evidence: envresolve.ChangeEvidence{Kind: "modified", ChangedAt: changedAt}},
@@ -115,6 +116,9 @@ func TestAttachPodEnvironmentEvidenceHonorsEffectiveSourceAndAccess(t *testing.T
 	}
 	if rows["ACTIVE"].Evidence == nil || rows["ACTIVE"].Evidence.Kind != "modified" {
 		t.Fatalf("effective source evidence missing: %+v", rows["ACTIVE"])
+	}
+	if rows["DEPENDENT"].Evidence == nil || rows["DEPENDENT"].Evidence.Kind != "modified" {
+		t.Fatalf("dependent value did not inherit source evidence: %+v", rows["DEPENDENT"])
 	}
 	if rows["REMOVED"].Evidence == nil || !rows["REMOVED"].Sensitive {
 		t.Fatalf("removed envFrom row was not synthesized safely: %+v", rows["REMOVED"])

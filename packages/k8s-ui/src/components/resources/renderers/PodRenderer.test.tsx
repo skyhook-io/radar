@@ -118,6 +118,63 @@ describe('PodRenderer resolved environment', () => {
     expect(normal).toContain('lucide-equal')
     expect(normal).not.toContain('lucide-pencil')
 
+    const optional = render({
+      ...environment,
+      containers: [{
+        ...environment.containers[0],
+        rows: [{ name: 'FEATURE', state: 'missing', optional: true, source: { kind: 'ConfigMap', name: 'settings', key: 'feature' }, message: 'Optional key feature is absent.' }],
+      }],
+    })
+    expect(optional).toContain('Not set')
+    expect(optional).toContain('w-[44%]')
+    expect(optional).not.toContain('>Status</span>')
+
+    const runtime = render({
+      ...environment,
+      containers: [{
+        ...environment.containers[0],
+        rows: [{ name: 'RUNTIME_VALUE', value: '$(SERVICE_HOST)', state: 'unavailable', runtimeDependent: true, source: { kind: 'Direct' } }],
+      }],
+    })
+    expect(runtime).toContain('Set at startup')
+    expect(runtime).toContain('w-[44%]')
+    expect(runtime).not.toContain('>Status</span>')
+
+    const restartBlocked = render({
+      ...environment,
+      containers: [{
+        ...environment.containers[0],
+        rows: [{
+          name: 'REQUIRED',
+          state: 'missing',
+          missingImpact: 'restartBlocked',
+          source: { kind: 'ConfigMap', name: 'settings', key: 'required' },
+          message: 'The running container cannot restart while this is missing.',
+          evidence: { kind: 'removed', changedAt: '2026-08-02T00:00:00Z', message: 'Removed after the container started.' },
+        }],
+      }],
+    })
+    expect(restartBlocked).toContain('Restart blocked')
+    expect(restartBlocked).not.toContain('>Removed after start</span>')
+    expect(restartBlocked).toContain('>Status</span>')
+
+    const startupBlocked = render({
+      ...environment,
+      containers: [{
+        ...environment.containers[0],
+        rows: [{ name: 'REQUIRED', state: 'missing', missingImpact: 'startupBlocked', source: { kind: 'Secret', name: 'credentials', key: 'required' } }],
+      }],
+    })
+    expect(startupBlocked).toContain('Prevents start')
+    expect(startupBlocked).toContain('>Status</span>')
+
+    const limitedHistory = render({
+      ...environment,
+      coverage: { degraded: true, degradedReason: 'Change history is limited to this Radar session.', saturated: true },
+    })
+    expect(limitedHistory).toContain('Change history is limited to this Radar session.')
+    expect(limitedHistory).toContain('Some recent changes may not be shown.')
+
     const changed = render({
       ...environment,
       containers: [{

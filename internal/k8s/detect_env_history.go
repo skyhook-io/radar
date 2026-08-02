@@ -302,6 +302,7 @@ func detectStaleSecretEnv(cache *ResourceCache, namespace string, now time.Time)
 	}
 	events := querySecretDataHistory(context.Background(), namespace, secretEnvPods, staleSecretEnvHistorySince(secretEnvPods, now))
 	checks := findStaleSecretEnvChecks(cache, secretEnvPods, events)
+	changes := latestPodEnvSourceChanges(events, nil)
 	checksByPod := make(map[string][]StaleSecretEnvCheck)
 	for _, check := range checks {
 		key := check.Namespace + "\x00" + check.PodName
@@ -321,7 +322,7 @@ func detectStaleSecretEnv(cache *ResourceCache, namespace string, now time.Time)
 	readyGroups := make(map[string]*staleSecretEnvReadyGroup)
 	notReadySubjects := make(map[string]bool)
 	for _, pod := range pods {
-		podChecks := checksByPod[pod.Namespace+"\x00"+pod.Name]
+		podChecks := omitMissingRequiredSecretKeyChecks(cache, pod, checksByPod[pod.Namespace+"\x00"+pod.Name], changes)
 		issueChecks, podReady := staleSecretEnvIssueChecks(pod, podChecks)
 		if len(issueChecks) == 0 {
 			continue
@@ -415,6 +416,43 @@ func detectStaleSecretEnv(cache *ResourceCache, namespace string, now time.Time)
 	out := append(notReadyOut, readyOut...)
 	if len(out) > maxStaleSecretEnvDetectionsPerNamespace {
 		out = out[:maxStaleSecretEnvDetectionsPerNamespace]
+	}
+	return out
+}
+
+func omitMissingRequiredSecretKeyChecks(cache *ResourceCache, pod *corev1.Pod, checks []StaleSecretEnvCheck, changes map[podEnvSourceKey]podEnvSourceChange) []StaleSecretEnvCheck {
+	if cache == nil || cache.Secrets() == nil || pod == nil || len(checks) == 0 {
+		return checks
+	}
+	missing := make(map[string]bool)
+	for _, container := range staleSecretEnvContainers(pod) {
+		for _, env := range container.Env {
+			if env.ValueFrom == nil || env.ValueFrom.SecretKeyRef == nil {
+				continue
+			}
+			ref := env.ValueFrom.SecretKeyRef
+			if ref.Optional != nil && *ref.Optional {
+				continue
+			}
+			secret, err := cache.Secrets().Secrets(pod.Namespace).Get(ref.Name)
+			if err != nil || secret == nil {
+				continue
+			}
+			if _, exists := secret.Data[ref.Key]; !exists {
+				missing[container.Name+"\x00"+env.Name+"\x00"+ref.Name+"\x00"+ref.Key] = true
+			}
+		}
+	}
+	if len(missing) == 0 {
+		return checks
+	}
+	out := make([]StaleSecretEnvCheck, 0, len(checks))
+	for _, check := range checks {
+		key := check.Container + "\x00" + check.EnvName + "\x00" + check.SecretName + "\x00" + check.Key
+		change := changes[podEnvSourceKey{kind: "Secret", namespace: pod.Namespace, name: check.SecretName, key: check.Key}]
+		if check.ReferenceKind != "secretKeyRef" || !missing[key] || change.kind != "removed" {
+			out = append(out, check)
+		}
 	}
 	return out
 }

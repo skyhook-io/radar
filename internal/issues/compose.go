@@ -23,8 +23,8 @@ type Provider interface {
 	// generic CRD-condition fallback structurally can't read (Argo encodes
 	// health/sync outside status.conditions). Surfaced under SourceProblem.
 	DetectGitOpsProblems(namespaces []string) []k8s.Detection
-	// DetectMissingRefs returns dangling-reference problems (Pod→missing
-	// PVC/CM/Secret/SA, HPA→missing target, Ingress→missing backend, etc.)
+	// DetectMissingRefs returns missing-reference problems (Pod→missing
+	// PVC/CM/Secret/SA or required key, HPA→missing target, Ingress→missing backend, etc.)
 	// plus webhook-config refs. Surfaced under SourceMissingRef so agents
 	// can filter the "direct config error" category separately from the
 	// workload-state-based SourceProblem signals.

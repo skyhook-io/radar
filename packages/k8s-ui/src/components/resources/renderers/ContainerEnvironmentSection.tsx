@@ -13,6 +13,7 @@ import {
   KeyRound,
   List,
   LockKeyhole,
+  Minus,
   Variable,
 } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -22,7 +23,7 @@ import type {
   PodEnvironmentRow,
   PodEnvironmentSource,
 } from '../../../types'
-import { Badge } from '../../ui/Badge'
+import { Badge, type BadgeSeverity } from '../../ui/Badge'
 import { Section, type CopyHandler } from '../../ui/drawer-components'
 import { Tooltip } from '../../ui/Tooltip'
 
@@ -215,6 +216,10 @@ export function ContainerEnvironmentSection({
 
         {environment.partial && <p className="text-xs text-warning-text">Some sources could not be read.</p>}
         {environment.truncated && <p className="text-xs text-warning-text">This Pod has more sources or variables than Radar can show at once.</p>}
+        {environment.coverage.degraded && (
+          <p className="text-xs text-warning-text">{environment.coverage.degradedReason || 'Recent changes could not be checked.'}</p>
+        )}
+        {environment.coverage.saturated && <p className="text-xs text-warning-text">Some recent changes may not be shown.</p>}
       </div>
     </Section>
   )
@@ -239,6 +244,24 @@ function ValueCell({
   copied: boolean
   revealEnabled: boolean
 }) {
+  if (row.runtimeDependent) {
+    const explanation = row.message || 'The final value is decided when the container starts.'
+    return (
+      <Tooltip content={row.value ? `${explanation} Pod configuration: ${row.value}` : explanation} position="top">
+        <span className="cursor-help border-b border-dotted border-theme-text-tertiary text-theme-text-tertiary" tabIndex={0}>Set at startup</span>
+      </Tooltip>
+    )
+  }
+  if (row.state === 'missing') {
+    if (row.optional) {
+      return (
+        <Tooltip content={row.message || 'This optional variable is not set.'} position="top">
+          <span className="cursor-help border-b border-dotted border-theme-text-tertiary text-theme-text-tertiary" tabIndex={0}>Not set</span>
+        </Tooltip>
+      )
+    }
+    return <span className="text-theme-text-tertiary">—</span>
+  }
   if (row.sensitive) {
     return (
       <div className="space-y-1">
@@ -447,6 +470,11 @@ function formatSources(sources: PodEnvironmentSource[]) {
 }
 
 function CompactStatusCell({ row }: { row: PodEnvironmentRow }) {
+  if (row.state === 'missing' && !row.optional) {
+    const { label, explanation } = missingStatus(row)
+    const severity = row.missingImpact === 'restartBlocked' ? 'warning' : 'error'
+    return <CompactStatusBadge label={label} explanation={explanation} severity={severity} icon={<CircleAlert className="h-3.5 w-3.5" aria-hidden />} />
+  }
   if (row.evidence) {
     const label = row.evidence.kind === 'added'
       ? 'Added after start'
@@ -456,7 +484,8 @@ function CompactStatusCell({ row }: { row: PodEnvironmentRow }) {
     return <CompactStatusBadge label={label} explanation={row.evidence.message} severity="warning" icon={<History className="h-3.5 w-3.5" aria-hidden />} />
   }
   if (row.state === 'denied') return <CompactStatusBadge label="Access needed" explanation={row.message} severity="info" icon={<LockKeyhole className="h-3.5 w-3.5" aria-hidden />} />
-  if (row.state === 'missing') return <CompactStatusBadge label="Missing" explanation={row.message} severity="warning" icon={<CircleAlert className="h-3.5 w-3.5" aria-hidden />} />
+  if (row.runtimeDependent) return <CompactStatusBadge label="At startup" explanation={row.message} severity="neutral" icon={<Minus className="h-3.5 w-3.5" aria-hidden />} />
+  if (row.state === 'missing' && row.optional) return <CompactStatusBadge label="Not set" explanation={row.message} severity="neutral" icon={<Minus className="h-3.5 w-3.5" aria-hidden />} />
   if (row.state === 'unavailable') return <CompactStatusBadge label="Unavailable" explanation={row.message} severity="neutral" icon={<CircleOff className="h-3.5 w-3.5" aria-hidden />} />
   return null
 }
@@ -469,7 +498,7 @@ function CompactStatusBadge({
 }: {
   label: string
   explanation?: string
-  severity?: 'warning' | 'info' | 'neutral'
+  severity?: BadgeSeverity
   icon: ReactNode
 }) {
   return (
@@ -485,6 +514,11 @@ function CompactStatusBadge({
 }
 
 function StatusCell({ row }: { row: PodEnvironmentRow }) {
+  if (row.state === 'missing' && !row.optional) {
+    const { label, explanation } = missingStatus(row)
+    const severity = row.missingImpact === 'restartBlocked' ? 'warning' : 'error'
+    return <StatusBadge explanation={explanation}><Badge severity={severity} size="sm">{label}</Badge></StatusBadge>
+  }
   if (row.evidence) {
     const label = row.evidence.kind === 'added'
       ? 'Added after start'
@@ -494,13 +528,23 @@ function StatusCell({ row }: { row: PodEnvironmentRow }) {
     return <StatusBadge explanation={row.evidence.message}><Badge severity="warning" size="sm">{label}</Badge></StatusBadge>
   }
   if (row.state === 'denied') return <StatusBadge explanation={row.message}><Badge severity="info" size="sm">Access needed</Badge></StatusBadge>
-  if (row.state === 'missing') return <StatusBadge explanation={row.message}><Badge severity="warning" size="sm">Missing</Badge></StatusBadge>
+  if (row.runtimeDependent) return <StatusBadge explanation={row.message}><Badge severity="neutral" size="sm">At startup</Badge></StatusBadge>
+  if (row.state === 'missing' && row.optional) return <StatusBadge explanation={row.message}><Badge severity="neutral" size="sm">Not set</Badge></StatusBadge>
   if (row.state === 'unavailable') return <StatusBadge explanation={row.message}><Badge severity="neutral" size="sm">Unavailable</Badge></StatusBadge>
   return null
 }
 
+function missingStatus(row: PodEnvironmentRow) {
+  const label = row.missingImpact === 'restartBlocked' ? 'Restart blocked' : 'Prevents start'
+  const explanation = [row.message, row.evidence?.message].filter(Boolean).join(' ')
+  return { label, explanation }
+}
+
 function hasEnvironmentStatus(row: PodEnvironmentRow) {
-  return Boolean(row.evidence) || row.state === 'denied' || row.state === 'missing' || row.state === 'unavailable'
+  return Boolean(row.evidence)
+    || row.state === 'denied'
+    || (row.state === 'missing' && !row.optional)
+    || (row.state === 'unavailable' && !row.runtimeDependent)
 }
 
 function StatusBadge({ explanation, children }: { explanation?: string; children: ReactNode }) {

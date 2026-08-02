@@ -16,6 +16,13 @@ const (
 	ValueDenied      ValueState = "denied"
 )
 
+type MissingImpact string
+
+const (
+	MissingImpactStartupBlocked MissingImpact = "startupBlocked"
+	MissingImpactRestartBlocked MissingImpact = "restartBlocked"
+)
+
 type SourceState string
 
 const (
@@ -68,6 +75,8 @@ type Row struct {
 	Dependencies     []SourceRef     `json:"dependencies,omitempty"`
 	ShadowedSources  []SourceRef     `json:"shadowedSources,omitempty"`
 	Message          string          `json:"message,omitempty"`
+	Optional         bool            `json:"optional,omitempty"`
+	MissingImpact    MissingImpact   `json:"missingImpact,omitempty"`
 	RuntimeDependent bool            `json:"runtimeDependent,omitempty"`
 	CurrentPodValue  bool            `json:"currentPodValue,omitempty"`
 	Placeholder      bool            `json:"placeholder,omitempty"`
