@@ -98,13 +98,8 @@ func (s *Server) handleRevealPodEnvironment(w http.ResponseWriter, r *http.Reque
 		s.writePodEnvironmentGetError(w, namespace, name, "Pod", err)
 		return
 	}
-	sources, _, truncated := loadPodEnvironmentSources(r, client, pod, true)
+	sources, partial, truncated := loadPodEnvironmentSources(r, client, pod, true)
 	node, _ := loadPodEnvironmentNode(r, client, pod)
-	if truncated {
-		auditDetails.Outcome = "unavailable"
-		s.writeError(w, http.StatusConflict, "environment source limit prevents safe reveal")
-		return
-	}
 	row, value, available, found := envresolve.ResolveVariable(pod, request.Container, request.Variable, sources, node)
 	if !found {
 		auditDetails.Outcome = "not-found"
@@ -121,6 +116,11 @@ func (s *Server) handleRevealPodEnvironment(w http.ResponseWriter, r *http.Reque
 		status, outcome, message := podEnvironmentRevealFailure(row)
 		auditDetails.Outcome = outcome
 		s.writeError(w, status, message)
+		return
+	}
+	if partial || truncated {
+		auditDetails.Outcome = "unavailable"
+		s.writeError(w, http.StatusConflict, "environment sources could not be fully inspected; reveal cannot be resolved safely")
 		return
 	}
 	encoding := "utf8"

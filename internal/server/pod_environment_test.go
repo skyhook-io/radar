@@ -155,6 +155,28 @@ func TestLoadPodEnvironmentSourcesMarksUninspectedSourcesUnavailable(t *testing.
 	}
 }
 
+func TestPartialLaterEnvFromCanLeaveAnUnsafeEarlierReveal(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "shop"},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "app",
+			EnvFrom: []corev1.EnvFromSource{
+				{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "earlier"}}},
+				{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "later-unreadable"}}},
+			},
+		}}},
+	}
+	client := fake.NewSimpleClientset(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "earlier", Namespace: "shop"},
+		Data:       map[string][]byte{"TOKEN": []byte("secret-value")},
+	})
+	sources, partial, _ := loadPodEnvironmentSources(httptest.NewRequest("POST", "/", nil), client, pod, true)
+	_, _, available, found := envresolve.ResolveVariable(pod, "app", "TOKEN", sources, envresolve.NodeData{})
+	if !partial || !found || !available {
+		t.Fatalf("expected an apparently resolvable earlier Secret under incomplete later precedence: partial=%v found=%v available=%v", partial, found, available)
+	}
+}
+
 func TestPodEnvironmentReadOutcomeMatchesHTTPErrorClass(t *testing.T) {
 	tests := []struct {
 		name string
