@@ -1066,7 +1066,7 @@ function capacityPageQuery(options?: CapacityPageQueryOptions): string {
 
 const CAPACITY_SYNCING_POLL_MS = 2_500;
 
-function capacityRefetchInterval(
+export function capacityRefetchInterval(
   options: CapacityQueryOptions | undefined,
   enabled: boolean,
   cursor?: string,

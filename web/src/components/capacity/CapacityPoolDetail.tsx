@@ -8,6 +8,7 @@ import {
   type CapacityPoolMember,
   type CapacityPoolObservation,
   type CapacityQuantityObservation,
+  type CapacitySourceCoverage,
 } from "@skyhook-io/k8s-ui";
 import { Badge } from "@skyhook-io/k8s-ui/components/ui/Badge";
 import {
@@ -52,7 +53,7 @@ import {
   POOL_SECTIONS,
   PressureDetail,
   quantityResourceRank,
-  quantityText,
+  QuantityInline,
   RefreshError,
   resourceLabel,
   ResourceLink,
@@ -268,7 +269,6 @@ export function CapacityPoolDetail({
 const LEDGER_COLUMNS: {
   key: keyof CapacityLedger | "usage";
   header: string;
-  glyph?: string;
   tooltip: string;
 }[] = [
   {
@@ -540,14 +540,7 @@ function PoolSummaryTab({
                 {LEDGER_COLUMNS.map((column) => (
                   <th key={column.key} className={TH}>
                     <WithTooltip tip={column.tooltip}>
-                      <span>
-                        {column.header}
-                        {column.glyph ? (
-                          <span className="ml-1 font-mono normal-case text-theme-text-tertiary">
-                            {column.glyph}
-                          </span>
-                        ) : null}
-                      </span>
+                      <span>{column.header}</span>
                     </WithTooltip>
                   </th>
                 ))}
@@ -602,6 +595,8 @@ function PoolSummaryTab({
           subtraction, <b>not bin-packed</b>, and does not prove another pod can
           schedule. Certainty glyphs: <span className="font-mono">=</span> exact
           · <span className="font-mono">≥</span> lower bound ·{" "}
+          <span className="font-mono">≤</span> upper bound (a difference
+          computed from a lower-bound input) ·{" "}
           <span className="font-mono">?</span> unknown. Hover any value for its
           definition, certainty and source.
         </p>
@@ -699,12 +694,35 @@ function LifecycleGrid({
           Scheduled pods on this pool
         </div>
         <div className="font-mono text-sm text-theme-text-primary">
-          {denied
-            ? "Unknown — Pod access denied"
-            : (pool.workloads?.scheduledPodCount ?? "—")}
+          <ScheduledPodCount
+            count={pool.workloads?.scheduledPodCount}
+            denied={denied}
+            coverage={pool.coverage.pods}
+          />
         </div>
       </div>
     </>
+  );
+}
+
+/** Pod-derived count: namespace-scoped pod coverage makes it a lower bound, so
+ *  it never renders bare. */
+function ScheduledPodCount({
+  count,
+  denied,
+  coverage,
+}: {
+  count?: number;
+  denied: boolean;
+  coverage?: CapacitySourceCoverage;
+}) {
+  if (denied) return <>Unknown — Pod access denied</>;
+  if (count === undefined) return <>—</>;
+  if (!coverageIsLowerBound(coverage)) return <>{count}</>;
+  return (
+    <WithTooltip tip={coverageMessage(coverage, "Scheduled pod count")}>
+      <span>≥ {count}</span>
+    </WithTooltip>
   );
 }
 
@@ -795,8 +813,8 @@ function WorkloadAttribution({
             <span className="shrink-0 font-mono text-xs">
               {workload.podCount} pods
             </span>
-            <span className="shrink-0 font-mono text-xs text-theme-text-secondary">
-              {quantityText(workload.requests) ?? "—"}
+            <span className="shrink-0">
+              <QuantityInline observation={workload.requests} empty="—" />
             </span>
           </button>
         ))
@@ -1194,8 +1212,8 @@ function PoolWorkloadsTab({
               {owner.namespace ?? item.resource.ref.namespace ?? "—"}
             </td>
             <td className={`${TD} font-mono`}>{workload.podCount}</td>
-            <td className={`${TD} whitespace-nowrap font-mono text-xs`}>
-              {quantityText(workload.requests) ?? "—"}
+            <td className={`${TD} whitespace-nowrap`}>
+              <QuantityInline observation={workload.requests} empty="—" />
             </td>
             <td className={`${TD} font-mono`}>
               <WithTooltip tip="Count of distinct nodes running this workload's scheduled pods">
@@ -1269,10 +1287,10 @@ function PoolMembersTab({
               <td className={`${TD} font-mono text-xs`}>
                 {node.architecture ?? "—"}
               </td>
-              <td className={`${TD} whitespace-nowrap font-mono text-xs`}>
-                {quantityText(node.allocatable) ?? "—"}
+              <td className={`${TD} whitespace-nowrap`}>
+                <QuantityInline observation={node.allocatable} empty="—" />
               </td>
-              <td className={`${TD} whitespace-nowrap font-mono text-xs`}>
+              <td className={`${TD} whitespace-nowrap`}>
                 {podsDeniedNode ? (
                   <WithTooltip tip="Pod access denied — not zero">
                     <span className="text-theme-text-tertiary">
@@ -1280,7 +1298,10 @@ function PoolMembersTab({
                     </span>
                   </WithTooltip>
                 ) : (
-                  (quantityText(node.scheduledRequests) ?? "—")
+                  <QuantityInline
+                    observation={node.scheduledRequests}
+                    empty="—"
+                  />
                 )}
               </td>
               <td className={`${TD} whitespace-nowrap`}>
@@ -1362,8 +1383,8 @@ function PoolMembersTab({
                   <span className="text-theme-text-tertiary">—</span>
                 )}
               </td>
-              <td className={`${TD} whitespace-nowrap font-mono text-xs`}>
-                {quantityText(claim.capacity) ?? "—"}
+              <td className={`${TD} whitespace-nowrap`}>
+                <QuantityInline observation={claim.capacity} empty="—" />
               </td>
               <td className={`${TD} text-xs text-theme-text-secondary`}>
                 {conditionSummary(claim.conditions)}

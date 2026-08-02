@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useIssues } from "../../api/client";
-import { useAPIResources, karpenterNavVisible } from "../../api/apiResources";
+import { useAPIResources, karpenterCapacityAvailable } from "../../api/apiResources";
 import { useCapabilitiesContext } from "../../contexts/CapabilitiesContext";
 import { useConnection } from "../../context/ConnectionContext";
 import type { SelectedResource } from "../../types";
@@ -99,7 +99,7 @@ export function IssuesPane({
   const { connection } = useConnection();
   const navigate = useNavigate();
   const apiResources = useAPIResources();
-  const hasKarpenter = karpenterNavVisible(
+  const hasKarpenter = karpenterCapacityAvailable(
     useCapabilitiesContext().karpenter,
     apiResources.data,
   );

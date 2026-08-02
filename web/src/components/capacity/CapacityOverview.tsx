@@ -37,6 +37,7 @@ import {
   DeniedBadge,
   EmptyState,
   errorMessage,
+  formatTimestamp,
   humanizeCode,
   identityToSelectedResource,
   InlineEmpty,
@@ -69,7 +70,7 @@ import {
 const EXPLAIN_CARDS: { term: string; body: string }[] = [
   {
     term: "Capacity managers",
-    body: "The controllers that add and remove nodes — Karpenter, the GKE or AKS cluster autoscaler, or the standalone Cluster Autoscaler. Detection is coverage-gated: when the autoscaler status is hidden by permissions, Radar says detection is unavailable rather than reporting none.",
+    body: 'The controllers that add and remove nodes — Karpenter, the GKE or AKS cluster autoscaler, or the standalone Cluster Autoscaler. Detection is coverage-gated: whenever the autoscaler status cannot be read — permissions, watch scope, or an unparseable payload — Radar says detection is unavailable rather than reporting none. "None detected" means the status ConfigMap was looked for in kube-system and is not there.',
   },
   {
     term: "Node groups",
@@ -131,6 +132,75 @@ export function coverageCertainty(
   return "exact";
 }
 
+/**
+ * Certainty of the node-groups count. A group with no nodes is only visible
+ * through its NodePool, so unreadable NodePools hide scale-to-zero groups
+ * entirely and make the count a lower bound even when every node was observed.
+ */
+export function nodeGroupsCertainty(coverage: CapacityCoverageBySource): {
+  certainty: CapacityCertainty;
+  title: string;
+} {
+  const fromNodes = coverageCertainty(coverage.nodes);
+  const nodePools = coverage.nodePools;
+  const nodePoolsHidden =
+    nodePools !== undefined && !coverageHasObservations(nodePools);
+  if (fromNodes === "unknown" || !nodePoolsHidden)
+    return {
+      certainty: fromNodes,
+      title: coverageMessage(coverage.nodes, "Node groups"),
+    };
+  return {
+    certainty: "lower_bound",
+    title: `${coverageMessage(nodePools, "NodePool inventory")} — NodePool groups holding no nodes are invisible, so this count is a lower bound.`,
+  };
+}
+
+/** Honest one-liner for an autoscaler-status source that could not be read.
+ *  Null when the source WAS observed — including the true "the autoscaler
+ *  publishes nothing here" observation, which is the only reading that may
+ *  render as "None detected". */
+export function autoscalerDetectionFailure(
+  coverage?: CapacitySourceCoverage,
+): string | null {
+  if (!coverage) return null;
+  if (coverage.status === "denied")
+    return 'Autoscaler status is hidden by permissions — this is not "none detected".';
+  if (coverage.status !== "unavailable" && coverage.status !== "error")
+    return null;
+  switch (coverage.reasonCode) {
+    case "autoscaler_status_not_published":
+      return null;
+    case "autoscaler_status_cache_scope":
+      return "The autoscaler status ConfigMap is outside the namespaces Radar watches.";
+    case "autoscaler_status_cache_unavailable":
+      return "The autoscaler status ConfigMap could not be read.";
+    case "autoscaler_status_read_failed":
+      return "Reading the autoscaler status ConfigMap failed.";
+    case "autoscaler_status_parse_failed":
+      return "The autoscaler status ConfigMap could not be parsed.";
+    default:
+      return coverage.reason ?? "The autoscaler status could not be observed.";
+  }
+}
+
+// The autoscaler publishes to one fixed object; the server reports the
+// namespace it probed on the not-published path.
+const AUTOSCALER_STATUS_NAMESPACE = "kube-system";
+
+/** Scope for the "None detected" reading. Absence of the status ConfigMap is
+ *  only evidence about the one namespace it can live in — unscoped, the tile
+ *  would read as a cluster-wide claim that no autoscaler exists. */
+export function autoscalerNotPublishedDetail(
+  coverage?: CapacitySourceCoverage,
+): string | null {
+  if (coverage?.reasonCode !== "autoscaler_status_not_published") return null;
+  const namespaces = coverage.namespaces?.length
+    ? coverage.namespaces.join(", ")
+    : AUTOSCALER_STATUS_NAMESPACE;
+  return `No cluster-autoscaler-status ConfigMap in ${namespaces}.`;
+}
+
 /** One-manager breakdown for the Node groups subline when no Karpenter pools
  *  own the groups (e.g. a GKE/EKS-managed cluster). Null when no manager was
  *  attributed. */
@@ -150,15 +220,20 @@ function nodeGroupsSubline(
   data: CapacityOverviewResponse,
   coverage: CapacityCoverageBySource,
 ): string {
-  if (summary.poolCount > 0)
+  if ((summary.poolCount ?? 0) > 0)
     return `${summary.poolCount} Karpenter · ${poolReadinessDetail(
       data.pools,
       data.poolsTruncated,
     )}`;
-  if (data.groups.length === 0)
-    return coverageHasObservations(coverage.nodes)
-      ? "none identified"
-      : coverageMessage(coverage.nodes, "Node inventory");
+  if (data.groups.length === 0) {
+    if (!coverageHasObservations(coverage.nodes))
+      return coverageMessage(coverage.nodes, "Node inventory");
+    // Unreadable NodePools cannot be summarized as "none identified" — the
+    // pools may exist and simply be invisible to this identity.
+    return summary.poolCount === undefined
+      ? coverageMessage(coverage.nodePools, "NodePool inventory")
+      : "none identified";
+  }
   return managerBreakdown(summary.managers) ?? "logical groups across managers";
 }
 
@@ -172,7 +247,7 @@ function nodesSubline(
   if (summary.nodeCount === undefined)
     return coverageMessage(coverage.nodes, "Node inventory");
   const parts: string[] = [];
-  if (summary.poolCount > 0)
+  if ((summary.poolCount ?? 0) > 0)
     parts.push(
       `${summary.nodeCount - (summary.unpooledNodeCount ?? 0)} in Karpenter pools`,
     );
@@ -269,6 +344,7 @@ export function CapacityOverview({
   const schedulingForBar =
     clusterScheduling ?? (karpenterActive ? summary.scheduling : undefined);
   const schedulingScope = clusterScheduling ? "cluster" : "karpenter";
+  const groupsCertainty = nodeGroupsCertainty(coverage);
 
   const signals = buildSignals(summary, { onOpenPool, onNavigate });
 
@@ -318,7 +394,8 @@ export function CapacityOverview({
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-5">
         <ManagersTile
           managers={summary.managers}
-          autoscalerDenied={coverageIsDenied(coverage.autoscalerStatus)}
+          groups={data.groups}
+          autoscalerStatus={coverage.autoscalerStatus}
           nodesObserved={coverageHasObservations(coverage.nodes)}
           karpenterMode={data.provider.controllerMode}
         />
@@ -326,8 +403,8 @@ export function CapacityOverview({
           label="Node groups"
           value={data.groups.length}
           sub={nodeGroupsSubline(summary, data, coverage)}
-          certainty={coverageCertainty(coverage.nodes)}
-          certaintyTitle={coverageMessage(coverage.nodes, "Node groups")}
+          certainty={groupsCertainty.certainty}
+          certaintyTitle={groupsCertainty.title}
           attention={data.pools.some((pool) => pool.ready === false)}
           linkLabel="View inventory ↓"
           onClick={() =>
@@ -498,16 +575,31 @@ export function CapacityOverview({
 
 function ManagersTile({
   managers,
-  autoscalerDenied,
+  groups,
+  autoscalerStatus,
   nodesObserved,
   karpenterMode,
 }: {
   managers: CapacityManagerSummary[];
-  autoscalerDenied: boolean;
+  groups: CapacityGroupSummary[];
+  autoscalerStatus?: CapacitySourceCoverage;
   nodesObserved: boolean;
   karpenterMode?: string;
 }) {
   const worst = worstManagerStatus(managers);
+  // Denied, cache-scoped, unreadable and unparseable all mean the same thing to
+  // an operator: detection did not run. Only a source that WAS read may report
+  // "none detected".
+  const detectionFailure = autoscalerDetectionFailure(autoscalerStatus);
+  const notPublishedDetail = autoscalerNotPublishedDetail(autoscalerStatus);
+  const unvalidated = new Set(
+    groups
+      .filter((group) => group.manager && !group.managerValidated)
+      .map((group) => group.manager),
+  );
+  const observedAt = coverageHasObservations(autoscalerStatus)
+    ? autoscalerStatus?.observedAt
+    : undefined;
   return (
     <div className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
       <div className="flex items-center gap-1.5">
@@ -522,21 +614,26 @@ function ManagersTile({
       </div>
       <div className="mt-1.5">
         {managers.length === 0 ? (
-          // A denied autoscaler ConfigMap is not a zero — never say "none".
-          autoscalerDenied ? (
+          detectionFailure ? (
             <>
               <div className="text-sm font-medium text-theme-text-primary">
                 Detection unavailable
               </div>
               <div className="mt-0.5 text-xs text-theme-text-tertiary">
-                Autoscaler status is hidden by permissions — this is not "none
-                detected".
+                {detectionFailure}
               </div>
             </>
           ) : nodesObserved ? (
-            <div className="text-sm text-theme-text-secondary">
-              None detected
-            </div>
+            <>
+              <div className="text-sm text-theme-text-secondary">
+                None detected
+              </div>
+              {notPublishedDetail && (
+                <div className="mt-0.5 text-xs text-theme-text-tertiary">
+                  {notPublishedDetail}
+                </div>
+              )}
+            </>
           ) : (
             <div className="text-xs text-theme-text-tertiary">
               Not yet observed
@@ -549,13 +646,22 @@ function ManagersTile({
                 key={manager.manager}
                 manager={manager}
                 karpenterMode={karpenterMode}
+                validated={!unvalidated.has(manager.manager)}
               />
             ))}
-            {autoscalerDenied && (
+            {detectionFailure && (
               <div className="mt-0.5 text-[11px] text-theme-text-tertiary">
-                Autoscaler detection is partially unavailable — permissions hide
-                some status.
+                {`Autoscaler detection is partially unavailable. ${detectionFailure}`}
               </div>
+            )}
+            {observedAt && (
+              <WithTooltip
+                tip={`The autoscaler publishes its own timestamp; a quiet cluster republishes rarely, so an old reading is context, not breakage. Published ${formatTimestamp(observedAt)}.`}
+              >
+                <div className="mt-0.5 text-[11px] text-theme-text-tertiary">
+                  as of {relativeTime(observedAt)}
+                </div>
+              </WithTooltip>
             )}
           </div>
         )}
@@ -564,12 +670,26 @@ function ManagersTile({
   );
 }
 
+/** Quiet marker for a manager whose node→group attribution Radar has not yet
+ *  validated against a live cluster of that platform. */
+function UnvalidatedHint() {
+  return (
+    <WithTooltip tip="Attribution for this platform is not yet validated on live clusters — group membership here is best effort.">
+      <span className="cursor-help text-[10px] text-theme-text-tertiary underline decoration-dotted underline-offset-2">
+        unvalidated
+      </span>
+    </WithTooltip>
+  );
+}
+
 function ManagerLine({
   manager,
   karpenterMode,
+  validated,
 }: {
   manager: CapacityManagerSummary;
   karpenterMode?: string;
+  validated: boolean;
 }) {
   const tone = managerStatusTone(manager.status);
   const showDetail = manager.status === "degraded" && manager.detail;
@@ -588,6 +708,7 @@ function ManagerLine({
             {capacityManagerLabel(manager.manager)}
             {modeSuffix}
           </span>
+          {!validated && <UnvalidatedHint />}
         </span>
         <span className="shrink-0 font-mono text-xs text-theme-text-tertiary">
           {manager.groupCount} {manager.groupCount === 1 ? "group" : "groups"}
@@ -620,7 +741,7 @@ function NodeGroupsSection({
   groups: CapacityGroupSummary[];
   pools: CapacityPoolSummary[];
   coverage: CapacityCoverageBySource;
-  poolCount: number;
+  poolCount?: number;
   unattributedNodeCount: number;
   onOpenPool: (name: string) => void;
   onOpenResource: (resource: SelectedResource) => void;
@@ -644,7 +765,7 @@ function NodeGroupsSection({
             <InlineEmpty
               title="No node groups identified"
               detail={
-                poolCount > 0
+                (poolCount ?? 0) > 0
                   ? "Nodes carry no group-identity labels and no Karpenter NodePool owns them yet."
                   : "Nodes carry no group-identity labels."
               }
@@ -780,6 +901,8 @@ function ExplainDialog({
           <p className="mt-4 border-t border-theme-border-subtle pt-3 text-[11px] text-theme-text-tertiary">
             Certainty on each value — <span className="font-mono">=</span> exact
             · <span className="font-mono">≥</span> lower bound ·{" "}
+            <span className="font-mono">≤</span> upper bound (a difference
+            computed from a lower-bound input) ·{" "}
             <span className="font-mono">?</span> unknown. Hover a glyph for its
             coverage detail.
           </p>
@@ -927,9 +1050,12 @@ function GroupRow({
         </td>
         <td className={TD}>
           {group.manager ? (
-            <Badge tone="structural" size="sm">
-              {capacityManagerLabel(group.manager)}
-            </Badge>
+            <span className="flex flex-wrap items-center gap-1.5">
+              <Badge tone="structural" size="sm">
+                {capacityManagerLabel(group.manager)}
+              </Badge>
+              {!group.managerValidated && <UnvalidatedHint />}
+            </span>
           ) : (
             <WithTooltip tip="No manager could be attributed to this group's nodes.">
               <span className="text-xs text-theme-text-tertiary">
@@ -1140,12 +1266,20 @@ function ChildHealth({ health }: { health?: string }) {
 }
 
 function ChildBackoff({ backoff }: { backoff?: CapacityAutoscalerBackoff }) {
-  const message = backoff?.errorMessage;
-  const label = backoff?.errorCode ?? backoff?.errorClass;
-  if (!backoff || (!message && !label))
-    return <span className="text-theme-text-tertiary">—</span>;
+  // The legacy status format reports a group as backing off without any error
+  // class, code or message. A dash there would read as "not backing off" — the
+  // detail is missing, the backoff is not.
+  if (!backoff) return <span className="text-theme-text-tertiary">—</span>;
+  const message = backoff.errorMessage;
+  const label = backoff.errorCode ?? backoff.errorClass;
   return (
-    <WithTooltip tip={message ?? label ?? "Backoff"}>
+    <WithTooltip
+      tip={
+        message ??
+        label ??
+        "The autoscaler reports this group in backoff without a reason."
+      }
+    >
       <Badge severity="alert" size="sm">
         {label ?? "Backoff"}
       </Badge>

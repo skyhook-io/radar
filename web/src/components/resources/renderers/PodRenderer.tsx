@@ -6,6 +6,7 @@ import { useOpenTerminal, useOpenLogs } from '../../dock'
 import { useCapabilitiesContext, useNamespacedCapabilities, useIsLocalDeployment } from '../../../contexts/CapabilitiesContext'
 import { getVisibleLiveMetrics, isLiveMetricsUnavailable, shouldFetchLiveMetrics, usePodMetrics, usePodMetricsHistory, usePrometheusResourceMetrics, usePrometheusStatus } from '../../../api/client'
 import { useRBACSubject } from '../../../api/rbac'
+import { podAwaitsScheduling } from '../../capacity/podDemandGate'
 import { PortForwardInlineButton } from '../../portforward/PortForwardButton'
 import { ImageFilesystemModal } from '../ImageFilesystemModal'
 import { PodFilesystemModal } from '../PodFilesystemModal'
@@ -27,10 +28,10 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
   const openLogsPanel = useOpenLogs()
   const navigate = useNavigate()
 
-  // Pending pod on a Karpenter cluster -> bridge into the Capacity Demand
+  // Unscheduled pod on a Karpenter cluster -> bridge into the Capacity Demand
   // view (the purpose-built surface for "why is this pod pending").
   const karpenterAvailable = useCapabilitiesContext().karpenter?.state === 'available'
-  const isPending = data.status?.phase === 'Pending'
+  const awaitsScheduling = podAwaitsScheduling(data)
 
   // Capabilities (namespace-scoped: re-checks RBAC if globally denied)
   const { canExec, canViewLogs, canPortForward } = useNamespacedCapabilities(namespace)
@@ -77,7 +78,7 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
       onNavigate={onNavigate}
       onOpenLogs={onOpenLogs}
       onEvaluateCapacity={
-        karpenterAvailable && isPending
+        karpenterAvailable && awaitsScheduling
           ? () => navigate('/capacity/demand')
           : undefined
       }

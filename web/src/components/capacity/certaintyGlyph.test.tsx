@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { renderToString } from "react-dom/server";
 import type { CapacityQuantityObservation } from "@skyhook-io/k8s-ui";
-import { CertaintyGlyph, QuantityInline, certaintyGlyph } from "./shared";
+import {
+  CertaintyGlyph,
+  InventoryQuantityCell,
+  QuantityInline,
+  certaintyGlyph,
+  managerStatusRank,
+} from "./shared";
 
 function observation(
   certainty: CapacityQuantityObservation["certainty"],
@@ -62,5 +68,80 @@ describe("QuantityInline certainty", () => {
       <QuantityInline observation={observation("lower_bound", {})} empty="0" />,
     );
     expect(html).toContain("≥");
+  });
+});
+
+describe("observed zero vs unobserved source", () => {
+  // "Not observed" is this page's RBAC-gap wording. A pool scaled to zero is a
+  // measured zero and must not borrow it.
+  it("renders an exact empty observation as 0, not the unobserved label", () => {
+    const html = renderToString(
+      <InventoryQuantityCell
+        observation={observation("exact", {})}
+        empty="Not observed"
+      />,
+    );
+    expect(html).toContain(">0<");
+    expect(html).not.toContain("Not observed");
+  });
+
+  it("renders an absent observation as the unobserved label", () => {
+    const html = renderToString(
+      <InventoryQuantityCell observation={undefined} empty="Not observed" />,
+    );
+    expect(html).toContain("Not observed");
+    expect(html).not.toContain(">0<");
+  });
+
+  it("keeps an empty unknown observation as Unknown", () => {
+    const html = renderToString(
+      <InventoryQuantityCell
+        observation={observation("unknown", {})}
+        empty="Not observed"
+      />,
+    );
+    expect(html).toContain("Unknown");
+    expect(html).not.toContain(">0<");
+  });
+
+  it("keeps an empty lower-bound observation hedged, not zeroed", () => {
+    const html = renderToString(
+      <InventoryQuantityCell
+        observation={observation("lower_bound", {})}
+        empty="Not observed"
+      />,
+    );
+    expect(html).toContain("Not observed");
+    expect(html).toContain("≥");
+  });
+
+  it("applies the same rule to QuantityInline", () => {
+    expect(
+      renderToString(
+        <QuantityInline observation={observation("exact", {})} empty="—" />,
+      ),
+    ).toContain(">0<");
+    expect(
+      renderToString(<QuantityInline observation={undefined} empty="—" />),
+    ).toContain("—");
+  });
+});
+
+describe("managerStatusRank", () => {
+  it("ranks degraded worst and healthy best", () => {
+    expect(managerStatusRank("degraded")).toBeLessThan(
+      managerStatusRank("unknown"),
+    );
+    expect(managerStatusRank("unknown")).toBeLessThan(
+      managerStatusRank("healthy"),
+    );
+  });
+
+  it("ranks a status this build does not know as unknown", () => {
+    // A newer server adding a rollup status must not produce NaN comparisons
+    // that silently misrank a real degradation.
+    expect(managerStatusRank("suspended_for_maintenance")).toBe(
+      managerStatusRank("unknown"),
+    );
   });
 });

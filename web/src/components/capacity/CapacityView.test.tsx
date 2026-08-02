@@ -1026,6 +1026,125 @@ describe("CapacityView overview", () => {
     // lives inside the tooltip, which SSR does not paint.
     expect(html).not.toContain("990");
   });
+
+  it("calls autoscaler detection unavailable for every unreadable source, not just denied", () => {
+    for (const reasonCode of [
+      "autoscaler_status_cache_scope",
+      "autoscaler_status_cache_unavailable",
+      "autoscaler_status_read_failed",
+      "autoscaler_status_parse_failed",
+    ]) {
+      const base = overview();
+      const html = renderCapacity("/capacity", (client) =>
+        client.setQueryData(["capacity", "overview"], {
+          ...base,
+          summary: { ...base.summary, managers: [] },
+          coverage: {
+            ...meta.coverage,
+            autoscalerStatus: {
+              ...sourceCoverage("unavailable"),
+              reasonCode,
+            },
+          },
+        }),
+      );
+      expect(html).toContain("Detection unavailable");
+      expect(html).not.toContain("None detected");
+    }
+  });
+
+  it("says none detected only when the autoscaler was read and published nothing", () => {
+    const base = overview();
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], {
+        ...base,
+        summary: { ...base.summary, managers: [] },
+        coverage: {
+          ...meta.coverage,
+          autoscalerStatus: {
+            ...sourceCoverage("unavailable"),
+            reasonCode: "autoscaler_status_not_published",
+            // The server reports the namespace it probed on this path.
+            namespaces: ["kube-system"],
+          },
+        },
+      }),
+    );
+    expect(html).toContain("None detected");
+    expect(html).not.toContain("Detection unavailable");
+    // "None detected" is only evidence about the namespace probed.
+    expect(html).toContain("No cluster-autoscaler-status ConfigMap in");
+    expect(html).toContain("kube-system");
+  });
+
+  it("dates the managers tile with the autoscaler payload's own timestamp", () => {
+    const base = comprehensiveOverview();
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], {
+        ...base,
+        coverage: { ...meta.coverage, autoscalerStatus: sourceCoverage() },
+      }),
+    );
+    expect(html).toContain("as of ");
+  });
+
+  it("hedges the node-groups count when NodePools are unreadable", () => {
+    const base = overview();
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], {
+        ...base,
+        // A denied NodePool source hides scale-to-zero groups entirely, so the
+        // count is a floor even with every node observed.
+        summary: { ...base.summary, poolCount: undefined },
+        state: "denied",
+        pools: [],
+        groups: [gkeGroup],
+        coverage: {
+          ...meta.coverage,
+          nodePools: sourceCoverage(
+            "denied",
+            "NodePools hidden by permissions",
+          ),
+        },
+      }),
+    );
+    expect(html).toContain("≥");
+    expect(html).toContain("NodePool groups holding no nodes are invisible");
+    // An omitted poolCount is never rendered as zero Karpenter pools.
+    expect(html).not.toContain("0 Karpenter");
+  });
+
+  it("keeps a detail-less backoff visible instead of dashing it out", () => {
+    // The legacy status format reports backoff with no error class, code or
+    // message; a dash there would read as "not backing off".
+    const base = comprehensiveOverview();
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], {
+        ...base,
+        groups: [
+          {
+            ...gkeGroup,
+            children: [{ ...gkeChild, backoff: {} }],
+            childrenMeta: boundedMeta(1),
+          },
+        ],
+      }),
+    );
+    // Match the badge itself — "Backoff" also appears as the column header and
+    // the group-row rollup, neither of which proves the cell kept the signal.
+    expect(html).toMatch(/badge-sm[^"]*">Backoff</);
+  });
+
+  it("marks a group whose manager attribution is unvalidated", () => {
+    const base = comprehensiveOverview();
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], {
+        ...base,
+        groups: [{ ...gkeGroup, managerValidated: false }],
+      }),
+    );
+    expect(html).toContain("unvalidated");
+  });
 });
 
 describe("CapacityView pool detail", () => {
@@ -1173,6 +1292,79 @@ describe("CapacityView pool detail", () => {
       );
     });
     expect(html).toContain("Unknown");
+  });
+
+  it("hedges a member's pod-derived requests when pod coverage is a lower bound", () => {
+    const html = renderCapacity("/capacity/pools/default/members", (client) => {
+      client.setQueryData(
+        ["capacity", "pool", "default"],
+        poolDetailResponse(cleanPoolDetail),
+      );
+      client.setQueryData(
+        ["capacity", "pool", "default", "members", "node", 50, undefined],
+        memberResponse(
+          "node",
+          [
+            {
+              ...nodeMember,
+              node: {
+                ...nodeMember.node!,
+                scheduledRequests: quantity(
+                  { cpu: "1", memory: "4Gi" },
+                  "lower_bound",
+                ),
+              },
+            },
+          ],
+          {
+            ...meta.coverage,
+            pods: sourceCoverage(
+              "available",
+              undefined,
+              "all_authorized_namespaces",
+            ),
+          },
+        ),
+      );
+      client.setQueryData(
+        ["capacity", "pool", "default", "members", "claim", 50, undefined],
+        memberResponse("claim", [claimMember]),
+      );
+    });
+    // Namespace-limited pod coverage cannot produce a bare exact-looking value.
+    expect(html).toContain("≥");
+  });
+
+  it("hedges the scheduled pod count under namespace-scoped pod coverage", () => {
+    const html = renderCapacity("/capacity/pools/default", (client) =>
+      client.setQueryData(
+        ["capacity", "pool", "default"],
+        poolDetailResponse({
+          ...cleanPoolDetail,
+          coverage: {
+            ...meta.coverage,
+            pods: sourceCoverage(
+              "available",
+              undefined,
+              "all_authorized_namespaces",
+            ),
+          },
+        }),
+      ),
+    );
+    expect(html).toContain("Scheduled pods on this pool");
+    expect(html).toMatch(/≥ (?:<!-- -->)?12/);
+  });
+
+  it("names the upper bound in the ledger certainty legend", () => {
+    const html = renderCapacity("/capacity/pools/default", (client) =>
+      client.setQueryData(
+        ["capacity", "pool", "default"],
+        poolDetailResponse(cleanPoolDetail),
+      ),
+    );
+    expect(html).toContain("≤");
+    expect(html).toContain("upper bound");
   });
 });
 
@@ -1368,6 +1560,42 @@ describe("CapacityView demand", () => {
     );
   });
 
+  it("hedges the state pills when pod coverage is a lower bound", () => {
+    const html = renderCapacity("/capacity/demand", (client) =>
+      client.setQueryData(
+        ["capacity", "demand", 25, undefined, undefined, undefined, undefined],
+        demandResponse({
+          coverage: {
+            ...meta.coverage,
+            pods: sourceCoverage(
+              "available",
+              undefined,
+              "all_authorized_namespaces",
+            ),
+          },
+        }),
+      ),
+    );
+    // Groups outside the authorized namespaces are invisible, so the rollup
+    // counts are floors, not totals.
+    expect(html).toContain("Blocked · ≥10");
+    expect(html).toContain("All states · ≥27");
+  });
+
+  it("leads the signature card with the grouping basis, not the hash", () => {
+    const html = renderCapacity("/capacity/demand", (client) =>
+      client.setQueryData(
+        ["capacity", "demand", 25, undefined, undefined, undefined, undefined],
+        demandResponse(),
+      ),
+    );
+    expect(html).toContain(
+      "Grouped by identical per-pod requests · 1 selector",
+    );
+    // The fingerprint hash moved into the tooltip, which SSR does not paint.
+    expect(html).not.toContain("sched-fp:abc123");
+  });
+
   it("preserves state while changing or clearing pool perspective", () => {
     const selected = updateDemandSearchParam("?state=blocked", "pool", "spot");
     expect(new URLSearchParams(selected).get("state")).toBe("blocked");
@@ -1485,5 +1713,64 @@ describe("CapacityView activity", () => {
     // Type pills keep the whole-window rollup — search narrows the page, not
     // the window.
     expect(unmatched).toContain("All · 3");
+  });
+
+  it("hedges the rollup pills when either evidence source is partial", () => {
+    const partial: Partial<CapacityActivityResponse["coverage"]>[] = [
+      // Episodes are correlated from Karpenter's object events as well as the
+      // retained timeline; a bound on either bounds every rollup count.
+      {
+        karpenterObjectEvents: sourceCoverage(
+          "available",
+          undefined,
+          "all_authorized_namespaces",
+        ),
+      },
+      { timeline: sourceCoverage("partial") },
+    ];
+    for (const coverage of partial) {
+      const html = renderCapacity("/capacity/activity", (client) =>
+        client.setQueryData(
+          [
+            "capacity",
+            "activity",
+            50,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+          ],
+          {
+            ...activityResponse(),
+            coverage: { ...meta.coverage, ...coverage },
+          },
+        ),
+      );
+      expect(html).toContain("All · ≥3");
+      expect(html).toContain("Provision · ≥2 · ≥1 failed");
+    }
+  });
+
+  it("leaves the rollup pills exact when both evidence sources are clean", () => {
+    const html = renderCapacity("/capacity/activity", (client) =>
+      client.setQueryData(
+        [
+          "capacity",
+          "activity",
+          50,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+        ],
+        activityResponse(),
+      ),
+    );
+    expect(html).toContain("All · 3");
+    expect(html).not.toContain("All · ≥3");
   });
 });

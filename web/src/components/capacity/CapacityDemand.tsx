@@ -10,6 +10,7 @@ import {
   type CapacityDemandState,
   type CapacityEvaluationEvidence,
   type CapacityPoolEvaluation,
+  type CapacitySchedulingSignature,
 } from "@skyhook-io/k8s-ui";
 import { Badge } from "@skyhook-io/k8s-ui/components/ui/Badge";
 import { FilterPill } from "@skyhook-io/k8s-ui";
@@ -180,6 +181,9 @@ export function CapacityDemand({
   // while Pod data isn't observed yet — then we show no total rather than a
   // misleading zero.
   const rollup = response.summary;
+  // Namespace-scoped pod coverage hides whole groups, so every rollup count is
+  // a floor — the pills must say so rather than read as totals.
+  const countsAreLowerBound = coverageIsLowerBound(response.coverage.pods);
   const denom = rollup
     ? stateFilter
       ? rollup.byState[stateFilter]
@@ -307,7 +311,11 @@ export function CapacityDemand({
             return (
               <FilterPill
                 key={state ?? "all"}
-                label={counts ? `${label} · ${counts.podCount}` : label}
+                label={
+                  counts
+                    ? `${label} · ${countsAreLowerBound ? "≥" : ""}${counts.podCount}`
+                    : label
+                }
                 active={stateFilter === state}
                 onClick={() => changeFilter(state)}
               />
@@ -374,6 +382,25 @@ export function CapacityDemand({
       )}
     </ScrollableContent>
   );
+}
+
+/** What actually binds these pods into one group, in words. The fingerprint
+ *  hash identifies the group but tells an operator nothing. */
+function signatureSummary(signature: CapacitySchedulingSignature): string {
+  const parts: string[] = ["identical per-pod requests"];
+  const constraints = signature.constraintsMeta.total;
+  const tolerations = signature.tolerationsMeta.total;
+  if (constraints > 0)
+    parts.push(
+      `${constraints} ${constraints === 1 ? "selector" : "selectors"}`,
+    );
+  if (tolerations > 0)
+    parts.push(
+      `${tolerations} ${tolerations === 1 ? "toleration" : "tolerations"}`,
+    );
+  if (constraints === 0 && tolerations === 0)
+    parts.push("no selectors or tolerations");
+  return `Grouped by ${parts.join(" · ")}`;
 }
 
 function DemandGroupCard({
@@ -532,11 +559,9 @@ function DemandGroupCard({
                 <h3 className="text-xs font-medium uppercase tracking-wide text-theme-text-tertiary">
                   Scheduling signature
                 </h3>
-                <WithTooltip tip={group.fingerprint}>
-                  <div className="mt-1.5 w-fit font-mono text-[11px] text-theme-text-tertiary">
-                    {group.fingerprint.length > 24
-                      ? `${group.fingerprint.slice(0, 15)}…${group.fingerprint.slice(-6)}`
-                      : group.fingerprint}
+                <WithTooltip tip={`Grouping fingerprint: ${group.fingerprint}`}>
+                  <div className="mt-1.5 w-fit cursor-help text-[11px] text-theme-text-tertiary">
+                    {signatureSummary(group.schedulingSignature)}
                   </div>
                 </WithTooltip>
                 <div className="mt-2 text-xs font-medium text-theme-text-tertiary">

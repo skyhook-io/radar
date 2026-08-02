@@ -2,6 +2,7 @@ import { Layers3 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useCapacityOverview } from '../../api/client'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
+import { coverageIsLowerBound, humanizeCode } from '../capacity/shared'
 
 // CapacityCard surfaces Karpenter fleet posture on the Home dashboard —
 // pool count, pending demand, and the worst operational signal — so morning
@@ -23,11 +24,17 @@ export function CapacityCard({ onNavigate }: { onNavigate: () => void }) {
       ? 'text-red-500'
       : 'text-amber-400'
     : 'text-emerald-500'
-  const headerLabel = worst ? humanizeActionCode(worst.code) : 'No active signals'
+  const headerLabel = worst ? humanizeCode(worst.code) : 'No active signals'
 
+  // Namespace-scoped pod coverage hides pending pods this identity cannot see,
+  // so the count is a floor — it must not read as the cluster total.
+  const pendingIsLowerBound = coverageIsLowerBound(data.coverage.pods)
   const stats: { label: string; value: string }[] = [
-    { label: 'NodePools', value: String(data.summary.poolCount) },
-    { label: 'Pending pods', value: absentAsDash(data.summary.pendingPodCount) },
+    { label: 'NodePools', value: absentAsDash(data.summary.poolCount) },
+    {
+      label: 'Pending pods',
+      value: absentAsDash(data.summary.pendingPodCount, pendingIsLowerBound ? '≥' : ''),
+    },
     { label: 'NodeClaims', value: absentAsDash(data.summary.claimCount) },
     { label: 'Nodes', value: absentAsDash(data.summary.nodeCount) },
   ]
@@ -73,7 +80,7 @@ export function CapacityCard({ onNavigate }: { onNavigate: () => void }) {
                     )}
                   />
                   <span className="truncate">
-                    {humanizeActionCode(action.code)}
+                    {humanizeCode(action.code)}
                     {action.count > 1 ? ` (${action.count})` : ''}
                   </span>
                 </div>
@@ -90,10 +97,6 @@ export function CapacityCard({ onNavigate }: { onNavigate: () => void }) {
   )
 }
 
-function absentAsDash(value: number | undefined): string {
-  return value === undefined ? '—' : String(value)
-}
-
-function humanizeActionCode(code: string): string {
-  return code.replaceAll('_', ' ').replace(/^./, (c) => c.toUpperCase())
+function absentAsDash(value: number | undefined, prefix = ''): string {
+  return value === undefined ? '—' : `${prefix}${value}`
 }

@@ -240,9 +240,11 @@ export function CapacityActivity({
       )
     : response.items;
   const aggregate = response.aggregate;
-  const aggregateIsLowerBound = coverageIsLowerBound(
-    response.coverage.timeline,
-  );
+  // Episodes are built from both the retained timeline and Karpenter's object
+  // events; either source being partial makes every rollup count a floor.
+  const aggregateIsLowerBound =
+    coverageIsLowerBound(response.coverage.timeline) ||
+    coverageIsLowerBound(response.coverage.karpenterObjectEvents);
   const formatAggregateCount = (count: number) =>
     `${aggregateIsLowerBound ? "≥" : ""}${count}`;
 
@@ -367,6 +369,7 @@ export function CapacityActivity({
           {sinceFilter && <span>Since {formatTimestamp(sinceFilter)}</span>}
         </div>
         <PoolSelector
+          key={response.clusterContext.contextName}
           pool={poolFilter}
           onChange={(pool) => setParam("pool", pool)}
           label="NodePool"

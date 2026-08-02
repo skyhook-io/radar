@@ -255,14 +255,6 @@ function missingUsageMessage(coverage?: CapacitySourceCoverage): string {
   return coverageMessage(coverage, "Live usage");
 }
 
-/**
- * The Pod source drives every "scheduling demand"/attribution figure. When it
- * is denied, values must read "Unavailable" — never zero.
- */
-export function podsDenied(coverage: CapacityCoverageBySource): boolean {
-  return coverageIsDenied(coverage.pods);
-}
-
 // ============================================================================
 // Certainty glyphs — the design's per-value trust vocabulary
 // = exact · ≥ lower bound · ≤ upper bound · ? unknown
@@ -474,11 +466,18 @@ export function managerStatusTone(
   return "neutral";
 }
 
-const MANAGER_STATUS_RANK: Record<CapacityManagerRollupStatus, number> = {
+const MANAGER_STATUS_RANK: Record<string, number> = {
   degraded: 0,
   unknown: 1,
   healthy: 2,
 };
+
+/** Severity rank of a manager rollup status (lower is worse). A status this
+ *  build does not know ranks as `unknown` — never as an accidental best-of that
+ *  would hide a real degradation behind a newer wire value. */
+export function managerStatusRank(status: string): number {
+  return MANAGER_STATUS_RANK[status] ?? MANAGER_STATUS_RANK.unknown;
+}
 
 /** Worst-of status across managers (degraded worst), driving the tile accent.
  *  Undefined when no managers were detected. */
@@ -488,7 +487,7 @@ export function worstManagerStatus(
   if (managers.length === 0) return undefined;
   return managers.reduce<CapacityManagerRollupStatus>(
     (worst, manager) =>
-      MANAGER_STATUS_RANK[manager.status] < MANAGER_STATUS_RANK[worst]
+      managerStatusRank(manager.status) < managerStatusRank(worst)
         ? manager.status
         : worst,
     managers[0].status,
@@ -783,6 +782,41 @@ export function DeniedBadge({ label = "Unavailable" }: { label?: string }) {
 // Quantity presentation
 // ============================================================================
 
+/**
+ * A quantity observation that carries no resource entries. Only certainty can
+ * tell a measured zero (a pool scaled to zero) apart from a source that was
+ * never read — `empty` is this page's "not observed" wording, so an exact
+ * observation must never land there, and an unobserved source must never land
+ * on a zero.
+ */
+function EmptyQuantity({
+  observation,
+  empty,
+}: {
+  observation?: CapacityQuantityObservation;
+  empty: string;
+}) {
+  if (!observation)
+    return <span className="text-xs text-theme-text-tertiary">{empty}</span>;
+  if (observation.certainty === "unknown")
+    return (
+      <WithTooltip tip={observationTitle(observation)}>
+        <span className="text-xs text-theme-text-tertiary">Unknown</span>
+      </WithTooltip>
+    );
+  if (observation.certainty === "exact")
+    return (
+      <WithTooltip tip={observationTitle(observation)}>
+        <span className="font-mono text-xs text-theme-text-secondary">0</span>
+      </WithTooltip>
+    );
+  return (
+    <span className="text-xs text-theme-text-tertiary">
+      {empty} <CertaintyGlyph certainty={observation.certainty} />
+    </span>
+  );
+}
+
 export function QuantityInline({
   observation,
   empty,
@@ -791,28 +825,7 @@ export function QuantityInline({
   empty: string;
 }) {
   const text = quantityText(observation);
-  if (!text) {
-    // An empty observation is only a real zero when its certainty says so —
-    // an unknown/lower-bound observation rendered as the empty label would
-    // fabricate an exact-looking zero.
-    if (observation?.certainty === "unknown")
-      return (
-        <WithTooltip tip={observationTitle(observation)}>
-          <span className="text-xs text-theme-text-tertiary">Unknown</span>
-        </WithTooltip>
-      );
-    return (
-      <span className="text-xs text-theme-text-tertiary">
-        {empty}
-        {observation?.certainty === "lower_bound" && (
-          <>
-            {" "}
-            <CertaintyGlyph certainty="lower_bound" />
-          </>
-        )}
-      </span>
-    );
-  }
+  if (!text) return <EmptyQuantity observation={observation} empty={empty} />;
   return (
     <WithTooltip tip={observation ? observationTitle(observation) : text}>
       <span className="font-mono text-xs text-theme-text-secondary">
@@ -846,25 +859,8 @@ export function InventoryQuantityCell({
   const entries = observation
     ? sortedResourceEntries(observation.resources)
     : [];
-  if (entries.length === 0) {
-    if (observation?.certainty === "unknown")
-      return (
-        <WithTooltip tip={observationTitle(observation)}>
-          <span className="text-xs text-theme-text-tertiary">Unknown</span>
-        </WithTooltip>
-      );
-    return (
-      <span className="text-xs text-theme-text-tertiary">
-        {empty}
-        {observation?.certainty === "lower_bound" && (
-          <>
-            {" "}
-            <CertaintyGlyph certainty="lower_bound" />
-          </>
-        )}
-      </span>
-    );
-  }
+  if (entries.length === 0)
+    return <EmptyQuantity observation={observation} empty={empty} />;
 
   const visible: string[] = [];
   const cpu = observation?.resources.cpu;
@@ -1474,7 +1470,7 @@ export function integrationBlock(
       <EmptyState
         icon={Shield}
         title="Capacity access denied"
-        detail="This user cannot read the Karpenter resources required for capacity planning."
+        detail="This user cannot read the Karpenter resources Capacity needs to diagnose this cluster."
       />
     );
   return null;
