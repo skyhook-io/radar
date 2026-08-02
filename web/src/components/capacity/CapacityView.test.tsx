@@ -1190,11 +1190,18 @@ describe("CapacityView overview", () => {
 
   it("the pending tile never dead-ends on a Karpenter-less cluster", () => {
     const html = renderCapacity("/capacity", (client) =>
-      client.setQueryData(["capacity", "overview"], {
-        ...overview({ poolCount: undefined, claimCount: undefined, managers: [] }),
-        state: "not_detected",
-        pools: [],
-      }),
+      client.setQueryData(["capacity", "overview"], (() => {
+        const base = overview({ state: "not_detected", pools: [] });
+        return {
+          ...base,
+          summary: {
+            ...base.summary,
+            poolCount: undefined,
+            claimCount: undefined,
+            managers: [],
+          },
+        };
+      })()),
     );
     expect(html).toContain("View issues");
     expect(html).not.toContain("Open Demand");
