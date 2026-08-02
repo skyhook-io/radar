@@ -343,17 +343,26 @@ func instanceShapeUnknowns(requests corev1.ResourceList, shapes []corev1.Resourc
 
 const observedShapeLimit = 64
 
-// ObservedMemberShapesByPool collects, per pool, the distinct schedulable
-// vectors of observed members: node allocatable, and for claims the published
-// status.allocatable, falling back to status.capacity only when the claim does
-// not carry it (a claim still launching, or a v1beta1 claim). Capacity
-// overstates what the scheduler can actually place, so preferring allocatable
-// keeps a pod that fits the raw machine but not the schedulable node from
-// reading as a shape match. Bounded per pool; a truncated shape set can only
-// make the evaluation more conservative (more unknowns), never overclaim.
+// ObservedMemberShapesByPool collects, per pool, the distinct SCHEDULABLE
+// vectors of observed members. Every recorded shape is affirmative evidence —
+// a pod that fits one is spared the instanceShape unknown — so only genuinely
+// schedulable readings may enter:
+//
+//   - Nodes contribute status.allocatable, the live schedulable truth.
+//   - Claims contribute ONLY status.allocatable. A claim carrying just
+//     status.capacity is skipped entirely: capacity is the raw machine, and
+//     admitting it would let a pod that fits the machine but not the node clear
+//     the shape check.
+//   - A claim already bound to an observed node is skipped — the node's own
+//     allocatable is in hand, and a claim's reading must never outweigh it.
+//
+// Every exclusion moves the verdict toward unknown, never toward compatible.
+// Bounded per pool for the same reason: a truncated shape set can only make the
+// evaluation more conservative.
 func ObservedMemberShapesByPool(nodes []*corev1.Node, claims []*unstructured.Unstructured) map[string][]corev1.ResourceList {
 	shapes := map[string][]corev1.ResourceList{}
 	seen := map[string]map[string]bool{}
+	observedNodes := make(map[string]bool, len(nodes))
 	record := func(pool string, resources corev1.ResourceList) {
 		if pool == "" || len(resources) == 0 || len(shapes[pool]) >= observedShapeLimit {
 			return
@@ -373,19 +382,24 @@ func ObservedMemberShapesByPool(nodes []*corev1.Node, claims []*unstructured.Uns
 		shapes[pool] = append(shapes[pool], copied)
 	}
 	for _, node := range nodes {
-		if node != nil {
-			record(node.Labels[karpenter.NodePoolLabelKey], node.Status.Allocatable)
+		if node == nil {
+			continue
 		}
+		observedNodes[node.Name] = true
+		record(node.Labels[karpenter.NodePoolLabelKey], node.Status.Allocatable)
 	}
 	for _, claim := range claims {
 		if claim == nil {
 			continue
 		}
-		schedulable := karpenter.NodeClaimAllocatable(claim)
-		if len(schedulable) == 0 {
-			schedulable = karpenter.NodeClaimCapacity(claim)
+		if nodeName := karpenter.ClaimNodeName(claim); nodeName != "" && observedNodes[nodeName] {
+			continue
 		}
-		record(claim.GetLabels()[karpenter.NodePoolLabelKey], schedulable)
+		allocatable := karpenter.NodeClaimAllocatable(claim)
+		if len(allocatable) == 0 {
+			continue
+		}
+		record(claim.GetLabels()[karpenter.NodePoolLabelKey], allocatable)
 	}
 	return shapes
 }

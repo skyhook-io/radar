@@ -1295,49 +1295,88 @@ func TestDemandInstanceShapeComparesWholeVectorsNotPerResourceMaxima(t *testing.
 	}
 }
 
-// TestObservedMemberShapesPrefersClaimAllocatable pins the schedulable-vs-raw
-// distinction. status.capacity is the machine; status.allocatable is what the
-// scheduler can place on it. Reading capacity let a pod that fits the machine
-// but not the node read as a shape match.
-func TestObservedMemberShapesPrefersClaimAllocatable(t *testing.T) {
+// TestObservedMemberShapesOnlyRecordSchedulableEvidence pins the direction of
+// every exclusion. A recorded shape is AFFIRMATIVE evidence — a pod that fits
+// one is spared the instanceShape unknown — so a reading that is not the
+// schedulable truth must never become one.
+func TestObservedMemberShapesOnlyRecordSchedulableEvidence(t *testing.T) {
 	ready := true
 	pool := demandTestPool("general", &ready, demandPoolSpec(nil, nil, nil, nil, nil), nil)
-	claim := capacityTestClaim("claim-a", "claim-uid", pool, map[string]any{
+	labelled := func(claim *unstructured.Unstructured) *unstructured.Unstructured {
+		claim.SetLabels(map[string]string{karpenter.NodePoolLabelKey: "general"})
+		return claim
+	}
+	evaluate := func(cpu string, shapes []corev1.ResourceList) capacityapi.PoolEvaluationResult {
+		group := BuildDemandGroups(DemandInput{
+			GeneratedAt: capacityTestTime(),
+			Pods:        []*corev1.Pod{demandTestPod("candidate", cpu)},
+			Pools:       []DemandPoolInput{{NodePool: pool, ObservedMemberShapes: shapes}},
+		})[0]
+		return group.PoolEvaluations[0].Result
+	}
+
+	// An allocatable-bearing claim is real schedulable evidence and is recorded
+	// at its allocatable value, never its capacity.
+	withAllocatable := labelled(capacityTestClaim("claim-a", "claim-uid", pool, map[string]any{
 		"capacity":    map[string]any{"cpu": "8", "memory": "32Gi", "pods": "110"},
 		"allocatable": map[string]any{"cpu": "7", "memory": "30Gi", "pods": "110"},
-	})
-	claim.SetLabels(map[string]string{karpenter.NodePoolLabelKey: "general"})
-
-	shapes := ObservedMemberShapesByPool(nil, []*unstructured.Unstructured{claim})["general"]
+	}))
+	shapes := ObservedMemberShapesByPool(nil, []*unstructured.Unstructured{withAllocatable})["general"]
 	if len(shapes) != 1 {
-		t.Fatalf("shapes = %#v, want one", shapes)
+		t.Fatalf("shapes = %#v, want the claim's allocatable vector", shapes)
 	}
 	if got := shapes[0][corev1.ResourceCPU]; got.String() != "7" {
 		t.Fatalf("shape cpu = %s, want the allocatable 7 (capacity 8 overstates what the scheduler can place)", got.String())
 	}
-
-	// The observable consequence: a pod fitting capacity but not allocatable
-	// degrades to unknown instead of reading as declared compatible.
-	group := BuildDemandGroups(DemandInput{
-		GeneratedAt: capacityTestTime(),
-		Pods:        []*corev1.Pod{demandTestPod("between", "8")},
-		Pools:       []DemandPoolInput{{NodePool: pool, ObservedMemberShapes: shapes}},
-	})[0]
-	if group.PoolEvaluations[0].Result != capacityapi.PoolEvaluationUnknown {
-		t.Fatalf("8-CPU pod vs 7-CPU allocatable = %q, want unknown", group.PoolEvaluations[0].Result)
+	if got := evaluate("8", shapes); got != capacityapi.PoolEvaluationUnknown {
+		t.Fatalf("8-CPU pod vs 7-CPU allocatable = %q, want unknown", got)
+	}
+	if got := evaluate("7", shapes); got != capacityapi.PoolDeclaredCompatible {
+		t.Fatalf("7-CPU pod vs 7-CPU allocatable = %q, want declared compatible", got)
 	}
 
-	// A claim that has not published allocatable yet still contributes its
-	// capacity — absence must not erase the shape entirely.
-	launching := capacityTestClaim("claim-b", "claim-b-uid", pool, map[string]any{
+	// A capacity-only claim proves nothing schedulable. Recording it would let
+	// a pod that fits the raw machine — but not the node the kubelet will
+	// actually offer — clear the shape check.
+	capacityOnly := labelled(capacityTestClaim("claim-b", "claim-b-uid", pool, map[string]any{
 		"capacity": map[string]any{"cpu": "16", "memory": "64Gi", "pods": "110"},
-	})
-	launching.SetLabels(map[string]string{karpenter.NodePoolLabelKey: "general"})
-	fallback := ObservedMemberShapesByPool(nil, []*unstructured.Unstructured{launching})["general"]
-	if len(fallback) != 1 {
-		t.Fatalf("fallback shapes = %#v, want the capacity vector", fallback)
+	}))
+	if got := ObservedMemberShapesByPool(nil, []*unstructured.Unstructured{capacityOnly})["general"]; len(got) != 0 {
+		t.Fatalf("capacity-only claim recorded a schedulable shape: %#v", got)
 	}
-	if got := fallback[0][corev1.ResourceCPU]; got.String() != "16" {
-		t.Fatalf("fallback shape cpu = %s, want 16", got.String())
+	// With that claim as the pool's only member, a 16-CPU pod stays unknown —
+	// no shape existed to prove it, and none was fabricated.
+	mixed := ObservedMemberShapesByPool(nil, []*unstructured.Unstructured{withAllocatable, capacityOnly})["general"]
+	if got := evaluate("16", mixed); got != capacityapi.PoolEvaluationUnknown {
+		t.Fatalf("16-CPU pod against a capacity-only claim = %q, want unknown", got)
+	}
+
+	// A claim bound to an observed node is redundant with that node's live
+	// allocatable, and its own reading must never outweigh it.
+	node := groupsTestNodeAlloc("ip-10-0-0-1", map[string]string{karpenter.NodePoolLabelKey: "general"},
+		resourceList(map[corev1.ResourceName]string{corev1.ResourceCPU: "4", corev1.ResourceMemory: "16Gi"}))
+	bound := labelled(capacityTestClaim("claim-c", "claim-c-uid", pool, map[string]any{
+		"nodeName":    "ip-10-0-0-1",
+		"allocatable": map[string]any{"cpu": "32", "memory": "128Gi", "pods": "110"},
+	}))
+	linked := ObservedMemberShapesByPool([]*corev1.Node{node}, []*unstructured.Unstructured{bound})["general"]
+	if len(linked) != 1 {
+		t.Fatalf("linked node+claim recorded %d shapes, want only the node's: %#v", len(linked), linked)
+	}
+	if got := linked[0][corev1.ResourceCPU]; got.String() != "4" {
+		t.Fatalf("linked shape cpu = %s, want the live node's 4", got.String())
+	}
+	if got := evaluate("32", linked); got != capacityapi.PoolEvaluationUnknown {
+		t.Fatalf("32-CPU pod against a 4-CPU live node = %q, want unknown — the claim's estimate must not outweigh the node", got)
+	}
+
+	// An unbound claim (still launching, no node yet) is not redundant with
+	// anything, so its allocatable still counts.
+	unbound := labelled(capacityTestClaim("claim-d", "claim-d-uid", pool, map[string]any{
+		"allocatable": map[string]any{"cpu": "12", "memory": "48Gi", "pods": "110"},
+	}))
+	inFlight := ObservedMemberShapesByPool([]*corev1.Node{node}, []*unstructured.Unstructured{unbound})["general"]
+	if len(inFlight) != 2 {
+		t.Fatalf("unbound claim shapes = %#v, want the node's and the claim's", inFlight)
 	}
 }
