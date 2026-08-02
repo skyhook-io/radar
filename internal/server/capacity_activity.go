@@ -58,6 +58,11 @@ func (s *Server) handleCapacityActivity(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	now := time.Now().UTC()
+	// Activity builds its own result rather than using the shared loader, but it
+	// reads the same cluster singletons (discovery for the capability probe, the
+	// timeline scoped to the active context), so it takes the same coherence
+	// snapshot and the same serialization gate.
+	result := capacityLoadResult{identity: currentCapacityClusterIdentity()}
 	response := capacityapi.NewActivityResponse(now)
 	response.ResponseMeta = newCapacityResponseMeta(now)
 	response.Observation.StartedAt = now
@@ -69,7 +74,7 @@ func (s *Server) handleCapacityActivity(w http.ResponseWriter, r *http.Request) 
 	}
 	if capability.State == capacityapi.IntegrationNotDetected || capability.State == capacityapi.IntegrationSyncing {
 		response.ResponseMeta.Coverage[capacityapi.CoverageNodePools] = sourceCoverageForState(capability.State, capability.ReasonCode)
-		s.writeJSON(w, response)
+		s.writeCapacityResponse(w, result, response)
 		return
 	}
 	response.State = capacityapi.IntegrationAvailable
@@ -83,7 +88,7 @@ func (s *Server) handleCapacityActivity(w http.ResponseWriter, r *http.Request) 
 	response.Observation.Retention.Mode = "memory_bounded"
 	if store == nil || processObservationStart.IsZero() {
 		response.ResponseMeta.Coverage[capacityapi.CoverageTimeline] = unavailableCoverage("timeline_unavailable", []string{"activity"})
-		s.writeJSON(w, response)
+		s.writeCapacityResponse(w, result, response)
 		return
 	}
 	stats := store.Stats()
@@ -106,13 +111,13 @@ func (s *Server) handleCapacityActivity(w http.ResponseWriter, r *http.Request) 
 	storeBounds, err := queryCapacityActivityStoreBounds(r.Context(), store, clusterContext, visibility.allows)
 	if err != nil {
 		response.ResponseMeta.Coverage[capacityapi.CoverageTimeline] = errorCoverage("timeline_query_failed", []string{"activity"})
-		s.writeJSON(w, response)
+		s.writeCapacityResponse(w, result, response)
 		return
 	}
 	activityQuery, err := queryCapacityActivityWindow(r.Context(), store, request, clusterContext, visibility.allows)
 	if err != nil {
 		response.ResponseMeta.Coverage[capacityapi.CoverageTimeline] = errorCoverage("timeline_query_failed", []string{"activity"})
-		s.writeJSON(w, response)
+		s.writeCapacityResponse(w, result, response)
 		return
 	}
 	events := activityQuery.events
@@ -122,7 +127,7 @@ func (s *Server) handleCapacityActivity(w http.ResponseWriter, r *http.Request) 
 		retainedVisibleStart, err = queryOldestVisibleCapacityActivityTimestamp(r.Context(), store, clusterContext, visibility.allows)
 		if err != nil {
 			response.ResponseMeta.Coverage[capacityapi.CoverageTimeline] = errorCoverage("timeline_query_failed", []string{"activity"})
-			s.writeJSON(w, response)
+			s.writeCapacityResponse(w, result, response)
 			return
 		}
 	}
@@ -135,7 +140,7 @@ func (s *Server) handleCapacityActivity(w http.ResponseWriter, r *http.Request) 
 		response.CursorStatus = capacityapi.CursorEpochChanged
 		response.CursorGap = &gap
 		response.Observation.Gaps = append(response.Observation.Gaps, gap)
-		s.writeJSON(w, response)
+		s.writeCapacityResponse(w, result, response)
 		return
 	}
 	// An older-direction cursor that points at (or below) the oldest retained
@@ -147,7 +152,7 @@ func (s *Server) handleCapacityActivity(w http.ResponseWriter, r *http.Request) 
 		response.CursorStatus = capacityapi.CursorEvicted
 		response.CursorGap = &gap
 		response.Observation.Gaps = append(response.Observation.Gaps, gap)
-		s.writeJSON(w, response)
+		s.writeCapacityResponse(w, result, response)
 		return
 	}
 
@@ -230,7 +235,7 @@ func (s *Server) handleCapacityActivity(w http.ResponseWriter, r *http.Request) 
 	case request.cursor != nil && request.cursor.Direction == "older" && queryTruncated && queryMinSeq > 0:
 		response.Page.NextCursor, _ = encodeCapacityActivityCursor(epoch, request.filterFingerprint, clusterContext, queryMinSeq, "older")
 	}
-	s.writeJSON(w, response)
+	s.writeCapacityResponse(w, result, response)
 }
 
 type capacityActivityWindow struct {

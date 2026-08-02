@@ -1,11 +1,16 @@
 package server
 
 import (
+	"encoding/json"
+	"io"
+	"net/http"
 	"testing"
 
+	"github.com/skyhook-io/radar/internal/auth"
 	capacitymodel "github.com/skyhook-io/radar/internal/capacity"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/capacityapi"
+	"github.com/skyhook-io/radar/pkg/karpenter"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	corelisters "k8s.io/client-go/listers/core/v1"
@@ -152,5 +157,87 @@ func TestCapacityClusterIdentityDetectsContextSwitch(t *testing.T) {
 	k8s.SetTestContextName(previous)
 	if !identity.stillCurrent() {
 		t.Fatal("identity must compare equal again once the context is restored")
+	}
+}
+
+// switchCapacityContextAfterFirstRead makes the cluster identity change exactly
+// once, after the request has captured it — the mid-flight kubeconfig switch a
+// test cannot otherwise time deterministically.
+func switchCapacityContextAfterFirstRead(t *testing.T) {
+	t.Helper()
+	previous := capacityClusterIdentityNow
+	t.Cleanup(func() { capacityClusterIdentityNow = previous })
+	reads := 0
+	capacityClusterIdentityNow = func() capacityClusterIdentity {
+		identity := previous()
+		if reads > 0 {
+			identity.contextName += "-switched"
+		}
+		reads++
+		return identity
+	}
+}
+
+// TestCapacityResponsesFailClosedOnMidRequestContextSwitch drives the real
+// handlers. The Karpenterless/denied path is the one that matters most: it
+// returns from the loader early and then loads nodes, pods and autoscaler
+// groups afterwards, so a gate that only guarded the fully-available return
+// would serve the previous cluster's fleet under the new cluster's name.
+func TestCapacityResponsesFailClosedOnMidRequestContextSwitch(t *testing.T) {
+	initCapacityContractDynamicState(t, true, true, capacityContractNodePool("general"))
+
+	t.Run("karpenterless denied overview", func(t *testing.T) {
+		env := newAuthTestServer(t)
+		permissions := &auth.UserPermissions{AllowedNamespaces: nil}
+		permissions.SetCanI("list", karpenter.Group, "nodepools", "", false)
+		permissions.SetCanI("list", "", "nodes", "", true)
+		permissions.SetCanI("list", "", "pods", "", false)
+		permissions.SetCanI("list", "", "pods", "default", false)
+		permissions.SetCanI("list", "", "pods", "broken", false)
+		permissions.SetCanI("get", "", "configmaps", "kube-system", false)
+		env.srv.permCache.Set("alice", permissions)
+
+		// Baseline: this path serves 200 when the cluster holds still.
+		resp := env.authGet(t, "/api/capacity", "alice", "")
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("baseline status = %d, want 200", resp.StatusCode)
+		}
+
+		switchCapacityContextAfterFirstRead(t)
+		assertCapacityContextSwitchFailsClosed(t, env.authGet(t, "/api/capacity", "alice", ""))
+	})
+
+	for _, path := range []string{
+		"/api/capacity",
+		"/api/capacity/pools",
+		"/api/capacity/pools/general",
+		"/api/capacity/pools/general/members?type=node",
+		"/api/capacity/demand",
+		"/api/capacity/activity",
+	} {
+		t.Run(path, func(t *testing.T) {
+			switchCapacityContextAfterFirstRead(t)
+			assertCapacityContextSwitchFailsClosed(t, get(t, path))
+		})
+	}
+}
+
+func assertCapacityContextSwitchFailsClosed(t *testing.T, resp *http.Response) {
+	t.Helper()
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 — a response assembled across a context switch mixes two clusters; body = %s", resp.StatusCode, body)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if message, _ := decoded["error"].(string); message != "Cluster context changed while the capacity response was being assembled" {
+		t.Fatalf("error = %q, want the context-change message", message)
 	}
 }

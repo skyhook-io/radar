@@ -41,7 +41,7 @@ func (s *Server) handleCapacityDemand(w http.ResponseWriter, r *http.Request) {
 	response.ResponseMeta = result.meta
 	response.State = result.state
 	if result.model == nil || result.snapshot == nil {
-		s.writeJSON(w, response)
+		s.writeCapacityResponse(w, result, response)
 		return
 	}
 	if poolFilter != "" {
@@ -96,7 +96,7 @@ func (s *Server) handleCapacityDemand(w http.ResponseWriter, r *http.Request) {
 	}
 	response.Items = capacitymodel.EvaluateDemandGroupModels(page.items, evaluationPools, 0)
 	response.Page = capacityapi.PageInfo{HasMore: page.hasMore, NextCursor: page.nextCursor}
-	s.writeJSON(w, response)
+	s.writeCapacityResponse(w, result, response)
 }
 
 type demandOwnerFilter struct {

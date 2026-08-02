@@ -39,7 +39,13 @@ type capacityClusterIdentity struct {
 	discovery   *k8s.ResourceDiscovery
 }
 
-func currentCapacityClusterIdentity() capacityClusterIdentity {
+// capacityClusterIdentityNow resolves the live cluster identity. Both the
+// capture and the re-check go through this one seam: a real kubeconfig switch
+// lands on another goroutine at an arbitrary moment, so injecting it here is
+// the only deterministic way to exercise what the gate is for.
+var capacityClusterIdentityNow = liveCapacityClusterIdentity
+
+func liveCapacityClusterIdentity() capacityClusterIdentity {
 	return capacityClusterIdentity{
 		contextName: k8s.GetContextName(),
 		resource:    k8s.GetResourceCache(),
@@ -48,8 +54,12 @@ func currentCapacityClusterIdentity() capacityClusterIdentity {
 	}
 }
 
+func currentCapacityClusterIdentity() capacityClusterIdentity {
+	return capacityClusterIdentityNow()
+}
+
 func (identity capacityClusterIdentity) stillCurrent() bool {
-	return identity == currentCapacityClusterIdentity()
+	return identity == capacityClusterIdentityNow()
 }
 
 type capacityLoadResult struct {
@@ -57,6 +67,25 @@ type capacityLoadResult struct {
 	meta     capacityapi.ResponseMeta
 	model    *capacitymodel.Model
 	snapshot *capacitymodel.Snapshot
+	// identity is the cluster the sources behind this result were read from,
+	// captured before the first read. writeCapacityResponse re-checks it.
+	identity capacityClusterIdentity
+}
+
+// writeCapacityResponse is the ONLY way a capacity response reaches the wire.
+// Every early return — denied, not detected, syncing, cache unavailable, list
+// error — and every post-load enrichment the handlers add afterwards (the
+// Overview's Karpenterless model and autoscaler groups) passes through here, so
+// the coherence check cannot be bypassed by a path that skips the full loader.
+func (s *Server) writeCapacityResponse(w http.ResponseWriter, result capacityLoadResult, response any) {
+	if !result.identity.stillCurrent() {
+		// The kubeconfig context switched while this response was being
+		// assembled. Its sources describe a cluster that is no longer connected;
+		// serving the mixture would be worse than serving nothing.
+		s.writeError(w, http.StatusServiceUnavailable, "Cluster context changed while the capacity response was being assembled")
+		return
+	}
+	s.writeJSON(w, response)
 }
 
 func (s *Server) handleCapacityOverview(w http.ResponseWriter, r *http.Request) {
@@ -81,7 +110,7 @@ func (s *Server) handleCapacityOverview(w http.ResponseWriter, r *http.Request) 
 		response.ResponseMeta = result.meta
 	}
 	if result.model == nil {
-		s.writeJSON(w, response)
+		s.writeCapacityResponse(w, result, response)
 		return
 	}
 	issueProjection := s.capacityIssuesForRequest(r)
@@ -136,7 +165,7 @@ func (s *Server) handleCapacityOverview(w http.ResponseWriter, r *http.Request) 
 		summaries = summaries[:capacityOverviewPoolLimit]
 	}
 	response.Pools = summaries
-	s.writeJSON(w, response)
+	s.writeCapacityResponse(w, result, response)
 }
 
 func (s *Server) handleCapacityPools(w http.ResponseWriter, r *http.Request) {
@@ -160,7 +189,7 @@ func (s *Server) handleCapacityPools(w http.ResponseWriter, r *http.Request) {
 	response.ResponseMeta = result.meta
 	response.State = result.state
 	if result.model == nil {
-		s.writeJSON(w, response)
+		s.writeCapacityResponse(w, result, response)
 		return
 	}
 	s.capacityIssuesForRequest(r).attachPools(result.model)
@@ -175,7 +204,7 @@ func (s *Server) handleCapacityPools(w http.ResponseWriter, r *http.Request) {
 	}
 	response.Items = page.items
 	response.Page = capacityapi.PageInfo{HasMore: page.hasMore, NextCursor: page.nextCursor}
-	s.writeJSON(w, response)
+	s.writeCapacityResponse(w, result, response)
 }
 
 func (s *Server) handleCapacityPool(w http.ResponseWriter, r *http.Request) {
@@ -195,7 +224,7 @@ func (s *Server) handleCapacityPool(w http.ResponseWriter, r *http.Request) {
 	response.ResponseMeta = result.meta
 	response.State = result.state
 	if result.model == nil {
-		s.writeJSON(w, response)
+		s.writeCapacityResponse(w, result, response)
 		return
 	}
 	s.capacityIssuesForRequest(r).attachPools(result.model)
@@ -208,7 +237,7 @@ func (s *Server) handleCapacityPool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.Pool = &pool.Observation
-	s.writeJSON(w, response)
+	s.writeCapacityResponse(w, result, response)
 }
 
 func (s *Server) handleCapacityPoolMembers(w http.ResponseWriter, r *http.Request) {
@@ -241,7 +270,7 @@ func (s *Server) handleCapacityPoolMembers(w http.ResponseWriter, r *http.Reques
 	response.State = result.state
 	response.Type = memberType
 	if result.model == nil {
-		s.writeJSON(w, response)
+		s.writeCapacityResponse(w, result, response)
 		return
 	}
 	pool, found := result.model.Pool(name)
@@ -266,7 +295,7 @@ func (s *Server) handleCapacityPoolMembers(w http.ResponseWriter, r *http.Reques
 	}
 	response.Items = page.items
 	response.Page = capacityapi.PageInfo{HasMore: page.hasMore, NextCursor: page.nextCursor}
-	s.writeJSON(w, response)
+	s.writeCapacityResponse(w, result, response)
 }
 
 // requireNodeVisibility is the first gate on every Capacity route: the whole
@@ -300,11 +329,13 @@ func capacityNodePoolDenialMessage(reasonCode string) string {
 // a 403. Every Karpenter-specific route passes false and fails closed.
 func (s *Server) loadCapacityModel(w http.ResponseWriter, r *http.Request, softKarpenterDenial bool) (capacityLoadResult, bool) {
 	now := time.Now().UTC()
-	result := capacityLoadResult{meta: newCapacityResponseMeta(now)}
+	// Captured before ANY authorization probe or source read, so the snapshot
+	// covers every branch below — including the early returns, which still carry
+	// coverage verdicts derived from this cluster's discovery and caches.
+	result := capacityLoadResult{meta: newCapacityResponseMeta(now), identity: currentCapacityClusterIdentity()}
 	if !s.requireNodeVisibility(w, r) {
 		return capacityLoadResult{}, false
 	}
-	identity := currentCapacityClusterIdentity()
 	capability := s.karpenterCapability(r)
 	result.state = capability.State
 	if capability.State == capacityapi.IntegrationDenied {
@@ -397,14 +428,6 @@ func (s *Server) loadCapacityModel(w http.ResponseWriter, r *http.Request, softK
 		for i := range model.Pools {
 			model.Pools[i].Observation.Coverage[capacityapi.CoverageWorkloads] = result.meta.Coverage[capacityapi.CoverageWorkloads]
 		}
-	}
-	if !identity.stillCurrent() {
-		// The kubeconfig context switched while this response was being
-		// assembled. Every source above was read from a cache that no longer
-		// describes the connected cluster; serving the mixture would be worse
-		// than serving nothing.
-		s.writeError(w, http.StatusServiceUnavailable, "Cluster context changed while the capacity response was being assembled")
-		return capacityLoadResult{}, false
 	}
 	result.model = &model
 	result.snapshot = &snapshot
