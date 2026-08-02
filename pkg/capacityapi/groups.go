@@ -47,8 +47,14 @@ type CapacityGroupSummary struct {
 }
 
 type ScalingFact struct {
-	// Code is machine-readable: "bounds", "target", "limits",
-	// "bounds_not_published", "no_manager_detected", "status_stale".
+	// Code is machine-readable, and is exactly one of: "limits" (Karpenter
+	// NodePool spec.limits, configured or not), "pool_not_observed" (a
+	// Karpenter-labeled group whose NodePool could not be read), "bounds" and
+	// "target" (published by the autoscaler), "bounds_not_published" (an
+	// autoscaler is running but says nothing about this group),
+	// "no_manager_detected" (nothing manages this group's size), and
+	// "manager_detection_unavailable" (the detection source itself was denied
+	// or unreadable — never conflate with "no manager").
 	Code    string `json:"code"`
 	Summary string `json:"summary"`
 }

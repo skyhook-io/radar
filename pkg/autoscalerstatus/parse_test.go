@@ -417,3 +417,64 @@ func TestParseUnrecognized(t *testing.T) {
 		})
 	}
 }
+
+func TestParseLegacyTextReportsRunningAutoscalerState(t *testing.T) {
+	// The legacy format has no autoscalerStatus field. Leaving the state blank
+	// left every pre-1.30 cluster's manager rollup permanently "unknown", since
+	// the rollup reads AutoscalerState to reach "healthy".
+	for _, fixture := range []string{"legacy-text.txt", "aks-legacy-text.txt"} {
+		t.Run(fixture, func(t *testing.T) {
+			st, err := Parse(loadFixture(t, fixture))
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if st.AutoscalerState != "Running" {
+				t.Errorf("AutoscalerState = %q, want %q — a payload with health sections is a running controller", st.AutoscalerState, "Running")
+			}
+		})
+	}
+}
+
+func TestParseLegacyInitializingPayload(t *testing.T) {
+	// Before its first health reading the legacy autoscaler writes the bare
+	// word into data.status. Rejecting it reported a parse error for a
+	// perfectly healthy starting controller.
+	st, err := Parse("Initializing\n")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if st.Format != FormatLegacyText {
+		t.Errorf("Format = %q, want %q", st.Format, FormatLegacyText)
+	}
+	if st.AutoscalerState != "Initializing" {
+		t.Errorf("AutoscalerState = %q, want %q", st.AutoscalerState, "Initializing")
+	}
+	if len(st.NodeGroups) != 0 {
+		t.Errorf("NodeGroups = %+v, want none — nothing was published yet", st.NodeGroups)
+	}
+}
+
+func TestParseLegacyBackoffCarriesStatusWithoutStructuredDetails(t *testing.T) {
+	st, err := Parse(loadFixture(t, "aks-legacy-text.txt"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if st.ClusterWide.ScaleUp.Status != "Backoff" {
+		t.Errorf("cluster-wide ScaleUp.Status = %q, want %q", st.ClusterWide.ScaleUp.Status, "Backoff")
+	}
+	if st.ClusterWide.ScaleUp.Backoff != nil {
+		t.Errorf("legacy text carries no structured backoffInfo; Backoff must stay nil, got %+v", st.ClusterWide.ScaleUp.Backoff)
+	}
+	var spot *NodeGroup
+	for i := range st.NodeGroups {
+		if st.NodeGroups[i].Basename == "aks-spotgpu-41529630-vmss" {
+			spot = &st.NodeGroups[i]
+		}
+	}
+	if spot == nil {
+		t.Fatalf("spotgpu group missing from %+v", st.NodeGroups)
+	}
+	if spot.ScaleUp.Status != "Backoff" {
+		t.Errorf("spotgpu ScaleUp.Status = %q, want %q", spot.ScaleUp.Status, "Backoff")
+	}
+}

@@ -15,16 +15,19 @@ func NewActionSummary() ActionSummary {
 }
 
 type OverviewSummary struct {
-	Actions            []ActionSummary        `json:"actions"`
-	AggregateDemand    *QuantityObservation   `json:"aggregateDemand,omitempty"`
-	Scheduling         *SchedulingCapacity    `json:"scheduling,omitempty"`
-	ClaimStages        *ClaimLifecycleSummary `json:"claimStages,omitempty"`
-	PoolCount          int                    `json:"poolCount"`
-	ClaimCount         *int                   `json:"claimCount,omitempty"`
-	NodeCount          *int                   `json:"nodeCount,omitempty"`
-	PendingPodCount    *int                   `json:"pendingPodCount,omitempty"`
-	OrphanedClaimCount *int                   `json:"orphanedClaimCount,omitempty"`
-	UnpooledNodeCount  *int                   `json:"unpooledNodeCount,omitempty"`
+	Actions         []ActionSummary        `json:"actions"`
+	AggregateDemand *QuantityObservation   `json:"aggregateDemand,omitempty"`
+	Scheduling      *SchedulingCapacity    `json:"scheduling,omitempty"`
+	ClaimStages     *ClaimLifecycleSummary `json:"claimStages,omitempty"`
+	// PoolCount is emitted only when NodePool coverage was actually observed.
+	// Absent means unobserved (denied, syncing, or Karpenter not installed) —
+	// a serialized 0 would read as "this fleet has no NodePools".
+	PoolCount          *int `json:"poolCount,omitempty"`
+	ClaimCount         *int `json:"claimCount,omitempty"`
+	NodeCount          *int `json:"nodeCount,omitempty"`
+	PendingPodCount    *int `json:"pendingPodCount,omitempty"`
+	OrphanedClaimCount *int `json:"orphanedClaimCount,omitempty"`
+	UnpooledNodeCount  *int `json:"unpooledNodeCount,omitempty"`
 	// ClusterScheduling is scheduled requests vs allocatable across ALL
 	// observed nodes, every manager included. Scheduling (above) stays
 	// Karpenter-scoped forever — consumers depend on that meaning.

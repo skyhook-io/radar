@@ -22,6 +22,9 @@ import (
 	"github.com/skyhook-io/radar/pkg/karpenter"
 	"github.com/skyhook-io/radar/pkg/subject"
 	pkgtimeline "github.com/skyhook-io/radar/pkg/timeline"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -133,8 +136,12 @@ func TestCapacityOverviewNodePoolsDeniedRendersClusterShape(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d, want 200; body = %s", resp.StatusCode, body)
 	}
+	wire, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
 	var body capacityapi.OverviewResponse
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := json.Unmarshal(wire, &body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 	if body.State != capacityapi.IntegrationDenied {
@@ -144,9 +151,13 @@ func TestCapacityOverviewNodePoolsDeniedRendersClusterShape(t *testing.T) {
 	if nodePoolCoverage.Status != capacityapi.CoverageDenied {
 		t.Fatalf("nodePools coverage = %#v, want denied", nodePoolCoverage)
 	}
-	if len(body.Pools) != 0 || body.Summary.PoolCount != 0 {
-		t.Fatalf("denied overview leaked pool-spec data: pools=%d poolCount=%d", len(body.Pools), body.Summary.PoolCount)
+	if len(body.Pools) != 0 || body.Summary.PoolCount != nil {
+		t.Fatalf("denied overview leaked pool-spec data: pools=%d poolCount=%v", len(body.Pools), body.Summary.PoolCount)
 	}
+	// Every Karpenter-scoped aggregate must be ABSENT on the wire, not zero: a
+	// serialized poolCount 0 / exact-empty scheduling ledger / unpooledNodeCount
+	// equal to the whole fleet would each describe NodePools nobody read.
+	assertCapacitySummaryKeysAbsent(t, wire, "poolCount", "scheduling", "unpooledNodeCount")
 	// The group surface is still present (arrays, never null); no Karpenter
 	// manager may claim readiness it could not observe.
 	if body.Groups == nil || body.Summary.Managers == nil {
@@ -1268,5 +1279,292 @@ func TestCapacityDemandRejectsMalformedOwnerFilter(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("malformed owner status = %d, want 400", resp.StatusCode)
+	}
+}
+
+// assertCapacitySummaryKeysAbsent pins omission on the WIRE, not on the decoded
+// struct: a *int nil and a serialized 0 decode identically for a consumer that
+// reads `summary.poolCount ?? 0`, so only the raw key proves "unobserved".
+func assertCapacitySummaryKeysAbsent(t *testing.T, wire []byte, keys ...string) {
+	t.Helper()
+	var raw map[string]any
+	if err := json.Unmarshal(wire, &raw); err != nil {
+		t.Fatalf("decode raw response: %v", err)
+	}
+	summary, ok := raw["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("summary is not an object: %s", wire)
+	}
+	for _, key := range keys {
+		if _, found := summary[key]; found {
+			t.Fatalf("summary.%s must be omitted when its source was not observed: %s", key, wire)
+		}
+	}
+}
+
+func TestCapacityOverviewObservedNodePoolsKeepKarpenterScopedAggregates(t *testing.T) {
+	// The mirror of the denied case: once NodePools are actually listed, the
+	// Karpenter-scoped aggregates are real observations and must be present —
+	// including poolCount 0 on an installed-but-empty fleet, which is a true zero.
+	initCapacityContractDynamicState(t, true, true, capacityContractNodePool("general"))
+
+	var body capacityapi.OverviewResponse
+	assertOK(t, get(t, "/api/capacity"), &body)
+	if body.State != capacityapi.IntegrationAvailable {
+		t.Fatalf("state = %q, want %q", body.State, capacityapi.IntegrationAvailable)
+	}
+	if body.Summary.PoolCount == nil || *body.Summary.PoolCount != 1 {
+		t.Fatalf("observed poolCount = %v, want 1", body.Summary.PoolCount)
+	}
+	if body.Summary.Scheduling == nil {
+		t.Fatal("observed NodePools must carry the Karpenter-scoped scheduling ledger")
+	}
+	if body.Summary.UnpooledNodeCount == nil {
+		t.Fatal("observed NodePools must carry unpooledNodeCount")
+	}
+}
+
+func TestCapacityOverviewOmitsPodDerivedCountsUnderPodDenial(t *testing.T) {
+	// The unpinned half of the omission family: pendingPodCount and
+	// aggregateDemand are pod-derived, so a pods denial must drop the keys
+	// entirely rather than serialize "0 pending, no demand".
+	initCapacityContractDynamicState(t, true, true, capacityContractNodePool("general"))
+	env := newAuthTestServer(t)
+	permissions := &auth.UserPermissions{AllowedNamespaces: []string{}}
+	permissions.SetCanI("list", karpenter.Group, "nodepools", "", true)
+	permissions.SetCanI("list", karpenter.Group, "nodeclaims", "", false)
+	permissions.SetCanI("list", "", "nodes", "", true)
+	permissions.SetCanI("list", "", "pods", "", false)
+	permissions.SetCanI("list", "metrics.k8s.io", "nodes", "", false)
+	permissions.SetCanI("get", "", "configmaps", "kube-system", false)
+	env.srv.permCache.Set("alice", permissions)
+
+	resp := env.authGet(t, "/api/capacity", "alice", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200; body = %s", resp.StatusCode, body)
+	}
+	wire, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	var body capacityapi.OverviewResponse
+	if err := json.Unmarshal(wire, &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Coverage[capacityapi.CoveragePods].Status != capacityapi.CoverageDenied {
+		t.Fatalf("pods coverage = %#v, want denied", body.Coverage[capacityapi.CoveragePods])
+	}
+	if body.Summary.PendingPodCount != nil || body.Summary.AggregateDemand != nil {
+		t.Fatalf("pod-derived counts survived denial: pending=%v demand=%v", body.Summary.PendingPodCount, body.Summary.AggregateDemand)
+	}
+	assertCapacitySummaryKeysAbsent(t, wire, "pendingPodCount", "aggregateDemand")
+	// NodePools were listable, so the Karpenter-scoped aggregates stay.
+	if body.Summary.PoolCount == nil {
+		t.Fatal("poolCount must survive a pods denial — NodePools were observed")
+	}
+}
+
+func TestCapacityProjectsNodeRegistrationHealthIssue(t *testing.T) {
+	// NodeRegistrationHealthy sits OUTSIDE the pool's aggregate Ready and the
+	// failing NodeClaims are deleted at the registration timeout, so this
+	// condition is the only durable trace of "nodes are not joining". Without an
+	// action code the projection filter dropped it from Capacity entirely.
+	pool := capacityContractNodePool("registration-broken")
+	pool.SetGeneration(3)
+	pool.Object["status"] = map[string]any{"conditions": []any{
+		map[string]any{
+			"type": "Ready", "status": "True", "observedGeneration": int64(3),
+			"lastTransitionTime": time.Now().UTC().Add(-time.Hour).Format(time.RFC3339),
+		},
+		map[string]any{
+			"type": "NodeRegistrationHealthy", "status": "False",
+			"reason": "RegistrationFailed", "message": "nodes failed to register",
+			"observedGeneration": int64(3),
+			"lastTransitionTime": time.Now().UTC().Add(-time.Minute).Format(time.RFC3339),
+		},
+	}}
+	initCapacityContractDynamicState(t, true, true, pool)
+
+	var overview capacityapi.OverviewResponse
+	assertOK(t, get(t, "/api/capacity"), &overview)
+	var signal *capacityapi.ActionSummary
+	for index := range overview.Summary.Actions {
+		if overview.Summary.Actions[index].Code == "node_registration_unhealthy" {
+			signal = &overview.Summary.Actions[index]
+			break
+		}
+	}
+	if signal == nil {
+		t.Fatalf("registration-health signal missing from overview actions: %+v", overview.Summary.Actions)
+	}
+	if signal.Count != 1 || len(signal.Pools) != 1 || signal.Pools[0].Ref.Name != "registration-broken" {
+		t.Fatalf("registration-health signal = %+v", signal)
+	}
+
+	var detail capacityapi.PoolDetailResponse
+	assertOK(t, get(t, "/api/capacity/pools/registration-broken"), &detail)
+	if detail.Pool == nil {
+		t.Fatal("pool detail missing")
+	}
+	found := false
+	for _, issue := range detail.Pool.Issues {
+		if issue.Reason == issues.ReasonKarpenterNodeRegistrationUnhealthy {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("pool detail dropped the registration-health issue: %+v", detail.Pool.Issues)
+	}
+}
+
+// TestCapacityZeroNodePoolsClassifiesIdenticallyOnBothLayers pins the ONE
+// owner of zero-pool semantics. Overview and Demand build the same demand
+// groups from the same pods; when Overview guarded classification on
+// len(pools)>0 while Demand ran it unconditionally, a Karpenter cluster with no
+// NodePools reported scheduler-level states on Overview and "blocked" on
+// Demand — the same fleet, two contradictory answers.
+func TestCapacityZeroNodePoolsClassifiesIdenticallyOnBothLayers(t *testing.T) {
+	now := time.Now().UTC()
+	pending := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web-0", UID: "web-0-uid"},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name:      "app",
+			Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")}},
+		}}},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			Conditions: []corev1.PodCondition{{
+				Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: corev1.PodReasonUnschedulable,
+				Message: "0/0 nodes are available: 1 Insufficient cpu.",
+			}},
+		},
+	}
+	// Karpenter observed (state available) with ZERO NodePools.
+	snapshot := &capacitymodel.Snapshot{GeneratedAt: now, Pods: []*corev1.Pod{pending}}
+	model := capacitymodel.Build(*snapshot)
+	meta := newCapacityResponseMeta(now)
+	meta.Coverage[capacityapi.CoverageNodePools] = availableClusterCoverage(now, 0, []string{"summary", "pools"})
+	result := capacityLoadResult{state: capacityapi.IntegrationAvailable, meta: meta, model: &model, snapshot: snapshot}
+
+	// Overview's path — the handler calls exactly this.
+	actions := capacityDemandActions(capacityOverviewDemandGroups(result))
+
+	// Demand's path.
+	classificationPools, _ := demandPoolSets(result, "")
+	demandGroups := capacitymodel.BuildDemandGroupModels(capacitymodel.DemandInput{GeneratedAt: now, Pods: snapshot.Pods})
+	capacitymodel.ClassifyDemandGroupModels(demandGroups, classificationPools)
+	summary := capacitymodel.SummarizeDemandGroupModels(demandGroups)
+
+	blocked := summary.ByState[capacityapi.DemandBlocked].GroupCount
+	if blocked != 1 {
+		t.Fatalf("demand blocked groups = %d, want 1 — with Karpenter observed, no NodePool can take this demand", blocked)
+	}
+	var overviewBlocked int
+	for _, action := range actions {
+		if action.Code == "pending_demand_blocked" {
+			overviewBlocked = action.Count
+		}
+	}
+	if overviewBlocked != blocked {
+		t.Fatalf("overview reports %d blocked groups, demand reports %d — one layer classified against pools the other did not", overviewBlocked, blocked)
+	}
+}
+
+// TestCapacityZeroNodePoolsStillReportsObservedPoolCount pins the companion
+// wire fact: zero pools on a listable Karpenter install is a TRUE zero, not the
+// unobserved omission the denied path produces.
+func TestCapacityZeroNodePoolsStillReportsObservedPoolCount(t *testing.T) {
+	initCapacityContractDynamicState(t, true, true)
+
+	var overview capacityapi.OverviewResponse
+	assertOK(t, get(t, "/api/capacity"), &overview)
+	if overview.State != capacityapi.IntegrationAvailable {
+		t.Fatalf("state = %q, want %q — Karpenter is installed and listable, it just has no pools", overview.State, capacityapi.IntegrationAvailable)
+	}
+	if overview.Summary.PoolCount == nil || *overview.Summary.PoolCount != 0 {
+		t.Fatalf("poolCount = %v, want an observed zero", overview.Summary.PoolCount)
+	}
+}
+
+// TestCapacityActivityAggregateSpansWindowAndFirstPageOnly pins the two rules
+// that make the type-rollup strip readable: the aggregate describes the whole
+// filtered window (so the type pills stay stable while the list narrows,
+// mirroring the demand-state rollup), and it appears only on first-page
+// responses — a cursor page sees a window bounded near the cursor, and an
+// aggregate over that slice would misread as the whole window.
+func TestCapacityActivityAggregateSpansWindowAndFirstPageOnly(t *testing.T) {
+	initCapacityContractDynamicState(t, true, true, capacityContractNodePool("general"))
+	timeline.ResetStore()
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 100}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	t.Cleanup(func() {
+		timeline.ResetStore()
+		if err := timeline.InitStore(timeline.DefaultStoreConfig()); err != nil {
+			t.Fatalf("re-init global store: %v", err)
+		}
+	})
+
+	startedAt := timeline.ObservationStart().Add(time.Second)
+	events := []pkgtimeline.TimelineEvent{
+		{
+			ID: "claim-created", Timestamp: startedAt, Source: pkgtimeline.SourceInformer,
+			Kind: karpenter.NodeClaimKind, APIVersion: karpenter.APIVersionV1, Name: "claim-a", UID: "claim-a-uid",
+			EventType: pkgtimeline.EventTypeAdd, ClusterContext: k8s.ActiveClusterContext(),
+			Owner: &k8score.OwnerInfo{Kind: karpenter.NodePoolKind, Name: "general"},
+		},
+		{
+			ID: "claim-ready", Timestamp: startedAt.Add(time.Minute), Source: pkgtimeline.SourceK8sEvent,
+			Kind: karpenter.NodeClaimKind, APIVersion: karpenter.APIVersionV1, Name: "claim-a", UID: "claim-a-uid",
+			Reason: "Ready", EventType: pkgtimeline.EventTypeNormal, ClusterContext: k8s.ActiveClusterContext(),
+		},
+		capacityActivityConfigEvent("pool-updated", k8s.ActiveClusterContext(), startedAt.Add(2*time.Minute)),
+	}
+	if err := timeline.GetStore().AppendBatch(context.Background(), events); err != nil {
+		t.Fatalf("append activity: %v", err)
+	}
+
+	var all capacityapi.ActivityResponse
+	assertOK(t, get(t, "/api/capacity/activity"), &all)
+	if all.Aggregate == nil {
+		t.Fatal("first page omitted the aggregate rollup")
+	}
+	if all.Aggregate.Total != 2 {
+		t.Fatalf("aggregate total = %d, want 2 (one provision episode + one config change)", all.Aggregate.Total)
+	}
+	if all.Aggregate.ByType[capacityapi.ActivityProvision].Total != 1 || all.Aggregate.ByType[capacityapi.ActivityConfigChange].Total != 1 {
+		t.Fatalf("aggregate byType = %#v", all.Aggregate.ByType)
+	}
+
+	// The type filter narrows the ITEMS, never the rollup.
+	var filtered capacityapi.ActivityResponse
+	assertOK(t, get(t, "/api/capacity/activity?type=config_change"), &filtered)
+	if len(filtered.Items) != 1 || filtered.Items[0].Type != capacityapi.ActivityConfigChange {
+		t.Fatalf("type-filtered items = %#v, want only the config change", filtered.Items)
+	}
+	if filtered.Aggregate == nil || !reflect.DeepEqual(*filtered.Aggregate, *all.Aggregate) {
+		t.Fatalf("type filter narrowed the aggregate: all=%#v filtered=%#v", all.Aggregate, filtered.Aggregate)
+	}
+
+	// Cursor pages carry no aggregate at all.
+	var first capacityapi.ActivityResponse
+	assertOK(t, get(t, "/api/capacity/activity?limit=1"), &first)
+	if first.Page.NextCursor == "" {
+		t.Fatal("first page omitted the older cursor")
+	}
+	resp := get(t, "/api/capacity/activity?cursor="+url.QueryEscape(first.Page.NextCursor))
+	defer resp.Body.Close()
+	wire, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read cursor page: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(wire, &raw); err != nil {
+		t.Fatalf("decode cursor page: %v", err)
+	}
+	if _, found := raw["aggregate"]; found {
+		t.Fatalf("cursor page carried an aggregate over its bounded slice: %s", wire)
 	}
 }

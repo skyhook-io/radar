@@ -33,12 +33,21 @@ func Parse(raw string) (Status, error) {
 		}
 	}
 
-	if strings.HasPrefix(strings.TrimSpace(raw), "Cluster-autoscaler status") {
+	trimmed := strings.TrimSpace(raw)
+	if strings.HasPrefix(trimmed, "Cluster-autoscaler status") {
 		return parseLegacyText(raw), nil
+	}
+	// Before the legacy autoscaler has its first health reading it writes the
+	// bare word into data.status; treating that as unrecognized would report a
+	// parse error for a perfectly healthy starting controller.
+	if trimmed == legacyInitializing {
+		return Status{Format: FormatLegacyText, AutoscalerState: legacyInitializing}, nil
 	}
 
 	return Status{}, ErrUnrecognizedFormat
 }
+
+const legacyInitializing = "Initializing"
 
 // --- structured YAML (cluster-autoscaler >= 1.30) ---
 
@@ -256,6 +265,13 @@ func parseLegacyText(raw string) Status {
 
 	for _, ng := range groups {
 		st.NodeGroups = append(st.NodeGroups, *ng)
+	}
+	// The legacy format has no autoscalerStatus field, but a payload carrying
+	// health sections is exactly what the controller writes once it is running.
+	// Leaving the state blank would make every legacy cluster's manager rollup
+	// "unknown" — the rollup reads AutoscalerState to reach "healthy".
+	if st.ClusterWide.Health.Status != "" || len(st.NodeGroups) > 0 {
+		st.AutoscalerState = "Running"
 	}
 	return st
 }

@@ -52,6 +52,10 @@ var platformIdentityLabels = []struct {
 // the truncation so nothing is silently dropped.
 const maxGroupChildren = 32
 
+// autoscalerBackoffStatus is the ScaleUp condition value both status formats
+// publish while scale-up is backing off.
+const autoscalerBackoffStatus = "Backoff"
+
 type GroupsModel struct {
 	Groups                 []capacityapi.CapacityGroupSummary
 	OrphanAutoscalerGroups []capacityapi.AutoscalerChildObservation
@@ -73,10 +77,27 @@ type groupBuilder struct {
 	children []capacityapi.AutoscalerChildObservation
 }
 
+// AutoscalerDetection is what the caller actually learned about the
+// cluster-autoscaler status ConfigMap. status being nil is not enough on its
+// own: "the ConfigMap does not exist" and "we were denied it / could not parse
+// it" both produce a nil Status but mean opposite things to an operator.
+type AutoscalerDetection uint8
+
+const (
+	// AutoscalerObserved — the status payload was read and parsed.
+	AutoscalerObserved AutoscalerDetection = iota
+	// AutoscalerNotPublished — the ConfigMap is confirmed absent. A true
+	// observation: no cluster-autoscaler is publishing here.
+	AutoscalerNotPublished
+	// AutoscalerUnavailable — denied, out of cache scope, unreadable, or
+	// unparseable. Nothing may be concluded about capacity managers.
+	AutoscalerUnavailable
+)
+
 // BuildGroupsModel derives the logical-group inventory across every capacity
-// manager. status is nil when the cluster-autoscaler status ConfigMap was not
-// observed. model is the already-built Karpenter model (never nil).
-func BuildGroupsModel(snapshot Snapshot, status *autoscalerstatus.Status, model *Model, generatedAt time.Time) GroupsModel {
+// manager. status is nil unless detection is AutoscalerObserved. model is the
+// already-built Karpenter model (never nil).
+func BuildGroupsModel(snapshot Snapshot, status *autoscalerstatus.Status, detection AutoscalerDetection, model *Model, generatedAt time.Time) GroupsModel {
 	asOf := generatedAt
 	if asOf.IsZero() {
 		asOf = snapshot.GeneratedAt
@@ -231,7 +252,7 @@ func BuildGroupsModel(snapshot Snapshot, status *autoscalerstatus.Status, model 
 	}
 
 	for _, id := range order {
-		result.Groups = append(result.Groups, finalizeGroup(builders[id], snapshot, podsByNode, status != nil, asOf))
+		result.Groups = append(result.Groups, finalizeGroup(builders[id], snapshot, podsByNode, detection, asOf))
 	}
 	sort.Slice(result.Groups, func(i, j int) bool {
 		if result.Groups[i].Name != result.Groups[j].Name {
@@ -277,7 +298,7 @@ func groupIdentityForNode(node *corev1.Node) (id, name, domain string, ok bool) 
 	return label.prefix + value, value, label.domain, true
 }
 
-func finalizeGroup(b *groupBuilder, snapshot Snapshot, podsByNode map[string][]*corev1.Pod, statusObserved bool, asOf time.Time) capacityapi.CapacityGroupSummary {
+func finalizeGroup(b *groupBuilder, snapshot Snapshot, podsByNode map[string][]*corev1.Pod, detection AutoscalerDetection, asOf time.Time) capacityapi.CapacityGroupSummary {
 	summary := capacityapi.CapacityGroupSummary{
 		ID:       b.id,
 		Name:     b.name,
@@ -310,7 +331,7 @@ func finalizeGroup(b *groupBuilder, snapshot Snapshot, podsByNode map[string][]*
 		summary.ScheduledRequests = &requests
 	}
 
-	summary.Scaling = scalingFacts(b, statusObserved)
+	summary.Scaling = scalingFacts(b, detection)
 
 	sort.Slice(b.children, func(i, j int) bool { return b.children[i].ID < b.children[j].ID })
 	summary.ChildrenMeta.Total = len(b.children)
@@ -342,7 +363,11 @@ func detectManager(b *groupBuilder) (capacityapi.CapacityManager, bool) {
 		// live cluster running the Cluster Autoscaler.
 		return capacityapi.ManagerClusterAutoscaler, true
 	}
-	return "", false
+	// Every remaining platform domain (kops, doks, ack, lke, scaleway) runs the
+	// upstream Cluster Autoscaler when it autoscales at all, and a joined child
+	// is proof this group is autoscaler-managed. The join itself is unvalidated
+	// on those providers, so the attribution says so.
+	return capacityapi.ManagerClusterAutoscaler, false
 }
 
 var eksASGSuffix = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -361,8 +386,8 @@ func eksManagedNodeGroupName(basename string) string {
 
 // scalingFacts always returns at least one fact — bounds/target when the
 // autoscaler publishes them, otherwise an honest statement of what is not
-// published or not detected. It never emits a bare dash.
-func scalingFacts(b *groupBuilder, statusObserved bool) []capacityapi.ScalingFact {
+// published, not detected, or not readable. It never emits a bare dash.
+func scalingFacts(b *groupBuilder, detection AutoscalerDetection) []capacityapi.ScalingFact {
 	if b.domain == "karpenter" {
 		if b.pool == nil {
 			// Label evidence without an observed NodePool CRD (Karpenter denied,
@@ -408,16 +433,29 @@ func scalingFacts(b *groupBuilder, statusObserved bool) []capacityapi.ScalingFac
 		return facts
 	}
 
-	if statusObserved {
+	switch detection {
+	case AutoscalerObserved:
+		// An autoscaler is running but publishes nothing for this group.
 		return []capacityapi.ScalingFact{{Code: "bounds_not_published", Summary: "bounds not published in-cluster"}}
+	case AutoscalerNotPublished:
+		return []capacityapi.ScalingFact{{Code: "no_manager_detected", Summary: "no capacity manager detected"}}
 	}
-	return []capacityapi.ScalingFact{{Code: "no_manager_detected", Summary: "no capacity manager detected"}}
+	// The detection source itself was denied or unreadable. "No manager
+	// detected" would state a cluster fact from a read that never happened.
+	return []capacityapi.ScalingFact{{Code: "manager_detection_unavailable", Summary: "manager detection unavailable"}}
 }
 
 func mapChild(group autoscalerstatus.NodeGroup) capacityapi.AutoscalerChildObservation {
+	// ID is the basename — the stable identity that survives a child gaining or
+	// losing a parent. Name keeps the full published name (on GKE a MIG URL) so
+	// an operator can find the object in the provider console.
+	name := group.Name
+	if name == "" {
+		name = group.Basename
+	}
 	child := capacityapi.AutoscalerChildObservation{
 		ID:         group.Basename,
-		Name:       group.Basename,
+		Name:       name,
 		MinSize:    intPtrCopy(group.MinSize),
 		MaxSize:    intPtrCopy(group.MaxSize),
 		Target:     intPtrCopy(group.Target),
@@ -432,6 +470,11 @@ func mapChild(group autoscalerstatus.NodeGroup) capacityapi.AutoscalerChildObser
 			ErrorCode:    group.ScaleUp.Backoff.ErrorCode,
 			ErrorMessage: group.ScaleUp.Backoff.ErrorMessage,
 		}
+	} else if group.ScaleUp.Status == autoscalerBackoffStatus {
+		// The legacy text format states backoff in the ScaleUp status but never
+		// carries the structured details. Dropping it because the details are
+		// missing would render a scale-up that cannot proceed as healthy.
+		child.Backoff = &capacityapi.AutoscalerBackoff{}
 	}
 	return child
 }
@@ -550,6 +593,12 @@ func autoscalerHealthRollup(status *autoscalerstatus.Status, children []capacity
 		degraded = true
 		if detail == "" {
 			detail = "autoscaler reports cluster-wide health unhealthy"
+		}
+	}
+	if status.ClusterWide.ScaleUp.Status == autoscalerBackoffStatus {
+		degraded = true
+		if detail == "" {
+			detail = "autoscaler reports cluster-wide scale-up backoff"
 		}
 	}
 	if degraded {

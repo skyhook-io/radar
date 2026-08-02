@@ -28,6 +28,30 @@ const (
 	capacityActionSubjectLimit = 25
 )
 
+// capacityClusterIdentity pins the cluster-scoped singletons a capacity
+// response is assembled from. A kubeconfig context switch swaps all of them at
+// once, so a response stitched across one would silently mix two clusters —
+// pool specs from the old cluster next to nodes from the new one.
+type capacityClusterIdentity struct {
+	contextName string
+	resource    *k8s.ResourceCache
+	dynamic     *k8s.DynamicResourceCache
+	discovery   *k8s.ResourceDiscovery
+}
+
+func currentCapacityClusterIdentity() capacityClusterIdentity {
+	return capacityClusterIdentity{
+		contextName: k8s.GetContextName(),
+		resource:    k8s.GetResourceCache(),
+		dynamic:     k8s.GetDynamicResourceCache(),
+		discovery:   k8s.GetResourceDiscovery(),
+	}
+}
+
+func (identity capacityClusterIdentity) stillCurrent() bool {
+	return identity == currentCapacityClusterIdentity()
+}
+
 type capacityLoadResult struct {
 	state    capacityapi.IntegrationState
 	meta     capacityapi.ResponseMeta
@@ -63,7 +87,16 @@ func (s *Server) handleCapacityOverview(w http.ResponseWriter, r *http.Request) 
 	issueProjection := s.capacityIssuesForRequest(r)
 	issueProjection.attachPools(result.model)
 
-	response.Summary.PoolCount = len(result.model.Pools)
+	// Every Karpenter-scoped aggregate below is gated on NodePools actually
+	// having been listed. On the denied / not-detected / syncing paths the model
+	// is built from nodes and pods alone, so poolCount, the pooled scheduling
+	// ledger, and "nodes outside a pool" would each describe a Karpenter fleet
+	// nobody read — 0 pools, an exact-empty ledger, and every node unpooled.
+	nodePoolsObserved := capacityCoverageObserved(result.meta.Coverage[capacityapi.CoverageNodePools])
+	if nodePoolsObserved {
+		poolCount := len(result.model.Pools)
+		response.Summary.PoolCount = &poolCount
+	}
 	if capacityCoverageObserved(result.meta.Coverage[capacityapi.CoveragePods]) {
 		pending := result.model.PendingPodCount
 		response.Summary.PendingPodCount = &pending
@@ -75,19 +108,7 @@ func (s *Server) handleCapacityOverview(w http.ResponseWriter, r *http.Request) 
 		accounting := capacitymodel.AccountResources(nil, result.snapshot.Pods)
 		demand := capacitymodel.QuantityObservation(accounting.PendingRequests, certainty, capacityapi.GranularityAggregateNotBinpacked, result.meta.GeneratedAt, "pods.spec.resources")
 		response.Summary.AggregateDemand = &demand
-		groups := capacitymodel.BuildDemandGroupModels(capacitymodel.DemandInput{
-			GeneratedAt:     result.meta.GeneratedAt,
-			Pods:            result.snapshot.Pods,
-			ResolvePodOwner: result.snapshot.ResolvePodOwner,
-		})
-		// Pool refinement only makes sense against pools that exist: with
-		// none, "blocked" would mean "no NodePool can take it" on clusters
-		// that never had NodePools — states stay at the scheduler-verdict
-		// level instead.
-		if len(result.snapshot.NodePools) > 0 {
-			capacitymodel.ClassifyDemandGroupModels(groups, capacityDemandPoolInputs(result))
-		}
-		response.Summary.Actions = append(response.Summary.Actions, capacityDemandActions(groups)...)
+		response.Summary.Actions = append(response.Summary.Actions, capacityDemandActions(capacityOverviewDemandGroups(result))...)
 	}
 	if capacityCoverageObserved(result.meta.Coverage[capacityapi.CoverageNodeClaims]) {
 		claimCount := len(result.snapshot.NodeClaims)
@@ -95,13 +116,17 @@ func (s *Server) handleCapacityOverview(w http.ResponseWriter, r *http.Request) 
 		orphaned := result.model.OrphanedClaimCount
 		response.Summary.OrphanedClaimCount = &orphaned
 	}
-	response.Summary.Scheduling = result.model.Scheduling
+	if nodePoolsObserved {
+		response.Summary.Scheduling = result.model.Scheduling
+	}
 	response.Summary.ClaimStages = result.model.ClaimStages
 	if capacityCoverageObserved(result.meta.Coverage[capacityapi.CoverageNodes]) {
 		nodeCount := len(result.snapshot.Nodes)
 		response.Summary.NodeCount = &nodeCount
-		unpooled := result.model.UnpooledNodeCount
-		response.Summary.UnpooledNodeCount = &unpooled
+		if nodePoolsObserved {
+			unpooled := result.model.UnpooledNodeCount
+			response.Summary.UnpooledNodeCount = &unpooled
+		}
 	}
 	s.attachCapacityGroups(r, result, &response)
 	response.Summary.Actions = append(response.Summary.Actions, capacityActions(*result.model, issueProjection.available)...)
@@ -257,6 +282,17 @@ func (s *Server) requireNodeVisibility(w http.ResponseWriter, r *http.Request) b
 	return false
 }
 
+// capacityNodePoolDenialMessage keeps the 403 honest about WHICH gate closed.
+// A failed informer start is not an RBAC refusal of the caller — telling an
+// operator whose own permissions are fine to go fix their RBAC sends them to
+// the wrong place.
+func capacityNodePoolDenialMessage(reasonCode string) string {
+	if reasonCode == "nodepools_watch_denied" {
+		return "NodePools could not be watched (the CRD exists, but starting its watch failed — check the Radar service account's watch permission on nodepools)"
+	}
+	return "no access to NodePools (cluster-scoped resource requires explicit RBAC)"
+}
+
 // loadCapacityModel loads the shared capacity model behind the node-visibility
 // gate. softKarpenterDenial is set only by the Overview: when true, a
 // Karpenter-denied identity gets the cluster-only shape (state denied, NodePools
@@ -268,11 +304,12 @@ func (s *Server) loadCapacityModel(w http.ResponseWriter, r *http.Request, softK
 	if !s.requireNodeVisibility(w, r) {
 		return capacityLoadResult{}, false
 	}
+	identity := currentCapacityClusterIdentity()
 	capability := s.karpenterCapability(r)
 	result.state = capability.State
 	if capability.State == capacityapi.IntegrationDenied {
 		if !softKarpenterDenial {
-			s.writeError(w, http.StatusForbidden, "no access to NodePools (cluster-scoped resource requires explicit RBAC)")
+			s.writeError(w, http.StatusForbidden, capacityNodePoolDenialMessage(capability.ReasonCode))
 			return capacityLoadResult{}, false
 		}
 		result.meta.Coverage[capacityapi.CoverageNodePools] = deniedCoverage(capability.ReasonCode, []string{"summary", "pools"})
@@ -280,10 +317,6 @@ func (s *Server) loadCapacityModel(w http.ResponseWriter, r *http.Request, softK
 	}
 	if capability.State == capacityapi.IntegrationNotDetected || capability.State == capacityapi.IntegrationSyncing {
 		result.meta.Coverage[capacityapi.CoverageNodePools] = sourceCoverageForState(capability.State, capability.ReasonCode)
-		return result, true
-	}
-	if capability.CacheUnavailable {
-		result.meta.Coverage[capacityapi.CoverageNodePools] = unavailableCoverage("nodepool_cache_unavailable", []string{"summary", "pools"})
 		return result, true
 	}
 
@@ -365,9 +398,36 @@ func (s *Server) loadCapacityModel(w http.ResponseWriter, r *http.Request, softK
 			model.Pools[i].Observation.Coverage[capacityapi.CoverageWorkloads] = result.meta.Coverage[capacityapi.CoverageWorkloads]
 		}
 	}
+	if !identity.stillCurrent() {
+		// The kubeconfig context switched while this response was being
+		// assembled. Every source above was read from a cache that no longer
+		// describes the connected cluster; serving the mixture would be worse
+		// than serving nothing.
+		s.writeError(w, http.StatusServiceUnavailable, "Cluster context changed while the capacity response was being assembled")
+		return capacityLoadResult{}, false
+	}
 	result.model = &model
 	result.snapshot = &snapshot
 	return result, true
+}
+
+// capacityOverviewDemandGroups builds the Overview's demand groups and applies
+// pool refinement under the SAME condition the Demand endpoint uses — Karpenter
+// observed. Splitting that condition is what let one Karpenter cluster with
+// zero NodePools read as "blocked" on Demand and scheduler-level on Overview.
+// With Karpenter listable but empty, "no NodePool can take this demand" is
+// literally true and actionable; without Karpenter there is no pool contract to
+// evaluate against, so states stay at the scheduler-verdict level.
+func capacityOverviewDemandGroups(result capacityLoadResult) []capacitymodel.DemandGroupModel {
+	groups := capacitymodel.BuildDemandGroupModels(capacitymodel.DemandInput{
+		GeneratedAt:     result.meta.GeneratedAt,
+		Pods:            result.snapshot.Pods,
+		ResolvePodOwner: result.snapshot.ResolvePodOwner,
+	})
+	if capacityCoverageObserved(result.meta.Coverage[capacityapi.CoverageNodePools]) {
+		capacitymodel.ClassifyDemandGroupModels(groups, capacityDemandPoolInputs(result))
+	}
+	return groups
 }
 
 func capacityOwnerResolutionPermissions(pods []*corev1.Pod, canList func(group, resource, namespace string) bool) (map[*corev1.Pod]bool, bool) {
@@ -756,6 +816,12 @@ func capacityActionCodeForIssue(reason string) string {
 	switch reason {
 	case issues.ReasonKarpenterNodePoolNotReady:
 		return "pool_not_ready"
+	case issues.ReasonKarpenterNodeRegistrationUnhealthy:
+		// Karpenter keeps this outside the pool's aggregate Ready, and deletes
+		// the failing NodeClaims at the registration timeout — the condition is
+		// the only durable trace of "nodes are not joining", so Capacity has to
+		// carry it or the whole failure mode is invisible here.
+		return "node_registration_unhealthy"
 	case issues.ReasonKarpenterNodeClassNotReady:
 		return "nodeclass_not_ready"
 	case issues.ReasonKarpenterNodeClassNotFound:

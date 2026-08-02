@@ -64,7 +64,7 @@ func (s *Server) handleCapacityActivity(w http.ResponseWriter, r *http.Request) 
 	capability := s.karpenterCapability(r)
 	response.State = capability.State
 	if capability.State == capacityapi.IntegrationDenied {
-		s.writeError(w, http.StatusForbidden, "no access to NodePools (cluster-scoped resource requires explicit RBAC)")
+		s.writeError(w, http.StatusForbidden, capacityNodePoolDenialMessage(capability.ReasonCode))
 		return
 	}
 	if capability.State == capacityapi.IntegrationNotDetected || capability.State == capacityapi.IntegrationSyncing {
@@ -73,13 +73,9 @@ func (s *Server) handleCapacityActivity(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	response.State = capacityapi.IntegrationAvailable
-	if capability.CacheUnavailable {
-		response.ResponseMeta.Coverage[capacityapi.CoverageNodePools] = unavailableCoverage("nodepool_cache_unavailable", []string{"activity"})
-	} else {
-		nodePoolCoverage := capacityapi.NewSourceCoverage(capacityapi.CoverageAvailable, capacityapi.CoverageScopeCluster)
-		nodePoolCoverage.ImpactFields = []string{"activity"}
-		response.ResponseMeta.Coverage[capacityapi.CoverageNodePools] = nodePoolCoverage
-	}
+	nodePoolCoverage := capacityapi.NewSourceCoverage(capacityapi.CoverageAvailable, capacityapi.CoverageScopeCluster)
+	nodePoolCoverage.ImpactFields = []string{"activity"}
+	response.ResponseMeta.Coverage[capacityapi.CoverageNodePools] = nodePoolCoverage
 
 	store := internaltimeline.GetStore()
 	processObservationStart := internaltimeline.ObservationStart()

@@ -476,6 +476,136 @@ func TestBuildGroupsModelNoStatusYieldsNoManagerDetected(t *testing.T) {
 	}
 }
 
+func TestBuildGroupsModelUnreadableStatusNeverClaimsNoManager(t *testing.T) {
+	// The server maps denied, out-of-cache-scope, read-failed and parse-failed
+	// all to a nil Status. "No capacity manager detected" is a cluster fact; it
+	// may only follow from a read that actually happened.
+	node := groupsTestNode("gke-pool-a-1234-x7kq", map[string]string{labelGKENodePool: "pool-a"})
+	snapshot := func() Snapshot {
+		return Snapshot{GeneratedAt: capacityTestTime(), Nodes: []*corev1.Node{node}, Coverage: capacityTestCoverage()}
+	}
+
+	for _, name := range []string{"denied", "cache scope", "read failed", "parse failed"} {
+		t.Run(name, func(t *testing.T) {
+			gm := buildGroupsWithDetection(snapshot(), nil, AutoscalerUnavailable)
+			group := mustFindGroup(t, gm.Groups, "gke-nodepool/pool-a")
+			assertFact(t, group.Scaling, "manager_detection_unavailable", "manager detection unavailable")
+			if _, ok := findFact(group.Scaling, "no_manager_detected"); ok {
+				t.Fatalf("unreadable detection claimed no manager: %+v", group.Scaling)
+			}
+			for _, manager := range gm.Managers {
+				if manager.Status == capacityapi.ManagerHealthy {
+					t.Fatalf("fabricated a healthy manager from an unreadable source: %+v", manager)
+				}
+			}
+		})
+	}
+
+	// The ConfigMap confirmed absent IS an observation — that case keeps saying
+	// so, and must not be softened into "unavailable".
+	observed := buildGroupsWithDetection(snapshot(), nil, AutoscalerNotPublished)
+	group := mustFindGroup(t, observed.Groups, "gke-nodepool/pool-a")
+	assertFact(t, group.Scaling, "no_manager_detected", "no capacity manager detected")
+	if _, ok := findFact(group.Scaling, "manager_detection_unavailable"); ok {
+		t.Fatalf("confirmed-absent ConfigMap reported as unavailable: %+v", group.Scaling)
+	}
+}
+
+func TestBuildGroupsModelJoinedChildAttributesUnvalidatedPlatformsToClusterAutoscaler(t *testing.T) {
+	// kops/doks/ack/lke/scaleway run the upstream Cluster Autoscaler; a joined
+	// child is proof the group is autoscaler-managed, so leaving Manager empty
+	// dropped the group from every rollup.
+	node := groupsTestNode("nodes-us-east-1a-abc", map[string]string{labelKopsInstanceGroup: "nodes-us-east-1a"})
+	probe := capacityTestTime()
+	status := &autoscalerstatus.Status{
+		Format:          autoscalerstatus.FormatStructured,
+		AutoscalerState: "Running",
+		Time:            &probe,
+		NodeGroups: []autoscalerstatus.NodeGroup{{
+			Name:     "nodes-us-east-1a",
+			Basename: "nodes-us-east-1a",
+			MinSize:  intPtr(1),
+			MaxSize:  intPtr(9),
+			Health:   autoscalerstatus.Health{Status: "Healthy"},
+		}},
+	}
+	gm := buildGroups(Snapshot{GeneratedAt: capacityTestTime(), Nodes: []*corev1.Node{node}, Coverage: capacityTestCoverage()}, status)
+
+	group := mustFindGroup(t, gm.Groups, "kops-instancegroup/nodes-us-east-1a")
+	if group.Manager != capacityapi.ManagerClusterAutoscaler {
+		t.Fatalf("manager = %q, want %q", group.Manager, capacityapi.ManagerClusterAutoscaler)
+	}
+	if group.ManagerValidated {
+		t.Fatal("the kops join rule is not validated against a live cluster — managerValidated must be false")
+	}
+	manager := mustFindManager(t, gm.Managers, capacityapi.ManagerClusterAutoscaler)
+	if manager.GroupCount != 1 {
+		t.Fatalf("rollup groupCount = %d, want 1 — it must agree with the attributed group rows", manager.GroupCount)
+	}
+}
+
+func TestBuildGroupsModelLegacyBackoffWithoutDetailsIsDegraded(t *testing.T) {
+	// The legacy text format states backoff in the ScaleUp status and never
+	// carries structured backoffInfo. Requiring the details rendered a scale-up
+	// that cannot proceed as an unknown-but-fine manager.
+	node := groupsTestNode("aks-spotgpu-41529630-vmss000000", map[string]string{labelAKSAgentPool: "spotgpu"})
+	probe := capacityTestTime()
+	status := &autoscalerstatus.Status{
+		Format:          autoscalerstatus.FormatLegacyText,
+		AutoscalerState: "Running",
+		Time:            &probe,
+		NodeGroups: []autoscalerstatus.NodeGroup{{
+			Name:     "aks-spotgpu-41529630-vmss",
+			Basename: "aks-spotgpu-41529630-vmss",
+			MinSize:  intPtr(0),
+			MaxSize:  intPtr(6),
+			Health:   autoscalerstatus.Health{Status: "Healthy"},
+			ScaleUp:  autoscalerstatus.Condition{Status: "Backoff"},
+		}},
+	}
+	gm := buildGroups(Snapshot{GeneratedAt: capacityTestTime(), Nodes: []*corev1.Node{node}, Coverage: capacityTestCoverage()}, status)
+
+	group := mustFindGroup(t, gm.Groups, "aks-agentpool/spotgpu")
+	if len(group.Children) != 1 || group.Children[0].Backoff == nil {
+		t.Fatalf("child lost its backoff because the details were unpublished: %+v", group.Children)
+	}
+	manager := mustFindManager(t, gm.Managers, capacityapi.ManagerAKSAutoscaler)
+	if manager.Status != capacityapi.ManagerDegraded {
+		t.Fatalf("manager status = %q, want degraded", manager.Status)
+	}
+}
+
+func TestBuildGroupsModelChildKeepsPublishedNameAndBasenameID(t *testing.T) {
+	node := groupsTestNode("gke-pool-a-1234-x7kq", map[string]string{labelGKENodePool: "pool-a"})
+	published := "https://www.googleapis.com/compute/v1/projects/p/zones/us-east1-b/instanceGroups/gke-pool-a-1234-grp"
+	probe := capacityTestTime()
+	status := &autoscalerstatus.Status{
+		Format:          autoscalerstatus.FormatStructured,
+		AutoscalerState: "Running",
+		Time:            &probe,
+		NodeGroups: []autoscalerstatus.NodeGroup{{
+			Name:     published,
+			Basename: "gke-pool-a-1234-grp",
+			MinSize:  intPtr(1),
+			MaxSize:  intPtr(10),
+			Health:   autoscalerstatus.Health{Status: "Healthy"},
+		}},
+	}
+	gm := buildGroups(Snapshot{GeneratedAt: capacityTestTime(), Nodes: []*corev1.Node{node}, Coverage: capacityTestCoverage()}, status)
+
+	group := mustFindGroup(t, gm.Groups, "gke-nodepool/pool-a")
+	if len(group.Children) != 1 {
+		t.Fatalf("children = %+v, want the joined MIG", group.Children)
+	}
+	child := group.Children[0]
+	if child.ID != "gke-pool-a-1234-grp" {
+		t.Fatalf("child ID = %q, want the stable basename", child.ID)
+	}
+	if child.Name != published {
+		t.Fatalf("child Name = %q, want the full published name %q", child.Name, published)
+	}
+}
+
 func TestBuildGroupsModelChildIDStableAcrossOrphanAndParented(t *testing.T) {
 	basename := "gke-pool-a-1234-grp"
 	makeStatus := func() *autoscalerstatus.Status {
@@ -533,9 +663,20 @@ func TestBuildGroupsModelNilBoundsChildYieldsBoundsNotPublished(t *testing.T) {
 
 // --- helpers ---
 
+// buildGroups treats a nil status as the ConfigMap being confirmed absent —
+// the true-observation case. Tests covering a denied or unreadable source call
+// buildGroupsWithDetection.
 func buildGroups(snapshot Snapshot, status *autoscalerstatus.Status) GroupsModel {
+	detection := AutoscalerObserved
+	if status == nil {
+		detection = AutoscalerNotPublished
+	}
+	return buildGroupsWithDetection(snapshot, status, detection)
+}
+
+func buildGroupsWithDetection(snapshot Snapshot, status *autoscalerstatus.Status, detection AutoscalerDetection) GroupsModel {
 	model := Build(snapshot)
-	return BuildGroupsModel(snapshot, status, &model, snapshot.GeneratedAt)
+	return BuildGroupsModel(snapshot, status, detection, &model, snapshot.GeneratedAt)
 }
 
 func groupsTestNode(name string, labels map[string]string) *corev1.Node {

@@ -376,7 +376,8 @@ export interface CapacityOverviewSummary {
   aggregateDemand?: CapacityQuantityObservation;
   scheduling?: CapacitySchedulingCapacity;
   claimStages?: CapacityClaimLifecycleSummary;
-  poolCount: number;
+  /** Absent when NodePools were not observed — never render that as zero. */
+  poolCount?: number;
   claimCount?: number;
   nodeCount?: number;
   pendingPodCount?: number;
