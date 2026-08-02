@@ -1439,6 +1439,67 @@ export function ScopeBadges({
 // Integration state gating (loading / syncing / not_detected / denied)
 // ============================================================================
 
+// The RBAC a cluster admin must grant for Capacity, ready to paste. The two
+// rules mirror the two gates: nodes opens the page, Karpenter resources add
+// its screens. Kept minimal on purpose — optional depth (pods, metrics,
+// NodeClasses) degrades to labeled partial coverage rather than a 403.
+export const CAPACITY_VIEWER_CLUSTERROLE = `apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: radar-capacity-viewer
+rules:
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["list", "watch"] # opens the Capacity page
+- apiGroups: ["karpenter.sh"]
+  resources: ["nodepools", "nodeclaims"]
+  verbs: ["list", "watch"] # adds the Karpenter screens
+`;
+
+// DeniedCapacityState is the 403 an operator can act on: what the denial
+// means, what they can still see without these permissions, and the exact
+// grant to request — a dead end converted into a next step.
+export function DeniedCapacityState({ detail }: { detail: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <EmptyState
+      icon={Shield}
+      title="Capacity access denied"
+      detail={detail}
+      action={
+        <div className="mt-4 text-left">
+          <p className="text-xs text-theme-text-secondary">
+            Your readable pods still carry their scheduler verdicts — the Pod
+            drawer and Issues answer “why is this pod pending” at pod grain
+            without these permissions.
+          </p>
+          <div className="mt-3 rounded-lg border border-theme-border bg-theme-surface">
+            <div className="flex items-center justify-between border-b border-theme-border-subtle px-3 py-1.5">
+              <span className="text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
+                Permissions to request
+              </span>
+              <LinkButton
+                onClick={() => {
+                  void navigator.clipboard?.writeText(
+                    CAPACITY_VIEWER_CLUSTERROLE,
+                  );
+                  setCopied(true);
+                  window.setTimeout(() => setCopied(false), 2000);
+                }}
+              >
+                {copied ? "Copied" : "Copy"}
+              </LinkButton>
+            </div>
+            <pre className="overflow-x-auto px-3 py-2 font-mono text-[11px] leading-relaxed text-theme-text-secondary">
+              {CAPACITY_VIEWER_CLUSTERROLE}
+            </pre>
+          </div>
+        </div>
+      }
+    />
+  );
+}
+
 export function integrationBlock(
   response:
     | {
@@ -1454,11 +1515,7 @@ export function integrationBlock(
     return <PaneLoader label={loadingLabel} className="min-h-0 flex-1" />;
   if (!response && error) {
     return isForbiddenError(error) ? (
-      <EmptyState
-        icon={Shield}
-        title="Capacity access denied"
-        detail={errorMessage(error)}
-      />
+      <DeniedCapacityState detail={errorMessage(error)} />
     ) : (
       <EmptyState
         icon={AlertTriangle}
@@ -1486,11 +1543,7 @@ export function integrationBlock(
     );
   if (response.state === "denied")
     return (
-      <EmptyState
-        icon={Shield}
-        title="Capacity access denied"
-        detail="This user cannot read the Karpenter resources Capacity needs to diagnose this cluster."
-      />
+      <DeniedCapacityState detail="This user cannot read the Karpenter resources Capacity needs to diagnose this cluster." />
     );
   return null;
 }

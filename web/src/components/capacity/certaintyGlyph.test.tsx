@@ -5,6 +5,7 @@ import type {
   CapacityQuantityObservation,
 } from "@skyhook-io/k8s-ui";
 import {
+  DeniedCapacityState,
   ActivityStateBadge,
   CertaintyGlyph,
   InventoryQuantityCell,
@@ -173,5 +174,18 @@ describe("ActivityStateBadge", () => {
     const html = render("superseded" as CapacityActivityState);
     expect(html).toContain("superseded");
     expect(html).toContain("text-theme-text-secondary");
+  });
+});
+
+describe("DeniedCapacityState", () => {
+  it("converts the 403 into a next step: fallback guidance plus the exact grant", () => {
+    const html = renderToString(
+      <DeniedCapacityState detail="no access to NodePools (cluster-scoped resource requires explicit RBAC)" />,
+    );
+    expect(html).toContain("Capacity access denied");
+    expect(html).toContain("Pod drawer and Issues");
+    expect(html).toContain("Permissions to request");
+    expect(html).toContain("radar-capacity-viewer");
+    expect(html).toContain("nodepools");
   });
 });
