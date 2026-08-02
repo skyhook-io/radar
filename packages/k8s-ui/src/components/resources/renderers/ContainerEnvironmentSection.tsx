@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { Copy, Eye, EyeOff, List } from 'lucide-react'
 import { clsx } from 'clsx'
 import type {
@@ -9,6 +9,7 @@ import type {
 } from '../../../types'
 import { Badge } from '../../ui/Badge'
 import { Section, type CopyHandler } from '../../ui/drawer-components'
+import { Tooltip } from '../../ui/Tooltip'
 
 interface ContainerEnvironmentSectionProps {
   environment: PodEnvironmentResponse
@@ -82,18 +83,23 @@ export function ContainerEnvironmentSection({
   }
 
   return (
-    <Section title={'Environment Variables  ·  ' + subtitle} icon={List} defaultExpanded={false}>
-      <div className="space-y-3">
+    <Section title={'Environment Variables  ·  ' + subtitle} icon={List} defaultExpanded={false} contentClassName="pl-2">
+      <div className="@container/env min-w-0 space-y-3">
         <p className="text-xs text-theme-text-tertiary">
           Shows where each value comes from. Secret values stay hidden until you reveal them.
         </p>
         <p className="text-xs text-theme-text-tertiary">
-          Values added automatically when a container starts are not listed.
+          <Tooltip content="The cluster can add networking-related variables when the container starts. They are not stored on the Pod, so Radar cannot show them." position="right">
+            <span className="cursor-help border-b border-dotted border-theme-text-tertiary" tabIndex={0}>Only variables declared on the Pod are shown.</span>
+          </Tooltip>
         </p>
 
         {environment.coverage.observedSince && (
           <p className="text-xs text-theme-text-tertiary">
-            Changes observed since {formatObservedSince(environment.coverage.observedSince)}.
+            <Tooltip content="Radar can flag ConfigMap and Secret changes recorded after this time. Earlier changes may not be available." position="right">
+              <span className="cursor-help border-b border-dotted border-theme-text-tertiary" tabIndex={0}>Changes observed</span>
+            </Tooltip>{' '}
+            since {formatObservedSince(environment.coverage.observedSince)}.
             {environment.coverage.degraded && ' Earlier history may be unavailable.'}
             {environment.coverage.saturated && ' Some older changes were omitted.'}
           </p>
@@ -126,14 +132,61 @@ export function ContainerEnvironmentSection({
           </div>
         )}
 
-        <div className="overflow-x-auto rounded-lg border border-theme-border">
-          <table className="w-full min-w-[680px] text-left text-xs">
+        <div className="divide-y divide-theme-border overflow-hidden rounded-lg border border-theme-border @min-[760px]/env:hidden">
+          {active.rows.map(row => {
+            const key = rowKey(active.name, row.name)
+            const revealedValue = revealed[key]
+            return (
+              <div key={row.name} className="space-y-2.5 px-3 py-3 text-xs">
+                <div className="flex min-w-0 items-start justify-between gap-3">
+                  <span className="min-w-0 break-all font-mono text-theme-text-primary">
+                    {row.placeholder ? 'All variables from this source' : row.name}
+                  </span>
+                  <div className="shrink-0">
+                    <StatusCell row={row} compact />
+                  </div>
+                </div>
+                <div className="min-w-0 font-mono text-theme-text-primary">
+                  <ValueCell
+                    row={row}
+                    revealed={revealedValue}
+                    revealing={revealing[key] === true}
+                    revealError={revealErrors[key]}
+                    onReveal={() => reveal(row)}
+                    onCopy={() => onCopy(revealedValue?.value ?? row.value ?? '', key)}
+                    copied={copied === key}
+                    revealEnabled={Boolean(onReveal)}
+                  />
+                </div>
+                <div className="flex min-w-0 items-start gap-2">
+                  <span className="shrink-0 text-theme-text-tertiary">Source</span>
+                  <SourceCell row={row} namespace={namespace} onNavigate={onNavigate} compact />
+                </div>
+              </div>
+            )
+          })}
+        </div>
+
+        <div className="hidden overflow-hidden rounded-lg border border-theme-border @min-[760px]/env:block">
+          <table className="w-full table-fixed text-left text-xs">
+            <colgroup>
+              <col className="w-[24%]" />
+              <col className="w-[32%]" />
+              <col className="w-[24%]" />
+              <col className="w-[20%]" />
+            </colgroup>
             <thead className="bg-theme-elevated text-theme-text-tertiary">
               <tr>
                 <th className="px-3 py-2 font-medium">Variable</th>
-                <th className="px-3 py-2 font-medium">Value if restarted now</th>
-                <th className="px-3 py-2 font-medium">Source</th>
-                <th className="px-3 py-2 font-medium">Status</th>
+                <th className="px-3 py-2 font-medium">
+                  <ExplainedLabel label="Value if restarted now" explanation="The value a newly started container would receive from the Pod's current configuration." />
+                </th>
+                <th className="px-3 py-2 font-medium">
+                  <ExplainedLabel label="Source" explanation="Where this variable gets its value." />
+                </th>
+                <th className="px-3 py-2 font-medium">
+                  <ExplainedLabel label="Status" explanation="Changes, access problems, or details that affect how to interpret this value." />
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-theme-border">
@@ -142,10 +195,10 @@ export function ContainerEnvironmentSection({
                 const revealedValue = revealed[key]
                 return (
                   <tr key={row.name} className="align-top">
-                    <td className="px-3 py-2 font-mono text-theme-text-primary">
+                    <td className="min-w-0 break-all px-3 py-2 font-mono text-theme-text-primary">
                       {row.placeholder ? 'All variables from this source' : row.name}
                     </td>
-                    <td className="max-w-sm px-3 py-2 font-mono text-theme-text-primary">
+                    <td className="min-w-0 px-3 py-2 font-mono text-theme-text-primary">
                       <ValueCell
                         row={row}
                         revealed={revealedValue}
@@ -157,10 +210,10 @@ export function ContainerEnvironmentSection({
                         revealEnabled={Boolean(onReveal)}
                       />
                     </td>
-                    <td className="px-3 py-2">
+                    <td className="min-w-0 px-3 py-2">
                       <SourceCell row={row} namespace={namespace} onNavigate={onNavigate} />
                     </td>
-                    <td className="px-3 py-2">
+                    <td className="min-w-0 px-3 py-2">
                       <StatusCell row={row} />
                     </td>
                   </tr>
@@ -211,9 +264,11 @@ function ValueCell({
               onClick={onReveal}
               disabled={!revealEnabled || revealing}
               className="text-theme-text-tertiary transition-colors hover:text-theme-text-primary disabled:cursor-not-allowed disabled:opacity-40"
-              title={revealed ? 'Hide value' : 'Reveal value'}
+              aria-label={revealed ? 'Hide value' : 'Reveal value'}
             >
-              {revealed ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+              <Tooltip content={revealed ? 'Hide Secret value' : 'Reveal this Secret value'} delay={150}>
+                {revealed ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+              </Tooltip>
             </button>
           )}
           {revealed && (
@@ -221,10 +276,11 @@ function ValueCell({
               type="button"
               onClick={onCopy}
               className="text-theme-text-tertiary transition-colors hover:text-theme-text-primary"
-              title="Copy value"
+              aria-label="Copy value"
             >
-              <Copy className="h-3.5 w-3.5" />
-              <span className="sr-only">{copied ? 'Copied' : 'Copy value'}</span>
+              <Tooltip content={copied ? 'Copied' : 'Copy value'} delay={150}>
+                <Copy className="h-3.5 w-3.5" />
+              </Tooltip>
             </button>
           )}
           {revealing && <span className="text-theme-text-tertiary">Loading…</span>}
@@ -242,14 +298,16 @@ function SourceCell({
   row,
   namespace,
   onNavigate,
+  compact = false,
 }: {
   row: PodEnvironmentRow
   namespace: string
   onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
+  compact?: boolean
 }) {
   const dependencies = row.dependencies ?? []
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
+    <div className={clsx('flex min-w-0 flex-wrap items-center gap-1.5', compact && 'leading-5')}>
       <SourceLabel source={row.source} namespace={namespace} onNavigate={onNavigate} />
       {dependencies.length > 0 && <span className="text-theme-text-tertiary">using</span>}
       {dependencies.map((dependency, index) => (
@@ -261,9 +319,11 @@ function SourceCell({
         />
       ))}
       {(row.shadowedSources?.length ?? 0) > 0 && (
-        <span className="text-theme-text-tertiary" title={formatSources(row.shadowedSources!)}>
-          overrides {row.shadowedSources!.length} earlier source{row.shadowedSources!.length === 1 ? '' : 's'}
-        </span>
+        <Tooltip content={'Earlier source' + (row.shadowedSources!.length === 1 ? ': ' : 's: ') + formatSources(row.shadowedSources!)}>
+          <span className="cursor-help border-b border-dotted border-theme-text-tertiary text-theme-text-tertiary" tabIndex={0}>
+            overrides {row.shadowedSources!.length} earlier source{row.shadowedSources!.length === 1 ? '' : 's'}
+          </span>
+        </Tooltip>
       )}
     </div>
   )
@@ -279,22 +339,34 @@ function SourceLabel({
   onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
 }) {
   if ((source.kind === 'Secret' || source.kind === 'ConfigMap') && source.name) {
+    const explanation = source.kind === 'Secret'
+      ? `Secret/${source.name} stores sensitive configuration. Its value stays hidden until you reveal it.`
+      : `ConfigMap/${source.name} stores non-sensitive configuration.`
+    const navigationHint = onNavigate ? ` Click to inspect ${source.kind}/${source.name}.` : ''
     return (
       <span className="inline-flex min-w-0 flex-col items-start gap-0.5">
-        <Badge
-          kind={source.kind}
-          size="sm"
-          onClick={onNavigate ? () => onNavigate({ kind: source.kind, namespace, name: source.name! }) : undefined}
-          title={onNavigate ? 'View ' + source.kind + '/' + source.name : undefined}
-        >
-          {source.kind}/{source.name}
-        </Badge>
+        <Tooltip content={explanation + navigationHint} position="top" wrapperClassName="min-w-0">
+          <span className="inline-flex min-w-0 max-w-full" tabIndex={onNavigate ? undefined : 0}>
+            <Badge
+              kind={source.kind}
+              size="sm"
+              className="max-w-full"
+              onClick={onNavigate ? () => onNavigate({ kind: source.kind, namespace, name: source.name! }) : undefined}
+            >
+              <span className="min-w-0 truncate">{source.kind}/{source.name}</span>
+            </Badge>
+          </span>
+        </Tooltip>
         {source.key && <span className="max-w-full break-all font-mono text-theme-text-tertiary">{source.key}</span>}
       </span>
     )
   }
   if (source.kind === 'Variable' && source.variable) {
-    return <span className="font-mono text-theme-text-secondary">{source.variable}</span>
+    return (
+      <Tooltip content={`This value uses the earlier ${source.variable} environment variable.`}>
+        <span className="cursor-help border-b border-dotted border-theme-text-tertiary font-mono text-theme-text-secondary" tabIndex={0}>{source.variable}</span>
+      </Tooltip>
+    )
   }
   const label = source.kind === 'Direct'
     ? 'Set directly'
@@ -303,27 +375,57 @@ function SourceLabel({
       : source.kind === 'Container resources'
         ? 'Container resources'
         : source.kind
-  return <span className="text-theme-text-secondary">{label}</span>
+  const explanation = source.kind === 'Direct'
+    ? 'Set directly in this container\'s configuration.'
+    : source.kind === 'Pod'
+      ? `Comes from the Pod itself${source.key ? ` (${source.key})` : ''}, such as its name, namespace, IP, or assigned node.`
+      : source.kind === 'Container resources'
+        ? `Calculated from a container's CPU or memory request or limit${source.key ? ` (${source.key})` : ''}.`
+        : `Value source: ${source.kind}.`
+  return (
+    <Tooltip content={explanation}>
+      <span className="cursor-help border-b border-dotted border-theme-text-tertiary text-theme-text-secondary" tabIndex={0}>{label}</span>
+    </Tooltip>
+  )
 }
 
 function formatSources(sources: PodEnvironmentSource[]) {
   return sources.map(source => source.kind + (source.name ? '/' + source.name : '') + (source.key ? '[' + source.key + ']' : '')).join(', ')
 }
 
-function StatusCell({ row }: { row: PodEnvironmentRow }) {
+function StatusCell({ row, compact = false }: { row: PodEnvironmentRow; compact?: boolean }) {
   if (row.evidence) {
     const label = row.evidence.kind === 'added'
-      ? 'Added after start'
+      ? compact ? 'Added' : 'Added after start'
       : row.evidence.kind === 'removed'
-        ? 'Removed after start'
-        : 'Changed after start'
-    return <Badge severity="warning" size="sm" title={row.evidence.message}>{label}</Badge>
+        ? compact ? 'Removed' : 'Removed after start'
+        : compact ? 'Changed' : 'Changed after start'
+    return <StatusBadge explanation={row.evidence.message}><Badge severity="warning" size="sm">{label}</Badge></StatusBadge>
   }
-  if (row.state === 'denied') return <Badge severity="info" size="sm" title={row.message}>Access needed</Badge>
-  if (row.state === 'missing') return <Badge severity="warning" size="sm" title={row.message}>Missing</Badge>
-  if (row.state === 'unavailable') return <Badge severity="neutral" size="sm" title={row.message}>Unavailable</Badge>
-  if (row.currentPodValue) return <Badge tone="note" size="sm" title={row.message}>Current Pod value</Badge>
+  if (row.state === 'denied') return <StatusBadge explanation={row.message}><Badge severity="info" size="sm">{compact ? 'Access' : 'Access needed'}</Badge></StatusBadge>
+  if (row.state === 'missing') return <StatusBadge explanation={row.message}><Badge severity="warning" size="sm">Missing</Badge></StatusBadge>
+  if (row.state === 'unavailable') return <StatusBadge explanation={row.message}><Badge severity="neutral" size="sm">Unavailable</Badge></StatusBadge>
+  if (row.currentPodValue) {
+    const explanation = row.message || 'Radar is showing the Pod value now. The running container read this field when it started, so it may be different.'
+    return <StatusBadge explanation={explanation}><Badge tone="note" size="sm">{compact ? 'Current' : 'Current Pod value'}</Badge></StatusBadge>
+  }
   return null
+}
+
+function StatusBadge({ explanation, children }: { explanation?: string; children: ReactNode }) {
+  return (
+    <Tooltip content={explanation} position="left" disabled={!explanation}>
+      <span className={clsx(explanation && 'cursor-help')} tabIndex={explanation ? 0 : undefined}>{children}</span>
+    </Tooltip>
+  )
+}
+
+function ExplainedLabel({ label, explanation }: { label: string; explanation: string }) {
+  return (
+    <Tooltip content={explanation}>
+      <span className="cursor-help border-b border-dotted border-theme-text-tertiary" tabIndex={0}>{label}</span>
+    </Tooltip>
+  )
 }
 
 function rowKey(container: string, variable: string) {
