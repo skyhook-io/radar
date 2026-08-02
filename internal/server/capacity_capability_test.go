@@ -138,7 +138,7 @@ func TestLoadCapacityNodeClassesDistinguishesPartialDiscoveryFromAbsentAPI(t *te
 				t.Fatalf("NewResourceDiscovery: %v", err)
 			}
 			discoveryView := &k8s.ResourceDiscovery{ResourceDiscovery: coreDiscovery}
-			meta := newCapacityResponseMeta(now)
+			meta := newCapacityResponseMeta(now, currentCapacityClusterIdentity())
 			(&Server{}).loadCapacityNodeClasses(nil, discoveryView, nil, []*unstructured.Unstructured{pool}, &meta, now)
 			coverage := meta.Coverage[capacityapi.CoverageNodeClasses]
 			if coverage.Status != test.wantStatus || coverage.ReasonCode != test.wantReason {
@@ -177,7 +177,7 @@ func TestLoadCapacityNodeClaimsDistinguishesPartialDiscoveryFromAbsentAPI(t *tes
 				t.Fatalf("NewResourceDiscovery: %v", err)
 			}
 			discoveryView := &k8s.ResourceDiscovery{ResourceDiscovery: coreDiscovery}
-			meta := newCapacityResponseMeta(now)
+			meta := newCapacityResponseMeta(now, currentCapacityClusterIdentity())
 			request := httptest.NewRequest(http.MethodGet, "/api/capacity", nil)
 			claims := (&Server{}).loadCapacityNodeClaims(request, discoveryView, nil, &meta, now)
 			if len(claims) != 0 {

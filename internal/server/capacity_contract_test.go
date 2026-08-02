@@ -1444,7 +1444,7 @@ func TestCapacityZeroNodePoolsClassifiesIdenticallyOnBothLayers(t *testing.T) {
 	// Karpenter observed (state available) with ZERO NodePools.
 	snapshot := &capacitymodel.Snapshot{GeneratedAt: now, Pods: []*corev1.Pod{pending}}
 	model := capacitymodel.Build(*snapshot)
-	meta := newCapacityResponseMeta(now)
+	meta := newCapacityResponseMeta(now, currentCapacityClusterIdentity())
 	meta.Coverage[capacityapi.CoverageNodePools] = availableClusterCoverage(now, 0, []string{"summary", "pools"})
 	result := capacityLoadResult{state: capacityapi.IntegrationAvailable, meta: meta, model: &model, snapshot: snapshot}
 

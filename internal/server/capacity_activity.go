@@ -13,7 +13,6 @@ import (
 	"time"
 
 	capacitymodel "github.com/skyhook-io/radar/internal/capacity"
-	"github.com/skyhook-io/radar/internal/k8s"
 	internaltimeline "github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/capacityapi"
 	"github.com/skyhook-io/radar/pkg/karpenter"
@@ -49,7 +48,14 @@ func (s *Server) handleCapacityActivity(w http.ResponseWriter, r *http.Request) 
 	if !s.requireConnected(w) {
 		return
 	}
-	request, err := parseCapacityActivityRequest(r.URL.Query())
+	// FIRST statement, ahead of cursor parsing and the node-visibility check:
+	// both of those read cluster state, so a snapshot taken after them could
+	// validate a cursor or an authorization against a cluster the response
+	// never describes. Activity builds its own result rather than using the
+	// shared loader, but it takes the same snapshot and the same gate.
+	identity := currentCapacityClusterIdentity()
+	result := capacityLoadResult{identity: identity}
+	request, err := parseCapacityActivityRequest(r.URL.Query(), identity.activeClusterContext)
 	if err != nil {
 		s.writeCapacityPageError(w, err)
 		return
@@ -58,13 +64,8 @@ func (s *Server) handleCapacityActivity(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	now := time.Now().UTC()
-	// Activity builds its own result rather than using the shared loader, but it
-	// reads the same cluster singletons (discovery for the capability probe, the
-	// timeline scoped to the active context), so it takes the same coherence
-	// snapshot and the same serialization gate.
-	result := capacityLoadResult{identity: currentCapacityClusterIdentity()}
 	response := capacityapi.NewActivityResponse(now)
-	response.ResponseMeta = newCapacityResponseMeta(now)
+	response.ResponseMeta = newCapacityResponseMeta(now, identity)
 	response.Observation.StartedAt = now
 	capability := s.karpenterCapability(r)
 	response.State = capability.State
@@ -82,7 +83,7 @@ func (s *Server) handleCapacityActivity(w http.ResponseWriter, r *http.Request) 
 	nodePoolCoverage.ImpactFields = []string{"activity"}
 	response.ResponseMeta.Coverage[capacityapi.CoverageNodePools] = nodePoolCoverage
 
-	store := internaltimeline.GetStore()
+	store := identity.timeline
 	processObservationStart := internaltimeline.ObservationStart()
 	response.Observation.EndedAt = now
 	response.Observation.Retention.Mode = "memory_bounded"
@@ -92,7 +93,7 @@ func (s *Server) handleCapacityActivity(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	stats := store.Stats()
-	clusterContext := k8s.ActiveClusterContext()
+	clusterContext := identity.activeClusterContext
 	visibility := s.newCapacityActivityVisibility(r)
 	if stats.MaxEvents > 0 {
 		maxEvents := stats.MaxEvents
@@ -415,7 +416,10 @@ func advanceCapacityActivityStoreQuery(query *timeline.QueryOptions, batch []tim
 	return true
 }
 
-func parseCapacityActivityRequest(query url.Values) (capacityActivityRequest, error) {
+// clusterContext is the caller's captured cluster stamp; the cursor's cluster
+// binding is checked against it rather than a fresh read, so a switch between
+// the snapshot and this parse cannot admit another cluster's cursor.
+func parseCapacityActivityRequest(query url.Values, clusterContext string) (capacityActivityRequest, error) {
 	limit, err := parseCapacityLimit(query, capacityDefaultPageLimit, capacityMaxPageLimit)
 	if err != nil {
 		return capacityActivityRequest{}, err
@@ -475,7 +479,7 @@ func parseCapacityActivityRequest(query url.Values) (capacityActivityRequest, er
 		if cursor.FilterFingerprint != request.filterFingerprint {
 			return capacityActivityRequest{}, newCapacityCursorInvalidError("cursor does not match the current filters")
 		}
-		if cursor.ClusterContext != k8s.ActiveClusterContext() {
+		if cursor.ClusterContext != clusterContext {
 			return capacityActivityRequest{}, newCapacityCursorInvalidError("cursor belongs to a different cluster context")
 		}
 		request.cursor = &cursor

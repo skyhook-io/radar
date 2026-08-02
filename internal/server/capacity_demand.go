@@ -18,22 +18,24 @@ func (s *Server) handleCapacityDemand(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
+	identity := currentCapacityClusterIdentity()
 	filters, stateFilter, poolFilter, ownerFilter, err := parseCapacityDemandFilters(r.URL.Query())
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	pageRequest, err := parseCapacityPage(r.URL.Query(), capacityPageOptions{
-		Scope:        "demand",
-		Filters:      filters,
-		DefaultLimit: capacityDemandPageLimit,
-		MaxLimit:     capacityDemandPageLimit,
+		Scope:          "demand",
+		Filters:        filters,
+		ClusterContext: identity.activeClusterContext,
+		DefaultLimit:   capacityDemandPageLimit,
+		MaxLimit:       capacityDemandPageLimit,
 	})
 	if err != nil {
 		s.writeCapacityPageError(w, err)
 		return
 	}
-	result, ok := s.loadCapacityModel(w, r, false)
+	result, ok := s.loadCapacityModel(w, r, identity, false)
 	if !ok {
 		return
 	}

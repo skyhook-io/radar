@@ -53,32 +53,32 @@ func TestCapacityActivityCursorRoundTripAndFilterBinding(t *testing.T) {
 		t.Fatalf("decoded cursor = %#v", decoded)
 	}
 
-	previousContext := k8s.SetTestContextName("cluster-a")
-	t.Cleanup(func() { k8s.SetTestContextName(previousContext) })
 	request, err := parseCapacityActivityRequest(url.Values{
 		"pool": {"general"}, "claim": {"general-abc12"}, "cursor": {encoded}, "limit": {"75"},
-	})
+	}, "cluster-a")
 	if err != nil || request.cursor == nil || request.limit != 75 {
 		t.Fatalf("parse bound cursor = %#v, %v", request, err)
 	}
-	if _, err := parseCapacityActivityRequest(url.Values{"pool": {"other"}, "claim": {"general-abc12"}, "cursor": {encoded}}); err == nil || !isCapacityCursorInvalidError(err) {
+	if _, err := parseCapacityActivityRequest(url.Values{"pool": {"other"}, "claim": {"general-abc12"}, "cursor": {encoded}}, "cluster-a"); err == nil || !isCapacityCursorInvalidError(err) {
 		t.Fatalf("changed filters error = %v, want classified cursor error", err)
 	}
-	k8s.SetTestContextName("cluster-b")
-	if _, err := parseCapacityActivityRequest(url.Values{"pool": {"general"}, "claim": {"general-abc12"}, "cursor": {encoded}}); err == nil || !isCapacityCursorInvalidError(err) {
+	// The cluster the cursor is checked against is the caller's CAPTURED stamp,
+	// not a fresh global read — that is what keeps a mid-request switch from
+	// admitting the previous cluster's cursor.
+	if _, err := parseCapacityActivityRequest(url.Values{"pool": {"general"}, "claim": {"general-abc12"}, "cursor": {encoded}}, "cluster-b"); err == nil || !isCapacityCursorInvalidError(err) {
 		t.Fatalf("changed cluster error = %v, want classified cursor error", err)
 	}
 }
 
 func TestCapacityActivityRequestTracksExplicitSince(t *testing.T) {
-	request, err := parseCapacityActivityRequest(url.Values{"since": {"2026-07-13T10:00:00Z"}})
+	request, err := parseCapacityActivityRequest(url.Values{"since": {"2026-07-13T10:00:00Z"}}, k8s.ActiveClusterContext())
 	if err != nil {
 		t.Fatalf("parse since: %v", err)
 	}
 	if !request.sinceProvided || request.since.IsZero() {
 		t.Fatalf("explicit since was not retained: %#v", request)
 	}
-	request, err = parseCapacityActivityRequest(url.Values{})
+	request, err = parseCapacityActivityRequest(url.Values{}, k8s.ActiveClusterContext())
 	if err != nil || request.sinceProvided || !request.since.IsZero() {
 		t.Fatalf("implicit since = %#v, %v", request, err)
 	}
@@ -99,17 +99,17 @@ func TestCapacityActivityCursorRejectsMalformedPayload(t *testing.T) {
 			}
 		})
 	}
-	if _, err := parseCapacityActivityRequest(url.Values{"cursor": {"one", "two"}}); err == nil || !isCapacityCursorInvalidError(err) {
+	if _, err := parseCapacityActivityRequest(url.Values{"cursor": {"one", "two"}}, k8s.ActiveClusterContext()); err == nil || !isCapacityCursorInvalidError(err) {
 		t.Fatalf("repeated cursor error = %v, want classified cursor error", err)
 	}
 }
 
 func TestCapacityActivityTypeFilterBindsFingerprintAndNarrowsRecords(t *testing.T) {
-	base, err := parseCapacityActivityRequest(url.Values{})
+	base, err := parseCapacityActivityRequest(url.Values{}, k8s.ActiveClusterContext())
 	if err != nil {
 		t.Fatalf("parse base request: %v", err)
 	}
-	typed, err := parseCapacityActivityRequest(url.Values{"type": {"provision"}})
+	typed, err := parseCapacityActivityRequest(url.Values{"type": {"provision"}}, k8s.ActiveClusterContext())
 	if err != nil {
 		t.Fatalf("parse typed request: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestCapacityActivityRequestValidatesFiltersAndSince(t *testing.T) {
 		"repeated type":   {"type": {"provision", "termination"}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := parseCapacityActivityRequest(query); err == nil {
+			if _, err := parseCapacityActivityRequest(query, k8s.ActiveClusterContext()); err == nil {
 				t.Fatal("invalid activity request was accepted")
 			}
 		})
