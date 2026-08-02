@@ -85,6 +85,7 @@ describe('PodRenderer resolved environment', () => {
     expect(html).toContain('Only variables declared on the Pod are shown.')
     expect(html).not.toContain('Changes observed')
     expect(html).toContain('Secret<!-- -->/<!-- -->shared')
+    expect(html).toContain('flex-wrap items-center gap-x-1.5 gap-y-0.5')
     expect(html).toContain('@container/env')
     expect(html).toContain('table-fixed')
     expect(html).toContain('w-[44%]')

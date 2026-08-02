@@ -426,7 +426,7 @@ function SourceLabel({
     const explanation = describeSource(source)
     const navigationHint = onNavigate ? ` Click to view the ${source.kind}.` : ''
     return (
-      <span className="inline-flex min-w-0 flex-col items-start gap-0.5">
+      <span className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-x-1.5 gap-y-0.5">
         <Tooltip content={explanation + navigationHint} position="top" wrapperClassName="min-w-0">
           <span className={clsx('inline-flex min-w-0 max-w-full', onNavigate ? 'cursor-pointer' : '!cursor-help')} tabIndex={onNavigate ? undefined : 0}>
             <Badge
@@ -439,7 +439,7 @@ function SourceLabel({
             </Badge>
           </span>
         </Tooltip>
-        {source.key && <span className="max-w-full break-all font-mono text-theme-text-tertiary">{source.key}</span>}
+        {source.key && <span className="min-w-0 max-w-full break-all font-mono text-theme-text-tertiary">{source.key}</span>}
       </span>
     )
   }
