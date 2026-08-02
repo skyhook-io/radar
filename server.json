@@ -30,9 +30,8 @@
           "description": "Mount your kubeconfig into the container (read-only)",
           "variables": {
             "kubeconfig_path": {
-              "description": "Path to your kubeconfig file on the host",
+              "description": "Absolute path to your kubeconfig file on the host, e.g. /home/you/.kube/config (a leading ~ is not expanded when the client execs docker directly)",
               "format": "filepath",
-              "default": "~/.kube/config",
               "isRequired": true
             }
           }
