@@ -305,7 +305,7 @@ func TestOverviewGroupSurfaceWireKeys(t *testing.T) {
 	groupAllocatable := NewQuantityObservation(asOf)
 	groupRequests := NewQuantityObservation(asOf)
 	response.Groups = []CapacityGroupSummary{{
-		ID: "gke-nodepool/pool-a", Name: "pool-a",
+		ID: "gke-nodepool/pool-a", Name: "pool-a", Platform: "gke",
 		Manager: ManagerGKEAutoscaler, ManagerValidated: true,
 		NodeCount: 3, ReadyNodeCount: 3,
 		Allocatable: &groupAllocatable, ScheduledRequests: &groupRequests,
@@ -344,7 +344,7 @@ func TestOverviewGroupSurfaceWireKeys(t *testing.T) {
 
 	group := capacityValueAt(t, got, "groups").([]any)[0].(map[string]any)
 	for key, want := range map[string]any{
-		"id": "gke-nodepool/pool-a", "name": "pool-a", "manager": "gke_autoscaler",
+		"id": "gke-nodepool/pool-a", "name": "pool-a", "platform": "gke", "manager": "gke_autoscaler",
 		"managerValidated": true, "nodeCount": float64(3), "readyNodeCount": float64(3),
 	} {
 		if group[key] != want {

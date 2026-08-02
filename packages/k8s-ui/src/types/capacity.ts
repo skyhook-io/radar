@@ -438,9 +438,18 @@ export interface CapacityAutoscalerChildObservation {
  * EKS managed node group, AKS agent pool). Identity comes from node labels or
  * CRD evidence, never from parsing provider group names.
  */
+export type CapacityGroupPlatform =
+  | "karpenter" | "gke" | "eks" | "aks"
+  | "kops" | "doks" | "ack" | "lke" | "scaleway";
+
 export interface CapacityGroupSummary {
   id: string;
   name: string;
+  /** The identity domain the row exists BY (node label / CRD family) — always
+   *  present and distinct from manager: a static EKS managed node group has a
+   *  platform and no manager. Render unknown future values via a humanized
+   *  fallback, never crash. */
+  platform: CapacityGroupPlatform | (string & {});
   manager?: CapacityManager;
   managerValidated: boolean;
   nodeCount: number;

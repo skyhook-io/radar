@@ -27,6 +27,13 @@ type CapacityGroupSummary struct {
 	ID      string          `json:"id"`
 	Name    string          `json:"name"`
 	Manager CapacityManager `json:"manager,omitempty"`
+	// Platform is the identity domain the group was recognized BY — the node
+	// label or CRD family that makes the row exist ("karpenter", "gke", "eks",
+	// "aks", "kops", "doks", "ack", "lke", "scaleway"). Always present, and
+	// deliberately distinct from Manager: a static EKS managed node group has a
+	// platform and no manager, and rendering "none detected" for its platform
+	// would read as failing to recognize the fleet's most basic fact.
+	Platform string `json:"platform"`
 	// ManagerValidated is false when the manager link rests on a join rule
 	// Radar has not validated against a live cluster of this provider.
 	ManagerValidated bool `json:"managerValidated"`

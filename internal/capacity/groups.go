@@ -302,6 +302,7 @@ func finalizeGroup(b *groupBuilder, snapshot Snapshot, podsByNode map[string][]*
 	summary := capacityapi.CapacityGroupSummary{
 		ID:       b.id,
 		Name:     b.name,
+		Platform: b.domain,
 		Children: []capacityapi.AutoscalerChildObservation{},
 	}
 	summary.Manager, summary.ManagerValidated = detectManager(b)

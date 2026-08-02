@@ -586,6 +586,22 @@ export function CapacityOverview({
 // Capacity managers KPI tile
 // ============================================================================
 
+const GROUP_PLATFORM_LABELS: Record<string, string> = {
+  karpenter: "Karpenter NodePool",
+  gke: "GKE node pool",
+  eks: "EKS managed node group",
+  aks: "AKS agent pool",
+  kops: "kOps instance group",
+  doks: "DOKS node pool",
+  ack: "ACK node pool",
+  lke: "LKE node pool",
+  scaleway: "Scaleway pool",
+};
+
+export function groupPlatformLabel(platform: string): string {
+  return GROUP_PLATFORM_LABELS[platform] ?? humanizeCode(platform);
+}
+
 function ManagersTile({
   managers,
   groups,
@@ -1086,9 +1102,9 @@ function GroupRow({
               </span>
             </WithTooltip>
           ) : (
-            <WithTooltip tip="No manager could be attributed to this group's nodes.">
+            <WithTooltip tip="No autoscaler was observed for this group — the platform identity comes from its node labels.">
               <span className="text-xs text-theme-text-tertiary">
-                none detected
+                {groupPlatformLabel(group.platform)}
               </span>
             </WithTooltip>
           )}

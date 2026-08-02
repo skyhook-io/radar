@@ -241,6 +241,7 @@ const gkeChildBackoff: CapacityAutoscalerChildObservation = {
 
 const karpenterGroup: CapacityGroupSummary = {
   id: "grp-karpenter-default",
+  platform: "karpenter",
   // Matches poolSummary.resource.ref.name so the karpenter row can join pools.
   name: "default",
   manager: "karpenter",
@@ -256,6 +257,7 @@ const karpenterGroup: CapacityGroupSummary = {
 
 const gkeGroup: CapacityGroupSummary = {
   id: "grp-gke-default",
+  platform: "gke",
   name: "gke-default-pool",
   manager: "gke_autoscaler",
   managerValidated: true,
@@ -275,6 +277,7 @@ const gkeGroup: CapacityGroupSummary = {
 // tame: cpu + memory lead, a GPU is promoted, pods + ephemeral-storage collapse.
 const richGroup: CapacityGroupSummary = {
   id: "grp-rich",
+  platform: "karpenter",
   name: "rich-pool",
   manager: "karpenter",
   managerValidated: true,
@@ -1164,7 +1167,7 @@ describe("CapacityView overview", () => {
     }
   });
 
-  it("still concludes 'none detected' in tile and row when the source was read", () => {
+  it("splits platform identity from autoscaler observation when the source was read", () => {
     const managerlessGroup: CapacityGroupSummary = {
       ...gkeGroup,
       manager: undefined,
@@ -1187,8 +1190,13 @@ describe("CapacityView overview", () => {
         },
       }),
     );
+    // Tile: the autoscaler was read and published nothing — an honest "none".
     expect(html).toContain("None detected");
-    expect(html).toContain("none detected");
+    // Row: the group's identity CAME from a platform label; concluding "none
+    // detected" there would read as failing to recognize the fleet's most
+    // basic fact. Platform identity renders instead.
+    expect(html).toContain("GKE node pool");
+    expect(html).not.toContain("none detected");
     expect(html).not.toContain("detection unavailable");
   });
 

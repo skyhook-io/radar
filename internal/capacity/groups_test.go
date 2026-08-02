@@ -538,6 +538,9 @@ func TestBuildGroupsModelJoinedChildAttributesUnvalidatedPlatformsToClusterAutos
 	if group.ManagerValidated {
 		t.Fatal("the kops join rule is not validated against a live cluster — managerValidated must be false")
 	}
+	if group.Platform != "kops" {
+		t.Fatalf("group.Platform = %q, want the identity domain the row exists by", group.Platform)
+	}
 	manager := mustFindManager(t, gm.Managers, capacityapi.ManagerClusterAutoscaler)
 	if manager.GroupCount != 1 {
 		t.Fatalf("rollup groupCount = %d, want 1 — it must agree with the attributed group rows", manager.GroupCount)
