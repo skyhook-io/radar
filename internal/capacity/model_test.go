@@ -1160,3 +1160,34 @@ func capacityTestAssertBuckets(t *testing.T, name string, got, want []capacityap
 		}
 	}
 }
+
+func TestAcceleratorFactEchoesDeclaredRequirementsOnly(t *testing.T) {
+	gpuCount := capacityapi.Requirement{Key: "karpenter.k8s.aws/instance-gpu-count", Operator: "In", Values: []string{"1", "4"}}
+	gpuName := capacityapi.Requirement{Key: "nvidia.com/gpu.product", Operator: "Exists"}
+	arch := capacityapi.Requirement{Key: "kubernetes.io/arch", Operator: "In", Values: []string{"amd64"}}
+
+	fact := acceleratorFact([]capacityapi.Requirement{arch, gpuCount, gpuName})
+	if fact == nil {
+		t.Fatal("a declared GPU requirement must produce the accelerator fact")
+	}
+	if fact.Code != "declared_accelerator_pool" {
+		t.Fatalf("fact.Code = %q", fact.Code)
+	}
+	// The summary quotes the requirement it found — echo, never inference —
+	// so it structurally cannot claim more than the spec declares.
+	if fact.Summary != "Declared accelerator pool — karpenter.k8s.aws/instance-gpu-count In [1, 4] (+1 more)" {
+		t.Fatalf("fact.Summary = %q", fact.Summary)
+	}
+
+	if acceleratorFact([]capacityapi.Requirement{arch}) != nil {
+		t.Fatal("an unknown or non-GPU requirement must produce NO fact — graceful null, never a wrong claim")
+	}
+	if acceleratorFact(nil) != nil {
+		t.Fatal("no requirements, no fact")
+	}
+
+	azure := acceleratorFact([]capacityapi.Requirement{{Key: "karpenter.azure.com/sku-gpu-count", Operator: "Exists"}})
+	if azure == nil || azure.Summary != "Declared accelerator pool — karpenter.azure.com/sku-gpu-count Exists" {
+		t.Fatalf("azure fact = %+v", azure)
+	}
+}

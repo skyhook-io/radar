@@ -2,6 +2,8 @@ package capacity
 
 import (
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/capacityapi"
@@ -379,6 +381,9 @@ func basePoolObservation(pool *unstructured.Unstructured, snapshot Snapshot) cap
 		observation.Mode = capacityapi.PoolModeDynamic
 	}
 	observation.Configuration = poolConfiguration(normalized)
+	if fact := acceleratorFact(observation.Configuration.Requirements); fact != nil {
+		observation.Facts = append(observation.Facts, *fact)
+	}
 	observation.Disruption = disruptionPolicy(normalized)
 	observation.Coverage = copyCoverage(snapshot.Coverage)
 
@@ -618,6 +623,56 @@ func populatePool(model *PoolModel, claims []*unstructured.Unstructured, nodes [
 	sortMembers(model.Workloads)
 	if observation.Composition != nil {
 		sortComposition(observation.Composition)
+	}
+}
+
+// acceleratorRequirementKeys are the well-known requirement keys that declare
+// a pool provisions accelerator instances: Karpenter's AWS and Azure GPU
+// instance selectors, the NVIDIA GPU-operator/NFD label family, and GKE's
+// accelerator label. The accelerator fact only ever ECHOES a declared
+// requirement — no instance-type name parsing, no inference — so an unknown
+// provider simply produces no fact, never a wrong one.
+var acceleratorRequirementKeys = map[string]bool{
+	"karpenter.k8s.aws/instance-gpu-count":        true,
+	"karpenter.k8s.aws/instance-gpu-name":         true,
+	"karpenter.k8s.aws/instance-gpu-manufacturer": true,
+	"karpenter.azure.com/sku-gpu-count":           true,
+	"karpenter.azure.com/sku-gpu-name":            true,
+	"karpenter.azure.com/sku-gpu-manufacturer":    true,
+	"nvidia.com/gpu.present":                      true,
+	"nvidia.com/gpu.product":                      true,
+	"nvidia.com/gpu.count":                        true,
+	"cloud.google.com/gke-accelerator":            true,
+}
+
+// acceleratorFact names the accelerator a pool is FOR when its declared
+// requirements say so. A scale-to-zero or failing GPU pool has no allocatable
+// to put the accelerator on the ledger — the declaration is the only truth
+// available, and naming it is what lets the "why is GPU demand unserved"
+// journey confirm it reached the right pool.
+func acceleratorFact(requirements []capacityapi.Requirement) *capacityapi.PostureFact {
+	var matched []capacityapi.Requirement
+	for _, requirement := range requirements {
+		if acceleratorRequirementKeys[requirement.Key] {
+			matched = append(matched, requirement)
+		}
+	}
+	if len(matched) == 0 {
+		return nil
+	}
+	lead := matched[0]
+	summary := "Declared accelerator pool — " + lead.Key + " " + lead.Operator
+	if len(lead.Values) > 0 {
+		summary += " [" + strings.Join(lead.Values, ", ") + "]"
+	}
+	if len(matched) > 1 {
+		summary += " (+" + strconv.Itoa(len(matched)-1) + " more)"
+	}
+	return &capacityapi.PostureFact{
+		Code:        "declared_accelerator_pool",
+		Summary:     summary,
+		Detail:      "Requirements pin accelerator instances. Declared, not measured: it says what this pool would provision, not that accelerator capacity exists right now.",
+		SourcePaths: []string{"spec.template.spec.requirements"},
 	}
 }
 
