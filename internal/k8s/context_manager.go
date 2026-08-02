@@ -487,6 +487,16 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 		callback(newContext)
 	}
 
+	// Publish success while still holding contextOpMu: a caller publishing
+	// after this returns races the next queued operation's teardown, and the
+	// window would advertise Connected over dead caches. HTTP handlers'
+	// duplicate publishes dedupe inside SetConnectionStatus.
+	SetConnectionStatus(ConnectionStatus{
+		State:       StateConnected,
+		Context:     newContext,
+		ClusterName: GetClusterName(),
+	})
+
 	return nil
 }
 

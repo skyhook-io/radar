@@ -994,6 +994,17 @@ func TestSmokeConnection(t *testing.T) {
 	}
 }
 
+func TestSmokeConnectionStatusOnly(t *testing.T) {
+	// The UI's perpetual fallback poll opts out of context enumeration, which
+	// re-reads kubeconfig files under the client write lock on every hit.
+	var body map[string]any
+	assertOK(t, get(t, "/api/connection?contexts=0"), &body)
+	assertKeys(t, body, "state", "context")
+	if _, present := body["contexts"]; present {
+		t.Error("contexts should be omitted when the poll asks for status only")
+	}
+}
+
 func TestSmokeSessions(t *testing.T) {
 	var body map[string]any
 	assertOK(t, get(t, "/api/sessions"), &body)

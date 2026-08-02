@@ -1,6 +1,5 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import type { ContextInfo } from '../types'
 import { getApiBase } from '../api/config'
 import { apiFetch } from '../api/client'
 
@@ -15,10 +14,7 @@ export interface ConnectionState {
   progressMessage?: string
 }
 
-interface ConnectionStatusResponse extends ConnectionState {
-  // Omitted when the poll asks for status only (?contexts=0)
-  contexts?: ContextInfo[]
-}
+type ConnectionStatusResponse = ConnectionState
 
 interface PolledConnectionStatus extends ConnectionStatusResponse {
   sseGenerationAtStart: number
@@ -26,7 +22,6 @@ interface PolledConnectionStatus extends ConnectionStatusResponse {
 
 interface ConnectionContextValue {
   connection: ConnectionState
-  contexts: ContextInfo[]
   retry: () => void
   isRetrying: boolean
   updateFromSSE: (status: ConnectionState) => void
@@ -65,12 +60,16 @@ export function shouldApplyPolledConnection(
     && (currentState !== 'connected' || polledState !== 'connecting')
 }
 
-async function fetchConnectionStatus(sseGenerationAtStart: number, includeContexts: boolean): Promise<PolledConnectionStatus> {
+async function fetchConnectionStatus(sseGenerationAtStart: number): Promise<PolledConnectionStatus> {
   // apiFetch handles a 401 globally (re-auth redirect). These endpoints are
   // no longer auth-exempt, so a session that expires while the connection-
   // error screen is parked open must route through that path rather than
   // surfacing as a misleading "cannot connect to cluster" error.
-  const response = await apiFetch(`${getApiBase()}/connection${includeContexts ? '' : '?contexts=0'}`)
+  //
+  // ?contexts=0: context enumeration re-reads kubeconfig files under the
+  // client write lock on the server — too costly for a perpetual poll, and
+  // nothing here consumes the list (ContextSwitcher has its own query).
+  const response = await apiFetch(`${getApiBase()}/connection?contexts=0`)
   if (!response.ok) {
     throw new Error('Failed to fetch connection status')
   }
@@ -95,7 +94,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     state: 'connecting',
     context: '',
   })
-  const [contexts, setContexts] = useState<ContextInfo[]>([])
   const [isAutoRetrying, setIsAutoRetrying] = useState(false)
   // Track whether SSE has delivered connection state so retry races prefer its
   // immediate recovery signal over an older failed request.
@@ -123,14 +121,25 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
 
   // Mirror for the poll-apply effect: it needs the current state to detect a
   // disconnected→connected transition, which a functional updater can't
-  // surface without side effects inside the updater.
+  // surface without side effects inside the updater. Deliberately written
+  // during render (not in an effect): when an SSE frame and a poll land in the
+  // same commit, the poll effect must already see the SSE-updated state or it
+  // would double-run the connected cache refresh.
   const connectionRef = useRef(connection)
   connectionRef.current = connection
 
   // Cache refresh shared by every path that lands on 'connected'.
+  const lastCacheRefreshAtRef = useRef(0)
   const refreshCachesOnConnect = useCallback(() => {
     const firstConnect = !hasConnectedRef.current
     hasConnectedRef.current = true
+    // Poll and SSE can both observe the same reconnect within moments of each
+    // other (SSE always writes a connected frame on stream open); refreshing
+    // twice cancels and refires every in-flight bootstrap fetch.
+    if (Date.now() - lastCacheRefreshAtRef.current < 1500) {
+      return
+    }
+    lastCacheRefreshAtRef.current = Date.now()
     // A reconnect after a drop (cache stale across the gap), or a first connect
     // onto a client that already carried data at mount (shared across clusters),
     // refreshes the whole cache. A clean first connect only needs to recover the
@@ -145,15 +154,16 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   }, [queryClient])
 
   // Poll quickly while connecting and slowly otherwise so a dropped SSE state
-  // frame cannot leave the UI stuck on stale connection state. The steady-state
-  // fallback poll skips context enumeration — on the server that walks
-  // kubeconfig files under a write lock, too costly for a perpetual 30s tick.
-  const { data, error: pollError } = useQuery<PolledConnectionStatus>({
+  // frame cannot leave the UI stuck on stale connection state. Runs in hidden
+  // tabs and catches up on focus — a parked tab is exactly where a dropped SSE
+  // frame otherwise strands stale state.
+  const { data, dataUpdatedAt, error: pollError } = useQuery<PolledConnectionStatus>({
     queryKey: ['connection-status'],
-    queryFn: () => fetchConnectionStatus(sseGenerationRef.current, connectionRef.current.state !== 'connected'),
+    queryFn: () => fetchConnectionStatus(sseGenerationRef.current),
     staleTime: 500, // Allow frequent refetches while connecting
     refetchInterval: connection.state === 'connecting' ? 500 : CONNECTION_STATUS_FALLBACK_POLL_MS,
-    refetchOnWindowFocus: false,
+    refetchIntervalInBackground: true,
+    refetchOnWindowFocus: true,
   })
 
   // The poll is the safety net for dropped SSE frames — if it starts failing
@@ -164,12 +174,12 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     }
   }, [pollError])
 
-  // Update state from query result
+  // Update state from query result. dataUpdatedAt is a deliberate dep:
+  // structural sharing keeps `data`'s identity stable across byte-identical
+  // polls, so without it a result dropped by the retry-in-flight guard below
+  // would never be re-applied — a stuck error screen when SSE is down.
   useEffect(() => {
     if (!data) return
-    if (data.contexts) {
-      setContexts(data.contexts)
-    }
     // A poll resolving mid-retry would flip the UI back to the error screen
     // while the retry is still running; the retry's own result supersedes it.
     if (manualRetryPendingRef.current || autoRetryInFlightRef.current) return
@@ -194,7 +204,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     if (becameConnected) {
       refreshCachesOnConnect()
     }
-  }, [data, refreshCachesOnConnect])
+  }, [data, dataUpdatedAt, refreshCachesOnConnect])
 
   // Retry mutation
   const retryMutation = useMutation({
@@ -214,6 +224,12 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     },
     onSuccess: (result) => {
       setConnection(result)
+      if (result.state === 'connected') {
+        // Keep the first-connect bookkeeping and the double-refresh window
+        // honest — the SSE frame that follows must not re-invalidate.
+        hasConnectedRef.current = true
+        lastCacheRefreshAtRef.current = Date.now()
+      }
       // Clear all query cache to get fresh data from new connection
       queryClient.removeQueries()
       queryClient.invalidateQueries()
@@ -265,6 +281,10 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
             autoRetryDelayRef.current = AUTO_RETRY_INITIAL_DELAY_MS
             sseActiveRef.current = false
             setConnection(result)
+            if (result.state === 'connected') {
+              hasConnectedRef.current = true
+              lastCacheRefreshAtRef.current = Date.now()
+            }
             queryClient.removeQueries()
             queryClient.invalidateQueries()
           })
@@ -336,7 +356,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
 
   const value: ConnectionContextValue = {
     connection,
-    contexts,
     retry,
     isRetrying: retryMutation.isPending || isAutoRetrying,
     updateFromSSE,

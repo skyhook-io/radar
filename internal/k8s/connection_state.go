@@ -60,6 +60,24 @@ func SetConnectionStatus(status ConnectionStatus) {
 	connectionStatus = status
 	connectionStatusMu.Unlock()
 
+	// Publish-side recovery ownership: every route into an auth-shaped
+	// disconnect (bootstrap with expired credentials, failed retry, failed
+	// context switch) must leave a reconnect loop running — the browser no
+	// longer auto-retries auth failures. Owed survives later non-auth
+	// republications (a hung-plugin retry classifies "timeout") and is only
+	// settled by a successful connect.
+	switch status.State {
+	case StateConnected:
+		runtimeAuthRecoveryOwed.Store(false)
+	case StateDisconnected:
+		if strings.HasPrefix(status.ErrorType, "auth") {
+			runtimeAuthRecoveryOwed.Store(true)
+		}
+		if runtimeAuthRecoveryOwed.Load() {
+			startRuntimeAuthRecovery()
+		}
+	}
+
 	notifyConnectionChange(status)
 }
 

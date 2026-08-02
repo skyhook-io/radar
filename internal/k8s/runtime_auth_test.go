@@ -15,6 +15,8 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
@@ -103,11 +105,27 @@ func TestRuntimeAuthRoundTripperReportsUnauthorizedResponse(t *testing.T) {
 	if probes.Load() != 1 {
 		t.Fatalf("confirmation probes = %d, want 1", probes.Load())
 	}
-	if status := GetConnectionStatus(); status.State != StateDisconnected || status.ErrorType != "auth" {
+	status := GetConnectionStatus()
+	if status.State != StateDisconnected || status.ErrorType != "auth" {
 		t.Fatalf("connection status = %+v, want disconnected auth", status)
 	}
-	if !runtimeAuthRecoveryActive.Load() {
-		t.Fatal("demotion did not start the runtime auth recovery loop")
+	if status.Error != runtimeAuthLostMessage {
+		t.Fatalf("published error = %q, want the fixed credential-loss message (raw probe errors can embed credential material)", status.Error)
+	}
+	if !runtimeAuthRecoveryOwed.Load() {
+		t.Fatal("demotion did not record the recovery debt")
+	}
+	waitForRecoveryWorker(t)
+}
+
+func waitForRecoveryWorker(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !runtimeAuthRecoveryActive.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("recovery worker did not start")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -308,6 +326,12 @@ func TestRuntimeAuthFailureDemotesAndQuiescesOnce(t *testing.T) {
 			callbacks.Add(1)
 		}
 	})
+	var beforeSwitchCalls atomic.Int32
+	var beforeSwitchArg atomic.Value
+	OnBeforeContextSwitch(func(contextName string) {
+		beforeSwitchCalls.Add(1)
+		beforeSwitchArg.Store(contextName)
+	})
 	sessionStopped := make(chan struct{}, 1)
 	SetSessionStopper(func() {
 		select {
@@ -316,6 +340,7 @@ func TestRuntimeAuthFailureDemotesAndQuiescesOnce(t *testing.T) {
 		}
 	})
 	t.Cleanup(func() { SetSessionStopper(nil) })
+	genBefore := currentOperationGen()
 
 	var callers sync.WaitGroup
 	for range 20 {
@@ -343,6 +368,17 @@ func TestRuntimeAuthFailureDemotesAndQuiescesOnce(t *testing.T) {
 	}
 	if probes.Load() != 1 {
 		t.Fatalf("confirmation probes = %d, want 1", probes.Load())
+	}
+	// Quiesce-in-place contract: fired exactly once, with the CURRENT context
+	// (consumers must not infer "changed" by comparing against the active name).
+	if beforeSwitchCalls.Load() != 1 {
+		t.Fatalf("before-switch callbacks = %d, want 1", beforeSwitchCalls.Load())
+	}
+	if got := beforeSwitchArg.Load(); got != GetContextName() {
+		t.Fatalf("before-switch context = %v, want the current context %q", got, GetContextName())
+	}
+	if currentOperationGen() == genBefore {
+		t.Fatal("demotion did not cancel ongoing operations (operation generation unchanged)")
 	}
 }
 
@@ -700,15 +736,19 @@ func TestRuntimeAuthRecoveryReconnectsWhenCredentialsReturn(t *testing.T) {
 			t.Errorf("reconnect context = %q, want %q", contextName, "recovery-context")
 		}
 		reconnects.Add(1)
+		// The real reconnect (performContextSwitch) publishes Connected
+		// while holding contextOpMu; the stub mirrors that contract.
+		SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: contextName})
 		return nil
 	})
 
+	// The publish-side hook alone must set the debt and start the worker —
+	// this is the startup-expired-credentials path, no demotion involved.
 	SetConnectionStatus(ConnectionStatus{
 		State:     StateDisconnected,
 		Context:   "recovery-context",
 		ErrorType: "auth",
 	})
-	startRuntimeAuthRecovery()
 
 	deadline := time.Now().Add(2 * time.Second)
 	for reconnects.Load() == 0 || runtimeAuthRecoveryActive.Load() {
@@ -725,7 +765,10 @@ func TestRuntimeAuthRecoveryReconnectsWhenCredentialsReturn(t *testing.T) {
 		t.Fatalf("reconnects = %d, want 1", reconnects.Load())
 	}
 	if status := GetConnectionStatus(); status.State != StateConnected {
-		t.Fatalf("recovery did not publish connected status, got %+v", status)
+		t.Fatalf("connection did not settle connected, got %+v", status)
+	}
+	if runtimeAuthRecoveryOwed.Load() {
+		t.Fatal("recovery debt not cleared by the connected publish")
 	}
 }
 
@@ -748,7 +791,6 @@ func TestRuntimeAuthRecoveryStopsWhenNoLongerNeeded(t *testing.T) {
 		Context:   "recovery-context",
 		ErrorType: "auth",
 	})
-	startRuntimeAuthRecovery()
 	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "recovery-context"})
 
 	deadline := time.Now().Add(2 * time.Second)
@@ -792,10 +834,11 @@ func TestRuntimeAuthRecoveryContinuesWhenSuperseded(t *testing.T) {
 
 	setRuntimeAuthProbe(func(context.Context) error { return nil })
 	var reconnects atomic.Int32
-	setRuntimeAuthReconnect(func(string, uint64) error {
+	setRuntimeAuthReconnect(func(contextName string, _ uint64) error {
 		if reconnects.Add(1) == 1 {
 			return ErrReconnectSuperseded
 		}
+		SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: contextName})
 		return nil
 	})
 
@@ -804,10 +847,9 @@ func TestRuntimeAuthRecoveryContinuesWhenSuperseded(t *testing.T) {
 		Context:   "recovery-context",
 		ErrorType: "auth",
 	})
-	startRuntimeAuthRecovery()
 
 	deadline := time.Now().Add(2 * time.Second)
-	for runtimeAuthRecoveryActive.Load() {
+	for runtimeAuthRecoveryActive.Load() || reconnects.Load() < 2 {
 		if time.Now().After(deadline) {
 			t.Fatalf("recovery loop did not finish: reconnects=%d", reconnects.Load())
 		}
@@ -817,7 +859,7 @@ func TestRuntimeAuthRecoveryContinuesWhenSuperseded(t *testing.T) {
 		t.Fatalf("reconnects = %d, want 2 (superseded attempt retried next tick)", reconnects.Load())
 	}
 	if status := GetConnectionStatus(); status.State != StateConnected {
-		t.Fatalf("recovery did not publish connected status, got %+v", status)
+		t.Fatalf("connection did not settle connected, got %+v", status)
 	}
 }
 
@@ -835,7 +877,13 @@ func TestRuntimeAuthRecoveryRetargetsNewEpisode(t *testing.T) {
 	})
 	var reconnectedContext atomic.Value
 	setRuntimeAuthReconnect(func(contextName string, _ uint64) error {
+		// Mirror the real precondition: a reconnect aimed at a context the
+		// live status has moved past is superseded, not applied.
+		if GetConnectionStatus().Context != contextName {
+			return ErrReconnectSuperseded
+		}
 		reconnectedContext.Store(contextName)
+		SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: contextName})
 		return nil
 	})
 
@@ -844,18 +892,18 @@ func TestRuntimeAuthRecoveryRetargetsNewEpisode(t *testing.T) {
 		Context:   "context-a",
 		ErrorType: "auth",
 	})
-	startRuntimeAuthRecovery()
 
+	// New episode on a different context: the publish-side hook nudges the
+	// worker awake so it retargets without waiting out the backoff.
 	SetConnectionStatus(ConnectionStatus{
 		State:     StateDisconnected,
 		Context:   "context-b",
 		ErrorType: "auth",
 	})
 	probeOK.Store(true)
-	startRuntimeAuthRecovery() // CAS fails; nudges the sleeping worker
 
 	deadline := time.Now().Add(2 * time.Second)
-	for runtimeAuthRecoveryActive.Load() {
+	for runtimeAuthRecoveryActive.Load() || reconnectedContext.Load() == nil {
 		if time.Now().After(deadline) {
 			t.Fatalf("recovery loop did not finish; reconnected=%v", reconnectedContext.Load())
 		}
@@ -864,6 +912,218 @@ func TestRuntimeAuthRecoveryRetargetsNewEpisode(t *testing.T) {
 	if got := reconnectedContext.Load(); got != "context-b" {
 		t.Fatalf("reconnected context = %v, want context-b", got)
 	}
+}
+
+func TestRuntimeAuthRecoverySurvivesErrorTypeFlip(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+	setRuntimeAuthRecoveryIntervalsForTest(2*time.Millisecond, 4*time.Millisecond)
+
+	var probes atomic.Int32
+	var probeOK atomic.Bool
+	setRuntimeAuthProbe(func(context.Context) error {
+		probes.Add(1)
+		if probeOK.Load() {
+			return nil
+		}
+		return errors.New("getting credentials: exec plugin failed")
+	})
+	var reconnects atomic.Int32
+	setRuntimeAuthReconnect(func(contextName string, _ uint64) error {
+		reconnects.Add(1)
+		SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: contextName})
+		return nil
+	})
+
+	SetConnectionStatus(ConnectionStatus{
+		State:     StateDisconnected,
+		Context:   "recovery-context",
+		ErrorType: "auth",
+	})
+	waitForRecoveryWorker(t)
+
+	// A failed user retry with a hung plugin republishes as "timeout", and a
+	// Helm handler marking the cluster unreachable does the same with no user
+	// action at all. Neither settles the recovery debt.
+	SetConnectionStatus(ConnectionStatus{
+		State:     StateDisconnected,
+		Context:   "recovery-context",
+		Error:     "cluster connection failed: auth plugin timeout: context deadline exceeded",
+		ErrorType: "timeout",
+	})
+	probeOK.Store(true)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for reconnects.Load() == 0 || runtimeAuthRecoveryActive.Load() {
+		if time.Now().After(deadline) {
+			t.Fatalf("worker died on errorType flip: probes=%d reconnects=%d", probes.Load(), reconnects.Load())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if status := GetConnectionStatus(); status.State != StateConnected {
+		t.Fatalf("connection did not settle connected, got %+v", status)
+	}
+}
+
+func TestRuntimeAuthHungExecPluginDemotesWhenEndpointReachable(t *testing.T) {
+	generation := prepareRuntimeAuthTest(t)
+	withContextExecAuth(t, true)
+	setRuntimeAuthProbe(func(context.Context) error {
+		return fmt.Errorf("auth plugin timeout: %w", context.DeadlineExceeded)
+	})
+
+	reportRuntimeAuthFailure(generation, errors.New("Kubernetes API returned HTTP 401 Unauthorized"))
+	waitForRuntimeAuthCheck(t, generation)
+
+	if status := GetConnectionStatus(); status.State != StateDisconnected || status.ErrorType != "auth" {
+		t.Fatalf("connection status = %+v, want disconnected auth (hung plugin with reachable endpoint)", status)
+	}
+}
+
+func TestRuntimeAuthHungPluginTimeoutWithoutExecAuthStaysConnected(t *testing.T) {
+	generation := prepareRuntimeAuthTest(t)
+	withContextExecAuth(t, false)
+	setRuntimeAuthProbe(func(context.Context) error {
+		return fmt.Errorf("auth plugin timeout: %w", context.DeadlineExceeded)
+	})
+
+	reportRuntimeAuthFailure(generation, errors.New("Kubernetes API returned HTTP 401 Unauthorized"))
+	waitForRuntimeAuthCheck(t, generation)
+
+	if got := GetConnectionStatus().State; got != StateConnected {
+		t.Fatalf("connection state = %q, want %q (plugin-timeout rule is exec-auth only)", got, StateConnected)
+	}
+}
+
+func TestRuntimeAuthCooldownIsScopedToGeneration(t *testing.T) {
+	generation := prepareRuntimeAuthTest(t)
+	var probes atomic.Int32
+	setRuntimeAuthProbe(func(context.Context) error {
+		probes.Add(1)
+		return errors.New("dial tcp: connection refused")
+	})
+
+	reportRuntimeAuthFailure(generation, errors.New("unauthorized"))
+	waitForRuntimeAuthCheck(t, generation)
+	if probes.Load() != 1 {
+		t.Fatalf("confirmation probes = %d, want 1", probes.Load())
+	}
+
+	// A context switch mints a new client generation; the old generation's
+	// cooldown must not suppress the new one's first candidate.
+	newGeneration := clientGenerationCounter.Add(1)
+	clientMu.Lock()
+	activeClientGeneration = newGeneration
+	clientMu.Unlock()
+
+	reportRuntimeAuthFailure(newGeneration, errors.New("unauthorized"))
+	waitForRuntimeAuthCheck(t, newGeneration)
+	if probes.Load() != 2 {
+		t.Fatalf("probes after generation change = %d, want 2 (old cooldown must not apply)", probes.Load())
+	}
+}
+
+func TestRuntimeAuthObserverCoversAllSharedClients(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		request func(t *testing.T, clients *sharedKubernetesClients)
+	}{
+		{name: "dynamic client", request: func(t *testing.T, clients *sharedKubernetesClients) {
+			gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"}
+			if _, err := clients.dynamic.Resource(gvr).List(context.Background(), metav1.ListOptions{}); err == nil {
+				t.Fatal("expected 401 error from dynamic list")
+			}
+		}},
+		{name: "discovery client", request: func(t *testing.T, clients *sharedKubernetesClients) {
+			if _, err := clients.discovery.ServerVersion(); err == nil {
+				t.Fatal("expected 401 error from discovery")
+			}
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			prepareRuntimeAuthTest(t)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusUnauthorized)
+			}))
+			t.Cleanup(server.Close)
+
+			var probes atomic.Int32
+			setRuntimeAuthProbe(func(context.Context) error {
+				probes.Add(1)
+				return errors.New("dial tcp: connection refused")
+			})
+
+			clients, err := newSharedKubernetesClients(&rest.Config{Host: server.URL})
+			if err != nil {
+				t.Fatalf("newSharedKubernetesClients() error = %v", err)
+			}
+			clientMu.Lock()
+			activeClientGeneration = clients.generation
+			clientMu.Unlock()
+
+			tt.request(t, clients)
+			waitForRuntimeAuthCheck(t, clients.generation)
+			if probes.Load() != 1 {
+				t.Fatalf("confirmation probes = %d, want 1 (401 through this client must reach the observer)", probes.Load())
+			}
+		})
+	}
+}
+
+func TestRuntimeAuthRecoveryYieldsToActiveContextOperation(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+	setRuntimeAuthRecoveryIntervalsForTest(2*time.Millisecond, 4*time.Millisecond)
+
+	var probes atomic.Int32
+	setRuntimeAuthProbe(func(context.Context) error {
+		probes.Add(1)
+		return nil
+	})
+	setRuntimeAuthReconnect(func(contextName string, _ uint64) error {
+		SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: contextName})
+		return nil
+	})
+
+	activeContextOperations.Add(1)
+	SetConnectionStatus(ConnectionStatus{
+		State:     StateDisconnected,
+		Context:   "recovery-context",
+		ErrorType: "auth",
+	})
+	waitForRecoveryWorker(t)
+	time.Sleep(30 * time.Millisecond)
+	if probes.Load() != 0 {
+		t.Fatalf("probes while a context operation is active = %d, want 0", probes.Load())
+	}
+
+	activeContextOperations.Add(-1)
+	deadline := time.Now().Add(2 * time.Second)
+	for runtimeAuthRecoveryActive.Load() {
+		if time.Now().After(deadline) {
+			t.Fatalf("recovery did not proceed after the operation cleared: probes=%d", probes.Load())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if probes.Load() == 0 {
+		t.Fatal("recovery never probed after the context operation cleared")
+	}
+}
+
+func TestSetConnectionStatusStartsRecoveryForAuthPrefixedTypes(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+	setRuntimeAuthRecoveryIntervalsForTest(time.Hour, time.Hour)
+
+	SetConnectionStatus(ConnectionStatus{
+		State:     StateDisconnected,
+		Context:   "some-context",
+		ErrorType: "auth-rejected",
+	})
+	if !runtimeAuthRecoveryOwed.Load() {
+		t.Fatal("auth-prefixed disconnect did not record the recovery debt")
+	}
+	waitForRecoveryWorker(t)
 }
 
 func TestNextRuntimeAuthRecoveryInterval(t *testing.T) {

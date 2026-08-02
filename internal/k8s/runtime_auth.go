@@ -26,13 +26,18 @@ type sharedKubernetesClients struct {
 }
 
 const (
-	runtimeAuthProbeCooldown             = 30 * time.Second
-	runtimeAuthInconclusiveProbeCooldown = 5 * time.Second
+	runtimeAuthProbeCooldown                = 30 * time.Second
+	runtimeAuthInconclusiveProbeCooldown    = 5 * time.Second
+	runtimeAuthInconclusiveProbeCooldownMax = 5 * time.Minute
 	// Must fit a full TLS handshake + response on high-RTT links: the
 	// confirmation probe has already proven the failure within its own 5s
 	// budget, and a shorter endpoint budget would let slow-but-healthy
 	// networks veto every demotion as "inconclusive" forever.
 	runtimeAuthEndpointProbeTimeout = 5 * time.Second
+
+	// Published instead of the raw probe error, which broadcasts to every SSE
+	// client and can embed credential material on exec-plugin failure paths.
+	runtimeAuthLostMessage = "Kubernetes credentials for this context are no longer valid; re-authenticate to reconnect"
 )
 
 var (
@@ -50,6 +55,7 @@ var (
 	// garbage).
 	runtimeAuthCooldownGeneration uint64
 	runtimeAuthProbeNotBefore     time.Time
+	runtimeAuthInconclusiveStreak int
 	runtimeAuthProbe              = TestClusterConnection
 	runtimeAuthEndpointProbe      = defaultRuntimeAuthEndpointProbe
 )
@@ -170,14 +176,23 @@ func confirmRuntimeAuthFailure(generation, operationGeneration uint64) {
 	probe := getRuntimeAuthProbe()
 	err := probe(ctx)
 	cancel()
-	if ClassifyError(err) != "auth" {
-		setRuntimeAuthCooldown(generation, runtimeAuthCooldown(err))
+	classification := ClassifyError(err)
+	// A hung exec plugin never produces an auth-classified error — the fresh
+	// probe times out inside the plugin instead ("auth plugin timeout", the
+	// exec-specific deadline branch). With the endpoint still reachable that
+	// IS a credential-system failure: without this, a wedged plugin keeps the
+	// UI "connected" while every request hangs behind client-go's shared
+	// plugin mutex.
+	hungPlugin := classification == "timeout" && err != nil && UsesExecAuth() &&
+		strings.Contains(err.Error(), "auth plugin timeout")
+	if classification != "auth" && !hungPlugin {
+		setRuntimeAuthCooldown(generation, runtimeAuthCooldown(err), true)
 		if err == nil {
 			log.Printf("[k8s] Runtime authentication candidate dismissed for context %q: credentials accepted by a fresh probe",
 				SanitizeForLog(GetContextName()))
 		} else {
 			log.Printf("[k8s] Runtime authentication candidate dismissed for context %q: confirmation classified %q",
-				SanitizeForLog(GetContextName()), ClassifyError(err))
+				SanitizeForLog(GetContextName()), classification)
 		}
 		return
 	}
@@ -194,9 +209,13 @@ func confirmRuntimeAuthFailure(generation, operationGeneration uint64) {
 	endpointErr := getRuntimeAuthEndpointProbe()(endpointCtx, endpointConfig)
 	endpointCancel()
 	if endpointErr != nil {
-		setRuntimeAuthCooldown(generation, runtimeAuthInconclusiveProbeCooldown)
+		// Escalating cooldown: an offline laptop otherwise re-runs the exec
+		// plugin every ~5s indefinitely, and a MITM that 401s credentialed
+		// requests while dropping the anonymous probe could pin that loop
+		// forever.
+		setRuntimeAuthCooldown(generation, nextInconclusiveCooldown(), false)
 		log.Printf("[k8s] Runtime authentication candidate inconclusive for context %q: API endpoint is unreachable: %v",
-			SanitizeForLog(GetContextName()), endpointErr)
+			SanitizeForLog(GetContextName()), SanitizeForLog(endpointErr.Error()))
 		return
 	}
 
@@ -211,13 +230,7 @@ func confirmRuntimeAuthFailure(generation, operationGeneration uint64) {
 	if !runtimeAuthStateIsCurrent(generation) || currentOperationGen() != operationGeneration {
 		return
 	}
-	// The probe wraps every failure as "cluster unreachable: %w" — exactly the
-	// wrong headline for a credential failure, so surface the underlying error.
-	demotionErr := err
-	if unwrapped := errors.Unwrap(err); unwrapped != nil {
-		demotionErr = unwrapped
-	}
-	if !transitionConnectedToRuntimeAuthFailure(demotionErr) {
+	if !transitionConnectedToRuntimeAuthFailure() {
 		return
 	}
 
@@ -225,7 +238,15 @@ func confirmRuntimeAuthFailure(generation, operationGeneration uint64) {
 	// and before-switch callbacks must never take contextOpMu or trigger a
 	// synchronous context operation, or this deadlocks.
 	currentContext := GetContextName()
-	log.Printf("[k8s] Runtime Kubernetes authentication lost for context %q; stopping cluster-backed work", SanitizeForLog(currentContext))
+	// The raw error stays in the log only — exec-plugin failures can embed
+	// credential material (a malformed plugin's stdout is quoted verbatim by
+	// client-go), and the published status broadcasts to every SSE client.
+	demotionErr := err
+	if unwrapped := errors.Unwrap(err); unwrapped != nil {
+		demotionErr = unwrapped
+	}
+	log.Printf("[k8s] Runtime Kubernetes authentication lost for context %q (%s); stopping cluster-backed work",
+		SanitizeForLog(currentContext), SanitizeForLog(demotionErr.Error()))
 	// Quiesce-in-place: fired with the current context so registered
 	// consumers cancel cluster-bound work; no actual switch follows.
 	notifyBeforeContextSwitch(currentContext)
@@ -235,11 +256,24 @@ func confirmRuntimeAuthFailure(generation, operationGeneration uint64) {
 	startRuntimeAuthRecovery()
 }
 
-func setRuntimeAuthCooldown(generation uint64, cooldown time.Duration) {
+func setRuntimeAuthCooldown(generation uint64, cooldown time.Duration, conclusive bool) {
 	runtimeAuthChecksMu.Lock()
 	runtimeAuthCooldownGeneration = generation
 	runtimeAuthProbeNotBefore = time.Now().Add(cooldown)
+	if conclusive {
+		runtimeAuthInconclusiveStreak = 0
+	}
 	runtimeAuthChecksMu.Unlock()
+}
+
+func nextInconclusiveCooldown() time.Duration {
+	runtimeAuthChecksMu.Lock()
+	defer runtimeAuthChecksMu.Unlock()
+	cooldown := min(runtimeAuthInconclusiveProbeCooldown<<runtimeAuthInconclusiveStreak, runtimeAuthInconclusiveProbeCooldownMax)
+	if runtimeAuthInconclusiveStreak < 30 {
+		runtimeAuthInconclusiveStreak++
+	}
+	return cooldown
 }
 
 func runtimeAuthCooldown(err error) time.Duration {
@@ -354,7 +388,7 @@ func defaultRuntimeAuthEndpointProbe(ctx context.Context, config *rest.Config) e
 	return nil
 }
 
-func transitionConnectedToRuntimeAuthFailure(err error) bool {
+func transitionConnectedToRuntimeAuthFailure() bool {
 	connectionStatusMu.Lock()
 	if connectionStatus.State != StateConnected {
 		connectionStatusMu.Unlock()
@@ -364,12 +398,13 @@ func transitionConnectedToRuntimeAuthFailure(err error) bool {
 		State:       StateDisconnected,
 		Context:     connectionStatus.Context,
 		ClusterName: connectionStatus.ClusterName,
-		Error:       err.Error(),
+		Error:       runtimeAuthLostMessage,
 		ErrorType:   "auth",
 	}
 	connectionStatus = status
 	connectionStatusMu.Unlock()
 
+	runtimeAuthRecoveryOwed.Store(true)
 	notifyConnectionChange(status)
 	return true
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log"
-	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -12,8 +11,10 @@ import (
 const (
 	defaultRuntimeAuthRecoveryInitialInterval = 30 * time.Second
 	defaultRuntimeAuthRecoveryMaxInterval     = 5 * time.Minute
-	// A hung exec plugin leaks a blocked goroutine and a child process per
-	// probe, so probing rarely bounds the leak while still self-healing.
+	// A hung exec plugin leaks a blocked goroutine per probe (client-go
+	// serializes plugin invocations process-wide, so at most one child
+	// process accumulates), and probing rarely bounds the leak while still
+	// self-healing.
 	defaultRuntimeAuthRecoveryHungInterval = 30 * time.Minute
 )
 
@@ -23,15 +24,24 @@ var (
 	runtimeAuthRecoveryHungInterval    = defaultRuntimeAuthRecoveryHungInterval
 
 	runtimeAuthRecoveryActive atomic.Bool
-	// Wakes a sleeping worker so a new auth-loss episode (possibly on a
-	// different context) isn't stuck waiting out the previous episode's
-	// backoff — worst case the 30min hung-plugin interval.
+	// Explicit recovery debt. The live ConnectionStatus.ErrorType cannot carry
+	// this: while credentials are dead it legitimately flips to non-auth
+	// values (a hung-plugin retry classifies "timeout", Helm handlers mark the
+	// cluster unreachable), and inferring exit from that string would kill the
+	// only reconnect path headless deployments have. Set on any auth-shaped
+	// disconnect, cleared only by a successful connect.
+	runtimeAuthRecoveryOwed atomic.Bool
+	// Wakes a sleeping worker so a new auth-loss episode isn't stuck waiting
+	// out the previous episode's backoff — worst case the 30min hung-plugin
+	// interval.
 	runtimeAuthRecoveryNudge = make(chan struct{}, 1)
-	runtimeAuthReconnect     = PerformContextSwitchIfOperationCurrent
+	// nil means PerformContextSwitchIfOperationCurrent; a direct initializer
+	// would form an init cycle through SetConnectionStatus's recovery hook.
+	runtimeAuthReconnect func(string, uint64) error
 )
 
 // startRuntimeAuthRecovery keeps a headless deployment (MCP-only, no browser
-// tab) from wedging permanently after an auth demotion: nothing else would
+// tab) from wedging permanently after an auth failure: nothing else would
 // ever retry once the user restores credentials, so the server re-probes on a
 // backoff and reconnects itself. Browser sessions benefit too — the reconnect
 // surfaces through SSE and the status poll. The worker reads its target from
@@ -48,31 +58,41 @@ func startRuntimeAuthRecovery() {
 }
 
 func runRuntimeAuthRecovery() {
-	defer runtimeAuthRecoveryActive.Store(false)
+	defer func() {
+		runtimeAuthRecoveryActive.Store(false)
+		// A demotion racing this exit saw the active flag still true and only
+		// nudged; re-check so its episode isn't stranded without a worker.
+		if runtimeAuthRecoveryStillOwed() {
+			startRuntimeAuthRecovery()
+		}
+	}()
 	initialInterval, maxInterval, hungInterval := runtimeAuthRecoveryIntervals()
 	interval := initialInterval
-	lastContext := ""
 	for {
 		select {
 		case <-time.After(interval):
 		case <-runtimeAuthRecoveryNudge:
+			// A nudge marks a new auth-loss episode; don't make it wait out
+			// the previous episode's backoff.
+			interval = initialInterval
 		}
-		contextName, needed := runtimeAuthRecoveryTarget()
-		if !needed {
+		if !runtimeAuthRecoveryOwed.Load() {
 			return
 		}
-		if contextName != lastContext {
-			// New episode (different context demoted while this worker was
-			// sleeping) — don't make it inherit the old episode's backoff.
-			interval = initialInterval
-			lastContext = contextName
+		status := GetConnectionStatus()
+		if status.State == StateConnected {
+			// The publish-side hook clears the debt on connect; this is a
+			// guard against direct status writes that bypass it.
+			runtimeAuthRecoveryOwed.Store(false)
+			return
 		}
-		if activeContextOperations.Load() != 0 {
-			// A user-driven switch or retry is queued or running; let it win
-			// this tick. If it fails, the demoted state persists and the loop
-			// re-checks next tick.
+		if status.State == StateConnecting || activeContextOperations.Load() != 0 {
+			// A connect attempt owns the moment (user-driven switch or retry);
+			// its failure republishes a disconnected status and the debt
+			// persists, so just check again next tick.
 			continue
 		}
+		contextName := status.Context
 		observedGen := currentOperationGen()
 		ctx, cancel := context.WithTimeout(context.Background(), connectionTestOperationTimeout())
 		err := getRuntimeAuthProbe()(ctx)
@@ -85,7 +105,7 @@ func runRuntimeAuthRecovery() {
 		switchErr := getRuntimeAuthReconnect()(contextName, observedGen)
 		if errors.Is(switchErr, ErrReconnectSuperseded) {
 			// A user operation won the race; its outcome decides whether the
-			// next tick still sees a demoted state.
+			// debt persists.
 			continue
 		}
 		if switchErr != nil {
@@ -93,25 +113,14 @@ func runRuntimeAuthRecovery() {
 			interval = nextRuntimeAuthRecoveryInterval(interval, switchErr, maxInterval, hungInterval)
 			continue
 		}
-		// PerformContextSwitch rebuilds clients and caches but leaves status
-		// publication to its caller (the HTTP handlers do the same).
-		SetConnectionStatus(ConnectionStatus{
-			State:       StateConnected,
-			Context:     GetContextName(),
-			ClusterName: GetClusterName(),
-		})
+		// performContextSwitch published the connected status (and cleared
+		// the debt) while still holding contextOpMu.
 		return
 	}
 }
 
-// The ErrorType prefix check keeps the loop owning every auth-shaped
-// demotion variant without enumerating them.
-func runtimeAuthRecoveryTarget() (string, bool) {
-	status := GetConnectionStatus()
-	if status.State != StateDisconnected || !strings.HasPrefix(status.ErrorType, "auth") {
-		return "", false
-	}
-	return status.Context, true
+func runtimeAuthRecoveryStillOwed() bool {
+	return runtimeAuthRecoveryOwed.Load() && GetConnectionStatus().State != StateConnected
 }
 
 func nextRuntimeAuthRecoveryInterval(current time.Duration, err error, maxInterval, hungInterval time.Duration) time.Duration {
@@ -130,6 +139,9 @@ func runtimeAuthRecoveryIntervals() (initial, maxInterval, hung time.Duration) {
 func getRuntimeAuthReconnect() func(string, uint64) error {
 	runtimeAuthChecksMu.Lock()
 	defer runtimeAuthChecksMu.Unlock()
+	if runtimeAuthReconnect == nil {
+		return PerformContextSwitchIfOperationCurrent
+	}
 	return runtimeAuthReconnect
 }
 
