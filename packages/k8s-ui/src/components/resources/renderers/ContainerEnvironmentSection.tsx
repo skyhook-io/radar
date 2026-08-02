@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import {
   Box,
+  Check,
   CircleAlert,
   CircleOff,
   Copy,
@@ -265,7 +266,7 @@ function ValueCell({
   if (row.sensitive) {
     return (
       <div className="space-y-1">
-        <div className="flex items-center gap-1.5">
+        <div className="group/value flex items-center gap-1.5">
           <span className="break-all">{revealed ? revealed.value : '••••••••'}</span>
           {row.state === 'masked' && !row.runtimeDependent && !row.placeholder && row.evidence?.kind !== 'removed' && (
             <button
@@ -281,16 +282,7 @@ function ValueCell({
             </button>
           )}
           {revealed && (
-            <button
-              type="button"
-              onClick={onCopy}
-              className="text-theme-text-tertiary transition-colors hover:text-theme-text-primary"
-              aria-label="Copy value"
-            >
-              <Tooltip content={copied ? 'Copied' : 'Copy value'} delay={150}>
-                <Copy className="h-3.5 w-3.5" />
-              </Tooltip>
-            </button>
+            <ValueCopyButton onCopy={onCopy} copied={copied} />
           )}
           {revealing && <span className="text-theme-text-tertiary">Loading…</span>}
         </div>
@@ -300,7 +292,32 @@ function ValueCell({
     )
   }
   if (row.state !== 'resolved' && !row.value) return <span className="text-theme-text-tertiary">—</span>
-  return <span className="break-all">{row.value ?? ''}</span>
+  return (
+    <div className="group/value flex min-w-0 items-center gap-1.5">
+      <span className="min-w-0 break-all">{row.value ?? ''}</span>
+      <ValueCopyButton onCopy={onCopy} copied={copied} />
+    </div>
+  )
+}
+
+function ValueCopyButton({ onCopy, copied }: { onCopy: () => void; copied: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={onCopy}
+      className={clsx(
+        'shrink-0 text-theme-text-tertiary transition-[color,opacity] hover:text-theme-text-primary focus-visible:opacity-100',
+        copied ? 'opacity-100' : 'opacity-0 group-hover/value:opacity-100 group-focus-within/value:opacity-100',
+      )}
+      aria-label={copied ? 'Value copied' : 'Copy value'}
+    >
+      <Tooltip content={copied ? 'Copied' : 'Copy value'} delay={150}>
+        {copied
+          ? <Check className="h-3.5 w-3.5 text-green-400" aria-hidden />
+          : <Copy className="h-3.5 w-3.5" aria-hidden />}
+      </Tooltip>
+    </button>
+  )
 }
 
 function CompactSourceCell({

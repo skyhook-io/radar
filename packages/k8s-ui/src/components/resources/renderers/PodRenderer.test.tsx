@@ -231,6 +231,35 @@ describe('PodRenderer resolved environment', () => {
     expect(html).toContain('aria-selected="true"')
   })
 
+  it('offers copy for concrete values and confirms success', () => {
+    const environment: PodEnvironmentResponse = {
+      containers: [{
+        name: 'api',
+        role: 'container',
+        rows: [{ name: 'PUBLIC_URL', value: 'https://example.com', state: 'resolved', source: { kind: 'Direct' } }],
+      }],
+      coverage: {},
+    }
+    const render = (copied: string | null) => renderToString(
+      <ContainerEnvironmentSection
+        environment={environment}
+        namespace="default"
+        onCopy={() => undefined}
+        copied={copied}
+      />,
+    )
+
+    const ready = render(null)
+    expect(ready).toContain('group-hover/value:opacity-100')
+    expect(ready).toContain('aria-label="Copy value"')
+    expect(ready).toContain('lucide-copy')
+
+    const confirmed = render('api\u0000PUBLIC_URL')
+    expect(confirmed).toContain('aria-label="Value copied"')
+    expect(confirmed).toContain('lucide-check')
+    expect(confirmed).toContain('text-green-400')
+  })
+
   it('keeps the declaration view when resolved sources contain no usable variables', () => {
     const html = renderToString(
       <PodRenderer
