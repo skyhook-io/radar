@@ -3,7 +3,6 @@ import {
   Box,
   CircleAlert,
   CircleOff,
-  Clock3,
   Copy,
   Cpu,
   Eye,
@@ -78,6 +77,7 @@ export function ContainerEnvironmentSection({
     + (unavailableSources ? ' · ' + unavailableSources + ' source' + (unavailableSources === 1 ? '' : 's') + ' unavailable' : '')
 
   if (!active) return null
+  const showStatus = active.rows.some(hasEnvironmentStatus)
 
   const reveal = async (row: PodEnvironmentRow) => {
     const key = rowKey(active.name, row.name)
@@ -102,7 +102,7 @@ export function ContainerEnvironmentSection({
     <Section title={'Environment Variables  ·  ' + subtitle} icon={List} defaultExpanded={false} contentClassName="pl-2">
       <div className="@container/env min-w-0 space-y-3">
         <p className="text-xs text-theme-text-tertiary">
-          Shows where each value comes from. Secret values stay hidden until you reveal them.
+          Shows values from the Pod's current configuration and where they come from. Secret values stay hidden until you reveal them.
         </p>
         <p className="text-xs text-theme-text-tertiary">
           <Tooltip content="The cluster can add networking-related variables when the container starts. They are not stored on the Pod, so Radar cannot show them." position="right">
@@ -151,23 +151,25 @@ export function ContainerEnvironmentSection({
         <div className="overflow-hidden rounded-lg border border-theme-border">
           <table className="w-full table-fixed text-left text-xs">
             <colgroup>
-              <col className="w-[40%] @min-[760px]/env:w-[24%]" />
-              <col className="w-[38%] @min-[760px]/env:w-[32%]" />
-              <col className="w-[11%] @min-[760px]/env:w-[24%]" />
-              <col className="w-[11%] @min-[760px]/env:w-[20%]" />
+              <col className={showStatus ? 'w-[40%] @min-[760px]/env:w-[24%]' : 'w-[44%] @min-[760px]/env:w-[28%]'} />
+              <col className={showStatus ? 'w-[38%] @min-[760px]/env:w-[32%]' : 'w-[44%] @min-[760px]/env:w-[40%]'} />
+              <col className={showStatus ? 'w-[11%] @min-[760px]/env:w-[24%]' : 'w-[12%] @min-[760px]/env:w-[32%]'} />
+              {showStatus && <col className="w-[11%] @min-[760px]/env:w-[20%]" />}
             </colgroup>
             <thead className="bg-theme-elevated text-theme-text-tertiary">
               <tr>
                 <th className="px-2 py-1.5 font-medium @min-[760px]/env:px-3 @min-[760px]/env:py-2">Variable</th>
                 <th className="px-2 py-1.5 font-medium @min-[760px]/env:px-3 @min-[760px]/env:py-2">
-                  <ExplainedLabel label="Value if restarted now" explanation="The value a newly started container would receive from the Pod's current configuration." />
+                  <ExplainedLabel label="Value" explanation="The value in the Pod's current configuration. A running container may still have an older value if its ConfigMap or Secret changed after it started." />
                 </th>
                 <th className="px-1 py-1.5 text-center font-medium @min-[760px]/env:px-3 @min-[760px]/env:py-2 @min-[760px]/env:text-left">
                   <ExplainedLabel label="Source" explanation="Where this variable gets its value." />
                 </th>
-                <th className="px-1 py-1.5 text-center font-medium @min-[760px]/env:px-3 @min-[760px]/env:py-2 @min-[760px]/env:text-left">
-                  <ExplainedLabel label="Status" explanation="Changes, access problems, or details that affect how to interpret this value." />
-                </th>
+                {showStatus && (
+                  <th className="px-1 py-1.5 text-center font-medium @min-[760px]/env:px-3 @min-[760px]/env:py-2 @min-[760px]/env:text-left">
+                    <ExplainedLabel label="Status" explanation="A change since the container started, or a problem reading this value." />
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody className="divide-y divide-theme-border">
@@ -199,14 +201,16 @@ export function ContainerEnvironmentSection({
                         <SourceCell row={row} namespace={namespace} onNavigate={onNavigate} />
                       </div>
                     </td>
-                    <td className="min-w-0 px-1 py-1.5 @min-[760px]/env:px-3 @min-[760px]/env:py-2">
-                      <div className="flex justify-center @min-[760px]/env:hidden">
-                        <CompactStatusCell row={row} />
-                      </div>
-                      <div className="hidden @min-[760px]/env:block">
-                        <StatusCell row={row} />
-                      </div>
-                    </td>
+                    {showStatus && (
+                      <td className="min-w-0 px-1 py-1.5 @min-[760px]/env:px-3 @min-[760px]/env:py-2">
+                        <div className="flex justify-center @min-[760px]/env:hidden">
+                          <CompactStatusCell row={row} />
+                        </div>
+                        <div className="hidden @min-[760px]/env:block">
+                          <StatusCell row={row} />
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 )
               })}
@@ -436,10 +440,10 @@ function describeSource(source: PodEnvironmentSource) {
     return `ConfigMap/${source.name} stores non-sensitive configuration${source.key ? `; this value uses its ${source.key} key` : ''}.`
   }
   if (source.kind === 'Pod') {
-    return `Comes from the Pod itself${source.key ? ` (${source.key})` : ''}, such as its name, namespace, IP, or assigned node.`
+    return `Comes from the Pod itself${source.key ? ` (${source.key})` : ''}, such as its name, namespace, IP, or assigned node. The running container read this value when it started.`
   }
   if (source.kind === 'Container resources') {
-    return `Calculated from a container's CPU or memory request or limit${source.key ? ` (${source.key})` : ''}.`
+    return `Calculated from a container's CPU or memory request or limit${source.key ? ` (${source.key})` : ''}. The running container read this value when it started.`
   }
   if (source.kind === 'Variable') return `Uses the earlier ${source.variable} environment variable.`
   return `Value source: ${source.kind}.`
@@ -463,10 +467,6 @@ function CompactStatusCell({ row }: { row: PodEnvironmentRow }) {
   if (row.state === 'denied') return <CompactStatusBadge label="Access needed" explanation={row.message} severity="info" icon={<LockKeyhole className="h-3.5 w-3.5" aria-hidden />} />
   if (row.state === 'missing') return <CompactStatusBadge label="Missing" explanation={row.message} severity="warning" icon={<CircleAlert className="h-3.5 w-3.5" aria-hidden />} />
   if (row.state === 'unavailable') return <CompactStatusBadge label="Unavailable" explanation={row.message} severity="neutral" icon={<CircleOff className="h-3.5 w-3.5" aria-hidden />} />
-  if (row.currentPodValue) {
-    const explanation = row.message || 'Radar is showing the Pod value now. The running container read this field when it started, so it may be different.'
-    return <CompactStatusBadge label="Current Pod value" explanation={explanation} tone="note" icon={<Clock3 className="h-3.5 w-3.5" aria-hidden />} />
-  }
   return null
 }
 
@@ -474,19 +474,17 @@ function CompactStatusBadge({
   label,
   explanation,
   severity,
-  tone,
   icon,
 }: {
   label: string
   explanation?: string
   severity?: 'warning' | 'info' | 'neutral'
-  tone?: 'note'
   icon: ReactNode
 }) {
   return (
     <Tooltip content={explanation || label} delay={150} position="left">
       <span className="inline-flex cursor-help" tabIndex={0}>
-        <Badge severity={severity} tone={tone} size="sm" className="!px-1">
+        <Badge severity={severity} size="sm" className="!px-1">
           {icon}
           <span className="sr-only">{label}</span>
         </Badge>
@@ -507,11 +505,11 @@ function StatusCell({ row }: { row: PodEnvironmentRow }) {
   if (row.state === 'denied') return <StatusBadge explanation={row.message}><Badge severity="info" size="sm">Access needed</Badge></StatusBadge>
   if (row.state === 'missing') return <StatusBadge explanation={row.message}><Badge severity="warning" size="sm">Missing</Badge></StatusBadge>
   if (row.state === 'unavailable') return <StatusBadge explanation={row.message}><Badge severity="neutral" size="sm">Unavailable</Badge></StatusBadge>
-  if (row.currentPodValue) {
-    const explanation = row.message || 'Radar is showing the Pod value now. The running container read this field when it started, so it may be different.'
-    return <StatusBadge explanation={explanation}><Badge tone="note" size="sm">Current Pod value</Badge></StatusBadge>
-  }
   return null
+}
+
+function hasEnvironmentStatus(row: PodEnvironmentRow) {
+  return Boolean(row.evidence) || row.state === 'denied' || row.state === 'missing' || row.state === 'unavailable'
 }
 
 function StatusBadge({ explanation, children }: { explanation?: string; children: ReactNode }) {

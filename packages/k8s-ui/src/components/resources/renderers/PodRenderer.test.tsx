@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import { PodRenderer } from './PodRenderer'
+import { ContainerEnvironmentSection } from './ContainerEnvironmentSection'
 import { resolvedEnvFromKey } from '../../../utils/env-from'
 import type { ResolvedEnvFrom } from '../../../types'
 import type { PodEnvironmentResponse } from '../../../types'
@@ -80,16 +81,52 @@ describe('PodRenderer resolved environment', () => {
     expect(html).toContain('2 variables')
     expect(html).toContain('1 from Secrets')
     expect(html).toContain('Secret values stay hidden until you reveal them.')
-    expect(html).toContain('Value if restarted now')
+    expect(html).not.toContain('Value if restarted now')
     expect(html).toContain('Only variables declared on the Pod are shown.')
     expect(html).toContain('Secret<!-- -->/<!-- -->shared')
     expect(html).toContain('@container/env')
     expect(html).toContain('table-fixed')
-    expect(html).toContain('w-[40%]')
+    expect(html).toContain('w-[44%]')
     expect(html).not.toContain('overflow-x-auto')
     expect(html).not.toContain('space-y-2.5 px-3 py-3 text-xs')
     expect(html).not.toContain('title=')
     expect(html).not.toContain('sentinel-secret-value')
+  })
+
+  it('only allocates a status column when a row needs attention', () => {
+    const environment: PodEnvironmentResponse = {
+      containers: [{
+        name: 'api',
+        role: 'container',
+        rows: [{ name: 'PUBLIC_URL', value: 'https://example.com', state: 'resolved', source: { kind: 'Direct' } }],
+      }],
+      coverage: {},
+    }
+    const render = (value: PodEnvironmentResponse) => renderToString(
+      <ContainerEnvironmentSection
+        environment={value}
+        namespace="default"
+        onCopy={() => undefined}
+        copied={null}
+      />,
+    )
+
+    const normal = render(environment)
+    expect(normal).toContain('w-[44%]')
+    expect(normal).not.toContain('>Status</span>')
+
+    const changed = render({
+      ...environment,
+      containers: [{
+        ...environment.containers[0],
+        rows: [{
+          ...environment.containers[0].rows[0],
+          evidence: { kind: 'modified', changedAt: '2026-08-02T00:00:00Z', message: 'Changed after the container started.' },
+        }],
+      }],
+    })
+    expect(changed).toContain('w-[40%]')
+    expect(changed).toContain('>Status</span>')
   })
 })
 
