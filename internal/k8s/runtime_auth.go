@@ -382,6 +382,13 @@ func defaultRuntimeAuthEndpointProbe(ctx context.Context, config *rest.Config) e
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
+		// A TLS alert IS a response from the endpoint: an mTLS-terminating
+		// proxy (Teleport, nginx with client verification) rejects this
+		// credential-free probe at the handshake, and treating that as
+		// unreachable would veto every demotion behind such a proxy forever.
+		if strings.Contains(strings.ToLower(err.Error()), "remote error: tls:") {
+			return nil
+		}
 		return err
 	}
 	_ = resp.Body.Close()

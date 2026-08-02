@@ -271,6 +271,46 @@ func TestClassifyError(t *testing.T) {
 			want: "config",
 		},
 		{
+			name: "mtls proxy rejecting client cert is tls",
+			err:  `failed to connect to cluster: Get "https://10.0.0.1:6443/version": remote error: tls: bad certificate`,
+			want: "tls",
+		},
+		{
+			name: "mtls proxy requiring client cert is tls",
+			err:  `Get "https://10.0.0.1:6443/version": remote error: tls: certificate required`,
+			want: "tls",
+		},
+		{
+			name: "mtls proxy unknown certificate is tls",
+			err:  `Get "https://teleport.example.com/version": remote error: tls: unknown certificate authority`,
+			want: "tls",
+		},
+		{
+			name: "oidc refresh token expired is auth",
+			err:  `Get "https://api.example.com/version": failed to refresh token: oauth2: cannot fetch token: 400 Bad Request Response: {"error":"invalid_grant","error_description":"Token is not active"}`,
+			want: "auth",
+		},
+		{
+			name: "oidc no refresh token is auth",
+			err:  "No valid id-token, and cannot refresh without refresh-token",
+			want: "auth",
+		},
+		{
+			name: "exec plugin cert path without wrapper is auth",
+			err:  `Get "https://teleport.example.com/version": exec: executable tsh failed with exit code 1`,
+			want: "auth",
+		},
+		{
+			name: "unreadable token file is auth",
+			err:  `failed to read token file "/var/run/secrets/kubernetes.io/serviceaccount/token": open /var/run/secrets/kubernetes.io/serviceaccount/token: no such file or directory`,
+			want: "auth",
+		},
+		{
+			name: "missing auth provider plugin is config",
+			err:  `no Auth Provider found for name "oidc"`,
+			want: "config",
+		},
+		{
 			name: "unknown",
 			err:  "something novel happened",
 			want: "unknown",
@@ -321,6 +361,14 @@ func TestClassifyErrorTypedErrors(t *testing.T) {
 			name: "dns error is network",
 			err:  &url.Error{Op: "Get", URL: "https://cluster.example", Err: &net.DNSError{Err: "no such host", Name: "cluster.example"}},
 			want: "network",
+		},
+		{
+			name: "url-wrapped unrecognized roundtripper failure stays unknown",
+			// http.Client wraps EVERYTHING a RoundTripper returns in url.Error,
+			// and the RoundTripper chain is the credential chain — an unknown
+			// credential failure must not earn a confident "network" verdict.
+			err:  &url.Error{Op: "Get", URL: "https://cluster.example/version", Err: errors.New("novel credential provider failure")},
+			want: "unknown",
 		},
 		{
 			name: "url-wrapped exec credential failure is auth",

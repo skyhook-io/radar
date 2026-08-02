@@ -187,7 +187,7 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 
 	obj, err := k8s.FetchResource(cache, kindNorm, input.Namespace, input.Name)
@@ -388,7 +388,7 @@ func handleGitOpsDiagnose(ctx context.Context, input diagnoseInput, canonicalKin
 	}
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 	u, err := cache.GetDynamicWithGroup(ctx, canonicalKind, input.Namespace, input.Name, group)
 	if err != nil {

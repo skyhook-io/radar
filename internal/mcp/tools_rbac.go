@@ -182,7 +182,7 @@ func handleGetSubjectPermissions(ctx context.Context, _ *mcp.CallToolRequest, in
 
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 
 	// Build the index inline. The HTTP handler memoizes a singleton; MCP

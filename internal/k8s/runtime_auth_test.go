@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
@@ -992,6 +993,24 @@ func TestRuntimeAuthHungPluginTimeoutWithoutExecAuthStaysConnected(t *testing.T)
 
 	if got := GetConnectionStatus().State; got != StateConnected {
 		t.Fatalf("connection state = %q, want %q (plugin-timeout rule is exec-auth only)", got, StateConnected)
+	}
+}
+
+func TestDefaultRuntimeAuthEndpointProbeTreatsTLSAlertAsReachable(t *testing.T) {
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	server.TLS = &tls.Config{ClientAuth: tls.RequireAndVerifyClientCert}
+	server.StartTLS()
+	t.Cleanup(server.Close)
+
+	// The credential-free probe fails the mTLS handshake with a TLS alert —
+	// which proves the endpoint is reachable, so the probe must report nil or
+	// every demotion behind an mTLS proxy would be vetoed as inconclusive.
+	err := defaultRuntimeAuthEndpointProbe(context.Background(), &rest.Config{
+		Host:            server.URL,
+		TLSClientConfig: rest.TLSClientConfig{Insecure: true},
+	})
+	if err != nil {
+		t.Fatalf("probe against mTLS-required endpoint = %v, want nil (TLS alert proves reachability)", err)
 	}
 }
 

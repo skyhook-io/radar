@@ -626,7 +626,7 @@ type issuesInput struct {
 func handleGetDashboard(ctx context.Context, req *mcp.CallToolRequest, input dashboardInput) (*mcp.CallToolResult, any, error) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 
 	// Dashboard summary doesn't currently take a multi-namespace input, so we
@@ -746,7 +746,7 @@ type topResourcesResponseMCP struct {
 func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input listResourcesInput) (*mcp.CallToolResult, any, error) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 
 	kind := strings.ToLower(input.Kind)
@@ -921,7 +921,7 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, g
 func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getResourceInput) (*mcp.CallToolResult, any, error) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 
 	kind := strings.ToLower(input.Kind)
@@ -1622,7 +1622,7 @@ func resolveEventTypeFilter(t string) (string, error) {
 func handleGetEvents(ctx context.Context, req *mcp.CallToolRequest, input eventsInput) (*mcp.CallToolResult, any, error) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 
 	eventLister := cache.Events()
@@ -1738,7 +1738,7 @@ func handleGetPodLogs(ctx context.Context, req *mcp.CallToolRequest, input podLo
 
 	clientset := k8s.ClientFromContext(ctx)
 	if clientset == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 
 	tailLines := int64(200)
@@ -1938,7 +1938,7 @@ type podLogsResponseMCP struct {
 func handleListNamespaces(ctx context.Context, req *mcp.CallToolRequest, input struct{}) (*mcp.CallToolResult, any, error) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 
 	lister := cache.Namespaces()
@@ -2715,7 +2715,7 @@ func countResources(cache *k8s.ResourceCache, namespace string, d *mcpDashboard,
 func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesInput) (*mcp.CallToolResult, any, error) {
 	provider := issues.NewCacheProvider()
 	if provider == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 	var allowedNamespaces []string
 	if input.Namespace != "" {
@@ -2986,7 +2986,7 @@ func mcpSearchSecretsRBAC(ctx context.Context, scanNamespaces []string) (decisio
 func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInput) (*mcp.CallToolResult, any, error) {
 	provider := search.NewCacheProvider()
 	if provider == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 	query := input.Query
 	if query == "" {

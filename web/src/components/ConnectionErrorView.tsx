@@ -157,8 +157,9 @@ const errorHints: Record<string, { title: string; hints: string[] }> = {
   tls: {
     title: 'Certificate Error',
     hints: [
-      'Radar reached the Kubernetes API, but could not verify its TLS certificate',
-      'Check the kubeconfig cluster server hostname and certificate-authority settings',
+      'Radar reached the Kubernetes API, but the TLS handshake failed',
+      'If the error mentions "bad certificate" or "certificate required", the cluster rejected Radar\'s client certificate — it may have expired (kubeadm certs expire after a year). Renew it (e.g. kubeadm certs renew) or re-download the kubeconfig',
+      'Otherwise check the kubeconfig cluster server hostname and certificate-authority settings',
       'If this cluster intentionally uses a private CA, refresh the kubeconfig for this context',
     ],
   },
@@ -382,8 +383,10 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
 
           {isAuth && (
             <p className="mt-4 text-xs text-theme-text-tertiary">
-              Radar re-checks in the background and reconnects once credentials are refreshed.
-              Use Retry Connection to check immediately.
+              Radar re-checks in the background and usually reconnects on its own once
+              credentials are refreshed. Use Retry Connection to check immediately —
+              always needed if you replaced the token or certificate inside the
+              kubeconfig file itself.
             </p>
           )}
         </div>

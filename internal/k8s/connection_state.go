@@ -5,7 +5,6 @@ import (
 	"crypto/x509"
 	"errors"
 	"net"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -233,13 +232,26 @@ func isAuthErrorMessage(lower string) bool {
 		"exec credential",
 		"exec plugin",
 		"gke-gcloud-auth-plugin",
+		// client-go's in-tree oidc auth provider returns refresh failures RAW
+		// from RoundTrip (no "getting credentials:" wrapper) — Keycloak/Dex/
+		// IBM IKS kubeconfigs die here. "invalid_grant" is the RFC 6749 code
+		// every IdP emits for an expired/revoked refresh token.
+		"failed to refresh token",
+		"invalid_grant",
+		"cannot refresh without refresh-token",
+		// The exec plugin's TLS client-certificate path (e.g. tsh) fails
+		// without the "getting credentials:" wrapper; this phrasing is
+		// produced only by client-go's exec plugin runner.
+		"exec: executable ",
+		"failed to read token file",
+		"read empty token from file",
 	}
 	for _, marker := range authMarkers {
 		if strings.Contains(lower, marker) {
 			return true
 		}
 	}
-	return strings.Contains(lower, "unable to connect to the server") && strings.Contains(lower, "oauth2")
+	return false
 }
 
 func isRBACErrorMessage(lower string) bool {
@@ -263,6 +275,7 @@ func isConfigErrorMessage(lower string) bool {
 		"k8s config not initialized",
 		"kubernetes client is not initialized",
 		"kubernetes discovery client is not initialized",
+		"no auth provider found for name",
 	}
 	for _, marker := range configMarkers {
 		if strings.Contains(lower, marker) {
@@ -278,7 +291,17 @@ func isTLSCertificateMessage(lower string) bool {
 		strings.Contains(lower, "certificate is valid for") ||
 		strings.Contains(lower, "cannot validate certificate") ||
 		strings.Contains(lower, "certificate has expired") ||
-		strings.Contains(lower, "certificate is not yet valid")
+		strings.Contains(lower, "certificate is not yet valid") ||
+		// TLS alerts rejecting OUR certificate come from mTLS-terminating
+		// proxies in front of the cluster (Teleport, nginx/HAProxy with
+		// client verification) — kube-apiserver itself never sends these; it
+		// uses RequestClientCert and returns 401 instead. Without these
+		// markers the alerts fall through to "network".
+		strings.Contains(lower, "tls: bad certificate") ||
+		strings.Contains(lower, "tls: certificate required") ||
+		strings.Contains(lower, "tls: expired certificate") ||
+		strings.Contains(lower, "tls: unknown certificate") ||
+		strings.Contains(lower, "tls: revoked certificate")
 }
 
 // UpdateConnectionProgress updates the progress message while connecting
@@ -346,10 +369,12 @@ func ClassifyError(err error) string {
 	if errors.As(err, &opErr) {
 		return "network"
 	}
-	var urlErr *url.Error
-	if errors.As(err, &urlErr) {
-		return "network"
-	}
+	// Deliberately NO *url.Error → "network" mapping: genuine transport
+	// failures unwrap into the typed branches above, so the only errors a
+	// bare url.Error match would catch are RoundTripper-level failures — and
+	// in a Kubernetes client the RoundTripper chain IS the credential chain.
+	// An unrecognized credential error must classify "unknown", not earn a
+	// confidently wrong "network" verdict.
 
 	// Network errors
 	if isTransportNetworkMessage(errLower) {

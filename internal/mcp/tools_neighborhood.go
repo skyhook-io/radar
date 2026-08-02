@@ -45,7 +45,7 @@ type neighborhoodSubgraphMCP struct {
 func handleGetNeighborhood(ctx context.Context, req *mcp.CallToolRequest, input getNeighborhoodInput) (*mcp.CallToolResult, any, error) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 	if input.Kind == "" || input.Name == "" {
 		return nil, nil, fmt.Errorf("kind and name are required")
