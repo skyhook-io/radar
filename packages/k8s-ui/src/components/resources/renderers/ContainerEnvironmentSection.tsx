@@ -5,6 +5,7 @@ import {
   CircleOff,
   Copy,
   Cpu,
+  Equal,
   Eye,
   EyeOff,
   FileCode2,
@@ -12,7 +13,6 @@ import {
   KeyRound,
   List,
   LockKeyhole,
-  Pencil,
   Variable,
 } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -323,7 +323,7 @@ function compactSourceIcon(kind: string) {
   if (kind === 'Pod') return <Box className={className} aria-hidden />
   if (kind === 'Container resources') return <Cpu className={className} aria-hidden />
   if (kind === 'Variable') return <Variable className={className} aria-hidden />
-  return <Pencil className={className} aria-hidden />
+  return <Equal className={className} aria-hidden />
 }
 
 function compactSourceExplanation(row: PodEnvironmentRow) {

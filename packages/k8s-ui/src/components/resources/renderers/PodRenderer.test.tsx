@@ -115,6 +115,8 @@ describe('PodRenderer resolved environment', () => {
     const normal = render(environment)
     expect(normal).toContain('w-[44%]')
     expect(normal).not.toContain('>Status</span>')
+    expect(normal).toContain('lucide-equal')
+    expect(normal).not.toContain('lucide-pencil')
 
     const changed = render({
       ...environment,
