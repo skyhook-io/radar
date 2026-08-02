@@ -474,6 +474,62 @@ export interface ResolvedEnvFromEntry {
 export type ResolvedEnvFromKey = `configmap:${string}` | `secret:${string}`
 export type ResolvedEnvFrom = Partial<Record<ResolvedEnvFromKey, ResolvedEnvFromEntry>>
 
+export type PodEnvironmentValueState = 'resolved' | 'masked' | 'unavailable' | 'missing' | 'denied'
+
+export interface PodEnvironmentSource {
+  kind: string
+  name?: string
+  key?: string
+  variable?: string
+}
+
+export interface PodEnvironmentEvidence {
+  kind: 'modified' | 'removed' | 'added'
+  changedAt: string
+  message?: string
+}
+
+export interface PodEnvironmentRow {
+  name: string
+  value?: string
+  state: PodEnvironmentValueState
+  sensitive?: boolean
+  source: PodEnvironmentSource
+  dependencies?: PodEnvironmentSource[]
+  shadowedSources?: PodEnvironmentSource[]
+  message?: string
+  optional?: boolean
+  missingImpact?: 'startupBlocked' | 'restartBlocked'
+  runtimeDependent?: boolean
+  currentPodValue?: boolean
+  placeholder?: boolean
+  evidence?: PodEnvironmentEvidence
+}
+
+export interface PodEnvironmentContainer {
+  name: string
+  role: 'container' | 'init' | 'sidecar'
+  rows: PodEnvironmentRow[]
+  truncated?: boolean
+}
+
+export interface PodEnvironmentResponse {
+  containers: PodEnvironmentContainer[]
+  coverage: {
+    observedSince?: string
+    degraded?: boolean
+    degradedReason?: string
+    saturated?: boolean
+  }
+  partial?: boolean
+  truncated?: boolean
+}
+
+export interface PodEnvironmentRevealResponse {
+  value: string
+  encoding: 'utf8' | 'base64'
+}
+
 // Resource reference (for relationships)
 export interface ResourceRef {
   kind: string

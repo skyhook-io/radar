@@ -312,6 +312,30 @@ func TestStaleSecretEnvExposureAndFalsePositiveMatrix(t *testing.T) {
 		}
 	})
 
+	t.Run("missing required key is left to the structural issue", func(t *testing.T) {
+		pod := staleSecretEnvPod("key-ref-removed-issue", startedAt, true, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
+		secretAfterRemoval := secret.DeepCopy()
+		delete(secretAfterRemoval.Data, "password")
+		cache := envHistoryTestCache(t, pod, secretAfterRemoval)
+		removed := envHistoryEvent(changedAt, "Secret", "shop", "db-conn", "data (removed keys)", []string{"password"}, nil)
+		checks := findStaleSecretEnvChecks(cache, []*corev1.Pod{pod}, []timeline.TimelineEvent{removed})
+		if len(checks) != 1 {
+			t.Fatalf("drawer evidence should retain the observed removal: %+v", checks)
+		}
+		changes := latestPodEnvSourceChanges([]timeline.TimelineEvent{removed}, nil)
+		if issueChecks := omitMissingRequiredSecretKeyChecks(cache, pod, checks, changes); len(issueChecks) != 0 {
+			t.Fatalf("stale-value issue would duplicate the missing-key issue: %+v", issueChecks)
+		}
+
+		optionalPod := pod.DeepCopy()
+		optionalPod.Name = "key-ref-removed-optional"
+		optional := true
+		optionalPod.Spec.Containers[0].Env[0].ValueFrom.SecretKeyRef.Optional = &optional
+		if issueChecks := omitMissingRequiredSecretKeyChecks(cache, optionalPod, checks, changes); len(issueChecks) != 1 {
+			t.Fatalf("optional key removal remains behavioral drift, got %+v", issueChecks)
+		}
+	})
+
 	t.Run("different key is ignored", func(t *testing.T) {
 		pod := staleSecretEnvPod("other-key", startedAt, false, secretKeyEnv("DB_HOST", "db-conn", "host"))
 		cache := envHistoryTestCache(t, pod, secret)

@@ -48,6 +48,8 @@ import type {
   GitOpsInsightRef,
   GitOpsResourceDiff,
   ArgoRevisionMetadata,
+  PodEnvironmentResponse,
+  PodEnvironmentRevealResponse,
 } from '../types'
 import type { GitOpsOperationResponse } from '../types/gitops'
 import { getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
@@ -2312,6 +2314,34 @@ export function usePodMetrics(
     refetchOnReconnect: "always",
     retry: retryMetricsQuery,
   });
+}
+
+export function usePodEnvironment(namespace: string, podName: string, enabled = true) {
+  return useQuery<PodEnvironmentResponse>({
+    queryKey: ['pod-environment', namespace, podName],
+    queryFn: () => fetchJSON(
+      `/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(podName)}/environment`,
+    ),
+    enabled: enabled && Boolean(namespace && podName),
+    staleTime: 10000,
+  })
+}
+
+export function useRevealPodEnvironment() {
+  return useMutation<
+    PodEnvironmentRevealResponse,
+    Error,
+    { namespace: string; podName: string; container: string; variable: string }
+  >({
+    mutationFn: ({ namespace, podName, container, variable }) => fetchJSON(
+      `/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(podName)}/environment/reveal`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ container, variable }),
+      },
+    ),
+  })
 }
 
 // Fetch metrics for a specific node

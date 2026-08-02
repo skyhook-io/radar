@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import { PodRenderer } from './PodRenderer'
+import { ContainerEnvironmentSection } from './ContainerEnvironmentSection'
 import { resolvedEnvFromKey } from '../../../utils/env-from'
 import type { ResolvedEnvFrom } from '../../../types'
+import type { PodEnvironmentResponse } from '../../../types'
 
 const pod = {
   metadata: { name: 'api', namespace: 'default' },
@@ -49,6 +51,231 @@ describe('PodRenderer envFrom expansion', () => {
     expect(html).toContain('Secret')
     expect(html).toContain('API_TOKEN')
     expect(html).not.toContain('PUBLIC_URL<!-- -->=')
+  })
+})
+
+describe('PodRenderer resolved environment', () => {
+  it('explains Secret coverage without placing Secret values in the initial markup', () => {
+    const environment: PodEnvironmentResponse = {
+      containers: [{
+        name: 'api',
+        role: 'container',
+        rows: [
+          { name: 'PUBLIC_URL', value: 'https://example.com', state: 'resolved', source: { kind: 'ConfigMap', name: 'shared', key: 'PUBLIC_URL' } },
+          { name: 'API_TOKEN', state: 'masked', sensitive: true, source: { kind: 'Secret', name: 'shared', key: 'API_TOKEN' } },
+        ],
+      }],
+      coverage: { observedSince: '2026-08-02T00:00:00Z' },
+    }
+
+    const html = renderToString(
+      <PodRenderer
+        data={pod}
+        onCopy={() => undefined}
+        copied={null}
+        environment={environment}
+        onRevealEnvironment={async () => ({ value: 'sentinel-secret-value', encoding: 'utf8' })}
+      />,
+    )
+
+    expect(html).toContain('2 variables')
+    expect(html).toContain('1 from Secrets')
+    expect(html).toContain('Secret values stay hidden until you reveal them.')
+    expect(html).not.toContain('Value if restarted now')
+    expect(html).toContain('Only variables declared on the Pod are shown.')
+    expect(html).not.toContain('Changes observed')
+    expect(html).toContain('Secret<!-- -->/<!-- -->shared')
+    expect(html).toContain('flex-wrap items-center gap-x-1.5 gap-y-0.5')
+    expect(html).toContain('@container/env')
+    expect(html).toContain('table-fixed')
+    expect(html).toContain('w-[46%]')
+    expect(html).toContain('table-divide-subtle')
+    expect(html).not.toContain('overflow-x-auto')
+    expect(html).not.toContain('space-y-2.5 px-3 py-3 text-xs')
+    expect(html).not.toContain('title=')
+    expect(html).not.toContain('sentinel-secret-value')
+  })
+
+  it('only allocates a status column when a row needs attention', () => {
+    const environment: PodEnvironmentResponse = {
+      containers: [{
+        name: 'api',
+        role: 'container',
+        rows: [{ name: 'PUBLIC_URL', value: 'https://example.com', state: 'resolved', source: { kind: 'Direct' } }],
+      }],
+      coverage: {},
+    }
+    const render = (value: PodEnvironmentResponse) => renderToString(
+      <ContainerEnvironmentSection
+        environment={value}
+        namespace="default"
+        onCopy={() => undefined}
+        copied={null}
+      />,
+    )
+
+    const normal = render(environment)
+    expect(normal).toContain('w-[46%]')
+    expect(normal).not.toContain('>Status</span>')
+    expect(normal).toContain('lucide-equal')
+    expect(normal).not.toContain('lucide-pencil')
+
+    const optional = render({
+      ...environment,
+      containers: [{
+        ...environment.containers[0],
+        rows: [{ name: 'FEATURE', state: 'missing', optional: true, source: { kind: 'ConfigMap', name: 'settings', key: 'feature' }, message: 'Optional key feature is absent.' }],
+      }],
+    })
+    expect(optional).toContain('Not set')
+    expect(optional).toContain('w-[46%]')
+    expect(optional).not.toContain('>Status</span>')
+    expect(optional).toContain('!cursor-help')
+    expect(optional).not.toContain('<button class="badge-sm')
+
+    const navigable = renderToString(
+      <ContainerEnvironmentSection
+        environment={{
+          ...environment,
+          containers: [{
+            ...environment.containers[0],
+            rows: [{ name: 'PUBLIC_URL', value: 'https://example.com', state: 'resolved', source: { kind: 'ConfigMap', name: 'settings', key: 'url' } }],
+          }],
+        }}
+        namespace="default"
+        onNavigate={() => undefined}
+        onCopy={() => undefined}
+        copied={null}
+      />,
+    )
+    expect(navigable).toContain('cursor-pointer')
+    expect(navigable).toContain('<button class="badge-sm')
+
+    const runtime = render({
+      ...environment,
+      containers: [{
+        ...environment.containers[0],
+        rows: [{ name: 'RUNTIME_VALUE', value: '$(SERVICE_HOST)', state: 'unavailable', runtimeDependent: true, source: { kind: 'Direct' } }],
+      }],
+    })
+    expect(runtime).toContain('Set at startup')
+    expect(runtime).toContain('w-[46%]')
+    expect(runtime).not.toContain('>Status</span>')
+
+    const restartBlocked = render({
+      ...environment,
+      containers: [{
+        ...environment.containers[0],
+        rows: [{
+          name: 'REQUIRED',
+          state: 'missing',
+          missingImpact: 'restartBlocked',
+          source: { kind: 'ConfigMap', name: 'settings', key: 'required' },
+          message: 'The running container cannot restart while this is missing.',
+          evidence: { kind: 'removed', changedAt: '2026-08-02T00:00:00Z', message: 'Removed after the container started.' },
+        }],
+      }],
+    })
+    expect(restartBlocked).toContain('Restart blocked')
+    expect(restartBlocked).not.toContain('>Removed after start</span>')
+    expect(restartBlocked).toContain('>Status</span>')
+
+    const startupBlocked = render({
+      ...environment,
+      containers: [{
+        ...environment.containers[0],
+        rows: [{ name: 'REQUIRED', state: 'missing', missingImpact: 'startupBlocked', source: { kind: 'Secret', name: 'credentials', key: 'required' } }],
+      }],
+    })
+    expect(startupBlocked).toContain('Prevents start')
+    expect(startupBlocked).toContain('>Status</span>')
+
+    const limitedHistory = render({
+      ...environment,
+      coverage: { degraded: true, degradedReason: 'Change history is limited to this Radar session.', saturated: true },
+    })
+    expect(limitedHistory).toContain('Change history is limited to this Radar session.')
+    expect(limitedHistory).toContain('Some recent changes may not be shown.')
+
+    const changed = render({
+      ...environment,
+      containers: [{
+        ...environment.containers[0],
+        rows: [{
+          ...environment.containers[0].rows[0],
+          evidence: { kind: 'modified', changedAt: '2026-08-02T00:00:00Z', message: 'Changed after the container started.' },
+        }],
+      }],
+    })
+    expect(changed).toContain('w-[42%]')
+    expect(changed).toContain('>Status</span>')
+  })
+
+  it('selects the first regular container instead of an init container', () => {
+    const html = renderToString(
+      <ContainerEnvironmentSection
+        environment={{
+          containers: [
+            { name: 'migrate', role: 'init', rows: [{ name: 'INIT_ONLY', value: 'yes', state: 'resolved', source: { kind: 'Direct' } }] },
+            { name: 'api', role: 'container', rows: [{ name: 'API_ONLY', value: 'yes', state: 'resolved', source: { kind: 'Direct' } }] },
+          ],
+          coverage: {},
+        }}
+        namespace="default"
+        onCopy={() => undefined}
+        copied={null}
+      />,
+    )
+
+    expect(html).toContain('API_ONLY')
+    expect(html).not.toContain('INIT_ONLY')
+    expect(html).toContain('aria-selected="false"')
+    expect(html).toContain('aria-selected="true"')
+  })
+
+  it('offers copy for concrete values and confirms success', () => {
+    const environment: PodEnvironmentResponse = {
+      containers: [{
+        name: 'api',
+        role: 'container',
+        rows: [{ name: 'PUBLIC_URL', value: 'https://example.com', state: 'resolved', source: { kind: 'Direct' } }],
+      }],
+      coverage: {},
+    }
+    const render = (copied: string | null) => renderToString(
+      <ContainerEnvironmentSection
+        environment={environment}
+        namespace="default"
+        onCopy={() => undefined}
+        copied={copied}
+      />,
+    )
+
+    const ready = render(null)
+    expect(ready).toContain('group-hover/value:opacity-100')
+    expect(ready).toContain('aria-label="Copy value"')
+    expect(ready).toContain('lucide-copy')
+
+    const confirmed = render('api\u0000PUBLIC_URL')
+    expect(confirmed).toContain('aria-label="Value copied"')
+    expect(confirmed).toContain('lucide-check')
+    expect(confirmed).toContain('text-green-400')
+  })
+
+  it('keeps the declaration view when resolved sources contain no usable variables', () => {
+    const html = renderToString(
+      <PodRenderer
+        data={pod}
+        onCopy={() => undefined}
+        copied={null}
+        environment={{ containers: [{ name: 'api', role: 'container', rows: [] }], coverage: {} }}
+      />,
+    )
+
+    expect(html).toContain('Environment Variables')
+    expect(html).toContain('ConfigMap')
+    expect(html).toContain('Secret')
+    expect(html).toContain('(all keys)')
   })
 })
 

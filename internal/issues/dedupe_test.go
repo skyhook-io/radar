@@ -164,6 +164,17 @@ func TestStructuralRootOverSymptom_Phase1(t *testing.T) {
 		}
 	})
 
+	t.Run("missing required key folds container_waiting on same pod", func(t *testing.T) {
+		missing := Issue{Source: SourceMissingRef, Kind: "Pod", Namespace: "ns", Name: "web-abc", Owner: dep,
+			Category: issuesapi.CategoryMissingConfigRef, Reason: "Missing ConfigMap key", Severity: SeverityCritical}
+		waiting := Issue{Source: SourceProblem, Kind: "Pod", Namespace: "ns", Name: "web-abc", Owner: dep,
+			Category: issuesapi.CategoryContainerWaiting, Reason: "CreateContainerConfigError", Severity: SeverityCritical}
+		out := dedupeContainerWaitingOverMissingRef([]Issue{missing, waiting})
+		if has(out, SourceProblem, issuesapi.CategoryContainerWaiting, "web-abc") || !has(out, SourceMissingRef, issuesapi.CategoryMissingConfigRef, "web-abc") {
+			t.Fatalf("missing-key root should replace container-waiting symptom, got %+v", out)
+		}
+	})
+
 	t.Run("image_pull_failed is NOT folded under a missing imagePullSecret", func(t *testing.T) {
 		// We deliberately don't fold image_pull_failed: an ImagePullBackOff
 		// alongside a missing pull secret is usually an unrelated pull error

@@ -12,10 +12,17 @@ import {
 import { resolvedEnvFromKey } from '../../../utils/env-from'
 import { detectBlastRadius, rulePermissivenessScore } from '../../../utils/rbac-blast-radius'
 import { RBACErrorSection, isRBACUnavailable } from './RBACErrorSection'
-import type { ResolvedEnvFrom, RBACSubjectResponse, RBACPolicyRule } from '../../../types'
+import type {
+  PodEnvironmentResponse,
+  PodEnvironmentRevealResponse,
+  ResolvedEnvFrom,
+  RBACSubjectResponse,
+  RBACPolicyRule,
+} from '../../../types'
 import { Tooltip } from '../../ui/Tooltip'
 import { MetricsChart } from '../../ui/MetricsChart'
 import { MetricsUnavailableNotice } from './MetricsUnavailableNotice'
+import { ContainerEnvironmentSection } from './ContainerEnvironmentSection'
 
 function parseValidDate(dateStr: string): Date | null {
   const d = new Date(dateStr)
@@ -89,6 +96,10 @@ interface PodRendererProps {
    * When provided, expands ConfigMap/Secret keys inline instead of showing "(all keys)".
    */
   resolvedEnvFrom?: ResolvedEnvFrom
+  environment?: PodEnvironmentResponse
+  environmentLoading?: boolean
+  environmentError?: Error | null
+  onRevealEnvironment?: (container: string, variable: string) => Promise<PodEnvironmentRevealResponse>
   /**
    * RBAC reverse-lookup for the Pod's ServiceAccount. Undefined means the host
    * didn't wire the fetch (Permissions section is omitted). Null means the
@@ -269,6 +280,10 @@ export function PodRenderer({
   renderImageBrowser,
   renderPodBrowser,
   resolvedEnvFrom,
+  environment,
+  environmentLoading,
+  environmentError,
+  onRevealEnvironment,
   rbacData,
   rbacLoading,
   rbacError,
@@ -277,6 +292,12 @@ export function PodRenderer({
   const containers = data.spec?.containers || []
   const initContainers = data.spec?.initContainers || []
   const initContainerStatuses = data.status?.initContainerStatuses || []
+  const hasEnvironmentDeclarations = [...initContainers, ...containers].some(
+    (container: any) => container.env?.length > 0 || container.envFrom?.length > 0,
+  )
+  const hasResolvedEnvironmentRows = environment?.containers.some(
+    container => container.rows.length > 0 || container.truncated,
+  ) ?? false
 
   const namespace = data.metadata?.namespace
   const podName = data.metadata?.name
@@ -732,7 +753,30 @@ export function PodRenderer({
       </Section>
 
       {/* Environment Variables */}
-      {[...initContainers, ...containers].some((c: any) => c.env?.length > 0 || c.envFrom?.length > 0) && (
+      {environment && hasResolvedEnvironmentRows && (
+        <ContainerEnvironmentSection
+          environment={environment}
+          namespace={namespace}
+          onNavigate={onNavigate}
+          onReveal={onRevealEnvironment}
+          onCopy={onCopy}
+          copied={copied}
+        />
+      )}
+      {hasEnvironmentDeclarations && environmentLoading && !environment && (
+        <Section title="Environment Variables" icon={List} defaultExpanded={false}>
+          <div className="text-xs text-theme-text-tertiary">Loading variable sources…</div>
+        </Section>
+      )}
+      {hasEnvironmentDeclarations && environmentError && !environment && (
+        <Section title="Environment Variables" icon={List} defaultExpanded={false}>
+          <div className="space-y-2 text-xs">
+            <p className="text-theme-text-secondary">Variable sources could not be loaded.</p>
+            <p className="text-theme-text-tertiary">{environmentError.message}</p>
+          </div>
+        </Section>
+      )}
+      {(!environment || !hasResolvedEnvironmentRows) && !environmentLoading && !environmentError && hasEnvironmentDeclarations && (
         <EnvVarsSection
           initContainers={initContainers}
           containers={containers}

@@ -1,10 +1,10 @@
 import { PodRenderer as BasePodRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/PodRenderer'
 import type { CopyHandler } from '@skyhook-io/k8s-ui/components/ui/drawer-components'
-import type { ResolvedEnvFrom } from '@skyhook-io/k8s-ui'
+import type { PodEnvironmentRevealResponse, ResolvedEnvFrom } from '@skyhook-io/k8s-ui'
 import { useNavigate } from 'react-router-dom'
 import { useOpenTerminal, useOpenLogs } from '../../dock'
 import { useCapabilitiesContext, useNamespacedCapabilities, useIsLocalDeployment } from '../../../contexts/CapabilitiesContext'
-import { getVisibleLiveMetrics, isLiveMetricsUnavailable, shouldFetchLiveMetrics, usePodMetrics, usePodMetricsHistory, usePrometheusResourceMetrics, usePrometheusStatus } from '../../../api/client'
+import { getVisibleLiveMetrics, isLiveMetricsUnavailable, shouldFetchLiveMetrics, usePodEnvironment, usePodMetrics, usePodMetricsHistory, usePrometheusResourceMetrics, usePrometheusStatus, useRevealPodEnvironment } from '../../../api/client'
 import { useRBACSubject } from '../../../api/rbac'
 import { podAwaitsScheduling } from '../../capacity/podDemandGate'
 import { PortForwardInlineButton } from '../../portforward/PortForwardButton'
@@ -23,6 +23,10 @@ interface PodRendererProps {
 export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, resolvedEnvFrom }: PodRendererProps) {
   const namespace = data.metadata?.namespace
   const podName = data.metadata?.name
+  const environmentEnabled = [...(data.spec?.initContainers ?? []), ...(data.spec?.containers ?? [])]
+    .some((container: any) => container.env?.length > 0 || container.envFrom?.length > 0)
+  const environmentQuery = usePodEnvironment(namespace ?? '', podName ?? '', environmentEnabled)
+  const revealEnvironment = useRevealPodEnvironment()
 
   const openTerminal = useOpenTerminal()
   const openLogsPanel = useOpenLogs()
@@ -86,6 +90,15 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
           : undefined
       }
       resolvedEnvFrom={resolvedEnvFrom}
+      environment={environmentQuery.data}
+      environmentLoading={environmentQuery.isLoading}
+      environmentError={environmentQuery.error as Error | null}
+      onRevealEnvironment={(container, variable): Promise<PodEnvironmentRevealResponse> => revealEnvironment.mutateAsync({
+        namespace: namespace ?? '',
+        podName: podName ?? '',
+        container,
+        variable,
+      })}
       rbacData={rbacData ?? null}
       rbacLoading={rbacLoading}
       rbacError={rbacError as Error | null}
