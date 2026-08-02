@@ -94,7 +94,7 @@ func (s *Server) handleRevealPodEnvironment(w http.ResponseWriter, r *http.Reque
 	}
 	pod, err := client.CoreV1().Pods(namespace).Get(r.Context(), name, metav1.GetOptions{})
 	if err != nil {
-		auditDetails.Outcome = "not-found"
+		auditDetails.Outcome = podEnvironmentReadOutcome(err)
 		s.writePodEnvironmentGetError(w, namespace, name, "Pod", err)
 		return
 	}
@@ -117,13 +117,10 @@ func (s *Server) handleRevealPodEnvironment(w http.ResponseWriter, r *http.Reque
 		s.writeError(w, http.StatusBadRequest, "environment variable is not Secret-backed")
 		return
 	}
-	if row.State == envresolve.ValueDenied {
-		s.writeError(w, http.StatusForbidden, row.Message)
-		return
-	}
 	if !available {
-		auditDetails.Outcome = "not-found"
-		s.writeError(w, http.StatusNotFound, "Secret-backed value is unavailable")
+		status, outcome, message := podEnvironmentRevealFailure(row)
+		auditDetails.Outcome = outcome
+		s.writeError(w, status, message)
 		return
 	}
 	encoding := "utf8"
@@ -391,5 +388,37 @@ func (s *Server) writePodEnvironmentGetError(w http.ResponseWriter, namespace, n
 	default:
 		log.Printf("[environment] Failed to read %s %s/%s: %v", kind, namespace, name, err)
 		s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to read %s", kind))
+	}
+}
+
+func podEnvironmentReadOutcome(err error) string {
+	switch {
+	case apierrors.IsForbidden(err), apierrors.IsUnauthorized(err):
+		return "denied"
+	case apierrors.IsNotFound(err):
+		return "not-found"
+	default:
+		return "unavailable"
+	}
+}
+
+func podEnvironmentRevealFailure(row envresolve.Row) (int, string, string) {
+	message := row.Message
+	switch row.State {
+	case envresolve.ValueDenied:
+		if message == "" {
+			message = "access to the Secret-backed value is required"
+		}
+		return http.StatusForbidden, "denied", message
+	case envresolve.ValueMissing:
+		if message == "" {
+			message = "Secret-backed value is missing"
+		}
+		return http.StatusNotFound, "not-found", message
+	default:
+		if message == "" {
+			message = "Secret-backed value is unavailable"
+		}
+		return http.StatusServiceUnavailable, "unavailable", message
 	}
 }

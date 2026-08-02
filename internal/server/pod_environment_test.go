@@ -9,7 +9,9 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -150,6 +152,44 @@ func TestLoadPodEnvironmentSourcesMarksUninspectedSourcesUnavailable(t *testing.
 	last := sources[envresolve.SourceID{Kind: "ConfigMap", Name: fmt.Sprintf("cm-%03d", maxPodEnvironmentSources)}]
 	if !truncated || last.State != envresolve.SourceUnavailable || !strings.Contains(last.Message, "not inspected") {
 		t.Fatalf("truncated source was misclassified: truncated=%v source=%+v", truncated, last)
+	}
+}
+
+func TestPodEnvironmentReadOutcomeMatchesHTTPErrorClass(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "forbidden", err: apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "api", fmt.Errorf("denied")), want: "denied"},
+		{name: "unauthorized", err: apierrors.NewUnauthorized("unauthorized"), want: "denied"},
+		{name: "not found", err: apierrors.NewNotFound(schema.GroupResource{Resource: "pods"}, "api"), want: "not-found"},
+		{name: "infrastructure", err: fmt.Errorf("transport failed"), want: "unavailable"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := podEnvironmentReadOutcome(test.err); got != test.want {
+				t.Fatalf("outcome = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestPodEnvironmentRevealFailureKeepsStatesDistinct(t *testing.T) {
+	tests := []struct {
+		state       envresolve.ValueState
+		wantStatus  int
+		wantOutcome string
+	}{
+		{state: envresolve.ValueDenied, wantStatus: 403, wantOutcome: "denied"},
+		{state: envresolve.ValueMissing, wantStatus: 404, wantOutcome: "not-found"},
+		{state: envresolve.ValueUnavailable, wantStatus: 503, wantOutcome: "unavailable"},
+	}
+	for _, test := range tests {
+		status, outcome, message := podEnvironmentRevealFailure(envresolve.Row{State: test.state})
+		if status != test.wantStatus || outcome != test.wantOutcome || message == "" {
+			t.Fatalf("state %q => status=%d outcome=%q message=%q", test.state, status, outcome, message)
+		}
 	}
 }
 
