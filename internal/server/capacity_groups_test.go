@@ -223,6 +223,47 @@ func TestCapacityResponsesFailClosedOnMidRequestContextSwitch(t *testing.T) {
 	}
 }
 
+// TestCapacityResponseMetaStampsFromCapturedIdentity pins property 2 of the
+// writeCapacityResponse invariant: the response's cluster naming comes from
+// the captured snapshot, never from a second read of the globals. The seam
+// returns a STABLE identity whose naming deliberately disagrees with the live
+// cluster state — the gate passes (capture == re-check), so the only way the
+// response can carry the seam's names is by stamping them from the capture.
+func TestCapacityResponseMetaStampsFromCapturedIdentity(t *testing.T) {
+	initCapacityContractDynamicState(t, true, true, capacityContractNodePool("general"))
+
+	previous := capacityClusterIdentityNow
+	t.Cleanup(func() { capacityClusterIdentityNow = previous })
+	capacityClusterIdentityNow = func() capacityClusterIdentity {
+		identity := previous()
+		identity.activeClusterContext = "captured-context"
+		identity.clusterName = "captured-cluster"
+		return identity
+	}
+
+	resp := get(t, "/api/capacity")
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", resp.StatusCode, body)
+	}
+	var decoded struct {
+		ClusterContext struct {
+			ContextName string `json:"contextName"`
+			ClusterName string `json:"clusterName"`
+		} `json:"clusterContext"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if decoded.ClusterContext.ContextName != "captured-context" || decoded.ClusterContext.ClusterName != "captured-cluster" {
+		t.Fatalf("clusterContext = %+v, want the CAPTURED identity's naming — a divergent value means the meta re-read the globals", decoded.ClusterContext)
+	}
+}
+
 func assertCapacityContextSwitchFailsClosed(t *testing.T, resp *http.Response) {
 	t.Helper()
 	defer resp.Body.Close()

@@ -45,15 +45,16 @@ type capacityActivityRequest struct {
 }
 
 func (s *Server) handleCapacityActivity(w http.ResponseWriter, r *http.Request) {
+	// Literally the first statement — ahead of the connection gate, cursor
+	// parsing, and the node-visibility check. Everything the handler does is
+	// downstream of this snapshot, so nothing can bind a cursor or an
+	// authorization to a cluster the response never describes. Activity builds
+	// its own result rather than using the shared loader, but it takes the
+	// same snapshot and the same gate.
+	identity := currentCapacityClusterIdentity()
 	if !s.requireConnected(w) {
 		return
 	}
-	// FIRST statement, ahead of cursor parsing and the node-visibility check:
-	// both of those read cluster state, so a snapshot taken after them could
-	// validate a cursor or an authorization against a cluster the response
-	// never describes. Activity builds its own result rather than using the
-	// shared loader, but it takes the same snapshot and the same gate.
-	identity := currentCapacityClusterIdentity()
 	result := capacityLoadResult{identity: identity}
 	request, err := parseCapacityActivityRequest(r.URL.Query(), identity.activeClusterContext)
 	if err != nil {

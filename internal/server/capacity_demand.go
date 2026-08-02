@@ -15,10 +15,10 @@ import (
 const capacityDemandPageLimit = 25
 
 func (s *Server) handleCapacityDemand(w http.ResponseWriter, r *http.Request) {
+	identity := currentCapacityClusterIdentity()
 	if !s.requireConnected(w) {
 		return
 	}
-	identity := currentCapacityClusterIdentity()
 	filters, stateFilter, poolFilter, ownerFilter, err := parseCapacityDemandFilters(r.URL.Query())
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())

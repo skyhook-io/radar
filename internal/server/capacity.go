@@ -36,13 +36,18 @@ const (
 // one would silently mix two clusters: pool specs from the old cluster next to
 // nodes from the new one, or cluster-A metadata over cluster-B data.
 //
-// Membership rule: anything a capacity handler reads out of a process global
-// during load belongs here. Today that is the cluster naming stamp, the API
-// client behind the SAR checks, the three caches, the metrics history store,
-// and the timeline store. Per-user caches (permCache, rbacMemo,
-// capacityIssueMemo) are deliberately absent: they are Server fields that are
-// never swapped, and the context-switch hook invalidates their CONTENTS, so a
-// pointer here would never change and would prove nothing.
+// Membership rule: the tuple must CHANGE whenever the cluster behind the
+// process globals changes. Every context switch or reconnect runs
+// ResetAllSubsystems, which constructs new objects for each pointer member
+// here — so the members are the reset-swapped singletons (SAR client, the
+// three caches, metrics history, timeline store) plus the naming stamp.
+// Globals a loader reads that are NOT members (connection status, the
+// timeline observation start, the namespace-scope target) are still covered:
+// nothing changes what they describe without a reset that swaps the members,
+// which the final equality check then rejects. Per-user caches (permCache,
+// rbacMemo, capacityIssueMemo) are deliberately absent: they are Server
+// fields that are never swapped — the switch hook invalidates their CONTENTS
+// — so a pointer here would never change and would prove nothing.
 type capacityClusterIdentity struct {
 	// contextName, activeClusterContext and clusterName are three separate
 	// reads, so a switch landing between them yields a mixed snapshot — which
@@ -104,20 +109,21 @@ type capacityLoadResult struct {
 //
 // Three properties together make a mixed-cluster response unserializable:
 //
-//  1. CAPTURE FIRST. Every handler takes the identity snapshot as its first
-//     statement — before metadata, cursor parsing, authorization, and any
-//     source read. Nothing upstream of the snapshot can contribute another
-//     cluster's data to the response.
+//  1. CAPTURE FIRST. Every handler takes the identity snapshot as its literal
+//     first statement — before the connection gate, metadata, cursor parsing,
+//     authorization, and any source read. Nothing upstream of the snapshot can
+//     contribute another cluster's data to the response.
 //  2. THE SNAPSHOT IS THE SOURCE OF TRUTH for anything derived from cluster
 //     naming: the response metadata's ClusterContext and the cursor's cluster
 //     binding are stamped from it, never re-read from the globals.
 //  3. FINAL EQUALITY. Pointer identity is what proves the reads were
 //     consistent. The loaders do re-fetch globals rather than thread the
-//     captured handles, but a switch runs ResetAllSubsystems, which constructs
-//     NEW objects for every member — so a loader that fetched across a switch
-//     implies the live tuple no longer equals the captured one, and this check
-//     fires. Recycled addresses cannot forge a match: the naming strings are
-//     part of the same tuple and a switch always changes them.
+//     captured handles, but any switch or reconnect runs ResetAllSubsystems,
+//     which constructs NEW objects for every pointer member — so a loader that
+//     fetched across one implies the live tuple no longer equals the captured
+//     one, and this check fires. Recycled addresses cannot forge a match: the
+//     captured tuple itself keeps the old objects alive, so no later reset can
+//     allocate at a captured address.
 func (s *Server) writeCapacityResponse(w http.ResponseWriter, result capacityLoadResult, response any) {
 	if !result.identity.stillCurrent() {
 		// The kubeconfig context switched while this response was being
@@ -130,10 +136,10 @@ func (s *Server) writeCapacityResponse(w http.ResponseWriter, result capacityLoa
 }
 
 func (s *Server) handleCapacityOverview(w http.ResponseWriter, r *http.Request) {
+	identity := currentCapacityClusterIdentity()
 	if !s.requireConnected(w) {
 		return
 	}
-	identity := currentCapacityClusterIdentity()
 	result, ok := s.loadCapacityModel(w, r, identity, true)
 	if !ok {
 		return
@@ -211,10 +217,10 @@ func (s *Server) handleCapacityOverview(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleCapacityPools(w http.ResponseWriter, r *http.Request) {
+	identity := currentCapacityClusterIdentity()
 	if !s.requireConnected(w) {
 		return
 	}
-	identity := currentCapacityClusterIdentity()
 	pageRequest, err := parseCapacityPage(r.URL.Query(), capacityPageOptions{
 		Scope:          "pools",
 		ClusterContext: identity.activeClusterContext,
@@ -252,10 +258,10 @@ func (s *Server) handleCapacityPools(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCapacityPool(w http.ResponseWriter, r *http.Request) {
+	identity := currentCapacityClusterIdentity()
 	if !s.requireConnected(w) {
 		return
 	}
-	identity := currentCapacityClusterIdentity()
 	name := chi.URLParam(r, "name")
 	if name == "" {
 		s.writeError(w, http.StatusBadRequest, "pool name is required")
@@ -286,10 +292,10 @@ func (s *Server) handleCapacityPool(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCapacityPoolMembers(w http.ResponseWriter, r *http.Request) {
+	identity := currentCapacityClusterIdentity()
 	if !s.requireConnected(w) {
 		return
 	}
-	identity := currentCapacityClusterIdentity()
 	name := chi.URLParam(r, "name")
 	memberType := capacityapi.MemberType(r.URL.Query().Get("type"))
 	if memberType != capacityapi.MemberNode && memberType != capacityapi.MemberClaim && memberType != capacityapi.MemberWorkload {
