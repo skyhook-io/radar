@@ -725,6 +725,19 @@ func buildWorkloadMembers(pods []*corev1.Pod, snapshot Snapshot) []capacityapi.P
 	return result
 }
 
+// DemandOwnerForPod returns the subject a pod's demand group is keyed by —
+// the identical resolution BuildDemandGroupModels applies, so a filter built
+// from it can never disagree with the grouping.
+func DemandOwnerForPod(pod *corev1.Pod, resolve func(*corev1.Pod) *subject.Ref) subject.Ref {
+	owner := defaultPodOwner(pod)
+	if resolve != nil {
+		if resolved := resolve(pod); resolved != nil && resolved.Kind != "" && resolved.Name != "" {
+			owner = *resolved
+		}
+	}
+	return owner
+}
+
 func defaultPodOwner(pod *corev1.Pod) subject.Ref {
 	for _, owner := range pod.OwnerReferences {
 		if owner.Controller != nil && *owner.Controller {

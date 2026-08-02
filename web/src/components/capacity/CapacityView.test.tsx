@@ -1521,6 +1521,7 @@ describe("CapacityView demand", () => {
             undefined,
             undefined,
             "payments/Deployment/checkout",
+            undefined,
           ],
           demandResponse(),
         ),
@@ -1532,10 +1533,52 @@ describe("CapacityView demand", () => {
     );
   });
 
+  it("lands the pod-drawer bridge on the pod's workload, filtered and labeled", () => {
+    const html = renderCapacity("/capacity/demand?pod=payments%2Fcheckout-abc12", (client) =>
+      client.setQueryData(
+        [
+          "capacity",
+          "demand",
+          25,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          "payments/checkout-abc12",
+        ],
+        demandResponse(),
+      ),
+    );
+    expect(html).toContain("pod checkout-abc12&#x27;s workload");
+    expect(html).toContain("Show all demand");
+    expect(html).toContain("for this workload");
+    expect(html).not.toContain("showing");
+  });
+
+  it("reports a true zero when the bridged pod has no pending demand", () => {
+    const html = renderCapacity("/capacity/demand?pod=payments%2Fcheckout-abc12", (client) =>
+      client.setQueryData(
+        [
+          "capacity",
+          "demand",
+          25,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          "payments/checkout-abc12",
+        ],
+        { ...demandResponse(), items: [] },
+      ),
+    );
+    expect(html).toContain("No pending demand for pod checkout-abc12&#x27;s workload");
+    expect(html).toContain("true zero");
+  });
+
   it("groups pending pods by scheduling signature with pool evaluations", () => {
     const html = renderCapacity("/capacity/demand", (client) =>
       client.setQueryData(
-        ["capacity", "demand", 25, undefined, undefined, undefined, undefined],
+        ["capacity", "demand", 25, undefined, undefined, undefined, undefined, undefined],
         demandResponse(),
       ),
     );
@@ -1551,7 +1594,7 @@ describe("CapacityView demand", () => {
   it("shows structured capacity-linked issues on the demand group", () => {
     const html = renderCapacity("/capacity/demand", (client) =>
       client.setQueryData(
-        ["capacity", "demand", 25, undefined, undefined, undefined, undefined],
+        ["capacity", "demand", 25, undefined, undefined, undefined, undefined, undefined],
         demandResponse({
           items: [
             {
@@ -1605,7 +1648,7 @@ describe("CapacityView demand", () => {
   it("takes pill and header counts from the server summary, not the page", () => {
     const html = renderCapacity("/capacity/demand", (client) =>
       client.setQueryData(
-        ["capacity", "demand", 25, undefined, undefined, undefined, undefined],
+        ["capacity", "demand", 25, undefined, undefined, undefined, undefined, undefined],
         demandResponse(),
       ),
     );
@@ -1620,7 +1663,7 @@ describe("CapacityView demand", () => {
   it("never fabricates zeros when the server omits the summary", () => {
     const html = renderCapacity("/capacity/demand", (client) =>
       client.setQueryData(
-        ["capacity", "demand", 25, undefined, undefined, undefined, undefined],
+        ["capacity", "demand", 25, undefined, undefined, undefined, undefined, undefined],
         demandResponse({ summary: undefined }),
       ),
     );
@@ -1638,7 +1681,7 @@ describe("CapacityView demand", () => {
       "/capacity/demand?state=blocked&pool=spot",
       (client) => {
         client.setQueryData(
-          ["capacity", "demand", 25, undefined, "blocked", "spot", undefined],
+          ["capacity", "demand", 25, undefined, "blocked", "spot", undefined, undefined],
           demandResponse(),
         );
         client.setQueryData(
@@ -1660,7 +1703,7 @@ describe("CapacityView demand", () => {
     );
     const html = renderCapacity("/capacity/demand", (client) => {
       client.setQueryData(
-        ["capacity", "demand", 25, undefined, undefined, undefined, undefined],
+        ["capacity", "demand", 25, undefined, undefined, undefined, undefined, undefined],
         demandResponse(),
       );
       client.setQueryData(
@@ -1676,7 +1719,7 @@ describe("CapacityView demand", () => {
   it("does not block Demand when NodePool option discovery fails", () => {
     const html = renderCapacity("/capacity/demand", (client) => {
       client.setQueryData(
-        ["capacity", "demand", 25, undefined, undefined, undefined, undefined],
+        ["capacity", "demand", 25, undefined, undefined, undefined, undefined, undefined],
         demandResponse(),
       );
       const poolQuery = client.getQueryCache().build(client, {
@@ -1702,7 +1745,7 @@ describe("CapacityView demand", () => {
   it("hedges the state pills when pod coverage is a lower bound", () => {
     const html = renderCapacity("/capacity/demand", (client) =>
       client.setQueryData(
-        ["capacity", "demand", 25, undefined, undefined, undefined, undefined],
+        ["capacity", "demand", 25, undefined, undefined, undefined, undefined, undefined],
         demandResponse({
           coverage: {
             ...meta.coverage,
@@ -1724,7 +1767,7 @@ describe("CapacityView demand", () => {
   it("leads the signature card with the grouping basis, not the hash", () => {
     const html = renderCapacity("/capacity/demand", (client) =>
       client.setQueryData(
-        ["capacity", "demand", 25, undefined, undefined, undefined, undefined],
+        ["capacity", "demand", 25, undefined, undefined, undefined, undefined, undefined],
         demandResponse(),
       ),
     );

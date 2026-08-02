@@ -126,7 +126,7 @@ function renderDemand(group: CapacityDemandGroup): string {
     defaultOptions: { queries: { retry: false, retryOnMount: false } },
   });
   client.setQueryData(
-    ["capacity", "demand", 25, undefined, undefined, undefined, undefined],
+    ["capacity", "demand", 25, undefined, undefined, undefined, undefined, undefined],
     demandResponse(group),
   );
   return renderToString(

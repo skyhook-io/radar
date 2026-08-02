@@ -1234,7 +1234,7 @@ func TestCapacityOverviewAggregateDemandCertaintyFollowsPodScope(t *testing.T) {
 
 func TestCapacityDemandOwnerFilterSemantics(t *testing.T) {
 	// Parse: well-formed, malformed, and cursor binding via the filters map.
-	filters, _, _, owner, err := parseCapacityDemandFilters(url.Values{"owner": {"shop/Deployment/web"}})
+	filters, _, _, owner, _, err := parseCapacityDemandFilters(url.Values{"owner": {"shop/Deployment/web"}})
 	if err != nil || owner == nil || *owner != (demandOwnerFilter{Namespace: "shop", Kind: "Deployment", Name: "web"}) {
 		t.Fatalf("parsed owner = %#v, err %v", owner, err)
 	}
@@ -1242,7 +1242,7 @@ func TestCapacityDemandOwnerFilterSemantics(t *testing.T) {
 		t.Fatalf("owner missing from cursor-bound filters: %#v", filters)
 	}
 	for _, malformed := range []string{"not-a-ref", "a/b", "//x", "a//c"} {
-		if _, _, _, _, err := parseCapacityDemandFilters(url.Values{"owner": {malformed}}); err == nil {
+		if _, _, _, _, _, err := parseCapacityDemandFilters(url.Values{"owner": {malformed}}); err == nil {
 			t.Fatalf("owner %q parsed without error", malformed)
 		}
 	}
@@ -1279,6 +1279,87 @@ func TestCapacityDemandRejectsMalformedOwnerFilter(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("malformed owner status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestCapacityDemandPodFilterSemantics(t *testing.T) {
+	// Parse: well-formed, cursor binding, malformed, and owner exclusivity.
+	filters, _, _, _, pod, err := parseCapacityDemandFilters(url.Values{"pod": {"shop/web-1"}})
+	if err != nil || pod == nil || *pod != (demandPodFilter{Namespace: "shop", Name: "web-1"}) {
+		t.Fatalf("parsed pod = %#v, err %v", pod, err)
+	}
+	if filters.Get("pod") != "shop/web-1" {
+		t.Fatalf("pod missing from cursor-bound filters: %#v", filters)
+	}
+	for _, malformed := range []string{"just-a-name", "a/b/c", "/x", "x/"} {
+		if _, _, _, _, _, err := parseCapacityDemandFilters(url.Values{"pod": {malformed}}); err == nil {
+			t.Fatalf("pod %q parsed without error", malformed)
+		}
+	}
+	if _, _, _, _, _, err := parseCapacityDemandFilters(url.Values{
+		"pod":   {"shop/web-1"},
+		"owner": {"shop/Deployment/web"},
+	}); err == nil {
+		t.Fatal("pod and owner together must be rejected — they are competing subject filters")
+	}
+
+	// Resolution: the filter must key on the SAME owner the grouping computes.
+	controller := true
+	owned := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Namespace: "shop", Name: "web-1",
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-abc123", Controller: &controller}},
+	}}
+	bare := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "solo"}}
+	snapshot := &capacitymodel.Snapshot{
+		Pods: []*corev1.Pod{owned, bare},
+		ResolvePodOwner: func(p *corev1.Pod) *subject.Ref {
+			if p.Name == "web-1" {
+				return &subject.Ref{Group: "apps", Kind: "Deployment", Namespace: "shop", Name: "web"}
+			}
+			return nil
+		},
+	}
+	resolved := demandOwnerForPodFilter(snapshot, demandPodFilter{Namespace: "shop", Name: "web-1"})
+	if resolved == nil || *resolved != (demandOwnerFilter{Namespace: "shop", Kind: "Deployment", Name: "web"}) {
+		t.Fatalf("owned pod resolved to %#v, want its TOP owner (Deployment web), not the ReplicaSet", resolved)
+	}
+	if bareOwner := demandOwnerForPodFilter(snapshot, demandPodFilter{Namespace: "shop", Name: "solo"}); bareOwner == nil ||
+		*bareOwner != (demandOwnerFilter{Namespace: "shop", Kind: "Pod", Name: "solo"}) {
+		t.Fatalf("bare pod resolved to %#v, want the pod itself as its own group subject", bareOwner)
+	}
+	if ghost := demandOwnerForPodFilter(snapshot, demandPodFilter{Namespace: "shop", Name: "ghost"}); ghost != nil {
+		t.Fatalf("unseen pod must resolve to nil (matches nothing), got %#v", ghost)
+	}
+}
+
+func TestCapacityDemandPodFilterHandlerPaths(t *testing.T) {
+	initCapacityContractDynamicState(t, true, true, capacityContractNodePool("general"))
+	for _, path := range []string{
+		"/api/capacity/demand?pod=just-a-name",
+		"/api/capacity/demand?pod=shop/web-1&owner=shop/Deployment/web",
+	} {
+		resp := get(t, path)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s status = %d, want 400", path, resp.StatusCode)
+		}
+	}
+	// A pod the model never observed matches nothing: an honest empty 200,
+	// byte-identical in shape to any other unmatched subject filter — the
+	// response must not reveal whether the pod exists.
+	resp := get(t, "/api/capacity/demand?pod=nowhere/ghost")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unseen pod status = %d, want 200", resp.StatusCode)
+	}
+	var decoded struct {
+		Items []json.RawMessage `json:"items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(decoded.Items) != 0 {
+		t.Fatalf("unseen pod returned %d groups, want 0", len(decoded.Items))
 	}
 }
 

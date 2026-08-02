@@ -79,7 +79,10 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
       onOpenLogs={onOpenLogs}
       onEvaluateCapacity={
         karpenterAvailable && awaitsScheduling
-          ? () => navigate('/capacity/demand')
+          ? () =>
+              navigate(
+                `/capacity/demand?pod=${encodeURIComponent(`${data.metadata?.namespace ?? ''}/${data.metadata?.name ?? ''}`)}`,
+              )
           : undefined
       }
       resolvedEnvFrom={resolvedEnvFrom}

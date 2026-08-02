@@ -68,7 +68,7 @@ const STATE_PILLS: [CapacityDemandState | undefined, string][] = [
 
 export function updateDemandSearchParam(
   search: string,
-  key: "pool" | "state" | "owner",
+  key: "pool" | "state" | "owner" | "pod",
   value: string | undefined,
 ): string {
   const params = new URLSearchParams(search);
@@ -107,6 +107,12 @@ export function CapacityDemand({
   const poolFilter = search.get("pool") || undefined;
   const ownerFilter = search.get("owner") || undefined;
   const ownerFilterName = ownerFilter?.split("/").slice(1).join(" ");
+  const podFilter = search.get("pod") || undefined;
+  const podFilterLabel = podFilter
+    ? `pod ${podFilter.split("/")[1] ?? podFilter}'s workload`
+    : undefined;
+  const subjectFilterLabel = ownerFilterName ?? podFilterLabel;
+  const subjectScoped = Boolean(ownerFilter || podFilter);
   const pagination = useCapacityPagination<CapacityDemandResponse>(
     `${location.search}`,
   );
@@ -116,6 +122,7 @@ export function CapacityDemand({
     state: stateFilter,
     pool: poolFilter,
     owner: ownerFilter,
+    pod: podFilter,
   });
   const recoveringCursor = useCapacityCursorRecovery(
     query.error,
@@ -126,7 +133,7 @@ export function CapacityDemand({
   const responseData =
     query.data ?? (recoveredCursor ? pagination.retainedPage : undefined);
   const updateSearchParam = (
-    key: "pool" | "state" | "owner",
+    key: "pool" | "state" | "owner" | "pod",
     value: string | undefined,
   ) => {
     navigate(
@@ -139,6 +146,7 @@ export function CapacityDemand({
   };
   const clearPoolFilter = () => updateSearchParam("pool", undefined);
   const clearOwnerFilter = () => updateSearchParam("owner", undefined);
+  const clearPodFilter = () => updateSearchParam("pod", undefined);
   if (poolFilter && !responseData && isNotFoundError(query.error)) {
     return (
       <EmptyState
@@ -192,17 +200,19 @@ export function CapacityDemand({
   const noun = stateFilter
     ? `${demandStateLabel(stateFilter).toLowerCase()} pods`
     : "pending pods";
+  const nounFor = (count: number) =>
+    count === 1 ? noun.replace(/pods$/, "pod") : noun;
   // Under an owner filter the rollup denominator describes ALL observed
   // demand, not this workload — "showing X of Y" would imply Y pods exist for
   // this owner. Owner-scoped views get honest page-local counts instead.
-  const headerSummary = ownerFilter
+  const headerSummary = subjectScoped
     ? pagePods > 0 || pageGroups > 0
-      ? `${pagePods}${response.page.hasMore ? "+" : ""} ${noun} in ${pageGroups}${response.page.hasMore ? "+" : ""} ${pageGroups === 1 ? "group" : "groups"} for this workload`
+      ? `${pagePods}${response.page.hasMore ? "+" : ""} ${nounFor(pagePods)} in ${pageGroups}${response.page.hasMore ? "+" : ""} ${pageGroups === 1 ? "group" : "groups"} for this workload`
       : null
     : denom
       ? denom.podCount === pagePods && denom.groupCount === pageGroups
-        ? `${denom.podCount} ${noun} in ${denom.groupCount} ${denom.groupCount === 1 ? "group" : "groups"}`
-        : `showing ${pagePods} of ${denom.podCount} ${noun} in ${pageGroups} of ${denom.groupCount} groups`
+        ? `${denom.podCount} ${nounFor(denom.podCount)} in ${denom.groupCount} ${denom.groupCount === 1 ? "group" : "groups"}`
+        : `showing ${pagePods} of ${denom.podCount} ${nounFor(denom.podCount)} in ${pageGroups} of ${denom.groupCount} groups`
       : null;
 
   return (
@@ -280,6 +290,19 @@ export function CapacityDemand({
           </LinkButton>
         </Notice>
       )}
+      {podFilter && (
+        <Notice>
+          Showing pending demand for{" "}
+          <span className="font-medium text-theme-text-primary">
+            {podFilterLabel}
+          </span>{" "}
+          only — the state counts below describe all observed demand, not just
+          this workload.{" "}
+          <LinkButton className="inline" onClick={clearPodFilter}>
+            Show all demand
+          </LinkButton>
+        </Notice>
+      )}
       {poolFilter && (
         <Notice>
           Evaluated against NodePool{" "}
@@ -345,9 +368,9 @@ export function CapacityDemand({
           ))}
         </div>
       ) : coverageHasObservations(response.coverage.pods) ? (
-        ownerFilter ? (
+        subjectScoped ? (
           <InlineEmpty
-            title={`No pending demand for ${ownerFilterName}`}
+            title={`No pending demand for ${subjectFilterLabel}`}
             detail="Its pods may have scheduled since this link was created — this is a true zero across all pending demand, not a paging artifact."
           />
         ) : (

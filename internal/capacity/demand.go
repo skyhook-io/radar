@@ -183,12 +183,7 @@ func BuildDemandGroupModels(input DemandInput) []DemandGroupModel {
 
 	groups := map[string]*demandGroupAccumulator{}
 	for _, pod := range orderedPods {
-		owner := defaultPodOwner(pod)
-		if input.ResolvePodOwner != nil {
-			if resolved := input.ResolvePodOwner(pod); resolved != nil && resolved.Kind != "" && resolved.Name != "" {
-				owner = *resolved
-			}
-		}
+		owner := DemandOwnerForPod(pod, input.ResolvePodOwner)
 		requests := EffectivePodRequests(pod)
 		model := demandSchedulingModelForPod(pod, requests)
 		fingerprint := stableDemandFingerprint(canonicalDemandGroup{

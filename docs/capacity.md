@@ -59,7 +59,7 @@ Operators rarely start at the nav. Capacity meets them where they are:
 
 - **Home** — a Karpenter posture card when the integration is detected.
 - **Issues** — capacity-relevant scheduling issues get a "View in Capacity" link that lands on Demand **filtered to the affected workload**; NodePool issues land on the pool's detail page.
-- **Pod drawer** — Pending pods show "Evaluate against Karpenter NodePools".
+- **Pod drawer** — unscheduled Pending pods show "Evaluate against Karpenter NodePools", landing on Demand **filtered to that pod's workload** (`?pod=`, resolved server-side).
 - **NodePool drawer** — "Open in Capacity".
 
 ## Reading the numbers
@@ -127,7 +127,7 @@ All read-only. Every route sits behind the node-visibility gate (list Nodes clus
 
 - `GET /api/capacity` — overview: KPIs, scheduling aggregates (Karpenter-scoped `scheduling` + all-nodes `clusterScheduling`), signals, pool summaries, the cross-manager `groups` inventory with autoscaler children, `orphanAutoscalerGroups`, and `summary.managers`; the `autoscalerStatus` coverage source reports denied / cache-scope / not-published / parse-error distinctly
 - `GET /api/capacity/pools` (+ `/{name}`, `/{name}/members`) — inventory, detail, paginated members
-- `GET /api/capacity/demand` — groups with `?state=`, `?pool=`, `?owner=ns/Kind/name` filters
+- `GET /api/capacity/demand` — groups with `?state=`, `?pool=`, `?owner=ns/Kind/name`, and `?pod=ns/name` filters (`pod` is resolved server-side to the same top owner the grouping uses, so the drawer's bridge and the group key can never disagree; mutually exclusive with `owner`)
 - `GET /api/capacity/activity` — episode timeline with keyset cursors; `?type=` narrows to one episode type, and first-page responses carry an `aggregate` rollup of the whole filtered window that the type filter deliberately does not narrow
 
 ## Limitations

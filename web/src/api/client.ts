@@ -1172,6 +1172,10 @@ export interface CapacityDemandQueryOptions extends CapacityPageQueryOptions {
    *  server-side across ALL groups, so an empty result is a true "no pending
    *  demand for this workload", never a paging artifact. */
   owner?: string;
+  /** Pod filter (namespace/name) — the Pod-drawer bridge. The server resolves
+   *  the pod to the same top owner the grouping uses, so this lands on the
+   *  pod's workload group; mutually exclusive with owner. */
+  pod?: string;
 }
 
 export function useCapacityDemand(options?: CapacityDemandQueryOptions) {
@@ -1182,6 +1186,7 @@ export function useCapacityDemand(options?: CapacityDemandQueryOptions) {
   if (options?.state) params.set("state", options.state);
   if (options?.pool) params.set("pool", options.pool);
   if (options?.owner) params.set("owner", options.owner);
+  if (options?.pod) params.set("pod", options.pod);
   const query = params.toString();
   const queryKey = [
     "capacity",
@@ -1191,6 +1196,7 @@ export function useCapacityDemand(options?: CapacityDemandQueryOptions) {
     options?.state,
     options?.pool,
     options?.owner,
+    options?.pod,
   ];
   return useQuery<CapacityDemandResponse>({
     queryKey,
