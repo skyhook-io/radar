@@ -60,6 +60,7 @@ interface ConfigResponse {
 interface SettingsDialogProps {
   open: boolean
   onClose: () => void
+  initialSection?: SettingsSectionId
 }
 
 // The settings surface splits into three honest apply buckets:
@@ -68,7 +69,7 @@ interface SettingsDialogProps {
 //   • Live integrations (Prometheus, Argo CD) — their own Apply/Connect endpoints
 //     re-point the running server; effect immediately, NOT part of footer dirty.
 //   • AI diagnose — client-side prefs, self-saving, editable by everyone.
-type SectionId =
+export type SettingsSectionId =
   | 'overview' | 'perms' | 'connection' | 'prometheus' | 'argocd' | 'ai' | 'advanced'
 
 // Only STARTUP fields count toward footer dirty. Integration fields (prometheusUrl,
@@ -89,7 +90,11 @@ function normalizeStartup(c: Config) {
   }
 }
 
-export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
+export function SettingsDialog({
+  open,
+  onClose,
+  initialSection = 'overview',
+}: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const { shouldRender, isOpen } = useAnimatedUnmount(open, 200)
   const { data: versionInfo } = useVersionCheck()
@@ -107,7 +112,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   const [saving, setSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [section, setSection] = useState<SectionId>('overview')
+  const [section, setSection] = useState<SettingsSectionId>('overview')
   const [confirmingClose, setConfirmingClose] = useState(false)
 
   // AI Diagnosis prefs are client-side (localStorage) and now SELF-SAVING: the
@@ -117,14 +122,14 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   const aiAvailable = diag.available && diag.agents.length > 0
   const [aiDraft, setAiDraft] = useState<AIDraft>({
     agent: diag.selectedAgent,
-    isolated: diag.isolated,
+    profile: diag.profile,
     model: diag.model,
     effort: diag.effort,
   })
   const [aiSaved, setAiSaved] = useState(false)
   const aiDirty =
     aiDraft.agent !== diag.selectedAgent ||
-    aiDraft.isolated !== diag.isolated ||
+    aiDraft.profile !== diag.profile ||
     aiDraft.model !== diag.model ||
     aiDraft.effort !== diag.effort
 
@@ -158,16 +163,10 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
     setAiSaved(false)
     setAiDraft({
       agent: diag.selectedAgent,
-      isolated: diag.isolated,
+      profile: diag.profile,
       model: diag.model,
       effort: diag.effort,
     })
-    // Overview is the landing section — a status-at-a-glance of what Radar is
-    // connected to (cluster, integrations, MCP, AI), useful to owners and
-    // viewers alike, rather than dropping owners on a config form or everyone
-    // on a permissions dump.
-    setSection('overview')
-
     fetch(apiUrl('/config'), { credentials: getCredentialsMode(), headers: getAuthHeaders() })
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -184,6 +183,19 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
     // Snapshot-on-open only; we don't want late diag updates to wipe staged edits.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
+
+  useEffect(() => {
+    if (open) setSection(initialSection)
+  }, [open, initialSection])
+
+  useEffect(() => {
+    if (!open || diag.agents.length === 0) return
+    setAiDraft((current) => {
+      const profiles = diag.agents.find((agent) => agent.name === current.agent)?.profiles ?? []
+      if (profiles.length === 0 || profiles.includes(current.profile)) return current
+      return { ...current, profile: profiles[0] }
+    })
+  }, [open, diag.agents])
 
   const updateConfigField = useCallback(<K extends keyof Config>(field: K, value: Config[K]) => {
     setEditedConfig((prev) => ({ ...prev, [field]: value }))
@@ -234,7 +246,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   // agent first, then restore the draft's model/effort.
   const saveAi = useCallback(() => {
     diag.setSelectedAgent(aiDraft.agent)
-    diag.setIsolated(aiDraft.isolated)
+    diag.setProfile(aiDraft.profile)
     diag.setModel(aiDraft.model)
     diag.setEffort(aiDraft.effort)
     setAiSaved(true)
@@ -335,7 +347,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
           // Fixed height so the dialog doesn't jump when switching tabs — short
           // tabs leave breathing room, tall ones scroll inside the content pane.
           // max-h keeps it on-screen on short viewports.
-          'sm:rounded-xl sm:max-w-4xl sm:mx-4 sm:h-[620px] sm:max-h-[85vh]',
+          'sm:rounded-xl sm:max-w-4xl sm:mx-4 sm:h-[660px] sm:max-h-[85vh]',
           TRANSITION_PANEL,
           isOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-95'
         )}
@@ -517,8 +529,9 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
               <div className="mb-4">
                 <h3 className="text-base font-semibold text-theme-text-primary">AI diagnose</h3>
                 <p className="mt-0.5 text-xs text-theme-text-tertiary">
-                  Investigate incidents with an AI agent that runs on your own machine — reading
-                  logs, events, and topology to explain what's wrong. No Radar cloud, no API key.
+                  {diag.hosted
+                    ? `Investigate incidents with ${diag.agentLabel} — reading logs, events, and topology to explain what's wrong.`
+                    : "Investigate incidents with an AI agent that runs on your own machine — reading logs, events, and topology to explain what's wrong. No Radar cloud, no API key."}
                 </p>
               </div>
               {aiAvailable ? (
@@ -526,6 +539,8 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
                   <AISettingsSection
                     available={diag.available}
                     agents={diag.agents}
+                    hosted={diag.hosted}
+                    agentLabel={diag.agentLabel}
                     draft={aiDraft}
                     onChange={(patch) => {
                       setAiDraft((d) => ({ ...d, ...patch }))
@@ -533,21 +548,23 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
                     }}
                     onHistoryCleared={diag.refreshRuns}
                   />
-                  <div className="flex items-center justify-end gap-3">
-                    {aiSaved && !aiDirty && (
-                      <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400/80">
-                        <Check className="w-3 h-3" />
-                        Saved
-                      </span>
-                    )}
-                    <button
-                      onClick={saveAi}
-                      disabled={!aiDirty}
-                      className="px-4 py-1.5 text-sm font-medium btn-brand rounded-md disabled:opacity-50 disabled:pointer-events-none"
-                    >
-                      Save
-                    </button>
-                  </div>
+                  {!diag.hosted && (
+                    <div className="flex items-center justify-end gap-3">
+                      {aiSaved && !aiDirty && (
+                        <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400/80">
+                          <Check className="w-3 h-3" />
+                          Saved
+                        </span>
+                      )}
+                      <button
+                        onClick={saveAi}
+                        disabled={!aiDirty}
+                        className="px-4 py-1.5 text-sm font-medium btn-brand rounded-md disabled:opacity-50 disabled:pointer-events-none"
+                      >
+                        Save
+                      </button>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <AIUnavailableNotice />
@@ -662,7 +679,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
 // -- Sidebar primitives -------------------------------------------------------
 
 interface NavItemDef {
-  id: SectionId
+  id: SettingsSectionId
   label: string
   icon: LucideIcon
   ownerOnly: boolean
@@ -743,8 +760,8 @@ function SectionPane({
   locked,
   children,
 }: {
-  id: SectionId
-  active: SectionId
+  id: SettingsSectionId
+  active: SettingsSectionId
   title: string
   caption?: string
   live?: boolean
@@ -797,7 +814,7 @@ function LockWall() {
 type OverviewTone = 'ok' | 'warn' | 'off' | 'unknown'
 
 interface OverviewRow {
-  id: SectionId
+  id: SettingsSectionId
   icon: LucideIcon
   label: string
   tone: OverviewTone
@@ -812,7 +829,7 @@ interface OverviewRow {
 // probe, so we don't want it firing when Settings opens on another section);
 // cluster and Prometheus status are shared app-wide caches, so they're read
 // unconditionally.
-function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s: SectionId) => void }) {
+function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s: SettingsSectionId) => void }) {
   const { data: cluster } = useClusterInfo()
   const { data: prom } = usePrometheusStatus()
   const { data: argo } = useArgoStatus(active)

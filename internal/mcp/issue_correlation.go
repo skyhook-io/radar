@@ -20,10 +20,11 @@ import (
 // truthfully carries no_recent_changes; an incident workload carries the
 // correlated change refs; the consumer weighs them.
 const (
-	// correlationIssueCap bounds the per-issue lookups per response. When the
-	// cap skips criticals, Response.CorrelationTruncated says so explicitly —
-	// an unmarked issue under truncation means "not checked", never "no
-	// changes".
+	// correlationIssueCap bounds the per-issue lookups per response, shared
+	// by criticals and warnings — criticals consume slots first, so a
+	// warning can never cost a critical its lookup. When the cap skips
+	// issues, Response.CorrelationTruncated says so explicitly — an unmarked
+	// issue under truncation means "not checked", never "no changes".
 	correlationIssueCap = 10
 	// correlationChangeCap bounds refs per issue: the top-ranked few changes
 	// are the evidence; the full feed stays one get_changes call away.
@@ -57,65 +58,85 @@ func correlationWindow() time.Duration {
 }
 
 // attachIssueChangeCorrelation fills CorrelatedChanges / NoRecentChanges on
-// critical issues. Single-namespace responses only — cross-namespace listings
-// are inventory sweeps where per-issue timeline lookups would multiply cost
-// without a triage question on the table.
+// critical and warning issues. Single-namespace responses only —
+// cross-namespace listings are inventory sweeps where per-issue timeline
+// lookups would multiply cost without a triage question on the table.
+//
+// Two passes share one cap: every critical is checked before any warning, so
+// cap priority never depends on the response's sort order. Warnings matter
+// because the active fault in a degraded-not-down incident is often
+// warning-severity (e.g. a Service selector matching no pods) — leaving it
+// uncorrelated hands the loudest chronic critical the only evidence trail.
 func attachIssueChangeCorrelation(ctx context.Context, resp *issues.ListResponse) {
 	window := correlationWindow()
 	if window == 0 {
 		return // not enough observation to claim anything, in either direction
 	}
 	checked := 0
-	for i := range resp.Issues {
-		iss := &resp.Issues[i]
-		if iss.Severity != issuesapi.SeverityCritical {
-			continue
-		}
-		// Only kinds whose changes the feed records can truthfully claim "no
-		// changes" — for untracked kinds the marker is omitted (= unknown).
-		nativeHelmIssue := iss.Kind == "HelmRelease" && iss.Group == issues.NativeHelmGroup
-		if !nativeHelmIssue && !meaningfulchanges.TrackedKind(iss.Kind) {
-			continue
-		}
-		if checked >= correlationIssueCap {
-			resp.CorrelationTruncated = true
-			return
-		}
-		checked++
-
-		var changes []issuesapi.RecentChange
-		var saturated bool
-		var err error
-		if nativeHelmIssue {
-			changes, saturated, err = helmIssueChangesForCorrelation(ctx, iss, window)
-		} else {
-			changes, saturated, err = correlationChangesForIssue(ctx, iss, window)
-		}
-		if err != nil {
-			log.Printf("[mcp] issue change correlation failed for %s %s/%s: %v", iss.Kind, iss.Namespace, iss.Name, err)
-			continue // marker omitted = unknown, never a false "no changes"
-		}
-		// The marker's contract is non-status evidence: status churn on a
-		// failing workload is the SYMPTOM, not a change that could explain it
-		// — including it would make every failing issue read as "correlated".
-		changes = filterSpecConfigChanges(changes)
-		if len(changes) == 0 {
-			// A saturated candidate fetch may have missed older changes in
-			// the window (churn-heavy subjects overflow the newest-N query) —
-			// that's unknown, not "no changes".
-			if saturated {
+	for _, severity := range []issuesapi.Severity{issuesapi.SeverityCritical, issuesapi.SeverityWarning} {
+		for i := range resp.Issues {
+			iss := &resp.Issues[i]
+			if iss.Severity != severity {
 				continue
 			}
-			iss.NoRecentChanges = &issuesapi.NoRecentChangesMarker{
-				WindowSeconds: int(window.Seconds()),
+			// Only kinds whose changes the feed records can truthfully claim "no
+			// changes" — for untracked kinds the marker is omitted (= unknown).
+			// Group-aware: a CRD issue whose kind collides with a tracked one
+			// (Knative Service vs core Service) must not be correlated against
+			// the same-named core object's changes.
+			nativeHelmIssue := iss.Kind == "HelmRelease" && iss.Group == issues.NativeHelmGroup
+			if !nativeHelmIssue && !meaningfulchanges.TrackedKindForGroup(iss.Kind, iss.Group) {
+				continue
 			}
-			continue
+			if checked >= correlationIssueCap {
+				resp.CorrelationTruncated = true
+				return
+			}
+			checked++
+			correlateIssue(ctx, iss, window, nativeHelmIssue)
 		}
-		if len(changes) > correlationChangeCap {
-			changes = changes[:correlationChangeCap]
-		}
-		iss.CorrelatedChanges = changes
 	}
+}
+
+// correlateIssue attaches CorrelatedChanges or NoRecentChanges to one issue,
+// or neither when the answer is unknown (fetch error, saturated fetch).
+func correlateIssue(ctx context.Context, iss *issuesapi.Issue, window time.Duration, nativeHelmIssue bool) {
+	var changes []issuesapi.RecentChange
+	var saturated bool
+	var err error
+	if nativeHelmIssue {
+		changes, saturated, err = helmIssueChangesForCorrelation(ctx, iss, window)
+	} else {
+		changes, saturated, err = correlationChangesForIssue(ctx, iss, window)
+	}
+	if err != nil {
+		log.Printf("[mcp] issue change correlation failed for %s %s/%s: %v", iss.Kind, iss.Namespace, iss.Name, err)
+		return // marker omitted = unknown, never a false "no changes"
+	}
+	// Per-kind RBAC: a workload subject's correlated changes include its consumed
+	// ConfigMaps, which the caller may not be able to read even when authorized on
+	// the workload. Drop what they can't read before building the marker.
+	changes = filterRecentChangesRBAC(ctx, changes)
+	// The marker's contract is non-status evidence: status churn on a
+	// failing workload is the SYMPTOM, not a change that could explain it
+	// — including it would make every failing issue read as "correlated".
+	changes = filterSpecConfigChanges(changes)
+	if len(changes) == 0 {
+		// A saturated candidate fetch may have missed older changes in
+		// the window (churn-heavy subjects overflow the newest-N query) —
+		// that's unknown, not "no changes".
+		if saturated {
+			return
+		}
+		iss.NoRecentChanges = &issuesapi.NoRecentChangesMarker{
+			WindowSeconds: int(window.Seconds()),
+		}
+		return
+	}
+	if len(changes) > correlationChangeCap {
+		changes = changes[:correlationChangeCap]
+	}
+	iss.CorrelatedChanges = changes
 }
 
 func filterSpecConfigChanges(changes []issuesapi.RecentChange) []issuesapi.RecentChange {

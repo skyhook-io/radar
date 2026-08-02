@@ -29,6 +29,9 @@ roleRef:
   name: {{ include "radar.fullname" . }}-helm
 subjects:
   - kind: Group
+    name: radar:owner
+    apiGroup: rbac.authorization.k8s.io
+  - kind: Group
     name: cloud:owner
     apiGroup: rbac.authorization.k8s.io
 ---
@@ -43,6 +46,9 @@ roleRef:
   kind: ClusterRole
   name: {{ include "radar.fullname" . }}-helm-admin
 subjects:
+  - kind: Group
+    name: radar:owner
+    apiGroup: rbac.authorization.k8s.io
   - kind: Group
     name: cloud:owner
     apiGroup: rbac.authorization.k8s.io
@@ -60,6 +66,9 @@ roleRef:
   kind: ClusterRole
   name: {{ include "radar.fullname" . }}-helm
 subjects:
+  - kind: Group
+    name: radar:member
+    apiGroup: rbac.authorization.k8s.io
   - kind: Group
     name: cloud:member
     apiGroup: rbac.authorization.k8s.io

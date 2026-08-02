@@ -131,6 +131,41 @@ helm install radar skyhook/radar -n radar --create-namespace
 
 See the [In-Cluster Deployment Guide](docs/in-cluster.md) for ingress, authentication, and RBAC configuration.
 
+### Gateway API HTTPRoute
+
+Chart supports optional Gateway API `HTTPRoute` generation. Enable
+`httpRoute.enabled`, set `parentRefs`, and use `httpRoute.rules` for multiple
+path prefixes, per-route timeouts, filters, or custom backends. `hostnames`
+defaults to an empty list, and `apiVersion` can be overridden for older Gateway
+API installations. The generated default route has no chart-imposed timeout,
+so the Gateway deployment default applies. Set `httpRoute.defaultTimeout` for
+an explicit timeout; custom rules can define their own `timeouts`.
+
+`ingress` and `httpRoute` are mutually exclusive: enabling both stops the
+install with an error, so enable only one. When `httpRoute` is enabled you must
+set at least one `parentRefs` entry (the Gateway the route attaches to);
+otherwise the install fails instead of creating an HTTPRoute that is attached to
+no Gateway.
+
+```yaml
+httpRoute:
+  enabled: true
+  parentRefs:
+    - name: public-gateway
+  hostnames: []
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: radar
+          port: 9280
+```
+
+See the [Helm Chart README](deploy/helm/radar/README.md#with-gateway-api-httproute)
+for full configuration details and timeout examples.
+
 </details>
 
 ---
@@ -145,6 +180,22 @@ kubectl radar
 radar
 ```
 
+To inspect an in-cluster Radar Cloud installation without changing it:
+
+```bash
+radar cloud status
+radar cloud status --context my-cluster
+radar cloud status --context my-cluster --namespace radar --release radar
+```
+
+The command reports installation ownership, chart and image, agent readiness,
+and Cloud configuration without printing the connection token. Passing both
+`--namespace` and `--release` selects an exact installation. Live tunnel status
+is reported by Radar Cloud using the token in the referenced Kubernetes Secret.
+If the Secret or Hub is unavailable, local installation diagnostics still run.
+Interactive terminals use restrained status colors; set `NO_COLOR` (or pipe the
+output) for plain text. URLs, tokens, and suggested commands remain unstyled.
+
 **CLI Flags**
 
 | Flag | Default | Description |
@@ -155,6 +206,7 @@ radar
 | `--namespaces` | (all) | Initial namespace filters as a comma-separated list, e.g. `--namespaces ns1,ns2,ns3`. Use this when your identity can list resources in specific namespaces but cannot list namespaces cluster-wide. |
 | `--namespace-scope` | `false` | Pin namespaced informer caches to a **single** namespace for large clusters (scoping to multiple namespaces is not supported yet). Requires `--namespace`, a kubeconfig context namespace, or a saved local single-namespace pick. Local mode can rebuild the cache when switching namespaces; auth/cloud mode locks the shared cache to the startup namespace. |
 | `--port` | `9280` | Server port |
+| `--listen-address` | `127.0.0.1` | HTTP listen address. Use `127.0.0.1` or `localhost` for local-only access; use `0.0.0.0` explicitly for containers, VMs, WSL, or remote/shared access, together with authentication and network controls. |
 | `--no-browser` | `false` | Don't auto-open browser |
 | `--browser` | | Browser to use when opening the UI, e.g. `firefox`, `google-chrome`, or `Google Chrome` on macOS |
 | `--timeline-storage` | `memory` | Timeline storage backend: `memory` or `sqlite` |

@@ -128,6 +128,10 @@ export interface IssueRecentChange {
   timestamp: string;
   change_category?: 'spec_config' | 'lifecycle' | 'runtime_status' | string;
   rank_reason?: string;
+  /** Ranking hint for workload runtime configuration (including the image) or directly consumed ConfigMap data; not a causal claim. */
+  application_configuration_change?: boolean;
+  /** Set only on top-level recent_changes in an eligible, unfiltered issues response with complete linkage evidence. */
+  not_linked_to_returned_issues?: boolean;
   fields?: IssueRecentChangeField[];
   /** Workloads that mount/reference this ConfigMap directly ("Deployment/flagd").
    *  Direct spec references only — runtime consumers via an intermediary

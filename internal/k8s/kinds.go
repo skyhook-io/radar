@@ -86,7 +86,12 @@ func ClusterOnlyKindGVR(kind string) (group, resource string, ok bool) {
 // Returns (false, "", "") for namespaced kinds, unknown kinds, or when
 // discovery isn't available.
 func ClassifyKindScope(kind, group string) (clusterScoped bool, gvrGroup, gvrResource string) {
-	if g, r, ok := ClusterOnlyKindGVR(kind); ok {
+	// The static builtin catalogue is only authoritative when the caller's group
+	// hint is absent or matches it. A disagreeing hint means a CRD colliding on
+	// Kind with a builtin cluster-scoped kind (e.g. Kind=ClusterRole in group
+	// example.com); trusting the builtin GVR there would authorize the CRD's
+	// reads against the builtin the user can list. Fall through to discovery.
+	if g, r, ok := ClusterOnlyKindGVR(kind); ok && (group == "" || group == g) {
 		return true, g, r
 	}
 	disc := GetResourceDiscovery()

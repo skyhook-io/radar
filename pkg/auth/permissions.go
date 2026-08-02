@@ -17,7 +17,7 @@ import (
 // AllowedNamespaces describes namespace-list scope for *namespaced* resources:
 //
 //   - nil:  user can list namespaced resources cluster-wide (no per-namespace
-//           filter required at read time)
+//     filter required at read time)
 //   - []:   user has no namespace access — every read returns empty
 //   - non-empty: user can read only the listed namespaces
 //
@@ -240,30 +240,40 @@ func DiscoverNamespaces(ctx context.Context, client kubernetes.Interface, userna
 	return allowedNS, nil
 }
 
-// SubjectCanI performs a SubjectAccessReview (not SelfSubject) to check if a specific
-// user can perform an action. This uses the ServiceAccount's permissions to check
-// on behalf of the user.
-func SubjectCanI(ctx context.Context, client kubernetes.Interface, username string, groups []string, namespace, group, resource, verb string) (bool, error) {
+// ReviewSubjectAccess asks the apiserver authorizer whether a subject can
+// perform the action described by attrs.
+func ReviewSubjectAccess(ctx context.Context, client kubernetes.Interface, username string, groups []string, attrs authv1.ResourceAttributes) (authv1.SubjectAccessReviewStatus, error) {
 	review := &authv1.SubjectAccessReview{
 		Spec: authv1.SubjectAccessReviewSpec{
-			User:   username,
-			Groups: groups,
-			ResourceAttributes: &authv1.ResourceAttributes{
-				Namespace: namespace,
-				Group:     group,
-				Resource:  resource,
-				Verb:      verb,
-			},
+			User:               username,
+			Groups:             groups,
+			ResourceAttributes: &attrs,
 		},
 	}
 
 	result, err := client.AuthorizationV1().SubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
 	if err != nil {
+		return authv1.SubjectAccessReviewStatus{}, err
+	}
+	return result.Status, nil
+}
+
+// SubjectCanI performs a SubjectAccessReview (not SelfSubject) to check if a specific
+// user can perform an action. This uses the ServiceAccount's permissions to check
+// on behalf of the user.
+func SubjectCanI(ctx context.Context, client kubernetes.Interface, username string, groups []string, namespace, group, resource, verb string) (bool, error) {
+	status, err := ReviewSubjectAccess(ctx, client, username, groups, authv1.ResourceAttributes{
+		Namespace: namespace,
+		Group:     group,
+		Resource:  resource,
+		Verb:      verb,
+	})
+	if err != nil {
 		log.Printf("[auth] SubjectAccessReview failed for user=%s %s %s/%s: %v", username, verb, group, resource, err)
 		return false, err
 	}
 
-	return result.Status.Allowed, nil
+	return status.Allowed, nil
 }
 
 // FilterNamespacesForUser intersects requested namespaces with user's allowed namespaces.

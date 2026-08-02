@@ -10,13 +10,14 @@ import {
 import { clsx } from 'clsx'
 import type { NodeKind, HealthStatus, PodSummary } from '../../types'
 import { displayKind } from '../../types'
-import { healthToSeverity, SEVERITY_DOT, SEVERITY_TEXT } from '../../utils/badge-colors'
+import { healthToSeverity, SEVERITY_DOT } from '../../utils/badge-colors'
 import { workloadHue } from '../../utils/workload-colors'
 import { ownershipOf } from '../../utils/topology-neighborhood'
 import { midTruncate } from '../../utils/format'
 import { getTopologyIcon } from '../../utils/resource-icons'
 import { Tooltip } from '../ui/Tooltip'
 import { AuditBadgeTooltip, type AuditBadgeMessage } from '../audit/AuditBadgeTooltip'
+import { SEVERITY_TEXT_CLASS } from '../checks/severity'
 import argoCdLogo from '../../assets/gitops/argocd.png'
 import fluxLogo from '../../assets/gitops/flux.svg'
 
@@ -464,12 +465,13 @@ export const K8sResourceNode = memo(function K8sResourceNode({
   // node's data by auditKey). The host only counts "badge-worthy" findings —
   // reference-integrity / lifecycle, "this resource is actually broken" — not the
   // posture/best-practice nags that fire near-universally, so the indicator stays
-  // a signal. Colored by worst severity (danger red, else warning amber).
-  const auditDanger =
+  // a signal. The counters retain the raw transport names, but presentation
+  // follows the canonical Checks severity ladder (High, then Medium).
+  const auditHigh =
     typeof nodeData.auditDanger === "number" ? nodeData.auditDanger : 0;
-  const auditWarning =
+  const auditMedium =
     typeof nodeData.auditWarning === "number" ? nodeData.auditWarning : 0;
-  const auditTotal = auditDanger + auditWarning;
+  const auditTotal = auditHigh + auditMedium;
   const auditMessages = Array.isArray(nodeData.auditMessages)
     ? (nodeData.auditMessages as AuditBadgeMessage[])
     : [];
@@ -652,7 +654,7 @@ export const K8sResourceNode = memo(function K8sResourceNode({
                         clickHint={false}
                       />
                     ) : (
-                      `${auditTotal} audit ${auditTotal === 1 ? "finding" : "findings"}${auditDanger > 0 ? ` · ${auditDanger} danger` : ""}`
+                      `${auditTotal} audit ${auditTotal === 1 ? "finding" : "findings"}${auditHigh > 0 ? ` · ${auditHigh} high` : ""}${auditMedium > 0 ? ` · ${auditMedium} medium` : ""}`
                     )
                   }
                   position="right"
@@ -660,9 +662,9 @@ export const K8sResourceNode = memo(function K8sResourceNode({
                   <TriangleAlert
                     className={clsx(
                       "w-3 h-3 cursor-help",
-                      auditDanger > 0
-                        ? SEVERITY_TEXT.error
-                        : SEVERITY_TEXT.warning,
+                      auditHigh > 0
+                        ? SEVERITY_TEXT_CLASS.high
+                        : SEVERITY_TEXT_CLASS.medium,
                     )}
                   />
                 </Tooltip>

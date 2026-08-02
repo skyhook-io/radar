@@ -22,7 +22,11 @@ import {
   recordConsent,
   DiagnoseError,
 } from "../../api/diagnose";
-import { type RunSummary, type AgentInfo } from "../../api/diagnose";
+import {
+  type RunSummary,
+  type AgentInfo,
+  type ExecutionProfile,
+} from "../../api/diagnose";
 
 export interface Target {
   kind: string;
@@ -34,11 +38,12 @@ export type DiagnoseView = "home" | "investigation";
 interface DiagnoseCtx {
   available: boolean; // an agent CLI is present (button/entry gate)
   agentLabel: string; // label of the selected agent, e.g. "Claude Code"
+  hosted: boolean; // selected agent runs on the host's backend, not this machine
   agents: AgentInfo[]; // supported agents detected on PATH (for the picker)
   selectedAgent: string; // name of the chosen backend ("claude"/"codex")
   setSelectedAgent: (name: string) => void;
-  isolated: boolean; // run the agent without the user's own CLI config
-  setIsolated: (v: boolean) => void;
+  profile: ExecutionProfile;
+  setProfile: (v: ExecutionProfile) => void;
   model: string; // optional model override ("" = the agent's own default)
   setModel: (v: string) => void;
   effort: string; // optional Codex reasoning effort ("" = default)
@@ -107,15 +112,10 @@ const WIDTH_KEY = "radar-ai-panel-width";
 // Consent is machine-scoped and lives server-side (~/.radar): it gates a
 // machine-scoped action (spawn this machine's agent CLI, persist transcripts to
 // this machine's disk), so one acknowledgment covers this panel AND the
-// `radar diagnose` CLI. Cursor gets its own surface — its trust model is
-// materially different (the user's global MCP servers can't be excluded), so
-// approving Claude/Codex never bypasses Cursor's distinct disclosure.
-type ConsentSurface = "standard" | "cursor";
-function consentSurfaceFor(agent: string): ConsentSurface {
-  return agent === "cursor-agent" ? "cursor" : "standard";
-}
+// `radar diagnose` CLI. The execution profile selects the disclosure because
+// it determines the actual access available to the agent process.
 const AGENT_KEY = "radar-ai-agent";
-const ISOLATED_KEY = "radar-ai-isolated";
+const PROFILE_KEY = "radar-ai-profile";
 const MODEL_KEY = "radar-ai-model";
 const EFFORT_KEY = "radar-ai-effort";
 // Push (reflow the app left) only while the app keeps at least this much width to
@@ -139,7 +139,9 @@ export function agentLabelFor(name: string, fallbackLabel?: string): string {
 // openDiagnoseSettings opens the Settings dialog (App.tsx listens for this DOM
 // event) — the canonical home for AI-diagnosis config.
 export function openDiagnoseSettings() {
-  window.dispatchEvent(new CustomEvent("radar:open-settings"));
+  window.dispatchEvent(
+    new CustomEvent("radar:open-settings", { detail: { section: "ai" } }),
+  );
 }
 
 function readStored(key: string): string | null {
@@ -160,14 +162,12 @@ function writeStored(key: string, value: string) {
 export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const [available, setAvailable] = useState(false);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
-  const [consented, setConsented] = useState<
-    Record<ConsentSurface, boolean>
-  >({ standard: false, cursor: false });
+  const [consented, setConsented] = useState<Record<string, boolean>>({});
   const [selectedAgent, setSelectedAgentState] = useState<string>(
     () => readStored(AGENT_KEY) || "",
   );
-  const [isolated, setIsolatedState] = useState<boolean>(
-    () => readStored(ISOLATED_KEY) !== "0", // default isolated
+  const [profile, setProfileState] = useState<ExecutionProfile>(
+    () => (readStored(PROFILE_KEY) as ExecutionProfile) || "safeguarded",
   );
   const [model, setModelState] = useState<string>(
     () => readStored(MODEL_KEY) || "",
@@ -204,12 +204,15 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     fetchAgents()
       .then((r) => {
         if (!live) return;
-        setAvailable(r.enabled);
-        setConsented({
-          standard: !!r.consented?.standard,
-          cursor: !!r.consented?.cursor,
-        });
-        const supported = r.agents.filter((a) => a.supported);
+        setConsented(r.consented ?? {});
+        const supported = r.agents.filter(
+          (a) =>
+            a.supported &&
+            (a.hosted ||
+              (!!a.profiles?.length &&
+                a.profiles.every((p) => !!a.consentSurfaces?.[p]))),
+        );
+        setAvailable(r.enabled && supported.length > 0);
         setAgents(supported);
         // Keep the stored pick only if it's still installed; else default to the
         // first supported agent (matches the server's default selection).
@@ -219,6 +222,13 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
             ? stored
             : (supported[0]?.name ?? "");
         setSelectedAgentState(next);
+        const profiles = supported.find((a) => a.name === next)?.profiles ?? [];
+        const storedProfile =
+          (readStored(PROFILE_KEY) as ExecutionProfile) || "safeguarded";
+        if (!profiles.includes(storedProfile) && profiles[0]) {
+          setProfileState(profiles[0]);
+          writeStored(PROFILE_KEY, profiles[0]);
+        }
         // Model/effort are agent-specific; if the stored agent is gone, its values
         // don't apply to the fallback agent (e.g. a Codex slug under Claude) — drop them.
         if (next !== stored) {
@@ -246,22 +256,35 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     (name: string) => {
       setSelectedAgentState(name);
       writeStored(AGENT_KEY, name);
+      const nextProfile = agents.find((agent) => agent.name === name)?.profiles?.[0];
+      if (nextProfile) {
+        setProfileState(nextProfile);
+        writeStored(PROFILE_KEY, nextProfile);
+      }
       // Model + effort are agent-specific (Claude aliases vs Codex slugs); reset
       // to the new agent's default rather than carry an invalid value across.
       setModel("");
       setEffort("");
     },
-    [setModel, setEffort],
+    [agents, setModel, setEffort],
   );
-  const setIsolated = useCallback((v: boolean) => {
-    setIsolatedState(v);
-    writeStored(ISOLATED_KEY, v ? "1" : "0");
+  const setProfile = useCallback((v: ExecutionProfile) => {
+    setProfileState(v);
+    writeStored(PROFILE_KEY, v);
   }, []);
 
-  const agentLabel = agentLabelFor(
-    selectedAgent,
-    agents.find((a) => a.name === selectedAgent)?.label,
-  );
+  const selectedAgentInfo = agents.find((a) => a.name === selectedAgent);
+  const effectiveProfile =
+    selectedAgentInfo?.profiles?.includes(profile)
+      ? profile
+      : (selectedAgentInfo?.profiles?.[0] ?? profile);
+  const agentLabel = agentLabelFor(selectedAgent, selectedAgentInfo?.label);
+  const hosted = !!selectedAgentInfo?.hosted;
+  // Hosted Radar uses its existing per-user disclosure surface and supplies its
+  // own copy. Local agents use the execution profile as the consent contract.
+  const consentSurface = hosted
+    ? "standard"
+    : (selectedAgentInfo?.consentSurfaces?.[effectiveProfile] ?? "");
 
   useEffect(() => {
     const onResize = () => setViewportW(window.innerWidth);
@@ -312,10 +335,6 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(t);
   }, [open, available, hasRunning, refreshRuns]);
 
-  // Keep the live selected agent reachable from the [] -dep callbacks below
-  // (consent is agent-specific, so they must read the CURRENT pick, not a closure).
-  const selectedAgentRef = useRef(selectedAgent);
-  selectedAgentRef.current = selectedAgent;
   const consentedRef = useRef(consented);
   consentedRef.current = consented;
 
@@ -327,7 +346,7 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     const seq = ++startSeqRef.current;
     createRun(t, {
       agent: selectedAgent || undefined,
-      isolated,
+      profile: hosted ? undefined : effectiveProfile,
       model: model || undefined,
       effort: effort || undefined,
     })
@@ -349,18 +368,28 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
       });
   };
 
-  const openInvestigation = useCallback((t: Target) => {
-    setStartError(null);
-    setOpen(true);
-    if (!consentedRef.current[consentSurfaceFor(selectedAgentRef.current)]) {
-      setPendingTarget(t);
+  const openInvestigation = useCallback(
+    (t: Target) => {
+      setStartError(null);
+      setOpen(true);
+      if (!hosted && !consentSurface) {
+        setPendingTarget(null);
+        setStartError("Radar can’t run this agent with a verified execution profile.");
+        setView("investigation");
+        return;
+      }
+      if (!consentedRef.current[consentSurface]) {
+        setPendingTarget(t);
+        setView("investigation");
+        return;
+      }
       setView("investigation");
-      return;
-    }
-    setView("investigation");
-    startRunRef.current(t);
-  }, []);
+      startRunRef.current(t);
+    },
+    [consentSurface, hosted],
+  );
   const openRun = useCallback((id: string) => {
+    setStartError(null);
     setActiveRunId(id);
     setView("investigation");
     setOpen(true);
@@ -398,15 +427,18 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const consentBusyRef = useRef(false);
   const approveConsent = useCallback(() => {
     if (consentBusyRef.current) return;
+    if (!consentSurface) {
+      setStartError("Radar can’t record consent for this agent.");
+      return;
+    }
     consentBusyRef.current = true;
     setStartError(null);
-    const surface = consentSurfaceFor(selectedAgentRef.current);
     const t = pendingTarget;
     // The server ENFORCES consent at start, so the acknowledgment must land
     // before the run request — awaiting also makes it durable for the CLI.
-    recordConsent(surface)
+    recordConsent(consentSurface)
       .then(() => {
-        setConsented((prev) => ({ ...prev, [surface]: true }));
+        setConsented((prev) => ({ ...prev, [consentSurface]: true }));
         // Cleared only on success: a failed write keeps the consent card up
         // (needsConsent = !!pendingTarget) so "try again" works in place.
         setPendingTarget(null);
@@ -418,7 +450,7 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
       .finally(() => {
         consentBusyRef.current = false;
       });
-  }, [pendingTarget]);
+  }, [consentSurface, pendingTarget]);
   const cancelConsent = useCallback(() => {
     setPendingTarget(null);
     setOpen(false);
@@ -433,11 +465,12 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const value: DiagnoseCtx = {
     available,
     agentLabel,
+    hosted,
     agents,
     selectedAgent,
     setSelectedAgent,
-    isolated,
-    setIsolated,
+    profile: effectiveProfile,
+    setProfile,
     model,
     setModel,
     effort,

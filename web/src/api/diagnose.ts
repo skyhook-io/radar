@@ -10,6 +10,9 @@ export interface AgentInfo {
   version: string;
   present: boolean;
   supported: boolean;
+  profiles?: ExecutionProfile[];
+  consentSurfaces?: Partial<Record<ExecutionProfile, string>>;
+  hosted?: boolean;
 }
 
 export interface AgentsResponse {
@@ -17,8 +20,10 @@ export interface AgentsResponse {
   enabled: boolean;
   // Machine-scoped consent per disclosure surface, recorded server-side
   // (~/.radar) — one acknowledgment covers the web panel and the CLI.
-  consented?: { standard?: boolean; cursor?: boolean };
+  consented?: Record<string, boolean>;
 }
+
+export type ExecutionProfile = "safeguarded" | "full-local";
 
 export interface DiagnoseStep {
   id: string;
@@ -63,14 +68,7 @@ export interface ResourceHealthSignal {
 }
 
 export interface DiagnoseStreamEvent {
-  type:
-    | "turn"
-    | "phase"
-    | "step"
-    | "thinking"
-    | "done"
-    | "error"
-    | "closed";
+  type: "turn" | "phase" | "step" | "thinking" | "done" | "error" | "closed";
   phase?: string;
   step?: DiagnoseStep;
   token?: string;
@@ -90,7 +88,7 @@ export interface RunSummary {
   name: string;
   context: string;
   agent?: string; // backend CLI that drove this run ("claude"/"codex")
-  isolated?: boolean;
+  profile?: ExecutionProfile;
   model?: string;
   effort?: string;
   managedBy?: string; // GitOps/Helm owner of the target ("Argo CD"/"Flux"/"Helm"), for the Apply warning
@@ -144,7 +142,7 @@ export async function createRun(
   },
   opts?: {
     agent?: string;
-    isolated?: boolean;
+    profile?: ExecutionProfile;
     model?: string;
     effort?: string;
   },
@@ -178,10 +176,8 @@ export async function listRuns(signal?: AbortSignal): Promise<RunsResponse> {
   return { runs: d.runs ?? [], historyDegraded: !!d.historyDegraded };
 }
 
-// recordConsent acknowledges the current disclosure for a surface, server-side.
-export async function recordConsent(
-  surface: "standard" | "cursor",
-): Promise<void> {
+// recordConsent acknowledges the current disclosure for an execution profile, server-side.
+export async function recordConsent(surface: string): Promise<void> {
   const res = await fetch(`${getApiBase()}/diagnose/consent`, {
     method: "POST",
     credentials: getCredentialsMode(),

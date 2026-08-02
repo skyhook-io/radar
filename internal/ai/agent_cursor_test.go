@@ -93,12 +93,13 @@ func TestCursorParseStream_ErrorResultNotVerdict(t *testing.T) {
 // stream-json output, sandboxed shell, MCP auto-approval, a workspace-local
 // mcp.json pointed at radar, and --resume only on a continued session.
 func TestCursorCommandFlags(t *testing.T) {
-	a := &cursorAgent{bin: "cursor-agent"}
+	a := &cursorAgent{bin: "cursor-agent", trustKnown: true, trust: true}
 	dir := t.TempDir()
 	const url = "http://localhost:9/mcp-readonly"
 
 	cmd, cleanup, err := a.command(context.Background(), turnSpec{
 		mcpURL: url, prompt: "go", workdir: dir, model: "sonnet-4.5",
+		profile: ExecutionProfileFullLocal,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -144,6 +145,7 @@ func TestCursorCommandFlags(t *testing.T) {
 	// A continued session passes --resume <id>.
 	resumed, cleanup2, err := a.command(context.Background(), turnSpec{
 		mcpURL: url, prompt: "more", workdir: dir, sessionID: "sess-xyz",
+		profile: ExecutionProfileFullLocal,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -151,6 +153,57 @@ func TestCursorCommandFlags(t *testing.T) {
 	defer cleanup2()
 	if !strings.Contains(strings.Join(resumed.Args, " "), "--resume sess-xyz") {
 		t.Errorf("continued session must pass --resume sess-xyz; got %q", resumed.Args)
+	}
+}
+
+func TestCursorCommandOmitsTrustWhenUnsupported(t *testing.T) {
+	a := &cursorAgent{bin: "cursor-agent", trustKnown: true}
+	cmd, cleanup, err := a.command(context.Background(), turnSpec{
+		mcpURL: "http://localhost:9/mcp-readonly", prompt: "go", workdir: t.TempDir(),
+		profile: ExecutionProfileFullLocal,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if strings.Contains(strings.Join(cmd.Args, " "), "--trust") {
+		t.Errorf("unsupported Cursor must not receive --trust: %q", cmd.Args)
+	}
+}
+
+func TestCursorCommandRejectsUnsupportedProfile(t *testing.T) {
+	a := &cursorAgent{bin: "cursor-agent", trustKnown: true}
+	if _, _, err := a.command(context.Background(), turnSpec{
+		mcpURL: "http://localhost:9/mcp-readonly", prompt: "go",
+		profile: ExecutionProfileSafeguarded,
+	}); err == nil {
+		t.Fatal("Cursor must reject safeguarded until the driver can enforce it")
+	}
+}
+
+func TestCursorCommandRejectsInconclusiveTrustProbe(t *testing.T) {
+	a := &cursorAgent{bin: filepath.Join(t.TempDir(), "missing-cursor-agent")}
+	if _, _, err := a.command(context.Background(), turnSpec{
+		mcpURL: "http://localhost:9/mcp-readonly", prompt: "go",
+		workdir: t.TempDir(), profile: ExecutionProfileFullLocal,
+	}); err == nil || !strings.Contains(err.Error(), "capability probe") {
+		t.Fatalf("inconclusive probe = %v, want capability-probe error", err)
+	}
+}
+
+func TestCursorHelpSupportsTrust(t *testing.T) {
+	if !cursorHelpSupportsTrust("  --trust  Trust the current workspace without prompting") {
+		t.Fatal("expected --trust to be detected from Cursor help")
+	}
+	for _, help := range []string{
+		"  --force  Run everything",
+		"  --trusted-domains  Trust listed domains",
+		"  --no-trust  Disable workspace trust",
+		"Removed: --trust is no longer supported",
+	} {
+		if cursorHelpSupportsTrust(help) {
+			t.Fatalf("must not infer --trust from %q", help)
+		}
 	}
 }
 

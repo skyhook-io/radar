@@ -66,46 +66,49 @@ func TestCodexParseStream_FormatPin(t *testing.T) {
 	}
 }
 
-// TestCodexIsolationFlags pins the security-relevant difference between isolated
-// and "my setup": isolated drops the user's config + runs in an empty cwd; both
+// TestCodexExecutionProfiles pins the security-relevant difference between safeguarded
+// and full-local: safeguarded drops the user's config + runs in an empty cwd; both
 // modes keep the read-only sandbox.
-func TestCodexIsolationFlags(t *testing.T) {
+func TestCodexExecutionProfiles(t *testing.T) {
 	a := &codexAgent{bin: "codex"}
 	ctx := context.Background()
 
-	iso, cleanup, err := a.command(ctx, turnSpec{mcpURL: "http://localhost:1/mcp-readonly", prompt: "go", isolated: true})
+	iso, cleanup, err := a.command(ctx, turnSpec{mcpURL: "http://localhost:1/mcp-readonly", prompt: "go", profile: ExecutionProfileSafeguarded})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer cleanup()
 	args := strings.Join(iso.Args, " ")
 	if !strings.Contains(args, "--ignore-user-config") {
-		t.Errorf("isolated mode must pass --ignore-user-config; got %q", args)
+		t.Errorf("safeguarded mode must pass --ignore-user-config; got %q", args)
 	}
 	if !strings.Contains(args, "--sandbox read-only") {
-		t.Errorf("isolated mode must keep --sandbox read-only; got %q", args)
+		t.Errorf("safeguarded mode must keep --sandbox read-only; got %q", args)
 	}
 	if iso.Dir == "" {
-		t.Error("isolated mode must run in a dedicated (empty) cwd")
+		t.Error("safeguarded mode must run in a dedicated (empty) cwd")
 	}
 	if iso.Env == nil {
-		t.Error("isolated mode must use a minimized env, not inherit nil")
+		t.Error("safeguarded mode must use a minimized env, not inherit nil")
 	}
 
-	my, cleanup2, err := a.command(ctx, turnSpec{mcpURL: "http://localhost:1/mcp-readonly", prompt: "go", isolated: false})
+	my, cleanup2, err := a.command(ctx, turnSpec{mcpURL: "http://localhost:1/mcp-readonly", prompt: "go", profile: ExecutionProfileFullLocal})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer cleanup2()
 	myArgs := strings.Join(my.Args, " ")
 	if strings.Contains(myArgs, "--ignore-user-config") {
-		t.Errorf("my-setup mode must NOT drop user config; got %q", myArgs)
+		t.Errorf("full-local mode must NOT drop user config; got %q", myArgs)
 	}
 	if !strings.Contains(myArgs, "--sandbox read-only") {
-		t.Errorf("my-setup mode must still keep --sandbox read-only; got %q", myArgs)
+		t.Errorf("full-local mode must still keep --sandbox read-only; got %q", myArgs)
 	}
 	if my.Dir != "" {
-		t.Error("my-setup mode should inherit radar's cwd (no override)")
+		t.Error("full-local mode should inherit radar's cwd (no override)")
+	}
+	if _, _, err := a.command(ctx, turnSpec{profile: ""}); err == nil {
+		t.Fatal("Codex must reject an empty profile rather than fail open")
 	}
 }
 

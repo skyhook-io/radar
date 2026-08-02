@@ -94,6 +94,31 @@ func TestValidateHubOriginTransportPolicy(t *testing.T) {
 	}
 }
 
+func TestHubOriginFromWebSocketURL(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want string
+	}{
+		{raw: "wss://api.radarhq.io/agent", want: "https://api.radarhq.io"},
+		{raw: "wss://hub.example:8443/agent?transport=websocket", want: "https://hub.example:8443"},
+		{raw: "ws://localhost:9091/agent", want: "http://localhost:9091"},
+		{raw: "ws://[::1]:9091/agent", want: "http://[::1]:9091"},
+	} {
+		t.Run(tc.raw, func(t *testing.T) {
+			got, err := HubOriginFromWebSocketURL(tc.raw)
+			if err != nil {
+				t.Fatalf("HubOriginFromWebSocketURL(%q): %v", tc.raw, err)
+			}
+			if got != tc.want {
+				t.Fatalf("HubOriginFromWebSocketURL(%q) = %q, want %q", tc.raw, got, tc.want)
+			}
+		})
+	}
+	if _, err := HubOriginFromWebSocketURL("ws://api.radarhq.io/agent"); err == nil {
+		t.Fatal("plaintext remote WebSocket URL unexpectedly accepted")
+	}
+}
+
 func TestConfigValidateRejectsPlaintextRemoteCloudURL(t *testing.T) {
 	cfg := Config{
 		URL:       "ws://api.radarhq.io/agent",

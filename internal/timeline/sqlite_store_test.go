@@ -679,7 +679,7 @@ func TestGetDiagnosis_WithSQLiteStore(t *testing.T) {
 		t.Fatalf("RecordEvent: %v", err)
 	}
 
-	resp := GetDiagnosis("TimelineWidget", "radar-timeline-test", "noise-check")
+	resp := GetDiagnosis("TimelineWidget", "radar-timeline-test", "noise-check", "", nil)
 	if !resp.StorePresent {
 		t.Fatal("expected diagnostics to see the global store")
 	}

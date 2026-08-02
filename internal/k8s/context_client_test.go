@@ -56,6 +56,30 @@ func TestClientFromContext_Impersonation(t *testing.T) {
 	}
 }
 
+func TestConfigSnapshotKeepsContextAndConfigTogether(t *testing.T) {
+	clientMu.Lock()
+	previousConfig := k8sConfig
+	previousContext := contextName
+	k8sConfig = &rest.Config{Host: "https://cluster-a.invalid"}
+	contextName = "cluster-a"
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		k8sConfig = previousConfig
+		contextName = previousContext
+		clientMu.Unlock()
+	})
+
+	config, snapshotContext := GetConfigSnapshot()
+	if config == nil || config.Host != "https://cluster-a.invalid" || snapshotContext != "cluster-a" {
+		t.Fatalf("snapshot = (%+v, %q), want cluster-a config and context", config, snapshotContext)
+	}
+	config.Host = "https://mutated.invalid"
+	if current := GetConfig(); current.Host != "https://cluster-a.invalid" {
+		t.Fatalf("snapshot mutation changed shared config: %q", current.Host)
+	}
+}
+
 // TestClientFromContext_ImpersonationFailureReturnsNil verifies the
 // fail-closed contract: when the base config is missing, impersonation
 // can't be constructed, and the caller gets nil (never a fallback to SA).

@@ -157,6 +157,34 @@
         }
       }
     },
+    "httpRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "apiVersion": { "type": "string", "minLength": 1 },
+        "annotations": { "type": "object", "additionalProperties": { "type": "string" } },
+        "labels": { "type": "object", "additionalProperties": { "type": "string" } },
+        "parentRefs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["name"],
+            "properties": { "name": { "type": "string", "minLength": 1 } }
+          }
+        },
+        "hostnames": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "defaultTimeout": { "type": "string" },
+        "rules": {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": true }
+        }
+      }
+    },
     "resources": { "type": "object" },
     "timeline": {
       "type": "object",
@@ -238,9 +266,20 @@
             "viewer": { "type": "boolean" },
             "ownerClusterRole": { "type": "string" },
             "memberClusterRole": { "type": "string" },
-            "viewerClusterRole": { "type": "string" }
+            "viewerClusterRole": { "type": "string" },
+            "clusterScopedRead": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "viewer": { "type": "boolean" },
+                "member": { "type": "boolean" },
+                "owner": { "type": "boolean" }
+              }
+            },
+            "nodeOps": { "type": "boolean" }
           }
-        }
+        },
+        "insecureSkipVerify": { "type": "boolean" }
       }
     },
     "mcp": {

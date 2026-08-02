@@ -17,8 +17,8 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/capacityapi"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // ResourcePermissions indicates which resource types the user can list/watch
@@ -89,6 +89,7 @@ type Capabilities struct {
 	WorkloadWrites WorkloadWritePermissions `json:"workloadWrites"`        // Can patch workload kinds (restart/scale controls)
 	MCPEnabled     bool                     `json:"mcpEnabled"`            // MCP server is running
 	Deployment     DeploymentInfo           `json:"deployment"`            // How / where this Radar binary is running. Tells the UI which chrome to render or suppress (e.g. embedded mode hides the cluster headline + local-MCP card because the hub already renders both).
+	Features       FeatureCapabilities      `json:"features"`              // Versioned server features that newer embedded frontends must negotiate
 	AuthEnabled    bool                     `json:"authEnabled,omitempty"` // Auth is enabled on the server
 	Username       string                   `json:"username,omitempty"`    // Authenticated username (when auth enabled)
 	Resources      *ResourcePermissions     `json:"resources,omitempty"`   // Per-resource-type permissions
@@ -103,6 +104,11 @@ type IntegrationCapability struct {
 	// right now" — a distinct condition every consumer must map to unavailable
 	// coverage, never to an observed/available source.
 	CacheUnavailable bool `json:"cacheUnavailable,omitempty"`
+}
+
+type FeatureCapabilities struct {
+	YAMLReview  bool `json:"yamlReview"`
+	YAMLSchemas bool `json:"yamlSchemas"`
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.

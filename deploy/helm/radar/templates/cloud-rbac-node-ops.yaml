@@ -1,0 +1,62 @@
+{{- /*
+Node operations for the owner tier — cordon / uncordon / drain from Radar.
+
+These are the exact verbs Radar's node-ops path uses (pkg/k8score/node_ops.go):
+  - patch nodes            → cordon / uncordon (spec.unschedulable strategic merge)
+  - list pods (all ns)     → enumerate pods on the node to drain
+  - create pods/eviction   → evict them (PodDisruptionBudgets are enforced by the
+                             eviction API itself, so no PDB read is needed)
+
+Be clear-eyed about the blast radius before enabling:
+  - `patch nodes` cannot be scoped to a field by K8s RBAC, so beyond cordon it
+    permits editing any node labels/taints — enough to defeat node-isolation
+    labeling, steer affinity-constrained workloads, or trigger NoExecute
+    evictions cluster-wide.
+  - `create pods/eviction` cannot be scoped by resourceNames, so it permits
+    evicting ANY pod in ANY namespace, not just pods on a node being drained.
+    PodDisruptionBudgets bound the availability impact only where they exist.
+This role itself adds no RBAC-object or Secret access (though the owner tier's
+default `admin` role already reads Secrets namespace-wide). Owner-only, its own
+toggle, default OFF. Set nodeOps=false to keep owners read-only on
+cluster-scoped resources.
+
+toString-eq gate: only a literal true enables a cluster-scoped write — a string
+"false" smuggled past schema validation must not render this.
+*/}}
+{{- if and .Values.cloud.enabled .Values.cloud.defaultRbac.create .Values.rbac.create (eq (toString .Values.cloud.defaultRbac.nodeOps) "true") .Values.cloud.defaultRbac.owner -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "radar.fullname" . }}-node-ops
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["patch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+  - apiGroups: [""]
+    resources: ["pods/eviction"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "radar.fullname" . }}-cloud-owner-node-ops
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "radar.fullname" . }}-node-ops
+subjects:
+  - kind: Group
+    name: radar:owner
+    apiGroup: rbac.authorization.k8s.io
+  # Legacy pre-rename vocabulary; kept for older hubs. Removed in v2.
+  - kind: Group
+    name: cloud:owner
+    apiGroup: rbac.authorization.k8s.io
+{{- end -}}

@@ -1820,6 +1820,7 @@ func TestSmokeCapabilitiesShape(t *testing.T) {
 	var body struct {
 		Resources      map[string]bool `json:"resources"`
 		WorkloadWrites map[string]bool `json:"workloadWrites"`
+		Features       map[string]bool `json:"features"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -1860,6 +1861,10 @@ func TestSmokeCapabilitiesShape(t *testing.T) {
 		if _, ok := body.WorkloadWrites[tag]; !ok {
 			t.Errorf("capabilities.workloadWrites missing key %q for WorkloadWritePermissions.%s", tag, field.Name)
 		}
+	}
+
+	if !body.Features["yamlReview"] || !body.Features["yamlSchemas"] {
+		t.Fatalf("capabilities.features = %v, want YAML review and schemas enabled", body.Features)
 	}
 }
 

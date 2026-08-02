@@ -22,7 +22,7 @@ import { Tooltip } from './Tooltip'
 // screen readers announce pressed/unpressed correctly. Optional tooltip
 // describes the toggle action ("Click to stop filtering by danger").
 
-export type FilterPillTone = 'neutral' | 'danger' | 'warn' | 'ok' | 'brand'
+export type FilterPillTone = 'neutral' | 'danger' | 'warn' | 'high' | 'medium' | 'ok' | 'brand'
 
 interface Props {
   label: ReactNode
@@ -49,6 +49,8 @@ const TONE_ACTIVE: Record<FilterPillTone, string> = {
   neutral: 'bg-theme-text-primary/10 border-theme-text-primary/25 text-theme-text-primary',
   danger:  'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-300',
   warn:    'bg-amber-500/15 border-amber-500/40 text-amber-800 dark:text-amber-300',
+  high:    'bg-orange-500/15 border-orange-500/40 text-orange-800 dark:text-orange-300',
+  medium:  'bg-yellow-500/15 border-yellow-500/40 text-yellow-800 dark:text-yellow-300',
   ok:      'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-300',
   brand:   'bg-[var(--color-brand-50)] border-[var(--color-radar-accent)] text-theme-text-primary dark:bg-[var(--color-brand-950)]',
 }

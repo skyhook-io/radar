@@ -45,7 +45,7 @@ type getWorkloadLogsInput struct {
 	Name      string `json:"name" jsonschema:"workload name"`
 	Container string `json:"container,omitempty" jsonschema:"specific container name, defaults to all containers"`
 	TailLines int    `json:"tail_lines,omitempty" jsonschema:"lines per pod (default 100)"`
-	Grep      string `json:"grep,omitempty" jsonschema:"optional regular expression to keep matching log lines before diagnostic filtering, like kubectl logs | grep PATTERN"`
+	Grep      string `json:"grep,omitempty" jsonschema:"optional regex; when set, only matching timestamp-prefixed lines are returned, like kubectl logs --timestamps | grep PATTERN; when omitted, lines are auto-filtered for diagnostic relevance"`
 	Since     string `json:"since,omitempty" jsonschema:"only return logs newer than this duration (e.g. 30s, 10m, 1h), like kubectl logs --since"`
 	Previous  bool   `json:"previous,omitempty" jsonschema:"return logs from the previous terminated container instance (e.g. for CrashLoopBackOff diagnosis), like kubectl logs -p"`
 }
@@ -260,25 +260,36 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 	}
 
 	allLogs := fetchPodLogs(ctx, pods, input.Namespace, input.Container, input.Grep, tailLines, sinceSeconds, input.Previous)
-
-	resp := map[string]any{
-		"workload": fmt.Sprintf("%s/%s/%s", kind, input.Namespace, input.Name),
-		"pods":     len(pods),
-		"logs":     allLogs,
-	}
+	var narrowHint string
 	// Steering hint when any pod's stream hit its tail cap. Compare against
 	// RawLines (pre-grep) so grep-filtered streams still surface the hint.
 	// Heuristic mirrors handleGetPodLogs.
 	for _, e := range allLogs {
 		if int64(e.RawLines) >= tailLines {
-			resp["narrowHint"] = fmt.Sprintf(
+			narrowHint = fmt.Sprintf(
 				"at least one pod's log stream tailed to %d lines (cap reached) — narrow with since= (e.g. 10m), grep= regex, container=, or raise tail_lines",
 				tailLines,
 			)
 			break
 		}
 	}
-	if w := computeWorkloadLogsWarnings(pods, input.Previous); len(w) > 0 {
+	capped, capStats := capMultiPodLogBundles(allLogs)
+	allLogs = capped[0]
+	if capStats.Truncated {
+		// Raising tail_lines cannot recover aggregate-truncated output, so the
+		// bundle-cap guidance supersedes the per-stream tail hint.
+		narrowHint = multiPodLogBundleNarrowHint(input.Namespace, capStats, input.Previous)
+	}
+
+	resp := map[string]any{
+		"workload": fmt.Sprintf("%s/%s/%s", kind, input.Namespace, input.Name),
+		"pods":     len(pods),
+		"logs":     allLogs,
+	}
+	if narrowHint != "" {
+		resp["narrowHint"] = narrowHint
+	}
+	if w := computeWorkloadLogsWarnings(pods, allLogs, input.Previous); len(w) > 0 {
 		resp["warnings"] = w
 	}
 	return toJSONResult(resp)
@@ -449,11 +460,13 @@ func schedulingBlockerWarnings(kind, namespace, name string) []string {
 	)}
 }
 
-// computeWorkloadLogsWarnings aggregates the not-Running and crashloop logs
-// hints that get_pod_logs surfaces, summarized across all pods of the workload.
-func computeWorkloadLogsWarnings(pods []*corev1.Pod, previous bool) []string {
+// computeWorkloadLogsWarnings aggregates the not-Running, crashloop, and empty
+// previous-log hints that get_pod_logs surfaces across the workload.
+func computeWorkloadLogsWarnings(pods []*corev1.Pod, logs []podLogEntry, previous bool) []string {
 	var notRunning, crashloop int
+	podsByName := make(map[string]*corev1.Pod, len(pods))
 	for _, p := range pods {
+		podsByName[p.Name] = p
 		if p.Status.Phase != corev1.PodRunning && p.Status.Phase != corev1.PodSucceeded {
 			notRunning++
 		}
@@ -474,14 +487,49 @@ func computeWorkloadLogsWarnings(pods []*corev1.Pod, previous bool) []string {
 			crashloop, len(pods),
 		))
 	}
+	if previous {
+		var emptyCrashLogs int
+		var examplePod string
+		var exampleStatus *corev1.ContainerStatus
+		for _, entry := range logs {
+			if entry.RawLines != 0 || entry.Error != "" {
+				continue
+			}
+			pod := podsByName[entry.Pod]
+			if pod == nil {
+				continue
+			}
+			statuses := filterContainerStatuses(pod.Status.ContainerStatuses, entry.Container)
+			if cs := pickCrashIndicator(statuses); cs != nil {
+				emptyCrashLogs++
+				if exampleStatus == nil {
+					examplePod = entry.Pod
+					exampleStatus = cs
+				}
+			}
+		}
+		if emptyCrashLogs > 0 {
+			reason := exampleStatus.LastTerminationState.Terminated.Reason
+			if reason == "" {
+				reason = "(reason unset)"
+			}
+			out = append(out, fmt.Sprintf(
+				"No crash log was captured for %d previous pod/container instance(s) (for example, `%s/%s`; last recorded termination: `%s`, exit code %d). This is an absence of evidence, not evidence of health — do NOT infer a root cause from the empty log. Inspect `get_events`, `diagnose` (recent spec changes), and pod conditions instead.",
+				emptyCrashLogs,
+				examplePod,
+				exampleStatus.Name,
+				reason,
+				exampleStatus.LastTerminationState.Terminated.ExitCode,
+			))
+		}
+	}
 	return out
 }
 
 // podLogEntry is the per-pod-per-container log row returned by fetchPodLogs.
 //
-// RawLines is the line count of the pre-grep stream so the workload-logs
-// narrowHint can detect upstream truncation correctly even when grep is
-// active. FilteredLogs.TotalLines reflects the post-grep count.
+// RawLines lets workload-logs detect upstream truncation independently of
+// response filtering.
 type podLogEntry struct {
 	Pod       string                 `json:"pod"`
 	Container string                 `json:"container"`
@@ -492,7 +540,7 @@ type podLogEntry struct {
 
 // fetchPodLogs fans out kubectl-logs requests across the given pods x containers.
 // containerFilter "" includes every container; non-empty restricts to that name.
-// grep is server-side regex applied before diagnostic filtering. previous=true
+// grep replaces diagnostic filtering when set. previous=true
 // fetches the prior terminated container instance (CrashLoopBackOff diagnosis).
 // Returns entries sorted by (pod, container) for deterministic output.
 // Resolves the kube client from ctx so the call still honors per-request RBAC.

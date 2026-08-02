@@ -22,17 +22,19 @@ import { stringify as toYaml } from "yaml";
 import { codeToHtml } from "shiki";
 import { DialogPortal } from "@skyhook-io/k8s-ui/components/ui/DialogPortal";
 import { useTheme } from "../../context/ThemeContext";
+import { type DiagnoseConsentCopy } from "../../context/DiagnoseCustomization";
 import {
   type Diagnosis,
   type DiagnoseStep,
   type AgentInfo,
+  type ExecutionProfile,
   type RunSummary,
 } from "../../api/diagnose";
 import { StatusDot } from "@skyhook-io/k8s-ui";
 import { Markdown } from "../ui/Markdown";
 
-// Segmented two-or-more-way selector — shared shape for the agent picker and the
-// isolation toggle.
+// Segmented two-or-more-way selector — shared shape for the agent and execution
+// profile pickers.
 function Segmented<T extends string | boolean>({
   label,
   options,
@@ -227,15 +229,15 @@ function SelectMenu({
   );
 }
 
-// AgentControls is the full AI-diagnosis config block (agent, isolation, model,
+// AgentControls is the full AI-diagnosis config block (agent, execution profile, model,
 // effort) — pure + prop-driven. It lives in Settings, not the investigation panel,
 // since these are set-once preferences rather than per-run knobs.
 export function AgentControls({
   agents,
   selectedAgent,
   onSelectAgent,
-  isolated,
-  onSetIsolated,
+  profile,
+  onSetProfile,
   model,
   onSetModel,
   effort,
@@ -244,8 +246,8 @@ export function AgentControls({
   agents: AgentInfo[];
   selectedAgent: string;
   onSelectAgent: (name: string) => void;
-  isolated: boolean;
-  onSetIsolated: (v: boolean) => void;
+  profile: ExecutionProfile;
+  onSetProfile: (v: ExecutionProfile) => void;
   model: string;
   onSetModel: (v: string) => void;
   effort: string;
@@ -254,6 +256,17 @@ export function AgentControls({
   const isCodex = selectedAgent === "codex";
   const isClaude = selectedAgent === "claude";
   const isCursor = selectedAgent === "cursor-agent";
+  const selectedAgentInfo = agents.find((a) => a.name === selectedAgent);
+  const selectedAgentLabel =
+    selectedAgentInfo?.label || selectedAgent || "agent";
+  const profiles = selectedAgentInfo?.profiles ?? [];
+  const shownProfile = profiles.includes(profile)
+    ? profile
+    : (profiles[0] ?? profile);
+  const profileLabels: Record<ExecutionProfile, string> = {
+    safeguarded: "Radar safeguards",
+    "full-local": `Your ${selectedAgentLabel} setup`,
+  };
   return (
     <div className="space-y-3">
       {agents.length >= 2 && (
@@ -267,29 +280,66 @@ export function AgentControls({
           }))}
         />
       )}
-      {isCodex && (
+      {profiles.length > 0 && (
         <div>
-          <Segmented<boolean>
-            label="Environment"
-            value={isolated}
-            onChange={onSetIsolated}
-            options={[
-              { value: true, label: "Isolated (recommended)" },
-              { value: false, label: "My setup" },
-            ]}
-          />
-          {isolated ? (
-            <p className="mt-1.5 text-[11px] leading-snug text-theme-text-tertiary">
-              Runs Codex on its own — no access to your other MCP servers,
-              guidelines, or project files.
-            </p>
+          {profiles.length > 1 ? (
+            <>
+              <Segmented<ExecutionProfile>
+                label="How Radar runs it"
+                value={shownProfile}
+                onChange={onSetProfile}
+                options={profiles.map((value) => ({
+                  value,
+                  label: profileLabels[value],
+                }))}
+              />
+              {shownProfile === "safeguarded" ? (
+                <p className="mt-1.5 text-[11px] leading-snug text-theme-text-tertiary">
+                  {isClaude
+                    ? "Claude’s built-in tools are disabled, and MCP access is limited to Radar’s read-only investigation tools. Your Claude settings, hooks, and CLAUDE.md instructions still apply and are outside Radar’s control."
+                    : isCodex
+                      ? "Radar excludes your Codex configuration and other MCP servers. Codex’s sandboxed shell can still read files on this machine; it cannot write or reach the network."
+                      : "Radar uses this agent’s safeguarded execution profile. Review the agent’s documented restrictions before continuing."}
+                </p>
+              ) : (
+                <div className="mt-1.5 flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-[11px] leading-snug text-theme-text-secondary">
+                  <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" />
+                  <span>
+                    Uses your agent&apos;s normal configuration and other
+                    configured tools and MCP servers. Radar cannot constrain that
+                    external tooling; it may access local files or the network
+                    and may be able to change your cluster.{" "}
+                    {isClaude
+                      ? "Claude uses the permissions from your setup; Radar does not override them."
+                      : "Radar still enables the agent CLI’s own sandbox, but that sandbox does not constrain external MCP servers."}{" "}
+                    Choose this only when you need that setup.
+                  </span>
+                </div>
+              )}
+            </>
+          ) : shownProfile === "safeguarded" ? (
+            <div className="flex items-start gap-1.5 rounded border border-theme-border bg-theme-base p-2 text-[11px] leading-snug text-theme-text-secondary">
+              <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0 text-accent" />
+              <span>
+                Radar always runs this agent with safeguards.
+                {isClaude
+                  ? " Claude’s built-in tools are disabled, and MCP access is limited to Radar’s read-only investigation tools. Your Claude settings, hooks, and CLAUDE.md instructions still apply and are outside Radar’s control."
+                  : isCodex
+                    ? " Your Codex configuration and other MCP servers are excluded. Codex’s sandboxed shell can still read files on this machine; it cannot write or reach the network."
+                    : " Review the agent’s documented restrictions before continuing."}
+              </span>
+            </div>
           ) : (
-            <div className="mt-1.5 flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-[11px] leading-snug text-theme-text-secondary">
+            <div className="flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-[11px] leading-snug text-theme-text-secondary">
               <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" />
               <span>
-                Runs Codex with your full setup — your own MCP servers (which may
-                be write- or network-capable) and guidelines, and it can read
-                local files. Only choose this if you rely on that config.
+                Radar must use this agent&apos;s normal setup. Radar cannot
+                constrain its external tools or MCP servers; they may access
+                local files or the network and may be able to change your
+                cluster. Radar still enables the agent CLI&apos;s own sandbox,
+                but that sandbox does not constrain external MCP servers.
+                {isCursor &&
+                  " Cursor always loads your global MCP servers, so Radar cannot exclude them."}
               </span>
             </div>
           )}
@@ -303,7 +353,7 @@ export function AgentControls({
           onChange={onSetModel}
           hint="Aliases always resolve to the latest of that tier."
         />
-      ) : (
+      ) : isCodex || isCursor ? (
         <TextField
           label="Model"
           value={model}
@@ -316,10 +366,18 @@ export function AgentControls({
           hint={
             isCursor
               ? "Leave empty for your Cursor default, or enter a model slug Cursor supports."
-              : !isolated
-                ? "“My setup” uses your own Codex config's model; set a slug here to override it."
+              : shownProfile === "full-local"
+                ? "Your Codex setup uses its configured model; set a slug here to override it."
                 : "Leave empty for Codex's default, or enter a model your Codex version supports."
           }
+        />
+      ) : (
+        <TextField
+          label="Model"
+          value={model}
+          placeholder="Default"
+          onChange={onSetModel}
+          hint="Leave empty for the agent's default, or enter a model identifier it supports."
         />
       )}
       {isCodex && (
@@ -402,6 +460,7 @@ export function TurnView({
   onApply,
   onAsk,
   onCheckStatus,
+  onRetryDiagnosis,
   hideVerdict = false,
 }: {
   turn: Turn;
@@ -410,6 +469,7 @@ export function TurnView({
   onApply?: (fix: string) => void;
   onAsk?: (question: string) => void;
   onCheckStatus?: () => void;
+  onRetryDiagnosis?: () => void;
   // In the maximized workspace the pinned turn's verdict renders in the side rail,
   // so the transcript suppresses its own copy (reasoning + tool calls still show).
   hideVerdict?: boolean;
@@ -469,7 +529,18 @@ export function TurnView({
       {turn.status === "error" && turn.error && (
         <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-theme-text-primary">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
-          <span>{turn.error}</span>
+          <div className="flex min-w-0 flex-col gap-2">
+            <span className="whitespace-pre-wrap break-words">{turn.error}</span>
+            {onRetryDiagnosis && (
+              <button
+                type="button"
+                onClick={onRetryDiagnosis}
+                className="btn-brand self-start px-3 py-1 text-xs"
+              >
+                Retry diagnosis
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -568,95 +639,63 @@ export function RunContextCard({ run }: { run: RunSummary }) {
   );
 }
 
-// The first-run consent + trust card. Its copy is the OSS BYO-local trust story
-// ("your own agent, on your machine, nothing to Radar").
-// TODO(cloud): this copy must become embedder-overridable for Radar Cloud, where
-//   the agent runs in the cloud (the company's self-hosted instance + their key /
-//   local LLM, OR our SaaS) — a different, honestly-different trust story ("runs in
-//   your Radar Cloud, audited, managed key"). Plumb an override through the
-//   DiagnoseCustomization seam (same place Hub overrides the entry button) before
-//   the k8s-ui lift, so OSS and Cloud don't ship the same claim over different data
-//   flows. This is also a natural "upgrade to Cloud" surface.
-export function ConsentCard({
-  agentName,
-  agent,
-  isolated = true,
+// ConsentCardShell owns the card chrome (icon, layout, settings link, Approve/
+// Cancel) so every copy tier — the OSS default, the hosted fallback, and a host
+// override — feeds the same frame instead of duplicating it.
+function ConsentCardShell({
+  title,
+  body,
+  bullets,
+  settingsLabel,
+  approveLabel = "Approve & investigate",
+  warning = false,
   onOpenSettings,
   onApprove,
   onCancel,
-}: {
-  agentName: string;
-  agent?: string;
-  isolated?: boolean;
+}: DiagnoseConsentCopy & {
+  warning?: boolean;
   onOpenSettings?: () => void;
   onApprove: () => void;
   onCancel: () => void;
 }) {
-  // Cursor can't be isolated (no flag suppresses its global MCP servers), so it
-  // gets its own honest framing rather than the isolated/my-setup pair.
-  const isCursor = agent === "cursor-agent";
+  // `settingsLabel: null` hides the link outright — a host with one fixed agent
+  // has nothing behind it. `undefined` keeps the OSS default label.
+  const resolvedSettingsLabel =
+    settingsLabel === undefined
+      ? "Change the agent and how it runs in Settings"
+      : settingsLabel;
   return (
-    <div className="rounded-lg border border-theme-border bg-theme-elevated p-4">
+    <div
+      className={
+        warning
+          ? "rounded-lg border border-amber-500/40 bg-amber-500/10 p-4"
+          : "rounded-lg border border-theme-border bg-theme-elevated p-4"
+      }
+    >
       <div className="mb-2 flex items-center gap-2">
-        <ShieldCheck className="h-4 w-4 text-accent" />
+        {warning ? (
+          <AlertTriangle className="h-4 w-4 text-amber-500" />
+        ) : (
+          <ShieldCheck className="h-4 w-4 text-accent" />
+        )}
         <div className="text-sm font-medium text-theme-text-primary">
-          {isolated && !isCursor
-            ? "Run a read-only AI investigation?"
-            : "Run an AI investigation?"}
+          {title}
         </div>
       </div>
-      <p className="text-sm leading-relaxed text-theme-text-secondary">
-        This runs{" "}
-        <span className="font-medium text-theme-text-primary">
-          your own {agentName}
-        </span>{" "}
-        on your machine — no Radar cloud, no API key, no account. Radar sends
-        this resource&apos;s spec, recent events, and pod logs to it (and on to
-        its model provider under your account, not to Radar). Transcripts are
-        kept in your local Radar history on this machine until cleared.
-        {isolated && !isCursor && (
-          <>
-            {" "}
-            Through Radar the agent can only{" "}
-            <span className="font-medium">read</span> — it cannot change your
-            cluster.
-          </>
-        )}
-      </p>
-      <ul className="mt-2 space-y-1 text-xs text-theme-text-tertiary">
-        {isCursor ? (
-          <li>
-            • Through Radar the agent only <span className="font-medium">reads</span>{" "}
-            your cluster. But Cursor also loads your own global MCP servers and
-            Radar can&apos;t exclude them (unlike Claude or Codex), so if any of
-            those can make changes, Cursor could use them.
-          </li>
-        ) : isolated ? (
-          <li>
-            • Isolated: only Radar&apos;s read-only investigation tools — your
-            other CLI config and MCP servers are excluded.
-            {agent === "codex" && (
-              <>
-                {" "}
-                Codex&apos;s sandboxed shell can still <em>read</em> files on
-                your machine (it cannot write or reach the network).
-              </>
-            )}
-          </li>
-        ) : (
-          <li>
-            • &ldquo;My setup&rdquo;: the agent also runs with your own CLI
-            config + MCP servers and can read local files. Only Radar&apos;s own
-            tools are read-only.
-          </li>
-        )}
-      </ul>
-      {onOpenSettings && (
+      <div className="text-sm leading-relaxed text-theme-text-secondary">{body}</div>
+      {bullets && bullets.length > 0 && (
+        <ul className="mt-2 space-y-1 text-xs text-theme-text-tertiary">
+          {bullets.map((b, i) => (
+            <li key={i}>• {b}</li>
+          ))}
+        </ul>
+      )}
+      {onOpenSettings && resolvedSettingsLabel && (
         <button
           onClick={onOpenSettings}
           className="mt-3 text-xs text-accent hover:underline"
         >
-          Change the agent and how it runs in Settings
+          {resolvedSettingsLabel}
         </button>
       )}
       <div className="mt-4 flex gap-2">
@@ -670,10 +709,129 @@ export function ConsentCard({
           onClick={onApprove}
           className="flex-1 rounded-lg btn-brand py-1.5 text-sm"
         >
-          Approve &amp; investigate
+          {approveLabel}
         </button>
       </div>
     </div>
+  );
+}
+
+// The first-run consent + trust card. The copy is checkable fact about a data
+// flow — not marketing — and the wrong claim is a lie, not a typo. It resolves
+// in two tiers:
+//
+//   1. `copy` — the embedding host tells its own trust story. Only the host
+//      knows where its agent runs, whose key pays, and where transcripts live,
+//      so any host that runs the agent somewhere other than the OSS local CLI
+//      MUST override rather than let Radar assert the local story over its flow.
+//   2. No `copy` — the OSS bring-your-own-local-CLI default, the only tier where
+//      "on your machine / no Radar cloud / your account" actually holds.
+export function ConsentCard({
+  agentName,
+  agent,
+  profile,
+  copy,
+  onOpenSettings,
+  onApprove,
+  onCancel,
+}: {
+  agentName: string;
+  agent?: string;
+  profile: ExecutionProfile;
+  copy?: DiagnoseConsentCopy;
+  onOpenSettings?: () => void;
+  onApprove: () => void;
+  onCancel: () => void;
+}) {
+  const chrome = { onOpenSettings, onApprove, onCancel };
+
+  // Tier 1: a host (e.g. radar-hub-web) supplied its own copy — use it verbatim.
+  if (copy) return <ConsentCardShell {...copy} {...chrome} />;
+
+  return (
+    <ConsentCardShell
+      {...chrome}
+      warning={profile === "full-local"}
+      approveLabel={
+        profile === "full-local"
+          ? "Continue with my agent setup"
+          : "Approve & investigate"
+      }
+      title={
+        profile === "safeguarded"
+          ? "Run an AI investigation with Radar safeguards?"
+          : `Run using your ${agentName} setup?`
+      }
+      body={
+        <>
+          This runs{" "}
+          <span className="font-medium text-theme-text-primary">
+            your own {agentName}
+          </span>{" "}
+          on your machine — no Radar cloud, no API key, no account. Radar sends
+          this resource&apos;s spec, recent events, and pod logs to it (and on
+          to its model provider under your account, not to Radar). Transcripts
+          are kept in your local Radar history on this machine until cleared.
+          {profile === "safeguarded" && (
+            <>
+              {" "}
+              Radar&apos;s investigation tools can only{" "}
+              <span className="font-medium">read</span> your cluster.
+            </>
+          )}
+        </>
+      }
+      bullets={
+        profile === "safeguarded"
+          ? [
+              agent === "claude" ? (
+                <>
+                  Radar safeguards disable Claude&apos;s built-in tools and limit
+                  MCP access to Radar&apos;s read-only investigation tools. Your
+                  Claude settings, hooks, and CLAUDE.md instructions still apply
+                  and are outside Radar&apos;s control.
+                </>
+              ) : agent === "codex" ? (
+                <>
+                  Radar safeguards exclude your Codex configuration and other MCP
+                  servers. Codex&apos;s sandboxed shell can still read files on
+                  this machine; it cannot write or reach the network.
+                </>
+              ) : (
+                <>
+                  Radar uses this agent&apos;s safeguarded execution profile.
+                  Review the agent&apos;s documented restrictions before
+                  continuing.
+                </>
+              ),
+            ]
+          : [
+              <>
+                Radar cannot constrain the agent&apos;s other configured tools or
+                MCP servers. They may access local files or the network and may
+                be able to change your cluster.
+              </>,
+              agent === "claude" ? (
+                <>
+                  Claude uses the permissions from your setup; Radar does not
+                  override them.
+                </>
+              ) : (
+                <>
+                  Radar still enables the agent CLI&apos;s own sandbox, but that
+                  sandbox does not constrain external MCP servers.
+                  {agent === "cursor-agent" && (
+                    <>
+                      {" "}
+                      Cursor always loads your global MCP servers; Radar cannot
+                      exclude them.
+                    </>
+                  )}
+                </>
+              ),
+            ]
+      }
+    />
   );
 }
 

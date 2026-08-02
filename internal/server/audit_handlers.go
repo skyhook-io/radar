@@ -110,8 +110,10 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	// Standalone Radar and the embedded per-cluster audit view omit the param
 	// and keep applying local settings.
 	if queryTrue(r, "raw") {
-		// Raw fan-out (the Hub): just the findings + catalog. The Hub applies
-		// org policy and builds its own rollup, so computing one here is waste.
+		// This mixed-version Hub boundary deliberately preserves the scanner's
+		// raw danger/warning provenance. Existing audit transport fields remain
+		// compatible, while Checks and agent surfaces use the canonical
+		// critical/high/medium/low ladder.
 		s.writeJSON(w, results)
 		return
 	}

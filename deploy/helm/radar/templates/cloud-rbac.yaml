@@ -32,6 +32,11 @@ roleRef:
   kind: ClusterRole
   name: {{ .Values.cloud.defaultRbac.ownerClusterRole }}
 subjects:
+  # radar:* is the canonical group vocabulary; the cloud:* subject is the
+  # pre-rename legacy kept for older hubs during the deprecation window.
+  - kind: Group
+    name: radar:owner
+    apiGroup: rbac.authorization.k8s.io
   - kind: Group
     name: cloud:owner
     apiGroup: rbac.authorization.k8s.io
@@ -49,6 +54,11 @@ roleRef:
   kind: ClusterRole
   name: {{ .Values.cloud.defaultRbac.memberClusterRole }}
 subjects:
+  # radar:* is the canonical group vocabulary; the cloud:* subject is the
+  # pre-rename legacy kept for older hubs during the deprecation window.
+  - kind: Group
+    name: radar:member
+    apiGroup: rbac.authorization.k8s.io
   - kind: Group
     name: cloud:member
     apiGroup: rbac.authorization.k8s.io
@@ -66,6 +76,11 @@ roleRef:
   kind: ClusterRole
   name: {{ .Values.cloud.defaultRbac.viewerClusterRole }}
 subjects:
+  # radar:* is the canonical group vocabulary; the cloud:* subject is the
+  # pre-rename legacy kept for older hubs during the deprecation window.
+  - kind: Group
+    name: radar:viewer
+    apiGroup: rbac.authorization.k8s.io
   - kind: Group
     name: cloud:viewer
     apiGroup: rbac.authorization.k8s.io

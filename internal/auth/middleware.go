@@ -112,7 +112,25 @@ func Authenticate(cfg Config) func(http.Handler) http.Handler {
 						}
 					}
 
+					// Under Cloud, constrain what Radar will impersonate: reject
+					// reserved K8s principals (system:masters etc.) and anything
+					// outside the radar:/cloud: group vocabulary. The SA's
+					// impersonate grant is cluster-scoped and can't express this,
+					// so it's enforced here or nowhere. No-op outside Cloud — the
+					// operator owns their proxy/OIDC identity chain. Reject the
+					// whole request; a bad principal from the tunnel is an anomaly.
+					if !ForwardedIdentityAllowed(username, groups, cloudProxyMode) {
+						log.Printf("[auth] rejected forwarded identity with disallowed principal (user=%q, cloud=%v)", username, cloudProxyMode)
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(http.StatusForbidden)
+						json.NewEncoder(w).Encode(map[string]string{
+							"error": "forwarded identity asserts a disallowed principal",
+						})
+						return
+					}
+
 					user := &User{Username: username, Groups: groups}
+					logAcceptedForwardedIdentity(user)
 					if !cloudProxyMode {
 						cookies := CreateSessionCookie(user, NewSessionID(), "", cfg.Secret, cfg.CookieTTL, secure)
 						for _, c := range cookies {

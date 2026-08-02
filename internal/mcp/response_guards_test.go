@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -11,7 +12,103 @@ import (
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 )
+
+func TestCapMultiPodLogBundles_UnderBudgetUnchanged(t *testing.T) {
+	current := []podLogEntry{{
+		Pod:       "api-0",
+		Container: "api",
+		Logs:      aicontext.FilteredLogs{Lines: []string{"ERROR small failure"}, TotalLines: 1, MatchedLines: 1},
+	}}
+	previous := []podLogEntry{{Pod: "api-0", Container: "api", Error: "previous terminated container not found"}}
+
+	got, stats := capMultiPodLogBundles(current, previous)
+	if stats.Truncated {
+		t.Fatal("small bundles must not be marked truncated")
+	}
+	if !reflect.DeepEqual(got, [][]podLogEntry{current, previous}) {
+		t.Fatalf("small bundles changed: %#v", got)
+	}
+}
+
+func TestCapMultiPodLogBundles_BreadthFirstAcrossDiagnoseStreams(t *testing.T) {
+	line := strings.Repeat("x", 4095)
+	entry := func(pod string) podLogEntry {
+		return podLogEntry{
+			Pod:       pod,
+			Container: "app",
+			Logs:      aicontext.FilteredLogs{Lines: []string{line, line, line, line}, TotalLines: 4, MatchedLines: 4},
+		}
+	}
+
+	got, stats := capMultiPodLogBundles(
+		[]podLogEntry{entry("api-0"), entry("api-1")},
+		[]podLogEntry{entry("api-2")},
+	)
+	if !stats.Truncated {
+		t.Fatal("oversized diagnose current+previous bundle must be truncated")
+	}
+	if stats.TotalPods != 3 || stats.ShownPods != 3 {
+		t.Fatalf("breadth lost: shown %d of %d pods", stats.ShownPods, stats.TotalPods)
+	}
+	if stats.ShownLines != 8 || stats.TotalLines != 12 {
+		t.Fatalf("lines = %d of %d, want 8 of 12", stats.ShownLines, stats.TotalLines)
+	}
+	for bundleIndex, bundle := range got {
+		for _, logEntry := range bundle {
+			if len(logEntry.Logs.Lines) < 2 {
+				t.Fatalf("bundle %d pod %s received only %d lines", bundleIndex, logEntry.Pod, len(logEntry.Logs.Lines))
+			}
+		}
+	}
+	if got[0][0].Logs.Lines[0] != line || got[1][0].Logs.Lines[0] != line {
+		t.Fatal("returned log content changed")
+	}
+
+	shownBytes := 0
+	for _, bundle := range got {
+		for _, logEntry := range bundle {
+			for _, returnedLine := range logEntry.Logs.Lines {
+				shownBytes += len(returnedLine) + 1
+			}
+		}
+	}
+	if shownBytes > maxMultiPodLogBundleBytes {
+		t.Fatalf("returned line payload is %d bytes, cap is %d", shownBytes, maxMultiPodLogBundleBytes)
+	}
+
+	hint := multiPodLogBundleNarrowHint("prod", stats, stats.FirstOmittedBundle == 1)
+	for _, want := range []string{"truncated", "showing 8 of 12 lines across 3 pods", "32 KiB", "aggregate log-content cap", "get_pod_logs", `namespace="prod"`, `name="api-2"`, `container="app"`, "previous=true", "inspect the omitted stream", "since=", "grep="} {
+		if !strings.Contains(hint, want) {
+			t.Errorf("hint %q missing %q", hint, want)
+		}
+	}
+}
+
+func TestCapMultiPodLogBundles_LongLineDoesNotStarveOtherPods(t *testing.T) {
+	logs := []podLogEntry{
+		{Pod: "oversized", Container: "app", Logs: aicontext.FilteredLogs{Lines: []string{strings.Repeat("x", maxMultiPodLogBundleBytes+1)}}},
+		{Pod: "useful", Container: "app", Logs: aicontext.FilteredLogs{Lines: []string{"ERROR connection refused", "WARN retrying"}}},
+	}
+
+	got, stats := capMultiPodLogBundles(logs)
+	if !stats.Truncated || stats.FirstOmittedPod != "oversized" {
+		t.Fatalf("stats = %+v, want oversized pod reported as omitted", stats)
+	}
+	if len(got[0][0].Logs.Lines) != 0 {
+		t.Fatalf("over-cap line must be omitted whole, got %d lines", len(got[0][0].Logs.Lines))
+	}
+	if !reflect.DeepEqual(got[0][1].Logs.Lines, logs[1].Logs.Lines) {
+		t.Fatalf("shorter pod lines were starved: %#v", got[0][1].Logs.Lines)
+	}
+	hint := multiPodLogBundleNarrowHint("prod", stats, false)
+	for _, want := range []string{"showing logs from 1 of 2 pods", `container="app"`, "previous=false"} {
+		if !strings.Contains(hint, want) {
+			t.Errorf("hint %q missing %q", hint, want)
+		}
+	}
+}
 
 func TestTruncateLargeConfigMapData(t *testing.T) {
 	small := map[string]any{"data": map[string]any{"k": "v"}}

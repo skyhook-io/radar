@@ -6,11 +6,126 @@ import (
 	"strings"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
+
+func TestWorkloadDiffsIncludeInitContainerImageChanges(t *testing.T) {
+	oldSpec := corev1.PodSpec{
+		InitContainers: []corev1.Container{{Name: "migrate", Image: "migrate:v1"}},
+		Containers:     []corev1.Container{{Name: "app", Image: "app:v1"}},
+	}
+	newSpec := oldSpec.DeepCopy()
+	newSpec.InitContainers[0].Image = "migrate:v2"
+
+	tests := []struct {
+		name string
+		old  any
+		new  any
+		diff func(any, any) ([]FieldChange, []string)
+	}{
+		{
+			name: "Deployment",
+			old:  &appsv1.Deployment{Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: oldSpec}}},
+			new:  &appsv1.Deployment{Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: *newSpec}}},
+			diff: diffDeployment,
+		},
+		{
+			name: "DaemonSet",
+			old:  &appsv1.DaemonSet{Spec: appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{Spec: oldSpec}}},
+			new:  &appsv1.DaemonSet{Spec: appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{Spec: *newSpec}}},
+			diff: diffDaemonSet,
+		},
+		{
+			name: "StatefulSet",
+			old:  &appsv1.StatefulSet{Spec: appsv1.StatefulSetSpec{Template: corev1.PodTemplateSpec{Spec: oldSpec}}},
+			new:  &appsv1.StatefulSet{Spec: appsv1.StatefulSetSpec{Template: corev1.PodTemplateSpec{Spec: *newSpec}}},
+			diff: diffStatefulSet,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			changes, summary := tt.diff(tt.old, tt.new)
+			if !hasChangePath(changes, "spec.template.spec.initContainers[migrate].image") {
+				t.Fatalf("init-container image change missing: %+v", changes)
+			}
+			if !strings.Contains(strings.Join(summary, "; "), "image(migrate): migrate:v1→migrate:v2") {
+				t.Fatalf("init-container image summary missing: %v", summary)
+			}
+		})
+	}
+}
+
+func TestDiffPodTemplateConfigUsesRealInitContainerPaths(t *testing.T) {
+	oldSpec := corev1.PodSpec{InitContainers: []corev1.Container{{
+		Name:            "migrate",
+		Image:           "migrate:v1",
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Env:             []corev1.EnvVar{{Name: "MODE", Value: "safe"}},
+		EnvFrom:         []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "old-config"}}}},
+		Command:         []string{"migrate"},
+		Args:            []string{"--safe"},
+		ReadinessProbe:  &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/ready", Port: intstr.FromInt32(8080)}}},
+		VolumeMounts:    []corev1.VolumeMount{{Name: "work", MountPath: "/work"}},
+		Ports:           []corev1.ContainerPort{{Name: "http", ContainerPort: 8080}},
+	}}}
+	newSpec := oldSpec.DeepCopy()
+	initContainer := &newSpec.InitContainers[0]
+	initContainer.ImagePullPolicy = corev1.PullAlways
+	initContainer.Env[0].Value = "fast"
+	initContainer.EnvFrom[0].ConfigMapRef.Name = "new-config"
+	initContainer.Command = []string{"migrate-v2"}
+	initContainer.Args = []string{"--fast"}
+	initContainer.ReadinessProbe.HTTPGet.Path = "/healthz"
+	initContainer.VolumeMounts[0].MountPath = "/workspace"
+	initContainer.Ports[0].ContainerPort = 9090
+
+	changes, _ := diffPodTemplateConfig(oldSpec, *newSpec)
+	for _, field := range []string{
+		"env[MODE]",
+		"envFrom",
+		"imagePullPolicy",
+		"readinessProbe",
+		"command",
+		"args",
+		"volumeMounts",
+		"ports",
+	} {
+		path := "spec.template.spec.initContainers[migrate]." + field
+		if !hasChangePath(changes, path) {
+			t.Errorf("missing %s in %+v", path, changes)
+		}
+	}
+	for _, change := range changes {
+		if strings.HasPrefix(change.Path, "spec.template.spec.containers[migrate]") {
+			t.Errorf("init-container change used ordinary-container path: %+v", change)
+		}
+	}
+}
+
+func TestDiffPodTemplateConfigTreatsContainerListMoveAsRemoveAndAdd(t *testing.T) {
+	oldSpec := corev1.PodSpec{Containers: []corev1.Container{{Name: "worker", Image: "worker:v1"}}}
+	newSpec := corev1.PodSpec{InitContainers: []corev1.Container{{Name: "worker", Image: "worker:v1"}}}
+
+	changes, summary := diffPodTemplateConfig(oldSpec, newSpec)
+	for _, path := range []string{
+		"spec.template.spec.containers[worker]",
+		"spec.template.spec.initContainers[worker]",
+	} {
+		if !hasChangePath(changes, path) {
+			t.Errorf("container-list move missing %s: %+v", path, changes)
+		}
+	}
+	joined := strings.Join(summary, "; ")
+	if !strings.Contains(joined, "container worker removed") ||
+		!strings.Contains(joined, "init container worker added") {
+		t.Fatalf("container-list move summary = %q", joined)
+	}
+}
 
 // Added/removed containers must surface as a single row naming the container
 // (with its image) — not vanish because per-field diffs only cover containers
@@ -207,6 +322,103 @@ func TestDiffPodTemplateConfig_PortsSAandScheduling(t *testing.T) {
 	joined := strings.Join(summary, "; ")
 	if !strings.Contains(joined, "serviceAccountName: default→app-sa") {
 		t.Fatalf("summary missing serviceAccountName transition: %q", joined)
+	}
+}
+
+func TestDiffPodTemplateConfig_DNS(t *testing.T) {
+	oldNDots := "2"
+	newNDots := "5"
+	oldSpec := corev1.PodSpec{
+		DNSPolicy: corev1.DNSClusterFirst,
+		DNSConfig: &corev1.PodDNSConfig{
+			Nameservers: []string{"10.96.0.10"},
+			Searches:    []string{"default.svc.cluster.local"},
+			Options:     []corev1.PodDNSConfigOption{{Name: "ndots", Value: &oldNDots}, {Name: "single-request-reopen"}},
+		},
+	}
+	newSpec := corev1.PodSpec{
+		DNSPolicy: corev1.DNSNone,
+		DNSConfig: &corev1.PodDNSConfig{
+			Nameservers: []string{"1.1.1.1", "8.8.8.8"},
+			Searches:    []string{"svc.cluster.local", "cluster.local"},
+			Options:     []corev1.PodDNSConfigOption{{Name: "ndots", Value: &newNDots}, {Name: "rotate"}},
+		},
+	}
+
+	changes, summary := diffPodTemplateConfig(oldSpec, newSpec)
+	expected := map[string]struct {
+		old any
+		new any
+	}{
+		"spec.template.spec.dnsPolicy":             {old: "ClusterFirst", new: "None"},
+		"spec.template.spec.dnsConfig.nameservers": {old: []string{"10.96.0.10"}, new: []string{"1.1.1.1", "8.8.8.8"}},
+		"spec.template.spec.dnsConfig.searches":    {old: []string{"default.svc.cluster.local"}, new: []string{"svc.cluster.local", "cluster.local"}},
+		"spec.template.spec.dnsConfig.options":     {old: []string{"ndots=2", "single-request-reopen"}, new: []string{"ndots=5", "rotate"}},
+	}
+	if len(changes) != len(expected) {
+		t.Fatalf("changes = %+v, want exactly the four DNS fields", changes)
+	}
+	for path, want := range expected {
+		change, ok := findChangePath(changes, path)
+		if !ok {
+			t.Fatalf("missing %s in %+v", path, changes)
+		}
+		if !reflect.DeepEqual(change.OldValue, want.old) || !reflect.DeepEqual(change.NewValue, want.new) {
+			t.Fatalf("%s = %#v→%#v, want %#v→%#v", path, change.OldValue, change.NewValue, want.old, want.new)
+		}
+	}
+	joined := strings.Join(summary, "; ")
+	for _, fragment := range []string{"dnsPolicy: ClusterFirst→None", "dnsConfig.nameservers changed", "dnsConfig.searches changed", "dnsConfig.options changed"} {
+		if !strings.Contains(joined, fragment) {
+			t.Fatalf("summary %q missing %q", joined, fragment)
+		}
+	}
+}
+
+func TestDiffPodTemplateConfig_DNSOrderRemainsObservable(t *testing.T) {
+	oldSpec := corev1.PodSpec{DNSConfig: &corev1.PodDNSConfig{
+		Nameservers: []string{"1.1.1.1", "8.8.8.8"},
+		Searches:    []string{"svc.cluster.local", "cluster.local"},
+		Options:     []corev1.PodDNSConfigOption{{Name: "rotate"}, {Name: "single-request-reopen"}},
+	}}
+	newSpec := corev1.PodSpec{DNSConfig: &corev1.PodDNSConfig{
+		Nameservers: []string{"8.8.8.8", "1.1.1.1"},
+		Searches:    []string{"cluster.local", "svc.cluster.local"},
+		Options:     []corev1.PodDNSConfigOption{{Name: "single-request-reopen"}, {Name: "rotate"}},
+	}}
+
+	changes, _ := diffPodTemplateConfig(oldSpec, newSpec)
+	for _, path := range []string{
+		"spec.template.spec.dnsConfig.nameservers",
+		"spec.template.spec.dnsConfig.searches",
+		"spec.template.spec.dnsConfig.options",
+	} {
+		change, ok := findChangePath(changes, path)
+		if !ok {
+			t.Fatalf("order-only change at %s was lost: %+v", path, changes)
+		}
+		oldValues := change.OldValue.([]string)
+		newValues := change.NewValue.([]string)
+		if len(oldValues) != 2 || len(newValues) != 2 || oldValues[0] == newValues[0] {
+			t.Fatalf("order-only change at %s lost ordered values: %#v→%#v", path, oldValues, newValues)
+		}
+	}
+}
+
+func TestDiffPodTemplateConfig_DNSDefaultsAndEmptyCollectionsAreEquivalent(t *testing.T) {
+	oldSpec := corev1.PodSpec{}
+	newSpec := corev1.PodSpec{
+		DNSPolicy: corev1.DNSClusterFirst,
+		DNSConfig: &corev1.PodDNSConfig{
+			Nameservers: []string{},
+			Searches:    []string{},
+			Options:     []corev1.PodDNSConfigOption{},
+		},
+	}
+
+	changes, summary := diffPodTemplateConfig(oldSpec, newSpec)
+	if len(changes) != 0 || len(summary) != 0 {
+		t.Fatalf("API defaults and empty DNS collections produced noise: changes=%+v summary=%+v", changes, summary)
 	}
 }
 

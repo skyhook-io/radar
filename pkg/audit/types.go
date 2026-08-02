@@ -194,7 +194,11 @@ const (
 	CategoryEfficiency  = "Efficiency"
 )
 
-// Severities
+// Raw detector severities are retained as scan provenance and in existing
+// audit transport/public-property compatibility contracts, especially the
+// mixed-version /api/audit?raw=true Radar Hub boundary. Checks and agent
+// surfaces map them to pkg/checks.Severity; visible audit presentation uses
+// the mapped High/Medium labels.
 const (
 	SeverityWarning = "warning"
 	SeverityDanger  = "danger"

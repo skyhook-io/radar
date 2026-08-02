@@ -25,6 +25,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"golang.org/x/sync/singleflight"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -65,6 +66,9 @@ type Server struct {
 	broadcaster        *SSEBroadcaster
 	vitalsMetrics      vitalsMetricsMemo
 	port               int
+	listenAddress      string
+	startupLog         bool
+	remoteAccessHint   bool
 	devMode            bool
 	staticFS           fs.FS
 	startTime          time.Time
@@ -123,6 +127,13 @@ type Server struct {
 
 	capacityIssueMemo *capacityIssueMemo
 
+	yamlSchemaMu          sync.Mutex
+	yamlSchemaCache       map[string][]byte
+	yamlSchemaPathCache   map[string]yamlSchemaPathCacheEntry
+	yamlSchemaBundleCache map[string]yamlSchemaBundleCacheEntry
+	yamlSchemaCacheBytes  int
+	yamlSchemaFetchGroup  singleflight.Group
+
 	// aiDiagnoser drives a local agent CLI for "Diagnose with AI" (nil when no
 	// CLI is on PATH — the endpoints then 501). Resolved once at startup.
 	aiDiagnoser *ai.Diagnoser
@@ -134,6 +145,9 @@ type Server struct {
 // Config holds server configuration
 type Config struct {
 	Port               int
+	ListenAddress      string         // 127.0.0.1/localhost for local-only; 0.0.0.0 for shared access
+	StartupLog         bool           // Emit the operator-facing startup block after a successful bind
+	RemoteAccessHint   bool           // Explain the explicit shared-listener opt-in (native CLI only)
 	DevMode            bool           // Serve frontend from filesystem instead of embedded
 	StaticFS           embed.FS       // Embedded frontend files
 	StaticRoot         string         // Path within StaticFS
@@ -150,19 +164,25 @@ func New(cfg Config) *Server {
 	cfg.AuthConfig.Defaults()
 
 	s := &Server{
-		router:             chi.NewRouter(),
-		broadcaster:        NewSSEBroadcaster(),
-		port:               cfg.Port,
-		devMode:            cfg.DevMode,
-		startTime:          time.Now(),
-		mcpHandler:         cfg.MCPHandler,
-		mcpReadOnlyHandler: cfg.MCPReadOnlyHandler,
-		diagConfig:         cfg.DiagConfig,
-		effectiveConfig:    cfg.EffectiveConfig,
-		authConfig:         cfg.AuthConfig,
-		topoMemo:           topology.NewMemoizer(5 * time.Second),
-		rbacMemo:           rbac.NewMemoizer(5 * time.Second),
-		capacityIssueMemo:  newCapacityIssueMemo(5 * time.Second),
+		router:                chi.NewRouter(),
+		broadcaster:           NewSSEBroadcaster(),
+		port:                  cfg.Port,
+		listenAddress:         cfg.ListenAddress,
+		startupLog:            cfg.StartupLog,
+		remoteAccessHint:      cfg.RemoteAccessHint,
+		devMode:               cfg.DevMode,
+		startTime:             time.Now(),
+		mcpHandler:            cfg.MCPHandler,
+		mcpReadOnlyHandler:    cfg.MCPReadOnlyHandler,
+		diagConfig:            cfg.DiagConfig,
+		effectiveConfig:       cfg.EffectiveConfig,
+		authConfig:            cfg.AuthConfig,
+		topoMemo:              topology.NewMemoizer(5 * time.Second),
+		rbacMemo:              rbac.NewMemoizer(5 * time.Second),
+		capacityIssueMemo:     newCapacityIssueMemo(5 * time.Second),
+		yamlSchemaCache:       make(map[string][]byte),
+		yamlSchemaPathCache:   make(map[string]yamlSchemaPathCacheEntry),
+		yamlSchemaBundleCache: make(map[string]yamlSchemaBundleCacheEntry),
 	}
 
 	// Resolve a local agent CLI for AI diagnosis (keyless, on the user's own
@@ -197,7 +217,6 @@ func New(cfg Config) *Server {
 				// history won't survive a restart, not just a log line.
 				s.aiRuns.MarkHistoryUnavailable(cfg.AIHistoryDB)
 			}
-			log.Printf("[ai] diagnose enabled (default agent: %s)", d.DefaultAgent())
 		}
 	}
 
@@ -265,10 +284,6 @@ func New(cfg Config) *Server {
 			s.oidcHandler = oidcHandler
 		}
 
-		if s.authConfig.Mode == "proxy" {
-			log.Printf("WARNING: Auth mode is 'proxy'. Ensure your ingress strips %s and %s headers from external requests to prevent spoofing.",
-				s.authConfig.UserHeader, s.authConfig.GroupsHeader)
-		}
 	}
 
 	// Set up static file system
@@ -415,6 +430,8 @@ func (s *Server) setupRoutes() {
 			r.Get("/resource-counts", s.handleResourceCounts)
 			r.Get("/resources/{kind}", s.handleListResources)
 			r.Get("/resources/{kind}/{namespace}/{name}", s.handleGetResource)
+			r.Post("/resources/preview", s.handlePreviewResources)
+			r.Post("/resources/schemas", s.handleResourceSchemas)
 			r.Post("/resources/apply", s.handleApplyResource)
 			r.Put("/resources/{kind}/{namespace}/{name}", s.handleUpdateResource)
 			r.Get("/resources/{kind}/{namespace}/{name}/cascade-preview", s.handleCascadeDeletePreview)
@@ -453,6 +470,10 @@ func (s *Server) setupRoutes() {
 			r.Get("/events", s.handleEvents)
 			r.Get("/changes", s.handleChanges)
 			r.Get("/changes/{kind}/{namespace}/{name}/children", s.handleChangeChildren)
+			// The shared timeline wire contract (NDJSON + terminal record) —
+			// the same shape the hub serves; backs the web client's single
+			// ring-and-delta timeline path.
+			r.Get("/timeline/events", s.handleTimelineEvents)
 
 			// Pod logs (non-streaming)
 			r.Get("/pods/{namespace}/{name}/logs", s.handlePodLogs)
@@ -730,22 +751,43 @@ func (s *Server) Start() error {
 // StartWithReady starts the server and signals on the ready channel once it
 // is accepting connections. If port is 0, an OS-assigned port is used.
 func (s *Server) StartWithReady(ready chan<- struct{}) error {
-	s.broadcaster.Start()
-
-	addr := fmt.Sprintf(":%d", s.port)
-	ln, err := net.Listen("tcp", addr)
+	configuredListenAddress := s.listenAddress
+	listenAddress, err := NormalizeListenAddress(configuredListenAddress)
 	if err != nil {
-		return fmt.Errorf("listen on %s: %w", addr, err)
+		return fmt.Errorf("invalid listen address %q: %w", configuredListenAddress, err)
+	}
+	s.listenAddress = listenAddress
+	bindAddr := socketAddress(listenAddress, s.port)
+	ln, err := net.Listen("tcp", bindAddr)
+	if err != nil {
+		displayAddr := net.JoinHostPort(listenAddress, strconv.Itoa(s.port))
+		return fmt.Errorf("listen on %s: %w", displayAddr, err)
 	}
 	s.listener = ln
-
-	log.Printf("Starting Explorer server on http://localhost:%d", s.ActualPort())
+	if s.startupLog {
+		s.logStartupSummaryBlock()
+	} else {
+		// Keep the security warnings fail-safe for any direct Server caller that
+		// opts out of the full CLI/desktop startup block.
+		if shouldWarnUnauthenticatedListener(listenAddress, s.authConfig.Enabled()) && !cloud.Mode() {
+			log.Printf("WARNING: Radar's HTTP listener is unauthenticated and reachable on %s", listenAddress)
+		}
+		if s.authConfig.Mode == "proxy" && !cloud.Mode() {
+			log.Printf("WARNING: Proxy auth trusts %s and %s; ensure the ingress strips client-supplied identity headers",
+				sanitizeForLog(s.authConfig.UserHeader), sanitizeForLog(s.authConfig.GroupsHeader))
+		}
+	}
+	s.broadcaster.Start()
 
 	if ready != nil {
 		close(ready)
 	}
 
 	return http.Serve(ln, localTCPHandler(s.router))
+}
+
+func shouldWarnUnauthenticatedListener(listenAddress string, authEnabled bool) bool {
+	return !authEnabled && !cloud.IsLoopbackHostname(listenAddress)
 }
 
 // localTCPHandler is the handler exposed on Radar's ordinary pod/host listener.
@@ -898,6 +940,10 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 
 	caps.MCPEnabled = s.mcpHandler != nil
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
+	caps.Features = k8s.FeatureCapabilities{
+		YAMLReview:  true,
+		YAMLSchemas: true,
+	}
 	caps.AuthEnabled = s.authConfig.Enabled()
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		caps.Username = user.Username
@@ -1180,14 +1226,31 @@ func (s *Server) canRead(r *http.Request, group, resource, namespace, verb strin
 	if user == nil || s.permCache == nil {
 		return true
 	}
-	perms := s.permCache.Get(user.Username)
-	if perms == nil {
+	if s.permCache.Get(user.Username) == nil {
 		// Trigger namespace discovery so SAR cache has a parent UserPermissions
 		// entry. parseNamespacesForUser is the canonical path that populates
-		// this; if it hasn't run yet, fall through to a fresh SAR every time.
+		// this; if it hasn't run yet, canReadUser falls through to a fresh SAR.
 		_ = s.getUserNamespaces(r, []string{})
-		perms = s.permCache.Get(user.Username)
 	}
+	return s.canReadUser(r.Context(), user, group, resource, namespace, verb)
+}
+
+// canReadUser is the request-free core of canRead: it authorizes a single
+// (verb, group, resource, namespace) tuple for an already-resolved user via
+// SubjectAccessReview, memoizing on the user's UserPermissions.canI cache.
+//
+// Split out so the SSE broadcast loop — a background goroutine with no
+// *http.Request — can authorize per-client change frames with the same gate
+// REST uses. The caller captures the user at subscribe time (where the request
+// is available) and passes a long-lived context for SAR cancellation.
+//
+// Fail-closed: no apiserver / SAR error → deny. Returns true only when auth is
+// disabled (nil user) or the SAR allows it.
+func (s *Server) canReadUser(ctx context.Context, user *auth.User, group, resource, namespace, verb string) bool {
+	if user == nil || s.permCache == nil {
+		return true
+	}
+	perms := s.permCache.Get(user.Username)
 	if perms != nil {
 		if v, ok := perms.CanI(verb, group, resource, namespace); ok {
 			return v
@@ -1197,13 +1260,13 @@ func (s *Server) canRead(r *http.Request, group, resource, namespace, verb strin
 	if client == nil {
 		// Fail-closed: no apiserver to ask, refuse rather than quietly
 		// serving from the cache.
-		log.Printf("[auth] canRead: K8s client unavailable, denying %s on %s/%s for %s", k8s.SanitizeForLog(verb), k8s.SanitizeForLog(group), k8s.SanitizeForLog(resource), k8s.SanitizeForLog(user.Username))
+		log.Printf("[auth] canReadUser: K8s client unavailable, denying %s on %s/%s for %s", k8s.SanitizeForLog(verb), k8s.SanitizeForLog(group), k8s.SanitizeForLog(resource), k8s.SanitizeForLog(user.Username))
 		return false
 	}
-	allowed, err := auth.SubjectCanI(r.Context(), client, user.Username, user.Groups, namespace, group, resource, verb)
+	allowed, err := auth.SubjectCanI(ctx, client, user.Username, user.Groups, namespace, group, resource, verb)
 	if err != nil {
 		// Fail-closed on SAR error — apiserver said something we don't trust.
-		log.Printf("[auth] canRead SAR failed for %s on %s/%s in ns=%q: %v", k8s.SanitizeForLog(user.Username), k8s.SanitizeForLog(group), k8s.SanitizeForLog(resource), k8s.SanitizeForLog(namespace), err)
+		log.Printf("[auth] canReadUser SAR failed for %s on %s/%s in ns=%q: %v", k8s.SanitizeForLog(user.Username), k8s.SanitizeForLog(group), k8s.SanitizeForLog(resource), k8s.SanitizeForLog(namespace), err)
 		return false
 	}
 	if perms != nil {
@@ -2672,11 +2735,13 @@ func (s *Server) handleTopPods(w http.ResponseWriter, r *http.Request) {
 
 	// Build metrics lookup (may be empty if metrics-server is unavailable)
 	metricsMap := make(map[string]*k8s.TopPodMetrics)
+	var containerUsage map[string]map[string]k8s.ContainerResourceMetrics
 	if store := k8s.GetMetricsHistory(); store != nil {
 		raw := store.GetAllPodMetricsLatest()
 		for i := range raw {
 			metricsMap[raw[i].Namespace+"/"+raw[i].Name] = &raw[i]
 		}
+		containerUsage = store.GetAllPodContainerMetricsLatest()
 	}
 
 	// Get pod lister from cache to enrich with requests/limits
@@ -2729,21 +2794,20 @@ func (s *Server) handleTopPods(w http.ResponseWriter, r *http.Request) {
 			entry.Memory = m.Memory
 		}
 
-		// Sum requests and limits across all containers
-		for _, c := range pod.Spec.Containers {
-			if req, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
-				entry.CPURequest += req.MilliValue() * 1000000 // millicores to nanocores
-			}
-			if lim, ok := c.Resources.Limits[corev1.ResourceCPU]; ok {
-				entry.CPULimit += lim.MilliValue() * 1000000
-			}
-			if req, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
-				entry.MemoryRequest += req.Value()
-			}
-			if lim, ok := c.Resources.Limits[corev1.ResourceMemory]; ok {
-				entry.MemoryLimit += lim.Value()
-			}
-		}
+		// Sum requests and limits over the pod's running containers (regular
+		// containers plus native sidecars) so they align with how usage is
+		// summed — otherwise a native sidecar's usage inflates the pod's
+		// over-limit percentage.
+		totals := k8s.SumRunningContainerResources(pod)
+		entry.CPURequest = totals.CPURequest
+		entry.CPULimit = totals.CPULimit
+		entry.MemoryRequest = totals.MemoryRequest
+		entry.MemoryLimit = totals.MemoryLimit
+
+		// Per-container breakdown drives the table's per-container display.
+		// Nil for single-running-container pods, where the client falls back
+		// to the pod-level sums above.
+		entry.Containers = k8s.BuildPodContainerMetrics(pod, containerUsage[key])
 
 		result = append(result, entry)
 	}
@@ -3082,7 +3146,7 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 			maxSeq = e.Seq
 		}
 	}
-	events = s.filterChangesByClusterScopedRBAC(r, events)
+	events = s.filterEventsByRBAC(r, events)
 
 	// The store epoch validates delta cursors: seq restarts from 1 when the
 	// store is re-created (process restart, context switch), so a client
@@ -3095,29 +3159,142 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, events)
 }
 
-// filterChangesByClusterScopedRBAC drops timeline events for cluster-scoped
-// kinds the user lacks RBAC to read. Namespace-restricted users never reach
-// cluster-scoped events (namespace IN(...) excludes namespace==""), but a
-// cluster-wide user with no per-kind RBAC for, say, admission webhook configs
-// (now tracked) would otherwise see them here — a side channel around the SAR
-// that gates every other read. canRead memoizes per request, so the per-event
-// check is cheap and only fires for cluster-scoped kinds.
-func (s *Server) filterChangesByClusterScopedRBAC(r *http.Request, events []timeline.TimelineEvent) []timeline.TimelineEvent {
-	filtered := events[:0]
-	for _, e := range events {
-		if clusterScoped, group, resource := k8s.ClassifyKindScope(e.Kind, ""); clusterScoped && !s.canRead(r, group, resource, "", "list") {
-			continue
+// filterEventsByRBAC drops timeline events the calling user lacks RBAC to read,
+// authorizing each event's exact kind via SubjectAccessReview.
+//
+// Namespace membership (parseNamespacesForUser) is the upstream gate, but it is
+// not sufficient on its own: within a namespace the user CAN see, they may lack
+// read on a specific kind (e.g. `list pods` but not `list secrets`) — the event
+// still carries the resource name, labels, owner and a change summary, so a
+// namespace-only gate leaks the existence of resources the user can't read.
+// This closes that gap on both axes:
+//   - namespaced events → require (group, resource) read in that namespace;
+//   - cluster-scoped events (namespace=="") → require the cluster-scoped read.
+//
+// canRead memoizes per request on UserPermissions.canI, so repeated kinds are a
+// map hit. Events whose kind can't be resolved (unknown CRD mid-discovery) fail
+// closed. Auth disabled → canReadUser short-circuits to allow, so this is a
+// no-op for the local single-user case.
+func (s *Server) filterEventsByRBAC(r *http.Request, events []timeline.TimelineEvent) []timeline.TimelineEvent {
+	user := auth.UserFromContext(r.Context())
+	if user == nil || s.permCache == nil {
+		// Auth off → nothing to filter; skip GVR resolution entirely.
+		return events
+	}
+
+	// Resolve each event's GVR once and collect the distinct
+	// (group, resource, namespace) tuples to authorize.
+	type key struct{ group, resource, namespace string }
+	type resolution struct {
+		ok bool
+		k  key
+	}
+	resolved := make([]resolution, len(events))
+	distinct := make(map[key]struct{})
+	for i, e := range events {
+		g, res, clusterScoped, ok := k8s.ResolveChangeGVR(e.Kind, k8s.GroupFromAPIVersion(e.APIVersion))
+		// Cluster-scoped kinds authorize at namespace "": the event row may carry
+		// a namespace (a K8s Event about a Node stores the Event's own namespace),
+		// and a namespaced SAR is strictly broader than the cluster-scoped read.
+		ns := e.Namespace
+		if clusterScoped {
+			ns = ""
 		}
-		filtered = append(filtered, e)
+		resolved[i] = resolution{ok: ok, k: key{g, res, ns}}
+		if ok {
+			distinct[key{g, res, ns}] = struct{}{}
+		}
+	}
+
+	// Prime the parent UserPermissions entry once so the parallel canReadUser
+	// calls below share its SAR memo instead of racing to populate it.
+	if s.permCache.Get(user.Username) == nil {
+		_ = s.getUserNamespaces(r, []string{})
+	}
+
+	// Authorize distinct tuples in bounded parallel — a broad timeline load can
+	// span many (kind, namespace) pairs and a serial SAR loop would stack the
+	// round-trips. Mirrors filterNamespacesByCanRead / capabilities probing.
+	allow := make(map[key]bool, len(distinct))
+	var mu sync.Mutex
+	const maxConcurrent = 16
+	sem := make(chan struct{}, maxConcurrent)
+	var wg sync.WaitGroup
+	ctx := r.Context()
+	for k := range distinct {
+		wg.Add(1)
+		go func(k key) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			ok := s.canReadUser(ctx, user, k.group, k.resource, k.namespace, "list")
+			mu.Lock()
+			allow[k] = ok
+			mu.Unlock()
+		}(k)
+	}
+	wg.Wait()
+
+	filtered := events[:0]
+	for i, e := range events {
+		// Unresolvable kind → fail closed (drop). Otherwise keep only if the
+		// per-kind SAR for this namespace (or cluster scope) allowed it.
+		if resolved[i].ok && allow[resolved[i].k] {
+			filtered = append(filtered, e)
+		}
 	}
 	return filtered
 }
 
+// changeAuthorizerForCtx returns a per-kind authorizer bound to the ctx user, for
+// the shared k8s.ChangeReadAllowed gate. Callers on a request path have already
+// primed the permission cache via parseNamespacesForUser, so canReadUser hits the
+// memo. Nil user (auth off) is handled by canReadUser (returns true).
+func (s *Server) changeAuthorizerForCtx(ctx context.Context) func(group, resource, namespace string) bool {
+	user := auth.UserFromContext(ctx)
+	return func(group, resource, namespace string) bool {
+		return s.canReadUser(ctx, user, group, resource, namespace, "list")
+	}
+}
+
+// filterTimelineEventsByRBAC drops timeline events the ctx user can't read, via
+// the shared per-kind gate. For the low-volume secondary surfaces (dashboard,
+// diagnose); the high-volume /api/changes path uses filterEventsByRBAC with its
+// dedupe+parallel SAR. Auth off → returned unchanged.
+func (s *Server) filterTimelineEventsByRBAC(ctx context.Context, events []timeline.TimelineEvent) []timeline.TimelineEvent {
+	if auth.UserFromContext(ctx) == nil {
+		return events
+	}
+	authz := s.changeAuthorizerForCtx(ctx)
+	out := events[:0]
+	for _, e := range events {
+		if k8s.ChangeReadAllowed(e.Kind, e.APIVersion, e.Namespace, authz) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // handleChangeChildren returns child resource changes for a given parent workload
 func (s *Server) handleChangeChildren(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
 	ownerKind := chi.URLParam(r, "kind")
 	namespace := chi.URLParam(r, "namespace")
 	ownerName := chi.URLParam(r, "name")
+
+	// Gate on the owner's namespace before touching the store: a user who can't
+	// see this namespace must not read change history for workloads in it. The
+	// per-kind SAR below (filterEventsByRBAC) is the authoritative gate; this is
+	// the cheap RBAC-ceiling pre-check. getUserNamespaces (not
+	// parseNamespacesForUser) so the header's namespace *view* pick can't hide a
+	// namespace the user has real access to.
+	if allowed := s.getUserNamespaces(r, nil); !namespaceInAllowed(allowed, namespace) {
+		s.writeJSON(w, []timeline.TimelineEvent{})
+		return
+	}
+
 	sinceStr := r.URL.Query().Get("since")
 
 	var since time.Time
@@ -3142,7 +3319,20 @@ func (s *Server) handleChangeChildren(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	children = s.filterEventsByRBAC(r, children)
+
 	s.writeJSON(w, children)
+}
+
+// namespaceInAllowed reports whether `namespace` is within an allowed set.
+// nil allowed means cluster-wide access (all namespaces); an empty non-nil
+// slice means no access. Mirrors the nil-vs-empty convention used throughout
+// the per-user namespace filtering.
+func namespaceInAllowed(allowed []string, namespace string) bool {
+	if allowed == nil {
+		return true
+	}
+	return slices.Contains(allowed, namespace)
 }
 
 // handleApplyResource creates or updates a Kubernetes resource from YAML.
@@ -3177,15 +3367,37 @@ func (s *Server) handleApplyResource(w http.ResponseWriter, r *http.Request) {
 	}
 	dryRun := r.URL.Query().Get("dryRun") == "true"
 	force := r.URL.Query().Get("force") == "true"
+	reviewedContext := r.URL.Query().Get("reviewedContext")
+	reviewedResourceVersions := make(map[int]string)
+	if encoded := r.URL.Query().Get("reviewedVersions"); encoded != "" {
+		if dryRun {
+			s.writeError(w, http.StatusBadRequest, "reviewed resource versions require a non-dry-run request")
+			return
+		}
+		if err := json.Unmarshal([]byte(encoded), &reviewedResourceVersions); err != nil {
+			s.writeError(w, http.StatusBadRequest, "reviewedVersions must be a document-index to resourceVersion map")
+			return
+		}
+	}
 
-	client := s.getDynamicClientForRequest(r)
+	client, contextName := s.getDynamicClientSnapshotForRequest(r)
 	if client == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
+		return
+	}
+	if reviewedContext != "" && reviewedContext != contextName {
+		s.writeError(w, http.StatusConflict, "cluster context changed after review; review the YAML again before applying")
 		return
 	}
 
 	// Split multi-document YAML
 	docs := k8s.SplitYAMLDocuments(yamlContent)
+	for index := range reviewedResourceVersions {
+		if index < 0 || index >= len(docs) {
+			s.writeError(w, http.StatusBadRequest, "reviewedVersions contains an invalid document index")
+			return
+		}
+	}
 
 	var results []k8s.ApplyResourceResult
 	for i, doc := range docs {
@@ -3194,11 +3406,14 @@ func (s *Server) handleApplyResource(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		reviewedResourceVersion, reviewed := reviewedResourceVersions[i]
 		result, err := k8s.ApplyResourceWithClient(r.Context(), k8s.ApplyResourceOptions{
-			YAML:   doc,
-			Mode:   mode,
-			DryRun: dryRun,
-			Force:  force,
+			YAML:                    doc,
+			Mode:                    mode,
+			DryRun:                  dryRun,
+			Force:                   force,
+			ExpectedResourceVersion: reviewedResourceVersion,
+			ExpectedResourceAbsent:  reviewed && reviewedResourceVersion == "",
 		}, client)
 		if err != nil {
 			errMsg := err.Error()
@@ -3206,27 +3421,27 @@ func (s *Server) handleApplyResource(w http.ResponseWriter, r *http.Request) {
 				errMsg = fmt.Sprintf("document %d: %s", i+1, errMsg)
 			}
 			if apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err) {
-				s.writeError(w, http.StatusConflict, errMsg)
+				s.writeApplyResourceError(w, http.StatusConflict, errMsg, results, i, len(docs))
 				return
 			}
 			if apierrors.IsForbidden(err) {
-				s.writeError(w, http.StatusForbidden, errMsg)
+				s.writeApplyResourceError(w, http.StatusForbidden, errMsg, results, i, len(docs))
 				return
 			}
 			if apierrors.IsNotFound(err) {
-				s.writeError(w, http.StatusNotFound, errMsg)
+				s.writeApplyResourceError(w, http.StatusNotFound, errMsg, results, i, len(docs))
 				return
 			}
 			if apierrors.IsInvalid(err) || apierrors.IsBadRequest(err) {
-				s.writeError(w, http.StatusUnprocessableEntity, errMsg)
+				s.writeApplyResourceError(w, http.StatusUnprocessableEntity, errMsg, results, i, len(docs))
 				return
 			}
 			if strings.Contains(err.Error(), "invalid YAML") || strings.Contains(err.Error(), "must include") {
-				s.writeError(w, http.StatusBadRequest, errMsg)
+				s.writeApplyResourceError(w, http.StatusBadRequest, errMsg, results, i, len(docs))
 				return
 			}
 			log.Printf("[apply] Failed to apply resource: %v", err)
-			s.writeError(w, http.StatusInternalServerError, errMsg)
+			s.writeApplyResourceError(w, http.StatusInternalServerError, errMsg, results, i, len(docs))
 			return
 		}
 		auth.AuditLog(r, result.Namespace, result.Name)
@@ -3257,7 +3472,7 @@ func (s *Server) handleUpdateResource(w http.ResponseWriter, r *http.Request) {
 
 	// Update the resource (use impersonated client when auth is enabled)
 	auth.AuditLog(r, namespace, name)
-	client := s.getDynamicClientForRequest(r)
+	client, contextName := s.getDynamicClientSnapshotForRequest(r)
 	if client == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
 		return
@@ -3266,14 +3481,25 @@ func (s *Server) handleUpdateResource(w http.ResponseWriter, r *http.Request) {
 	// conflict on every field owned by Helm/Flux/Argo/a controller. Default to
 	// force; the editor's checkbox sends force=false to opt out.
 	force := r.URL.Query().Get("force") != "false"
+	expectedResourceVersion := r.URL.Query().Get("resourceVersion")
+	reviewedContext := r.URL.Query().Get("reviewedContext")
+	if reviewedContext != "" && reviewedContext != contextName {
+		s.writeError(w, http.StatusConflict, "cluster context changed after review; review the YAML again before saving")
+		return
+	}
 	result, err := k8s.UpdateResourceWithClient(r.Context(), k8s.UpdateResourceOptions{
-		Kind:      kind,
-		Namespace: namespace,
-		Name:      name,
-		YAML:      string(body),
-		Force:     force,
+		Kind:                    kind,
+		Namespace:               namespace,
+		Name:                    name,
+		YAML:                    string(body),
+		Force:                   force,
+		ExpectedResourceVersion: expectedResourceVersion,
 	}, client)
 	if err != nil {
+		if apierrors.IsConflict(err) {
+			s.writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		if apierrors.IsNotFound(err) {
 			s.writeError(w, http.StatusNotFound, err.Error())
 			return
@@ -3991,6 +4217,25 @@ func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
 	}
 }
 
+func (s *Server) writeApplyResourceError(w http.ResponseWriter, status int, message string, results []k8s.ApplyResourceResult, failedIndex, total int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	payload := struct {
+		Error       string                    `json:"error"`
+		Results     []k8s.ApplyResourceResult `json:"results,omitempty"`
+		FailedIndex int                       `json:"failedIndex"`
+		Total       int                       `json:"total"`
+	}{
+		Error:       message,
+		Results:     results,
+		FailedIndex: failedIndex,
+		Total:       total,
+	}
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		log.Printf("Failed to encode apply error response: %v", err)
+	}
+}
+
 // writeErrorCode is writeError plus a stable machine-readable `error_code`
 // the frontend branches on (e.g. cloud_role_insufficient → "your role can't do
 // this" instead of a generic auth failure).
@@ -4079,30 +4324,40 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 // or the shared client when auth is disabled. Returns nil if impersonation fails
 // (never falls back to the ServiceAccount client). Callers must handle nil.
 func (s *Server) getDynamicClientForRequest(r *http.Request) dynamic.Interface {
+	client, _ := s.getDynamicClientSnapshotForRequest(r)
+	return client
+}
+
+func (s *Server) getDynamicClientSnapshotForRequest(r *http.Request) (dynamic.Interface, string) {
 	if user := auth.UserFromContext(r.Context()); user != nil {
-		client, err := k8s.ImpersonatedDynamicClient(user.Username, user.Groups)
+		client, contextName, err := k8s.ImpersonatedDynamicClientSnapshot(user.Username, user.Groups)
 		if err != nil {
 			log.Printf("[auth] Impersonation failed for %s: %v", k8s.SanitizeForLog(user.Username), err)
-			return nil
+			return nil, contextName
 		}
-		return client
+		return client, contextName
 	}
-	return k8s.GetDynamicClient()
+	return k8s.GetDynamicClientSnapshot()
 }
 
 // getConfigForRequest returns an impersonated REST config when auth is enabled,
 // or the shared config when auth is disabled. Returns nil if impersonation fails
 // (never falls back to the ServiceAccount config). Callers must handle nil.
 func (s *Server) getConfigForRequest(r *http.Request) *rest.Config {
+	config, _ := s.getConfigSnapshotForRequest(r)
+	return config
+}
+
+func (s *Server) getConfigSnapshotForRequest(r *http.Request) (*rest.Config, string) {
 	if user := auth.UserFromContext(r.Context()); user != nil {
-		cfg, err := k8s.ImpersonatedConfig(user.Username, user.Groups)
+		cfg, contextName, err := k8s.ImpersonatedConfigSnapshot(user.Username, user.Groups)
 		if err != nil {
 			log.Printf("[auth] Impersonation failed for %s: %v", k8s.SanitizeForLog(user.Username), err)
-			return nil
+			return nil, contextName
 		}
-		return cfg
+		return cfg, contextName
 	}
-	return k8s.GetConfig()
+	return k8s.GetConfigSnapshot()
 }
 
 // getClientForRequest returns an impersonated typed client when auth is enabled,
@@ -4227,9 +4482,20 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		}
 		deny[topology.KindNamespace] = true
 	}
-	s.broadcaster.HandleSSE(w, r, deny, func(tuple topology.SARTuple) bool {
-		return s.canRead(r, tuple.Group, tuple.Resource, "", "list")
-	})
+	// Per-kind authorizer for change (k8s_event) frames, bound to this request's
+	// user + context so the broadcast goroutine can SAR-gate diff-bearing frames
+	// without a request. Prime the permission cache once here (the request is
+	// available) so the closure's canReadUser calls hit the memo. When auth is
+	// off, UserFromContext is nil and canReadUser short-circuits to allow.
+	user := auth.UserFromContext(r.Context())
+	if user != nil && s.permCache != nil && s.permCache.Get(user.Username) == nil {
+		_ = s.getUserNamespaces(r, []string{})
+	}
+	ctx := r.Context()
+	authorize := func(group, resource, namespace, verb string) bool {
+		return s.canReadUser(ctx, user, group, resource, namespace, verb)
+	}
+	s.broadcaster.HandleSSE(w, r, deny, authorize)
 }
 
 // Settings handlers
@@ -4531,10 +4797,39 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 
 // Debug handlers for event pipeline diagnostics
 
-// handleDebugEvents returns event pipeline metrics and recent drops
+// handleDebugEvents returns event pipeline metrics and recent drops. The
+// aggregate counters/stats carry no resource identity, but RecentDrops name
+// individual resources (kind/namespace/name) — filter those to what the caller
+// may read so this diagnostic endpoint isn't a side channel around the timeline
+// RBAC gate.
 func (s *Server) handleDebugEvents(w http.ResponseWriter, r *http.Request) {
 	response := timeline.GetDebugEventsResponse()
+	response.RecentDrops = s.filterDropsByRBAC(r, response.RecentDrops)
 	s.writeJSON(w, response)
+}
+
+// filterDropsByRBAC drops records for resources the caller can't read, using the
+// same per-kind SAR as the timeline gate. Auth off → returned unchanged. canRead
+// memoizes, and the drop ring is small, so a serial loop is cheap.
+func (s *Server) filterDropsByRBAC(r *http.Request, drops []timeline.DropRecord) []timeline.DropRecord {
+	if auth.UserFromContext(r.Context()) == nil {
+		return drops
+	}
+	out := drops[:0]
+	for _, d := range drops {
+		group, resource, clusterScoped, ok := k8s.ResolveChangeGVR(d.Kind, "")
+		if !ok {
+			continue // unresolved kind → fail closed
+		}
+		ns := d.Namespace
+		if clusterScoped {
+			ns = ""
+		}
+		if s.canRead(r, group, resource, ns, "list") {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // handleDebugEventsDiagnose diagnoses why events for a specific resource might be missing
@@ -4548,7 +4843,21 @@ func (s *Server) handleDebugEventsDiagnose(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	response := timeline.GetDiagnosis(kind, namespace, name)
+	// RBAC: diagnose returns a specific resource's timeline rows (with diffs),
+	// drop history, and recommendations derived from them. The query matches by
+	// kind string only (not group), so authorize each returned row per-kind using
+	// its own apiVersion — disambiguating a Kind that collides with a builtin (a
+	// namespaced CRD Kind=Node must not ride the caller's `list nodes`). The gate
+	// runs inside GetDiagnosis, BEFORE recommendations, so tips can't describe a
+	// row the caller can't read. Auth off → nil filter → no-op.
+	var allow func(kind, apiVersion, namespace string) bool
+	if user := auth.UserFromContext(r.Context()); user != nil && s.permCache != nil {
+		authz := s.changeAuthorizerForCtx(r.Context())
+		allow = func(kind, apiVersion, namespace string) bool {
+			return k8s.ChangeReadAllowed(kind, apiVersion, namespace, authz)
+		}
+	}
+	response := timeline.GetDiagnosis(kind, namespace, name, k8s.ActiveClusterContext(), allow)
 	s.writeJSON(w, response)
 }
 

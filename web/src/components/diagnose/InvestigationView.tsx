@@ -44,7 +44,13 @@ export function InvestigationView({
   maximized: boolean;
 }) {
   const { kind, namespace, name } = run;
-  const { refreshRuns, openInvestigation } = useDiagnose();
+  // Apply is off for hosted agents (read-only server-side). Keyed on the selected
+  // agent, which matches run.agent unless a deployment mixes hosted + local agents.
+  const { refreshRuns, openInvestigation, startError, hosted } = useDiagnose();
+  const retryDiagnosis = useCallback(
+    () => openInvestigation({ kind, namespace, name }),
+    [openInvestigation, kind, namespace, name],
+  );
   const queryClient = useQueryClient();
   const [turns, setTurns] = useState<Turn[]>([]);
   // The run is gone server-side (evicted past the retention cap, or lost on a
@@ -494,7 +500,8 @@ export function InvestigationView({
             <RunContextCard run={run} />
             {turns.map((t, i) => {
               const isLast = i === turns.length - 1;
-              const canApply = i === lastRemediationIdx && !stale;
+              // Hosted runners are read-only — the server refuses apply turns.
+              const canApply = i === lastRemediationIdx && !stale && !hosted;
               const canCheck = isLast && t.status === "done" && !!t.apply;
               return (
                 <TurnView
@@ -505,14 +512,23 @@ export function InvestigationView({
                   onApply={canApply ? requestApply : undefined}
                   onAsk={isLast && !busy && !stale ? askFollowup : undefined}
                   onCheckStatus={canCheck ? checkStatus : undefined}
+                  onRetryDiagnosis={
+                    isLast &&
+                    t.status === "error" &&
+                    !t.question &&
+                    !t.apply &&
+                    !stale
+                      ? retryDiagnosis
+                      : undefined
+                  }
                   hideVerdict={pinned && i === pinnedIdx}
                 />
               );
             })}
-            {actionError && (
+            {(actionError || startError) && (
               <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-theme-text-primary">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
-                <span>{actionError}</span>
+                <span>{actionError || startError}</span>
               </div>
             )}
           </div>
@@ -528,7 +544,9 @@ export function InvestigationView({
           <ResultCard
             diagnosis={turns[pinnedIdx].diagnosis!}
             onApply={
-              pinnedIdx === lastRemediationIdx && !stale ? requestApply : undefined
+              pinnedIdx === lastRemediationIdx && !stale && !hosted
+                ? requestApply
+                : undefined
             }
             onAsk={!busy && !stale ? askFollowup : undefined}
             reveal="full"

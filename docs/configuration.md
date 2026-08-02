@@ -2,6 +2,28 @@
 
 This document covers Radar's cluster connection behavior. For CLI flags and basic usage, see the [README](../README.md#usage).
 
+## HTTP Listener
+
+Radar listens on `127.0.0.1:9280` by default, so an unauthenticated local
+instance is reachable only from the same network namespace. `localhost` is
+accepted as an equivalent spelling.
+
+To reach Radar through a VM, WSL, dev container, jump host, or another machine,
+opt into a shared listener explicitly:
+
+```bash
+radar --listen-address=0.0.0.0
+```
+
+An all-interface listener can be reached by non-browser clients; CORS is not an
+authentication boundary. Enable Radar authentication and restrict network
+access whenever using `0.0.0.0`.
+
+The Docker image and Helm chart set `0.0.0.0` explicitly because their HTTP
+listener must be reachable through a published container port or Kubernetes
+Service. Desktop Radar and temporary `radar diagnose` servers remain
+loopback-only.
+
 ## Persistent Configuration
 
 Radar stores configuration in two files under `~/.radar/`:

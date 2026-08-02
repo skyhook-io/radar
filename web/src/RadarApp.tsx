@@ -40,7 +40,10 @@ import type { ClusterLoadState } from "./types/clusterLoadState";
 import { TimelineSourceProvider } from "./context/TimelineSource";
 import type { TimelineSourceConfig } from "./api/timelineSource";
 import { DiagnoseCustomizationProvider } from "./context/DiagnoseCustomization";
-import type { RenderDiagnoseAction } from "./context/DiagnoseCustomization";
+import type {
+  RenderDiagnoseAction,
+  DiagnoseConsentCopy,
+} from "./context/DiagnoseCustomization";
 import { defaultDiagnoseAction } from "./components/diagnose/LocalDiagnoseAction";
 import { DiagnoseProvider } from "./components/diagnose/DiagnoseContext";
 
@@ -110,6 +113,15 @@ export interface RadarAppProps {
    * agent-free. See ./context/DiagnoseCustomization for the render-prop shape.
    */
   renderDiagnoseAction?: RenderDiagnoseAction;
+  /**
+   * Replaces the first-run consent card's trust copy. REQUIRED of any host whose
+   * backend runs the agent somewhere other than the user's own machine — the
+   * default copy states the agent runs locally, under the user's own model
+   * account, with transcripts kept on their disk, and none of that is true of a
+   * hosted runner. Radar keeps the card's chrome and the Approve/Cancel flow; a
+   * host only supplies the claims. See ./context/DiagnoseCustomization.
+   */
+  diagnoseConsent?: DiagnoseConsentCopy;
   /**
    * Initial route for `router: 'memory'` (ignored for 'browser'). Lets a host
    * deep-link a specific view (e.g. '/topology') without owning the URL bar —
@@ -184,6 +196,7 @@ export function RadarApp({
   manageDocumentTitle = false,
   documentTitleSuffix,
   renderDiagnoseAction,
+  diagnoseConsent,
   initialPath,
   onClusterLoadStateChange,
   timelineSource,
@@ -213,6 +226,7 @@ export function RadarApp({
               <TimelineSourceProvider config={timelineSource}>
                 <DiagnoseCustomizationProvider
                   value={renderDiagnoseAction ?? defaultDiagnoseAction}
+                  consentCopy={diagnoseConsent}
                 >
                   <DiagnoseProvider>
                     <App

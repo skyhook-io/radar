@@ -35,6 +35,7 @@ import {
   usePodLogs,
   useTopology,
   useUpdateResource,
+  usePreviewResources,
   useDeleteResource,
   useTriggerCronJob,
   useSuspendCronJob,
@@ -60,6 +61,7 @@ import {
   useWorkloadRuns,
   useApplications,
   fetchJSON,
+  fetchYamlSchemas,
 } from '../../api/client'
 import { PrometheusCharts, isPrometheusSupported } from '../resource/PrometheusCharts'
 import { PrometheusChartsGrid } from '../resource/PrometheusChartsGrid'
@@ -79,6 +81,7 @@ import {
   useCanNodeWrite,
   useNamespacedCapabilities,
   useIsLocalDeployment,
+  useCapabilitiesContext,
 } from '../../contexts/CapabilitiesContext'
 import { useOpenTerminal, useOpenLogs, useOpenWorkloadLogs, useOpenNodeTerminal } from '../dock'
 import { PortForwardButton, PortForwardInlineButton } from '../portforward/PortForwardButton'
@@ -290,7 +293,7 @@ function useActionsBarProps(kind: string, namespace: string, name: string) {
   const uncordonMutation = useUncordonNode()
   const drainMutation = useDrainNode()
 
-  const renderDiagnose = useDiagnoseCustomization()
+  const { renderAction: renderDiagnose } = useDiagnoseCustomization()
 
   return {
     canExec,
@@ -653,6 +656,7 @@ export function WorkloadView({
 
   // RBAC
   const canUpdateSecrets = useCanUpdateSecrets()
+  const { features } = useCapabilitiesContext()
   const { canPortForward } = useNamespacedCapabilities(namespace)
   const isLocalDeployment = useIsLocalDeployment()
   const showServingPortForward = canPortForward || !isLocalDeployment
@@ -726,6 +730,7 @@ export function WorkloadView({
     [closeServingCurl, servingCurl],
   )
   const updateResource = useUpdateResource()
+  const previewResources = usePreviewResources()
   const baseActionsBarProps = useActionsBarProps(apiKind, namespace, name)
   const desktopDownload = useDesktopDownload()
 
@@ -763,10 +768,15 @@ export function WorkloadView({
   )
 
   const handleUpdateResource = useCallback(
-    async (params: { kind: string; namespace: string; name: string; yaml: string }) => {
+    async (params: Parameters<typeof updateResource.mutateAsync>[0]) => {
       await updateResource.mutateAsync(params)
     },
     [updateResource],
+  )
+  const handlePreviewResource = useCallback(
+    async (params: Parameters<typeof previewResources.mutateAsync>[0]) =>
+      previewResources.mutateAsync(params),
+    [previewResources],
   )
 
   const navigateRouter = useNavigate()
@@ -903,6 +913,10 @@ export function WorkloadView({
         onUpdateResource={handleUpdateResource}
         isUpdatingResource={updateResource.isPending}
         updateResourceError={updateResource.error?.message ?? null}
+        onPreviewResource={features?.yamlReview ? handlePreviewResource : undefined}
+        isPreviewingResource={previewResources.isPending}
+        previewResourceError={previewResources.error?.message ?? null}
+        yamlSchemaLoader={features?.yamlSchemas ? fetchYamlSchemas : undefined}
         // Tab state (URL-synced)
         activeTab={migratedTab}
         onTabChange={handleTabChange}

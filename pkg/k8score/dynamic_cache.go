@@ -682,6 +682,8 @@ func (d *DynamicResourceCache) enqueueDynamicChange(kind string, gvr schema.Grou
 		UID:       uid,
 		Operation: op,
 		Diff:      diff,
+		Group:     gvr.Group,
+		Resource:  gvr.Resource,
 	}
 
 	// Always fire OnChange (even during sync adds — Radar uses this for timeline)
@@ -1545,6 +1547,11 @@ func (d *DynamicResourceCache) DiscoverAllCRDs() {
 		best := make(map[string]schema.GroupVersionResource)
 		for _, res := range resources {
 			if !res.IsCRD {
+				continue
+			}
+			// Crossplane serves this legacy API with a deprecation warning on every
+			// informer watch renewal. Keep it available on demand, but don't eagerly watch it.
+			if res.Group == "apiextensions.crossplane.io" && res.Name == "usages" {
 				continue
 			}
 			hasList := false

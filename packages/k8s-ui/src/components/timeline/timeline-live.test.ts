@@ -1,12 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
-  BASE_QUANTIZE_STEP_MS,
   LENS_LATCH_EPSILON_MS,
   STALE_AMBER_AFTER_MS,
   advanceLatchedLens,
   deriveLiveSelection,
   isLensLatched,
-  quantizeBaseWindow,
 } from './timeline-live'
 import { clampSelection, type ScrubberRange } from './scrubber-math'
 
@@ -17,41 +15,6 @@ describe('deriveLiveSelection', () => {
   it('pins the window to now with the given width', () => {
     const now = 1_000_000_000
     expect(deriveLiveSelection(HOUR, now)).toEqual({ fromMs: now - HOUR, toMs: now })
-  })
-})
-
-describe('quantizeBaseWindow', () => {
-  it('floors both edges to the step', () => {
-    const step = BASE_QUANTIZE_STEP_MS
-    const q = quantizeBaseWindow(step * 3 + 12_345, step * 10 + 4_000, step)
-    expect(q).toEqual({ fromMs: step * 3, toMs: step * 10 })
-  })
-
-  it('is stable across two ticks inside the same step', () => {
-    const step = BASE_QUANTIZE_STEP_MS
-    const base = step * 100
-    // Two "now" values 30s apart but inside the same 5-minute step.
-    const a = quantizeBaseWindow(base - HOUR + 10_000, base + 10_000, step)
-    const b = quantizeBaseWindow(base - HOUR + 40_000, base + 40_000, step)
-    expect(a).toEqual(b)
-  })
-
-  it('advances once the edge crosses a step boundary', () => {
-    const step = BASE_QUANTIZE_STEP_MS
-    const before = quantizeBaseWindow(0, step - 1, step)
-    const after = quantizeBaseWindow(0, step + 1, step)
-    expect(before.toMs).toBe(0)
-    expect(after.toMs).toBe(step)
-  })
-
-  it('trailing seam never exceeds one step (covered by the 10-min live poll)', () => {
-    const step = BASE_QUANTIZE_STEP_MS
-    const now = step * 42 + 137_000
-    const q = quantizeBaseWindow(now - HOUR, now, step)
-    // Gap between the quantized right edge and now is < one step, and one step
-    // (5min) is well inside the 10-min live poll window ⇒ no data hole.
-    expect(now - q.toMs).toBeLessThan(step)
-    expect(step).toBeLessThan(10 * MIN)
   })
 })
 

@@ -54,6 +54,18 @@ type NodeMetricsHistory struct {
 	MetricsUnavailable          bool               `json:"metricsUnavailable,omitempty"`
 }
 
+// ContainerResourceMetrics holds latest usage plus request/limit for a single
+// container. Usage comes from the metrics API; request/limit from the pod spec.
+type ContainerResourceMetrics struct {
+	Name          string `json:"name"`
+	CPU           int64  `json:"cpu"`
+	CPURequest    int64  `json:"cpuRequest"`
+	CPULimit      int64  `json:"cpuLimit"`
+	Memory        int64  `json:"memory"`
+	MemoryRequest int64  `json:"memoryRequest"`
+	MemoryLimit   int64  `json:"memoryLimit"`
+}
+
 // TopPodMetrics holds the latest metrics snapshot for a single pod.
 type TopPodMetrics struct {
 	Namespace     string `json:"namespace"`
@@ -64,6 +76,10 @@ type TopPodMetrics struct {
 	CPULimit      int64  `json:"cpuLimit"`
 	MemoryRequest int64  `json:"memoryRequest"`
 	MemoryLimit   int64  `json:"memoryLimit"`
+	// Containers carries per-container usage and request/limit for pods with
+	// more than one running container (regular + native sidecars). Omitted for
+	// single-container pods, where the pod-level fields above already suffice.
+	Containers []ContainerResourceMetrics `json:"containers,omitempty"`
 }
 
 // TopNodeMetrics holds the latest metrics snapshot for a single node.
@@ -508,6 +524,36 @@ func (s *MetricsHistoryStore) GetAllPodMetricsLatest() []TopPodMetrics {
 			CPU:       totalCPU,
 			Memory:    totalMem,
 		})
+	}
+	return result
+}
+
+// GetAllPodContainerMetricsLatest returns the latest per-container usage for all
+// tracked pods, keyed by "namespace/name" then container name. Unlike
+// GetAllPodMetricsLatest it does not sum across containers. Only the usage
+// fields (CPU, Memory) are populated; request/limit are filled from the pod
+// spec by callers.
+func (s *MetricsHistoryStore) GetAllPodContainerMetricsLatest() map[string]map[string]ContainerResourceMetrics {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make(map[string]map[string]ContainerResourceMetrics, len(s.podMetrics))
+	for key, podBuf := range s.podMetrics {
+		containers := make(map[string]ContainerResourceMetrics, len(podBuf.containers))
+		for name, buf := range podBuf.containers {
+			if points := buf.GetAll(); len(points) > 0 {
+				last := points[len(points)-1]
+				containers[name] = ContainerResourceMetrics{
+					Name:   name,
+					CPU:    last.CPU,
+					Memory: last.Memory,
+				}
+			}
+		}
+		result[key] = containers
 	}
 	return result
 }

@@ -12,10 +12,10 @@ import (
 	"time"
 
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
-	"golang.org/x/term"
 	"k8s.io/klog/v2"
 
 	"github.com/skyhook-io/radar/internal/app"
+	"github.com/skyhook-io/radar/internal/cliui"
 )
 
 // bootEphemeral starts a temporary in-process Radar for one investigation:
@@ -48,6 +48,7 @@ func bootEphemeral(kubeconfig string) (base string, shutdown func(), err error) 
 	cfg := app.AppConfig{
 		Kubeconfig:      kubeconfig,
 		Port:            0, // random free port
+		ListenAddress:   "127.0.0.1",
 		NoBrowser:       true,
 		HistoryLimit:    1000, // in-memory timeline floor; this instance lives minutes
 		MCPEnabled:      true,
@@ -108,7 +109,7 @@ func bootEphemeral(kubeconfig string) (base string, shutdown func(), err error) 
 // connecting to cluster… 12s") on stderr; the renderer's own spinner takes
 // over once the investigation streams.
 func bootSpinner(stop <-chan struct{}) {
-	if os.Getenv("NO_COLOR") != "" || !term.IsTerminal(int(os.Stderr.Fd())) {
+	if !cliui.ColorEnabled(os.Stderr) {
 		return
 	}
 	start := time.Now()

@@ -49,11 +49,18 @@ func InitTestResourceCache(client kubernetes.Interface) error {
 		"limitranges":              true,
 	}
 
+	secretWriteTimes := newSecretDataManagerWriteIndex()
 	cfg := k8score.CacheConfig{
 		Client:        client,
 		ResourceTypes: enabled,
 		// No deferred types for tests — all sync immediately
 		DeferredTypes: map[string]bool{},
+		OnTransform: func(obj any) {
+			secretWriteTimes.capture(obj)
+		},
+		OnObservedChange: func(change k8score.ResourceChange, obj, _ any) {
+			secretWriteTimes.reconcile(change, obj)
+		},
 	}
 
 	core, err := k8score.NewResourceCache(cfg)
@@ -64,8 +71,9 @@ func InitTestResourceCache(client kubernetes.Interface) error {
 	initialSyncComplete = true
 
 	resourceCache = &ResourceCache{
-		ResourceCache:  core,
-		secretsEnabled: true,
+		ResourceCache:    core,
+		secretsEnabled:   true,
+		secretWriteTimes: secretWriteTimes,
 	}
 
 	// Mark cacheOnce as "already executed" so InitResourceCache is a no-op.

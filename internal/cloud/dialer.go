@@ -2,6 +2,7 @@ package cloud
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -31,6 +32,9 @@ func dial(ctx context.Context, cfg Config) (*yamux.Session, error) {
 
 	dialer := *websocket.DefaultDialer
 	dialer.HandshakeTimeout = 10 * time.Second
+	if cfg.InsecureSkipVerify {
+		dialer.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // user-requested via --cloud-insecure-skip-verify for a self-signed hub
+	}
 	ws, resp, err := dialer.DialContext(ctx, u.String(), headers)
 	if err != nil {
 		if resp != nil {

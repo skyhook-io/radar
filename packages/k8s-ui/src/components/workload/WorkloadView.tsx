@@ -43,7 +43,11 @@ import { buildResourceHierarchy, getAllEventsFromHierarchy, isProblematicEvent, 
 import { TimelineSwimlanes, type TimeWindow } from '../timeline/TimelineSwimlanes'
 import { TimelineList } from '../timeline/TimelineList'
 import { ResourceActionsBar } from '../shared/ResourceActionsBar'
-import { EditableYamlView, SaveSuccessAnimation } from '../shared/EditableYamlView'
+import {
+  EditableYamlView,
+  SaveSuccessAnimation,
+  type EditableYamlViewProps,
+} from '../shared/EditableYamlView'
 import { ResourceRendererDispatch, getResourceStatus, diagnoseHealthHint, type DiagnoseHealthHint, type RendererOverrides } from '../shared/ResourceRendererDispatch'
 import type { ScalerDiagnosis } from '../resources/renderers/WorkloadRenderer'
 import { DetailShell, type DetailShellTab } from '../shared/DetailShell'
@@ -188,11 +192,19 @@ interface WorkloadViewProps {
 
   // ── Mutations ────────────────────────────────────────────────────────────
   /** Update a resource from YAML */
-  onUpdateResource?: (params: { kind: string; namespace: string; name: string; yaml: string }) => Promise<void>
+  onUpdateResource?: EditableYamlViewProps['onSave']
   /** Whether the resource is being updated */
   isUpdatingResource?: boolean
   /** Error message from the last update attempt */
   updateResourceError?: string | null
+  /** Preview a resource update against Kubernetes before saving. */
+  onPreviewResource?: EditableYamlViewProps['onPreview']
+  /** Whether the resource preview is being prepared. */
+  isPreviewingResource?: boolean
+  /** Error message from the last preview attempt. */
+  previewResourceError?: string | null
+  /** Load cluster schemas for YAML validation and completion. */
+  yamlSchemaLoader?: EditableYamlViewProps['schemaLoader']
 
   // ── Tab state (optional URL sync) ────────────────────────────────────────
   /** Controlled active tab. If not provided, managed internally. */
@@ -360,6 +372,10 @@ export function WorkloadView({
   onUpdateResource,
   isUpdatingResource,
   updateResourceError,
+  onPreviewResource,
+  isPreviewingResource,
+  previewResourceError,
+  yamlSchemaLoader,
   // Tab state
   activeTab: controlledTab,
   onTabChange,
@@ -572,6 +588,7 @@ export function WorkloadView({
         namespace,
         name,
         yaml,
+        force: true,
       })
       setTimeout(() => refetch(), 1000)
     } catch {
@@ -806,6 +823,10 @@ export function WorkloadView({
               onSave={onUpdateResource}
               isSaving={isUpdatingResource}
               saveError={updateResourceError}
+              onPreview={onPreviewResource}
+              isPreviewing={isPreviewingResource}
+              previewError={previewResourceError}
+              schemaLoader={yamlSchemaLoader}
               onDuplicate={onDuplicate}
               onDownload={onDownload}
             />
@@ -1099,6 +1120,10 @@ export function WorkloadView({
                   onSave={onUpdateResource}
                   isSaving={isUpdatingResource}
                   saveError={updateResourceError}
+                  onPreview={onPreviewResource}
+                  isPreviewing={isPreviewingResource}
+                  previewError={previewResourceError}
+                  schemaLoader={yamlSchemaLoader}
                   onDuplicate={onDuplicate}
                   onDownload={onDownload}
                 />

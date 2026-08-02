@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"reflect"
 	"sort"
@@ -21,7 +22,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"sigs.k8s.io/yaml"
+	k8syaml "k8s.io/apimachinery/pkg/util/yaml"
 )
 
 // Type aliases — canonical definitions live in pkg/k8score.
@@ -342,21 +343,9 @@ func diffDeployment(oldObj, newObj any) ([]FieldChange, []string) {
 		summary = append(summary, fmt.Sprintf("replicas: %d→%d", oldReplicas, newReplicas))
 	}
 
-	// Check container images
-	oldImages := getContainerImages(oldDep.Spec.Template.Spec.Containers)
-	newImages := getContainerImages(newDep.Spec.Template.Spec.Containers)
-	if !equalStringMaps(oldImages, newImages) {
-		for name, oldImg := range oldImages {
-			if newImg, ok := newImages[name]; ok && oldImg != newImg {
-				changes = append(changes, FieldChange{
-					Path:     fmt.Sprintf("spec.template.spec.containers[%s].image", name),
-					OldValue: oldImg,
-					NewValue: newImg,
-				})
-				summary = append(summary, fmt.Sprintf("image(%s): %s→%s", name, truncateImage(oldImg), truncateImage(newImg)))
-			}
-		}
-	}
+	imageChanges, imageSummary := diffContainerImages(oldDep.Spec.Template.Spec, newDep.Spec.Template.Spec)
+	changes = append(changes, imageChanges...)
+	summary = append(summary, imageSummary...)
 
 	// Check resource limits/requests
 	oldResources := getContainerResources(oldDep.Spec.Template.Spec.Containers)
@@ -978,7 +967,8 @@ func diffConfigMap(oldObj, newObj any) ([]FieldChange, []string) {
 	var changes []FieldChange
 	var summary []string
 
-	// Check data keys (not values for security)
+	// Parseable structured values are path- and pattern-redacted before
+	// emission; all other values remain key-only.
 	oldKeys := getMapKeys(oldCM.Data)
 	newKeys := getMapKeys(newCM.Data)
 
@@ -1130,7 +1120,7 @@ func diffConfigMapModifiedKeys(oldData, newData map[string]string, keys []string
 	var fallback []string
 	for _, key := range keys {
 		structured, ok := structuredConfigValueDiff(key, oldData[key], newData[key])
-		if !ok || len(structured) == 0 {
+		if !ok || len(structured) == 0 || len(changes)+len(structured) > configMapStructuredFieldCap {
 			fallback = append(fallback, key)
 			continue
 		}
@@ -1151,12 +1141,16 @@ func structuredConfigValueDiff(key, oldVal, newVal string) ([]FieldChange, bool)
 	if !shouldParseStructuredConfigValue(key, oldVal, newVal) {
 		return nil, false
 	}
-	oldParsed, okOld := parseStructuredConfigValue(oldVal)
-	newParsed, okNew := parseStructuredConfigValue(newVal)
+	oldParsed, okOld := parseStructuredConfigValue(key, oldVal)
+	newParsed, okNew := parseStructuredConfigValue(key, newVal)
 	if !okOld || !okNew {
 		return nil, false
 	}
-	state := structuredDiffState{fieldCap: configMapStructuredFieldCap, nodeCap: configMapStructuredNodeCap}
+	state := structuredDiffState{
+		fieldCap:     configMapStructuredFieldCap,
+		nodeCap:      configMapStructuredNodeCap,
+		redactValues: isPropertiesConfigKey(key),
+	}
 	state.diff(fmt.Sprintf("data.%s", key), oldParsed, newParsed, 0)
 	if state.capped {
 		return nil, false
@@ -1166,7 +1160,7 @@ func structuredConfigValueDiff(key, oldVal, newVal string) ([]FieldChange, bool)
 
 func shouldParseStructuredConfigValue(key, oldVal, newVal string) bool {
 	lowerKey := strings.ToLower(strings.TrimSpace(key))
-	if strings.HasSuffix(lowerKey, ".json") || strings.HasSuffix(lowerKey, ".yaml") || strings.HasSuffix(lowerKey, ".yml") {
+	if strings.HasSuffix(lowerKey, ".json") || strings.HasSuffix(lowerKey, ".yaml") || strings.HasSuffix(lowerKey, ".yml") || isPropertiesConfigKey(lowerKey) {
 		return true
 	}
 	return looksLikeStructuredConfigValue(oldVal) && looksLikeStructuredConfigValue(newVal)
@@ -1174,22 +1168,123 @@ func shouldParseStructuredConfigValue(key, oldVal, newVal string) bool {
 
 func looksLikeStructuredConfigValue(value string) bool {
 	trimmed := strings.TrimSpace(value)
-	return strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[")
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		return true
+	}
+
+	// A block threshold avoids common one-line prose; structuredRoot remains
+	// the fail-closed guard after YAML parsing.
+	significantLines := 0
+	for _, line := range strings.Split(trimmed, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		significantLines++
+		if significantLines >= 2 {
+			return true
+		}
+	}
+	return false
 }
 
-func parseStructuredConfigValue(value string) (any, bool) {
+func parseStructuredConfigValue(key, value string) (any, bool) {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
 		return nil, false
+	}
+	if isPropertiesConfigKey(key) {
+		if parsed, ok := parsePropertiesConfigValue(trimmed); ok {
+			return parsed, true
+		}
 	}
 	var parsed any
 	if json.Unmarshal([]byte(trimmed), &parsed) == nil && structuredRoot(parsed) {
 		return normalizeStructuredValue(parsed), true
 	}
-	if yaml.Unmarshal([]byte(trimmed), &parsed) == nil && structuredRoot(parsed) {
-		return normalizeStructuredValue(parsed), true
+	// YAML parsers may accept a leading flow collection while ignoring trailing
+	// format-specific text, so bracketed values must be valid JSON.
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		return nil, false
+	}
+	if parsed, ok := parseSingleStructuredYAML(trimmed); ok {
+		return parsed, true
 	}
 	return nil, false
+}
+
+func parseSingleStructuredYAML(value string) (any, bool) {
+	decoder := k8syaml.NewYAMLOrJSONDecoder(strings.NewReader(value), 4096)
+	var parsed any
+	if err := decoder.Decode(&parsed); err != nil || !structuredRoot(parsed) {
+		return nil, false
+	}
+	for {
+		var extra any
+		err := decoder.Decode(&extra)
+		if err == io.EOF {
+			return normalizeStructuredValue(parsed), true
+		}
+		if err != nil || extra != nil {
+			return nil, false
+		}
+	}
+}
+
+func isPropertiesConfigKey(key string) bool {
+	lower := strings.ToLower(strings.TrimSpace(key))
+	return strings.HasSuffix(lower, ".properties") || isDotEnvConfigKey(lower)
+}
+
+func isDotEnvConfigKey(key string) bool {
+	lower := strings.ToLower(strings.TrimSpace(key))
+	// A structured extension wins: app.env.yaml / app.env.json are YAML/JSON
+	// overlay files that happen to contain ".env.", not dotenv content.
+	if strings.HasSuffix(lower, ".yaml") || strings.HasSuffix(lower, ".yml") || strings.HasSuffix(lower, ".json") {
+		return false
+	}
+	return lower == ".env" || strings.HasPrefix(lower, ".env.") ||
+		strings.HasSuffix(lower, ".env") || strings.Contains(lower, ".env.")
+}
+
+func parsePropertiesConfigValue(value string) (any, bool) {
+	parsed := map[string]any{}
+	for _, rawLine := range strings.Split(value, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "#!") || strings.HasSuffix(line, "\\") {
+			return nil, false
+		}
+		if strings.HasPrefix(line, "#") || strings.HasPrefix(line, "!") {
+			continue
+		}
+		key, val, ok := strings.Cut(line, "=")
+		key = strings.TrimSpace(key)
+		if !ok || !validPropertiesKey(key) {
+			return nil, false
+		}
+		if _, duplicate := parsed[key]; duplicate {
+			return nil, false
+		}
+		parsed[key] = strings.TrimSpace(val)
+	}
+	return parsed, len(parsed) > 0
+}
+
+func validPropertiesKey(key string) bool {
+	if key == "" {
+		return false
+	}
+	for _, ch := range key {
+		if ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' ||
+			ch == '_' || ch == '-' || ch == '.' || ch == '/' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func structuredRoot(value any) bool {
@@ -1227,12 +1322,13 @@ func normalizeStructuredValue(v any) any {
 }
 
 type structuredDiffState struct {
-	changes  []FieldChange
-	fields   int
-	nodes    int
-	fieldCap int
-	nodeCap  int
-	capped   bool
+	changes      []FieldChange
+	fields       int
+	nodes        int
+	fieldCap     int
+	nodeCap      int
+	redactValues bool
+	capped       bool
 }
 
 func (s *structuredDiffState) diff(path string, oldVal, newVal any, depth int) {
@@ -1270,7 +1366,7 @@ func (s *structuredDiffState) diff(path string, oldVal, newVal any, depth int) {
 	newSlice, newIsSlice := newVal.([]any)
 	if oldIsSlice && newIsSlice {
 		if len(oldSlice) != len(newSlice) {
-			s.add(path, oldVal, newVal)
+			s.add(path, oldVal, newVal, depth)
 			return
 		}
 		for i := range oldSlice {
@@ -1280,24 +1376,48 @@ func (s *structuredDiffState) diff(path string, oldVal, newVal any, depth int) {
 	}
 
 	if !reflect.DeepEqual(oldVal, newVal) {
-		s.add(path, oldVal, newVal)
+		s.add(path, oldVal, newVal, depth)
 	}
 }
 
-func (s *structuredDiffState) add(path string, oldVal, newVal any) {
+func (s *structuredDiffState) add(path string, oldVal, newVal any, depth int) {
 	if s.fields >= s.fieldCap {
 		s.capped = true
 		return
 	}
 	s.fields++
+	if s.redactValues {
+		oldVal = redactPresentConfigValue(oldVal)
+		newVal = redactPresentConfigValue(newVal)
+	}
+	oldSanitized := s.sanitizeConfigValue(path, oldVal, depth)
+	newSanitized := s.sanitizeConfigValue(path, newVal, depth)
+	if s.capped {
+		return
+	}
 	s.changes = append(s.changes, FieldChange{
 		Path:     path,
-		OldValue: sanitizeConfigValue(path, oldVal),
-		NewValue: sanitizeConfigValue(path, newVal),
+		OldValue: oldSanitized,
+		NewValue: newSanitized,
 	})
 }
 
-func sanitizeConfigValue(path string, value any) any {
+func redactPresentConfigValue(value any) any {
+	if value == nil {
+		return nil
+	}
+	return "[REDACTED]"
+}
+
+func (s *structuredDiffState) sanitizeConfigValue(path string, value any, depth int) any {
+	if s.capped {
+		return nil
+	}
+	s.nodes++
+	if s.nodes > s.nodeCap || depth > configMapStructuredDepthCap {
+		s.capped = true
+		return nil
+	}
 	if sensitivePath(path) {
 		return "[REDACTED]"
 	}
@@ -1307,13 +1427,18 @@ func sanitizeConfigValue(path string, value any) any {
 	case map[string]any:
 		out := make(map[string]any, len(typed))
 		for k, child := range typed {
-			out[k] = sanitizeConfigValue(path+"."+k, child)
+			if s.fields >= s.fieldCap {
+				s.capped = true
+				return nil
+			}
+			s.fields++
+			out[k] = s.sanitizeConfigValue(path+"."+k, child, depth+1)
 		}
 		return out
 	case []any:
 		out := make([]any, len(typed))
 		for i, child := range typed {
-			out[i] = sanitizeConfigValue(fmt.Sprintf("%s[%d]", path, i), child)
+			out[i] = s.sanitizeConfigValue(fmt.Sprintf("%s[%d]", path, i), child, depth+1)
 		}
 		return out
 	case nil:
@@ -1324,28 +1449,59 @@ func sanitizeConfigValue(path string, value any) any {
 }
 
 func sensitivePath(path string) bool {
-	if sensitivePathSegment(strings.ToLower(path)) {
+	if aicontext.IsSensitiveEnvName(path) {
 		return true
 	}
-	for _, part := range strings.FieldsFunc(path, func(r rune) bool { return r == '.' || r == '[' || r == ']' || r == '/' || r == '-' || r == '_' }) {
-		if sensitivePathSegment(part) {
+	parts := strings.FieldsFunc(path, func(r rune) bool { return r == '.' || r == '[' || r == ']' || r == '/' || r == '-' || r == '_' })
+	for i, part := range parts {
+		if aicontext.IsSensitiveEnvName(part) || sensitiveConfigPathPart(parts, i) {
 			return true
 		}
 	}
 	return false
 }
 
-func sensitivePathSegment(segment string) bool {
-	segment = strings.ToLower(segment)
-	compact := strings.NewReplacer("-", "", "_", "", ".", "", "/", "").Replace(segment)
-	return strings.Contains(segment, "password") || strings.Contains(segment, "passwd") ||
-		strings.Contains(segment, "token") || strings.Contains(segment, "secret") ||
-		strings.Contains(segment, "credential") ||
-		strings.Contains(segment, "api_key") || strings.Contains(segment, "apikey") ||
-		strings.Contains(segment, "accesskey") || strings.Contains(segment, "privatekey") ||
-		strings.Contains(segment, "private_key") ||
-		strings.Contains(compact, "apikey") || strings.Contains(compact, "accesskey") ||
-		strings.Contains(compact, "privatekey") || strings.Contains(compact, "clientsecret")
+func sensitiveConfigPathPart(parts []string, index int) bool {
+	part := strings.ToLower(parts[index])
+	switch part {
+	case "pass", "pw", "pwd", "passphrase", "cred", "creds":
+		return true
+	case "auth", "dsn", "webhook":
+		return terminalConfigPathPart(parts, index)
+	case "key":
+		if index > 0 && sensitiveConfigKeyQualifier(parts[index-1]) {
+			return true
+		}
+	}
+	for _, suffix := range []string{"pass", "pwd", "pw", "key"} {
+		if qualifier, ok := strings.CutSuffix(part, suffix); ok && qualifier != "" && sensitiveConfigKeyQualifier(qualifier) {
+			return true
+		}
+	}
+	return false
+}
+
+func terminalConfigPathPart(parts []string, index int) bool {
+	for _, part := range parts[index+1:] {
+		if part == "" {
+			return false
+		}
+		for _, char := range part {
+			if char < '0' || char > '9' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func sensitiveConfigKeyQualifier(part string) bool {
+	switch strings.ToLower(part) {
+	case "access", "admin", "api", "app", "auth", "client", "database", "db", "encryption", "hmac", "jwt", "license", "master", "mongo", "mongodb", "mysql", "pg", "postgres", "postgresql", "private", "redis", "secret", "signing", "smtp", "ssh", "stripe", "tls", "user":
+		return true
+	default:
+		return false
+	}
 }
 
 func truncateConfigScalar(value string, max int) string {
@@ -1531,21 +1687,9 @@ func diffDaemonSet(oldObj, newObj any) ([]FieldChange, []string) {
 	var changes []FieldChange
 	var summary []string
 
-	// Check container images
-	oldImages := getContainerImages(oldDS.Spec.Template.Spec.Containers)
-	newImages := getContainerImages(newDS.Spec.Template.Spec.Containers)
-	if !equalStringMaps(oldImages, newImages) {
-		for name, oldImg := range oldImages {
-			if newImg, ok := newImages[name]; ok && oldImg != newImg {
-				changes = append(changes, FieldChange{
-					Path:     fmt.Sprintf("spec.template.spec.containers[%s].image", name),
-					OldValue: oldImg,
-					NewValue: newImg,
-				})
-				summary = append(summary, fmt.Sprintf("image(%s): %s→%s", name, truncateImage(oldImg), truncateImage(newImg)))
-			}
-		}
-	}
+	imageChanges, imageSummary := diffContainerImages(oldDS.Spec.Template.Spec, newDS.Spec.Template.Spec)
+	changes = append(changes, imageChanges...)
+	summary = append(summary, imageSummary...)
 
 	podTemplateChanges, podTemplateSummary := diffPodTemplateConfig(oldDS.Spec.Template.Spec, newDS.Spec.Template.Spec)
 	changes = append(changes, podTemplateChanges...)
@@ -1638,21 +1782,9 @@ func diffStatefulSet(oldObj, newObj any) ([]FieldChange, []string) {
 		summary = append(summary, fmt.Sprintf("replicas: %d→%d", oldReplicas, newReplicas))
 	}
 
-	// Check container images
-	oldImages := getContainerImages(oldSTS.Spec.Template.Spec.Containers)
-	newImages := getContainerImages(newSTS.Spec.Template.Spec.Containers)
-	if !equalStringMaps(oldImages, newImages) {
-		for name, oldImg := range oldImages {
-			if newImg, ok := newImages[name]; ok && oldImg != newImg {
-				changes = append(changes, FieldChange{
-					Path:     fmt.Sprintf("spec.template.spec.containers[%s].image", name),
-					OldValue: oldImg,
-					NewValue: newImg,
-				})
-				summary = append(summary, fmt.Sprintf("image(%s): %s→%s", name, truncateImage(oldImg), truncateImage(newImg)))
-			}
-		}
-	}
+	imageChanges, imageSummary := diffContainerImages(oldSTS.Spec.Template.Spec, newSTS.Spec.Template.Spec)
+	changes = append(changes, imageChanges...)
+	summary = append(summary, imageSummary...)
 
 	podTemplateChanges, podTemplateSummary := diffPodTemplateConfig(oldSTS.Spec.Template.Spec, newSTS.Spec.Template.Spec)
 	changes = append(changes, podTemplateChanges...)
@@ -2760,14 +2892,6 @@ func getPVCConditionStatus(pvc *corev1.PersistentVolumeClaim, condType corev1.Pe
 
 // Helper functions
 
-func getContainerImages(containers []corev1.Container) map[string]string {
-	images := make(map[string]string)
-	for _, c := range containers {
-		images[c.Name] = c.Image
-	}
-	return images
-}
-
 func getContainerResources(containers []corev1.Container) map[string]any {
 	resources := make(map[string]any)
 	for _, c := range containers {
@@ -2777,6 +2901,33 @@ func getContainerResources(containers []corev1.Container) map[string]any {
 		}
 	}
 	return resources
+}
+
+func diffContainerImages(oldSpec, newSpec corev1.PodSpec) ([]FieldChange, []string) {
+	oldContainers := containerConfigMap(oldSpec)
+	newContainers := containerConfigMap(newSpec)
+	names := make([]string, 0, len(oldContainers))
+	for name := range oldContainers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var changes []FieldChange
+	var summary []string
+	for _, name := range names {
+		oldContainer := oldContainers[name]
+		newContainer, ok := newContainers[name]
+		if !ok || oldContainer.pathPrefix != newContainer.pathPrefix || oldContainer.Image == newContainer.Image {
+			continue
+		}
+		changes = append(changes, FieldChange{
+			Path:     newContainer.fieldPath(name, "image"),
+			OldValue: oldContainer.Image,
+			NewValue: newContainer.Image,
+		})
+		summary = append(summary, fmt.Sprintf("image(%s): %s→%s", name, truncateImage(oldContainer.Image), truncateImage(newContainer.Image)))
+	}
+	return changes, summary
 }
 
 func diffPodTemplateConfig(oldSpec, newSpec corev1.PodSpec) ([]FieldChange, []string) {
@@ -2804,60 +2955,71 @@ func diffPodTemplateConfig(oldSpec, newSpec corev1.PodSpec) ([]FieldChange, []st
 		// row naming it (with its image), not a per-field fan-out of its
 		// entire config against nothing.
 		if !oldOK {
-			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s]", name), OldValue: nil, NewValue: newC.Image})
-			summary = append(summary, fmt.Sprintf("container %s added (%s)", name, truncateImage(newC.Image)))
+			changes = append(changes, FieldChange{Path: newC.fieldPath(name, ""), OldValue: nil, NewValue: newC.Image})
+			summary = append(summary, fmt.Sprintf("%s %s added (%s)", newC.summaryKind(), name, truncateImage(newC.Image)))
 			continue
 		}
 		if !newOK {
-			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s]", name), OldValue: oldC.Image, NewValue: nil})
-			summary = append(summary, fmt.Sprintf("container %s removed", name))
+			changes = append(changes, FieldChange{Path: oldC.fieldPath(name, ""), OldValue: oldC.Image, NewValue: nil})
+			summary = append(summary, fmt.Sprintf("%s %s removed", oldC.summaryKind(), name))
 			continue
 		}
-		for _, change := range diffContainerEnv(name, oldC.Env, newC.Env) {
+		if oldC.pathPrefix != newC.pathPrefix {
+			changes = append(changes,
+				FieldChange{Path: oldC.fieldPath(name, ""), OldValue: oldC.Image, NewValue: nil},
+				FieldChange{Path: newC.fieldPath(name, ""), OldValue: nil, NewValue: newC.Image},
+			)
+			summary = append(summary,
+				fmt.Sprintf("%s %s removed", oldC.summaryKind(), name),
+				fmt.Sprintf("%s %s added (%s)", newC.summaryKind(), name, truncateImage(newC.Image)),
+			)
+			continue
+		}
+		for _, change := range diffContainerEnv(newC.fieldPath(name, ""), oldC.Env, newC.Env) {
 			changes = append(changes, change)
 			summary = append(summary, envChangeSummary(change, name))
 		}
 		if oldEnvFrom, newEnvFrom := envFromRefs(oldC.EnvFrom), envFromRefs(newC.EnvFrom); !equalStringSlices(oldEnvFrom, newEnvFrom) {
-			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].envFrom", name), OldValue: oldEnvFrom, NewValue: newEnvFrom})
+			changes = append(changes, FieldChange{Path: newC.fieldPath(name, "envFrom"), OldValue: oldEnvFrom, NewValue: newEnvFrom})
 			summary = append(summary, fmt.Sprintf("envFrom(%s) changed", name))
 		}
 		if oldC.ImagePullPolicy != newC.ImagePullPolicy {
 			changes = append(changes, FieldChange{
-				Path:     fmt.Sprintf("spec.template.spec.containers[%s].imagePullPolicy", name),
+				Path:     newC.fieldPath(name, "imagePullPolicy"),
 				OldValue: string(oldC.ImagePullPolicy),
 				NewValue: string(newC.ImagePullPolicy),
 			})
 			summary = append(summary, fmt.Sprintf("imagePullPolicy(%s): %s→%s", name, oldC.ImagePullPolicy, newC.ImagePullPolicy))
 		}
 		for _, probeName := range []string{"readinessProbe", "livenessProbe", "startupProbe"} {
-			oldProbe := normalizedProbe(probeForName(oldC, probeName))
-			newProbe := normalizedProbe(probeForName(newC, probeName))
+			oldProbe := normalizedProbe(probeForName(oldC.Container, probeName))
+			newProbe := normalizedProbe(probeForName(newC.Container, probeName))
 			if !reflect.DeepEqual(oldProbe, newProbe) {
-				changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].%s", name, probeName), OldValue: oldProbe, NewValue: newProbe})
+				changes = append(changes, FieldChange{Path: newC.fieldPath(name, probeName), OldValue: oldProbe, NewValue: newProbe})
 				summary = append(summary, fmt.Sprintf("%s(%s) changed", probeName, name))
 			}
 		}
 		if !equalStringSlices(oldC.Command, newC.Command) {
-			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].command", name), OldValue: commandArgDisplayValues(oldC.Command), NewValue: commandArgDisplayValues(newC.Command)})
+			changes = append(changes, FieldChange{Path: newC.fieldPath(name, "command"), OldValue: commandArgDisplayValues(oldC.Command), NewValue: commandArgDisplayValues(newC.Command)})
 			summary = append(summary, fmt.Sprintf("command(%s) changed", name))
 		}
 		if !equalStringSlices(oldC.Args, newC.Args) {
-			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].args", name), OldValue: commandArgDisplayValues(oldC.Args), NewValue: commandArgDisplayValues(newC.Args)})
+			changes = append(changes, FieldChange{Path: newC.fieldPath(name, "args"), OldValue: commandArgDisplayValues(oldC.Args), NewValue: commandArgDisplayValues(newC.Args)})
 			summary = append(summary, fmt.Sprintf("args(%s) changed", name))
 		}
 		if oldMounts, newMounts := volumeMountRefs(oldC.VolumeMounts), volumeMountRefs(newC.VolumeMounts); !equalStringSlices(oldMounts, newMounts) {
-			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].volumeMounts", name), OldValue: oldMounts, NewValue: newMounts})
+			changes = append(changes, FieldChange{Path: newC.fieldPath(name, "volumeMounts"), OldValue: oldMounts, NewValue: newMounts})
 			summary = append(summary, fmt.Sprintf("volumeMounts(%s) changed", name))
 		}
 		if oldPorts, newPorts := containerPortRefs(oldC.Ports), containerPortRefs(newC.Ports); !equalStringSlices(oldPorts, newPorts) {
-			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].ports", name), OldValue: oldPorts, NewValue: newPorts})
+			changes = append(changes, FieldChange{Path: newC.fieldPath(name, "ports"), OldValue: oldPorts, NewValue: newPorts})
 			summary = append(summary, fmt.Sprintf("ports(%s) changed", name))
 		}
 		// Boolean-level only: securityContext values (capabilities, uids,
 		// seccomp profiles) are deep structures whose exact contents rarely
 		// matter to triage — that something changed does.
 		if !reflect.DeepEqual(oldC.SecurityContext, newC.SecurityContext) {
-			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].securityContext", name), OldValue: "changed", NewValue: "changed"})
+			changes = append(changes, FieldChange{Path: newC.fieldPath(name, "securityContext"), OldValue: "changed", NewValue: "changed"})
 			summary = append(summary, fmt.Sprintf("securityContext(%s) changed", name))
 		}
 	}
@@ -2865,6 +3027,26 @@ func diffPodTemplateConfig(oldSpec, newSpec corev1.PodSpec) ([]FieldChange, []st
 	// Pod-level fields. Volume diffs carry source references only (never
 	// contents); tolerations are summarized to compact strings; affinity is a
 	// bare "changed" marker — its tree is too large to diff usefully.
+	oldDNSPolicy := normalizedDNSPolicy(oldSpec.DNSPolicy)
+	newDNSPolicy := normalizedDNSPolicy(newSpec.DNSPolicy)
+	if oldDNSPolicy != newDNSPolicy {
+		changes = append(changes, FieldChange{Path: "spec.template.spec.dnsPolicy", OldValue: oldDNSPolicy, NewValue: newDNSPolicy})
+		summary = append(summary, fmt.Sprintf("dnsPolicy: %s→%s", oldDNSPolicy, newDNSPolicy))
+	}
+	oldNameservers, oldSearches, oldDNSOptions := dnsConfigValues(oldSpec.DNSConfig)
+	newNameservers, newSearches, newDNSOptions := dnsConfigValues(newSpec.DNSConfig)
+	if !equalStringSlices(oldNameservers, newNameservers) {
+		changes = append(changes, FieldChange{Path: "spec.template.spec.dnsConfig.nameservers", OldValue: oldNameservers, NewValue: newNameservers})
+		summary = append(summary, "dnsConfig.nameservers changed")
+	}
+	if !equalStringSlices(oldSearches, newSearches) {
+		changes = append(changes, FieldChange{Path: "spec.template.spec.dnsConfig.searches", OldValue: oldSearches, NewValue: newSearches})
+		summary = append(summary, "dnsConfig.searches changed")
+	}
+	if !equalStringSlices(oldDNSOptions, newDNSOptions) {
+		changes = append(changes, FieldChange{Path: "spec.template.spec.dnsConfig.options", OldValue: oldDNSOptions, NewValue: newDNSOptions})
+		summary = append(summary, "dnsConfig.options changed")
+	}
 	if oldVols, newVols := volumeSourceRefs(oldSpec.Volumes), volumeSourceRefs(newSpec.Volumes); !equalStringSlices(oldVols, newVols) {
 		changes = append(changes, FieldChange{Path: "spec.template.spec.volumes", OldValue: oldVols, NewValue: newVols})
 		summary = append(summary, "volumes changed")
@@ -2890,6 +3072,32 @@ func diffPodTemplateConfig(oldSpec, newSpec corev1.PodSpec) ([]FieldChange, []st
 		summary = append(summary, "pod securityContext changed")
 	}
 	return changes, summary
+}
+
+func normalizedDNSPolicy(policy corev1.DNSPolicy) string {
+	if policy == "" {
+		return string(corev1.DNSClusterFirst)
+	}
+	return string(policy)
+}
+
+func dnsConfigValues(config *corev1.PodDNSConfig) (nameservers, searches, options []string) {
+	nameservers = []string{}
+	searches = []string{}
+	options = []string{}
+	if config == nil {
+		return nameservers, searches, options
+	}
+	nameservers = append(nameservers, config.Nameservers...)
+	searches = append(searches, config.Searches...)
+	for _, option := range config.Options {
+		value := option.Name
+		if option.Value != nil {
+			value += "=" + *option.Value
+		}
+		options = append(options, value)
+	}
+	return nameservers, searches, options
 }
 
 // volumeSourceRefs renders volumes as "name:sourceType/sourceName" references
@@ -2980,18 +3188,38 @@ func emptyAsNone(s string) string {
 	return s
 }
 
-func containerConfigMap(spec corev1.PodSpec) map[string]corev1.Container {
-	out := make(map[string]corev1.Container, len(spec.InitContainers)+len(spec.Containers))
+type podTemplateContainer struct {
+	corev1.Container
+	pathPrefix string
+}
+
+func (c podTemplateContainer) fieldPath(name, field string) string {
+	path := fmt.Sprintf("%s[%s]", c.pathPrefix, name)
+	if field != "" {
+		path += "." + field
+	}
+	return path
+}
+
+func (c podTemplateContainer) summaryKind() string {
+	if c.pathPrefix == "spec.template.spec.initContainers" {
+		return "init container"
+	}
+	return "container"
+}
+
+func containerConfigMap(spec corev1.PodSpec) map[string]podTemplateContainer {
+	out := make(map[string]podTemplateContainer, len(spec.InitContainers)+len(spec.Containers))
 	for _, c := range spec.InitContainers {
-		out[c.Name] = c
+		out[c.Name] = podTemplateContainer{Container: c, pathPrefix: "spec.template.spec.initContainers"}
 	}
 	for _, c := range spec.Containers {
-		out[c.Name] = c
+		out[c.Name] = podTemplateContainer{Container: c, pathPrefix: "spec.template.spec.containers"}
 	}
 	return out
 }
 
-func diffContainerEnv(container string, oldEnv, newEnv []corev1.EnvVar) []FieldChange {
+func diffContainerEnv(containerPath string, oldEnv, newEnv []corev1.EnvVar) []FieldChange {
 	oldMap := envVarMap(oldEnv)
 	newMap := envVarMap(newEnv)
 	keys := make(map[string]struct{}, len(oldMap)+len(newMap))
@@ -3015,7 +3243,7 @@ func diffContainerEnv(container string, oldEnv, newEnv []corev1.EnvVar) []FieldC
 			continue
 		}
 		changes = append(changes, FieldChange{
-			Path:     fmt.Sprintf("spec.template.spec.containers[%s].env[%s]", container, name),
+			Path:     fmt.Sprintf("%s.env[%s]", containerPath, name),
 			OldValue: valueOrNil(oldVal, oldOK),
 			NewValue: valueOrNil(newVal, newOK),
 		})
@@ -3138,7 +3366,7 @@ func valueOrNil(v string, ok bool) any {
 }
 
 func envNameLooksSecret(name string) bool {
-	return sensitivePathSegment(name)
+	return aicontext.IsSensitiveEnvName(name)
 }
 
 func commandArgDisplayValues(values []string) []string {
@@ -3184,7 +3412,7 @@ func commandArgNameLooksSecret(value string) bool {
 	if name == "key" {
 		return true
 	}
-	return sensitivePathSegment(name)
+	return aicontext.IsSensitiveEnvName(name)
 }
 
 func getTotalRestarts(statuses []corev1.ContainerStatus) int32 {
@@ -3228,6 +3456,7 @@ func getModifiedKeys(old, new map[string]string) []string {
 			modified = append(modified, k)
 		}
 	}
+	sort.Strings(modified)
 	return modified
 }
 

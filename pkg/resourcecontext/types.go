@@ -16,6 +16,8 @@
 // and for stable, machine-friendly JSON output.
 package resourcecontext
 
+import "time"
+
 // ResourceContext is the top-level enrichment block attached to a resource
 // response. Every field is optional; the zero value is a valid (empty)
 // "basic"-tier context.
@@ -109,7 +111,11 @@ type UsesBlock struct {
 }
 
 type AppReferences struct {
-	ServiceEnv []ServiceEnvReference `json:"serviceEnv,omitempty"`
+	ServiceEnv              []ServiceEnvReference        `json:"serviceEnv,omitempty"`
+	DuplicateEnv            []DuplicateEnvVarReference   `json:"duplicateEnv,omitempty"`
+	RemovedServiceEnv       []RemovedServiceEnvReference `json:"removedServiceEnv,omitempty"`
+	StaleSecretEnv          []StaleSecretEnvReference    `json:"staleSecretEnv,omitempty"`
+	StaleSecretEnvTruncated bool                         `json:"staleSecretEnvTruncated,omitempty"`
 }
 
 type ServiceEnvReference struct {
@@ -121,6 +127,45 @@ type ServiceEnvReference struct {
 	ReferencedPort int32      `json:"referencedPort,omitempty"`
 	ServicePorts   []string   `json:"servicePorts,omitempty"`
 	Message        string     `json:"message,omitempty"`
+}
+
+type DuplicateEnvVarReference struct {
+	Container         string                      `json:"container"`
+	Env               string                      `json:"env"`
+	Count             int                         `json:"count"`
+	Occurrences       []DuplicateEnvVarOccurrence `json:"occurrences"`
+	LastDeclaredValue string                      `json:"lastDeclaredValue"`
+	Message           string                      `json:"message,omitempty"`
+}
+
+type DuplicateEnvVarOccurrence struct {
+	Position int    `json:"position"`
+	Value    string `json:"value"`
+}
+
+type RemovedServiceEnvReference struct {
+	Container      string     `json:"container"`
+	Env            string     `json:"env"`
+	OldValue       string     `json:"oldValue"`
+	Service        ContextRef `json:"service"`
+	ReferencedPort int32      `json:"referencedPort,omitempty"`
+	RemovedAt      time.Time  `json:"removedAt"`
+	Message        string     `json:"message,omitempty"`
+}
+
+type StaleSecretEnvReference struct {
+	Pod                string     `json:"pod,omitempty"`
+	AffectedPods       int        `json:"affectedPods,omitempty"`
+	Container          string     `json:"container"`
+	Env                string     `json:"env,omitempty"`
+	ReferenceKind      string     `json:"referenceKind"`
+	EvidenceSource     string     `json:"evidenceSource"`
+	Prefix             string     `json:"prefix,omitempty"`
+	Secret             ContextRef `json:"secret"`
+	Key                string     `json:"key,omitempty"`
+	ContainerStartedAt time.Time  `json:"containerStartedAt"`
+	SecretChangedAt    time.Time  `json:"secretChangedAt"`
+	Message            string     `json:"message,omitempty"`
 }
 
 // ReferencedBy lists workload specs that directly reference the subject
@@ -173,8 +218,9 @@ type ContainerStateSummary struct {
 }
 
 type WorkloadSummary struct {
-	Replicas   *ReplicaSummary    `json:"replicas,omitempty"`
-	Conditions []ConditionSummary `json:"conditions,omitempty"`
+	Replicas    *ReplicaSummary     `json:"replicas,omitempty"`
+	Conditions  []ConditionSummary  `json:"conditions,omitempty"`
+	RolloutRisk *RolloutRiskSummary `json:"rolloutRisk,omitempty"`
 }
 
 type ReplicaSummary struct {
@@ -183,6 +229,17 @@ type ReplicaSummary struct {
 	Available   int32 `json:"available,omitempty"`
 	Updated     int32 `json:"updated,omitempty"`
 	Unavailable int32 `json:"unavailable,omitempty"`
+}
+
+type RolloutRiskSummary struct {
+	Reason                 string `json:"reason"`
+	Replicas               int32  `json:"replicas"`
+	MaxSurge               string `json:"maxSurge"`
+	MaxUnavailable         string `json:"maxUnavailable"`
+	ResolvedMaxSurge       int32  `json:"resolvedMaxSurge"`
+	ResolvedMaxUnavailable int32  `json:"resolvedMaxUnavailable"`
+	Message                string `json:"message"`
+	Action                 string `json:"action"`
 }
 
 // ServiceSummary adds realized backend state for a Service. The raw Service
@@ -333,8 +390,9 @@ type IssueSummary struct {
 	BySource        map[string]int `json:"bySource,omitempty"`
 }
 
-// AuditSummary is a rollup of audit-engine findings scoped to the
-// subject resource.
+// AuditSummary is a rollup of static posture findings scoped to the subject
+// resource. HighestSeverity uses the canonical Checks severity ladder; it is
+// remediation priority, not proof of an active outage.
 type AuditSummary struct {
 	Count           int    `json:"count"`
 	HighestSeverity string `json:"highestSeverity,omitempty"`

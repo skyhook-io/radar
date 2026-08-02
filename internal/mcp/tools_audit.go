@@ -10,12 +10,13 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/settings"
 	bp "github.com/skyhook-io/radar/pkg/audit"
+	"github.com/skyhook-io/radar/pkg/checks"
 )
 
 type auditInput struct {
 	Namespace string `json:"namespace,omitempty" jsonschema:"filter to a specific namespace"`
 	Category  string `json:"category,omitempty" jsonschema:"filter by category: Security, Reliability, or Efficiency"`
-	Severity  string `json:"severity,omitempty" jsonschema:"filter by severity: danger or warning"`
+	Severity  string `json:"severity,omitempty" jsonschema:"filter by posture remediation priority: critical, high, medium, or low. Current built-in checks emit high or medium."`
 	Limit     int    `json:"limit,omitempty" jsonschema:"max audit violation findings to return (default 30, max 100). This limits findings only; compliant resources are not returned."`
 }
 
@@ -29,21 +30,28 @@ type auditToolResult struct {
 
 type auditSummary struct {
 	Critical   int            `json:"critical"`
-	Warning    int            `json:"warning"`
+	High       int            `json:"high"`
+	Medium     int            `json:"medium"`
+	Low        int            `json:"low"`
 	Resources  int            `json:"resources"`
 	Categories map[string]int `json:"categories"`
 }
 
 type auditFinding struct {
-	Resource    string `json:"resource"` // "Deployment/default/web"
-	Check       string `json:"check"`    // "runAsRoot"
-	Severity    string `json:"severity"` // "danger" or "warning"
-	Category    string `json:"category"` // "Security"
-	Message     string `json:"message"`
-	Remediation string `json:"remediation,omitempty"`
+	Resource    string          `json:"resource"` // "Deployment/default/web"
+	Check       string          `json:"check"`    // "runAsRoot"
+	Severity    checks.Severity `json:"severity"`
+	Category    string          `json:"category"` // "Security"
+	Message     string          `json:"message"`
+	Remediation string          `json:"remediation,omitempty"`
 }
 
 func handleGetAudit(ctx context.Context, req *mcp.CallToolRequest, input auditInput) (*mcp.CallToolResult, any, error) {
+	severity, err := parseAuditSeverity(input.Severity)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return nil, nil, fmt.Errorf("not connected to cluster")
@@ -98,51 +106,8 @@ func handleGetAudit(ctx context.Context, req *mcp.CallToolRequest, input auditIn
 		}
 	}
 
-	// Category counts are built post-namespace-filter so restricted users
-	// don't see totals that include namespaces they can't access.
-	catCounts := map[string]int{}
-	var filtered []auditFinding
-	for _, f := range results.Findings {
-		if nsAllow != nil && !nsAllow[f.Namespace] {
-			continue
-		}
-		catCounts[f.Category]++
-
-		if input.Category != "" && f.Category != input.Category {
-			continue
-		}
-		if input.Severity != "" && f.Severity != input.Severity {
-			continue
-		}
-		remediation := ""
-		if meta, ok := registry[f.CheckID]; ok {
-			remediation = meta.Remediation
-		}
-		filtered = append(filtered, auditFinding{
-			Resource:    fmt.Sprintf("%s/%s/%s", f.Kind, f.Namespace, f.Name),
-			Check:       f.CheckID,
-			Severity:    f.Severity,
-			Category:    f.Category,
-			Message:     f.Message,
-			Remediation: remediation,
-		})
-	}
-
-	// Counts come from `filtered` so Summary reflects the agent's namespace
-	// / category / severity filters the same way Findings does. Categories
-	// stays post-RBAC + pre-category-filter so the agent can still see
-	// which categories have findings before narrowing.
-	var critical, warning int
-	resourceSet := map[string]struct{}{}
-	for _, f := range filtered {
-		switch f.Severity {
-		case "danger", "critical":
-			critical++
-		case "warning":
-			warning++
-		}
-		resourceSet[f.Resource] = struct{}{}
-	}
+	catCounts, filtered := collectAuditToolFindings(results.Findings, registry, nsAllow, input.Category, severity)
+	summary := summarizeAuditToolFindings(filtered, catCounts)
 
 	totalCount := len(filtered)
 	truncated := false
@@ -157,17 +122,81 @@ func handleGetAudit(ctx context.Context, req *mcp.CallToolRequest, input auditIn
 	}
 
 	return toJSONResult(auditToolResult{
-		Summary: auditSummary{
-			Critical:   critical,
-			Warning:    warning,
-			Resources:  len(resourceSet),
-			Categories: catCounts,
-		},
+		Summary:    summary,
 		Findings:   filtered,
 		TotalCount: totalCount,
 		Truncated:  truncated,
 		NarrowHint: narrowHint,
 	})
+}
+
+func collectAuditToolFindings(
+	findings []bp.Finding,
+	registry map[string]bp.CheckMeta,
+	nsAllow map[string]bool,
+	category string,
+	severity checks.Severity,
+) (map[string]int, []auditFinding) {
+	// Category counts stay post-RBAC + post-severity-filter + pre-category-filter
+	// so an agent can see which categories remain available before narrowing.
+	categories := map[string]int{}
+	var filtered []auditFinding
+	for _, f := range findings {
+		if nsAllow != nil && !nsAllow[f.Namespace] {
+			continue
+		}
+		effectiveSeverity := checks.MapSeverity(f.Severity)
+		if severity != "" && effectiveSeverity != severity {
+			continue
+		}
+		categories[f.Category]++
+		if category != "" && f.Category != category {
+			continue
+		}
+		remediation := ""
+		if meta, ok := registry[f.CheckID]; ok {
+			remediation = meta.Remediation
+		}
+		filtered = append(filtered, auditFinding{
+			Resource:    fmt.Sprintf("%s/%s/%s", f.Kind, f.Namespace, f.Name),
+			Check:       f.CheckID,
+			Severity:    effectiveSeverity,
+			Category:    f.Category,
+			Message:     f.Message,
+			Remediation: remediation,
+		})
+	}
+	return categories, filtered
+}
+
+func summarizeAuditToolFindings(findings []auditFinding, categories map[string]int) auditSummary {
+	summary := auditSummary{Categories: categories}
+	resources := map[string]struct{}{}
+	for _, f := range findings {
+		switch f.Severity {
+		case checks.SeverityCritical:
+			summary.Critical++
+		case checks.SeverityHigh:
+			summary.High++
+		case checks.SeverityMedium:
+			summary.Medium++
+		case checks.SeverityLow:
+			summary.Low++
+		}
+		resources[f.Resource] = struct{}{}
+	}
+	summary.Resources = len(resources)
+	return summary
+}
+
+func parseAuditSeverity(value string) (checks.Severity, error) {
+	if value == "" {
+		return "", nil
+	}
+	if !checks.ValidSeverity(value) {
+		return "", fmt.Errorf("unknown audit severity %q (want: critical, high, medium, low)", value)
+	}
+	return checks.Severity(value), nil
 }
 
 func loadAuditConfig() settings.AuditConfig {

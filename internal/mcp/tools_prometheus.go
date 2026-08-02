@@ -8,6 +8,7 @@ import (
 	"log"
 	"math"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,9 +21,16 @@ import (
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
-// promQueryTimeout is the default per-call budget for the read tools. var, not
-// const, so tests can shrink it to exercise the timeout paths.
-var promQueryTimeout = 30 * time.Second
+// These are vars so tests can shrink them to exercise timeout paths.
+var (
+	promQueryTimeout      = 30 * time.Second
+	promSuggestionTimeout = 5 * time.Second
+)
+
+var (
+	promMetricNamePattern     = regexp.MustCompile(`^[a-zA-Z_:][a-zA-Z0-9_:]*$`)
+	promVectorSelectorPattern = regexp.MustCompile(`([a-zA-Z_:][a-zA-Z0-9_:]*)\s*[\{\[]`)
+)
 
 const (
 	promMaxQueryTimeout      = 180 * time.Second
@@ -34,6 +42,7 @@ const (
 	promDiscoverDefaultLimit = 100
 	promDiscoverMaxLimit     = 500
 	promDiscoverLookback     = time.Hour
+	promSuggestionLimit      = 20
 	promMetadataLimit        = 5000
 	promRulesDefaultLimit    = 50
 	promRulesMaxLimit        = 200
@@ -79,17 +88,18 @@ type discoverMetricsInput struct {
 }
 
 type promQueryResponse struct {
-	Query       string          `json:"query"`
-	Type        string          `json:"type"`
-	Start       string          `json:"start,omitempty"`
-	End         string          `json:"end,omitempty"`
-	Step        string          `json:"step,omitempty"`
-	ResultType  string          `json:"resultType,omitempty"`
-	SeriesCount int             `json:"seriesCount"`
-	Series      []prom.Series   `json:"series"`
-	Truncated   bool            `json:"truncated,omitempty"`
-	Summary     json.RawMessage `json:"summary,omitempty"`
-	Note        string          `json:"note,omitempty"`
+	Query            string          `json:"query"`
+	Type             string          `json:"type"`
+	Start            string          `json:"start,omitempty"`
+	End              string          `json:"end,omitempty"`
+	Step             string          `json:"step,omitempty"`
+	ResultType       string          `json:"resultType,omitempty"`
+	SeriesCount      int             `json:"seriesCount"`
+	Series           []prom.Series   `json:"series"`
+	Truncated        bool            `json:"truncated,omitempty"`
+	Summary          json.RawMessage `json:"summary,omitempty"`
+	Note             string          `json:"note,omitempty"`
+	SuggestedMetrics []string        `json:"suggestedMetrics,omitempty"`
 }
 
 type promMetricInfo struct {
@@ -160,6 +170,26 @@ func handleQueryPrometheus(ctx context.Context, req *mcp.CallToolRequest, input 
 	resp.Series = []prom.Series{}
 	if len(result.Series) == 0 {
 		resp.Note = "query returned no data — verify metric and label names with discover_metrics"
+		prefix := promMetricFamilyPrefix(input.Query)
+		if prefix != "" {
+			discoveryCtx, discoveryCancel := context.WithTimeout(ctx, promSuggestionTimeout)
+			values, truncated, discoveryErr := discoverPromLabelValues(
+				discoveryCtx,
+				p,
+				"__name__",
+				[]string{fmt.Sprintf(`{__name__=~"%s.*"}`, prefix)},
+				promSuggestionLimit,
+			)
+			discoveryCancel()
+			if discoveryErr == nil && len(values) > 0 {
+				resp.SuggestedMetrics = values
+				qualifier := ""
+				if truncated {
+					qualifier = fmt.Sprintf(" (first %d)", promSuggestionLimit)
+				}
+				resp.Note = fmt.Sprintf("query returned no data — suggestedMetrics contains active metric names beginning with %q%s; verify metric and label names with discover_metrics", prefix, qualifier)
+			}
+		}
 		return toJSONResult(resp)
 	}
 
@@ -204,30 +234,13 @@ func handleDiscoverMetrics(ctx context.Context, req *mcp.CallToolRequest, input 
 	if strings.TrimSpace(input.Match) != "" {
 		matches = []string{input.Match}
 	}
-	// Lookback window keeps dead series (rotated pods, removed exporters)
-	// from bloating discovery results.
-	end := time.Now()
-	start := end.Add(-promDiscoverLookback)
-
 	label := input.Label
 	if label == "" {
 		label = "__name__"
 	}
-	// Request one past the limit so a result of exactly `limit` can be told
-	// apart from a genuinely truncated one — asking for `limit` alone makes a
-	// complete-at-limit result indistinguishable from "more exist".
-	values, err := p.LabelValues(ctx, label, matches, start, end, limit+1)
+	values, truncated, err := discoverPromLabelValues(ctx, p, label, matches, limit)
 	if err != nil {
 		return nil, nil, promDiscoverError(ctx, input.Match, err)
-	}
-
-	// The limit is also enforced client-side: the server-side limit param only
-	// landed in Prometheus 2.55, and older Prometheus / Thanos / Mimir builds
-	// silently ignore unknown params — without this cap a broad match on such
-	// backends returns an unbounded payload with no truncation signal.
-	truncated := len(values) > limit
-	if truncated {
-		values = values[:limit]
 	}
 
 	resp := discoverMetricsResponse{
@@ -281,6 +294,118 @@ func handleDiscoverMetrics(ctx context.Context, req *mcp.CallToolRequest, input 
 		resp.Usage = "some results are counters (type=counter) — they only ever increase, so wrap them in rate(metric[5m]) before querying; gauges can be queried directly"
 	}
 	return toJSONResult(resp)
+}
+
+func discoverPromLabelValues(ctx context.Context, p *prom.Client, label string, matches []string, limit int) ([]string, bool, error) {
+	// The one-hour window excludes dead series, while limit+1 distinguishes an
+	// exact-limit result from a truncated one.
+	end := time.Now()
+	start := end.Add(-promDiscoverLookback)
+	values, err := p.LabelValues(ctx, label, matches, start, end, limit+1)
+	if err != nil {
+		return nil, false, err
+	}
+	// Prometheus versions before 2.55 and some compatible backends ignore the
+	// wire limit, so the response must also be capped client-side.
+	truncated := len(values) > limit
+	if truncated {
+		values = values[:limit]
+	}
+	return values, truncated, nil
+}
+
+func promMetricFamilyPrefix(query string) string {
+	query = strings.TrimSpace(withoutPromStringLiterals(query))
+	name := query
+	if !promMetricNamePattern.MatchString(query) {
+		if promHasBinaryOperator(query) {
+			return ""
+		}
+		matches := promVectorSelectorPattern.FindAllStringSubmatch(query, -1)
+		if len(matches) != 1 {
+			return ""
+		}
+		name = matches[0][1]
+	}
+
+	separatorCount := 0
+	for i, ch := range name {
+		if ch != '_' && ch != ':' {
+			continue
+		}
+		separatorCount++
+		if separatorCount == 2 {
+			return name[:i]
+		}
+	}
+	return name
+}
+
+func promHasBinaryOperator(query string) bool {
+	braceDepth := 0
+	for i := 0; i < len(query); {
+		switch query[i] {
+		case '{':
+			braceDepth++
+			i++
+			continue
+		case '}':
+			if braceDepth > 0 {
+				braceDepth--
+			}
+			i++
+			continue
+		}
+		if braceDepth > 0 {
+			i++
+			continue
+		}
+
+		if strings.ContainsRune("+-*/%^><=!", rune(query[i])) {
+			return true
+		}
+		if (query[i] >= 'a' && query[i] <= 'z') || (query[i] >= 'A' && query[i] <= 'Z') || query[i] == '_' {
+			start := i
+			for i < len(query) && ((query[i] >= 'a' && query[i] <= 'z') || (query[i] >= 'A' && query[i] <= 'Z') || (query[i] >= '0' && query[i] <= '9') || query[i] == '_' || query[i] == ':') {
+				i++
+			}
+			switch query[start:i] {
+			case "and", "or", "unless", "atan2":
+				return true
+			}
+			continue
+		}
+		i++
+	}
+	return false
+}
+
+func withoutPromStringLiterals(query string) string {
+	var b strings.Builder
+	b.Grow(len(query))
+	var quote byte
+	escaped := false
+	for i := 0; i < len(query); i++ {
+		ch := query[i]
+		if quote != 0 {
+			if quote != '`' && escaped {
+				escaped = false
+			} else if quote != '`' && ch == '\\' {
+				escaped = true
+			} else if ch == quote {
+				quote = 0
+			}
+			b.WriteByte(' ')
+			continue
+		}
+		if ch == '"' || ch == '\'' || ch == '`' {
+			quote = ch
+			b.WriteByte(' ')
+			continue
+		}
+		b.WriteByte(ch)
+	}
+	return b.String()
 }
 
 func handleGetPrometheusRules(ctx context.Context, req *mcp.CallToolRequest, input getPrometheusRulesInput) (*mcp.CallToolResult, any, error) {

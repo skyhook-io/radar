@@ -17,6 +17,7 @@ import {
   type TimelineGrouping,
   type TimelineSort,
   type PinnedLaneRef,
+  useDebouncedValue,
 } from '@skyhook-io/k8s-ui'
 import { TimelineList } from './TimelineList'
 import type { ActivityFilterKey } from './TimelineList'
@@ -92,6 +93,10 @@ export type TimelineMode =
 // burying the lanes in a day of history; presets/URL widen it deliberately.
 const DEFAULT_LIVE_WIDTH_MS = 60 * 60 * 1000
 const DAY_MS = 24 * 60 * 60 * 1000
+// Presets wider than this land the swimlane on a bounded recent lens instead of
+// the full range, so it never renders every resource lane at once (a 30d domain
+// has thousands). 7d and narrower keep the full-range lens.
+const WIDE_LENS_THRESHOLD_MS = 7 * DAY_MS
 // Fallback cap for a retained hand-entered ?from&to when the source doesn't
 // declare maxRangeDays — mirrors the retained source's own default.
 const DEFAULT_MAX_RANGE_DAYS = 7
@@ -293,8 +298,8 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
   const effectiveInitialMode = scopeRequiresNamespaceFilter ? 'list' : (parseView(searchParams) ?? initialViewMode ?? DEFAULT_VIEW)
   const [viewMode, setViewMode] = useState<TimelineViewMode>(effectiveInitialMode)
   // Shared across list + swimlane so the toggle carries across the view switch,
-  // and so the swimlane fetch can exclude deletes server-side (before LIMIT)
-  // rather than only hiding them client-side after the 10k cap.
+  // and so the fetch can exclude deletes at the source rather than only hiding
+  // them client-side.
   const [showDeleted, setShowDeleted] = useState(() => searchParams.get('deleted') !== '0')
   // ?pinnedOnly=1 is inert without pins: honoring it with no stored pins would
   // arm a filter that hides everything. Gate the read on stored pins so the param
@@ -304,6 +309,17 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
   // Search / activity-type / kind lifted here too, so they survive the view
   // switch and drive both views through one source of truth.
   const [search, setSearch] = useState(() => searchParams.get('q') ?? '')
+  // The `q` URL write is debounced so typing doesn't navigate per keystroke
+  // (clearing applies immediately — a delayed clear makes the × feel broken).
+  // The URL therefore lags the input while typing, so the URL→state read below
+  // must not sync a `q` that is merely the echo of our own write — it would
+  // revert in-flight keystrokes. Echoes are recognized by value: they carry
+  // exactly the debounced search we wrote. Ref instead of a dep: the read
+  // effect keys on searchParams alone (see its comment) and only needs the
+  // written value at fire time.
+  const debouncedSearch = useDebouncedValue(search, 300, (v) => v === '')
+  const writtenSearchRef = useRef(debouncedSearch)
+  writtenSearchRef.current = debouncedSearch
   // Seed the multi-select from the URL `activity` csv, else the home-page
   // deep-link preset: 'all'/undefined means no chips selected (everything).
   const [activityFilter, setActivityFilter] = useState<ActivityFilterKey[]>(
@@ -519,11 +535,21 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     // plain fixed widths.
     const all = isLocal && scrubberDomain != null && widthMs >= scrubberDomain.maxSelectionMs
     const now = Date.now()
+    const sel = deriveLiveSelection(capped, now)
     setMode({ kind: 'live', widthMs: capped, all: all || undefined })
     setFrozenAsOfMs(null)
     setNowTick(now)
-    resetLensToFull(deriveLiveSelection(capped, now))
-  }, [isLocal, scrubberDomain, resetLensToFull])
+    // A full-range lens on a very wide domain (e.g. 30d) renders EVERY resource
+    // lane at once — thousands of rows — which freezes the browser for seconds
+    // before the view settles. Land directly on a bounded recent lens instead;
+    // the density strip still spans the full selected range for context, and the
+    // user scrubs it. Narrow presets (<= 7d) keep the full-range lens unchanged.
+    if (capped > WIDE_LENS_THRESHOLD_MS) {
+      resetLensToRecent(sel)
+    } else {
+      resetLensToFull(sel)
+    }
+  }, [isLocal, scrubberDomain, resetLensToFull, resetLensToRecent])
 
   // "→ Now" → LIVE, width = current selection width. Pins to now and resets the
   // lens to the live edge.
@@ -607,7 +633,9 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     const nextPinnedOnly = sp.get('pinnedOnly') === '1' && pinnedLanes.length > 0
     setPinnedOnly((prev) => (prev === nextPinnedOnly ? prev : nextPinnedOnly))
     const nextSearch = sp.get('q') ?? ''
-    setSearch((prev) => (prev === nextSearch ? prev : nextSearch))
+    if (nextSearch !== writtenSearchRef.current) {
+      setSearch((prev) => (prev === nextSearch ? prev : nextSearch))
+    }
     const nextActivity = parseActivity(sp) ?? []
     setActivityFilter((prev) => (arraysEqual(prev, nextActivity) ? prev : nextActivity))
     const nextKinds = parseKinds(sp)
@@ -624,7 +652,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     const current = searchParamsRef.current
     const target = writeTimelineParams(
       current,
-      { viewMode, mode, showDeleted, pinnedOnly, search, activityFilter, kindFilter, grouping, sort, selectedEventId },
+      { viewMode, mode, showDeleted, pinnedOnly, search: debouncedSearch, activityFilter, kindFilter, grouping, sort, selectedEventId },
       { isRetained: isRetained || isLocal, requiresNamespaceFilter: scopeRequiresNamespaceFilter },
     )
     const targetStr = target.toString()
@@ -638,24 +666,28 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     const replace = !didMountUrlSyncRef.current || onlyHighFreqDiffer(currentStr, targetStr)
     didMountUrlSyncRef.current = true
     setSearchParamsRef.current(target, { replace })
-  }, [viewMode, mode, showDeleted, pinnedOnly, search, activityFilter, kindFilter, grouping, sort, selectedEventId, isRetained, isLocal, scopeRequiresNamespaceFilter])
+  }, [viewMode, mode, showDeleted, pinnedOnly, debouncedSearch, activityFilter, kindFilter, grouping, sort, selectedEventId, isRetained, isLocal, scopeRequiresNamespaceFilter])
 
-  // Fetch all activity - zoom controls what's visible in the UI. The heavy 10k
-  // ring feeds the swimlanes and the local strip's histogram, so it also runs in
-  // list mode when that strip is shown; the list itself fetches its own 2000.
-  const { data: activity, isLoading, isError, refetch } = timelineSource.useEvents({
+  // Fetch all activity - zoom controls what's visible in the UI. This ring feeds
+  // the swimlanes and the local strip's histogram, so it also runs in list mode
+  // when that strip is shown; the list itself fetches its own 2000.
+  const { data: activity, isLoading, isError, error, refetch, truncated: ringTruncated } = timelineSource.useEvents({
     namespaces: timelineNamespaces,
     timeRange: 'all',
     includeK8sEvents: true,
     includeManaged: true,
     includeDeleted: showDeleted,
-    limit: 10000,
+    // Only the local in-memory ring imposes a client-side size cap (it can't
+    // hold more than its ring anyway). Retained mode renders every event its
+    // ring holds — the hub bounds the ring itself (retention depth + a newest-
+    // 50k cap flagged as truncated, never a silent cut), so a busy window
+    // never silently drops its oldest events on the client.
+    limit: isRetained ? undefined : 10000,
     // The local strip derives its histogram from this ring fetch, so it must
     // run in list mode too whenever the strip is shown.
     enabled: appScopeReady && (showSwimlanes || showLocalScrubber),
     fromMs: isRetained ? selection.fromMs : undefined,
     toMs: isRetained ? selection.toMs : undefined,
-    sliding: isRetained && mode.kind === 'live',
   })
 
   // Topology powers both swimlane hierarchy and application-scoped attribution.
@@ -721,7 +753,12 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
   )
   const focusedAppLoading = Boolean(focusedAppKey) && appsLoading
   const focusedAppUnavailable = Boolean(focusedAppKey) && (!appScopeReady || (!appsLoading && (appsError || !focusedApp)))
-  const focusedAppTimelineLimited = Boolean(focusedAppKey) && unscopedEvents.length >= 10_000
+  // Only local truncates the swimlane fetch at 10k (the in-memory ring cap), so
+  // hitting 10k there genuinely means older app activity is hidden. Retained
+  // sends no client limit — the full hub ring is on screen (the hub caps it at
+  // the newest 50k, surfaced by the truncated flag and its banner, never a
+  // silent cut) — so this "showing newest 10k" banner would be false there.
+  const focusedAppTimelineLimited = isLocal && Boolean(focusedAppKey) && unscopedEvents.length >= 10_000
   const clearFocusedApp = useCallback(() => {
     const next = new URLSearchParams(searchParamsRef.current)
     next.delete('app')
@@ -802,6 +839,26 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     return (
       <div className="flex-1 flex flex-col min-h-0">
         {appScopeBar}
+        {/* A row-capped ring load means the OLDEST part of the retention
+            window is not loaded — say so, or an old selection reads as
+            "nothing happened back then". */}
+        {ringTruncated && (
+          <div className="flex items-center gap-1.5 border-b border-theme-border px-4 py-1.5 text-xs text-theme-text-tertiary">
+            <AlertTriangle className={`h-3.5 w-3.5 shrink-0 ${SEVERITY_TEXT.warning}`} />
+            History is truncated: showing the newest {timelineSource.capabilities.ringLimit.toLocaleString()} events of the retention window — the oldest activity is not loaded.
+          </div>
+        )}
+        {/* Failing background polls with a loaded ring: keep the data, say
+            it's going stale. The full-screen error is reserved for no-data. */}
+        {isError && activity && (
+          <div className="flex items-center gap-1.5 border-b border-theme-border px-4 py-1.5 text-xs text-theme-text-tertiary">
+            <AlertTriangle className={`h-3.5 w-3.5 shrink-0 ${SEVERITY_TEXT.warning}`} />
+            Live updates are failing — the timeline may be stale.
+            <button type="button" onClick={() => refetch()} className="underline hover:text-theme-text-primary">
+              Retry now
+            </button>
+          </div>
+        )}
         {isRetained ? (
           <RetainedTimelineScrubber
             source={timelineSource}
@@ -887,18 +944,26 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
       )
     }
 
-    // A failed fetch must not render as the swimlane "No events yet" empty state —
-    // that reads as a quiet cluster rather than a load failure.
-    if (isError) {
+    // A failed fetch with NOTHING loaded must not render as the swimlane
+    // "No events yet" empty state — that reads as a quiet cluster rather than
+    // a load failure. With a loaded ring on screen, a failing background poll
+    // must NOT blank it (gate on data before error); the stale-data banner
+    // below carries the warning instead.
+    if (isError && !activity) {
+      // Surface the server's own message — a generic "failed to load" would
+      // swallow whatever the hub said. "Try again" is a full resync: the
+      // retained source drops its delta cursor and reloads the whole ring.
+      const detail = error?.message?.trim()
       return wrap(
         <div className="flex-1 flex flex-col">
           <div className="flex items-center justify-between px-4 py-2 border-b border-theme-border">
             <div />
             <ViewModeToggle viewMode={viewMode} onViewModeChange={setViewMode} />
           </div>
-          <div className="flex-1 flex flex-col items-center justify-center text-theme-text-tertiary gap-3">
+          <div className="flex-1 flex flex-col items-center justify-center text-theme-text-tertiary gap-3 px-6">
             <AlertTriangle className="w-10 h-10 text-amber-400/70" />
             <p className="text-base">Failed to load timeline data</p>
+            {detail && <p className="max-w-md text-center text-sm text-theme-text-tertiary">{detail}</p>}
             <button
               onClick={() => refetch()}
               className="flex items-center gap-2 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border-light rounded-lg hover:bg-theme-hover transition-colors"
@@ -971,7 +1036,6 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
       // to own the range — passing it scrubber-less would hide the list's own
       // range dropdown and leave the user with no time control at all.
       selectionWindow={showScrubber ? selection : undefined}
-      sliding={showScrubber && mode.kind === 'live'}
       onVisibleWindowChange={setListVisibleWindow}
       // Seeded with the swimlane's window at the switch (see the viewMode
       // effect); afterwards, dragging the strip band retargets the scroll.

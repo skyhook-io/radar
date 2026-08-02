@@ -122,6 +122,7 @@ func main() {
 		Namespace:                resolvedNamespace,
 		Namespaces:               resolvedNamespaces,
 		Port:                     fileCfg.PortOr(0), // Configured port, or random to avoid conflicts with CLI
+		ListenAddress:            "127.0.0.1",
 		DevMode:                  false,
 		HistoryLimit:             *historyLimit,
 		DebugEvents:              *debugEvents,

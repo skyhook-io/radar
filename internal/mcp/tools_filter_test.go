@@ -661,6 +661,63 @@ func TestHandleSearch_Secrets_PerNamespaceFanout(t *testing.T) {
 	}
 }
 
+func TestHandleSearch_NamespaceParameter(t *testing.T) {
+	setupFakeCacheForFilterTests(t)
+
+	t.Run("matches inline scope", func(t *testing.T) {
+		structured, _, err := handleSearch(context.Background(), nil, searchInput{Query: "kind:Pod", Namespace: "alpha"})
+		if err != nil {
+			t.Fatalf("structured namespace: %v", err)
+		}
+		inline, _, err := handleSearch(context.Background(), nil, searchInput{Query: "kind:Pod ns:alpha"})
+		if err != nil {
+			t.Fatalf("inline namespace: %v", err)
+		}
+		if got, want := extractText(t, structured), extractText(t, inline); got != want {
+			t.Errorf("structured namespace result differs from inline scope\nstructured: %s\ninline: %s", got, want)
+		}
+	})
+
+	t.Run("omitted remains cluster wide", func(t *testing.T) {
+		result, _, err := handleSearch(context.Background(), nil, searchInput{Query: "kind:Pod"})
+		if err != nil {
+			t.Fatalf("handleSearch: %v", err)
+		}
+		body := extractText(t, result)
+		for _, want := range []string{"alpha-pod", "beta-pod", "gamma-pod"} {
+			if !containsName(body, want) {
+				t.Errorf("cluster-wide search missing %s: %s", want, body)
+			}
+		}
+	})
+
+	t.Run("denied namespace returns no hits", func(t *testing.T) {
+		ctx := withRestrictedUser(t, "namespace-search-user", []string{"alpha"})
+		result, _, err := handleSearch(ctx, nil, searchInput{Query: "kind:Pod", Namespace: "beta"})
+		if err != nil {
+			t.Fatalf("handleSearch: %v", err)
+		}
+		body := extractText(t, result)
+		if containsName(body, "alpha-pod") || containsName(body, "beta-pod") || containsName(body, "gamma-pod") {
+			t.Errorf("denied namespace search returned pod hits: %s", body)
+		}
+	})
+
+	t.Run("top level overrides inline namespace modifiers", func(t *testing.T) {
+		result, _, err := handleSearch(context.Background(), nil, searchInput{Query: "kind:Pod namespace:beta", Namespace: "alpha"})
+		if err != nil {
+			t.Fatalf("handleSearch: %v", err)
+		}
+		body := extractText(t, result)
+		if !containsName(body, "alpha-pod") {
+			t.Errorf("top-level namespace result missing alpha-pod: %s", body)
+		}
+		if containsName(body, "beta-pod") || containsName(body, "gamma-pod") {
+			t.Errorf("inline namespace was not overridden: %s", body)
+		}
+	})
+}
+
 func TestHandleSearch_Secrets_ClusterWideShape_NsFilter(t *testing.T) {
 	// Regression for the bug where AllowedNamespaces==nil (cluster-wide
 	// namespace sentinel) plus a concrete `ns:` filter took the cluster-
@@ -689,6 +746,18 @@ func TestHandleSearch_Secrets_ClusterWideShape_NsFilter(t *testing.T) {
 	}
 	if containsName(body, "beta-secret") {
 		t.Errorf("beta-secret leaked despite ns:alpha filter + per-ns RBAC: %s", body)
+	}
+
+	result, _, err = handleSearch(ctx, nil, searchInput{Query: "kind:Secret", Namespace: "alpha"})
+	if err != nil {
+		t.Fatalf("handleSearch with structured namespace: %v", err)
+	}
+	body = extractText(t, result)
+	if !containsName(body, "alpha-secret") {
+		t.Errorf("structured namespace did not reach per-namespace secret RBAC: %s", body)
+	}
+	if containsName(body, "beta-secret") {
+		t.Errorf("beta-secret leaked despite structured namespace + per-ns RBAC: %s", body)
 	}
 }
 

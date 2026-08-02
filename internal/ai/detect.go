@@ -17,7 +17,9 @@ type AgentInfo struct {
 	// Supported is true when Radar can actually DRIVE this CLI (we parse its
 	// stream-json). Detected-but-unsupported CLIs are shown so the user knows
 	// they exist, but can't be selected to run an investigation yet.
-	Supported bool `json:"supported"`
+	Supported       bool                        `json:"supported"`
+	Profiles        []ExecutionProfile          `json:"profiles,omitempty"`
+	ConsentSurfaces map[ExecutionProfile]string `json:"consentSurfaces,omitempty"`
 }
 
 // knownAgents are the CLI names we probe for — a FIXED list. We never exec a
@@ -57,15 +59,66 @@ func EffectiveAgent(pick string, agents []AgentInfo) string {
 	return def
 }
 
-// ConsentSurfaceFor maps an agent to its consent-disclosure surface. Cursor's
-// trust model is materially different (its global MCP servers can't be
-// excluded), so it has its own; drift between enforcement sites would silently
-// mis-gate consent, so both the server and the CLI call this.
-func ConsentSurfaceFor(agent string) string {
-	if agent == "cursor-agent" {
-		return "cursor"
+// ProfilesFor returns the execution profiles Radar can honestly offer for an
+// agent. Keep this policy beside detection so the API, consent gate, and UI all
+// consume the same source of truth.
+func ProfilesFor(agent string) []ExecutionProfile {
+	switch agent {
+	case "claude":
+		return []ExecutionProfile{ExecutionProfileSafeguarded, ExecutionProfileFullLocal}
+	case "codex":
+		return []ExecutionProfile{ExecutionProfileSafeguarded, ExecutionProfileFullLocal}
+	case "cursor-agent":
+		return []ExecutionProfile{ExecutionProfileFullLocal}
+	default:
+		return nil
 	}
-	return "standard"
+}
+
+func DefaultProfileFor(agent string) ExecutionProfile {
+	profiles := ProfilesFor(agent)
+	if len(profiles) == 0 {
+		return ""
+	}
+	return profiles[0]
+}
+
+func SupportsProfile(agent string, profile ExecutionProfile) bool {
+	for _, candidate := range ProfilesFor(agent) {
+		if candidate == profile {
+			return true
+		}
+	}
+	return false
+}
+
+func ConsentSurfaceFor(agent string, profile ExecutionProfile) string {
+	if !SupportsProfile(agent, profile) {
+		return ""
+	}
+	return agent + ":" + string(profile)
+}
+
+func ConsentSurfacesFor(agent string) map[ExecutionProfile]string {
+	profiles := ProfilesFor(agent)
+	if len(profiles) == 0 {
+		return nil
+	}
+	surfaces := make(map[ExecutionProfile]string, len(profiles))
+	for _, profile := range profiles {
+		surfaces[profile] = ConsentSurfaceFor(agent, profile)
+	}
+	return surfaces
+}
+
+func AllConsentSurfaces() []string {
+	var surfaces []string
+	for _, agent := range agentCLICandidates {
+		for _, profile := range ProfilesFor(agent) {
+			surfaces = append(surfaces, ConsentSurfaceFor(agent, profile))
+		}
+	}
+	return surfaces
 }
 
 // supportedAgents are the CLIs we can drive today (have a stream-json parser).
@@ -94,11 +147,13 @@ func DetectAgents(ctx context.Context, withVersions bool) []AgentInfo {
 			continue
 		}
 		info := AgentInfo{
-			Name:      name,
-			Label:     agentLabels[name],
-			Path:      path,
-			Present:   true,
-			Supported: isSupportedAgent(name),
+			Name:            name,
+			Label:           agentLabels[name],
+			Path:            path,
+			Present:         true,
+			Supported:       isSupportedAgent(name),
+			Profiles:        ProfilesFor(name),
+			ConsentSurfaces: ConsentSurfacesFor(name),
 		}
 		if withVersions {
 			info.Version = probeVersion(ctx, path)

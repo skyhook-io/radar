@@ -1,0 +1,115 @@
+{{- /*
+Cluster-scoped READ for the Cloud tiers.
+
+The built-in admin/edit/view ClusterRoles the tiers bind to (see cloud-rbac.yaml)
+are namespace roles — by design they grant nothing on cluster-scoped resources
+(Nodes, PersistentVolumes, StorageClasses, IngressClasses, PriorityClasses). For a
+cluster-wide observability tool that means owners and viewers can't see core
+infrastructure. This add-on grants get/list/watch on those kinds via EXPLICIT
+bindings to the cloud:* groups — deliberately NOT via `aggregate-to-view` labels,
+which would widen the shared built-in `view`/`edit` roles cluster-wide for every
+other subject bound to them (mirrors the radar-helm add-on pattern).
+
+No Secrets and no RBAC objects here — those stay gated behind the tier roles
+(view excludes Secrets; RBAC visibility is rbac.viewRBAC) so this is a pure
+infrastructure-read widening.
+
+Scoping — cluster-scoped read is its own axis, per tier:
+  - cloud.defaultRbac.clusterScopedRead.{viewer,member,owner} (each default true).
+    Set one false to make that tier namespaced-only — e.g. clusterScopedRead.viewer
+    =false gives viewers the stock built-in `view` (namespaced read) and nothing
+    cluster-scoped.
+  - This is INDEPENDENT of which namespaced ClusterRole the tier binds to. Swapping
+    in a custom {viewer,member,owner}ClusterRole changes namespaced scope only; it
+    does not touch cluster-read (the two are separate ClusterRoleBindings). If you
+    want a custom namespaced role AND no infra-read, set its clusterScopedRead false.
+  - A disabled tier (cloud.defaultRbac.<tier>=false) gets nothing here either — you
+    own that tier's RBAC entirely.
+  - Want a DIFFERENT cluster-read set for a tier (e.g. Nodes but not PVs)? Don't
+    fork this role: set clusterScopedRead.<tier>=false and bind your own ClusterRole
+    to the cloud:<tier> group. The cloud:* groups are injected by Cloud regardless,
+    so your binding composes with the built-in namespaced one.
+*/}}
+{{- /*
+Nil-safety is load-bearing: `helm upgrade --reuse-values` renders with the
+PREVIOUS release's value tree, where clusterScopedRead may not exist at all —
+a bare `index` on that nil crashes the upgrade. Absence means the operator
+never opted out, so it must behave exactly like the declared default (true);
+only an explicit false disables a tier. toString-comparison also keeps a
+string "false" (possible only via --set-string + --skip-schema-validation)
+from being truthy.
+*/}}
+{{- $csr := .Values.cloud.defaultRbac.clusterScopedRead | default dict }}
+{{- $csrOn := dict }}
+{{- range $tier := list "viewer" "member" "owner" }}
+{{- $_ := set $csrOn $tier (ne (toString (index $csr $tier)) "false") }}
+{{- end }}
+{{- $rbacDefaults := .Values.cloud.defaultRbac }}
+{{- $anyTier := or (and $rbacDefaults.viewer (get $csrOn "viewer")) (and $rbacDefaults.member (get $csrOn "member")) (and $rbacDefaults.owner (get $csrOn "owner")) }}
+{{- if and .Values.cloud.enabled .Values.cloud.defaultRbac.create .Values.rbac.create $anyTier -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "radar.fullname" . }}-cluster-read
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+rules:
+  # Namespaces are intentionally NOT here — the built-in view/edit/admin roles
+  # already grant namespace read, so this add-on stays scoped to the resources
+  # the built-ins actually exclude.
+  - apiGroups: [""]
+    resources: ["nodes", "persistentvolumes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingressclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["scheduling.k8s.io"]
+    resources: ["priorityclasses"]
+    verbs: ["get", "list", "watch"]
+  # RuntimeClasses belong to the same benign-infra class: Radar's SA caches
+  # them by default (clusterrole.yaml) and the UI has a dedicated renderer,
+  # so omitting them here would leave tiers with an unexplainable denied
+  # state on one kind out of the set.
+  - apiGroups: ["node.k8s.io"]
+    resources: ["runtimeclasses"]
+    verbs: ["get", "list", "watch"]
+  {{- if .Values.rbac.metrics }}
+  # On clusters with a standard metrics-server install this is usually
+  # redundant — its aggregated-metrics-reader role carries aggregate-to-view
+  # labels, so view/edit/admin already read metrics.k8s.io. Kept for installs
+  # without that aggregation; gated on rbac.metrics because user-facing node
+  # metrics only exist when the SA collects them at all.
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+  {{- end }}
+{{- $fullname := include "radar.fullname" . }}
+{{- $labels := include "radar.labels" . }}
+{{- $rbac := .Values.cloud.defaultRbac }}
+{{- range $tier := list "viewer" "member" "owner" }}
+{{- if and (index $rbac $tier) (get $csrOn $tier) }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $fullname }}-cloud-{{ $tier }}-cluster-read
+  labels:
+    {{- $labels | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $fullname }}-cluster-read
+subjects:
+  - kind: Group
+    name: radar:{{ $tier }}
+    apiGroup: rbac.authorization.k8s.io
+  # Legacy pre-rename vocabulary; kept for older hubs. Removed in v2.
+  - kind: Group
+    name: cloud:{{ $tier }}
+    apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- end }}
+{{- end -}}

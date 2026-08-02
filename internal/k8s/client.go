@@ -266,15 +266,6 @@ func doInit(opts InitOptions) error {
 					}
 				}
 			}
-			fileCount := len(kubeconfigPaths)
-			if fileCount == 0 && kubeconfigPath != "" {
-				fileCount = 1
-			}
-			// Total contexts across all files (pre-#519 this was the post-merge
-			// count, which silently hid colliding user/cluster definitions;
-			// now every file's contexts are individually reachable).
-			log.Printf("Kubeconfig loaded: mode=%s, files=%d, contexts=%d, exec-plugins=%d",
-				kubeconfigMode, fileCount, totalContextCount, len(execPluginCommands))
 		}
 
 		config, err = kubeConfig.ClientConfig()
@@ -410,6 +401,15 @@ func GetConfig() *rest.Config {
 	return k8sConfig
 }
 
+func GetConfigSnapshot() (*rest.Config, string) {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	if k8sConfig == nil {
+		return nil, activeClusterContextLocked()
+	}
+	return rest.CopyConfig(k8sConfig), activeClusterContextLocked()
+}
+
 // GetDiscoveryClient returns the K8s discovery client for API resource discovery
 func GetDiscoveryClient() *discovery.DiscoveryClient {
 	clientMu.RLock()
@@ -422,6 +422,12 @@ func GetDynamicClient() dynamic.Interface {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
 	return dynamicClient
+}
+
+func GetDynamicClientSnapshot() (dynamic.Interface, string) {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	return dynamicClient, activeClusterContextLocked()
 }
 
 // GetKubeconfigPath returns the path to the kubeconfig file used
@@ -644,8 +650,14 @@ func GetContextName() string {
 // kubeconfig context name; the sentinel keeps those events distinguishable
 // from legacy rows recorded before provenance was tracked (empty string).
 func ActiveClusterContext() string {
-	if name := GetContextName(); name != "" {
-		return name
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	return activeClusterContextLocked()
+}
+
+func activeClusterContextLocked() string {
+	if contextName != "" {
+		return contextName
 	}
 	return "in-cluster"
 }

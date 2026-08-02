@@ -206,6 +206,7 @@ func main() {
 
 	srv := server.New(server.Config{
 		Port:            *port,
+		ListenAddress:   server.DefaultListenAddress,
 		StaticFS:        static.FS,
 		StaticRoot:      "dist",
 		EffectiveConfig: effectiveCfg,

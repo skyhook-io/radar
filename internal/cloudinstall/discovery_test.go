@@ -3,6 +3,8 @@ package cloudinstall
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -76,6 +78,14 @@ func TestDiscoverRadarTargetsNativeHelmSelectedTarget(t *testing.T) {
 		"meta.helm.sh/release-name":      "radar",
 		"meta.helm.sh/release-namespace": "radar",
 	})
+	replicas := int32(2)
+	deployment.Spec.Replicas = &replicas
+	deployment.Generation = 3
+	deployment.Status.ObservedGeneration = 3
+	deployment.Status.Replicas = 2
+	deployment.Status.UpdatedReplicas = 1
+	deployment.Status.ReadyReplicas = 1
+	deployment.Status.AvailableReplicas = 1
 	kc := kubernetesfake.NewSimpleClientset(deployment)
 
 	result, err := DiscoverRadarTargets(context.Background(), kc, nil, DiscoveryOptions{})
@@ -89,6 +99,9 @@ func TestDiscoverRadarTargetsNativeHelmSelectedTarget(t *testing.T) {
 	if target.Namespace != "radar" || target.DeploymentName != "radar" || target.ReleaseName != "radar" || target.Chart != "radar-1.6.0" {
 		t.Fatalf("unexpected target: %#v", target)
 	}
+	if target.Runtime.DesiredReplicas != 2 || target.Runtime.TotalReplicas != 2 || target.Runtime.UpdatedReplicas != 1 || target.Runtime.ReadyReplicas != 1 || target.Runtime.AvailableReplicas != 1 || !target.Runtime.StatusObserved {
+		t.Fatalf("runtime replicas = %#v, want 1/2 updated, ready, and available", target.Runtime)
+	}
 	if target.Ownership.Classification != OwnershipNativeHelm {
 		t.Fatalf("ownership = %q, want %q", target.Ownership.Classification, OwnershipNativeHelm)
 	}
@@ -97,6 +110,72 @@ func TestDiscoverRadarTargetsNativeHelmSelectedTarget(t *testing.T) {
 	}
 	if !target.Ownership.NativeHelmMatchesTarget {
 		t.Fatal("native Helm metadata should match selected target")
+	}
+}
+
+func TestDiscoverRadarTargetsMarksSourcedCloudModeUnresolved(t *testing.T) {
+	deployment := radarDeployment("radar", "radar", "radar", nil, nil)
+	deployment.Spec.Template.Spec.Containers = []corev1.Container{{
+		Name: "radar",
+		Env: []corev1.EnvVar{{
+			Name: "RADAR_CLOUD_MODE",
+			ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "radar-config"}, Key: "cloud-mode",
+			}},
+		}},
+	}}
+
+	result, err := DiscoverRadarTargets(context.Background(), kubernetesfake.NewSimpleClientset(deployment), nil, DiscoveryOptions{})
+	if err != nil {
+		t.Fatalf("DiscoverRadarTargets: %v", err)
+	}
+	runtime := result.Selected[0].Runtime
+	if !runtime.CloudModeConfigured || !runtime.CloudModeUnresolved || !runtime.AlreadyCloud {
+		t.Fatalf("cloud runtime = %#v", runtime)
+	}
+}
+
+func TestDiscoverRadarTargetsMarksSourcedCloudIdentityUnresolved(t *testing.T) {
+	deployment := radarDeployment("radar", "radar", "radar", nil, nil)
+	deployment.Spec.Template.Spec.Containers = []corev1.Container{{
+		Name: "radar",
+		Env: []corev1.EnvVar{
+			{Name: "RADAR_CLOUD_URL", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "radar-cloud"}, Key: "url"}}},
+			{Name: "RADAR_CLOUD_CLUSTER_NAME", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "radar-config"}, Key: "cluster"}}},
+		},
+	}}
+
+	result, err := DiscoverRadarTargets(context.Background(), kubernetesfake.NewSimpleClientset(deployment), nil, DiscoveryOptions{})
+	if err != nil {
+		t.Fatalf("DiscoverRadarTargets: %v", err)
+	}
+	runtime := result.Selected[0].Runtime
+	if !runtime.CloudURLConfigured || !runtime.CloudURLUnresolved || !runtime.ClusterNameConfigured || !runtime.ClusterNameUnresolved {
+		t.Fatalf("cloud runtime = %#v", runtime)
+	}
+}
+
+func TestDiscoverRadarTargetsNeverRetainsLiteralCloudToken(t *testing.T) {
+	const token = "rhc_super_secret_literal"
+	deployment := radarDeployment("radar", "radar", "radar", nil, nil)
+	deployment.Spec.Template.Spec.Containers = []corev1.Container{{
+		Name: "radar",
+		Args: []string{"--cloud-token", token},
+	}}
+
+	result, err := DiscoverRadarTargets(context.Background(), kubernetesfake.NewSimpleClientset(deployment), nil, DiscoveryOptions{})
+	if err != nil {
+		t.Fatalf("DiscoverRadarTargets: %v", err)
+	}
+	runtime := result.Selected[0].Runtime
+	if !runtime.CloudTokenConfigured {
+		t.Fatal("literal Cloud token was not detected as configured")
+	}
+	if runtime.CloudTokenSecretName != "" || runtime.CloudTokenSecretKey != "" {
+		t.Fatalf("literal Cloud token invented Secret reference: %#v", runtime)
+	}
+	if strings.Contains(fmt.Sprintf("%#v", runtime), token) {
+		t.Fatal("deployment runtime retained the literal Cloud token")
 	}
 }
 
@@ -451,6 +530,9 @@ func TestDiscoverRadarTargetsSummarizesLiveRuntime(t *testing.T) {
 	}
 	if !runtime.CloudModeConfigured || !runtime.CloudMode || runtime.CloudURL != "wss://api.radarhq.io/agent" || !runtime.CloudURLConfigured || runtime.ClusterName != "cluster-id" || !runtime.ClusterNameConfigured || !runtime.CloudTokenConfigured || !runtime.AlreadyCloud {
 		t.Fatalf("cloud runtime = %#v", runtime)
+	}
+	if runtime.CloudTokenSecretName != "radar-cloud-config" || runtime.CloudTokenSecretKey != "token" {
+		t.Fatalf("Cloud token Secret reference = %q/%q", runtime.CloudTokenSecretName, runtime.CloudTokenSecretKey)
 	}
 }
 

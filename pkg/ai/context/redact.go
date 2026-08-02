@@ -20,14 +20,16 @@ var highConfidenceSecretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`\$(?:apr1|2[aby]|5|6)\$[./A-Za-z0-9$]{8,}`), // htpasswd/crypt hashes (basicAuth users)
 }
 
+var credentialURLPattern = regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*)://([^:/@\s]*:)[^/\s?#]+@([A-Za-z0-9._~:%\[\]-]*)`)
+var sha256DigestPattern = regexp.MustCompile(`(?i)^sha256:[a-f0-9]{64}$`)
+var sha256DigestPrefixPattern = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])sha256:$`)
+var containerIDSchemePrefixPattern = regexp.MustCompile(`(?i)\b(?:docker|containerd|cri-o):$`)
+
 // base64SecretPattern is a broad catch-all for base64 blobs. It earns its keep
 // in free-text (logs, env values) but over-redacts when applied to arbitrary
 // CRD fields (it eats SHA-like IDs, config hashes, generated names), so the
 // spec walker deliberately does NOT use it — see RedactInlineSecrets.
 var base64SecretPattern = regexp.MustCompile(`[A-Za-z0-9+/=]{50,}`)
-
-// secretPatterns is the full set used for free-text redaction (logs, env values).
-var secretPatterns = append(append([]*regexp.Regexp{}, highConfidenceSecretPatterns...), base64SecretPattern)
 
 // sensitiveValueKeys are exact key names (normalized: lowercased, '-'/'_'
 // stripped) whose string value is inline secret MATERIAL. Deliberately matched
@@ -53,8 +55,32 @@ func isSensitiveKey(key string) bool {
 	return sensitiveValueKeys[norm]
 }
 
+func IsSensitiveEnvName(name string) bool {
+	lower := strings.ToLower(name)
+	compact := strings.NewReplacer("-", "", "_", "", ".", "", "/", "").Replace(lower)
+	return strings.Contains(lower, "password") || strings.Contains(lower, "passwd") ||
+		strings.Contains(lower, "passphrase") ||
+		strings.Contains(lower, "token") || strings.Contains(lower, "secret") ||
+		strings.Contains(lower, "credential") ||
+		strings.Contains(lower, "api_key") || strings.Contains(lower, "apikey") ||
+		strings.Contains(lower, "accesskey") || strings.Contains(lower, "privatekey") ||
+		strings.Contains(lower, "private_key") ||
+		strings.Contains(compact, "apikey") || strings.Contains(compact, "accesskey") ||
+		strings.Contains(compact, "privatekey") || strings.Contains(compact, "clientsecret")
+}
+
 func applyPatterns(text string, patterns []*regexp.Regexp) string {
-	result := text
+	result := credentialURLPattern.ReplaceAllStringFunc(text, func(match string) string {
+		parts := credentialURLPattern.FindStringSubmatch(match)
+		if len(parts) != 4 {
+			return match
+		}
+		scheme := strings.ToLower(parts[1])
+		if (scheme == "docker" || scheme == "docker-pullable" || scheme == "oci") && sha256DigestPattern.MatchString(parts[3]) {
+			return match
+		}
+		return parts[1] + "://" + parts[2] + "[REDACTED]@" + parts[3]
+	})
 	for _, pattern := range patterns {
 		result = pattern.ReplaceAllStringFunc(result, func(match string) string {
 			// For Bearer tokens, preserve the "Bearer " prefix
@@ -81,7 +107,37 @@ func RedactSecrets(text string) string {
 	if text == "" {
 		return text
 	}
-	return applyPatterns(text, secretPatterns)
+	return redactBase64Secrets(applyPatterns(text, highConfidenceSecretPatterns))
+}
+
+func redactBase64Secrets(text string) string {
+	matches := base64SecretPattern.FindAllStringIndex(text, -1)
+	if len(matches) == 0 {
+		return text
+	}
+
+	var result strings.Builder
+	last := 0
+	for _, match := range matches {
+		result.WriteString(text[last:match[0]])
+		value := text[match[0]:match[1]]
+		prefixStart := max(0, match[0]-12)
+		prefix := text[prefixStart:match[0]]
+		preserve := sha256DigestPattern.MatchString("sha256:"+value) &&
+			sha256DigestPrefixPattern.MatchString(prefix)
+		if strings.HasPrefix(value, "//") && sha256DigestPattern.MatchString("sha256:"+value[2:]) &&
+			containerIDSchemePrefixPattern.MatchString(prefix) {
+			preserve = true
+		}
+		if preserve {
+			result.WriteString(value)
+		} else {
+			result.WriteString("[REDACTED]")
+		}
+		last = match[1]
+	}
+	result.WriteString(text[last:])
+	return result.String()
 }
 
 // RedactInlineSecrets walks an unstructured subtree (a CRD's spec/status) in

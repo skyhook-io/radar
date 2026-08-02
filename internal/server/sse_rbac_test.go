@@ -69,9 +69,12 @@ func TestNodeClassAuthorizationGroupsUseExactProviderResource(t *testing.T) {
 	}
 }
 
-// clientCanSeeChange gates k8s_event (diff-bearing) frames per client so a
-// restricted user doesn't receive change content for namespaces or cluster-scoped
-// kinds their RBAC forbids.
+// clientCanSeeChange gates k8s_event (diff-bearing) frames per client. Without
+// an authorizer wired (auth off / tests) it falls back to the namespace +
+// topology-denied-kind gate; with one it authorizes the exact (group, resource)
+// against the client's RBAC — closing the two gaps a namespace-only gate leaves:
+// namespaced kinds unreadable within an allowed namespace, and cluster-scoped
+// kinds outside the topology denied set.
 func TestClientCanSeeChange(t *testing.T) {
 	allAccess := ClientInfo{Namespaces: nil}
 	scopedAB := ClientInfo{Namespaces: []string{"a", "b"}}
@@ -86,23 +89,119 @@ func TestClientCanSeeChange(t *testing.T) {
 		name      string
 		info      ClientInfo
 		namespace string
+		group     string
+		resource  string
 		kind      string
 		want      bool
 	}{
-		{"all-access sees namespaced change", allAccess, "a", "ConfigMap", true},
-		{"scoped sees allowed namespace", scopedAB, "a", "Deployment", true},
-		{"scoped does NOT see other namespace", scopedAB, "c", "Deployment", false},
-		{"no-access sees nothing namespaced", noAccess, "a", "ConfigMap", false},
-		{"cluster-scoped allowed when not denied", scopedAB, "", "Node", true},
-		{"cluster-scoped denied kind blocked", deniedNodes, "", "Node", false},
-		{"cluster-scoped non-denied kind allowed", deniedNodes, "", "StorageClass", true},
-		{"Namespace event blocked when can't list namespaces", deniedNamespaces, "", "Namespace", false},
-		{"Namespace event allowed when can list namespaces", scopedAB, "", "Namespace", true},
+		// --- Fallback path (Authorize == nil): namespace + denied-kind gate ---
+		{"all-access sees namespaced change", allAccess, "a", "", "configmaps", "ConfigMap", true},
+		{"scoped sees allowed namespace", scopedAB, "a", "apps", "deployments", "Deployment", true},
+		{"scoped does NOT see other namespace", scopedAB, "c", "apps", "deployments", "Deployment", false},
+		{"no-access sees nothing namespaced", noAccess, "a", "", "configmaps", "ConfigMap", false},
+		{"cluster-scoped allowed when not denied", scopedAB, "", "", "nodes", "Node", true},
+		{"cluster-scoped denied kind blocked", deniedNodes, "", "", "nodes", "Node", false},
+		{"cluster-scoped non-denied kind allowed", deniedNodes, "", "storage.k8s.io", "storageclasses", "StorageClass", true},
+		{"Namespace event blocked when can't list namespaces", deniedNamespaces, "", "", "namespaces", "Namespace", false},
+		{"Namespace event allowed when can list namespaces", scopedAB, "", "", "namespaces", "Namespace", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := clientCanSeeChange(tc.info, tc.namespace, tc.kind); got != tc.want {
-				t.Fatalf("clientCanSeeChange(%v, %q, %q) = %v, want %v", tc.info, tc.namespace, tc.kind, got, tc.want)
+			if got := clientCanSeeChange(tc.info, tc.namespace, tc.group, tc.resource, tc.kind); got != tc.want {
+				t.Fatalf("clientCanSeeChange(%v, %q, %q, %q, %q) = %v, want %v", tc.info, tc.namespace, tc.group, tc.resource, tc.kind, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestClientCanSeeChange_SensitiveKindsSuperset proves the authorizer path is a
+// functional superset of the interim per-kind SSE gate (the standalone
+// sensitive-kinds fix): the SAME kinds — Secret, Role, RoleBinding, ClusterRole,
+// ClusterRoleBinding, and both admission webhook configs — are dropped for a
+// user who can see the namespace but not read that kind, while ordinary readable
+// kinds pass. Ours is per-(kind,namespace) exact rather than cluster-wide, so it
+// also gates these inside individual namespaces (no over-denial of a user who
+// legitimately holds a per-namespace grant) and covers every other kind too.
+func TestClientCanSeeChange_SensitiveKindsSuperset(t *testing.T) {
+	// Restricted user: sees ns "a" and reads deployments there, but not the
+	// sensitive kinds (namespaced ones denied in "a", cluster-scoped ones at "").
+	denied := map[string]bool{
+		"|secrets|a":                                                    true,
+		"rbac.authorization.k8s.io|roles|a":                             true,
+		"rbac.authorization.k8s.io|rolebindings|a":                      true,
+		"rbac.authorization.k8s.io|clusterroles|":                       true,
+		"rbac.authorization.k8s.io|clusterrolebindings|":                true,
+		"admissionregistration.k8s.io|mutatingwebhookconfigurations|":   true,
+		"admissionregistration.k8s.io|validatingwebhookconfigurations|": true,
+	}
+	authorize := func(group, resource, namespace, verb string) bool {
+		return !denied[group+"|"+resource+"|"+namespace]
+	}
+	info := ClientInfo{Namespaces: []string{"a"}, Authorize: authorize}
+
+	cases := []struct {
+		kind, namespace, group, resource string
+		want                             bool
+	}{
+		{"Secret", "a", "", "secrets", false},
+		{"Role", "a", "rbac.authorization.k8s.io", "roles", false},
+		{"RoleBinding", "a", "rbac.authorization.k8s.io", "rolebindings", false},
+		{"ClusterRole", "", "rbac.authorization.k8s.io", "clusterroles", false},
+		{"ClusterRoleBinding", "", "rbac.authorization.k8s.io", "clusterrolebindings", false},
+		{"MutatingWebhookConfiguration", "", "admissionregistration.k8s.io", "mutatingwebhookconfigurations", false},
+		{"ValidatingWebhookConfiguration", "", "admissionregistration.k8s.io", "validatingwebhookconfigurations", false},
+		{"Deployment", "a", "apps", "deployments", true}, // ordinary readable kind unaffected
+	}
+	for _, tc := range cases {
+		t.Run(tc.kind, func(t *testing.T) {
+			if got := clientCanSeeChange(info, tc.namespace, tc.group, tc.resource, tc.kind); got != tc.want {
+				t.Fatalf("%s in ns %q: got %v, want %v", tc.kind, tc.namespace, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestClientCanSeeChange_Authorizer covers the auth-enabled path: the per-kind
+// SubjectAccessReview closure, not the namespace-only fallback, decides. This is
+// the fix for the two RBAC gaps in the live k8s_event stream.
+func TestClientCanSeeChange_Authorizer(t *testing.T) {
+	// authorize allows only (group,resource,namespace) tuples in `allowed`.
+	allowed := map[string]bool{
+		"|pods|a":       true, // core pods in ns a
+		"|configmaps|a": true,
+		"rbac.authorization.k8s.io|clusterroles|": true, // cluster-scoped clusterroles
+	}
+	authorize := func(group, resource, namespace, verb string) bool {
+		return allowed[group+"|"+resource+"|"+namespace]
+	}
+	// Client can SEE namespaces a and b (namespace gate passes), but per-kind
+	// RBAC is narrower than that within them.
+	info := ClientInfo{Namespaces: []string{"a", "b"}, Authorize: authorize}
+
+	cases := []struct {
+		name            string
+		namespace       string
+		group, resource string
+		kind            string
+		want            bool
+	}{
+		// Gap A: namespace is visible, but the kind is not readable there.
+		{"pods in a allowed", "a", "", "pods", "Pod", true},
+		{"secrets in a denied (list-pods-only viewer)", "a", "", "secrets", "Secret", false},
+		{"configmaps in a allowed", "a", "", "configmaps", "ConfigMap", true},
+		{"pods in b denied (no per-kind grant there)", "b", "", "pods", "Pod", false},
+		{"namespace outside client set denied before SAR", "c", "", "pods", "Pod", false},
+		// Gap B: cluster-scoped kind outside the topology denied set.
+		{"clusterroles allowed by SAR", "", "rbac.authorization.k8s.io", "clusterroles", "ClusterRole", true},
+		{"webhookconfigs denied by SAR", "", "admissionregistration.k8s.io", "validatingwebhookconfigurations", "ValidatingWebhookConfiguration", false},
+		// Unresolved kind (empty resource) fails closed under auth.
+		{"unresolved namespaced kind fails closed", "a", "", "", "MysteryCRD", false},
+		{"unresolved cluster-scoped kind fails closed", "", "", "", "MysteryCRD", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := clientCanSeeChange(info, tc.namespace, tc.group, tc.resource, tc.kind); got != tc.want {
+				t.Fatalf("clientCanSeeChange(ns=%q, %q/%q) = %v, want %v", tc.namespace, tc.group, tc.resource, got, tc.want)
 			}
 		})
 	}

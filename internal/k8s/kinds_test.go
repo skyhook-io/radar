@@ -86,11 +86,20 @@ func TestClassifyKindScope_StaticCatalogue(t *testing.T) {
 		t.Error("pods should not be cluster-scoped")
 	}
 
-	// Group passthrough on static catalogue: an explicit group doesn't
-	// change the answer for a static cluster-scoped kind.
-	clusterScoped, group, resource = ClassifyKindScope("nodes", "ignored.example.com")
-	if !clusterScoped || group != "" || resource != "nodes" {
-		t.Errorf("nodes with group: got (%v, %q, %q); want (true, \"\", \"nodes\")", clusterScoped, group, resource)
+	// A group hint MATCHING the builtin's canonical group still resolves the
+	// builtin (clusterroles live in rbac.authorization.k8s.io).
+	clusterScoped, group, resource = ClassifyKindScope("clusterroles", "rbac.authorization.k8s.io")
+	if !clusterScoped || group != "rbac.authorization.k8s.io" || resource != "clusterroles" {
+		t.Errorf("clusterroles with matching group: got (%v, %q, %q); want (true, \"rbac…\", \"clusterroles\")", clusterScoped, group, resource)
+	}
+
+	// A group hint that DISAGREES with the builtin's canonical group is a CRD
+	// Kind collision (e.g. a CRD Kind=Node in another group), not the builtin —
+	// the static catalogue must NOT win, or the CRD's reads would be authorized
+	// against the builtin the caller can list. With no discovery, fail closed.
+	clusterScoped, _, _ = ClassifyKindScope("nodes", "ignored.example.com")
+	if clusterScoped {
+		t.Error("nodes with a foreign group must not resolve to the builtin (collision guard)")
 	}
 }
 

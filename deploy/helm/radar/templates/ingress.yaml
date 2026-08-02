@@ -1,4 +1,7 @@
 {{- if .Values.ingress.enabled -}}
+{{- if .Values.httpRoute.enabled -}}
+{{- fail "Enable only ONE of ingress.enabled or httpRoute.enabled, not both." -}}
+{{- end -}}
 {{- $fullName := include "radar.fullname" . -}}
 {{- $svcPort := .Values.service.port -}}
 apiVersion: networking.k8s.io/v1

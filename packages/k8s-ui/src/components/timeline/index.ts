@@ -20,8 +20,6 @@ export {
   advanceLatchedLens,
   deriveLiveSelection,
   isLensLatched,
-  quantizeBaseWindow,
   LIVE_TICK_MS,
-  BASE_QUANTIZE_STEP_MS,
   type TimelineLiveState,
 } from './timeline-live'

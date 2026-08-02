@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -282,6 +283,145 @@ func TestMinify_Detail_EnvValueRedaction(t *testing.T) {
 	}
 	if !contains(output, "production") {
 		t.Errorf("Safe env value should be preserved at detail level: %s", output)
+	}
+}
+
+func TestMinify_Detail_RedactsSensitiveEnvNamesAcrossPodContainerTypes(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "env-redaction", Namespace: "default"},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{
+				Name: "app",
+				Env: []corev1.EnvVar{
+					{Name: "API_PASSWORD", Value: "secret-one"},
+					{Name: "APP_MODE", Value: "production"},
+					{Name: "EMPTY_VALUE"},
+					{Name: "CONFIG_FROM", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "app-credentials"},
+						Key:                  "password",
+					}}},
+				},
+			}},
+			InitContainers: []corev1.Container{{
+				Name: "init",
+				Env:  []corev1.EnvVar{{Name: "CLIENT_SECRET", Value: "opaque"}},
+			}},
+			EphemeralContainers: []corev1.EphemeralContainer{{
+				EphemeralContainerCommon: corev1.EphemeralContainerCommon{
+					Name: "debug",
+					Env:  []corev1.EnvVar{{Name: "AUTH_TOKEN", Value: "short"}},
+				},
+			}},
+		},
+	}
+
+	raw, err := Minify(pod, LevelDetail)
+	if err != nil {
+		t.Fatalf("Minify failed: %v", err)
+	}
+	data, _ := json.Marshal(raw)
+	output := string(data)
+	for _, leaked := range []string{"secret-one", "opaque", "short"} {
+		if contains(output, leaked) {
+			t.Errorf("sensitive env value %q leaked: %s", leaked, output)
+		}
+	}
+	for _, preserved := range []string{"production", "app-credentials", `"key":"password"`} {
+		if !contains(output, preserved) {
+			t.Errorf("expected safe/reference value %q to survive: %s", preserved, output)
+		}
+	}
+	compactRaw, err := Minify(pod, LevelCompact)
+	if err != nil {
+		t.Fatalf("Minify Compact failed: %v", err)
+	}
+	compactData, _ := json.Marshal(compactRaw)
+	if !contains(string(compactData), "EMPTY_VALUE") || contains(string(compactData), `"name":"EMPTY_VALUE"`) {
+		t.Fatalf("empty literal env was not reduced to its name: %s", compactData)
+	}
+}
+
+func TestMinify_EnvSanitizationCoversCronJobAndNestedUnstructured(t *testing.T) {
+	cronJob := &batchv1.CronJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "report", Namespace: "default"},
+		Spec: batchv1.CronJobSpec{JobTemplate: batchv1.JobTemplateSpec{Spec: batchv1.JobSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+			RestartPolicy: corev1.RestartPolicyNever,
+			Containers: []corev1.Container{{Name: "report", Env: []corev1.EnvVar{
+				{Name: "DB_PASSWORD", Value: "cron-secret"},
+				{Name: "REPORT_MODE", Value: "daily"},
+			}}},
+		}}}}},
+	}
+
+	for _, level := range []VerbosityLevel{LevelDetail, LevelCompact} {
+		raw, err := Minify(cronJob, level)
+		if err != nil {
+			t.Fatalf("Minify CronJob level=%d failed: %v", level, err)
+		}
+		data, _ := json.Marshal(raw)
+		output := string(data)
+		if contains(output, "cron-secret") {
+			t.Fatalf("CronJob password leaked at level=%d: %s", level, output)
+		}
+		if !contains(output, "DB_PASSWORD") || !contains(output, "REPORT_MODE") {
+			t.Fatalf("CronJob env names missing at level=%d: %s", level, output)
+		}
+		if level == LevelDetail && !contains(output, "daily") {
+			t.Fatalf("safe CronJob env value missing at Detail: %s", output)
+		}
+		if level == LevelCompact && contains(output, "daily") {
+			t.Fatalf("CronJob env value survived Compact: %s", output)
+		}
+	}
+
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "example.io/v1",
+		"kind":       "Worker",
+		"metadata":   map[string]any{"name": "nested", "namespace": "default"},
+		"spec": map[string]any{"controller": map[string]any{"template": map[string]any{"env": []any{
+			map[string]any{"name": "API_PASSWORD", "value": "nested-secret"},
+			map[string]any{"name": "APP_MODE", "value": "staging"},
+			map[string]any{"name": "CONFIG_FROM", "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": "worker-credentials", "key": "password"}}},
+			map[string]any{"name": "MALFORMED"},
+			map[string]any{"value": "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo5MDEyMzQ1Njc4OUFCQ0RFRg=="},
+			"QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo5MDEyMzQ1Njc4OUFCQ0RFRg==",
+		}}}},
+	}}
+
+	detailData, _ := json.Marshal(MinifyUnstructured(obj, LevelDetail))
+	detail := string(detailData)
+	if contains(detail, "nested-secret") || contains(detail, "QUJDREVGR0hJ") || !contains(detail, "staging") || !contains(detail, "worker-credentials") {
+		t.Fatalf("unexpected nested Detail env sanitization: %s", detail)
+	}
+	compactData, _ := json.Marshal(MinifyUnstructured(obj, LevelCompact))
+	compact := string(compactData)
+	if contains(compact, "nested-secret") || contains(compact, "QUJDREVGR0hJ") || contains(compact, "staging") || !contains(compact, "API_PASSWORD") || !contains(compact, "APP_MODE") {
+		t.Fatalf("unexpected nested Compact env sanitization: %s", compact)
+	}
+}
+
+func TestMinifyUnstructured_EnvSanitizationPreservesNonEnvVarListsAndFailsClosed(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "example.io/v1",
+		"kind":       "Worker",
+		"metadata":   map[string]any{"name": "worker"},
+		"spec": map[string]any{
+			"env": []any{"prod", "staging"},
+			"template": map[string]any{"env": []any{
+				map[string]any{"name": "API_TOKEN", "value": map[string]any{"opaque": "short-secret"}},
+			}},
+		},
+	}}
+
+	for _, level := range []VerbosityLevel{LevelDetail, LevelCompact} {
+		data, _ := json.Marshal(MinifyUnstructured(obj.DeepCopy(), level))
+		output := string(data)
+		if !contains(output, `"env":["prod","staging"]`) {
+			t.Fatalf("non-EnvVar env list changed at level=%d: %s", level, output)
+		}
+		if contains(output, "short-secret") {
+			t.Fatalf("sensitive non-string env value leaked at level=%d: %s", level, output)
+		}
 	}
 }
 

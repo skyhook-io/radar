@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"regexp"
 	"sort"
@@ -9,6 +10,9 @@ import (
 	"testing"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/skyhook-io/radar/internal/issues"
+	"github.com/skyhook-io/radar/internal/meaningfulchanges"
 )
 
 // setupDialogCatalogPath is the human-facing tool catalog rendered by the MCP
@@ -66,6 +70,306 @@ func TestSetupDialogCoversAllTools(t *testing.T) {
 	if len(staleInDialog) > 0 {
 		t.Errorf("setup dialog catalog (%s) lists tools that are not registered — remove them: %s",
 			setupDialogCatalogPath, strings.Join(staleInDialog, ", "))
+	}
+}
+
+func TestIssuesToolPreservesEvidenceBoundaries(t *testing.T) {
+	// Exact reason-token behavior is covered by meaningfulchanges tests. This
+	// pins the agent-facing interpretation that must survive copy reductions.
+	var issuesTool *mcpsdk.Tool
+	for _, tool := range listRegisteredTools(t) {
+		if tool.Name == "issues" {
+			issuesTool = tool
+			break
+		}
+	}
+	if issuesTool == nil || issuesTool.Description == "" {
+		t.Fatal("issues tool is not registered or has no description")
+	}
+	for _, token := range []string{
+		meaningfulchanges.ChangesReasonNoCriticalIssues,
+		meaningfulchanges.ChangesReasonWithAllCreationTimeCriticalIssues,
+		"`recent_changes`",
+		"`recent_changes_guidance`",
+		"`not_linked_to_returned_issues`",
+		"`recent_changes_truncated=true`",
+		"`no_recent_changes.window_seconds`",
+		"`correlated_changes`",
+		"`diagnostic_context.role`",
+		"`related_issues[].count`",
+	} {
+		if !strings.Contains(issuesTool.Description, token) {
+			t.Errorf("issues tool description lost response contract %q", token)
+		}
+	}
+	for _, boundary := range []string{
+		"not healthy",
+		"linkage was not evaluated",
+		"not evidence of cause",
+		"does not strengthen causality",
+		"absence from the feed is not evidence",
+		"evidence against, not disproof",
+		"external dependencies",
+		"correlation is unknown",
+		"affected subset",
+		"not the linked issue total",
+	} {
+		if !strings.Contains(issuesTool.Description, boundary) {
+			t.Errorf("issues tool description lost interpretation boundary %q", boundary)
+		}
+	}
+
+	schema, err := json.Marshal(issuesTool.InputSchema)
+	if err != nil {
+		t.Fatalf("marshal issues input schema: %v", err)
+	}
+	for label, text := range map[string]string{
+		"description":  issuesTool.Description,
+		"input schema": string(schema),
+	} {
+		for _, want := range []string{
+			"started_at_resource_creation",
+			"started_after_resource_was_healthy",
+			"timing evidence",
+			"root-cause verdict",
+		} {
+			if !strings.Contains(text, want) {
+				t.Errorf("issues %s lost issue_timing contract %q", label, want)
+			}
+		}
+	}
+}
+
+func TestTrimmedToolsPreserveLoadBearingSteers(t *testing.T) {
+	descriptions := map[string]string{}
+	for _, tool := range listRegisteredTools(t) {
+		descriptions[tool.Name] = tool.Description
+	}
+
+	for _, want := range []string{
+		"CrashLoopBackOff",
+		"OOMKilled",
+		"image-pull",
+		"readiness",
+		"scheduling",
+		"one round-trip",
+		"`crashCause`",
+		"`" + crashLineFatalPattern + "`",
+		"`" + crashLineHeaderOnly + "`",
+		"`" + crashLineLastMatchedLine + "`",
+		"`" + crashLineLogTail + "`",
+		"`auditSummary.highestSeverity`",
+		"critical|high|medium|low",
+		"`issueSummary` critical|warning",
+	} {
+		if !strings.Contains(descriptions["diagnose"], want) {
+			t.Errorf("diagnose tool description lost interpretation boundary %q", want)
+		}
+	}
+	for _, boundary := range []string{
+		"not a root-cause verdict",
+		"capped sample",
+		"exhaustive set",
+		"low-confidence",
+	} {
+		if !strings.Contains(descriptions["diagnose"], boundary) {
+			t.Errorf("diagnose tool description lost evidence boundary %q", boundary)
+		}
+	}
+
+	for _, want := range []string{
+		"`sourcesErrored`",
+		"results are partial",
+		"missing packages",
+		"not installed",
+		"not source errors",
+		"manually merging list_helm_releases and list_resources",
+		"Helm-only deployment debugging",
+	} {
+		if !strings.Contains(descriptions["list_packages"], want) {
+			t.Errorf("list_packages tool description lost partial-result boundary %q", want)
+		}
+	}
+
+	for _, want := range []string{
+		"Supply both verb and resource",
+		"`usedByPods`",
+		"For ServiceAccount subjects",
+		"`system:authenticated`",
+		"`system:serviceaccounts`",
+		"`inheritedFromGroup`",
+		"`flatRules`",
+		"without provenance",
+		"User and Group subjects",
+		"bindings that name them directly",
+		"empty string for cluster-scoped or cluster-wide access",
+		"create SubjectAccessReviews",
+	} {
+		if !strings.Contains(descriptions["get_subject_permissions"], want) {
+			t.Errorf("get_subject_permissions tool description lost authorization boundary %q", want)
+		}
+	}
+	for _, boundary := range []string{"best-effort", "absence is not proof", "never retries"} {
+		if !strings.Contains(descriptions["get_subject_permissions"], boundary) {
+			t.Errorf("get_subject_permissions tool description lost uncertainty boundary %q", boundary)
+		}
+	}
+
+	for _, want := range []string{
+		"Helm storage namespace",
+		"`storageNamespace`",
+		"release namespace",
+		"key-aware redacted",
+	} {
+		if !strings.Contains(descriptions["get_helm_release"], want) {
+			t.Errorf("get_helm_release tool description lost call or secrecy boundary %q", want)
+		}
+	}
+}
+
+func TestToolCatalogContextBudget(t *testing.T) {
+	// These caps guard against description accretion, not against new tools or
+	// load-bearing routing and uncertainty contracts. Raise them deliberately.
+	const (
+		maxCatalogBytes         = 49000
+		maxToolDescriptionBytes = 3000
+	)
+
+	total := 0
+	for _, tool := range listRegisteredTools(t) {
+		if len(tool.Description) > maxToolDescriptionBytes {
+			t.Errorf("%s description uses %d bytes, per-tool budget is %d; trim field-by-field manuals but preserve routing, uncertainty, and response fields that need interpretation",
+				tool.Name, len(tool.Description), maxToolDescriptionBytes)
+		}
+		schema, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatalf("marshal %s input schema: %v", tool.Name, err)
+		}
+		total += len(tool.Description) + len(schema)
+	}
+	if total > maxCatalogBytes {
+		t.Fatalf("MCP tool descriptions and schemas use %d bytes, budget is %d; raise deliberately for new tools or load-bearing contracts, and trim response-field manuals rather than routing or uncertainty boundaries",
+			total, maxCatalogBytes)
+	}
+}
+
+func TestToolDescriptionsPreserveCrossSurfaceRouting(t *testing.T) {
+	descriptions := map[string]string{}
+	for _, tool := range listRegisteredTools(t) {
+		descriptions[tool.Name] = tool.Description
+	}
+
+	for _, want := range []string{
+		"`group=" + issues.NativeHelmGroup + "` routes to get_helm_release",
+		"`group=helm.toolkit.fluxcd.io` routes to diagnose",
+		"`correlated_changes`",
+		"tracked edits on the issue subject",
+		"directly referenced ConfigMaps",
+	} {
+		if !strings.Contains(descriptions["issues"], want) {
+			t.Errorf("issues tool description lost routing or evidence scope %q", want)
+		}
+	}
+	for _, want := range []string{
+		"Kyverno PolicyReport",
+		"not included",
+		"resourceContext",
+	} {
+		if !strings.Contains(descriptions["get_cluster_audit"], want) {
+			t.Errorf("get_cluster_audit tool description lost policy-report boundary %q", want)
+		}
+	}
+}
+
+func TestToolsEmittingApplicationConfigurationMarkerDocumentRankingBoundary(t *testing.T) {
+	descriptions := map[string]string{}
+	for _, tool := range listRegisteredTools(t) {
+		switch tool.Name {
+		case "get_changes", "get_resource", "diagnose", "issues":
+			descriptions[tool.Name] = tool.Description
+		}
+	}
+	for _, name := range []string{"get_changes", "get_resource", "diagnose", "issues"} {
+		description := descriptions[name]
+		if description == "" {
+			t.Fatalf("%s tool is not registered or has no description", name)
+		}
+		for _, want := range []string{
+			"application_configuration_change",
+			"not a causal or universal relevance verdict",
+		} {
+			if !strings.Contains(description, want) {
+				t.Errorf("%s tool description does not document %q", name, want)
+			}
+		}
+	}
+	if !strings.Contains(descriptions["get_changes"], "Helm operation entries rank by category and recency") {
+		t.Error("get_changes tool description does not document Helm ranking")
+	}
+}
+
+func TestClusterAuditToolAndSetupCatalogUseCanonicalSeverity(t *testing.T) {
+	var auditTool *mcpsdk.Tool
+	for _, tool := range listRegisteredTools(t) {
+		if tool.Name == "get_cluster_audit" {
+			auditTool = tool
+			break
+		}
+	}
+	if auditTool == nil {
+		t.Fatal("get_cluster_audit tool is not registered")
+	}
+	schema, err := json.Marshal(auditTool.InputSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for label, text := range map[string]string{
+		"tool description": auditTool.Description,
+		"input schema":     string(schema),
+	} {
+		if !strings.Contains(text, "critical") || !strings.Contains(text, "high") ||
+			!strings.Contains(text, "medium") || !strings.Contains(text, "low") {
+			t.Errorf("%s does not document the canonical severity ladder: %s", label, text)
+		}
+		if strings.Contains(text, "danger-severity") || strings.Contains(text, "danger or warning") {
+			t.Errorf("%s exposes raw audit severity vocabulary: %s", label, text)
+		}
+	}
+
+	catalog, err := os.ReadFile(setupDialogCatalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "posture priority: critical, high, medium, or low (built-ins use high or medium)"
+	if !strings.Contains(string(catalog), want) {
+		t.Fatalf("setup dialog catalog does not contain exact audit severity copy %q", want)
+	}
+}
+
+func TestSearchToolSchemaIncludesNamespace(t *testing.T) {
+	var searchTool *mcpsdk.Tool
+	for _, tool := range listRegisteredTools(t) {
+		if tool.Name == "search" {
+			searchTool = tool
+			break
+		}
+	}
+	if searchTool == nil {
+		t.Fatal("search tool is not registered")
+	}
+
+	raw, err := json.Marshal(searchTool.InputSchema)
+	if err != nil {
+		t.Fatalf("marshal search input schema: %v", err)
+	}
+	var schema struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("unmarshal search input schema: %v", err)
+	}
+	if _, ok := schema.Properties["namespace"]; !ok {
+		t.Fatalf("search input schema does not accept namespace: %s", raw)
 	}
 }
 

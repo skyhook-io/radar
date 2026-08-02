@@ -22,15 +22,15 @@ func TestShouldAttachIssueChanges(t *testing.T) {
 	if !ShouldAttachIssueChanges(nil) {
 		t.Fatalf("zero critical issues should allow the recent-changes attachment")
 	}
-	if got := IssueChangesReason(nil); got != ChangesReasonNoCriticalIssues {
-		t.Fatalf("IssueChangesReason(nil) = %q, want %q", got, ChangesReasonNoCriticalIssues)
+	if got, want := IssueChangesReason(nil), "no_critical_issues"; got != want {
+		t.Fatalf("IssueChangesReason(nil) = %q, want %q", got, want)
 	}
 	baseline := []issuesapi.Issue{{Severity: issuesapi.SeverityCritical, IssueTiming: "started_at_resource_creation"}}
 	if !ShouldAttachIssueChanges(baseline) {
-		t.Fatalf("baseline-dominated critical issues should allow the recent-changes attachment")
+		t.Fatalf("creation-time critical issues should allow the recent-changes attachment")
 	}
-	if got := IssueChangesReason(baseline); got != ChangesReasonAllCriticalStartedAtCreation {
-		t.Fatalf("IssueChangesReason(baseline) = %q, want %q", got, ChangesReasonAllCriticalStartedAtCreation)
+	if got, want := IssueChangesReason(baseline), "recent_changes_with_all_critical_issues_at_creation"; got != want {
+		t.Fatalf("IssueChangesReason(baseline) = %q, want %q", got, want)
 	}
 	runtime := []issuesapi.Issue{{Severity: issuesapi.SeverityCritical, IssueTiming: "started_after_resource_was_healthy"}}
 	if ShouldAttachIssueChanges(runtime) {
@@ -39,12 +39,42 @@ func TestShouldAttachIssueChanges(t *testing.T) {
 	if got := IssueChangesReason(runtime); got != "" {
 		t.Fatalf("IssueChangesReason(runtime) = %q, want empty", got)
 	}
+	mixed := append(append([]issuesapi.Issue{}, baseline...), runtime...)
+	if got := IssueChangesReason(mixed); got != "" {
+		t.Fatalf("IssueChangesReason(mixed) = %q, want empty", got)
+	}
 	unknown := []issuesapi.Issue{{Severity: issuesapi.SeverityCritical}}
 	if ShouldAttachIssueChanges(unknown) {
 		t.Fatalf("critical issue with unknown timing should suppress the recent-changes attachment")
 	}
 	if got := IssueChangesReason(unknown); got != "" {
 		t.Fatalf("IssueChangesReason(unknown) = %q, want empty", got)
+	}
+}
+
+// The creation-timing collision is the exact spot where the old dismissive
+// token steered agents away from the change feed; the guidance must ride that
+// reason and no other, and must steer without claiming causation.
+func TestIssueChangesGuidance(t *testing.T) {
+	guidance := issueChangesGuidance(ChangesReasonWithAllCreationTimeCriticalIssues)
+	if !strings.Contains(guidance, "does not clear the listed changes") || !strings.Contains(guidance, "Review the changes") {
+		t.Fatalf("collision-reason guidance must steer toward the feed, got %q", guidance)
+	}
+	if strings.Contains(strings.ToLower(guidance), "caused the") {
+		t.Fatalf("guidance must not claim causation, got %q", guidance)
+	}
+	// The timing classification is per-resource ("failing since creation"); it
+	// establishes no ordering against the change feed, so the prose must never
+	// claim the issues predate the changes — a resource created after a bad
+	// change fails from creation because of that change.
+	if strings.Contains(strings.ToLower(guidance), "predate") {
+		t.Fatalf("guidance must not claim an issue-vs-change ordering, got %q", guidance)
+	}
+	if got := issueChangesGuidance(ChangesReasonNoCriticalIssues); got != "" {
+		t.Fatalf("no_critical_issues carries no landmine and needs no guidance, got %q", got)
+	}
+	if got := issueChangesGuidance(""); got != "" {
+		t.Fatalf("empty reason must yield empty guidance, got %q", got)
 	}
 }
 
@@ -107,10 +137,11 @@ func TestRecentRanksSpecConfigAboveStatusChurn(t *testing.T) {
 		t.Fatalf("append config: %v", err)
 	}
 
-	changes, _, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}, Limit: 2})
+	recentResult, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}, Limit: 2})
 	if err != nil {
 		t.Fatalf("Recent: %v", err)
 	}
+	changes := recentResult.Changes
 	if len(changes) != 2 {
 		t.Fatalf("changes length = %d, want 2", len(changes))
 	}
@@ -147,10 +178,11 @@ func TestRecentSurfacesWebhookConfigUpdate(t *testing.T) {
 		t.Fatalf("append: %v", err)
 	}
 
-	changes, _, err := Recent(context.Background(), Query{Limit: 5})
+	recentResult, err := Recent(context.Background(), Query{Limit: 5})
 	if err != nil {
 		t.Fatalf("Recent: %v", err)
 	}
+	changes := recentResult.Changes
 	if len(changes) != 1 {
 		t.Fatalf("changes = %d, want the webhook update: %+v", len(changes), changes)
 	}
@@ -203,10 +235,11 @@ func TestRecentLifecycleEventSurvivesUpdateChurn(t *testing.T) {
 		}
 	}
 
-	changes, _, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}})
+	recentResult, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}})
 	if err != nil {
 		t.Fatalf("Recent: %v", err)
 	}
+	changes := recentResult.Changes
 	found := false
 	for _, c := range changes {
 		if c.Kind == "Service" && c.Name == "user-service" && c.ChangeType == "delete" {
@@ -324,6 +357,64 @@ func TestRecentForResourceReportsSaturation(t *testing.T) {
 	}
 }
 
+func TestRecentSeparatesOutputCapFromFetchSaturation(t *testing.T) {
+	for _, tt := range []struct {
+		name               string
+		eventCount         int
+		wantOutputCapped   bool
+		wantFetchSaturated bool
+	}{
+		{
+			name:             "fully observed window recapped by output limit",
+			eventCount:       6,
+			wantOutputCapped: true,
+		},
+		{
+			name:               "candidate query reaches its cap",
+			eventCount:         100,
+			wantOutputCapped:   true,
+			wantFetchSaturated: true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			timeline.ResetStore()
+			t.Cleanup(timeline.ResetStore)
+			if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: tt.eventCount + 10}); err != nil {
+				t.Fatalf("InitStore: %v", err)
+			}
+			store := timeline.GetStore()
+			for i := 0; i < tt.eventCount; i++ {
+				if err := store.Append(context.Background(), timeline.TimelineEvent{
+					ID: fmt.Sprintf("spec-%d", i), Timestamp: time.Now().Add(-time.Duration(i) * time.Second),
+					Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+					Kind: "Deployment", Namespace: "shop", Name: fmt.Sprintf("web-%d", i),
+					EventType: timeline.EventTypeUpdate,
+					Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{
+						Path: "spec.replicas", OldValue: int32(1), NewValue: int32(2),
+					}}},
+				}); err != nil {
+					t.Fatalf("append %d: %v", i, err)
+				}
+			}
+
+			result, err := Recent(context.Background(), Query{
+				Namespaces: []string{"shop"},
+				Limit:      5,
+			})
+			if err != nil {
+				t.Fatalf("Recent: %v", err)
+			}
+			if result.OutputCapped != tt.wantOutputCapped || result.FetchSaturated != tt.wantFetchSaturated {
+				t.Fatalf(
+					"truncation state = outputCapped %v fetchSaturated %v, want %v/%v",
+					result.OutputCapped, result.FetchSaturated,
+					tt.wantOutputCapped, tt.wantFetchSaturated,
+				)
+			}
+		})
+	}
+}
+
 // A recreate (delete + ReasonRecreated add carrying the cross-recreate diff)
 // must surface as exactly ONE entry — the diff-bearing add, classified
 // spec_config — with the paired delete coalesced away. Entry count strictly
@@ -377,10 +468,11 @@ func TestRecentCoalescesRecreatePairs(t *testing.T) {
 		t.Fatalf("append final delete: %v", err)
 	}
 
-	changes, _, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}})
+	recentResult, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}})
 	if err != nil {
 		t.Fatalf("Recent: %v", err)
 	}
+	changes := recentResult.Changes
 	if len(changes) != 3 {
 		t.Fatalf("changes = %d entries %+v, want exactly 3 (recreate add + final delete + true delete)", len(changes), changes)
 	}
@@ -456,10 +548,11 @@ func TestRecentExcludesOtherClusterEvents(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
-	changes, _, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}, Since: time.Hour, Limit: 5, FieldLimit: 5})
+	recentResult, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}, Since: time.Hour, Limit: 5, FieldLimit: 5})
 	if err != nil {
 		t.Fatalf("Recent: %v", err)
 	}
+	changes := recentResult.Changes
 	if len(changes) != 0 {
 		t.Fatalf("another cluster's events leaked into Recent: %+v", changes)
 	}
@@ -487,10 +580,11 @@ func TestRecentSecretDeleteOnly(t *testing.T) {
 		}
 	}
 
-	changes, _, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}})
+	recentResult, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}})
 	if err != nil {
 		t.Fatalf("Recent: %v", err)
 	}
+	changes := recentResult.Changes
 	if len(changes) != 1 {
 		t.Fatalf("changes = %+v, want exactly the Secret delete", changes)
 	}
@@ -551,20 +645,690 @@ func TestRecentAnnotatesConfigMapConsumers(t *testing.T) {
 		Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
 		Kind: "ConfigMap", Namespace: "shop", Name: "flagd-config",
 		EventType: timeline.EventTypeUpdate,
-		Diff:      &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "data.flags.adHighCpu.defaultVariant", OldValue: "off", NewValue: "on"}}, Summary: "flag changed"},
+		Diff:      &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "data (modified keys)", OldValue: []string{"LOG_LEVEL"}, NewValue: []string{"LOG_LEVEL"}}}, Summary: "modified keys: [LOG_LEVEL]"},
 	}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
 
-	changes, _, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}})
+	recentResult, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}})
 	if err != nil {
 		t.Fatalf("Recent: %v", err)
 	}
+	changes := recentResult.Changes
 	if len(changes) != 1 {
 		t.Fatalf("changes = %+v, want 1", changes)
 	}
 	got := changes[0].ConsumedBy
 	if len(got) != 2 || got[0] != "Deployment/flagd" || got[1] != "Job/seed" {
 		t.Fatalf("consumed_by = %v, want [Deployment/flagd Job/seed]", got)
+	}
+	if !changes[0].ApplicationConfigurationChange {
+		t.Fatalf("change = %+v, want application_configuration_change", changes[0])
+	}
+}
+
+func TestRankAndCapApplicationConfigTiebreak(t *testing.T) {
+	at := time.Now()
+	changes := []issuesapi.RecentChange{
+		recentChange("Deployment", "shop", "ad", at, "spec.template.spec.containers[ad].image"),
+		recentChange("Deployment", "shop", "flagd", at.Add(-time.Second), "metadata.generation"),
+		{
+			Kind: "ConfigMap", Namespace: "shop", Name: "flagd-config",
+			Timestamp:      at.Add(-2 * time.Second).Format(time.RFC3339),
+			ChangeCategory: issuesapi.ChangeCategorySpecConfig,
+			Fields:         []issuesapi.ChangeField{{Path: "data.demo.flagd.json.flags.adFailure.defaultVariant"}},
+			ConsumedBy:     []string{"Deployment/flagd"},
+		},
+		{
+			Kind: "Service", Namespace: "shop", Name: "jaeger",
+			Timestamp:      at.Add(-3 * time.Second).Format(time.RFC3339),
+			ChangeType:     string(timeline.EventTypeAdd),
+			ChangeCategory: issuesapi.ChangeCategorySpecConfig,
+			RankReason:     "recreated with desired-state or configuration changes",
+			Fields:         []issuesapi.ChangeField{{Path: "spec.type"}},
+		},
+	}
+
+	RankAndCap(&changes, 5)
+
+	if got := changes[0]; got.Name != "ad" || !got.ApplicationConfigurationChange {
+		t.Fatalf("first change = %+v, want the newer image edit", got)
+	}
+	if got := changes[1]; got.Name != "flagd-config" || !got.ApplicationConfigurationChange {
+		t.Fatalf("second change = %+v, want the consumed structured ConfigMap edit", got)
+	}
+	if got := changes[len(changes)-1]; got.Name != "flagd" || !strings.Contains(got.RankReason, "generation") {
+		t.Fatalf("last change = %+v, want generation-only below real spec changes", got)
+	}
+	if got := changes[len(changes)-2]; got.Name != "jaeger" || !strings.Contains(got.RankReason, "recreated") {
+		t.Fatalf("jaeger recreate = %+v, want retained as real spec change", got)
+	}
+}
+
+func TestBenchmarkFlagEditsAreMarkedNotLinkedToReturnedIssues(t *testing.T) {
+	for _, flag := range []string{"adFailure", "cartFailure"} {
+		t.Run(flag, func(t *testing.T) {
+			at := time.Now()
+			changes := []issuesapi.RecentChange{
+				recentChange("Deployment", "shop", "ad", at, "metadata.generation"),
+				recentChange("Deployment", "shop", "flagd", at.Add(-time.Second), "metadata.generation"),
+				{
+					Kind: "ConfigMap", Namespace: "shop", Name: "flagd-config",
+					Timestamp:      at.Add(-2 * time.Second).Format(time.RFC3339),
+					ChangeCategory: issuesapi.ChangeCategorySpecConfig,
+					Fields:         []issuesapi.ChangeField{{Path: "data.demo.flagd.json.flags." + flag + ".defaultVariant"}},
+					ConsumedBy:     []string{"Deployment/flagd"},
+				},
+			}
+
+			got, guidance, _ := PrioritizeIssueChanges(
+				changes,
+				[]issuesapi.Issue{{
+					Kind: "Deployment", Namespace: "shop", Name: "product-catalog",
+					Severity: issuesapi.SeverityCritical,
+				}},
+				IssueChangePriorityOptions{
+					Reason:             ChangesReasonWithAllCreationTimeCriticalIssues,
+					Limit:              IssueChangesLimit,
+					UnfilteredIssueSet: true,
+				},
+			)
+
+			if got[0].Name != "flagd-config" || !got[0].ApplicationConfigurationChange || !got[0].NotLinkedToReturnedIssues {
+				t.Fatalf("first change = %+v, want issue-less flag edit", got[0])
+			}
+			if !strings.Contains(guidance, "ConfigMap/shop/flagd-config") ||
+				!strings.Contains(guidance, "not evidence of cause") {
+				t.Fatalf("guidance did not name and hedge the flag edit: %q", guidance)
+			}
+		})
+	}
+}
+
+func TestApplicationConfigClassifierFalsePositiveGuards(t *testing.T) {
+	tests := []struct {
+		name      string
+		change    issuesapi.RecentChange
+		want      bool
+		wantScore int
+	}{
+		{
+			name: "workload env", change: recentChange("Deployment", "shop", "frontend", time.Now(),
+				"spec.template.spec.containers[frontend].env[CART_ADDR]"),
+			want: true, wantScore: 105,
+		},
+		{
+			name: "init container", change: recentChange("Deployment", "shop", "frontend", time.Now(),
+				"spec.template.spec.initContainers[migrate].envFrom"),
+			want: true, wantScore: 105,
+		},
+		{
+			name: "command", change: recentChange("StatefulSet", "shop", "db", time.Now(),
+				"spec.template.spec.containers[db].command"),
+			want: true, wantScore: 105,
+		},
+		{
+			name: "image", change: recentChange("Deployment", "shop", "frontend", time.Now(),
+				"spec.template.spec.containers[frontend].image"),
+			want: true, wantScore: 105,
+		},
+		{
+			name: "whole container add or removal", change: recentChange("Deployment", "shop", "frontend", time.Now(),
+				"spec.template.spec.containers[sidecar]"),
+			want: true, wantScore: 105,
+		},
+		{
+			name: "whole init container add or removal", change: recentChange("Deployment", "shop", "frontend", time.Now(),
+				"spec.template.spec.initContainers[setup]"),
+			want: true, wantScore: 105,
+		},
+		{
+			name: "malformed whole container path", change: recentChange("Deployment", "shop", "frontend", time.Now(),
+				"spec.template.spec.containers[sidecar][image]"),
+			wantScore: 100,
+		},
+		{
+			name: "replicas", change: recentChange("Deployment", "shop", "frontend", time.Now(),
+				"spec.replicas"),
+			wantScore: 100,
+		},
+		{
+			name: "HPA target", change: recentChange("HorizontalPodAutoscaler", "shop", "frontend", time.Now(),
+				"spec.maxReplicas"),
+			wantScore: 100,
+		},
+		{
+			name: "envoy substring", change: recentChange("Deployment", "shop", "frontend", time.Now(),
+				"spec.template.metadata.annotations.envoy.io/config"),
+			wantScore: 100,
+		},
+		{
+			name: "unrelated CRD prose", change: recentChange("Widget", "shop", "frontend", time.Now(),
+				"spec.sql.command"),
+			wantScore: 100,
+		},
+		{
+			name: "consumed ConfigMap scalar value fallback", change: issuesapi.RecentChange{
+				Kind: "ConfigMap", Namespace: "shop", Name: "flags",
+				ChangeCategory: issuesapi.ChangeCategorySpecConfig,
+				Fields:         []issuesapi.ChangeField{{Path: "data (modified keys)"}},
+				ConsumedBy:     []string{"Deployment/flagd"},
+			},
+			want: true, wantScore: 105,
+		},
+		{
+			name: "consumed ConfigMap key removal", change: issuesapi.RecentChange{
+				Kind: "ConfigMap", Namespace: "shop", Name: "frontend-env",
+				ChangeCategory: issuesapi.ChangeCategorySpecConfig,
+				Fields:         []issuesapi.ChangeField{{Path: "data (removed keys)"}},
+				ConsumedBy:     []string{"Deployment/frontend"},
+			},
+			want: true, wantScore: 105,
+		},
+		{
+			name: "ConfigMap binary data", change: issuesapi.RecentChange{
+				Kind: "ConfigMap", Namespace: "shop", Name: "assets",
+				ChangeCategory: issuesapi.ChangeCategorySpecConfig,
+				Fields:         []issuesapi.ChangeField{{Path: "binaryData (modified keys)"}},
+				ConsumedBy:     []string{"Deployment/frontend"},
+			},
+			wantScore: 100,
+		},
+		{
+			name: "unconsumed ConfigMap", change: issuesapi.RecentChange{
+				Kind: "ConfigMap", Namespace: "shop", Name: "flags",
+				ChangeCategory: issuesapi.ChangeCategorySpecConfig,
+				Fields:         []issuesapi.ChangeField{{Path: "data.flags.enabled"}},
+			},
+			wantScore: 100,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			changes := []issuesapi.RecentChange{tt.change}
+			RankAndCap(&changes, 1)
+			if got := changes[0].ApplicationConfigurationChange; got != tt.want {
+				t.Fatalf("application_configuration_change = %v, want %v", got, tt.want)
+			}
+			if got := score(changes[0]); got != tt.wantScore {
+				t.Fatalf("score = %d, want %d", got, tt.wantScore)
+			}
+		})
+	}
+}
+
+func TestRankAndCapKeepsRecentImageAheadOfOlderConsumedConfigMapEdits(t *testing.T) {
+	at := time.Now()
+	changes := []issuesapi.RecentChange{
+		recentChange("Deployment", "shop", "frontend", at,
+			"spec.template.spec.containers[frontend].image"),
+	}
+	for i := 0; i < 3; i++ {
+		changes = append(changes, issuesapi.RecentChange{
+			Kind: "ConfigMap", Namespace: "shop", Name: fmt.Sprintf("frontend-config-%d", i),
+			Timestamp:      at.Add(-time.Duration(40+i*5) * time.Minute).Format(time.RFC3339),
+			ChangeCategory: issuesapi.ChangeCategorySpecConfig,
+			Fields:         []issuesapi.ChangeField{{Path: "data (modified keys)"}},
+			ConsumedBy:     []string{"Deployment/frontend"},
+		})
+	}
+
+	RankAndCap(&changes, 3)
+
+	if len(changes) != 3 || changes[0].Kind != "Deployment" || changes[0].Name != "frontend" {
+		t.Fatalf("ranked changes = %+v, want recent image change retained first", changes)
+	}
+}
+
+func TestPrioritizeIssueChangesMarksOnlyUnexplainedEdits(t *testing.T) {
+	at := time.Now()
+	changes := []issuesapi.RecentChange{
+		recentChange("Deployment", "shop", "frontend", at, "spec.template.spec.containers[frontend].env[CART_ADDR]"),
+		{
+			Kind: "ConfigMap", Namespace: "shop", Name: "flagd-config",
+			Timestamp:      at.Add(-time.Second).Format(time.RFC3339),
+			ChangeCategory: issuesapi.ChangeCategorySpecConfig,
+			Fields:         []issuesapi.ChangeField{{Path: "data.demo.flagd.json.flags.cartFailure.defaultVariant"}},
+			ConsumedBy:     []string{"Deployment/flagd"},
+		},
+		recentChange("Deployment", "shop", "checkout", at.Add(-2*time.Second),
+			"spec.template.spec.containers[checkout].env[PAYMENT_ADDR]"),
+	}
+	issues := []issuesapi.Issue{
+		{
+			Kind: "Deployment", Namespace: "shop", Name: "frontend",
+			Severity: issuesapi.SeverityCritical,
+		},
+		{
+			Kind: "Pod", Namespace: "shop", Name: "flagd-abc",
+			Owner:    issuesapi.Ref{Kind: "Deployment", Namespace: "shop", Name: "flagd"},
+			Severity: issuesapi.SeverityCritical,
+		},
+	}
+
+	got, guidance, capped := PrioritizeIssueChanges(
+		changes, issues, IssueChangePriorityOptions{
+			Reason:             ChangesReasonWithAllCreationTimeCriticalIssues,
+			Limit:              5,
+			UnfilteredIssueSet: true,
+		},
+	)
+
+	if capped {
+		t.Fatal("three entries must not report a five-entry cap")
+	}
+	if got[0].Name != "checkout" || !got[0].NotLinkedToReturnedIssues {
+		t.Fatalf("first change = %+v, want sole unexplained edit", got[0])
+	}
+	if got[1].Name == "checkout" || !got[1].ApplicationConfigurationChange || got[1].NotLinkedToReturnedIssues {
+		t.Fatalf("explained edit was promoted: %+v", got[1])
+	}
+	if !got[2].ApplicationConfigurationChange || got[2].NotLinkedToReturnedIssues {
+		t.Fatalf("ConfigMap explained through its consumer was promoted: %+v", got[2])
+	}
+	if !strings.Contains(guidance, "Deployment/shop/checkout") ||
+		!strings.Contains(guidance, "a lead, not evidence") {
+		t.Fatalf("guidance did not name and hedge the sole returned suspect: %q", guidance)
+	}
+}
+
+func TestPrioritizeIssueChangesUsesWarningLinksAndFailsClosedWhenSeverityFiltered(t *testing.T) {
+	change := recentChange(
+		"Deployment", "shop", "frontend", time.Now(),
+		"spec.template.spec.containers[frontend].env[CART_ADDR]",
+	)
+	critical := issuesapi.Issue{
+		Kind:        "Deployment",
+		Namespace:   "shop",
+		Name:        "product-catalog",
+		Severity:    issuesapi.SeverityCritical,
+		IssueTiming: "started_at_resource_creation",
+	}
+	warning := issuesapi.Issue{
+		Kind:      "Deployment",
+		Namespace: "shop",
+		Name:      "frontend",
+		Severity:  issuesapi.SeverityWarning,
+	}
+	if got := IssueChangesReason([]issuesapi.Issue{critical, warning}); got != ChangesReasonWithAllCreationTimeCriticalIssues {
+		t.Fatalf("warning issue suppressed creation-time branch: %q", got)
+	}
+
+	full, _, _ := PrioritizeIssueChanges(
+		[]issuesapi.RecentChange{change},
+		[]issuesapi.Issue{critical, warning},
+		IssueChangePriorityOptions{
+			Reason:             ChangesReasonWithAllCreationTimeCriticalIssues,
+			Limit:              5,
+			UnfilteredIssueSet: true,
+		},
+	)
+	if !full[0].ApplicationConfigurationChange || full[0].NotLinkedToReturnedIssues || score(full[0]) != 105 {
+		t.Fatalf("warning-linked change = %+v, want static classification at score 105", full[0])
+	}
+
+	filtered, guidance, _ := PrioritizeIssueChanges(
+		[]issuesapi.RecentChange{change},
+		[]issuesapi.Issue{critical},
+		IssueChangePriorityOptions{
+			Reason:             ChangesReasonWithAllCreationTimeCriticalIssues,
+			Limit:              5,
+			UnfilteredIssueSet: false,
+		},
+	)
+	if filtered[0].NotLinkedToReturnedIssues || score(filtered[0]) != 105 {
+		t.Fatalf("severity-filtered change = %+v, want fail-closed score 105", filtered[0])
+	}
+	if !strings.Contains(guidance, filteredIssueSetGuidance) || strings.Contains(guidance, "appears first") {
+		t.Fatalf("severity-filtered guidance is misleading: %q", guidance)
+	}
+}
+
+func TestIssueSeveritySetComplete(t *testing.T) {
+	tests := []struct {
+		name       string
+		severities []issuesapi.Severity
+		want       bool
+	}{
+		{name: "omitted means all", want: true},
+		{name: "critical only", severities: []issuesapi.Severity{issuesapi.SeverityCritical}},
+		{name: "warning only", severities: []issuesapi.Severity{issuesapi.SeverityWarning}},
+		{
+			name: "both explicit",
+			severities: []issuesapi.Severity{
+				issuesapi.SeverityCritical,
+				issuesapi.SeverityWarning,
+			},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IssueSeveritySetComplete(tt.severities); got != tt.want {
+				t.Fatalf("IssueSeveritySetComplete(%v) = %v, want %v", tt.severities, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPrioritizeIssueChangesNamesTwoUnlinkedChanges(t *testing.T) {
+	changes := []issuesapi.RecentChange{
+		recentChange("Deployment", "shop", "frontend", time.Now(),
+			"spec.template.spec.containers[frontend].env[CART_ADDR]"),
+		recentChange("Deployment", "shop", "checkout", time.Now().Add(-time.Second),
+			"spec.template.spec.containers[checkout].args"),
+	}
+
+	got, guidance, _ := PrioritizeIssueChanges(
+		changes,
+		[]issuesapi.Issue{{
+			Kind: "Deployment", Namespace: "shop", Name: "unrelated",
+			Severity: issuesapi.SeverityCritical,
+		}},
+		IssueChangePriorityOptions{
+			Reason:             ChangesReasonWithAllCreationTimeCriticalIssues,
+			Limit:              5,
+			UnfilteredIssueSet: true,
+		},
+	)
+
+	if !got[0].NotLinkedToReturnedIssues || !got[1].NotLinkedToReturnedIssues {
+		t.Fatalf("unlinked changes were not both marked: %+v", got)
+	}
+	for _, want := range []string{
+		"Deployment/shop/frontend",
+		"Deployment/shop/checkout",
+		"they appear first within `recent_changes`",
+		"not evidence of cause",
+	} {
+		if !strings.Contains(guidance, want) {
+			t.Fatalf("two-change guidance missing %q: %q", want, guidance)
+		}
+	}
+}
+
+func TestIssueChangesFetchLimitOnlyWidensForIssueAwareRanking(t *testing.T) {
+	if got := IssueChangesFetchLimit(ChangesReasonNoCriticalIssues); got != IssueChangesLimit {
+		t.Fatalf("no-critical fetch limit = %d, want %d", got, IssueChangesLimit)
+	}
+	if got := IssueChangesFetchLimit(ChangesReasonWithAllCreationTimeCriticalIssues); got != IssueChangesCandidateLimit {
+		t.Fatalf("issue-aware fetch limit = %d, want %d", got, IssueChangesCandidateLimit)
+	}
+	if got := IssueChangesFetchLimit(""); got != IssueChangesLimit {
+		t.Fatalf("unknown-reason fetch limit = %d, want %d", got, IssueChangesLimit)
+	}
+}
+
+func TestPrioritizeIssueChangesDoesNotMarkHealthyClusterEdits(t *testing.T) {
+	changes := []issuesapi.RecentChange{
+		recentChange("Deployment", "shop", "frontend", time.Now(),
+			"spec.template.spec.containers[frontend].env[CART_ADDR]"),
+	}
+
+	got, guidance, _ := PrioritizeIssueChanges(changes, nil, IssueChangePriorityOptions{
+		Reason:             ChangesReasonNoCriticalIssues,
+		Limit:              5,
+		UnfilteredIssueSet: true,
+	})
+
+	if !got[0].ApplicationConfigurationChange || got[0].NotLinkedToReturnedIssues {
+		t.Fatalf("healthy-cluster edit = %+v, want static classification only", got[0])
+	}
+	if guidance != "" {
+		t.Fatalf("healthy-cluster guidance = %q, want none", guidance)
+	}
+}
+
+func TestPrioritizeIssueChangesSuppressesCrowdedNamedGuidance(t *testing.T) {
+	var changes []issuesapi.RecentChange
+	for _, name := range []string{"frontend", "checkout", "payment"} {
+		changes = append(changes, recentChange("Deployment", "shop", name, time.Now(),
+			"spec.template.spec.containers["+name+"].args"))
+	}
+
+	got, guidance, _ := PrioritizeIssueChanges(
+		changes,
+		[]issuesapi.Issue{{Kind: "Deployment", Namespace: "shop", Name: "unrelated", Severity: issuesapi.SeverityCritical}},
+		IssueChangePriorityOptions{
+			Reason:             ChangesReasonWithAllCreationTimeCriticalIssues,
+			Limit:              5,
+			UnfilteredIssueSet: true,
+		},
+	)
+
+	for _, change := range got {
+		if !change.NotLinkedToReturnedIssues {
+			t.Fatalf("unexplained edit not marked: %+v", change)
+		}
+	}
+	if strings.Contains(guidance, "frontend") || strings.Contains(guidance, "checkout") || strings.Contains(guidance, "payment") {
+		t.Fatalf("crowded suspect set must suppress named guidance: %q", guidance)
+	}
+	if !strings.Contains(guidance, "3 application-configuration changes") ||
+		!strings.Contains(guidance, "not evidence of cause") {
+		t.Fatalf("crowded suspect set must retain count-only verification guidance: %q", guidance)
+	}
+	if !strings.Contains(guidance, "does not clear the listed changes") {
+		t.Fatalf("base timing guidance must remain: %q", guidance)
+	}
+}
+
+func TestPrioritizeIssueChangesFailsClosedOnCappedConsumers(t *testing.T) {
+	change := issuesapi.RecentChange{
+		Kind: "ConfigMap", Namespace: "shop", Name: "shared-config",
+		ChangeCategory: issuesapi.ChangeCategorySpecConfig,
+		Fields:         []issuesapi.ChangeField{{Path: "data.flags.enabled"}},
+		ConsumedBy: []string{
+			"Deployment/a", "Deployment/b", "Deployment/c", "Deployment/d", "Deployment/e",
+		},
+	}
+
+	got, _, _ := PrioritizeIssueChanges(
+		[]issuesapi.RecentChange{change},
+		[]issuesapi.Issue{{Kind: "Deployment", Namespace: "shop", Name: "unrelated", Severity: issuesapi.SeverityCritical}},
+		IssueChangePriorityOptions{
+			Reason:             ChangesReasonWithAllCreationTimeCriticalIssues,
+			Limit:              5,
+			UnfilteredIssueSet: true,
+		},
+	)
+
+	if !got[0].ApplicationConfigurationChange || got[0].NotLinkedToReturnedIssues {
+		t.Fatalf("capped consumer evidence must fail closed instead of claiming unexplained: %+v", got[0])
+	}
+}
+
+func TestPrioritizeIssueChangesFailsClosedOnTruncatedIssueMembers(t *testing.T) {
+	change := recentChange(
+		"Deployment", "shop", "member-eleven", time.Now(),
+		"spec.template.spec.containers[app].env[DATABASE_URL]",
+	)
+	issue := issuesapi.Issue{
+		Kind: "Deployment", Namespace: "shop", Name: "group-subject",
+		Severity:         issuesapi.SeverityCritical,
+		Members:          []issuesapi.Ref{{Kind: "Deployment", Namespace: "shop", Name: "member-one"}},
+		MembersTruncated: true,
+	}
+
+	got, guidance, _ := PrioritizeIssueChanges(
+		[]issuesapi.RecentChange{change},
+		[]issuesapi.Issue{issue},
+		IssueChangePriorityOptions{
+			Reason:             ChangesReasonWithAllCreationTimeCriticalIssues,
+			Limit:              5,
+			UnfilteredIssueSet: true,
+		},
+	)
+
+	if !got[0].ApplicationConfigurationChange || got[0].NotLinkedToReturnedIssues {
+		t.Fatalf("truncated issue membership must fail closed instead of claiming unexplained: %+v", got[0])
+	}
+	if !strings.Contains(guidance, truncatedIssueMembersGuidance) ||
+		strings.Contains(guidance, "appears first") {
+		t.Fatalf("truncated-members guidance is misleading: %q", guidance)
+	}
+}
+
+func TestPrioritizeIssueChangesReportsSecondStageCap(t *testing.T) {
+	var changes []issuesapi.RecentChange
+	for i := 0; i < IssueChangesCandidateLimit; i++ {
+		changes = append(changes, recentChange(
+			"Deployment", "shop", fmt.Sprintf("workload-%d", i), time.Now().Add(-time.Duration(i)*time.Second),
+			"spec.replicas",
+		))
+	}
+
+	got, guidance, capped := PrioritizeIssueChanges(changes, nil, IssueChangePriorityOptions{
+		Reason:             ChangesReasonNoCriticalIssues,
+		Limit:              IssueChangesLimit,
+		UnfilteredIssueSet: true,
+	})
+
+	if len(got) != IssueChangesLimit || !capped {
+		t.Fatalf("second-stage cap = len %d capped %v, want %d/true", len(got), capped, IssueChangesLimit)
+	}
+	if strings.Contains(guidance, "candidate cap") {
+		t.Fatalf("output recap must not claim the candidate query saturated: %q", guidance)
+	}
+}
+
+func TestPrioritizeIssueChangesWarnsOnlyForFetchSaturation(t *testing.T) {
+	_, guidance, _ := PrioritizeIssueChanges(
+		[]issuesapi.RecentChange{recentChange(
+			"Deployment", "shop", "frontend", time.Now(),
+			"spec.template.spec.containers[frontend].env[CART_ADDR]",
+		)},
+		nil,
+		IssueChangePriorityOptions{
+			Reason:             ChangesReasonNoCriticalIssues,
+			Limit:              IssueChangesLimit,
+			UnfilteredIssueSet: true,
+			FetchSaturated:     true,
+		},
+	)
+	if guidance != FetchSaturatedGuidance {
+		t.Fatalf("fetch-saturation guidance = %q, want %q", guidance, FetchSaturatedGuidance)
+	}
+}
+
+func TestFromEventClassifiesApplicationConfigurationBeforeFieldDisplayCap(t *testing.T) {
+	change := fromEvent(timeline.TimelineEvent{
+		Source: timeline.SourceInformer, Kind: "Deployment", Namespace: "shop", Name: "frontend",
+		EventType: timeline.EventTypeUpdate,
+		Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{
+			{Path: "spec.replicas"},
+			{Path: "spec.template.spec.containers[frontend].env[CART_ADDR]"},
+		}},
+	}, 1)
+	changes := []issuesapi.RecentChange{change}
+	RankAndCap(&changes, 1)
+
+	if len(changes[0].Fields) != 1 {
+		t.Fatalf("display fields = %d, want cap 1", len(changes[0].Fields))
+	}
+	if !changes[0].ApplicationConfigurationChange {
+		t.Fatalf("full producer evidence did not survive display cap: %+v", changes[0])
+	}
+	if got := changes[0].Fields[0].Path; got != "spec.template.spec.containers[frontend].env[CART_ADDR]" {
+		t.Fatalf("displayed field = %q, want the evidence supporting the classification", got)
+	}
+}
+
+func TestFromEventDoesNotDemoteTruncatedRealSpecChangeAsGenerationOnly(t *testing.T) {
+	change := fromEvent(timeline.TimelineEvent{
+		Source: timeline.SourceInformer, Kind: "Widget", Namespace: "shop", Name: "example",
+		EventType: timeline.EventTypeUpdate,
+		Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{
+			{Path: "metadata.generation"},
+			{Path: "spec.mode"},
+		}},
+	}, 1)
+	changes := []issuesapi.RecentChange{change}
+	RankAndCap(&changes, 1)
+
+	if len(changes[0].Fields) != 1 {
+		t.Fatalf("display fields = %d, want cap 1", len(changes[0].Fields))
+	}
+	if got := score(changes[0]); got != 100 {
+		t.Fatalf("multi-field spec change score = %d, want 100: %+v", got, changes[0])
+	}
+	if got := changes[0].Fields[0].Path; got != "spec.mode" {
+		t.Fatalf("displayed field = %q, want non-generation evidence", got)
+	}
+}
+
+func TestRecreatedApplicationConfigurationChangeKeepsRecreateContext(t *testing.T) {
+	changes := []issuesapi.RecentChange{{
+		Kind: "Deployment", Namespace: "shop", Name: "frontend",
+		ChangeType:     string(timeline.EventTypeAdd),
+		ChangeCategory: issuesapi.ChangeCategorySpecConfig,
+		RankReason:     "recreated with desired-state or configuration changes",
+		Fields: []issuesapi.ChangeField{{
+			Path: "spec.template.spec.containers[frontend].env[CART_ADDR]",
+		}},
+	}}
+
+	RankAndCap(&changes, 1)
+
+	if !changes[0].ApplicationConfigurationChange ||
+		!strings.Contains(changes[0].RankReason, "recreated") {
+		t.Fatalf("recreate context was lost: %+v", changes[0])
+	}
+
+	got, _, _ := PrioritizeIssueChanges(
+		changes,
+		[]issuesapi.Issue{{
+			Kind: "Deployment", Namespace: "shop", Name: "unrelated",
+			Severity: issuesapi.SeverityCritical,
+		}},
+		IssueChangePriorityOptions{
+			Reason:             ChangesReasonWithAllCreationTimeCriticalIssues,
+			Limit:              1,
+			UnfilteredIssueSet: true,
+		},
+	)
+	if !got[0].NotLinkedToReturnedIssues ||
+		!strings.Contains(got[0].RankReason, "recreated") {
+		t.Fatalf("unlinked change lost recreate context: %+v", got[0])
+	}
+}
+
+func TestRecentDemotesRealGenericCRDGenerationOnlyChange(t *testing.T) {
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	if err := timeline.GetStore().Append(context.Background(), timeline.TimelineEvent{
+		ID: "widget-gen", Timestamp: time.Now(),
+		Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+		Kind: "Widget", Namespace: "shop", Name: "example",
+		EventType: timeline.EventTypeUpdate,
+		Diff: &timeline.DiffInfo{
+			Fields: []timeline.FieldChange{{Path: "metadata.generation", OldValue: int64(1), NewValue: int64(2)}},
+		},
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	recentResult, err := Recent(context.Background(), Query{
+		Namespaces: []string{"shop"}, Kinds: []string{"Widget"}, Limit: 5,
+	})
+	if err != nil {
+		t.Fatalf("Recent: %v", err)
+	}
+	changes := recentResult.Changes
+	if len(changes) != 1 || score(changes[0]) != 80 || changes[0].ApplicationConfigurationChange || changes[0].NotLinkedToReturnedIssues {
+		t.Fatalf("generic CRD generation change = %+v, want retained score 80 without configuration markers", changes)
+	}
+}
+
+func recentChange(kind, namespace, name string, at time.Time, fieldPath string) issuesapi.RecentChange {
+	return issuesapi.RecentChange{
+		Kind: kind, Namespace: namespace, Name: name,
+		Timestamp:      at.Format(time.RFC3339),
+		ChangeCategory: issuesapi.ChangeCategorySpecConfig,
+		Fields:         []issuesapi.ChangeField{{Path: fieldPath}},
 	}
 }

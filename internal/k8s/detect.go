@@ -23,6 +23,11 @@ const probeFailureWindow = 10 * time.Minute
 
 const livenessProbeFailedReason = "LivenessProbeFailed"
 
+// Core ConfigMaps and Secrets have no kind-specific graceful termination phase.
+// Once deletion starts, a remaining finalizer is the only thing keeping the
+// object present, so delayed cleanup is actionable sooner than workload drain.
+const configMapSecretTerminatingWarningAfter = 2 * time.Minute
+
 const terminatingWarningAfter = 10 * time.Minute
 const terminatingCriticalAfter = 30 * time.Minute
 
@@ -150,6 +155,35 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			}
 		}
 	}
+
+	if cmLister := cache.ConfigMaps(); cmLister != nil {
+		var configMaps []*corev1.ConfigMap
+		if namespace != "" {
+			configMaps, _ = cmLister.ConfigMaps(namespace).List(labels.Everything())
+		} else {
+			configMaps, _ = cmLister.List(labels.Everything())
+		}
+		for _, cm := range configMaps {
+			if det, ok := terminatingProblem("ConfigMap", "", cm, now); ok {
+				problems = append(problems, det)
+			}
+		}
+	}
+
+	if secretLister := cache.Secrets(); secretLister != nil {
+		var secrets []*corev1.Secret
+		if namespace != "" {
+			secrets, _ = secretLister.Secrets(namespace).List(labels.Everything())
+		} else {
+			secrets, _ = secretLister.List(labels.Everything())
+		}
+		for _, secret := range secrets {
+			if det, ok := terminatingProblem("Secret", "", secret, now); ok {
+				problems = append(problems, det)
+			}
+		}
+	}
+
 	podsByNamespace := listPodsByNamespace(cache, namespace)
 
 	// Deployment problems: unavailableReplicas > 0
@@ -412,11 +446,13 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				message = init.message
 				fingerprint = init.fingerprint
 			}
-			var cause, action string
-			if reason == crashLoopReason {
-				cause, action = health.PodCrashLoopDiagnosis(pod, now)
-			} else if c, a := imagePullDiagnosis(reason, message); c != "" {
-				cause, action = c, a
+			cause, action := oomLimitDiagnosis(cache, pod, reason, lastTermReason, now)
+			if cause == "" {
+				if reason == crashLoopReason {
+					cause, action = health.PodCrashLoopDiagnosis(pod, now)
+				} else {
+					cause, action = imagePullDiagnosis(reason, message)
+				}
 			}
 			// IssueTiming: classify whether this pod has been failing since the Deployment
 			// was first created (started_at_resource_creation) or broke after a period of
@@ -1440,16 +1476,26 @@ func terminatingProblem(kind, group string, obj metav1.Object, now time.Time) (D
 	if obj.GetDeletionTimestamp() == nil {
 		return Detection{}, false
 	}
+	finalizers := obj.GetFinalizers()
+	usesShortWarningWindow := group == "" &&
+		(kind == "ConfigMap" || kind == "Secret") &&
+		hasNonGarbageCollectionFinalizer(finalizers)
+	warningAfter := terminatingWarningAfter
+	if usesShortWarningWindow {
+		warningAfter = configMapSecretTerminatingWarningAfter
+	}
 	duration := now.Sub(obj.GetDeletionTimestamp().Time)
-	if duration < terminatingWarningAfter {
+	if duration < warningAfter {
 		return Detection{}, false
 	}
 	severity := "high"
-	if duration >= terminatingCriticalAfter {
+	if usesShortWarningWindow && duration < terminatingWarningAfter {
+		severity = "medium"
+	} else if duration >= terminatingCriticalAfter {
 		severity = "critical"
 	}
 	msg := "Resource is still present after deletion started"
-	if finalizers := obj.GetFinalizers(); len(finalizers) > 0 {
+	if len(finalizers) > 0 {
 		msg = "Waiting on finalizers: " + strings.Join(finalizers, ", ")
 	}
 	// The stuck-termination issue began when deletion was requested — run the
@@ -1476,6 +1522,17 @@ func terminatingProblem(kind, group string, obj metav1.Object, now time.Time) (D
 		IssueTiming:      timingR.IssueTiming,
 		IssueTimingBasis: timingR.Basis,
 	}, true
+}
+
+func hasNonGarbageCollectionFinalizer(finalizers []string) bool {
+	for _, finalizer := range finalizers {
+		// Garbage collection may legitimately wait for dependents to finish
+		// terminating, so it keeps the generic grace period.
+		if finalizer != metav1.FinalizerDeleteDependents && finalizer != metav1.FinalizerOrphanDependents {
+			return true
+		}
+	}
+	return false
 }
 
 func namespaceTerminatingProblem(ns *corev1.Namespace, now time.Time) (Detection, bool) {

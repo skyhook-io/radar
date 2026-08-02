@@ -757,8 +757,11 @@ export function PodRenderer({
               {(metricsHistory?.containers || currentMetrics?.containers || []).map((historyContainer) => {
                 // Find current metrics for this container
                 const currentContainerMetrics = currentMetrics?.containers?.find(c => c.name === historyContainer.name)
-                // Find the container spec to compare against limits
+                // Find the container spec to compare against limits. Native
+                // sidecars live in initContainers (restartPolicy Always), so
+                // fall through to them or their chart shows no limit line.
                 const containerSpec = containers.find((c: any) => c.name === historyContainer.name)
+                  || initContainers.find((c: any) => c.name === historyContainer.name && c.restartPolicy === 'Always')
                 const limits = containerSpec?.resources?.limits
                 const requests = containerSpec?.resources?.requests
 

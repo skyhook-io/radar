@@ -214,6 +214,20 @@ ingress:
   #    hosts:
   #      - radar.example.com
 
+httpRoute:
+  enabled: false
+  apiVersion: gateway.networking.k8s.io/v1
+  annotations: {}
+  labels: {}
+  parentRefs: []
+  hostnames: []
+  # Optional request timeout for chart-generated default rule. Empty means
+  # Gateway deployment default applies. Set 0s to explicitly disable timeout.
+  defaultTimeout: ""
+  # When empty, chart emits a default / Prefix rule to Radar Service.
+  # Non-empty rules replace default and pass through unchanged.
+  rules: []
+
 resources:
   limits:
     cpu: 500m
@@ -327,6 +341,11 @@ cloud:
   # The Secret must contain a key matching existingSecretKey.
   existingSecret: ""
   existingSecretKey: "token"
+  # Skip TLS verification on the tunnel to the hub — for trials against a
+  # self-hosted hub that serves a self-signed certificate. The tunnel stays
+  # encrypted but is NOT authenticated (a network attacker could impersonate
+  # the hub), so leave false for any hub with a publicly trusted certificate.
+  insecureSkipVerify: false
   # Default ClusterRoleBindings for Radar Cloud identity groups.
   #
   # How it works: Cloud injects X-Forwarded-Groups: cloud:<role>,
@@ -358,10 +377,44 @@ cloud:
     member: true
     viewer: true
     # ClusterRoles the three Cloud roles bind to. Swap for custom ClusterRoles
-    # to tighten or loosen the defaults.
+    # to tighten or loosen the defaults. NOTE: this controls the namespaced
+    # binding only — the cluster-scoped read add-on below is a SEPARATE,
+    # independent binding. Tightening a tier here does not remove its
+    # clusterScopedRead grant; set that tier's flag below too.
     ownerClusterRole: admin
     memberClusterRole: edit
     viewerClusterRole: view
+    # Grant cluster-scoped READ (Nodes, PVs, StorageClasses, IngressClasses,
+    # PriorityClasses, RuntimeClasses) on top of the built-in view/edit/admin
+    # roles, which exclude cluster-scoped resources. Per tier, each default
+    # true — Radar is a cluster-wide observability tool, so by default every
+    # tier (incl. viewer) sees core infrastructure. No Secrets or RBAC objects.
+    #
+    # Set a tier false to remove this add-on's binding. With the default
+    # built-in role mappings above that leaves the tier namespaced-only —
+    # common for security-conscious orgs (clusterScopedRead.viewer=false →
+    # viewers get stock `view` and cannot enumerate cluster infra). With a
+    # custom *ClusterRole the tier's cluster-scoped reach is whatever that
+    # role grants; this flag only controls our add-on binding.
+    #
+    # Independent of *ClusterRole above: a custom namespaced role does NOT
+    # disable cluster-read (they're separate bindings). Want a tier to read a
+    # DIFFERENT cluster-scoped set (e.g. Nodes but not PVs)? Set its flag false
+    # and bind your own ClusterRole to the cloud:<tier> group — the cloud:*
+    # groups exist regardless of this chart, so your binding composes cleanly.
+    clusterScopedRead:
+      viewer: true
+      member: true
+      owner: true
+    # Grant the owner tier node cordon/drain. Cluster-scoped WRITE, so OFF by
+    # default. Blast radius when enabled: `patch nodes` can't be field-scoped
+    # by RBAC (also permits label/taint edits cluster-wide), and
+    # `create pods/eviction` can't be name-scoped (permits evicting any pod in
+    # any namespace; PDBs bound the impact only where they exist). The role
+    # adds no RBAC-object or Secret access. Composes with the tier toggles:
+    # while owner=false this renders nothing, but it stays latent — re-enabling
+    # owner later activates it. See templates/cloud-rbac-node-ops.yaml.
+    nodeOps: false
 
 # MCP (Model Context Protocol) server for AI tools
 mcp:

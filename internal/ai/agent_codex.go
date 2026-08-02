@@ -18,13 +18,22 @@ import (
 //   - --sandbox read-only blocks the model's shell from network + filesystem
 //     writes (verified: no loopback, no kubectl), though it can still READ local
 //     files into context — disclosed to the user;
-//   - --ignore-user-config keeps the user's other MCP servers out of an isolated
+//   - --ignore-user-config keeps the user's other MCP servers out of a safeguarded
 //     run; cmd.Dir is an empty temp dir so it doesn't read the launch directory.
 type codexAgent struct{ bin string }
 
 func (a *codexAgent) Name() string { return "codex" }
 
+func (a *codexAgent) Path() string { return a.bin }
+
+func (a *codexAgent) SigninCmd() string { return "codex login" }
+
 func (a *codexAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(), error) {
+	switch s.profile {
+	case ExecutionProfileSafeguarded, ExecutionProfileFullLocal:
+	default:
+		return nil, nil, fmt.Errorf("ai: Codex does not support execution profile %q", s.profile)
+	}
 	// Codex has no system-prompt flag; the framing rides on the first turn's
 	// prompt (the resumed session already carries it).
 	prompt := s.prompt
@@ -33,11 +42,11 @@ func (a *codexAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func()
 	}
 	mcpCfg := fmt.Sprintf("mcp_servers.radar.url=%q", s.mcpURL)
 
-	// Always start from the base flags; isolation adds --ignore-user-config, an
-	// empty cwd, and a minimal env. "My setup" keeps the user's config (their other
+	// Always start from the base flags; safeguards add --ignore-user-config, an
+	// empty cwd, and a minimal env. Full-local keeps the user's config (their other
 	// MCP servers, guidelines), their full env, and their home cwd. The shell stays
 	// --sandbox read-only in BOTH modes — but the "cluster writes go only through
-	// Radar's read-only MCP" containment holds ONLY when isolated. In "my setup"
+	// Radar's read-only MCP" containment holds ONLY when safeguarded. In full-local
 	// the agent also gets the user's own MCP servers (possibly write/network/cloud
 	// capable) + local file reads: a deliberate trusted mode, not a contained one.
 	base := []string{"--json", "--skip-git-repo-check", "-c", mcpCfg}
@@ -50,7 +59,7 @@ func (a *codexAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func()
 	// only this cluster" guarantee. The diagnosis needs cluster data via MCP, not the
 	// web. (image_gen is also built in but is inert for k8s and can't be disabled.)
 	base = append(base, "-c", `web_search="disabled"`)
-	if s.isolated {
+	if s.profile == ExecutionProfileSafeguarded {
 		base = append(base, "--ignore-user-config")
 	}
 	if s.model != "" {
@@ -83,7 +92,7 @@ func (a *codexAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func()
 	cmd := exec.CommandContext(ctx, a.bin, args...)
 
 	cleanup := func() {}
-	if s.isolated {
+	if s.profile == ExecutionProfileSafeguarded {
 		// Empty working dir so the model's shell can't read radar's source / cwd.
 		dir, err := os.MkdirTemp("", "radar-codex-")
 		if err != nil {
@@ -93,7 +102,7 @@ func (a *codexAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func()
 		cmd.Dir = dir
 		cmd.Env = codexEnv()
 	}
-	// "My setup": inherit radar's cwd + full env so the user's auth/config/MCPs work.
+	// Full-local: inherit radar's cwd + full env so the user's auth/config/MCPs work.
 
 	return cmd, cleanup, nil
 }

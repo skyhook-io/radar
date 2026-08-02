@@ -1,0 +1,111 @@
+name: Release Image
+
+# Builds and pushes the multi-arch Radar container image using the EXACT same
+# procedure as the Release workflow's Docker Image job — goreleaser-built,
+# natively cross-compiled binaries copied into distroless via `--target release`
+# — but WITHOUT cutting a GitHub Release or publishing the Homebrew/Scoop/Krew/
+# desktop apps, and therefore WITHOUT triggering the in-app update notification
+# (the update check compares against GitHub Releases, and this creates none).
+#
+# Use this to ship a Radar image the Helm chart can pull (bump the chart's
+# appVersion to the version built here) without a public app release.
+#
+# The image is identical in construction to a `Release` build: same goreleaser
+# `builds:` section, same ldflags, same `--target release` stage. The only
+# difference from release.yml is `goreleaser build` (no publish) instead of
+# `goreleaser release`, and the app/Release steps are absent.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build, e.g. 1.9.0 (stamped into the binary and used as the image tag)'
+        required: true
+      push_latest:
+        description: 'Also move the :latest tag (leave off for out-of-band/patch images)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  DOCKER_REPO: ghcr.io/skyhook-io/radar
+
+jobs:
+  build:
+    name: Build & Push Image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # goreleaser derives the version from the git tag on HEAD. Create it
+      # locally (never pushed) so the binary stamps the requested version and no
+      # GitHub Release is cut — the v* tag that would trigger release.yml is not
+      # pushed to the remote.
+      - name: Create local version tag
+        run: git tag "v${{ github.event.inputs.version }}"
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      # `build` (not `release`) runs the identical builds: matrix — same native
+      # cross-compile, same ldflags, same embedded frontend via the before hooks
+      # — but publishes nothing (no Release, no Homebrew, no Scoop, no Krew).
+      - name: GoReleaser build (no publish)
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: latest
+          args: build --clean
+
+      - name: Prepare binaries
+        run: |
+          cp dist/radar_linux_amd64_v1/kubectl-radar radar-amd64
+          cp dist/radar_linux_arm64_v8.0/kubectl-radar radar-arm64
+          chmod +x radar-amd64 radar-arm64
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute Docker tags
+        id: tags
+        run: |
+          TAGS="${{ env.DOCKER_REPO }}:${{ github.event.inputs.version }}"
+          if [[ "${{ github.event.inputs.push_latest }}" == "true" ]]; then
+            TAGS="${TAGS},${{ env.DOCKER_REPO }}:latest"
+          fi
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+
+      # Same context, same target as release.yml's Docker Image job: the
+      # `release` stage only COPYs the pre-built radar-${TARGETARCH} binaries
+      # into distroless, so the multi-arch build needs no in-Docker compilation.
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          target: release
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}

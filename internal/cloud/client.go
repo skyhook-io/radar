@@ -26,6 +26,13 @@ type Config struct {
 	// e.g. wss://api.radarhq.io/agent
 	URL string
 
+	// InsecureSkipVerify disables TLS certificate verification on the wss
+	// tunnel. Intended only for trials against a self-hosted hub that serves a
+	// self-signed certificate: the connection stays encrypted but is not
+	// authenticated, so a network attacker could impersonate the hub. Leave
+	// false for any hub with a publicly trusted certificate.
+	InsecureSkipVerify bool
+
 	// Token is the cluster bearer token issued by the Cloud install wizard.
 	// Format: rhc_<random>.
 	Token string

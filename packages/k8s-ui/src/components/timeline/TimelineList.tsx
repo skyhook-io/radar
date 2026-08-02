@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
+import { useDebouncedValue } from '../../hooks/useDebouncedValue'
 import { PaneLoader } from '../ui/PaneLoader'
 import { Tooltip } from '../ui/Tooltip'
 import {
@@ -117,6 +118,10 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
   const [searchInternal, setSearchInternal] = useState('')
   const searchTerm = searchProp ?? searchInternal
   const setSearchTerm = onSearchChange ?? setSearchInternal
+  // Coalesce typing bursts: re-filtering the aggregated list per keystroke is
+  // what makes the search box feel dead on large timelines. Clearing flushes
+  // immediately.
+  const debouncedSearchTerm = useDebouncedValue(searchTerm, 300, (v) => v === '')
   const [activityFilterInternal, setActivityFilterInternal] = useState<ActivityFilterKey[]>(
     initialFilter && initialFilter !== 'all' ? [initialFilter] : [],
   )
@@ -174,10 +179,10 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
       if (!matchesActivityFilter(item, activityTypeFilter)) return false
       if (kindFilter.length > 0 && !kindFilter.includes(item.kind)) return false
       if (!showDeleted && item.eventType === 'delete') return false
-      if (!matchesTimelineSearch(item, searchTerm)) return false
+      if (!matchesTimelineSearch(item, debouncedSearchTerm)) return false
       return true
     })
-  }, [events, activityTypeFilter, kindFilter, searchTerm, showDeleted])
+  }, [events, activityTypeFilter, kindFilter, debouncedSearchTerm, showDeleted])
 
   // Aggregated event group type
   type AggregatedItem = {

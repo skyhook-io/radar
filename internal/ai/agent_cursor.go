@@ -7,10 +7,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
+	"time"
 )
 
 // cursorAgent drives the Cursor CLI (`cursor-agent -p`). Containment differs from
@@ -28,11 +32,24 @@ import (
 // is disclosed in the consent UI — this is a BYO "your own setup" mode, not a
 // hermetic one. Cursor's --resume is workspace-scoped, so every turn of a run must
 // share one workspace dir (RunManager supplies a stable per-run dir via turnSpec).
-type cursorAgent struct{ bin string }
+type cursorAgent struct {
+	bin string
+
+	trustMu    sync.Mutex
+	trustKnown bool
+	trust      bool
+}
 
 func (a *cursorAgent) Name() string { return "cursor-agent" }
 
+func (a *cursorAgent) Path() string { return a.bin }
+
+func (a *cursorAgent) SigninCmd() string { return "cursor-agent login" }
+
 func (a *cursorAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(), error) {
+	if s.profile != ExecutionProfileFullLocal {
+		return nil, nil, fmt.Errorf("ai: Cursor Agent does not support execution profile %q", s.profile)
+	}
 	// Cursor has no system-prompt flag; the framing rides on the first turn's
 	// prompt (the resumed session already carries it).
 	prompt := s.prompt
@@ -61,7 +78,14 @@ func (a *cursorAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(
 		"--workspace", workdir,
 		"--sandbox", "enabled", // sandbox Cursor's own shell/file tools; MCP calls run server-side in radar
 		"--approve-mcps", // auto-approve the radar server for this headless run
-		"--trust",        // headless: trust the workspace without an interactive prompt
+	}
+	trust, err := a.supportsTrust()
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	if trust {
+		args = append(args, "--trust")
 	}
 	if s.model != "" {
 		args = append(args, "--model", s.model) // free-form Cursor model slug; "" = the user's default
@@ -74,9 +98,36 @@ func (a *cursorAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(
 	cmd := exec.CommandContext(ctx, a.bin, args...)
 	cmd.Dir = workdir
 	// Inherit the full environment: Cursor's auth lives under ~/.cursor (and
-	// CURSOR_API_KEY) and it has no isolated mode, so a scrubbed env would break
-	// login. This is the BYO "your own setup" trust posture, like Codex "my setup".
+	// CURSOR_API_KEY) and it has no safeguarded mode, so a scrubbed env would
+	// break login. This is the full-local trust posture.
 	return cmd, cleanup, nil
+}
+
+func (a *cursorAgent) supportsTrust() (bool, error) {
+	a.trustMu.Lock()
+	defer a.trustMu.Unlock()
+	if a.trustKnown {
+		return a.trust, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, _ := exec.CommandContext(ctx, a.bin, "--help").CombinedOutput()
+	if ctx.Err() != nil {
+		return false, fmt.Errorf("ai: Cursor Agent capability probe timed out")
+	}
+	if len(bytes.TrimSpace(out)) == 0 {
+		return false, fmt.Errorf("ai: Cursor Agent capability probe returned no help output")
+	}
+	a.trust = cursorHelpSupportsTrust(string(out))
+	a.trustKnown = true
+	log.Printf("[ai] cursor-agent --trust supported=%v", a.trust)
+	return a.trust, nil
+}
+
+var cursorTrustFlag = regexp.MustCompile(`(?m)^[[:space:]]*(-[[:alnum:]],?[[:space:]]+)?--trust([[:space:],=]|$)`)
+
+func cursorHelpSupportsTrust(help string) bool {
+	return cursorTrustFlag.MatchString(help)
 }
 
 // writeCursorMCPConfig points Cursor at radar's MCP via the workspace-local config

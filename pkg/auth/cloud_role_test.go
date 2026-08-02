@@ -5,6 +5,27 @@ import (
 	"testing"
 )
 
+func TestCloudRoleFromGroupsRadarVocabulary(t *testing.T) {
+	cases := []struct {
+		name   string
+		groups []string
+		want   CloudRole
+	}{
+		{"radar canonical", []string{"radar:member", "radar:org:o1", "radar:user:u1"}, RoleMember},
+		{"dual-emit picks tier once", []string{"radar:viewer", "radar:org:o1", "cloud:viewer", "cloud:org:o1"}, RoleViewer},
+		{"legacy cloud only (old hub)", []string{"cloud:owner", "cloud:org:o1"}, RoleOwner},
+		{"idp groups are not tiers", []string{"radar:idp:owner", "radar:idp:member"}, RoleNone},
+		{"highest rank wins across vocabularies", []string{"cloud:viewer", "radar:owner"}, RoleOwner},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := CloudRoleFromGroups(tc.groups); got != tc.want {
+				t.Errorf("CloudRoleFromGroups(%v) = %q, want %q", tc.groups, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCloudRoleFromGroups(t *testing.T) {
 	cases := []struct {
 		name   string

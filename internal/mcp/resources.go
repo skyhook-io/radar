@@ -38,7 +38,7 @@ func registerResources(server *mcp.Server) {
 		&mcp.Resource{
 			URI:         "cluster://events",
 			Name:        "Recent Events",
-			Description: "Recent Kubernetes warning events, deduplicated and sorted by recency",
+			Description: "Recent Kubernetes warning events, deduplicated and sorted by recency. Capped at 50 groups — a full 50 may be truncated; use the get_events tool to narrow by namespace/kind/name or control the limit",
 			MIMEType:    "application/json",
 		},
 		handleResourceEvents,
@@ -128,12 +128,11 @@ func handleResourceEvents(ctx context.Context, req *mcp.ReadResourceRequest) (*m
 		}
 	}
 
-	deduplicated := aicontext.DeduplicateEvents(warnings)
-
-	// Cap at 50 events for the resource
-	if len(deduplicated) > 50 {
-		deduplicated = deduplicated[:50]
-	}
+	// 50 is this resource's real cap (the dedup helper used to truncate to
+	// 20 internally, making this a dead branch). The bare-array wire shape
+	// cannot carry a truncation marker — the resource description points
+	// consumers at get_events for narrowing; a full 50 may be truncated.
+	deduplicated, _ := aicontext.DeduplicateEventsN(warnings, 50)
 
 	data, _ := json.Marshal(deduplicated)
 	return textResource("cluster://events", string(data)), nil

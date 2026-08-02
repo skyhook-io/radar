@@ -6,6 +6,7 @@ import {
   RefreshCw,
   Pencil,
   Save,
+  Eye,
   XCircle,
   AlertTriangle,
 } from 'lucide-react'
@@ -13,6 +14,8 @@ import { Download } from 'lucide-react'
 import { stringify as yamlStringify } from 'yaml'
 import { CodeViewer } from '../ui/CodeViewer'
 import { YamlEditor } from '../ui/YamlEditor'
+import type { YamlSchemaLoader } from '../ui/YamlEditor'
+import { YamlReview, type YamlPreviewResult } from '../ui/YamlReview'
 import { Tooltip } from '../ui/Tooltip'
 import type { SelectedResource } from '../../types'
 import { resourceToYaml } from '../../utils/yaml'
@@ -40,20 +43,23 @@ export function SaveSuccessAnimation() {
 // ============================================================================
 
 // Get edit warning for resource types with limited editability
-function getEditWarning(kind: string): { message: string; tip: string; learnMoreUrl?: string } | null {
+function getEditWarning(
+  kind: string,
+): { message: string; tip: string; learnMoreUrl?: string } | null {
   const k = kind.toLowerCase()
   if (k === 'pods' || k === 'pod') {
     return {
       message: 'Pods have limited editability.',
       tip: 'Green highlighted lines can be changed. Edit the parent Deployment instead for other fields.',
-      learnMoreUrl: 'https://kubernetes.io/docs/concepts/workloads/pods/#pod-update-and-replacement'
+      learnMoreUrl:
+        'https://kubernetes.io/docs/concepts/workloads/pods/#pod-update-and-replacement',
     }
   }
   if (k === 'jobs' || k === 'job') {
     return {
       message: 'Jobs cannot be modified after creation.',
       tip: 'Delete and recreate the Job to make changes.',
-      learnMoreUrl: 'https://kubernetes.io/docs/concepts/workloads/controllers/job/'
+      learnMoreUrl: 'https://kubernetes.io/docs/concepts/workloads/controllers/job/',
     }
   }
   return null
@@ -77,7 +83,7 @@ function formatSaveError(error: string): { summary: string; details?: string } {
         const message = errorPart.slice(messageStart, messageEnd).trim()
         return {
           summary: `Cannot update ${target}: ${message}`,
-          details: error.length > 200 ? error : undefined
+          details: error.length > 200 ? error : undefined,
         }
       }
     }
@@ -87,7 +93,7 @@ function formatSaveError(error: string): { summary: string; details?: string } {
     if (summary) {
       return {
         summary,
-        details: error.length > 200 ? error : undefined
+        details: error.length > 200 ? error : undefined,
       }
     }
   }
@@ -95,7 +101,7 @@ function formatSaveError(error: string): { summary: string; details?: string } {
   if (error.length > 150) {
     return {
       summary: error.substring(0, 150) + '...',
-      details: error
+      details: error,
     }
   }
 
@@ -105,16 +111,28 @@ function formatSaveError(error: string): { summary: string; details?: string } {
 // Safe sessionStorage wrappers — storage can throw QuotaExceededError or be
 // blocked by browser security policies. Draft persistence is best-effort.
 function safeSessionGet(key: string): string | null {
-  try { return sessionStorage.getItem(key) } catch { return null }
+  try {
+    return sessionStorage.getItem(key)
+  } catch {
+    return null
+  }
 }
 function safeSessionSet(key: string, value: string): void {
-  try { sessionStorage.setItem(key, value) } catch { /* best-effort */ }
+  try {
+    sessionStorage.setItem(key, value)
+  } catch {
+    /* best-effort */
+  }
 }
 function safeSessionRemove(key: string): void {
-  try { sessionStorage.removeItem(key) } catch { /* best-effort */ }
+  try {
+    sessionStorage.removeItem(key)
+  } catch {
+    /* best-effort */
+  }
 }
 
-interface EditableYamlViewProps {
+export interface EditableYamlViewProps {
   resource: SelectedResource
   data: any
   onCopy: (text: string) => void
@@ -124,11 +142,32 @@ interface EditableYamlViewProps {
   /** Called after a successful save so the parent can refetch */
   onSaved?: () => void
   /** Save handler — injected by the platform wrapper */
-  onSave?: (params: { kind: string; namespace: string; name: string; yaml: string; force: boolean }) => Promise<void>
+  onSave?: (params: {
+    kind: string
+    namespace: string
+    name: string
+    yaml: string
+    force: boolean
+    reviewedResourceVersion?: string
+    reviewedContext?: string
+  }) => Promise<void>
   /** Whether a save is in progress */
   isSaving?: boolean
   /** Error message from the last save attempt */
   saveError?: string | null
+  onPreview?: (params: {
+    yaml: string
+    mode: 'update'
+    force: boolean
+    target: { kind: string; namespace: string; name: string }
+  }) => Promise<{
+    documents: YamlPreviewResult[]
+    nonAtomic: boolean
+    context?: string
+  }>
+  isPreviewing?: boolean
+  previewError?: string | null
+  schemaLoader?: YamlSchemaLoader
   /** Duplicate handler — opens create dialog with this resource's YAML */
   onDuplicate?: (params: { kind: string; namespace: string; name: string; yaml: string }) => void
   /**
@@ -138,7 +177,23 @@ interface EditableYamlViewProps {
   onDownload?: (content: string, mime: string, filename: string) => void
 }
 
-export function EditableYamlView({ resource, data, onCopy, copied, readOnly = false, onSaved, onSave, isSaving, saveError, onDuplicate, onDownload }: EditableYamlViewProps) {
+export function EditableYamlView({
+  resource,
+  data,
+  onCopy,
+  copied,
+  readOnly = false,
+  onSaved,
+  onSave,
+  isSaving,
+  saveError,
+  onPreview,
+  isPreviewing,
+  previewError,
+  schemaLoader,
+  onDuplicate,
+  onDownload,
+}: EditableYamlViewProps) {
   const draftKey = `radar_yaml_draft:${resource.kind}/${resource.namespace}/${resource.name}`
 
   // Restore draft from sessionStorage (e.g., after session-expiry redirect).
@@ -152,6 +207,14 @@ export function EditableYamlView({ resource, data, onCopy, copied, readOnly = fa
   // Default on: the editor resubmits the full live manifest, so an unforced
   // save would conflict on every field owned by Helm/Flux/Argo/a controller.
   const [force, setForce] = useState(true)
+  const [preview, setPreview] = useState<{
+    yaml: string
+    force: boolean
+    originalYaml: string
+    documents: YamlPreviewResult[]
+    nonAtomic: boolean
+    context?: string
+  } | null>(null)
 
   // Clean up restored draft flag
   useEffect(() => {
@@ -190,6 +253,7 @@ export function EditableYamlView({ resource, data, onCopy, copied, readOnly = fa
     if (readOnly) return
     setEditedYaml(resourceToYaml(data))
     setYamlErrors([])
+    setPreview(null)
     setIsEditing(true)
   }, [data, readOnly])
 
@@ -197,12 +261,34 @@ export function EditableYamlView({ resource, data, onCopy, copied, readOnly = fa
     setIsEditing(false)
     setEditedYaml('')
     setYamlErrors([])
+    setPreview(null)
   }, [])
 
   const handleSaveEdit = useCallback(async () => {
     if (yamlErrors.length > 0 || !onSave) return
 
     try {
+      if (onPreview) {
+        const result = await onPreview({
+          yaml: editedYaml,
+          mode: 'update',
+          force,
+          target: {
+            kind: resource.kind,
+            namespace: resource.namespace,
+            name: resource.name,
+          },
+        })
+        setPreview({
+          yaml: editedYaml,
+          force,
+          originalYaml: resourceToYaml(data),
+          documents: result.documents,
+          nonAtomic: result.nonAtomic,
+          context: result.context,
+        })
+        return
+      }
       await onSave({
         kind: resource.kind,
         namespace: resource.namespace,
@@ -216,7 +302,49 @@ export function EditableYamlView({ resource, data, onCopy, copied, readOnly = fa
     } catch {
       // Error handled by caller via saveError prop
     }
-  }, [onSave, resource, editedYaml, yamlErrors, onSaved, force])
+  }, [onSave, onPreview, resource, data, editedYaml, yamlErrors, onSaved, force])
+
+  const handleApplyReviewed = useCallback(async () => {
+    if (!preview || !onSave) return
+    try {
+      await onSave({
+        kind: resource.kind,
+        namespace: resource.namespace,
+        name: resource.name,
+        yaml: preview.yaml,
+        force: preview.force,
+        reviewedResourceVersion: preview.documents[0]?.reviewedResourceVersion,
+        reviewedContext: preview.context,
+      })
+      setPreview(null)
+      setIsEditing(false)
+      setEditedYaml('')
+      setTimeout(() => onSaved?.(), 1000)
+    } catch {
+      if (onPreview) {
+        try {
+          const refreshed = await onPreview({
+            yaml: preview.yaml,
+            mode: 'update',
+            force: preview.force,
+            target: {
+              kind: resource.kind,
+              namespace: resource.namespace,
+              name: resource.name,
+            },
+          })
+          setPreview({
+            ...preview,
+            documents: refreshed.documents,
+            nonAtomic: refreshed.nonAtomic,
+            context: refreshed.context,
+          })
+        } catch {
+          // Keep the last review visible when refresh is unavailable.
+        }
+      }
+    }
+  }, [preview, onSave, onPreview, resource, onSaved])
 
   const handleYamlValidate = useCallback((_isValid: boolean, errors: string[]) => {
     setYamlErrors(errors)
@@ -225,9 +353,24 @@ export function EditableYamlView({ resource, data, onCopy, copied, readOnly = fa
   const yamlContent = yamlStringify(data, { lineWidth: 0, indent: 2 })
   const editWarning = getEditWarning(resource.kind)
   const formattedError = saveError ? formatSaveError(saveError) : null
-  const isPending = isSaving ?? false
+  const isPending = (isSaving ?? false) || (isPreviewing ?? false)
 
   if (isEditing) {
+    if (preview) {
+      return (
+        <YamlReview
+          submittedYaml={preview.yaml}
+          originalYaml={preview.originalYaml}
+          documents={preview.documents}
+          nonAtomic={preview.nonAtomic}
+          force={preview.force}
+          isApplying={isSaving}
+          applyError={saveError}
+          onBack={() => setPreview(null)}
+          onApply={handleApplyReviewed}
+        />
+      )
+    }
     return (
       <div className="flex flex-col h-full">
         <div className="flex items-center justify-between px-4 py-2 border-b border-theme-border bg-theme-elevated/50">
@@ -249,10 +392,14 @@ export function EditableYamlView({ resource, data, onCopy, copied, readOnly = fa
                 <div className="space-y-1.5 max-w-[19rem]">
                   <p>Override field ownership (server-side apply).</p>
                   <p>
-                    <span className="font-medium text-theme-text-primary">On (default):</span> your edits overwrite fields owned by Helm/Flux/Argo/kubectl — but an active controller may reconcile them back on its next sync.
+                    <span className="font-medium text-theme-text-primary">On (default):</span> your
+                    edits overwrite fields owned by Helm/Flux/Argo/kubectl — but an active
+                    controller may reconcile them back on its next sync.
                   </p>
                   <p>
-                    <span className="font-medium text-theme-text-primary">Off:</span> if another manager owns a field you changed, the whole save is rejected with a conflict (nothing is applied).
+                    <span className="font-medium text-theme-text-primary">Off:</span> if another
+                    manager owns a field you changed, the whole save is rejected with a conflict
+                    (nothing is applied).
                   </p>
                 </div>
               }
@@ -276,10 +423,18 @@ export function EditableYamlView({ resource, data, onCopy, copied, readOnly = fa
             >
               {isPending ? (
                 <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              ) : onPreview ? (
+                <Eye className="w-3.5 h-3.5" />
               ) : (
                 <Save className="w-3.5 h-3.5" />
               )}
-              {isPending ? 'Saving...' : 'Save'}
+              {isPreviewing
+                ? 'Preparing review…'
+                : isSaving
+                  ? 'Saving…'
+                  : onPreview
+                    ? 'Review changes'
+                    : 'Save'}
             </button>
           </div>
         </div>
@@ -289,8 +444,12 @@ export function EditableYamlView({ resource, data, onCopy, copied, readOnly = fa
             <div className="flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-yellow-300 mt-0.5 shrink-0" />
               <div className="text-xs">
-                <span className="font-medium text-amber-700 dark:text-yellow-300">{editWarning.message}</span>
-                <span className="text-amber-600 dark:text-yellow-300/80 ml-1">{editWarning.tip}</span>
+                <span className="font-medium text-amber-700 dark:text-yellow-300">
+                  {editWarning.message}
+                </span>
+                <span className="text-amber-600 dark:text-yellow-300/80 ml-1">
+                  {editWarning.tip}
+                </span>
                 {editWarning.learnMoreUrl && (
                   <a
                     href={editWarning.learnMoreUrl}
@@ -319,14 +478,14 @@ export function EditableYamlView({ resource, data, onCopy, copied, readOnly = fa
           </div>
         )}
 
-        {formattedError && (
+        {(formattedError || previewError) && (
           <div className="px-4 py-2 bg-red-500/10 border-b border-red-300 dark:border-red-500/30">
             <div className="flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 text-red-600 dark:text-red-300 mt-0.5 shrink-0" />
               <div className="text-xs text-red-600 dark:text-red-300 flex-1">
-                <div className="font-medium">Save failed</div>
-                <div className="mt-1">{formattedError.summary}</div>
-                {formattedError.details && (
+                <div className="font-medium">{previewError ? 'Preview failed' : 'Save failed'}</div>
+                <div className="mt-1">{previewError || formattedError?.summary}</div>
+                {formattedError?.details && (
                   <button
                     onClick={() => setShowErrorDetails(!showErrorDetails)}
                     className="mt-1 text-red-500 dark:text-red-300 hover:text-red-700 dark:hover:text-red-200 underline"
@@ -334,7 +493,7 @@ export function EditableYamlView({ resource, data, onCopy, copied, readOnly = fa
                     {showErrorDetails ? 'Hide details' : 'Show details'}
                   </button>
                 )}
-                {showErrorDetails && formattedError.details && (
+                {showErrorDetails && formattedError?.details && (
                   <pre className="mt-2 p-2 bg-red-500/10 rounded text-[10px] whitespace-pre-wrap break-all max-h-40 overflow-auto">
                     {formattedError.details}
                   </pre>
@@ -349,6 +508,7 @@ export function EditableYamlView({ resource, data, onCopy, copied, readOnly = fa
             value={editedYaml}
             onChange={setEditedYaml}
             onValidate={handleYamlValidate}
+            schemaLoader={schemaLoader}
             height="100%"
             kind={resource.kind}
           />
@@ -376,7 +536,11 @@ export function EditableYamlView({ resource, data, onCopy, copied, readOnly = fa
             onClick={() => onCopy(yamlContent)}
             className="flex items-center gap-1 px-2 py-1 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
           >
-            {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
+            {copied ? (
+              <Check className="w-3.5 h-3.5 text-green-400" />
+            ) : (
+              <Copy className="w-3.5 h-3.5" />
+            )}
             Copy
           </button>
           <Tooltip content="Download manifest as YAML (server-generated fields stripped)">
@@ -391,7 +555,14 @@ export function EditableYamlView({ resource, data, onCopy, copied, readOnly = fa
           {onDuplicate && (
             <Tooltip content="Duplicate as new resource">
               <button
-                onClick={() => onDuplicate({ kind: resource.kind, namespace: resource.namespace, name: resource.name, yaml: yamlContent })}
+                onClick={() =>
+                  onDuplicate({
+                    kind: resource.kind,
+                    namespace: resource.namespace,
+                    name: resource.name,
+                    yaml: yamlContent,
+                  })
+                }
                 className="flex items-center gap-1 px-2 py-1 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
               >
                 <CopyPlus className="w-3.5 h-3.5" />

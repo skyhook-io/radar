@@ -1,9 +1,10 @@
-import React, { useState, useMemo, useEffect, useCallback, useRef, useContext, useId } from 'react'
+import React, { useState, useMemo, useEffect, useCallback, useDeferredValue, useRef, useContext, useId } from 'react'
 import { TableVirtuoso, type TableVirtuosoHandle } from 'react-virtuoso'
+import { useDebouncedValue } from '../../hooks/useDebouncedValue'
 import { PaneLoader } from '../ui/PaneLoader'
 import { RestrictedState } from '../ui/RestrictedState'
 import { Input } from '../ui/Input'
-import type { TopPodMetrics, TopNodeMetrics } from '../../types'
+import type { TopPodMetrics, TopNodeMetrics, ContainerResourceMetrics } from '../../types'
 import {
   Search,
   RefreshCw,
@@ -129,16 +130,18 @@ import {
   getCellFilterValue,
   parseColumnFilters,
   serializeColumnFilters,
+  parseColumnFilterExcludes,
   podMatchesProblemCategory,
   SEVERITY_DOT_COLOR,
 } from './resource-utils'
-import { SEVERITY_BADGE, EVENT_TYPE_COLORS, SEVERITY_TEXT } from '../../utils/badge-colors'
+import { SEVERITY_BADGE, EVENT_TYPE_COLORS } from '../../utils/badge-colors'
 import { pluralize } from '../../utils/pluralize'
 import { getPodGpuCount, getNodeGpuCount } from '../../utils/extended-resources'
 import { type CustomColumnDef, type CustomColumnSource, customColumnKey, readCustomColumnValue, sanitizeCustomColumnDefs } from '../../utils/custom-columns'
 import { FreshnessControl, type FreshnessConnection } from '../ui/FreshnessControl'
 import { Tooltip } from '../ui/Tooltip'
 import { AuditBadgeTooltip, type AuditBadgeMessage } from '../audit/AuditBadgeTooltip'
+import { SEVERITY_TEXT_CLASS } from '../checks/severity'
 // CRD-specific cell components (extracted)
 import { GitRepositoryCell, OCIRepositoryCell, HelmRepositoryCell, KustomizationCell, FluxHelmReleaseCell, FluxAlertCell } from './renderers/flux-cells'
 import { ArgoApplicationCell, ArgoApplicationSetCell, ArgoAppProjectCell } from './renderers/argo-cells'
@@ -1828,8 +1831,8 @@ interface ResourcesViewData {
   onNavigate?: (path: string, options?: { replace?: boolean }) => void
   certExpiry?: Record<string, { expired?: boolean; daysLeft: number }>
   certExpiryError?: boolean
-  // Cluster Audit findings for the listed kind, keyed by "namespace/name" (the
-  // list shows one kind at a time, so ns/name is unambiguous). Host-injected.
+  /** Cluster Audit findings keyed by "namespace/name". Raw compatibility
+   *  counts render danger as High and warning as Medium. */
   auditBadges?: Record<string, { danger: number; warning: number; messages?: AuditBadgeMessage[] }>
   onOpenLogs?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string }) => void
   onOpenWorkloadLogs?: (params: { namespace: string; workloadKind: string; workloadName: string }) => void
@@ -1888,7 +1891,8 @@ interface ResourcesViewProps {
   topNodeMetrics?: TopNodeMetrics[]
   certExpiry?: Record<string, { expired?: boolean; daysLeft: number }>
   certExpiryError?: boolean
-  // Cluster Audit findings for the selected kind, keyed by "namespace/name".
+  /** Cluster Audit findings keyed by "namespace/name". Raw compatibility
+   *  counts render danger as High and warning as Medium. */
   auditBadges?: Record<string, { danger: number; warning: number; messages?: AuditBadgeMessage[] }>
   // Pinned kinds
   pinned?: Array<{ name: string; kind: string; group: string }>
@@ -2096,11 +2100,14 @@ export function deriveSidebarResourceCounts(
 function getInitialFiltersFromURL() {
   const params = new URLSearchParams(window.location.search)
   // Parse generic column filters
-  const columnFilters = parseColumnFilters(params.get('filters'))
+  const filtersParam = params.get('filters')
+  const columnFilters = parseColumnFilters(filtersParam)
+  const columnFilterExcludes = parseColumnFilterExcludes(filtersParam)
   const result = {
     search: params.get('search') || '',
     regex: params.get('regex') === 'true',
     columnFilters,
+    columnFilterExcludes,
     problemFilters: params.get('problems')?.split(',').filter(Boolean) || [],
     showInactive: params.get('showInactive') === 'true',
     labelSelector: params.get('labels') || '', // e.g., "app=caretta,version=v1"
@@ -2179,11 +2186,21 @@ export function ResourcesView({
     setBulkForceDelete(false)
   }, [selectedKind.name, selectedKind.group]) // eslint-disable-line react-hooks/exhaustive-deps
   const [searchTerm, setSearchTerm] = useState(initialFilters.search)
+  // Typing must never wait on the list or the router. The input renders raw
+  // searchTerm; filtering consumes the deferred copy (React yields to keep
+  // keystrokes responsive on large lists); the URL write consumes the
+  // debounced copy (one history entry per pause, not one per keystroke —
+  // per-keystroke navigations re-render the whole route tree and, when
+  // renders lag, the URL→state sync effect could revert in-flight input).
+  // Clearing skips the debounce so the × cleans the URL immediately.
+  const deferredSearchTerm = useDeferredValue(searchTerm)
+  const debouncedSearchTerm = useDebouncedValue(searchTerm, 300, (v) => v === '')
   const [regexMode, setRegexMode] = useState(initialFilters.regex)
   const [sortColumn, setSortColumn] = useState<string | null>(null)
   const [sortDirection, setSortDirection] = useState<SortDirection>(null)
   // Filter state
   const [columnFilters, setColumnFilters] = useState<Record<string, string[]>>(initialFilters.columnFilters)
+  const [columnFilterExcludes, setColumnFilterExcludes] = useState<Record<string, boolean>>(initialFilters.columnFilterExcludes)
   const [problemFilters, setProblemFilters] = useState<string[]>(initialFilters.problemFilters)
   const [openColumnFilter, setOpenColumnFilter] = useState<string | null>(null)
   const [columnFilterSearch, setColumnFilterSearch] = useState('')
@@ -2233,6 +2250,25 @@ export function ResourcesView({
       delete next[key]
       return next
     })
+    setColumnFilterExcludes(prev => {
+      if (!prev[key]) return prev
+      const next = { ...prev }
+      delete next[key]
+      return next
+    })
+  }, [])
+
+  const setColumnFilterMode = useCallback((key: string, exclude: boolean) => {
+    setColumnFilterExcludes(prev => {
+      if (Boolean(prev[key]) === exclude) return prev
+      const next = { ...prev }
+      if (exclude) {
+        next[key] = true
+      } else {
+        delete next[key]
+      }
+      return next
+    })
   }, [])
 
   const toggleColumnFilterValue = useCallback((key: string, value: string) => {
@@ -2244,6 +2280,14 @@ export function ResourcesView({
         const updated = current.filter(v => v !== value)
         if (updated.length === 0) {
           delete next[key]
+          // The operator is meaningless with no selected values — drop it so a
+          // stale exclude flag doesn't linger in state or re-arm on reselect.
+          setColumnFilterExcludes(inv => {
+            if (!inv[key]) return inv
+            const nextInv = { ...inv }
+            delete nextInv[key]
+            return nextInv
+          })
         } else {
           next[key] = updated
         }
@@ -2541,6 +2585,12 @@ export function ResourcesView({
     // table keeps filtering (and syncing to the URL) on a key with no column
     // and no UI to clear it, and sort silently references a gone column.
     setColumnFilters(prev => {
+      if (!(key in prev)) return prev
+      const next = { ...prev }
+      delete next[key]
+      return next
+    })
+    setColumnFilterExcludes(prev => {
       if (!(key in prev)) return prev
       const next = { ...prev }
       delete next[key]
@@ -2923,8 +2973,17 @@ export function ResourcesView({
       setOwnerName(newFilters.ownerName)
     }
 
-    // Update search if it changed
-    if (newFilters.search !== searchTerm) {
+    // Update search if it changed — unless this navigation is the echo of our
+    // own debounced URL write (its search equals the value we just wrote), or
+    // the user is mid-typing in the box. During typing the URL intentionally
+    // lags the input, so an un-guarded sync here would revert in-flight
+    // keystrokes whenever a write echo lands mid-burst. Genuinely external
+    // navigations (deep links, back/forward) carry a different search value
+    // and still sync.
+    const isOwnWriteEcho =
+      newFilters.search === debouncedSearchTerm ||
+      (typeof document !== 'undefined' && document.activeElement === searchInputRef.current)
+    if (!isOwnWriteEcho && newFilters.search !== searchTerm) {
       setSearchTerm(newFilters.search)
     }
 
@@ -2938,6 +2997,12 @@ export function ResourcesView({
     const currentFiltersStr = serializeColumnFilters(columnFilters)
     if (newFiltersStr !== currentFiltersStr) {
       setColumnFilters(newFilters.columnFilters)
+    }
+
+    // Update column filter operators (include/exclude) if changed
+    const excludeKeys = (m: Record<string, boolean>) => Object.keys(m).filter(k => m[k]).sort().join(',')
+    if (excludeKeys(newFilters.columnFilterExcludes) !== excludeKeys(columnFilterExcludes)) {
+      setColumnFilterExcludes(newFilters.columnFilterExcludes)
     }
 
     // Reset the flag after a tick to allow normal URL updates
@@ -2965,6 +3030,7 @@ export function ResourcesView({
     search: string,
     regex: boolean,
     colFilters: Record<string, string[]>,
+    colExcludes: Record<string, boolean>,
     problems: string[],
     showInactive: boolean,
     resourceNs?: string,
@@ -2991,8 +3057,13 @@ export function ResourcesView({
     } else {
       params.delete('regex')
     }
-    // Write column filters as `filters` param; remove legacy `status` param
-    const filtersStr = serializeColumnFilters(colFilters)
+    // Write column filters as `filters` param; the exclude operator is folded
+    // into each column entry, so it can never drift from the values it negates.
+    // Guard against a stale exclude flag on a column with no active values.
+    const activeExcludes = Object.fromEntries(
+      Object.entries(colExcludes).filter(([k, on]) => on && (colFilters[k]?.length ?? 0) > 0)
+    )
+    const filtersStr = serializeColumnFilters(colFilters, activeExcludes)
     if (filtersStr) {
       params.set('filters', filtersStr)
     } else {
@@ -3054,6 +3125,7 @@ export function ResourcesView({
     setSearchTerm('')
     setRegexMode(false)
     setColumnFilters({})
+    setColumnFilterExcludes({})
     setProblemFilters([])
     setLabelSelector('')
     setOwnerKind('')
@@ -3120,8 +3192,8 @@ export function ResourcesView({
     shouldPushHistory.current = false
     prevSelectedResourceRef.current = current
 
-    updateURL(selectedKind, searchTerm, regexMode, columnFilters, problemFilters, showInactiveReplicaSets, selectedResource?.namespace, selectedResource?.name, pushHistory)
-  }, [selectedKind, searchTerm, regexMode, columnFilters, problemFilters, showInactiveReplicaSets, selectedResource, updateURL, basePath, locationPathname])
+    updateURL(selectedKind, debouncedSearchTerm, regexMode, columnFilters, columnFilterExcludes, problemFilters, showInactiveReplicaSets, selectedResource?.namespace, selectedResource?.name, pushHistory)
+  }, [selectedKind, debouncedSearchTerm, regexMode, columnFilters, columnFilterExcludes, problemFilters, showInactiveReplicaSets, selectedResource, updateURL, basePath, locationPathname])
 
   // Handle resource click from URL on mount
   useEffect(() => {
@@ -3421,6 +3493,7 @@ export function ResourcesView({
     setOpenColumnFilter(null)
     if (!isSyncingFromURL.current) {
       setColumnFilters({})
+      setColumnFilterExcludes({})
     }
     setProblemFilters([])
   }, [selectedKind.name])
@@ -3551,13 +3624,13 @@ export function ResourcesView({
   // rows shown) rather than zero results, so the table doesn't flash empty
   // while the user is mid-typing a pattern.
   const searchRegex = useMemo<{ re: RegExp | null; error: string | null }>(() => {
-    if (!regexMode || !searchTerm) return { re: null, error: null }
+    if (!regexMode || !deferredSearchTerm) return { re: null, error: null }
     try {
-      return { re: new RegExp(searchTerm, 'i'), error: null }
+      return { re: new RegExp(deferredSearchTerm, 'i'), error: null }
     } catch (e) {
       return { re: null, error: e instanceof Error ? e.message : 'Invalid regex' }
     }
-  }, [regexMode, searchTerm])
+  }, [regexMode, deferredSearchTerm])
 
   // Filter resources by search term, status, problems, and sort
   const filteredResources = useMemo(() => {
@@ -3566,7 +3639,7 @@ export function ResourcesView({
     let result = resources
 
     // Apply search filter
-    if (searchTerm) {
+    if (deferredSearchTerm) {
       if (regexMode) {
         const re = searchRegex.re
         if (re) {
@@ -3576,7 +3649,7 @@ export function ResourcesView({
           )
         }
       } else {
-        const term = searchTerm.toLowerCase()
+        const term = deferredSearchTerm.toLowerCase()
         result = result.filter((r: any) =>
           r.metadata?.name?.toLowerCase().includes(term) ||
           r.metadata?.namespace?.toLowerCase().includes(term)
@@ -3594,7 +3667,8 @@ export function ResourcesView({
         activeColFilters.every(([col, vals]) => {
           const extra = extraColumnsByKey.get(col)
           const cellVal = extra?.getFilterValue ? extra.getFilterValue(r) : getCellFilterValue(r, col, kindLower)
-          return vals.includes(cellVal)
+          const match = vals.includes(cellVal)
+          return columnFilterExcludes[col] ? !match : match
         })
       )
     }
@@ -3737,7 +3811,7 @@ export function ResourcesView({
     }
 
     return result
-  }, [resources, searchTerm, regexMode, searchRegex, columnFilters, problemFilters, showInactiveReplicaSets, labelSelector, ownerKind, ownerName, selectedKind.name, sortColumn, sortDirection, getSortValue, extraColumnsByKey, podMatchesProblemFilter])
+  }, [resources, deferredSearchTerm, regexMode, searchRegex, columnFilters, columnFilterExcludes, problemFilters, showInactiveReplicaSets, labelSelector, ownerKind, ownerName, selectedKind.name, sortColumn, sortDirection, getSortValue, extraColumnsByKey, podMatchesProblemFilter])
 
   // For nodes table: compute the majority minor version so outliers can be highlighted
   const majorityNodeMinorVersion = useMemo(() => {
@@ -3863,6 +3937,16 @@ export function ResourcesView({
   }, [allVisibleChecked, filteredResources, getResourceKey])
 
   const isCheckboxMode = canBulkSelect && bulkMode
+
+  // Stable row handlers so the memoized ResourceRowCells skips re-rendering
+  // rows whose data didn't change on a refetch (React Query's structural
+  // sharing keeps unchanged resources referentially identical).
+  const handleRowClick = useCallback((resource: any, isSelected: boolean) => {
+    if (compareMode) toggleComparePick(resource)
+    else if (isCheckboxMode) toggleChecked(resource)
+    else selectResource(resource, isSelected)
+  }, [compareMode, isCheckboxMode, toggleComparePick, toggleChecked, selectResource])
+  const handleRowMouseEnter = useCallback(() => setHighlightedIndex(-1), [])
 
   // Filter columns by visibility
   const columns = useMemo(() => {
@@ -4689,7 +4773,7 @@ export function ResourcesView({
                         className="flex items-center gap-1 px-2 py-1 text-xs selection selection-text rounded-md hover:selection-strong transition-colors"
                       >
                         <ListFilter className="w-3 h-3" />
-                        <span>{key}: {vals.join(', ')}</span>
+                        <span>{key}: {columnFilterExcludes[key] ? 'not ' : ''}{vals.join(', ')}</span>
                         <X className="w-3 h-3" />
                       </button>
                     ))}
@@ -4827,7 +4911,14 @@ export function ResourcesView({
                                 )}
                               >
                                 <ListFilter className="w-3 h-3" />
-                                {hasActiveFilter && <span className="text-[10px] leading-none font-semibold">{activeFilterValues.length}</span>}
+                                {hasActiveFilter && (
+                                  <span
+                                    className="text-[10px] leading-none font-semibold"
+                                    aria-label={`${activeFilterValues.length} ${columnFilterExcludes[col.key] ? 'excluded' : 'included'} value${activeFilterValues.length === 1 ? '' : 's'}`}
+                                  >
+                                    {columnFilterExcludes[col.key] ? `≠ ${activeFilterValues.length}` : activeFilterValues.length}
+                                  </span>
+                                )}
                               </button>
                               {hasActiveFilter && (
                                 <button
@@ -4861,6 +4952,34 @@ export function ResourcesView({
                               )}
                               onClick={(e) => e.stopPropagation()}
                             >
+                              <div className="flex items-center gap-1 p-1.5 border-b border-theme-border" role="group" aria-label={`${col.label} filter mode`}>
+                                <button
+                                  onClick={() => setColumnFilterMode(col.key, false)}
+                                  aria-pressed={!columnFilterExcludes[col.key]}
+                                  className={clsx(
+                                    'flex-1 px-2 py-1 text-xs rounded transition-colors',
+                                    !columnFilterExcludes[col.key]
+                                      ? 'selection-strong selection-text'
+                                      : 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary'
+                                  )}
+                                  title="Show rows matching the selected values"
+                                >
+                                  Include
+                                </button>
+                                <button
+                                  onClick={() => setColumnFilterMode(col.key, true)}
+                                  aria-pressed={Boolean(columnFilterExcludes[col.key])}
+                                  className={clsx(
+                                    'flex-1 px-2 py-1 text-xs rounded transition-colors',
+                                    columnFilterExcludes[col.key]
+                                      ? 'selection-strong selection-text'
+                                      : 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary'
+                                  )}
+                                  title="Show rows that do NOT match the selected values"
+                                >
+                                  Exclude
+                                </button>
+                              </div>
                               {values.length > 5 ? (
                                 <div className="flex items-center gap-2 p-2 border-b border-theme-border">
                                   <div className="relative flex-1">
@@ -4955,12 +5074,12 @@ export function ResourcesView({
                     isChecked={checkedResources.has(resourceKey)}
                     showCheckbox={isCheckboxMode}
                     majorityNodeMinorVersion={majorityNodeMinorVersion}
-                    onClick={() => compareMode ? toggleComparePick(resource) : isCheckboxMode ? toggleChecked(resource) : selectResource(resource, isSelected)}
-                    onMouseEnter={() => setHighlightedIndex(-1)}
+                    onRowClick={handleRowClick}
+                    onRowMouseEnter={handleRowMouseEnter}
                     compareMode={compareMode}
                     comparePickIndex={pickIdx}
                     rowHref={rowHrefFor?.(resource)}
-                    onCheckToggle={() => toggleChecked(resource)}
+                    onRowCheckToggle={toggleChecked}
                   />
                 )
               }}
@@ -5110,8 +5229,11 @@ interface ResourceRowCellsProps {
   isChecked?: boolean
   showCheckbox?: boolean
   majorityNodeMinorVersion?: string
-  onClick?: () => void
-  onMouseEnter?: () => void
+  // Row callbacks receive the resource so the parent can pass referentially
+  // stable handlers — per-row closures would defeat React.memo and re-render
+  // every visible row on each SSE-driven refetch.
+  onRowClick?: (resource: any, isSelected: boolean) => void
+  onRowMouseEnter?: () => void
   compareMode?: boolean
   /** -1 when not picked; 0 = pick A; 1 = pick B. */
   comparePickIndex?: number
@@ -5119,7 +5241,7 @@ interface ResourceRowCellsProps {
    *  data cells drop their click handlers. The compare-mode chip column
    *  is unaffected (still toggles picks). */
   rowHref?: string
-  onCheckToggle?: () => void
+  onRowCheckToggle?: (resource: any) => void
 }
 
 function rowHighlightClass(
@@ -5141,9 +5263,11 @@ function rowHighlightClass(
   return 'group-hover/row:bg-theme-surface/50'
 }
 
-function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, hasSpacerColumn, isSelected, isHighlighted, isChecked, showCheckbox, majorityNodeMinorVersion, onClick, onMouseEnter, compareMode, comparePickIndex = -1, rowHref, onCheckToggle }: ResourceRowCellsProps) {
+const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, hasSpacerColumn, isSelected, isHighlighted, isChecked, showCheckbox, majorityNodeMinorVersion, onRowClick, onRowMouseEnter, compareMode, comparePickIndex = -1, rowHref, onRowCheckToggle }: ResourceRowCellsProps) {
   const rowHighlight = rowHighlightClass(compareMode, comparePickIndex, isSelected, isHighlighted, isChecked)
   const pickedSide = comparePickIndex === 0 ? 'a' : comparePickIndex === 1 ? 'b' : null
+  const onClick = onRowClick ? () => onRowClick(resource, !!isSelected) : undefined
+  const onMouseEnter = onRowMouseEnter
   // When the host supplies an anchor, drop per-cell onClick for the data
   // columns: the anchor is the only navigation surface. The compare-mode
   // chip column keeps its onClick so pick toggling still works.
@@ -5178,7 +5302,7 @@ function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, h
       {showCheckbox && (
         <td
           className={clsx('border-b-subtle text-center px-0 py-3 w-10 cursor-pointer transition-colors', rowHighlight)}
-          onClick={(e) => { e.stopPropagation(); onCheckToggle?.() }}
+          onClick={(e) => { e.stopPropagation(); onRowCheckToggle?.(resource) }}
         >
           <input
             type="checkbox"
@@ -5214,7 +5338,7 @@ function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, h
       {hasSpacerColumn && <td className="border-b-subtle p-0" />}
     </>
   )
-}
+})
 
 const VirtuosoTableRow = React.forwardRef<HTMLTableRowElement, React.HTMLAttributes<HTMLTableRowElement>>(
   function VirtuosoTableRow(props, ref) {
@@ -5293,8 +5417,8 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
         {auditTotal > 0 && audit && (
           <Tooltip content={audit.messages && audit.messages.length > 0
             ? <AuditBadgeTooltip messages={audit.messages} />
-            : `${auditTotal} audit ${auditTotal === 1 ? 'finding' : 'findings'}${audit.danger > 0 ? ` · ${audit.danger} danger` : ''}`}>
-            <span className={clsx('shrink-0 inline-flex items-center gap-0.5 text-[10px] font-medium cursor-help', audit.danger > 0 ? SEVERITY_TEXT.error : SEVERITY_TEXT.warning)}>
+            : `${auditTotal} audit ${auditTotal === 1 ? 'finding' : 'findings'}${audit.danger > 0 ? ` · ${audit.danger} high` : ''}${audit.warning > 0 ? ` · ${audit.warning} medium` : ''}`}>
+            <span className={clsx('shrink-0 inline-flex items-center gap-0.5 text-[10px] font-medium cursor-help', audit.danger > 0 ? SEVERITY_TEXT_CLASS.high : SEVERITY_TEXT_CLASS.medium)}>
               <AlertTriangle className="w-3 h-3" />
               {auditTotal}
             </span>
@@ -5918,11 +6042,17 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
           <button
             onClick={(e) => {
               e.stopPropagation()
-              // Merge node filter into existing column filters via URL
+              // Merge node filter into existing column filters via URL,
+              // preserving any exclude operators already set on other columns.
               const params = new URLSearchParams(window.location.search)
               const existing = parseColumnFilters(params.get('filters'))
+              const existingExcludes = parseColumnFilterExcludes(params.get('filters'))
               existing['node'] = [nodeVal]
-              params.set('filters', serializeColumnFilters(existing))
+              // Clicking a node means "show pods on this node", so force the
+              // node column back to include mode even if it was previously
+              // set to exclude — otherwise the shortcut would hide those pods.
+              delete existingExcludes['node']
+              params.set('filters', serializeColumnFilters(existing, existingExcludes))
               navigate?.(`/resources/pods?${params.toString()}`)
             }}
             className="text-sm text-blue-400 hover:text-blue-300 hover:underline truncate block text-left"
@@ -5936,27 +6066,91 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
       const ip = resource.status?.podIP || '-'
       return <span className="text-sm text-theme-text-secondary font-mono">{ip}</span>
     }
-    case 'cpu': {
-      const key = `${resource.metadata?.namespace}/${resource.metadata?.name}`
-      const m = metrics.pods.get(key)
-      if (!m || m.cpu === 0) return <span className="text-sm text-theme-text-tertiary">-</span>
-      const denom = m.cpuLimit || m.cpuRequest
-      if (!denom) return <span className="text-sm text-theme-text-secondary font-mono">{formatCPU(m.cpu)}</span>
-      const pct = (m.cpu / denom) * 100
-      const marker = m.cpuLimit > 0 && m.cpuRequest > 0 ? (m.cpuRequest / m.cpuLimit) * 100 : undefined
-      const tip = buildResourceTooltip('CPU', m.cpu, m.cpuRequest, m.cpuLimit, formatCPU)
-      return <ResourceBar used={formatCPU(m.cpu)} total={formatCPU(denom)} percent={pct} colorScheme={getBulletBarScheme(pct, marker)} markerPercent={marker} tooltip={tip} />
-    }
+    case 'cpu':
     case 'memory': {
+      const kind = column as 'cpu' | 'memory'
+      const isCPU = kind === 'cpu'
       const key = `${resource.metadata?.namespace}/${resource.metadata?.name}`
       const m = metrics.pods.get(key)
-      if (!m || m.memory === 0) return <span className="text-sm text-theme-text-tertiary">-</span>
-      const denom = m.memoryLimit || m.memoryRequest
-      if (!denom) return <span className="text-sm text-theme-text-secondary font-mono">{formatMemoryShort(m.memory)}</span>
-      const pct = (m.memory / denom) * 100
-      const marker = m.memoryLimit > 0 && m.memoryRequest > 0 ? (m.memoryRequest / m.memoryLimit) * 100 : undefined
-      const tip = buildResourceTooltip('Memory', m.memory, m.memoryRequest, m.memoryLimit, formatMemoryShort)
-      return <ResourceBar used={formatMemoryShort(m.memory)} total={formatMemoryShort(denom)} percent={pct} colorScheme={getBulletBarScheme(pct, marker)} markerPercent={marker} tooltip={tip} />
+      if (!m) return <span className="text-sm text-theme-text-tertiary">-</span>
+      const label = isCPU ? 'CPU' : 'Memory'
+      const format = isCPU ? formatCPU : formatMemoryShort
+
+      // Multi-container pods carry a per-container breakdown; single-container
+      // pods fall back to the (union-summed) pod-level fields as one synthetic
+      // container so the rest of the logic is uniform.
+      const list: ContainerResourceMetrics[] = (m.containers && m.containers.length > 0)
+        ? m.containers
+        : [{
+            name: resource.spec?.containers?.[0]?.name ?? resource.metadata?.name ?? '',
+            cpu: m.cpu, cpuRequest: m.cpuRequest, cpuLimit: m.cpuLimit,
+            memory: m.memory, memoryRequest: m.memoryRequest, memoryLimit: m.memoryLimit,
+          }]
+
+      const { mode, totalUsage, denom, markerPct, unlimitedCount } = podAggregate(list, kind)
+      if (totalUsage === 0) return <span className="text-sm text-theme-text-tertiary">-</span>
+
+      // Pod-vs-node context: how full the pod's node is (the risk signal) and
+      // how much of it this pod takes. Only when node metrics are loaded.
+      const nodeName = resource.spec?.nodeName as string | undefined
+      const node = nodeName ? metrics.nodes.get(nodeName) : undefined
+      const nodeAlloc = node ? (isCPU ? node.cpuAllocatable : node.memoryAllocatable) : 0
+      const nodeUsage = node ? (isCPU ? node.cpu : node.memory) : 0
+      // Zero usage means metrics-server has no sample for the node (down, or not
+      // yet scraped) — the same "no data" NodeCell renders blank — so skip the
+      // line rather than assert a misleading "0% used" that reads as safe.
+      const nodeCtx = node && nodeAlloc > 0 && nodeUsage > 0
+        ? {
+            name: nodeName!,
+            usedPct: (nodeUsage / nodeAlloc) * 100,
+            podSharePct: (totalUsage / nodeAlloc) * 100,
+          }
+        : undefined
+
+      const tip = buildContainerResourceTooltip(label, list, kind, format, nodeCtx)
+
+      // Every container is limited → aggregate bar against the summed limit; a
+      // real pod-level ceiling, so it may go red.
+      if (mode === 'limit') {
+        const pct = denom > 0 ? (totalUsage / denom) * 100 : 0
+        return (
+          <ResourceBar
+            used={format(totalUsage)}
+            total={format(denom)}
+            percent={pct}
+            colorScheme={getBulletBarScheme(pct, markerPct)}
+            markerPercent={markerPct}
+            tooltip={tip}
+          />
+        )
+      }
+
+      // No limits but some requests → neutral bar against the summed request
+      // (no ceiling → never red), no marker.
+      if (mode === 'request') {
+        const pct = denom > 0 ? (totalUsage / denom) * 100 : 0
+        return (
+          <ResourceBar
+            used={format(totalUsage)}
+            total={format(denom)}
+            percent={pct}
+            colorScheme="quiet"
+            tooltip={tip}
+          />
+        )
+      }
+
+      // partial (some limited, some not — the sum is not a real ceiling) or none
+      // (nothing set) → plain usage number plus a faint tag.
+      const tag = mode === 'partial' ? `${unlimitedCount} unbounded` : 'no limit'
+      return (
+        <Tooltip content={tip} delay={200} position="top" wrapperClassName="w-full min-w-0">
+          <span className="inline-flex items-center gap-1.5 min-w-0">
+            <span className="text-sm text-theme-text-secondary font-mono">{format(totalUsage)}</span>
+            <span className="text-[10px] text-theme-text-tertiary shrink-0">{tag}</span>
+          </span>
+        </Tooltip>
+      )
     }
     case 'gpu': {
       const count = getPodGpuCount(resource)
@@ -6171,7 +6365,7 @@ function ServiceCell({ resource, column }: { resource: any; column: string }) {
       const flagged = auditBadges?.[`${meta.namespace || ''}/${meta.name}`]
       if (flagged && flagged.danger + flagged.warning > 0) {
         return (
-          <span className={clsx('badge', flagged.danger > 0 ? 'status-unhealthy' : 'status-degraded')}>
+          <span className={clsx('badge', flagged.danger > 0 ? 'status-alert' : 'status-degraded')}>
             No endpoints
           </span>
         )
@@ -6479,65 +6673,176 @@ function getBulletBarScheme(_usagePct: number, _markerPct: number | undefined): 
   return 'utilization'
 }
 
-function buildResourceTooltip(
-  type: 'CPU' | 'Memory',
-  usage: number,
-  request: number,
-  limit: number,
-  formatFn: (n: number) => string,
-) {
-  const isCPU = type === 'CPU'
+// Max per-container rows shown in the compact cell tooltip before collapsing
+// the tail into a "+N more" line.
+const CONTAINER_TOOLTIP_CAP = 3
 
-  let guidance: string
-  if (limit > 0 && request > 0) {
-    const pctOfLimit = (usage / limit) * 100
-    if (pctOfLimit > 90) {
-      guidance = isCPU
-        ? 'Near the limit — CPU may be throttled'
-        : 'Near the limit — at risk of OOM kill'
-    } else if (usage > request) {
-      guidance = 'Exceeds request — consider raising it if sustained'
-    } else {
-      guidance = 'Below request — healthy headroom'
-    }
-  } else if (limit > 0) {
-    const pctOfLimit = (usage / limit) * 100
-    if (pctOfLimit > 90) {
-      guidance = isCPU
-        ? 'Near the limit — CPU may be throttled'
-        : 'Near the limit — at risk of OOM kill'
-    } else {
-      guidance = 'No request set — scheduling may be suboptimal'
-    }
+// Per-container resource reading. The yardstick is the container's own limit
+// when set, otherwise its request. A limit means an enforced ceiling (usage can
+// be throttled / OOM-killed → the bar may go red); a request-only container has
+// no ceiling, so usage above request is normal and the bar stays neutral.
+type Yardstick = 'limit' | 'request' | 'none'
+
+export function readContainer(c: ContainerResourceMetrics, kind: 'cpu' | 'memory') {
+  const isCPU = kind === 'cpu'
+  const usage = isCPU ? c.cpu : c.memory
+  const limit = isCPU ? c.cpuLimit : c.memoryLimit
+  const request = isCPU ? c.cpuRequest : c.memoryRequest
+  let yardstick: Yardstick = 'none'
+  let denom = 0
+  if (limit > 0) {
+    yardstick = 'limit'
+    denom = limit
   } else if (request > 0) {
-    guidance = usage > request
-      ? `Exceeds request with no limit — unbounded ${isCPU ? 'CPU' : 'memory'} access`
-      : 'No limit set — pod can burst beyond request'
-  } else {
-    guidance = 'No request or limit configured'
+    yardstick = 'request'
+    denom = request
   }
+  const pct = denom > 0 ? (usage / denom) * 100 : -1
+  return { usage, limit, request, yardstick, denom, pct }
+}
+
+interface PodAggregate {
+  // limit: every container is limited → a real ceiling exists (bar vs summed
+  // limit). partial: some containers limited, some not → the sum is not a true
+  // ceiling, so plain usage + an "unbounded" tag. request: no limits but some
+  // requests → neutral bar vs summed request. none: nothing set → plain usage.
+  mode: 'limit' | 'partial' | 'request' | 'none'
+  totalUsage: number
+  /** summed limit (limit mode) or summed request (request mode); 0 otherwise. */
+  denom: number
+  /** request marker as % of summed limit; limit mode only. */
+  markerPct?: number
+  /** number of containers with no limit set. */
+  unlimitedCount: number
+}
+
+// podAggregate reduces a pod's containers to the aggregate the compact cell
+// headline renders — total usage measured against a pod-level yardstick. It
+// keeps the dominant consumer visible instead of demoting it behind a small
+// limited container, and stays honest about partial limits (which don't form a
+// real ceiling).
+export function podAggregate(list: ContainerResourceMetrics[], kind: 'cpu' | 'memory'): PodAggregate {
+  const isCPU = kind === 'cpu'
+  let totalUsage = 0
+  let limitedCount = 0
+  let requestedCount = 0
+  let unlimitedCount = 0
+  let summedLimit = 0
+  let summedRequest = 0
+  for (const c of list) {
+    const usage = isCPU ? c.cpu : c.memory
+    const limit = isCPU ? c.cpuLimit : c.memoryLimit
+    const request = isCPU ? c.cpuRequest : c.memoryRequest
+    totalUsage += usage
+    if (limit > 0) {
+      limitedCount++
+      summedLimit += limit
+    } else {
+      unlimitedCount++
+    }
+    if (request > 0) {
+      requestedCount++
+      summedRequest += request
+    }
+  }
+  const allLimited = list.length > 0 && limitedCount === list.length
+  if (allLimited) {
+    return {
+      mode: 'limit',
+      totalUsage,
+      denom: summedLimit,
+      markerPct: summedRequest > 0 ? (summedRequest / summedLimit) * 100 : undefined,
+      unlimitedCount,
+    }
+  }
+  if (limitedCount > 0) {
+    return { mode: 'partial', totalUsage, denom: 0, unlimitedCount }
+  }
+  if (requestedCount > 0) {
+    return { mode: 'request', totalUsage, denom: summedRequest, unlimitedCount }
+  }
+  return { mode: 'none', totalUsage, denom: 0, unlimitedCount }
+}
+
+// buildContainerResourceTooltip renders one row per container — usage against
+// its OWN yardstick (limit if set, otherwise request) and percentage — sorted
+// by pct descending, intermixing limited and request-only. Containers with
+// neither render the words "no limit". Capped at CONTAINER_TOOLTIP_CAP rows,
+// with a final "+N more" line pointing at the pod.
+// NodeContext answers "is this pod at risk from its node?" — how full the node
+// is (the risk signal) and how much of the node this pod takes (attribution).
+interface NodeContext {
+  name: string
+  usedPct: number
+  podSharePct: number
+}
+
+// A node this full puts every pod on it at risk (eviction / OOM / throttling),
+// regardless of the pod's own limit headroom — so the line goes amber here.
+const NODE_PRESSURE_PCT = 85
+
+function formatSharePct(pct: number): string {
+  if (pct > 0 && pct < 1) return '<1%'
+  return `${Math.round(pct)}%`
+}
+
+function buildContainerResourceTooltip(
+  label: 'CPU' | 'Memory',
+  containers: ContainerResourceMetrics[],
+  kind: 'cpu' | 'memory',
+  formatFn: (n: number) => string,
+  nodeCtx?: NodeContext,
+) {
+  const rows = [...containers].sort((a, b) => {
+    const diff = readContainer(b, kind).pct - readContainer(a, kind).pct
+    return diff !== 0 ? diff : a.name.localeCompare(b.name)
+  })
+  const shown = rows.slice(0, CONTAINER_TOOLTIP_CAP)
+  const remaining = rows.length - shown.length
 
   return (
-    <div className="whitespace-normal w-52 flex flex-col gap-1.5 py-0.5">
-      <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs font-mono">
-        <span className="text-theme-text-tertiary">Usage</span>
-        <span className="text-theme-text-primary">{formatFn(usage)}</span>
-        {request > 0 && (
-          <>
-            <span className="text-theme-text-tertiary">Request</span>
-            <span className="text-theme-text-primary">{formatFn(request)}</span>
-          </>
-        )}
-        {limit > 0 && (
-          <>
-            <span className="text-theme-text-tertiary">Limit</span>
-            <span className="text-theme-text-primary">{formatFn(limit)}</span>
-          </>
-        )}
+    <div className="whitespace-normal w-72 flex flex-col gap-2 py-0.5">
+      <div className="text-[11px] text-theme-text-tertiary uppercase tracking-wide">{label} by container</div>
+      <div className="flex flex-col gap-2">
+        {shown.map((c) => {
+          const r = readContainer(c, kind)
+          // Container name on its own line, the numbers below it. Limited
+          // containers also show the request (the tooltip is the detail
+          // surface and shouldn't drop it); request-only/unset show their
+          // single yardstick or "no limit".
+          const detail = r.yardstick === 'limit'
+            ? `${formatFn(r.usage)} · ${Math.round(r.pct)}% · ${formatFn(r.denom)} limit${r.request > 0 ? ` · req ${formatFn(r.request)}` : ''}`
+            : r.yardstick === 'request'
+              ? `${formatFn(r.usage)} · ${Math.round(r.pct)}% · ${formatFn(r.denom)} request`
+              : `${formatFn(r.usage)} · no limit`
+          return (
+            <div key={c.name} className="flex flex-col leading-snug">
+              <span className="text-[11px] text-theme-text-tertiary truncate">{c.name}</span>
+              <span className="text-xs font-mono text-theme-text-primary">{detail}</span>
+            </div>
+          )
+        })}
       </div>
-      <div className="text-[11px] text-theme-text-secondary border-t border-theme-border/50 pt-1">
-        {guidance}
-      </div>
+      {remaining > 0 && (
+        <div className="text-[11px] text-theme-text-tertiary border-t border-theme-border/50 pt-1">
+          +{remaining} more → open pod
+        </div>
+      )}
+      {nodeCtx && (
+        <div className="flex flex-col leading-snug border-t border-theme-border/50 pt-1">
+          <span className="text-[11px] text-theme-text-tertiary truncate">Node {nodeCtx.name}</span>
+          <span
+            className={clsx(
+              'text-[11px]',
+              nodeCtx.usedPct >= NODE_PRESSURE_PCT
+                ? 'text-amber-500 font-medium'
+                : 'text-theme-text-secondary',
+            )}
+          >
+            {formatSharePct(nodeCtx.usedPct)} used · this pod {formatSharePct(nodeCtx.podSharePct)}
+          </span>
+        </div>
+      )}
     </div>
   )
 }

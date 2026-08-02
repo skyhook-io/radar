@@ -26,6 +26,210 @@ describe('getPodStatus', () => {
     }
     expect(getPodStatus(crashing).level).toBe('unhealthy')
   })
+
+  it('deranks a serving container with unsettled crash history', () => {
+    const recovered = {
+      status: {
+        phase: 'Running',
+        containerStatuses: [{
+          name: 'app',
+          ready: true,
+          restartCount: 2,
+          state: { running: {} },
+          lastState: { terminated: { reason: 'Error', exitCode: 1 } },
+        }],
+      },
+    }
+    expect(getPodStatus(recovered)).toMatchObject({ text: 'Restarted (2)', level: 'degraded' })
+    expect(getPodPhaseDisplay(recovered)).toMatchObject({
+      text: 'Running — Recently restarted (2 restarts)',
+      level: 'degraded',
+    })
+  })
+
+  it('keeps a non-serving container with crash history unhealthy', () => {
+    const down = {
+      status: {
+        phase: 'Running',
+        containerStatuses: [{
+          name: 'app',
+          ready: false,
+          restartCount: 2,
+          state: { running: {} },
+          lastState: { terminated: { reason: 'Error', exitCode: 1 } },
+        }],
+      },
+    }
+    expect(getPodStatus(down).level).toBe('unhealthy')
+    expect(getPodPhaseDisplay(down).level).toBe('unhealthy')
+  })
+
+  it('keeps a readiness-probed flapper visible until the settle window', () => {
+    const flapper = {
+      spec: { containers: [{ name: 'app', readinessProbe: { tcpSocket: { port: 8080 } } }] },
+      status: {
+        phase: 'Running',
+        containerStatuses: [{
+          name: 'app',
+          ready: true,
+          restartCount: 2,
+          state: { running: { startedAt: new Date(Date.now() - 60 * 1000).toISOString() } },
+          lastState: {
+            terminated: {
+              reason: 'Error',
+              exitCode: 1,
+              finishedAt: new Date(Date.now() - 60 * 1000).toISOString(),
+            },
+          },
+        }],
+      },
+    }
+    expect(getPodStatus(flapper).level).toBe('degraded')
+
+    const settled = structuredClone(flapper)
+    settled.status.containerStatuses[0].state.running.startedAt = new Date(Date.now() - 6 * 60 * 1000).toISOString()
+    expect(getPodStatus(settled).level).toBe('healthy')
+  })
+
+  it('lets an active sibling failure outrank recovered crash history', () => {
+    const pod = {
+      status: {
+        phase: 'Running',
+        containerStatuses: [
+          {
+            name: 'app',
+            ready: true,
+            restartCount: 2,
+            state: { running: {} },
+            lastState: { terminated: { reason: 'Error', exitCode: 1 } },
+          },
+          {
+            name: 'image',
+            ready: false,
+            state: { waiting: { reason: 'ImagePullBackOff' } },
+          },
+        ],
+      },
+    }
+    expect(getPodStatus(pod)).toMatchObject({ text: 'ImagePullBackOff', level: 'unhealthy' })
+    expect(getPodPhaseDisplay(pod)).toMatchObject({
+      text: 'Running — ImagePullBackOff',
+      level: 'unhealthy',
+    })
+  })
+
+  it('keeps a not-ready sibling visible ahead of recovered crash history', () => {
+    const pod = {
+      status: {
+        phase: 'Running',
+        containerStatuses: [
+          {
+            name: 'app',
+            ready: true,
+            restartCount: 1,
+            state: { running: {} },
+            lastState: { terminated: { reason: 'Error', exitCode: 1 } },
+          },
+          {
+            name: 'sidecar',
+            ready: false,
+            restartCount: 0,
+            state: { running: {} },
+          },
+        ],
+      },
+    }
+    expect(getPodStatus(pod)).toMatchObject({ text: 'Running (1/2)', level: 'degraded' })
+    expect(getPodPhaseDisplay(pod)).toMatchObject({
+      text: 'Running — Not Ready (1/2)',
+      level: 'degraded',
+    })
+  })
+
+  it('counts only crash history still inside the settle window', () => {
+    const pod = {
+      status: {
+        phase: 'Running',
+        containerStatuses: [
+          {
+            name: 'app',
+            ready: true,
+            restartCount: 1,
+            state: { running: {} },
+            lastState: { terminated: { reason: 'Error', exitCode: 1 } },
+          },
+          {
+            name: 'settled-sidecar',
+            ready: true,
+            restartCount: 40,
+            state: { running: { startedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString() } },
+            lastState: {
+              terminated: {
+                reason: 'Error',
+                exitCode: 1,
+                finishedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+              },
+            },
+          },
+        ],
+      },
+    }
+    expect(getPodStatus(pod)).toMatchObject({ text: 'Restarted (1)', level: 'degraded' })
+    expect(getPodPhaseDisplay(pod)).toMatchObject({
+      text: 'Running — Recently restarted (1 restart)',
+      level: 'degraded',
+    })
+  })
+
+  it('does not revive old crash history after a long node outage', () => {
+    const pod = {
+      status: {
+        phase: 'Running',
+        containerStatuses: [{
+          name: 'app',
+          ready: true,
+          restartCount: 5,
+          state: { running: { startedAt: new Date(Date.now() - 30 * 1000).toISOString() } },
+          lastState: {
+            terminated: {
+              reason: 'Error',
+              exitCode: 1,
+              finishedAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+            },
+          },
+        }],
+      },
+    }
+    expect(getPodStatus(pod)).toMatchObject({ text: 'Running', level: 'healthy' })
+
+    const maxBackoffContinuation = structuredClone(pod)
+    maxBackoffContinuation.status.containerStatuses[0].state.running.startedAt =
+      new Date(Date.now() - 60 * 1000).toISOString()
+    maxBackoffContinuation.status.containerStatuses[0].lastState.terminated.finishedAt =
+      new Date(Date.now() - 6 * 60 * 1000).toISOString()
+    expect(getPodStatus(maxBackoffContinuation).level).toBe('degraded')
+  })
+
+  it('shows Terminating instead of a recovered-crash warning during graceful deletion', () => {
+    const terminating = {
+      metadata: { deletionTimestamp: new Date().toISOString() },
+      status: {
+        phase: 'Running',
+        containerStatuses: [{
+          name: 'app',
+          ready: true,
+          restartCount: 2,
+          state: { running: {} },
+          lastState: { terminated: { reason: 'Error', exitCode: 1 } },
+        }],
+      },
+    }
+    expect(getPodStatus(terminating)).toMatchObject({ text: 'Terminating', level: 'neutral' })
+    expect(getPodPhaseDisplay(terminating)).toMatchObject({
+      text: 'Running — Terminating',
+      level: 'neutral',
+    })
+  })
 })
 
 const podRunningHealthy = {

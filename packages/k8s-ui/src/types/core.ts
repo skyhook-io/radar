@@ -86,9 +86,17 @@ export interface Capabilities {
   // doesn't crash against an older backend that hasn't shipped the field yet —
   // consumers should default to { mode: 'local' } when absent.
   deployment?: Deployment
+  // Optional because Radar Hub can embed a newer frontend against an older
+  // in-cluster Radar agent. Features require an explicit server advertisement.
+  features?: FeatureCapabilities
   resources?: ResourcePermissions // Per-resource-type permissions
   authEnabled?: boolean   // Auth is enabled on the backend
   username?: string       // Authenticated user's username (when auth enabled)
+}
+
+export interface FeatureCapabilities {
+  yamlReview?: boolean
+  yamlSchemas?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.
@@ -1036,15 +1044,28 @@ export type ChartSource = 'local' | 'artifacthub'
 // ============================================================================
 
 // Top metrics types (bulk, for resource table view)
+export interface ContainerResourceMetrics {
+  name: string
+  cpu: number           // nanocores (usage)
+  cpuRequest: number    // nanocores
+  cpuLimit: number      // nanocores
+  memory: number        // bytes (usage)
+  memoryRequest: number // bytes
+  memoryLimit: number   // bytes
+}
+
 export interface TopPodMetrics {
   namespace: string
   name: string
   cpu: number           // nanocores (usage)
   memory: number        // bytes (usage)
-  cpuRequest: number    // nanocores (sum across containers)
-  cpuLimit: number      // nanocores (sum across containers)
-  memoryRequest: number // bytes (sum across containers)
-  memoryLimit: number   // bytes (sum across containers)
+  cpuRequest: number    // nanocores (sum across running containers)
+  cpuLimit: number      // nanocores (sum across running containers)
+  memoryRequest: number // bytes (sum across running containers)
+  memoryLimit: number   // bytes (sum across running containers)
+  // Per-container breakdown; present only for pods with more than one running
+  // container (regular + native sidecars). Absent for single-container pods.
+  containers?: ContainerResourceMetrics[]
 }
 
 export interface TopNodeMetrics {

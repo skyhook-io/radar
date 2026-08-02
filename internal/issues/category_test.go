@@ -30,6 +30,10 @@ func TestClassify(t *testing.T) {
 		{"coredns service rewrite", classifyInput{Source: SourceProblem, Kind: "ConfigMap", Reason: "CoreDNS service DNS rewrite"}, issuesapi.CategoryDNSFailure},
 		{"env missing service", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "Missing referenced Service"}, issuesapi.CategoryMissingConfigRef},
 		{"env service port mismatch", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "Service port mismatch"}, issuesapi.CategoryMissingConfigRef},
+		{"deployment duplicate env", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "DuplicateEnvVar"}, issuesapi.CategoryInvalidConfiguration},
+		{"job duplicate env is not job failure", classifyInput{Source: SourceProblem, Kind: "Job", Reason: "DuplicateEnvVar"}, issuesapi.CategoryInvalidConfiguration},
+		{"cronjob duplicate env", classifyInput{Source: SourceProblem, Kind: "CronJob", Reason: "DuplicateEnvVar"}, issuesapi.CategoryInvalidConfiguration},
+		{"stale Secret env", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "StaleSecretEnv"}, issuesapi.CategoryInvalidConfiguration},
 
 		// problem / Pod
 		{"image pull backoff", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "ImagePullBackOff"}, issuesapi.CategoryImagePullFailed},

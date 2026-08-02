@@ -65,6 +65,21 @@ export function routePath(path: string): string {
 }
 
 /**
+ * Inverse of `routePath`: strips the configured basename from a window-level
+ * path so it can be handed to React Router's navigate(), which re-applies the
+ * basename. Passing an already-prefixed path to navigate() doubles the prefix
+ * (e.g. /c/abc/c/abc/...). Basename-relative paths pass through unchanged.
+ */
+export function stripBasename(path: string): string {
+  const prefix = basename;
+  if (!prefix) return path;
+  if (path === prefix || path.startsWith(prefix + '/') || path.startsWith(prefix + '?')) {
+    return path.slice(prefix.length) || '/';
+  }
+  return path;
+}
+
+/**
  * Builds a WebSocket URL for a given API path.
  *
  * When apiBase is relative, uses window.location.host + apiBase + path.

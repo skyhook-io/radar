@@ -69,6 +69,7 @@ func main() {
 	namespace := flag.String("namespace", fileCfg.Namespace, "Initial namespace filter (empty = all namespaces)")
 	namespaces := flag.String("namespaces", fileCfg.NamespacesFlag(), "Initial namespace filters as a comma-separated list (e.g. ns1,ns2,ns3). Use this when you can list resources in specific namespaces but cannot list namespaces cluster-wide.")
 	port := flag.Int("port", fileCfg.PortOr(9280), "Server port")
+	listenAddress := flag.String("listen-address", server.DefaultListenAddress, "HTTP listen address: 127.0.0.1 or localhost for local-only access; 0.0.0.0 for remote/shared access")
 	noBrowser := flag.Bool("no-browser", fileCfg.NoBrowser, "Don't auto-open browser")
 	browser := flag.String("browser", fileCfg.Browser, "Browser to use when opening the UI (default: OS default browser; macOS app names supported)")
 	devMode := flag.Bool("dev", false, "Development mode (serve frontend from filesystem)")
@@ -129,6 +130,7 @@ func main() {
 	cloudURL := flag.String("cloud-url", os.Getenv("RADAR_CLOUD_URL"), "Radar Hub WebSocket URL (e.g. wss://api.radarhq.io/agent) — empty = local-only. Env: RADAR_CLOUD_URL")
 	cloudToken := flag.String("cloud-token", os.Getenv("RADAR_CLOUD_TOKEN"), "Connection token from the Radar install flow (rhc_<random>). Env: RADAR_CLOUD_TOKEN")
 	cloudClusterName := flag.String("cluster-name", os.Getenv("RADAR_CLOUD_CLUSTER_NAME"), "Human-readable cluster name shown in Radar (required with --cloud-url). Env: RADAR_CLOUD_CLUSTER_NAME")
+	cloudInsecureSkipVerify := flag.Bool("cloud-insecure-skip-verify", os.Getenv("RADAR_CLOUD_INSECURE_SKIP_VERIFY") == "true", "Skip TLS verification on the Radar Hub tunnel — for trials against a self-hosted hub with a self-signed cert (insecure: encrypted but not authenticated). Env: RADAR_CLOUD_INSECURE_SKIP_VERIFY")
 	// Tunable deadlines for slow / high-latency / SSH-tunneled clusters.
 	// Defaults preserve the original behavior. Each flag falls back to an
 	// environment variable so Kubernetes deployments can source values from
@@ -149,9 +151,9 @@ func main() {
 	// give every Cloud user full SA permissions).
 	// Read once via the cloud package so we use the same normalized
 	// parser (strconv.ParseBool — accepts true/1/T/TRUE etc.) as every
-	// other site that reads RADAR_CLOUD_MODE. cloud.LogStartupMode
-	// emits the resolved value below regardless of true/false so the
-	// deployment topology is obvious in startup logs.
+	// other site that reads RADAR_CLOUD_MODE. The resolved mode is included
+	// in both the preflight line (so early failures retain it) and the startup
+	// summary after the HTTP listener binds.
 	cloudMode := cloud.Mode()
 	if cloudMode {
 		if *authMode != "none" && *authMode != "proxy" {
@@ -164,11 +166,6 @@ func main() {
 		*authGroupsHeader = "X-Forwarded-Groups"
 		log.Printf("[cloud] RADAR_CLOUD_MODE=true: auth-mode forced to proxy, trusting tunnel-supplied identity headers")
 	}
-	// Always log the resolved cloud mode (true OR false) so deployment
-	// topology is visible in chart-install logs even when an operator
-	// expected Cloud mode but typo'd the env var.
-	cloud.LogStartupMode()
-
 	if *showVersion {
 		fmt.Printf("radar %s\n", version)
 		os.Exit(0)
@@ -181,7 +178,11 @@ func main() {
 	_ = flag.Set("alsologtostderr", "false")
 	klog.SetOutput(os.Stderr)
 
-	log.Printf("Radar %s starting...", version)
+	startupMode := "local"
+	if cloudMode {
+		startupMode = "Radar Cloud"
+	}
+	log.Printf("Radar %s starting (mode=%s, auth=%s)...", version, startupMode, *authMode)
 
 	// Validate flags
 	switch *authMode {
@@ -192,6 +193,10 @@ func main() {
 	}
 	if *kubeconfig != "" && *kubeconfigDir != "" {
 		log.Fatalf("--kubeconfig and --kubeconfig-dir are mutually exclusive")
+	}
+	normalizedListenAddress, err := server.NormalizeListenAddress(*listenAddress)
+	if err != nil {
+		log.Fatalf("Invalid --listen-address %q: %v", *listenAddress, err)
 	}
 	timelineMaxSizeBytes, err := config.ParseByteSize(*timelineMaxSize)
 	if err != nil {
@@ -245,6 +250,8 @@ func main() {
 		Namespace:                resolvedNamespace,
 		Namespaces:               resolvedNamespaces,
 		Port:                     *port,
+		ListenAddress:            normalizedListenAddress,
+		ShowRemoteAccessHint:     true,
 		NoBrowser:                *noBrowser,
 		Browser:                  *browser,
 		DevMode:                  *devMode,
@@ -403,8 +410,9 @@ func main() {
 				Token:        *cloudToken,
 				ClusterID:    *cloudClusterName,
 				ClusterName:  *cloudClusterName,
-				Namespace:    namespace,
-				APIServerURL: apiServerURL,
+				Namespace:          namespace,
+				APIServerURL:       apiServerURL,
+				InsecureSkipVerify: *cloudInsecureSkipVerify,
 				// The chart sets both env vars only when rbac.selfUpgrade is
 				// enabled. Match handleSelfUpgrade's configuration gate exactly.
 				SelfUpgradeAvailable: namespace != "" && deploymentName != "",

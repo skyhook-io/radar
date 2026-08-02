@@ -147,29 +147,29 @@ func TestEvictKeepsRunning(t *testing.T) {
 }
 
 // TestRunMatchesTarget pins the Start focus-existing key: same resource+cluster
-// focuses only when the agent AND isolation mode also match, so a different mode
+// focuses only when the agent AND execution profile also match, so a different profile
 // starts its own run instead of silently reusing one.
 func TestRunMatchesTarget(t *testing.T) {
 	r := &Run{
 		Kind: "Deployment", Namespace: "ns", Name: "app",
-		Context: "ctx", Agent: "codex", Isolated: true, Model: "o3", Effort: "high",
+		Context: "ctx", Agent: "codex", Profile: ExecutionProfileSafeguarded, Model: "o3", Effort: "high",
 	}
-	if !r.matchesTarget("Deployment", "ns", "app", "ctx", "codex", true, "o3", "high") {
+	if !r.matchesTarget("Deployment", "ns", "app", "ctx", "codex", ExecutionProfileSafeguarded, "o3", "high") {
 		t.Error("identical target+mode should match")
 	}
-	if r.matchesTarget("Deployment", "ns", "app", "ctx", "claude", true, "o3", "high") {
+	if r.matchesTarget("Deployment", "ns", "app", "ctx", "claude", ExecutionProfileSafeguarded, "o3", "high") {
 		t.Error("different agent must NOT match")
 	}
-	if r.matchesTarget("Deployment", "ns", "app", "ctx", "codex", false, "o3", "high") {
-		t.Error("different isolation mode must NOT match")
+	if r.matchesTarget("Deployment", "ns", "app", "ctx", "codex", ExecutionProfileFullLocal, "o3", "high") {
+		t.Error("different execution profile must NOT match")
 	}
-	if r.matchesTarget("Deployment", "ns", "app", "other", "codex", true, "o3", "high") {
+	if r.matchesTarget("Deployment", "ns", "app", "other", "codex", ExecutionProfileSafeguarded, "o3", "high") {
 		t.Error("different cluster context must NOT match")
 	}
-	if r.matchesTarget("Deployment", "ns", "app", "ctx", "codex", true, "", "high") {
+	if r.matchesTarget("Deployment", "ns", "app", "ctx", "codex", ExecutionProfileSafeguarded, "", "high") {
 		t.Error("different model must NOT match")
 	}
-	if r.matchesTarget("Deployment", "ns", "app", "ctx", "codex", true, "o3", "low") {
+	if r.matchesTarget("Deployment", "ns", "app", "ctx", "codex", ExecutionProfileSafeguarded, "o3", "low") {
 		t.Error("different effort must NOT match")
 	}
 }
@@ -260,7 +260,8 @@ func TestPersistenceInterruptedRun(t *testing.T) {
 func TestPersistenceCursorNotResumable(t *testing.T) {
 	st, _ := testStore(t)
 	st.SaveRun(RunSummary{ID: "run-1", Kind: "Pod", Name: "p", Context: "ctx-a",
-		Agent: "cursor-agent", Status: "done", SessionID: "cursor-sess",
+		Agent: "cursor-agent", Profile: ExecutionProfileFullLocal,
+		Status: "done", SessionID: "cursor-sess",
 		CreatedAt: nowUTC(), UpdatedAt: nowUTC()})
 	st.(*sqliteRunStore).barrier()
 
@@ -270,12 +271,27 @@ func TestPersistenceCursorNotResumable(t *testing.T) {
 	}
 }
 
+func TestPersistenceProfilelessRunCannotResume(t *testing.T) {
+	st, _ := testStore(t)
+	st.SaveRun(RunSummary{ID: "run-legacy", Kind: "Pod", Name: "p", Context: "ctx-a",
+		Agent: "codex", Status: "done", SessionID: "codex-sess",
+		CreatedAt: nowUTC(), UpdatedAt: nowUTC()})
+	st.(*sqliteRunStore).barrier()
+
+	m := persistedManager(t, st, "ctx-a")
+	err := m.AddTurn("run-legacy", "and?", false, "")
+	if err == nil || !strings.Contains(err.Error(), "unsupported execution profile") {
+		t.Fatalf("profileless follow-up = %v, want unsupported profile", err)
+	}
+}
+
 // TestPersistenceForeignContextSweep pins that history from another kube-context
 // loads view-only: stale status, closed stream after replay, follow-ups refused.
 func TestPersistenceForeignContextSweep(t *testing.T) {
 	st, _ := testStore(t)
 	st.SaveRun(RunSummary{ID: "run-1", Kind: "Pod", Name: "p", Context: "ctx-OLD",
-		Agent: "claude", Status: "done", SessionID: "s", CreatedAt: nowUTC(), UpdatedAt: nowUTC()})
+		Agent: "claude", Profile: ExecutionProfileSafeguarded,
+		Status: "done", SessionID: "s", CreatedAt: nowUTC(), UpdatedAt: nowUTC()})
 	st.AppendEvent("run-1", RunEvent{Seq: 1, Event: StreamEvent{Type: "turn"}}, nil)
 	st.(*sqliteRunStore).barrier()
 
@@ -452,7 +468,8 @@ func TestPersistenceGracefulShutdown(t *testing.T) {
 func TestHydrationFailureRefusesAppends(t *testing.T) {
 	st, _ := testStore(t)
 	st.SaveRun(RunSummary{ID: "run-1", Kind: "Pod", Name: "p", Context: "ctx-a",
-		Agent: "claude", Status: "done", SessionID: "s", CreatedAt: nowUTC(), UpdatedAt: nowUTC()})
+		Agent: "claude", Profile: ExecutionProfileSafeguarded,
+		Status: "done", SessionID: "s", CreatedAt: nowUTC(), UpdatedAt: nowUTC()})
 	st.(*sqliteRunStore).barrier()
 	m := persistedManager(t, st, "ctx-a")
 	st.Close() // simulate the DB becoming unreadable before first hydration

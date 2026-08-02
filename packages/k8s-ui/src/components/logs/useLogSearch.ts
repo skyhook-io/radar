@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
+import { useState, useMemo, useCallback, useDeferredValue, useEffect, useRef } from 'react'
 import type { VirtuosoHandle } from 'react-virtuoso'
 import type { LogEntry } from './useLogBuffer'
 import { stripAnsi, escapeRegExp } from '../../utils/log-format'
@@ -40,17 +40,22 @@ export function useLogSearch(
   const [currentMatch, setCurrentMatch] = useState(0)
   const [isOpen, setIsOpen] = useState(false)
 
+  // The scan strips ANSI and regex-tests every buffered line — on a multi-MB
+  // buffer that's too slow to run synchronously per keystroke. Deferring lets
+  // the input echo immediately while the match set catches up.
+  const deferredQuery = useDeferredValue(query)
+
   const { matchIndices, regexError } = useMemo(() => {
-    if (!query) {
+    if (!deferredQuery) {
       return { matchIndices: [] as number[], regexError: null }
     }
 
     try {
       let pattern: RegExp
       if (isRegex) {
-        pattern = new RegExp(query, isCaseSensitive ? 'g' : 'gi')
+        pattern = new RegExp(deferredQuery, isCaseSensitive ? 'g' : 'gi')
       } else {
-        pattern = new RegExp(escapeRegExp(query), isCaseSensitive ? 'g' : 'gi')
+        pattern = new RegExp(escapeRegExp(deferredQuery), isCaseSensitive ? 'g' : 'gi')
       }
 
       const indices: number[] = []
@@ -65,14 +70,14 @@ export function useLogSearch(
     } catch (e) {
       return { matchIndices: [] as number[], regexError: e instanceof Error ? e.message : 'Invalid regex' }
     }
-  }, [entries, query, isRegex, isCaseSensitive])
+  }, [entries, deferredQuery, isRegex, isCaseSensitive])
 
   // Filtered entries for filter mode
   const filteredEntries = useMemo(() => {
-    if (!isFilterMode || !query) return entries
+    if (!isFilterMode || !deferredQuery) return entries
     const matchSet = new Set(matchIndices)
     return entries.filter((_, i) => matchSet.has(i))
-  }, [entries, isFilterMode, query, matchIndices])
+  }, [entries, isFilterMode, deferredQuery, matchIndices])
 
   // Reset current match when search criteria change (but not when new entries arrive during streaming)
   const prevCriteria = useRef({ query, isRegex, isCaseSensitive })

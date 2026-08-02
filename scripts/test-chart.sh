@@ -49,6 +49,7 @@ echo "Running chart template tests against $CHART_DIR"
 echo
 
 render "defaults — no self-upgrade footprint"
+assert_contains '--listen-address=0.0.0.0'          "shared listener explicitly enabled"
 assert_not_contains '^kind: Role$'                  "no namespaced Role"
 assert_not_contains '^kind: RoleBinding$'           "no namespaced RoleBinding"
 assert_not_contains 'MY_POD_NAMESPACE'              "no downward-API env var"
@@ -212,6 +213,74 @@ assert_contains 'customresourcedefinitions'               "CRDs writable in memb
 assert_contains 'clusterrolebindings'                     "RBAC writes present (in admin role)"
 assert_contains 'validatingwebhookconfigurations'         "webhook writes present (in admin role)"
 assert_contains 'apiservices'                             "apiservices writes present (in admin role)"
+echo
+
+# ── Cloud-tier cluster-scoped RBAC add-ons (cloud-rbac-cluster-read / node-ops) ──
+CLOUD="--set cloud.enabled=true --set cloud.token=dummy --set cloud.url=wss://x.example --set cloud.clusterName=c1"
+
+render "cloud defaults: cluster-read on for all three tiers, node-ops off" $CLOUD
+assert_contains 'name: radar-cluster-read$'                     "cluster-read ClusterRole rendered"
+assert_contains 'name: radar-cloud-viewer-cluster-read$'        "viewer binding rendered"
+assert_contains 'name: radar-cloud-member-cluster-read$'        "member binding rendered"
+assert_contains 'name: radar-cloud-owner-cluster-read$'         "owner binding rendered"
+assert_contains 'runtimeclasses'                                "runtimeclasses granted"
+assert_contains 'name: radar:viewer$'                           "canonical radar:* subject present"
+assert_contains 'name: cloud:viewer$'                           "legacy cloud:* subject present (deprecation window)"
+assert_contains 'priorityclasses'                               "priorityclasses granted"
+assert_not_contains 'name: radar-node-ops$'                     "node-ops absent by default"
+echo
+
+render "clusterScopedRead.viewer=false drops only the viewer binding" $CLOUD   --set cloud.defaultRbac.clusterScopedRead.viewer=false
+assert_not_contains 'name: radar-cloud-viewer-cluster-read$'    "viewer binding dropped"
+assert_contains 'name: radar-cloud-member-cluster-read$'        "member binding kept"
+assert_contains 'name: radar-cloud-owner-cluster-read$'         "owner binding kept"
+echo
+
+render "all clusterScopedRead false: no role, no bindings" $CLOUD   --set cloud.defaultRbac.clusterScopedRead.viewer=false   --set cloud.defaultRbac.clusterScopedRead.member=false   --set cloud.defaultRbac.clusterScopedRead.owner=false
+assert_not_contains 'name: radar-cluster-read$'                 "cluster-read role suppressed"
+echo
+
+render "all tiers disabled: no orphan cluster-read role" $CLOUD   --set cloud.defaultRbac.viewer=false   --set cloud.defaultRbac.member=false   --set cloud.defaultRbac.owner=false
+assert_not_contains 'name: radar-cluster-read$'                 "no unbound ClusterRole when every tier is off"
+echo
+
+render "custom viewerClusterRole does NOT drop viewer cluster-read (independent axes)" $CLOUD   --set cloud.defaultRbac.viewerClusterRole=my-restricted-view
+assert_contains 'name: radar-cloud-viewer-cluster-read$'        "viewer keeps cluster-read with custom namespaced role"
+echo
+
+# helm upgrade --reuse-values renders with the previous release's value tree,
+# where clusterScopedRead doesn't exist. null deletes the key, simulating that.
+# Absence must behave like the declared default (all on), never crash.
+render "legacy values (clusterScopedRead absent) render default-on, no nil crash" $CLOUD   --set cloud.defaultRbac.clusterScopedRead=null
+assert_contains 'name: radar-cloud-viewer-cluster-read$'        "absent map treated as default-on (viewer)"
+assert_contains 'name: radar-cloud-owner-cluster-read$'         "absent map treated as default-on (owner)"
+echo
+
+render "rbac.metrics=false drops the metrics rule" $CLOUD --set rbac.metrics=false
+assert_not_contains 'metrics.k8s.io'                            "no metrics.k8s.io rule"
+echo
+
+render "nodeOps=true renders owner-only node-ops" $CLOUD --set cloud.defaultRbac.nodeOps=true
+assert_contains 'name: radar-node-ops$'                         "node-ops role rendered"
+assert_contains 'name: radar-cloud-owner-node-ops$'             "owner binding rendered"
+assert_contains 'pods/eviction'                                 "eviction verb present"
+assert_not_contains 'name: radar-cloud-member-node-ops$'        "no member node-ops binding"
+echo
+
+render "nodeOps=true with owner tier disabled renders nothing" $CLOUD   --set cloud.defaultRbac.nodeOps=true --set cloud.defaultRbac.owner=false
+assert_not_contains 'name: radar-node-ops$'                     "node-ops suppressed without owner tier"
+echo
+
+# A string "false" is truthy to Go templates; it can only reach the template
+# via --set-string plus --skip-schema-validation, but a cluster-scoped WRITE
+# grant must stay off even then (toString-eq gate in the template).
+render "string 'false' via schema bypass must NOT enable node-ops" $CLOUD   --set-string cloud.defaultRbac.nodeOps=false --skip-schema-validation
+assert_not_contains 'name: radar-node-ops$'                     "string-false stays off"
+echo
+
+render "OSS mode (cloud disabled): no cloud RBAC at all"
+assert_not_contains 'name: radar-cluster-read$'                 "no cluster-read outside cloud mode"
+assert_not_contains 'name: radar-cloud-viewer-cluster-read$'    "no tier bindings outside cloud mode"
 echo
 
 if [[ $FAIL -eq 0 ]]; then

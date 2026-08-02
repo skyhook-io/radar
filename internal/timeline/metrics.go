@@ -265,7 +265,12 @@ type ResourceInfo struct {
 }
 
 // GetDiagnosis diagnoses why events for a specific resource might be missing
-func GetDiagnosis(kind, namespace, name string) DiagnoseResponse {
+// GetDiagnosis diagnoses why events for a resource might be missing. `allow`, when
+// non-nil, authorizes each timeline row / drop by (kind, apiVersion, namespace)
+// BEFORE the recommendations are derived from them — so a caller who can't read
+// some of the matched rows gets neither those rows nor tips computed from them.
+// nil `allow` (auth off) returns everything.
+func GetDiagnosis(kind, namespace, name, clusterContext string, allow func(kind, apiVersion, namespace string) bool) DiagnoseResponse {
 	resp := DiagnoseResponse{
 		Resource: ResourceInfo{
 			Kind:      kind,
@@ -281,13 +286,16 @@ func GetDiagnosis(kind, namespace, name string) DiagnoseResponse {
 	resp.StorePresent = store != nil
 
 	if store != nil {
-		// Query for events matching this resource
+		// Query for events matching this resource. Scope to the active cluster
+		// context — the persistent store outlives context switches, so an
+		// unscoped query would return a previously-connected cluster's rows.
 		events, err := store.Query(context.Background(), QueryOptions{
 			Namespaces:       []string{namespace},
 			Kinds:            []string{kind},
 			Limit:            50,
 			IncludeManaged:   true,
 			IncludeK8sEvents: true,
+			ClusterContext:   clusterContext,
 		})
 		if err == nil {
 			// Filter to just this resource
@@ -308,6 +316,28 @@ func GetDiagnosis(kind, namespace, name string) DiagnoseResponse {
 		}
 	}
 	metrics.mu.RUnlock()
+
+	// Per-kind RBAC: drop rows the caller can't read BEFORE deriving any
+	// recommendation, so tips can't describe a filtered-out event/drop. Drops
+	// carry no apiVersion, so they resolve group-less (a Kind colliding with a
+	// cluster-scoped builtin is the one documented residue).
+	if allow != nil {
+		events := resp.TimelineEvents[:0]
+		for _, e := range resp.TimelineEvents {
+			if allow(e.Kind, e.APIVersion, e.Namespace) {
+				events = append(events, e)
+			}
+		}
+		resp.TimelineEvents = events
+
+		drops := resp.DropHistory[:0]
+		for _, d := range resp.DropHistory {
+			if allow(d.Kind, "", d.Namespace) {
+				drops = append(drops, d)
+			}
+		}
+		resp.DropHistory = drops
+	}
 
 	// Generate recommendations
 	if len(resp.TimelineEvents) == 0 && len(resp.DropHistory) == 0 {

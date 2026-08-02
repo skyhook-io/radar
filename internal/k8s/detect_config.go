@@ -31,6 +31,8 @@ func detectConfigProblems(cache *ResourceCache, namespace string, now time.Time)
 		out = append(out, detectSuspiciousCoreDNS(cache, now)...)
 	}
 	out = append(out, detectEnvServiceRefs(cache, namespace, now)...)
+	out = append(out, detectDuplicateEnvVars(cache, namespace, now)...)
+	out = append(out, detectStaleSecretEnv(cache, namespace, now)...)
 	return out
 }
 
@@ -131,6 +133,124 @@ type EnvServiceRefCheck struct {
 	ServicePorts     []string
 	Message          string
 	AgeSeconds       int64
+}
+
+type DuplicateEnvVarOccurrence struct {
+	Position int
+	Value    string
+}
+
+type DuplicateEnvVarCheck struct {
+	WorkloadGroup     string
+	WorkloadKind      string
+	Namespace         string
+	WorkloadName      string
+	Container         string
+	EnvName           string
+	Occurrences       []DuplicateEnvVarOccurrence
+	LastDeclaredValue string
+	Message           string
+	AgeSeconds        int64
+}
+
+const maxDuplicateEnvVarMessageOccurrences = 5
+
+func detectDuplicateEnvVars(cache *ResourceCache, namespace string, now time.Time) []Detection {
+	checks := findDuplicateEnvVarChecks(envServiceWorkloads(cache, namespace), now)
+	out := make([]Detection, 0, len(checks))
+	for _, check := range checks {
+		out = append(out, Detection{
+			Kind:        check.WorkloadKind,
+			Group:       check.WorkloadGroup,
+			Namespace:   check.Namespace,
+			Name:        check.WorkloadName,
+			Severity:    "warning",
+			Reason:      "DuplicateEnvVar",
+			Message:     check.Message,
+			Age:         FormatAge(time.Duration(check.AgeSeconds) * time.Second),
+			AgeSeconds:  check.AgeSeconds,
+			Fingerprint: FormatDuplicateEnvVarFingerprint(check.Namespace, check.WorkloadName, check.Container, check.EnvName),
+		})
+	}
+	return out
+}
+
+// FindDuplicateEnvVarsForObject returns duplicate environment-variable facts
+// for a single workload object.
+func FindDuplicateEnvVarsForObject(obj runtime.Object) []DuplicateEnvVarCheck {
+	wl, ok := envServiceWorkloadForObject(obj)
+	if !ok {
+		return nil
+	}
+	return findDuplicateEnvVarChecks([]envServiceWorkload{wl}, time.Now())
+}
+
+func findDuplicateEnvVarChecks(workloads []envServiceWorkload, now time.Time) []DuplicateEnvVarCheck {
+	var out []DuplicateEnvVarCheck
+	for _, wl := range workloads {
+		containers := make([]corev1.Container, 0, len(wl.spec.InitContainers)+len(wl.spec.Containers))
+		containers = append(containers, wl.spec.InitContainers...)
+		containers = append(containers, wl.spec.Containers...)
+		for _, container := range containers {
+			byName := make(map[string][]DuplicateEnvVarOccurrence, len(container.Env))
+			for i, env := range container.Env {
+				byName[env.Name] = append(byName[env.Name], DuplicateEnvVarOccurrence{
+					Position: i + 1,
+					Value:    envVarDisplayValue(env),
+				})
+			}
+			for envName, occurrences := range byName {
+				if len(occurrences) < 2 {
+					continue
+				}
+				last := occurrences[len(occurrences)-1]
+				out = append(out, DuplicateEnvVarCheck{
+					WorkloadGroup:     wl.group,
+					WorkloadKind:      wl.kind,
+					Namespace:         wl.namespace,
+					WorkloadName:      wl.name,
+					Container:         container.Name,
+					EnvName:           envName,
+					Occurrences:       occurrences,
+					LastDeclaredValue: last.Value,
+					Message:           duplicateEnvVarMessage(container.Name, envName, occurrences),
+					AgeSeconds:        ageSeconds(now, wl.created),
+				})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Namespace != out[j].Namespace {
+			return out[i].Namespace < out[j].Namespace
+		}
+		if out[i].WorkloadKind != out[j].WorkloadKind {
+			return out[i].WorkloadKind < out[j].WorkloadKind
+		}
+		if out[i].WorkloadName != out[j].WorkloadName {
+			return out[i].WorkloadName < out[j].WorkloadName
+		}
+		if out[i].Container != out[j].Container {
+			return out[i].Container < out[j].Container
+		}
+		return out[i].EnvName < out[j].EnvName
+	})
+	return out
+}
+
+func duplicateEnvVarMessage(container, envName string, occurrences []DuplicateEnvVarOccurrence) string {
+	displayed := occurrences
+	if len(displayed) > maxDuplicateEnvVarMessageOccurrences {
+		displayed = displayed[:maxDuplicateEnvVarMessageOccurrences]
+	}
+	values := make([]string, 0, len(displayed)+1)
+	for _, occurrence := range displayed {
+		values = append(values, fmt.Sprintf("%d=%q", occurrence.Position, occurrence.Value))
+	}
+	if omitted := len(occurrences) - len(displayed); omitted > 0 {
+		values = append(values, fmt.Sprintf("... and %d more", omitted))
+	}
+	last := occurrences[len(occurrences)-1]
+	return fmt.Sprintf("Container %s defines env %s %d times at positions/values %s; the last definition %q typically takes effect.", container, envName, len(occurrences), strings.Join(values, ", "), last.Value)
 }
 
 func detectEnvServiceRefs(cache *ResourceCache, namespace string, now time.Time) []Detection {

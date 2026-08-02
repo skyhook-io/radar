@@ -23,6 +23,12 @@ describe('AuditBadgeTooltip', () => {
     expect(html).not.toContain('A fourth finding')
   })
 
+  it('sorts High first before applying the cap', () => {
+    const html = renderToString(<AuditBadgeTooltip messages={msgs} max={1} />)
+    expect(html).toContain('Ingress references missing Service')
+    expect(html).not.toContain('Service selector matches no pods')
+  })
+
   it('shows the click hint by default and omits it when disabled', () => {
     expect(renderToString(<AuditBadgeTooltip messages={msgs.slice(0, 1)} />)).toContain('Click to open')
     expect(renderToString(<AuditBadgeTooltip messages={msgs.slice(0, 1)} clickHint={false} />)).not.toContain('Click to open')

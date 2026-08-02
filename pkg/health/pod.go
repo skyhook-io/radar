@@ -16,7 +16,7 @@ import (
 //
 //	Succeeded            → neutral  (completed; lifecycle, not a problem)
 //	Failed               → unhealthy
-//	stable crashloop     → unhealthy
+//	stable crashloop     → unhealthy when down, degraded when Running+Ready
 //	fatal waiting reason → unhealthy
 //	active OOMKilled     → unhealthy
 //	Pending > 5m         → degraded ; Pending < 5m → healthy (startup grace)
@@ -76,14 +76,12 @@ func classifyPodLevel(pod *corev1.Pod, now time.Time) Level {
 		return LevelUnknown
 	}
 
-	// Stable crashloop: a container that has restarted with a recorded crash
-	// outcome is a failure REGARDLESS of whether the kubelet currently reports it
-	// Waiting (backing off) or Running (just restarted, about to die again).
-	// Keying off the instantaneous phase here is what made severity flap
-	// poll-to-poll; the stable history fields don't oscillate, so neither does
-	// the verdict. Checked before the per-state scan below so a momentary
-	// "Running" can't downgrade it.
-	if podHasStableCrashLoop(pod, now) {
+	// Crash history keeps the problem present across the kubelet's
+	// Waiting→Running oscillation, while current state controls urgency.
+	// Unhealthy may return immediately; degraded must not mask an unrelated
+	// fatal state on another container.
+	crashLoopLevel := podStableCrashLoopLevel(pod, now)
+	if crashLoopLevel == LevelUnhealthy {
 		return LevelUnhealthy
 	}
 
@@ -101,6 +99,9 @@ func classifyPodLevel(pod *corev1.Pod, now time.Time) Level {
 		if cs.State.Waiting != nil && isFatalWaitingReason(cs.State.Waiting.Reason) {
 			return LevelUnhealthy
 		}
+	}
+	if crashLoopLevel == LevelDegraded {
+		return LevelDegraded
 	}
 
 	// Pods pending past the startup grace window.
@@ -266,6 +267,25 @@ func PodCrashLoopDiagnosis(pod *corev1.Pod, now time.Time) (cause, action string
 		ref = fmt.Sprintf("init container %q", candidate.status.Name)
 	}
 	run := shortRunContext(term)
+	if IsCrashLoopContainerServing(pod, candidate.status) {
+		exit := fmt.Sprintf("exit code %d", term.ExitCode)
+		action := "Watch for another restart. If it repeats, inspect previous container logs and verify the pod command, args, config, and dependencies."
+		switch term.ExitCode {
+		case 127:
+			exit = "exit code 127 (command not found)"
+			action = "Watch for another restart. If it repeats, check the image entrypoint and pod command/args; verify the binary exists in the image."
+		case 126:
+			exit = "exit code 126 (command found but not executable)"
+			action = "Watch for another restart. If it repeats, check executable permissions, the shebang/interpreter, and the pod command/args."
+		case 139:
+			exit = "exit code 139 (segmentation fault)"
+			action = "Watch for another restart. If it repeats, inspect previous container logs and recent image/code changes; check native libraries or unsafe code."
+		case 137:
+			exit = "exit code 137 (Kubernetes did not report OOMKilled)"
+			action = "Watch for another restart. If it repeats, check node pressure, process-level SIGKILLs, and memory limits."
+		}
+		return fmt.Sprintf("%s restarted after %s and is serving again within the 5-minute settle window.%s", ref, exit, run), action
+	}
 
 	switch term.ExitCode {
 	case 127:
@@ -289,8 +309,8 @@ func PodCrashLoopDiagnosis(pod *corev1.Pod, now time.Time) (cause, action string
 func activeCrashLoopCandidate(pod *corev1.Pod, now time.Time) (crashLoopCandidate, bool) {
 	var best crashLoopCandidate
 	have := false
-	consider := func(cs corev1.ContainerStatus, init bool, index int, readyTrusted bool) {
-		if !isStableCrashLoop(&cs, now, readyTrusted) {
+	consider := func(cs corev1.ContainerStatus, init bool, index int) {
+		if !isStableCrashLoop(&cs, now) {
 			return
 		}
 		c := crashLoopCandidate{
@@ -307,11 +327,12 @@ func activeCrashLoopCandidate(pod *corev1.Pod, now time.Time) (crashLoopCandidat
 		}
 	}
 	for i := range pod.Status.InitContainerStatuses {
-		consider(pod.Status.InitContainerStatuses[i], true, i, false)
+		cs := pod.Status.InitContainerStatuses[i]
+		consider(cs, true, i)
 	}
 	for i := range pod.Status.ContainerStatuses {
 		cs := pod.Status.ContainerStatuses[i]
-		consider(cs, false, i, containerHasReadinessProbe(pod.Spec.Containers, cs.Name))
+		consider(cs, false, i)
 	}
 	return best, have
 }

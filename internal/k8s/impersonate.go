@@ -20,6 +20,14 @@ func ImpersonatedConfig(username string, groups []string) (*rest.Config, error) 
 	return pkgauth.ImpersonatedConfig(base, username, groups), nil
 }
 
+func ImpersonatedConfigSnapshot(username string, groups []string) (*rest.Config, string, error) {
+	base, contextName := GetConfigSnapshot()
+	if base == nil {
+		return nil, contextName, fmt.Errorf("K8s config not initialized")
+	}
+	return pkgauth.ImpersonatedConfig(base, username, groups), contextName, nil
+}
+
 // ImpersonatedClient creates a typed client that acts as the given user.
 func ImpersonatedClient(username string, groups []string) (kubernetes.Interface, error) {
 	base := GetConfig()
@@ -37,4 +45,13 @@ func ImpersonatedDynamicClient(username string, groups []string) (dynamic.Interf
 		return nil, fmt.Errorf("K8s config not initialized")
 	}
 	return pkgauth.ImpersonatedDynamicClient(base, username, groups)
+}
+
+func ImpersonatedDynamicClientSnapshot(username string, groups []string) (dynamic.Interface, string, error) {
+	base, contextName := GetConfigSnapshot()
+	if base == nil {
+		return nil, contextName, fmt.Errorf("K8s config not initialized")
+	}
+	client, err := pkgauth.ImpersonatedDynamicClient(base, username, groups)
+	return client, contextName, err
 }

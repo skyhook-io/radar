@@ -66,17 +66,17 @@ type RunManager struct {
 // Run is one investigation: identity, status, the agent session to resume, and the
 // canonical append-only event log (every subscriber reconstructs state from it).
 type Run struct {
-	ID        string // immutable
-	Kind      string // immutable
-	Namespace string // immutable
-	Name      string // immutable
-	Context   string // immutable — kube-context the run is about (baseline)
-	Agent     string // immutable — backend CLI driving this run ("claude"/"codex")
-	WorkDir   string // immutable — per-run scratch dir (under RunManager.workRoot); "" if none
-	Isolated  bool   // immutable — isolation mode chosen at Start
-	Model     string // immutable — optional model override ("" = agent default)
-	Effort    string // immutable — optional reasoning effort (Codex; "" = default)
-	ManagedBy string // immutable — GitOps/Helm owner of the target ("" = none), for the Apply warning
+	ID        string           // immutable
+	Kind      string           // immutable
+	Namespace string           // immutable
+	Name      string           // immutable
+	Context   string           // immutable — kube-context the run is about (baseline)
+	Agent     string           // immutable — backend CLI driving this run ("claude"/"codex")
+	WorkDir   string           // immutable — per-run scratch dir (under RunManager.workRoot); "" if none
+	Profile   ExecutionProfile // immutable — execution profile chosen at Start
+	Model     string           // immutable — optional model override ("" = agent default)
+	Effort    string           // immutable — optional reasoning effort (Codex; "" = default)
+	ManagedBy string           // immutable — GitOps/Helm owner of the target ("" = none), for the Apply warning
 	Health    *ResourceHealthSignal
 	CreatedAt time.Time
 	// OwnerPID is the process that owns this run's lifecycle. Persisted so a
@@ -118,7 +118,7 @@ type RunSummary struct {
 	Name      string                `json:"name"`
 	Context   string                `json:"context"`
 	Agent     string                `json:"agent,omitempty"`
-	Isolated  bool                  `json:"isolated"`
+	Profile   ExecutionProfile      `json:"profile"`
 	Model     string                `json:"model,omitempty"`
 	Effort    string                `json:"effort,omitempty"`
 	ManagedBy string                `json:"managedBy,omitempty"`
@@ -252,7 +252,7 @@ func (m *RunManager) loadPersisted() {
 		}
 		r := &Run{
 			ID: s.ID, Kind: s.Kind, Namespace: s.Namespace, Name: s.Name,
-			Context: s.Context, Agent: s.Agent, Isolated: s.Isolated,
+			Context: s.Context, Agent: s.Agent, Profile: s.Profile,
 			Model: s.Model, Effort: s.Effort, ManagedBy: s.ManagedBy,
 			Health: s.Health, CreatedAt: s.CreatedAt, OwnerPID: s.OwnerPID,
 			store:  m.store,
@@ -406,13 +406,13 @@ func (m *RunManager) ctx() string {
 // Start creates and launches an investigation, or focuses an existing live run for
 // the same target+context instead of duplicating it. Returns ErrAtCapacity when
 // the concurrent-running cap is reached.
-func (m *RunManager) Start(kind, namespace, name, agent string, isolated bool, model, effort, managedBy string, health *ResourceHealthSignal) (RunSummary, error) {
+func (m *RunManager) Start(kind, namespace, name, agent string, profile ExecutionProfile, model, effort, managedBy string, health *ResourceHealthSignal) (RunSummary, error) {
 	cur := m.ctx()
 	m.mu.Lock()
 	// Focus an existing live run for this exact target+mode rather than duplicate it.
 	for _, id := range m.order {
 		r := m.runs[id]
-		if r.matchesTarget(kind, namespace, name, cur, agent, isolated, model, effort) &&
+		if r.matchesTarget(kind, namespace, name, cur, agent, profile, model, effort) &&
 			r.snapshotStatus() == "running" {
 			m.mu.Unlock()
 			return r.Summary(), nil
@@ -425,7 +425,7 @@ func (m *RunManager) Start(kind, namespace, name, agent string, isolated bool, m
 	id := newRunID()
 	r := &Run{
 		ID: id, Kind: kind, Namespace: namespace,
-		Name: name, Context: cur, Agent: agent, WorkDir: m.runWorkDir(id), Isolated: isolated,
+		Name: name, Context: cur, Agent: agent, WorkDir: m.runWorkDir(id), Profile: profile,
 		Model: model, Effort: effort, ManagedBy: managedBy, Health: health, CreatedAt: nowUTC(),
 		OwnerPID: os.Getpid(),
 		store:    m.store,
@@ -451,6 +451,9 @@ func (m *RunManager) AddTurn(id, question string, apply bool, fix string) error 
 	r := m.get(id)
 	if r == nil {
 		return ErrRunNotFound
+	}
+	if !SupportsProfile(r.Agent, r.Profile) {
+		return fmt.Errorf("ai: run uses unsupported execution profile %q", r.Profile)
 	}
 	// A follow-up on a run loaded from history must extend the PERSISTED log —
 	// hydrate before beginTurn so the new turn's sequence numbers continue it.
@@ -488,7 +491,7 @@ func (m *RunManager) launchTurn(r *Run, question string, apply bool, fix, sessio
 			Kind: r.Kind, Namespace: r.Namespace, Name: r.Name,
 			MCPPort: m.mcpPort(), SessionID: session,
 			Question: question, Apply: apply, Fix: fix,
-			Agent: r.Agent, Isolated: r.Isolated, Model: r.Model, Effort: r.Effort,
+			Agent: r.Agent, Profile: r.Profile, Model: r.Model, Effort: r.Effort,
 			Health: r.Health, WorkDir: r.WorkDir,
 		}, func(ev StreamEvent) {
 			// The agent can keep streaming briefly after Stop/context-switch
@@ -777,7 +780,7 @@ func (r *Run) Summary() RunSummary {
 func (r *Run) summaryLocked() RunSummary {
 	return RunSummary{
 		ID: r.ID, Kind: r.Kind, Namespace: r.Namespace, Name: r.Name,
-		Context: r.Context, Agent: r.Agent, Isolated: r.Isolated,
+		Context: r.Context, Agent: r.Agent, Profile: r.Profile,
 		Model: r.Model, Effort: r.Effort, ManagedBy: r.ManagedBy,
 		Health: r.Health,
 		Status: r.status, SessionID: r.sessionID, OwnerPID: r.OwnerPID,
@@ -888,12 +891,12 @@ func (r *Run) markStale() {
 }
 
 // matchesTarget reports whether r is the same investigation as a Start request —
-// same resource + cluster AND same agent/isolation mode. The mode is part of the
-// key so starting codex-isolated never silently focuses a live claude or my-setup
+// same resource + cluster AND same agent/execution profile. The profile is part of the
+// key so starting safeguarded Codex never silently focuses a full-local run
 // run for the same resource. Immutable fields, so no lock needed.
-func (r *Run) matchesTarget(kind, namespace, name, ctx, agent string, isolated bool, model, effort string) bool {
+func (r *Run) matchesTarget(kind, namespace, name, ctx, agent string, profile ExecutionProfile, model, effort string) bool {
 	return r.Kind == kind && r.Namespace == namespace && r.Name == name &&
-		r.Context == ctx && r.Agent == agent && r.Isolated == isolated &&
+		r.Context == ctx && r.Agent == agent && r.Profile == profile &&
 		r.Model == model && r.Effort == effort
 }
 

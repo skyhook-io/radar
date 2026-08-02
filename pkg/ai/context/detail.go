@@ -70,6 +70,7 @@ func pruneMapDetail(m map[string]any) {
 // detailBaseProfile's Drop + ElementDrops).
 func pruneSpecElements(m map[string]any) {
 	forEachContainer(m, pruneContainerConditional)
+	sanitizeSpecEnvLists(m, false)
 }
 
 func minifySecretDetail(secret *corev1.Secret) map[string]any {

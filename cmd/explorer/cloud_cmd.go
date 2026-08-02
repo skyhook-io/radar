@@ -5,6 +5,7 @@ package main
 // os.Args[1]=="cloud" check there).
 //
 //	radar cloud install     install an in-cluster agent connected to Cloud
+//	radar cloud status      inspect an in-cluster Cloud installation
 //
 // Local-process preview connections are not available yet. The reserved
 // `connect` command exits before contacting the hub and points users to the
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/app"
+	"github.com/skyhook-io/radar/internal/cliui"
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/cloudinstall"
 	"github.com/skyhook-io/radar/internal/config"
@@ -37,6 +39,7 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
@@ -66,6 +69,8 @@ func runCloudSubcommand() {
 	case "install":
 		cloudInstall(rest)
 		os.Exit(0)
+	case "status":
+		os.Exit(cloudStatus(rest, os.Stdout, os.Stderr))
 	case "-h", "--help", "help":
 		cloudUsage(os.Stdout)
 		os.Exit(0)
@@ -81,11 +86,16 @@ func cloudUsage(w *os.File) {
 
 Usage:
   radar cloud install [--context NAME] [-y|--yes] [--namespace NS] [--release NAME] [--adopt-existing] [--hub-url URL] [--name NAME] [--dry-run]
+  radar cloud status [--context NAME] [--namespace NS --release NAME]
 
 install  Connect one kubeconfig cluster to Radar. Installs Radar when absent,
          or offers a safe native-Helm adoption / GitOps handoff when detected.
          An explicit --context is used directly; otherwise the current context
          must be confirmed unless -y/--yes is set.
+
+status   Inspect the Radar installation in one kubeconfig cluster. Reports
+         ownership, Cloud configuration, agent readiness, and Hub-reported
+         tunnel health without changing Kubernetes.
 
 Flags (install):
   --context NAME   Kubernetes context to install into (default: current context)
@@ -104,6 +114,11 @@ Flags (install):
   --dry-run        Run the permission preflight + print the plan; install nothing
   --no-browser     Print the approval URL instead of opening a browser
   --browser NAME   Browser to use for approval (default: Radar config / OS default)
+
+Flags (status):
+  --context NAME   Kubernetes context to inspect (default: current context)
+  --namespace NS   Exact namespace (requires --release)
+  --release NAME   Exact Helm release (requires --namespace)
 `)
 }
 
@@ -227,6 +242,8 @@ func cloudInstall(args []string) {
 
 	ctx, cancel := signalContext()
 	defer cancel()
+	stdoutStyle := cliui.New(os.Stdout)
+	stderrStyle := cliui.New(os.Stderr)
 
 	// Build kube + helm clients against the resolved kubecontext — the driver runs
 	// before Radar's normal boot, so we resolve these ourselves.
@@ -236,7 +253,7 @@ func cloudInstall(args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("Inspecting Kubernetes context %q for an existing Radar installation…\n\n", ctxName)
+	fmt.Printf("%s Inspecting Kubernetes context %q for an existing Radar installation…\n\n", stdoutStyle.Marker(cliui.Progress), ctxName)
 	interactive := term.IsTerminal(int(os.Stdin.Fd()))
 	plan, err := inspectCloudInstallPlan(ctx, clients, *namespace, *release, cloudInstallUsesExactTarget(explicitNamespace, explicitRelease))
 	if err != nil {
@@ -285,7 +302,7 @@ func cloudInstall(args []string) {
 		}
 	}
 	if err != nil {
-		if !printFreshInstallConflict(os.Stderr, err, commandTarget) && !printTokenSecretConflict(os.Stderr, err) {
+		if !printFreshInstallConflict(os.Stderr, err, commandTarget) && !printTokenSecretConflict(os.Stderr, err, plan.Release, commandTarget) {
 			fmt.Fprintf(os.Stderr, "installation preparation failed: %v\n", err)
 		}
 		fmt.Fprintln(os.Stderr, "No Hub request or cluster was created.")
@@ -318,7 +335,7 @@ func cloudInstall(args []string) {
 			})
 		}
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "permission preflight failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "%s permission preflight failed: %v\n", stderrStyle.Marker(cliui.Failure), err)
 			fmt.Fprintln(os.Stderr, "No Hub request or cluster was created.")
 			os.Exit(1)
 		}
@@ -327,15 +344,16 @@ func cloudInstall(args []string) {
 			fmt.Fprintln(os.Stderr, "No Hub request or cluster was created.")
 			os.Exit(1)
 		}
+		fmt.Printf("%s Permission preflight passed.\n", stdoutStyle.Marker(cliui.Success))
 		printCloudPermissionAdvisories(os.Stdout, pf)
 	}
 
 	// Dry-run stops before device approval and token minting.
 	if *dryRun {
 		if plan.Mode == cloudInstallGitOps {
-			fmt.Println("Dry run complete. The verified GitOps controller and exact stable target are shown above; no Hub request or live Kubernetes change was made.")
+			fmt.Printf("%s Dry run complete. The verified GitOps controller and exact stable target are shown above; no Hub request or live Kubernetes change was made.\n", stdoutStyle.Marker(cliui.Success))
 		} else {
-			fmt.Println("Dry run complete. Blocking permission checks and chart preparation passed; no Hub request or Kubernetes change was made.")
+			fmt.Printf("%s Dry run complete. Blocking permission checks and chart preparation passed; no Hub request or Kubernetes change was made.\n", stdoutStyle.Marker(cliui.Success))
 		}
 		return
 	}
@@ -346,18 +364,18 @@ func cloudInstall(args []string) {
 	client := cloud.NewConnectClient(*hubURL)
 	cr, err := client.Create(ctx, meta)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "\ncouldn't start the connect flow: %v\n", err)
+		fmt.Fprintf(os.Stderr, "\n%s couldn't start the connect flow: %v\n", stderrStyle.Marker(cliui.Failure), err)
 		os.Exit(1)
 	}
-	fmt.Printf("  Approve this connection in your browser:\n\n    %s\n\n", cr.ConnectURL)
+	fmt.Printf("  %s Approve this connection in your browser:\n\n    %s\n\n", stdoutStyle.Marker(cliui.Progress), cr.ConnectURL)
 	if !*noBrowser {
 		go app.OpenBrowser(cr.ConnectURL, *browserPref)
 	}
-	fmt.Println("  Waiting for approval… (Ctrl-C to cancel)")
+	fmt.Printf("  %s Waiting for approval… (Ctrl-C to cancel)\n", stdoutStyle.Marker(cliui.Progress))
 
 	pr, err := client.PollUntilApproved(ctx, cr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "\nconnect failed: %v\n", err)
+		printConnectFailure(os.Stderr, err, cloudClustersURL(cr.ConnectURL))
 		os.Exit(1)
 	}
 	if ctx.Err() != nil && plan.Mode != cloudInstallGitOps {
@@ -370,7 +388,7 @@ func cloudInstall(args []string) {
 			printGitOpsHandoffFailure(os.Stderr, err, pr.ClusterID, cloudClusterURL(cr.ConnectURL, pr.ClusterID))
 			os.Exit(1)
 		}
-		fmt.Printf("\n  Waiting up to %s for your GitOps-managed agent to connect (you can safely leave this running)…\n", cloudTunnelConfirmationTimeout)
+		fmt.Printf("\n  %s Waiting up to %s for your GitOps-managed agent to connect (you can safely leave this running)…\n", stdoutStyle.Marker(cliui.Progress), cloudTunnelConfirmationTimeout)
 		if err := client.WaitUntilConsumed(ctx, cr, cloudTunnelConfirmationTimeout); err != nil {
 			printGitOpsPendingHandoff(os.Stderr, err, pr.ClusterID, cloudClusterURL(cr.ConnectURL, pr.ClusterID))
 			os.Exit(1)
@@ -385,7 +403,8 @@ func cloudInstall(args []string) {
 	if plan.Mode == cloudInstallAdopt {
 		action = "Upgrading and connecting"
 	}
-	fmt.Printf("\n  Approved. %s Radar in namespace %q…\n", action, prepared.Namespace())
+	fmt.Printf("\n  %s Approved.\n", stdoutStyle.Marker(cliui.Success))
+	fmt.Printf("  %s %s Radar in namespace %q…\n", stdoutStyle.Marker(cliui.Progress), action, prepared.Namespace())
 	perr := cloudinstall.ProvisionPrepared(ctx, clients.Kubernetes, prepared, cloudinstall.ProvisionConfig{
 		Namespace:    prepared.Namespace(),
 		ReleaseName:  prepared.ReleaseName(),
@@ -395,14 +414,15 @@ func cloudInstall(args []string) {
 		Token:        pr.Token,
 	})
 	if perr != nil {
-		fmt.Fprintf(os.Stderr, "\nprovisioning failed: %v\n", perr)
+		fmt.Fprintf(os.Stderr, "\n%s provisioning failed: %v\n", stderrStyle.Marker(cliui.Failure), perr)
 		printPostApprovalRecoveryGuidance(os.Stderr, pr.ClusterID, cloudClusterURL(cr.ConnectURL, pr.ClusterID), provisionRecoveryFrom(prepared), perr, commandTarget)
 		os.Exit(1)
 	}
 
-	fmt.Printf("\n  Kubernetes provisioning complete. Waiting up to %s for the in-cluster agent to connect…\n", cloudTunnelConfirmationTimeout)
+	fmt.Printf("\n  %s Kubernetes provisioning complete.\n", stdoutStyle.Marker(cliui.Success))
+	fmt.Printf("  %s Waiting up to %s for the in-cluster agent to connect…\n", stdoutStyle.Marker(cliui.Progress), cloudTunnelConfirmationTimeout)
 	if err := client.WaitUntilConsumed(ctx, cr, cloudTunnelConfirmationTimeout); err != nil {
-		printTunnelConfirmationFailure(os.Stderr, err, pr.ClusterID, pr.WSSURL, prepared.Deployment(), commandTarget)
+		printTunnelConfirmationFailure(os.Stderr, err, pr.ClusterID, pr.WSSURL, cloudClusterURL(cr.ConnectURL, pr.ClusterID), prepared.Deployment(), commandTarget)
 		os.Exit(1)
 	}
 
@@ -450,13 +470,25 @@ func resolveCloudInstallClusterName(explicit, contextName string) string {
 }
 
 func cloudClusterURL(connectURL, clusterID string) string {
+	return cloudFrontendOrigin(connectURL) + "/c/" + url.PathEscape(clusterID)
+}
+
+func cloudClustersURL(connectURL string) string {
+	return cloudFrontendOrigin(connectURL) + "/clusters"
+}
+
+func cloudFrontendOrigin(connectURL string) string {
 	u, _ := url.Parse(connectURL)
-	origin := (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()
-	return origin + "/c/" + url.PathEscape(clusterID)
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()
+}
+
+func printConnectFailure(w io.Writer, err error, clustersURL string) {
+	fmt.Fprintf(w, "\n%s connect failed: %v\n", cliui.New(w).Marker(cliui.Failure), err)
+	fmt.Fprintf(w, "Open: %s\n", clustersURL)
 }
 
 func printInstallSuccess(w io.Writer, clusterName, clusterURL string, deployment helm.DeploymentRef, target cloudCommandTarget) {
-	fmt.Fprintf(w, "\n  ✓ Cluster %q is connected to Radar.\n", clusterName)
+	fmt.Fprintf(w, "\n  %s Cluster %q is connected to Radar.\n", cliui.New(w).Marker(cliui.Success), clusterName)
 	fmt.Fprintf(w, "    Open: %s\n", clusterURL)
 	fmt.Fprintf(w, "    Track it: %s -n %s rollout status deployment/%s\n\n", target.kubectl(), deployment.Namespace, deployment.Name)
 }
@@ -494,19 +526,21 @@ func printFreshInstallConflict(w io.Writer, err error, target cloudCommandTarget
 	return false
 }
 
-func printTokenSecretConflict(w io.Writer, err error) bool {
+func printTokenSecretConflict(w io.Writer, err error, releaseName string, target cloudCommandTarget) bool {
 	var secret *cloudinstall.TokenSecretExistsError
 	if !errors.As(err, &secret) {
 		return false
 	}
 	fmt.Fprintf(w, "Cloud token Secret %q already exists in namespace %q; Radar will not overwrite it.\n", secret.Name, secret.Namespace)
-	fmt.Fprintln(w, "Inspect the existing Helm release and Secret, and recover that installation if it belongs to an earlier approval.")
+	fmt.Fprintln(w, "Inspect the existing installation and its Cloud pairing:")
+	fmt.Fprintf(w, "  %s\n", target.cloudStatus(secret.Namespace, releaseName))
+	fmt.Fprintln(w, "Recover that installation if it belongs to an earlier approval.")
 	fmt.Fprintln(w, "If it was abandoned, clean up its Helm release and Secret and delete the corresponding Hub cluster before starting a fresh flow.")
 	return true
 }
 
 func printCanceledAfterApproval(w io.Writer, clusterID, clusterURL string) {
-	fmt.Fprintf(w, "\nThe Hub approved cluster %q, but this command was canceled before Kubernetes provisioning began.\n", clusterID)
+	fmt.Fprintf(w, "\n%s The Hub approved cluster %q, but this command was canceled before Kubernetes provisioning began.\n", cliui.New(w).Marker(cliui.Attention), clusterID)
 	fmt.Fprintln(w, "No token Secret or Helm release was written. Rerun `radar cloud install` to try again.")
 	fmt.Fprintln(w, "The previous approval may remain as a pending cluster in Radar. An organization owner can delete it later:")
 	fmt.Fprintf(w, "  %s\n", clusterURL)
@@ -572,7 +606,7 @@ func printPostApprovalRecoveryGuidance(w io.Writer, clusterID, clusterURL string
 	fmt.Fprintln(w, "If the token Secret remains, recover the partial install with this Hub cluster. If the Secret was cleaned up, the token is no longer recoverable: clean up any partial Helm release, then delete this Hub cluster before starting a fresh flow.")
 }
 
-func printTunnelConfirmationFailure(w io.Writer, err error, clusterID, cloudURL string, deployment helm.DeploymentRef, target cloudCommandTarget) {
+func printTunnelConfirmationFailure(w io.Writer, err error, clusterID, cloudURL, clusterURL string, deployment helm.DeploymentRef, target cloudCommandTarget) {
 	reason := err.Error()
 	switch {
 	case errors.Is(err, cloud.ErrConnectConsumptionTimeout):
@@ -583,7 +617,8 @@ func printTunnelConfirmationFailure(w io.Writer, err error, clusterID, cloudURL 
 		reason = "confirmation was canceled"
 	}
 
-	fmt.Fprintf(w, "\nRadar was provisioned and Hub cluster %q already exists, but its tunnel could not be confirmed: %s.\n", clusterID, reason)
+	fmt.Fprintf(w, "\n%s Radar was provisioned and Hub cluster %q already exists, but its tunnel could not be confirmed: %s.\n", cliui.New(w).Marker(cliui.Attention), clusterID, reason)
+	fmt.Fprintf(w, "Open: %s\n", clusterURL)
 	fmt.Fprintln(w, "Do not rerun the installer or delete the cluster by default; the existing agent can still connect after you resolve its startup or egress issue.")
 	fmt.Fprintln(w, "Inspect:")
 	fmt.Fprintf(w, "  %s -n %s rollout status deployment/%s\n", target.kubectl(), deployment.Namespace, deployment.Name)
@@ -603,36 +638,51 @@ type localInstallClients struct {
 	Releases   cloudReleaseInspector
 }
 
-func buildLocalInstallClients(kubeconfig, contextName string) (localInstallClients, error) {
+type localKubernetesClients struct {
+	Kubernetes kubernetes.Interface
+	Dynamic    dynamic.Interface
+	Discovery  discovery.DiscoveryInterface
+	RESTConfig *rest.Config
+}
+
+func buildLocalKubernetesClients(kubeconfig, contextName string) (localKubernetesClients, error) {
 	rules := connectLoadingRules(kubeconfig)
 	restCfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{CurrentContext: contextName}).ClientConfig()
 	if err != nil {
-		return localInstallClients{}, fmt.Errorf("no reachable kubeconfig context: %w", err)
+		return localKubernetesClients{}, fmt.Errorf("no reachable kubeconfig context: %w", err)
 	}
-	// Helm's non-cancelable mutation avoids returning while its background apply
-	// is still running. Bound each Kubernetes request so that critical section
-	// cannot hang forever on a dead apiserver connection.
+	// Bound each Kubernetes request so status and install cannot hang forever on
+	// a dead apiserver connection. This also bounds Helm's non-cancelable apply
+	// critical section when the caller initializes Helm with this config.
 	if restCfg.Timeout <= 0 || restCfg.Timeout > cloudKubernetesRequestTimeout {
 		restCfg.Timeout = cloudKubernetesRequestTimeout
 	}
 	kc, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
-		return localInstallClients{}, fmt.Errorf("kube client: %w", err)
+		return localKubernetesClients{}, fmt.Errorf("kube client: %w", err)
 	}
 	dc, err := dynamic.NewForConfig(restCfg)
 	if err != nil {
-		return localInstallClients{}, fmt.Errorf("dynamic kube client: %w", err)
+		return localKubernetesClients{}, fmt.Errorf("dynamic kube client: %w", err)
+	}
+	return localKubernetesClients{Kubernetes: kc, Dynamic: dc, Discovery: kc.Discovery(), RESTConfig: restCfg}, nil
+}
+
+func buildLocalInstallClients(kubeconfig, contextName string) (localInstallClients, error) {
+	clients, err := buildLocalKubernetesClients(kubeconfig, contextName)
+	if err != nil {
+		return localInstallClients{}, err
 	}
 	// Hand Helm the SAME resolved rest.Config, not a kubeconfig path — otherwise
 	// a multi-file KUBECONFIG could leave Helm on a different current-context
 	// (cluster B) than the preflight/Secret client (cluster A).
-	if err := helm.InitializeWithRESTConfig(restCfg); err != nil {
+	if err := helm.InitializeWithRESTConfig(clients.RESTConfig); err != nil {
 		return localInstallClients{}, fmt.Errorf("helm init: %w", err)
 	}
 	return localInstallClients{
-		Kubernetes: kc,
-		Dynamic:    dc,
-		Discovery:  kc.Discovery(),
+		Kubernetes: clients.Kubernetes,
+		Dynamic:    clients.Dynamic,
+		Discovery:  clients.Discovery,
 		Helm:       helm.GetClient(),
 		Releases:   helm.GetClient(),
 	}, nil

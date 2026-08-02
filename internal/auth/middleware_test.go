@@ -1,14 +1,17 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -102,6 +105,35 @@ func TestMiddleware_ProxyHeaders(t *testing.T) {
 	}
 	if !found {
 		t.Error("proxy auth should set session cookie")
+	}
+}
+
+func TestMiddleware_ProxyHeaders_LogsAcceptedIdentity(t *testing.T) {
+	resetForwardedIdentityLog()
+
+	mw := Authenticate(proxyConfig())
+	handler := mw(http.HandlerFunc(echoUser))
+
+	var buf bytes.Buffer
+	defer log.SetOutput(log.Writer())
+	log.SetOutput(&buf)
+
+	req := httptest.NewRequest("GET", "/api/resources/pods", nil)
+	req.Header.Set("X-Forwarded-User", "dave")
+	req.Header.Set("X-Forwarded-Groups", "radar:idp:read-only-team")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	line := buf.String()
+	if !strings.Contains(line, "[auth] accepted forwarded identity") {
+		t.Fatalf("expected accepted-identity log line, got: %q", line)
+	}
+	if !strings.Contains(line, "dave") || !strings.Contains(line, "radar:idp:read-only-team") {
+		t.Errorf("log line missing user/group: %q", line)
 	}
 }
 

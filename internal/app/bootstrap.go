@@ -37,6 +37,8 @@ type AppConfig struct {
 	Namespace                string
 	Namespaces               []string
 	Port                     int
+	ListenAddress            string
+	ShowRemoteAccessHint     bool
 	NoBrowser                bool
 	Browser                  string
 	DevMode                  bool
@@ -117,14 +119,6 @@ func InitializeK8s(cfg AppConfig) error {
 		if err := validateNamespaceScopeTarget(k8s.GetNamespaceScopeTarget()); err != nil {
 			return err
 		}
-	}
-
-	if len(cfg.KubeconfigDirs) > 0 {
-		log.Printf("Using kubeconfigs from directories: %v", cfg.KubeconfigDirs)
-	} else if kubepath := k8s.GetKubeconfigPath(); kubepath != "" {
-		log.Printf("Using kubeconfig: %s", kubepath)
-	} else {
-		log.Printf("Using in-cluster config")
 	}
 
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{
@@ -272,11 +266,14 @@ func CreateServer(cfg AppConfig) *server.Server {
 	}
 
 	serverCfg := server.Config{
-		Port:            cfg.Port,
-		DevMode:         cfg.DevMode,
-		StaticFS:        static.FS,
-		StaticRoot:      "dist",
-		EffectiveConfig: effectiveCfg,
+		Port:             cfg.Port,
+		ListenAddress:    cfg.ListenAddress,
+		StartupLog:       true,
+		RemoteAccessHint: cfg.ShowRemoteAccessHint,
+		DevMode:          cfg.DevMode,
+		StaticFS:         static.FS,
+		StaticRoot:       "dist",
+		EffectiveConfig:  effectiveCfg,
 		DiagConfig: &server.DiagConfig{
 			Port:                 cfg.Port,
 			DevMode:              cfg.DevMode,
@@ -306,11 +303,6 @@ func CreateServer(cfg AppConfig) *server.Server {
 	if cfg.MCPEnabled {
 		serverCfg.MCPHandler = mcppkg.NewHandler()
 		serverCfg.MCPReadOnlyHandler = mcppkg.NewReadOnlyHandler()
-		if cfg.Port != 0 {
-			log.Printf("MCP server enabled at http://localhost:%d/mcp", cfg.Port)
-		} else {
-			log.Printf("MCP server enabled (port will be assigned at startup)")
-		}
 	}
 
 	return server.New(serverCfg)
@@ -324,12 +316,13 @@ func CreateServer(cfg AppConfig) *server.Server {
 // (RBAC checks + informer sync) so neither blocks the other. If the
 // connectivity check fails, subsystem init is canceled immediately.
 func InitializeCluster() {
+	log.Printf("── Kubernetes initialization · %s ─────────────────────────", k8s.SanitizeForLog(k8s.GetContextName()))
+
 	// Cancel any in-flight API calls from previous attempts (e.g., browser
 	// polling /api/capabilities with RBAC checks through a broken exec plugin).
 	k8s.CancelOngoingOperations()
 
 	clusterStart := time.Now()
-	log.Printf("[ops] InitializeCluster START (context=%s)", k8s.GetContextName())
 
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{
 		State:       k8s.StateConnecting,
@@ -472,7 +465,6 @@ func WriteMCPPortFile(port int) {
 		log.Printf("[mcp] Failed to write port file: %v", err)
 		return
 	}
-	log.Printf("[mcp] Port file written: %s (port %d)", path, port)
 }
 
 // RemoveMCPPortFile removes the port discovery file on shutdown.

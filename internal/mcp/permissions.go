@@ -12,8 +12,59 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/timeline"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
+
+// mcpChangeAuthorizer returns the per-kind authorizer for the ctx user, for the
+// shared k8s.ChangeReadAllowed gate. canReadInNamespace memoizes on the user's
+// permission cache; nil user (auth off) short-circuits to allow inside it.
+func mcpChangeAuthorizer(ctx context.Context) func(group, resource, namespace string) bool {
+	return func(group, resource, namespace string) bool {
+		return canReadInNamespace(ctx, group, resource, namespace, "list")
+	}
+}
+
+// filterRecentChangesRBAC drops RecentChange rows the ctx user can't read, via
+// the shared per-kind gate (APIVersion disambiguates CRD kind collisions). It is
+// the MCP twin of the server-side filter, applied at every MCP surface that
+// emits change rows (get_changes, dashboard, issues recent_changes, per-issue
+// correlation incl. consumed ConfigMaps, diagnose, get_resource).
+//
+// Helm-package-manager rows are a synthesized kind with no real GVR and their
+// own namespace/helm authorization upstream; pass them through rather than
+// fail-closed on an unresolvable kind (preserves the pre-existing behavior — the
+// prior cluster-scoped-only filter also let them through). Auth off → unchanged.
+func filterRecentChangesRBAC(ctx context.Context, changes []issuesapi.RecentChange) []issuesapi.RecentChange {
+	if pkgauth.UserFromContext(ctx) == nil {
+		return changes
+	}
+	authz := mcpChangeAuthorizer(ctx)
+	out := changes[:0]
+	for _, c := range changes {
+		if c.Source == helmChangeSource || k8s.ChangeReadAllowed(c.Kind, c.APIVersion, c.Namespace, authz) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// filterTimelineEventsRBAC is filterRecentChangesRBAC's twin for raw timeline
+// events (the MCP dashboard queries the store directly). Auth off → unchanged.
+func filterTimelineEventsRBAC(ctx context.Context, events []timeline.TimelineEvent) []timeline.TimelineEvent {
+	if pkgauth.UserFromContext(ctx) == nil {
+		return events
+	}
+	authz := mcpChangeAuthorizer(ctx)
+	out := events[:0]
+	for _, e := range events {
+		if k8s.ChangeReadAllowed(e.Kind, e.APIVersion, e.Namespace, authz) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
 
 // MCP read tools share the cluster-wide resource cache (populated by the pod
 // SA), so per-user namespace filtering must happen at read time. This mirrors

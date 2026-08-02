@@ -1,6 +1,6 @@
 {
   "name": "@skyhook-io/radar-app",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Radar's full web UI as a reusable React component. Used by Radar's own binary and by external consumers like Radar Cloud.",
   "repository": {
     "type": "git",
@@ -33,15 +33,15 @@
     "@fontsource/dm-mono": "^5.2.7",
     "@monaco-editor/react": "^4.7.0",
     "diff": "^9.0.0",
-    "monaco-editor": "^0.55.1",
+    "monaco-editor": "0.55.1",
     "react-markdown": "^10.1.0",
-    "react-virtuoso": "^4.18.10",
+    "react-virtuoso": "^4.18.11",
     "remark-gfm": "^4.0.1",
     "shiki": "^4.2.0",
     "yaml": "^2.9.0"
   },
   "peerDependencies": {
-    "@skyhook-io/k8s-ui": ">=1.8.11",
+    "@skyhook-io/k8s-ui": ">=1.10.0",
     "@tanstack/react-query": ">=5",
     "@xyflow/react": ">=12.0.0",
     "clsx": ">=2",
@@ -54,15 +54,15 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@playwright/test": "^1.59.1",
+    "@playwright/test": "^1.62.0",
     "@skyhook-io/k8s-ui": "*",
     "@tailwindcss/typography": "^0.5.20",
-    "@tailwindcss/vite": "^4.3.1",
-    "@tanstack/react-query": "^5.101.2",
-    "@types/node": "^26.0.1",
+    "@tailwindcss/vite": "^4.3.3",
+    "@tanstack/react-query": "^5.101.4",
+    "@types/node": "^26.1.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.2",
+    "@vitejs/plugin-react": "^6.0.4",
     "@xyflow/react": "^12.11.2",
     "clsx": "^2.1.1",
     "elkjs": "^0.11.1",
@@ -77,13 +77,12 @@
     "react-dom": "^19.2.7",
     "react-router-dom": "^7.18.1",
     "tailwind-merge": "^3.6.0",
-    "tailwindcss": "^4.3.1",
+    "tailwindcss": "^4.3.3",
     "typescript": "^6.0.2",
     "typescript-eslint": "^8.62.0",
-    "vite": "^8.0.12"
+    "vite": "^8.1.5"
   },
   "sideEffects": [
-    "*.css",
-    "./src/monaco-setup.ts"
+    "*.css"
   ]
 }

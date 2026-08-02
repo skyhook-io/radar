@@ -5,14 +5,15 @@ import type { RenderDiagnoseAction } from "../../context/DiagnoseCustomization";
 
 // The per-resource AI entry point. It no longer owns a panel — it just dispatches
 // to the single app-level AI surface (DiagnoseContext), opening a new investigation
-// for this resource. Self-hides when no agent CLI is present. A host like Radar Hub
-// overrides this slot with its own action.
+// for this resource. Self-hides when no agent CLI is present. Hosts can override
+// this slot with their own action.
 //
 // Adaptive by health: on a resource with a live problem it reads as a prominent
 // "Diagnose" (find the root cause); when the resource is fine or health is unknown
 // it shrinks to a quiet colored-icon affordance ("ask my agent about this") — so it
 // never implies "something is wrong here" on a healthy resource. The tooltip leads
-// with the BYO framing: this runs the user's OWN agent, locally.
+// with the BYO framing (the user's OWN agent, locally) — unless the agent is
+// hosted, where those claims would be false.
 function DiagnoseResourceButton({
   kind,
   namespace,
@@ -31,9 +32,13 @@ function DiagnoseResourceButton({
   const running = runningKeys.has(runTargetKey(kind, namespace, name));
   const tooltip = running
     ? `${d.agentLabel} is investigating this resource — click to watch it live.`
-    : problem
-      ? `Diagnose with your own ${d.agentLabel} — runs locally, reads this resource's spec, events & logs to find the root cause.`
-      : `Ask your own ${d.agentLabel} about this resource — runs locally, reads its spec, events & logs.`;
+    : d.hosted
+      ? problem
+        ? `Diagnose with ${d.agentLabel} — reads this resource's spec, events & logs to find the root cause.`
+        : `Ask ${d.agentLabel} about this resource — reads its spec, events & logs.`
+      : problem
+        ? `Diagnose with your own ${d.agentLabel} — runs locally, reads this resource's spec, events & logs to find the root cause.`
+        : `Ask your own ${d.agentLabel} about this resource — runs locally, reads its spec, events & logs.`;
   // While an investigation is live, the button advertises it (and clicking focuses
   // the existing run rather than starting a new one — openInvestigation dedups).
   const showLabel = problem || running;
@@ -95,7 +100,11 @@ export function IssueDiagnoseButton({
   if (!d.available) return null;
   return (
     <Tooltip
-      content={`Runs ${d.agentLabel} on your machine and sends it this resource's context to find the root cause`}
+      content={
+        d.hosted
+          ? `Sends this resource's context to ${d.agentLabel} to find the root cause`
+          : `Runs ${d.agentLabel} on your machine and sends it this resource's context to find the root cause`
+      }
       position="left"
     >
       <button
@@ -119,12 +128,15 @@ export function GlobalDiagnoseButton() {
   const { runningKeys } = useDiagnoseLayout();
   if (!d.available) return null;
   const runningCount = runningKeys.size;
+  const agentSuffix = d.hosted
+    ? `powered by ${d.agentLabel}`
+    : `runs your own ${d.agentLabel} locally`;
   return (
     <Tooltip
       content={
         runningCount > 0
-          ? `${runningCount} investigation${runningCount > 1 ? "s" : ""} running — runs your own ${d.agentLabel} locally`
-          : `AI investigations — runs your own ${d.agentLabel} locally`
+          ? `${runningCount} investigation${runningCount > 1 ? "s" : ""} running — ${agentSuffix}`
+          : `AI investigations — ${agentSuffix}`
       }
       position="bottom"
     >

@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/pkg/hpadiag"
+	"github.com/skyhook-io/radar/pkg/rolloutdiag"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -887,13 +888,26 @@ func containerStateSummary(st corev1.ContainerStatus) ContainerStateSummary {
 func buildWorkloadSummary(obj runtime.Object) *WorkloadSummary {
 	switch v := obj.(type) {
 	case *appsv1.Deployment:
-		return &WorkloadSummary{Replicas: &ReplicaSummary{
+		summary := &WorkloadSummary{Replicas: &ReplicaSummary{
 			Desired:     replicasOrZero(v.Spec.Replicas),
 			Ready:       v.Status.ReadyReplicas,
 			Available:   v.Status.AvailableReplicas,
 			Updated:     v.Status.UpdatedReplicas,
 			Unavailable: v.Status.UnavailableReplicas,
 		}}
+		if risk := rolloutdiag.Analyze(v); risk != nil {
+			summary.RolloutRisk = &RolloutRiskSummary{
+				Reason:                 risk.Reason,
+				Replicas:               risk.Replicas,
+				MaxSurge:               risk.MaxSurge,
+				MaxUnavailable:         risk.MaxUnavailable,
+				ResolvedMaxSurge:       risk.ResolvedMaxSurge,
+				ResolvedMaxUnavailable: risk.ResolvedMaxUnavailable,
+				Message:                risk.Message,
+				Action:                 risk.Remediation,
+			}
+		}
+		return summary
 	case *appsv1.StatefulSet:
 		return &WorkloadSummary{Replicas: &ReplicaSummary{
 			Desired:   replicasOrZero(v.Spec.Replicas),
@@ -1410,7 +1424,7 @@ func filterAppReferences(ctx context.Context, refs *AppReferences, ac RefAccessC
 	if refs == nil {
 		return nil
 	}
-	out := &AppReferences{}
+	out := &AppReferences{DuplicateEnv: append([]DuplicateEnvVarReference(nil), refs.DuplicateEnv...)}
 	deniedAny := false
 	for _, ref := range refs.ServiceEnv {
 		if !checkRef(ctx, ac, &ref.Service) {
@@ -1422,7 +1436,32 @@ func filterAppReferences(ctx context.Context, refs *AppReferences, ac RefAccessC
 	if deniedAny {
 		omitted.add("appReferences.serviceEnv", OmittedRBACDenied)
 	}
-	if len(out.ServiceEnv) == 0 {
+	deniedAny = false
+	for _, ref := range refs.RemovedServiceEnv {
+		if !checkRef(ctx, ac, &ref.Service) {
+			deniedAny = true
+			continue
+		}
+		out.RemovedServiceEnv = append(out.RemovedServiceEnv, ref)
+	}
+	if deniedAny {
+		omitted.add("appReferences.removedServiceEnv", OmittedRBACDenied)
+	}
+	deniedAny = false
+	for _, ref := range refs.StaleSecretEnv {
+		if !checkRef(ctx, ac, &ref.Secret) {
+			deniedAny = true
+			continue
+		}
+		out.StaleSecretEnv = append(out.StaleSecretEnv, ref)
+	}
+	if len(out.StaleSecretEnv) > 0 {
+		out.StaleSecretEnvTruncated = refs.StaleSecretEnvTruncated
+	}
+	if deniedAny {
+		omitted.add("appReferences.staleSecretEnv", OmittedRBACDenied)
+	}
+	if len(out.ServiceEnv) == 0 && len(out.DuplicateEnv) == 0 && len(out.RemovedServiceEnv) == 0 && len(out.StaleSecretEnv) == 0 {
 		return nil
 	}
 	return out

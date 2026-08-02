@@ -5,12 +5,16 @@
 // Settings tabs' layout — this renders only the controls (no card, no heading).
 import { useState } from "react";
 import { Trash2 } from "lucide-react";
-import { clearHistory, type AgentInfo } from "../../api/diagnose";
+import {
+  clearHistory,
+  type AgentInfo,
+  type ExecutionProfile,
+} from "../../api/diagnose";
 import { AgentControls } from "./parts";
 
 export interface AIDraft {
   agent: string;
-  isolated: boolean;
+  profile: ExecutionProfile;
   model: string;
   effort: string;
 }
@@ -18,7 +22,15 @@ export interface AIDraft {
 // ClearHistoryRow is an immediate action (not part of the staged draft): a
 // two-step confirm button that wipes finished investigations from the local
 // history DB. Live investigations survive.
-function ClearHistoryRow({ onCleared }: { onCleared: () => void }) {
+function ClearHistoryRow({
+  hosted,
+  agentLabel,
+  onCleared,
+}: {
+  hosted: boolean;
+  agentLabel: string;
+  onCleared: () => void;
+}) {
   const [confirming, setConfirming] = useState(false);
   const [state, setState] = useState<"idle" | "busy" | "done" | "error">(
     "idle",
@@ -36,9 +48,15 @@ function ClearHistoryRow({ onCleared }: { onCleared: () => void }) {
   return (
     <div className="mt-3 flex items-center justify-between gap-2 border-t border-theme-border/60 pt-3">
       <p className="text-[11px] leading-snug text-theme-text-tertiary">
-        Investigation transcripts are kept on this machine (
-        <code className="font-mono">~/.radar</code>) so history survives
-        restarts.
+        {hosted ? (
+          `Investigation transcripts are stored by ${agentLabel} so history survives restarts.`
+        ) : (
+          <>
+            Investigation transcripts are kept on this machine (
+            <code className="font-mono">~/.radar</code>) so history survives
+            restarts.
+          </>
+        )}
         {state === "done" && (
           <span className="ml-1 font-medium text-theme-text-secondary">
             History cleared.
@@ -85,12 +103,16 @@ function ClearHistoryRow({ onCleared }: { onCleared: () => void }) {
 export function AISettingsSection({
   available,
   agents,
+  hosted,
+  agentLabel,
   draft,
   onChange,
   onHistoryCleared,
 }: {
   available: boolean;
   agents: AgentInfo[];
+  hosted: boolean;
+  agentLabel: string;
   draft: AIDraft;
   onChange: (patch: Partial<AIDraft>) => void;
   onHistoryCleared: () => void;
@@ -98,19 +120,42 @@ export function AISettingsSection({
   if (!available || agents.length === 0) return null;
   return (
     <>
-      <AgentControls
-        agents={agents}
-        selectedAgent={draft.agent}
-        // Model + effort are agent-specific; reset them when the agent changes.
-        onSelectAgent={(a) => onChange({ agent: a, model: "", effort: "" })}
-        isolated={draft.isolated}
-        onSetIsolated={(v) => onChange({ isolated: v })}
-        model={draft.model}
-        onSetModel={(v) => onChange({ model: v })}
-        effort={draft.effort}
-        onSetEffort={(v) => onChange({ effort: v })}
+      {hosted ? (
+        // The agent, its model, and how it runs are all fixed by the host — none
+        // of the local BYO-agent knobs apply, so there's nothing to configure.
+        <p className="text-xs leading-snug text-theme-text-tertiary">
+          {agentLabel} manages the model and how it runs — there&apos;s nothing
+          to configure here.
+        </p>
+      ) : (
+        <AgentControls
+          agents={agents}
+          selectedAgent={draft.agent}
+          // Model + effort are agent-specific; reset them when the agent changes.
+          onSelectAgent={(a) => {
+            const nextProfile = agents.find(
+              (agent) => agent.name === a,
+            )?.profiles?.[0];
+            onChange({
+              agent: a,
+              profile: nextProfile ?? draft.profile,
+              model: "",
+              effort: "",
+            });
+          }}
+          profile={draft.profile}
+          onSetProfile={(v) => onChange({ profile: v })}
+          model={draft.model}
+          onSetModel={(v) => onChange({ model: v })}
+          effort={draft.effort}
+          onSetEffort={(v) => onChange({ effort: v })}
+        />
+      )}
+      <ClearHistoryRow
+        hosted={hosted}
+        agentLabel={agentLabel}
+        onCleared={onHistoryCleared}
       />
-      <ClearHistoryRow onCleared={onHistoryCleared} />
     </>
   );
 }

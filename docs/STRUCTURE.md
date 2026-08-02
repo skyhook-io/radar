@@ -52,6 +52,8 @@ radar/
 │   ├── prometheus/            # Prometheus client integration
 │   ├── server/
 │   │   ├── server.go          # chi router, main REST endpoints (SOURCE OF TRUTH for routes)
+│   │   ├── yaml_preview.go    # Server-dry-run YAML review and Secret-safe predictions
+│   │   ├── yaml_schemas.go    # Bounded connected-cluster OpenAPI schemas for YAML authoring
 │   │   ├── sse.go             # Server-Sent Events broadcaster
 │   │   ├── certificate.go     # TLS certificate parsing and expiry
 │   │   ├── exec.go            # WebSocket pod terminal exec
@@ -97,7 +99,7 @@ radar/
 │       │   ├── workload/      # WorkloadView
 │       │   ├── timeline/      # Timeline shared components
 │       │   ├── logs/          # Log viewer core
-│       │   └── ui/            # Shared UI primitives (Toast, CodeViewer, etc.)
+│       │   └── ui/            # Shared primitives, package-owned Monaco/YAML runtime, Problems + review
 │       ├── hooks/             # useKeyboardShortcuts, useRefreshAnimation
 │       ├── types/             # Shared TypeScript types
 │       └── utils/             # Pure utilities (api-resources, format, icons, etc.)

@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -51,6 +52,7 @@ type fakeProm struct {
 	rangeBody      string
 	labelStatus    int
 	labelBody      string
+	labelDelay     time.Duration
 	metadataStatus int
 	metadataBody   string
 	rulesStatus    int
@@ -78,6 +80,9 @@ func (f *fakeProm) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(path, "/api/v1/label/") && strings.HasSuffix(path, "/values"):
 		label := strings.TrimSuffix(strings.TrimPrefix(path, "/api/v1/label/"), "/values")
 		f.labelCalls = append(f.labelCalls, labelCall{label: label, params: q})
+		if f.labelDelay > 0 {
+			time.Sleep(f.labelDelay)
+		}
 		writeFakeBody(w, f.labelStatus, orDefault(f.labelBody, emptyLabelsBody))
 	case path == "/api/v1/metadata":
 		f.metadataCalls++
@@ -172,7 +177,8 @@ func TestHandleQueryPrometheus_InstantHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleQueryPrometheus: %v", err)
 	}
-	resp := decodeQueryResponse(t, extractText(t, result))
+	body := extractText(t, result)
+	resp := decodeQueryResponse(t, body)
 
 	if resp.Query != "test_cpu_usage" {
 		t.Errorf("response should echo query, got %q", resp.Query)
@@ -188,6 +194,15 @@ func TestHandleQueryPrometheus_InstantHappyPath(t *testing.T) {
 	}
 	if resp.Truncated {
 		t.Errorf("small result should not be truncated")
+	}
+	if strings.Contains(body, `"suggestedMetrics"`) {
+		t.Errorf("non-empty response must omit suggestedMetrics, body: %s", body)
+	}
+	f.mu.Lock()
+	labelCalls := len(f.labelCalls)
+	f.mu.Unlock()
+	if labelCalls != 0 {
+		t.Errorf("non-empty query must not run discovery, got %d label calls", labelCalls)
 	}
 }
 
@@ -299,6 +314,7 @@ func TestHandleQueryPrometheus_MaxPointsClampedAt600(t *testing.T) {
 func TestHandleQueryPrometheus_EmptyResultHasNote(t *testing.T) {
 	f := setupFakeProm(t)
 	f.queryBody = emptyVectorBody
+	f.labelBody = `{"status":"success","data":["test_missing_metric_total","test_missing_requests"]}`
 
 	result, _, err := handleQueryPrometheus(context.Background(), nil, queryPrometheusInput{Query: "test_missing_metric"})
 	if err != nil {
@@ -311,6 +327,148 @@ func TestHandleQueryPrometheus_EmptyResultHasNote(t *testing.T) {
 	}
 	if !strings.Contains(resp.Note, "discover_metrics") {
 		t.Errorf("note should steer the model to discover_metrics, got %q", resp.Note)
+	}
+	if len(resp.SuggestedMetrics) != 2 || resp.SuggestedMetrics[0] != "test_missing_metric_total" || resp.SuggestedMetrics[1] != "test_missing_requests" {
+		t.Errorf("suggestedMetrics = %v, want available test_missing names", resp.SuggestedMetrics)
+	}
+	call := f.lastLabelCall(t)
+	if call.label != "__name__" {
+		t.Errorf("fallback label = %q, want __name__", call.label)
+	}
+	if got := call.params["match[]"]; len(got) != 1 || got[0] != `{__name__=~"test_missing.*"}` {
+		t.Errorf("fallback match[] = %v, want scoped test_missing selector", got)
+	}
+	if got := call.params.Get("limit"); got != strconv.Itoa(promSuggestionLimit+1) {
+		t.Errorf("fallback limit = %q, want %d", got, promSuggestionLimit+1)
+	}
+	start, startErr := strconv.ParseInt(call.params.Get("start"), 10, 64)
+	end, endErr := strconv.ParseInt(call.params.Get("end"), 10, 64)
+	if startErr != nil || endErr != nil || end-start != int64(promDiscoverLookback/time.Second) {
+		t.Errorf("fallback lookback start=%q end=%q, want %s", call.params.Get("start"), call.params.Get("end"), promDiscoverLookback)
+	}
+}
+
+func TestHandleQueryPrometheus_EmptyResultSuggestionsCapped(t *testing.T) {
+	f := setupFakeProm(t)
+	f.queryBody = emptyVectorBody
+	metrics := make([]string, 0, promSuggestionLimit+5)
+	for i := 0; i < promSuggestionLimit+5; i++ {
+		metrics = append(metrics, fmt.Sprintf("test_missing_metric_%02d", i))
+	}
+	encoded, err := json.Marshal(metrics)
+	if err != nil {
+		t.Fatalf("marshal metrics: %v", err)
+	}
+	f.labelBody = `{"status":"success","data":` + string(encoded) + `}`
+
+	result, _, err := handleQueryPrometheus(context.Background(), nil, queryPrometheusInput{Query: "test_missing_metric"})
+	if err != nil {
+		t.Fatalf("handleQueryPrometheus: %v", err)
+	}
+	resp := decodeQueryResponse(t, extractText(t, result))
+	if len(resp.SuggestedMetrics) != promSuggestionLimit {
+		t.Fatalf("len(suggestedMetrics) = %d, want cap %d", len(resp.SuggestedMetrics), promSuggestionLimit)
+	}
+	if !strings.Contains(resp.Note, fmt.Sprintf("first %d", promSuggestionLimit)) {
+		t.Errorf("truncated suggestion note should disclose cap, got %q", resp.Note)
+	}
+}
+
+func TestHandleQueryPrometheus_DiscoveryFailurePreservesPlainNote(t *testing.T) {
+	f := setupFakeProm(t)
+	f.queryBody = emptyVectorBody
+	f.labelStatus = http.StatusInternalServerError
+	f.labelBody = "discovery failed"
+
+	result, _, err := handleQueryPrometheus(context.Background(), nil, queryPrometheusInput{Query: "test_missing_metric"})
+	if err != nil {
+		t.Fatalf("fallback discovery failure must not fail query: %v", err)
+	}
+	body := extractText(t, result)
+	resp := decodeQueryResponse(t, body)
+	if resp.Note != "query returned no data — verify metric and label names with discover_metrics" {
+		t.Errorf("note = %q, want original plain note", resp.Note)
+	}
+	if strings.Contains(body, `"suggestedMetrics"`) || len(resp.SuggestedMetrics) != 0 {
+		t.Errorf("failed fallback must omit suggestedMetrics, body: %s", body)
+	}
+}
+
+func TestHandleQueryPrometheus_DiscoveryTimeoutPreservesPlainNote(t *testing.T) {
+	previousTimeout := promSuggestionTimeout
+	promSuggestionTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { promSuggestionTimeout = previousTimeout })
+
+	f := setupFakeProm(t)
+	f.queryBody = emptyVectorBody
+	f.labelDelay = 50 * time.Millisecond
+	f.labelBody = `{"status":"success","data":["test_missing_metric_total"]}`
+
+	result, _, err := handleQueryPrometheus(context.Background(), nil, queryPrometheusInput{Query: "test_missing_metric"})
+	if err != nil {
+		t.Fatalf("fallback discovery timeout must not fail query: %v", err)
+	}
+	body := extractText(t, result)
+	resp := decodeQueryResponse(t, body)
+	if resp.Note != "query returned no data — verify metric and label names with discover_metrics" {
+		t.Errorf("note = %q, want original plain note", resp.Note)
+	}
+	if strings.Contains(body, `"suggestedMetrics"`) {
+		t.Errorf("timed-out fallback must omit suggestedMetrics, body: %s", body)
+	}
+}
+
+func TestHandleQueryPrometheus_AmbiguousQuerySkipsDiscovery(t *testing.T) {
+	f := setupFakeProm(t)
+	f.queryBody = emptyVectorBody
+	f.labelBody = `{"status":"success","data":["foo_metric_total","bar_metric_total"]}`
+
+	result, _, err := handleQueryPrometheus(context.Background(), nil, queryPrometheusInput{Query: `foo_metric{job="api"} + bar_metric`})
+	if err != nil {
+		t.Fatalf("ambiguous empty query must not be an error: %v", err)
+	}
+	body := extractText(t, result)
+	resp := decodeQueryResponse(t, body)
+	if resp.Note != "query returned no data — verify metric and label names with discover_metrics" {
+		t.Errorf("note = %q, want original plain note", resp.Note)
+	}
+	if strings.Contains(body, `"suggestedMetrics"`) {
+		t.Errorf("ambiguous query must omit suggestedMetrics, body: %s", body)
+	}
+	f.mu.Lock()
+	labelCalls := len(f.labelCalls)
+	f.mu.Unlock()
+	if labelCalls != 0 {
+		t.Errorf("ambiguous query must not run discovery, got %d label calls", labelCalls)
+	}
+}
+
+func TestPromMetricFamilyPrefix(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+		want  string
+	}{
+		{name: "simple metric", query: "test_missing_metric", want: "test_missing"},
+		{name: "function and selector", query: `rate(container_cpu_usage_seconds_total{namespace="very_long_fake_metric"}[5m])`, want: "container_cpu"},
+		{name: "postfix grouping", query: `sum(rate(http_requests_total[5m])) by (destination_service_namespace)`, want: "http_requests"},
+		{name: "prefix grouping", query: `sum by (namespace) (rate(node_cpu_seconds_total{mode!="idle"}[5m]))`, want: "node_cpu"},
+		{name: "binary grouping modifiers", query: `left_metric_total / on (namespace, pod) group_left (node_name) right_metric_total`, want: ""},
+		{name: "plain binary expression", query: `foo_metric + bar_metric`, want: ""},
+		{name: "selector plus bare metric", query: `foo_metric{job="api"} + bar_metric`, want: ""},
+		{name: "bare metric plus range selector", query: `bar_metric + rate(foo_metric[5m])`, want: ""},
+		{name: "bare aggregation", query: `sum(foo_metric)`, want: ""},
+		{name: "multiple explicit selectors", query: `rate(foo_metric[5m]) + rate(bar_metric[5m])`, want: ""},
+		{name: "matcher operator is not binary", query: `rate(http_requests_total{job!="api"}[5m])`, want: "http_requests"},
+		{name: "ambiguous function argument", query: "label_join(actual_metric_total, 'fake_long_metric', `another_fake_metric`, \"third_fake_metric\")", want: ""},
+		{name: "name matcher is ambiguous", query: `{__name__=~"http_.*"}`, want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := promMetricFamilyPrefix(tt.query); got != tt.want {
+				t.Errorf("promMetricFamilyPrefix(%q) = %q, want %q", tt.query, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -333,10 +491,14 @@ func TestHandleQueryPrometheus_OversizedResultSummary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleQueryPrometheus: %v", err)
 	}
-	resp := decodeQueryResponse(t, extractText(t, result))
+	body := extractText(t, result)
+	resp := decodeQueryResponse(t, body)
 
 	if !resp.Truncated {
-		t.Fatalf("expected truncated=true, body: %s", extractText(t, result))
+		t.Fatalf("expected truncated=true, body: %s", body)
+	}
+	if strings.Contains(body, `"suggestedMetrics"`) {
+		t.Errorf("oversized non-empty response must omit suggestedMetrics, body: %s", body)
 	}
 	if len(resp.Series) != 0 {
 		t.Errorf("summary path must never return raw series, got %d", len(resp.Series))

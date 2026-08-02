@@ -126,8 +126,6 @@ func pruneContainerConditional(container map[string]any) {
 	if policy, ok := container["imagePullPolicy"].(string); ok && policy != "Never" {
 		delete(container, "imagePullPolicy")
 	}
-	// Redact inline env values
-	redactEnvValues(container)
 }
 
 // pruneContainersCompact applies the CONDITIONAL per-container pruning at
@@ -139,9 +137,8 @@ func pruneContainerConditionalCompact(container map[string]any) {
 	if policy, ok := container["imagePullPolicy"].(string); ok && policy != "Never" {
 		delete(container, "imagePullPolicy")
 	}
-	// Simplify volumeMounts + env: keep names only (strip values for tokens)
+	// Simplify volumeMounts; env lists are handled recursively under spec.
 	simplifyVolumeMounts(container)
-	simplifyEnvToNames(container)
 }
 
 func simplifyVolumeMounts(container map[string]any) {
@@ -160,34 +157,109 @@ func simplifyVolumeMounts(container map[string]any) {
 	container["volumeMounts"] = names
 }
 
-func simplifyEnvToNames(container map[string]any) {
-	envList, ok := container["env"].([]any)
+func sanitizeSpecEnvLists(m map[string]any, compact bool) {
+	spec, ok := m["spec"]
 	if !ok {
 		return
 	}
-	names := make([]string, 0, len(envList))
-	for _, e := range envList {
-		if env, ok := e.(map[string]any); ok {
-			if name, ok := env["name"].(string); ok {
-				names = append(names, name)
-			}
-		}
-	}
-	container["env"] = names
+	sanitizeEnvLists(spec, compact)
 }
 
-func redactEnvValues(container map[string]any) {
-	envList, ok := container["env"].([]any)
-	if !ok {
-		return
-	}
-	for _, e := range envList {
-		if env, ok := e.(map[string]any); ok {
-			if val, ok := env["value"].(string); ok {
-				env["value"] = RedactSecrets(val)
+func sanitizeEnvLists(node any, compact bool) {
+	switch value := node.(type) {
+	case map[string]any:
+		for key, child := range value {
+			if key == "env" {
+				if envList, ok := child.([]any); ok && containsEnvEntry(envList) {
+					value[key] = sanitizeEnvEntries(envList, compact)
+					continue
+				}
 			}
+			sanitizeEnvLists(child, compact)
+		}
+	case []any:
+		for _, child := range value {
+			sanitizeEnvLists(child, compact)
 		}
 	}
+}
+
+func containsEnvEntry(items []any) bool {
+	for _, item := range items {
+		env, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, ok := env["name"].(string); !ok {
+			continue
+		}
+		_, hasValue := env["value"]
+		_, hasValueFrom := env["valueFrom"]
+		if hasValue || hasValueFrom || len(env) == 1 {
+			return true
+		}
+	}
+	return false
+}
+
+func sanitizeEnvEntries(envList []any, compact bool) any {
+	out := make([]any, 0, len(envList))
+	names := make([]string, 0, len(envList))
+	allRecognized := true
+	for _, item := range envList {
+		env, ok := item.(map[string]any)
+		if !ok {
+			allRecognized = false
+			if compact {
+				continue
+			}
+			if literal, ok := item.(string); ok {
+				out = append(out, RedactSecrets(literal))
+			} else {
+				out = append(out, item)
+			}
+			continue
+		}
+		name, hasName := env["name"].(string)
+		_, hasValue := env["value"]
+		_, hasValueFrom := env["valueFrom"]
+		emptyLiteral := hasName && len(env) == 1
+		if !hasName || (!hasValue && !hasValueFrom && !emptyLiteral) {
+			allRecognized = false
+			if literal, ok := env["value"].(string); ok {
+				if compact {
+					delete(env, "value")
+				} else {
+					env["value"] = RedactSecrets(literal)
+				}
+			}
+			if compact {
+				delete(env, "valueFrom")
+			}
+			sanitizeEnvLists(env, compact)
+			if len(env) > 0 {
+				out = append(out, env)
+			}
+			continue
+		}
+		if compact {
+			names = append(names, name)
+			out = append(out, name)
+			continue
+		}
+		if literal, ok := env["value"]; ok {
+			if IsSensitiveEnvName(name) {
+				env["value"] = "[REDACTED]"
+			} else if literal, ok := literal.(string); ok {
+				env["value"] = RedactSecrets(literal)
+			}
+		}
+		out = append(out, env)
+	}
+	if compact && allRecognized {
+		return names
+	}
+	return out
 }
 
 // The flat drop tables above are POLICY; the tree surgery executing them is

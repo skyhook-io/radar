@@ -10,19 +10,18 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/term"
-
 	"github.com/skyhook-io/radar/internal/ai"
+	"github.com/skyhook-io/radar/internal/cliui"
 )
 
 const (
-	cReset = "\x1b[0m"
-	cDim   = "\x1b[2m"
-	cBold  = "\x1b[1m"
-	cGreen = "\x1b[32m"
-	cRed   = "\x1b[31m"
-	cAmber = "\x1b[33m"
-	cCyan  = "\x1b[36m"
+	cReset = cliui.Reset
+	cDim   = cliui.Dim
+	cBold  = cliui.Bold
+	cGreen = cliui.Green
+	cRed   = cliui.Red
+	cAmber = cliui.Amber
+	cCyan  = cliui.Cyan
 
 	// clearLine returns the cursor to column 0 and erases the spinner line.
 	clearLine = "\r\x1b[K"
@@ -43,6 +42,7 @@ type renderer struct {
 	lastEvent   time.Time // last real output, for the quiet-gap threshold
 	activeTool  string    // tool currently running (the spinner speaks its activity verb)
 	sawAnything bool      // false until the agent's first output ("starting investigation…")
+	watchURL    string
 	stopSpin    chan struct{}
 	spinStopped bool
 }
@@ -54,7 +54,7 @@ func newRenderer(jsonMode bool) *renderer {
 	}
 	return &renderer{
 		w:         w,
-		color:     term.IsTerminal(int(w.Fd())) && os.Getenv("NO_COLOR") == "",
+		color:     cliui.ColorEnabled(w),
 		lastEvent: time.Now(),
 		stopSpin:  make(chan struct{}),
 	}
@@ -153,13 +153,14 @@ func (r *renderer) toolStarted(tool string) {
 }
 
 func (r *renderer) header(run runSummary, base string) {
+	r.watchURL = fmt.Sprintf("%s/?ai-run=%s", base, run.ID)
 	target := run.Kind + " "
 	if run.Namespace != "" {
 		target += run.Namespace + "/"
 	}
 	target += run.Name
 	fmt.Fprintf(r.w, "%s %s\n", r.c(cBold, "◉ Investigating"), r.c(cBold, r.c(cCyan, target)))
-	fmt.Fprintf(r.w, "%s\n", r.c(cDim, fmt.Sprintf("%s · via %s · watch: %s/?ai-run=%s", run.ID, ai.AgentLabel(run.Agent), base, run.ID)))
+	fmt.Fprintf(r.w, "%s\n", r.c(cDim, fmt.Sprintf("%s · via %s · watch: %s", run.ID, ai.AgentLabel(run.Agent), r.watchURL)))
 	// Radar's read at start — the concrete issue rows the server captured, shown
 	// before the agent produces anything (its boot is the longest silent gap).
 	if h := run.Health; h != nil {
@@ -340,7 +341,11 @@ func (r *renderer) verdict(d diagnosis) {
 			fmt.Fprintln(r.w, "The investigation finished without a clear result.")
 		}
 	}
-	fmt.Fprintf(r.w, "\n%s\n", r.c(cDim, "AI-generated — review before applying. Continue in the Radar UI or your own agent."))
+	footer := "AI-generated — review before applying. Continue in the Radar UI or your own agent."
+	if r.watchURL != "" {
+		footer = "AI-generated — review before applying. Continue in Radar: " + r.watchURL + " — or in your own agent."
+	}
+	fmt.Fprintf(r.w, "\n%s\n", r.c(cDim, footer))
 }
 
 func confidenceLabel(c float64) string {

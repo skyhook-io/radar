@@ -96,13 +96,13 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'get_pod_logs',
-    desc: 'Filtered log lines from a pod, prioritizing errors and warnings, falling back to recent tail lines. Optional grep, since, and previous-container logs.',
+    desc: 'Pod logs with secret redaction. Without grep, prioritizes errors and warnings and falls back to recent tail lines; grep returns only regex matches instead.',
     params: [
       { arg: 'namespace', required: true, desc: 'pod namespace' },
       { arg: 'name', required: true, desc: 'pod name' },
       { arg: 'container', desc: 'container name (defaults to first)' },
       { arg: 'tail_lines', desc: 'lines from end (default 200)' },
-      { arg: 'grep', desc: 'regex to filter lines, like kubectl logs | grep' },
+      { arg: 'grep', desc: 'regex matches to return instead of diagnostic auto-filtering' },
       { arg: 'since', desc: 'only logs newer than this duration (e.g. 30s, 10m, 1h)' },
       { arg: 'previous', desc: 'logs from the previous terminated container (CrashLoopBackOff)' },
     ],
@@ -141,7 +141,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
     params: [
       { arg: 'namespace', desc: 'filter to a specific namespace' },
       { arg: 'category', desc: 'Security, Reliability, or Efficiency' },
-      { arg: 'severity', desc: 'danger or warning' },
+      { arg: 'severity', desc: 'posture priority: critical, high, medium, or low (built-ins use high or medium)' },
       { arg: 'limit', desc: 'max findings (default 30, max 100)' },
     ],
   },
@@ -194,11 +194,17 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'get_subject_permissions',
-    desc: 'Effective RBAC for a ServiceAccount, User, or Group: the bindings that grant access, a flattened rule list, and (for SAs) the Pods running as it. Answers "what\'s the blast radius if compromised?".',
+    desc: 'Effective RBAC for a ServiceAccount, User, or Group. Returns the full bindings/rules dump by default, or an authoritative SubjectAccessReview answer when verb and resource are supplied for a ServiceAccount.',
     params: [
       { arg: 'kind', required: true, desc: 'ServiceAccount, User, or Group' },
       { arg: 'name', required: true, desc: 'subject name' },
       { arg: 'namespace', desc: 'required for ServiceAccount; omit for User/Group' },
+      { arg: 'verb', desc: 'access check: Kubernetes API verb; requires resource' },
+      { arg: 'resource', desc: 'access check: plural API resource; requires verb' },
+      { arg: 'group', desc: 'access check: API group; omit for core/v1' },
+      { arg: 'resource_namespace', desc: 'access check target; defaults to subject namespace' },
+      { arg: 'subresource', desc: 'access check subresource, e.g. log for pods/log' },
+      { arg: 'resource_name', desc: 'access check target resource name' },
     ],
   },
   {
@@ -237,14 +243,14 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'get_workload_logs',
-    desc: 'Aggregated, filtered logs across all pods of a workload (Deployment, StatefulSet, DaemonSet, Job, or Argo Workflow) — collected concurrently, filtered for errors/warnings, and deduplicated.',
+    desc: 'Aggregated logs across all pods of a workload. Without grep, filters for diagnostic relevance; grep returns only matching timestamp-prefixed lines instead.',
     params: [
       { arg: 'kind', desc: 'deployment (default), statefulset, daemonset, job, or workflow' },
       { arg: 'namespace', required: true, desc: 'workload namespace' },
       { arg: 'name', required: true, desc: 'workload name' },
       { arg: 'container', desc: 'specific container (defaults to all)' },
       { arg: 'tail_lines', desc: 'lines per pod (default 100)' },
-      { arg: 'grep', desc: 'regex to filter lines, like kubectl logs | grep' },
+      { arg: 'grep', desc: 'regex matches to return instead of diagnostic auto-filtering' },
       { arg: 'since', desc: 'only logs newer than this duration' },
       { arg: 'previous', desc: 'logs from the previous terminated container' },
     ],

@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/skyhook-io/radar/pkg/resourceid"
+	"github.com/skyhook-io/radar/pkg/rolloutdiag"
 	"github.com/skyhook-io/radar/pkg/timeutil"
 )
 
@@ -74,6 +75,9 @@ func RunChecks(input *CheckInput) *ScanResults {
 		findings = append(findings, checkSingleReplica(tr, input.Deployments, hpaTargets)...)
 	} else {
 		missingInputs = append(missingInputs, "horizontalpodautoscalers")
+	}
+	if input.Deployments != nil {
+		findings = append(findings, checkRolloutAvailabilityRisk(tr, input.Deployments)...)
 	}
 	// Only check PDB coverage if we can actually list PDBs (nil = RBAC denied, not "none exist")
 	if input.PodDisruptionBudgets != nil {
@@ -724,6 +728,24 @@ func checkSingleReplica(tr *evalTracker, deployments []*appsv1.Deployment, hpaTa
 				Kind: "Deployment", Namespace: d.Namespace, Name: d.Name,
 				CheckID: "singleReplica", Category: CategoryReliability, Severity: SeverityWarning,
 				Message: "Deployment has only 1 replica",
+			})
+		}
+	}
+	return findings
+}
+
+func checkRolloutAvailabilityRisk(tr *evalTracker, deployments []*appsv1.Deployment) []Finding {
+	var findings []Finding
+	for _, deployment := range deployments {
+		if !rolloutdiag.Applicable(deployment) {
+			continue
+		}
+		tr.record("rolloutAvailabilityRisk", deployment.Namespace)
+		if risk := rolloutdiag.Analyze(deployment); risk != nil {
+			findings = append(findings, Finding{
+				Kind: "Deployment", Namespace: deployment.Namespace, Name: deployment.Name,
+				CheckID: "rolloutAvailabilityRisk", Category: CategoryReliability, Severity: SeverityWarning,
+				Message: risk.Message,
 			})
 		}
 	}

@@ -238,6 +238,9 @@ export type ApplicationDetailProps = {
   }>;
   historyCoverageRecordCount?: number;
   historyRuntimeLimited?: boolean;
+  // The retained ring itself was row-capped: the OLDEST part of the retention
+  // window is not loaded, independent of the per-query event limit.
+  historyRingTruncated?: boolean;
   onHistoryRangeChange?: (range: ApplicationHistoryRange) => void;
   onOpenTimeline?: (timestamp?: string) => void;
   onOpenSource?: (source: AppSourceRef) => void;
@@ -330,6 +333,7 @@ export function ApplicationDetail({
   historyRangeOptions,
   historyCoverageRecordCount,
   historyRuntimeLimited,
+  historyRingTruncated,
   onHistoryRangeChange,
   onOpenTimeline,
   onOpenSource,
@@ -750,6 +754,7 @@ export function ApplicationDetail({
             historyRangeOptions={historyRangeOptions}
             historyCoverageRecordCount={historyCoverageRecordCount}
             historyRuntimeLimited={historyRuntimeLimited}
+            historyRingTruncated={historyRingTruncated}
             onHistoryRangeChange={onHistoryRangeChange}
             onOpenTimeline={onOpenTimeline}
             onOpenSource={onOpenSource}
@@ -797,6 +802,7 @@ function ApplicationWorkspace({
   historyRangeOptions,
   historyCoverageRecordCount,
   historyRuntimeLimited,
+  historyRingTruncated,
   onHistoryRangeChange,
   onOpenTimeline,
   onOpenSource,
@@ -848,6 +854,7 @@ function ApplicationWorkspace({
   }>;
   historyCoverageRecordCount?: number;
   historyRuntimeLimited?: boolean;
+  historyRingTruncated?: boolean;
   onHistoryRangeChange?: (range: ApplicationHistoryRange) => void;
   onOpenTimeline?: (timestamp?: string) => void;
   onOpenSource?: (source: AppSourceRef) => void;
@@ -916,6 +923,7 @@ function ApplicationWorkspace({
           rangeOptions={historyRangeOptions}
           coverageRecordCount={historyCoverageRecordCount}
           runtimeLimited={historyRuntimeLimited}
+          ringTruncated={historyRingTruncated}
           workloads={workloads}
           onSelectWorkload={onSelectWorkload}
           onNavigateToResource={onNavigateToResource}
@@ -2146,6 +2154,7 @@ function ApplicationHistoryView({
   rangeOptions,
   coverageRecordCount,
   runtimeLimited,
+  ringTruncated,
   workloads,
   onSelectWorkload,
   onNavigateToResource,
@@ -2163,6 +2172,7 @@ function ApplicationHistoryView({
   rangeOptions?: Array<{ value: ApplicationHistoryRange; label: string }>;
   coverageRecordCount?: number;
   runtimeLimited?: boolean;
+  ringTruncated?: boolean;
   workloads: AppWorkload[];
   onSelectWorkload: (workload: AppWorkload) => void;
   onNavigateToResource?: (resource: ResourceRef) => void;
@@ -2370,6 +2380,13 @@ function ApplicationHistoryView({
               <div>
                 Showing the 10,000 most recent events in these namespaces. Older
                 application activity in this range may not be included.
+              </div>
+            )}
+            {ringTruncated && (
+              <div>
+                {mode === "retained"
+                  ? "Event history may be incomplete: the retained window exceeded its size limit, so the oldest activity is not loaded."
+                  : "Event history may be incomplete: the event store's ring is full, so the oldest activity is not loaded."}
               </div>
             )}
           </div>

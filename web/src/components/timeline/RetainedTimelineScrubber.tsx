@@ -13,10 +13,11 @@ import {
   type ScrubberRange,
   type TimelineLiveState,
 } from '@skyhook-io/k8s-ui'
-import type {
-  TimelineSource,
-  TimelineOverviewBucket,
-  TimelineOverviewResult,
+import {
+  RETAINED_CLOCK_SKEW_SLACK_MS,
+  type TimelineSource,
+  type TimelineOverviewBucket,
+  type TimelineOverviewResult,
 } from '../../api/timelineSource'
 import { getApiBase } from '../../api/config'
 
@@ -25,8 +26,11 @@ const DAY_MS = 24 * HOUR_MS
 const EMPTY_BUCKETS: TimelineOverviewBucket[] = []
 const MAX_STRIP_BARS = 512
 
-// Per-request guard on the retained events endpoint: never brush wider than 7d.
-const MAX_SELECTION_MS = 7 * DAY_MS
+// Absolute per-request ceiling on the retained events endpoint, matching the
+// hub's own timelineEventsMaxRange. The effective cap is the smaller of this
+// and the embedder's declared retention depth (maxRangeDays), so a host that
+// advertises 30d of retention can load all 30d in one view.
+const MAX_SELECTION_MS = 31 * DAY_MS
 
 // Group the server's hour buckets into fixed display buckets aligned to the
 // display size, summing counts. The host owns this so the pure scrubber only
@@ -83,8 +87,8 @@ export function buildPresets(maxRangeDays: number): ScrubberPreset[] {
     { label: '24h', ms: DAY_MS },
     { label: '7d', ms: 7 * DAY_MS },
   ]
-  // 30d is a domain-context preset — it clamps to the 7d per-request cap, but
-  // signals the deeper retained window is available.
+  // 30d loads the full retained window in one request (bounded by the hub's
+  // per-request cap); shown only when the retention depth reaches it.
   if (maxRangeDays >= 30) presets.push({ label: '30d', ms: 30 * DAY_MS })
   return presets
 }
@@ -176,17 +180,21 @@ export function RetainedTimelineScrubber({ source, selection, onSelectionChange,
   const availableFromMs = overview.data?.availableFromMs
 
   const domain = useMemo<ScrubberRange>(() => {
-    // Clamp the domain floor to the queryable window. availableFromMs can point
+    // Clamp the domain floor to the LOADED window. availableFromMs can point
     // at ancient synthesized-historical event times (resource creation dates on
-    // long-lived clusters), which would stretch the strip over years of
-    // unreachable nothing — the UI can never brush past maxRangeDays anyway.
-    const floor = now - maxRangeDays * DAY_MS
+    // long-lived clusters), and a host may declare maxRangeDays deeper than the
+    // ring the client actually loads (MAX_SELECTION_MS) — either would stretch
+    // the strip over regions that render empty despite overview density. The
+    // ring's window slides forward by the clock-skew slack, so the floor does
+    // too — without it the oldest slack-width sliver is brushable but never
+    // loadable.
+    const floor = now - Math.min(maxRangeDays * DAY_MS, MAX_SELECTION_MS) + RETAINED_CLOCK_SKEW_SLACK_MS
     const fromMs = availableFromMs != null ? Math.max(availableFromMs, floor) : floor
     return { fromMs: Math.min(fromMs, now - HOUR_MS), toMs: now }
   }, [availableFromMs, now, maxRangeDays])
 
   const domainWidth = domain.toMs - domain.fromMs
-  const maxSelectionMs = Math.min(MAX_SELECTION_MS, domainWidth)
+  const maxSelectionMs = Math.min(maxRangeDays * DAY_MS, MAX_SELECTION_MS, domainWidth)
 
   // The histogram spans the QUERY RANGE (selection) directly —
   // no ×8 framing, no minimap. The query is the view, so a narrow window is never

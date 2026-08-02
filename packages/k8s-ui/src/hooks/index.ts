@@ -1,4 +1,5 @@
 export { useAnimatedUnmount } from './useAnimatedUnmount'
+export { useDebouncedValue } from './useDebouncedValue'
 export { useRefreshAnimation } from './useRefreshAnimation'
 export {
   KeyboardShortcutProvider,

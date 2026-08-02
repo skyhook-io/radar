@@ -69,20 +69,23 @@ type ClientInfo struct {
 	// Resolved once at subscribe time (the request is available there) so the
 	// broadcast loop never runs a SAR. nil/empty for users with full access.
 	DeniedKinds map[topology.NodeKind]bool
-	// AuthorizeNodeClass evaluates the exact provider resource carried by a
-	// NodeClass topology node. It remains live for the SSE request lifetime so
-	// newly referenced custom kinds and context switches do not reuse a stale
-	// provider permission snapshot.
-	AuthorizeNodeClass func(topology.SARTuple) bool
+	// Authorize authorizes a per-resource change frame for this client's user
+	// via SubjectAccessReview (memoized on the user's permission cache). Bound
+	// at subscribe time to the request's user + a connection-lived context, so
+	// the broadcast goroutine can gate diff-bearing k8s_event frames per kind
+	// without holding a request. nil when no authorizer was wired (defensive /
+	// tests) — clientCanSeeChange then falls back to the namespace + denied-kind
+	// gate. When auth is disabled the closure is still set and returns true.
+	Authorize func(group, resource, namespace, verb string) bool
 }
 
 type clientRegistration struct {
-	ch                 chan SSEEvent
-	namespaces         []string
-	viewMode           string
-	showPolicyEffect   bool
-	deniedKinds        map[topology.NodeKind]bool
-	authorizeNodeClass func(topology.SARTuple) bool
+	ch               chan SSEEvent
+	namespaces       []string
+	viewMode         string
+	showPolicyEffect bool
+	deniedKinds      map[topology.NodeKind]bool
+	authorize        func(group, resource, namespace, verb string) bool
 }
 
 // SSEEvent represents an event to send to clients
@@ -394,7 +397,7 @@ func (b *SSEBroadcaster) run() {
 				close(reg.ch) // Signal rejection by closing the channel
 				continue
 			}
-			b.clients[reg.ch] = ClientInfo{Namespaces: reg.namespaces, ViewMode: reg.viewMode, ShowPolicyEffect: reg.showPolicyEffect, DeniedKinds: reg.deniedKinds, AuthorizeNodeClass: reg.authorizeNodeClass}
+			b.clients[reg.ch] = ClientInfo{Namespaces: reg.namespaces, ViewMode: reg.viewMode, ShowPolicyEffect: reg.showPolicyEffect, DeniedKinds: reg.deniedKinds, Authorize: reg.authorize}
 			b.mu.Unlock()
 			log.Printf("SSE client connected (namespaces=%v, view=%s), total clients: %d", reg.namespaces, reg.viewMode, len(b.clients))
 
@@ -440,7 +443,6 @@ func (b *SSEBroadcaster) watchResourceChanges() {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		// Cache not ready yet — wait for connection to be established
-		log.Println("SSE broadcaster: cache not ready, waiting for connection...")
 		ch := make(chan struct{}, 1)
 		k8s.OnConnectionChange(func(status k8s.ConnectionStatus) {
 			// Check if this watcher was replaced by a context switch.
@@ -472,7 +474,6 @@ func (b *SSEBroadcaster) watchResourceChanges() {
 				log.Println("Warning: Resource cache still nil after connection")
 				return
 			}
-			log.Println("SSE broadcaster: cache ready, starting resource change watcher")
 		case <-b.stopCh:
 			return
 		case <-watchStop:
@@ -543,10 +544,24 @@ func (b *SSEBroadcaster) watchResourceChanges() {
 						"summary": change.Diff.Summary,
 					}
 				}
+				// Resolve the GVR for per-kind authorization. The dynamic cache
+				// stamps the exact GVR on the change (disambiguates CRD kind
+				// collisions); the typed cache leaves it empty, so resolve from
+				// Kind — unambiguous for the well-known typed kinds.
+				group, resource := change.Group, change.Resource
+				namespace := change.Namespace
+				if resource == "" {
+					if g, r, clusterScoped, ok := k8s.ResolveChangeGVR(change.Kind, change.Group); ok {
+						group, resource = g, r
+						if clusterScoped {
+							namespace = ""
+						}
+					}
+				}
 				b.broadcastResourceChange(SSEEvent{
 					Event: "k8s_event",
 					Data:  eventData,
-				}, change.Namespace, change.Kind)
+				}, namespace, group, resource, change.Kind)
 			}
 
 			// Schedule debounced topology update. Re-evaluate debounce on
@@ -685,7 +700,7 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() {
 		}
 		nodeClassGroups := make(map[string]*nodeClassGroup)
 		for ch, info := range group.clients {
-			allowed := authorizedNodeClassTuples(topo, info.AuthorizeNodeClass)
+			allowed := authorizedNodeClassTuples(topo, nodeClassAuthorizer(info.Authorize))
 			authKey := nodeClassTuplesKey(allowed)
 			if nodeClassGroups[authKey] == nil {
 				nodeClassGroups[authKey] = &nodeClassGroup{allowed: allowed}
@@ -727,6 +742,21 @@ func deniedKindsKey(deny map[topology.NodeKind]bool) string {
 	}
 	sort.Strings(kinds)
 	return strings.Join(kinds, ",")
+}
+
+// nodeClassAuthorizer narrows the per-kind change authorizer to the exact
+// provider resource carried by a NodeClass topology node. NodeClass kinds are
+// cluster-scoped and unbounded (one CRD per provider), so the gate must ask
+// about the node's own group/resource rather than a finite kind table. A nil
+// authorizer fails closed: an unwired caller must not widen NodeClass
+// visibility.
+func nodeClassAuthorizer(authorize func(group, resource, namespace, verb string) bool) func(topology.SARTuple) bool {
+	return func(tuple topology.SARTuple) bool {
+		if authorize == nil {
+			return false
+		}
+		return authorize(tuple.Group, tuple.Resource, "", "list")
+	}
 }
 
 func authorizedNodeClassTuples(topo *topology.Topology, authorize func(topology.SARTuple) bool) map[topology.SARTuple]bool {
@@ -829,37 +859,70 @@ func (b *SSEBroadcaster) Broadcast(event SSEEvent) {
 //     cluster-scoped CRDs) aren't in DeniedKinds, and kind-string matching misses
 //     CRD variants (EC2NodeClass vs synthesized NodeClass).
 //
-// The complete fix carries the exact GVR on ResourceChange and authorizes each
-// client via the cached per-user canRead — tracked separately.
-func (b *SSEBroadcaster) broadcastResourceChange(event SSEEvent, namespace, kind string) {
+// The group/resource come from the change's GVR (dynamic cache) or are resolved
+// from its Kind (typed cache); an empty resource means the kind couldn't be
+// resolved and the frame fails closed for authenticated clients.
+//
+// Clients are snapshotted under the lock, then authorized + sent WITHOUT it: an
+// authorization can miss the per-user memo and do a SAR round-trip, and holding
+// b.mu across that would stall registrations and other broadcasts. safeSend
+// tolerates a channel closed by a concurrent Unsubscribe after the snapshot.
+func (b *SSEBroadcaster) broadcastResourceChange(event SSEEvent, namespace, group, resource, kind string) {
 	event = premarshalEventData(event)
-	b.mu.RLock()
-	defer b.mu.RUnlock()
 
+	type target struct {
+		ch   chan SSEEvent
+		info ClientInfo
+	}
+	b.mu.RLock()
+	targets := make([]target, 0, len(b.clients))
 	for ch, info := range b.clients {
-		if clientCanSeeChange(info, namespace, kind) {
-			safeSend(ch, event)
+		targets = append(targets, target{ch: ch, info: info})
+	}
+	b.mu.RUnlock()
+
+	for _, t := range targets {
+		if clientCanSeeChange(t.info, namespace, group, resource, kind) {
+			safeSend(t.ch, event)
 		}
 	}
 }
 
-// clientCanSeeChange reports whether a client's RBAC allows a change frame.
-func clientCanSeeChange(info ClientInfo, namespace, kind string) bool {
-	if namespace != "" {
-		// Namespaced change: deliver only if the client can see that namespace.
-		// nil Namespaces means all-namespace access (no RBAC restriction).
-		if info.Namespaces == nil {
-			return true
+// clientCanSeeChange reports whether a client's RBAC allows a change frame for
+// the given (namespace, group, resource, kind).
+func clientCanSeeChange(info ClientInfo, namespace, group, resource, kind string) bool {
+	if info.Authorize == nil {
+		// No authorizer wired (tests / defensive): fall back to the namespace +
+		// topology-denied-kind gate.
+		if namespace != "" {
+			return info.Namespaces == nil || slices.Contains(info.Namespaces, namespace)
 		}
-		return slices.Contains(info.Namespaces, namespace)
+		return !info.DeniedKinds[topology.NodeKind(kind)]
 	}
-	// Cluster-scoped change (no namespace): deliver unless the kind is one this
-	// client was denied — the per-kind SAR result resolved at subscribe time.
-	return !info.DeniedKinds[topology.NodeKind(kind)]
+
+	if namespace != "" {
+		// Namespaced change: must see the namespace (nil = all) AND hold read on
+		// this kind within it.
+		if info.Namespaces != nil && !slices.Contains(info.Namespaces, namespace) {
+			return false
+		}
+		if resource == "" {
+			return false // unresolved kind under auth — fail closed
+		}
+		return info.Authorize(group, resource, namespace, "list")
+	}
+
+	// Cluster-scoped change (no namespace): require the cluster-scoped read.
+	if resource == "" {
+		return false
+	}
+	return info.Authorize(group, resource, "", "list")
 }
 
 // Subscribe adds a new SSE client. Returns nil if max clients reached.
-func (b *SSEBroadcaster) Subscribe(namespaces []string, viewMode string, deniedKinds map[topology.NodeKind]bool, authorizeNodeClass func(topology.SARTuple) bool, showPolicyEffect ...bool) chan SSEEvent {
+// authorize gates per-kind change frames for the client's user (may be nil in
+// tests / when no authorizer is wired).
+func (b *SSEBroadcaster) Subscribe(namespaces []string, viewMode string, deniedKinds map[topology.NodeKind]bool, authorize func(group, resource, namespace, verb string) bool, showPolicyEffect ...bool) chan SSEEvent {
 	// Check client count before creating the channel to fail fast
 	b.mu.RLock()
 	clientCount := len(b.clients)
@@ -881,7 +944,7 @@ func (b *SSEBroadcaster) Subscribe(namespaces []string, viewMode string, deniedK
 
 	policyEffect := len(showPolicyEffect) > 0 && showPolicyEffect[0]
 	ch := make(chan SSEEvent, 10)
-	b.register <- clientRegistration{ch: ch, namespaces: sortedNs, viewMode: viewMode, showPolicyEffect: policyEffect, deniedKinds: deniedKinds, authorizeNodeClass: authorizeNodeClass}
+	b.register <- clientRegistration{ch: ch, namespaces: sortedNs, viewMode: viewMode, showPolicyEffect: policyEffect, deniedKinds: deniedKinds, authorize: authorize}
 	return ch
 }
 
@@ -1001,7 +1064,7 @@ func buildFullTopology() (*topology.Topology, error) {
 }
 
 // HandleSSE is the HTTP handler for the SSE endpoint
-func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request, deniedKinds map[topology.NodeKind]bool, authorizeNodeClass func(topology.SARTuple) bool) {
+func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request, deniedKinds map[topology.NodeKind]bool, authorize func(group, resource, namespace, verb string) bool) {
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -1024,7 +1087,7 @@ func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request, denie
 	}
 
 	// Subscribe to events
-	eventCh := b.Subscribe(namespaces, viewMode, deniedKinds, authorizeNodeClass, policyEffect)
+	eventCh := b.Subscribe(namespaces, viewMode, deniedKinds, authorize, policyEffect)
 	if eventCh == nil {
 		http.Error(w, "Too many SSE connections", http.StatusServiceUnavailable)
 		return
@@ -1057,7 +1120,7 @@ func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request, denie
 		opts.ShowPolicyEffect = policyEffect
 		if topo, err := builder.Build(opts); err == nil {
 			topo.StripNodeKinds(deniedKinds)
-			topo.StripNodeClassesExcept(authorizedNodeClassTuples(topo, authorizeNodeClass))
+			topo.StripNodeClassesExcept(authorizedNodeClassTuples(topo, nodeClassAuthorizer(authorize)))
 			data, marshalErr := json.Marshal(topo)
 			if marshalErr != nil {
 				log.Printf("SSE: failed to marshal initial topology: %v", marshalErr)

@@ -14,9 +14,9 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // Scheduling failure decomposition.
@@ -339,20 +339,20 @@ func DetectSchedulingProblems(cache *ResourceCache, namespace string) []Detectio
 			ownerGroup, ownerKind, ownerName := podOwnerKindName(cache, pod)
 			schedMessage, schedAction := diagnoseUnschedulable(pod, cond.Message, nodes)
 			problems = append(problems, Detection{
-				Kind:             "Pod",
-				Namespace:        pod.Namespace,
-				Name:             pod.Name,
-				Severity:         schedulingSeverity(dur),
-				Reason:           "Unschedulable",
-				Action:           schedAction,
-				Message:          schedMessage,
-				Age:              FormatAge(ageDur),
-				AgeSeconds:       int64(ageDur.Seconds()),
-				Duration:         FormatAge(dur),
-				DurationSeconds:  int64(dur.Seconds()),
-				OwnerGroup:       ownerGroup,
-				OwnerKind:        ownerKind,
-				OwnerName:        ownerName,
+				Kind:                       "Pod",
+				Namespace:                  pod.Namespace,
+				Name:                       pod.Name,
+				Severity:                   schedulingSeverity(dur),
+				Reason:                     "Unschedulable",
+				Action:                     schedAction,
+				Message:                    schedMessage,
+				Age:                        FormatAge(ageDur),
+				AgeSeconds:                 int64(ageDur.Seconds()),
+				Duration:                   FormatAge(dur),
+				DurationSeconds:            int64(dur.Seconds()),
+				OwnerGroup:                 ownerGroup,
+				OwnerKind:                  ownerKind,
+				OwnerName:                  ownerName,
 				CapacityRelevant:           podRequiresKarpenterNodePool(pod),
 				CapacityRelevantCorrelated: podHasDeclaredCompatibleKarpenterPool(pod, karpenterPools()),
 			})
@@ -698,10 +698,10 @@ func karpenterDemandPoolInputs(cache *ResourceCache) []capacitymodel.DemandPoolI
 			continue
 		}
 		inputs = append(inputs, capacitymodel.DemandPoolInput{
-			NodePool:                pool,
-			ProvisionedKnown:        karpenter.NodePoolStatusResources(pool) != nil,
-			NodeClassReady:          classReadiness(pool),
-			ObservedMemberShapes:    shapesByPool[pool.GetName()],
+			NodePool:             pool,
+			ProvisionedKnown:     karpenter.NodePoolStatusResources(pool) != nil,
+			NodeClassReady:       classReadiness(pool),
+			ObservedMemberShapes: shapesByPool[pool.GetName()],
 		})
 	}
 	return inputs

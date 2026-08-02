@@ -398,25 +398,124 @@ func topPodFromObject(cache *ResourceCache, pod *corev1.Pod) TopMetricsItem {
 		Node:      pod.Spec.NodeName,
 		Owner:     topOwnerForPodResolved(cache, pod),
 	}
-	for _, c := range pod.Spec.Containers {
-		if req, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
-			item.CPURequest += req.MilliValue() * 1000000
-		}
-		if lim, ok := c.Resources.Limits[corev1.ResourceCPU]; ok {
-			item.CPULimit += lim.MilliValue() * 1000000
-		}
-		if req, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
-			item.MemoryRequest += req.Value()
-		}
-		if lim, ok := c.Resources.Limits[corev1.ResourceMemory]; ok {
-			item.MemoryLimit += lim.Value()
-		}
-	}
+	totals := SumRunningContainerResources(pod)
+	item.CPURequest = totals.CPURequest
+	item.CPULimit = totals.CPULimit
+	item.MemoryRequest = totals.MemoryRequest
+	item.MemoryLimit = totals.MemoryLimit
 	item.CPURequestMilli = nanoToMilli(item.CPURequest)
 	item.CPULimitMilli = nanoToMilli(item.CPULimit)
 	item.MemoryRequestMi = bytesToMi(item.MemoryRequest)
 	item.MemoryLimitMi = bytesToMi(item.MemoryLimit)
 	return item
+}
+
+// PodResourceTotals holds request/limit sums over a pod's running containers.
+// CPU values are nanocores, memory values are bytes.
+type PodResourceTotals struct {
+	CPURequest    int64
+	CPULimit      int64
+	MemoryRequest int64
+	MemoryLimit   int64
+}
+
+// isNativeSidecar reports whether an init container is a native sidecar — one
+// whose restartPolicy is Always, so it runs for the pod's whole lifetime and
+// holds its resource reservation the same way a regular container does.
+func isNativeSidecar(c *corev1.Container) bool {
+	return c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways
+}
+
+func addContainerResources(t *PodResourceTotals, c *corev1.Container) {
+	if req, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
+		t.CPURequest += req.MilliValue() * 1000000
+	}
+	if lim, ok := c.Resources.Limits[corev1.ResourceCPU]; ok {
+		t.CPULimit += lim.MilliValue() * 1000000
+	}
+	if req, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
+		t.MemoryRequest += req.Value()
+	}
+	if lim, ok := c.Resources.Limits[corev1.ResourceMemory]; ok {
+		t.MemoryLimit += lim.Value()
+	}
+}
+
+// SumRunningContainerResources sums resource requests and limits over the union
+// of a pod's regular containers and native sidecars. Regular init containers
+// are excluded — they don't hold a reservation for the pod's whole lifetime.
+// Usage is reported across the same set, so summing here keeps request/limit
+// percentages honest.
+func SumRunningContainerResources(pod *corev1.Pod) PodResourceTotals {
+	var t PodResourceTotals
+	for i := range pod.Spec.Containers {
+		addContainerResources(&t, &pod.Spec.Containers[i])
+	}
+	for i := range pod.Spec.InitContainers {
+		if isNativeSidecar(&pod.Spec.InitContainers[i]) {
+			addContainerResources(&t, &pod.Spec.InitContainers[i])
+		}
+	}
+	return t
+}
+
+// BuildPodContainerMetrics builds per-container resource metrics for a pod's
+// running containers (regular + native sidecars), merging spec requests/limits
+// with observed usage. usage is keyed by container name. Names present only in
+// usage (e.g. ephemeral debug containers reporting metrics) are appended with
+// zero request/limit. Returns nil when the pod has a single running container —
+// callers fall back to the pod-level sums.
+func BuildPodContainerMetrics(pod *corev1.Pod, usage map[string]ContainerResourceMetrics) []ContainerResourceMetrics {
+	specs := make(map[string]corev1.ResourceRequirements, len(pod.Spec.Containers)+len(pod.Spec.InitContainers))
+	order := make([]string, 0, len(pod.Spec.Containers)+len(pod.Spec.InitContainers))
+	runningCount := 0
+	add := func(name string, res corev1.ResourceRequirements) {
+		if _, seen := specs[name]; !seen {
+			order = append(order, name)
+		}
+		specs[name] = res
+		runningCount++
+	}
+	for i := range pod.Spec.Containers {
+		add(pod.Spec.Containers[i].Name, pod.Spec.Containers[i].Resources)
+	}
+	for i := range pod.Spec.InitContainers {
+		if isNativeSidecar(&pod.Spec.InitContainers[i]) {
+			add(pod.Spec.InitContainers[i].Name, pod.Spec.InitContainers[i].Resources)
+		}
+	}
+	if runningCount <= 1 {
+		return nil
+	}
+	// Only the pod's declared long-running containers (regular + native
+	// sidecars) are reported. A name that appears in the usage map but not
+	// here is a completed init container or a removed ephemeral container whose
+	// per-container buffer was never pruned — including it would add a phantom
+	// zero-limit row and inflate the unbounded count.
+
+	result := make([]ContainerResourceMetrics, 0, len(order))
+	for _, name := range order {
+		cm := ContainerResourceMetrics{Name: name}
+		if u, ok := usage[name]; ok {
+			cm.CPU = u.CPU
+			cm.Memory = u.Memory
+		}
+		res := specs[name]
+		if req, ok := res.Requests[corev1.ResourceCPU]; ok {
+			cm.CPURequest = req.MilliValue() * 1000000
+		}
+		if lim, ok := res.Limits[corev1.ResourceCPU]; ok {
+			cm.CPULimit = lim.MilliValue() * 1000000
+		}
+		if req, ok := res.Requests[corev1.ResourceMemory]; ok {
+			cm.MemoryRequest = req.Value()
+		}
+		if lim, ok := res.Limits[corev1.ResourceMemory]; ok {
+			cm.MemoryLimit = lim.Value()
+		}
+		result = append(result, cm)
+	}
+	return result
 }
 
 func applyPodUsage(item *TopMetricsItem, m TopPodMetrics) {

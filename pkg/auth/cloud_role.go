@@ -6,8 +6,9 @@ import (
 )
 
 // CloudRole captures the user's tier under Radar Cloud's RBAC model.
-// Cloud injects one of `cloud:owner` / `cloud:member` / `cloud:viewer`
-// into X-Forwarded-Groups; this type extracts that signal.
+// Cloud injects one of `radar:owner` / `radar:member` / `radar:viewer`
+// into X-Forwarded-Groups (plus the deprecated `cloud:*` equivalents for
+// the transition window); this type extracts that signal.
 //
 // CloudRole is the **product-side** boundary (decides whether the user
 // can attempt an operation in the UI / API). The K8s ClusterRoleBindings
@@ -26,7 +27,11 @@ const (
 	RoleOwner  CloudRole = "owner"
 )
 
-const cloudGroupPrefix = "cloud:"
+// radar: is the canonical vocabulary; cloud: is the pre-rename legacy still
+// emitted by the hub (and possibly present from older hubs) during the
+// deprecation window. Accepting both keeps every hub/binary version pairing
+// working; drop cloud: in the next major.
+var tierGroupPrefixes = []string{"radar:", "cloud:"}
 
 // ErrCodeCloudRoleInsufficient is the stable wire value emitted in 403
 // response bodies (`error_code` field) when a request is denied by a
@@ -42,23 +47,27 @@ var tierRank = map[CloudRole]int{
 }
 
 // CloudRoleFromGroups returns the highest-ranked Cloud tier present in
-// the group list. Returns RoleNone when no `cloud:<tier>` group is
-// found, which the call sites treat as "not running under Cloud."
+// the group list (accepting both the canonical radar:<tier> and legacy
+// cloud:<tier> forms). Returns RoleNone when no tier group is found,
+// which the call sites treat as "not running under Cloud."
 func CloudRoleFromGroups(groups []string) CloudRole {
 	var best CloudRole
 	bestRank := 0
 	for _, g := range groups {
-		if !strings.HasPrefix(g, cloudGroupPrefix) {
-			continue
-		}
-		role := CloudRole(strings.TrimPrefix(g, cloudGroupPrefix))
-		rank, ok := tierRank[role]
-		if !ok {
-			continue
-		}
-		if rank > bestRank {
-			best = role
-			bestRank = rank
+		for _, prefix := range tierGroupPrefixes {
+			if !strings.HasPrefix(g, prefix) {
+				continue
+			}
+			role := CloudRole(strings.TrimPrefix(g, prefix))
+			rank, ok := tierRank[role]
+			if !ok {
+				continue
+			}
+			if rank > bestRank {
+				best = role
+				bestRank = rank
+			}
+			break
 		}
 	}
 	return best
