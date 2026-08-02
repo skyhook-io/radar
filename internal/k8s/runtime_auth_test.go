@@ -1186,6 +1186,74 @@ func TestRuntimeAuthRecoveryStaticCredentialsReconnectViaDiskReread(t *testing.T
 	}
 }
 
+func TestMarkDisconnectedAuthShapedMessageRoutesThroughDemotionPipeline(t *testing.T) {
+	generation := prepareRuntimeAuthTest(t)
+	var probes atomic.Int32
+	probeReturned := make(chan struct{}, 1)
+	setRuntimeAuthProbe(func(context.Context) error {
+		probes.Add(1)
+		select {
+		case probeReturned <- struct{}{}:
+		default:
+		}
+		return errors.New("dial tcp: connection refused")
+	})
+
+	marked := MarkDisconnectedIfClusterUnreachable(
+		`failed to list helm releases: Kubernetes cluster unreachable: Get "https://cluster.test/version": getting credentials: exec: executable aws failed with exit code 255`)
+	if marked {
+		t.Fatal("auth-shaped message must not mark disconnected directly — the pipeline decides")
+	}
+	select {
+	case <-probeReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("auth-shaped message did not reach the demotion pipeline")
+	}
+	waitForRuntimeAuthCheck(t, generation)
+	if got := GetConnectionStatus().State; got != StateConnected {
+		t.Fatalf("state = %q, want %q (pipeline dismissed the candidate; no direct publish)", got, StateConnected)
+	}
+}
+
+func TestRuntimeAuthRecoveryStaticCredentialsSkipDiskRereadWhenOffline(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+	setRuntimeAuthRecoveryIntervalsForTest(2*time.Millisecond, 4*time.Millisecond)
+
+	clientMu.Lock()
+	k8sConfig = &rest.Config{Host: "https://cluster.test", BearerToken: "expired-inline-token"}
+	clientMu.Unlock()
+
+	var probes atomic.Int32
+	setRuntimeAuthProbe(func(context.Context) error {
+		probes.Add(1)
+		return errors.New("dial tcp: connection refused")
+	})
+	var reconnects atomic.Int32
+	setRuntimeAuthReconnect(func(string, uint64) error {
+		reconnects.Add(1)
+		return nil
+	})
+
+	SetConnectionStatus(ConnectionStatus{
+		State:     StateDisconnected,
+		Context:   "openshift-context",
+		ErrorType: "auth",
+	})
+	waitForRecoveryWorker(t)
+
+	deadline := time.Now().Add(50 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if probes.Load() == 0 {
+		t.Fatal("recovery never probed")
+	}
+	if reconnects.Load() != 0 {
+		t.Fatalf("reconnects = %d, want 0 (a network failure cannot be fixed by a kubeconfig re-read)", reconnects.Load())
+	}
+}
+
 func TestRuntimeAuthRecoveryExecCredentialsSkipDiskRereadAttempts(t *testing.T) {
 	ResetTestState()
 	t.Cleanup(ResetTestState)

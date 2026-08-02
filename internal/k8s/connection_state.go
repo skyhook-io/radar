@@ -94,6 +94,19 @@ func notifyConnectionChange(status ConnectionStatus) {
 // MarkDisconnectedIfClusterUnreachable updates the shared connection state when
 // a live Kubernetes request proves that the current cluster endpoint is gone.
 func MarkDisconnectedIfClusterUnreachable(message string) bool {
+	if ClassifyError(errors.New(message)) == "auth" {
+		// Credential loss must go through the demotion pipeline — it confirms
+		// with a fresh probe, gates on endpoint reachability, and quiesces
+		// cluster-backed work. Publishing disconnected directly would skip
+		// the teardown AND disarm the pipeline (candidate intake requires
+		// StateConnected), leaving informers hammering the dead credential
+		// for the whole outage.
+		clientMu.RLock()
+		generation := activeClientGeneration
+		clientMu.RUnlock()
+		reportRuntimeAuthFailure(generation, errors.New(message))
+		return false
+	}
 	if !isClusterUnreachableMessage(message) {
 		return false
 	}

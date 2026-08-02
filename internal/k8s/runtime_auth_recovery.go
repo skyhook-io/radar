@@ -91,7 +91,11 @@ func runRuntimeAuthRecovery() {
 		if status.State == StateConnecting || activeContextOperations.Load() != 0 {
 			// A connect attempt owns the moment (user-driven switch or retry);
 			// its failure republishes a disconnected status and the debt
-			// persists, so just check again next tick.
+			// persists, so check again soon. Don't re-sleep the accumulated
+			// backoff (worst case 30min): if the operation's failure publish
+			// is byte-identical to the current status, the dedupe in
+			// SetConnectionStatus means no nudge will arrive.
+			interval = initialInterval
 			continue
 		}
 		contextName := status.Context
@@ -99,7 +103,7 @@ func runRuntimeAuthRecovery() {
 		ctx, cancel := context.WithTimeout(context.Background(), connectionTestOperationTimeout())
 		err := getRuntimeAuthProbe()(ctx)
 		cancel()
-		if err != nil && runtimeAuthCredentialsAreStatic() {
+		if err != nil && ClassifyError(err) == "auth" && runtimeAuthCredentialsAreStatic() {
 			// Probing the in-memory config can never observe new INLINE
 			// credentials (token:/client-certificate-data: are read once at
 			// connect), but a full reconnect re-reads the kubeconfig from
