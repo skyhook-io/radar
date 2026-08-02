@@ -38,9 +38,14 @@ describe("capacityHrefForIssue", () => {
   it("preserves namespace scope on the Demand link", () => {
     expect(
       capacityHrefForIssue(
-        issue({ source: "scheduling", capacity_relevant: true }),
+        issue({
+          source: "scheduling",
+          capacity_relevant: true,
+          namespace: "payments",
+          owner: { kind: "Deployment", name: "api" },
+        }),
         true),
-    ).toBe("/capacity/demand");
+    ).toBe(`/capacity/demand?owner=${encodeURIComponent("payments/Deployment/api")}`);
   });
 
   it("does NOT link a scheduling failure the backend did not flag", () => {

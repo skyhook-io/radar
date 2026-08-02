@@ -5544,15 +5544,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	// Summary mode: stamp collapsed pod counts onto their workload nodes.
 	stampPodSummaries(nodes, podSummaries)
 
-	// A nil slice marshals as JSON null, not [] — an empty build (cache still
-	// syncing after a context switch, or RBAC stripping everything) must still
-	// honor the wire contract the frontend types promise.
-	if nodes == nil {
-		nodes = []Node{}
-	}
-	if edges == nil {
-		edges = []Edge{}
-	}
 	topo := &Topology{Nodes: stampAuditKeys(nodes), Edges: edges, Warnings: warnings}
 
 	// Add CRD discovery status
@@ -7086,15 +7077,6 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-	// A nil slice marshals as JSON null, not [] — an empty build (cache still
-	// syncing after a context switch, or RBAC stripping everything) must still
-	// honor the wire contract the frontend types promise.
-	if nodes == nil {
-		nodes = []Node{}
-	}
-	if edges == nil {
-		edges = []Edge{}
-	}
 	topo := &Topology{Nodes: stampAuditKeys(nodes), Edges: edges, Warnings: warnings}
 
 	// Add CRD discovery status
