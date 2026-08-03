@@ -6,6 +6,7 @@ import (
 )
 
 const containerCompletionSplitNote = "A regular container exited successfully while a sibling keeps running. " +
+	"The reported age is measured from the exited container's finish time. " +
 	"Inspect the running container's image, command, and logs: it may be a long-lived sidecar, " +
 	"or it may still be doing legitimate work."
 

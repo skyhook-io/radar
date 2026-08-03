@@ -32,7 +32,7 @@ func TestContainerCompletionSplitFromShape(t *testing.T) {
 			t.Errorf("Note is not fact-only; contains %q: %q", forbidden, out.Note)
 		}
 	}
-	for _, want := range []string{"exited successfully", "inspect", "legitimate work", "sidecar"} {
+	for _, want := range []string{"exited successfully", "finish time", "inspect", "legitimate work", "sidecar"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("Note missing disambiguation hint %q: %q", want, out.Note)
 		}

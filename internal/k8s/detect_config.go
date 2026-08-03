@@ -72,6 +72,9 @@ func FindContainerCompletionSplitForObject(cache *ResourceCache, obj runtime.Obj
 			if !job.DeletionTimestamp.IsZero() {
 				continue
 			}
+			if job.Spec.Suspend != nil && *job.Spec.Suspend {
+				continue
+			}
 			controller := metav1.GetControllerOf(job)
 			if controller == nil || controller.Kind != "CronJob" || controller.Name != subject.Name || controller.UID != subject.UID {
 				continue
@@ -159,6 +162,11 @@ func earlierContainerCompletionSplitEvidence(candidate, current containerComplet
 		candidate.startedAt.Equal(current.startedAt) && containerCompletionSplitEvidenceKey(candidate) < containerCompletionSplitEvidenceKey(current)
 }
 
+func laterContainerCompletionSplitEvidence(candidate, current containerCompletionSplitEvidence) bool {
+	return current.startedAt.IsZero() || candidate.startedAt.After(current.startedAt) ||
+		candidate.startedAt.Equal(current.startedAt) && containerCompletionSplitEvidenceKey(candidate) < containerCompletionSplitEvidenceKey(current)
+}
+
 func containerCompletionSplitEvidenceKey(e containerCompletionSplitEvidence) string {
 	return e.jobName + "\x00" + e.podName + "\x00" + e.exitedContainer + "\x00" + e.runningContainer
 }
@@ -183,7 +191,7 @@ func regularContainerCompletionSplit(statuses []corev1.ContainerStatus, now time
 				runningContainer: running.Name,
 				startedAt:        shapeStartedAt,
 			}
-			if earlierContainerCompletionSplitEvidence(candidate, best) {
+			if laterContainerCompletionSplitEvidence(candidate, best) {
 				best = candidate
 			}
 		}

@@ -242,6 +242,9 @@ func TestFindContainerCompletionSplitForObject(t *testing.T) {
 		if shape := FindContainerCompletionSplitForObject(cache, fixture.jobs[0], now); shape != nil {
 			t.Fatalf("suspended Job produced an observation: %+v", shape)
 		}
+		if shape := FindContainerCompletionSplitForObject(cache, fixture.cronJob, now); shape != nil {
+			t.Fatalf("CronJob exposed a suspended child Job observation: %+v", shape)
+		}
 	})
 
 	t.Run("suspended CronJob still exposes an active child", func(t *testing.T) {
@@ -313,6 +316,20 @@ func TestFindContainerCompletionSplitForObject(t *testing.T) {
 		shape := FindContainerCompletionSplitForObject(cache, fixture.jobs[0], now)
 		if shape == nil || shape.SinceSeconds != int64((10*time.Minute).Seconds()) {
 			t.Fatalf("running-container restart reset the completion clock: %+v", shape)
+		}
+	})
+
+	t.Run("latest successful exit anchors the split", func(t *testing.T) {
+		fixture := newContainerCompletionSplitFixture(now, 1)
+		fixture.pods[0].Status.ContainerStatuses = []corev1.ContainerStatus{
+			containerCompletionSplitTerminatedStatus("fetch-config", 0, now.Add(-6*time.Hour)),
+			containerCompletionSplitTerminatedStatus("worker", 0, now.Add(-10*time.Minute)),
+			containerCompletionSplitRunningStatus("log-agent", now.Add(-time.Hour)),
+		}
+		cache := containerCompletionSplitTestCache(t, fixture)
+		shape := FindContainerCompletionSplitForObject(cache, fixture.jobs[0], now)
+		if shape == nil || shape.ExitedContainer != "worker" || shape.SinceSeconds != int64((10*time.Minute).Seconds()) {
+			t.Fatalf("split was not anchored to the latest successful exit: %+v", shape)
 		}
 	})
 
