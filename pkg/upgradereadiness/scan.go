@@ -696,6 +696,11 @@ func scanFlexVolume(input *Input, index *workloadIndex) Check {
 		check.Summary = "The Kubernetes 1.36 FlexVolume change is specific to kubeadm-managed control planes."
 		return check
 	}
+	if countNonNil(input.Nodes) == 0 {
+		check.Status = CheckUnknown
+		check.Summary = "Nodes are unavailable; Radar could not determine whether this kubeadm-specific change applies."
+		return check
+	}
 	if input.Namespaces != nil {
 		check.Caveat = scopedCoverageNote(input.Namespaces, "live workloads")
 		check.Summary = "No FlexVolume usage was found in workloads in the selected namespace scope or inspected PersistentVolumes."

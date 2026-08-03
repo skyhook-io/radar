@@ -517,6 +517,21 @@ func TestScanCloudProviderIDDoesNotImplyManagedControlPlane(t *testing.T) {
 	}
 }
 
+func TestScanFlexVolumeApplicabilityRequiresNodeEvidence(t *testing.T) {
+	input := completeInput()
+	input.Platform = "eks"
+	input.Nodes = []*corev1.Node{nil}
+	input.PersistentVolumes = []*corev1.PersistentVolume{{ObjectMeta: metav1.ObjectMeta{Name: "flex"}, Spec: corev1.PersistentVolumeSpec{PersistentVolumeSource: corev1.PersistentVolumeSource{FlexVolume: &corev1.FlexPersistentVolumeSource{Driver: "example.com/driver"}}}}}
+	got, err := Scan(input, "1.35", "1.36")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := checkByID(t, got, "flexvolume-kubeadm-support")
+	if check.Status != CheckUnknown || len(check.Findings) != 0 {
+		t.Fatalf("FlexVolume check without node evidence = %+v, want unknown applicability", check)
+	}
+}
+
 func TestScanCoverageAndVerdictPrecedence(t *testing.T) {
 	input := completeInput()
 	input.CronJobs = nil
