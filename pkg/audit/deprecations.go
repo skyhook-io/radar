@@ -14,6 +14,9 @@ type DeprecationEntry struct {
 	Replacement string
 }
 
+// DeprecationCatalogReviewedThrough includes reviewed releases with no removed built-in API versions.
+const DeprecationCatalogReviewedThrough = "1.36"
+
 // DeprecationTable contains known deprecated K8s APIs from 1.16 through 1.32.
 // Sources: https://kubernetes.io/docs/reference/using-api/deprecation-guide/
 var DeprecationTable = []DeprecationEntry{

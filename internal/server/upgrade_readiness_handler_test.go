@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bytes"
+	"io"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -11,6 +13,28 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
+
+func TestReadBoundedUpgradeResponse(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		body    string
+		limit   int64
+		wantErr bool
+	}{
+		{name: "within limit", body: "1234", limit: 4},
+		{name: "over limit", body: "12345", limit: 4, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := readBoundedUpgradeResponse(io.NopCloser(bytes.NewBufferString(tc.body)), tc.limit)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("read error = %v, wantErr %v", err, tc.wantErr)
+			}
+			if !tc.wantErr && string(got) != tc.body {
+				t.Fatalf("body = %q, want %q", got, tc.body)
+			}
+		})
+	}
+}
 
 type fakeUpgradeResourceLister struct {
 	synced            bool

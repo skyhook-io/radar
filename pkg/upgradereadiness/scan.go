@@ -1,6 +1,7 @@
 package upgradereadiness
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -202,12 +203,12 @@ func cacheScopedCoverageNote(input *Input, kinds []string) string {
 		}
 		namespaces = append([]string(nil), namespaces...)
 		sort.Strings(namespaces)
-		parts = append(parts, kind+" ("+strings.Join(namespaces, ", ")+")")
+		parts = append(parts, kind+" ("+formatBoundedList(namespaces, ", ")+")")
 	}
 	if len(parts) == 0 {
 		return ""
 	}
-	return "Cached evidence is namespace-limited for: " + strings.Join(parts, "; ") + "."
+	return "Cached evidence is namespace-limited for: " + formatBoundedList(parts, "; ") + "."
 }
 
 func crossesRelease(current, target *utilversion.Version, release string) bool {
@@ -267,20 +268,7 @@ func finalizeCheck(check *Check) {
 		check.Findings = []Finding{}
 	}
 	sort.Slice(check.Findings, func(i, j int) bool {
-		if check.Findings[i].Level != check.Findings[j].Level {
-			return findingLevelOrder(check.Findings[i].Level) < findingLevelOrder(check.Findings[j].Level)
-		}
-		a, b := check.Findings[i].Resource, check.Findings[j].Resource
-		if a == nil || b == nil {
-			return check.Findings[i].Evidence.Path < check.Findings[j].Evidence.Path
-		}
-		if a.Namespace != b.Namespace {
-			return a.Namespace < b.Namespace
-		}
-		if a.Kind != b.Kind {
-			return a.Kind < b.Kind
-		}
-		return a.Name < b.Name
+		return compareFindings(check.Findings[i], check.Findings[j]) < 0
 	})
 	for _, finding := range check.Findings {
 		if finding.Level == LevelBlocker {
@@ -297,6 +285,39 @@ func finalizeCheck(check *Check) {
 	if len(check.Findings) > 0 {
 		check.Status = CheckReview
 	}
+}
+
+func compareFindings(a, b Finding) int {
+	return cmp.Or(
+		cmp.Compare(findingLevelOrder(a.Level), findingLevelOrder(b.Level)),
+		compareResourceRefs(a.Resource, b.Resource),
+		cmp.Compare(a.Evidence.Source, b.Evidence.Source),
+		cmp.Compare(a.Evidence.Path, b.Evidence.Path),
+		cmp.Compare(a.Evidence.Detail, b.Evidence.Detail),
+		cmp.Compare(a.Title, b.Title),
+		cmp.Compare(a.AppliesFrom, b.AppliesFrom),
+		compareResourceRefs(a.ManagedBy, b.ManagedBy),
+		cmp.Compare(a.Impact, b.Impact),
+		cmp.Compare(a.Remediation, b.Remediation),
+	)
+}
+
+func compareResourceRefs(a, b *ResourceRef) int {
+	if a == nil && b == nil {
+		return 0
+	}
+	if a == nil {
+		return -1
+	}
+	if b == nil {
+		return 1
+	}
+	return cmp.Or(
+		cmp.Compare(a.Group, b.Group),
+		cmp.Compare(a.Kind, b.Kind),
+		cmp.Compare(a.Namespace, b.Namespace),
+		cmp.Compare(a.Name, b.Name),
+	)
 }
 
 func findingLevelOrder(level Level) int {
@@ -831,7 +852,7 @@ func scanRenamedMetrics(input *Input) Check {
 		check.Summary = "No inspected PrometheusRule in the selected namespace scope references a metric renamed in Kubernetes 1.36."
 	}
 	if len(input.PrometheusRuleUnavailableNamespaces) > 0 {
-		check.Caveat = appendCaveat(check.Caveat, "PrometheusRules could not be read in: "+strings.Join(input.PrometheusRuleUnavailableNamespaces, ", ")+".")
+		check.Caveat = appendCaveat(check.Caveat, "PrometheusRules could not be read in: "+formatBoundedList(input.PrometheusRuleUnavailableNamespaces, ", ")+".")
 	}
 	if input.PrometheusRules == nil {
 		check.Status = CheckUnknown
@@ -1096,11 +1117,30 @@ func workloadsUnavailable(input *Input) bool {
 func scopedCoverageNote(namespaces []string, subject string) string {
 	names := append([]string(nil), namespaces...)
 	sort.Strings(names)
+	if len(names) == 0 {
+		return ""
+	}
 	label, verb := "namespace", "was"
 	if len(names) != 1 {
 		label, verb = "namespaces", "were"
 	}
-	return fmt.Sprintf("Only %s %s %s inspected for %s.", label, strings.Join(names, ", "), verb, subject)
+	return fmt.Sprintf("Only %s %s %s inspected for %s.", label, formatBoundedList(names, ", "), verb, subject)
+}
+
+func formatBoundedList(values []string, separator string) string {
+	values = append([]string(nil), values...)
+	sort.Strings(values)
+	unique := values[:0]
+	for _, value := range values {
+		if len(unique) == 0 || unique[len(unique)-1] != value {
+			unique = append(unique, value)
+		}
+	}
+	const limit = 5
+	if len(unique) <= limit {
+		return strings.Join(unique, separator)
+	}
+	return fmt.Sprintf("%s%sand %d more", strings.Join(unique[:limit], separator), separator, len(unique)-limit)
 }
 
 func appendCaveat(existing, addition string) string {
@@ -1121,7 +1161,7 @@ func appendSourceManifestCoverageCaveats(check *Check, input *Input, lastApplied
 			check.Caveat = appendCaveat(check.Caveat, "Stored Helm release manifests were unavailable; only kubectl last-applied configuration was inspected.")
 		}
 	} else if len(input.HelmUnavailableNamespaces) > 0 {
-		check.Caveat = appendCaveat(check.Caveat, "Stored Helm release manifests could not be read in: "+strings.Join(input.HelmUnavailableNamespaces, ", ")+".")
+		check.Caveat = appendCaveat(check.Caveat, "Stored Helm release manifests could not be read in: "+formatBoundedList(input.HelmUnavailableNamespaces, ", ")+".")
 	}
 	if input.HelmScopedNamespaces != nil {
 		check.Caveat = appendCaveat(check.Caveat, scopedCoverageNote(input.HelmScopedNamespaces, "stored Helm release manifests"))
@@ -1133,7 +1173,7 @@ func appendSourceManifestCoverageCaveats(check *Check, input *Input, lastApplied
 		check.Caveat = appendCaveat(check.Caveat, fmt.Sprintf("%d kubectl last-applied %s could not be parsed.", lastAppliedParseErrors, plural(lastAppliedParseErrors, "annotation", "annotations")))
 	}
 	if len(input.SourceObjectUnavailableKinds) > 0 {
-		check.Caveat = appendCaveat(check.Caveat, "kubectl last-applied configuration could not be inspected for: "+strings.Join(input.SourceObjectUnavailableKinds, ", ")+".")
+		check.Caveat = appendCaveat(check.Caveat, "kubectl last-applied configuration could not be inspected for: "+formatBoundedList(input.SourceObjectUnavailableKinds, ", ")+".")
 	}
 }
 

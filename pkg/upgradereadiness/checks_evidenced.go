@@ -26,6 +26,24 @@ func scanNodeCgroupCompatibility(input *Input) Check {
 		check.Status, check.Summary = CheckUnknown, "Nodes were unavailable; Radar could not inspect cgroup compatibility."
 		return check
 	}
+	nonNilNodes, linuxNodes := 0, 0
+	for _, node := range input.Nodes {
+		if node == nil {
+			continue
+		}
+		nonNilNodes++
+		if !strings.EqualFold(node.Status.NodeInfo.OperatingSystem, "windows") {
+			linuxNodes++
+		}
+	}
+	if nonNilNodes == 0 {
+		check.Status, check.Summary = CheckUnknown, "Nodes were unavailable; Radar could not inspect cgroup compatibility."
+		return check
+	}
+	if linuxNodes == 0 {
+		check.Status, check.Summary = CheckNotApplicable, "Cgroup v1 compatibility does not apply to Windows nodes."
+		return check
+	}
 	if input.NodeRuntimeEvidence == nil {
 		check.Status, check.Summary = CheckUnknown, "Kubelet cgroup version metrics were unavailable."
 		return check
@@ -76,6 +94,7 @@ func scanContainerRuntimeSupport(input *Input, target *utilversion.Version) Chec
 	}
 	check.Inspected = 0
 	unknown := 0
+	metricAvailableFrom := utilversion.MustParseGeneric("1.35")
 	for _, node := range input.Nodes {
 		if node == nil {
 			continue
@@ -90,6 +109,10 @@ func scanContainerRuntimeSupport(input *Input, target *utilversion.Version) Chec
 			continue
 		}
 		if !evidence.CRILosingSupportAvailable {
+			kubeletVersion, err := parseMinor(node.Status.NodeInfo.KubeletVersion)
+			if err != nil || kubeletVersion.LessThan(metricAvailableFrom) {
+				unknown++
+			}
 			continue
 		}
 		losing, err := parseMinor(evidence.CRILosingSupportVersion)
@@ -763,7 +786,12 @@ func strictNetworkCandidates(object *unstructured.Unstructured) []networkCandida
 
 func scanGKEExecProbeTimeout(input *Input) Check {
 	check := Check{ID: "gke-exec-probe-timeout", Category: "Managed Kubernetes", Title: "GKE exec probe timeout exposure", Status: CheckPassed, Summary: "No GKE exec probes rely on the one-second default timeout.", Scope: "Workload probes and recent Kubernetes Events", AppliesFrom: "1.35", References: append([]Reference(nil), gkeExecProbeReferences...)}
-	if !strings.Contains(strings.ToLower(input.Platform), "gke") && !strings.Contains(strings.ToLower(input.Platform), "google") {
+	platform := strings.ToLower(strings.TrimSpace(input.Platform))
+	if platform == "" || platform == "unknown" {
+		check.Status, check.Summary = CheckUnknown, "Cluster platform detection was unavailable; Radar could not determine whether the GKE-specific change applies."
+		return check
+	}
+	if !strings.Contains(platform, "gke") && !strings.Contains(platform, "google") {
 		check.Status, check.Summary = CheckNotApplicable, "This cluster is not running on GKE."
 		return check
 	}

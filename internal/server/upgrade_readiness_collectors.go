@@ -28,8 +28,8 @@ var upgradeSourceExcludedKinds = map[string]bool{
 	"Lease": true,
 }
 
-func collectUpgradeSourceObjects(r *http.Request, namespaces []string) ([]metav1.Object, []string) {
-	client := k8s.DynamicClientFromContext(r.Context())
+func collectUpgradeSourceObjects(ctx context.Context, namespaces []string) ([]metav1.Object, []string) {
+	client := k8s.DynamicClientFromContext(ctx)
 	discovery := k8s.GetResourceDiscovery()
 	if client == nil || discovery == nil {
 		return nil, []string{"source-object discovery"}
@@ -51,7 +51,7 @@ func collectUpgradeSourceObjects(r *http.Request, namespaces []string) ([]metav1
 	if len(resources) == 0 {
 		return nil, []string{"source-object discovery"}
 	}
-	objects, unavailable := collectUpgradeSourceObjectsWithClient(r.Context(), client, namespaces, resources)
+	objects, unavailable := collectUpgradeSourceObjectsWithClient(ctx, client, namespaces, resources)
 	if discovery.HasPartialDiscovery() && !slices.Contains(unavailable, "source-object discovery") {
 		unavailable = append(unavailable, "source-object discovery")
 		sort.Strings(unavailable)

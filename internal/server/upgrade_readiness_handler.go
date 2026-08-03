@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log"
 	"math"
 	"net/http"
@@ -28,6 +29,14 @@ import (
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/upgradereadiness"
+)
+
+const (
+	upgradeSourceObjectCollectionTimeout = 10 * time.Second
+	upgradeNodeRuntimeCollectionTimeout  = 20 * time.Second
+	upgradeNodeMetricsResponseLimit      = 8 << 20
+	upgradeAPIMetricsCollectionTimeout   = 10 * time.Second
+	upgradeAPIMetricsResponseLimit       = 16 << 20
 )
 
 func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) {
@@ -75,12 +84,16 @@ func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) 
 		}
 		deprecatedRequests, deprecatedMetricsWindow = collectDeprecatedAPIRequests(r)
 		prometheusRules, prometheusInstalled, discoveryAvailable, prometheusUnavailableNamespaces = s.collectUpgradePrometheusRules(r, namespaces)
-		sourceObjects, sourceObjectUnavailableKinds = collectUpgradeSourceObjects(r, namespaces)
+		sourceObjectCtx, cancelSourceObjectCollection := context.WithTimeout(r.Context(), upgradeSourceObjectCollectionTimeout)
+		sourceObjects, sourceObjectUnavailableKinds = collectUpgradeSourceObjects(sourceObjectCtx, namespaces)
+		cancelSourceObjectCollection()
 		admissionConfigs, admissionConfigUnavailableKinds, crds, endpointSlices, additionalServices = s.collectUpgradeWebhookEvidence(r)
 		apiServices = s.collectUpgradeAPIServices(r)
 		if canReadNodes && s.canReadSubresource(r, "", "nodes", "proxy", "", "get") && cache.Nodes() != nil {
 			nodes, _ := cache.Nodes().List(labels.Everything())
-			nodeRuntimeEvidence = collectUpgradeNodeRuntimeEvidence(r.Context(), nodes)
+			nodeRuntimeCtx, cancelNodeRuntimeCollection := context.WithTimeout(r.Context(), upgradeNodeRuntimeCollectionTimeout)
+			nodeRuntimeEvidence = collectUpgradeNodeRuntimeEvidence(nodeRuntimeCtx, nodes)
+			cancelNodeRuntimeCollection()
 		}
 	}
 	if r.Context().Err() != nil {
@@ -213,7 +226,13 @@ func collectDeprecatedAPIRequests(r *http.Request) ([]upgradereadiness.Deprecate
 	if client == nil || client.Discovery().RESTClient() == nil {
 		return nil, ""
 	}
-	raw, err := client.Discovery().RESTClient().Get().AbsPath("/metrics").DoRaw(r.Context())
+	metricsCtx, cancel := context.WithTimeout(r.Context(), upgradeAPIMetricsCollectionTimeout)
+	defer cancel()
+	stream, err := client.Discovery().RESTClient().Get().AbsPath("/metrics").Stream(metricsCtx)
+	if err != nil {
+		return nil, ""
+	}
+	raw, err := readBoundedUpgradeResponse(stream, upgradeAPIMetricsResponseLimit)
 	if err != nil {
 		return nil, ""
 	}
@@ -230,6 +249,18 @@ func collectDeprecatedAPIRequests(r *http.Request) ([]upgradereadiness.Deprecate
 		}
 	}
 	return requests, window
+}
+
+func readBoundedUpgradeResponse(stream io.ReadCloser, limit int64) ([]byte, error) {
+	defer stream.Close()
+	raw, err := io.ReadAll(io.LimitReader(stream, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) > limit {
+		return nil, errors.New("upgrade evidence response exceeds limit")
+	}
+	return raw, nil
 }
 
 func parseDeprecatedAPIRequests(raw []byte) ([]upgradereadiness.DeprecatedAPIRequest, time.Time, error) {
@@ -375,7 +406,11 @@ func collectUpgradeNodeRuntimeEvidence(ctx context.Context, nodes []*corev1.Node
 			for job := range jobs {
 				result := upgradereadiness.NodeRuntimeEvidence{NodeName: job.node.Name}
 				probeCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
-				raw, err := client.CoreV1().RESTClient().Get().AbsPath("/api/v1/nodes/" + url.PathEscape(job.node.Name) + "/proxy/metrics").DoRaw(probeCtx)
+				stream, err := client.CoreV1().RESTClient().Get().AbsPath("/api/v1/nodes/" + url.PathEscape(job.node.Name) + "/proxy/metrics").Stream(probeCtx)
+				var raw []byte
+				if err == nil {
+					raw, err = readBoundedUpgradeResponse(stream, upgradeNodeMetricsResponseLimit)
+				}
 				cancel()
 				if err == nil {
 					parser := expfmt.NewTextParser(model.LegacyValidation)

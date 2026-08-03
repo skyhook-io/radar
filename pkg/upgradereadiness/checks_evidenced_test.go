@@ -75,6 +75,13 @@ func TestNodeCompatibilityEvidence(t *testing.T) {
 	}
 
 	input = completeInput()
+	input.Nodes[0].Status.NodeInfo.KubeletVersion = "v1.34.9"
+	result, _ = Scan(input, "1.35", "1.36")
+	if checkByID(t, result, "container-runtime-support").Status != CheckUnknown {
+		t.Fatal("pre-1.35 kubelet without the CRI support metric must remain unknown")
+	}
+
+	input = completeInput()
 	input.Nodes[0].Status.NodeInfo.ContainerRuntimeVersion = "cri-o://1.35.0"
 	input.NodeRuntimeEvidence[0].MetricsAvailable = false
 	result, _ = Scan(input, "1.35", "1.36")
@@ -85,6 +92,11 @@ func TestNodeCompatibilityEvidence(t *testing.T) {
 	input = completeInput()
 	input.Nodes[0].Status.NodeInfo.OperatingSystem = "windows"
 	input.NodeRuntimeEvidence[0] = NodeRuntimeEvidence{NodeName: input.Nodes[0].Name}
+	result, _ = Scan(input, "1.34", "1.35")
+	cgroup = checkByID(t, result, "node-cgroup-v1")
+	if cgroup.Status != CheckNotApplicable || cgroup.Inspected != 0 {
+		t.Fatalf("Windows-only cgroup check = %+v, want not applicable", cgroup)
+	}
 	result, _ = Scan(input, "1.35", "1.36")
 	runtime := checkByID(t, result, "container-runtime-support")
 	if runtime.Status != CheckPassed || runtime.Caveat != "" || runtime.Inspected != 0 {
@@ -564,6 +576,19 @@ func TestGKEExecProbeRetainsReadableFindingsWithPartialWorkloadCoverage(t *testi
 	check := checkByID(t, result, "gke-exec-probe-timeout")
 	if check.Status != CheckReview || len(check.Findings) != 1 || check.Caveat == "" {
 		t.Fatalf("GKE check = %+v, want retained finding plus partial-evidence caveat", check)
+	}
+}
+
+func TestGKEExecProbeUnknownPlatformPreservesUncertainty(t *testing.T) {
+	input := completeInput()
+	input.Platform = "unknown"
+	result, err := Scan(input, "1.34", "1.35")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := checkByID(t, result, "gke-exec-probe-timeout")
+	if check.Status != CheckUnknown || !strings.Contains(check.Summary, "platform detection was unavailable") {
+		t.Fatalf("unknown-platform GKE check = %+v, want explicit uncertainty", check)
 	}
 }
 

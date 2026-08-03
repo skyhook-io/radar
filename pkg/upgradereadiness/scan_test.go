@@ -13,6 +13,8 @@ import (
 	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	bp "github.com/skyhook-io/radar/pkg/audit"
 )
 
 func completeInput() *Input {
@@ -46,6 +48,13 @@ func completeInput() *Input {
 		PrometheusRules:                   []*unstructured.Unstructured{},
 		PrometheusRulesInstalled:          false,
 		PrometheusRulesDiscoveryAvailable: true,
+		Platform:                          "generic",
+	}
+}
+
+func TestReviewedThroughMatchesDeprecationCatalog(t *testing.T) {
+	if bp.DeprecationCatalogReviewedThrough != ReviewedThrough {
+		t.Fatalf("deprecation catalog reviewed through %s, upgrade catalog through %s", bp.DeprecationCatalogReviewedThrough, ReviewedThrough)
 	}
 }
 
@@ -570,6 +579,28 @@ func TestFinalizeCheckUsesHighestActionLevel(t *testing.T) {
 				t.Fatalf("finalized check = %+v, want status %s and highest action first", check, tc.want)
 			}
 		})
+	}
+}
+
+func TestFinalizeCheckSortsEquivalentResourcesByEvidence(t *testing.T) {
+	resource := &ResourceRef{Kind: "Deployment", Namespace: "default", Name: "api"}
+	check := Check{Status: CheckPassed, Findings: []Finding{
+		{Level: LevelReview, Resource: resource, Evidence: Evidence{Source: "live", Path: "spec.z"}},
+		{Level: LevelReview, Resource: resource, Evidence: Evidence{Source: "live", Path: "spec.a"}},
+	}}
+	finalizeCheck(&check)
+	if check.Findings[0].Evidence.Path != "spec.a" || check.Findings[1].Evidence.Path != "spec.z" {
+		t.Fatalf("finding order = %+v, want deterministic evidence-path order", check.Findings)
+	}
+}
+
+func TestFormatBoundedList(t *testing.T) {
+	got := formatBoundedList([]string{"z", "e", "d", "c", "b", "a", "a"}, ", ")
+	if got != "a, b, c, d, e, and 1 more" {
+		t.Fatalf("formatted list = %q", got)
+	}
+	if got := scopedCoverageNote([]string{}, "source manifests"); got != "" {
+		t.Fatalf("empty scope note = %q, want empty", got)
 	}
 }
 
