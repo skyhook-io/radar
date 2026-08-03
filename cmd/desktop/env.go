@@ -27,6 +27,10 @@ var shellEnvVars = []string{
 	"GOOGLE_APPLICATION_CREDENTIALS",
 	"CLOUDSDK_CONFIG",
 	"AZURE_CONFIG_DIR",
+	// Self-hosted Hub overrides — a Finder/Dock launch strips the shell env,
+	// and without these Cloud Connect would silently target the hosted Hub.
+	"RADAR_HUB_URL",
+	"RADAR_HUB_APP_URL",
 }
 
 // enrichEnv captures key environment variables from the user's login

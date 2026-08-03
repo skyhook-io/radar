@@ -269,24 +269,9 @@ func main() {
 	// origin is set, the frontend origin defaults to the same host — the
 	// self-hosted stack serves web + API from one origin; the hosted pair
 	// (api./app.radarhq.io) stays the default otherwise.
-	hubAPIURL := strings.TrimSpace(os.Getenv("RADAR_HUB_URL"))
-	hubAppURL := strings.TrimSpace(os.Getenv("RADAR_HUB_APP_URL"))
-	if hubAPIURL != "" {
-		normalized, err := cloud.NormalizeHubOrigin(hubAPIURL)
-		if err != nil {
-			log.Fatalf("invalid RADAR_HUB_URL: %v", err)
-		}
-		hubAPIURL = normalized
-		if hubAppURL == "" {
-			hubAppURL = hubAPIURL
-		}
-	}
-	if hubAppURL != "" {
-		normalized, err := cloud.NormalizeHubOrigin(hubAppURL)
-		if err != nil {
-			log.Fatalf("invalid RADAR_HUB_APP_URL: %v", err)
-		}
-		hubAppURL = normalized
+	hubAPIURL, hubAppURL, err := cloud.ResolveHubOriginsFromEnv()
+	if err != nil {
+		log.Fatalf("%v", err)
 	}
 
 	cfg := app.AppConfig{

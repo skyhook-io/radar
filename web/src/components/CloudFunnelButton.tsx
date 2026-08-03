@@ -139,9 +139,14 @@ export function CloudFunnelButton() {
   const showFlow = inFlowView && (blocked !== null || prepare.isPending || flowLive)
   // The prepare POST can take tens of seconds (chart download + preflight);
   // until the status poll observes the server-side flow, synthesize the
-  // preparing state so the modal never renders empty.
+  // preparing state so the modal never renders empty. A blocked result gets
+  // the same treatment: it lives only in local state (never seeded into the
+  // status query), so a slow or failed first /status fetch must not drop the
+  // explanation back to the pitch.
   const flowForView: CloudInstallStatus | undefined =
-    prepare.isPending && !flowLive ? { state: 'preparing' } : flow
+    prepare.isPending && !flowLive
+      ? { state: 'preparing' }
+      : (flow ?? (blocked ? { state: 'blocked', blocked } : undefined))
 
   return (
     <>

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/app"
+	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/updater"
@@ -116,6 +117,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	// The device flow and consent page must identify this build and target the
+	// same control plane the CLI would — Desktop starts the same shared server.
+	cloud.Version = version
+	hubAPIURL, hubAppURL, err := cloud.ResolveHubOriginsFromEnv()
+	if err != nil {
+		log.Printf("ERROR: %v", err)
+		os.Exit(1)
+	}
+
 	cfg := app.AppConfig{
 		Kubeconfig:               *kubeconfig,
 		KubeconfigDirs:           app.ParseKubeconfigDirs(*kubeconfigDir),
@@ -138,6 +148,8 @@ func main() {
 		PrometheusHeaders:        resolvedPrometheusHeaders,
 		PrometheusHeadersFromEnv: fileCfg.PrometheusHeadersFromEnv,
 		Version:                  version,
+		HubAPIURL:                hubAPIURL,
+		HubAppURL:                hubAppURL,
 		MCPEnabled:               fileCfg.MCPEnabledOr(true),
 		AIHistory:                fileCfg.AIHistoryOr(true),
 		AIHistoryDBPath:          fileCfg.AIHistoryDBPath,
