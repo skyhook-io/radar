@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { useEffect, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Bell, Check, Globe, History, Sparkles, Users, X } from 'lucide-react'
+import { DialogPortal } from '@skyhook-io/k8s-ui/components/ui/DialogPortal'
 import { Tooltip } from './ui/Tooltip'
 import { CloudConnectFlow } from './CloudConnectFlow'
 import {
@@ -24,15 +24,36 @@ import {
 // receiving end (utm_source on wizard links, Hub funnel events on the driver).
 const FALLBACK_APP_URL = 'https://app.radarhq.io'
 const SIGNUP_QUERY = '?utm_source=radar-oss&utm_medium=app&utm_campaign=cloud-modal'
-const ABOUT_URL = 'https://www.radarhq.io/about'
+const ABOUT_URL = 'https://radarhq.io/about'
 const SELF_HOSTED_DOCS_URL = 'https://radarhq.io/docs/cloud/self-hosted/'
+const SEEN_KEY = 'radar.cloudFunnel.seen'
+
+// localStorage access can throw (SecurityError) where storage is denied —
+// sandboxed embeds, some privacy modes. This button mounts in the top bar
+// outside the main error boundary, so an uncaught throw would take down the
+// chrome; degrade to "not seen" / no-op persistence instead.
+function readSeen(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    return window.localStorage.getItem(SEEN_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+function markSeen() {
+  try {
+    window.localStorage.setItem(SEEN_KEY, 'true')
+  } catch {
+    // Storage denied — the ping dot reappears on next mount; harmless.
+  }
+}
 
 export function CloudFunnelButton() {
   const [open, setOpen] = useState(false)
-  const [seen, setSeen] = useState(() => localStorage.getItem('radar.cloudFunnel.seen') === 'true')
+  const [seen, setSeen] = useState(readSeen)
   const [inFlowView, setInFlowView] = useState(false)
   const [blocked, setBlocked] = useState<CloudInstallBlocked | null>(null)
-  const closeRef = useRef<HTMLButtonElement>(null)
 
   const capabilities = useCapabilities()
   const lane = capabilities.data?.cloudConnect?.lane ?? 'wizard'
@@ -76,7 +97,7 @@ export function CloudFunnelButton() {
   const openModal = () => {
     setOpen(true)
     setSeen(true)
-    localStorage.setItem('radar.cloudFunnel.seen', 'true')
+    markSeen()
     // Re-open lands on a live flow if one is running.
     if (lane === 'driver' && flowLive) setInFlowView(true)
   }
@@ -98,16 +119,6 @@ export function CloudFunnelButton() {
     if (open && lane === 'driver' && flowLive) setInFlowView(true)
   }, [open, lane, flowLive])
 
-  useEffect(() => {
-    if (!open) return
-    closeRef.current?.focus()
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [open])
-
   const showFlow = inFlowView && (blocked !== null || prepare.isPending || flowLive)
   // The prepare POST can take tens of seconds (chart download + preflight);
   // until the status poll observes the server-side flow, synthesize the
@@ -117,7 +128,9 @@ export function CloudFunnelButton() {
 
   return (
     <>
-      <Tooltip content="Radar Cloud — all your clusters, one URL" delay={100} position="bottom">
+      {/* Tooltip is suppressed while the modal is open — it portals above the
+          modal backdrop and would otherwise paint on top of the dialog. */}
+      <Tooltip content="Radar Cloud — all your clusters, one URL" delay={100} position="bottom" disabled={open}>
         <button
           onClick={openModal}
           aria-label="Radar Cloud"
@@ -126,68 +139,61 @@ export function CloudFunnelButton() {
         >
           <Globe className="w-4 h-4" />
           {cloudInstallActive(flow?.state) ? (
-            <span className="absolute top-0.5 right-0.5 w-[7px] h-[7px] rounded-full bg-emerald-500 animate-pulse" />
+            <span className="absolute top-0.5 right-0.5 w-[7px] h-[7px] rounded-full bg-emerald-500 animate-pulse motion-reduce:animate-none" />
           ) : (
             !seen && (
               <span className="absolute top-0.5 right-0.5 w-[7px] h-[7px] rounded-full bg-emerald-500">
-                <span className="absolute -inset-[3px] rounded-full border border-emerald-500/70 animate-ping" />
+                <span className="absolute -inset-[3px] rounded-full border border-emerald-500/70 animate-ping motion-reduce:animate-none" />
               </span>
             )
           )}
         </button>
       </Tooltip>
 
-      {/* Portaled: the header's backdrop-blur creates a containing block that
-          would otherwise trap this fixed overlay inside the 49px bar. */}
-      {open && createPortal(
-        <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-6"
-          onClick={(e) => { if (e.target === e.currentTarget) setOpen(false) }}
+      <DialogPortal
+        open={open}
+        onClose={() => setOpen(false)}
+        className="w-[500px] max-w-full max-h-[calc(100vh-2rem)] overflow-hidden flex flex-col"
+      >
+        <button
+          onClick={() => setOpen(false)}
+          aria-label="Close"
+          className="absolute top-3.5 right-3.5 z-10 p-1.5 rounded-md text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-hover transition-colors"
         >
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label="Radar Cloud"
-            className="dialog relative overflow-hidden w-[500px] max-w-full max-h-full overflow-y-auto"
-          >
-            <button
-              ref={closeRef}
-              onClick={() => setOpen(false)}
-              aria-label="Close"
-              className="absolute top-3.5 right-3.5 z-10 p-1.5 rounded-md text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-hover transition-colors"
-            >
-              <X className="w-4 h-4" />
-            </button>
+          <X className="w-4 h-4" />
+        </button>
 
-            {showFlow && flowForView ? (
-              <>
-                <div className="px-7 pt-6">
-                  <Eyebrow />
-                </div>
-                <CloudConnectFlow
-                  status={flowForView}
-                  blocked={blocked}
-                  signupUrl={signupUrl}
-                  onStatus={applyStatus}
-                  onExit={exitFlow}
-                />
-              </>
-            ) : (
-              <>
-                <ModalBody />
-                <ModalFooter
-                  lane={lane}
-                  signupUrl={signupUrl}
-                  self={inCluster ? self.data : undefined}
-                  onConnect={startConnect}
-                  onLater={() => setOpen(false)}
-                />
-              </>
-            )}
+        {/* Only the body scrolls on short viewports — the close control and
+            the footer CTA stay pinned so they never scroll away. This matters
+            more with the connect flow, whose plan card is the tallest state. */}
+        {showFlow && flowForView ? (
+          <div className="min-h-0 overflow-y-auto">
+            <div className="px-7 pt-6">
+              <Eyebrow />
+            </div>
+            <CloudConnectFlow
+              status={flowForView}
+              blocked={blocked}
+              signupUrl={signupUrl}
+              onStatus={applyStatus}
+              onExit={exitFlow}
+            />
           </div>
-        </div>,
-        document.body
-      )}
+        ) : (
+          <>
+            <div className="min-h-0 overflow-y-auto">
+              <ModalBody />
+            </div>
+            <ModalFooter
+              lane={lane}
+              signupUrl={signupUrl}
+              self={inCluster ? self.data : undefined}
+              onConnect={startConnect}
+              onLater={() => setOpen(false)}
+            />
+          </>
+        )}
+      </DialogPortal>
     </>
   )
 }
