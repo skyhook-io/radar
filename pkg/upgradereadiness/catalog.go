@@ -11,6 +11,10 @@ var (
 		Title: "Kubernetes deprecated API migration guide",
 		URL:   "https://kubernetes.io/docs/reference/using-api/deprecation-guide/",
 	}}
+	cloudMetricsPermissionReference = Reference{
+		Title: "Radar Cloud metrics permission",
+		URL:   "https://github.com/skyhook-io/radar/blob/main/docs/authentication.md#cloud-mode-helm-bindings",
+	}
 	gitRepoReferences = []Reference{
 		{Title: "Kubernetes volumes: gitRepo", URL: "https://kubernetes.io/docs/concepts/storage/volumes/#gitrepo"},
 		{Title: "Kubernetes 1.36 removal announcement", URL: "https://kubernetes.io/blog/2026/04/22/kubernetes-v1-36-release/#removal-of-the-gitrepo-volume-driver"},

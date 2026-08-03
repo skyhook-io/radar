@@ -395,10 +395,13 @@ cloud:
     memberClusterRole: edit
     viewerClusterRole: view
     # Grant cluster-scoped READ (Nodes, PVs, StorageClasses, IngressClasses,
-    # PriorityClasses, RuntimeClasses) on top of the built-in view/edit/admin
-    # roles, which exclude cluster-scoped resources. Per tier, each default
-    # true — Radar is a cluster-wide observability tool, so by default every
-    # tier (incl. viewer) sees core infrastructure. No Secrets or RBAC objects.
+    # PriorityClasses, RuntimeClasses, CRDs, and admission webhooks) on top of
+    # the built-in view/edit/admin roles, which exclude cluster-scoped resources.
+    # When their matching collection is enabled, the add-on also grants read on
+    # APIServices, PrometheusRules, Karpenter kinds, and node metrics. Per tier,
+    # each default true — Radar is a cluster-wide observability tool, so by
+    # default every tier (incl. viewer) sees core infrastructure. No Secrets or
+    # RBAC objects.
     #
     # Set a tier false to remove this add-on's binding. With the default
     # built-in role mappings above that leaves the tier namespaced-only —

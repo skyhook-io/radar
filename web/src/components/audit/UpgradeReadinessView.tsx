@@ -43,6 +43,7 @@ interface UpgradeReadinessViewProps {
 
 const FINDING_CAP = 8
 export const UPGRADE_IMPACT_DOCS_URL = 'https://radarhq.io/docs/features/upgrade-impact'
+export const UPGRADE_IMPACT_MIN_RADAR_VERSION = 'v1.9.0'
 
 const statusMeta: Record<UpgradeReadinessCheckStatus, {
   label: string
@@ -109,17 +110,7 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
       <div className="flex-1 flex flex-col min-h-0 p-4 gap-4">
         <ChecksViewTabs />
         <div className="flex flex-1 items-center justify-center">
-          <EmptyState
-            tone="neutral"
-            icon={AlertTriangle}
-            headline="Unable to analyze upgrade impact"
-            body={error instanceof ApiError ? error.message : 'Failed to analyze upgrade impact.'}
-            action={error instanceof ApiError && error.status === 400 ? (
-              <button type="button" onClick={resetTarget} className="btn-brand px-3 py-1.5 text-xs font-medium">
-                Use next Kubernetes version
-              </button>
-            ) : undefined}
-          />
+          <UpgradeReadinessError error={error} onResetTarget={resetTarget} />
         </div>
       </div>
     )
@@ -255,6 +246,42 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
         </section>
       )}
     </div>
+  )
+}
+
+export function UpgradeReadinessError({ error, onResetTarget }: { error: unknown; onResetTarget?: () => void }) {
+  const missingEndpoint = error instanceof ApiError
+    && error.status === 404
+    && error.message === 'Unknown error'
+  if (missingEndpoint) {
+    return (
+      <EmptyState
+        tone="neutral"
+        icon={ShieldAlert}
+        headline="Upgrade impact needs a newer Radar"
+        body={
+          <>
+            This cluster&rsquo;s Radar predates Upgrade impact (added in Radar {UPGRADE_IMPACT_MIN_RADAR_VERSION}).
+            <br />
+            Upgrade the in-cluster Radar to enable it.
+          </>
+        }
+      />
+    )
+  }
+
+  return (
+    <EmptyState
+      tone="neutral"
+      icon={AlertTriangle}
+      headline="Unable to analyze upgrade impact"
+      body={error instanceof ApiError ? error.message : 'Failed to analyze upgrade impact.'}
+      action={error instanceof ApiError && error.status === 400 && onResetTarget ? (
+        <button type="button" onClick={onResetTarget} className="btn-brand px-3 py-1.5 text-xs font-medium">
+          Use next Kubernetes version
+        </button>
+      ) : undefined}
+    />
   )
 }
 

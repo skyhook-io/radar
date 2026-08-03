@@ -145,6 +145,8 @@ function getViewFromPath(pathname: string): ExtendedMainView {
 //     breakdown; a filter would only hide rows).
 //   - A GitOps detail tree spans namespaces — its controller lives in one
 //     namespace but manages workloads across many.
+//   - Upgrade impact evaluates the full readable cluster scope rather than a
+//     browsing filter.
 //   - A cluster-scoped resource kind (Nodes, PVs, ClusterRoles…) has no
 //     namespace at all.
 // The pick itself is preserved so it re-applies when the user returns to a
@@ -168,6 +170,12 @@ function namespaceFilterDisabled(
     return {
       disabled: true,
       tooltip: 'Capacity is reported across the cluster — the namespace filter doesn’t apply here.',
+    }
+  }
+  if (view === 'checks' && pathname.startsWith('/checks/upgrade')) {
+    return {
+      disabled: true,
+      tooltip: 'Upgrade impact scans every namespace you can access — the namespace filter doesn’t apply.',
     }
   }
   const segments = pathname.replace(/^\//, '').split('/')

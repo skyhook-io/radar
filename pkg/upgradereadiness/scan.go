@@ -348,7 +348,9 @@ func scanDeprecatedAPIRequests(input *Input, target *utilversion.Version) Check 
 	if input.DeprecatedAPIRequests == nil {
 		check.Status = CheckUnknown
 		check.Summary = "API usage metrics are unavailable; Radar could not inspect deprecated API requests."
+		check.Caveat = "Grant get on the API server /metrics non-resource URL to the current identity to enable this evidence. Radar Cloud's default role intentionally omits this broader read."
 		check.EvidenceNote = ""
+		check.References = append(check.References, cloudMetricsPermissionReference)
 		return check
 	}
 	check.Inspected = len(input.DeprecatedAPIRequests)

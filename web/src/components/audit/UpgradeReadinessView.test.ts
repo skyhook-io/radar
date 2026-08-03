@@ -1,5 +1,34 @@
 import { describe, expect, it } from 'vitest'
-import { UPGRADE_IMPACT_DOCS_URL, groupFindings, incompleteUpgradeCheckCount, issueSpecificReferences, summaryMeta, upgradeEvaluationSummary } from './UpgradeReadinessView'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { ApiError } from '../../api/client'
+import { UPGRADE_IMPACT_DOCS_URL, UPGRADE_IMPACT_MIN_RADAR_VERSION, UpgradeReadinessError, groupFindings, incompleteUpgradeCheckCount, issueSpecificReferences, summaryMeta, upgradeEvaluationSummary } from './UpgradeReadinessView'
+
+describe('UpgradeReadinessError', () => {
+  it('maps an unmatched endpoint 404 to the v1.9 upgrade message', () => {
+    const html = renderToStaticMarkup(UpgradeReadinessError({ error: new ApiError('Unknown error', 404) }))
+
+    expect(html).toContain('Upgrade impact needs a newer Radar')
+    expect(html).toContain(UPGRADE_IMPACT_MIN_RADAR_VERSION)
+    expect(html).toContain('Upgrade the in-cluster Radar to enable it')
+    expect(html).not.toContain('Unable to analyze upgrade impact')
+  })
+
+  it('keeps a real resource 404 on the generic error state', () => {
+    const html = renderToStaticMarkup(UpgradeReadinessError({ error: new ApiError('Cluster not found', 404) }))
+
+    expect(html).toContain('Unable to analyze upgrade impact')
+    expect(html).toContain('Cluster not found')
+    expect(html).not.toContain('needs a newer Radar')
+  })
+
+  it('keeps ordinary failures on the generic error state', () => {
+    const html = renderToStaticMarkup(UpgradeReadinessError({ error: new ApiError('boom', 500) }))
+
+    expect(html).toContain('Unable to analyze upgrade impact')
+    expect(html).toContain('boom')
+    expect(html).not.toContain('needs a newer Radar')
+  })
+})
 
 describe('upgradeEvaluationSummary', () => {
   it('distinguishes applicable, incomplete, and not-applicable checks', () => {

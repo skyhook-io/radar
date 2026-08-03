@@ -3,9 +3,10 @@ Cluster-scoped READ for the Cloud tiers.
 
 The built-in admin/edit/view ClusterRoles the tiers bind to (see cloud-rbac.yaml)
 are namespace roles — by design they grant nothing on cluster-scoped resources
-(Nodes, PersistentVolumes, StorageClasses, IngressClasses, PriorityClasses). For a
-cluster-wide observability tool that means owners and viewers can't see core
-infrastructure. This add-on grants get/list/watch on those kinds via EXPLICIT
+(Nodes, PersistentVolumes, StorageClasses, IngressClasses, PriorityClasses, and
+cluster-scoped extension metadata). For a cluster-wide observability tool that
+means owners and viewers can't see core infrastructure. This add-on grants
+get/list/watch on those kinds via EXPLICIT
 bindings to the cloud:* groups — deliberately NOT via `aggregate-to-view` labels,
 which would widen the shared built-in `view`/`edit` roles cluster-wide for every
 other subject bound to them (mirrors the radar-helm add-on pattern).
@@ -76,6 +77,26 @@ rules:
   - apiGroups: ["node.k8s.io"]
     resources: ["runtimeclasses"]
     verbs: ["get", "list", "watch"]
+  # Upgrade impact evaluates cluster extension readiness per caller. These are
+  # read-only API registration and admission metadata: no Secrets, RBAC objects,
+  # writes, API-server metrics, or kubelet proxy access. The latter two remain
+  # explicitly permission-gated because their read surface is materially broader.
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["mutatingwebhookconfigurations", "validatingwebhookconfigurations"]
+    verbs: ["get", "list", "watch"]
+  {{- if .Values.rbac.crdGroups.apiRegistration }}
+  - apiGroups: ["apiregistration.k8s.io"]
+    resources: ["apiservices"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.prometheus }}
+  - apiGroups: ["monitoring.coreos.com"]
+    resources: ["prometheusrules"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.karpenter }}
   # The Capacity view gates per-CALLER: the page on "list nodes" (granted
   # above), the Karpenter screens on "list nodepools". Without this rule every
