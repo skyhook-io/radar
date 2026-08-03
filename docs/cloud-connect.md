@@ -196,6 +196,42 @@ global flag cannot reach them. A self-signed pilot must use the Hub wizard,
 which generates a command the operator can edit. Wiring the option through both
 installers is a follow-up.
 
+## Live dialog copy
+
+The pitch fetches `GET {apiUrl}/api/connect/info` when the dialog opens —
+**only** then, never on the capabilities poll or a timer. The Hub learns that
+someone opened the Cloud dialog, which is congruent with what the dialog is
+for; it must not learn that Radar is merely running.
+
+```jsonc
+{
+  "assurances": ["Free for 3 clusters", "No credit card", "…"],
+  "notice": "Cloud signup is paused for maintenance."   // optional
+}
+```
+
+- **Why it exists:** the assurances were compiled into the binary. Change the
+  free tier and every install in the field misstates the terms until its owner
+  upgrades — a population the rollout gate guarantees you cannot reach. It also
+  lets a `notice` stop people starting a flow that would fail, without a release.
+- **Per-field fallback, never blocking.** The dialog renders `DEFAULT_ASSURANCES`
+  immediately and swaps if a response arrives. A Hub that 404s, a self-hosted
+  Hub, or an offline laptop all render exactly what Radar rendered before this
+  existed.
+- **Bare GET.** `credentials: omit`, no identifiers, no params — the Hub sees
+  only what any HTTP request reveals (IP, timestamp). 4s timeout, 5-minute
+  client cache, no retry.
+- **Server-gated.** `capabilities.cloudConnect.apiUrl` is what enables the
+  fetch; omit it server-side and the dialog simply never calls out. Disabling is
+  a server decision, not client policy.
+- **Rendered as text, always.** Server-supplied strings must never reach
+  `dangerouslySetInnerHTML` — a compromised Hub would otherwise become XSS in
+  every Radar in the field.
+
+Announcements deliberately do **not** live here: the dialog would have to be
+opened to learn there was something worth opening it for. That belongs on the
+version check, which already runs on its own schedule.
+
 ## Staged rollout
 
 The funnel ships behind a compiled-in percentage

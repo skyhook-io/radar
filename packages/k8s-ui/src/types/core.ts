@@ -103,6 +103,10 @@ export interface Capabilities {
 export interface CloudConnectCapability {
   lane: 'driver' | 'wizard'
   appUrl: string
+  // Hub API origin the connect dialog reads its live copy from. Absent means
+  // the server decided this deployment must not fetch — consumers render their
+  // compiled-in copy instead.
+  apiUrl?: string
 }
 
 export interface FeatureCapabilities {

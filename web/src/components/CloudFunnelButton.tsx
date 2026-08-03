@@ -13,6 +13,7 @@ import {
   type CloudInstallStatus,
   prepareCloudInstall,
   useCapabilities,
+  useCloudConnectInfo,
   useCloudConnectSelf,
   useCloudInstallStatus,
 } from '../api/client'
@@ -24,6 +25,12 @@ import {
 // design: no impressions, no remote config — conversion is measured on the
 // receiving end (utm_source on wizard links, Hub funnel events on the driver).
 const FALLBACK_APP_URL = 'https://app.radarhq.io'
+
+// Rendered until (or unless) the Hub states its own. Keeping the compiled-in
+// copy as the fallback means an unreachable Hub, a self-hosted one, or an
+// offline laptop all render exactly what Radar rendered before this fetch
+// existed — the dialog never waits on the network and never shows a gap.
+const DEFAULT_ASSURANCES = ['Free for 3 clusters', 'No credit card', 'Your cluster data stays in your cluster']
 const SIGNUP_QUERY = '?utm_source=radar-oss&utm_medium=app&utm_campaign=cloud-modal'
 const ABOUT_URL = 'https://radarhq.io/about'
 const SELF_HOSTED_DOCS_URL = 'https://radarhq.io/docs/cloud/self-hosted/'
@@ -63,6 +70,11 @@ export function CloudFunnelButton() {
   // only when the user actually navigates there; Radar transmits nothing.
   const signupUrlFor = (content: string) => `${appUrl}/signup${SIGNUP_QUERY}&utm_content=${content}`
   const signupUrl = signupUrlFor('funnel-cta')
+
+  // Only while the dialog is open — never on the capabilities poll. The Hub
+  // learns that someone opened it, which is congruent with what the dialog is
+  // for; it must not learn that Radar is merely running.
+  const connectInfo = useCloudConnectInfo(capabilities.data?.cloudConnect?.apiUrl, open)
 
   // In-cluster Radar can't install its own connection, but it knows exactly
   // which install it is — so the wizard link can carry the real target, and a
@@ -213,6 +225,8 @@ export function CloudFunnelButton() {
               lane={lane}
               signupUrl={signupUrl}
               driverEscapeUrl={signupUrlFor('driver-escape')}
+              assurances={connectInfo.data?.assurances}
+              notice={connectInfo.data?.notice}
               self={inCluster ? self.data : undefined}
               // Also covers the capabilities query: until it resolves, lane
               // defaults to wizard and Radar does not yet know it is
@@ -276,6 +290,8 @@ function ModalFooter({
   lane,
   signupUrl,
   driverEscapeUrl,
+  assurances,
+  notice,
   self,
   selfLoading,
   onConnect,
@@ -287,6 +303,9 @@ function ModalFooter({
   // signupUrl, distinct utm_content so the Hub can tell an escape from an
   // in-product flow apart from a pitch CTA click.
   driverEscapeUrl: string
+  // Live copy from the Hub; undefined until (or unless) it arrives.
+  assurances?: string[]
+  notice?: string
   // Present only in-cluster: what this Radar knows about its own install.
   self?: CloudConnectSelf
   // True while in-cluster self-classification is still in flight.
@@ -331,6 +350,9 @@ function ModalFooter({
           )}
         </div>
       )}
+      {notice && (
+        <div className="mb-3 card-inner text-[11.5px] leading-snug text-theme-text-secondary">{notice}</div>
+      )}
       <div className="flex items-center gap-4">
         {lane === 'driver' ? (
           <>
@@ -366,7 +388,7 @@ function ModalFooter({
         </button>
       </div>
       <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-theme-text-tertiary">
-        {['Free for 3 clusters', 'No credit card', 'Your cluster data stays in your cluster'].map((item) => (
+        {(assurances?.length ? assurances : DEFAULT_ASSURANCES).map((item) => (
           <span key={item} className="flex items-center gap-1">
             <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
             {item}

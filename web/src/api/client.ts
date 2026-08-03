@@ -1627,6 +1627,37 @@ export const cloudInstallActive = (state: CloudInstallState | undefined): boolea
 // Poll while a flow is live so progress renders in near-real-time; the flow
 // itself is server-owned, so this hook merely observes (and re-attaches after
 // a page reload). gcTime 0: never cache connect-flow payloads.
+// What the Hub says about connecting to it. Fetched from the Hub itself, not
+// from Radar's API, so the dialog states current terms instead of whatever was
+// compiled into this binary months ago — a stale free-tier claim is a promise
+// Radar can't keep. Every field is optional and falls back per-field, so a Hub
+// that doesn't serve this (self-hosted, older, offline) renders exactly what
+// Radar renders today.
+export interface CloudConnectInfo {
+  assurances?: string[]
+  notice?: string
+}
+
+// Deliberately a bare cross-origin GET: no credentials, no identifiers, no
+// params. The Hub learns only what any HTTP request reveals.
+export function useCloudConnectInfo(apiUrl: string | undefined, enabled: boolean) {
+  return useQuery<CloudConnectInfo>({
+    queryKey: ["cloud-connect-info", apiUrl],
+    queryFn: async () => {
+      const res = await fetch(`${apiUrl}/api/connect/info`, {
+        credentials: "omit",
+        signal: AbortSignal.timeout(4000),
+      });
+      if (!res.ok) throw new Error(`connect info: ${res.status}`);
+      return res.json();
+    },
+    // No apiUrl means the server decided this deployment must not fetch.
+    enabled: enabled && !!apiUrl,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
+}
+
 export function useCloudInstallStatus(enabled: boolean) {
   const queryClient = useQueryClient()
   const query = useQuery<CloudInstallStatus>({

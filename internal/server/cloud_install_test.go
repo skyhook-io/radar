@@ -582,6 +582,17 @@ func TestCloudInstallEndpointGating(t *testing.T) {
 		}
 	})
 
+	// apiUrl is what enables the dialog's live-copy fetch, so its presence is a
+	// server-side decision the frontend never second-guesses.
+	t.Run("capability carries the Hub API origin for the live-copy fetch", func(t *testing.T) {
+		t.Setenv("RADAR_CLOUD_FUNNEL", "on")
+		srv := newSrv("127.0.0.1")
+		cap := srv.cloudConnectCapability()
+		if cap == nil || cap.APIURL != "https://api.test.example" {
+			t.Fatalf("capability = %+v, want apiUrl https://api.test.example", cap)
+		}
+	})
+
 	t.Run("production constructor wires the shared-listener probe", func(t *testing.T) {
 		srv := New(Config{DevMode: true, ListenAddress: "0.0.0.0"})
 		if srv.cloudInstall.sharedListener == nil || !srv.cloudInstall.sharedListener() {

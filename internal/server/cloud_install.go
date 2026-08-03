@@ -930,7 +930,11 @@ func (s *Server) cloudConnectCapability() *k8s.CloudConnectCapability {
 	if s.cloudConnectDriverEnabled() {
 		lane = "driver"
 	}
-	return &k8s.CloudConnectCapability{Lane: lane, AppURL: s.cloudConnectCfg.HubAppURL}
+	return &k8s.CloudConnectCapability{
+		Lane:   lane,
+		AppURL: s.cloudConnectCfg.HubAppURL,
+		APIURL: s.cloudConnectCfg.HubAPIURL,
+	}
 }
 
 // sameOriginOK is CSRF protection for the connect endpoints: a page on another

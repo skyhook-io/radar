@@ -113,6 +113,11 @@ type IntegrationCapability struct {
 type CloudConnectCapability struct {
 	Lane   string `json:"lane"`
 	AppURL string `json:"appUrl"`
+	// APIURL is the Hub API origin the connect dialog reads its live copy
+	// from. Omitted when the dialog must not fetch — the frontend treats its
+	// absence as "render the compiled-in copy", so disabling the fetch is a
+	// server-side decision rather than client policy.
+	APIURL string `json:"apiUrl,omitempty"`
 }
 
 type FeatureCapabilities struct {
