@@ -205,9 +205,13 @@ no remote flag service: Radar makes no network calls it doesn't announce, and
 a rollout gate is not a reason to start.
 
 - **Bucketing** hashes a random install ID persisted in
-  `~/.radar/settings.json` — minted locally, never transmitted. Same install →
-  same verdict across restarts; raising the percentage only ever adds
-  installs (monotonic, pinned by test).
+  `~/.radar/install-id` — minted locally, never transmitted. Its own file,
+  deliberately not `settings.json`: `/api/settings` serializes the Settings
+  struct verbatim (including through a Cloud tunnel), and the identifier must
+  not be reachable from any wire shape. Same install → same verdict across
+  restarts; raising the percentage only ever adds installs (monotonic, pinned
+  by test); a concurrent first mint (CLI + Desktop starting together)
+  resolves to one winner via O_EXCL.
 - **Out-of-cohort** means `capabilities.cloudConnect` is absent — the same
   hiding mechanism as an already-connected cluster. Nothing else changes; the
   install endpoints keep their own gating.

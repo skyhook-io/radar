@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
+	"sync"
 	"testing"
 )
 
@@ -147,15 +149,48 @@ func TestInstallIDMintsOnceAndPersists(t *testing.T) {
 	if InstallID() != id {
 		t.Fatal("InstallID is not stable across calls")
 	}
-	// Persisted: a fresh load sees the same identity, and it round-trips
-	// alongside other settings mutations.
-	if s := Load(); s.InstallID != id {
-		t.Fatalf("persisted installId = %q, want %q", s.InstallID, id)
+	// Its own file, never the settings struct: /api/settings serializes
+	// Settings verbatim, so the identifier must not be reachable from it.
+	if raw, err := json.Marshal(Load()); err != nil || strings.Contains(string(raw), id) {
+		t.Fatalf("install ID leaked into serialized settings: %s (%v)", raw, err)
 	}
-	if _, err := Update(func(s *Settings) { s.Theme = "light" }); err != nil {
-		t.Fatalf("Update: %v", err)
+	data, err := os.ReadFile(filepath.Join(dir, ".radar", "install-id"))
+	if err != nil || strings.TrimSpace(string(data)) != id {
+		t.Fatalf("persisted id = %q (%v), want %q", data, err, id)
 	}
-	if InstallID() != id {
-		t.Fatal("unrelated settings update lost the install ID")
+}
+
+func TestInstallIDConcurrentMintResolvesToOneWinner(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+
+	// Simulates the CLI and Desktop starting together: every racer must end
+	// up with the same identity (O_EXCL create; losers adopt the winner).
+	const racers = 16
+	ids := make([]string, racers)
+	var wg sync.WaitGroup
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			ids[i] = InstallID()
+		}(i)
+	}
+	wg.Wait()
+
+	for i, id := range ids {
+		if id == "" {
+			// A loser may observe the winner's file before its bytes land —
+			// "" (out of cohort this start) is the allowed fail-safe, a
+			// DIFFERENT id is not.
+			continue
+		}
+		if id != ids[0] && ids[0] != "" {
+			t.Fatalf("racer %d minted %q while racer 0 got %q", i, id, ids[0])
+		}
+	}
+	if InstallID() == "" {
+		t.Fatal("no identity persisted after the race")
 	}
 }

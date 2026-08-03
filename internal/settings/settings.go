@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -51,12 +52,6 @@ type Settings struct {
 	// cluster-scoped: a registry is where your charts live, independent of which
 	// cluster they're deployed to.
 	HelmOCISources []string `json:"helmOciSources,omitempty"`
-	// InstallID is a random identifier minted on first use. It exists solely
-	// so staged feature rollouts can bucket this installation deterministically
-	// (same install → same verdict across restarts). It is never transmitted
-	// anywhere — Radar makes no network calls with it, and nothing derives it
-	// from the machine or the user.
-	InstallID string `json:"installId,omitempty"`
 }
 
 // mu serializes Load-mutate-Save cycles to prevent concurrent PUTs from
@@ -140,27 +135,46 @@ func Update(mutate func(*Settings)) (Settings, error) {
 }
 
 // InstallID returns this installation's stable rollout identifier, minting
-// and persisting one on first use. Returns "" when settings cannot be
-// persisted (no home directory, read-only filesystem) — a caller gating a
-// partial rollout must treat that as out-of-cohort rather than re-rolling a
-// fresh identity every start.
+// and persisting one on first use. Returns "" when it cannot be persisted
+// (no home directory, read-only filesystem) — a caller gating a partial
+// rollout must treat that as out-of-cohort rather than re-rolling a fresh
+// identity every start.
+//
+// The ID lives in its own file, deliberately NOT in the Settings struct:
+// /api/settings serializes that struct verbatim (including through a Cloud
+// tunnel), and a settings PUT round-trip could silently drop a field the
+// client never saw. A random local identifier must be able to do neither.
+// The O_EXCL create makes a concurrent first mint (CLI and Desktop starting
+// together) resolve to one winner; losers adopt the winner's file.
 func InstallID() string {
-	mu.Lock()
-	defer mu.Unlock()
-	s, err := LoadChecked()
+	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	if s.InstallID != "" {
-		return s.InstallID
+	path := filepath.Join(homeDir, ".radar", "install-id")
+	if data, err := os.ReadFile(path); err == nil {
+		return strings.TrimSpace(string(data))
 	}
 	raw := make([]byte, 16)
 	if _, err := rand.Read(raw); err != nil {
 		return ""
 	}
-	s.InstallID = hex.EncodeToString(raw)
-	if err := Save(s); err != nil {
+	id := hex.EncodeToString(raw)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return ""
 	}
-	return s.InstallID
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		if os.IsExist(err) {
+			if data, rerr := os.ReadFile(path); rerr == nil {
+				return strings.TrimSpace(string(data))
+			}
+		}
+		return ""
+	}
+	defer f.Close()
+	if _, err := f.WriteString(id); err != nil {
+		return ""
+	}
+	return id
 }
