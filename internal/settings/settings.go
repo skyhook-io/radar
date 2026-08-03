@@ -177,14 +177,12 @@ func InstallID() string {
 	// callers treat as "no identity" — pinning the install out of a staged
 	// rollout permanently, with no way to self-heal. Removing it lets the next
 	// start mint cleanly.
-	if _, err := f.WriteString(id); err != nil {
-		f.Close()
-		os.Remove(path)
-		return ""
-	}
-	// Close is where a failed flush surfaces on some filesystems, so the id is
-	// only trustworthy once it returns cleanly.
-	if err := f.Close(); err != nil {
+	// Close is where a failed flush surfaces on some filesystems, so both it and
+	// the write have to succeed before the id can be trusted — and either
+	// failing is handled the same way.
+	_, writeErr := f.WriteString(id)
+	closeErr := f.Close()
+	if writeErr != nil || closeErr != nil {
 		os.Remove(path)
 		return ""
 	}
