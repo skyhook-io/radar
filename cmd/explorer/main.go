@@ -271,17 +271,21 @@ func main() {
 	hubAPIURL := strings.TrimSpace(os.Getenv("RADAR_HUB_URL"))
 	hubAppURL := strings.TrimSpace(os.Getenv("RADAR_HUB_APP_URL"))
 	if hubAPIURL != "" {
-		if err := cloud.ValidateHubOrigin(hubAPIURL); err != nil {
+		normalized, err := cloud.NormalizeHubOrigin(hubAPIURL)
+		if err != nil {
 			log.Fatalf("invalid RADAR_HUB_URL: %v", err)
 		}
+		hubAPIURL = normalized
 		if hubAppURL == "" {
 			hubAppURL = hubAPIURL
 		}
 	}
 	if hubAppURL != "" {
-		if err := cloud.ValidateHubOrigin(hubAppURL); err != nil {
+		normalized, err := cloud.NormalizeHubOrigin(hubAppURL)
+		if err != nil {
 			log.Fatalf("invalid RADAR_HUB_APP_URL: %v", err)
 		}
+		hubAppURL = normalized
 	}
 
 	cfg := app.AppConfig{

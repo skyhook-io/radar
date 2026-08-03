@@ -1622,7 +1622,7 @@ export const cloudInstallActive = (state: CloudInstallState | undefined): boolea
   state === 'starting' ||
   state === 'awaiting_approval' ||
   state === 'provisioning' ||
-  state === 'waiting_tunnel'
+  state === 'waiting_tunnel';
 
 // Poll while a flow is live so progress renders in near-real-time; the flow
 // itself is server-owned, so this hook merely observes (and re-attaches after

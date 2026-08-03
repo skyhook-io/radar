@@ -94,6 +94,31 @@ func TestValidateHubOriginTransportPolicy(t *testing.T) {
 	}
 }
 
+func TestNormalizeHubOrigin(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want string
+	}{
+		{"https://api.radarhq.io", "https://api.radarhq.io"},
+		{"https://api.radarhq.io/", "https://api.radarhq.io"},
+		{"http://localhost:9091/", "http://localhost:9091"},
+	} {
+		t.Run(tc.raw, func(t *testing.T) {
+			got, err := NormalizeHubOrigin(tc.raw)
+			if err != nil {
+				t.Fatalf("NormalizeHubOrigin(%q): %v", tc.raw, err)
+			}
+			if got != tc.want {
+				t.Fatalf("NormalizeHubOrigin(%q) = %q, want %q", tc.raw, got, tc.want)
+			}
+		})
+	}
+
+	if _, err := NormalizeHubOrigin("https://api.radarhq.io/api"); err == nil {
+		t.Fatal("NormalizeHubOrigin with a path unexpectedly succeeded")
+	}
+}
+
 func TestHubOriginFromWebSocketURL(t *testing.T) {
 	for _, tc := range []struct {
 		raw  string

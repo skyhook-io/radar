@@ -130,6 +130,11 @@ export function CloudFunnelButton() {
     if (open && lane === 'driver' && flowLive) setInFlowView(true)
   }, [open, lane, flowLive])
 
+  // Already-tunneled deployments have nothing to be pitched; waiting for
+  // capabilities (rather than defaulting to visible) keeps the funnel from
+  // flashing at a connected cluster's operator before the mode is known.
+  if (!capabilities.data || capabilities.data.deployment?.mode === 'cloud') return null
+
   const showFlow = inFlowView && (blocked !== null || prepare.isPending || flowLive)
   // The prepare POST can take tens of seconds (chart download + preflight);
   // until the status poll observes the server-side flow, synthesize the

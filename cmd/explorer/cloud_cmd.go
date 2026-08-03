@@ -18,7 +18,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -446,13 +445,11 @@ func normalizeCloudInstallNames(namespace, release string) (string, string, erro
 
 func normalizeHubOrigin(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
-	if err := cloud.ValidateHubOrigin(raw); err != nil {
+	origin, err := cloud.NormalizeHubOrigin(raw)
+	if err != nil {
 		return "", fmt.Errorf("invalid --hub-url %q: %w", raw, err)
 	}
-	u, _ := url.Parse(raw) // ValidateHubOrigin already parsed and validated it.
-	u.Path = ""
-	u.RawPath = ""
-	return u.String(), nil
+	return origin, nil
 }
 
 func cloudInstallUsesExactTarget(explicitNamespace, explicitRelease bool) bool {

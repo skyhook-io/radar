@@ -41,6 +41,18 @@ func ClustersURL(hubProvidedURL string) string {
 	return FrontendOrigin(hubProvidedURL) + "/clusters"
 }
 
+// NormalizeHubOrigin validates raw as a Hub origin and returns it with any
+// trailing slash removed, so consumers can concatenate paths onto it safely.
+func NormalizeHubOrigin(raw string) (string, error) {
+	if err := ValidateHubOrigin(raw); err != nil {
+		return "", err
+	}
+	u, _ := url.Parse(raw) // ValidateHubOrigin already parsed and validated it.
+	u.Path = ""
+	u.RawPath = ""
+	return u.String(), nil
+}
+
 // ValidateHubOrigin validates the API origin used by the device-flow client.
 // The client sends its device secret in an Authorization header, so plaintext
 // is restricted to explicit loopback hosts.
