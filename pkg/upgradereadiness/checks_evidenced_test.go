@@ -90,6 +90,14 @@ func TestNodeCompatibilityEvidence(t *testing.T) {
 	}
 
 	input = completeInput()
+	input.Nodes = append(input.Nodes, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-b"}})
+	result, _ = Scan(input, "1.34", "1.35")
+	cgroup = checkByID(t, result, "node-cgroup-v1")
+	if cgroup.Status != CheckUnknown || cgroup.Inspected != 2 || !strings.Contains(cgroup.Caveat, "1 node") {
+		t.Fatalf("cgroup check with a node missing runtime evidence = %+v, want incomplete coverage", cgroup)
+	}
+
+	input = completeInput()
 	input.Nodes[0].Status.NodeInfo.OperatingSystem = "windows"
 	input.NodeRuntimeEvidence[0] = NodeRuntimeEvidence{NodeName: input.Nodes[0].Name}
 	result, _ = Scan(input, "1.34", "1.35")

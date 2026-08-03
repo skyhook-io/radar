@@ -330,12 +330,11 @@ func metricValue(metricType dto.MetricType, metric *dto.Metric) float64 {
 
 func (s *Server) collectUpgradePrometheusRules(r *http.Request, namespaces []string) (rules []*unstructured.Unstructured, installed, discoveryAvailable bool, unavailableNamespaces []string) {
 	discovery := k8s.GetResourceDiscovery()
-	if discovery == nil {
+	gvr, installed, discoveryAvailable := discoverUpgradePrometheusRule(discovery)
+	if !discoveryAvailable {
 		return nil, false, false, nil
 	}
-	discoveryAvailable = true
-	gvr, ok := discovery.GetGVRWithGroup("PrometheusRule", "monitoring.coreos.com")
-	if !ok {
+	if !installed {
 		return []*unstructured.Unstructured{}, false, true, nil
 	}
 	if len(namespaces) == 0 {
@@ -372,6 +371,17 @@ func (s *Server) collectUpgradePrometheusRules(r *http.Request, namespaces []str
 		rules = []*unstructured.Unstructured{}
 	}
 	return rules, true, true, unavailableNamespaces
+}
+
+func discoverUpgradePrometheusRule(discovery *k8s.ResourceDiscovery) (schema.GroupVersionResource, bool, bool) {
+	if discovery == nil {
+		return schema.GroupVersionResource{}, false, false
+	}
+	gvr, ok := discovery.GetGVRWithGroup("PrometheusRule", "monitoring.coreos.com")
+	if ok {
+		return gvr, true, true
+	}
+	return schema.GroupVersionResource{}, false, !discovery.GroupHadPartialDiscovery("monitoring.coreos.com")
 }
 
 type upgradeResourceLister interface {

@@ -39,24 +39,23 @@ func scanNodeCgroupCompatibility(input *Input) Check {
 		check.Status, check.Summary = CheckUnknown, "Kubelet cgroup version metrics were unavailable."
 		return check
 	}
-	nodes := map[string]*corev1.Node{}
-	for _, node := range input.Nodes {
-		if node != nil {
-			nodes[node.Name] = node
-		}
+	metrics := make(map[string]NodeRuntimeEvidence, len(input.NodeRuntimeEvidence))
+	for _, evidence := range input.NodeRuntimeEvidence {
+		metrics[evidence.NodeName] = evidence
 	}
 	missing := 0
-	for _, evidence := range input.NodeRuntimeEvidence {
-		if node := nodes[evidence.NodeName]; node != nil && strings.EqualFold(node.Status.NodeInfo.OperatingSystem, "windows") {
+	for _, node := range input.Nodes {
+		if node == nil || strings.EqualFold(node.Status.NodeInfo.OperatingSystem, "windows") {
 			continue
 		}
 		check.Inspected++
-		if !evidence.CgroupVersionAvailable {
+		evidence, ok := metrics[node.Name]
+		if !ok || !evidence.CgroupVersionAvailable {
 			missing++
 			continue
 		}
 		if evidence.CgroupVersion == 1 {
-			check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: "Node still uses cgroup v1", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Node", Name: evidence.NodeName}, Evidence: Evidence{Source: "kubelet metrics", Path: "kubelet_cgroup_version", Detail: "1"}, AppliesFrom: check.AppliesFrom, Impact: "Kubernetes 1.35 defaults the kubelet to fail on cgroup v1; continuing requires an explicit temporary override and remains a migration risk.", Remediation: "Migrate the node operating system and runtime to cgroup v2, then replace or restart the node and re-run this check.", References: append([]Reference(nil), check.References...)})
+			check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: "Node still uses cgroup v1", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Node", Name: node.Name}, Evidence: Evidence{Source: "kubelet metrics", Path: "kubelet_cgroup_version", Detail: "1"}, AppliesFrom: check.AppliesFrom, Impact: "Kubernetes 1.35 defaults the kubelet to fail on cgroup v1; continuing requires an explicit temporary override and remains a migration risk.", Remediation: "Migrate the node operating system and runtime to cgroup v2, then replace or restart the node and re-run this check.", References: append([]Reference(nil), check.References...)})
 		} else if evidence.CgroupVersion != 2 {
 			missing++
 		}

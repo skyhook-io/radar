@@ -7,11 +7,19 @@ import (
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery"
+	fakediscovery "k8s.io/client-go/discovery/fake"
+	fakeclientset "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 func TestReadBoundedUpgradeResponse(t *testing.T) {
@@ -31,6 +39,40 @@ func TestReadBoundedUpgradeResponse(t *testing.T) {
 			}
 			if !tc.wantErr && string(got) != tc.body {
 				t.Fatalf("body = %q, want %q", got, tc.body)
+			}
+		})
+	}
+}
+
+func TestDiscoverUpgradePrometheusRuleDistinguishesPartialDiscoveryFromAbsentAPI(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		partial          bool
+		wantDiscoverable bool
+	}{
+		{name: "clean discovery without API", wantDiscoverable: true},
+		{name: "partial monitoring discovery", partial: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeDiscovery := fakeclientset.NewSimpleClientset().Discovery().(*fakediscovery.FakeDiscovery)
+			fakeDiscovery.Resources = []*metav1.APIResourceList{{
+				GroupVersion: "v1",
+				APIResources: []metav1.APIResource{{Name: "pods", Kind: "Pod", Namespaced: true}},
+			}}
+			if tc.partial {
+				fakeDiscovery.PrependReactor("get", "resource", func(k8stesting.Action) (bool, runtime.Object, error) {
+					return true, nil, &discovery.ErrGroupDiscoveryFailed{Groups: map[schema.GroupVersion]error{
+						{Group: "monitoring.coreos.com", Version: "v1"}: apierrors.NewForbidden(schema.GroupResource{Group: "monitoring.coreos.com", Resource: "prometheusrules"}, "", nil),
+					}}
+				})
+			}
+			coreDiscovery, err := k8score.NewResourceDiscovery(fakeDiscovery)
+			if err != nil {
+				t.Fatalf("NewResourceDiscovery: %v", err)
+			}
+			_, installed, discoverable := discoverUpgradePrometheusRule(&k8s.ResourceDiscovery{ResourceDiscovery: coreDiscovery})
+			if installed || discoverable != tc.wantDiscoverable {
+				t.Fatalf("discovery state = installed=%v discoverable=%v, want false/%v", installed, discoverable, tc.wantDiscoverable)
 			}
 		})
 	}
