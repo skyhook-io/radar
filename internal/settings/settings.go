@@ -172,8 +172,13 @@ func InstallID() string {
 		}
 		return ""
 	}
-	defer f.Close()
 	if _, err := f.WriteString(id); err != nil {
+		f.Close()
+		return ""
+	}
+	// A close error is where a failed flush surfaces on some filesystems —
+	// returning the id anyway could hand out an identity that never landed.
+	if err := f.Close(); err != nil {
 		return ""
 	}
 	return id
