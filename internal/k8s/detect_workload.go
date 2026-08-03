@@ -171,14 +171,14 @@ func maxedReasonText(diagnosis *hpadiag.Diagnosis, reason hpadiag.Reason) string
 type CronJobProblem struct {
 	Name      string
 	Namespace string
-	Problem   string // "stale" or "never-scheduled"
+	Problem   string // "stale", "never-scheduled", or "repeated-without-success"
 	Reason    string
 }
 
-// DetectCronJobProblems finds non-suspended CronJobs that haven't run recently.
-func DetectCronJobProblems(cronjobs []*batchv1.CronJob) []CronJobProblem {
+// DetectCronJobProblems finds non-suspended CronJobs whose schedule or success
+// history indicates that they are not producing successful runs.
+func DetectCronJobProblems(cronjobs []*batchv1.CronJob, now time.Time) []CronJobProblem {
 	var problems []CronJobProblem
-	now := time.Now()
 	for _, cj := range cronjobs {
 		if cj.Spec.Suspend != nil && *cj.Spec.Suspend {
 			continue
@@ -193,6 +193,15 @@ func DetectCronJobProblems(cronjobs []*batchv1.CronJob) []CronJobProblem {
 					Problem:   "stale",
 					Reason:    fmt.Sprintf("last run %dh ago", int(sinceLast.Hours())),
 				})
+				continue
+			}
+			if reason, ok := repeatedCronJobSchedulesWithoutSuccess(cj, now); ok {
+				problems = append(problems, CronJobProblem{
+					Name:      cj.Name,
+					Namespace: cj.Namespace,
+					Problem:   "repeated-without-success",
+					Reason:    reason,
+				})
 			}
 		} else if now.Sub(cj.CreationTimestamp.Time) > threshold {
 			problems = append(problems, CronJobProblem{
@@ -204,4 +213,33 @@ func DetectCronJobProblems(cronjobs []*batchv1.CronJob) []CronJobProblem {
 		}
 	}
 	return problems
+}
+
+func repeatedCronJobSchedulesWithoutSuccess(cj *batchv1.CronJob, now time.Time) (string, bool) {
+	// Replace is the blind spot: it deletes each unfinished Job before the Job
+	// detectors can accumulate evidence. Allow retains Jobs for those detectors,
+	// while Forbid stops advancing lastScheduleTime and is covered as stale.
+	if cj.Spec.ConcurrencyPolicy != batchv1.ReplaceConcurrent || len(cj.Status.Active) == 0 {
+		return "", false
+	}
+
+	interval, ok := cronsched.MinInterval(cj.Spec.Schedule)
+	if !ok || cj.Status.LastScheduleTime == nil || cj.Status.LastScheduleTime.Time.After(now) {
+		return "", false
+	}
+
+	baseline := cj.CreationTimestamp.Time
+	if cj.Status.LastSuccessfulTime != nil && !cj.Status.LastSuccessfulTime.IsZero() {
+		baseline = cj.Status.LastSuccessfulTime.Time
+	}
+	if baseline.IsZero() || cj.Status.LastScheduleTime.Time.Before(baseline) ||
+		cj.Status.LastScheduleTime.Sub(baseline) < 3*interval {
+		return "", false
+	}
+	if cj.Status.LastSuccessfulTime == nil || cj.Status.LastSuccessfulTime.IsZero() {
+		return fmt.Sprintf("no recorded success since creation %s ago; last scheduled %s ago",
+			FormatAge(now.Sub(baseline)), FormatAge(now.Sub(cj.Status.LastScheduleTime.Time))), true
+	}
+	return fmt.Sprintf("last success %s ago; last scheduled %s ago",
+		FormatAge(now.Sub(baseline)), FormatAge(now.Sub(cj.Status.LastScheduleTime.Time))), true
 }

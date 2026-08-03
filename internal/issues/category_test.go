@@ -111,6 +111,7 @@ func TestClassify(t *testing.T) {
 		{"cronjob stale", classifyInput{Source: SourceProblem, Kind: "CronJob", Reason: "stale"}, issuesapi.CategoryCronJobFailed},
 		{"cronjob stale reason beats embedded forbidden message", classifyInput{Source: SourceProblem, Kind: "CronJob", Reason: "stale", Message: `jobs.batch is forbidden: User "system:serviceaccount:ci:default" cannot create resource "jobs"`}, issuesapi.CategoryCronJobFailed},
 		{"cronjob never scheduled", classifyInput{Source: SourceProblem, Kind: "CronJob", Reason: "never-scheduled"}, issuesapi.CategoryCronJobFailed},
+		{"cronjob repeated without success", classifyInput{Source: SourceProblem, Kind: "CronJob", Reason: "repeated-without-success"}, issuesapi.CategoryCronJobFailed},
 		{"argo workflow rbac forbidden", classifyInput{Source: SourceProblem, Kind: "Workflow", APIGroup: "argoproj.io", Reason: "Completed", Message: `workflowtaskresults.argoproj.io is forbidden: User "system:serviceaccount:radar-batch-visual:default" cannot create resource "workflowtaskresults" in API group "argoproj.io" in the namespace "radar-batch-visual"`}, issuesapi.CategoryRBACForbidden},
 		{"argo workflow completed without forbidden stays unknown", classifyInput{Source: SourceProblem, Kind: "Workflow", APIGroup: "argoproj.io", Reason: "Completed", Message: "child 'example' failed"}, issuesapi.CategoryUnknown},
 

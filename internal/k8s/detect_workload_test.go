@@ -394,6 +394,10 @@ func TestDetectCronJobProblems(t *testing.T) {
 	notSuspended := false
 	oldTime := metav1.NewTime(now.Add(-48 * time.Hour))
 	freshTime := metav1.NewTime(now.Add(-1 * time.Hour))
+	veryFreshTime := metav1.NewTime(now.Add(-5 * time.Minute))
+	oldSuccess := metav1.NewTime(now.Add(-4 * time.Hour))
+	recentSuccess := metav1.NewTime(now.Add(-30 * time.Minute))
+	active := []corev1.ObjectReference{{Name: "current"}}
 
 	tests := []struct {
 		name        string
@@ -402,12 +406,16 @@ func TestDetectCronJobProblems(t *testing.T) {
 		wantProblem string
 	}{
 		{
-			name: "stale cronjob",
+			name: "stale takes precedence over repeated without success",
 			cronjobs: []*batchv1.CronJob{
 				{
 					ObjectMeta: metav1.ObjectMeta{Name: "backup", Namespace: "default", CreationTimestamp: metav1.NewTime(now.Add(-72 * time.Hour))},
-					Spec:       batchv1.CronJobSpec{Schedule: "0 2 * * *", Suspend: &notSuspended},
-					Status:     batchv1.CronJobStatus{LastScheduleTime: &oldTime},
+					Spec: batchv1.CronJobSpec{
+						Schedule:          "0 2 * * *",
+						ConcurrencyPolicy: batchv1.ReplaceConcurrent,
+						Suspend:           &notSuspended,
+					},
+					Status: batchv1.CronJobStatus{Active: active, LastScheduleTime: &oldTime},
 				},
 			},
 			wantCount:   1,
@@ -447,11 +455,133 @@ func TestDetectCronJobProblems(t *testing.T) {
 			wantCount:   1,
 			wantProblem: "never-scheduled",
 		},
+		{
+			name: "Replace cronjob repeatedly schedules but never succeeds",
+			cronjobs: []*batchv1.CronJob{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "replace-broken", Namespace: "default", CreationTimestamp: metav1.NewTime(now.Add(-4 * time.Hour))},
+					Spec: batchv1.CronJobSpec{
+						Schedule:          "* * * * *",
+						ConcurrencyPolicy: batchv1.ReplaceConcurrent,
+						Suspend:           &notSuspended,
+					},
+					Status: batchv1.CronJobStatus{Active: active, LastScheduleTime: &veryFreshTime},
+				},
+			},
+			wantCount:   1,
+			wantProblem: "repeated-without-success",
+		},
+		{
+			name: "daily Replace cronjob eventually reports no success from creation",
+			cronjobs: []*batchv1.CronJob{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "daily-broken", Namespace: "default", CreationTimestamp: metav1.NewTime(now.Add(-4 * 24 * time.Hour))},
+					Spec: batchv1.CronJobSpec{
+						Schedule:          "0 2 * * *",
+						ConcurrencyPolicy: batchv1.ReplaceConcurrent,
+						Suspend:           &notSuspended,
+					},
+					Status: batchv1.CronJobStatus{Active: active, LastScheduleTime: &veryFreshTime},
+				},
+			},
+			wantCount:   1,
+			wantProblem: "repeated-without-success",
+		},
+		{
+			name: "Replace cronjob regressed since an old success",
+			cronjobs: []*batchv1.CronJob{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "regressed", Namespace: "default", CreationTimestamp: metav1.NewTime(now.Add(-24 * time.Hour))},
+					Spec: batchv1.CronJobSpec{
+						Schedule:          "0 * * * *",
+						ConcurrencyPolicy: batchv1.ReplaceConcurrent,
+						Suspend:           &notSuspended,
+					},
+					Status: batchv1.CronJobStatus{
+						Active:             active,
+						LastScheduleTime:   &veryFreshTime,
+						LastSuccessfulTime: &oldSuccess,
+					},
+				},
+			},
+			wantCount:   1,
+			wantProblem: "repeated-without-success",
+		},
+		{
+			name: "Replace cronjob with a recent success is ok",
+			cronjobs: []*batchv1.CronJob{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "healthy", Namespace: "default", CreationTimestamp: metav1.NewTime(now.Add(-24 * time.Hour))},
+					Spec: batchv1.CronJobSpec{
+						Schedule:          "0 * * * *",
+						ConcurrencyPolicy: batchv1.ReplaceConcurrent,
+						Suspend:           &notSuspended,
+					},
+					Status: batchv1.CronJobStatus{
+						Active:             active,
+						LastScheduleTime:   &veryFreshTime,
+						LastSuccessfulTime: &recentSuccess,
+					},
+				},
+			},
+			wantCount: 0,
+		},
+		{
+			name: "active Allow cronjob relies on its retained Jobs",
+			cronjobs: []*batchv1.CronJob{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "allow", Namespace: "default", CreationTimestamp: metav1.NewTime(now.Add(-24 * time.Hour))},
+					Spec:       batchv1.CronJobSpec{Schedule: "0 * * * *", Suspend: &notSuspended},
+					Status: batchv1.CronJobStatus{
+						Active:           active,
+						LastScheduleTime: &veryFreshTime,
+					},
+				},
+			},
+			wantCount: 0,
+		},
+		{
+			name: "new cronjob gets time to succeed",
+			cronjobs: []*batchv1.CronJob{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "new", Namespace: "default", CreationTimestamp: metav1.NewTime(now.Add(-2 * time.Hour))},
+					Spec:       batchv1.CronJobSpec{Schedule: "0 * * * *", Suspend: &notSuspended},
+					Status:     batchv1.CronJobStatus{LastScheduleTime: &veryFreshTime},
+				},
+			},
+			wantCount: 0,
+		},
+		{
+			name: "first run of a stepped-hour schedule is not repeated",
+			cronjobs: []*batchv1.CronJob{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "first-run", Namespace: "default", CreationTimestamp: metav1.NewTime(now.Add(-4 * time.Hour))},
+					Spec: batchv1.CronJobSpec{
+						Schedule:          "0 */12 * * *",
+						ConcurrencyPolicy: batchv1.ReplaceConcurrent,
+						Suspend:           &notSuspended,
+					},
+					Status: batchv1.CronJobStatus{Active: active, LastScheduleTime: &veryFreshTime},
+				},
+			},
+			wantCount: 0,
+		},
+		{
+			name: "unparsed schedule does not guess at repeated runs",
+			cronjobs: []*batchv1.CronJob{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "unknown-cadence", Namespace: "default", CreationTimestamp: metav1.NewTime(now.Add(-365 * 24 * time.Hour))},
+					Spec:       batchv1.CronJobSpec{Schedule: "invalid", Suspend: &notSuspended},
+					Status:     batchv1.CronJobStatus{LastScheduleTime: &veryFreshTime},
+				},
+			},
+			wantCount: 0,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			problems := DetectCronJobProblems(tt.cronjobs)
+			problems := DetectCronJobProblems(tt.cronjobs, now)
 			if len(problems) != tt.wantCount {
 				t.Errorf("DetectCronJobProblems() returned %d problems, want %d", len(problems), tt.wantCount)
 			}

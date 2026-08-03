@@ -58,7 +58,13 @@ func MinInterval(schedule string) (time.Duration, bool) {
 	case dow != "*":
 		// Specific day(s)-of-week → weekly is the conservative lower bound.
 		return 7 * day, true
-	case hour != "*" && !strings.HasPrefix(hour, "*/"):
+	case strings.HasPrefix(hour, "*/"):
+		step, err := strconv.Atoi(strings.TrimPrefix(hour, "*/"))
+		if err != nil || step < 1 || step > 23 {
+			return 0, false
+		}
+		return time.Duration(step) * time.Hour, true
+	case hour != "*":
 		// Specific hour(s) each day → daily.
 		return day, true
 	default:

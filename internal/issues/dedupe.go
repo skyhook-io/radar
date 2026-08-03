@@ -82,10 +82,10 @@ var childCategories = map[issuesapi.Category]bool{
 // Job, so a BackoffLimitExceeded Job whose pods crashloop/OOM/can't-pull is one
 // incident — the pod cause is the root. A DeadlineExceeded job (the controller
 // killed a slow-but-not-crashing pod) has no qualifying child, so the severity
-// gate keeps its row. cronjob_failed is deliberately NOT here: "stale" /
-// "never-scheduled" means no Jobs were produced at all — an orthogonal failure
-// with no symptom children to fold into (a failed child Job surfaces as
-// job_failed on that Job, which already resolves to the CronJob subject).
+// gate keeps its row. cronjob_failed is deliberately NOT here: stale and
+// never-scheduled CronJobs have no child failure to replace, while the
+// repeated-without-success case targets active Replace jobs whose prior child
+// Jobs have been deleted.
 var parentRollupCategories = map[issuesapi.Category]bool{
 	issuesapi.CategoryWorkloadDegraded: true,
 	issuesapi.CategoryRolloutStalled:   true,
