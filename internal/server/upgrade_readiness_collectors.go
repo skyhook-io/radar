@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net/http"
+	"slices"
 	"sort"
 
 	corev1 "k8s.io/api/core/v1"
@@ -14,53 +15,70 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/upgradereadiness"
 )
 
-var upgradeSourceGVRs = []schema.GroupVersionResource{
-	{Group: "", Version: "v1", Resource: "pods"},
-	{Group: "", Version: "v1", Resource: "services"},
-	{Group: "", Version: "v1", Resource: "endpoints"},
-	{Group: "apps", Version: "v1", Resource: "deployments"},
-	{Group: "apps", Version: "v1", Resource: "replicasets"},
-	{Group: "apps", Version: "v1", Resource: "statefulsets"},
-	{Group: "apps", Version: "v1", Resource: "daemonsets"},
-	{Group: "batch", Version: "v1", Resource: "jobs"},
-	{Group: "batch", Version: "v1", Resource: "cronjobs"},
-	{Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"},
-	{Group: "networking.k8s.io", Version: "v1", Resource: "networkpolicies"},
-	{Group: "autoscaling", Version: "v2", Resource: "horizontalpodautoscalers"},
-	{Group: "policy", Version: "v1", Resource: "poddisruptionbudgets"},
-	{Group: "discovery.k8s.io", Version: "v1", Resource: "endpointslices"},
+type upgradeSourceResource struct {
+	gvr        schema.GroupVersionResource
+	namespaced bool
+}
+
+var upgradeSourceExcludedKinds = map[string]bool{
+	"Event": true,
+	"Lease": true,
 }
 
 func collectUpgradeSourceObjects(r *http.Request, namespaces []string) ([]metav1.Object, []string) {
 	client := k8s.DynamicClientFromContext(r.Context())
-	if client == nil {
-		return nil, nil
+	discovery := k8s.GetResourceDiscovery()
+	if client == nil || discovery == nil {
+		return nil, []string{"source-object discovery"}
 	}
-	return collectUpgradeSourceObjectsWithClient(r.Context(), client, namespaces)
+	apiResources, err := discovery.GetAPIResources()
+	if err != nil {
+		return nil, []string{"source-object discovery"}
+	}
+	resources := make([]upgradeSourceResource, 0, len(apiResources))
+	for _, resource := range apiResources {
+		if resource.IsCRD || upgradeSourceExcludedKinds[resource.Kind] || !slices.Contains(resource.Verbs, "list") || !upgradereadiness.IsUpgradeSourceObjectCandidate(resource.Kind, resource.Group) {
+			continue
+		}
+		resources = append(resources, upgradeSourceResource{
+			gvr:        schema.GroupVersionResource{Group: resource.Group, Version: resource.Version, Resource: resource.Name},
+			namespaced: resource.Namespaced,
+		})
+	}
+	if len(resources) == 0 {
+		return nil, []string{"source-object discovery"}
+	}
+	objects, unavailable := collectUpgradeSourceObjectsWithClient(r.Context(), client, namespaces, resources)
+	if discovery.HasPartialDiscovery() && !slices.Contains(unavailable, "source-object discovery") {
+		unavailable = append(unavailable, "source-object discovery")
+		sort.Strings(unavailable)
+	}
+	return objects, unavailable
 }
 
-func collectUpgradeSourceObjectsWithClient(ctx context.Context, client dynamic.Interface, namespaces []string) ([]metav1.Object, []string) {
+func collectUpgradeSourceObjectsWithClient(ctx context.Context, client dynamic.Interface, namespaces []string, resources []upgradeSourceResource) ([]metav1.Object, []string) {
 	objects := []metav1.Object{}
 	unavailable := map[string]bool{}
 	successfulLists := 0
-	for _, gvr := range upgradeSourceGVRs {
-		if namespaces == nil {
-			listed, err := listUpgradeSourceObjects(ctx, client.Resource(gvr))
+	for _, resource := range resources {
+		if namespaces == nil || !resource.namespaced {
+			listed, err := listUpgradeSourceObjects(ctx, client.Resource(resource.gvr))
 			objects = append(objects, listed...)
 			if err != nil {
-				unavailable[gvr.Resource] = true
+				unavailable[resource.gvr.Resource] = true
 				continue
 			}
 			successfulLists++
 			continue
 		}
 		for _, namespace := range namespaces {
-			listed, err := listUpgradeSourceObjects(ctx, client.Resource(gvr).Namespace(namespace))
+			listed, err := listUpgradeSourceObjects(ctx, client.Resource(resource.gvr).Namespace(namespace))
 			objects = append(objects, listed...)
 			if err != nil {
-				unavailable[gvr.Resource] = true
+				unavailable[resource.gvr.Resource] = true
 				continue
 			}
 			successfulLists++
@@ -128,6 +146,7 @@ func collectUpgradeAPIServicesWithClient(ctx context.Context, client dynamic.Int
 }
 
 func (s *Server) collectUpgradeWebhookEvidence(r *http.Request) (configs []*unstructured.Unstructured, unavailableConfigKinds []string, crds []*unstructured.Unstructured, endpointSlices []*discoveryv1.EndpointSlice, services []*corev1.Service) {
+	defer func() { sort.Strings(unavailableConfigKinds) }()
 	dynamicClient := k8s.DynamicClientFromContext(r.Context())
 	typedClient := k8s.ClientFromContext(r.Context())
 	if dynamicClient == nil || typedClient == nil {
@@ -177,20 +196,25 @@ func (s *Server) collectUpgradeWebhookEvidence(r *http.Request) (configs []*unst
 			endpointSlices = append(endpointSlices, &slice)
 		}
 	}
-	sort.Strings(unavailableConfigKinds)
 	return configs, unavailableConfigKinds, crds, endpointSlices, services
 }
 
 func collectUpgradeCRDs(ctx context.Context, client dynamic.Interface) []*unstructured.Unstructured {
-	list, err := client.Resource(crdGVR).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil
+	crds := []*unstructured.Unstructured{}
+	continueToken := ""
+	for {
+		list, err := client.Resource(crdGVR).List(ctx, metav1.ListOptions{Limit: upgradeSourceListPageSize, Continue: continueToken})
+		if err != nil {
+			return nil
+		}
+		for i := range list.Items {
+			crds = append(crds, compactUpgradeCRD(&list.Items[i]))
+		}
+		continueToken = list.GetContinue()
+		if continueToken == "" {
+			return crds
+		}
 	}
-	crds := make([]*unstructured.Unstructured, 0, len(list.Items))
-	for i := range list.Items {
-		crds = append(crds, compactUpgradeCRD(&list.Items[i]))
-	}
-	return crds
 }
 
 func webhookServiceNamespaces(configs, crds []*unstructured.Unstructured) []string {
@@ -221,7 +245,22 @@ func webhookServiceNamespaces(configs, crds []*unstructured.Unstructured) []stri
 
 func compactUpgradeCRD(crd *unstructured.Unstructured) *unstructured.Unstructured {
 	compact := &unstructured.Unstructured{Object: map[string]any{"apiVersion": crd.GetAPIVersion(), "kind": crd.GetKind(), "metadata": map[string]any{"name": crd.GetName()}}}
-	for _, path := range [][]string{{"spec", "versions"}, {"spec", "conversion"}, {"status", "storedVersions"}} {
+	versions, _, _ := unstructured.NestedSlice(crd.Object, "spec", "versions")
+	if versions != nil {
+		compactVersions := make([]any, 0, len(versions))
+		for _, raw := range versions {
+			version, _ := raw.(map[string]any)
+			compactVersion := map[string]any{}
+			for _, field := range []string{"name", "served", "storage"} {
+				if value, ok := version[field]; ok {
+					compactVersion[field] = value
+				}
+			}
+			compactVersions = append(compactVersions, compactVersion)
+		}
+		_ = unstructured.SetNestedSlice(compact.Object, compactVersions, "spec", "versions")
+	}
+	for _, path := range [][]string{{"spec", "conversion"}, {"status", "storedVersions"}} {
 		value, found, _ := unstructured.NestedFieldCopy(crd.Object, path...)
 		if found {
 			_ = unstructured.SetNestedField(compact.Object, value, path...)

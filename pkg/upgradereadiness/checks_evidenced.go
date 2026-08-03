@@ -349,10 +349,10 @@ func scanAdmissionWebhookReadiness(input *Input) Check {
 		check.Caveat = appendCaveat(check.Caveat, "Admission webhook configurations could not be inspected for: "+strings.Join(input.AdmissionWebhookUnavailableKinds, ", ")+".")
 	}
 	check.Inspected = len(input.AdmissionWebhookConfigurations)
-	backendEvidenceAvailable := input.Services != nil && input.EndpointSlices != nil
+	backendEvidenceAvailable := input.WebhookServices != nil && input.EndpointSlices != nil
 	backendEvidenceCaveatAdded := false
 	services := map[string]bool{}
-	for _, svc := range input.Services {
+	for _, svc := range input.WebhookServices {
 		if svc != nil {
 			services[svc.Namespace+"/"+svc.Name] = true
 		}
@@ -500,9 +500,10 @@ func scanCRDConversionWebhookReadiness(input *Input) Check {
 		check.Status, check.Summary = CheckUnknown, "CRD conversion configuration evidence was unavailable."
 		return check
 	}
-	backendEvidenceAvailable := input.Services != nil && input.EndpointSlices != nil
+	backendEvidenceAvailable := input.WebhookServices != nil && input.EndpointSlices != nil
+	backendEvidenceCaveatAdded := false
 	services := map[string]bool{}
-	for _, svc := range input.Services {
+	for _, svc := range input.WebhookServices {
 		if svc != nil {
 			services[svc.Namespace+"/"+svc.Name] = true
 		}
@@ -539,7 +540,10 @@ func scanCRDConversionWebhookReadiness(input *Input) Check {
 			continue
 		}
 		if !backendEvidenceAvailable {
-			check.Caveat = appendCaveat(check.Caveat, "Service or EndpointSlice evidence was unavailable; conversion backend readiness could not be verified.")
+			if !backendEvidenceCaveatAdded {
+				check.Caveat = appendCaveat(check.Caveat, "Service or EndpointSlice evidence was unavailable; conversion backend readiness could not be verified.")
+				backendEvidenceCaveatAdded = true
+			}
 			continue
 		}
 		if !services[key] || !ready[key] {
@@ -600,8 +604,9 @@ func scanStrictIPCIDRValidation(input *Input) Check {
 		check.Summary = "No invalid network value was found in source manifests in the selected namespace scope."
 	}
 	resources := append([]ManifestResource(nil), input.ManifestResources...)
-	resources = append(resources, lastAppliedResources(input.SourceObjects)...)
-	appendSourceManifestCoverageCaveats(&check, input)
+	lastApplied, lastAppliedParseErrors := lastAppliedResources(input.SourceObjects)
+	resources = append(resources, lastApplied...)
+	appendSourceManifestCoverageCaveats(&check, input, lastAppliedParseErrors)
 	if resources == nil {
 		check.Status, check.Summary = CheckUnknown, "Source manifests were unavailable; strict IP and CIDR validation could not be evaluated."
 		return check
@@ -681,7 +686,14 @@ func strictNetworkCandidates(object *unstructured.Unstructured) []networkCandida
 	switch object.GetKind() {
 	case "Service":
 		addString([]string{"spec", "clusterIP"}, false)
-		addStrings([]string{"spec", "clusterIPs"}, false)
+		clusterIPs, found, _ := unstructured.NestedStringSlice(object.Object, "spec", "clusterIPs")
+		if found {
+			for i, value := range clusterIPs {
+				if value != corev1.ClusterIPNone {
+					out = append(out, networkCandidate{path: fmt.Sprintf("spec.clusterIPs[%d]", i), value: value})
+				}
+			}
+		}
 		addStrings([]string{"spec", "externalIPs"}, false)
 		addStrings([]string{"spec", "loadBalancerSourceRanges"}, true)
 	case "NetworkPolicy":
@@ -755,19 +767,19 @@ func scanGKEExecProbeTimeout(input *Input) Check {
 		check.Status, check.Summary = CheckNotApplicable, "This cluster is not running on GKE."
 		return check
 	}
-	if workloadsUnavailable(input) {
-		check.Status, check.Summary = CheckUnknown, "Workloads were unavailable; exec probes could not be inspected."
-		return check
+	workloadCoverageIncomplete := workloadsUnavailable(input)
+	if workloadCoverageIncomplete {
+		check.Caveat = appendCaveat(check.Caveat, "One or more workload kinds were unavailable, so additional exec probes may exist.")
 	}
 	if input.Namespaces != nil {
-		check.Caveat = scopedCoverageNote(input.Namespaces, "workloads and recent Events")
+		check.Caveat = appendCaveat(check.Caveat, scopedCoverageNote(input.Namespaces, "workloads and recent Events"))
 		check.Summary = "No risky GKE exec probe was found in the selected namespace scope."
 	}
 	timedOut := map[string]bool{}
 	if input.Events != nil {
 		for _, event := range input.Events {
 			if event != nil && execProbeTimeoutEvent.MatchString(event.Message) {
-				markTimedOutWorkload(timedOut, input, event.InvolvedObject.Namespace, event.InvolvedObject.Name)
+				markTimedOutWorkload(timedOut, input, event.InvolvedObject.Namespace, event.InvolvedObject.Kind, event.InvolvedObject.Name)
 			}
 		}
 	}
@@ -787,14 +799,14 @@ func scanGKEExecProbeTimeout(input *Input) Check {
 						continue
 					}
 					configured++
+					check.Inspected++
 					if probe.TimeoutSeconds > 1 {
 						continue
 					}
-					check.Inspected++
 					level := LevelReview
 					title := "Exec probe relies on default one-second timeout"
 					impact := "This exec probe relies on the one-second default timeout and may begin failing after the GKE 1.35 behavior change."
-					if timedOut[subject.resource.Namespace+"/"+subject.resource.Name] {
+					if timedOut[workloadTimeoutKey(subject.resource.Kind, subject.resource.Namespace, subject.resource.Name)] {
 						level = LevelBlocker
 						title = "Exec probe already timing out"
 						impact = "Recent events show this exec probe timing out; the GKE behavior change is already observable."
@@ -806,11 +818,19 @@ func scanGKEExecProbeTimeout(input *Input) Check {
 	}
 	if input.Events == nil && len(check.Findings) > 0 {
 		check.Caveat = appendCaveat(check.Caveat, "Recent Events were unavailable, so Radar could not distinguish observed timeouts from static exposure.")
+	} else if len(check.Findings) > 0 && len(input.CacheScopedKinds["events"]) > 0 {
+		check.Caveat = appendCaveat(check.Caveat, cacheScopedCoverageNote(input, []string{"events"}))
 	}
-	if configured > 0 && len(check.Findings) == 0 {
+	if len(check.Findings) == 0 && workloadCoverageIncomplete {
+		check.Status = CheckUnknown
+		check.Summary = "No risky GKE exec probes were found in readable workloads, but workload coverage is incomplete."
+	} else if configured > 0 && len(check.Findings) == 0 {
 		check.Status = CheckUnknown
 		check.Summary = "Exec probe timeouts are configured, but static configuration and short-lived Events cannot prove their commands finish within the timeout."
 		check.Caveat = appendCaveat(check.Caveat, "Verify probe duration in staging or longer-lived logs before upgrading.")
+	} else if len(check.Findings) == 0 && input.Namespaces != nil {
+		check.Status = CheckUnknown
+		check.Summary = "No risky GKE exec probe was found in the selected namespace scope, but workload coverage is incomplete."
 	}
 	if len(check.Findings) > 0 {
 		check.Summary = fmt.Sprintf("%d GKE exec %s rely on a one-second timeout.", len(check.Findings), plural(len(check.Findings), "probe", "probes"))
@@ -820,8 +840,15 @@ func scanGKEExecProbeTimeout(input *Input) Check {
 
 var execProbeTimeoutEvent = regexp.MustCompile(`(?i)^(?:Liveness|Readiness|Startup) probe (?:failed|errored).*: command timed out|^\s*probe errored and resulted in .* state: command timed out`)
 
-func markTimedOutWorkload(out map[string]bool, input *Input, namespace, podName string) {
-	out[namespace+"/"+podName] = true
+func workloadTimeoutKey(kind, namespace, name string) string {
+	return kind + "\x00" + namespace + "\x00" + name
+}
+
+func markTimedOutWorkload(out map[string]bool, input *Input, namespace, kind, podName string) {
+	if kind != "" && kind != "Pod" {
+		return
+	}
+	out[workloadTimeoutKey("Pod", namespace, podName)] = true
 	for _, pod := range input.Pods {
 		if pod == nil || pod.Namespace != namespace || pod.Name != podName {
 			continue
@@ -830,12 +857,12 @@ func markTimedOutWorkload(out map[string]bool, input *Input, namespace, podName 
 		if owner == nil {
 			return
 		}
-		out[namespace+"/"+owner.Name] = true
+		out[workloadTimeoutKey(owner.Kind, namespace, owner.Name)] = true
 		if owner.Kind == "ReplicaSet" {
 			for _, rs := range input.ReplicaSets {
 				if rs != nil && rs.Namespace == namespace && rs.Name == owner.Name {
 					if top := controllerOwner(rs.OwnerReferences); top != nil {
-						out[namespace+"/"+top.Name] = true
+						out[workloadTimeoutKey(top.Kind, namespace, top.Name)] = true
 					}
 					break
 				}
@@ -845,7 +872,7 @@ func markTimedOutWorkload(out map[string]bool, input *Input, namespace, podName 
 			for _, job := range input.Jobs {
 				if job != nil && job.Namespace == namespace && job.Name == owner.Name {
 					if top := controllerOwner(job.OwnerReferences); top != nil {
-						out[namespace+"/"+top.Name] = true
+						out[workloadTimeoutKey(top.Kind, namespace, top.Name)] = true
 					}
 					break
 				}

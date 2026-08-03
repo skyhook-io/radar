@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -48,6 +49,7 @@ func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) 
 
 	var manifestResources []upgradereadiness.ManifestResource
 	var helmUnavailableNamespaces []string
+	var helmScopedNamespaces []string
 	var manifestParseErrors int
 	var deprecatedRequests []upgradereadiness.DeprecatedAPIRequest
 	var deprecatedMetricsWindow string
@@ -66,6 +68,10 @@ func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) 
 	if !noAccess {
 		if helmNamespaces, ok := s.resolveHelmNamespacesForScope(r, namespaces); ok {
 			manifestResources, helmUnavailableNamespaces, manifestParseErrors = collectUpgradeHelmManifests(r, helmNamespaces)
+			if !sameNamespaceScope(namespaces, helmNamespaces) {
+				helmScopedNamespaces = make([]string, len(helmNamespaces))
+				copy(helmScopedNamespaces, helmNamespaces)
+			}
 		}
 		deprecatedRequests, deprecatedMetricsWindow = collectDeprecatedAPIRequests(r)
 		prometheusRules, prometheusInstalled, discoveryAvailable, prometheusUnavailableNamespaces = s.collectUpgradePrometheusRules(r, namespaces)
@@ -77,6 +83,9 @@ func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) 
 			nodeRuntimeEvidence = collectUpgradeNodeRuntimeEvidence(r.Context(), nodes)
 		}
 	}
+	if r.Context().Err() != nil {
+		return
+	}
 	platform, _ := k8s.GetClusterPlatform(r.Context())
 	results, err := audit.RunUpgradeReadinessFromCache(scanInput, namespaces, audit.UpgradeReadinessOptions{
 		CurrentVersion:                      k8s.GetServerVersion(),
@@ -84,6 +93,7 @@ func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) 
 		Platform:                            platform,
 		ManifestResources:                   manifestResources,
 		HelmUnavailableNamespaces:           helmUnavailableNamespaces,
+		HelmScopedNamespaces:                helmScopedNamespaces,
 		ManifestParseErrors:                 manifestParseErrors,
 		DeprecatedAPIRequests:               deprecatedRequests,
 		DeprecatedAPIMetricsWindow:          deprecatedMetricsWindow,
@@ -100,7 +110,7 @@ func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) 
 		CustomResourceDefinitions:           crds,
 		APIServices:                         apiServices,
 		EndpointSlices:                      endpointSlices,
-		AdditionalServices:                  additionalServices,
+		WebhookServices:                     additionalServices,
 		NodeRuntimeEvidence:                 nodeRuntimeEvidence,
 	})
 	if err != nil {
@@ -120,6 +130,17 @@ func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) 
 	}
 
 	s.writeJSON(w, results)
+}
+
+func sameNamespaceScope(a, b []string) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	a = append([]string(nil), a...)
+	b = append([]string(nil), b...)
+	slices.Sort(a)
+	slices.Sort(b)
+	return slices.Equal(a, b)
 }
 
 // upgradeReadinessNamespaces intentionally ignores the active namespace picker:
@@ -162,12 +183,14 @@ func collectUpgradeHelmManifests(r *http.Request, namespaces []string) ([]upgrad
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		username, groups = user.Username, user.Groups
 	}
-	resources, unavailableNamespaces, parseErrors, err := client.ListManifestResourcesAcrossNamespaces(namespaces, username, groups)
+	resources, unavailableNamespaces, parseErrors, err := client.ListManifestResourcesAcrossNamespaces(r.Context(), namespaces, username, groups)
 	if err != nil {
 		if !helm.IsForbiddenError(err) {
 			log.Printf("[upgrade-impact] failed to inspect Helm manifests: %v", err)
 		}
-		return nil, unavailableNamespaces, parseErrors
+		if len(unavailableNamespaces) == 0 {
+			return nil, nil, parseErrors
+		}
 	}
 	result := make([]upgradereadiness.ManifestResource, 0, len(resources))
 	for _, resource := range resources {

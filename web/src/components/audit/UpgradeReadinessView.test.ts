@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { UPGRADE_IMPACT_DOCS_URL, groupFindings, incompleteUpgradeCheckCount, issueSpecificReferences, upgradeEvaluationSummary } from './UpgradeReadinessView'
+import { UPGRADE_IMPACT_DOCS_URL, groupFindings, incompleteUpgradeCheckCount, issueSpecificReferences, summaryMeta, upgradeEvaluationSummary } from './UpgradeReadinessView'
 
 describe('upgradeEvaluationSummary', () => {
   it('distinguishes applicable, incomplete, and not-applicable checks', () => {
@@ -73,6 +73,18 @@ describe('groupFindings', () => {
       { ...base, evidence: { ...base.evidence, detail: 'old_b' } },
     ])
     expect(groups[0].total).toBe(2)
+  })
+})
+
+describe('summaryMeta', () => {
+  it('keeps partial coverage explicit even when a confirmed blocker takes precedence', () => {
+    const meta = summaryMeta('blocked', '1.36', '1.36', {
+      blocked: 1,
+      warnings: 0,
+      reviews: 0,
+      unknown: 2,
+    }, 'partial')
+    expect(meta.body).toContain('Evidence coverage is also incomplete')
   })
 })
 

@@ -59,6 +59,15 @@ func TestUpgradeReadinessNamespacesIntersectsForcedScopeWithUserAccess(t *testin
 	}
 }
 
+func TestSameNamespaceScopeDistinguishesClusterWideFromEmpty(t *testing.T) {
+	if sameNamespaceScope(nil, []string{}) {
+		t.Fatal("cluster-wide and empty namespace scopes are not equivalent")
+	}
+	if !sameNamespaceScope([]string{"b", "a"}, []string{"a", "b"}) {
+		t.Fatal("scope comparison should ignore ordering")
+	}
+}
+
 func (f *fakeUpgradeResourceLister) ListNamespaces(schema.GroupVersionResource, []string) ([]*unstructured.Unstructured, error) {
 	f.lists++
 	if f.lists == 1 {

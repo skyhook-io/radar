@@ -367,23 +367,31 @@ func (c *Client) ListReleasesAcrossNamespaces(namespaces []string, username stri
 // ListManifestResourcesAcrossNamespaces returns resource declarations from the
 // latest stored manifest of each visible Helm release. It follows the same
 // namespace and impersonation rules as ListReleasesAcrossNamespaces.
-func (c *Client) ListManifestResourcesAcrossNamespaces(namespaces []string, username string, groups []string) ([]ReleaseManifestResource, []string, int, error) {
+func (c *Client) ListManifestResourcesAcrossNamespaces(ctx context.Context, namespaces []string, username string, groups []string) ([]ReleaseManifestResource, []string, int, error) {
 	if namespaces == nil {
-		resources, parseErrors, err := c.listManifestResourcesAsUser("", username, groups)
+		resources, parseErrors, err := c.listManifestResourcesAsUser(ctx, "", username, groups)
 		return resources, nil, parseErrors, err
 	}
-	var all []ReleaseManifestResource
-	var forbidden []string
+	all := []ReleaseManifestResource{}
+	var unavailable []string
+	var firstError error
 	parseErrors := 0
-	for _, namespace := range namespaces {
-		resources, namespaceParseErrors, err := c.listManifestResourcesAsUser(namespace, username, groups)
+	for index, namespace := range namespaces {
+		if err := ctx.Err(); err != nil {
+			unavailable = append(unavailable, namespaces[index:]...)
+			return all, unavailable, parseErrors, err
+		}
+		resources, namespaceParseErrors, err := c.listManifestResourcesAsUser(ctx, namespace, username, groups)
 		parseErrors += namespaceParseErrors
 		if err != nil {
+			unavailable = append(unavailable, namespace)
 			if IsForbiddenError(err) {
-				forbidden = append(forbidden, namespace)
 				continue
 			}
-			return nil, forbidden, parseErrors, err
+			if firstError == nil {
+				firstError = err
+			}
+			continue
 		}
 		all = append(all, resources...)
 	}
@@ -402,10 +410,10 @@ func (c *Client) ListManifestResourcesAcrossNamespaces(namespaces []string, user
 			Name: all[j].Resource.Name, Namespace: all[j].Resource.Namespace,
 		})
 	})
-	return all, forbidden, parseErrors, nil
+	return all, unavailable, parseErrors, firstError
 }
 
-func (c *Client) listManifestResourcesAsUser(namespace, username string, groups []string) ([]ReleaseManifestResource, int, error) {
+func (c *Client) listManifestResourcesAsUser(ctx context.Context, namespace, username string, groups []string) ([]ReleaseManifestResource, int, error) {
 	var actionConfig *action.Configuration
 	var err error
 	if username == "" {
@@ -430,6 +438,9 @@ func (c *Client) listManifestResourcesAsUser(namespace, username string, groups 
 	resources := []ReleaseManifestResource{}
 	parseErrors := 0
 	for _, rel := range snapshot.latest {
+		if err := ctx.Err(); err != nil {
+			return resources, parseErrors, err
+		}
 		if rel == nil {
 			continue
 		}

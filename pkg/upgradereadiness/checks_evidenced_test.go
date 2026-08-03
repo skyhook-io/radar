@@ -407,7 +407,7 @@ func TestWebhookConfigurationFindingsSurviveMissingBackendEvidence(t *testing.T)
 func TestWebhookBackendsOutsideBrowseScopeUseCollectedEvidence(t *testing.T) {
 	input := completeInput()
 	input.Namespaces = []string{"default"}
-	input.Services = append(input.Services, &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "policy", Namespace: "policy-system"}}, &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "converter", Namespace: "policy-system"}})
+	input.WebhookServices = append(input.WebhookServices, &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "policy", Namespace: "policy-system"}}, &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "converter", Namespace: "policy-system"}})
 	input.EndpointSlices = append(input.EndpointSlices,
 		&discoveryv1.EndpointSlice{ObjectMeta: metav1.ObjectMeta{Name: "policy", Namespace: "policy-system", Labels: map[string]string{discoveryv1.LabelServiceName: "policy"}}, Endpoints: []discoveryv1.Endpoint{{Conditions: discoveryv1.EndpointConditions{Ready: boolPtr(true)}}}},
 		&discoveryv1.EndpointSlice{ObjectMeta: metav1.ObjectMeta{Name: "converter", Namespace: "policy-system", Labels: map[string]string{discoveryv1.LabelServiceName: "converter"}}, Endpoints: []discoveryv1.Endpoint{{Conditions: discoveryv1.EndpointConditions{Ready: boolPtr(true)}}}},
@@ -496,8 +496,8 @@ func TestStrictSourceValidationAndGKEProbeEvidence(t *testing.T) {
 	input.Namespaces = []string{"default"}
 	result, _ = Scan(input, "1.34", "1.35")
 	gke := checkByID(t, result, "gke-exec-probe-timeout")
-	if gke.Status != CheckPassed || gke.Caveat == "" || !strings.Contains(gke.Summary, "selected namespace scope") {
-		t.Fatalf("scoped GKE scan with no exec probes = %+v, want a scoped pass", gke)
+	if gke.Status != CheckUnknown || gke.Caveat == "" || !strings.Contains(gke.Summary, "coverage is incomplete") {
+		t.Fatalf("scoped GKE scan with no exec probes = %+v, want incomplete scoped evidence", gke)
 	}
 
 	input.Namespaces = nil
@@ -532,8 +532,61 @@ func TestStrictSourceValidationAndGKEProbeEvidence(t *testing.T) {
 	input.Deployments[0].Spec.Template.Spec.Containers[0].LivenessProbe.TimeoutSeconds = 2
 	result, _ = Scan(input, "1.34", "1.35")
 	gke = checkByID(t, result, "gke-exec-probe-timeout")
-	if gke.Status != CheckUnknown || !strings.Contains(gke.Summary, "Exec probe timeouts are configured") || strings.Contains(gke.Summary, "No risky") {
+	if gke.Status != CheckUnknown || gke.Inspected != 1 || !strings.Contains(gke.Summary, "Exec probe timeouts are configured") || strings.Contains(gke.Summary, "No risky") {
 		t.Fatalf("scoped configured GKE probes must retain the unprovable-duration explanation: %+v", gke)
+	}
+}
+
+func TestStrictNetworkCandidatesIgnoreHeadlessServiceSentinel(t *testing.T) {
+	service := &unstructured.Unstructured{Object: map[string]any{
+		"kind": "Service",
+		"spec": map[string]any{"clusterIP": "None", "clusterIPs": []any{"None"}},
+	}}
+	if candidates := strictNetworkCandidates(service); len(candidates) != 0 {
+		t.Fatalf("headless Service candidates = %+v, want none", candidates)
+	}
+}
+
+func TestGKEExecProbeRetainsReadableFindingsWithPartialWorkloadCoverage(t *testing.T) {
+	input := completeInput()
+	input.Platform = "gke"
+	input.Pods = nil
+	input.Deployments = []*appsv1.Deployment{{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "default"},
+		Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "api", LivenessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"check"}}}},
+		}}}}},
+	}}
+	result, err := Scan(input, "1.34", "1.35")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := checkByID(t, result, "gke-exec-probe-timeout")
+	if check.Status != CheckReview || len(check.Findings) != 1 || check.Caveat == "" {
+		t.Fatalf("GKE check = %+v, want retained finding plus partial-evidence caveat", check)
+	}
+}
+
+func TestGKEExecProbeEventDoesNotCrossResourceKinds(t *testing.T) {
+	input := completeInput()
+	input.Platform = "gke"
+	input.Deployments = []*appsv1.Deployment{{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "default"},
+		Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "api", LivenessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"check"}}}},
+		}}}}},
+	}}
+	input.Events = []*corev1.Event{{
+		InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "default", Name: "api"},
+		Message:        "Liveness probe failed: command timed out",
+	}}
+	result, err := Scan(input, "1.34", "1.35")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := checkByID(t, result, "gke-exec-probe-timeout")
+	if check.Status != CheckReview || check.Findings[0].Title != "Exec probe relies on default one-second timeout" {
+		t.Fatalf("GKE check = %+v, Pod event must not mark same-named Deployment as timed out", check)
 	}
 }
 

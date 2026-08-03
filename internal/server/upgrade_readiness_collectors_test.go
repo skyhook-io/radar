@@ -12,10 +12,19 @@ import (
 	ktesting "k8s.io/client-go/testing"
 )
 
+var testUpgradeSourceResources = []upgradeSourceResource{
+	{gvr: schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}, namespaced: true},
+	{gvr: schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}, namespaced: true},
+	{gvr: schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"}, namespaced: true},
+	{gvr: schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "networkpolicies"}, namespaced: true},
+	{gvr: schema.GroupVersionResource{Group: "autoscaling", Version: "v2", Resource: "horizontalpodautoscalers"}, namespaced: true},
+	{gvr: schema.GroupVersionResource{Group: "policy", Version: "v1", Resource: "poddisruptionbudgets"}, namespaced: true},
+}
+
 func TestCollectUpgradeSourceObjectsRetainsPartialEvidence(t *testing.T) {
-	listKinds := make(map[schema.GroupVersionResource]string, len(upgradeSourceGVRs))
-	for _, gvr := range upgradeSourceGVRs {
-		listKinds[gvr] = "UpgradeSourceList"
+	listKinds := make(map[schema.GroupVersionResource]string, len(testUpgradeSourceResources))
+	for _, resource := range testUpgradeSourceResources {
+		listKinds[resource.gvr] = "UpgradeSourceList"
 	}
 	pod := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "v1",
@@ -43,7 +52,7 @@ func TestCollectUpgradeSourceObjectsRetainsPartialEvidence(t *testing.T) {
 		return true, nil, errors.New("forbidden")
 	})
 
-	objects, unavailable := collectUpgradeSourceObjectsWithClient(context.Background(), client, nil)
+	objects, unavailable := collectUpgradeSourceObjectsWithClient(context.Background(), client, nil, testUpgradeSourceResources)
 	if len(objects) != 1 || objects[0].GetName() != "web" {
 		t.Fatalf("partial objects = %#v, want only the Ingress with last-applied evidence", objects)
 	}
@@ -61,22 +70,33 @@ func TestCollectUpgradeSourceObjectsRetainsPartialEvidence(t *testing.T) {
 	}
 }
 
+func TestUpgradeSourceExcludesControllerAuthoredHighCardinalityKinds(t *testing.T) {
+	for _, kind := range []string{"Event", "Lease"} {
+		if !upgradeSourceExcludedKinds[kind] {
+			t.Fatalf("%s must not be listed for kubectl last-applied evidence", kind)
+		}
+	}
+	if upgradeSourceExcludedKinds["EndpointSlice"] {
+		t.Fatal("EndpointSlice source manifests remain relevant to strict IP validation")
+	}
+}
+
 func TestCollectUpgradeSourceObjectsReturnsNilWhenEveryListFails(t *testing.T) {
-	listKinds := make(map[schema.GroupVersionResource]string, len(upgradeSourceGVRs))
-	for _, gvr := range upgradeSourceGVRs {
-		listKinds[gvr] = "UpgradeSourceList"
+	listKinds := make(map[schema.GroupVersionResource]string, len(testUpgradeSourceResources))
+	for _, resource := range testUpgradeSourceResources {
+		listKinds[resource.gvr] = "UpgradeSourceList"
 	}
 	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds)
 	client.PrependReactor("list", "*", func(ktesting.Action) (bool, runtime.Object, error) {
 		return true, nil, errors.New("unavailable")
 	})
 
-	objects, unavailable := collectUpgradeSourceObjectsWithClient(context.Background(), client, []string{"default"})
+	objects, unavailable := collectUpgradeSourceObjectsWithClient(context.Background(), client, []string{"default"}, testUpgradeSourceResources)
 	if objects != nil {
 		t.Fatalf("objects = %#v, want nil when every list fails", objects)
 	}
-	if len(unavailable) != len(upgradeSourceGVRs) {
-		t.Fatalf("unavailable = %v, want %d kinds", unavailable, len(upgradeSourceGVRs))
+	if len(unavailable) != len(testUpgradeSourceResources) {
+		t.Fatalf("unavailable = %v, want %d kinds", unavailable, len(testUpgradeSourceResources))
 	}
 }
 
@@ -90,6 +110,27 @@ func TestCollectUpgradeCRDsReturnsNilOnListFailure(t *testing.T) {
 
 	if crds := collectUpgradeCRDs(context.Background(), client); crds != nil {
 		t.Fatalf("crds = %#v, want nil so the check reports incomplete evidence", crds)
+	}
+}
+
+func TestCompactUpgradeCRDDropsValidationSchemas(t *testing.T) {
+	crd := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apiextensions.k8s.io/v1", "kind": "CustomResourceDefinition",
+		"metadata": map[string]any{"name": "widgets.example.io"},
+		"spec": map[string]any{
+			"versions": []any{map[string]any{
+				"name": "v1", "served": true, "storage": true,
+				"schema": map[string]any{"openAPIV3Schema": map[string]any{"type": "object"}},
+			}},
+			"conversion": map[string]any{"strategy": "None"},
+		},
+		"status": map[string]any{"storedVersions": []any{"v1"}},
+	}}
+	compact := compactUpgradeCRD(crd)
+	versions, _, _ := unstructured.NestedSlice(compact.Object, "spec", "versions")
+	version := versions[0].(map[string]any)
+	if _, found := version["schema"]; found || version["name"] != "v1" || version["storage"] != true {
+		t.Fatalf("compact versions = %+v, want only conversion-relevant fields", versions)
 	}
 }
 

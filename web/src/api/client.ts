@@ -442,6 +442,7 @@ export interface UpgradeReadinessResponse {
     state: 'complete' | 'partial' | 'no_access'
     unavailableKinds?: string[]
     scopedNamespaces?: string[]
+    scopedKinds?: Record<string, string[]>
   }
 }
 
@@ -546,8 +547,9 @@ export function useUpgradeReadiness(target?: string) {
   const query = params.toString()
   return useQuery<UpgradeReadinessResponse>({
     queryKey: ['upgrade-readiness', target ?? 'next'],
-    queryFn: () => fetchJSON(`/upgrade-readiness${query ? `?${query}` : ''}`),
+    queryFn: ({ signal }) => fetchJSON(`/upgrade-readiness${query ? `?${query}` : ''}`, signal),
     staleTime: 30000,
+    placeholderData: (previous) => previous,
   })
 }
 

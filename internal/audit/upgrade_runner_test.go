@@ -123,13 +123,34 @@ func TestFilterPersistentVolumesForNamespaces(t *testing.T) {
 	}
 }
 
-func TestMergeServicesDeduplicatesCollectedWebhookBackends(t *testing.T) {
-	cached := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "policy", Namespace: "policy-system"}}
-	duplicate := cached.DeepCopy()
-	additional := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "converter", Namespace: "policy-system"}}
+func TestRunUpgradeReadinessDoesNotTreatTargetedWebhookServicesAsFullServiceCoverage(t *testing.T) {
+	results, err := RunUpgradeReadinessFromCache(nil, nil, UpgradeReadinessOptions{
+		CurrentVersion: "1.35",
+		TargetVersion:  "1.36",
+		WebhookServices: []*corev1.Service{{
+			ObjectMeta: metav1.ObjectMeta{Name: "policy", Namespace: "policy-system"},
+			Spec:       corev1.ServiceSpec{ExternalIPs: []string{"192.0.2.1"}},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range results.Checks {
+		if check.ID == "service-externalips-deprecated" {
+			if check.Status != upgradereadiness.CheckUnknown || len(check.Findings) != 0 {
+				t.Fatalf("Service check = %+v, want unavailable full-Service evidence", check)
+			}
+			return
+		}
+	}
+	t.Fatal("Service externalIPs check not found")
+}
 
-	merged := mergeServices([]*corev1.Service{cached}, []*corev1.Service{duplicate, nil, additional})
-	if len(merged) != 2 || merged[0] != cached || merged[1] != additional {
-		t.Fatalf("mergeServices() = %#v, want stable namespace/name deduplication", merged)
+func TestSameNamespaceSet(t *testing.T) {
+	if !sameNamespaceSet([]string{"team-b", "team-a"}, []string{"team-a", "team-b"}) {
+		t.Fatal("equal namespace sets should ignore ordering")
+	}
+	if sameNamespaceSet(nil, []string{}) || sameNamespaceSet([]string{"team-a"}, []string{"team-b"}) {
+		t.Fatal("cluster-wide, empty, and distinct scopes must remain different")
 	}
 }

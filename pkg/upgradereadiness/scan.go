@@ -61,6 +61,15 @@ func Scan(input *Input, currentVersion, targetVersion string) (*ScanResults, err
 		result.Coverage.ScopedNamespaces = append([]string(nil), input.Namespaces...)
 		sort.Strings(result.Coverage.ScopedNamespaces)
 	}
+	if len(input.CacheScopedKinds) > 0 {
+		result.Coverage.State = "partial"
+		result.Coverage.ScopedKinds = make(map[string][]string, len(input.CacheScopedKinds))
+		for kind, namespaces := range input.CacheScopedKinds {
+			copied := append([]string(nil), namespaces...)
+			sort.Strings(copied)
+			result.Coverage.ScopedKinds[kind] = copied
+		}
+	}
 	result.Coverage.UnavailableKinds = unavailableKinds(input)
 	if len(result.Coverage.UnavailableKinds) > 0 {
 		result.Coverage.State = "partial"
@@ -102,9 +111,13 @@ func Scan(input *Input, currentVersion, targetVersion string) (*ScanResults, err
 	)
 
 	for i := range result.Checks {
+		applyCacheScope(&result.Checks[i], input)
 		finalizeCheck(&result.Checks[i])
 		check := &result.Checks[i]
 		if check.Caveat != "" {
+			result.Coverage.State = "partial"
+		}
+		if check.Status == CheckUnknown {
 			result.Coverage.State = "partial"
 		}
 		result.Summary.Findings += len(check.Findings)
@@ -139,6 +152,62 @@ func Scan(input *Input, currentVersion, targetVersion string) (*ScanResults, err
 	}
 
 	return result, nil
+}
+
+var cacheKindsByCheck = map[string][]string{
+	"gitrepo-volume-removed":         {"pods", "deployments", "replicasets", "statefulsets", "daemonsets", "jobs", "cronjobs"},
+	"flexvolume-kubeadm-support":     {"pods", "deployments", "replicasets", "statefulsets", "daemonsets", "jobs", "cronjobs"},
+	"service-externalips-deprecated": {"services"},
+	"node-drain-feasibility":         {"pods", "poddisruptionbudgets"},
+	"gke-exec-probe-timeout":         {"pods", "deployments", "replicasets", "statefulsets", "daemonsets", "jobs", "cronjobs"},
+}
+
+func applyCacheScope(check *Check, input *Input) {
+	if len(input.CacheScopedKinds) == 0 {
+		return
+	}
+	if check.ID == "kube-proxy-version-skew" {
+		namespaces := input.CacheScopedKinds["daemonsets"]
+		if len(namespaces) == 0 || containsString(namespaces, "kube-system") {
+			return
+		}
+		check.Caveat = appendCaveat(check.Caveat, cacheScopedCoverageNote(input, []string{"daemonsets"}))
+		if len(check.Findings) == 0 && (check.Status == CheckPassed || check.Status == CheckNotApplicable) {
+			check.Status = CheckUnknown
+			check.Summary = "kube-proxy could not be inspected because kube-system is outside the DaemonSet informer scope."
+		}
+		return
+	}
+	kinds := cacheKindsByCheck[check.ID]
+	if len(kinds) == 0 || check.Status == CheckNotApplicable {
+		return
+	}
+	note := cacheScopedCoverageNote(input, kinds)
+	if note == "" {
+		return
+	}
+	check.Caveat = appendCaveat(check.Caveat, note)
+	if len(check.Findings) == 0 && check.Status == CheckPassed {
+		check.Status = CheckUnknown
+		check.Summary = "No issue was found in readable cached evidence, but per-kind namespace coverage is incomplete."
+	}
+}
+
+func cacheScopedCoverageNote(input *Input, kinds []string) string {
+	parts := make([]string, 0, len(kinds))
+	for _, kind := range kinds {
+		namespaces := input.CacheScopedKinds[kind]
+		if len(namespaces) == 0 {
+			continue
+		}
+		namespaces = append([]string(nil), namespaces...)
+		sort.Strings(namespaces)
+		parts = append(parts, kind+" ("+strings.Join(namespaces, ", ")+")")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "Cached evidence is namespace-limited for: " + strings.Join(parts, "; ") + "."
 }
 
 func crossesRelease(current, target *utilversion.Version, release string) bool {
@@ -309,12 +378,12 @@ func scanManifestCompatibility(input *Input, target *utilversion.Version) Check 
 	}
 	helmManifestsAvailable := input.ManifestResources != nil
 	helmUnavailable := len(input.HelmUnavailableNamespaces) > 0
-	lastApplied := lastAppliedResources(input.SourceObjects)
+	lastApplied, lastAppliedParseErrors := lastAppliedResources(input.SourceObjects)
 	resources := append([]ManifestResource(nil), input.ManifestResources...)
 	resources = append(resources, lastApplied...)
 	resources = dedupeManifestResources(resources)
 	check.Inspected = len(resources)
-	appendSourceManifestCoverageCaveats(&check, input)
+	appendSourceManifestCoverageCaveats(&check, input, lastAppliedParseErrors)
 	if len(resources) == 0 {
 		check.Status = CheckUnknown
 		switch {
@@ -886,9 +955,10 @@ func managedByRef(obj metav1.Object, resource ResourceRef) *ResourceRef {
 	return &ResourceRef{Group: ref.Group, Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}
 }
 
-func lastAppliedResources(objects []metav1.Object) []ManifestResource {
+func lastAppliedResources(objects []metav1.Object) ([]ManifestResource, int) {
 	const annotation = "kubectl.kubernetes.io/last-applied-configuration"
 	var resources []ManifestResource
+	parseErrors := 0
 	for _, object := range objects {
 		if object == nil {
 			continue
@@ -899,6 +969,7 @@ func lastAppliedResources(objects []metav1.Object) []ManifestResource {
 		}
 		var manifest unstructured.Unstructured
 		if json.Unmarshal([]byte(raw), &manifest.Object) != nil || manifest.GetAPIVersion() == "" || manifest.GetKind() == "" {
+			parseErrors++
 			continue
 		}
 		if manifest.GetName() == "" {
@@ -916,7 +987,7 @@ func lastAppliedResources(objects []metav1.Object) []ManifestResource {
 			Object:     manifest.DeepCopy(),
 		})
 	}
-	return resources
+	return resources, parseErrors
 }
 
 func dedupeManifestResources(resources []ManifestResource) []ManifestResource {
@@ -1042,7 +1113,7 @@ func appendCaveat(existing, addition string) string {
 	return existing + " " + addition
 }
 
-func appendSourceManifestCoverageCaveats(check *Check, input *Input) {
+func appendSourceManifestCoverageCaveats(check *Check, input *Input, lastAppliedParseErrors int) {
 	if input.ManifestResources == nil {
 		if input.SourceObjects == nil {
 			check.Caveat = appendCaveat(check.Caveat, "Stored Helm release manifests and kubectl last-applied configuration were unavailable.")
@@ -1052,8 +1123,14 @@ func appendSourceManifestCoverageCaveats(check *Check, input *Input) {
 	} else if len(input.HelmUnavailableNamespaces) > 0 {
 		check.Caveat = appendCaveat(check.Caveat, "Stored Helm release manifests could not be read in: "+strings.Join(input.HelmUnavailableNamespaces, ", ")+".")
 	}
+	if input.HelmScopedNamespaces != nil {
+		check.Caveat = appendCaveat(check.Caveat, scopedCoverageNote(input.HelmScopedNamespaces, "stored Helm release manifests"))
+	}
 	if input.ManifestParseErrors > 0 {
 		check.Caveat = appendCaveat(check.Caveat, fmt.Sprintf("%d Helm manifest %s could not be parsed.", input.ManifestParseErrors, plural(input.ManifestParseErrors, "document", "documents")))
+	}
+	if lastAppliedParseErrors > 0 {
+		check.Caveat = appendCaveat(check.Caveat, fmt.Sprintf("%d kubectl last-applied %s could not be parsed.", lastAppliedParseErrors, plural(lastAppliedParseErrors, "annotation", "annotations")))
 	}
 	if len(input.SourceObjectUnavailableKinds) > 0 {
 		check.Caveat = appendCaveat(check.Caveat, "kubectl last-applied configuration could not be inspected for: "+strings.Join(input.SourceObjectUnavailableKinds, ", ")+".")
@@ -1074,8 +1151,10 @@ func unavailableKinds(input *Input) []string {
 		{"jobs", input.Jobs != nil},
 		{"cronjobs", input.CronJobs != nil},
 		{"services", input.Services != nil},
+		{"poddisruptionbudgets", input.PodDisruptionBudgets != nil},
 		{"persistentvolumes", input.PersistentVolumes != nil},
 		{"nodes", input.Nodes != nil},
+		{"customresourcedefinitions", input.CustomResourceDefinitions != nil},
 		{"apiservices", input.APIServices != nil},
 	}
 	for _, item := range checks {
@@ -1083,6 +1162,7 @@ func unavailableKinds(input *Input) []string {
 			unavailable = append(unavailable, item.name)
 		}
 	}
+	sort.Strings(unavailable)
 	return unavailable
 }
 
@@ -1115,6 +1195,28 @@ func groupForAPIVersion(apiVersion string) string {
 		return ""
 	}
 	return group
+}
+
+var strictNetworkSourceGroups = map[string]string{
+	"CronJob": "batch", "DaemonSet": "apps", "Deployment": "apps", "EndpointSlice": "discovery.k8s.io",
+	"Endpoints": "", "Job": "batch", "NetworkPolicy": "networking.k8s.io", "Node": "",
+	"Pod": "", "ReplicaSet": "apps", "Service": "", "StatefulSet": "apps",
+}
+
+// IsUpgradeSourceObjectCandidate reports whether a currently served resource
+// can carry source evidence used by an upgrade check.
+func IsUpgradeSourceObjectCandidate(kind, group string) bool {
+	if allowedGroup, ok := strictNetworkSourceGroups[kind]; ok && allowedGroup == group {
+		return true
+	}
+	for _, entry := range bp.DeprecationTable {
+		deprecatedGroup := groupForAPIVersion(entry.GroupVersion)
+		replacementGroup := groupForAPIVersion(entry.Replacement)
+		if (entry.Kind == kind && (deprecatedGroup == group || replacementGroup == group)) || (entry.Kind == "" && deprecatedGroup == group) {
+			return true
+		}
+	}
+	return false
 }
 
 func plural(count int, singular, plural string) string {

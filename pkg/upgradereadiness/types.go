@@ -43,15 +43,23 @@ type Input struct {
 	// Namespaces is nil for a cluster-wide scan and populated when live
 	// namespaced evidence was filtered by an RBAC or configured cache ceiling.
 	Namespaces []string
+	// CacheScopedKinds records informer kinds whose cached live evidence covers
+	// only the listed namespaces. It is separate from Namespaces because mixed
+	// per-kind RBAC scopes cannot be represented by one global filter.
+	CacheScopedKinds map[string][]string
 
-	Pods                 []*corev1.Pod
-	Deployments          []*appsv1.Deployment
-	ReplicaSets          []*appsv1.ReplicaSet
-	StatefulSets         []*appsv1.StatefulSet
-	DaemonSets           []*appsv1.DaemonSet
-	Jobs                 []*batchv1.Job
-	CronJobs             []*batchv1.CronJob
-	Services             []*corev1.Service
+	Pods         []*corev1.Pod
+	Deployments  []*appsv1.Deployment
+	ReplicaSets  []*appsv1.ReplicaSet
+	StatefulSets []*appsv1.StatefulSet
+	DaemonSets   []*appsv1.DaemonSet
+	Jobs         []*batchv1.Job
+	CronJobs     []*batchv1.CronJob
+	Services     []*corev1.Service
+	// WebhookServices contains the explicitly collected Service backends
+	// referenced by admission and CRD conversion webhooks. It must not be
+	// inferred from Services, whose informer may have a different RBAC scope.
+	WebhookServices      []*corev1.Service
 	PersistentVolumes    []*corev1.PersistentVolume
 	Nodes                []*corev1.Node
 	Events               []*corev1.Event
@@ -84,7 +92,10 @@ type Input struct {
 	// HelmUnavailableNamespaces names namespaces whose stored release
 	// manifests could not be read while other namespaces were inspected.
 	HelmUnavailableNamespaces []string
-	ManifestParseErrors       int
+	// HelmScopedNamespaces records a Secret-RBAC ceiling narrower than the
+	// workload scan scope.
+	HelmScopedNamespaces []string
+	ManifestParseErrors  int
 
 	// DeprecatedAPIRequests is nil when /metrics could not be read. An empty,
 	// non-nil slice means the sampled API server process had no active series.
@@ -189,10 +200,11 @@ type Summary struct {
 }
 
 type Coverage struct {
-	Source           string   `json:"source"`
-	State            string   `json:"state"`
-	UnavailableKinds []string `json:"unavailableKinds,omitempty"`
-	ScopedNamespaces []string `json:"scopedNamespaces,omitempty"`
+	Source           string              `json:"source"`
+	State            string              `json:"state"`
+	UnavailableKinds []string            `json:"unavailableKinds,omitempty"`
+	ScopedNamespaces []string            `json:"scopedNamespaces,omitempty"`
+	ScopedKinds      map[string][]string `json:"scopedKinds,omitempty"`
 }
 
 type ScanResults struct {

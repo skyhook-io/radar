@@ -2,6 +2,7 @@ package upgradereadiness
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -24,6 +25,7 @@ func completeInput() *Input {
 		Jobs:                           []*batchv1.Job{},
 		CronJobs:                       []*batchv1.CronJob{},
 		Services:                       []*corev1.Service{},
+		WebhookServices:                []*corev1.Service{},
 		PersistentVolumes:              []*corev1.PersistentVolume{},
 		Nodes:                          []*corev1.Node{readyNode("node-a", "v1.35.7")},
 		Events:                         []*corev1.Event{},
@@ -91,6 +93,65 @@ func TestScanBaselineCanPassWithSampledMetricsEvidence(t *testing.T) {
 	metrics := checkByID(t, got, "deprecated-api-requests")
 	if metrics.Status != CheckPassed || metrics.EvidenceNote == "" || metrics.Caveat != "" {
 		t.Fatalf("sampled metrics should pass with an evidence note: %+v", metrics)
+	}
+}
+
+func TestUnknownCheckForcesPartialCoverage(t *testing.T) {
+	input := completeInput()
+	input.DeprecatedAPIRequests = nil
+	got, err := Scan(input, "1.35", "1.36")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Coverage.State != "partial" || got.Verdict != VerdictUnknown {
+		t.Fatalf("coverage=%+v verdict=%q, want partial unknown", got.Coverage, got.Verdict)
+	}
+}
+
+func TestCacheScopedKindsRemainExplicitPerKind(t *testing.T) {
+	input := completeInput()
+	input.CacheScopedKinds = map[string][]string{
+		"pods":     {"team-b", "team-a"},
+		"services": {"team-a"},
+	}
+	got, err := Scan(input, "1.35", "1.36")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Coverage.State != "partial" || !slices.Equal(got.Coverage.ScopedKinds["pods"], []string{"team-a", "team-b"}) {
+		t.Fatalf("coverage = %+v, want sorted per-kind namespace ceilings", got.Coverage)
+	}
+	for _, id := range []string{"gitrepo-volume-removed", "service-externalips-deprecated", "node-drain-feasibility"} {
+		check := checkByID(t, got, id)
+		if check.Status != CheckUnknown || !strings.Contains(check.Caveat, "Cached evidence is namespace-limited") {
+			t.Fatalf("%s = %+v, want incomplete per-kind cache evidence", id, check)
+		}
+	}
+	input.CacheScopedKinds["pods"][0] = "mutated"
+	if got.Coverage.ScopedKinds["pods"][1] != "team-b" {
+		t.Fatal("coverage retained the mutable input slice")
+	}
+}
+
+func TestKubeProxyAbsenceRequiresKubeSystemInformerCoverage(t *testing.T) {
+	input := completeInput()
+	input.CacheScopedKinds = map[string][]string{"daemonsets": {"default"}}
+	got, err := Scan(input, "1.35", "1.36")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := checkByID(t, got, "kube-proxy-version-skew")
+	if check.Status != CheckUnknown || !strings.Contains(check.Summary, "kube-system is outside") {
+		t.Fatalf("kube-proxy check = %+v, want incomplete outside kube-system", check)
+	}
+
+	input.CacheScopedKinds["daemonsets"] = []string{"kube-system"}
+	got, err = Scan(input, "1.35", "1.36")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if check = checkByID(t, got, "kube-proxy-version-skew"); check.Status != CheckNotApplicable {
+		t.Fatalf("kube-proxy check = %+v, kube-system coverage can support absence", check)
 	}
 }
 
@@ -215,6 +276,42 @@ func TestScanManifestCompatibilityFromHelmAndLastApplied(t *testing.T) {
 	}
 	if check.Findings[0].ManagedBy == nil && check.Findings[1].ManagedBy == nil {
 		t.Fatalf("Helm ownership was not preserved: %+v", check.Findings)
+	}
+}
+
+func TestMalformedLastAppliedAnnotationKeepsManifestCoveragePartial(t *testing.T) {
+	input := completeInput()
+	input.SourceObjects = []metav1.Object{&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+		Name: "broken", Namespace: "default",
+		Annotations: map[string]string{"kubectl.kubernetes.io/last-applied-configuration": "{"},
+	}}}
+	got, err := Scan(input, "1.35", "1.36")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"manifest-api-compatibility", "strict-ip-cidr-validation"} {
+		check := checkByID(t, got, id)
+		if check.Status != CheckUnknown || !strings.Contains(check.Caveat, "1 kubectl last-applied annotation could not be parsed") {
+			t.Fatalf("%s = %+v, want incomplete malformed-annotation coverage", id, check)
+		}
+	}
+}
+
+func TestUpgradeSourceObjectCandidatesFollowChecksAndDeprecationCatalog(t *testing.T) {
+	for _, candidate := range []struct{ kind, group string }{
+		{kind: "Node"},
+		{kind: "Ingress", group: "networking.k8s.io"},
+		{kind: "Role", group: "rbac.authorization.k8s.io"},
+	} {
+		if !IsUpgradeSourceObjectCandidate(candidate.kind, candidate.group) {
+			t.Fatalf("%s.%s should be discovered as source evidence", candidate.kind, candidate.group)
+		}
+	}
+	if IsUpgradeSourceObjectCandidate("Widget", "example.io") {
+		t.Fatal("unrelated CRDs must not be listed for source evidence")
+	}
+	if IsUpgradeSourceObjectCandidate("Ingress", "example.io") || IsUpgradeSourceObjectCandidate("Event", "") || IsUpgradeSourceObjectCandidate("Service", "anything.io") {
+		t.Fatal("same-kind resources from unrelated API groups must not become source evidence")
 	}
 }
 

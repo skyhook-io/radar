@@ -75,11 +75,11 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
   const location = useLocation()
   const navigate = useNavigate()
   const requestedTarget = new URLSearchParams(location.search).get('target') ?? undefined
-  const { data, isLoading, error, dataUpdatedAt, refetch } = useUpgradeReadiness(requestedTarget)
+  const { data, isLoading, isFetching, isPlaceholderData, error, dataUpdatedAt, refetch } = useUpgradeReadiness(requestedTarget)
   const { connection } = useConnection()
   const targetOptions = useMemo(
-    () => buildTargetOptions(data?.currentVersion, data?.reviewedThrough, data?.targetVersion),
-    [data?.currentVersion, data?.reviewedThrough, data?.targetVersion],
+    () => buildTargetOptions(data?.currentVersion, data?.reviewedThrough, requestedTarget ?? data?.targetVersion),
+    [data?.currentVersion, data?.reviewedThrough, data?.targetVersion, requestedTarget],
   )
   const sortedChecks = useMemo(
     () => [...(data?.checks ?? [])].sort((a, b) =>
@@ -131,9 +131,11 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
     navigate({ pathname: location.pathname, search: params.toString() })
   }
   const unsupportedTarget = compareMinor(data.targetVersion, data.reviewedThrough) > 0
+  const scopedKinds = Object.entries(data.coverage.scopedKinds ?? {})
+  const showingPreviousTarget = Boolean(isPlaceholderData && requestedTarget && requestedTarget !== data.targetVersion)
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 p-4 gap-4 overflow-auto">
+    <div aria-busy={isFetching} className="flex-1 flex flex-col min-h-0 p-4 gap-4 overflow-auto">
       <PageHeader
         icon={ShieldAlert}
         title="Upgrade impact"
@@ -145,7 +147,7 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
                 <span className="text-xs text-theme-text-tertiary">Target</span>
                 {targetOptions.length > 1 ? (
                   <SelectMenu
-                    value={data.targetVersion}
+                    value={requestedTarget ?? data.targetVersion}
                     options={targetOptions}
                     onChange={setTarget}
                     ariaLabel="Target Kubernetes version"
@@ -163,12 +165,20 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
               dataUpdatedAt={dataUpdatedAt}
               onRefresh={() => refetch()}
               connectionState={connection.state}
+              isFetching={isFetching}
             />
           </>
         }
       />
 
       <ChecksViewTabs />
+
+      {showingPreviousTarget && (
+        <CoverageNotice
+          headline={`Analyzing Kubernetes ${requestedTarget}`}
+          body={`Results for Kubernetes ${data.targetVersion} remain visible until the new scan completes.`}
+        />
+      )}
 
       {data.coverage.state !== 'no_access' && (
         <UpgradeSummary
@@ -192,7 +202,7 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
           body={`Results do not cover namespaced configuration outside ${formatNamespaceScope(data.coverage.scopedNamespaces!)}.`}
         />
       )}
-      {namespaces.length > 0 && !data.coverage.scopedNamespaces?.length && data.coverage.state !== 'no_access' && (
+      {namespaces.length > 0 && !data.coverage.scopedNamespaces?.length && scopedKinds.length === 0 && data.coverage.state !== 'no_access' && (
         <CoverageNotice
           headline="Cluster-wide upgrade scan"
           body="The current namespace browsing filter does not limit upgrade checks. Radar evaluates every namespace your identity can read."
@@ -204,7 +214,13 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
           body={`Radar could not inspect: ${(data.coverage.unavailableKinds ?? []).join(', ')}. Affected checks are marked incomplete.`}
         />
       )}
-      {data.coverage.state === 'partial' && !data.coverage.scopedNamespaces?.length && !data.coverage.unavailableKinds?.length && (
+      {data.coverage.state !== 'no_access' && scopedKinds.length > 0 && (
+        <CoverageNotice
+          headline={`${scopedKinds.length} cached ${scopedKinds.length === 1 ? 'resource kind has' : 'resource kinds have'} narrower coverage`}
+          body={`Informer evidence is namespace-limited for ${formatScopedKinds(scopedKinds)}. Radar does not treat absence outside those per-kind scopes as proof.`}
+        />
+      )}
+      {data.coverage.state === 'partial' && !data.coverage.scopedNamespaces?.length && !data.coverage.unavailableKinds?.length && scopedKinds.length === 0 && (
         <CoverageNotice headline="Some evidence is incomplete" body="Rows marked Partial evidence explain what Radar could not verify." />
       )}
       {data.coverage.state === 'no_access' ? (
@@ -255,12 +271,12 @@ export function upgradeEvaluationSummary(total: number, summary: UpgradeReadines
 function CoverageMethodology({ data }: { data: UpgradeReadinessResponse }) {
   const [open, setOpen] = useState(false)
   const unavailable = data.coverage.unavailableKinds ?? []
+  const scopedKinds = Object.entries(data.coverage.scopedKinds ?? {})
   return (
     <div className="border-b-subtle bg-theme-base/30">
       <button
         type="button"
         aria-expanded={open}
-        aria-controls="upgrade-coverage-methodology"
         onClick={() => setOpen((value) => !value)}
         className="flex w-full items-center justify-between gap-4 px-4 py-2.5 text-left transition-colors hover:bg-theme-hover/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-theme-text-primary/20"
       >
@@ -281,6 +297,8 @@ function CoverageMethodology({ data }: { data: UpgradeReadinessResponse }) {
           <p>
             Results use live cluster resources and the row-specific evidence scope shown below. {unavailable.length > 0
               ? `Radar could not inspect ${unavailable.join(', ')}; affected checks are marked incomplete.`
+              : scopedKinds.length > 0
+                ? `Cached evidence has per-kind namespace ceilings for ${formatScopedKinds(scopedKinds)}.`
               : data.coverage.state === 'complete'
                 ? 'Every required evidence source for the displayed checks was readable.'
                 : 'Coverage is partial; affected rows explain which evidence was missing, unreadable, or outside the scan scope.'}
@@ -334,7 +352,7 @@ function SummaryCount({ tone, value, label }: { tone: 'error' | 'warning' | 'inf
   return <span className="inline-flex items-center gap-1.5"><span className={clsx('h-1.5 w-1.5 rounded-full', dot)} />{value} {label}</span>
 }
 
-function summaryMeta(
+export function summaryMeta(
   verdict: UpgradeReadinessVerdict,
   target: string,
   reviewedThrough: string,
@@ -343,21 +361,21 @@ function summaryMeta(
 ) {
   if (verdict === 'blocked') return {
     headline: `${summary.blocked} upgrade ${summary.blocked === 1 ? 'blocker' : 'blockers'} found`,
-    body: `Resolve blocked checks before moving the control plane to Kubernetes ${target}.`,
+    body: `Resolve blocked checks before moving the control plane to Kubernetes ${target}.${coverageState === 'partial' ? ' Evidence coverage is also incomplete.' : ''}`,
     icon: AlertCircle, iconClass: 'text-red-600 dark:text-red-400', className: 'border-red-500/30 bg-red-500/5',
   }
   if (verdict === 'warning') return {
-    headline: `No blockers found · ${summary.warnings} ${summary.warnings === 1 ? 'warning needs' : 'warnings need'} attention`,
-    body: `Resolve or explicitly accept these risks before scheduling Kubernetes ${target}.`,
+    headline: `${summary.warnings} upgrade ${summary.warnings === 1 ? 'warning needs' : 'warnings need'} attention`,
+    body: `Resolve or explicitly accept these risks before scheduling Kubernetes ${target}.${coverageState === 'partial' ? ' Evidence coverage is also incomplete.' : ''}`,
     icon: AlertTriangle, iconClass: 'text-amber-600 dark:text-amber-400', className: 'border-amber-500/30 bg-amber-500/5',
   }
   if (verdict === 'review') return {
-    headline: `No blockers found · ${summary.reviews} ${summary.reviews === 1 ? 'item needs' : 'items need'} review`,
-    body: `Verify the affected configuration before scheduling Kubernetes ${target}.`,
+    headline: `${summary.reviews} upgrade ${summary.reviews === 1 ? 'item needs' : 'items need'} review`,
+    body: `Verify the affected configuration before scheduling Kubernetes ${target}.${coverageState === 'partial' ? ' Evidence coverage is also incomplete.' : ''}`,
     icon: FileSearch, iconClass: 'text-blue-600 dark:text-blue-400', className: 'border-blue-500/30 bg-blue-500/5',
   }
   if (verdict === 'unknown') return {
-    headline: 'No blockers found · coverage is incomplete',
+    headline: 'Upgrade evidence is incomplete',
     body: summary.unknown > 0
       ? `${summary.unknown} ${summary.unknown === 1 ? 'check is' : 'checks are'} incomplete, so this is not a readiness guarantee.`
       : coverageState !== 'complete'
@@ -394,7 +412,6 @@ function CheckRow({ check, onNavigateToResource }: { check: UpgradeReadinessChec
       <button
         type="button"
         aria-expanded={open}
-        aria-controls={detailID}
         onClick={() => setOpen((value) => !value)}
         className="grid w-full cursor-pointer items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-theme-hover/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-theme-text-primary/20 md:grid-cols-[minmax(230px,0.9fr)_minmax(320px,1.6fr)_160px] md:gap-4"
       >
@@ -484,7 +501,6 @@ function FindingGroupRow({ id, group, checkReferences, onNavigateToResource }: {
       <button
         type="button"
         aria-expanded={open}
-        aria-controls={id}
         onClick={() => setOpen((value) => !value)}
         className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition-colors hover:bg-theme-hover/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-theme-text-primary/20"
       >
@@ -514,8 +530,8 @@ function FindingGroupRow({ id, group, checkReferences, onNavigateToResource }: {
               <CompactFindingRow key={findingKey(item, index)} finding={item} onNavigateToResource={onNavigateToResource} />
             ))}
             {remaining.length > 0 && (
-              <Collapse open={showAll}>
-                <div className="divide-y divide-theme-border/70">
+              <Collapse open={showAll} mountLazily>
+                <div id={`${id}-remaining`} className="divide-y divide-theme-border/70">
                   {remaining.map((item, index) => (
                     <CompactFindingRow key={findingKey(item, index + FINDING_CAP)} finding={item} onNavigateToResource={onNavigateToResource} />
                   ))}
@@ -526,6 +542,7 @@ function FindingGroupRow({ id, group, checkReferences, onNavigateToResource }: {
           {remaining.length > 0 && (
             <button
               type="button"
+              aria-expanded={showAll}
               onClick={() => setShowAll((value) => !value)}
               className="mt-2 inline-flex w-fit items-center gap-1 rounded px-1 py-1 text-xs font-medium text-accent-text hover:underline"
             >
@@ -572,6 +589,14 @@ function CompactFindingRow({ finding, onNavigateToResource }: {
 function formatNamespaceScope(namespaces: string[]) {
   if (namespaces.length <= 3) return namespaces.join(', ')
   return `${namespaces.slice(0, 3).join(', ')} and ${namespaces.length - 3} more`
+}
+
+function formatScopedKinds(entries: [string, string[]][]) {
+  const labels = entries
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([kind, namespaces]) => `${kind} (${formatNamespaceScope(namespaces)})`)
+  if (labels.length <= 3) return labels.join(', ')
+  return `${labels.slice(0, 3).join(', ')} and ${labels.length - 3} more`
 }
 
 function evidenceLabel(check: UpgradeReadinessCheck) {
