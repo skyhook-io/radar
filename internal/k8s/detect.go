@@ -790,7 +790,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 		} else {
 			cronjobs, _ = cjLister.List(labels.Everything())
 		}
-		for _, cp := range DetectCronJobProblems(cronjobs, jobs, cache.cronJobTurnovers, now) {
+		for _, cp := range DetectCronJobProblems(cronjobs, jobs, cache.cronJobScheduleObservations, now) {
 			ageDur := resourceAge(now, cronjobs, cp.Namespace, cp.Name)
 			detection := Detection{
 				Kind:       "CronJob",

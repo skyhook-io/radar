@@ -52,7 +52,7 @@ func InitTestResourceCache(client kubernetes.Interface) error {
 	}
 
 	secretWriteTimes := newSecretDataManagerWriteIndex()
-	cronJobTurnovers := newCronJobTurnoverTracker()
+	cronJobScheduleObservations := newCronJobScheduleObservationTracker()
 	cfg := k8score.CacheConfig{
 		Client:        client,
 		ResourceTypes: enabled,
@@ -64,7 +64,7 @@ func InitTestResourceCache(client kubernetes.Interface) error {
 		OnObservedChange: func(change k8score.ResourceChange, obj, _ any) {
 			secretWriteTimes.reconcile(change, obj)
 			if cj, ok := obj.(*batchv1.CronJob); ok {
-				cronJobTurnovers.observe(change.Operation, cj)
+				cronJobScheduleObservations.observe(change.Operation, cj)
 			}
 		},
 	}
@@ -77,10 +77,10 @@ func InitTestResourceCache(client kubernetes.Interface) error {
 	initialSyncComplete = true
 
 	resourceCache = &ResourceCache{
-		ResourceCache:    core,
-		secretsEnabled:   true,
-		cronJobTurnovers: cronJobTurnovers,
-		secretWriteTimes: secretWriteTimes,
+		ResourceCache:               core,
+		secretsEnabled:              true,
+		cronJobScheduleObservations: cronJobScheduleObservations,
+		secretWriteTimes:            secretWriteTimes,
 	}
 
 	// Mark cacheOnce as "already executed" so InitResourceCache is a no-op.

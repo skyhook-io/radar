@@ -180,7 +180,7 @@ type CronJobProblem struct {
 
 // DetectCronJobProblems finds non-suspended CronJobs whose schedule or success
 // history indicates that they are not producing successful runs.
-func DetectCronJobProblems(cronjobs []*batchv1.CronJob, jobs []*batchv1.Job, tracker *cronJobTurnoverTracker, now time.Time) []CronJobProblem {
+func DetectCronJobProblems(cronjobs []*batchv1.CronJob, jobs []*batchv1.Job, tracker *cronJobScheduleObservationTracker, now time.Time) []CronJobProblem {
 	var problems []CronJobProblem
 	jobProblemOwners := cronJobOwnersWithJobProblems(jobs, now)
 	for _, cj := range cronjobs {
@@ -251,10 +251,10 @@ func stuckActiveJob(job *batchv1.Job, now time.Time) bool {
 		now.Sub(job.CreationTimestamp.Time) > time.Hour
 }
 
-func repeatedCronJobSchedulesWithoutSuccess(cj *batchv1.CronJob, tracker *cronJobTurnoverTracker, now time.Time) (string, time.Duration, bool) {
-	// Replace is the blind spot: it deletes each unfinished Job before the Job
-	// detectors can accumulate evidence. Allow retains Jobs for those detectors,
-	// while Forbid stops advancing lastScheduleTime and is covered as stale.
+func repeatedCronJobSchedulesWithoutSuccess(cj *batchv1.CronJob, tracker *cronJobScheduleObservationTracker, now time.Time) (string, time.Duration, bool) {
+	// Replace can delete an unfinished Job before the Job detectors accumulate
+	// evidence. Allow retains Jobs for those detectors, while Forbid stops
+	// advancing lastScheduleTime and is covered as stale.
 	if cj.Spec.ConcurrencyPolicy != batchv1.ReplaceConcurrent || len(cj.Status.Active) == 0 {
 		return "", 0, false
 	}
@@ -262,13 +262,13 @@ func repeatedCronJobSchedulesWithoutSuccess(cj *batchv1.CronJob, tracker *cronJo
 	if cj.Status.LastScheduleTime == nil || cj.Status.LastScheduleTime.Time.After(now) {
 		return "", 0, false
 	}
-	turnovers, failureSince := tracker.failure(cj.UID)
-	if turnovers < cronJobTurnoverThreshold || failureSince.IsZero() || failureSince.After(now) {
+	schedules, sequenceSince := tracker.withoutRecordedSuccess(cj.UID)
+	if schedules < cronJobScheduleObservationThreshold || sequenceSince.IsZero() || sequenceSince.After(now) {
 		return "", 0, false
 	}
-	if success := cj.Status.LastSuccessfulTime; success != nil && !success.IsZero() && !success.Time.Before(failureSince) {
+	if success := cj.Status.LastSuccessfulTime; success != nil && !success.IsZero() && !success.Time.Before(sequenceSince) {
 		return "", 0, false
 	}
-	return fmt.Sprintf("%d consecutive schedule turnovers observed without a recorded success; last scheduled %s ago",
-		turnovers, FormatAge(now.Sub(cj.Status.LastScheduleTime.Time))), now.Sub(failureSince), true
+	return fmt.Sprintf("%d consecutive schedules observed without a recorded success; last scheduled %s ago",
+		schedules, FormatAge(now.Sub(cj.Status.LastScheduleTime.Time))), now.Sub(sequenceSince), true
 }

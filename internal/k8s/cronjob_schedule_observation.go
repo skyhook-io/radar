@@ -11,31 +11,31 @@ import (
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
-const cronJobTurnoverThreshold = 3
+const cronJobScheduleObservationThreshold = 3
 
-type cronJobTurnoverState struct {
+type cronJobScheduleObservationState struct {
 	schedule       string
 	policy         batchv1.ConcurrencyPolicy
 	suspended      bool
 	lastSchedule   time.Time
 	lastSuccess    time.Time
 	withoutSuccess int
-	failureSince   time.Time
+	sequenceSince  time.Time
 }
 
-// cronJobTurnoverTracker deliberately starts from observation rather than
-// reconstructing missed runs from resource age. Restarts and policy changes
-// reset the evidence, favoring a late warning over a fabricated history.
-type cronJobTurnoverTracker struct {
+// cronJobScheduleObservationTracker deliberately starts from observation
+// rather than reconstructing missed runs from resource age. Restarts and
+// policy changes reset the evidence, favoring a late warning over fabricated history.
+type cronJobScheduleObservationTracker struct {
 	mu      sync.Mutex
-	entries map[types.UID]cronJobTurnoverState
+	entries map[types.UID]cronJobScheduleObservationState
 }
 
-func newCronJobTurnoverTracker() *cronJobTurnoverTracker {
-	return &cronJobTurnoverTracker{entries: map[types.UID]cronJobTurnoverState{}}
+func newCronJobScheduleObservationTracker() *cronJobScheduleObservationTracker {
+	return &cronJobScheduleObservationTracker{entries: map[types.UID]cronJobScheduleObservationState{}}
 }
 
-func (t *cronJobTurnoverTracker) observe(operation string, cj *batchv1.CronJob) {
+func (t *cronJobScheduleObservationTracker) observe(operation string, cj *batchv1.CronJob) {
 	if t == nil || cj == nil || cj.UID == "" {
 		return
 	}
@@ -47,7 +47,7 @@ func (t *cronJobTurnoverTracker) observe(operation string, cj *batchv1.CronJob) 
 		return
 	}
 
-	current := cronJobTurnoverState{
+	current := cronJobScheduleObservationState{
 		schedule:     cj.Spec.Schedule,
 		policy:       cj.Spec.ConcurrencyPolicy,
 		suspended:    cj.Spec.Suspend != nil && *cj.Spec.Suspend,
@@ -64,24 +64,24 @@ func (t *cronJobTurnoverTracker) observe(operation string, cj *batchv1.CronJob) 
 	}
 
 	current.withoutSuccess = previous.withoutSuccess
-	current.failureSince = previous.failureSince
+	current.sequenceSince = previous.sequenceSince
 	if current.lastSchedule.After(previous.lastSchedule) {
 		current.withoutSuccess++
-		if current.failureSince.IsZero() {
-			current.failureSince = current.lastSchedule
+		if current.sequenceSince.IsZero() {
+			current.sequenceSince = current.lastSchedule
 		}
 	}
 	t.entries[cj.UID] = current
 }
 
-func (t *cronJobTurnoverTracker) failure(uid types.UID) (int, time.Time) {
+func (t *cronJobScheduleObservationTracker) withoutRecordedSuccess(uid types.UID) (int, time.Time) {
 	if t == nil || uid == "" {
 		return 0, time.Time{}
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	state := t.entries[uid]
-	return state.withoutSuccess, state.failureSince
+	return state.withoutSuccess, state.sequenceSince
 }
 
 func cronJobStatusTime(value *metav1.Time) time.Time {
