@@ -158,7 +158,11 @@ function PlanCard({
         acknowledgeSharedListener: ackShared,
       }),
     onSuccess: (st) => {
-      if (st.connectUrl) {
+      // Only navigate to an approval the server still considers live. A cancel
+      // from another tab (or a server-side failure) can land while start is in
+      // flight, and opening its connectUrl anyway would present an approvable
+      // request for a flow the user already stopped.
+      if (st.connectUrl && st.state === 'awaiting_approval') {
         if (approvalTab.current && !approvalTab.current.closed) {
           approvalTab.current.location.href = st.connectUrl
         } else {
@@ -292,9 +296,14 @@ function PlanCard({
         >
           {start.isPending ? 'Starting…' : 'Continue in browser'}
         </button>
+        {/* Disabled while start is in flight: cancelling there only marks the
+            server flow canceling, and start's own success would still land
+            afterwards — reopening the approval tab and overwriting the newer
+            status with a stale one. */}
         <button
           onClick={() => discard.mutate()}
-          className="text-[12.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors"
+          disabled={start.isPending || discard.isPending}
+          className="text-[12.5px] text-theme-text-tertiary hover:text-theme-text-primary disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
           Cancel
         </button>

@@ -172,13 +172,20 @@ func InstallID() string {
 		}
 		return ""
 	}
+	// Any failure past the create must take the file with it. A stranded empty
+	// file is read back as a valid-but-empty id on every later call, which
+	// callers treat as "no identity" — pinning the install out of a staged
+	// rollout permanently, with no way to self-heal. Removing it lets the next
+	// start mint cleanly.
 	if _, err := f.WriteString(id); err != nil {
 		f.Close()
+		os.Remove(path)
 		return ""
 	}
-	// A close error is where a failed flush surfaces on some filesystems —
-	// returning the id anyway could hand out an identity that never landed.
+	// Close is where a failed flush surfaces on some filesystems, so the id is
+	// only trustworthy once it returns cleanly.
 	if err := f.Close(); err != nil {
+		os.Remove(path)
 		return ""
 	}
 	return id

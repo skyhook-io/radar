@@ -190,9 +190,12 @@ func AdoptionRollbackGuidance(recovery ProvisionRecovery, clusterURL string, tar
 			fmt.Sprintf("%s rollback %s %d -n %s", target.Helm(), recovery.ReleaseName, recovery.CurrentRevision, recovery.Namespace),
 			fmt.Sprintf("%s -n %s delete secret/%s", target.Kubectl(), recovery.Namespace, CloudTokenSecretName),
 		},
+		// Order-independent prose: the CLI prints the commands above these
+		// lines and the UI prints them below, so nothing here may lean on
+		// "then" or "the steps above" to make sense.
 		Lines: []string{
-			"The Helm rollback restores the exact pre-adoption chart, image pin, values, and RBAC. Delete the Secret only after that rollback succeeds.",
-			"Then have an organization owner delete the connected cluster in the Hub — until they do, its fleet row shows as disconnected.",
+			"The Helm rollback restores the exact pre-adoption chart, image pin, values, and RBAC. Delete the Secret only once that rollback has succeeded.",
+			"An organization owner must also delete the connected cluster in the Hub — until they do, its fleet row shows as disconnected.",
 		},
 		ClusterURL: clusterURL,
 	}

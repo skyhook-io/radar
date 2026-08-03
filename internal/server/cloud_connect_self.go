@@ -117,9 +117,17 @@ func (s *Server) inspectSelfInstall(ctx context.Context, r *http.Request, namesp
 		cloudinstall.OwnershipGitOpsUnreadable,
 		cloudinstall.OwnershipGitOpsStale:
 		self.Ownership = "gitops"
-		if len(target.Ownership.Controllers) > 0 {
-			ref := target.Ownership.Controllers[0].Ref
-			self.Controller = ref.Kind + " " + ref.Namespace + "/" + ref.Name
+		// The verified controller, not merely the first one. A stale leftover
+		// ref can sort ahead of the real owner — controllerClassification still
+		// returns Verified with one verified candidate alongside a stale one —
+		// and naming or deep-linking that ref would hand the operator a patch
+		// for an object that does not manage this release.
+		owner := verifiedController(target.Ownership.Controllers)
+		if owner == nil && len(target.Ownership.Controllers) > 0 {
+			owner = &target.Ownership.Controllers[0]
+		}
+		if owner != nil {
+			self.Controller = owner.Ref.Kind + " " + owner.Ref.Namespace + "/" + owner.Ref.Name
 		}
 		// Only a verified controller earns the deep link. Suspected, unreadable,
 		// and stale all mean the same thing here: evidence of GitOps we could
@@ -131,8 +139,8 @@ func (s *Server) inspectSelfInstall(ctx context.Context, r *http.Request, namesp
 		// A release name is required even when verified: the wizard's GitOps
 		// artifact is a Helm values patch, so an installation with no Helm
 		// release identity has nothing for it to patch.
-		if target.Ownership.Classification == cloudinstall.OwnershipGitOpsVerified && target.ReleaseName != "" {
-			if method := wizardMethodFor(target.Ownership.Controllers[0].Ref); method != "" {
+		if target.Ownership.Classification == cloudinstall.OwnershipGitOpsVerified && target.ReleaseName != "" && owner != nil {
+			if method := wizardMethodFor(owner.Ref); method != "" {
 				self.WizardURL = s.wizardInstallURL(target.Namespace, target.ReleaseName, method)
 			}
 		}
@@ -146,6 +154,18 @@ func (s *Server) inspectSelfInstall(ctx context.Context, r *http.Request, namesp
 		self.WizardURL = generic.WizardURL
 	}
 	return self
+}
+
+// verifiedController returns the candidate whose ownership was confirmed
+// against the live object, or nil when none was. Candidate order reflects
+// discovery, not confidence.
+func verifiedController(candidates []cloudinstall.ControllerCandidate) *cloudinstall.ControllerCandidate {
+	for i := range candidates {
+		if candidates[i].Verification == cloudinstall.ControllerVerified {
+			return &candidates[i]
+		}
+	}
+	return nil
 }
 
 // wizardMethodFor maps an owning GitOps object to the Hub wizard's install-method

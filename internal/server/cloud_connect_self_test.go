@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/skyhook-io/radar/internal/cloudinstall"
 	"github.com/skyhook-io/radar/pkg/subject"
 )
 
@@ -101,5 +102,32 @@ func TestWizardMethodOnlyForRecognizedControllers(t *testing.T) {
 				t.Fatalf("wizardMethodFor(%s/%s) = %q, want %q", tc.group, tc.kind, got, tc.want)
 			}
 		})
+	}
+}
+
+// A stale leftover controller can sort ahead of the real owner while
+// controllerClassification still reports Verified, so both the displayed owner
+// and the wizard tab must come from the verified candidate — not from
+// whichever discovery happened to list first.
+func TestVerifiedControllerIgnoresCandidateOrder(t *testing.T) {
+	candidates := []cloudinstall.ControllerCandidate{
+		{
+			Ref:          subject.Ref{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "stale"},
+			Verification: cloudinstall.ControllerStale,
+		},
+		{
+			Ref:          subject.Ref{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Namespace: "flux-system", Name: "radar"},
+			Verification: cloudinstall.ControllerVerified,
+		},
+	}
+	owner := verifiedController(candidates)
+	if owner == nil || owner.Ref.Name != "radar" {
+		t.Fatalf("owner = %+v, want the verified HelmRelease", owner)
+	}
+	if got := wizardMethodFor(owner.Ref); got != "flux" {
+		t.Fatalf("method = %q, want flux — the stale Argo ref must not pick the tab", got)
+	}
+	if verifiedController(candidates[:1]) != nil {
+		t.Fatal("a stale-only candidate list must not yield an owner")
 	}
 }
