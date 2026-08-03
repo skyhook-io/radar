@@ -20,6 +20,9 @@ func TestWizardInstallURLCarriesTheRealTarget(t *testing.T) {
 	if q.Get("ns") != "observability" || q.Get("release") != "prod" || q.Get("existing") != "1" {
 		t.Fatalf("query = %v", q)
 	}
+	if q.Get("utm_content") != "wizard-deeplink" {
+		t.Fatalf("deep link missing lane marker: %v", q)
+	}
 	if u.Host != "app.test.example" || u.Path != "/install" {
 		t.Fatalf("url = %q", got)
 	}
@@ -61,8 +64,12 @@ func TestInspectSelfInstallDegradesWithoutIdentity(t *testing.T) {
 		if self.Ownership != "unknown" || self.Namespace != "" || self.Release != "" {
 			t.Fatalf("ns=%q deployment=%q → self = %+v", tc.ns, tc.deployment, self)
 		}
-		if self.WizardURL != "https://app.test.example/install" {
-			t.Fatalf("wizard url = %q", self.WizardURL)
+		u, err := url.Parse(self.WizardURL)
+		if err != nil || u.Host != "app.test.example" || u.Path != "/install" {
+			t.Fatalf("wizard url = %q (%v)", self.WizardURL, err)
+		}
+		if u.Query().Get("utm_content") != "wizard-generic" {
+			t.Fatalf("generic wizard link missing lane marker: %q", self.WizardURL)
 		}
 	}
 }

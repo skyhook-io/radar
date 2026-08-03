@@ -1,6 +1,8 @@
 package settings
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log"
@@ -49,6 +51,12 @@ type Settings struct {
 	// cluster-scoped: a registry is where your charts live, independent of which
 	// cluster they're deployed to.
 	HelmOCISources []string `json:"helmOciSources,omitempty"`
+	// InstallID is a random identifier minted on first use. It exists solely
+	// so staged feature rollouts can bucket this installation deterministically
+	// (same install → same verdict across restarts). It is never transmitted
+	// anywhere — Radar makes no network calls with it, and nothing derives it
+	// from the machine or the user.
+	InstallID string `json:"installId,omitempty"`
 }
 
 // mu serializes Load-mutate-Save cycles to prevent concurrent PUTs from
@@ -129,4 +137,30 @@ func Update(mutate func(*Settings)) (Settings, error) {
 	s := Load()
 	mutate(&s)
 	return s, Save(s)
+}
+
+// InstallID returns this installation's stable rollout identifier, minting
+// and persisting one on first use. Returns "" when settings cannot be
+// persisted (no home directory, read-only filesystem) — a caller gating a
+// partial rollout must treat that as out-of-cohort rather than re-rolling a
+// fresh identity every start.
+func InstallID() string {
+	mu.Lock()
+	defer mu.Unlock()
+	s, err := LoadChecked()
+	if err != nil {
+		return ""
+	}
+	if s.InstallID != "" {
+		return s.InstallID
+	}
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return ""
+	}
+	s.InstallID = hex.EncodeToString(raw)
+	if err := Save(s); err != nil {
+		return ""
+	}
+	return s.InstallID
 }

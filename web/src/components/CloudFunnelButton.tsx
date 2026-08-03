@@ -59,7 +59,10 @@ export function CloudFunnelButton() {
   const capabilities = useCapabilities()
   const lane = capabilities.data?.cloudConnect?.lane ?? 'wizard'
   const appUrl = capabilities.data?.cloudConnect?.appUrl || FALLBACK_APP_URL
-  const signupUrl = `${appUrl}/signup${SIGNUP_QUERY}`
+  // utm_content distinguishes the lane that opened the Hub — measured Hub-side
+  // only when the user actually navigates there; Radar transmits nothing.
+  const signupUrlFor = (content: string) => `${appUrl}/signup${SIGNUP_QUERY}&utm_content=${content}`
+  const signupUrl = signupUrlFor('funnel-cta')
 
   // In-cluster Radar can't install its own connection, but it knows exactly
   // which install it is — so the wizard link can carry the real target, and a
@@ -196,7 +199,7 @@ export function CloudFunnelButton() {
             <CloudConnectFlow
               status={flowForView}
               blocked={blocked}
-              signupUrl={signupUrl}
+              signupUrl={signupUrlFor('flow-escape')}
               onStatus={applyStatus}
               onExit={exitFlow}
             />
@@ -209,6 +212,7 @@ export function CloudFunnelButton() {
             <ModalFooter
               lane={lane}
               signupUrl={signupUrl}
+              driverEscapeUrl={signupUrlFor('driver-escape')}
               self={inCluster ? self.data : undefined}
               // Also covers the capabilities query: until it resolves, lane
               // defaults to wizard and Radar does not yet know it is
@@ -271,6 +275,7 @@ function Faces() {
 function ModalFooter({
   lane,
   signupUrl,
+  driverEscapeUrl,
   self,
   selfLoading,
   onConnect,
@@ -278,6 +283,10 @@ function ModalFooter({
 }: {
   lane: 'driver' | 'wizard'
   signupUrl: string
+  // The driver branch's "start in the browser" link — same destination as
+  // signupUrl, distinct utm_content so the Hub can tell an escape from an
+  // in-product flow apart from a pitch CTA click.
+  driverEscapeUrl: string
   // Present only in-cluster: what this Radar knows about its own install.
   self?: CloudConnectSelf
   // True while in-cluster self-classification is still in flight.
@@ -332,7 +341,7 @@ function ModalFooter({
               Connect this cluster
             </button>
             <a
-              href={signupUrl}
+              href={driverEscapeUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="text-[12.5px] text-theme-text-secondary hover:text-theme-text-primary underline underline-offset-2 transition-colors"

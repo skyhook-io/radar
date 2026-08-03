@@ -42,6 +42,14 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	// The Cloud-funnel rollout gate mints an install ID in ~/.radar on first
+	// use; redirect HOME so no test run touches the developer's real settings.
+	tmpHome, err := os.MkdirTemp("", "radar-server-test-home")
+	if err == nil {
+		os.Setenv("HOME", tmpHome)
+		os.Setenv("USERPROFILE", tmpHome)
+	}
+
 	replicas := int32(1)
 	brokenReplicas := int32(3)
 
@@ -361,6 +369,9 @@ func TestMain(m *testing.M) {
 	srv.Stop()
 	timeline.ResetStore()
 	k8s.ResetTestState()
+	if tmpHome != "" {
+		os.RemoveAll(tmpHome)
+	}
 
 	os.Exit(code)
 }

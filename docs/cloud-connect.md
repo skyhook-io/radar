@@ -196,6 +196,38 @@ global flag cannot reach them. A self-signed pilot must use the Hub wizard,
 which generates a command the operator can edit. Wiring the option through both
 installers is a follow-up.
 
+## Staged rollout
+
+The funnel ships behind a compiled-in percentage
+(`cloudFunnelRolloutPercent` in `internal/server/cloud_funnel_rollout.go`,
+starting at 10) ramped by releases and deleted at 100. There is deliberately
+no remote flag service: Radar makes no network calls it doesn't announce, and
+a rollout gate is not a reason to start.
+
+- **Bucketing** hashes a random install ID persisted in
+  `~/.radar/settings.json` — minted locally, never transmitted. Same install →
+  same verdict across restarts; raising the percentage only ever adds
+  installs (monotonic, pinned by test).
+- **Out-of-cohort** means `capabilities.cloudConnect` is absent — the same
+  hiding mechanism as an already-connected cluster. Nothing else changes; the
+  install endpoints keep their own gating.
+- **`RADAR_CLOUD_FUNNEL=on|off`** overrides in either direction: force-on for
+  demos, docs, or opting a friendly cluster in early (set it via the chart's
+  env for in-cluster installs); force-off to opt out permanently.
+- **In-cluster pods are excluded from the ramp** (they join at 100): without
+  durable storage the bucket would re-roll every restart and the funnel would
+  flicker. The driver lane is local-only anyway, so the ramp cohort is the
+  population whose feedback matters most.
+- **Emergency brake, no release needed:** the Hub refusing
+  `POST /api/connect/requests` stops the risky half (device flow +
+  provisioning) for every version in the field; the funnel degrades to an
+  error card.
+- **Measurement is Hub-side only.** Funnel-opened URLs carry
+  `utm_source=radar-oss&utm_medium=app&utm_campaign=cloud-modal` plus a
+  per-lane `utm_content` (`funnel-cta`, `driver-escape`, `flow-escape`,
+  `wizard-deeplink`, `wizard-generic`) — the Hub sees them only when the user
+  actually navigates there.
+
 ## Related
 
 - `cmd/explorer/cloud_cmd.go` — the CLI driver (`radar cloud install|status|connect`).

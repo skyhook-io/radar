@@ -923,6 +923,9 @@ func (s *Server) cloudConnectCapability() *k8s.CloudConnectCapability {
 	if cloudMode() || s.cloudConnectCfg.CloudTunnelConfigured {
 		return nil
 	}
+	if !cloudFunnelInCohort() {
+		return nil
+	}
 	lane := "wizard"
 	if s.cloudConnectDriverEnabled() {
 		lane = "driver"

@@ -573,6 +573,7 @@ func TestCloudInstallEndpointGating(t *testing.T) {
 	})
 
 	t.Run("wizard lane capability when driver disabled", func(t *testing.T) {
+		t.Setenv("RADAR_CLOUD_FUNNEL", "on")
 		srv := newSrv("127.0.0.1")
 		srv.authConfig.Mode = "proxy"
 		cap := srv.cloudConnectCapability()
@@ -592,10 +593,19 @@ func TestCloudInstallEndpointGating(t *testing.T) {
 	})
 
 	t.Run("driver lane capability on loopback", func(t *testing.T) {
+		t.Setenv("RADAR_CLOUD_FUNNEL", "on")
 		srv := newSrv("127.0.0.1")
 		cap := srv.cloudConnectCapability()
 		if cap.Lane != "driver" {
 			t.Fatalf("capability = %+v", cap)
+		}
+	})
+
+	t.Run("out-of-cohort rollout hides the capability", func(t *testing.T) {
+		t.Setenv("RADAR_CLOUD_FUNNEL", "off")
+		srv := newSrv("127.0.0.1")
+		if cap := srv.cloudConnectCapability(); cap != nil {
+			t.Fatalf("capability = %+v, want nil during staged rollout opt-out", cap)
 		}
 	})
 

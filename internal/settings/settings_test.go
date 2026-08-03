@@ -134,3 +134,28 @@ func TestSaveCreatesDirectory(t *testing.T) {
 		t.Errorf("settings.json should exist: %v", err)
 	}
 }
+
+func TestInstallIDMintsOnceAndPersists(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+
+	id := InstallID()
+	if id == "" {
+		t.Fatal("InstallID returned empty with a writable home")
+	}
+	if InstallID() != id {
+		t.Fatal("InstallID is not stable across calls")
+	}
+	// Persisted: a fresh load sees the same identity, and it round-trips
+	// alongside other settings mutations.
+	if s := Load(); s.InstallID != id {
+		t.Fatalf("persisted installId = %q, want %q", s.InstallID, id)
+	}
+	if _, err := Update(func(s *Settings) { s.Theme = "light" }); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if InstallID() != id {
+		t.Fatal("unrelated settings update lost the install ID")
+	}
+}
