@@ -110,6 +110,12 @@ jobs:
 
       - name: Install Helm
         uses: azure/setup-helm@v5
+        with:
+          # Pinned to Helm 3: unpinned runners started resolving Helm 4, whose
+          # plugin layout breaks helm-unittest (fork/exec untt: no such file).
+          # Green/red alternated by runner cache. Unpin deliberately, with a
+          # helm-unittest release that supports Helm 4.
+          version: v3.19.0
 
       - name: Lint
         run: helm lint deploy/helm/radar
@@ -167,6 +173,7 @@ jobs:
         uses: helmfile/helmfile-action@v2.2.0
         with:
           helmfile-auto-init: 'true'
+          helm-version: v3.19.0
           helm-plugins: >
             https://github.com/helm-unittest/helm-unittest@v1.1.0
 
