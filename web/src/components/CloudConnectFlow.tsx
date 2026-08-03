@@ -529,8 +529,11 @@ function useDismiss(status: CloudInstallStatus, onStatus: (st: CloudInstallStatu
       // 410: the flow is already gone — another tab dismissed it, or the
       // server restarted. Nothing is left to dismiss, so exiting IS the
       // requested outcome; erroring would leave a card whose only button
-      // fails forever.
+      // fails forever. Push idle into the shared status too (the same shape
+      // the success path receives from the server): terminal states are not
+      // polled, so a cached one would re-attach this dead card on reopen.
       if (err instanceof ApiError && err.status === 410) {
+        onStatus({ state: 'idle' })
         onExit()
         return
       }
