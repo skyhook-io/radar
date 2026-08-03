@@ -234,17 +234,46 @@ func TestFindContainerCompletionSplitForObject(t *testing.T) {
 		}
 	})
 
-	t.Run("suspended subjects are quiet", func(t *testing.T) {
+	t.Run("suspended Job is quiet", func(t *testing.T) {
+		suspended := true
+		fixture := newContainerCompletionSplitFixture(now, 1)
+		fixture.jobs[0].Spec.Suspend = &suspended
+		cache := containerCompletionSplitTestCache(t, fixture)
+		if shape := FindContainerCompletionSplitForObject(cache, fixture.jobs[0], now); shape != nil {
+			t.Fatalf("suspended Job produced an observation: %+v", shape)
+		}
+	})
+
+	t.Run("suspended CronJob still exposes an active child", func(t *testing.T) {
 		suspended := true
 		fixture := newContainerCompletionSplitFixture(now, 1)
 		fixture.cronJob.Spec.Suspend = &suspended
-		fixture.jobs[0].Spec.Suspend = &suspended
+		cache := containerCompletionSplitTestCache(t, fixture)
+		if shape := FindContainerCompletionSplitForObject(cache, fixture.cronJob, now); shape == nil {
+			t.Fatal("suspended CronJob hid its active child observation")
+		}
+	})
+
+	t.Run("terminating Job and Pod are quiet", func(t *testing.T) {
+		fixture := newContainerCompletionSplitFixture(now, 1)
+		deletedAt := metav1.NewTime(now.Add(-time.Minute))
+		fixture.jobs[0].DeletionTimestamp = &deletedAt
 		cache := containerCompletionSplitTestCache(t, fixture)
 		if shape := FindContainerCompletionSplitForObject(cache, fixture.cronJob, now); shape != nil {
-			t.Fatalf("suspended CronJob produced an observation: %+v", shape)
+			t.Fatalf("CronJob accepted a terminating Job: %+v", shape)
 		}
 		if shape := FindContainerCompletionSplitForObject(cache, fixture.jobs[0], now); shape != nil {
-			t.Fatalf("suspended Job produced an observation: %+v", shape)
+			t.Fatalf("terminating Job produced an observation: %+v", shape)
+		}
+
+		fixture = newContainerCompletionSplitFixture(now, 1)
+		fixture.pods[0].DeletionTimestamp = &deletedAt
+		cache = containerCompletionSplitTestCache(t, fixture)
+		if shape := FindContainerCompletionSplitForObject(cache, fixture.cronJob, now); shape != nil {
+			t.Fatalf("CronJob accepted a terminating Pod: %+v", shape)
+		}
+		if shape := FindContainerCompletionSplitForObject(cache, fixture.jobs[0], now); shape != nil {
+			t.Fatalf("Job accepted a terminating Pod: %+v", shape)
 		}
 	})
 

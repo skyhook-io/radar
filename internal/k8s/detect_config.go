@@ -60,7 +60,7 @@ func FindContainerCompletionSplitForObject(cache *ResourceCache, obj runtime.Obj
 
 	switch subject := obj.(type) {
 	case *batchv1.CronJob:
-		if subject == nil || cache.Jobs() == nil || subject.Spec.Suspend != nil && *subject.Spec.Suspend {
+		if subject == nil || cache.Jobs() == nil {
 			return nil
 		}
 		jobs, err := cache.Jobs().Jobs(subject.Namespace).List(labels.Everything())
@@ -69,6 +69,9 @@ func FindContainerCompletionSplitForObject(cache *ResourceCache, obj runtime.Obj
 		}
 		activeJobs = make(map[string]*batchv1.Job)
 		for _, job := range jobs {
+			if !job.DeletionTimestamp.IsZero() {
+				continue
+			}
 			controller := metav1.GetControllerOf(job)
 			if controller == nil || controller.Kind != "CronJob" || controller.Name != subject.Name || controller.UID != subject.UID {
 				continue
@@ -83,7 +86,7 @@ func FindContainerCompletionSplitForObject(cache *ResourceCache, obj runtime.Obj
 		namespace = subject.Namespace
 
 	case *batchv1.Job:
-		if subject == nil || subject.Status.Active < 1 ||
+		if subject == nil || !subject.DeletionTimestamp.IsZero() || subject.Status.Active < 1 ||
 			subject.Spec.Suspend != nil && *subject.Spec.Suspend {
 			return nil
 		}
@@ -122,7 +125,7 @@ type containerCompletionSplitEvidence struct {
 func findContainerCompletionSplitEvidence(pods []*corev1.Pod, activeJobs map[string]*batchv1.Job, now time.Time) (containerCompletionSplitEvidence, bool) {
 	var best containerCompletionSplitEvidence
 	for _, pod := range pods {
-		if pod.Status.Phase == corev1.PodSucceeded {
+		if !pod.DeletionTimestamp.IsZero() || pod.Status.Phase == corev1.PodSucceeded {
 			continue
 		}
 		controller := metav1.GetControllerOf(pod)
