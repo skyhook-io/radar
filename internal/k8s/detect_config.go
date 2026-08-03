@@ -183,9 +183,6 @@ func regularContainerCompletionSplit(statuses []corev1.ContainerStatus, now time
 				continue
 			}
 			shapeStartedAt := terminated.FinishedAt.Time
-			if now.Sub(shapeStartedAt) < containerCompletionSplitMinimumAge {
-				continue
-			}
 			candidate := containerCompletionSplitEvidence{
 				exitedContainer:  exited.Name,
 				runningContainer: running.Name,
@@ -195,6 +192,9 @@ func regularContainerCompletionSplit(statuses []corev1.ContainerStatus, now time
 				best = candidate
 			}
 		}
+	}
+	if best.startedAt.IsZero() || now.Sub(best.startedAt) < containerCompletionSplitMinimumAge {
+		return "", "", time.Time{}, false
 	}
 	return best.exitedContainer, best.runningContainer, best.startedAt, !best.startedAt.IsZero()
 }

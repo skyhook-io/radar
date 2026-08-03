@@ -318,6 +318,19 @@ func TestFindContainerCompletionSplitForObject(t *testing.T) {
 		}
 	})
 
+	t.Run("recent successful exit keeps an older split quiet", func(t *testing.T) {
+		fixture := newContainerCompletionSplitFixture(now, 1)
+		fixture.pods[0].Status.ContainerStatuses = []corev1.ContainerStatus{
+			containerCompletionSplitTerminatedStatus("fetch-config", 0, now.Add(-10*time.Minute)),
+			containerCompletionSplitTerminatedStatus("worker", 0, now.Add(-time.Minute)),
+			containerCompletionSplitRunningStatus("log-agent", now.Add(-time.Hour)),
+		}
+		cache := containerCompletionSplitTestCache(t, fixture)
+		if shape := FindContainerCompletionSplitForObject(cache, fixture.jobs[0], now); shape != nil {
+			t.Fatalf("older exit bypassed grace period for the latest split: %+v", shape)
+		}
+	})
+
 	t.Run("running container restart does not reset the split", func(t *testing.T) {
 		fixture := newContainerCompletionSplitFixture(now, 1)
 		fixture.pods[0].Status.ContainerStatuses = []corev1.ContainerStatus{
