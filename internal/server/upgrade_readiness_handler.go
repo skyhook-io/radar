@@ -48,6 +48,12 @@ func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusServiceUnavailable, "Cache not initialized")
 		return
 	}
+	currentVersion := k8s.GetServerVersion()
+	targetVersion := r.URL.Query().Get("target")
+	if err := upgradereadiness.ValidateTarget(currentVersion, targetVersion); err != nil {
+		s.writeUpgradeReadinessError(w, err)
+		return
+	}
 
 	namespaces := s.upgradeReadinessNamespaces(r)
 	noAccess := noNamespaceAccess(namespaces)
@@ -101,8 +107,8 @@ func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) 
 	}
 	platform, _ := k8s.GetClusterPlatform(r.Context())
 	results, err := audit.RunUpgradeReadinessFromCache(scanInput, namespaces, audit.UpgradeReadinessOptions{
-		CurrentVersion:                      k8s.GetServerVersion(),
-		TargetVersion:                       r.URL.Query().Get("target"),
+		CurrentVersion:                      currentVersion,
+		TargetVersion:                       targetVersion,
 		Platform:                            platform,
 		ManifestResources:                   manifestResources,
 		HelmUnavailableNamespaces:           helmUnavailableNamespaces,
@@ -127,14 +133,7 @@ func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) 
 		NodeRuntimeEvidence:                 nodeRuntimeEvidence,
 	})
 	if err != nil {
-		switch {
-		case errors.Is(err, upgradereadiness.ErrInvalidTargetVersion), errors.Is(err, upgradereadiness.ErrNonForwardTarget):
-			s.writeError(w, http.StatusBadRequest, err.Error())
-		case errors.Is(err, upgradereadiness.ErrInvalidCurrentVersion):
-			s.writeError(w, http.StatusServiceUnavailable, "Unable to determine the cluster Kubernetes version")
-		default:
-			s.writeError(w, http.StatusInternalServerError, "Upgrade impact scan failed")
-		}
+		s.writeUpgradeReadinessError(w, err)
 		return
 	}
 	if noAccess {
@@ -143,6 +142,17 @@ func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) 
 	}
 
 	s.writeJSON(w, results)
+}
+
+func (s *Server) writeUpgradeReadinessError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, upgradereadiness.ErrInvalidTargetVersion), errors.Is(err, upgradereadiness.ErrNonForwardTarget):
+		s.writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, upgradereadiness.ErrInvalidCurrentVersion):
+		s.writeError(w, http.StatusServiceUnavailable, "Unable to determine the cluster Kubernetes version")
+	default:
+		s.writeError(w, http.StatusInternalServerError, "Upgrade impact scan failed")
+	}
 }
 
 func sameNamespaceScope(a, b []string) bool {

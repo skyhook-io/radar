@@ -99,8 +99,8 @@ func TestNodeCompatibilityEvidence(t *testing.T) {
 	}
 	result, _ = Scan(input, "1.35", "1.36")
 	runtime := checkByID(t, result, "container-runtime-support")
-	if runtime.Status != CheckPassed || runtime.Caveat != "" || runtime.Inspected != 0 {
-		t.Fatalf("Windows node without Linux kubelet metrics = %+v, want an evidence-neutral pass", runtime)
+	if runtime.Status != CheckNotApplicable || runtime.Caveat != "" || runtime.Inspected != 0 {
+		t.Fatalf("Windows-only runtime check = %+v, want not applicable", runtime)
 	}
 }
 

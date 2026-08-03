@@ -29,19 +29,9 @@ var (
 )
 
 func Scan(input *Input, currentVersion, targetVersion string) (*ScanResults, error) {
-	current, err := parseMinor(currentVersion)
+	current, target, err := validateUpgradeVersions(currentVersion, targetVersion)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %q", ErrInvalidCurrentVersion, currentVersion)
-	}
-	if targetVersion == "" {
-		targetVersion = current.AddMinor(1).String()
-	}
-	target, err := parseTargetMinor(targetVersion)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %q", ErrInvalidTargetVersion, targetVersion)
-	}
-	if !target.GreaterThan(current) {
-		return nil, ErrNonForwardTarget
+		return nil, err
 	}
 	if input == nil {
 		input = &Input{}
@@ -244,9 +234,18 @@ func scanUpgradePath(current, target *utilversion.Version) Check {
 		}}
 		return check
 	}
-	path := make([]string, 0, target.Minor()-current.Minor()+1)
-	for minor := current.Minor(); minor <= target.Minor(); minor++ {
-		path = append(path, fmt.Sprintf("%d.%d", current.Major(), minor))
+	const maxPathEntries = 10
+	steps := target.Minor() - current.Minor() + 1
+	path := make([]string, 0, maxPathEntries)
+	if steps <= maxPathEntries {
+		for minor := current.Minor(); minor <= target.Minor(); minor++ {
+			path = append(path, fmt.Sprintf("%d.%d", current.Major(), minor))
+		}
+	} else {
+		for minor := current.Minor(); len(path) < maxPathEntries-2; minor++ {
+			path = append(path, fmt.Sprintf("%d.%d", current.Major(), minor))
+		}
+		path = append(path, "…", minorString(target))
 	}
 	sequence := strings.Join(path, " → ")
 	check.Summary = "This target skips required Kubernetes minor-version upgrades."
@@ -1206,7 +1205,31 @@ func unavailableKinds(input *Input) []string {
 	return unavailable
 }
 
-var targetMinorPattern = regexp.MustCompile(`^v?\d+\.\d+$`)
+var targetMinorPattern = regexp.MustCompile(`^v?\d{1,4}\.\d{1,4}$`)
+
+// ValidateTarget validates the requested version before evidence collection begins.
+func ValidateTarget(currentVersion, targetVersion string) error {
+	_, _, err := validateUpgradeVersions(currentVersion, targetVersion)
+	return err
+}
+
+func validateUpgradeVersions(currentVersion, targetVersion string) (*utilversion.Version, *utilversion.Version, error) {
+	current, err := parseMinor(currentVersion)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %q", ErrInvalidCurrentVersion, currentVersion)
+	}
+	if targetVersion == "" {
+		targetVersion = current.AddMinor(1).String()
+	}
+	target, err := parseTargetMinor(targetVersion)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %q", ErrInvalidTargetVersion, targetVersion)
+	}
+	if !target.GreaterThan(current) {
+		return nil, nil, ErrNonForwardTarget
+	}
+	return current, target, nil
+}
 
 func parseTargetMinor(raw string) (*utilversion.Version, error) {
 	raw = strings.TrimSpace(raw)

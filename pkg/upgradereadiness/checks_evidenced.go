@@ -26,16 +26,7 @@ func scanNodeCgroupCompatibility(input *Input) Check {
 		check.Status, check.Summary = CheckUnknown, "Nodes were unavailable; Radar could not inspect cgroup compatibility."
 		return check
 	}
-	nonNilNodes, linuxNodes := 0, 0
-	for _, node := range input.Nodes {
-		if node == nil {
-			continue
-		}
-		nonNilNodes++
-		if !strings.EqualFold(node.Status.NodeInfo.OperatingSystem, "windows") {
-			linuxNodes++
-		}
-	}
+	nonNilNodes, linuxNodes := nodeOSCounts(input.Nodes)
 	if nonNilNodes == 0 {
 		check.Status, check.Summary = CheckUnknown, "Nodes were unavailable; Radar could not inspect cgroup compatibility."
 		return check
@@ -82,10 +73,32 @@ func scanNodeCgroupCompatibility(input *Input) Check {
 	return check
 }
 
+func nodeOSCounts(nodes []*corev1.Node) (nonNil, linux int) {
+	for _, node := range nodes {
+		if node == nil {
+			continue
+		}
+		nonNil++
+		if !strings.EqualFold(node.Status.NodeInfo.OperatingSystem, "windows") {
+			linux++
+		}
+	}
+	return nonNil, linux
+}
+
 func scanContainerRuntimeSupport(input *Input, target *utilversion.Version) Check {
 	check := Check{ID: "container-runtime-support", Category: "Node compatibility", Title: "Container runtime support", Status: CheckPassed, Summary: "All inspected node runtimes are supported by the target version.", Scope: "Kubelet CRI support metric and Node status", AppliesFrom: "1.36", References: append([]Reference(nil), runtimeReferences...)}
 	if len(input.Nodes) == 0 {
 		check.Status, check.Summary = CheckUnknown, "Nodes were unavailable; Radar could not inspect container runtime versions."
+		return check
+	}
+	nonNilNodes, linuxNodes := nodeOSCounts(input.Nodes)
+	if nonNilNodes == 0 {
+		check.Status, check.Summary = CheckUnknown, "Nodes were unavailable; Radar could not inspect container runtime versions."
+		return check
+	}
+	if linuxNodes == 0 {
+		check.Status, check.Summary = CheckNotApplicable, "Container runtime support for this upgrade does not apply to Windows nodes."
 		return check
 	}
 	metrics := make(map[string]NodeRuntimeEvidence, len(input.NodeRuntimeEvidence))

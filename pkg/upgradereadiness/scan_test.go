@@ -13,6 +13,7 @@ import (
 	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	utilversion "k8s.io/apimachinery/pkg/util/version"
 
 	bp "github.com/skyhook-io/radar/pkg/audit"
 )
@@ -625,10 +626,21 @@ func TestScanValidatesVersions(t *testing.T) {
 		current string
 		target  string
 		want    error
-	}{{"nope", "1.36", ErrInvalidCurrentVersion}, {"1.35", "1.36.1", ErrInvalidTargetVersion}, {"1.35", "1.35", ErrNonForwardTarget}} {
+	}{{"nope", "1.36", ErrInvalidCurrentVersion}, {"1.35", "1.36.1", ErrInvalidTargetVersion}, {"1.35", "1.99999", ErrInvalidTargetVersion}, {"1.35", "1.35", ErrNonForwardTarget}} {
 		_, err := Scan(completeInput(), tc.current, tc.target)
 		if !errors.Is(err, tc.want) {
 			t.Fatalf("Scan(%q, %q) error = %v, want %v", tc.current, tc.target, err, tc.want)
 		}
+	}
+}
+
+func TestScanUpgradePathCapsRenderedSequence(t *testing.T) {
+	check := scanUpgradePath(utilversion.MustParseGeneric("1.34"), utilversion.MustParseGeneric("1.9999"))
+	if len(check.Findings) != 1 {
+		t.Fatalf("findings = %+v", check.Findings)
+	}
+	sequence := check.Findings[0].Evidence.Detail
+	if !strings.Contains(sequence, "…") || !strings.HasSuffix(sequence, "1.9999") || strings.Count(sequence, "→") != 9 || len(sequence) > 100 {
+		t.Fatalf("uncapped upgrade sequence = %q", sequence)
 	}
 }
