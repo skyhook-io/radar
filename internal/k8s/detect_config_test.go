@@ -303,6 +303,19 @@ func TestFindContainerCompletionSplitForObject(t *testing.T) {
 		}
 	})
 
+	t.Run("running container restart does not reset the split", func(t *testing.T) {
+		fixture := newContainerCompletionSplitFixture(now, 1)
+		fixture.pods[0].Status.ContainerStatuses = []corev1.ContainerStatus{
+			containerCompletionSplitTerminatedStatus("archiver", 0, now.Add(-10*time.Minute)),
+			containerCompletionSplitRunningStatus("log-agent", now.Add(-time.Minute)),
+		}
+		cache := containerCompletionSplitTestCache(t, fixture)
+		shape := FindContainerCompletionSplitForObject(cache, fixture.jobs[0], now)
+		if shape == nil || shape.SinceSeconds != int64((10*time.Minute).Seconds()) {
+			t.Fatalf("running-container restart reset the completion clock: %+v", shape)
+		}
+	})
+
 	t.Run("failed container exit is quiet", func(t *testing.T) {
 		fixture := newContainerCompletionSplitFixture(now, 1)
 		fixture.pods[0].Status.ContainerStatuses[0] = containerCompletionSplitTerminatedStatus("archiver", 1, now.Add(-10*time.Minute))

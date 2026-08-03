@@ -171,13 +171,10 @@ func regularContainerCompletionSplit(statuses []corev1.ContainerStatus, now time
 			continue
 		}
 		for _, running := range statuses {
-			if running.Name == exited.Name || running.State.Running == nil || running.State.Running.StartedAt.IsZero() {
+			if running.Name == exited.Name || running.State.Running == nil {
 				continue
 			}
 			shapeStartedAt := terminated.FinishedAt.Time
-			if running.State.Running.StartedAt.Time.After(shapeStartedAt) {
-				shapeStartedAt = running.State.Running.StartedAt.Time
-			}
 			if now.Sub(shapeStartedAt) < containerCompletionSplitMinimumAge {
 				continue
 			}
