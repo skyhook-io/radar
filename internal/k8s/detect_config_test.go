@@ -280,6 +280,18 @@ func TestFindContainerCompletionSplitForObject(t *testing.T) {
 		}
 	})
 
+	t.Run("failed Pod is quiet", func(t *testing.T) {
+		fixture := newContainerCompletionSplitFixture(now, 1)
+		fixture.pods[0].Status.Phase = corev1.PodFailed
+		cache := containerCompletionSplitTestCache(t, fixture)
+		if shape := FindContainerCompletionSplitForObject(cache, fixture.cronJob, now); shape != nil {
+			t.Fatalf("CronJob accepted a failed Pod: %+v", shape)
+		}
+		if shape := FindContainerCompletionSplitForObject(cache, fixture.jobs[0], now); shape != nil {
+			t.Fatalf("Job accepted a failed Pod: %+v", shape)
+		}
+	})
+
 	t.Run("native restartable init sidecar is excluded", func(t *testing.T) {
 		fixture := newContainerCompletionSplitFixture(now, 1)
 		fixture.pods[0].Status.ContainerStatuses = []corev1.ContainerStatus{
@@ -330,6 +342,21 @@ func TestFindContainerCompletionSplitForObject(t *testing.T) {
 		shape := FindContainerCompletionSplitForObject(cache, fixture.jobs[0], now)
 		if shape == nil || shape.ExitedContainer != "worker" || shape.SinceSeconds != int64((10*time.Minute).Seconds()) {
 			t.Fatalf("split was not anchored to the latest successful exit: %+v", shape)
+		}
+	})
+
+	t.Run("equal completion times use the container-name tie break", func(t *testing.T) {
+		fixture := newContainerCompletionSplitFixture(now, 1)
+		finishedAt := now.Add(-10 * time.Minute)
+		fixture.pods[0].Status.ContainerStatuses = []corev1.ContainerStatus{
+			containerCompletionSplitTerminatedStatus("z-worker", 0, finishedAt),
+			containerCompletionSplitTerminatedStatus("a-worker", 0, finishedAt),
+			containerCompletionSplitRunningStatus("log-agent", now.Add(-time.Hour)),
+		}
+		cache := containerCompletionSplitTestCache(t, fixture)
+		shape := FindContainerCompletionSplitForObject(cache, fixture.jobs[0], now)
+		if shape == nil || shape.ExitedContainer != "a-worker" {
+			t.Fatalf("equal completion times were not deterministic: %+v", shape)
 		}
 	})
 
@@ -384,6 +411,21 @@ func TestFindContainerCompletionSplitEvidenceIsDeterministic(t *testing.T) {
 	}
 	if forward != reverse || forward.podName != fixture.pods[1].Name {
 		t.Fatalf("evidence changed with input order: forward=%+v reverse=%+v", forward, reverse)
+	}
+
+	for i := range fixture.pods {
+		fixture.pods[i].Status.ContainerStatuses[0] = containerCompletionSplitTerminatedStatus("archiver", 0, now.Add(-10*time.Minute))
+	}
+	forward, ok = findContainerCompletionSplitEvidence(fixture.pods, activeJobs, now)
+	if !ok {
+		t.Fatal("equal-time forward lookup found no evidence")
+	}
+	reverse, ok = findContainerCompletionSplitEvidence([]*corev1.Pod{fixture.pods[1], fixture.pods[0]}, activeJobs, now)
+	if !ok {
+		t.Fatal("equal-time reverse lookup found no evidence")
+	}
+	if forward != reverse || forward.podName != fixture.pods[0].Name {
+		t.Fatalf("equal-time evidence changed with input order: forward=%+v reverse=%+v", forward, reverse)
 	}
 }
 

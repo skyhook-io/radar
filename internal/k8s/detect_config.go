@@ -128,7 +128,7 @@ type containerCompletionSplitEvidence struct {
 func findContainerCompletionSplitEvidence(pods []*corev1.Pod, activeJobs map[string]*batchv1.Job, now time.Time) (containerCompletionSplitEvidence, bool) {
 	var best containerCompletionSplitEvidence
 	for _, pod := range pods {
-		if !pod.DeletionTimestamp.IsZero() || pod.Status.Phase == corev1.PodSucceeded {
+		if !pod.DeletionTimestamp.IsZero() || pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
 			continue
 		}
 		controller := metav1.GetControllerOf(pod)
