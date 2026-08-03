@@ -38,7 +38,7 @@ export function CloudConnectFlow({
         <div className="px-7 py-10 flex flex-col items-center gap-3 text-center">
           <Loader2 className="w-5 h-5 animate-spin text-emerald-600 dark:text-emerald-400" />
           <p className="text-[13px] text-theme-text-secondary">
-            Inspecting this cluster for an existing Radar installation…
+            Checking this cluster and preparing the install — this can take a moment on a slow link.
           </p>
         </div>
       )

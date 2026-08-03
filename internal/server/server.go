@@ -472,6 +472,15 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 		// Node drain — outside 60s timeout group (drain may need minutes for PDB backoff)
 		r.Post("/nodes/{name}/drain", s.handleDrainNode)
 
+		// Cloud Connect prepare/start — outside the 60s timeout group. prepare
+		// downloads and renders the chart and runs the exact-manifest
+		// preflight; start probes cluster metadata and creates the Hub
+		// request. Either can legitimately outlast 60s on a slow link, and
+		// being killed mid-flight is worse than waiting. Both carry their own
+		// bound (see cloudInstallHandlerTimeout).
+		r.Post("/cloud/install/prepare", s.handleCloudInstallPrepare)
+		r.Post("/cloud/install/start", s.handleCloudInstallStart)
+
 		// All other API routes get a 60-second timeout
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.Timeout(60 * time.Second))
@@ -502,9 +511,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/capacity/activity", s.handleCapacityActivity)
 
 			// In-product Cloud Connect driver lane; every handler re-checks
-			// the gate (local + no auth + no tunnel).
-			r.Post("/cloud/install/prepare", s.handleCloudInstallPrepare)
-			r.Post("/cloud/install/start", s.handleCloudInstallStart)
+			// the gate (local + no auth + no tunnel). prepare/start are
+			// registered above, outside the 60s timeout.
 			r.Get("/cloud/install/status", s.handleCloudInstallStatus)
 			r.Post("/cloud/install/cancel", s.handleCloudInstallCancel)
 			r.Post("/cloud/install/dismiss", s.handleCloudInstallDismiss)

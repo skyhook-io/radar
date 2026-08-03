@@ -82,6 +82,11 @@ const (
 const (
 	cloudInstallRequestTimeout  = 30 * time.Second
 	cloudTunnelConfirmationWait = 5 * time.Minute
+	// cloudInstallHandlerTimeout bounds prepare/start, which are registered
+	// outside the router's blanket 60s timeout because chart download plus
+	// preflight can legitimately exceed it. Generous enough for a slow link,
+	// finite so a wedged download cannot pin the single-flight slot forever.
+	cloudInstallHandlerTimeout = 5 * time.Minute
 )
 
 // preparedInstall is the slice of *cloudinstall.PreparedProvision the flow
@@ -800,7 +805,9 @@ func (s *Server) handleCloudInstallPrepare(w http.ResponseWriter, r *http.Reques
 	if !s.requireConnected(w) {
 		return
 	}
-	flow, blocked, err := s.cloudInstall.prepare(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), cloudInstallHandlerTimeout)
+	defer cancel()
+	flow, blocked, err := s.cloudInstall.prepare(ctx)
 	w.Header().Set("Cache-Control", "no-store")
 	switch {
 	case errors.Is(err, errFlowActive):
