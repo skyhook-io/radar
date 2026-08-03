@@ -1341,7 +1341,7 @@ export function EmptyState({
 }: {
   icon: ComponentType<{ className?: string }>;
   title: string;
-  detail: string;
+  detail: ReactNode;
   action?: ReactNode;
 }) {
   return (
@@ -1528,7 +1528,14 @@ export function integrationBlock(
         <EmptyState
           icon={Gauge}
           title="Capacity needs a newer Radar"
-          detail="This cluster's Radar predates the Capacity view (added in Radar v1.9.0). Upgrade the in-cluster Radar to enable it."
+          detail={
+            <>
+              This cluster&rsquo;s Radar predates the Capacity view (added in
+              Radar v1.9.0).
+              <br />
+              Upgrade the in-cluster Radar to enable it.
+            </>
+          }
         />
       );
     return (
