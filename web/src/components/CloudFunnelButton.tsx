@@ -89,7 +89,14 @@ export function CloudFunnelButton() {
       // started in another tab, or before this tab's status cache refreshed).
       // Attach to it rather than showing an error over a running install.
       const live = err instanceof ApiError && err.status === 409 ? (err.data as CloudInstallStatus | undefined) : undefined
-      if (live?.state) applyStatus(live)
+      if (live?.state) {
+        applyStatus(live)
+        return
+      }
+      // Anything else failed before a flow existed. Return to the pitch rather
+      // than leaving the flow view armed, where a later status change would
+      // pull the user into a screen they did not ask for.
+      exitFlow()
     },
     meta: { errorMessage: 'Could not inspect this cluster for Cloud connect' },
   })
