@@ -964,8 +964,10 @@ function AIUnavailableNotice() {
     <div className="rounded-md border border-theme-border bg-theme-elevated/50 p-3">
       <p className="text-sm font-medium text-theme-text-primary">No supported agent CLI found</p>
       <p className="mt-1 text-xs text-theme-text-tertiary">
-        Install <span className="text-theme-text-secondary">Claude Code</span> or{' '}
-        <span className="text-theme-text-secondary">Codex</span>, then restart Radar — this tab
+        Install <span className="text-theme-text-secondary">Claude Code</span>,{' '}
+        <span className="text-theme-text-secondary">Codex</span>, or{' '}
+        <span className="text-theme-text-secondary">Cursor</span> (
+        <span className="font-mono">cursor-agent</span>), then restart Radar — this tab
         will show the agent, model, and effort controls.
       </p>
     </div>

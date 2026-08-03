@@ -218,7 +218,7 @@ func (s *Server) handleDiagnoseConsent(w http.ResponseWriter, r *http.Request) {
 // writes the error) when unavailable.
 func (s *Server) aiReady(w http.ResponseWriter) bool {
 	if s.aiRuns == nil {
-		s.writeError(w, http.StatusNotImplemented, "no agent CLI available — install Claude Code or Codex to enable AI diagnosis")
+		s.writeError(w, http.StatusNotImplemented, "no agent CLI available — install Claude Code, Codex, or Cursor (cursor-agent) to enable AI diagnosis")
 		return false
 	}
 	return s.requireConnected(w)
