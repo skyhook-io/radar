@@ -30,7 +30,8 @@ moves to the surface that actually holds them (the terminal or the Hub).
 | 5 | local | none | **0.0.0.0** | any | **Driver lane, behind an explicit acknowledgement** — `apply`/`exec` are ungated on this listener too, so gating this harder would hold the weaker capability to a higher bar, but the approver may not be the operator and the binding outlives the request | modal button |
 | 6 | local | proxy/OIDC | any | any | Driver lane disabled (server's kubeconfig ≠ authenticated user; impersonated driver is future work) → wizard link | wizard / CLI |
 | 7a | in-cluster, native Helm | any | any | itself | **Wizard, deep-linked at the real target** (`/install?existing=1&ns=…&release=…`) plus the detected layout shown in-modal. The SA cannot self-grant impersonation RBAC and a successful upgrade restarts the pod serving this UI, so the install itself happens from the Hub | wizard |
-| 7b | in-cluster, GitOps-managed | any | any | itself | Names the owning controller and routes to `radar cloud install` — the wizard's imperative command would drift or be reverted | CLI |
+| 7b | in-cluster, GitOps **verified** (Argo Application / Flux HelmRelease or Kustomization) | any | any | itself | Names the owning controller and deep-links the wizard's matching tab (`&method=argocd\|flux`) for a values patch scoped to the real release — never an imperative command the controller would revert | wizard |
+| 7b-ii | in-cluster, GitOps **unverified** (suspected / unreadable / stale) | any | any | itself | Names what evidence it found, routes to `radar cloud install` — a patch aimed at a controller we could not confirm owns this release is the confidently-wrong answer | CLI |
 | 7c | in-cluster, ambiguous ownership | any | any | itself | Conflicting Helm/GitOps metadata — routes to `radar cloud install`, which refuses rather than guessing (same posture as `ClassifyInstallPlan`) | CLI |
 | 7d | in-cluster, undetectable | any | any | itself | Generic wizard link (SA can't read its own Deployment, or the downward-API identity is absent) | wizard |
 | 8 | in-cluster, chart-armed (future WS3) | — | — | itself | Zero-command hot-start (chart pre-provisions cloud RBAC + Secret write-back Role) — not built yet | (future) |
@@ -133,7 +134,10 @@ In-cluster (read-only, no Hub contact, never mutates):
   would deep-link an operator at someone else's release. The pod's own
   Deployment is matched by `MY_DEPLOYMENT_NAME` — "the only Radar-labelled
   Deployment in this namespace" is not proof it is the one serving the
-  request. Those downward-API vars ship on every install (they carry no RBAC
+  request. `wizardUrl` carries `method=helm|argocd|flux` derived from the
+  verified owning object, so the wizard opens on the tab that produces the
+  right artifact; its **absence** is what tells the modal to route to the CLI,
+  so that decision stays server-side. Those downward-API vars ship on every install (they carry no RBAC
   implication); whether Radar may patch itself is answered by a
   SelfSubjectAccessReview against the Role `rbac.selfUpgrade` creates — never
   by an env marker, which Hub's image-only self-upgrade would leave stale.

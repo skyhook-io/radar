@@ -316,13 +316,16 @@ function ModalFooter({
   onConnect: () => void
   onLater: () => void
 }) {
-  // Neither GitOps nor ambiguous ownership may receive the imperative
-  // deep link: one would be reverted, the other has conflicting management.
   const gitops = self?.ownership === 'gitops'
   const ambiguous = self?.ownership === 'ambiguous'
+  // The server decides who gets a link: it withholds wizardUrl whenever the
+  // handoff must inspect before it acts (ambiguous ownership, or GitOps
+  // evidence it could not verify). A GitOps install with a link goes to the
+  // wizard's Argo/Flux tab, which generates a values patch for the repo rather
+  // than an imperative command the controller would revert.
+  const cliOnly = (gitops || ambiguous) && !self?.wizardUrl
   // Until classification resolves we cannot know which lane applies, and a
-  // fast click would escape to signup before we could route a GitOps install
-  // to the CLI.
+  // fast click would escape to signup before we could route this install.
   const selfPending = selfLoading === true
   return (
     <div className="px-7 py-4 bg-theme-base border-t border-theme-border">
@@ -339,9 +342,19 @@ function ModalFooter({
             <>
               This Radar is managed by{' '}
               <b className="text-theme-text-primary">{self.controller || 'a GitOps controller'}</b>, so
-              connecting it is a values change in your repository — an imperative upgrade would be reverted.
-              Run <code className="font-mono text-[11px]">radar cloud install</code> from a machine with
-              kubectl to generate the exact snippet and token.
+              connecting it is a values change in your repository — an imperative upgrade would be reverted.{' '}
+              {cliOnly ? (
+                <>
+                  Radar found that evidence but couldn't confirm it against the live object, so run{' '}
+                  <code className="font-mono text-[11px]">radar cloud install</code> from a machine with
+                  kubectl — it inspects the release before generating anything.
+                </>
+              ) : (
+                <>
+                  The wizard generates the values patch for that controller, plus the one command that
+                  creates the token Secret — the token never goes into your repository.
+                </>
+              )}
             </>
           ) : (
             <>
@@ -374,7 +387,7 @@ function ModalFooter({
               or start in the browser
             </a>
           </>
-        ) : gitops || ambiguous ? null : (
+        ) : cliOnly ? null : (
           <a
             href={self?.wizardUrl || signupUrl}
             aria-disabled={selfPending}
@@ -383,7 +396,7 @@ function ModalFooter({
             onClick={(e) => { if (selfPending) e.preventDefault() }}
             className={`px-5 py-2 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[13.5px] font-bold shadow-[0_0_22px_rgba(16,185,129,0.35)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] hover:-translate-y-px transition-all ${selfPending ? 'opacity-60 pointer-events-none' : ''}`}
           >
-            {self?.ownership === 'helm' ? 'Connect this cluster' : 'Try Cloud free'}
+            {self?.ownership === 'helm' || gitops ? 'Connect this cluster' : 'Try Cloud free'}
           </a>
         )}
         <button onClick={onLater} className="text-[12.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors">

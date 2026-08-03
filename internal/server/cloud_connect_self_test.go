@@ -6,11 +6,13 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/skyhook-io/radar/pkg/subject"
 )
 
 func TestWizardInstallURLCarriesTheRealTarget(t *testing.T) {
 	srv := &Server{cloudConnectCfg: CloudConnectConfig{HubAppURL: "https://app.test.example"}}
-	got := srv.wizardInstallURL("observability", "prod")
+	got := srv.wizardInstallURL("observability", "prod", "flux")
 
 	u, err := url.Parse(got)
 	if err != nil {
@@ -19,6 +21,9 @@ func TestWizardInstallURLCarriesTheRealTarget(t *testing.T) {
 	q := u.Query()
 	if q.Get("ns") != "observability" || q.Get("release") != "prod" || q.Get("existing") != "1" {
 		t.Fatalf("query = %v", q)
+	}
+	if q.Get("method") != "flux" {
+		t.Fatalf("deep link did not select the owning tool's tab: %v", q)
 	}
 	if q.Get("utm_content") != "wizard-deeplink" {
 		t.Fatalf("deep link missing lane marker: %v", q)
@@ -32,7 +37,7 @@ func TestWizardInstallURLCarriesTheRealTarget(t *testing.T) {
 // forge extra query parameters in the wizard link.
 func TestWizardInstallURLEscapesTarget(t *testing.T) {
 	srv := &Server{cloudConnectCfg: CloudConnectConfig{HubAppURL: "https://app.test.example"}}
-	got := srv.wizardInstallURL("ns&existing=0", "rel#frag")
+	got := srv.wizardInstallURL("ns&existing=0", "rel#frag", "helm")
 
 	u, err := url.Parse(got)
 	if err != nil {
@@ -71,5 +76,30 @@ func TestInspectSelfInstallDegradesWithoutIdentity(t *testing.T) {
 		if u.Query().Get("utm_content") != "wizard-generic" {
 			t.Fatalf("generic wizard link missing lane marker: %q", self.WizardURL)
 		}
+	}
+}
+
+// Only a verified controller earns a deep link. Suspected, unreadable, and
+// stale all mean "GitOps evidence we could not confirm" — a values patch aimed
+// at a controller that may not own this release is exactly the confidently
+// wrong answer this endpoint exists to avoid.
+func TestWizardMethodOnlyForRecognizedControllers(t *testing.T) {
+	for _, tc := range []struct {
+		group, kind, want string
+	}{
+		{"argoproj.io", "Application", "argocd"},
+		{"helm.toolkit.fluxcd.io", "HelmRelease", "flux"},
+		{"kustomize.toolkit.fluxcd.io", "Kustomization", "flux"},
+		// Unrecognized owners get no tab, so the caller withholds the link
+		// rather than sending an operator to the wrong artifact.
+		{"acme.io", "Whatever", ""},
+		{"argoproj.io", "ApplicationSet", ""},
+	} {
+		t.Run(tc.group+"/"+tc.kind, func(t *testing.T) {
+			got := wizardMethodFor(subject.Ref{Group: tc.group, Kind: tc.kind})
+			if got != tc.want {
+				t.Fatalf("wizardMethodFor(%s/%s) = %q, want %q", tc.group, tc.kind, got, tc.want)
+			}
+		})
 	}
 }

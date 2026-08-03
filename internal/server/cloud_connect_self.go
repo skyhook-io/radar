@@ -21,6 +21,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/cloudinstall"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/subject"
 )
 
 // cloudConnectSelf describes the in-cluster Radar to the funnel modal so it can
@@ -35,8 +36,9 @@ type cloudConnectSelf struct {
 	// Controller names the GitOps object that owns this install, when one does.
 	Controller string `json:"controller,omitempty"`
 	// WizardURL deep-links the Hub's connect wizard with this install's real
-	// target, so it renders the existing-install command for the right release
-	// instead of guessing. Empty for GitOps (its command would drift).
+	// target, so it renders the existing-install artifact for the right release
+	// instead of guessing. Empty when the handoff must go through the CLI —
+	// the modal keys the CTA off its presence rather than re-deciding.
 	WizardURL string `json:"wizardUrl,omitempty"`
 }
 
@@ -109,7 +111,7 @@ func (s *Server) inspectSelfInstall(ctx context.Context, r *http.Request, namesp
 			return generic
 		}
 		self.Ownership = "helm"
-		self.WizardURL = s.wizardInstallURL(target.Namespace, target.ReleaseName)
+		self.WizardURL = s.wizardInstallURL(target.Namespace, target.ReleaseName, "helm")
 	case cloudinstall.OwnershipGitOpsVerified,
 		cloudinstall.OwnershipGitOpsSuspected,
 		cloudinstall.OwnershipGitOpsUnreadable,
@@ -118,6 +120,21 @@ func (s *Server) inspectSelfInstall(ctx context.Context, r *http.Request, namesp
 		if len(target.Ownership.Controllers) > 0 {
 			ref := target.Ownership.Controllers[0].Ref
 			self.Controller = ref.Kind + " " + ref.Namespace + "/" + ref.Name
+		}
+		// Only a verified controller earns the deep link. Suspected, unreadable,
+		// and stale all mean the same thing here: evidence of GitOps we could
+		// not confirm against the live object. Handing those a values patch
+		// aimed at a controller that may not own this release is the
+		// confidently-wrong answer this whole endpoint exists to avoid — they
+		// keep the CLI, which inspects before it acts.
+		//
+		// A release name is required even when verified: the wizard's GitOps
+		// artifact is a Helm values patch, so an installation with no Helm
+		// release identity has nothing for it to patch.
+		if target.Ownership.Classification == cloudinstall.OwnershipGitOpsVerified && target.ReleaseName != "" {
+			if method := wizardMethodFor(target.Ownership.Controllers[0].Ref); method != "" {
+				self.WizardURL = s.wizardInstallURL(target.Namespace, target.ReleaseName, method)
+			}
 		}
 	case cloudinstall.OwnershipAmbiguous:
 		// Conflicting Helm and GitOps evidence: cloudinstall.ClassifyInstallPlan
@@ -131,13 +148,32 @@ func (s *Server) inspectSelfInstall(ctx context.Context, r *http.Request, namesp
 	return self
 }
 
+// wizardMethodFor maps an owning GitOps object to the Hub wizard's install-method
+// tab, so a Flux-managed install lands on a values patch for its HelmRelease
+// rather than an imperative command its controller would revert. Empty for
+// anything unrecognized — the caller then withholds the link instead of
+// guessing a tool.
+func wizardMethodFor(ref subject.Ref) string {
+	switch {
+	case ref.Group == "argoproj.io" && ref.Kind == "Application":
+		return "argocd"
+	case ref.Group == "helm.toolkit.fluxcd.io" && ref.Kind == "HelmRelease",
+		ref.Group == "kustomize.toolkit.fluxcd.io" && ref.Kind == "Kustomization":
+		return "flux"
+	default:
+		return ""
+	}
+}
+
 // wizardInstallURL deep-links the Hub wizard at this install's real target so
-// it renders the existing-install command for the right namespace and release.
-func (s *Server) wizardInstallURL(namespace, release string) string {
+// it renders the existing-install artifact for the right namespace, release,
+// and tool instead of guessing any of the three.
+func (s *Server) wizardInstallURL(namespace, release, method string) string {
 	q := cloudFunnelUTM("wizard-deeplink")
 	q.Set("existing", "1")
 	q.Set("ns", namespace)
 	q.Set("release", release)
+	q.Set("method", method)
 	return s.cloudConnectCfg.HubAppURL + "/install?" + q.Encode()
 }
 
