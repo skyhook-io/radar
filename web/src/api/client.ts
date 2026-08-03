@@ -1546,7 +1546,7 @@ export function useCapabilities() {
 }
 
 // ============================================================================
-// In-product Cloud Connect (driver lane; see docs/cloud-connect.md)
+// In-product Cloud Connect (driver lane; see docs/internal/cloud-connect.md)
 // ============================================================================
 
 export interface CloudInstallRecoveryGuidance {

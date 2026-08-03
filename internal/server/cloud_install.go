@@ -8,7 +8,7 @@ package server
 // existing Cloud tunnel. A non-loopback listener does not disable it — those
 // endpoints are ungated there too — but the plan card names the exposure.
 // Every other configuration routes to the Hub wizard instead (see
-// docs/cloud-connect.md for the full scenario matrix).
+// docs/internal/cloud-connect.md for the full scenario matrix).
 //
 // Safety properties preserved from the CLI driver:
 //   - No Hub request or token mint before the exact-manifest preflight passes.

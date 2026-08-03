@@ -20,10 +20,13 @@ import {
 
 // OSS → Cloud funnel: a quiet globe button in the top bar that opens a modal
 // pitching Radar Cloud. Two lanes (capabilities.cloudConnect, see
-// docs/cloud-connect.md): "driver" runs the in-product connect flow against
-// this server; "wizard" links to the Hub's connect wizard. Ships dark by
-// design: no impressions, no remote config — conversion is measured on the
-// receiving end (utm_source on wizard links, Hub funnel events on the driver).
+// docs/internal/cloud-connect.md): "driver" runs the in-product connect flow
+// against this server; "wizard" links to the Hub's connect wizard.
+//
+// The only outbound call is the Hub's own copy, fetched when the dialog opens
+// (never on a poll or a timer) and falling back per-field to the constants
+// below. Conversion is otherwise measured on the receiving end: utm_content
+// distinguishes which lane sent the user.
 const FALLBACK_APP_URL = 'https://app.radarhq.io'
 
 // Rendered until (or unless) the Hub states its own. Keeping the compiled-in

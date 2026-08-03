@@ -167,6 +167,36 @@ When Radar starts with `--namespace-scope`, the picker controls the process-wide
 
 **Single namespace only.** `--namespace-scope` pins the cache to exactly one namespace; scoping to several namespaces at once is not supported yet. Passing more than one (e.g. `--namespace=a,b`) fails at startup with a clear error rather than silently caching nothing. When scoped, the namespace picker becomes single-select, and a switch re-points the whole cache to the new namespace rather than adding to it.
 
+## Radar Cloud
+
+Radar is free and fully functional without an account. A Cloud button in the
+header offers to connect the cluster to [Radar Cloud](https://app.radarhq.io) —
+optional, and nothing else depends on it.
+
+| Variable | Effect |
+|---|---|
+| `RADAR_CLOUD_FUNNEL=off` | Removes the Cloud button entirely. `on` forces it on. |
+| `RADAR_HUB_URL` | Point Cloud connection at a self-hosted Radar Hub instead of the hosted service. |
+| `RADAR_HUB_APP_URL` | Self-hosted Hub's web origin, when it differs from `RADAR_HUB_URL`. |
+
+To connect a cluster from the command line, use `radar cloud install`
+(`--hub-url` for a self-hosted Hub).
+
+### What Radar sends
+
+Radar makes exactly two outbound requests, both to Skyhook, neither containing
+cluster data:
+
+- **Update check** — periodically, to `releases.skyhook.io`, with the Radar
+  version, OS/arch, install method, and whether it's running locally or
+  in-cluster. Skipped entirely on development builds.
+- **Cloud dialog copy** — only when you *open* the Cloud dialog, to fetch the
+  current terms shown in it. No identifiers are sent. `RADAR_CLOUD_FUNNEL=off`
+  stops this request from ever happening.
+
+Your cluster's data is never sent anywhere. Radar talks to your Kubernetes API
+directly and keeps everything it reads on your machine.
+
 ## Related Documentation
 
 - [README](../README.md#usage) — CLI flags and basic usage
