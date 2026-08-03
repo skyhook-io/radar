@@ -76,6 +76,21 @@ rules:
   - apiGroups: ["node.k8s.io"]
     resources: ["runtimeclasses"]
     verbs: ["get", "list", "watch"]
+  {{- if .Values.rbac.crdGroups.karpenter }}
+  # The Capacity view gates per-CALLER: the page on "list nodes" (granted
+  # above), the Karpenter screens on "list nodepools". Without this rule every
+  # Cloud tier lands in the denied-NodePools shape on Karpenter clusters even
+  # though the SA caches everything. Same benign-infra class as the rest of
+  # this role — cluster-scoped provisioning config, no secrets. Group-wide
+  # read (not named kinds) because Karpenter's kind set moves with its
+  # versions (NodeOverlays, provider NodeClass variants) and a named list
+  # would strand new kinds in an unexplainable denied state. Gated on the SA's
+  # own karpenter collection for the same reason metrics is below: caller
+  # read is meaningless for data the SA never caches.
+  - apiGroups: ["karpenter.sh", "karpenter.k8s.aws", "karpenter.azure.com", "karpenter.k8s.gcp", "eks.amazonaws.com"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.metrics }}
   # On clusters with a standard metrics-server install this is usually
   # redundant — its aggregated-metrics-reader role carries aggregate-to-view

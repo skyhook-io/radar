@@ -300,7 +300,7 @@ rules:
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.karpenter }}
-  - apiGroups: ["karpenter.sh", "karpenter.k8s.aws", "karpenter.azure.com", "karpenter.k8s.gcp"]
+  - apiGroups: ["karpenter.sh", "karpenter.k8s.aws", "karpenter.azure.com", "karpenter.k8s.gcp", "eks.amazonaws.com"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}

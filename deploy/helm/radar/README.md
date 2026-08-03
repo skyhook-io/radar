@@ -266,7 +266,7 @@ This overrides individual settings below. Simpler but broader — some orgs may 
 | `gcpMonitoring` | `monitoring.googleapis.com` |
 | `grafana` | `monitoring.grafana.com`, `tempo.grafana.com`, `loki.grafana.com`, `grafana.integreatly.org` |
 | `istio` | `networking.istio.io`, `security.istio.io` |
-| `karpenter` | `karpenter.sh`, `karpenter.k8s.aws`, `karpenter.azure.com`, `karpenter.k8s.gcp` |
+| `karpenter` | `karpenter.sh`, `karpenter.k8s.aws`, `karpenter.azure.com`, `karpenter.k8s.gcp`, `eks.amazonaws.com` |
 | `keda` | `keda.sh` |
 | `knative` | `serving.knative.dev`, `eventing.knative.dev`, `sources.knative.dev`, `messaging.knative.dev`, `flows.knative.dev`, `networking.internal.knative.dev` |
 | `kubeshark` | `kubeshark.io` |
