@@ -773,6 +773,15 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 		}
 	}
 
+	var jobs []*batchv1.Job
+	if jobLister := cache.Jobs(); jobLister != nil {
+		if namespace != "" {
+			jobs, _ = jobLister.Jobs(namespace).List(labels.Everything())
+		} else {
+			jobs, _ = jobLister.List(labels.Everything())
+		}
+	}
+
 	// CronJob problems
 	if cjLister := cache.CronJobs(); cjLister != nil {
 		var cronjobs []*batchv1.CronJob
@@ -781,7 +790,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 		} else {
 			cronjobs, _ = cjLister.List(labels.Everything())
 		}
-		for _, cp := range DetectCronJobProblems(cronjobs, cache.cronJobTurnovers, now) {
+		for _, cp := range DetectCronJobProblems(cronjobs, jobs, cache.cronJobTurnovers, now) {
 			ageDur := resourceAge(now, cronjobs, cp.Namespace, cp.Name)
 			detection := Detection{
 				Kind:       "CronJob",
@@ -1045,13 +1054,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 	}
 
 	// Job problems: stuck active (running > 1h with no completions)
-	if jobLister := cache.Jobs(); jobLister != nil {
-		var jobs []*batchv1.Job
-		if namespace != "" {
-			jobs, _ = jobLister.Jobs(namespace).List(labels.Everything())
-		} else {
-			jobs, _ = jobLister.List(labels.Everything())
-		}
+	if cache.Jobs() != nil {
 		for _, job := range jobs {
 			if det, ok := terminatingProblem("Job", "batch", job, now); ok {
 				problems = append(problems, det)
@@ -1089,21 +1092,19 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				})
 				continue
 			}
-			if job.Status.Active > 0 && job.Status.Succeeded == 0 && job.Status.Failed == 0 {
-				if ageDur > time.Hour {
-					problems = append(problems, Detection{
-						Kind:            "Job",
-						Namespace:       job.Namespace,
-						Name:            job.Name,
-						Group:           "batch",
-						Severity:        "high",
-						Reason:          fmt.Sprintf("Running for %s with no completions", FormatAge(ageDur)),
-						Age:             FormatAge(ageDur),
-						AgeSeconds:      int64(ageDur.Seconds()),
-						Duration:        FormatAge(ageDur),
-						DurationSeconds: int64(ageDur.Seconds()),
-					})
-				}
+			if stuckActiveJob(job, now) {
+				problems = append(problems, Detection{
+					Kind:            "Job",
+					Namespace:       job.Namespace,
+					Name:            job.Name,
+					Group:           "batch",
+					Severity:        "high",
+					Reason:          fmt.Sprintf("Running for %s with no completions", FormatAge(ageDur)),
+					Age:             FormatAge(ageDur),
+					AgeSeconds:      int64(ageDur.Seconds()),
+					Duration:        FormatAge(ageDur),
+					DurationSeconds: int64(ageDur.Seconds()),
+				})
 			}
 		}
 	}

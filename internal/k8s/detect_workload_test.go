@@ -485,7 +485,7 @@ func TestDetectCronJobProblems(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			problems := DetectCronJobProblems(tt.cronjobs, nil, now)
+			problems := DetectCronJobProblems(tt.cronjobs, nil, nil, now)
 			if len(problems) != tt.wantCount {
 				t.Errorf("DetectCronJobProblems() returned %d problems, want %d", len(problems), tt.wantCount)
 			}
@@ -532,12 +532,22 @@ func TestCronJobTurnoverDetectionUsesObservedHistory(t *testing.T) {
 			advance(tracker, cj, now.Add(time.Duration(n-4)*time.Hour))
 		}
 	}
+	ownedJob := func(cj *batchv1.CronJob) *batchv1.Job {
+		controller := true
+		return &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+			Name: "replace-broken-run", Namespace: cj.Namespace, UID: types.UID("job-uid"),
+			CreationTimestamp: metav1.NewTime(now.Add(-2 * time.Hour)),
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "batch/v1", Kind: "CronJob", Name: cj.Name, UID: cj.UID, Controller: &controller,
+			}},
+		}}
+	}
 
 	t.Run("an old status snapshot does not invent prior turnovers", func(t *testing.T) {
 		cj := newSubject()
 		tracker := newCronJobTurnoverTracker()
 		tracker.observe(k8score.OpAdd, cj)
-		if got := DetectCronJobProblems([]*batchv1.CronJob{cj}, tracker, now); len(got) != 0 {
+		if got := DetectCronJobProblems([]*batchv1.CronJob{cj}, nil, tracker, now); len(got) != 0 {
 			t.Fatalf("initial observation produced a problem: %+v", got)
 		}
 	})
@@ -546,11 +556,11 @@ func TestCronJobTurnoverDetectionUsesObservedHistory(t *testing.T) {
 		cj := newSubject()
 		tracker := newCronJobTurnoverTracker()
 		observeMisses(tracker, cj, cronJobTurnoverThreshold-1)
-		if got := DetectCronJobProblems([]*batchv1.CronJob{cj}, tracker, now); len(got) != 0 {
+		if got := DetectCronJobProblems([]*batchv1.CronJob{cj}, nil, tracker, now); len(got) != 0 {
 			t.Fatalf("reported before the threshold: %+v", got)
 		}
 		advance(tracker, cj, now.Add(-time.Hour))
-		got := DetectCronJobProblems([]*batchv1.CronJob{cj}, tracker, now)
+		got := DetectCronJobProblems([]*batchv1.CronJob{cj}, nil, tracker, now)
 		if len(got) != 1 || got[0].Problem != "repeated-without-success" {
 			t.Fatalf("threshold result = %+v", got)
 		}
@@ -559,6 +569,64 @@ func TestCronJobTurnoverDetectionUsesObservedHistory(t *testing.T) {
 		}
 		if !strings.Contains(got[0].Reason, "3 consecutive schedule turnovers") {
 			t.Fatalf("reason = %q", got[0].Reason)
+		}
+	})
+
+	t.Run("live success wins over tracker state", func(t *testing.T) {
+		cj := newSubject()
+		tracker := newCronJobTurnoverTracker()
+		observeMisses(tracker, cj, cronJobTurnoverThreshold)
+		success := metav1.NewTime(now.Add(-30 * time.Minute))
+		cj.Status.LastSuccessfulTime = &success
+		if got := DetectCronJobProblems([]*batchv1.CronJob{cj}, nil, tracker, now); len(got) != 0 {
+			t.Fatalf("live success raced with stale tracker state: %+v", got)
+		}
+	})
+
+	t.Run("a failed child Job suppresses the aggregate", func(t *testing.T) {
+		cj := newSubject()
+		tracker := newCronJobTurnoverTracker()
+		observeMisses(tracker, cj, cronJobTurnoverThreshold)
+		job := ownedJob(cj)
+		job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue}}
+		if got := DetectCronJobProblems([]*batchv1.CronJob{cj}, []*batchv1.Job{job}, tracker, now); len(got) != 0 {
+			t.Fatalf("failed child Job left a duplicate aggregate: %+v", got)
+		}
+	})
+
+	t.Run("a directly detected stuck child Job suppresses the aggregate", func(t *testing.T) {
+		cj := newSubject()
+		tracker := newCronJobTurnoverTracker()
+		observeMisses(tracker, cj, cronJobTurnoverThreshold)
+		job := ownedJob(cj)
+		job.Status.Active = 1
+		if got := DetectCronJobProblems([]*batchv1.CronJob{cj}, []*batchv1.Job{job}, tracker, now); len(got) != 0 {
+			t.Fatalf("stuck child Job left a duplicate aggregate: %+v", got)
+		}
+	})
+
+	t.Run("a directly detected terminating child Job suppresses the aggregate", func(t *testing.T) {
+		cj := newSubject()
+		tracker := newCronJobTurnoverTracker()
+		observeMisses(tracker, cj, cronJobTurnoverThreshold)
+		job := ownedJob(cj)
+		deleting := metav1.NewTime(now.Add(-20 * time.Minute))
+		job.DeletionTimestamp = &deleting
+		if got := DetectCronJobProblems([]*batchv1.CronJob{cj}, []*batchv1.Job{job}, tracker, now); len(got) != 0 {
+			t.Fatalf("terminating child Job left a duplicate aggregate: %+v", got)
+		}
+	})
+
+	t.Run("a failed Job from another CronJob does not suppress", func(t *testing.T) {
+		cj := newSubject()
+		tracker := newCronJobTurnoverTracker()
+		observeMisses(tracker, cj, cronJobTurnoverThreshold)
+		job := ownedJob(cj)
+		job.OwnerReferences[0].UID = types.UID("previous-cronjob-uid")
+		job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue}}
+		got := DetectCronJobProblems([]*batchv1.CronJob{cj}, []*batchv1.Job{job}, tracker, now)
+		if len(got) != 1 || got[0].Problem != "repeated-without-success" {
+			t.Fatalf("unrelated Job suppressed the aggregate: %+v", got)
 		}
 	})
 
@@ -631,7 +699,7 @@ func TestCronJobTurnoverDetectionUsesObservedHistory(t *testing.T) {
 			for n := 1; n < cronJobTurnoverThreshold; n++ {
 				advance(tracker, cj, now.Add(time.Duration(n)*time.Hour))
 			}
-			if got := DetectCronJobProblems([]*batchv1.CronJob{cj}, tracker, now.Add(3*time.Hour)); len(got) != 0 {
+			if got := DetectCronJobProblems([]*batchv1.CronJob{cj}, nil, tracker, now.Add(3*time.Hour)); len(got) != 0 {
 				t.Fatalf("reset evidence still produced a problem: %+v", got)
 			}
 		})
@@ -652,7 +720,7 @@ func TestCronJobTurnoverDetectionUsesObservedHistory(t *testing.T) {
 		tracker := newCronJobTurnoverTracker()
 		observeMisses(tracker, cj, cronJobTurnoverThreshold)
 		cj.Status.Active = nil
-		if got := DetectCronJobProblems([]*batchv1.CronJob{cj}, tracker, now); len(got) != 0 {
+		if got := DetectCronJobProblems([]*batchv1.CronJob{cj}, nil, tracker, now); len(got) != 0 {
 			t.Fatalf("inactive CronJob produced a problem: %+v", got)
 		}
 	})
