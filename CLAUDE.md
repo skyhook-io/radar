@@ -13,6 +13,11 @@ Radar is a modern Kubernetes visibility tool — local-first, no account require
 - **Don't reference tickets, PRs, bug numbers, or diff history** in code comments (e.g. "fixes SKY-123", "Bugbot caught this on PR #584", "used to read X, now…"). Those belong in the PR description and rot as the codebase evolves. The WHY of the change should stand on its own.
 - This applies to comments written by any tool (Cursor, Bugbot, Copilot) as well as humans — strip ticket/PR references before merging.
 
+## Release and publishing authorization
+
+- Never create, move, or delete Git tags or GitHub Releases; dispatch release or publish workflows; or publish binaries, container images, npm packages, package-manager artifacts, Helm charts, or other distribution artifacts without explicit user approval naming the exact artifact, version, and action.
+- Approval to implement a change, open or merge a PR, or prepare release changes is not authorization to publish. If release authorization is ambiguous, stop and ask.
+
 ## Reference Docs — MUST READ before making changes
 
 Not everything is in this file. The following files contain critical details that are **not duplicated here**. You MUST read them when working in the relevant area — do not guess or rely on memory.
