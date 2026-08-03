@@ -189,4 +189,7 @@ func printAdoptionRollbackGuidance(w io.Writer, recovery cloudProvisionRecovery,
 	for _, line := range g.Lines {
 		fmt.Fprintf(w, "  %s\n", line)
 	}
+	if g.ClusterURL != "" {
+		fmt.Fprintf(w, "  Open: %s\n", g.ClusterURL)
+	}
 }

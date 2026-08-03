@@ -5,12 +5,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"log"
-	"os"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -46,12 +46,12 @@ func (f *fakePrepared) Deployment() helm.DeploymentRef {
 }
 
 type fakeConnectClient struct {
-	cr             *cloud.CreateResponse
-	createErr      error
-	pollErr        error
-	approve        chan *cloud.PollResponse
+	cr              *cloud.CreateResponse
+	createErr       error
+	pollErr         error
+	approve         chan *cloud.PollResponse
 	approveOnCancel *cloud.PollResponse
-	consume        chan error
+	consume         chan error
 	// beforeApprovalReturn runs just before an approval is handed back, so a
 	// test can widen the window between "approved" and the provisioning claim.
 	beforeApprovalReturn func()
@@ -564,12 +564,30 @@ func TestCloudInstallEndpointGating(t *testing.T) {
 		}
 	})
 
-	t.Run("wizard lane capability when driver disabled", func(t *testing.T) {
+	t.Run("tunnel-configured deployment gets no capability at all", func(t *testing.T) {
 		srv := newSrv("127.0.0.1")
 		srv.cloudConnectCfg.CloudTunnelConfigured = true
+		if cap := srv.cloudConnectCapability(); cap != nil {
+			t.Fatalf("capability = %+v, want nil — an already-connected cluster must not be pitched", cap)
+		}
+	})
+
+	t.Run("wizard lane capability when driver disabled", func(t *testing.T) {
+		srv := newSrv("127.0.0.1")
+		srv.authConfig.Mode = "proxy"
 		cap := srv.cloudConnectCapability()
-		if cap.Lane != "wizard" || cap.AppURL != "https://app.test.example" {
+		if cap == nil || cap.Lane != "wizard" || cap.AppURL != "https://app.test.example" {
 			t.Fatalf("capability = %+v", cap)
+		}
+	})
+
+	t.Run("production constructor wires the shared-listener probe", func(t *testing.T) {
+		srv := New(Config{DevMode: true, ListenAddress: "0.0.0.0"})
+		if srv.cloudInstall.sharedListener == nil || !srv.cloudInstall.sharedListener() {
+			t.Fatal("New did not wire the shared-listener acknowledgement probe")
+		}
+		if loopback := New(Config{DevMode: true, ListenAddress: "127.0.0.1"}); loopback.cloudInstall.sharedListener() {
+			t.Fatal("loopback listener reported as shared")
 		}
 	})
 

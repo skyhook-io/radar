@@ -182,15 +182,17 @@ func TunnelConfirmationGuidance(err error, clusterID, cloudURL, clusterURL strin
 // AdoptionRollbackGuidance tells a successfully adopted install how to undo
 // the adoption deliberately later.
 func AdoptionRollbackGuidance(recovery ProvisionRecovery, clusterURL string, target CommandTarget) RecoveryGuidance {
+	// Inspect holds only runnable commands — both presenters render it as a
+	// copyable shell block, so prose there would be pasted into a terminal.
 	return RecoveryGuidance{
 		Summary: "To deliberately undo this adoption later:",
 		Inspect: []string{
 			fmt.Sprintf("%s rollback %s %d -n %s", target.Helm(), recovery.ReleaseName, recovery.CurrentRevision, recovery.Namespace),
 			fmt.Sprintf("%s -n %s delete secret/%s", target.Kubectl(), recovery.Namespace, CloudTokenSecretName),
-			fmt.Sprintf("Have an organization owner delete the connected cluster at %s", clusterURL),
 		},
 		Lines: []string{
-			"The Helm rollback restores the exact pre-adoption chart, image pin, values, and RBAC. Delete the Secret and connected cluster only after that rollback succeeds; otherwise the fleet row would remain disconnected.",
+			"The Helm rollback restores the exact pre-adoption chart, image pin, values, and RBAC. Delete the Secret only after that rollback succeeds.",
+			"Then have an organization owner delete the connected cluster in the Hub — until they do, its fleet row shows as disconnected.",
 		},
 		ClusterURL: clusterURL,
 	}

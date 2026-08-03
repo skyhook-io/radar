@@ -130,10 +130,11 @@ export function CloudFunnelButton() {
     if (open && lane === 'driver' && flowLive) setInFlowView(true)
   }, [open, lane, flowLive])
 
-  // Already-tunneled deployments have nothing to be pitched; waiting for
+  // The server owns the "nothing to pitch" decision: an already-tunneled
+  // deployment gets no cloudConnect capability at all. Waiting for
   // capabilities (rather than defaulting to visible) keeps the funnel from
-  // flashing at a connected cluster's operator before the mode is known.
-  if (!capabilities.data || capabilities.data.deployment?.mode === 'cloud') return null
+  // flashing at a connected cluster's operator before that answer arrives.
+  if (!capabilities.data?.cloudConnect) return null
 
   const showFlow = inFlowView && (blocked !== null || prepare.isPending || flowLive)
   // The prepare POST can take tens of seconds (chart download + preflight);
@@ -207,7 +208,7 @@ export function CloudFunnelButton() {
               // Also covers the capabilities query: until it resolves, lane
               // defaults to wizard and Radar does not yet know it is
               // in-cluster, so the CTA would escape before classification.
-              selfLoading={capabilities.isPending || (inCluster && self.isPending)}
+              selfLoading={inCluster && self.isPending}
               onConnect={startConnect}
               onLater={() => setOpen(false)}
             />

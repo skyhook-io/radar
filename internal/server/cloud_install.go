@@ -914,10 +914,15 @@ func (s *Server) writeCloudInstallJSON(w http.ResponseWriter, status int, data a
 	}
 }
 
-// cloudConnectCapability picks the connect lane the frontend should render.
-// Embedded/cloud deployments hide the funnel entirely client-side; everything
-// else gets either the in-product driver or a Hub-wizard link.
+// cloudConnectCapability picks the connect lane the frontend should render:
+// the in-product driver, a Hub-wizard link, or nil — nothing to pitch. nil
+// covers any tunnel-configured run, not just full cloud mode, so a binary
+// started with --cloud-url alone is not pitched a connection it already has.
+// (Embedded mode additionally hides the funnel client-side as chrome policy.)
 func (s *Server) cloudConnectCapability() *k8s.CloudConnectCapability {
+	if cloudMode() || s.cloudConnectCfg.CloudTunnelConfigured {
+		return nil
+	}
 	lane := "wizard"
 	if s.cloudConnectDriverEnabled() {
 		lane = "driver"

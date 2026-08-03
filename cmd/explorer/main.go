@@ -28,6 +28,7 @@ import (
 	"golang.org/x/net/http/httpguts"
 	authv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 	_ "k8s.io/client-go/plugin/pkg/client/auth" // Register all auth provider plugins (OIDC, GCP, Azure, etc.)
 	"k8s.io/klog/v2"
 )
@@ -475,7 +476,7 @@ func main() {
 				// self-description, and a chart-set marker would go stale on
 				// exactly the path that matters — Hub's self-upgrade patches
 				// only the image, leaving an older pod template in place.
-				SelfUpgradeAvailable: func() bool { return canSelfUpgrade(rootCtx, namespace, deploymentName) },
+				SelfUpgradeAvailable: func() bool { return canSelfUpgrade(rootCtx, k8s.GetClient(), namespace, deploymentName) },
 				Handler:              srv.Handler(),
 			})
 			if runErr != nil && !errors.Is(runErr, context.Canceled) {
@@ -695,11 +696,10 @@ func (h *headerFromEnvFlag) Set(raw string) error {
 // to Hub from anything other than the apiserver's own answer produces an
 // upgrade button that 403s: a chart-set env marker is invisible to an
 // image-only self-upgrade, and identity env vars ship unconditionally.
-func canSelfUpgrade(ctx context.Context, namespace, deploymentName string) bool {
+func canSelfUpgrade(ctx context.Context, client kubernetes.Interface, namespace, deploymentName string) bool {
 	if namespace == "" || deploymentName == "" {
 		return false
 	}
-	client := k8s.GetClient()
 	if client == nil {
 		return false
 	}

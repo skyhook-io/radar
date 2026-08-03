@@ -34,13 +34,14 @@ moves to the surface that actually holds them (the terminal or the Hub).
 | 7c | in-cluster, ambiguous ownership | any | any | itself | Conflicting Helm/GitOps metadata — routes to `radar cloud install`, which refuses rather than guessing (same posture as `ClassifyInstallPlan`) | CLI |
 | 7d | in-cluster, undetectable | any | any | itself | Generic wizard link (SA can't read its own Deployment, or the downward-API identity is absent) | wizard |
 | 8 | in-cluster, chart-armed (future WS3) | — | — | itself | Zero-command hot-start (chart pre-provisions cloud RBAC + Secret write-back Role) — not built yet | (future) |
-| 9 | cloud / embedded (Radar Hub) | — | — | — | Funnel hidden entirely (already connected) | — |
+| 9 | cloud / embedded / any run with `--cloud-url` | — | — | — | Funnel hidden entirely (already connected — `capabilities.cloudConnect` is absent) | — |
 | 10 | any | — | — | self-hosted Hub target, browser-trusted cert | Same flows against `RADAR_HUB_URL` (+ `RADAR_HUB_APP_URL`); CLI: `--hub-url` | any |
 | 11 | any | — | — | self-hosted Hub, **self-signed** cert | **Not supported by either installer today** — see below | Hub wizard |
 
 The lane is advertised to the frontend as `capabilities.cloudConnect =
-{lane: "driver"|"wizard", appUrl}`; rows 3–4 are discovered at `prepare` time
-(classification), not from capabilities.
+{lane: "driver"|"wizard", appUrl}` — absent entirely on already-tunneled runs
+(row 9), which is what hides the funnel; rows 3–4 are discovered at `prepare`
+time (classification), not from capabilities.
 
 ## Decision flow
 
@@ -49,7 +50,9 @@ flowchart TD
     A[User clicks Connect in Radar UI] --> B{Deployment mode}
     B -->|cloud / embedded| Z[Funnel hidden]
     B -->|in-cluster| W["Hub wizard link<br/>existing-install paste"]
-    B -->|local| C{"Auth disabled AND<br/>no --cloud-url?"}
+    B -->|local| C0{"--cloud-url<br/>tunnel configured?"}
+    C0 -->|yes| Z
+    C0 -->|no| C{"Auth disabled?"}
     C -->|no| W
     C -->|yes| D["POST /api/cloud/install/prepare<br/>discovery → classify → chart prepare → preflight<br/>zero Hub contact"]
     D -->|GitOps-managed| G["Blocked: source-of-truth handoff<br/>→ radar cloud install"]
@@ -134,6 +137,9 @@ In-cluster (read-only, no Hub contact, never mutates):
   implication); whether Radar may patch itself is answered by a
   SelfSubjectAccessReview against the Role `rbac.selfUpgrade` creates — never
   by an env marker, which Hub's image-only self-upgrade would leave stale.
+  The probe re-runs on every tunnel handshake and periodically while a tunnel
+  is up; a stable change cycles the connection so enabling `rbac.selfUpgrade`
+  (an RBAC-only change that restarts nothing) reaches the Hub within minutes.
   Reads use
   request-scoped clients, so with auth enabled nobody learns about a
   Deployment their own identity cannot read.

@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { AlertTriangle, ArrowUpRight, Check, ExternalLink, GitBranch, Info, Loader2, ShieldAlert, X } from 'lucide-react'
 import {
+  ApiError,
   cancelCloudInstall,
   type CloudInstallBlocked,
   type CloudInstallRecoveryGuidance,
@@ -9,6 +10,7 @@ import {
   dismissCloudInstall,
   startCloudInstall,
 } from '../api/client'
+import { showApiError } from './ui/Toast'
 
 // The driver-lane connect flow rendered inside the Cloud funnel modal. The
 // flow itself is server-owned (it survives modal close and page reloads);
@@ -523,7 +525,19 @@ function useDismiss(status: CloudInstallStatus, onStatus: (st: CloudInstallStatu
       onStatus(st)
       onExit()
     },
-    meta: { errorMessage: 'Could not dismiss the connection flow' },
+    onError: (err) => {
+      // 410: the flow is already gone — another tab dismissed it, or the
+      // server restarted. Nothing is left to dismiss, so exiting IS the
+      // requested outcome; erroring would leave a card whose only button
+      // fails forever.
+      if (err instanceof ApiError && err.status === 410) {
+        onExit()
+        return
+      }
+      showApiError('Could not dismiss the connection flow', err instanceof Error ? err.message : undefined)
+    },
+    // No meta.errorMessage: the global handler would also toast the 410
+    // already-gone case, which this mutation treats as success.
   })
   return () => dismiss.mutate()
 }
