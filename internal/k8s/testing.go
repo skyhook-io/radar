@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
+	batchv1 "k8s.io/api/batch/v1"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	fakeclientset "k8s.io/client-go/kubernetes/fake"
@@ -51,6 +52,7 @@ func InitTestResourceCache(client kubernetes.Interface) error {
 	}
 
 	secretWriteTimes := newSecretDataManagerWriteIndex()
+	cronJobTurnovers := newCronJobTurnoverTracker()
 	cfg := k8score.CacheConfig{
 		Client:        client,
 		ResourceTypes: enabled,
@@ -61,6 +63,9 @@ func InitTestResourceCache(client kubernetes.Interface) error {
 		},
 		OnObservedChange: func(change k8score.ResourceChange, obj, _ any) {
 			secretWriteTimes.reconcile(change, obj)
+			if cj, ok := obj.(*batchv1.CronJob); ok {
+				cronJobTurnovers.observe(change.Operation, cj)
+			}
 		},
 	}
 
@@ -74,6 +79,7 @@ func InitTestResourceCache(client kubernetes.Interface) error {
 	resourceCache = &ResourceCache{
 		ResourceCache:    core,
 		secretsEnabled:   true,
+		cronJobTurnovers: cronJobTurnovers,
 		secretWriteTimes: secretWriteTimes,
 	}
 

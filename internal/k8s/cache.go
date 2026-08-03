@@ -119,6 +119,9 @@ type ResourceCache struct {
 	// continuously OutOfSync. Lives here so its lifecycle is the cache's:
 	// recreated per cluster, dropped on a kubeconfig context switch.
 	argoDrift *argoDriftTracker
+	// cronJobTurnovers only counts schedule changes observed by this cache, so
+	// restart and context-switch boundaries cannot manufacture run history.
+	cronJobTurnovers *cronJobTurnoverTracker
 	// secretWriteTimes preserves verified Secret data-owner write times that
 	// the shared informer transform intentionally strips before caching.
 	secretWriteTimes *secretDataManagerWriteIndex
@@ -358,6 +361,7 @@ func InitResourceCache(ctx context.Context) error {
 		// cluster they came from.
 		recordClusterContext := ActiveClusterContext()
 		secretWriteTimes := newSecretDataManagerWriteIndex()
+		cronJobTurnovers := newCronJobTurnoverTracker()
 
 		cfg := k8score.CacheConfig{
 			Client:                  client,
@@ -383,6 +387,9 @@ func InitResourceCache(ctx context.Context) error {
 
 			OnObservedChange: func(change k8score.ResourceChange, obj, _ any) {
 				secretWriteTimes.reconcile(change, obj)
+				if cj, ok := obj.(*batchv1.CronJob); ok {
+					cronJobTurnovers.observe(change.Operation, cj)
+				}
 			},
 
 			OnChange: func(change k8score.ResourceChange, obj, oldObj any) {
@@ -430,6 +437,7 @@ func InitResourceCache(ctx context.Context) error {
 			ResourceCache:    core,
 			secretsEnabled:   scopes["secrets"].Enabled,
 			argoDrift:        newArgoDriftTracker(),
+			cronJobTurnovers: cronJobTurnovers,
 			secretWriteTimes: secretWriteTimes,
 		}
 	})

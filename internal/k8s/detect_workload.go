@@ -173,11 +173,12 @@ type CronJobProblem struct {
 	Namespace string
 	Problem   string // "stale", "never-scheduled", or "repeated-without-success"
 	Reason    string
+	Duration  time.Duration
 }
 
 // DetectCronJobProblems finds non-suspended CronJobs whose schedule or success
 // history indicates that they are not producing successful runs.
-func DetectCronJobProblems(cronjobs []*batchv1.CronJob, now time.Time) []CronJobProblem {
+func DetectCronJobProblems(cronjobs []*batchv1.CronJob, tracker *cronJobTurnoverTracker, now time.Time) []CronJobProblem {
 	var problems []CronJobProblem
 	for _, cj := range cronjobs {
 		if cj.Spec.Suspend != nil && *cj.Spec.Suspend {
@@ -195,12 +196,13 @@ func DetectCronJobProblems(cronjobs []*batchv1.CronJob, now time.Time) []CronJob
 				})
 				continue
 			}
-			if reason, ok := repeatedCronJobSchedulesWithoutSuccess(cj, now); ok {
+			if reason, duration, ok := repeatedCronJobSchedulesWithoutSuccess(cj, tracker, now); ok {
 				problems = append(problems, CronJobProblem{
 					Name:      cj.Name,
 					Namespace: cj.Namespace,
 					Problem:   "repeated-without-success",
 					Reason:    reason,
+					Duration:  duration,
 				})
 			}
 		} else if now.Sub(cj.CreationTimestamp.Time) > threshold {
@@ -215,31 +217,21 @@ func DetectCronJobProblems(cronjobs []*batchv1.CronJob, now time.Time) []CronJob
 	return problems
 }
 
-func repeatedCronJobSchedulesWithoutSuccess(cj *batchv1.CronJob, now time.Time) (string, bool) {
+func repeatedCronJobSchedulesWithoutSuccess(cj *batchv1.CronJob, tracker *cronJobTurnoverTracker, now time.Time) (string, time.Duration, bool) {
 	// Replace is the blind spot: it deletes each unfinished Job before the Job
 	// detectors can accumulate evidence. Allow retains Jobs for those detectors,
 	// while Forbid stops advancing lastScheduleTime and is covered as stale.
 	if cj.Spec.ConcurrencyPolicy != batchv1.ReplaceConcurrent || len(cj.Status.Active) == 0 {
-		return "", false
+		return "", 0, false
 	}
 
-	interval, ok := cronsched.MinInterval(cj.Spec.Schedule)
-	if !ok || cj.Status.LastScheduleTime == nil || cj.Status.LastScheduleTime.Time.After(now) {
-		return "", false
+	if cj.Status.LastScheduleTime == nil || cj.Status.LastScheduleTime.Time.After(now) {
+		return "", 0, false
 	}
-
-	baseline := cj.CreationTimestamp.Time
-	if cj.Status.LastSuccessfulTime != nil && !cj.Status.LastSuccessfulTime.IsZero() {
-		baseline = cj.Status.LastSuccessfulTime.Time
+	turnovers, failureSince := tracker.failure(cj.UID)
+	if turnovers < cronJobTurnoverThreshold || failureSince.IsZero() || failureSince.After(now) {
+		return "", 0, false
 	}
-	if baseline.IsZero() || cj.Status.LastScheduleTime.Time.Before(baseline) ||
-		cj.Status.LastScheduleTime.Sub(baseline) < 3*interval {
-		return "", false
-	}
-	if cj.Status.LastSuccessfulTime == nil || cj.Status.LastSuccessfulTime.IsZero() {
-		return fmt.Sprintf("no recorded success since creation %s ago; last scheduled %s ago",
-			FormatAge(now.Sub(baseline)), FormatAge(now.Sub(cj.Status.LastScheduleTime.Time))), true
-	}
-	return fmt.Sprintf("last success %s ago; last scheduled %s ago",
-		FormatAge(now.Sub(baseline)), FormatAge(now.Sub(cj.Status.LastScheduleTime.Time))), true
+	return fmt.Sprintf("%d consecutive schedule turnovers observed without a recorded success; last scheduled %s ago",
+		turnovers, FormatAge(now.Sub(cj.Status.LastScheduleTime.Time))), now.Sub(failureSince), true
 }
