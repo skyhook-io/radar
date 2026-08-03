@@ -1,8 +1,12 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"log"
+	"os"
 	"errors"
 	"fmt"
 	"net/http"
@@ -761,10 +765,19 @@ func TestSameOriginOKAcceptsTheServingAuthority(t *testing.T) {
 // message string.
 func TestCloudInstallProvisionErrorNeverLeaksTokenIntoStatus(t *testing.T) {
 	fx := newManagerFixture(cloudinstall.ProvisionFresh, cloudinstall.InstallModeFresh, nil)
+	// The apiserver folds stringData into base64 `data` before admission runs,
+	// so a webhook quoting the object it denied reports the ENCODED token.
+	// Exercise both representations.
+	encoded := base64.StdEncoding.EncodeToString([]byte(testToken))
 	fx.provision.err = fmt.Errorf(
-		`admission webhook "policy.example.com" denied the request: Secret radar-cloud-config has disallowed data: {"token":%q}`,
-		testToken,
+		`admission webhook "policy.example.com" denied the request: Secret radar-cloud-config has disallowed data: {"token":%q} (raw %s)`,
+		encoded, testToken,
 	)
+
+	// Capture the log sink too — it is as readable as the status API.
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
 	if _, _, err := fx.m.prepare(context.Background()); err != nil {
 		t.Fatalf("prepare: %v", err)
@@ -788,5 +801,11 @@ func TestCloudInstallProvisionErrorNeverLeaksTokenIntoStatus(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), "[REDACTED]") {
 		t.Fatalf("expected an explicit redaction marker: %s", raw)
+	}
+	if strings.Contains(string(raw), encoded) {
+		t.Fatalf("status leaks the base64 token: %s", raw)
+	}
+	if got := logs.String(); strings.Contains(got, testToken) || strings.Contains(got, encoded) {
+		t.Fatalf("server log leaks the token: %s", got)
 	}
 }

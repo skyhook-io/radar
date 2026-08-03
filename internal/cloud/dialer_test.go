@@ -5,11 +5,13 @@ import "testing"
 func TestCloudHandshakeHeadersAlwaysAdvertiseSelfUpgradeCapability(t *testing.T) {
 	for _, tt := range []struct {
 		name      string
-		available bool
+		available func() bool
 		want      string
 	}{
-		{name: "configured", available: true, want: "true"},
-		{name: "disabled", available: false, want: "false"},
+		{name: "configured", available: func() bool { return true }, want: "true"},
+		{name: "disabled", available: func() bool { return false }, want: "false"},
+		// Nil must not panic the handshake — it means "no probe wired".
+		{name: "unset", available: nil, want: "false"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			headers := cloudHandshakeHeaders(Config{

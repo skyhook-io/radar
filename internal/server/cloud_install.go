@@ -23,6 +23,7 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -35,10 +36,10 @@ import (
 	"sync"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
 
 	"github.com/skyhook-io/radar/internal/cloud"
@@ -68,15 +69,15 @@ const (
 )
 
 const (
-	cloudFailConnect            = "connect_failed"
-	cloudFailRejected           = "rejected"
-	cloudFailExpired            = "expired"
-	cloudFailPickupExpired      = "pickup_expired"
-	cloudFailApprovalUnknown    = "approval_unknown"
-	cloudFailCanceled           = "canceled"
-	cloudFailCanceledApproved   = "canceled_after_approval"
-	cloudFailProvision          = "provision_failed"
-	cloudFailTunnelUnconfirmed  = "tunnel_unconfirmed"
+	cloudFailConnect           = "connect_failed"
+	cloudFailRejected          = "rejected"
+	cloudFailExpired           = "expired"
+	cloudFailPickupExpired     = "pickup_expired"
+	cloudFailApprovalUnknown   = "approval_unknown"
+	cloudFailCanceled          = "canceled"
+	cloudFailCanceledApproved  = "canceled_after_approval"
+	cloudFailProvision         = "provision_failed"
+	cloudFailTunnelUnconfirmed = "tunnel_unconfirmed"
 )
 
 const (
@@ -132,8 +133,8 @@ type cloudInstallBackend struct {
 }
 
 type cloudInstallConnected struct {
-	ClusterID  string                         `json:"clusterId"`
-	ClusterURL string                         `json:"clusterUrl"`
+	ClusterID  string `json:"clusterId"`
+	ClusterURL string `json:"clusterUrl"`
 	// TrackCmd lets the operator watch the rollout locally; it already names
 	// the Deployment, so the ref itself is not repeated on the wire.
 	TrackCmd string                         `json:"trackCommand"`
@@ -666,7 +667,7 @@ func (m *cloudInstallManager) run(ctx context.Context, flow *cloudInstallFlow, c
 	connected := &cloudInstallConnected{
 		ClusterID:  pr.ClusterID,
 		ClusterURL: clusterURL,
-		TrackCmd: fmt.Sprintf("%s -n %s rollout status deployment/%s", target.Kubectl(), prepared.Deployment().Namespace, prepared.Deployment().Name),
+		TrackCmd:   fmt.Sprintf("%s -n %s rollout status deployment/%s", target.Kubectl(), prepared.Deployment().Namespace, prepared.Deployment().Name),
 	}
 	if recovery.Mode == cloudinstall.ProvisionAdopt {
 		g := cloudinstall.AdoptionRollbackGuidance(recovery, clusterURL, target)
@@ -729,13 +730,13 @@ func (m *cloudInstallManager) clearFlow(flow *cloudInstallFlow) {
 }
 
 type cloudInstallStatus struct {
-	FlowID            string                   `json:"flowId,omitempty"`
-	State             string                   `json:"state"`
-	Plan              *cloudInstallPlanSummary `json:"plan,omitempty"`
-	ClusterName       string                   `json:"clusterName,omitempty"`
-	ConnectURL        string                   `json:"connectUrl,omitempty"`
-	Connected         *cloudInstallConnected   `json:"connected,omitempty"`
-	Failure           *cloudInstallFailure     `json:"failure,omitempty"`
+	FlowID      string                   `json:"flowId,omitempty"`
+	State       string                   `json:"state"`
+	Plan        *cloudInstallPlanSummary `json:"plan,omitempty"`
+	ClusterName string                   `json:"clusterName,omitempty"`
+	ConnectURL  string                   `json:"connectUrl,omitempty"`
+	Connected   *cloudInstallConnected   `json:"connected,omitempty"`
+	Failure     *cloudInstallFailure     `json:"failure,omitempty"`
 }
 
 func (m *cloudInstallManager) status() cloudInstallStatus {
@@ -953,12 +954,27 @@ func sameOriginOK(r *http.Request) bool {
 }
 
 // redactCloudToken removes a cluster token that an upstream error may have
-// echoed back. Post-approval failures carry Kubernetes and Helm messages that
-// can quote the Secret being applied, and those messages land in server logs
-// and the status API — neither of which the token may ever reach.
+// echoed back. Post-approval failures carry Kubernetes messages that can quote
+// the Secret being applied, and those messages land in server logs and the
+// status API — neither of which the token may ever reach.
+//
+// Both representations must go. The Secret is submitted via stringData, which
+// the apiserver folds into base64 `data` before admission runs, so a webhook
+// quoting the object it denied reports the ENCODED token, not the raw one.
 func redactCloudToken(text, token string) string {
 	if token == "" {
 		return text
 	}
-	return strings.ReplaceAll(text, token, "[REDACTED]")
+	text = strings.ReplaceAll(text, token, cloudTokenRedaction)
+	for _, enc := range []string{
+		base64.StdEncoding.EncodeToString([]byte(token)),
+		base64.RawStdEncoding.EncodeToString([]byte(token)),
+		base64.URLEncoding.EncodeToString([]byte(token)),
+		base64.RawURLEncoding.EncodeToString([]byte(token)),
+	} {
+		text = strings.ReplaceAll(text, enc, cloudTokenRedaction)
+	}
+	return text
 }
+
+const cloudTokenRedaction = "[REDACTED]"

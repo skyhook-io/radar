@@ -199,6 +199,10 @@ export function CloudFunnelButton() {
               lane={lane}
               signupUrl={signupUrl}
               self={inCluster ? self.data : undefined}
+              // Also covers the capabilities query: until it resolves, lane
+              // defaults to wizard and Radar does not yet know it is
+              // in-cluster, so the CTA would escape before classification.
+              selfLoading={capabilities.isPending || (inCluster && self.isPending)}
               onConnect={startConnect}
               onLater={() => setOpen(false)}
             />

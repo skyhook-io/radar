@@ -471,7 +471,7 @@ func main() {
 				// self-description, and a chart-set marker would go stale on
 				// exactly the path that matters — Hub's self-upgrade patches
 				// only the image, leaving an older pod template in place.
-				SelfUpgradeAvailable: canSelfUpgrade(rootCtx, namespace, deploymentName),
+				SelfUpgradeAvailable: func() bool { return canSelfUpgrade(rootCtx, namespace, deploymentName) },
 				Handler:              srv.Handler(),
 			})
 			if runErr != nil && !errors.Is(runErr, context.Canceled) {
@@ -701,24 +701,30 @@ func canSelfUpgrade(ctx context.Context, namespace, deploymentName string) bool 
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	// The review MUST name the Deployment: rbac.selfUpgrade's Role is scoped
+	// Every operation the endpoint performs, not just the mutation: it gets the
+	// Deployment, reads the Helm release manifest out of the storage Secrets,
+	// then patches. A stock chart grants these together, but a BYO-RBAC install
+	// can pass a patch-only probe and still fail mid-upgrade.
+	//
+	// The Deployment reviews MUST name it: rbac.selfUpgrade's Role is scoped
 	// with resourceNames, so an unnamed "can I patch deployments here" review
 	// answers no even where self-upgrade is correctly enabled.
-	review := &authv1.SelfSubjectAccessReview{
-		Spec: authv1.SelfSubjectAccessReviewSpec{
-			ResourceAttributes: &authv1.ResourceAttributes{
-				Namespace: namespace,
-				Group:     "apps",
-				Resource:  "deployments",
-				Name:      deploymentName,
-				Verb:      "patch",
-			},
-		},
+	for _, probe := range []authv1.ResourceAttributes{
+		{Namespace: namespace, Group: "apps", Resource: "deployments", Name: deploymentName, Verb: "get"},
+		{Namespace: namespace, Group: "apps", Resource: "deployments", Name: deploymentName, Verb: "patch"},
+		{Namespace: namespace, Resource: "secrets", Verb: "list"},
+	} {
+		review := &authv1.SelfSubjectAccessReview{
+			Spec: authv1.SelfSubjectAccessReviewSpec{ResourceAttributes: &probe},
+		}
+		result, err := client.AuthorizationV1().SelfSubjectAccessReviews().Create(probeCtx, review, metav1.CreateOptions{})
+		if err != nil {
+			log.Printf("[cloud] self-upgrade capability probe failed, advertising unavailable: %v", err)
+			return false
+		}
+		if !result.Status.Allowed {
+			return false
+		}
 	}
-	result, err := client.AuthorizationV1().SelfSubjectAccessReviews().Create(probeCtx, review, metav1.CreateOptions{})
-	if err != nil {
-		log.Printf("[cloud] self-upgrade capability probe failed, advertising unavailable: %v", err)
-		return false
-	}
-	return result.Status.Allowed
+	return true
 }

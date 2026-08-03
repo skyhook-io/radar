@@ -71,7 +71,8 @@ func cloudHandshakeHeaders(cfg Config) http.Header {
 	headers := http.Header{}
 	headers.Set("Authorization", "Bearer "+cfg.Token)
 	headers.Set("X-Radar-Version", Version)
-	headers.Set(selfUpgradeAvailableHeader, strconv.FormatBool(cfg.SelfUpgradeAvailable))
+	selfUpgrade := cfg.SelfUpgradeAvailable != nil && cfg.SelfUpgradeAvailable()
+	headers.Set(selfUpgradeAvailableHeader, strconv.FormatBool(selfUpgrade))
 	if cfg.Namespace != "" {
 		headers.Set("X-Radar-Namespace", cfg.Namespace)
 	}

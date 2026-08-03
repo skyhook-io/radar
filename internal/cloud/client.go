@@ -62,12 +62,18 @@ type Config struct {
 	// is empty.
 	APIServerURL string
 
-	// SelfUpgradeAvailable reports whether this installation has the
-	// chart-provided namespace/deployment configuration and RBAC needed by
-	// Radar's in-cluster self-upgrade endpoint. It is advertised explicitly on
-	// every Cloud tunnel handshake so the Hub never has to infer capability
-	// from the Radar version.
-	SelfUpgradeAvailable bool
+	// SelfUpgradeAvailable reports whether this installation has the RBAC
+	// Radar's in-cluster self-upgrade endpoint needs. It is advertised
+	// explicitly on every Cloud tunnel handshake so the Hub never has to infer
+	// capability from the Radar version.
+	//
+	// It is a func, not a bool, because the answer can change without
+	// restarting Radar: enabling rbac.selfUpgrade adds a Role and RoleBinding
+	// but leaves the pod template untouched, so a value sampled once at
+	// startup would stay stale for the process lifetime. Re-evaluated per
+	// handshake, which also lets a transient API failure self-correct on the
+	// next reconnect. Nil means unavailable.
+	SelfUpgradeAvailable func() bool
 
 	// Handler is the HTTP handler to serve over tunneled streams — typically
 	// Radar's Server.Handler() (chi router).
