@@ -115,30 +115,15 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
 
   const currentPort = Number(window.location.port) || 80
 
-  const claudeDesktopConfig = JSON.stringify({
+  const makeMcpConfig = (fields: Record<string, string>) => JSON.stringify({
     mcpServers: {
-      radar: {
-        type: "http",
-        url: mcpUrl,
-      }
+      radar: fields
     }
   }, null, 2)
 
-  const cursorConfig = JSON.stringify({
-    mcpServers: {
-      radar: {
-        url: mcpUrl,
-      }
-    }
-  }, null, 2)
-
-  const windsurfConfig = JSON.stringify({
-    mcpServers: {
-      radar: {
-        serverUrl: mcpUrl,
-      }
-    }
-  }, null, 2)
+  const claudeDesktopConfig = makeMcpConfig({ type: "http", url: mcpUrl })
+  const cursorConfig = makeMcpConfig({ url: mcpUrl })
+  const windsurfConfig = makeMcpConfig({ serverUrl: mcpUrl })
 
   const vsCodeConfig = JSON.stringify({
     servers: {
@@ -149,31 +134,20 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
     }
   }, null, 2)
 
-  const geminiConfig = JSON.stringify({
-    mcpServers: {
-      radar: {
-        httpUrl: mcpUrl,
-      }
-    }
-  }, null, 2)
-
+  const geminiConfig = makeMcpConfig({ httpUrl: mcpUrl })
   const codexConfig = `[mcp_servers.radar]\nurl = "${mcpUrl}"`
-
-  const clineConfig = JSON.stringify({
-    mcpServers: {
+  const clineConfig = makeMcpConfig({ url: mcpUrl })
+  const jetbrainsConfig = makeMcpConfig({ url: mcpUrl })
+  const antigravityConfig = makeMcpConfig({ type: "http", url: mcpUrl })
+  const opencodeConfig = JSON.stringify({
+    mcp: {
       radar: {
+        type: "remote",
         url: mcpUrl,
       }
     }
   }, null, 2)
-
-  const jetbrainsConfig = JSON.stringify({
-    mcpServers: {
-      radar: {
-        url: mcpUrl,
-      }
-    }
-  }, null, 2)
+  const piConfig = makeMcpConfig({ url: mcpUrl })
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -283,6 +257,9 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
               { icon: Code2, name: 'JetBrains AI', path: 'Settings → Tools → AI Assistant → MCP', config: jetbrainsConfig },
               { icon: Terminal, name: 'OpenAI Codex', path: '~/.codex/config.toml', config: codexConfig },
               { icon: Terminal, name: 'Gemini CLI', path: '~/.gemini/settings.json', config: geminiConfig },
+              { icon: Terminal, name: 'Antigravity', path: '~/.gemini/antigravity-cli/mcp_config.json', config: antigravityConfig },
+              { icon: Terminal, name: 'OpenCode', path: '~/.config/opencode/opencode.json', config: opencodeConfig },
+              { icon: Terminal, name: 'Pi CLI', path: '~/.pi/agent/mcp.json', config: piConfig },
             ].map((agent) => (
               <details key={agent.name} className="group rounded-md border border-theme-border/50 bg-theme-base/30">
                 <summary className="flex items-center gap-2 px-3 py-2 select-none list-none hover:bg-theme-hover/50 rounded-md transition-colors [&::-webkit-details-marker]:hidden">

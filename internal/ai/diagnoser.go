@@ -237,7 +237,7 @@ const defaultMaxTurns = 15
 
 // agentCLICandidates are CLIs whose event stream we can parse + drive. Order is
 // the default-selection preference when several are installed.
-var agentCLICandidates = []string{"claude", "codex", "cursor-agent"}
+var agentCLICandidates = []string{"claude", "codex", "cursor-agent", "antigravity", "opencode", "pi"}
 
 // Detector / Diagnoser ------------------------------------------------------
 
@@ -620,7 +620,7 @@ var (
 		// AWS creds are passed through so BYO-Bedrock works; the user opted in.
 		"AWS_PROFILE": true, "AWS_REGION": true, "AWS_DEFAULT_REGION": true,
 	}
-	envAllowPrefix = []string{"ANTHROPIC_", "CLAUDE_", "AWS_", "GOOGLE_", "CLOUD_ML_", "VERTEX_"}
+	envAllowPrefix = []string{"ANTHROPIC_", "CLAUDE_", "AWS_", "GOOGLE_", "CLOUD_ML_", "VERTEX_", "OPENAI_", "GEMINI_", "MISTRAL_", "DEEPSEEK_", "GROQ_", "OPENROUTER_", "PI_", "GITHUB_"}
 )
 
 // scrubbedEnv returns a minimal environment: the CLI ingests untrusted cluster

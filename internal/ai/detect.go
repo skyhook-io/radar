@@ -24,10 +24,18 @@ type AgentInfo struct {
 
 // knownAgents are the CLI names we probe for — a FIXED list. We never exec a
 // user-supplied name/path: only these literals, resolved through PATH, are run.
-var knownAgents = []string{"claude", "codex", "gemini", "cursor-agent"}
+var knownAgents = []string{"claude", "codex", "gemini", "cursor-agent", "antigravity", "opencode", "pi"}
 
 var agentLabels = map[string]string{
 	"claude": "Claude Code", "codex": "Codex", "gemini": "Gemini CLI", "cursor-agent": "Cursor Agent",
+	"antigravity": "Antigravity", "opencode": "OpenCode", "pi": "Pi CLI",
+}
+
+// agentBinaries maps known agent identifiers to their candidate binary names on PATH.
+// Probing stops at the first binary name that resolves.
+var agentBinaries = map[string][]string{
+	"antigravity": {"agy", "antigravity"},
+	"pi":          {"pi", "pi-coding-agent"},
 }
 
 // AgentLabel is the display name for an agent CLI — the ONE table every
@@ -68,7 +76,7 @@ func ProfilesFor(agent string) []ExecutionProfile {
 		return []ExecutionProfile{ExecutionProfileSafeguarded, ExecutionProfileFullLocal}
 	case "codex":
 		return []ExecutionProfile{ExecutionProfileSafeguarded, ExecutionProfileFullLocal}
-	case "cursor-agent":
+	case "cursor-agent", "antigravity", "opencode", "pi":
 		return []ExecutionProfile{ExecutionProfileFullLocal}
 	default:
 		return nil
@@ -142,7 +150,16 @@ func isSupportedAgent(name string) bool {
 func DetectAgents(ctx context.Context, withVersions bool) []AgentInfo {
 	var out []AgentInfo
 	for _, name := range knownAgents {
-		path, err := exec.LookPath(name)
+		binName := name
+		if binaries, ok := agentBinaries[name]; ok {
+			for _, bin := range binaries {
+				if _, err := exec.LookPath(bin); err == nil {
+					binName = bin
+					break
+				}
+			}
+		}
+		path, err := exec.LookPath(binName)
 		if err != nil {
 			continue
 		}

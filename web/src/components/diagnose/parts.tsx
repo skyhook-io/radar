@@ -270,15 +270,27 @@ export function AgentControls({
   return (
     <div className="space-y-3">
       {agents.length >= 2 && (
-        <Segmented
-          label="Agent"
-          value={selectedAgent}
-          onChange={onSelectAgent}
-          options={agents.map((a) => ({
-            value: a.name,
-            label: a.label || a.name,
-          }))}
-        />
+        agents.length > 3 ? (
+          <SelectMenu
+            label="Agent"
+            value={selectedAgent}
+            onChange={onSelectAgent}
+            options={agents.map((a) => ({
+              value: a.name,
+              label: a.label || a.name,
+            }))}
+          />
+        ) : (
+          <Segmented
+            label="Agent"
+            value={selectedAgent}
+            onChange={onSelectAgent}
+            options={agents.map((a) => ({
+              value: a.name,
+              label: a.label || a.name,
+            }))}
+          />
+        )
       )}
       {profiles.length > 0 && (
         <div>
@@ -353,31 +365,31 @@ export function AgentControls({
           onChange={onSetModel}
           hint="Aliases always resolve to the latest of that tier."
         />
-      ) : isCodex || isCursor ? (
+      ) : (
         <TextField
           label="Model"
           value={model}
           placeholder={
             isCursor
               ? "Default (e.g. auto, gpt-5.2, composer-2.5)"
-              : "Default (e.g. gpt-5-codex, o3)"
+              : isCodex
+                ? "Default (e.g. gpt-5-codex, o3)"
+                : selectedAgent === "antigravity"
+                  ? "Default (e.g. gemini-2.5-flash)"
+                  : selectedAgent === "opencode"
+                    ? "Default (e.g. opencode-1.5-pro)"
+                    : "Default"
           }
           onChange={onSetModel}
           hint={
             isCursor
               ? "Leave empty for your Cursor default, or enter a model slug Cursor supports."
-              : shownProfile === "full-local"
-                ? "Your Codex setup uses its configured model; set a slug here to override it."
-                : "Leave empty for Codex's default, or enter a model your Codex version supports."
+              : isCodex
+                ? shownProfile === "full-local"
+                  ? "Your Codex setup uses its configured model; set a slug here to override it."
+                  : "Leave empty for Codex's default, or enter a model your Codex version supports."
+                : `Leave empty for ${selectedAgentLabel}'s default, or enter a supported model slug.`
           }
-        />
-      ) : (
-        <TextField
-          label="Model"
-          value={model}
-          placeholder="Default"
-          onChange={onSetModel}
-          hint="Leave empty for the agent's default, or enter a model identifier it supports."
         />
       )}
       {isCodex && (
