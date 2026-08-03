@@ -35,7 +35,8 @@ moves to the surface that actually holds them (the terminal or the Hub).
 | 7d | in-cluster, undetectable | any | any | itself | Generic wizard link (SA can't read its own Deployment, or the downward-API identity is absent) | wizard |
 | 8 | in-cluster, chart-armed (future WS3) | — | — | itself | Zero-command hot-start (chart pre-provisions cloud RBAC + Secret write-back Role) — not built yet | (future) |
 | 9 | cloud / embedded (Radar Hub) | — | — | — | Funnel hidden entirely (already connected) | — |
-| 10 | any | — | — | self-hosted Hub target | Same flows against `RADAR_HUB_URL` (+ `RADAR_HUB_APP_URL`); CLI: `--hub-url`. Self-signed pilots add `--cloud-insecure-skip-verify` / `cloud.insecureSkipVerify` | any |
+| 10 | any | — | — | self-hosted Hub target, browser-trusted cert | Same flows against `RADAR_HUB_URL` (+ `RADAR_HUB_APP_URL`); CLI: `--hub-url` | any |
+| 11 | any | — | — | self-hosted Hub, **self-signed** cert | **Not supported by either installer today** — see below | Hub wizard |
 
 The lane is advertised to the frontend as `capabilities.cloudConnect =
 {lane: "driver"|"wizard", appUrl}`; rows 3–4 are discovered at `prepare` time
@@ -109,7 +110,7 @@ implemented in `internal/server/cloud_install.go`:
   exact-manifest preflight. **Zero Hub contact.** Returns a flow (`flowId`,
   `state: ready`, plan summary) or `{state: blocked, blocked}` (nothing
   retained). 409 with current status if a flow is active (single-flight).
-- `POST /start {flowId, clusterName, acceptAdoption?, acknowledgeIncompleteDiscovery?}`
+- `POST /start {flowId, clusterName, acceptAdoption?, acknowledgeIncompleteDiscovery?, acknowledgeSharedListener?}`
   — creates the Hub connect request, returns `connectUrl`; a manager-owned
   goroutine continues approval → provision → tunnel (surviving modal close,
   navigation, and client disconnects).
@@ -123,14 +124,17 @@ implemented in `internal/server/cloud_install.go`:
 In-cluster (read-only, no Hub contact, never mutates):
 
 - `GET /api/cloud/connect/self` — what this Radar knows about its own
-  installation: `{ownership: helm|gitops|unknown, namespace, release,
+  installation: `{ownership: helm|gitops|ambiguous|unknown, namespace, release,
   deploymentName, chart, controller?, wizardUrl?}`. Every failure degrades to
   `unknown` + a generic wizard link; a confidently wrong namespace/release
   would deep-link an operator at someone else's release. The pod's own
   Deployment is matched by `MY_DEPLOYMENT_NAME` — "the only Radar-labelled
   Deployment in this namespace" is not proof it is the one serving the
   request. Those downward-API vars ship on every install (they carry no RBAC
-  implication); `RADAR_SELF_UPGRADE` separately gates self-upgrade. Reads use
+  implication); whether Radar may patch itself is answered by a
+  SelfSubjectAccessReview against the Role `rbac.selfUpgrade` creates — never
+  by an env marker, which Hub's image-only self-upgrade would leave stale.
+  Reads use
   request-scoped clients, so with auth enabled nobody learns about a
   Deployment their own identity cannot read.
 
@@ -175,9 +179,16 @@ properties:
 control plane; `RADAR_HUB_APP_URL` overrides the frontend origin when it
 differs (default: same origin as `RADAR_HUB_URL`, or the hosted
 `app.radarhq.io`). All success/recovery links derive from Hub responses, not
-hardcoded origins. The CLI equivalent is `--hub-url`; self-signed pilot stacks
-also need `--cloud-insecure-skip-verify` (binary) / `cloud.insecureSkipVerify`
-(chart).
+hardcoded origins. The CLI equivalent is `--hub-url`.
+
+**Self-signed hubs are not supported by either installer yet.** The running
+agent accepts `--cloud-insecure-skip-verify` / `cloud.insecureSkipVerify`, but
+neither the in-product driver nor `radar cloud install` can pass it: the
+driver's config carries no TLS option and never sets the chart value, and the
+`cloud` subcommands are dispatched before the global flag set is parsed, so the
+global flag cannot reach them. A self-signed pilot must use the Hub wizard,
+which generates a command the operator can edit. Wiring the option through both
+installers is a follow-up.
 
 ## Related
 

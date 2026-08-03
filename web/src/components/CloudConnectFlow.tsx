@@ -104,11 +104,12 @@ function BlockedView({
         </div>
       </div>
       <div className="mt-4 flex items-center gap-4">
-        {/* The wizard is not an escape hatch for a GitOps-managed install: its
-            imperative command is the exact thing that would drift or be
-            reverted, which is why prepare refused this path. Offering it here
-            would contradict the message directly above. */}
-        {blocked.reason !== 'gitops' && (
+        {/* Only a preflight denial has a legitimate browser alternative —
+            someone with more Kubernetes permission can run the wizard. GitOps
+            and unsupported refusals named a specific reason and target that a
+            generic signup link cannot carry, so offering it would contradict
+            the message directly above. */}
+        {blocked.reason === 'preflight' && (
           <a
             href={signupUrl}
             target="_blank"
@@ -218,6 +219,9 @@ function PlanCard({
             label="Note"
             value={`Pinned image.tag "${plan.currentImageTag}" will be cleared so the chart's stable Radar runs`}
           />
+        )}
+        {plan.preservedImageRepository && (
+          <PlanRow label="Image repository" value={`${plan.preservedImageRepository} (preserved)`} mono />
         )}
       </div>
 
@@ -467,6 +471,10 @@ function ConnectedCard({
           Done
         </button>
       </div>
+      <p className="text-[11px] text-theme-text-tertiary mb-3">
+        Watch the rollout locally:{' '}
+        <code className="font-mono text-[10.5px] text-theme-text-secondary">{connected.trackCommand}</code>
+      </p>
       {connected.rollback && <GuidanceDetails title="How to undo this later" guidance={connected.rollback} />}
     </div>
   )

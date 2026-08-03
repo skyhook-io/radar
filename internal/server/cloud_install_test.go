@@ -208,7 +208,7 @@ func TestCloudInstallHappyPathFreshNeverLeaksToken(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 	st = waitForState(t, fx.m, cloudFlowAwaitingApproval)
-	if st.ConnectURL == "" || st.ApprovalExpiresAt == "" {
+	if st.ConnectURL == "" {
 		t.Fatalf("awaiting_approval status = %+v", st)
 	}
 	assertNoTokenInStatus(t, fx.m)
@@ -752,5 +752,41 @@ func TestSameOriginOKAcceptsTheServingAuthority(t *testing.T) {
 				t.Fatalf("sameOriginOK(host=%q, origin=%q) = %v, want %v", tc.host, tc.origin, got, tc.want)
 			}
 		})
+	}
+}
+
+// An admission webhook can quote the Secret it denied, so a provisioning error
+// may carry the cluster token. It must not reach the status API — the wire
+// structs having no token FIELD is not enough when the value rides inside a
+// message string.
+func TestCloudInstallProvisionErrorNeverLeaksTokenIntoStatus(t *testing.T) {
+	fx := newManagerFixture(cloudinstall.ProvisionFresh, cloudinstall.InstallModeFresh, nil)
+	fx.provision.err = fmt.Errorf(
+		`admission webhook "policy.example.com" denied the request: Secret radar-cloud-config has disallowed data: {"token":%q}`,
+		testToken,
+	)
+
+	if _, _, err := fx.m.prepare(context.Background()); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	st := waitForState(t, fx.m, cloudFlowReady)
+	if _, err := fx.m.start(cloudInstallStartRequest{FlowID: st.FlowID}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	fx.connect.approve <- &cloud.PollResponse{Status: "approved", ClusterID: "cl_1", Token: testToken, WSSURL: "wss://api.test.example/agent"}
+
+	st = waitForState(t, fx.m, cloudFlowFailed)
+	if st.Failure.Kind != cloudFailProvision {
+		t.Fatalf("failure = %+v", st.Failure)
+	}
+	assertNoTokenInStatus(t, fx.m)
+
+	// The operator still needs to see WHAT failed, just not the credential.
+	raw, _ := json.Marshal(st)
+	if !strings.Contains(string(raw), "admission webhook") {
+		t.Fatalf("redaction destroyed the diagnostic: %s", raw)
+	}
+	if !strings.Contains(string(raw), "[REDACTED]") {
+		t.Fatalf("expected an explicit redaction marker: %s", raw)
 	}
 }

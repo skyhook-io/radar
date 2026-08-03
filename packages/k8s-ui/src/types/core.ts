@@ -99,7 +99,7 @@ export interface Capabilities {
 
 // CloudConnectCapability picks the Cloud funnel's connect lane: 'driver'
 // means the in-product connect flow can run on this server (local, no auth,
-// loopback listener); 'wizard' routes to the Hub's connect wizard at appUrl.
+// no existing tunnel); 'wizard' routes to the Hub's connect wizard at appUrl.
 export interface CloudConnectCapability {
   lane: 'driver' | 'wizard'
   appUrl: string

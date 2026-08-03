@@ -132,11 +132,12 @@ type cloudInstallBackend struct {
 }
 
 type cloudInstallConnected struct {
-	ClusterID  string                        `json:"clusterId"`
-	ClusterURL string                        `json:"clusterUrl"`
-	Deployment helm.DeploymentRef            `json:"deployment"`
-	TrackCmd   string                        `json:"trackCommand"`
-	Rollback   *cloudinstall.RecoveryGuidance `json:"rollback,omitempty"`
+	ClusterID  string                         `json:"clusterId"`
+	ClusterURL string                         `json:"clusterUrl"`
+	// TrackCmd lets the operator watch the rollout locally; it already names
+	// the Deployment, so the ref itself is not repeated on the wire.
+	TrackCmd string                         `json:"trackCommand"`
+	Rollback *cloudinstall.RecoveryGuidance `json:"rollback,omitempty"`
 }
 
 type cloudInstallFailure struct {
@@ -184,10 +185,9 @@ type cloudInstallFlow struct {
 	prepared    preparedInstall
 	summary     cloudInstallPlanSummary
 
-	clusterName       string
-	connectURL        string
-	approvalExpiresAt time.Time
-	cancel            context.CancelFunc
+	clusterName string
+	connectURL  string
+	cancel      context.CancelFunc
 	// canceling is set under the manager lock the moment a cancel is accepted,
 	// so the run goroutine cannot claim the provisioning state afterwards.
 	canceling bool
@@ -518,7 +518,6 @@ func (m *cloudInstallManager) start(req cloudInstallStartRequest) (*cloudInstall
 	runCtx, cancel := context.WithCancel(context.Background())
 	flow.cancel = cancel
 	flow.connectURL = cr.ConnectURL
-	flow.approvalExpiresAt = time.Now().Add(time.Duration(cr.ExpiresIn) * time.Second)
 	flow.state = cloudFlowAwaitingApproval
 	go m.run(runCtx, flow, client, cr)
 	return flow, nil
@@ -628,11 +627,20 @@ func (m *cloudInstallManager) run(ctx context.Context, flow *cloudInstallFlow, c
 	})
 	cancelProvision()
 	if err != nil {
-		log.Printf("[cloud-install] provisioning failed for cluster %s: %v", pr.ClusterID, err)
+		// The token is inside the Secret this step submits, so a rejection can
+		// echo it back — admission webhooks routinely quote the object they
+		// denied. Scrub before the message reaches a log or the status API,
+		// both of which are readable by anyone who can reach this Radar.
+		safeErr := redactCloudToken(err.Error(), pr.Token)
+		log.Printf("[cloud-install] provisioning failed for cluster %s: %s", pr.ClusterID, safeErr)
 		g := cloudinstall.PostApprovalProvisionGuidance(pr.ClusterID, clusterURL, recovery, err, target)
+		g.Summary = redactCloudToken(g.Summary, pr.Token)
+		for i, line := range g.Lines {
+			g.Lines[i] = redactCloudToken(line, pr.Token)
+		}
 		// The summary carries the "do not rerun the installer" instruction, so
-		// it must be the headline; the raw Helm error rides along as detail.
-		g.Lines = append([]string{fmt.Sprintf("Provisioning failed: %v", err)}, g.Lines...)
+		// it must be the headline; the scrubbed Helm error rides along.
+		g.Lines = append([]string{fmt.Sprintf("Provisioning failed: %s", safeErr)}, g.Lines...)
 		fail(cloudFailProvision, g.Summary, &g, false)
 		return
 	}
@@ -647,6 +655,10 @@ func (m *cloudInstallManager) run(ctx context.Context, flow *cloudInstallFlow, c
 
 	if err := client.WaitUntilConsumed(ctx, cr, cloudTunnelConfirmationWait); err != nil {
 		g := cloudinstall.TunnelConfirmationGuidance(err, pr.ClusterID, pr.WSSURL, clusterURL, prepared.Deployment(), target)
+		g.Summary = redactCloudToken(g.Summary, pr.Token)
+		for i, line := range g.Lines {
+			g.Lines[i] = redactCloudToken(line, pr.Token)
+		}
 		fail(cloudFailTunnelUnconfirmed, g.Summary, &g, false)
 		return
 	}
@@ -654,8 +666,7 @@ func (m *cloudInstallManager) run(ctx context.Context, flow *cloudInstallFlow, c
 	connected := &cloudInstallConnected{
 		ClusterID:  pr.ClusterID,
 		ClusterURL: clusterURL,
-		Deployment: prepared.Deployment(),
-		TrackCmd:   fmt.Sprintf("%s -n %s rollout status deployment/%s", target.Kubectl(), prepared.Deployment().Namespace, prepared.Deployment().Name),
+		TrackCmd: fmt.Sprintf("%s -n %s rollout status deployment/%s", target.Kubectl(), prepared.Deployment().Namespace, prepared.Deployment().Name),
 	}
 	if recovery.Mode == cloudinstall.ProvisionAdopt {
 		g := cloudinstall.AdoptionRollbackGuidance(recovery, clusterURL, target)
@@ -723,7 +734,6 @@ type cloudInstallStatus struct {
 	Plan              *cloudInstallPlanSummary `json:"plan,omitempty"`
 	ClusterName       string                   `json:"clusterName,omitempty"`
 	ConnectURL        string                   `json:"connectUrl,omitempty"`
-	ApprovalExpiresAt string                   `json:"approvalExpiresAt,omitempty"`
 	Connected         *cloudInstallConnected   `json:"connected,omitempty"`
 	Failure           *cloudInstallFailure     `json:"failure,omitempty"`
 }
@@ -752,9 +762,6 @@ func (m *cloudInstallManager) statusLocked() cloudInstallStatus {
 		if summary.Mode != "" {
 			st.Plan = &summary
 		}
-	}
-	if !flow.approvalExpiresAt.IsZero() {
-		st.ApprovalExpiresAt = flow.approvalExpiresAt.UTC().Format(time.RFC3339)
 	}
 	return st
 }
@@ -943,4 +950,15 @@ func sameOriginOK(r *http.Request) bool {
 		requestHost = h
 	}
 	return cloud.IsLoopbackHostname(u.Hostname()) && cloud.IsLoopbackHostname(requestHost)
+}
+
+// redactCloudToken removes a cluster token that an upstream error may have
+// echoed back. Post-approval failures carry Kubernetes and Helm messages that
+// can quote the Secret being applied, and those messages land in server logs
+// and the status API — neither of which the token may ever reach.
+func redactCloudToken(text, token string) string {
+	if token == "" {
+		return text
+	}
+	return strings.ReplaceAll(text, token, "[REDACTED]")
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/diagnosecli"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
 	"github.com/skyhook-io/radar/internal/server"
 	"golang.org/x/net/http/httpguts"
@@ -463,9 +464,13 @@ func main() {
 				Namespace:          namespace,
 				APIServerURL:       apiServerURL,
 				InsecureSkipVerify: *cloudInsecureSkipVerify,
-				// The chart sets both env vars only when rbac.selfUpgrade is
-				// enabled. Match handleSelfUpgrade's configuration gate exactly.
-				SelfUpgradeAvailable: namespace != "" && deploymentName != "",
+				// Ask the apiserver whether this ServiceAccount may actually
+				// patch its own Deployment. Env presence is NOT the signal:
+				// identity ships on every install for read-only
+				// self-description, and a chart-set marker would go stale on
+				// exactly the path that matters — Hub's self-upgrade patches
+				// only the image, leaving an older pod template in place.
+				SelfUpgradeAvailable: canSelfUpgrade(rootCtx, namespace, deploymentName),
 				Handler:              srv.Handler(),
 			})
 			if runErr != nil && !errors.Is(runErr, context.Canceled) {
@@ -678,4 +683,23 @@ func (h *headerFromEnvFlag) Set(raw string) error {
 	}
 	h.m[key] = envName
 	return nil
+}
+
+// canSelfUpgrade reports whether Radar's ServiceAccount may patch its own
+// Deployment, which is what rbac.selfUpgrade's Role grants. Advertising this
+// to Hub from anything other than the apiserver's own answer produces an
+// upgrade button that 403s: a chart-set env marker is invisible to an
+// image-only self-upgrade, and identity env vars ship unconditionally.
+func canSelfUpgrade(ctx context.Context, namespace, deploymentName string) bool {
+	if namespace == "" || deploymentName == "" {
+		return false
+	}
+	client := k8s.GetClient()
+	if client == nil {
+		return false
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	allowed, apiErr := k8score.CanI(probeCtx, client, namespace, "apps", "deployments", "patch")
+	return allowed && !apiErr
 }

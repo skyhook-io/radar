@@ -4,6 +4,7 @@ import { Bell, Check, Globe, History, Sparkles, Users, X } from 'lucide-react'
 import { DialogPortal } from '@skyhook-io/k8s-ui/components/ui/DialogPortal'
 import { Tooltip } from './ui/Tooltip'
 import { CloudConnectFlow } from './CloudConnectFlow'
+import { showApiError } from './ui/Toast'
 import {
   ApiError,
   cloudInstallActive,
@@ -97,8 +98,11 @@ export function CloudFunnelButton() {
       // than leaving the flow view armed, where a later status change would
       // pull the user into a screen they did not ask for.
       exitFlow()
+      showApiError('Could not inspect this cluster for Cloud connect', err instanceof Error ? err.message : undefined)
     },
-    meta: { errorMessage: 'Could not inspect this cluster for Cloud connect' },
+    // No meta.errorMessage: the global handler cannot tell a single-flight 409
+    // (a successful attach) from a real failure, and would report failure over
+    // a running install. Toast explicitly on the paths that are failures.
   })
 
   const openModal = () => {
@@ -253,6 +257,7 @@ function ModalFooter({
   lane,
   signupUrl,
   self,
+  selfLoading,
   onConnect,
   onLater,
 }: {
@@ -260,6 +265,8 @@ function ModalFooter({
   signupUrl: string
   // Present only in-cluster: what this Radar knows about its own install.
   self?: CloudConnectSelf
+  // True while in-cluster self-classification is still in flight.
+  selfLoading?: boolean
   onConnect: () => void
   onLater: () => void
 }) {
@@ -267,6 +274,10 @@ function ModalFooter({
   // deep link: one would be reverted, the other has conflicting management.
   const gitops = self?.ownership === 'gitops'
   const ambiguous = self?.ownership === 'ambiguous'
+  // Until classification resolves we cannot know which lane applies, and a
+  // fast click would escape to signup before we could route a GitOps install
+  // to the CLI.
+  const selfPending = selfLoading === true
   return (
     <div className="px-7 py-4 bg-theme-base border-t border-theme-border">
       {self && self.ownership !== 'unknown' && (
@@ -314,12 +325,14 @@ function ModalFooter({
               or start in the browser
             </a>
           </>
-        ) : (
+        ) : gitops || ambiguous ? null : (
           <a
-            href={gitops || ambiguous ? signupUrl : self?.wizardUrl || signupUrl}
+            href={self?.wizardUrl || signupUrl}
+            aria-disabled={selfPending}
             target="_blank"
             rel="noopener noreferrer"
-            className="px-5 py-2 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[13.5px] font-bold shadow-[0_0_22px_rgba(16,185,129,0.35)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] hover:-translate-y-px transition-all"
+            onClick={(e) => { if (selfPending) e.preventDefault() }}
+            className={`px-5 py-2 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[13.5px] font-bold shadow-[0_0_22px_rgba(16,185,129,0.35)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] hover:-translate-y-px transition-all ${selfPending ? 'opacity-60 pointer-events-none' : ''}`}
           >
             {self?.ownership === 'helm' ? 'Connect this cluster' : 'Try Cloud free'}
           </a>

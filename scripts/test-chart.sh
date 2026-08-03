@@ -48,13 +48,17 @@ render() {
 echo "Running chart template tests against $CHART_DIR"
 echo
 
-render "defaults — no self-upgrade footprint"
+# Identity env and self-upgrade RBAC are deliberately decoupled: Radar needs to
+# know which object it is for read-only self-description (the Cloud connect
+# handoff), which grants nothing. Whether it may PATCH itself is the Role — so
+# assert on the Role, not on the env vars.
+render "defaults — no self-upgrade RBAC"
 assert_contains '--listen-address=0.0.0.0'          "shared listener explicitly enabled"
 assert_not_contains '^kind: Role$'                  "no namespaced Role"
 assert_not_contains '^kind: RoleBinding$'           "no namespaced RoleBinding"
-assert_not_contains 'MY_POD_NAMESPACE'              "no downward-API env var"
-assert_not_contains 'MY_DEPLOYMENT_NAME'            "no deployment-name env var"
-assert_not_contains 'self-upgrade'                  "no self-upgrade references anywhere"
+assert_not_contains 'radar-self-upgrade'            "no self-upgrade Role/RoleBinding"
+assert_contains 'MY_POD_NAMESPACE'                  "identity ships for read-only self-description"
+assert_contains 'MY_DEPLOYMENT_NAME'                "identity ships for read-only self-description"
 echo
 
 render "prometheusHeadersFromEnv — flag and secret env stay separate" \
@@ -105,8 +109,7 @@ echo
 
 render "cloud.enabled=true alone — does NOT auto-enable self-upgrade" \
   --set cloud.enabled=true --set cloud.url=wss://x --set cloud.token=t --set cloud.clusterName=c
-assert_not_contains 'MY_POD_NAMESPACE'              "env vars absent without explicit rbac.selfUpgrade"
-assert_not_contains 'self-upgrade'                  "no Role/RoleBinding without explicit opt-in"
+assert_not_contains 'radar-self-upgrade'            "no Role/RoleBinding without explicit opt-in"
 echo
 
 render "rbac.create=false + rbac.selfUpgrade=true — feature still works" \

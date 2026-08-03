@@ -1576,7 +1576,6 @@ export interface CloudInstallPlanSummary {
 export interface CloudInstallConnected {
   clusterId: string
   clusterUrl: string
-  deployment: { name: string; namespace: string }
   trackCommand: string
   rollback?: CloudInstallRecoveryGuidance
 }
@@ -1612,7 +1611,6 @@ export interface CloudInstallStatus {
   plan?: CloudInstallPlanSummary
   clusterName?: string
   connectUrl?: string
-  approvalExpiresAt?: string
   connected?: CloudInstallConnected
   failure?: CloudInstallFailure
   blocked?: CloudInstallBlocked
