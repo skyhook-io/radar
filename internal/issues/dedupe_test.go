@@ -2,75 +2,9 @@ package issues
 
 import (
 	"testing"
-	"time"
 
-	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
-
-func TestRollupStuckJobsUnderSidecarCronJob(t *testing.T) {
-	owner := Ref{Group: "batch", Kind: "CronJob", Namespace: "ns", Name: "archive"}
-	p := &fakeProvider{
-		problems: []k8s.Detection{
-			{Kind: "CronJob", Group: "batch", Namespace: "ns", Name: "archive", Severity: "warning", Reason: "SidecarBlocksJobCompletion", Action: "fix the sidecar", Fingerprint: "job-sidecar-block:ns:archive", DurationSeconds: 600},
-			{Kind: "Job", Group: "batch", Namespace: "ns", Name: "archive-1", Severity: "high", Reason: "Running for 2h with no completions", DurationSeconds: 7200},
-			{Kind: "Job", Group: "batch", Namespace: "ns", Name: "archive-2", Severity: "high", Reason: "Running for 3h with no completions", DurationSeconds: 10800},
-		},
-		jobCronJobOwner: map[string]Ref{
-			"ns/archive-1": owner,
-			"ns/archive-2": owner,
-		},
-	}
-
-	grouped := Compose(p, Filters{Grouped: true, Limit: NoLimit})
-	if len(grouped) != 1 {
-		t.Fatalf("grouped issues = %d, want one CronJob root: %+v", len(grouped), grouped)
-	}
-	got := grouped[0]
-	if got.Kind != "CronJob" || got.Name != "archive" || got.Category != issuesapi.CategoryCronJobFailed {
-		t.Fatalf("grouped root = %+v, want CronJob archive", got)
-	}
-	if got.Reason != "SidecarBlocksJobCompletion" {
-		t.Fatalf("grouped reason = %q, want CronJob root diagnosis", got.Reason)
-	}
-	if got.Severity != SeverityWarning {
-		t.Fatalf("grouped severity = %q, want normalized warning", got.Severity)
-	}
-	if got.Count != 2 || got.Affected.Workloads != 2 || len(got.Members) != 2 {
-		t.Fatalf("grouped affected Jobs = count %d, affected %+v, members %+v", got.Count, got.Affected, got.Members)
-	}
-	if got.Action != "fix the sidecar" {
-		t.Fatalf("root diagnosis was lost during rollup: %+v", got)
-	}
-	if got.LastSeen.Sub(got.FirstSeen) != 10*time.Minute {
-		t.Fatalf("grouped onset = %s, want root evidence duration 10m", got.LastSeen.Sub(got.FirstSeen))
-	}
-
-	flat := Compose(p, Filters{Limit: NoLimit})
-	if len(flat) != 3 {
-		t.Fatalf("flat and per-resource evidence must retain both Job rows, got %+v", flat)
-	}
-}
-
-func TestRollupStuckJobsUnderSidecarCronJobKeepsUnrelatedJobFailures(t *testing.T) {
-	owner := Ref{Group: "batch", Kind: "CronJob", Namespace: "ns", Name: "archive"}
-	p := &fakeProvider{
-		problems: []k8s.Detection{
-			{Kind: "CronJob", Group: "batch", Namespace: "ns", Name: "archive", Severity: "warning", Reason: "SidecarBlocksJobCompletion", Fingerprint: "job-sidecar-block:ns:archive"},
-			{Kind: "Job", Group: "batch", Namespace: "ns", Name: "archive-failed", Severity: "critical", Reason: "BackoffLimitExceeded"},
-			{Kind: "Job", Group: "batch", Namespace: "ns", Name: "other-stuck", Severity: "high", Reason: "Running for 2h with no completions"},
-		},
-		jobCronJobOwner: map[string]Ref{
-			"ns/archive-failed": owner,
-			"ns/other-stuck":    {Group: "batch", Kind: "CronJob", Namespace: "ns", Name: "other"},
-		},
-	}
-
-	got := Compose(p, Filters{Grouped: true, Limit: NoLimit})
-	if len(got) != 3 {
-		t.Fatalf("only no-completion Jobs owned by the detected CronJob may roll up, got %+v", got)
-	}
-}
 
 func TestDedupePodSchedulingOverProblem(t *testing.T) {
 	sched := Issue{Source: SourceScheduling, Kind: "Pod", Namespace: "ns", Name: "web-abc"}

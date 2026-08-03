@@ -17,29 +17,18 @@ func RelatedIssues(p Provider, opts RelatedIssueOptions, group, kind, namespace,
 	// Compose FLAT (uncapped) then group: matching against the flat evidence —
 	// not the grouped issue's inline Members (capped at maxInlineMembers) — is
 	// what makes member #11..#N in a large fan-out resolve correctly.
-	flat, grouped := ComposeForRelatedIssues(p, opts)
+	flat := Compose(p, Filters{
+		Namespaces:           opts.Namespaces,
+		Limit:                NoLimit,
+		CanReadClusterScoped: opts.CanReadClusterScoped,
+		CanReadRelated:       opts.CanReadRelated,
+	})
+	grouped := GroupIssues(flat)
 	// Run the grouped-mode enrichment (mirrors the cluster path) so the grouped
 	// issues get coverage-gated incident_parent pointers — GroupIssues alone only
 	// carries the representative's DiagnosticContext, never the reverse pointer.
 	grouped = enrichDiagnosticContext(grouped, flat, grouped, p)
 	return RelatedIssuesFrom(flat, grouped, opts, group, kind, namespace, name)
-}
-
-// ComposeForRelatedIssues builds the (flat, grouped) pair RelatedIssuesFrom
-// expects: an uncapped flat compose with the same evidence-level rollups the
-// cluster grouped path applies, then its grouping. Callers that compose once
-// and match many resources (the GitOps insights resolver) must use this
-// instead of a bare Compose+GroupIssues, so per-resource diagnoses cannot
-// diverge from the cluster view — a stuck child Job must resolve to its
-// CronJob sidecar root on every surface, not only in RelatedIssues.
-func ComposeForRelatedIssues(p Provider, opts RelatedIssueOptions) (flat, grouped []Issue) {
-	flat, _ = composeWithStats(p, Filters{
-		Namespaces:           opts.Namespaces,
-		Limit:                NoLimit,
-		CanReadClusterScoped: opts.CanReadClusterScoped,
-		CanReadRelated:       opts.CanReadRelated,
-	}, composeOptions{rollupStuckSidecarJobs: true})
-	return flat, GroupIssues(flat)
 }
 
 // RelatedIssuesFrom is the matching half of RelatedIssues over an

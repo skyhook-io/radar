@@ -3,7 +3,6 @@ package issues
 import (
 	"strings"
 
-	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
@@ -85,71 +84,12 @@ var childCategories = map[issuesapi.Category]bool{
 // killed a slow-but-not-crashing pod) has no qualifying child, so the severity
 // gate keeps its row. cronjob_failed is deliberately NOT here: "stale" /
 // "never-scheduled" means no Jobs were produced at all — an orthogonal failure
-// with no symptom children to fold into. SidecarBlocksJobCompletion is folded
-// separately because it has to cross the Job -> CronJob subject boundary.
+// with no symptom children to fold into (a failed child Job surfaces as
+// job_failed on that Job, which already resolves to the CronJob subject).
 var parentRollupCategories = map[issuesapi.Category]bool{
 	issuesapi.CategoryWorkloadDegraded: true,
 	issuesapi.CategoryRolloutStalled:   true,
 	issuesapi.CategoryJobFailed:        true,
-}
-
-type cronJobOwnerProvider interface {
-	CronJobOwnerForJob(namespace, name string) (Ref, bool)
-}
-
-func rollupStuckJobsUnderSidecarCronJob(in []Issue, p Provider) []Issue {
-	owners, ok := p.(cronJobOwnerProvider)
-	if !ok {
-		return in
-	}
-
-	roots := make(map[string]Issue)
-	for _, issue := range in {
-		if issue.Source == SourceProblem && issue.Kind == "CronJob" && issue.Reason == "SidecarBlocksJobCompletion" {
-			roots[subjectKeyOf(subjectRef(issue))] = issue
-		}
-	}
-	if len(roots) == 0 {
-		return in
-	}
-
-	out := make([]Issue, 0, len(in))
-	for _, issue := range in {
-		if issue.Source != SourceProblem || issue.Kind != "Job" || issue.Category != issuesapi.CategoryJobFailed ||
-			!k8s.IsStuckActiveJobReason(issue.Reason) {
-			out = append(out, issue)
-			continue
-		}
-		owner, found := owners.CronJobOwnerForJob(issue.Namespace, issue.Name)
-		root, foundRoot := roots[subjectKeyOf(owner)]
-		if !found || !foundRoot {
-			out = append(out, issue)
-			continue
-		}
-
-		issue.Owner = owner
-		issue.ID = root.ID
-		issue.GroupingScope = root.GroupingScope
-		issue.Category = root.Category
-		issue.CategoryGroup = root.CategoryGroup
-		issue.Fingerprint = root.Fingerprint
-		issue.Severity = root.Severity
-		issue.Reason = root.Reason
-		issue.Message = root.Message
-		issue.RawMessage = root.RawMessage
-		issue.Cause = root.Cause
-		issue.Action = root.Action
-		issue.RemediationKind = root.RemediationKind
-		issue.RemediationTarget = root.RemediationTarget
-		issue.OperationRetryCount = root.OperationRetryCount
-		issue.Stuck = root.Stuck
-		issue.FirstSeen = root.FirstSeen
-		issue.LastSeen = root.LastSeen
-		issue.IssueTiming = root.IssueTiming
-		issue.IssueTimingBasis = root.IssueTimingBasis
-		out = append(out, issue)
-	}
-	return out
 }
 
 // dedupeWorkloadDegradedOverChild drops the parent workload rollup row

@@ -308,66 +308,6 @@ func TestRelatedIssues_SubjectAndMember(t *testing.T) {
 	}
 }
 
-// TestRelatedIssues_StuckJobResolvesToSidecarCronJobRoot pins that the
-// per-resource path runs the sidecar rollup: diagnosing a stuck child Job must
-// surface the CronJob root's SidecarBlocksJobCompletion diagnosis and
-// remediation, not the bare "no completions" row — agents diagnose the symptom
-// object, and the remediation lives on the root.
-func TestRelatedIssues_StuckJobResolvesToSidecarCronJobRoot(t *testing.T) {
-	owner := Ref{Group: "batch", Kind: "CronJob", Namespace: "ns", Name: "archive"}
-	p := &fakeProvider{
-		problems: []k8s.Detection{
-			{Kind: "CronJob", Group: "batch", Namespace: "ns", Name: "archive", Severity: "warning", Reason: "SidecarBlocksJobCompletion", Action: "fix the sidecar", Fingerprint: "job-sidecar-block:ns:archive", DurationSeconds: 600},
-			{Kind: "Job", Group: "batch", Namespace: "ns", Name: "archive-1", Severity: "high", Reason: "Running for 2h with no completions", DurationSeconds: 7200},
-		},
-		jobCronJobOwner: map[string]Ref{"ns/archive-1": owner},
-		change: map[string]*issuesapi.ChangeContext{
-			resourceKey("batch", "CronJob", "ns", "archive"): {Changed: true, What: "cronjob-template"},
-			resourceKey("batch", "Job", "ns", "archive-1"):   {Changed: true, What: "job-template"},
-		},
-	}
-	got := RelatedIssues(p, RelatedIssueOptions{}, "batch", "Job", "ns", "archive-1")
-	if len(got) != 1 {
-		t.Fatalf("RelatedIssues(stuck Job) = %d, want the single CronJob root: %+v", len(got), got)
-	}
-	if got[0].Kind != "CronJob" || got[0].Name != "archive" || got[0].Reason != "SidecarBlocksJobCompletion" {
-		t.Fatalf("stuck Job resolved to %+v, want the SidecarBlocksJobCompletion CronJob root", got[0])
-	}
-	if got[0].Action != "fix the sidecar" {
-		t.Fatalf("root remediation was lost on the per-resource path: %+v", got[0])
-	}
-	if got[0].ChangeContext == nil || got[0].ChangeContext.What != "cronjob-template" {
-		t.Fatalf("change context = %+v, want CronJob-root enrichment", got[0].ChangeContext)
-	}
-}
-
-// TestComposeForRelatedIssues_CarriesSidecarRollup pins the shared precompose
-// entry used by compose-once/match-many callers (the GitOps insights resolver):
-// the pair it returns must carry the sidecar rollup, so a stuck child Job
-// resolves to the CronJob root there too — not only through RelatedIssues.
-func TestComposeForRelatedIssues_CarriesSidecarRollup(t *testing.T) {
-	owner := Ref{Group: "batch", Kind: "CronJob", Namespace: "ns", Name: "archive"}
-	p := &fakeProvider{
-		problems: []k8s.Detection{
-			{Kind: "CronJob", Group: "batch", Namespace: "ns", Name: "archive", Severity: "warning", Reason: "SidecarBlocksJobCompletion", Action: "fix the sidecar", Fingerprint: "job-sidecar-block:ns:archive", DurationSeconds: 600},
-			{Kind: "Job", Group: "batch", Namespace: "ns", Name: "archive-1", Severity: "high", Reason: "Running for 2h with no completions", DurationSeconds: 7200},
-		},
-		jobCronJobOwner: map[string]Ref{"ns/archive-1": owner},
-		change: map[string]*issuesapi.ChangeContext{
-			resourceKey("batch", "CronJob", "ns", "archive"): {Changed: true, What: "cronjob-template"},
-			resourceKey("batch", "Job", "ns", "archive-1"):   {Changed: true, What: "job-template"},
-		},
-	}
-	flat, grouped := ComposeForRelatedIssues(p, RelatedIssueOptions{})
-	got := RelatedIssuesFrom(flat, grouped, RelatedIssueOptions{}, "batch", "Job", "ns", "archive-1")
-	if len(got) != 1 || got[0].Kind != "CronJob" || got[0].Reason != "SidecarBlocksJobCompletion" || got[0].Action != "fix the sidecar" {
-		t.Fatalf("precomposed pair lost the sidecar rollup: %+v", got)
-	}
-	if got[0].ChangeContext == nil || got[0].ChangeContext.What != "cronjob-template" {
-		t.Fatalf("precomposed change context = %+v, want CronJob-root enrichment", got[0].ChangeContext)
-	}
-}
-
 // TestRelatedIssues_PopulatesIncidentParent pins that the per-resource path runs
 // the grouped-mode enrichment, so a symptom returned for the drawer / get_resource
 // / diagnose carries the symptom→root incident_parent (not just the forward links).

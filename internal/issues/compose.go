@@ -103,14 +103,6 @@ func Compose(p Provider, f Filters) []Issue {
 // severity desc, then last-seen desc, then kind/ns/name for stable
 // tiebreaks.
 func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
-	return composeWithStats(p, f, composeOptions{})
-}
-
-type composeOptions struct {
-	rollupStuckSidecarJobs bool
-}
-
-func composeWithStats(p Provider, f Filters, opts composeOptions) ([]Issue, ComposeStats) {
 	// Negative Limit is the "uncapped" sentinel: callers that need the
 	// full matched set (per-resource issue indexes for /api/ai list +
 	// search summaryContext) pass NoLimit so a 5000-issue cluster
@@ -185,9 +177,6 @@ func composeWithStats(p Provider, f Filters, opts composeOptions) ([]Issue, Comp
 	out = dedupeWorkloadDegradedOverChild(out)
 	out = dedupeConditionOverMissingRef(out)
 	out = dedupePVCPendingOverMissingRef(out)
-	if f.Grouped || opts.rollupStuckSidecarJobs {
-		out = rollupStuckJobsUnderSidecarCronJob(out, p)
-	}
 
 	// ---- 3. Shape: fold to the public grouped model ------------------
 	// A grouped row's Kind/Name is the SUBJECT (the owner a 50-pod crashloop

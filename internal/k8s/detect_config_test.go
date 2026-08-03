@@ -174,7 +174,7 @@ func TestDetectConfigProblemsIncludesDuplicateEnvVars(t *testing.T) {
 	t.Cleanup(core.Stop)
 	cache := &ResourceCache{ResourceCache: core}
 
-	got := detectConfigProblems(cache, "prod", now, listPodsByNamespace(cache, "prod"))
+	got := detectConfigProblems(cache, "prod", now)
 	if len(got) != 1 {
 		t.Fatalf("got %d config problems, want 1: %+v", len(got), got)
 	}
@@ -190,570 +190,170 @@ func TestDetectConfigProblemsIncludesDuplicateEnvVars(t *testing.T) {
 	}
 }
 
-func TestDetectStuckSidecarJobs(t *testing.T) {
-	now := time.Date(2026, time.July, 21, 12, 0, 0, 0, time.UTC)
-	tests := []struct {
-		name            string
-		mutate          func(*sidecarJobFixture)
-		allNamespaces   bool
-		wantDetections  int
-		wantActiveCount int
-		wantAge         time.Duration
-		wantDuration    time.Duration
-	}{
-		{
-			name:            "accumulating jobs with completed and running containers",
-			wantDetections:  1,
-			wantActiveCount: 3,
+func duplicateEnvTestDeployment(containers, initContainers []corev1.Container) *appsv1.Deployment {
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "prod", CreationTimestamp: metav1.Now()},
+		Spec: appsv1.DeploymentSpec{
+			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: containers, InitContainers: initContainers}},
 		},
-		{
-			name:            "all namespace scan",
-			allNamespaces:   true,
-			wantDetections:  1,
-			wantActiveCount: 3,
-		},
-		{
-			name: "split work without accumulation",
-			mutate: func(f *sidecarJobFixture) {
-				f.jobs = f.jobs[:1]
-				f.pods = f.pods[:1]
-			},
-		},
-		{
-			name: "overlapping single container jobs",
-			mutate: func(f *sidecarJobFixture) {
-				for _, pod := range f.pods {
-					pod.Status.ContainerStatuses = []corev1.ContainerStatus{sidecarTestRunningStatus("worker", now.Add(-10*time.Minute))}
-				}
-			},
-		},
-		{
-			name: "container split in only one active Job",
-			mutate: func(f *sidecarJobFixture) {
-				for _, pod := range f.pods[1:] {
-					pod.Status.ContainerStatuses = []corev1.ContainerStatus{sidecarTestRunningStatus("worker", now.Add(-10*time.Minute))}
-				}
-			},
-		},
-		{
-			name: "different container pairs across active Jobs",
-			mutate: func(f *sidecarJobFixture) {
-				for i, pod := range f.pods {
-					pod.Status.ContainerStatuses = []corev1.ContainerStatus{
-						sidecarTestCompletedStatus(fmt.Sprintf("worker-%d", i), 0, now.Add(-10*time.Minute)),
-						sidecarTestRunningStatus(fmt.Sprintf("helper-%d", i), now.Add(-20*time.Minute)),
-					}
-				}
-			},
-		},
-		{
-			name: "recent CronJob success",
-			mutate: func(f *sidecarJobFixture) {
-				recent := metav1.NewTime(now.Add(-5 * time.Minute))
-				f.cronJob.Status.LastSuccessfulTime = &recent
-			},
-		},
-		{
-			name: "recent succeeded owned Job",
-			mutate: func(f *sidecarJobFixture) {
-				f.jobs = append(f.jobs, sidecarTestSucceededJob(f.cronJob, "recent-success", now.Add(-5*time.Minute)))
-			},
-		},
-		{
-			name: "recent partial success without completion time suppresses",
-			mutate: func(f *sidecarJobFixture) {
-				job := sidecarTestSucceededJob(f.cronJob, "partial-success", now.Add(-5*time.Minute))
-				job.Status.CompletionTime = nil
-				started := metav1.NewTime(now.Add(-5 * time.Minute))
-				job.Status.StartTime = &started
-				f.jobs = append(f.jobs, job)
-			},
-		},
-		{
-			name: "old partial success without completion time does not suppress forever",
-			mutate: func(f *sidecarJobFixture) {
-				job := sidecarTestSucceededJob(f.cronJob, "partial-success", now.Add(-24*time.Hour))
-				job.Status.CompletionTime = nil
-				started := metav1.NewTime(now.Add(-24 * time.Hour))
-				job.Status.StartTime = &started
-				f.jobs = append(f.jobs, job)
-			},
-			wantDetections:  1,
-			wantActiveCount: 3,
-		},
-		{
-			name: "old retained successes do not hide a new completion drought",
-			mutate: func(f *sidecarJobFixture) {
-				old := metav1.NewTime(now.Add(-24 * time.Hour))
-				f.cronJob.Status.LastSuccessfulTime = &old
-				for i := 0; i < 3; i++ {
-					f.jobs = append(f.jobs, sidecarTestSucceededJob(f.cronJob, fmt.Sprintf("old-success-%d", i), old.Time))
-				}
-			},
-			wantDetections:  1,
-			wantActiveCount: 3,
-		},
-		{
-			name: "crashed workload container",
-			mutate: func(f *sidecarJobFixture) {
-				for _, pod := range f.pods {
-					pod.Status.ContainerStatuses[0].State.Terminated.ExitCode = 1
-				}
-			},
-		},
-		{
-			name: "native sidecar is ignored",
-			mutate: func(f *sidecarJobFixture) {
-				restartAlways := corev1.ContainerRestartPolicyAlways
-				for _, pod := range f.pods {
-					pod.Spec.Containers = []corev1.Container{{Name: "archiver"}}
-					pod.Spec.InitContainers = []corev1.Container{{Name: "fluent-bit-sidecar", RestartPolicy: &restartAlways}}
-					pod.Status.ContainerStatuses = []corev1.ContainerStatus{sidecarTestCompletedStatus("archiver", 0, now.Add(-10*time.Minute))}
-					pod.Status.InitContainerStatuses = []corev1.ContainerStatus{sidecarTestRunningStatus("fluent-bit-sidecar", now.Add(-20*time.Minute))}
-				}
-			},
-		},
-		{
-			name: "current container pair is within grace",
-			mutate: func(f *sidecarJobFixture) {
-				for _, pod := range f.pods {
-					pod.Status.ContainerStatuses[0] = sidecarTestCompletedStatus("archiver", 0, now.Add(-time.Minute))
-				}
-			},
-		},
-		{
-			name: "container pair at grace boundary fires",
-			mutate: func(f *sidecarJobFixture) {
-				for _, pod := range f.pods {
-					pod.Status.ContainerStatuses[0] = sidecarTestCompletedStatus("archiver", 0, now.Add(-2*time.Minute))
-				}
-			},
-			wantDetections:  1,
-			wantActiveCount: 3,
-			wantDuration:    2 * time.Minute,
-		},
-		{
-			name: "hourly observed cadence requires an hour in the stuck shape",
-			mutate: func(f *sidecarJobFixture) {
-				setSidecarTestJobCadence(f.jobs, now.Add(-6*time.Hour), time.Hour)
-				for _, pod := range f.pods {
-					pod.Status.ContainerStatuses[0] = sidecarTestCompletedStatus("archiver", 0, now.Add(-30*time.Minute))
-				}
-			},
-		},
-		{
-			name: "hourly observed cadence fires after grace",
-			mutate: func(f *sidecarJobFixture) {
-				setSidecarTestJobCadence(f.jobs, now.Add(-6*time.Hour), time.Hour)
-				old := metav1.NewTime(now.Add(-3 * time.Hour))
-				f.cronJob.Status.LastSuccessfulTime = &old
-				for _, pod := range f.pods {
-					pod.Status.ContainerStatuses[0] = sidecarTestCompletedStatus("archiver", 0, now.Add(-61*time.Minute))
-					pod.Status.ContainerStatuses[1] = sidecarTestRunningStatus("fluent-bit-sidecar", now.Add(-2*time.Hour))
-				}
-			},
-			wantDetections:  1,
-			wantActiveCount: 3,
-			wantDuration:    61 * time.Minute,
-		},
-		{
-			name: "hourly observed cadence uses two intervals for recent success",
-			mutate: func(f *sidecarJobFixture) {
-				setSidecarTestJobCadence(f.jobs, now.Add(-6*time.Hour), time.Hour)
-				recent := metav1.NewTime(now.Add(-90 * time.Minute))
-				f.cronJob.Status.LastSuccessfulTime = &recent
-				for _, pod := range f.pods {
-					pod.Status.ContainerStatuses[0] = sidecarTestCompletedStatus("archiver", 0, now.Add(-3*time.Hour))
-					pod.Status.ContainerStatuses[1] = sidecarTestRunningStatus("fluent-bit-sidecar", now.Add(-4*time.Hour))
-				}
-			},
-		},
-		{
-			name: "hourly observed cadence ignores success older than two intervals",
-			mutate: func(f *sidecarJobFixture) {
-				setSidecarTestJobCadence(f.jobs, now.Add(-6*time.Hour), time.Hour)
-				old := metav1.NewTime(now.Add(-121 * time.Minute))
-				f.cronJob.Status.LastSuccessfulTime = &old
-				for _, pod := range f.pods {
-					pod.Status.ContainerStatuses[0] = sidecarTestCompletedStatus("archiver", 0, now.Add(-3*time.Hour))
-					pod.Status.ContainerStatuses[1] = sidecarTestRunningStatus("fluent-bit-sidecar", now.Add(-4*time.Hour))
-				}
-			},
-			wantDetections:  1,
-			wantActiveCount: 3,
-			wantDuration:    3 * time.Hour,
-		},
-		{
-			name: "suspended CronJob is intentionally quiet",
-			mutate: func(f *sidecarJobFixture) {
-				suspended := true
-				f.cronJob.Spec.Suspend = &suspended
-			},
-		},
-		{
-			name: "new CronJob without any success gets a fair startup window",
-			mutate: func(f *sidecarJobFixture) {
-				f.cronJob.CreationTimestamp = metav1.NewTime(now.Add(-59 * time.Minute))
-				setSidecarTestJobCadence(f.jobs, now.Add(-59*time.Minute), time.Minute)
-			},
-		},
-		{
-			name: "new CronJob startup window boundary fires",
-			mutate: func(f *sidecarJobFixture) {
-				f.cronJob.CreationTimestamp = metav1.NewTime(now.Add(-60 * time.Minute))
-				setSidecarTestJobCadence(f.jobs, now.Add(-60*time.Minute), time.Minute)
-			},
-			wantDetections:  1,
-			wantActiveCount: 3,
-			wantAge:         60 * time.Minute,
-		},
-		{
-			name: "old CronJob resumed recently gets a fresh startup window",
-			mutate: func(f *sidecarJobFixture) {
-				setSidecarTestJobCadence(f.jobs, now.Add(-10*time.Minute), time.Minute)
-			},
-		},
-		{
-			name: "running sibling restarted within grace",
-			mutate: func(f *sidecarJobFixture) {
-				for _, pod := range f.pods {
-					pod.Status.ContainerStatuses[1] = sidecarTestRunningStatus("fluent-bit-sidecar", now.Add(-time.Minute))
-				}
-			},
-		},
-		{
-			name: "active jobs have no pods",
-			mutate: func(f *sidecarJobFixture) {
-				f.pods = nil
-			},
-		},
-		{
-			name: "completed Job pod cannot supply evidence for active Jobs",
-			mutate: func(f *sidecarJobFixture) {
-				for _, pod := range f.pods {
-					pod.Status.ContainerStatuses = []corev1.ContainerStatus{sidecarTestRunningStatus("worker", now.Add(-10*time.Minute))}
-				}
-				completedJob := sidecarTestSucceededJob(f.cronJob, "old-completed", now.Add(-24*time.Hour))
-				completedPod := f.pods[0].DeepCopy()
-				completedPod.Name = "old-completed-pod"
-				completedPod.OwnerReferences[0].Name = completedJob.Name
-				completedPod.OwnerReferences[0].UID = completedJob.UID
-				completedPod.Status.ContainerStatuses = []corev1.ContainerStatus{
-					sidecarTestCompletedStatus("archiver", 0, now.Add(-10*time.Minute)),
-					sidecarTestRunningStatus("fluent-bit-sidecar", now.Add(-20*time.Minute)),
-				}
-				f.jobs = append(f.jobs, completedJob)
-				f.pods = append(f.pods, completedPod)
-			},
-		},
-		{
-			name: "succeeded-phase active Job pods cannot supply evidence",
-			mutate: func(f *sidecarJobFixture) {
-				for _, pod := range f.pods {
-					pod.Status.Phase = corev1.PodSucceeded
-				}
-			},
-		},
-		{
-			name: "same CronJob name with a different UID does not own Jobs",
-			mutate: func(f *sidecarJobFixture) {
-				for _, job := range f.jobs {
-					job.OwnerReferences[0].UID = types.UID("old-cronjob-uid")
-				}
-			},
-		},
-		{
-			name: "same Job name with a different UID does not own pods",
-			mutate: func(f *sidecarJobFixture) {
-				for _, pod := range f.pods {
-					pod.OwnerReferences[0].UID = types.UID("old-job-uid")
-				}
-			},
-		},
-		{
-			name: "Forbid policy single stuck Job stays below accumulation threshold",
-			mutate: func(f *sidecarJobFixture) {
-				f.cronJob.Spec.ConcurrencyPolicy = batchv1.ForbidConcurrent
-				f.jobs = f.jobs[:1]
-				f.pods = f.pods[:1]
-			},
-		},
-		{
-			name: "threshold boundary N minus one",
-			mutate: func(f *sidecarJobFixture) {
-				f.jobs = f.jobs[:sidecarJobAccumulationThreshold-1]
-				f.pods = f.pods[:sidecarJobAccumulationThreshold-1]
-			},
-		},
-		{
-			name: "threshold boundary N",
-			mutate: func(f *sidecarJobFixture) {
-				f.jobs = f.jobs[:sidecarJobAccumulationThreshold]
-				f.pods = f.pods[:sidecarJobAccumulationThreshold]
-			},
-			wantDetections:  1,
-			wantActiveCount: sidecarJobAccumulationThreshold,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			fixture := newSidecarJobFixture(now, 3)
-			if tt.mutate != nil {
-				tt.mutate(fixture)
-			}
-			cache := sidecarJobTestCache(t, fixture)
-			namespace := "prod"
-			if tt.allNamespaces {
-				namespace = ""
-			}
-			var got []Detection
-			for _, detection := range detectConfigProblems(cache, namespace, now, listPodsByNamespace(cache, namespace)) {
-				if detection.Reason == "SidecarBlocksJobCompletion" {
-					got = append(got, detection)
-				}
-			}
-			if len(got) != tt.wantDetections {
-				t.Fatalf("got %d sidecar detections, want %d: %+v", len(got), tt.wantDetections, got)
-			}
-			if tt.wantDetections == 0 {
-				return
-			}
-
-			detection := got[0]
-			if detection.Kind != "CronJob" || detection.Group != "batch" || detection.Namespace != "prod" || detection.Name != "audit-log-archiver" {
-				t.Fatalf("unexpected subject: %+v", detection)
-			}
-			if detection.Severity != "warning" || detection.Fingerprint != "job-sidecar-block:prod:audit-log-archiver" {
-				t.Fatalf("unexpected severity/fingerprint: %+v", detection)
-			}
-			for _, want := range []string{fmt.Sprintf("%d active Jobs", tt.wantActiveCount), "completed successfully", "still running", "appears in"} {
-				if !strings.Contains(detection.Message, want) {
-					t.Errorf("message %q does not contain %q", detection.Message, want)
-				}
-			}
-			for _, hidden := range []string{fixture.pods[0].Name, "fluent-bit-sidecar"} {
-				if strings.Contains(detection.Message, hidden) {
-					t.Errorf("message exposes related-resource detail %q: %q", hidden, detection.Message)
-				}
-			}
-			for _, want := range []string{"Kubernetes 1.29+", "initContainers", "restartPolicy: Always", "KEP-753", "stable in Kubernetes 1.33", "Otherwise"} {
-				if !strings.Contains(detection.Action, want) {
-					t.Errorf("action %q does not contain %q", detection.Action, want)
-				}
-			}
-			wantAge := tt.wantAge
-			if wantAge == 0 {
-				wantAge = 6 * time.Hour
-			}
-			if detection.AgeSeconds != int64(wantAge.Seconds()) {
-				t.Errorf("AgeSeconds = %d, want %d", detection.AgeSeconds, int64(wantAge.Seconds()))
-			}
-			wantDuration := tt.wantDuration
-			if wantDuration == 0 {
-				wantDuration = 10 * time.Minute
-			}
-			if detection.DurationSeconds != int64(wantDuration.Seconds()) {
-				t.Errorf("DurationSeconds = %d, want %d", detection.DurationSeconds, int64(wantDuration.Seconds()))
-			}
-		})
 	}
 }
 
-// sidecarDetectionCount runs the config detectors and counts SidecarBlocksJobCompletion
-// rows — used to prove the neutral lead fires in windows where the confident detection
-// (correctly) does not.
-func sidecarDetectionCount(cache *ResourceCache, now time.Time) int {
-	n := 0
-	for _, d := range detectConfigProblems(cache, "prod", now, listPodsByNamespace(cache, "prod")) {
-		if d.Reason == "SidecarBlocksJobCompletion" {
-			n++
-		}
-	}
-	return n
-}
-
-func TestStuckActiveJobReasonContract(t *testing.T) {
-	reason := formatStuckActiveJobReason(2 * time.Hour)
-	if reason != "Running for 2h with no completions" || !IsStuckActiveJobReason(reason) {
-		t.Fatalf("stuck-active Job reason contract drifted: %q", reason)
-	}
-	if IsStuckActiveJobReason("BackoffLimitExceeded") {
-		t.Fatal("failed Job reason matched the stuck-active predicate")
-	}
-}
-
-func TestFindRunningPastCompletionForObject(t *testing.T) {
+func TestFindContainerCompletionSplitForObject(t *testing.T) {
 	now := time.Date(2026, time.July, 21, 12, 0, 0, 0, time.UTC)
 
-	t.Run("fires below the confident detector's accumulation threshold", func(t *testing.T) {
-		fixture := newSidecarJobFixture(now, 1) // 1 active Job < sidecarJobAccumulationThreshold (2)
-		fixture.pods[0].Status.ContainerStatuses = []corev1.ContainerStatus{
-			sidecarTestCompletedStatus("archiver", 0, now.Add(-61*time.Minute)),
-			sidecarTestRunningStatus("fluent-bit-sidecar", now.Add(-2*time.Hour)),
-		}
-		cache := sidecarJobTestCache(t, fixture)
-		if got := sidecarDetectionCount(cache, now); got != 0 {
-			t.Fatalf("precondition: confident detector fired %d times, want 0 (below accumulation)", got)
-		}
-		shape := FindRunningPastCompletionForObject(cache, fixture.cronJob, now)
-		if shape == nil {
-			t.Fatal("lead is nil; want a neutral completion-blocked observation")
-		}
-		if shape.CompletedContainer != "archiver" || shape.RunningContainer != "fluent-bit-sidecar" {
-			t.Errorf("container split = %q/%q, want archiver/fluent-bit-sidecar", shape.CompletedContainer, shape.RunningContainer)
-		}
-		if shape.ActiveJobs != 1 || shape.Pod == "" || shape.Job != fixture.jobs[0].Name {
-			t.Errorf("ActiveJobs=%d Pod=%q Job=%q, want 1, a pod name, and Job %q", shape.ActiveJobs, shape.Pod, shape.Job, fixture.jobs[0].Name)
-		}
-	})
+	t.Run("CronJob and Job expose the same observation", func(t *testing.T) {
+		fixture := newContainerCompletionSplitFixture(now, 1)
+		cache := containerCompletionSplitTestCache(t, fixture)
 
-	t.Run("fires within the never-succeeded warmup window", func(t *testing.T) {
-		// Fresh deploy: 2 accumulating Jobs, but the CronJob has never recorded a
-		// success and its Jobs are only 5m old — under the confident detector's
-		// 4×recentSuccessWindow (60m) warmup. The lead must still surface the shape.
-		fixture := newSidecarJobFixture(now, 2)
-		fixture.cronJob.CreationTimestamp = metav1.NewTime(now.Add(-5 * time.Minute))
-		setSidecarTestJobCadence(fixture.jobs, now.Add(-5*time.Minute), time.Minute)
-		for _, pod := range fixture.pods {
-			pod.Status.ContainerStatuses = []corev1.ContainerStatus{
-				sidecarTestCompletedStatus("archiver", 0, now.Add(-3*time.Minute)),
-				sidecarTestRunningStatus("fluent-bit-sidecar", now.Add(-4*time.Minute)),
+		for _, subject := range []runtime.Object{fixture.cronJob, fixture.jobs[0]} {
+			shape := FindContainerCompletionSplitForObject(cache, subject, now)
+			if shape == nil {
+				t.Fatalf("%T observation is nil", subject)
+			}
+			if shape.ExitedContainer != "archiver" || shape.RunningContainer != "log-agent" ||
+				shape.Job != fixture.jobs[0].Name || shape.Pod != fixture.pods[0].Name {
+				t.Fatalf("%T observation = %+v", subject, shape)
 			}
 		}
-		cache := sidecarJobTestCache(t, fixture)
-		if got := sidecarDetectionCount(cache, now); got != 0 {
-			t.Fatalf("precondition: confident detector fired %d times, want 0 (warmup not met)", got)
+	})
+
+	t.Run("ownership requires name and UID", func(t *testing.T) {
+		fixture := newContainerCompletionSplitFixture(now, 1)
+		fixture.jobs[0].OwnerReferences[0].UID = types.UID("old-cronjob")
+		cache := containerCompletionSplitTestCache(t, fixture)
+		if shape := FindContainerCompletionSplitForObject(cache, fixture.cronJob, now); shape != nil {
+			t.Fatalf("CronJob accepted a Job from another UID: %+v", shape)
 		}
-		if shape := FindRunningPastCompletionForObject(cache, fixture.cronJob, now); shape == nil {
-			t.Fatal("lead is nil; want it to surface before the 60m warmup lets the detection fire")
+
+		fixture = newContainerCompletionSplitFixture(now, 1)
+		fixture.pods[0].OwnerReferences[0].UID = types.UID("old-job")
+		cache = containerCompletionSplitTestCache(t, fixture)
+		if shape := FindContainerCompletionSplitForObject(cache, fixture.jobs[0], now); shape != nil {
+			t.Fatalf("Job accepted a Pod from another UID: %+v", shape)
 		}
 	})
 
-	t.Run("respects the short grace (no transient startup split)", func(t *testing.T) {
-		fixture := newSidecarJobFixture(now, 2)
-		for _, pod := range fixture.pods {
-			pod.Status.ContainerStatuses = []corev1.ContainerStatus{
-				sidecarTestCompletedStatus("archiver", 0, now.Add(-30*time.Second)),
-				sidecarTestRunningStatus("fluent-bit-sidecar", now.Add(-30*time.Second)),
-			}
-		}
-		cache := sidecarJobTestCache(t, fixture)
-		if shape := FindRunningPastCompletionForObject(cache, fixture.cronJob, now); shape != nil {
-			t.Fatalf("lead fired within grace; want nil, got %+v", shape)
-		}
-	})
-
-	t.Run("suspended CronJob is quiet", func(t *testing.T) {
-		fixture := newSidecarJobFixture(now, 2)
+	t.Run("suspended subjects are quiet", func(t *testing.T) {
 		suspended := true
+		fixture := newContainerCompletionSplitFixture(now, 1)
 		fixture.cronJob.Spec.Suspend = &suspended
-		cache := sidecarJobTestCache(t, fixture)
-		if shape := FindRunningPastCompletionForObject(cache, fixture.cronJob, now); shape != nil {
-			t.Fatalf("suspended CronJob produced a lead: %+v", shape)
+		fixture.jobs[0].Spec.Suspend = &suspended
+		cache := containerCompletionSplitTestCache(t, fixture)
+		if shape := FindContainerCompletionSplitForObject(cache, fixture.cronJob, now); shape != nil {
+			t.Fatalf("suspended CronJob produced an observation: %+v", shape)
+		}
+		if shape := FindContainerCompletionSplitForObject(cache, fixture.jobs[0], now); shape != nil {
+			t.Fatalf("suspended Job produced an observation: %+v", shape)
 		}
 	})
 
-	t.Run("no active Jobs is quiet", func(t *testing.T) {
-		fixture := newSidecarJobFixture(now, 0)
-		cache := sidecarJobTestCache(t, fixture)
-		if shape := FindRunningPastCompletionForObject(cache, fixture.cronJob, now); shape != nil {
-			t.Fatalf("no-active-Jobs CronJob produced a lead: %+v", shape)
+	t.Run("native restartable init sidecar is excluded", func(t *testing.T) {
+		fixture := newContainerCompletionSplitFixture(now, 1)
+		fixture.pods[0].Status.ContainerStatuses = []corev1.ContainerStatus{
+			containerCompletionSplitTerminatedStatus("archiver", 0, now.Add(-10*time.Minute)),
+		}
+		fixture.pods[0].Status.InitContainerStatuses = []corev1.ContainerStatus{
+			containerCompletionSplitRunningStatus("native-sidecar", now.Add(-time.Hour)),
+		}
+		cache := containerCompletionSplitTestCache(t, fixture)
+		if shape := FindContainerCompletionSplitForObject(cache, fixture.jobs[0], now); shape != nil {
+			t.Fatalf("native sidecar produced an observation: %+v", shape)
 		}
 	})
 
-	t.Run("non-CronJob object is quiet", func(t *testing.T) {
-		fixture := newSidecarJobFixture(now, 2)
-		cache := sidecarJobTestCache(t, fixture)
-		if shape := FindRunningPastCompletionForObject(cache, fixture.pods[0], now); shape != nil {
-			t.Fatalf("non-CronJob object produced a lead: %+v", shape)
+	t.Run("transient split within minimum grace is quiet", func(t *testing.T) {
+		fixture := newContainerCompletionSplitFixture(now, 1)
+		fixture.pods[0].Status.ContainerStatuses = []corev1.ContainerStatus{
+			containerCompletionSplitTerminatedStatus("archiver", 0, now.Add(-time.Minute)),
+			containerCompletionSplitRunningStatus("log-agent", now.Add(-time.Hour)),
+		}
+		cache := containerCompletionSplitTestCache(t, fixture)
+		if shape := FindContainerCompletionSplitForObject(cache, fixture.jobs[0], now); shape != nil {
+			t.Fatalf("transient split produced an observation: %+v", shape)
+		}
+	})
+
+	t.Run("failed container exit is quiet", func(t *testing.T) {
+		fixture := newContainerCompletionSplitFixture(now, 1)
+		fixture.pods[0].Status.ContainerStatuses[0] = containerCompletionSplitTerminatedStatus("archiver", 1, now.Add(-10*time.Minute))
+		cache := containerCompletionSplitTestCache(t, fixture)
+		if shape := FindContainerCompletionSplitForObject(cache, fixture.jobs[0], now); shape != nil {
+			t.Fatalf("failed exit produced an observation: %+v", shape)
+		}
+	})
+
+	t.Run("parallel Job with successful pods still reports active split", func(t *testing.T) {
+		fixture := newContainerCompletionSplitFixture(now, 1)
+		fixture.jobs[0].Status.Succeeded = 2
+		cache := containerCompletionSplitTestCache(t, fixture)
+		if shape := FindContainerCompletionSplitForObject(cache, fixture.jobs[0], now); shape == nil {
+			t.Fatal("parallel Job observation is nil")
+		}
+		if shape := FindContainerCompletionSplitForObject(cache, fixture.cronJob, now); shape == nil {
+			t.Fatal("parallel CronJob observation is nil")
+		}
+	})
+
+	t.Run("unrelated kind is quiet", func(t *testing.T) {
+		fixture := newContainerCompletionSplitFixture(now, 1)
+		cache := containerCompletionSplitTestCache(t, fixture)
+		deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: "prod"}}
+		if shape := FindContainerCompletionSplitForObject(cache, deployment, now); shape != nil {
+			t.Fatalf("Deployment produced an observation: %+v", shape)
 		}
 	})
 }
 
-func TestSidecarJobTimingUsesObservedStarts(t *testing.T) {
+func TestFindContainerCompletionSplitEvidenceIsDeterministic(t *testing.T) {
 	now := time.Date(2026, time.July, 21, 12, 0, 0, 0, time.UTC)
-	tests := []struct {
-		name       string
-		schedule   string
-		starts     []time.Time
-		wantGrace  time.Duration
-		wantWindow time.Duration
-	}{
-		{name: "invalid schedule without observed interval uses floors", schedule: "invalid", wantGrace: 2 * time.Minute, wantWindow: 15 * time.Minute},
-		{name: "single Job uses coarse schedule fallback", schedule: "0 * * * *", starts: []time.Time{now}, wantGrace: time.Hour, wantWindow: 2 * time.Hour},
-		{name: "five-minute cadence uses window floor", starts: []time.Time{now, now.Add(-5 * time.Minute)}, wantGrace: 5 * time.Minute, wantWindow: 15 * time.Minute},
-		{name: "hourly cadence", starts: []time.Time{now, now.Add(-time.Hour), now.Add(-2 * time.Hour)}, wantGrace: time.Hour, wantWindow: 2 * time.Hour},
-		{name: "most recent observed gap ignores an older outlier", starts: []time.Time{now, now.Add(-time.Hour), now.Add(-4 * time.Hour)}, wantGrace: time.Hour, wantWindow: 2 * time.Hour},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			jobs := make(map[string]*batchv1.Job, len(tt.starts))
-			for i, startedAt := range tt.starts {
-				start := metav1.NewTime(startedAt)
-				name := fmt.Sprintf("job-%d", i)
-				jobs[name] = &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: name}, Status: batchv1.JobStatus{StartTime: &start}}
-			}
-			cj := &batchv1.CronJob{Spec: batchv1.CronJobSpec{Schedule: tt.schedule}}
-			grace, window := sidecarJobTiming(cj, jobs)
-			if grace != tt.wantGrace || window != tt.wantWindow {
-				t.Fatalf("sidecarJobTiming() = (%s, %s), want (%s, %s)", grace, window, tt.wantGrace, tt.wantWindow)
-			}
-		})
-	}
-}
-
-func TestStuckSidecarEvidenceIsDeterministic(t *testing.T) {
-	now := time.Date(2026, time.July, 21, 12, 0, 0, 0, time.UTC)
-	fixture := newSidecarJobFixture(now, 2)
-	fixture.pods[0].Status.ContainerStatuses[0] = sidecarTestCompletedStatus("archiver", 0, now.Add(-10*time.Minute))
-	fixture.pods[1].Status.ContainerStatuses[0] = sidecarTestCompletedStatus("archiver", 0, now.Add(-20*time.Minute))
+	fixture := newContainerCompletionSplitFixture(now, 2)
+	fixture.pods[0].Status.ContainerStatuses[0] = containerCompletionSplitTerminatedStatus("archiver", 0, now.Add(-10*time.Minute))
+	fixture.pods[1].Status.ContainerStatuses[0] = containerCompletionSplitTerminatedStatus("archiver", 0, now.Add(-20*time.Minute))
 	activeJobs := map[string]*batchv1.Job{
 		fixture.jobs[0].Name: fixture.jobs[0],
 		fixture.jobs[1].Name: fixture.jobs[1],
 	}
 
-	forward, ok := stuckSidecarEvidence(fixture.pods, activeJobs, now, 2*time.Minute)
+	forward, ok := findContainerCompletionSplitEvidence(fixture.pods, activeJobs, now)
 	if !ok {
-		t.Fatal("stuckSidecarEvidence() found no evidence")
+		t.Fatal("forward lookup found no evidence")
 	}
-	reverse, ok := stuckSidecarEvidence([]*corev1.Pod{fixture.pods[1], fixture.pods[0]}, activeJobs, now, 2*time.Minute)
+	reverse, ok := findContainerCompletionSplitEvidence([]*corev1.Pod{fixture.pods[1], fixture.pods[0]}, activeJobs, now)
 	if !ok {
-		t.Fatal("stuckSidecarEvidence() found no evidence for reversed input")
+		t.Fatal("reverse lookup found no evidence")
 	}
 	if forward != reverse || forward.podName != fixture.pods[1].Name {
 		t.Fatalf("evidence changed with input order: forward=%+v reverse=%+v", forward, reverse)
 	}
 }
 
-type sidecarJobFixture struct {
+type containerCompletionSplitFixture struct {
 	cronJob *batchv1.CronJob
 	jobs    []*batchv1.Job
 	pods    []*corev1.Pod
 }
 
-func newSidecarJobFixture(now time.Time, activeJobs int) *sidecarJobFixture {
+func newContainerCompletionSplitFixture(now time.Time, activeJobs int) *containerCompletionSplitFixture {
 	controller := true
 	cronJob := &batchv1.CronJob{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:              "audit-log-archiver",
-			Namespace:         "prod",
-			UID:               types.UID("cronjob-uid"),
-			CreationTimestamp: metav1.NewTime(now.Add(-6 * time.Hour)),
+			Name:      "audit-log-archiver",
+			Namespace: "prod",
+			UID:       types.UID("cronjob-uid"),
 		},
 		Spec: batchv1.CronJobSpec{Schedule: "* * * * *"},
 	}
-	fixture := &sidecarJobFixture{cronJob: cronJob}
+	fixture := &containerCompletionSplitFixture{cronJob: cronJob}
 	for i := 0; i < activeJobs; i++ {
 		name := fmt.Sprintf("audit-log-archiver-%d", i)
-		uid := types.UID("job-" + name)
-		startedAt := metav1.NewTime(now.Add(-6*time.Hour + time.Duration(i)*time.Minute))
+		jobUID := types.UID("job-" + name)
+		startedAt := metav1.NewTime(now.Add(time.Duration(i-2) * time.Minute))
 		job := &batchv1.Job{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:              name,
-				Namespace:         "prod",
-				UID:               uid,
-				CreationTimestamp: metav1.NewTime(now.Add(-6 * time.Hour)),
+				Name:      name,
+				Namespace: "prod",
+				UID:       jobUID,
 				OwnerReferences: []metav1.OwnerReference{{
 					APIVersion: "batch/v1",
 					Kind:       "CronJob",
@@ -777,12 +377,11 @@ func newSidecarJobFixture(now time.Time, activeJobs int) *sidecarJobFixture {
 					Controller: &controller,
 				}},
 			},
-			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "archiver"}, {Name: "fluent-bit-sidecar"}}},
 			Status: corev1.PodStatus{
 				Phase: corev1.PodRunning,
 				ContainerStatuses: []corev1.ContainerStatus{
-					sidecarTestCompletedStatus("archiver", 0, now.Add(-10*time.Minute)),
-					sidecarTestRunningStatus("fluent-bit-sidecar", now.Add(-20*time.Minute)),
+					containerCompletionSplitTerminatedStatus("archiver", 0, now.Add(-2*time.Hour)),
+					containerCompletionSplitRunningStatus("log-agent", now.Add(-3*time.Hour)),
 				},
 			},
 		}
@@ -792,44 +391,7 @@ func newSidecarJobFixture(now time.Time, activeJobs int) *sidecarJobFixture {
 	return fixture
 }
 
-func setSidecarTestJobStarts(jobs []*batchv1.Job, startedAt time.Time) {
-	for _, job := range jobs {
-		job.CreationTimestamp = metav1.NewTime(startedAt)
-		start := metav1.NewTime(startedAt)
-		job.Status.StartTime = &start
-	}
-}
-
-func setSidecarTestJobCadence(jobs []*batchv1.Job, oldestStart time.Time, interval time.Duration) {
-	for i, job := range jobs {
-		startedAt := oldestStart.Add(time.Duration(i) * interval)
-		job.CreationTimestamp = metav1.NewTime(startedAt)
-		start := metav1.NewTime(startedAt)
-		job.Status.StartTime = &start
-	}
-}
-
-func sidecarTestSucceededJob(cj *batchv1.CronJob, name string, completedAt time.Time) *batchv1.Job {
-	controller := true
-	completion := metav1.NewTime(completedAt)
-	return &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: cj.Namespace,
-			UID:       types.UID("job-" + name),
-			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: "batch/v1",
-				Kind:       "CronJob",
-				Name:       cj.Name,
-				UID:        cj.UID,
-				Controller: &controller,
-			}},
-		},
-		Status: batchv1.JobStatus{Succeeded: 1, CompletionTime: &completion},
-	}
-}
-
-func sidecarTestCompletedStatus(name string, exitCode int32, finishedAt time.Time) corev1.ContainerStatus {
+func containerCompletionSplitTerminatedStatus(name string, exitCode int32, finishedAt time.Time) corev1.ContainerStatus {
 	return corev1.ContainerStatus{
 		Name: name,
 		State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
@@ -839,7 +401,7 @@ func sidecarTestCompletedStatus(name string, exitCode int32, finishedAt time.Tim
 	}
 }
 
-func sidecarTestRunningStatus(name string, startedAt time.Time) corev1.ContainerStatus {
+func containerCompletionSplitRunningStatus(name string, startedAt time.Time) corev1.ContainerStatus {
 	return corev1.ContainerStatus{
 		Name: name,
 		State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{
@@ -848,7 +410,7 @@ func sidecarTestRunningStatus(name string, startedAt time.Time) corev1.Container
 	}
 }
 
-func sidecarJobTestCache(t *testing.T, fixtures ...*sidecarJobFixture) *ResourceCache {
+func containerCompletionSplitTestCache(t *testing.T, fixtures ...*containerCompletionSplitFixture) *ResourceCache {
 	t.Helper()
 	var objects []runtime.Object
 	for _, fixture := range fixtures {
@@ -874,13 +436,4 @@ func sidecarJobTestCache(t *testing.T, fixtures ...*sidecarJobFixture) *Resource
 	}
 	t.Cleanup(core.Stop)
 	return &ResourceCache{ResourceCache: core}
-}
-
-func duplicateEnvTestDeployment(containers, initContainers []corev1.Container) *appsv1.Deployment {
-	return &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "prod", CreationTimestamp: metav1.Now()},
-		Spec: appsv1.DeploymentSpec{
-			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: containers, InitContainers: initContainers}},
-		},
-	}
 }

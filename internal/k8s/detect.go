@@ -23,19 +23,6 @@ const probeFailureWindow = 10 * time.Minute
 
 const livenessProbeFailedReason = "LivenessProbeFailed"
 
-const (
-	stuckActiveJobReasonPrefix = "Running for "
-	stuckActiveJobReasonSuffix = " with no completions"
-)
-
-func formatStuckActiveJobReason(age time.Duration) string {
-	return stuckActiveJobReasonPrefix + FormatAge(age) + stuckActiveJobReasonSuffix
-}
-
-func IsStuckActiveJobReason(reason string) bool {
-	return strings.HasPrefix(reason, stuckActiveJobReasonPrefix) && strings.HasSuffix(reason, stuckActiveJobReasonSuffix)
-}
-
 // Core ConfigMaps and Secrets have no kind-specific graceful termination phase.
 // Once deletion starts, a remaining finalizer is the only thing keeping the
 // object present, so delayed cleanup is actionable sooner than workload drain.
@@ -156,8 +143,7 @@ func podOwnerKindName(cache *ResourceCache, pod *corev1.Pod) (group, kind, name 
 func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 	var problems []Detection
 	now := time.Now()
-	podsByNamespace := listPodsByNamespace(cache, namespace)
-	problems = append(problems, detectConfigProblems(cache, namespace, now, podsByNamespace)...)
+	problems = append(problems, detectConfigProblems(cache, namespace, now)...)
 
 	if namespace == "" {
 		if nsLister := cache.Namespaces(); nsLister != nil {
@@ -197,6 +183,8 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			}
 		}
 	}
+
+	podsByNamespace := listPodsByNamespace(cache, namespace)
 
 	// Deployment problems: unavailableReplicas > 0
 	if depLister := cache.Deployments(); depLister != nil {
@@ -1104,7 +1092,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 						Name:            job.Name,
 						Group:           "batch",
 						Severity:        "high",
-						Reason:          formatStuckActiveJobReason(ageDur),
+						Reason:          fmt.Sprintf("Running for %s with no completions", FormatAge(ageDur)),
 						Age:             FormatAge(ageDur),
 						AgeSeconds:      int64(ageDur.Seconds()),
 						Duration:        FormatAge(ageDur),

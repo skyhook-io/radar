@@ -7,7 +7,6 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -35,7 +34,6 @@ type fakeProvider struct {
 	podsMountingPVC map[string][]Ref
 	secretProducer  map[string]secretProducerResult
 	change          map[string]*issuesapi.ChangeContext
-	jobCronJobOwner map[string]Ref
 }
 
 type secretProducerResult struct {
@@ -67,42 +65,6 @@ func (f *fakeProvider) KindForGVR(gvr schema.GroupVersionResource) string {
 func (f *fakeProvider) NamespacedForGVR(gvr schema.GroupVersionResource) (bool, bool) {
 	namespaced, ok := f.namespaced[gvr]
 	return namespaced, ok
-}
-func (f *fakeProvider) CronJobOwnerForJob(namespace, name string) (Ref, bool) {
-	owner, ok := f.jobCronJobOwner[namespace+"/"+name]
-	return owner, ok
-}
-
-func TestCacheProviderCronJobOwnerForJobRequiresCurrentUID(t *testing.T) {
-	defer k8s.ResetTestState()
-	controller := true
-	cronJob := &batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{Name: "archive", Namespace: "prod", UID: "current-uid"}}
-	matching := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
-		Name:      "archive-current",
-		Namespace: "prod",
-		OwnerReferences: []metav1.OwnerReference{{
-			APIVersion: "batch/v1", Kind: "CronJob", Name: "archive", UID: cronJob.UID, Controller: &controller,
-		}},
-	}}
-	retained := matching.DeepCopy()
-	retained.Name = "archive-retained"
-	retained.OwnerReferences[0].UID = "deleted-uid"
-	if err := k8s.InitTestResourceCache(fake.NewClientset(
-		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "prod"}},
-		cronJob,
-		matching,
-		retained,
-	)); err != nil {
-		t.Fatalf("InitTestResourceCache: %v", err)
-	}
-	provider := &CacheProvider{cache: k8s.GetResourceCache()}
-
-	if owner, ok := provider.CronJobOwnerForJob("prod", matching.Name); !ok || owner.Name != cronJob.Name {
-		t.Fatalf("current Job owner = (%+v, %t), want current CronJob", owner, ok)
-	}
-	if owner, ok := provider.CronJobOwnerForJob("prod", retained.Name); ok {
-		t.Fatalf("retained Job from deleted CronJob resolved to recreated owner: %+v", owner)
-	}
 }
 func (f *fakeProvider) SelectedPodsForService(namespace, name string) []Ref {
 	return f.selectedPods[namespace+"/"+name]

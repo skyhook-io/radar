@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/logsafe"
-	"github.com/skyhook-io/radar/pkg/cronsched"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -20,22 +19,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 )
 
 var (
 	dnsLabelPattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 )
 
-const (
-	sidecarJobAccumulationThreshold      = 2
-	sidecarJobMinimumStuckGrace          = 2 * time.Minute
-	sidecarJobMinimumRecentSuccessWindow = 15 * time.Minute
-	sidecarJobRecentSuccessIntervalCount = 2
-	sidecarJobNoSuccessWarmupWindowCount = 4
-)
-
-func detectConfigProblems(cache *ResourceCache, namespace string, now time.Time, podsByNamespace map[string][]*corev1.Pod) []Detection {
+func detectConfigProblems(cache *ResourceCache, namespace string, now time.Time) []Detection {
 	var out []Detection
 	if namespace == "" {
 		out = append(out, detectSuspiciousCoreDNS(cache, now)...)
@@ -43,294 +33,94 @@ func detectConfigProblems(cache *ResourceCache, namespace string, now time.Time,
 	out = append(out, detectEnvServiceRefs(cache, namespace, now)...)
 	out = append(out, detectDuplicateEnvVars(cache, namespace, now)...)
 	out = append(out, detectStaleSecretEnv(cache, namespace, now)...)
-	out = append(out, detectStuckSidecarJobs(cache, namespace, now, podsByNamespace)...)
 	return out
 }
 
-func detectStuckSidecarJobs(cache *ResourceCache, namespace string, now time.Time, podsByNamespace map[string][]*corev1.Pod) []Detection {
-	if cache == nil || cache.CronJobs() == nil || cache.Jobs() == nil || cache.Pods() == nil {
+const containerCompletionSplitMinimumAge = 2 * time.Minute
+
+// ContainerCompletionSplitShape describes a regular-container completion split
+// without inferring why the sibling container is still running.
+type ContainerCompletionSplitShape struct {
+	Pod              string
+	Job              string
+	ExitedContainer  string
+	RunningContainer string
+	SinceSeconds     int64
+}
+
+// FindContainerCompletionSplitForObject returns a neutral completion split for
+// an active Job or for an active Job owned by a CronJob.
+func FindContainerCompletionSplitForObject(cache *ResourceCache, obj runtime.Object, now time.Time) *ContainerCompletionSplitShape {
+	if cache == nil || obj == nil || cache.Pods() == nil {
 		return nil
 	}
 
-	var cronJobs []*batchv1.CronJob
-	var err error
-	if namespace == "" {
-		cronJobs, err = cache.CronJobs().List(labels.Everything())
-	} else {
-		cronJobs, err = cache.CronJobs().CronJobs(namespace).List(labels.Everything())
-	}
-	if err != nil {
-		logConfigListError("CronJob", namespace, err)
-		return nil
-	}
+	var namespace string
+	var activeJobs map[string]*batchv1.Job
 
-	type cronJobOwnerKey struct {
-		name string
-		uid  types.UID
-	}
-	jobsByOwner := make(map[string]map[cronJobOwnerKey][]*batchv1.Job)
-	loadedJobNamespaces := make(map[string]bool)
-	var out []Detection
-	for _, cj := range cronJobs {
-		if cj.Spec.Suspend != nil && *cj.Spec.Suspend {
-			continue
+	switch subject := obj.(type) {
+	case *batchv1.CronJob:
+		if subject == nil || cache.Jobs() == nil || subject.Spec.Suspend != nil && *subject.Spec.Suspend {
+			return nil
 		}
-		if !loadedJobNamespaces[cj.Namespace] {
-			jobs, listErr := cache.Jobs().Jobs(cj.Namespace).List(labels.Everything())
-			if listErr != nil {
-				logConfigListError("Job", cj.Namespace, listErr)
-			} else {
-				byOwner := make(map[cronJobOwnerKey][]*batchv1.Job)
-				for _, job := range jobs {
-					controller := metav1.GetControllerOf(job)
-					if controller == nil || controller.Kind != "CronJob" {
-						continue
-					}
-					key := cronJobOwnerKey{name: controller.Name, uid: controller.UID}
-					byOwner[key] = append(byOwner[key], job)
-				}
-				jobsByOwner[cj.Namespace] = byOwner
+		jobs, err := cache.Jobs().Jobs(subject.Namespace).List(labels.Everything())
+		if err != nil {
+			return nil
+		}
+		activeJobs = make(map[string]*batchv1.Job)
+		for _, job := range jobs {
+			controller := metav1.GetControllerOf(job)
+			if controller == nil || controller.Kind != "CronJob" || controller.Name != subject.Name || controller.UID != subject.UID {
+				continue
 			}
-			loadedJobNamespaces[cj.Namespace] = true
-		}
-
-		ownedJobs := jobsByOwner[cj.Namespace][cronJobOwnerKey{name: cj.Name, uid: cj.UID}]
-		activeJobs := make(map[string]*batchv1.Job)
-		for _, job := range ownedJobs {
-			if job.Status.Succeeded == 0 && job.Status.Active >= 1 {
+			if job.Status.Active >= 1 {
 				activeJobs[job.Name] = job
 			}
 		}
-		if len(activeJobs) < sidecarJobAccumulationThreshold {
-			continue
+		if len(activeJobs) == 0 {
+			return nil
 		}
+		namespace = subject.Namespace
 
-		stuckGrace, recentSuccessWindow := sidecarJobTiming(cj, activeJobs)
-		if cronJobSucceededRecently(cj, ownedJobs, now, recentSuccessWindow) {
-			continue
+	case *batchv1.Job:
+		if subject == nil || subject.Status.Active < 1 ||
+			subject.Spec.Suspend != nil && *subject.Spec.Suspend {
+			return nil
 		}
-		if !cronJobHasRecordedSuccess(cj, ownedJobs) {
-			// A CronJob may spend most of its life suspended. Start the warmup when
-			// its current active Jobs actually appeared, not when the object did.
-			firstActiveStart, ok := oldestActiveJobStart(activeJobs)
-			if !ok || now.Sub(firstActiveStart) < sidecarJobNoSuccessWarmupWindowCount*recentSuccessWindow {
-				continue
-			}
-		}
+		namespace = subject.Namespace
+		activeJobs = map[string]*batchv1.Job{subject.Name: subject}
 
-		evidence, affectedJobs, found := recurringStuckSidecarEvidence(podsByNamespace[cj.Namespace], activeJobs, now, stuckGrace)
-		if !found {
-			continue
-		}
-
-		age := ageSeconds(now, cj.CreationTimestamp.Time)
-		duration := ageSeconds(now, evidence.startedAt)
-		out = append(out, Detection{
-			Kind:            "CronJob",
-			Group:           "batch",
-			Namespace:       cj.Namespace,
-			Name:            cj.Name,
-			Severity:        "warning",
-			Reason:          "SidecarBlocksJobCompletion",
-			Message:         fmt.Sprintf("CronJob %q has %d active Jobs and no recent successful completions. The same pattern—a regular container completed successfully while another is still running—appears in %d active Jobs, preventing their pods and Jobs from reaching Succeeded.", cj.Name, len(activeJobs), affectedJobs),
-			Action:          "If the still-running container is intended as a long-lived sidecar and the cluster runs Kubernetes 1.29+ with SidecarContainers enabled, move it to initContainers with restartPolicy: Always (KEP-753; stable in Kubernetes 1.33) so Kubernetes terminates it after regular containers finish; for injected sidecars such as istio-proxy, enable the mesh's native sidecar mode instead of editing the pod spec. Then delete the accumulated stuck Jobs. Otherwise, adjust the schedule or make the remaining workload terminate.",
-			Age:             FormatAge(time.Duration(age) * time.Second),
-			AgeSeconds:      age,
-			Duration:        FormatAge(time.Duration(duration) * time.Second),
-			DurationSeconds: duration,
-			Fingerprint:     fmt.Sprintf("job-sidecar-block:%s:%s", cj.Namespace, cj.Name),
-		})
-	}
-	return out
-}
-
-// RunningPastCompletionShape is the evidence behind the neutral resource-context
-// lead. It deliberately omits the detector's accumulation and completion-drought gates.
-type RunningPastCompletionShape struct {
-	Pod                string
-	Job                string
-	CompletedContainer string
-	RunningContainer   string
-	ActiveJobs         int
-	SinceSeconds       int64
-}
-
-// FindRunningPastCompletionForObject returns the neutral container-split observation
-// for a CronJob when an active Job shows the split past its cadence-aware grace.
-func FindRunningPastCompletionForObject(cache *ResourceCache, obj runtime.Object, now time.Time) *RunningPastCompletionShape {
-	if cache == nil || obj == nil || cache.Jobs() == nil || cache.Pods() == nil {
+	default:
 		return nil
 	}
-	cj, ok := obj.(*batchv1.CronJob)
-	if !ok || cj == nil {
-		return nil
-	}
-	if cj.Spec.Suspend != nil && *cj.Spec.Suspend {
-		return nil
-	}
-	jobs, err := cache.Jobs().Jobs(cj.Namespace).List(labels.Everything())
+
+	pods, err := cache.Pods().Pods(namespace).List(labels.Everything())
 	if err != nil {
 		return nil
 	}
-	activeJobs := make(map[string]*batchv1.Job)
-	for _, job := range jobs {
-		controller := metav1.GetControllerOf(job)
-		if controller == nil || controller.Kind != "CronJob" || controller.Name != cj.Name || controller.UID != cj.UID {
-			continue
-		}
-		if job.Status.Succeeded == 0 && job.Status.Active >= 1 {
-			activeJobs[job.Name] = job
-		}
-	}
-	if len(activeJobs) == 0 {
-		return nil
-	}
-	grace, _ := sidecarJobTiming(cj, activeJobs)
-	pods, err := cache.Pods().Pods(cj.Namespace).List(labels.Everything())
-	if err != nil {
-		return nil
-	}
-	evidence, found := stuckSidecarEvidence(pods, activeJobs, now, grace)
+	evidence, found := findContainerCompletionSplitEvidence(pods, activeJobs, now)
 	if !found {
 		return nil
 	}
-	return &RunningPastCompletionShape{
-		Pod:                evidence.podName,
-		Job:                evidence.jobName,
-		CompletedContainer: evidence.completedContainer,
-		RunningContainer:   evidence.runningContainer,
-		ActiveJobs:         len(activeJobs),
-		SinceSeconds:       ageSeconds(now, evidence.startedAt),
+	return &ContainerCompletionSplitShape{
+		Pod:              evidence.podName,
+		Job:              evidence.jobName,
+		ExitedContainer:  evidence.exitedContainer,
+		RunningContainer: evidence.runningContainer,
+		SinceSeconds:     ageSeconds(now, evidence.startedAt),
 	}
 }
 
-func sidecarJobTiming(cj *batchv1.CronJob, activeJobs map[string]*batchv1.Job) (time.Duration, time.Duration) {
-	interval := observedJobCadence(activeJobs)
-	if interval == 0 {
-		if scheduledInterval, ok := cronsched.MinInterval(cj.Spec.Schedule); ok {
-			interval = scheduledInterval
-		}
-	}
-	stuckGrace := max(sidecarJobMinimumStuckGrace, interval)
-	recentSuccessWindow := max(sidecarJobMinimumRecentSuccessWindow, sidecarJobRecentSuccessIntervalCount*interval)
-	return stuckGrace, recentSuccessWindow
+type containerCompletionSplitEvidence struct {
+	exitedContainer  string
+	runningContainer string
+	jobName          string
+	podName          string
+	startedAt        time.Time
 }
 
-func observedJobCadence(jobs map[string]*batchv1.Job) time.Duration {
-	starts := make([]time.Time, 0, len(jobs))
-	for _, job := range jobs {
-		startedAt := job.CreationTimestamp.Time
-		if job.Status.StartTime != nil && !job.Status.StartTime.IsZero() {
-			startedAt = job.Status.StartTime.Time
-		}
-		if !startedAt.IsZero() {
-			starts = append(starts, startedAt)
-		}
-	}
-	if len(starts) < sidecarJobAccumulationThreshold {
-		return 0
-	}
-	sort.Slice(starts, func(i, j int) bool { return starts[i].Before(starts[j]) })
-	return starts[len(starts)-1].Sub(starts[len(starts)-2])
-}
-
-func cronJobHasRecordedSuccess(cj *batchv1.CronJob, jobs []*batchv1.Job) bool {
-	if cj.Status.LastSuccessfulTime != nil {
-		return true
-	}
-	for _, job := range jobs {
-		if job.Status.Succeeded > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func cronJobSucceededRecently(cj *batchv1.CronJob, jobs []*batchv1.Job, now time.Time, window time.Duration) bool {
-	cutoff := now.Add(-window)
-	if cj.Status.LastSuccessfulTime != nil && !cj.Status.LastSuccessfulTime.Time.Before(cutoff) {
-		return true
-	}
-	for _, job := range jobs {
-		if job.Status.Succeeded < 1 {
-			continue
-		}
-		completedAt := job.Status.CompletionTime
-		if completedAt == nil {
-			completedAt = job.Status.StartTime
-		}
-		if completedAt != nil && !completedAt.Time.Before(cutoff) {
-			return true
-		}
-	}
-	return false
-}
-
-func oldestActiveJobStart(jobs map[string]*batchv1.Job) (time.Time, bool) {
-	var oldest time.Time
-	for _, job := range jobs {
-		startedAt := job.CreationTimestamp.Time
-		if job.Status.StartTime != nil && !job.Status.StartTime.IsZero() {
-			startedAt = job.Status.StartTime.Time
-		}
-		if startedAt.IsZero() {
-			continue
-		}
-		if oldest.IsZero() || startedAt.Before(oldest) {
-			oldest = startedAt
-		}
-	}
-	return oldest, !oldest.IsZero()
-}
-
-type sidecarJobEvidence struct {
-	completedContainer string
-	runningContainer   string
-	jobName            string
-	podName            string
-	startedAt          time.Time
-}
-
-func stuckSidecarEvidence(pods []*corev1.Pod, activeJobs map[string]*batchv1.Job, now time.Time, grace time.Duration) (sidecarJobEvidence, bool) {
-	byJob := stuckSidecarEvidenceByJob(pods, activeJobs, now, grace)
-	var best sidecarJobEvidence
-	for _, candidate := range byJob {
-		if earlierSidecarEvidence(candidate, best) {
-			best = candidate
-		}
-	}
-	return best, !best.startedAt.IsZero()
-}
-
-func recurringStuckSidecarEvidence(pods []*corev1.Pod, activeJobs map[string]*batchv1.Job, now time.Time, grace time.Duration) (sidecarJobEvidence, int, bool) {
-	byPair := make(map[string][]sidecarJobEvidence)
-	for _, candidate := range stuckSidecarEvidenceByJob(pods, activeJobs, now, grace) {
-		key := candidate.completedContainer + "\x00" + candidate.runningContainer
-		byPair[key] = append(byPair[key], candidate)
-	}
-
-	var best sidecarJobEvidence
-	bestCount := 0
-	for _, candidates := range byPair {
-		if len(candidates) < sidecarJobAccumulationThreshold {
-			continue
-		}
-		candidateBest := candidates[0]
-		for _, candidate := range candidates[1:] {
-			if earlierSidecarEvidence(candidate, candidateBest) {
-				candidateBest = candidate
-			}
-		}
-		if bestCount == 0 || len(candidates) > bestCount || len(candidates) == bestCount && earlierSidecarEvidence(candidateBest, best) {
-			best = candidateBest
-			bestCount = len(candidates)
-		}
-	}
-	return best, bestCount, bestCount >= sidecarJobAccumulationThreshold
-}
-
-func stuckSidecarEvidenceByJob(pods []*corev1.Pod, activeJobs map[string]*batchv1.Job, now time.Time, grace time.Duration) map[string]sidecarJobEvidence {
-	bestByJob := make(map[string]sidecarJobEvidence)
+func findContainerCompletionSplitEvidence(pods []*corev1.Pod, activeJobs map[string]*batchv1.Job, now time.Time) (containerCompletionSplitEvidence, bool) {
+	var best containerCompletionSplitEvidence
 	for _, pod := range pods {
 		if pod.Status.Phase == corev1.PodSucceeded {
 			continue
@@ -343,51 +133,62 @@ func stuckSidecarEvidenceByJob(pods []*corev1.Pod, activeJobs map[string]*batchv
 		if job == nil || controller.UID != job.UID {
 			continue
 		}
-		completed, running, startedAt, ok := stuckRegularContainerPair(pod.Status.ContainerStatuses, now, grace)
+		exited, running, startedAt, ok := regularContainerCompletionSplit(pod.Status.ContainerStatuses, now)
 		if !ok {
 			continue
 		}
-		candidate := sidecarJobEvidence{completedContainer: completed, runningContainer: running, jobName: job.Name, podName: pod.Name, startedAt: startedAt}
-		if earlierSidecarEvidence(candidate, bestByJob[job.Name]) {
-			bestByJob[job.Name] = candidate
+		candidate := containerCompletionSplitEvidence{
+			exitedContainer:  exited,
+			runningContainer: running,
+			jobName:          job.Name,
+			podName:          pod.Name,
+			startedAt:        startedAt,
+		}
+		if earlierContainerCompletionSplitEvidence(candidate, best) {
+			best = candidate
 		}
 	}
-	return bestByJob
+	return best, !best.startedAt.IsZero()
 }
 
-func earlierSidecarEvidence(candidate, current sidecarJobEvidence) bool {
+func earlierContainerCompletionSplitEvidence(candidate, current containerCompletionSplitEvidence) bool {
 	return current.startedAt.IsZero() || candidate.startedAt.Before(current.startedAt) ||
-		candidate.startedAt.Equal(current.startedAt) && evidenceKey(candidate) < evidenceKey(current)
+		candidate.startedAt.Equal(current.startedAt) && containerCompletionSplitEvidenceKey(candidate) < containerCompletionSplitEvidenceKey(current)
 }
 
-func evidenceKey(e sidecarJobEvidence) string {
-	return e.jobName + "\x00" + e.podName + "\x00" + e.completedContainer + "\x00" + e.runningContainer
+func containerCompletionSplitEvidenceKey(e containerCompletionSplitEvidence) string {
+	return e.jobName + "\x00" + e.podName + "\x00" + e.exitedContainer + "\x00" + e.runningContainer
 }
 
-func stuckRegularContainerPair(statuses []corev1.ContainerStatus, now time.Time, grace time.Duration) (string, string, time.Time, bool) {
-	var best sidecarJobEvidence
-	for _, completed := range statuses {
-		terminated := completed.State.Terminated
+func regularContainerCompletionSplit(statuses []corev1.ContainerStatus, now time.Time) (string, string, time.Time, bool) {
+	var best containerCompletionSplitEvidence
+	for _, exited := range statuses {
+		terminated := exited.State.Terminated
 		if terminated == nil || terminated.ExitCode != 0 || terminated.FinishedAt.IsZero() {
 			continue
 		}
 		for _, running := range statuses {
-			if running.Name == completed.Name || running.State.Running == nil || running.State.Running.StartedAt.IsZero() {
+			if running.Name == exited.Name || running.State.Running == nil || running.State.Running.StartedAt.IsZero() {
 				continue
 			}
 			shapeStartedAt := terminated.FinishedAt.Time
 			if running.State.Running.StartedAt.Time.After(shapeStartedAt) {
 				shapeStartedAt = running.State.Running.StartedAt.Time
 			}
-			if now.Sub(shapeStartedAt) >= grace {
-				candidate := sidecarJobEvidence{completedContainer: completed.Name, runningContainer: running.Name, startedAt: shapeStartedAt}
-				if best.startedAt.IsZero() || candidate.startedAt.Before(best.startedAt) || (candidate.startedAt.Equal(best.startedAt) && evidenceKey(candidate) < evidenceKey(best)) {
-					best = candidate
-				}
+			if now.Sub(shapeStartedAt) < containerCompletionSplitMinimumAge {
+				continue
+			}
+			candidate := containerCompletionSplitEvidence{
+				exitedContainer:  exited.Name,
+				runningContainer: running.Name,
+				startedAt:        shapeStartedAt,
+			}
+			if earlierContainerCompletionSplitEvidence(candidate, best) {
+				best = candidate
 			}
 		}
 	}
-	return best.completedContainer, best.runningContainer, best.startedAt, !best.startedAt.IsZero()
+	return best.exitedContainer, best.runningContainer, best.startedAt, !best.startedAt.IsZero()
 }
 
 // DetectSuspiciousCoreDNS returns conservative CoreDNS Corefile findings for

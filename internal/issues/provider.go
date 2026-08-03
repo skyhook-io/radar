@@ -9,7 +9,6 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -38,8 +37,6 @@ type CacheProvider struct {
 	dynamic   *k8s.DynamicResourceCache
 	discovery *k8s.ResourceDiscovery
 }
-
-var _ cronJobOwnerProvider = (*CacheProvider)(nil)
 
 // NewCacheProvider returns a Provider over the live radar caches, or
 // nil if the typed cache isn't ready (cluster connection still pending).
@@ -71,25 +68,6 @@ func (p *CacheProvider) DetectProblems(namespaces []string) []k8s.Detection {
 		perNs = append(perNs, k8s.DetectProblems(p.cache, ns))
 	}
 	return flattenNamespacedProblems(perNs)
-}
-
-func (p *CacheProvider) CronJobOwnerForJob(namespace, name string) (Ref, bool) {
-	if p == nil || p.cache == nil || p.cache.Jobs() == nil || p.cache.CronJobs() == nil {
-		return Ref{}, false
-	}
-	job, err := p.cache.Jobs().Jobs(namespace).Get(name)
-	if err != nil {
-		return Ref{}, false
-	}
-	controller := metav1.GetControllerOf(job)
-	if controller == nil || controller.Kind != "CronJob" || !strings.HasPrefix(controller.APIVersion, "batch/") {
-		return Ref{}, false
-	}
-	cronJob, err := p.cache.CronJobs().CronJobs(namespace).Get(controller.Name)
-	if err != nil || controller.UID == "" || cronJob.UID == "" || controller.UID != cronJob.UID {
-		return Ref{}, false
-	}
-	return Ref{Group: "batch", Kind: "CronJob", Namespace: namespace, Name: controller.Name}, true
 }
 
 // DetectMissingRefs returns dangling-reference problems for all enabled

@@ -437,8 +437,8 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 			k8s.FindRemovedServiceEnvChecksForObject(r.Context(), cache, obj),
 			k8s.FindStaleSecretEnvChecksForObject(r.Context(), cache, obj),
 		),
-		RunningPastCompletion: resourcecontextrefs.RunningPastCompletionFromShape(
-			k8s.FindRunningPastCompletionForObject(cache, obj, time.Now()),
+		ContainerCompletionSplit: resourcecontextrefs.ContainerCompletionSplitFromShape(
+			k8s.FindContainerCompletionSplitForObject(cache, obj, time.Now()),
 		),
 		ServiceBackends: serviceBackendLookup{cache: cache},
 	}
