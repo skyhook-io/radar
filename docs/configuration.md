@@ -24,6 +24,23 @@ listener must be reachable through a published container port or Kubernetes
 Service. Desktop Radar and temporary `radar diagnose` servers remain
 loopback-only.
 
+## Automatic Update Checks
+
+While the UI is in use, release builds check `releases.skyhook.io` for updates
+and fall back to the GitHub Releases API if that endpoint fails. The query
+contains Radar version, OS, and architecture; the `User-Agent` repeats the
+Radar version. Define `RADAR_NO_UPDATE_CHECK` to prevent both requests:
+
+```bash
+RADAR_NO_UPDATE_CHECK=1 radar
+```
+
+This is a presence-based privacy control: any value, including an empty value,
+`0`, or `false`, disables the check. Unset the variable to re-enable it. For an
+in-cluster deployment, set the same variable through the chart's `env` value.
+The complete payload and network-boundary disclosure is in
+[Security](../README.md#security).
+
 ## Persistent Configuration
 
 Radar stores configuration in two files under `~/.radar/`:

@@ -639,9 +639,9 @@ func (s *Server) setupRoutes() {
 			r.Get("/connection", s.handleConnectionStatus)
 			r.Post("/connection/retry", s.handleConnectionRetry)
 
-			// GitHub star status and action
+			// GitHub star prompt state
 			r.Get("/github/starred", s.handleGitHubStarStatus)
-			r.Post("/github/star", s.handleGitHubStar)
+			r.Post("/github/star-intent", s.handleGitHubStarIntent)
 			r.Post("/github/dismiss", s.handleGitHubDismiss)
 
 			// Self-upgrade: Hub calls this over the yamux tunnel to patch this

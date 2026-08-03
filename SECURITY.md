@@ -30,6 +30,10 @@ Include as much of the following information as possible:
 
 ## Security Model
 
+While the UI is in use, release builds automatically check for updates. The application-level query contains Radar version, OS, and architecture — no stable installation or user identifier — and the `User-Agent` repeats the Radar version. The endpoint still receives ordinary HTTPS metadata such as source IP and timing. Successful results are cached for an hour and failures for five minutes. Define `RADAR_NO_UPDATE_CHECK` to prevent both the request to `releases.skyhook.io` and its `api.github.com` fallback. Any value, including empty, disables the check; unset the variable to re-enable it. Blocking both hosts is the network-policy backstop. This behavior applies to local and in-cluster deployments.
+
+`RADAR_NO_UPDATE_CHECK` controls only the update check. It does not disable operational network paths that Radar needs or that an operator configures, including Kubernetes API and credential-helper traffic, metrics and Prometheus access, OIDC discovery, Argo CD integration, AI providers, or the opt-in Cloud Hub tunnel. User-invoked actions such as accepting the GitHub star prompt, searching Artifact Hub, inspecting remote images, and downloading a desktop update can also make additional requests.
+
 ### Local Execution (Default)
 
 When running Radar locally on your machine:

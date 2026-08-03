@@ -8,9 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -48,6 +46,11 @@ const (
 	InstallScoop    InstallMethod = "scoop"
 	InstallDirect   InstallMethod = "direct"
 	InstallDesktop  InstallMethod = "desktop"
+
+	// Presence disables the automatic update check, regardless of value. This
+	// keeps the privacy control fail-closed even when an environment injector
+	// renders the variable with an empty value.
+	noUpdateCheckEnv = "RADAR_NO_UPDATE_CHECK"
 )
 
 // UpdateInfo contains version update information
@@ -86,7 +89,7 @@ func IsDesktop() bool {
 	return isDesktop
 }
 
-// CheckForUpdate checks GitHub for the latest release
+// CheckForUpdate checks for the latest release.
 func CheckForUpdate(_ context.Context) *UpdateInfo {
 	mu.Lock()
 
@@ -118,6 +121,10 @@ func CheckForUpdate(_ context.Context) *UpdateInfo {
 }
 
 func fetchLatestRelease(ctx context.Context) *UpdateInfo {
+	return fetchLatestReleaseWithClient(ctx, &http.Client{Timeout: 10 * time.Second})
+}
+
+func fetchLatestReleaseWithClient(ctx context.Context, client *http.Client) *UpdateInfo {
 	method := detectInstallMethod()
 	result := &UpdateInfo{
 		CurrentVersion: Current,
@@ -125,28 +132,13 @@ func fetchLatestRelease(ctx context.Context) *UpdateInfo {
 		UpdateCommand:  getUpdateCommand(method),
 	}
 
-	// Don't compare dev builds
-	if Current == "dev" {
+	// Development builds and explicitly opted-out installations never make an
+	// update-check request.
+	if shouldSkipUpdateCheck(Current) {
 		return result
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-
-	mode := "local"
-	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
-		mode = "in-cluster"
-	}
-	params := url.Values{
-		"v":      {Current},
-		"os":     {runtime.GOOS},
-		"arch":   {runtime.GOARCH},
-		"method": {string(method)},
-		"mode":   {mode},
-	}
-	if t := radarDirBirthtime(); t != 0 {
-		params.Set("t", strconv.FormatInt(t, 10))
-	}
-	proxyURL := fmt.Sprintf("%s?%s", releasesURL, params.Encode())
+	proxyURL := updateCheckURL(Current, runtime.GOOS, runtime.GOARCH)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", proxyURL, nil)
 	if err != nil {
@@ -206,6 +198,19 @@ func fetchLatestRelease(ctx context.Context) *UpdateInfo {
 	return result
 }
 
+func updateCheckURL(version, goos, goarch string) string {
+	return fmt.Sprintf("%s?%s", releasesURL, url.Values{
+		"v":    {version},
+		"os":   {goos},
+		"arch": {goarch},
+	}.Encode())
+}
+
+func shouldSkipUpdateCheck(current string) bool {
+	_, optedOut := os.LookupEnv(noUpdateCheckEnv)
+	return current == "dev" || optedOut
+}
+
 // isNewerVersion compares semver versions using Masterminds/semver
 func isNewerVersion(latest, current string) (bool, error) {
 	latestV, err := semver.NewVersion(latest)
@@ -224,16 +229,6 @@ func truncateNotes(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
-}
-
-// radarDirBirthtime returns the creation timestamp of ~/.radar/ as Unix epoch
-// seconds, or 0 if unavailable.
-func radarDirBirthtime() int64 {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return 0
-	}
-	return dirBirthtime(filepath.Join(homeDir, ".radar"))
 }
 
 // detectInstallMethod determines how Radar was installed based on binary path

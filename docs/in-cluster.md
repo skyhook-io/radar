@@ -323,6 +323,16 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 
 **Response compression:** Radar gzip-compresses HTTP responses by default (streaming endpoints like SSE are excluded). The level defaults to `1` (best speed), since on large clusters peak response size coincides with peak CPU. Set the `RADAR_COMPRESS_LEVEL` environment variable (via the chart's pod `env`) to `0` to disable, or `2`-`9` to trade CPU for smaller bodies on bandwidth-bound deployments.
 
+**Update checks:** Release builds check for updates while the UI is in use. To prevent both the primary request and its GitHub fallback, define `RADAR_NO_UPDATE_CHECK` through the chart's `env` value:
+
+```yaml
+env:
+  - name: RADAR_NO_UPDATE_CHECK
+    value: "1"
+```
+
+The control is presence-based: any value, including empty, `0`, or `false`, disables the check; remove the variable to re-enable it. See [Security](../README.md#security) for the exact application payload and the distinction from ordinary HTTPS metadata.
+
 ## Troubleshooting
 
 ### Pod not starting

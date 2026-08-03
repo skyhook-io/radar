@@ -16,13 +16,21 @@ import (
 
 const githubRepo = "skyhook-io/radar"
 
+var (
+	isInteractiveTerminal = func() bool {
+		return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+	}
+	githubStarPromptDelay = 5 * time.Second
+)
+
 // starState tracks GitHub star prompt history across launches.
 type starState struct {
-	Opens       int    `json:"opens"`                  // Total radar launches
-	StarredAt   string `json:"starred_at,omitempty"`   // Set when user starred via prompt
-	DismissedAt string `json:"dismissed_at,omitempty"` // Last time user said no
-	Dismissals  int    `json:"dismissals"`             // Number of times dismissed
-	PromptedAt  string `json:"prompted_at,omitempty"`  // Last time we showed the prompt
+	Opens             int    `json:"opens"`                         // Total radar launches
+	StarredAt         string `json:"starred_at,omitempty"`          // Set after the CLI confirms a successful star
+	PromptSatisfiedAt string `json:"prompt_satisfied_at,omitempty"` // Set when the user follows the web prompt link
+	DismissedAt       string `json:"dismissed_at,omitempty"`        // Last time user said no
+	Dismissals        int    `json:"dismissals"`                    // Number of times dismissed
+	PromptedAt        string `json:"prompted_at,omitempty"`         // Last time we showed the prompt
 }
 
 // Prompt schedule: show at open 3, then back off with increasing gaps.
@@ -30,7 +38,7 @@ type starState struct {
 // Note: thresholds[0] is only used by the PromptedAt=="" path (first prompt).
 // Subsequent prompts use thresholds[dismissals] where dismissals >= 1.
 func (s *starState) shouldPrompt() bool {
-	if s.StarredAt != "" {
+	if s.StarredAt != "" || s.PromptSatisfiedAt != "" {
 		return false
 	}
 
@@ -78,38 +86,6 @@ func IsStarred() bool {
 	return state.StarredAt != ""
 }
 
-// checkAndUpdateStarred checks the GitHub API via gh CLI and updates the cached state.
-// Returns true if the user has starred the repo.
-func checkAndUpdateStarred(statePath string, state *starState) bool {
-	ghPath, _ := exec.LookPath("gh")
-	if ghPath == "" {
-		return state.StarredAt != ""
-	}
-	if err := exec.Command(ghPath, "auth", "status").Run(); err != nil {
-		return state.StarredAt != ""
-	}
-	if err := exec.Command(ghPath, "api", "user/starred/"+githubRepo, "--silent").Run(); err == nil {
-		// 204 No Content — user has starred
-		if state.StarredAt == "" {
-			state.StarredAt = time.Now().Format(time.RFC3339)
-			saveStarState(statePath, state)
-		}
-		return true
-	}
-	// The error could be 404 (not starred) or a transient failure (network, rate limit).
-	// Only clear cached StarredAt if we can confirm it's a 404 by re-checking with
-	// a command that surfaces the HTTP status code.
-	out, err := exec.Command(ghPath, "api", "user/starred/"+githubRepo, "-i", "--silent").CombinedOutput()
-	if err != nil && strings.Contains(string(out), "HTTP 404") {
-		if state.StarredAt != "" {
-			state.StarredAt = ""
-			saveStarState(statePath, state)
-		}
-	}
-	// For any other error (network, rate limit, etc.), keep cached state as-is
-	return false
-}
-
 func trackAndMaybePrompt() error {
 	statePath, err := starStatePath()
 	if err != nil {
@@ -121,17 +97,12 @@ func trackAndMaybePrompt() error {
 	state.Opens++
 	saveStarState(statePath, state)
 
-	// Always check starred status in background (updates star.json for the UI)
-	if checkAndUpdateStarred(statePath, state) {
-		return nil // Already starred, no need to prompt
-	}
-
 	if !state.shouldPrompt() {
 		return nil
 	}
 
 	// Only prompt in interactive terminals (check both stdin and stdout)
-	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
+	if !isInteractiveTerminal() {
 		return nil
 	}
 
@@ -141,20 +112,16 @@ func trackAndMaybePrompt() error {
 	saveStarState(statePath, state)
 
 	// Wait for the user to see the UI before prompting
-	time.Sleep(5 * time.Second)
+	time.Sleep(githubStarPromptDelay)
 
-	// Re-check gh availability for the interactive prompt
+	// Checking the executable path is local. Do not inspect the user's GitHub
+	// account in the background; GitHub is contacted only if they accept below.
 	ghPath, _ := exec.LookPath("gh")
 	ghReady := ghPath != ""
-	if ghReady {
-		if err := exec.Command(ghPath, "auth", "status").Run(); err != nil {
-			ghReady = false
-		}
-	}
 
 	if ghReady {
 		// Interactive prompt — can star for them
-		fmt.Printf("\n  ⭐ Enjoying Radar? Star us on GitHub! [Y/n]: ")
+		fmt.Printf("\n  ⭐ Enjoying Radar? Star us on GitHub! [y/N]: ")
 		reader := bufio.NewReader(os.Stdin)
 		response, err := reader.ReadString('\n')
 		if err != nil {
@@ -165,7 +132,7 @@ func trackAndMaybePrompt() error {
 		}
 		response = strings.TrimSpace(strings.ToLower(response))
 
-		if response == "" || response == "y" || response == "yes" {
+		if response == "y" || response == "yes" {
 			cmd := exec.Command(ghPath, "api", "user/starred/"+githubRepo, "-X", "PUT", "--silent")
 			if err := cmd.Run(); err != nil {
 				fmt.Printf("  Hmm, that didn't work — you can star manually at https://github.com/%s\n\n", githubRepo)

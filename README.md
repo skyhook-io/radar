@@ -46,7 +46,7 @@ curl -fsSL https://get.radarhq.io | sh && kubectl radar
 - **Single binary** — no dependencies, no agents, no CRDs
 - **Fast on big clusters** — tested on tens of thousands of pods, with responsive views and live updates under real cluster churn
 - **Private by design** — your cluster data stays on your machine. No account, no agents, no cloud sync, no cluster telemetry
-- **Airgapped-friendly** — runs as a single binary against the Kubernetes API and works in locked-down environments with outbound egress blocked
+- **Airgapped-friendly** — runs as a single binary against the Kubernetes API and works with outbound egress blocked; define `RADAR_NO_UPDATE_CHECK` to avoid periodic blocked update requests ([details](#security))
 - **Real-time** — watches your cluster via informers, pushes updates to the browser via SSE
 - **Works everywhere** — GKE, EKS, AKS, minikube, kind, k3s, or any conformant cluster
 - **AI-ready** — built-in [MCP server](docs/mcp.md) lets AI agents query your cluster through Radar
@@ -550,7 +550,7 @@ Radar auto-discovers any CRD in your cluster. Popular tools get [dedicated integ
 
 ## Security
 
-Radar reads your cluster through your own credentials and keeps cluster data local. It does not upload manifests, logs, events, metrics, or resource data to Skyhook, and it does not require an account, agent, or cloud backend. Found a vulnerability? Please report it privately to **security@skyhook.io** — see [SECURITY.md](SECURITY.md) for the process and response timelines.
+By default, standalone Radar reads your cluster through your own credentials and does not upload manifests, logs, events, metrics, or resource data to Skyhook; it requires no account, agent, or cloud backend. While the UI is in use, release builds automatically check for updates. The application-level query contains Radar version, OS, and architecture, with no stable installation or user identifier; the `User-Agent` repeats the Radar version. The endpoint still receives ordinary HTTPS metadata such as source IP and timing. Successful results are cached for an hour and failures for five minutes. Define `RADAR_NO_UPDATE_CHECK` to prevent these requests; any value, including empty, disables the check, and the variable must be unset to re-enable it. Blocking `releases.skyhook.io` and its `api.github.com` fallback is the network-policy backstop. User-invoked actions such as accepting the GitHub star prompt, searching Artifact Hub, and inspecting remote images can make separate requests. Opt-in Cloud mode separately maintains its configured Hub tunnel. Found a vulnerability? Please report it privately to **security@skyhook.io** — see [SECURITY.md](SECURITY.md) for the process and response timelines.
 
 ---
 

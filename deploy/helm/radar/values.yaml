@@ -501,6 +501,8 @@ affinity: {}
 env: []
 #  - name: DEBUG
 #    value: "true"
+#  - name: RADAR_NO_UPDATE_CHECK
+#    value: "1"
 
 # Init containers to run before the main container
 initContainers: []
