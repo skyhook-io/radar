@@ -104,14 +104,20 @@ function BlockedView({
         </div>
       </div>
       <div className="mt-4 flex items-center gap-4">
-        <a
-          href={signupUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-[12.5px] font-semibold text-emerald-600 dark:text-emerald-400 hover:underline underline-offset-2"
-        >
-          Connect through the browser wizard instead →
-        </a>
+        {/* The wizard is not an escape hatch for a GitOps-managed install: its
+            imperative command is the exact thing that would drift or be
+            reverted, which is why prepare refused this path. Offering it here
+            would contradict the message directly above. */}
+        {blocked.reason !== 'gitops' && (
+          <a
+            href={signupUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[12.5px] font-semibold text-emerald-600 dark:text-emerald-400 hover:underline underline-offset-2"
+          >
+            Connect through the browser wizard instead →
+          </a>
+        )}
         <button onClick={onExit} className="text-[12.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors">
           Back
         </button>

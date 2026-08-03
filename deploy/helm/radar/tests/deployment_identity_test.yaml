@@ -19,17 +19,16 @@ tests:
           content:
             name: MY_DEPLOYMENT_NAME
             value: RELEASE-NAME-radar
-      - notContains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: RADAR_SELF_UPGRADE
-            value: "true"
-
-  - it: marks self-upgrade only when its RBAC is enabled
+  # Self-upgrade permission is decided by the apiserver against the Role that
+  # rbac.selfUpgrade creates. A marker env would go stale on exactly the path
+  # that matters: Hub's self-upgrade patches only the image, leaving the old
+  # pod template — so an env requirement would disable the mechanism that
+  # delivered the new binary.
+  - it: does not gate self-upgrade on a marker env
     set:
       rbac.selfUpgrade: true
     asserts:
-      - contains:
+      - notContains:
           path: spec.template.spec.containers[0].env
           content:
             name: RADAR_SELF_UPGRADE
