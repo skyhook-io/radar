@@ -23,10 +23,11 @@ import (
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/diagnosecli"
 	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/pkg/k8score"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
 	"github.com/skyhook-io/radar/internal/server"
 	"golang.org/x/net/http/httpguts"
+	authv1 "k8s.io/api/authorization/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	_ "k8s.io/client-go/plugin/pkg/client/auth" // Register all auth provider plugins (OIDC, GCP, Azure, etc.)
 	"k8s.io/klog/v2"
 )
@@ -457,10 +458,10 @@ func main() {
 			namespace := os.Getenv("MY_POD_NAMESPACE")
 			deploymentName := os.Getenv("MY_DEPLOYMENT_NAME")
 			runErr := cloud.Run(rootCtx, cloud.Config{
-				URL:          *cloudURL,
-				Token:        *cloudToken,
-				ClusterID:    *cloudClusterName,
-				ClusterName:  *cloudClusterName,
+				URL:                *cloudURL,
+				Token:              *cloudToken,
+				ClusterID:          *cloudClusterName,
+				ClusterName:        *cloudClusterName,
 				Namespace:          namespace,
 				APIServerURL:       apiServerURL,
 				InsecureSkipVerify: *cloudInsecureSkipVerify,
@@ -700,6 +701,24 @@ func canSelfUpgrade(ctx context.Context, namespace, deploymentName string) bool 
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	allowed, apiErr := k8score.CanI(probeCtx, client, namespace, "apps", "deployments", "patch")
-	return allowed && !apiErr
+	// The review MUST name the Deployment: rbac.selfUpgrade's Role is scoped
+	// with resourceNames, so an unnamed "can I patch deployments here" review
+	// answers no even where self-upgrade is correctly enabled.
+	review := &authv1.SelfSubjectAccessReview{
+		Spec: authv1.SelfSubjectAccessReviewSpec{
+			ResourceAttributes: &authv1.ResourceAttributes{
+				Namespace: namespace,
+				Group:     "apps",
+				Resource:  "deployments",
+				Name:      deploymentName,
+				Verb:      "patch",
+			},
+		},
+	}
+	result, err := client.AuthorizationV1().SelfSubjectAccessReviews().Create(probeCtx, review, metav1.CreateOptions{})
+	if err != nil {
+		log.Printf("[cloud] self-upgrade capability probe failed, advertising unavailable: %v", err)
+		return false
+	}
+	return result.Status.Allowed
 }
