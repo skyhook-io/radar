@@ -1,6 +1,7 @@
 package resourcecontextrefs
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -14,13 +15,13 @@ func TestContainerCompletionSplitFromShape(t *testing.T) {
 
 	out := ContainerCompletionSplitFromShape(&k8s.ContainerCompletionSplitShape{
 		Pod: "audit-log-archiver-1-pod", Job: "audit-log-archiver-1",
-		ExitedContainer: "archiver", RunningContainer: "fluent-bit-sidecar", SinceSeconds: 360,
+		ExitedContainer: "archiver", RunningContainers: []string{"fluent-bit-sidecar", "uploader"}, SinceSeconds: 360,
 	})
 	if out == nil {
 		t.Fatal("want a mapped observation, got nil")
 	}
 	if out.Pod != "audit-log-archiver-1-pod" || out.ExitedContainer != "archiver" ||
-		out.RunningContainer != "fluent-bit-sidecar" || out.SinceSeconds != 360 {
+		!slices.Equal(out.RunningContainers, []string{"fluent-bit-sidecar", "uploader"}) || out.SinceSeconds != 360 {
 		t.Fatalf("fields not mapped through: %+v", out)
 	}
 

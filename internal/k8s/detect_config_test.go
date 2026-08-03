@@ -2,6 +2,8 @@ package k8s
 
 import (
 	"fmt"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -211,10 +213,24 @@ func TestFindContainerCompletionSplitForObject(t *testing.T) {
 			if shape == nil {
 				t.Fatalf("%T observation is nil", subject)
 			}
-			if shape.ExitedContainer != "archiver" || shape.RunningContainer != "log-agent" ||
+			if shape.ExitedContainer != "archiver" || !slices.Equal(shape.RunningContainers, []string{"log-agent"}) ||
 				shape.Job != fixture.jobs[0].Name || shape.Pod != fixture.pods[0].Name {
 				t.Fatalf("%T observation = %+v", subject, shape)
 			}
+		}
+	})
+
+	t.Run("all running siblings are reported in stable order", func(t *testing.T) {
+		fixture := newContainerCompletionSplitFixture(now, 1)
+		fixture.pods[0].Status.ContainerStatuses = []corev1.ContainerStatus{
+			containerCompletionSplitTerminatedStatus("worker", 0, now.Add(-10*time.Minute)),
+			containerCompletionSplitRunningStatus("istio-proxy", now.Add(-time.Hour)),
+			containerCompletionSplitRunningStatus("cloudsql-proxy", now.Add(-time.Hour)),
+		}
+		cache := containerCompletionSplitTestCache(t, fixture)
+		shape := FindContainerCompletionSplitForObject(cache, fixture.jobs[0], now)
+		if shape == nil || !slices.Equal(shape.RunningContainers, []string{"cloudsql-proxy", "istio-proxy"}) {
+			t.Fatalf("running siblings were incomplete or unstable: %+v", shape)
 		}
 	})
 
@@ -289,6 +305,17 @@ func TestFindContainerCompletionSplitForObject(t *testing.T) {
 		}
 		if shape := FindContainerCompletionSplitForObject(cache, fixture.jobs[0], now); shape != nil {
 			t.Fatalf("Job accepted a failed Pod: %+v", shape)
+		}
+	})
+
+	t.Run("non-running Pod phases are quiet", func(t *testing.T) {
+		for _, phase := range []corev1.PodPhase{corev1.PodPending, corev1.PodUnknown} {
+			fixture := newContainerCompletionSplitFixture(now, 1)
+			fixture.pods[0].Status.Phase = phase
+			cache := containerCompletionSplitTestCache(t, fixture)
+			if shape := FindContainerCompletionSplitForObject(cache, fixture.jobs[0], now); shape != nil {
+				t.Fatalf("%s Pod produced an observation: %+v", phase, shape)
+			}
 		}
 	})
 
@@ -422,7 +449,7 @@ func TestFindContainerCompletionSplitEvidenceIsDeterministic(t *testing.T) {
 	if !ok {
 		t.Fatal("reverse lookup found no evidence")
 	}
-	if forward != reverse || forward.podName != fixture.pods[1].Name {
+	if !reflect.DeepEqual(forward, reverse) || forward.podName != fixture.pods[1].Name {
 		t.Fatalf("evidence changed with input order: forward=%+v reverse=%+v", forward, reverse)
 	}
 
@@ -437,7 +464,7 @@ func TestFindContainerCompletionSplitEvidenceIsDeterministic(t *testing.T) {
 	if !ok {
 		t.Fatal("equal-time reverse lookup found no evidence")
 	}
-	if forward != reverse || forward.podName != fixture.pods[0].Name {
+	if !reflect.DeepEqual(forward, reverse) || forward.podName != fixture.pods[0].Name {
 		t.Fatalf("equal-time evidence changed with input order: forward=%+v reverse=%+v", forward, reverse)
 	}
 }

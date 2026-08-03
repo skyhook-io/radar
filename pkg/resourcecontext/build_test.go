@@ -1324,7 +1324,7 @@ func TestBuild_ContainerCompletionSplit_GatedByAccess(t *testing.T) {
 	}
 	obs := &ContainerCompletionSplit{
 		Pod: "audit-log-archiver-1-pod", Job: "audit-log-archiver-1",
-		ExitedContainer: "archiver", RunningContainer: "fluent-bit-sidecar",
+		ExitedContainer: "archiver", RunningContainers: []string{"fluent-bit-sidecar"},
 	}
 
 	t.Run("attached when Pod and Job are readable", func(t *testing.T) {

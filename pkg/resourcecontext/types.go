@@ -350,15 +350,15 @@ type CronJobSummary struct {
 	ContainerCompletionSplit *ContainerCompletionSplit `json:"containerCompletionSplit,omitempty"`
 }
 
-// ContainerCompletionSplit is a fact-only observation. The running container
-// must be inspected before treating it as a stuck sidecar.
+// ContainerCompletionSplit is a fact-only observation. The running containers
+// must be inspected before treating any as a stuck sidecar.
 type ContainerCompletionSplit struct {
-	Pod              string `json:"pod,omitempty"`
-	Job              string `json:"job,omitempty"`
-	ExitedContainer  string `json:"exitedContainer,omitempty"`
-	RunningContainer string `json:"runningContainer,omitempty"`
-	SinceSeconds     int64  `json:"sinceSeconds,omitempty"`
-	Note             string `json:"note,omitempty"`
+	Pod               string   `json:"pod,omitempty"`
+	Job               string   `json:"job,omitempty"`
+	ExitedContainer   string   `json:"exitedContainer,omitempty"`
+	RunningContainers []string `json:"runningContainers,omitempty"`
+	SinceSeconds      int64    `json:"sinceSeconds,omitempty"`
+	Note              string   `json:"note,omitempty"`
 }
 
 type HPASummary struct {

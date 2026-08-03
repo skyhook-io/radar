@@ -41,11 +41,11 @@ const containerCompletionSplitMinimumAge = 2 * time.Minute
 // ContainerCompletionSplitShape describes a regular-container completion split
 // without inferring why the sibling container is still running.
 type ContainerCompletionSplitShape struct {
-	Pod              string
-	Job              string
-	ExitedContainer  string
-	RunningContainer string
-	SinceSeconds     int64
+	Pod               string
+	Job               string
+	ExitedContainer   string
+	RunningContainers []string
+	SinceSeconds      int64
 }
 
 // FindContainerCompletionSplitForObject returns a neutral completion split for
@@ -109,26 +109,26 @@ func FindContainerCompletionSplitForObject(cache *ResourceCache, obj runtime.Obj
 		return nil
 	}
 	return &ContainerCompletionSplitShape{
-		Pod:              evidence.podName,
-		Job:              evidence.jobName,
-		ExitedContainer:  evidence.exitedContainer,
-		RunningContainer: evidence.runningContainer,
-		SinceSeconds:     ageSeconds(now, evidence.startedAt),
+		Pod:               evidence.podName,
+		Job:               evidence.jobName,
+		ExitedContainer:   evidence.exitedContainer,
+		RunningContainers: evidence.runningContainers,
+		SinceSeconds:      ageSeconds(now, evidence.startedAt),
 	}
 }
 
 type containerCompletionSplitEvidence struct {
-	exitedContainer  string
-	runningContainer string
-	jobName          string
-	podName          string
-	startedAt        time.Time
+	exitedContainer   string
+	runningContainers []string
+	jobName           string
+	podName           string
+	startedAt         time.Time
 }
 
 func findContainerCompletionSplitEvidence(pods []*corev1.Pod, activeJobs map[string]*batchv1.Job, now time.Time) (containerCompletionSplitEvidence, bool) {
 	var best containerCompletionSplitEvidence
 	for _, pod := range pods {
-		if !pod.DeletionTimestamp.IsZero() || pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+		if !pod.DeletionTimestamp.IsZero() || pod.Status.Phase != corev1.PodRunning {
 			continue
 		}
 		controller := metav1.GetControllerOf(pod)
@@ -144,12 +144,14 @@ func findContainerCompletionSplitEvidence(pods []*corev1.Pod, activeJobs map[str
 			continue
 		}
 		candidate := containerCompletionSplitEvidence{
-			exitedContainer:  exited,
-			runningContainer: running,
-			jobName:          job.Name,
-			podName:          pod.Name,
-			startedAt:        startedAt,
+			exitedContainer:   exited,
+			runningContainers: running,
+			jobName:           job.Name,
+			podName:           pod.Name,
+			startedAt:         startedAt,
 		}
+		// A Pod's latest exit marks its latest progress; across Pods, the
+		// oldest qualifying split is the most established evidence.
 		if earlierContainerCompletionSplitEvidence(candidate, best) {
 			best = candidate
 		}
@@ -168,35 +170,40 @@ func laterContainerCompletionSplitEvidence(candidate, current containerCompletio
 }
 
 func containerCompletionSplitEvidenceKey(e containerCompletionSplitEvidence) string {
-	return e.jobName + "\x00" + e.podName + "\x00" + e.exitedContainer + "\x00" + e.runningContainer
+	return e.jobName + "\x00" + e.podName + "\x00" + e.exitedContainer + "\x00" + strings.Join(e.runningContainers, "\x00")
 }
 
-func regularContainerCompletionSplit(statuses []corev1.ContainerStatus, now time.Time) (string, string, time.Time, bool) {
+func regularContainerCompletionSplit(statuses []corev1.ContainerStatus, now time.Time) (string, []string, time.Time, bool) {
+	runningContainers := make([]string, 0, len(statuses))
+	for _, status := range statuses {
+		if status.State.Running != nil {
+			runningContainers = append(runningContainers, status.Name)
+		}
+	}
+	if len(runningContainers) == 0 {
+		return "", nil, time.Time{}, false
+	}
+	sort.Strings(runningContainers)
+
 	var best containerCompletionSplitEvidence
 	for _, exited := range statuses {
 		terminated := exited.State.Terminated
 		if terminated == nil || terminated.ExitCode != 0 || terminated.FinishedAt.IsZero() {
 			continue
 		}
-		for _, running := range statuses {
-			if running.Name == exited.Name || running.State.Running == nil {
-				continue
-			}
-			shapeStartedAt := terminated.FinishedAt.Time
-			candidate := containerCompletionSplitEvidence{
-				exitedContainer:  exited.Name,
-				runningContainer: running.Name,
-				startedAt:        shapeStartedAt,
-			}
-			if laterContainerCompletionSplitEvidence(candidate, best) {
-				best = candidate
-			}
+		candidate := containerCompletionSplitEvidence{
+			exitedContainer:   exited.Name,
+			runningContainers: runningContainers,
+			startedAt:         terminated.FinishedAt.Time,
+		}
+		if laterContainerCompletionSplitEvidence(candidate, best) {
+			best = candidate
 		}
 	}
 	if best.startedAt.IsZero() || now.Sub(best.startedAt) < containerCompletionSplitMinimumAge {
-		return "", "", time.Time{}, false
+		return "", nil, time.Time{}, false
 	}
-	return best.exitedContainer, best.runningContainer, best.startedAt, !best.startedAt.IsZero()
+	return best.exitedContainer, best.runningContainers, best.startedAt, true
 }
 
 // DetectSuspiciousCoreDNS returns conservative CoreDNS Corefile findings for
