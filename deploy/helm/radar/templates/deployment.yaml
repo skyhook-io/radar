@@ -9,6 +9,17 @@
 {{- if and $basePath .Values.cloud.enabled }}
 {{- fail "basePath is not supported with cloud.enabled=true: Radar Hub owns the URL path in Cloud mode, and the binary refuses the combination at startup — unset one of them rather than installing a release that crash-loops" }}
 {{- end }}
+{{- /* URLs registered at the IdP have to carry the prefix: Radar's OIDC routes
+       move under it, and an unprefixed URI is not routed here, so login fails
+       after the callback rather than at install time. */}}
+{{- if $basePath }}
+{{- range $key := list "redirectURL" "postLogoutRedirectURL" }}
+{{- $val := get $.Values.auth.oidc $key }}
+{{- if and $val (not (contains $basePath $val)) }}
+{{- fail (printf "auth.oidc.%s (%s) must include basePath %q — Radar serves /auth/* under the prefix, so the IdP would send the browser to a path that is not routed to Radar" $key $val $basePath) }}
+{{- end }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
