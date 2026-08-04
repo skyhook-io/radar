@@ -15,8 +15,11 @@
 {{- if $basePath }}
 {{- range $key := list "redirectURL" "postLogoutRedirectURL" }}
 {{- $val := get $.Values.auth.oidc $key }}
-{{- if and $val (not (contains $basePath $val)) }}
-{{- fail (printf "auth.oidc.%s (%s) must include basePath %q — Radar serves /auth/* under the prefix, so the IdP would send the browser to a path that is not routed to Radar" $key $val $basePath) }}
+{{- /* Compare the URL's PATH, not the whole string: a substring test passes
+       spuriously whenever the hostname happens to start with the same word,
+       e.g. basePath /radar against https://radar.example.com/auth/callback. */}}
+{{- if and $val (not (hasPrefix $basePath (urlParse $val).path)) }}
+{{- fail (printf "auth.oidc.%s (%s) must be under basePath %q — Radar serves /auth/* below the prefix, so the IdP would send the browser to a path that is not routed to Radar" $key $val $basePath) }}
 {{- end }}
 {{- end }}
 {{- end }}
