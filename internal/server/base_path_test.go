@@ -221,26 +221,6 @@ func TestPrefixAttrPathsLeavesOtherOriginsAlone(t *testing.T) {
 	}
 }
 
-// The OIDC handler sends the browser into the app after a successful login, so
-// it has to know the prefix: under a no-strip subpath ingress only {basePath}/*
-// reaches this service, and a bare "/" would land the user outside Radar. The
-// redirect itself needs a token exchange to exercise, so this covers the wiring
-// that would silently break it.
-func TestAuthConfigCarriesNormalizedBasePath(t *testing.T) {
-	for raw, want := range map[string]string{
-		"":             "",
-		"/":            "",
-		"/radar":       "/radar",
-		"radar/":       "/radar",
-		"/tools/radar": "/tools/radar",
-	} {
-		srv := New(Config{DevMode: true, BasePath: raw, AuthConfig: auth.Config{Mode: "proxy"}})
-		if got := srv.authConfig.BasePath; got != want {
-			t.Errorf("BasePath %q: authConfig.BasePath = %q, want %q", raw, got, want)
-		}
-	}
-}
-
 // Both base-path redirects echo the request's query string, so their Location
 // must stay same-origin no matter what the caller sends: a value that browsers
 // read as scheme-relative ("//host", "/\host") would be an open redirect.

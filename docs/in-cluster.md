@@ -75,6 +75,8 @@ auth:
   oidc:
     redirectURL: https://tools.your-domain.com/radar/auth/callback           # not /auth/callback
     postLogoutRedirectURL: https://tools.your-domain.com/radar/              # not /
+    # With backchannelLogout, the URI registered at the IdP is likewise
+    # https://tools.your-domain.com/radar/auth/backchannel-logout
 ```
 
 Radar's callback route lives at `{basePath}/auth/callback`, so a redirect URL

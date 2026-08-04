@@ -175,10 +175,6 @@ func New(cfg Config) *Server {
 	if err != nil {
 		log.Fatalf("Invalid base path %q: %v", cfg.BasePath, err)
 	}
-	// The OIDC handler redirects into the app after login, so it needs to know
-	// where the app lives. Set before NewOIDCHandler reads the config below.
-	cfg.AuthConfig.BasePath = basePath
-
 	s := &Server{
 		router:                chi.NewRouter(),
 		broadcaster:           NewSSEBroadcaster(),
@@ -292,7 +288,7 @@ func New(cfg Config) *Server {
 			if s.authConfig.OIDCRedirectURL == "" {
 				log.Fatalf("[auth] --auth-oidc-redirect-url is required when auth-mode=oidc")
 			}
-			oidcHandler, err := auth.NewOIDCHandler(context.Background(), s.authConfig)
+			oidcHandler, err := auth.NewOIDCHandler(context.Background(), s.authConfig, basePath)
 			if err != nil {
 				log.Fatalf("[auth] OIDC initialization failed (issuer=%s): %v — cannot start with auth-mode=oidc", s.authConfig.OIDCIssuer, err)
 			}

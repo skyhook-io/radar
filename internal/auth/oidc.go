@@ -34,6 +34,12 @@ type OIDCHandler struct {
 	httpClient         *http.Client          // custom TLS client for OIDC provider calls; nil = default
 	revoker            *MemoryRevoker        // session revocation store; nil = backchannel logout disabled
 
+	// basePath is the URL prefix Radar serves under ("" at the root). Where Radar
+	// is mounted is the server's concern, not part of the shared auth config, but
+	// the post-login redirect has to land inside the app: under a no-strip subpath
+	// ingress only {basePath}/* is routed here, so "/" would leave the app.
+	basePath string
+
 	// Discovery: backchannel logout support
 	backchannelLogoutSupported        bool
 	backchannelLogoutSessionSupported bool
@@ -63,9 +69,11 @@ var supportedOIDCSigningAlgorithms = map[string]bool{
 	oidc.EdDSA: true,
 }
 
-// NewOIDCHandler creates a new OIDC handler. Returns an error if the provider
-// cannot be discovered (network error, invalid issuer URL, etc.).
-func NewOIDCHandler(ctx context.Context, cfg Config) (*OIDCHandler, error) {
+// NewOIDCHandler creates a new OIDC handler. basePath is the URL prefix Radar is
+// served under ("" at the root), which the post-login redirect must target.
+// Returns an error if the provider cannot be discovered (network error, invalid
+// issuer URL, etc.).
+func NewOIDCHandler(ctx context.Context, cfg Config, basePath string) (*OIDCHandler, error) {
 	// Build a custom HTTP client for OIDC provider TLS when configured
 	var httpClient *http.Client
 	if cfg.OIDCCACert != "" {
@@ -122,6 +130,7 @@ func NewOIDCHandler(ctx context.Context, cfg Config) (*OIDCHandler, error) {
 
 	h := &OIDCHandler{
 		cfg:                               cfg,
+		basePath:                          basePath,
 		provider:                          provider,
 		oauth:                             oauthCfg,
 		verifier:                          verifier,
@@ -542,7 +551,7 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	// Redirect to the app root under its base path. A bare "/" would leave the
 	// user outside Radar on a subpath deployment, where the ingress routes only
 	// the prefix to this service.
-	http.Redirect(w, r, h.cfg.BasePath+"/", http.StatusFound)
+	http.Redirect(w, r, h.basePath+"/", http.StatusFound)
 }
 
 // sessionIssued reports whether a CreateSessionCookie result actually

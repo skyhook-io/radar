@@ -333,7 +333,7 @@ func TestNewOIDCHandler_FailsWithSelfSignedCert(t *testing.T) {
 		OIDCClientID:     "test",
 		OIDCClientSecret: "secret",
 		OIDCRedirectURL:  "http://localhost/callback",
-	})
+	}, "")
 	if err == nil {
 		t.Fatal("expected TLS error, got nil")
 	}
@@ -353,7 +353,7 @@ func TestNewOIDCHandler_InsecureSkipVerify(t *testing.T) {
 		OIDCClientSecret:       "secret",
 		OIDCRedirectURL:        "http://localhost/callback",
 		OIDCInsecureSkipVerify: true,
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("expected success with InsecureSkipVerify, got: %v", err)
 	}
@@ -388,7 +388,7 @@ func TestNewOIDCHandler_CACert(t *testing.T) {
 		OIDCClientSecret: "secret",
 		OIDCRedirectURL:  "http://localhost/callback",
 		OIDCCACert:       f.Name(),
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("expected success with CA cert, got: %v", err)
 	}
@@ -425,7 +425,7 @@ func TestNewOIDCHandler_CACertTakesPrecedence(t *testing.T) {
 		OIDCRedirectURL:        "http://localhost/callback",
 		OIDCCACert:             f.Name(),
 		OIDCInsecureSkipVerify: true,
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("expected success, got: %v", err)
 	}
@@ -467,7 +467,7 @@ func TestNewOIDCHandler_InternalIssuerUsesInternalEndpoints(t *testing.T) {
 		OIDCClientID:       "radar",
 		OIDCClientSecret:   "secret",
 		OIDCRedirectURL:    "http://localhost/callback",
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("expected success with internal issuer, got: %v", err)
 	}
@@ -535,7 +535,7 @@ func TestNewOIDCHandler_InternalIssuerWithOverridesKeepsDiscoveryMetadata(t *tes
 		OIDCClientID:         "radar",
 		OIDCClientSecret:     "secret",
 		OIDCRedirectURL:      "http://localhost/callback",
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("expected success with internal issuer and overrides, got: %v", err)
 	}
@@ -565,7 +565,7 @@ func TestNewOIDCHandler_ExplicitEndpointsDoNotRequireDiscovery(t *testing.T) {
 		OIDCClientID:         "radar",
 		OIDCClientSecret:     "secret",
 		OIDCRedirectURL:      "http://localhost/callback",
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("expected explicit endpoints to initialize without discovery: %v", err)
 	}
@@ -927,7 +927,7 @@ func TestNewOIDCHandler_InvalidCACertPath(t *testing.T) {
 		OIDCClientSecret: "secret",
 		OIDCRedirectURL:  "http://localhost/callback",
 		OIDCCACert:       "/nonexistent/ca.pem",
-	})
+	}, "")
 	if err == nil {
 		t.Fatal("expected error for invalid CA cert path")
 	}
@@ -952,7 +952,7 @@ func TestNewOIDCHandler_InvalidCACertContent(t *testing.T) {
 		OIDCClientSecret: "secret",
 		OIDCRedirectURL:  "http://localhost/callback",
 		OIDCCACert:       f.Name(),
-	})
+	}, "")
 	if err == nil {
 		t.Fatal("expected error for invalid CA cert content")
 	}
@@ -1030,3 +1030,33 @@ func TestBackchannelLogout_CacheControlAlwaysSet(t *testing.T) {
 
 // Note: testing invalid/valid JWT verification requires a real OIDC provider
 // with JWKS. The pre-verification tests above cover all paths before Verify().
+
+// The post-login redirect must land inside the app. Under a no-strip subpath
+// ingress only {basePath}/* is routed to Radar, so a bare "/" would drop the
+// user onto whatever else owns the origin root right after authenticating.
+// Reaching the redirect itself needs a token exchange, so this pins the value
+// the handler was built with.
+func TestNewOIDCHandlerRetainsBasePath(t *testing.T) {
+	srv := newTLSOIDCServer()
+	defer srv.Close()
+
+	for _, basePath := range []string{"", "/radar", "/tools/radar"} {
+		h, err := NewOIDCHandler(context.Background(), Config{
+			Mode:                   "oidc",
+			OIDCIssuer:             srv.URL,
+			OIDCClientID:           "test",
+			OIDCClientSecret:       "secret",
+			OIDCRedirectURL:        "http://localhost" + basePath + "/auth/callback",
+			OIDCInsecureSkipVerify: true,
+		}, basePath)
+		if err != nil {
+			t.Fatalf("basePath %q: NewOIDCHandler: %v", basePath, err)
+		}
+		if h.basePath != basePath {
+			t.Errorf("basePath %q: handler.basePath = %q", basePath, h.basePath)
+		}
+		if got := h.basePath + "/"; got != basePath+"/" {
+			t.Errorf("basePath %q: post-login target = %q, want %q", basePath, got, basePath+"/")
+		}
+	}
+}

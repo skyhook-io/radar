@@ -148,6 +148,8 @@ When an admin disables a user at the IdP level (e.g., disables an Okta account),
 
 To enable, set `--auth-oidc-backchannel-logout` (or `auth.oidc.backchannelLogout: true` in Helm), then register `https://radar.example.com/auth/backchannel-logout` as the Back-Channel Logout URI in your IdP.
 
+If Radar is served under a base path, the route sits at `{basePath}/auth/backchannel-logout` — register that. An unprefixed URI is not routed to Radar, and the IdP's POST is silently lost: disabling a user leaves their Radar session live until the cookie expires, which is the exact failure this feature exists to prevent.
+
 ```yaml
 auth:
   mode: oidc

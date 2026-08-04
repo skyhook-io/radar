@@ -17,11 +17,6 @@ type Config struct {
 	Secret    string        // HMAC signing key for session cookies
 	CookieTTL time.Duration // default 4h, sliding
 
-	// BasePath is the URL prefix Radar is served under ("" at the root). Post-login
-	// redirects must target it: under a no-strip subpath ingress only {BasePath}/*
-	// is routed to Radar, so sending the browser to "/" lands outside the app.
-	BasePath string
-
 	// Proxy mode
 	UserHeader     string // default "X-Forwarded-User"
 	GroupsHeader   string // default "X-Forwarded-Groups"
