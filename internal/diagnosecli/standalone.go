@@ -157,8 +157,12 @@ func (t *tailBuffer) String() string {
 // probeListening reports whether anything answers on the discovered base —
 // used to distinguish "stale port file" from "no Radar at all".
 func probeListening(base string) bool {
-	u := strings.TrimPrefix(strings.TrimPrefix(base, "http://"), "https://")
-	conn, err := net.DialTimeout("tcp", u, time.Second)
+	// Dial the authority only. The base carries the server's --base-path when it
+	// has one, and a path suffix is not a valid dial address — leaving it in makes
+	// a healthy prefixed instance look dead.
+	authority := strings.TrimPrefix(strings.TrimPrefix(base, "http://"), "https://")
+	authority, _, _ = strings.Cut(authority, "/")
+	conn, err := net.DialTimeout("tcp", authority, time.Second)
 	if err != nil {
 		return false
 	}

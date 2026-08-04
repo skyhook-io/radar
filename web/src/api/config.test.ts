@@ -40,6 +40,25 @@ describe('stripBasename', () => {
     expect(stripBasename('/c/abcdef/resources')).toBe('/c/abcdef/resources')
   })
 
+  // Standalone Radar sets a basename too once --base-path is configured, so the
+  // session-expiry return path round-trips through this in a new shape. Store
+  // strips once (client.ts) and restore strips again defensively (App.tsx) before
+  // navigate() re-applies the basename — the net effect must be the original
+  // route, never a doubled one.
+  it('round-trips a return path under a base path without doubling', () => {
+    setBasename('/radar')
+    const stored = stripBasename('/radar/resources/pods') + '?namespaces=prod'
+    expect(stored).toBe('/resources/pods?namespaces=prod')
+    // Restore side strips a second time; already-relative values are untouched.
+    expect(stripBasename(stored)).toBe('/resources/pods?namespaces=prod')
+  })
+
+  it('leaves a nested base path return path relative', () => {
+    setBasename('/tools/radar')
+    expect(stripBasename('/tools/radar/topology')).toBe('/topology')
+    expect(stripBasename(stripBasename('/tools/radar/topology'))).toBe('/topology')
+  })
+
   it('inverts routePath', () => {
     setBasename('/c/abc')
     expect(stripBasename(routePath('/auth/login'))).toBe('/auth/login')

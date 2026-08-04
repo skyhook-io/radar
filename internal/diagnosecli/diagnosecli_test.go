@@ -2,6 +2,7 @@ package diagnosecli
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -188,5 +189,39 @@ func TestResolveServerReadsBasePathFromDiscoveryFile(t *testing.T) {
 				t.Errorf("resolveServer() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// probeListening receives the discovered base URL, which carries the server's
+// --base-path when it has one. A path suffix is not a dialable address, so
+// leaving it in makes a healthy prefixed instance look dead and sends the CLI
+// off to spawn a throwaway standalone server instead of attaching.
+func TestProbeListeningIgnoresBasePathSuffix(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	addr := ln.Addr().String()
+
+	for _, base := range []string{
+		"http://" + addr,
+		"http://" + addr + "/radar",
+		"http://" + addr + "/tools/radar",
+		addr + "/radar",
+	} {
+		if !probeListening(base) {
+			t.Errorf("probeListening(%q) = false, want true", base)
+		}
+	}
+
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	deadAddr := closed.Addr().String()
+	closed.Close()
+	if probeListening("http://" + deadAddr + "/radar") {
+		t.Error("probeListening on a closed port = true, want false")
 	}
 }
