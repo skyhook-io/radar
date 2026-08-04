@@ -103,6 +103,10 @@ type Server struct {
 	// rebuild, not this handler's persist step).
 	scopeMutationMu sync.Mutex
 
+	// rootHintOnce keeps the base-path misconfiguration hint to a single log
+	// line no matter how many requests reach the origin root.
+	rootHintOnce sync.Once
+
 	// nsPickMu serializes namespace-pick mutations: the POST handler's
 	// persist+set pair and the read-path stale-pick prune. Without it, a
 	// prune computed from a stale snapshot can land after a user's fresh
@@ -322,6 +326,7 @@ func (s *Server) setupRoutes() {
 		appRouter := chi.NewRouter()
 		s.setupAppRoutes(appRouter)
 		s.router.Get("/", func(w http.ResponseWriter, r *http.Request) {
+			s.hintRootRequestUnderBasePath()
 			http.Redirect(w, r, s.basePath+"/"+querySuffix(r), http.StatusFound)
 		})
 		s.router.Mount(s.basePath, s.basePathHandler(appRouter))
@@ -350,6 +355,23 @@ func (s *Server) basePathHandler(app http.Handler) http.Handler {
 			return
 		}
 		stripped.ServeHTTP(w, r)
+	})
+}
+
+// hintRootRequestUnderBasePath explains, once, the misconfiguration that
+// otherwise presents only as an unexplained browser redirect loop: an ingress
+// that strips the prefix sitting in front of a Radar that also serves under it.
+// Radar sends the browser to {basePath}/, the ingress strips it again, and the
+// two bounce until the browser gives up with ERR_TOO_MANY_REDIRECTS.
+//
+// Phrased as a hint rather than an error because reaching / is legitimate — a
+// port-forward straight to the pod lands here, as does an ingress that routes
+// the origin root through as well.
+func (s *Server) hintRootRequestUnderBasePath() {
+	s.rootHintOnce.Do(func() {
+		log.Printf("[base-path] serving under %s; a request arrived for / and was redirected to %s/. "+
+			"If the browser reports too many redirects, the ingress in front of Radar is stripping the prefix: "+
+			"either stop stripping it, or unset --base-path / chart basePath.", s.basePath, s.basePath)
 	})
 }
 
