@@ -83,11 +83,20 @@ Radar's callback route lives at `{basePath}/auth/callback`, so a redirect URL
 without the prefix sends the IdP to a path the ingress doesn't route to Radar and
 login ends in a 404.
 
-**Two Radar instances behind subpaths on the same host share browser state.**
-Cookies are set at `Path=/` and `localStorage` is scoped per origin, not per path,
-so `/radar-a` and `/radar-b` on one hostname will share the session cookie and UI
-preferences (and the session cookie is also sent to unrelated apps on that
-hostname). Give each instance its own hostname if you need them isolated.
+**Give each instance its own hostname.** Two Radars behind subpaths on one
+hostname (`/radar-a`, `/radar-b`) are the same browser origin, so they share
+browser state: the session cookie is set at `Path=/`, and `localStorage` — which
+holds the theme, log-viewer preferences and similar per-instance settings — is
+scoped per origin with no path-scoped equivalent in the platform at all. Logging
+into one can end the other's session, and preferences set in one show up in the
+other. A hostname each keeps them properly separate.
+
+Separately from that: a Radar per cluster gives you a view per cluster. Each
+watches only its own cluster and carries its own upgrades, ingress and auth
+config, with no cross-cluster search or combined issue list across them. If you
+want several clusters in one view, that is what
+[Radar Cloud](https://radarhq.io) is for, and its agent dials out so there is no
+per-cluster ingress to wire up.
 
 ### With Basic Authentication
 
