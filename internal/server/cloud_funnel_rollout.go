@@ -12,12 +12,17 @@ import (
 	"github.com/skyhook-io/radar/internal/settings"
 )
 
-// cloudFunnelRolloutPercent stages the Cloud funnel's exposure. It is
-// compiled in and ramped by releases (10 → higher → 100, then this file is
-// deleted) — deliberately not a remote flag service, because Radar makes no
+// cloudFunnelRolloutPercent stages the Cloud funnel's exposure. It is compiled
+// in and raised by successive releases until it reaches 100 and this file is
+// deleted — deliberately not a remote flag service, because Radar makes no
 // network calls it doesn't announce and a rollout gate is not a reason to
 // start.
-const cloudFunnelRolloutPercent = 10
+//
+// Raising it only ever adds installs: the bucket is `hash % 100 < percent`, so
+// anyone already inside a lower percentage stays inside a higher one. Older
+// releases keep whatever value they were built with, so during a ramp the fleet
+// runs several percentages at once.
+const cloudFunnelRolloutPercent = 20
 
 // cloudFunnelInCohort decides whether this installation sees the Cloud
 // funnel during the staged rollout. RADAR_CLOUD_FUNNEL=on|off overrides in
