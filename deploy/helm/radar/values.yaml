@@ -201,6 +201,7 @@ service:
 # URL path prefix that Radar itself serves under, e.g. /radar. Set this when
 # your ingress forwards a subpath through to the service without stripping it.
 # Leave empty for root serving or for ingresses that rewrite /radar -> /.
+# Cannot be combined with cloud.enabled — Radar Cloud owns the URL path.
 basePath: ""
 
 ingress:

@@ -214,7 +214,7 @@ func main() {
 	// signals are checked because the chart sets them together but they are
 	// independent inputs, and either one alone is enough to break the prefix.
 	if normalizedBasePath != "" && (*cloudURL != "" || cloud.Mode()) {
-		log.Fatalf("--base-path is not supported in Radar Cloud mode (--cloud-url / RADAR_CLOUD_MODE): the Hub owns the URL path")
+		log.Fatalf("--base-path is not supported in Radar Cloud mode (--cloud-url / RADAR_CLOUD_MODE): Radar Cloud owns the URL path")
 	}
 	timelineMaxSizeBytes, err := config.ParseByteSize(*timelineMaxSize)
 	if err != nil {

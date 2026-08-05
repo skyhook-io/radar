@@ -7,7 +7,7 @@
 {{- $basePath = printf "/%s" $trimmedBasePath -}}
 {{- end -}}
 {{- if and $basePath .Values.cloud.enabled }}
-{{- fail "basePath is not supported with cloud.enabled=true: Radar Hub owns the URL path in Cloud mode, and the binary refuses the combination at startup — unset one of them rather than installing a release that crash-loops" }}
+{{- fail "basePath is not supported with cloud.enabled=true: Radar Cloud owns the URL path, and the binary refuses the combination at startup — unset one of them" }}
 {{- end }}
 {{- /* URLs registered at the IdP have to carry the prefix: Radar's OIDC routes
        move under it, and an unprefixed URI is not routed here, so login fails

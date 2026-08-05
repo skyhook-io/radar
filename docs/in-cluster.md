@@ -63,8 +63,8 @@ Path segments accept letters, digits, `-`, `_`, `.` and `~`. Radar serves the ap
 **only** under the prefix — requests to unprefixed paths get a 404, so update any
 external health checks or scrapers that hit `/api/health` or `/metrics` directly
 (the chart's own probes follow `basePath` automatically). `basePath` is not
-supported together with Radar Cloud (`--cloud-url`), where the Hub owns the URL
-path.
+supported together with Radar Cloud (`--cloud-url`), which owns the URL path
+itself.
 
 **Every URL you hand to an external system must include the prefix.** With OIDC
 that means the values you register with your identity provider:
