@@ -87,14 +87,14 @@ func TestCreateMenuReloadIsWiredToPlatformAccelerator(t *testing.T) {
 	}
 }
 
-func TestPasteAcceleratorBindsOnlyOnMac(t *testing.T) {
+func TestPasteAcceleratorDroppedOnlyOnWindows(t *testing.T) {
 	cases := []struct {
 		goos string
 		want *keys.Accelerator
 	}{
-		{"darwin", keys.CmdOrCtrl("v")},
 		{"windows", nil},
-		{"linux", nil},
+		{"darwin", keys.CmdOrCtrl("v")},
+		{"linux", keys.CmdOrCtrl("v")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.goos, func(t *testing.T) {
@@ -108,7 +108,8 @@ func TestPasteAcceleratorBindsOnlyOnMac(t *testing.T) {
 
 // TestCreateMenuPasteKeepsCallbackWithoutDoubleBinding pins both halves of the
 // paste contract: the callback must stay (a nil one leaves the item inert on
-// Windows), and off macOS no accelerator may be bound alongside it.
+// Windows), and on Windows no accelerator may be bound alongside it because
+// winc does not consume the key.
 func TestCreateMenuPasteKeepsCallbackWithoutDoubleBinding(t *testing.T) {
 	appMenu := createMenu(&DesktopApp{}, "test")
 	paste := findMenuItem(t, findSubmenu(t, appMenu, "Edit"), "Paste")
@@ -119,8 +120,8 @@ func TestCreateMenuPasteKeepsCallbackWithoutDoubleBinding(t *testing.T) {
 	if !reflect.DeepEqual(paste.Accelerator, pasteAccelerator(goruntime.GOOS)) {
 		t.Fatalf("Paste accelerator = %+v, want %+v", paste.Accelerator, pasteAccelerator(goruntime.GOOS))
 	}
-	if goruntime.GOOS != "darwin" && paste.Accelerator != nil {
-		t.Fatalf("Paste is bound to %+v on %s — the webview pastes on Ctrl+V too, so the clipboard lands twice", paste.Accelerator, goruntime.GOOS)
+	if goruntime.GOOS == "windows" && paste.Accelerator != nil {
+		t.Fatalf("Paste is bound to %+v on windows — the webview pastes on Ctrl+V too, so the clipboard lands twice", paste.Accelerator)
 	}
 }
 
