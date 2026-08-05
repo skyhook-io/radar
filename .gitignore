@@ -50,3 +50,6 @@ tmp/
 vt-shots/
 vt-audit-shots/
 vt-issues-shots/
+
+# Playwright e2e artifacts (never commit)
+web/test-results/

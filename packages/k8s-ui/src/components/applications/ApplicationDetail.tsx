@@ -71,6 +71,7 @@ import {
   sourceReportedHealth,
   sourceSyncHealth,
   servingReadiness,
+  resolveAppWorkloadSelection,
   worstHealth,
   appGroupLagMessage,
   compareVersions,
@@ -122,9 +123,10 @@ export interface AppIdentityInstance {
 
 /** Workload selection is either fully controlled (key + callback, the host
  *  wires it to the URL so back/forward works) or fully internal — providing
- *  only half silently freezes the selector, so the types forbid it. `null` means
- *  the application itself is selected; a key (see `workloadKey`) selects a
- *  workload scope. */
+ *  only half silently freezes the selector, so the types forbid it. A key (see
+ *  `workloadKey`) selects a workload scope; `null` asks for application scope,
+ *  which a single-workload app does not have — there the component resolves to
+ *  the sole workload regardless. See `rawSelected`. */
 type SelectionProps =
   | {
       selectedWorkloadKey: string | null;
@@ -407,12 +409,13 @@ export function ApplicationDetail({
   }, [app.key, selectedView]);
 
   const [internalSelected, setInternalSelected] = useState<string | null>(null);
-  const implicitSingleWorkloadKey =
-    workloads.length === 1 ? workloadKey(workloads[0]) : null;
-  const rawSelected =
-    selectedWorkloadKey !== undefined
-      ? selectedWorkloadKey
-      : (internalSelected ?? implicitSingleWorkloadKey);
+  const hostSelected =
+    selectedWorkloadKey !== undefined ? selectedWorkloadKey : internalSelected;
+  const { selected: rawSelected, hostKeyIsStale } = useMemo(
+    () =>
+      resolveAppWorkloadSelection(workloads.map(workloadKey), hostSelected),
+    [workloads, hostSelected],
+  );
   const setSelected = useCallback(
     (key: string | null, options?: AppWorkloadSelectionOptions) =>
       onSelectWorkload
@@ -425,14 +428,10 @@ export function ApplicationDetail({
     : undefined;
   const singleWorkloadScope = workloads.length === 1 && !!selectedWorkload;
   useEffect(() => {
-    if (
-      selectedWorkloadKey !== undefined &&
-      selectedWorkloadKey !== null &&
-      !selectedWorkload
-    ) {
+    if (selectedWorkloadKey !== undefined && hostKeyIsStale) {
       onSelectWorkload?.(null);
     }
-  }, [selectedWorkloadKey, selectedWorkload, onSelectWorkload]);
+  }, [selectedWorkloadKey, hostKeyIsStale, onSelectWorkload]);
   useEffect(() => {
     if (selectedWorkloadKey === undefined) setInternalSelected(null);
   }, [app.key, selectedWorkloadKey]);
