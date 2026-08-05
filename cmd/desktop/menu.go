@@ -22,6 +22,19 @@ func reloadAccelerator(goos string) *keys.Accelerator {
 	return keys.Combo("r", keys.ControlKey, keys.ShiftKey)
 }
 
+// pasteAccelerator binds Cmd+V only on macOS. Paste needs an explicit callback
+// (see the Edit menu below), and off macOS the accelerator does not consume the
+// keypress — winc fires the menu action from WM_KEYDOWN and still lets the
+// event reach the webview, which pastes natively on Ctrl+V. Binding both would
+// insert the clipboard twice. Leaving the accelerator off costs only the
+// menu-item hint; Ctrl+V still pastes through the webview.
+func pasteAccelerator(goos string) *keys.Accelerator {
+	if goos == "darwin" {
+		return keys.CmdOrCtrl("v")
+	}
+	return nil
+}
+
 func createMenu(desktopApp *DesktopApp, version string) *menu.Menu {
 	appMenu := menu.NewMenu()
 
@@ -45,7 +58,8 @@ func createMenu(desktopApp *DesktopApp, version string) *menu.Menu {
 	//
 	// Paste: Must use explicit WindowExecJS because WKWebView's native paste:
 	// doesn't work for complex editors like Monaco. We read from the clipboard
-	// API and dispatch a synthetic ClipboardEvent.
+	// API and dispatch a synthetic ClipboardEvent. The accelerator is macOS-only
+	// — see pasteAccelerator.
 	//
 	// Undo/Redo/SelectAll: Use WindowExecJS (these work fine via execCommand).
 	editMenu := appMenu.AddSubmenu("Edit")
@@ -58,7 +72,7 @@ func createMenu(desktopApp *DesktopApp, version string) *menu.Menu {
 	editMenu.AddSeparator()
 	editMenu.AddText("Cut", keys.CmdOrCtrl("x"), nil)
 	editMenu.AddText("Copy", keys.CmdOrCtrl("c"), nil)
-	editMenu.AddText("Paste", keys.CmdOrCtrl("v"), func(_ *menu.CallbackData) {
+	editMenu.AddText("Paste", pasteAccelerator(goruntime.GOOS), func(_ *menu.CallbackData) {
 		runtime.WindowExecJS(desktopApp.ctx, `
 			navigator.clipboard.readText().then(function(text) {
 				if (!text) return;
