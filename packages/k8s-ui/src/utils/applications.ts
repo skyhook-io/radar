@@ -1384,7 +1384,10 @@ export function resolveAppWorkloadSelection(
   const soleWorkload = workloadKeys.length === 1 ? workloadKeys[0] : null;
   return {
     selected: matched ?? soleWorkload,
-    hostKeyIsStale: Boolean(hostSelected) && !matched,
+    // Any non-null value counts as a key the host supplied, including the empty
+    // string a bare `?workload=` yields — that names no workload either, and
+    // leaving it in the URL would strand a param nothing can act on.
+    hostKeyIsStale: hostSelected !== null && !matched,
   };
 }
 

@@ -48,6 +48,19 @@ describe('application workload scope resolution', () => {
       hostKeyIsStale: false,
     })
   })
+
+  // A bare `?workload=` reaches a host as '' rather than null, and names no
+  // workload — it has to leave the URL like any other unusable key.
+  it('treats the empty string a bare query param yields as a stale key', () => {
+    expect(resolveAppWorkloadSelection(sole, '')).toEqual({
+      selected: 'Deployment/prod/api',
+      hostKeyIsStale: true,
+    })
+    expect(resolveAppWorkloadSelection(many, '')).toEqual({
+      selected: null,
+      hostKeyIsStale: true,
+    })
+  })
 })
 
 describe('batch application runtime', () => {
