@@ -19,9 +19,9 @@ import {
 } from '../api/client'
 
 // OSS → Cloud funnel: a quiet globe button in the top bar that opens a modal
-// pitching Radar Cloud. Two lanes (capabilities.cloudConnect, see
-// docs/internal/cloud-connect.md): "driver" runs the in-product connect flow
-// against this server; "wizard" links to the Hub's connect wizard.
+// pitching Radar Cloud. Two lanes (capabilities.cloudConnect): "driver" runs
+// the in-product connect flow against this server; "wizard" links to the Hub's
+// connect wizard.
 //
 // The only outbound call is the Hub's own copy, fetched when the dialog opens
 // (never on a poll or a timer) and falling back per-field to the constants

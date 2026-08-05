@@ -6,9 +6,13 @@ package server
 // user already wields the server's kubeconfig through existing endpoints
 // (/api/resources/apply, pods/exec): a local deployment, auth disabled, no
 // existing Cloud tunnel. A non-loopback listener does not disable it — those
-// endpoints are ungated there too — but the plan card names the exposure.
-// Every other configuration routes to the Hub wizard instead (see
-// docs/internal/cloud-connect.md for the full scenario matrix).
+// endpoints are ungated there too — but the plan card names the exposure, so
+// binding a shared cluster into someone's personal org takes a decision.
+//
+// Every other configuration routes to the Hub wizard instead. In-cluster it is
+// not a policy choice: the ServiceAccount cannot self-grant the RBAC, and a
+// successful helm upgrade restarts the very pod serving the flow, so an
+// in-product install there cannot report its own outcome.
 //
 // Safety properties preserved from the CLI driver:
 //   - No Hub request or token mint before the exact-manifest preflight passes.

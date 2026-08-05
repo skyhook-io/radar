@@ -1,8 +1,10 @@
 package server
 
 import (
+	"context"
 	"hash/fnv"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -44,11 +46,26 @@ func cloudFunnelInCohort() bool {
 // page load — no reason to re-read the settings file each time. The env
 // override above stays live deliberately.
 var cloudFunnelBucketVerdict = sync.OnceValue(func() bool {
-	if k8s.IsInCluster() {
-		return false
-	}
-	return cloudFunnelBucketed(cloudFunnelRolloutPercent, settings.InstallID())
+	return cloudFunnelBucketed(cloudFunnelRolloutPercent, rolloutIdentity())
 })
+
+// rolloutIdentity is the value the cohort hashes on. In-cluster it comes from
+// the Radar Deployment's creation time, not ~/.radar: that directory sits on an
+// emptyDir that dies with the pod, so bucketing on it would re-roll the verdict
+// on every restart and rollout — and disagree between replicas — making the
+// funnel flicker in and out.
+//
+// Empty either way means no durable identity, which cloudFunnelBucketed treats
+// as out-of-cohort rather than re-rolling every start.
+func rolloutIdentity() string {
+	if k8s.IsInCluster() {
+		if installed := k8s.InstalledAt(context.Background()); installed != 0 {
+			return strconv.FormatInt(installed, 10)
+		}
+		return ""
+	}
+	return settings.InstallID()
+}
 
 func cloudFunnelBucketed(percent uint32, installID string) bool {
 	if percent >= 100 {

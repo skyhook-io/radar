@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+
+	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 const (
@@ -143,7 +145,14 @@ func fetchLatestRelease(ctx context.Context) *UpdateInfo {
 		"method": {string(method)},
 		"mode":   {mode},
 	}
-	if t := radarDirBirthtime(); t != 0 {
+	// In-cluster, ~/.radar is an emptyDir that dies with the pod, so its
+	// birthtime marks a pod lifetime rather than an installation. The Radar
+	// Deployment's creation time is the installation.
+	t := radarDirBirthtime()
+	if mode == "in-cluster" {
+		t = k8s.InstalledAt(ctx)
+	}
+	if t != 0 {
 		params.Set("t", strconv.FormatInt(t, 10))
 	}
 	proxyURL := fmt.Sprintf("%s?%s", releasesURL, params.Encode())
