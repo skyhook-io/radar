@@ -2,11 +2,12 @@
 Cluster-scoped READ for the Cloud tiers.
 
 The built-in admin/edit/view ClusterRoles the tiers bind to (see cloud-rbac.yaml)
-are namespace roles — by design they grant nothing on cluster-scoped resources
-(Nodes, PersistentVolumes, StorageClasses, IngressClasses, PriorityClasses, and
-cluster-scoped extension metadata). For a cluster-wide observability tool that
-means owners and viewers can't see core infrastructure. This add-on grants
-get/list/watch on those kinds via EXPLICIT
+cover common namespaced resources but exclude core cluster infrastructure and
+some Upgrade impact source types (including CSIStorageCapacities and API
+flow-control configuration). For a cluster-wide observability tool that means
+owners and viewers can't see core infrastructure or complete those checks. This
+add-on grants get/list/watch on infrastructure and list-only access to Upgrade
+impact evidence through EXPLICIT
 bindings to the cloud:* groups — deliberately NOT via `aggregate-to-view` labels,
 which would widen the shared built-in `view`/`edit` roles cluster-wide for every
 other subject bound to them (mirrors the radar-helm add-on pattern).
@@ -55,9 +56,7 @@ metadata:
   labels:
     {{- include "radar.labels" . | nindent 4 }}
 rules:
-  # Namespaces are intentionally NOT here — the built-in view/edit/admin roles
-  # already grant namespace read, so this add-on stays scoped to the resources
-  # the built-ins actually exclude.
+  # Common namespaced resources are intentionally not duplicated here.
   - apiGroups: [""]
     resources: ["nodes", "persistentvolumes"]
     verbs: ["get", "list", "watch"]
@@ -87,6 +86,19 @@ rules:
   - apiGroups: ["admissionregistration.k8s.io"]
     resources: ["mutatingwebhookconfigurations", "validatingwebhookconfigurations"]
     verbs: ["get", "list", "watch"]
+  # Upgrade impact source evidence. These kinds are not cached or browsable;
+  # the collector only lists them to inspect kubectl last-applied annotations.
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["csistoragecapacities"]
+    verbs: ["list"]
+  - apiGroups: ["flowcontrol.apiserver.k8s.io"]
+    resources: ["flowschemas", "prioritylevelconfigurations"]
+    verbs: ["list"]
+  # Removed in Kubernetes 1.25, but required to assess clusters upgrading
+  # from a release where PodSecurityPolicy is still served.
+  - apiGroups: ["policy"]
+    resources: ["podsecuritypolicies"]
+    verbs: ["list"]
   {{- if .Values.rbac.crdGroups.apiRegistration }}
   - apiGroups: ["apiregistration.k8s.io"]
     resources: ["apiservices"]

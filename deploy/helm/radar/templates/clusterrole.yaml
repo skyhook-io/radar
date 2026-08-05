@@ -5,7 +5,7 @@ metadata:
   name: {{ include "radar.fullname" . }}
   labels:
     {{- include "radar.labels" . | nindent 4 }}
-# Keep default and opt-in resource rules aligned with ResourcePermissions in
+# Keep cache-backed resource rules aligned with ResourcePermissions in
 # internal/k8s/capabilities.go and the README's "Supported Resources" table.
 rules:
   # Core resources (read-only)
@@ -40,6 +40,24 @@ rules:
     resources:
       - storageclasses
     verbs: ["get", "list", "watch"]
+
+  # Upgrade impact source evidence. These kinds are not cached or browsable;
+  # the collector only lists them to inspect kubectl last-applied annotations.
+  - apiGroups: ["storage.k8s.io"]
+    resources:
+      - csistoragecapacities
+    verbs: ["list"]
+  - apiGroups: ["flowcontrol.apiserver.k8s.io"]
+    resources:
+      - flowschemas
+      - prioritylevelconfigurations
+    verbs: ["list"]
+  # Removed in Kubernetes 1.25, but required to assess clusters upgrading
+  # from a release where PodSecurityPolicy is still served.
+  - apiGroups: ["policy"]
+    resources:
+      - podsecuritypolicies
+    verbs: ["list"]
 
   {{- if .Values.rbac.helm }}
   # Helm write operations require broad permissions because charts can create
