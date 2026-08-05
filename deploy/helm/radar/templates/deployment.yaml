@@ -15,10 +15,13 @@
 {{- if $basePath }}
 {{- range $key := list "redirectURL" "postLogoutRedirectURL" }}
 {{- $val := get $.Values.auth.oidc $key }}
-{{- /* Compare the URL's PATH, not the whole string: a substring test passes
-       spuriously whenever the hostname happens to start with the same word,
-       e.g. basePath /radar against https://radar.example.com/auth/callback. */}}
-{{- if and $val (not (hasPrefix $basePath (urlParse $val).path)) }}
+{{- /* Match on whole path segments of the URL's path. Comparing the whole URL
+       string lets the authority satisfy the prefix (basePath /radar against
+       https://radar.example.com/auth/callback), and a bare string prefix on the
+       path lets a different segment satisfy it (/radartools/auth/callback). Same
+       rule the server applies when routing: equal, or followed by a slash. */}}
+{{- $p := (urlParse $val).path }}
+{{- if and $val (not (or (eq $p $basePath) (hasPrefix (printf "%s/" $basePath) $p))) }}
 {{- fail (printf "auth.oidc.%s (%s) must be under basePath %q — Radar serves /auth/* below the prefix, so the IdP would send the browser to a path that is not routed to Radar" $key $val $basePath) }}
 {{- end }}
 {{- end }}
