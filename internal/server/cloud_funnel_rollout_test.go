@@ -35,6 +35,29 @@ func TestCloudFunnelBucketing(t *testing.T) {
 	}
 }
 
+// An in-cluster install whose Deployment can't be read (chart predating the
+// downward-API env vars, restricted RBAC) must still get a bucket key. Returning
+// "" would pin it out of every rollout below 100% permanently — the failure that
+// left ~17% of 1.9.0 in-cluster installs unable to reach the funnel at all.
+func TestBucketKeyFallsBackWhenDeploymentUnreadable(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+
+	// No cluster access in a test binary, so InstalledAt() is 0 — and
+	// IsInCluster() is true here because no kubeconfig path is configured.
+	key := bucketKey()
+	if key == "" {
+		t.Fatal("in-cluster install with an unreadable Deployment got no bucket key")
+	}
+	if !cloudFunnelBucketed(100, key) {
+		t.Fatal("the fallback key is not usable for bucketing")
+	}
+	if bucketKey() != key {
+		t.Fatal("fallback key is not stable across calls within a process")
+	}
+}
+
 func TestCloudFunnelEnvOverrideWins(t *testing.T) {
 	t.Setenv("RADAR_CLOUD_FUNNEL", "on")
 	if !cloudFunnelInCohort() {

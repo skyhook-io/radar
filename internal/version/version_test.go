@@ -1,6 +1,9 @@
 package version
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -118,5 +121,24 @@ func TestTruncateNotes(t *testing.T) {
 				t.Errorf("truncateNotes(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
 			}
 		})
+	}
+}
+
+// When the Deployment is unreadable, in-cluster must report the same timestamp a
+// local install would rather than reporting none. Asserted as equality with the
+// local path so the test holds on filesystems that don't record a birthtime at
+// all (where both are legitimately 0).
+func TestInstallTimestampFallsBackInCluster(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	if err := os.MkdirAll(filepath.Join(dir, ".radar"), 0o755); err != nil {
+		t.Fatalf("seed ~/.radar: %v", err)
+	}
+
+	ctx := context.Background()
+	local := installTimestamp(ctx, "local")
+	if got := installTimestamp(ctx, "in-cluster"); got != local {
+		t.Fatalf("in-cluster timestamp %d did not fall back to the local timestamp %d", got, local)
 	}
 }

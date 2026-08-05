@@ -41,42 +41,44 @@ func cloudFunnelInCohort() bool {
 	return cloudFunnelBucketVerdict()
 }
 
-// Memoized: the bucket verdict cannot change within a process (the ID is
+// Memoized: the bucket verdict cannot change within a process (the key is
 // sticky and the percent is compiled in), and capabilities are requested per
 // page load — no reason to re-read the settings file each time. The env
 // override above stays live deliberately.
 var cloudFunnelBucketVerdict = sync.OnceValue(func() bool {
-	return cloudFunnelBucketed(cloudFunnelRolloutPercent, rolloutIdentity())
+	return cloudFunnelBucketed(cloudFunnelRolloutPercent, bucketKey())
 })
 
-// rolloutIdentity is the value the cohort hashes on. In-cluster it comes from
-// the Radar Deployment's creation time, not ~/.radar: that directory sits on an
-// emptyDir that dies with the pod, so bucketing on it would re-roll the verdict
-// on every restart and rollout — and disagree between replicas — making the
-// funnel flicker in and out.
+// bucketKey is the value the rollout hashes on. In-cluster it prefers the Radar
+// Deployment's creation time over ~/.radar: that directory sits on an emptyDir
+// that dies with the pod, so bucketing on it re-rolls the verdict on every
+// restart and rollout — and disagrees between replicas — making the funnel
+// flicker in and out.
 //
-// Empty either way means no durable identity, which cloudFunnelBucketed treats
-// as out-of-cohort rather than re-rolling every start.
-func rolloutIdentity() string {
+// It still falls back to ~/.radar when the Deployment is unreadable (chart too
+// old to set the downward-API env vars, no cluster access, RBAC without
+// deployments). A flickering verdict is recoverable; returning nothing is not —
+// cloudFunnelBucketed pins an empty key out of every partial rollout, so those
+// installs would never see the funnel at any percentage below 100.
+func bucketKey() string {
 	if k8s.IsInCluster() {
 		if installed := k8s.InstalledAt(context.Background()); installed != 0 {
 			return strconv.FormatInt(installed, 10)
 		}
-		return ""
 	}
-	return settings.InstallID()
+	return settings.RolloutKey()
 }
 
-func cloudFunnelBucketed(percent uint32, installID string) bool {
+func cloudFunnelBucketed(percent uint32, key string) bool {
 	if percent >= 100 {
 		return true
 	}
-	// An empty ID means no persistable identity — stay out of a partial
-	// rollout rather than re-rolling a fresh bucket every start.
-	if percent == 0 || installID == "" {
+	// An empty key means nothing stable to hash — stay out of a partial rollout
+	// rather than re-rolling a fresh bucket every start.
+	if percent == 0 || key == "" {
 		return false
 	}
 	h := fnv.New32a()
-	h.Write([]byte(installID))
+	h.Write([]byte(key))
 	return h.Sum32()%100 < percent
 }

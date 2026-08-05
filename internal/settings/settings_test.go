@@ -137,17 +137,17 @@ func TestSaveCreatesDirectory(t *testing.T) {
 	}
 }
 
-func TestInstallIDMintsOnceAndPersists(t *testing.T) {
+func TestRolloutKeyMintsOnceAndPersists(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("USERPROFILE", dir)
 
-	id := InstallID()
+	id := RolloutKey()
 	if id == "" {
-		t.Fatal("InstallID returned empty with a writable home")
+		t.Fatal("RolloutKey returned empty with a writable home")
 	}
-	if InstallID() != id {
-		t.Fatal("InstallID is not stable across calls")
+	if RolloutKey() != id {
+		t.Fatal("RolloutKey is not stable across calls")
 	}
 	// Its own file, never the settings struct: /api/settings serializes
 	// Settings verbatim, so the identifier must not be reachable from it.
@@ -160,7 +160,7 @@ func TestInstallIDMintsOnceAndPersists(t *testing.T) {
 	}
 }
 
-func TestInstallIDConcurrentMintResolvesToOneWinner(t *testing.T) {
+func TestRolloutKeyConcurrentMintResolvesToOneWinner(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("USERPROFILE", dir)
@@ -174,7 +174,7 @@ func TestInstallIDConcurrentMintResolvesToOneWinner(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			ids[i] = InstallID()
+			ids[i] = RolloutKey()
 		}(i)
 	}
 	wg.Wait()
@@ -190,7 +190,7 @@ func TestInstallIDConcurrentMintResolvesToOneWinner(t *testing.T) {
 			t.Fatalf("racer %d minted %q while racer 0 got %q", i, id, ids[0])
 		}
 	}
-	if InstallID() == "" {
+	if RolloutKey() == "" {
 		t.Fatal("no identity persisted after the race")
 	}
 }

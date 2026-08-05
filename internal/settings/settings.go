@@ -134,19 +134,23 @@ func Update(mutate func(*Settings)) (Settings, error) {
 	return s, Save(s)
 }
 
-// InstallID returns this installation's stable rollout identifier, minting
-// and persisting one on first use. Returns "" when it cannot be persisted
-// (no home directory, read-only filesystem) — a caller gating a partial
-// rollout must treat that as out-of-cohort rather than re-rolling a fresh
-// identity every start.
+// RolloutKey returns the local value staged rollouts hash on, minting and
+// persisting one on first use. It never leaves this machine. Returns "" when it
+// cannot be persisted (no home directory, read-only filesystem) — a caller
+// gating a partial rollout must treat that as out-of-cohort rather than
+// re-rolling a fresh key every start.
 //
-// The ID lives in its own file, deliberately NOT in the Settings struct:
+// The file name is load-bearing: changing it makes every existing install mint
+// a new key and land in a different bucket, so the rollout would visibly flip
+// for people on both sides of it.
+//
+// It lives in its own file, deliberately NOT in the Settings struct:
 // /api/settings serializes that struct verbatim (including through a Cloud
 // tunnel), and a settings PUT round-trip could silently drop a field the
-// client never saw. A random local identifier must be able to do neither.
+// client never saw. A random local value must be able to do neither.
 // The O_EXCL create makes a concurrent first mint (CLI and Desktop starting
 // together) resolve to one winner; losers adopt the winner's file.
-func InstallID() string {
+func RolloutKey() string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return ""
@@ -173,8 +177,8 @@ func InstallID() string {
 		return ""
 	}
 	// Any failure past the create must take the file with it. A stranded empty
-	// file is read back as a valid-but-empty id on every later call, which
-	// callers treat as "no identity" — pinning the install out of a staged
+	// file is read back as a valid-but-empty value on every later call, which
+	// callers treat as nothing to hash — pinning the install out of a staged
 	// rollout permanently, with no way to self-heal. Removing it lets the next
 	// start mint cleanly.
 	// Close is where a failed flush surfaces on some filesystems, so both it and
