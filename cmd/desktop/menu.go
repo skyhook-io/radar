@@ -37,6 +37,21 @@ func pasteAccelerator(goos string) *keys.Accelerator {
 	return keys.CmdOrCtrl("v")
 }
 
+// clipboardDelegate returns nil on macOS, where Cut/Copy rely on the native
+// responder chain. Off macOS a nil callback binds no handler at all, so the menu
+// entries do nothing when clicked; routing through execCommand reaches the
+// copy/cut interception in main.tsx, which also covers Monaco's virtual
+// selection. Both handlers re-read the selection, so the keyboard path staying
+// on the webview is harmless.
+func clipboardDelegate(goos string, desktopApp *DesktopApp, command string) func(*menu.CallbackData) {
+	if goos == "darwin" {
+		return nil
+	}
+	return func(_ *menu.CallbackData) {
+		runtime.WindowExecJS(desktopApp.ctx, "document.execCommand('"+command+"')")
+	}
+}
+
 func createMenu(desktopApp *DesktopApp, version string) *menu.Menu {
 	appMenu := menu.NewMenu()
 
@@ -52,11 +67,12 @@ func createMenu(desktopApp *DesktopApp, version string) *menu.Menu {
 
 	// Edit menu — clipboard handling strategy:
 	//
-	// Copy/Cut: Use nil callbacks to delegate to macOS's native responder chain.
+	// Copy/Cut: On macOS a nil callback delegates to the native responder chain.
 	// WKWebView does NOT dispatch DOM copy/cut events from the native selectors.
 	// Instead, the JS keydown handler in main.tsx intercepts Cmd+C/X before macOS
 	// consumes the event, reads the selection (including Monaco virtual selection),
-	// and writes to the clipboard via navigator.clipboard.writeText().
+	// and writes to the clipboard via navigator.clipboard.writeText(). Elsewhere
+	// there is no responder chain to fall back on — see clipboardDelegate.
 	//
 	// Paste: Must use explicit WindowExecJS because WKWebView's native paste:
 	// doesn't work for complex editors like Monaco. We read from the clipboard
@@ -72,8 +88,8 @@ func createMenu(desktopApp *DesktopApp, version string) *menu.Menu {
 		runtime.WindowExecJS(desktopApp.ctx, "document.execCommand('redo')")
 	})
 	editMenu.AddSeparator()
-	editMenu.AddText("Cut", keys.CmdOrCtrl("x"), nil)
-	editMenu.AddText("Copy", keys.CmdOrCtrl("c"), nil)
+	editMenu.AddText("Cut", keys.CmdOrCtrl("x"), clipboardDelegate(goruntime.GOOS, desktopApp, "cut"))
+	editMenu.AddText("Copy", keys.CmdOrCtrl("c"), clipboardDelegate(goruntime.GOOS, desktopApp, "copy"))
 	editMenu.AddText("Paste", pasteAccelerator(goruntime.GOOS), func(_ *menu.CallbackData) {
 		runtime.WindowExecJS(desktopApp.ctx, `
 			navigator.clipboard.readText().then(function(text) {

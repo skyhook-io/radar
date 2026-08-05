@@ -125,6 +125,36 @@ func TestCreateMenuPasteKeepsCallbackWithoutDoubleBinding(t *testing.T) {
 	}
 }
 
+func TestClipboardDelegateSkipsOnlyMac(t *testing.T) {
+	for _, goos := range []string{"windows", "linux"} {
+		t.Run(goos, func(t *testing.T) {
+			if clipboardDelegate(goos, &DesktopApp{}, "copy") == nil {
+				t.Fatalf("clipboardDelegate(%q) = nil, want a callback", goos)
+			}
+		})
+	}
+	if clipboardDelegate("darwin", &DesktopApp{}, "copy") != nil {
+		t.Fatal("clipboardDelegate(\"darwin\") returned a callback, want nil for the responder chain")
+	}
+}
+
+// TestCreateMenuCutCopyAreClickableOffMac guards the inert-menu-item case: off
+// macOS a nil callback binds no handler, so Edit -> Cut/Copy would do nothing.
+func TestCreateMenuCutCopyAreClickableOffMac(t *testing.T) {
+	if goruntime.GOOS == "darwin" {
+		t.Skip("macOS delegates Cut/Copy to the native responder chain")
+	}
+	editMenu := findSubmenu(t, createMenu(&DesktopApp{}, "test"), "Edit")
+
+	for _, label := range []string{"Cut", "Copy"} {
+		t.Run(label, func(t *testing.T) {
+			if findMenuItem(t, editMenu, label).Click == nil {
+				t.Fatalf("%s has no callback on %s — the menu entry would be inert", label, goruntime.GOOS)
+			}
+		})
+	}
+}
+
 func findSubmenu(t *testing.T, root *menu.Menu, label string) *menu.Menu {
 	t.Helper()
 	for _, item := range root.Items {
