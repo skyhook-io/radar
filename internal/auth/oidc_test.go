@@ -635,7 +635,7 @@ func TestNewOIDCHandler_ExplicitEndpointsVerifyES256Token(t *testing.T) {
 		OIDCClientID:         "radar",
 		OIDCClientSecret:     "secret",
 		OIDCRedirectURL:      "http://localhost/callback",
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("expected explicit-endpoint init to succeed: %v", err)
 	}
@@ -717,6 +717,11 @@ func (f *fakeIDP) defaultClaims() string {
 
 func (f *fakeIDP) newHandler(t *testing.T, cfg Config) *OIDCHandler {
 	t.Helper()
+	return f.newHandlerUnderBasePath(t, cfg, "")
+}
+
+func (f *fakeIDP) newHandlerUnderBasePath(t *testing.T, cfg Config, basePath string) *OIDCHandler {
+	t.Helper()
 	cfg.Mode = "oidc"
 	cfg.OIDCIssuer = f.issuer
 	if cfg.OIDCClientID == "" {
@@ -732,7 +737,7 @@ func (f *fakeIDP) newHandler(t *testing.T, cfg Config) *OIDCHandler {
 		// clock tick between issue and parse would flake the callback asserts.
 		cfg.CookieTTL = time.Hour
 	}
-	h, err := NewOIDCHandler(context.Background(), cfg)
+	h, err := NewOIDCHandler(context.Background(), cfg, basePath)
 	if err != nil {
 		t.Fatalf("NewOIDCHandler: %v", err)
 	}
@@ -1031,32 +1036,22 @@ func TestBackchannelLogout_CacheControlAlwaysSet(t *testing.T) {
 // Note: testing invalid/valid JWT verification requires a real OIDC provider
 // with JWKS. The pre-verification tests above cover all paths before Verify().
 
-// The post-login redirect must land inside the app. Under a no-strip subpath
-// ingress only {basePath}/* is routed to Radar, so a bare "/" would drop the
-// user onto whatever else owns the origin root right after authenticating.
-// Reaching the redirect itself needs a token exchange, so this pins the value
-// the handler was built with.
-func TestNewOIDCHandlerRetainsBasePath(t *testing.T) {
-	srv := newTLSOIDCServer()
-	defer srv.Close()
-
+// A completed login must land inside the app. Under a no-strip subpath ingress
+// only {basePath}/* is routed to Radar, so redirecting to a bare "/" would drop
+// the user onto whatever else owns the origin root right after authenticating.
+func TestHandleCallback_RedirectsUnderBasePath(t *testing.T) {
 	for _, basePath := range []string{"", "/radar", "/tools/radar"} {
-		h, err := NewOIDCHandler(context.Background(), Config{
-			Mode:                   "oidc",
-			OIDCIssuer:             srv.URL,
-			OIDCClientID:           "test",
-			OIDCClientSecret:       "secret",
-			OIDCRedirectURL:        "http://localhost" + basePath + "/auth/callback",
-			OIDCInsecureSkipVerify: true,
-		}, basePath)
-		if err != nil {
-			t.Fatalf("basePath %q: NewOIDCHandler: %v", basePath, err)
-		}
-		if h.basePath != basePath {
-			t.Errorf("basePath %q: handler.basePath = %q", basePath, h.basePath)
-		}
-		if got := h.basePath + "/"; got != basePath+"/" {
-			t.Errorf("basePath %q: post-login target = %q, want %q", basePath, got, basePath+"/")
-		}
+		t.Run("basePath="+basePath, func(t *testing.T) {
+			idp := newFakeIDP(t, oidc.RS256)
+			h := idp.newHandlerUnderBasePath(t, Config{}, basePath)
+			w := runCallback(h)
+
+			if w.Code != http.StatusFound {
+				t.Fatalf("status = %d, want 302 (body: %s)", w.Code, w.Body.String())
+			}
+			if got, want := w.Header().Get("Location"), basePath+"/"; got != want {
+				t.Errorf("Location = %q, want %q", got, want)
+			}
+		})
 	}
 }
