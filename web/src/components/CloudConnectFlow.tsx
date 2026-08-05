@@ -308,9 +308,12 @@ function PlanCard({
           Cancel
         </button>
       </div>
+      {/* Radar has no Hub identity here — that is what the device flow is for —
+       *  so this cannot assert whether an account already exists. Phrased to
+       *  read correctly for a returning operator and a first-time one alike. */}
       <p className="mt-2.5 text-[11px] text-theme-text-tertiary">
-        Nothing is installed yet — the browser approval creates your account, org, and this cluster in one
-        step, then Radar installs the agent.
+        Nothing is installed yet — you'll approve this cluster in the browser, creating your account and
+        organization first if you don't have one. Then Radar installs the agent.
       </p>
     </div>
   )
