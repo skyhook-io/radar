@@ -388,6 +388,20 @@ function TabTooltip({ hosts, members, verdict, children }: { hosts: string[]; me
   )
 }
 
+/** Matches the `2xl:` breakpoint that shows the verdict chips - the tooltip
+ *  duplicates the chip unless it only speaks when the chip is hidden, so the
+ *  two MUST key on the same width. */
+function useChipsVisible(): boolean {
+  const [wide, setWide] = useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 1536px)').matches)
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1536px)')
+    const on = () => setWide(mq.matches)
+    mq.addEventListener('change', on)
+    return () => mq.removeEventListener('change', on)
+  }, [])
+  return wide
+}
+
 function ScenarioPicker({
   scenarios,
   activeKey,
@@ -401,6 +415,7 @@ function ScenarioPicker({
   stale: boolean
   running: boolean
 }) {
+  const chipsVisible = useChipsVisible()
   return (
     <div
       className="absolute right-3 top-2 z-10 max-w-[46%] rounded-lg border border-theme-border bg-theme-elevated shadow-theme-md"
@@ -417,7 +432,7 @@ function ScenarioPicker({
           const active = s.key === activeKey
           const chip = routeChip(s.primary, { stale, running })
           return (
-            <TabTooltip hosts={s.hosts} members={s.members} verdict={chip} key={s.key}>
+            <TabTooltip hosts={s.hosts} members={s.members} verdict={chipsVisible ? undefined : chip} key={s.key}>
               <button
                 type="button"
                 onClick={() => onPick(s.key)}
