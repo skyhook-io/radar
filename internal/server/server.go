@@ -3264,6 +3264,22 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, events)
 }
 
+// clampMinSeqToPage bounds the advertised retention floor (the store's oldest
+// retained seq) to the lowest seq actually delivered on this page. pageMinSeq
+// is 0 for an empty page — nothing to be inconsistent with — so the raw floor
+// stands. A genuine gap (low seqs evicted before the query, so pageMinSeq is
+// already at or above the floor) is preserved, because min() keeps the floor.
+// The clamp only bites when a fresh floor read has risen above a seq still
+// present in the body (e.g. eviction during the slow RBAC filter), which would
+// otherwise make a consumer record a false coverage gap and skip delivered
+// events.
+func clampMinSeqToPage(retainedFloor, pageMinSeq int64) int64 {
+	if pageMinSeq > 0 && pageMinSeq < retainedFloor {
+		return pageMinSeq
+	}
+	return retainedFloor
+}
+
 // handleChanges returns timeline events using the unified timeline.TimelineEvent format.
 // This is the main timeline API endpoint - it queries the timeline store directly.
 func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
@@ -3386,12 +3402,24 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 	// client only via its periodic full resync. A precise fix needs a
 	// same-snapshot store max-seq that ignores content filters; deferred as
 	// not worth the concurrency risk here.
-	var maxSeq int64
+	var maxSeq, pageMinSeq int64
 	for _, e := range events {
 		if e.Seq > maxSeq {
 			maxSeq = e.Seq
 		}
+		if pageMinSeq == 0 || e.Seq < pageMinSeq {
+			pageMinSeq = e.Seq
+		}
 	}
+	// Sample the retained floor here, from the same pre-filter moment maxSeq is
+	// taken — before filterEventsByRBAC below issues its (slow, SAR-bound)
+	// SubjectAccessReview round-trips. Reading it after the filter would let a
+	// busy ring evict mid-request and raise OldestSeq above seqs still in this
+	// response body, so the emitted floor could exceed a seq we actually
+	// deliver. The clamp below closes any residual skew, but sampling early
+	// keeps the two values consistent to begin with.
+	retainedFloor := store.Stats().OldestSeq
+
 	events = s.filterEventsByRBAC(r, events)
 
 	// The store epoch validates delta cursors: seq restarts from 1 when the
@@ -3404,11 +3432,16 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 	}
 	// The store's oldest retained seq lets a consumer pulling forward from a
 	// cursor detect that events below its cursor were evicted while it was
-	// behind. Mirrors the Max-Seq header's marshaling and its skip-when-zero
-	// convention: an empty store (never recorded, nothing evicted) reports
-	// OldestSeq==0, so the header is omitted rather than sent as 0.
-	if oldestSeq := store.Stats().OldestSeq; oldestSeq > 0 {
-		w.Header().Set("X-Radar-Timeline-Min-Seq", strconv.FormatInt(oldestSeq, 10))
+	// behind. Clamp it to the lowest seq actually delivered in this response
+	// (pageMinSeq, computed pre-RBAC-filter so it aligns with maxSeq): the
+	// header must never claim a floor above a seq present in the body, or a
+	// consumer would record a false coverage gap and skip events it received.
+	// A genuine gap — low seqs evicted before this query, so pageMinSeq is
+	// already high — is preserved, since min() keeps the true floor. Mirrors
+	// the Max-Seq header's marshaling and its skip-when-zero convention: an
+	// empty store reports OldestSeq==0, so the header is omitted, not sent as 0.
+	if minSeq := clampMinSeqToPage(retainedFloor, pageMinSeq); minSeq > 0 {
+		w.Header().Set("X-Radar-Timeline-Min-Seq", strconv.FormatInt(minSeq, 10))
 	}
 	s.writeJSON(w, events)
 }

@@ -204,6 +204,53 @@ func TestHandleChanges_MinSeqTracksEviction(t *testing.T) {
 	}
 }
 
+// The min-seq header is derived pre-RBAC-filter (pageMinSeq) but the retained
+// floor was historically re-read fresh after the slow, SAR-bound RBAC filter.
+// A ring evicting during that window raises the fresh floor above seqs still in
+// the response body, so the header could advertise a floor higher than a seq we
+// actually delivered — making the hub puller record a false coverage gap and
+// skip events it received. clampMinSeqToPage is the guard: whatever the floor
+// read reports, the emitted value can never exceed the lowest delivered seq.
+func TestClampMinSeqToPage(t *testing.T) {
+	cases := []struct {
+		name          string
+		retainedFloor int64
+		pageMinSeq    int64
+		want          int64
+	}{
+		// The race: a fresh floor read (10) has risen above a seq still on the
+		// delivered page (4) because the ring evicted mid-request. The emitted
+		// header must be the page floor, not the inflated store floor.
+		{"floor inflated above delivered page", 10, 4, 4},
+		// Genuine gap: low seqs were evicted before the query, so the page
+		// itself starts high (8) above the floor (5). min() keeps the true
+		// floor so the consumer still sees the gap below the page.
+		{"genuine gap preserved", 5, 8, 5},
+		// No skew: page floor equals the store floor.
+		{"floor matches page", 4, 4, 4},
+		// Empty page (all rows RBAC-filtered, or none matched): nothing in the
+		// body to contradict, so the raw floor stands.
+		{"empty page keeps floor", 7, 0, 7},
+		// Empty store: floor 0 → caller omits the header entirely.
+		{"empty store", 0, 0, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := clampMinSeqToPage(tc.retainedFloor, tc.pageMinSeq); got != tc.want {
+				t.Fatalf("clampMinSeqToPage(%d, %d) = %d, want %d",
+					tc.retainedFloor, tc.pageMinSeq, got, tc.want)
+			}
+			// The load-bearing invariant across every non-empty page: the
+			// emitted floor never exceeds a delivered seq.
+			if tc.pageMinSeq > 0 {
+				if got := clampMinSeqToPage(tc.retainedFloor, tc.pageMinSeq); got > tc.pageMinSeq {
+					t.Fatalf("emitted floor %d exceeds delivered page floor %d", got, tc.pageMinSeq)
+				}
+			}
+		})
+	}
+}
+
 // minEventSeq returns the smallest Seq in a page; the changes feed returns
 // events newest-first, so the oldest retained seq is the page minimum, not
 // events[0].
