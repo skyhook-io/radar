@@ -78,6 +78,18 @@ type Config struct {
 	// DefaultsWindow is true when an absent from/to defaults a window (hub, 24h);
 	// false when from/to are required (OSS).
 	DefaultsWindow bool
+	// RejectsOverLimit declares what the server does with a limit above MaxRows.
+	//
+	// false (default) = the server CLAMPS the over-cap limit to its max and
+	// returns 200. radar OSS is a local, single-user tool: an oversized limit
+	// costs nothing shared, so it forgives the caller and serves up to the cap.
+	//
+	// true = the server REJECTS limit > MaxRows with HTTP 400. radar-hub is a
+	// multi-tenant service where an oversized query reads shared storage on
+	// behalf of one tenant; it fails loud at the boundary rather than silently
+	// truncating, so the caller learns the request was too big instead of
+	// mistaking a capped page for the full result.
+	RejectsOverLimit bool
 }
 
 // Run drives the shared timeline wire contract against cfg's live handler.
@@ -190,10 +202,16 @@ func Run(t *testing.T, cfg Config) {
 		}
 	})
 
-	// --- shared invariant: an over-cap limit clamps, never errors (gated on MaxRows) ---
-	t.Run("over-limit request clamps rather than errors", func(t *testing.T) {
+	// --- capability-gated: an over-cap limit clamps (OSS) or is rejected 400 (hub) ---
+	t.Run("over-limit request clamps or is rejected per capability", func(t *testing.T) {
 		over := strconv.Itoa(cfg.MaxRows + 5000)
 		rr := cfg.request(t, map[string]string{"from": fromMs, "to": toMs, "limit": over})
+		if cfg.RejectsOverLimit {
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("over-limit status = %d, want 400 (reject: limit > MaxRows); body %s", rr.Code, rr.Body.String())
+			}
+			return
+		}
 		if rr.Code != http.StatusOK {
 			t.Fatalf("over-limit status = %d, want 200 (clamp, not error); body %s", rr.Code, rr.Body.String())
 		}

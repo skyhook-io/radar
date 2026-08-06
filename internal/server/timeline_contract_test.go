@@ -17,7 +17,8 @@ import (
 // servers prove they speak the one contract; each declares its capabilities and
 // the suite gates the deliberate divergences on them. OSS's capabilities:
 // "<epoch>:<seq>" cursors, foreign cursor → 400, no coverage records, a 10k row
-// cap, and a required (non-defaulted) window.
+// cap that clamps an over-cap limit rather than rejecting it, and a required
+// (non-defaulted) window.
 func TestHandleTimelineEvents_WireContract(t *testing.T) {
 	prev := k8s.GetConnectionStatus()
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
@@ -54,5 +55,6 @@ func TestHandleTimelineEvents_WireContract(t *testing.T) {
 		MaxRows:              10000,
 		RejectsForeignCursor: true,
 		DefaultsWindow:       false,
+		RejectsOverLimit:     false,
 	})
 }
