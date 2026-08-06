@@ -1,6 +1,7 @@
 import { useEffect, useId, useState, type ReactNode } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Bell, Check, ChevronRight, Globe, History, Sparkles, Users, X } from 'lucide-react'
+import { Bell, Check, Globe, History, Sparkles, Users, X } from 'lucide-react'
+import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
 import { DialogPortal } from '@skyhook-io/k8s-ui/components/ui/DialogPortal'
 import { Tooltip } from './ui/Tooltip'
 import { CloudConnectFlow } from './CloudConnectFlow'
@@ -261,14 +262,14 @@ function Fold({ summary, className = '', children }: { summary: string; classNam
         aria-controls={bodyId}
         className="flex items-center gap-1.5 text-[11.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors"
       >
-        <ChevronRight className={`w-3 h-3 shrink-0 transition-transform duration-200 ${open ? 'rotate-90' : ''}`} />
+        <CollapseChevron open={open} className="w-3 h-3" />
         {summary}
       </button>
-      <div id={bodyId} className={`issue-details-motion ${open ? 'issue-details-motion-open' : ''}`}>
-        <div className="overflow-hidden">
-          <p className="mt-2 pl-[18px] text-[11.5px] leading-relaxed text-theme-text-tertiary">{children}</p>
-        </div>
-      </div>
+      <Collapse open={open}>
+        <p id={bodyId} className="mt-2 pl-[18px] text-[11.5px] leading-relaxed text-theme-text-tertiary">
+          {children}
+        </p>
+      </Collapse>
     </div>
   )
 }
