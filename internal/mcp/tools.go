@@ -1152,9 +1152,9 @@ func buildMCPResourceContextWithStaleChecks(ctx context.Context, obj runtime.Obj
 		ServiceBackends: mcpServiceBackendLookup{cache: cache},
 	}
 
-	if idx := k8s.GetPolicyReportIndex(); idx != nil {
-		opts.PolicyReports = mcpPolicyReportLookupAdapter{idx: idx}
-	}
+	// Wired unconditionally: a nil index is exactly the case that needs to
+	// report WHY it is nil.
+	opts.PolicyReports = mcpPolicyReportLookupAdapter{idx: k8s.GetPolicyReportIndex(), status: k8s.GetPolicyReportStatus()}
 
 	if topo, prov, dyn, ok := mcpTopologyForContext(namespace); ok {
 		opts.Topology = topo

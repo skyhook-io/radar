@@ -82,6 +82,22 @@ type PolicyReportLookup interface {
 	FindingsFor(group, kind, namespace, name string) []KyvernoFinding
 }
 
+// PolicyReportAvailability is an optional interface a PolicyReportLookup may
+// also implement to say that findings could not be read at all, and why.
+//
+// Without it, "this resource has no policy violations" and "Radar could not
+// see the policy reports" produce the identical empty response — the silent
+// emptiness this codebase treats as a bug. Implementing it makes Build emit
+// `omitted: [{field: "policySummary.kyverno", reason: ...}]` instead.
+//
+// Optional rather than part of PolicyReportLookup so existing implementers
+// keep compiling.
+type PolicyReportAvailability interface {
+	// Unavailable reports (reason, true) when findings are unreadable.
+	// (_, false) means the lookup is serving normally.
+	Unavailable() (OmittedReason, bool)
+}
+
 type ServiceBackendLookup interface {
 	PodsForServiceSelector(namespace string, selector labels.Selector) ([]*corev1.Pod, error)
 }
@@ -293,6 +309,11 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	// counts only (fail/warn/pass); diagnostic tier adds the top[]
 	// findings. Tier discrimination keeps the basic-tier wire size tight.
 	if opts.PolicyReports != nil {
+		if avail, ok := opts.PolicyReports.(PolicyReportAvailability); ok {
+			if reason, unavailable := avail.Unavailable(); unavailable {
+				omitted.add("policySummary.kyverno", reason)
+			}
+		}
 		findings := opts.PolicyReports.FindingsFor(ident.Group, ident.Kind, ident.Namespace, ident.Name)
 		if len(findings) > 0 {
 			rc.PolicySummary = buildPolicySummary(findings, opts.Tier)

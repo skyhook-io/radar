@@ -11,6 +11,7 @@ import (
 	toolscache "k8s.io/client-go/tools/cache"
 
 	"github.com/skyhook-io/radar/pkg/policyreports"
+	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
 
 // KyvernoStatus reports why the PolicyReport index is (or isn't) populated.
@@ -41,6 +42,39 @@ const (
 	KyvernoStatusReady KyvernoStatus = "ready"
 )
 
+// Reason codes explaining a non-ready status. The bare four-state enum
+// collapses RBAC denial, probe failure and over-cap into "deferred", which
+// leaves an operator with an empty policy view and no way to tell "nothing is
+// violating" from "Radar cannot see". The reason code is what makes that
+// distinction sayable.
+const (
+	ReasonNoDiscovery  = "discovery_unavailable"
+	ReasonNotInstalled = "kyverno_not_installed"
+	ReasonNoReportCRDs = "no_report_crds"
+	ReasonCacheDown    = "cache_unavailable"
+	ReasonRBACDenied   = "rbac_denied"
+	ReasonProbeFailed  = "probe_failed"
+	ReasonOverCap      = "over_cap"
+)
+
+// PolicyReportStatus is the structured contract behind the PolicyReport
+// index. Status alone cannot answer "why is this empty"; ObservedCount and
+// Cap turn "deferred" into a sentence an operator can act on ("1,842 reports
+// exceeds the 500-report cap"), and WatchedGroups names which API family the
+// data actually came from — load-bearing on a cluster mid-migration from
+// wgpolicyk8s.io to openreports.io.
+type PolicyReportStatus struct {
+	Status     KyvernoStatus `json:"status"`
+	ReasonCode string        `json:"reasonCode,omitempty"`
+	// ObservedCount is the number of report objects the pre-warmup probe
+	// counted across the selected groups. -1 when the probe could not run.
+	ObservedCount int `json:"observedCount"`
+	Cap           int `json:"cap"`
+	// WatchedGroups are the API groups actually being watched, e.g.
+	// ["openreports.io"]. Empty when nothing is watched.
+	WatchedGroups []string `json:"watchedGroups,omitempty"`
+}
+
 // kyvernoWarmupDecision is set by WarmupKyvernoPolicyReports to record
 // the outcome of its single decision pass: empty (warmup hasn't run yet)
 // vs not-installed vs deferred vs ready. Read by GetKyvernoStatus so
@@ -59,23 +93,58 @@ var kyvernoWarmupDecision atomic.Value // holds KyvernoStatus, "" before first d
 // inherits the old cluster's index or decision.
 var kyvernoWarmupGen atomic.Int64
 
-// PolicyReport GVRs. Kept here (not in supportedCRDFallbacks) because
-// warmup is conditional — we only register informers for these CRDs when
-// Kyverno's own Policy/ClusterPolicy CRDs are present in discovery.
+// kyvernoWarmupReason carries the structured PolicyReportStatus alongside the
+// bare decision enum. Same generation discipline as kyvernoWarmupDecision:
+// writes go through setStatus, which checks the generation under the mutex so
+// a pre-Reset warmup can't stamp the previous cluster's reason onto the new
+// one.
+var kyvernoWarmupReason atomic.Value // holds PolicyReportStatus
+
+// Report families. Kept here (not in supportedCRDFallbacks) because warmup
+// is conditional — we only register informers for these CRDs when Kyverno is
+// present in discovery.
 //
-// We try v1alpha2 first (the dominant version Kyverno emits) and fall back
-// to v1beta1 if v1alpha2 is not registered. Most clusters in the wild
-// (Kyverno 1.10+) ship v1alpha2.
-var (
-	policyReportGVRs = []schema.GroupVersionResource{
-		{Group: "wgpolicyk8s.io", Version: "v1alpha2", Resource: "policyreports"},
-		{Group: "wgpolicyk8s.io", Version: "v1beta1", Resource: "policyreports"},
-	}
-	clusterPolicyReportGVRs = []schema.GroupVersionResource{
-		{Group: "wgpolicyk8s.io", Version: "v1alpha2", Resource: "clusterpolicyreports"},
-		{Group: "wgpolicyk8s.io", Version: "v1beta1", Resource: "clusterpolicyreports"},
-	}
-)
+// Two API groups can carry the same data. wgpolicyk8s.io is the original
+// working-group API; openreports.io is the successor Kyverno 1.15+ writes to
+// when started with --openreportsEnabled. Within a group the versions are the
+// same resource at different versions, so exactly one is watched: we prefer
+// v1alpha2 (the dominant version Kyverno emits) and fall back to v1beta1.
+//
+// reports.kyverno.io is deliberately absent. EphemeralReport /
+// ClusterEphemeralReport are Kyverno's intermediate objects — the reports
+// controller merges them into PolicyReports and deletes them — and they churn
+// hard enough on busy clusters to be a real memory cost for no added
+// information.
+type reportGroup struct {
+	group string
+	// Version candidates, most-preferred first. Only the first served
+	// candidate in each slice is watched.
+	namespaced []schema.GroupVersionResource
+	cluster    []schema.GroupVersionResource
+}
+
+var reportGroups = []reportGroup{
+	{
+		group: "wgpolicyk8s.io",
+		namespaced: []schema.GroupVersionResource{
+			{Group: "wgpolicyk8s.io", Version: "v1alpha2", Resource: "policyreports"},
+			{Group: "wgpolicyk8s.io", Version: "v1beta1", Resource: "policyreports"},
+		},
+		cluster: []schema.GroupVersionResource{
+			{Group: "wgpolicyk8s.io", Version: "v1alpha2", Resource: "clusterpolicyreports"},
+			{Group: "wgpolicyk8s.io", Version: "v1beta1", Resource: "clusterpolicyreports"},
+		},
+	},
+	{
+		group: "openreports.io",
+		namespaced: []schema.GroupVersionResource{
+			{Group: "openreports.io", Version: "v1alpha1", Resource: "reports"},
+		},
+		cluster: []schema.GroupVersionResource{
+			{Group: "openreports.io", Version: "v1alpha1", Resource: "clusterreports"},
+		},
+	},
+}
 
 // kyvernoReportWarmupCap caps how many PolicyReport documents the index
 // keeps in memory. The pkg/policyreports.MaxIndexedReports constant is the
@@ -167,15 +236,22 @@ func WarmupKyvernoPolicyReports() {
 	myGen := kyvernoWarmupGen.Load()
 	policyReportMu.Unlock()
 	once.Do(func() {
-		setDecision := func(s KyvernoStatus) {
+		setStatus := func(s KyvernoStatus, reason string, observed int, groups []string) {
 			policyReportMu.Lock()
 			defer policyReportMu.Unlock()
 			if kyvernoWarmupGen.Load() != myGen {
 				return
 			}
 			kyvernoWarmupDecision.Store(s)
+			kyvernoWarmupReason.Store(PolicyReportStatus{
+				Status:        s,
+				ReasonCode:    reason,
+				ObservedCount: observed,
+				Cap:           kyvernoReportWarmupCap,
+				WatchedGroups: groups,
+			})
 		}
-		publishReady := func(idx *policyreports.Index, watched []schema.GroupVersionResource) {
+		publishReady := func(idx *policyreports.Index, watched []schema.GroupVersionResource, observed int, groups []string) {
 			policyReportMu.Lock()
 			defer policyReportMu.Unlock()
 			if kyvernoWarmupGen.Load() != myGen {
@@ -184,82 +260,70 @@ func WarmupKyvernoPolicyReports() {
 			policyReportIndex.Store(idx)
 			policyReportWatched = watched
 			kyvernoWarmupDecision.Store(KyvernoStatusReady)
+			kyvernoWarmupReason.Store(PolicyReportStatus{
+				Status:        KyvernoStatusReady,
+				ObservedCount: observed,
+				Cap:           kyvernoReportWarmupCap,
+				WatchedGroups: groups,
+			})
 		}
 
 		discovery := GetResourceDiscovery()
 		if discovery == nil || discovery.ResourceDiscovery == nil {
 			log.Printf("[policy-reports] No resource discovery available; skipping Kyverno detection")
 			// Discovery unavailable is operationally indistinguishable from
-			// "not installed" — the consumer surface only needs to know
-			// findings won't appear.
-			setDecision(KyvernoStatusNotInstalled)
+			// "not installed" for the consumer surface, but the reason code
+			// keeps the two tellable apart in diagnostics.
+			setStatus(KyvernoStatusNotInstalled, ReasonNoDiscovery, 0, nil)
 			return
 		}
 		if !discovery.IsKyvernoInstalled() {
-			log.Printf("[policy-reports] Kyverno not detected (no kyverno.io/Policy or ClusterPolicy); leaving PolicyReports deferred")
-			setDecision(KyvernoStatusNotInstalled)
+			log.Printf("[policy-reports] Kyverno not detected (neither kyverno.io nor policies.kyverno.io CRDs present); leaving PolicyReports deferred")
+			setStatus(KyvernoStatusNotInstalled, ReasonNotInstalled, 0, nil)
 			return
 		}
 
 		cache := GetDynamicResourceCache()
 		if cache == nil || cache.DynamicResourceCache == nil {
 			log.Printf("[policy-reports] Dynamic resource cache not initialized; cannot warm up PolicyReports")
-			setDecision(KyvernoStatusDeferred)
+			setStatus(KyvernoStatusDeferred, ReasonCacheDown, -1, nil)
 			return
 		}
 
-		// Pick the actual GVRs registered on this cluster — there are two
-		// candidate versions per kind. We prefer v1alpha2 (most common)
-		// but accept v1beta1 if that's what's installed.
-		watched := make([]schema.GroupVersionResource, 0, 2)
-		for _, candidate := range policyReportGVRs {
-			if discovery.SupportsWatchGVR(candidate) {
-				watched = append(watched, candidate)
-				break
-			}
-		}
-		for _, candidate := range clusterPolicyReportGVRs {
-			if discovery.SupportsWatchGVR(candidate) {
-				watched = append(watched, candidate)
-				break
-			}
-		}
+		// Choose which report API groups actually carry data. See
+		// selectReportGVRs — first-served-wins picks an empty API on any
+		// cluster mid-migration between wgpolicyk8s.io and openreports.io.
+		selection := selectReportGVRs(discovery.SupportsWatchGVR, cache.ProbeCount)
+		watched := selection.gvrs
 
 		if len(watched) == 0 {
-			log.Printf("[policy-reports] Kyverno detected but no wgpolicyk8s.io PolicyReport CRDs are registered for watch; nothing to warm up")
-			// Kyverno is installed but the reporting CRDs aren't — operator
-			// has Kyverno without the policy-reporter shim. Surface as
-			// not_installed because there is no PolicyReport data to expose.
-			setDecision(KyvernoStatusNotInstalled)
-			return
-		}
-
-		// Probe cluster size before starting informers. The index caps what we
-		// keep in memory (MaxIndexedReports), but informers themselves
-		// list/watch/cache every PolicyReport object cluster-wide — on a
-		// Kyverno-heavy cluster with tens of thousands of reports, that's
-		// exactly the high-cardinality cost we're trying to avoid. If the
-		// aggregate count across watched GVRs exceeds the cap, leave reports
-		// in the deferred-fetch tier so callers can resolve them on demand.
-		var total int
-		for _, gvr := range watched {
-			count := cache.ProbeCount(gvr)
-			if count < 0 {
-				// -1 RBAC denied, -2 transient probe error. Either way, we
-				// can't bound the warmup cost; defer rather than gamble.
-				log.Printf("[policy-reports] Probe for %s returned %d; deferring PolicyReport warmup", gvr, count)
-				setDecision(KyvernoStatusDeferred)
-				return
+			switch selection.reason {
+			case ReasonRBACDenied, ReasonProbeFailed:
+				log.Printf("[policy-reports] Could not probe report CRDs (%s); deferring PolicyReport warmup", selection.reason)
+				setStatus(KyvernoStatusDeferred, selection.reason, selection.total, nil)
+			default:
+				log.Printf("[policy-reports] Kyverno detected but no PolicyReport CRDs are registered for watch; nothing to warm up")
+				// Kyverno is installed but the reporting CRDs aren't —
+				// Kyverno without the reporting shim. Surface as
+				// not_installed because there is no report data to expose.
+				setStatus(KyvernoStatusNotInstalled, ReasonNoReportCRDs, 0, nil)
 			}
-			total += count
-		}
-		if total > kyvernoReportWarmupCap {
-			log.Printf("[policy-reports] Cluster has %d PolicyReports across %d CRDs (cap=%d); leaving deferred to avoid full-cluster watch cost", total, len(watched), kyvernoReportWarmupCap)
-			setDecision(KyvernoStatusDeferred)
 			return
 		}
 
-		log.Printf("[policy-reports] Kyverno detected; warming up %d PolicyReport CRDs (probed %d reports, cap=%d)", len(watched), total, kyvernoReportWarmupCap)
+		// The index caps what it keeps in memory (MaxIndexedReports), but the
+		// informers themselves list/watch/cache every report object
+		// cluster-wide — on a Kyverno-heavy cluster with tens of thousands of
+		// reports that is exactly the high-cardinality cost we're avoiding.
+		// Over the cap, leave reports in the deferred-fetch tier and say so
+		// with the count, so the operator can tell over-cap from empty.
+		if selection.total > kyvernoReportWarmupCap {
+			log.Printf("[policy-reports] Cluster has %d reports across %v (cap=%d); leaving deferred to avoid full-cluster watch cost", selection.total, selection.groups, kyvernoReportWarmupCap)
+			setStatus(KyvernoStatusDeferred, ReasonOverCap, selection.total, selection.groups)
+			return
+		}
+
+		log.Printf("[policy-reports] Kyverno detected; warming up %d report CRDs from %v (probed %d reports, cap=%d)", len(watched), selection.groups, selection.total, kyvernoReportWarmupCap)
 		cache.WarmupParallel(watched, 30*time.Second)
 
 		// Initialize the index from current cache contents so the first
@@ -295,7 +359,7 @@ func WarmupKyvernoPolicyReports() {
 		// generation check ensures a Reset that fires before this point
 		// causes the writes to be skipped, so the new cluster never
 		// inherits the old cluster's index or decision.
-		publishReady(idx, watched)
+		publishReady(idx, watched, selection.total, selection.groups)
 		log.Printf("[policy-reports] Index initialized with %d subjects", idx.Size())
 	})
 }
@@ -329,6 +393,174 @@ func GetKyvernoStatus() KyvernoStatus {
 		return KyvernoStatusWarmup
 	}
 	return v
+}
+
+// GetPolicyReportStatus returns the structured status behind the PolicyReport
+// index: the lifecycle phase plus why it is in that phase, how many report
+// objects were observed, the cap they were measured against, and which API
+// groups are actually being watched.
+//
+// Consumers rendering an empty policy view must use this rather than
+// GetKyvernoStatus alone — "deferred" collapses RBAC denial, probe failure and
+// over-cap, and those need different words in front of an operator.
+func GetPolicyReportStatus() PolicyReportStatus {
+	status, _ := kyvernoWarmupReason.Load().(PolicyReportStatus)
+	// Ready is authoritative for the same reason GetKyvernoStatus treats it
+	// so: the index publishes before the status flag inside warmup.
+	if policyReportIndex.Load() != nil {
+		status.Status = KyvernoStatusReady
+		status.ReasonCode = ""
+		if status.Cap == 0 {
+			status.Cap = kyvernoReportWarmupCap
+		}
+		return status
+	}
+	if status.Status == "" {
+		return PolicyReportStatus{Status: KyvernoStatusWarmup, Cap: kyvernoReportWarmupCap}
+	}
+	return status
+}
+
+// reportSelection is the outcome of choosing which report GVRs to watch.
+type reportSelection struct {
+	gvrs   []schema.GroupVersionResource
+	groups []string
+	// total is the probed object count across the selected GVRs, or -1 when
+	// no probe could complete.
+	total  int
+	reason string
+}
+
+// firstServed returns the first candidate the cluster actually serves for
+// watch. Within an API group the candidates are the same resource at
+// different versions, so watching more than one would double-count.
+func firstServed(served func(schema.GroupVersionResource) bool, candidates []schema.GroupVersionResource) (schema.GroupVersionResource, bool) {
+	for _, candidate := range candidates {
+		if served(candidate) {
+			return candidate, true
+		}
+	}
+	return schema.GroupVersionResource{}, false
+}
+
+// selectReportGVRs decides which report API groups to watch.
+//
+// The naive approach — take the first served GVR and stop — is wrong on any
+// cluster that has migrated between report APIs. Both families can legally be
+// served while only one is written to: enabling Kyverno's --openreportsEnabled
+// leaves the wgpolicyk8s.io CRDs registered but empty while every report lands
+// in openreports.io. First-served-wins then selects an empty API and reports
+// zero findings on a cluster that has plenty, which is indistinguishable from
+// a clean cluster.
+//
+// So we probe each group for actual objects and watch the ones that have any,
+// watching several when several carry data (a migration can leave stale
+// reports behind in the old family; identical findings are deduplicated when
+// the index is built). When no group has data we still watch the first served
+// group, so the result is an honest "ready, and there really are no findings"
+// rather than "not installed".
+// The two cluster interactions are injected so the selection rules can be
+// tested without a live apiserver: `served` reports whether a GVR is
+// watchable, `probeCount` returns its object count (-1 RBAC denied, -2
+// transient error).
+func selectReportGVRs(served func(schema.GroupVersionResource) bool, probeCount func(schema.GroupVersionResource) int) reportSelection {
+	var (
+		selection      reportSelection
+		fallback       []schema.GroupVersionResource
+		fallbackGroup  string
+		servedAnything bool
+		anyDenied      bool
+		anyProbeFailed bool
+	)
+	selection.total = 0
+
+	for _, family := range reportGroups {
+		var candidates []schema.GroupVersionResource
+		if gvr, ok := firstServed(served, family.namespaced); ok {
+			candidates = append(candidates, gvr)
+		}
+		if gvr, ok := firstServed(served, family.cluster); ok {
+			candidates = append(candidates, gvr)
+		}
+		if len(candidates) == 0 {
+			continue
+		}
+		servedAnything = true
+		if fallback == nil {
+			fallback = candidates
+			fallbackGroup = family.group
+		}
+
+		groupTotal := 0
+		probeFailed := false
+		for _, gvr := range candidates {
+			count := probeCount(gvr)
+			switch {
+			case count == -1:
+				anyDenied = true
+				probeFailed = true
+			case count < 0:
+				anyProbeFailed = true
+				probeFailed = true
+			default:
+				groupTotal += count
+			}
+		}
+		// A group we could not fully probe is not safe to watch — we cannot
+		// bound its cost — but it must not silently vanish either, which is
+		// what the reason codes below carry.
+		if probeFailed || groupTotal == 0 {
+			continue
+		}
+
+		selection.gvrs = append(selection.gvrs, candidates...)
+		selection.groups = append(selection.groups, family.group)
+		selection.total += groupTotal
+	}
+
+	if len(selection.gvrs) > 0 {
+		return selection
+	}
+
+	// Nothing had data. Distinguish "we were blocked from looking" from
+	// "we looked and there is genuinely nothing".
+	switch {
+	case anyDenied:
+		return reportSelection{total: -1, reason: ReasonRBACDenied}
+	case anyProbeFailed:
+		return reportSelection{total: -1, reason: ReasonProbeFailed}
+	case !servedAnything:
+		return reportSelection{total: 0, reason: ReasonNoReportCRDs}
+	}
+	return reportSelection{gvrs: fallback, groups: []string{fallbackGroup}, total: 0}
+}
+
+// OmittedReason maps the PolicyReport index state onto the agent-facing
+// omitted-field enum, or reports false when findings are being served
+// normally.
+//
+// Lives here, in one place, because both the REST and MCP resource-context
+// adapters need the identical mapping and a second copy would drift.
+//
+// "Not installed" deliberately returns false: there is no Kyverno on the
+// cluster, so an omitted note on every resource of every non-Kyverno cluster
+// would be pure noise rather than honesty.
+func (s PolicyReportStatus) OmittedReason() (resourcecontext.OmittedReason, bool) {
+	switch s.Status {
+	case KyvernoStatusReady, KyvernoStatusNotInstalled:
+		return "", false
+	case KyvernoStatusWarmup:
+		return resourcecontext.OmittedCacheCold, true
+	}
+	// Deferred — the reason code is what distinguishes the cases the bare
+	// enum collapses.
+	switch s.ReasonCode {
+	case ReasonRBACDenied:
+		return resourcecontext.OmittedRBACDenied, true
+	case ReasonOverCap:
+		return resourcecontext.OmittedBudgetExceeded, true
+	}
+	return resourcecontext.OmittedCacheCold, true
 }
 
 // listPolicyReportsAll concatenates reports from every watched GVR.
@@ -414,6 +646,7 @@ func ResetPolicyReportIndex() {
 	// detection pass, and GetKyvernoStatus should report "warmup" until
 	// the new pass completes (not whatever the previous cluster decided).
 	kyvernoWarmupDecision.Store(KyvernoStatus(""))
+	kyvernoWarmupReason.Store(PolicyReportStatus{})
 	// Replace the pointer rather than zeroing the value — see the comment
 	// on policyReportInit's declaration. Any Do() lambda still running on
 	// the old *sync.Once finishes against that instance without

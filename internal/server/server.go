@@ -1269,6 +1269,14 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 
 	caps.Karpenter = s.karpenterCapability(r)
 
+	// Report the PolicyReport index state so the frontend can say WHY a policy
+	// view is empty. Omitted when Kyverno isn't installed at all — there is
+	// nothing for the operator to act on, and a "not installed" note on every
+	// non-Kyverno cluster would be noise.
+	if prStatus := k8s.GetPolicyReportStatus(); prStatus.Status != k8s.KyvernoStatusNotInstalled {
+		caps.PolicyReports = &prStatus
+	}
+
 	s.writeJSON(w, caps)
 }
 

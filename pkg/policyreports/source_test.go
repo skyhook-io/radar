@@ -118,3 +118,46 @@ func TestFindingsForEngine_NilSafe(t *testing.T) {
 		t.Errorf("nil index returned %d findings, want nil", len(got))
 	}
 }
+
+// A cluster mid-migration can serve both report families with overlapping
+// content, and the selection layer watches both when both hold data. The same
+// (policy, rule, result, message, source) on the same subject carries no extra
+// information whichever report it arrived in, and counting it twice would
+// inflate every violation total the UI and agents show.
+func TestBuildIndex_DeduplicatesIdenticalFindingsAcrossReports(t *testing.T) {
+	now := time.Now()
+	result := map[string]any{
+		"policy": "require-labels", "rule": "check", "result": "fail",
+		"source": "KyvernoValidatingPolicy", "message": "needs a team label",
+		"resources": []any{resourceRef("Pod", "prod", "api-1")},
+	}
+	// Same finding, carried by two reports from two API families.
+	wg := makeReport(t, "PolicyReport", "prod", "wg-1", nil, now, []map[string]any{result})
+	or := makeReport(t, "Report", "prod", "or-1", nil, now, []map[string]any{result})
+
+	got := BuildIndex([]*unstructured.Unstructured{wg, or}).FindingsFor("", "Pod", "prod", "api-1")
+	if len(got) != 1 {
+		t.Fatalf("expected the duplicate to be collapsed to 1 finding, got %d", len(got))
+	}
+}
+
+// Dedup must key on the whole finding, not just the policy — two different
+// rules of the same policy failing on one subject are two real findings.
+func TestBuildIndex_KeepsDistinctFindingsFromTheSamePolicy(t *testing.T) {
+	now := time.Now()
+	r := makeReport(t, "PolicyReport", "prod", "pr-1", nil, now, []map[string]any{
+		{
+			"policy": "baseline", "rule": "no-host-network", "result": "fail", "source": "kyverno",
+			"resources": []any{resourceRef("Pod", "prod", "api-1")},
+		},
+		{
+			"policy": "baseline", "rule": "no-privileged", "result": "fail", "source": "kyverno",
+			"resources": []any{resourceRef("Pod", "prod", "api-1")},
+		},
+	})
+
+	got := BuildIndex([]*unstructured.Unstructured{r}).FindingsFor("", "Pod", "prod", "api-1")
+	if len(got) != 2 {
+		t.Fatalf("expected 2 distinct findings, got %d", len(got))
+	}
+}

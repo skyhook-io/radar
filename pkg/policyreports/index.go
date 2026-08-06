@@ -95,10 +95,40 @@ func (i *Index) Replace(reports []*unstructured.Unstructured) {
 	for _, r := range sorted {
 		extractFindings(r, next)
 	}
+	dedupeFindings(next)
 
 	i.mu.Lock()
 	i.bySubject = next
 	i.mu.Unlock()
+}
+
+// dedupeFindings collapses byte-identical findings within each subject.
+//
+// A cluster migrating between report APIs (wgpolicyk8s.io → openreports.io)
+// can serve both families at once, and the caller may legitimately watch both
+// when both hold data — stale reports in the old family otherwise disappear
+// from view entirely. The same (policy, rule, result, message, source) on the
+// same subject carries no extra information whichever report it arrived in,
+// and counting it twice would inflate every violation total.
+//
+// Order is preserved: the first occurrence wins, so the newest report's copy
+// is the one kept (Replace feeds reports newest-first).
+func dedupeFindings(bySubject map[string][]Finding) {
+	for key, findings := range bySubject {
+		if len(findings) < 2 {
+			continue
+		}
+		seen := make(map[Finding]bool, len(findings))
+		out := findings[:0]
+		for _, f := range findings {
+			if seen[f] {
+				continue
+			}
+			seen[f] = true
+			out = append(out, f)
+		}
+		bySubject[key] = out
+	}
 }
 
 // FindingsFor returns the findings indexed for the given subject. Returns

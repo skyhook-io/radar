@@ -62,7 +62,15 @@ import (
 // here lets unrelated changes to policyreports.Finding evolve without
 // perturbing the wire contract that downstream callers depend on.
 type policyReportLookupAdapter struct {
-	idx *policyreports.Index
+	idx    *policyreports.Index
+	status k8s.PolicyReportStatus
+}
+
+// Unavailable implements resourcecontext.PolicyReportAvailability so a
+// resource whose policy findings could not be read says so, instead of being
+// indistinguishable from a resource with no violations.
+func (a policyReportLookupAdapter) Unavailable() (resourcecontext.OmittedReason, bool) {
+	return a.status.OmittedReason()
 }
 
 func (a policyReportLookupAdapter) FindingsFor(group, kind, namespace, name string) []resourcecontext.KyvernoFinding {
@@ -446,9 +454,9 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	// Wire the PolicyReport index when Kyverno is installed. Build emits a
 	// counts-only `policySummary.kyverno` on the basic tier; diagnostic
 	// tier (T10) will surface the top[] findings.
-	if idx := k8s.GetPolicyReportIndex(); idx != nil {
-		opts.PolicyReports = policyReportLookupAdapter{idx: idx}
-	}
+	// Wired unconditionally: a nil index is exactly the case that needs to
+	// report WHY it is nil.
+	opts.PolicyReports = policyReportLookupAdapter{idx: k8s.GetPolicyReportIndex(), status: k8s.GetPolicyReportStatus()}
 
 	if topo, prov, dyn, ok := s.topologyForContext(namespace); ok {
 		opts.Topology = topo

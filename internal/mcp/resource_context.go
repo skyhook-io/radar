@@ -21,7 +21,14 @@ import (
 // internal/server/ai_handlers.go — keeping the projection narrow here lets
 // pkg/policyreports.Finding evolve without perturbing the wire contract.
 type mcpPolicyReportLookupAdapter struct {
-	idx *policyreports.Index
+	idx    *policyreports.Index
+	status k8s.PolicyReportStatus
+}
+
+// Unavailable implements resourcecontext.PolicyReportAvailability so an agent
+// can tell "no violations" from "Radar could not read the policy reports".
+func (a mcpPolicyReportLookupAdapter) Unavailable() (resourcecontext.OmittedReason, bool) {
+	return a.status.OmittedReason()
 }
 
 func (a mcpPolicyReportLookupAdapter) FindingsFor(group, kind, namespace, name string) []resourcecontext.KyvernoFinding {
