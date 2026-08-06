@@ -64,12 +64,9 @@ func TestSubjectPermissionsAliasRepairsTheBenchmarkFailure(t *testing.T) {
 func TestOrthographicRepairCrossesTheSnakeCamelSplit(t *testing.T) {
 	registerToolsOnce(t)
 
-	// radar is snake_case nearly everywhere but manage_gitops uses camelCase.
-	// An agent that learned dry_run from apply_resource must not be rejected by
-	// manage_gitops for the same concept, and vice versa.
-	// radar is uniformly snake_case, so repair absorbs the camelCase spelling an
-	// agent is most likely to guess — camelCase is what most third-party MCP
-	// servers publish, and what Kubernetes itself uses in manifests.
+	// radar publishes snake_case throughout, so repair must absorb the camelCase
+	// spelling an agent is most likely to guess: camelCase is what most
+	// third-party MCP servers publish and what Kubernetes uses in manifests.
 	cases := []struct{ tool, supplied, want string }{
 		{"manage_gitops", "dryRun", "dry_run"},
 		{"manage_gitops", "historyId", "history_id"},
@@ -297,12 +294,12 @@ func TestZeroArgumentToolSaysSo(t *testing.T) {
 	}
 }
 
-// TestAliasRepairIsDeterministic pins the map-order bug.
+// TestAliasRepairIsDeterministic pins an invariant: the subject kind must be
+// resolved before the argument map is iterated.
 //
-// The subject kind was once resolved inside the rewrite loop, so whether
-// "SubjectKind" had already become "kind" depended on Go's random map iteration
-// order — the identical request was repaired or refused at random (measured
-// 23/200 vs 177/200). The kind is now resolved once, before any rewriting.
+// Resolving it during iteration makes the outcome depend on whether Go's random
+// map order happened to rename "SubjectKind" to "kind" first, so the identical
+// request is repaired or refused at random.
 func TestAliasRepairIsDeterministic(t *testing.T) {
 	registerToolsOnce(t)
 
