@@ -1,4 +1,5 @@
 import { describe, test, expect, afterEach } from 'vitest'
+import { englishPlural } from './pluralize'
 import { kindToPlural, pluralToKind, refToSelectedResource, initNavigationMap, resetNavigationMap, laneId, laneResourceKey, groupQualifiesLaneId, parseLaneId } from './navigation'
 
 afterEach(() => {
@@ -64,6 +65,66 @@ describe('kindToPlural', () => {
     expect(kindToPlural('HorizontalPodAutoscaler')).toBe('horizontalpodautoscalers')
     expect(kindToPlural('pvc')).toBe('persistentvolumeclaims')
     expect(kindToPlural('PodGroup')).toBe('pods')
+  })
+
+  // A cold direct-URL load runs kindToPlural against the URL's plural slug one
+  // round-trip BEFORE initNavigationMap lands, so the discovered-plural guard
+  // can't fire for a CRD absent from BUILTIN_PLURAL_TO_KIND.
+  describe('CRD plurals before the discovery map arrives', () => {
+    test('idempotent on unknown lowercase plurals', () => {
+      expect(kindToPlural('schedules')).toBe('schedules')
+      expect(kindToPlural('validatingpolicies')).toBe('validatingpolicies')
+      expect(kindToPlural('virtualservices')).toBe('virtualservices')
+      expect(kindToPlural('clusters')).toBe('clusters')
+      expect(kindToPlural('backups')).toBe('backups')
+    })
+
+    // Plurals of `*se` singulars — Flux's HelmRelease and coordination.k8s.io's
+    // Lease are both kinds Radar handles, and both reach this cold path.
+    test('idempotent on plurals of *se singulars', () => {
+      expect(kindToPlural('helmreleases')).toBe('helmreleases')
+      expect(kindToPlural('leases')).toBe('leases')
+      expect(kindToPlural('databases')).toBe('databases')
+    })
+
+    test('still pluralizes singular PascalCase CRD kinds', () => {
+      expect(kindToPlural('Schedule')).toBe('schedules')
+      expect(kindToPlural('ValidatingPolicy')).toBe('validatingpolicies')
+      expect(kindToPlural('VirtualService')).toBe('virtualservices')
+      expect(kindToPlural('Cluster')).toBe('clusters')
+    })
+
+    // Lowercase does NOT imply plural. WorkloadViewRoute passes the URL segment
+    // through verbatim, so /workload/deployment/ns/name yields "deployment";
+    // pkg/topology's normalizeKind likewise returns its input unchanged when a
+    // kind resolves through neither its static map nor discovery, so a
+    // ResourceRef can carry "certificaterequest". Both must still pluralize —
+    // including the singulars that already end in 's'.
+    test('still pluralizes lowercase singular kinds', () => {
+      expect(kindToPlural('deployment')).toBe('deployments')
+      expect(kindToPlural('pod')).toBe('pods')
+      expect(kindToPlural('cronjob')).toBe('cronjobs')
+      expect(kindToPlural('certificaterequest')).toBe('certificaterequests')
+      expect(kindToPlural('validatingpolicy')).toBe('validatingpolicies')
+      expect(kindToPlural('ingress')).toBe('ingresses')
+      expect(kindToPlural('nodeclass')).toBe('nodeclasses')
+      expect(kindToPlural('ec2nodeclass')).toBe('ec2nodeclasses')
+      expect(kindToPlural('storageclass')).toBe('storageclasses')
+    })
+
+    test('leaves the empty-string result unchanged', () => {
+      expect(kindToPlural('')).toBe(englishPlural(''))
+    })
+
+    test('agrees with the post-discovery answer', () => {
+      const inputs = ['schedules', 'validatingpolicies', 'Schedule', 'ValidatingPolicy']
+      const cold = inputs.map(kindToPlural)
+      initNavigationMap([
+        { group: 'velero.io', version: 'v1', kind: 'Schedule', name: 'schedules', namespaced: true, isCrd: true, verbs: [] },
+        { group: 'kyverno.io', version: 'v1alpha1', kind: 'ValidatingPolicy', name: 'validatingpolicies', namespaced: false, isCrd: true, verbs: [] },
+      ])
+      expect(inputs.map(kindToPlural)).toEqual(cold)
+    })
   })
 })
 

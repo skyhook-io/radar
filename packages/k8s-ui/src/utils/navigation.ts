@@ -1,5 +1,5 @@
 import type { SelectedResource, ResourceRef, APIResource } from '../types/core'
-import { englishPlural } from './pluralize'
+import { englishPlural, englishSingular, isEnglishPlural } from './pluralize'
 
 /**
  * Canonical callback type for navigating to a resource.
@@ -103,6 +103,15 @@ export function kindToPlural(kind: string): string {
   }
   if (aliases[kindLower]) return aliases[kindLower]
 
+  // Keep the idempotence contract alive for CRD plurals that neither map knows
+  // yet: the discovery map arrives one round-trip after a cold direct-URL load,
+  // and English-pluralizing an already-plural slug yields `scheduleses`. An
+  // all-lowercase input is an API resource name rather than a Kind (Kubernetes
+  // Kinds are PascalCase), and isEnglishPlural separates a real plural from a
+  // singular that merely ends in 's' — `ingress` and `nodeclass` must still be
+  // pluralized, `schedules` and `validatingpolicies` must not.
+  if (kind === kindLower && isEnglishPlural(kindLower)) return kindLower
+
   // Fallback: English pluralization rules (shared with pluralize() in
   // utils/pluralize.ts so a rule change updates both call paths).
   return englishPlural(kindLower)
@@ -125,14 +134,7 @@ export function pluralToKind(plural: string): string {
   }
 
   // Fallback: basic de-pluralization + capitalize first letter
-  let singular = lower
-  if (singular.endsWith('ies')) {
-    singular = singular.slice(0, -3) + 'y'
-  } else if (singular.endsWith('ses') || singular.endsWith('xes') || singular.endsWith('ches') || singular.endsWith('shes')) {
-    singular = singular.slice(0, -2)
-  } else if (singular.endsWith('s')) {
-    singular = singular.slice(0, -1)
-  }
+  const singular = englishSingular(lower)
   return singular.charAt(0).toUpperCase() + singular.slice(1)
 }
 

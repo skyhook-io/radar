@@ -31,6 +31,40 @@ export function englishPlural(noun: string): string {
 }
 
 /**
+ * Undo englishPlural's regular rules.
+ *
+ *   englishSingular('classes')  → 'class'
+ *   englishSingular('policies') → 'policy'
+ *   englishSingular('clusters') → 'cluster'
+ *
+ * Lossy by construction — a noun that is already singular comes back mangled
+ * ('ingress' → 'ingres'). Use isEnglishPlural to find out which case you have.
+ */
+export function englishSingular(noun: string): string {
+  const lower = noun.toLowerCase();
+  if (lower.endsWith('ies')) return noun.slice(0, -3) + 'y';
+  if (lower.endsWith('ses') || lower.endsWith('xes') || lower.endsWith('ches') || lower.endsWith('shes')) {
+    return noun.slice(0, -2);
+  }
+  if (lower.endsWith('s')) return noun.slice(0, -1);
+  return noun;
+}
+
+/**
+ * Whether a noun is already the regular English plural of its own singular —
+ * i.e. whether englishPlural would reproduce it. Distinguishes a plural from a
+ * singular that merely ends in 's':
+ *
+ *   isEnglishPlural('schedules') → true   ('schedule' → 'schedules')
+ *   isEnglishPlural('policies')  → true   ('policy'   → 'policies')
+ *   isEnglishPlural('ingress')   → false  ('ingres'   → 'ingreses')
+ *   isEnglishPlural('nodeclass') → false  ('nodeclas' → 'nodeclases')
+ */
+export function isEnglishPlural(noun: string): boolean {
+  return englishPlural(englishSingular(noun)) === noun;
+}
+
+/**
  * Count-aware plural noun. Returns the singular when n===1, else the
  * plural form (passed-in or derived via englishPlural).
  *
