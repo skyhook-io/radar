@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState, type ReactNode } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Bell, Check, Globe, History, Sparkles, Users, X } from 'lucide-react'
+import { Bell, Check, ChevronRight, Globe, History, Sparkles, Users, X } from 'lucide-react'
 import { DialogPortal } from '@skyhook-io/k8s-ui/components/ui/DialogPortal'
 import { Tooltip } from './ui/Tooltip'
 import { CloudConnectFlow } from './CloudConnectFlow'
@@ -34,6 +34,9 @@ const FALLBACK_APP_URL = 'https://app.radarhq.io'
 // offline laptop all render exactly what Radar rendered before this fetch
 // existed — the dialog never waits on the network and never shows a gap.
 const DEFAULT_ASSURANCES = ['Free for 3 clusters', 'No credit card', 'Your cluster data stays in your cluster']
+// A product fact, not funnel copy — appended even when the Hub supplies its
+// own assurances (deduped if the Hub starts sending it).
+const SOC2_ASSURANCE = 'SOC 2 compliant'
 const SIGNUP_QUERY = '?utm_source=radar-oss&utm_medium=app&utm_campaign=cloud-modal'
 const ABOUT_URL = 'https://radarhq.io/about'
 const SELF_HOSTED_DOCS_URL = 'https://radarhq.io/docs/cloud/self-hosted/'
@@ -193,7 +196,7 @@ export function CloudFunnelButton() {
       <DialogPortal
         open={open}
         onClose={() => setOpen(false)}
-        className="w-[500px] max-w-full max-h-[calc(100vh-2rem)] overflow-hidden flex flex-col"
+        className="w-[580px] max-w-full max-h-[calc(100vh-2rem)] overflow-hidden flex flex-col"
       >
         <button
           onClick={() => setOpen(false)}
@@ -245,6 +248,39 @@ export function CloudFunnelButton() {
   )
 }
 
+// Secondary copy the pitch shouldn't spend vertical space on until asked for.
+function Fold({ summary, className = '', children }: { summary: string; className?: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false)
+  const bodyId = useId()
+  return (
+    <div className={className}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-controls={bodyId}
+        className="flex items-center gap-1.5 text-[11.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors"
+      >
+        <ChevronRight className={`w-3 h-3 shrink-0 transition-transform duration-200 ${open ? 'rotate-90' : ''}`} />
+        {summary}
+      </button>
+      <div id={bodyId} className={`issue-details-motion ${open ? 'issue-details-motion-open' : ''}`}>
+        <div className="overflow-hidden">
+          <p className="mt-2 pl-[18px] text-[11.5px] leading-relaxed text-theme-text-tertiary">{children}</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function assuranceItems(fromHub?: string[]): string[] {
+  const items = fromHub?.length ? fromHub : DEFAULT_ASSURANCES
+  if (items.some((item) => item.toLowerCase().includes('soc 2'))) return items
+  // Before the last item: the closer ("data stays in your cluster") is the
+  // longest line and wraps most naturally when it comes last.
+  return [...items.slice(0, -1), SOC2_ASSURANCE, items[items.length - 1]]
+}
+
 function RadarSweep() {
   return (
     <div
@@ -263,28 +299,9 @@ function RadarSweep() {
 
 function Eyebrow() {
   return (
-    <div className="flex items-center gap-2.5 mb-3.5">
+    <div className="flex items-center gap-3 mb-5">
       <RadarSweep />
       <span className="font-mono text-[10.5px] tracking-[0.16em] uppercase text-emerald-600 dark:text-emerald-400">Radar Cloud</span>
-    </div>
-  )
-}
-
-function Faces() {
-  return (
-    <div className="flex shrink-0" aria-hidden>
-      {[
-        ['R', 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300'],
-        ['N', 'bg-sky-500/20 text-sky-700 dark:text-sky-300'],
-        ['E', 'bg-amber-500/20 text-amber-700 dark:text-amber-300'],
-      ].map(([initial, color], i) => (
-        <div
-          key={initial}
-          className={`w-6 h-6 text-[10px] ${color} rounded-full grid place-items-center font-bold border-2 border-theme-surface ${i > 0 ? '-ml-1.5' : ''}`}
-        >
-          {initial}
-        </div>
-      ))}
     </div>
   )
 }
@@ -328,9 +345,9 @@ function ModalFooter({
   // fast click would escape to signup before we could route this install.
   const selfPending = selfLoading === true
   return (
-    <div className="px-7 py-4 bg-theme-base border-t border-theme-border">
+    <div className="shrink-0 px-8 py-5 bg-theme-base border-t border-theme-border">
       {self && self.ownership !== 'unknown' && (
-        <div className="mb-3 card-inner text-[11.5px] leading-snug text-theme-text-secondary">
+        <div className="mb-3.5 card-inner p-3 text-[12px] leading-relaxed text-theme-text-secondary">
           {ambiguous ? (
             <>
               Radar found conflicting management metadata on this install, so it can't say whether a Helm
@@ -367,14 +384,20 @@ function ModalFooter({
         </div>
       )}
       {notice && (
-        <div className="mb-3 card-inner text-[11.5px] leading-snug text-theme-text-secondary">{notice}</div>
+        <div className="mb-3.5 card-inner p-3 text-[12px] leading-relaxed text-theme-text-secondary">{notice}</div>
       )}
-      <div className="flex items-center gap-4">
+      {lane === 'driver' && (
+        <p className="mb-3.5 text-[12px] leading-relaxed text-theme-text-secondary">
+          The guided setup runs right here in the app — Radar installs the Cloud agent on this cluster, and
+          you approve the connection in your browser.
+        </p>
+      )}
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2.5">
         {lane === 'driver' ? (
           <>
             <button
               onClick={onConnect}
-              className="px-5 py-2 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[13.5px] font-bold shadow-[0_0_22px_rgba(16,185,129,0.35)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] hover:-translate-y-px transition-all"
+              className="whitespace-nowrap px-6 py-2.5 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[14px] font-bold shadow-[0_0_22px_rgba(16,185,129,0.35)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] hover:-translate-y-px transition-all"
             >
               Connect this cluster
             </button>
@@ -382,9 +405,9 @@ function ModalFooter({
               href={driverEscapeUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-[12.5px] text-theme-text-secondary hover:text-theme-text-primary underline underline-offset-2 transition-colors"
+              className="whitespace-nowrap text-[13px] text-theme-text-secondary hover:text-theme-text-primary underline underline-offset-2 transition-colors"
             >
-              or start in the browser
+              or set up in the browser
             </a>
           </>
         ) : cliOnly ? null : (
@@ -399,33 +422,32 @@ function ModalFooter({
             {self?.ownership === 'helm' || gitops ? 'Connect this cluster' : 'Try Cloud free'}
           </a>
         )}
-        <button onClick={onLater} className="text-[12.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors">
+        <button onClick={onLater} className="whitespace-nowrap text-[13px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors">
           Maybe later
         </button>
       </div>
-      <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-theme-text-tertiary">
-        {(assurances?.length ? assurances : DEFAULT_ASSURANCES).map((item) => (
-          <span key={item} className="flex items-center gap-1">
-            <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+      <div className="mt-4 grid grid-cols-2 gap-x-5 gap-y-2 text-[11.5px] text-theme-text-tertiary">
+        {assuranceItems(assurances).map((item) => (
+          <span key={item} className="flex items-start gap-1.5">
+            <Check className="w-3 h-3 mt-[3px] shrink-0 text-emerald-600 dark:text-emerald-400" />
             {item}
           </span>
         ))}
       </div>
-      <p className="mt-3.5 text-[11px] text-theme-text-tertiary">
-        Prefer to run the control plane in your own VPC? Self-hosting is self-serve — 30-day trial, no sales
-        call.{' '}
+      <Fold summary="Prefer to run the control plane in your own VPC?" className="mt-3.5">
+        Self-hosting is fully self-serve — set it up yourself, whenever you're ready.{' '}
         <a href={SELF_HOSTED_DOCS_URL} target="_blank" rel="noopener noreferrer" className="text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary">
           Read the docs
         </a>
         .
-      </p>
+      </Fold>
     </div>
   )
 }
 
 // Headline defuses the paywall fear before anything is pitched; the grid
-// carries the concrete capabilities; the humans strip closes with the
-// anti-sell — the credibility beat that makes the sell land.
+// carries the concrete capabilities; the anti-sell closes — the credibility
+// beat that makes the sell land.
 function ModalBody() {
   const features = [
     {
@@ -456,43 +478,43 @@ function ModalBody() {
     },
   ]
   return (
-    <div className="px-7 pt-6 pb-1">
+    <div className="px-8 pt-7 pb-2">
       <Eyebrow />
-      <h3 className="text-[21px] font-semibold leading-tight tracking-tight text-theme-text-primary mb-2.5 text-balance">
+      <h3 className="text-[22px] font-semibold leading-tight tracking-tight text-theme-text-primary mb-3 text-balance">
         First things first: Radar stays free.
       </h3>
-      <p className="text-[13.5px] leading-relaxed text-theme-text-secondary mb-4">
+      <p className="text-[14px] leading-relaxed text-theme-text-secondary mb-5">
         The app you're looking at is Apache&nbsp;2.0 — every feature, forever, no rug pulls.{' '}
         <b className="text-theme-text-primary font-semibold">Radar Cloud is how we keep the lights on:</b> the
         same Radar, plus the parts that are genuinely hard to run on your own.
       </p>
-      <div className="grid grid-cols-2 gap-2 mb-4">
+      <div className="grid grid-cols-2 gap-3 mb-5">
         {features.map(({ icon: Icon, title, body, wide }) => (
-          <div key={title} className={`card-inner-lg flex gap-2.5 ${wide ? 'col-span-2' : ''}`}>
+          <div
+            key={title}
+            className={`card-inner-lg p-3.5 flex gap-3 ${
+              wide ? 'col-span-2 bg-emerald-500/[0.06] border-emerald-500/25 dark:bg-emerald-500/[0.08]' : ''
+            }`}
+          >
             <Icon className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600 dark:text-emerald-400" />
             <div>
-              <div className="text-[12.5px] font-semibold text-theme-text-primary">{title}</div>
-              <p className="mt-0.5 text-[11.5px] leading-snug text-theme-text-tertiary">{body}</p>
+              <div className="text-[13px] font-semibold text-theme-text-primary">{title}</div>
+              <p className="mt-1 text-[12px] leading-relaxed text-theme-text-tertiary">{body}</p>
             </div>
           </div>
         ))}
       </div>
-      <div className="flex items-start gap-2.5 mb-4">
-        <div className="mt-0.5">
-          <Faces />
-        </div>
-        <div className="min-w-0">
-          <p className="text-[12px] leading-snug text-theme-text-secondary">
-            If it's just you and one cluster — honestly, stay right here. This app is the product, not a demo.
-          </p>
-          <p className="mt-1 text-[11px] leading-snug text-theme-text-tertiary">
-            Radar is built in the open by many hands, and overseen by a small team of humans — the kind you can
-            actually talk to.{' '}
-            <a href={ABOUT_URL} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary">
-              Meet us →
-            </a>
-          </p>
-        </div>
+      <div className="mb-5 border-l-2 border-emerald-500/40 pl-3.5">
+        <p className="text-[12.5px] leading-relaxed text-theme-text-secondary">
+          If it's just you and one cluster — honestly, stay right here. This app is the product, not a demo.
+        </p>
+        <p className="mt-2 text-[11.5px] leading-relaxed text-theme-text-tertiary">
+          Radar is built in the open by many hands, and overseen by a small team of humans — the kind you
+          can actually talk to.{' '}
+          <a href={ABOUT_URL} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary">
+            Meet us →
+          </a>
+        </p>
       </div>
     </div>
   )
