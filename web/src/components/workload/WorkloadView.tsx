@@ -966,7 +966,7 @@ export function WorkloadView({
             <DiagnoseInlineSection kind={k} namespace={ns} name={n} group={g} onOpenReachability={openReachability} />
           ) : null
           const diagnoseHint = context === 'drawer' && !isNetworkKind ? (
-            <DiagnoseFromWorkloadHint kind={k} namespace={ns} name={n} onOpenReachability={openReachability} />
+            <DiagnoseFromWorkloadHint services={servingServices} onOpenReachability={openReachability} />
           ) : null
           return (
           <>
@@ -1485,22 +1485,17 @@ function AuditOverviewSection({
 // to find the right Service. Renders only when the workload has at
 // least one Service in its relationships; on isolated workloads (no
 // Service in front) the card stays hidden because no entry-point exists
-// to link to. The relationships fetch is the same query the drawer
-// infrastructure already uses, so React Query dedupes - no extra
-// network cost.
+// to link to. Services are handed down from the drawer's own relationships
+// fetch rather than re-fetched here: re-fetching by singular Kind missed
+// both the plural and the API group, which 404s for a CRD whose plural
+// collides with another CRD's (CNPG vs CAPI `clusters`).
 function DiagnoseFromWorkloadHint({
-  kind,
-  namespace,
-  name,
+  services,
   onOpenReachability,
 }: {
-  kind: string
-  namespace: string
-  name: string
+  services: ResourceRef[]
   onOpenReachability: () => void
 }) {
-  const { relationships } = useResource<unknown>(kind, namespace, name)
-  const services = relationships?.services ?? []
   if (services.length === 0) return null
   return (
     <Section title="Diagnose network path">
