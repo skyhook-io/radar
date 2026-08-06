@@ -68,6 +68,15 @@ type PolicyReportStatus struct {
 	ReasonCode string        `json:"reasonCode,omitempty"`
 	// ObservedCount is the number of report objects the pre-warmup probe
 	// counted across the selected groups. -1 when the probe could not run.
+	//
+	// It is a BOOT-TIME SNAPSHOT and does not track growth. The probe runs
+	// once, inside warmup's sync.Once; the debounced rebuild re-lists and
+	// lets Index.Replace truncate to the cap without re-counting. So a
+	// cluster that starts under the cap and later grows past it keeps
+	// reporting `ready` with a stale count while findings are silently
+	// dropped. Don't render this as a live number, and don't infer
+	// "under the cap" from it. Making post-warmup truncation observable is
+	// the actual fix and belongs with the multi-engine retention work.
 	ObservedCount int `json:"observedCount"`
 	Cap           int `json:"cap"`
 	// WatchedGroups are the API groups actually being watched, e.g.
