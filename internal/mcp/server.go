@@ -21,6 +21,12 @@ func newServer(includeWrites bool) *mcpsdk.Server {
 		nil,
 	)
 
+	// Repair recognisable argument-name mistakes before schema validation, and
+	// report the accepted argument names when validation still fails. Every tool
+	// schema is additionalProperties:false, so without this one wrong argument
+	// name is an unrecoverable dead end for an agent. See toolparams.go.
+	server.AddReceivingMiddleware(paramRepairMiddleware)
+
 	registerTools(server, includeWrites)
 	registerResources(server)
 
