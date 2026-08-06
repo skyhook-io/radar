@@ -348,7 +348,11 @@ rules:
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.kyverno }}
-  - apiGroups: ["kyverno.io", "wgpolicyk8s.io", "reports.kyverno.io", "openreports.io"]
+  # policies.kyverno.io is Kyverno's modern CEL policy family (ValidatingPolicy
+  # et al.), which replaces the kyverno.io Policy/ClusterPolicy types whose
+  # removal is planned for Kyverno 1.20. Without this grant a modern-only
+  # cluster's policies 403 and silently never appear.
+  - apiGroups: ["kyverno.io", "policies.kyverno.io", "wgpolicyk8s.io", "reports.kyverno.io", "openreports.io"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}

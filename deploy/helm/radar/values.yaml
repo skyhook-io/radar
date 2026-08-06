@@ -152,7 +152,7 @@ rbac:
     kubeshark: true         # kubeshark.io
     kubevirt: true          # kubevirt.io (VirtualMachines/VMIs) + cdi/clone/export/instancetype/migrations/pool/snapshot.kubevirt.io
     kured: true             # kured.io
-    kyverno: true           # kyverno.io, wgpolicyk8s.io, reports.kyverno.io, openreports.io
+    kyverno: true           # kyverno.io, policies.kyverno.io (modern CEL policy family), wgpolicyk8s.io, reports.kyverno.io, openreports.io
     mariadb: true           # mariadb.mmontes.io
     networkPolicyApi: true  # policy.networking.k8s.io (Admin/Baseline/ClusterNetworkPolicy — SIG-network)
     nginx: true             # nginx.org

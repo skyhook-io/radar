@@ -153,6 +153,7 @@ import { ResourceClaimCell, ResourceClaimTemplateCell, DeviceClassCell, Resource
 import { NvidiaClusterPolicyCell, NvidiaDriverCell } from './renderers/nvidia-cells'
 import { ServiceMonitorCell, PrometheusRuleCell, PodMonitorCell } from './renderers/prometheus-cells'
 import { PolicyReportCell, ClusterPolicyReportCell, KyvernoPolicyCell, ClusterPolicyCell } from './renderers/kyverno-cells'
+import { KyvernoModernPolicyCell, KyvernoPolicyExceptionCell, KyvernoCleanupPolicyCell } from './renderers/kyverno-modern-cells'
 import { ExternalSecretCell, ClusterExternalSecretCell, SecretStoreCell, ClusterSecretStoreCell } from './renderers/eso-cells'
 import { BackupCell, RestoreCell, ScheduleCell, BackupStorageLocationCell } from './renderers/velero-cells'
 import { CNPGClusterCell, CNPGBackupCell, CNPGScheduledBackupCell, CNPGPoolerCell } from './renderers/cnpg-cells'
@@ -733,6 +734,104 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'action', label: 'Action', width: 'w-24', tooltip: 'Validation failure action (Enforce or Audit)' },
     { key: 'rules', label: 'Rules', width: 'w-16' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  // Kyverno modern CEL family (policies.kyverno.io). "Enforcement" is the
+  // effective posture, not spec.validationActions verbatim — a policy that
+  // declares Deny with admission evaluation disabled blocks nothing.
+  validatingpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Enforcement', width: 'w-32', tooltip: 'Effective enforcement posture, accounting for whether admission evaluation is enabled' },
+    { key: 'appliesTo', label: 'Applies To', width: 'min-w-40', tooltip: 'Resources matched by spec.matchConstraints' },
+    { key: 'rules', label: 'Rules', width: 'w-16', tooltip: 'CEL validation expressions' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  namespacedvalidatingpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Enforcement', width: 'w-32', tooltip: 'Effective enforcement posture, accounting for whether admission evaluation is enabled' },
+    { key: 'appliesTo', label: 'Applies To', width: 'min-w-40' },
+    { key: 'rules', label: 'Rules', width: 'w-16' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  imagevalidatingpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Enforcement', width: 'w-32' },
+    { key: 'images', label: 'Images', width: 'min-w-40', tooltip: 'Image references this policy verifies' },
+    { key: 'attestors', label: 'Attestors', width: 'w-20', tooltip: 'Trusted signing authorities' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  namespacedimagevalidatingpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Enforcement', width: 'w-32' },
+    { key: 'images', label: 'Images', width: 'min-w-40' },
+    { key: 'attestors', label: 'Attestors', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  mutatingpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Enforcement', width: 'w-32' },
+    { key: 'appliesTo', label: 'Applies To', width: 'min-w-40' },
+    { key: 'rules', label: 'Mutations', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  namespacedmutatingpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Enforcement', width: 'w-32' },
+    { key: 'appliesTo', label: 'Applies To', width: 'min-w-40' },
+    { key: 'rules', label: 'Mutations', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  generatingpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Enforcement', width: 'w-32' },
+    { key: 'appliesTo', label: 'Applies To', width: 'min-w-40' },
+    { key: 'rules', label: 'Generates', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  namespacedgeneratingpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Enforcement', width: 'w-32' },
+    { key: 'appliesTo', label: 'Applies To', width: 'min-w-40' },
+    { key: 'rules', label: 'Generates', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  deletingpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'schedule', label: 'Schedule', width: 'w-32', tooltip: 'Cron schedule on which matched resources are deleted' },
+    { key: 'appliesTo', label: 'Deletes', width: 'min-w-40' },
+    { key: 'rules', label: 'Conditions', width: 'w-24', tooltip: 'CEL conditions narrowing what is deleted; none means every matched resource' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  namespaceddeletingpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'schedule', label: 'Schedule', width: 'w-32' },
+    { key: 'appliesTo', label: 'Deletes', width: 'min-w-40' },
+    { key: 'rules', label: 'Conditions', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  policyexceptions: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Exempts', width: 'w-28', tooltip: 'How many policies this exception bypasses' },
+    { key: 'policies', label: 'Policies', width: 'min-w-40' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  cleanuppolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'schedule', label: 'Schedule', width: 'w-32' },
+    { key: 'appliesTo', label: 'Deletes', width: 'min-w-40' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  clustercleanuppolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'schedule', label: 'Schedule', width: 'w-32' },
+    { key: 'appliesTo', label: 'Deletes', width: 'min-w-40' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   grpcroutes: [
@@ -5617,6 +5716,24 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       return <KyvernoPolicyCell resource={resource} column={column} />
     case 'clusterpolicies':
       return <ClusterPolicyCell resource={resource} column={column} />
+    // Kyverno modern CEL family — all ten kinds share one cell component;
+    // the per-family differences are resolved inside it.
+    case 'validatingpolicies':
+    case 'namespacedvalidatingpolicies':
+    case 'imagevalidatingpolicies':
+    case 'namespacedimagevalidatingpolicies':
+    case 'mutatingpolicies':
+    case 'namespacedmutatingpolicies':
+    case 'generatingpolicies':
+    case 'namespacedgeneratingpolicies':
+    case 'deletingpolicies':
+    case 'namespaceddeletingpolicies':
+      return <KyvernoModernPolicyCell resource={resource} column={column} />
+    case 'policyexceptions':
+      return <KyvernoPolicyExceptionCell resource={resource} column={column} />
+    case 'cleanuppolicies':
+    case 'clustercleanuppolicies':
+      return <KyvernoCleanupPolicyCell resource={resource} column={column} />
     // Trivy Operator
     case 'vulnerabilityreports':
       return <VulnerabilityReportCell resource={resource} column={column} />

@@ -30,6 +30,11 @@ import {
   Cylinder,
   Database,
   FileSearch,
+  Fingerprint,
+  Wand2,
+  Sparkles,
+  Trash2,
+  ShieldOff,
 
   // Cluster
   Cpu,
@@ -226,6 +231,26 @@ const KIND_ICON_MAP: Record<string, LucideIcon> = {
   azuremachine: Cpu,
   azuremachinetemplate: Cpu,
   azuremanagedcluster: Server,
+
+  // Kyverno — legacy kyverno.io family, modern policies.kyverno.io CEL
+  // family, and the wgpolicyk8s.io reports every engine writes into.
+  policy: Shield,
+  clusterpolicy: Shield,
+  policyreport: FileSearch,
+  clusterpolicyreport: FileSearch,
+  validatingpolicy: ShieldCheck,
+  namespacedvalidatingpolicy: ShieldCheck,
+  imagevalidatingpolicy: Fingerprint,
+  namespacedimagevalidatingpolicy: Fingerprint,
+  mutatingpolicy: Wand2,
+  namespacedmutatingpolicy: Wand2,
+  generatingpolicy: Sparkles,
+  namespacedgeneratingpolicy: Sparkles,
+  deletingpolicy: Trash2,
+  namespaceddeletingpolicy: Trash2,
+  policyexception: ShieldOff,
+  cleanuppolicy: Trash2,
+  clustercleanuppolicy: Trash2,
 
   // Trivy Operator
   vulnerabilityreport: Shield,

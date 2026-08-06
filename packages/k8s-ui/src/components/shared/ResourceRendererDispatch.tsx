@@ -51,6 +51,16 @@ import { getNodePoolStatus, getNodeClaimStatus, getEC2NodeClassStatus } from '..
 import { getScaledObjectStatus, getScaledJobStatus } from '../resources/resource-utils-keda'
 import { getServiceMonitorStatus, getPrometheusRuleStatus, getPodMonitorStatus } from '../resources/resource-utils-prometheus'
 import { getPolicyReportStatus, getKyvernoPolicyStatus } from '../resources/resource-utils-kyverno'
+import {
+  KYVERNO_MODERN_PLURALS,
+  getModernKyvernoPolicyStatus,
+  isModernKyvernoPolicy,
+} from '../resources/resource-utils-kyverno-modern'
+import {
+  getKyvernoCleanupPolicyStatus,
+  getKyvernoPolicyExceptionStatus,
+  isAnyKyvernoPolicyException,
+} from '../resources/resource-utils-kyverno-exceptions'
 import { getResourceClaimStatus, getResourceClaimTemplateStatus, getDeviceClassStatus, getResourceSliceStatus } from '../resources/resource-utils-dra'
 import { getNvidiaClusterPolicyStatus, getNvidiaDriverStatus } from '../resources/resource-utils-nvidia'
 import { getBackupStatus, getRestoreStatus, getScheduleStatus, getBSLStatus } from '../resources/resource-utils-velero'
@@ -140,6 +150,13 @@ import {
   PodMonitorRenderer,
   PolicyReportRenderer,
   KyvernoPolicyRenderer,
+  KyvernoValidatingPolicyRenderer,
+  KyvernoImageValidatingPolicyRenderer,
+  KyvernoMutatingPolicyRenderer,
+  KyvernoGeneratingPolicyRenderer,
+  KyvernoDeletingPolicyRenderer,
+  KyvernoPolicyExceptionRenderer,
+  KyvernoCleanupPolicyRenderer,
   VeleroBackupRenderer,
   VeleroRestoreRenderer,
   VeleroScheduleRenderer,
@@ -339,6 +356,13 @@ const KNOWN_KINDS = new Set([
   'triggerauthentications', 'clustertriggerauthentications',
   'servicemonitors', 'prometheusrules', 'podmonitors',
   'policyreports', 'clusterpolicyreports', 'kyvernopolicies', 'clusterpolicies',
+  // Kyverno modern CEL family (policies.kyverno.io) + its namespaced twins.
+  'validatingpolicies', 'namespacedvalidatingpolicies',
+  'imagevalidatingpolicies', 'namespacedimagevalidatingpolicies',
+  'mutatingpolicies', 'namespacedmutatingpolicies',
+  'generatingpolicies', 'namespacedgeneratingpolicies',
+  'deletingpolicies', 'namespaceddeletingpolicies',
+  'policyexceptions', 'cleanuppolicies', 'clustercleanuppolicies',
   'resourceclaims', 'resourceclaimtemplates', 'deviceclasses', 'resourceslices',
   'nvidiadrivers',
   'vulnerabilityreports', 'configauditreports', 'exposedsecretreports',
@@ -488,6 +512,27 @@ export function ResourceRendererDispatch({
   )
   const crossplaneCollisionFallthrough = isCollisionGatedKind && !crossplaneApiVersionMatched
 
+  // Kyverno's modern CEL family uses plurals generic enough that another
+  // vendor could ship the same ones (`validatingpolicies`, `mutatingpolicies`,
+  // `generatingpolicies`, ...), and `policyexceptions` collides with Kyverno
+  // ITSELF — the same Kind and plural exists in both kyverno.io and
+  // policies.kyverno.io with different spec shapes. Every render line below is
+  // therefore group-gated, which means each needs the same fall-through the
+  // Crossplane block documents above: without it a foreign CR with a colliding
+  // plural matches no renderer and, being in KNOWN_KINDS, renders blank.
+  const isKyvernoModernPlural = KYVERNO_MODERN_PLURALS.has(kind)
+  const kyvernoModernMatched = isKyvernoModernPlural && isModernKyvernoPolicy(data)
+  const isKyvernoLegacyExtraPlural = kind === 'cleanuppolicies' || kind === 'clustercleanuppolicies'
+  const kyvernoLegacyExtraMatched =
+    isKyvernoLegacyExtraPlural && data?.apiVersion?.startsWith('kyverno.io/')
+  // PolicyException is served by both families; either group is a match.
+  const isPolicyExceptionPlural = kind === 'policyexceptions'
+  const policyExceptionMatched = isPolicyExceptionPlural && isAnyKyvernoPolicyException(data)
+  const kyvernoCollisionFallthrough =
+    (isKyvernoModernPlural && !kyvernoModernMatched) ||
+    (isKyvernoLegacyExtraPlural && !kyvernoLegacyExtraMatched) ||
+    (isPolicyExceptionPlural && !policyExceptionMatched)
+
   const isKnownKind = KNOWN_KINDS.has(kind) || isCrossplaneMR || isCrossplaneClaim || isCrossplaneXR
 
   const PodComp = rendererOverrides?.PodRenderer ?? PodRenderer
@@ -594,6 +639,15 @@ export function ResourceRendererDispatch({
         {(kind === 'policyreports' || kind === 'clusterpolicyreports') && <PolicyReportRenderer data={data} />}
         {(kind === 'kyvernopolicies' || (kind === 'clusterpolicies' && !data?.apiVersion?.startsWith('nvidia.com/'))) && <KyvernoPolicyRenderer data={data} />}
         {(kind === 'clusterpolicies' && data?.apiVersion?.startsWith('nvidia.com/')) && <NvidiaClusterPolicyRenderer data={data} />}
+        {/* Kyverno modern CEL family. Each Namespaced* twin shares its
+            cluster-scoped counterpart's renderer — same spec, narrower scope. */}
+        {kyvernoModernMatched && (kind === 'validatingpolicies' || kind === 'namespacedvalidatingpolicies') && <KyvernoValidatingPolicyRenderer data={data} />}
+        {kyvernoModernMatched && (kind === 'imagevalidatingpolicies' || kind === 'namespacedimagevalidatingpolicies') && <KyvernoImageValidatingPolicyRenderer data={data} />}
+        {kyvernoModernMatched && (kind === 'mutatingpolicies' || kind === 'namespacedmutatingpolicies') && <KyvernoMutatingPolicyRenderer data={data} />}
+        {kyvernoModernMatched && (kind === 'generatingpolicies' || kind === 'namespacedgeneratingpolicies') && <KyvernoGeneratingPolicyRenderer data={data} />}
+        {kyvernoModernMatched && (kind === 'deletingpolicies' || kind === 'namespaceddeletingpolicies') && <KyvernoDeletingPolicyRenderer data={data} />}
+        {policyExceptionMatched && <KyvernoPolicyExceptionRenderer data={data} />}
+        {kyvernoLegacyExtraMatched && <KyvernoCleanupPolicyRenderer data={data} />}
         {kind === 'nvidiadrivers' && <NvidiaDriverRenderer data={data} />}
         {/* DRA (resource.k8s.io) */}
         {kind === 'resourceclaims' && <ResourceClaimRenderer data={data} onNavigate={onNavigate} />}
@@ -706,7 +760,7 @@ export function ResourceRendererDispatch({
             for known-plural collisions where no apiVersion-gated renderer
             matched (e.g. a Knative Configuration sharing the `configurations`
             plural with Crossplane Configuration). */}
-        {(!isKnownKind || crossplaneCollisionFallthrough) && <GenericRenderer data={data} />}
+        {(!isKnownKind || crossplaneCollisionFallthrough || kyvernoCollisionFallthrough) && <GenericRenderer data={data} />}
 
         {/* Common sections - can be disabled when parent handles them separately */}
         {showCommonSections && (
@@ -832,6 +886,14 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'kyvernopolicies' || k === 'clusterpolicies') {
     if (data?.apiVersion?.startsWith('nvidia.com/')) return getNvidiaClusterPolicyStatus(data)
     return getKyvernoPolicyStatus(data)
+  }
+  // Modern CEL family — group-gated so a foreign CRD sharing one of these
+  // generic plurals falls through to the default status rather than being
+  // described in Kyverno's vocabulary.
+  if (KYVERNO_MODERN_PLURALS.has(k) && isModernKyvernoPolicy(data)) return getModernKyvernoPolicyStatus(data)
+  if (k === 'policyexceptions' && isAnyKyvernoPolicyException(data)) return getKyvernoPolicyExceptionStatus(data)
+  if ((k === 'cleanuppolicies' || k === 'clustercleanuppolicies') && data?.apiVersion?.startsWith('kyverno.io/')) {
+    return getKyvernoCleanupPolicyStatus(data)
   }
   if (k === 'nvidiadrivers') return getNvidiaDriverStatus(data)
   if (k === 'resourceclaims') return getResourceClaimStatus(data)
