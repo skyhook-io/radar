@@ -203,10 +203,13 @@ func structJSONFields(t reflect.Type) (accepted, required []string) {
 }
 
 // toSnake and toCamel convert between the two spellings of a multi-word
-// argument name. radar is snake_case nearly everywhere (dry_run, tail_lines,
-// resource_namespace) but manage_gitops uses camelCase (dryRun, applyOnly,
-// syncOptions, historyId). An agent that learned `dry_run` from apply_resource
-// is otherwise hard-rejected by manage_gitops for the same concept.
+// argument name.
+//
+// radar publishes snake_case throughout (dry_run, tail_lines,
+// resource_namespace), matching Anthropic's own agent tooling and kubectl's
+// flags. Most third-party MCP servers publish camelCase, and Kubernetes
+// manifests use it too, so camelCase is a very common agent guess. Repair
+// absorbs it rather than rejecting a call over spelling.
 func toSnake(s string) string {
 	var b strings.Builder
 	for i, r := range s {

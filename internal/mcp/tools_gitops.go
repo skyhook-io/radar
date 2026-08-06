@@ -23,13 +23,13 @@ type manageGitOpsInput struct {
 	// ArgoCD sync options (all optional; ignored for FluxCD).
 	Revision    string   `json:"revision,omitempty" jsonschema:"sync only — branch/tag/commit. Empty = use targetRevision."`
 	Prune       *bool    `json:"prune,omitempty" jsonschema:"sync/rollback — delete resources no longer in source. Default true for sync, false for rollback."`
-	DryRun      *bool    `json:"dryRun,omitempty" jsonschema:"sync/rollback — preview only, do not apply."`
+	DryRun      *bool    `json:"dry_run,omitempty" jsonschema:"sync/rollback — preview only, do not apply."`
 	Force       *bool    `json:"force,omitempty" jsonschema:"sync only — kubectl --force; required for some immutable-field changes."`
-	ApplyOnly   *bool    `json:"applyOnly,omitempty" jsonschema:"sync only — skip PreSync/PostSync/SyncFail hooks."`
-	SyncOptions []string `json:"syncOptions,omitempty" jsonschema:"sync only — Argo SyncOption strings, e.g. Replace=true, ServerSideApply=true."`
+	ApplyOnly   *bool    `json:"apply_only,omitempty" jsonschema:"sync only — skip PreSync/PostSync/SyncFail hooks."`
+	SyncOptions []string `json:"sync_options,omitempty" jsonschema:"sync only — Argo SyncOption strings, e.g. Replace=true, ServerSideApply=true."`
 
 	// ArgoCD rollback options (rollback only).
-	HistoryID int64 `json:"historyId,omitempty" jsonschema:"rollback only — history entry ID to roll back to (from get_resource Application status.history)."`
+	HistoryID int64 `json:"history_id,omitempty" jsonschema:"rollback only — history entry ID to roll back to (from get_resource Application status.history)."`
 }
 
 // GitOps tool handler
@@ -71,7 +71,7 @@ func handleManageGitOps(ctx context.Context, req *mcp.CallToolRequest, input man
 			result, err = gitops.TerminateArgoSync(ctx, dynClient, input.Namespace, input.Name)
 		case "rollback":
 			if input.HistoryID <= 0 {
-				return nil, nil, fmt.Errorf("rollback requires historyId (positive integer from Application status.history[].id)")
+				return nil, nil, fmt.Errorf("rollback requires history_id (positive integer from Application status.history[].id)")
 			}
 			result, err = gitops.RollbackArgoApp(ctx, dynClient, input.Namespace, input.Name, gitops.ArgoRollbackOptions{
 				ID:     input.HistoryID,
@@ -153,19 +153,19 @@ func validateGitOpsActionInput(action string, in manageGitOpsInput) error {
 		rejected = append(rejected, "prune")
 	}
 	if !u.dryRun && in.DryRun != nil {
-		rejected = append(rejected, "dryRun")
+		rejected = append(rejected, "dry_run")
 	}
 	if !u.force && in.Force != nil {
 		rejected = append(rejected, "force")
 	}
 	if !u.applyOnly && in.ApplyOnly != nil {
-		rejected = append(rejected, "applyOnly")
+		rejected = append(rejected, "apply_only")
 	}
 	if !u.syncOptions && len(in.SyncOptions) > 0 {
-		rejected = append(rejected, "syncOptions")
+		rejected = append(rejected, "sync_options")
 	}
 	if !u.historyID && in.HistoryID != 0 {
-		rejected = append(rejected, "historyId")
+		rejected = append(rejected, "history_id")
 	}
 	if len(rejected) > 0 {
 		return fmt.Errorf("action %q does not accept fields: %s", action, strings.Join(rejected, ", "))

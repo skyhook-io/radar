@@ -67,10 +67,16 @@ func TestOrthographicRepairCrossesTheSnakeCamelSplit(t *testing.T) {
 	// radar is snake_case nearly everywhere but manage_gitops uses camelCase.
 	// An agent that learned dry_run from apply_resource must not be rejected by
 	// manage_gitops for the same concept, and vice versa.
+	// radar is uniformly snake_case, so repair absorbs the camelCase spelling an
+	// agent is most likely to guess — camelCase is what most third-party MCP
+	// servers publish, and what Kubernetes itself uses in manifests.
 	cases := []struct{ tool, supplied, want string }{
-		{"manage_gitops", "dry_run", "dryRun"},
+		{"manage_gitops", "dryRun", "dry_run"},
+		{"manage_gitops", "historyId", "history_id"},
+		{"manage_gitops", "syncOptions", "sync_options"},
 		{"apply_resource", "dryRun", "dry_run"},
 		{"patch_resource", "dryRun", "dry_run"},
+		{"get_workload_logs", "tailLines", "tail_lines"},
 	}
 	for _, tc := range cases {
 		raw := json.RawMessage(`{"` + tc.supplied + `":true}`)
@@ -483,13 +489,13 @@ func checkToolAgainstRegistry(t *testing.T, tool *mcpsdk.Tool) {
 // adding more.
 //
 // If this fails on a tool you just added: rename the parameter to snake_case.
-// Only extend the grandfathered list to keep a published schema stable.
 func TestParameterNamingStaysConsistent(t *testing.T) {
 	registerToolsOnce(t)
 
-	grandfathered := map[string][]string{
-		"manage_gitops": {"dryRun", "applyOnly", "syncOptions", "historyId"},
-	}
+	// No exceptions: every radar parameter is snake_case. Keep it that way —
+	// a lone camelCase outlier is what made an agent that learned `dry_run`
+	// from apply_resource get hard-rejected by manage_gitops.
+	grandfathered := map[string][]string{}
 
 	for tool, params := range toolParamNames {
 		for _, p := range params {
