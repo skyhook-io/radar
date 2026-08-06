@@ -1319,7 +1319,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'cluster', label: 'Cluster', width: 'w-36' },
     { key: 'type', label: 'Type', width: 'w-16' },
     { key: 'poolMode', label: 'Pool Mode', width: 'w-32' },
-    { key: 'instances', label: 'Instances', width: 'w-28', tooltip: 'Ready/Total' },
+    // status.instances counts pods trying to be scheduled, not ready ones.
+    { key: 'instances', label: 'Instances', width: 'w-28', tooltip: 'Scheduled/Total' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   // ============================================================================

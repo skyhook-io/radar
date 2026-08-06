@@ -784,7 +784,7 @@ They roll up under two categories: `backup_failed` for runs, and `backup_target_
 
 **Pooler Detail View:**
 - Type (read-write/read-only) with colored badge, pool mode
-- Instances scheduled/desired
+- Instances scheduled/desired (not readiness — see below)
 - Cluster reference with clickable link
 - PgBouncer parameters
 - Degraded state detection (AlertBanner when not all instances are scheduled)

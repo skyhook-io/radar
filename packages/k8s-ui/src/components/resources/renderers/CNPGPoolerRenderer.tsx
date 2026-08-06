@@ -17,8 +17,12 @@ interface CNPGPoolerRendererProps {
 
 export function CNPGPoolerRenderer({ data, onNavigate }: CNPGPoolerRendererProps) {
   const desired = data.spec?.instances ?? 0
-  const ready = data.status?.instances ?? 0
-  const isDegraded = desired > 0 && ready < desired
+  // status.instances is the number of pods trying to be SCHEDULED, not ready
+  // pods — a Pooler whose PgBouncer pods are all Pending still reports the full
+  // count. Naming it `ready` here is what let the banner claim a readiness the
+  // CR never establishes.
+  const scheduled = data.status?.instances ?? 0
+  const isDegraded = desired > 0 && scheduled < desired
   const clusterName = getCNPGPoolerCluster(data)
   const parameters = getCNPGPoolerParameters(data)
   const authQuery = getCNPGPoolerAuthQuery(data)
@@ -31,7 +35,7 @@ export function CNPGPoolerRenderer({ data, onNavigate }: CNPGPoolerRendererProps
         <AlertBanner
           variant="warning"
           title="Pooler Degraded"
-          message={`Only ${ready} of ${desired} pooler instances are ready.`}
+          message={`Only ${scheduled} of ${desired} pooler instances are scheduled. Readiness is tracked on the "${data.metadata?.name}" Deployment, not on the Pooler.`}
         />
       )}
 
@@ -40,7 +44,7 @@ export function CNPGPoolerRenderer({ data, onNavigate }: CNPGPoolerRendererProps
         <PropertyList>
           <Property label="Type" value={getCNPGPoolerType(data)} />
           <Property label="Pool Mode" value={getCNPGPoolerMode(data)} />
-          <Property label="Instances" value={getCNPGPoolerInstances(data)} />
+          <Property label="Instances Scheduled" value={getCNPGPoolerInstances(data)} />
         </PropertyList>
       </Section>
 

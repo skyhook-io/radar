@@ -163,7 +163,14 @@ const KIND: Record<string, string> = {
   // Contour
   HTTPProxy:            'bg-violet-100 text-violet-700 border-violet-300 dark:bg-violet-950/50 dark:text-violet-400 dark:border-violet-700/40',
 
-  // CloudNativePG
+  // CloudNativePG. CNPGCluster/CNPGBackup/CNPGScheduledBackup are topology
+  // pseudo-kinds (same convention as CAPICluster above) — getKindColorClass is
+  // keyed on the kind string alone, and the resource browser passes the real
+  // API kind, so those three are only reachable from topology. They are
+  // deliberately NOT registered under bare `Cluster`/`Backup`: those collide
+  // with CAPI and Velero, and Badge has no API group to disambiguate with, so
+  // a bare key would paint another operator's resource in Postgres colors.
+  // `Pooler` is unambiguous, so it resolves everywhere.
   CNPGCluster:          'bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-950/50 dark:text-sky-400 dark:border-sky-700/40',
   CNPGBackup:           'bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-950/50 dark:text-sky-400 dark:border-sky-700/40',
   CNPGScheduledBackup:  'bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-950/50 dark:text-sky-400 dark:border-sky-700/40',
