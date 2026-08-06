@@ -450,6 +450,10 @@ func TestAliasGuardIsSubjectKindAware(t *testing.T) {
 		{"SA uppercase refused", `{"subject":"CleanupController","subjectKind":"ServiceAccount"}`, false},
 		{"SA leading dash refused", `{"subject":"-cleanup","subjectKind":"ServiceAccount"}`, false},
 		{"SA dotted name repairs", `{"subject":"cleanup.controller","subjectKind":"ServiceAccount"}`, true},
+		// The kind alias carries an enum, not a resource name. Applying the
+		// name validation to it would reject every correct call, since
+		// "ServiceAccount" is not a valid DNS-1123 subdomain.
+		{"kind alias is not name-validated", `{"subject":"cleanup","subjectKind":"ServiceAccount"}`, true},
 		// Case variants of the alias keys must resolve the kind the same way, or
 		// the result depends on Go's map iteration order.
 		{"capitalised keys, Group", `{"Subject":"system:authenticated","SubjectKind":"Group"}`, true},

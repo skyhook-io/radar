@@ -290,7 +290,11 @@ func repairToolArgs(tool string, raw json.RawMessage) (fixed json.RawMessage, re
 	// form is never silently reinterpreted.
 	resolve := func(key string, val json.RawMessage) string {
 		if alias, ok := perToolAliases[tool][strings.ToLower(key)]; ok && isAccepted(alias) {
-			if !aliasValueKeepsMeaning(subjectKind, val) {
+			// Only the subject NAME needs the value check. Aliases targeting
+			// `kind` carry an enum ("ServiceAccount", "User", "Group"), which is
+			// not a resource name — validating it as one would reject every
+			// correct call.
+			if alias == "name" && !aliasValueKeepsMeaning(subjectKind, val) {
 				return ""
 			}
 			return alias
