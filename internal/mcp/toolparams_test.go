@@ -16,7 +16,11 @@ import (
 // than a hand-written fixture.
 func registerToolsOnce(t *testing.T) {
 	t.Helper()
-	if len(toolParamNames) > 0 {
+	// Check for a specific tool rather than non-emptiness: a test that
+	// overwrites or removes one entry leaves the map populated, and a
+	// len()>0 guard would then skip the rebuild and hand later tests a
+	// registry missing exactly the tool they assert on.
+	if accepted, _ := lookupToolParams("get_subject_permissions"); len(accepted) > 0 {
 		return
 	}
 	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "radar", Version: "test"}, nil)
@@ -257,6 +261,11 @@ func TestMiddlewareDeliversRepairedArgsToHandler(t *testing.T) {
 	var got sentinelIn
 	var ran bool
 
+	// Snapshot BEFORE addTool overwrites the entry, or the restore below would
+	// put the sentinel's shape back instead of the real tool's.
+	registerToolsOnce(t)
+	prevAccepted, prevRequired := lookupToolParams("get_subject_permissions")
+
 	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "radar-test", Version: "test"}, nil)
 	server.AddReceivingMiddleware(paramRepairMiddleware)
 	addTool(server, &mcpsdk.Tool{Name: "get_subject_permissions", Description: "sentinel"},
@@ -264,13 +273,20 @@ func TestMiddlewareDeliversRepairedArgsToHandler(t *testing.T) {
 			ran, got = true, in
 			return &mcpsdk.CallToolResult{Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: "ok"}}}, nil, nil
 		})
+	// The registry is process-global and this sentinel deliberately overwrites a
+	// real tool's entry. Snapshot and RESTORE it rather than deleting: deleting
+	// leaves the map non-empty, so registerToolsOnce would skip rebuilding and
+	// every later alias test would silently run without this tool's schema.
 	t.Cleanup(func() {
-		// The registry is process-global; drop the sentinel's entry so test
-		// order cannot leak its shape into other tests.
 		toolParamsMu.Lock()
-		delete(toolParamNames, "get_subject_permissions")
-		delete(toolRequired, "get_subject_permissions")
-		toolParamsMu.Unlock()
+		defer toolParamsMu.Unlock()
+		if prevAccepted == nil {
+			delete(toolParamNames, "get_subject_permissions")
+			delete(toolRequired, "get_subject_permissions")
+			return
+		}
+		toolParamNames["get_subject_permissions"] = prevAccepted
+		toolRequired["get_subject_permissions"] = prevRequired
 	})
 
 	session := connectTo(t, server)
