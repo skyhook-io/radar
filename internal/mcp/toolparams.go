@@ -76,10 +76,10 @@ func lookupToolParams(tool string) (accepted, required []string) {
 // wrong answer. That is strictly worse than the rejection it replaced, and it
 // is the same false-negative class this file exists to remove.
 //
-// Only aliases whose value is plainly the same thing qualify, and only when
-// guarded by isPlainResourceName below. `pod` and `workload` were considered
-// and rejected: an agent may reasonably send `pod: "prod/api-0"` or
-// `workload: "deployment/api"`, which are not bare names.
+// Only aliases whose value means the same thing under the target parameter
+// qualify, as decided by aliasValueKeepsMeaning below. `pod` and `workload`
+// were considered and rejected: an agent may reasonably send
+// `pod: "prod/api-0"` or `workload: "deployment/api"`, which are not names.
 //
 // Cross-tool spelling differences do NOT belong here — those are pure
 // orthography and are handled generically below.
@@ -97,23 +97,58 @@ var perToolAliases = map[string]map[string]string{
 	},
 }
 
-// isPlainResourceName reports whether a value is an unqualified Kubernetes
-// name, and so means the same thing under an aliased parameter as under the
-// canonical one.
+// aliasValueKeepsMeaning reports whether moving val into the canonical
+// parameter preserves what the caller meant.
 //
-// A qualified form — "system:serviceaccount:prod:cleanup", "prod/api-0",
-// "deployment/api" — carries structure the target parameter does not parse, so
-// renaming it would turn a rejected call into a confidently wrong lookup.
-// Those are left for the validator to reject, with help attached.
-func isPlainResourceName(raw json.RawMessage) bool {
+// What counts as safe depends on the subject kind, and getting this wrong in
+// either direction is a bug:
+//
+//   - ServiceAccount names are DNS subdomains. A qualified value like
+//     "prod/cleanup" or "system:serviceaccount:prod:cleanup" is NOT a
+//     ServiceAccount name; renaming it to `name` would pass validation and make
+//     the handler look up a resource that cannot exist, reporting "no bindings"
+//     for a subject that has them — the false negative this file exists to
+//     remove.
+//   - User and Group names are opaque identities where those same characters
+//     are normal and correct: "system:authenticated" is a real Group, and
+//     "system:serviceaccount:prod:cleanup" is the canonical *User* name for a
+//     ServiceAccount identity. Rejecting those would refuse to repair calls
+//     that were right all along.
+//
+// args is the full argument object so the kind can be resolved from whichever
+// spelling the caller used. When the kind is absent or unrecognised, the strict
+// ServiceAccount rule applies — that is the kind these tools are asked about
+// most, and being conservative only costs a rejection with help attached.
+func aliasValueKeepsMeaning(args map[string]json.RawMessage, val json.RawMessage) bool {
 	var s string
-	if err := json.Unmarshal(raw, &s); err != nil {
-		return false // non-string values are never a bare name
+	if err := json.Unmarshal(val, &s); err != nil || s == "" {
+		return false // non-string and empty values are never a name
 	}
-	if s == "" {
-		return false
+	if strings.ContainsAny(s, " \t\n") {
+		return false // whitespace is not part of any of these identities
 	}
-	return !strings.ContainsAny(s, ":/ ")
+
+	switch strings.ToLower(subjectKindOf(args)) {
+	case "user", "group":
+		return true // opaque identity; ":" and "/" are legitimate
+	default:
+		return !strings.ContainsAny(s, ":/")
+	}
+}
+
+// subjectKindOf reads the subject kind from whichever spelling is present.
+func subjectKindOf(args map[string]json.RawMessage) string {
+	for _, key := range []string{"kind", "subjectKind", "subject_kind", "subjectkind"} {
+		raw, ok := args[key]
+		if !ok {
+			continue
+		}
+		var s string
+		if err := json.Unmarshal(raw, &s); err == nil {
+			return s
+		}
+	}
+	return ""
 }
 
 // addTool registers a tool and records its accepted argument names.
@@ -227,7 +262,7 @@ func repairToolArgs(tool string, raw json.RawMessage) (fixed json.RawMessage, re
 	// form is never silently reinterpreted.
 	resolve := func(key string, val json.RawMessage) string {
 		if alias, ok := perToolAliases[tool][strings.ToLower(key)]; ok && isAccepted(alias) {
-			if !isPlainResourceName(val) {
+			if !aliasValueKeepsMeaning(args, val) {
 				return ""
 			}
 			return alias
@@ -257,6 +292,14 @@ func repairToolArgs(tool string, raw json.RawMessage) (fixed json.RawMessage, re
 		delete(args, key)
 		args[target] = val
 		repairs = append(repairs, fmt.Sprintf("%s->%s", key, target))
+	}
+	// Missing required arguments are the other guaranteed validation failure.
+	// Detecting them here means the help attaches without parsing SDK text.
+	_, required := lookupToolParams(tool)
+	for _, req := range required {
+		if _, ok := args[req]; !ok {
+			unresolved = append(unresolved, "(missing "+req+")")
+		}
 	}
 	slices.Sort(repairs)
 	slices.Sort(unresolved)

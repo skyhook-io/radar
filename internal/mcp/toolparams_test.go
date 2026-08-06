@@ -239,26 +239,123 @@ func TestMiddlewareAnnotatesRealSDKRejection(t *testing.T) {
 	}
 }
 
-// TestMiddlewareRepairsThroughRealSDK proves repair happens early enough to
-// satisfy validation — the whole design rests on running before the SDK's
-// schema check, which a unit test of repairToolArgs alone cannot show.
-func TestMiddlewareRepairsThroughRealSDK(t *testing.T) {
+// TestMiddlewareDeliversRepairedArgsToHandler proves a repaired call actually
+// reaches the handler carrying the canonical names.
+//
+// Asserting only that a schema error is absent would pass even if the call were
+// dropped or rewritten wrongly, so this registers a sentinel tool and inspects
+// exactly what its handler received.
+func TestMiddlewareDeliversRepairedArgsToHandler(t *testing.T) {
 	ctx := context.Background()
-	session := connectTestServer(t)
 
+	type sentinelIn struct {
+		Kind      string `json:"kind"`
+		Name      string `json:"name"`
+		Namespace string `json:"namespace,omitempty"`
+		DryRun    bool   `json:"dry_run,omitempty"`
+	}
+	var got sentinelIn
+	var ran bool
+
+	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "radar-test", Version: "test"}, nil)
+	server.AddReceivingMiddleware(paramRepairMiddleware)
+	addTool(server, &mcpsdk.Tool{Name: "get_subject_permissions", Description: "sentinel"},
+		func(_ context.Context, _ *mcpsdk.CallToolRequest, in sentinelIn) (*mcpsdk.CallToolResult, any, error) {
+			ran, got = true, in
+			return &mcpsdk.CallToolResult{Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: "ok"}}}, nil, nil
+		})
+	t.Cleanup(func() {
+		// The registry is process-global; drop the sentinel's entry so test
+		// order cannot leak its shape into other tests.
+		toolParamsMu.Lock()
+		delete(toolParamNames, "get_subject_permissions")
+		delete(toolRequired, "get_subject_permissions")
+		toolParamsMu.Unlock()
+	})
+
+	session := connectTo(t, server)
 	res, err := session.CallTool(ctx, &mcpsdk.CallToolParams{
 		Name: "get_subject_permissions",
-		// The benchmark's exact argument names.
-		Arguments: map[string]any{"namespace": "kube-system", "subject": "sa", "subjectKind": "ServiceAccount"},
+		// The benchmark's exact argument names, plus a camelCase spelling.
+		Arguments: map[string]any{
+			"namespace":   "hotel-reservation",
+			"subject":     "cleanup-controller",
+			"subjectKind": "ServiceAccount",
+			"dryRun":      true,
+		},
 	})
 	if err != nil {
 		t.Fatalf("CallTool: %v", err)
 	}
-	// Without repair this is rejected before the handler runs. With repair it
-	// reaches the handler, which may still fail for lack of a cluster — but the
-	// failure must no longer be a schema rejection.
-	if text := renderContent(res.Content); strings.Contains(text, `validating "arguments"`) {
-		t.Errorf("repaired call was still rejected by schema validation:\n%s", text)
+	if res.IsError {
+		t.Fatalf("repaired call was rejected: %s", renderContent(res.Content))
+	}
+	if !ran {
+		t.Fatal("handler never ran — the repaired call did not get through")
+	}
+	want := sentinelIn{Kind: "ServiceAccount", Name: "cleanup-controller", Namespace: "hotel-reservation", DryRun: true}
+	if got != want {
+		t.Errorf("handler received %+v, want %+v", got, want)
+	}
+}
+
+// TestMiddlewareAnnotatesMissingRequiredArgument covers the other guaranteed
+// validation failure. It is detected structurally from the registry, so the help
+// attaches without depending on the SDK's wording.
+func TestMiddlewareAnnotatesMissingRequiredArgument(t *testing.T) {
+	ctx := context.Background()
+	session := connectTestServer(t)
+
+	// `name` is required and omitted.
+	res, err := session.CallTool(ctx, &mcpsdk.CallToolParams{
+		Name:      "get_subject_permissions",
+		Arguments: map[string]any{"kind": "ServiceAccount", "namespace": "kube-system"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected a missing required argument to fail")
+	}
+	if text := renderContent(res.Content); !strings.Contains(text, "accepts:") {
+		t.Errorf("missing-required failure was not annotated:\n%s", text)
+	}
+}
+
+// TestAliasGuardIsSubjectKindAware pins the boundary in both directions.
+//
+// ServiceAccount names are DNS subdomains, so a qualified value is not a name
+// and must not be moved into `name`. User and Group names are opaque identities
+// where the same characters are correct — "system:serviceaccount:ns:sa" is the
+// canonical User name for a ServiceAccount identity, and refusing to repair it
+// would reject a call that was right all along.
+func TestAliasGuardIsSubjectKindAware(t *testing.T) {
+	registerToolsOnce(t)
+
+	cases := []struct {
+		name, args string
+		repaired   bool
+	}{
+		{"SA bare name repairs", `{"subject":"cleanup","subjectKind":"ServiceAccount"}`, true},
+		{"SA qualified refused", `{"subject":"system:serviceaccount:p:c","subjectKind":"ServiceAccount"}`, false},
+		{"SA slashed refused", `{"subject":"prod/cleanup","subjectKind":"ServiceAccount"}`, false},
+		{"User qualified repairs", `{"subject":"system:serviceaccount:p:c","subjectKind":"User"}`, true},
+		{"Group qualified repairs", `{"subject":"system:authenticated","subjectKind":"Group"}`, true},
+		{"unknown kind is strict", `{"subject":"system:authenticated"}`, false},
+		{"whitespace always refused", `{"subject":"two words","subjectKind":"User"}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fixed, _, _ := repairToolArgs("get_subject_permissions", json.RawMessage(tc.args))
+			var got map[string]json.RawMessage
+			if err := json.Unmarshal(fixed, &got); err != nil {
+				t.Fatal(err)
+			}
+			_, moved := got["name"]
+			if moved != tc.repaired {
+				t.Errorf("subject moved to name = %v, want %v (%s -> %s)", moved, tc.repaired, tc.args, fixed)
+			}
+		})
 	}
 }
 
@@ -277,9 +374,15 @@ func renderContent(content []mcpsdk.Content) string {
 // transport, so tests exercise the real middleware chain.
 func connectTestServer(t *testing.T) *mcpsdk.ClientSession {
 	t.Helper()
+	return connectTo(t, newServer(true))
+}
+
+// connectTo wires a client to an already-built server over an in-memory
+// transport, so tests exercise the real middleware chain.
+func connectTo(t *testing.T, server *mcpsdk.Server) *mcpsdk.ClientSession {
+	t.Helper()
 	ctx := context.Background()
 
-	server := newServer(true)
 	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "radar-test-client", Version: "test"}, nil)
 	serverTransport, clientTransport := mcpsdk.NewInMemoryTransports()
 	serverSession, err := server.Connect(ctx, serverTransport, nil)
