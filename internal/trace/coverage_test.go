@@ -2089,3 +2089,65 @@ func TestDuplicatePortNumber_IsNotAnIdentity(t *testing.T) {
 		t.Fatalf("the TCP side's own skip must be absorbed by the preserved TCP route, got %+v", skips)
 	}
 }
+
+// The PR contract both reviewers converged on: a transport-only TCP reach on
+// an HTTPS port must not swallow the HTTPS application-layer gap. Radar
+// in-cluster dials TCP directly and the HTTPS proxy skip must SURVIVE as a
+// counted gap - coverage reads "1 got through · 1 couldn't be tried", never a
+// clean pass with TLS/HTTP unrun.
+func TestComputeCoverage_TransportOnlyReachKeepsHTTPSGap(t *testing.T) {
+	httpsSkip := probe.SkippedCmd(probe.LayerHTTP, "port 8443 (https)", probe.VantageInCluster,
+		"HTTPS backend - the API-server proxy speaks plain HTTP and can't verify TLS on this port. Test it directly.", "")
+	httpsSkip.Path = probe.PathAPIServer
+	httpsSkip.Port = 8443
+	httpsSkip.SkipClass = SkipClassVantage
+	tr := &Trace{
+		Subject: ResourceRef{Kind: "Service", Namespace: "prod", Name: "secure-api"},
+		Downstream: []Hop{{
+			Resource: ResourceRef{Kind: "Service", Namespace: "prod", Name: "secure-api"},
+			Config:   &HopConfig{ClusterIP: "10.0.0.9", Ports: []PortMap{{Port: 8443, Name: "https"}}},
+			Probes: []probe.Result{
+				{Layer: probe.LayerTCP, Target: "10.0.0.9:8443", Port: 8443, Vantage: probe.VantageInCluster, Path: probe.PathData, OK: true, Tone: probe.ToneHealthy},
+				httpsSkip,
+			},
+		}},
+	}
+	computeCoverage(tr)
+	if len(tr.Routes) != 1 || tr.Routes[0].Outcome != OutcomeReached {
+		t.Fatalf("Routes = %+v, want one transport-reached route", tr.Routes)
+	}
+	kept := false
+	for _, s := range tr.NotTested {
+		if s.ReasonClass != SkipClassBenign && strings.Contains(s.Reason, "HTTPS backend") {
+			kept = true
+		}
+	}
+	if !kept {
+		t.Fatalf("NotTested = %+v, want the HTTPS app-layer gap kept beside the transport-only reach", tr.NotTested)
+	}
+	if tr.Coverage == nil || tr.Coverage.Passed != 1 || tr.Coverage.Skipped != 1 {
+		t.Fatalf("Coverage = %+v, want passed=1 skipped=1 (transport through, app layer untried)", tr.Coverage)
+	}
+	// The same skip beside a VERIFIED (real HTTP ran) route absorbs as before.
+	tr2 := &Trace{
+		Subject: ResourceRef{Kind: "Service", Namespace: "prod", Name: "web"},
+		Downstream: []Hop{{
+			Resource: ResourceRef{Kind: "Service", Namespace: "prod", Name: "web"},
+			Config:   &HopConfig{ClusterIP: "10.0.0.10", Ports: []PortMap{{Port: 80, Name: "http"}}},
+			Probes: []probe.Result{
+				{Layer: probe.LayerHTTP, Target: "10.0.0.10:80", Port: 80, Vantage: probe.VantageInCluster, Path: probe.PathData, OK: true, Tone: probe.ToneHealthy},
+				func() probe.Result {
+					sk := probe.SkippedCmd(probe.LayerHTTP, "port 80 (http)", probe.VantageLocal, "couldn't reach an internal address from your machine", "")
+					sk.Port = 80
+					return sk
+				}(),
+			},
+		}},
+	}
+	computeCoverage(tr2)
+	for _, s := range tr2.NotTested {
+		if strings.Contains(s.Reason, "internal address") {
+			t.Fatalf("a live-HTTP-tested port must still absorb its own HTTP skip rows, got %+v", tr2.NotTested)
+		}
+	}
+}

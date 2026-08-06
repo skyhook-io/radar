@@ -180,3 +180,28 @@ func TestSchemeForPort_AgreesWithProber(t *testing.T) {
 		}
 	}
 }
+
+// Anything the TLS classifier accepts must be HTTP-probable - a port the
+// prober calls HTTPS must never receive a TCP-only candidate.
+func TestTLSClassifiedPortsAreHTTPProbable(t *testing.T) {
+	cases := []PortMap{
+		{Port: 9000, AppProtocol: "https2"},
+		{Port: 9000, Name: "tls"},
+		{Port: 9000, Name: "wss"},
+	}
+	for _, pm := range cases {
+		if !isHTTPSPort(pm.Name, pm.AppProtocol, pm.Port) {
+			t.Errorf("precondition: %+v should classify TLS", pm)
+		}
+		if !isHTTPProbablePort(pm.Name, pm.AppProtocol, pm.Port) {
+			t.Errorf("%+v is TLS per the prober but not HTTP-probable - it would get a TCP-only candidate", pm)
+		}
+		if got := protocolForPort(pm); got != "https" {
+			t.Errorf("protocolForPort(%+v) = %q, want https", pm, got)
+		}
+	}
+	// Explicit non-HTTP appProtocol keeps winning, even on a TLS-looking port.
+	if isHTTPProbablePort("", "tcp", 443) {
+		t.Error("explicit appProtocol=tcp must stay non-HTTP-probable even on 443")
+	}
+}

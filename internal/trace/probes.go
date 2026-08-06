@@ -797,8 +797,11 @@ func probeService(ctx context.Context, h *Hop, vantage probe.Vantage, client kub
 // unclassified web service still gets probed rather than unexplained-skipped.
 func isHTTPProbablePort(name, appProtocol string, port int32) bool {
 	if ap := strings.ToLower(strings.TrimSpace(appProtocol)); ap != "" {
+		// Everything the TLS classifier accepts as an HTTPS appProtocol must be
+		// HTTP-probable too - the classifiers disagreeing gave an https2 port a
+		// TCP-only candidate instead of a real HTTPS request.
 		switch ap {
-		case "http", "https", "ws", "wss", "kubernetes.io/ws", "kubernetes.io/wss":
+		case "http", "https", "https2", "ws", "wss", "kubernetes.io/ws", "kubernetes.io/wss":
 			return true
 		}
 		return false
@@ -809,6 +812,12 @@ func isHTTPProbablePort(name, appProtocol string, port int32) bool {
 	// in the misc-TCP list must not overrule it. Checked after the non-HTTP names
 	// so "grpc-web" and "h2c" keep losing.
 	if nameSaysHTTP(name) {
+		return true
+	}
+	// A name the TLS classifier reads as TLS ("tls", "wss") speaks HTTP over
+	// TLS - same rule as the appProtocol tier above.
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "tls", "wss":
 		return true
 	}
 	switch strings.ToLower(strings.TrimSpace(name)) {
@@ -1044,7 +1053,7 @@ func nameLooksNonHTTP(name string) bool {
 	case "grpc", "grpc-web", "h2", "h2c",
 		"postgres", "postgresql", "pg",
 		"mysql", "mariadb",
-		"redis",
+		"redis", "valkey",
 		"mongo", "mongodb",
 		"kafka",
 		"amqp", "rabbitmq",

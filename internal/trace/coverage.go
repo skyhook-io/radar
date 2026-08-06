@@ -2204,6 +2204,18 @@ func layerRank(l probe.Layer) int {
 	return 4
 }
 
+// hopHasLiveHTTP reports whether a non-skipped HTTP-layer probe ran against
+// the given port on this hop - the evidence that lets a live-tested route
+// absorb an HTTP-layer skip row for the same port.
+func hopHasLiveHTTP(h Hop, port int32) bool {
+	for _, p := range h.Probes {
+		if !p.Skipped && p.Layer == probe.LayerHTTP && p.Port == port {
+			return true
+		}
+	}
+	return false
+}
+
 // isNonTCPProto reports a declared L4 protocol that is not TCP; empty is the
 // Kubernetes default (TCP).
 func isNonTCPProto(proto string) bool {
@@ -2224,7 +2236,12 @@ func buildNotTested(t *Trace) []RouteSkip {
 	// gap - keeping both rendered "argocd-server:80" and "port 80" as separate
 	// scenarios. Structured identity (backend namespace/name + port), never
 	// display strings: "port 80" can't string-match "argocd-server:80".
-	preserved := map[string]bool{}
+	type preservedRoute struct {
+		// A not-tested or benign-dormant route IS the same gap as its raw skip
+		// rows; a live-tested route only absorbs rows whose layer actually ran.
+		absorbsAllLayers bool
+	}
+	preserved := map[string]preservedRoute{}
 	for _, r := range t.Routes {
 		name, port, ok := routeBackend(r)
 		if !ok {
@@ -2234,7 +2251,9 @@ func buildNotTested(t *Trace) []RouteSkip {
 		if ns == "" {
 			ns = t.Subject.Namespace
 		}
-		preserved[fmt.Sprintf("%s\x00%s\x00%d", ns, name, port)] = true
+		preserved[fmt.Sprintf("%s\x00%s\x00%d", ns, name, port)] = preservedRoute{
+			absorbsAllLayers: r.Outcome == OutcomeNotTested || r.Benign,
+		}
 	}
 	for _, h := range t.Downstream {
 		// Pod dials are LOCALIZATION evidence behind the Service, never intended
@@ -2260,8 +2279,21 @@ func buildNotTested(t *Trace) []RouteSkip {
 			// swallow the UDP row (erasing a declared path) or kept the TCP
 			// sibling's own skip beside a route that already covers it
 			// (a contradiction).
-			if p.Port != 0 && !isNonTCPProto(p.Protocol) && preserved[fmt.Sprintf("%s\x00%s\x00%d", hopNS, h.Resource.Name, p.Port)] {
-				continue
+			// One layer-aware exception: a LIVE-tested route absorbs an
+			// HTTP-layer skip only when that layer actually ran on the port.
+			// A transport-only TCP reach on an HTTPS port must not swallow the
+			// HTTPS gap - the contract is that HTTPS stays a coverage gap until
+			// an application-layer request completes. Ports that expect no app
+			// layer (redis, dns-tcp) are complete at TCP and absorb as before.
+			if p.Port != 0 && !isNonTCPProto(p.Protocol) {
+				if pr, ok := preserved[fmt.Sprintf("%s\x00%s\x00%d", hopNS, h.Resource.Name, p.Port)]; ok {
+					appLayerGap := p.Layer == probe.LayerHTTP &&
+						httpProbablePort(hopPorts(h), p.Port) &&
+						!hopHasLiveHTTP(h, p.Port)
+					if pr.absorbsAllLayers || !appLayerGap {
+						continue
+					}
+				}
 			}
 			key := string(p.Layer) + "|" + p.Target + "|" + p.Reason
 			if seen[key] {
