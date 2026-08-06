@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 // Argument-name repair for tool calls.
@@ -143,8 +144,13 @@ func aliasValueKeepsMeaning(kind string, val json.RawMessage) bool {
 		// group may legitimately be named "Platform Admins".
 		return true
 	default:
-		// ServiceAccount names are DNS subdomains: no separators, no spaces.
-		return !strings.ContainsAny(s, ":/ \t\n")
+		// ServiceAccount names are DNS-1123 subdomains. Validate in full rather
+		// than blacklisting separators: a malformed name like "cleanup_controller"
+		// would otherwise pass validation after aliasing and have the handler
+		// report an empty permission set for an account that cannot exist —
+		// a confident wrong answer where a rejection carrying the accepted
+		// parameter names would have let the caller retry.
+		return len(validation.IsDNS1123Subdomain(s)) == 0
 	}
 }
 

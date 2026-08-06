@@ -443,6 +443,13 @@ func TestAliasGuardIsSubjectKindAware(t *testing.T) {
 		// named "Platform Admins" is legitimate and must not be refused.
 		{"Group with spaces repairs", `{"subject":"Platform Admins","subjectKind":"Group"}`, true},
 		{"unknown kind is strict", `{"subject":"system:authenticated"}`, false},
+		// Malformed ServiceAccount names must be refused too: aliasing one would
+		// pass validation and have the handler report an empty permission set for
+		// an account that cannot exist, instead of a rejection the caller can act on.
+		{"SA underscore refused", `{"subject":"cleanup_controller","subjectKind":"ServiceAccount"}`, false},
+		{"SA uppercase refused", `{"subject":"CleanupController","subjectKind":"ServiceAccount"}`, false},
+		{"SA leading dash refused", `{"subject":"-cleanup","subjectKind":"ServiceAccount"}`, false},
+		{"SA dotted name repairs", `{"subject":"cleanup.controller","subjectKind":"ServiceAccount"}`, true},
 		// Case variants of the alias keys must resolve the kind the same way, or
 		// the result depends on Go's map iteration order.
 		{"capitalised keys, Group", `{"Subject":"system:authenticated","SubjectKind":"Group"}`, true},
