@@ -61,10 +61,10 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		DestructiveHint: boolPtr(true),
 		OpenWorldHint:   boolPtr(false),
 	}
-	// diagnose is read-only EXCEPT when inCluster=true, which creates UP TO
+	// diagnose is read-only EXCEPT when in_cluster=true, which creates UP TO
 	// maxInClusterProbes transient, self-destructing probe pods (one per intended
 	// route, sequentially) to test the real dataplane. That makes it non-read-only
-	// (a client gating on readOnlyHint must know the inCluster arg can create pods),
+	// (a client gating on readOnlyHint must know the in_cluster arg can create pods),
 	// but NOT destructive - each pod is additive and deletes itself within ~60s - so
 	// DestructiveHint stays false.
 	diagnoseAnno := &mcp.ToolAnnotations{
@@ -225,9 +225,9 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"proxy, never the live-traffic path. " +
 			"Prefer a targeted resource/log/event " +
 			"tool when you need only one facet; use get_resource for other kinds. " +
-			"Read-only EXCEPT the optional inCluster=true arg (network kinds), which creates up to 5 " +
+			"Read-only EXCEPT the optional in_cluster=true arg (network kinds), which creates up to 5 " +
 			"transient, self-destructing probe pods to test the real dataplane.",
-		// NOT readOnly: inCluster=true creates pods. A client gating on
+		// NOT readOnly: in_cluster=true creates pods. A client gating on
 		// readOnlyHint must be told that.
 		Annotations: diagnoseAnno,
 	}, logToolCall("diagnose", handleDiagnose))

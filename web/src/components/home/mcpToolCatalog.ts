@@ -115,7 +115,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
       { arg: 'namespace', required: true, desc: 'resource namespace' },
       { arg: 'name', required: true, desc: 'resource name' },
       { arg: 'probe', desc: 'network kinds only: add active DNS/TCP/TLS/HTTP probes against the declared path (0-3s wall time)' },
-      { arg: 'inCluster', desc: 'network kinds: run the probe from inside the cluster via short-lived self-destructing pods (real dataplane) - confirms a route the apiserver proxy could only reach indirectly. Creates up to 5 short-lived probe pods (one per dialed target) under your RBAC' },
+      { arg: 'in_cluster', desc: 'network kinds: run the probe from inside the cluster via short-lived self-destructing pods (real dataplane) - confirms a route the apiserver proxy could only reach indirectly. Creates up to 5 short-lived probe pods (one per dialed target) under your RBAC' },
       { arg: 'container', desc: 'workload kinds: specific container (defaults to all)' },
       { arg: 'tail_lines', desc: 'workload kinds: lines per pod/stream (default 100)' },
       { arg: 'since', desc: 'workload kinds: only logs newer than this duration' },

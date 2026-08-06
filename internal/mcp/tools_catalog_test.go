@@ -402,12 +402,12 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 			}
 			continue
 		}
-		// diagnose is read-only EXCEPT its optional inCluster=true arg, which creates
+		// diagnose is read-only EXCEPT its optional in_cluster=true arg, which creates
 		// ONE transient, self-destructing probe pod - so it is non-read-only but NOT
 		// destructive (additive + self-deleting). It is the only such tool.
 		if tool.Name == "diagnose" {
 			if tool.Annotations.ReadOnlyHint {
-				t.Errorf("diagnose must NOT set readOnlyHint=true - inCluster=true creates a transient pod")
+				t.Errorf("diagnose must NOT set readOnlyHint=true - in_cluster=true creates a transient pod")
 			}
 			if tool.Annotations.DestructiveHint == nil || *tool.Annotations.DestructiveHint {
 				t.Errorf("diagnose should set destructiveHint=false (the probe pod self-deletes; nothing existing is mutated)")
