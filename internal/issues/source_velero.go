@@ -200,7 +200,7 @@ func veleroRunIssue(gvr schema.GroupVersionResource, kind string, u *unstructure
 		message = message + " (" + strconv.FormatInt(errCount, 10) + " errors)"
 	}
 	return newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), severity, reason, message,
-		veleroSince(u), "", u.GetCreationTimestamp().Time), true
+		veleroRunSince(u), "", u.GetCreationTimestamp().Time), true
 }
 
 // veleroScheduleIssues reports schedules Velero refused to accept. A paused
@@ -210,6 +210,14 @@ func veleroRunIssue(gvr schema.GroupVersionResource, kind string, u *unstructure
 func veleroScheduleIssues(gvr schema.GroupVersionResource, kind string, items []*unstructured.Unstructured) []Issue {
 	var out []Issue
 	for _, u := range items {
+		// A paused schedule is not producing backups by intent, so its
+		// validation errors — which the controller leaves in place rather than
+		// re-evaluating while paused — describe a hypothetical future run, not
+		// a live failure. Raising critical here would contradict the rule above
+		// and light up the queue for a deliberate state.
+		if paused, ok, _ := unstructured.NestedBool(u.Object, "spec", "paused"); ok && paused {
+			continue
+		}
 		validationErrors := veleroStringSlice(u, "status", "validationErrors")
 		// Velero leaves the phase empty on some validation failures and records
 		// only the errors, so the array is checked independently of the phase.
@@ -222,7 +230,7 @@ func veleroScheduleIssues(gvr schema.GroupVersionResource, kind string, items []
 		}
 		out = append(out, newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(),
 			SeverityCritical, ReasonVeleroScheduleValidationFailed, message,
-			veleroSince(u), "", u.GetCreationTimestamp().Time))
+			veleroStateSince(u), "", u.GetCreationTimestamp().Time))
 	}
 	return out
 }
@@ -236,7 +244,7 @@ func veleroBSLIssues(gvr schema.GroupVersionResource, kind string, items []*unst
 		message := veleroFailureMessage(u, "backup storage location is Unavailable — Velero cannot read or write backups here")
 		out = append(out, newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(),
 			SeverityCritical, ReasonVeleroBSLUnavailable, message,
-			veleroSince(u), "", u.GetCreationTimestamp().Time))
+			veleroStateSince(u), "", u.GetCreationTimestamp().Time))
 	}
 	return out
 }
@@ -250,7 +258,7 @@ func veleroRepositoryIssues(gvr schema.GroupVersionResource, kind string, items 
 		message := veleroFailureMessage(u, "backup repository is NotReady — filesystem and data-mover backups to it will fail")
 		out = append(out, newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(),
 			SeverityWarning, ReasonVeleroRepositoryNotReady, message,
-			veleroSince(u), "", u.GetCreationTimestamp().Time))
+			veleroStateSince(u), "", u.GetCreationTimestamp().Time))
 	}
 	return out
 }
@@ -271,12 +279,12 @@ func veleroFailureMessage(u *unstructured.Unstructured, fallback string) string 
 	return fallback
 }
 
-// veleroSince is how long the object has been in its current state. Velero has
-// no lastTransitionTime, so the completion time is the closest thing to "when
-// this became true", with the start and creation times as fallbacks. A zero
-// return suppresses issue_timing in newConditionIssue rather than inventing a
-// now-based duration.
-func veleroSince(u *unstructured.Unstructured) time.Duration {
+// veleroRunSince is how long ago a Backup or Restore reached its verdict.
+// Velero has no lastTransitionTime, so the completion time is the closest thing
+// to "when this became true". A FailedValidation run never starts and so has
+// neither timestamp, but it is created and rejected in the same instant, which
+// makes creationTimestamp an accurate anchor for that case specifically.
+func veleroRunSince(u *unstructured.Unstructured) time.Duration {
 	for _, field := range []string{"completionTimestamp", "startTimestamp"} {
 		if ts, ok, _ := unstructured.NestedString(u.Object, "status", field); ok && ts != "" {
 			if t, err := time.Parse(time.RFC3339, ts); err == nil {
@@ -289,6 +297,19 @@ func veleroSince(u *unstructured.Unstructured) time.Duration {
 	}
 	return 0
 }
+
+// veleroStateSince covers the kinds that describe standing state rather than a
+// run — Schedule, BackupStorageLocation, BackupRepository. None of them records
+// when its phase last changed (their status carries only phase, message and
+// last-check times), so there is nothing to anchor on and this returns 0.
+//
+// Falling back to creationTimestamp here would be actively misleading: a BSL
+// that ran healthy for six months and broke two minutes ago would report
+// FirstSeen six months back and assert issue_timing
+// "started_at_resource_creation" — i.e. that the destination was never usable.
+// Returning 0 makes newConditionIssue anchor at compose time and omit
+// issue_timing, which claims nothing it cannot support.
+func veleroStateSince(*unstructured.Unstructured) time.Duration { return 0 }
 
 // veleroRunTime orders runs within a series.
 func veleroRunTime(u *unstructured.Unstructured) time.Time {

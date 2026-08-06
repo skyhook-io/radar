@@ -670,17 +670,44 @@ See the main [README](../README.md#gitops) for the user-facing overview. This se
 **VolumeSnapshotLocation Detail View:**
 - Provider name and configuration parameters
 
-**Resource Browser:** Smart columns show phase badges, storage location, namespace counts, duration, expiry (with color-coded warnings), and error/warning counts.
+**Resource Browser:** Smart columns show phase badges, storage location, namespace counts, duration, expiry (with color-coded warnings), and error/warning counts. VolumeSnapshotLocation shows provider and config — deliberately no status column, since the VSL controller never populates `status.phase`.
+
+### Backup failures on the Problems surface
+
+Velero reports every outcome through `status.phase` and has no `status.conditions` on any of its CRDs, so Radar reads phases directly rather than through the generic CRD-condition fallback. These become Issues (`/api/issues`, the Problems surface, MCP `list_issues`):
+
+| Detection | Trigger | Severity |
+|-----------|---------|----------|
+| `BackupFailed` | `Backup.status.phase == Failed` | critical |
+| `BackupValidationFailed` | `phase == FailedValidation`; message from `status.validationErrors` | critical |
+| `BackupPartiallyFailed` | `PartiallyFailed`, `FinalizingPartiallyFailed`, `WaitingForPluginOperationsPartiallyFailed` | warning |
+| `RestoreFailed` / `RestoreValidationFailed` / `RestorePartiallyFailed` | the same phases on `Restore` | critical / critical / warning |
+| `ScheduleValidationFailed` | `phase == FailedValidation`, or non-empty `status.validationErrors` | critical |
+| `BackupStorageLocationUnavailable` | `BSL.status.phase == Unavailable` | critical |
+| `BackupRepositoryNotReady` | `BackupRepository.status.phase == NotReady` | warning |
+
+They roll up under two categories: `backup_failed` for runs, and `backup_target_unavailable` for the location/repository kinds — an unreachable destination is a different fix from a run that failed.
+
+**Supersession.** Velero retains failed `Backup` objects until their TTL expires, so a raw phase-to-issue mapping would keep one bad night red for days. Backups group by the `velero.io/schedule-name` label; only the newest run that reached a verdict raises an issue, a later `Completed` clears the series, and an in-progress run neither clears nor raises. Ad-hoc (unlabelled) backups are their own series, so nothing supersedes them. Restores get no supersession — they are one-off operator actions, not a recurring series.
+
+**A paused Schedule is not an issue.** Pausing is operator intent; the Schedule list and detail view show the state without adding queue noise.
+
+**Namespace attribution.** Issues attribute to the Velero object's own namespace (`velero`, or `kommander` on NKP). They are therefore admin-visible, but *not* visible to a user whose namespace view-filter excludes the Velero namespace — including one scoped only to the namespace whose data was lost. Surfacing a failure against the *protected* namespaces needs the protection-coverage model and is not part of this.
+
+**What is not detected yet.** Every detection above is driven by a phase Velero actually wrote. Radar does not yet detect the *absence* of a run — a schedule that quietly stopped firing (controller down, wrong cron, schedule deleted) leaves its last run `Completed`, so no issue is raised even though backups have silently stopped. The same applies to a run wedged in an active phase past its `itemOperationTimeout`. Both need the schedule cadence modelled against Velero's real controller semantics (a due run is *skipped* while a prior backup is in flight, and `itemOperationTimeout` is configurable), which is tracked separately. **Treat "no Velero issues" as "no run reported a failure", not as "backups are healthy."**
 
 ### Supported CRDs
 
-| CRD | Group | Topology | Detail View | AI Summary |
-|-----|-------|----------|-------------|------------|
-| Backup | `velero.io/v1` | — | Yes | — |
-| Restore | `velero.io/v1` | — | Yes | — |
-| Schedule | `velero.io/v1` | — | Yes | — |
-| BackupStorageLocation | `velero.io/v1` | — | Yes | — |
-| VolumeSnapshotLocation | `velero.io/v1` | — | Yes | — |
+| CRD | Group | Topology | Detail View | Issues | AI Summary |
+|-----|-------|----------|-------------|--------|------------|
+| Backup | `velero.io/v1` | — | Yes | Yes | — |
+| Restore | `velero.io/v1` | — | Yes | Yes | — |
+| Schedule | `velero.io/v1` | — | Yes | Yes | — |
+| BackupStorageLocation | `velero.io/v1` | — | Yes | Yes | — |
+| VolumeSnapshotLocation | `velero.io/v1` | — | Yes | — | — |
+| BackupRepository | `velero.io/v1` | — | — | Yes | — |
+
+**Kind collisions.** `restores` and `schedules` are shared plurals — `rancher/backup-restore-operator` ships `restores.resources.cattle.io`, and several operators ship their own `schedules` kind. Radar's Velero renderers, status readers, columns and cells all select on the `velero.io` group; a foreign resource with the same plural falls through to the generic renderer instead of being dressed up as a backup.
 
 ---
 

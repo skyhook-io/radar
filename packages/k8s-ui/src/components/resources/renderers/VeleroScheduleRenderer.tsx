@@ -39,11 +39,16 @@ export function VeleroScheduleRenderer({ data }: VeleroScheduleRendererProps) {
           message="This backup schedule is currently paused. No new backups will be created."
         />
       )}
-      {scheduleStatus.text === 'FailedValidation' && (
+      {/* Gated on the errors themselves, not on the badge: a paused schedule
+          badges as "Paused", which would otherwise hide the validation errors
+          the user needs to fix before resuming. */}
+      {(validationErrors.length > 0 || status.phase === 'FailedValidation') && (
         <AlertBanner
           variant="error"
           title="Validation Failed"
-          message="The schedule spec failed validation and is not active — no backups are being created."
+          message={isPaused
+            ? 'The schedule spec failed validation. It will not create backups when resumed until this is fixed.'
+            : 'The schedule spec failed validation and is not active — no backups are being created.'}
           items={validationErrors.length > 0 ? validationErrors : undefined}
         />
       )}

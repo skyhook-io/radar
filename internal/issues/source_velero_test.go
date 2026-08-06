@@ -348,6 +348,18 @@ func TestVeleroScheduleIssues(t *testing.T) {
 		}
 	})
 
+	t.Run("a paused schedule with stale validation errors stays quiet", func(t *testing.T) {
+		// The controller leaves validationErrors in place rather than
+		// re-evaluating a paused schedule, so they describe a hypothetical
+		// future run. Raising critical would contradict the paused rule; the
+		// detail page still shows the errors so they can be fixed before
+		// resuming.
+		got := detect(veleroObj{name: "s1", phase: "FailedValidation", paused: true, validation: []string{"invalid cron"}})
+		if len(got) != 0 {
+			t.Fatalf("a paused schedule must not raise regardless of validation errors, got %v", reasonsOf(got))
+		}
+	})
+
 	t.Run("an enabled schedule is silent", func(t *testing.T) {
 		if got := detect(veleroObj{name: "s1", phase: "Enabled"}); len(got) != 0 {
 			t.Fatalf("want no issue, got %v", reasonsOf(got))
@@ -437,6 +449,37 @@ func TestVeleroIssueAnchorsOnRunTime(t *testing.T) {
 	age := time.Since(got[0].FirstSeen)
 	if age < 170*time.Minute || age > 190*time.Minute {
 		t.Errorf("FirstSeen age = %v, want ~180m (the completion time)", age)
+	}
+}
+
+// Schedule, BackupStorageLocation and BackupRepository record no transition
+// timestamp at all (their status carries only phase, message and last-check
+// times). Anchoring those on creationTimestamp would claim a BSL that broke two
+// minutes ago has been broken since it was created, and would assert an
+// issue_timing the data cannot support.
+func TestVeleroStateKindsDoNotAnchorOnCreation(t *testing.T) {
+	cases := []struct {
+		kind, resource string
+		obj            veleroObj
+	}{
+		{"BackupStorageLocation", "backupstoragelocations", veleroObj{name: "bsl", phase: "Unavailable"}},
+		{"BackupRepository", "backuprepositories", veleroObj{name: "repo", phase: "NotReady"}},
+		{"Schedule", "schedules", veleroObj{name: "sched", phase: "FailedValidation"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.kind, func(t *testing.T) {
+			// The fixture is created 24h ago; the issue must NOT claim that age.
+			got := detectVeleroIssues(veleroGVR(tc.resource), tc.kind, buildVelero(tc.kind, tc.obj), nil)
+			if len(got) != 1 {
+				t.Fatalf("want 1 issue, got %d", len(got))
+			}
+			if age := time.Since(got[0].FirstSeen); age > time.Minute {
+				t.Errorf("FirstSeen age = %v, want ~0 (compose time) — the object's 24h age is not how long it has been broken", age)
+			}
+			if got[0].IssueTiming != "" {
+				t.Errorf("issue_timing = %q, want empty: there is no transition timestamp to derive it from", got[0].IssueTiming)
+			}
+		})
 	}
 }
 
