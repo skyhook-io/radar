@@ -1,0 +1,295 @@
+package issues
+
+import (
+	"strings"
+	"testing"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+)
+
+var cnpgClusterGVR = schema.GroupVersionResource{Group: "postgresql.cnpg.io", Version: "v1", Resource: "clusters"}
+var cnpgBackupGVR = schema.GroupVersionResource{Group: "postgresql.cnpg.io", Version: "v1", Resource: "backups"}
+
+func cnpgCluster(spec, status map[string]any) *unstructured.Unstructured {
+	if spec == nil {
+		spec = map[string]any{}
+	}
+	if status == nil {
+		status = map[string]any{}
+	}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "postgresql.cnpg.io/v1",
+		"kind":       "Cluster",
+		"metadata":   map[string]any{"name": "pg-main", "namespace": "pg"},
+		"spec":       spec,
+		"status":     status,
+	}}
+}
+
+func cnpgCondition(condType, status, reason, message string) map[string]any {
+	return map[string]any{
+		"type": condType, "status": status, "reason": reason, "message": message,
+		"lastTransitionTime": "2026-04-28T10:00:00Z",
+	}
+}
+
+func reasonsOf(issues []Issue) []string {
+	out := make([]string, 0, len(issues))
+	for _, i := range issues {
+		out = append(out, i.Reason)
+	}
+	return out
+}
+
+func findIssue(t *testing.T, issues []Issue, reason string) Issue {
+	t.Helper()
+	for _, i := range issues {
+		if i.Reason == reason {
+			return i
+		}
+	}
+	t.Fatalf("no issue with reason %q; got %v", reason, reasonsOf(issues))
+	return Issue{}
+}
+
+// The whole point of RAD-318: a cluster whose pods are all Ready but whose
+// phase says it is unrecoverable must not read as fine.
+func TestCNPGTerminalPhasesAreCriticalDespiteReadyInstances(t *testing.T) {
+	cases := []struct {
+		phase      string
+		wantReason string
+	}{
+		{"Cluster is unrecoverable and needs manual intervention", "CNPGClusterUnrecoverable"},
+		{"Cluster cannot proceed to reconciliation due to an unknown plugin being required", "CNPGClusterPluginFailure"},
+		{"Cluster cannot proceed to reconciliation due to an error while interacting with plugins", "CNPGClusterPluginFailure"},
+		{"Unable to create required cluster objects", "CNPGClusterTerminal"},
+		{"Cluster has incomplete or invalid image catalog", "CNPGClusterTerminal"},
+		{"Cluster cannot execute instance online upgrade due to missing architecture binary", "CNPGClusterTerminal"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.phase, func(t *testing.T) {
+			u := cnpgCluster(
+				map[string]any{"instances": int64(3)},
+				map[string]any{"phase": tc.phase, "readyInstances": int64(3)},
+			)
+			issues := detectCNPGIssues(cnpgClusterGVR, "Cluster", u)
+			iss := findIssue(t, issues, tc.wantReason)
+			if iss.Severity != SeverityCritical {
+				t.Errorf("severity = %q, want critical", iss.Severity)
+			}
+			if iss.Message != tc.phase {
+				t.Errorf("message = %q, want the phase verbatim", iss.Message)
+			}
+		})
+	}
+}
+
+func TestCNPGWALArchivingFailureIsCritical(t *testing.T) {
+	u := cnpgCluster(
+		map[string]any{"instances": int64(2)},
+		map[string]any{
+			"phase": "Cluster in healthy state", "readyInstances": int64(2),
+			"conditions": []any{
+				cnpgCondition("Ready", "True", "ClusterIsReady", "Cluster is Ready"),
+				cnpgCondition("ContinuousArchiving", "False", "ContinuousArchivingFailing", "unable to upload WAL"),
+			},
+		},
+	)
+	iss := findIssue(t, detectCNPGIssues(cnpgClusterGVR, "Cluster", u), "CNPGWALArchivingFailing")
+	if iss.Severity != SeverityCritical {
+		t.Errorf("severity = %q, want critical — the cluster serves traffic while the recovery point stalls", iss.Severity)
+	}
+	if !strings.Contains(iss.Message, "unable to upload WAL") {
+		t.Errorf("message should carry the operator's own text, got %q", iss.Message)
+	}
+	// Must not claim an exact RPO — the condition only proves the last attempt failed.
+	if strings.Contains(strings.ToLower(iss.Message), "data loss") {
+		t.Errorf("message overclaims: %q", iss.Message)
+	}
+}
+
+func TestCNPGHealthyClusterRaisesNothing(t *testing.T) {
+	// Shape taken from a live CNPG 1.27 cluster.
+	u := cnpgCluster(
+		map[string]any{"instances": int64(2)},
+		map[string]any{
+			"phase": "Cluster in healthy state", "readyInstances": int64(2), "instances": int64(2),
+			"conditions": []any{
+				cnpgCondition("ConsistentSystemID", "True", "Unique", "A single, unique system ID was found across reporting instances."),
+				cnpgCondition("Ready", "True", "ClusterIsReady", "Cluster is Ready"),
+				cnpgCondition("ContinuousArchiving", "True", "ContinuousArchivingSuccess", "Continuous archiving is working"),
+			},
+		},
+	)
+	if got := detectCNPGIssues(cnpgClusterGVR, "Cluster", u); len(got) != 0 {
+		t.Fatalf("healthy cluster raised %v", reasonsOf(got))
+	}
+}
+
+// CNPG sets LastBackupSucceeded=False/BackupStarted while a backup is merely
+// starting up. Raising an issue there fires on every backup run.
+func TestCNPGBackupStartedIsNotAFailure(t *testing.T) {
+	u := cnpgCluster(
+		map[string]any{"instances": int64(1)},
+		map[string]any{
+			"phase": "Cluster in healthy state", "readyInstances": int64(1),
+			"conditions": []any{cnpgCondition("LastBackupSucceeded", "False", "BackupStarted", "New Backup starting up")},
+		},
+	)
+	if got := detectCNPGIssues(cnpgClusterGVR, "Cluster", u); len(got) != 0 {
+		t.Fatalf("in-flight backup raised %v", reasonsOf(got))
+	}
+}
+
+func TestCNPGLastBackupFailedIsAWarning(t *testing.T) {
+	u := cnpgCluster(
+		map[string]any{"instances": int64(1)},
+		map[string]any{
+			"phase": "Cluster in healthy state", "readyInstances": int64(1),
+			"conditions": []any{cnpgCondition("LastBackupSucceeded", "False", "LastBackupFailed", "no credentials")},
+		},
+	)
+	iss := findIssue(t, detectCNPGIssues(cnpgClusterGVR, "Cluster", u), "CNPGLastBackupFailed")
+	if iss.Severity != SeverityWarning {
+		t.Errorf("severity = %q, want warning", iss.Severity)
+	}
+}
+
+// Under `supervised` the operator is SUPPOSED to wait for a human — flagging it
+// would light permanently on every supervised cluster.
+func TestCNPGWaitingForUserRespectsSupervisedStrategy(t *testing.T) {
+	status := map[string]any{"phase": "Waiting for user action", "readyInstances": int64(2)}
+
+	supervised := cnpgCluster(map[string]any{"instances": int64(2), "primaryUpdateStrategy": "supervised"}, status)
+	if got := detectCNPGIssues(cnpgClusterGVR, "Cluster", supervised); len(got) != 0 {
+		t.Fatalf("supervised cluster raised %v", reasonsOf(got))
+	}
+
+	unsupervised := cnpgCluster(map[string]any{"instances": int64(2), "primaryUpdateStrategy": "unsupervised"}, status)
+	iss := findIssue(t, detectCNPGIssues(cnpgClusterGVR, "Cluster", unsupervised), "CNPGClusterWaitingForUser")
+	if iss.Severity != SeverityWarning {
+		t.Errorf("severity = %q, want warning", iss.Severity)
+	}
+}
+
+func TestCNPGTransientPhaseDoesNotRaiseDegraded(t *testing.T) {
+	// Mid-operation with fewer ready instances is expected, not a defect.
+	u := cnpgCluster(
+		map[string]any{"instances": int64(3)},
+		map[string]any{"phase": "Creating a new replica", "readyInstances": int64(2)},
+	)
+	if got := detectCNPGIssues(cnpgClusterGVR, "Cluster", u); len(got) != 0 {
+		t.Fatalf("transient phase raised %v", reasonsOf(got))
+	}
+}
+
+func TestCNPGDegradedInstancesUnderHealthyPhase(t *testing.T) {
+	u := cnpgCluster(
+		map[string]any{"instances": int64(3)},
+		map[string]any{"phase": "Cluster in healthy state", "readyInstances": int64(1)},
+	)
+	iss := findIssue(t, detectCNPGIssues(cnpgClusterGVR, "Cluster", u), "CNPGClusterDegraded")
+	if iss.Severity != SeverityWarning {
+		t.Errorf("severity = %q, want warning", iss.Severity)
+	}
+
+	down := cnpgCluster(
+		map[string]any{"instances": int64(3)},
+		map[string]any{"phase": "Cluster in healthy state", "readyInstances": int64(0)},
+	)
+	if got := findIssue(t, detectCNPGIssues(cnpgClusterGVR, "Cluster", down), "CNPGClusterDegraded"); got.Severity != SeverityCritical {
+		t.Errorf("all instances down: severity = %q, want critical", got.Severity)
+	}
+}
+
+func TestCNPGUnknownPhaseRaisesNothing(t *testing.T) {
+	// A phase from a future CNPG minor must not be guessed at.
+	u := cnpgCluster(
+		map[string]any{"instances": int64(1)},
+		map[string]any{"phase": "Reticulating splines", "readyInstances": int64(1)},
+	)
+	if got := detectCNPGIssues(cnpgClusterGVR, "Cluster", u); len(got) != 0 {
+		t.Fatalf("unknown phase raised %v", reasonsOf(got))
+	}
+}
+
+func TestCNPGBackupPhases(t *testing.T) {
+	backup := func(phase, errMsg string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "postgresql.cnpg.io/v1",
+			"kind":       "Backup",
+			"metadata":   map[string]any{"name": "b1", "namespace": "pg"},
+			"status":     map[string]any{"phase": phase, "error": errMsg},
+		}}
+	}
+
+	walIssues := detectCNPGIssues(cnpgBackupGVR, "Backup", backup("walArchivingFailing", "S3 timeout"))
+	iss := findIssue(t, walIssues, "CNPGWALArchivingFailing")
+	if iss.Severity != SeverityCritical {
+		t.Errorf("walArchivingFailing severity = %q, want critical", iss.Severity)
+	}
+	if !strings.Contains(iss.Message, "S3 timeout") {
+		t.Errorf("message should carry status.error, got %q", iss.Message)
+	}
+
+	failed := findIssue(t, detectCNPGIssues(cnpgBackupGVR, "Backup", backup("failed", "boom")), "CNPGBackupFailed")
+	if failed.Severity != SeverityWarning {
+		t.Errorf("failed severity = %q, want warning", failed.Severity)
+	}
+
+	// Every non-failure phase CNPG 1.27 ships.
+	for _, phase := range []string{"pending", "started", "running", "finalizing", "completed", ""} {
+		if got := detectCNPGIssues(cnpgBackupGVR, "Backup", backup(phase, "")); len(got) != 0 {
+			t.Errorf("phase %q raised %v", phase, reasonsOf(got))
+		}
+	}
+}
+
+// Kinds without a curated detector must return nothing so the generic
+// condition path still gets its turn (detectCuratedConditionIssues skips the
+// generic walk only when the curated result is non-empty).
+func TestCNPGUncuratedKindsFallThrough(t *testing.T) {
+	for _, kind := range []string{"Pooler", "ScheduledBackup", "Database"} {
+		u := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "postgresql.cnpg.io/v1", "kind": kind,
+			"metadata": map[string]any{"name": "x", "namespace": "pg"},
+			"status":   map[string]any{"phase": "whatever"},
+		}}
+		if got := detectCNPGIssues(cnpgClusterGVR, kind, u); got != nil {
+			t.Errorf("kind %s returned %v, want nil so the generic path runs", kind, reasonsOf(got))
+		}
+	}
+}
+
+// A cluster can be unrecoverable AND failing to archive WAL at the same time.
+// Issue IDs are category-only unless a Fingerprint is supplied, so without one
+// these two collapse into a single row and the archiving cause — the whole
+// point of the detector — is the one that gets dropped.
+func TestCNPGConcurrentCausesGetDistinctIdentities(t *testing.T) {
+	u := cnpgCluster(
+		map[string]any{"instances": int64(2)},
+		map[string]any{
+			"phase": "Cluster is unrecoverable and needs manual intervention", "readyInstances": int64(2),
+			"conditions": []any{
+				cnpgCondition("ContinuousArchiving", "False", "ContinuousArchivingFailing", "unable to upload WAL"),
+				cnpgCondition("LastBackupSucceeded", "False", "LastBackupFailed", "no credentials"),
+			},
+		},
+	)
+	issues := detectCNPGIssues(cnpgClusterGVR, "Cluster", u)
+	if len(issues) != 3 {
+		t.Fatalf("expected 3 concurrent causes, got %d: %v", len(issues), reasonsOf(issues))
+	}
+
+	ids := map[string]string{}
+	for _, i := range issues {
+		if i.Fingerprint == "" {
+			t.Errorf("issue %q has no Fingerprint — it will collide on ID", i.Reason)
+		}
+		if prev, dup := ids[i.ID]; dup {
+			t.Errorf("issues %q and %q share ID %q — one will be dropped", prev, i.Reason, i.ID)
+		}
+		ids[i.ID] = i.Reason
+	}
+}

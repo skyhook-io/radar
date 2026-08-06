@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
-import { ResourceRendererDispatch, type RendererOverrides } from './ResourceRendererDispatch'
+import { ResourceRendererDispatch, getResourceStatus, type RendererOverrides } from './ResourceRendererDispatch'
 import type { ResourceRef } from '../../types'
 
 function renderWithScalers(scalers: ResourceRef[]): string {
@@ -144,5 +144,87 @@ describe('DRA renderers dispatch', () => {
     })
     expect(html).toContain('Selectors (1)')
     expect(html).toContain('device.driver')
+  })
+})
+
+// ============================================================================
+// COLLIDING CRD PLURALS — `clusters` (CNPG / CAPI / third parties) and
+// `backups` (CNPG / Velero). Both used to be resolved with a negative guard,
+// so any third operator's CRD inherited whichever branch was the fallback.
+// ============================================================================
+
+function renderCollidingKind(kind: string, apiVersion: string): string {
+  return renderToString(
+    <ResourceRendererDispatch
+      resource={{ kind, namespace: 'default', name: 'thing' }}
+      data={{ apiVersion, kind: 'Cluster', metadata: { name: 'thing', namespace: 'default' }, spec: {}, status: {} }}
+      onCopy={() => {}}
+      copied={null}
+      showCommonSections={false}
+    />,
+  )
+}
+
+describe('getResourceStatus — colliding plurals', () => {
+  it('fabricates no status badge for a third-party clusters CRD', () => {
+    // KubeBlocks, Redis/Valkey operators and friends all ship `clusters`.
+    expect(getResourceStatus('clusters', { apiVersion: 'apps.kubeblocks.io/v1alpha1', status: {} })).toBeNull()
+    expect(getResourceStatus('clusters', { apiVersion: 'redis.redis.opstreelabs.in/v1beta2', status: {} })).toBeNull()
+  })
+
+  it('still resolves both known clusters engines positively', () => {
+    expect(getResourceStatus('clusters', {
+      apiVersion: 'postgresql.cnpg.io/v1',
+      spec: { instances: 2 },
+      status: { phase: 'Cluster in healthy state', readyInstances: 2 },
+    })).toMatchObject({ text: 'Healthy' })
+
+    expect(getResourceStatus('clusters', {
+      apiVersion: 'cluster.x-k8s.io/v1beta1',
+      status: { phase: 'Provisioned' },
+    })).not.toBeNull()
+  })
+
+  it('fabricates no status badge for a third-party backups CRD', () => {
+    expect(getResourceStatus('backups', { apiVersion: 'kubevirt.io/v1', status: {} })).toBeNull()
+  })
+
+  it('still resolves both known backups engines positively', () => {
+    expect(getResourceStatus('backups', {
+      apiVersion: 'postgresql.cnpg.io/v1',
+      status: { phase: 'completed' },
+    })).toMatchObject({ text: 'Completed' })
+
+    expect(getResourceStatus('backups', {
+      apiVersion: 'velero.io/v1',
+      status: { phase: 'Completed' },
+    })).not.toBeNull()
+  })
+
+  it('gives no badge to third-party scheduledbackups and poolers', () => {
+    expect(getResourceStatus('scheduledbackups', { apiVersion: 'other.io/v1', spec: {}, status: {} })).toBeNull()
+    expect(getResourceStatus('poolers', { apiVersion: 'other.io/v1', spec: {}, status: {} })).toBeNull()
+  })
+})
+
+describe('ResourceRendererDispatch — colliding plurals fall through', () => {
+  // These plurals are in KNOWN_KINDS, which suppresses the generic renderer.
+  // Making every render line apiVersion-gated without an explicit fall-through
+  // renders a blank drawer for a foreign CRD — the trap the Crossplane
+  // collision block documents.
+  it.each([
+    ['clusters', 'apps.kubeblocks.io/v1alpha1'],
+    ['backups', 'kubevirt.io/v1'],
+    ['scheduledbackups', 'other.io/v1'],
+    ['poolers', 'other.io/v1'],
+  ])('renders something for a foreign %s CRD', (kind, apiVersion) => {
+    expect(renderCollidingKind(kind, apiVersion).trim()).not.toBe('')
+  })
+
+  it('does not double-render when a known engine matches', () => {
+    const html = renderCollidingKind('clusters', 'postgresql.cnpg.io/v1')
+    expect(html).toContain('Cluster Overview')
+    // The generic renderer's raw-spec dump must not appear alongside it.
+    expect(html.match(/Cluster Overview/g)).toHaveLength(1)
   })
 })

@@ -538,12 +538,27 @@ export function ResourceRendererDispatch({
   // a foreign CR with the same plural (rancher/backup-restore-operator ships
   // restores.resources.cattle.io; several operators ship `schedules`) matches
   // no renderer AND is suppressed from GenericRenderer — i.e. renders blank.
-  // `backups` is deliberately absent: its render lines are still keyed on the
-  // CNPG-vs-Velero split, not a positive velero.io guard.
+  // `backups` is deliberately absent here — it is shared with CNPG, so both of
+  // its render lines are positively group-gated and it falls through via
+  // isGroupGatedKind below rather than through this Velero-only check.
   const isVeleroCollisionGatedKind =
     kind === 'restores' || kind === 'schedules'
     || kind === 'backupstoragelocations' || kind === 'volumesnapshotlocations'
   const veleroCollisionFallthrough = isVeleroCollisionGatedKind && !isVeleroResource(data)
+
+  // Same rule as the Crossplane block above, for the plurals shared by two
+  // named operators: `clusters` (CNPG / CAPI — plus KubeBlocks, Redis/Valkey
+  // and friends in the wild) and `backups` (CNPG / Velero). Both render lines
+  // are positively apiVersion-gated, so a third CRD with the plural matches
+  // neither and needs an explicit fall-through or the drawer renders blank.
+  const isGroupGatedKind =
+    kind === 'clusters' || kind === 'backups' || kind === 'scheduledbackups' || kind === 'poolers'
+  const isCNPGApiVersion = data?.apiVersion?.includes('postgresql.cnpg.io') === true
+  const groupGatedMatched =
+    (kind === 'clusters' && (isCNPGApiVersion || data?.apiVersion?.includes('cluster.x-k8s.io') === true))
+    || (kind === 'backups' && (isCNPGApiVersion || data?.apiVersion?.includes('velero.io') === true))
+    || ((kind === 'scheduledbackups' || kind === 'poolers') && isCNPGApiVersion)
+  const groupGatedFallthrough = isGroupGatedKind && !groupGatedMatched
 
   const isKnownKind = KNOWN_KINDS.has(kind) || isCrossplaneMR || isCrossplaneClaim || isCrossplaneXR
 
@@ -666,8 +681,8 @@ export function ResourceRendererDispatch({
         {kind === 'resourceclaimtemplates' && <ResourceClaimTemplateRenderer data={data} />}
         {kind === 'deviceclasses' && <DeviceClassRenderer data={data} />}
         {kind === 'resourceslices' && <ResourceSliceRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'backups' && data.apiVersion?.includes('cnpg.io') && <CNPGBackupRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'backups' && !data.apiVersion?.includes('cnpg.io') && <VeleroBackupRenderer data={data} />}
+        {kind === 'backups' && data.apiVersion?.includes('postgresql.cnpg.io') && <CNPGBackupRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'backups' && data.apiVersion?.includes('velero.io') && <VeleroBackupRenderer data={data} />}
         {kind === 'restores' && isVeleroResource(data) && <VeleroRestoreRenderer data={data} />}
         {kind === 'schedules' && isVeleroResource(data) && <VeleroScheduleRenderer data={data} />}
         {kind === 'backupstoragelocations' && isVeleroResource(data) && <VeleroBSLRenderer data={data} />}
@@ -675,10 +690,10 @@ export function ResourceRendererDispatch({
         {kind === 'externalsecrets' && <ExternalSecretRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'clusterexternalsecrets' && <ClusterExternalSecretRenderer data={data} onNavigate={onNavigate} />}
         {(kind === 'secretstores' || kind === 'clustersecretstores') && <SecretStoreRenderer data={data} />}
-        {kind === 'clusters' && !data?.apiVersion?.includes('cluster.x-k8s.io') && <CNPGClusterRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'clusters' && data?.apiVersion?.includes('postgresql.cnpg.io') && <CNPGClusterRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'clusters' && data?.apiVersion?.includes('cluster.x-k8s.io') && <CAPIClusterRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'scheduledbackups' && <CNPGScheduledBackupRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'poolers' && <CNPGPoolerRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'scheduledbackups' && data?.apiVersion?.includes('postgresql.cnpg.io') && <CNPGScheduledBackupRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'poolers' && data?.apiVersion?.includes('postgresql.cnpg.io') && <CNPGPoolerRenderer data={data} onNavigate={onNavigate} />}
         {/* Cluster API (CAPI) */}
         {'topology.cluster.x-k8s.io/owned' in (data?.metadata?.labels ?? {}) && data?.apiVersion?.includes('cluster.x-k8s.io') && (
           <AlertBanner
@@ -772,7 +787,7 @@ export function ResourceRendererDispatch({
             for known-plural collisions where no apiVersion-gated renderer
             matched (e.g. a Knative Configuration sharing the `configurations`
             plural with Crossplane Configuration). */}
-        {(!isKnownKind || crossplaneCollisionFallthrough || kyvernoCollisionFallthrough || veleroCollisionFallthrough) && <GenericRenderer data={data} />}
+        {(!isKnownKind || crossplaneCollisionFallthrough || kyvernoCollisionFallthrough || veleroCollisionFallthrough || groupGatedFallthrough) && <GenericRenderer data={data} />}
 
         {/* Common sections - can be disabled when parent handles them separately */}
         {showCommonSections && (
@@ -912,9 +927,12 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'resourceclaimtemplates') return getResourceClaimTemplateStatus(data)
   if (k === 'deviceclasses') return getDeviceClassStatus(data)
   if (k === 'resourceslices') return getResourceSliceStatus(data)
+  // Positive guards both ways — a third `backups` CRD gets no badge rather than
+  // a fabricated one from whichever engine happened to be the fallback.
   if (k === 'backups') {
-    if (data.apiVersion?.includes('cnpg.io')) return getCNPGBackupStatus(data)
-    return getBackupStatus(data)
+    if (data.apiVersion?.includes('postgresql.cnpg.io')) return getCNPGBackupStatus(data)
+    if (data.apiVersion?.includes('velero.io')) return getBackupStatus(data)
+    return null
   }
   if (k === 'restores' && isVeleroResource(data)) return getRestoreStatus(data)
   if (k === 'schedules' && isVeleroResource(data)) return getScheduleStatus(data)
@@ -925,7 +943,8 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'clustersecretstores') return getClusterSecretStoreStatus(data)
   if (k === 'clusters') {
     if (data.apiVersion?.includes('cluster.x-k8s.io')) return getCAPIClusterStatus(data)
-    return getCNPGClusterStatus(data)
+    if (data.apiVersion?.includes('postgresql.cnpg.io')) return getCNPGClusterStatus(data)
+    return null
   }
   if (k === 'machines' && data.apiVersion?.includes('cluster.x-k8s.io')) return getMachineStatus(data)
   if (k === 'machinedeployments') return getMachineDeploymentStatus(data)
@@ -949,8 +968,8 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'azuremanagedmachinepools') return getAzureMMPStatus(data)
   if (k === 'azuremachines') return getAzureMachineStatus(data)
   if (k === 'azuremanagedclusters') return getAzureManagedClusterStatus(data)
-  if (k === 'scheduledbackups') return getCNPGScheduledBackupStatus(data)
-  if (k === 'poolers') return getCNPGPoolerStatus(data)
+  if (k === 'scheduledbackups' && data.apiVersion?.includes('postgresql.cnpg.io')) return getCNPGScheduledBackupStatus(data)
+  if (k === 'poolers' && data.apiVersion?.includes('postgresql.cnpg.io')) return getCNPGPoolerStatus(data)
   if (k === 'virtualservices') return getVirtualServiceStatus(data)
   if (k === 'destinationrules') return getDestinationRuleStatus(data)
   if (k === 'serviceentries') return getServiceEntryStatus(data)

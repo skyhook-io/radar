@@ -207,6 +207,8 @@ export function formatGroupName(group: string): string {
     'eks.amazonaws.com': 'EKS',
     'networking.k8s.aws': 'AWS Networking',
     'acid.zalan.do': 'Zalando Postgres',
+    'postgresql.cnpg.io': 'CloudNativePG',
+    'barmancloud.cnpg.io': 'CloudNativePG',
     'serving.kserve.io': 'KServe',
     'ray.io': 'KubeRay',
     'leaderworkerset.x-k8s.io': 'LeaderWorkerSet',

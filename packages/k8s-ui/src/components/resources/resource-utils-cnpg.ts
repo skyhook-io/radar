@@ -8,44 +8,94 @@ import { parseGoTimeString } from '../../utils/parse-go-time'
 // CNPG CLUSTER UTILITIES
 // ============================================================================
 
+// Phase strings are full English sentences copied verbatim from CNPG's
+// api/v1/cluster_types.go — match on equality, never substring. Verified
+// against CNPG 1.27. Radar's Go issue detection mirrors these buckets in
+// internal/issues/source_cnpg.go; the two must not drift, or a cluster gets
+// a red badge and no issue (or the reverse).
+
+/** Cluster is reconciled and serving. */
+export const CNPG_CLUSTER_PHASES_HEALTHY = ['Cluster in healthy state'] as const
+
+/** Operator is mid-operation. Expected to resolve on its own. */
+export const CNPG_CLUSTER_PHASES_TRANSIENT = [
+  'Setting up primary',
+  'Creating a new replica',
+  'Switchover in progress',
+  'Upgrading cluster',
+  'Upgrading Postgres major version',
+  'Online upgrade in progress',
+  'Applying configuration',
+  'Primary instance is being restarted in-place',
+  'Primary instance is being restarted without a switchover',
+  'Promoting to primary cluster',
+  'Waiting for the instances to become active',
+] as const
+
+/** Losing the primary — degraded now, self-resolving only if a replica can take over. */
+export const CNPG_CLUSTER_PHASES_FAILING = ['Failing over'] as const
+
+/** Reconciliation has stopped. These need a human; none of them self-heal. */
+export const CNPG_CLUSTER_PHASES_TERMINAL = [
+  'Cluster is unrecoverable and needs manual intervention',
+  'Unable to create required cluster objects',
+  'Cluster has incomplete or invalid image catalog',
+  'Cluster cannot proceed to reconciliation due to an unknown plugin being required',
+  'Cluster cannot proceed to reconciliation due to an error while interacting with plugins',
+  'Cluster cannot execute instance online upgrade due to missing architecture binary',
+] as const
+
+/**
+ * Stalled waiting on a human. Under `primaryUpdateStrategy: supervised` this is
+ * the documented, expected resting state, so it is styled as attention rather
+ * than failure and the Go side suppresses the issue entirely.
+ */
+export const CNPG_CLUSTER_PHASES_ATTENTION = [
+  'Waiting for user action',
+  'Cluster upgrade delayed',
+] as const
+
+export type CNPGPhaseBucket = 'healthy' | 'transient' | 'failing' | 'terminal' | 'attention' | 'unknown'
+
+export function classifyCNPGClusterPhase(phase: string): CNPGPhaseBucket {
+  if (!phase) return 'unknown'
+  if ((CNPG_CLUSTER_PHASES_HEALTHY as readonly string[]).includes(phase)) return 'healthy'
+  if ((CNPG_CLUSTER_PHASES_TERMINAL as readonly string[]).includes(phase)) return 'terminal'
+  if ((CNPG_CLUSTER_PHASES_FAILING as readonly string[]).includes(phase)) return 'failing'
+  if ((CNPG_CLUSTER_PHASES_TRANSIENT as readonly string[]).includes(phase)) return 'transient'
+  if ((CNPG_CLUSTER_PHASES_ATTENTION as readonly string[]).includes(phase)) return 'attention'
+  return 'unknown'
+}
+
 export function getCNPGClusterStatus(resource: any): StatusBadge {
   const status = resource.status || {}
   const phase = status.phase || ''
   const instances = resource.spec?.instances ?? 0
   const readyInstances = status.readyInstances ?? 0
+  const bucket = classifyCNPGClusterPhase(phase)
 
-  // Check for degraded instances first
-  if (instances > 0 && readyInstances < instances) {
-    // Distinguish between total failure and partial degradation
-    if (readyInstances === 0) {
-      return { text: 'Not Ready', color: healthColors.unhealthy, level: 'unhealthy' }
-    }
-    return { text: 'Degraded', color: healthColors.degraded, level: 'degraded' }
+  // Terminal phases outrank instance counts: an unrecoverable cluster whose pods
+  // happen to still be Ready is still unrecoverable, and reading the counts first
+  // is what used to render it neutral.
+  if (bucket === 'terminal') {
+    return { text: phase, color: healthColors.unhealthy, level: 'unhealthy' }
   }
-
-  // Phase-based status
-  const healthyPhases = ['Cluster in healthy state', 'Healthy']
-  const transientPhases = [
-    'Setting up primary',
-    'Creating replica',
-    'Switchover in progress',
-    'Upgrading cluster',
-    'Online upgrade in progress',
-  ]
-  const unhealthyPhases = [
-    'Failing over',
-    'Failing over (streaming)',
-    'Failing over (designated primary)',
-  ]
-
-  if (healthyPhases.some(p => phase.includes(p))) {
+  if (bucket === 'failing') {
+    return { text: 'Failing Over', color: healthColors.alert, level: 'alert' }
+  }
+  // Zero ready instances is a hard down regardless of what the phase claims.
+  if (instances > 0 && readyInstances === 0) {
+    return { text: 'Not Ready', color: healthColors.unhealthy, level: 'unhealthy' }
+  }
+  if (bucket === 'healthy') {
     return { text: 'Healthy', color: healthColors.healthy, level: 'healthy' }
   }
-  if (unhealthyPhases.some(p => phase.includes(p))) {
-    return { text: 'Failing Over', color: healthColors.unhealthy, level: 'unhealthy' }
-  }
-  if (transientPhases.some(p => phase.includes(p))) {
+  // A transient phase explains partial readiness better than a bare "Degraded".
+  if (bucket === 'transient' || bucket === 'attention') {
     return { text: phase, color: healthColors.degraded, level: 'degraded' }
+  }
+  if (instances > 0 && readyInstances < instances) {
+    return { text: 'Degraded', color: healthColors.degraded, level: 'degraded' }
   }
 
   // Conditions fallback
@@ -58,6 +108,8 @@ export function getCNPGClusterStatus(resource: any): StatusBadge {
     return { text: readyCond.reason || 'Not Ready', color: healthColors.unhealthy, level: 'unhealthy' }
   }
 
+  // Unrecognized phase — surface the operator's own words rather than inventing
+  // a health level. A new CNPG minor adding a phase lands here, not in "Healthy".
   if (phase) {
     return { text: phase, color: healthColors.unknown, level: 'unknown' }
   }
@@ -118,21 +170,66 @@ export function getCNPGClusterUpdateStrategy(resource: any): string {
   return resource.spec?.primaryUpdateStrategy || 'unsupervised'
 }
 
+export const CNPG_BARMAN_PLUGIN_NAME = 'barman-cloud.cloudnative-pg.io'
+
+export interface CNPGBarmanPlugin {
+  name: string
+  /** ObjectStore CR (barmancloud.cnpg.io/v1) holding the real destination + recovery window. */
+  barmanObjectName?: string
+  /** Resolved server key inside ObjectStore.status.serverRecoveryWindow. */
+  serverName?: string
+  isWALArchiver: boolean
+}
+
+/**
+ * Detects the barman-cloud CNPG-I plugin. In-tree `spec.backup.barmanObjectStore`
+ * is deprecated as of CNPG 1.26 and the migration moves config into an
+ * `ObjectStore` CR in a different API group — at which point CNPG stops setting
+ * status.lastSuccessfulBackup / firstRecoverabilityPoint entirely.
+ */
+export function getCNPGClusterBarmanPlugin(resource: any): CNPGBarmanPlugin | null {
+  const plugins = resource.spec?.plugins
+  if (!Array.isArray(plugins)) return null
+  const plugin = plugins.find(
+    (p: any) => p?.name === CNPG_BARMAN_PLUGIN_NAME && p?.enabled !== false
+  )
+  if (!plugin) return null
+  return {
+    name: plugin.name,
+    barmanObjectName: plugin.parameters?.barmanObjectName,
+    // ObjectStore keys the recovery window by the plugin's serverName when set,
+    // otherwise by the cluster name.
+    serverName: plugin.parameters?.serverName || resource.metadata?.name,
+    isWALArchiver: plugin.isWALArchiver === true,
+  }
+}
+
 export function getCNPGClusterBackupConfig(resource: any): {
   configured: boolean
   destinationPath?: string
   retentionPolicy?: string
   lastSuccessfulBackup?: string
   firstRecoverabilityPoint?: string
+  /** Non-null when backup is managed by the barman-cloud plugin. */
+  plugin: CNPGBarmanPlugin | null
+  /**
+   * True when the status RPO fields are deprecated-and-unset by design (plugin
+   * mode) rather than genuinely absent. Distinguishes "tracked elsewhere" from
+   * "no backups configured" — the ambiguity that made this section render blank.
+   */
+  rpoTrackedOnObjectStore: boolean
 } {
   const backup = resource.spec?.backup
   const barman = backup?.barmanObjectStore
+  const plugin = getCNPGClusterBarmanPlugin(resource)
   return {
-    configured: !!barman,
+    configured: !!barman || !!plugin,
     destinationPath: barman?.destinationPath,
     retentionPolicy: backup?.retentionPolicy,
     lastSuccessfulBackup: resource.status?.lastSuccessfulBackup,
     firstRecoverabilityPoint: resource.status?.firstRecoverabilityPoint,
+    plugin,
+    rpoTrackedOnObjectStore: !!plugin && !resource.status?.lastSuccessfulBackup,
   }
 }
 
@@ -172,6 +269,7 @@ export interface CNPGInstanceReportedState {
   podName: string
   isPrimary: boolean
   timelineID?: number
+  ip?: string
 }
 
 export function getCNPGClusterInstancesReportedState(resource: any): CNPGInstanceReportedState[] {
@@ -180,7 +278,9 @@ export function getCNPGClusterInstancesReportedState(resource: any): CNPGInstanc
   return Object.entries(reported).map(([podName, state]: [string, any]) => ({
     podName,
     isPrimary: state?.isPrimary === true,
-    timelineID: state?.timelineID,
+    // CNPG serializes this as timeLineID (capital L).
+    timelineID: state?.timeLineID,
+    ip: state?.ip,
   }))
 }
 
@@ -205,21 +305,97 @@ export function getCNPGClusterCertificateExpirations(resource: any): CNPGCertifi
 }
 
 // ============================================================================
+// CNPG CLUSTER CONDITIONS — WAL ARCHIVING / BACKUP HEALTH
+// ============================================================================
+
+export interface CNPGCondition {
+  type: string
+  status: string
+  reason?: string
+  message?: string
+  lastTransitionTime?: string
+}
+
+export function getCNPGClusterCondition(resource: any, type: string): CNPGCondition | null {
+  const conditions = resource.status?.conditions
+  if (!Array.isArray(conditions)) return null
+  const cond = conditions.find((c: any) => c?.type === type)
+  if (!cond) return null
+  return {
+    type: cond.type,
+    status: String(cond.status ?? ''),
+    reason: cond.reason,
+    message: cond.message,
+    lastTransitionTime: cond.lastTransitionTime,
+  }
+}
+
+/**
+ * WAL archiving failure — the classic silent CNPG incident. The cluster keeps
+ * serving traffic normally while the recovery point stops advancing.
+ *
+ * The condition proves the LAST ARCHIVE ATTEMPT failed, not an exact RPO, so
+ * callers must not turn `since` into a data-loss window.
+ */
+export function getCNPGWALArchivingFailure(resource: any): CNPGCondition | null {
+  const cond = getCNPGClusterCondition(resource, 'ContinuousArchiving')
+  if (!cond || cond.status !== 'False') return null
+  return cond
+}
+
+/**
+ * Last-backup failure. CNPG also sets LastBackupSucceeded=False with reason
+ * `BackupStarted` while a backup is merely in flight — treating that as a
+ * failure would light the banner on every backup run, so only an explicit
+ * LastBackupFailed reason counts.
+ */
+export function getCNPGLastBackupFailure(resource: any): CNPGCondition | null {
+  const cond = getCNPGClusterCondition(resource, 'LastBackupSucceeded')
+  if (!cond || cond.status !== 'False') return null
+  if (cond.reason === 'BackupStarted') return null
+  return cond
+}
+
+// ============================================================================
 // CNPG BACKUP UTILITIES
 // ============================================================================
+
+// Backup phases are lowercase tokens from CNPG's api/v1/backup_types.go,
+// verified against CNPG 1.27. Unlike cluster phases these are stable enum
+// tokens, but they are still matched exactly — an unrecognized phase must
+// surface as unknown rather than be swallowed by a prefix match.
+export const CNPG_BACKUP_PHASES_TRANSIENT = ['pending', 'started', 'running', 'finalizing'] as const
+
+/**
+ * WAL archiving is broken upstream of this Backup, so the recovery window for
+ * the whole cluster is affected — not just this one object. Kept separate from
+ * a plain `failed` so callers can escalate it to the cluster level.
+ */
+export const CNPG_BACKUP_PHASE_WAL_ARCHIVING_FAILING = 'walArchivingFailing'
+
+export type CNPGBackupPhaseBucket = 'healthy' | 'transient' | 'failed' | 'walArchivingFailing' | 'unknown'
+
+export function classifyCNPGBackupPhase(phase: string): CNPGBackupPhaseBucket {
+  if (!phase) return 'unknown'
+  if (phase === CNPG_BACKUP_PHASE_WAL_ARCHIVING_FAILING) return 'walArchivingFailing'
+  if (phase === 'completed') return 'healthy'
+  if (phase === 'failed') return 'failed'
+  if ((CNPG_BACKUP_PHASES_TRANSIENT as readonly string[]).includes(phase)) return 'transient'
+  return 'unknown'
+}
 
 export function getCNPGBackupStatus(resource: any): StatusBadge {
   const phase = resource.status?.phase || ''
 
-  switch (phase.toLowerCase()) {
-    case 'completed':
+  switch (classifyCNPGBackupPhase(phase)) {
+    case 'healthy':
       return { text: 'Completed', color: healthColors.healthy, level: 'healthy' }
-    case 'running':
-      return { text: 'Running', color: healthColors.degraded, level: 'degraded' }
-    case 'pending':
-      return { text: 'Pending', color: healthColors.degraded, level: 'degraded' }
+    case 'transient':
+      return { text: phase.charAt(0).toUpperCase() + phase.slice(1), color: healthColors.degraded, level: 'degraded' }
     case 'failed':
       return { text: 'Failed', color: healthColors.unhealthy, level: 'unhealthy' }
+    case 'walArchivingFailing':
+      return { text: 'WAL Archiving Failing', color: healthColors.unhealthy, level: 'unhealthy' }
     default:
       if (phase) return { text: phase, color: healthColors.unknown, level: 'unknown' }
       return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
@@ -341,22 +517,35 @@ export function getCNPGScheduledBackupOwnerRef(resource: any): string {
 // CNPG POOLER UTILITIES
 // ============================================================================
 
+/**
+ * Pooler.status.instances is "the number of pods trying to be scheduled" — NOT
+ * ready pods. A Pooler whose PgBouncer pods are all Pending still reports
+ * status.instances == spec.instances, so reading it as readiness renders a
+ * broken Pooler green. Readiness lives on the generated Deployment (same name,
+ * same namespace), which the Pooler CR alone cannot see — so the positive state
+ * is labelled "Scheduled", not "Ready".
+ */
 export function getCNPGPoolerStatus(resource: any): StatusBadge {
   const desired = resource.spec?.instances ?? 0
-  const ready = resource.status?.instances ?? 0
+  const scheduled = resource.status?.instances ?? 0
 
-  if (desired > 0 && ready < desired) {
-    if (ready === 0) {
-      return { text: 'Not Ready', color: healthColors.unhealthy, level: 'unhealthy' }
+  if (desired > 0 && scheduled < desired) {
+    if (scheduled === 0) {
+      return { text: 'Not Scheduled', color: healthColors.unhealthy, level: 'unhealthy' }
     }
     return { text: 'Degraded', color: healthColors.degraded, level: 'degraded' }
   }
 
-  if (desired > 0 && ready >= desired) {
-    return { text: 'Ready', color: healthColors.healthy, level: 'healthy' }
+  if (desired > 0 && scheduled >= desired) {
+    return { text: 'Scheduled', color: healthColors.healthy, level: 'healthy' }
   }
 
   return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
+}
+
+/** Name of the Deployment CNPG generates for this Pooler — where real readiness lives. */
+export function getCNPGPoolerDeploymentName(resource: any): string {
+  return resource.metadata?.name || ''
 }
 
 export function getCNPGPoolerCluster(resource: any): string {

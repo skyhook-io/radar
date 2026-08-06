@@ -65,6 +65,10 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 		input.AllServices = listNamespaced(cache.Services(), nil)
 	}
 
+	// CloudNativePG clusters + their backup schedules for the declarative-backup
+	// posture check. Nil inventory (CNPG absent / RBAC denied) → check no-ops.
+	input.CNPGClusters, input.CNPGScheduledBackups, input.CNPGScheduledBackupsAuthoritative = listCNPGDynamic(namespaces)
+
 	return bp.RunChecks(input)
 }
 
@@ -152,6 +156,64 @@ func listCrossplaneDynamic(namespaces []string) (mrs, xrs []*unstructured.Unstru
 		}
 	}
 	return mrs, xrs
+}
+
+const cnpgGroup = "postgresql.cnpg.io"
+
+// listCNPGDynamic gathers CNPG Clusters (scoped to the audited namespaces —
+// they're the subjects the check reports on) plus ScheduledBackups. A
+// ScheduledBackup always lives in its Cluster's namespace, so the targets need
+// no cross-namespace widening; what they DO need is absence-authority.
+//
+// `scheduledAuthoritative` is true only when a synced cluster-wide
+// ScheduledBackup informer backs the list. Under a namespace-scoped fallback the
+// cache knows a subset of namespaces, so "no schedule targets this cluster"
+// could just mean "not listed" — the check must not run at all there.
+func listCNPGDynamic(namespaces []string) (clusters, scheduledBackups []*unstructured.Unstructured, scheduledAuthoritative bool) {
+	cache := k8s.GetDynamicResourceCache()
+	if cache == nil {
+		return nil, nil, false
+	}
+
+	clustersGVR := schema.GroupVersionResource{Group: cnpgGroup, Version: "v1", Resource: "clusters"}
+	scheduledGVR := schema.GroupVersionResource{Group: cnpgGroup, Version: "v1", Resource: "scheduledbackups"}
+	_ = cache.EnsureWatching(clustersGVR) // best-effort; unserved/denied → no-op
+	_ = cache.EnsureWatching(scheduledGVR)
+
+	nsSet := make(map[string]bool, len(namespaces))
+	for _, ns := range namespaces {
+		nsSet[ns] = true
+	}
+	inScope := func(u *unstructured.Unstructured) bool {
+		if len(namespaces) == 0 {
+			return true
+		}
+		ns := u.GetNamespace()
+		return ns == "" || nsSet[ns]
+	}
+
+	list := func(gvr schema.GroupVersionResource) []*unstructured.Unstructured {
+		items, err := cache.ListWatched(gvr)
+		if err != nil {
+			if !apierrors.IsForbidden(err) && !apierrors.IsUnauthorized(err) {
+				log.Printf("[audit] CNPG scan: skipping %s: %v", gvr.GroupResource(), err)
+			}
+			return nil
+		}
+		var out []*unstructured.Unstructured
+		for _, u := range items {
+			if u == nil || !inScope(u) {
+				continue
+			}
+			out = append(out, u)
+		}
+		return out
+	}
+
+	clusters = list(clustersGVR)
+	scheduledBackups = list(scheduledGVR)
+	scheduledAuthoritative = cache.IsClusterWideSynced(scheduledGVR)
+	return clusters, scheduledBackups, scheduledAuthoritative
 }
 
 // traefikGroups are the two CRD groups Traefik has shipped — current and legacy.

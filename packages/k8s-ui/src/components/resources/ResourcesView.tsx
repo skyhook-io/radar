@@ -1291,6 +1291,16 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'storage', label: 'Storage', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
+  cnpgbackups: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'cluster', label: 'Cluster', width: 'w-36' },
+    { key: 'method', label: 'Method', width: 'w-36' },
+    { key: 'started', label: 'Started', width: 'w-24' },
+    { key: 'duration', label: 'Duration', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
   scheduledbackups: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
@@ -1836,6 +1846,9 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
 // Map (plural, group) → KNOWN_COLUMNS key for kinds that collide with core K8s
 const GROUP_QUALIFIED_COLUMN_KEYS: Record<string, Record<string, string>> = {
   clusters: { 'postgresql.cnpg.io': 'cnpgclusters', 'cluster.x-k8s.io': 'capiclusters' },
+  // Velero owns the unqualified `backups` column set; CNPG Backups carry a
+  // completely different shape (cluster + method, no storage location/expiry).
+  backups: { 'postgresql.cnpg.io': 'cnpgbackups' },
   clusterpolicies: { 'nvidia.com': 'nvidiaclusterpolicies' },
   services: { 'serving.knative.dev': 'knativeservices' },
   configurations: { 'serving.knative.dev': 'knativeconfigurations' },
@@ -5811,12 +5824,19 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
     case 'clustersecretstores':
       return <ClusterSecretStoreCell resource={resource} column={column} />
     // Velero
+    case 'cnpgbackups':
+      return <CNPGBackupCell resource={resource} column={column} />
     case 'backups':
-      // Disambiguate CNPG vs Velero backups by apiVersion
-      if (resource.apiVersion?.includes('cnpg.io')) {
+      // Reached only when the group is unknown to normalizeKindToPlural. Both
+      // engines are matched positively so a third `backups` CRD renders generic
+      // rather than inheriting whichever branch happened to be the fallback.
+      if (resource.apiVersion?.includes('postgresql.cnpg.io')) {
         return <CNPGBackupCell resource={resource} column={column} />
       }
-      return <BackupCell resource={resource} column={column} />
+      if (resource.apiVersion?.includes('velero.io')) {
+        return <BackupCell resource={resource} column={column} />
+      }
+      return <GenericCell resource={resource} column={column} />
     case 'velerorestores':
       return <RestoreCell resource={resource} column={column} />
     case 'veleroschedules':
@@ -5832,12 +5852,25 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       return <BackupRepositoryCell resource={resource} column={column} />
     // CloudNativePG
     case 'cnpgclusters':
-    case 'clusters':
       return <CNPGClusterCell resource={resource} column={column} />
+    case 'clusters':
+      // Positive guard: `clusters` is one of the most collided CRD plurals
+      // (CNPG, CAPI, KubeBlocks, Redis/Valkey operators). Anything else gets
+      // the generic cell instead of a fabricated Postgres status.
+      if (resource.apiVersion?.includes('postgresql.cnpg.io')) {
+        return <CNPGClusterCell resource={resource} column={column} />
+      }
+      return <GenericCell resource={resource} column={column} />
     case 'scheduledbackups':
-      return <CNPGScheduledBackupCell resource={resource} column={column} />
+      if (resource.apiVersion?.includes('postgresql.cnpg.io')) {
+        return <CNPGScheduledBackupCell resource={resource} column={column} />
+      }
+      return <GenericCell resource={resource} column={column} />
     case 'poolers':
-      return <CNPGPoolerCell resource={resource} column={column} />
+      if (resource.apiVersion?.includes('postgresql.cnpg.io')) {
+        return <CNPGPoolerCell resource={resource} column={column} />
+      }
+      return <GenericCell resource={resource} column={column} />
     // Istio Service Mesh
     case 'virtualservices':
       return <VirtualServiceCell resource={resource} column={column} />

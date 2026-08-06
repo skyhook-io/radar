@@ -764,9 +764,11 @@ They roll up under two categories: `backup_failed` for runs, and `backup_target_
 - Storage configuration: data size, storage class, WAL storage
 - Backup configuration: destination, retention policy, last successful backup, recovery point
 - Monitoring: PodMonitor integration, custom query ConfigMaps
-- Replication settings (for replica clusters)
+- Replication settings (for replica clusters), with per-instance role and timeline ID
 - PostgreSQL parameters
 - Health detection (AlertBanner for degraded clusters, failover/switchover in progress)
+- **WAL archiving failure** — a first-class AlertBanner driven by the `ContinuousArchiving` condition. This is the classic silent CNPG incident: the cluster keeps serving traffic normally while the recovery point stops advancing. The condition proves the last archive attempt failed, so Radar reports "archiving failing since &lt;time&gt; — the recovery point may not be advancing" and deliberately does not claim an exact RPO
+- **Last-backup failure** — driven by the `LastBackupSucceeded` condition. CNPG also sets this condition False with reason `BackupStarted` while a backup is merely in flight; Radar ignores that state rather than alerting on every backup run
 
 **Backup Detail View:**
 - Phase, backup method, duration, start/stop timestamps
@@ -782,12 +784,34 @@ They roll up under two categories: `backup_failed` for runs, and `backup_target_
 
 **Pooler Detail View:**
 - Type (read-write/read-only) with colored badge, pool mode
-- Instances ready/desired
+- Instances scheduled/desired
 - Cluster reference with clickable link
 - PgBouncer parameters
-- Degraded state detection (AlertBanner when not all instances ready)
+- Degraded state detection (AlertBanner when not all instances are scheduled)
+
+Note `Pooler.status.instances` counts pods *trying to be scheduled*, not ready pods — a Pooler whose PgBouncer pods are all Pending still reports the full count. Radar therefore labels the healthy state **Scheduled** rather than Ready; actual readiness lives on the Deployment CNPG generates for the Pooler (same name, same namespace).
 
 **Resource Browser:** Smart columns show status, instance counts (with degraded highlighting), primary instance, image tag, storage size, cluster reference, and schedule expressions.
+
+### Phase classification
+
+Cluster phases are full English sentences (`Cluster is unrecoverable and needs manual intervention`), not enum tokens, and are matched on equality. They are bucketed as healthy / transient / failing / terminal / attention; terminal phases outrank instance counts, so an unrecoverable cluster whose pods happen to still be Ready is still rendered red. An unrecognized phase from a newer CNPG minor surfaces verbatim as unknown rather than being guessed at.
+
+Backup phases are lowercase tokens. `walArchivingFailing` is treated as a cluster-level signal, not an ordinary backup failure — archiving is broken upstream of that Backup, so the whole recovery window is affected.
+
+The taxonomy is defined twice — TypeScript for the badge, Go for the issue detector — and pinned by `TestCNPGPhaseTaxonomyMatchesFrontend`, which fails if the two drift.
+
+### Backup: in-tree vs the barman-cloud plugin
+
+In-tree `spec.backup.barmanObjectStore` is deprecated as of CNPG 1.26. Clusters migrated to the [barman-cloud plugin](https://github.com/cloudnative-pg/plugin-barman-cloud) keep their config in an `ObjectStore` CR (`barmancloud.cnpg.io/v1`), and CNPG stops populating `status.lastSuccessfulBackup` / `firstRecoverabilityPoint` by design. Radar detects the plugin from `spec.plugins[]`, names the ObjectStore and resolved server key, and says so explicitly — rather than rendering an empty backup section that reads identically to "no backups configured". Reading the ObjectStore's recovery window is not yet implemented.
+
+### Cluster Audit checks
+
+| Check | What it catches |
+|-------|-----------------|
+| `cnpgNoDeclarativeBackup` | A CNPG Cluster with no ScheduledBackup targeting it |
+
+Deliberately narrow: the absence of a ScheduledBackup does not prove a cluster is unprotected (on-demand Backups, volume snapshots and external schedulers all exist), so the finding asserts only that no schedule is *declared*, at posture severity. All three `spec.method` values — `barmanObjectStore`, `volumeSnapshot` and `plugin` — count as a declared schedule. Suspended schedules count as present, since suspension is deliberate operator intent. The check does not run at all unless a synced cluster-wide ScheduledBackup informer backs the inventory, because absence would otherwise be unprovable.
 
 ### Supported CRDs
 
@@ -797,6 +821,8 @@ They roll up under two categories: `backup_failed` for runs, and `backup_target_
 | Backup | `postgresql.cnpg.io/v1` | — | Yes | — |
 | ScheduledBackup | `postgresql.cnpg.io/v1` | — | Yes | — |
 | Pooler | `postgresql.cnpg.io/v1` | — | Yes | — |
+
+The `clusters` and `backups` plurals collide with Cluster API and Velero respectively. Radar resolves both with positive API-group guards, so a third operator's CRD sharing either plural (KubeBlocks, Redis/Valkey operators) falls through to the generic renderer instead of inheriting a fabricated PostgreSQL status.
 
 ---
 

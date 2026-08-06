@@ -18,7 +18,10 @@ import {
   getCNPGClusterPostgresParams,
   getCNPGClusterInstancesReportedState,
   getCNPGClusterCertificateExpirations,
+  getCNPGWALArchivingFailure,
+  getCNPGLastBackupFailure,
 } from '../resource-utils-cnpg'
+import { formatAge } from '../resource-utils'
 
 interface CNPGClusterRendererProps {
   data: any
@@ -56,6 +59,10 @@ export function CNPGClusterRenderer({ data, onNavigate }: CNPGClusterRendererPro
 
   // Last failed backup
   const lastFailedBackup = data.status?.lastFailedBackup
+
+  // WAL archiving / backup health, straight from the operator's own conditions.
+  const walArchivingFailure = getCNPGWALArchivingFailure(data)
+  const lastBackupFailure = getCNPGLastBackupFailure(data)
 
   // Problem detection
   const isDown = instances > 0 && readyInstances === 0
@@ -108,11 +115,26 @@ export function CNPGClusterRenderer({ data, onNavigate }: CNPGClusterRendererPro
           message={`Target primary is ${targetPrimary} but current primary is ${currentPrimary}.`}
         />
       )}
-      {lastFailedBackup && (
+      {walArchivingFailure && (
         <AlertBanner
           variant="error"
-          title="Last Backup Failed"
-          message={`Last backup failed at ${lastFailedBackup}. WAL archiving may be impacted and RPO is growing.`}
+          title="WAL archiving is failing"
+          message={
+            `Continuous archiving has been failing${walArchivingFailure.lastTransitionTime ? ` for ${formatAge(walArchivingFailure.lastTransitionTime)}` : ''}. ` +
+            'The cluster keeps serving traffic normally, but the recovery point may not be advancing — ' +
+            'check the backup destination before relying on point-in-time recovery.' +
+            (walArchivingFailure.message ? ` Operator reported: ${walArchivingFailure.message}` : '')
+          }
+        />
+      )}
+      {lastBackupFailure && (
+        <AlertBanner
+          variant="error"
+          title="Last backup failed"
+          message={
+            `The most recent backup attempt failed${lastBackupFailure.lastTransitionTime ? ` ${formatAge(lastBackupFailure.lastTransitionTime)} ago` : ''}.` +
+            (lastBackupFailure.message ? ` Operator reported: ${lastBackupFailure.message}` : '')
+          }
         />
       )}
       {expiredCerts.length > 0 && (
@@ -242,6 +264,22 @@ export function CNPGClusterRenderer({ data, onNavigate }: CNPGClusterRendererPro
       {backupConfig.configured && (
         <Section title="Backup" icon={Clock} defaultExpanded>
           <PropertyList>
+            {backupConfig.plugin && (
+              <Property label="Managed By" value="barman-cloud plugin" />
+            )}
+            {backupConfig.plugin?.barmanObjectName && (
+              <Property label="Object Store" value={
+                <ResourceLink
+                  name={backupConfig.plugin.barmanObjectName}
+                  kind="objectstores"
+                  namespace={data.metadata?.namespace || ''}
+                  onNavigate={onNavigate}
+                />
+              } />
+            )}
+            {backupConfig.plugin?.isWALArchiver && (
+              <Property label="WAL Archiver" value="This plugin" />
+            )}
             {backupConfig.destinationPath && (
               <Property label="Destination" value={backupConfig.destinationPath} />
             )}
@@ -258,6 +296,17 @@ export function CNPGClusterRenderer({ data, onNavigate }: CNPGClusterRendererPro
               <Property label="First Recoverability" value={backupConfig.firstRecoverabilityPoint} />
             )}
           </PropertyList>
+          {/* Without this note the section renders empty on plugin-migrated
+              clusters, which is indistinguishable from "no backups configured" —
+              the worst possible ambiguity for a recovery-point display. */}
+          {backupConfig.rpoTrackedOnObjectStore && (
+            <div className="mt-2 pt-2 border-t border-theme-border text-xs text-theme-text-secondary">
+              Recovery-point fields are not published on the Cluster when backups run through the
+              barman-cloud plugin. The recovery window is tracked on the ObjectStore
+              {backupConfig.plugin?.barmanObjectName ? ` "${backupConfig.plugin.barmanObjectName}"` : ''}
+              {backupConfig.plugin?.serverName ? `, under server "${backupConfig.plugin.serverName}"` : ''}.
+            </div>
+          )}
         </Section>
       )}
 

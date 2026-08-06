@@ -276,6 +276,8 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "projectcontour.io", Versions: []string{"v1"}, Resource: "httpproxies", Kind: "HTTPProxy", Namespaced: true},
 	{Group: "postgresql.cnpg.io", Versions: []string{"v1"}, Resource: "clusters", Kind: "Cluster", Namespaced: true},
 	{Group: "postgresql.cnpg.io", Versions: []string{"v1"}, Resource: "poolers", Kind: "Pooler", Namespaced: true},
+	{Group: "postgresql.cnpg.io", Versions: []string{"v1"}, Resource: "backups", Kind: "Backup", Namespaced: true},
+	{Group: "postgresql.cnpg.io", Versions: []string{"v1"}, Resource: "scheduledbackups", Kind: "ScheduledBackup", Namespaced: true},
 	{Group: "cluster.x-k8s.io", Versions: []string{"v1beta2", "v1beta1"}, Resource: "clusters", Kind: "Cluster", Namespaced: true},
 	{Group: "cluster.x-k8s.io", Versions: []string{"v1beta2", "v1beta1"}, Resource: "machinedeployments", Kind: "MachineDeployment", Namespaced: true},
 	{Group: "cluster.x-k8s.io", Versions: []string{"v1beta2", "v1beta1"}, Resource: "machinesets", Kind: "MachineSet", Namespaced: true},

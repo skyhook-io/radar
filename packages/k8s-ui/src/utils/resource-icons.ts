@@ -29,6 +29,8 @@ import {
   HardDrive,
   Cylinder,
   Database,
+  DatabaseBackup,
+  Waypoints,
   FileSearch,
   Fingerprint,
   Wand2,
@@ -206,6 +208,13 @@ const KIND_ICON_MAP: Record<string, LucideIcon> = {
   // Contour
   httpproxy: Globe,
 
+  // CloudNativePG — pseudo-kinds for topology; the resource browser resolves
+  // the real API kinds through GROUP_QUALIFIED_KIND_ICONS below.
+  cnpgcluster: Database,
+  cnpgbackup: DatabaseBackup,
+  cnpgscheduledbackup: DatabaseBackup,
+  pooler: Waypoints,
+
   // Cluster API
   capicluster: Server,
   machinedeployment: Layers,
@@ -273,8 +282,25 @@ const KIND_ICON_MAP: Record<string, LucideIcon> = {
 }
 
 /** Get the icon for a Kubernetes resource kind (case-insensitive). */
-export function getResourceIcon(kind: string): LucideIcon {
-  return KIND_ICON_MAP[kind.toLowerCase()] ?? Puzzle
+/**
+ * Kinds shared by more than one operator, where the icon can only be chosen
+ * once the API group is known. The resource browser passes the group; callers
+ * that don't have one fall through to the ungrouped map.
+ */
+const GROUP_QUALIFIED_KIND_ICONS: Record<string, Record<string, LucideIcon>> = {
+  cluster: { 'postgresql.cnpg.io': Database, 'cluster.x-k8s.io': Server },
+  backup: { 'postgresql.cnpg.io': DatabaseBackup },
+  scheduledbackup: { 'postgresql.cnpg.io': DatabaseBackup },
+  pooler: { 'postgresql.cnpg.io': Waypoints },
+}
+
+export function getResourceIcon(kind: string, group?: string): LucideIcon {
+  const k = kind.toLowerCase()
+  if (group) {
+    const byGroup = GROUP_QUALIFIED_KIND_ICONS[k]?.[group]
+    if (byGroup) return byGroup
+  }
+  return KIND_ICON_MAP[k] ?? Puzzle
 }
 
 /** Get the icon for a topology node kind, including virtual kinds (Internet, PodGroup). */

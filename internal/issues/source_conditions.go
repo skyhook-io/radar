@@ -196,6 +196,8 @@ func detectCuratedConditionIssues(gvr schema.GroupVersionResource, kind string, 
 		if kind == "CustomResourceDefinition" {
 			return detectObjectConditionIssues(gvr, kind, u, SeverityCritical, "Established", "NamesAccepted")
 		}
+	case "postgresql.cnpg.io":
+		return detectCNPGIssues(gvr, kind, u)
 	}
 	return nil
 }

@@ -11,6 +11,7 @@ import {
   getCNPGBackupCluster,
   getCNPGBackupMethod,
   getCNPGBackupDuration,
+  getCNPGBackupStartedAt,
   getCNPGScheduledBackupStatus,
   getCNPGScheduledBackupCluster,
   getCNPGScheduleCron,
@@ -77,6 +78,10 @@ export function CNPGBackupCell({ resource, column }: { resource: any; column: st
     case 'method': {
       const method = getCNPGBackupMethod(resource)
       return <span className="text-sm text-theme-text-secondary">{method}</span>
+    }
+    case 'started': {
+      const started = getCNPGBackupStartedAt(resource)
+      return <span className="text-sm text-theme-text-secondary">{started}</span>
     }
     case 'duration': {
       const duration = getCNPGBackupDuration(resource)
