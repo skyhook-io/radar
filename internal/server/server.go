@@ -410,7 +410,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 		AllowedHeaders: []string{"Accept", "Content-Type"},
 		// Without an expose entry, cross-origin JS reads these as "" and the
 		// timeline client silently falls back to full-ring refetches.
-		ExposedHeaders:   []string{"X-Radar-Timeline-Epoch", "X-Radar-Timeline-Max-Seq"},
+		ExposedHeaders:   []string{"X-Radar-Timeline-Epoch", "X-Radar-Timeline-Max-Seq", "X-Radar-Timeline-Min-Seq"},
 		AllowCredentials: true,
 	}))
 
@@ -3401,6 +3401,14 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Radar-Timeline-Epoch", strconv.FormatInt(timeline.ObservationStart().UnixNano(), 10))
 	if maxSeq > 0 {
 		w.Header().Set("X-Radar-Timeline-Max-Seq", strconv.FormatInt(maxSeq, 10))
+	}
+	// The store's oldest retained seq lets a consumer pulling forward from a
+	// cursor detect that events below its cursor were evicted while it was
+	// behind. Mirrors the Max-Seq header's marshaling and its skip-when-zero
+	// convention: an empty store (never recorded, nothing evicted) reports
+	// OldestSeq==0, so the header is omitted rather than sent as 0.
+	if oldestSeq := store.Stats().OldestSeq; oldestSeq > 0 {
+		w.Header().Set("X-Radar-Timeline-Min-Seq", strconv.FormatInt(oldestSeq, 10))
 	}
 	s.writeJSON(w, events)
 }
