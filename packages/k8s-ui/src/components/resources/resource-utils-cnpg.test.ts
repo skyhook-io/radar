@@ -386,3 +386,33 @@ describe('CNPG_CLUSTER_PHASES_ATTENTION', () => {
     expect(classifyCNPGClusterPhase('Cluster upgrade delayed')).toBe('transient')
   })
 })
+
+// The badge and the Go issue detector must agree on the same object. These
+// fixtures are mirrored in internal/issues/source_cnpg_test.go
+// (TestCNPGBadgeAndIssueAgreeOnReadiness) — change one, change both.
+describe('badge/issue agreement on instance readiness', () => {
+  it('does not render Healthy while the detector reports a shortfall', () => {
+    // CNPG sets "Cluster in healthy state" once reconciliation settles, which
+    // can be true while instances are still missing. Returning Healthy here put
+    // a green badge on a cluster the Go side flags CNPGClusterDegraded.
+    const s = getCNPGClusterStatus(cluster({ phase: 'Cluster in healthy state', readyInstances: 1 }, { instances: 3 }))
+    expect(s.level).toBe('degraded')
+    expect(s.text).toBe('Degraded')
+  })
+
+  it('still renders Healthy only when the count is actually met', () => {
+    expect(getCNPGClusterStatus(cluster({ phase: 'Cluster in healthy state', readyInstances: 3 }, { instances: 3 })).level).toBe('healthy')
+  })
+
+  it('lets a transient phase explain a legitimate shortfall', () => {
+    // Go marks these phaseExplained and raises no issue, so the badge must not
+    // say "Degraded" either — it shows the phase, at the same amber tier.
+    const s = getCNPGClusterStatus(cluster({ phase: 'Creating a new replica', readyInstances: 1 }, { instances: 3 }))
+    expect(s.level).toBe('degraded')
+    expect(s.text).toBe('Creating a new replica')
+  })
+
+  it('flags a shortfall under an unrecognized phase, matching the Go fallthrough', () => {
+    expect(getCNPGClusterStatus(cluster({ phase: 'Some future phase', readyInstances: 1 }, { instances: 3 })).level).toBe('degraded')
+  })
+})

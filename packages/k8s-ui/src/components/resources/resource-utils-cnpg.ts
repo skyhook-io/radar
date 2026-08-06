@@ -107,15 +107,22 @@ export function getCNPGClusterStatus(resource: any): StatusBadge {
   if (instances > 0 && readyInstances === 0) {
     return { text: 'Not Ready', color: healthColors.unhealthy, level: 'unhealthy' }
   }
-  if (bucket === 'healthy') {
-    return { text: 'Healthy', color: healthColors.healthy, level: 'healthy' }
-  }
-  // A transient phase explains partial readiness better than a bare "Degraded".
+  // A transient phase explains partial readiness better than a bare "Degraded",
+  // so it is checked BEFORE the shortfall — mid-operation the cluster is
+  // legitimately below its desired count.
   if (bucket === 'transient' || bucket === 'attention') {
     return { text: phase, color: healthColors.degraded, level: 'degraded' }
   }
+  // The shortfall must be checked BEFORE the healthy phase, not after. CNPG
+  // reports "Cluster in healthy state" the moment reconciliation is settled,
+  // which can be true while instances are still missing — returning Healthy
+  // there paints a green badge on a cluster the Go detector flags as
+  // CNPGClusterDegraded. Mirrors source_cnpg.go's !phaseExplained gate.
   if (instances > 0 && readyInstances < instances) {
     return { text: 'Degraded', color: healthColors.degraded, level: 'degraded' }
+  }
+  if (bucket === 'healthy') {
+    return { text: 'Healthy', color: healthColors.healthy, level: 'healthy' }
   }
 
   // Conditions fallback

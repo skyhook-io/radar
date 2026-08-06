@@ -331,3 +331,40 @@ func TestCNPGUpgradeDelayedIsTransientNotAttention(t *testing.T) {
 		}
 	}
 }
+
+// Mirror of the TS "badge/issue agreement on instance readiness" suite in
+// resource-utils-cnpg.test.ts. Same fixtures, asserted from the detector side:
+// a green badge with a Degraded issue (or the reverse) is the drift this
+// integration was repaired to prevent.
+func TestCNPGBadgeAndIssueAgreeOnReadiness(t *testing.T) {
+	cases := []struct {
+		name      string
+		phase     string
+		desired   int64
+		ready     int64
+		wantIssue bool
+	}{
+		{"healthy phase, shortfall — badge Degraded", "Cluster in healthy state", 3, 1, true},
+		{"healthy phase, count met — badge Healthy", "Cluster in healthy state", 3, 3, false},
+		{"transient phase explains the shortfall — badge shows the phase", "Creating a new replica", 3, 1, false},
+		{"unrecognized phase, shortfall — badge Degraded", "Some future phase", 3, 1, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			u := cnpgCluster(
+				map[string]any{"instances": tc.desired},
+				map[string]any{"phase": tc.phase, "readyInstances": tc.ready},
+			)
+			issues := detectCNPGIssues(cnpgClusterGVR, "Cluster", u)
+			var degraded bool
+			for _, i := range issues {
+				if i.Reason == "CNPGClusterDegraded" {
+					degraded = true
+				}
+			}
+			if degraded != tc.wantIssue {
+				t.Errorf("CNPGClusterDegraded = %v, want %v (issues: %v)", degraded, tc.wantIssue, reasonsOf(issues))
+			}
+		})
+	}
+}
