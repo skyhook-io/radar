@@ -208,11 +208,10 @@ const KIND_ICON_MAP: Record<string, LucideIcon> = {
   // Contour
   httpproxy: Globe,
 
-  // CloudNativePG — pseudo-kinds for topology; the resource browser resolves
-  // the real API kinds through GROUP_QUALIFIED_KIND_ICONS below.
-  cnpgcluster: Database,
-  cnpgbackup: DatabaseBackup,
-  cnpgscheduledbackup: DatabaseBackup,
+  // CloudNativePG. Pooler is unambiguous so it keys directly; CNPG's colliding
+  // kinds resolve through GROUP_QUALIFIED_KIND_ICONS below. Topology
+  // pseudo-kinds (cnpgcluster/…) belong here only once pkg/topology's
+  // KindForGVK emits them — it has no CNPG case today.
   pooler: Waypoints,
 
   // Cluster API
