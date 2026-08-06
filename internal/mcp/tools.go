@@ -404,8 +404,10 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"check. In that mode, `resource_namespace` defaults to the ServiceAccount " +
 			"namespace; set it to an empty string for cluster-scoped or cluster-wide access. " +
 			"The caller must be allowed to create SubjectAccessReviews. Radar never retries " +
-			"with a privileged identity, so authorization errors are explicit. ServiceAccounts " +
-			"require a subject namespace; omit it for Users and Groups.",
+			"with a privileged identity, so authorization errors are explicit. Identify the " +
+			"subject with `kind` (ServiceAccount, User, or Group) and `name` — a bare name, " +
+			"not a qualified form like `system:serviceaccount:ns:sa`. `namespace` is required " +
+			"for ServiceAccounts and omitted for Users and Groups.",
 		Annotations: readOnly,
 	}, logToolCall("get_subject_permissions", handleGetSubjectPermissions))
 

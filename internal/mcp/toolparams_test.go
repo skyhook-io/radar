@@ -1,7 +1,9 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -29,7 +31,7 @@ func TestSubjectPermissionsAliasRepairsTheBenchmarkFailure(t *testing.T) {
 	// all" for a ServiceAccount that had one.
 	in := json.RawMessage(`{"namespace":"hotel-reservation","subject":"cleanup-controller","subjectKind":"ServiceAccount"}`)
 
-	fixed, repairs := repairToolArgs("get_subject_permissions", in)
+	fixed, repairs, _ := repairToolArgs("get_subject_permissions", in)
 	if len(repairs) == 0 {
 		t.Fatal("expected the subject/subjectKind call to be repaired; it was left unchanged")
 	}
@@ -68,7 +70,7 @@ func TestOrthographicRepairCrossesTheSnakeCamelSplit(t *testing.T) {
 	}
 	for _, tc := range cases {
 		raw := json.RawMessage(`{"` + tc.supplied + `":true}`)
-		fixed, repairs := repairToolArgs(tc.tool, raw)
+		fixed, repairs, _ := repairToolArgs(tc.tool, raw)
 		if len(repairs) == 0 {
 			t.Errorf("%s: %q was not repaired to %q", tc.tool, tc.supplied, tc.want)
 			continue
@@ -88,7 +90,7 @@ func TestRepairNeverInventsOrClobbers(t *testing.T) {
 
 	t.Run("unknown name with no accepted target is left for the validator", func(t *testing.T) {
 		raw := json.RawMessage(`{"kind":"ServiceAccount","name":"x","totally_made_up":1}`)
-		fixed, repairs := repairToolArgs("get_subject_permissions", raw)
+		fixed, repairs, _ := repairToolArgs("get_subject_permissions", raw)
 		if len(repairs) != 0 {
 			t.Fatalf("unexpected repair %v", repairs)
 		}
@@ -100,7 +102,7 @@ func TestRepairNeverInventsOrClobbers(t *testing.T) {
 	t.Run("an alias never overwrites a correctly-named value", func(t *testing.T) {
 		// Both spellings supplied: the canonical one must win untouched.
 		raw := json.RawMessage(`{"kind":"ServiceAccount","name":"real","subject":"decoy"}`)
-		fixed, _ := repairToolArgs("get_subject_permissions", raw)
+		fixed, _, _ := repairToolArgs("get_subject_permissions", raw)
 		var got map[string]string
 		if err := json.Unmarshal(fixed, &got); err != nil {
 			t.Fatal(err)
@@ -112,7 +114,7 @@ func TestRepairNeverInventsOrClobbers(t *testing.T) {
 
 	t.Run("non-object arguments are passed through", func(t *testing.T) {
 		raw := json.RawMessage(`["not","an","object"]`)
-		fixed, repairs := repairToolArgs("get_subject_permissions", raw)
+		fixed, repairs, _ := repairToolArgs("get_subject_permissions", raw)
 		if len(repairs) != 0 || string(fixed) != string(raw) {
 			t.Errorf("array args should be untouched, got %s %v", fixed, repairs)
 		}
@@ -120,7 +122,7 @@ func TestRepairNeverInventsOrClobbers(t *testing.T) {
 
 	t.Run("unregistered tool is passed through", func(t *testing.T) {
 		raw := json.RawMessage(`{"subject":"x"}`)
-		fixed, repairs := repairToolArgs("no_such_tool", raw)
+		fixed, repairs, _ := repairToolArgs("no_such_tool", raw)
 		if len(repairs) != 0 || string(fixed) != string(raw) {
 			t.Errorf("unknown tool should be untouched, got %s %v", fixed, repairs)
 		}
@@ -147,7 +149,7 @@ func TestSchemaErrorNamesTheAcceptedArguments(t *testing.T) {
 			Text: `validating "arguments": validating root: unexpected additional properties ["subject"]`,
 		}},
 	}
-	annotateSchemaError("get_subject_permissions", res)
+	annotateSchemaError("get_subject_permissions", res, nil)
 	if txt := res.Content[0].(*mcpsdk.TextContent).Text; !strings.Contains(txt, "accepts:") {
 		t.Errorf("validation error was not annotated: %s", txt)
 	}
@@ -157,28 +159,199 @@ func TestSchemaErrorNamesTheAcceptedArguments(t *testing.T) {
 		IsError: true,
 		Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: "ServiceAccount requires a namespace"}},
 	}
-	annotateSchemaError("get_subject_permissions", domain)
+	annotateSchemaError("get_subject_permissions", domain, nil)
 	if txt := domain.Content[0].(*mcpsdk.TextContent).Text; strings.Contains(txt, "accepts:") {
 		t.Errorf("domain error should not be annotated: %s", txt)
 	}
 }
 
-// TestEveryToolRegistersItsParameters guards the registry itself: a tool added
-// with mcpsdk.AddTool instead of addTool would silently lose both repair and
-// error help, which is invisible until an agent guesses a name wrong.
-func TestEveryToolRegistersItsParameters(t *testing.T) {
+// TestAliasesRefuseQualifiedValues is the safety property that makes semantic
+// aliases acceptable at all.
+//
+// An alias moves a value into a different field. If the value carries structure
+// the target field does not parse — "system:serviceaccount:ns:sa", "ns/pod",
+// "deployment/api" — renaming it turns a rejected call into a confidently WRONG
+// lookup: schema validation passes, the handler searches for a resource with
+// that literal name, finds nothing, and reports "no bindings" for a subject that
+// has them. That is the exact false negative this file exists to remove, so a
+// qualified value must be left for the validator to reject.
+func TestAliasesRefuseQualifiedValues(t *testing.T) {
 	registerToolsOnce(t)
 
-	if len(toolParamNames) < 20 {
-		t.Fatalf("only %d tools registered parameters; did a tool skip addTool()?", len(toolParamNames))
+	qualified := []string{
+		`{"subject":"system:serviceaccount:prod:cleanup","subjectKind":"ServiceAccount"}`,
+		`{"subject":"prod/cleanup-controller","subjectKind":"ServiceAccount"}`,
+		`{"subject":"has space","subjectKind":"ServiceAccount"}`,
+		`{"subject":123,"subjectKind":"ServiceAccount"}`,
 	}
-	for name, params := range toolParamNames {
-		if len(params) == 0 {
-			continue // genuinely argument-free tools are fine
+	for _, in := range qualified {
+		fixed, _, unresolved := repairToolArgs("get_subject_permissions", json.RawMessage(in))
+		var got map[string]json.RawMessage
+		if err := json.Unmarshal(fixed, &got); err != nil {
+			t.Fatalf("%s: %v", in, err)
 		}
-		if describeToolParams(name) == "" {
-			t.Errorf("tool %q has params %v but produces no parameter help", name, params)
+		if _, moved := got["name"]; moved {
+			t.Errorf("qualified value was silently remapped to name: %s -> %s", in, fixed)
 		}
+		if !slices.Contains(unresolved, "subject") {
+			t.Errorf("%s: expected 'subject' reported unresolved, got %v", in, unresolved)
+		}
+	}
+
+	// The bare-name case must still be repaired — the guard must not disable
+	// the alias entirely.
+	_, repairs, _ := repairToolArgs("get_subject_permissions",
+		json.RawMessage(`{"subject":"cleanup-controller","subjectKind":"ServiceAccount"}`))
+	if len(repairs) == 0 {
+		t.Error("guard disabled the alias for a plain name; bare names must still be repaired")
+	}
+}
+
+// TestMiddlewareAnnotatesRealSDKRejection drives an actually-invalid tools/call
+// through the SDK rather than fabricating its error text.
+//
+// The point is that the help must survive an SDK wording change: annotation is
+// keyed off argument names we know the tool does not accept, not off matching
+// the SDK's rendered message. A test that asserts against a hand-written string
+// would keep passing while the real integration broke.
+func TestMiddlewareAnnotatesRealSDKRejection(t *testing.T) {
+	ctx := context.Background()
+	session := connectTestServer(t)
+
+	res, err := session.CallTool(ctx, &mcpsdk.CallToolParams{
+		Name:      "get_subject_permissions",
+		Arguments: map[string]any{"namespace": "kube-system", "whoIsThis": "x"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected an unknown argument to be rejected")
+	}
+	text := renderContent(res.Content)
+	if !strings.Contains(text, "get_subject_permissions accepts:") {
+		t.Errorf("rejection was not annotated with accepted arguments:\n%s", text)
+	}
+	for _, want := range []string{"kind, name (required)", "resource_namespace"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("annotation missing %q:\n%s", want, text)
+		}
+	}
+}
+
+// TestMiddlewareRepairsThroughRealSDK proves repair happens early enough to
+// satisfy validation — the whole design rests on running before the SDK's
+// schema check, which a unit test of repairToolArgs alone cannot show.
+func TestMiddlewareRepairsThroughRealSDK(t *testing.T) {
+	ctx := context.Background()
+	session := connectTestServer(t)
+
+	res, err := session.CallTool(ctx, &mcpsdk.CallToolParams{
+		Name: "get_subject_permissions",
+		// The benchmark's exact argument names.
+		Arguments: map[string]any{"namespace": "kube-system", "subject": "sa", "subjectKind": "ServiceAccount"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	// Without repair this is rejected before the handler runs. With repair it
+	// reaches the handler, which may still fail for lack of a cluster — but the
+	// failure must no longer be a schema rejection.
+	if text := renderContent(res.Content); strings.Contains(text, `validating "arguments"`) {
+		t.Errorf("repaired call was still rejected by schema validation:\n%s", text)
+	}
+}
+
+func renderContent(content []mcpsdk.Content) string {
+	var b strings.Builder
+	for _, c := range content {
+		if tc, ok := c.(*mcpsdk.TextContent); ok {
+			b.WriteString(tc.Text)
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+// connectTestServer wires a client to a full radar MCP server over an in-memory
+// transport, so tests exercise the real middleware chain.
+func connectTestServer(t *testing.T) *mcpsdk.ClientSession {
+	t.Helper()
+	ctx := context.Background()
+
+	server := newServer(true)
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "radar-test-client", Version: "test"}, nil)
+	serverTransport, clientTransport := mcpsdk.NewInMemoryTransports()
+	serverSession, err := server.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatalf("server.Connect: %v", err)
+	}
+	clientSession, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client.Connect: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = clientSession.Close()
+		_ = serverSession.Wait()
+	})
+	return clientSession
+}
+
+// TestRegistryMatchesPublishedSchema is the load-bearing correctness test.
+//
+// The registry is derived by reflection over the handler input structs, while
+// the schema agents actually see is generated independently by the SDK. If the
+// two ever disagree, repair silently stops recognising a real parameter and the
+// error help starts naming arguments that don't exist — both of which make the
+// failure mode worse than the one this code exists to fix. Compare against the
+// live tools/list output rather than trusting the reflection.
+func TestRegistryMatchesPublishedSchema(t *testing.T) {
+	// Both server shapes: the read-only handler registers a different tool set,
+	// and a tool that skipped addTool() in either is invisible until an agent
+	// gets a name wrong against that server.
+	for _, includeWrites := range []bool{true, false} {
+		for _, tool := range listRegisteredToolsWith(t, includeWrites) {
+			checkToolAgainstRegistry(t, tool)
+		}
+	}
+}
+
+func checkToolAgainstRegistry(t *testing.T, tool *mcpsdk.Tool) {
+	t.Helper()
+	if tool.InputSchema == nil {
+		return
+	}
+	accepted, required := lookupToolParams(tool.Name)
+
+	// InputSchema is `any` on the wire; round-trip it to read the shape the SDK
+	// actually publishes.
+	raw, err := json.Marshal(tool.InputSchema)
+	if err != nil {
+		t.Fatalf("%s: marshal InputSchema: %v", tool.Name, err)
+	}
+	var schema struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+		Required   []string                   `json:"required"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("%s: unmarshal InputSchema: %v", tool.Name, err)
+	}
+
+	wantAccepted := slices.Sorted(maps.Keys(schema.Properties))
+	gotAccepted := slices.Clone(accepted)
+	slices.Sort(gotAccepted)
+	if !slices.Equal(gotAccepted, wantAccepted) {
+		t.Errorf("%s: registry params %v != published schema properties %v",
+			tool.Name, gotAccepted, wantAccepted)
+	}
+
+	wantRequired := slices.Clone(schema.Required)
+	slices.Sort(wantRequired)
+	gotRequired := slices.Clone(required)
+	slices.Sort(gotRequired)
+	if !slices.Equal(gotRequired, wantRequired) {
+		t.Errorf("%s: registry required %v != published schema required %v",
+			tool.Name, gotRequired, wantRequired)
 	}
 }
 

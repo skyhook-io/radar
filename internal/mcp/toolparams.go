@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -46,23 +47,47 @@ import (
 // toolParamNames maps a tool name to its accepted argument names; toolRequired
 // maps it to the subset that must be present. Both are populated by addTool at
 // registration, from the handler's input struct.
+//
+// Guarded because these are package-level maps written during registration and
+// read on every tool call. Today every server is built before it serves
+// (bootstrap constructs the read-write and read-only handlers in sequence), so
+// there is no race — but a concurrent map write panics, and "someone later
+// builds a handler lazily" is not a failure worth discovering in production.
+// The read cost is nil next to the Kubernetes calls these tools make.
 var (
+	toolParamsMu   sync.RWMutex
 	toolParamNames = map[string][]string{}
 	toolRequired   = map[string][]string{}
 )
 
+func lookupToolParams(tool string) (accepted, required []string) {
+	toolParamsMu.RLock()
+	defer toolParamsMu.RUnlock()
+	return toolParamNames[tool], toolRequired[tool]
+}
+
 // perToolAliases lists semantic aliases per tool: names an agent plausibly
 // reaches for that mean an existing parameter. Keys are lowercased.
 //
-// Keep this list evidence-driven and narrow. A wrong entry silently redirects a
-// caller's value to a different field, which is worse than the rejection it
-// replaces — so only add a name whose meaning is unambiguous for that specific
-// tool. Cross-tool spelling differences do not belong here; they are handled
-// orthographically below.
+// This list is deliberately tiny, and adding to it needs real evidence of an
+// agent getting the name wrong — not a hunch that someone might. A silent
+// rename routes a caller's value into a different field, and if the value does
+// not mean what the target field expects, the call now *succeeds* with the
+// wrong answer. That is strictly worse than the rejection it replaced, and it
+// is the same false-negative class this file exists to remove.
+//
+// Only aliases whose value is plainly the same thing qualify, and only when
+// guarded by isPlainResourceName below. `pod` and `workload` were considered
+// and rejected: an agent may reasonably send `pod: "prod/api-0"` or
+// `workload: "deployment/api"`, which are not bare names.
+//
+// Cross-tool spelling differences do NOT belong here — those are pure
+// orthography and are handled generically below.
 var perToolAliases = map[string]map[string]string{
-	// The description says "subject" throughout ("for a ServiceAccount, User,
-	// or Group", "ServiceAccounts require a subject namespace") while the
-	// parameters are kind/name. This is the case observed in the wild.
+	// Observed in the wild: an agent sent {"subject", "subjectKind"} because
+	// this tool's description spoke of "subjects" while its parameters are
+	// kind/name. The description has since been fixed to name the parameters;
+	// these aliases catch agents that learned the older phrasing.
 	"get_subject_permissions": {
 		"subject":      "name",
 		"subjectkind":  "kind",
@@ -70,10 +95,25 @@ var perToolAliases = map[string]map[string]string{
 		"subjectname":  "name",
 		"subject_name": "name",
 	},
-	// Pod-scoped tools: "pod" can only mean the pod's name.
-	"get_pod_logs": {"pod": "name", "podname": "name", "pod_name": "name"},
-	// Workload-scoped: "workload" can only mean the workload's name.
-	"get_workload_logs": {"workload": "name", "workloadname": "name", "workload_name": "name"},
+}
+
+// isPlainResourceName reports whether a value is an unqualified Kubernetes
+// name, and so means the same thing under an aliased parameter as under the
+// canonical one.
+//
+// A qualified form — "system:serviceaccount:prod:cleanup", "prod/api-0",
+// "deployment/api" — carries structure the target parameter does not parse, so
+// renaming it would turn a rejected call into a confidently wrong lookup.
+// Those are left for the validator to reject, with help attached.
+func isPlainResourceName(raw json.RawMessage) bool {
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return false // non-string values are never a bare name
+	}
+	if s == "" {
+		return false
+	}
+	return !strings.ContainsAny(s, ":/ ")
 }
 
 // addTool registers a tool and records its accepted argument names.
@@ -82,8 +122,10 @@ var perToolAliases = map[string]map[string]string{
 // builds is what lets a failed call report what it should have been called with.
 func addTool[In, Out any](s *mcpsdk.Server, t *mcpsdk.Tool, h mcpsdk.ToolHandlerFor[In, Out]) {
 	accepted, required := structJSONFields(reflect.TypeFor[In]())
+	toolParamsMu.Lock()
 	toolParamNames[t.Name] = accepted
 	toolRequired[t.Name] = required
+	toolParamsMu.Unlock()
 	mcpsdk.AddTool(s, t, h)
 }
 
@@ -163,23 +205,31 @@ func toCamel(s string) string {
 }
 
 // repairToolArgs rewrites recognisable misspellings of argument names to the
-// names this tool actually accepts. It returns the (possibly rewritten) JSON and
-// a human-readable list of the renames performed, for logging.
-func repairToolArgs(tool string, raw json.RawMessage) (json.RawMessage, []string) {
-	accepted := toolParamNames[tool]
+// names this tool actually accepts. It returns the (possibly rewritten) JSON,
+// the renames performed (for logging), and any supplied names it could NOT
+// resolve — which are exactly the names that will make schema validation fail,
+// and so the signal for attaching parameter help without parsing SDK text.
+func repairToolArgs(tool string, raw json.RawMessage) (fixed json.RawMessage, repairs, unresolved []string) {
+	accepted, _ := lookupToolParams(tool)
 	if len(accepted) == 0 || len(raw) == 0 {
-		return raw, nil
+		return raw, nil, nil
 	}
 	var args map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &args); err != nil || len(args) == 0 {
 		// Not an object (or malformed) — leave it for the validator to reject.
-		return raw, nil
+		return raw, nil, nil
 	}
 
 	isAccepted := func(n string) bool { return slices.Contains(accepted, n) }
 	// Resolve a supplied-but-unknown key to an accepted parameter, or "".
-	resolve := func(key string) string {
+	// Orthographic variants are always safe — same word, same meaning. Semantic
+	// aliases additionally require the value to be a bare name, so a qualified
+	// form is never silently reinterpreted.
+	resolve := func(key string, val json.RawMessage) string {
 		if alias, ok := perToolAliases[tool][strings.ToLower(key)]; ok && isAccepted(alias) {
+			if !isPlainResourceName(val) {
+				return ""
+			}
 			return alias
 		}
 		for _, cand := range []string{toSnake(key), toCamel(key)} {
@@ -190,41 +240,43 @@ func repairToolArgs(tool string, raw json.RawMessage) (json.RawMessage, []string
 		return ""
 	}
 
-	var repairs []string
 	for key, val := range args {
 		if isAccepted(key) {
 			continue
 		}
-		target := resolve(key)
-		// Never clobber a value the caller supplied under the correct name.
+		target := resolve(key, val)
 		if target == "" {
+			unresolved = append(unresolved, key)
 			continue
 		}
+		// Never clobber a value the caller supplied under the correct name.
 		if _, taken := args[target]; taken {
+			unresolved = append(unresolved, key)
 			continue
 		}
 		delete(args, key)
 		args[target] = val
 		repairs = append(repairs, fmt.Sprintf("%s->%s", key, target))
 	}
+	slices.Sort(repairs)
+	slices.Sort(unresolved)
+
 	if len(repairs) == 0 {
-		return raw, nil
+		return raw, nil, unresolved
 	}
 	fixed, err := json.Marshal(args)
 	if err != nil {
-		return raw, nil
+		return raw, nil, unresolved
 	}
-	slices.Sort(repairs)
-	return fixed, repairs
+	return fixed, repairs, unresolved
 }
 
 // describeToolParams renders the accepted arguments for a tool, required first.
 func describeToolParams(tool string) string {
-	accepted := toolParamNames[tool]
+	accepted, required := lookupToolParams(tool)
 	if len(accepted) == 0 {
 		return ""
 	}
-	required := toolRequired[tool]
 	optional := make([]string, 0, len(accepted))
 	for _, n := range accepted {
 		if !slices.Contains(required, n) {
@@ -258,7 +310,8 @@ func paramRepairMiddleware(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 			return next(ctx, method, req)
 		}
 
-		if fixed, repairs := repairToolArgs(call.Params.Name, call.Params.Arguments); repairs != nil {
+		fixed, repairs, unresolved := repairToolArgs(call.Params.Name, call.Params.Arguments)
+		if repairs != nil {
 			call.Params.Arguments = fixed
 			logRepairedArgs(call.Params.Name, repairs)
 		}
@@ -270,7 +323,7 @@ func paramRepairMiddleware(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 		// The SDK reports a schema failure as an isError result with a nil
 		// error, so the enrichment hangs off the result rather than err.
 		if out, ok := res.(*mcpsdk.CallToolResult); ok {
-			annotateSchemaError(call.Params.Name, out)
+			annotateSchemaError(call.Params.Name, out, unresolved)
 		}
 		return res, nil
 	}
@@ -283,9 +336,19 @@ func logRepairedArgs(tool string, repairs []string) {
 	log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m repaired args: %s", tool, strings.Join(repairs, " "))
 }
 
-// annotateSchemaError appends the accepted argument names to a validation
-// failure. Anything else (a tool's own domain error) is left untouched.
-func annotateSchemaError(tool string, res *mcpsdk.CallToolResult) {
+// annotateSchemaError appends the accepted argument names to an argument-shape
+// failure, so the caller can correct itself instead of guessing again.
+//
+// `unresolved` is the authoritative signal: those are argument names the caller
+// supplied that this tool does not accept and repair could not map, so the SDK
+// is certain to reject the call. Keying off that rather than the SDK's rendered
+// message means a wording change upstream cannot silently disable the help, and
+// a tool's own domain error can never be mistaken for a schema failure.
+//
+// The text match is a secondary path for validation failures we did not predict
+// (wrong type, missing required field), where the SDK's wording is the only
+// signal available.
+func annotateSchemaError(tool string, res *mcpsdk.CallToolResult, unresolved []string) {
 	if res == nil || !res.IsError {
 		return
 	}
@@ -295,11 +358,14 @@ func annotateSchemaError(tool string, res *mcpsdk.CallToolResult) {
 	}
 	for i, c := range res.Content {
 		text, ok := c.(*mcpsdk.TextContent)
-		if !ok || !strings.Contains(text.Text, `validating "arguments"`) {
+		if !ok {
 			continue
 		}
 		if strings.Contains(text.Text, "accepts:") {
 			continue // already annotated
+		}
+		if len(unresolved) == 0 && !strings.Contains(text.Text, `validating "arguments"`) {
+			continue
 		}
 		res.Content[i] = &mcpsdk.TextContent{Text: text.Text + help}
 	}
