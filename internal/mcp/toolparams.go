@@ -66,6 +66,17 @@ func lookupToolParams(tool string) (accepted, required []string) {
 	return toolParamNames[tool], toolRequired[tool]
 }
 
+// isRegisteredTool distinguishes a tool that takes no arguments from one this
+// process never registered. Both have an empty parameter list, but only the
+// first should tell a caller "this tool accepts no arguments" — for the second
+// we know nothing and must stay quiet.
+func isRegisteredTool(tool string) bool {
+	toolParamsMu.RLock()
+	defer toolParamsMu.RUnlock()
+	_, ok := toolParamNames[tool]
+	return ok
+}
+
 // perToolAliases lists semantic aliases per tool: names an agent plausibly
 // reaches for that mean an existing parameter. Keys are lowercased.
 //
@@ -84,10 +95,8 @@ func lookupToolParams(tool string) (accepted, required []string) {
 // Cross-tool spelling differences do NOT belong here — those are pure
 // orthography and are handled generically below.
 var perToolAliases = map[string]map[string]string{
-	// Observed in the wild: an agent sent {"subject", "subjectKind"} because
-	// this tool's description spoke of "subjects" while its parameters are
-	// kind/name. The description has since been fixed to name the parameters;
-	// these aliases catch agents that learned the older phrasing.
+	// RBAC subjects are naturally called "subjects", so an agent reaching for
+	// this tool tends to send subject/subjectKind rather than name/kind.
 	"get_subject_permissions": {
 		"subject":      "name",
 		"subjectkind":  "kind",
@@ -255,10 +264,10 @@ func toCamel(s string) string {
 // resolve — which are exactly the names that will make schema validation fail,
 // and so the signal for attaching parameter help without parsing SDK text.
 func repairToolArgs(tool string, raw json.RawMessage) (fixed json.RawMessage, repairs, unresolved []string) {
-	accepted, _ := lookupToolParams(tool)
-	if len(accepted) == 0 || len(raw) == 0 {
+	if !isRegisteredTool(tool) || len(raw) == 0 {
 		return raw, nil, nil
 	}
+	accepted, _ := lookupToolParams(tool)
 	var args map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &args); err != nil || len(args) == 0 {
 		// Not an object (or malformed) — leave it for the validator to reject.
@@ -280,9 +289,14 @@ func repairToolArgs(tool string, raw json.RawMessage) (fixed json.RawMessage, re
 			}
 			return alias
 		}
-		for _, cand := range []string{toSnake(key), toCamel(key)} {
-			if cand != key && isAccepted(cand) {
-				return cand
+		// Compare against spellings of the ACCEPTED names, not of the supplied
+		// key. toSnake and toCamel do not round-trip through numeric segments —
+		// toCamel("diff_revision_1") is "diffRevision1", but toSnake of that is
+		// "diff_revision1" — so deriving candidates from the caller's key silently
+		// misses real parameters. Deriving them from the accepted set cannot.
+		for _, p := range accepted {
+			if p != key && (toCamel(p) == key || toSnake(p) == key) {
+				return p
 			}
 		}
 		return ""
@@ -329,9 +343,12 @@ func repairToolArgs(tool string, raw json.RawMessage) (fixed json.RawMessage, re
 
 // describeToolParams renders the accepted arguments for a tool, required first.
 func describeToolParams(tool string) string {
+	if !isRegisteredTool(tool) {
+		return ""
+	}
 	accepted, required := lookupToolParams(tool)
 	if len(accepted) == 0 {
-		return ""
+		return fmt.Sprintf("\n\n%s accepts no arguments. Retry with an empty object.", tool)
 	}
 	optional := make([]string, 0, len(accepted))
 	for _, n := range accepted {

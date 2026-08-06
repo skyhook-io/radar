@@ -249,6 +249,54 @@ func TestMiddlewareAnnotatesRealSDKRejection(t *testing.T) {
 	}
 }
 
+// TestOrthographicRepairHandlesNumericSegments covers parameters whose words end
+// in a digit.
+//
+// toSnake and toCamel do not round-trip there — toCamel("diff_revision_1") is
+// "diffRevision1", but toSnake of that is "diff_revision1" — so deriving
+// candidate spellings from the caller's key silently misses a real parameter.
+// Candidates come from the accepted set instead, which cannot drift.
+func TestOrthographicRepairHandlesNumericSegments(t *testing.T) {
+	registerToolsOnce(t)
+
+	fixed, repairs, unresolved := repairToolArgs("get_helm_release",
+		json.RawMessage(`{"namespace":"n","name":"x","diffRevision1":1,"diffRevision2":2}`))
+	if len(repairs) != 2 {
+		t.Fatalf("expected both numeric-segment params repaired, got repairs=%v unresolved=%v", repairs, unresolved)
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(fixed, &got); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"diff_revision_1", "diff_revision_2"} {
+		if _, ok := got[want]; !ok {
+			t.Errorf("missing %q after repair: %s", want, fixed)
+		}
+	}
+}
+
+// TestZeroArgumentToolSaysSo distinguishes a tool that takes no arguments from
+// one we never registered. Both have an empty parameter list, but only the first
+// can tell the caller what to do about it.
+func TestZeroArgumentToolSaysSo(t *testing.T) {
+	registerToolsOnce(t)
+
+	help := describeToolParams("list_namespaces")
+	if !strings.Contains(help, "accepts no arguments") {
+		t.Errorf("zero-argument tool gave no usable help: %q", help)
+	}
+	if got := describeToolParams("no_such_tool_at_all"); got != "" {
+		t.Errorf("unregistered tool should produce no help, got %q", got)
+	}
+
+	// A bogus argument on a zero-argument tool must be reported as unresolved so
+	// the help attaches.
+	_, _, unresolved := repairToolArgs("list_namespaces", json.RawMessage(`{"namespace":"x"}`))
+	if !slices.Contains(unresolved, "namespace") {
+		t.Errorf("expected 'namespace' unresolved on a zero-argument tool, got %v", unresolved)
+	}
+}
+
 // TestAliasRepairIsDeterministic pins the map-order bug.
 //
 // The subject kind was once resolved inside the rewrite loop, so whether
@@ -516,19 +564,14 @@ func checkToolAgainstRegistry(t *testing.T, tool *mcpsdk.Tool) {
 
 // TestParameterNamingStaysConsistent stops the footgun class from growing.
 //
-// radar is snake_case nearly everywhere (dry_run, tail_lines, resource_namespace).
-// manage_gitops is the lone camelCase holdout, and that split is exactly what
-// makes an agent that learned `dry_run` from apply_resource get hard-rejected by
-// manage_gitops. Repair papers over the existing cases; this keeps new tools from
-// adding more.
+// Every radar parameter is snake_case. A lone camelCase outlier is what lets an
+// agent that learned one tool's spelling get hard-rejected by another for the
+// same concept, so the invariant is worth enforcing rather than repairing.
 //
 // If this fails on a tool you just added: rename the parameter to snake_case.
 func TestParameterNamingStaysConsistent(t *testing.T) {
 	registerToolsOnce(t)
 
-	// No exceptions: every radar parameter is snake_case. Keep it that way —
-	// a lone camelCase outlier is what made an agent that learned `dry_run`
-	// from apply_resource get hard-rejected by manage_gitops.
 	grandfathered := map[string][]string{}
 
 	for tool, params := range toolParamNames {
