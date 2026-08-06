@@ -37,7 +37,7 @@ export function CloudConnectFlow({
   switch (status.state) {
     case 'preparing':
       return (
-        <div className="px-7 py-10 flex flex-col items-center gap-3 text-center">
+        <div className="px-8 py-10 flex flex-col items-center gap-3 text-center">
           <Loader2 className="w-5 h-5 animate-spin text-emerald-600 dark:text-emerald-400" />
           <p className="text-[13px] text-theme-text-secondary">
             Checking this cluster and preparing the install — this can take a moment on a slow link.
@@ -87,7 +87,7 @@ function BlockedView({
         ? 'Your Kubernetes identity can’t install this'
         : 'This cluster can’t be connected from here'
   return (
-    <div className="px-7 pt-6 pb-5">
+    <div className="px-8 pt-6 pb-5">
       <div className="card-inner-lg flex gap-2.5">
         {icon}
         <div className="min-w-0">
@@ -198,7 +198,7 @@ function PlanCard({
     (!!plan.sharedListener && !ackShared)
 
   return (
-    <div className="px-7 pt-6 pb-5">
+    <div className="px-8 pt-6 pb-5">
       <h4 className="text-[15px] font-semibold text-theme-text-primary mb-3">
         {adopt ? 'Adopt and connect this cluster' : 'Connect this cluster'}
       </h4>
@@ -356,7 +356,7 @@ function ApprovalCard({ status, onStatus }: { status: CloudInstallStatus; onStat
   const cancel = useCancelButton(status, onStatus)
   const starting = status.state === 'starting'
   return (
-    <div className="px-7 pt-6 pb-5">
+    <div className="px-8 pt-6 pb-5">
       <div className="flex items-center gap-2.5 mb-3">
         <Loader2 className="w-4 h-4 animate-spin text-emerald-600 dark:text-emerald-400" />
         <h4 className="text-[15px] font-semibold text-theme-text-primary">
@@ -394,7 +394,7 @@ function ProgressCard({ status, onStatus }: { status: CloudInstallStatus; onStat
     { label: 'Waiting for the agent to connect', state: provisioning ? 'todo' : 'active' },
   ]
   return (
-    <div className="px-7 pt-6 pb-5">
+    <div className="px-8 pt-6 pb-5">
       <h4 className="text-[15px] font-semibold text-theme-text-primary mb-3.5">
         Connecting {status.clusterName}
       </h4>
@@ -459,7 +459,7 @@ function ConnectedCard({
   const connected = status.connected
   if (!connected) return null
   return (
-    <div className="px-7 pt-6 pb-5">
+    <div className="px-8 pt-6 pb-5">
       <div className="flex items-center gap-2.5 mb-3">
         <span className="w-7 h-7 rounded-full bg-emerald-500/20 grid place-items-center">
           <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
@@ -507,7 +507,7 @@ function FailedCard({
   const failure = status.failure
   if (!failure) return null
   return (
-    <div className="px-7 pt-6 pb-5">
+    <div className="px-8 pt-6 pb-5">
       <div className="flex items-start gap-2.5 mb-3">
         <AlertTriangle className="w-4 h-4 shrink-0 mt-1 text-amber-500" />
         <h4 className="text-[14px] font-semibold leading-snug text-theme-text-primary">{failure.message}</h4>

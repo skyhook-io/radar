@@ -211,7 +211,7 @@ export function CloudFunnelButton() {
             more with the connect flow, whose plan card is the tallest state. */}
         {showFlow && flowForView ? (
           <div className="min-h-0 overflow-y-auto">
-            <div className="px-7 pt-6">
+            <div className="px-8 pt-7">
               <Eyebrow />
             </div>
             <CloudConnectFlow
