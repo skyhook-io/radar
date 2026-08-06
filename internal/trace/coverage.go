@@ -2237,8 +2237,12 @@ func buildNotTested(t *Trace) []RouteSkip {
 	// scenarios. Structured identity (backend namespace/name + port), never
 	// display strings: "port 80" can't string-match "argocd-server:80".
 	type preservedRoute struct {
-		// A not-tested or benign-dormant route IS the same gap as its raw skip
-		// rows; a live-tested route only absorbs rows whose layer actually ran.
+		// Only a REACHED route discriminates by layer: transport got through
+		// and the app layer may be genuinely untried. Every other outcome
+		// absorbs all its rows - not-tested and benign-dormant are the same
+		// gap as their rows, verified proves the app layer, and a FAILED
+		// transport already condemns the path (keeping its HTTP row counted
+		// one broken port as failed AND couldn't-be-tried).
 		absorbsAllLayers bool
 	}
 	preserved := map[string]preservedRoute{}
@@ -2252,7 +2256,7 @@ func buildNotTested(t *Trace) []RouteSkip {
 			ns = t.Subject.Namespace
 		}
 		preserved[fmt.Sprintf("%s\x00%s\x00%d", ns, name, port)] = preservedRoute{
-			absorbsAllLayers: r.Outcome == OutcomeNotTested || r.Benign,
+			absorbsAllLayers: r.Outcome != OutcomeReached,
 		}
 	}
 	for _, h := range t.Downstream {

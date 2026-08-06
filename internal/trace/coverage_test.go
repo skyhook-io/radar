@@ -2151,3 +2151,37 @@ func TestComputeCoverage_TransportOnlyReachKeepsHTTPSGap(t *testing.T) {
 		}
 	}
 }
+
+// The layer-aware keep applies to a transport-only REACH, never a transport
+// FAILURE - a TCP-failed port's HTTP row is the same broken gap, and keeping
+// it counted one broken path as failed AND couldn't-be-tried.
+func TestComputeCoverage_TransportFailureAbsorbsAppLayerRow(t *testing.T) {
+	httpsSkip := probe.SkippedCmd(probe.LayerHTTP, "port 8443 (https)", probe.VantageInCluster,
+		"HTTPS backend - the API-server proxy speaks plain HTTP and can't verify TLS on this port. Test it directly.", "")
+	httpsSkip.Path = probe.PathAPIServer
+	httpsSkip.Port = 8443
+	httpsSkip.SkipClass = SkipClassVantage
+	tr := &Trace{
+		Subject: ResourceRef{Kind: "Service", Namespace: "prod", Name: "secure-api"},
+		Downstream: []Hop{{
+			Resource: ResourceRef{Kind: "Service", Namespace: "prod", Name: "secure-api"},
+			Config:   &HopConfig{ClusterIP: "10.0.0.9", Ports: []PortMap{{Port: 8443, Name: "https"}}},
+			Probes: []probe.Result{
+				{Layer: probe.LayerTCP, Target: "10.0.0.9:8443", Port: 8443, Vantage: probe.VantageInCluster, Path: probe.PathData, OK: false, Tone: probe.ToneUnhealthy, Detail: "connection refused"},
+				httpsSkip,
+			},
+		}},
+	}
+	computeCoverage(tr)
+	if len(tr.Routes) != 1 || tr.Routes[0].Outcome != OutcomeUnreachable {
+		t.Fatalf("Routes = %+v, want one unreachable route", tr.Routes)
+	}
+	for _, sk := range tr.NotTested {
+		if strings.Contains(sk.Reason, "HTTPS backend") {
+			t.Fatalf("a transport FAILURE must absorb the app-layer row (same broken gap), got %+v", tr.NotTested)
+		}
+	}
+	if tr.Coverage == nil || tr.Coverage.Failed != 1 || tr.Coverage.Skipped != 0 {
+		t.Fatalf("Coverage = %+v, want failed=1 skipped=0 - one broken path counted once", tr.Coverage)
+	}
+}
