@@ -78,6 +78,12 @@ export interface KyvernoEnforcementPosture {
   /** True only when a violating admission request is actually rejected. */
   blocks: boolean
   /**
+   * One sentence describing what this policy does to matched resources.
+   * Per-family, because "violations are recorded" is meaningless for a
+   * policy that mutates, generates, or deletes on a schedule.
+   */
+  summary: string
+  /**
    * Set when the effective posture differs from what the declared fields
    * suggest at a glance — the operator needs the reason, not just the verdict.
    */
@@ -155,6 +161,7 @@ export function getKyvernoEnforcementPosture(
       label: schedule ? `Deletes on schedule (${schedule})` : 'Deletes on schedule',
       level: 'alert',
       blocks: false,
+      summary: 'Matched resources are deleted when the schedule fires.',
       note: schedule ? undefined : 'No schedule set — this policy will not run.',
     }
   }
@@ -164,6 +171,7 @@ export function getKyvernoEnforcementPosture(
       label: 'JSON mode',
       level: 'neutral',
       blocks: false,
+      summary: 'Evaluated outside the cluster; it does not take part in admission.',
       note: 'Evaluated against JSON payloads outside the cluster; it does not take part in admission.',
     }
   }
@@ -173,16 +181,23 @@ export function getKyvernoEnforcementPosture(
       label: admissionEnabled ? 'Generates resources' : 'Generates resources (background only)',
       level: 'neutral',
       blocks: false,
+      summary: 'Matched resources trigger generation of the resources below.',
     }
   }
 
   if (family === 'mutating') {
     return admissionEnabled
-      ? { label: 'Mutates on admission', level: 'degraded', blocks: false }
+      ? {
+          label: 'Mutates on admission',
+          level: 'degraded',
+          blocks: false,
+          summary: 'Matched resources are modified as they are admitted.',
+        }
       : {
           label: 'Inactive',
           level: 'unknown',
           blocks: false,
+          summary: 'This policy modifies nothing.',
           note: 'Admission evaluation is disabled, so this policy mutates nothing.',
         }
   }
@@ -196,6 +211,9 @@ export function getKyvernoEnforcementPosture(
       label: backgroundEnabled ? 'Background only' : 'Inactive',
       level: backgroundEnabled ? 'neutral' : 'unknown',
       blocks: false,
+      summary: backgroundEnabled
+        ? 'Violations are recorded by background scans, not blocked.'
+        : 'This policy evaluates nothing.',
       note: declaresDeny
         ? backgroundEnabled
           ? 'Declares Deny, but admission evaluation is disabled — violations are reported, never blocked.'
@@ -207,12 +225,27 @@ export function getKyvernoEnforcementPosture(
   }
 
   if (declaresDeny) {
-    return { label: actions.join(' + '), level: 'unhealthy', blocks: true }
+    return {
+      label: actions.join(' + '),
+      level: 'unhealthy',
+      blocks: true,
+      summary: 'Violating requests are rejected at admission.',
+    }
   }
   if (actions.includes('Warn')) {
-    return { label: actions.join(' + '), level: 'degraded', blocks: false }
+    return {
+      label: actions.join(' + '),
+      level: 'degraded',
+      blocks: false,
+      summary: 'Violations are surfaced as admission warnings, not blocked.',
+    }
   }
-  return { label: actions.join(' + ') || 'Audit', level: 'neutral', blocks: false }
+  return {
+    label: actions.join(' + ') || 'Audit',
+    level: 'neutral',
+    blocks: false,
+    summary: 'Violations are recorded in policy reports, not blocked.',
+  }
 }
 
 // ============================================================================

@@ -127,6 +127,19 @@ describe('non-validating families', () => {
     expect(posture.label).toBe('Inactive')
   })
 
+  // A deleting policy has no "violations" — the generic non-blocking sentence
+  // must not leak into a family it does not describe.
+  it('describes deletion in its own terms, not violation terms', () => {
+    const posture = getKyvernoEnforcementPosture(vpol({ schedule: '0 2 * * *' }), 'deleting')
+    expect(posture.summary).toMatch(/deleted/i)
+    expect(posture.summary).not.toMatch(/violation/i)
+  })
+
+  it('describes generation in its own terms', () => {
+    const posture = getKyvernoEnforcementPosture(vpol({ generate: [] }), 'generating')
+    expect(posture.summary).not.toMatch(/violation/i)
+  })
+
   it('surfaces the cron in a deleting policy posture', () => {
     const posture = getKyvernoEnforcementPosture(vpol({ schedule: '0 */6 * * *' }), 'deleting')
     expect(posture.blocks).toBe(false)

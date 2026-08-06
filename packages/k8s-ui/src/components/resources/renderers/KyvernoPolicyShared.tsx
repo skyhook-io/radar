@@ -74,11 +74,7 @@ export function KyvernoPostureHeader({
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs uppercase tracking-wide text-theme-text-tertiary">Enforcement</span>
           <span className={`badge ${POSTURE_TONE[posture.level] || 'status-unknown'}`}>{posture.label}</span>
-          {posture.blocks ? (
-            <span className="text-xs text-theme-text-secondary">Violating requests are rejected at admission.</span>
-          ) : (
-            <span className="text-xs text-theme-text-secondary">Violations are recorded, not blocked.</span>
-          )}
+          {posture.summary && <span className="text-xs text-theme-text-secondary">{posture.summary}</span>}
         </div>
 
         {posture.note && <div className="mt-2 text-xs text-theme-text-secondary">{posture.note}</div>}
