@@ -184,6 +184,43 @@ func (i *Index) FindingsForEngine(group, kind, namespace, name string, engine En
 	return out
 }
 
+// Engines returns the distinct engines that contributed at least one indexed
+// finding, in stable alphabetical order.
+//
+// This separates "the engine is installed but nothing is writing reports"
+// from "reports are being written and nothing is firing" — two different
+// operator problems that an empty findings list alone cannot tell apart. A
+// caller that walked All() to work this out would be re-implementing the
+// source→engine mapping outside the one place that owns it.
+//
+// Presence means "this engine wrote at least one result we indexed", NOT
+// "this engine is installed": an engine that is installed but silent, or
+// whose reports fell outside the index cap, does not appear. Callers
+// reporting coverage must not read absence as absence-of-engine.
+func (i *Index) Engines() []Engine {
+	if i == nil {
+		return nil
+	}
+	seen := make(map[Engine]bool)
+	i.mu.RLock()
+	for _, findings := range i.bySubject {
+		for _, f := range findings {
+			seen[f.Engine()] = true
+		}
+	}
+	i.mu.RUnlock()
+
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]Engine, 0, len(seen))
+	for e := range seen {
+		out = append(out, e)
+	}
+	sort.Slice(out, func(a, b int) bool { return out[a] < out[b] })
+	return out
+}
+
 // All returns every indexed subject together with its findings. Both the
 // outer slice and each per-subject Findings slice are defensive copies —
 // callers may freely sort, truncate, or filter them without racing the

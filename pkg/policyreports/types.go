@@ -33,6 +33,13 @@ package policyreports
 // EngineForSource for the normalized view. Both are kept: the raw value is
 // what an operator recognizes from `kubectl get policyreport -o yaml`, and
 // the normalized one is what filtering must use.
+//
+// `Policy` is producer-defined and is NOT guaranteed to name a policy
+// object. Kyverno puts the policy name there, but falcosidekick puts Falco's
+// own detection source ("syscall", "k8s_audit") in this field and the rule
+// name in `Rule`. Don't resolve it to a policy resource without first
+// checking the engine, and don't label it "Policy" in a UI that renders more
+// than one engine.
 type Finding struct {
 	Policy   string
 	Rule     string
