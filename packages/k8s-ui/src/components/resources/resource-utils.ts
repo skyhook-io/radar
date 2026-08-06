@@ -2091,8 +2091,13 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'nvidiadrivers') return _getNvidiaDriverStatus(resource).text
       if (kindLower === 'resourceclaims') return _getResourceClaimStatus(resource).text
       if (kindLower === 'backups') return _getBackupStatus(resource).text
-      if (kindLower === 'restores') return _getRestoreStatus(resource).text
-      if (kindLower === 'schedules') return _getScheduleStatus(resource).text
+      // Velero's Restore/Schedule keys are group-qualified (see
+      // GROUP_QUALIFIED_COLUMN_KEYS) because those plurals are shared with
+      // rancher/backup-restore-operator and others. The unqualified plural
+      // deliberately does not match: a foreign CRD falls through to the generic
+      // reader below rather than being filtered as though it were Velero.
+      if (kindLower === 'velerorestores') return _getRestoreStatus(resource).text
+      if (kindLower === 'veleroschedules') return _getScheduleStatus(resource).text
       if (kindLower === 'backupstoragelocations') return _getBSLStatus(resource).text
       if (kindLower === 'externalsecrets') return _getExternalSecretStatus(resource).text
       if (kindLower === 'clusterexternalsecrets') return _getClusterExternalSecretStatus(resource).text
