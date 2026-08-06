@@ -82,6 +82,8 @@ const CATEGORY_LABEL: Record<string, string> = {
   pvc_resize_failed: 'PVC resize failed',
   volume_mount_failed: 'Volume mount failed',
   volume_access_mode_conflict: 'Volume access conflict',
+  backup_failed: 'Backup failed',
+  backup_target_unavailable: 'Backup target unavailable',
   job_failed: 'Job failed',
   cronjob_failed: 'CronJob failed',
   rollout_stalled: 'Rollout stalled',

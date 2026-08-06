@@ -67,6 +67,8 @@ const (
 	CategoryPVCResizeFailed          Category = "pvc_resize_failed"
 	CategoryVolumeMountFailed        Category = "volume_mount_failed"
 	CategoryVolumeAccessModeConflict Category = "volume_access_mode_conflict"
+	CategoryBackupFailed             Category = "backup_failed"
+	CategoryBackupTargetUnavailable  Category = "backup_target_unavailable"
 	CategoryRolloutStalled           Category = "rollout_stalled"
 	CategoryHPALimitedOrFailed       Category = "hpa_limited_or_failed"
 	CategoryRBACForbidden            Category = "rbac_forbidden"
@@ -142,6 +144,8 @@ var categoryGroup = map[Category]CategoryGroup{
 	CategoryPVCResizeFailed:          GroupStorage,
 	CategoryVolumeMountFailed:        GroupStorage,
 	CategoryVolumeAccessModeConflict: GroupStorage,
+	CategoryBackupFailed:             GroupStorage,
+	CategoryBackupTargetUnavailable:  GroupStorage,
 	CategoryRolloutStalled:           GroupScaling,
 	CategoryHPALimitedOrFailed:       GroupScaling,
 	CategoryRBACForbidden:            GroupSecurity,

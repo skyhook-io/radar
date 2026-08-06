@@ -95,6 +95,13 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 			}
 			items = its
 		}
+		// Velero is handled at list level, not per object: none of its CRDs
+		// carry status.conditions (so the loop below would find nothing), and
+		// backup supersession is a property of the series, not of one object.
+		if gvr.Group == VeleroGroup {
+			out = append(out, detectVeleroIssues(gvr, kind, items, ownedSubjects)...)
+			continue
+		}
 		for _, u := range items {
 			if ownedSubjects[resourceKey(gvr.Group, kind, u.GetNamespace(), u.GetName())] {
 				continue

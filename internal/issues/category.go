@@ -112,6 +112,14 @@ func Classify(in classifyInput) issuesapi.Category {
 			return issuesapi.CategoryOperatorConditionFail
 		case g == "apiregistration.k8s.io" && in.Kind == "APIService":
 			return issuesapi.CategoryAPIServiceUnavailable
+		case g == "velero.io":
+			// The location/repository kinds are the backup *target* being
+			// unreachable, which is a different fix from a run that failed.
+			switch in.Kind {
+			case "BackupStorageLocation", "VolumeSnapshotLocation", "BackupRepository":
+				return issuesapi.CategoryBackupTargetUnavailable
+			}
+			return issuesapi.CategoryBackupFailed
 		case g == "external-secrets.io":
 			return issuesapi.CategorySecretSyncFailed
 		case g == "keda.sh":

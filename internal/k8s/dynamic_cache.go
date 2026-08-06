@@ -287,8 +287,15 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "controlplane.cluster.x-k8s.io", Versions: []string{"v1beta2", "v1beta1"}, Resource: "kubeadmcontrolplanes", Kind: "KubeadmControlPlane", Namespaced: true},
 	{Group: "bootstrap.cluster.x-k8s.io", Versions: []string{"v1beta2", "v1beta1"}, Resource: "kubeadmconfigs", Kind: "KubeadmConfig", Namespaced: true},
 	{Group: "bootstrap.cluster.x-k8s.io", Versions: []string{"v1beta2", "v1beta1"}, Resource: "kubeadmconfigtemplates", Kind: "KubeadmConfigTemplate", Namespaced: true},
+	// The issue adapter reads all six: a failed Backup is only visible if its
+	// informer is running, and BackupRepository/BSL are the backup targets whose
+	// health explains why the runs fail.
+	{Group: "velero.io", Versions: []string{"v1"}, Resource: "backups", Kind: "Backup", Namespaced: true},
+	{Group: "velero.io", Versions: []string{"v1"}, Resource: "restores", Kind: "Restore", Namespaced: true},
+	{Group: "velero.io", Versions: []string{"v1"}, Resource: "schedules", Kind: "Schedule", Namespaced: true},
 	{Group: "velero.io", Versions: []string{"v1"}, Resource: "backupstoragelocations", Kind: "BackupStorageLocation", Namespaced: true},
 	{Group: "velero.io", Versions: []string{"v1"}, Resource: "volumesnapshotlocations", Kind: "VolumeSnapshotLocation", Namespaced: true},
+	{Group: "velero.io", Versions: []string{"v1"}, Resource: "backuprepositories", Kind: "BackupRepository", Namespaced: true},
 	{Group: "aquasecurity.github.io", Versions: []string{"v1alpha1"}, Resource: "vulnerabilityreports", Kind: "VulnerabilityReport", Namespaced: true},
 	{Group: "aquasecurity.github.io", Versions: []string{"v1alpha1"}, Resource: "configauditreports", Kind: "ConfigAuditReport", Namespaced: true},
 	{Group: "aquasecurity.github.io", Versions: []string{"v1alpha1"}, Resource: "exposedsecretreports", Kind: "ExposedSecretReport", Namespaced: true},

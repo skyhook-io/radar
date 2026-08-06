@@ -1,0 +1,457 @@
+package issues
+
+import (
+	"testing"
+	"time"
+
+	"github.com/skyhook-io/radar/pkg/issuesapi"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+)
+
+func veleroGVR(resource string) schema.GroupVersionResource {
+	return schema.GroupVersionResource{Group: VeleroGroup, Version: "v1", Resource: resource}
+}
+
+type veleroObj struct {
+	name      string
+	namespace string
+	schedule  string
+	phase     string
+	// started is minutes before now; 0 means "no startTimestamp".
+	startedMinsAgo int
+	validation     []string
+	message        string
+	errors         int64
+	paused         bool
+}
+
+func (o veleroObj) build(kind string) *unstructured.Unstructured {
+	ns := o.namespace
+	if ns == "" {
+		ns = "velero"
+	}
+	meta := map[string]any{
+		"name":              o.name,
+		"namespace":         ns,
+		"creationTimestamp": metav1.NewTime(time.Now().Add(-24 * time.Hour)).UTC().Format(time.RFC3339),
+	}
+	if o.schedule != "" {
+		meta["labels"] = map[string]any{veleroScheduleLabel: o.schedule}
+	}
+	status := map[string]any{}
+	if o.phase != "" {
+		status["phase"] = o.phase
+	}
+	if o.startedMinsAgo > 0 {
+		start := time.Now().Add(-time.Duration(o.startedMinsAgo) * time.Minute).UTC().Format(time.RFC3339)
+		status["startTimestamp"] = start
+		status["completionTimestamp"] = start
+	}
+	if len(o.validation) > 0 {
+		errs := make([]any, len(o.validation))
+		for i, e := range o.validation {
+			errs[i] = e
+		}
+		status["validationErrors"] = errs
+	}
+	if o.message != "" {
+		status["failureReason"] = o.message
+	}
+	if o.errors > 0 {
+		status["errors"] = o.errors
+	}
+	spec := map[string]any{}
+	if o.paused {
+		spec["paused"] = true
+	}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "velero.io/v1",
+		"kind":       kind,
+		"metadata":   meta,
+		"spec":       spec,
+		"status":     status,
+	}}
+}
+
+func buildVelero(kind string, objs ...veleroObj) []*unstructured.Unstructured {
+	out := make([]*unstructured.Unstructured, 0, len(objs))
+	for _, o := range objs {
+		out = append(out, o.build(kind))
+	}
+	return out
+}
+
+func detectBackups(objs ...veleroObj) []Issue {
+	return detectVeleroIssues(veleroGVR("backups"), "Backup", buildVelero("Backup", objs...), nil)
+}
+
+func reasonsOf(issues []Issue) []string {
+	out := make([]string, 0, len(issues))
+	for _, i := range issues {
+		out = append(out, i.Reason)
+	}
+	return out
+}
+
+func namesOf(issues []Issue) []string {
+	out := make([]string, 0, len(issues))
+	for _, i := range issues {
+		out = append(out, i.Name)
+	}
+	return out
+}
+
+// The whole point of RAD-314: every terminal Backup phase Velero can report
+// must produce an Issue with the right severity, and no phase may fall through
+// to silence. FailedValidation is the one that used to render as a grey
+// "Unknown" pill and produced nothing at all.
+func TestVeleroBackupPhaseToIssue(t *testing.T) {
+	cases := []struct {
+		phase        string
+		wantIssue    bool
+		wantSeverity Severity
+		wantReason   string
+	}{
+		{phase: "Failed", wantIssue: true, wantSeverity: SeverityCritical, wantReason: ReasonVeleroBackupFailed},
+		{phase: "FailedValidation", wantIssue: true, wantSeverity: SeverityCritical, wantReason: ReasonVeleroBackupValidationFailed},
+		{phase: "PartiallyFailed", wantIssue: true, wantSeverity: SeverityWarning, wantReason: ReasonVeleroBackupPartiallyFailed},
+		{phase: "FinalizingPartiallyFailed", wantIssue: true, wantSeverity: SeverityWarning, wantReason: ReasonVeleroBackupPartiallyFailed},
+		{phase: "WaitingForPluginOperationsPartiallyFailed", wantIssue: true, wantSeverity: SeverityWarning, wantReason: ReasonVeleroBackupPartiallyFailed},
+		// Healthy and in-flight phases are silent.
+		{phase: "Completed"},
+		{phase: "New"},
+		{phase: "Queued"},
+		{phase: "ReadyToStart"},
+		{phase: "InProgress"},
+		{phase: "WaitingForPluginOperations"},
+		{phase: "Finalizing"},
+		{phase: "Deleting"},
+		{phase: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.phase, func(t *testing.T) {
+			got := detectBackups(veleroObj{name: "b1", phase: tc.phase, startedMinsAgo: 30})
+			if !tc.wantIssue {
+				if len(got) != 0 {
+					t.Fatalf("phase %q must not raise an issue, got %v", tc.phase, reasonsOf(got))
+				}
+				return
+			}
+			if len(got) != 1 {
+				t.Fatalf("phase %q: want 1 issue, got %d %v", tc.phase, len(got), reasonsOf(got))
+			}
+			if got[0].Reason != tc.wantReason {
+				t.Errorf("reason = %q, want %q", got[0].Reason, tc.wantReason)
+			}
+			if got[0].Severity != tc.wantSeverity {
+				t.Errorf("severity = %q, want %q", got[0].Severity, tc.wantSeverity)
+			}
+			if got[0].Source != SourceCondition {
+				t.Errorf("source = %q, want %q", got[0].Source, SourceCondition)
+			}
+			if got[0].Category != issuesapi.CategoryBackupFailed {
+				t.Errorf("category = %q, want %q", got[0].Category, issuesapi.CategoryBackupFailed)
+			}
+		})
+	}
+}
+
+// Supersession is the reason this adapter reads the whole list. Velero keeps
+// failed Backups until their TTL expires, so without it one bad night stays red
+// for days after the schedule recovered.
+func TestVeleroBackupSupersession(t *testing.T) {
+	t.Run("later success clears an earlier failure", func(t *testing.T) {
+		got := detectBackups(
+			veleroObj{name: "nightly-1", schedule: "nightly", phase: "Failed", startedMinsAgo: 240},
+			veleroObj{name: "nightly-2", schedule: "nightly", phase: "Completed", startedMinsAgo: 60},
+		)
+		if len(got) != 0 {
+			t.Fatalf("a later Completed run must supersede the failure, got %v", reasonsOf(got))
+		}
+	})
+
+	t.Run("only the newest failure in a series is reported", func(t *testing.T) {
+		got := detectBackups(
+			veleroObj{name: "nightly-1", schedule: "nightly", phase: "Failed", startedMinsAgo: 240},
+			veleroObj{name: "nightly-2", schedule: "nightly", phase: "Failed", startedMinsAgo: 120},
+			veleroObj{name: "nightly-3", schedule: "nightly", phase: "Failed", startedMinsAgo: 60},
+		)
+		if len(got) != 1 || got[0].Name != "nightly-3" {
+			t.Fatalf("want one issue on nightly-3, got %v", namesOf(got))
+		}
+	})
+
+	t.Run("an earlier success does not clear a later failure", func(t *testing.T) {
+		got := detectBackups(
+			veleroObj{name: "nightly-1", schedule: "nightly", phase: "Completed", startedMinsAgo: 240},
+			veleroObj{name: "nightly-2", schedule: "nightly", phase: "Failed", startedMinsAgo: 60},
+		)
+		if len(got) != 1 || got[0].Name != "nightly-2" {
+			t.Fatalf("want the later failure reported, got %v", namesOf(got))
+		}
+	})
+
+	t.Run("an in-flight run neither clears nor raises", func(t *testing.T) {
+		// The running backup is newer but has no verdict yet — it is not
+		// evidence of recovery, so the last decided run still drives the issue.
+		got := detectBackups(
+			veleroObj{name: "nightly-1", schedule: "nightly", phase: "Failed", startedMinsAgo: 120},
+			veleroObj{name: "nightly-2", schedule: "nightly", phase: "InProgress", startedMinsAgo: 5},
+		)
+		if len(got) != 1 || got[0].Name != "nightly-1" {
+			t.Fatalf("want the last decided run reported, got %v", namesOf(got))
+		}
+	})
+
+	t.Run("a group with no decided run is silent", func(t *testing.T) {
+		got := detectBackups(veleroObj{name: "nightly-1", schedule: "nightly", phase: "InProgress", startedMinsAgo: 5})
+		if len(got) != 0 {
+			t.Fatalf("an entirely in-flight series must be silent, got %v", reasonsOf(got))
+		}
+	})
+
+	t.Run("supersession is per schedule", func(t *testing.T) {
+		got := detectBackups(
+			veleroObj{name: "nightly-1", schedule: "nightly", phase: "Failed", startedMinsAgo: 60},
+			veleroObj{name: "weekly-1", schedule: "weekly", phase: "Completed", startedMinsAgo: 30},
+		)
+		if len(got) != 1 || got[0].Name != "nightly-1" {
+			t.Fatalf("a different schedule's success must not clear nightly, got %v", namesOf(got))
+		}
+	})
+
+	t.Run("ad-hoc backups are never superseded", func(t *testing.T) {
+		// Unlabelled backups are one-off operator runs, not a series — a later
+		// manual backup of something else says nothing about this one.
+		got := detectBackups(
+			veleroObj{name: "manual-a", phase: "Failed", startedMinsAgo: 120},
+			veleroObj{name: "manual-b", phase: "Completed", startedMinsAgo: 60},
+			veleroObj{name: "manual-c", phase: "Failed", startedMinsAgo: 30},
+		)
+		if len(got) != 2 {
+			t.Fatalf("want both ad-hoc failures reported, got %v", namesOf(got))
+		}
+	})
+
+	t.Run("supersession does not cross namespaces", func(t *testing.T) {
+		// Two Velero installs (e.g. velero and kommander) can both run a
+		// schedule called "nightly"; one succeeding says nothing about the other.
+		got := detectBackups(
+			veleroObj{name: "nightly-1", namespace: "velero", schedule: "nightly", phase: "Failed", startedMinsAgo: 60},
+			veleroObj{name: "nightly-1", namespace: "kommander", schedule: "nightly", phase: "Completed", startedMinsAgo: 30},
+		)
+		if len(got) != 1 || got[0].Namespace != "velero" {
+			t.Fatalf("want the velero-namespace failure reported, got %d issues", len(got))
+		}
+	})
+}
+
+// Ordering must be stable when Velero's second-resolution generated names
+// collide on the same startTimestamp, or the reported row would flip between
+// polls and the issue identity would churn.
+func TestVeleroBackupSupersessionTieBreak(t *testing.T) {
+	first := detectBackups(
+		veleroObj{name: "nightly-20260806010000", schedule: "nightly", phase: "Failed", startedMinsAgo: 60},
+		veleroObj{name: "nightly-20260806010001", schedule: "nightly", phase: "Failed", startedMinsAgo: 60},
+	)
+	second := detectBackups(
+		veleroObj{name: "nightly-20260806010001", schedule: "nightly", phase: "Failed", startedMinsAgo: 60},
+		veleroObj{name: "nightly-20260806010000", schedule: "nightly", phase: "Failed", startedMinsAgo: 60},
+	)
+	if len(first) != 1 || len(second) != 1 {
+		t.Fatalf("want one issue from each ordering, got %d and %d", len(first), len(second))
+	}
+	if first[0].Name != second[0].Name {
+		t.Errorf("tie-break is order-dependent: %q vs %q", first[0].Name, second[0].Name)
+	}
+	if first[0].Name != "nightly-20260806010001" {
+		t.Errorf("want the lexically-later name to win the tie, got %q", first[0].Name)
+	}
+}
+
+// A FailedValidation backup carries its cause in status.validationErrors, not
+// in failureReason — surfacing "phase Failed" there would hide the reason.
+func TestVeleroValidationErrorsBecomeTheMessage(t *testing.T) {
+	got := detectBackups(veleroObj{
+		name:           "bad",
+		phase:          "FailedValidation",
+		startedMinsAgo: 10,
+		validation:     []string{"Invalid included/excluded resource lists", "storage location not found"},
+	})
+	if len(got) != 1 {
+		t.Fatalf("want 1 issue, got %d", len(got))
+	}
+	want := "Invalid included/excluded resource lists; storage location not found"
+	if got[0].Message != want {
+		t.Errorf("message = %q, want %q", got[0].Message, want)
+	}
+}
+
+func TestVeleroRestoreIssues(t *testing.T) {
+	detect := func(objs ...veleroObj) []Issue {
+		return detectVeleroIssues(veleroGVR("restores"), "Restore", buildVelero("Restore", objs...), nil)
+	}
+
+	t.Run("failed and partially-failed restores both surface", func(t *testing.T) {
+		got := detect(
+			veleroObj{name: "r1", phase: "Failed", startedMinsAgo: 30},
+			veleroObj{name: "r2", phase: "PartiallyFailed", startedMinsAgo: 20},
+			veleroObj{name: "r3", phase: "FailedValidation", startedMinsAgo: 10},
+			veleroObj{name: "r4", phase: "Completed", startedMinsAgo: 5},
+		)
+		if len(got) != 3 {
+			t.Fatalf("want 3 issues, got %d %v", len(got), namesOf(got))
+		}
+	})
+
+	t.Run("restores are not superseded", func(t *testing.T) {
+		// A restore is a deliberate one-off action; a later restore of something
+		// else does not vindicate an earlier failure the way a backup run does.
+		got := detect(
+			veleroObj{name: "r1", phase: "Failed", startedMinsAgo: 60},
+			veleroObj{name: "r2", phase: "Completed", startedMinsAgo: 30},
+		)
+		if len(got) != 1 || got[0].Name != "r1" {
+			t.Fatalf("want the failed restore still reported, got %v", namesOf(got))
+		}
+	})
+}
+
+func TestVeleroScheduleIssues(t *testing.T) {
+	detect := func(objs ...veleroObj) []Issue {
+		return detectVeleroIssues(veleroGVR("schedules"), "Schedule", buildVelero("Schedule", objs...), nil)
+	}
+
+	t.Run("FailedValidation phase raises critical", func(t *testing.T) {
+		got := detect(veleroObj{name: "s1", phase: "FailedValidation"})
+		if len(got) != 1 || got[0].Reason != ReasonVeleroScheduleValidationFailed || got[0].Severity != SeverityCritical {
+			t.Fatalf("want one critical ScheduleValidationFailed, got %v", got)
+		}
+	})
+
+	t.Run("validationErrors raise even with an empty phase", func(t *testing.T) {
+		got := detect(veleroObj{name: "s1", validation: []string{"invalid cron"}})
+		if len(got) != 1 {
+			t.Fatalf("want 1 issue, got %d", len(got))
+		}
+		if got[0].Message != "invalid cron" {
+			t.Errorf("message = %q, want the validation error", got[0].Message)
+		}
+	})
+
+	t.Run("a paused schedule is operator intent, not an issue", func(t *testing.T) {
+		got := detect(veleroObj{name: "s1", phase: "Enabled", paused: true})
+		if len(got) != 0 {
+			t.Fatalf("pausing is deliberate and must not raise an issue, got %v", reasonsOf(got))
+		}
+	})
+
+	t.Run("an enabled schedule is silent", func(t *testing.T) {
+		if got := detect(veleroObj{name: "s1", phase: "Enabled"}); len(got) != 0 {
+			t.Fatalf("want no issue, got %v", reasonsOf(got))
+		}
+	})
+}
+
+func TestVeleroTargetIssues(t *testing.T) {
+	t.Run("Unavailable BSL is critical and categorised as a target failure", func(t *testing.T) {
+		got := detectVeleroIssues(veleroGVR("backupstoragelocations"), "BackupStorageLocation",
+			buildVelero("BackupStorageLocation", veleroObj{name: "default", phase: "Unavailable", message: "bucket not found"}), nil)
+		if len(got) != 1 {
+			t.Fatalf("want 1 issue, got %d", len(got))
+		}
+		if got[0].Reason != ReasonVeleroBSLUnavailable || got[0].Severity != SeverityCritical {
+			t.Errorf("got reason=%q severity=%q", got[0].Reason, got[0].Severity)
+		}
+		if got[0].Category != issuesapi.CategoryBackupTargetUnavailable {
+			t.Errorf("category = %q, want %q", got[0].Category, issuesapi.CategoryBackupTargetUnavailable)
+		}
+		if got[0].Message != "bucket not found" {
+			t.Errorf("message = %q, want the controller's failureReason", got[0].Message)
+		}
+	})
+
+	t.Run("Available BSL is silent", func(t *testing.T) {
+		got := detectVeleroIssues(veleroGVR("backupstoragelocations"), "BackupStorageLocation",
+			buildVelero("BackupStorageLocation", veleroObj{name: "default", phase: "Available"}), nil)
+		if len(got) != 0 {
+			t.Fatalf("want no issue, got %v", reasonsOf(got))
+		}
+	})
+
+	t.Run("NotReady BackupRepository is a warning", func(t *testing.T) {
+		got := detectVeleroIssues(veleroGVR("backuprepositories"), "BackupRepository",
+			buildVelero("BackupRepository", veleroObj{name: "repo-1", phase: "NotReady"}), nil)
+		if len(got) != 1 || got[0].Severity != SeverityWarning || got[0].Reason != ReasonVeleroRepositoryNotReady {
+			t.Fatalf("want one warning BackupRepositoryNotReady, got %v", got)
+		}
+	})
+
+	t.Run("Ready BackupRepository is silent", func(t *testing.T) {
+		got := detectVeleroIssues(veleroGVR("backuprepositories"), "BackupRepository",
+			buildVelero("BackupRepository", veleroObj{name: "repo-1", phase: "Ready"}), nil)
+		if len(got) != 0 {
+			t.Fatalf("want no issue, got %v", reasonsOf(got))
+		}
+	})
+}
+
+// Kinds Radar watches but has no Velero detector for (VolumeSnapshotLocation
+// has no populated status.phase; the data-mover kinds are v2 work) must not
+// fabricate issues.
+func TestVeleroUnhandledKindsAreSilent(t *testing.T) {
+	for _, kind := range []string{"VolumeSnapshotLocation", "DataUpload", "PodVolumeBackup", "DeleteBackupRequest"} {
+		got := detectVeleroIssues(veleroGVR("x"), kind, buildVelero(kind, veleroObj{name: "o1", phase: "Failed"}), nil)
+		if len(got) != 0 {
+			t.Errorf("kind %s must be silent, got %v", kind, reasonsOf(got))
+		}
+	}
+}
+
+// ownedSubjects is how the compose layer suppresses rows already reported by a
+// higher-level detector; the Velero adapter must honour it before grouping, or
+// a suppressed backup could still win supersession and re-report.
+func TestVeleroRespectsOwnedSubjects(t *testing.T) {
+	owned := map[string]bool{
+		resourceKey(VeleroGroup, "Backup", "velero", "nightly-2"): true,
+	}
+	items := buildVelero("Backup",
+		veleroObj{name: "nightly-1", schedule: "nightly", phase: "Failed", startedMinsAgo: 120},
+		veleroObj{name: "nightly-2", schedule: "nightly", phase: "Failed", startedMinsAgo: 60},
+	)
+	got := detectVeleroIssues(veleroGVR("backups"), "Backup", items, owned)
+	if len(got) != 1 || got[0].Name != "nightly-1" {
+		t.Fatalf("want the non-owned backup reported, got %v", namesOf(got))
+	}
+}
+
+// FirstSeen must anchor on when the run actually failed, not on compose time —
+// otherwise a week-old failure looks brand new on every poll and jumps the queue.
+func TestVeleroIssueAnchorsOnRunTime(t *testing.T) {
+	got := detectBackups(veleroObj{name: "b1", phase: "Failed", startedMinsAgo: 180})
+	if len(got) != 1 {
+		t.Fatalf("want 1 issue, got %d", len(got))
+	}
+	age := time.Since(got[0].FirstSeen)
+	if age < 170*time.Minute || age > 190*time.Minute {
+		t.Errorf("FirstSeen age = %v, want ~180m (the completion time)", age)
+	}
+}
+
+// The issue identity must not change between polls for an unchanged failure.
+func TestVeleroIssueIdentityIsStable(t *testing.T) {
+	obj := veleroObj{name: "nightly-1", schedule: "nightly", phase: "Failed", startedMinsAgo: 60}
+	first := detectBackups(obj)
+	second := detectBackups(obj)
+	if len(first) != 1 || len(second) != 1 {
+		t.Fatalf("want 1 issue each, got %d and %d", len(first), len(second))
+	}
+	if first[0].ID == "" {
+		t.Fatal("issue ID must be populated by enrichIdentity")
+	}
+	if first[0].ID != second[0].ID {
+		t.Errorf("issue ID is unstable: %q vs %q", first[0].ID, second[0].ID)
+	}
+}
