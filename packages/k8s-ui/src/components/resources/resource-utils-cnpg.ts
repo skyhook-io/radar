@@ -8,6 +8,23 @@ import { parseGoTimeString } from '../../utils/parse-go-time'
 // CNPG CLUSTER UTILITIES
 // ============================================================================
 
+export const CNPG_GROUP = 'postgresql.cnpg.io'
+
+/**
+ * Exact API-group match for a resource's `apiVersion` ("group/version").
+ *
+ * Used for the `clusters` and `backups` plurals, where several operators ship
+ * the same kind and a wrong guess fabricates a status. A substring test is not
+ * a group guard — `extension.postgresql.cnpg.io/v1` contains `postgresql.cnpg.io`
+ * — and these are exactly the plurals where that would misfire.
+ */
+export function isApiGroup(apiVersion: unknown, group: string): boolean {
+  if (typeof apiVersion !== 'string') return false
+  const slash = apiVersion.lastIndexOf('/')
+  // A core-group resource ("v1") has no slash and belongs to no CRD group.
+  return slash > 0 && apiVersion.slice(0, slash) === group
+}
+
 // Phase strings are full English sentences copied verbatim from CNPG's
 // api/v1/cluster_types.go — match on equality, never substring. Verified
 // against CNPG 1.27. Radar's Go issue detection mirrors these buckets in
@@ -30,6 +47,10 @@ export const CNPG_CLUSTER_PHASES_TRANSIENT = [
   'Primary instance is being restarted without a switchover',
   'Promoting to primary cluster',
   'Waiting for the instances to become active',
+  // Upstream sets this when an upgrade is postponed by the OPERATOR's own
+  // rollout-delay config and requeued — nothing is waiting on a human, so it
+  // does not belong with 'Waiting for user action'.
+  'Cluster upgrade delayed',
 ] as const
 
 /** Losing the primary — degraded now, self-resolving only if a replica can take over. */
@@ -52,7 +73,6 @@ export const CNPG_CLUSTER_PHASES_TERMINAL = [
  */
 export const CNPG_CLUSTER_PHASES_ATTENTION = [
   'Waiting for user action',
-  'Cluster upgrade delayed',
 ] as const
 
 export type CNPGPhaseBucket = 'healthy' | 'transient' | 'failing' | 'terminal' | 'attention' | 'unknown'

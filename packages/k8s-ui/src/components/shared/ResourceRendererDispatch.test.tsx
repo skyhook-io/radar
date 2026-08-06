@@ -166,10 +166,15 @@ function renderCollidingKind(kind: string, apiVersion: string): string {
 }
 
 describe('getResourceStatus — colliding plurals', () => {
-  it('fabricates no status badge for a third-party clusters CRD', () => {
-    // KubeBlocks, Redis/Valkey operators and friends all ship `clusters`.
+  it('fabricates no PostgreSQL status for a third-party clusters CRD', () => {
+    // KubeBlocks, Redis/Valkey operators and friends all ship `clusters`. With
+    // no status of their own they get nothing; with a phase they get the
+    // generic phase badge, never a CNPG-derived one.
     expect(getResourceStatus('clusters', { apiVersion: 'apps.kubeblocks.io/v1alpha1', status: {} })).toBeNull()
-    expect(getResourceStatus('clusters', { apiVersion: 'redis.redis.opstreelabs.in/v1beta2', status: {} })).toBeNull()
+    expect(getResourceStatus('clusters', { apiVersion: 'apps.kubeblocks.io/v1alpha1', status: { phase: 'Running' } }))
+      .toMatchObject({ text: 'Running' })
+    // CNPG would have rendered "Not Ready" from the absent instance counts.
+    expect(getResourceStatus('clusters', { apiVersion: 'redis.redis.opstreelabs.in/v1beta2', spec: { instances: 3 }, status: {} })).toBeNull()
   })
 
   it('still resolves both known clusters engines positively', () => {
@@ -185,8 +190,10 @@ describe('getResourceStatus — colliding plurals', () => {
     })).not.toBeNull()
   })
 
-  it('fabricates no status badge for a third-party backups CRD', () => {
+  it('fabricates no engine status for a third-party backups CRD', () => {
     expect(getResourceStatus('backups', { apiVersion: 'kubevirt.io/v1', status: {} })).toBeNull()
+    expect(getResourceStatus('backups', { apiVersion: 'kubevirt.io/v1', status: { phase: 'Running' } }))
+      .toMatchObject({ text: 'Running' })
   })
 
   it('still resolves both known backups engines positively', () => {
@@ -201,9 +208,10 @@ describe('getResourceStatus — colliding plurals', () => {
     })).not.toBeNull()
   })
 
-  it('gives no badge to third-party scheduledbackups and poolers', () => {
+  it('gives no CNPG badge to third-party scheduledbackups and poolers', () => {
+    // CNPG's Pooler getter would have said "Not Scheduled" from spec.instances.
+    expect(getResourceStatus('poolers', { apiVersion: 'other.io/v1', spec: { instances: 2 }, status: {} })).toBeNull()
     expect(getResourceStatus('scheduledbackups', { apiVersion: 'other.io/v1', spec: {}, status: {} })).toBeNull()
-    expect(getResourceStatus('poolers', { apiVersion: 'other.io/v1', spec: {}, status: {} })).toBeNull()
   })
 })
 
@@ -226,5 +234,33 @@ describe('ResourceRendererDispatch — colliding plurals fall through', () => {
     expect(html).toContain('Cluster Overview')
     // The generic renderer's raw-spec dump must not appear alongside it.
     expect(html.match(/Cluster Overview/g)).toHaveLength(1)
+  })
+})
+
+describe('colliding plurals — near-match API groups', () => {
+  // A substring guard would hand these to CNPG/Velero. They are different groups.
+  it.each([
+    ['clusters', 'extension.postgresql.cnpg.io/v1'],
+    ['clusters', 'barmancloud.cnpg.io/v1'],
+    ['backups', 'extension.postgresql.cnpg.io/v1'],
+    ['backups', 'backup.velero.io/v1'],
+    ['poolers', 'sub.postgresql.cnpg.io/v1'],
+    ['scheduledbackups', 'sub.postgresql.cnpg.io/v1'],
+  ])('does not give %s/%s an engine-specific status', (kind, apiVersion) => {
+    const s = getResourceStatus(kind, { apiVersion, spec: { instances: 2 }, status: { phase: 'completed' } })
+    // The generic fallback echoes the phase verbatim; the CNPG/Velero getters
+    // would have mapped it to "Completed" or read the instance counts.
+    expect(s?.text).not.toBe('Completed')
+    expect(s?.text).not.toBe('Not Scheduled')
+    expect(s?.text).not.toBe('Not Ready')
+  })
+
+  it.each([
+    ['clusters', 'extension.postgresql.cnpg.io/v1'],
+    ['backups', 'backup.velero.io/v1'],
+  ])('falls %s/%s through to the generic renderer', (kind, apiVersion) => {
+    const html = renderCollidingKind(kind, apiVersion)
+    expect(html.trim()).not.toBe('')
+    expect(html).not.toContain('Cluster Overview')
   })
 })

@@ -41,7 +41,29 @@ var cnpgTerminalPhases = map[string]bool{
 // only raises an issue under an unsupervised strategy.
 var cnpgAttentionPhases = map[string]bool{
 	"Waiting for user action": true,
-	"Cluster upgrade delayed": true,
+}
+
+// cnpgTransientPhases are mid-operation and self-resolving. Enumerated (rather
+// than left to the unknown fallback) so the frontend parity test covers them
+// and a genuinely new phase is still distinguishable from a known transient.
+//
+// "Cluster upgrade delayed" belongs here, not in attention: upstream sets it
+// when an upgrade is postponed by the OPERATOR's own rollout-delay config and
+// requeued — no human is being waited on, and it has nothing to do with
+// primaryUpdateStrategy.
+var cnpgTransientPhases = map[string]bool{
+	"Setting up primary":                                       true,
+	"Creating a new replica":                                   true,
+	"Switchover in progress":                                   true,
+	"Upgrading cluster":                                        true,
+	"Upgrading Postgres major version":                         true,
+	"Online upgrade in progress":                               true,
+	"Applying configuration":                                   true,
+	"Primary instance is being restarted in-place":             true,
+	"Primary instance is being restarted without a switchover": true,
+	"Promoting to primary cluster":                             true,
+	"Waiting for the instances to become active":               true,
+	"Cluster upgrade delayed":                                  true,
 }
 
 func detectCNPGIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured) []Issue {
@@ -78,7 +100,7 @@ func detectCNPGClusterIssues(gvr schema.GroupVersionResource, kind string, u *un
 	if _, reason, msg, since, ok := conditions.FindFalseCondition(u, "ContinuousArchiving"); ok {
 		out = append(out, newConditionIssue(gvr, kind, ns, name, SeverityCritical,
 			"CNPGWALArchivingFailing",
-			cnpgMessage("WAL archiving is failing; the recovery point may not be advancing", reason, msg),
+			cnpgMessage("The last WAL archival did not complete; recovery-point advancement is uncertain", reason, msg),
 			since, "CNPGWALArchivingFailing", created))
 	}
 
@@ -92,8 +114,10 @@ func detectCNPGClusterIssues(gvr schema.GroupVersionResource, kind string, u *un
 			since, "CNPGLastBackupFailed", created))
 	}
 
+	phaseExplained := false
 	switch {
 	case cnpgTerminalPhases[phase]:
+		phaseExplained = true
 		reason := "CNPGClusterTerminal"
 		switch phase {
 		case cnpgPhaseUnrecoverable:
@@ -107,15 +131,22 @@ func detectCNPGClusterIssues(gvr schema.GroupVersionResource, kind string, u *un
 			reason, phase, 0, "CNPGClusterPhase", created))
 
 	case phase == cnpgPhaseFailingOver:
+		phaseExplained = true
 		out = append(out, newConditionIssue(gvr, kind, ns, name, SeverityWarning,
 			"CNPGClusterFailingOver", phase, 0, "CNPGClusterPhase", created))
 
 	case cnpgAttentionPhases[phase]:
 		strategy, _, _ := unstructured.NestedString(u.Object, "spec", "primaryUpdateStrategy")
 		if strategy != "supervised" {
+			phaseExplained = true
 			out = append(out, newConditionIssue(gvr, kind, ns, name, SeverityWarning,
 				"CNPGClusterWaitingForUser", phase, 0, "CNPGClusterPhase", created))
 		}
+
+	case cnpgTransientPhases[phase]:
+		// Mid-operation: running below the desired instance count is expected,
+		// so the shortfall check below is suppressed without raising an issue.
+		phaseExplained = true
 
 	case phase == cnpgPhaseHealthy || phase == "":
 		// Nothing phase-derived to report.
@@ -125,10 +156,11 @@ func detectCNPGClusterIssues(gvr schema.GroupVersionResource, kind string, u *un
 		// the degraded-instances check below still applies.
 	}
 
-	// Instance shortfall is only worth reporting when the phase hasn't already
-	// explained it; a transient phase like "Creating a new replica" legitimately
-	// runs below the desired count.
-	if len(out) == 0 && phase == cnpgPhaseHealthy {
+	// Instance shortfall is reported unless the PHASE already explains it. This
+	// must not key on len(out): a WAL-archiving or failed-backup issue is an
+	// unrelated cause, and letting either suppress the shortfall would hide a
+	// cluster with zero ready instances behind a backup warning.
+	if !phaseExplained {
 		desired, okD, _ := unstructured.NestedInt64(u.Object, "spec", "instances")
 		ready, okR, _ := unstructured.NestedInt64(u.Object, "status", "readyInstances")
 		if okD && okR && desired > 0 && ready < desired {

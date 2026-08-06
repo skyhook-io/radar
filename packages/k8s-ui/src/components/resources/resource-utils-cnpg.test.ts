@@ -18,6 +18,8 @@ import {
   CNPG_CLUSTER_PHASES_ATTENTION,
   CNPG_BACKUP_PHASES_TRANSIENT,
   CNPG_BARMAN_PLUGIN_NAME,
+  CNPG_GROUP,
+  isApiGroup,
 } from './resource-utils-cnpg'
 
 describe('getCNPGClusterCertificateExpirations', () => {
@@ -354,5 +356,33 @@ describe('getCNPGClusterBackupConfig', () => {
 
   it('reports not-configured when neither path is present', () => {
     expect(getCNPGClusterBackupConfig({ spec: {}, status: {} }).configured).toBe(false)
+  })
+})
+
+describe('isApiGroup', () => {
+  it('matches the exact group, not a substring of it', () => {
+    expect(isApiGroup('postgresql.cnpg.io/v1', CNPG_GROUP)).toBe(true)
+    // A vendor sub-group contains the CNPG group as a substring but is not it.
+    expect(isApiGroup('extension.postgresql.cnpg.io/v1', CNPG_GROUP)).toBe(false)
+    expect(isApiGroup('barmancloud.cnpg.io/v1', CNPG_GROUP)).toBe(false)
+    expect(isApiGroup('backup.velero.io/v1', 'velero.io')).toBe(false)
+    expect(isApiGroup('velero.io/v1', 'velero.io')).toBe(true)
+  })
+
+  it('rejects core-group and malformed apiVersions', () => {
+    expect(isApiGroup('v1', CNPG_GROUP)).toBe(false)
+    expect(isApiGroup('/v1', CNPG_GROUP)).toBe(false)
+    expect(isApiGroup(undefined, CNPG_GROUP)).toBe(false)
+    expect(isApiGroup(null, CNPG_GROUP)).toBe(false)
+  })
+})
+
+describe('CNPG_CLUSTER_PHASES_ATTENTION', () => {
+  it('excludes the operator-driven rollout delay', () => {
+    // "Cluster upgrade delayed" is postponed by the operator's own config and
+    // requeued — nothing waits on a human.
+    expect(CNPG_CLUSTER_PHASES_ATTENTION).not.toContain('Cluster upgrade delayed')
+    expect(CNPG_CLUSTER_PHASES_TRANSIENT).toContain('Cluster upgrade delayed')
+    expect(classifyCNPGClusterPhase('Cluster upgrade delayed')).toBe('transient')
   })
 })

@@ -293,3 +293,41 @@ func TestCNPGConcurrentCausesGetDistinctIdentities(t *testing.T) {
 		ids[i.ID] = i.Reason
 	}
 }
+
+// A backup-condition issue must never suppress the instance-shortfall issue:
+// they are unrelated causes, and letting a backup warning hide a cluster with
+// zero ready instances buries the actual outage.
+func TestCNPGBackupConditionDoesNotSuppressOutage(t *testing.T) {
+	for _, cond := range []map[string]any{
+		cnpgCondition("LastBackupSucceeded", "False", "LastBackupFailed", "no credentials"),
+		cnpgCondition("ContinuousArchiving", "False", "ContinuousArchivingFailing", "cannot upload"),
+	} {
+		u := cnpgCluster(
+			map[string]any{"instances": int64(3)},
+			map[string]any{
+				"phase": "Cluster in healthy state", "readyInstances": int64(0),
+				"conditions": []any{cond},
+			},
+		)
+		issues := detectCNPGIssues(cnpgClusterGVR, "Cluster", u)
+		degraded := findIssue(t, issues, "CNPGClusterDegraded")
+		if degraded.Severity != SeverityCritical {
+			t.Errorf("%v: outage severity = %q, want critical", cond["type"], degraded.Severity)
+		}
+	}
+}
+
+// Upstream sets PhaseUpgradeDelayed when the OPERATOR's rollout-delay config
+// postpones an upgrade and requeues — it is self-resolving and unrelated to
+// primaryUpdateStrategy, so it must not raise a waiting-for-user issue.
+func TestCNPGUpgradeDelayedIsTransientNotAttention(t *testing.T) {
+	for _, strategy := range []string{"unsupervised", "supervised", ""} {
+		u := cnpgCluster(
+			map[string]any{"instances": int64(2), "primaryUpdateStrategy": strategy},
+			map[string]any{"phase": "Cluster upgrade delayed", "readyInstances": int64(1)},
+		)
+		if got := detectCNPGIssues(cnpgClusterGVR, "Cluster", u); len(got) != 0 {
+			t.Errorf("strategy %q: rollout-delay raised %v", strategy, reasonsOf(got))
+		}
+	}
+}

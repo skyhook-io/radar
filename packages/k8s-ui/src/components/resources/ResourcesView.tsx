@@ -160,6 +160,7 @@ import { ExternalSecretCell, ClusterExternalSecretCell, SecretStoreCell, Cluster
 import { BackupCell, RestoreCell, ScheduleCell, BackupStorageLocationCell, VolumeSnapshotLocationCell, BackupRepositoryCell } from './renderers/velero-cells'
 import { isVeleroResource } from './resource-utils-velero'
 import { CNPGClusterCell, CNPGBackupCell, CNPGScheduledBackupCell, CNPGPoolerCell } from './renderers/cnpg-cells'
+import { isApiGroup, CNPG_GROUP } from './resource-utils-cnpg'
 import { ManagedResourceCell, CompositeResourceCell, CrossplaneProviderCell, CrossplaneProviderConfigCell, CompositionCell, XRDCell } from './renderers/crossplane-cells'
 import { isManagedResource, isComposite } from './resource-utils-crossplane'
 import { VirtualServiceCell, DestinationRuleCell, IstioGatewayCell, ServiceEntryCell, PeerAuthenticationCell, AuthorizationPolicyCell } from './renderers/istio-cells'
@@ -5830,10 +5831,10 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       // Reached only when the group is unknown to normalizeKindToPlural. Both
       // engines are matched positively so a third `backups` CRD renders generic
       // rather than inheriting whichever branch happened to be the fallback.
-      if (resource.apiVersion?.includes('postgresql.cnpg.io')) {
+      if (isApiGroup(resource.apiVersion, CNPG_GROUP)) {
         return <CNPGBackupCell resource={resource} column={column} />
       }
-      if (resource.apiVersion?.includes('velero.io')) {
+      if (isApiGroup(resource.apiVersion, 'velero.io')) {
         return <BackupCell resource={resource} column={column} />
       }
       return <GenericCell resource={resource} column={column} />
@@ -5857,17 +5858,17 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       // Positive guard: `clusters` is one of the most collided CRD plurals
       // (CNPG, CAPI, KubeBlocks, Redis/Valkey operators). Anything else gets
       // the generic cell instead of a fabricated Postgres status.
-      if (resource.apiVersion?.includes('postgresql.cnpg.io')) {
+      if (isApiGroup(resource.apiVersion, CNPG_GROUP)) {
         return <CNPGClusterCell resource={resource} column={column} />
       }
       return <GenericCell resource={resource} column={column} />
     case 'scheduledbackups':
-      if (resource.apiVersion?.includes('postgresql.cnpg.io')) {
+      if (isApiGroup(resource.apiVersion, CNPG_GROUP)) {
         return <CNPGScheduledBackupCell resource={resource} column={column} />
       }
       return <GenericCell resource={resource} column={column} />
     case 'poolers':
-      if (resource.apiVersion?.includes('postgresql.cnpg.io')) {
+      if (isApiGroup(resource.apiVersion, CNPG_GROUP)) {
         return <CNPGPoolerCell resource={resource} column={column} />
       }
       return <GenericCell resource={resource} column={column} />

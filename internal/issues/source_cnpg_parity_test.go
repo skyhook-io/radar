@@ -13,6 +13,9 @@ const cnpgFrontendTaxonomyPath = "../../packages/k8s-ui/src/components/resources
 var (
 	cnpgTSConstBlock = regexp.MustCompile(`(?s)export const (CNPG_CLUSTER_PHASES_[A-Z]+) = \[(.*?)\] as const`)
 	cnpgTSEntry      = regexp.MustCompile(`'([^']*)'`)
+	// Prose in the block carries apostrophes and quoted phrases; strip comments
+	// before extracting entries or they parse as phases.
+	cnpgTSComment = regexp.MustCompile(`(?m)//.*$`)
 )
 
 // TestCNPGPhaseTaxonomyMatchesFrontend fails when the Go phase buckets and the
@@ -21,9 +24,10 @@ var (
 // detector. A divergence ships a red badge with no issue, or an issue with no
 // badge — the exact failure mode this integration was repaired for.
 //
-// Only the buckets Go actually enumerates are compared. Go has no transient
-// list: its degraded check fires only under the healthy phase, so transient
-// phases are excluded structurally rather than by enumeration.
+// All five buckets are compared. The transient bucket matters as much as the
+// rest: Go uses it to suppress the instance-shortfall issue during a legitimate
+// mid-operation shortfall, so a phase present on one side only would either
+// raise a spurious "degraded" issue or silently swallow a real one.
 func TestCNPGPhaseTaxonomyMatchesFrontend(t *testing.T) {
 	raw, err := os.ReadFile(cnpgFrontendTaxonomyPath)
 	if err != nil {
@@ -33,7 +37,7 @@ func TestCNPGPhaseTaxonomyMatchesFrontend(t *testing.T) {
 	ts := map[string][]string{}
 	for _, m := range cnpgTSConstBlock.FindAllStringSubmatch(string(raw), -1) {
 		var phases []string
-		for _, e := range cnpgTSEntry.FindAllStringSubmatch(m[2], -1) {
+		for _, e := range cnpgTSEntry.FindAllStringSubmatch(cnpgTSComment.ReplaceAllString(m[2], ""), -1) {
 			phases = append(phases, e[1])
 		}
 		ts[m[1]] = phases
@@ -48,6 +52,7 @@ func TestCNPGPhaseTaxonomyMatchesFrontend(t *testing.T) {
 	}{
 		{"CNPG_CLUSTER_PHASES_TERMINAL", cnpgTerminalPhases},
 		{"CNPG_CLUSTER_PHASES_ATTENTION", cnpgAttentionPhases},
+		{"CNPG_CLUSTER_PHASES_TRANSIENT", cnpgTransientPhases},
 		{"CNPG_CLUSTER_PHASES_HEALTHY", map[string]bool{cnpgPhaseHealthy: true}},
 		{"CNPG_CLUSTER_PHASES_FAILING", map[string]bool{cnpgPhaseFailingOver: true}},
 	}

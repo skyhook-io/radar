@@ -20,6 +20,7 @@ import {
   getCNPGClusterCertificateExpirations,
   getCNPGWALArchivingFailure,
   getCNPGLastBackupFailure,
+  classifyCNPGClusterPhase,
 } from '../resource-utils-cnpg'
 import { formatAge } from '../resource-utils'
 
@@ -63,6 +64,7 @@ export function CNPGClusterRenderer({ data, onNavigate }: CNPGClusterRendererPro
   // WAL archiving / backup health, straight from the operator's own conditions.
   const walArchivingFailure = getCNPGWALArchivingFailure(data)
   const lastBackupFailure = getCNPGLastBackupFailure(data)
+  const phaseBucket = classifyCNPGClusterPhase(phase)
 
   // Problem detection
   const isDown = instances > 0 && readyInstances === 0
@@ -120,9 +122,17 @@ export function CNPGClusterRenderer({ data, onNavigate }: CNPGClusterRendererPro
           variant="error"
           title="WAL archiving is failing"
           message={
-            `Continuous archiving has been failing${walArchivingFailure.lastTransitionTime ? ` for ${formatAge(walArchivingFailure.lastTransitionTime)}` : ''}. ` +
-            'The cluster keeps serving traffic normally, but the recovery point may not be advancing — ' +
-            'check the backup destination before relying on point-in-time recovery.' +
+            // Precision matters here. The condition proves the last archival
+            // attempt did not complete and has stayed False since its
+            // transition — it does not prove a continuous run of failures, and
+            // it says nothing about an exact RPO. The "still serving" framing
+            // is gated on the cluster actually being up: asserting it next to a
+            // Cluster Down banner would be plainly false.
+            `CNPG reports that the last WAL archival did not complete${walArchivingFailure.lastTransitionTime ? `, and archiving has been in this state for ${formatAge(walArchivingFailure.lastTransitionTime)}` : ''}. ` +
+            'Recovery-point advancement is uncertain — check the backup destination before relying on point-in-time recovery.' +
+            (isDown || isDegraded || isFailover || phaseBucket === 'terminal'
+              ? ''
+              : ' The cluster is otherwise serving normally, so nothing else here will look wrong.') +
             (walArchivingFailure.message ? ` Operator reported: ${walArchivingFailure.message}` : '')
           }
         />
