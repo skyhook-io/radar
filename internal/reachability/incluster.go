@@ -41,13 +41,10 @@ type InClusterTestResult struct {
 
 // InClusterTestOptions tunes one whole-subject in-cluster test run.
 type InClusterTestOptions struct {
-	// PathOverride, when non-empty, replaces every tested route's request path.
-	// The operator asked to test THIS path, so probing each route's declared
-	// path instead would silently test something else. Normalized via
-	// NormalizeProbePath; the per-route result Request records the path that
-	// was actually probed. An override that differs from a route's own declared
-	// path stays evidence-only for that route - it never folds into the route's
-	// outcome, because a clean probe of /healthz says nothing about /admin.
+	// PathOverride, when non-empty, replaces every HTTP(S) route's request path.
+	// TCP-only routes ignore it because they have no HTTP request target. An
+	// override that differs from an HTTP route's declared path stays evidence-only
+	// for that route: a clean probe of /healthz says nothing about /admin.
 	PathOverride string
 }
 
@@ -128,28 +125,33 @@ func runInClusterTests(ctx context.Context, typed kubernetes.Interface, image st
 		// explicit override also clears PathGuessed - the operator chose this path,
 		// it is not a guessed concretization of a pattern.
 		req := *r.InClusterRequest
-		// Every probe path is sanitized before it reaches the Job (strip CR/LF and
-		// other control characters, force a single leading slash) - not only the
-		// operator override. A raw declared path from a route spec must not reach
-		// the probe un-normalized.
-		req.Path = NormalizeProbePath(req.Path)
-		if req.Path == "" {
-			req.Path = "/"
-		}
-		declaredPath := req.Path
-		// An override tests ONE specific request. Only when it equals this route's
-		// own declared path is the probe evidence about the route's declared
-		// traffic - otherwise a clean probe of the override path would fold under
-		// every route's key and read as "verified over live traffic" for declared
-		// paths that were never dialed.
+		httpRequest := req.Protocol == "http" || req.Protocol == "https"
+		declaredPath := ""
 		overrideMismatch := false
-		if override != "" {
-			normalizedOverride := NormalizeProbePath(override)
-			if normalizedOverride == "" {
-				normalizedOverride = "/"
+		if httpRequest {
+			// Every HTTP path is sanitized before it reaches the Job, not only the
+			// operator override. A malformed route spec must not inject controls
+			// into the probe request.
+			req.Path = NormalizeProbePath(req.Path)
+			if req.Path == "" {
+				req.Path = "/"
 			}
-			overrideMismatch = normalizedOverride != declaredPath
-			req.Path = normalizedOverride
+			declaredPath = req.Path
+			if override != "" {
+				normalizedOverride := NormalizeProbePath(override)
+				if normalizedOverride == "" {
+					normalizedOverride = "/"
+				}
+				overrideMismatch = normalizedOverride != declaredPath
+				req.Path = normalizedOverride
+				req.PathGuessed = false
+			}
+		} else {
+			// Transport-only probes must not carry contradictory HTTP fields. The
+			// protocol is the complete request contract for these routes.
+			req.Scheme = ""
+			req.Host = ""
+			req.Path = ""
 			req.PathGuessed = false
 		}
 		// For a cross-namespace backend (Gateway API backendRef into another ns)
@@ -162,8 +164,8 @@ func runInClusterTests(ctx context.Context, typed kubernetes.Interface, image st
 		}
 		opts := RunOptions{
 			Image: image, Namespace: namespace, Target: dialTarget,
-			Scheme: req.Scheme, Host: req.Host, Path: req.Path,
-			Layers: "tcp,http",
+			Scheme: schemeForProtocol(req.Protocol), Host: req.Host, Path: req.Path,
+			Layers: layersForProtocol(req.Protocol),
 		}
 		res := InClusterTestResult{Route: r.Route, Target: r.Target, TargetNamespace: r.TargetNamespace, Request: &req}
 		// No impersonated client → auth/impersonation failed for EVERY route. This
@@ -235,6 +237,20 @@ func runInClusterTests(ctx context.Context, typed kubernetes.Interface, image st
 		tests = append(tests, res)
 	}
 	return tests, byTarget
+}
+
+func layersForProtocol(protocol string) string {
+	if protocol == "http" || protocol == "https" {
+		return "tcp,http"
+	}
+	return "tcp"
+}
+
+func schemeForProtocol(protocol string) string {
+	if protocol == "http" || protocol == "https" {
+		return protocol
+	}
+	return ""
 }
 
 // runBudgetContext sizes one probe run to the REMAINING request deadline minus

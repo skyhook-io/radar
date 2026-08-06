@@ -586,10 +586,6 @@ func readPodLogs(ctx context.Context, client kubernetes.Interface, namespace, po
 // (target/scheme/host/path/layers) so the manual run tests the same request the
 // runner would have - a fallback that tested a different request would mislead.
 func FallbackCommand(opts RunOptions) string {
-	scheme := opts.Scheme
-	if scheme == "" {
-		scheme = "http"
-	}
 	image := opts.Image
 	if image == "" {
 		image = DefaultImage()
@@ -626,7 +622,10 @@ func FallbackCommand(opts RunOptions) string {
 		"--image=" + shellQuote(image), "--restart=Never --rm -i",
 		"--override-type=strategic --overrides=" + shellQuote(string(ov)),
 		"--command --",
-		"/radar probe --target " + shellQuote(opts.Target), "--scheme " + shellQuote(scheme),
+		"/radar probe --target " + shellQuote(opts.Target), "--timeout 3s",
+	}
+	if opts.Scheme != "" {
+		parts = append(parts, "--scheme "+shellQuote(opts.Scheme))
 	}
 	if opts.Host != "" {
 		parts = append(parts, "--host "+shellQuote(opts.Host))

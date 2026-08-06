@@ -57,7 +57,12 @@ const findingsFp = (findings: Finding[] | undefined): string =>
 
 const configFp = (c: HopConfig | undefined): string => {
   if (!c) return ''
-  const ports = (c.ports ?? []).map((p) => `${p.port}>${p.targetPort ?? ''}/${p.protocol ?? ''}`).join(',')
+  // name + appProtocol decide HTTP-vs-HTTPS-vs-TCP for the in-cluster request,
+  // so an edit to them MUST invalidate the trace: consent renders from the
+  // displayed trace while the server re-derives fresh state at run time, and a
+  // fingerprint blind to these fields let consent describe different traffic
+  // than the Job then sent.
+  const ports = (c.ports ?? []).map((p) => `${p.port}>${p.targetPort ?? ''}/${p.protocol ?? ''}/${p.name ?? ''}/${p.appProtocol ?? ''}`).join(',')
   const rules = (c.rules ?? [])
     .map((r) =>
       [

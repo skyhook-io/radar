@@ -371,11 +371,13 @@ export interface VantageResult {
   segment?: 'backend'
 }
 
-/** A concrete HTTP request the in-cluster runner can send to the Service. */
+/** A concrete request the in-cluster runner can send to the Service. HTTP
+ * fields are absent for transport-only TCP probes. */
 export interface ProbeRequest {
-  scheme: string
+  protocol: 'http' | 'https' | 'tcp'
+  scheme?: 'http' | 'https'
   host?: string
-  path: string
+  path?: string
   pathGuessed?: boolean
 }
 

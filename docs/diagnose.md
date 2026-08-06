@@ -7,7 +7,7 @@ The **Diagnose** tab in the resource detail view (and the matching MCP `diagnose
 The trace has two layers:
 
 1. **Static** - is the path wired correctly in config + current pod state? Pure functions over the in-memory informer cache, no per-call API requests. Always on.
-2. **Active reachability test** (optional, one-shot) - send DNS / TCP / TLS / HTTP probes along the declared path and report what came back. The proxy probe runs automatically once when the **Diagnose** tab opens (re-runnable via **Run test**); only the in-cluster Job test stays a manual click.
+2. **Active reachability test** (optional, one-shot) - send DNS / TCP / TLS / HTTP probes along the declared path and report what came back. HTTP-shaped ports get an HTTP request; explicitly non-HTTP ports stop at TCP rather than sending an unrelated protocol. The proxy probe runs automatically once when the **Diagnose** tab opens (re-runnable via **Run test**); only the in-cluster Job test stays a manual click.
 
 The active layer can escalate the static verdict when probes give clear evidence of a real failure on a hop (every non-skipped probe failed → that hop counts toward broken; over half failed → counts toward degraded). It never softens a static verdict: a critical static finding outranks probe state, and an unverifiable path stays unverifiable.
 
@@ -66,13 +66,13 @@ kubectl get httproute api-route -n prod -o jsonpath='{.status.parents}'
 
 ## Reachability test (active probes)
 
-The **Run test** button under the verdict fires one round of probes against the declared path:
+The **Run test** button under the verdict fires one round of applicable probes. HTTP(S) routes use their declared path; non-HTTP Service ports have no HTTP path and stop at TCP:
 
 | Hop | What runs |
 |-----|-----------|
 | Ingress / Gateway hostname | DNS → TCP → TLS (if HTTPS) → HTTP |
-| Service | Direct TCP to ClusterIP:port (in-cluster), or HTTP via the K8s API server's `/services/{name}:{port}/proxy/` subresource (from a laptop) |
-| Pods | Direct TCP to PodIP:port (in-cluster) or HTTP via `/pods/{name}/proxy/` (from a laptop) for up to 3 sampled ready pods; the remaining pods get a "sampled N of M" skip row |
+| Service | Direct TCP to ClusterIP:port in-cluster, followed by HTTP only for an HTTP-shaped port; from a laptop, HTTP via the K8s API server's `/services/{name}:{port}/proxy/` subresource when applicable |
+| Pods | Direct TCP to PodIP:port in-cluster, followed by HTTP only for an HTTP-shaped port; from a laptop, HTTP via `/pods/{name}/proxy/` when applicable for up to 3 sampled ready pods; the remaining pods get a "sampled N of M" skip row |
 | HTTPRoute / GRPCRoute | Skipped - routes have no own routable address; reachability is the upstream Gateway + downstream Service |
 
 Each row reports outcome (`ok` / `fail` / `skipped`), latency, the path it traversed (`pod-to-pod path` or `via Kubernetes API`), and an HTTP status detail when available. The total budget is 3 seconds; per-hop runs in parallel within that envelope. Probes are an action, not a polling state; the button fires once, results land, the next static refetch replaces them.

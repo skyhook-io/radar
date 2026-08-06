@@ -156,7 +156,7 @@ describe('summarizeTrace - the passive drawer glance', () => {
     expect(v.headline).not.toContain('running pod')
     expect(v.headline).not.toContain('shop.example.com')
     expect(v.headline).not.toContain('port 80')
-    expect(v.subtitle).toBeTruthy()
+    expect(v.subtitle).toBe('A quick live connection test from where Radar runs.')
     expect(v.ctaLabel).toBe('Run test →')
   })
 
@@ -177,6 +177,7 @@ describe('summarizeTrace - the passive drawer glance', () => {
     expect(v.headline).not.toContain('routes to')
     expect(v.headline).not.toContain('running pod')
     expect(v.headline).not.toContain('shop.example.com')
+    expect(v.subtitle).toBe('A quick live probe of the declared host and path.')
     expect(v.tone).toBeUndefined()
     expect(v.ctaLabel).toBe('Run test →')
   })

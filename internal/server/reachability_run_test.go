@@ -70,6 +70,9 @@ func TestStampInClusterProbes_KeepsCleanReach(t *testing.T) {
 	if len(tr.Downstream[0].Probes) != 1 || tr.Downstream[0].Probes[0].Skipped {
 		t.Errorf("a clean in-cluster reach must stay a live probe, got %+v", tr.Downstream[0].Probes)
 	}
+	if tr.Downstream[0].Probes[0].Port != 80 {
+		t.Errorf("stamped probe port = %d, want 80 so it rejoins the route row", tr.Downstream[0].Probes[0].Port)
+	}
 }
 
 // A same-namespace probe result (empty TargetNamespace = the subject's own

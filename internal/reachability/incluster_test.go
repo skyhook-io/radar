@@ -49,7 +49,7 @@ func TestRunInClusterTests_NilClientIsHonest(t *testing.T) {
 	tr := &trace.Trace{
 		Routes: []trace.RouteResult{{
 			Route: "api", Target: "api:80", Outcome: trace.OutcomeReached, Confidence: trace.ConfidenceIndirect,
-			InClusterRequest: &trace.ProbeRequest{Scheme: "http", Path: "/"},
+			InClusterRequest: &trace.ProbeRequest{Protocol: "http", Scheme: "http", Path: "/"},
 		}},
 	}
 	tests, byTarget := RunInClusterTests(context.Background(), tr, "prod")
@@ -76,7 +76,7 @@ func TestRunInClusterTests_NilClientDoesNotConsumeCap(t *testing.T) {
 		routes = append(routes, trace.RouteResult{
 			Route: fmt.Sprintf("r%d", i), Target: fmt.Sprintf("svc%d:80", i),
 			Outcome: trace.OutcomeReached, Confidence: trace.ConfidenceIndirect,
-			InClusterRequest: &trace.ProbeRequest{Scheme: "http", Path: "/"},
+			InClusterRequest: &trace.ProbeRequest{Protocol: "http", Scheme: "http", Path: "/"},
 		})
 	}
 	tests, _ := RunInClusterTests(context.Background(), &trace.Trace{Routes: routes}, "prod")
@@ -101,7 +101,7 @@ func TestRunInClusterTests_PathOverrideThreads(t *testing.T) {
 	tr := &trace.Trace{
 		Routes: []trace.RouteResult{{
 			Route: "api", Target: "api:80", Outcome: trace.OutcomeReached, Confidence: trace.ConfidenceIndirect,
-			InClusterRequest: &trace.ProbeRequest{Scheme: "http", Path: "/declared", PathGuessed: true},
+			InClusterRequest: &trace.ProbeRequest{Protocol: "http", Scheme: "http", Path: "/declared", PathGuessed: true},
 		}},
 	}
 	tests, _ := RunInClusterTestsWithOptions(context.Background(), tr, "prod", InClusterTestOptions{PathOverride: "/healthz"})
@@ -131,7 +131,7 @@ func TestRunInClusterTests_DeclaredPathSanitized(t *testing.T) {
 	tr := &trace.Trace{
 		Routes: []trace.RouteResult{{
 			Route: "api", Target: "api:80", Outcome: trace.OutcomeReached, Confidence: trace.ConfidenceIndirect,
-			InClusterRequest: &trace.ProbeRequest{Scheme: "http", Path: "api/v1\r\nX-Injected: 1"},
+			InClusterRequest: &trace.ProbeRequest{Protocol: "http", Scheme: "http", Path: "api/v1\r\nX-Injected: 1"},
 		}},
 	}
 	runInClusterTests(context.Background(), fake.NewSimpleClientset(), "img:test", tr, "prod", InClusterTestOptions{})
@@ -144,6 +144,96 @@ func TestRunInClusterTests_DeclaredPathSanitized(t *testing.T) {
 	}
 	if got != "/api/v1X-Injected: 1" {
 		t.Errorf("declared path not sanitized as expected, got %q", got)
+	}
+}
+
+func TestRunInClusterTests_ProtocolSelectsProbeLayers(t *testing.T) {
+	calls := stubCleanProbe(t)
+	tr := &trace.Trace{
+		Routes: []trace.RouteResult{
+			{
+				Route: "web", Target: "web:8080",
+				InClusterRequest: &trace.ProbeRequest{Protocol: "http", Scheme: "http", Path: "/"},
+			},
+			{
+				Route: "database", Target: "database:5432",
+				InClusterRequest: &trace.ProbeRequest{Protocol: "tcp", Scheme: "http", Path: "/"},
+			},
+			{
+				Route: "database-on-443", Target: "database:443",
+				InClusterRequest: &trace.ProbeRequest{Protocol: "tcp", Scheme: "https", Path: "/"},
+			},
+		},
+	}
+	tests, _ := runInClusterTests(context.Background(), fake.NewSimpleClientset(), "img:test", tr, "prod", InClusterTestOptions{})
+	if len(*calls) != 3 {
+		t.Fatalf("want 3 probe calls, got %d", len(*calls))
+	}
+	if got := (*calls)[0].Layers; got != "tcp,http" {
+		t.Errorf("HTTP route layers = %q, want tcp,http", got)
+	}
+	if got := (*calls)[0].Scheme; got != "http" {
+		t.Errorf("HTTP route scheme = %q, want http", got)
+	}
+	if got := (*calls)[1].Layers; got != "tcp" {
+		t.Errorf("non-HTTP route layers = %q, want tcp", got)
+	}
+	if got := (*calls)[1].Scheme; got != "" {
+		t.Errorf("non-HTTP route scheme = %q, want empty", got)
+	}
+	if got := (*calls)[2].Layers; got != "tcp" {
+		t.Errorf("non-HTTP route on port 443 layers = %q, want tcp", got)
+	}
+	if got := (*calls)[2].Scheme; got != "" {
+		t.Errorf("non-HTTP route on port 443 scheme = %q, want empty so TLS cannot run", got)
+	}
+	for _, i := range []int{1, 2} {
+		if (*calls)[i].Path != "" || (*calls)[i].Host != "" {
+			t.Errorf("TCP route %d carried HTTP options: %+v", i, (*calls)[i])
+		}
+		if tests[i].Request == nil || tests[i].Request.Scheme != "" || tests[i].Request.Path != "" || tests[i].Request.Host != "" {
+			t.Errorf("TCP result %d carried contradictory HTTP request fields: %+v", i, tests[i].Request)
+		}
+	}
+}
+
+func TestRunInClusterTests_TCPPathOverrideIgnored(t *testing.T) {
+	calls := stubCleanProbe(t)
+	tr := &trace.Trace{
+		Routes: []trace.RouteResult{{
+			Route: "database", Target: "database:5432",
+			InClusterRequest: &trace.ProbeRequest{
+				Protocol: "tcp", Scheme: "https", Host: "database.example", Path: "/declared", PathGuessed: true,
+			},
+		}},
+	}
+
+	tests, byTarget := runInClusterTests(
+		context.Background(),
+		fake.NewSimpleClientset(),
+		"img:test",
+		tr,
+		"prod",
+		InClusterTestOptions{PathOverride: "/healthz"},
+	)
+
+	if len(*calls) != 1 {
+		t.Fatalf("want 1 probe call, got %d", len(*calls))
+	}
+	call := (*calls)[0]
+	if call.Layers != "tcp" || call.Scheme != "" || call.Host != "" || call.Path != "" {
+		t.Errorf("TCP probe options = %+v, want transport-only options", call)
+	}
+	if len(tests) != 1 || tests[0].Status != "" {
+		t.Fatalf("TCP success should fold normally despite an HTTP path override, got %+v", tests)
+	}
+	if tests[0].Request == nil || tests[0].Request.Protocol != "tcp" ||
+		tests[0].Request.Scheme != "" || tests[0].Request.Host != "" ||
+		tests[0].Request.Path != "" || tests[0].Request.PathGuessed {
+		t.Errorf("TCP result request = %+v, want only protocol=tcp", tests[0].Request)
+	}
+	if _, ok := byTarget[trace.InClusterResultKey("database", "database:5432", "")]; !ok {
+		t.Errorf("TCP result was not folded: %v", byTarget)
 	}
 }
 
@@ -174,12 +264,12 @@ func TestRunInClusterTests_OverrideMismatchIsEvidenceOnly(t *testing.T) {
 			{
 				Route: "shop.example.com/admin", Target: "admin:80",
 				Outcome: trace.OutcomeReached, Confidence: trace.ConfidenceIndirect,
-				InClusterRequest: &trace.ProbeRequest{Scheme: "http", Path: "/admin"},
+				InClusterRequest: &trace.ProbeRequest{Protocol: "http", Scheme: "http", Path: "/admin"},
 			},
 			{
 				Route: "shop.example.com/healthz", Target: "web:80",
 				Outcome: trace.OutcomeReached, Confidence: trace.ConfidenceIndirect,
-				InClusterRequest: &trace.ProbeRequest{Scheme: "http", Path: "/healthz"},
+				InClusterRequest: &trace.ProbeRequest{Protocol: "http", Scheme: "http", Path: "/healthz"},
 			},
 		},
 	}
@@ -229,7 +319,7 @@ func TestRunInClusterTests_NoOverrideCleanProbeFolds(t *testing.T) {
 	tr := &trace.Trace{
 		Routes: []trace.RouteResult{{
 			Route: "api", Target: "api:80", Outcome: trace.OutcomeReached, Confidence: trace.ConfidenceIndirect,
-			InClusterRequest: &trace.ProbeRequest{Scheme: "http", Path: "/"},
+			InClusterRequest: &trace.ProbeRequest{Protocol: "http", Scheme: "http", Path: "/"},
 		}},
 	}
 	tests, byTarget := runInClusterTests(context.Background(), fake.NewSimpleClientset(), "img:test", tr, "prod", InClusterTestOptions{})
@@ -272,7 +362,7 @@ func TestRunInClusterTests_BudgetExhaustedRows(t *testing.T) {
 		routes = append(routes, trace.RouteResult{
 			Route: fmt.Sprintf("r%d", i), Target: fmt.Sprintf("svc%d:80", i),
 			Outcome: trace.OutcomeReached, Confidence: trace.ConfidenceIndirect,
-			InClusterRequest: &trace.ProbeRequest{Scheme: "http", Path: "/"},
+			InClusterRequest: &trace.ProbeRequest{Protocol: "http", Scheme: "http", Path: "/"},
 		})
 	}
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Second))
@@ -303,7 +393,7 @@ func TestRunInClusterTests_NoDeadlineRunsNormally(t *testing.T) {
 	tr := &trace.Trace{
 		Routes: []trace.RouteResult{{
 			Route: "api", Target: "api:80", Outcome: trace.OutcomeReached, Confidence: trace.ConfidenceIndirect,
-			InClusterRequest: &trace.ProbeRequest{Scheme: "http", Path: "/"},
+			InClusterRequest: &trace.ProbeRequest{Protocol: "http", Scheme: "http", Path: "/"},
 		}},
 	}
 	// The fake client denies the capability SSAR by default, so the run reports
@@ -345,7 +435,7 @@ func TestRunInClusterTests_ZeroEligibleRoutesIsExplicit(t *testing.T) {
 				Subject: trace.ResourceRef{Kind: "Service", Name: "sleeper"},
 				Routes: []trace.RouteResult{{
 					Route: "svc", Target: "sleeper:80", Benign: true,
-					InClusterRequest: &trace.ProbeRequest{Scheme: "http", Path: "/"},
+					InClusterRequest: &trace.ProbeRequest{Protocol: "http", Scheme: "http", Path: "/"},
 				}},
 			},
 			"intentionally scaled to zero",

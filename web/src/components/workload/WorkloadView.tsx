@@ -73,7 +73,7 @@ import { RightsizingPanel, RightsizingStrip } from '../resource/RightsizingStrip
 import { WorkloadCostTab } from '../cost/WorkloadCostTab'
 import { isOpenCostWorkloadKind } from '../cost/kinds'
 import { useResourceAudit, useResourceIssues, useResources, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
-import { AuditAlerts, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven } from '@skyhook-io/k8s-ui'
+import { AuditAlerts, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows } from '@skyhook-io/k8s-ui'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
 import { ScheduledWorkloadLogsViewer } from '../logs/ScheduledWorkloadLogsViewer'
 import { LogsViewer } from '../logs/LogsViewer'
@@ -1880,27 +1880,10 @@ function DiagnoseTabContent({
   // paths that landed in `notTested`.
   const pendingPath = pendingRunPath ?? probePath
   const override = pendingPath && pendingPath !== '/' ? pendingPath : ''
-  const consentRequests = useMemo(() => {
-    const rows: { route: string; request: string }[] = []
-    for (const r of displayTrace?.routes ?? []) {
-      const req = r.inClusterRequest
-      if (!req) continue
-      // The runner skips benign (deliberately scaled-to-0) routes outright, so
-      // listing them as requests overstates what the operator is agreeing to.
-      if (r.benign) continue
-      const path = override || req.path || '/'
-      // The probe dials the SERVICE and passes the hostname as a Host/SNI header.
-      // Showing only the hostname put a public-looking address on a consent
-      // screen for traffic that never leaves the cluster - so name the address
-      // actually dialled, and the Host header as the header it is.
-      const dialled = r.target || ''
-      const scheme = req.scheme || 'http'
-      const addr = dialled ? `${scheme}://${dialled}${path}` : `${scheme}://${req.host ?? ''}${path}`
-      const asHost = req.host && dialled ? ` (Host: ${req.host})` : ''
-      rows.push({ route: r.route, request: `GET ${addr}${asHost}`.trim() })
-    }
-    return rows
-  }, [displayTrace, override])
+  const consentRequests = useMemo(
+    () => consentRequestRows(displayTrace?.routes ?? [], override),
+    [displayTrace, override],
+  )
   const consentUntestedCount = useMemo(() => {
     const derivable = new Set((displayTrace?.routes ?? []).filter((r) => r.inClusterRequest).map((r) => r.route))
     const declared = new Set<string>([

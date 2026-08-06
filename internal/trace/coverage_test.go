@@ -834,6 +834,86 @@ func TestComputeCoverage_ScaledToZeroIsBenign(t *testing.T) {
 	}
 }
 
+func TestComputeCoverage_ScaledToZeroNonHTTPCandidateIsBenign(t *testing.T) {
+	skip := probe.SkippedCmd(
+		probe.LayerHTTP,
+		"port 6379",
+		probe.VantageLocal,
+		"Port named \"redis\" looks non-HTTP. Run Radar from in-cluster to verify TCP reachability.",
+		"kubectl port-forward svc/sleeper 6379:6379",
+	)
+	skip.Port = 6379
+	skip.SkipClass = SkipClassVantage
+	tr := &Trace{
+		Subject: ResourceRef{Kind: "Service", Namespace: "prod", Name: "sleeper"},
+		Verdict: VerdictBroken,
+		Downstream: []Hop{{
+			Resource: ResourceRef{Kind: "Service", Namespace: "prod", Name: "sleeper"},
+			Config:   &HopConfig{Ports: []PortMap{{Port: 6379, Name: "redis", Protocol: "TCP"}}},
+			Findings: []Finding{{
+				Code: k8s.ScaledToZeroFingerprint, Severity: SeverityWarning,
+				Message: "Backing workload scaled to 0",
+			}},
+			Probes: []probe.Result{skip},
+		}},
+	}
+
+	computeCoverage(tr)
+
+	if len(tr.Routes) != 1 {
+		t.Fatalf("Routes = %+v, want one dormant Service-port route", tr.Routes)
+	}
+	route := tr.Routes[0]
+	if route.Outcome != OutcomeUnreachable || !route.Benign {
+		t.Fatalf("route = %+v, want benign unreachable scale-to-zero framing", route)
+	}
+	if tr.Coverage == nil || tr.Coverage.Failed != 1 || tr.Coverage.Skipped != 0 {
+		t.Fatalf("Coverage = %+v, want failed=1 skipped=0 for intentional dormancy", tr.Coverage)
+	}
+	// The raw skip row is absorbed into the route (they are the same gap - two
+	// rows rendered one dormant port as two scenarios); the route itself now
+	// carries the dormancy story, and it must not recommend a probe that
+	// cannot work.
+	if len(tr.NotTested) != 0 {
+		t.Fatalf("NotTested = %+v, want the port skip absorbed into the benign route", tr.NotTested)
+	}
+	if !strings.Contains(route.Evidence, "no running backends") {
+		t.Fatalf("route evidence = %q, want dormant-context explanation", route.Evidence)
+	}
+	if route.InClusterRequest != nil {
+		t.Fatalf("InClusterRequest = %+v, dormant Service must not recommend a probe that cannot work", route.InClusterRequest)
+	}
+	if !strings.Contains(tr.Headline, "scaled to 0") {
+		t.Fatalf("Headline = %q, want intentional scale-to-zero framing", tr.Headline)
+	}
+}
+
+func TestMarkBenignServiceSkips_LeavesOtherPortGap(t *testing.T) {
+	tr := &Trace{
+		Subject: ResourceRef{Kind: "Service", Name: "mixed"},
+		Routes: []RouteResult{
+			{Target: "mixed:6379", Outcome: OutcomeUnreachable, Benign: true},
+			{Target: "mixed:8080", Outcome: OutcomeNotTested},
+		},
+		NotTested: []RouteSkip{
+			{Route: "port 6379", Reason: "run Radar in-cluster", ReasonClass: SkipClassVantage, Command: "kubectl port-forward svc/mixed 6379:6379"},
+			{Route: "port 8080", Reason: "budget exhausted", ReasonClass: SkipClassCoverage, Command: "curl localhost:8080"},
+		},
+	}
+
+	markBenignServiceSkips(tr)
+
+	if tr.NotTested[0].ReasonClass != SkipClassBenign {
+		t.Errorf("dormant port class = %q, want benign", tr.NotTested[0].ReasonClass)
+	}
+	if tr.NotTested[1].ReasonClass != SkipClassCoverage {
+		t.Errorf("unrelated port class = %q, want coverage preserved", tr.NotTested[1].ReasonClass)
+	}
+	if tr.NotTested[1].Reason != "budget exhausted" || tr.NotTested[1].Command != "curl localhost:8080" {
+		t.Errorf("unrelated port was rewritten: %+v", tr.NotTested[1])
+	}
+}
+
 // A Service at replicas>0 with 0 ready (crashloop) is a REAL break - no scale-0
 // finding → not benign, verdict stays broken/red.
 func TestComputeCoverage_CrashloopStaysRed(t *testing.T) {
@@ -1118,7 +1198,7 @@ func TestApplyInClusterResults_UpgradesIndirectToReal(t *testing.T) {
 		Subject: ResourceRef{Kind: "Service", Namespace: "prod", Name: "api"},
 		Routes: []RouteResult{{
 			Route: "api", Target: "api:80", Outcome: OutcomeReached, Confidence: ConfidenceIndirect,
-			Evidence: "HTTP 404 · reached via proxy", InClusterRequest: &ProbeRequest{Scheme: "http", Path: "/"},
+			Evidence: "HTTP 404 · reached via proxy", InClusterRequest: &ProbeRequest{Protocol: "http", Scheme: "http", Path: "/"},
 		}},
 		Coverage: &Coverage{Tested: 1, Passed: 1},
 	}
@@ -1148,7 +1228,7 @@ func TestApplyInClusterResults_LeavesBenignUntouched(t *testing.T) {
 	tr := &Trace{
 		Routes: []RouteResult{{
 			Route: "api", Target: "api:80", Outcome: OutcomeUnreachable, Benign: true,
-			InClusterRequest: &ProbeRequest{Scheme: "http", Path: "/"},
+			InClusterRequest: &ProbeRequest{Protocol: "http", Scheme: "http", Path: "/"},
 		}},
 		Coverage: &Coverage{Tested: 1, Failed: 1},
 	}
@@ -1286,7 +1366,7 @@ func TestRoutesByPort_SharedFrontDoorDoesNotVerifyPort(t *testing.T) {
 	skipped := probe.Skipped(probe.LayerHTTP, "port 9090", probe.VantageLocal, "non-HTTP port - can't verify from here")
 	skipped.Port = 9090
 	probes := append(append([]probe.Result{}, shared...), skipped)
-	routes := routesByPort("api/", "api", "api:9090", probes, []int32{9090}, nil, nil, false)
+	routes := routesByPort("api/", "api", "api:9090", probes, []int32{9090}, nil, nil, false, false)
 	if len(routes) != 1 {
 		t.Fatalf("want 1 route, got %d", len(routes))
 	}
@@ -1306,9 +1386,136 @@ func TestRoutesByPort_OwnHealthyStillVerifies(t *testing.T) {
 	}
 	own := probe.Result{Layer: probe.LayerHTTP, Target: "port 80", Port: 80, OK: true, Tone: probe.ToneHealthy, Vantage: probe.VantageInCluster}
 	probes := append(append([]probe.Result{}, shared...), own)
-	routes := routesByPort("api/", "api", "api:80", probes, []int32{80}, nil, nil, false)
+	routes := routesByPort("api/", "api", "api:80", probes, []int32{80}, nil, nil, false, false)
 	if len(routes) != 1 || routes[0].Outcome != OutcomeVerified {
 		t.Fatalf("want a verified route from the port's own healthy probe, got %+v", routes)
+	}
+}
+
+func TestRoutesByPort_VantageSkipsMaterializeOnlyForServiceSubjects(t *testing.T) {
+	skip := probe.Skipped(
+		probe.LayerHTTP,
+		"port 6379",
+		probe.VantageLocal,
+		"non-HTTP Service port can only be tested from inside the cluster",
+	)
+	skip.Port = 6379
+	skip.SkipClass = SkipClassVantage
+
+	if got := routesByPort("entry/", "database", "database:6379", []probe.Result{skip}, []int32{6379}, nil, nil, false, false); len(got) != 0 {
+		t.Fatalf("backend-only vantage skip became an intended route: %+v", got)
+	}
+	got := routesByPort("database", "database", "database:6379", []probe.Result{skip}, nil, nil, nil, false, true)
+	if len(got) != 1 || got[0].Outcome != OutcomeNotTested {
+		t.Fatalf("Service-subject vantage skip = %+v, want one not-tested route", got)
+	}
+}
+
+func TestComputeCoverage_NonHTTPServiceBuildsInClusterCandidate(t *testing.T) {
+	serviceSkip := probe.SkippedCmd(
+		probe.LayerHTTP,
+		"port 6379",
+		probe.VantageLocal,
+		"Port 6379 is a well-known non-HTTP port. Run Radar from in-cluster to verify TCP reachability.",
+		"kubectl port-forward svc/valkey 6379:6379",
+	)
+	serviceSkip.Port = 6379
+	serviceSkip.SkipClass = SkipClassVantage
+	podSkip := serviceSkip
+	podSkip.Target = "valkey-abc port 6379"
+
+	tr := &Trace{
+		Subject: ResourceRef{Kind: "Service", Namespace: "default", Name: "valkey"},
+		Downstream: []Hop{
+			{
+				Resource: ResourceRef{Kind: "Service", Namespace: "default", Name: "valkey"},
+				Config:   &HopConfig{Ports: []PortMap{{Port: 6379, Protocol: "TCP"}}},
+				Probes:   []probe.Result{serviceSkip},
+			},
+			{
+				Resource: ResourceRef{Kind: "Pods", Namespace: "default"},
+				Probes:   []probe.Result{podSkip},
+			},
+		},
+	}
+
+	computeCoverage(tr)
+
+	if len(tr.Routes) != 1 {
+		t.Fatalf("Routes = %+v, want one not-tested Service route", tr.Routes)
+	}
+	route := tr.Routes[0]
+	if route.Outcome != OutcomeNotTested || route.Target != "valkey:6379" {
+		t.Fatalf("route = %+v, want valkey:6379 not-tested", route)
+	}
+	if route.InClusterRequest == nil || route.InClusterRequest.Protocol != "tcp" {
+		t.Fatalf("in-cluster request = %+v, want TCP candidate", route.InClusterRequest)
+	}
+	if tr.Coverage == nil || tr.Coverage.Skipped != 1 {
+		t.Fatalf("Coverage = %+v, want one intended Service-port gap", tr.Coverage)
+	}
+
+	ApplyInClusterResults(tr, map[string][]probe.Result{
+		InClusterResultKey(route.Route, route.Target, route.TargetNamespace): {{
+			Layer: probe.LayerTCP, Target: "10.96.0.10:6379", Port: 6379,
+			Path: probe.PathData, Vantage: probe.VantageInCluster,
+			OK: true, Tone: probe.ToneHealthy,
+		}},
+	})
+
+	if tr.Routes[0].Outcome != OutcomeReached || tr.Routes[0].Confidence != ConfidenceReal {
+		t.Fatalf("folded route = %+v, want reached with real confidence", tr.Routes[0])
+	}
+	if tr.Coverage == nil || tr.Coverage.Passed != 1 || tr.Coverage.Skipped != 0 {
+		t.Fatalf("folded Coverage = %+v, want one pass and no stale skips", tr.Coverage)
+	}
+	if len(tr.NotTested) != 0 {
+		t.Fatalf("NotTested = %+v, want resolved port skips removed", tr.NotTested)
+	}
+}
+
+func TestComputeCoverage_SameNumberMultiProtocolServiceGetsTCPCandidate(t *testing.T) {
+	tcpSkip := probe.SkippedCmd(
+		probe.LayerHTTP,
+		"port 53",
+		probe.VantageLocal,
+		"Port 53 is not HTTP. Run Radar from in-cluster to verify TCP reachability.",
+		"",
+	)
+	tcpSkip.Port = 53
+	tcpSkip.SkipClass = SkipClassVantage
+	udpSkip := probe.SkippedCmd(
+		probe.LayerTCP,
+		"port 53",
+		probe.VantageLocal,
+		"port 53 is UDP - a TCP dial can't test it",
+		"",
+	)
+	udpSkip.Port = 53
+	udpSkip.SkipClass = SkipClassCoverage
+
+	tr := &Trace{
+		Subject: ResourceRef{Kind: "Service", Namespace: "kube-system", Name: "kube-dns"},
+		Downstream: []Hop{{
+			Resource: ResourceRef{Kind: "Service", Namespace: "kube-system", Name: "kube-dns"},
+			Config: &HopConfig{Ports: []PortMap{
+				{Name: "dns-udp", Port: 53, Protocol: "UDP"},
+				{Name: "dns-tcp", Port: 53, Protocol: "TCP"},
+			}},
+			Probes: []probe.Result{udpSkip, tcpSkip},
+		}},
+	}
+
+	computeCoverage(tr)
+
+	if len(tr.Routes) != 1 {
+		t.Fatalf("Routes = %+v, want one numeric route", tr.Routes)
+	}
+	// TCP and UDP share :53, but the candidate is not ambiguous: requests only
+	// travel TCP, so the TCP-declared sibling owns it - a TCP dial against the
+	// TCP :53, never an HTTP guess and never a UDP claim.
+	if tr.Routes[0].InClusterRequest == nil || tr.Routes[0].InClusterRequest.Protocol != "tcp" {
+		t.Fatalf("InClusterRequest = %+v, want a TCP candidate for the TCP-declared sibling", tr.Routes[0].InClusterRequest)
 	}
 }
 
@@ -1323,7 +1530,7 @@ func TestRecountCoverage_SingleHostNotTestedNoDoubleCount(t *testing.T) {
 			Route:            "/api", // path-only label (single-host Ingress)
 			Target:           "shop:80",
 			Outcome:          OutcomeNotTested,
-			InClusterRequest: &ProbeRequest{Host: "shop.example.com", Path: "/api"},
+			InClusterRequest: &ProbeRequest{Protocol: "http", Scheme: "http", Host: "shop.example.com", Path: "/api"},
 		}},
 		// The route's own skipped transport probe, keyed by host in NotTested.
 		NotTested: []RouteSkip{{
@@ -1338,6 +1545,29 @@ func TestRecountCoverage_SingleHostNotTestedNoDoubleCount(t *testing.T) {
 	}
 	if tr.Coverage.Skipped != 1 {
 		t.Errorf("Coverage.Skipped = %d, want 1 - the not-tested route and its skip row are the SAME gap, not two", tr.Coverage.Skipped)
+	}
+}
+
+// A skip row that SURVIVES beside a Service route is a distinct gap by
+// construction - buildNotTested absorbs every same-gap TCP row structurally -
+// so recountCoverage must count both. A per-port deduction here re-erased
+// exactly the deliberately retained UDP sibling of a TCP candidate.
+func TestRecountCoverage_ServiceRetainedRowIsADistinctGap(t *testing.T) {
+	tr := &Trace{
+		Subject: ResourceRef{Kind: "Service", Namespace: "kube-system", Name: "kube-dns"},
+		Routes: []RouteResult{{
+			Route: "kube-dns:53", Target: "kube-dns:53", Outcome: OutcomeNotTested,
+			InClusterRequest: &ProbeRequest{Protocol: "tcp"},
+		}},
+		NotTested: []RouteSkip{{
+			Route: "port 53/UDP (dns)", Reason: "port 53 is UDP - a TCP dial can't test it", ReasonClass: SkipClassCoverage,
+		}},
+	}
+
+	recountCoverage(tr)
+
+	if tr.Coverage == nil || tr.Coverage.Skipped != 2 {
+		t.Fatalf("Coverage = %+v, want 2 distinct gaps (untested TCP route + untestable UDP sibling)", tr.Coverage)
 	}
 }
 
@@ -1372,13 +1602,13 @@ func TestRecountCoverage_HostSkipDoesNotSwallowSiblingRoutes(t *testing.T) {
 				Route:            "/web",
 				Target:           "shop:80",
 				Outcome:          OutcomeNotTested,
-				InClusterRequest: &ProbeRequest{Host: "shop.example.com", Path: "/web"},
+				InClusterRequest: &ProbeRequest{Protocol: "http", Scheme: "http", Host: "shop.example.com", Path: "/web"},
 			},
 			{
 				Route:            "/admin",
 				Target:           "shop:80",
 				Outcome:          OutcomeNotTested,
-				InClusterRequest: &ProbeRequest{Host: "shop.example.com", Path: "/admin"},
+				InClusterRequest: &ProbeRequest{Protocol: "http", Scheme: "http", Host: "shop.example.com", Path: "/admin"},
 			},
 		},
 		NotTested: []RouteSkip{{
@@ -1547,7 +1777,7 @@ func TestRecountCoverage_SkipAbsorptionTruthTable(t *testing.T) {
 	}
 	route := func(path string) RouteResult {
 		return RouteResult{Route: path, Target: "shop:80", Outcome: OutcomeNotTested,
-			InClusterRequest: &ProbeRequest{Host: "shop.example.com", Path: path}}
+			InClusterRequest: &ProbeRequest{Protocol: "http", Scheme: "http", Host: "shop.example.com", Path: path}}
 	}
 	cases := []struct {
 		name   string
@@ -1759,11 +1989,12 @@ func TestProtocolBoundaryFailsClosed(t *testing.T) {
 		t.Error("empty protocol is the Kubernetes TCP default and must stay HTTP-probable")
 	}
 
-	// A redis route that exists on real TCP evidence gets NO HTTP request.
+	// A redis route that exists on real TCP evidence gets a TCP-shaped request
+	// - never an HTTP-shaped one against a protocol the prober declined to speak.
 	routes := []RouteResult{{Route: "redis:6379", Target: "redis:6379", Outcome: OutcomeReached, Confidence: ConfidenceReal}}
 	attachInClusterRequest(routes, "", "", &HopConfig{Ports: []PortMap{{Port: 6379, Name: "redis", TargetPort: "6379"}}})
-	if routes[0].InClusterRequest != nil {
-		t.Errorf("a non-HTTP route acquired an HTTP-shaped request: %+v", routes[0].InClusterRequest)
+	if routes[0].InClusterRequest == nil || routes[0].InClusterRequest.Protocol != "tcp" || routes[0].InClusterRequest.Scheme != "" {
+		t.Errorf("non-HTTP route request = %+v, want a bare TCP candidate with no HTTP shape", routes[0].InClusterRequest)
 	}
 
 	// ...while its HTTP sibling still does.
@@ -1799,8 +2030,13 @@ func TestDuplicatePortNumber_IsNotAnIdentity(t *testing.T) {
 
 	// Scheme hints belong to the TCP entry - requests only travel TCP.
 	cfg := &HopConfig{Ports: dup}
-	if got := portFromTarget("kube-dns:53", cfg); got.Name != "dns-tcp" {
-		t.Fatalf("portFromTarget must prefer the TCP entry, got %q", got.Name)
+	if got, ok := portFromTarget("kube-dns:53", cfg); !ok || got.Name != "dns-tcp" {
+		t.Fatalf("portFromTarget must prefer the TCP entry, got %q ok=%v", got.Name, ok)
+	}
+	// With no TCP interpretation among the matches, the shape fails closed.
+	noTCP := &HopConfig{Ports: []PortMap{{Port: 53, Protocol: "UDP"}, {Port: 53, Protocol: "SCTP"}}}
+	if _, ok := portFromTarget("kube-dns:53", noTCP); ok {
+		t.Fatal("duplicate non-TCP-only matches must fail closed")
 	}
 
 	// Labels distinguish the two declared paths and carry the protocol.

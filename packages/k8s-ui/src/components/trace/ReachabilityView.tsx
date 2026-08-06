@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Trace, RouteResult, ResourceRef } from './types'
-import { ReachActions, JustTestedNote, CopyableCommand, type TracePanelProps } from './TracePanel'
+import { ReachActions, JustTestedNote, CopyableCommand, completedRequestMode, type TracePanelProps } from './TracePanel'
 import { AlertBanner } from '../ui/drawer-components'
 import { PaneLoader } from '../ui/PaneLoader'
 import { ReachabilityGraph, MarkGlyph } from './ReachabilityGraph'
@@ -236,7 +236,25 @@ function ReachabilityBoard(props: BoardProps) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-theme-border bg-theme-surface">
-      <VerdictBand verdict={verdict} trace={trace} runNonce={runNonce} actions={<ReachActions {...props} inClusterRunnable={traceInClusterRunnable(trace)} inClusterTested={origins.some((o) => o.id === 'incluster' && o.mark !== 'untested')} />} />
+      {/* The HTTP-path editor only makes sense when some declared route takes an
+          HTTP-shaped request - a TCP-only (redis/gRPC) subject would offer a
+          path field nothing would ever send. */}
+      <VerdictBand
+        verdict={verdict}
+        trace={trace}
+        runNonce={runNonce}
+        actions={
+          <ReachActions
+            {...props}
+            inClusterRunnable={traceInClusterRunnable(trace)}
+            inClusterTested={origins.some((o) => o.id === 'incluster' && o.mark !== 'untested')}
+            supportsHTTPPath={(trace.routes ?? []).some((r) => {
+              const p = r.inClusterRequest?.protocol
+              return p === 'http' || p === 'https' || (!p && !!r.inClusterRequest)
+            }) || !(trace.routes ?? []).some((r) => r.inClusterRequest?.protocol === 'tcp')}
+          />
+        }
+      />
 
       {/* Three columns once there is room for them. The graph is the navigation
           surface and the inspector the reading surface, so keeping them side by
@@ -880,7 +898,19 @@ function CoverageFooter({
   // folding them in reported requests that failed when none were sent.
   const derived = c?.derived ? `${c.derived} broken without testing` : ''
   const gaps = realGaps.length ? `${realGaps.length} path${realGaps.length === 1 ? '' : 's'} with no evidence` : ''
-  const coverageText = c ? [attempts, derived, gaps].filter(Boolean).join('  ·  ') || 'nothing tested yet' : 'nothing tested yet'
+  // The KIND of proof must stay visible after the run, not only on the consent
+  // dialog: a TCP-only pass proves a socket opened, never that the application
+  // protocol works, and "got through" alone let the reader assume more.
+  const mode = completedRequestMode(trace)
+  const proofKind =
+    mode === 'tcp'
+      ? 'TCP connections only — application protocol not checked'
+      : mode === 'mixed'
+        ? 'some ports TCP-only — application protocol not checked there'
+        : ''
+  const coverageText =
+    (c ? [attempts, derived, gaps].filter(Boolean).join('  ·  ') || 'nothing tested yet' : 'nothing tested yet') +
+    (proofKind ? `  ·  ${proofKind}` : '')
   // The live-check volume moved up into the verdict band - the footer stays
   // the coverage ledger (routes, gaps, when), not the trust headline.
   return (

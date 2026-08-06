@@ -108,7 +108,7 @@ func TestFallbackCommand_ParityAndQuoting(t *testing.T) {
 		Namespace: "ns", Image: "img",
 		Target: "10.0.0.5:8080", Scheme: "https", Host: "shop.example.com", Path: "/api/", Layers: "tcp,http",
 	})
-	for _, want := range []string{"--target '10.0.0.5:8080'", "--scheme 'https'", "--host 'shop.example.com'", "--path '/api/'", "--layers 'tcp,http'"} {
+	for _, want := range []string{"--target '10.0.0.5:8080'", "--timeout 3s", "--scheme 'https'", "--host 'shop.example.com'", "--path '/api/'", "--layers 'tcp,http'"} {
 		if !strings.Contains(cmd, want) {
 			t.Errorf("fallback missing %q; got: %s", want, cmd)
 		}
@@ -116,6 +116,22 @@ func TestFallbackCommand_ParityAndQuoting(t *testing.T) {
 	evil := FallbackCommand(RunOptions{Namespace: "ns", Image: "img", Target: "x:80", Path: "/a;rm -rf /"})
 	if !strings.Contains(evil, "'/a;rm -rf /'") {
 		t.Errorf("dangerous path not single-quoted; got: %s", evil)
+	}
+}
+
+func TestFallbackCommand_TCPHasNoHTTPArgs(t *testing.T) {
+	cmd := FallbackCommand(RunOptions{
+		Namespace: "ns", Image: "img", Target: "database:6379", Layers: "tcp",
+	})
+	for _, want := range []string{"--target 'database:6379'", "--timeout 3s", "--layers 'tcp'"} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("TCP fallback missing %q; got: %s", want, cmd)
+		}
+	}
+	for _, forbidden := range []string{"--scheme", "--host", "--path"} {
+		if strings.Contains(cmd, forbidden) {
+			t.Errorf("TCP fallback contains HTTP-only %q; got: %s", forbidden, cmd)
+		}
 	}
 }
 

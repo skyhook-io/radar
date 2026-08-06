@@ -45,9 +45,9 @@ const VantageAPIServer = "via API server"
 // Skip reason classes. Only "coverage" + "vantage" are real coverage gaps that
 // should cap a full-green headline; "benign" loses no coverage.
 const (
-	SkipClassCoverage = "coverage" // a declared path we genuinely couldn't test (UDP/wildcard/no-SNI/non-HTTP/truncated)
-	SkipClassBenign   = "benign"   // no coverage lost (sampled identical pods, duplicate default backend)
-	SkipClassVantage  = "vantage"  // couldn't reach the front door from HERE (laptop + internal) - a gap, not an outage
+	SkipClassCoverage = "coverage" // a declared path or protocol we genuinely couldn't test
+	SkipClassBenign   = "benign"   // no coverage lost (sampling, duplicate path, or inapplicable proxy beside a direct test)
+	SkipClassVantage  = "vantage"  // this execution path couldn't run from here; a later vantage may resolve the gap
 )
 
 // Coverage counts intended routes: Tested = routes that got any non-skipped
@@ -146,7 +146,7 @@ type VantageResult struct {
 	// Source is WHO dialled - radar | probe-job. Empty means radar. Kept apart
 	// from Vantage because a throwaway Job and Radar-as-a-Pod share a vantage
 	// and a path but are different observers with different identities.
-	Source string `json:"source,omitempty"`
+	Source  string `json:"source,omitempty"`
 	Outcome string `json:"outcome"`
 	// Confidence mirrors the rollup's rule per group: anything relayed by the
 	// API server is indirect no matter how clean the response was.
@@ -402,14 +402,16 @@ func originIdentity(vantage, path, source string) string {
 	return vantage + "\x00" + path + "\x00" + source
 }
 
-// ProbeRequest is a concrete HTTP request a user can run against a Service from
+// ProbeRequest is a concrete request a user can run against a Service from
 // inside the cluster. Every field is derivable from the declared route; Scheme
-// comes from the BACKEND Service port (not the Ingress TLS, which terminates at
-// the front door the in-cluster dial bypasses).
+// is meaningful only for HTTP/HTTPS and comes from the BACKEND Service port
+// (not the Ingress TLS, which terminates at the front door the in-cluster dial
+// bypasses).
 type ProbeRequest struct {
-	Scheme      string `json:"scheme"`         // http | https
-	Host        string `json:"host,omitempty"` // Host header / SNI (omitted when none declared)
-	Path        string `json:"path"`           // request path
+	Protocol    string `json:"protocol"`         // http | https | tcp
+	Scheme      string `json:"scheme,omitempty"` // http | https; HTTP(S) only
+	Host        string `json:"host,omitempty"`   // Host header / SNI (omitted when none declared)
+	Path        string `json:"path,omitempty"`   // HTTP request path
 	PathGuessed bool   `json:"pathGuessed,omitempty"`
 }
 
@@ -440,6 +442,7 @@ func computeCoverage(t *Trace) {
 	localizeBoundaries(t)
 	upgradeDefinitiveBackendDown(t)
 	t.NotTested = append(buildNotTested(t), unprobed...)
+	markBenignServiceSkips(t)
 
 	// A static-only trace (no probing) leaves Coverage nil; the headline below
 	// still resolves ("Configuration only - not yet tested").
@@ -541,10 +544,17 @@ func recountCoverage(t *Trace) {
 			// route on a host consumes ALL of that host's raw skip rows (they
 			// describe the same untested front door); subsequent sibling routes on
 			// the host just count themselves.
-			if h := routeResultHostKey(r); h != "" && !consumedHosts[h] {
-				if n := skipRowsByHost[h]; n > 0 {
-					skipped -= n
-					consumedHosts[h] = true
+			// Service subjects get NO second per-port deduction here: buildNotTested
+			// already absorbs every same-gap TCP row structurally, so a row that
+			// SURVIVES beside a Service route is a distinct gap by construction -
+			// the deliberately retained UDP/SCTP sibling of a TCP candidate. A
+			// port-number deduction re-erased exactly that gap from the count.
+			if t.Subject.Kind != "Service" {
+				if h := routeResultHostKey(r); h != "" && !consumedHosts[h] {
+					if n := skipRowsByHost[h]; n > 0 {
+						skipped -= n
+						consumedHosts[h] = true
+					}
 				}
 			}
 			skipped++
@@ -662,30 +672,53 @@ func ApplyInClusterResults(t *Trace, byTarget map[string][]probe.Result) {
 	// route on it now carries a real reach/verify: with a partial fold (probe
 	// cap, throwaway-denied sibling), /web passing must not delete the advice
 	// row that is still the truth for /admin on the same host.
+	// Service-subject rows are PORT-scoped instead: their skip target is
+	// "port N" while the route target is "service:N", so the two key spaces
+	// meet on the port number. Only vantage skips may be removed either way -
+	// a UDP/SCTP coverage gap can share a number with TCP and is never
+	// resolved by a successful TCP result.
 	resolvedHosts := map[string]bool{}
 	unresolvedHosts := map[string]bool{}
+	resolvedPorts := map[string]bool{}
+	unresolvedPorts := map[string]bool{}
 	for i := range t.Routes {
 		r := t.Routes[i]
 		if r.Benign {
 			continue
 		}
-		h := routeResultHostKey(r)
-		if h == "" {
-			continue
+		resolved := r.Confidence == ConfidenceReal && (r.Outcome == OutcomeVerified || r.Outcome == OutcomeReached)
+		if h := routeResultHostKey(r); h != "" {
+			if resolved {
+				resolvedHosts[h] = true
+			} else {
+				unresolvedHosts[h] = true
+			}
 		}
-		if r.Confidence == ConfidenceReal && (r.Outcome == OutcomeVerified || r.Outcome == OutcomeReached) {
-			resolvedHosts[h] = true
-		} else {
-			unresolvedHosts[h] = true
+		if t.Subject.Kind == "Service" {
+			if p := portKey(r.Target); p != "" {
+				if resolved {
+					resolvedPorts[p] = true
+				} else {
+					unresolvedPorts[p] = true
+				}
+			}
 		}
 	}
 	for h := range unresolvedHosts {
 		delete(resolvedHosts, h)
 	}
-	if len(resolvedHosts) > 0 {
+	for p := range unresolvedPorts {
+		delete(resolvedPorts, p)
+	}
+	if len(resolvedHosts) > 0 || len(resolvedPorts) > 0 {
 		kept := t.NotTested[:0]
 		for _, s := range t.NotTested {
-			if s.ReasonClass == SkipClassVantage && resolvedHosts[routeHostKey(s.Route)] {
+			if t.Subject.Kind == "Service" && s.ReasonClass == SkipClassVantage &&
+				resolvedPorts[portKey(s.Route)] {
+				continue
+			}
+			if s.ReasonClass == SkipClassVantage &&
+				resolvedHosts[routeHostKey(s.Route)] {
 				continue
 			}
 			kept = append(kept, s)
@@ -946,8 +979,8 @@ type Diagnosis struct {
 	// A trace carries one Diagnosis but can carry many routes. Without this the
 	// selected-path panel rendered whichever route's cause happened to win, so
 	// an operator reading path B was shown path A's culprit under "THIS PATH".
-	Route   string `json:"route,omitempty"`
-	Summary string `json:"summary"`
+	Route           string       `json:"route,omitempty"`
+	Summary         string       `json:"summary"`
 	CulpritResource *ResourceRef `json:"culpritResource,omitempty"`
 	NextAction      string       `json:"nextAction,omitempty"`
 	Command         string       `json:"command,omitempty"`
@@ -1440,7 +1473,7 @@ func buildRoutes(t *Trace) ([]RouteResult, []RouteSkip) {
 		// intended-route test, one route per Service port; the Pods-hop probes sit
 		// behind the Service, so they're localization, never a separate route.
 		podLoc := factsFromProbes(downstreamProbes(t.Downstream[1:]))
-		routes := routesByPort(subjectRouteLabel(t.Subject, entry), entry.Resource.Name, subjectTarget(entry), entry.Probes, nil, podLoc, hopPorts(entry), traceHasFrontDoor(t))
+		routes := routesByPort(subjectRouteLabel(t.Subject, entry), entry.Resource.Name, subjectTarget(entry), entry.Probes, nil, podLoc, hopPorts(entry), traceHasFrontDoor(t), true)
 		setTargetNamespace(routes, entry.Resource.Namespace)
 		markBenignScaleZero(routes, entry)
 		attachInClusterRequest(routes, "", "", entry.Config)
@@ -1525,7 +1558,7 @@ func buildRoutes(t *Trace) ([]RouteResult, []RouteSkip) {
 			}
 			shared := entryProbesForHost(entry, scopeHost)
 			outcomeProbes := append(append([]probe.Result{}, shared...), backend.Probes...)
-			routes := routesByPort(rr.label, backend.Resource.Name, target, outcomeProbes, rr.ports, podLoc, hopPorts(backend), true)
+			routes := routesByPort(rr.label, backend.Resource.Name, target, outcomeProbes, rr.ports, podLoc, hopPorts(backend), true, false)
 			if len(routes) > 0 {
 				setTargetNamespace(routes, backend.Resource.Namespace)
 				markBenignScaleZero(routes, backend)
@@ -1543,7 +1576,7 @@ func buildRoutes(t *Trace) ([]RouteResult, []RouteSkip) {
 	// entry path). Surface the Gateway's OWN front-door reachability as the route
 	// so its probe evidence isn't dropped and coverage doesn't read empty.
 	if entry.Resource.Kind == "Gateway" && len(out) == 0 {
-		gw := routesByPort(subjectRouteLabel(t.Subject, entry), entry.Resource.Name, subjectTarget(entry), entry.Probes, nil, nil, hopPorts(entry), false)
+		gw := routesByPort(subjectRouteLabel(t.Subject, entry), entry.Resource.Name, subjectTarget(entry), entry.Probes, nil, nil, hopPorts(entry), false, false)
 		setTargetNamespace(gw, entry.Resource.Namespace)
 		out = append(out, gw...)
 	}
@@ -1558,17 +1591,43 @@ func setTargetNamespace(routes []RouteResult, namespace string) {
 	}
 }
 
-// markBenignScaleZero flags an unreachable route as benign when a contributing
-// hop carries the intentional-scale-to-0 finding - deliberate dormancy, not an
-// outage. The Outcome stays unreachable (factually true); only the framing softens.
+// markBenignScaleZero normalizes an unreachable or vantage-only route when a
+// contributing hop carries the intentional-scale-to-0 finding. The backend is
+// authoritatively absent by design, so a not-tested transport candidate is also
+// factually unreachable and must not become a runnable incident probe.
 func markBenignScaleZero(routes []RouteResult, hops ...Hop) {
 	if !hopsHaveScaleZero(hops) {
 		return
 	}
 	for i := range routes {
-		if routes[i].Outcome == OutcomeUnreachable {
+		if routes[i].Outcome == OutcomeUnreachable || routes[i].Outcome == OutcomeNotTested {
+			routes[i].Outcome = OutcomeUnreachable
 			routes[i].Benign = true
 			routes[i].Evidence = "no running backends (scaled to 0)"
+		}
+	}
+}
+
+// markBenignServiceSkips keeps the raw per-hop skip rows aligned with a Service
+// route already proven dormant by scale-to-zero. Port scoping is load-bearing:
+// an unrelated untested port must remain a real coverage gap.
+func markBenignServiceSkips(t *Trace) {
+	if t.Subject.Kind != "Service" {
+		return
+	}
+	benignPorts := map[string]bool{}
+	for _, r := range t.Routes {
+		if r.Benign {
+			if port := portKey(r.Target); port != "" {
+				benignPorts[port] = true
+			}
+		}
+	}
+	for i := range t.NotTested {
+		if benignPorts[portKey(t.NotTested[i].Route)] {
+			t.NotTested[i].ReasonClass = SkipClassBenign
+			t.NotTested[i].Reason = "protocol reachability was not tested because the Service has no running backends (scaled to 0)"
+			t.NotTested[i].Command = ""
 		}
 	}
 }
@@ -1630,7 +1689,7 @@ func httpProbablePortMap(pm PortMap) bool {
 	return isHTTPProbablePort(pm.Name, pm.AppProtocol, pm.Port)
 }
 
-func routesByPort(routeID, backendName, fallbackTarget string, probes []probe.Result, scope []int32, extraLoc []ProbeFact, ports []PortMap, backendScoped bool) []RouteResult {
+func routesByPort(routeID, backendName, fallbackTarget string, probes []probe.Result, scope []int32, extraLoc []ProbeFact, ports []PortMap, backendScoped, materializeVantageSkips bool) []RouteResult {
 	inScope := func(port int32) bool {
 		if len(scope) == 0 {
 			return true
@@ -1663,6 +1722,16 @@ func routesByPort(routeID, backendName, fallbackTarget string, probes []probe.Re
 	emit := func(rid, target string, ps []probe.Result) (RouteResult, bool) {
 		r, ok := routeFromProbes(rid, target, ps, backendScoped)
 		if !ok {
+			if materializeVantageSkips {
+				for _, p := range ps {
+					if p.Skipped && skipClassOf(p) == SkipClassVantage {
+						return RouteResult{
+							Route: rid, Target: target, Outcome: OutcomeNotTested,
+							Evidence: p.Reason, Command: p.Command,
+						}, true
+					}
+				}
+			}
 			return r, false
 		}
 		r.Localization = dedupeFacts(append(r.Localization, extraLoc...))
@@ -2360,18 +2429,26 @@ func mergePorts(existing, add []int32) []int32 {
 
 // attachInClusterRequest fills each route's best-guess in-cluster request from
 // the route's declared host/path and the backend Service port (parsed back from
-// the route Target so multi-port routes each get their own scheme).
+// the route Target so multi-port routes each get their own protocol).
 func attachInClusterRequest(routes []RouteResult, host, path string, cfg *HopConfig) {
 	for i := range routes {
-		pm := portFromTarget(routes[i].Target, cfg)
-		// A route can exist on non-HTTP evidence (a direct TCP reach of a
-		// redis port). Handing it an HTTP-shaped request offered a Job the
-		// runner would send as tcp,http against a protocol the prober itself
-		// declined to speak - fail closed until native-protocol probing lands.
-		if pm.Port != 0 && !httpProbablePortMap(pm) {
+		// A benign-dormant route is deliberately not runnable - recommending a
+		// probe against a Service scaled to zero offers a test that cannot work.
+		if routes[i].Benign {
+			continue
+		}
+		pm, ok := portFromTarget(routes[i].Target, cfg)
+		if !ok {
 			continue
 		}
 		req := guessInClusterRequest(host, path, pm)
+		// A route can exist on non-HTTP evidence (a direct TCP reach of a
+		// redis port). Such a port gets a TCP-shaped request - never an
+		// HTTP-shaped one against a protocol the prober itself declined to
+		// speak - and a UDP/SCTP port gets no request at all.
+		if req.Protocol == "" {
+			continue
+		}
 		routes[i].InClusterRequest = &req
 	}
 }
@@ -2381,23 +2458,35 @@ func attachInClusterRequest(routes []RouteResult, host, path string, cfg *HopCon
 // guesses the leading literal and flags PathGuessed - the UI surfaces that and
 // lets the user correct it before running.
 func guessInClusterRequest(host, path string, port PortMap) ProbeRequest {
-	req := ProbeRequest{Scheme: schemeForPort(port), Host: concreteHost(host)}
-	req.Path, req.PathGuessed = guessConcretePath(path)
+	protocol := protocolForPort(port)
+	req := ProbeRequest{Protocol: protocol}
+	if protocol == "http" || protocol == "https" {
+		req.Scheme = protocol
+		req.Host = concreteHost(host)
+		req.Path, req.PathGuessed = guessConcretePath(path)
+	}
 	return req
+}
+
+func protocolForPort(port PortMap) string {
+	if protocol := strings.ToUpper(strings.TrimSpace(port.Protocol)); protocol == "UDP" || protocol == "SCTP" {
+		return ""
+	}
+	if !isHTTPProbablePort(port.Name, port.AppProtocol, port.Port) {
+		return "tcp"
+	}
+	return schemeForPort(port)
 }
 
 // schemeForPort reads the L7 scheme off the backend Service port: the explicit
 // appProtocol hint wins, then a conventional "https" port name, then the 443
 // fallback; everything else is plain http.
+// schemeForPort reads the L7 scheme off the backend Service port by delegating
+// to the SAME TLS classifier the prober uses. Two classifiers disagreed on
+// wss/tls names and bare 8443 - the request builder sent plaintext HTTP Jobs
+// at ports the prober itself treats as TLS.
 func schemeForPort(port PortMap) string {
-	switch strings.ToLower(port.AppProtocol) {
-	case "https", "https2":
-		return "https"
-	}
-	if strings.Contains(strings.ToLower(port.Name), "https") {
-		return "https"
-	}
-	if port.Port == 443 {
+	if isHTTPSPort(port.Name, port.AppProtocol, port.Port) {
 		return "https"
 	}
 	return "http"
@@ -2485,10 +2574,11 @@ func ensureLeadingSlash(p string) string {
 	return p
 }
 
-// portFromTarget parses the "name:port" route Target and returns the matching
-// Service PortMap (for its scheme hints); a bare PortMap with just the number
-// when the config doesn't carry it.
-func portFromTarget(target string, cfg *HopConfig) PortMap {
+// portFromTarget parses the "name:port" route Target and returns its unique
+// Service PortMap. A numeric target cannot distinguish two Service ports that
+// share a number but use different protocols, so that shape fails closed rather
+// than attaching a potentially false TCP/HTTP request.
+func portFromTarget(target string, cfg *HopConfig) (PortMap, bool) {
 	num := int32(0)
 	if i := strings.LastIndexByte(target, ':'); i >= 0 {
 		if n, err := strconv.ParseInt(target[i+1:], 10, 32); err == nil {
@@ -2498,28 +2588,34 @@ func portFromTarget(target string, cfg *HopConfig) PortMap {
 	if cfg != nil {
 		// A route target is something a request was (or would be) sent to, and
 		// requests only travel TCP - so when TCP and UDP share the number, the
-		// TCP entry owns the scheme hints. First-match handed them to whichever
-		// protocol was declared first.
+		// TCP entry owns the request. Declaration order never decides: with no
+		// TCP entry among the matches (UDP beside SCTP), the shape fails closed
+		// rather than attaching a request in a protocol nothing speaks.
 		var fallback *PortMap
+		matches := 0
 		for i := range cfg.Ports {
 			p := cfg.Ports[i]
 			if p.Port != num {
 				continue
 			}
+			matches++
 			switch strings.ToUpper(strings.TrimSpace(p.Protocol)) {
 			case "", "TCP":
-				return p
+				return p, true
 			default:
 				if fallback == nil {
 					fallback = &p
 				}
 			}
 		}
+		if matches > 1 {
+			return PortMap{}, false
+		}
 		if fallback != nil {
-			return *fallback
+			return *fallback, true
 		}
 	}
-	return PortMap{Port: num}
+	return PortMap{Port: num}, num != 0
 }
 
 // backendRefMatches reports whether a route BackendRef points at the given

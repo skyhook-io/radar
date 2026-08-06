@@ -3,6 +3,7 @@ package trace
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"testing"
@@ -263,16 +264,15 @@ func TestProbeService_GRPCPortEmitsGrpcurlCommand(t *testing.T) {
 	}
 	runProbes(context.Background(), tr, Options{Probe: true, ProbeBudget: 2 * time.Second}, fake.NewClientset())
 
-	// The apiserver-path skips don't stamp Port, so match by the port in the command.
 	var plaintextCmd, tlsCmd string
 	for _, r := range tr.Downstream[0].Probes {
 		if r.Path != probe.PathAPIServer || !r.Skipped {
 			continue
 		}
-		if strings.Contains(r.Command, "localhost:9090") {
+		if r.Port == 9090 {
 			plaintextCmd = r.Command
 		}
-		if strings.Contains(r.Command, "localhost:8443") {
+		if r.Port == 8443 {
 			tlsCmd = r.Command
 		}
 	}
@@ -281,6 +281,130 @@ func TestProbeService_GRPCPortEmitsGrpcurlCommand(t *testing.T) {
 	}
 	if !strings.Contains(tlsCmd, "grpcurl -insecure localhost:8443 list") {
 		t.Errorf("TLS gRPC (h2) should get -insecure, not -plaintext, got %q", tlsCmd)
+	}
+}
+
+func TestProbeService_MultiPortKeepsNonHTTPRouteAttached(t *testing.T) {
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+	stubProxyProbes(t)
+	tr := &Trace{
+		Subject: ResourceRef{Kind: "Service", Namespace: "ns", Name: "mixed"},
+		Downstream: []Hop{{
+			Resource: ResourceRef{Kind: "Service", Namespace: "ns", Name: "mixed"},
+			Config: &HopConfig{ServiceType: "ClusterIP", ClusterIP: "10.0.0.1", Ports: []PortMap{
+				{Port: 6379, Name: "redis", Protocol: "TCP"},
+				{Port: 8080, Name: "http", Protocol: "TCP"},
+			}},
+		}},
+	}
+
+	runProbes(context.Background(), tr, Options{Probe: true, ProbeBudget: 2 * time.Second}, fake.NewClientset())
+
+	var redisSkip *probe.Result
+	for i := range tr.Downstream[0].Probes {
+		p := &tr.Downstream[0].Probes[i]
+		if p.Skipped && p.Path == probe.PathAPIServer && p.Port == 6379 {
+			redisSkip = p
+			break
+		}
+	}
+	if redisSkip == nil {
+		t.Fatalf("production probe result did not retain the Redis port: %+v", tr.Downstream[0].Probes)
+	}
+
+	computeCoverage(tr)
+	if len(tr.Routes) != 2 {
+		t.Fatalf("routes = %+v, want one route per Service port", tr.Routes)
+	}
+	requests := map[string]*ProbeRequest{}
+	outcomes := map[string]string{}
+	for i := range tr.Routes {
+		requests[tr.Routes[i].Target] = tr.Routes[i].InClusterRequest
+		outcomes[tr.Routes[i].Target] = tr.Routes[i].Outcome
+	}
+	if req := requests["mixed:6379"]; req == nil || req.Protocol != "tcp" || req.Scheme != "" || req.Path != "" {
+		t.Errorf("Redis route request = %+v, want transport-only TCP", req)
+	}
+	if outcomes["mixed:6379"] != OutcomeNotTested {
+		t.Errorf("Redis route outcome = %q, want not-tested candidate", outcomes["mixed:6379"])
+	}
+	if req := requests["mixed:8080"]; req == nil || req.Protocol != "http" || req.Scheme != "http" || req.Path != "/" {
+		t.Errorf("HTTP route request = %+v, want HTTP GET /", req)
+	}
+}
+
+func TestProbeService_InClusterTCPIsCompleteNonHTTPCoverage(t *testing.T) {
+	t.Setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
+	listener, err := net.Listen("tcp4", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	var clusterIP string
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, addr := range addrs {
+		ip, _, err := net.ParseCIDR(addr.String())
+		if err == nil && ip.To4() != nil && !ip.IsLoopback() && !ip.IsUnspecified() && !ip.IsLinkLocalUnicast() {
+			clusterIP = ip.String()
+			break
+		}
+	}
+	if clusterIP == "" {
+		t.Skip("no non-loopback IPv4 address available for the direct TCP probe")
+	}
+	port := int32(listener.Addr().(*net.TCPAddr).Port)
+	stubProxyProbes(t)
+	tr := &Trace{
+		Subject: ResourceRef{Kind: "Service", Namespace: "ns", Name: "database"},
+		Downstream: []Hop{
+			{
+				Resource: ResourceRef{Kind: "Service", Namespace: "ns", Name: "database"},
+				Config: &HopConfig{
+					ServiceType: "ClusterIP",
+					ClusterIP:   clusterIP,
+					Ports:       []PortMap{{Port: port, Name: "redis", Protocol: "TCP"}},
+				},
+			},
+			{
+				Resource: ResourceRef{Kind: "Pods", Namespace: "ns"},
+				Config: &HopConfig{
+					ContainerPorts: []ContainerPortRef{{Container: "database", Port: port, Name: "redis", Protocol: "TCP"}},
+					PodIPs:         []string{clusterIP},
+					PodNames:       []string{"database-0"},
+				},
+			},
+		},
+	}
+
+	runProbes(context.Background(), tr, Options{Probe: true, ProbeBudget: 2 * time.Second}, fake.NewClientset())
+	computeCoverage(tr)
+
+	if len(tr.Routes) != 1 || tr.Routes[0].Outcome != OutcomeReached || tr.Routes[0].Confidence != ConfidenceReal {
+		t.Fatalf("routes = %+v, want one real TCP reach", tr.Routes)
+	}
+	if tr.Coverage == nil || tr.Coverage.Passed != 1 || tr.Coverage.Skipped != 0 {
+		t.Fatalf("coverage = %+v, want passed=1 skipped=0", tr.Coverage)
+	}
+	var sawBenignProxySkip bool
+	for _, p := range tr.Downstream[0].Probes {
+		if p.Skipped && p.Path == probe.PathAPIServer && p.Port == port {
+			sawBenignProxySkip = p.SkipClass == SkipClassBenign
+		}
+	}
+	if !sawBenignProxySkip {
+		t.Errorf("inapplicable HTTP proxy note was not classified benign: %+v", tr.Downstream[0].Probes)
+	}
+	var sawBenignPodProxySkip bool
+	for _, p := range tr.Downstream[1].Probes {
+		if p.Skipped && p.Path == probe.PathAPIServer && p.Port == port {
+			sawBenignPodProxySkip = p.SkipClass == SkipClassBenign
+		}
+	}
+	if !sawBenignPodProxySkip {
+		t.Errorf("inapplicable pod-proxy HTTP note was not classified benign: %+v", tr.Downstream[1].Probes)
 	}
 }
 
@@ -316,6 +440,59 @@ func TestProbePods_DualPathInCluster(t *testing.T) {
 	}
 	if !sawData || !sawAPI {
 		t.Errorf("expected both PathData and PathAPIServer pod probes, got %+v", tr.Downstream[0].Probes)
+	}
+}
+
+func TestProbePodsByName_ProtocolSkipsCarryCoverageClass(t *testing.T) {
+	stubProxyProbes(t)
+	tests := []struct {
+		name      string
+		vantage   probe.Vantage
+		podIPs    []string
+		port      ContainerPortRef
+		wantClass string
+	}{
+		{
+			name: "local non-HTTP needs another vantage", vantage: probe.VantageLocal,
+			port:      ContainerPortRef{Container: "database", Port: 6379, Name: "redis", Protocol: "TCP"},
+			wantClass: SkipClassVantage,
+		},
+		{
+			name: "in-cluster non-HTTP already has direct TCP", vantage: probe.VantageInCluster,
+			podIPs:    []string{"10.244.0.10"},
+			port:      ContainerPortRef{Container: "database", Port: 6379, Name: "redis", Protocol: "TCP"},
+			wantClass: SkipClassBenign,
+		},
+		{
+			name: "in-cluster non-HTTP without Pod IP still needs another path", vantage: probe.VantageInCluster,
+			port:      ContainerPortRef{Container: "database", Port: 6379, Name: "redis", Protocol: "TCP"},
+			wantClass: SkipClassVantage,
+		},
+		{
+			name: "HTTPS still needs an application request", vantage: probe.VantageInCluster,
+			podIPs:    []string{"10.244.0.10"},
+			port:      ContainerPortRef{Container: "api", Port: 443, Name: "https", Protocol: "TCP"},
+			wantClass: SkipClassVantage,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &Hop{
+				Resource: ResourceRef{Kind: "Pods", Namespace: "ns"},
+				Config: &HopConfig{
+					ContainerPorts: []ContainerPortRef{tc.port},
+					PodIPs:         tc.podIPs,
+					PodNames:       []string{"pod-x"},
+				},
+			}
+			out := probePodsByName(context.Background(), h, tc.vantage, fake.NewClientset(), "/")
+			if len(out) != 1 || !out[0].Skipped {
+				t.Fatalf("results = %+v, want one skipped proxy row", out)
+			}
+			if out[0].SkipClass != tc.wantClass {
+				t.Errorf("SkipClass = %q, want %q", out[0].SkipClass, tc.wantClass)
+			}
+		})
 	}
 }
 
@@ -372,6 +549,7 @@ func TestIsHTTPProbablePort(t *testing.T) {
 		{"name postgres", "postgres", "", 0, false},
 		{"name postgresql", "postgresql", "", 0, false},
 		{"name redis", "redis", "", 0, false},
+		{"name valkey", "valkey", "", 0, false},
 		{"name mysql", "mysql", "", 0, false},
 		{"name mongo", "mongo", "", 0, false},
 		{"name MYSQL uppercase", "MYSQL", "", 0, false},
@@ -1556,6 +1734,9 @@ func TestProbePodsByName_SkipsUDPAndSCTP(t *testing.T) {
 		if r.OK {
 			t.Errorf("port %d (%s): a skipped non-TCP port must not read as reached: %+v", want.port, want.proto, r)
 		}
+		if got := skipClassOf(r); got != SkipClassCoverage {
+			t.Errorf("port %d (%s): skip class = %q, want coverage", want.port, want.proto, got)
+		}
 	}
 
 	// The TCP port on the SAME pod is still probed via the apiserver path.
@@ -1973,5 +2154,24 @@ func TestNonHTTPReasonBlamesTheSignalThatFired(t *testing.T) {
 	byName := nonHTTPBaseReason("postgres", "", 5432)
 	if !strings.Contains(byName, "postgres") {
 		t.Errorf("a name-triggered skip must name the name: %q", byName)
+	}
+}
+
+// Declared-port labels carry protocol and name suffixes; portKey must pair
+// them all, or every per-port reconciliation silently dies for named ports.
+func TestPortKey_PairsEveryLabelShape(t *testing.T) {
+	for in, want := range map[string]string{
+		"port 6379":             "6379",
+		"kube-dns:53":           "53",
+		"10.0.0.5:80":           "80",
+		"port 53/UDP (dns)":     "53",
+		"port 53 (dns-tcp)":     "53",
+		"port 6379 (redis)":     "6379",
+		"httpbin-abc port 8080": "8080",
+		"no port here":          "",
+	} {
+		if got := portKey(in); got != want {
+			t.Errorf("portKey(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

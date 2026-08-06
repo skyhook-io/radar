@@ -493,10 +493,13 @@ func probeExternalName(ctx context.Context, h *Hop, vantage probe.Vantage, path 
 	if !dns.OK && vantage == probe.VantageLocal {
 		// An ExternalName can alias a cluster-internal / split-horizon host a laptop
 		// can't resolve. A failed LOCAL lookup isn't proof the alias is broken -
-		// demote to a skip with a run-in-cluster hint instead of a confident red row
-		// (mirrors probeIngress's local-vantage demotion).
+		// demote to a skip instead of a confident red row (mirrors probeIngress's
+		// local-vantage demotion). Radar's in-cluster test never dials external
+		// aliases (its probes stay inside the cluster), so the skip must not
+		// prescribe it - it hands a copyable manual check instead.
 		return []probe.Result{classed(probe.SkippedCmd(probe.LayerDNS, host, vantage,
-			"couldn't resolve this external alias from where Radar runs - it may be a split-horizon or cluster-internal name. Run the in-cluster test to check it from inside.", ""), SkipClassVantage)}
+			"couldn't resolve this external alias from where Radar runs - it may be a split-horizon or cluster-internal name that only resolves inside the cluster. Radar doesn't test external aliases from in-cluster; check it from a pod by hand.",
+			fmt.Sprintf("kubectl run alias-check --rm -i --restart=Never --image=busybox:1.36 -- nslookup %s", host)), SkipClassVantage)}
 	}
 	dns.Path = probe.PathData
 	out = append(out, dns)
@@ -572,7 +575,8 @@ func probeExternalNamePort(ctx context.Context, host, path string, p PortMap, va
 	}
 	if !r.OK && internalOnly {
 		skip := probe.SkippedCmd(r.Layer, r.Target, vantage,
-			fmt.Sprintf("%q resolves to an internal address your machine can't reach - it may be cluster-internal. Run the in-cluster test to check it from inside.", host), "")
+			fmt.Sprintf("%q resolves to an internal address your machine can't reach - it may be cluster-internal. Radar doesn't test external aliases from in-cluster; check it from a pod by hand.", host),
+			fmt.Sprintf("kubectl run alias-check --rm -i --restart=Never --image=busybox:1.36 -- nc -vz -w 3 %s %d", host, p.Port))
 		skip.Path = probe.PathData
 		skip.Port = p.Port
 		return classed(skip, SkipClassVantage)
@@ -712,6 +716,14 @@ func probeService(ctx context.Context, h *Hop, vantage probe.Vantage, client kub
 				// into the port-agnostic pool and the port lost its identity - and
 				// with it, any chance of a preserved test candidate.
 				skip.Port = p.Port
+				if !dataReachable {
+					skip = classed(skip, SkipClassVantage)
+				} else {
+					// TCP is the complete automatic check for an explicitly
+					// non-HTTP route. The inapplicable HTTP proxy path is useful
+					// context, but it is not lost route coverage.
+					skip = classed(skip, SkipClassBenign)
+				}
 				out = append(out, skip)
 				continue
 			}
@@ -727,6 +739,7 @@ func probeService(ctx context.Context, h *Hop, vantage probe.Vantage, client kub
 				// Port-stamped so the declared HTTPS candidate survives as a
 				// not-tested route the in-cluster test can actually dial.
 				skip.Port = p.Port
+				skip = classed(skip, SkipClassVantage)
 				out = append(out, skip)
 				continue
 			}
@@ -759,6 +772,8 @@ func probeService(ctx context.Context, h *Hop, vantage probe.Vantage, client kub
 			}
 			skip := probe.SkippedCmd(probe.LayerHTTP, declaredPortLabel(p), vantage, reason, cmd)
 			skip.Path = probe.PathAPIServer
+			skip.Port = p.Port
+			skip = classed(skip, SkipClassVantage)
 			out = append(out, skip)
 		}
 	}
@@ -800,7 +815,7 @@ func isHTTPProbablePort(name, appProtocol string, port int32) bool {
 	case "grpc", "grpc-web", "h2", "h2c",
 		"postgres", "postgresql", "pg",
 		"mysql", "mariadb",
-		"redis",
+		"redis", "valkey",
 		"mongo", "mongodb",
 		"kafka",
 		"amqp", "rabbitmq",
@@ -882,11 +897,16 @@ func isInternalGuardError(r probe.Result) bool {
 // port numbers.
 func isHTTPSPort(name, appProtocol string, port int32) bool {
 	switch strings.ToLower(strings.TrimSpace(appProtocol)) {
-	case "https", "wss", "kubernetes.io/wss":
+	case "https", "wss", "kubernetes.io/wss", "https2":
 		return true
 	}
-	switch strings.ToLower(strings.TrimSpace(name)) {
+	n := strings.ToLower(strings.TrimSpace(name))
+	switch n {
 	case "https", "wss", "tls":
+		return true
+	}
+	// "https-alt" and friends: a name that says https means https.
+	if strings.Contains(n, "https") {
 		return true
 	}
 	return port == 443 || port == 8443
@@ -1041,19 +1061,33 @@ func nameLooksNonHTTP(name string) bool {
 	return false
 }
 
-// portKey extracts the trailing port number from a probe target so
-// divergence detection can pair "10.0.0.5:80" with "port 80" or
-// "httpbin-abc port 8080" with "10.244.1.5:8080". Returns "" when no
-// trailing integer is present.
+// portKey extracts the port number from a probe target so divergence
+// detection can pair "10.0.0.5:80" with a declared-port label. Declared-port
+// labels carry protocol and name suffixes ("port 53/UDP (dns)",
+// "port 6379 (redis)") - anchoring on a TRAILING integer paired nothing for
+// any named port, silently disabling every per-port reconciliation.
+// Returns "" when no port number is present.
 func portKey(target string) string {
-	// Try "...:N" first (IP-style targets).
+	// "...:N" (IP-style and "name:port" route targets).
 	if i := strings.LastIndexByte(target, ':'); i >= 0 && i < len(target)-1 {
 		rest := target[i+1:]
 		if isAllDigits(rest) {
 			return rest
 		}
 	}
-	// Fall back to "...space N" (friendly "port N" / "name port N" targets).
+	// "port N..." labels: the digits directly after the marker, whatever
+	// follows them ("/UDP", "(redis)", nothing).
+	if i := strings.LastIndex(target, "port "); i >= 0 {
+		rest := target[i+len("port "):]
+		end := 0
+		for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
+			end++
+		}
+		if end > 0 {
+			return rest[:end]
+		}
+	}
+	// "...space N" (friendly "name 8080" targets).
 	if i := strings.LastIndexByte(target, ' '); i >= 0 && i < len(target)-1 {
 		rest := target[i+1:]
 		if isAllDigits(rest) {
@@ -1165,6 +1199,7 @@ func probePodsByName(ctx context.Context, h *Hop, vantage probe.Vantage, client 
 	if len(names) > maxPodsToProbe {
 		names = names[:maxPodsToProbe]
 	}
+	dataReachable := vantage == probe.VantageInCluster && len(h.Config.PodIPs) > 0
 	var out []probe.Result
 	for _, name := range names {
 		for _, cp := range h.Config.ContainerPorts {
@@ -1189,9 +1224,15 @@ func probePodsByName(ctx context.Context, h *Hop, vantage probe.Vantage, client 
 				continue
 			}
 			if !isHTTPProbablePort(cp.Name, "", cp.Port) {
-				skip := probe.SkippedCmd(probe.LayerHTTP, target, vantage, nonHTTPSkipReason(cp.Name, "", cp.Port, vantage, vantage == probe.VantageInCluster && len(h.Config.PodIPs) > 0),
+				skip := probe.SkippedCmd(probe.LayerHTTP, target, vantage, nonHTTPSkipReason(cp.Name, "", cp.Port, vantage, dataReachable),
 					portForwardCmd("pod", h.Resource.Namespace, name, cp.Port)+fmt.Sprintf("   # then connect a client for this protocol on localhost:%d", cp.Port))
 				skip.Path = probe.PathAPIServer
+				skip.Port = cp.Port
+				if dataReachable {
+					skip = classed(skip, SkipClassBenign)
+				} else {
+					skip = classed(skip, SkipClassVantage)
+				}
 				out = append(out, skip)
 				continue
 			}
@@ -1200,6 +1241,8 @@ func probePodsByName(ctx context.Context, h *Hop, vantage probe.Vantage, client 
 					"HTTPS backend - the API-server proxy speaks plain HTTP and can't verify TLS on this port. Test it directly.",
 					portForwardCmd("pod", h.Resource.Namespace, name, cp.Port)+fmt.Sprintf("   # then: curl -k https://localhost:%d/", cp.Port))
 				skip.Path = probe.PathAPIServer
+				skip.Port = cp.Port
+				skip = classed(skip, SkipClassVantage)
 				out = append(out, skip)
 				continue
 			}

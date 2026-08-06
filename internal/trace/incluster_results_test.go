@@ -133,7 +133,7 @@ func entryBrokenTrace() *Trace {
 		Routes: []RouteResult{{
 			Route: "/", Target: "web:80", Outcome: OutcomeUnreachable, Confidence: ConfidenceReal,
 			Evidence:         "connection refused",
-			InClusterRequest: &ProbeRequest{Scheme: "http", Host: "shop.example.com", Path: "/"},
+			InClusterRequest: &ProbeRequest{Protocol: "http", Scheme: "http", Host: "shop.example.com", Path: "/"},
 		}},
 		NotTested: []RouteSkip{},
 		Coverage:  &Coverage{Tested: 1, Failed: 1},
@@ -272,7 +272,7 @@ func TestApplyInClusterResults_PrunesResolvedVantageSkip(t *testing.T) {
 			Target:           "api:80",
 			TargetNamespace:  "prod",
 			Outcome:          OutcomeNotTested,
-			InClusterRequest: &ProbeRequest{Host: "api", Path: "/"},
+			InClusterRequest: &ProbeRequest{Protocol: "http", Scheme: "http", Host: "api", Path: "/"},
 		}},
 		NotTested: []RouteSkip{{
 			Route:       "api:80",
@@ -314,6 +314,66 @@ func TestApplyInClusterResults_PrunesResolvedVantageSkip(t *testing.T) {
 	}
 }
 
+func TestApplyInClusterResults_PrunesResolvedServiceProtocolSkip(t *testing.T) {
+	tr := &Trace{
+		Subject: ResourceRef{Kind: "Service", Namespace: "prod", Name: "secure-api"},
+		Verdict: VerdictUnknown,
+		Routes: []RouteResult{{
+			Route: "secure-api", Target: "secure-api:443", TargetNamespace: "prod",
+			Outcome: OutcomeReached, Confidence: ConfidenceIndirect,
+			InClusterRequest: &ProbeRequest{Protocol: "https", Scheme: "https", Path: "/"},
+		}},
+		NotTested: []RouteSkip{{
+			Route: "port 443", ReasonClass: SkipClassVantage,
+			Reason: "the API-server proxy cannot verify an HTTPS backend",
+		}},
+	}
+
+	ApplyInClusterResults(tr, map[string][]probe.Result{
+		InClusterResultKey("secure-api", "secure-api:443", "prod"): cleanInClusterPass(),
+	})
+
+	if len(tr.NotTested) != 0 {
+		t.Fatalf("NotTested = %+v, want the now-tested HTTPS port gap removed", tr.NotTested)
+	}
+	if tr.Coverage == nil || tr.Coverage.Passed != 1 || tr.Coverage.Skipped != 0 {
+		t.Fatalf("Coverage = %+v, want passed=1 skipped=0", tr.Coverage)
+	}
+}
+
+func TestApplyInClusterResults_KeepsSameNumberUDPGapAfterTCPPass(t *testing.T) {
+	tr := &Trace{
+		Subject: ResourceRef{Kind: "Service", Namespace: "kube-system", Name: "kube-dns"},
+		Verdict: VerdictUnknown,
+		Routes: []RouteResult{{
+			Route: "kube-dns", Target: "kube-dns:53", TargetNamespace: "kube-system",
+			Outcome:          OutcomeNotTested,
+			InClusterRequest: &ProbeRequest{Protocol: "tcp"},
+		}},
+		NotTested: []RouteSkip{
+			{
+				Route: "port 53", ReasonClass: SkipClassVantage,
+				Reason: "run the TCP test from inside the cluster",
+			},
+			{
+				Route: "port 53", ReasonClass: SkipClassCoverage,
+				Reason: "port 53 is UDP - test it with a UDP client",
+			},
+		},
+	}
+
+	ApplyInClusterResults(tr, map[string][]probe.Result{
+		InClusterResultKey("kube-dns", "kube-dns:53", "kube-system"): cleanInClusterPass(),
+	})
+
+	if len(tr.NotTested) != 1 || tr.NotTested[0].ReasonClass != SkipClassCoverage {
+		t.Fatalf("NotTested = %+v, want only the unresolved UDP coverage gap", tr.NotTested)
+	}
+	if tr.Coverage == nil || tr.Coverage.Passed != 1 || tr.Coverage.Skipped != 1 {
+		t.Fatalf("Coverage = %+v, want TCP passed=1 and UDP skipped=1", tr.Coverage)
+	}
+}
+
 // Regression: a vantage skip whose route did NOT get a live in-cluster pass must
 // survive - pruning must be scoped to routes the live pass actually resolved,
 // even while a DIFFERENT route's result folds in.
@@ -326,14 +386,14 @@ func TestApplyInClusterResults_KeepsUnresolvedVantageSkip(t *testing.T) {
 				Target:           "api:80",
 				TargetNamespace:  "prod",
 				Outcome:          OutcomeNotTested,
-				InClusterRequest: &ProbeRequest{Host: "api", Path: "/"},
+				InClusterRequest: &ProbeRequest{Protocol: "http", Scheme: "http", Host: "api", Path: "/"},
 			},
 			{
 				Route:            "other:80",
 				Target:           "other:80",
 				TargetNamespace:  "prod",
 				Outcome:          OutcomeNotTested,
-				InClusterRequest: &ProbeRequest{Host: "other", Path: "/"},
+				InClusterRequest: &ProbeRequest{Protocol: "http", Scheme: "http", Host: "other", Path: "/"},
 			},
 		},
 		NotTested: []RouteSkip{{
@@ -407,7 +467,7 @@ func TestApplyInClusterResults_DowngradesTargetPortOnLivePass(t *testing.T) {
 		Routes: []RouteResult{{
 			Route: "mismatch", Target: "mismatch:80",
 			Outcome: OutcomeReached, Confidence: ConfidenceIndirect,
-			InClusterRequest: &ProbeRequest{Scheme: "http", Path: "/"},
+			InClusterRequest: &ProbeRequest{Protocol: "http", Scheme: "http", Path: "/"},
 		}},
 		Downstream: []Hop{
 			{Resource: ResourceRef{Kind: "Service", Namespace: "prod", Name: "mismatch"}, Edge: "entry:Service",
@@ -456,7 +516,7 @@ func TestApplyInClusterResults_KeepsTargetPortOnDifferentPortPass(t *testing.T) 
 		Routes: []RouteResult{{
 			Route: "mismatch", Target: "mismatch:443",
 			Outcome: OutcomeReached, Confidence: ConfidenceIndirect,
-			InClusterRequest: &ProbeRequest{Scheme: "https", Path: "/"},
+			InClusterRequest: &ProbeRequest{Protocol: "https", Scheme: "https", Path: "/"},
 		}},
 		Downstream: []Hop{
 			{Resource: ResourceRef{Kind: "Service", Namespace: "prod", Name: "mismatch"}, Edge: "entry:Service",

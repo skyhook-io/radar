@@ -25,8 +25,7 @@ export interface TraceSummaryView {
    *  routes failed in total - so the label can read honestly ("Failing route"
    *  for one, "Worst of N failing routes" when there are more). */
   worst?: { route: string; target?: string; evidence?: string; failingCount: number }
-  /** A muted descriptive line under the headline - e.g. the invite button's
-   *  "A quick DNS → TCP → HTTP probe from where Radar runs." */
+  /** A muted descriptive line under the headline. */
   subtitle?: string
   notTested: number
   ctaLabel: string
@@ -87,7 +86,7 @@ export function summarizeTrace(trace: Trace): TraceSummaryView {
     return {
       kind: 'minimal',
       headline: 'Verify the path in through the front door',
-      subtitle: 'A quick probe of the declared host and path (DNS → TCP → HTTP).',
+      subtitle: 'A quick live probe of the declared host and path.',
       notTested: 0,
       ctaLabel: RUN_CTA_SHORT,
     }
@@ -99,7 +98,7 @@ export function summarizeTrace(trace: Trace): TraceSummaryView {
   return {
     kind: 'minimal',
     headline: 'Verify the live path to these pods',
-    subtitle: 'A quick DNS → TCP → HTTP probe from where Radar runs.',
+    subtitle: 'A quick live connection test from where Radar runs.',
     notTested: 0,
     ctaLabel: RUN_CTA_SHORT,
   }

@@ -1,6 +1,109 @@
 import { describe, it, expect } from 'vitest'
-import { routeOutcomeRank, coverageBannerTone, inClusterOutcome, inClusterEligible } from './TracePanel'
-import type { ProbeResult, RouteResult, Coverage } from './types'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { routeOutcomeRank, coverageBannerTone, inClusterOutcome, inClusterEligible, RequestIndicator, completedRequestMode } from './TracePanel'
+import type { ProbeResult, RouteResult, Coverage, Trace } from './types'
+
+describe('protocol-honest probe copy', () => {
+  it('labels a TCP-only test without inventing an HTTP request', () => {
+    const html = renderToStaticMarkup(createElement(RequestIndicator, {
+      requestMode: 'tcp',
+      path: '/healthz',
+      onApplyProbePath: () => {},
+    }))
+    expect(html).toContain('TCP connection')
+    expect(html).not.toContain('GET')
+    expect(html).not.toContain('Edit the request path')
+  })
+
+  it('does not claim an application request completed when every applicable probe skipped', () => {
+    const html = renderToStaticMarkup(createElement(RequestIndicator, {
+      requestMode: 'none',
+      path: '/healthz',
+      onApplyProbePath: () => {},
+    }))
+    expect(html).toContain('no application request completed from here')
+    expect(html).not.toContain('GET')
+    expect(html).not.toContain('TCP connection')
+  })
+
+  it('labels TCP routes as TCP in the test matrix', () => {
+    const trace: Trace = {
+      subject: { kind: 'Service', namespace: 'ns', name: 'database' },
+      upstreams: [],
+      verdict: 'unknown',
+      brokenAt: -1,
+      downstream: [{
+        resource: { kind: 'Service', namespace: 'ns', name: 'database' },
+        edge: 'entry:Service',
+        findings: [],
+        probes: [
+          { layer: 'http', target: 'port 6379', port: 6379, vantage: 'local', path: 'apiserver', ok: false, skipped: true, reason: 'non-HTTP' },
+          { layer: 'http', target: 'port 5432', port: 5432, vantage: 'local', path: 'apiserver', ok: false, skipped: true, reason: 'non-HTTP' },
+        ],
+      }],
+      routes: [
+        { route: 'database', target: 'database:6379', targetNamespace: 'ns', outcome: 'not-tested', inClusterRequest: { protocol: 'tcp' } },
+        { route: 'database', target: 'database:5432', targetNamespace: 'ns', outcome: 'not-tested', inClusterRequest: { protocol: 'tcp' } },
+      ],
+    }
+    expect(completedRequestMode(trace)).toBe('none')
+
+    trace.downstream[0].probes?.push({
+      layer: 'tcp',
+      target: 'database:6379',
+      port: 6379,
+      vantage: 'in-cluster',
+      path: 'data',
+      ok: true,
+    })
+    expect(completedRequestMode(trace)).toBe('tcp')
+  })
+
+  it('distinguishes a preliminary TCP connection from a completed HTTPS request', () => {
+    const trace: Trace = {
+      subject: { kind: 'Service', namespace: 'ns', name: 'secure-api' },
+      upstreams: [],
+      verdict: 'unknown',
+      brokenAt: -1,
+      downstream: [{
+        resource: { kind: 'Service', namespace: 'ns', name: 'secure-api' },
+        edge: 'entry:Service',
+        findings: [],
+        probes: [{
+          layer: 'tcp',
+          target: 'secure-api:443',
+          port: 443,
+          vantage: 'in-cluster',
+          path: 'data',
+          ok: true,
+        }, {
+          layer: 'http',
+          target: 'port 443',
+          port: 443,
+          vantage: 'in-cluster',
+          path: 'apiserver',
+          ok: false,
+          skipped: true,
+          reason: 'the API-server proxy cannot test HTTPS',
+        }],
+      }],
+      routes: [{
+        route: 'secure-api',
+        target: 'secure-api:443',
+        targetNamespace: 'ns',
+        outcome: 'reached',
+        inClusterRequest: { protocol: 'https', scheme: 'https', path: '/' },
+      }],
+    }
+
+    expect(completedRequestMode(trace)).toBe('none')
+    const indicator = renderToStaticMarkup(createElement(RequestIndicator, {
+      requestMode: completedRequestMode(trace),
+    }))
+    expect(indicator).toContain('no application request completed')
+  })
+})
 
 describe('in-cluster test - eligibility + outcome', () => {
   const p = (o: Partial<ProbeResult>): ProbeResult => ({ layer: 'http', target: 't', vantage: 'in-cluster', ok: true, ...o })

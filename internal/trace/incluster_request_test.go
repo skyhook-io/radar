@@ -1,6 +1,7 @@
 package trace
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/skyhook-io/radar/pkg/probe"
@@ -55,6 +56,31 @@ func TestSchemeForPort(t *testing.T) {
 	}
 }
 
+func TestProtocolForPort(t *testing.T) {
+	cases := []struct {
+		name string
+		port PortMap
+		want string
+	}{
+		{name: "ordinary HTTP", port: PortMap{Port: 8080}, want: "http"},
+		{name: "HTTPS appProtocol", port: PortMap{Port: 8443, AppProtocol: "https"}, want: "https"},
+		{name: "Redis name", port: PortMap{Port: 1234, Name: "redis"}, want: "tcp"},
+		{name: "Valkey name", port: PortMap{Port: 1234, Name: "valkey"}, want: "tcp"},
+		{name: "Redis number", port: PortMap{Port: 6379}, want: "tcp"},
+		{name: "Postgres", port: PortMap{Port: 5432}, want: "tcp"},
+		{name: "Kafka appProtocol", port: PortMap{Port: 19092, AppProtocol: "kafka"}, want: "tcp"},
+		{name: "UDP is unsupported", port: PortMap{Port: 53, Protocol: "UDP"}, want: ""},
+		{name: "SCTP is unsupported", port: PortMap{Port: 3868, Protocol: "SCTP"}, want: ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := protocolForPort(c.port); got != c.want {
+				t.Errorf("protocolForPort(%+v) = %q, want %q", c.port, got, c.want)
+			}
+		})
+	}
+}
+
 func TestConcreteHost(t *testing.T) {
 	if got := concreteHost("*.example.com"); got != "www.example.com" {
 		t.Errorf("wildcard host = %q, want www.example.com", got)
@@ -64,6 +90,25 @@ func TestConcreteHost(t *testing.T) {
 	}
 	if got := concreteHost(""); got != "" {
 		t.Errorf("empty host = %q, want empty", got)
+	}
+}
+
+func TestGuessInClusterRequest_TCPHasNoHTTPFields(t *testing.T) {
+	req := guessInClusterRequest("database.example.com", "/healthz", PortMap{
+		Name: "valkey", Port: 6379, Protocol: "TCP",
+	})
+	if req.Protocol != "tcp" {
+		t.Fatalf("protocol = %q, want tcp", req.Protocol)
+	}
+	if req.Scheme != "" || req.Host != "" || req.Path != "" || req.PathGuessed {
+		t.Errorf("TCP request carried HTTP-only fields: %+v", req)
+	}
+	wire, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(wire); got != `{"protocol":"tcp"}` {
+		t.Errorf("TCP wire request = %s, want protocol only", got)
 	}
 }
 
@@ -85,7 +130,7 @@ func TestBuildRoutes_AttachesInClusterRequest_ServiceSubject(t *testing.T) {
 		t.Fatalf("want 1 route with an in-cluster request, got %+v", tr.Routes)
 	}
 	req := tr.Routes[0].InClusterRequest
-	if req.Scheme != "https" || req.Path != "/" || req.PathGuessed {
+	if req.Protocol != "https" || req.Scheme != "https" || req.Path != "/" || req.PathGuessed {
 		t.Errorf("service-subject request = %+v, want https / not-guessed", req)
 	}
 }
@@ -112,7 +157,26 @@ func TestBuildRoutes_AttachesInClusterRequest_RegexRoute(t *testing.T) {
 		t.Fatalf("want 1 route with an in-cluster request, got %+v", tr.Routes)
 	}
 	req := tr.Routes[0].InClusterRequest
-	if req.Scheme != "http" || req.Host != "shop.example.com" || req.Path != "/api/" || !req.PathGuessed {
+	if req.Protocol != "http" || req.Scheme != "http" || req.Host != "shop.example.com" || req.Path != "/api/" || !req.PathGuessed {
 		t.Errorf("regex-route request = %+v, want http shop.example.com /api/ guessed", req)
+	}
+}
+
+// The prober and the request builder must share one TLS classification - a
+// port the prober treats as TLS must never receive a plaintext HTTP Job.
+func TestSchemeForPort_AgreesWithProber(t *testing.T) {
+	cases := []PortMap{
+		{Port: 9000, Name: "wss"},
+		{Port: 9000, Name: "tls"},
+		{Port: 8443},
+		{Port: 9000, AppProtocol: "kubernetes.io/wss"},
+	}
+	for _, pm := range cases {
+		if !isHTTPSPort(pm.Name, pm.AppProtocol, pm.Port) {
+			t.Errorf("prober should classify %+v as TLS", pm)
+		}
+		if got := schemeForPort(pm); got != "https" {
+			t.Errorf("schemeForPort(%+v) = %q, want https (prober treats it as TLS)", pm, got)
+		}
 	}
 }
