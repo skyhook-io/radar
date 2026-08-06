@@ -23,6 +23,8 @@ import {
   getBSLBucket,
   getBSLDefault,
   getBSLLastValidation,
+  getVSLProvider,
+  getVSLConfig,
 } from '../resource-utils-velero'
 
 export function BackupCell({ resource, column }: { resource: any; column: string }) {
@@ -126,6 +128,28 @@ export function ScheduleCell({ resource, column }: { resource: any; column: stri
     case 'paused': {
       const paused = getSchedulePaused(resource)
       return <span className={clsx('text-sm', paused ? 'text-yellow-400' : 'text-theme-text-tertiary')}>{paused ? 'Yes' : '-'}</span>
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
+// VolumeSnapshotLocation has no status column on purpose: the VSL controller
+// does not populate status.phase, so a badge would read "Unknown" forever.
+export function VolumeSnapshotLocationCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'provider': {
+      const provider = getVSLProvider(resource)
+      return <span className="text-sm text-theme-text-secondary truncate block">{provider}</span>
+    }
+    case 'config': {
+      const config = getVSLConfig(resource)
+      const keys = Object.keys(config)
+      if (keys.length === 0) {
+        return <span className="text-sm text-theme-text-tertiary">-</span>
+      }
+      const summary = keys.map((k) => `${k}=${config[k]}`).join(', ')
+      return <span className="text-sm text-theme-text-secondary truncate block" title={summary}>{summary}</span>
     }
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>

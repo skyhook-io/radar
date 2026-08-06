@@ -3,9 +3,46 @@
 import type { StatusBadge } from './resource-utils'
 import { healthColors, formatAge, formatDuration } from './resource-utils'
 
+// Several Velero plurals are shared with other operators —
+// rancher/backup-restore-operator ships backups/restores.resources.cattle.io,
+// CNPG ships backups.postgresql.cnpg.io, and `schedules` is a common CRD name.
+// Renderers, status readers and cells must therefore select on the API group,
+// not on the plural alone, or a foreign resource renders through Velero's UI.
+export function isVeleroResource(resource: any): boolean {
+  return typeof resource?.apiVersion === 'string' && resource.apiVersion.startsWith('velero.io/')
+}
+
 // ============================================================================
 // BACKUP UTILITIES
 // ============================================================================
+
+// Phases in which a Backup or Restore is still executing. Velero has no
+// single "running" flag — the set below is the v1.18 enum minus the terminal
+// and pre-start phases. `Finalizing`/`WaitingForPluginOperations` and their
+// *PartiallyFailed twins are still doing work, so the progress bar applies.
+const BACKUP_ACTIVE_PHASES = new Set([
+  'InProgress',
+  'WaitingForPluginOperations',
+  'WaitingForPluginOperationsPartiallyFailed',
+  'Finalizing',
+  'FinalizingPartiallyFailed',
+])
+
+// Phases meaning "some of the backup made it, some didn't". Distinct from a
+// plain failure: the data is partially recoverable.
+const BACKUP_PARTIAL_PHASES = new Set([
+  'PartiallyFailed',
+  'FinalizingPartiallyFailed',
+  'WaitingForPluginOperationsPartiallyFailed',
+])
+
+export function isBackupActivePhase(phase: string): boolean {
+  return BACKUP_ACTIVE_PHASES.has(phase)
+}
+
+export function isBackupPartialFailurePhase(phase: string): boolean {
+  return BACKUP_PARTIAL_PHASES.has(phase)
+}
 
 export function getBackupStatus(resource: any): StatusBadge {
   const phase = resource.status?.phase || ''
@@ -14,13 +51,20 @@ export function getBackupStatus(resource: any): StatusBadge {
     case 'Completed':
       return { text: 'Completed', color: healthColors.healthy, level: 'healthy' }
     case 'InProgress':
-      return { text: 'InProgress', color: healthColors.neutral, level: 'neutral' }
-    case 'Uploading':
-      return { text: 'Uploading', color: healthColors.neutral, level: 'neutral' }
+    case 'WaitingForPluginOperations':
+    case 'Finalizing':
+    case 'Queued':
+    case 'ReadyToStart':
+      return { text: phase, color: healthColors.neutral, level: 'neutral' }
+    // Partial failure is worse than "degraded" (some data is already lost) but
+    // not a total loss — the orange `alert` tier separates the two.
     case 'PartiallyFailed':
-      return { text: 'PartiallyFailed', color: healthColors.degraded, level: 'degraded' }
+    case 'FinalizingPartiallyFailed':
+    case 'WaitingForPluginOperationsPartiallyFailed':
+      return { text: phase, color: healthColors.alert, level: 'alert' }
     case 'Failed':
-      return { text: 'Failed', color: healthColors.unhealthy, level: 'unhealthy' }
+    case 'FailedValidation':
+      return { text: phase, color: healthColors.unhealthy, level: 'unhealthy' }
     case 'Deleting':
       return { text: 'Deleting', color: healthColors.degraded, level: 'degraded' }
     case 'New':
@@ -28,6 +72,12 @@ export function getBackupStatus(resource: any): StatusBadge {
     default:
       return { text: phase || 'Unknown', color: healthColors.unknown, level: 'unknown' }
   }
+}
+
+// Backups queued behind the concurrency limit (v1.18+) report their position.
+export function getBackupQueuePosition(resource: any): number | null {
+  const pos = resource.status?.queuePosition
+  return typeof pos === 'number' ? pos : null
 }
 
 export function getBackupStorageLocation(resource: any): string {
@@ -115,6 +165,8 @@ export function getBackupVolumeSnapshotLocations(resource: any): string[] {
 // RESTORE UTILITIES
 // ============================================================================
 
+// Restore shares Backup's phase vocabulary except for the pre-start
+// (`Queued`/`ReadyToStart`) and `Deleting` phases, which only Backup has.
 export function getRestoreStatus(resource: any): StatusBadge {
   const phase = resource.status?.phase || ''
 
@@ -122,16 +174,25 @@ export function getRestoreStatus(resource: any): StatusBadge {
     case 'Completed':
       return { text: 'Completed', color: healthColors.healthy, level: 'healthy' }
     case 'InProgress':
-      return { text: 'InProgress', color: healthColors.neutral, level: 'neutral' }
+    case 'WaitingForPluginOperations':
+    case 'Finalizing':
+      return { text: phase, color: healthColors.neutral, level: 'neutral' }
     case 'PartiallyFailed':
-      return { text: 'PartiallyFailed', color: healthColors.degraded, level: 'degraded' }
+    case 'FinalizingPartiallyFailed':
+    case 'WaitingForPluginOperationsPartiallyFailed':
+      return { text: phase, color: healthColors.alert, level: 'alert' }
     case 'Failed':
-      return { text: 'Failed', color: healthColors.unhealthy, level: 'unhealthy' }
+    case 'FailedValidation':
+      return { text: phase, color: healthColors.unhealthy, level: 'unhealthy' }
     case 'New':
       return { text: 'New', color: healthColors.unknown, level: 'unknown' }
     default:
       return { text: phase || 'Unknown', color: healthColors.unknown, level: 'unknown' }
   }
+}
+
+export function getRestoreValidationErrors(resource: any): string[] {
+  return resource.status?.validationErrors || []
 }
 
 export function getRestoreBackupName(resource: any): string {
@@ -195,6 +256,13 @@ export function getScheduleStatus(resource: any): StatusBadge {
     return { text: 'Paused', color: healthColors.degraded, level: 'degraded' }
   }
 
+  // Velero leaves the phase empty on some validation failures and only records
+  // the reason in status.validationErrors, so the array is the authoritative
+  // signal — a schedule with errors is not producing backups whatever the phase.
+  if (getScheduleValidationErrors(resource).length > 0) {
+    return { text: 'FailedValidation', color: healthColors.unhealthy, level: 'unhealthy' }
+  }
+
   switch (phase) {
     case 'Enabled':
       return { text: 'Enabled', color: healthColors.healthy, level: 'healthy' }
@@ -203,6 +271,10 @@ export function getScheduleStatus(resource: any): StatusBadge {
     default:
       return { text: phase || 'Unknown', color: healthColors.unknown, level: 'unknown' }
   }
+}
+
+export function getScheduleValidationErrors(resource: any): string[] {
+  return resource.status?.validationErrors || []
 }
 
 export function getScheduleCron(resource: any): string {

@@ -8,6 +8,7 @@ import {
   getSchedulePaused,
   getScheduleTemplate,
   getScheduleUseOwnerReferences,
+  getScheduleValidationErrors,
 } from '../resource-utils-velero'
 
 interface VeleroScheduleRendererProps {
@@ -21,6 +22,7 @@ export function VeleroScheduleRenderer({ data }: VeleroScheduleRendererProps) {
   const scheduleStatus = getScheduleStatus(data)
   const isPaused = getSchedulePaused(data)
   const template = getScheduleTemplate(data)
+  const validationErrors = getScheduleValidationErrors(data)
 
   const templateIncludedNs = template.includedNamespaces || []
   const templateExcludedNs = template.excludedNamespaces || []
@@ -41,7 +43,8 @@ export function VeleroScheduleRenderer({ data }: VeleroScheduleRendererProps) {
         <AlertBanner
           variant="error"
           title="Validation Failed"
-          message="The schedule spec failed validation and is not active."
+          message="The schedule spec failed validation and is not active — no backups are being created."
+          items={validationErrors.length > 0 ? validationErrors : undefined}
         />
       )}
 

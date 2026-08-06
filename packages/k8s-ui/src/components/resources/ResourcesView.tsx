@@ -157,7 +157,8 @@ import { KyvernoModernPolicyCell, KyvernoPolicyExceptionCell, KyvernoCleanupPoli
 import { KYVERNO_MODERN_PLURALS, isModernKyvernoPolicy } from './resource-utils-kyverno-modern'
 import { isAnyKyvernoPolicyException } from './resource-utils-kyverno-exceptions'
 import { ExternalSecretCell, ClusterExternalSecretCell, SecretStoreCell, ClusterSecretStoreCell } from './renderers/eso-cells'
-import { BackupCell, RestoreCell, ScheduleCell, BackupStorageLocationCell } from './renderers/velero-cells'
+import { BackupCell, RestoreCell, ScheduleCell, BackupStorageLocationCell, VolumeSnapshotLocationCell } from './renderers/velero-cells'
+import { isVeleroResource } from './resource-utils-velero'
 import { CNPGClusterCell, CNPGBackupCell, CNPGScheduledBackupCell, CNPGPoolerCell } from './renderers/cnpg-cells'
 import { ManagedResourceCell, CompositeResourceCell, CrossplaneProviderCell, CrossplaneProviderConfigCell, CompositionCell, XRDCell } from './renderers/crossplane-cells'
 import { isManagedResource, isComposite } from './resource-utils-crossplane'
@@ -1224,7 +1225,12 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'errors', label: 'Errors', width: 'w-20' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
-  restores: [
+  // `restores` and `schedules` are keyed group-qualified (see
+  // GROUP_QUALIFIED_COLUMN_KEYS): rancher/backup-restore-operator ships
+  // restores.resources.cattle.io and several operators ship their own
+  // `schedules` kind. Only velero.io resolves to these column sets;
+  // everything else falls through to the generic columns.
+  velerorestores: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
@@ -1233,13 +1239,22 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'errors', label: 'Errors', width: 'w-20' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
-  schedules: [
+  veleroschedules: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'schedule', label: 'Schedule', width: 'w-32' },
     { key: 'lastBackup', label: 'Last Backup', width: 'w-28' },
     { key: 'paused', label: 'Paused', width: 'w-16' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  // No status column on purpose: the VSL controller never populates
+  // status.phase, so a badge would read "Unknown" on every row forever.
+  volumesnapshotlocations: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'provider', label: 'Provider', width: 'w-32' },
+    { key: 'config', label: 'Config' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   backupstoragelocations: [
@@ -1817,6 +1832,8 @@ const GROUP_QUALIFIED_COLUMN_KEYS: Record<string, Record<string, string>> = {
   routes: { 'serving.knative.dev': 'knativeroutes' },
   ingresses: { 'networking.internal.knative.dev': 'knativeingresses' },
   certificates: { 'networking.internal.knative.dev': 'knativecertificates' },
+  restores: { 'velero.io': 'velerorestores' },
+  schedules: { 'velero.io': 'veleroschedules' },
 }
 
 // Normalize a kind name to its plural API form used in KNOWN_COLUMNS keys.
@@ -5789,12 +5806,16 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
         return <CNPGBackupCell resource={resource} column={column} />
       }
       return <BackupCell resource={resource} column={column} />
-    case 'restores':
+    case 'velerorestores':
       return <RestoreCell resource={resource} column={column} />
-    case 'schedules':
+    case 'veleroschedules':
       return <ScheduleCell resource={resource} column={column} />
     case 'backupstoragelocations':
+      if (!isVeleroResource(resource)) return <GenericCell resource={resource} column={column} />
       return <BackupStorageLocationCell resource={resource} column={column} />
+    case 'volumesnapshotlocations':
+      if (!isVeleroResource(resource)) return <GenericCell resource={resource} column={column} />
+      return <VolumeSnapshotLocationCell resource={resource} column={column} />
     // CloudNativePG
     case 'cnpgclusters':
     case 'clusters':

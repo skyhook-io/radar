@@ -63,7 +63,7 @@ import {
 } from '../resources/resource-utils-kyverno-exceptions'
 import { getResourceClaimStatus, getResourceClaimTemplateStatus, getDeviceClassStatus, getResourceSliceStatus } from '../resources/resource-utils-dra'
 import { getNvidiaClusterPolicyStatus, getNvidiaDriverStatus } from '../resources/resource-utils-nvidia'
-import { getBackupStatus, getRestoreStatus, getScheduleStatus, getBSLStatus } from '../resources/resource-utils-velero'
+import { getBackupStatus, getRestoreStatus, getScheduleStatus, getBSLStatus, isVeleroResource } from '../resources/resource-utils-velero'
 import {
   getVirtualServiceStatus,
   getDestinationRuleStatus,
@@ -533,6 +533,18 @@ export function ResourceRendererDispatch({
     (isKyvernoLegacyExtraPlural && !kyvernoLegacyExtraMatched) ||
     (isPolicyExceptionPlural && !policyExceptionMatched)
 
+  // Same shape as the Crossplane fall-through above: these Velero plurals are
+  // in KNOWN_KINDS but their render lines are gated on the velero.io group, so
+  // a foreign CR with the same plural (rancher/backup-restore-operator ships
+  // restores.resources.cattle.io; several operators ship `schedules`) matches
+  // no renderer AND is suppressed from GenericRenderer — i.e. renders blank.
+  // `backups` is deliberately absent: its render lines are still keyed on the
+  // CNPG-vs-Velero split, not a positive velero.io guard.
+  const isVeleroCollisionGatedKind =
+    kind === 'restores' || kind === 'schedules'
+    || kind === 'backupstoragelocations' || kind === 'volumesnapshotlocations'
+  const veleroCollisionFallthrough = isVeleroCollisionGatedKind && !isVeleroResource(data)
+
   const isKnownKind = KNOWN_KINDS.has(kind) || isCrossplaneMR || isCrossplaneClaim || isCrossplaneXR
 
   const PodComp = rendererOverrides?.PodRenderer ?? PodRenderer
@@ -656,10 +668,10 @@ export function ResourceRendererDispatch({
         {kind === 'resourceslices' && <ResourceSliceRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'backups' && data.apiVersion?.includes('cnpg.io') && <CNPGBackupRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'backups' && !data.apiVersion?.includes('cnpg.io') && <VeleroBackupRenderer data={data} />}
-        {kind === 'restores' && <VeleroRestoreRenderer data={data} />}
-        {kind === 'schedules' && <VeleroScheduleRenderer data={data} />}
-        {kind === 'backupstoragelocations' && <VeleroBSLRenderer data={data} />}
-        {kind === 'volumesnapshotlocations' && <VeleroVSLRenderer data={data} />}
+        {kind === 'restores' && isVeleroResource(data) && <VeleroRestoreRenderer data={data} />}
+        {kind === 'schedules' && isVeleroResource(data) && <VeleroScheduleRenderer data={data} />}
+        {kind === 'backupstoragelocations' && isVeleroResource(data) && <VeleroBSLRenderer data={data} />}
+        {kind === 'volumesnapshotlocations' && isVeleroResource(data) && <VeleroVSLRenderer data={data} />}
         {kind === 'externalsecrets' && <ExternalSecretRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'clusterexternalsecrets' && <ClusterExternalSecretRenderer data={data} onNavigate={onNavigate} />}
         {(kind === 'secretstores' || kind === 'clustersecretstores') && <SecretStoreRenderer data={data} />}
@@ -760,7 +772,7 @@ export function ResourceRendererDispatch({
             for known-plural collisions where no apiVersion-gated renderer
             matched (e.g. a Knative Configuration sharing the `configurations`
             plural with Crossplane Configuration). */}
-        {(!isKnownKind || crossplaneCollisionFallthrough || kyvernoCollisionFallthrough) && <GenericRenderer data={data} />}
+        {(!isKnownKind || crossplaneCollisionFallthrough || kyvernoCollisionFallthrough || veleroCollisionFallthrough) && <GenericRenderer data={data} />}
 
         {/* Common sections - can be disabled when parent handles them separately */}
         {showCommonSections && (
@@ -904,9 +916,9 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
     if (data.apiVersion?.includes('cnpg.io')) return getCNPGBackupStatus(data)
     return getBackupStatus(data)
   }
-  if (k === 'restores') return getRestoreStatus(data)
-  if (k === 'schedules') return getScheduleStatus(data)
-  if (k === 'backupstoragelocations') return getBSLStatus(data)
+  if (k === 'restores' && isVeleroResource(data)) return getRestoreStatus(data)
+  if (k === 'schedules' && isVeleroResource(data)) return getScheduleStatus(data)
+  if (k === 'backupstoragelocations' && isVeleroResource(data)) return getBSLStatus(data)
   if (k === 'externalsecrets') return getExternalSecretStatus(data)
   if (k === 'clusterexternalsecrets') return getClusterExternalSecretStatus(data)
   if (k === 'secretstores') return getSecretStoreStatus(data)

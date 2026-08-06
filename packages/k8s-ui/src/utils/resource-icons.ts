@@ -70,6 +70,13 @@ import {
   HeartPulse,
   BookOpen,
 
+  // Velero
+  ArchiveRestore,
+  CalendarClock,
+  Cloud,
+  Camera,
+  Package,
+
   // Fallback
   Puzzle,
 } from 'lucide-react'
@@ -257,6 +264,14 @@ const KIND_ICON_MAP: Record<string, LucideIcon> = {
   configauditreport: ShieldCheck,
   exposedsecretreport: ShieldAlert,
   sbomreport: FileSearch,
+
+  // Velero. `backup` is deliberately absent: the key is shared with CNPG's
+  // Backup and this map has no group awareness.
+  restore: ArchiveRestore,
+  schedule: CalendarClock,
+  backupstoragelocation: Cloud,
+  volumesnapshotlocation: Camera,
+  backuprepository: Package,
 }
 
 /** Get the icon for a Kubernetes resource kind (case-insensitive). */
