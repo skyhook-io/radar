@@ -405,9 +405,11 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"namespace; set it to an empty string for cluster-scoped or cluster-wide access. " +
 			"The caller must be allowed to create SubjectAccessReviews. Radar never retries " +
 			"with a privileged identity, so authorization errors are explicit. Identify the " +
-			"subject with `kind` (ServiceAccount, User, or Group) and `name` — a bare name, " +
-			"not a qualified form like `system:serviceaccount:ns:sa`. `namespace` is required " +
-			"for ServiceAccounts and omitted for Users and Groups.",
+			"subject with `kind` (ServiceAccount, User, or Group) and `name`. For " +
+			"ServiceAccounts `name` is the bare object name (`cleanup-controller`) with " +
+			"`namespace` set — not a qualified form like `system:serviceaccount:ns:sa`. For " +
+			"Users and Groups `name` is the opaque identity verbatim, which may contain " +
+			"colons or spaces (`system:authenticated`), and `namespace` is omitted.",
 		Annotations: readOnly,
 	}, logToolCall("get_subject_permissions", handleGetSubjectPermissions))
 

@@ -115,36 +115,43 @@ var perToolAliases = map[string]map[string]string{
 //     ServiceAccount identity. Rejecting those would refuse to repair calls
 //     that were right all along.
 //
-// args is the full argument object so the kind can be resolved from whichever
-// spelling the caller used. When the kind is absent or unrecognised, the strict
-// ServiceAccount rule applies — that is the kind these tools are asked about
-// most, and being conservative only costs a rejection with help attached.
-func aliasValueKeepsMeaning(args map[string]json.RawMessage, val json.RawMessage) bool {
+// kind is resolved once, before any rewriting (see repairToolArgs) — resolving
+// it inside the rewrite loop would make the result depend on Go's random map
+// iteration order, so the same request would be repaired or refused at random.
+// When the kind is absent or unrecognised the strict ServiceAccount rule
+// applies: that is the kind these tools are asked about most, and being
+// conservative only costs a rejection with help attached.
+func aliasValueKeepsMeaning(kind string, val json.RawMessage) bool {
 	var s string
 	if err := json.Unmarshal(val, &s); err != nil || s == "" {
 		return false // non-string and empty values are never a name
 	}
-	if strings.ContainsAny(s, " \t\n") {
-		return false // whitespace is not part of any of these identities
-	}
 
-	switch strings.ToLower(subjectKindOf(args)) {
+	switch strings.ToLower(kind) {
 	case "user", "group":
-		return true // opaque identity; ":" and "/" are legitimate
+		// Opaque identity, preserved verbatim by the RBAC index. ":" and "/"
+		// are normal ("system:authenticated"), and so is whitespace — an OIDC
+		// group may legitimately be named "Platform Admins".
+		return true
 	default:
-		return !strings.ContainsAny(s, ":/")
+		// ServiceAccount names are DNS subdomains: no separators, no spaces.
+		return !strings.ContainsAny(s, ":/ \t\n")
 	}
 }
 
-// subjectKindOf reads the subject kind from whichever spelling is present.
+// subjectKindOf reads the subject kind from whichever spelling the caller used.
+//
+// Matching is case-insensitive because perToolAliases accepts case variants of
+// the alias keys; recognising "SubjectKind" here but not there is what made the
+// outcome depend on map order.
 func subjectKindOf(args map[string]json.RawMessage) string {
-	for _, key := range []string{"kind", "subjectKind", "subject_kind", "subjectkind"} {
-		raw, ok := args[key]
-		if !ok {
+	wanted := map[string]bool{"kind": true, "subjectkind": true, "subject_kind": true}
+	for key, raw := range args {
+		if !wanted[strings.ToLower(key)] {
 			continue
 		}
 		var s string
-		if err := json.Unmarshal(raw, &s); err == nil {
+		if err := json.Unmarshal(raw, &s); err == nil && s != "" {
 			return s
 		}
 	}
@@ -259,13 +266,16 @@ func repairToolArgs(tool string, raw json.RawMessage) (fixed json.RawMessage, re
 	}
 
 	isAccepted := func(n string) bool { return slices.Contains(accepted, n) }
+	// Resolved before any rewriting: doing it per-key inside the loop below
+	// would make the outcome depend on map iteration order.
+	subjectKind := subjectKindOf(args)
 	// Resolve a supplied-but-unknown key to an accepted parameter, or "".
 	// Orthographic variants are always safe — same word, same meaning. Semantic
 	// aliases additionally require the value to be a bare name, so a qualified
 	// form is never silently reinterpreted.
 	resolve := func(key string, val json.RawMessage) string {
 		if alias, ok := perToolAliases[tool][strings.ToLower(key)]; ok && isAccepted(alias) {
-			if !aliasValueKeepsMeaning(args, val) {
+			if !aliasValueKeepsMeaning(subjectKind, val) {
 				return ""
 			}
 			return alias

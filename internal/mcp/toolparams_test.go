@@ -249,6 +249,33 @@ func TestMiddlewareAnnotatesRealSDKRejection(t *testing.T) {
 	}
 }
 
+// TestAliasRepairIsDeterministic pins the map-order bug.
+//
+// The subject kind was once resolved inside the rewrite loop, so whether
+// "SubjectKind" had already become "kind" depended on Go's random map iteration
+// order — the identical request was repaired or refused at random (measured
+// 23/200 vs 177/200). The kind is now resolved once, before any rewriting.
+func TestAliasRepairIsDeterministic(t *testing.T) {
+	registerToolsOnce(t)
+
+	const args = `{"Subject":"system:authenticated","SubjectKind":"Group"}`
+	first := -1
+	for i := 0; i < 300; i++ {
+		_, repairs, _ := repairToolArgs("get_subject_permissions", json.RawMessage(args))
+		if first == -1 {
+			first = len(repairs)
+			continue
+		}
+		if len(repairs) != first {
+			t.Fatalf("run %d repaired %d args, first run repaired %d — result depends on map order",
+				i, len(repairs), first)
+		}
+	}
+	if first != 2 {
+		t.Errorf("expected both Subject and SubjectKind repaired, got %d", first)
+	}
+}
+
 // TestMiddlewareDeliversRepairedArgsToHandler proves a repaired call actually
 // reaches the handler carrying the canonical names.
 //
@@ -361,10 +388,17 @@ func TestAliasGuardIsSubjectKindAware(t *testing.T) {
 		{"SA bare name repairs", `{"subject":"cleanup","subjectKind":"ServiceAccount"}`, true},
 		{"SA qualified refused", `{"subject":"system:serviceaccount:p:c","subjectKind":"ServiceAccount"}`, false},
 		{"SA slashed refused", `{"subject":"prod/cleanup","subjectKind":"ServiceAccount"}`, false},
+		{"SA spaced refused", `{"subject":"two words","subjectKind":"ServiceAccount"}`, false},
 		{"User qualified repairs", `{"subject":"system:serviceaccount:p:c","subjectKind":"User"}`, true},
 		{"Group qualified repairs", `{"subject":"system:authenticated","subjectKind":"Group"}`, true},
+		// Group identities are opaque and may contain spaces — an OIDC group
+		// named "Platform Admins" is legitimate and must not be refused.
+		{"Group with spaces repairs", `{"subject":"Platform Admins","subjectKind":"Group"}`, true},
 		{"unknown kind is strict", `{"subject":"system:authenticated"}`, false},
-		{"whitespace always refused", `{"subject":"two words","subjectKind":"User"}`, false},
+		// Case variants of the alias keys must resolve the kind the same way, or
+		// the result depends on Go's map iteration order.
+		{"capitalised keys, Group", `{"Subject":"system:authenticated","SubjectKind":"Group"}`, true},
+		{"capitalised keys, SA qualified refused", `{"Subject":"a:b","SubjectKind":"ServiceAccount"}`, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
