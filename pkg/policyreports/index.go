@@ -128,6 +128,32 @@ func (i *Index) FindingsFor(group, kind, namespace, name string) []Finding {
 	return out
 }
 
+// FindingsForEngine returns the findings indexed for the given subject that
+// were produced by the given engine. Same contract as FindingsFor,
+// filtered.
+//
+// Filtering happens on the normalized engine rather than the raw Source
+// because one engine emits several source values — asking for
+// EngineKyverno must return legacy `kyverno` results and modern
+// `KyvernoValidatingPolicy` results alike. A caller that matched on the raw
+// string would silently see only part of what Kyverno reported.
+func (i *Index) FindingsForEngine(group, kind, namespace, name string, engine Engine) []Finding {
+	all := i.FindingsFor(group, kind, namespace, name)
+	if len(all) == 0 {
+		return nil
+	}
+	out := make([]Finding, 0, len(all))
+	for _, f := range all {
+		if f.Engine() == engine {
+			out = append(out, f)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // All returns every indexed subject together with its findings. Both the
 // outer slice and each per-subject Findings slice are defensive copies —
 // callers may freely sort, truncate, or filter them without racing the
@@ -225,6 +251,7 @@ func (i *Index) Size() int {
 //	    severity: info|low|medium|high|critical
 //	    category: string
 //	    message: string
+//	    source: string                               # producer type, not engine
 //	    resources:
 //	      - apiVersion, kind, namespace, name, uid     # optional, can be []
 //	    ...
@@ -255,6 +282,7 @@ func extractFindings(report *unstructured.Unstructured, dst map[string][]Finding
 			Severity: stringField(entry, "severity"),
 			Category: stringField(entry, "category"),
 			Message:  stringField(entry, "message"),
+			Source:   stringField(entry, "source"),
 		}
 
 		subjects, hasResources := resultResources(entry)

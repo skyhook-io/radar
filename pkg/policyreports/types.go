@@ -26,6 +26,13 @@ package policyreports
 // `Severity` and `Category` are free-form strings (e.g. "high", "medium",
 // "low" for severity; "Pod Security", "Best Practices" for category) — they
 // come straight from the report and are not normalized.
+//
+// `Source` names the *producer type* that wrote the result, verbatim (e.g.
+// "kyverno", "KyvernoValidatingPolicy", "ValidatingAdmissionPolicy",
+// "Trivy Vulnerability"). It is not an engine name — see Engine() and
+// EngineForSource for the normalized view. Both are kept: the raw value is
+// what an operator recognizes from `kubectl get policyreport -o yaml`, and
+// the normalized one is what filtering must use.
 type Finding struct {
 	Policy   string
 	Rule     string
@@ -33,4 +40,12 @@ type Finding struct {
 	Severity string
 	Category string
 	Message  string
+	Source   string
+}
+
+// Engine returns the normalized engine behind this finding, derived from
+// Source. Deriving rather than storing keeps the two from drifting apart:
+// there is exactly one place that decides what a source value means.
+func (f Finding) Engine() Engine {
+	return EngineForSource(f.Source)
 }

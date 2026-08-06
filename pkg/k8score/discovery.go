@@ -518,12 +518,55 @@ func (d *ResourceDiscovery) HasKindInGroup(kind, group string) bool {
 	return false
 }
 
-// IsKyvernoInstalled reports whether the Kyverno admission controller's
-// CRDs are present on the cluster. The check uses Kyverno's own Policy
-// and ClusterPolicy CRDs as the signal — these are unique to Kyverno
-// itself, whereas the PolicyReport CRDs (wgpolicyk8s.io) are emitted by
-// several engines (Kyverno, Trivy, etc.) and so do not by themselves
-// imply Kyverno is the source.
+// HasGroup reports whether any resource is registered under the given API
+// group. Use it when the group itself is the signal — i.e. the group is
+// owned by exactly one product, so any kind in it proves that product is
+// installed. When a specific CRD must exist, use HasKindInGroup instead.
+func (d *ResourceDiscovery) HasGroup(group string) bool {
+	if d == nil {
+		return false
+	}
+
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	for _, res := range d.resources {
+		if res.Group == group {
+			return true
+		}
+	}
+	return false
+}
+
+// KyvernoLegacyPolicyGroup is the original Kyverno API group, home of the
+// Policy/ClusterPolicy types deprecated in Kyverno 1.18 with removal
+// planned for 1.20.
+const KyvernoLegacyPolicyGroup = "kyverno.io"
+
+// KyvernoModernPolicyGroup is the CEL-based policy family Kyverno
+// stabilized in 1.17/1.18 (ValidatingPolicy, ImageValidatingPolicy,
+// MutatingPolicy, ...). It is the family that survives the 1.20 removal.
+const KyvernoModernPolicyGroup = "policies.kyverno.io"
+
+// IsKyvernoInstalled reports whether Kyverno's CRDs are present on the
+// cluster. Both API families count:
+//
+//   - kyverno.io — the legacy Policy/ClusterPolicy family, deprecated in
+//     1.18 with removal planned for 1.20.
+//   - policies.kyverno.io — the modern CEL family (ValidatingPolicy et al.)
+//     that replaces it.
+//
+// Detecting only the legacy family would report not-installed on a
+// modern-only cluster and silently drop the entire PolicyReport index —
+// the reports would still exist, Radar would just stop indexing them.
+// Whole-group presence is the right signal for the modern family because
+// policies.kyverno.io is owned exclusively by Kyverno, so no single kind
+// has to be nominated as the sentinel.
+//
+// Kyverno's own policy CRDs are the signal rather than the PolicyReport
+// CRDs (wgpolicyk8s.io / openreports.io) because those are emitted by
+// several engines (Trivy, Falco adapters, ...) and so do not by
+// themselves imply Kyverno is the source.
 //
 // The signal drives conditional eager warmup of PolicyReport informers:
 // clusters without Kyverno keep the reports in the deferred-fetch tier
@@ -532,7 +575,9 @@ func (d *ResourceDiscovery) IsKyvernoInstalled() bool {
 	if d == nil {
 		return false
 	}
-	return d.HasKindInGroup("Policy", "kyverno.io") || d.HasKindInGroup("ClusterPolicy", "kyverno.io")
+	return d.HasKindInGroup("Policy", KyvernoLegacyPolicyGroup) ||
+		d.HasKindInGroup("ClusterPolicy", KyvernoLegacyPolicyGroup) ||
+		d.HasGroup(KyvernoModernPolicyGroup)
 }
 
 // GetKindForGVR returns the Kind name for a given GVR
