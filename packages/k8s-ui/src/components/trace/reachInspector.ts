@@ -1,6 +1,6 @@
 import type { Trace, RouteResult, ResourceRef } from './types'
 import type { Mark, SevTone } from './reachMarks'
-import { routeMark, routeChip, routeTone, routeAsSeenFrom, originRouteEvidence, routeForOrigin, traceInClusterRunnable } from './reachMarks'
+import { routeMark, routeChip, routeTone, routeAsSeenFrom, originRouteEvidence, routeForOrigin, traceInClusterRunnable, markHelp } from './reachMarks'
 import type { Origin, OriginId } from './reachOrigins'
 import { strongestGap, actionableGap, originSkipReason } from './reachOrigins'
 import { hopEvidenceFor, originProducedEvidence, type GraphNode } from './reachGraphModel'
@@ -338,6 +338,10 @@ function pathSection(ctx: Ctx): Sidebar['path'] {
     evidence.push({ mark: m, text })
   }
   if ((hasEvidence || fromConfig) && asSeen?.evidence) add(mark, asSeen.evidence)
+  // A result with no evidence STRING is still a result. Falling through to the
+  // "nothing ran" default below printed "no test has been run from here" beside
+  // a headline reporting what that very run found.
+  else if (hasEvidence && asSeen) add(mark, markHelp(mark))
   // What this vantage saw at each HOP. The route is built from the backend's
   // probes, so a laptop that dialled the front door and got an answer had all
   // of it discarded and read as "no test has been run from here" - beside a

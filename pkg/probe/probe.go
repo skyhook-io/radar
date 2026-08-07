@@ -395,6 +395,12 @@ func TCP(ctx context.Context, addr string, vantage Vantage) Result {
 	}
 	_ = conn.Close()
 	r.OK = true
+	// Every other layer names what it observed (DNS "resolved to ...", TLS
+	// "valid · ...", HTTP "HTTP 200 ..."). A silent TCP success left the route's
+	// evidence empty, and an empty evidence string reads downstream as "no test
+	// has been run from here" - the exact contradiction beside a passing result
+	// that this view exists to prevent.
+	r.Detail = "TCP connection succeeded"
 	return r
 }
 

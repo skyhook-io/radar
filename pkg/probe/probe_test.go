@@ -485,3 +485,29 @@ func TestIsAPIServerTunnelDown(t *testing.T) {
 		t.Error("nil is not a tunnel-down")
 	}
 }
+
+// A successful TCP dial must name what it observed: an empty Detail leaves the
+// route's evidence blank, which downstream renders as "no test has been run".
+func TestTCP_SuccessCarriesDetail(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err == nil {
+			_ = c.Close()
+		}
+	}()
+	orig := dialControl
+	dialControl = nil // the SSRF guard blocks loopback; this test is about the success Detail
+	defer func() { dialControl = orig }()
+	r := TCP(context.Background(), ln.Addr().String(), VantageLocal)
+	if !r.OK {
+		t.Fatalf("dial failed: %+v", r)
+	}
+	if r.Detail == "" {
+		t.Error("a successful TCP probe must carry a Detail - empty evidence reads as 'nothing ran'")
+	}
+}

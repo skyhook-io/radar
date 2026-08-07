@@ -667,3 +667,14 @@ describe('a fresh failed attempt outranks leftover skip rows', () => {
     expect(texts).not.toContain('stale skip')
   })
 })
+
+describe('a result with no evidence string still reads as a result', () => {
+  it('never says "no test has been run" beside an outcome that ran', () => {
+    const t = mk([pod('a', true, '10.0.0.1')], [p({ layer: 'tcp', path: 'data', ok: true })])
+    const r = route({ route: 'redis', target: 'redis:6379', outcome: 'reached', confidence: 'real', evidence: undefined })
+    t.routes = [r]
+    const texts = buildSidebar(undefined, ctx(t, 'incluster', r)).path.evidence.map((e) => e.text).join('\n')
+    expect(texts).not.toContain('no test has been run from here')
+    expect(texts.length).toBeGreaterThan(0)
+  })
+})
