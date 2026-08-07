@@ -110,6 +110,14 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 				out = append(out, curated...)
 				continue
 			}
+			// An empty curated result means "nothing to say", not "handled", so
+			// the generic walk below still runs. A curated detector that stays
+			// silent ON PURPOSE — because the object is mid-operation and its
+			// False Ready is expected — has to say so explicitly, or the noise
+			// it just suppressed comes straight back through the generic path.
+			if cnpgSuppressesGenericConditions(gvr.Group, kind, u) {
+				continue
+			}
 			condType, reason, msg, since, ok := conditions.FindFalseCondition(u)
 			if !ok {
 				continue

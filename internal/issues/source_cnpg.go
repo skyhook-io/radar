@@ -66,6 +66,27 @@ var cnpgTransientPhases = map[string]bool{
 	"Cluster upgrade delayed":                                  true,
 }
 
+// cnpgSuppressesGenericConditions reports whether the generic False-condition
+// walk must stay quiet for this object.
+//
+// The curated seam treats an empty result as "nothing to say", not "handled",
+// so the generic walk still runs after this detector deliberately stays silent.
+// During a switchover, replica creation or an upgrade CNPG sets Ready=False
+// with reason ClusterIsNotReady — which is NOT in conditions'
+// transientConditionReasons, so the noise floor doesn't catch it and a warning
+// leaks for the exact windows the phase buckets exist to silence.
+//
+// Deliberately scoped to the transient/attention phases rather than the whole
+// kind: outside those windows a False Ready is worth surfacing, and blanket
+// ownership would silence reasons like DetachedVolume on a settled cluster.
+func cnpgSuppressesGenericConditions(group, kind string, u *unstructured.Unstructured) bool {
+	if group != "postgresql.cnpg.io" || kind != "Cluster" {
+		return false
+	}
+	phase, _, _ := unstructured.NestedString(u.Object, "status", "phase")
+	return cnpgTransientPhases[phase] || cnpgAttentionPhases[phase]
+}
+
 func detectCNPGIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured) []Issue {
 	switch kind {
 	case "Cluster":
@@ -136,9 +157,15 @@ func detectCNPGClusterIssues(gvr schema.GroupVersionResource, kind string, u *un
 			"CNPGClusterFailingOver", phase, 0, "CNPGClusterPhase", created))
 
 	case cnpgAttentionPhases[phase]:
+		// The phase explains the state either way — primaryUpdateStrategy only
+		// decides whether it is worth an issue. Leaving phaseExplained false
+		// under `supervised` let the shortfall check emit CNPGClusterDegraded
+		// while the badge showed the attention phase, and a supervised cluster
+		// waiting on a human is precisely when instances are legitimately below
+		// the desired count.
+		phaseExplained = true
 		strategy, _, _ := unstructured.NestedString(u.Object, "spec", "primaryUpdateStrategy")
 		if strategy != "supervised" {
-			phaseExplained = true
 			out = append(out, newConditionIssue(gvr, kind, ns, name, SeverityWarning,
 				"CNPGClusterWaitingForUser", phase, 0, "CNPGClusterPhase", created))
 		}

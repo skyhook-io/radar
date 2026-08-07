@@ -412,6 +412,15 @@ describe('badge/issue agreement on instance readiness', () => {
     expect(s.text).toBe('Creating a new replica')
   })
 
+  it('lets an attention phase explain a shortfall, matching the supervised Go path', () => {
+    // Go marks attention phases phaseExplained regardless of update strategy,
+    // so a supervised cluster waiting on a human raises no shortfall issue —
+    // the badge must show the phase, not "Degraded".
+    const s = getCNPGClusterStatus(cluster({ phase: 'Waiting for user action', readyInstances: 1 }, { instances: 3 }))
+    expect(s.level).toBe('degraded')
+    expect(s.text).toBe('Waiting for user action')
+  })
+
   it('flags a shortfall under an unrecognized phase, matching the Go fallthrough', () => {
     expect(getCNPGClusterStatus(cluster({ phase: 'Some future phase', readyInstances: 1 }, { instances: 3 })).level).toBe('degraded')
   })

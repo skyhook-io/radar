@@ -368,3 +368,63 @@ func TestCNPGBadgeAndIssueAgreeOnReadiness(t *testing.T) {
 		})
 	}
 }
+
+// Under `supervised` the operator waits for a human, which is exactly when
+// instances sit below the desired count. The phase explains that, so the
+// shortfall must not fire — the badge shows the attention phase, and an issue
+// saying "degraded" alongside it is the disagreement this detector prevents.
+func TestCNPGSupervisedWaitSuppressesShortfall(t *testing.T) {
+	u := cnpgCluster(
+		map[string]any{"instances": int64(3), "primaryUpdateStrategy": "supervised"},
+		map[string]any{"phase": "Waiting for user action", "readyInstances": int64(1)},
+	)
+	if got := detectCNPGIssues(cnpgClusterGVR, "Cluster", u); len(got) != 0 {
+		t.Fatalf("supervised wait with a shortfall raised %v", reasonsOf(got))
+	}
+
+	// Unsupervised still reports the wait itself, and still only once.
+	un := cnpgCluster(
+		map[string]any{"instances": int64(3), "primaryUpdateStrategy": "unsupervised"},
+		map[string]any{"phase": "Waiting for user action", "readyInstances": int64(1)},
+	)
+	got := detectCNPGIssues(cnpgClusterGVR, "Cluster", un)
+	if len(got) != 1 || got[0].Reason != "CNPGClusterWaitingForUser" {
+		t.Fatalf("unsupervised wait = %v, want exactly CNPGClusterWaitingForUser", reasonsOf(got))
+	}
+}
+
+// CNPG reports Ready=False/ClusterIsNotReady throughout a switchover or replica
+// creation. That reason is not in conditions' transient set, so without an
+// explicit opt-out the generic CRD walk re-emits the warning the phase buckets
+// just suppressed.
+func TestCNPGTransientPhasesSuppressGenericConditionWalk(t *testing.T) {
+	for _, phase := range []string{
+		"Switchover in progress", "Creating a new replica", "Upgrading cluster",
+		"Upgrading Postgres major version", "Waiting for user action",
+	} {
+		u := cnpgCluster(map[string]any{"instances": int64(3)}, map[string]any{"phase": phase})
+		if !cnpgSuppressesGenericConditions("postgresql.cnpg.io", "Cluster", u) {
+			t.Errorf("phase %q should suppress the generic condition walk", phase)
+		}
+	}
+
+	// Outside those windows a False Ready is still worth surfacing — blanket
+	// ownership would silence real reasons like DetachedVolume.
+	for _, phase := range []string{
+		"Cluster in healthy state", "Cluster is unrecoverable and needs manual intervention", "",
+	} {
+		u := cnpgCluster(map[string]any{"instances": int64(3)}, map[string]any{"phase": phase})
+		if cnpgSuppressesGenericConditions("postgresql.cnpg.io", "Cluster", u) {
+			t.Errorf("phase %q must NOT suppress the generic walk", phase)
+		}
+	}
+
+	// Scoped to CNPG Clusters only.
+	u := cnpgCluster(map[string]any{}, map[string]any{"phase": "Switchover in progress"})
+	if cnpgSuppressesGenericConditions("postgresql.cnpg.io", "Pooler", u) {
+		t.Error("suppression must not extend to other CNPG kinds")
+	}
+	if cnpgSuppressesGenericConditions("cluster.x-k8s.io", "Cluster", u) {
+		t.Error("suppression must not extend to other groups' Cluster kinds")
+	}
+}
