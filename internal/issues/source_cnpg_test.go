@@ -428,3 +428,49 @@ func TestCNPGTransientPhasesSuppressGenericConditionWalk(t *testing.T) {
 		t.Error("suppression must not extend to other groups' Cluster kinds")
 	}
 }
+
+// No phase excuses a database with nothing serving. Suppressing the shortfall
+// for attention/transient phases is right for a PARTIAL shortfall, but a
+// cluster with zero ready instances is an outage — and once the generic
+// condition walk is also suppressed for those phases, silence here means no
+// signal anywhere.
+func TestCNPGZeroReadyIsNeverExcusedByPhase(t *testing.T) {
+	cases := []struct {
+		phase    string
+		strategy string
+	}{
+		{"Waiting for user action", "supervised"},
+		{"Waiting for user action", "unsupervised"},
+		{"Cluster upgrade delayed", ""},
+		{"Switchover in progress", ""},
+		{"Creating a new replica", ""},
+		{"Upgrading Postgres major version", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.phase+"/"+tc.strategy, func(t *testing.T) {
+			spec := map[string]any{"instances": int64(3)}
+			if tc.strategy != "" {
+				spec["primaryUpdateStrategy"] = tc.strategy
+			}
+			u := cnpgCluster(spec, map[string]any{"phase": tc.phase, "readyInstances": int64(0)})
+			iss := findIssue(t, detectCNPGIssues(cnpgClusterGVR, "Cluster", u), "CNPGClusterDegraded")
+			if iss.Severity != SeverityCritical {
+				t.Errorf("severity = %q, want critical for a fully-down cluster", iss.Severity)
+			}
+		})
+	}
+
+	// A partial shortfall under the same phases stays suppressed — that is the
+	// legitimate operator-workflow case.
+	for _, phase := range []string{"Waiting for user action", "Switchover in progress"} {
+		u := cnpgCluster(
+			map[string]any{"instances": int64(3), "primaryUpdateStrategy": "supervised"},
+			map[string]any{"phase": phase, "readyInstances": int64(2)},
+		)
+		for _, i := range detectCNPGIssues(cnpgClusterGVR, "Cluster", u) {
+			if i.Reason == "CNPGClusterDegraded" {
+				t.Errorf("phase %q: partial shortfall should stay suppressed", phase)
+			}
+		}
+	}
+}

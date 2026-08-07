@@ -135,6 +135,16 @@ func detectCNPGClusterIssues(gvr schema.GroupVersionResource, kind string, u *un
 			since, "CNPGLastBackupFailed", created))
 	}
 
+	desired, okD, _ := unstructured.NestedInt64(u.Object, "spec", "instances")
+	ready, okR, _ := unstructured.NestedInt64(u.Object, "status", "readyInstances")
+	// No phase excuses a database with nothing serving. "Waiting for user action"
+	// under a supervised strategy legitimately explains a PARTIAL shortfall, but
+	// not a cluster that is entirely down — that is an outage, not operator
+	// intent, and silencing it is how a total failure ends up with no issue at
+	// all. Mirrors the badge, which treats zero ready as hard-down ahead of
+	// every phase branch except terminal and failing-over.
+	allDown := okD && okR && desired > 0 && ready == 0
+
 	phaseExplained := false
 	switch {
 	case cnpgTerminalPhases[phase]:
@@ -163,7 +173,7 @@ func detectCNPGClusterIssues(gvr schema.GroupVersionResource, kind string, u *un
 		// while the badge showed the attention phase, and a supervised cluster
 		// waiting on a human is precisely when instances are legitimately below
 		// the desired count.
-		phaseExplained = true
+		phaseExplained = !allDown
 		strategy, _, _ := unstructured.NestedString(u.Object, "spec", "primaryUpdateStrategy")
 		if strategy != "supervised" {
 			out = append(out, newConditionIssue(gvr, kind, ns, name, SeverityWarning,
@@ -172,8 +182,9 @@ func detectCNPGClusterIssues(gvr schema.GroupVersionResource, kind string, u *un
 
 	case cnpgTransientPhases[phase]:
 		// Mid-operation: running below the desired instance count is expected,
-		// so the shortfall check below is suppressed without raising an issue.
-		phaseExplained = true
+		// so the shortfall check below is suppressed without raising an issue —
+		// unless nothing is serving at all.
+		phaseExplained = !allDown
 
 	case phase == cnpgPhaseHealthy || phase == "":
 		// Nothing phase-derived to report.
@@ -188,8 +199,6 @@ func detectCNPGClusterIssues(gvr schema.GroupVersionResource, kind string, u *un
 	// unrelated cause, and letting either suppress the shortfall would hide a
 	// cluster with zero ready instances behind a backup warning.
 	if !phaseExplained {
-		desired, okD, _ := unstructured.NestedInt64(u.Object, "spec", "instances")
-		ready, okR, _ := unstructured.NestedInt64(u.Object, "status", "readyInstances")
 		if okD && okR && desired > 0 && ready < desired {
 			severity := SeverityWarning
 			if ready == 0 {
