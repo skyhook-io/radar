@@ -32,7 +32,12 @@ interface CNPGClusterRendererProps {
 export function CNPGClusterRenderer({ data, onNavigate }: CNPGClusterRendererProps) {
   const conditions = data.status?.conditions || []
   const instances = data.spec?.instances ?? 0
-  const readyInstances = data.status?.readyInstances ?? 0
+  // Presence matters — see getCNPGClusterStatus. A cluster whose status has no
+  // readyInstances yet is unknown, not zero; defaulting to 0 raised a "Cluster
+  // Down" banner on a cluster that had simply not reported yet.
+  const readyKnown = typeof data.status?.readyInstances === 'number'
+  const readyInstances: number = readyKnown ? data.status.readyInstances : 0
+  const countsKnown = instances > 0 && readyKnown
   const phase = getCNPGClusterPhase(data)
   const backupConfig = getCNPGClusterBackupConfig(data)
   const monitoring = getCNPGClusterMonitoring(data)
@@ -67,14 +72,22 @@ export function CNPGClusterRenderer({ data, onNavigate }: CNPGClusterRendererPro
   const phaseBucket = classifyCNPGClusterPhase(phase)
 
   // Problem detection
-  const isDown = instances > 0 && readyInstances === 0
-  const isDegraded = instances > 0 && readyInstances < instances && readyInstances > 0
-  const isFailover = phase.toLowerCase().includes('failing over')
-  const isSwitchover = phase.toLowerCase().includes('switchover')
+  const isDown = countsKnown && readyInstances === 0
+  const isDegraded = countsKnown && readyInstances < instances && readyInstances > 0
+  const isFailover = phaseBucket === 'failing'
+  const isSwitchover = phase === 'Switchover in progress'
+  const isTerminal = phaseBucket === 'terminal'
 
   return (
     <>
       {/* Problem alerts */}
+      {isTerminal && (
+        <AlertBanner
+          variant="error"
+          title="Reconciliation has stopped"
+          message={`${phase}. This state does not resolve on its own — the operator has stopped reconciling this cluster and it needs manual intervention.`}
+        />
+      )}
       {hasSplitBrain && (
         <AlertBanner
           variant="error"
@@ -97,8 +110,13 @@ export function CNPGClusterRenderer({ data, onNavigate }: CNPGClusterRendererPro
         />
       )}
       {isFailover && (
+        // Warning, not error: the badge renders failover at the alert tier and
+        // the issue detector reports it as a warning. A failover that has also
+        // taken every instance down still gets the red "Cluster Down" banner
+        // above, so severity is not lost — this just stops one surface shouting
+        // louder than the other two about the same event.
         <AlertBanner
-          variant="error"
+          variant="warning"
           title="Failover in Progress"
           message={`Cluster is performing a failover. Current phase: ${phase}`}
         />
@@ -130,7 +148,7 @@ export function CNPGClusterRenderer({ data, onNavigate }: CNPGClusterRendererPro
             // Cluster Down banner would be plainly false.
             `CNPG reports that the last WAL archival did not complete${walArchivingFailure.lastTransitionTime ? `, and archiving has been in this state for ${formatAge(walArchivingFailure.lastTransitionTime)}` : ''}. ` +
             'Recovery-point advancement is uncertain — check the backup destination before relying on point-in-time recovery.' +
-            (isDown || isDegraded || isFailover || phaseBucket === 'terminal'
+            (isDown || isDegraded || isFailover || isTerminal
               ? ''
               : ' The cluster is otherwise serving normally, so nothing else here will look wrong.') +
             (walArchivingFailure.message ? ` Operator reported: ${walArchivingFailure.message}` : '')

@@ -59,6 +59,11 @@ export const CNPG_CLUSTER_PHASES_FAILING = ['Failing over'] as const
 /** Reconciliation has stopped. These need a human; none of them self-heal. */
 export const CNPG_CLUSTER_PHASES_TERMINAL = [
   'Cluster is unrecoverable and needs manual intervention',
+  // Not in 1.27 or 1.28; added upstream after 1.28 (PhaseDefinitionInvalid).
+  // Listed early because matching is by equality — a phase string the running
+  // operator never emits is inert, so carrying it costs nothing and stops a
+  // future minor from landing in the unknown bucket.
+  'Invalid cluster definition',
   'Unable to create required cluster objects',
   'Cluster has incomplete or invalid image catalog',
   'Cluster cannot proceed to reconciliation due to an unknown plugin being required',
@@ -91,21 +96,38 @@ export function getCNPGClusterStatus(resource: any): StatusBadge {
   const status = resource.status || {}
   const phase = status.phase || ''
   const instances = resource.spec?.instances ?? 0
-  const readyInstances = status.readyInstances ?? 0
+  // Readiness PRESENCE matters. A cluster whose status has no readyInstances yet
+  // (freshly created, operator hasn't written status) is unknown, not zero —
+  // defaulting to 0 fabricated a red "Not Ready" badge for a cluster the issue
+  // detector correctly said nothing about.
+  const readyKnown = typeof status.readyInstances === 'number'
+  const readyInstances: number = readyKnown ? status.readyInstances : 0
+  const countsKnown = instances > 0 && readyKnown
   const bucket = classifyCNPGClusterPhase(phase)
 
-  // Terminal phases outrank instance counts: an unrecoverable cluster whose pods
-  // happen to still be Ready is still unrecoverable, and reading the counts first
-  // is what used to render it neutral.
+  // Ordered by descending severity, and mirrored by source_cnpg.go. Terminal
+  // phases outrank instance counts: an unrecoverable cluster whose pods happen
+  // to still be Ready is still unrecoverable, and reading the counts first is
+  // what used to render it neutral.
   if (bucket === 'terminal') {
     return { text: phase, color: healthColors.unhealthy, level: 'unhealthy' }
+  }
+  // Zero ready instances is a hard down that no phase excuses — including a
+  // failover, where the phase alone would otherwise downgrade a total outage to
+  // orange.
+  if (countsKnown && readyInstances === 0) {
+    return { text: 'Not Ready', color: healthColors.unhealthy, level: 'unhealthy' }
   }
   if (bucket === 'failing') {
     return { text: 'Failing Over', color: healthColors.alert, level: 'alert' }
   }
-  // Zero ready instances is a hard down regardless of what the phase claims.
-  if (instances > 0 && readyInstances === 0) {
-    return { text: 'Not Ready', color: healthColors.unhealthy, level: 'unhealthy' }
+  // Data-durability failures don't move any instance count, so a cluster with a
+  // broken recovery point looks perfectly healthy on availability alone — which
+  // is precisely how it stays invisible until a restore. The detail drawer has
+  // always shown this; the list badge must too, or the headline signal of this
+  // integration reads green.
+  if (getCNPGWALArchivingFailure(resource)) {
+    return { text: 'WAL Archiving Failing', color: healthColors.alert, level: 'alert' }
   }
   // A transient phase explains partial readiness better than a bare "Degraded",
   // so it is checked BEFORE the shortfall — mid-operation the cluster is
@@ -118,8 +140,11 @@ export function getCNPGClusterStatus(resource: any): StatusBadge {
   // which can be true while instances are still missing — returning Healthy
   // there paints a green badge on a cluster the Go detector flags as
   // CNPGClusterDegraded. Mirrors source_cnpg.go's !phaseExplained gate.
-  if (instances > 0 && readyInstances < instances) {
+  if (countsKnown && readyInstances < instances) {
     return { text: 'Degraded', color: healthColors.degraded, level: 'degraded' }
+  }
+  if (getCNPGLastBackupFailure(resource)) {
+    return { text: 'Backup Failed', color: healthColors.degraded, level: 'degraded' }
   }
   if (bucket === 'healthy') {
     return { text: 'Healthy', color: healthColors.healthy, level: 'healthy' }

@@ -2,6 +2,7 @@ package issues
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/skyhook-io/radar/pkg/conditions"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -34,7 +35,16 @@ var cnpgTerminalPhases = map[string]bool{
 	"Unable to create required cluster objects":       true,
 	"Cluster has incomplete or invalid image catalog": true,
 	"Cluster cannot execute instance online upgrade due to missing architecture binary": true,
+	// Not in 1.27 or 1.28; added upstream after 1.28 (PhaseDefinitionInvalid).
+	// Matching is by equality, so a phase the running operator never emits is
+	// inert — carrying it costs nothing and keeps a future minor out of the
+	// unknown bucket.
+	"Invalid cluster definition": true,
 }
+
+// cnpgTransientConditionGrace bounds how long a False condition is written off
+// as "mid-operation" before the generic detector is allowed to report it.
+const cnpgTransientConditionGrace = 30 * time.Minute
 
 // cnpgAttentionPhases are stalled waiting on a human. Under
 // primaryUpdateStrategy: supervised this is the documented resting state, so it
@@ -84,7 +94,18 @@ func cnpgSuppressesGenericConditions(group, kind string, u *unstructured.Unstruc
 		return false
 	}
 	phase, _, _ := unstructured.NestedString(u.Object, "status", "phase")
-	return cnpgTransientPhases[phase] || cnpgAttentionPhases[phase]
+	if !cnpgTransientPhases[phase] && !cnpgAttentionPhases[phase] {
+		return false
+	}
+	// A phase that never advances is not transient. CNPG clusters do get stuck
+	// mid-operation (upstream #3365: "Creating a new replica" pinned at 2/3 with
+	// Ready=False indefinitely), and an unbounded suppression would keep that
+	// silent forever — worse than the noise it was added to remove. Bound it by
+	// the condition's own age so a genuinely stuck cluster surfaces.
+	if _, _, _, since, ok := conditions.FindFalseCondition(u); ok && since > cnpgTransientConditionGrace {
+		return false
+	}
+	return true
 }
 
 func detectCNPGIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured) []Issue {
@@ -162,7 +183,10 @@ func detectCNPGClusterIssues(gvr schema.GroupVersionResource, kind string, u *un
 			reason, phase, 0, "CNPGClusterPhase", created))
 
 	case phase == cnpgPhaseFailingOver:
-		phaseExplained = true
+		// A failover explains a shortfall, but not a cluster with nothing
+		// serving — that is a total outage, and letting the phase absorb it
+		// downgraded it to this warning while the badge showed red.
+		phaseExplained = !allDown
 		out = append(out, newConditionIssue(gvr, kind, ns, name, SeverityWarning,
 			"CNPGClusterFailingOver", phase, 0, "CNPGClusterPhase", created))
 

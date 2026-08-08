@@ -691,7 +691,7 @@ export function ResourceRendererDispatch({
         {kind === 'clusterexternalsecrets' && <ClusterExternalSecretRenderer data={data} onNavigate={onNavigate} />}
         {(kind === 'secretstores' || kind === 'clustersecretstores') && <SecretStoreRenderer data={data} />}
         {kind === 'clusters' && isApiGroup(data?.apiVersion, CNPG_GROUP) && <CNPGClusterRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'clusters' && data?.apiVersion?.includes('cluster.x-k8s.io') && <CAPIClusterRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'clusters' && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io') && <CAPIClusterRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'scheduledbackups' && isApiGroup(data?.apiVersion, CNPG_GROUP) && <CNPGScheduledBackupRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'poolers' && isApiGroup(data?.apiVersion, CNPG_GROUP) && <CNPGPoolerRenderer data={data} onNavigate={onNavigate} />}
         {/* Cluster API (CAPI) */}
@@ -942,7 +942,7 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'secretstores') return getSecretStoreStatus(data)
   if (k === 'clustersecretstores') return getClusterSecretStoreStatus(data)
   if (k === 'clusters') {
-    if (data.apiVersion?.includes('cluster.x-k8s.io')) return getCAPIClusterStatus(data)
+    if (isApiGroup(data.apiVersion, 'cluster.x-k8s.io')) return getCAPIClusterStatus(data)
     if (isApiGroup(data.apiVersion, CNPG_GROUP)) return getCNPGClusterStatus(data)
     // Third-party `clusters` CRDs (KubeBlocks, Redis/Valkey) fall through to the
     // generic handling below instead of getting a fabricated PostgreSQL status.

@@ -125,12 +125,15 @@ describe('classifyCNPGClusterPhase', () => {
     expect(classifyCNPGClusterPhase('')).toBe('unknown')
   })
 
-  it('has no dead entries — every listed phase is a real CNPG constant', () => {
+  it('has no invented entries — every listed phase is a real CNPG constant', () => {
     // "Creating replica" was the shipped typo; CNPG emits "Creating a new replica".
     expect(CNPG_CLUSTER_PHASES_TRANSIENT).toContain('Creating a new replica')
     expect(CNPG_CLUSTER_PHASES_TRANSIENT).not.toContain('Creating replica')
-    // "Invalid cluster definition" does not exist in CNPG 1.27's cluster_types.go.
-    expect(CNPG_CLUSTER_PHASES_TERMINAL).not.toContain('Invalid cluster definition')
+    // PhaseDefinitionInvalid is absent from 1.27 and 1.28 but present upstream
+    // after 1.28. Matching is by equality, so carrying it is inert against an
+    // operator that never emits it, and correct once one does.
+    expect(CNPG_CLUSTER_PHASES_TERMINAL).toContain('Invalid cluster definition')
+    expect(classifyCNPGClusterPhase('Invalid cluster definition')).toBe('terminal')
   })
 })
 
