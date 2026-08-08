@@ -270,9 +270,13 @@ describe('an in-cluster test that could not run says so first', () => {
 
   // The button moved to the vantage capsule in the graph, so the panel must not
   // offer a third copy of it - it keeps the reasoning instead.
-  it('offers no run button of its own', () => {
+  it('offers the run, disabled, with the reason attached', () => {
+    // The action lives WITH its explanation now, so it is present even when it
+    // cannot be taken - but never silently clickable into a guaranteed no-op.
     const s = buildSidebar(undefined, ctx(noRunnableRoute(), 'apiserver'))
-    expect(s.path.next.ctas.some((c) => c.action === 'run-in-cluster')).toBe(false)
+    const run = s.path.next.ctas.find((c) => c.action === 'run-in-cluster')
+    expect(run).toBeTruthy()
+    expect(run!.disabledReason).toMatch(/nothing to run|no path/i)
   })
 
   it('explains it in the body rather than promising stronger evidence', () => {
@@ -814,5 +818,37 @@ describe('every state explains itself, not the nearest generic sentence', () => 
   it('a verified answer is not described as a partial one', () => {
     const b = withRoute(route({ outcome: 'verified', confidence: 'real', evidence: 'HTTP 200 · verified' } as never))
     expect(b).toContain('A real request went through')
+  })
+})
+
+
+describe('the action sits with its explanation', () => {
+  it('an untested vantage offers the run, and does not repeat the sentence above it', () => {
+    const t = mk([pod('a', true, '10.0.0.1')], [p({ path: 'apiserver' })])
+    const r = route({ outcome: 'not-tested', confidence: undefined, byVantage: undefined, inClusterRequest: { protocol: 'http', path: '/' } } as never)
+    t.routes = [r]
+    const s = buildSidebar(undefined, ctx(t, 'incluster', r)).path
+    expect(s.body).toContain('Nothing has been tested from here')
+    // the action is present...
+    expect(s.next.ctas.some((c) => c.action === 'run-in-cluster')).toBe(true)
+    // ...and the block does not say "nothing has been tested" a second time
+    expect(s.next.body).toBe('')
+  })
+
+  it('WHAT WE SAW disappears rather than echoing "no test has been run"', () => {
+    const t = mk([pod('a', true, '10.0.0.1')], [p({ path: 'apiserver' })])
+    const r = route({ outcome: 'not-tested', confidence: undefined, byVantage: undefined } as never)
+    t.routes = [r]
+    const ev = buildSidebar(undefined, ctx(t, 'incluster', r)).path.evidence
+    expect(ev).toHaveLength(0)
+  })
+
+  it('a vantage that CANNOT be used still says why, instead of going silent', () => {
+    const t = mk([pod('a', true, '10.0.0.1')], [])
+    t.verdict = 'unknown'
+    t.routes = [route({ outcome: 'not-tested', confidence: undefined, byVantage: undefined } as never)]
+    t.downstream![0].probes = [p({ target: 'shop:80', port: 80, vantage: 'local', path: 'apiserver', skipped: true, reason: 'proxy said no', ok: false })]
+    const ev = buildSidebar(undefined, ctx(t, 'local', t.routes[0])).path.evidence
+    expect(ev.map((e) => e.text).join(' ')).toMatch(/no entry point|Ingress/i)
   })
 })

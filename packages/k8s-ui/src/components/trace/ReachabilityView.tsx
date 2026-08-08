@@ -856,6 +856,41 @@ function InspectorPanel({
         </Disclosure>
       )}
 
+      {/* The action sits with the sentence that explains why it is offered. As
+          its own block at the very bottom it repeated that sentence, and put
+          the button a scroll away from the reason for it. */}
+      {(path.next.body || path.next.ctas.length > 0) && (
+        <div className={path.next.header ? 'rounded-md px-2.5 py-2' : ''} style={path.next.header ? { border: '1px solid var(--accent)', background: 'var(--accent-muted)' } : undefined}>
+          {path.next.header && (
+            <div className="mb-1 text-[9.5px] font-bold tracking-[0.05em]" style={{ color: 'var(--accent-text)' }}>
+              {path.next.header}
+            </div>
+          )}
+          {path.next.body && <div className="text-[11.5px] leading-snug text-theme-text-secondary text-pretty">{path.next.body}</div>}
+          {path.next.blocked && <div className="mt-1.5 text-[10.5px] leading-snug text-theme-text-tertiary">{path.next.blocked}</div>}
+          {path.next.ctas.length > 0 && (
+            <div className={`flex flex-wrap gap-1.5 ${path.next.body || path.next.header ? 'mt-2' : 'mt-1'}`}>
+              {path.next.ctas.map((c, i) => (
+                <Tooltip key={i} content={c.disabledReason ?? ''} wrapperClassName="cursor-help">
+                  <button
+                    type="button"
+                    onClick={() => onCTA(c)}
+                    disabled={!!c.disabledReason}
+                    className={
+                      c.primary && !c.disabledReason
+                        ? 'btn-brand cursor-pointer whitespace-nowrap rounded-md px-2.5 py-1.5 text-[11px] font-semibold'
+                        : 'cursor-pointer whitespace-nowrap rounded-md border border-theme-border bg-theme-base px-2.5 py-1.5 text-[11px] font-semibold text-theme-text-secondary disabled:cursor-not-allowed disabled:opacity-60'
+                    }
+                  >
+                    {c.text}
+                  </button>
+                </Tooltip>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {path.evidence.length > 0 && (
         <div>
           {/* Same count idiom as TEST DETAILS: the number of distinct
@@ -896,39 +931,6 @@ function InspectorPanel({
         </div>
       )}
       <Caveats items={path.notProve} />
-
-      {/* The terminal "nothing to do" state renders as one quiet line - the
-          callout styling is reserved for states that carry an actual next move. */}
-      <div
-        className={path.next.quiet ? 'border-t border-theme-border pt-2.5' : 'rounded-md px-2.5 py-2.5'}
-        style={path.next.quiet ? undefined : { border: '1px solid var(--accent)', background: 'var(--accent-muted)' }}
-      >
-        <div className="text-[9.5px] font-bold tracking-[0.05em]" style={{ color: path.next.quiet ? 'var(--text-tertiary)' : 'var(--accent-text)' }}>
-          {path.next.header}
-        </div>
-        <div className="mt-1 text-[11.5px] leading-snug text-theme-text-secondary text-pretty">{path.next.body}</div>
-        {path.next.blocked && <div className="mt-1.5 text-[10.5px] leading-snug text-theme-text-tertiary">{path.next.blocked}</div>}
-        {path.next.ctas.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {path.next.ctas.map((c, i) => (
-              <Tooltip key={i} content={c.disabledReason ?? ''} wrapperClassName="cursor-help">
-              <button
-                type="button"
-                onClick={() => onCTA(c)}
-                disabled={!!c.disabledReason}
-                className={
-                  c.primary && !c.disabledReason
-                    ? 'btn-brand cursor-pointer whitespace-nowrap rounded-md px-2.5 py-1.5 text-[11px] font-semibold'
-                    : 'cursor-pointer whitespace-nowrap rounded-md border border-theme-border bg-theme-base px-2.5 py-1.5 text-[11px] font-semibold text-theme-text-secondary disabled:cursor-not-allowed disabled:opacity-60'
-                }
-              >
-                {c.text}
-              </button>
-              </Tooltip>
-            ))}
-          </div>
-        )}
-      </div>
 
     </div>
   )

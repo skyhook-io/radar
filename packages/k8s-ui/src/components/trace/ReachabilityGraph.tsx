@@ -352,9 +352,7 @@ function Node({
         <div className="mt-1.5 flex flex-col gap-0.5 border-t border-theme-border-subtle pt-1.5">
           {node.anomalies.map((a, i) => (
             <div key={i} className={`flex gap-1.5 ${inlineAction && i === 0 ? 'items-center' : 'items-baseline'}`}>
-              <span className={a.mark === 'running' ? 'reach-glyph-testing' : undefined}>
-                <MarkGlyph mark={a.mark} />
-              </span>
+              <MarkGlyph mark={a.mark} />
               {/* Rows truncate visually; the full sentence must always be a
                   hover away - a cut "reached, redirect…" hid its destination. */}
               <Tooltip content={a.title || a.text} wrapperClassName="min-w-0 flex-1">

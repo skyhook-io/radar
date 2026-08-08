@@ -286,14 +286,6 @@
 .reach-node-testing {
   animation: reach-node-breathe 1.6s ease-in-out infinite;
 }
-/* The running glyph turns, so the row reads as live even at a glance. */
-@keyframes reach-glyph-spin {
-  to { transform: rotate(360deg); }
-}
-.reach-glyph-testing {
-  display: inline-block;
-  animation: reach-glyph-spin 1.4s linear infinite;
-}
 /* The label itself pulses gently - "testing now" that never changes reads as
    a stuck state on a long run. */
 @keyframes reach-label-fade {
@@ -305,6 +297,5 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .reach-node-testing,
-  .reach-glyph-testing,
   .reach-label-testing { animation: none; }
 }

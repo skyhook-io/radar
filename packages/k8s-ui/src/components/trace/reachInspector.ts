@@ -168,7 +168,10 @@ function gapNext(
   // graph, which is the thing that would produce the missing evidence - and a
   // third copy of the same control (header, panel, capsule) was one too many.
   // The panel keeps the REASONING, which is what it is good at.
-  const inClusterCTA = (): InspectorCTA[] => []
+  const inClusterCTA = (): InspectorCTA[] =>
+    inClusterRunnable
+      ? [{ text: '⚗ Run the in-cluster test', action: 'run-in-cluster', primary: true }]
+      : [{ text: '⚗ Run the in-cluster test', action: 'run-in-cluster', disabledReason: notRunnable }]
   const actionable = actionableGap(origins)
   const ceiling = strongestGap(origins)
   const ceilingNote = ceiling?.unsupported ? `Even then, ${ceiling.name.toLowerCase()} stays untested — ${ceiling.unavailable}` : undefined
@@ -201,13 +204,12 @@ function gapNext(
     }
   }
   if (actionable && actionable.id === current.id) {
-    // You are looking at the vantage that is itself the gap.
+    // You are looking at the vantage that is itself the gap. The section body
+    // already said nothing ran from here, and the caveats section already
+    // carries the ceiling - so this is the ACTION and nothing else.
     return {
-      header: 'RUN THIS NEXT',
-      body: inClusterRunnable
-        ? `Nothing has been tested from ${actionable.name} yet, and it is the strongest evidence Radar can still collect.${allPaths}`
-        : `${notRunnable} Every declared path here was skipped before a request could be formed.`,
-      blocked: ceilingNote,
+      header: '',
+      body: inClusterRunnable ? '' : `${notRunnable} Every declared path here was skipped before a request could be formed.`,
       ctas: actionable.id === 'incluster' ? inClusterCTA() : [{ text: '⟳ Re-run', action: 'run-probes' }],
     }
   }
@@ -392,9 +394,9 @@ function pathSection(ctx: Ctx): Sidebar['path'] {
     evidence.push({ mark: m, text: t })
   }
   if ((hasEvidence || fromConfig) && asSeen?.evidence) add(mark, asSeen.evidence)
-  // A result with no evidence STRING is still a result. Falling through to the
-  // "nothing ran" default below printed "no test has been run from here" beside
-  // a headline reporting what that very run found.
+  // A result with no evidence STRING is still a result: show what the mark
+  // means rather than leaving the section empty, which would read as "nothing
+  // ran" for a vantage that did.
   else if (hasEvidence && asSeen) add(mark, markHelp(mark))
   // What this vantage saw at each HOP. The route is built from the backend's
   // probes, so a laptop that dialled the front door and got an answer had all
@@ -450,7 +452,7 @@ function pathSection(ctx: Ctx): Sidebar['path'] {
             : // A vantage that CANNOT be used states why (nothing dialable from
               // the laptop, a skipped mechanism) - "no test has been run" reads
               // as a test someone forgot, which is a different claim.
-              origin.unavailable || 'no test has been run from here'),
+              origin.unavailable || ''),
     )
   }
 
