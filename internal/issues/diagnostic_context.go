@@ -473,11 +473,11 @@ func addAdmissionWebhookContext(b *diagnosticContextBuilder, root Issue, edges *
 	var configRefs []Ref
 	failClosed := false
 	for _, ref := range refs {
+		failClosed = failClosed || ref.FailurePolicy == "Fail"
 		if !canReadClusterScoped(ref.Configuration.Kind, ref.Configuration.Group) {
 			continue
 		}
 		configRefs = append(configRefs, ref.Configuration)
-		failClosed = failClosed || ref.FailurePolicy == "Fail"
 	}
 	configRefs = dedupeRefs(configRefs)
 	if len(configRefs) == 0 {
@@ -486,7 +486,7 @@ func addAdmissionWebhookContext(b *diagnosticContextBuilder, root Issue, edges *
 
 	message := "This Service is the backend for a fail-open admission webhook; admission continues while its validation or mutation is bypassed."
 	if failClosed {
-		message = "This Service is the backend for a fail-closed admission webhook; matching admission requests are blocked while it has no ready backend."
+		message = "A fail-closed admission webhook depends on this Service; matching admission requests are blocked while it has no ready backend."
 	}
 
 	seen := map[string]bool{}

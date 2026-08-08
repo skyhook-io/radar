@@ -265,6 +265,54 @@ func TestAdmissionWebhookIgnoreKeepsExistingSeverity(t *testing.T) {
 	}
 }
 
+func TestAdmissionWebhookPartialRBACKeepsObjectiveFailureMode(t *testing.T) {
+	message := `failed calling webhook "validate.example.com": Post "https://policy-webhook.hooks.svc:443/validate": no endpoints available for service "policy-webhook"`
+	p := &fakeProvider{
+		problems: []k8s.Detection{{Kind: "Service", Namespace: "hooks", Name: "policy-webhook", Severity: "warning", Reason: k8s.SelectorMatchesNoPodsReason}},
+		scheduling: []k8s.Detection{{
+			Kind: "Deployment", Group: "apps", Namespace: "apps", Name: "catalog", Severity: "critical",
+			Reason: "WebhookUnavailable", Message: message,
+		}},
+		webhookRefs: map[string][]AdmissionWebhookRef{
+			"hooks/policy-webhook": {
+				{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "MutatingWebhookConfiguration", Name: "visible-open"}, FailurePolicy: "Ignore"},
+				{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "hidden-closed"}, FailurePolicy: "Fail"},
+			},
+		},
+	}
+	canReadMutatingOnly := func(kind, _ string) bool { return kind == "MutatingWebhookConfiguration" }
+	out := Compose(p, Filters{Limit: NoLimit, Grouped: true, CanReadClusterScoped: canReadMutatingOnly})
+
+	var service, deployment Issue
+	for _, issue := range out {
+		switch issue.Kind {
+		case "Service":
+			service = issue
+		case "Deployment":
+			deployment = issue
+		}
+	}
+	if service.Severity != SeverityCritical {
+		t.Fatalf("partial RBAC changed objective severity: %+v", service)
+	}
+	var fact issuesapi.DiagnosticFact
+	for _, candidate := range service.DiagnosticContext.Facts {
+		if candidate.Type == factAdmissionWebhook {
+			fact = candidate
+			break
+		}
+	}
+	if !strings.Contains(fact.Message, "fail-closed") || strings.Contains(fact.Message, "fail-open") {
+		t.Fatalf("partial RBAC misclassified failure mode: %+v", fact)
+	}
+	if len(fact.Refs) != 1 || fact.Refs[0].Name != "visible-open" {
+		t.Fatalf("partial RBAC leaked unreadable configuration: %+v", fact.Refs)
+	}
+	if deployment.IncidentParent == nil || deployment.IncidentParent.ID != service.ID {
+		t.Fatalf("partial RBAC dropped objective blocked-workload correlation: %+v", deployment.IncidentParent)
+	}
+}
+
 func TestAdmissionWebhookTwoServiceRootsLeaveIncidentParentAmbiguous(t *testing.T) {
 	message := func(service string) string {
 		return `failed calling webhook "validate.example.com": Post "https://` + service + `.hooks.svc:443/validate": no endpoints available for service "` + service + `"`
