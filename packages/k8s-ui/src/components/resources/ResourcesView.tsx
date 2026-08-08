@@ -157,7 +157,7 @@ import { KyvernoModernPolicyCell, KyvernoPolicyExceptionCell, KyvernoCleanupPoli
 import { KYVERNO_MODERN_PLURALS, isModernKyvernoPolicy } from './resource-utils-kyverno-modern'
 import { isAnyKyvernoPolicyException } from './resource-utils-kyverno-exceptions'
 import { ExternalSecretCell, ClusterExternalSecretCell, SecretStoreCell, ClusterSecretStoreCell } from './renderers/eso-cells'
-import { BackupCell, RestoreCell, ScheduleCell, BackupStorageLocationCell, VolumeSnapshotLocationCell } from './renderers/velero-cells'
+import { BackupCell, RestoreCell, ScheduleCell, BackupStorageLocationCell, VolumeSnapshotLocationCell, BackupRepositoryCell } from './renderers/velero-cells'
 import { isVeleroResource } from './resource-utils-velero'
 import { CNPGClusterCell, CNPGBackupCell, CNPGScheduledBackupCell, CNPGPoolerCell } from './renderers/cnpg-cells'
 import { ManagedResourceCell, CompositeResourceCell, CrossplaneProviderCell, CrossplaneProviderConfigCell, CompositionCell, XRDCell } from './renderers/crossplane-cells'
@@ -1255,6 +1255,18 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'provider', label: 'Provider', width: 'w-32' },
     { key: 'config', label: 'Config' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  // repositoryType is kopia|restic, and it is what `kubectl get
+  // backuprepositories` shows. It earns a column because restic is being retired
+  // (no new backups since v1.17, restore dropped in v1.19), which makes it a
+  // migration liability worth spotting by scanning rather than by opening each
+  // repository one at a time.
+  backuprepositories: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'repositoryType', label: 'Type', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   backupstoragelocations: [
@@ -5816,6 +5828,9 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
     case 'volumesnapshotlocations':
       if (!isVeleroResource(resource)) return <GenericCell resource={resource} column={column} />
       return <VolumeSnapshotLocationCell resource={resource} column={column} />
+    case 'backuprepositories':
+      if (!isVeleroResource(resource)) return <GenericCell resource={resource} column={column} />
+      return <BackupRepositoryCell resource={resource} column={column} />
     // CloudNativePG
     case 'cnpgclusters':
     case 'clusters':

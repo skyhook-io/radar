@@ -25,6 +25,8 @@ import {
   getBSLLastValidation,
   getVSLProvider,
   getVSLConfig,
+  getBackupRepositoryStatus,
+  getBackupRepositoryType,
 } from '../resource-utils-velero'
 
 export function BackupCell({ resource, column }: { resource: any; column: string }) {
@@ -128,6 +130,32 @@ export function ScheduleCell({ resource, column }: { resource: any; column: stri
     case 'paused': {
       const paused = getSchedulePaused(resource)
       return <span className={clsx('text-sm', paused ? 'text-yellow-400' : 'text-theme-text-tertiary')}>{paused ? 'Yes' : '-'}</span>
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
+export function BackupRepositoryCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'status': {
+      const status = getBackupRepositoryStatus(resource)
+      return (
+        <span className={clsx('badge', status.color)}>
+          {status.text}
+        </span>
+      )
+    }
+    case 'repositoryType': {
+      const type = getBackupRepositoryType(resource)
+      // restic is on its way out (no new backups since v1.17, restore dropped in
+      // v1.19), so flag it rather than rendering it as neutral configuration.
+      const isLegacy = type === 'restic'
+      return (
+        <span className={clsx('text-sm', isLegacy ? 'text-amber-600 dark:text-amber-400 font-medium' : 'text-theme-text-secondary')}>
+          {type}
+        </span>
+      )
     }
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>

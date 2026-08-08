@@ -363,3 +363,29 @@ export function getVSLProvider(resource: any): string {
 export function getVSLConfig(resource: any): Record<string, string> {
   return resource.spec?.config || {}
 }
+
+// ============================================================================
+// BACKUP REPOSITORY UTILITIES
+// ============================================================================
+
+export function getBackupRepositoryStatus(resource: any): StatusBadge {
+  const phase = resource.status?.phase || ''
+
+  switch (phase) {
+    case 'Ready':
+      return { text: 'Ready', color: healthColors.healthy, level: 'healthy' }
+    case 'NotReady':
+      return { text: 'NotReady', color: healthColors.unhealthy, level: 'unhealthy' }
+    case 'New':
+      return { text: 'New', color: healthColors.unknown, level: 'unknown' }
+    default:
+      return { text: phase || 'Unknown', color: healthColors.unknown, level: 'unknown' }
+  }
+}
+
+// kopia | restic. Worth scanning for: restic is being retired — v1.17 stopped
+// creating new restic backups and v1.19 drops restic restore — so a restic
+// repository is a migration liability, not just a configuration detail.
+export function getBackupRepositoryType(resource: any): string {
+  return resource.spec?.repositoryType || '-'
+}
