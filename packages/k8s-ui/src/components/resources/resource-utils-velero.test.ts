@@ -40,13 +40,27 @@ describe('getCellFilterValue — Velero status column', () => {
     // through to status.phase would make the row unfilterable — the exact
     // failure this integration exists to surface.
     const invalid = schedule({ schedule: 'not-a-cron' }, { validationErrors: ['invalid schedule'] })
-    expect(getScheduleStatus(invalid).text).toBe('FailedValidation')
-    expect(getCellFilterValue(invalid, 'status', 'veleroschedules')).toBe('FailedValidation')
+    expect(getScheduleStatus(invalid).text).toBe('Rejected')
+    expect(getCellFilterValue(invalid, 'status', 'veleroschedules')).toBe('Rejected')
   })
 
   it('filters Restore phases through the curated reader', () => {
     const restore = { apiVersion: 'velero.io/v1', kind: 'Restore', status: { phase: 'PartiallyFailed' } }
-    expect(getCellFilterValue(restore, 'status', 'velerorestores')).toBe('PartiallyFailed')
+    expect(getCellFilterValue(restore, 'status', 'velerorestores')).toBe('Partially failed')
+  })
+
+  it('lets a real failure outrank paused, so neither fact is lost', () => {
+    // Previously paused won outright and a paused+invalid schedule showed only
+    // "Paused" — the table gave no sign it was also broken. The badge now
+    // carries the failure (the fact to act on) and the cell adds a paused
+    // indicator alongside.
+    const pausedOnly = schedule({ paused: true }, { phase: 'Enabled' })
+    expect(getScheduleStatus(pausedOnly).text).toBe('Paused')
+
+    const pausedAndInvalid = schedule({ paused: true }, { phase: 'FailedValidation', validationErrors: ['bad cron'] })
+    expect(getScheduleStatus(pausedAndInvalid).text).toBe('Rejected')
+    // and it filters as the failure, so it is reachable from the status filter
+    expect(getCellFilterValue(pausedAndInvalid, 'status', 'veleroschedules')).toBe('Rejected')
   })
 
   it('leaves a foreign CRD sharing the plural on the generic reader', () => {
@@ -65,22 +79,46 @@ describe('getCellFilterValue — Velero status column', () => {
 })
 
 describe('Velero Backup phase vocabulary', () => {
+  // The table label rule: sentence-case the upstream phase, diverge only where
+  // it does not fit. Each row below is (phase, label, level) — the label column
+  // is the contract, and the three departures from upstream are called out.
   it.each([
-    ['Completed', 'healthy'],
-    ['InProgress', 'neutral'],
-    ['Queued', 'neutral'],
-    ['ReadyToStart', 'neutral'],
-    ['WaitingForPluginOperations', 'neutral'],
-    ['Finalizing', 'neutral'],
-    ['PartiallyFailed', 'alert'],
-    ['FinalizingPartiallyFailed', 'alert'],
-    ['WaitingForPluginOperationsPartiallyFailed', 'alert'],
-    ['Failed', 'unhealthy'],
-    ['FailedValidation', 'unhealthy'],
-  ])('maps %s to %s', (phase, level) => {
+    ['Completed', 'Completed', 'healthy'],
+    ['New', 'New', 'unknown'],
+    ['Queued', 'Queued', 'neutral'],
+    ['Failed', 'Failed', 'unhealthy'],
+    ['Deleting', 'Deleting', 'degraded'],
+    ['Finalizing', 'Finalizing', 'neutral'],
+    // sentence-cased, not renamed
+    ['InProgress', 'In progress', 'neutral'],
+    ['ReadyToStart', 'Ready to start', 'neutral'],
+    ['PartiallyFailed', 'Partially failed', 'alert'],
+    // the three genuine departures
+    ['WaitingForPluginOperations', 'Plugin work', 'neutral'],
+    ['FailedValidation', 'Rejected', 'unhealthy'],
+    ['FinalizingPartiallyFailed', 'Partially failed', 'alert'],
+    ['WaitingForPluginOperationsPartiallyFailed', 'Partially failed', 'alert'],
+  ])('%s renders as "%s" (%s)', (phase, label, level) => {
     const status = getBackupStatus(backup(phase))
-    expect(status.text).toBe(phase)
+    expect(status.text).toBe(label)
     expect(status.level).toBe(level)
+  })
+
+  // The collapse is deliberate and lossy: three distinct phases share one
+  // label, so the column cannot tell you whether a partially-failed run has
+  // finished. Pinned so the loss is a decision rather than a drift.
+  it('collapses all three partial-failure phases onto one label', () => {
+    const labels = ['PartiallyFailed', 'FinalizingPartiallyFailed', 'WaitingForPluginOperationsPartiallyFailed']
+      .map(p => getBackupStatus(backup(p)).text)
+    expect(new Set(labels)).toEqual(new Set(['Partially failed']))
+  })
+
+  // Two labels a reader cannot tell apart fail the way an exact duplicate
+  // does. Every other phase must stay distinguishable.
+  it('gives no two non-partial phases the same label', () => {
+    const phases = ['New','Queued','ReadyToStart','InProgress','WaitingForPluginOperations','Finalizing','Completed','Failed','FailedValidation','Deleting']
+    const labels = phases.map(p => getBackupStatus(backup(p)).text)
+    expect(new Set(labels).size).toBe(phases.length)
   })
 
   it('no longer knows the fictional Uploading phase', () => {

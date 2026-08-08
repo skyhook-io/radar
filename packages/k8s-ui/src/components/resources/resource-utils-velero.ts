@@ -13,6 +13,55 @@ export function isVeleroResource(resource: any): boolean {
 }
 
 // ============================================================================
+// TABLE LABELS
+// ============================================================================
+
+// The rule: sentence-case the upstream phase; diverge only where it does not
+// fit. Most of the status column is therefore Velero's own vocabulary as
+// typography, not a rename — which is what keeps it recognisable next to
+// `velero backup describe`. The exact phase stays reachable in the detail
+// drawer and in the badge tooltip.
+//
+// The budget is 96px: a w-36 column less 32px of cell padding and 16px of badge
+// padding. Labels are held to at least 8px of headroom — sub-pixel shortfalls
+// still render an ellipsis, and the ellipsis glyph costs two more characters.
+const VELERO_LABEL_EXCEPTIONS: Record<string, string> = {
+  // 175px, so no defensible column width. "Finishing up" was the obvious
+  // alternative and is worse: a reader cannot tell it apart from the real
+  // `Finalizing` phase, and two labels that look like the same state fail the
+  // way an exact duplicate does, only more slowly.
+  WaitingForPluginOperations: 'Plugin work',
+  // "Validation failed" measures 91px — inside the noise floor at a 96px
+  // budget — and the Schedule cell needs room for a paused indicator beside it.
+  // "Rejected" also states the actionable fact: Velero refused this before it
+  // ran, so nothing happened at all.
+  FailedValidation: 'Rejected',
+  // 237px and 147px. Both collapse onto the plain partial-failure label, which
+  // makes the column non-injective: from the table you cannot tell whether a
+  // partially-failed run has finished. The outcome is the actionable fact and
+  // the stage is one click away, but it is a real loss, not a free win.
+  WaitingForPluginOperationsPartiallyFailed: 'Partially failed',
+  FinalizingPartiallyFailed: 'Partially failed',
+}
+
+// PartiallyFailed -> "Partially failed", ReadyToStart -> "Ready to start".
+function sentenceCasePhase(phase: string): string {
+  return phase
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .split(' ')
+    .map((word, i) => (i === 0 ? word : word.toLowerCase()))
+    .join(' ')
+}
+
+// The table label for a Velero phase. Display only — the issues engine and MCP
+// keep the raw phase, because those are API surfaces read by agents rather than
+// a column read by a human.
+export function veleroPhaseLabel(phase: string): string {
+  if (!phase) return 'Unknown'
+  return VELERO_LABEL_EXCEPTIONS[phase] ?? sentenceCasePhase(phase)
+}
+
+// ============================================================================
 // BACKUP UTILITIES
 // ============================================================================
 
@@ -49,28 +98,28 @@ export function getBackupStatus(resource: any): StatusBadge {
 
   switch (phase) {
     case 'Completed':
-      return { text: 'Completed', color: healthColors.healthy, level: 'healthy' }
+      return { text: veleroPhaseLabel('Completed'), color: healthColors.healthy, level: 'healthy' }
     case 'InProgress':
     case 'WaitingForPluginOperations':
     case 'Finalizing':
     case 'Queued':
     case 'ReadyToStart':
-      return { text: phase, color: healthColors.neutral, level: 'neutral' }
+      return { text: veleroPhaseLabel(phase), color: healthColors.neutral, level: 'neutral' }
     // Partial failure is worse than "degraded" (some data is already lost) but
     // not a total loss — the orange `alert` tier separates the two.
     case 'PartiallyFailed':
     case 'FinalizingPartiallyFailed':
     case 'WaitingForPluginOperationsPartiallyFailed':
-      return { text: phase, color: healthColors.alert, level: 'alert' }
+      return { text: veleroPhaseLabel(phase), color: healthColors.alert, level: 'alert' }
     case 'Failed':
     case 'FailedValidation':
-      return { text: phase, color: healthColors.unhealthy, level: 'unhealthy' }
+      return { text: veleroPhaseLabel(phase), color: healthColors.unhealthy, level: 'unhealthy' }
     case 'Deleting':
-      return { text: 'Deleting', color: healthColors.degraded, level: 'degraded' }
+      return { text: veleroPhaseLabel('Deleting'), color: healthColors.degraded, level: 'degraded' }
     case 'New':
-      return { text: 'New', color: healthColors.unknown, level: 'unknown' }
+      return { text: veleroPhaseLabel('New'), color: healthColors.unknown, level: 'unknown' }
     default:
-      return { text: phase || 'Unknown', color: healthColors.unknown, level: 'unknown' }
+      return { text: veleroPhaseLabel(phase), color: healthColors.unknown, level: 'unknown' }
   }
 }
 
@@ -172,22 +221,22 @@ export function getRestoreStatus(resource: any): StatusBadge {
 
   switch (phase) {
     case 'Completed':
-      return { text: 'Completed', color: healthColors.healthy, level: 'healthy' }
+      return { text: veleroPhaseLabel('Completed'), color: healthColors.healthy, level: 'healthy' }
     case 'InProgress':
     case 'WaitingForPluginOperations':
     case 'Finalizing':
-      return { text: phase, color: healthColors.neutral, level: 'neutral' }
+      return { text: veleroPhaseLabel(phase), color: healthColors.neutral, level: 'neutral' }
     case 'PartiallyFailed':
     case 'FinalizingPartiallyFailed':
     case 'WaitingForPluginOperationsPartiallyFailed':
-      return { text: phase, color: healthColors.alert, level: 'alert' }
+      return { text: veleroPhaseLabel(phase), color: healthColors.alert, level: 'alert' }
     case 'Failed':
     case 'FailedValidation':
-      return { text: phase, color: healthColors.unhealthy, level: 'unhealthy' }
+      return { text: veleroPhaseLabel(phase), color: healthColors.unhealthy, level: 'unhealthy' }
     case 'New':
-      return { text: 'New', color: healthColors.unknown, level: 'unknown' }
+      return { text: veleroPhaseLabel('New'), color: healthColors.unknown, level: 'unknown' }
     default:
-      return { text: phase || 'Unknown', color: healthColors.unknown, level: 'unknown' }
+      return { text: veleroPhaseLabel(phase), color: healthColors.unknown, level: 'unknown' }
   }
 }
 
@@ -252,24 +301,31 @@ export function getScheduleStatus(resource: any): StatusBadge {
   const phase = resource.status?.phase || ''
   const isPaused = resource.spec?.paused === true
 
+  // Velero leaves the phase empty on some validation failures and only records
+  // the reason in status.validationErrors, so the array is the authoritative
+  // signal — a schedule with errors is not producing backups whatever the phase.
+  const isRejected = phase === 'FailedValidation' || getScheduleValidationErrors(resource).length > 0
+
+  // A real failure outranks paused. Pausing is a state the operator chose; being
+  // rejected is one they need to fix, and it survives resuming. When both are
+  // true the cell renders this badge plus a separate paused indicator, so
+  // neither fact is lost — previously paused won outright and the table showed
+  // no sign the schedule was also invalid.
+  if (isRejected) {
+    return { text: veleroPhaseLabel('FailedValidation'), color: healthColors.unhealthy, level: 'unhealthy' }
+  }
+
   if (isPaused) {
     return { text: 'Paused', color: healthColors.degraded, level: 'degraded' }
   }
 
-  // Velero leaves the phase empty on some validation failures and only records
-  // the reason in status.validationErrors, so the array is the authoritative
-  // signal — a schedule with errors is not producing backups whatever the phase.
-  if (getScheduleValidationErrors(resource).length > 0) {
-    return { text: 'FailedValidation', color: healthColors.unhealthy, level: 'unhealthy' }
-  }
-
   switch (phase) {
     case 'Enabled':
-      return { text: 'Enabled', color: healthColors.healthy, level: 'healthy' }
+      return { text: veleroPhaseLabel('Enabled'), color: healthColors.healthy, level: 'healthy' }
     case 'FailedValidation':
-      return { text: 'FailedValidation', color: healthColors.unhealthy, level: 'unhealthy' }
+      return { text: veleroPhaseLabel('FailedValidation'), color: healthColors.unhealthy, level: 'unhealthy' }
     default:
-      return { text: phase || 'Unknown', color: healthColors.unknown, level: 'unknown' }
+      return { text: veleroPhaseLabel(phase), color: healthColors.unknown, level: 'unknown' }
   }
 }
 
@@ -308,11 +364,11 @@ export function getBSLStatus(resource: any): StatusBadge {
 
   switch (phase) {
     case 'Available':
-      return { text: 'Available', color: healthColors.healthy, level: 'healthy' }
+      return { text: veleroPhaseLabel('Available'), color: healthColors.healthy, level: 'healthy' }
     case 'Unavailable':
-      return { text: 'Unavailable', color: healthColors.unhealthy, level: 'unhealthy' }
+      return { text: veleroPhaseLabel('Unavailable'), color: healthColors.unhealthy, level: 'unhealthy' }
     default:
-      return { text: phase || 'Unknown', color: healthColors.unknown, level: 'unknown' }
+      return { text: veleroPhaseLabel(phase), color: healthColors.unknown, level: 'unknown' }
   }
 }
 
@@ -373,13 +429,13 @@ export function getBackupRepositoryStatus(resource: any): StatusBadge {
 
   switch (phase) {
     case 'Ready':
-      return { text: 'Ready', color: healthColors.healthy, level: 'healthy' }
+      return { text: veleroPhaseLabel('Ready'), color: healthColors.healthy, level: 'healthy' }
     case 'NotReady':
-      return { text: 'NotReady', color: healthColors.unhealthy, level: 'unhealthy' }
+      return { text: veleroPhaseLabel('NotReady'), color: healthColors.unhealthy, level: 'unhealthy' }
     case 'New':
-      return { text: 'New', color: healthColors.unknown, level: 'unknown' }
+      return { text: veleroPhaseLabel('New'), color: healthColors.unknown, level: 'unknown' }
     default:
-      return { text: phase || 'Unknown', color: healthColors.unknown, level: 'unknown' }
+      return { text: veleroPhaseLabel(phase), color: healthColors.unknown, level: 'unknown' }
   }
 }
 

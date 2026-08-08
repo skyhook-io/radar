@@ -1,6 +1,8 @@
 // Velero cell components for ResourcesView table
 
 import { clsx } from 'clsx'
+import { Pause } from 'lucide-react'
+import { Tooltip } from '../../ui/Tooltip'
 import {
   getBackupStatus,
   getBackupStorageLocation,
@@ -15,6 +17,7 @@ import {
   getRestoreDuration,
   getRestoreErrors,
   getScheduleStatus,
+  getSchedulePaused,
   getScheduleCron,
   getScheduleLastBackup,
   getBSLStatus,
@@ -112,9 +115,23 @@ export function ScheduleCell({ resource, column }: { resource: any; column: stri
   switch (column) {
     case 'status': {
       const status = getScheduleStatus(resource)
+      // A paused schedule that is *also* rejected carries two independent facts
+      // and the badge can only show one. The failure takes the badge because it
+      // is the one to act on; paused rides alongside as a chip — the same
+      // primary-plus-secondary shape CellContent uses for Terminating in the
+      // name column. A chip rather than a second word is what keeps it inside
+      // the column budget: "Rejected" plus a spelled-out "Paused" does not fit.
+      const alsoPaused = getSchedulePaused(resource) && status.text !== 'Paused'
       return (
-        <span className={clsx('badge', status.color)}>
-          {status.text}
+        <span className="inline-flex items-center gap-1 min-w-0">
+          <span className={clsx('badge', status.color)}>
+            {status.text}
+          </span>
+          {alsoPaused && (
+            <Tooltip content="Also paused — this schedule will not run until it is resumed">
+              <Pause className="w-3 h-3 shrink-0 text-amber-600 dark:text-amber-400" />
+            </Tooltip>
+          )}
         </span>
       )
     }

@@ -1217,7 +1217,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   backups: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-32' },
+    { key: 'status', label: 'Status', width: 'w-36' },
     { key: 'storageLocation', label: 'Storage', width: 'w-36' },
     { key: 'namespaces', label: 'Scope', width: 'w-24', tooltip: 'Included namespaces (* = all)' },
     { key: 'duration', label: 'Duration', width: 'w-24' },
@@ -1233,7 +1233,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   velerorestores: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-32' },
+    { key: 'status', label: 'Status', width: 'w-36' },
     { key: 'backupName', label: 'Backup', width: 'w-40' },
     { key: 'duration', label: 'Duration', width: 'w-24' },
     { key: 'errors', label: 'Errors', width: 'w-28' },
@@ -1242,7 +1242,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   veleroschedules: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-32' },
+    { key: 'status', label: 'Status', width: 'w-36' },
     { key: 'schedule', label: 'Schedule', width: 'w-32' },
     { key: 'lastBackup', label: 'Last Backup', width: 'w-32' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -1264,14 +1264,14 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   backuprepositories: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-32' },
+    { key: 'status', label: 'Status', width: 'w-36' },
     { key: 'repositoryType', label: 'Type', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   backupstoragelocations: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-32' },
+    { key: 'status', label: 'Status', width: 'w-36' },
     { key: 'provider', label: 'Provider', width: 'w-24' },
     { key: 'bucket', label: 'Bucket', width: 'w-40' },
     { key: 'default', label: 'Default', width: 'w-24' },
