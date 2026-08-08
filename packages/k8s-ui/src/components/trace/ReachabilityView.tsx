@@ -6,7 +6,7 @@ import { PaneLoader } from '../ui/PaneLoader'
 import { ReachabilityGraph, MarkGlyph } from './ReachabilityGraph'
 import { Activity, ChevronRight } from 'lucide-react'
 import { Tooltip } from '../ui/Tooltip'
-import { buildGraph } from './reachGraphModel'
+import { buildGraph, noteHeadline } from './reachGraphModel'
 import { buildOrigins, defaultOrigin, probeCheckStats, type Origin, type OriginId } from './reachOrigins'
 import { buildSidebar, buildVerdict, type Sidebar, type HopReport, type InspectorCTA, type Selection } from './reachInspector'
 import { markStyle, glyphStyle, markHelp, scenariosFor, routeTone, routeChip, routeIdentity, traceInClusterRunnable, SEV_COLOR, SEV_BADGE, type Scenario } from './reachMarks'
@@ -486,7 +486,7 @@ function EntryProblems({
         const nodeId = `n:${p.resource.kind}/${p.resource.namespace ?? ''}/${p.resource.name || 'pods'}`
         const label = `${p.resource.kind} ${p.resource.name}`
         return (
-          <Tooltip key={`${p.code}-${i}`} content={[p.summary, p.action].filter(Boolean).join(' — ')} wrapperClassName="block">
+          <Tooltip key={`${p.code}-${i}`} content={[p.summary, p.detail, p.action].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(' — ')} wrapperClassName="block">
             <button
               type="button"
               onMouseEnter={() => onHover?.(nodeId)}
@@ -501,7 +501,10 @@ function EntryProblems({
               <span className="shrink-0" style={{ color: 'var(--color-warning-dark)' }}>▲</span>
               <span className="min-w-0 flex-1 text-theme-text-primary">
                 <span className="text-[9.5px] font-bold tracking-[0.07em] text-theme-text-tertiary">CONFIGURED ENTRY </span>
-                <span className="font-mono font-semibold">{label}</span> — <span className="line-clamp-2">{p.summary}</span>
+                {/* The SAME humanizer the graph node uses, so the row and the
+                    node can never word one fault two ways; the raw controller
+                    condition stays one hover away. */}
+                <span className="font-mono font-semibold">{label}</span> — <span className="line-clamp-2">{noteHeadline(p.summary)}</span>
               </span>
             </button>
           </Tooltip>

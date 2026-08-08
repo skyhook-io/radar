@@ -363,7 +363,15 @@ type Trace struct {
 // from an existing upstream Finding - never synthesized.
 type EntryProblem struct {
 	Resource ResourceRef `json:"resource"`
-	Summary  string      `json:"summary"`
+	// Summary is the HUMAN line ("Not attached: no listener matches its hosts").
+	// Deliberately Message-first, the opposite of Diagnosis: a diagnosis wants
+	// the deeper cause, but a one-line row under the header wants the sentence a
+	// non-expert can read - the raw controller condition goes in Detail, one
+	// hover away.
+	Summary string `json:"summary"`
+	// Detail is the underlying cause (a controller condition, usually), shown on
+	// hover. Empty when it would just repeat Summary.
+	Detail string `json:"detail,omitempty"`
 	Severity string      `json:"severity"`
 	Code     string      `json:"code,omitempty"`
 	Action   string      `json:"action,omitempty"`

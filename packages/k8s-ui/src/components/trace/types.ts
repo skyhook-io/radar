@@ -266,7 +266,9 @@ export interface Trace {
  *  internal/trace/trace.go EntryProblem. */
 export interface EntryProblem {
   resource: ResourceRef
+  /** The human line; `detail` carries the raw controller cause for the hover. */
   summary: string
+  detail?: string
   severity: string
   code?: string
   action?: string

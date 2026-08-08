@@ -2211,6 +2211,17 @@ func TestComputeEntryProblems_PromotesUpstreamFaultWithoutTouchingVerdict(t *tes
 	if got[0].Resource.Kind != "HTTPRoute" || !strings.Contains(got[0].Summary, "no listener") {
 		t.Fatalf("promoted the wrong finding: %+v", got[0])
 	}
+	// The row is read by a human at a glance: the friendly Message leads, and
+	// the raw controller condition is one hover away - the opposite order from
+	// Diagnosis, which wants the deeper cause first.
+	tr.Upstreams[1].Findings[0].Cause = "Accepted: NoMatchingListenerHostname - there were no hostname intersections between the HTTPRoute and this parent ref's Listener(s)."
+	promoted := computeEntryProblems(tr)[0]
+	if !strings.Contains(promoted.Summary, "Not attached") {
+		t.Errorf("Summary = %q, want the human Message to lead", promoted.Summary)
+	}
+	if !strings.Contains(promoted.Detail, "NoMatchingListenerHostname") {
+		t.Errorf("Detail = %q, want the raw cause available for the hover", promoted.Detail)
+	}
 	if got[0].Action == "" {
 		t.Error("an entry problem should carry its finding's action")
 	}

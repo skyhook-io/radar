@@ -1013,9 +1013,13 @@ func computeEntryProblems(t *Trace) []EntryProblem {
 			if isScaleZeroFinding(f) {
 				continue
 			}
-			summary := firstNonEmpty(f.Cause, f.Message)
+			summary := firstNonEmpty(f.Message, f.Cause)
 			if summary == "" {
 				continue
+			}
+			detail := ""
+			if f.Cause != "" && f.Cause != summary {
+				detail = f.Cause
 			}
 			// Already stated by the Diagnosis band - printing it twice reads as
 			// two problems.
@@ -1025,6 +1029,7 @@ func computeEntryProblems(t *Trace) []EntryProblem {
 			out = append(out, EntryProblem{
 				Resource: h.Resource,
 				Summary:  summary,
+				Detail:   detail,
 				Severity: f.Severity,
 				Code:     f.Code,
 				Action:   f.Action,
