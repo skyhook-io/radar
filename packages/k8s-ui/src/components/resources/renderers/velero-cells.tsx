@@ -18,7 +18,7 @@ import {
   getRestoreErrors,
   getScheduleStatus,
   getSchedulePaused,
-  getScheduleCron,
+  getScheduleCronInfo,
   getScheduleLastBackup,
   getBSLStatus,
   getBSLProvider,
@@ -164,8 +164,35 @@ export function ScheduleCell({ resource, column }: { resource: any; column: stri
       )
     }
     case 'schedule': {
-      const cron = getScheduleCron(resource)
-      return <span className="text-sm text-theme-text-secondary font-mono">{cron}</span>
+      const { cron, readable, malformed } = getScheduleCronInfo(resource)
+      return (
+        <div className="flex flex-col min-w-0">
+          <span
+            className={clsx(
+              'text-sm font-mono truncate',
+              malformed ? 'text-red-600 dark:text-red-400' : 'text-theme-text-secondary'
+            )}
+            // Cron has no bounded width — `*/15 9-17 * * 1-5` measures 143px
+            // against 128px of cell — so the raw value carries a title on every
+            // row, not just the malformed ones.
+            title={malformed ? `${cron} is not a valid cron expression — this schedule cannot run` : cron}
+          >
+            {cron}
+          </span>
+          {/* The second line is always occupied, even when there is nothing to
+              say. Dropping it for the rows cronToHuman can't phrase left those
+              rows 10px shorter than their neighbours, which is the ragged
+              rhythm this table already had once. `invisible` reserves the line
+              without painting or announcing it. */}
+          {malformed ? (
+            <span className="text-xs text-red-600 dark:text-red-400">Invalid cron</span>
+          ) : readable ? (
+            <span className="text-xs text-theme-text-tertiary truncate">{readable}</span>
+          ) : (
+            <span aria-hidden className="text-xs invisible">&nbsp;</span>
+          )}
+        </div>
+      )
     }
     case 'lastBackup': {
       const last = getScheduleLastBackup(resource)

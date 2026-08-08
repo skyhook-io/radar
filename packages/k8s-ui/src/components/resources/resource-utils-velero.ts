@@ -1,7 +1,7 @@
 // Velero CRD utility functions
 
 import type { StatusBadge } from './resource-utils'
-import { healthColors, formatAge, formatDuration } from './resource-utils'
+import { healthColors, formatAge, formatDuration, cronToHuman } from './resource-utils'
 
 // Several Velero plurals are shared with other operators —
 // rancher/backup-restore-operator ships backups/restores.resources.cattle.io,
@@ -337,6 +337,33 @@ export function getScheduleValidationErrors(resource: any): string[] {
 
 export function getScheduleCron(resource: any): string {
   return resource.spec?.schedule || '-'
+}
+
+// The schedule cell shows the raw cron with its plain-English reading beneath,
+// matching CronJob. Two departures from that cell, both deliberate:
+//
+// `readable` is empty when cronToHuman gives the expression back unchanged —
+// it recognises a handful of shapes and returns the input for the rest, so
+// rendering unconditionally prints the same string twice (which CronJob does).
+//
+// `malformed` is a field-count check, the same thing Velero's own parser
+// complains about first ("expected exactly 5 fields"). It is deliberately not
+// derived from FailedValidation: a schedule can be rejected for a missing
+// storage location while its cron is perfectly good, and reddening the cron
+// there would accuse the wrong field. `@`-descriptors pass unflagged, and a
+// 5-field expression with an out-of-range number is not caught — the status
+// badge carries Velero's verdict, so under-marking beats a false accusation.
+export function getScheduleCronInfo(resource: any): {
+  cron: string
+  readable: string
+  malformed: boolean
+} {
+  const cron = (resource.spec?.schedule || '').trim()
+  if (!cron) return { cron: '-', readable: '', malformed: false }
+
+  const malformed = !cron.startsWith('@') && cron.split(/\s+/).length !== 5
+  const readable = malformed ? '' : cronToHuman(cron)
+  return { cron, readable: readable === cron ? '' : readable, malformed }
 }
 
 export function getScheduleLastBackup(resource: any): string {

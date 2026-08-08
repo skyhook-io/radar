@@ -1243,7 +1243,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-36' },
-    { key: 'schedule', label: 'Schedule', width: 'w-32' },
+    { key: 'schedule', label: 'Schedule', width: 'w-40' },
     { key: 'lastBackup', label: 'Last Backup', width: 'w-32' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],

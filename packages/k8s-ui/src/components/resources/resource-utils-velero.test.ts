@@ -7,6 +7,7 @@ import {
   isBackupActivePhase,
   isBackupPartialFailurePhase,
   isVeleroResource,
+  getScheduleCronInfo,
 } from './resource-utils-velero'
 
 const backup = (phase: string, extra: Record<string, unknown> = {}) => ({
@@ -151,5 +152,54 @@ describe('isVeleroResource', () => {
     expect(isVeleroResource({ apiVersion: 'notvelero.io/v1' })).toBe(false)
     expect(isVeleroResource({})).toBe(false)
     expect(isVeleroResource(null)).toBe(false)
+  })
+})
+
+describe('getScheduleCronInfo', () => {
+  const sched = (schedule: string, status?: any) => ({ spec: { schedule }, status })
+
+  it('reads a recognised cron as raw plus plain English', () => {
+    const r = getScheduleCronInfo(sched('0 1 * * *'))
+    expect(r).toEqual({ cron: '0 1 * * *', readable: 'Daily at 1:00', malformed: false })
+  })
+
+  it('leaves readable empty when cronToHuman has no phrasing for the expression', () => {
+    // cronToHuman returns its input unchanged for shapes it does not recognise.
+    // Rendering that would print the same string on both lines.
+    const r = getScheduleCronInfo(sched('0 3 * * 0'))
+    expect(r.malformed).toBe(false)
+    expect(r.readable).toBe('')
+  })
+
+  it.each(['not-a-cron', 'bad-cron', '0 1 * *', '0 1 * * * *'])('flags %s as malformed', (c) => {
+    const r = getScheduleCronInfo(sched(c))
+    expect(r.malformed).toBe(true)
+    expect(r.readable).toBe('')
+    expect(r.cron).toBe(c)
+  })
+
+  it('does not flag @-descriptors, which the field count would reject', () => {
+    expect(getScheduleCronInfo(sched('@daily')).malformed).toBe(false)
+    expect(getScheduleCronInfo(sched('@every 1h')).malformed).toBe(false)
+  })
+
+  it('does not call a valid cron malformed just because the Schedule was rejected', () => {
+    // Observed live: a schedule can fail validation for a missing storage
+    // location while its cron is fine. Reddening the cron there accuses the
+    // wrong field, so malformed must not be derived from phase.
+    const r = getScheduleCronInfo(
+      sched('0 4 * * *', { phase: 'FailedValidation', validationErrors: ['storage location "gone" not found'] })
+    )
+    expect(r.malformed).toBe(false)
+    expect(r.readable).toBe('Daily at 4:00')
+  })
+
+  it('tolerates padded whitespace and trims the raw value', () => {
+    const r = getScheduleCronInfo(sched('  0   1   *   *   *  '))
+    expect(r.malformed).toBe(false)
+  })
+
+  it('renders a missing schedule as a dash, not as malformed', () => {
+    expect(getScheduleCronInfo({ spec: {} })).toEqual({ cron: '-', readable: '', malformed: false })
   })
 })
