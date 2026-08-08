@@ -281,6 +281,10 @@ export interface EntryProblem {
  *  fingerprints (missing-ref / svc:*); a pod-state code is omitted and summary
  *  carries the honest prose instead. */
 export interface Diagnosis {
+  /** "fault" (something wrong, promoted from a finding) or "coverage" (a
+   *  statement about what could be tested). The problem list renders faults
+   *  only - a coverage sentence there restates the headline. */
+  class?: string
   causeCode?: string
   /** Which route this diagnosis explains, when attributable to exactly one.
    *  Absent means it describes the resource as a whole. The selected-path panel

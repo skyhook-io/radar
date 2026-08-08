@@ -973,7 +973,18 @@ func hopDenyPort(meta map[string]any) int32 {
 // "problem:Completed" on a crashloop) would mislabel, so it is omitted and the
 // honest Summary prose carries the diagnosis instead. The name says "code" so a
 // consumer never mistakes the enum for the plain-English explanation (Summary).
+// Diagnosis classes. A FAULT is something wrong in the user's system, promoted
+// from a real finding; COVERAGE explains what could or could not be tested. The
+// UI's problem list shows faults only - a coverage sentence there duplicated the
+// headline, which is generated from the same coverage state.
+const (
+	DiagnosisClassFault    = "fault"
+	DiagnosisClassCoverage = "coverage"
+)
+
 type Diagnosis struct {
+	// Class is "fault" (default, promoted from a finding) or "coverage".
+	Class     string `json:"class,omitempty"`
 	CauseCode string `json:"causeCode,omitempty"`
 	// Route names WHICH route this diagnosis explains, when it is attributable
 	// to exactly one. Empty means it describes the resource as a whole.
@@ -1091,10 +1102,16 @@ func computeDiagnosis(t *Trace) *Diagnosis {
 	if t.Coverage == nil {
 		return nil
 	}
-	// Reachable, but only the apiserver proxy reached it - the real-traffic path
-	// was never confirmed. The action is to test from inside the cluster.
+	// Reachable only through the apiserver proxy. Kept on the wire for agents -
+	// one machine-readable "what next" - but tagged COVERAGE, because it is a
+	// statement about what could be tested, not a fault in the user's system.
+	// The UI's problem list renders faults only: the headline already says this
+	// ("Reached via API server - not live traffic"), the viewing strip says it
+	// for the selected vantage, and the next-step block offers the in-cluster
+	// run, so a fourth copy read as a separate problem.
 	if t.Coverage.Tested > 0 && !anyRealPass(t.Routes) && anyIndirectReach(t.Routes) {
 		return &Diagnosis{
+			Class:      DiagnosisClassCoverage,
 			Summary:    "reachable via API server - the real-traffic path wasn't confirmed from here",
 			NextAction: "run the in-cluster reachability test to confirm the real path",
 		}
@@ -1108,6 +1125,7 @@ func computeDiagnosis(t *Trace) *Diagnosis {
 		// Nothing is RUNNING: the dominant fact is the workload, not the vantage.
 		if hopsHaveScaleZero(t.Downstream) {
 			return &Diagnosis{
+				Class:      DiagnosisClassCoverage,
 				Summary:    "no running pods - the backing workload is scaled to 0, so there's nothing to reach",
 				NextAction: "scale the workload up to test it (e.g. kubectl scale --replicas=1), or leave it if it's intentionally idle",
 			}
@@ -1121,16 +1139,20 @@ func computeDiagnosis(t *Trace) *Diagnosis {
 		reasons := distinctSkipReasons(t.NotTested)
 		switch {
 		case len(reasons) == 1:
-			d := &Diagnosis{Summary: "couldn't test from here - " + reasons[0]}
+			// No "couldn't test from here -" prefix: the headline says that much.
+			// The reason is the only part that adds anything.
+			d := &Diagnosis{Class: DiagnosisClassCoverage, Summary: reasons[0]}
 			d.NextAction = firstNonEmpty(firstSkipCommand(t.NotTested), "run the in-cluster reachability test to confirm the real path")
 			return d
 		case len(reasons) > 1:
 			return &Diagnosis{
+				Class:      DiagnosisClassCoverage,
 				Summary:    fmt.Sprintf("couldn't test any of the %d declared paths from here, for %d different reasons - select a path to see its own", len(t.NotTested), len(reasons)),
 				NextAction: "run the in-cluster reachability test to confirm the real path",
 			}
 		}
 		return &Diagnosis{
+			Class:      DiagnosisClassCoverage,
 			Summary:    "couldn't actively test any route from here",
 			NextAction: "run the in-cluster reachability test to confirm the real path",
 		}

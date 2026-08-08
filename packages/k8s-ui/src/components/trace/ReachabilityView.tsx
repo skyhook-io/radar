@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Trace, RouteResult, ResourceRef, EntryProblem } from './types'
+import type { Trace, RouteResult, ResourceRef } from './types'
 import { ReachActions, JustTestedNote, CopyableCommand, completedRequestMode, type TracePanelProps } from './TracePanel'
 import { AlertBanner } from '../ui/drawer-components'
 import { PaneLoader } from '../ui/PaneLoader'
@@ -9,7 +9,7 @@ import { Tooltip } from '../ui/Tooltip'
 import { buildGraph, noteHeadline } from './reachGraphModel'
 import { buildOrigins, defaultOrigin, probeCheckStats, type Origin, type OriginId } from './reachOrigins'
 import { buildSidebar, buildVerdict, type Sidebar, type HopReport, type InspectorCTA, type Selection } from './reachInspector'
-import { markStyle, glyphStyle, markHelp, scenariosFor, routeTone, routeChip, routeIdentity, traceInClusterRunnable, SEV_COLOR, SEV_BADGE, type Scenario } from './reachMarks'
+import { markStyle, glyphStyle, markHelp, scenariosFor, routeTone, routeChip, routeIdentity, routeForOrigin, traceInClusterRunnable, SEV_COLOR, SEV_BADGE, type Scenario } from './reachMarks'
 import { evidenceBannerTitle } from './inClusterSummary'
 import { DEV_STATES, devTrace, type DevState } from './reachFixtures'
 
@@ -227,6 +227,11 @@ function ReachabilityBoard(props: BoardProps) {
     [trace, route, origins, stale, running, multiPath, scenario, origin],
   )
 
+  const problems = useMemo(
+    () => problemRows(trace, route, origins, origin?.id),
+    [trace, route, origins, origin],
+  )
+
   const onCTA = (cta: InspectorCTA) => {
     if (cta.disabledReason) return
     if (cta.action === 'run-in-cluster') onRunInCluster?.()
@@ -246,8 +251,20 @@ function ReachabilityBoard(props: BoardProps) {
         verdict={verdict}
         trace={trace}
         runNonce={runNonce}
+        problems={problems}
         onEntryHover={setHoveredNodeId}
-        onEntrySelect={(id) => setSelection(id)}
+        onEntrySelect={(id) => {
+          // A pointer row addresses a VANTAGE capsule; everything else a
+          // resource node. Selecting the capsule re-routes the whole board to
+          // that vantage, which is what "show me what it saw" means.
+          const originId = id.startsWith('origin:') ? (id.slice('origin:'.length) as OriginId) : undefined
+          if (originId) {
+            setOriginId(originId)
+            setSelection(undefined)
+            return
+          }
+          setSelection(id)
+        }}
         actions={
           <ReachActions
             {...props}
@@ -300,6 +317,7 @@ function ReachabilityBoard(props: BoardProps) {
               running={running}
             />
           )}
+          <ViewingStrip verdict={verdict} scenario={scenario} multiPath={multiPath} />
           <ReachabilityGraph
             model={model}
             onAction={(a) => {
@@ -463,63 +481,170 @@ function ScenarioPicker({
 
 const LAYER_ORDER = ['dns', 'tcp', 'tls', 'http']
 
-/** The declared entry points that cannot carry traffic. Stated under the
- *  headline because the verdict is scoped to the TESTED path and structurally
- *  cannot see them - a dead front door was visible only as a dot inside a graph
- *  node. Interaction ladder: hover names it in full and rings it in the graph,
- *  click focuses it (graph + inspector), and the hop's own "Open" leaves. */
-function EntryProblems({
-  problems,
-  onHover,
-  onSelect,
-}: {
-  problems: EntryProblem[]
-  onHover?: (nodeId?: string) => void
-  onSelect?: (nodeId: string) => void
-}) {
-  if (problems.length === 0) return null
-  const shown = problems.slice(0, 2)
-  const rest = problems.length - shown.length
+/**
+ * One row in the header's problem list.
+ *
+ * The list is deliberately VANTAGE-INVARIANT: everything in it is true no
+ * matter which capsule is selected, so a fault can never hide behind a click.
+ * Faults read off cluster state (a dead entry, a promoted finding) say what is
+ * wrong; a pointer row says another vantage saw something and takes you there.
+ * What a vantage saw stays on the board and in the inspector.
+ */
+interface ProblemRow {
+  key: string
+  scope: string
+  subject: string
+  text: string
+  detail?: string
+  /** Graph node to ring on hover and select on click - a resource node, or an
+   *  origin capsule (`origin:<id>`) for a pointer row. */
+  nodeId: string
+  severity: 'critical' | 'warning'
+}
+
+const SEV_RANK: Record<ProblemRow['severity'], number> = { critical: 0, warning: 1 }
+
+/** Merges every vantage-invariant problem into ONE ranked list: the promoted
+ *  diagnosis, the declared entries that cannot carry traffic, and a pointer to
+ *  anything only another vantage saw. Two separate bands read as two separate
+ *  problems when they were often the same one. */
+export function problemRows(trace: Trace, route: RouteResult | undefined, origins: Origin[], selectedOriginId?: string): ProblemRow[] {
+  const rows: ProblemRow[] = []
+  const seen = new Set<string>()
+  const push = (r: ProblemRow) => {
+    const k = `${r.subject}\u0000${r.text}`
+    if (seen.has(k)) return
+    seen.add(k)
+    rows.push(r)
+  }
+  const refNode = (r?: ResourceRef) => (r ? `n:${r.kind}/${r.namespace ?? ''}/${r.name || 'pods'}` : '')
+
+  // The promoted fault. A COVERAGE-class diagnosis is not a fault - it restates
+  // the headline, which is generated from the same coverage state.
+  const d = trace.diagnosis
+  if (d?.summary && d.class !== 'coverage') {
+    const ref = d.culpritResource
+    push({
+      key: 'diagnosis',
+      scope: ref ? ref.kind.toUpperCase() : 'PATH',
+      subject: ref ? `${ref.kind} ${ref.name}` : trace.subject.name,
+      text: noteHeadline(d.summary),
+      detail: [d.summary, d.nextAction].filter(Boolean).join(' — '),
+      nodeId: refNode(ref) || refNode(trace.subject),
+      severity: 'critical',
+    })
+  }
+
+  for (const p of trace.entryProblems ?? []) {
+    push({
+      key: `entry-${p.resource.kind}-${p.resource.name}`,
+      scope: 'ENTRY',
+      subject: `${p.resource.kind} ${p.resource.name}`,
+      text: noteHeadline(p.summary),
+      detail: [p.summary, p.detail, p.action].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(' — '),
+      nodeId: refNode(p.resource),
+      severity: p.severity === 'critical' ? 'critical' : 'warning',
+    })
+  }
+
+  // Something only ANOTHER vantage saw. Without this a reader parked on one
+  // capsule never learns that a different one hit a wall - the fault would be
+  // discoverable only by luck of which capsule they clicked.
+  for (const o of origins) {
+    if (o.id === selectedOriginId || o.unsupported) continue
+    const own = route ? routeForOrigin(route, o.id, trace.runVantage) : undefined
+    if (!own || (own.outcome !== 'unreachable' && own.outcome !== 'server-error')) continue
+    push({
+      key: `vantage-${o.id}`,
+      scope: 'ANOTHER VANTAGE',
+      subject: o.name,
+      text: own.evidence ? noteHeadline(own.evidence) : 'this vantage could not get through',
+      detail: own.evidence,
+      nodeId: `origin:${o.id}`,
+      severity: 'warning',
+    })
+  }
+
+  return rows.sort((a, b) => SEV_RANK[a.severity] - SEV_RANK[b.severity])
+}
+
+/** The header's problem list. Hover names the fault in full and rings it on the
+ *  board; click focuses it there. */
+/**
+ * What you are currently looking at, stated ON the board that changes. Keeping
+ * it here rather than in the header is the whole redesign: the header is the
+ * resource and never moves, this strip is the selection and always does, and
+ * the spatial split says so without anyone having to read a label.
+ */
+function ViewingStrip({ verdict, scenario, multiPath }: { verdict: ReturnType<typeof buildVerdict>; scenario?: Scenario; multiPath: boolean }) {
+  const path = multiPath ? scenario?.primary.target || scenario?.label : undefined
   return (
-    <div className="mt-1.5 flex flex-col gap-1">
-      {shown.map((p, i) => {
-        const nodeId = `n:${p.resource.kind}/${p.resource.namespace ?? ''}/${p.resource.name || 'pods'}`
-        const label = `${p.resource.kind} ${p.resource.name}`
-        return (
-          <Tooltip key={`${p.code}-${i}`} content={[p.summary, p.detail, p.action].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(' — ')} wrapperClassName="block">
-            <button
-              type="button"
-              onMouseEnter={() => onHover?.(nodeId)}
-              onMouseLeave={() => onHover?.(undefined)}
-              onFocus={() => onHover?.(nodeId)}
-              onBlur={() => onHover?.(undefined)}
-              onClick={() => onSelect?.(nodeId)}
-              aria-label={`${label} — ${p.summary}. Show it on the path.`}
-              className="flex w-full max-w-[92ch] cursor-pointer items-start gap-1.5 rounded-md px-2 py-1.5 text-left text-xs leading-relaxed text-pretty transition-colors hover:bg-theme-hover"
-              style={{ border: '1px solid var(--color-warning)', background: 'color-mix(in srgb, var(--color-warning) 10%, transparent)' }}
-            >
-              <span className="shrink-0" style={{ color: 'var(--color-warning-dark)' }}>▲</span>
-              <span className="min-w-0 flex-1 text-theme-text-primary">
-                <span className="text-[9.5px] font-bold tracking-[0.07em] text-theme-text-tertiary">CONFIGURED ENTRY </span>
-                {/* The SAME humanizer the graph node uses, so the row and the
-                    node can never word one fault two ways; the raw controller
-                    condition stays one hover away. */}
-                <span className="font-mono font-semibold">{label}</span> — <span className="line-clamp-2">{noteHeadline(p.summary)}</span>
-              </span>
-            </button>
-          </Tooltip>
-        )
-      })}
-      {rest > 0 && <div className="text-[11px] text-theme-text-tertiary">+{rest} more entry point{rest > 1 ? 's' : ''} with problems — see the path below</div>}
+    <div className="pointer-events-none absolute left-3 top-2 z-10 flex max-w-[50%] flex-wrap items-center gap-x-2 gap-y-1">
+      <span className="text-[9.5px] font-bold tracking-[0.07em] text-theme-text-tertiary">VIEWING</span>
+      {path && <span className="truncate font-mono text-[11px] font-semibold text-theme-text-secondary">{path}</span>}
+      {path && <span className="text-theme-border">·</span>}
+      <span className="truncate font-mono text-[11px] font-semibold text-theme-text-secondary">{verdict.originName ?? 'this resource'}</span>
+      <span className={`badge-sm whitespace-nowrap ${SEV_BADGE[verdict.tone]}`}>{verdict.chipText}</span>
     </div>
   )
 }
 
+function ProblemList({
+  rows,
+  onHover,
+  onSelect,
+}: {
+  rows: ProblemRow[]
+  onHover?: (nodeId?: string) => void
+  onSelect?: (nodeId: string) => void
+}) {
+  if (rows.length === 0) return null
+  const shown = rows.slice(0, 3)
+  const rest = rows.length - shown.length
+  return (
+    <div className="mt-1.5 flex flex-col gap-1">
+      {shown.map((p) => (
+        <Tooltip key={p.key} content={p.detail || p.text} wrapperClassName="block">
+          <button
+            type="button"
+            onMouseEnter={() => onHover?.(p.nodeId)}
+            onMouseLeave={() => onHover?.(undefined)}
+            onFocus={() => onHover?.(p.nodeId)}
+            onBlur={() => onHover?.(undefined)}
+            onClick={() => onSelect?.(p.nodeId)}
+            aria-label={`${p.subject} — ${p.text}. Show it on the path.`}
+            className="flex w-full max-w-[92ch] cursor-pointer items-start gap-1.5 rounded-md px-2 py-1.5 text-left text-xs leading-relaxed text-pretty transition-colors hover:bg-theme-hover"
+            style={{
+              border: `1px solid var(${p.severity === 'critical' ? '--color-error' : '--color-warning'})`,
+              background: `color-mix(in srgb, var(${p.severity === 'critical' ? '--color-error' : '--color-warning'}) 10%, transparent)`,
+            }}
+          >
+            <span className="shrink-0" style={{ color: `var(${p.severity === 'critical' ? '--color-error-dark' : '--color-warning-dark'})` }}>▲</span>
+            <span className="min-w-0 flex-1 text-theme-text-primary">
+              <span className="text-[9.5px] font-bold tracking-[0.07em] text-theme-text-tertiary">{p.scope} </span>
+              <span className="font-mono font-semibold">{p.subject}</span> — <span className="line-clamp-2">{p.text}</span>
+            </span>
+          </button>
+        </Tooltip>
+      ))}
+      {rest > 0 && <div className="text-[11px] text-theme-text-tertiary">+{rest} more problem{rest > 1 ? 's' : ''} — see the path below</div>}
+    </div>
+  )
+}
+
+/**
+ * The header. Everything in it describes THE RESOURCE and never changes when a
+ * vantage or path is selected - which is the whole point: the reader can learn
+ * once that this block is static and the board below is what moves. Anything
+ * scoped to the current selection lives on the board (the viewing strip and the
+ * capsules) and in the inspector.
+ */
 function VerdictBand({
   verdict,
   trace,
   actions,
   runNonce,
+  problems,
   onEntryHover,
   onEntrySelect,
 }: {
@@ -527,6 +652,7 @@ function VerdictBand({
   trace: Trace
   actions: React.ReactNode
   runNonce?: number
+  problems: ProblemRow[]
   onEntryHover?: (nodeId?: string) => void
   onEntrySelect?: (nodeId: string) => void
 }) {
@@ -551,15 +677,9 @@ function VerdictBand({
         )}
         <div className="flex flex-wrap items-baseline gap-2">
           <span className="text-[14.5px] font-semibold text-theme-text-primary">{verdict.title}</span>
-          {!verdict.chipScope && <span className={`badge-sm whitespace-nowrap ${SEV_BADGE[verdict.tone]}`}>{verdict.chipText}</span>}
           <JustTestedNote nonce={runNonce} />
         </div>
-        {verdict.chipScope && (
-          <div className="mt-1 flex flex-wrap items-center gap-2">
-            <span className="text-[9.5px] font-bold tracking-[0.07em] text-theme-text-tertiary">{verdict.chipScope.toUpperCase()}</span>
-            <span className={`badge-sm whitespace-nowrap ${SEV_BADGE[verdict.tone]}`}>{verdict.chipText}</span>
-          </div>
-        )}
+
         {stats.checks > 0 && (
           <Tooltip
             content={`${layerBreakdown}${stats.vantages > 1 ? ` — from ${stats.vantages} vantages` : ''}. Every check is a real dial; skipped ones are listed with their reasons, never counted. Each check waits up to ~1s, inside a 3s budget per run — a slow backend can time out and read as not tested.`}
@@ -576,17 +696,9 @@ function VerdictBand({
             </span>
           </Tooltip>
         )}
-        {verdict.problem && (
-          <div
-            className="mt-1.5 flex max-w-[92ch] items-start gap-1.5 rounded-md px-2 py-1.5 text-xs leading-relaxed text-pretty"
-            style={{ border: '1px solid var(--color-warning)', background: 'color-mix(in srgb, var(--color-warning) 10%, transparent)' }}
-          >
-            <span className="shrink-0" style={{ color: 'var(--color-warning-dark)' }}>▲</span>
-            <span className="text-theme-text-primary">{verdict.problem}</span>
-          </div>
-        )}
+
         {verdict.body && <div className="mt-1 max-w-[76ch] text-xs leading-relaxed text-theme-text-secondary text-pretty">{verdict.body}</div>}
-        <EntryProblems problems={trace.entryProblems ?? []} onHover={onEntryHover} onSelect={onEntrySelect} />
+        <ProblemList rows={problems} onHover={onEntryHover} onSelect={onEntrySelect} />
       </div>
       <div className="flex flex-none gap-2">{actions}</div>
     </div>

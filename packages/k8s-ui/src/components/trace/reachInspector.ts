@@ -615,6 +615,8 @@ export function buildVerdict(
    *  route-scoped badge apart from the resource-wide headline beside it. */
   chipScope?: string
   scopeLabel?: string
+  /** The selected vantage's name - the viewing strip renders it. */
+  originName?: string
   title: string
   problem?: string
   body: string
@@ -651,6 +653,7 @@ export function buildVerdict(
       .filter(Boolean)
       .join(' · ') || undefined,
     scopeLabel: opts.pathLabel || opts.originName ? 'THIS RESOURCE' : undefined,
+    originName: opts.originName,
     // A stale screen previously led with the old headline ("Reachable...") and
     // then said underneath that the result was excluded. That is a contradiction,
     // not an exclusion.

@@ -710,3 +710,15 @@ describe('selecting a context entry opens it', () => {
     expect((s.context?.hops ?? []).every((h) => !h.expanded)).toBe(true)
   })
 })
+
+describe('a coverage statement is not a fault', () => {
+  it('the verdict keeps it on the wire but marks it coverage-class', () => {
+    const t = mk([pod('a', true, '10.0.0.1')], [p({ path: 'apiserver' })])
+    t.diagnosis = { class: 'coverage', summary: "reachable via API server - the real-traffic path wasn't confirmed from here" } as never
+    // buildVerdict still surfaces it for consumers that want the sentence...
+    const v = buildVerdict(t, route({ outcome: 'reached', confidence: 'indirect' }), { originId: 'apiserver', originName: 'API-server proxy' })
+    expect(v.problem).toBeTruthy()
+    // ...and the class is what the header uses to keep it OUT of the problem list.
+    expect(t.diagnosis!.class).toBe('coverage')
+  })
+})
