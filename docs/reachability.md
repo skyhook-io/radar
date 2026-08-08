@@ -92,7 +92,7 @@ Every claim on the page carries its evidence: the verdict band states the live-c
 **RBAC for active probes (from a laptop):** the user identity reading the trace must hold `get services/proxy` and `get pods/proxy` in the target namespace. In-cluster Radar uses the data path directly and doesn't need these. To disable the active layer entirely, deny those permissions to the role Radar uses.
 
 
-![A Redis Service: the in-cluster probe capsule offers Run now, and the path shows the declared TCP route](images/reachability/reachability-non-http-service.png)
+![A Redis Service after an in-cluster TCP test: the probe capsule reports what it saw, and the coverage line states that only the transport was checked](images/reachability/reachability-non-http-service.png)
 
 *A non-HTTP Service (Redis on 6379) after an in-cluster test: the throwaway Pod connected over TCP, and the coverage line states the ceiling of that proof - "TCP connections only - application protocol not checked".*
 
