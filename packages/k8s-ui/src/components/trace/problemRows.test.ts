@@ -75,3 +75,33 @@ describe('the header problem list', () => {
     expect(problemRows(t, buildOrigins(t), nodesOf(t))).toHaveLength(0)
   })
 })
+
+// One entry can carry several findings, and one origin several failed routes,
+// so a key built from the subject alone collides. React silently mis-renders or
+// drops rows on duplicate keys - which would hide a fault in the list whose
+// whole job is to surface faults.
+describe('every row can be told apart', () => {
+  it('gives two findings on ONE entry distinct keys, and keeps both rows', () => {
+    const t = base()
+    const ref = { kind: 'HTTPRoute', name: 'shop', namespace: 'store' }
+    t.entryProblems = [
+      { resource: ref, summary: 'Not attached: no listener matches its hosts', severity: 'warning' },
+      { resource: ref, summary: 'Backend service port 8080 does not exist', severity: 'critical' },
+    ] as never
+    const rows = problemRows(t, buildOrigins(t), nodesOf(t))
+    expect(rows).toHaveLength(2)
+    expect(new Set(rows.map((r) => r.key)).size).toBe(2)
+  })
+
+  it('keeps keys unique across the whole list, whatever the mix', () => {
+    const t = base()
+    t.diagnosis = { summary: 'container is crashlooping', severity: 'critical' } as never
+    t.entryProblems = [
+      { resource: { kind: 'HTTPRoute', name: 'shop', namespace: 'store' }, summary: 'Not attached', severity: 'warning' },
+      { resource: { kind: 'HTTPRoute', name: 'shop', namespace: 'store' }, summary: 'Backend port missing', severity: 'warning' },
+    ] as never
+    const rows = problemRows(t, buildOrigins(t), nodesOf(t))
+    expect(rows.length).toBeGreaterThan(1)
+    expect(new Set(rows.map((r) => r.key)).size).toBe(rows.length)
+  })
+})
