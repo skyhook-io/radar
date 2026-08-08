@@ -425,7 +425,23 @@ func GetPolicyReportStatus() PolicyReportStatus {
 		return status
 	}
 	if status.Status == "" {
-		return PolicyReportStatus{Status: KyvernoStatusWarmup, Cap: kyvernoReportWarmupCap}
+		// Warmup hasn't recorded a decision. "Undecided" must not be reported
+		// as warmup unconditionally: warmup only runs when the dynamic cache
+		// initialized (subsystems.go), and its init failure is non-fatal — so
+		// on a cluster where it never runs this state is permanent, not
+		// transient. Reporting warmup there makes OmittedReason emit
+		// `policySummary.kyverno: cache_cold` on every resource of every
+		// non-Kyverno cluster, forever, which is exactly the noise the silent
+		// not-installed path exists to avoid.
+		//
+		// Ask discovery the same question warmup would: only claim the index
+		// is cold when Kyverno is actually present. The scan is confined to
+		// this pre-decision branch — once warmup records an outcome the
+		// stored status returns above.
+		if d := GetResourceDiscovery(); d != nil && d.ResourceDiscovery != nil && d.IsKyvernoInstalled() {
+			return PolicyReportStatus{Status: KyvernoStatusWarmup, Cap: kyvernoReportWarmupCap}
+		}
+		return PolicyReportStatus{Status: KyvernoStatusNotInstalled, ReasonCode: ReasonNotInstalled, Cap: kyvernoReportWarmupCap}
 	}
 	return status
 }
@@ -500,29 +516,33 @@ func selectReportGVRs(served func(schema.GroupVersionResource) bool, probeCount 
 			fallbackGroup = family.group
 		}
 
+		// Probe per GVR, not per family. A denial on one sibling must not
+		// discard the other: namespace-scoped RBAC routinely grants `list
+		// policyreports` within the user's namespaces while denying the
+		// cluster-scoped `clusterpolicyreports`, and dropping the whole
+		// family there loses every finding the user could legitimately see.
 		groupTotal := 0
-		probeFailed := false
+		var readable []schema.GroupVersionResource
 		for _, gvr := range candidates {
 			count := probeCount(gvr)
 			switch {
 			case count == -1:
 				anyDenied = true
-				probeFailed = true
 			case count < 0:
 				anyProbeFailed = true
-				probeFailed = true
 			default:
+				// Readable, including a legitimately empty sibling — keep it
+				// watched so a report created later still appears live. Its
+				// cost is bounded precisely because the probe succeeded.
+				readable = append(readable, gvr)
 				groupTotal += count
 			}
 		}
-		// A group we could not fully probe is not safe to watch — we cannot
-		// bound its cost — but it must not silently vanish either, which is
-		// what the reason codes below carry.
-		if probeFailed || groupTotal == 0 {
+		if groupTotal == 0 {
 			continue
 		}
 
-		selection.gvrs = append(selection.gvrs, candidates...)
+		selection.gvrs = append(selection.gvrs, readable...)
 		selection.groups = append(selection.groups, family.group)
 		selection.total += groupTotal
 	}

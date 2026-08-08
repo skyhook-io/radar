@@ -213,3 +213,56 @@ func TestEngineForSource_FalcosidekickLiteral(t *testing.T) {
 		t.Errorf("Engine() = %q, want %q", f.Engine(), EngineFalco)
 	}
 }
+
+// Bugbot #3 (MEDIUM): the Kyverno-labelled rollup must not absorb other
+// engines. The index is shared — Trivy, Falco adapters and VAP evaluation all
+// write into the same report families — so an unfiltered read presented as
+// "kyverno" over-counts as soon as a second engine is installed.
+func TestFindingsForAnyEngine_KyvernoAttributionSet(t *testing.T) {
+	now := time.Now()
+	r := makeReport(t, "PolicyReport", "prod", "pr-1", nil, now, []map[string]any{
+		{"policy": "modern", "result": "fail", "source": "KyvernoValidatingPolicy",
+			"resources": []any{resourceRef("Pod", "prod", "api-1")}},
+		{"policy": "legacy", "result": "fail", "source": "kyverno",
+			"resources": []any{resourceRef("Pod", "prod", "api-1")}},
+		// No source at all — older Kyverno. Must still count, or the rollup
+		// empties out on exactly the legacy clusters we still serve.
+		{"policy": "unattributed", "result": "fail",
+			"resources": []any{resourceRef("Pod", "prod", "api-1")}},
+		{"policy": "vap", "result": "fail", "source": "ValidatingAdmissionPolicy",
+			"resources": []any{resourceRef("Pod", "prod", "api-1")}},
+		{"policy": "cve", "result": "fail", "source": "Trivy Vulnerability",
+			"resources": []any{resourceRef("Pod", "prod", "api-1")}},
+		{"policy": "syscall", "result": "fail", "source": "Falco",
+			"resources": []any{resourceRef("Pod", "prod", "api-1")}},
+	})
+
+	got := BuildIndex([]*unstructured.Unstructured{r}).
+		FindingsForAnyEngine("", "Pod", "prod", "api-1", EnginesAttributableToKyverno...)
+
+	if len(got) != 3 {
+		t.Fatalf("got %d findings, want 3 (modern + legacy + unattributed)", len(got))
+	}
+	for _, f := range got {
+		switch f.Policy {
+		case "modern", "legacy", "unattributed":
+		default:
+			t.Errorf("%q (source %q) leaked into the Kyverno rollup", f.Policy, f.Source)
+		}
+	}
+}
+
+// An empty filter must mean "nothing matches", never "everything" — a caller
+// that accidentally passes no engines should get an obviously empty result
+// rather than silently unfiltered data.
+func TestFindingsForAnyEngine_EmptyFilterReturnsNothing(t *testing.T) {
+	now := time.Now()
+	r := makeReport(t, "PolicyReport", "prod", "pr-1", nil, now, []map[string]any{
+		{"policy": "a", "result": "fail", "source": "kyverno",
+			"resources": []any{resourceRef("Pod", "prod", "api-1")}},
+	})
+
+	if got := BuildIndex([]*unstructured.Unstructured{r}).FindingsForAnyEngine("", "Pod", "prod", "api-1"); got != nil {
+		t.Errorf("empty engine filter returned %d findings, want nil", len(got))
+	}
+}

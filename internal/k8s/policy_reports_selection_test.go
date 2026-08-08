@@ -223,3 +223,56 @@ func TestPolicyReportStatusOmittedReason(t *testing.T) {
 		})
 	}
 }
+
+// Bugbot #2 (HIGH): a denial on one sibling must not discard the other.
+// Namespace-scoped RBAC routinely grants `list policyreports` in the user's
+// namespaces while denying cluster-scoped `clusterpolicyreports`; the old
+// per-family probeFailed flag dropped the whole family and lost every finding
+// the user could legitimately see.
+func TestSelectReportGVRs_DeniedSiblingKeepsReadableOne(t *testing.T) {
+	sel := selectReportGVRs(
+		servedSet(wgReports, wgClusterReports),
+		counts(map[schema.GroupVersionResource]int{wgReports: 50, wgClusterReports: -1}),
+	)
+
+	if !hasGVR(sel, wgReports) {
+		t.Fatalf("readable namespaced GVR was discarded because its cluster-scoped sibling was denied: %v", sel.gvrs)
+	}
+	if hasGVR(sel, wgClusterReports) {
+		t.Errorf("denied GVR must not be watched, got %v", sel.gvrs)
+	}
+	if sel.total != 50 {
+		t.Errorf("total = %d, want 50", sel.total)
+	}
+}
+
+// A readable-but-empty sibling stays watched when the family has data, so a
+// report created later still shows up live.
+func TestSelectReportGVRs_KeepsEmptyReadableSibling(t *testing.T) {
+	sel := selectReportGVRs(
+		servedSet(wgReports, wgClusterReports),
+		counts(map[schema.GroupVersionResource]int{wgReports: 12, wgClusterReports: 0}),
+	)
+
+	if !hasGVR(sel, wgClusterReports) {
+		t.Errorf("empty but readable sibling should stay watched, got %v", sel.gvrs)
+	}
+	if sel.total != 12 {
+		t.Errorf("total = %d, want 12", sel.total)
+	}
+}
+
+// A probe error (not a denial) on one sibling is handled the same way.
+func TestSelectReportGVRs_ProbeErrorOnSiblingKeepsReadableOne(t *testing.T) {
+	sel := selectReportGVRs(
+		servedSet(wgReports, wgClusterReports),
+		counts(map[schema.GroupVersionResource]int{wgReports: 7, wgClusterReports: -2}),
+	)
+
+	if !hasGVR(sel, wgReports) || hasGVR(sel, wgClusterReports) {
+		t.Fatalf("expected only the readable GVR to be watched, got %v", sel.gvrs)
+	}
+	if sel.total != 7 {
+		t.Errorf("total = %d, want 7", sel.total)
+	}
+}

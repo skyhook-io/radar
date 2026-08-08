@@ -168,13 +168,36 @@ func (i *Index) FindingsFor(group, kind, namespace, name string) []Finding {
 // `KyvernoValidatingPolicy` results alike. A caller that matched on the raw
 // string would silently see only part of what Kyverno reported.
 func (i *Index) FindingsForEngine(group, kind, namespace, name string, engine Engine) []Finding {
+	return i.FindingsForAnyEngine(group, kind, namespace, name, engine)
+}
+
+// FindingsForAnyEngine returns the findings indexed for the given subject that
+// were produced by any of the given engines.
+//
+// Use this over FindingsFor wherever the result is labelled with an engine
+// name. The index is shared across producers — Kyverno, Trivy, Falco adapters
+// and VAP evaluation all write into the same report families — so an
+// unfiltered read presented under one engine's name over-counts the moment a
+// second engine is installed.
+//
+// Passing no engines returns nil. An empty filter means "nothing matches"
+// rather than "everything", so a caller that accidentally passes an empty set
+// gets an obviously empty result instead of silently unfiltered data.
+func (i *Index) FindingsForAnyEngine(group, kind, namespace, name string, engines ...Engine) []Finding {
+	if len(engines) == 0 {
+		return nil
+	}
 	all := i.FindingsFor(group, kind, namespace, name)
 	if len(all) == 0 {
 		return nil
 	}
+	want := make(map[Engine]bool, len(engines))
+	for _, e := range engines {
+		want[e] = true
+	}
 	out := make([]Finding, 0, len(all))
 	for _, f := range all {
-		if f.Engine() == engine {
+		if want[f.Engine()] {
 			out = append(out, f)
 		}
 	}

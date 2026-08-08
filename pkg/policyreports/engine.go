@@ -44,6 +44,21 @@ const (
 	EngineUnknown Engine = "unknown"
 )
 
+// EnginesAttributableToKyverno is the engine set that may legitimately fill a
+// Kyverno-labelled rollup.
+//
+// EngineUnknown is included deliberately. `results[].source` is optional and
+// older Kyverno builds omit it, so those findings normalize to EngineUnknown.
+// Excluding them would empty the Kyverno summary on exactly the legacy
+// clusters this integration still has to serve, so an unattributed finding
+// keeps the historical assumption that Kyverno wrote it.
+//
+// EngineVAP is deliberately NOT included, even though Kyverno's reports
+// controller is what writes VAP results into PolicyReports: the evaluating
+// engine is the apiserver, and a rollup labelled "kyverno" must not count
+// enforcement Kyverno did not perform.
+var EnginesAttributableToKyverno = []Engine{EngineKyverno, EngineUnknown}
+
 // EngineForSource normalizes a raw PolicyReport `results[].source` value to
 // the engine that produced it. Matching is case-insensitive and
 // whitespace-trimmed because the field is free-form — nothing upstream

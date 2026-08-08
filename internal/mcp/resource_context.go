@@ -35,7 +35,11 @@ func (a mcpPolicyReportLookupAdapter) FindingsFor(group, kind, namespace, name s
 	if a.idx == nil {
 		return nil
 	}
-	findings := a.idx.FindingsFor(group, kind, namespace, name)
+	// Filtered, not FindingsFor: this projection fills `policySummary.kyverno`,
+	// and the index is shared with every other producer writing into the same
+	// report families — Trivy, Falco adapters, VAP evaluation. An unfiltered
+	// read would inflate the Kyverno rollup with enforcement Kyverno never did.
+	findings := a.idx.FindingsForAnyEngine(group, kind, namespace, name, policyreports.EnginesAttributableToKyverno...)
 	if len(findings) == 0 {
 		return nil
 	}

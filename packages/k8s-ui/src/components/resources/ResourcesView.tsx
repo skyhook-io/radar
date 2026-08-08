@@ -154,6 +154,8 @@ import { NvidiaClusterPolicyCell, NvidiaDriverCell } from './renderers/nvidia-ce
 import { ServiceMonitorCell, PrometheusRuleCell, PodMonitorCell } from './renderers/prometheus-cells'
 import { PolicyReportCell, ClusterPolicyReportCell, KyvernoPolicyCell, ClusterPolicyCell } from './renderers/kyverno-cells'
 import { KyvernoModernPolicyCell, KyvernoPolicyExceptionCell, KyvernoCleanupPolicyCell } from './renderers/kyverno-modern-cells'
+import { KYVERNO_MODERN_PLURALS, isModernKyvernoPolicy } from './resource-utils-kyverno-modern'
+import { isAnyKyvernoPolicyException } from './resource-utils-kyverno-exceptions'
 import { ExternalSecretCell, ClusterExternalSecretCell, SecretStoreCell, ClusterSecretStoreCell } from './renderers/eso-cells'
 import { BackupCell, RestoreCell, ScheduleCell, BackupStorageLocationCell } from './renderers/velero-cells'
 import { CNPGClusterCell, CNPGBackupCell, CNPGScheduledBackupCell, CNPGPoolerCell } from './renderers/cnpg-cells'
@@ -5554,6 +5556,29 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
 
   // Kind-specific columns (normalize CRD singular names like 'ScaledObject' → 'scaledobjects')
   const kindLower = normalizeKindToPlural(kind, group)
+
+  // Kyverno cells are group-gated ahead of the switch so a non-matching CR
+  // falls through to the switch's default (GenericCell) instead of being
+  // described in Kyverno's vocabulary. These plurals are generic enough that
+  // another vendor could ship them, and `policyexceptions` is served by BOTH
+  // Kyverno API families with different spec shapes. The stakes are higher
+  // here than in the drawer: an absent `validationActions` legitimately means
+  // Deny for a real Kyverno policy, so an ungated foreign CR would render a
+  // red "Deny" badge purely because it lacks a field it never had.
+  if (KYVERNO_MODERN_PLURALS.has(kindLower) && isModernKyvernoPolicy(resource)) {
+    return <KyvernoModernPolicyCell resource={resource} column={column} />
+  }
+  if (kindLower === 'policyexceptions' && isAnyKyvernoPolicyException(resource)) {
+    return <KyvernoPolicyExceptionCell resource={resource} column={column} />
+  }
+  if (
+    (kindLower === 'cleanuppolicies' || kindLower === 'clustercleanuppolicies') &&
+    typeof resource?.apiVersion === 'string' &&
+    resource.apiVersion.startsWith('kyverno.io/')
+  ) {
+    return <KyvernoCleanupPolicyCell resource={resource} column={column} />
+  }
+
   switch (kindLower) {
     case 'pods':
       return <PodCell resource={resource} column={column} />
@@ -5716,24 +5741,6 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       return <KyvernoPolicyCell resource={resource} column={column} />
     case 'clusterpolicies':
       return <ClusterPolicyCell resource={resource} column={column} />
-    // Kyverno modern CEL family — all ten kinds share one cell component;
-    // the per-family differences are resolved inside it.
-    case 'validatingpolicies':
-    case 'namespacedvalidatingpolicies':
-    case 'imagevalidatingpolicies':
-    case 'namespacedimagevalidatingpolicies':
-    case 'mutatingpolicies':
-    case 'namespacedmutatingpolicies':
-    case 'generatingpolicies':
-    case 'namespacedgeneratingpolicies':
-    case 'deletingpolicies':
-    case 'namespaceddeletingpolicies':
-      return <KyvernoModernPolicyCell resource={resource} column={column} />
-    case 'policyexceptions':
-      return <KyvernoPolicyExceptionCell resource={resource} column={column} />
-    case 'cleanuppolicies':
-    case 'clustercleanuppolicies':
-      return <KyvernoCleanupPolicyCell resource={resource} column={column} />
     // Trivy Operator
     case 'vulnerabilityreports':
       return <VulnerabilityReportCell resource={resource} column={column} />
