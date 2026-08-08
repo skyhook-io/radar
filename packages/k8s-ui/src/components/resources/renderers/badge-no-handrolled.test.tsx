@@ -23,7 +23,7 @@ const BASELINE = new Set<string>([
   'AlertRenderer.tsx', 'ArgoApplicationRenderer.tsx', 'CertificateRenderer.tsx',
   'CertificateRequestRenderer.tsx', 'ChallengeRenderer.tsx', 'CiliumNetworkPolicyRenderer.tsx',
   'ClusterExternalSecretRenderer.tsx', 'ClusterIssuerRenderer.tsx', 'ClusterNetworkPolicyRenderer.tsx',
-  'cnpg-cells.tsx', 'CNPGClusterRenderer.tsx', 'EventRenderer.tsx', 'GatewayRenderer.tsx',
+  'cnpg-cells.tsx', 'CNPGClusterRenderer.tsx', 'GatewayRenderer.tsx',
   'GenericRenderer.tsx', 'IngressClassRenderer.tsx', 'IstioPeerAuthenticationRenderer.tsx',
   'IstioServiceEntryRenderer.tsx', 'KarpenterNodeClaimRenderer.tsx', 'knative-cells.tsx',
   'KnativeEventingRenderer.tsx', 'KnativeRevisionRenderer.tsx', 'kyverno-cells.tsx',
