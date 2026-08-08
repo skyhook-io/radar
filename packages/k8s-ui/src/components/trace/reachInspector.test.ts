@@ -738,3 +738,52 @@ describe('one observation is stated once', () => {
     expect(plain[0]).toContain('checked directly')
   })
 })
+
+describe('an answer is interpretable', () => {
+  const reached = (evidence: string): RouteResult =>
+    route({ outcome: 'reached', confidence: 'real', evidence, inClusterRequest: { protocol: 'http', scheme: 'http', path: '/' } } as never)
+  const body = (evidence: string) => {
+    const t = mk([pod('a', true, '10.0.0.1')], [p({ tone: 'reached', detail: evidence })])
+    const r = reached(evidence)
+    t.routes = [r]
+    return buildSidebar(undefined, ctx(t, 'incluster', r)).path
+  }
+
+  it('a 404 says the PATH works and names what would verify a route', () => {
+    const b = body('HTTP 404 · reached').body
+    expect(b).toContain('path works')
+    expect(b).toContain('serves no route')
+    expect(b).toContain('re-run with a path your app serves')
+  })
+  it('auth, redirect and app-error answers are each read correctly', () => {
+    expect(body('HTTP 401 · reached').body).toContain('credentials')
+    expect(body('HTTP 308 · reached, redirect').body).toMatch(/redirect .*Radar does not follow/)
+    expect(body('HTTP 503 · reached, server error').body).toContain('application health')
+  })
+  it('a transport-only reach never claims something was asked', () => {
+    const t = mk([pod('a', true, '10.0.0.1')], [p({ layer: 'tcp', ok: true })])
+    const r = route({ outcome: 'reached', confidence: 'real', evidence: '', inClusterRequest: { protocol: 'tcp' } } as never)
+    t.routes = [r]
+    expect(buildSidebar(undefined, ctx(t, 'incluster', r)).path.body).toContain('nothing was asked of the application')
+  })
+  it('shows WHAT was requested, so a status code can be read at all', () => {
+    expect(body('HTTP 404 · reached').scope.some((s) => s.k === 'REQUEST' && s.v === 'GET /')).toBe(true)
+    const t = mk([pod('a', true, '10.0.0.1')], [p({ layer: 'tcp', ok: true })])
+    const r = route({ outcome: 'reached', confidence: 'real', inClusterRequest: { protocol: 'tcp' } } as never)
+    t.routes = [r]
+    expect(buildSidebar(undefined, ctx(t, 'incluster', r)).path.scope.some((s) => s.k === 'REQUEST' && s.v === 'TCP connect')).toBe(true)
+  })
+})
+
+describe('a relayed answer explains the relay AND the answer', () => {
+  it('keeps the relay caveat and still reads the status', () => {
+    const t = mk([pod('a', true, '10.0.0.1')], [p({ path: 'apiserver', tone: 'reached', detail: 'HTTP 404 · reached' })])
+    const r = route({ outcome: 'reached', confidence: 'indirect', evidence: 'HTTP 404 · reached', inClusterRequest: { protocol: 'http', path: '/' } } as never)
+    t.routes = [r]
+    const b = buildSidebar(undefined, ctx(t, 'apiserver', r)).path.body
+    expect(b).toContain('relayed')
+    expect(b).toContain('serves no route')
+    // ...but never claims the real path works, because a relay cannot show that
+    expect(b).not.toContain('The path works')
+  })
+})

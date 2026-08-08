@@ -124,7 +124,7 @@ const NOT_DATAPLANE = 'Nothing about the normal network path. Kubernetes relayed
 const SYNTHETIC_IDENTITY =
   'That your app can reach it. This test ran from a throwaway Pod under the namespace’s default account with no token mounted — not as your application — so anything that checks who is calling may answer differently.'
 
-function originScope(o: Origin, trace: Trace): { k: string; v: string }[] {
+function originScope(o: Origin, trace: Trace, request?: string): { k: string; v: string }[] {
   const runsIn: Record<OriginId, string> = {
     incluster: `a throwaway Pod in ${trace.subject.namespace || 'the cluster'}`,
     'radar-incluster': 'Radar\u2019s own Pod',
@@ -141,6 +141,9 @@ function originScope(o: Origin, trace: Trace): { k: string; v: string }[] {
     // different facts and must not share a label.
     { k: o.id === 'local' ? 'NETWORK POSITION' : 'IDENTITY', v: o.identity },
     { k: 'MECHANISM', v: o.mech },
+    // A status code cannot be read without knowing what was asked for - "404"
+    // means nothing until you know the request was GET /.
+    ...(request ? [{ k: 'REQUEST', v: request }] : []),
   ]
 }
 
@@ -282,6 +285,38 @@ interface Ctx {
 function restatesTitle(summary: string | undefined, title: string): boolean {
   const norm = (x: string) => x.trim().toLowerCase().replace(/[.!]$/, '')
   return !!summary && !!title && norm(summary) === norm(title)
+}
+
+/** The request this route would send, in one line - "GET /healthz", or "TCP
+ *  connect" where there is no application request to make. */
+function requestLabel(route: RouteResult | undefined, httpPath?: string): string | undefined {
+  const r = route?.inClusterRequest
+  if (!r) return undefined
+  if (r.protocol === 'tcp') return 'TCP connect'
+  const path = httpPath || r.path || '/'
+  return `GET ${path}`
+}
+
+/**
+ * What an ANSWER means for this page's question.
+ *
+ * "reached" plus an HTTP status is the single most-misread result on the tab:
+ * a reader sees amber and 404 and cannot tell whether that is a problem. It is
+ * not - for the question this page asks. The network path is proven the moment
+ * the app answers at all; the status code is a statement about the app's own
+ * routing, auth or health, which reachability does not judge. Say that, and say
+ * what would turn it into a verified pass.
+ */
+function statusMeaning(evidence?: string, httpPath?: string): string | undefined {
+  const m = /HTTP\s+(\d{3})/i.exec(evidence ?? '')
+  if (!m) return undefined
+  const code = Number(m[1])
+  const asked = httpPath && httpPath !== '/' ? httpPath : '/'
+  if (code >= 500) return `the request reached the app and the app itself returned an error (HTTP ${code}) - application health, which this page does not judge.`
+  if (code === 401 || code === 403 || code === 407) return `the app answered by demanding credentials (HTTP ${code}) - it is enforcing auth, which is a different thing from reachability.`
+  if (code >= 300 && code < 400) return `the app answered with a redirect (HTTP ${code}), which Radar does not follow - so whatever it points at is untested from here.`
+  if (code >= 400) return `the app answered (HTTP ${code}) - that is it saying it serves no route for ${asked}, not a reachability problem. To verify a real route, re-run with a path your app serves.`
+  return undefined
 }
 
 /** The persistent diagnosis: did traffic get through, from where, and what next. */
@@ -439,7 +474,14 @@ function pathSection(ctx: Ctx): Sidebar['path'] {
     : mark === 'proved'
       ? 'A real request went through and the target answered.'
       : mark === 'proxied'
-        ? 'Kubernetes relayed a request and the target answered — which shows something is serving, not that the normal path works.'
+        ? [
+            'Kubernetes relayed a request and the target answered — which shows something is serving, not that the normal path works.',
+            // The relay caveat alone leaves "404" unreadable: the reader still
+            // cannot tell whether the answer itself was a problem.
+            statusMeaning(asSeen?.evidence, ctx.httpPath) && `As for the answer itself: ${statusMeaning(asSeen?.evidence, ctx.httpPath)}`,
+          ]
+            .filter(Boolean)
+            .join(' ')
         : mark === 'untested'
           ? 'Nothing has been tried from here yet. Configuration may look right, but that is intent, not proof.'
           : mark === 'stale'
@@ -451,7 +493,14 @@ function pathSection(ctx: Ctx): Sidebar['path'] {
                 // the reader to debug an application response that never existed.
                 asSeen?.outcome === 'unreachable' && asSeen?.confidence === 'indirect'
                 ? 'The relayed dial failed. The proxy bypasses the real path, so this does not condemn it — but nothing answered, and the real path is still untested.'
-                : 'The target answered, but not with what was asked for.'
+                : (() => {
+                  const meaning = statusMeaning(asSeen?.evidence, ctx.httpPath)
+                  return meaning ? `The path works: ${meaning}` : undefined
+                })() ??
+                // A transport-only reach: nothing was asked of the application.
+                (asSeen?.outcome === 'reached'
+                  ? 'The port accepted a connection, but nothing was asked of the application - the transport works and the application protocol is unverified.'
+                  : 'The target answered, but not with what was asked for.')
 
   return {
     chipTone: asSeen ? routeTone(asSeen, { stale: ctx.stale, running: ctx.running }) : 'unknown',
@@ -459,7 +508,7 @@ function pathSection(ctx: Ctx): Sidebar['path'] {
     title: `${origin.name} → ${route?.target || trace.subject.name}`,
     request: route ? `${route.route}${ctx.httpPath && ctx.httpPath !== '/' ? ` · HTTP path ${ctx.httpPath}` : ''}` : undefined,
     body,
-    scope: [...originScope(origin, trace), ...(route ? [{ k: 'PATH', v: route.route }] : [])],
+    scope: [...originScope(origin, trace, requestLabel(route, ctx.httpPath)), ...(route ? [{ k: 'PATH', v: route.route }] : [])],
     evidence,
     notProve,
     next:
