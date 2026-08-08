@@ -73,7 +73,9 @@ describe('the diagnosis is always present', () => {
     const s = buildSidebar(undefined, ctx(t, 'incluster'))
     expect(s.path.title).toBeTruthy()
     expect(s.path.evidence.length).toBeGreaterThan(0)
-    expect(s.path.next.header).toBeTruthy()
+    // The panel always answers the path question; a next-step block is offered
+    // only when there is genuinely a next step.
+    expect(s.path.body).toBeTruthy()
     expect(s.resource).toBeUndefined()
   })
 
@@ -223,10 +225,14 @@ describe('verdict band', () => {
     expect(s.path.next.header).toMatch(/run this next/i)
   })
 
-  it('says so plainly when nothing stronger can be run', () => {
+  it('offers nothing when nothing stronger can be run', () => {
+    // A resource-level "there is no more to learn" repeated on every vantage was
+    // scope mixing; the ceiling is stated with specifics in the caveats and the
+    // footer's coverage ledger instead.
     const t = mk([pod('a', true, '10.0.0.1')], [p({}), p({ path: 'apiserver' }), p({ vantage: 'local', path: 'data' })])
     const s = buildSidebar(undefined, ctx(t, 'incluster'))
-    expect(s.path.next.header).toMatch(/no stronger test/i)
+    expect(s.path.next.header).toBe('')
+    expect(s.path.next.ctas).toHaveLength(0)
   })
 
   it('falls back to the backend verdict when there is no route to derive a tone from', () => {
@@ -638,14 +644,13 @@ describe('a proxy-only failure never claims the target answered', () => {
   })
 })
 
-describe('the terminal "nothing to do" state is quiet', () => {
-  it('no call-to-action styling, no duplicate Re-run, no repeated ceiling caveat', () => {
+describe('nothing to suggest means nothing shown', () => {
+  it('renders no next-step block at all when there is no stronger test', () => {
     const t = mk([pod('a', true, '10.0.0.1')], [p({})])
     const s = buildSidebar(undefined, ctx(t, 'incluster'))
-    expect(s.path.next.quiet).toBe(true)
+    expect(s.path.next.header).toBe('')
+    expect(s.path.next.body).toBe('')
     expect(s.path.next.ctas).toHaveLength(0)
-    expect(s.path.next.body).toMatch(/strongest evidence/i)
-    expect(s.path.next.blocked).toBeUndefined()
   })
 })
 

@@ -285,6 +285,8 @@ export interface Diagnosis {
    *  statement about what could be tested). The problem list renders faults
    *  only - a coverage sentence there restates the headline. */
   class?: string
+  /** Severity of the finding this was promoted from. */
+  severity?: string
   causeCode?: string
   /** Which route this diagnosis explains, when attributable to exactly one.
    *  Absent means it describes the resource as a whole. The selected-path panel

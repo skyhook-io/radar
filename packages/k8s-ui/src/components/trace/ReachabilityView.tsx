@@ -219,8 +219,9 @@ function ReachabilityBoard(props: BoardProps) {
         running: selectedOriginRunning,
         multiPath,
         httpPath: props.probePath,
+        canRunInCluster: !!onRunInCluster && inClusterAllowed !== false,
       }),
-    [selection, trace, route, origin, origins, model, stale, selectedOriginRunning, multiPath, props.probePath],
+    [selection, trace, route, origin, origins, model, stale, selectedOriginRunning, multiPath, props.probePath, onRunInCluster, inClusterAllowed],
   )
   const verdict = useMemo(
     () => buildVerdict(trace, route, { stale, running: selectedOriginRunning, originId: origin?.id, originName: origin?.name, pathLabel: multiPath ? scenario?.primary.target || scenario?.label : undefined }),
@@ -228,8 +229,9 @@ function ReachabilityBoard(props: BoardProps) {
   )
 
   const problems = useMemo(
-    () => problemRows(trace, route, origins, origin?.id),
-    [trace, route, origins, origin],
+    () => problemRows(trace, origins, new Set(model.nodes.map((n) => n.id))),
+    // Deliberately NOT keyed on the selection: the header is the resource.
+    [trace, origins, model],
   )
 
   const onCTA = (cta: InspectorCTA) => {
@@ -508,12 +510,25 @@ const SEV_RANK: Record<ProblemRow['severity'], number> = { critical: 0, warning:
  *  diagnosis, the declared entries that cannot carry traffic, and a pointer to
  *  anything only another vantage saw. Two separate bands read as two separate
  *  problems when they were often the same one. */
-export function problemRows(trace: Trace, route: RouteResult | undefined, origins: Origin[], selectedOriginId?: string): ProblemRow[] {
+export function problemRows(
+  trace: Trace,
+  origins: Origin[],
+  knownNodeIds: ReadonlySet<string>,
+): ProblemRow[] {
   const rows: ProblemRow[] = []
   const seen = new Set<string>()
   const push = (r: ProblemRow) => {
     const k = `${r.subject}\u0000${r.text}`
     if (seen.has(k)) return
+    // Never address a node the graph does not draw: a Pod culprit resolves to
+    // the aggregate Pods node it lives in, and anything still unknown drops its
+    // pointer rather than offering a hover that rings nothing and a click that
+    // selects a section no inspector can resolve.
+    if (r.nodeId && !knownNodeIds.has(r.nodeId)) {
+      const pods = [...knownNodeIds].find((id) => id.startsWith('n:Pods/'))
+      if (r.nodeId.startsWith('n:Pod/') && pods) r = { ...r, nodeId: pods }
+      else r = { ...r, nodeId: '' }
+    }
     seen.add(k)
     rows.push(r)
   }
@@ -531,7 +546,9 @@ export function problemRows(trace: Trace, route: RouteResult | undefined, origin
       text: noteHeadline(d.summary),
       detail: [d.summary, d.nextAction].filter(Boolean).join(' — '),
       nodeId: refNode(ref) || refNode(trace.subject),
-      severity: 'critical',
+      // The detector's own severity. Assuming critical turned every warning-tier
+      // prediction into a red it had not earned.
+      severity: d.severity === 'critical' ? 'critical' : 'warning',
     })
   }
 
@@ -547,22 +564,25 @@ export function problemRows(trace: Trace, route: RouteResult | undefined, origin
     })
   }
 
-  // Something only ANOTHER vantage saw. Without this a reader parked on one
-  // capsule never learns that a different one hit a wall - the fault would be
-  // discoverable only by luck of which capsule they clicked.
+  // A fault some vantage hit, on ANY declared path. Deliberately independent of
+  // what is selected: the header is the resource, so a row that appears or
+  // vanishes as you click capsules would hide exactly the fault the reader has
+  // not thought to look for.
   for (const o of origins) {
-    if (o.id === selectedOriginId || o.unsupported) continue
-    const own = route ? routeForOrigin(route, o.id, trace.runVantage) : undefined
-    if (!own || (own.outcome !== 'unreachable' && own.outcome !== 'server-error')) continue
-    push({
-      key: `vantage-${o.id}`,
-      scope: 'ANOTHER VANTAGE',
-      subject: o.name,
-      text: own.evidence ? noteHeadline(own.evidence) : 'this vantage could not get through',
-      detail: own.evidence,
-      nodeId: `origin:${o.id}`,
-      severity: 'warning',
-    })
+    if (o.unsupported) continue
+    for (const r of trace.routes ?? []) {
+      const own = routeForOrigin(r, o.id, trace.runVantage)
+      if (!own || (own.outcome !== 'unreachable' && own.outcome !== 'server-error')) continue
+      push({
+        key: `vantage-${o.id}-${r.route}`,
+        scope: 'SEEN FROM',
+        subject: o.name,
+        text: own.evidence ? noteHeadline(own.evidence) : `could not get through to ${r.target || r.route}`,
+        detail: [own.evidence, `path: ${r.route}`].filter(Boolean).join(' — '),
+        nodeId: `origin:${o.id}`,
+        severity: 'warning',
+      })
+    }
   }
 
   return rows.sort((a, b) => SEV_RANK[a.severity] - SEV_RANK[b.severity])

@@ -2247,3 +2247,27 @@ func TestComputeEntryProblems_DedupesAgainstDiagnosis(t *testing.T) {
 		t.Fatalf("EntryProblems = %+v, want none - the Diagnosis already says it", got)
 	}
 }
+
+// An entry can serve THIS Service perfectly while a different backendRef of the
+// same entry is missing. Promoting that sibling's break as "this entry cannot
+// carry traffic" is the misattribution computeVerdict already refuses to make.
+func TestComputeEntryProblems_IgnoresSiblingMissingRef(t *testing.T) {
+	tr := &Trace{
+		Subject: ResourceRef{Kind: "Service", Namespace: "store", Name: "shop"},
+		Upstreams: []Hop{{
+			Resource: ResourceRef{Kind: "Ingress", Namespace: "store", Name: "entry"},
+			Findings: []Finding{
+				{Code: missingRefCodePrefix + "service", Severity: SeverityCritical, Message: "backend Service checkout does not exist"},
+				{Code: "gwroute:not-accepted", Severity: SeverityWarning, Message: "Not attached: no listener matches its hosts"},
+			},
+		}},
+		Downstream: []Hop{{Resource: ResourceRef{Kind: "Service", Namespace: "store", Name: "shop"}}},
+	}
+	got := computeEntryProblems(tr)
+	if len(got) != 1 {
+		t.Fatalf("EntryProblems = %+v, want only the entry's OWN fault", got)
+	}
+	if strings.Contains(got[0].Summary, "checkout") {
+		t.Errorf("a sibling backend's missing ref was promoted as this entry's problem: %q", got[0].Summary)
+	}
+}

@@ -984,7 +984,10 @@ const (
 
 type Diagnosis struct {
 	// Class is "fault" (default, promoted from a finding) or "coverage".
-	Class     string `json:"class,omitempty"`
+	Class string `json:"class,omitempty"`
+	// Severity of the finding this was promoted from, so a consumer renders the
+	// weight the detector assigned rather than assuming the worst.
+	Severity  string `json:"severity,omitempty"`
 	CauseCode string `json:"causeCode,omitempty"`
 	// Route names WHICH route this diagnosis explains, when it is attributable
 	// to exactly one. Empty means it describes the resource as a whole.
@@ -1017,7 +1020,12 @@ func computeEntryProblems(t *Trace) []EntryProblem {
 	}
 	var out []EntryProblem
 	for _, h := range t.Upstreams {
-		for _, f := range h.Findings {
+		// A missing-ref on an entry is about a DIFFERENT backendRef: the entry can
+		// still serve this Service perfectly while another of its backends is
+		// missing. computeVerdict already refuses to let a sibling's break count
+		// here; promoting it as "this entry cannot carry traffic" would be the
+		// same misattribution one surface up.
+		for _, f := range nonMissingRefFindings(h.Findings) {
 			if f.Severity != SeverityCritical && f.Severity != SeverityWarning {
 				continue
 			}
@@ -1059,6 +1067,10 @@ func computeDiagnosis(t *Trace) *Diagnosis {
 		d := &Diagnosis{
 			Summary: firstNonEmpty(f.Cause, f.Message),
 			Command: f.Command,
+			// The promoted finding's OWN severity. Without it a consumer has to
+			// invent one, and a warning-tier prediction (a would-deny, a soft pod
+			// condition) renders as a red critical it never earned.
+			Severity: f.Severity,
 		}
 		if trustworthyCauseCode(f.Code) {
 			d.CauseCode = f.Code

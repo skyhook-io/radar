@@ -158,6 +158,7 @@ function gapNext(
   namespace?: string,
   multiPath?: boolean,
   inClusterRunnable = true,
+  canRun = true,
 ): Sidebar['path']['next'] {
   // The server can only test a route that carries a concrete in-cluster request.
   // When none does, the run fails with "not supported for this subject" - so the
@@ -168,10 +169,14 @@ function gapNext(
   // graph, which is the thing that would produce the missing evidence - and a
   // third copy of the same control (header, panel, capsule) was one too many.
   // The panel keeps the REASONING, which is what it is good at.
-  const inClusterCTA = (): InspectorCTA[] =>
-    inClusterRunnable
+  const inClusterCTA = (): InspectorCTA[] => {
+    // No handler wired (a library consumer that omits it) means the click would
+    // do nothing at all - offer nothing rather than a button that lies.
+    if (!canRun) return []
+    return inClusterRunnable
       ? [{ text: '⚗ Run the in-cluster test', action: 'run-in-cluster', primary: true }]
       : [{ text: '⚗ Run the in-cluster test', action: 'run-in-cluster', disabledReason: notRunnable }]
+  }
   const actionable = actionableGap(origins)
   const ceiling = strongestGap(origins)
   const ceilingNote = ceiling?.unsupported ? `Even then, ${ceiling.name.toLowerCase()} stays untested — ${ceiling.unavailable}` : undefined
@@ -214,17 +219,13 @@ function gapNext(
     }
   }
   if (!actionable) {
-    // Terminal state: there is nothing to do, and a call-to-action box whose
-    // message is "no action" shouts its own irrelevance. One quiet line of
-    // closure; no Re-run (the header already owns that control - the same
-    // one-copy rule as inClusterCTA), and no ceiling caveat (WHAT THIS
-    // DOESN'T PROVE states it on this same pane).
-    return {
-      header: 'NO STRONGER TEST AVAILABLE',
-      body: `This is the strongest evidence Radar can collect for this path.${allPaths}`,
-      ctas: [],
-      quiet: true,
-    }
+    // Nothing to offer: say nothing. This was a resource-level statement living
+    // in the selection-scoped panel, identical on every vantage - the scope
+    // mixing this redesign exists to remove - and the ceiling it gestured at is
+    // already stated, with specifics, in WHAT THIS DOESN'T PROVE and in the
+    // footer's coverage ledger. An empty section is the honest render of
+    // "there is no next step".
+    return { header: '', body: '', ctas: [] }
   }
   return {
     header: 'RUN THIS NEXT',
@@ -268,6 +269,9 @@ interface Ctx {
   multiPath?: boolean
   /** The HTTP path the run requests, as chosen in "what to test". */
   httpPath?: string
+  /** False when the host wired no in-cluster handler, or permission is denied:
+   *  the run must not be offered at all then. */
+  canRunInCluster?: boolean
 }
 
 /**
@@ -309,11 +313,18 @@ function requestLabel(route: RouteResult | undefined, httpPath?: string): string
  * routing, auth or health, which reachability does not judge. Say that, and say
  * what would turn it into a verified pass.
  */
-function statusMeaning(evidence?: string, httpPath?: string): string | undefined {
+function statusMeaning(evidence?: string, httpPath?: string, failedLayer?: string): string | undefined {
   const m = /HTTP\s+(\d{3})/i.exec(evidence ?? '')
   if (!m) return undefined
   const code = Number(m[1])
   const asked = httpPath && httpPath !== '/' ? httpPath : '/'
+  // 502/504 are NOT the app: a gateway answering that it could not reach its
+  // upstream. The producer says so with failedLayer 'upstream'; blaming app
+  // health here contradicted the chip beside it.
+  if (failedLayer === 'upstream' || code === 502 || code === 504) {
+    return `the front door answered, but only to say it could not reach the backend (HTTP ${code}) - the break is between the entry and the app, not inside the app.`
+  }
+  if (failedLayer === 'tls') return `the TLS handshake did not verify (HTTP ${code}) - a certificate problem, not an application one.`
   if (code >= 500) return `the request reached the app and the app itself returned an error (HTTP ${code}) - application health, which this page does not judge.`
   if (code === 401 || code === 403 || code === 407) return `the app answered by demanding credentials (HTTP ${code}) - it is enforcing auth, which is a different thing from reachability.`
   if (code >= 300 && code < 400) return `the app answered with a redirect (HTTP ${code}), which Radar does not follow - so whatever it points at is untested from here.`
@@ -490,7 +501,7 @@ function pathSection(ctx: Ctx): Sidebar['path'] {
             'Kubernetes relayed a request and the target answered — which shows something is serving, not that the normal path works.',
             // The relay caveat alone leaves "404" unreadable: the reader still
             // cannot tell whether the answer itself was a problem.
-            statusMeaning(asSeen?.evidence, ctx.httpPath) && `As for the answer itself: ${statusMeaning(asSeen?.evidence, ctx.httpPath)}`,
+            statusMeaning(asSeen?.evidence, ctx.httpPath, asSeen?.failedLayer) && `As for the answer itself: ${statusMeaning(asSeen?.evidence, ctx.httpPath, asSeen?.failedLayer)}`,
           ]
             .filter(Boolean)
             .join(' ')
@@ -517,7 +528,7 @@ function pathSection(ctx: Ctx): Sidebar['path'] {
                 asSeen?.outcome === 'unreachable' && asSeen?.confidence === 'indirect'
                 ? 'The relayed dial failed. The proxy bypasses the real path, so this does not condemn it — but nothing answered, and the real path is still untested.'
                 : (() => {
-                  const meaning = statusMeaning(asSeen?.evidence, ctx.httpPath)
+                  const meaning = statusMeaning(asSeen?.evidence, ctx.httpPath, asSeen?.failedLayer)
                   return meaning ? `The path works: ${meaning}` : undefined
                 })() ??
                 // A transport-only reach: nothing was asked of the application.
@@ -544,7 +555,7 @@ function pathSection(ctx: Ctx): Sidebar['path'] {
               ...(diagnosis.command ? [{ text: 'Copy the command', action: 'copy-command' as InspectorAction, command: diagnosis.command }] : []),
             ],
           }
-        : gapNext(origins, origin, trace.subject.namespace, ctx.multiPath, traceInClusterRunnable(trace)),
+        : gapNext(origins, origin, trace.subject.namespace, ctx.multiPath, traceInClusterRunnable(trace), ctx.canRunInCluster !== false),
   }
 }
 
