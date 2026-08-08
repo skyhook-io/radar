@@ -8,6 +8,7 @@ import {
   isBackupPartialFailurePhase,
   isVeleroResource,
   getScheduleCronInfo,
+  getBackupRepositoryStatus,
 } from './resource-utils-velero'
 
 const backup = (phase: string, extra: Record<string, unknown> = {}) => ({
@@ -34,6 +35,21 @@ describe('getCellFilterValue — Velero status column', () => {
     const paused = schedule({ paused: true }, { phase: 'Enabled' })
     expect(getScheduleStatus(paused).text).toBe('Paused')
     expect(getCellFilterValue(paused, 'status', 'veleroschedules')).toBe('Paused')
+  })
+
+  it('offers the BackupRepository dropdown the same string the badge shows', () => {
+    // Asserted as literals rather than against the reader: comparing the filter
+    // to getBackupRepositoryStatus().text passes even when both are wrong. The
+    // contract is that the dropdown offers "Not ready" — the label — and never
+    // the raw NotReady phase the generic fallback would have produced.
+    const repo = {
+      apiVersion: 'velero.io/v1',
+      kind: 'BackupRepository',
+      status: { phase: 'NotReady' },
+    }
+    expect(getBackupRepositoryStatus(repo).text).toBe('Not ready')
+    expect(getCellFilterValue(repo, 'status', 'backuprepositories')).toBe('Not ready')
+    expect(getCellFilterValue(repo, 'status', 'backuprepositories')).not.toBe('NotReady')
   })
 
   it('filters a validation-error-only Schedule as FailedValidation', () => {
