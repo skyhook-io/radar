@@ -266,6 +266,9 @@ function Node({
   // An origin capsule carries exactly one status row; its action shares that
   // line instead of adding a full-width row beneath it.
   const inlineAction = !!(isOrigin && node.action && node.anomalies?.length === 1)
+  // A test running FROM this vantage: the edge already animates, but the
+  // capsule it leaves from looked as inert as everything else on the board.
+  const testing = !!node.anomalies?.some((a) => a.mark === 'running')
   const style: CSSProperties = {
     left: node.x,
     top: node.y,
@@ -290,6 +293,7 @@ function Node({
     <div
       role="button"
       tabIndex={0}
+      data-testing={testing || undefined}
       // The visible text is kind + name in separate spans a screen reader joins
       // unpredictably; one explicit name says what this is and (for a vantage
       // capsule) what selecting it does.
@@ -302,7 +306,7 @@ function Node({
           onSelect(node.id)
         }
       }}
-      className="absolute cursor-pointer px-2.5 py-1.5 text-left"
+      className={`absolute cursor-pointer px-2.5 py-1.5 text-left${testing ? ' reach-node-testing' : ''}`}
       style={style}
     >
       <div className="flex items-center gap-1.5">
@@ -348,11 +352,15 @@ function Node({
         <div className="mt-1.5 flex flex-col gap-0.5 border-t border-theme-border-subtle pt-1.5">
           {node.anomalies.map((a, i) => (
             <div key={i} className={`flex gap-1.5 ${inlineAction && i === 0 ? 'items-center' : 'items-baseline'}`}>
-              <MarkGlyph mark={a.mark} />
+              <span className={a.mark === 'running' ? 'reach-glyph-testing' : undefined}>
+                <MarkGlyph mark={a.mark} />
+              </span>
               {/* Rows truncate visually; the full sentence must always be a
                   hover away - a cut "reached, redirect…" hid its destination. */}
               <Tooltip content={a.title || a.text} wrapperClassName="min-w-0 flex-1">
-                <span className="block truncate text-[9.5px] leading-[1.35] text-theme-text-secondary">{a.text}</span>
+                <span className={`block truncate text-[9.5px] leading-[1.35] text-theme-text-secondary${a.mark === 'running' ? ' reach-label-testing' : ''}`}>
+                  {a.text}
+                </span>
               </Tooltip>
               {/* The capsule's single status row and its action share the line -
                   a stacked full-width button grew the capsule past the height

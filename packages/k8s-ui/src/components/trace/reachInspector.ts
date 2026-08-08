@@ -2,7 +2,7 @@ import type { Trace, RouteResult, ResourceRef } from './types'
 import type { Mark, SevTone } from './reachMarks'
 import { routeMark, routeChip, routeTone, routeAsSeenFrom, originRouteEvidence, routeForOrigin, traceInClusterRunnable, markHelp } from './reachMarks'
 import type { Origin, OriginId } from './reachOrigins'
-import { strongestGap, actionableGap, originSkipReason } from './reachOrigins'
+import { strongestGap, actionableGap, originSkipReason, originInformationalReason } from './reachOrigins'
 import { hopEvidenceFor, originProducedEvidence, type GraphNode } from './reachGraphModel'
 
 // 'run-probes' re-runs the reachability probes. It is deliberately NOT
@@ -432,12 +432,16 @@ function pathSection(ctx: Ctx): Sidebar['path'] {
     // has been run" - the capsule preserves the attempt and this row must not
     // erase it. The error itself is the observation.
     const attemptError = origin.id === 'incluster' && origin.mark === 'blocked' ? origin.unavailable : undefined
+    // A demoted run produced a real observation; "no test has been run from
+    // here" erased it.
+    const informational = origin.mark === 'inconclusive' ? originInformationalReason(trace, origin.id) : undefined
     add(
       mark,
       // The attempt error outranks skip rows: a prior Job's leftover skips
       // would otherwise paint a fresh failed run (image pull, quota) with last
       // run's reason, one pane from a capsule saying "test couldn't run".
-      attemptError ||
+      informational ||
+        attemptError ||
         skipReason ||
         (origin.unsupported
           ? 'Radar cannot test from here, so nothing has been learned this way'
@@ -463,6 +467,12 @@ function pathSection(ctx: Ctx): Sidebar['path'] {
     ? 'The configuration itself is broken, so this path cannot work from any vantage. No request was sent to establish that — it is read off what is declared.'
     : reachedSomething
     ? 'This vantage did reach part of the path — see what it saw below. It has no result for this route as a whole, so the end-to-end journey from here is still unproven.'
+    : origin.mark === 'inconclusive'
+    // A demoted run RAN and answered - it is only kept out of the verdict. The
+    // "nothing has been tested" branch below fired first and denied it happened.
+    ? `The probe ran and got an answer, but it is kept as evidence rather than a verdict${
+        originInformationalReason(trace, origin.id) ? `: ${originInformationalReason(trace, origin.id)}` : ''
+      }. A throwaway identity cannot stand in for your application, so what it saw informs but never decides.`
     : !hasEvidence
     ? (origin.unavailable || 'Nothing has been tested from here, so this says nothing about whether traffic gets through.') +
       // When NOTHING was tested anywhere, the health dots are the only colour
@@ -486,6 +496,17 @@ function pathSection(ctx: Ctx): Sidebar['path'] {
           ? 'Nothing has been tried from here yet. Configuration may look right, but that is intent, not proof.'
           : mark === 'stale'
             ? 'This result predates a change to the cluster, so it is set aside rather than trusted.'
+            : mark === 'excluded'
+              // Benign by design (deliberately scaled to zero, a not-eligible
+              // endpoint). It fell through to the generic "answered" sentence,
+              // which described a request that was never sent.
+              ? `${asSeen?.evidence || 'Nothing is behind this path right now'} — that is deliberate, not a failure: nothing was sent, because there is nothing to reach.`
+            : mark === 'inconclusive'
+              // The probe RAN and answered; the answer was deliberately kept out
+              // of the verdict. The reason was collected and then never shown.
+              ? `The probe ran and got an answer, but it is kept as evidence rather than a verdict${
+                  originSkipReason(trace, origin.id, route) ? `: ${originSkipReason(trace, origin.id, route)}` : ''
+                }. A throwaway identity cannot stand in for your application, so what it saw informs but never decides.`
             : mark === 'running'
               ? 'A test is running. Earlier results stay until new ones replace them.'
               : // A proxy-only failure wears the same amber mark as a real answer,

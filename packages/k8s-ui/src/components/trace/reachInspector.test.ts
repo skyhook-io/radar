@@ -787,3 +787,32 @@ describe('a relayed answer explains the relay AND the answer', () => {
     expect(b).not.toContain('The path works')
   })
 })
+
+describe('every state explains itself, not the nearest generic sentence', () => {
+  const withRoute = (r: RouteResult, probes = [p({})]) => {
+    const t = mk([pod('a', true, '10.0.0.1')], probes)
+    t.routes = [r]
+    return buildSidebar(undefined, ctx(t, 'incluster', r)).path.body
+  }
+
+  it('a deliberately dormant path is not described as an answer', () => {
+    const b = withRoute(route({ outcome: 'unreachable', benign: true, evidence: 'no running backends (scaled to 0)' } as never))
+    expect(b).toContain('deliberate')
+    expect(b).not.toContain('not with what was asked for')
+  })
+
+  it('a kept-informational run says it ran AND why it does not decide', () => {
+    const t = mk([pod('a', true, '10.0.0.1')], [
+      p({ target: 'shop:80', port: 80, skipped: true, skipClass: 'informational', reason: 'the throwaway Pod was denied by mTLS', ok: false, source: 'probe-job' }),
+    ])
+    const r = route({ target: 'shop:80', outcome: 'not-tested', confidence: undefined, byVantage: undefined } as never)
+    t.routes = [r]
+    const b = buildSidebar(undefined, ctx(t, 'incluster', r)).path.body
+    expect(b + JSON.stringify(buildSidebar(undefined, ctx(t, 'incluster', r)).path.evidence)).toContain('denied by mTLS')
+  })
+
+  it('a verified answer is not described as a partial one', () => {
+    const b = withRoute(route({ outcome: 'verified', confidence: 'real', evidence: 'HTTP 200 · verified' } as never))
+    expect(b).toContain('A real request went through')
+  })
+})

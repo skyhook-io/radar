@@ -194,6 +194,18 @@ export function originSkipReason(trace: Trace | undefined, originId: OriginId, r
 }
 
 /**
+ * Why this origin's run was kept informational. A demotion applies to the RUN,
+ * not to one backend, so this is origin-scoped rather than route-scoped: the
+ * route-scoped lookup asks which declared path a skip speaks for, which is the
+ * wrong question when the whole run was demoted.
+ */
+export function originInformationalReason(trace: Trace | undefined, originId: OriginId): string | undefined {
+  return allProbes(trace).find(
+    (p) => p.skipped && p.skipClass === 'informational' && !!p.reason && originOf(p, trace?.runVantage) === originId,
+  )?.reason
+}
+
+/**
  * Builds the origin rail for a trace.
  *
  * Order is by evidence strength, not by availability, so the gap between what

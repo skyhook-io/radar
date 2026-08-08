@@ -273,3 +273,38 @@
 @media (prefers-reduced-motion: reduce) {
   .reach-edge-testing { animation: none; }
 }
+
+/* reach-node-testing: the vantage a test is running FROM, while it runs.
+   The edge already shows the request travelling; the capsule it leaves from
+   stayed inert, so the source of the work looked as static as everything else.
+   A slow border breathe + a lifted surface says "this one is working" without
+   competing with the flowing edge. Semantic: only the running origin gets it. */
+@keyframes reach-node-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); }
+  50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 12%, transparent); }
+}
+.reach-node-testing {
+  animation: reach-node-breathe 1.6s ease-in-out infinite;
+}
+/* The running glyph turns, so the row reads as live even at a glance. */
+@keyframes reach-glyph-spin {
+  to { transform: rotate(360deg); }
+}
+.reach-glyph-testing {
+  display: inline-block;
+  animation: reach-glyph-spin 1.4s linear infinite;
+}
+/* The label itself pulses gently - "testing now" that never changes reads as
+   a stuck state on a long run. */
+@keyframes reach-label-fade {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+.reach-label-testing {
+  animation: reach-label-fade 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .reach-node-testing,
+  .reach-glyph-testing,
+  .reach-label-testing { animation: none; }
+}
