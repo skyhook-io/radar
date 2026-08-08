@@ -133,10 +133,10 @@ func veleroBackupSeriesKey(u *unstructured.Unstructured) string {
 }
 
 // newestDecidedVeleroRun returns the most recent run that reached a verdict, or
-// nil when every run in the group is still in flight. Ordering prefers the
-// backup's own start time and falls back to creationTimestamp; the name breaks
-// ties so the result is stable across polls (Velero's generated names embed a
-// second-resolution timestamp, so same-second siblings are possible).
+// nil when every run in the group is still in flight. Ordering is by
+// creationTimestamp (see veleroRunTime for why not start time); the name breaks
+// ties so the result is stable across polls, since creationTimestamp has
+// second resolution and Velero's generated names can collide on the second.
 func newestDecidedVeleroRun(group []*unstructured.Unstructured) *unstructured.Unstructured {
 	decided := make([]*unstructured.Unstructured, 0, len(group))
 	for _, u := range group {
@@ -232,9 +232,8 @@ func veleroScheduleIssues(gvr schema.GroupVersionResource, kind string, items []
 		if len(validationErrors) > 0 {
 			message = strings.Join(validationErrors, "; ")
 		}
-		out = append(out, newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(),
-			SeverityCritical, ReasonVeleroScheduleValidationFailed, message,
-			veleroStateSince(u), "", u.GetCreationTimestamp().Time))
+		out = append(out, veleroStateIssue(gvr, kind, u.GetNamespace(), u.GetName(),
+			SeverityCritical, ReasonVeleroScheduleValidationFailed, message, u.GetCreationTimestamp().Time))
 	}
 	return out
 }
@@ -246,9 +245,8 @@ func veleroBSLIssues(gvr schema.GroupVersionResource, kind string, items []*unst
 			continue
 		}
 		message := veleroFailureMessage(u, "backup storage location is Unavailable — Velero cannot read or write backups here")
-		out = append(out, newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(),
-			SeverityCritical, ReasonVeleroBSLUnavailable, message,
-			veleroStateSince(u), "", u.GetCreationTimestamp().Time))
+		out = append(out, veleroStateIssue(gvr, kind, u.GetNamespace(), u.GetName(),
+			SeverityCritical, ReasonVeleroBSLUnavailable, message, u.GetCreationTimestamp().Time))
 	}
 	return out
 }
@@ -260,9 +258,8 @@ func veleroRepositoryIssues(gvr schema.GroupVersionResource, kind string, items 
 			continue
 		}
 		message := veleroFailureMessage(u, "backup repository is NotReady — filesystem and data-mover backups to it will fail")
-		out = append(out, newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(),
-			SeverityWarning, ReasonVeleroRepositoryNotReady, message,
-			veleroStateSince(u), "", u.GetCreationTimestamp().Time))
+		out = append(out, veleroStateIssue(gvr, kind, u.GetNamespace(), u.GetName(),
+			SeverityWarning, ReasonVeleroRepositoryNotReady, message, u.GetCreationTimestamp().Time))
 	}
 	return out
 }
@@ -302,26 +299,44 @@ func veleroRunSince(u *unstructured.Unstructured) time.Duration {
 	return 0
 }
 
-// veleroStateSince covers the kinds that describe standing state rather than a
-// run — Schedule, BackupStorageLocation, BackupRepository. None of them records
-// when its phase last changed (their status carries only phase, message and
-// last-check times), so there is nothing to anchor on and this returns 0.
+// veleroStateIssue builds an issue for the kinds that describe standing state
+// rather than a run — Schedule, BackupStorageLocation, BackupRepository. None of
+// them records when its phase last changed (their status carries only phase,
+// message and last-check times), so there is no honest age to report.
 //
-// Falling back to creationTimestamp here would be actively misleading: a BSL
-// that ran healthy for six months and broke two minutes ago would report
-// FirstSeen six months back and assert issue_timing
-// "started_at_resource_creation" — i.e. that the destination was never usable.
-// Returning 0 makes newConditionIssue anchor at compose time and omit
-// issue_timing, which claims nothing it cannot support.
-func veleroStateSince(*unstructured.Unstructured) time.Duration { return 0 }
+// FirstSeen is therefore cleared rather than left at compose time. Anchoring on
+// creationTimestamp would claim a BSL that ran healthy for six months and broke
+// two minutes ago had been broken since the day it was created; anchoring at
+// compose time is worse in practice, because issues are recomposed every poll,
+// so the age would re-derive from "now" on every read and sit at 0s forever —
+// telling an operator asking "how long has this been broken" that it is always
+// a brand-new problem. Both are fabrications. `first_seen` is `omitzero` on the
+// wire, so a zero value simply omits the field (same treatment
+// source_karpenter.go gives an issue whose start it cannot establish).
+//
+// LastSeen stays at now: that one is true — it is when we observed the state.
+func veleroStateIssue(gvr schema.GroupVersionResource, kind, namespace, name string, severity Severity, reason, message string, createdAt time.Time) Issue {
+	iss := newConditionIssue(gvr, kind, namespace, name, severity, reason, message, 0, "", createdAt)
+	iss.FirstSeen = time.Time{}
+	iss.LastSeen = time.Now()
+	return iss
+}
 
 // veleroRunTime orders runs within a series.
+//
+// Deliberately creationTimestamp only, never startTimestamp. A run rejected in
+// validation never starts and so carries no start time, while a run that
+// succeeded does — ordering one against the other compares two different
+// lifecycle events, and the comparison can invert. That is not hypothetical:
+// the schedule controller does not block a new backup while a prior one sits
+// Queued, and the backup controller stamps startTimestamp only after validation
+// passes, so an older run can start (and succeed) after a newer run was created
+// and rejected. Ordering on start time there lets the success bury the newer
+// real failure — the exact silent-failure class this adapter exists to remove.
+//
+// creationTimestamp is on every object, means the same thing for all of them,
+// and for a schedule series is monotonic with run order.
 func veleroRunTime(u *unstructured.Unstructured) time.Time {
-	if ts, ok, _ := unstructured.NestedString(u.Object, "status", "startTimestamp"); ok && ts != "" {
-		if t, err := time.Parse(time.RFC3339, ts); err == nil {
-			return t
-		}
-	}
 	return u.GetCreationTimestamp().Time
 }
 

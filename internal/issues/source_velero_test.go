@@ -1,6 +1,7 @@
 package issues
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -20,8 +21,14 @@ type veleroObj struct {
 	namespace string
 	schedule  string
 	phase     string
-	// started is minutes before now; 0 means "no startTimestamp".
+	// started is minutes before now; 0 means "no startTimestamp" — the shape a
+	// FailedValidation run really has, since Velero only stamps a start time
+	// after validation passes.
 	startedMinsAgo int
+	// createdMinsAgo defaults to 24h when unset. Set it explicitly whenever a
+	// test depends on ordering: creation time and start time are different
+	// lifecycle events and must never be compared against each other.
+	createdMinsAgo int
 	validation     []string
 	message        string
 	errors         int64
@@ -33,10 +40,14 @@ func (o veleroObj) build(kind string) *unstructured.Unstructured {
 	if ns == "" {
 		ns = "velero"
 	}
+	created := 24 * 60
+	if o.createdMinsAgo > 0 {
+		created = o.createdMinsAgo
+	}
 	meta := map[string]any{
 		"name":              o.name,
 		"namespace":         ns,
-		"creationTimestamp": metav1.NewTime(time.Now().Add(-24 * time.Hour)).UTC().Format(time.RFC3339),
+		"creationTimestamp": metav1.NewTime(time.Now().Add(-time.Duration(created) * time.Minute)).UTC().Format(time.RFC3339),
 	}
 	if o.schedule != "" {
 		meta["labels"] = map[string]any{veleroScheduleLabel: o.schedule}
@@ -165,8 +176,8 @@ func TestVeleroBackupPhaseToIssue(t *testing.T) {
 func TestVeleroBackupSupersession(t *testing.T) {
 	t.Run("later success clears an earlier failure", func(t *testing.T) {
 		got := detectBackups(
-			veleroObj{name: "nightly-1", schedule: "nightly", phase: "Failed", startedMinsAgo: 240},
-			veleroObj{name: "nightly-2", schedule: "nightly", phase: "Completed", startedMinsAgo: 60},
+			veleroObj{name: "nightly-1", schedule: "nightly", phase: "Failed", createdMinsAgo: 240, startedMinsAgo: 240},
+			veleroObj{name: "nightly-2", schedule: "nightly", phase: "Completed", createdMinsAgo: 60, startedMinsAgo: 60},
 		)
 		if len(got) != 0 {
 			t.Fatalf("a later Completed run must supersede the failure, got %v", reasonsOf(got))
@@ -175,9 +186,9 @@ func TestVeleroBackupSupersession(t *testing.T) {
 
 	t.Run("only the newest failure in a series is reported", func(t *testing.T) {
 		got := detectBackups(
-			veleroObj{name: "nightly-1", schedule: "nightly", phase: "Failed", startedMinsAgo: 240},
-			veleroObj{name: "nightly-2", schedule: "nightly", phase: "Failed", startedMinsAgo: 120},
-			veleroObj{name: "nightly-3", schedule: "nightly", phase: "Failed", startedMinsAgo: 60},
+			veleroObj{name: "nightly-3", schedule: "nightly", phase: "Failed", createdMinsAgo: 60, startedMinsAgo: 60},
+			veleroObj{name: "nightly-1", schedule: "nightly", phase: "Failed", createdMinsAgo: 240, startedMinsAgo: 240},
+			veleroObj{name: "nightly-2", schedule: "nightly", phase: "Failed", createdMinsAgo: 120, startedMinsAgo: 120},
 		)
 		if len(got) != 1 || got[0].Name != "nightly-3" {
 			t.Fatalf("want one issue on nightly-3, got %v", namesOf(got))
@@ -186,8 +197,8 @@ func TestVeleroBackupSupersession(t *testing.T) {
 
 	t.Run("an earlier success does not clear a later failure", func(t *testing.T) {
 		got := detectBackups(
-			veleroObj{name: "nightly-1", schedule: "nightly", phase: "Completed", startedMinsAgo: 240},
-			veleroObj{name: "nightly-2", schedule: "nightly", phase: "Failed", startedMinsAgo: 60},
+			veleroObj{name: "nightly-2", schedule: "nightly", phase: "Failed", createdMinsAgo: 60, startedMinsAgo: 60},
+			veleroObj{name: "nightly-1", schedule: "nightly", phase: "Completed", createdMinsAgo: 240, startedMinsAgo: 240},
 		)
 		if len(got) != 1 || got[0].Name != "nightly-2" {
 			t.Fatalf("want the later failure reported, got %v", namesOf(got))
@@ -198,8 +209,8 @@ func TestVeleroBackupSupersession(t *testing.T) {
 		// The running backup is newer but has no verdict yet — it is not
 		// evidence of recovery, so the last decided run still drives the issue.
 		got := detectBackups(
-			veleroObj{name: "nightly-1", schedule: "nightly", phase: "Failed", startedMinsAgo: 120},
-			veleroObj{name: "nightly-2", schedule: "nightly", phase: "InProgress", startedMinsAgo: 5},
+			veleroObj{name: "nightly-1", schedule: "nightly", phase: "Failed", createdMinsAgo: 120, startedMinsAgo: 120},
+			veleroObj{name: "nightly-2", schedule: "nightly", phase: "InProgress", createdMinsAgo: 5, startedMinsAgo: 5},
 		)
 		if len(got) != 1 || got[0].Name != "nightly-1" {
 			t.Fatalf("want the last decided run reported, got %v", namesOf(got))
@@ -215,8 +226,8 @@ func TestVeleroBackupSupersession(t *testing.T) {
 
 	t.Run("supersession is per schedule", func(t *testing.T) {
 		got := detectBackups(
-			veleroObj{name: "nightly-1", schedule: "nightly", phase: "Failed", startedMinsAgo: 60},
-			veleroObj{name: "weekly-1", schedule: "weekly", phase: "Completed", startedMinsAgo: 30},
+			veleroObj{name: "nightly-1", schedule: "nightly", phase: "Failed", createdMinsAgo: 60, startedMinsAgo: 60},
+			veleroObj{name: "weekly-1", schedule: "weekly", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 30},
 		)
 		if len(got) != 1 || got[0].Name != "nightly-1" {
 			t.Fatalf("a different schedule's success must not clear nightly, got %v", namesOf(got))
@@ -227,9 +238,9 @@ func TestVeleroBackupSupersession(t *testing.T) {
 		// Unlabelled backups are one-off operator runs, not a series — a later
 		// manual backup of something else says nothing about this one.
 		got := detectBackups(
-			veleroObj{name: "manual-a", phase: "Failed", startedMinsAgo: 120},
-			veleroObj{name: "manual-b", phase: "Completed", startedMinsAgo: 60},
-			veleroObj{name: "manual-c", phase: "Failed", startedMinsAgo: 30},
+			veleroObj{name: "manual-a", phase: "Failed", createdMinsAgo: 120, startedMinsAgo: 120},
+			veleroObj{name: "manual-b", phase: "Completed", createdMinsAgo: 60, startedMinsAgo: 60},
+			veleroObj{name: "manual-c", phase: "Failed", createdMinsAgo: 30, startedMinsAgo: 30},
 		)
 		if len(got) != 2 {
 			t.Fatalf("want both ad-hoc failures reported, got %v", namesOf(got))
@@ -240,13 +251,56 @@ func TestVeleroBackupSupersession(t *testing.T) {
 		// Two Velero installs (e.g. velero and kommander) can both run a
 		// schedule called "nightly"; one succeeding says nothing about the other.
 		got := detectBackups(
-			veleroObj{name: "nightly-1", namespace: "velero", schedule: "nightly", phase: "Failed", startedMinsAgo: 60},
-			veleroObj{name: "nightly-1", namespace: "kommander", schedule: "nightly", phase: "Completed", startedMinsAgo: 30},
+			veleroObj{name: "nightly-1", namespace: "velero", schedule: "nightly", phase: "Failed", createdMinsAgo: 60, startedMinsAgo: 60},
+			veleroObj{name: "nightly-1", namespace: "kommander", schedule: "nightly", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 30},
 		)
 		if len(got) != 1 || got[0].Namespace != "velero" {
 			t.Fatalf("want the velero-namespace failure reported, got %d issues", len(got))
 		}
 	})
+}
+
+// Ordering must be driven by creation time; the name is only a tie-break. Here
+// the two disagree — the newest run sorts LAST alphabetically — so a
+// name-ordered implementation would pick the stale success and hide the failure.
+func TestVeleroSupersessionOrdersByTimeNotName(t *testing.T) {
+	got := detectBackups(
+		// Lexically greatest, but the OLDER run — and it succeeded.
+		veleroObj{name: "nightly-zzz", schedule: "nightly", phase: "Completed", createdMinsAgo: 240, startedMinsAgo: 240},
+		// Lexically smallest, but the NEWER run — and it failed.
+		veleroObj{name: "nightly-aaa", schedule: "nightly", phase: "Failed", createdMinsAgo: 30, startedMinsAgo: 30},
+	)
+	if len(got) != 1 {
+		t.Fatalf("the newer failure must win over the older success; got %d issues %v", len(got), namesOf(got))
+	}
+	if got[0].Name != "nightly-aaa" {
+		t.Errorf("want nightly-aaa (newest by creation time), got %q — ordering fell back to the name", got[0].Name)
+	}
+}
+
+// A FailedValidation run never starts, so it has no startTimestamp. Ordering a
+// series must therefore not compare one run's start time against another's
+// creation time — they are different lifecycle events, and mixing them can
+// invert the order and let a success bury a newer real failure.
+//
+// The sequence below is reachable on v1.18: the schedule controller does not
+// block a new backup while a prior one sits Queued, and the backup controller
+// only stamps startTimestamp after validation passes. So the older run can
+// start (and succeed) after the newer run was created and rejected.
+func TestVeleroSupersessionNeverComparesStartAgainstCreation(t *testing.T) {
+	got := detectBackups(
+		// Created first, sat Queued, started late, succeeded.
+		veleroObj{name: "nightly-a", schedule: "nightly", phase: "Completed", createdMinsAgo: 65, startedMinsAgo: 5},
+		// Created after A, rejected in validation, never started.
+		veleroObj{name: "nightly-b", schedule: "nightly", phase: "FailedValidation", createdMinsAgo: 10,
+			validation: []string{"backup template is invalid"}},
+	)
+	if len(got) != 1 {
+		t.Fatalf("the newer FailedValidation run must not be swallowed by the older success; got %d issues %v", len(got), namesOf(got))
+	}
+	if got[0].Name != "nightly-b" {
+		t.Errorf("want nightly-b reported, got %q", got[0].Name)
+	}
 }
 
 // Ordering must be stable when Velero's second-resolution generated names
@@ -504,10 +558,15 @@ func TestVeleroIssueAnchorsOnRunTime(t *testing.T) {
 
 // Schedule, BackupStorageLocation and BackupRepository record no transition
 // timestamp at all (their status carries only phase, message and last-check
-// times). Anchoring those on creationTimestamp would claim a BSL that broke two
-// minutes ago has been broken since it was created, and would assert an
-// issue_timing the data cannot support.
-func TestVeleroStateKindsDoNotAnchorOnCreation(t *testing.T) {
+// times), so there is no honest age to report and FirstSeen must be omitted.
+//
+// Both alternatives are fabrications. creationTimestamp would claim a BSL that
+// broke two minutes ago had been broken since it was created. Compose time is
+// worse: issues are recomposed on every poll, so the age re-derives from "now"
+// each read and sits at 0s permanently — an operator asking "how long has this
+// been broken" is told it is always brand new. `first_seen` is `omitzero`, so a
+// zero value drops the field from the wire entirely.
+func TestVeleroStateKindsOmitFirstSeen(t *testing.T) {
 	cases := []struct {
 		kind, resource string
 		obj            veleroObj
@@ -518,18 +577,41 @@ func TestVeleroStateKindsDoNotAnchorOnCreation(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.kind, func(t *testing.T) {
-			// The fixture is created 24h ago; the issue must NOT claim that age.
 			got := detectVeleroIssues(veleroGVR(tc.resource), tc.kind, buildVelero(tc.kind, tc.obj), nil)
 			if len(got) != 1 {
 				t.Fatalf("want 1 issue, got %d", len(got))
 			}
-			if age := time.Since(got[0].FirstSeen); age > time.Minute {
-				t.Errorf("FirstSeen age = %v, want ~0 (compose time) — the object's 24h age is not how long it has been broken", age)
+			if !got[0].FirstSeen.IsZero() {
+				t.Errorf("FirstSeen = %v, want zero so the field is omitted — neither the object's age nor compose time is how long this has been broken", got[0].FirstSeen)
+			}
+			// LastSeen is the one timestamp we can stand behind: when we looked.
+			if age := time.Since(got[0].LastSeen); age > time.Minute {
+				t.Errorf("LastSeen age = %v, want ~now (the observation time)", age)
 			}
 			if got[0].IssueTiming != "" {
 				t.Errorf("issue_timing = %q, want empty: there is no transition timestamp to derive it from", got[0].IssueTiming)
 			}
 		})
+	}
+}
+
+// The zero FirstSeen must actually disappear from the wire, not serialize as a
+// zero date — that is the whole point of clearing it.
+func TestVeleroStateKindsOmitFirstSeenOnTheWire(t *testing.T) {
+	got := detectVeleroIssues(veleroGVR("backupstoragelocations"), "BackupStorageLocation",
+		buildVelero("BackupStorageLocation", veleroObj{name: "bsl", phase: "Unavailable"}), nil)
+	if len(got) != 1 {
+		t.Fatalf("want 1 issue, got %d", len(got))
+	}
+	blob, err := json.Marshal(got[0])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(blob), "first_seen") {
+		t.Errorf("first_seen must be omitted from the wire, got %s", blob)
+	}
+	if !strings.Contains(string(blob), "last_seen") {
+		t.Errorf("last_seen must still be present, got %s", blob)
 	}
 }
 

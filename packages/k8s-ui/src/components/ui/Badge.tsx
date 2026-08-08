@@ -173,10 +173,11 @@ const KIND: Record<string, string> = {
   ClusterClass:         'bg-indigo-100 text-indigo-700 border-indigo-300 dark:bg-indigo-950/50 dark:text-indigo-400 dark:border-indigo-700/40',
   MachineHealthCheck:   'bg-indigo-100 text-indigo-700 border-indigo-300 dark:bg-indigo-950/50 dark:text-indigo-400 dark:border-indigo-700/40',
 
-  // Velero. `Backup` stays unmapped: this table has no group awareness and the
-  // plural is shared with CNPG, so one colour would be wrong for one of them.
-  Restore:                'bg-teal-100 text-teal-800 border-teal-300 dark:bg-teal-950/50 dark:text-teal-400 dark:border-teal-700/40',
-  Schedule:               'bg-teal-100 text-teal-800 border-teal-300 dark:bg-teal-950/50 dark:text-teal-400 dark:border-teal-700/40',
+  // Velero. Only kinds whose names no other operator claims are mapped: this
+  // table is keyed on kind alone with no group awareness, so a shared name would
+  // paint a foreign resource in Velero's colour. That rules out `Backup` (CNPG),
+  // `Restore` (rancher/backup-restore-operator) and `Schedule` (several
+  // operators) — the same collisions the renderers guard on velero.io.
   BackupStorageLocation:  'bg-teal-100 text-teal-800 border-teal-300 dark:bg-teal-950/50 dark:text-teal-400 dark:border-teal-700/40',
   VolumeSnapshotLocation: 'bg-teal-100 text-teal-800 border-teal-300 dark:bg-teal-950/50 dark:text-teal-400 dark:border-teal-700/40',
   BackupRepository:       'bg-teal-100 text-teal-800 border-teal-300 dark:bg-teal-950/50 dark:text-teal-400 dark:border-teal-700/40',

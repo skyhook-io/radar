@@ -71,8 +71,6 @@ import {
   BookOpen,
 
   // Velero
-  ArchiveRestore,
-  CalendarClock,
   Cloud,
   Camera,
   Package,
@@ -265,10 +263,10 @@ const KIND_ICON_MAP: Record<string, LucideIcon> = {
   exposedsecretreport: ShieldAlert,
   sbomreport: FileSearch,
 
-  // Velero. `backup` is deliberately absent: the key is shared with CNPG's
-  // Backup and this map has no group awareness.
-  restore: ArchiveRestore,
-  schedule: CalendarClock,
+  // Velero. Only kinds whose names no other operator claims: this map is keyed
+  // on kind alone with no group awareness, so a shared name would give a foreign
+  // resource a Velero icon. That rules out `backup` (CNPG), `restore`
+  // (rancher/backup-restore-operator) and `schedule` (several operators).
   backupstoragelocation: Cloud,
   volumesnapshotlocation: Camera,
   backuprepository: Package,

@@ -674,7 +674,7 @@ See the main [README](../README.md#gitops) for the user-facing overview. This se
 
 ### Backup failures on the Problems surface
 
-Velero reports every outcome through `status.phase` and has no `status.conditions` on any of its CRDs, so Radar reads phases directly rather than through the generic CRD-condition fallback. These become Issues (`/api/issues`, the Problems surface, MCP `list_issues`):
+Velero reports every outcome through `status.phase` and has no `status.conditions` on any of its CRDs, so Radar reads phases directly rather than through the generic CRD-condition fallback. These become Issues (`/api/issues`, the Problems surface, MCP `issues`):
 
 | Detection | Trigger | Severity |
 |-----------|---------|----------|
@@ -707,7 +707,7 @@ They roll up under two categories: `backup_failed` for runs, and `backup_target_
 | VolumeSnapshotLocation | `velero.io/v1` | — | Yes | — | — |
 | BackupRepository | `velero.io/v1` | — | — | Yes | — |
 
-**Kind collisions.** `restores` and `schedules` are shared plurals — `rancher/backup-restore-operator` ships `restores.resources.cattle.io`, and several operators ship their own `schedules` kind. Radar's Velero renderers, status readers, columns and cells all select on the `velero.io` group; a foreign resource with the same plural falls through to the generic renderer instead of being dressed up as a backup.
+**Kind collisions.** `restores` and `schedules` are shared plurals — `rancher/backup-restore-operator` ships `restores.resources.cattle.io`, and several operators ship their own `schedules` kind. For those two, Radar's renderers, status readers, column sets and cells all select on the `velero.io` group, so a foreign resource with the same plural falls through to the generic renderer instead of being dressed up as a backup. `backupstoragelocations` and `volumesnapshotlocations` are keyed on the plural alone — no other operator is known to claim those names — though their renderers and cells still group-guard. The kind→colour and kind→icon tables have no group awareness at all, so only Velero-unique kinds appear in them: `Backup`, `Restore` and `Schedule` are deliberately left unstyled rather than risk decorating a foreign resource.
 
 ---
 
