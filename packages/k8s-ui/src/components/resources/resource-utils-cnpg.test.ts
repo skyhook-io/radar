@@ -22,6 +22,7 @@ import {
   isApiGroup,
   getCNPGClusterDisplayState,
 } from './resource-utils-cnpg'
+import { getCellFilterValue } from './resource-utils'
 
 describe('getCNPGClusterCertificateExpirations', () => {
   beforeEach(() => {
@@ -473,5 +474,59 @@ describe('getCNPGClusterDisplayState', () => {
     ))
     expect(s.text).toBe('Unrecoverable')
     expect(s.level).toBe('unhealthy')
+  })
+})
+
+describe('status column filter reads the badge, not the raw phase', () => {
+  // Deliberately asserts LITERAL strings rather than comparing against
+  // getCNPGClusterStatus(...).text — both sides would call the same reader and
+  // the test would pass while both were wrong. These are the strings a user
+  // sees on a badge, so the dropdown must offer exactly them.
+  const CLUSTER = 'cnpgclusters'
+
+  it('offers the short state, not CNPG prose', () => {
+    expect(getCellFilterValue(
+      cluster({ phase: 'Cluster is unrecoverable and needs manual intervention', readyInstances: 2 }, { instances: 2 }),
+      'status', CLUSTER,
+    )).toBe('Unrecoverable')
+
+    expect(getCellFilterValue(
+      cluster({ phase: 'Cluster in healthy state', readyInstances: 2 }, { instances: 2 }),
+      'status', CLUSTER,
+    )).toBe('Healthy')
+  })
+
+  it('separates a WAL-archiving failure from healthy — they share a phase', () => {
+    // The defect this pins: both clusters report `Cluster in healthy state`,
+    // so filtering on the raw phase collapsed them into one option and the
+    // headline state of this integration could not be filtered for at all.
+    const healthy = cluster({ phase: 'Cluster in healthy state', readyInstances: 2 }, { instances: 2 })
+    const walFailing = cluster({
+      phase: 'Cluster in healthy state',
+      readyInstances: 2,
+      conditions: [{ type: 'ContinuousArchiving', status: 'False', reason: 'ContinuousArchivingFailing' }],
+    }, { instances: 2 })
+
+    expect(healthy.status.phase).toBe(walFailing.status.phase)
+    expect(getCellFilterValue(healthy, 'status', CLUSTER)).toBe('Healthy')
+    expect(getCellFilterValue(walFailing, 'status', CLUSTER)).toBe('WAL Archiving Failing')
+  })
+
+  it('covers the other three CNPG kinds', () => {
+    expect(getCellFilterValue({ status: { phase: 'completed' } }, 'status', 'cnpgbackups')).toBe('Completed')
+    expect(getCellFilterValue(
+      { apiVersion: 'postgresql.cnpg.io/v1', spec: { suspend: true } }, 'status', 'scheduledbackups',
+    )).toBe('Suspended')
+    expect(getCellFilterValue(
+      { apiVersion: 'postgresql.cnpg.io/v1', spec: { instances: 2 }, status: { instances: 2 } }, 'status', 'poolers',
+    )).toBe('Scheduled')
+  })
+
+  it('leaves a foreign CRD sharing the plural on the generic path', () => {
+    // `poolers`/`scheduledbackups` are bare plurals — another operator could
+    // ship them, and it must not be read through a CNPG accessor.
+    expect(getCellFilterValue(
+      { apiVersion: 'pooling.example.com/v1', status: { phase: 'Running' } }, 'status', 'poolers',
+    )).toBe('Running')
   })
 })

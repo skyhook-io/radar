@@ -15,6 +15,7 @@ import { getNvidiaClusterPolicyStatus as _getNvidiaClusterPolicyStatus, getNvidi
 import { getBackupStatus as _getBackupStatus, getRestoreStatus as _getRestoreStatus, getScheduleStatus as _getScheduleStatus, getBSLStatus as _getBSLStatus, getBackupRepositoryStatus as _getBackupRepositoryStatus } from './resource-utils-velero'
 import { getExternalSecretStatus as _getExternalSecretStatus, getClusterExternalSecretStatus as _getClusterExternalSecretStatus, getSecretStoreStatus as _getSecretStoreStatus, getClusterSecretStoreStatus as _getClusterSecretStoreStatus, getSecretStoreProviderType as _getSecretStoreProviderType } from './resource-utils-eso'
 import { getHPATableState, hpaStatusFromState } from './resource-utils-hpa'
+import { getCNPGClusterStatus as _getCNPGClusterStatus, getCNPGBackupStatus as _getCNPGBackupStatus, getCNPGScheduledBackupStatus as _getCNPGScheduledBackupStatus, getCNPGPoolerStatus as _getCNPGPoolerStatus, isApiGroup as _isApiGroup, CNPG_GROUP as _CNPG_GROUP } from './resource-utils-cnpg'
 
 // ============================================================================
 // STATUS & HEALTH UTILITIES
@@ -2104,6 +2105,18 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'clusterexternalsecrets') return _getClusterExternalSecretStatus(resource).text
       if (kindLower === 'secretstores') return _getSecretStoreStatus(resource).text
       if (kindLower === 'clustersecretstores') return _getClusterSecretStoreStatus(resource).text
+      // CNPG. The filter must read the same text the cell renders, or the
+      // dropdown offers strings that appear on no row: CNPG's phase is prose
+      // ("Cluster in healthy state") while the badge is a short state
+      // ("Healthy"). Worse for `cnpgclusters` — a WAL-archiving failure leaves
+      // the phase healthy, so filtering on the raw phase cannot express the
+      // badge at all. `cnpgclusters`/`cnpgbackups` arrive group-qualified;
+      // `scheduledbackups`/`poolers` are bare plurals, so gate those on the
+      // group rather than assume nobody else ships the name.
+      if (kindLower === 'cnpgclusters') return _getCNPGClusterStatus(resource).text
+      if (kindLower === 'cnpgbackups') return _getCNPGBackupStatus(resource).text
+      if (kindLower === 'scheduledbackups' && _isApiGroup(resource.apiVersion, _CNPG_GROUP)) return _getCNPGScheduledBackupStatus(resource).text
+      if (kindLower === 'poolers' && _isApiGroup(resource.apiVersion, _CNPG_GROUP)) return _getCNPGPoolerStatus(resource).text
       // Generic CRDs: try status.phase, then Ready condition
       if (resource.status?.phase) return resource.status.phase
       {
