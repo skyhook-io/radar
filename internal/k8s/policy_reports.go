@@ -82,6 +82,15 @@ type PolicyReportStatus struct {
 	// WatchedGroups are the API groups actually being watched, e.g.
 	// ["openreports.io"]. Empty when nothing is watched.
 	WatchedGroups []string `json:"watchedGroups,omitempty"`
+	// DeniedGroups are report families the probe could not read. Present
+	// alongside a `ready` status: the index is real but incomplete, and a
+	// consumer that renders "no violations" without mentioning this is
+	// claiming coverage it does not have.
+	DeniedGroups []string `json:"deniedGroups,omitempty"`
+	// LiveUpdates is false when the index was built but change handlers could
+	// not be registered, so it is frozen at its initial contents until the
+	// next context switch. `ready` otherwise promises live data.
+	LiveUpdates bool `json:"liveUpdates"`
 }
 
 // kyvernoWarmupDecision is set by WarmupKyvernoPolicyReports to record
@@ -260,7 +269,7 @@ func WarmupKyvernoPolicyReports() {
 				WatchedGroups: groups,
 			})
 		}
-		publishReady := func(idx *policyreports.Index, watched []schema.GroupVersionResource, observed int, groups []string) {
+		publishReady := func(idx *policyreports.Index, watched []schema.GroupVersionResource, observed int, groups []string, denied []string, live bool) {
 			policyReportMu.Lock()
 			defer policyReportMu.Unlock()
 			if kyvernoWarmupGen.Load() != myGen {
@@ -274,6 +283,8 @@ func WarmupKyvernoPolicyReports() {
 				ObservedCount: observed,
 				Cap:           kyvernoReportWarmupCap,
 				WatchedGroups: groups,
+				DeniedGroups:  denied,
+				LiveUpdates:   live,
 			})
 		}
 
@@ -348,6 +359,7 @@ func WarmupKyvernoPolicyReports() {
 		// in bursts when Kyverno re-evaluates a policy, and rebuilding
 		// once per burst is cheaper than per-event incremental updates
 		// given how small the index is (≤500 reports).
+		handlersRegistered := true
 		handler := toolscache.ResourceEventHandlerFuncs{
 			AddFunc:    func(_ any) { scheduleRebuild() },
 			UpdateFunc: func(_, _ any) { scheduleRebuild() },
@@ -355,6 +367,7 @@ func WarmupKyvernoPolicyReports() {
 		}
 		for _, gvr := range watched {
 			if err := cache.AddGVRChangeHandler(gvr, handler); err != nil {
+				handlersRegistered = false
 				// Non-fatal: index is still populated from the initial
 				// build, just won't update until the next context switch.
 				log.Printf("[policy-reports] Failed to register event handler for %s: %v", gvr, err)
@@ -368,7 +381,7 @@ func WarmupKyvernoPolicyReports() {
 		// generation check ensures a Reset that fires before this point
 		// causes the writes to be skipped, so the new cluster never
 		// inherits the old cluster's index or decision.
-		publishReady(idx, watched, selection.total, selection.groups)
+		publishReady(idx, watched, selection.total, selection.groups, selection.deniedGroups, handlersRegistered)
 		log.Printf("[policy-reports] Index initialized with %d subjects", idx.Size())
 	})
 }
@@ -417,6 +430,15 @@ func GetPolicyReportStatus() PolicyReportStatus {
 	// Ready is authoritative for the same reason GetKyvernoStatus treats it
 	// so: the index publishes before the status flag inside warmup.
 	if policyReportIndex.Load() != nil {
+		// The index and the metadata live in separate atomics, and
+		// publishReady stores the index first. A reader that sampled the
+		// metadata before that store and the index after it would otherwise
+		// report `ready` with an empty ObservedCount and no WatchedGroups —
+		// a status that describes no real cluster. Re-read once now that the
+		// index is known to be published.
+		if status.Status == "" {
+			status, _ = kyvernoWarmupReason.Load().(PolicyReportStatus)
+		}
 		status.Status = KyvernoStatusReady
 		status.ReasonCode = ""
 		if status.Cap == 0 {
@@ -438,7 +460,12 @@ func GetPolicyReportStatus() PolicyReportStatus {
 		// is cold when Kyverno is actually present. The scan is confined to
 		// this pre-decision branch — once warmup records an outcome the
 		// stored status returns above.
-		if d := GetResourceDiscovery(); d != nil && d.ResourceDiscovery != nil && d.IsKyvernoInstalled() {
+		d := GetResourceDiscovery()
+		if d == nil || d.ResourceDiscovery == nil {
+			// No discovery yet — we haven't looked, so we can't claim absence.
+			return PolicyReportStatus{Status: KyvernoStatusNotInstalled, ReasonCode: ReasonNoDiscovery, Cap: kyvernoReportWarmupCap}
+		}
+		if d.IsKyvernoInstalled() {
 			return PolicyReportStatus{Status: KyvernoStatusWarmup, Cap: kyvernoReportWarmupCap}
 		}
 		return PolicyReportStatus{Status: KyvernoStatusNotInstalled, ReasonCode: ReasonNotInstalled, Cap: kyvernoReportWarmupCap}
@@ -454,6 +481,9 @@ type reportSelection struct {
 	// no probe could complete.
 	total  int
 	reason string
+	// deniedGroups are families we could not fully read. Watching proceeds
+	// without them, so the resulting index is real but incomplete.
+	deniedGroups []string
 }
 
 // firstServed returns the first candidate the cluster actually serves for
@@ -481,9 +511,12 @@ func firstServed(served func(schema.GroupVersionResource) bool, candidates []sch
 // So we probe each group for actual objects and watch the ones that have any,
 // watching several when several carry data (a migration can leave stale
 // reports behind in the old family; identical findings are deduplicated when
-// the index is built). When no group has data we still watch the first served
-// group, so the result is an honest "ready, and there really are no findings"
-// rather than "not installed".
+// the index is built). When NO group has data we watch every readable group
+// rather than just the first: on a cluster that has enabled openreports but
+// hasn't produced a violation yet, both families are legitimately empty, and
+// locking onto the first would leave the group Kyverno is about to write to
+// unwatched — reports would appear in the cluster and never in Radar, with the
+// status still claiming `ready`.
 // The two cluster interactions are injected so the selection rules can be
 // tested without a live apiserver: `served` reports whether a GVR is
 // watchable, `probeCount` returns its object count (-1 RBAC denied, -2
@@ -492,10 +525,11 @@ func selectReportGVRs(served func(schema.GroupVersionResource) bool, probeCount 
 	var (
 		selection      reportSelection
 		fallback       []schema.GroupVersionResource
-		fallbackGroup  string
+		fallbackGroups []string
 		servedAnything bool
 		anyDenied      bool
 		anyProbeFailed bool
+		deniedGroups   []string
 	)
 	selection.total = 0
 
@@ -511,10 +545,6 @@ func selectReportGVRs(served func(schema.GroupVersionResource) bool, probeCount 
 			continue
 		}
 		servedAnything = true
-		if fallback == nil {
-			fallback = candidates
-			fallbackGroup = family.group
-		}
 
 		// Probe per GVR, not per family. A denial on one sibling must not
 		// discard the other: namespace-scoped RBAC routinely grants `list
@@ -522,20 +552,36 @@ func selectReportGVRs(served func(schema.GroupVersionResource) bool, probeCount 
 		// cluster-scoped `clusterpolicyreports`, and dropping the whole
 		// family there loses every finding the user could legitimately see.
 		groupTotal := 0
+		groupDenied := false
 		var readable []schema.GroupVersionResource
 		for _, gvr := range candidates {
 			count := probeCount(gvr)
 			switch {
 			case count == -1:
 				anyDenied = true
+				groupDenied = true
 			case count < 0:
 				anyProbeFailed = true
+				groupDenied = true
 			default:
 				// Readable, including a legitimately empty sibling — keep it
 				// watched so a report created later still appears live. Its
 				// cost is bounded precisely because the probe succeeded.
 				readable = append(readable, gvr)
 				groupTotal += count
+			}
+		}
+		if groupDenied {
+			// Some of this family is unreadable. We still watch what we can,
+			// but the coverage is partial and consumers must be able to say so.
+			deniedGroups = append(deniedGroups, family.group)
+		}
+		// Readable but currently empty: remember it as a fallback so an
+		// all-empty cluster still watches every family it could write to.
+		if len(readable) > 0 {
+			fallback = append(fallback, readable...)
+			if len(fallbackGroups) == 0 || fallbackGroups[len(fallbackGroups)-1] != family.group {
+				fallbackGroups = append(fallbackGroups, family.group)
 			}
 		}
 		if groupTotal == 0 {
@@ -546,6 +592,7 @@ func selectReportGVRs(served func(schema.GroupVersionResource) bool, probeCount 
 		selection.groups = append(selection.groups, family.group)
 		selection.total += groupTotal
 	}
+	selection.deniedGroups = deniedGroups
 
 	if len(selection.gvrs) > 0 {
 		return selection
@@ -561,7 +608,7 @@ func selectReportGVRs(served func(schema.GroupVersionResource) bool, probeCount 
 	case !servedAnything:
 		return reportSelection{total: 0, reason: ReasonNoReportCRDs}
 	}
-	return reportSelection{gvrs: fallback, groups: []string{fallbackGroup}, total: 0}
+	return reportSelection{gvrs: fallback, groups: fallbackGroups, total: 0, deniedGroups: deniedGroups}
 }
 
 // OmittedReason maps the PolicyReport index state onto the agent-facing
@@ -576,7 +623,17 @@ func selectReportGVRs(served func(schema.GroupVersionResource) bool, probeCount 
 // would be pure noise rather than honesty.
 func (s PolicyReportStatus) OmittedReason() (resourcecontext.OmittedReason, bool) {
 	switch s.Status {
-	case KyvernoStatusReady, KyvernoStatusNotInstalled:
+	case KyvernoStatusReady:
+		return "", false
+	case KyvernoStatusNotInstalled:
+		// Genuine absence is silent — a note on every resource of every
+		// non-Kyverno cluster is noise. But "discovery was unavailable" is
+		// NOT absence: we never established whether Kyverno exists, and
+		// reporting silence there would be concluding a negative from a
+		// failed lookup.
+		if s.ReasonCode == ReasonNoDiscovery {
+			return resourcecontext.OmittedCacheCold, true
+		}
 		return "", false
 	case KyvernoStatusWarmup:
 		return resourcecontext.OmittedCacheCold, true

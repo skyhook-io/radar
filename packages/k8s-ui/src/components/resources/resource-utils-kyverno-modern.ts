@@ -113,6 +113,18 @@ export function isKyvernoAdmissionEnabled(resource: any): boolean {
   return resource?.spec?.evaluation?.admission?.enabled !== false
 }
 
+/**
+ * `spec.evaluation.mutateExisting.enabled` (MutatingPolicy only), defaulting
+ * to FALSE per the CRD schema — the opposite default from admission/background.
+ *
+ * Load-bearing for the posture verdict: a MutatingPolicy with admission
+ * disabled still rewrites already-existing resources when this is on, so it is
+ * emphatically not inactive.
+ */
+export function isKyvernoMutateExistingEnabled(resource: any): boolean {
+  return resource?.spec?.evaluation?.mutateExisting?.enabled === true
+}
+
 /** `spec.evaluation.background.enabled`, defaulting to true per the CRD schema. */
 export function isKyvernoBackgroundEnabled(resource: any): boolean {
   return resource?.spec?.evaluation?.background?.enabled !== false
@@ -186,20 +198,37 @@ export function getKyvernoEnforcementPosture(
   }
 
   if (family === 'mutating') {
-    return admissionEnabled
-      ? {
-          label: 'Mutates on admission',
-          level: 'degraded',
-          blocks: false,
-          summary: 'Matched resources are modified as they are admitted.',
-        }
-      : {
-          label: 'Inactive',
-          level: 'unknown',
-          blocks: false,
-          summary: 'This policy modifies nothing.',
-          note: 'Admission evaluation is disabled, so this policy mutates nothing.',
-        }
+    const mutatesExisting = isKyvernoMutateExistingEnabled(resource)
+    if (admissionEnabled) {
+      return {
+        label: 'Mutates on admission',
+        level: 'degraded',
+        blocks: false,
+        summary: mutatesExisting
+          ? 'Matched resources are modified as they are admitted, and existing ones are rewritten too.'
+          : 'Matched resources are modified as they are admitted.',
+      }
+    }
+    // Admission off is NOT the same as inactive: mutateExisting rewrites
+    // resources that already exist, independently of the admission path.
+    // Calling this policy inactive would tell an operator nothing is being
+    // changed while it is actively rewriting their cluster.
+    if (mutatesExisting) {
+      return {
+        label: 'Mutates existing',
+        level: 'degraded',
+        blocks: false,
+        summary: 'Existing matched resources are rewritten by background scans.',
+        note: 'Admission evaluation is disabled, so nothing is modified as it is admitted — but mutateExisting is on.',
+      }
+    }
+    return {
+      label: 'Inactive',
+      level: 'unknown',
+      blocks: false,
+      summary: 'This policy modifies nothing.',
+      note: 'Admission evaluation is disabled and mutateExisting is off, so this policy mutates nothing.',
+    }
   }
 
   // validating + imageValidating

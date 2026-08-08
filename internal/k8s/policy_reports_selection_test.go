@@ -276,3 +276,43 @@ func TestSelectReportGVRs_ProbeErrorOnSiblingKeepsReadableOne(t *testing.T) {
 		t.Errorf("total = %d, want 7", sel.total)
 	}
 }
+
+// Codex #1 (HIGH): when every served family is legitimately empty — an
+// openreports-enabled cluster that hasn't produced a violation yet — locking
+// onto the first served family leaves the group Kyverno is about to write to
+// unwatched. Reports would then appear in the cluster and never in Radar,
+// with the status still claiming `ready`.
+func TestSelectReportGVRs_AllEmptyWatchesEveryReadableFamily(t *testing.T) {
+	sel := selectReportGVRs(
+		servedSet(wgReports, wgClusterReports, orReports, orClusterReports),
+		counts(nil),
+	)
+
+	for _, want := range []schema.GroupVersionResource{wgReports, orReports} {
+		if !hasGVR(sel, want) {
+			t.Errorf("all-empty fallback must watch %v, got %v", want, sel.gvrs)
+		}
+	}
+	if len(sel.groups) != 2 {
+		t.Errorf("groups = %v, want both families", sel.groups)
+	}
+	if sel.total != 0 {
+		t.Errorf("total = %d, want 0", sel.total)
+	}
+}
+
+// Codex #3 (MEDIUM): watching what we can read is right, but publishing it as
+// unqualified coverage is not — the denied family has to be nameable.
+func TestSelectReportGVRs_RecordsDeniedGroupsAlongsideAPartialWatch(t *testing.T) {
+	sel := selectReportGVRs(
+		servedSet(wgReports, orReports),
+		counts(map[schema.GroupVersionResource]int{wgReports: -1, orReports: 9}),
+	)
+
+	if !hasGVR(sel, orReports) {
+		t.Fatalf("readable populated family must still be watched, got %v", sel.gvrs)
+	}
+	if len(sel.deniedGroups) != 1 || sel.deniedGroups[0] != "wgpolicyk8s.io" {
+		t.Errorf("deniedGroups = %v, want [wgpolicyk8s.io]", sel.deniedGroups)
+	}
+}

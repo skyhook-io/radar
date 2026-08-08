@@ -119,12 +119,38 @@ describe('non-validating families', () => {
     expect(posture.label).toBe('Mutates on admission')
   })
 
-  it('marks a mutating policy inactive when admission is disabled', () => {
+  it('marks a mutating policy inactive when admission is disabled and it mutates nothing existing', () => {
     const posture = getKyvernoEnforcementPosture(
       vpol({ evaluation: { admission: { enabled: false } } }),
       'mutating'
     )
     expect(posture.label).toBe('Inactive')
+  })
+
+  // Codex #7: mutateExisting rewrites resources that already exist,
+  // independently of the admission path. Calling such a policy "Inactive"
+  // tells an operator nothing is changing while it actively rewrites their
+  // cluster. Verified against the upstream CRD: MutatingPolicy's
+  // spec.evaluation.mutateExisting.enabled defaults to false, the opposite of
+  // admission/background.
+  it('does not call a mutating policy inactive when mutateExisting is on', () => {
+    const posture = getKyvernoEnforcementPosture(
+      vpol({ evaluation: { admission: { enabled: false }, mutateExisting: { enabled: true } } }),
+      'mutating'
+    )
+    expect(posture.label).toBe('Mutates existing')
+    expect(posture.label).not.toBe('Inactive')
+    expect(posture.summary).toMatch(/rewritten/i)
+    expect(posture.note).toMatch(/mutateExisting is on/i)
+  })
+
+  it('mentions existing-resource rewriting even when admission is enabled', () => {
+    const posture = getKyvernoEnforcementPosture(
+      vpol({ evaluation: { admission: { enabled: true }, mutateExisting: { enabled: true } } }),
+      'mutating'
+    )
+    expect(posture.label).toBe('Mutates on admission')
+    expect(posture.summary).toMatch(/existing/i)
   })
 
   // A deleting policy has no "violations" — the generic non-blocking sentence

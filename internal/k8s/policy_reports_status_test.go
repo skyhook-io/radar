@@ -63,19 +63,35 @@ func TestGetPolicyReportStatus_UndecidedWithoutKyvernoStaysSilent(t *testing.T) 
 	}
 }
 
-// Same branch, reached the other way: no discovery at all.
-func TestGetPolicyReportStatus_UndecidedWithoutDiscoveryStaysSilent(t *testing.T) {
+// Codex #5: "we couldn't look" is not "there's nothing to see". With no
+// discovery we never established whether Kyverno exists, so concluding
+// absence would be inferring a negative from a failed lookup — the silent
+// emptiness this codebase treats as a bug. The reason code separates it from
+// genuine absence, and only genuine absence is silent.
+func TestGetPolicyReportStatus_UndecidedWithoutDiscoveryIsNotSilent(t *testing.T) {
 	ResetPolicyReportIndex()
 	prev := resourceDiscovery
 	resourceDiscovery = nil
 	t.Cleanup(func() { resourceDiscovery = prev })
 
 	status := GetPolicyReportStatus()
-	if status.Status != KyvernoStatusNotInstalled {
-		t.Fatalf("status = %q, want %q", status.Status, KyvernoStatusNotInstalled)
+	if status.ReasonCode != ReasonNoDiscovery {
+		t.Fatalf("reasonCode = %q, want %q", status.ReasonCode, ReasonNoDiscovery)
 	}
-	if _, omit := status.OmittedReason(); omit {
-		t.Error("no discovery must not emit an omitted policy note")
+	reason, omit := status.OmittedReason()
+	if !omit {
+		t.Fatal("an unestablished lookup must not be reported as absence")
+	}
+	if string(reason) != "cache_cold" {
+		t.Errorf("reason = %q, want cache_cold", reason)
+	}
+}
+
+// ...while a cluster we DID look at and found no Kyverno on stays silent, so
+// the fix for the spurious-omit bug is not undone.
+func TestGetPolicyReportStatus_GenuineAbsenceStaysSilent(t *testing.T) {
+	if _, omit := (PolicyReportStatus{Status: KyvernoStatusNotInstalled, ReasonCode: ReasonNotInstalled}).OmittedReason(); omit {
+		t.Error("an established absence must stay silent")
 	}
 }
 
