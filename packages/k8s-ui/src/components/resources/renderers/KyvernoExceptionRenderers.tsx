@@ -16,6 +16,7 @@ import {
 } from '../../ui/drawer-components'
 import { KyvernoExpressionList } from './KyvernoPolicyShared'
 import {
+  getKyvernoCleanupConditions,
   getKyvernoCleanupExclude,
   getKyvernoCleanupLastExecution,
   getKyvernoCleanupMatch,
@@ -201,7 +202,7 @@ export function KyvernoCleanupPolicyRenderer({ data }: { data: any }) {
   const propagation = getKyvernoCleanupPropagationPolicy(data)
   const match = getKyvernoCleanupMatch(data)
   const exclude = getKyvernoCleanupExclude(data)
-  const conditions = data?.spec?.conditions
+  const conditions = getKyvernoCleanupConditions(data)
 
   return (
     <div className="space-y-4">

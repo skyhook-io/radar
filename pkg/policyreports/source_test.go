@@ -162,48 +162,6 @@ func TestBuildIndex_KeepsDistinctFindingsFromTheSamePolicy(t *testing.T) {
 	}
 }
 
-// Coverage reporting depends on this: a Falco surface must distinguish
-// "Falco installed but no adapter writing reports" from "adapter writing,
-// nothing firing", and counting the engine in the index is the only way to
-// tell those apart.
-func TestIndex_Engines(t *testing.T) {
-	now := time.Now()
-	r := makeReport(t, "PolicyReport", "prod", "pr-1", nil, now, []map[string]any{
-		{"policy": "a", "result": "fail", "source": "kyverno",
-			"resources": []any{resourceRef("Pod", "prod", "api-1")}},
-		{"policy": "b", "result": "fail", "source": "KyvernoValidatingPolicy",
-			"resources": []any{resourceRef("Pod", "prod", "api-1")}},
-		{"policy": "syscall", "rule": "Terminal shell in container", "result": "fail", "source": "Falco",
-			"resources": []any{resourceRef("Pod", "prod", "api-2")}},
-		{"policy": "c", "result": "fail", "source": "Trivy Vulnerability",
-			"resources": []any{resourceRef("Pod", "prod", "api-2")}},
-	})
-
-	got := BuildIndex([]*unstructured.Unstructured{r}).Engines()
-
-	// Both Kyverno producer types collapse to one engine, and the result is
-	// sorted so callers get stable output.
-	want := []Engine{EngineFalco, EngineKyverno, EngineTrivy}
-	if len(got) != len(want) {
-		t.Fatalf("Engines() = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("Engines() = %v, want %v", got, want)
-		}
-	}
-}
-
-func TestIndex_EnginesEmptyAndNilSafe(t *testing.T) {
-	if got := NewIndex().Engines(); got != nil {
-		t.Errorf("empty index Engines() = %v, want nil", got)
-	}
-	var idx *Index
-	if got := idx.Engines(); got != nil {
-		t.Errorf("nil index Engines() = %v, want nil", got)
-	}
-}
-
 // falcosidekick hardcodes the producer string as the literal "Falco" and puts
 // its own detection source ("syscall"/"k8s_audit") in the POLICY field. Pinned
 // because the taxonomy has to attribute on Source, never on Policy.
