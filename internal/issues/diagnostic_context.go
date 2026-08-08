@@ -489,7 +489,12 @@ func addAdmissionWebhookContext(b *diagnosticContextBuilder, root Issue, edges *
 		message = "A fail-closed admission webhook depends on this Service; matching admission requests are blocked while it has no ready backend."
 	}
 
-	seen := map[string]bool{}
+	type matchedGroup struct {
+		issue   Issue
+		members []Ref
+	}
+	matchedByID := map[string]*matchedGroup{}
+	var matchedOrder []string
 	var related []issuesapi.IssueRef
 	var edgeIDs []string
 	selfDeadlock := false
@@ -506,16 +511,24 @@ func addAdmissionWebhookContext(b *diagnosticContextBuilder, root Issue, edges *
 			if grouped, ok := groupedByID[candidate.ID]; ok {
 				shaped = grouped
 			}
-			if seen[shaped.ID] {
-				continue
+			matched := matchedByID[shaped.ID]
+			if matched == nil {
+				matched = &matchedGroup{issue: shaped}
+				matchedByID[shaped.ID] = matched
+				matchedOrder = append(matchedOrder, shaped.ID)
 			}
-			seen[shaped.ID] = true
-			related = append(related, issueRef(shaped))
-			if provider.WorkloadBacksService(shaped.Group, shaped.Kind, shaped.Namespace, shaped.Name, root.Namespace, root.Name) {
+			matched.members = append(matched.members, Ref{Group: candidate.Group, Kind: candidate.Kind, Namespace: candidate.Namespace, Name: candidate.Name})
+		}
+		for _, id := range matchedOrder {
+			matched := matchedByID[id]
+			related = append(related, issueRef(matched.issue))
+			if provider.WorkloadBacksService(matched.issue.Group, matched.issue.Kind, matched.issue.Namespace, matched.issue.Name, root.Namespace, root.Name) {
 				selfDeadlock = true
 				continue
 			}
-			edgeIDs = append(edgeIDs, shaped.ID)
+			if len(dedupeRefs(matched.members)) >= matched.issue.Count {
+				edgeIDs = append(edgeIDs, id)
+			}
 		}
 	}
 	if selfDeadlock {

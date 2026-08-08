@@ -694,21 +694,8 @@ func detectStatefulSetMissingService(cache *ResourceCache, namespace string, now
 	return out
 }
 
-// DetectMissingWebhookRefs scans admission-webhook configs
-// (ValidatingWebhookConfiguration, MutatingWebhookConfiguration) for
-// clientConfig.service refs that point at missing Services. Returned
-// separately from DetectMissingRefs because admissionregistration.k8s.io
-// kinds aren't in the typed lister set. Mirrors DetectCAPIProblems shape.
-//
-// Webhook misconfigurations are particularly worth surfacing because the
-// failure mode is silent: with failurePolicy=Ignore, security/mutation
-// rules are skipped without any visible cluster-level signal.
-//
-// CRD conversion webhook refs (spec.conversion.webhook.clientConfig.service)
-// are NOT checked here. The dynamic cache strips spec.conversion via
-// pkg/k8score/transform.go to avoid retaining heavy schema/caBundle data,
-// so reading those refs from the cache is impossible. Would need a direct
-// API list bypassing the transform — tracked as a follow-up.
+// AdmissionWebhookServiceReference describes one service-backed admission
+// webhook and the configuration that declares it.
 type AdmissionWebhookServiceReference struct {
 	ConfigurationKind  string
 	ConfigurationGroup string
@@ -817,6 +804,21 @@ func admissionWebhookServiceReferences(dynamicCache *DynamicResourceCache, disco
 	return refs
 }
 
+// DetectMissingWebhookRefs scans admission-webhook configs
+// (ValidatingWebhookConfiguration, MutatingWebhookConfiguration) for
+// clientConfig.service refs that point at missing Services. Returned
+// separately from DetectMissingRefs because admissionregistration.k8s.io
+// kinds aren't in the typed lister set. Mirrors DetectCAPIProblems shape.
+//
+// Webhook misconfigurations are particularly worth surfacing because the
+// failure mode is silent: with failurePolicy=Ignore, security/mutation
+// rules are skipped without any visible cluster-level signal.
+//
+// CRD conversion webhook refs (spec.conversion.webhook.clientConfig.service)
+// are NOT checked here. The dynamic cache strips spec.conversion via
+// pkg/k8score/transform.go to avoid retaining heavy schema/caBundle data,
+// so reading those refs from the cache is impossible. Would need a direct
+// API list bypassing the transform — tracked as a follow-up.
 func DetectMissingWebhookRefs(cache *ResourceCache, dynamicCache *DynamicResourceCache, discovery *ResourceDiscovery, namespace string) []Detection {
 	if cache == nil || dynamicCache == nil || discovery == nil {
 		return nil

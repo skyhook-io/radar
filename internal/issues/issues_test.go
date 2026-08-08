@@ -245,6 +245,47 @@ func TestAdmissionWebhookCorrelationSurvivesReplicaSetWorkloadGrouping(t *testin
 	}
 }
 
+func TestAdmissionWebhookCorrelationRequiresWholeGroupedIssueCoverage(t *testing.T) {
+	noEndpoints := `failed calling webhook "validate.example.com": Post "https://policy-webhook.hooks.svc:443/validate": no endpoints available for service "policy-webhook"`
+	p := &fakeProvider{
+		problems: []k8s.Detection{{
+			Kind: "Service", Namespace: "hooks", Name: "policy-webhook", Severity: "warning",
+			Reason: k8s.SelectorMatchesNoPodsReason, Fingerprint: k8s.NoReadyEndpointsFingerprint,
+		}},
+		scheduling: []k8s.Detection{
+			{
+				Kind: "ReplicaSet", Group: "apps", Namespace: "apps", Name: "catalog-old", Severity: "critical",
+				Reason: "WebhookUnavailable", Message: noEndpoints,
+				OwnerGroup: "apps", OwnerKind: "Deployment", OwnerName: "catalog",
+			},
+			{
+				Kind: "ReplicaSet", Group: "apps", Namespace: "apps", Name: "catalog-new", Severity: "critical",
+				Reason: "WebhookDenied", Message: `admission webhook "other.example.com" denied the request`,
+				OwnerGroup: "apps", OwnerKind: "Deployment", OwnerName: "catalog",
+			},
+		},
+		webhookRefs: map[string][]AdmissionWebhookRef{
+			"hooks/policy-webhook": {{
+				Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "policy"},
+				FailurePolicy: "Fail",
+			}},
+		},
+	}
+	out := Compose(p, Filters{Limit: NoLimit, Grouped: true, CanReadClusterScoped: func(string, string) bool { return true }})
+	for _, issue := range out {
+		if issue.Kind == "Deployment" && issue.Name == "catalog" {
+			if issue.Count != 2 {
+				t.Fatalf("mixed-cause grouped Deployment count = %d, want 2", issue.Count)
+			}
+			if issue.IncidentParent != nil {
+				t.Fatalf("partially covered grouped issue must not carry webhook incident parent: %+v", issue.IncidentParent)
+			}
+			return
+		}
+	}
+	t.Fatalf("mixed-cause grouped Deployment missing from output: %+v", out)
+}
+
 func TestAdmissionWebhookIgnoreKeepsExistingSeverity(t *testing.T) {
 	p := &fakeProvider{
 		problems: []k8s.Detection{{Kind: "Service", Namespace: "hooks", Name: "audit-webhook", Severity: "warning", Reason: k8s.SelectorMatchesNoPodsReason}},
@@ -262,6 +303,43 @@ func TestAdmissionWebhookIgnoreKeepsExistingSeverity(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("fail-open webhook fact missing: %+v", out[0].DiagnosticContext)
+	}
+}
+
+func TestAdmissionWebhookUnrelatedServiceProblemsStayUnchanged(t *testing.T) {
+	p := &fakeProvider{
+		problems: []k8s.Detection{
+			{
+				Kind: "Service", Namespace: "hooks", Name: "policy-webhook", Severity: "high",
+				Reason: "Unresolved named targetPort: https", Fingerprint: "svc:unresolved-targetport",
+			},
+			{
+				Kind: "Service", Namespace: "hooks", Name: "policy-webhook", Severity: "high",
+				Reason: "LoadBalancer pending", Fingerprint: "svc:loadbalancer-pending",
+			},
+		},
+		webhookRefs: map[string][]AdmissionWebhookRef{
+			"hooks/policy-webhook": {{
+				Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "policy"},
+				FailurePolicy: "Fail",
+			}},
+		},
+	}
+	out := Compose(p, Filters{Limit: NoLimit, Grouped: true, CanReadClusterScoped: func(string, string) bool { return true }})
+	if len(out) != 2 {
+		t.Fatalf("unrelated Service problems = %+v, want two rows", out)
+	}
+	for _, issue := range out {
+		if issue.Severity != SeverityWarning {
+			t.Errorf("unrelated Service problem was elevated: %+v", issue)
+		}
+		if issue.DiagnosticContext != nil {
+			for _, fact := range issue.DiagnosticContext.Facts {
+				if fact.Type == factAdmissionWebhook {
+					t.Errorf("unrelated Service problem received webhook context: %+v", issue)
+				}
+			}
+		}
 	}
 }
 
