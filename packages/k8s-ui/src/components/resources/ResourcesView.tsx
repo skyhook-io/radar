@@ -801,19 +801,34 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'rules', label: 'Generates', width: 'w-20' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
+  // The Deleting kinds are the only modern family whose headline column is the
+  // schedule rather than the enforcement posture, so they carry their own
+  // health signal. It is Last Run, NOT readiness: Kyverno 1.18.2 declares a
+  // READY printer column on these CRDs but never populates
+  // status.conditionStatus.ready, so `kubectl get deletingpolicies` prints it
+  // blank and a Ready column here would read "unknown" on every row forever.
+  // It also has nothing to catch — an uncompilable policy is rejected at
+  // admission and never exists. What does go wrong is a policy that exists and
+  // silently never fires, which lastExecutionTime shows.
+  //
+  // The other eight kinds deliberately have no readiness column either: their
+  // status cell already returns "Not Ready" IN PLACE OF the posture (see
+  // getModernKyvernoPolicyStatus), so a second one would be redundant.
   deletingpolicies: [
     { key: 'name', label: 'Name' },
+    { key: 'lastRun', label: 'Last Run', width: 'w-28', tooltip: 'When the schedule last fired. A scheduled policy that has never run is the failure worth catching — Kyverno rejects uncompilable policies at admission, so a broken one never exists to flag.' },
     { key: 'schedule', label: 'Schedule', width: 'w-32', tooltip: 'Cron schedule on which matched resources are deleted' },
     { key: 'appliesTo', label: 'Deletes', width: 'min-w-40' },
-    { key: 'rules', label: 'Conditions', width: 'w-24', tooltip: 'CEL conditions narrowing what is deleted; none means every matched resource' },
+    { key: 'rules', label: 'Conditions', width: 'w-28', tooltip: 'CEL conditions narrowing what is deleted; none means every matched resource' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   namespaceddeletingpolicies: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'lastRun', label: 'Last Run', width: 'w-28', tooltip: 'When the schedule last fired. A scheduled policy that has never run is the failure worth catching — Kyverno rejects uncompilable policies at admission, so a broken one never exists to flag.' },
     { key: 'schedule', label: 'Schedule', width: 'w-32' },
     { key: 'appliesTo', label: 'Deletes', width: 'min-w-40' },
-    { key: 'rules', label: 'Conditions', width: 'w-24' },
+    { key: 'rules', label: 'Conditions', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   policyexceptions: [

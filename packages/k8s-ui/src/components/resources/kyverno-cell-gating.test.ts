@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   KYVERNO_MODERN_PLURALS,
+  getKyvernoLastExecutionTime,
+  getKyvernoPolicyReady,
   getModernKyvernoPolicyStatus,
   isModernKyvernoPolicy,
 } from './resource-utils-kyverno-modern'
@@ -53,5 +55,39 @@ describe('kyverno cell group gating', () => {
   it('gates CleanupPolicy on the legacy kyverno.io group', () => {
     expect('kyverno.io/v2'.startsWith('kyverno.io/')).toBe(true)
     expect('cleanup.example.com/v1'.startsWith('kyverno.io/')).toBe(false)
+  })
+})
+
+// The Deleting kinds carry a Last Run column rather than a readiness one.
+// Verified on Kyverno 1.18.2: the CRD declares a READY printer column but the
+// controller never populates status.conditionStatus.ready — even after the
+// cron has fired, status is {conditionStatus:{message:""}, lastExecutionTime}.
+// A Ready column would read "unknown" on every row forever. lastExecutionTime
+// is populated, varies, and catches the failure that actually happens: a
+// scheduled policy that silently never runs.
+describe('deleting-policy last-run signal', () => {
+  const withLastRun = (t?: string) => ({
+    apiVersion: 'policies.kyverno.io/v1',
+    kind: 'DeletingPolicy',
+    spec: { schedule: '0 2 * * *' },
+    status: t ? { lastExecutionTime: t } : { conditionStatus: { message: '' } },
+  })
+
+  it('reads lastExecutionTime when the schedule has fired', () => {
+    expect(getKyvernoLastExecutionTime(withLastRun('2026-08-08T13:38:00Z'))).toBe('2026-08-08T13:38:00Z')
+  })
+
+  // Must stay empty rather than defaulting to anything — the cell renders
+  // "Never run" for this, which is the state worth catching.
+  it('returns empty when the policy has never run', () => {
+    expect(getKyvernoLastExecutionTime(withLastRun())).toBe('')
+    expect(getKyvernoLastExecutionTime({})).toBe('')
+  })
+
+  // The status shape Kyverno 1.18.2 actually writes after a real cron tick.
+  it('is empty for the real post-tick shape that omits ready', () => {
+    const real = { status: { conditionStatus: { message: '' }, lastExecutionTime: '2026-08-08T13:38:00Z' } }
+    expect(getKyvernoLastExecutionTime(real)).toBe('2026-08-08T13:38:00Z')
+    expect(getKyvernoPolicyReady(real)).toBeUndefined()
   })
 })

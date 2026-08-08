@@ -2,6 +2,7 @@
 // CleanupPolicy rows in ResourcesView.
 
 import { clsx } from 'clsx'
+import { formatAge } from '../resource-utils'
 import {
   getKyvernoAttestors,
   getKyvernoDeletionConditions,
@@ -10,6 +11,7 @@ import {
   getKyvernoMatchSummary,
   getKyvernoMutations,
   getKyvernoPolicyFamily,
+  getKyvernoLastExecutionTime,
   getKyvernoSchedule,
   getKyvernoValidations,
   getModernKyvernoPolicyStatus,
@@ -55,6 +57,21 @@ export function KyvernoModernPolicyCell({ resource, column }: { resource: any; c
         return <span className="text-sm text-theme-text-secondary">All matched</span>
       }
       return <span className="text-sm text-theme-text-secondary">{count}</span>
+    }
+    case 'lastRun': {
+      // Absence is stated, never blank. A blank cell reads the same whether the
+      // policy ran and we failed to show it or it has never run at all — and
+      // "never run" is the actual failure mode for a scheduled policy, so it
+      // has to be the loud state rather than the empty one.
+      const last = getKyvernoLastExecutionTime(resource)
+      if (!last) {
+        return (
+          <span className="badge status-degraded" title="This policy has not run since it was created">
+            Never run
+          </span>
+        )
+      }
+      return <span className="text-sm text-theme-text-secondary">{formatAge(last)} ago</span>
     }
     case 'schedule': {
       const schedule = getKyvernoSchedule(resource)

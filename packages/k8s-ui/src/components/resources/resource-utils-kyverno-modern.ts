@@ -398,6 +398,18 @@ export function getKyvernoSchedule(resource: any): string {
   return resource?.spec?.schedule || ''
 }
 
+/**
+ * `status.lastExecutionTime` — when the schedule last fired.
+ *
+ * This, not readiness, is the health signal for a scheduled policy. Kyverno
+ * rejects an uncompilable DeletingPolicy at admission, so a broken one never
+ * exists to be flagged; the real failure is a policy that exists and never
+ * runs. Empty means it has not run since creation.
+ */
+export function getKyvernoLastExecutionTime(resource: any): string {
+  return resource?.status?.lastExecutionTime || ''
+}
+
 export function getKyvernoDeletionPropagationPolicy(resource: any): string {
   return resource?.spec?.deletionPropagationPolicy || ''
 }
@@ -540,6 +552,17 @@ export function getKyvernoPolicyConditions(resource: any): any[] {
  * Table/drawer status badge. Readiness outranks posture: a policy that failed
  * to compile enforces nothing, so surfacing its declared "Deny" would be
  * actively misleading.
+ *
+ * This is why the eight admission-shaped kinds have no separate Ready column:
+ * readiness is not missing from their tables, it REPLACES the posture in this
+ * one cell. Upstream's own printer columns list READY separately, so the
+ * absence looks like an omission at a glance — it isn't. Adding a second Ready
+ * column beside Enforcement would show one irrelevant value on every row,
+ * because the two states are mutually exclusive by construction here.
+ *
+ * The Deleting kinds are the exception and DO carry their own `ready` column
+ * (see KNOWN_COLUMNS): their headline column is the cron schedule rather than
+ * a posture, so nothing else in the row would ever surface a failed compile.
  */
 export function getModernKyvernoPolicyStatus(resource: any): StatusBadge {
   const ready = getKyvernoPolicyReady(resource)
