@@ -144,7 +144,7 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 				}
 			}
 			now := time.Now()
-			lastSeen := now.Add(-issueSince)
+			firstSeen, lastSeen, onsetUnknown := conditionIssueTimes(now, issueSince)
 			// IssueTiming: only compute when we have a real condition timestamp.
 			// timingSince=0 means no lastTransitionTime was found; computing issue_timing
 			// from now-based arithmetic would falsely classify old resources as
@@ -162,7 +162,8 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 				Name:             u.GetName(),
 				Reason:           issReason,
 				Message:          issMsg,
-				FirstSeen:        lastSeen,
+				FirstSeen:        firstSeen,
+				OnsetUnknown:     onsetUnknown,
 				LastSeen:         lastSeen,
 				Count:            1,
 				IssueTiming:      timingR.IssueTiming,
@@ -352,13 +353,7 @@ func composeParentMessage(label, msg string) string {
 
 func newConditionIssue(gvr schema.GroupVersionResource, kind, namespace, name string, severity Severity, reason, message string, since time.Duration, fingerprint string, createdAt time.Time) Issue {
 	now := time.Now()
-	lastSeen := now
-	firstSeen := time.Time{}
-	onsetUnknown := since <= 0
-	if !onsetUnknown {
-		lastSeen = now.Add(-since)
-		firstSeen = lastSeen
-	}
+	firstSeen, lastSeen, onsetUnknown := conditionIssueTimes(now, since)
 	// Only compute issue_timing when we have a real condition timestamp (since > 0).
 	// since=0 means the condition has no lastTransitionTime; issue_timing would be wrong.
 	var timingR k8s.IssueTimingResult
@@ -385,6 +380,14 @@ func newConditionIssue(gvr schema.GroupVersionResource, kind, namespace, name st
 	classifyIssue(&iss)
 	enrichIdentity(&iss)
 	return iss
+}
+
+func conditionIssueTimes(now time.Time, since time.Duration) (time.Time, time.Time, bool) {
+	if since <= 0 {
+		return time.Time{}, now, true
+	}
+	observed := now.Add(-since)
+	return observed, observed, false
 }
 
 func conditionSince(cond map[string]any) time.Duration {

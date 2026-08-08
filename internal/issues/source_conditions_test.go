@@ -99,6 +99,47 @@ func TestNewConditionIssue_IssueTimingSinceGuard(t *testing.T) {
 	}
 }
 
+func TestDetectGenericCRDIssues_UnknownOnsetWithoutTransitionTime(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
+	knownLTT := time.Now().Add(-30 * time.Minute).UTC().Format(time.RFC3339)
+	widget := func(name string, lastTransitionTime string) *unstructured.Unstructured {
+		condition := map[string]any{
+			"type": "Ready", "status": "False", "reason": "Broken", "message": "controller failed",
+		}
+		if lastTransitionTime != "" {
+			condition["lastTransitionTime"] = lastTransitionTime
+		}
+		return &unstructured.Unstructured{Object: map[string]any{
+			"metadata": map[string]any{"name": name, "namespace": "prod"},
+			"status":   map[string]any{"conditions": []any{condition}},
+		}}
+	}
+	p := &fakeProvider{
+		dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{
+			gvr: {widget("unknown", ""), widget("known", knownLTT)},
+		},
+		kinds:      map[schema.GroupVersionResource]string{gvr: "Widget"},
+		namespaced: map[schema.GroupVersionResource]bool{gvr: true},
+	}
+
+	out := Compose(p, Filters{Limit: NoLimit})
+	if len(out) != 2 {
+		t.Fatalf("generic condition issues = %d, want 2: %+v", len(out), out)
+	}
+	byName := map[string]Issue{}
+	for _, issue := range out {
+		byName[issue.Name] = issue
+	}
+	unknown := byName["unknown"]
+	if !unknown.OnsetUnknown || !unknown.FirstSeen.IsZero() || unknown.LastSeen.IsZero() {
+		t.Errorf("timestamp-less generic condition = unknown:%v first:%v last:%v", unknown.OnsetUnknown, unknown.FirstSeen, unknown.LastSeen)
+	}
+	known := byName["known"]
+	if known.OnsetUnknown || known.FirstSeen.IsZero() {
+		t.Errorf("timestamped generic condition = unknown:%v first:%v", known.OnsetUnknown, known.FirstSeen)
+	}
+}
+
 // A Rollout override (InvalidSpec) without a parseable LTT must omit
 // issue_timing but KEEP the generic Healthy condition's age anchor for
 // FirstSeen — resetting it to compose-time would make a long-broken rollout
