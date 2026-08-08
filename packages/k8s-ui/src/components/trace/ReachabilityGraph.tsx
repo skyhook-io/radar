@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 import { PILL_MAX_PX, type GraphModel, type GraphNode, type GraphEdge, type LaneBox } from './reachGraphModel'
-import { markStyle, glyphStyle, markHelp, edgeHelp, SEV_COLOR, MARK_LEGEND, MARK_CATEGORY_LABEL, type Mark, type MarkCategory } from './reachMarks'
+import { markStyle, glyphStyle, markHelp, edgeHelp, edgeHelpIsRedundant, SEV_COLOR, MARK_LEGEND, MARK_CATEGORY_LABEL, type Mark, type MarkCategory } from './reachMarks'
 import { Tooltip } from '../ui/Tooltip'
 
 /** Finding severity -> the shared health tones. Findings describe the OBJECT;
@@ -225,7 +225,9 @@ function EdgePill({ edge }: { edge: GraphEdge }) {
       content={
         <>
           <span className="font-semibold">{edge.title}</span>
-          <span className="text-theme-text-tertiary"> — {edgeHelp(edge.label, edge.mark)}</span>
+          {!edgeHelpIsRedundant(edge.title, edge.label, edge.mark) && (
+            <span className="text-theme-text-tertiary"> — {edgeHelp(edge.label, edge.mark)}</span>
+          )}
         </>
       }
       wrapperClassName="absolute cursor-help"

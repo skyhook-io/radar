@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { routeMark, routeTone, routeChip, orderRoutes, scenariosFor, groupRoutes, vantageSignature, routeIdentity, isSlow, formatLatency, hostMatches, declaredHosts, routeHostOf, routeForOrigin, routeAsSeenFrom, originRouteEvidence, MARKS, edgeHelp, markHelp } from './reachMarks'
+import { routeMark, routeTone, routeChip, orderRoutes, scenariosFor, groupRoutes, vantageSignature, routeIdentity, isSlow, formatLatency, hostMatches, declaredHosts, routeHostOf, routeForOrigin, routeAsSeenFrom, originRouteEvidence, MARKS, edgeHelp, markHelp, edgeHelpIsRedundant } from './reachMarks'
 import type { RouteResult, Hop } from './types'
 
 const r = (o: Partial<RouteResult>): RouteResult => ({ route: 'GET /', outcome: 'verified', ...o })
@@ -681,5 +681,18 @@ describe('a structural line explains itself, not a test that never existed', () 
   it('anything actually observed keeps the mark vocabulary', () => {
     expect(edgeHelp('selects', 'proved')).toBe(markHelp('proved'))
     expect(edgeHelp('routes to', 'failed')).toBe(markHelp('failed'))
+  })
+})
+
+describe('the rest of the edge vocabulary', () => {
+  it('a collapsed sibling and an off-path backend say why, not "not tested"', () => {
+    expect(edgeHelp('also serves', 'config')).toContain('collapsed')
+    expect(edgeHelp('also serves', 'config')).not.toContain('not tested')
+    expect(edgeHelp('other host', 'excluded')).toContain('different host')
+  })
+  it("a line whose own label already says it does not say it twice", () => {
+    // origin edges are labelled with their evidence
+    expect(edgeHelpIsRedundant('not tested', '', 'untested')).toBe(true)
+    expect(edgeHelpIsRedundant('HTTP 404 · reached', '', 'proxied')).toBe(false)
   })
 })
