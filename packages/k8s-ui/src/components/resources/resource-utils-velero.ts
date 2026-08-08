@@ -38,8 +38,10 @@ const VELERO_LABEL_EXCEPTIONS: Record<string, string> = {
   FailedValidation: 'Rejected',
   // 237px and 147px. Both collapse onto the plain partial-failure label, which
   // makes the column non-injective: from the table you cannot tell whether a
-  // partially-failed run has finished. The outcome is the actionable fact and
-  // the stage is one click away, but it is a real loss, not a free win.
+  // partially-failed run has finished. That is acceptable only because the
+  // drawer prints the raw `.status.phase` next to the badge — see
+  // `VeleroPhaseValue`. Remove that and this stops being a display choice and
+  // becomes lost information.
   WaitingForPluginOperationsPartiallyFailed: 'Partially failed',
   FinalizingPartiallyFailed: 'Partially failed',
 }

@@ -1,5 +1,4 @@
 import { Clock, Archive } from 'lucide-react'
-import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
 import {
   getScheduleStatus,
@@ -10,6 +9,7 @@ import {
   getScheduleUseOwnerReferences,
   getScheduleValidationErrors,
 } from '../resource-utils-velero'
+import { VeleroPhaseValue } from './velero-cells'
 
 interface VeleroScheduleRendererProps {
   data: any
@@ -57,9 +57,7 @@ export function VeleroScheduleRenderer({ data }: VeleroScheduleRendererProps) {
       <Section title="Schedule" icon={Clock} defaultExpanded>
         <PropertyList>
           <Property label="Status" value={
-            <span className={clsx('badge', scheduleStatus.color)}>
-              {scheduleStatus.text}
-            </span>
+            <VeleroPhaseValue status={scheduleStatus} phase={status.phase || ''} />
           } />
           <Property label="Cron Schedule" value={
             <span className="font-mono text-sm">{getScheduleCron(data)}</span>

@@ -1,5 +1,4 @@
 import { Archive, Clock, HardDrive, Filter } from 'lucide-react'
-import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
 import {
   getBackupStatus,
@@ -22,6 +21,7 @@ import {
   isBackupActivePhase,
   isBackupPartialFailurePhase,
 } from '../resource-utils-velero'
+import { VeleroPhaseValue } from './velero-cells'
 import { formatAge } from '../resource-utils'
 
 interface VeleroBackupRendererProps {
@@ -94,9 +94,7 @@ export function VeleroBackupRenderer({ data }: VeleroBackupRendererProps) {
       <Section title="Status" icon={Archive} defaultExpanded>
         <PropertyList>
           <Property label="Phase" value={
-            <span className={clsx('badge', backupStatus.color)}>
-              {backupStatus.text}
-            </span>
+            <VeleroPhaseValue status={backupStatus} phase={phase} />
           } />
           {queuePosition !== null && (
             <Property label="Queue Position" value={String(queuePosition)} />

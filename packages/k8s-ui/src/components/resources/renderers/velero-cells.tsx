@@ -31,6 +31,34 @@ import {
   getBackupRepositoryType,
 } from '../resource-utils-velero'
 
+// The detail-page Phase value. The badge carries the same label the table
+// showed, so the row you clicked and the drawer you landed on agree — but the
+// drawer has no width budget, so the raw `.status.phase` rides alongside it
+// whenever the two differ. Without this the three collapsed partial-failure
+// phases would be unreachable outside the YAML tab, and the label would stop
+// being a display choice and start being a loss of information.
+export function VeleroPhaseValue({
+  status,
+  phase,
+}: {
+  status: { text: string; color: string }
+  phase: string
+}) {
+  // Stacked rather than side-by-side: the property column is ~300px and the
+  // longest phase is 40 unbroken characters, so a row would clip the phase and
+  // wrap the badge at the same time. `break-all` because the token has no break
+  // opportunity — in a detail panel wrapping is the right answer, since the
+  // whole point of the value is that it is exact.
+  return (
+    <span className="flex flex-col items-start gap-1 min-w-0">
+      <span className={clsx('badge whitespace-nowrap', status.color)}>{status.text}</span>
+      {phase && phase !== status.text && (
+        <span className="text-xs font-mono text-theme-text-tertiary break-all">{phase}</span>
+      )}
+    </span>
+  )
+}
+
 export function BackupCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'status': {
