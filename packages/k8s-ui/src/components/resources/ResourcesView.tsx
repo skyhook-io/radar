@@ -1285,7 +1285,12 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   cnpgclusters: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-28' },
+    // w-28 leaves the "Status" label 0.23px short once the sort AND filter
+    // affordances are both present, which renders "STAT…" — a sub-pixel miss
+    // costs two characters because the ellipsis needs its own room. The filter
+    // icon appears as soon as a column holds more than one distinct value, so
+    // this is latent on any status column, not specific to the current data.
+    { key: 'status', label: 'Status', width: 'w-32' },
     { key: 'instances', label: 'Instances', width: 'w-28', tooltip: 'Ready/Total' },
     { key: 'primary', label: 'Primary', width: 'w-36' },
     { key: 'image', label: 'Image', width: 'w-28' },
@@ -1295,9 +1300,11 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   cnpgbackups: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'status', label: 'Status', width: 'w-32' },
     { key: 'cluster', label: 'Cluster', width: 'w-36' },
-    { key: 'method', label: 'Method', width: 'w-36' },
+    // `barmanObjectStore` is the longest method and the field that decides how
+    // the rest of the row reads; at w-36 it was permanently ellipsised.
+    { key: 'method', label: 'Method', width: 'w-40' },
     { key: 'started', label: 'Started', width: 'w-24' },
     { key: 'duration', label: 'Duration', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -1315,9 +1322,15 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   poolers: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-24' },
+    // "Not Scheduled" measures ~100px and wrapped at w-24 (96px). Sized to the
+    // widest value the column can hold, not the one the current data happens to
+    // show — and to w-32 for the header, per the note on cnpgclusters.status.
+    { key: 'status', label: 'Status', width: 'w-32' },
     { key: 'cluster', label: 'Cluster', width: 'w-36' },
-    { key: 'type', label: 'Type', width: 'w-16' },
+    // Sized for the HEADER, not the value: `rw`/`ro` need 27px, but "Type" plus
+    // the sort affordance needs more than w-16 leaves, and the label rendered
+    // as "T…".
+    { key: 'type', label: 'Type', width: 'w-24' },
     { key: 'poolMode', label: 'Pool Mode', width: 'w-32' },
     // status.instances counts pods trying to be scheduled, not ready ones.
     { key: 'instances', label: 'Instances', width: 'w-28', tooltip: 'Scheduled/Total' },
