@@ -254,6 +254,23 @@ export interface Trace {
    *  walking the hop chain. Absent when there is nothing to diagnose (every
    *  route verified over real traffic). */
   diagnosis?: Diagnosis
+  /** Faults on the DECLARED ENTRY POINTS (an Ingress or route that will never
+   *  receive traffic). Deliberately separate from `diagnosis`: entries are
+   *  parallel, so a dead front door must not condemn a Service that another
+   *  entry still serves - but a verdict scoped to the tested path cannot see it
+   *  either. Vantage-invariant; deduped against `diagnosis` by the producer. */
+  entryProblems?: EntryProblem[]
+}
+
+/** One declared entry point that cannot carry traffic, mirrors
+ *  internal/trace/trace.go EntryProblem. */
+export interface EntryProblem {
+  resource: ResourceRef
+  summary: string
+  severity: string
+  code?: string
+  action?: string
+  command?: string
 }
 
 /** Hoisted lead diagnosis, mirrors internal/trace/coverage.go Diagnosis. Every

@@ -2185,3 +2185,54 @@ func TestComputeCoverage_TransportFailureAbsorbsAppLayerRow(t *testing.T) {
 		t.Fatalf("Coverage = %+v, want failed=1 skipped=0 - one broken path counted once", tr.Coverage)
 	}
 }
+
+// A dead front door is a real misconfiguration, but upstreams are parallel: it
+// must be stated WITHOUT condemning a Service that other entries still serve.
+func TestComputeEntryProblems_PromotesUpstreamFaultWithoutTouchingVerdict(t *testing.T) {
+	tr := &Trace{
+		Subject: ResourceRef{Kind: "Service", Namespace: "staging", Name: "shop"},
+		Upstreams: []Hop{
+			{Resource: ResourceRef{Kind: "Ingress", Namespace: "staging", Name: "shop"}},
+			{
+				Resource: ResourceRef{Kind: "HTTPRoute", Namespace: "staging", Name: "shop"},
+				Findings: []Finding{{
+					Code: "gwroute:not-accepted", Severity: SeverityWarning,
+					Message: "Not attached: no listener matches its hosts",
+					Action:  "check the parent Gateway's listener hostnames",
+				}},
+			},
+		},
+		Downstream: []Hop{{Resource: ResourceRef{Kind: "Service", Namespace: "staging", Name: "shop"}}},
+	}
+	got := computeEntryProblems(tr)
+	if len(got) != 1 {
+		t.Fatalf("EntryProblems = %+v, want the HTTPRoute fault promoted", got)
+	}
+	if got[0].Resource.Kind != "HTTPRoute" || !strings.Contains(got[0].Summary, "no listener") {
+		t.Fatalf("promoted the wrong finding: %+v", got[0])
+	}
+	if got[0].Action == "" {
+		t.Error("an entry problem should carry its finding's action")
+	}
+	// Info-level advisories stay where they are.
+	tr.Upstreams[1].Findings[0].Severity = SeverityInfo
+	if n := len(computeEntryProblems(tr)); n != 0 {
+		t.Errorf("info-severity findings must not surface as entry problems, got %d", n)
+	}
+}
+
+// The two surfaces must never state the same fault twice.
+func TestComputeEntryProblems_DedupesAgainstDiagnosis(t *testing.T) {
+	same := "Not attached: no listener matches its hosts"
+	tr := &Trace{
+		Subject:   ResourceRef{Kind: "Service", Namespace: "staging", Name: "shop"},
+		Diagnosis: &Diagnosis{Summary: same},
+		Upstreams: []Hop{{
+			Resource: ResourceRef{Kind: "HTTPRoute", Namespace: "staging", Name: "shop"},
+			Findings: []Finding{{Code: "gwroute:not-accepted", Severity: SeverityWarning, Message: same}},
+		}},
+	}
+	if got := computeEntryProblems(tr); len(got) != 0 {
+		t.Fatalf("EntryProblems = %+v, want none - the Diagnosis already says it", got)
+	}
+}

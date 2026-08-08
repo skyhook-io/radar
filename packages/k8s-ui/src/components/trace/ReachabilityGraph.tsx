@@ -68,11 +68,15 @@ function useFit(canvasW: number, canvasH: number): [React.RefObject<HTMLDivEleme
 export function ReachabilityGraph({
   model,
   selected,
+  hovered,
   onSelect,
   onAction,
 }: {
   model: GraphModel
   selected?: string
+  /** Node the reader is pointing at from OUTSIDE the graph (the entry-problem
+   *  rows under the header). Answers "where is it?" before a click is spent. */
+  hovered?: string
   onSelect: (id: string) => void
   onAction?: (a: NonNullable<GraphNode['action']>) => void
 }) {
@@ -149,7 +153,7 @@ export function ReachabilityGraph({
             <EdgePill key={e.id} edge={e} />
           ))}
         {model.nodes.map((n) => (
-          <Node key={n.id} node={n} selected={selected === n.id} onSelect={onSelect} onAction={onAction} />
+          <Node key={n.id} node={n} selected={selected === n.id} hovered={hovered === n.id} onSelect={onSelect} onAction={onAction} />
         ))}
         </div>
         </div>
@@ -246,11 +250,13 @@ function EdgePill({ edge }: { edge: GraphEdge }) {
 function Node({
   node,
   selected,
+  hovered,
   onSelect,
   onAction,
 }: {
   node: GraphNode
   selected: boolean
+  hovered?: boolean
   onSelect: (id: string) => void
   onAction?: (a: NonNullable<GraphNode['action']>) => void
 }) {
@@ -275,7 +281,7 @@ function Node({
       : isOrigin
         ? `1.5px dashed ${node.lane === 'control' ? 'var(--color-info)' : 'var(--accent)'}`
         : '1px solid var(--border-default)',
-    boxShadow: selected ? '0 0 0 3px var(--accent-muted)' : isOrigin ? 'none' : '0 1px 2px rgba(0,0,0,.05)',
+    boxShadow: selected ? '0 0 0 3px var(--accent-muted)' : hovered ? '0 0 0 3px var(--color-warning)' : isOrigin ? 'none' : '0 1px 2px rgba(0,0,0,.05)',
     opacity: node.dim ? 0.5 : 1,
   }
   return (

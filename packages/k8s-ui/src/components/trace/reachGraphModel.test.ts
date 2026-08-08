@@ -1405,3 +1405,19 @@ describe('an all-skipped origin never claims a network verdict', () => {
     expect(originNoEvidenceLabel({ id: 'incluster', mark: 'blocked', unavailable: 'image pull failed' } as never)).toBe('test couldn’t run')
   })
 })
+
+describe('entry-problem rows can address a graph node', () => {
+  it('the node id an EntryProblem resolves to matches the graph upstream node id', () => {
+    const t = {
+      subject: { kind: 'Service', name: 'shop', namespace: 'store' },
+      verdict: 'degraded', brokenAt: -1,
+      upstreams: [{ resource: { kind: 'HTTPRoute', name: 'shop', namespace: 'store' }, edge: 'httproute->service', findings: [] }],
+      downstream: [{ resource: { kind: 'Service', name: 'shop', namespace: 'store' }, edge: 'service', findings: [] }],
+      routes: [{ route: 'shop', target: 'shop:80', outcome: 'reached', confidence: 'real' }],
+    } as never
+    const g = buildGraph({ trace: t, route: route({ target: 'shop:80', outcome: 'reached' }), origin: buildOrigins(t).find((o) => o.id === 'apiserver')! })
+    // Mirrors the id the EntryProblems row builds from EntryProblem.resource.
+    const fromProblem = 'n:HTTPRoute/store/shop'
+    expect(g.nodes.some((n) => n.id === fromProblem)).toBe(true)
+  })
+})

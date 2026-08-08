@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Trace, RouteResult, ResourceRef } from './types'
+import type { Trace, RouteResult, ResourceRef, EntryProblem } from './types'
 import { ReachActions, JustTestedNote, CopyableCommand, completedRequestMode, type TracePanelProps } from './TracePanel'
 import { AlertBanner } from '../ui/drawer-components'
 import { PaneLoader } from '../ui/PaneLoader'
@@ -190,6 +190,9 @@ function ReachabilityBoard(props: BoardProps) {
   const selectedOriginRunning = running && origin?.id === 'incluster'
 
   const [selection, setSelection] = useState<Selection>(undefined)
+  // The entry-problem rows point at a node from outside the graph: hovering one
+  // rings it, so "where is it?" is answered before a click is spent.
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | undefined>(undefined)
 
   const model = useMemo(
     () => buildGraph({ trace, route, origin, origins, stale, running }),
@@ -243,6 +246,8 @@ function ReachabilityBoard(props: BoardProps) {
         verdict={verdict}
         trace={trace}
         runNonce={runNonce}
+        onEntryHover={setHoveredNodeId}
+        onEntrySelect={(id) => setSelection(id)}
         actions={
           <ReachActions
             {...props}
@@ -308,6 +313,7 @@ function ReachabilityBoard(props: BoardProps) {
               onRunInCluster?.()
             }}
             selected={selection}
+            hovered={hoveredNodeId}
             onSelect={(id) => {
               // An origin capsule selects the VANTAGE - the rest of the graph
               // and the inspector re-route to it. Any other node selects the
@@ -457,16 +463,69 @@ function ScenarioPicker({
 
 const LAYER_ORDER = ['dns', 'tcp', 'tls', 'http']
 
+/** The declared entry points that cannot carry traffic. Stated under the
+ *  headline because the verdict is scoped to the TESTED path and structurally
+ *  cannot see them - a dead front door was visible only as a dot inside a graph
+ *  node. Interaction ladder: hover names it in full and rings it in the graph,
+ *  click focuses it (graph + inspector), and the hop's own "Open" leaves. */
+function EntryProblems({
+  problems,
+  onHover,
+  onSelect,
+}: {
+  problems: EntryProblem[]
+  onHover?: (nodeId?: string) => void
+  onSelect?: (nodeId: string) => void
+}) {
+  if (problems.length === 0) return null
+  const shown = problems.slice(0, 2)
+  const rest = problems.length - shown.length
+  return (
+    <div className="mt-1.5 flex flex-col gap-1">
+      {shown.map((p, i) => {
+        const nodeId = `n:${p.resource.kind}/${p.resource.namespace ?? ''}/${p.resource.name || 'pods'}`
+        const label = `${p.resource.kind} ${p.resource.name}`
+        return (
+          <Tooltip key={`${p.code}-${i}`} content={[p.summary, p.action].filter(Boolean).join(' — ')} wrapperClassName="block">
+            <button
+              type="button"
+              onMouseEnter={() => onHover?.(nodeId)}
+              onMouseLeave={() => onHover?.(undefined)}
+              onFocus={() => onHover?.(nodeId)}
+              onBlur={() => onHover?.(undefined)}
+              onClick={() => onSelect?.(nodeId)}
+              aria-label={`${label} — ${p.summary}. Show it on the path.`}
+              className="flex w-full max-w-[92ch] cursor-pointer items-start gap-1.5 rounded-md px-2 py-1.5 text-left text-xs leading-relaxed text-pretty transition-colors hover:bg-theme-hover"
+              style={{ border: '1px solid var(--color-warning)', background: 'color-mix(in srgb, var(--color-warning) 10%, transparent)' }}
+            >
+              <span className="shrink-0" style={{ color: 'var(--color-warning-dark)' }}>▲</span>
+              <span className="min-w-0 flex-1 text-theme-text-primary">
+                <span className="text-[9.5px] font-bold tracking-[0.07em] text-theme-text-tertiary">CONFIGURED ENTRY </span>
+                <span className="font-mono font-semibold">{label}</span> — <span className="line-clamp-2">{p.summary}</span>
+              </span>
+            </button>
+          </Tooltip>
+        )
+      })}
+      {rest > 0 && <div className="text-[11px] text-theme-text-tertiary">+{rest} more entry point{rest > 1 ? 's' : ''} with problems — see the path below</div>}
+    </div>
+  )
+}
+
 function VerdictBand({
   verdict,
   trace,
   actions,
   runNonce,
+  onEntryHover,
+  onEntrySelect,
 }: {
   verdict: ReturnType<typeof buildVerdict>
   trace: Trace
   actions: React.ReactNode
   runNonce?: number
+  onEntryHover?: (nodeId?: string) => void
+  onEntrySelect?: (nodeId: string) => void
 }) {
   // The check volume lives HERE, not only in the footer ledger: the band is
   // the one line everyone reads, and a verdict with no visible work behind it
@@ -524,6 +583,7 @@ function VerdictBand({
           </div>
         )}
         {verdict.body && <div className="mt-1 max-w-[76ch] text-xs leading-relaxed text-theme-text-secondary text-pretty">{verdict.body}</div>}
+        <EntryProblems problems={trace.entryProblems ?? []} onHover={onEntryHover} onSelect={onEntrySelect} />
       </div>
       <div className="flex flex-none gap-2">{actions}</div>
     </div>

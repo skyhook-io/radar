@@ -450,6 +450,7 @@ func computeCoverage(t *Trace) {
 	// Single source of truth for the banner sentence - UI and MCP both read this.
 	t.Headline = CoverageHeadline(t)
 	t.Diagnosis = computeDiagnosis(t)
+	t.EntryProblems = computeEntryProblems(t)
 }
 
 // upgradeDefinitiveBackendDown promotes a Service route's unreachability from
@@ -772,6 +773,7 @@ func ApplyInClusterResults(t *Trace, byTarget map[string][]probe.Result) {
 	recountCoverage(t)
 	t.Headline = CoverageHeadline(t)
 	t.Diagnosis = computeDiagnosis(t)
+	t.EntryProblems = computeEntryProblems(t)
 	// Same collapse as the standard path (BuildTraceWithOptions): ship the one
 	// coverage-honest verdict so REST, UI, and MCP never diverge on the in-cluster
 	// flow.
@@ -992,6 +994,47 @@ type Diagnosis struct {
 // Returns nil when every route was verified over real traffic - nothing to
 // diagnose. Benign (intentional scale-to-0) routes are NOT treated as a problem
 // here; their route already reads amber-benign with its own evidence.
+// computeEntryProblems promotes warning+ findings on the DECLARED ENTRY hops
+// (upstreams) so a front door that cannot carry traffic is stated where the
+// reader looks, instead of living only as a dot inside a graph node. Kept out
+// of the Diagnosis ranking on purpose: entries are parallel, so a broken
+// sibling must never hijack the headline of a path that works. Anything the
+// Diagnosis already names is dropped, so the two surfaces never say it twice.
+func computeEntryProblems(t *Trace) []EntryProblem {
+	if t == nil || len(t.Upstreams) == 0 {
+		return nil
+	}
+	var out []EntryProblem
+	for _, h := range t.Upstreams {
+		for _, f := range h.Findings {
+			if f.Severity != SeverityCritical && f.Severity != SeverityWarning {
+				continue
+			}
+			if isScaleZeroFinding(f) {
+				continue
+			}
+			summary := firstNonEmpty(f.Cause, f.Message)
+			if summary == "" {
+				continue
+			}
+			// Already stated by the Diagnosis band - printing it twice reads as
+			// two problems.
+			if t.Diagnosis != nil && t.Diagnosis.Summary == summary {
+				continue
+			}
+			out = append(out, EntryProblem{
+				Resource: h.Resource,
+				Summary:  summary,
+				Severity: f.Severity,
+				Code:     f.Code,
+				Action:   f.Action,
+				Command:  f.Command,
+			})
+		}
+	}
+	return out
+}
+
 func computeDiagnosis(t *Trace) *Diagnosis {
 	if t == nil {
 		return nil
