@@ -552,7 +552,7 @@ See the main [README](../README.md#gitops) for the user-facing overview. This se
 - **Operation-failure parser** recognizes 11 patterns: annotation-too-large, label-too-long, hook failure, admission webhook denial, RBAC, conflict, immutable field, schema migration, connectivity, etc.
 
 **Limitations**:
-- SSA-applied resources (`ServerSideApply=true` sync-option) lack the `last-applied-configuration` annotation; per-resource diff is unavailable for those rows. SSA fallback via `metadata.managedFields` and Argo API integration for canonical Git-rendered diffs are tracked in [#601](https://github.com/skyhook-io/radar/issues/601).
+- SSA-applied resources (`ServerSideApply=true` sync-option) lack the `last-applied-configuration` annotation, so the local diff described above is unavailable for those rows. Configuring the [Argo CD API integration](gitops.md#argo-cd-api-integration-deep-diff) covers them: Radar then asks argocd-server for the Git-rendered desired state and diffs against that, which is canonical rather than annotation-derived. An annotation-free local fallback via `metadata.managedFields` is still tracked in [#601](https://github.com/skyhook-io/radar/issues/601).
 - Single-cluster only: Application↔resource edges only render when Radar is connected to the cluster where the managed resources live (not necessarily the cluster running the Argo controller).
 
 ---

@@ -184,8 +184,8 @@ To connect a cluster from the command line, use `radar cloud install`
 
 ### What Radar sends
 
-Radar makes exactly two outbound requests, both to Skyhook, neither containing
-cluster data:
+Until you connect a cluster to Cloud, Radar makes exactly two outbound
+requests, both to Skyhook, neither containing cluster data:
 
 - **Update check** — periodically, to `releases.skyhook.io`, with the Radar
   version, OS/arch, install method, and whether it's running locally or
@@ -194,8 +194,14 @@ cluster data:
   current terms shown in it. No identifiers are sent. `RADAR_CLOUD_FUNNEL=off`
   stops this request from ever happening.
 
-Your cluster's data is never sent anywhere. Radar talks to your Kubernetes API
-directly and keeps everything it reads on your machine.
+A standalone Radar sends your cluster's data nowhere: it talks to your
+Kubernetes API directly and keeps everything it reads on your machine.
+
+Connecting a cluster to Cloud is what changes that, and it is the point of
+connecting — the cluster's agent opens an outbound tunnel to the Hub so the
+team can reach the same views without each person holding kubeconfig access.
+Deciding whether to connect is a separate question from the two requests
+above, which happen either way.
 
 ## Related Documentation
 

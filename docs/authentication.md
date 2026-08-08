@@ -393,7 +393,7 @@ When auth is enabled:
 - The **namespace selector** only shows namespaces the user can access
 - **Topology, resources, events, dashboard** are filtered to accessible namespaces
 - **Cluster-scoped resources** (Nodes, PersistentVolumes, StorageClasses) are gated per-kind via `SubjectAccessReview` — a user sees them only if their own RBAC permits listing that kind, independent of namespace access
-- **Helm releases** are visible to all authenticated users (reads use the ServiceAccount, not impersonation, because the K8s `view` role doesn't include `list secrets` which Helm requires). Write operations (install, upgrade, rollback, uninstall) are impersonated and require the user to have appropriate RBAC.
+- **Helm releases** are read with the user's own identity, like everything else. Helm stores releases as Secrets, so a user sees a release only where their RBAC grants `list secrets` in the storage namespace — and the K8s built-in `view` role deliberately does not. Radar resolves the namespaces the user can actually read release storage in and lists only there, returning 403 when there are none. Write operations (install, upgrade, rollback, uninstall) are impersonated and need the matching RBAC.
 - **Write buttons** (restart, scale, exec, Helm install, etc.) only appear if the user has permission
 - Write operations return **403** from K8s if RBAC denies them (shown as an error toast)
 - The **/api/auth/me** endpoint returns the current user info and whether auth is enabled
