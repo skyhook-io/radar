@@ -107,6 +107,32 @@ export function markHelp(m: Mark): string {
   return MARK_LEGEND.find((l) => l.mark === m)?.text ?? m
 }
 
+/**
+ * What a LINE means, when the generic mark help would mislead.
+ *
+ * Structural edges are drawn `config` because nothing was dialled along them -
+ * but "not tested" then invites the reader to ask why we didn't, and the honest
+ * answer differs per edge: ownership is not a traffic hop at all, a selector is
+ * read from the cluster rather than proven by a request, and declared routing
+ * can only be exercised by a request that actually goes through that entry.
+ * Saying "not tested" for all three trains the reader to expect a test that in
+ * two of the cases does not exist.
+ */
+export function edgeHelp(label: string, mark: Mark): string {
+  if (mark === 'config') {
+    switch (label.trim().toLowerCase()) {
+      case 'runs':
+        return 'ownership, not a traffic hop - the workload owns these Pods'
+      case 'selects':
+        return 'read from the cluster - which Pods this Service selects'
+      case 'routes to':
+      case 'sends to':
+        return 'declared routing - only a request through this entry exercises it'
+    }
+  }
+  return markHelp(mark)
+}
+
 /** Inline style for a mark glyph. */
 export function glyphStyle(m: Mark): React.CSSProperties {
   return { color: markStyle(m).color, fontWeight: 700, fontSize: '12px', lineHeight: 1.1, flex: 'none' }

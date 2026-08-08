@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { routeMark, routeTone, routeChip, orderRoutes, scenariosFor, groupRoutes, vantageSignature, routeIdentity, isSlow, formatLatency, hostMatches, declaredHosts, routeHostOf, routeForOrigin, routeAsSeenFrom, originRouteEvidence, MARKS } from './reachMarks'
+import { routeMark, routeTone, routeChip, orderRoutes, scenariosFor, groupRoutes, vantageSignature, routeIdentity, isSlow, formatLatency, hostMatches, declaredHosts, routeHostOf, routeForOrigin, routeAsSeenFrom, originRouteEvidence, MARKS, edgeHelp, markHelp } from './reachMarks'
 import type { RouteResult, Hop } from './types'
 
 const r = (o: Partial<RouteResult>): RouteResult => ({ route: 'GET /', outcome: 'verified', ...o })
@@ -663,5 +663,23 @@ describe('a preserved candidate is one gap, not two scenarios', () => {
       [{ route: 'other-svc:9090', reason: 'not reachable from here' }],
     )
     expect(s).toHaveLength(2)
+  })
+})
+
+describe('a structural line explains itself, not a test that never existed', () => {
+  it('ownership and selection never claim they were "not tested"', () => {
+    expect(edgeHelp('runs', 'config')).toContain('ownership')
+    expect(edgeHelp('runs', 'config')).not.toContain('not tested')
+    expect(edgeHelp('selects', 'config')).toContain('read from the cluster')
+    expect(edgeHelp('selects', 'config')).not.toContain('not tested')
+  })
+  it('declared routing says what WOULD exercise it', () => {
+    for (const l of ['routes to', 'sends to']) {
+      expect(edgeHelp(l, 'config')).toContain('request through this entry')
+    }
+  })
+  it('anything actually observed keeps the mark vocabulary', () => {
+    expect(edgeHelp('selects', 'proved')).toBe(markHelp('proved'))
+    expect(edgeHelp('routes to', 'failed')).toBe(markHelp('failed'))
   })
 })
