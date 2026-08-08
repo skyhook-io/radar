@@ -4,20 +4,23 @@ when cloud.enabled=true and cloud.defaultRbac.create=true (the default).
 
 Cloud injects identity headers on every proxied request:
   X-Forwarded-User:   <workos user id>
-  X-Forwarded-Groups: cloud:<role>,cloud:org:<org_id>,cloud:user:<user_id>
+  X-Forwarded-Groups: radar:<role>,radar:org:<org_id>,radar:user:<user_id>
 
 Radar runs with --auth-mode=proxy under cloud-mode, so K8s sees the request
 as that impersonated identity and enforces RBAC on it. These bindings map
 the Cloud role tiers to standard K8s ClusterRoles:
 
-  cloud:owner   → K8s "admin" role (namespace-everything, no cluster-scoped writes)
-  cloud:member  → K8s "edit" role (read+write on standard resources, no RBAC)
-  cloud:viewer  → K8s "view" role (read-only)
+  radar:owner   → K8s "admin" role (namespace-everything, no cluster-scoped writes)
+  radar:member  → K8s "edit" role (read+write on standard resources, no RBAC)
+  radar:viewer  → K8s "view" role (read-only)
 
 Cluster operators can disable any of these (set cloud.defaultRbac.<role>=false)
 and author their own bindings — e.g., per-namespace RoleBindings, or bindings
-for cloud:user:<id> groups to grant individuals extra access. Set
+for radar:user:<id> groups to grant individuals extra access. Set
 cloud.defaultRbac.ownerClusterRole=cluster-admin to grant cluster-wide admin.
+
+Each binding also includes its pre-rename cloud:* subject so rolling hub and
+chart upgrades remain compatible. Remove those subjects in v2.
 */}}
 {{- if and .Values.cloud.enabled .Values.cloud.defaultRbac.create -}}
 {{- if .Values.cloud.defaultRbac.owner -}}
@@ -32,8 +35,6 @@ roleRef:
   kind: ClusterRole
   name: {{ .Values.cloud.defaultRbac.ownerClusterRole }}
 subjects:
-  # radar:* is the canonical group vocabulary; the cloud:* subject is the
-  # pre-rename legacy kept for older hubs during the deprecation window.
   - kind: Group
     name: radar:owner
     apiGroup: rbac.authorization.k8s.io
@@ -54,8 +55,6 @@ roleRef:
   kind: ClusterRole
   name: {{ .Values.cloud.defaultRbac.memberClusterRole }}
 subjects:
-  # radar:* is the canonical group vocabulary; the cloud:* subject is the
-  # pre-rename legacy kept for older hubs during the deprecation window.
   - kind: Group
     name: radar:member
     apiGroup: rbac.authorization.k8s.io
@@ -76,8 +75,6 @@ roleRef:
   kind: ClusterRole
   name: {{ .Values.cloud.defaultRbac.viewerClusterRole }}
 subjects:
-  # radar:* is the canonical group vocabulary; the cloud:* subject is the
-  # pre-rename legacy kept for older hubs during the deprecation window.
   - kind: Group
     name: radar:viewer
     apiGroup: rbac.authorization.k8s.io

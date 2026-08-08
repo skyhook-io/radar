@@ -77,7 +77,7 @@ roleRef:
   name: admin
 subjects:
 - kind: Group
-  name: cloud:owner
+  name: radar:owner
   apiGroup: rbac.authorization.k8s.io
 `
 
@@ -205,7 +205,7 @@ roleRef:
   name: admin
 subjects:
 - kind: Group
-  name: cloud:owner
+  name: radar:owner
   apiGroup: rbac.authorization.k8s.io`,
 			live: []*unstructured.Unstructured{
 				adoptionObject("v1", "ConfigMap", "radar", "radar-config", nil),

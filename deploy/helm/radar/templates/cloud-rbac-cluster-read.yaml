@@ -8,7 +8,7 @@ flow-control configuration). For a cluster-wide observability tool that means
 owners and viewers can't see core infrastructure or complete those checks. This
 add-on grants get/list/watch on infrastructure and list-only access to Upgrade
 impact evidence through EXPLICIT
-bindings to the cloud:* groups — deliberately NOT via `aggregate-to-view` labels,
+bindings to the radar:* groups — deliberately NOT via `aggregate-to-view` labels,
 which would widen the shared built-in `view`/`edit` roles cluster-wide for every
 other subject bound to them (mirrors the radar-helm add-on pattern).
 
@@ -29,7 +29,7 @@ Scoping — cluster-scoped read is its own axis, per tier:
     own that tier's RBAC entirely.
   - Want a DIFFERENT cluster-read set for a tier (e.g. Nodes but not PVs)? Don't
     fork this role: set clusterScopedRead.<tier>=false and bind your own ClusterRole
-    to the cloud:<tier> group. The cloud:* groups are injected by Cloud regardless,
+    to the radar:<tier> group. The radar:* groups are injected by Cloud regardless,
     so your binding composes with the built-in namespaced one.
 */}}
 {{- /*

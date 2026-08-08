@@ -43,7 +43,7 @@ roleRef:
   name: admin
 subjects:
 - kind: Group
-  name: cloud:owner
+  name: radar:owner
   apiGroup: rbac.authorization.k8s.io
 `
 

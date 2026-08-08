@@ -101,7 +101,7 @@ func TestHandleAuthMe_CloudUser_ExposesCloudRole(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := requestWithUser("GET", "/api/auth/me", &auth.User{
 		Username: "bob",
-		Groups:   []string{"cloud:viewer", "cloud:org:abc"},
+		Groups:   []string{"radar:viewer", "radar:org:abc"},
 	})
 	s.handleAuthMe(w, r)
 

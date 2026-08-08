@@ -11,7 +11,7 @@ import (
 )
 
 // userWithGroups builds an authenticated user carrying the given groups, used
-// to drive the Cloud-role gate (cloud:<tier> prefix).
+// to drive the Cloud-role gate (radar:<tier> prefix).
 func userWithGroups(groups ...string) *auth.User {
 	return &auth.User{Username: "u@example.com", Groups: groups}
 }
@@ -35,7 +35,7 @@ func putConfigStatus(t *testing.T, user *auth.User) (int, string) {
 func TestPutConfig_RoleGate(t *testing.T) {
 	// Non-owner Cloud roles are rejected with the stable error_code so the
 	// frontend can branch on it.
-	for _, tier := range []string{"cloud:viewer", "cloud:member"} {
+	for _, tier := range []string{"radar:viewer", "radar:member"} {
 		code, body := putConfigStatus(t, userWithGroups(tier))
 		if code != http.StatusForbidden {
 			t.Errorf("%s: status = %d, want 403; body=%s", tier, code, body)
@@ -59,7 +59,7 @@ func TestPutConfig_OwnerAndOSSBypassRoleGate(t *testing.T) {
 		name string
 		user *auth.User
 	}{
-		{"owner", userWithGroups("cloud:owner")},
+		{"owner", userWithGroups("radar:owner")},
 		{"no-role-groups", userWithGroups("devs")},
 		{"no-user", nil},
 	}

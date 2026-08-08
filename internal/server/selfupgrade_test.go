@@ -29,7 +29,7 @@ func TestSelfUpgradeRequiresCloudOwner(t *testing.T) {
 	t.Setenv("MY_POD_NAMESPACE", "")
 	t.Setenv("MY_DEPLOYMENT_NAME", "")
 
-	for _, tier := range []string{"cloud:viewer", "cloud:member", "cloud:unknown", ""} {
+	for _, tier := range []string{"radar:viewer", "radar:member", "radar:unknown", ""} {
 		t.Run(tier, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/api/agent/self-upgrade", strings.NewReader(`{"image":"ghcr.io/skyhook-io/radar:1.9.0"}`))
 			req = req.WithContext(auth.ContextWithUser(req.Context(), userWithGroups(tier)))
@@ -93,7 +93,7 @@ func TestSelfUpgradeCloudOwnerPassesRoleGate(t *testing.T) {
 	t.Setenv("MY_POD_NAMESPACE", "")
 	t.Setenv("MY_DEPLOYMENT_NAME", "")
 	req := httptest.NewRequest(http.MethodPost, "/api/agent/self-upgrade", strings.NewReader(`{"image":"ghcr.io/skyhook-io/radar:1.9.0"}`))
-	req = req.WithContext(auth.ContextWithUser(req.Context(), userWithGroups("cloud:owner")))
+	req = req.WithContext(auth.ContextWithUser(req.Context(), userWithGroups("radar:owner")))
 	rec := httptest.NewRecorder()
 
 	(&Server{}).handleSelfUpgrade(rec, req)

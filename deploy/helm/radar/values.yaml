@@ -368,8 +368,8 @@ cloud:
   insecureSkipVerify: false
   # Default ClusterRoleBindings for Radar Cloud identity groups.
   #
-  # How it works: Cloud injects X-Forwarded-Groups: cloud:<role>,
-  # cloud:org:<id>, cloud:user:<id> on every proxied request. Radar
+  # How it works: Cloud injects X-Forwarded-Groups: radar:<role>,
+  # radar:org:<id>, radar:user:<id> on every proxied request. Radar
   # impersonates that identity against the K8s API on EVERY user-initiated
   # call (REST, MCP, Helm reads and writes, workload logs, node ops, pod
   # file browse, CAPI kubeconfig), so K8s RBAC enforces the tier — no
@@ -378,17 +378,17 @@ cloud:
   # Defaults map Cloud's tiers onto standard K8s ClusterRoles. These are
   # ClusterRoleBindings (not namespace-scoped RoleBindings), so the grant
   # applies in EVERY namespace:
-  #   cloud:owner   → "admin"  (full read+write in every namespace, including
+  #   radar:owner   → "admin"  (full read+write in every namespace, including
   #                            RBAC within namespaces; no writes on cluster-
   #                            scoped resources like Nodes, CRDs, ClusterRoles)
-  #   cloud:member  → "edit"   (read+write on standard resources, no RBAC)
-  #   cloud:viewer  → "view"   (read-only)
+  #   radar:member  → "edit"   (read+write on standard resources, no RBAC)
+  #   radar:viewer  → "view"   (read-only)
   #
   # These are starting-point grants, not "fallbacks that kick in when the
   # user has nothing else" — K8s RBAC is strictly ADDITIVE. Operator bindings
   # stack on top of ours, they can't override or deny. To tighten a tier,
   # set its boolean below to false (suppresses our binding) and author your
-  # own. To give an individual user extra access, bind cloud:user:<id> to
+  # own. To give an individual user extra access, bind radar:user:<id> to
   # an extra Role/ClusterRole — it will union with their tier's permissions.
   # To loosen owner, set ownerClusterRole=cluster-admin.
   defaultRbac:
@@ -426,7 +426,7 @@ cloud:
     # Independent of *ClusterRole above: a custom namespaced role does NOT
     # disable cluster-read (they're separate bindings). Want a tier to read a
     # DIFFERENT cluster-scoped set (e.g. Nodes but not PVs)? Set its flag false
-    # and bind your own ClusterRole to the cloud:<tier> group — the cloud:*
+    # and bind your own ClusterRole to the radar:<tier> group — the radar:*
     # groups exist regardless of this chart, so your binding composes cleanly.
     clusterScopedRead:
       viewer: true

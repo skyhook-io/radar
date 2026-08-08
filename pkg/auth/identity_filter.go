@@ -22,7 +22,7 @@ var reservedPrincipalPrefixes = []string{
 
 // IsReservedPrincipal reports whether a username or group falls in a reserved
 // Kubernetes namespace. Matched as an exact leading prefix so Radar's own
-// namespaced synthetic principals (e.g. "cloud:system:alerts:…") are
+// namespaced synthetic principals (e.g. "radar:system:alerts:…") are
 // unaffected — only leading "system:" is reserved.
 func IsReservedPrincipal(principal string) bool {
 	for _, p := range reservedPrincipalPrefixes {
@@ -79,7 +79,7 @@ func ForwardedIdentityAllowed(username string, groups []string, cloudMode bool) 
 // isCloudUsername reports whether a username is one the Radar Cloud control
 // plane legitimately injects: the opaque per-user id the hub sets as
 // X-Forwarded-User, or an internal synthetic principal namespaced under
-// "cloud:system:". The hub never forwards a K8s-reserved username, so
+// "radar:system:". The hub never forwards a K8s-reserved username, so
 // rejecting reserved is the meaningful check; the opaque WorkOS id has no
 // fixed prefix to match beyond "non-empty and not reserved".
 func isCloudUsername(username string) bool {

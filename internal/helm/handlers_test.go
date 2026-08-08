@@ -32,22 +32,22 @@ func TestRequireCloudRole(t *testing.T) {
 		// CloudRole is RoleNone, AtLeast bypasses. This is permissive
 		// by design — the assumption is that radar-hub guarantees the
 		// role group when forwarding.
-		{name: "user without cloud:* — bypass", groups: []string{"developers"}, min: auth.RoleOwner, wantOK: true},
+		{name: "user without radar:* — bypass", groups: []string{"developers"}, min: auth.RoleOwner, wantOK: true},
 
 		// Cloud-attributed users — gate enforces.
-		{name: "viewer denied member-required op", groups: []string{"cloud:viewer"}, min: auth.RoleMember,
+		{name: "viewer denied member-required op", groups: []string{"radar:viewer"}, min: auth.RoleMember,
 			wantOK: false, wantCode: auth.ErrCodeCloudRoleInsufficient},
-		{name: "viewer denied owner-required op", groups: []string{"cloud:viewer"}, min: auth.RoleOwner,
+		{name: "viewer denied owner-required op", groups: []string{"radar:viewer"}, min: auth.RoleOwner,
 			wantOK: false, wantCode: auth.ErrCodeCloudRoleInsufficient},
-		{name: "viewer allowed viewer-required op", groups: []string{"cloud:viewer"}, min: auth.RoleViewer, wantOK: true},
-		{name: "member allowed member-required op", groups: []string{"cloud:member"}, min: auth.RoleMember, wantOK: true},
-		{name: "member denied owner-required op", groups: []string{"cloud:member"}, min: auth.RoleOwner,
+		{name: "viewer allowed viewer-required op", groups: []string{"radar:viewer"}, min: auth.RoleViewer, wantOK: true},
+		{name: "member allowed member-required op", groups: []string{"radar:member"}, min: auth.RoleMember, wantOK: true},
+		{name: "member denied owner-required op", groups: []string{"radar:member"}, min: auth.RoleOwner,
 			wantOK: false, wantCode: auth.ErrCodeCloudRoleInsufficient},
-		{name: "owner allowed owner-required op", groups: []string{"cloud:owner"}, min: auth.RoleOwner, wantOK: true},
+		{name: "owner allowed owner-required op", groups: []string{"radar:owner"}, min: auth.RoleOwner, wantOK: true},
 
 		// Defensive: a stuffed lower tier alongside owner shouldn't
 		// downgrade the user. CloudRoleFromGroups picks the highest.
-		{name: "stuffed viewer + owner — allowed", groups: []string{"cloud:viewer", "cloud:owner"}, min: auth.RoleOwner, wantOK: true},
+		{name: "stuffed viewer + owner — allowed", groups: []string{"radar:viewer", "radar:owner"}, min: auth.RoleOwner, wantOK: true},
 	}
 
 	for _, tc := range cases {
@@ -174,7 +174,7 @@ func TestSensitiveHelmHandlers_GateOnViewer(t *testing.T) {
 			req := httptest.NewRequest(tc.method, "/test", nil)
 			req = req.WithContext(auth.ContextWithUser(req.Context(), &auth.User{
 				Username: "viewer-test",
-				Groups:   []string{"cloud:viewer"},
+				Groups:   []string{"radar:viewer"},
 			}))
 			rec := httptest.NewRecorder()
 

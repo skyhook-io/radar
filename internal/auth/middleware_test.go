@@ -215,13 +215,13 @@ func TestMiddleware_CloudProxyHeadersOverrideSessionWithoutSettingCookie(t *test
 	handler := cloud.AuthenticatedTunnelHandler(Authenticate(cfg)(http.HandlerFunc(echoUser)))
 
 	cookie := CreateSessionCookie(
-		&User{Username: "stale-user", Groups: []string{"cloud:owner"}},
+		&User{Username: "stale-user", Groups: []string{"radar:owner"}},
 		NewSessionID(), "", cfg.Secret, cfg.CookieTTL, false,
 	)[0]
 	req := httptest.NewRequest(http.MethodGet, "/api/topology", nil)
 	req.AddCookie(cookie)
 	req.Header.Set(cfg.UserHeader, "current-user")
-	req.Header.Set(cfg.GroupsHeader, "cloud:viewer, cloud:org:org-1")
+	req.Header.Set(cfg.GroupsHeader, "radar:viewer, radar:org:org-1")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -236,7 +236,7 @@ func TestMiddleware_CloudProxyHeadersOverrideSessionWithoutSettingCookie(t *test
 	if got.Username != "current-user" {
 		t.Fatalf("username = %q, want current Hub header identity", got.Username)
 	}
-	if len(got.Groups) != 2 || got.Groups[0] != "cloud:viewer" || got.Groups[1] != "cloud:org:org-1" {
+	if len(got.Groups) != 2 || got.Groups[0] != "radar:viewer" || got.Groups[1] != "radar:org:org-1" {
 		t.Fatalf("groups = %v, want current Hub header groups", got.Groups)
 	}
 	if values := rec.Header().Values("Set-Cookie"); len(values) != 0 {
@@ -271,7 +271,7 @@ func TestMiddleware_CloudProxyRejectsSpoofedHeadersOutsideTunnel(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/topology", nil)
 	req.Header.Set(cfg.UserHeader, "attacker")
-	req.Header.Set(cfg.GroupsHeader, "cloud:owner")
+	req.Header.Set(cfg.GroupsHeader, "radar:owner")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)

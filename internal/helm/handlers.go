@@ -181,7 +181,7 @@ func (h *Handlers) handleGetRelease(w http.ResponseWriter, r *http.Request) {
 
 // handleGetManifest returns the rendered manifest for a release.
 // Member+ only — manifests can inline literal Secret resources with
-// base64-encoded data, which K8s 'view' (the default cloud:viewer
+// base64-encoded data, which K8s 'view' (the default radar:viewer
 // binding) excludes.
 func (h *Handlers) handleGetManifest(w http.ResponseWriter, r *http.Request) {
 	if !requireCloudRole(w, r, auth.RoleMember, "view Helm release manifests") {

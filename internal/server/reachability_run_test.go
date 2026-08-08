@@ -172,7 +172,7 @@ func TestTraceInClusterDoesNotLeakExistenceAcrossNamespaces(t *testing.T) {
 	rctx.URLParams.Add("namespace", "ns-b")
 	rctx.URLParams.Add("name", "secret-svc")
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
-	req = req.WithContext(auth.ContextWithUser(req.Context(), userWithGroups("cloud:member")))
+	req = req.WithContext(auth.ContextWithUser(req.Context(), userWithGroups("radar:member")))
 	rec := httptest.NewRecorder()
 
 	s.handleTraceInCluster(rec, req)

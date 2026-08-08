@@ -1,6 +1,6 @@
 {{- /*
 Cluster-admin-equivalent add-on ClusterRole. Emitted under the same gate as
-radar-helm but bound only to cloud:owner — never cloud:member.
+radar-helm but bound only to radar:owner — never radar:member.
 
 The verbs in this role are individually sufficient for self-promotion to
 cluster-admin or for bypassing admission control:

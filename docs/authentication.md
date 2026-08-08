@@ -213,7 +213,7 @@ If you see `RADAR_CLOUD_MODE` or `cloud.*` values in the chart, they control a s
 Under cloud-mode (`RADAR_CLOUD_MODE=true`, set automatically by the chart when `cloud.enabled=true`), Radar:
 
 - Forces `--auth-mode=proxy` with pinned `X-Forwarded-User` / `X-Forwarded-Groups` headers. Radar accepts those headers only on requests marked in-process by its authenticated Cloud tunnel; the ordinary pod TCP listener cannot assert Cloud identity.
-- Ships three default ClusterRoleBindings mapping Cloud's `radar:owner` / `radar:member` / `radar:viewer` groups (canonical; the legacy `cloud:*` equivalents are still emitted and bound during the deprecation window) to the standard K8s `admin` / `edit` / `view` ClusterRoles. Configurable via `cloud.defaultRbac.*` in `values.yaml`.
+- Ships three default ClusterRoleBindings mapping Cloud's `radar:owner` / `radar:member` / `radar:viewer` groups to the standard K8s `admin` / `edit` / `view` ClusterRoles. Configurable via `cloud.defaultRbac.*` in `values.yaml`.
 - Adds a **cluster-read add-on** (`cloud.defaultRbac.clusterScopedRead.{viewer,member,owner}`, each default on) granting `get/list/watch` on infrastructure the built-in `view`/`edit`/`admin` roles exclude — Nodes, PersistentVolumes, StorageClasses, IngressClasses, PriorityClasses, RuntimeClasses, CRDs, and admission webhook configurations — plus list-only Upgrade impact source evidence for CSIStorageCapacities, legacy PodSecurityPolicies, and API flow-control configuration. When the matching collection is enabled, it also grants APIServices, PrometheusRules, Karpenter kinds, and node metrics. It does not grant Secrets, RBAC objects, API-server metrics, or kubelet proxy access. It's an independent axis per tier: set a tier `false` to make it namespaced-only (e.g. `clusterScopedRead.viewer: false`). Owner node cordon/drain is a separate cluster-scoped *write*, off by default (`cloud.defaultRbac.nodeOps`).
 - Restricts the ordinary pod/ClusterIP TCP listener to `/api/health`; the full handler is served only over yamux streams from the outbound Cloud tunnel. Cloud mode also omits `/debug/pprof/*` and narrows auth exemptions to health only.
 
@@ -222,10 +222,10 @@ Under cloud-mode (`RADAR_CLOUD_MODE=true`, set automatically by the chart when `
 
 **Helm-specific bindings (when `rbac.helm=true`).** Helm's pre-flight existence check needs cluster-scoped reads/writes that the K8s built-in `admin`/`edit`/`view` ClusterRoles don't grant. The chart emits two add-on ClusterRoles, split by trust tier:
 
-- `radar-helm` — CRDs, StorageClasses, RuntimeClasses, PriorityClasses, PodDisruptionBudgets, Namespaces. Bound to `cloud:owner` AND `cloud:member`.
-- `radar-helm-admin` — RBAC objects (Roles/Bindings, Cluster variants), validating/mutating webhooks, ApiServices. Bound to `cloud:owner` ONLY. Granting these to a tier weaker than owner would let a member self-promote to cluster-admin in one `ClusterRoleBinding` write, collapsing the owner/member distinction.
+- `radar-helm` — CRDs, StorageClasses, RuntimeClasses, PriorityClasses, PodDisruptionBudgets, Namespaces. Bound to `radar:owner` AND `radar:member`.
+- `radar-helm-admin` — RBAC objects (Roles/Bindings, Cluster variants), validating/mutating webhooks, ApiServices. Bound to `radar:owner` ONLY. Granting these to a tier weaker than owner would let a member self-promote to cluster-admin in one `ClusterRoleBinding` write, collapsing the owner/member distinction.
 
-A `cloud:member` attempting to install a chart that bundles its own RBAC will get a typed `rbac_preflight` 403 with an actionable "ask an owner" message. Day-to-day app charts and operator-CRD installs still work for members.
+A `radar:member` attempting to install a chart that bundles its own RBAC will get a typed `rbac_preflight` 403 with an actionable "ask an owner" message. Day-to-day app charts and operator-CRD installs still work for members.
 
 Customer-facing documentation for Radar Cloud lives on [radarhq.io](https://radarhq.io). The authoritative reference for the Cloud-mode chart values is the comment block in [`deploy/helm/radar/values.yaml`](../deploy/helm/radar/values.yaml) under `cloud:`.
 

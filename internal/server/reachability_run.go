@@ -68,7 +68,7 @@ func (s *Server) handleProbeInClusterCapability(w http.ResponseWriter, r *http.R
 	}
 	// The POST gate is additive: K8s RBAC AND the Cloud-role tier (Member). Mirror
 	// the Cloud-role half here (without the 403) so the capability answer matches
-	// what the POST will actually do - a cloud:viewer with the right RBAC must not
+	// what the POST will actually do - a radar:viewer with the right RBAC must not
 	// see allowed=true and then get a 403 cloud_role_insufficient on submit.
 	if !auth.CloudRoleFromContext(r.Context()).AtLeast(auth.RoleMember) {
 		resp.Reason = "your Radar Cloud role cannot run an in-cluster reachability test"
