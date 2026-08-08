@@ -419,6 +419,26 @@ func TestCNPGTransientPhasesSuppressGenericConditionWalk(t *testing.T) {
 		}
 	}
 
+	// The age bound applies to TRANSIENT phases only. A stuck mid-operation
+	// cluster must surface; a supervised cluster parked on "Waiting for user
+	// action" is the documented resting state and must stay quiet however long
+	// it lasts, or a supported configuration becomes permanently lit.
+	stale := []any{map[string]any{"type": "Ready", "status": "False",
+		"reason": "ClusterIsNotReady", "lastTransitionTime": "2020-01-01T00:00:00Z"}}
+
+	stuckTransient := cnpgCluster(map[string]any{"instances": int64(3)},
+		map[string]any{"phase": "Creating a new replica", "readyInstances": int64(2), "conditions": stale})
+	if cnpgSuppressesGenericConditions("postgresql.cnpg.io", "Cluster", stuckTransient) {
+		t.Error("a transient phase stuck past the grace must stop suppressing")
+	}
+
+	parkedSupervised := cnpgCluster(
+		map[string]any{"instances": int64(3), "primaryUpdateStrategy": "supervised"},
+		map[string]any{"phase": "Waiting for user action", "readyInstances": int64(2), "conditions": stale})
+	if !cnpgSuppressesGenericConditions("postgresql.cnpg.io", "Cluster", parkedSupervised) {
+		t.Error("a supervised wait must keep suppressing however long it lasts")
+	}
+
 	// Scoped to CNPG Clusters only.
 	u := cnpgCluster(map[string]any{}, map[string]any{"phase": "Switchover in progress"})
 	if cnpgSuppressesGenericConditions("postgresql.cnpg.io", "Pooler", u) {

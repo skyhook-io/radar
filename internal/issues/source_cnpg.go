@@ -94,14 +94,25 @@ func cnpgSuppressesGenericConditions(group, kind string, u *unstructured.Unstruc
 		return false
 	}
 	phase, _, _ := unstructured.NestedString(u.Object, "status", "phase")
-	if !cnpgTransientPhases[phase] && !cnpgAttentionPhases[phase] {
+
+	// Attention phases suppress WITHOUT an age bound. "Waiting for user action"
+	// under primaryUpdateStrategy: supervised is the documented resting state and
+	// legitimately persists until a human acts — bounding it would turn a
+	// supported configuration into a permanently-lit issue, the alert-fatigue
+	// trap this detector exists to avoid. (Under an unsupervised strategy the
+	// curated detector emits its own issue, so the generic walk is already
+	// skipped before this is consulted.)
+	if cnpgAttentionPhases[phase] {
+		return true
+	}
+	if !cnpgTransientPhases[phase] {
 		return false
 	}
-	// A phase that never advances is not transient. CNPG clusters do get stuck
-	// mid-operation (upstream #3365: "Creating a new replica" pinned at 2/3 with
-	// Ready=False indefinitely), and an unbounded suppression would keep that
-	// silent forever — worse than the noise it was added to remove. Bound it by
-	// the condition's own age so a genuinely stuck cluster surfaces.
+	// A transient phase that never advances is not transient. CNPG clusters do
+	// get stuck mid-operation (upstream #3365: "Creating a new replica" pinned at
+	// 2/3 with Ready=False indefinitely), and an unbounded suppression would keep
+	// that silent forever — worse than the noise it was added to remove. Bound it
+	// by the condition's own age so a genuinely stuck cluster surfaces.
 	if _, _, _, since, ok := conditions.FindFalseCondition(u); ok && since > cnpgTransientConditionGrace {
 		return false
 	}
