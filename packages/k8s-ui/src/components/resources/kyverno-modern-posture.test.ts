@@ -64,6 +64,55 @@ describe('effective enforcement posture', () => {
     expect(posture.note).toMatch(/never blocked/i)
   })
 
+  // Tone marks the discrepancy between declared and effective, not the
+  // severity of the declared action. `alert` rather than `degraded` because
+  // `degraded` is already the deliberate Warn posture — "I meant to audit" and
+  // "I meant to block and don't" must not share a tone.
+  it('flags a Deny-declaring background-only policy as a discrepancy', () => {
+    const p = getKyvernoEnforcementPosture(
+      vpol({ validationActions: ['Deny'], evaluation: { admission: { enabled: false } } }),
+      'validating'
+    )
+    expect(p.label).toBe('Background only')
+    expect(p.level).toBe('alert')
+  })
+
+  // No Deny declared means no protection gap — reporting-only either way.
+  it('leaves a non-blocking background-only policy calm', () => {
+    const p = getKyvernoEnforcementPosture(
+      vpol({ validationActions: ['Audit'], evaluation: { admission: { enabled: false } } }),
+      'validating'
+    )
+    expect(p.label).toBe('Background only')
+    expect(p.level).toBe('neutral')
+  })
+
+  // Deliberate postures keep their own tones and must stay distinct from the
+  // discrepancy tier above.
+  it('keeps deliberate Audit and Audit + Warn visually distinct from a discrepancy', () => {
+    expect(getKyvernoEnforcementPosture(vpol({ validationActions: ['Audit'] }), 'validating').level).toBe('neutral')
+    expect(getKyvernoEnforcementPosture(vpol({ validationActions: ['Audit', 'Warn'] }), 'validating').level).toBe('degraded')
+  })
+
+  it('flags JSON mode as a discrepancy only when the policy declares Deny', () => {
+    expect(getKyvernoEnforcementPosture(vpol({ validationActions: ['Deny'], evaluation: { mode: 'JSON' } }), 'validating').level).toBe('alert')
+    expect(getKyvernoEnforcementPosture(vpol({ validationActions: ['Audit'], evaluation: { mode: 'JSON' } }), 'validating').level).toBe('neutral')
+  })
+
+  // A policy that evaluates nothing at all declared *something* and delivers
+  // none of it, whatever that something was.
+  it('flags a fully inactive policy as a discrepancy regardless of declared action', () => {
+    const ev = { admission: { enabled: false }, background: { enabled: false } }
+    expect(getKyvernoEnforcementPosture(vpol({ validationActions: ['Deny'], evaluation: ev }), 'validating').level).toBe('alert')
+    expect(getKyvernoEnforcementPosture(vpol({ validationActions: ['Audit'], evaluation: ev }), 'validating').level).toBe('alert')
+  })
+
+  it('flags an inactive mutating policy as a discrepancy', () => {
+    const p = getKyvernoEnforcementPosture(vpol({ evaluation: { admission: { enabled: false } } }), 'mutating')
+    expect(p.label).toBe('Inactive')
+    expect(p.level).toBe('alert')
+  })
+
   it('says the policy does nothing when both admission and background are off', () => {
     const posture = getKyvernoEnforcementPosture(
       vpol({

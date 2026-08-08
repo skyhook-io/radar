@@ -166,6 +166,11 @@ export function getKyvernoEnforcementPosture(
   const admissionEnabled = isKyvernoAdmissionEnabled(resource)
   const mode = getKyvernoEvaluationMode(resource)
   const backgroundEnabled = isKyvernoBackgroundEnabled(resource)
+  // Only the validating families carry validationActions; asking for them on a
+  // mutating/generating policy would read the Deny default off a field that
+  // kind never has.
+  const validating = family === 'validating' || family === 'imageValidating'
+  const declaresBlocking = validating && getKyvernoValidationActions(resource).includes('Deny')
 
   if (family === 'deleting') {
     const schedule = getKyvernoSchedule(resource)
@@ -181,7 +186,7 @@ export function getKyvernoEnforcementPosture(
   if (mode === 'JSON') {
     return {
       label: 'JSON mode',
-      level: 'neutral',
+      level: declaresBlocking ? 'alert' : 'neutral',
       blocks: false,
       summary: 'Evaluated outside the cluster; it does not take part in admission.',
       note: 'Evaluated against JSON payloads outside the cluster; it does not take part in admission.',
@@ -224,7 +229,7 @@ export function getKyvernoEnforcementPosture(
     }
     return {
       label: 'Inactive',
-      level: 'unknown',
+      level: 'alert',
       blocks: false,
       summary: 'This policy modifies nothing.',
       note: 'Admission evaluation is disabled and mutateExisting is off, so this policy mutates nothing.',
@@ -238,7 +243,14 @@ export function getKyvernoEnforcementPosture(
   if (!admissionEnabled) {
     return {
       label: backgroundEnabled ? 'Background only' : 'Inactive',
-      level: backgroundEnabled ? 'neutral' : 'unknown',
+      // Tone marks the DISCREPANCY, not the severity of the action. A policy
+      // declaring Deny that evaluates nothing at admission is a gap between
+      // what an operator believes protects the cluster and what does — it must
+      // not read as calm. `alert` rather than `degraded` because `degraded` is
+      // already the deliberate Warn posture, and "I meant to audit" must not
+      // share a tone with "I meant to block and don't". A policy that never
+      // evaluates at all is a discrepancy whatever it declared.
+      level: !backgroundEnabled ? 'alert' : declaresBlocking ? 'alert' : 'neutral',
       blocks: false,
       summary: backgroundEnabled
         ? 'Violations are recorded by background scans, not blocked.'
