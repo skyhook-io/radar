@@ -17,7 +17,6 @@ import {
   getScheduleStatus,
   getScheduleCron,
   getScheduleLastBackup,
-  getSchedulePaused,
   getBSLStatus,
   getBSLProvider,
   getBSLBucket,
@@ -126,10 +125,6 @@ export function ScheduleCell({ resource, column }: { resource: any; column: stri
     case 'lastBackup': {
       const last = getScheduleLastBackup(resource)
       return <span className="text-sm text-theme-text-secondary">{last}</span>
-    }
-    case 'paused': {
-      const paused = getSchedulePaused(resource)
-      return <span className={clsx('text-sm', paused ? 'text-yellow-400' : 'text-theme-text-tertiary')}>{paused ? 'Yes' : '-'}</span>
     }
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>
