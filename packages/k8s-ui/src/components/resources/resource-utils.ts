@@ -749,29 +749,19 @@ export function getContainerSquareStates(pod: any): ContainerSquareState[] {
 // WORKLOAD UTILITIES (Deployment, StatefulSet, DaemonSet, ReplicaSet)
 // ============================================================================
 
-/** How long a freshly created workload may take to converge before we grade it.
- *  Mirrors pkg/health.workloadConvergenceGrace. */
-const CONVERGENCE_GRACE_MS = 5 * 60 * 1000
-
 /**
- * Whether a workload has not yet had a fair chance to reach its target. Two
- * ways that happens: the controller has not observed the current spec
- * generation yet (which is what covers scale-ups on long-lived workloads,
- * where the creation timestamp is months old but the target moved a second
- * ago), or the object was created inside the grace window.
+ * Whether the controller has not yet acted on this workload's current spec, so
+ * grading against that spec would report controller lag as an outage. The
+ * scale-up case: spec says 10, the controller is still working from the previous
+ * generation and has created 3.
  *
- * Mirrors pkg/health.converging — keep the two in step.
+ * Deliberately NOT age-based — "created recently" guesses wrong exactly when a
+ * deploy is broken on arrival. Mirrors pkg/health.converging; keep in step.
  */
 function isConverging(resource: any): boolean {
   const generation = resource?.metadata?.generation
   const observed = resource?.status?.observedGeneration
-  if (typeof generation === 'number' && typeof observed === 'number' && observed > 0 && observed < generation) {
-    return true
-  }
-  const created = resource?.metadata?.creationTimestamp
-  if (!created) return false
-  const age = Date.now() - new Date(created).getTime()
-  return Number.isFinite(age) && age >= 0 && age < CONVERGENCE_GRACE_MS
+  return typeof generation === 'number' && typeof observed === 'number' && observed > 0 && observed < generation
 }
 
 /** Whether the pod was created by a batch Job. The owner's API group is checked

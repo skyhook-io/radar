@@ -25,18 +25,18 @@ func Workload(obj any, now time.Time) Verdict {
 	switch o := obj.(type) {
 	case *appsv1.Deployment:
 		return replicaVerdict(specReplicas(o.Spec.Replicas), o.Status.ReadyReplicas, o.Status.AvailableReplicas, true,
-			converging(o.CreationTimestamp.Time, now, o.Generation, o.Status.ObservedGeneration))
+			converging(o.Generation, o.Status.ObservedGeneration))
 	case *appsv1.ReplicaSet:
 		return replicaVerdict(specReplicas(o.Spec.Replicas), o.Status.ReadyReplicas, 0, false,
-			converging(o.CreationTimestamp.Time, now, o.Generation, o.Status.ObservedGeneration))
+			converging(o.Generation, o.Status.ObservedGeneration))
 	case *appsv1.StatefulSet:
 		return replicaVerdict(specReplicas(o.Spec.Replicas), o.Status.ReadyReplicas, 0, false,
-			converging(o.CreationTimestamp.Time, now, o.Generation, o.Status.ObservedGeneration))
+			converging(o.Generation, o.Status.ObservedGeneration))
 	case *appsv1.DaemonSet:
 		// DesiredNumberScheduled 0 means the selector matches no nodes — benign,
 		// nothing to run, not unhealthy.
 		return replicaVerdict(o.Status.DesiredNumberScheduled, o.Status.NumberReady, 0, false,
-			converging(o.CreationTimestamp.Time, now, o.Generation, o.Status.ObservedGeneration))
+			converging(o.Generation, o.Status.ObservedGeneration))
 	case *batchv1.Job:
 		return jobVerdict(o)
 	case *batchv1.CronJob:
@@ -78,22 +78,21 @@ func replicaVerdict(desired, ready, available int32, requireAvailable, convergin
 	return Verdict{Level: LevelUnhealthy, Reason: "NoneReady"}
 }
 
-// workloadConvergenceGrace is how long a freshly created workload may take to
-// reach its target before we grade it. Matches the 5-minute window Pending pods
-// and unassigned LoadBalancers already get elsewhere in the codebase, so the
-// product has one startup-tolerance story rather than three.
-const workloadConvergenceGrace = 5 * time.Minute
-
-// converging reports whether a workload has not yet had a fair chance to reach
-// its target — either because it was created moments ago, or because its spec
-// changed and the controller has not observed that generation yet. The
-// generation check is what covers scale-ups on long-lived workloads, where the
-// creation timestamp is months old but the target moved a second ago.
-func converging(created, now time.Time, generation, observedGeneration int64) bool {
-	if observedGeneration > 0 && observedGeneration < generation {
-		return true
-	}
-	return now.Sub(created) < workloadConvergenceGrace
+// converging reports whether the controller has not yet acted on the workload's
+// current spec, so grading against that spec would report controller lag as an
+// outage. This is the scale-up case: spec says 10, the controller is still
+// working from generation N-1 and has created 3, so ready-vs-desired looks like
+// a 70% outage for as long as the reconcile takes.
+//
+// Deliberately NOT age-based. An earlier revision also granted grace to any
+// workload created within five minutes, which softened genuinely broken
+// workloads: an unschedulable Deployment at 0/3 read neutral while the object's
+// own issues said [critical] workload_degraded. Generation skew is evidence —
+// the controller has demonstrably not looked at this spec yet. "Created
+// recently" is only a guess, and it guesses wrong exactly when a deploy is
+// broken on arrival, which is when it matters most.
+func converging(generation, observedGeneration int64) bool {
+	return observedGeneration > 0 && observedGeneration < generation
 }
 
 func jobVerdict(j *batchv1.Job) Verdict {

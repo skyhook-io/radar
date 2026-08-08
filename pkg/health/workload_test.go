@@ -172,13 +172,18 @@ func TestWorkloadConvergenceGrace(t *testing.T) {
 			wantLevel: LevelNeutral,
 		},
 		{
-			name: "freshly created deployment with nothing ready yet",
+			// Age alone must NOT buy grace. A deploy that is broken on arrival is
+			// still broken, and softening it is worst exactly when it matters
+			// most: an earlier revision granted every workload a 5-minute window
+			// and reported an unschedulable Deployment as neutral while that same
+			// object carried a critical workload_degraded issue.
+			name: "freshly created but controller caught up is graded normally",
 			dep: &appsv1.Deployment{
 				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: fresh, Generation: 1},
 				Spec:       appsv1.DeploymentSpec{Replicas: ptr32(3)},
 				Status:     appsv1.DeploymentStatus{ObservedGeneration: 1},
 			},
-			wantLevel: LevelNeutral,
+			wantLevel: LevelUnhealthy,
 		},
 		{
 			// Past the window with the controller caught up and still nothing
