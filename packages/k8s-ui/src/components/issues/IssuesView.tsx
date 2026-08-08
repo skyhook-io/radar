@@ -240,6 +240,13 @@ export function IssueRow({
             </Tooltip>
           ) : null}
         </>
+      ) : issue.onset_unknown ? (
+        <Tooltip content="Radar can confirm this issue is active, but current Kubernetes state does not reveal when it began." delay={200} wrapperClassName="shrink-0">
+          <span className="flex items-center gap-1 text-xs text-theme-text-tertiary">
+            <Clock className="h-3 w-3" aria-hidden />
+            Onset unknown
+          </span>
+        </Tooltip>
       ) : null}
     </div>
   );
@@ -451,6 +458,8 @@ function Diagnosis({ issue, source }: { issue: Issue; source?: IssueDiagnosisSou
     meta.push(timing.meta);
   } else if (issue.first_seen) {
     meta.push(`started ${formatRelativeAgeTime(issue.first_seen)}`);
+  } else if (issue.onset_unknown) {
+    meta.push('onset unknown');
   }
   if (issue.first_seen) {
     if (issue.last_seen && timing?.kind !== 'creation') meta.push(`last seen ${formatRelativeAgeTime(issue.last_seen)}`);

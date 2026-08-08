@@ -160,6 +160,7 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 	karpenterIssues, karpenterOwnedSubjects := detectKarpenterIssues(p, f)
 	out = append(out, karpenterIssues...)
 	out = append(out, detectGenericCRDIssues(p, f, karpenterOwnedSubjects)...) // generic CRD .status.conditions
+	out = elevateAdmissionWebhookBackendSeverity(out, p)
 
 	// ---- 2. Evidence-level transforms (operate on flat rows) ---------
 	// RBAC gating on the underlying resource, and dedup that compares child
@@ -192,7 +193,7 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 		out = GroupIssues(out)
 		groupedForContext = out
 	}
-	out = enrichDiagnosticContext(out, flatForContext, groupedForContext, p)
+	out = enrichDiagnosticContextAuthorized(out, flatForContext, groupedForContext, p, f.CanReadClusterScoped)
 
 	return finalizeShapedIssues(out, f, !f.Grouped, uncapped)
 }

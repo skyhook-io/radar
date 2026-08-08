@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/ingressstatus"
 	"github.com/skyhook-io/radar/internal/logsafe"
 	"github.com/skyhook-io/radar/pkg/envresolve"
 	appsv1 "k8s.io/api/apps/v1"
@@ -494,6 +495,8 @@ func workloadExists(cache *ResourceCache, kind, namespace, name string) (verifia
 	return false, false
 }
 
+const missingIngressClassGrace = 2 * time.Minute
+
 func detectIngressMissingBackend(cache *ResourceCache, namespace string, now time.Time) []Detection {
 	ingLister := cache.Ingresses()
 	if ingLister == nil {
@@ -517,6 +520,29 @@ func detectIngressMissingBackend(cache *ResourceCache, namespace string, now tim
 		age := now.Sub(ing.CreationTimestamp.Time)
 		seenSvc := map[string]bool{}
 		seenSec := map[string]bool{}
+		classLister := cache.IngressClasses()
+		if age >= missingIngressClassGrace &&
+			ingressstatus.ClassifyUnresolvedClass(ing) == ingressstatus.NamedClassMissing &&
+			classLister != nil && cache.IsKindReady("ingressclasses") {
+			className := strings.TrimSpace(*ing.Spec.IngressClassName)
+			if _, err := classLister.Get(className); refKnownMissing(cache, "ingressclasses", "", err) {
+				out = append(out, Detection{
+					Kind:         "Ingress",
+					Group:        "networking.k8s.io",
+					Namespace:    ing.Namespace,
+					Name:         ing.Name,
+					Severity:     "warning",
+					Reason:       "Missing IngressClass",
+					Message:      fmt.Sprintf("spec.ingressClassName references IngressClass %q which does not exist", className),
+					Cause:        fmt.Sprintf("IngressClass %q is not installed, so no controller can claim these routing rules by that class.", className),
+					Action:       "Set spec.ingressClassName to an installed class, or install the intended ingress controller and IngressClass.",
+					Fingerprint:  missingRefFingerprint("Missing IngressClass", className),
+					Age:          FormatAge(age),
+					AgeSeconds:   int64(age.Seconds()),
+					OnsetUnknown: true,
+				})
+			}
+		}
 
 		// checkBackend verifies (a) the Service exists, and (b) the port
 		// reference resolves against the Service's port list. A backend that
@@ -683,6 +709,114 @@ func detectStatefulSetMissingService(cache *ResourceCache, namespace string, now
 // pkg/k8score/transform.go to avoid retaining heavy schema/caBundle data,
 // so reading those refs from the cache is impossible. Would need a direct
 // API list bypassing the transform — tracked as a follow-up.
+type AdmissionWebhookServiceReference struct {
+	ConfigurationKind  string
+	ConfigurationGroup string
+	ConfigurationName  string
+	WebhookName        string
+	ServiceNamespace   string
+	ServiceName        string
+	FailurePolicy      string
+	CreationTimestamp  time.Time
+}
+
+func AdmissionWebhookServiceReferences(dynamicCache *DynamicResourceCache, discovery *ResourceDiscovery) []AdmissionWebhookServiceReference {
+	return admissionWebhookServiceReferences(dynamicCache, discovery, false)
+}
+
+// AdmissionWebhookServiceReferencesWatched reads only a fully-synced,
+// cluster-wide cache. Request-time correlation uses this path so a restricted
+// identity does not re-probe denied cluster-scoped resources on every request.
+func AdmissionWebhookServiceReferencesWatched(dynamicCache *DynamicResourceCache, discovery *ResourceDiscovery) []AdmissionWebhookServiceReference {
+	return admissionWebhookServiceReferences(dynamicCache, discovery, true)
+}
+
+func admissionWebhookServiceReferences(dynamicCache *DynamicResourceCache, discovery *ResourceDiscovery, watchedOnly bool) []AdmissionWebhookServiceReference {
+	if dynamicCache == nil || discovery == nil {
+		return nil
+	}
+	types := []struct {
+		kind  string
+		group string
+	}{
+		{kind: "ValidatingWebhookConfiguration", group: "admissionregistration.k8s.io"},
+		{kind: "MutatingWebhookConfiguration", group: "admissionregistration.k8s.io"},
+	}
+	var refs []AdmissionWebhookServiceReference
+	for _, webhookType := range types {
+		gvr, ok := discovery.GetGVRWithGroup(webhookType.kind, webhookType.group)
+		if !ok {
+			continue
+		}
+		var items []*unstructured.Unstructured
+		var err error
+		if watchedOnly {
+			if !dynamicCache.IsClusterWideSynced(gvr) {
+				continue
+			}
+			items, err = dynamicCache.ListWatched(gvr)
+		} else {
+			items, err = dynamicCache.List(gvr, "")
+		}
+		if err != nil {
+			if !watchedOnly {
+				log.Printf("[missing-refs] failed to list %s.%s: %v", webhookType.kind, webhookType.group, err)
+			}
+			continue
+		}
+		for _, item := range items {
+			webhooks, found, err := unstructured.NestedSlice(item.Object, "webhooks")
+			if err != nil || !found {
+				continue
+			}
+			for _, webhook := range webhooks {
+				wm, ok := webhook.(map[string]any)
+				if !ok {
+					continue
+				}
+				service, found, err := unstructured.NestedMap(wm, "clientConfig", "service")
+				if err != nil || !found {
+					continue
+				}
+				serviceName, _ := service["name"].(string)
+				serviceNamespace, _ := service["namespace"].(string)
+				if serviceName == "" || serviceNamespace == "" {
+					continue
+				}
+				webhookName, _ := wm["name"].(string)
+				refs = append(refs, AdmissionWebhookServiceReference{
+					ConfigurationKind:  webhookType.kind,
+					ConfigurationGroup: webhookType.group,
+					ConfigurationName:  item.GetName(),
+					WebhookName:        webhookName,
+					ServiceNamespace:   serviceNamespace,
+					ServiceName:        serviceName,
+					FailurePolicy:      webhookFailurePolicy(wm),
+					CreationTimestamp:  item.GetCreationTimestamp().Time,
+				})
+			}
+		}
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		left := refs[i]
+		right := refs[j]
+		if left.ConfigurationKind != right.ConfigurationKind {
+			return left.ConfigurationKind < right.ConfigurationKind
+		}
+		if left.ConfigurationName != right.ConfigurationName {
+			return left.ConfigurationName < right.ConfigurationName
+		}
+		if left.WebhookName != right.WebhookName {
+			return left.WebhookName < right.WebhookName
+		}
+		if left.ServiceNamespace != right.ServiceNamespace {
+			return left.ServiceNamespace < right.ServiceNamespace
+		}
+		return left.ServiceName < right.ServiceName
+	})
+	return refs
+}
+
 func DetectMissingWebhookRefs(cache *ResourceCache, dynamicCache *DynamicResourceCache, discovery *ResourceDiscovery, namespace string) []Detection {
 	if cache == nil || dynamicCache == nil || discovery == nil {
 		return nil
@@ -697,19 +831,6 @@ func DetectMissingWebhookRefs(cache *ResourceCache, dynamicCache *DynamicResourc
 		return nil
 	}
 	now := time.Now()
-
-	listByKind := func(kind, group string) []*unstructured.Unstructured {
-		gvr, ok := discovery.GetGVRWithGroup(kind, group)
-		if !ok {
-			return nil
-		}
-		items, err := dynamicCache.List(gvr, "")
-		if err != nil {
-			log.Printf("[missing-refs] failed to list %s.%s: %v", kind, group, err)
-			return nil
-		}
-		return items
-	}
 
 	emit := func(kind, group, name, sourceRefPhrase, svcNS, svcName, severity, policySummary string, age time.Duration) Detection {
 		reason := "Missing webhook backend Service"
@@ -727,67 +848,67 @@ func DetectMissingWebhookRefs(cache *ResourceCache, dynamicCache *DynamicResourc
 			cause,
 			fmt.Sprintf("Restore Service %q and its endpoints in namespace %q, or fix clientConfig.service to point at the correct healthy Service.", svcName, svcNS))
 		det.Fingerprint = missingRefFingerprint(reason, "clientConfig.service:"+svcNS+"/"+svcName)
+		det.Duration = ""
+		det.DurationSeconds = 0
+		det.OnsetUnknown = true
 		return det
 	}
 
-	checkWebhookList := func(items []*unstructured.Unstructured, ownerKind, ownerGroup, webhookPath string) []Detection {
-		var problems []Detection
-		for _, item := range items {
-			webhooks, found, err := unstructured.NestedSlice(item.Object, webhookPath)
-			if err != nil || !found {
-				continue
-			}
-			age := now.Sub(item.GetCreationTimestamp().Time)
-			missingByService := map[string]*webhookMissingBackend{}
-			for _, w := range webhooks {
-				wm, ok := w.(map[string]any)
-				if !ok {
-					continue
-				}
-				ccSvc, found, err := unstructured.NestedMap(wm, "clientConfig", "service")
-				if err != nil || !found {
-					continue // URL-based clientConfig has no Service ref
-				}
-				svcName, _ := ccSvc["name"].(string)
-				svcNS, _ := ccSvc["namespace"].(string)
-				if svcName == "" || svcNS == "" {
-					continue
-				}
-				// clientConfig.service targets an arbitrary namespace, which a
-				// namespace-scoped Services informer frequently doesn't watch —
-				// only a covered-namespace NotFound is a real absence.
-				if _, err := svcLister.Services(svcNS).Get(svcName); refKnownMissing(cache, "services", svcNS, err) {
-					whName, _ := wm["name"].(string)
-					policy := webhookFailurePolicy(wm)
-					key := svcNS + "/" + svcName
-					missing := missingByService[key]
-					if missing == nil {
-						missing = &webhookMissingBackend{
-							serviceNamespace: svcNS,
-							serviceName:      svcName,
-						}
-						missingByService[key] = missing
-					}
-					missing.addWebhook(whName, policy)
-				}
-			}
-			for _, key := range sortedWebhookMissingBackendKeys(missingByService) {
-				missing := missingByService[key]
-				problems = append(problems, emit(ownerKind, ownerGroup, item.GetName(), missing.sourceReferencePhrase(), missing.serviceNamespace, missing.serviceName, missing.severity, missing.policySummary(), age))
-			}
-		}
-		return problems
+	type missingWebhookConfiguration struct {
+		kind              string
+		group             string
+		name              string
+		creationTimestamp time.Time
+		byService         map[string]*webhookMissingBackend
 	}
-
+	missingByConfiguration := map[string]*missingWebhookConfiguration{}
+	for _, ref := range AdmissionWebhookServiceReferences(dynamicCache, discovery) {
+		if _, err := svcLister.Services(ref.ServiceNamespace).Get(ref.ServiceName); !refKnownMissing(cache, "services", ref.ServiceNamespace, err) {
+			continue
+		}
+		configurationKey := ref.ConfigurationKind + "/" + ref.ConfigurationName
+		configuration := missingByConfiguration[configurationKey]
+		if configuration == nil {
+			configuration = &missingWebhookConfiguration{
+				kind:              ref.ConfigurationKind,
+				group:             ref.ConfigurationGroup,
+				name:              ref.ConfigurationName,
+				creationTimestamp: ref.CreationTimestamp,
+				byService:         map[string]*webhookMissingBackend{},
+			}
+			missingByConfiguration[configurationKey] = configuration
+		}
+		serviceKey := ref.ServiceNamespace + "/" + ref.ServiceName
+		missing := configuration.byService[serviceKey]
+		if missing == nil {
+			missing = &webhookMissingBackend{serviceNamespace: ref.ServiceNamespace, serviceName: ref.ServiceName}
+			configuration.byService[serviceKey] = missing
+		}
+		missing.addWebhook(ref.WebhookName, ref.FailurePolicy)
+	}
+	configurationKeys := make([]string, 0, len(missingByConfiguration))
+	for key := range missingByConfiguration {
+		configurationKeys = append(configurationKeys, key)
+	}
+	sort.Strings(configurationKeys)
 	var out []Detection
-	out = append(out, checkWebhookList(
-		listByKind("ValidatingWebhookConfiguration", "admissionregistration.k8s.io"),
-		"ValidatingWebhookConfiguration", "admissionregistration.k8s.io", "webhooks",
-	)...)
-	out = append(out, checkWebhookList(
-		listByKind("MutatingWebhookConfiguration", "admissionregistration.k8s.io"),
-		"MutatingWebhookConfiguration", "admissionregistration.k8s.io", "webhooks",
-	)...)
+	for _, key := range configurationKeys {
+		configuration := missingByConfiguration[key]
+		for _, serviceKey := range sortedWebhookMissingBackendKeys(configuration.byService) {
+			missing := configuration.byService[serviceKey]
+			out = append(out, emit(
+				configuration.kind,
+				configuration.group,
+				configuration.name,
+				missing.sourceReferencePhrase(),
+				missing.serviceNamespace,
+				missing.serviceName,
+				missing.severity,
+				missing.policySummary(),
+				now.Sub(configuration.creationTimestamp),
+			))
+		}
+	}
 	return out
 }
 

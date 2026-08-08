@@ -27,7 +27,7 @@ func RelatedIssues(p Provider, opts RelatedIssueOptions, group, kind, namespace,
 	// Run the grouped-mode enrichment (mirrors the cluster path) so the grouped
 	// issues get coverage-gated incident_parent pointers — GroupIssues alone only
 	// carries the representative's DiagnosticContext, never the reverse pointer.
-	grouped = enrichDiagnosticContext(grouped, flat, grouped, p)
+	grouped = enrichDiagnosticContextAuthorized(grouped, flat, grouped, p, opts.CanReadClusterScoped)
 	return RelatedIssuesFrom(flat, grouped, opts, group, kind, namespace, name)
 }
 
@@ -150,6 +150,7 @@ func foldGroup(members []Issue) Issue {
 		RestartCount:         rep.RestartCount,
 		LastTerminatedReason: rep.LastTerminatedReason,
 		FirstSeen:            rep.FirstSeen,
+		OnsetUnknown:         rep.OnsetUnknown,
 		LastSeen:             rep.LastSeen,
 		// Per-issue context carries from the representative, like Reason/Message.
 		// In the cluster-wide path grouping runs before enrichment, so these are
@@ -175,7 +176,9 @@ func foldGroup(members []Issue) Issue {
 	}
 
 	var refs []Ref
+	anyOnsetUnknown := rep.OnsetUnknown
 	for _, m := range members {
+		anyOnsetUnknown = anyOnsetUnknown || m.OnsetUnknown
 		if !m.FirstSeen.IsZero() && (g.FirstSeen.IsZero() || m.FirstSeen.Before(g.FirstSeen)) {
 			g.FirstSeen = m.FirstSeen
 		}
@@ -187,6 +190,7 @@ func foldGroup(members []Issue) Issue {
 			refs = append(refs, own)
 		}
 	}
+	g.OnsetUnknown = anyOnsetUnknown && g.FirstSeen.IsZero()
 	sortRefs(refs)
 
 	// IssueTiming: keep only if all members with issue_timing agree; any mix of

@@ -34,7 +34,8 @@ func issueToActivation(i Issue) map[string]any {
 		"count":              int64(i.Count),
 		// first_seen is the observed issue age anchor (the axis the queue sorts on);
 		// last_seen churns to compose-time every poll, so `last_seen > X` ("older
-		// than…") is near-useless. Both are int unix seconds.
+		// than…") is near-useless. Both are int unix seconds; first_seen=0 means
+		// onset is unknown, so filters comparing age must guard first_seen != 0.
 		"first_seen":             firstSeen,
 		"last_seen":              lastSeen,
 		"grouping_scope":         string(i.GroupingScope),

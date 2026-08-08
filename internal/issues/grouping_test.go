@@ -63,6 +63,24 @@ func TestGroupIssues_FoldsMembersUnderOwner(t *testing.T) {
 	}
 }
 
+func TestGroupIssuesPreservesUnknownOnsetOnlyWithoutKnownMemberTime(t *testing.T) {
+	dep := Ref{Group: "apps", Kind: "Deployment", Namespace: "ns", Name: "web"}
+	unknownA := flatPod("web-a", "CrashLoopBackOff", SeverityWarning, dep, time.Time{}, time.Unix(2000, 0))
+	unknownA.OnsetUnknown = true
+	unknownB := flatPod("web-b", "CrashLoopBackOff", SeverityWarning, dep, time.Time{}, time.Unix(3000, 0))
+	unknownB.OnsetUnknown = true
+	grouped := GroupIssues([]Issue{unknownA, unknownB})
+	if len(grouped) != 1 || !grouped[0].OnsetUnknown || !grouped[0].FirstSeen.IsZero() {
+		t.Fatalf("all-unknown group = %+v", grouped)
+	}
+
+	known := flatPod("web-c", "CrashLoopBackOff", SeverityWarning, dep, time.Unix(1000, 0), time.Unix(3000, 0))
+	grouped = GroupIssues([]Issue{unknownA, known})
+	if len(grouped) != 1 || grouped[0].OnsetUnknown || !grouped[0].FirstSeen.Equal(time.Unix(1000, 0)) {
+		t.Fatalf("mixed known/unknown group = %+v", grouped)
+	}
+}
+
 func TestGroupIssues_RolloutSubjectIsWorkload(t *testing.T) {
 	ro := Ref{Group: "argoproj.io", Kind: "Rollout", Namespace: "ns", Name: "web"}
 	i := Issue{

@@ -178,7 +178,7 @@ func TestComposeKarpenterMissingNodeClassRequiresAuthoritativeCoverage(t *testin
 	if byName["missing-object"].Reason != ReasonKarpenterNodeClassNotFound {
 		t.Errorf("missing-object issue = %+v", byName["missing-object"])
 	}
-	if !byName["missing-object"].FirstSeen.IsZero() || byName["missing-object"].IssueTiming != "" || byName["missing-object"].IssueTimingBasis != "" {
+	if !byName["missing-object"].FirstSeen.IsZero() || !byName["missing-object"].OnsetUnknown || byName["missing-object"].IssueTiming != "" || byName["missing-object"].IssueTimingBasis != "" {
 		t.Errorf("missing-object fabricated age evidence: firstSeen:%s timing:%q/%q", byName["missing-object"].FirstSeen, byName["missing-object"].IssueTiming, byName["missing-object"].IssueTimingBasis)
 	}
 	if byName["missing-kind"].Reason != ReasonKarpenterNodeClassKindNotInstalled {

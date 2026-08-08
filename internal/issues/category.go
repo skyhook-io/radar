@@ -38,7 +38,7 @@ func Classify(in classifyInput) issuesapi.Category {
 			// Pod Security admission (built-in PSA) is NOT a webhook — don't
 			// mislabel it as such.
 			return issuesapi.CategoryPodSecurityViolation
-		case "WebhookDenied":
+		case "WebhookDenied", "WebhookUnavailable":
 			return issuesapi.CategoryAdmissionWebhookBlocking
 		case "RBACForbidden":
 			return issuesapi.CategoryRBACForbidden
@@ -57,6 +57,8 @@ func Classify(in classifyInput) issuesapi.Category {
 		switch in.Reason {
 		case "Missing backend Service", "Missing backend Service port":
 			return issuesapi.CategoryIngressBackendMissing
+		case "Missing IngressClass":
+			return issuesapi.CategoryIngressClassMissing
 		case "Missing Gateway backend Service", "Missing Gateway backend Service port", "Missing Gateway ReferenceGrant":
 			return issuesapi.CategoryGatewayRouteInvalid
 		case "Missing webhook backend Service":

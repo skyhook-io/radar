@@ -41,7 +41,9 @@ func issuesSeverity(token string) Severity {
 func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 	sev := issuesSeverity(p.Severity)
 	since := now.Add(-time.Duration(p.DurationSeconds) * time.Second)
-	if p.DurationSeconds == 0 && p.AgeSeconds > 0 {
+	if p.OnsetUnknown {
+		since = time.Time{}
+	} else if p.DurationSeconds == 0 && p.AgeSeconds > 0 {
 		// Detectors that don't track how long the problem has persisted leave
 		// DurationSeconds zero; without this, FirstSeen would reset to `now` on
 		// every compose and the queue (sorted by first_seen) would keep a chronic
@@ -77,6 +79,7 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 		CapacityRelevant:     p.CapacityRelevant,
 		Fingerprint:          p.Fingerprint,
 		FirstSeen:            since,
+		OnsetUnknown:         p.OnsetUnknown,
 		LastSeen:             now,
 		Count:                1,
 		RestartCount:         p.RestartCount,

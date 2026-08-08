@@ -390,9 +390,14 @@ function ProblemsPanel({
                         <div className="flex items-center gap-1.5">
                           <span className="text-[10px] text-theme-text-tertiary bg-theme-elevated px-1 py-0.5 rounded">{issue.kind}</span>
                           <span className="text-xs text-theme-text-primary truncate font-medium">{issue.name}</span>
-                          {(age || timing) && (
+                          {(age || timing || issue.onset_unknown) && (
                             <span className="ml-auto flex shrink-0 items-center gap-1">
                               {age && <span className="text-[10px] text-theme-text-tertiary tabular-nums">{age}</span>}
+                              {issue.onset_unknown && (
+                                <Tooltip content="Radar can confirm this issue is active, but current Kubernetes state does not reveal when it began." delay={100}>
+                                  <span className="text-[10px] text-theme-text-tertiary">Onset unknown</span>
+                                </Tooltip>
+                              )}
                               {timing && (
                                 <Tooltip content={timing.tooltip} delay={100}>
                                   <span className="badge-sm text-[10px] text-theme-text-secondary">{timing.chip}</span>

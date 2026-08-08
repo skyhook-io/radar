@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/skyhook-io/radar/internal/ingressstatus"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -187,7 +188,7 @@ func resolveIngressClass(deps Deps, ing *networkingv1.Ingress) (name, controller
 // ubiquitous on older clusters. An Ingress declaring its class only via this
 // annotation must not be condemned as "no controller".
 func legacyIngressClass(ing *networkingv1.Ingress) string {
-	return strings.TrimSpace(ing.Annotations["kubernetes.io/ingress.class"])
+	return ingressstatus.LegacyClass(ing)
 }
 
 // hasCloudLBAnnotations reports cloud load-balancer ingress annotations. This
@@ -196,17 +197,7 @@ func legacyIngressClass(ing *networkingv1.Ingress) string {
 // stale alb.* annotations on an nginx-class Ingress must not skip the nginx
 // pod-health check.
 func hasCloudLBAnnotations(ing *networkingv1.Ingress) bool {
-	for k, v := range ing.Annotations {
-		if strings.HasPrefix(k, "alb.ingress.kubernetes.io/") ||
-			strings.HasPrefix(k, "ingress.gcp.kubernetes.io/") ||
-			strings.HasPrefix(k, "networking.gke.io/") {
-			return true
-		}
-		if k == "kubernetes.io/ingress.class" && (strings.Contains(v, "alb") || strings.Contains(v, "gce")) {
-			return true
-		}
-	}
-	return false
+	return ingressstatus.HasCloudLoadBalancerAnnotations(ing)
 }
 
 // findControllerPods locates a controller's pods cluster-wide by its known label
@@ -351,7 +342,7 @@ func ingressControllerStatus(deps Deps, ing *networkingv1.Ingress) controllerSta
 	// address, no cloud annotations, no legacy class. Only here do we say nothing
 	// serves it.
 	cause := "An ingress controller is the component that actually serves Ingress traffic. None is configured here: no IngressClass resolves (none set, no default installed) and no controller has assigned it an address."
-	if ing.Spec.IngressClassName != nil && *ing.Spec.IngressClassName != "" {
+	if ingressstatus.ClassifyUnresolvedClass(ing) == ingressstatus.NamedClassMissing {
 		// A class IS named, but no IngressClass object by that name resolved -
 		// "none set" would be factually wrong and mildly condemn a configured class.
 		cause = fmt.Sprintf("An ingress controller is the component that actually serves Ingress traffic. This Ingress names class %q, but no IngressClass by that name was found (it may be misspelled, not installed, or not yet synced) and no controller has assigned it an address.", *ing.Spec.IngressClassName)

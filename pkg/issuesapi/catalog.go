@@ -61,7 +61,7 @@ var catalogOrder = []Category{
 	// Configuration
 	CategoryMissingConfigRef, CategoryInvalidConfiguration, CategoryPDBBlocksEvictions, CategorySecretSyncFailed,
 	// Networking
-	CategoryServiceNoEndpoints, CategoryIngressBackendMissing, CategoryLoadBalancerPending,
+	CategoryServiceNoEndpoints, CategoryIngressBackendMissing, CategoryIngressClassMissing, CategoryLoadBalancerPending,
 	CategoryGatewayNotReady, CategoryGatewayRouteInvalid, CategoryDNSFailure,
 	// Storage
 	CategoryPVCPending, CategoryPVCLost, CategoryPVFailed, CategoryPVCResizeFailed,
@@ -115,6 +115,7 @@ var categoryDescription = map[Category]string{
 	// Networking
 	CategoryServiceNoEndpoints:    "A Service has no ready endpoints — its selector matches no ready pods, so traffic to it fails.",
 	CategoryIngressBackendMissing: "An Ingress points at a Service that doesn't exist — incoming requests get 503s.",
+	CategoryIngressClassMissing:   "An Ingress names an IngressClass that doesn't exist, so no matching controller can serve it.",
 	CategoryLoadBalancerPending:   "A LoadBalancer Service is stuck Pending — the cloud controller hasn't provisioned an external IP.",
 	CategoryGatewayNotReady:       "A Gateway (Gateway API) isn't accepted or programmed — its listeners aren't serving.",
 	CategoryGatewayRouteInvalid:   "An HTTPRoute (or other route) was rejected or not accepted by its parent Gateway.",

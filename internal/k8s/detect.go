@@ -27,11 +27,12 @@ import (
 
 const probeFailureWindow = 10 * time.Minute
 
-// ScaledToZeroFingerprint marks the benign "backing workload intentionally
-// scaled to 0" detection so downstream consumers (the network trace's coverage
-// tone) can recognize it structurally and read it as deliberate dormancy, not
-// a red outage.
-const ScaledToZeroFingerprint = "svc:scaled-to-zero"
+const (
+	NoReadyEndpointsFingerprint            = "svc:no-ready-endpoints"
+	SelectorMatchesNoPodsReason            = "Selector matches no pods"
+	SelectorMatchesOnlyCompletedPodsReason = "Selector matches only completed pods"
+	ScaledToZeroFingerprint                = "svc:scaled-to-zero"
+)
 
 // ScaledToZeroReason is the detection reason for the benign scale-to-0 case,
 // shared so the trace coverage layer can recognise the GROUPED issue (whose
@@ -77,6 +78,10 @@ type Detection struct {
 	AgeSeconds      int64  // for sorting
 	Duration        string // how long the problem has persisted
 	DurationSeconds int64
+	// OnsetUnknown is set when the snapshot proves the issue exists but carries
+	// no defensible evidence for when the failing state began. Resource age may
+	// still be populated independently.
+	OnsetUnknown bool
 	// RestartCount + LastTerminatedReason are populated for Pod problems where
 	// the kubelet has recorded crash data. Together they answer the two
 	// questions an agent needs about a CrashLoopBackOff in one read:
@@ -620,199 +625,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					DurationSeconds: int64(ageDur.Seconds()),
 				})
 			}
-			if svc.Spec.Type == corev1.ServiceTypeExternalName || len(svc.Spec.Selector) == 0 {
-				continue
-			}
-			selected := podsMatchingService(svc, podsByNamespace[svc.Namespace])
-			if len(selected) == 0 {
-				// Warning, not critical: a Service with zero matching pods
-				// is often intentional (scaled-to-zero workload, dormant
-				// staging environment, just-deployed Service waiting for
-				// its workload to apply). The "0/N selected but 0 ready"
-				// case below stays critical — that's a real routing break
-				// because the workload is up but unhealthy.
-				reason := "Selector matches no pods"
-				message := selectorMessage(svc.Spec.Selector)
-				fingerprint := ""
-				// Distinguish the deliberate scale-to-0 case (managed-prometheus
-				// components disabled, antrea on Autopilot, dormant staging) from
-				// a genuinely orphaned selector. Both stay warning, but an honest
-				// reason keeps the row from reading as a routing fault.
-				zero, rolloutLookup := scaledToZeroBackingWorkload(cache, svc)
-				if zero {
-					reason = ScaledToZeroReason
-					message = "selector matches a workload (Deployment/StatefulSet/Rollout) intentionally scaled to 0 replicas"
-					fingerprint = ScaledToZeroFingerprint
-				} else if selectorMatchesSucceededPod(svc, podsByNamespace[svc.Namespace]) {
-					// The selector DOES match pods — they're just completed Job pods,
-					// which aren't routable endpoints. "matches no pods" would be a
-					// false lead for an operator who can see them with kubectl.
-					reason = "Selector matches only completed pods"
-					message = "selector matches finished Job pods, which are not routable endpoints"
-				} else {
-					// Couldn't confirm scale-to-zero: if the workload lookup was
-					// inconclusive (RBAC-denied, unsynced, or out-of-scope), say so
-					// rather than asserting a bare orphaned selector — the same honest
-					// framing the ready==0 path uses.
-					switch rolloutLookup {
-					case rolloutLookupForbidden:
-						message += "; couldn't check Argo Rollouts (no RBAC to list rollouts.argoproj.io) - if this is a Rollout intentionally scaled to zero, ignore this"
-					case rolloutLookupTransient:
-						message += "; couldn't verify the backing workload yet (cache still syncing) - re-check shortly"
-					case rolloutLookupScopeUnverifiable:
-						message += "; the backing workload is outside this session's cache scope, so a scale-to-zero couldn't be confirmed - check the workload directly"
-					}
-				}
-				problems = append(problems, Detection{
-					Kind:            "Service",
-					Namespace:       svc.Namespace,
-					Name:            svc.Name,
-					Severity:        "warning",
-					Reason:          reason,
-					Message:         message,
-					Fingerprint:     fingerprint,
-					Age:             FormatAge(ageDur),
-					AgeSeconds:      int64(ageDur.Seconds()),
-					Duration:        FormatAge(ageDur),
-					DurationSeconds: int64(ageDur.Seconds()),
-				})
-				continue
-			}
-			ready := 0
-			for _, pod := range selected {
-				if isPodReadyForProblem(pod) {
-					ready++
-				}
-			}
-			if ready == 0 && svc.Spec.PublishNotReadyAddresses {
-				// publishNotReadyAddresses Services get endpoints for NOT-ready
-				// pods by design (headless StatefulSet peer discovery, bootstrap
-				// ordering) — Kubernetes still routes, so 0 ready is not a
-				// routing outage. Keep an informational row (0 ready is worth a
-				// glance) but never the red outage framing. No `continue`: this
-				// only reframes readiness — the independent Service-spec checks
-				// below (e.g. an unresolved named targetPort, where NOTHING
-				// routes regardless of publishNotReadyAddresses) must still run.
-				problems = append(problems, Detection{
-					Kind:            "Service",
-					Namespace:       svc.Namespace,
-					Name:            svc.Name,
-					Severity:        "info",
-					Reason:          fmt.Sprintf("0/%d selected pods ready", len(selected)),
-					Message:         "no selected pod reports ready; this Service publishes endpoints regardless of readiness (publishNotReadyAddresses), so readiness alone doesn't stop routing",
-					Fingerprint:     "svc:no-ready-endpoints",
-					Age:             FormatAge(ageDur),
-					AgeSeconds:      int64(ageDur.Seconds()),
-					Duration:        FormatAge(ageDur),
-					DurationSeconds: int64(ageDur.Seconds()),
-				})
-			} else if ready == 0 {
-				// Mid scale-to-zero (1→0) the terminating old pod still matches
-				// the selector (selected>0) but isn't ready — that's the
-				// deliberate scale-down, not a routing break. Same benign case
-				// as the zero-selected branch above, just caught a poll earlier.
-				zero, rolloutLookup := scaledToZeroBackingWorkload(cache, svc)
-				if zero {
-					problems = append(problems, Detection{
-						Kind:            "Service",
-						Namespace:       svc.Namespace,
-						Name:            svc.Name,
-						Severity:        "warning",
-						Reason:          ScaledToZeroReason,
-						Message:         "selector matches a workload (Deployment/StatefulSet/Rollout) intentionally scaled to 0 replicas",
-						Fingerprint:     ScaledToZeroFingerprint,
-						Age:             FormatAge(ageDur),
-						AgeSeconds:      int64(ageDur.Seconds()),
-						Duration:        FormatAge(ageDur),
-						DurationSeconds: int64(ageDur.Seconds()),
-					})
-					continue
-				}
-				if rolloutLookup == rolloutLookupTransient {
-					// Couldn't read the Rollout CRD yet (cache still syncing /
-					// transient list failure) - the next poll settles it, so
-					// don't escalate to the red "routing break" framing on
-					// state that's about to become verifiable.
-					problems = append(problems, Detection{
-						Kind:            "Service",
-						Namespace:       svc.Namespace,
-						Name:            svc.Name,
-						Severity:        "warning",
-						Reason:          fmt.Sprintf("0/%d selected pods ready", len(selected)),
-						Message:         "no ready endpoints; couldn't verify whether the backing workload is intentionally scaled to 0 (Rollout lookup failed) - re-check shortly",
-						Fingerprint:     "svc:no-ready-endpoints",
-						Age:             FormatAge(ageDur),
-						AgeSeconds:      int64(ageDur.Seconds()),
-						Duration:        FormatAge(ageDur),
-						DurationSeconds: int64(ageDur.Seconds()),
-					})
-					continue
-				}
-				if rolloutLookup == rolloutLookupScopeUnverifiable {
-					// The typed Deployment/StatefulSet informers don't cover this
-					// Service's namespace (namespace-scoped RBAC), so an empty
-					// workload list can't prove the backing workload isn't
-					// intentionally scaled to 0. Report the observed 0-ready state
-					// but stay warning - a confident outage critical here would be
-					// a scope artifact, not a verified break.
-					problems = append(problems, Detection{
-						Kind:            "Service",
-						Namespace:       svc.Namespace,
-						Name:            svc.Name,
-						Severity:        "warning",
-						Reason:          fmt.Sprintf("0/%d selected pods ready", len(selected)),
-						Message:         "no ready endpoints; the backing workload's namespace isn't covered by this session's cache scope, so we can't confirm whether it's intentionally scaled to 0 - check the workload directly",
-						Fingerprint:     "svc:no-ready-endpoints",
-						Age:             FormatAge(ageDur),
-						AgeSeconds:      int64(ageDur.Seconds()),
-						Duration:        FormatAge(ageDur),
-						DurationSeconds: int64(ageDur.Seconds()),
-					})
-					continue
-				}
-				det := Detection{
-					Kind:      "Service",
-					Namespace: svc.Namespace,
-					Name:      svc.Name,
-					Severity:  "critical",
-					Reason:    fmt.Sprintf("0/%d selected pods ready", len(selected)),
-					// A Service can be BOTH no-ready-endpoints AND have an
-					// unresolved named targetPort — distinct fixes (the workload
-					// vs the Service port spec). Stable per-cause fingerprints
-					// (not the flapping replica count) keep them as two issues.
-					Fingerprint:     "svc:no-ready-endpoints",
-					Age:             FormatAge(ageDur),
-					AgeSeconds:      int64(ageDur.Seconds()),
-					Duration:        FormatAge(ageDur),
-					DurationSeconds: int64(ageDur.Seconds()),
-				}
-				if rolloutLookup == rolloutLookupForbidden {
-					// RBAC denies listing Rollouts, permanently — no future poll
-					// will ever answer, so amber-forever would hide a real full
-					// outage behind a missing permission. The "0/N ready"
-					// observation is certain (and the typed Deployment/
-					// StatefulSet scaled-to-zero check already found nothing);
-					// only the Rollout interpretation is unreadable. Stay
-					// critical and state the caveat explicitly.
-					det.Message = "no ready endpoints; couldn't check Argo Rollouts (no RBAC to list rollouts.argoproj.io) - if this workload is a Rollout intentionally scaled to zero, ignore this"
-				}
-				problems = append(problems, det)
-			}
-			if missing := unresolvedNamedTargetPorts(svc, selected); len(missing) > 0 {
-				problems = append(problems, Detection{
-					Kind:            "Service",
-					Namespace:       svc.Namespace,
-					Name:            svc.Name,
-					Severity:        "high",
-					Reason:          fmt.Sprintf("Unresolved named targetPort: %s", strings.Join(missing, ", ")),
-					Message:         "No selected pod declares a container port with this name",
-					Fingerprint:     "svc:unresolved-targetport",
-					Age:             FormatAge(ageDur),
-					AgeSeconds:      int64(ageDur.Seconds()),
-					Duration:        FormatAge(ageDur),
-					DurationSeconds: int64(ageDur.Seconds()),
-				})
-			}
+			problems = append(problems, detectServiceBackendProblems(cache, svc, podsByNamespace[svc.Namespace], now)...)
 		}
 	}
 
@@ -1262,6 +1075,126 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 	}
 
 	return problems
+}
+
+func detectServiceBackendProblems(cache *ResourceCache, svc *corev1.Service, pods []*corev1.Pod, now time.Time) []Detection {
+	if svc.Spec.Type == corev1.ServiceTypeExternalName || len(svc.Spec.Selector) == 0 {
+		return nil
+	}
+	ageDur := now.Sub(svc.CreationTimestamp.Time)
+	selected := podsMatchingService(svc, pods)
+	if len(selected) == 0 {
+		reason := SelectorMatchesNoPodsReason
+		message := selectorMessage(svc.Spec.Selector)
+		fingerprint := ""
+		zero, rolloutLookup := scaledToZeroBackingWorkload(cache, svc)
+		if zero {
+			reason = ScaledToZeroReason
+			message = "selector matches a workload (Deployment/StatefulSet/Rollout) intentionally scaled to 0 replicas"
+			fingerprint = ScaledToZeroFingerprint
+		} else if selectorMatchesSucceededPod(svc, pods) {
+			reason = SelectorMatchesOnlyCompletedPodsReason
+			message = "selector matches finished Job pods, which are not routable endpoints"
+		} else {
+			switch rolloutLookup {
+			case rolloutLookupForbidden:
+				message += "; couldn't check Argo Rollouts (no RBAC to list rollouts.argoproj.io) - if this is a Rollout intentionally scaled to zero, ignore this"
+			case rolloutLookupTransient:
+				message += "; couldn't verify the backing workload yet (cache still syncing) - re-check shortly"
+			case rolloutLookupScopeUnverifiable:
+				message += "; the backing workload is outside this session's cache scope, so a scale-to-zero couldn't be confirmed - check the workload directly"
+			}
+		}
+		return []Detection{serviceBackendDetection(svc, ageDur, "warning", reason, message, fingerprint)}
+	}
+
+	ready := 0
+	for _, pod := range selected {
+		if isPodReadyForProblem(pod) {
+			ready++
+		}
+	}
+	var problems []Detection
+	if ready == 0 && svc.Spec.PublishNotReadyAddresses {
+		problems = append(problems, serviceBackendDetection(
+			svc,
+			ageDur,
+			"info",
+			fmt.Sprintf("0/%d selected pods ready", len(selected)),
+			"no selected pod reports ready; this Service publishes endpoints regardless of readiness (publishNotReadyAddresses), so readiness alone doesn't stop routing",
+			NoReadyEndpointsFingerprint,
+		))
+	} else if ready == 0 {
+		zero, rolloutLookup := scaledToZeroBackingWorkload(cache, svc)
+		if zero {
+			return []Detection{serviceBackendDetection(
+				svc,
+				ageDur,
+				"warning",
+				ScaledToZeroReason,
+				"selector matches a workload (Deployment/StatefulSet/Rollout) intentionally scaled to 0 replicas",
+				ScaledToZeroFingerprint,
+			)}
+		}
+		if rolloutLookup == rolloutLookupTransient {
+			return []Detection{serviceBackendDetection(
+				svc,
+				ageDur,
+				"warning",
+				fmt.Sprintf("0/%d selected pods ready", len(selected)),
+				"no ready endpoints; couldn't verify whether the backing workload is intentionally scaled to 0 (Rollout lookup failed) - re-check shortly",
+				NoReadyEndpointsFingerprint,
+			)}
+		}
+		if rolloutLookup == rolloutLookupScopeUnverifiable {
+			return []Detection{serviceBackendDetection(
+				svc,
+				ageDur,
+				"warning",
+				fmt.Sprintf("0/%d selected pods ready", len(selected)),
+				"no ready endpoints; the backing workload's namespace isn't covered by this session's cache scope, so we can't confirm whether it's intentionally scaled to 0 - check the workload directly",
+				NoReadyEndpointsFingerprint,
+			)}
+		}
+		det := serviceBackendDetection(
+			svc,
+			ageDur,
+			"critical",
+			fmt.Sprintf("0/%d selected pods ready", len(selected)),
+			"",
+			NoReadyEndpointsFingerprint,
+		)
+		if rolloutLookup == rolloutLookupForbidden {
+			det.Message = "no ready endpoints; couldn't check Argo Rollouts (no RBAC to list rollouts.argoproj.io) - if this workload is a Rollout intentionally scaled to zero, ignore this"
+		}
+		problems = append(problems, det)
+	}
+	if missing := unresolvedNamedTargetPorts(svc, selected); len(missing) > 0 {
+		problems = append(problems, serviceBackendDetection(
+			svc,
+			ageDur,
+			"high",
+			fmt.Sprintf("Unresolved named targetPort: %s", strings.Join(missing, ", ")),
+			"No selected pod declares a container port with this name",
+			"svc:unresolved-targetport",
+		))
+	}
+	return problems
+}
+
+func serviceBackendDetection(svc *corev1.Service, age time.Duration, severity, reason, message, fingerprint string) Detection {
+	return Detection{
+		Kind:         "Service",
+		Namespace:    svc.Namespace,
+		Name:         svc.Name,
+		Severity:     severity,
+		Reason:       reason,
+		Message:      message,
+		Fingerprint:  fingerprint,
+		Age:          FormatAge(age),
+		AgeSeconds:   int64(age.Seconds()),
+		OnsetUnknown: true,
+	}
 }
 
 type probeFailure struct {

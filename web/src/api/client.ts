@@ -313,6 +313,7 @@ export interface DashboardProblem {
   ageSeconds: number;
   duration: string;
   durationSeconds: number;
+  onsetUnknown?: boolean;
   podCount?: number;
 }
 

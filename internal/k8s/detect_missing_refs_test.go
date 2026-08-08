@@ -768,9 +768,82 @@ func TestDetectMissingWebhookRefs(t *testing.T) {
 		if hasSubstr(p.Message, "webhook-ok") || hasSubstr(p.Message, "external") {
 			t.Errorf("existing Service or URL-based webhook should not flag: %+v", p)
 		}
+		if !p.OnsetUnknown || p.Duration != "" || p.DurationSeconds != 0 {
+			t.Errorf("missing webhook Service must not use configuration age as outage onset: %+v", p)
+		}
+	}
+	refs := AdmissionWebhookServiceReferences(dynCache, discovery)
+	if len(refs) != 3 {
+		t.Fatalf("service-backed webhook refs = %+v, want three and no URL-backed ref", refs)
+	}
+	if watched := AdmissionWebhookServiceReferencesWatched(dynCache, discovery); len(watched) != len(refs) {
+		t.Fatalf("watched service-backed webhook refs = %+v, want %+v", watched, refs)
+	}
+	if refs[0].FailurePolicy != "Fail" {
+		t.Fatalf("omitted failurePolicy must normalize to Fail: %+v", refs[0])
 	}
 	if scoped := DetectMissingWebhookRefs(GetResourceCache(), dynCache, discovery, "hooks"); len(scoped) != 0 {
 		t.Fatalf("namespace-scoped call should omit cluster-scoped webhook configs, got %+v", scoped)
+	}
+}
+
+func TestAdmissionWebhookServiceReferencesWatchedDoesNotStartInformer(t *testing.T) {
+	defer ResetTestDynamicState()
+
+	vwhGVR := schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingwebhookconfigurations"}
+	dynClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{vwhGVR: "ValidatingWebhookConfigurationList"},
+		webhookConfig("ValidatingWebhookConfiguration", "validate-hooks", metav1.Now(), []any{
+			webhookWithService("validate", "hooks", "policy-webhook"),
+		}),
+	)
+	if err := InitTestDynamicResourceCache(dynClient, []APIResource{{
+		Group: "admissionregistration.k8s.io", Version: "v1", Kind: "ValidatingWebhookConfiguration", Name: "validatingwebhookconfigurations", Verbs: []string{"list", "watch"},
+	}}); err != nil {
+		t.Fatalf("InitTestDynamicResourceCache: %v", err)
+	}
+
+	dynCache := GetDynamicResourceCache()
+	if refs := AdmissionWebhookServiceReferencesWatched(dynCache, GetResourceDiscovery()); len(refs) != 0 {
+		t.Fatalf("unwatched webhook refs = %+v, want none", refs)
+	}
+	if watched := dynCache.GetWatchedResources(); len(watched) != 0 {
+		t.Fatalf("request-time webhook correlation started informers: %+v", watched)
+	}
+}
+
+func TestDetectIngressMissingIngressClass(t *testing.T) {
+	defer ResetTestState()
+
+	now := time.Now()
+	old := metav1.NewTime(now.Add(-10 * time.Minute))
+	young := metav1.NewTime(now.Add(-time.Minute))
+	missing := "missing"
+	existing := "nginx"
+	objects := []runtime.Object{
+		&networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: existing}},
+		&networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: "missing", Namespace: "prod", CreationTimestamp: old}, Spec: networkingv1.IngressSpec{IngressClassName: &missing}},
+		&networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: "existing", Namespace: "prod", CreationTimestamp: old}, Spec: networkingv1.IngressSpec{IngressClassName: &existing}},
+		&networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: "young", Namespace: "prod", CreationTimestamp: young}, Spec: networkingv1.IngressSpec{IngressClassName: &missing}},
+		&networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: "addressed", Namespace: "prod", CreationTimestamp: old}, Spec: networkingv1.IngressSpec{IngressClassName: &missing}, Status: networkingv1.IngressStatus{LoadBalancer: networkingv1.IngressLoadBalancerStatus{Ingress: []networkingv1.IngressLoadBalancerIngress{{Hostname: "example.test"}}}}},
+		&networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: "legacy", Namespace: "prod", CreationTimestamp: old, Annotations: map[string]string{"kubernetes.io/ingress.class": "nginx"}}, Spec: networkingv1.IngressSpec{IngressClassName: &missing}},
+		&networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: "cloud", Namespace: "prod", CreationTimestamp: old, Annotations: map[string]string{"alb.ingress.kubernetes.io/scheme": "internet-facing"}}, Spec: networkingv1.IngressSpec{IngressClassName: &missing}},
+	}
+	if err := InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+
+	problems := detectIngressMissingBackend(GetResourceCache(), "prod", now)
+	if len(problems) != 1 {
+		t.Fatalf("IngressClass problems = %+v, want only the old authoritative named miss", problems)
+	}
+	problem := problems[0]
+	if problem.Name != "missing" || problem.Reason != "Missing IngressClass" || problem.Severity != "warning" {
+		t.Fatalf("unexpected missing IngressClass problem: %+v", problem)
+	}
+	if !problem.OnsetUnknown || problem.Duration != "" || problem.DurationSeconds != 0 || problem.AgeSeconds <= 0 {
+		t.Fatalf("missing IngressClass must preserve resource age without inventing onset: %+v", problem)
 	}
 }
 

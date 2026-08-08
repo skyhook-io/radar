@@ -198,6 +198,9 @@ export interface Issue {
    *  Capacity / Demand view, so a generic scheduling failure never links. */
   capacity_relevant?: boolean;
   first_seen?: string;
+  /** Radar can confirm the issue is active, but current cluster evidence does
+   *  not establish when the failing state began. */
+  onset_unknown?: boolean;
   last_seen?: string;
   /** Affected-resource fan-out, EXCLUDING the subject (the row header).
    *  0/omitted for a single-resource issue; e.g. 50 for one Deployment's

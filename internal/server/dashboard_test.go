@@ -4,8 +4,20 @@ import (
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/helm"
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/helmhistory"
 )
+
+func TestDetectionToDashboardProblemPreservesUnknownOnset(t *testing.T) {
+	detection := k8s.Detection{
+		Kind: "Service", Namespace: "hooks", Name: "policy-webhook", Group: "", Severity: "critical",
+		Reason: "Selector matches no pods", Age: "5m", AgeSeconds: 300, OnsetUnknown: true,
+	}
+	got := detectionToDashboardProblem(detection)
+	if !got.OnsetUnknown || got.Duration != "" || got.DurationSeconds != 0 || got.Age != "5m" || got.AgeSeconds != 300 {
+		t.Fatalf("dashboard problem lost unknown-onset contract: %+v", got)
+	}
+}
 
 func TestDashboardHelmSummaryFromReleasesSortsAndLimits(t *testing.T) {
 	releases := []helm.HelmRelease{

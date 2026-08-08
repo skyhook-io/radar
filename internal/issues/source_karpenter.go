@@ -376,6 +376,7 @@ func karpenterMissingNodeClassIssue(pool *unstructured.Unstructured, ref karpent
 		pool.GetCreationTimestamp().Time,
 	)
 	issue.FirstSeen = time.Time{}
+	issue.OnsetUnknown = true
 	issue.LastSeen = time.Now()
 	issue.Cause = cause
 	issue.Action = action

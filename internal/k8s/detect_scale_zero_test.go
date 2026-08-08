@@ -315,6 +315,9 @@ func TestNoReadyEndpointsTruthTable(t *testing.T) {
 			if tc.wantEmptyMsg && got.Message != "" {
 				t.Errorf("confirmed outage must carry no caveat message, got %q", got.Message)
 			}
+			if !got.OnsetUnknown || got.Duration != "" || got.DurationSeconds != 0 {
+				t.Errorf("Service backend snapshot must preserve age but omit invented onset: %+v", got)
+			}
 			// The matched row must be the ONLY Service/api endpoint-health row
 			// in that snapshot — a benign framing must not coexist with a red
 			// outage row for the same observation.
@@ -509,10 +512,10 @@ func TestPublishNotReadyDoesNotSuppressUnresolvedTargetPort(t *testing.T) {
 func TestNestedNumberInt64(t *testing.T) {
 	obj := func(v any) map[string]any { return map[string]any{"spec": map[string]any{"replicas": v}} }
 	cases := []struct {
-		name    string
-		in      any
-		want    int64
-		wantOK  bool
+		name   string
+		in     any
+		want   int64
+		wantOK bool
 	}{
 		{"int64", int64(0), 0, true},
 		{"int64 nonzero", int64(3), 3, true},

@@ -71,6 +71,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   secret_sync_failed: 'Secret sync failed',
   service_no_endpoints: 'No endpoints',
   ingress_backend_missing: 'Ingress backend missing',
+  ingress_class_missing: 'Ingress class missing',
   load_balancer_pending: 'Load balancer pending',
   gateway_not_ready: 'Gateway not ready',
   gateway_route_invalid: 'Gateway route invalid',

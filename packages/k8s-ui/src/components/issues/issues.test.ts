@@ -126,6 +126,17 @@ describe('IssueRow', () => {
     expect(html).toContain('Control plane')
     expect(html).toContain(groupBadgeClass('control_plane'))
   })
+
+  it('shows an explicit unknown-onset state instead of inventing an age', () => {
+    const html = renderToString(createElement(IssueRow, {
+      issue: mk({ onset_unknown: true }),
+      open: false,
+      onToggle: () => undefined,
+    }))
+
+    expect(html).toContain('Onset unknown')
+    expect(html).not.toContain('0s')
+  })
 })
 
 describe('issueTiming', () => {

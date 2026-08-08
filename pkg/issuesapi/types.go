@@ -56,6 +56,7 @@ const (
 	CategorySecretSyncFailed         Category = "secret_sync_failed"
 	CategoryServiceNoEndpoints       Category = "service_no_endpoints"
 	CategoryIngressBackendMissing    Category = "ingress_backend_missing"
+	CategoryIngressClassMissing      Category = "ingress_class_missing"
 	CategoryLoadBalancerPending      Category = "load_balancer_pending"
 	CategoryGatewayNotReady          Category = "gateway_not_ready"
 	CategoryGatewayRouteInvalid      Category = "gateway_route_invalid"
@@ -131,6 +132,7 @@ var categoryGroup = map[Category]CategoryGroup{
 	CategorySecretSyncFailed:         GroupConfiguration,
 	CategoryServiceNoEndpoints:       GroupNetworking,
 	CategoryIngressBackendMissing:    GroupNetworking,
+	CategoryIngressClassMissing:      GroupNetworking,
 	CategoryLoadBalancerPending:      GroupNetworking,
 	CategoryGatewayNotReady:          GroupNetworking,
 	CategoryGatewayRouteInvalid:      GroupNetworking,
@@ -381,6 +383,7 @@ type Issue struct {
 	// sees it set, since the bit would otherwise leak cluster-scoped pool state.
 	CapacityRelevant     bool               `json:"capacity_relevant,omitempty"`
 	FirstSeen            time.Time          `json:"first_seen,omitzero"`
+	OnsetUnknown         bool               `json:"onset_unknown,omitempty"`
 	LastSeen             time.Time          `json:"last_seen,omitzero"`
 	Count                int                `json:"count,omitempty"`
 	Owner                Ref                `json:"owner,omitzero"`

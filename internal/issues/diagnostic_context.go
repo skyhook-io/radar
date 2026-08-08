@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
@@ -24,10 +25,63 @@ const (
 	factPVCBlastRadius      = "pvc_blast_radius"
 	factAPIServiceHPA       = "apiservice_hpa"
 	factSecretNotReady      = "secret_not_ready"
+	factAdmissionWebhook    = "admission_webhook_backend"
 )
 
 type serviceBackendIssueProvider interface {
 	SelectedPodsForService(namespace, name string) []Ref
+}
+
+type AdmissionWebhookRef struct {
+	Configuration Ref
+	WebhookName   string
+	FailurePolicy string
+}
+
+type admissionWebhookContextProvider interface {
+	AdmissionWebhookRefsForService(namespace, name string) []AdmissionWebhookRef
+	WorkloadBacksService(group, kind, namespace, name, serviceNamespace, serviceName string) bool
+}
+
+func isAdmissionWebhookBackendService(issue Issue) bool {
+	if issue.Source != SourceProblem || issue.Kind != "Service" {
+		return false
+	}
+	if issue.Fingerprint == k8s.NoReadyEndpointsFingerprint || issue.Fingerprint == k8s.ScaledToZeroFingerprint {
+		return true
+	}
+	return issue.Reason == k8s.SelectorMatchesNoPodsReason || issue.Reason == k8s.SelectorMatchesOnlyCompletedPodsReason
+}
+
+func elevateAdmissionWebhookBackendSeverity(issues []Issue, p Provider) []Issue {
+	provider, ok := p.(admissionWebhookContextProvider)
+	if !ok {
+		return issues
+	}
+	for idx := range issues {
+		issue := &issues[idx]
+		if !isAdmissionWebhookBackendService(*issue) {
+			continue
+		}
+		failClosed := false
+		for _, ref := range provider.AdmissionWebhookRefsForService(issue.Namespace, issue.Name) {
+			if ref.FailurePolicy == "Fail" {
+				failClosed = true
+				break
+			}
+		}
+		if !failClosed {
+			continue
+		}
+		issue.Severity = SeverityCritical
+		const detail = "A fail-closed admission webhook depends on this Service, so matching admission requests are blocked."
+		if issue.Message == "" {
+			issue.Message = detail
+		} else if !strings.Contains(issue.Message, detail) {
+			issue.Message = strings.TrimRight(issue.Message, ".") + ". " + detail
+		}
+	}
+	return issues
 }
 
 type nodeBlastRadiusProvider interface {
@@ -112,6 +166,10 @@ type changeContextProvider interface {
 }
 
 func enrichDiagnosticContext(shaped, flat, grouped []Issue, p Provider) []Issue {
+	return enrichDiagnosticContextAuthorized(shaped, flat, grouped, p, nil)
+}
+
+func enrichDiagnosticContextAuthorized(shaped, flat, grouped []Issue, p Provider, canReadClusterScoped func(kind, group string) bool) []Issue {
 	if len(shaped) == 0 {
 		return shaped
 	}
@@ -149,6 +207,10 @@ func enrichDiagnosticContext(shaped, flat, grouped []Issue, p Provider) []Issue 
 	var changeProvider changeContextProvider
 	if cp, ok := p.(changeContextProvider); ok {
 		changeProvider = cp
+	}
+	var webhookProvider admissionWebhookContextProvider
+	if wp, ok := p.(admissionWebhookContextProvider); ok && canReadClusterScoped != nil {
+		webhookProvider = wp
 	}
 
 	out := append([]Issue(nil), shaped...)
@@ -216,6 +278,10 @@ func enrichDiagnosticContext(shaped, flat, grouped []Issue, p Provider) []Issue 
 			addServiceBackendContext(&b, *i, serviceProvider, flatByResource, groupedByID)
 		}
 
+		if webhookProvider != nil && isAdmissionWebhookBackendService(*i) {
+			addAdmissionWebhookContext(&b, *i, &incidentEdges, webhookProvider, canReadClusterScoped, flat, groupedByID)
+		}
+
 		if nodeProvider != nil && i.Kind == "Node" && i.Category == issuesapi.CategoryNodeNotReady {
 			addNodeBlastRadiusContext(&b, *i, &incidentEdges, nodeProvider, flatByResource, groupedByID)
 		}
@@ -261,7 +327,7 @@ type incidentEdge struct {
 // recordIncidentEdges proposes a reverse pointer from each linked downstream
 // symptom to this root, capturing the root's subject ref + the link's confidence.
 // Self-edges are skipped. Only called for causal-direction-correct links (node /
-// pvc / apiservice / secret-producer); selected_backend never
+// pvc / apiservice / secret-producer / admission-webhook); selected_backend never
 // records edges because its related issues are the cause, not the symptom.
 func recordIncidentEdges(edges *[]incidentEdge, root Issue, factType string, conf issuesapi.Confidence, symptomIDs []string) {
 	if edges == nil {
@@ -289,8 +355,8 @@ func recordIncidentEdges(edges *[]incidentEdge, root Issue, factType string, con
 // DISTINCT roots at the SAME tier the pointer is left UNSET. Severity is NOT
 // causal evidence, so we never use it to choose between equally-confident roots;
 // an honest "no single root" beats a guessed one. (Cycles can't form with the
-// current link set — node/pvc/apiservice/secret-producer roots are
-// never themselves downstream symptoms — so only the self-edge guard is needed.)
+// current link set; admission-webhook self-deadlocks suppress their circular
+// edge before this point, and the self-edge guard covers identical issue IDs.)
 func assignIncidentParents(out []Issue, edges []incidentEdge) {
 	if len(edges) == 0 {
 		return
@@ -398,6 +464,70 @@ func addServiceBackendContext(b *diagnosticContextBuilder, issue Issue, serviceP
 		Message:       "Selected backend pod(s) already have active issues.",
 		Confidence:    issuesapi.ConfidenceHigh, // declared selector edge Service→Pod
 		Refs:          limitRefs(dedupeRefs(refs), maxDiagnosticRefs),
+		RelatedIssues: limitIssueRefs(related, maxDiagnosticIssueRefs),
+	})
+}
+
+func addAdmissionWebhookContext(b *diagnosticContextBuilder, root Issue, edges *[]incidentEdge, provider admissionWebhookContextProvider, canReadClusterScoped func(kind, group string) bool, flat []Issue, groupedByID map[string]Issue) {
+	refs := provider.AdmissionWebhookRefsForService(root.Namespace, root.Name)
+	var configRefs []Ref
+	failClosed := false
+	for _, ref := range refs {
+		if !canReadClusterScoped(ref.Configuration.Kind, ref.Configuration.Group) {
+			continue
+		}
+		configRefs = append(configRefs, ref.Configuration)
+		failClosed = failClosed || ref.FailurePolicy == "Fail"
+	}
+	configRefs = dedupeRefs(configRefs)
+	if len(configRefs) == 0 {
+		return
+	}
+
+	message := "This Service is the backend for a fail-open admission webhook; admission continues while its validation or mutation is bypassed."
+	if failClosed {
+		message = "This Service is the backend for a fail-closed admission webhook; matching admission requests are blocked while it has no ready backend."
+	}
+
+	seen := map[string]bool{}
+	var related []issuesapi.IssueRef
+	var edgeIDs []string
+	selfDeadlock := false
+	if failClosed {
+		for _, candidate := range flat {
+			if candidate.Category != issuesapi.CategoryAdmissionWebhookBlocking {
+				continue
+			}
+			failure, ok := k8s.ParseAdmissionWebhookNoEndpoints(diagnosticMessage(candidate))
+			if !ok || failure.ServiceNamespace != root.Namespace || failure.ServiceName != root.Name {
+				continue
+			}
+			shaped := candidate
+			if grouped, ok := groupedByID[candidate.ID]; ok {
+				shaped = grouped
+			}
+			if seen[shaped.ID] {
+				continue
+			}
+			seen[shaped.ID] = true
+			related = append(related, issueRef(shaped))
+			if provider.WorkloadBacksService(shaped.Group, shaped.Kind, shaped.Namespace, shaped.Name, root.Namespace, root.Name) {
+				selfDeadlock = true
+				continue
+			}
+			edgeIDs = append(edgeIDs, shaped.ID)
+		}
+	}
+	if selfDeadlock {
+		message += " The blocked workload also backs this Service, creating a startup deadlock; restore an independent ready backend or make bootstrap admission fail-open."
+	}
+	sortIssueRefs(related)
+	recordIncidentEdges(edges, root, factAdmissionWebhook, issuesapi.ConfidenceHigh, edgeIDs)
+	b.add(issuesapi.DiagnosticRoleCandidate, issuesapi.DiagnosticFact{
+		Type:          factAdmissionWebhook,
+		Message:       message,
+		Confidence:    issuesapi.ConfidenceHigh,
+		Refs:          limitRefs(configRefs, maxDiagnosticRefs),
 		RelatedIssues: limitIssueRefs(related, maxDiagnosticIssueRefs),
 	})
 }

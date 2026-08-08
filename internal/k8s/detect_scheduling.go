@@ -2,6 +2,8 @@ package k8s
 
 import (
 	"fmt"
+	"net/url"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -1152,6 +1154,9 @@ func replicaSetDeploymentOwnerName(rs *appsv1.ReplicaSet) (string, bool) {
 // (e.g. transient "object is being deleted") so we don't over-report.
 func classifyAdmissionFailure(msg string) (string, bool) {
 	lower := strings.ToLower(msg)
+	if _, ok := ParseAdmissionWebhookNoEndpoints(msg); ok {
+		return "WebhookUnavailable", true
+	}
 	switch {
 	case strings.Contains(lower, "exceeded quota"), strings.Contains(lower, "failed quota"):
 		return "QuotaExceeded", true
@@ -1169,6 +1174,37 @@ func classifyAdmissionFailure(msg string) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+type AdmissionWebhookNoEndpoints struct {
+	ServiceNamespace string
+	ServiceName      string
+}
+
+var (
+	admissionWebhookURLPattern      = regexp.MustCompile(`https?://[^\s"]+`)
+	admissionNoEndpointsNamePattern = regexp.MustCompile(`(?i)no endpoints available for service "([a-z0-9]([-a-z0-9]*[a-z0-9])?)"`)
+)
+
+func ParseAdmissionWebhookNoEndpoints(message string) (AdmissionWebhookNoEndpoints, bool) {
+	lower := strings.ToLower(message)
+	if !strings.Contains(lower, "failed calling webhook") || !strings.Contains(lower, "no endpoints available for service") {
+		return AdmissionWebhookNoEndpoints{}, false
+	}
+	nameMatch := admissionNoEndpointsNamePattern.FindStringSubmatch(message)
+	urlText := admissionWebhookURLPattern.FindString(message)
+	if len(nameMatch) < 2 || urlText == "" {
+		return AdmissionWebhookNoEndpoints{}, false
+	}
+	parsed, err := url.Parse(urlText)
+	if err != nil {
+		return AdmissionWebhookNoEndpoints{}, false
+	}
+	hostParts := strings.Split(strings.ToLower(parsed.Hostname()), ".")
+	if len(hostParts) < 3 || hostParts[0] == "" || hostParts[1] == "" || hostParts[2] != "svc" || hostParts[0] != strings.ToLower(nameMatch[1]) {
+		return AdmissionWebhookNoEndpoints{}, false
+	}
+	return AdmissionWebhookNoEndpoints{ServiceNamespace: hostParts[1], ServiceName: hostParts[0]}, true
 }
 
 // ---- Post-bind detection ------------------------------------------------

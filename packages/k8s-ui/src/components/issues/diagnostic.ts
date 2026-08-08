@@ -46,6 +46,8 @@ export function diagnosticFactLabel(type: string): string {
       return 'Stalled autoscalers';
     case 'secret_not_ready':
       return 'Dependent pods';
+    case 'admission_webhook_backend':
+      return 'Admission dependency';
     default:
       return type.replace(/_/g, ' ');
   }
@@ -59,6 +61,7 @@ export function incidentParentLabel(factType?: string, confidence?: string): str
   switch (factType) {
     case 'pvc_blast_radius':
     case 'secret_not_ready':
+    case 'admission_webhook_backend':
       return 'Caused by';
     case 'apiservice_hpa':
       return 'Likely cause';
