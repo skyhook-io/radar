@@ -40,6 +40,62 @@ func TestPodGoldenVectors(t *testing.T) {
 			wantReason: "Completed",
 		},
 		{
+			// Batch work in flight is not an all-clear. Workload() already says
+			// this for the Job itself (jobVerdict returns Neutral/"Running");
+			// without the same call here the Job read Neutral while its own pods
+			// read Healthy — one piece of work graded two ways.
+			name: "job-owned pod is neutral, not an affirmative healthy",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{OwnerReferences: []metav1.OwnerReference{
+					{Kind: "Job", APIVersion: "batch/v1", Name: "archiver-123"},
+				}},
+				Status: corev1.PodStatus{
+					Phase:             corev1.PodRunning,
+					ContainerStatuses: []corev1.ContainerStatus{{Ready: true}},
+				},
+			},
+			wantLevel: LevelNeutral,
+		},
+		{
+			// The masking guard. Neutral sits after every failure check, so a
+			// genuinely broken Job pod keeps its real verdict. If this ever
+			// returns Neutral the ordering has regressed and failing batch
+			// workloads have gone silent.
+			name: "crashlooping job-owned pod stays unhealthy",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{OwnerReferences: []metav1.OwnerReference{
+					{Kind: "Job", APIVersion: "batch/v1", Name: "archiver-123"},
+				}},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+					ContainerStatuses: []corev1.ContainerStatus{{
+						Ready:        false,
+						RestartCount: 6,
+						State: corev1.ContainerState{
+							Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"},
+						},
+					}},
+				},
+			},
+			wantLevel:  LevelUnhealthy,
+			wantReason: "CrashLoopBackOff",
+		},
+		{
+			// A CRD that merely happens to be Kind "Job" must not match; the
+			// owner's API group is checked, not just the kind string.
+			name: "non-batch Job kind does not trigger the neutral branch",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{OwnerReferences: []metav1.OwnerReference{
+					{Kind: "Job", APIVersion: "acme.example.com/v1", Name: "not-a-batch-job"},
+				}},
+				Status: corev1.PodStatus{
+					Phase:             corev1.PodRunning,
+					ContainerStatuses: []corev1.ContainerStatus{{Ready: true}},
+				},
+			},
+			wantLevel: LevelHealthy,
+		},
+		{
 			name:      "failed pod is unhealthy",
 			pod:       &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodFailed}},
 			wantLevel: LevelUnhealthy,

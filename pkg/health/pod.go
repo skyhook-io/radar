@@ -2,6 +2,7 @@ package health
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -22,6 +23,7 @@ import (
 //	Pending > 5m         → degraded ; Pending < 5m → healthy (startup grace)
 //	readiness probe fail → degraded
 //	active thrash        → degraded
+//	owned by a Job       → neutral  (batch work in flight; not an all-clear)
 //	default              → healthy
 //
 // Unschedulable and stuck-termination are NOT folded in here: they are detected
@@ -126,7 +128,37 @@ func classifyPodLevel(pod *corev1.Pod, now time.Time) Level {
 		return LevelDegraded
 	}
 
+	// Batch work is in-flight, not "healthy". Workload() already draws exactly
+	// this line for the Job itself — jobVerdict returns Neutral/"Running" for an
+	// active Job (workload.go), documented there as "in-progress, not healthy".
+	// Without this, the same work gets two answers: the Job reads Neutral while
+	// every one of its pods reads Healthy. A Job pod sitting at 1/2 ready
+	// because its sidecar outlived the main container then reads as an
+	// affirmative all-clear, which is the claim we most want not to make.
+	//
+	// LAST, after every failure check, so a crashlooping / OOMKilled / fatally
+	// waiting Job pod keeps its real verdict — Neutral must never mask a
+	// failure. From here we can see the owner reference but not the Job's
+	// status, so the honest claim is "this is batch work", not "the Job is
+	// in-flight" — which is why it is Neutral (no assertion) rather than
+	// Degraded (an assertion of impairment).
+	if isOwnedByJob(pod) {
+		return LevelNeutral
+	}
+
 	return LevelHealthy
+}
+
+// isOwnedByJob reports whether the pod was created by a batch Job. The
+// APIVersion group is checked so a CRD that happens to be Kind "Job" doesn't
+// match.
+func isOwnedByJob(pod *corev1.Pod) bool {
+	for _, ref := range pod.OwnerReferences {
+		if ref.Kind == "Job" && strings.HasPrefix(ref.APIVersion, "batch/") {
+			return true
+		}
+	}
+	return false
 }
 
 // PodProblemReason returns a short reason token for a problematic pod. Walks

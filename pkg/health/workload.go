@@ -24,15 +24,19 @@ import (
 func Workload(obj any, now time.Time) Verdict {
 	switch o := obj.(type) {
 	case *appsv1.Deployment:
-		return replicaVerdict(specReplicas(o.Spec.Replicas), o.Status.ReadyReplicas, o.Status.AvailableReplicas, true)
+		return replicaVerdict(specReplicas(o.Spec.Replicas), o.Status.ReadyReplicas, o.Status.AvailableReplicas, true,
+			converging(o.CreationTimestamp.Time, now, o.Generation, o.Status.ObservedGeneration))
 	case *appsv1.ReplicaSet:
-		return replicaVerdict(specReplicas(o.Spec.Replicas), o.Status.ReadyReplicas, 0, false)
+		return replicaVerdict(specReplicas(o.Spec.Replicas), o.Status.ReadyReplicas, 0, false,
+			converging(o.CreationTimestamp.Time, now, o.Generation, o.Status.ObservedGeneration))
 	case *appsv1.StatefulSet:
-		return replicaVerdict(specReplicas(o.Spec.Replicas), o.Status.ReadyReplicas, 0, false)
+		return replicaVerdict(specReplicas(o.Spec.Replicas), o.Status.ReadyReplicas, 0, false,
+			converging(o.CreationTimestamp.Time, now, o.Generation, o.Status.ObservedGeneration))
 	case *appsv1.DaemonSet:
 		// DesiredNumberScheduled 0 means the selector matches no nodes — benign,
 		// nothing to run, not unhealthy.
-		return replicaVerdict(o.Status.DesiredNumberScheduled, o.Status.NumberReady, 0, false)
+		return replicaVerdict(o.Status.DesiredNumberScheduled, o.Status.NumberReady, 0, false,
+			converging(o.CreationTimestamp.Time, now, o.Generation, o.Status.ObservedGeneration))
 	case *batchv1.Job:
 		return jobVerdict(o)
 	case *batchv1.CronJob:
@@ -46,17 +50,50 @@ func Workload(obj any, now time.Time) Verdict {
 // replicaVerdict grades a replica-based workload. requireAvailable additionally
 // demands available==desired (Deployment tracks availability; ReplicaSet /
 // StatefulSet / DaemonSet don't expose it the same way).
-func replicaVerdict(desired, ready, available int32, requireAvailable bool) Verdict {
+func replicaVerdict(desired, ready, available int32, requireAvailable, converging bool) Verdict {
 	if desired == 0 {
 		return Verdict{Level: LevelNeutral, Reason: "ScaledToZero"}
 	}
 	if ready == desired && (!requireAvailable || available == desired) {
 		return Verdict{Level: LevelHealthy}
 	}
+	// Convergence grace. Without it every ordinary rollout and every scale-up
+	// grades as impaired for its whole duration — a Deployment scaled 3->10
+	// reads NoneReady/PartiallyReady the instant the spec changes, before the
+	// controller has created a single pod, which is controller lag rather than
+	// an outage.
+	//
+	// Neutral, never Healthy: we are declining to call it broken, not claiming
+	// it is fine. And this only softens the WORKLOAD verdict — a pod that is
+	// genuinely failing (ImagePullBackOff, CrashLoopBackOff) is classified
+	// unhealthy on its own by Pod(), so real breakage during the window still
+	// surfaces; it just surfaces on the pod rather than as a premature verdict
+	// on the controller.
+	if converging {
+		return Verdict{Level: LevelNeutral, Reason: "Converging"}
+	}
 	if ready > 0 {
 		return Verdict{Level: LevelDegraded, Reason: "PartiallyReady"}
 	}
 	return Verdict{Level: LevelUnhealthy, Reason: "NoneReady"}
+}
+
+// workloadConvergenceGrace is how long a freshly created workload may take to
+// reach its target before we grade it. Matches the 5-minute window Pending pods
+// and unassigned LoadBalancers already get elsewhere in the codebase, so the
+// product has one startup-tolerance story rather than three.
+const workloadConvergenceGrace = 5 * time.Minute
+
+// converging reports whether a workload has not yet had a fair chance to reach
+// its target — either because it was created moments ago, or because its spec
+// changed and the controller has not observed that generation yet. The
+// generation check is what covers scale-ups on long-lived workloads, where the
+// creation timestamp is months old but the target moved a second ago.
+func converging(created, now time.Time, generation, observedGeneration int64) bool {
+	if observedGeneration > 0 && observedGeneration < generation {
+		return true
+	}
+	return now.Sub(created) < workloadConvergenceGrace
 }
 
 func jobVerdict(j *batchv1.Job) Verdict {

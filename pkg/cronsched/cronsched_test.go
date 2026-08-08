@@ -39,6 +39,48 @@ func TestMinInterval(t *testing.T) {
 	}
 }
 
+// TestMinInterval_MultiDayOfMonth pins day-of-month cadence to the real gap
+// between firings. Any constrained day-of-month used to collapse to a flat 28
+// days, so a twice-monthly job inherited a 42-day staleness grace and could miss
+// two consecutive runs while still reading healthy for six weeks.
+//
+// This needs an UPPER bound — the main table asserts only a lower one, which is
+// why the bug survived there.
+func TestMinInterval_MultiDayOfMonth(t *testing.T) {
+	day := 24 * time.Hour
+	cases := []struct {
+		schedule string
+		atMost   time.Duration
+		why      string
+	}{
+		// 1st and 15th: the widest gap is the 15th to the 1st of next month.
+		{"0 0 1,15 * *", 18 * day, "twice monthly"},
+		// Every fifth day: gaps of 5, plus the wrap off the 26th.
+		{"0 0 */5 * *", 11 * day, "every fifth day"},
+		// A contiguous run fires daily inside the window; the wrap off the 7th
+		// is the widest gap.
+		{"0 0 1-7 * *", 26 * day, "first week of each month"},
+	}
+	for _, c := range cases {
+		got, ok := MinInterval(c.schedule)
+		if !ok {
+			t.Errorf("%q (%s): could not parse", c.schedule, c.why)
+			continue
+		}
+		if got > c.atMost {
+			t.Errorf("%q (%s): interval=%s, want <= %s — too wide a cadence grants "+
+				"an unearned staleness grace", c.schedule, c.why, got, c.atMost)
+		}
+	}
+
+	// A day that doesn't exist in every month must stay conservative rather
+	// than alarm every February.
+	if got, _ := MinInterval("0 0 31 * *"); got < 60*day {
+		t.Errorf("dom=31: interval=%s, want >= 60d — the 31st is skipped in short "+
+			"months, so the real gap can span two months", got)
+	}
+}
+
 func TestStaleThreshold(t *testing.T) {
 	day := 24 * time.Hour
 	cases := []struct {

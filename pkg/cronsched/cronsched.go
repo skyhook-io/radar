@@ -53,7 +53,13 @@ func MinInterval(schedule string) (time.Duration, bool) {
 		}
 		return 28 * day, true
 	case dom != "*":
-		// Specific day(s)-of-month → monthly cadence.
+		// Specific day(s)-of-month → take the real largest gap, not a flat
+		// month. "1,15" fires twice monthly; calling that a 28-day cadence gave
+		// it a 42-day staleness grace, so it could miss two consecutive runs
+		// and still read healthy for six weeks.
+		if gap, ok := maxDomGapDays(dom); ok {
+			return gap, true
+		}
 		return 28 * day, true
 	case dow != "*":
 		// Specific day(s)-of-week → weekly is the conservative lower bound.
@@ -65,6 +71,48 @@ func MinInterval(schedule string) (time.Duration, bool) {
 		// Intra-day cadence (every minute / */n minutes or hours).
 		return time.Hour, true
 	}
+}
+
+// maxDomGapDays returns the longest stretch (in days) a day-of-month field can
+// go between firings. Unlike months, days-of-month are not uniform units: the
+// wrap from the last firing day of one month to the first of the next depends
+// on month length, and a day past 29 is skipped entirely in short months.
+//
+// Both are resolved upward so the estimate stays an upper bound — a staleness
+// threshold must never trip on a healthy rare-cadence job:
+//   - the wrap gap uses a 31-day month,
+//   - any day above 29 is treated as possibly skipping a whole month.
+//
+// ok=false when the field can't be parsed, so the caller falls back rather than
+// trusting a partial set.
+func maxDomGapDays(field string) (time.Duration, bool) {
+	days, ok := cronFieldValues(field, 1, 31)
+	if !ok || len(days) == 0 {
+		return 0, false
+	}
+	// Only days that exist in EVERY month can be relied on to fire. The 29th
+	// through 31st are skipped in short months, so a schedule firing solely on
+	// those can pass a whole month without running.
+	reliable := make([]int, 0, len(days))
+	for _, d := range days {
+		if d <= 28 {
+			reliable = append(reliable, d)
+		}
+	}
+	if len(reliable) == 0 {
+		return 62 * day, true // e.g. the 31st: Jan 31 → Mar 31
+	}
+	// Wrap from the last reliable day to the first of the next month, measured
+	// against the SHORTEST month. Longer months only add firings, which can
+	// only narrow gaps, so this stays an upper bound. A single day yields a
+	// full 28-day cycle, which is the monthly case.
+	maxGap := (28 - reliable[len(reliable)-1]) + reliable[0]
+	for i := 1; i < len(reliable); i++ {
+		if g := reliable[i] - reliable[i-1]; g > maxGap {
+			maxGap = g
+		}
+	}
+	return time.Duration(maxGap) * day, true
 }
 
 // maxMonthGapDays returns the longest stretch (in days) the schedule can go
