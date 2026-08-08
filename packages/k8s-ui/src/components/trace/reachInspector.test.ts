@@ -678,3 +678,35 @@ describe('a result with no evidence string still reads as a result', () => {
     expect(texts.length).toBeGreaterThan(0)
   })
 })
+
+describe('selecting a context entry opens it', () => {
+  // The entry-problem row exists to answer "show me the cause". Landing on a
+  // still-collapsed section makes the reader spend a second click on the very
+  // thing they asked for - and it must hold for EVERY declared entry kind.
+  const withEntries = (): Trace => {
+    const t = mk([pod('a', true, '10.0.0.1')], [p({ path: 'apiserver' })])
+    t.upstreams = [
+      { resource: { kind: 'Ingress', name: 'shop', namespace: 'store' }, edge: 'ingress->service', findings: [], config: { addresses: ['34.0.0.1'] } },
+      { resource: { kind: 'HTTPRoute', name: 'shop', namespace: 'store' }, edge: 'httproute->service', findings: [] },
+    ]
+    return t
+  }
+  for (const kind of ['Ingress', 'HTTPRoute']) {
+    it(`expands the selected ${kind}, and leaves its sibling collapsed`, () => {
+      const t = withEntries()
+      const c = ctx(t, 'apiserver')
+      const id = `n:${kind}/store/shop`
+      const s = buildSidebar(id, c)
+      const hops = s.context?.hops ?? []
+      expect(hops.length).toBeGreaterThan(0)
+      const picked = hops.find((h) => h.id === id)
+      expect(picked, `${kind} should be a context hop`).toBeTruthy()
+      expect(picked!.expanded).toBe(true)
+      expect(hops.filter((h) => h.id !== id).every((h) => !h.expanded)).toBe(true)
+    })
+  }
+  it('leaves every context hop collapsed when nothing is selected', () => {
+    const s = buildSidebar(undefined, ctx(withEntries(), 'apiserver'))
+    expect((s.context?.hops ?? []).every((h) => !h.expanded)).toBe(true)
+  })
+})

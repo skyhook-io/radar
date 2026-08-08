@@ -74,7 +74,7 @@ export interface HopDetail {
 /** Configured-but-bypassed resources, grouped under one label naming WHY they
  *  are outside this vantage's journey. Their config sections stay readable;
  *  their journey-state words do not apply. */
-function contextGroup(ctx: Ctx, byId: Map<string, GraphNode>): Sidebar['context'] {
+function contextGroup(ctx: Ctx, byId: Map<string, GraphNode>, sel: Selection): Sidebar['context'] {
   const nodes = (ctx.contextNodeIds ?? []).map((id) => byId.get(id)).filter((n): n is GraphNode => !!n)
   if (nodes.length === 0) return undefined
   const label =
@@ -85,12 +85,16 @@ function contextGroup(ctx: Ctx, byId: Map<string, GraphNode>): Sidebar['context'
         : 'PARALLEL ENTRY — NOT ON THIS ROUTE\u2019S PATH'
   return {
     label,
+    // Context hops are collapsed by default - they are not the journey. But the
+    // SELECTED one opens: the entry-problem row's whole purpose is "show me the
+    // cause", and landing on a still-collapsed section makes the reader spend a
+    // second click on the thing they just asked for.
     hops: nodes.map((n) => ({
       ...resourceSection(n),
       id: n.id,
       state: 'plain' as const,
       chipText: '',
-      expanded: false,
+      expanded: sel === n.id,
     })),
   }
 }
@@ -592,7 +596,7 @@ export function buildSidebar(sel: Selection, ctx: Ctx): Sidebar {
         expanded: sel ? n.id === sel : i === defaultOpen,
       }
     }),
-    context: contextGroup(ctx, byId),
+    context: contextGroup(ctx, byId, sel),
   }
 }
 
