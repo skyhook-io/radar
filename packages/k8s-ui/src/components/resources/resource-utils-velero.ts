@@ -361,8 +361,17 @@ export function getScheduleCronInfo(resource: any): {
   const cron = (resource.spec?.schedule || '').trim()
   if (!cron) return { cron: '-', readable: '', malformed: false }
 
-  const malformed = !cron.startsWith('@') && cron.split(/\s+/).length !== 5
-  const readable = malformed ? '' : cronToHuman(cron)
+  // Velero documents `CRON_TZ=America/New_York 0 3 * * *`, and robfig/cron also
+  // accepts the legacy `TZ=` spelling. Both put a sixth token in front of the
+  // expression, so the prefix comes off before anything is counted.
+  const zoned = /^(CRON_TZ|TZ)=(\S+)\s+/i.exec(cron)
+  const bare = zoned ? cron.slice(zoned[0].length) : cron
+
+  const malformed = !bare.startsWith('@') && bare.split(/\s+/).length !== 5
+  // No plain-English line for a zoned expression: "Daily at 3:00" reads as
+  // cluster time, and the whole point of the prefix is that it isn't. The raw
+  // value already names the zone.
+  const readable = malformed || zoned ? '' : cronToHuman(bare)
   return { cron, readable: readable === cron ? '' : readable, malformed }
 }
 

@@ -178,6 +178,22 @@ describe('getScheduleCronInfo', () => {
     expect(r.cron).toBe(c)
   })
 
+  it('does not flag timezone-prefixed crons, which Velero documents', () => {
+    // From Velero's own CLI docs:
+    //   velero schedule create x --schedule="CRON_TZ=America/New_York 0 3 * * *"
+    const r = getScheduleCronInfo(sched('CRON_TZ=America/New_York 0 3 * * *'))
+    expect(r.malformed).toBe(false)
+    expect(r.cron).toBe('CRON_TZ=America/New_York 0 3 * * *')
+    // No phrasing: "Daily at 3:00" would read as cluster time, which is exactly
+    // what the prefix says it is not.
+    expect(r.readable).toBe('')
+  })
+
+  it('accepts the legacy TZ= spelling and still catches a bad zoned expression', () => {
+    expect(getScheduleCronInfo(sched('TZ=UTC 0 3 * * *')).malformed).toBe(false)
+    expect(getScheduleCronInfo(sched('CRON_TZ=Europe/Berlin not-a-cron')).malformed).toBe(true)
+  })
+
   it('does not flag @-descriptors, which the field count would reject', () => {
     expect(getScheduleCronInfo(sched('@daily')).malformed).toBe(false)
     expect(getScheduleCronInfo(sched('@every 1h')).malformed).toBe(false)
