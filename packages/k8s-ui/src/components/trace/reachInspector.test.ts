@@ -722,3 +722,19 @@ describe('a coverage statement is not a fault', () => {
     expect(t.diagnosis!.class).toBe('coverage')
   })
 })
+
+describe('one observation is stated once', () => {
+  it('a localization fact does not repeat the route evidence it came from', () => {
+    const t = mk([pod('a', true, '10.0.0.1')], [p({ path: 'apiserver', tone: 'reached', detail: 'HTTP 404 · reached' })])
+    const r = route({
+      outcome: 'reached', confidence: 'indirect', evidence: 'HTTP 404 · reached',
+      localization: [{ layer: 'http', ok: true, detail: 'HTTP 404 · reached' }],
+    } as never)
+    t.routes = [r]
+    const texts = buildSidebar(undefined, ctx(t, 'apiserver', r)).path.evidence.map((e) => e.text)
+    const plain = texts.filter((x) => x.toLowerCase().startsWith('http 404 · reached'))
+    expect(plain, `saw: ${JSON.stringify(texts)}`).toHaveLength(1)
+    // and the surviving line is the MORE specific one
+    expect(plain[0]).toContain('checked directly')
+  })
+})

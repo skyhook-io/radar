@@ -285,6 +285,10 @@ function restatesTitle(summary: string | undefined, title: string): boolean {
 }
 
 /** The persistent diagnosis: did traffic get through, from where, and what next. */
+/** The suffix the localization lines carry; stripped when deduping so one
+ *  observation cannot appear twice at two lengths. */
+const LOCALIZED_SUFFIX_RE = / [-\u2014] checked directly, past the entry point$/
+
 function pathSection(ctx: Ctx): Sidebar['path'] {
   const { trace, route, origin, origins } = ctx
   // The route outcome is merged across origins. Without this gate the panel
@@ -334,12 +338,23 @@ function pathSection(ctx: Ctx): Sidebar['path'] {
   }
 
   const evidence: { mark: Mark; text: string }[] = []
-  const seen = new Set<string>()
+  const seen = new Map<string, number>()
+  // Two lines can be the SAME observation worded at different lengths: a route's
+  // rollup evidence and the localization fact from that same dial differ only by
+  // the " - checked directly..." suffix, so exact-string dedupe let both through
+  // and the reader saw "HTTP 404 - reached" twice. Key on the observation and
+  // keep the more specific wording.
   const add = (m: Mark, text: string) => {
-    const key = text.trim().toLowerCase()
-    if (!key || seen.has(key)) return
-    seen.add(key)
-    evidence.push({ mark: m, text })
+    const t = text.trim()
+    const key = t.toLowerCase().replace(LOCALIZED_SUFFIX_RE, '').trim()
+    if (!key) return
+    const at = seen.get(key)
+    if (at !== undefined) {
+      if (t.length > evidence[at].text.length) evidence[at] = { mark: evidence[at].mark, text: t }
+      return
+    }
+    seen.set(key, evidence.length)
+    evidence.push({ mark: m, text: t })
   }
   if ((hasEvidence || fromConfig) && asSeen?.evidence) add(mark, asSeen.evidence)
   // A result with no evidence STRING is still a result. Falling through to the
