@@ -80,6 +80,59 @@ export const CNPG_CLUSTER_PHASES_ATTENTION = [
   'Waiting for user action',
 ] as const
 
+/**
+ * Short display states for the table badge.
+ *
+ * CNPG's phases are prose, not tokens — "Cluster is unrecoverable and needs
+ * manual intervention" is banner copy. At 315px it fits no defensible column,
+ * so this is about badge semantics rather than width: a badge carries a state,
+ * the drawer and the `title` carry the operator's exact words.
+ *
+ * Radar's own labels (Healthy, WAL Archiving Failing, …) are not in here —
+ * those are already states and are produced directly by getCNPGClusterStatus.
+ *
+ * Both in-place and without-a-switchover restarts collapse to "Restarting
+ * Primary". The distinction is about the operator's mechanism, not about what a
+ * scanning operator needs; the exact phase remains in the drawer. Splitting
+ * them honestly would need ~140px and a wider column than the rest earns.
+ */
+const CNPG_PHASE_DISPLAY_STATE: Record<string, string> = {
+  // Terminal
+  'Cluster is unrecoverable and needs manual intervention': 'Unrecoverable',
+  'Invalid cluster definition': 'Invalid Spec',
+  'Unable to create required cluster objects': 'Setup Failed',
+  'Cluster has incomplete or invalid image catalog': 'Image Catalog Error',
+  'Cluster cannot proceed to reconciliation due to an unknown plugin being required': 'Unknown Plugin',
+  'Cluster cannot proceed to reconciliation due to an error while interacting with plugins': 'Plugin Error',
+  'Cluster cannot execute instance online upgrade due to missing architecture binary': 'Arch Binary Missing',
+  // Transient
+  'Setting up primary': 'Setting Up Primary',
+  'Creating a new replica': 'Creating Replica',
+  'Switchover in progress': 'Switchover',
+  'Upgrading cluster': 'Upgrading',
+  'Upgrading Postgres major version': 'Major Upgrade',
+  'Online upgrade in progress': 'Online Upgrade',
+  'Applying configuration': 'Configuring',
+  'Primary instance is being restarted in-place': 'Restarting Primary',
+  'Primary instance is being restarted without a switchover': 'Restarting Primary',
+  'Promoting to primary cluster': 'Promoting',
+  'Waiting for the instances to become active': 'Starting Instances',
+  'Cluster upgrade delayed': 'Upgrade Delayed',
+  // Attention
+  'Waiting for user action': 'Needs Action',
+}
+
+/**
+ * The short state for a phase, or the phase itself when we have no mapping.
+ *
+ * An unrecognized phase from a newer CNPG minor passes through verbatim —
+ * inventing a state for a string we have never seen would be worse than showing
+ * the operator's words, and that is the case badge truncation exists for.
+ */
+export function getCNPGClusterDisplayState(phase: string): string {
+  return CNPG_PHASE_DISPLAY_STATE[phase] || phase
+}
+
 export type CNPGPhaseBucket = 'healthy' | 'transient' | 'failing' | 'terminal' | 'attention' | 'unknown'
 
 export function classifyCNPGClusterPhase(phase: string): CNPGPhaseBucket {
@@ -110,7 +163,7 @@ export function getCNPGClusterStatus(resource: any): StatusBadge {
   // to still be Ready is still unrecoverable, and reading the counts first is
   // what used to render it neutral.
   if (bucket === 'terminal') {
-    return { text: phase, color: healthColors.unhealthy, level: 'unhealthy' }
+    return { text: getCNPGClusterDisplayState(phase), color: healthColors.unhealthy, level: 'unhealthy' }
   }
   // Zero ready instances is a hard down that no phase excuses — including a
   // failover, where the phase alone would otherwise downgrade a total outage to
@@ -133,7 +186,7 @@ export function getCNPGClusterStatus(resource: any): StatusBadge {
   // so it is checked BEFORE the shortfall — mid-operation the cluster is
   // legitimately below its desired count.
   if (bucket === 'transient' || bucket === 'attention') {
-    return { text: phase, color: healthColors.degraded, level: 'degraded' }
+    return { text: getCNPGClusterDisplayState(phase), color: healthColors.degraded, level: 'degraded' }
   }
   // The shortfall must be checked BEFORE the healthy phase, not after. CNPG
   // reports "Cluster in healthy state" the moment reconciliation is settled,

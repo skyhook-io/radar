@@ -100,7 +100,7 @@
       "name": "unrecoverable while every pod is still Ready",
       "spec": { "instances": 3 },
       "status": { "phase": "Cluster is unrecoverable and needs manual intervention", "readyInstances": 3 },
-      "badge": { "text": "Cluster is unrecoverable and needs manual intervention", "level": "unhealthy" },
+      "badge": { "text": "Unrecoverable", "level": "unhealthy" },
       "issues": ["CNPGClusterUnrecoverable"],
       "worst": "critical"
     },
@@ -112,7 +112,7 @@
         "readyInstances": 3
       },
       "badge": {
-        "text": "Cluster cannot proceed to reconciliation due to an unknown plugin being required",
+        "text": "Unknown Plugin",
         "level": "unhealthy"
       },
       "issues": ["CNPGClusterPluginFailure"],
@@ -122,7 +122,7 @@
       "name": "post-1.28 PhaseDefinitionInvalid is carried ahead of the release that emits it",
       "spec": { "instances": 3 },
       "status": { "phase": "Invalid cluster definition", "readyInstances": 3 },
-      "badge": { "text": "Invalid cluster definition", "level": "unhealthy" },
+      "badge": { "text": "Invalid Spec", "level": "unhealthy" },
       "issues": ["CNPGClusterTerminal"],
       "worst": "critical"
     },
@@ -146,7 +146,7 @@
       "name": "mid-operation shortfall is expected and stays quiet",
       "spec": { "instances": 3 },
       "status": { "phase": "Creating a new replica", "readyInstances": 2 },
-      "badge": { "text": "Creating a new replica", "level": "degraded" },
+      "badge": { "text": "Creating Replica", "level": "degraded" },
       "issues": [],
       "worst": "none"
     },
@@ -162,7 +162,7 @@
       "name": "rollout delay is operator-driven, not a wait on a human",
       "spec": { "instances": 3 },
       "status": { "phase": "Cluster upgrade delayed", "readyInstances": 2 },
-      "badge": { "text": "Cluster upgrade delayed", "level": "degraded" },
+      "badge": { "text": "Upgrade Delayed", "level": "degraded" },
       "issues": [],
       "worst": "none"
     },
@@ -170,7 +170,7 @@
       "name": "supervised wait — a shortfall is the documented resting state",
       "spec": { "instances": 3, "primaryUpdateStrategy": "supervised" },
       "status": { "phase": "Waiting for user action", "readyInstances": 2 },
-      "badge": { "text": "Waiting for user action", "level": "degraded" },
+      "badge": { "text": "Needs Action", "level": "degraded" },
       "issues": [],
       "worst": "none"
     },
@@ -178,7 +178,7 @@
       "name": "unsupervised wait is worth reporting",
       "spec": { "instances": 3, "primaryUpdateStrategy": "unsupervised" },
       "status": { "phase": "Waiting for user action", "readyInstances": 2 },
-      "badge": { "text": "Waiting for user action", "level": "degraded" },
+      "badge": { "text": "Needs Action", "level": "degraded" },
       "issues": ["CNPGClusterWaitingForUser"],
       "worst": "warning"
     },
@@ -224,7 +224,7 @@
           { "type": "ContinuousArchiving", "status": "False", "reason": "ContinuousArchivingFailing" }
         ]
       },
-      "badge": { "text": "Cluster is unrecoverable and needs manual intervention", "level": "unhealthy" },
+      "badge": { "text": "Unrecoverable", "level": "unhealthy" },
       "issues": ["CNPGWALArchivingFailing", "CNPGClusterUnrecoverable"],
       "worst": "critical"
     }

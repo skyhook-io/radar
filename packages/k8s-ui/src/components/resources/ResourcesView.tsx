@@ -1290,17 +1290,23 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     // costs two characters because the ellipsis needs its own room. The filter
     // icon appears as soon as a column holds more than one distinct value, so
     // this is latent on any status column, not specific to the current data.
-    { key: 'status', label: 'Status', width: 'w-32' },
+    // w-44 fits "WAL Archiving Failing" (120.2px against a 127px label budget).
+    // CNPG's own phases are mapped to short display states — see
+    // getCNPGClusterDisplayState; a 315px sentence fits no column at all.
+    { key: 'status', label: 'Status', width: 'w-44' },
     { key: 'instances', label: 'Instances', width: 'w-28', tooltip: 'Ready/Total' },
     { key: 'primary', label: 'Primary', width: 'w-36' },
     { key: 'image', label: 'Image', width: 'w-28' },
-    { key: 'storage', label: 'Storage', width: 'w-28' },
+    // No Storage column: it rendered spec.storage.size, the configured REQUEST.
+    // The useful number is actual usage (kubectl cnpg status shows "Size: 158M")
+    // and that isn't in the CR. A plausible-but-wrong-meaning number is worse
+    // than an absent one — the reader can't tell which meaning they're getting.
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   cnpgbackups: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-32' },
+    { key: 'status', label: 'Status', width: 'w-44' },
     { key: 'cluster', label: 'Cluster', width: 'w-36' },
     // `barmanObjectStore` is the longest method and the field that decides how
     // the rest of the row reads; at w-36 it was permanently ellipsised.
@@ -1322,10 +1328,11 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   poolers: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    // "Not Scheduled" measures ~100px and wrapped at w-24 (96px). Sized to the
-    // widest value the column can hold, not the one the current data happens to
-    // show — and to w-32 for the header, per the note on cnpgclusters.status.
-    { key: 'status', label: 'Status', width: 'w-32' },
+    // "Not Scheduled" (83.5px) is kept rather than shortened to "Unscheduled":
+    // ScheduledBackup also renders a literal "Scheduled" badge in this same
+    // column, so a standalone adjective would read as "has no cron" — a claim
+    // about a field Poolers don't have. w-36 buys the words.
+    { key: 'status', label: 'Status', width: 'w-36' },
     { key: 'cluster', label: 'Cluster', width: 'w-36' },
     // Sized for the HEADER, not the value: `rw`/`ro` need 27px, but "Type" plus
     // the sort affordance needs more than w-16 leaves, and the label rendered

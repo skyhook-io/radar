@@ -20,6 +20,7 @@ import {
   CNPG_BARMAN_PLUGIN_NAME,
   CNPG_GROUP,
   isApiGroup,
+  getCNPGClusterDisplayState,
 } from './resource-utils-cnpg'
 
 describe('getCNPGClusterCertificateExpirations', () => {
@@ -146,7 +147,7 @@ describe('getCNPGClusterStatus', () => {
       { instances: 3 },
     ))
     expect(s.level).toBe('unhealthy')
-    expect(s.text).toBe('Cluster is unrecoverable and needs manual intervention')
+    expect(s.text).toBe('Unrecoverable')
   })
 
   it('renders both plugin-failure phases red', () => {
@@ -161,7 +162,7 @@ describe('getCNPGClusterStatus', () => {
   it('renders a major-version upgrade as transient, not unknown', () => {
     const s = getCNPGClusterStatus(cluster({ phase: 'Upgrading Postgres major version', readyInstances: 1 }, { instances: 3 }))
     expect(s.level).toBe('degraded')
-    expect(s.text).toBe('Upgrading Postgres major version')
+    expect(s.text).toBe('Major Upgrade')
   })
 
   it('uses the alert tier for failover, between degraded and unhealthy', () => {
@@ -412,7 +413,7 @@ describe('badge/issue agreement on instance readiness', () => {
     // say "Degraded" either — it shows the phase, at the same amber tier.
     const s = getCNPGClusterStatus(cluster({ phase: 'Creating a new replica', readyInstances: 1 }, { instances: 3 }))
     expect(s.level).toBe('degraded')
-    expect(s.text).toBe('Creating a new replica')
+    expect(s.text).toBe('Creating Replica')
   })
 
   it('lets an attention phase explain a shortfall, matching the supervised Go path', () => {
@@ -421,10 +422,56 @@ describe('badge/issue agreement on instance readiness', () => {
     // the badge must show the phase, not "Degraded".
     const s = getCNPGClusterStatus(cluster({ phase: 'Waiting for user action', readyInstances: 1 }, { instances: 3 }))
     expect(s.level).toBe('degraded')
-    expect(s.text).toBe('Waiting for user action')
+    expect(s.text).toBe('Needs Action')
   })
 
   it('flags a shortfall under an unrecognized phase, matching the Go fallthrough', () => {
     expect(getCNPGClusterStatus(cluster({ phase: 'Some future phase', readyInstances: 1 }, { instances: 3 })).level).toBe('degraded')
+  })
+})
+
+// ============================================================================
+// DISPLAY STATES — a badge carries a state, the drawer carries the prose
+// ============================================================================
+
+describe('getCNPGClusterDisplayState', () => {
+  it('maps every mapped phase to something a badge can hold', () => {
+    // 127px is the label budget at w-44. The longest state must clear it with
+    // real headroom — not the 0.2px kind that has bitten three times.
+    const all = [
+      ...CNPG_CLUSTER_PHASES_TERMINAL,
+      ...CNPG_CLUSTER_PHASES_TRANSIENT,
+      ...CNPG_CLUSTER_PHASES_ATTENTION,
+    ]
+    for (const phase of all) {
+      const state = getCNPGClusterDisplayState(phase)
+      expect(state, `${phase} has no display state`).not.toBe(phase)
+      // Rough proxy for width in a unit test; the real measurement is in the
+      // PR. 22 chars ≈ 120px at this typography.
+      expect(state.length, `${state} is too long for a badge`).toBeLessThanOrEqual(22)
+    }
+  })
+
+  it('passes an unmapped phase through verbatim rather than inventing one', () => {
+    // A phase from a newer CNPG minor. Inventing a state for a string we have
+    // never seen would be worse than showing the operator's words.
+    expect(getCNPGClusterDisplayState('Reticulating splines')).toBe('Reticulating splines')
+    expect(getCNPGClusterDisplayState('')).toBe('')
+  })
+
+  it('collapses both restart phases to one state — a documented loss', () => {
+    // You cannot tell from the table which restart mechanism is in play. The
+    // exact phase stays in the drawer; splitting them needs ~140px.
+    expect(getCNPGClusterDisplayState('Primary instance is being restarted in-place')).toBe('Restarting Primary')
+    expect(getCNPGClusterDisplayState('Primary instance is being restarted without a switchover')).toBe('Restarting Primary')
+  })
+
+  it('renders the state, not the sentence, on the badge', () => {
+    const s = getCNPGClusterStatus(cluster(
+      { phase: 'Cluster is unrecoverable and needs manual intervention', readyInstances: 2 },
+      { instances: 2 },
+    ))
+    expect(s.text).toBe('Unrecoverable')
+    expect(s.level).toBe('unhealthy')
   })
 })
