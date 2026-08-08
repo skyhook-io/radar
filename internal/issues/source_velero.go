@@ -197,7 +197,11 @@ func veleroRunIssue(gvr schema.GroupVersionResource, kind string, u *unstructure
 	}
 
 	if errCount := veleroInt(u, "status", "errors"); errCount > 0 {
-		message = message + " (" + strconv.FormatInt(errCount, 10) + " errors)"
+		noun := " errors)"
+		if errCount == 1 {
+			noun = " error)"
+		}
+		message = message + " (" + strconv.FormatInt(errCount, 10) + noun
 	}
 	return newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), severity, reason, message,
 		veleroRunSince(u), "", u.GetCreationTimestamp().Time), true
@@ -329,10 +333,28 @@ func veleroStringSlice(u *unstructured.Unstructured, fields ...string) []string 
 	return vals
 }
 
+// veleroInt reads an integer status field, accepting both the int64 shape a
+// typed decode produces and the float64 shape a plain JSON decode can leave on
+// a dynamic-informer object. NestedInt64 alone rejects the float64 case and
+// would silently drop the error count from the message — the same pitfall
+// internal/k8s and internal/mcp each guard against locally. A fractional value
+// is not a valid count and reads as absent.
 func veleroInt(u *unstructured.Unstructured, fields ...string) int64 {
-	val, found, err := unstructured.NestedInt64(u.Object, fields...)
+	val, found, err := unstructured.NestedFieldNoCopy(u.Object, fields...)
 	if !found || err != nil {
 		return 0
 	}
-	return val
+	switch n := val.(type) {
+	case int64:
+		return n
+	case int32:
+		return int64(n)
+	case int:
+		return int64(n)
+	case float64:
+		if n == float64(int64(n)) {
+			return int64(n)
+		}
+	}
+	return 0
 }

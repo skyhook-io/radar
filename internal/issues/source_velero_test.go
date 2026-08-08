@@ -1,6 +1,7 @@
 package issues
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -286,6 +287,55 @@ func TestVeleroValidationErrorsBecomeTheMessage(t *testing.T) {
 	want := "Invalid included/excluded resource lists; storage location not found"
 	if got[0].Message != want {
 		t.Errorf("message = %q, want %q", got[0].Message, want)
+	}
+}
+
+// The error-count suffix must survive both numeric shapes an unstructured object
+// can carry. The veleroObj fixtures above store int64, so an int64-only reader
+// passes them while silently dropping the count on any object whose numbers came
+// through a plain JSON decode.
+func TestVeleroErrorCountAcceptsBothNumericShapes(t *testing.T) {
+	build := func(errors any, omit bool) []*unstructured.Unstructured {
+		status := map[string]any{"phase": "Failed"}
+		if !omit {
+			status["errors"] = errors
+		}
+		return []*unstructured.Unstructured{{Object: map[string]any{
+			"apiVersion": "velero.io/v1",
+			"kind":       "Backup",
+			"metadata":   map[string]any{"name": "b1", "namespace": "velero"},
+			"status":     status,
+		}}}
+	}
+	for _, tc := range []struct {
+		name   string
+		errors any
+		omit   bool
+		want   string
+	}{
+		{name: "int64 (typed decode)", errors: int64(3), want: "(3 errors)"},
+		{name: "one error reads singular", errors: int64(1), want: "(1 error)"},
+		{name: "float64 (plain JSON decode)", errors: float64(3), want: "(3 errors)"},
+		{name: "int", errors: 3, want: "(3 errors)"},
+		{name: "zero is omitted", errors: int64(0)},
+		{name: "fractional is not a count", errors: 3.5},
+		{name: "absent", omit: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := detectVeleroIssues(veleroGVR("backups"), "Backup", build(tc.errors, tc.omit), nil)
+			if len(got) != 1 {
+				t.Fatalf("want 1 issue (the failure must surface regardless), got %d", len(got))
+			}
+			if tc.want == "" {
+				if strings.Contains(got[0].Message, "errors)") {
+					t.Errorf("message should carry no count, got %q", got[0].Message)
+				}
+				return
+			}
+			if !strings.Contains(got[0].Message, tc.want) {
+				t.Errorf("message = %q, want it to contain %q", got[0].Message, tc.want)
+			}
+		})
 	}
 }
 
