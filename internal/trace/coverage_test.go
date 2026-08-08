@@ -2271,3 +2271,30 @@ func TestComputeEntryProblems_IgnoresSiblingMissingRef(t *testing.T) {
 		t.Errorf("a sibling backend's missing ref was promoted as this entry's problem: %q", got[0].Summary)
 	}
 }
+
+// A route Radar dialled and watched fail is the strongest fault it can report.
+// The UI renders anything short of critical as a warning, so an unset severity
+// on this path would make confirmed unreachability look weaker than a predicted
+// one.
+func TestComputeDiagnosis_ConfirmedRouteFailureIsCritical(t *testing.T) {
+	tr := &Trace{
+		Subject: ResourceRef{Kind: "Service", Namespace: "store", Name: "shop"},
+		Routes: []RouteResult{{
+			Route:      "GET /",
+			Target:     "shop:80",
+			Outcome:    OutcomeUnreachable,
+			Confidence: "real",
+			Evidence:   "connection refused",
+		}},
+	}
+	d := computeDiagnosis(tr)
+	if d == nil {
+		t.Fatal("a failed route must produce a diagnosis")
+	}
+	if d.Severity != SeverityCritical {
+		t.Errorf("severity = %q, want %q — a dialled-and-failed route is not a warning", d.Severity, SeverityCritical)
+	}
+	if d.Class == DiagnosisClassCoverage {
+		t.Errorf("class = %q, want a fault — this is a real break, not an untested gap", d.Class)
+	}
+}

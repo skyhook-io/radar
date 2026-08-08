@@ -45,7 +45,7 @@ export interface Sidebar {
     scope: { k: string; v: string }[]
     evidence: { mark: Mark; text: string }[]
     notProve: string[]
-    next: { header: string; body: string; blocked?: string; ctas: InspectorCTA[]; quiet?: boolean }
+    next: { header: string; body: string; blocked?: string; ctas: InspectorCTA[] }
   }
   /** Every hop on the selected path, in order - the whole story for this path
    *  seen from this vantage, rather than a summary plus whichever node was last
@@ -313,7 +313,20 @@ function requestLabel(route: RouteResult | undefined, httpPath?: string): string
  * routing, auth or health, which reachability does not judge. Say that, and say
  * what would turn it into a verified pass.
  */
-function statusMeaning(evidence?: string, httpPath?: string, failedLayer?: string): string | undefined {
+/**
+ * What an answer MEANS, and whether that answer is evidence the path works.
+ *
+ * `pathWorks` is the load-bearing half: an app answering 404 proves the journey
+ * reached it, while a gateway answering 502 proves the opposite. Both are
+ * "answers", so a caller that prefixes every meaning with "the path works"
+ * states the reverse of the truth on exactly the cases that matter most.
+ */
+function statusMeaning(evidence?: string, httpPath?: string, failedLayer?: string): { text: string; pathWorks: boolean } | undefined {
+  // A cert failure never gets an HTTP status - the handshake stops before a
+  // request is sent - so this must be decided before looking for a code.
+  if (failedLayer === 'tls') {
+    return { text: 'the TLS handshake did not verify - a certificate problem, not an application one.', pathWorks: false }
+  }
   const m = /HTTP\s+(\d{3})/i.exec(evidence ?? '')
   if (!m) return undefined
   const code = Number(m[1])
@@ -322,13 +335,23 @@ function statusMeaning(evidence?: string, httpPath?: string, failedLayer?: strin
   // upstream. The producer says so with failedLayer 'upstream'; blaming app
   // health here contradicted the chip beside it.
   if (failedLayer === 'upstream' || code === 502 || code === 504) {
-    return `the front door answered, but only to say it could not reach the backend (HTTP ${code}) - the break is between the entry and the app, not inside the app.`
+    return {
+      text: `the front door answered, but only to say it could not reach the backend (HTTP ${code}) - the break is between the entry and the app, not inside the app.`,
+      pathWorks: false,
+    }
   }
-  if (failedLayer === 'tls') return `the TLS handshake did not verify (HTTP ${code}) - a certificate problem, not an application one.`
-  if (code >= 500) return `the request reached the app and the app itself returned an error (HTTP ${code}) - application health, which this page does not judge.`
-  if (code === 401 || code === 403 || code === 407) return `the app answered by demanding credentials (HTTP ${code}) - it is enforcing auth, which is a different thing from reachability.`
-  if (code >= 300 && code < 400) return `the app answered with a redirect (HTTP ${code}), which Radar does not follow - so whatever it points at is untested from here.`
-  if (code >= 400) return `the app answered (HTTP ${code}) - that is it saying it serves no route for ${asked}, not a reachability problem. To verify a real route, re-run with a path your app serves.`
+  if (code >= 500) {
+    return { text: `the request reached the app and the app itself returned an error (HTTP ${code}) - application health, which this page does not judge.`, pathWorks: true }
+  }
+  if (code === 401 || code === 403 || code === 407) {
+    return { text: `the app answered by demanding credentials (HTTP ${code}) - it is enforcing auth, which is a different thing from reachability.`, pathWorks: true }
+  }
+  if (code >= 300 && code < 400) {
+    return { text: `the app answered with a redirect (HTTP ${code}), which Radar does not follow - so whatever it points at is untested from here.`, pathWorks: true }
+  }
+  if (code >= 400) {
+    return { text: `the app answered (HTTP ${code}) - that is it saying it serves no route for ${asked}, not a reachability problem. To verify a real route, re-run with a path your app serves.`, pathWorks: true }
+  }
   return undefined
 }
 
@@ -474,15 +497,19 @@ function pathSection(ctx: Ctx): Sidebar['path'] {
   const rawDiagnosis = trace.diagnosis
   const diagnosis = rawDiagnosis && (!rawDiagnosis.route || rawDiagnosis.route === route?.route) ? rawDiagnosis : undefined
   const reachedSomething = !hasEvidence && !fromConfig && hopSeen.some((x) => x.ev.mark !== 'failed')
+  const answer = statusMeaning(asSeen?.evidence, ctx.httpPath, asSeen?.failedLayer)
   const body = basis === 'cluster-state'
     ? 'Nothing is ready to serve this path right now, so it cannot work from any vantage. No request was sent to establish that — it is read off the current state of the cluster, and it changes when the workload does.'
     : fromConfig
     ? 'The configuration itself is broken, so this path cannot work from any vantage. No request was sent to establish that — it is read off what is declared.'
     : reachedSomething
     ? 'This vantage did reach part of the path — see what it saw below. It has no result for this route as a whole, so the end-to-end journey from here is still unproven.'
-    : origin.mark === 'inconclusive'
+    : origin.mark === 'inconclusive' || mark === 'inconclusive'
     // A demoted run RAN and answered - it is only kept out of the verdict. The
     // "nothing has been tested" branch below fired first and denied it happened.
+    // Both the origin's mark and the route's own can carry the demotion, and the
+    // sentence is the same either way; the reason comes from the informational
+    // skip that recorded it, never from the route-scoped skip lookup.
     ? `The probe ran and got an answer, but it is kept as evidence rather than a verdict${
         originInformationalReason(trace, origin.id) ? `: ${originInformationalReason(trace, origin.id)}` : ''
       }. A throwaway identity cannot stand in for your application, so what it saw informs but never decides.`
@@ -501,7 +528,7 @@ function pathSection(ctx: Ctx): Sidebar['path'] {
             'Kubernetes relayed a request and the target answered — which shows something is serving, not that the normal path works.',
             // The relay caveat alone leaves "404" unreadable: the reader still
             // cannot tell whether the answer itself was a problem.
-            statusMeaning(asSeen?.evidence, ctx.httpPath, asSeen?.failedLayer) && `As for the answer itself: ${statusMeaning(asSeen?.evidence, ctx.httpPath, asSeen?.failedLayer)}`,
+            answer && `As for the answer itself: ${answer.text}`,
           ]
             .filter(Boolean)
             .join(' ')
@@ -514,12 +541,6 @@ function pathSection(ctx: Ctx): Sidebar['path'] {
               // endpoint). It fell through to the generic "answered" sentence,
               // which described a request that was never sent.
               ? `${asSeen?.evidence || 'Nothing is behind this path right now'} — that is deliberate, not a failure: nothing was sent, because there is nothing to reach.`
-            : mark === 'inconclusive'
-              // The probe RAN and answered; the answer was deliberately kept out
-              // of the verdict. The reason was collected and then never shown.
-              ? `The probe ran and got an answer, but it is kept as evidence rather than a verdict${
-                  originSkipReason(trace, origin.id, route) ? `: ${originSkipReason(trace, origin.id, route)}` : ''
-                }. A throwaway identity cannot stand in for your application, so what it saw informs but never decides.`
             : mark === 'running'
               ? 'A test is running. Earlier results stay until new ones replace them.'
               : // A proxy-only failure wears the same amber mark as a real answer,
@@ -527,10 +548,10 @@ function pathSection(ctx: Ctx): Sidebar['path'] {
                 // the reader to debug an application response that never existed.
                 asSeen?.outcome === 'unreachable' && asSeen?.confidence === 'indirect'
                 ? 'The relayed dial failed. The proxy bypasses the real path, so this does not condemn it — but nothing answered, and the real path is still untested.'
-                : (() => {
-                  const meaning = statusMeaning(asSeen?.evidence, ctx.httpPath, asSeen?.failedLayer)
-                  return meaning ? `The path works: ${meaning}` : undefined
-                })() ??
+                : // Only an answer that proves the journey completed earns "the
+                  // path works" - a 502 or a failed handshake is an answer that
+                  // says the opposite.
+                  (answer ? (answer.pathWorks ? `The path works: ${answer.text}` : `The path did not work: ${answer.text}`) : undefined) ??
                 // A transport-only reach: nothing was asked of the application.
                 (asSeen?.outcome === 'reached'
                   ? 'The port accepted a connection, but nothing was asked of the application - the transport works and the application protocol is unverified.'

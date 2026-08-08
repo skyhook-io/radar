@@ -1104,7 +1104,10 @@ func computeDiagnosis(t *Trace) *Diagnosis {
 	// resolve (branchKnownBreak synthesizes evidence from absence, no Finding).
 	// Promote the route's own real evidence; do NOT invent a cause code.
 	if r, ok := worstNonBenignFailedRoute(t.Routes); ok {
-		d := &Diagnosis{Route: r.Route, Summary: firstNonEmpty(r.Evidence, "route is unreachable")}
+		// A route that was dialled and failed is the strongest fault this page can
+		// state. Leaving Severity empty demotes it to the UI's warning default, so
+		// confirmed unreachability would render weaker than a predicted one.
+		d := &Diagnosis{Route: r.Route, Severity: SeverityCritical, Summary: firstNonEmpty(r.Evidence, "route is unreachable")}
 		if t.BrokenRoute != nil {
 			d.CulpritResource = t.BrokenRoute
 		}

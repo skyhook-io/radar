@@ -797,6 +797,39 @@ describe('a relayed answer explains the relay AND the answer', () => {
   })
 })
 
+// An answer is not the same as an answer that got through. A gateway saying it
+// could not reach its upstream, and a handshake that never verified, are both
+// answers - and both mean the opposite of "the path works".
+describe('an answer that reports a break never reads as a success', () => {
+  const bodyFor = (r: Partial<RouteResult>) => {
+    const t = mk([pod('a', true, '10.0.0.1')], [p({ tone: 'reached' } as never)])
+    const full = route({ outcome: 'server-error', confidence: 'real', inClusterRequest: { protocol: 'http', path: '/' }, ...r } as never)
+    t.routes = [full]
+    return buildSidebar(undefined, ctx(t, 'incluster', full)).path.body
+  }
+
+  for (const code of [502, 504]) {
+    it(`does not claim the path works on HTTP ${code}`, () => {
+      const b = bodyFor({ evidence: `HTTP ${code}`, failedLayer: 'upstream' } as never)
+      expect(b).not.toContain('The path works')
+      expect(b).toContain('could not reach the backend')
+    })
+  }
+
+  it('explains a certificate failure, which carries no status code at all', () => {
+    const b = bodyFor({ evidence: 'x509: certificate has expired', failedLayer: 'tls' } as never)
+    expect(b).not.toContain('The path works')
+    expect(b).toContain('certificate problem')
+    // The generic fallthrough would have said this instead, explaining nothing.
+    expect(b).not.toContain('not with what was asked for')
+  })
+
+  it('still credits the path when the APP itself answered', () => {
+    expect(bodyFor({ evidence: 'HTTP 404' } as never)).toContain('The path works')
+    expect(bodyFor({ evidence: 'HTTP 500' } as never)).toContain('The path works')
+  })
+})
+
 describe('every state explains itself, not the nearest generic sentence', () => {
   const withRoute = (r: RouteResult, probes = [p({})]) => {
     const t = mk([pod('a', true, '10.0.0.1')], probes)
