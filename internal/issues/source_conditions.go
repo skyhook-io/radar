@@ -352,7 +352,13 @@ func composeParentMessage(label, msg string) string {
 
 func newConditionIssue(gvr schema.GroupVersionResource, kind, namespace, name string, severity Severity, reason, message string, since time.Duration, fingerprint string, createdAt time.Time) Issue {
 	now := time.Now()
-	lastSeen := now.Add(-since)
+	lastSeen := now
+	firstSeen := time.Time{}
+	onsetUnknown := since <= 0
+	if !onsetUnknown {
+		lastSeen = now.Add(-since)
+		firstSeen = lastSeen
+	}
 	// Only compute issue_timing when we have a real condition timestamp (since > 0).
 	// since=0 means the condition has no lastTransitionTime; issue_timing would be wrong.
 	var timingR k8s.IssueTimingResult
@@ -368,7 +374,8 @@ func newConditionIssue(gvr schema.GroupVersionResource, kind, namespace, name st
 		Name:             name,
 		Reason:           reason,
 		Message:          message,
-		FirstSeen:        lastSeen,
+		FirstSeen:        firstSeen,
+		OnsetUnknown:     onsetUnknown,
 		LastSeen:         lastSeen,
 		Count:            1,
 		Fingerprint:      fingerprint,

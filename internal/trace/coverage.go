@@ -1206,6 +1206,9 @@ func trustworthyCauseCode(code string) bool {
 // (the raw detection fingerprint, or the "<source>:<reason>" code that issue
 // grouping leaves) - mirrors hopsHaveScaleZero.
 func isScaleZeroFinding(f Finding) bool {
+	if f.Severity == SeverityCritical {
+		return false
+	}
 	return f.Code == k8s.ScaledToZeroFingerprint || strings.HasSuffix(f.Code, k8s.ScaledToZeroReason)
 }
 
@@ -1639,7 +1642,7 @@ func hopsHaveScaleZero(hops []Hop) bool {
 			// (RelatedIssues) does not preserve it on the grouped representative,
 			// so the trace usually sees the "<source>:<reason>" code instead.
 			// Match either form against the shared constants.
-			if f.Code == k8s.ScaledToZeroFingerprint || strings.HasSuffix(f.Code, k8s.ScaledToZeroReason) {
+			if isScaleZeroFinding(f) {
 				return true
 			}
 		}

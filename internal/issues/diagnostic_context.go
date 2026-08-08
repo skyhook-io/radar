@@ -183,9 +183,11 @@ func enrichDiagnosticContextAuthorized(shaped, flat, grouped []Issue, p Provider
 	}
 
 	flatByResource := make(map[string][]Issue, len(flat))
+	flatRowsByID := make(map[string]int, len(flat))
 	for _, f := range flat {
 		key := resourceKey(f.Group, f.Kind, f.Namespace, f.Name)
 		flatByResource[key] = append(flatByResource[key], f)
+		flatRowsByID[f.ID]++
 	}
 
 	var serviceProvider serviceBackendIssueProvider
@@ -279,7 +281,7 @@ func enrichDiagnosticContextAuthorized(shaped, flat, grouped []Issue, p Provider
 		}
 
 		if webhookProvider != nil && isAdmissionWebhookBackendService(*i) {
-			addAdmissionWebhookContext(&b, *i, &incidentEdges, webhookProvider, canReadClusterScoped, flat, groupedByID)
+			addAdmissionWebhookContext(&b, *i, &incidentEdges, webhookProvider, canReadClusterScoped, flat, groupedByID, flatRowsByID)
 		}
 
 		if nodeProvider != nil && i.Kind == "Node" && i.Category == issuesapi.CategoryNodeNotReady {
@@ -304,7 +306,7 @@ func enrichDiagnosticContextAuthorized(shaped, flat, grouped []Issue, p Provider
 	}
 
 	// incident_parent is a property of the GROUPED issue model: the whole-row
-	// coverage gate needs the grouped fan-out (Count), and a grouped subject has a
+	// coverage gate needs every flat row behind the grouped ID, and a grouped subject has a
 	// unique ID. Only assign when called in grouped mode (grouped != nil) — the
 	// cluster Issues path, and the per-resource RelatedIssues path which re-runs
 	// this enrichment over its grouped set. Ungrouped calls (?view=flat, the flat
@@ -468,7 +470,7 @@ func addServiceBackendContext(b *diagnosticContextBuilder, issue Issue, serviceP
 	})
 }
 
-func addAdmissionWebhookContext(b *diagnosticContextBuilder, root Issue, edges *[]incidentEdge, provider admissionWebhookContextProvider, canReadClusterScoped func(kind, group string) bool, flat []Issue, groupedByID map[string]Issue) {
+func addAdmissionWebhookContext(b *diagnosticContextBuilder, root Issue, edges *[]incidentEdge, provider admissionWebhookContextProvider, canReadClusterScoped func(kind, group string) bool, flat []Issue, groupedByID map[string]Issue, flatRowsByID map[string]int) {
 	refs := provider.AdmissionWebhookRefsForService(root.Namespace, root.Name)
 	var configRefs []Ref
 	failClosed := false
@@ -490,8 +492,8 @@ func addAdmissionWebhookContext(b *diagnosticContextBuilder, root Issue, edges *
 	}
 
 	type matchedGroup struct {
-		issue   Issue
-		members []Ref
+		issue Issue
+		rows  int
 	}
 	matchedByID := map[string]*matchedGroup{}
 	var matchedOrder []string
@@ -517,7 +519,7 @@ func addAdmissionWebhookContext(b *diagnosticContextBuilder, root Issue, edges *
 				matchedByID[shaped.ID] = matched
 				matchedOrder = append(matchedOrder, shaped.ID)
 			}
-			matched.members = append(matched.members, Ref{Group: candidate.Group, Kind: candidate.Kind, Namespace: candidate.Namespace, Name: candidate.Name})
+			matched.rows++
 		}
 		for _, id := range matchedOrder {
 			matched := matchedByID[id]
@@ -526,7 +528,7 @@ func addAdmissionWebhookContext(b *diagnosticContextBuilder, root Issue, edges *
 				selfDeadlock = true
 				continue
 			}
-			if len(dedupeRefs(matched.members)) >= matched.issue.Count {
+			if matched.rows == flatRowsByID[id] {
 				edgeIDs = append(edgeIDs, id)
 			}
 		}

@@ -834,6 +834,31 @@ func TestComputeCoverage_ScaledToZeroIsBenign(t *testing.T) {
 	}
 }
 
+func TestComputeCoverage_CriticalScaledToZeroIsNotBenign(t *testing.T) {
+	tr := &Trace{
+		Subject:  ResourceRef{Kind: "Service", Name: "webhook"},
+		Verdict:  VerdictBroken,
+		BrokenAt: 0,
+		Downstream: []Hop{
+			{Resource: ResourceRef{Kind: "Service", Name: "webhook"}, Edge: "entry:Service",
+				Config:   &HopConfig{Ports: []PortMap{{Port: 443}}},
+				Findings: []Finding{{Code: k8s.ScaledToZeroFingerprint, Severity: SeverityCritical, Message: "Fail-closed webhook backend scaled to 0"}},
+				Probes:   []probe.Result{{Layer: probe.LayerHTTP, Path: probe.PathAPIServer, OK: false, Tone: probe.ToneUnhealthy, Detail: "No ready backend endpoints"}}},
+			{Resource: ResourceRef{Kind: "Pods"}, Edge: "Service->Pods"},
+		},
+	}
+	computeCoverage(tr)
+	if len(tr.Routes) != 1 || tr.Routes[0].Benign {
+		t.Fatalf("critical scale-to-zero route must not be benign: %+v", tr.Routes)
+	}
+	if got := CoverageVerdict(tr); got != VerdictBroken {
+		t.Fatalf("critical scale-to-zero verdict = %q, want %q", got, VerdictBroken)
+	}
+	if tr.Diagnosis == nil || !strings.Contains(tr.Diagnosis.Summary, "Fail-closed webhook backend scaled to 0") {
+		t.Fatalf("critical scale-to-zero diagnosis = %+v, want elevated finding", tr.Diagnosis)
+	}
+}
+
 func TestComputeCoverage_ScaledToZeroNonHTTPCandidateIsBenign(t *testing.T) {
 	skip := probe.SkippedCmd(
 		probe.LayerHTTP,

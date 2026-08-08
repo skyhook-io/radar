@@ -86,10 +86,16 @@ func TestNewConditionIssue_IssueTimingSinceGuard(t *testing.T) {
 	if noLTT.IssueTiming != "" || noLTT.IssueTimingBasis != "" {
 		t.Errorf("since=0 must omit issue_timing, got (%q, %q)", noLTT.IssueTiming, noLTT.IssueTimingBasis)
 	}
+	if !noLTT.OnsetUnknown || !noLTT.FirstSeen.IsZero() || noLTT.LastSeen.IsZero() {
+		t.Errorf("since=0 onset = unknown:%v first:%v last:%v, want unknown with observation time only", noLTT.OnsetUnknown, noLTT.FirstSeen, noLTT.LastSeen)
+	}
 
 	withLTT := newConditionIssue(gvr, "Widget", "ns", "w", SeverityWarning, "Ready: Bad", "msg", 30*time.Minute, "fp", createdAt)
 	if withLTT.IssueTiming != "started_after_resource_was_healthy" || withLTT.IssueTimingBasis != "condition" {
 		t.Errorf("90m healthy then failing 30m must be started_after_resource_was_healthy/condition, got (%q, %q)", withLTT.IssueTiming, withLTT.IssueTimingBasis)
+	}
+	if withLTT.OnsetUnknown || withLTT.FirstSeen.IsZero() {
+		t.Errorf("timestamped condition onset = unknown:%v first:%v, want known", withLTT.OnsetUnknown, withLTT.FirstSeen)
 	}
 }
 

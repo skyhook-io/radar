@@ -286,6 +286,46 @@ func TestAdmissionWebhookCorrelationRequiresWholeGroupedIssueCoverage(t *testing
 	t.Fatalf("mixed-cause grouped Deployment missing from output: %+v", out)
 }
 
+func TestAdmissionWebhookCorrelationCountsGroupedSubjectRow(t *testing.T) {
+	noEndpoints := `failed calling webhook "validate.example.com": Post "https://policy-webhook.hooks.svc:443/validate": no endpoints available for service "policy-webhook"`
+	p := &fakeProvider{
+		problems: []k8s.Detection{{
+			Kind: "Service", Namespace: "hooks", Name: "policy-webhook", Severity: "warning",
+			Reason: k8s.SelectorMatchesNoPodsReason, Fingerprint: k8s.NoReadyEndpointsFingerprint,
+		}},
+		scheduling: []k8s.Detection{
+			{
+				Kind: "ReplicaSet", Group: "apps", Namespace: "apps", Name: "catalog-old", Severity: "critical",
+				Reason: "WebhookUnavailable", Message: noEndpoints,
+				OwnerGroup: "apps", OwnerKind: "Deployment", OwnerName: "catalog",
+			},
+			{
+				Kind: "Deployment", Group: "apps", Namespace: "apps", Name: "catalog", Severity: "critical",
+				Reason: "WebhookDenied", Message: `admission webhook "other.example.com" denied the request`,
+			},
+		},
+		webhookRefs: map[string][]AdmissionWebhookRef{
+			"hooks/policy-webhook": {{
+				Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "policy"},
+				FailurePolicy: "Fail",
+			}},
+		},
+	}
+	out := Compose(p, Filters{Limit: NoLimit, Grouped: true, CanReadClusterScoped: func(string, string) bool { return true }})
+	for _, issue := range out {
+		if issue.Kind == "Deployment" && issue.Name == "catalog" {
+			if issue.Count != 1 {
+				t.Fatalf("subject-plus-member Deployment count = %d, want fan-out 1", issue.Count)
+			}
+			if issue.IncidentParent != nil {
+				t.Fatalf("group with an unrelated subject row must not carry webhook incident parent: %+v", issue.IncidentParent)
+			}
+			return
+		}
+	}
+	t.Fatalf("subject-plus-member Deployment missing from output: %+v", out)
+}
+
 func TestAdmissionWebhookIgnoreKeepsExistingSeverity(t *testing.T) {
 	p := &fakeProvider{
 		problems: []k8s.Detection{{Kind: "Service", Namespace: "hooks", Name: "audit-webhook", Severity: "warning", Reason: k8s.SelectorMatchesNoPodsReason}},
