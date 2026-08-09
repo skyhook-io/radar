@@ -34,14 +34,6 @@ func cnpgCondition(condType, status, reason, message string) map[string]any {
 	}
 }
 
-func reasonsOf(issues []Issue) []string {
-	out := make([]string, 0, len(issues))
-	for _, i := range issues {
-		out = append(out, i.Reason)
-	}
-	return out
-}
-
 func findIssue(t *testing.T, issues []Issue, reason string) Issue {
 	t.Helper()
 	for _, i := range issues {
