@@ -21,6 +21,8 @@ import {
   CNPG_GROUP,
   isApiGroup,
   getCNPGClusterDisplayState,
+  getCNPGClusterInstances,
+  getCNPGPoolerInstances,
 } from './resource-utils-cnpg'
 import { getCellFilterValue } from './resource-utils'
 
@@ -560,5 +562,40 @@ describe('an unknown phase outranks the Ready condition', () => {
     expect(getCNPGClusterStatus(withPhase('', 'True')).text).toBe('Ready')
     expect(getCNPGClusterStatus(withPhase('', 'False')).text).toBe('ClusterIsReady')
     expect(getCNPGClusterStatus({ spec: {}, status: {} }).text).toBe('Unknown')
+  })
+})
+
+describe('an absent count is unknown, never zero', () => {
+  // The window this covers is ordinary: between creation and the operator's
+  // first status write. Brief, common, and exactly when someone is watching.
+  it('Cluster instances cell renders a dash, not 0', () => {
+    expect(getCNPGClusterInstances({ spec: { instances: 3 }, status: {} })).toBe('-/3')
+    expect(getCNPGClusterInstances({ spec: {}, status: {} })).toBe('-/-')
+    expect(getCNPGClusterInstances({ spec: { instances: 3 }, status: { readyInstances: 0 } })).toBe('0/3')
+    expect(getCNPGClusterInstances({ spec: { instances: 3 }, status: { readyInstances: 3 } })).toBe('3/3')
+  })
+
+  it('does not contradict the badge during that window', () => {
+    // The pairing IS the claim: a cell reading 0/3 beside a badge that does not
+    // say degraded is the contradiction this integration exists to remove.
+    const fresh = { spec: { instances: 3 }, status: { phase: 'Setting up primary' } }
+    expect(getCNPGClusterInstances(fresh)).toBe('-/3')
+    expect(getCNPGClusterStatus(fresh).level).not.toBe('unhealthy')
+  })
+
+  it('Pooler instances cell renders a dash, not 0', () => {
+    expect(getCNPGPoolerInstances({ spec: { instances: 2 }, status: {} })).toBe('-/2')
+    expect(getCNPGPoolerInstances({ spec: { instances: 2 }, status: { instances: 0 } })).toBe('0/2')
+  })
+
+  it('Pooler badge says Unknown, not a red Not Scheduled', () => {
+    // Sharper than the cell: reading absence as 0 fabricated a FAILURE, so an
+    // unreconciled Pooler went red on a state nobody had reported yet.
+    const fresh = { spec: { instances: 2 }, status: {} }
+    expect(getCNPGPoolerStatus(fresh)).toMatchObject({ text: 'Unknown', level: 'unknown' })
+    expect(getCNPGPoolerStatus({ spec: { instances: 2 }, status: { instances: 0 } }))
+      .toMatchObject({ text: 'Not Scheduled', level: 'unhealthy' })
+    expect(getCNPGPoolerStatus({ spec: { instances: 2 }, status: { instances: 2 } }))
+      .toMatchObject({ text: 'Scheduled', level: 'healthy' })
   })
 })

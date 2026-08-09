@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import {
   getCNPGClusterStatus,
+  getCNPGClusterInstances,
   classifyCNPGClusterPhase,
   CNPG_CLUSTER_PHASES_HEALTHY,
   CNPG_CLUSTER_PHASES_TRANSIENT,
@@ -56,6 +57,28 @@ describe('CNPG golden matrix — badge side', () => {
       if (badge.level === 'unhealthy') {
         expect(tc.worst, 'an unhealthy badge must not sit next to silence').not.toBe('none')
       }
+    },
+  )
+
+  // The Instances CELL, derived from the same cases rather than specified in
+  // them. The matrix stays a Go/TS parity spec — Go has no instances cell, so a
+  // `cell` field would add a column only one language can assert to a file
+  // whose whole purpose is that both do. Deriving costs no schema change and
+  // covers every case added later for badge reasons.
+  //
+  // This is the gap that let the bug through: the matrix already pinned
+  // "readyInstances absent — unknown, not zero; must not fabricate an outage"
+  // for the badge, and the cell rendered 0/N on that very case.
+  it.each(cases.map((c) => [c.name, c] as const))(
+    'instances cell does not claim an outage the badge denies — %s',
+    (_name, tc) => {
+      const cell = getCNPGClusterInstances({ spec: tc.spec, status: tc.status })
+      const ready = cell.split('/')[0]
+      const readyReported = typeof tc.status.readyInstances === 'number'
+      expect(
+        ready === '-',
+        `readyInstances ${readyReported ? 'is reported' : 'is absent'} but the cell reads ${cell}`,
+      ).toBe(!readyReported)
     },
   )
 })

@@ -234,10 +234,14 @@ export function getCNPGClusterStatus(resource: any): StatusBadge {
   return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
 }
 
+// Absence is not zero — same rule the badge follows via readyKnown. Between
+// creation and the operator's first status write there is no readyInstances,
+// and defaulting it to 0 rendered "0/3" next to a badge that (correctly) did
+// not say degraded: the cell claimed a total outage the badge denied.
+const countOrDash = (n: unknown): string => (typeof n === 'number' ? String(n) : '-')
+
 export function getCNPGClusterInstances(resource: any): string {
-  const desired = resource.spec?.instances ?? 0
-  const ready = resource.status?.readyInstances ?? 0
-  return `${ready}/${desired}`
+  return `${countOrDash(resource.status?.readyInstances)}/${countOrDash(resource.spec?.instances)}`
 }
 
 export function getCNPGClusterPrimary(resource: any): string {
@@ -644,7 +648,16 @@ export function getCNPGScheduledBackupOwnerRef(resource: any): string {
  */
 export function getCNPGPoolerStatus(resource: any): StatusBadge {
   const desired = resource.spec?.instances ?? 0
-  const scheduled = resource.status?.instances ?? 0
+  // Presence, not value — the same distinction getCNPGClusterStatus makes. A
+  // Pooler the controller has not reconciled yet has no status.instances at
+  // all, and reading that as 0 rendered a red "Not Scheduled" on a Pooler that
+  // may be perfectly healthy: a fabricated failure, not merely a wrong count.
+  const scheduledKnown = typeof resource.status?.instances === 'number'
+  const scheduled = scheduledKnown ? resource.status.instances : 0
+
+  if (!scheduledKnown) {
+    return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
+  }
 
   if (desired > 0 && scheduled < desired) {
     if (scheduled === 0) {
@@ -678,9 +691,7 @@ export function getCNPGPoolerMode(resource: any): string {
 }
 
 export function getCNPGPoolerInstances(resource: any): string {
-  const desired = resource.spec?.instances ?? 0
-  const ready = resource.status?.instances ?? 0
-  return `${ready}/${desired}`
+  return `${countOrDash(resource.status?.instances)}/${countOrDash(resource.spec?.instances)}`
 }
 
 export function getCNPGPoolerParameters(resource: any): Record<string, string> {
