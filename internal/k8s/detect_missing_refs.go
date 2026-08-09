@@ -120,6 +120,12 @@ func missingRefFingerprint(reason, detail string) string {
 	return fmt.Sprintf("%s|%016x", reason, h.Sum64())
 }
 
+const MissingWebhookBackendReason = "Missing webhook backend Service"
+
+func WebhookBackendFingerprint(namespace, name string) string {
+	return missingRefFingerprint(MissingWebhookBackendReason, "clientConfig.service:"+namespace+"/"+name)
+}
+
 // refLookupResult classifies a lister Get result into the honest tri-state
 // "exists / known missing / couldn't verify". A lister miss is only
 // authoritative when the informer for the target's kind actually covers the
@@ -854,7 +860,7 @@ func DetectMissingWebhookRefs(cache *ResourceCache, dynamicCache *DynamicResourc
 	}
 	now := time.Now()
 	emit := func(kind, group, name, sourceRefPhrase, svcNS, svcName, severity, policySummary string, createdAt time.Time) Detection {
-		reason := "Missing webhook backend Service"
+		reason := MissingWebhookBackendReason
 		cause := fmt.Sprintf("Webhook backend Service %q in namespace %q doesn't exist.", svcName, svcNS)
 		if severity == "warning" {
 			cause += " One or more referencing webhooks use failurePolicy=Ignore, so admission proceeds but the webhook's validation or mutation is bypassed."
@@ -868,7 +874,7 @@ func DetectMissingWebhookRefs(cache *ResourceCache, dynamicCache *DynamicResourc
 			createdAt),
 			cause,
 			fmt.Sprintf("Restore Service %q and its endpoints in namespace %q, or fix clientConfig.service to point at the correct healthy Service.", svcName, svcNS))
-		det.Fingerprint = missingRefFingerprint(reason, "clientConfig.service:"+svcNS+"/"+svcName)
+		det.Fingerprint = WebhookBackendFingerprint(svcNS, svcName)
 		return det
 	}
 

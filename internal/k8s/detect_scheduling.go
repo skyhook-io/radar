@@ -1196,7 +1196,7 @@ func replicaSetDeploymentOwnerName(rs *appsv1.ReplicaSet) (string, bool) {
 // (e.g. transient "object is being deleted") so we don't over-report.
 func classifyAdmissionFailure(msg string) (string, bool) {
 	lower := strings.ToLower(msg)
-	if _, ok := ParseAdmissionWebhookNoEndpoints(msg); ok {
+	if _, ok := ParseAdmissionWebhookBackendFailure(msg); ok {
 		return "WebhookUnavailable", true
 	}
 	switch {
@@ -1218,35 +1218,65 @@ func classifyAdmissionFailure(msg string) (string, bool) {
 	}
 }
 
-type AdmissionWebhookNoEndpoints struct {
+type AdmissionWebhookBackendFailureKind string
+
+const (
+	AdmissionWebhookNoReadyEndpoints AdmissionWebhookBackendFailureKind = "no_ready_endpoints"
+	AdmissionWebhookServiceNotFound  AdmissionWebhookBackendFailureKind = "service_not_found"
+)
+
+type AdmissionWebhookBackendFailure struct {
+	WebhookName      string
 	ServiceNamespace string
 	ServiceName      string
+	Kind             AdmissionWebhookBackendFailureKind
 }
 
 var (
 	admissionWebhookURLPattern      = regexp.MustCompile(`https?://[^\s"]+`)
+	admissionWebhookNamePattern     = regexp.MustCompile(`(?i)failed calling webhook "([^"]+)"`)
 	admissionNoEndpointsNamePattern = regexp.MustCompile(`(?i)no endpoints available for service "([a-z0-9]([-a-z0-9]*[a-z0-9])?)"`)
+	admissionServiceNotFoundPattern = regexp.MustCompile(`(?i)services? "([a-z0-9]([-a-z0-9]*[a-z0-9])?)" not found`)
 )
 
-func ParseAdmissionWebhookNoEndpoints(message string) (AdmissionWebhookNoEndpoints, bool) {
+func ParseAdmissionWebhookBackendFailure(message string) (AdmissionWebhookBackendFailure, bool) {
 	lower := strings.ToLower(message)
-	if !strings.Contains(lower, "failed calling webhook") || !strings.Contains(lower, "no endpoints available for service") {
-		return AdmissionWebhookNoEndpoints{}, false
+	if !strings.Contains(lower, "failed calling webhook") {
+		return AdmissionWebhookBackendFailure{}, false
 	}
+	webhookMatch := admissionWebhookNamePattern.FindStringSubmatch(message)
+	if len(webhookMatch) < 2 || webhookMatch[1] == "" {
+		return AdmissionWebhookBackendFailure{}, false
+	}
+	var kind AdmissionWebhookBackendFailureKind
 	nameMatch := admissionNoEndpointsNamePattern.FindStringSubmatch(message)
+	if len(nameMatch) >= 2 {
+		kind = AdmissionWebhookNoReadyEndpoints
+	} else {
+		nameMatch = admissionServiceNotFoundPattern.FindStringSubmatch(message)
+		if len(nameMatch) < 2 {
+			return AdmissionWebhookBackendFailure{}, false
+		}
+		kind = AdmissionWebhookServiceNotFound
+	}
 	urlText := admissionWebhookURLPattern.FindString(message)
 	if len(nameMatch) < 2 || urlText == "" {
-		return AdmissionWebhookNoEndpoints{}, false
+		return AdmissionWebhookBackendFailure{}, false
 	}
 	parsed, err := url.Parse(urlText)
 	if err != nil {
-		return AdmissionWebhookNoEndpoints{}, false
+		return AdmissionWebhookBackendFailure{}, false
 	}
 	hostParts := strings.Split(strings.ToLower(parsed.Hostname()), ".")
 	if len(hostParts) < 3 || hostParts[0] == "" || hostParts[1] == "" || hostParts[2] != "svc" || hostParts[0] != strings.ToLower(nameMatch[1]) {
-		return AdmissionWebhookNoEndpoints{}, false
+		return AdmissionWebhookBackendFailure{}, false
 	}
-	return AdmissionWebhookNoEndpoints{ServiceNamespace: hostParts[1], ServiceName: hostParts[0]}, true
+	return AdmissionWebhookBackendFailure{
+		WebhookName:      webhookMatch[1],
+		ServiceNamespace: hostParts[1],
+		ServiceName:      hostParts[0],
+		Kind:             kind,
+	}, true
 }
 
 // ---- Post-bind detection ------------------------------------------------
