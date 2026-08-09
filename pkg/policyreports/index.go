@@ -1,6 +1,8 @@
 package policyreports
 
 import (
+	"cmp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -31,11 +33,11 @@ type SubjectFindings struct {
 	Findings []Finding
 }
 
-// MaxIndexedReports caps how many PolicyReport documents the index keeps,
-// chosen by newest `metadata.creationTimestamp` first. Reports beyond the
-// cap are silently dropped on rebuild. Tunable here for clusters where a
-// single namespace generates a runaway number of reports — the index is
-// purely diagnostic, so dropping the oldest is acceptable.
+// MaxIndexedReports is retained for source compatibility. It no longer limits
+// the index; every report supplied to BuildIndex or Replace is included.
+//
+// Deprecated: PolicyReport retention belongs to the cluster and report
+// producers, not the index.
 const MaxIndexedReports = 500
 
 // Index maps subject keys ("Group/Kind/namespace/name", group-prefixed
@@ -58,9 +60,8 @@ func NewIndex() *Index {
 
 // BuildIndex constructs an Index from a slice of PolicyReport documents
 // (both namespaced PolicyReport and cluster-scoped ClusterPolicyReport).
-// Reports are processed newest-first by `metadata.creationTimestamp`, and
-// only the first MaxIndexedReports are considered — older reports are
-// dropped to bound memory.
+// Every supplied report is included; retention is owned by the cluster and
+// the report producers rather than this projection.
 //
 // For each report, every entry in `results[]` becomes one Finding per
 // resource in `results[].resources[]`. When a result has no `resources[]`
@@ -81,18 +82,8 @@ func (i *Index) Replace(reports []*unstructured.Unstructured) {
 		return
 	}
 
-	// Sort newest-first so the cap drops the oldest reports.
-	sorted := make([]*unstructured.Unstructured, len(reports))
-	copy(sorted, reports)
-	sort.SliceStable(sorted, func(a, b int) bool {
-		return sorted[a].GetCreationTimestamp().Time.After(sorted[b].GetCreationTimestamp().Time)
-	})
-	if len(sorted) > MaxIndexedReports {
-		sorted = sorted[:MaxIndexedReports]
-	}
-
 	next := make(map[string][]Finding)
-	for _, r := range sorted {
+	for _, r := range reports {
 		extractFindings(r, next)
 	}
 	dedupeFindings(next)
@@ -110,9 +101,8 @@ func (i *Index) Replace(reports []*unstructured.Unstructured) {
 // from view entirely. The same (policy, rule, result, message, source) on the
 // same subject carries no extra information whichever report it arrived in,
 // and counting it twice would inflate every violation total.
-//
-// Order is preserved: the first occurrence wins, so the newest report's copy
-// is the one kept (Replace feeds reports newest-first).
+// Sorting by the complete finding value keeps downstream top-N summaries
+// stable even though informer stores do not promise report iteration order.
 func dedupeFindings(bySubject map[string][]Finding) {
 	for key, findings := range bySubject {
 		if len(findings) < 2 {
@@ -127,6 +117,17 @@ func dedupeFindings(bySubject map[string][]Finding) {
 			seen[f] = true
 			out = append(out, f)
 		}
+		slices.SortFunc(out, func(left, right Finding) int {
+			return cmp.Or(
+				cmp.Compare(left.Policy, right.Policy),
+				cmp.Compare(left.Rule, right.Rule),
+				cmp.Compare(left.Result, right.Result),
+				cmp.Compare(left.Severity, right.Severity),
+				cmp.Compare(left.Category, right.Category),
+				cmp.Compare(left.Message, right.Message),
+				cmp.Compare(left.Source, right.Source),
+			)
+		})
 		bySubject[key] = out
 	}
 }
@@ -138,10 +139,7 @@ func dedupeFindings(bySubject map[string][]Finding) {
 // part of the index key so distinct CRDs sharing a Kind don't collide.
 //
 // The returned slice is a defensive copy: callers may freely sort, truncate,
-// or filter it without racing the index's own rebuild path. The cost is
-// modest — findings per subject are bounded (Kyverno emits at most one
-// PolicyReport entry per (policy, rule, resource) tuple, and pathological
-// reports are capped during BuildIndex anyway).
+// or filter it without racing the index's own rebuild path.
 func (i *Index) FindingsFor(group, kind, namespace, name string) []Finding {
 	if i == nil {
 		return nil
@@ -315,8 +313,12 @@ func extractFindings(report *unstructured.Unstructured, dst map[string][]Finding
 
 	scopeGroup, scopeKind, scopeNS, scopeName := reportScope(report)
 
-	results, found, err := unstructured.NestedSlice(report.Object, "results")
+	rawResults, found, err := unstructured.NestedFieldNoCopy(report.Object, "results")
 	if err != nil || !found {
+		return
+	}
+	results, ok := rawResults.([]any)
+	if !ok {
 		return
 	}
 
@@ -389,8 +391,12 @@ func extractFindings(report *unstructured.Unstructured, dst map[string][]Finding
 // Group is derived from `scope.apiVersion` (the part before "/"; "" for
 // core kinds like Pod whose apiVersion is just "v1").
 func reportScope(report *unstructured.Unstructured) (group, kind, namespace, name string) {
-	scope, found, err := unstructured.NestedMap(report.Object, "scope")
+	rawScope, found, err := unstructured.NestedFieldNoCopy(report.Object, "scope")
 	if err != nil || !found {
+		return "", "", "", ""
+	}
+	scope, ok := rawScope.(map[string]any)
+	if !ok {
 		return "", "", "", ""
 	}
 	return groupFromAPIVersion(stringField(scope, "apiVersion")),

@@ -1541,6 +1541,36 @@ func TestDynamicResourceCache_ListWatchedUnionsNamespaceInformers(t *testing.T) 
 	if len(got) != 2 {
 		t.Errorf("ListWatched returned %d objects, want 2 (union of both namespace-scoped informers)", len(got))
 	}
+
+	readOnly, err := d.ListWatchedReadOnly(gvr)
+	if err != nil {
+		t.Fatalf("ListWatchedReadOnly failed: %v", err)
+	}
+	if len(readOnly) != 2 {
+		t.Fatalf("ListWatchedReadOnly returned %d objects, want 2", len(readOnly))
+	}
+	copiesByName := make(map[string]*unstructured.Unstructured, len(got))
+	for _, item := range got {
+		copiesByName[item.GetName()] = item
+	}
+	for _, item := range readOnly {
+		if item == copiesByName[item.GetName()] {
+			t.Fatalf("ListWatched returned cached pointer for %s instead of a defensive copy", item.GetName())
+		}
+	}
+	readOnlyAgain, err := d.ListWatchedReadOnly(gvr)
+	if err != nil {
+		t.Fatalf("second ListWatchedReadOnly failed: %v", err)
+	}
+	readOnlyByName := make(map[string]*unstructured.Unstructured, len(readOnly))
+	for _, item := range readOnly {
+		readOnlyByName[item.GetName()] = item
+	}
+	for _, item := range readOnlyAgain {
+		if item != readOnlyByName[item.GetName()] {
+			t.Fatalf("ListWatchedReadOnly copied cached object %s", item.GetName())
+		}
+	}
 }
 
 // ListNamespaces must short-circuit a cluster-scoped GVR to a cluster-wide

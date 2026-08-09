@@ -15,11 +15,9 @@ import (
 )
 
 // KyvernoStatus reports why the PolicyReport index is (or isn't) populated.
-// Callers that need to distinguish "Kyverno not installed" from "warmup
-// deferred (cluster too large)" from "warmup in flight" from "ready but
-// empty" use GetKyvernoStatus to surface the reason to the operator/agent
-// — otherwise an empty PolicyReport response is indistinguishable from a
-// transient one.
+// Callers that need lifecycle and coverage details use GetPolicyReportStatus;
+// the bare enum only distinguishes absence, deferred warmup, active warmup,
+// and a live index.
 type KyvernoStatus string
 
 const (
@@ -27,26 +25,25 @@ const (
 	// not present in discovery. The PolicyReport source is unavailable;
 	// nothing to do.
 	KyvernoStatusNotInstalled KyvernoStatus = "not_installed"
-	// KyvernoStatusDeferred — Kyverno is installed but warmup decided not
-	// to track PolicyReports (cluster aggregate exceeds the warmup cap, or
-	// the probe was denied/errored). Findings are NOT being indexed.
+	// KyvernoStatusDeferred — Kyverno is installed but warmup could not
+	// track PolicyReports because the probe was denied or failed. Findings
+	// are NOT being indexed.
 	// Callers wanting them must fall back to a direct fetch.
 	KyvernoStatusDeferred KyvernoStatus = "deferred"
 	// KyvernoStatusWarmup — Kyverno is installed and warmup is presumed
 	// in-flight (discovery has named the CRDs but the index hasn't been
 	// published yet). Narrow window; expect to become "ready" shortly.
 	KyvernoStatusWarmup KyvernoStatus = "warmup"
-	// KyvernoStatusReady — PolicyReport index is populated and live. An
-	// empty findings list with this status means "no policy violations",
-	// not "data unavailable".
+	// KyvernoStatusReady — PolicyReport index is populated and live. Consumers
+	// must inspect its structured coverage fields before treating an empty
+	// findings list as complete.
 	KyvernoStatusReady KyvernoStatus = "ready"
 )
 
 // Reason codes explaining a non-ready status. The bare four-state enum
-// collapses RBAC denial, probe failure and over-cap into "deferred", which
-// leaves an operator with an empty policy view and no way to tell "nothing is
-// violating" from "Radar cannot see". The reason code is what makes that
-// distinction sayable.
+// collapses RBAC denial and probe failure into "deferred", which leaves an
+// operator with an empty policy view and no way to tell "nothing is violating"
+// from "Radar cannot see". The reason code makes that distinction sayable.
 const (
 	ReasonNoDiscovery  = "discovery_unavailable"
 	ReasonNotInstalled = "kyverno_not_installed"
@@ -54,31 +51,21 @@ const (
 	ReasonCacheDown    = "cache_unavailable"
 	ReasonRBACDenied   = "rbac_denied"
 	ReasonProbeFailed  = "probe_failed"
-	ReasonOverCap      = "over_cap"
 )
 
 // PolicyReportStatus is the structured contract behind the PolicyReport
-// index. Status alone cannot answer "why is this empty"; ObservedCount and
-// Cap turn "deferred" into a sentence an operator can act on ("1,842 reports
-// exceeds the 500-report cap"), and WatchedGroups names which API family the
-// data actually came from — load-bearing on a cluster mid-migration from
-// wgpolicyk8s.io to openreports.io.
+// index. Status alone cannot answer "why is this empty"; WatchedGroups names
+// which API family the data actually came from, which is load-bearing on a
+// cluster mid-migration from wgpolicyk8s.io to openreports.io.
 type PolicyReportStatus struct {
 	Status     KyvernoStatus `json:"status"`
 	ReasonCode string        `json:"reasonCode,omitempty"`
 	// ObservedCount is the number of report objects the pre-warmup probe
 	// counted across the selected groups. -1 when the probe could not run.
 	//
-	// It is a BOOT-TIME SNAPSHOT and does not track growth. The probe runs
-	// once, inside warmup's sync.Once; the debounced rebuild re-lists and
-	// lets Index.Replace truncate to the cap without re-counting. So a
-	// cluster that starts under the cap and later grows past it keeps
-	// reporting `ready` with a stale count while findings are silently
-	// dropped. Don't render this as a live number, and don't infer
-	// "under the cap" from it. Making post-warmup truncation observable is
-	// the actual fix and belongs with the multi-engine retention work.
+	// It is a boot-time snapshot for diagnostics and does not track growth.
+	// Do not render it as a live count.
 	ObservedCount int `json:"observedCount"`
-	Cap           int `json:"cap"`
 	// WatchedGroups are the API groups actually being watched, e.g.
 	// ["openreports.io"]. Empty when nothing is watched.
 	WatchedGroups []string `json:"watchedGroups,omitempty"`
@@ -164,13 +151,6 @@ var reportGroups = []reportGroup{
 	},
 }
 
-// kyvernoReportWarmupCap caps how many PolicyReport documents the index
-// keeps in memory. The pkg/policyreports.MaxIndexedReports constant is the
-// authoritative number; this re-export lives here for easy operator-side
-// tuning at the integration boundary (so anyone grepping the codebase for
-// "Kyverno" finds the tunable without having to know the package layout).
-const kyvernoReportWarmupCap = policyreports.MaxIndexedReports
-
 // policyReportIndex is the singleton index instance, populated when
 // Kyverno is detected and kept up to date by PolicyReport informer
 // events. Nil when Kyverno is absent — callers must nil-check.
@@ -181,10 +161,13 @@ var (
 	// value-type sync.Once whose mutex is currently held by a concurrent
 	// Do() crashes with "unlock of unlocked mutex". Every other sync.Once
 	// in internal/k8s/ uses this same pointer pattern for the same reason.
-	policyReportInit    = new(sync.Once)
-	policyReportWatched []schema.GroupVersionResource // guarded by policyReportMu
-	policyReportMu      sync.Mutex                    // guards policyReportWatched + serializes rebuild
-	policyReportPending atomic.Bool                   // true when a rebuild is already queued
+	policyReportInit         = new(sync.Once)
+	policyReportWatched      []schema.GroupVersionResource // guarded by policyReportMu
+	policyReportMu           sync.Mutex                    // guards policyReportWatched + warmup/reset publication
+	policyReportRebuildMu    sync.Mutex
+	policyReportRebuilding   bool        // guarded by policyReportRebuildMu
+	policyReportRebuildAgain bool        // guarded by policyReportRebuildMu
+	policyReportPending      atomic.Bool // true when a rebuild is already queued
 
 	// debounceDelay is how long after an informer event we wait before
 	// rebuilding the index. PolicyReport updates often arrive in bursts
@@ -199,10 +182,9 @@ var (
 // "Nil" collapses several distinct conditions today — discovery not
 // available, Kyverno not installed, dynamic cache not initialized, no
 // PolicyReport CRDs registered, RBAC denied on the count probe, or the
-// aggregate report count exceeded the warmup cap (deferred). Callers
-// that need to distinguish these — e.g. to emit the correct
-// `resourcecontext.OmittedReason` (not_installed vs rbac_denied vs
-// budget_exceeded vs cache_cold) — cannot do so today.
+// report probe was denied or failed. Callers that need to distinguish
+// these — e.g. to emit the correct `resourcecontext.OmittedReason`
+// (not_installed vs rbac_denied vs cache_cold) — cannot do so today.
 //
 // TODO(T10): when the diagnostic `policySummary.kyverno` consumer
 // arrives, introduce a sibling accessor that returns an enum status
@@ -265,7 +247,6 @@ func WarmupKyvernoPolicyReports() {
 				Status:        s,
 				ReasonCode:    reason,
 				ObservedCount: observed,
-				Cap:           kyvernoReportWarmupCap,
 				WatchedGroups: groups,
 			})
 		}
@@ -281,7 +262,6 @@ func WarmupKyvernoPolicyReports() {
 			kyvernoWarmupReason.Store(PolicyReportStatus{
 				Status:        KyvernoStatusReady,
 				ObservedCount: observed,
-				Cap:           kyvernoReportWarmupCap,
 				WatchedGroups: groups,
 				DeniedGroups:  denied,
 				LiveUpdates:   live,
@@ -331,19 +311,7 @@ func WarmupKyvernoPolicyReports() {
 			return
 		}
 
-		// The index caps what it keeps in memory (MaxIndexedReports), but the
-		// informers themselves list/watch/cache every report object
-		// cluster-wide — on a Kyverno-heavy cluster with tens of thousands of
-		// reports that is exactly the high-cardinality cost we're avoiding.
-		// Over the cap, leave reports in the deferred-fetch tier and say so
-		// with the count, so the operator can tell over-cap from empty.
-		if selection.total > kyvernoReportWarmupCap {
-			log.Printf("[policy-reports] Cluster has %d reports across %v (cap=%d); leaving deferred to avoid full-cluster watch cost", selection.total, selection.groups, kyvernoReportWarmupCap)
-			setStatus(KyvernoStatusDeferred, ReasonOverCap, selection.total, selection.groups)
-			return
-		}
-
-		log.Printf("[policy-reports] Kyverno detected; warming up %d report CRDs from %v (probed %d reports, cap=%d)", len(watched), selection.groups, selection.total, kyvernoReportWarmupCap)
+		log.Printf("[policy-reports] Kyverno detected; warming up %d report CRDs from %v (probed %d reports)", len(watched), selection.groups, selection.total)
 		cache.WarmupParallel(watched, 30*time.Second)
 
 		// Initialize the index from current cache contents so the first
@@ -357,8 +325,7 @@ func WarmupKyvernoPolicyReports() {
 		// critical section sees the new policyReportWatched value. Each
 		// handler does a debounced rebuild — PolicyReport events arrive
 		// in bursts when Kyverno re-evaluates a policy, and rebuilding
-		// once per burst is cheaper than per-event incremental updates
-		// given how small the index is (≤500 reports).
+		// once per burst is cheaper than rebuilding once per event.
 		handlersRegistered := true
 		handler := toolscache.ResourceEventHandlerFuncs{
 			AddFunc:    func(_ any) { scheduleRebuild() },
@@ -392,14 +359,14 @@ func WarmupKyvernoPolicyReports() {
 //
 //	not_installed — discovery decided Kyverno is absent (or the reporting
 //	                CRDs are missing); findings will never appear.
-//	deferred      — warmup ran but skipped indexing (cluster exceeded the
-//	                cap, or RBAC/probe error). Findings won't appear from
-//	                this index; callers may fall back to on-demand.
+//	deferred      — warmup ran but skipped indexing after an RBAC/probe
+//	                error. Findings won't appear from this index; callers
+//	                may fall back to on-demand.
 //	warmup        — warmup hasn't completed its decision pass yet (typical
 //	                for the first second or two after subsystem init); the
 //	                index is uninitialized.
-//	ready         — index is live. An empty findings list under this
-//	                status means "no violations", not "data unavailable".
+//	ready         — index is live. GetPolicyReportStatus carries the
+//	                coverage fields needed to interpret an empty lookup.
 //
 // Cheap: a single atomic.Value Load. Safe to call from request paths.
 func GetKyvernoStatus() KyvernoStatus {
@@ -419,12 +386,12 @@ func GetKyvernoStatus() KyvernoStatus {
 
 // GetPolicyReportStatus returns the structured status behind the PolicyReport
 // index: the lifecycle phase plus why it is in that phase, how many report
-// objects were observed, the cap they were measured against, and which API
-// groups are actually being watched.
+// objects were observed at boot, and which API groups are actually being
+// watched.
 //
 // Consumers rendering an empty policy view must use this rather than
-// GetKyvernoStatus alone — "deferred" collapses RBAC denial, probe failure and
-// over-cap, and those need different words in front of an operator.
+// GetKyvernoStatus alone — "deferred" collapses RBAC denial and probe failure,
+// and those need different words in front of an operator.
 func GetPolicyReportStatus() PolicyReportStatus {
 	status, _ := kyvernoWarmupReason.Load().(PolicyReportStatus)
 	// Ready is authoritative for the same reason GetKyvernoStatus treats it
@@ -441,9 +408,6 @@ func GetPolicyReportStatus() PolicyReportStatus {
 		}
 		status.Status = KyvernoStatusReady
 		status.ReasonCode = ""
-		if status.Cap == 0 {
-			status.Cap = kyvernoReportWarmupCap
-		}
 		return status
 	}
 	if status.Status == "" {
@@ -463,12 +427,12 @@ func GetPolicyReportStatus() PolicyReportStatus {
 		d := GetResourceDiscovery()
 		if d == nil || d.ResourceDiscovery == nil {
 			// No discovery yet — we haven't looked, so we can't claim absence.
-			return PolicyReportStatus{Status: KyvernoStatusNotInstalled, ReasonCode: ReasonNoDiscovery, Cap: kyvernoReportWarmupCap}
+			return PolicyReportStatus{Status: KyvernoStatusNotInstalled, ReasonCode: ReasonNoDiscovery}
 		}
 		if d.IsKyvernoInstalled() {
-			return PolicyReportStatus{Status: KyvernoStatusWarmup, Cap: kyvernoReportWarmupCap}
+			return PolicyReportStatus{Status: KyvernoStatusWarmup}
 		}
-		return PolicyReportStatus{Status: KyvernoStatusNotInstalled, ReasonCode: ReasonNotInstalled, Cap: kyvernoReportWarmupCap}
+		return PolicyReportStatus{Status: KyvernoStatusNotInstalled, ReasonCode: ReasonNotInstalled}
 	}
 	return status
 }
@@ -565,8 +529,7 @@ func selectReportGVRs(served func(schema.GroupVersionResource) bool, probeCount 
 				groupDenied = true
 			default:
 				// Readable, including a legitimately empty sibling — keep it
-				// watched so a report created later still appears live. Its
-				// cost is bounded precisely because the probe succeeded.
+				// watched so a report created later still appears live.
 				readable = append(readable, gvr)
 				groupTotal += count
 			}
@@ -643,8 +606,6 @@ func (s PolicyReportStatus) OmittedReason() (resourcecontext.OmittedReason, bool
 	switch s.ReasonCode {
 	case ReasonRBACDenied:
 		return resourcecontext.OmittedRBACDenied, true
-	case ReasonOverCap:
-		return resourcecontext.OmittedBudgetExceeded, true
 	}
 	return resourcecontext.OmittedCacheCold, true
 }
@@ -658,7 +619,7 @@ func listPolicyReportsAll(gvrs []schema.GroupVersionResource) []*unstructured.Un
 	}
 	var all []*unstructured.Unstructured
 	for _, gvr := range gvrs {
-		items, err := cache.ListWatched(gvr)
+		items, err := cache.ListWatchedReadOnly(gvr)
 		if err != nil {
 			log.Printf("[policy-reports] list %s: %v", gvr, err)
 			continue
@@ -688,28 +649,69 @@ func scheduleRebuild() {
 		// fresh timer (CAS would fail while pending=true), and would
 		// only be picked up when *some later* event happened to fire.
 		// Clearing first means any event during the rebuild always
-		// either lands in the current rebuild's snapshot OR arms a
-		// fresh timer. The cost is one extra rebuild per event that
-		// arrives during the rebuild window — cheaper than chasing
-		// silent staleness.
+		// either lands in the current rebuild's snapshot or arms a
+		// fresh timer. Concurrent timer expirations collapse into one
+		// follow-up rebuild.
 		policyReportPending.Store(false)
 		rebuildPolicyReportIndex()
 	})
 }
 
-// rebuildPolicyReportIndex re-lists all watched PolicyReport GVRs from
-// the dynamic cache and atomically swaps the index contents. Serialized
-// by policyReportMu so concurrent triggers don't waste CPU rebuilding
-// the same data.
 func rebuildPolicyReportIndex() {
-	policyReportMu.Lock()
-	defer policyReportMu.Unlock()
+	rebuildPolicyReportIndexUsing(listPolicyReportsAll)
+}
 
-	idx := policyReportIndex.Load()
-	if idx == nil {
-		return // index was reset (context switch) — drop event
+func rebuildPolicyReportIndexUsing(listReports func([]schema.GroupVersionResource) []*unstructured.Unstructured) {
+	policyReportRebuildMu.Lock()
+	if policyReportRebuilding {
+		policyReportRebuildAgain = true
+		policyReportRebuildMu.Unlock()
+		return
 	}
-	idx.Replace(listPolicyReportsAll(policyReportWatched))
+	policyReportRebuilding = true
+	policyReportRebuildMu.Unlock()
+
+	for {
+		started := time.Now()
+		rebuildPolicyReportIndexOnce(listReports)
+		rebuildDuration := time.Since(started)
+
+		policyReportRebuildMu.Lock()
+		if !policyReportRebuildAgain {
+			policyReportRebuilding = false
+			policyReportRebuildMu.Unlock()
+			return
+		}
+		policyReportRebuildMu.Unlock()
+
+		// A sustained report storm must not consume more than roughly half
+		// of one core rebuilding the same full snapshot repeatedly.
+		time.Sleep(max(rebuildDebounce, rebuildDuration))
+		policyReportRebuildMu.Lock()
+		policyReportRebuildAgain = false
+		policyReportRebuildMu.Unlock()
+	}
+}
+
+func rebuildPolicyReportIndexOnce(listReports func([]schema.GroupVersionResource) []*unstructured.Unstructured) {
+	policyReportMu.Lock()
+	idx := policyReportIndex.Load()
+	gvrs := append([]schema.GroupVersionResource(nil), policyReportWatched...)
+	generation := kyvernoWarmupGen.Load()
+	policyReportMu.Unlock()
+
+	if idx == nil {
+		return
+	}
+	reports := listReports(gvrs)
+
+	policyReportMu.Lock()
+	stale := kyvernoWarmupGen.Load() != generation
+	policyReportMu.Unlock()
+	if stale {
+		return
+	}
+	idx.Replace(reports)
 }
 
 // ResetPolicyReportIndex clears the index and re-arms warmup-once. Called

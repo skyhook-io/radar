@@ -2,6 +2,7 @@ package policyreports
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 	"testing"
 	"time"
@@ -318,16 +319,11 @@ func TestBuildIndex_FindingsForUnknownSubject(t *testing.T) {
 	}
 }
 
-func TestBuildIndex_Cap_OldestDropped(t *testing.T) {
-	// Build with MaxIndexedReports + 5 reports, each targeting a unique
-	// pod. The 5 oldest should be dropped — only the newest
-	// MaxIndexedReports survive.
-	base := time.Now()
-	reports := make([]*unstructured.Unstructured, 0, MaxIndexedReports+5)
-	for i := 0; i < MaxIndexedReports+5; i++ {
-		// Older reports first; index sorts newest-first internally.
-		created := base.Add(time.Duration(i) * time.Second)
-		reports = append(reports, makeReport(t, "PolicyReport", "ns", fmt.Sprintf("rep-%d", i), nil, created, []map[string]any{
+func TestBuildIndex_IndexesEveryReport(t *testing.T) {
+	const reportCount = 1000
+	reports := make([]*unstructured.Unstructured, 0, reportCount)
+	for i := 0; i < reportCount; i++ {
+		reports = append(reports, makeReport(t, "PolicyReport", "ns", fmt.Sprintf("rep-%d", i), nil, time.Now(), []map[string]any{
 			{
 				"policy": "p",
 				"result": "fail",
@@ -339,17 +335,38 @@ func TestBuildIndex_Cap_OldestDropped(t *testing.T) {
 	}
 
 	idx := BuildIndex(reports)
-	if idx.Size() != MaxIndexedReports {
-		t.Fatalf("expected exactly MaxIndexedReports=%d subjects after cap, got %d", MaxIndexedReports, idx.Size())
+	if idx.Size() != reportCount {
+		t.Fatalf("expected all %d report subjects, got %d", reportCount, idx.Size())
 	}
-	// The 5 oldest (indexes 0..4) should be absent. The newest (index
-	// MaxIndexedReports+4) should be present.
-	if got := idx.FindingsFor("", "Pod", "ns", "pod-0"); got != nil {
-		t.Errorf("pod-0 should have been dropped by cap, got %v", got)
+	if got := idx.FindingsFor("", "Pod", "ns", "pod-0"); len(got) != 1 {
+		t.Errorf("first report subject should be present, got %v", got)
 	}
-	newestName := fmt.Sprintf("pod-%d", MaxIndexedReports+4)
-	if got := idx.FindingsFor("", "Pod", "ns", newestName); len(got) != 1 {
-		t.Errorf("newest pod %s should be present, got %v", newestName, got)
+	lastName := fmt.Sprintf("pod-%d", reportCount-1)
+	if got := idx.FindingsFor("", "Pod", "ns", lastName); len(got) != 1 {
+		t.Errorf("last report subject %s should be present, got %v", lastName, got)
+	}
+}
+
+func TestBuildIndex_FindingOrderIsStableAcrossReportOrder(t *testing.T) {
+	result := func(policy string) map[string]any {
+		return map[string]any{
+			"policy": policy,
+			"result": "fail",
+			"resources": []any{
+				resourceRef("Pod", "ns", "pod"),
+			},
+		}
+	}
+	alpha := makeReport(t, "PolicyReport", "ns", "alpha", nil, time.Now(), []map[string]any{result("alpha")})
+	zeta := makeReport(t, "PolicyReport", "ns", "zeta", nil, time.Now(), []map[string]any{result("zeta"), result("alpha")})
+
+	forward := BuildIndex([]*unstructured.Unstructured{zeta, alpha}).FindingsFor("", "Pod", "ns", "pod")
+	reverse := BuildIndex([]*unstructured.Unstructured{alpha, zeta}).FindingsFor("", "Pod", "ns", "pod")
+	if !reflect.DeepEqual(forward, reverse) {
+		t.Fatalf("finding order changed with report order: forward=%v reverse=%v", forward, reverse)
+	}
+	if len(forward) != 2 || forward[0].Policy != "alpha" || forward[1].Policy != "zeta" {
+		t.Fatalf("findings = %v, want deduplicated deterministic order [alpha zeta]", forward)
 	}
 }
 
@@ -640,9 +657,9 @@ func TestBuildIndex_GroupCollisionAcrossCRDs(t *testing.T) {
 
 func TestParseSubjectKey(t *testing.T) {
 	cases := []struct {
-		key                    string
-		group, kind, ns, name  string
-		ok                     bool
+		key                   string
+		group, kind, ns, name string
+		ok                    bool
 	}{
 		// Core-group + namespaced
 		{"/Pod/prod/web", "", "Pod", "prod", "web", true},

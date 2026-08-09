@@ -1174,6 +1174,21 @@ func (d *DynamicResourceCache) List(gvr schema.GroupVersionResource, namespace s
 // Request-facing reads must stay on List / ListNamespaces with explicit
 // namespaces.
 func (d *DynamicResourceCache) ListWatched(gvr schema.GroupVersionResource) ([]*unstructured.Unstructured, error) {
+	items, err := d.ListWatchedReadOnly(gvr)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*unstructured.Unstructured, 0, len(items))
+	for _, item := range items {
+		result = append(result, StripUnstructuredFields(item))
+	}
+	return result, nil
+}
+
+// ListWatchedReadOnly returns the cached objects covered by ListWatched
+// without copying them. Callers must not mutate the objects or retain them
+// beyond the synchronous computation that requested them.
+func (d *DynamicResourceCache) ListWatchedReadOnly(gvr schema.GroupVersionResource) ([]*unstructured.Unstructured, error) {
 	if d == nil {
 		return nil, fmt.Errorf("dynamic resource cache not initialized")
 	}
@@ -1185,7 +1200,7 @@ func (d *DynamicResourceCache) ListWatched(gvr schema.GroupVersionResource) ([]*
 	result := make([]*unstructured.Unstructured, 0, len(items))
 	for _, item := range items {
 		if u, ok := item.(*unstructured.Unstructured); ok {
-			result = append(result, StripUnstructuredFields(u))
+			result = append(result, u)
 		}
 	}
 	return result, nil

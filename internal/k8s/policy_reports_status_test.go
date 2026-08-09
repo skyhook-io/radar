@@ -44,8 +44,8 @@ func coreOnlyList() *metav1.APIResourceList {
 	}
 }
 
-// Bugbot #1 (HIGH). Warmup only runs when the dynamic cache initialized, and
-// that init failure is non-fatal — so "no decision recorded" is permanent on
+// Warmup only runs when the dynamic cache initialized, and that init failure
+// is non-fatal — so "no decision recorded" is permanent on
 // such a cluster, not transient. Reporting it as `warmup` made OmittedReason
 // emit `policySummary.kyverno: cache_cold` on every resource of every
 // non-Kyverno cluster, forever, which is the exact noise the silent
@@ -63,8 +63,8 @@ func TestGetPolicyReportStatus_UndecidedWithoutKyvernoStaysSilent(t *testing.T) 
 	}
 }
 
-// Codex #5: "we couldn't look" is not "there's nothing to see". With no
-// discovery we never established whether Kyverno exists, so concluding
+// "We couldn't look" is not "there's nothing to see". With no discovery we
+// never established whether Kyverno exists, so concluding
 // absence would be inferring a negative from a failed lookup — the silent
 // emptiness this codebase treats as a bug. The reason code separates it from
 // genuine absence, and only genuine absence is silent.

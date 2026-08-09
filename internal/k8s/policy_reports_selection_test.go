@@ -101,6 +101,21 @@ func TestSelectReportGVRs_WatchesBothWhenBothHoldData(t *testing.T) {
 	}
 }
 
+func TestSelectReportGVRs_PreservesLargeObservedCount(t *testing.T) {
+	const reportCount = 20_000
+	sel := selectReportGVRs(
+		servedSet(orReports),
+		counts(map[schema.GroupVersionResource]int{orReports: reportCount}),
+	)
+
+	if !hasGVR(sel, orReports) {
+		t.Fatalf("expected large readable report collection to be watched, got %v", sel.gvrs)
+	}
+	if sel.total != reportCount {
+		t.Errorf("total = %d, want %d", sel.total, reportCount)
+	}
+}
+
 // Within one group the versions are the same resource; watching two would
 // double-count every finding.
 func TestSelectReportGVRs_WatchesOneVersionPerGroup(t *testing.T) {
@@ -145,7 +160,7 @@ func TestSelectReportGVRs_ReportsRBACDenialDistinctly(t *testing.T) {
 	)
 
 	if len(sel.gvrs) != 0 {
-		t.Errorf("must not watch a GVR whose cost could not be bounded, got %v", sel.gvrs)
+		t.Errorf("must not watch a GVR the current identity cannot read, got %v", sel.gvrs)
 	}
 	if sel.reason != ReasonRBACDenied {
 		t.Errorf("reason = %q, want %q", sel.reason, ReasonRBACDenied)
@@ -206,7 +221,6 @@ func TestPolicyReportStatusOmittedReason(t *testing.T) {
 		// non-Kyverno cluster would be noise, not honesty.
 		{"not installed stays silent", PolicyReportStatus{Status: KyvernoStatusNotInstalled}, "", false},
 		{"warmup is cache cold", PolicyReportStatus{Status: KyvernoStatusWarmup}, "cache_cold", true},
-		{"over cap is budget exceeded", PolicyReportStatus{Status: KyvernoStatusDeferred, ReasonCode: ReasonOverCap}, "budget_exceeded", true},
 		{"rbac denial is reported as such", PolicyReportStatus{Status: KyvernoStatusDeferred, ReasonCode: ReasonRBACDenied}, "rbac_denied", true},
 		{"probe failure falls back to cache cold", PolicyReportStatus{Status: KyvernoStatusDeferred, ReasonCode: ReasonProbeFailed}, "cache_cold", true},
 	}
@@ -224,8 +238,8 @@ func TestPolicyReportStatusOmittedReason(t *testing.T) {
 	}
 }
 
-// Bugbot #2 (HIGH): a denial on one sibling must not discard the other.
-// Namespace-scoped RBAC routinely grants `list policyreports` in the user's
+// A denial on one sibling must not discard the other. Namespace-scoped RBAC
+// routinely grants `list policyreports` in the user's
 // namespaces while denying cluster-scoped `clusterpolicyreports`; the old
 // per-family probeFailed flag dropped the whole family and lost every finding
 // the user could legitimately see.
@@ -277,11 +291,9 @@ func TestSelectReportGVRs_ProbeErrorOnSiblingKeepsReadableOne(t *testing.T) {
 	}
 }
 
-// Codex #1 (HIGH): when every served family is legitimately empty — an
-// openreports-enabled cluster that hasn't produced a violation yet — locking
-// onto the first served family leaves the group Kyverno is about to write to
-// unwatched. Reports would then appear in the cluster and never in Radar,
-// with the status still claiming `ready`.
+// When every served family is legitimately empty, locking onto the first
+// family leaves the group Kyverno may write to unwatched. Reports could then
+// appear in the cluster but not in Radar while the status still claims ready.
 func TestSelectReportGVRs_AllEmptyWatchesEveryReadableFamily(t *testing.T) {
 	sel := selectReportGVRs(
 		servedSet(wgReports, wgClusterReports, orReports, orClusterReports),
@@ -301,8 +313,8 @@ func TestSelectReportGVRs_AllEmptyWatchesEveryReadableFamily(t *testing.T) {
 	}
 }
 
-// Codex #3 (MEDIUM): watching what we can read is right, but publishing it as
-// unqualified coverage is not — the denied family has to be nameable.
+// Partial coverage must name the denied family so consumers do not present it
+// as complete.
 func TestSelectReportGVRs_RecordsDeniedGroupsAlongsideAPartialWatch(t *testing.T) {
 	sel := selectReportGVRs(
 		servedSet(wgReports, orReports),
