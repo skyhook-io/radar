@@ -115,12 +115,18 @@ func withSchedulingGate() podOption {
 	}
 }
 
+// withLastTerminationOOM builds a container that was OOMKilled and came back.
+// RestartCount is non-zero because that is the only shape a kubelet produces: a
+// container cannot have a LastTerminationState and zero restarts. Termination
+// history is reported only when something actually restarted, so a fixture
+// without the count would exercise a state that cannot occur.
 func withLastTerminationOOM() podOption {
 	return func(p *corev1.Pod) {
 		p.Status.ContainerStatuses = []corev1.ContainerStatus{{
-			Name:  "app",
-			Ready: false,
-			State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+			Name:         "app",
+			Ready:        false,
+			RestartCount: 2,
+			State:        corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
 			LastTerminationState: corev1.ContainerState{
 				Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled"},
 			},
