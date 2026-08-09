@@ -70,6 +70,7 @@ interface ResourceActionsBarProps {
   isDeleting?: boolean
   cascadeDependents?: CascadeDependent[]
   cascadeLoading?: boolean
+  cascadeRootResolved?: boolean
 
   // Workload restart
   onRestart?: (params: { kind: string; namespace: string; name: string }, callbacks?: { onSuccess?: () => void; onError?: (err: unknown) => void }) => void
@@ -130,7 +131,7 @@ export function ResourceActionsBar({
   canExec, canViewLogs, canPortForward,
   onOpenTerminal, onOpenLogs: openLogs, onOpenWorkloadLogs: openWorkloadLogs, onCopyCommand,
   renderPortForward,
-  onDelete, isDeleting, cascadeDependents, cascadeLoading,
+  onDelete, isDeleting, cascadeDependents, cascadeLoading, cascadeRootResolved,
   onRestart, isRestarting,
   revisions: revisionsList, revisionsLoading, revisionsError, onRollback, isRollingBack,
   onTriggerCronJob, isTriggeringCronJob,
@@ -608,6 +609,7 @@ export function ResourceActionsBar({
         isLoading={isDeleting ?? false}
         cascadeDependents={cascadeDependents}
         cascadeLoading={cascadeLoading}
+        cascadeRootResolved={cascadeRootResolved}
       />
 
       {/* Node cordon confirmation */}

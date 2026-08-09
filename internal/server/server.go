@@ -3883,13 +3883,19 @@ func (s *Server) handleCascadeDeletePreview(w http.ResponseWriter, r *http.Reque
 	kind := chi.URLParam(r, "kind")
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
+	group := r.URL.Query().Get("group")
 	if namespace == "_" {
 		namespace = ""
 	}
 
 	cachedTopo := s.broadcaster.GetCachedTopology()
 	dp := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
-	preview := topology.GetCascadeDeletePreview(kind, namespace, name, cachedTopo, dp)
+	preview := topology.GetCascadeDeletePreview(topology.ResourceRef{
+		Kind:      kind,
+		Namespace: namespace,
+		Name:      name,
+		Group:     group,
+	}, cachedTopo, dp)
 
 	s.writeJSON(w, preview)
 }

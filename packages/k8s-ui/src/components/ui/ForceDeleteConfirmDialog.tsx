@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import { ConfirmDialog } from './ConfirmDialog'
 import { pluralize } from '../../utils/pluralize'
 
@@ -20,6 +20,7 @@ interface ForceDeleteConfirmDialogProps {
   isLoading: boolean
   cascadeDependents?: CascadeDependent[]
   cascadeLoading?: boolean
+  cascadeRootResolved?: boolean
 }
 
 export function ForceDeleteConfirmDialog({
@@ -32,6 +33,7 @@ export function ForceDeleteConfirmDialog({
   isLoading,
   cascadeDependents,
   cascadeLoading,
+  cascadeRootResolved,
 }: ForceDeleteConfirmDialogProps) {
   const [forceDelete, setForceDelete] = useState(false)
 
@@ -66,6 +68,15 @@ export function ForceDeleteConfirmDialog({
 
         {!cascadeLoading && cascadeDependents && cascadeDependents.length > 0 && (
           <CascadeDependentsList dependents={cascadeDependents} />
+        )}
+
+        {!cascadeLoading && cascadeRootResolved === false && (
+          <div className="flex items-start gap-2 rounded border border-theme-border bg-theme-elevated px-3 py-2 text-xs text-warning-text">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>
+              Radar couldn&apos;t verify which dependent resources Kubernetes will also delete. Additional resources may be deleted but aren&apos;t shown here.
+            </span>
+          </div>
         )}
 
         <label className="flex items-center gap-2 text-sm text-theme-text-secondary">

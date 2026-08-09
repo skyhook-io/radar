@@ -1,6 +1,7 @@
 package topology
 
 import (
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -12,12 +13,12 @@ import (
 	k8score "github.com/skyhook-io/radar/pkg/k8score"
 )
 
-// stubDP is a minimal DynamicProvider for CRD-fallback regression tests in
-// the topology package. Only GetGVR and Get are exercised by the metadata
-// lookup path; the rest are stubs sufficient to satisfy the interface.
+// stubDP is the shared minimal DynamicProvider for topology package tests.
 type stubDP struct {
-	gvr map[string]schema.GroupVersionResource
-	obj map[string]*unstructured.Unstructured // key = "ns/name"
+	gvr        map[string]schema.GroupVersionResource
+	gvrByGroup map[string]schema.GroupVersionResource
+	kindByGVR  map[schema.GroupVersionResource]string
+	obj        map[string]*unstructured.Unstructured // key = "ns/name"
 }
 
 func (s *stubDP) List(_ schema.GroupVersionResource, _ string) ([]*unstructured.Unstructured, error) {
@@ -38,11 +39,16 @@ func (s *stubDP) GetGVR(kindOrName string) (schema.GroupVersionResource, bool) {
 	g, ok := s.gvr[kindOrName]
 	return g, ok
 }
-func (s *stubDP) GetGVRWithGroup(kindOrName, _ string) (schema.GroupVersionResource, bool) {
+func (s *stubDP) GetGVRWithGroup(kindOrName, group string) (schema.GroupVersionResource, bool) {
+	if gvr, ok := s.gvrByGroup[group+"/"+strings.ToLower(kindOrName)]; ok {
+		return gvr, true
+	}
 	return s.GetGVR(kindOrName)
 }
-func (s *stubDP) GetKindForGVR(_ schema.GroupVersionResource) string { return "" }
-func (s *stubDP) IsCRD(_ string) bool                                { return true }
+func (s *stubDP) GetKindForGVR(gvr schema.GroupVersionResource) string {
+	return s.kindByGVR[gvr]
+}
+func (s *stubDP) IsCRD(_ string) bool { return true }
 
 func meta(labels, annos map[string]string) metav1.Object {
 	return &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: annos}}

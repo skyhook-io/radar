@@ -248,7 +248,13 @@ interface WorkloadViewProps {
   pushTabHistory?: boolean
 }
 
-function useActionsBarProps(kind: string, namespace: string, name: string) {
+function useActionsBarProps(
+  kind: string,
+  namespace: string,
+  name: string,
+  group: string | undefined,
+  cascadeEnabled: boolean,
+) {
   const { showCopied } = useToast()
   const openTerminal = useOpenTerminal()
   const openLogs = useOpenLogs()
@@ -284,11 +290,16 @@ function useActionsBarProps(kind: string, namespace: string, name: string) {
   const argoSuspendMutation = useArgoSuspend()
   const argoResumeMutation = useArgoResume()
 
-  const { data: cascadePreview, isLoading: cascadeLoading } = useCascadeDeletePreview(
+  const {
+    data: cascadePreview,
+    isLoading: cascadeLoading,
+    isError: cascadeError,
+  } = useCascadeDeletePreview(
     kind,
     namespace,
     name,
-    true,
+    group,
+    cascadeEnabled,
   )
 
   const canNodeWrite = useCanNodeWrite()
@@ -327,6 +338,7 @@ function useActionsBarProps(kind: string, namespace: string, name: string) {
     isDeleting: deleteMutation.isPending,
     cascadeDependents: cascadePreview?.dependents,
     cascadeLoading,
+    cascadeRootResolved: cascadeError ? false : cascadePreview?.rootResolved,
     onRestart: (params: Parameters<typeof restartWorkloadMutation.mutate>[0]) =>
       restartWorkloadMutation.mutate(params),
     isRestarting: restartWorkloadMutation.isPending,
@@ -675,7 +687,13 @@ export function WorkloadView({
   )
   const updateResource = useUpdateResource()
   const previewResources = usePreviewResources()
-  const baseActionsBarProps = useActionsBarProps(apiKind, namespace, name)
+  const baseActionsBarProps = useActionsBarProps(
+    apiKind,
+    namespace,
+    name,
+    effectiveGroup,
+    !resourceLoading && Boolean(resource),
+  )
   const desktopDownload = useDesktopDownload()
 
   // Live Operational Issues for this resource. Fetched here (not inside the lead

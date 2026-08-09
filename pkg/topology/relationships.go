@@ -86,19 +86,66 @@ func edgesForNode(topo *Topology, idx *RelationshipsIndex, nodeID string) (incom
 	return incoming, outgoing
 }
 
-// GetCascadeDeletePreview returns a preview of all resources that will be garbage-collected
-// when the specified resource is deleted. It walks EdgeManages edges recursively
-// to find all transitive dependents — mirroring Kubernetes owner-reference cascade behavior.
-func GetCascadeDeletePreview(kind, namespace, name string, topo *Topology, dp DynamicProvider) *CascadeDeletePreview {
+// GetCascadeDeletePreview walks topology management edges to approximate the
+// resources Kubernetes may garbage-collect with root.
+func GetCascadeDeletePreview(root ResourceRef, topo *Topology, dp DynamicProvider) *CascadeDeletePreview {
+	preview := &CascadeDeletePreview{
+		Root:       root,
+		Dependents: []ResourceRef{},
+	}
 	if topo == nil {
-		return &CascadeDeletePreview{
-			Root:       ResourceRef{Kind: kind, Namespace: namespace, Name: name},
-			Dependents: []ResourceRef{},
-		}
+		return preview
 	}
 
-	root := ResourceRef{Kind: kind, Namespace: namespace, Name: name}
-	enrichRef(&root, dp)
+	rootID := buildNodeID(root.Kind, root.Namespace, root.Name, dp)
+	if root.Group != "" {
+		if dp == nil {
+			return preview
+		}
+		gvr, ok := dp.GetGVRWithGroup(root.Kind, root.Group)
+		if !ok {
+			return preview
+		}
+		resolvedKind := dp.GetKindForGVR(gvr)
+		if resolvedKind == "" {
+			return preview
+		}
+		rootID = strings.ToLower(KindForGVK(resolvedKind, root.Group)) + "/" + root.Namespace + "/" + root.Name
+	}
+
+	nodeByID := make(map[string]*Node, len(topo.Nodes))
+	for i := range topo.Nodes {
+		nodeByID[topo.Nodes[i].ID] = &topo.Nodes[i]
+	}
+	rootNode, ok := nodeByID[rootID]
+	if !ok {
+		return preview
+	}
+	if root.Group != "" {
+		if nodeGroup := nodeAPIGroupFromData(rootNode); nodeGroup != "" && nodeGroup != root.Group {
+			return preview
+		}
+	} else {
+		rootKind := string(rootNode.Kind)
+		if externalKind, found := collisionKindToK8sKind[rootNode.Kind]; found {
+			rootKind = externalKind
+		}
+		matches := 0
+		for i := range topo.Nodes {
+			node := &topo.Nodes[i]
+			nodeKind := string(node.Kind)
+			if externalKind, found := collisionKindToK8sKind[node.Kind]; found {
+				nodeKind = externalKind
+			}
+			if strings.EqualFold(nodeKind, rootKind) && node.Name == root.Name && nodeNamespaceFromData(node) == root.Namespace {
+				matches++
+			}
+		}
+		if matches > 1 {
+			return preview
+		}
+	}
+	preview.RootResolved = true
 
 	// Build adjacency list for EdgeManages edges (source → targets)
 	manages := make(map[string][]string)
@@ -109,7 +156,6 @@ func GetCascadeDeletePreview(kind, namespace, name string, topo *Topology, dp Dy
 	}
 
 	// BFS from root node
-	rootID := buildNodeID(kind, namespace, name, dp)
 	visited := map[string]bool{rootID: true}
 	queue := []string{rootID}
 	var dependents []ResourceRef
@@ -128,20 +174,20 @@ func GetCascadeDeletePreview(kind, namespace, name string, topo *Topology, dp Dy
 			if ref == nil {
 				continue
 			}
+			if node := nodeByID[targetID]; node != nil {
+				ref.Group = nodeAPIGroupFromData(node)
+			}
 			enrichRef(ref, dp)
 			dependents = append(dependents, *ref)
 			queue = append(queue, targetID)
 		}
 	}
 
-	if dependents == nil {
-		dependents = []ResourceRef{}
+	if dependents != nil {
+		preview.Dependents = dependents
 	}
 
-	return &CascadeDeletePreview{
-		Root:       root,
-		Dependents: dependents,
-	}
+	return preview
 }
 
 // resolveAPIGroup returns the API group for a resource kind using resource discovery.

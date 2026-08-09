@@ -3622,6 +3622,7 @@ export function useUpdateResource() {
 // Cascade delete preview — shows resources that will be garbage-collected
 export interface CascadeDeletePreview {
   root: { kind: string; namespace: string; name: string; group?: string };
+  rootResolved: boolean;
   dependents: {
     kind: string;
     namespace: string;
@@ -3634,13 +3635,14 @@ export function useCascadeDeletePreview(
   kind: string,
   namespace: string,
   name: string,
+  group: string | undefined,
   enabled: boolean,
 ) {
   return useQuery<CascadeDeletePreview>({
-    queryKey: ["cascade-preview", kind, namespace, name],
+    queryKey: ["cascade-preview", kind, group, namespace, name],
     queryFn: () =>
       fetchJSON<CascadeDeletePreview>(
-        `/resources/${kind}/${namespace}/${name}/cascade-preview`,
+        `/resources/${kind}/${namespace}/${name}/cascade-preview${group ? `?group=${encodeURIComponent(group)}` : ""}`,
       ),
     enabled,
     staleTime: 30_000,
