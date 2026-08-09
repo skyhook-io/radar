@@ -43,7 +43,7 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 	var since time.Time
 	if p.OnsetUnknown {
 		since = time.Time{}
-	} else if !p.OnsetAt.IsZero() {
+	} else if !p.OnsetAt.IsZero() && !p.OnsetAt.After(now) {
 		since = p.OnsetAt.UTC()
 	}
 	reason := p.Reason

@@ -478,6 +478,26 @@ func TestUnknownOnsetUsesZeroCELSentinel(t *testing.T) {
 	}
 }
 
+func TestFutureProblemOnsetIsUnknown(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	issue := fromProblem(k8s.Detection{
+		Kind:             "PersistentVolumeClaim",
+		Namespace:        "prod",
+		Name:             "data",
+		Severity:         "critical",
+		Reason:           "Missing StorageClass",
+		OnsetAt:          now.Add(time.Minute),
+		IssueTiming:      "started_at_resource_creation",
+		IssueTimingBasis: "phase",
+	}, now, SourceProblem)
+	if !issue.FirstSeen.IsZero() || !issue.OnsetUnknown {
+		t.Fatalf("future-onset normalization = %+v", issue)
+	}
+	if issue.IssueTiming != "" || issue.IssueTimingBasis != "" {
+		t.Fatalf("future-onset timing metadata = %q/%q, want empty", issue.IssueTiming, issue.IssueTimingBasis)
+	}
+}
+
 func TestProblemOnsetRequiresExactEvidence(t *testing.T) {
 	now := time.Unix(10_000, 0)
 	createdAt := time.Unix(1_000, 0)
