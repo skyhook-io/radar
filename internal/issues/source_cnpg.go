@@ -233,21 +233,23 @@ func detectCNPGClusterIssues(gvr schema.GroupVersionResource, kind string, u *un
 	//
 	// The condition proves the LAST ARCHIVE ATTEMPT failed — it is not an exact
 	// RPO, and the message deliberately doesn't claim one.
-	if _, reason, msg, since, ok := conditions.FindFalseCondition(u, "ContinuousArchiving"); ok {
+	if condition, ok := conditions.FindFalseConditionWithTime(u, "ContinuousArchiving"); ok {
 		out = append(out, newConditionIssue(gvr, kind, ns, name, SeverityCritical,
 			"CNPGWALArchivingFailing",
-			cnpgMessage("The last WAL archival did not complete; recovery-point advancement is uncertain", reason, msg),
-			since, "CNPGWALArchivingFailing", created))
+			cnpgMessage("The last WAL archival did not complete; recovery-point advancement is uncertain", condition.Reason, condition.Message),
+			condition.LastTransitionTime, condition.HasLastTransitionTime,
+			"CNPGWALArchivingFailing", created))
 	}
 
 	// CNPG also sets LastBackupSucceeded=False with reason BackupStarted while a
 	// backup is merely in flight. Treating that as a failure would raise an issue
 	// on every backup run — the canonical alert-fatigue trap.
-	if _, reason, msg, since, ok := conditions.FindFalseCondition(u, "LastBackupSucceeded"); ok && reason != "BackupStarted" {
+	if condition, ok := conditions.FindFalseConditionWithTime(u, "LastBackupSucceeded"); ok && condition.Reason != "BackupStarted" {
 		out = append(out, newConditionIssue(gvr, kind, ns, name, SeverityWarning,
 			"CNPGLastBackupFailed",
-			cnpgMessage("The most recent backup attempt failed", reason, msg),
-			since, "CNPGLastBackupFailed", created))
+			cnpgMessage("The most recent backup attempt failed", condition.Reason, condition.Message),
+			condition.LastTransitionTime, condition.HasLastTransitionTime,
+			"CNPGLastBackupFailed", created))
 	}
 
 	desired, okD, _ := unstructured.NestedInt64(u.Object, "spec", "instances")
@@ -271,10 +273,10 @@ func detectCNPGClusterIssues(gvr schema.GroupVersionResource, kind string, u *un
 		case cnpgPhaseUnknownPlugin, cnpgPhaseFailurePlugin:
 			reason = "CNPGClusterPluginFailure"
 		}
-		// Phase carries no lastTransitionTime, so since=0 — newConditionIssue
-		// omits issue_timing rather than inventing one from now().
+		// Phase carries no lastTransitionTime, so newConditionIssue omits
+		// issue_timing rather than inventing one from now().
 		out = append(out, newConditionIssue(gvr, kind, ns, name, SeverityCritical,
-			reason, phase, 0, "CNPGClusterPhase", created))
+			reason, phase, time.Time{}, false, "CNPGClusterPhase", created))
 
 	case phase == cnpgPhaseFailingOver:
 		// A failover explains a shortfall, but not a cluster with nothing
@@ -282,7 +284,7 @@ func detectCNPGClusterIssues(gvr schema.GroupVersionResource, kind string, u *un
 		// downgraded it to this warning while the badge showed red.
 		phaseExplained = !allDown
 		out = append(out, newConditionIssue(gvr, kind, ns, name, SeverityWarning,
-			"CNPGClusterFailingOver", phase, 0, "CNPGClusterPhase", created))
+			"CNPGClusterFailingOver", phase, time.Time{}, false, "CNPGClusterPhase", created))
 
 	case cnpgAttentionPhases[phase]:
 		// The phase explains the state either way — primaryUpdateStrategy only
@@ -295,7 +297,7 @@ func detectCNPGClusterIssues(gvr schema.GroupVersionResource, kind string, u *un
 		strategy, _, _ := unstructured.NestedString(u.Object, "spec", "primaryUpdateStrategy")
 		if strategy != "supervised" {
 			out = append(out, newConditionIssue(gvr, kind, ns, name, SeverityWarning,
-				"CNPGClusterWaitingForUser", phase, 0, "CNPGClusterPhase", created))
+				"CNPGClusterWaitingForUser", phase, time.Time{}, false, "CNPGClusterPhase", created))
 		}
 
 	case cnpgTransientPhases[phase]:
@@ -325,7 +327,7 @@ func detectCNPGClusterIssues(gvr schema.GroupVersionResource, kind string, u *un
 			out = append(out, newConditionIssue(gvr, kind, ns, name, severity,
 				"CNPGClusterDegraded",
 				fmt.Sprintf("Only %d of %d instances are ready", ready, desired),
-				0, "CNPGClusterDegraded", created))
+				time.Time{}, false, "CNPGClusterDegraded", created))
 		}
 	}
 
@@ -346,14 +348,14 @@ func detectCNPGBackupIssues(gvr schema.GroupVersionResource, kind string, u *uns
 			msg += ": " + e
 		}
 		return []Issue{newConditionIssue(gvr, kind, ns, name, SeverityCritical,
-			"CNPGWALArchivingFailing", msg, 0, "CNPGWALArchivingFailing", created)}
+			"CNPGWALArchivingFailing", msg, time.Time{}, false, "CNPGWALArchivingFailing", created)}
 	case "failed":
 		msg := "Backup failed"
 		if e, _, _ := unstructured.NestedString(u.Object, "status", "error"); e != "" {
 			msg += ": " + e
 		}
 		return []Issue{newConditionIssue(gvr, kind, ns, name, SeverityWarning,
-			"CNPGBackupFailed", msg, 0, "CNPGBackupFailed", created)}
+			"CNPGBackupFailed", msg, time.Time{}, false, "CNPGBackupFailed", created)}
 	}
 	return nil
 }

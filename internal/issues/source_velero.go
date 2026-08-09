@@ -448,8 +448,9 @@ func veleroRunIssue(gvr schema.GroupVersionResource, kind string, u *unstructure
 		}
 		message = message + " (" + strconv.FormatInt(errCount, 10) + noun
 	}
+	transitionAt, transitionKnown := veleroRunTimestamp(u, phase)
 	return newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), severity, reason, message,
-		veleroRunSince(u), "", u.GetCreationTimestamp().Time), true
+		transitionAt, transitionKnown, "", u.GetCreationTimestamp().Time), true
 }
 
 // veleroScheduleIssues reports schedules Velero refused to accept. A paused
@@ -529,23 +530,23 @@ func veleroFailureMessage(u *unstructured.Unstructured, fallback string) string 
 	return fallback
 }
 
-// veleroRunSince is how long ago a Backup or Restore reached its verdict.
+// veleroRunTimestamp is when a Backup or Restore reached its verdict.
 // Velero has no lastTransitionTime, so the completion time is the closest thing
 // to "when this became true". A FailedValidation run never starts and so has
 // neither timestamp, but it is created and rejected in the same instant, which
 // makes creationTimestamp an accurate anchor for that case specifically.
-func veleroRunSince(u *unstructured.Unstructured) time.Duration {
+func veleroRunTimestamp(u *unstructured.Unstructured, phase string) (time.Time, bool) {
 	for _, field := range []string{"completionTimestamp", "startTimestamp"} {
 		if ts, ok, _ := unstructured.NestedString(u.Object, "status", field); ok && ts != "" {
 			if t, err := time.Parse(time.RFC3339, ts); err == nil {
-				return time.Since(t)
+				return t, true
 			}
 		}
 	}
-	if created := u.GetCreationTimestamp().Time; !created.IsZero() {
-		return time.Since(created)
+	if created := u.GetCreationTimestamp().Time; phase == "FailedValidation" && !created.IsZero() {
+		return created, true
 	}
-	return 0
+	return time.Time{}, false
 }
 
 // veleroStateIssue builds an issue for the kinds that describe standing state
@@ -565,7 +566,7 @@ func veleroRunSince(u *unstructured.Unstructured) time.Duration {
 //
 // LastSeen stays at now: that one is true — it is when we observed the state.
 func veleroStateIssue(gvr schema.GroupVersionResource, kind, namespace, name string, severity Severity, reason, message string, createdAt time.Time) Issue {
-	iss := newConditionIssue(gvr, kind, namespace, name, severity, reason, message, 0, "", createdAt)
+	iss := newConditionIssue(gvr, kind, namespace, name, severity, reason, message, time.Time{}, false, "", createdAt)
 	iss.FirstSeen = time.Time{}
 	iss.LastSeen = time.Now()
 	return iss

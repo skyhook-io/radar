@@ -770,9 +770,9 @@ func hpaBlockedOnMetricFamily(i Issue, family string) bool {
 // the node, and the category is consistent with the pressure, but co-located is
 // not proof of cause — hence the "may be the cause / verify" framing. A node whose
 // reason has no attributable categories (a dead-kubelet NotReady node, or an
-// unrecognized reason) links nothing. No timestamp guard: pod-issue onset isn't
-// reliably recorded (FirstSeen tracks pod age, not failure onset), so a guard
-// would drop legitimate long-running pods while still admitting unrelated ones.
+// unrecognized reason) links nothing. There is no timestamp guard because even
+// exact condition transitions can lag or retrigger; topology plus category is
+// the evidence for this deliberately medium-confidence relationship.
 func addNodeBlastRadiusContext(b *diagnosticContextBuilder, node Issue, edges *[]incidentEdge, np nodeBlastRadiusProvider, flatByResource map[string][]Issue, groupedByID map[string]Issue) {
 	// A node can hit several pressures at once (memory + disk + PID); those
 	// detections share the node_not_ready ID and group into one issue that keeps

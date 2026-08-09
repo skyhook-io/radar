@@ -31,7 +31,7 @@ func TestArgoRolloutFailure(t *testing.T) {
 		{"type": "Progressing", "status": "False", "reason": "ProgressDeadlineExceeded", "message": "deadline"},
 		{"type": "InvalidSpec", "status": "True", "reason": "InvalidSpec", "message": "bad stableService"},
 	})
-	if r, m, _, ok := argoRolloutFailure(ro); !ok || r != "InvalidSpec" || m != "bad stableService" {
+	if r, m, _, _, ok := argoRolloutFailure(ro); !ok || r != "InvalidSpec" || m != "bad stableService" {
 		t.Errorf("InvalidSpec must win: got (%q,%q,%v)", r, m, ok)
 	}
 
@@ -40,7 +40,7 @@ func TestArgoRolloutFailure(t *testing.T) {
 		{"type": "Healthy", "status": "False", "reason": "RolloutHealthy"},
 		{"type": "Progressing", "status": "False", "reason": "ProgressDeadlineExceeded", "message": "timed out"},
 	})
-	if r, _, _, ok := argoRolloutFailure(stalled); !ok || r != "Progressing: ProgressDeadlineExceeded" {
+	if r, _, _, _, ok := argoRolloutFailure(stalled); !ok || r != "Progressing: ProgressDeadlineExceeded" {
 		t.Errorf("ProgressDeadlineExceeded fallback: got (%q,%v)", r, ok)
 	}
 
@@ -50,7 +50,7 @@ func TestArgoRolloutFailure(t *testing.T) {
 		{"type": "Healthy", "status": "False", "reason": "RolloutHealthy"},
 		{"type": "Progressing", "status": "True", "reason": "ReplicaSetUpdated"},
 	})
-	if _, _, _, ok := argoRolloutFailure(progressing); ok {
+	if _, _, _, _, ok := argoRolloutFailure(progressing); ok {
 		t.Error("a mid-progress rollout must not be flagged as a definitive failure")
 	}
 
@@ -60,17 +60,17 @@ func TestArgoRolloutFailure(t *testing.T) {
 		{"type": "Healthy", "status": "False", "reason": "RolloutHealthy"},
 		{"type": "InvalidSpec", "status": "True", "reason": "InvalidSpec", "message": "bad", "lastTransitionTime": time.Now().Add(-5 * time.Minute).Format(time.RFC3339)},
 	})
-	if _, _, since, ok := argoRolloutFailure(withLTT); !ok || since < 4*time.Minute || since > 6*time.Minute {
-		t.Errorf("valid LTT must produce since ≈ 5m, got (%v, %v)", since, ok)
+	if _, _, transitionAt, known, ok := argoRolloutFailure(withLTT); !ok || !known || time.Since(transitionAt) < 4*time.Minute || time.Since(transitionAt) > 6*time.Minute {
+		t.Errorf("valid LTT must produce transition ≈ 5m ago, got (%v, %v, %v)", transitionAt, known, ok)
 	}
 
-	// Malformed or missing LTT → since=0, which downstream means "omit issue_timing"
+	// Malformed or missing LTT means "omit issue_timing"
 	// rather than falling back to a wrong timestamp.
 	badLTT := rolloutWithConditions([]map[string]any{
 		{"type": "InvalidSpec", "status": "True", "reason": "InvalidSpec", "lastTransitionTime": "not-a-timestamp"},
 	})
-	if _, _, since, ok := argoRolloutFailure(badLTT); !ok || since != 0 {
-		t.Errorf("malformed LTT must produce since=0, got (%v, %v)", since, ok)
+	if _, _, transitionAt, known, ok := argoRolloutFailure(badLTT); !ok || known || !transitionAt.IsZero() {
+		t.Errorf("malformed LTT must produce unknown transition, got (%v, %v, %v)", transitionAt, known, ok)
 	}
 }
 
@@ -106,7 +106,7 @@ func TestIsTransientCRDConditionArgoRolloutPause(t *testing.T) {
 	}
 }
 
-// TestNewConditionIssue_IssueTimingSinceGuard pins the since=0 guard: a condition
+// TestNewConditionIssue_IssueTimingSinceGuard pins the missing-timestamp guard: a condition
 // with no lastTransitionTime must not produce an issue_timing. Without the guard,
 // lastSeen=now makes failingFor≈0 and any old resource looks like it was
 // "healthy for ages then broke" — a false runtime classification.
@@ -114,20 +114,25 @@ func TestNewConditionIssue_IssueTimingSinceGuard(t *testing.T) {
 	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
 	createdAt := time.Now().Add(-2 * time.Hour)
 
-	noLTT := newConditionIssue(gvr, "Widget", "ns", "w", SeverityWarning, "Ready: Bad", "msg", 0, "fp", createdAt)
+	noLTT := newConditionIssue(gvr, "Widget", "ns", "w", SeverityWarning, "Ready: Bad", "msg", time.Time{}, false, "fp", createdAt)
 	if noLTT.IssueTiming != "" || noLTT.IssueTimingBasis != "" {
-		t.Errorf("since=0 must omit issue_timing, got (%q, %q)", noLTT.IssueTiming, noLTT.IssueTimingBasis)
+		t.Errorf("missing transition must omit issue_timing, got (%q, %q)", noLTT.IssueTiming, noLTT.IssueTimingBasis)
 	}
 	if !noLTT.OnsetUnknown || !noLTT.FirstSeen.IsZero() || noLTT.LastSeen.IsZero() {
-		t.Errorf("since=0 onset = unknown:%v first:%v last:%v, want unknown with observation time only", noLTT.OnsetUnknown, noLTT.FirstSeen, noLTT.LastSeen)
+		t.Errorf("missing transition onset = unknown:%v first:%v last:%v, want unknown with observation time only", noLTT.OnsetUnknown, noLTT.FirstSeen, noLTT.LastSeen)
 	}
 
-	withLTT := newConditionIssue(gvr, "Widget", "ns", "w", SeverityWarning, "Ready: Bad", "msg", 30*time.Minute, "fp", createdAt)
+	withLTT := newConditionIssue(gvr, "Widget", "ns", "w", SeverityWarning, "Ready: Bad", "msg", time.Now().Add(-30*time.Minute), true, "fp", createdAt)
 	if withLTT.IssueTiming != "started_after_resource_was_healthy" || withLTT.IssueTimingBasis != "condition" {
 		t.Errorf("90m healthy then failing 30m must be started_after_resource_was_healthy/condition, got (%q, %q)", withLTT.IssueTiming, withLTT.IssueTimingBasis)
 	}
 	if withLTT.OnsetUnknown || withLTT.FirstSeen.IsZero() {
 		t.Errorf("timestamped condition onset = unknown:%v first:%v, want known", withLTT.OnsetUnknown, withLTT.FirstSeen)
+	}
+
+	future := newConditionIssue(gvr, "Widget", "ns", "w", SeverityWarning, "Ready: Bad", "msg", time.Now().Add(time.Hour), true, "fp", createdAt)
+	if !future.OnsetUnknown || !future.FirstSeen.IsZero() || future.IssueTiming != "" {
+		t.Errorf("future condition timestamp must be rejected as onset evidence: %+v", future)
 	}
 }
 
@@ -303,6 +308,38 @@ func TestDetectGatewayRouteParentIssues_CollapsesPerListenerDupes(t *testing.T) 
 		if !strings.Contains(got[0].Message, want) {
 			t.Fatalf("collapsed message %q must contain %q", got[0].Message, want)
 		}
+	}
+}
+
+func TestDetectGatewayRouteParentIssues_PreservesMixedOnsetCoverage(t *testing.T) {
+	routeGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}
+	route := routeWithParents("primary-gateway", []struct{ section, reason, message string }{
+		{"http", "NoMatchingListenerHostname", "no hostname intersections"},
+		{"https", "NoMatchingListenerHostname", "no hostname intersections"},
+	})
+	parents, _, _ := unstructured.NestedSlice(route.Object, "status", "parents")
+	second := parents[1].(map[string]any)
+	condition := second["conditions"].([]any)[0].(map[string]any)
+	delete(condition, "lastTransitionTime")
+	if err := unstructured.SetNestedSlice(route.Object, parents, "status", "parents"); err != nil {
+		t.Fatal(err)
+	}
+	p := &fakeProvider{
+		dynamic:    map[schema.GroupVersionResource][]*unstructured.Unstructured{routeGVR: {route}},
+		kinds:      map[schema.GroupVersionResource]string{routeGVR: "HTTPRoute"},
+		namespaced: map[schema.GroupVersionResource]bool{routeGVR: true},
+	}
+
+	got := Compose(p, Filters{})
+	if len(got) != 1 {
+		t.Fatalf("mixed listener onset must collapse to 1 issue, got %d: %+v", len(got), got)
+	}
+	issue := got[0]
+	if issue.FirstSeen.IsZero() || issue.OnsetUnknown || issue.OnsetCoverage == nil || issue.OnsetCoverage.Known != 1 || issue.OnsetCoverage.Unknown != 1 {
+		t.Fatalf("mixed listener onset provenance = first:%v unknown:%v coverage:%+v", issue.FirstSeen, issue.OnsetUnknown, issue.OnsetCoverage)
+	}
+	if issue.IssueTiming != "" || issue.IssueTimingBasis != "" {
+		t.Fatalf("mixed listener group must not claim one timing class: %q/%q", issue.IssueTiming, issue.IssueTimingBasis)
 	}
 }
 

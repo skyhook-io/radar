@@ -478,6 +478,51 @@ func TestUnknownOnsetUsesZeroCELSentinel(t *testing.T) {
 	}
 }
 
+func TestProblemOnsetRequiresExactEvidence(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	createdAt := time.Unix(1_000, 0)
+	withoutEvidence := fromProblem(k8s.Detection{
+		Kind: "Deployment", Namespace: "prod", Name: "api", Severity: "critical",
+		Reason: "Unavailable", AgeSeconds: 9_000, DurationSeconds: 9_000, ResourceCreatedAt: createdAt,
+		IssueTiming: "started_at_resource_creation", IssueTimingBasis: "condition",
+	}, now, SourceProblem)
+	if !withoutEvidence.FirstSeen.IsZero() || !withoutEvidence.OnsetUnknown || !withoutEvidence.ResourceCreatedAt.Equal(createdAt) || withoutEvidence.IssueTiming != "" || withoutEvidence.IssueTimingBasis != "" {
+		t.Fatalf("age-only detection fabricated onset: %+v", withoutEvidence)
+	}
+
+	onsetAt := now.Add(-500 * time.Millisecond)
+	withEvidence := fromProblem(k8s.Detection{
+		Kind: "Deployment", Namespace: "prod", Name: "api", Severity: "critical",
+		Reason: "Unavailable", OnsetAt: onsetAt, ResourceCreatedAt: createdAt,
+	}, now, SourceProblem)
+	if withEvidence.OnsetUnknown || !withEvidence.FirstSeen.Equal(onsetAt) {
+		t.Fatalf("exact sub-second onset was lost: %+v", withEvidence)
+	}
+	activation := issueToActivation(withoutEvidence)
+	if activation["resource_created_at"] != createdAt.Unix() {
+		t.Fatalf("resource_created_at CEL binding = %#v, want %d", activation["resource_created_at"], createdAt.Unix())
+	}
+	mixed := withEvidence
+	mixed.OnsetCoverage = &issuesapi.OnsetCoverage{Known: 2, Unknown: 48}
+	mixedActivation := issueToActivation(mixed)
+	if mixedActivation["onset_unknown"] != false || mixedActivation["onset_coverage_known"] != int64(2) || mixedActivation["onset_coverage_unknown"] != int64(48) {
+		t.Fatalf("onset coverage CEL bindings = %#v", mixedActivation)
+	}
+}
+
+func TestPublicIssueTimesNormalizeToUTC(t *testing.T) {
+	local := time.FixedZone("test-offset", 3*60*60)
+	out, _ := finalizeShapedIssues([]Issue{{
+		Name:              "offset",
+		FirstSeen:         time.Date(2026, 8, 10, 1, 30, 0, 0, local),
+		ResourceCreatedAt: time.Date(2026, 8, 10, 1, 0, 0, 0, local),
+		LastSeen:          time.Date(2026, 8, 10, 2, 0, 0, 0, local),
+	}}, Filters{Limit: NoLimit}, false, true)
+	if len(out) != 1 || out[0].FirstSeen.Location() != time.UTC || out[0].ResourceCreatedAt.Location() != time.UTC || out[0].LastSeen.Location() != time.UTC {
+		t.Fatalf("public issue times were not normalized to UTC: %+v", out)
+	}
+}
+
 func TestCompose_NormalizesProblemSeverity(t *testing.T) {
 	p := &fakeProvider{
 		problems: []k8s.Detection{
@@ -935,7 +980,7 @@ func TestCompose_SuppressedParentDonatesIssueTimingToChildren(t *testing.T) {
 	t.Run("after-healthy donates to non-cycling child", func(t *testing.T) {
 		p := &fakeProvider{
 			problems: []k8s.Detection{
-				{Kind: "Deployment", Namespace: "ns", Name: "web", Group: "apps", Severity: "critical", Reason: "1/3 available", IssueTiming: "started_after_resource_was_healthy", IssueTimingBasis: "condition"},
+				{Kind: "Deployment", Namespace: "ns", Name: "web", Group: "apps", Severity: "critical", Reason: "1/3 available", OnsetAt: time.Now().Add(-time.Hour), IssueTiming: "started_after_resource_was_healthy", IssueTimingBasis: "condition"},
 				{Kind: "Pod", Namespace: "ns", Name: "web-abc", Severity: "critical", Reason: "ImagePullBackOff", OwnerKind: "Deployment", OwnerName: "web"},
 			},
 		}
@@ -954,7 +999,7 @@ func TestCompose_SuppressedParentDonatesIssueTimingToChildren(t *testing.T) {
 	t.Run("after-healthy blocked for crashloop child", func(t *testing.T) {
 		p := &fakeProvider{
 			problems: []k8s.Detection{
-				{Kind: "Deployment", Namespace: "ns", Name: "web", Group: "apps", Severity: "critical", Reason: "1/3 available", IssueTiming: "started_after_resource_was_healthy", IssueTimingBasis: "condition"},
+				{Kind: "Deployment", Namespace: "ns", Name: "web", Group: "apps", Severity: "critical", Reason: "1/3 available", OnsetAt: time.Now().Add(-time.Hour), IssueTiming: "started_after_resource_was_healthy", IssueTimingBasis: "condition"},
 				{Kind: "Pod", Namespace: "ns", Name: "web-abc", Severity: "critical", Reason: "CrashLoopBackOff", OwnerKind: "Deployment", OwnerName: "web"},
 			},
 		}
@@ -971,7 +1016,7 @@ func TestCompose_SuppressedParentDonatesIssueTimingToChildren(t *testing.T) {
 		// restart-cycling children.
 		p := &fakeProvider{
 			problems: []k8s.Detection{
-				{Kind: "Deployment", Namespace: "ns", Name: "web", Group: "apps", Severity: "critical", Reason: "1/3 available", IssueTiming: "started_at_resource_creation", IssueTimingBasis: "condition"},
+				{Kind: "Deployment", Namespace: "ns", Name: "web", Group: "apps", Severity: "critical", Reason: "1/3 available", OnsetAt: time.Now().Add(-time.Hour), IssueTiming: "started_at_resource_creation", IssueTimingBasis: "condition"},
 				{Kind: "Pod", Namespace: "ns", Name: "web-abc", Severity: "critical", Reason: "CrashLoopBackOff", OwnerKind: "Deployment", OwnerName: "web"},
 			},
 		}
@@ -995,11 +1040,11 @@ func TestCompose_PVCPendingDedupesOverMissingStorageClass(t *testing.T) {
 			{
 				Kind: "PersistentVolumeClaim", Namespace: "ns", Name: "stuck-pvc", Severity: "high", Reason: "Pending",
 				Cause: "Storage provisioner failed to create a volume.", Action: "Check the CSI controller logs.",
-				IssueTiming: "started_at_resource_creation", IssueTimingBasis: "phase",
+				OnsetAt: time.Now().Add(-time.Hour), IssueTiming: "started_at_resource_creation", IssueTimingBasis: "phase",
 			},
 		},
 		missingRefs: []k8s.Detection{
-			{Kind: "PersistentVolumeClaim", Namespace: "ns", Name: "stuck-pvc", Severity: "critical", Reason: "Missing StorageClass", Fingerprint: "Missing StorageClass|abc", IssueTiming: "started_at_resource_creation", IssueTimingBasis: "phase"},
+			{Kind: "PersistentVolumeClaim", Namespace: "ns", Name: "stuck-pvc", Severity: "critical", Reason: "Missing StorageClass", Fingerprint: "Missing StorageClass|abc", OnsetAt: time.Now().Add(-time.Hour), IssueTiming: "started_at_resource_creation", IssueTimingBasis: "phase"},
 		},
 	}
 	out := Compose(p, Filters{})

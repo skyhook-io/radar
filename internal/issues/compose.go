@@ -252,6 +252,17 @@ func finalizeShapedIssues(out []Issue, f Filters, sortOut bool, uncapped bool) (
 }
 
 func filterShapedIssues(out []Issue, f Filters) ([]Issue, ComposeStats) {
+	for idx := range out {
+		if !out[idx].FirstSeen.IsZero() {
+			out[idx].FirstSeen = out[idx].FirstSeen.UTC()
+		}
+		if !out[idx].ResourceCreatedAt.IsZero() {
+			out[idx].ResourceCreatedAt = out[idx].ResourceCreatedAt.UTC()
+		}
+		if !out[idx].LastSeen.IsZero() {
+			out[idx].LastSeen = out[idx].LastSeen.UTC()
+		}
+	}
 	out = applyFilters(out, f) // severity + kind, against subject (grouped) or evidence (flat)
 	var stats ComposeStats
 	if f.Filter == nil {

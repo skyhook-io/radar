@@ -4,7 +4,7 @@ import { CardBody, CardSection, ClusterName, EmptyState, KIND_CHIP_CLASS, Termin
 import { Tooltip } from '../ui/Tooltip';
 import { formatCompactAge, formatRelativeAgeTime } from '../../utils/format';
 import { diagnosticRoleLabel, diagnosticFactLabel, confidenceTitle, incidentParentLabel } from './diagnostic';
-import { issueTiming } from './issue-timing';
+import { issueOnsetUnknownTitle, issueResourceCreatedTitle, issueTiming, partialIssueOnsetTitle } from './issue-timing';
 import {
   ISSUE_SEVERITY_BADGE_CLASS,
   ISSUE_SEVERITY_HEADER_BAND_CLASS,
@@ -212,7 +212,9 @@ export function IssueRow({
   const severity = normalizeIssueSeverity(issue.severity);
   const SeverityIcon = ISSUE_SEVERITY_ICON[severity];
   const slotCtx = { issue, open };
-  const timing = issueTiming(issue);
+  const partialUnknown = issue.onset_coverage?.unknown ?? 0;
+  const partialOnset = Boolean(issue.first_seen && partialUnknown > 0);
+  const timing = partialOnset ? null : issueTiming(issue);
 
   // Severity pill + age + timing chip. Rendered in two positions the container
   // query toggles: inline at the row's right edge on a wide container, and on a
@@ -231,7 +233,7 @@ export function IssueRow({
               className="flex items-center gap-1 text-xs tabular-nums text-theme-text-tertiary"
             >
               <Clock className="h-3 w-3" aria-hidden />
-              {formatCompactAge(issue.first_seen)}
+              {partialOnset ? '≥' : ''}{formatCompactAge(issue.first_seen)}
             </time>
           </Tooltip>
           {timing ? (
@@ -241,7 +243,7 @@ export function IssueRow({
           ) : null}
         </>
       ) : issue.onset_unknown ? (
-        <Tooltip content="Radar can confirm this issue is active, but current Kubernetes state does not reveal when it began." delay={200} wrapperClassName="shrink-0">
+        <Tooltip content={issueOnsetUnknownTitle(issue)} delay={200} wrapperClassName="shrink-0">
           <span className="flex items-center gap-1 text-xs text-theme-text-tertiary">
             <Clock className="h-3 w-3" aria-hidden />
             Onset unknown
@@ -437,7 +439,9 @@ function Diagnosis({ issue, source }: { issue: Issue; source?: IssueDiagnosisSou
   // present, else headline+detail) rather than a string that may never appear.
   const visibleMessage = [headline, detail].filter(Boolean).join(' ');
   const shownText = issue.cause ?? visibleMessage;
-  const timing = issueTiming(issue);
+  const partialUnknown = issue.onset_coverage?.unknown ?? 0;
+  const partialOnset = Boolean(issue.first_seen && partialUnknown > 0);
+  const timing = partialOnset ? null : issueTiming(issue);
   const rawError = [
     ...new Set(
       [issue.raw_message ?? (issue.cause ? issue.message : undefined), detail].filter(
@@ -456,6 +460,8 @@ function Diagnosis({ issue, source }: { issue: Issue; source?: IssueDiagnosisSou
   if (crash) meta.push(crash);
   if (timing) {
     meta.push(timing.meta);
+  } else if (partialOnset && issue.first_seen) {
+    meta.push(`active at least ${formatRelativeAgeTime(issue.first_seen)}; onset unknown for ${partialUnknown} contributing ${partialUnknown === 1 ? 'signal' : 'signals'}`);
   } else if (issue.first_seen) {
     meta.push(`started ${formatRelativeAgeTime(issue.first_seen)}`);
   } else if (issue.onset_unknown) {
@@ -632,8 +638,16 @@ function DiagnosticContext({
 function ageTitle(issue: Issue): string {
   const parts: string[] = [];
   const timing = issueTiming(issue);
-  if (timing) parts.push(timing.tooltip);
-  if (issue.first_seen) parts.push(`First seen ${new Date(issue.first_seen).toLocaleString()}`);
+  const partialUnknown = issue.onset_coverage?.unknown ?? 0;
+  if (timing && partialUnknown === 0) parts.push(timing.tooltip);
+  const partialTitle = partialIssueOnsetTitle(issue);
+  if (partialTitle) {
+    parts.push(partialTitle);
+  } else if (issue.first_seen) {
+    parts.push(`First seen ${new Date(issue.first_seen).toLocaleString()}`);
+  }
+  const resourceContext = issueResourceCreatedTitle(issue);
+  if (resourceContext) parts.push(resourceContext);
   if (issue.last_seen) parts.push(`Last seen ${formatRelativeAgeTime(issue.last_seen)}`);
   return parts.join('\n');
 }

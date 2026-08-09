@@ -10,6 +10,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/logsafe"
 	"github.com/skyhook-io/radar/pkg/conditions"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -118,10 +119,11 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 			if cnpgSuppressesGenericConditions(gvr.Group, kind, u) {
 				continue
 			}
-			condType, reason, msg, since, ok := conditions.FindFalseCondition(u)
+			condition, ok := conditions.FindFalseConditionWithTime(u)
 			if !ok {
 				continue
 			}
+			condType, reason, msg := condition.Type, condition.Reason, condition.Message
 			// Noise-floor suppression: a False Ready/Available on an object that
 			// is suspended, still reconciling, or whose controller hasn't yet
 			// observed the current spec is NOT a failure — it's in-flight.
@@ -134,11 +136,11 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 			severity := SeverityWarning
 			issReason := condTypeReason(condType, reason)
 			issMsg := msg
-			// issueSince anchors FirstSeen/LastSeen; timingSince gates issue_timing.
+			// issueTransition anchors FirstSeen/LastSeen; timingTransition gates issue_timing.
 			// They start identical (FindFalseCondition's result) and only diverge
 			// when a curated override below carries no usable timestamp.
-			issueSince := since
-			timingSince := since
+			issueTransition, issueTransitionKnown := condition.LastTransitionTime, condition.HasLastTransitionTime
+			timingTransition, timingTransitionKnown := condition.LastTransitionTime, condition.HasLastTransitionTime
 			// Argo Rollout: FindFalseCondition picks Healthy=False/RolloutHealthy
 			// first (Healthy precedes Available in the Rollout's condition list),
 			// which reads as "healthy" and buries the real cause. When a
@@ -150,39 +152,39 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 			// it to compose-time would make a long-broken rollout look newly broken
 			// and jump the queue on every poll.
 			if kind == "Rollout" && strings.Contains(strings.ToLower(gvr.Group), "argoproj.io") {
-				if r, m, s, found := argoRolloutFailure(u); found {
+				if r, m, transition, transitionKnown, found := argoRolloutFailure(u); found {
 					issReason, issMsg, severity = r, m, SeverityCritical
-					timingSince = s
-					if s > 0 {
-						issueSince = s
+					timingTransition, timingTransitionKnown = transition, transitionKnown
+					if transitionKnown {
+						issueTransition, issueTransitionKnown = transition, true
 					}
 				}
 			}
 			now := time.Now()
-			firstSeen, lastSeen, onsetUnknown := conditionIssueTimes(now, issueSince)
+			firstSeen, lastSeen, onsetUnknown := conditionIssueTimes(now, issueTransition, issueTransitionKnown)
 			// IssueTiming: only compute when we have a real condition timestamp.
-			// timingSince=0 means no lastTransitionTime was found; computing issue_timing
-			// from now-based arithmetic would falsely classify old resources as
-			// "started_after_resource_was_healthy" (failingFor≈0, resourceAge large → healthyFor large).
+			// Without a parsed transition timestamp, computing issue_timing from
+			// observation time would falsely classify old resources as regressions.
 			var timingR k8s.IssueTimingResult
-			if timingSince > 0 {
-				timingR = k8s.IssueTimingFromConditionLTT(now.Add(-timingSince), u.GetCreationTimestamp().Time, "condition")
+			if timingTransitionKnown {
+				timingR = k8s.IssueTimingFromConditionLTT(timingTransition, u.GetCreationTimestamp().Time, "condition")
 			}
 			iss := Issue{
-				Severity:         severity,
-				Source:           SourceCondition,
-				Kind:             kind,
-				Group:            gvr.Group,
-				Namespace:        u.GetNamespace(),
-				Name:             u.GetName(),
-				Reason:           issReason,
-				Message:          issMsg,
-				FirstSeen:        firstSeen,
-				OnsetUnknown:     onsetUnknown,
-				LastSeen:         lastSeen,
-				Count:            1,
-				IssueTiming:      timingR.IssueTiming,
-				IssueTimingBasis: timingR.Basis,
+				Severity:          severity,
+				Source:            SourceCondition,
+				Kind:              kind,
+				Group:             gvr.Group,
+				Namespace:         u.GetNamespace(),
+				Name:              u.GetName(),
+				Reason:            issReason,
+				Message:           issMsg,
+				FirstSeen:         firstSeen,
+				OnsetUnknown:      onsetUnknown,
+				ResourceCreatedAt: u.GetCreationTimestamp().Time,
+				LastSeen:          lastSeen,
+				Count:             1,
+				IssueTiming:       timingR.IssueTiming,
+				IssueTimingBasis:  timingR.Basis,
 			}
 			classifyIssue(&iss)
 			enrichIdentity(&iss)
@@ -222,17 +224,18 @@ func detectGatewayConditionIssues(gvr schema.GroupVersionResource, kind string, 
 }
 
 func detectObjectConditionIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured, severity Severity, condTypes ...string) []Issue {
-	condType, reason, msg, since, ok := conditions.FindFalseCondition(u, condTypes...)
-	if !ok || isTransientCRDCondition(u, reason) {
+	condition, ok := conditions.FindFalseConditionWithTime(u, condTypes...)
+	if !ok || isTransientCRDCondition(u, condition.Reason) {
 		return nil
 	}
-	return []Issue{newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), severity, condTypeReason(condType, reason), msg, since, "", u.GetCreationTimestamp().Time)}
+	return []Issue{newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), severity, condTypeReason(condition.Type, condition.Reason), condition.Message, condition.LastTransitionTime, condition.HasLastTransitionTime, "", u.GetCreationTimestamp().Time)}
 }
 
 // gwListenerCond is one listener's failing condition within a gateway group.
 type gwListenerCond struct {
-	section, msg string
-	since        time.Duration
+	section, msg    string
+	transitionAt    time.Time
+	transitionKnown bool
 }
 
 func detectGatewayRouteParentIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured) []Issue {
@@ -289,7 +292,8 @@ func detectGatewayRouteParentIssues(gvr schema.GroupVersionResource, kind string
 				groups[gk] = g
 				order = append(order, gk)
 			}
-			g.members = append(g.members, gwListenerCond{section: section, msg: msg, since: conditionSince(cm)})
+			transitionAt, transitionKnown := conditionTransitionTime(cm)
+			g.members = append(g.members, gwListenerCond{section: section, msg: msg, transitionAt: transitionAt, transitionKnown: transitionKnown})
 		}
 	}
 
@@ -302,15 +306,31 @@ func detectGatewayRouteParentIssues(gvr schema.GroupVersionResource, kind string
 		// first_seen anchors on the OLDEST listener transition: the gateway
 		// attachment has been failing since the first listener broke; a later
 		// listener joining the same fault doesn't make it a new problem.
-		oldest := g.members[0].since
-		for _, m := range g.members[1:] {
-			if m.since > oldest {
-				oldest = m.since
+		now := time.Now()
+		var oldest time.Time
+		known, unknown := 0, 0
+		for _, m := range g.members {
+			if m.transitionKnown && !m.transitionAt.IsZero() && !m.transitionAt.After(now) {
+				known++
+			} else {
+				unknown++
+				continue
+			}
+			if oldest.IsZero() || m.transitionAt.Before(oldest) {
+				oldest = m.transitionAt
 			}
 		}
 		fp := g.condType + ":" + g.gwKey + ":" + g.reason
 		message := gatewayRouteMessage(g.gwLabel, g.members)
-		out = append(out, newConditionIssue(gvr, kind, ns, name, SeverityWarning, condTypeReason(g.condType, g.reason), message, oldest, fp, createdAt))
+		issue := newConditionIssue(gvr, kind, ns, name, SeverityWarning, condTypeReason(g.condType, g.reason), message, oldest, !oldest.IsZero(), fp, createdAt)
+		if len(g.members) > 1 {
+			issue.OnsetCoverage = &issuesapi.OnsetCoverage{Known: known, Unknown: unknown}
+		}
+		if known > 0 && unknown > 0 {
+			issue.IssueTiming = ""
+			issue.IssueTimingBasis = ""
+		}
+		out = append(out, issue)
 	}
 	return out
 }
@@ -368,55 +388,54 @@ func composeParentMessage(label, msg string) string {
 	}
 }
 
-func newConditionIssue(gvr schema.GroupVersionResource, kind, namespace, name string, severity Severity, reason, message string, since time.Duration, fingerprint string, createdAt time.Time) Issue {
+func newConditionIssue(gvr schema.GroupVersionResource, kind, namespace, name string, severity Severity, reason, message string, transitionAt time.Time, transitionKnown bool, fingerprint string, createdAt time.Time) Issue {
 	now := time.Now()
-	firstSeen, lastSeen, onsetUnknown := conditionIssueTimes(now, since)
-	// Only compute issue_timing when we have a real condition timestamp (since > 0).
-	// since=0 means the condition has no lastTransitionTime; issue_timing would be wrong.
+	firstSeen, lastSeen, onsetUnknown := conditionIssueTimes(now, transitionAt, transitionKnown)
+	// Only compute issue_timing when we have a parsed condition timestamp.
 	var timingR k8s.IssueTimingResult
-	if since > 0 {
-		timingR = k8s.IssueTimingFromConditionLTT(lastSeen, createdAt, "condition")
+	if transitionKnown {
+		timingR = k8s.IssueTimingFromConditionLTT(transitionAt, createdAt, "condition")
 	}
 	iss := Issue{
-		Severity:         severity,
-		Source:           SourceCondition,
-		Kind:             kind,
-		Group:            gvr.Group,
-		Namespace:        namespace,
-		Name:             name,
-		Reason:           reason,
-		Message:          message,
-		FirstSeen:        firstSeen,
-		OnsetUnknown:     onsetUnknown,
-		LastSeen:         lastSeen,
-		Count:            1,
-		Fingerprint:      fingerprint,
-		IssueTiming:      timingR.IssueTiming,
-		IssueTimingBasis: timingR.Basis,
+		Severity:          severity,
+		Source:            SourceCondition,
+		Kind:              kind,
+		Group:             gvr.Group,
+		Namespace:         namespace,
+		Name:              name,
+		Reason:            reason,
+		Message:           message,
+		FirstSeen:         firstSeen,
+		OnsetUnknown:      onsetUnknown,
+		ResourceCreatedAt: createdAt,
+		LastSeen:          lastSeen,
+		Count:             1,
+		Fingerprint:       fingerprint,
+		IssueTiming:       timingR.IssueTiming,
+		IssueTimingBasis:  timingR.Basis,
 	}
 	classifyIssue(&iss)
 	enrichIdentity(&iss)
 	return iss
 }
 
-func conditionIssueTimes(now time.Time, since time.Duration) (time.Time, time.Time, bool) {
-	if since <= 0 {
+func conditionIssueTimes(now, transitionAt time.Time, transitionKnown bool) (time.Time, time.Time, bool) {
+	if !transitionKnown || transitionAt.IsZero() || transitionAt.After(now) {
 		return time.Time{}, now, true
 	}
-	observed := now.Add(-since)
-	return observed, observed, false
+	return transitionAt, transitionAt, false
 }
 
-func conditionSince(cond map[string]any) time.Duration {
+func conditionTransitionTime(cond map[string]any) (time.Time, bool) {
 	ts, _ := cond["lastTransitionTime"].(string)
 	if ts == "" {
-		return 0
+		return time.Time{}, false
 	}
 	t, err := time.Parse(time.RFC3339, ts)
 	if err != nil {
-		return 0
+		return time.Time{}, false
 	}
-	return time.Since(t)
+	return t, true
 }
 
 // gatewayParentRef returns the gateway-level display label and identity key
@@ -559,10 +578,10 @@ func condTypeReason(condType, reason string) string {
 // caller promotes them to critical and uses their reason instead of the generic
 // Healthy=False/RolloutHealthy the condition reader would otherwise surface.
 // ok=false leaves the generic reason untouched.
-func argoRolloutFailure(u *unstructured.Unstructured) (reason, message string, since time.Duration, ok bool) {
+func argoRolloutFailure(u *unstructured.Unstructured) (reason, message string, transitionAt time.Time, transitionKnown, ok bool) {
 	conds, found, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
 	if !found {
-		return "", "", 0, false
+		return "", "", time.Time{}, false, false
 	}
 	type condResult struct {
 		status, reason, message, ltt string
@@ -583,28 +602,30 @@ func argoRolloutFailure(u *unstructured.Unstructured) (reason, message string, s
 		}
 		return
 	}
-	parseSince := func(ltt string) time.Duration {
+	parseTransition := func(ltt string) (time.Time, bool) {
 		if ltt == "" {
-			return 0
+			return time.Time{}, false
 		}
 		t, err := time.Parse(time.RFC3339, ltt)
 		if err != nil {
 			log.Printf("[issues] Failed to parse Rollout condition lastTransitionTime %q: %v", ltt, err)
-			return 0
+			return time.Time{}, false
 		}
-		return time.Since(t)
+		return t, true
 	}
 	if c := lookup("InvalidSpec"); c.status == "True" {
 		rolloutReason := "InvalidSpec"
 		if c.reason != "" && c.reason != "InvalidSpec" {
 			rolloutReason = condTypeReason("InvalidSpec", c.reason)
 		}
-		return rolloutReason, c.message, parseSince(c.ltt), true
+		transitionAt, known := parseTransition(c.ltt)
+		return rolloutReason, c.message, transitionAt, known, true
 	}
 	if c := lookup("Progressing"); c.status == "False" && c.reason == "ProgressDeadlineExceeded" {
-		return condTypeReason("Progressing", c.reason), c.message, parseSince(c.ltt), true
+		transitionAt, known := parseTransition(c.ltt)
+		return condTypeReason("Progressing", c.reason), c.message, transitionAt, known, true
 	}
-	return "", "", 0, false
+	return "", "", time.Time{}, false, false
 }
 
 // ---------------------------------------------------------------------------

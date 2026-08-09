@@ -184,14 +184,31 @@ func TestIssueTimingFromConditionLTT(t *testing.T) {
 	}
 }
 
-// capiIssueTiming wraps IssueTimingFromConditionLTT behind a dur==0 guard: CAPI condition
-// readers fall back to resource age when no LTT exists, and that fallback
-// duration must never reach the classifier.
-func TestCapiIssueTiming_ZeroDurationGuard(t *testing.T) {
-	if timing, basis := capiIssueTiming(0, time.Now().Add(-3*time.Hour)); timing != "" || basis != "" {
-		t.Errorf("dur=0 must omit issue_timing, got (%q, %q)", timing, basis)
+func TestSetDetectionOnsetRequiresNonFutureTimestamp(t *testing.T) {
+	now := time.Date(2026, 8, 9, 1, 0, 0, 0, time.UTC)
+
+	for _, onset := range []time.Time{time.Time{}, now.Add(time.Second)} {
+		detection := Detection{Duration: "old", DurationSeconds: 10, OnsetAt: now.Add(-time.Hour)}
+		setDetectionOnset(&detection, now, onset)
+		if !detection.OnsetUnknown || !detection.OnsetAt.IsZero() || detection.Duration != "" || detection.DurationSeconds != 0 {
+			t.Fatalf("invalid onset %v was accepted: %+v", onset, detection)
+		}
 	}
-	if timing, basis := capiIssueTiming(time.Hour, time.Now().Add(-3*time.Hour)); timing != "started_after_resource_was_healthy" || basis != "condition" {
+
+	detection := Detection{}
+	setDetectionOnset(&detection, now, now)
+	if detection.OnsetUnknown || !detection.OnsetAt.Equal(now) || detection.DurationSeconds != 0 {
+		t.Fatalf("exact-now onset was lost: %+v", detection)
+	}
+}
+
+// CAPI condition readers must not classify timing when no exact transition
+// timestamp exists.
+func TestCapiIssueTiming_MissingTimestampGuard(t *testing.T) {
+	if timing, basis := capiIssueTiming(time.Time{}, false, time.Now().Add(-3*time.Hour)); timing != "" || basis != "" {
+		t.Errorf("missing transition must omit issue_timing, got (%q, %q)", timing, basis)
+	}
+	if timing, basis := capiIssueTiming(time.Now().Add(-time.Hour), true, time.Now().Add(-3*time.Hour)); timing != "started_after_resource_was_healthy" || basis != "condition" {
 		t.Errorf("2h healthy then failing 1h must be started_after_resource_was_healthy/condition, got (%q, %q)", timing, basis)
 	}
 }

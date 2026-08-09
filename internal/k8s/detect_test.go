@@ -1718,6 +1718,9 @@ func TestDetectProblems_NetworkAndStorageState(t *testing.T) {
 	}
 
 	assertProblem(t, problems, "Service", "edge", "LoadBalancer pending", "high")
+	if p, ok := lookupProblem(problems, "Service", "edge", "LoadBalancer pending"); !ok || !p.OnsetUnknown || !p.OnsetAt.IsZero() || !p.ResourceCreatedAt.Equal(old.Time) {
+		t.Fatalf("LoadBalancer pending onset = %+v, want unknown onset with Service creation as context", p)
+	}
 	if hasProblem(problems, "Service", "assigned", "LoadBalancer pending") {
 		t.Fatalf("assigned LoadBalancer Service should not be flagged: %+v", problems)
 	}
@@ -2423,6 +2426,11 @@ func TestDetectProblems_RolloutStuckIssueTimingGen1(t *testing.T) {
 	if !ok || nh.IssueTiming != "started_at_resource_creation" || nh.IssueTimingBasis != "condition" {
 		t.Errorf("never-healthy issue_timing = (%q, %q), want (started_at_resource_creation, condition); ok=%v", nh.IssueTiming, nh.IssueTimingBasis, ok)
 	}
+	for _, problem := range problems {
+		if problem.IssueTiming != "" && problem.OnsetAt.IsZero() {
+			t.Errorf("timestamp-backed issue_timing lost exact onset: %+v", problem)
+		}
+	}
 }
 
 // Pins the two pod-issue_timing paths: a crashloop pod created alongside a young
@@ -2562,6 +2570,11 @@ func TestDetectProblems_PodIssueTimingCreationProximity(t *testing.T) {
 	latebreak, ok := lookupProblem(problems, "Pod", "latebreak-1-abc", "CrashLoopBackOff")
 	if !ok || latebreak.IssueTiming != "started_after_resource_was_healthy" || latebreak.IssueTimingBasis != "owner_condition" {
 		t.Errorf("stable-pod late failure = (%q, %q), want (started_after_resource_was_healthy, owner_condition); ok=%v", latebreak.IssueTiming, latebreak.IssueTimingBasis, ok)
+	}
+	for _, problem := range problems {
+		if problem.IssueTiming != "" && problem.OnsetAt.IsZero() {
+			t.Errorf("timestamp-backed issue_timing lost exact onset: %+v", problem)
+		}
 	}
 }
 

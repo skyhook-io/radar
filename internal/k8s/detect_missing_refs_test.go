@@ -22,6 +22,15 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
+func TestMissingRefProblemUsesInjectedClockForResourceAge(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	createdAt := now.Add(-90 * time.Minute)
+	got := missingRefProblem(now, "Pod", "", "shop", "web", "Missing Secret", "missing", createdAt)
+	if got.AgeSeconds != int64((90*time.Minute).Seconds()) || got.Age != "1h" {
+		t.Fatalf("resource age = %q/%ds, want injected-clock age 1h/5400s", got.Age, got.AgeSeconds)
+	}
+}
+
 // TestDetectMissingRefs covers each dangling-ref check exactly once
 // against a single fixture. Each assertion pins one production-impact
 // path (pod-won't-schedule, route-returns-nothing, binding-grants-no-permissions, etc.).

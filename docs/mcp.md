@@ -225,6 +225,8 @@ The Docker image's primary use is [in-cluster deployment](in-cluster.md) with a 
 | `discover_metrics` | Discover exact metric names (enriched with type/help from Prometheus metadata) or values of one label before writing PromQL. Lists active series from the last hour; `truncated: true` means narrow the `match` selector. | `match` (PromQL series selector; required when `label` is empty), `label` (optional: list values of this label instead of metric names), `limit` (optional, default 100, max 500) |
 | `get_prometheus_rules` | List Prometheus alerting/recording rules with PromQL definitions, state, labels, annotations, and active alert instances. Alert-investigation entry point: fetch the rule definition, then run its query with `query_prometheus`. | `type` (optional: `alert`, `record`), `name` / `group` (optional substring filters), `state` (optional: `firing`, `pending`, `inactive`), `limit` (optional, default 50, max 200) |
 
+For `issues`, `first_seen` is the earliest proven onset among the contributing signals. When `onset_coverage.unknown > 0`, it is a lower bound rather than the whole group's onset; CEL filters can test the flattened `onset_coverage_unknown` binding. `resource_created_at` is resource-age context and the stable ordering fallback, never onset evidence.
+
 ### Write Tools
 
 | Tool | Description | Parameters |

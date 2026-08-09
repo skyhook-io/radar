@@ -197,6 +197,26 @@ func TestDuplicateEnvAggregateBoundsEvidenceSummary(t *testing.T) {
 	}
 }
 
+func TestDuplicateEnvAggregatePreservesMixedOnsetProvenance(t *testing.T) {
+	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
+	known := duplicateEnvIssueForMerge("apps", "web", "app", "KNOWN", now.Add(-30*time.Minute), now)
+	known.ResourceCreatedAt = now.Add(-2 * time.Hour)
+	unknown := duplicateEnvIssueForMerge("apps", "web", "app", "UNKNOWN", time.Time{}, now)
+	unknown.OnsetUnknown = true
+	unknown.ResourceCreatedAt = now.Add(-3 * time.Hour)
+
+	aggregate := newDuplicateEnvAggregate([]Issue{known, unknown})
+	if aggregate.OnsetUnknown || !aggregate.FirstSeen.Equal(known.FirstSeen) {
+		t.Fatalf("mixed aggregate onset = unknown:%v first:%v", aggregate.OnsetUnknown, aggregate.FirstSeen)
+	}
+	if aggregate.OnsetCoverage == nil || aggregate.OnsetCoverage.Known != 1 || aggregate.OnsetCoverage.Unknown != 1 {
+		t.Fatalf("mixed aggregate coverage = %+v, want 1 known / 1 unknown", aggregate.OnsetCoverage)
+	}
+	if !aggregate.ResourceCreatedAt.Equal(unknown.ResourceCreatedAt) {
+		t.Fatalf("aggregate resource creation = %v, want oldest %v", aggregate.ResourceCreatedAt, unknown.ResourceCreatedAt)
+	}
+}
+
 func testIssueForMerge(kind, namespace, name string, severity Severity, firstSeen time.Time) Issue {
 	iss := Issue{
 		Severity:  severity,

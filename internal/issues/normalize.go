@@ -40,18 +40,19 @@ func issuesSeverity(token string) Severity {
 
 func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 	sev := issuesSeverity(p.Severity)
-	since := now.Add(-time.Duration(p.DurationSeconds) * time.Second)
+	var since time.Time
 	if p.OnsetUnknown {
 		since = time.Time{}
-	} else if p.DurationSeconds == 0 && p.AgeSeconds > 0 {
-		// Detectors that don't track how long the problem has persisted leave
-		// DurationSeconds zero; without this, FirstSeen would reset to `now` on
-		// every compose and the queue (sorted by first_seen) would keep a chronic
-		// issue looking fresh. AgeSeconds (resource age) is a stable lower bound.
-		since = now.Add(-time.Duration(p.AgeSeconds) * time.Second)
+	} else if !p.OnsetAt.IsZero() {
+		since = p.OnsetAt.UTC()
 	}
 	reason := p.Reason
 	cause, action := p.Cause, p.Action
+	issueTiming, issueTimingBasis := p.IssueTiming, p.IssueTimingBasis
+	if since.IsZero() {
+		issueTiming = ""
+		issueTimingBasis = ""
+	}
 	if isForbiddenMessage(p.Message) && !isBatchFailureProblem(p.Kind, p.Reason) {
 		if reason != "RBACForbidden" {
 			// Detector diagnoses describe the original reason and would mislead
@@ -79,13 +80,14 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 		CapacityRelevant:     p.CapacityRelevant,
 		Fingerprint:          p.Fingerprint,
 		FirstSeen:            since,
-		OnsetUnknown:         p.OnsetUnknown,
+		OnsetUnknown:         since.IsZero(),
+		ResourceCreatedAt:    p.ResourceCreatedAt.UTC(),
 		LastSeen:             now,
 		Count:                1,
 		RestartCount:         p.RestartCount,
 		LastTerminatedReason: p.LastTerminatedReason,
-		IssueTiming:          p.IssueTiming,
-		IssueTimingBasis:     p.IssueTimingBasis,
+		IssueTiming:          issueTiming,
+		IssueTimingBasis:     issueTimingBasis,
 	}
 	if p.OwnerKind != "" {
 		// Prefer the owner group resolved at detection (carries the real group

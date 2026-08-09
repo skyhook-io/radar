@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,20 @@ import (
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
+
+func TestIssuesFilterSchemaDocumentsOnsetProvenanceBindings(t *testing.T) {
+	var description string
+	for _, field := range reflect.VisibleFields(reflect.TypeOf(issuesInput{})) {
+		if field.Tag.Get("json") == "filter,omitempty" {
+			description = field.Tag.Get("jsonschema")
+		}
+	}
+	for _, text := range []string{"first_seen is the earliest proven member onset", "onset_coverage_unknown > 0", "lower bound", "resource_created_at is resource-age context", "never onset"} {
+		if !strings.Contains(description, text) {
+			t.Fatalf("issues filter schema must explain %q; got %q", text, description)
+		}
+	}
+}
 
 func TestGetChangesEmitsApplicationConfigurationClassificationWithoutIssueAwarePromotion(t *testing.T) {
 	store := initCorrelationStore(t)

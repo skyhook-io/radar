@@ -62,12 +62,13 @@ func TestDetectSchedulingProblems_BindTime(t *testing.T) {
 // the LATEST event wins when the active blocker changed (quota → webhook).
 func TestDetectAdmissionProblems_FailedCreateCrossCheck(t *testing.T) {
 	defer ResetTestState()
+	createdAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 	// replicas = pods actually CREATED. "blocked" = couldn't create (replicas<2);
 	// created-but-not-ready (replicas==2, ready==0, e.g. now unschedulable) is
 	// NOT admission-blocked and must be skipped.
 	rs := func(name string, replicas int32) *appsv1.ReplicaSet {
 		return &appsv1.ReplicaSet{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "prod"},
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "prod", CreationTimestamp: metav1.NewTime(createdAt)},
 			Spec:       appsv1.ReplicaSetSpec{Replicas: ptr32(2)},
 			Status:     appsv1.ReplicaSetStatus{Replicas: replicas, ReadyReplicas: 0},
 		}
@@ -107,6 +108,9 @@ func TestDetectAdmissionProblems_FailedCreateCrossCheck(t *testing.T) {
 	for _, p := range problems {
 		if p.Name == "rs-blocked" {
 			blockedRows++
+			if !p.OnsetUnknown || !p.OnsetAt.IsZero() || !p.ResourceCreatedAt.Equal(createdAt) || p.AgeSeconds < 3599 || p.AgeSeconds > 3601 {
+				t.Errorf("timestamp-less FailedCreate provenance = onset:%v unknown:%v created:%v age:%d", p.OnsetAt, p.OnsetUnknown, p.ResourceCreatedAt, p.AgeSeconds)
+			}
 			if p.Reason == "QuotaExceeded" {
 				t.Errorf("stale (older) quota event must not win over the newer webhook one: %+v", p)
 			}

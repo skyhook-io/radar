@@ -1,6 +1,11 @@
 package issuesapi
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+)
 
 func TestGroupOf(t *testing.T) {
 	cases := []struct {
@@ -28,5 +33,21 @@ func TestGroupOf(t *testing.T) {
 		if g == GroupUnknown {
 			t.Fatalf("category %q maps to GroupUnknown", c)
 		}
+	}
+}
+
+func TestIssueOnsetProvenanceWireShape(t *testing.T) {
+	createdAt := time.Date(2026, 8, 9, 1, 2, 3, 0, time.UTC)
+	blob, err := json.Marshal(Issue{
+		OnsetUnknown:      false,
+		OnsetCoverage:     &OnsetCoverage{Known: 2, Unknown: 1},
+		ResourceCreatedAt: createdAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire := string(blob)
+	if !strings.Contains(wire, `"onset_coverage":{"known":2,"unknown":1}`) || !strings.Contains(wire, `"resource_created_at":"2026-08-09T01:02:03Z"`) {
+		t.Fatalf("onset provenance wire shape = %s", wire)
 	}
 }

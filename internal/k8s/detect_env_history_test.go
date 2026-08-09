@@ -1041,7 +1041,8 @@ func TestSecretChangeWritesData(t *testing.T) {
 func TestStaleSecretEnvDetectionResolvesWorkloadOwner(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	controller := true
-	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "catalog", Namespace: "shop", UID: types.UID("dep")}}
+	deploymentCreatedAt := now.Add(-time.Hour)
+	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "catalog", Namespace: "shop", UID: types.UID("dep"), CreationTimestamp: metav1.NewTime(deploymentCreatedAt)}}
 	replicaSet := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{
 		Name: "catalog-abc", Namespace: "shop", UID: types.UID("rs"),
 		OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: deployment.Name, UID: deployment.UID, Controller: &controller}},
@@ -1062,7 +1063,8 @@ func TestStaleSecretEnvReadyWorkloadAggregationAndRolloutSuppression(t *testing.
 	changedAt := now.Add(-time.Minute)
 	startedAt := changedAt.Add(-time.Minute)
 	controller := true
-	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "catalog", Namespace: "shop", UID: types.UID("dep")}}
+	deploymentCreatedAt := now.Add(-time.Hour)
+	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "catalog", Namespace: "shop", UID: types.UID("dep"), CreationTimestamp: metav1.NewTime(deploymentCreatedAt)}}
 	replicaSet := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{
 		Name: "catalog-abc", Namespace: "shop", UID: types.UID("rs"),
 		OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: deployment.Name, UID: deployment.UID, Controller: &controller}},
@@ -1095,6 +1097,9 @@ func TestStaleSecretEnvReadyWorkloadAggregationAndRolloutSuppression(t *testing.
 		if !strings.Contains(detections[0].Message, "2 Ready pods") || !strings.Contains(detections[0].Message, "2 Secret-backed environment values") ||
 			!strings.Contains(detections[0].Action, "Confirm no rollout") {
 			t.Fatalf("aggregated workload issue is not operationally clear: %+v", detections[0])
+		}
+		if detections[0].AgeSeconds != int64(time.Hour.Seconds()) || !detections[0].ResourceCreatedAt.Equal(deploymentCreatedAt) {
+			t.Fatalf("aggregated workload resource age/context = %q/%v, want 1h/%v", detections[0].Age, detections[0].ResourceCreatedAt, deploymentCreatedAt)
 		}
 	})
 

@@ -16,7 +16,9 @@
 //
 //	CompileIssueFilter — bindings shaped to an issues.Issue:
 //	  severity, source, category, category_group, kind, group, ns,
-//	  name, reason, message, count, first_seen, last_seen, grouping_scope,
+//	  name, reason, message, count, first_seen, onset_unknown,
+//	  onset_coverage_known, onset_coverage_unknown, resource_created_at, last_seen,
+//	  grouping_scope,
 //	  restart_count, last_terminated_reason, cause, action,
 //	  remediation_kind, remediation_target, operation_retry_count, stuck,
 //	  issue_timing, issue_timing_basis
@@ -132,7 +134,8 @@ func CompileObjectFilter(expr string) (*Filter, error) {
 }
 
 // CompileIssueFilter compiles a CEL expression against the Issue
-// row bindings (severity, source, kind, …, count, last_seen).
+// row bindings (severity, source, kind, …, first_seen, resource_created_at,
+// last_seen).
 func CompileIssueFilter(expr string) (*Filter, error) {
 	return compileWith(envIssue, expr)
 }

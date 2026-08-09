@@ -352,6 +352,14 @@ type ClusterDNSFinding struct {
 	Evidence  string `json:"evidence,omitempty"`
 }
 
+// OnsetCoverage counts the contributing failure signals whose onset is or is
+// not known. A signal is usually one affected resource, but controllers may
+// collapse multiple status entries for one resource into a single issue.
+type OnsetCoverage struct {
+	Known   int `json:"known"`
+	Unknown int `json:"unknown"`
+}
+
 type Issue struct {
 	Severity      Severity      `json:"severity"`
 	Source        Source        `json:"source"`
@@ -390,6 +398,8 @@ type Issue struct {
 	CapacityRelevant     bool               `json:"capacity_relevant,omitempty"`
 	FirstSeen            time.Time          `json:"first_seen,omitzero"`
 	OnsetUnknown         bool               `json:"onset_unknown,omitempty"`
+	OnsetCoverage        *OnsetCoverage     `json:"onset_coverage,omitempty"`
+	ResourceCreatedAt    time.Time          `json:"resource_created_at,omitzero"`
 	LastSeen             time.Time          `json:"last_seen,omitzero"`
 	Count                int                `json:"count,omitempty"`
 	Owner                Ref                `json:"owner,omitzero"`
@@ -513,6 +523,10 @@ var CELBindings = []CELBinding{
 	{Name: "remediation_target", Type: BindingString},
 	{Name: "count", Type: BindingInt},
 	{Name: "first_seen", Type: BindingInt},
+	{Name: "onset_unknown", Type: BindingBool},
+	{Name: "onset_coverage_known", Type: BindingInt},
+	{Name: "onset_coverage_unknown", Type: BindingInt},
+	{Name: "resource_created_at", Type: BindingInt},
 	{Name: "last_seen", Type: BindingInt},
 	{Name: "grouping_scope", Type: BindingString},
 	{Name: "restart_count", Type: BindingInt},
