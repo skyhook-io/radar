@@ -5,7 +5,7 @@ metadata:
   name: {{ include "radar.fullname" . }}
   labels:
     {{- include "radar.labels" . | nindent 4 }}
-# Keep default and opt-in resource rules aligned with ResourcePermissions in
+# Keep cache-backed resource rules aligned with ResourcePermissions in
 # internal/k8s/capabilities.go and the README's "Supported Resources" table.
 rules:
   # Core resources (read-only)
@@ -40,6 +40,24 @@ rules:
     resources:
       - storageclasses
     verbs: ["get", "list", "watch"]
+
+  # Upgrade impact source evidence. These kinds are not cached or browsable;
+  # the collector only lists them to inspect kubectl last-applied annotations.
+  - apiGroups: ["storage.k8s.io"]
+    resources:
+      - csistoragecapacities
+    verbs: ["list"]
+  - apiGroups: ["flowcontrol.apiserver.k8s.io"]
+    resources:
+      - flowschemas
+      - prioritylevelconfigurations
+    verbs: ["list"]
+  # Removed in Kubernetes 1.25, but required to assess clusters upgrading
+  # from a release where PodSecurityPolicy is still served.
+  - apiGroups: ["policy"]
+    resources:
+      - podsecuritypolicies
+    verbs: ["list"]
 
   {{- if .Values.rbac.helm }}
   # Helm write operations require broad permissions because charts can create
@@ -300,7 +318,7 @@ rules:
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.karpenter }}
-  - apiGroups: ["karpenter.sh", "karpenter.k8s.aws", "karpenter.azure.com", "karpenter.k8s.gcp"]
+  - apiGroups: ["karpenter.sh", "karpenter.k8s.aws", "karpenter.azure.com", "karpenter.k8s.gcp", "eks.amazonaws.com"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
@@ -330,7 +348,11 @@ rules:
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.kyverno }}
-  - apiGroups: ["kyverno.io", "wgpolicyk8s.io", "reports.kyverno.io", "openreports.io"]
+  # policies.kyverno.io is Kyverno's modern CEL policy family (ValidatingPolicy
+  # et al.), which replaces the kyverno.io Policy/ClusterPolicy types whose
+  # removal is planned for Kyverno 1.20. Without this grant a modern-only
+  # cluster's policies 403 and silently never appear.
+  - apiGroups: ["kyverno.io", "policies.kyverno.io", "wgpolicyk8s.io", "reports.kyverno.io", "openreports.io"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}

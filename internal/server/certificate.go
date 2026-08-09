@@ -35,7 +35,7 @@ type CertExpiry = topology.CertExpiry
 // lives in pkg/certs so the hub stays a thin pivot.
 //
 // Read pattern mirrors handleListPackages: the ServiceAccount-backed cache
-// performs the read (so cert hygiene survives cloud:viewer, whose K8s `view`
+// performs the read (so cert hygiene survives radar:viewer, whose K8s `view`
 // role excludes secrets), but the response is post-filtered to the caller's
 // RBAC-allowed namespaces. Only public certificate metadata (issuer / domains
 // / expiry) is emitted — never tls.key. A cluster without cert-manager simply

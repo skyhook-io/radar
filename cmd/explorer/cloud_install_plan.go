@@ -3,160 +3,47 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 
 	"github.com/skyhook-io/radar/internal/cloudinstall"
-	"github.com/skyhook-io/radar/internal/helm"
 )
 
-type cloudInstallPlanMode string
+type cloudInstallPlanMode = cloudinstall.InstallPlanMode
 
 const (
-	cloudInstallFresh  cloudInstallPlanMode = "fresh"
-	cloudInstallAdopt  cloudInstallPlanMode = "adopt"
-	cloudInstallGitOps cloudInstallPlanMode = "gitops"
+	cloudInstallFresh  = cloudinstall.InstallModeFresh
+	cloudInstallAdopt  = cloudinstall.InstallModeAdopt
+	cloudInstallGitOps = cloudinstall.InstallModeGitOps
 )
 
-type cloudInstallPlan struct {
-	Mode                 cloudInstallPlanMode
-	Namespace            string
-	Release              string
-	Target               *cloudinstall.RadarTarget
-	ClusterWideScanError error
-}
+type cloudInstallPlan = cloudinstall.InstallPlan
 
-type cloudReleaseInspector interface {
-	InspectCloudRelease(namespace, name string) (helm.CloudReleaseInspection, error)
-}
+type cloudReleaseInspector = cloudinstall.ReleaseInspector
 
-// inspectCloudInstallPlan combines workload discovery with Helm storage. It
-// never mutates Kubernetes and deliberately refuses to guess when ownership is
-// ambiguous or an unmanaged workload collides with the intended target.
+// inspectCloudInstallPlan wraps the shared classifier with the CLI's flag
+// vocabulary: a multiple-installation result resolves via --namespace/--release.
 func inspectCloudInstallPlan(
 	ctx context.Context,
 	clients localInstallClients,
 	namespace, release string,
 	explicitTarget bool,
 ) (cloudInstallPlan, error) {
-	result, err := cloudinstall.DiscoverRadarTargets(ctx, clients.Kubernetes, clients.Dynamic, cloudinstall.DiscoveryOptions{
-		Namespace: namespace, ReleaseName: release, ClusterWide: !explicitTarget,
-	})
-	if err != nil {
-		return cloudInstallPlan{}, err
+	plan, err := cloudinstall.InspectInstallPlan(ctx, clients.Kubernetes, clients.Dynamic, clients.Releases, namespace, release, explicitTarget)
+	var multiple *cloudinstall.MultipleTargetsError
+	if errors.As(err, &multiple) {
+		return cloudInstallPlan{}, renderMultipleTargetsHint(multiple)
 	}
-	return classifyCloudInstallPlan(result, clients.Releases, namespace, release, explicitTarget)
+	return plan, err
 }
 
-func classifyCloudInstallPlan(
-	result cloudinstall.DiscoveryResult,
-	releases cloudReleaseInspector,
-	namespace, release string,
-	explicitTarget bool,
-) (cloudInstallPlan, error) {
-	candidates := discoveredRadarTargets(result, explicitTarget)
-	if len(candidates) > 1 {
-		return cloudInstallPlan{}, fmt.Errorf(
-			"found multiple Radar installations; choose one explicitly with --namespace and --release:\n%s",
-			formatRadarTargets(candidates),
-		)
-	}
-
-	plan := cloudInstallPlan{Namespace: namespace, Release: release}
-	if !explicitTarget {
-		plan.ClusterWideScanError = result.ClusterWideError
-	}
-	if len(candidates) == 1 {
-		target := candidates[0]
-		if strings.TrimSpace(target.ReleaseName) == "" {
-			return cloudInstallPlan{}, fmt.Errorf(
-				"Radar Deployment %q in namespace %q has no Helm release identity; refusing to guess how it is managed",
-				target.DeploymentName, target.Namespace,
-			)
-		}
-		plan.Target = &target
-		if !explicitTarget {
-			plan.Namespace = target.Namespace
-			plan.Release = target.ReleaseName
-		}
-		if target.Runtime.AlreadyCloud {
-			return cloudInstallPlan{}, fmt.Errorf(
-				"Radar Deployment %q in namespace %q already has Cloud connection settings; recover that pairing instead of creating another",
-				target.DeploymentName, target.Namespace,
-			)
-		}
-		switch target.Ownership.Classification {
-		case cloudinstall.OwnershipGitOpsVerified:
-			plan.Mode = cloudInstallGitOps
-			return plan, nil
-		case cloudinstall.OwnershipGitOpsSuspected,
-			cloudinstall.OwnershipGitOpsUnreadable,
-			cloudinstall.OwnershipGitOpsStale,
-			cloudinstall.OwnershipAmbiguous:
-			return cloudInstallPlan{}, fmt.Errorf(
-				"Radar Deployment %q in namespace %q has %s ownership evidence; refusing an imperative upgrade until its GitOps ownership is unambiguous and readable",
-				target.DeploymentName, target.Namespace, target.Ownership.Classification,
-			)
-		}
-	}
-
-	if releases == nil {
-		return cloudInstallPlan{}, fmt.Errorf("inspect Helm release: nil release inspector")
-	}
-	inspection, err := releases.InspectCloudRelease(plan.Namespace, plan.Release)
-	if err != nil {
-		return cloudInstallPlan{}, fmt.Errorf("inspect Helm release %q in namespace %q: %w", plan.Release, plan.Namespace, err)
-	}
-	switch inspection.State {
-	case helm.CloudReleaseNone:
-		if plan.Target != nil {
-			return cloudInstallPlan{}, fmt.Errorf(
-				"Radar Deployment %q already occupies release target %q/%q but no adoptable Helm release exists; refusing to overwrite an unmanaged installation",
-				plan.Target.DeploymentName, plan.Namespace, plan.Release,
-			)
-		}
-		plan.Mode = cloudInstallFresh
-		return plan, nil
-	case helm.CloudReleaseDeployed:
-		if plan.Target != nil && (plan.Target.Ownership.Classification != cloudinstall.OwnershipNativeHelm || !plan.Target.Ownership.NativeHelmMatchesTarget) {
-			return cloudInstallPlan{}, fmt.Errorf(
-				"Helm release %q/%q is deployed, but workload ownership is %s; refusing to mutate a release with conflicting management metadata",
-				plan.Namespace, plan.Release, plan.Target.Ownership.Classification,
-			)
-		}
-		plan.Mode = cloudInstallAdopt
-		return plan, nil
-	case helm.CloudReleasePending:
-		return cloudInstallPlan{}, fmt.Errorf(
-			"Helm release %q in namespace %q is %q at revision %d; wait for or resolve that operation before connecting it to Radar",
-			plan.Release, plan.Namespace, inspection.Status, inspection.Revision,
-		)
-	case helm.CloudReleaseHistory:
-		return cloudInstallPlan{}, fmt.Errorf(
-			"Helm release %q in namespace %q has retained %q history at revision %d but is not deployed; resolve or remove that history before connecting it to Radar",
-			plan.Release, plan.Namespace, inspection.Status, inspection.Revision,
-		)
-	default:
-		return cloudInstallPlan{}, fmt.Errorf("unrecognized Helm release state %q", inspection.State)
-	}
-}
-
-func discoveredRadarTargets(result cloudinstall.DiscoveryResult, exactTarget bool) []cloudinstall.RadarTarget {
-	if exactTarget {
-		return result.Selected
-	}
-	targets := append([]cloudinstall.RadarTarget{}, result.Namespace...)
-	return append(targets, result.ClusterWide...)
-}
-
-func formatRadarTargets(targets []cloudinstall.RadarTarget) string {
-	var out strings.Builder
-	for _, target := range targets {
-		fmt.Fprintf(&out, "  - namespace %q, release %q, Deployment %q, ownership %s\n",
-			target.Namespace, target.ReleaseName, target.DeploymentName, target.Ownership.Classification)
-	}
-	return strings.TrimSuffix(out.String(), "\n")
+func renderMultipleTargetsHint(err *cloudinstall.MultipleTargetsError) error {
+	return fmt.Errorf(
+		"found multiple Radar installations; choose one explicitly with --namespace and --release:\n%s",
+		cloudinstall.FormatTargets(err.Targets),
+	)
 }
 
 func confirmDiscoveryUncertainty(in io.Reader, out io.Writer, scanErr error, interactive bool, namespace, release string) bool {

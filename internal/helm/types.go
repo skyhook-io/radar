@@ -3,6 +3,8 @@ package helm
 import (
 	"time"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"github.com/skyhook-io/radar/pkg/helmhistory"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
@@ -191,6 +193,16 @@ type OwnedResource struct {
 	Message    string `json:"message,omitempty"` // Status message or reason
 	Summary    string `json:"summary,omitempty"` // Brief status like "0/3 OOMKilled"
 	Issue      string `json:"issue,omitempty"`   // Primary issue if unhealthy
+}
+
+// ReleaseManifestResource is a resource declaration preserved in the latest
+// stored manifest for a Helm release. Unlike a live object, APIVersion is the
+// version Helm will submit again on the next upgrade or rollback.
+type ReleaseManifestResource struct {
+	ReleaseName      string
+	ReleaseNamespace string
+	Resource         OwnedResource
+	Object           *unstructured.Unstructured
 }
 
 // HelmValues represents the values for a release

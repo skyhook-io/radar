@@ -50,3 +50,21 @@ tmp/
 vt-shots/
 vt-audit-shots/
 vt-issues-shots/
+
+# Playwright e2e artifacts (never commit)
+web/test-results/
+
+# design-sync (claude.ai/design) — staged scripts, build output, machine state.
+# The durable set under .design-sync/ (config.json, NOTES.md, conventions.md,
+# previews/, overrides/) IS committed; everything below is regenerated.
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
+# bundle scaffolding staged into the package (shiki stub + bundle tsconfig + compiled Tailwind CSS)
+packages/k8s-ui/.ds-sync-stubs/
+packages/k8s-ui/.ds-sync-tsconfig.json
+packages/k8s-ui/.ds-sync-styles-input.css
+packages/k8s-ui/.ds-sync-styles.css
+packages/k8s-ui/.ds-sync-additions.tsx

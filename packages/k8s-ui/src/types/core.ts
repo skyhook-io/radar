@@ -1,3 +1,5 @@
+import type { CapacityIntegrationState } from './capacity'
+
 // Topology types matching the Go backend
 
 // Per-resource-type RBAC permissions. Field names must match the JSON keys
@@ -57,6 +59,12 @@ export interface WorkloadWritePermissions {
   rollouts: boolean
 }
 
+export interface IntegrationCapability {
+  state: CapacityIntegrationState
+  reasonCode?: string
+  cacheUnavailable?: boolean
+}
+
 // Feature capabilities based on RBAC permissions
 export interface Capabilities {
   exec: boolean           // Terminal feature (pods/exec)
@@ -69,6 +77,10 @@ export interface Capabilities {
   nodeWrite: boolean      // Node write operations (cordon, uncordon, drain)
   workloadWrites?: WorkloadWritePermissions // Workload patch permissions (restart/scale controls)
   mcpEnabled: boolean     // MCP server is running
+  // Karpenter discovery and NodePool read state. Optional on the wire for the
+  // same newer-frontend/older-backend reason as `deployment` below — consumers
+  // must treat absence as "unknown" and fall back to discovery signals.
+  karpenter?: IntegrationCapability
   // How / where this Radar binary is running. Optional on the wire so a
   // newer frontend (e.g. radar-hub-web bundling a fresher @skyhook-io/radar-app)
   // doesn't crash against an older backend that hasn't shipped the field yet —
@@ -80,6 +92,21 @@ export interface Capabilities {
   resources?: ResourcePermissions // Per-resource-type permissions
   authEnabled?: boolean   // Auth is enabled on the backend
   username?: string       // Authenticated user's username (when auth enabled)
+  // Which Cloud-connect lane this deployment gets. Optional on the wire:
+  // older backends don't advertise it — consumers fall back to wizard links.
+  cloudConnect?: CloudConnectCapability
+}
+
+// CloudConnectCapability picks the Cloud funnel's connect lane: 'driver'
+// means the in-product connect flow can run on this server (local, no auth,
+// no existing tunnel); 'wizard' routes to the Hub's connect wizard at appUrl.
+export interface CloudConnectCapability {
+  lane: 'driver' | 'wizard'
+  appUrl: string
+  // Hub API origin the connect dialog reads its live copy from. Absent means
+  // the server decided this deployment must not fetch — consumers render their
+  // compiled-in copy instead.
+  apiUrl?: string
 }
 
 export interface FeatureCapabilities {
@@ -231,8 +258,16 @@ export interface TopologyEdge {
   target: string
   type: EdgeType
   label?: string
+  /** Hover tooltip for the edge label. Used by the Reachability view to keep the
+   *  DECLARED route path available when the label shows an overridden tested path. */
+  labelTitle?: string
   skipIfKindVisible?: string // Hide this edge if this kind is visible (for shortcut edges)
   policyEffect?: 'allowed' | 'blocked' | 'unprotected'
+  /** Reachability outcome for THIS route/hop edge (distinct from policyEffect, a
+   *  NetworkPolicy concept). When set, the topology renderer colors the edge by
+   *  reachability: verified/reached = green, unreachable = red, blocked (downstream
+   *  of a break) = dashed gray, not-tested = neutral. Used by the Reachability view. */
+  reachOutcome?: 'verified' | 'reached' | 'unreachable' | 'blocked' | 'not-tested'
 }
 
 export interface Topology {
@@ -461,6 +496,62 @@ export interface ResolvedEnvFromEntry {
 }
 export type ResolvedEnvFromKey = `configmap:${string}` | `secret:${string}`
 export type ResolvedEnvFrom = Partial<Record<ResolvedEnvFromKey, ResolvedEnvFromEntry>>
+
+export type PodEnvironmentValueState = 'resolved' | 'masked' | 'unavailable' | 'missing' | 'denied'
+
+export interface PodEnvironmentSource {
+  kind: string
+  name?: string
+  key?: string
+  variable?: string
+}
+
+export interface PodEnvironmentEvidence {
+  kind: 'modified' | 'removed' | 'added'
+  changedAt: string
+  message?: string
+}
+
+export interface PodEnvironmentRow {
+  name: string
+  value?: string
+  state: PodEnvironmentValueState
+  sensitive?: boolean
+  source: PodEnvironmentSource
+  dependencies?: PodEnvironmentSource[]
+  shadowedSources?: PodEnvironmentSource[]
+  message?: string
+  optional?: boolean
+  missingImpact?: 'startupBlocked' | 'restartBlocked'
+  runtimeDependent?: boolean
+  currentPodValue?: boolean
+  placeholder?: boolean
+  evidence?: PodEnvironmentEvidence
+}
+
+export interface PodEnvironmentContainer {
+  name: string
+  role: 'container' | 'init' | 'sidecar'
+  rows: PodEnvironmentRow[]
+  truncated?: boolean
+}
+
+export interface PodEnvironmentResponse {
+  containers: PodEnvironmentContainer[]
+  coverage: {
+    observedSince?: string
+    degraded?: boolean
+    degradedReason?: string
+    saturated?: boolean
+  }
+  partial?: boolean
+  truncated?: boolean
+}
+
+export interface PodEnvironmentRevealResponse {
+  value: string
+  encoding: 'utf8' | 'base64'
+}
 
 // Resource reference (for relationships)
 export interface ResourceRef {
@@ -1060,6 +1151,7 @@ export interface TopNodeMetrics {
   name: string
   cpu: number              // nanocores (usage)
   memory: number           // bytes (usage)
+  observedAt?: string      // exact metrics sample time; absent when no sample exists
   podCount: number         // pods scheduled on this node
   cpuAllocatable: number   // nanocores
   memoryAllocatable: number // bytes
@@ -1231,11 +1323,11 @@ export interface TrafficFilters {
   timeRange: string
 }
 
-// Main view type now includes 'traffic', 'cost', 'checks', 'gitops'.
+// Main view type now includes 'traffic', 'cost', 'capacity', 'checks', 'gitops'.
 // Library consumers (Radar Hub) get all GitOps surfaces — the package
 // IS the public surface, so adding new top-level views must extend
 // this type rather than rely on app-local extensions.
-export type ExtendedMainView = MainView | 'traffic' | 'cost' | 'checks' | 'gitops' | 'issues' | 'applications'
+export type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'checks' | 'gitops' | 'issues' | 'applications'
 
 // ============================================================================
 // Image Filesystem Types
@@ -1302,6 +1394,7 @@ export interface WorkloadPodInfo {
   containers: string[]
   ready: boolean
   phase?: string
+  nodeName?: string
   healthLevel?: HealthStatus
   reason?: string
   message?: string

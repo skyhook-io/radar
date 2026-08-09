@@ -272,11 +272,18 @@ func resolveServer(explicit string) (string, error) {
 		return "", fmt.Errorf("no running Radar found (%s missing) — start radar first, or pass --server http://localhost:<port>",
 			filepath.Join(home, ".radar", "mcp-port"))
 	}
-	port, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	// Line 1 is the port; an optional line 2 carries the server's --base-path,
+	// without which every request would 404 against a subpath deployment.
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	port, err := strconv.Atoi(strings.TrimSpace(lines[0]))
 	if err != nil || port <= 0 {
 		return "", fmt.Errorf("~/.radar/mcp-port is unreadable — is radar running? (or pass --server)")
 	}
-	return fmt.Sprintf("http://localhost:%d", port), nil
+	basePath := ""
+	if len(lines) > 1 {
+		basePath = strings.TrimRight(strings.TrimSpace(lines[1]), "/")
+	}
+	return fmt.Sprintf("http://localhost:%d%s", port, basePath), nil
 }
 
 type agentsResponse struct {

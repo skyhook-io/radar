@@ -37,6 +37,7 @@ var (
 	NewPermissionCache       = pkgauth.NewPermissionCache
 	DiscoverNamespaces       = pkgauth.DiscoverNamespaces
 	SubjectCanI              = pkgauth.SubjectCanI
+	SubjectCanISubresource   = pkgauth.SubjectCanISubresource
 	FilterNamespacesForUser  = pkgauth.FilterNamespacesForUser
 	NewSessionID             = pkgauth.NewSessionID
 	CreateSessionCookie      = pkgauth.CreateSessionCookie

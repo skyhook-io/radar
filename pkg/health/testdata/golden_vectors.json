@@ -156,6 +156,42 @@
       "kind": "PersistentVolumeClaim",
       "level": "unhealthy",
       "object": { "status": { "phase": "Lost" } }
+    },
+    {
+      "name": "pod owned by a batch Job is neutral, not an affirmative healthy",
+      "kind": "Pod",
+      "level": "neutral",
+      "object": { "metadata": { "ownerReferences": [{ "kind": "Job", "apiVersion": "batch/v1", "name": "archiver-1" }] }, "status": { "phase": "Running", "containerStatuses": [{ "ready": true }] } }
+    },
+    {
+      "name": "pod owned by a non-batch Job kind stays healthy",
+      "kind": "Pod",
+      "level": "healthy",
+      "object": { "metadata": { "ownerReferences": [{ "kind": "Job", "apiVersion": "acme.example.com/v1", "name": "nope" }] }, "status": { "phase": "Running", "containerStatuses": [{ "ready": true }] } }
+    },
+    {
+      "name": "deployment whose controller has not observed the new spec is converging, not down",
+      "kind": "Deployment",
+      "level": "neutral",
+      "object": { "metadata": { "generation": 7 }, "spec": { "replicas": 10 }, "status": { "observedGeneration": 6, "replicas": 3, "readyReplicas": 3, "availableReplicas": 3 } }
+    },
+    {
+      "name": "deployment settled with zero ready is unhealthy",
+      "kind": "Deployment",
+      "level": "unhealthy",
+      "object": { "metadata": { "generation": 7 }, "spec": { "replicas": 3 }, "status": { "observedGeneration": 7, "replicas": 3, "readyReplicas": 0, "availableReplicas": 0 } }
+    },
+    {
+      "name": "daemonset whose controller has not observed the new spec is converging",
+      "kind": "DaemonSet",
+      "level": "neutral",
+      "object": { "metadata": { "generation": 5 }, "status": { "observedGeneration": 4, "desiredNumberScheduled": 3, "numberReady": 1, "updatedNumberScheduled": 1 } }
+    },
+    {
+      "name": "daemonset settled with none ready is unhealthy",
+      "kind": "DaemonSet",
+      "level": "unhealthy",
+      "object": { "metadata": { "generation": 5 }, "status": { "observedGeneration": 5, "desiredNumberScheduled": 3, "numberReady": 0, "updatedNumberScheduled": 3 } }
     }
   ]
 }

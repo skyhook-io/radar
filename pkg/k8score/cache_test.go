@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"reflect"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -62,6 +63,12 @@ func TestNewResourceCache_Basic(t *testing.T) {
 	}
 	if rc.Nodes() != nil {
 		t.Error("expected Nodes() lister to be nil (not enabled)")
+	}
+	if !rc.IsKindClusterWide(Pods) {
+		t.Error("legacy cluster-wide ResourceTypes config must report cluster-wide authority")
+	}
+	if got := rc.KindNamespaces(Pods); got != nil {
+		t.Fatalf("cluster-wide Pod namespaces = %v, want nil", got)
 	}
 }
 
@@ -1000,7 +1007,7 @@ func TestNewResourceCache_ResourceScopesMixed(t *testing.T) {
 		ResourceScopes: map[string]ResourceScope{
 			Pods:        {Enabled: true, Namespace: ns}, // namespace-scoped
 			Deployments: {Enabled: true, Namespace: ns}, // namespace-scoped
-			Nodes:       {Enabled: true, Namespace: ""}, // cluster-wide (cluster-scoped kind)
+			Nodes:       {Enabled: true, Namespace: ns}, // cluster-scoped kinds ignore namespace fallback
 			Services:    {Enabled: false},               // denied — no informer
 		},
 	})
@@ -1020,6 +1027,9 @@ func TestNewResourceCache_ResourceScopesMixed(t *testing.T) {
 	}
 	if rc.Services() != nil {
 		t.Error("Services lister should be nil — kind was disabled")
+	}
+	if !rc.IsKindClusterWide(Nodes) || rc.KindNamespaces(Nodes) != nil {
+		t.Fatal("cluster-scoped Node informer did not report its effective cluster-wide scope")
 	}
 
 	enabled := rc.GetEnabledResources()
@@ -1091,6 +1101,14 @@ func TestNewResourceCache_ResourceScopeNamespacesUnion(t *testing.T) {
 	}
 	if rc.IsKindClusterWide(Pods) {
 		t.Fatal("multi-namespace scoped Pods must not report cluster-wide authority")
+	}
+	if got := rc.KindNamespaces(Pods); !slices.Equal(got, []string{nsA, nsB}) {
+		t.Fatalf("Pod informer namespaces = %v, want [%s %s]", got, nsA, nsB)
+	}
+	got := rc.KindNamespaces(Pods)
+	got[0] = "mutated"
+	if next := rc.KindNamespaces(Pods); !slices.Equal(next, []string{nsA, nsB}) {
+		t.Fatalf("caller mutation changed Pod informer namespaces: %v", next)
 	}
 }
 
@@ -1523,6 +1541,36 @@ func TestDynamicResourceCache_ListWatchedUnionsNamespaceInformers(t *testing.T) 
 	if len(got) != 2 {
 		t.Errorf("ListWatched returned %d objects, want 2 (union of both namespace-scoped informers)", len(got))
 	}
+
+	readOnly, err := d.ListWatchedReadOnly(gvr)
+	if err != nil {
+		t.Fatalf("ListWatchedReadOnly failed: %v", err)
+	}
+	if len(readOnly) != 2 {
+		t.Fatalf("ListWatchedReadOnly returned %d objects, want 2", len(readOnly))
+	}
+	copiesByName := make(map[string]*unstructured.Unstructured, len(got))
+	for _, item := range got {
+		copiesByName[item.GetName()] = item
+	}
+	for _, item := range readOnly {
+		if item == copiesByName[item.GetName()] {
+			t.Fatalf("ListWatched returned cached pointer for %s instead of a defensive copy", item.GetName())
+		}
+	}
+	readOnlyAgain, err := d.ListWatchedReadOnly(gvr)
+	if err != nil {
+		t.Fatalf("second ListWatchedReadOnly failed: %v", err)
+	}
+	readOnlyByName := make(map[string]*unstructured.Unstructured, len(readOnly))
+	for _, item := range readOnly {
+		readOnlyByName[item.GetName()] = item
+	}
+	for _, item := range readOnlyAgain {
+		if item != readOnlyByName[item.GetName()] {
+			t.Fatalf("ListWatchedReadOnly copied cached object %s", item.GetName())
+		}
+	}
 }
 
 // ListNamespaces must short-circuit a cluster-scoped GVR to a cluster-wide
@@ -1760,6 +1808,30 @@ func fakeDynamicForListAccess(
 		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: gvr.Group, Resource: gvr.Resource}, "", nil)
 	})
 	return dyn
+}
+
+// TestKindCoversNamespace pins the empty-vs-unreadable distinction: an empty list
+// is only authoritative when the informer actually covers the namespace.
+func TestKindCoversNamespace(t *testing.T) {
+	// nil ResourceScopes = legacy / cluster-wide default → covers everything.
+	if !(&ResourceCache{}).KindCoversNamespace("pods", "any") {
+		t.Error("nil scopes must cover all (legacy cluster-wide)")
+	}
+	clusterWide := &ResourceCache{config: CacheConfig{ResourceScopes: map[string]ResourceScope{"pods": {Enabled: true, Namespace: ""}}}}
+	if !clusterWide.KindCoversNamespace("pods", "prod") {
+		t.Error("cluster-wide pods must cover any namespace")
+	}
+	scoped := &ResourceCache{config: CacheConfig{ResourceScopes: map[string]ResourceScope{"pods": {Enabled: true, Namespace: "prod"}}}}
+	if !scoped.KindCoversNamespace("pods", "prod") {
+		t.Error("namespace-scoped pods must cover its own namespace")
+	}
+	if scoped.KindCoversNamespace("pods", "other") {
+		t.Error("pods scoped to prod must NOT cover another namespace (empty there is out-of-scope, not 0 pods)")
+	}
+	disabled := &ResourceCache{config: CacheConfig{ResourceScopes: map[string]ResourceScope{}}}
+	if disabled.KindCoversNamespace("pods", "prod") {
+		t.Error("a kind absent from an authoritative scope set is not covered")
+	}
 }
 
 // The PR core for CRDs: cluster-wide denied but several fallback namespaces

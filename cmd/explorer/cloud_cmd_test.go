@@ -97,9 +97,10 @@ func TestAdoptionRollbackGuidanceIncludesHubCleanup(t *testing.T) {
 	for _, want := range []string{
 		"helm rollback prod 7 -n observability",
 		"delete secret/radar-cloud-config",
-		"organization owner delete the connected cluster",
+		"organization owner",
+		"delete the connected cluster",
 		"https://app.radarhq.io/c/clus_existing",
-		"fleet row would remain disconnected",
+		"fleet row shows as disconnected",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("rollback guidance missing %q:\n%s", want, got)

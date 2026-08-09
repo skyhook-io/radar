@@ -68,7 +68,7 @@ func handlePatchResource(ctx context.Context, req *mcp.CallToolRequest, input pa
 
 	dynClient := k8s.DynamicClientFromContext(ctx)
 	if dynClient == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 
 	patchType, err := parsePatchType(input.PatchType)

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 ## Project Overview
 
-Radar is a modern Kubernetes visibility tool — local-first, no account required, no cloud dependency, fast. It provides topology visualization, event timeline, service traffic maps, resource browsing, Helm management, and cluster audit (best-practices scanning). Runs as a kubectl plugin (`kubectl-radar`) or standalone binary and opens a web UI in the browser. Open source, free forever. Built by Skyhook.
+Radar is a modern Kubernetes visibility tool — local-first, no account required, no cloud dependency, fast. It provides topology visualization, event timeline, service traffic maps, resource browsing, Helm management, cluster audit (best-practices scanning), and Kubernetes upgrade impact analysis. Runs as a kubectl plugin (`kubectl-radar`) or standalone binary and opens a web UI in the browser. Open source, free forever. Built by Skyhook.
 
 ## Code comments
 
@@ -12,6 +12,11 @@ Radar is a modern Kubernetes visibility tool — local-first, no account require
 - Don't explain WHAT the code does — well-named identifiers already do that.
 - **Don't reference tickets, PRs, bug numbers, or diff history** in code comments (e.g. "fixes SKY-123", "Bugbot caught this on PR #584", "used to read X, now…"). Those belong in the PR description and rot as the codebase evolves. The WHY of the change should stand on its own.
 - This applies to comments written by any tool (Cursor, Bugbot, Copilot) as well as humans — strip ticket/PR references before merging.
+
+## Release and publishing authorization
+
+- Never create, move, or delete Git tags or GitHub Releases; dispatch release or publish workflows; or publish binaries, container images, npm packages, package-manager artifacts, Helm charts, or other distribution artifacts without explicit user approval naming the exact artifact, version, and action.
+- Approval to implement a change, open or merge a PR, or prepare release changes is not authorization to publish. If release authorization is ambiguous, stop and ask.
 
 ## Reference Docs — MUST READ before making changes
 
@@ -22,6 +27,7 @@ Not everything is in this file. The following files contain critical details tha
 | Adding or modifying **HTTP endpoints** | `internal/server/server.go` — all routes are defined here |
 | Adding or modifying **CLI flags** | `cmd/explorer/main.go` — flag definitions and defaults |
 | Adding a **new CRD integration** (renderer, topology, discovery) | [docs/INTEGRATION_GUIDE.md](docs/INTEGRATION_GUIDE.md) — full checklist with collision gotchas |
+| Working on the **Capacity (Karpenter) views** | [docs/capacity.md](docs/capacity.md) — the four screens, the per-value certainty contract (`= ≥ ≤ ?`, unavailable ≠ zero, partial ≠ exact, declared ≠ actual), demand-evaluation semantics, and the real Karpenter failure model. Wire types in `pkg/capacityapi`, engine in `internal/capacity`, handlers in `internal/server/capacity*` |
 | Working on **resource renderers** | `packages/k8s-ui/src/components/resources/renderers/` — all existing renderers live here |
 | Understanding **cluster connection behavior** | [docs/configuration.md](docs/configuration.md) — kubeconfig precedence, multi-context, in-cluster |
 | Working on **MCP tools or AI context** | [docs/mcp.md](docs/mcp.md) + `internal/mcp/tools.go` — tool definitions and design rationale |
@@ -138,7 +144,11 @@ Use `/visual-test` command for the full workflow (cluster check, Playwright MCP,
 - GitOps detail data: `/api/gitops/tree/{kind}/{ns}/{name}` (resource tree + ownership edges), `/api/gitops/insights/{kind}/{ns}/{name}` (curated diagnosis: summary + issues + drift + events + plan + history + capabilities)
 - Nodes: `/api/nodes/{name}/...` (cordon, uncordon, drain, debug)
 - Audit: `/api/audit`, `/api/audit/resource/{kind}/{ns}/{name}`, `/api/settings/audit` (GET/PUT)
+- Network trace: `/api/trace/{kind}/{ns}/{name}` (path-shaped diagnosis for Service/Ingress/HTTPRoute/GRPCRoute/Gateway; `?probe=true` runs DNS/TCP/TLS/HTTP probes against the declared path - direct TCP in-cluster, K8s API server proxy from a laptop, gated by the user's `services/proxy` + `pods/proxy` RBAC).
+- Capacity (Karpenter): `/api/capacity` (overview), `/api/capacity/pools` (+ `/{name}`, `/{name}/members`), `/api/capacity/demand` (`?state=`, `?pool=`, `?owner=ns/Kind/name`, `?pod=ns/name`), `/api/capacity/activity` — all read-only, all gated on the caller's ability to list NodePools; deliberately cluster-wide (no namespace view-filter forwarding). See [docs/capacity.md](docs/capacity.md)
+- Upgrade impact: `/api/upgrade-readiness?target={major.minor}` (GET; cluster-wide evidence bounded by the current identity's RBAC and the configured cache scope)
 - CAPI: `/api/capi/clusters/{ns}/{name}/kubeconfig` (GET), `/api/capi/clusters/{ns}/{name}/connect` (POST)
+- Cloud Connect driver lane: `/api/cloud/install/{prepare,start,status,cancel,dismiss}` — the in-product device-flow install behind the funnel modal. Enabled ONLY local + auth-disabled + no `--cloud-url` (deliberately NOT gated on a loopback listener — `resources/apply` and `pods/exec` are ungated there too; a shared listener instead requires an explicit acknowledgement); every other configuration routes to the Hub wizard. The cluster token never serializes through these endpoints.
 - RBAC reverse-lookup: `/api/rbac/subject/{kind}/{namespace}/{name}` (ServiceAccount) and `/api/rbac/subject/{kind}/{name}` (User/Group) return direct + group-inherited bindings + flattened effective rules. SA subjects also get a `usedByPods` list (Pods whose `spec.serviceAccountName` matches — closes the loop on the SA detail page). `/api/rbac/role/{kind}/{namespace}/{name}` (use `_` for ClusterRole's empty namespace) returns the inverse — bindings that reference the role + their subjects. `/api/rbac/namespace/{namespace}` returns RoleBindings in the namespace + ClusterRoleBindings with at least one SA subject in it + a ServiceAccount count (backs the NamespaceRenderer's RBAC section; group-only ClusterRoleBindings like `system:authenticated` grants are deliberately excluded — they'd appear in every namespace and would be noise). `/api/rbac/whoami?namespace=...` is a pass-through of `SelfSubjectRulesReview` for the current user. Backed by `pkg/rbac/` (pure index + 5s TTL memo); endpoints gate on `list rolebindings` AND `list clusterrolebindings` (403 when either is denied — silent partial views would mislead operators).
 
 ## Key Patterns

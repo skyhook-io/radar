@@ -28,7 +28,7 @@ func TestForwardedIdentityAllowed(t *testing.T) {
 		{"cloud: radar:email allowed", "user_01ABC", []string{"radar:email:a@b.com"}, true, true},
 		{"cloud: non-vocabulary group rejected", "user_01ABC", []string{"radar:owner", "sre-team"}, true, false},
 		{"cloud: empty username rejected", "", []string{"radar:owner"}, true, false},
-		{"cloud: internal synthetic username allowed", "cloud:system:alerts:o1", []string{"radar:owner"}, true, true},
+		{"cloud mode internal synthetic username allowed", "radar:system:alerts:o1", []string{"radar:owner"}, true, true},
 		{"cloud: no groups, valid user, allowed", "user_01ABC", nil, true, true},
 	}
 	for _, tc := range cases {
@@ -50,7 +50,7 @@ func TestIsReservedPrincipal(t *testing.T) {
 		}
 	}
 	// Radar's own namespaced synthetic principals must NOT be treated as reserved.
-	notReserved := []string{"cloud:system:alerts:o1", "cloud:system", "radar:owner", "alice@company.com", "sre-team", ""}
+	notReserved := []string{"radar:system:alerts:o1", "radar:system", "radar:owner", "alice@company.com", "sre-team", ""}
 	for _, p := range notReserved {
 		if IsReservedPrincipal(p) {
 			t.Errorf("IsReservedPrincipal(%q) = true, want false", p)

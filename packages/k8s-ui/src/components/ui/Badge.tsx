@@ -106,6 +106,25 @@ const KIND: Record<string, string> = {
   CiliumClusterwideNetworkPolicy:     'bg-indigo-100 text-indigo-800 border-indigo-300 dark:bg-indigo-950/50 dark:text-indigo-300 dark:border-indigo-700/40',
   ClusterNetworkPolicy:               'bg-violet-100 text-violet-800 border-violet-300 dark:bg-violet-950/50 dark:text-violet-300 dark:border-violet-700/40',
 
+  // Kyverno. Policy kinds share the indigo family used by the other
+  // policy-shaped kinds above; the destructive ones (Deleting/Cleanup) and
+  // PolicyException take amber so they read as "changes or bypasses things".
+  Policy:                             'bg-indigo-100 text-indigo-800 border-indigo-300 dark:bg-indigo-950/50 dark:text-indigo-300 dark:border-indigo-700/40',
+  ClusterPolicy:                      'bg-indigo-100 text-indigo-800 border-indigo-300 dark:bg-indigo-950/50 dark:text-indigo-300 dark:border-indigo-700/40',
+  ValidatingPolicy:                   'bg-indigo-100 text-indigo-800 border-indigo-300 dark:bg-indigo-950/50 dark:text-indigo-300 dark:border-indigo-700/40',
+  NamespacedValidatingPolicy:         'bg-indigo-100 text-indigo-800 border-indigo-300 dark:bg-indigo-950/50 dark:text-indigo-300 dark:border-indigo-700/40',
+  ImageValidatingPolicy:              'bg-violet-100 text-violet-800 border-violet-300 dark:bg-violet-950/50 dark:text-violet-300 dark:border-violet-700/40',
+  NamespacedImageValidatingPolicy:    'bg-violet-100 text-violet-800 border-violet-300 dark:bg-violet-950/50 dark:text-violet-300 dark:border-violet-700/40',
+  MutatingPolicy:                     'bg-violet-100 text-violet-800 border-violet-300 dark:bg-violet-950/50 dark:text-violet-300 dark:border-violet-700/40',
+  NamespacedMutatingPolicy:           'bg-violet-100 text-violet-800 border-violet-300 dark:bg-violet-950/50 dark:text-violet-300 dark:border-violet-700/40',
+  GeneratingPolicy:                   'bg-violet-100 text-violet-800 border-violet-300 dark:bg-violet-950/50 dark:text-violet-300 dark:border-violet-700/40',
+  NamespacedGeneratingPolicy:         'bg-violet-100 text-violet-800 border-violet-300 dark:bg-violet-950/50 dark:text-violet-300 dark:border-violet-700/40',
+  DeletingPolicy:                     'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-700/40',
+  NamespacedDeletingPolicy:           'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-700/40',
+  PolicyException:                    'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-700/40',
+  CleanupPolicy:                      'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-700/40',
+  ClusterCleanupPolicy:               'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-700/40',
+
   // Cluster-scoped
   Node:          'bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-950/50 dark:text-sky-400 dark:border-sky-700/40',
   Namespace:     'bg-gray-100 text-gray-700 border-gray-300 dark:bg-gray-950/50 dark:text-gray-400 dark:border-gray-700/40',
@@ -144,6 +163,14 @@ const KIND: Record<string, string> = {
   // Contour
   HTTPProxy:            'bg-violet-100 text-violet-700 border-violet-300 dark:bg-violet-950/50 dark:text-violet-400 dark:border-violet-700/40',
 
+  // CloudNativePG. Only Pooler is keyed here. getKindColorClass takes the kind
+  // string alone, and CNPG's other kinds arrive as bare `Cluster` / `Backup` /
+  // `ScheduledBackup`, which collide with CAPI and Velero — keying those would
+  // paint another operator's resource in Postgres colors, the exact collision
+  // class this integration fixes elsewhere. Coloring them needs the API group
+  // threaded through Badge; until then they take the default.
+  Pooler:               'bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-950/50 dark:text-sky-400 dark:border-sky-700/40',
+
   // Cluster API
   CAPICluster:          'bg-indigo-100 text-indigo-700 border-indigo-300 dark:bg-indigo-950/50 dark:text-indigo-400 dark:border-indigo-700/40',
   MachineDeployment:    'bg-indigo-100 text-indigo-700 border-indigo-300 dark:bg-indigo-950/50 dark:text-indigo-400 dark:border-indigo-700/40',
@@ -153,6 +180,15 @@ const KIND: Record<string, string> = {
   KubeadmControlPlane:  'bg-indigo-100 text-indigo-700 border-indigo-300 dark:bg-indigo-950/50 dark:text-indigo-400 dark:border-indigo-700/40',
   ClusterClass:         'bg-indigo-100 text-indigo-700 border-indigo-300 dark:bg-indigo-950/50 dark:text-indigo-400 dark:border-indigo-700/40',
   MachineHealthCheck:   'bg-indigo-100 text-indigo-700 border-indigo-300 dark:bg-indigo-950/50 dark:text-indigo-400 dark:border-indigo-700/40',
+
+  // Velero. Only kinds whose names no other operator claims are mapped: this
+  // table is keyed on kind alone with no group awareness, so a shared name would
+  // paint a foreign resource in Velero's colour. That rules out `Backup` (CNPG),
+  // `Restore` (rancher/backup-restore-operator) and `Schedule` (several
+  // operators) — the same collisions the renderers guard on velero.io.
+  BackupStorageLocation:  'bg-teal-100 text-teal-800 border-teal-300 dark:bg-teal-950/50 dark:text-teal-400 dark:border-teal-700/40',
+  VolumeSnapshotLocation: 'bg-teal-100 text-teal-800 border-teal-300 dark:bg-teal-950/50 dark:text-teal-400 dark:border-teal-700/40',
+  BackupRepository:       'bg-teal-100 text-teal-800 border-teal-300 dark:bg-teal-950/50 dark:text-teal-400 dark:border-teal-700/40',
 
   // Events
   Event:                'bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-950/50 dark:text-slate-400 dark:border-slate-700/40',

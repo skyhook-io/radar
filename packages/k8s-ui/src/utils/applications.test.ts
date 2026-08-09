@@ -1,5 +1,67 @@
 import { describe, it, expect } from 'vitest'
-import { compareVersions, appGroupingExplainer, APP_IDENTITY_ANNOTATION, appGroupLagMessage, matchWorkloadAcrossInstances, foldAppGroups, identityEnvInferred, worstHealth, buildAppMembershipIndex, batchActivityForApp, batchRuntimeForApp, servingReadiness, type AppGroupFoldEntry, type AppRow, type AppWorkload } from './applications'
+import { compareVersions, appGroupingExplainer, APP_IDENTITY_ANNOTATION, appGroupLagMessage, matchWorkloadAcrossInstances, foldAppGroups, identityEnvInferred, worstHealth, buildAppMembershipIndex, batchActivityForApp, batchRuntimeForApp, servingReadiness, resolveAppWorkloadSelection, type AppGroupFoldEntry, type AppRow, type AppWorkload } from './applications'
+
+describe('application workload scope resolution', () => {
+  const sole = ['Deployment/prod/api']
+  const many = ['Deployment/prod/api', 'Deployment/prod/worker']
+
+  it('resolves application scope to the sole workload — a one-workload app has none', () => {
+    expect(resolveAppWorkloadSelection(sole, null)).toEqual({
+      selected: 'Deployment/prod/api',
+      hostKeyIsStale: false,
+    })
+  })
+
+  it('keeps application scope for a multi-workload app', () => {
+    expect(resolveAppWorkloadSelection(many, null)).toEqual({
+      selected: null,
+      hostKeyIsStale: false,
+    })
+  })
+
+  it('passes a key that names a current workload straight through', () => {
+    expect(resolveAppWorkloadSelection(many, 'Deployment/prod/worker')).toEqual({
+      selected: 'Deployment/prod/worker',
+      hostKeyIsStale: false,
+    })
+  })
+
+  // The stale key still has to leave the URL even though the sole workload
+  // renders in its place — the two outcomes are deliberately independent.
+  it('renders the sole workload from a stale key and still reports the key stale', () => {
+    expect(resolveAppWorkloadSelection(sole, 'Deployment/prod/gone')).toEqual({
+      selected: 'Deployment/prod/api',
+      hostKeyIsStale: true,
+    })
+  })
+
+  it('falls back to application scope when a stale key has no sole workload to land on', () => {
+    expect(resolveAppWorkloadSelection(many, 'Deployment/prod/gone')).toEqual({
+      selected: null,
+      hostKeyIsStale: true,
+    })
+  })
+
+  it('reports no stale key when none was supplied', () => {
+    expect(resolveAppWorkloadSelection([], null)).toEqual({
+      selected: null,
+      hostKeyIsStale: false,
+    })
+  })
+
+  // A bare `?workload=` reaches a host as '' rather than null, and names no
+  // workload — it has to leave the URL like any other unusable key.
+  it('treats the empty string a bare query param yields as a stale key', () => {
+    expect(resolveAppWorkloadSelection(sole, '')).toEqual({
+      selected: 'Deployment/prod/api',
+      hostKeyIsStale: true,
+    })
+    expect(resolveAppWorkloadSelection(many, '')).toEqual({
+      selected: null,
+      hostKeyIsStale: true,
+    })
+  })
+})
 
 describe('batch application runtime', () => {
   it('uses the latest retained outcome instead of historical failure count', () => {

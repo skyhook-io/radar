@@ -13,7 +13,8 @@ describe('KarpenterNodePoolRenderer', () => {
       />,
     )
 
-    expect(html).toContain('6 / 12')
+    expect(html).toContain('6 cores provisioned / 12 cores limit')
+    expect(html).toContain('This is not live workload usage')
   })
 
   it('renders non-string CPU quantities without throwing', () => {
@@ -27,5 +28,29 @@ describe('KarpenterNodePoolRenderer', () => {
         />,
       ),
     ).not.toThrow()
+  })
+
+  it('renders disruption reasons and lifecycle safety settings', () => {
+    const html = renderToString(
+      <KarpenterNodePoolRenderer
+        data={{
+          spec: {
+            template: {
+              spec: {
+                terminationGracePeriod: '24h',
+                requirements: [{ key: 'node.kubernetes.io/instance-family', operator: 'In', values: ['m6i'], minValues: 2 }],
+              },
+            },
+            disruption: { budgets: [{ nodes: '10%', reasons: ['Drifted', 'Underutilized'] }] },
+          },
+        }}
+      />,
+    )
+
+    expect(html).toContain('Termination Grace Period')
+    expect(html).toContain('24h')
+    expect(html).toContain('Drifted')
+    expect(html).toContain('Underutilized')
+    expect(html).toContain('min <!-- -->2')
   })
 })

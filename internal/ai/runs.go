@@ -29,9 +29,10 @@ import (
 // Lock order is always m.mu → r.mu, never the reverse; the run goroutine never
 // takes m.mu.
 type RunManager struct {
-	d        *Diagnoser
-	mcpPort  func() int    // resolved lazily — the listener port isn't known at construction
-	ctxLabel func() string // current kube-context label, for the run's baseline
+	d           *Diagnoser
+	mcpPort     func() int    // resolved lazily — the listener port isn't known at construction
+	mcpBasePath string        // --base-path prefix the MCP mounts sit under ("" at the root)
+	ctxLabel    func() string // current kube-context label, for the run's baseline
 
 	baseCtx    context.Context // parent of every run ctx; cancelled on Shutdown
 	baseCancel context.CancelFunc
@@ -177,7 +178,7 @@ func turnTimeout() time.Duration {
 // callbacks because the listener port and kube-context are only known at runtime.
 // store persists history across restarts (nil = memory-only); persisted runs are
 // hydrated into the manager here.
-func NewRunManager(d *Diagnoser, mcpPort func() int, ctxLabel func() string, store RunStore) *RunManager {
+func NewRunManager(d *Diagnoser, mcpPort func() int, mcpBasePath string, ctxLabel func() string, store RunStore) *RunManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	// Best-effort: a failure here just means runs get no shared workdir (logged).
 	root, err := os.MkdirTemp("", "radar-ai-")
@@ -188,6 +189,7 @@ func NewRunManager(d *Diagnoser, mcpPort func() int, ctxLabel func() string, sto
 	m := &RunManager{
 		d:             d,
 		mcpPort:       mcpPort,
+		mcpBasePath:   mcpBasePath,
 		ctxLabel:      ctxLabel,
 		baseCtx:       ctx,
 		baseCancel:    cancel,
@@ -489,7 +491,7 @@ func (m *RunManager) launchTurn(r *Run, question string, apply bool, fix, sessio
 		defer cancel()
 		diag, err := m.d.DiagnoseStream(ctx, Request{
 			Kind: r.Kind, Namespace: r.Namespace, Name: r.Name,
-			MCPPort: m.mcpPort(), SessionID: session,
+			MCPPort: m.mcpPort(), MCPBasePath: m.mcpBasePath, SessionID: session,
 			Question: question, Apply: apply, Fix: fix,
 			Agent: r.Agent, Profile: r.Profile, Model: r.Model, Effort: r.Effort,
 			Health: r.Health, WorkDir: r.WorkDir,

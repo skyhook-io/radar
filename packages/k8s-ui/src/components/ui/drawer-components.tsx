@@ -81,9 +81,10 @@ interface SectionProps {
   icon?: React.ComponentType<{ className?: string }>
   children: React.ReactNode
   defaultExpanded?: boolean
+  contentClassName?: string
 }
 
-export function Section({ title, icon: Icon, children, defaultExpanded = true }: SectionProps) {
+export function Section({ title, icon: Icon, children, defaultExpanded = true, contentClassName }: SectionProps) {
   const [expanded, setExpanded] = useState(defaultExpanded)
 
   return (
@@ -101,7 +102,7 @@ export function Section({ title, icon: Icon, children, defaultExpanded = true }:
         style={{ gridTemplateRows: expanded ? '1fr' : '0fr' }}
       >
         <div className="overflow-hidden">
-          <div className="pl-6">{children}</div>
+          <div className={contentClassName ?? 'pl-6'}>{children}</div>
         </div>
       </div>
     </div>

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -36,6 +37,9 @@ type CacheProvider struct {
 	cache     *k8s.ResourceCache
 	dynamic   *k8s.DynamicResourceCache
 	discovery *k8s.ResourceDiscovery
+
+	webhookRefsOnce sync.Once
+	webhookRefs     []k8s.AdmissionWebhookServiceReference
 }
 
 // NewCacheProvider returns a Provider over the live radar caches, or
@@ -50,6 +54,13 @@ func NewCacheProvider() *CacheProvider {
 		dynamic:   k8s.GetDynamicResourceCache(),
 		discovery: k8s.GetResourceDiscovery(),
 	}
+}
+
+func (p *CacheProvider) CacheIdentity() (*k8s.ResourceCache, *k8s.DynamicResourceCache, *k8s.ResourceDiscovery) {
+	if p == nil {
+		return nil, nil, nil
+	}
+	return p.cache, p.dynamic, p.discovery
 }
 
 func (p *CacheProvider) DetectProblems(namespaces []string) []k8s.Detection {
@@ -156,6 +167,95 @@ func (p *CacheProvider) SelectedPodsForService(namespace, name string) []Ref {
 	}
 	sortRefs(refs)
 	return refs
+}
+
+func (p *CacheProvider) AdmissionWebhookRefsForService(namespace, name string) []AdmissionWebhookRef {
+	if p == nil || namespace == "" || name == "" {
+		return nil
+	}
+	p.webhookRefsOnce.Do(func() {
+		p.webhookRefs = k8s.AdmissionWebhookServiceReferencesWatched(p.dynamic, p.discovery)
+	})
+	var refs []AdmissionWebhookRef
+	for _, ref := range p.webhookRefs {
+		if ref.ServiceNamespace != namespace || ref.ServiceName != name {
+			continue
+		}
+		refs = append(refs, AdmissionWebhookRef{
+			Configuration: Ref{
+				Group: ref.ConfigurationGroup,
+				Kind:  ref.ConfigurationKind,
+				Name:  ref.ConfigurationName,
+			},
+			WebhookName:   ref.WebhookName,
+			FailurePolicy: ref.FailurePolicy,
+		})
+	}
+	return refs
+}
+
+func (p *CacheProvider) WorkloadBacksService(group, kind, namespace, name, serviceNamespace, serviceName string) bool {
+	if p == nil || p.cache == nil || namespace == "" || namespace != serviceNamespace || name == "" {
+		return false
+	}
+	svcLister := p.cache.Services()
+	if svcLister == nil {
+		return false
+	}
+	svc, err := svcLister.Services(serviceNamespace).Get(serviceName)
+	if err != nil || svc == nil || len(svc.Spec.Selector) == 0 {
+		return false
+	}
+	selector := labels.SelectorFromSet(labels.Set(svc.Spec.Selector))
+	switch kind {
+	case "Deployment":
+		if group != "apps" || p.cache.Deployments() == nil {
+			return false
+		}
+		workload, err := p.cache.Deployments().Deployments(namespace).Get(name)
+		return err == nil && workload != nil && selector.Matches(labels.Set(workload.Spec.Template.Labels))
+	case "ReplicaSet":
+		if group != "apps" {
+			return false
+		}
+		if p.cache.ReplicaSets() == nil {
+			return false
+		}
+		workload, err := p.cache.ReplicaSets().ReplicaSets(namespace).Get(name)
+		return err == nil && workload != nil && selector.Matches(labels.Set(workload.Spec.Template.Labels))
+	case "StatefulSet":
+		if group != "apps" || p.cache.StatefulSets() == nil {
+			return false
+		}
+		workload, err := p.cache.StatefulSets().StatefulSets(namespace).Get(name)
+		return err == nil && workload != nil && selector.Matches(labels.Set(workload.Spec.Template.Labels))
+	case "DaemonSet":
+		if group != "apps" || p.cache.DaemonSets() == nil {
+			return false
+		}
+		workload, err := p.cache.DaemonSets().DaemonSets(namespace).Get(name)
+		return err == nil && workload != nil && selector.Matches(labels.Set(workload.Spec.Template.Labels))
+	default:
+		if group == "apps" || group == "" || p.dynamic == nil || p.discovery == nil {
+			return false
+		}
+		gvr, ok := p.discovery.GetGVRWithGroup(kind, group)
+		if !ok || !p.dynamic.IsSynced(gvr) {
+			return false
+		}
+		items, err := p.dynamic.ListWatched(gvr)
+		if err != nil {
+			return false
+		}
+		for _, workload := range items {
+			if workload.GetNamespace() != namespace || workload.GetName() != name {
+				continue
+			}
+			templateLabels, _, _ := unstructured.NestedStringMap(workload.Object, "spec", "template", "metadata", "labels")
+			return selector.Matches(labels.Set(templateLabels))
+		}
+		return false
+	}
 }
 
 // PodsOnNode returns every pod scheduled onto the named node (spec.nodeName).
@@ -665,4 +765,41 @@ func (p *CacheProvider) NamespacedForGVR(gvr schema.GroupVersionResource) (bool,
 		return false, false
 	}
 	return ar.Namespaced, true
+}
+
+func (p *CacheProvider) karpenterResourceDiscovery(group, kind string) karpenterResourceCoverage {
+	if p.discovery == nil {
+		return karpenterCoverageUnknown
+	}
+	apiResource, ok := p.discovery.GetResourceWithGroup(kind, group)
+	if !ok {
+		if p.discovery.GroupHadPartialDiscovery(group) {
+			return karpenterCoverageUnknown
+		}
+		return karpenterCoverageNotInstalled
+	}
+	if apiResource.Namespaced {
+		return karpenterCoverageUnknown
+	}
+	return karpenterCoverageAuthoritative
+}
+
+func (p *CacheProvider) karpenterResources(group, kind string) karpenterResourceInventory {
+	coverage := p.karpenterResourceDiscovery(group, kind)
+	if coverage != karpenterCoverageAuthoritative || p.dynamic == nil {
+		return karpenterResourceInventory{Coverage: coverage}
+	}
+	apiResource, ok := p.discovery.GetResourceWithGroup(kind, group)
+	if !ok {
+		return karpenterResourceInventory{Coverage: karpenterCoverageUnknown}
+	}
+	gvr := schema.GroupVersionResource{Group: apiResource.Group, Version: apiResource.Version, Resource: apiResource.Name}
+	if err := p.dynamic.EnsureWatching(gvr); err != nil || !p.dynamic.IsSynced(gvr) {
+		return karpenterResourceInventory{GVR: gvr, Coverage: karpenterCoverageUnknown}
+	}
+	items, err := p.dynamic.List(gvr, "")
+	if err != nil {
+		return karpenterResourceInventory{GVR: gvr, Coverage: karpenterCoverageUnknown}
+	}
+	return karpenterResourceInventory{GVR: gvr, Items: items, Coverage: karpenterCoverageAuthoritative}
 }

@@ -107,7 +107,7 @@ interface ResourceTypeButtonProps {
 
 const ResourceTypeButton = forwardRef<HTMLButtonElement, ResourceTypeButtonProps>(
   function ResourceTypeButton({ resource, count, isSelected, isHighlighted, isForbidden: forbidden, isPinned, onTogglePin, onClick }, ref) {
-    const Icon = getResourceIcon(resource.kind)
+    const Icon = getResourceIcon(resource.kind, resource.group)
     return (
       <button
         ref={ref}

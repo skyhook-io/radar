@@ -1,11 +1,14 @@
 package settings
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -129,4 +132,63 @@ func Update(mutate func(*Settings)) (Settings, error) {
 	s := Load()
 	mutate(&s)
 	return s, Save(s)
+}
+
+// RolloutKey returns the local value staged rollouts hash on, minting and
+// persisting one on first use. It never leaves this machine. Returns "" when it
+// cannot be persisted (no home directory, read-only filesystem) — a caller
+// gating a partial rollout must treat that as out-of-cohort rather than
+// re-rolling a fresh key every start.
+//
+// The file name is load-bearing: changing it makes every existing install mint
+// a new key and land in a different bucket, so the rollout would visibly flip
+// for people on both sides of it.
+//
+// It lives in its own file, deliberately NOT in the Settings struct:
+// /api/settings serializes that struct verbatim (including through a Cloud
+// tunnel), and a settings PUT round-trip could silently drop a field the
+// client never saw. A random local value must be able to do neither.
+// The O_EXCL create makes a concurrent first mint (CLI and Desktop starting
+// together) resolve to one winner; losers adopt the winner's file.
+func RolloutKey() string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	path := filepath.Join(homeDir, ".radar", "install-id")
+	if data, err := os.ReadFile(path); err == nil {
+		return strings.TrimSpace(string(data))
+	}
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return ""
+	}
+	id := hex.EncodeToString(raw)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return ""
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		if os.IsExist(err) {
+			if data, rerr := os.ReadFile(path); rerr == nil {
+				return strings.TrimSpace(string(data))
+			}
+		}
+		return ""
+	}
+	// Any failure past the create must take the file with it. A stranded empty
+	// file is read back as a valid-but-empty value on every later call, which
+	// callers treat as nothing to hash — pinning the install out of a staged
+	// rollout permanently, with no way to self-heal. Removing it lets the next
+	// start mint cleanly.
+	// Close is where a failed flush surfaces on some filesystems, so both it and
+	// the write have to succeed before the id can be trusted — and either
+	// failing is handled the same way.
+	_, writeErr := f.WriteString(id)
+	closeErr := f.Close()
+	if writeErr != nil || closeErr != nil {
+		os.Remove(path)
+		return ""
+	}
+	return id
 }

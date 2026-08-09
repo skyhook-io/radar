@@ -29,6 +29,7 @@ import {
   X,
   BarChart3,
   Network,
+  Stethoscope,
   DollarSign,
 } from 'lucide-react'
 import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom, Topology, TopologyNode, HPADiagnosis, WorkloadPodInfo } from '../../types'
@@ -69,7 +70,7 @@ import {
 } from '../resources/resource-utils'
 import { ServicePortCards, type ServicePortRenderProps } from '../resources/renderers/ServiceRenderer'
 
-export type WorkloadTabType = 'overview' | 'topology' | 'timeline' | 'logs' | 'metrics' | 'cost' | 'yaml'
+export type WorkloadTabType = 'overview' | 'topology' | 'timeline' | 'logs' | 'metrics' | 'reachability' | 'cost' | 'yaml'
 type TabType = WorkloadTabType
 
 export interface ResourceOwnershipContext {
@@ -156,6 +157,9 @@ interface WorkloadViewProps {
   workloadPods?: WorkloadPodInfo[]
   workloadPodsLoading?: boolean
   workloadPodsError?: Error | null
+  /** Wired by the host only while this workload has pods awaiting scheduling
+   *  and Karpenter is available — absent otherwise, so no dead affordance. */
+  onEvaluateCapacity?: () => void
   /** Full objects for service/route refs related to this workload. Optional;
    *  overview falls back to relationship refs when hosts do not fetch them. */
   servingResources?: ServingResourceDetail[]
@@ -270,6 +274,17 @@ interface WorkloadViewProps {
   }) => ReactNode
   /** Render the metrics tab content */
   renderMetricsTab?: (props: { kind: string; namespace: string; name: string }) => ReactNode
+  /** Render the Diagnose tab content - a path-shaped trace for network
+   *  entry kinds (Service / Ingress / HTTPRoute / GRPCRoute / Gateway). The
+   *  tab is hidden when this callback is not provided OR when the focused
+   *  kind is neither a network entry kind nor reachable through one. */
+  renderDiagnoseTab?: (props: { kind: string; namespace: string; name: string }) => ReactNode
+  /** Set when the focused resource is NOT itself a network entry kind but is
+   *  served by one - a Deployment behind a Service. Reachability for a workload
+   *  IS the reachability of the Services in front of it, so the tab opens here
+   *  instead of sending the operator to another page to start over. Empty or
+   *  omitted keeps the tab hidden for non-entry kinds. */
+  reachableVia?: { kind: string; namespace?: string; name: string }[]
   /** Render the cost tab content */
   renderCostTab?: (props: { kind: string; namespace: string; name: string }) => ReactNode
   /** Render a read-only YAML view for a related object from the workload's
@@ -282,8 +297,12 @@ interface WorkloadViewProps {
   isMetricsAvailable?: (kind: string, resource: any) => boolean
   /** Whether cost is available for this resource kind */
   isCostAvailable?: (kind: string, resource: any) => boolean
-  /** Render extra content at the bottom of the overview tab (e.g. audit findings) */
-  renderOverviewExtra?: (props: { kind: string; namespace: string; name: string }) => ReactNode
+  /** Render extra content at the bottom of the overview tab (e.g. audit
+   *  findings). `context` lets the host suppress sections that are already
+   *  surfaced by a dedicated tab in expanded mode - e.g. the Diagnose card
+   *  belongs inline when there are no tabs (drawer) but would duplicate the
+   *  Diagnose tab when it is. */
+  renderOverviewExtra?: (props: { kind: string; namespace: string; name: string; group?: string; context: 'drawer' | 'expanded' }) => ReactNode
   /** Render lightweight overview intro content before the default renderer. */
   renderOverviewIntro?: (props: { kind: string; namespace: string; name: string }) => ReactNode
   /** Render content at the TOP of the overview tab, above the renderer (e.g. live
@@ -349,6 +368,7 @@ export function WorkloadView({
   workloadPods,
   workloadPodsLoading = false,
   workloadPodsError = null,
+  onEvaluateCapacity,
   servingResources,
   renderServicePortAction,
   renderServicePortPanel,
@@ -381,6 +401,8 @@ export function WorkloadView({
   onTabChange,
   // Render props
   renderLogsTab,
+  renderDiagnoseTab,
+  reachableVia,
   renderExpandedOverview,
   renderRelatedYaml,
   renderMetricsTab,
@@ -691,6 +713,12 @@ export function WorkloadView({
     },
     { id: 'logs', label: 'Logs', icon: <Terminal className="w-4 h-4" />, hidden: !logsTabVisible },
     { id: 'metrics', label: 'Metrics', icon: <BarChart3 className="w-4 h-4" />, hidden: !metricsTabVisible },
+    {
+      id: 'reachability',
+      label: 'Reachability',
+      icon: <Stethoscope className="w-4 h-4" />,
+      hidden: !(renderDiagnoseTab && (isDiagnoseKind(apiKind, group) || (reachableVia?.length ?? 0) > 0)),
+    },
     { id: 'cost', label: 'Cost', icon: <DollarSign className="w-4 h-4" />, hidden: !costTabVisible },
     { id: 'yaml', label: 'YAML', icon: <FileText className="w-4 h-4" /> },
   ]
@@ -857,7 +885,7 @@ export function WorkloadView({
                 updates={resourceFocusedUpdates}
                 eventsError={resourceFocusedK8sError}
                 updatesError={resourceFocusedUpdatesError}
-                mainFooter={renderOverviewExtra && renderOverviewExtra({ kind, namespace, name })}
+                mainFooter={renderOverviewExtra && renderOverviewExtra({ kind, namespace, name, group, context: 'drawer' })}
               />
             </OperationalIssuesShownContext.Provider>
           )}
@@ -1024,9 +1052,10 @@ export function WorkloadView({
               updates={resourceFocusedUpdates}
               eventsError={overviewEventsError}
               updatesError={resourceFocusedUpdatesError}
-              extraContent={renderOverviewExtra && renderOverviewExtra({ kind, namespace, name })}
+              extraContent={renderOverviewExtra && renderOverviewExtra({ kind, namespace, name, group, context: 'expanded' })}
               introContent={overviewIntro}
               leadContent={hasOperationalIssues && renderOverviewLead ? renderOverviewLead({ kind, namespace, name }) : undefined}
+              onEvaluateCapacity={onEvaluateCapacity}
             />
         )}
         {effectiveTab === 'topology' && (
@@ -1073,6 +1102,11 @@ export function WorkloadView({
         {effectiveTab === 'metrics' && renderMetricsTab && (
           <div className="h-full overflow-auto p-4">
             {renderMetricsTab({ kind: resource?.kind || kind, namespace, name })}
+          </div>
+        )}
+        {effectiveTab === 'reachability' && renderDiagnoseTab && (
+          <div className="flex h-full min-h-0 flex-col p-3">
+            {renderDiagnoseTab({ kind: resource?.kind || kind, namespace, name })}
           </div>
         )}
         {effectiveTab === 'cost' && renderCostTab && (
@@ -1139,6 +1173,30 @@ export function WorkloadView({
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
+
+// Diagnose tab is only meaningful for the five network entry kinds. The
+// canonical predicate is internal/trace.IsEntryKind in Go; we mirror the
+// allowlist here so TypeScript callers don't need a fetch to decide whether
+// to render the tab. The two MUST stay in sync - when a kind is added on
+// either side, update both. Exported so the web wrapper can reuse the same
+// predicate for the inline drawer section.
+export function isDiagnoseKind(kind: string, group?: string): boolean {
+  const k = kind.toLowerCase()
+  const g = (group ?? '').toLowerCase()
+  // When the API group is known, require it to match - a CRD sharing a core kind
+  // name (Knative Service, Istio Gateway) must NOT enable the trace, which would
+  // fire /trace/<kind> against the wrong (core) object. group===undefined keeps the
+  // legacy kind-only behavior for callers that don't thread the group yet.
+  const groupOk = (expected: string[]): boolean => group === undefined || expected.includes(g)
+  if (k === 'service' || k === 'services') return groupOk([''])
+  if (k === 'ingress' || k === 'ingresses') return groupOk(['', 'networking.k8s.io'])
+  if (
+    k === 'httproute' || k === 'httproutes' ||
+    k === 'grpcroute' || k === 'grpcroutes' ||
+    k === 'gateway' || k === 'gateways'
+  ) return groupOk(['gateway.networking.k8s.io'])
+  return false
+}
 
 function extractMetadata(kind: string, resource: any): { label: string; value: string }[] {
   if (!resource) return []
@@ -1471,6 +1529,7 @@ function InfoTab({
   extraContent,
   introContent,
   leadContent,
+  onEvaluateCapacity,
 }: {
   resource: any
   selectedResource: SelectedResource
@@ -1481,6 +1540,7 @@ function InfoTab({
   workloadPods?: WorkloadPodInfo[]
   workloadPodsLoading?: boolean
   workloadPodsError?: Error | null
+  onEvaluateCapacity?: () => void
   servingResources?: ServingResourceDetail[]
   renderServicePortAction?: (props: ServicePortRenderProps) => ReactNode
   renderServicePortPanel?: (props: ServicePortRenderProps) => ReactNode
@@ -1591,6 +1651,7 @@ function InfoTab({
       extraContent={extraContent}
       introContent={introContent}
       leadContent={leadContent}
+      onEvaluateCapacity={onEvaluateCapacity}
     />
   )
 }
@@ -1646,6 +1707,7 @@ function WorkloadOverviewTab({
   extraContent,
   introContent,
   leadContent,
+  onEvaluateCapacity,
 }: {
   resource: any
   selectedResource: SelectedResource
@@ -1655,6 +1717,7 @@ function WorkloadOverviewTab({
   workloadPods?: WorkloadPodInfo[]
   workloadPodsLoading?: boolean
   workloadPodsError?: Error | null
+  onEvaluateCapacity?: () => void
   servingResources?: ServingResourceDetail[]
   renderServicePortAction?: (props: ServicePortRenderProps) => ReactNode
   renderServicePortPanel?: (props: ServicePortRenderProps) => ReactNode
@@ -1706,6 +1769,18 @@ function WorkloadOverviewTab({
             podSummary={podSummary}
             servingSummary={showServingPath ? buildServingStripSummary(servingRelationshipGroups, servingResources) : undefined}
           />
+
+          {onEvaluateCapacity && (
+            <div>
+              <button
+                type="button"
+                onClick={onEvaluateCapacity}
+                className="text-xs font-medium text-accent-text hover:underline"
+              >
+                Evaluate pending pods against Karpenter NodePools →
+              </button>
+            </div>
+          )}
 
           <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_360px] 2xl:grid-cols-[minmax(0,1fr)_400px]">
             <div className="space-y-4">

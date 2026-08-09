@@ -114,6 +114,7 @@ func makeNodeClassNode(name string) *topology.Node {
 		Data: map[string]any{
 			// No namespace — NodeClass is cluster-scoped.
 			"apiVersion": "karpenter.k8s.aws/v1",
+			"resource":   "ec2nodeclasses",
 		},
 	}
 }
@@ -204,6 +205,7 @@ func TestCanReadNeighborhoodNode_NodeClassPerVariantDeniesWrongProvider(t *testi
 		Status: topology.StatusHealthy,
 		Data: map[string]any{
 			"apiVersion": "karpenter.azure.com/v1beta1",
+			"resource":   "aksnodeclasses",
 		},
 	}
 	if s.canReadNeighborhoodNode(r, aks) {
@@ -218,6 +220,7 @@ func TestCanReadNeighborhoodNode_NodeClassPerVariantDeniesWrongProvider(t *testi
 		Status: topology.StatusHealthy,
 		Data: map[string]any{
 			"apiVersion": "karpenter.k8s.aws/v1",
+			"resource":   "ec2nodeclasses",
 		},
 	}
 	if !s.canReadNeighborhoodNode(r, ec2) {
@@ -255,14 +258,10 @@ func pseudoKindTuplesForTest(kind, group string) (tuples []topology.SARTuple, fa
 	return t, fa
 }
 
-// TestAllowPseudoKindTuples_NodeClass pins the root-preflight helper: a user
-// without ANY provider get-SAR for NodeClass must be denied, while a user
-// with EC2 RBAC must be allowed (single-provider grant is sufficient,
-// matching the per-node gate). This is the kind-only variant used at root
-// preflight before the topology has resolved a concrete node with an
-// apiVersion — so we iterate every table row under that kind and allow on
-// any pass.
-func TestAllowPseudoKindTuples_NodeClass_DeniedWithoutSAR(t *testing.T) {
+// An unqualified NodeClass root cannot be authorized from a finite provider
+// table. Preflight defers to the exact node gate, which fails closed on the
+// concrete group/resource after root resolution.
+func TestAllowPseudoKindTuples_NodeClass_DefersToExactNode(t *testing.T) {
 	s := newAuthServer(auth.Config{Mode: "proxy"})
 	perms := &auth.UserPermissions{AllowedNamespaces: nil}
 	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", false)
@@ -272,11 +271,11 @@ func TestAllowPseudoKindTuples_NodeClass_DeniedWithoutSAR(t *testing.T) {
 
 	r := requestWithUser("GET", "/api/ai/neighborhood/nodeclass/_/x", &auth.User{Username: "alice"})
 	tuples, fallthroughAllow := pseudoKindTuplesForTest("nodeclass", "")
-	if len(tuples) == 0 {
-		t.Fatal("RBACTuplesForKind returned 0 tuples for nodeclass — table wiring is broken")
+	if len(tuples) != 0 || !fallthroughAllow {
+		t.Fatalf("NodeClass preflight must defer: tuples=%+v fallthroughAllow=%v", tuples, fallthroughAllow)
 	}
-	if s.allowPseudoKindTuples(r, tuples, fallthroughAllow) {
-		t.Error("nodeclass root preflight allowed user without any provider get-SAR — must deny")
+	if !s.allowPseudoKindTuples(r, tuples, fallthroughAllow) {
+		t.Error("NodeClass preflight did not defer to exact per-node authorization")
 	}
 }
 
@@ -325,21 +324,12 @@ func TestAllowPseudoKindTuples_NodePool(t *testing.T) {
 	}
 }
 
-// TestNeighborhood_NodeClassRootPreflightNotBadRequest is the integration
-// pin: the URL /api/ai/neighborhood/nodeclass/_/foo must NOT return 400
-// "namespace is required" — that's the regression we're fixing.
-//
-// Two assertions:
-//   - Unauthorized user (no provider get-SAR): preflight must reject as 403,
-//     not 400.
-//   - Authorized user (EC2 get-SAR): preflight passes, BFS runs against the
-//     test cache (which has no NodeClass nodes), root lookup misses → 404,
-//     also not 400. Both prove the preflight is no longer rejecting on
-//     namespace.
+// Unqualified NodeClass roots defer provider authorization until the concrete
+// topology node resolves its API group and resource.
 func TestNeighborhood_NodeClassRootPreflightNotBadRequest(t *testing.T) {
 	env := newAuthTestServer(t)
 
-	// Unauthorized: all provider SARs denied → 403, not 400.
+	// Unauthorized: missing root remains 404, not a namespace error.
 	denyPerms := &auth.UserPermissions{AllowedNamespaces: nil}
 	denyPerms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", false)
 	denyPerms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
@@ -349,10 +339,10 @@ func TestNeighborhood_NodeClassRootPreflightNotBadRequest(t *testing.T) {
 	resp := env.authGet(t, "/api/ai/neighborhood/nodeclass/_/foo", "alice", "")
 	resp.Body.Close()
 	if resp.StatusCode == http.StatusBadRequest {
-		t.Errorf("nodeclass root preflight returned 400 — regression: pseudo-kind classified as namespaced")
+		t.Error("unqualified nodeclass was misclassified as namespaced")
 	}
-	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("unauthorized user got %d for nodeclass — want 403 (cluster-scoped pseudo-kind gate)", resp.StatusCode)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("unauthorized user got %d for missing nodeclass — want 404", resp.StatusCode)
 	}
 
 	// Authorized: EC2 get-SAR allowed → preflight passes; BFS finds no
@@ -366,15 +356,14 @@ func TestNeighborhood_NodeClassRootPreflightNotBadRequest(t *testing.T) {
 	resp2 := env.authGet(t, "/api/ai/neighborhood/nodeclass/_/foo", "bob", "")
 	resp2.Body.Close()
 	if resp2.StatusCode == http.StatusBadRequest {
-		t.Errorf("nodeclass root preflight returned 400 even with EC2 SAR — regression")
+		t.Error("unqualified nodeclass was misclassified as namespaced")
 	}
 	if resp2.StatusCode != http.StatusNotFound {
 		t.Errorf("authorized user got %d for nonexistent nodeclass — want 404 (preflight passed, BFS empty)", resp2.StatusCode)
 	}
 }
 
-// Same for NodePool — sanity that the fix covers all pseudo-kinds the
-// agent might request, not just NodeClass.
+// NodePool roots are cluster-scoped and never require a namespace.
 func TestNeighborhood_NodePoolRootPreflightNotBadRequest(t *testing.T) {
 	env := newAuthTestServer(t)
 

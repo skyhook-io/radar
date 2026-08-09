@@ -9,6 +9,9 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 func TestDetectHPAProblems(t *testing.T) {
@@ -394,6 +397,8 @@ func TestDetectCronJobProblems(t *testing.T) {
 	notSuspended := false
 	oldTime := metav1.NewTime(now.Add(-48 * time.Hour))
 	freshTime := metav1.NewTime(now.Add(-1 * time.Hour))
+	veryFreshTime := metav1.NewTime(now.Add(-5 * time.Minute))
+	active := []corev1.ObjectReference{{Name: "current"}}
 
 	tests := []struct {
 		name        string
@@ -402,12 +407,16 @@ func TestDetectCronJobProblems(t *testing.T) {
 		wantProblem string
 	}{
 		{
-			name: "stale cronjob",
+			name: "stale Replace cronjob",
 			cronjobs: []*batchv1.CronJob{
 				{
 					ObjectMeta: metav1.ObjectMeta{Name: "backup", Namespace: "default", CreationTimestamp: metav1.NewTime(now.Add(-72 * time.Hour))},
-					Spec:       batchv1.CronJobSpec{Schedule: "0 2 * * *", Suspend: &notSuspended},
-					Status:     batchv1.CronJobStatus{LastScheduleTime: &oldTime},
+					Spec: batchv1.CronJobSpec{
+						Schedule:          "0 2 * * *",
+						ConcurrencyPolicy: batchv1.ReplaceConcurrent,
+						Suspend:           &notSuspended,
+					},
+					Status: batchv1.CronJobStatus{Active: active, LastScheduleTime: &oldTime},
 				},
 			},
 			wantCount:   1,
@@ -447,11 +456,36 @@ func TestDetectCronJobProblems(t *testing.T) {
 			wantCount:   1,
 			wantProblem: "never-scheduled",
 		},
+		{
+			name: "active Allow cronjob relies on its retained Jobs",
+			cronjobs: []*batchv1.CronJob{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "allow", Namespace: "default", CreationTimestamp: metav1.NewTime(now.Add(-24 * time.Hour))},
+					Spec:       batchv1.CronJobSpec{Schedule: "0 * * * *", Suspend: &notSuspended},
+					Status: batchv1.CronJobStatus{
+						Active:           active,
+						LastScheduleTime: &veryFreshTime,
+					},
+				},
+			},
+			wantCount: 0,
+		},
+		{
+			name: "new cronjob gets time to succeed",
+			cronjobs: []*batchv1.CronJob{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "new", Namespace: "default", CreationTimestamp: metav1.NewTime(now.Add(-2 * time.Hour))},
+					Spec:       batchv1.CronJobSpec{Schedule: "0 * * * *", Suspend: &notSuspended},
+					Status:     batchv1.CronJobStatus{LastScheduleTime: &veryFreshTime},
+				},
+			},
+			wantCount: 0,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			problems := DetectCronJobProblems(tt.cronjobs)
+			problems := DetectCronJobProblems(tt.cronjobs, nil, nil, now)
 			if len(problems) != tt.wantCount {
 				t.Errorf("DetectCronJobProblems() returned %d problems, want %d", len(problems), tt.wantCount)
 			}
@@ -462,4 +496,232 @@ func TestDetectCronJobProblems(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCronJobScheduleDetectionUsesObservedHistory(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	notSuspended := false
+	newSubject := func() *batchv1.CronJob {
+		lastSchedule := metav1.NewTime(now.Add(-4 * time.Hour))
+		return &batchv1.CronJob{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "replace-broken",
+				Namespace:         "default",
+				UID:               types.UID("replace-broken-uid"),
+				CreationTimestamp: metav1.NewTime(now.Add(-30 * 24 * time.Hour)),
+			},
+			Spec: batchv1.CronJobSpec{
+				Schedule:          "0 * * * *",
+				ConcurrencyPolicy: batchv1.ReplaceConcurrent,
+				Suspend:           &notSuspended,
+			},
+			Status: batchv1.CronJobStatus{
+				Active:           []corev1.ObjectReference{{Name: "current"}},
+				LastScheduleTime: &lastSchedule,
+			},
+		}
+	}
+	advance := func(tracker *cronJobScheduleObservationTracker, cj *batchv1.CronJob, at time.Time) {
+		lastSchedule := metav1.NewTime(at)
+		cj.Status.LastScheduleTime = &lastSchedule
+		tracker.observe(k8score.OpUpdate, cj)
+	}
+	observeMisses := func(tracker *cronJobScheduleObservationTracker, cj *batchv1.CronJob, count int) {
+		tracker.observe(k8score.OpAdd, cj)
+		for n := 1; n <= count; n++ {
+			advance(tracker, cj, now.Add(time.Duration(n-4)*time.Hour))
+		}
+	}
+	ownedJob := func(cj *batchv1.CronJob) *batchv1.Job {
+		controller := true
+		return &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+			Name: "replace-broken-run", Namespace: cj.Namespace, UID: types.UID("job-uid"),
+			CreationTimestamp: metav1.NewTime(now.Add(-2 * time.Hour)),
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "batch/v1", Kind: "CronJob", Name: cj.Name, UID: cj.UID, Controller: &controller,
+			}},
+		}}
+	}
+
+	t.Run("an old status snapshot does not invent prior schedules", func(t *testing.T) {
+		cj := newSubject()
+		tracker := newCronJobScheduleObservationTracker()
+		tracker.observe(k8score.OpAdd, cj)
+		if got := DetectCronJobProblems([]*batchv1.CronJob{cj}, nil, tracker, now); len(got) != 0 {
+			t.Fatalf("initial observation produced a problem: %+v", got)
+		}
+	})
+
+	t.Run("three observed schedules cross the threshold", func(t *testing.T) {
+		cj := newSubject()
+		tracker := newCronJobScheduleObservationTracker()
+		observeMisses(tracker, cj, cronJobScheduleObservationThreshold-1)
+		if got := DetectCronJobProblems([]*batchv1.CronJob{cj}, nil, tracker, now); len(got) != 0 {
+			t.Fatalf("reported before the threshold: %+v", got)
+		}
+		advance(tracker, cj, now.Add(-time.Hour))
+		got := DetectCronJobProblems([]*batchv1.CronJob{cj}, nil, tracker, now)
+		if len(got) != 1 || got[0].Problem != "repeated-without-success" {
+			t.Fatalf("threshold result = %+v", got)
+		}
+		if got[0].Duration != 3*time.Hour {
+			t.Fatalf("duration = %s, want observed 3h failure window", got[0].Duration)
+		}
+		if !strings.Contains(got[0].Reason, "3 consecutive schedules") {
+			t.Fatalf("reason = %q", got[0].Reason)
+		}
+	})
+
+	t.Run("live success wins over tracker state", func(t *testing.T) {
+		cj := newSubject()
+		tracker := newCronJobScheduleObservationTracker()
+		observeMisses(tracker, cj, cronJobScheduleObservationThreshold)
+		success := metav1.NewTime(now.Add(-30 * time.Minute))
+		cj.Status.LastSuccessfulTime = &success
+		if got := DetectCronJobProblems([]*batchv1.CronJob{cj}, nil, tracker, now); len(got) != 0 {
+			t.Fatalf("live success raced with stale tracker state: %+v", got)
+		}
+	})
+
+	t.Run("a failed child Job suppresses the aggregate", func(t *testing.T) {
+		cj := newSubject()
+		tracker := newCronJobScheduleObservationTracker()
+		observeMisses(tracker, cj, cronJobScheduleObservationThreshold)
+		job := ownedJob(cj)
+		job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue}}
+		if got := DetectCronJobProblems([]*batchv1.CronJob{cj}, []*batchv1.Job{job}, tracker, now); len(got) != 0 {
+			t.Fatalf("failed child Job left a duplicate aggregate: %+v", got)
+		}
+	})
+
+	t.Run("a directly detected stuck child Job suppresses the aggregate", func(t *testing.T) {
+		cj := newSubject()
+		tracker := newCronJobScheduleObservationTracker()
+		observeMisses(tracker, cj, cronJobScheduleObservationThreshold)
+		job := ownedJob(cj)
+		job.Status.Active = 1
+		if got := DetectCronJobProblems([]*batchv1.CronJob{cj}, []*batchv1.Job{job}, tracker, now); len(got) != 0 {
+			t.Fatalf("stuck child Job left a duplicate aggregate: %+v", got)
+		}
+	})
+
+	t.Run("a directly detected terminating child Job suppresses the aggregate", func(t *testing.T) {
+		cj := newSubject()
+		tracker := newCronJobScheduleObservationTracker()
+		observeMisses(tracker, cj, cronJobScheduleObservationThreshold)
+		job := ownedJob(cj)
+		deleting := metav1.NewTime(now.Add(-20 * time.Minute))
+		job.DeletionTimestamp = &deleting
+		if got := DetectCronJobProblems([]*batchv1.CronJob{cj}, []*batchv1.Job{job}, tracker, now); len(got) != 0 {
+			t.Fatalf("terminating child Job left a duplicate aggregate: %+v", got)
+		}
+	})
+
+	t.Run("a failed Job from another CronJob does not suppress", func(t *testing.T) {
+		cj := newSubject()
+		tracker := newCronJobScheduleObservationTracker()
+		observeMisses(tracker, cj, cronJobScheduleObservationThreshold)
+		job := ownedJob(cj)
+		job.OwnerReferences[0].UID = types.UID("previous-cronjob-uid")
+		job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue}}
+		got := DetectCronJobProblems([]*batchv1.CronJob{cj}, []*batchv1.Job{job}, tracker, now)
+		if len(got) != 1 || got[0].Problem != "repeated-without-success" {
+			t.Fatalf("unrelated Job suppressed the aggregate: %+v", got)
+		}
+	})
+
+	t.Run("unchanged schedule time never accumulates evidence", func(t *testing.T) {
+		cj := newSubject()
+		tracker := newCronJobScheduleObservationTracker()
+		tracker.observe(k8score.OpAdd, cj)
+		for range 5 {
+			tracker.observe(k8score.OpUpdate, cj)
+		}
+		if count, _ := tracker.withoutRecordedSuccess(cj.UID); count != 0 {
+			t.Fatalf("unchanged status accumulated %d schedules", count)
+		}
+	})
+
+	resetCases := []struct {
+		name   string
+		mutate func(*batchv1.CronJob, *cronJobScheduleObservationTracker)
+	}{
+		{
+			name: "recorded success",
+			mutate: func(cj *batchv1.CronJob, tracker *cronJobScheduleObservationTracker) {
+				success := metav1.NewTime(now.Add(-2 * time.Hour))
+				cj.Status.LastSuccessfulTime = &success
+				tracker.observe(k8score.OpUpdate, cj)
+			},
+		},
+		{
+			name: "suspend and resume",
+			mutate: func(cj *batchv1.CronJob, tracker *cronJobScheduleObservationTracker) {
+				suspended := true
+				cj.Spec.Suspend = &suspended
+				tracker.observe(k8score.OpUpdate, cj)
+				resumed := false
+				cj.Spec.Suspend = &resumed
+				tracker.observe(k8score.OpUpdate, cj)
+			},
+		},
+		{
+			name: "schedule edit",
+			mutate: func(cj *batchv1.CronJob, tracker *cronJobScheduleObservationTracker) {
+				cj.Spec.Schedule = "30 * * * *"
+				tracker.observe(k8score.OpUpdate, cj)
+			},
+		},
+		{
+			name: "policy edit",
+			mutate: func(cj *batchv1.CronJob, tracker *cronJobScheduleObservationTracker) {
+				cj.Spec.ConcurrencyPolicy = batchv1.AllowConcurrent
+				tracker.observe(k8score.OpUpdate, cj)
+				cj.Spec.ConcurrencyPolicy = batchv1.ReplaceConcurrent
+				tracker.observe(k8score.OpUpdate, cj)
+			},
+		},
+		{
+			name: "status regression",
+			mutate: func(cj *batchv1.CronJob, tracker *cronJobScheduleObservationTracker) {
+				lastSchedule := metav1.NewTime(now.Add(-5 * time.Hour))
+				cj.Status.LastScheduleTime = &lastSchedule
+				tracker.observe(k8score.OpUpdate, cj)
+			},
+		},
+	}
+	for _, tt := range resetCases {
+		t.Run(tt.name+" resets evidence", func(t *testing.T) {
+			cj := newSubject()
+			tracker := newCronJobScheduleObservationTracker()
+			observeMisses(tracker, cj, cronJobScheduleObservationThreshold-1)
+			tt.mutate(cj, tracker)
+			for n := 1; n < cronJobScheduleObservationThreshold; n++ {
+				advance(tracker, cj, now.Add(time.Duration(n)*time.Hour))
+			}
+			if got := DetectCronJobProblems([]*batchv1.CronJob{cj}, nil, tracker, now.Add(3*time.Hour)); len(got) != 0 {
+				t.Fatalf("reset evidence still produced a problem: %+v", got)
+			}
+		})
+	}
+
+	t.Run("delete removes evidence", func(t *testing.T) {
+		cj := newSubject()
+		tracker := newCronJobScheduleObservationTracker()
+		observeMisses(tracker, cj, cronJobScheduleObservationThreshold)
+		tracker.observe(k8score.OpDelete, cj)
+		if count, since := tracker.withoutRecordedSuccess(cj.UID); count != 0 || !since.IsZero() {
+			t.Fatalf("deleted state survived: count=%d since=%s", count, since)
+		}
+	})
+
+	t.Run("an active run is required", func(t *testing.T) {
+		cj := newSubject()
+		tracker := newCronJobScheduleObservationTracker()
+		observeMisses(tracker, cj, cronJobScheduleObservationThreshold)
+		cj.Status.Active = nil
+		if got := DetectCronJobProblems([]*batchv1.CronJob{cj}, nil, tracker, now); len(got) != 0 {
+			t.Fatalf("inactive CronJob produced a problem: %+v", got)
+		}
+	})
 }

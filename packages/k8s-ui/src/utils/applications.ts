@@ -1364,6 +1364,33 @@ export function applicationDisplayHealth(app: AppRow): AppHealth {
   ]);
 }
 
+/** Which workload an application detail view renders, and whether the host's
+ *  key should be dropped from the URL.
+ *
+ *  A single-workload app has no application scope, so it resolves to its sole
+ *  workload even when the caller asks for application scope (`null`) or names a
+ *  workload the app no longer has. Deciding this here rather than in each host
+ *  is the point: a controlled host's only way to say "no workload in the URL"
+ *  is `null`, so leaving the rule to hosts makes the forbidden state their
+ *  default. `hostKeyIsStale` stays independent of what gets rendered — a key
+ *  naming no current workload must leave the URL even when the sole workload
+ *  renders in its place. */
+export function resolveAppWorkloadSelection(
+  workloadKeys: readonly string[],
+  hostSelected: string | null,
+): { selected: string | null; hostKeyIsStale: boolean } {
+  const matched =
+    hostSelected && workloadKeys.includes(hostSelected) ? hostSelected : null;
+  const soleWorkload = workloadKeys.length === 1 ? workloadKeys[0] : null;
+  return {
+    selected: matched ?? soleWorkload,
+    // Any non-null value counts as a key the host supplied, including the empty
+    // string a bare `?workload=` yields — that names no workload either, and
+    // leaving it in the URL would strand a param nothing can act on.
+    hostKeyIsStale: hostSelected !== null && !matched,
+  };
+}
+
 export function servingReadiness(workloads: AppWorkload[]): {
   ready: number;
   desired: number;

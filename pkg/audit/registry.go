@@ -48,6 +48,7 @@ var (
 	refOpenGitOps      = Reference{Label: "OpenGitOps: Principles", URL: "https://opengitops.dev/"}
 	refArgoCD          = Reference{Label: "Argo CD: Declarative GitOps", URL: "https://argo-cd.readthedocs.io/en/stable/"}
 	refHelm            = Reference{Label: "Helm: Charts", URL: "https://helm.sh/docs/topics/charts/"}
+	refCNPGBackup      = Reference{Label: "CloudNativePG: Backup", URL: "https://cloudnative-pg.io/documentation/current/backup/"}
 )
 
 // CheckRegistry maps checkID → metadata for all built-in checks.
@@ -381,6 +382,18 @@ var CheckRegistry = map[string]CheckMeta{
 		Description: "A Crossplane Managed Resource, Composite Resource, or Claim has been reporting Ready=False or Synced=False past the reconciliation window. Synced=False usually means a configuration error (bad ProviderConfig, malformed forProvider spec, missing IAM permissions, quota exceeded, schema mismatch). Ready=False usually means the provider accepted the spec but can't reach a desired state (target cloud API rejected, dependency missing, eventual-consistency lag past the threshold).",
 		Remediation: "Open the resource and read the latest condition's message — Crossplane providers almost always include the upstream cloud error verbatim. Common fixes: (1) check the linked Provider's Healthy condition; the package controller crashlooping starves every MR it manages. (2) verify the ProviderConfig credentials Secret still exists and is current (rotated keys, expired tokens). (3) check IAM/RBAC at the target cloud — Synced=False with auth errors needs a credentials fix, not a Crossplane fix. (4) look at quota/limit errors in the cloud provider console. (5) for paused resources (crossplane.io/paused annotation), this finding is intentionally suppressed — remove the annotation to resume reconciliation.",
 		References:  []Reference{refCrossplane},
+	},
+
+	// ── CloudNativePG ─────────────────────────────────────────────────
+	// Posture, not breakage: absence of a schedule doesn't prove a cluster is
+	// unprotected, so this stays at the default Medium and is not BadgeWorthy.
+	checkCNPGNoDeclarativeBackup: {
+		ID:          checkCNPGNoDeclarativeBackup,
+		Title:       "PostgreSQL cluster has no declarative backup schedule",
+		Category:    CategoryReliability,
+		Description: "No ScheduledBackup targets this CloudNativePG cluster, so nothing in the cluster declares when its backups run. Backups may still be taken on demand or by an external scheduler — this reports what is declared, not whether backups exist. Without a declared schedule there is no in-cluster record of the intended backup cadence, and no signal when backups silently stop.",
+		Remediation: "Create a ScheduledBackup in the cluster's namespace referencing it by spec.cluster.name, with the schedule and the method that matches how backups run (barmanObjectStore, volumeSnapshot, or plugin for barman-cloud). Note CNPG schedules are six-field cron expressions — they include a leading seconds field.",
+		References:  []Reference{refCNPGBackup},
 	},
 
 	// ── GitOps coverage (emit under Reliability) ───────────────────────

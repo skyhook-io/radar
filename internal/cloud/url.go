@@ -20,6 +20,39 @@ func IsLoopbackHostname(hostname string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// FrontendOrigin derives the Hub's user-facing origin from a Hub-provided URL
+// (typically connect_url). Presenters build cluster links from Hub responses
+// rather than hardcoding a hosted domain, so self-hosted hubs link correctly.
+func FrontendOrigin(hubProvidedURL string) string {
+	u, err := url.Parse(hubProvidedURL)
+	if err != nil {
+		return ""
+	}
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()
+}
+
+// ClusterURL is the Hub frontend page for one connected cluster.
+func ClusterURL(hubProvidedURL, clusterID string) string {
+	return FrontendOrigin(hubProvidedURL) + "/c/" + url.PathEscape(clusterID)
+}
+
+// ClustersURL is the Hub frontend clusters list.
+func ClustersURL(hubProvidedURL string) string {
+	return FrontendOrigin(hubProvidedURL) + "/clusters"
+}
+
+// NormalizeHubOrigin validates raw as a Hub origin and returns it with any
+// trailing slash removed, so consumers can concatenate paths onto it safely.
+func NormalizeHubOrigin(raw string) (string, error) {
+	if err := ValidateHubOrigin(raw); err != nil {
+		return "", err
+	}
+	u, _ := url.Parse(raw) // ValidateHubOrigin already parsed and validated it.
+	u.Path = ""
+	u.RawPath = ""
+	return u.String(), nil
+}
+
 // ValidateHubOrigin validates the API origin used by the device-flow client.
 // The client sends its device secret in an Authorization header, so plaintext
 // is restricted to explicit loopback hosts.

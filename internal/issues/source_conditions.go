@@ -27,7 +27,7 @@ import (
 // comparison mirrors applyFilters: lowercase for case-insensitive
 // match against the user's filter (which itself is canonicalized to
 // the singular form upstream).
-func detectGenericCRDIssues(p Provider, f Filters) []Issue {
+func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool) []Issue {
 	gvrs := p.WatchedDynamic()
 	if len(gvrs) == 0 {
 		return nil
@@ -95,9 +95,27 @@ func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 			}
 			items = its
 		}
+		// Velero is handled at list level, not per object: none of its CRDs
+		// carry status.conditions (so the loop below would find nothing), and
+		// backup supersession is a property of the series, not of one object.
+		if gvr.Group == VeleroGroup {
+			out = append(out, detectVeleroIssues(gvr, kind, items, ownedSubjects)...)
+			continue
+		}
 		for _, u := range items {
+			if ownedSubjects[resourceKey(gvr.Group, kind, u.GetNamespace(), u.GetName())] {
+				continue
+			}
 			if curated := detectCuratedConditionIssues(gvr, kind, u); len(curated) > 0 {
 				out = append(out, curated...)
+				continue
+			}
+			// An empty curated result means "nothing to say", not "handled", so
+			// the generic walk below still runs. A curated detector that stays
+			// silent ON PURPOSE — because the object is mid-operation and its
+			// False Ready is expected — has to say so explicitly, or the noise
+			// it just suppressed comes straight back through the generic path.
+			if cnpgSuppressesGenericConditions(gvr.Group, kind, u) {
 				continue
 			}
 			condType, reason, msg, since, ok := conditions.FindFalseCondition(u)
@@ -141,7 +159,7 @@ func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 				}
 			}
 			now := time.Now()
-			lastSeen := now.Add(-issueSince)
+			firstSeen, lastSeen, onsetUnknown := conditionIssueTimes(now, issueSince)
 			// IssueTiming: only compute when we have a real condition timestamp.
 			// timingSince=0 means no lastTransitionTime was found; computing issue_timing
 			// from now-based arithmetic would falsely classify old resources as
@@ -159,7 +177,8 @@ func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 				Name:             u.GetName(),
 				Reason:           issReason,
 				Message:          issMsg,
-				FirstSeen:        lastSeen,
+				FirstSeen:        firstSeen,
+				OnsetUnknown:     onsetUnknown,
 				LastSeen:         lastSeen,
 				Count:            1,
 				IssueTiming:      timingR.IssueTiming,
@@ -185,6 +204,8 @@ func detectCuratedConditionIssues(gvr schema.GroupVersionResource, kind string, 
 		if kind == "CustomResourceDefinition" {
 			return detectObjectConditionIssues(gvr, kind, u, SeverityCritical, "Established", "NamesAccepted")
 		}
+	case "postgresql.cnpg.io":
+		return detectCNPGIssues(gvr, kind, u)
 	}
 	return nil
 }
@@ -349,7 +370,7 @@ func composeParentMessage(label, msg string) string {
 
 func newConditionIssue(gvr schema.GroupVersionResource, kind, namespace, name string, severity Severity, reason, message string, since time.Duration, fingerprint string, createdAt time.Time) Issue {
 	now := time.Now()
-	lastSeen := now.Add(-since)
+	firstSeen, lastSeen, onsetUnknown := conditionIssueTimes(now, since)
 	// Only compute issue_timing when we have a real condition timestamp (since > 0).
 	// since=0 means the condition has no lastTransitionTime; issue_timing would be wrong.
 	var timingR k8s.IssueTimingResult
@@ -365,7 +386,8 @@ func newConditionIssue(gvr schema.GroupVersionResource, kind, namespace, name st
 		Name:             name,
 		Reason:           reason,
 		Message:          message,
-		FirstSeen:        lastSeen,
+		FirstSeen:        firstSeen,
+		OnsetUnknown:     onsetUnknown,
 		LastSeen:         lastSeen,
 		Count:            1,
 		Fingerprint:      fingerprint,
@@ -375,6 +397,14 @@ func newConditionIssue(gvr schema.GroupVersionResource, kind, namespace, name st
 	classifyIssue(&iss)
 	enrichIdentity(&iss)
 	return iss
+}
+
+func conditionIssueTimes(now time.Time, since time.Duration) (time.Time, time.Time, bool) {
+	if since <= 0 {
+		return time.Time{}, now, true
+	}
+	observed := now.Add(-since)
+	return observed, observed, false
 }
 
 func conditionSince(cond map[string]any) time.Duration {

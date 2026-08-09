@@ -7,10 +7,11 @@
  */
 import ELK from 'elkjs/lib/elk-api.js'
 import elkWorkerAlgorithm from 'elkjs/lib/elk-worker.min.js?url'
+import { assetUrl } from '../../utils/asset-url'
 
 // Create ELK with explicit worker URL (runs the algorithm in our worker context)
 const elk = new ELK({
-  workerUrl: elkWorkerAlgorithm,
+  workerUrl: assetUrl(elkWorkerAlgorithm),
 })
 
 // ELK options for laying out nodes within a single group

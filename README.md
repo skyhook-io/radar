@@ -7,12 +7,14 @@
 
 🌐 **[radarhq.io](https://radarhq.io)** · [Docs](https://radarhq.io/docs) · [Releases](https://github.com/skyhook-io/radar/releases)
 
-Topology, resources, Helm, GitOps, traffic, audit, and MCP context for AI agents — from your laptop or in-cluster.
+Topology, resources, Helm, GitOps, traffic, audit, upgrade impact, and MCP context for AI agents — from your laptop or in-cluster.
 
 [![CI](https://github.com/skyhook-io/radar/actions/workflows/ci.yml/badge.svg)](https://github.com/skyhook-io/radar/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/skyhook-io/radar/actions/workflows/codeql.yml/badge.svg)](https://github.com/skyhook-io/radar/actions/workflows/codeql.yml)
 [![Release](https://img.shields.io/github/v/release/skyhook-io/radar?logo=github)](https://github.com/skyhook-io/radar/releases/latest)
-[![Go Report Card](https://goreportcard.com/badge/github.com/skyhook-io/radar?v=2)](https://goreportcard.com/report/github.com/skyhook-io/radar)
 [![Downloads](https://img.shields.io/github/downloads/skyhook-io/radar/total?logo=github)](https://github.com/skyhook-io/radar/releases)
+[![Helm repo downloads](https://img.shields.io/github/downloads/skyhook-io/helm-charts/total?logo=helm&label=Helm%20repo%20downloads)](https://artifacthub.io/packages/helm/skyhook/radar)
+[![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://radarhq.io/community/chat)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 
@@ -22,7 +24,7 @@ Topology, resources, Helm, GitOps, traffic, audit, and MCP context for AI agents
 - [Why Radar?](#why-radar)
 - [Installation](#installation)
 - [Usage](#usage)
-- [Views](#views) — Topology · Resources · Image Filesystem · Timeline · Helm · Compare · TLS · GitOps · Traffic · Cost · Audit · RBAC · MCP · Auth
+- [Views](#views) — Topology · Resources · Image Filesystem · Timeline · Helm · Compare · TLS · GitOps · Traffic · Cost · Audit · Upgrade impact · RBAC · MCP · Auth
 - [Supported Resources](#supported-resources)
 - [Keyboard Shortcuts](#keyboard-shortcuts)
 - [Security](#security)
@@ -207,6 +209,7 @@ output) for plain text. URLs, tokens, and suggested commands remain unstyled.
 | `--namespace-scope` | `false` | Pin namespaced informer caches to a **single** namespace for large clusters (scoping to multiple namespaces is not supported yet). Requires `--namespace`, a kubeconfig context namespace, or a saved local single-namespace pick. Local mode can rebuild the cache when switching namespaces; auth/cloud mode locks the shared cache to the startup namespace. |
 | `--port` | `9280` | Server port |
 | `--listen-address` | `127.0.0.1` | HTTP listen address. Use `127.0.0.1` or `localhost` for local-only access; use `0.0.0.0` explicitly for containers, VMs, WSL, or remote/shared access, together with authentication and network controls. |
+| `--base-path` | | Serve Radar under a URL prefix such as `/radar`. Use when an ingress forwards a subpath without stripping it — everything, including `/api/health`, moves under the prefix. Not supported with `--cloud-url`. |
 | `--no-browser` | `false` | Don't auto-open browser |
 | `--browser` | | Browser to use when opening the UI, e.g. `firefox`, `google-chrome`, or `Google Chrome` on macOS |
 | `--timeline-storage` | `memory` | Timeline storage backend: `memory`, `sqlite`, or `postgres` |
@@ -408,6 +411,19 @@ Visualize live network traffic between services using Hubble or Caretta.
 - Filter by namespace, protocol, or status code
 - Setup wizard to install a traffic source if none is detected
 
+### Capacity (Karpenter)
+
+Read-only diagnosis for Karpenter-managed fleets — why is my pod pending, which NodePool could take it, why aren't my nodes joining, what is disruption doing to my fleet? Appears automatically when Karpenter NodePools are detected (RBAC-gated).
+
+- **Overview** — fleet KPIs with claim lifecycle detail, a cluster scheduling-capacity bar (requests vs allocatable, in-flight beyond the edge, pending demand as an honest not-to-scale count), prioritized operational signals, and the NodePool inventory
+- **NodePool detail** — the capacity ledger (configured limit, provisioned, headroom, allocatable, scheduled requests, unallocated, actual usage), claim lifecycle, fleet composition, and workload attribution
+- **Demand** — pending pods grouped by scheduling signature, each group evaluated against every NodePool's declared constraints with per-predicate evidence; filterable by state, pool, and workload
+- **Activity** — provisioning / disruption / interruption episodes classified from Karpenter's exact event vocabulary, with per-evidence confidence
+- Every quantity carries per-value certainty (`= ≥ ≤ ?`) — unavailable is never rendered as zero, partial is never rendered as exact
+- Issues, Pending-pod drawers, and the Home posture card deep-link into the right diagnosis
+
+See [docs/capacity.md](docs/capacity.md) for the full reference.
+
 ### Cost Insights
 
 Track Kubernetes spending with OpenCost integration — no additional configuration needed.
@@ -424,12 +440,36 @@ Proactive best-practices scanner with 31 checks across security, reliability, an
 
 - Security: privileged containers, privilege escalation, dangerous/insecure capabilities, host namespaces, container runtime socket mounts, sensitive host paths, secrets in ConfigMaps, auto-mounted service account tokens
 - Reliability: missing probes, image tag `latest`, single-replica deployments, missing PDB/topology spread, pod HA risk (all replicas on same node), orphan services/ingresses, deprecated API versions
-- Efficiency: missing CPU/memory requests and limits, orphan ConfigMaps/Secrets, resource utilization vs requests
-- Grouped-by-resource and by-namespace views with search, category/severity/framework filters
-- Each finding includes description and remediation guidance, with inline hide actions (per-check, per-category, per-namespace)
+- Efficiency: missing CPU/memory requests and limits, orphan ConfigMaps/Secrets
+- Check-grouped remediation queue with search and category, severity, and framework filters; expand a check to see affected resources
+- Each finding includes description and remediation guidance, with inline hide actions for a check or category
 - Configurable: ignored namespaces (with wildcard patterns), disabled checks, persisted across sessions
 - Framework labels: NSA/CISA, CIS benchmarks
 - MCP tool (`get_cluster_audit`) for AI-assisted cluster analysis
+
+### Network Path Diagnose
+
+Hop-ordered diagnosis for Service, Ingress, HTTPRoute, GRPCRoute, and Gateway - answering "if traffic is sent toward this resource, does it reach a healthy process, and if not which hop breaks first?"
+
+- Composes the detections Radar already runs (missing backend Service, port mismatches, no-ready-endpoints, route not Accepted by parent Gateway, readiness probe targeting the wrong port) into a path shape ordered along the traffic flow
+- Upstreams (Ingresses / Routes pointing at a Service) are judged independently - one broken Ingress doesn't condemn the other delivery paths
+- First critical hop is named explicitly so the operator can localize the break without reading the whole list; each finding ships a kubectl reproducer
+- **Optional one-shot reachability test** runs DNS / TCP / TLS / HTTP probes against the declared path - direct TCP when Radar is in-cluster, K8s API server proxy when running from a laptop - so the same button works regardless of where Radar runs. Probes never override the static verdict; they add evidence.
+- NetworkPolicies that select the subject's pods are statically evaluated for their caller-independent ingress rules: a "would block" **WARNING prediction** when no rule admits the path's port, a source-restricted advisory, or an outbound egress note. It's a prediction, never a verdict - the CNI is the only enforcement authority, so the live in-cluster probe confirms or downgrades it
+- Static trace is pure functions over the in-memory informer cache. Active probing from a laptop uses the cluster's normal RBAC (`get services/proxy`, `get pods/proxy`); in-cluster mode goes directly to the data path.
+- Exposed via the **Reachability** tab in the resource detail view (and via the network branch of the MCP `diagnose` tool for AI consumers) - see [docs/reachability.md](docs/reachability.md)
+### Kubernetes Upgrade Impact
+
+Open **Checks → Upgrade impact** before upgrading the control plane. Radar compares the current cluster with a target Kubernetes minor and orders evidenced compatibility, health, admission, drain, runtime, and configuration checks by required action. Release-specific checks appear only when their Kubernetes minor lies in the selected upgrade path; the current catalog contains 18 checks through Kubernetes 1.36.
+
+- Finds blockers such as skipped minor versions, APIs removed in the target release, unsupported kubelet or kube-proxy skew, overlapping PodDisruptionBudgets, and the `gitRepo` volume driver disabled in Kubernetes 1.36
+- Flags likely operational impact such as FlexVolume exposure and renamed control-plane metrics as warnings, while intent-dependent configuration such as deprecated Service `externalIPs` remains review
+- Inspects live resources, aggregated API availability, Helm release manifests, kubectl last-applied configuration, API server usage metrics, and PrometheusRule expressions
+- Distinguishes **Passed**, **Review**, **Warning**, **Blocked**, **Incomplete**, and **Not applicable** instead of flattening advisory findings, likely impact, and missing evidence into one state
+- Scans every namespace the current identity can read; the header namespace picker remains a browsing filter and does not narrow upgrade analysis
+- Shows the bundled catalog boundary and the evidence scope for sampled or unavailable data
+
+See the [Kubernetes upgrade impact guide](https://radarhq.io/docs/features/upgrade-impact) for the check catalog, coverage semantics, and RBAC notes.
 
 ### Access Control (RBAC visibility)
 
@@ -472,6 +512,8 @@ No auth by default (local use). See the **[Authentication Guide](docs/authentica
 Radar auto-discovers any CRD in your cluster. Popular tools get [dedicated integrations](docs/integrations.md) with topology edges, detail views, and AI summaries.
 
 **Default chart RBAC** covers the built-in Kubernetes kinds listed below — Workloads, Networking (including NetworkPolicies and PodDisruptionBudgets), Configuration, Storage (PersistentVolumes, PersistentVolumeClaims, StorageClasses), HorizontalPodAutoscalers, ServiceAccounts, LimitRanges, ResourceQuotas, Nodes, Namespaces, and Events. RBAC objects (Roles, ClusterRoles, RoleBindings, ClusterRoleBindings) are opt-in via `rbac.viewRBAC=true`. **CRD-based integrations** (Gateway API, VerticalPodAutoscaler, ArgoCD, FluxCD, cert-manager, etc.) need both the CRD installed in your cluster *and* read access granted — most groups are default-on under `rbac.crdGroups.<name>` (e.g. `gatewayApi`, `verticalPodAutoscaler`); check `values.yaml` or add custom rules via `rbac.additionalRules`.
+
+Upgrade impact also gets list-only access to CSIStorageCapacities, FlowSchemas, PriorityLevelConfigurations, and PodSecurityPolicies on clusters where those kinds are served. These reads inspect source-manifest evidence and do not add the kinds to Radar's resource browser.
 
 | Category | Resources |
 |----------|-----------|

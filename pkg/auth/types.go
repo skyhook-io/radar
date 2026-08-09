@@ -26,18 +26,24 @@ type Config struct {
 	Revoker SessionRevoker
 
 	// OIDC mode
-	OIDCIssuer       string
-	OIDCClientID     string
-	OIDCClientSecret string
+	OIDCIssuer                string
+	OIDCInternalIssuer        string
+	OIDCAuthorizationURL      string
+	OIDCTokenURL              string
+	OIDCUserInfoURL           string
+	OIDCJWKSURL               string
+	OIDCClientID              string
+	OIDCClientSecret          string
 	OIDCRedirectURL           string
 	OIDCGroupsClaim           string   // default "groups"
 	OIDCScopes                []string // OAuth2 scopes requested at authorization; default ["openid", "profile", "email", "groups"]
-	OIDCPostLogoutRedirectURL  string // optional, URL to redirect after IdP logout
-	OIDCUsernamePrefix         string // prefix added to OIDC username for K8s impersonation (e.g., "oidc:")
-	OIDCGroupsPrefix           string // prefix added to OIDC groups for K8s impersonation (e.g., "oidc:")
-	OIDCInsecureSkipVerify     bool   // skip TLS verification for OIDC provider (dev/test only)
-	OIDCCACert                 string // path to CA certificate file for OIDC provider TLS
-	OIDCBackchannelLogout      bool   // enable backchannel logout endpoint
+	OIDCPostLogoutRedirectURL string   // optional, URL to redirect after IdP logout
+	OIDCUsernamePrefix        string   // prefix added to OIDC username for K8s impersonation (e.g., "oidc:")
+	OIDCGroupsPrefix          string   // prefix added to OIDC groups for K8s impersonation (e.g., "oidc:")
+	OIDCInsecureSkipVerify    bool     // skip TLS verification for OIDC provider (dev/test only)
+	OIDCCACert                string   // path to CA certificate file for OIDC provider TLS
+	OIDCBackchannelLogout     bool     // enable backchannel logout endpoint
+	OIDCEnablePKCE            bool     // enable PKCE (S256) for the OIDC authorization-code flow (opt-in)
 }
 
 // SessionRevoker checks whether a session has been revoked (e.g., via OIDC

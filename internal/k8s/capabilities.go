@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/skyhook-io/radar/pkg/capacityapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
@@ -77,22 +78,47 @@ type PermissionCheckResult struct {
 
 // Capabilities represents the features available based on RBAC permissions
 type Capabilities struct {
-	Exec           bool                     `json:"exec"`                  // Can create pods/exec (terminal feature)
-	LocalTerminal  bool                     `json:"localTerminal"`         // Local terminal available (not in-cluster, not disabled)
-	Logs           bool                     `json:"logs"`                  // Can get pods/log (log viewer)
-	PortForward    bool                     `json:"portForward"`           // Can create pods/portforward
-	Secrets        bool                     `json:"secrets"`               // Can list secrets
-	SecretsUpdate  bool                     `json:"secretsUpdate"`         // Can update secrets (inline editing)
-	HelmWrite      bool                     `json:"helmWrite"`             // Helm write ops (detected via secrets/create as sentinel RBAC check)
-	NodeWrite      bool                     `json:"nodeWrite"`             // Can patch nodes (cordon/uncordon/drain)
-	WorkloadWrites WorkloadWritePermissions `json:"workloadWrites"`        // Can patch workload kinds (restart/scale controls)
-	MCPEnabled     bool                     `json:"mcpEnabled"`            // MCP server is running
-	Deployment     DeploymentInfo           `json:"deployment"`            // How / where this Radar binary is running. Tells the UI which chrome to render or suppress (e.g. embedded mode hides the cluster headline + local-MCP card because the hub already renders both).
-	Features       FeatureCapabilities      `json:"features"`              // Versioned server features that newer embedded frontends must negotiate
-	AuthEnabled    bool                     `json:"authEnabled,omitempty"` // Auth is enabled on the server
-	Username       string                   `json:"username,omitempty"`    // Authenticated username (when auth enabled)
-	Resources      *ResourcePermissions     `json:"resources,omitempty"`   // Per-resource-type permissions
-	Visibility     *VisibilitySummary       `json:"visibility,omitempty"`  // Present when resource visibility is limited enough to make diagnostics incomplete
+	Exec           bool                     `json:"exec"`                    // Can create pods/exec (terminal feature)
+	LocalTerminal  bool                     `json:"localTerminal"`           // Local terminal available (not in-cluster, not disabled)
+	Logs           bool                     `json:"logs"`                    // Can get pods/log (log viewer)
+	PortForward    bool                     `json:"portForward"`             // Can create pods/portforward
+	Secrets        bool                     `json:"secrets"`                 // Can list secrets
+	SecretsUpdate  bool                     `json:"secretsUpdate"`           // Can update secrets (inline editing)
+	HelmWrite      bool                     `json:"helmWrite"`               // Helm write ops (detected via secrets/create as sentinel RBAC check)
+	NodeWrite      bool                     `json:"nodeWrite"`               // Can patch nodes (cordon/uncordon/drain)
+	WorkloadWrites WorkloadWritePermissions `json:"workloadWrites"`          // Can patch workload kinds (restart/scale controls)
+	MCPEnabled     bool                     `json:"mcpEnabled"`              // MCP server is running
+	Deployment     DeploymentInfo           `json:"deployment"`              // How / where this Radar binary is running. Tells the UI which chrome to render or suppress (e.g. embedded mode hides the cluster headline + local-MCP card because the hub already renders both).
+	Features       FeatureCapabilities      `json:"features"`                // Versioned server features that newer embedded frontends must negotiate
+	AuthEnabled    bool                     `json:"authEnabled,omitempty"`   // Auth is enabled on the server
+	Username       string                   `json:"username,omitempty"`      // Authenticated username (when auth enabled)
+	Resources      *ResourcePermissions     `json:"resources,omitempty"`     // Per-resource-type permissions
+	Visibility     *VisibilitySummary       `json:"visibility,omitempty"`    // Present when resource visibility is limited enough to make diagnostics incomplete
+	Karpenter      IntegrationCapability    `json:"karpenter"`               // Per-request Karpenter discovery + NodePool read state; populated by the HTTP layer after user SAR.
+	PolicyReports  *PolicyReportStatus      `json:"policyReports,omitempty"` // Why the Kyverno PolicyReport index is (or is not) populated, so an empty policy view can say which.
+	CloudConnect   *CloudConnectCapability  `json:"cloudConnect,omitempty"`
+}
+
+type IntegrationCapability struct {
+	State      capacityapi.IntegrationState `json:"state"`
+	ReasonCode string                       `json:"reasonCode,omitempty"`
+	// CacheUnavailable marks "integration detected but its cache cannot serve
+	// right now" — a distinct condition every consumer must map to unavailable
+	// coverage, never to an observed/available source.
+	CacheUnavailable bool `json:"cacheUnavailable,omitempty"`
+}
+
+// CloudConnectCapability tells the frontend which Cloud-connect lane this
+// deployment gets: "driver" (the in-product connect flow can run here) or
+// "wizard" (route to the Hub's connect wizard at AppURL instead).
+type CloudConnectCapability struct {
+	Lane   string `json:"lane"`
+	AppURL string `json:"appUrl"`
+	// APIURL is the Hub API origin the connect dialog reads its live copy
+	// from. Omitted when the dialog must not fetch — the frontend treats its
+	// absence as "render the compiled-in copy", so disabling the fetch is a
+	// server-side decision rather than client policy.
+	APIURL string `json:"apiUrl,omitempty"`
 }
 
 type FeatureCapabilities struct {

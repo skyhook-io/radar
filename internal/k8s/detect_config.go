@@ -36,6 +36,176 @@ func detectConfigProblems(cache *ResourceCache, namespace string, now time.Time)
 	return out
 }
 
+const containerCompletionSplitMinimumAge = 2 * time.Minute
+
+// ContainerCompletionSplitShape describes a regular-container completion split
+// without inferring why the sibling container is still running.
+type ContainerCompletionSplitShape struct {
+	Pod               string
+	Job               string
+	ExitedContainer   string
+	RunningContainers []string
+	SinceSeconds      int64
+}
+
+// FindContainerCompletionSplitForObject returns a neutral completion split for
+// an active Job or for an active Job owned by a CronJob.
+func FindContainerCompletionSplitForObject(cache *ResourceCache, obj runtime.Object, now time.Time) *ContainerCompletionSplitShape {
+	if cache == nil || obj == nil || cache.Pods() == nil {
+		return nil
+	}
+
+	var namespace string
+	var activeJobs map[string]*batchv1.Job
+
+	switch subject := obj.(type) {
+	case *batchv1.CronJob:
+		if subject == nil || cache.Jobs() == nil {
+			return nil
+		}
+		jobs, err := cache.Jobs().Jobs(subject.Namespace).List(labels.Everything())
+		if err != nil {
+			return nil
+		}
+		activeJobs = make(map[string]*batchv1.Job)
+		for _, job := range jobs {
+			if !job.DeletionTimestamp.IsZero() {
+				continue
+			}
+			if job.Spec.Suspend != nil && *job.Spec.Suspend {
+				continue
+			}
+			controller := metav1.GetControllerOf(job)
+			if controller == nil || controller.Kind != "CronJob" || controller.Name != subject.Name || controller.UID != subject.UID {
+				continue
+			}
+			if job.Status.Active >= 1 {
+				activeJobs[job.Name] = job
+			}
+		}
+		if len(activeJobs) == 0 {
+			return nil
+		}
+		namespace = subject.Namespace
+
+	case *batchv1.Job:
+		if subject == nil || !subject.DeletionTimestamp.IsZero() || subject.Status.Active < 1 ||
+			subject.Spec.Suspend != nil && *subject.Spec.Suspend {
+			return nil
+		}
+		namespace = subject.Namespace
+		activeJobs = map[string]*batchv1.Job{subject.Name: subject}
+
+	default:
+		return nil
+	}
+
+	pods, err := cache.Pods().Pods(namespace).List(labels.Everything())
+	if err != nil {
+		return nil
+	}
+	evidence, found := findContainerCompletionSplitEvidence(pods, activeJobs, now)
+	if !found {
+		return nil
+	}
+	return &ContainerCompletionSplitShape{
+		Pod:               evidence.podName,
+		Job:               evidence.jobName,
+		ExitedContainer:   evidence.exitedContainer,
+		RunningContainers: evidence.runningContainers,
+		SinceSeconds:      ageSeconds(now, evidence.startedAt),
+	}
+}
+
+type containerCompletionSplitEvidence struct {
+	exitedContainer   string
+	runningContainers []string
+	jobName           string
+	podName           string
+	startedAt         time.Time
+}
+
+func findContainerCompletionSplitEvidence(pods []*corev1.Pod, activeJobs map[string]*batchv1.Job, now time.Time) (containerCompletionSplitEvidence, bool) {
+	var best containerCompletionSplitEvidence
+	for _, pod := range pods {
+		if !pod.DeletionTimestamp.IsZero() || pod.Status.Phase != corev1.PodRunning {
+			continue
+		}
+		controller := metav1.GetControllerOf(pod)
+		if controller == nil || controller.Kind != "Job" {
+			continue
+		}
+		job := activeJobs[controller.Name]
+		if job == nil || controller.UID != job.UID {
+			continue
+		}
+		exited, running, startedAt, ok := regularContainerCompletionSplit(pod.Status.ContainerStatuses, now)
+		if !ok {
+			continue
+		}
+		candidate := containerCompletionSplitEvidence{
+			exitedContainer:   exited,
+			runningContainers: running,
+			jobName:           job.Name,
+			podName:           pod.Name,
+			startedAt:         startedAt,
+		}
+		// A Pod's latest exit marks its latest progress; across Pods, the
+		// oldest qualifying split is the most established evidence.
+		if earlierContainerCompletionSplitEvidence(candidate, best) {
+			best = candidate
+		}
+	}
+	return best, !best.startedAt.IsZero()
+}
+
+func earlierContainerCompletionSplitEvidence(candidate, current containerCompletionSplitEvidence) bool {
+	return current.startedAt.IsZero() || candidate.startedAt.Before(current.startedAt) ||
+		candidate.startedAt.Equal(current.startedAt) && containerCompletionSplitEvidenceKey(candidate) < containerCompletionSplitEvidenceKey(current)
+}
+
+func laterContainerCompletionSplitEvidence(candidate, current containerCompletionSplitEvidence) bool {
+	return current.startedAt.IsZero() || candidate.startedAt.After(current.startedAt) ||
+		candidate.startedAt.Equal(current.startedAt) && containerCompletionSplitEvidenceKey(candidate) < containerCompletionSplitEvidenceKey(current)
+}
+
+func containerCompletionSplitEvidenceKey(e containerCompletionSplitEvidence) string {
+	return e.jobName + "\x00" + e.podName + "\x00" + e.exitedContainer + "\x00" + strings.Join(e.runningContainers, "\x00")
+}
+
+func regularContainerCompletionSplit(statuses []corev1.ContainerStatus, now time.Time) (string, []string, time.Time, bool) {
+	runningContainers := make([]string, 0, len(statuses))
+	for _, status := range statuses {
+		if status.State.Running != nil {
+			runningContainers = append(runningContainers, status.Name)
+		}
+	}
+	if len(runningContainers) == 0 {
+		return "", nil, time.Time{}, false
+	}
+	sort.Strings(runningContainers)
+
+	var best containerCompletionSplitEvidence
+	for _, exited := range statuses {
+		terminated := exited.State.Terminated
+		if terminated == nil || terminated.ExitCode != 0 || terminated.FinishedAt.IsZero() {
+			continue
+		}
+		candidate := containerCompletionSplitEvidence{
+			exitedContainer:   exited.Name,
+			runningContainers: runningContainers,
+			startedAt:         terminated.FinishedAt.Time,
+		}
+		if laterContainerCompletionSplitEvidence(candidate, best) {
+			best = candidate
+		}
+	}
+	if best.startedAt.IsZero() || now.Sub(best.startedAt) < containerCompletionSplitMinimumAge {
+		return "", nil, time.Time{}, false
+	}
+	return best.exitedContainer, best.runningContainers, best.startedAt, true
+}
+
 // DetectSuspiciousCoreDNS returns conservative CoreDNS Corefile findings for
 // callers that are already in a DNS diagnostic context. General namespaced
 // issue sweeps keep this out of their main list to avoid repeating one

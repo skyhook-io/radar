@@ -37,7 +37,7 @@ type cursorAgent struct {
 
 	trustMu    sync.Mutex
 	trustKnown bool
-	trust      bool
+	trustArg   string // resolved workspace-trust flag: "--trust" | "--force" | ""
 }
 
 func (a *cursorAgent) Name() string { return "cursor-agent" }
@@ -79,14 +79,20 @@ func (a *cursorAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(
 		"--sandbox", "enabled", // sandbox Cursor's own shell/file tools; MCP calls run server-side in radar
 		"--approve-mcps", // auto-approve the radar server for this headless run
 	}
-	trust, err := a.supportsTrust()
+	// Headless (-p) runs get no TTY, so Cursor can't prompt the workspace-trust
+	// gate — without a trust flag it aborts with "Workspace Trust Required", and
+	// the per-run throwaway workdir means a one-time manual trust never carries
+	// over. Which flag grants trust varies across Cursor releases (--trust was
+	// removed, then re-added), so probe --help and pass what's supported,
+	// preferring the narrowest. --force/--yolo also auto-approve command runs, but
+	// --sandbox enabled already contains Cursor's own shell/file tools and cluster
+	// writes stay gated by the read-only MCP mount, so the extra grant is bounded.
+	trustArg, err := a.resolveTrustFlag()
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	if trust {
-		args = append(args, "--trust")
-	}
+	args = append(args, trustArg)
 	if s.model != "" {
 		args = append(args, "--model", s.model) // free-form Cursor model slug; "" = the user's default
 	}
@@ -103,31 +109,54 @@ func (a *cursorAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(
 	return cmd, cleanup, nil
 }
 
-func (a *cursorAgent) supportsTrust() (bool, error) {
+// resolveTrustFlag returns the workspace-trust flag to pass this cursor-agent,
+// probing --help once and caching. Prefers --trust (workspace trust only); falls
+// back to --force (also skips command approvals, bounded by --sandbox). Errors if
+// the probe is inconclusive or no known trust flag is supported.
+func (a *cursorAgent) resolveTrustFlag() (string, error) {
 	a.trustMu.Lock()
 	defer a.trustMu.Unlock()
 	if a.trustKnown {
-		return a.trust, nil
+		if a.trustArg == "" {
+			return "", errNoCursorTrustFlag
+		}
+		return a.trustArg, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	out, _ := exec.CommandContext(ctx, a.bin, "--help").CombinedOutput()
 	if ctx.Err() != nil {
-		return false, fmt.Errorf("ai: Cursor Agent capability probe timed out")
+		return "", fmt.Errorf("ai: Cursor Agent capability probe timed out")
 	}
 	if len(bytes.TrimSpace(out)) == 0 {
-		return false, fmt.Errorf("ai: Cursor Agent capability probe returned no help output")
+		return "", fmt.Errorf("ai: Cursor Agent capability probe returned no help output")
 	}
-	a.trust = cursorHelpSupportsTrust(string(out))
+	a.trustArg = cursorHelpTrustFlag(string(out))
 	a.trustKnown = true
-	log.Printf("[ai] cursor-agent --trust supported=%v", a.trust)
-	return a.trust, nil
+	log.Printf("[ai] cursor-agent trust flag=%q", a.trustArg)
+	if a.trustArg == "" {
+		return "", errNoCursorTrustFlag
+	}
+	return a.trustArg, nil
 }
 
-var cursorTrustFlag = regexp.MustCompile(`(?m)^[[:space:]]*(-[[:alnum:]],?[[:space:]]+)?--trust([[:space:],=]|$)`)
+var errNoCursorTrustFlag = fmt.Errorf("ai: installed cursor-agent supports no known workspace-trust flag (--trust/--force/--yolo); upgrade cursor-agent")
 
-func cursorHelpSupportsTrust(help string) bool {
-	return cursorTrustFlag.MatchString(help)
+var (
+	cursorTrustFlag = regexp.MustCompile(`(?m)^[[:space:]]*(-[[:alnum:]],?[[:space:]]+)?--trust([[:space:],=]|$)`)
+	cursorForceFlag = regexp.MustCompile(`(?m)^[[:space:]]*(-[[:alnum:]],?[[:space:]]+)?(--force|--yolo)([[:space:],=]|$)`)
+)
+
+// cursorHelpTrustFlag returns the narrowest supported trust flag, or "" if none.
+func cursorHelpTrustFlag(help string) string {
+	switch {
+	case cursorTrustFlag.MatchString(help):
+		return "--trust"
+	case cursorForceFlag.MatchString(help):
+		return "--force"
+	default:
+		return ""
+	}
 }
 
 // writeCursorMCPConfig points Cursor at radar's MCP via the workspace-local config

@@ -1,5 +1,4 @@
 import { HardDrive, Clock } from 'lucide-react'
-import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection } from '../../ui/drawer-components'
 import {
   getBSLStatus,
@@ -12,6 +11,7 @@ import {
   getBSLLastValidation,
   getBSLLastSynced,
 } from '../resource-utils-velero'
+import { VeleroPhaseValue } from './velero-cells'
 
 interface VeleroBSLRendererProps {
   data: any
@@ -29,9 +29,7 @@ export function VeleroBSLRenderer({ data }: VeleroBSLRendererProps) {
       <Section title="Status" icon={Clock} defaultExpanded>
         <PropertyList>
           <Property label="Phase" value={
-            <span className={clsx('badge', bslStatus.color)}>
-              {bslStatus.text}
-            </span>
+            <VeleroPhaseValue status={bslStatus} phase={status.phase || ''} />
           } />
           <Property label="Last Validation" value={getBSLLastValidation(data)} />
           <Property label="Last Synced" value={getBSLLastSynced(data)} />

@@ -123,3 +123,42 @@ describe("ConsentCard execution profile treatment", () => {
     expect(html).not.toContain("Radar still enables the agent CLI");
   });
 });
+
+// The consent card's error box is the ONLY place a refused approval is
+// explained: the card stays mounted on failure, focus doesn't move, and nothing
+// else on screen changes. Red (not the card's own amber) and role="alert", or a
+// screen-reader user re-presses a button the server will never accept.
+describe("ConsentCard error", () => {
+  const base = {
+    agentName: "Claude",
+    profile: "safeguarded" as ExecutionProfile,
+    onApprove: noop,
+    onCancel: noop,
+  };
+
+  it("renders the server's refusal as an alert", () => {
+    const html = renderToStaticMarkup(
+      <ConsentCard {...base} error="An owner has to allow it once." />,
+    );
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("An owner has to allow it once.");
+  });
+
+  it("uses the error tone, not the card's warning tone", () => {
+    // full-local renders the card itself amber; an amber box on it reads as
+    // another paragraph of body copy rather than a failure.
+    const html = renderToStaticMarkup(
+      <ConsentCard
+        {...base}
+        profile={"full-local" as ExecutionProfile}
+        error="Refused."
+      />,
+    );
+    expect(html).toContain("border-red-500/30");
+  });
+
+  it("renders no alert when the approval hasn't failed", () => {
+    const html = renderToStaticMarkup(<ConsentCard {...base} />);
+    expect(html).not.toContain('role="alert"');
+  });
+});

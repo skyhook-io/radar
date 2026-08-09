@@ -63,6 +63,8 @@ type Options struct {
 	AuditSummary  *AuditSummary
 	PolicyReports PolicyReportLookup // nil = Kyverno not installed / no findings
 	AppReferences *AppReferences
+	// Attached only after the evidence Job and Pod pass the access gate.
+	ContainerCompletionSplit *ContainerCompletionSplit
 
 	// Optional kind-specific lookups. ServiceBackends is used only for
 	// Service resources to attach realized pod-selection state. The raw
@@ -78,6 +80,22 @@ type Options struct {
 // adapt other policy engines into the same shape.
 type PolicyReportLookup interface {
 	FindingsFor(group, kind, namespace, name string) []KyvernoFinding
+}
+
+// PolicyReportAvailability is an optional interface a PolicyReportLookup may
+// also implement to say that findings could not be read at all, and why.
+//
+// Without it, "this resource has no policy violations" and "Radar could not
+// see the policy reports" produce the identical empty response — the silent
+// emptiness this codebase treats as a bug. Implementing it makes Build emit
+// `omitted: [{field: "policySummary.kyverno", reason: ...}]` instead.
+//
+// Optional rather than part of PolicyReportLookup so existing implementers
+// keep compiling.
+type PolicyReportAvailability interface {
+	// Unavailable reports (reason, true) when findings are unreadable.
+	// (_, false) means the lookup is serving normally.
+	Unavailable() (OmittedReason, bool)
 }
 
 type ServiceBackendLookup interface {
@@ -272,6 +290,13 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	rc.PVCSummary = buildPVCSummary(obj)
 	rc.JobSummary = buildJobSummary(obj)
 	rc.CronJobSummary = buildCronJobSummary(ctx, obj, opts.AccessChecker, omitted)
+	if rc.JobSummary != nil && opts.ContainerCompletionSplit != nil {
+		rc.JobSummary.ContainerCompletionSplit = gateContainerCompletionSplit(
+			ctx, opts.AccessChecker, obj, opts.ContainerCompletionSplit, "jobSummary.containerCompletionSplit", omitted)
+	} else if rc.CronJobSummary != nil && opts.ContainerCompletionSplit != nil {
+		rc.CronJobSummary.ContainerCompletionSplit = gateContainerCompletionSplit(
+			ctx, opts.AccessChecker, obj, opts.ContainerCompletionSplit, "cronJobSummary.containerCompletionSplit", omitted)
+	}
 	rc.HPASummary = buildHPASummary(obj)
 	rc.StatusSummary = buildStatusSummary(obj)
 
@@ -284,6 +309,11 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	// counts only (fail/warn/pass); diagnostic tier adds the top[]
 	// findings. Tier discrimination keeps the basic-tier wire size tight.
 	if opts.PolicyReports != nil {
+		if avail, ok := opts.PolicyReports.(PolicyReportAvailability); ok {
+			if reason, unavailable := avail.Unavailable(); unavailable {
+				omitted.add("policySummary.kyverno", reason)
+			}
+		}
 		findings := opts.PolicyReports.FindingsFor(ident.Group, ident.Kind, ident.Namespace, ident.Name)
 		if len(findings) > 0 {
 			rc.PolicySummary = buildPolicySummary(findings, opts.Tier)
@@ -1474,6 +1504,30 @@ func checkRef(ctx context.Context, ac RefAccessChecker, r *ContextRef) bool {
 		return true
 	}
 	return ac.CanRead(ctx, r.Group, r.Kind, r.Namespace)
+}
+
+// gateContainerCompletionSplit requires access to both resources that establish
+// the observation; namespace access alone does not imply access to their state.
+func gateContainerCompletionSplit(ctx context.Context, ac RefAccessChecker, obj runtime.Object, obs *ContainerCompletionSplit, fieldPath string, omitted *omittedTracker) *ContainerCompletionSplit {
+	if obs == nil {
+		return nil
+	}
+	var namespace string
+	switch subject := obj.(type) {
+	case *batchv1.Job:
+		namespace = subject.Namespace
+	case *batchv1.CronJob:
+		namespace = subject.Namespace
+	default:
+		return nil
+	}
+	podRef := ContextRef{Kind: "Pod", Namespace: namespace, Name: obs.Pod}
+	jobRef := ContextRef{Kind: "Job", Group: "batch", Namespace: namespace, Name: obs.Job}
+	if !checkRef(ctx, ac, &podRef) || !checkRef(ctx, ac, &jobRef) {
+		omitted.add(fieldPath, OmittedRBACDenied)
+		return nil
+	}
+	return obs
 }
 
 // ---------------------------------------------------------------------------

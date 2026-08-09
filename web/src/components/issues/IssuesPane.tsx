@@ -1,7 +1,10 @@
-import { useMemo, useState } from 'react'
-import { useIssues } from '../../api/client'
-import { useConnection } from '../../context/ConnectionContext'
-import type { SelectedResource } from '../../types'
+import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useIssues } from "../../api/client";
+import { useAPIResources, karpenterCapacityAvailable } from "../../api/apiResources";
+import { useCapabilitiesContext } from "../../contexts/CapabilitiesContext";
+import { useConnection } from "../../context/ConnectionContext";
+import type { SelectedResource } from "../../types";
 import {
   IssuesView,
   PaneLoader,
@@ -10,18 +13,73 @@ import {
   FreshnessControl,
   ISSUE_SEVERITIES,
   ISSUE_SEVERITY_LABEL,
+  type Issue,
   type IssueResourceRef,
   type IssueSeverity,
   type SummaryTone,
-} from '@skyhook-io/k8s-ui'
-import { AlertTriangle } from 'lucide-react'
-import { IssueDiagnoseButton } from '../diagnose/LocalDiagnoseAction'
+} from "@skyhook-io/k8s-ui";
+import { AlertTriangle } from "lucide-react";
+import { IssueDiagnoseButton } from "../diagnose/LocalDiagnoseAction";
 
-const SEVERITY_TONE: Record<IssueSeverity, SummaryTone> = { critical: 'error', warning: 'warning' }
+// A capacity-relevant issue links to its Karpenter diagnosis. Karpenter is
+// always single-cluster (unlike Argo hub-and-spoke), so the issue and the
+// Capacity view are guaranteed to be the same cluster — the deep link is
+// unambiguous.
+//
+// Fail closed: return null unless the issue is *definitely* Karpenter's, so the
+// link can't mislead. Only two signals qualify — (1) the subject IS a Karpenter
+// NodePool, or (2) the backend has flagged an unschedulable pod as requiring a
+// Karpenter NodePool (issue.capacity_relevant — a structural pod-spec check
+// server-side, not message parsing). A generic scheduling failure (insufficient
+// cpu, node-pinned, zonal PVC, a non-Karpenter managed node group) is NOT
+// Karpenter's to solve and gets no link, even in a Karpenter cluster. Clusters
+// without Karpenter never reach the signal checks (hasKarpenter is false).
+export function capacityHrefForIssue(
+  issue: Issue,
+  hasKarpenter: boolean,
+): string | null {
+  if (!hasKarpenter) return null;
+  // (1) A NodePool-subject issue (not ready, limit pressure, …) → its pool detail.
+  if (issue.kind === "NodePool" && issue.group === "karpenter.sh") {
+    return `/capacity/pools/${encodeURIComponent(issue.name)}`;
+  }
+  // (2) A pod the backend flagged as requiring a Karpenter NodePool → the Demand
+  // queue, which groups pending pods by scheduling signature and shows which
+  // pools can (or can't) take them. The link carries its subject (?owner=) so
+  // Demand lands filtered server-side: grouped scheduling issues have the
+  // workload AS their subject (grouping promotes the owner); flat pod rows
+  // carry issue.owner. Fail closed to the unfiltered link when no complete
+  // subject exists. No STATE filter on purpose — the issue doesn't map cleanly
+  // to a single demand state (blocked vs awaiting capacity), and a state filter
+  // could hide the very group being investigated. Capacity is deliberately
+  // cluster-wide — no namespace view-filter forwarding.
+  if (issue.capacity_relevant) {
+    const owner =
+      issue.owner?.kind && issue.owner.name
+        ? {
+            kind: issue.owner.kind,
+            namespace: issue.owner.namespace ?? issue.namespace,
+            name: issue.owner.name,
+          }
+        : issue.kind && issue.kind !== "Pod" && issue.name
+          ? { kind: issue.kind, namespace: issue.namespace, name: issue.name }
+          : undefined;
+    if (owner?.namespace) {
+      return `/capacity/demand?owner=${encodeURIComponent(`${owner.namespace}/${owner.kind}/${owner.name}`)}`;
+    }
+    return "/capacity/demand";
+  }
+  return null;
+}
+
+const SEVERITY_TONE: Record<IssueSeverity, SummaryTone> = {
+  critical: "error",
+  warning: "warning",
+};
 
 interface IssuesPaneProps {
-  namespaces: string[]
-  onNavigateToResource: (resource: SelectedResource) => void
+  namespaces: string[];
+  onNavigateToResource: (resource: SelectedResource) => void;
 }
 
 // The per-cluster Issues surface. Renders the same shared triage queue
@@ -32,31 +90,51 @@ interface IssuesPaneProps {
 // (IssuesView is a pure list); single-cluster gets a light severity filter via
 // the header status tiles (clickable → filter), matching the Applications /
 // GitOps header-tile pattern rather than Hub's fleet facet sidebar.
-export function IssuesPane({ namespaces, onNavigateToResource }: IssuesPaneProps) {
-  const { data, isLoading, error, dataUpdatedAt, refetch } = useIssues(namespaces)
-  const { connection } = useConnection()
-  const [severityFilter, setSeverityFilter] = useState<Set<IssueSeverity>>(new Set())
+export function IssuesPane({
+  namespaces,
+  onNavigateToResource,
+}: IssuesPaneProps) {
+  const { data, isLoading, error, dataUpdatedAt, refetch } =
+    useIssues(namespaces);
+  const { connection } = useConnection();
+  const navigate = useNavigate();
+  const apiResources = useAPIResources();
+  const hasKarpenter = karpenterCapacityAvailable(
+    useCapabilitiesContext().karpenter,
+    apiResources.data,
+  );
+  const [severityFilter, setSeverityFilter] = useState<Set<IssueSeverity>>(
+    new Set(),
+  );
 
-  const allIssues = useMemo(() => data?.issues ?? [], [data])
+  const allIssues = useMemo(() => data?.issues ?? [], [data]);
   const totals = useMemo(() => {
-    const t: Record<IssueSeverity, number> = { critical: 0, warning: 0 }
-    for (const i of allIssues) t[i.severity] = (t[i.severity] ?? 0) + 1
-    return t
-  }, [allIssues])
-  const shown = severityFilter.size ? allIssues.filter((i) => severityFilter.has(i.severity)) : allIssues
+    const t: Record<IssueSeverity, number> = { critical: 0, warning: 0 };
+    for (const i of allIssues) t[i.severity] = (t[i.severity] ?? 0) + 1;
+    return t;
+  }, [allIssues]);
+  const shown = severityFilter.size
+    ? allIssues.filter((i) => severityFilter.has(i.severity))
+    : allIssues;
 
   const toggleSeverity = (s: IssueSeverity) =>
     setSeverityFilter((prev) => {
-      const next = new Set(prev)
-      if (next.has(s)) next.delete(s); else next.add(s)
-      return next
-    })
+      const next = new Set(prev);
+      if (next.has(s)) next.delete(s);
+      else next.add(s);
+      return next;
+    });
 
   const onResourceClick = (ref: IssueResourceRef) =>
-    onNavigateToResource({ kind: ref.kind, namespace: ref.namespace ?? '', name: ref.name, group: ref.group ?? '' })
+    onNavigateToResource({
+      kind: ref.kind,
+      namespace: ref.namespace ?? "",
+      name: ref.name,
+      group: ref.group ?? "",
+    });
 
   if (isLoading) {
-    return <PaneLoader label="Loading issues…" className="flex-1" />
+    return <PaneLoader label="Loading issues…" className="flex-1" />;
   }
 
   if (error) {
@@ -64,7 +142,7 @@ export function IssuesPane({ namespaces, onNavigateToResource }: IssuesPaneProps
       <div className="flex-1 flex items-center justify-center text-theme-text-secondary">
         <p>Failed to load issues</p>
       </div>
-    )
+    );
   }
 
   return (
@@ -83,7 +161,10 @@ export function IssuesPane({ namespaces, onNavigateToResource }: IssuesPaneProps
             />
             {allIssues.length > 0 && (
               <>
-                <SummaryTile label={allIssues.length === 1 ? 'issue' : 'issues'} value={allIssues.length} />
+                <SummaryTile
+                  label={allIssues.length === 1 ? "issue" : "issues"}
+                  value={allIssues.length}
+                />
                 {ISSUE_SEVERITIES.map((s) =>
                   totals[s] > 0 || severityFilter.has(s) ? (
                     <SummaryTile
@@ -108,17 +189,22 @@ export function IssuesPane({ namespaces, onNavigateToResource }: IssuesPaneProps
       {data?.visibility?.impact && (
         <div className="flex items-start gap-2 rounded-lg border border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
-          <span>Limited visibility — {data.visibility.impact} Results may be incomplete.</span>
+          <span>
+            Limited visibility — {data.visibility.impact} Results may be
+            incomplete.
+          </span>
         </div>
       )}
 
       {/* Truncation honesty: when more issues matched than were returned, say
           so — don't present a capped list as the complete picture. */}
-      {data?.total_matched != null && data.total_matched > (data.issues?.length ?? 0) && (
-        <p className="text-xs text-theme-text-tertiary">
-          Showing {data.issues?.length ?? 0} of {data.total_matched} issues (capped) — narrow by namespace to see the rest.
-        </p>
-      )}
+      {data?.total_matched != null &&
+        data.total_matched > (data.issues?.length ?? 0) && (
+          <p className="text-xs text-theme-text-tertiary">
+            Showing {data.issues?.length ?? 0} of {data.total_matched} issues
+            (capped) — narrow by namespace to see the rest.
+          </p>
+        )}
 
       {/* Filtered-empty is NOT the healthy empty state: when a severity filter
           hides every row but issues still exist, say "no matches" rather than
@@ -141,11 +227,29 @@ export function IssuesPane({ namespaces, onNavigateToResource }: IssuesPaneProps
           issues={shown}
           anyData={!!data}
           onResourceClick={onResourceClick}
-          renderActions={({ issue }) => (
-            <IssueDiagnoseButton kind={issue.kind} namespace={issue.namespace ?? ''} name={issue.name} />
-          )}
+          renderActions={({ issue }) => {
+            const capacityHref = capacityHrefForIssue(issue, hasKarpenter);
+            return (
+              <div className="flex items-center gap-2">
+                {capacityHref && (
+                  <button
+                    type="button"
+                    onClick={() => navigate(capacityHref)}
+                    className="rounded-md border border-theme-border px-2 py-1 text-xs font-medium text-accent-text transition-colors hover:bg-theme-hover"
+                  >
+                    View in Capacity →
+                  </button>
+                )}
+                <IssueDiagnoseButton
+                  kind={issue.kind}
+                  namespace={issue.namespace ?? ""}
+                  name={issue.name}
+                />
+              </div>
+            );
+          }}
         />
       )}
     </div>
-  )
+  );
 }

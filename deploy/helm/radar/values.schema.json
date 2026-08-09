@@ -116,6 +116,11 @@
         "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
       }
     },
+    "basePath": {
+      "type": "string",
+      "pattern": "^$|^/?[A-Za-z0-9._~-]*[A-Za-z0-9_~-][A-Za-z0-9._~-]*(/[A-Za-z0-9._~-]*[A-Za-z0-9_~-][A-Za-z0-9._~-]*)*/?$",
+      "description": "Optional URL path prefix served by Radar itself, e.g. /radar. Use when ingress forwards the subpath without stripping it. Path segments accept letters, digits, '-', '_', '.' and '~', and no segment may be '.' or '..' — matching the server's --base-path validation, so an invalid value fails at install time instead of crash-looping the pod."
+    },
     "ingress": {
       "type": "object",
       "additionalProperties": true,
@@ -234,6 +239,11 @@
           "additionalProperties": true,
           "properties": {
             "issuerURL": { "type": "string" },
+            "internalIssuerURL": { "type": "string" },
+            "authorizationURL": { "type": "string" },
+            "tokenURL": { "type": "string" },
+            "userInfoURL": { "type": "string" },
+            "jwksURL": { "type": "string" },
             "clientID": { "type": "string" },
             "clientSecret": { "type": "string" },
             "existingSecret": { "type": "string" },
@@ -245,7 +255,8 @@
             "groupsPrefix": { "type": "string" },
             "caCert": { "type": "string" },
             "insecureSkipVerify": { "type": "boolean" },
-            "backchannelLogout": { "type": "boolean", "description": "Single-replica only — revocations are in-memory." }
+            "backchannelLogout": { "type": "boolean", "description": "Single-replica only — revocations are in-memory." },
+            "enablePKCE": { "type": "boolean", "description": "Enable PKCE (S256) for the OIDC authorization-code flow (opt-in, default off)." }
           }
         }
       }

@@ -200,7 +200,7 @@ describe('buildApplicationHistoryItems', () => {
         name: 'shop-config',
         diff: {
           summary: 'Added keys: API_URL',
-          fields: [{ path: 'data (added keys)', newValue: 'API_URL' }],
+          fields: [{ path: 'data (added keys)', oldValue: undefined, newValue: 'API_URL' }],
         },
       }),
       event({

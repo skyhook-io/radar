@@ -4,6 +4,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/pkg/policyreports"
 )
@@ -270,5 +274,154 @@ func TestWarmupKyvernoPolicyReports_SnapshotsOnceAndGenAtomically(t *testing.T) 
 
 	if got := mismatch.Load(); got != 0 {
 		t.Fatalf("snapshot pair was not atomic under policyReportMu: %d mismatches (Reset is mutating policyReportInit and/or kyvernoWarmupGen outside the mutex, OR the snapshot is being torn — either breaks the race protection)", got)
+	}
+}
+
+func TestRebuildPolicyReportIndex_DropsStaleGeneration(t *testing.T) {
+	ResetPolicyReportIndex()
+	t.Cleanup(ResetPolicyReportIndex)
+
+	oldIndex := policyreports.NewIndex()
+	policyReportMu.Lock()
+	policyReportIndex.Store(oldIndex)
+	policyReportWatched = []schema.GroupVersionResource{orReports}
+	policyReportMu.Unlock()
+
+	staleReport := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "openreports.io/v1alpha1",
+		"kind":       "Report",
+		"metadata": map[string]any{
+			"name":      "stale-report",
+			"namespace": "default",
+		},
+		"results": []any{map[string]any{
+			"policy": "stale-policy",
+			"result": "fail",
+			"resources": []any{map[string]any{
+				"apiVersion": "v1",
+				"kind":       "Pod",
+				"namespace":  "default",
+				"name":       "stale-pod",
+			}},
+		}},
+	}}
+	listStarted := make(chan struct{})
+	allowList := make(chan struct{})
+	rebuildDone := make(chan struct{})
+	go func() {
+		rebuildPolicyReportIndexUsing(func([]schema.GroupVersionResource) []*unstructured.Unstructured {
+			close(listStarted)
+			<-allowList
+			return []*unstructured.Unstructured{staleReport}
+		})
+		close(rebuildDone)
+	}()
+
+	<-listStarted
+	ResetPolicyReportIndex()
+	freshIndex := policyreports.NewIndex()
+	policyReportMu.Lock()
+	policyReportIndex.Store(freshIndex)
+	policyReportWatched = []schema.GroupVersionResource{orReports}
+	policyReportMu.Unlock()
+	close(allowList)
+	<-rebuildDone
+
+	if findings := oldIndex.FindingsFor("", "Pod", "default", "stale-pod"); len(findings) != 0 {
+		t.Fatalf("stale rebuild mutated the old index after a context switch: %+v", findings)
+	}
+	if findings := freshIndex.FindingsFor("", "Pod", "default", "stale-pod"); len(findings) != 0 {
+		t.Fatalf("stale rebuild published into the new index: %+v", findings)
+	}
+}
+
+func TestRebuildPolicyReportIndex_PublishesCurrentGeneration(t *testing.T) {
+	ResetPolicyReportIndex()
+	t.Cleanup(ResetPolicyReportIndex)
+
+	idx := policyreports.NewIndex()
+	policyReportMu.Lock()
+	policyReportIndex.Store(idx)
+	policyReportWatched = []schema.GroupVersionResource{orReports}
+	policyReportMu.Unlock()
+
+	report := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "openreports.io/v1alpha1",
+		"kind":       "Report",
+		"metadata": map[string]any{
+			"name":      "current-report",
+			"namespace": "default",
+		},
+		"results": []any{map[string]any{
+			"policy": "current-policy",
+			"result": "fail",
+			"resources": []any{map[string]any{
+				"apiVersion": "v1",
+				"kind":       "Pod",
+				"namespace":  "default",
+				"name":       "current-pod",
+			}},
+		}},
+	}}
+	rebuildPolicyReportIndexUsing(func([]schema.GroupVersionResource) []*unstructured.Unstructured {
+		return []*unstructured.Unstructured{report}
+	})
+
+	if findings := idx.FindingsFor("", "Pod", "default", "current-pod"); len(findings) != 0 {
+		t.Fatalf("rebuild mutated the previously published snapshot: %+v", findings)
+	}
+	current := policyReportIndex.Load()
+	if current == idx {
+		t.Fatal("rebuild did not publish a new index snapshot")
+	}
+	findings := current.FindingsFor("", "Pod", "default", "current-pod")
+	if len(findings) != 1 || findings[0].Policy != "current-policy" {
+		t.Fatalf("current rebuild findings = %+v, want current-policy", findings)
+	}
+}
+
+func TestRebuildPolicyReportIndex_CollapsesConcurrentRequests(t *testing.T) {
+	ResetPolicyReportIndex()
+	t.Cleanup(ResetPolicyReportIndex)
+
+	policyReportMu.Lock()
+	policyReportIndex.Store(policyreports.NewIndex())
+	policyReportWatched = []schema.GroupVersionResource{orReports}
+	policyReportMu.Unlock()
+
+	var listCalls atomic.Int64
+	firstListStarted := make(chan struct{})
+	allowFirstList := make(chan struct{})
+	secondListStarted := make(chan struct{})
+	rebuildDone := make(chan struct{})
+	listReports := func([]schema.GroupVersionResource) []*unstructured.Unstructured {
+		switch listCalls.Add(1) {
+		case 1:
+			close(firstListStarted)
+			<-allowFirstList
+		case 2:
+			close(secondListStarted)
+		}
+		return nil
+	}
+	go func() {
+		rebuildPolicyReportIndexUsing(listReports)
+		close(rebuildDone)
+	}()
+
+	<-firstListStarted
+	for range 100 {
+		rebuildPolicyReportIndexUsing(listReports)
+	}
+	followupNotBefore := time.Now().Add(rebuildDebounce)
+	close(allowFirstList)
+	<-secondListStarted
+	if time.Now().Before(followupNotBefore) {
+		t.Fatal("collapsed follow-up started before the production debounce delay")
+	}
+	<-rebuildDone
+
+	if got := listCalls.Load(); got != 2 {
+		t.Fatalf("list calls = %d, want one in-flight rebuild plus one collapsed follow-up", got)
 	}
 }

@@ -1,5 +1,6 @@
 import { AlertTriangle, Info, Clock, Target, Server, Hash } from 'lucide-react'
 import { clsx } from 'clsx'
+import { Badge } from '../../ui/Badge'
 import { Section, PropertyList, Property } from '../../ui/drawer-components'
 import { formatAge } from '../resource-utils'
 import type { NavigateToResource } from '../../../utils/navigation'
@@ -20,35 +21,29 @@ export function EventRenderer({ data, onNavigate }: EventRendererProps) {
   const source = data.source || {}
   const firstTimestamp = data.firstTimestamp
   const lastTimestamp = data.lastTimestamp || data.metadata?.creationTimestamp
+  const statusClass = isWarning ? 'status-degraded' : 'status-neutral'
+  const badgeSeverity = isWarning ? 'warning' : 'info'
 
   return (
     <>
       {/* Event Type Banner */}
       <div className={clsx(
         'mb-4 p-4 rounded-lg border',
-        isWarning
-          ? 'bg-amber-500/10 border-amber-500/30'
-          : 'bg-blue-500/10 border-blue-500/30'
+        statusClass,
       )}>
         <div className="flex items-start gap-3">
           {isWarning ? (
-            <AlertTriangle className="w-5 h-5 text-amber-400 mt-0.5 shrink-0" />
+            <AlertTriangle className="w-5 h-5 mt-0.5 shrink-0" />
           ) : (
-            <Info className="w-5 h-5 text-blue-400 mt-0.5 shrink-0" />
+            <Info className="w-5 h-5 mt-0.5 shrink-0" />
           )}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
-              <span className={clsx(
-                'badge',
-                isWarning ? 'bg-amber-500/20 text-amber-400' : 'bg-blue-500/20 text-blue-400'
-              )}>
+              <Badge severity={badgeSeverity}>
                 {eventType}
-              </span>
+              </Badge>
               {reason && (
-                <span className={clsx(
-                  'text-sm font-semibold',
-                  isWarning ? 'text-amber-300' : 'text-blue-300'
-                )}>
+                <span className="text-sm font-semibold">
                   {reason}
                 </span>
               )}
@@ -59,10 +54,7 @@ export function EventRenderer({ data, onNavigate }: EventRendererProps) {
               )}
             </div>
             {message && (
-              <p className={clsx(
-                'text-sm break-all',
-                isWarning ? 'text-amber-200/90' : 'text-blue-200/90'
-              )}>
+              <p className="text-sm break-all">
                 {message}
               </p>
             )}

@@ -86,19 +86,66 @@ func edgesForNode(topo *Topology, idx *RelationshipsIndex, nodeID string) (incom
 	return incoming, outgoing
 }
 
-// GetCascadeDeletePreview returns a preview of all resources that will be garbage-collected
-// when the specified resource is deleted. It walks EdgeManages edges recursively
-// to find all transitive dependents — mirroring Kubernetes owner-reference cascade behavior.
-func GetCascadeDeletePreview(kind, namespace, name string, topo *Topology, dp DynamicProvider) *CascadeDeletePreview {
+// GetCascadeDeletePreview walks topology management edges to approximate the
+// resources Kubernetes may garbage-collect with root.
+func GetCascadeDeletePreview(root ResourceRef, topo *Topology, dp DynamicProvider) *CascadeDeletePreview {
+	preview := &CascadeDeletePreview{
+		Root:       root,
+		Dependents: []ResourceRef{},
+	}
 	if topo == nil {
-		return &CascadeDeletePreview{
-			Root:       ResourceRef{Kind: kind, Namespace: namespace, Name: name},
-			Dependents: []ResourceRef{},
-		}
+		return preview
 	}
 
-	root := ResourceRef{Kind: kind, Namespace: namespace, Name: name}
-	enrichRef(&root, dp)
+	rootID := buildNodeID(root.Kind, root.Namespace, root.Name, dp)
+	if root.Group != "" {
+		if dp == nil {
+			return preview
+		}
+		gvr, ok := dp.GetGVRWithGroup(root.Kind, root.Group)
+		if !ok {
+			return preview
+		}
+		resolvedKind := dp.GetKindForGVR(gvr)
+		if resolvedKind == "" {
+			return preview
+		}
+		rootID = strings.ToLower(KindForGVK(resolvedKind, root.Group)) + "/" + root.Namespace + "/" + root.Name
+	}
+
+	nodeByID := make(map[string]*Node, len(topo.Nodes))
+	for i := range topo.Nodes {
+		nodeByID[topo.Nodes[i].ID] = &topo.Nodes[i]
+	}
+	rootNode, ok := nodeByID[rootID]
+	if !ok {
+		return preview
+	}
+	if root.Group != "" {
+		if nodeGroup := nodeAPIGroupFromData(rootNode); nodeGroup != "" && nodeGroup != root.Group {
+			return preview
+		}
+	} else {
+		rootKind := string(rootNode.Kind)
+		if externalKind, found := collisionKindToK8sKind[rootNode.Kind]; found {
+			rootKind = externalKind
+		}
+		matches := 0
+		for i := range topo.Nodes {
+			node := &topo.Nodes[i]
+			nodeKind := string(node.Kind)
+			if externalKind, found := collisionKindToK8sKind[node.Kind]; found {
+				nodeKind = externalKind
+			}
+			if strings.EqualFold(nodeKind, rootKind) && node.Name == root.Name && nodeNamespaceFromData(node) == root.Namespace {
+				matches++
+			}
+		}
+		if matches > 1 {
+			return preview
+		}
+	}
+	preview.RootResolved = true
 
 	// Build adjacency list for EdgeManages edges (source → targets)
 	manages := make(map[string][]string)
@@ -109,7 +156,6 @@ func GetCascadeDeletePreview(kind, namespace, name string, topo *Topology, dp Dy
 	}
 
 	// BFS from root node
-	rootID := buildNodeID(kind, namespace, name, dp)
 	visited := map[string]bool{rootID: true}
 	queue := []string{rootID}
 	var dependents []ResourceRef
@@ -128,20 +174,20 @@ func GetCascadeDeletePreview(kind, namespace, name string, topo *Topology, dp Dy
 			if ref == nil {
 				continue
 			}
+			if node := nodeByID[targetID]; node != nil {
+				ref.Group = nodeAPIGroupFromData(node)
+			}
 			enrichRef(ref, dp)
 			dependents = append(dependents, *ref)
 			queue = append(queue, targetID)
 		}
 	}
 
-	if dependents == nil {
-		dependents = []ResourceRef{}
+	if dependents != nil {
+		preview.Dependents = dependents
 	}
 
-	return &CascadeDeletePreview{
-		Root:       root,
-		Dependents: dependents,
-	}
+	return preview
 }
 
 // resolveAPIGroup returns the API group for a resource kind using resource discovery.
@@ -160,6 +206,9 @@ func resolveAPIGroup(kind string, dp DynamicProvider) string {
 // enrichRef sets the API group on a ResourceRef for CRD types.
 func enrichRef(ref *ResourceRef, dp DynamicProvider) {
 	if ref == nil {
+		return
+	}
+	if ref.Group != "" {
 		return
 	}
 	ref.Group = resolveAPIGroup(ref.Kind, dp)
@@ -918,7 +967,7 @@ func parseNodeID(nodeID string, dp DynamicProvider) *ResourceRef {
 	// Node IDs are formatted as: kind/namespace/name
 	// e.g., "deployment/default/my-app" or "pod/kube-system/coredns-abc123"
 
-	parts := strings.SplitN(nodeID, "/", 3)
+	parts := strings.Split(nodeID, "/")
 	if len(parts) < 3 {
 		return nil
 	}
@@ -926,17 +975,38 @@ func parseNodeID(nodeID string, dp DynamicProvider) *ResourceRef {
 	kind := parts[0]
 	namespace := parts[1]
 	name := parts[2]
+	group := ""
+	normalizedKind := ""
+	if strings.EqualFold(kind, "nodeclass") && len(parts) >= 5 {
+		group = parts[3]
+		normalizedKind = normalizeKindWithGroup(parts[4], group, dp)
+	}
 
 	// Skip PodGroup - it's a UI grouping concept, not a real K8s resource
 	if strings.ToLower(kind) == "podgroup" {
 		return nil
 	}
+	if normalizedKind == "" {
+		normalizedKind = normalizeKind(kind, dp)
+	}
 
 	return &ResourceRef{
-		Kind:      normalizeKind(kind, dp),
+		Kind:      normalizedKind,
 		Namespace: namespace,
 		Name:      name,
+		Group:     group,
 	}
+}
+
+func normalizeKindWithGroup(kind, group string, dp DynamicProvider) string {
+	if dp != nil && group != "" {
+		if gvr, ok := dp.GetGVRWithGroup(kind, group); ok {
+			if resolved := dp.GetKindForGVR(gvr); resolved != "" {
+				return resolved
+			}
+		}
+	}
+	return normalizeKind(kind, dp)
 }
 
 // normalizeKind converts internal kind format to display format

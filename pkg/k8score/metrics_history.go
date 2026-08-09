@@ -84,12 +84,13 @@ type TopPodMetrics struct {
 
 // TopNodeMetrics holds the latest metrics snapshot for a single node.
 type TopNodeMetrics struct {
-	Name              string `json:"name"`
-	CPU               int64  `json:"cpu"`
-	Memory            int64  `json:"memory"`
-	PodCount          int    `json:"podCount"`
-	CPUAllocatable    int64  `json:"cpuAllocatable"`
-	MemoryAllocatable int64  `json:"memoryAllocatable"`
+	Name              string    `json:"name"`
+	CPU               int64     `json:"cpu"`
+	Memory            int64     `json:"memory"`
+	ObservedAt        time.Time `json:"observedAt,omitzero"`
+	PodCount          int       `json:"podCount"`
+	CPUAllocatable    int64     `json:"cpuAllocatable"`
+	MemoryAllocatable int64     `json:"memoryAllocatable"`
 }
 
 // MetricsCollectionHealth reports the health of the metrics collection loop.
@@ -569,7 +570,7 @@ func (s *MetricsHistoryStore) GetAllNodeMetricsLatest() []TopNodeMetrics {
 	for _, nodeBuf := range s.nodeMetrics {
 		if points := nodeBuf.buffer.GetAll(); len(points) > 0 {
 			last := points[len(points)-1]
-			result = append(result, TopNodeMetrics{Name: nodeBuf.name, CPU: last.CPU, Memory: last.Memory})
+			result = append(result, TopNodeMetrics{Name: nodeBuf.name, CPU: last.CPU, Memory: last.Memory, ObservedAt: last.Timestamp})
 		}
 	}
 	return result

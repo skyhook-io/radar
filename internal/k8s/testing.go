@@ -2,8 +2,10 @@ package k8s
 
 import (
 	"sync"
+	"time"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
+	batchv1 "k8s.io/api/batch/v1"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	fakeclientset "k8s.io/client-go/kubernetes/fake"
@@ -50,6 +52,7 @@ func InitTestResourceCache(client kubernetes.Interface) error {
 	}
 
 	secretWriteTimes := newSecretDataManagerWriteIndex()
+	cronJobScheduleObservations := newCronJobScheduleObservationTracker()
 	cfg := k8score.CacheConfig{
 		Client:        client,
 		ResourceTypes: enabled,
@@ -60,6 +63,9 @@ func InitTestResourceCache(client kubernetes.Interface) error {
 		},
 		OnObservedChange: func(change k8score.ResourceChange, obj, _ any) {
 			secretWriteTimes.reconcile(change, obj)
+			if cj, ok := obj.(*batchv1.CronJob); ok {
+				cronJobScheduleObservations.observe(change.Operation, cj)
+			}
 		},
 	}
 
@@ -71,9 +77,10 @@ func InitTestResourceCache(client kubernetes.Interface) error {
 	initialSyncComplete = true
 
 	resourceCache = &ResourceCache{
-		ResourceCache:    core,
-		secretsEnabled:   true,
-		secretWriteTimes: secretWriteTimes,
+		ResourceCache:               core,
+		secretsEnabled:              true,
+		cronJobScheduleObservations: cronJobScheduleObservations,
+		secretWriteTimes:            secretWriteTimes,
 	}
 
 	// Mark cacheOnce as "already executed" so InitResourceCache is a no-op.
@@ -194,6 +201,45 @@ func ResetTestState() {
 	connectionCallbacksMu.Lock()
 	connectionCallbacks = nil
 	connectionCallbacksMu.Unlock()
+
+	runtimeAuthChecksMu.Lock()
+	runtimeAuthChecks = make(map[uint64]struct{})
+	runtimeAuthCooldownGeneration = 0
+	runtimeAuthProbeNotBefore = time.Time{}
+	runtimeAuthInconclusiveStreak = 0
+	runtimeAuthProbe = TestClusterConnection
+	runtimeAuthEndpointProbe = defaultRuntimeAuthEndpointProbe
+	runtimeAuthReconnect = nil
+	runtimeAuthRecoveryInitialInterval = defaultRuntimeAuthRecoveryInitialInterval
+	runtimeAuthRecoveryMaxInterval = defaultRuntimeAuthRecoveryMaxInterval
+	runtimeAuthRecoveryHungInterval = defaultRuntimeAuthRecoveryHungInterval
+	runtimeAuthChecksMu.Unlock()
+	// Clear the debt and nudge rather than forcing the active flag: a
+	// surviving worker wakes, sees no debt, and exits through its own defer.
+	// Forcing the flag false would let a second worker coexist with it. With
+	// no worker alive, drain instead — a stray token would give the next
+	// test's worker a spurious immediate tick.
+	runtimeAuthRecoveryOwed.Store(false)
+	if runtimeAuthRecoveryActive.Load() {
+		select {
+		case runtimeAuthRecoveryNudge <- struct{}{}:
+		default:
+		}
+	} else {
+		select {
+		case <-runtimeAuthRecoveryNudge:
+		default:
+		}
+	}
+	activeContextOperations.Store(0)
+	clientMu.Lock()
+	k8sConfig = nil
+	k8sClient = nil
+	discoveryClient = nil
+	dynamicClient = nil
+	activeClientGeneration = 0
+	kubeconfigMode = ""
+	clientMu.Unlock()
 
 	// Reset capabilities cache
 	capabilitiesMu.Lock()

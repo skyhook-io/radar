@@ -149,7 +149,7 @@ func TestMergeExternalIssuesDuplicateEnvPresentationBoundaries(t *testing.T) {
 	if len(composed) != 1 || composedStats.TotalMatched != 1 || !strings.Contains(composed[0].Message, "APP_MODE (app), APP_MODE (init)") {
 		t.Fatalf("composed aggregate lost env evidence: %+v, TotalMatched=%d", composed, composedStats.TotalMatched)
 	}
-	related := RelatedIssues(p, nil, "apps", "Deployment", "apps", "web")
+	related := RelatedIssues(p, RelatedIssueOptions{}, "apps", "Deployment", "apps", "web")
 	if len(related) != 2 {
 		t.Fatalf("RelatedIssues rows=%d, want 2 detailed findings", len(related))
 	}

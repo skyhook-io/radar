@@ -39,6 +39,7 @@ type AppConfig struct {
 	Port                     int
 	ListenAddress            string
 	ShowRemoteAccessHint     bool
+	BasePath                 string
 	NoBrowser                bool
 	Browser                  string
 	DevMode                  bool
@@ -50,6 +51,7 @@ type AppConfig struct {
 	DisableLocalTerminal     bool
 	PodShellDefault          string
 	DebugImage               string
+	ReachabilityImage        string
 	ListPageSize             int64
 	NamespaceScope           bool
 	TimelineStorage          string
@@ -65,12 +67,17 @@ type AppConfig struct {
 	AIHistory                bool   // persist AI investigations across restarts
 	AIHistoryDBPath          string // "" = ~/.radar/ai-runs.db
 	AuthConfig               auth.Config
+	HubAPIURL                string // Hub API origin override ("" = hosted default)
+	HubAppURL                string // Hub frontend origin override ("" = derived)
+	CloudTunnelConfigured    bool   // --cloud-url was set on this process
 }
 
 // SetGlobals applies debug/test flags to global state.
 func SetGlobals(cfg AppConfig) {
 	k8s.DebugEvents = cfg.DebugEvents
 	k8s.TimingLogs = cfg.DevMode
+	// Init-only write, before any goroutine reads it; later reads happen under
+	// clientMu and assume no concurrent mutation.
 	k8s.ForceInCluster = cfg.FakeInCluster
 	k8s.ForceDisableHelmWrite = cfg.DisableHelmWrite
 	k8s.ForceDisableExec = cfg.DisableExec
@@ -277,12 +284,14 @@ func CreateServer(cfg AppConfig) *server.Server {
 		PrometheusHeaders:        cfg.PrometheusHeaders,
 		PrometheusHeadersFromEnv: cfg.PrometheusHeadersFromEnv,
 		DebugImage:               cfg.DebugImage,
+		ReachabilityImage:        cfg.ReachabilityImage,
 		MCP:                      &cfg.MCPEnabled,
 	}
 
 	serverCfg := server.Config{
 		Port:             cfg.Port,
 		ListenAddress:    cfg.ListenAddress,
+		BasePath:         cfg.BasePath,
 		StartupLog:       true,
 		RemoteAccessHint: cfg.ShowRemoteAccessHint,
 		DevMode:          cfg.DevMode,
@@ -301,6 +310,12 @@ func CreateServer(cfg AppConfig) *server.Server {
 			HasPrometheusHeaders: len(cfg.PrometheusHeaders) > 0,
 		},
 		AuthConfig: cfg.AuthConfig,
+		CloudConnect: server.CloudConnectConfig{
+			HubAPIURL:             cfg.HubAPIURL,
+			HubAppURL:             cfg.HubAppURL,
+			Kubeconfig:            cfg.Kubeconfig,
+			CloudTunnelConfigured: cfg.CloudTunnelConfigured,
+		},
 	}
 
 	// AI-history DB path: resolved here (like the timeline DB) so the server
@@ -466,8 +481,11 @@ var mcpPortFileDisabled bool
 func DisableMCPPortFile() { mcpPortFileDisabled = true }
 
 // WriteMCPPortFile writes the actual server port to ~/.radar/mcp-port so MCP
-// clients can discover the running instance without hardcoding a port.
-func WriteMCPPortFile(port int) {
+// clients can discover the running instance without hardcoding a port. A
+// non-empty basePath is written as a second line: the routes it identifies sit
+// under that prefix, so the port alone is not enough to reach them. The port
+// stays on the first line so a port-only reader keeps working.
+func WriteMCPPortFile(port int, basePath string) {
 	path := mcpPortFilePath()
 	if path == "" || mcpPortFileDisabled {
 		return
@@ -476,7 +494,11 @@ func WriteMCPPortFile(port int) {
 		log.Printf("[mcp] Failed to create directory for port file: %v", err)
 		return
 	}
-	if err := os.WriteFile(path, fmt.Appendf(nil, "%d\n", port), 0o644); err != nil {
+	contents := fmt.Appendf(nil, "%d\n", port)
+	if basePath != "" {
+		contents = fmt.Appendf(contents, "%s\n", basePath)
+	}
+	if err := os.WriteFile(path, contents, 0o644); err != nil {
 		log.Printf("[mcp] Failed to write port file: %v", err)
 		return
 	}
@@ -538,7 +560,7 @@ func CheckClusterAccess(ctx context.Context) error {
 			// Exception: exec auth timeouts are retryable — the first call
 			// triggers a token refresh, and the cached token is ready by retry.
 			errType := k8s.ClassifyError(lastErr)
-			if errType == "config" || errType == "auth" || errType == "rbac" || errType == "network" || errType == "tls" {
+			if errType == "config" || errType == "auth" || errType == "auth-rejected" || errType == "rbac" || errType == "network" || errType == "tls" {
 				break
 			}
 			// Don't retry if the parent context is already done

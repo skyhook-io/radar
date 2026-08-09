@@ -61,11 +61,12 @@ var catalogOrder = []Category{
 	// Configuration
 	CategoryMissingConfigRef, CategoryInvalidConfiguration, CategoryPDBBlocksEvictions, CategorySecretSyncFailed,
 	// Networking
-	CategoryServiceNoEndpoints, CategoryIngressBackendMissing, CategoryLoadBalancerPending,
+	CategoryServiceNoEndpoints, CategoryIngressBackendMissing, CategoryIngressClassMissing, CategoryLoadBalancerPending,
 	CategoryGatewayNotReady, CategoryGatewayRouteInvalid, CategoryDNSFailure,
 	// Storage
 	CategoryPVCPending, CategoryPVCLost, CategoryPVFailed, CategoryPVCResizeFailed,
 	CategoryVolumeMountFailed, CategoryVolumeAccessModeConflict,
+	CategoryBackupFailed, CategoryBackupTargetUnavailable,
 	// Scaling
 	CategoryRolloutStalled, CategoryHPALimitedOrFailed,
 	// Security
@@ -115,6 +116,7 @@ var categoryDescription = map[Category]string{
 	// Networking
 	CategoryServiceNoEndpoints:    "A Service has no ready endpoints — its selector matches no ready pods, so traffic to it fails.",
 	CategoryIngressBackendMissing: "An Ingress points at a Service that doesn't exist — incoming requests get 503s.",
+	CategoryIngressClassMissing:   "An Ingress names an IngressClass that doesn't exist, so no matching controller can serve it.",
 	CategoryLoadBalancerPending:   "A LoadBalancer Service is stuck Pending — the cloud controller hasn't provisioned an external IP.",
 	CategoryGatewayNotReady:       "A Gateway (Gateway API) isn't accepted or programmed — its listeners aren't serving.",
 	CategoryGatewayRouteInvalid:   "An HTTPRoute (or other route) was rejected or not accepted by its parent Gateway.",
@@ -126,6 +128,8 @@ var categoryDescription = map[Category]string{
 	CategoryPVCResizeFailed:          "A volume expansion didn't complete — the requested resize failed or is stuck.",
 	CategoryVolumeMountFailed:        "A pod can't mount a volume — attach/mount failed (wrong node, missing CSI driver, or permissions).",
 	CategoryVolumeAccessModeConflict: "A volume's access mode conflicts with how it's mounted (e.g. an RWO volume claimed by pods on different nodes).",
+	CategoryBackupFailed:             "A backup or restore run failed, partially failed, or was rejected in validation — the recovery point you'd expect to have may not exist.",
+	CategoryBackupTargetUnavailable:  "The backup destination itself is unhealthy — an object-store location or backup repository the backup tool can't reach or validate.",
 	// Scaling
 	CategoryRolloutStalled:     "A workload rollout is stuck — the new revision isn't progressing (progressDeadlineExceeded).",
 	CategoryHPALimitedOrFailed: "A HorizontalPodAutoscaler can't scale — missing metrics, pinned at max replicas, or scaling errors.",

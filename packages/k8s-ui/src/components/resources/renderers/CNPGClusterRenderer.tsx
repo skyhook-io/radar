@@ -18,7 +18,11 @@ import {
   getCNPGClusterPostgresParams,
   getCNPGClusterInstancesReportedState,
   getCNPGClusterCertificateExpirations,
+  getCNPGWALArchivingFailure,
+  getCNPGLastBackupFailure,
+  classifyCNPGClusterPhase,
 } from '../resource-utils-cnpg'
+import { formatAge } from '../resource-utils'
 
 interface CNPGClusterRendererProps {
   data: any
@@ -28,7 +32,12 @@ interface CNPGClusterRendererProps {
 export function CNPGClusterRenderer({ data, onNavigate }: CNPGClusterRendererProps) {
   const conditions = data.status?.conditions || []
   const instances = data.spec?.instances ?? 0
-  const readyInstances = data.status?.readyInstances ?? 0
+  // Presence matters — see getCNPGClusterStatus. A cluster whose status has no
+  // readyInstances yet is unknown, not zero; defaulting to 0 raised a "Cluster
+  // Down" banner on a cluster that had simply not reported yet.
+  const readyKnown = typeof data.status?.readyInstances === 'number'
+  const readyInstances: number = readyKnown ? data.status.readyInstances : 0
+  const countsKnown = instances > 0 && readyKnown
   const phase = getCNPGClusterPhase(data)
   const backupConfig = getCNPGClusterBackupConfig(data)
   const monitoring = getCNPGClusterMonitoring(data)
@@ -57,15 +66,46 @@ export function CNPGClusterRenderer({ data, onNavigate }: CNPGClusterRendererPro
   // Last failed backup
   const lastFailedBackup = data.status?.lastFailedBackup
 
+  // WAL archiving / backup health, straight from the operator's own conditions.
+  const walArchivingFailure = getCNPGWALArchivingFailure(data)
+  const lastBackupFailure = getCNPGLastBackupFailure(data)
+  const phaseBucket = classifyCNPGClusterPhase(phase)
+
   // Problem detection
-  const isDown = instances > 0 && readyInstances === 0
-  const isDegraded = instances > 0 && readyInstances < instances && readyInstances > 0
-  const isFailover = phase.toLowerCase().includes('failing over')
-  const isSwitchover = phase.toLowerCase().includes('switchover')
+  const isDown = countsKnown && readyInstances === 0
+  // A shortfall the PHASE already explains is not a separate problem. Mirrors
+  // source_cnpg.go's phaseExplained gate and the badge's ordering, both of
+  // which check the phase before the instance counts: mid-switchover or waiting
+  // on a supervised update, running below the desired count is the operation,
+  // not a fault. Without this the drawer raised "Degraded Cluster" while the
+  // badge deliberately said "Switchover" — the same two-surfaces-one-cluster
+  // disagreement this integration exists to remove, inverted.
+  const phaseExplainsShortfall =
+    phaseBucket === 'terminal' || phaseBucket === 'failing'
+    || phaseBucket === 'attention' || phaseBucket === 'transient'
+  const isDegraded = countsKnown && readyInstances < instances && readyInstances > 0 && !phaseExplainsShortfall
+  const isFailover = phaseBucket === 'failing'
+  const isSwitchover = phase === 'Switchover in progress'
+  const isTerminal = phaseBucket === 'terminal'
+  // "The cluster is otherwise serving normally, so nothing else here will look
+  // wrong" is a claim about the REST OF THIS DRAWER, so any other banner
+  // falsifies it. It can no longer lean on isDegraded now that a
+  // phase-explained shortfall doesn't set it: a cluster mid-switchover at 2/3
+  // would assert nothing else looks wrong directly beneath a Switchover banner.
+  const hasOtherProblemBanner =
+    isDown || isDegraded || primaryMismatch || hasSplitBrain
+    || (phaseBucket !== 'healthy' && phaseBucket !== 'unknown')
 
   return (
     <>
       {/* Problem alerts */}
+      {isTerminal && (
+        <AlertBanner
+          variant="error"
+          title="Reconciliation has stopped"
+          message={`${phase}. This state does not resolve on its own — the operator has stopped reconciling this cluster and it needs manual intervention.`}
+        />
+      )}
       {hasSplitBrain && (
         <AlertBanner
           variant="error"
@@ -88,8 +128,13 @@ export function CNPGClusterRenderer({ data, onNavigate }: CNPGClusterRendererPro
         />
       )}
       {isFailover && (
+        // Warning, not error: the badge renders failover at the alert tier and
+        // the issue detector reports it as a warning. A failover that has also
+        // taken every instance down still gets the red "Cluster Down" banner
+        // above, so severity is not lost — this just stops one surface shouting
+        // louder than the other two about the same event.
         <AlertBanner
-          variant="error"
+          variant="warning"
           title="Failover in Progress"
           message={`Cluster is performing a failover. Current phase: ${phase}`}
         />
@@ -108,11 +153,39 @@ export function CNPGClusterRenderer({ data, onNavigate }: CNPGClusterRendererPro
           message={`Target primary is ${targetPrimary} but current primary is ${currentPrimary}.`}
         />
       )}
-      {lastFailedBackup && (
+      {walArchivingFailure && (
         <AlertBanner
           variant="error"
-          title="Last Backup Failed"
-          message={`Last backup failed at ${lastFailedBackup}. WAL archiving may be impacted and RPO is growing.`}
+          title="WAL archiving is failing"
+          message={
+            // Precision matters here. The condition proves the last archival
+            // attempt did not complete and has stayed False since its
+            // transition — it does not prove a continuous run of failures, and
+            // it says nothing about an exact RPO. The "still serving" framing
+            // is gated on the cluster actually being up: asserting it next to a
+            // Cluster Down banner would be plainly false.
+            `CNPG reports that the last WAL archival did not complete${walArchivingFailure.lastTransitionTime ? `, and archiving has been in this state for ${formatAge(walArchivingFailure.lastTransitionTime)}` : ''}. ` +
+            'Recovery-point advancement is uncertain — check the backup destination before relying on point-in-time recovery.' +
+            (hasOtherProblemBanner
+              ? ''
+              : ' The cluster is otherwise serving normally, so nothing else here will look wrong.') +
+            (walArchivingFailure.message ? ` Operator reported: ${walArchivingFailure.message}` : '')
+          }
+        />
+      )}
+      {lastBackupFailure && (
+        // Warning, not error: the badge renders this at the degraded tier and
+        // the issue detector reports SeverityWarning. One failed attempt puts
+        // the recovery window at risk and CNPG will retry — unlike the
+        // archiving failure above, which is continuous and stays red on all
+        // three surfaces.
+        <AlertBanner
+          variant="warning"
+          title="Last backup failed"
+          message={
+            `The most recent backup attempt failed${lastBackupFailure.lastTransitionTime ? ` ${formatAge(lastBackupFailure.lastTransitionTime)} ago` : ''}.` +
+            (lastBackupFailure.message ? ` Operator reported: ${lastBackupFailure.message}` : '')
+          }
         />
       )}
       {expiredCerts.length > 0 && (
@@ -242,6 +315,22 @@ export function CNPGClusterRenderer({ data, onNavigate }: CNPGClusterRendererPro
       {backupConfig.configured && (
         <Section title="Backup" icon={Clock} defaultExpanded>
           <PropertyList>
+            {backupConfig.plugin && (
+              <Property label="Managed By" value="barman-cloud plugin" />
+            )}
+            {backupConfig.plugin?.barmanObjectName && (
+              <Property label="Object Store" value={
+                <ResourceLink
+                  name={backupConfig.plugin.barmanObjectName}
+                  kind="objectstores"
+                  namespace={data.metadata?.namespace || ''}
+                  onNavigate={onNavigate}
+                />
+              } />
+            )}
+            {backupConfig.plugin?.isWALArchiver && (
+              <Property label="WAL Archiver" value="This plugin" />
+            )}
             {backupConfig.destinationPath && (
               <Property label="Destination" value={backupConfig.destinationPath} />
             )}
@@ -258,6 +347,17 @@ export function CNPGClusterRenderer({ data, onNavigate }: CNPGClusterRendererPro
               <Property label="First Recoverability" value={backupConfig.firstRecoverabilityPoint} />
             )}
           </PropertyList>
+          {/* Without this note the section renders empty on plugin-migrated
+              clusters, which is indistinguishable from "no backups configured" —
+              the worst possible ambiguity for a recovery-point display. */}
+          {backupConfig.rpoTrackedOnObjectStore && (
+            <div className="mt-2 pt-2 border-t border-theme-border text-xs text-theme-text-secondary">
+              Recovery-point fields are not published on the Cluster when backups run through the
+              barman-cloud plugin. The recovery window is tracked on the ObjectStore
+              {backupConfig.plugin?.barmanObjectName ? ` "${backupConfig.plugin.barmanObjectName}"` : ''}
+              {backupConfig.plugin?.serverName ? `, under server "${backupConfig.plugin.serverName}"` : ''}.
+            </div>
+          )}
         </Section>
       )}
 

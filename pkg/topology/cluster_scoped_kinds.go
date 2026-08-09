@@ -22,10 +22,11 @@ type ClusterScopedKindEntry struct {
 // drift hazard that the checklist on NodeKind warned about.
 //
 // KindNamespace is intentionally excluded — handled by per-user filter
-// upstream. KindNodeClass has one entry per cloud provider (EC2 / AKS /
-// GCP) because the topology builder iterates them under the same NodeKind
-// label; callers should treat ALL three as a single SAR-anchored gate so
-// providers absent from cluster discovery don't over-deny.
+// upstream. KindNodeClass has entries for the built-in providers solely for
+// coarse root preflight. Concrete NodeClass nodes are always authorized from
+// the exact (group, resource) identity emitted in Node.Data; Karpenter permits
+// arbitrary provider kinds, so this table must never be the authorization
+// boundary for a built graph.
 var ClusterScopedKinds = []ClusterScopedKindEntry{
 	{KindNode, "", "nodes"},
 	{KindNodePool, "karpenter.sh", "nodepools"},
@@ -90,11 +91,9 @@ type PseudoKindDiscoveryLookup func(resource, group string) (k8score.APIResource
 //     protocol-specific per-user check (REST: s.canRead; MCP:
 //     canReadInNamespace) and ALLOWS on the first pass.
 //   - tracked=true + len(tuples) == 0 + fallthroughAllow=true: every
-//     candidate row was eliminated by the discovery filter (CRD removed
-//     mid-build, or no provider variant installed on this cluster). Caller
-//     should ALLOW — matches the pre-existing "over-include rather than
-//     silently hide a node the cluster admin can see" behavior the per-node
-//     and by-name helpers both used.
+//     candidate row was eliminated by the discovery filter, or a NodeClass
+//     root cannot be resolved exactly until the graph node is found. Caller
+//     should defer to the per-node gate.
 //   - tracked=true + len(tuples) == 0 + fallthroughAllow=false: kind IS
 //     tracked but no row matched the supplied group. Caller should DENY —
 //     this is the per-variant safety the helpers exist to enforce. Only
@@ -128,6 +127,29 @@ func RBACTuplesForKind(kind, group string, disc PseudoKindDiscoveryLookup) (tupl
 	}
 	if !tracked {
 		return nil, false, false
+	}
+
+	// NodeClass is a topology pseudo-kind over an open-ended provider API.
+	// Karpenter NodePools can reference eks.amazonaws.com/NodeClass or an
+	// arbitrary custom kind, neither of which can be exhaustively represented
+	// in ClusterScopedKinds. Without a group, or when a supplied group isn't a
+	// built-in row, defer authorization until root resolution; the concrete
+	// node carries the exact discovered resource plural and RBACTuplesForNode
+	// fails closed if that identity is absent.
+	if strings.EqualFold(resolved, string(KindNodeClass)) {
+		if group == "" {
+			return nil, true, true
+		}
+		matchedBuiltIn := false
+		for _, ck := range ClusterScopedKinds {
+			if ck.Kind == KindNodeClass && ck.Group == group {
+				matchedBuiltIn = true
+				break
+			}
+		}
+		if !matchedBuiltIn {
+			return nil, true, true
+		}
 	}
 
 	// Caller-supplied group selects a specific variant; empty group returns
@@ -232,7 +254,9 @@ const (
 //     secrets tuple. Secret nodes need a per-user secrets SAR because the
 //     cache SA may have cluster-wide secrets RBAC the calling user doesn't.
 //   - Namespaced, other kinds → Allow.
-//   - Cluster-scoped, tracked pseudo-kind, variant matches → CheckTuples
+//   - NodeClass → CheckTuples with the exact group/resource stored on the
+//     node by the builder. Missing exact identity fails closed.
+//   - Other cluster-scoped tracked pseudo-kind, variant matches → CheckTuples
 //     with the per-variant cluster-scope tuple.
 //   - Cluster-scoped, tracked pseudo-kind, disc filter ate the row → Allow.
 //   - Cluster-scoped, tracked pseudo-kind, unmapped variant → Deny.
@@ -248,6 +272,19 @@ func RBACTuplesForNode(n *Node, disc PseudoKindDiscoveryLookup) (decision NodeRB
 			return NodeRBACCheckTuples, []SARTuple{{Group: "", Resource: "secrets", Namespace: ns}}
 		}
 		return NodeRBACAllow, nil
+	}
+
+	// NodeClass provider kinds are open-ended. The builder resolves each
+	// referenced kind through discovery and records the exact plural resource;
+	// authorize that identity instead of the finite built-in table. Trust the
+	// producer shape and fail closed when it is incomplete.
+	if n.Kind == KindNodeClass {
+		group := nodeAPIGroupFromData(n)
+		resource, _ := n.Data["resource"].(string)
+		if group == "" || resource == "" {
+			return NodeRBACDeny, nil
+		}
+		return NodeRBACCheckTuples, []SARTuple{{Group: group, Resource: resource, Namespace: ""}}
 	}
 
 	// Cluster-scoped. Try the pseudo-kind table first.

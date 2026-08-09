@@ -1,5 +1,4 @@
 import { Archive, Clock, HardDrive, Filter } from 'lucide-react'
-import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
 import {
   getBackupStatus,
@@ -18,7 +17,11 @@ import {
   getBackupSnapshotVolumes,
   getBackupDefaultVolumesToFsBackup,
   getBackupVolumeSnapshotLocations,
+  getBackupQueuePosition,
+  isBackupActivePhase,
+  isBackupPartialFailurePhase,
 } from '../resource-utils-velero'
+import { VeleroPhaseValue } from './velero-cells'
 import { formatAge } from '../resource-utils'
 
 interface VeleroBackupRendererProps {
@@ -39,9 +42,12 @@ export function VeleroBackupRenderer({ data }: VeleroBackupRendererProps) {
   const excludedResources = getBackupExcludedResources(data)
   const vslLocations = getBackupVolumeSnapshotLocations(data)
 
+  const phase = status.phase || ''
   const isFailed = backupStatus.level === 'unhealthy'
-  const isPartiallyFailed = backupStatus.text === 'PartiallyFailed'
-  const isInProgress = backupStatus.text === 'InProgress' || backupStatus.text === 'Uploading'
+  const isValidationFailure = phase === 'FailedValidation'
+  const isPartiallyFailed = isBackupPartialFailurePhase(phase)
+  const isInProgress = isBackupActivePhase(phase)
+  const queuePosition = getBackupQueuePosition(data)
 
   // Progress data
   const progress = status.progress
@@ -52,15 +58,31 @@ export function VeleroBackupRenderer({ data }: VeleroBackupRendererProps) {
   return (
     <>
       {/* Problem alerts */}
-      {(isFailed || isPartiallyFailed) && (
+      {isValidationFailure && (
         <AlertBanner
           variant="error"
-          title={isFailed ? 'Backup Failed' : 'Backup Partially Failed'}
+          title="Backup Validation Failed"
+          message={status.failureReason || 'Velero rejected this backup before it started — nothing was backed up.'}
+          items={validationErrors.length > 0 ? validationErrors : undefined}
+        />
+      )}
+      {isFailed && !isValidationFailure && (
+        <AlertBanner
+          variant="error"
+          title="Backup Failed"
           message={status.failureReason || `${errors} error(s) occurred during backup.`}
           items={validationErrors.length > 0 ? validationErrors : undefined}
         />
       )}
-      {warnings > 0 && !isFailed && (
+      {isPartiallyFailed && (
+        <AlertBanner
+          variant="warning"
+          title="Backup Partially Failed"
+          message={status.failureReason || `${errors} error(s) occurred — some items were not backed up. Do not assume this backup is complete.`}
+          items={validationErrors.length > 0 ? validationErrors : undefined}
+        />
+      )}
+      {warnings > 0 && !isFailed && !isPartiallyFailed && (
         <AlertBanner
           variant="warning"
           title={`${warnings} Warning(s)`}
@@ -72,10 +94,11 @@ export function VeleroBackupRenderer({ data }: VeleroBackupRendererProps) {
       <Section title="Status" icon={Archive} defaultExpanded>
         <PropertyList>
           <Property label="Phase" value={
-            <span className={clsx('badge', backupStatus.color)}>
-              {backupStatus.text}
-            </span>
+            <VeleroPhaseValue status={backupStatus} phase={phase} />
           } />
+          {queuePosition !== null && (
+            <Property label="Queue Position" value={String(queuePosition)} />
+          )}
           {status.startTimestamp && (
             <Property label="Started" value={formatAge(status.startTimestamp) + ' ago'} />
           )}

@@ -73,12 +73,60 @@ func withContainerTerminated(reason string) podOption {
 	}
 }
 
+// withExtraRunningReadyContainer appends a second container that is running and
+// ready — the sidecar half of the "main container finished, sidecar didn't"
+// shape. Added to spec as well as status so the READY denominator is right.
+func withExtraRunningReadyContainer(name string) podOption {
+	return func(p *corev1.Pod) {
+		p.Spec.Containers = append(p.Spec.Containers, corev1.Container{Name: name, Image: "fluent-bit:2"})
+		p.Status.ContainerStatuses = append(p.Status.ContainerStatuses, corev1.ContainerStatus{
+			Name:  name,
+			Ready: true,
+			State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+		})
+	}
+}
+
+func withPodReady(ready bool) podOption {
+	return func(p *corev1.Pod) {
+		status := corev1.ConditionFalse
+		if ready {
+			status = corev1.ConditionTrue
+		}
+		p.Status.Conditions = append(p.Status.Conditions, corev1.PodCondition{
+			Type: corev1.PodReady, Status: status,
+		})
+	}
+}
+
+// withPodReason sets the pod-level reason (Evicted, NodeAffinity, ...), which
+// lives on the pod rather than on any container.
+func withPodReason(reason string) podOption {
+	return func(p *corev1.Pod) { p.Status.Reason = reason }
+}
+
+func withSchedulingGate() podOption {
+	return func(p *corev1.Pod) {
+		p.Status.Conditions = append(p.Status.Conditions, corev1.PodCondition{
+			Type:   corev1.PodScheduled,
+			Status: corev1.ConditionFalse,
+			Reason: corev1.PodReasonSchedulingGated,
+		})
+	}
+}
+
+// withLastTerminationOOM builds a container that was OOMKilled and came back.
+// RestartCount is non-zero because that is the only shape a kubelet produces: a
+// container cannot have a LastTerminationState and zero restarts. Termination
+// history is reported only when something actually restarted, so a fixture
+// without the count would exercise a state that cannot occur.
 func withLastTerminationOOM() podOption {
 	return func(p *corev1.Pod) {
 		p.Status.ContainerStatuses = []corev1.ContainerStatus{{
-			Name:  "app",
-			Ready: false,
-			State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+			Name:         "app",
+			Ready:        false,
+			RestartCount: 2,
+			State:        corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
 			LastTerminationState: corev1.ContainerState{
 				Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled"},
 			},
@@ -100,10 +148,15 @@ func withInitContainerWaiting(reason string) podOption {
 
 // --- Workload helpers ---
 
+// makeDeployment builds a converged Deployment: `total` is the DESIRED count,
+// so it is set on spec as well as status. Real Deployments always carry
+// spec.replicas; a fixture that set only status let the status-denominated
+// READY bug pass unnoticed.
 func makeDeployment(name string, ready, total int32) *appsv1.Deployment {
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
 		Spec: appsv1.DeploymentSpec{
+			Replicas: &total,
 			Strategy: appsv1.DeploymentStrategy{Type: appsv1.RollingUpdateDeploymentStrategyType},
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
@@ -161,6 +214,11 @@ func TestSummary_PodStatus(t *testing.T) {
 		wantStatus string
 		wantIssue  string
 		wantReady  string
+		// wantLastTerminated is the termination HISTORY field, asserted apart
+		// from Status on purpose: a pod OOMKilled an hour ago that has been
+		// Ready since is Running now, and the reason belongs in history rather
+		// than masquerading as the current state.
+		wantLastTerminated string
 	}{
 		{
 			name:       "running healthy",
@@ -184,11 +242,18 @@ func TestSummary_PodStatus(t *testing.T) {
 			wantReady:  "0/1",
 		},
 		{
-			name:       "OOMKilled via lastTerminationState",
-			pod:        makePod("oom-last", withLastTerminationOOM()),
-			wantStatus: "OOMKilled",
-			wantIssue:  "OOMKilled",
-			wantReady:  "0/1",
+			// A PAST OOM kill is not the current status. kubectl keeps STATUS
+			// on the live state and reports the reason under "Last State";
+			// health.Pod agrees (pkg/health/pod_test.go: "recovered
+			// LastTerminationState OOMKilled is healthy"). Before this split
+			// the row claimed Status "OOMKilled" for a pod that was running
+			// fine, contradicting the health verdict on the very same object.
+			name:               "recovered OOM reports as running, with history",
+			pod:                makePod("oom-last", withLastTerminationOOM()),
+			wantStatus:         "Running",
+			wantIssue:          "OOMKilled", // getPodIssue is the diagnostic signal; unchanged
+			wantReady:          "0/1",
+			wantLastTerminated: "OOMKilled",
 		},
 		{
 			name:       "ImagePullBackOff",
@@ -198,24 +263,71 @@ func TestSummary_PodStatus(t *testing.T) {
 			wantReady:  "0/1",
 		},
 		{
-			name:       "init container failing",
+			// The Init: prefix is load-bearing — it tells a reader the failure
+			// is in initialization, not the main workload, which points at a
+			// different fix. kubectl has carried it for years.
+			name:       "init container failing is attributed to init",
 			pod:        makePod("init-fail", withPhase(corev1.PodPending), withInitContainerWaiting("CrashLoopBackOff")),
-			wantStatus: "CrashLoopBackOff",
+			wantStatus: "Init:CrashLoopBackOff",
 			wantIssue:  "CrashLoopBackOff",
-			wantReady:  "",
+			wantReady:  "0/1", // denominator is spec containers, as kubectl does
 		},
 		{
 			name:       "completed",
 			pod:        makePod("done", withPhase(corev1.PodSucceeded)),
 			wantStatus: "Succeeded",
 			wantIssue:  "",
-			wantReady:  "",
+			wantReady:  "0/1",
 		},
 		{
-			name:       "terminated Completed is not an issue",
+			// Nothing else is running, so "Completed" is the whole truth —
+			// this is the branch that does NOT become NotReady.
+			name:       "terminated Completed with nothing else running",
 			pod:        makePod("completed-term", withContainerTerminated("Completed")),
-			wantStatus: "Running",
+			wantStatus: "Completed",
 			wantIssue:  "",
+			wantReady:  "0/1",
+		},
+		{
+			// THE case this work exists for. A Job pod whose main container
+			// finished while a sidecar keeps running: phase stays Running
+			// forever, so the bare phase said "Running" and radar called it
+			// healthy. kubectl reports NotReady, which is what let other tools
+			// spot a CronJob wedged by a non-exiting sidecar.
+			name: "completed main container with a lingering sidecar is NotReady",
+			pod: makePod("job-sidecar",
+				withContainerTerminated("Completed"),
+				withExtraRunningReadyContainer("sidecar"),
+				withPodReady(false)),
+			wantStatus: "NotReady",
+			wantReady:  "1/2",
+		},
+		{
+			// Same shape, but the pod IS Ready — a legitimately healthy pod
+			// that happens to have a finished container. Must stay Running or
+			// the fix would false-positive on every such pod.
+			name: "completed container but pod is Ready stays Running",
+			pod: makePod("job-ready",
+				withContainerTerminated("Completed"),
+				withExtraRunningReadyContainer("sidecar"),
+				withPodReady(true)),
+			wantStatus: "Running",
+			wantReady:  "1/2",
+		},
+		{
+			// Node pressure evicted it. The reason lives on the pod, not on any
+			// container, so a container-only walk loses it entirely.
+			name:       "evicted pod names the eviction",
+			pod:        makePod("eviction", withPhase(corev1.PodFailed), withPodReason("Evicted")),
+			wantStatus: "Evicted",
+			wantReady:  "0/1",
+		},
+		{
+			// Intentionally parked (quota gate, Kueue). Worth naming so an
+			// agent doesn't chase it as slow scheduling.
+			name:       "scheduling gated is named, not generic Pending",
+			pod:        makePod("gated", withPhase(corev1.PodPending), withSchedulingGate()),
+			wantStatus: "SchedulingGated",
 			wantReady:  "0/1",
 		},
 	}
@@ -236,6 +348,9 @@ func TestSummary_PodStatus(t *testing.T) {
 			}
 			if s.Ready != tt.wantReady {
 				t.Errorf("Ready = %q, want %q", s.Ready, tt.wantReady)
+			}
+			if s.LastTerminatedReason != tt.wantLastTerminated {
+				t.Errorf("LastTerminatedReason = %q, want %q", s.LastTerminatedReason, tt.wantLastTerminated)
 			}
 		})
 	}
@@ -268,6 +383,22 @@ func TestSummary_WorkloadStatus(t *testing.T) {
 			obj:        makeDeployment("web", 0, 0),
 			wantStatus: "Scaled to 0",
 			wantReady:  "0/0",
+			wantImage:  "myapp:v1",
+		},
+		{
+			// Scale-up before the controller reacts: spec says 10, status still
+			// says 3. Denominating by status reported "3/3 Running" for a
+			// workload 7 replicas short of target — worse than kubectl, which
+			// denominates by spec and shows 3/10.
+			name: "Deployment scaled up before the controller reacts",
+			obj: func() *appsv1.Deployment {
+				d := makeDeployment("web", 3, 3)
+				ten := int32(10)
+				d.Spec.Replicas = &ten
+				return d
+			}(),
+			wantStatus: "Progressing",
+			wantReady:  "3/10",
 			wantImage:  "myapp:v1",
 		},
 		{

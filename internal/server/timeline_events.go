@@ -9,6 +9,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
+	"github.com/skyhook-io/radar/pkg/timelineapi"
 )
 
 // timelineEventsPageLimit caps both response shapes at the store's own page
@@ -18,13 +19,9 @@ const timelineEventsPageLimit = 10000
 
 // timelineEndRecord is the NDJSON terminal record closing an events stream.
 // Its shape is the wire contract the web client's retained source parses —
-// the same record the hub emits.
-type timelineEndRecord struct {
-	Type      string `json:"type"`
-	Cursor    string `json:"cursor,omitempty"`
-	More      bool   `json:"more,omitempty"`
-	Truncated bool   `json:"truncated,omitempty"`
-}
+// the same record the hub emits. It aliases the shared timelineapi.EndRecord
+// so this production output and the exported wire type cannot drift.
+type timelineEndRecord = timelineapi.EndRecord
 
 // handleTimelineEvents serves GET /api/timeline/events — the shared timeline
 // wire contract (the same one the hub serves): NDJSON event lines closed by a

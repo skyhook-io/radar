@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"fmt"
+	"net/url"
 	"regexp"
 	"slices"
 	"sort"
@@ -9,10 +10,15 @@ import (
 	"strings"
 	"time"
 
+	capacitymodel "github.com/skyhook-io/radar/internal/capacity"
+	"github.com/skyhook-io/radar/pkg/karpenter"
+	"github.com/skyhook-io/radar/pkg/scheduling"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // Scheduling failure decomposition.
@@ -34,56 +40,24 @@ import (
 // Taint key/value come straight from the scheduler message (parseTaintPayload),
 // not from a cache join.
 
-// SchedReasonClass is the predicate family a scheduling failure falls into.
-type SchedReasonClass string
+type SchedReasonClass = scheduling.ReasonClass
 
 const (
-	SchedInsufficientResource SchedReasonClass = "InsufficientResource"
-	SchedUntoleratedTaint     SchedReasonClass = "UntoleratedTaint"
-	SchedNodeAffinitySelector SchedReasonClass = "NodeAffinitySelector"
-	SchedPodAffinity          SchedReasonClass = "PodAffinity"
-	SchedPodAntiAffinity      SchedReasonClass = "PodAntiAffinity"
-	SchedTopologySpread       SchedReasonClass = "TopologySpread"
-	SchedVolumeNodeAffinity   SchedReasonClass = "VolumeNodeAffinity"
-	SchedVolumeBinding        SchedReasonClass = "VolumeBinding" // unbound PVC / no available PVs to bind
-	SchedVolumeCount          SchedReasonClass = "VolumeCount"
-	SchedNoPorts              SchedReasonClass = "NoPorts"
-	SchedNodeUnschedulable    SchedReasonClass = "NodeUnschedulable" // cordoned / not-ready / unschedulable taint
-	SchedOther                SchedReasonClass = "Other"
+	SchedInsufficientResource = scheduling.InsufficientResource
+	SchedUntoleratedTaint     = scheduling.UntoleratedTaint
+	SchedNodeAffinitySelector = scheduling.NodeAffinitySelector
+	SchedPodAffinity          = scheduling.PodAffinity
+	SchedPodAntiAffinity      = scheduling.PodAntiAffinity
+	SchedTopologySpread       = scheduling.TopologySpread
+	SchedVolumeNodeAffinity   = scheduling.VolumeNodeAffinity
+	SchedVolumeBinding        = scheduling.VolumeBinding
+	SchedVolumeCount          = scheduling.VolumeCount
+	SchedNoPorts              = scheduling.NoPorts
+	SchedNodeUnschedulable    = scheduling.NodeUnschedulable
+	SchedOther                = scheduling.Other
 )
 
-// SchedulingReason is one decomposed clause of a scheduler verdict. The
-// side fields are populated only for their owning Class (Resource for
-// SchedInsufficientResource; TaintKey/TaintValue for SchedUntoleratedTaint);
-// other classes leave them zero. classifyClause is the sole producer and
-// always sets Class + Raw.
-type SchedulingReason struct {
-	Class SchedReasonClass
-	// NodeCount is how many nodes this clause rejected. 0 when the clause
-	// is whole-message (e.g. unbound PVC) or the count couldn't be parsed.
-	NodeCount int
-	// Resource is set for SchedInsufficientResource: "cpu", "memory",
-	// "ephemeral-storage", "pods", "nvidia.com/gpu", …
-	Resource string
-	// TaintKey / TaintValue are set for SchedUntoleratedTaint. TaintValue
-	// is empty for valueless taints (e.g. {node.kubernetes.io/unreachable}).
-	TaintKey   string
-	TaintValue string
-	// Raw is the original clause text, preserved so callers can fall back
-	// to it for classes we don't further structure.
-	Raw string
-}
-
-var (
-	// "0/5 nodes are available" / "1/12 nodes are available"
-	reNodesAvailable = regexp.MustCompile(`(\d+)/(\d+)\s+nodes? are available`)
-	// leading integer count on a clause: "2 Insufficient cpu", "3 node(s) had…"
-	reLeadingCount = regexp.MustCompile(`^\s*(\d+)\s+`)
-	// "Insufficient <resource>" — resource may contain '.'/'-'/'/'
-	reInsufficient = regexp.MustCompile(`Insufficient\s+([A-Za-z0-9./_-]+)`)
-	// taint payload: "{key: value}" or "{key}"
-	reTaint = regexp.MustCompile(`\{([^}]*)\}`)
-)
+type SchedulingReason = scheduling.Reason
 
 // parseSchedulerMessage decomposes a scheduler verdict (from a
 // FailedScheduling event message or a PodScheduled=False condition message)
@@ -91,140 +65,20 @@ var (
 // considered (the denominator of "0/N nodes are available"); 0 when the
 // message carries no such prefix. An empty/unrecognized message yields nil
 // reasons so callers can fall back to the raw text.
-func parseSchedulerMessage(msg string) (totalNodes int, reasons []SchedulingReason) {
-	msg = strings.TrimSpace(msg)
-	if msg == "" {
-		return 0, nil
-	}
-
-	// Drop the "preemption: …" tail — it restates the same node set from
-	// the preemption scheduler's point of view and only adds noise.
-	if before, _, ok := strings.Cut(msg, ". preemption:"); ok {
-		msg = before
-	} else if before, _, ok := strings.Cut(msg, " preemption:"); ok {
-		msg = before
-	}
-
-	if m := reNodesAvailable.FindStringSubmatch(msg); m != nil {
-		totalNodes, _ = strconv.Atoi(m[2])
-	}
-
-	// Everything after the first ":" is the comma-separated clause list.
-	// Messages without a colon (e.g. "pod has unbound immediate
-	// PersistentVolumeClaims") are treated as a single clause.
-	clauseStr := msg
-	if _, rest, ok := strings.Cut(msg, ":"); ok {
-		clauseStr = rest
-	}
-	clauseStr = strings.TrimRight(strings.TrimSpace(clauseStr), ".")
-	if clauseStr == "" {
-		return totalNodes, nil
-	}
-
-	for clause := range strings.SplitSeq(clauseStr, ", ") {
-		clause = normalizeSchedulerClause(clause)
-		if clause == "" {
-			continue
-		}
-		if r, ok := classifyClause(clause); ok {
-			reasons = append(reasons, r)
-		}
-	}
-	return totalNodes, reasons
+func parseSchedulerMessage(message string) (int, []SchedulingReason) {
+	return scheduling.ParseMessage(message)
 }
 
 func normalizeSchedulerClause(clause string) string {
-	return strings.TrimSpace(strings.TrimRight(strings.TrimSpace(clause), ",."))
+	return scheduling.NormalizeClause(clause)
 }
 
-// classifyClause maps one scheduler clause to a structured reason. The
-// substring checks are ordered so the more specific phrasings win (e.g.
-// "anti-affinity" before "affinity", "node affinity/selector" before the
-// bare "affinity" used by pod-affinity).
-func classifyClause(clause string) (SchedulingReason, bool) {
-	clause = normalizeSchedulerClause(clause)
-	if clause == "" {
-		return SchedulingReason{}, false
-	}
-	r := SchedulingReason{Raw: clause}
-	if m := reLeadingCount.FindStringSubmatch(clause); m != nil {
-		r.NodeCount, _ = strconv.Atoi(m[1])
-	}
-
-	lower := strings.ToLower(clause)
-
-	switch {
-	case strings.Contains(clause, "Insufficient"):
-		r.Class = SchedInsufficientResource
-		if m := reInsufficient.FindStringSubmatch(clause); m != nil {
-			r.Resource = m[1]
-		}
-	case strings.Contains(lower, "too many pods"):
-		r.Class = SchedInsufficientResource
-		r.Resource = "pods"
-	case strings.Contains(lower, "untolerated taint"):
-		r.Class = SchedUntoleratedTaint
-		r.TaintKey, r.TaintValue = parseTaintPayload(clause)
-		// A cordon / not-ready taint is really a node-availability problem,
-		// not a pod-misconfiguration; classify it as such so the UI doesn't
-		// tell the user to "add a toleration" for node.kubernetes.io/*.
-		if isNodeLifecycleTaint(r.TaintKey) {
-			r.Class = SchedNodeUnschedulable
-		}
-	case strings.Contains(lower, "volume node affinity"):
-		// Must precede the bare "node affinity" check below — this clause
-		// contains the substring "node affinity" but is a volume-topology
-		// failure, not a pod node-affinity mismatch.
-		r.Class = SchedVolumeNodeAffinity
-	case strings.Contains(lower, "anti-affinity"):
-		r.Class = SchedPodAntiAffinity
-	case strings.Contains(lower, "node affinity") || strings.Contains(lower, "node selector"):
-		r.Class = SchedNodeAffinitySelector
-	case strings.Contains(lower, "pod affinity"):
-		r.Class = SchedPodAffinity
-	case strings.Contains(lower, "topology spread"):
-		r.Class = SchedTopologySpread
-	case strings.Contains(lower, "max volume count"):
-		r.Class = SchedVolumeCount
-	case strings.Contains(lower, "free ports"):
-		r.Class = SchedNoPorts
-	case strings.Contains(lower, "unbound") && strings.Contains(lower, "persistentvolumeclaim"),
-		strings.Contains(lower, "persistent volumes to bind"):
-		r.Class = SchedVolumeBinding
-	case isIgnoredSchedulerClause(clause):
-		return SchedulingReason{}, false
-	case strings.Contains(lower, "unschedulable"), strings.Contains(lower, "were not ready"):
-		r.Class = SchedNodeUnschedulable
-	default:
-		r.Class = SchedOther
-	}
-	return r, true
+func parseTaintPayload(clause string) (string, string) {
+	return scheduling.ParseTaint(clause)
 }
 
-// parseTaintPayload extracts key/value from an "untolerated taint {k: v}"
-// or "{k}" clause. Returns empty strings if no {…} payload is present.
-func parseTaintPayload(clause string) (key, value string) {
-	m := reTaint.FindStringSubmatch(clause)
-	if m == nil {
-		return "", ""
-	}
-	inner := strings.TrimSpace(m[1])
-	if inner == "" {
-		return "", ""
-	}
-	if k, v, ok := strings.Cut(inner, ":"); ok {
-		return strings.TrimSpace(k), strings.TrimSpace(v)
-	}
-	return inner, ""
-}
-
-// isNodeLifecycleTaint reports whether a taint key is one the control plane
-// sets to mark a node temporarily unusable (cordon, not-ready, pressure),
-// as opposed to an operator-applied dedicated/workload taint.
 func isNodeLifecycleTaint(key string) bool {
-	return strings.HasPrefix(key, "node.kubernetes.io/") ||
-		strings.HasPrefix(key, "node-role.kubernetes.io/") ||
-		strings.HasPrefix(key, "node.cloudprovider.kubernetes.io/")
+	return scheduling.IsNodeLifecycleTaint(key)
 }
 
 // ---- Node-fit resolution ------------------------------------------------
@@ -452,6 +306,17 @@ func DetectSchedulingProblems(cache *ResourceCache, namespace string) []Detectio
 	var problems []Detection
 	now := time.Now()
 	nodes := schedulingNodeFacts(cache)
+	// Lazy: most sweeps have zero unschedulable pods, and loading the
+	// NodePool/NodeClass/Node inventory is only worth it once one appears.
+	var loadedPools []capacitymodel.DemandPoolInput
+	poolsLoaded := false
+	karpenterPools := func() []capacitymodel.DemandPoolInput {
+		if !poolsLoaded {
+			loadedPools = karpenterDemandPoolInputs(cache)
+			poolsLoaded = true
+		}
+		return loadedPools
+	}
 
 	for _, pods := range listPodsByNamespace(cache, namespace) {
 		for _, pod := range pods {
@@ -476,20 +341,22 @@ func DetectSchedulingProblems(cache *ResourceCache, namespace string) []Detectio
 			ownerGroup, ownerKind, ownerName := podOwnerKindName(cache, pod)
 			schedMessage, schedAction := diagnoseUnschedulable(pod, cond.Message, nodes)
 			problems = append(problems, Detection{
-				Kind:            "Pod",
-				Namespace:       pod.Namespace,
-				Name:            pod.Name,
-				Severity:        schedulingSeverity(dur),
-				Reason:          "Unschedulable",
-				Action:          schedAction,
-				Message:         schedMessage,
-				Age:             FormatAge(ageDur),
-				AgeSeconds:      int64(ageDur.Seconds()),
-				Duration:        FormatAge(dur),
-				DurationSeconds: int64(dur.Seconds()),
-				OwnerGroup:      ownerGroup,
-				OwnerKind:       ownerKind,
-				OwnerName:       ownerName,
+				Kind:                       "Pod",
+				Namespace:                  pod.Namespace,
+				Name:                       pod.Name,
+				Severity:                   schedulingSeverity(dur),
+				Reason:                     "Unschedulable",
+				Action:                     schedAction,
+				Message:                    schedMessage,
+				Age:                        FormatAge(ageDur),
+				AgeSeconds:                 int64(ageDur.Seconds()),
+				Duration:                   FormatAge(dur),
+				DurationSeconds:            int64(dur.Seconds()),
+				OwnerGroup:                 ownerGroup,
+				OwnerKind:                  ownerKind,
+				OwnerName:                  ownerName,
+				CapacityRelevant:           podRequiresKarpenterNodePool(pod),
+				CapacityRelevantCorrelated: podEvaluatedAgainstKarpenterPools(pod, karpenterPools()),
 			})
 		}
 	}
@@ -615,7 +482,7 @@ func schedulerMessageOnlyIgnoredNoise(msg string) bool {
 }
 
 func isIgnoredSchedulerClause(clause string) bool {
-	return strings.Contains(strings.ToLower(normalizeSchedulerClause(clause)), "no new claims to deallocate")
+	return scheduling.IsIgnoredClause(clause)
 }
 
 // unschedulableAction turns the parsed scheduler reasons into a concrete next
@@ -765,6 +632,133 @@ func nonEmptySchedulerSummaryParts(parts []string) []string {
 		}
 	}
 	return out
+}
+
+// karpenterDemandPoolInputs loads NodePools (+ their NodeClass readiness and
+// largest observed member capacity) for demand correlation. Fail-closed by
+// construction: any gap — Karpenter absent, cache unsynced, class unresolved —
+// yields inputs that evaluate unknown, never declared-compatible, so the
+// capacity link cannot fire on uncertainty.
+func karpenterDemandPoolInputs(cache *ResourceCache) []capacitymodel.DemandPoolInput {
+	discovery := GetResourceDiscovery()
+	dynamicCache := GetDynamicResourceCache()
+	if discovery == nil || dynamicCache == nil {
+		return nil
+	}
+	poolGVR, found := discovery.GetGVRWithGroup(karpenter.NodePoolKind, karpenter.Group)
+	if !found || !dynamicCache.IsSynced(poolGVR) {
+		return nil
+	}
+	pools, err := dynamicCache.List(poolGVR, "")
+	if err != nil || len(pools) == 0 {
+		return nil
+	}
+	var claims []*unstructured.Unstructured
+	if claimGVR, ok := discovery.GetGVRWithGroup(karpenter.NodeClaimKind, karpenter.Group); ok && dynamicCache.IsSynced(claimGVR) {
+		claims, _ = dynamicCache.List(claimGVR, "")
+	}
+	var nodes []*corev1.Node
+	if nodeLister := cache.Nodes(); nodeLister != nil {
+		nodes, _ = nodeLister.List(labels.Everything())
+	}
+	shapesByPool := capacitymodel.ObservedMemberShapesByPool(nodes, claims)
+
+	classListsByGVR := map[schema.GroupVersionResource][]*unstructured.Unstructured{}
+	classReadiness := func(pool *unstructured.Unstructured) *bool {
+		ref, ok := karpenter.NodeClassRefForNodePool(pool)
+		if !ok {
+			return nil
+		}
+		classGVR, ok := discovery.GetGVRWithGroup(ref.Kind, ref.Group)
+		if !ok || !dynamicCache.IsSynced(classGVR) {
+			return nil
+		}
+		classes, listed := classListsByGVR[classGVR]
+		if !listed {
+			classes, _ = dynamicCache.List(classGVR, "")
+			classListsByGVR[classGVR] = classes
+		}
+		for _, class := range classes {
+			if class != nil && class.GetName() == ref.Name {
+				switch karpenter.ResourceReadiness(class) {
+				case karpenter.ReadinessReady:
+					ready := true
+					return &ready
+				case karpenter.ReadinessNotReady:
+					ready := false
+					return &ready
+				}
+				return nil
+			}
+		}
+		return nil
+	}
+
+	inputs := make([]capacitymodel.DemandPoolInput, 0, len(pools))
+	for _, pool := range pools {
+		if pool == nil || pool.GetName() == "" {
+			continue
+		}
+		inputs = append(inputs, capacitymodel.DemandPoolInput{
+			NodePool:             pool,
+			ProvisionedKnown:     karpenter.NodePoolStatusResources(pool) != nil,
+			NodeClassReady:       classReadiness(pool),
+			ObservedMemberShapes: shapesByPool[pool.GetName()],
+		})
+	}
+	return inputs
+}
+
+// podEvaluatedAgainstKarpenterPools reports whether this pod's demand group
+// was evaluated against Karpenter NodePools at all — the demand-correlated
+// expansion of capacity relevance. The structural pin check stays as the other
+// qualifying path. Deliberately NOT gated on a compatible result: an
+// evaluated-and-rejected pod (the GPU-demand-no-pool-can-serve archetype) is
+// the case where the Demand diagnosis — including its no-pool-can-take-this
+// verdict — is most valuable, and filtering it out would withhold the link
+// exactly when the answer is bad news.
+func podEvaluatedAgainstKarpenterPools(pod *corev1.Pod, pools []capacitymodel.DemandPoolInput) bool {
+	if pod == nil || len(pools) == 0 {
+		return false
+	}
+	groups := capacitymodel.BuildDemandGroupModels(capacitymodel.DemandInput{GeneratedAt: time.Now(), Pods: []*corev1.Pod{pod}})
+	return len(groups) == 1
+}
+
+// podRequiresKarpenterNodePool reports whether the pod STRUCTURALLY pins itself
+// to a Karpenter NodePool — a nodeSelector on karpenter.sh/nodepool, or a
+// required nodeAffinity matchExpression on that key (any operator). Read from
+// the spec, never from the scheduler message, so the signal is a fact about
+// what the pod asked for rather than a parse of prose.
+func podRequiresKarpenterNodePool(pod *corev1.Pod) bool {
+	if pod == nil {
+		return false
+	}
+	if _, ok := pod.Spec.NodeSelector[karpenter.NodePoolLabelKey]; ok {
+		return true
+	}
+	if pod.Spec.Affinity == nil || pod.Spec.Affinity.NodeAffinity == nil {
+		return false
+	}
+	req := pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+	if req == nil {
+		return false
+	}
+	for _, term := range req.NodeSelectorTerms {
+		for _, e := range term.MatchExpressions {
+			if e.Key != karpenter.NodePoolLabelKey {
+				continue
+			}
+			// Only a positive requirement means the pod wants a Karpenter
+			// NodePool. NotIn / DoesNotExist ask to stay OFF one, so they must
+			// not qualify the issue as capacity-relevant.
+			if e.Operator == corev1.NodeSelectorOpIn ||
+				e.Operator == corev1.NodeSelectorOpExists {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // extractPodPlacement pulls the pod's node-targeting constraints (nodeSelector
@@ -1160,6 +1154,9 @@ func replicaSetDeploymentOwnerName(rs *appsv1.ReplicaSet) (string, bool) {
 // (e.g. transient "object is being deleted") so we don't over-report.
 func classifyAdmissionFailure(msg string) (string, bool) {
 	lower := strings.ToLower(msg)
+	if _, ok := ParseAdmissionWebhookNoEndpoints(msg); ok {
+		return "WebhookUnavailable", true
+	}
 	switch {
 	case strings.Contains(lower, "exceeded quota"), strings.Contains(lower, "failed quota"):
 		return "QuotaExceeded", true
@@ -1177,6 +1174,37 @@ func classifyAdmissionFailure(msg string) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+type AdmissionWebhookNoEndpoints struct {
+	ServiceNamespace string
+	ServiceName      string
+}
+
+var (
+	admissionWebhookURLPattern      = regexp.MustCompile(`https?://[^\s"]+`)
+	admissionNoEndpointsNamePattern = regexp.MustCompile(`(?i)no endpoints available for service "([a-z0-9]([-a-z0-9]*[a-z0-9])?)"`)
+)
+
+func ParseAdmissionWebhookNoEndpoints(message string) (AdmissionWebhookNoEndpoints, bool) {
+	lower := strings.ToLower(message)
+	if !strings.Contains(lower, "failed calling webhook") || !strings.Contains(lower, "no endpoints available for service") {
+		return AdmissionWebhookNoEndpoints{}, false
+	}
+	nameMatch := admissionNoEndpointsNamePattern.FindStringSubmatch(message)
+	urlText := admissionWebhookURLPattern.FindString(message)
+	if len(nameMatch) < 2 || urlText == "" {
+		return AdmissionWebhookNoEndpoints{}, false
+	}
+	parsed, err := url.Parse(urlText)
+	if err != nil {
+		return AdmissionWebhookNoEndpoints{}, false
+	}
+	hostParts := strings.Split(strings.ToLower(parsed.Hostname()), ".")
+	if len(hostParts) < 3 || hostParts[0] == "" || hostParts[1] == "" || hostParts[2] != "svc" || hostParts[0] != strings.ToLower(nameMatch[1]) {
+		return AdmissionWebhookNoEndpoints{}, false
+	}
+	return AdmissionWebhookNoEndpoints{ServiceNamespace: hostParts[1], ServiceName: hostParts[0]}, true
 }
 
 // ---- Post-bind detection ------------------------------------------------

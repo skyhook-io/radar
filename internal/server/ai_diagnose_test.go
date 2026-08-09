@@ -1,12 +1,49 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/ai"
+	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
 )
+
+// TestListAgents_Eligible pins the eligibility signal that drives the UI's
+// "install an agent to enable this" nudge: true only when the deployment mode
+// supports local BYO-agent diagnosis (no proxy/OIDC auth AND /mcp mounted) —
+// the same gate the boot-time engine init uses.
+func TestListAgents_Eligible(t *testing.T) {
+	mcp := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	cases := []struct {
+		name string
+		mode string
+		mcp  http.Handler
+		want bool
+	}{
+		{"local mode + mcp mounted", "none", mcp, true},
+		{"auth enabled", "proxy", mcp, false},
+		{"mcp disabled", "none", nil, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := &Server{authConfig: auth.Config{Mode: c.mode}, mcpHandler: c.mcp}
+			rec := httptest.NewRecorder()
+			s.handleListAgents(rec, httptest.NewRequest(http.MethodGet, "/api/agents", nil))
+			var resp struct {
+				Eligible bool `json:"eligible"`
+			}
+			if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if resp.Eligible != c.want {
+				t.Errorf("eligible = %v, want %v", resp.Eligible, c.want)
+			}
+		})
+	}
+}
 
 // TestLocalOriginOK pins the cross-origin guard on the process-spawning POST
 // endpoints: same-origin and exact loopback pass; look-alike hosts don't.

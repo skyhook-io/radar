@@ -26,9 +26,17 @@ type ResourceSummary struct {
 	Kind      string `json:"kind"`
 	Name      string `json:"name"`
 	Namespace string `json:"namespace,omitempty"`
-	Status    string `json:"status,omitempty"`
-	Ready     string `json:"ready,omitempty"`
-	Issue     string `json:"issue,omitempty"`
+	// Status is the DISPLAY state, computed the way `kubectl get` computes its
+	// STATUS column: what is true about this object right now.
+	Status string `json:"status,omitempty"`
+	Ready  string `json:"ready,omitempty"`
+	// Issue is the diagnostic hint — a reason worth looking at. It is
+	// deliberately NOT the same concept as Status and is allowed to be broader:
+	// it surfaces recent history too, so a pod that OOMKilled and recovered
+	// reports Status "Running" with Issue "OOMKilled". Read it as "notable,
+	// worth a look", never as "currently broken" — the health level
+	// (summaryContext.health, from pkg/health) is the authority on that.
+	Issue string `json:"issue,omitempty"`
 	Age       string `json:"age,omitempty"`
 	// Terminating signals that metadata.deletionTimestamp is set on the
 	// resource. AI agents need this signal to avoid suggesting
@@ -52,7 +60,17 @@ type ResourceSummary struct {
 	ClusterIP     string   `json:"clusterIP,omitempty"`
 	Hosts         []string `json:"hosts,omitempty"`
 	Restarts      int32    `json:"restarts,omitempty"`
-	Node          string   `json:"node,omitempty"`
+	// LastTerminatedReason is why the most recently terminated container
+	// exited (OOMKilled, Error, ...). It is HISTORY, not an active fault: a
+	// pod OOMKilled an hour ago that has been Ready since is healthy, and
+	// Status says so. Carried separately so an agent can tell "crashing now"
+	// from "crashed once, weeks ago" — a distinction a bare restart count
+	// destroys. Mirrors what `kubectl describe` shows as "Last State".
+	LastTerminatedReason string `json:"lastTerminatedReason,omitempty"`
+	// LastRestartedAge is how long ago that termination happened, mirroring
+	// kubectl's "2 (5m ago)" RESTARTS column. Empty when nothing restarted.
+	LastRestartedAge string `json:"lastRestartedAge,omitempty"`
+	Node             string `json:"node,omitempty"`
 	Strategy      string   `json:"strategy,omitempty"`
 	Completions   string   `json:"completions,omitempty"`
 	Duration      string   `json:"duration,omitempty"`
@@ -218,25 +236,42 @@ func summarizePod(pod *corev1.Pod) *ResourceSummary {
 		s.Image = pod.Spec.Containers[0].Image
 	}
 
-	// Ready count and restarts
-	ready, total := int32(0), int32(len(pod.Status.ContainerStatuses))
-	var restarts int32
-	for _, cs := range pod.Status.ContainerStatuses {
-		if cs.Ready {
-			ready++
+	// STATUS / READY / RESTARTS come from the kubectl-equivalent computation.
+	// Status is a DISPLAY string describing the pod's current state; Issue
+	// below is the separate diagnostic signal. Keeping them apart matters:
+	// routing display through getPodIssue would turn every display refinement
+	// (Completed, SchedulingGated) into a serialized "issue", which is a
+	// different, load-bearing concept.
+	d := computePodDisplay(pod)
+	s.Status = d.Status
+	s.Ready = d.Ready
+	s.Restarts = d.Restarts
+	// Termination history, deliberately NOT folded into Status: a pod
+	// OOMKilled an hour ago that has been Ready since is healthy now, and
+	// Status says "Running". The history is still worth carrying — a bare
+	// restart count can't distinguish "crashing right now" from "crashed once,
+	// weeks ago". This mirrors kubectl, which keeps STATUS current and shows
+	// the reason under "Last State" in describe.
+	// Only when something actually restarted, which is the rule kubectl applies
+	// to its own RESTARTS column ("7 (16h ago)" for a non-zero count, a bare
+	// "0" otherwise). Termination history without a restart would describe a
+	// container that ended and stayed ended — the pod's current state already
+	// says that, so the history adds nothing.
+	//
+	// A 4,355-resource sweep across five clusters found no row violating this,
+	// so the guard is an invariant made explicit rather than a fix for observed
+	// breakage. Note "Completed" IS legitimate history here: redis-master-0 in
+	// that sweep had 7 restarts each ending cleanly, which kubectl reports too —
+	// a service quietly exiting and being restarted is worth seeing.
+	if d.Restarts > 0 {
+		s.LastTerminatedReason = d.LastTerminatedBy
+		if !d.LastRestartedAt.IsZero() {
+			s.LastRestartedAge = age(d.LastRestartedAt)
 		}
-		restarts += cs.RestartCount
 	}
-	if total > 0 {
-		s.Ready = fmt.Sprintf("%d/%d", ready, total)
-	}
-	s.Restarts = restarts
 
-	// Detect issue
+	// Diagnostic issue — independent of the display status above.
 	s.Issue = getPodIssue(pod)
-	if s.Issue != "" {
-		s.Status = s.Issue
-	}
 
 	return s
 }
@@ -246,16 +281,23 @@ func summarizeDeployment(dep *appsv1.Deployment) *ResourceSummary {
 		Kind:      "Deployment",
 		Name:      dep.Name,
 		Namespace: dep.Namespace,
-		Ready:     fmt.Sprintf("%d/%d", dep.Status.ReadyReplicas, dep.Status.Replicas),
+		Ready:     fmt.Sprintf("%d/%d", dep.Status.ReadyReplicas, specReplicas(dep.Spec.Replicas)),
 		Strategy:  string(dep.Spec.Strategy.Type),
 		Age:       age(dep.CreationTimestamp.Time),
 	}
 
-	if dep.Status.ReadyReplicas == dep.Status.Replicas && dep.Status.Replicas > 0 {
-		s.Status = "Running"
-	} else if dep.Status.Replicas == 0 {
+	// Denominate by SPEC, not status. status.Replicas is what the controller
+	// has created so far; on a 3->10 scale-up it still reads 3 until the
+	// controller catches up, so a status-denominated row shows "3/3 Running"
+	// for a workload that is 7 replicas short of its target. kubectl uses
+	// spec.Replicas for exactly this reason.
+	desired := specReplicas(dep.Spec.Replicas)
+	switch {
+	case desired == 0:
 		s.Status = "Scaled to 0"
-	} else {
+	case dep.Status.ReadyReplicas == desired:
+		s.Status = "Running"
+	default:
 		s.Status = "Progressing"
 	}
 
@@ -384,13 +426,33 @@ func summarizeJob(job *batchv1.Job) *ResourceSummary {
 		Age:       age(job.CreationTimestamp.Time),
 	}
 
-	// Status from conditions
+	// Status from conditions. Terminal conditions win over spec intent: a Job
+	// that failed and was then suspended is still a failure, so Complete /
+	// Failed are checked before Suspended — mirroring health.jobVerdict
+	// (pkg/health/workload.go:63) so the two surfaces agree.
 	s.Status = "Running"
+	terminal := false
 	for _, c := range job.Status.Conditions {
 		if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
-			s.Status = "Complete"
+			s.Status, terminal = "Complete", true
 		} else if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
-			s.Status = "Failed"
+			s.Status, terminal = "Failed", true
+			// Preserve WHY it failed (BackoffLimitExceeded / DeadlineExceeded);
+			// "Failed" alone sends a reader back to the API for the reason.
+			if c.Reason != "" {
+				s.Issue = c.Reason
+			}
+		}
+	}
+
+	// Suspension is operator intent, not a fault — surfaced as its own field
+	// rather than folded into Status. CronJob already did this
+	// (s.Suspended below); Job did not, so a deliberately paused Job read as
+	// "Running" here while health.jobVerdict correctly called it Suspended.
+	if job.Spec.Suspend != nil && *job.Spec.Suspend {
+		s.Suspended = job.Spec.Suspend
+		if !terminal {
+			s.Status = "Suspended"
 		}
 	}
 
@@ -575,8 +637,9 @@ func summarizeReplicaSet(rs *appsv1.ReplicaSet) *ResourceSummary {
 		Kind:      "ReplicaSet",
 		Name:      rs.Name,
 		Namespace: rs.Namespace,
-		Ready:     fmt.Sprintf("%d/%d", rs.Status.ReadyReplicas, rs.Status.Replicas),
-		Age:       age(rs.CreationTimestamp.Time),
+		// Spec-denominated, same reasoning as summarizeDeployment.
+		Ready: fmt.Sprintf("%d/%d", rs.Status.ReadyReplicas, specReplicas(rs.Spec.Replicas)),
+		Age:   age(rs.CreationTimestamp.Time),
 	}
 
 	if len(rs.Spec.Template.Spec.Containers) > 0 {
@@ -597,6 +660,216 @@ func summarizeNamespace(ns *corev1.Namespace) *ResourceSummary {
 		Status: string(ns.Status.Phase),
 		Age:    age(ns.CreationTimestamp.Time),
 	}
+}
+
+// podDisplay is the `kubectl get pods` view of a pod — its STATUS, READY and
+// RESTARTS columns. The three are computed together because upstream derives
+// all of them from a single walk over the container statuses; splitting them
+// would duplicate that walk and let them drift apart.
+//
+// WHY THIS EXISTS: pod.Status.Phase alone is nearly useless as a status. It has
+// five values, and a Job pod whose main container finished while a sidecar
+// keeps running reports phase Running forever. Radar used to emit the bare
+// phase here, so such a pod read "Running" with no hint anything was wrong,
+// while `kubectl get pods` read "NotReady". This is a deliberate port of
+// upstream printPod (k8s.io/kubernetes/pkg/printers/internalversion).
+//
+// Two deliberate divergences from upstream, both retaining strictly more
+// information than upstream does:
+//   - No Terminating override. kubectl replaces STATUS wholesale with
+//     "Terminating" when deletionTimestamp is set; radar carries Terminating
+//     and Finalizers as dedicated fields, so overriding would DISCARD the
+//     underlying state during every routine rollout.
+//   - No NodeUnreachable -> "Unknown" branch. It is gated on a legacy
+//     pod.Status.Reason that modern kubelets rarely set; radar's health
+//     classifier keys on phase Unknown instead (pkg/health/pod.go:75).
+type podDisplay struct {
+	Status           string
+	Ready            string
+	Restarts         int32
+	LastRestartedAt  time.Time
+	LastTerminatedBy string
+}
+
+// isRestartableInitContainer reports whether an init container is a native
+// (KEP-753) sidecar — restartPolicy: Always — which runs alongside the main
+// containers rather than gating them.
+func isRestartableInitContainer(c *corev1.Container) bool {
+	return c != nil && c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways
+}
+
+func computePodDisplay(pod *corev1.Pod) podDisplay {
+	var d podDisplay
+
+	// Native sidecars count toward the READY denominator: they are real
+	// containers the pod depends on, not setup steps that finish.
+	totalContainers := len(pod.Spec.Containers)
+	initSpecs := make(map[string]*corev1.Container, len(pod.Spec.InitContainers))
+	for i := range pod.Spec.InitContainers {
+		c := &pod.Spec.InitContainers[i]
+		initSpecs[c.Name] = c
+		if isRestartableInitContainer(c) {
+			totalContainers++
+		}
+	}
+
+	reason := string(pod.Status.Phase)
+	if pod.Status.Reason != "" {
+		reason = pod.Status.Reason // Evicted, NodeAffinity, ...
+	}
+	for _, cond := range pod.Status.Conditions {
+		if cond.Type == corev1.PodScheduled && cond.Reason == corev1.PodReasonSchedulingGated {
+			reason = corev1.PodReasonSchedulingGated
+		}
+	}
+
+	readyContainers := 0
+	var restarts, sidecarRestarts int32
+	var lastRestart, lastSidecarRestart time.Time
+	var lastReason, lastSidecarReason string
+
+	noteTermination := func(t *corev1.ContainerStateTerminated, at *time.Time, who *string) {
+		if t == nil {
+			return
+		}
+		// A kubelet always stamps FinishedAt, but an unstamped termination
+		// still tells us WHY the container died — keep the reason and simply
+		// report no age for it, rather than dropping the fact entirely.
+		if t.FinishedAt.IsZero() {
+			if *who == "" {
+				*who = t.Reason
+			}
+			return
+		}
+		if at.IsZero() || t.FinishedAt.Time.After(*at) {
+			*at, *who = t.FinishedAt.Time, t.Reason
+		}
+	}
+
+	initializing := false
+	for i := range pod.Status.InitContainerStatuses {
+		cs := pod.Status.InitContainerStatuses[i]
+		spec := initSpecs[cs.Name]
+		restarts += cs.RestartCount
+		noteTermination(cs.LastTerminationState.Terminated, &lastRestart, &lastReason)
+		if isRestartableInitContainer(spec) {
+			sidecarRestarts += cs.RestartCount
+			noteTermination(cs.LastTerminationState.Terminated, &lastSidecarRestart, &lastSidecarReason)
+		}
+
+		switch {
+		case cs.State.Terminated != nil && cs.State.Terminated.ExitCode == 0:
+			continue // a completed init step: move on
+		case isRestartableInitContainer(spec) && cs.Started != nil && *cs.Started:
+			if cs.Ready {
+				readyContainers++
+			}
+			continue // native sidecar: running alongside, doesn't gate init
+		case cs.State.Terminated != nil:
+			switch {
+			case cs.State.Terminated.Reason != "":
+				reason = "Init:" + cs.State.Terminated.Reason
+			case cs.State.Terminated.Signal != 0:
+				reason = fmt.Sprintf("Init:Signal:%d", cs.State.Terminated.Signal)
+			default:
+				reason = fmt.Sprintf("Init:ExitCode:%d", cs.State.Terminated.ExitCode)
+			}
+			initializing = true
+		case cs.State.Waiting != nil && cs.State.Waiting.Reason != "" && cs.State.Waiting.Reason != "PodInitializing":
+			reason = "Init:" + cs.State.Waiting.Reason
+			initializing = true
+		default:
+			reason = fmt.Sprintf("Init:%d/%d", i, len(pod.Spec.InitContainers))
+			initializing = true
+		}
+		break // upstream stops at the first init container that isn't done
+	}
+
+	if !initializing || isPodInitialized(pod) {
+		// Init restarts stop counting once initialization is done; only native
+		// sidecars keep contributing, matching upstream.
+		restarts, lastRestart, lastReason = sidecarRestarts, lastSidecarRestart, lastSidecarReason
+		hasRunning := false
+		errorReason := ""
+		// Reverse order is upstream's: the FIRST container in spec order wins
+		// the reason, because later iterations overwrite earlier ones.
+		for i := len(pod.Status.ContainerStatuses) - 1; i >= 0; i-- {
+			cs := pod.Status.ContainerStatuses[i]
+			restarts += cs.RestartCount
+			noteTermination(cs.LastTerminationState.Terminated, &lastRestart, &lastReason)
+
+			switch {
+			case cs.State.Waiting != nil && cs.State.Waiting.Reason != "":
+				reason = cs.State.Waiting.Reason
+			case cs.State.Terminated != nil:
+				switch {
+				case cs.State.Terminated.Reason != "":
+					reason = cs.State.Terminated.Reason
+				case cs.State.Terminated.Signal != 0:
+					reason = fmt.Sprintf("Signal:%d", cs.State.Terminated.Signal)
+				default:
+					reason = fmt.Sprintf("ExitCode:%d", cs.State.Terminated.ExitCode)
+				}
+				if cs.State.Terminated.ExitCode != 0 {
+					errorReason = reason
+				}
+			case cs.Ready && cs.State.Running != nil:
+				hasRunning = true
+				readyContainers++
+			}
+		}
+
+		// THE CASE THAT MATTERS: a container reported Completed while another
+		// is still running. If the pod is Ready it is genuinely fine; if not,
+		// something finished and left the pod wedged — a Job whose sidecar
+		// never exits is the canonical example.
+		if reason == "Completed" {
+			switch {
+			case hasRunning && hasPodReadyCondition(pod):
+				reason = "Running"
+			case errorReason != "":
+				reason = errorReason
+			case hasRunning:
+				reason = "NotReady"
+			}
+		}
+	}
+
+	d.Status = reason
+	d.Restarts = restarts
+	d.LastRestartedAt = lastRestart
+	d.LastTerminatedBy = lastReason
+	if totalContainers > 0 {
+		d.Ready = fmt.Sprintf("%d/%d", readyContainers, totalContainers)
+	}
+	return d
+}
+
+// specReplicas resolves a workload's desired replica count. A nil pointer
+// means "unset", which Kubernetes defaults to 1 — not 0.
+func specReplicas(r *int32) int32 {
+	if r == nil {
+		return 1
+	}
+	return *r
+}
+
+func hasPodReadyCondition(pod *corev1.Pod) bool {
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
+func isPodInitialized(pod *corev1.Pod) bool {
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodInitialized && c.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
 }
 
 // getPodIssue extracts the primary issue from a pod's status.

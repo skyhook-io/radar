@@ -1,0 +1,35 @@
+suite: deployment identity env
+templates:
+  - deployment.yaml
+tests:
+  # Radar needs to know which object it is to describe itself for the Cloud
+  # connect handoff. That is read-only and must not depend on the RBAC that
+  # lets it patch itself, which is off by default.
+  - it: ships downward-API identity without self-upgrade RBAC
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MY_POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MY_DEPLOYMENT_NAME
+            value: RELEASE-NAME-radar
+  # Self-upgrade permission is decided by the apiserver against the Role that
+  # rbac.selfUpgrade creates. A marker env would go stale on exactly the path
+  # that matters: Hub's self-upgrade patches only the image, leaving the old
+  # pod template — so an env requirement would disable the mechanism that
+  # delivered the new binary.
+  - it: does not gate self-upgrade on a marker env
+    set:
+      rbac.selfUpgrade: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: RADAR_SELF_UPGRADE
+            value: "true"

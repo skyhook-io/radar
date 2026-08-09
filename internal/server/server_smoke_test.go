@@ -42,6 +42,14 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	// The Cloud-funnel rollout gate mints an install ID in ~/.radar on first
+	// use; redirect HOME so no test run touches the developer's real settings.
+	tmpHome, err := os.MkdirTemp("", "radar-server-test-home")
+	if err == nil {
+		os.Setenv("HOME", tmpHome)
+		os.Setenv("USERPROFILE", tmpHome)
+	}
+
 	replicas := int32(1)
 	brokenReplicas := int32(3)
 
@@ -361,6 +369,9 @@ func TestMain(m *testing.M) {
 	srv.Stop()
 	timeline.ResetStore()
 	k8s.ResetTestState()
+	if tmpHome != "" {
+		os.RemoveAll(tmpHome)
+	}
 
 	os.Exit(code)
 }
@@ -991,6 +1002,17 @@ func TestSmokeConnection(t *testing.T) {
 	assertKeys(t, body, "state", "context", "contexts")
 	if body["state"] != string(k8s.StateConnected) {
 		t.Errorf("expected state=%q, got %v", k8s.StateConnected, body["state"])
+	}
+}
+
+func TestSmokeConnectionStatusOnly(t *testing.T) {
+	// The UI's perpetual fallback poll opts out of context enumeration, which
+	// re-reads kubeconfig files under the client write lock on every hit.
+	var body map[string]any
+	assertOK(t, get(t, "/api/connection?contexts=0"), &body)
+	assertKeys(t, body, "state", "context", "authRecoveryOwed")
+	if _, present := body["contexts"]; present {
+		t.Error("contexts should be omitted when the poll asks for status only")
 	}
 }
 

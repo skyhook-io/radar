@@ -331,21 +331,34 @@ const (
 )
 
 type JobSummary struct {
-	Active       int32 `json:"active,omitempty"`
-	Succeeded    int32 `json:"succeeded,omitempty"`
-	Failed       int32 `json:"failed,omitempty"`
-	Completions  int32 `json:"completions,omitempty"`
-	Parallelism  int32 `json:"parallelism,omitempty"`
-	BackoffLimit int32 `json:"backoffLimit,omitempty"`
-	Suspended    bool  `json:"suspended,omitempty"`
+	Active                   int32                     `json:"active,omitempty"`
+	Succeeded                int32                     `json:"succeeded,omitempty"`
+	Failed                   int32                     `json:"failed,omitempty"`
+	Completions              int32                     `json:"completions,omitempty"`
+	Parallelism              int32                     `json:"parallelism,omitempty"`
+	BackoffLimit             int32                     `json:"backoffLimit,omitempty"`
+	Suspended                bool                      `json:"suspended,omitempty"`
+	ContainerCompletionSplit *ContainerCompletionSplit `json:"containerCompletionSplit,omitempty"`
 }
 
 type CronJobSummary struct {
-	Schedule           string       `json:"schedule,omitempty"`
-	Suspended          bool         `json:"suspended,omitempty"`
-	ActiveJobs         []ContextRef `json:"activeJobs,omitempty"`
-	LastScheduleTime   string       `json:"lastScheduleTime,omitempty"`
-	LastSuccessfulTime string       `json:"lastSuccessfulTime,omitempty"`
+	Schedule                 string                    `json:"schedule,omitempty"`
+	Suspended                bool                      `json:"suspended,omitempty"`
+	ActiveJobs               []ContextRef              `json:"activeJobs,omitempty"`
+	LastScheduleTime         string                    `json:"lastScheduleTime,omitempty"`
+	LastSuccessfulTime       string                    `json:"lastSuccessfulTime,omitempty"`
+	ContainerCompletionSplit *ContainerCompletionSplit `json:"containerCompletionSplit,omitempty"`
+}
+
+// ContainerCompletionSplit is a fact-only observation. The running containers
+// must be inspected before treating any as a stuck sidecar.
+type ContainerCompletionSplit struct {
+	Pod               string   `json:"pod,omitempty"`
+	Job               string   `json:"job,omitempty"`
+	ExitedContainer   string   `json:"exitedContainer,omitempty"`
+	RunningContainers []string `json:"runningContainers,omitempty"`
+	SinceSeconds      int64    `json:"sinceSeconds,omitempty"`
+	Note              string   `json:"note,omitempty"`
 }
 
 type HPASummary struct {

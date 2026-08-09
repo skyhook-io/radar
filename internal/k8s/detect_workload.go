@@ -7,6 +7,8 @@ import (
 
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/pkg/cronsched"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
@@ -171,14 +173,16 @@ func maxedReasonText(diagnosis *hpadiag.Diagnosis, reason hpadiag.Reason) string
 type CronJobProblem struct {
 	Name      string
 	Namespace string
-	Problem   string // "stale" or "never-scheduled"
+	Problem   string // "stale", "never-scheduled", or "repeated-without-success"
 	Reason    string
+	Duration  time.Duration
 }
 
-// DetectCronJobProblems finds non-suspended CronJobs that haven't run recently.
-func DetectCronJobProblems(cronjobs []*batchv1.CronJob) []CronJobProblem {
+// DetectCronJobProblems finds non-suspended CronJobs whose schedule or success
+// history indicates that they are not producing successful runs.
+func DetectCronJobProblems(cronjobs []*batchv1.CronJob, jobs []*batchv1.Job, tracker *cronJobScheduleObservationTracker, now time.Time) []CronJobProblem {
 	var problems []CronJobProblem
-	now := time.Now()
+	jobProblemOwners := cronJobOwnersWithJobProblems(jobs, now)
 	for _, cj := range cronjobs {
 		if cj.Spec.Suspend != nil && *cj.Spec.Suspend {
 			continue
@@ -193,6 +197,18 @@ func DetectCronJobProblems(cronjobs []*batchv1.CronJob) []CronJobProblem {
 					Problem:   "stale",
 					Reason:    fmt.Sprintf("last run %dh ago", int(sinceLast.Hours())),
 				})
+				continue
+			}
+			if !jobProblemOwners[cj.UID] {
+				if reason, duration, ok := repeatedCronJobSchedulesWithoutSuccess(cj, tracker, now); ok {
+					problems = append(problems, CronJobProblem{
+						Name:      cj.Name,
+						Namespace: cj.Namespace,
+						Problem:   "repeated-without-success",
+						Reason:    reason,
+						Duration:  duration,
+					})
+				}
 			}
 		} else if now.Sub(cj.CreationTimestamp.Time) > threshold {
 			problems = append(problems, CronJobProblem{
@@ -204,4 +220,55 @@ func DetectCronJobProblems(cronjobs []*batchv1.CronJob) []CronJobProblem {
 		}
 	}
 	return problems
+}
+
+func cronJobOwnersWithJobProblems(jobs []*batchv1.Job, now time.Time) map[types.UID]bool {
+	owners := map[types.UID]bool{}
+	for _, job := range jobs {
+		if !jobHasDetectedProblem(job, now) {
+			continue
+		}
+		controller := metav1.GetControllerOf(job)
+		if controller != nil && controller.Kind == "CronJob" && controller.UID != "" {
+			owners[controller.UID] = true
+		}
+	}
+	return owners
+}
+
+func jobHasDetectedProblem(job *batchv1.Job, now time.Time) bool {
+	if job == nil {
+		return false
+	}
+	if _, ok := terminatingProblem("Job", "batch", job, now); ok {
+		return true
+	}
+	return failedJobCondition(job) != nil || stuckActiveJob(job, now)
+}
+
+func stuckActiveJob(job *batchv1.Job, now time.Time) bool {
+	return job != nil && job.Status.Active > 0 && job.Status.Succeeded == 0 && job.Status.Failed == 0 &&
+		now.Sub(job.CreationTimestamp.Time) > time.Hour
+}
+
+func repeatedCronJobSchedulesWithoutSuccess(cj *batchv1.CronJob, tracker *cronJobScheduleObservationTracker, now time.Time) (string, time.Duration, bool) {
+	// Replace can delete an unfinished Job before the Job detectors accumulate
+	// evidence. Allow retains Jobs for those detectors, while Forbid stops
+	// advancing lastScheduleTime and is covered as stale.
+	if cj.Spec.ConcurrencyPolicy != batchv1.ReplaceConcurrent || len(cj.Status.Active) == 0 {
+		return "", 0, false
+	}
+
+	if cj.Status.LastScheduleTime == nil || cj.Status.LastScheduleTime.Time.After(now) {
+		return "", 0, false
+	}
+	schedules, sequenceSince := tracker.withoutRecordedSuccess(cj.UID)
+	if schedules < cronJobScheduleObservationThreshold || sequenceSince.IsZero() || sequenceSince.After(now) {
+		return "", 0, false
+	}
+	if success := cj.Status.LastSuccessfulTime; success != nil && !success.IsZero() && !success.Time.Before(sequenceSince) {
+		return "", 0, false
+	}
+	return fmt.Sprintf("%d consecutive schedules observed without a recorded success; last scheduled %s ago",
+		schedules, FormatAge(now.Sub(cj.Status.LastScheduleTime.Time))), now.Sub(sequenceSince), true
 }

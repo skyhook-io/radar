@@ -1,7 +1,9 @@
 {{- /*
-Bind Helm add-on ClusterRoles to cloud tiers. radar-helm goes to owner +
+Bind Helm add-on ClusterRoles to Radar tiers. radar-helm goes to owner +
 member; radar-helm-admin goes to owner only — see clusterrole-helm-admin.yaml
 for the rationale. Viewer is intentionally not bound; viewers never install.
+The cloud:* subjects below keep rolling hub and chart upgrades compatible
+until v2.
 
 Gating note: cloud.enabled is sufficient (matches sibling cloud-rbac.yaml
 and the upstream clusterrole-helm.yaml which uses
@@ -10,7 +12,7 @@ and the upstream clusterrole-helm.yaml which uses
 installs that set cloud.enabled=true but left auth.mode at the default —
 which is the shape produced by the cloud install wizard. The underlying
 ClusterRoles still rendered, so it looked like Helm RBAC was wired up
-when in fact cloud:owner/cloud:member groups had no path to them.
+when in fact radar:owner/radar:member groups had no path to them.
 Runtime forces --auth-mode=proxy via RADAR_CLOUD_MODE when cloud.enabled
 is set, so the bindings are always meaningful here regardless of the
 chart-values auth.mode.

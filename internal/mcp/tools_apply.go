@@ -55,7 +55,7 @@ func handleApplyResource(ctx context.Context, req *mcp.CallToolRequest, input ap
 
 	dynClient := k8s.DynamicClientFromContext(ctx)
 	if dynClient == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 
 	verify := input.Verify == nil || *input.Verify

@@ -37,6 +37,11 @@ type Config struct {
 	// pods. Empty falls back to busybox:latest; set it to a reachable mirror for
 	// air-gapped / private-registry clusters.
 	DebugImage string `json:"debugImage,omitempty"`
+
+	// ReachabilityImage is the image for the in-cluster reachability probe Job
+	// (`radar probe`). Empty falls back to RADAR_IMAGE, then the version-matched
+	// published Radar image; set it to a reachable mirror for air-gapped clusters.
+	ReachabilityImage string `json:"reachabilityImage,omitempty"`
 	// ArgoCDURL is the Argo CD API server URL. Empty enables auto-discovery.
 	ArgoCDURL string `json:"argoCdUrl,omitempty"`
 	// ArgoCDToken is the Argo CD API bearer token. Stored in plain text in

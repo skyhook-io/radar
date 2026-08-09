@@ -120,7 +120,7 @@ func TestCompose_CrashLoopCurrentStateControlsRankingAndGrouping(t *testing.T) {
 		t.Fatalf("catalog group cause = %q, want serving recovery copy", grouped.Cause)
 	}
 
-	related := RelatedIssues(provider, []string{"prod"}, "", "Pod", "prod", "catalog-a")
+	related := RelatedIssues(provider, RelatedIssueOptions{Namespaces: []string{"prod"}}, "", "Pod", "prod", "catalog-a")
 	if len(related) != 1 || related[0].Severity != SeverityWarning {
 		t.Fatalf("related issues for recovered pod = %+v, want its warning crashloop", related)
 	}

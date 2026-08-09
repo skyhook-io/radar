@@ -65,6 +65,13 @@ func (s *Server) handleSelfUpgrade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Identity ships on every install (read-only self-description needs it), so
+	// its presence no longer implies self-upgrade RBAC. Deliberately NOT gated
+	// on a chart-set marker env: Hub's self-upgrade patches only the container
+	// image, so a cluster that upgrades this way keeps its old pod template —
+	// a new env requirement would permanently 503 the very mechanism that
+	// delivered the binary. Authorization is left to the apiserver, whose
+	// Forbidden on the Get below is translated into the same guidance.
 	ns := os.Getenv("MY_POD_NAMESPACE")
 	deployment := os.Getenv("MY_DEPLOYMENT_NAME")
 	if ns == "" || deployment == "" {

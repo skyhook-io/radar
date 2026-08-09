@@ -62,12 +62,20 @@ type Config struct {
 	// is empty.
 	APIServerURL string
 
-	// SelfUpgradeAvailable reports whether this installation has the
-	// chart-provided namespace/deployment configuration and RBAC needed by
-	// Radar's in-cluster self-upgrade endpoint. It is advertised explicitly on
-	// every Cloud tunnel handshake so the Hub never has to infer capability
-	// from the Radar version.
-	SelfUpgradeAvailable bool
+	// SelfUpgradeAvailable reports whether this installation has the RBAC
+	// Radar's in-cluster self-upgrade endpoint needs. It is advertised
+	// explicitly on every Cloud tunnel handshake so the Hub never has to infer
+	// capability from the Radar version.
+	//
+	// It is a func, not a bool, because the answer can change without
+	// restarting Radar: enabling rbac.selfUpgrade adds a Role and RoleBinding
+	// but leaves the pod template untouched, so a value sampled once at
+	// startup would stay stale for the process lifetime. Re-evaluated per
+	// handshake, and re-checked periodically while a tunnel is up — a stable
+	// change closes the session so the next handshake re-advertises, since a
+	// healthy tunnel might otherwise never hand-shake again. Nil means
+	// unavailable.
+	SelfUpgradeAvailable func() bool
 
 	// Handler is the HTTP handler to serve over tunneled streams — typically
 	// Radar's Server.Handler() (chi router).
@@ -113,7 +121,8 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 
 		log.Printf("[cloud] dialing Radar Cloud: %s cluster=%s", cfg.URL, cfg.ClusterID)
-		sess, err := dial(ctx, cfg)
+		advertised := cfg.SelfUpgradeAvailable != nil && cfg.SelfUpgradeAvailable()
+		sess, err := dial(ctx, cfg, advertised)
 		if err != nil {
 			failures++
 			log.Printf("[cloud] dial failed: %v (retry in %s)", err, backoff)
@@ -131,6 +140,9 @@ func Run(ctx context.Context, cfg Config) error {
 		log.Printf("[cloud] connected to Radar Cloud; serving streams")
 		connectedAt := time.Now()
 
+		if cfg.SelfUpgradeAvailable != nil {
+			go watchSelfUpgradeAdvertisement(ctx, cfg.SelfUpgradeAvailable, advertised, sess, selfUpgradeRecheckInterval)
+		}
 		err = serve(ctx, sess, cfg.Handler)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("[cloud] session ended: %v", err)
@@ -151,6 +163,49 @@ func Run(ctx context.Context, cfg Config) error {
 				return ctx.Err()
 			}
 			backoff = nextBackoff(backoff, maxBackoff)
+		}
+	}
+}
+
+const selfUpgradeRecheckInterval = 3 * time.Minute
+
+// advertisementSession is the slice of *yamux.Session the capability watcher
+// needs; an interface so tests can observe the close decision without a
+// real tunnel.
+type advertisementSession interface {
+	CloseChan() <-chan struct{}
+	Close() error
+}
+
+// watchSelfUpgradeAdvertisement closes the session when the self-upgrade
+// capability stops matching what this session's handshake advertised, forcing
+// the reconnect loop to re-dial and re-advertise. Without it, enabling
+// rbac.selfUpgrade — which adds only RBAC objects, restarting nothing — would
+// leave a healthy long-lived tunnel advertising the old answer indefinitely.
+// Two consecutive mismatches are required so one transient probe failure
+// cannot cycle a healthy tunnel.
+func watchSelfUpgradeAdvertisement(ctx context.Context, current func() bool, advertised bool, sess advertisementSession, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	mismatches := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-sess.CloseChan():
+			return
+		case <-ticker.C:
+			if current() == advertised {
+				mismatches = 0
+				continue
+			}
+			mismatches++
+			if mismatches < 2 {
+				continue
+			}
+			log.Printf("[cloud] self-upgrade capability changed (advertised %t); reconnecting to re-advertise", advertised)
+			sess.Close()
+			return
 		}
 	}
 }

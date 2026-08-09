@@ -276,6 +276,8 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "projectcontour.io", Versions: []string{"v1"}, Resource: "httpproxies", Kind: "HTTPProxy", Namespaced: true},
 	{Group: "postgresql.cnpg.io", Versions: []string{"v1"}, Resource: "clusters", Kind: "Cluster", Namespaced: true},
 	{Group: "postgresql.cnpg.io", Versions: []string{"v1"}, Resource: "poolers", Kind: "Pooler", Namespaced: true},
+	{Group: "postgresql.cnpg.io", Versions: []string{"v1"}, Resource: "backups", Kind: "Backup", Namespaced: true},
+	{Group: "postgresql.cnpg.io", Versions: []string{"v1"}, Resource: "scheduledbackups", Kind: "ScheduledBackup", Namespaced: true},
 	{Group: "cluster.x-k8s.io", Versions: []string{"v1beta2", "v1beta1"}, Resource: "clusters", Kind: "Cluster", Namespaced: true},
 	{Group: "cluster.x-k8s.io", Versions: []string{"v1beta2", "v1beta1"}, Resource: "machinedeployments", Kind: "MachineDeployment", Namespaced: true},
 	{Group: "cluster.x-k8s.io", Versions: []string{"v1beta2", "v1beta1"}, Resource: "machinesets", Kind: "MachineSet", Namespaced: true},
@@ -287,8 +289,15 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "controlplane.cluster.x-k8s.io", Versions: []string{"v1beta2", "v1beta1"}, Resource: "kubeadmcontrolplanes", Kind: "KubeadmControlPlane", Namespaced: true},
 	{Group: "bootstrap.cluster.x-k8s.io", Versions: []string{"v1beta2", "v1beta1"}, Resource: "kubeadmconfigs", Kind: "KubeadmConfig", Namespaced: true},
 	{Group: "bootstrap.cluster.x-k8s.io", Versions: []string{"v1beta2", "v1beta1"}, Resource: "kubeadmconfigtemplates", Kind: "KubeadmConfigTemplate", Namespaced: true},
+	// The issue adapter reads all six: a failed Backup is only visible if its
+	// informer is running, and BackupRepository/BSL are the backup targets whose
+	// health explains why the runs fail.
+	{Group: "velero.io", Versions: []string{"v1"}, Resource: "backups", Kind: "Backup", Namespaced: true},
+	{Group: "velero.io", Versions: []string{"v1"}, Resource: "restores", Kind: "Restore", Namespaced: true},
+	{Group: "velero.io", Versions: []string{"v1"}, Resource: "schedules", Kind: "Schedule", Namespaced: true},
 	{Group: "velero.io", Versions: []string{"v1"}, Resource: "backupstoragelocations", Kind: "BackupStorageLocation", Namespaced: true},
 	{Group: "velero.io", Versions: []string{"v1"}, Resource: "volumesnapshotlocations", Kind: "VolumeSnapshotLocation", Namespaced: true},
+	{Group: "velero.io", Versions: []string{"v1"}, Resource: "backuprepositories", Kind: "BackupRepository", Namespaced: true},
 	{Group: "aquasecurity.github.io", Versions: []string{"v1alpha1"}, Resource: "vulnerabilityreports", Kind: "VulnerabilityReport", Namespaced: true},
 	{Group: "aquasecurity.github.io", Versions: []string{"v1alpha1"}, Resource: "configauditreports", Kind: "ConfigAuditReport", Namespaced: true},
 	{Group: "aquasecurity.github.io", Versions: []string{"v1alpha1"}, Resource: "exposedsecretreports", Kind: "ExposedSecretReport", Namespaced: true},
@@ -318,11 +327,37 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	// provider-helm
 	{Group: "helm.crossplane.io", Versions: []string{"v1beta1"}, Resource: "providerconfigs", Kind: "ProviderConfig", Namespaced: false},
 	{Group: "helm.crossplane.io", Versions: []string{"v1beta1"}, Resource: "releases", Kind: "Release", Namespaced: false},
-	// Kyverno admission/policy CRDs. Watching Policy/ClusterPolicy directly
-	// is what flips the conditional PolicyReport warmup (see policy_reports.go) —
-	// presence of these in discovery is the signal that the cluster runs Kyverno.
+	// Kyverno admission/policy CRDs. Presence of either family in discovery is
+	// the signal that the cluster runs Kyverno, which flips the conditional
+	// PolicyReport warmup (see policy_reports.go).
+	//
+	// Legacy kyverno.io family — deprecated in Kyverno 1.18, removal planned
+	// for 1.20. Kept because the installed base still runs it; it gets no new
+	// feature investment.
 	{Group: "kyverno.io", Versions: []string{"v1", "v2", "v2beta1"}, Resource: "policies", Kind: "Policy", Namespaced: true},
 	{Group: "kyverno.io", Versions: []string{"v1", "v2", "v2beta1"}, Resource: "clusterpolicies", Kind: "ClusterPolicy", Namespaced: false},
+	{Group: "kyverno.io", Versions: []string{"v2", "v2beta1"}, Resource: "cleanuppolicies", Kind: "CleanupPolicy", Namespaced: true},
+	{Group: "kyverno.io", Versions: []string{"v2", "v2beta1"}, Resource: "clustercleanuppolicies", Kind: "ClusterCleanupPolicy", Namespaced: false},
+	{Group: "kyverno.io", Versions: []string{"v2", "v2beta1"}, Resource: "policyexceptions", Kind: "PolicyException", Namespaced: true},
+	// Modern policies.kyverno.io CEL family — stabilized at v1 in Kyverno
+	// 1.17/1.18, and the family that survives the 1.20 removal. Discovery
+	// already auto-watches small CRDs, so these entries buy the guarantee plus
+	// partial-discovery recovery rather than first-time visibility.
+	//
+	// PolicyException appears in BOTH groups with the same Kind and the same
+	// plural but a different spec shape; consumers must dispatch on the API
+	// group, never on the plural alone.
+	{Group: "policies.kyverno.io", Versions: []string{"v1", "v1beta1", "v1alpha1"}, Resource: "validatingpolicies", Kind: "ValidatingPolicy", Namespaced: false},
+	{Group: "policies.kyverno.io", Versions: []string{"v1", "v1beta1", "v1alpha1"}, Resource: "imagevalidatingpolicies", Kind: "ImageValidatingPolicy", Namespaced: false},
+	{Group: "policies.kyverno.io", Versions: []string{"v1", "v1beta1", "v1alpha1"}, Resource: "mutatingpolicies", Kind: "MutatingPolicy", Namespaced: false},
+	{Group: "policies.kyverno.io", Versions: []string{"v1", "v1beta1", "v1alpha1"}, Resource: "generatingpolicies", Kind: "GeneratingPolicy", Namespaced: false},
+	{Group: "policies.kyverno.io", Versions: []string{"v1", "v1beta1", "v1alpha1"}, Resource: "deletingpolicies", Kind: "DeletingPolicy", Namespaced: false},
+	{Group: "policies.kyverno.io", Versions: []string{"v1", "v1beta1"}, Resource: "namespacedvalidatingpolicies", Kind: "NamespacedValidatingPolicy", Namespaced: true},
+	{Group: "policies.kyverno.io", Versions: []string{"v1", "v1beta1"}, Resource: "namespacedimagevalidatingpolicies", Kind: "NamespacedImageValidatingPolicy", Namespaced: true},
+	{Group: "policies.kyverno.io", Versions: []string{"v1", "v1beta1"}, Resource: "namespacedmutatingpolicies", Kind: "NamespacedMutatingPolicy", Namespaced: true},
+	{Group: "policies.kyverno.io", Versions: []string{"v1", "v1beta1"}, Resource: "namespacedgeneratingpolicies", Kind: "NamespacedGeneratingPolicy", Namespaced: true},
+	{Group: "policies.kyverno.io", Versions: []string{"v1", "v1beta1"}, Resource: "namespaceddeletingpolicies", Kind: "NamespacedDeletingPolicy", Namespaced: true},
+	{Group: "policies.kyverno.io", Versions: []string{"v1", "v1beta1", "v1alpha1"}, Resource: "policyexceptions", Kind: "PolicyException", Namespaced: true},
 	// DRA (built-in resource.k8s.io, GA in K8s 1.34). Normal discovery flags
 	// these IsCRD (group not in coreAPIGroups) and watches them; the fallback
 	// entries cover partial-discovery clusters. v1beta2 serves 1.32-1.33.

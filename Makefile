@@ -28,6 +28,23 @@ deploy-test: frontend embed
 	kubectl rollout status deploy/$(CLUSTER_DEPLOY) -n $(CLUSTER_NS) --timeout=60s
 	@echo "=== Done. Tail logs: kubectl logs -n $(CLUSTER_NS) -l app.kubernetes.io/name=$(CLUSTER_DEPLOY) -f ==="
 
+# Build a probe image from the CURRENT code and load it into a kind cluster, for
+# developing the in-cluster reachability probe. A -dirty local build's version is
+# not a published tag, so the default image won't exist - load a local one and run
+# radar with --reachability-image $(PROBE_IMAGE). Binary path /radar + ENTRYPOINT
+# match the official image so the probe Job's `["/radar","probe",...]` command works.
+KIND_CLUSTER ?= test
+PROBE_IMAGE  ?= radar-probe:dev
+kind-load-probe:
+	@echo "Building probe binary for linux/$$(go env GOARCH)..."
+	GOOS=linux GOARCH=$$(go env GOARCH) CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o /tmp/radar-probe-bin ./cmd/explorer
+	@echo 'FROM gcr.io/distroless/static-debian12:nonroot' > /tmp/Dockerfile.probe
+	@echo 'COPY radar-probe-bin /radar' >> /tmp/Dockerfile.probe
+	@echo 'ENTRYPOINT ["/radar"]' >> /tmp/Dockerfile.probe
+	docker build -t $(PROBE_IMAGE) -f /tmp/Dockerfile.probe /tmp
+	kind load docker-image $(PROBE_IMAGE) --name $(KIND_CLUSTER)
+	@echo "Loaded $(PROBE_IMAGE) into kind/$(KIND_CLUSTER). Run radar with: --reachability-image $(PROBE_IMAGE)"
+
 ## Build targets
 
 # Build the complete application (frontend + embedded binary)

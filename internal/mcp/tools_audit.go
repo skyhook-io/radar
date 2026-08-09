@@ -54,7 +54,7 @@ func handleGetAudit(ctx context.Context, req *mcp.CallToolRequest, input auditIn
 
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 
 	var requested []string

@@ -208,7 +208,9 @@ func TestHandleDiagnose_InvalidKind(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	ctx := withClusterAdmin(t, "admin")
 
-	_, _, err := handleDiagnose(ctx, nil, diagnoseInput{Kind: "service", Namespace: "alpha", Name: "alpha-pod"})
+	// configmap is not a workload, not a GitOps reconciler, and not a
+	// network entry kind - diagnose should reject it.
+	_, _, err := handleDiagnose(ctx, nil, diagnoseInput{Kind: "configmap", Namespace: "alpha", Name: "alpha-cm"})
 	if err == nil {
 		t.Fatalf("expected error for unsupported kind, got nil")
 	}
@@ -461,5 +463,15 @@ func TestIsReplicaSetOf(t *testing.T) {
 		if got := isReplicaSetOf(c.rs, c.deploy); got != c.want {
 			t.Errorf("isReplicaSetOf(%q, %q) = %v, want %v", c.rs, c.deploy, got, c.want)
 		}
+	}
+}
+
+func TestIssueNamespacesForResourcePreservesClusterScope(t *testing.T) {
+	if got := issueNamespacesForResource(""); got != nil {
+		t.Fatalf("cluster-scoped namespaces = %#v, want nil", got)
+	}
+	got := issueNamespacesForResource("team-a")
+	if len(got) != 1 || got[0] != "team-a" {
+		t.Fatalf("namespaced namespaces = %#v, want [team-a]", got)
 	}
 }

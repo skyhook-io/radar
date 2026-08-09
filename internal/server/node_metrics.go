@@ -6,6 +6,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/capacity"
 	"github.com/skyhook-io/radar/internal/k8s"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -89,7 +90,7 @@ func listPodsScoped(podLister v1listers.PodLister, namespaces []string) []*corev
 }
 
 // capacityRequests carries the informer-derived halves of the capacity
-// picture: node capacity plus scheduled-pod requests (completed pods
+// picture: node allocatable capacity plus scheduled-pod requests (completed pods
 // excluded). Usage is the metrics-server probe's job (fetchNodeUsage).
 type capacityRequests struct {
 	cpuCapMillis int64
@@ -99,26 +100,11 @@ type capacityRequests struct {
 }
 
 func computeCapacityRequests(nodes []*corev1.Node, pods []*corev1.Pod) capacityRequests {
-	var cr capacityRequests
-	for _, n := range nodes {
-		cr.cpuCapMillis += n.Status.Capacity.Cpu().MilliValue()
-		cr.memCapBytes += n.Status.Capacity.Memory().Value()
+	accounting := capacity.AccountResources(nodes, pods)
+	return capacityRequests{
+		cpuCapMillis: accounting.Allocatable.Cpu().MilliValue(),
+		memCapBytes:  accounting.Allocatable.Memory().Value(),
+		cpuReqMillis: accounting.ScheduledRequests.Cpu().MilliValue(),
+		memReqBytes:  accounting.ScheduledRequests.Memory().Value(),
 	}
-	for _, pod := range pods {
-		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
-			continue
-		}
-		for _, c := range pod.Spec.Containers {
-			if c.Resources.Requests == nil {
-				continue
-			}
-			if cpu, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
-				cr.cpuReqMillis += cpu.MilliValue()
-			}
-			if mem, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
-				cr.memReqBytes += mem.Value()
-			}
-		}
-	}
-	return cr
 }

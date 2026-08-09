@@ -82,7 +82,7 @@ type promRulesResponse struct {
 }
 
 type discoverMetricsInput struct {
-	Match string `json:"match,omitempty" jsonschema:"PromQL series selector to filter, e.g. {__name__=~\"node_cpu.*|node_memory.*\"} or {namespace=\"payments\"}. Combine patterns with regex | to reduce calls. REQUIRED when label is empty (unfiltered metric-name listing is rarely useful)"`
+	Match string `json:"match,omitempty" jsonschema:"PromQL series selector to filter, e.g. {__name__=~\"node_cpu.*|node_memory.*\"} or {namespace=\"payments\"}. Combine patterns with regex | to reduce calls. REQUIRED when label is empty (unfiltered metric-name listing is rarely useful). This tool takes no namespace argument — scope to a namespace inside the selector, as {namespace=\"payments\"}"`
 	Label string `json:"label,omitempty" jsonschema:"discover values of this label instead of metric names, e.g. namespace, pod, job, instance"`
 	Limit int    `json:"limit,omitempty" jsonschema:"max values returned (default 100, max 500)"`
 }

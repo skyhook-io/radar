@@ -92,3 +92,36 @@ func TestExtractLabels_KeepsGitOpsIdentityLabels(t *testing.T) {
 		t.Errorf("non-grouping label leaked through the filter")
 	}
 }
+
+func TestExtractLabels_KeepsKarpenterIdentityLabels(t *testing.T) {
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
+		"karpenter.sh/nodepool":       "general",
+		"karpenter.sh/nodeclaim":      "general-abc",
+		"karpenter.sh/capacity-type":  "spot",
+		"topology.kubernetes.io/zone": "us-east-1a",
+	}}}
+
+	got := ExtractLabels(node)
+	for _, key := range []string{"karpenter.sh/nodepool", "karpenter.sh/nodeclaim", "karpenter.sh/capacity-type"} {
+		if got[key] == "" {
+			t.Errorf("Karpenter label %s was filtered out", key)
+		}
+	}
+	if _, ok := got["topology.kubernetes.io/zone"]; ok {
+		t.Error("unapproved topology label leaked through the filter")
+	}
+}
+
+func TestNewK8sEventTimelineEventUsesInvolvedObjectUID(t *testing.T) {
+	event := &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{UID: "event-uid"},
+		InvolvedObject: corev1.ObjectReference{
+			APIVersion: "karpenter.sh/v1", Kind: "NodeClaim", Name: "claim-a", UID: "claim-uid",
+		},
+	}
+
+	got := NewK8sEventTimelineEvent(event, nil)
+	if got.ID != "event-uid" || got.UID != "claim-uid" {
+		t.Fatalf("timeline identity = id %q, uid %q", got.ID, got.UID)
+	}
+}

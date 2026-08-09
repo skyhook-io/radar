@@ -29,6 +29,12 @@ func enrichIdentity(i *Issue) {
 	i.ID = subject.StableID(scope, resourceKey(subjRef.Group, subjRef.Kind, subjRef.Namespace, subjRef.Name), discriminator(i))
 }
 
+// RebindIdentity regenerates subject-derived fields after a caller replaces an
+// owner to enforce its visibility boundary.
+func RebindIdentity(i *Issue) {
+	enrichIdentity(i)
+}
+
 // discriminator is the cause portion of the issue ID. Category alone is the
 // user-facing rollup but too coarse to be the durable identity for categories
 // where one subject can have several distinct causes: it would collapse them

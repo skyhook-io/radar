@@ -32,11 +32,29 @@ export interface Target {
   kind: string;
   namespace: string;
   name: string;
+  /** The issue this investigation is for, when it came from an issue. Hosts
+   *  that group sessions by issue key on it; the rest carry it and ignore it. */
+  issueId?: string;
+  /** Start a new session instead of continuing one the backend would otherwise
+   *  return for this target. Rides here rather than as a separate argument so
+   *  the consent-deferred path replays one object — a parallel "was it fresh?"
+   *  state is a thing that can fall out of sync with the target it describes. */
+  fresh?: boolean;
 }
 export type DiagnoseView = "home" | "investigation";
 
+// Setup readiness of the local AI-diagnosis feature, derived from the agents API:
+//  - "ready":         an agent is installed and the engine is running (available)
+//  - "needs-install": the feature is supported here but no agent CLI is installed
+//  - "needs-restart": a supported agent is now on PATH but Radar booted before it
+//                     existed (the engine is decided once, at startup)
+//  - "off":           not available in this deployment (proxy/OIDC auth, --no-mcp,
+//                     or an embed host) — no install nudge would help
+export type DiagnoseSetup = "ready" | "needs-install" | "needs-restart" | "off";
+
 interface DiagnoseCtx {
   available: boolean; // an agent CLI is present (button/entry gate)
+  setupState: DiagnoseSetup; // readiness for the setup nudge (see DiagnoseSetup)
   agentLabel: string; // label of the selected agent, e.g. "Claude Code"
   hosted: boolean; // selected agent runs on the host's backend, not this machine
   agents: AgentInfo[]; // supported agents detected on PATH (for the picker)
@@ -56,6 +74,10 @@ interface DiagnoseCtx {
   historyDegraded: boolean; // persistence broke — history won't survive a restart
   needsConsent: boolean; // a start is pending the one-time consent
   startError: string | null;
+  // Kept apart from startError: the consent card renders this as "why your
+  // approval was refused", and a run-start failure landing in the same slot
+  // would be read as exactly that — the two paths don't share a lifecycle.
+  consentError: string | null;
   openInvestigation: (t: Target) => void;
   openRun: (id: string) => void;
   openHome: () => void;
@@ -86,7 +108,11 @@ interface DiagnoseLayoutCtx {
 
 // Stable key for "is THIS resource being investigated right now" — built the same way
 // from a run summary and from a button's target so the two always match.
-export function runTargetKey(kind: string, namespace: string, name: string): string {
+export function runTargetKey(
+  kind: string,
+  namespace: string,
+  name: string,
+): string {
   return `${kind} ${namespace} ${name}`;
 }
 
@@ -95,7 +121,8 @@ const LayoutCtx = createContext<DiagnoseLayoutCtx | null>(null);
 
 export function useDiagnoseLayout(): DiagnoseLayoutCtx {
   const c = useContext(LayoutCtx);
-  if (!c) throw new Error("useDiagnoseLayout must be used within DiagnoseProvider");
+  if (!c)
+    throw new Error("useDiagnoseLayout must be used within DiagnoseProvider");
   return c;
 }
 
@@ -161,6 +188,7 @@ function writeStored(key: string, value: string) {
 
 export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const [available, setAvailable] = useState(false);
+  const [eligible, setEligible] = useState(false);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [consented, setConsented] = useState<Record<string, boolean>>({});
   const [selectedAgent, setSelectedAgentState] = useState<string>(
@@ -184,6 +212,7 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const [historyDegraded, setHistoryDegraded] = useState(false);
   const [pendingTarget, setPendingTarget] = useState<Target | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
+  const [consentError, setConsentError] = useState<string | null>(null);
   const [width, setWidth] = useState<number>(() => {
     try {
       const v = Number(localStorage.getItem(WIDTH_KEY));
@@ -205,6 +234,7 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
       .then((r) => {
         if (!live) return;
         setConsented(r.consented ?? {});
+        setEligible(!!r.eligible);
         const supported = r.agents.filter(
           (a) =>
             a.supported &&
@@ -256,7 +286,8 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     (name: string) => {
       setSelectedAgentState(name);
       writeStored(AGENT_KEY, name);
-      const nextProfile = agents.find((agent) => agent.name === name)?.profiles?.[0];
+      const nextProfile = agents.find((agent) => agent.name === name)
+        ?.profiles?.[0];
       if (nextProfile) {
         setProfileState(nextProfile);
         writeStored(PROFILE_KEY, nextProfile);
@@ -274,10 +305,9 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const selectedAgentInfo = agents.find((a) => a.name === selectedAgent);
-  const effectiveProfile =
-    selectedAgentInfo?.profiles?.includes(profile)
-      ? profile
-      : (selectedAgentInfo?.profiles?.[0] ?? profile);
+  const effectiveProfile = selectedAgentInfo?.profiles?.includes(profile)
+    ? profile
+    : (selectedAgentInfo?.profiles?.[0] ?? profile);
   const agentLabel = agentLabelFor(selectedAgent, selectedAgentInfo?.label);
   const hosted = !!selectedAgentInfo?.hosted;
   // Hosted Radar uses its existing per-user disclosure surface and supplies its
@@ -285,6 +315,16 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const consentSurface = hosted
     ? "standard"
     : (selectedAgentInfo?.consentSurfaces?.[effectiveProfile] ?? "");
+
+  // `agents` holds only supported CLIs (filtered on fetch), so a non-empty list
+  // while the engine is off means a drivable agent appeared on PATH after boot.
+  const setupState: DiagnoseSetup = available
+    ? "ready"
+    : !eligible
+      ? "off"
+      : agents.length > 0
+        ? "needs-restart"
+        : "needs-install";
 
   useEffect(() => {
     const onResize = () => setViewportW(window.innerWidth);
@@ -314,7 +354,7 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   // panel closed — and only re-render when the set actually changes, not every poll.
   const runningSig = runs
     .filter((r) => r.status === "running")
-    .map((r) => `${r.kind}\x00${r.namespace}\x00${r.name}`)
+    .map((r) => runTargetKey(r.kind, r.namespace, r.name))
     .sort()
     .join("|");
   const runningKeys = useMemo(
@@ -371,10 +411,13 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const openInvestigation = useCallback(
     (t: Target) => {
       setStartError(null);
+      setConsentError(null);
       setOpen(true);
       if (!hosted && !consentSurface) {
         setPendingTarget(null);
-        setStartError("Radar can’t run this agent with a verified execution profile.");
+        setStartError(
+          "Radar can’t run this agent with a verified execution profile.",
+        );
         setView("investigation");
         return;
       }
@@ -410,7 +453,9 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
         window.history.replaceState(
           null,
           "",
-          window.location.pathname + (qs ? `?${qs}` : "") + window.location.hash,
+          window.location.pathname +
+            (qs ? `?${qs}` : "") +
+            window.location.hash,
         );
       }
     } catch {
@@ -418,21 +463,29 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     }
     if (id) openRun(id);
   }, [available, openRun]);
+  // Leaving the detail pane drops the failure that belonged to it. startError
+  // renders as the entire pane (maximized home still shows `detail`), where a
+  // message about a resource you just navigated away from has nothing to attach
+  // to and no way to be dismissed.
   const openHome = useCallback(() => {
     setView("home");
+    setStartError(null);
     setOpen(true);
   }, []);
-  const goHome = useCallback(() => setView("home"), []);
+  const goHome = useCallback(() => {
+    setView("home");
+    setStartError(null);
+  }, []);
   const close = useCallback(() => setOpen(false), []);
   const consentBusyRef = useRef(false);
   const approveConsent = useCallback(() => {
     if (consentBusyRef.current) return;
     if (!consentSurface) {
-      setStartError("Radar can’t record consent for this agent.");
+      setConsentError("Radar can’t record consent for this agent.");
       return;
     }
     consentBusyRef.current = true;
-    setStartError(null);
+    setConsentError(null);
     const t = pendingTarget;
     // The server ENFORCES consent at start, so the acknowledgment must land
     // before the run request — awaiting also makes it durable for the CLI.
@@ -444,8 +497,16 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
         setPendingTarget(null);
         if (t) startRunRef.current(t);
       })
-      .catch(() => {
-        setStartError("Couldn't record your consent — try again.");
+      .catch((e) => {
+        // The server's message, when it has one. A host that records consent
+        // above the individual refuses whoever isn't allowed to grant it, and
+        // only its message can say who is — "try again" sends them at something
+        // that can never succeed.
+        setConsentError(
+          e instanceof DiagnoseError && e.message
+            ? e.message
+            : "Couldn't record your consent — try again.",
+        );
       })
       .finally(() => {
         consentBusyRef.current = false;
@@ -453,6 +514,7 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   }, [consentSurface, pendingTarget]);
   const cancelConsent = useCallback(() => {
     setPendingTarget(null);
+    setConsentError(null);
     setOpen(false);
   }, []);
   const dismissError = useCallback(() => setStartError(null), []);
@@ -464,6 +526,7 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
 
   const value: DiagnoseCtx = {
     available,
+    setupState,
     agentLabel,
     hosted,
     agents,
@@ -485,6 +548,7 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     // cleared on approve/cancel — so its presence is exactly "consent needed now".
     needsConsent: !!pendingTarget,
     startError,
+    consentError,
     openInvestigation,
     openRun,
     openHome,
@@ -513,7 +577,16 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
       panelWidthKey: WIDTH_KEY,
       runningKeys,
     }),
-    [open, contentGutter, maximized, width, narrow, runningKeys, setMaximized, setWidth],
+    [
+      open,
+      contentGutter,
+      maximized,
+      width,
+      narrow,
+      runningKeys,
+      setMaximized,
+      setWidth,
+    ],
   );
 
   return (

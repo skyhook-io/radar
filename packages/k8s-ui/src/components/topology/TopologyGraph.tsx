@@ -83,6 +83,31 @@ function getEdgeStyle(type: string, isTrafficView: boolean, isTrafficEdge: boole
   return style
 }
 
+// Reachability outcome → edge color/dash, set by the Reachability view via
+// TopologyEdge.reachOutcome (distinct from policyEffect, a NetworkPolicy concept).
+// Honest + DISTINCT: "blocked" (a CONSEQUENCE - downstream of a real break) is a gray
+// DASH; "not-tested" (ABSENCE of probe data) is a lighter DOTTED line. Neither is ever
+// a flowing/green edge that implies traffic crosses a break.
+const REACH_COLORS: Record<string, string> = {
+  verified: '#22c55e',
+  reached: '#22c55e',
+  unreachable: '#ef4444',
+  blocked: '#94a3b8',
+  'not-tested': '#cbd5e1',
+}
+const REACH_DASH: Record<string, string | undefined> = {
+  reached: '5 4', // dashed green - reached, but only via the proxy (not real-traffic verified)
+  blocked: '6 3', // dashed gray - a consequence of an upstream break
+  'not-tested': '2 4', // dotted - we have no probe data, not a failure
+}
+function reachEdgeStyle(o: string): React.CSSProperties {
+  return {
+    stroke: REACH_COLORS[o] || '#94a3b8',
+    strokeWidth: 2,
+    strokeDasharray: REACH_DASH[o],
+  }
+}
+
 // Threshold for disabling edge animations (performance optimization)
 const EDGE_ANIMATION_THRESHOLD = 200
 
@@ -139,14 +164,19 @@ function buildEdges(
     // Skip self-loops (both ends in same collapsed group)
     if (source === target) continue
 
-    // Skip duplicate edges (O(1) with Set)
-    const edgeId = `${source}-${target}-${edge.type}`
+    // Skip duplicate edges (O(1) with Set). Include the reachability outcome and
+    // label in the key: two route edges between the same source/target/type but
+    // with different outcomes (one verified, one unreachable) are DISTINCT routes -
+    // collapsing them would drop the failing route from the diagram.
+    const edgeId = `${source}-${target}-${edge.type}${edge.reachOutcome ? `-${edge.reachOutcome}` : ''}${edge.label ? `-${edge.label}` : ''}`
     if (seenEdgeIds.has(edgeId)) continue
     seenEdgeIds.add(edgeId)
 
-    const edgeColor = getEdgeColor(edge.type, isTrafficView)
+    const reach = edge.reachOutcome
+    const edgeColor = reach ? (REACH_COLORS[reach] || '#94a3b8') : getEdgeColor(edge.type, isTrafficView)
     const isTrafficEdge = edge.type === 'routes-to' || edge.type === 'exposes'
-    const animated = enableAnimations && isTrafficView && isTrafficEdge
+    // A reachability edge never animates (a dashed "blocked" must not look like flow).
+    const animated = enableAnimations && isTrafficView && isTrafficEdge && !reach
 
     edges.push({
       id: edgeId,
@@ -154,13 +184,19 @@ function buildEdges(
       target,
       type: 'smoothstep',
       animated,
+      // labelTitle (declared route when the label shows an overridden tested
+      // path) renders as a native SVG <title> tooltip inside React Flow's edge
+      // text - keeps the declared path available without overwriting the label.
+      label: edge.labelTitle
+        ? (<>{edge.label}<title>{edge.labelTitle}</title></>)
+        : (edge.label || undefined),
       markerEnd: {
         type: MarkerType.ArrowClosed,
         color: edgeColor,
         width: 12,
         height: 12,
       },
-      style: getEdgeStyle(edge.type, isTrafficView, isTrafficEdge, animated),
+      style: reach ? reachEdgeStyle(reach) : getEdgeStyle(edge.type, isTrafficView, isTrafficEdge, animated),
     })
   }
 
@@ -232,6 +268,9 @@ export function TopologyGraph({
   const isTrafficView = viewMode === 'traffic'
   const [nodes, setNodes, onNodesChangeBase] = useNodesState([] as Node[])
   const [edges, setEdges, onEdgesChange] = useEdgesState([] as Edge[])
+  // Bumped each time an ELK layout lands; the visual-sync effect depends on it so a
+  // probe that arrives mid-layout still gets its fresh styles re-applied afterward.
+  const [layoutEpoch, setLayoutEpoch] = useState(0)
 
   // Wrap onNodesChange to track user-dragged positions so they survive re-layouts.
   const onNodesChange = useCallback((changes: NodeChange<Node>[]) => {
@@ -736,6 +775,7 @@ export function TopologyGraph({
         )
         setEdges(builtEdges)
       }
+      if (groupingMode === 'none') setLayoutEpoch(e => e + 1)
     }).catch((err) => {
       console.error('[TopologyGraph] Layout post-processing error:', err)
       setLayoutError(err instanceof Error ? err.message : String(err))
@@ -745,6 +785,46 @@ export function TopologyGraph({
     // This prevents React's effect re-runs from canceling in-flight layouts
     // when the actual structure hasn't changed
   }, [workingNodes, workingEdges, structureKey, groupingMode, hideGroupHeader, collapsedGroups, groupLevels, handleSetLevel, handleCardClick, onMaximizeNamespace, isTrafficView, expandedPodGroups, handleExpandPodGroup, handleCollapsePodGroup, onToggleReplicaSets, setNodes, setEdges, layoutRetryCount])
+
+  // Visual-only sync - no relayout. The layout effect above is guarded by
+  // structureKey, which DELIBERATELY ignores node status + edge reachOutcome (a
+  // recolor shouldn't pay for an ELK pass). But the Reachability diagram mutates
+  // exactly those: clicking Run recolors an edge (e.g. not-tested → verified)
+  // WITHOUT changing structure, so the layout effect skips and the new outcome
+  // never reaches the canvas. Re-apply the visual attributes here, in place,
+  // preserving ELK positions. Scoped to groupingMode 'none' (the reachability
+  // view) - the grouped app topology rebuilds structure on each data refresh and
+  // never relies on in-place restyle, so it stays untouched.
+  const visualKey = useMemo(() => {
+    if (groupingMode !== 'none') return ''
+    const nodeStatus = foldHash(workingNodes, n => `${n.id}:${n.status}:${(n.data as { subtitleOverride?: unknown })?.subtitleOverride ?? ''}`)
+    const edgeReach = foldHash(workingEdges, e => `${e.source}->${e.target}:${e.reachOutcome ?? ''}:${e.label ?? ''}`)
+    return `${nodeStatus}|${edgeReach}`
+  }, [groupingMode, workingNodes, workingEdges])
+
+  useEffect(() => {
+    if (groupingMode !== 'none' || prevStructureRef.current === '') return
+    const byId = new Map(workingNodes.map(n => [n.id, n]))
+    setNodes(prev => {
+      let changed = false
+      const next = prev.map(node => {
+        const wn = byId.get(node.id)
+        if (!wn) return node
+        // Re-apply BOTH the status AND the latest node payload (nodeData) so a probe
+        // updates the on-canvas subtitle (e.g. "not reached - break upstream") too,
+        // not just the dot color. The detail panel reads the topology node directly,
+        // but the rendered card reads node.data.nodeData - keep it fresh.
+        if (node.data?.status === wn.status && node.data?.nodeData === wn.data) return node
+        changed = true
+        return { ...node, data: { ...node.data, status: wn.status, nodeData: wn.data } }
+      })
+      return changed ? next : prev
+    })
+    setEdges(prev => (prev.length === 0 ? prev : buildEdges(workingEdges, collapsedGroups, groupMapRef.current ?? new Map(), groupingMode, isTrafficView, undefined, prev.length, groupLevels, false)))
+    // layoutEpoch is a dep so this re-applies AFTER any in-flight ELK layout lands -
+    // a stale layout closure can't leave the canvas painted with pre-probe styles.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visualKey, layoutEpoch])
 
   // Handle node click
   const handleNodeClick = useCallback(

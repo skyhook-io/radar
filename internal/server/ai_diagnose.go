@@ -37,12 +37,12 @@ func (s *Server) detectManagedBy(ctx context.Context, kind, namespace, name stri
 	return managedByFromMeta(obj)
 }
 
-func (s *Server) detectDiagnoseHealth(ctx context.Context, kind, namespace, name string) *ai.ResourceHealthSignal {
+func (s *Server) detectDiagnoseHealth(r *http.Request, kind, namespace, name string) *ai.ResourceHealthSignal {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return nil
 	}
-	obj, err := cache.GetDynamic(ctx, kind, namespace, name)
+	obj, err := cache.GetDynamic(r.Context(), kind, namespace, name)
 	if err != nil || obj == nil {
 		return nil
 	}
@@ -51,7 +51,7 @@ func (s *Server) detectDiagnoseHealth(ctx context.Context, kind, namespace, name
 	if canonicalKind == "" {
 		canonicalKind = kind
 	}
-	issueSum, issueRows := computeIssueSummaryAndRows(cache, gvk.Group, canonicalKind, namespace, name)
+	issueSum, issueRows := computeIssueSummaryAndRows(cache, s.issueClusterScopedAccess(r), s.issueRelatedResourceAccess(r), gvk.Group, canonicalKind, namespace, name)
 	auditSum, auditRows := computeAuditSummaryAndRows(cache, gvk.Group, canonicalKind, namespace, name)
 
 	var issueCount int
@@ -145,9 +145,16 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	} else {
 		agents = ai.DetectAgents(r.Context(), withVersions)
 	}
+	// eligible: this run mode supports local BYO-agent diagnosis (no proxy/OIDC
+	// auth, /mcp mounted) — the SAME gate the boot-time engine init uses. It's true
+	// even when no agent is installed, so the UI can distinguish "install an agent
+	// to enable this" (eligible && !enabled) from "not available in this deployment"
+	// (auth/cloud/--no-mcp), where nudging an install wouldn't help.
+	eligible := !s.authConfig.Enabled() && s.mcpHandler != nil
 	s.writeJSON(w, map[string]any{
 		"agents":    agents,
 		"enabled":   s.aiRuns != nil,
+		"eligible":  eligible,
 		"consented": currentConsents(),
 	})
 }
@@ -211,7 +218,7 @@ func (s *Server) handleDiagnoseConsent(w http.ResponseWriter, r *http.Request) {
 // writes the error) when unavailable.
 func (s *Server) aiReady(w http.ResponseWriter) bool {
 	if s.aiRuns == nil {
-		s.writeError(w, http.StatusNotImplemented, "no agent CLI available — install Claude Code or Codex to enable AI diagnosis")
+		s.writeError(w, http.StatusNotImplemented, "no agent CLI available — install Claude Code, Codex, or Cursor (cursor-agent) to enable AI diagnosis")
 		return false
 	}
 	return s.requireConnected(w)
@@ -312,7 +319,7 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 	// the Apply confirmation can warn that a direct change will be reverted — rather
 	// than relying on the agent to self-report it. Best effort: "" (unknown) on miss.
 	managedBy := s.detectManagedBy(r.Context(), kind, namespace, name)
-	health := s.detectDiagnoseHealth(r.Context(), kind, namespace, name)
+	health := s.detectDiagnoseHealth(r, kind, namespace, name)
 	run, err := s.aiRuns.Start(kind, namespace, name, agent, profile, model, effort, managedBy, health)
 	if err != nil {
 		if errors.Is(err, ai.ErrAtCapacity) {

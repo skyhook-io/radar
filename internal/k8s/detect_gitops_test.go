@@ -595,7 +595,7 @@ func TestDetectCronJobProblems_CadenceAware(t *testing.T) {
 		mk("daily-stale", "0 0 * * *", 3*24*time.Hour),  // daily, silent 3d → stale
 	}
 	stale := map[string]bool{}
-	for _, p := range DetectCronJobProblems(cjs) {
+	for _, p := range DetectCronJobProblems(cjs, nil, nil, now) {
 		if p.Problem == "stale" {
 			stale[p.Name] = true
 		}

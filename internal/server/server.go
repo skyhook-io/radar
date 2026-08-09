@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"net/url"
+	pathpkg "path"
 	"reflect"
 	"runtime"
 	"slices"
@@ -53,6 +55,7 @@ import (
 	"github.com/skyhook-io/radar/internal/updater"
 	"github.com/skyhook-io/radar/internal/version"
 	"github.com/skyhook-io/radar/pkg/argoapi"
+	"github.com/skyhook-io/radar/pkg/conditions"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/perfstats"
@@ -67,6 +70,7 @@ type Server struct {
 	vitalsMetrics      vitalsMetricsMemo
 	port               int
 	listenAddress      string
+	basePath           string
 	startupLog         bool
 	remoteAccessHint   bool
 	devMode            bool
@@ -82,6 +86,8 @@ type Server struct {
 	permCache          *auth.PermissionCache
 	oidcHandler        *auth.OIDCHandler
 	saveFileFunc       func(defaultFilename string, data []byte) (string, error)
+	cloudConnectCfg    CloudConnectConfig
+	cloudInstall       *cloudInstallManager
 
 	// nsPreferences holds each user's active-namespace pick from the in-app
 	// switcher. Key shape: "<username>\x00<contextName>" when auth is enabled,
@@ -98,6 +104,10 @@ type Server struct {
 	// ends on another (PerformNamespaceRescope's own lock only serializes the
 	// rebuild, not this handler's persist step).
 	scopeMutationMu sync.Mutex
+
+	// rootHintOnce keeps the base-path misconfiguration hint to a single log
+	// line no matter how many requests reach the origin root.
+	rootHintOnce sync.Once
 
 	// nsPickMu serializes namespace-pick mutations: the POST handler's
 	// persist+set pair and the read-path stale-pick prune. Without it, a
@@ -125,6 +135,8 @@ type Server struct {
 	// no semantic effect.
 	rbacMemo *rbac.Memoizer
 
+	capacityIssueMemo *capacityIssueMemo
+
 	yamlSchemaMu          sync.Mutex
 	yamlSchemaCache       map[string][]byte
 	yamlSchemaPathCache   map[string]yamlSchemaPathCacheEntry
@@ -144,6 +156,7 @@ type Server struct {
 type Config struct {
 	Port               int
 	ListenAddress      string         // 127.0.0.1/localhost for local-only; 0.0.0.0 for shared access
+	BasePath           string         // Optional URL path prefix for self-hosted subpath deployments
 	StartupLog         bool           // Emit the operator-facing startup block after a successful bind
 	RemoteAccessHint   bool           // Explain the explicit shared-listener opt-in (native CLI only)
 	DevMode            bool           // Serve frontend from filesystem instead of embedded
@@ -155,17 +168,28 @@ type Config struct {
 	EffectiveConfig    *config.Config // Running startup config for GET /api/config
 	AuthConfig         auth.Config    // Authentication configuration
 	AIHistoryDB        string         // AI run-history SQLite path ("" = memory-only runs)
+	CloudConnect       CloudConnectConfig
 }
 
 // New creates a new server instance
 func New(cfg Config) *Server {
 	cfg.AuthConfig.Defaults()
-
+	basePath, err := NormalizeBasePath(cfg.BasePath)
+	if err != nil {
+		log.Fatalf("Invalid base path %q: %v", cfg.BasePath, err)
+	}
+	if cfg.CloudConnect.HubAPIURL == "" {
+		cfg.CloudConnect.HubAPIURL = "https://api.radarhq.io"
+	}
+	if cfg.CloudConnect.HubAppURL == "" {
+		cfg.CloudConnect.HubAppURL = "https://app.radarhq.io"
+	}
 	s := &Server{
 		router:                chi.NewRouter(),
 		broadcaster:           NewSSEBroadcaster(),
 		port:                  cfg.Port,
 		listenAddress:         cfg.ListenAddress,
+		basePath:              basePath,
 		startupLog:            cfg.StartupLog,
 		remoteAccessHint:      cfg.RemoteAccessHint,
 		devMode:               cfg.DevMode,
@@ -175,12 +199,16 @@ func New(cfg Config) *Server {
 		diagConfig:            cfg.DiagConfig,
 		effectiveConfig:       cfg.EffectiveConfig,
 		authConfig:            cfg.AuthConfig,
+		cloudConnectCfg:       cfg.CloudConnect,
 		topoMemo:              topology.NewMemoizer(5 * time.Second),
 		rbacMemo:              rbac.NewMemoizer(5 * time.Second),
+		capacityIssueMemo:     newCapacityIssueMemo(5 * time.Second),
 		yamlSchemaCache:       make(map[string][]byte),
 		yamlSchemaPathCache:   make(map[string]yamlSchemaPathCacheEntry),
 		yamlSchemaBundleCache: make(map[string]yamlSchemaBundleCacheEntry),
 	}
+	s.cloudInstall = newCloudInstallManager(cfg.CloudConnect)
+	s.cloudInstall.sharedListener = s.sharedListener
 
 	// Resolve a local agent CLI for AI diagnosis (keyless, on the user's own
 	// subscription). nil when none is found — the feature stays disabled.
@@ -208,7 +236,7 @@ func New(cfg Config) *Server {
 					store = st
 				}
 			}
-			s.aiRuns = ai.NewRunManager(d, s.ActualPort, k8s.GetContextName, store)
+			s.aiRuns = ai.NewRunManager(d, s.ActualPort, s.basePath, k8s.GetContextName, store)
 			if historyBroken {
 				// Persistence was requested but isn't working — the UI must say
 				// history won't survive a restart, not just a log line.
@@ -235,6 +263,12 @@ func New(cfg Config) *Server {
 		if s.aiRuns != nil {
 			s.aiRuns.OnContextSwitch()
 		}
+		// Runtime auth-loss demotion fires ONLY this callback (quiesce in
+		// place, no switch follows), and Argo CD's private port-forward lives
+		// outside the session manager — without this it survives the
+		// demotion's teardown indefinitely. Reset is idempotent, so the
+		// second call from OnContextSwitch on a real switch is harmless.
+		argocd.Reset()
 	})
 
 	// Let the destructive cache operations (context switch, namespace rescope)
@@ -266,7 +300,7 @@ func New(cfg Config) *Server {
 			if s.authConfig.OIDCRedirectURL == "" {
 				log.Fatalf("[auth] --auth-oidc-redirect-url is required when auth-mode=oidc")
 			}
-			oidcHandler, err := auth.NewOIDCHandler(context.Background(), s.authConfig)
+			oidcHandler, err := auth.NewOIDCHandler(context.Background(), s.authConfig, basePath)
 			if err != nil {
 				log.Fatalf("[auth] OIDC initialization failed (issuer=%s): %v — cannot start with auth-mode=oidc", s.authConfig.OIDCIssuer, err)
 			}
@@ -296,7 +330,67 @@ func New(cfg Config) *Server {
 }
 
 func (s *Server) setupRoutes() {
-	r := s.router
+	if s.basePath != "" {
+		appRouter := chi.NewRouter()
+		s.setupAppRoutes(appRouter)
+		s.router.Get("/", func(w http.ResponseWriter, r *http.Request) {
+			s.hintRootRequestUnderBasePath()
+			http.Redirect(w, r, s.basePath+"/"+querySuffix(r), http.StatusFound)
+		})
+		s.router.Mount(s.basePath, s.basePathHandler(appRouter))
+		return
+	}
+	s.setupAppRoutes(s.router)
+}
+
+// basePathHandler adapts the prefixed public URL space to the app router, which
+// is written as if it owned the origin's root.
+//
+// The prefix MUST be stripped from r.URL.Path before any app middleware runs.
+// chi's Mount only rewrites the routing context's RoutePath and leaves
+// r.URL.Path prefixed, while the auth middleware matches on r.URL.Path and
+// treats anything outside /api, /mcp and /debug as public static content — so a
+// still-prefixed path reads as public and skips authentication entirely,
+// /debug/pprof (which dumps the whole informer cache) included. Translating once
+// here keeps that concern at the edge rather than in every path check inside.
+func (s *Server) basePathHandler(app http.Handler) http.Handler {
+	stripped := http.StripPrefix(s.basePath, app)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Canonicalize the bare prefix to a trailing slash so the app always
+		// sees a rooted path.
+		if r.URL.Path == s.basePath {
+			http.Redirect(w, r, s.basePath+"/"+querySuffix(r), http.StatusMovedPermanently)
+			return
+		}
+		stripped.ServeHTTP(w, r)
+	})
+}
+
+// hintRootRequestUnderBasePath explains, once, the misconfiguration that
+// otherwise presents only as an unexplained browser redirect loop: an ingress
+// that strips the prefix sitting in front of a Radar that also serves under it.
+// Radar sends the browser to {basePath}/, the ingress strips it again, and the
+// two bounce until the browser gives up with ERR_TOO_MANY_REDIRECTS.
+//
+// Phrased as a hint rather than an error because reaching / is legitimate — a
+// port-forward straight to the pod lands here, as does an ingress that routes
+// the origin root through as well.
+func (s *Server) hintRootRequestUnderBasePath() {
+	s.rootHintOnce.Do(func() {
+		log.Printf("[base-path] serving under %s; a request arrived for / and was redirected to %s/. "+
+			"If the browser reports too many redirects, the ingress in front of Radar is stripping the prefix: "+
+			"either stop stripping it, or unset --base-path / chart basePath.", s.basePath, s.basePath)
+	})
+}
+
+func querySuffix(r *http.Request) string {
+	if r.URL.RawQuery == "" {
+		return ""
+	}
+	return "?" + r.URL.RawQuery
+}
+
+func (s *Server) setupAppRoutes(r chi.Router) {
 
 	// Middleware (applied to all routes)
 	r.Use(middleware.Logger)
@@ -316,7 +410,7 @@ func (s *Server) setupRoutes() {
 		AllowedHeaders: []string{"Accept", "Content-Type"},
 		// Without an expose entry, cross-origin JS reads these as "" and the
 		// timeline client silently falls back to full-ring refetches.
-		ExposedHeaders:   []string{"X-Radar-Timeline-Epoch", "X-Radar-Timeline-Max-Seq"},
+		ExposedHeaders:   []string{"X-Radar-Timeline-Epoch", "X-Radar-Timeline-Max-Seq", "X-Radar-Timeline-Min-Seq"},
 		AllowCredentials: true,
 	}))
 
@@ -378,6 +472,15 @@ func (s *Server) setupRoutes() {
 		// Node drain — outside 60s timeout group (drain may need minutes for PDB backoff)
 		r.Post("/nodes/{name}/drain", s.handleDrainNode)
 
+		// Cloud Connect prepare/start — outside the 60s timeout group. prepare
+		// downloads and renders the chart and runs the exact-manifest
+		// preflight; start probes cluster metadata and creates the Hub
+		// request. Either can legitimately outlast 60s on a slow link, and
+		// being killed mid-flight is worse than waiting. Both carry their own
+		// bound (see cloudInstallHandlerTimeout).
+		r.Post("/cloud/install/prepare", s.handleCloudInstallPrepare)
+		r.Post("/cloud/install/start", s.handleCloudInstallStart)
+
 		// All other API routes get a 60-second timeout
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.Timeout(60 * time.Second))
@@ -400,6 +503,20 @@ func (s *Server) setupRoutes() {
 			r.Get("/dashboard/helm", s.handleDashboardHelm)
 			r.Get("/cluster-info", s.handleClusterInfo)
 			r.Get("/capabilities", s.handleCapabilities)
+			r.Get("/capacity", s.handleCapacityOverview)
+			r.Get("/capacity/pools", s.handleCapacityPools)
+			r.Get("/capacity/pools/{name}", s.handleCapacityPool)
+			r.Get("/capacity/pools/{name}/members", s.handleCapacityPoolMembers)
+			r.Get("/capacity/demand", s.handleCapacityDemand)
+			r.Get("/capacity/activity", s.handleCapacityActivity)
+
+			// In-product Cloud Connect driver lane; every handler re-checks
+			// the gate (local + no auth + no tunnel). prepare/start are
+			// registered above, outside the 60s timeout.
+			r.Get("/cloud/install/status", s.handleCloudInstallStatus)
+			r.Post("/cloud/install/cancel", s.handleCloudInstallCancel)
+			r.Post("/cloud/install/dismiss", s.handleCloudInstallDismiss)
+			r.Get("/cloud/connect/self", s.handleCloudConnectSelf)
 			r.Get("/topology", s.handleTopology)
 			r.Get("/gitops/tree/{kind}/{namespace}/{name}", s.handleGitOpsTree)
 			r.Get("/gitops/insights/{kind}/{namespace}/{name}", s.handleGitOpsInsights)
@@ -433,6 +550,20 @@ func (s *Server) setupRoutes() {
 			// Cluster audit
 			r.Get("/audit", s.handleAudit)
 			r.Get("/audit/resource/{kind}/{namespace}/{name}", s.handleAuditResource)
+			r.Get("/upgrade-readiness", s.handleUpgradeReadiness)
+
+			// Network path trace - path-shaped diagnosis for Service /
+			// Ingress / HTTPRoute / GRPCRoute / Gateway. See internal/trace.
+			r.Get("/trace/{kind}/{namespace}/{name}", s.handleTrace)
+			// Whether the active "test from inside the cluster" (a short-lived,
+			// restricted, self-destructing probe Job as the caller's RBAC) can
+			// run - gates the UI button and names the cluster + namespace the
+			// probe pod would land in.
+			r.Get("/trace/{kind}/{namespace}/{name}/probe-in-cluster/capability", s.handleProbeInClusterCapability)
+			// Whole-subject in-cluster test: runs every route's live probe and folds
+			// them in server-side (canonical merge), returning the finalized trace so
+			// the frontend never reimplements a divergent merge.
+			r.Post("/trace/{kind}/{namespace}/{name}/in-cluster", s.handleTraceInCluster)
 
 			// Packages — merged "what's installed" view across Helm
 			// releases, workload labels, CRD registrations, and GitOps
@@ -468,6 +599,8 @@ func (s *Server) setupRoutes() {
 
 			// Pod logs (non-streaming)
 			r.Get("/pods/{namespace}/{name}/logs", s.handlePodLogs)
+			r.Get("/pods/{namespace}/{name}/environment", s.handlePodEnvironment)
+			r.Post("/pods/{namespace}/{name}/environment/reveal", s.handleRevealPodEnvironment)
 
 			// Pod debug (ephemeral container)
 			r.Post("/pods/{namespace}/{name}/debug", s.handleCreateDebugContainer)
@@ -699,26 +832,73 @@ func (s *Server) setupRoutes() {
 
 	// Static files (frontend) - index.html fallback for client-side routes.
 	if s.staticFS != nil {
-		r.Handle("/*", frontendHandler(http.FS(s.staticFS)))
+		r.Handle("/*", frontendHandler(http.FS(s.staticFS), s.basePath))
 	} else if s.devMode {
 		// In dev mode, serve from web/dist
-		r.Handle("/*", frontendHandler(http.Dir("web/dist")))
+		r.Handle("/*", frontendHandler(http.Dir("web/dist"), s.basePath))
 	}
 }
 
+// NormalizeBasePath canonicalizes the optional URL prefix used when Radar is
+// served behind an ingress path like /radar. Empty and "/" mean root.
+func NormalizeBasePath(raw string) (string, error) {
+	p := strings.TrimSpace(raw)
+	if p == "" || p == "/" {
+		return "", nil
+	}
+	if strings.Contains(p, "://") || strings.HasPrefix(p, "//") {
+		return "", fmt.Errorf("must be a path, not a URL")
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	// Allowlist rather than a blocklist: the value is interpolated into a chi
+	// route pattern and into href/src attributes of the served index.html, so
+	// anything outside unreserved RFC 3986 path characters is rejected up front
+	// instead of relying on each consumer to escape it. Also blocks %-encoding,
+	// which would make the configured prefix and the routed path disagree.
+	for _, segment := range strings.Split(p, "/") {
+		if segment == "" {
+			continue
+		}
+		if segment == "." || segment == ".." {
+			return "", fmt.Errorf("must not contain . or .. path segments")
+		}
+		for _, c := range segment {
+			isAllowed := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' ||
+				c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.' || c == '~'
+			if !isAllowed {
+				return "", fmt.Errorf("segment %q contains disallowed character %q — use only letters, digits, '-', '_', '.', '~'", segment, c)
+			}
+		}
+	}
+	clean := pathpkg.Clean(p)
+	if clean == "/" || clean == "." {
+		return "", nil
+	}
+	return clean, nil
+}
+
 // frontendHandler serves static files, falling back to index.html for client-side routing
-func frontendHandler(fsys http.FileSystem) http.Handler {
+func frontendHandler(fsys http.FileSystem, basePath string) http.Handler {
 	fileServer := http.FileServer(fsys)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Paths arrive root-relative even under a base path — basePathHandler
+		// strips the prefix at the router edge. basePath is still needed to
+		// rewrite the asset URLs inside index.html.
 		path := r.URL.Path
+
+		if path == "/" || path == "/index.html" {
+			serveFrontendIndex(w, r, fsys, basePath)
+			return
+		}
 
 		// Try to open the file
 		f, err := fsys.Open(path)
 		if err != nil {
 			// File doesn't exist - serve index.html for client-side routing
-			r.URL.Path = "/"
-			fileServer.ServeHTTP(w, r)
+			serveFrontendIndex(w, r, fsys, basePath)
 			return
 		}
 		defer f.Close()
@@ -727,11 +907,100 @@ func frontendHandler(fsys http.FileSystem) http.Handler {
 		stat, err := f.Stat()
 		if err != nil || (stat.IsDir() && path != "/") {
 			// For directories without index.html, serve root index.html
-			r.URL.Path = "/"
+			serveFrontendIndex(w, r, fsys, basePath)
+			return
 		}
 
 		fileServer.ServeHTTP(w, r)
 	})
+}
+
+func serveFrontendIndex(w http.ResponseWriter, r *http.Request, fsys http.FileSystem, basePath string) {
+	f, err := fsys.Open("/index.html")
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+
+	stat, err := f.Stat()
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	body, err := io.ReadAll(f)
+	if err != nil {
+		http.Error(w, "failed to read frontend index", http.StatusInternalServerError)
+		return
+	}
+	body = rewriteFrontendIndex(body, basePath)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	http.ServeContent(w, r, "index.html", stat.ModTime(), bytes.NewReader(body))
+}
+
+// prefixAttrPaths re-roots the href/src URLs of the served index.html under
+// basePath, turning both root-absolute ("/x") and Vite's relative ("./x") forms
+// into "{basePath}/x" — the latter matters at the root too, where basePath is
+// empty and "./x" must still become "/x" so deep client routes resolve assets.
+//
+// Protocol-relative URLs ("//cdn.example.com/x") are deliberately skipped: they
+// address another origin, and prefixing one would silently turn it into a local
+// path that 404s. Scheme-qualified URLs never match, since the character after
+// the quote isn't a slash.
+func prefixAttrPaths(html, basePath string) string {
+	for _, attr := range []string{`href="`, `src="`} {
+		var out strings.Builder
+		rest := html
+		for {
+			i := strings.Index(rest, attr)
+			if i < 0 {
+				out.WriteString(rest)
+				break
+			}
+			out.WriteString(rest[:i+len(attr)])
+			rest = rest[i+len(attr):]
+			switch {
+			case strings.HasPrefix(rest, "//"):
+				// another origin — leave untouched
+			case strings.HasPrefix(rest, "./"):
+				out.WriteString(basePath + "/")
+				rest = rest[len("./"):]
+			case strings.HasPrefix(rest, "/"):
+				out.WriteString(basePath + "/")
+				rest = rest[len("/"):]
+			}
+		}
+		html = out.String()
+	}
+	return html
+}
+
+func rewriteFrontendIndex(body []byte, basePath string) []byte {
+	html := prefixAttrPaths(string(body), basePath)
+	if basePath == "" {
+		return []byte(html)
+	}
+	cfg := struct {
+		BasePath  string `json:"basePath"`
+		ApiBase   string `json:"apiBase"`
+		AssetBase string `json:"assetBase"`
+	}{
+		BasePath:  basePath,
+		ApiBase:   basePath + "/api",
+		AssetBase: basePath,
+	}
+	cfgJSON, err := json.Marshal(cfg)
+	if err != nil {
+		return body
+	}
+
+	runtimeScript := `<script>window.__RADAR_RUNTIME_CONFIG__=` + string(cfgJSON) + `;</script>`
+	if strings.Contains(html, `<script type="module"`) {
+		html = strings.Replace(html, `<script type="module"`, runtimeScript+"\n    "+`<script type="module"`, 1)
+	} else {
+		html = strings.Replace(html, `</head>`, "    "+runtimeScript+"\n  </head>", 1)
+	}
+	return []byte(html)
 }
 
 // Start starts the server. If port is 0, an OS-assigned port is used.
@@ -807,6 +1076,12 @@ func (s *Server) ActualPort() int {
 		return s.listener.Addr().(*net.TCPAddr).Port
 	}
 	return s.port
+}
+
+// BasePath returns the normalized URL prefix the server mounted under, or ""
+// when it serves from the root.
+func (s *Server) BasePath() string {
+	return s.basePath
 }
 
 // ActualAddr returns the address the server is listening on (e.g. "localhost:9280").
@@ -931,6 +1206,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 
 	caps.MCPEnabled = s.mcpHandler != nil
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
+	caps.CloudConnect = s.cloudConnectCapability()
 	caps.Features = k8s.FeatureCapabilities{
 		YAMLReview:  true,
 		YAMLSchemas: true,
@@ -989,6 +1265,16 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 			caps.Resources = result.Perms
 			caps.Visibility = k8s.BuildVisibilitySummary(result, r.URL.Query().Get("namespace"))
 		}
+	}
+
+	caps.Karpenter = s.karpenterCapability(r)
+
+	// Report the PolicyReport index state so the frontend can say WHY a policy
+	// view is empty. Omitted when Kyverno isn't installed at all — there is
+	// nothing for the operator to act on, and a "not installed" note on every
+	// non-Kyverno cluster would be noise.
+	if prStatus := k8s.GetPolicyReportStatus(); prStatus.Status != k8s.KyvernoStatusNotInstalled {
+		caps.PolicyReports = &prStatus
 	}
 
 	s.writeJSON(w, caps)
@@ -1114,6 +1400,15 @@ func (s *Server) resolveHelmNamespaces(r *http.Request) ([]string, bool) {
 	}
 
 	namespaces := s.parseNamespacesForUser(r)
+	return s.resolveHelmNamespacesForScope(r, namespaces)
+}
+
+// resolveHelmNamespacesForScope applies Helm's Secret-specific RBAC and
+// no-auth fallback behavior to an already resolved workload namespace scope.
+// Callers that intentionally ignore the browsing namespace picker (such as the
+// cluster upgrade scan) can reuse the same Helm resolution without rebuilding
+// it from request query state.
+func (s *Server) resolveHelmNamespacesForScope(r *http.Request, namespaces []string) ([]string, bool) {
 	if noNamespaceAccess(namespaces) {
 		return nil, false
 	}
@@ -1316,15 +1611,16 @@ func (s *Server) filterNamespacesByCanRead(r *http.Request, group, resource, ver
 // canRead's per-user canI cache so subsequent topology calls within the
 // TTL don't re-SAR.
 //
-// Skips CRDs not present in discovery (e.g. AKSNodeClass on an EKS cluster):
-// SARing a non-existent resource returns false because no RBAC rule covers
-// it, which would over-strip KindNodeClass for a user who has list-RBAC on
-// the provider that IS installed. Mirrors MCP canReadClusterScopedKind's
-// unknown-kind passthrough.
+// NodeClass is intentionally excluded here. One synthesized NodeKind contains
+// independently authorized provider APIs, including arbitrary custom kinds;
+// applyClusterScopedTopologyRBAC filters those by exact node GVR instead.
 func (s *Server) deniedClusterScopedTopoKinds(r *http.Request) map[topology.NodeKind]bool {
 	deny := make(map[topology.NodeKind]bool)
 	disc := k8s.GetResourceDiscovery()
 	for _, ck := range topology.ClusterScopedKinds {
+		if ck.Kind == topology.KindNodeClass {
+			continue
+		}
 		if ck.Group != "" && disc != nil {
 			if _, ok := disc.GetResourceWithGroup(ck.Resource, ck.Group); !ok {
 				continue
@@ -1335,6 +1631,22 @@ func (s *Server) deniedClusterScopedTopoKinds(r *http.Request) map[topology.Node
 		}
 	}
 	return deny
+}
+
+func (s *Server) applyClusterScopedTopologyRBAC(r *http.Request, topo *topology.Topology) {
+	if topo == nil {
+		return
+	}
+	if deny := s.deniedClusterScopedTopoKinds(r); len(deny) > 0 {
+		topo.StripNodeKinds(deny)
+	}
+	allowedNodeClasses := make(map[topology.SARTuple]bool)
+	for _, tuple := range topo.NodeClassRBACTuples() {
+		if s.canRead(r, tuple.Group, tuple.Resource, "", "list") {
+			allowedNodeClasses[tuple] = true
+		}
+	}
+	topo.StripNodeClassesExcept(allowedNodeClasses)
 }
 
 // parseNamespaces parses the namespace filter from query parameters.
@@ -1403,9 +1715,7 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 	// them from the SA-populated cache regardless of namespace scope, so
 	// without this strip a namespace-restricted user with cluster-wide pod
 	// access would enumerate cluster infrastructure they have no RBAC for.
-	if deny := s.deniedClusterScopedTopoKinds(r); len(deny) > 0 {
-		topo.StripNodeKinds(deny)
-	}
+	s.applyClusterScopedTopologyRBAC(r, topo)
 
 	// Marshal once so we can record the exact wire size in perfstats.
 	// (writeJSON streams, which would force a counting-writer wrapper.)
@@ -2561,53 +2871,36 @@ func metricsAPIServiceLookupDiagnosis(apiService *unstructured.Unstructured, err
 }
 
 func metricsAPIServiceDiagnosis(apiService *unstructured.Unstructured, includeConditionMessage bool) string {
-	conditions, found, _ := unstructured.NestedSlice(apiService.Object, "status", "conditions")
+	condition, found := conditions.Find(apiService, "Available")
 	if !found {
 		return "The v1beta1.metrics.k8s.io APIService exists but has no Available condition. Check metrics-server and API aggregation status."
 	}
-
-	for _, condition := range conditions {
-		conditionMap, ok := condition.(map[string]any)
-		if !ok {
-			continue
-		}
-		conditionType, _ := conditionMap["type"].(string)
-		if conditionType != "Available" {
-			continue
-		}
-
-		status, _ := conditionMap["status"].(string)
-		reason, _ := conditionMap["reason"].(string)
-		reasonSuffix := ""
-		if reason != "" {
-			reasonSuffix = " (" + reason + ")"
-		}
-		messageSuffix := ""
-		if includeConditionMessage {
-			messageSuffix = metricsAPIServiceConditionMessageSuffix(conditionMap)
-		}
-
-		switch status {
-		case "True":
-			return "The v1beta1.metrics.k8s.io APIService is Available, but metrics reads still fail. Check metrics-server logs and API aggregation errors."
-		case "False", "Unknown":
-			return metricsAPIServiceDiagnosisSentence(
-				"The v1beta1.metrics.k8s.io APIService is not Available"+reasonSuffix+messageSuffix,
-				"Check the metrics-server Service, endpoints, and API aggregation/TLS configuration.",
-			)
-		default:
-			return metricsAPIServiceDiagnosisSentence(
-				"The v1beta1.metrics.k8s.io APIService has an unexpected Available status"+reasonSuffix+messageSuffix,
-				"Check metrics-server and API aggregation status.",
-			)
-		}
+	reasonSuffix := ""
+	if condition.Reason != "" {
+		reasonSuffix = " (" + condition.Reason + ")"
+	}
+	messageSuffix := ""
+	if includeConditionMessage {
+		messageSuffix = metricsAPIServiceConditionMessageSuffix(condition.Message)
 	}
 
-	return "The v1beta1.metrics.k8s.io APIService exists but has no Available condition. Check metrics-server and API aggregation status."
+	switch condition.Status {
+	case "True":
+		return "The v1beta1.metrics.k8s.io APIService is Available, but metrics reads still fail. Check metrics-server logs and API aggregation errors."
+	case "False", "Unknown":
+		return metricsAPIServiceDiagnosisSentence(
+			"The v1beta1.metrics.k8s.io APIService is not Available"+reasonSuffix+messageSuffix,
+			"Check the metrics-server Service, endpoints, and API aggregation/TLS configuration.",
+		)
+	default:
+		return metricsAPIServiceDiagnosisSentence(
+			"The v1beta1.metrics.k8s.io APIService has an unexpected Available status"+reasonSuffix+messageSuffix,
+			"Check metrics-server and API aggregation status.",
+		)
+	}
 }
 
-func metricsAPIServiceConditionMessageSuffix(conditionMap map[string]any) string {
-	message, _ := conditionMap["message"].(string)
+func metricsAPIServiceConditionMessageSuffix(message string) string {
 	message = strings.Join(strings.Fields(message), " ")
 	message = strings.TrimRight(message, ":;,")
 	if message == "" {
@@ -2851,6 +3144,7 @@ func (s *Server) handleTopNodes(w http.ResponseWriter, r *http.Request) {
 		if m, ok := metricsMap[node.Name]; ok {
 			entry.CPU = m.CPU
 			entry.Memory = m.Memory
+			entry.ObservedAt = m.ObservedAt
 		}
 
 		entry.PodCount = podCounts[node.Name]
@@ -2991,6 +3285,22 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, events)
 }
 
+// clampMinSeqToPage bounds the advertised retention floor (the store's oldest
+// retained seq) to the lowest seq actually delivered on this page. pageMinSeq
+// is 0 for an empty page — nothing to be inconsistent with — so the raw floor
+// stands. A genuine gap (low seqs evicted before the query, so pageMinSeq is
+// already at or above the floor) is preserved, because min() keeps the floor.
+// The clamp only bites when a fresh floor read has risen above a seq still
+// present in the body (e.g. eviction during the slow RBAC filter), which would
+// otherwise make a consumer record a false coverage gap and skip delivered
+// events.
+func clampMinSeqToPage(retainedFloor, pageMinSeq int64) int64 {
+	if pageMinSeq > 0 && pageMinSeq < retainedFloor {
+		return pageMinSeq
+	}
+	return retainedFloor
+}
+
 // handleChanges returns timeline events using the unified timeline.TimelineEvent format.
 // This is the main timeline API endpoint - it queries the timeline store directly.
 func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
@@ -3113,12 +3423,24 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 	// client only via its periodic full resync. A precise fix needs a
 	// same-snapshot store max-seq that ignores content filters; deferred as
 	// not worth the concurrency risk here.
-	var maxSeq int64
+	var maxSeq, pageMinSeq int64
 	for _, e := range events {
 		if e.Seq > maxSeq {
 			maxSeq = e.Seq
 		}
+		if pageMinSeq == 0 || e.Seq < pageMinSeq {
+			pageMinSeq = e.Seq
+		}
 	}
+	// Sample the retained floor here, from the same pre-filter moment maxSeq is
+	// taken — before filterEventsByRBAC below issues its (slow, SAR-bound)
+	// SubjectAccessReview round-trips. Reading it after the filter would let a
+	// busy ring evict mid-request and raise OldestSeq above seqs still in this
+	// response body, so the emitted floor could exceed a seq we actually
+	// deliver. The clamp below closes any residual skew, but sampling early
+	// keeps the two values consistent to begin with.
+	retainedFloor := store.Stats().OldestSeq
+
 	events = s.filterEventsByRBAC(r, events)
 
 	// The store epoch validates delta cursors: seq restarts from 1 when the
@@ -3128,6 +3450,19 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Radar-Timeline-Epoch", strconv.FormatInt(timeline.ObservationStart().UnixNano(), 10))
 	if maxSeq > 0 {
 		w.Header().Set("X-Radar-Timeline-Max-Seq", strconv.FormatInt(maxSeq, 10))
+	}
+	// The store's oldest retained seq lets a consumer pulling forward from a
+	// cursor detect that events below its cursor were evicted while it was
+	// behind. Clamp it to the lowest seq actually delivered in this response
+	// (pageMinSeq, computed pre-RBAC-filter so it aligns with maxSeq): the
+	// header must never claim a floor above a seq present in the body, or a
+	// consumer would record a false coverage gap and skip events it received.
+	// A genuine gap — low seqs evicted before this query, so pageMinSeq is
+	// already high — is preserved, since min() keeps the true floor. Mirrors
+	// the Max-Seq header's marshaling and its skip-when-zero convention: an
+	// empty store reports OldestSeq==0, so the header is omitted, not sent as 0.
+	if minSeq := clampMinSeqToPage(retainedFloor, pageMinSeq); minSeq > 0 {
+		w.Header().Set("X-Radar-Timeline-Min-Seq", strconv.FormatInt(minSeq, 10))
 	}
 	s.writeJSON(w, events)
 }
@@ -3548,13 +3883,19 @@ func (s *Server) handleCascadeDeletePreview(w http.ResponseWriter, r *http.Reque
 	kind := chi.URLParam(r, "kind")
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
+	group := r.URL.Query().Get("group")
 	if namespace == "_" {
 		namespace = ""
 	}
 
 	cachedTopo := s.broadcaster.GetCachedTopology()
 	dp := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
-	preview := topology.GetCascadeDeletePreview(kind, namespace, name, cachedTopo, dp)
+	preview := topology.GetCascadeDeletePreview(topology.ResourceRef{
+		Kind:      kind,
+		Namespace: namespace,
+		Name:      name,
+		Group:     group,
+	}, cachedTopo, dp)
 
 	s.writeJSON(w, preview)
 }
@@ -3927,12 +4268,9 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 
 	// Per-user state (permCache, namespace picks, capabilities cache) is
 	// cleared by the OnContextSwitch callback registered in New().
-
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{
-		State:       k8s.StateConnected,
-		Context:     k8s.GetContextName(),
-		ClusterName: k8s.GetClusterName(),
-	})
+	// PerformContextSwitch published the connected status while still holding
+	// the context-operation lock; publishing again here would race a queued
+	// operation's teardown.
 
 	// Return the new cluster info
 	info, err := k8s.GetClusterInfo(r.Context())
@@ -3949,17 +4287,27 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) {
 	status := k8s.GetConnectionStatus()
-	contexts, _ := k8s.GetAvailableContexts() // Always works (reads kubeconfig)
 
-	s.writeJSON(w, map[string]any{
+	response := map[string]any{
 		"state":           status.State,
 		"context":         status.Context,
 		"clusterName":     status.ClusterName,
 		"error":           status.Error,
 		"errorType":       status.ErrorType,
 		"progressMessage": status.ProgressMsg,
-		"contexts":        contexts,
-	})
+		// Lets the browser stand down its auto-retry for the whole auth-loss
+		// episode, even when the live errorType flips to non-auth values.
+		"authRecoveryOwed": k8s.RuntimeAuthRecoveryOwed(),
+	}
+	// Context enumeration re-reads kubeconfig files (under the client write
+	// lock in multi-file mode) — too expensive for the UI's perpetual
+	// fallback poll, which opts out via ?contexts=0.
+	if r.URL.Query().Get("contexts") != "0" {
+		contexts, _ := k8s.GetAvailableContexts() // Always works (reads kubeconfig)
+		response["contexts"] = contexts
+	}
+
+	s.writeJSON(w, response)
 }
 
 func (s *Server) handleConnectionRetry(w http.ResponseWriter, r *http.Request) {
@@ -3991,13 +4339,9 @@ func (s *Server) handleConnectionRetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set connected state after successful reconnection
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{
-		State:       k8s.StateConnected,
-		Context:     k8s.GetContextName(),
-		ClusterName: k8s.GetClusterName(),
-	})
-
+	// PerformContextSwitch published the connected status under the
+	// context-operation lock; a second publish here would race a queued
+	// operation's teardown.
 	s.writeJSON(w, k8s.GetConnectionStatus())
 }
 
@@ -4147,12 +4491,8 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 	}
 
 	// Per-user state cleared via the OnContextSwitch callback (see New()).
-
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{
-		State:       k8s.StateConnected,
-		Context:     k8s.GetContextName(),
-		ClusterName: k8s.GetClusterName(),
-	})
+	// Connected status was published by PerformContextSwitch under the
+	// context-operation lock.
 
 	// Use %q on user-influenced values (context name derived from an uploaded
 	// kubeconfig YAML, temp path partly includes the system TMPDIR) so a

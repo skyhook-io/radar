@@ -19,6 +19,10 @@ type Filters struct {
 	Namespaces []string
 	Severities []Severity
 	Kinds      []string
+	// IncludeClusterScopedKarpenter keeps cluster-scoped Karpenter rows when
+	// Namespaces is non-empty. Public namespace-filtered issue queries leave this
+	// false; mixed-scope internal projections such as Capacity opt in explicitly.
+	IncludeClusterScopedKarpenter bool
 	// Limit caps the returned slice. Zero means default (200).
 	Limit int
 	// Filter is an optional compiled CEL predicate evaluated against
@@ -31,12 +35,32 @@ type Filters struct {
 	// nil preserves auth-mode=none and tests where the provider's own
 	// permissions are the only gate.
 	CanReadClusterScoped func(kind, group string) bool
+	// CanReadRelated authorizes resources whose observed state is required to
+	// assert an issue on another subject, such as a NodeClass referenced by a
+	// NodePool. Nil preserves internal/no-auth composition.
+	CanReadRelated func(Ref) bool
 	// Grouped folds the flat rows into the public grouped model
 	// (GroupIssues) before the cap, so the limit counts issue groups, not
 	// replica fan-out. The public /api/issues + MCP issues set this; flat
 	// callers (summarycontext per-resource index, /api/issues?view=flat)
 	// leave it false.
 	Grouped bool
+}
+
+// RelatedIssueOptions controls the per-resource issue lookup. CanReadRelated
+// authorizes the subject of an issue reached through a cross-resource
+// diagnostic reference. A nil predicate fails closed for those associations;
+// direct subject and evidence-member matches remain governed by the caller's
+// authorization of the requested resource.
+type RelatedIssueOptions struct {
+	Namespaces []string
+	// CanReadClusterScoped mirrors Filters.CanReadClusterScoped — it gates
+	// cluster-scoped Issue rows AND the cluster-scoped state (NodePool specs)
+	// folded into per-issue signals such as capacity relevance. Omitting it here
+	// would let a caller who cannot list NodePools read that state through the
+	// per-resource path. Nil preserves auth-mode=none and internal composition.
+	CanReadClusterScoped func(kind, group string) bool
+	CanReadRelated       func(Ref) bool
 }
 
 const (

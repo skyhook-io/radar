@@ -207,6 +207,52 @@ describe("ApplicationDetail shell", () => {
     expect(html).not.toContain("Application views");
   });
 
+  // A controlled host's only way to say "no workload in the URL" is null, so
+  // without this the application scope a single-workload app must not have
+  // becomes the default for every URL-driven host.
+  it("opens the workload directly for controlled single-workload apps with no workload in the URL", () => {
+    const singleApp: AppRow = {
+      ...app,
+      workloads: [app.workloads[0]],
+    };
+    const html = renderDetail({
+      app: singleApp,
+      selectedWorkloadKey: null,
+      onSelectWorkload: () => {},
+    });
+
+    expect(html).toContain("Runtime for");
+    expect(html).toContain("checkout-api");
+    expect(html).not.toContain("Application views");
+    expect(html).not.toContain('aria-haspopup="listbox"');
+  });
+
+  it("keeps workload scope for a controlled single-workload app whose URL names a workload it no longer has", () => {
+    const singleApp: AppRow = {
+      ...app,
+      workloads: [app.workloads[0]],
+    };
+    const html = renderDetail({
+      app: singleApp,
+      selectedWorkloadKey: workloadKey(app.workloads[1]),
+      onSelectWorkload: () => {},
+    });
+
+    expect(html).toContain("Runtime for");
+    expect(html).toContain("checkout-api");
+    expect(html).not.toContain("Application views");
+  });
+
+  it("keeps application scope for a controlled multi-workload app with no workload in the URL", () => {
+    const html = renderDetail({
+      selectedWorkloadKey: null,
+      onSelectWorkload: () => {},
+    });
+
+    expect(html).toContain("Application views");
+    expect(html).not.toContain("Runtime for");
+  });
+
   it("renders one filtered application chronology with workload and source actions", () => {
     const html = renderDetail({
       selectedView: "history",

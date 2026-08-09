@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/karpenter"
 	"github.com/skyhook-io/radar/pkg/perfstats"
 )
 
@@ -779,13 +780,14 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	}
 
 	// 1h. Add Karpenter NodePool and NodeClaim nodes (CRD - fetched via dynamic cache)
-	nodePoolIDs := make(map[string]string)        // ns/name -> nodePoolID
+	nodePoolIDs := make(map[string]string) // name -> nodePoolID
+	nodePoolsByName := make(map[string]*unstructured.Unstructured)
 	nodeClaimNodeNames := make(map[string]string) // nodeName -> nodeClaimID (for NodeClaim → Node edges)
 
 	var nodePoolGVR schema.GroupVersionResource
 	hasNodePools := false
 	if resourceDiscovery != nil {
-		nodePoolGVR, hasNodePools = resourceDiscovery.GetGVR("NodePool")
+		nodePoolGVR, hasNodePools = resourceDiscovery.GetGVRWithGroup(karpenter.NodePoolKind, karpenter.Group)
 	}
 	var cachedNodePools []*unstructured.Unstructured // reused for NodePool→NodeClass edges
 	if hasNodePools && dynamicCache != nil {
@@ -803,7 +805,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			name := np.GetName()
 
 			npID := fmt.Sprintf("nodepool/%s/%s", ns, name)
-			nodePoolIDs[ns+"/"+name] = npID
+			nodePoolIDs[name] = npID
+			nodePoolsByName[name] = np
 			nodes = append(nodes, Node{
 				ID:     npID,
 				Kind:   KindNodePool,
@@ -821,7 +824,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	var nodeClaimGVR schema.GroupVersionResource
 	hasNodeClaims := false
 	if resourceDiscovery != nil {
-		nodeClaimGVR, hasNodeClaims = resourceDiscovery.GetGVR("NodeClaim")
+		nodeClaimGVR, hasNodeClaims = resourceDiscovery.GetGVRWithGroup(karpenter.NodeClaimKind, karpenter.Group)
 	}
 	if hasNodeClaims && dynamicCache != nil {
 		nodeClaims, ncErr := dynamicCache.ListNamespaces(nodeClaimGVR, opts.Namespaces)
@@ -849,38 +852,19 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				},
 			})
 
-			// NodePool → NodeClaim edge via ownerRef or karpenter.sh/nodepool label
-			edgeAdded := false
-			for _, ownerRef := range nc.GetOwnerReferences() {
-				if ownerRef.Kind == "NodePool" {
-					// NodePool is cluster-scoped, so key uses empty namespace
-					if ownerID, ok := nodePoolIDs["/"+ownerRef.Name]; ok {
-						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", ownerID, ncID),
-							Source: ownerID,
-							Target: ncID,
-							Type:   EdgeManages,
-						})
-						edgeAdded = true
-					}
-				}
-			}
-			// Fallback: use karpenter.sh/nodepool label if no ownerRef matched
-			if !edgeAdded {
-				if poolName, ok := nc.GetLabels()["karpenter.sh/nodepool"]; ok {
-					if ownerID, ok := nodePoolIDs["/"+poolName]; ok {
-						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", ownerID, ncID),
-							Source: ownerID,
-							Target: ncID,
-							Type:   EdgeManages,
-						})
-					}
+			if pool, _ := karpenter.ResolveNodePoolForClaim(nc, nodePoolsByName); pool != nil {
+				if ownerID, ok := nodePoolIDs[pool.GetName()]; ok {
+					edges = append(edges, Edge{
+						ID:     fmt.Sprintf("%s-to-%s", ownerID, ncID),
+						Source: ownerID,
+						Target: ncID,
+						Type:   EdgeManages,
+					})
 				}
 			}
 
 			// Collect status.nodeName for NodeClaim → Node edges
-			if nodeName, _, _ := unstructured.NestedString(nc.Object, "status", "nodeName"); nodeName != "" {
+			if nodeName := karpenter.ClaimNodeName(nc); nodeName != "" {
 				nodeClaimNodeNames[nodeName] = ncID
 			}
 
@@ -920,39 +904,59 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-	// 1h-iii. Add Karpenter NodeClass nodes (EC2NodeClass, AKSNodeClass, etc.)
-	nodeClassIDs := make(map[string]string) // "kind/name" -> nodeClassID (cluster-scoped, keyed by kind to avoid collision)
-
-	// Try common NodeClass kinds across cloud providers
-	nodeClassKinds := []string{"EC2NodeClass", "AKSNodeClass", "GCENodeClass"}
-	for _, ncKind := range nodeClassKinds {
-		var ncGVR schema.GroupVersionResource
-		var hasKind bool
-		if resourceDiscovery != nil {
-			ncGVR, hasKind = resourceDiscovery.GetGVR(ncKind)
+	// 1h-iii. Add the exact NodeClass types referenced by NodePools.
+	nodeClassIDs := make(map[string]string)
+	type nodeClassType struct {
+		group string
+		kind  string
+	}
+	nodeClassTypes := make(map[nodeClassType]karpenter.NodeClassRef)
+	for _, np := range cachedNodePools {
+		if ref, ok := karpenter.NodeClassRefForNodePool(np); ok {
+			nodeClassTypes[nodeClassType{group: ref.Group, kind: ref.Kind}] = ref
 		}
-		if !hasKind || dynamicCache == nil {
+	}
+	orderedNodeClassTypes := make([]nodeClassType, 0, len(nodeClassTypes))
+	for refType := range nodeClassTypes {
+		orderedNodeClassTypes = append(orderedNodeClassTypes, refType)
+	}
+	sort.Slice(orderedNodeClassTypes, func(i, j int) bool {
+		if orderedNodeClassTypes[i].group != orderedNodeClassTypes[j].group {
+			return orderedNodeClassTypes[i].group < orderedNodeClassTypes[j].group
+		}
+		return orderedNodeClassTypes[i].kind < orderedNodeClassTypes[j].kind
+	})
+
+	for _, refType := range orderedNodeClassTypes {
+		ref := nodeClassTypes[refType]
+		if resourceDiscovery == nil || dynamicCache == nil {
+			continue
+		}
+		ncGVR, hasKind := resourceDiscovery.GetGVRWithGroup(ref.Kind, ref.Group)
+		if !hasKind {
 			continue
 		}
 		nodeClasses, ncErr := dynamicCache.List(ncGVR, "")
 		if ncErr != nil {
-			log.Printf("WARNING [topology] Failed to list Karpenter %s: %v", ncKind, ncErr)
-			warnings = append(warnings, fmt.Sprintf("Failed to list Karpenter %s: %v", ncKind, ncErr))
+			log.Printf("WARNING [topology] Failed to list Karpenter %s.%s: %v", ref.Kind, ref.Group, ncErr)
+			warnings = append(warnings, fmt.Sprintf("Failed to list Karpenter %s.%s: %v", ref.Kind, ref.Group, ncErr))
 			continue
 		}
 		for _, nc := range nodeClasses {
 			name := nc.GetName()
-			ncID := fmt.Sprintf("nodeclass//%s", name)
-			nodeClassIDs[ncKind+"/"+name] = ncID
+			ncID := karpenterNodeClassID(ref.Group, ref.Kind, name)
+			nodeClassIDs[karpenterNodeClassKey(ref.Group, ref.Kind, name)] = ncID
 			nodes = append(nodes, Node{
 				ID:     ncID,
 				Kind:   KindNodeClass,
 				Name:   name,
-				Status: extractKarpenterNodePoolStatus(*nc), // Same Ready condition pattern
+				Status: extractKarpenterStatus(*nc),
 				Data: map[string]any{
-					"namespace":  "",
-					"labels":     nc.GetLabels(),
-					"apiVersion": nc.GetAPIVersion(),
+					"namespace":    "",
+					"labels":       nc.GetLabels(),
+					"apiVersion":   nc.GetAPIVersion(),
+					"resource":     ncGVR.Resource,
+					"resourceKind": ref.Kind,
 				},
 			})
 		}
@@ -961,16 +965,13 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	// NodePool → NodeClass edges via spec.template.spec.nodeClassRef
 	if len(nodeClassIDs) > 0 {
 		for _, np := range cachedNodePools {
-			npNs := np.GetNamespace()
 			npName := np.GetName()
-			npID, ok := nodePoolIDs[npNs+"/"+npName]
+			npID, ok := nodePoolIDs[npName]
 			if !ok {
 				continue
 			}
-			refName, _, _ := unstructured.NestedString(np.Object, "spec", "template", "spec", "nodeClassRef", "name")
-			refKind, _, _ := unstructured.NestedString(np.Object, "spec", "template", "spec", "nodeClassRef", "kind")
-			if refName != "" && refKind != "" {
-				if ncID, ok := nodeClassIDs[refKind+"/"+refName]; ok {
+			if ref, valid := karpenter.NodeClassRefForNodePool(np); valid {
+				if ncID, ok := nodeClassIDs[karpenterNodeClassKey(ref.Group, ref.Kind, ref.Name)]; ok {
 					edges = append(edges, Edge{
 						ID:     fmt.Sprintf("%s-to-%s", npID, ncID),
 						Source: npID,
@@ -7926,52 +7927,33 @@ func extractCertificateStatus(cert unstructured.Unstructured) HealthStatus {
 	return StatusUnknown
 }
 
-// extractKarpenterNodePoolStatus reads the Ready condition from a Karpenter NodePool
-func extractKarpenterNodePoolStatus(np unstructured.Unstructured) HealthStatus {
-	conditions, found, _ := unstructured.NestedSlice(np.Object, "status", "conditions")
-	if !found {
-		return StatusUnknown
-	}
-	for _, c := range conditions {
-		cond, ok := c.(map[string]any)
-		if !ok {
-			continue
-		}
-		if cond["type"] == "Ready" {
-			switch cond["status"] {
-			case "True":
-				return StatusHealthy
-			case "False":
-				return StatusUnhealthy
-			}
-			return StatusUnknown
-		}
-	}
-	return StatusUnknown
+func karpenterNodeClassKey(group, kind, name string) string {
+	return group + "\x00" + kind + "\x00" + name
 }
 
-// extractKarpenterNodeClaimStatus reads the Ready condition from a Karpenter NodeClaim
-func extractKarpenterNodeClaimStatus(nc unstructured.Unstructured) HealthStatus {
-	conditions, found, _ := unstructured.NestedSlice(nc.Object, "status", "conditions")
-	if !found {
+func karpenterNodeClassID(group, kind, name string) string {
+	// Keep kind/namespace/name as the first three segments for consumers that
+	// parse topology IDs, then append the provider identity to prevent collisions.
+	return fmt.Sprintf("nodeclass//%s/%s/%s", name, strings.ToLower(group), strings.ToLower(kind))
+}
+
+func extractKarpenterStatus(obj unstructured.Unstructured) HealthStatus {
+	switch karpenter.ResourceReadiness(&obj) {
+	case karpenter.ReadinessReady:
+		return StatusHealthy
+	case karpenter.ReadinessNotReady:
+		return StatusUnhealthy
+	default:
 		return StatusUnknown
 	}
-	for _, c := range conditions {
-		cond, ok := c.(map[string]any)
-		if !ok {
-			continue
-		}
-		if cond["type"] == "Ready" {
-			switch cond["status"] {
-			case "True":
-				return StatusHealthy
-			case "False":
-				return StatusUnhealthy
-			}
-			return StatusUnknown
-		}
-	}
-	return StatusUnknown
+}
+
+func extractKarpenterNodePoolStatus(np unstructured.Unstructured) HealthStatus {
+	return extractKarpenterStatus(np)
+}
+
+func extractKarpenterNodeClaimStatus(nc unstructured.Unstructured) HealthStatus {
+	return extractKarpenterStatus(nc)
 }
 
 // extractNodeStatus reads the Ready condition from a Kubernetes Node
@@ -8237,6 +8219,14 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		"workflow": true, "cronworkflow": true,
 		// Also skip namespace (not typically owned)
 		"namespace": true,
+	}
+	for _, node := range nodes {
+		if node.Kind != KindNodeClass {
+			continue
+		}
+		if resourceKind, ok := node.Data["resourceKind"].(string); ok && resourceKind != "" {
+			processedKinds[strings.ToLower(resourceKind)] = true
+		}
 	}
 
 	// Track per-kind counts to prevent any single CRD type from overwhelming the topology

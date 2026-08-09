@@ -146,13 +146,13 @@ rbac:
     gcpMonitoring: true     # monitoring.googleapis.com
     grafana: true           # monitoring.grafana.com, tempo/loki/grafana.integreatly.org
     istio: true             # networking.istio.io, security.istio.io
-    karpenter: true         # karpenter.sh, karpenter.k8s.aws, karpenter.azure.com, karpenter.k8s.gcp
+    karpenter: true         # karpenter.sh, karpenter.k8s.aws, karpenter.azure.com, karpenter.k8s.gcp, eks.amazonaws.com (EKS Auto Mode NodeClasses)
     keda: true              # keda.sh
     knative: true           # serving.knative.dev, eventing.knative.dev, sources/messaging/flows/networking.internal.knative.dev
     kubeshark: true         # kubeshark.io
     kubevirt: true          # kubevirt.io (VirtualMachines/VMIs) + cdi/clone/export/instancetype/migrations/pool/snapshot.kubevirt.io
     kured: true             # kured.io
-    kyverno: true           # kyverno.io, wgpolicyk8s.io, reports.kyverno.io, openreports.io
+    kyverno: true           # kyverno.io, policies.kyverno.io (modern CEL policy family), wgpolicyk8s.io, reports.kyverno.io, openreports.io
     mariadb: true           # mariadb.mmontes.io
     networkPolicyApi: true  # policy.networking.k8s.io (Admin/Baseline/ClusterNetworkPolicy — SIG-network)
     nginx: true             # nginx.org
@@ -197,6 +197,12 @@ service:
   annotations: {}
   type: ClusterIP
   port: 9280
+
+# URL path prefix that Radar itself serves under, e.g. /radar. Set this when
+# your ingress forwards a subpath through to the service without stripping it.
+# Leave empty for root serving or for ingresses that rewrite /radar -> /.
+# Cannot be combined with cloud.enabled — Radar Cloud owns the URL path.
+basePath: ""
 
 ingress:
   enabled: false
@@ -308,6 +314,16 @@ auth:
   # OIDC mode settings
   oidc:
     issuerURL: ""
+    # Optional internal issuer base URL used by the Radar pod for discovery and
+    # derived server-side token/userinfo/JWKS endpoints. Tokens are still
+    # validated against issuerURL, and browser redirects stay browser-facing.
+    internalIssuerURL: ""
+    # Optional endpoint overrides. Use these when browser-facing and server-side
+    # OIDC URLs cannot be derived from issuerURL/internalIssuerURL.
+    authorizationURL: ""
+    tokenURL: ""
+    userInfoURL: ""
+    jwksURL: ""
     clientID: ""
     clientSecret: ""
     # Use an existing K8s Secret for the OIDC client secret (avoids storing in Helm values).
@@ -335,6 +351,10 @@ auth:
     # a signed logout_token to /auth/backchannel-logout to revoke sessions.
     # Single-replica only — revocations are stored in memory and lost on pod restart.
     backchannelLogout: false
+    # Enable PKCE (S256) for the OIDC authorization-code flow (opt-in). Default off —
+    # existing deployments are unaffected. Enable only if your IdP supports PKCE and
+    # you want the extra protection against authorization-code interception.
+    enablePKCE: false
 
 # Radar Cloud (hosted SaaS at radarhq.io) — outbound-only tunnel. When
 # enabled, this Radar instance dials out to the Cloud service over
@@ -362,8 +382,8 @@ cloud:
   insecureSkipVerify: false
   # Default ClusterRoleBindings for Radar Cloud identity groups.
   #
-  # How it works: Cloud injects X-Forwarded-Groups: cloud:<role>,
-  # cloud:org:<id>, cloud:user:<id> on every proxied request. Radar
+  # How it works: Cloud injects X-Forwarded-Groups: radar:<role>,
+  # radar:org:<id>, radar:user:<id> on every proxied request. Radar
   # impersonates that identity against the K8s API on EVERY user-initiated
   # call (REST, MCP, Helm reads and writes, workload logs, node ops, pod
   # file browse, CAPI kubeconfig), so K8s RBAC enforces the tier — no
@@ -372,17 +392,17 @@ cloud:
   # Defaults map Cloud's tiers onto standard K8s ClusterRoles. These are
   # ClusterRoleBindings (not namespace-scoped RoleBindings), so the grant
   # applies in EVERY namespace:
-  #   cloud:owner   → "admin"  (full read+write in every namespace, including
+  #   radar:owner   → "admin"  (full read+write in every namespace, including
   #                            RBAC within namespaces; no writes on cluster-
   #                            scoped resources like Nodes, CRDs, ClusterRoles)
-  #   cloud:member  → "edit"   (read+write on standard resources, no RBAC)
-  #   cloud:viewer  → "view"   (read-only)
+  #   radar:member  → "edit"   (read+write on standard resources, no RBAC)
+  #   radar:viewer  → "view"   (read-only)
   #
   # These are starting-point grants, not "fallbacks that kick in when the
   # user has nothing else" — K8s RBAC is strictly ADDITIVE. Operator bindings
   # stack on top of ours, they can't override or deny. To tighten a tier,
   # set its boolean below to false (suppresses our binding) and author your
-  # own. To give an individual user extra access, bind cloud:user:<id> to
+  # own. To give an individual user extra access, bind radar:user:<id> to
   # an extra Role/ClusterRole — it will union with their tier's permissions.
   # To loosen owner, set ownerClusterRole=cluster-admin.
   defaultRbac:
@@ -398,11 +418,17 @@ cloud:
     ownerClusterRole: admin
     memberClusterRole: edit
     viewerClusterRole: view
-    # Grant cluster-scoped READ (Nodes, PVs, StorageClasses, IngressClasses,
-    # PriorityClasses, RuntimeClasses) on top of the built-in view/edit/admin
-    # roles, which exclude cluster-scoped resources. Per tier, each default
-    # true — Radar is a cluster-wide observability tool, so by default every
-    # tier (incl. viewer) sees core infrastructure. No Secrets or RBAC objects.
+    # Grant cluster-wide infrastructure read (Nodes, PVs, StorageClasses,
+    # IngressClasses, PriorityClasses, RuntimeClasses, CRDs, and admission
+    # webhooks) plus list-only Upgrade impact source evidence
+    # (CSIStorageCapacities, legacy PodSecurityPolicies, and API flow-control
+    # config) on top of the built-in view/edit/admin roles, which don't cover
+    # all of them.
+    # When their matching collection is enabled, the add-on also grants read on
+    # APIServices, PrometheusRules, Karpenter kinds, and node metrics. Per tier,
+    # each default true — Radar is a cluster-wide observability tool, so by
+    # default every tier (incl. viewer) sees core infrastructure. No Secrets or
+    # RBAC objects.
     #
     # Set a tier false to remove this add-on's binding. With the default
     # built-in role mappings above that leaves the tier namespaced-only —
@@ -414,7 +440,7 @@ cloud:
     # Independent of *ClusterRole above: a custom namespaced role does NOT
     # disable cluster-read (they're separate bindings). Want a tier to read a
     # DIFFERENT cluster-scoped set (e.g. Nodes but not PVs)? Set its flag false
-    # and bind your own ClusterRole to the cloud:<tier> group — the cloud:*
+    # and bind your own ClusterRole to the radar:<tier> group — the radar:*
     # groups exist regardless of this chart, so your binding composes cleanly.
     clusterScopedRead:
       viewer: true

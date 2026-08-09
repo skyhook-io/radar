@@ -274,20 +274,26 @@ func (c *CarettaSource) discoverPrometheus(ctx context.Context) string {
 		return ""
 	}
 
-	// Check for active managed port-forward first
-	if pfAddr := portforward.GetAddress(portforward.OwnerTraffic, c.currentContext); pfAddr != "" {
-		if c.tryMetricsEndpointLocked(ctx, pfAddr) {
-			log.Printf("[caretta] Using managed port-forward at %s", pfAddr)
-			c.prometheusAddr = pfAddr
-			return pfAddr
-		}
-	}
-
 	// Layer 2+3: Well-known locations, then dynamic discovery
 	info := c.discoverServiceLocked(ctx)
 	if info == nil {
 		log.Printf("[caretta] No Prometheus/VictoriaMetrics service found via any discovery method")
 		return ""
+	}
+
+	// Reuse an existing managed port-forward only if it targets the SAME service
+	// we just discovered. A generic reachability probe can't tell caretta-vm apart
+	// from the cluster's general Prometheus (both answer /api/v1/query), so match
+	// on (namespace, service) — otherwise we'd adopt the general-metrics forward
+	// and query it for caretta_links_observed, which returns 0 flows silently.
+	if pfAddr := portforward.GetAddressForService(portforward.OwnerTraffic, c.currentContext, info.namespace, info.name); pfAddr != "" {
+		testAddr := pfAddr + info.basePath
+		if c.tryMetricsEndpointLocked(ctx, testAddr) {
+			log.Printf("[caretta] Using managed port-forward at %s for %s/%s", pfAddr, info.namespace, info.name)
+			c.prometheusAddr = pfAddr
+			c.metricsBasePath = info.basePath
+			return pfAddr
+		}
 	}
 
 	// Try cluster address (works when running in-cluster)
@@ -562,8 +568,13 @@ func (c *CarettaSource) Connect(ctx context.Context, contextName string) (*portf
 		}, nil
 	}
 
-	// Check if there's already a valid managed port-forward for this context
-	if pfAddr := portforward.GetAddress(portforward.OwnerTraffic, contextName); pfAddr != "" {
+	// Check if there's already a valid managed port-forward for this context that
+	// targets the SAME service we discovered. Matching on (namespace, service)
+	// stops the traffic source from adopting the general-metrics forward (owner=
+	// prometheus, e.g. prometheus-operated:9090): it answers the generic probe but
+	// holds no caretta_links_observed, so flows would come back empty. On no match
+	// we fall through and start the dedicated forward to caretta-vm below.
+	if pfAddr := portforward.GetAddressForService(portforward.OwnerTraffic, contextName, metricsInfo.namespace, metricsInfo.name); pfAddr != "" {
 		pfTestAddr := pfAddr + metricsInfo.basePath
 		if c.tryMetricsEndpointLocked(ctx, pfTestAddr) {
 			log.Printf("[caretta] Using existing port-forward at %s", pfAddr)

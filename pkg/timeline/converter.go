@@ -82,6 +82,7 @@ func NewK8sEventTimelineEvent(event *corev1.Event, owner *OwnerInfo) TimelineEve
 		APIVersion: event.InvolvedObject.APIVersion,
 		Namespace:  event.Namespace,
 		Name:       event.InvolvedObject.Name,
+		UID:        string(event.InvolvedObject.UID),
 		EventType:  evtType,
 		Reason:     event.Reason,
 		Message:    event.Message,
@@ -191,6 +192,9 @@ func ExtractLabels(obj any) map[string]string {
 		"component",
 		"argocd.argoproj.io/instance",
 		"helm.toolkit.fluxcd.io/name",
+		"karpenter.sh/nodepool",
+		"karpenter.sh/nodeclaim",
+		"karpenter.sh/capacity-type",
 	}
 
 	for _, key := range interestingLabels {

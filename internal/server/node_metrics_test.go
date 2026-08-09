@@ -39,24 +39,35 @@ func TestListPodsScoped_SentinelContract(t *testing.T) {
 	}
 }
 
-func TestComputeCapacityRequests_ExcludesCompletedPods(t *testing.T) {
-	nodes := []*corev1.Node{{Status: corev1.NodeStatus{Capacity: corev1.ResourceList{
-		corev1.ResourceCPU: mustQty(t, "4"), corev1.ResourceMemory: mustQty(t, "8Gi"),
-	}}}}
+func TestComputeCapacityRequests_UsesAllocatableScheduledNonterminalPods(t *testing.T) {
+	nodes := []*corev1.Node{{Status: corev1.NodeStatus{
+		Capacity: corev1.ResourceList{
+			corev1.ResourceCPU: mustQty(t, "8"), corev1.ResourceMemory: mustQty(t, "16Gi"),
+		},
+		Allocatable: corev1.ResourceList{
+			corev1.ResourceCPU: mustQty(t, "4"), corev1.ResourceMemory: mustQty(t, "8Gi"),
+		},
+	}}}
 	req := corev1.ResourceList{corev1.ResourceCPU: mustQty(t, "500m"), corev1.ResourceMemory: mustQty(t, "1Gi")}
 	running := &corev1.Pod{
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
-		Spec:   corev1.PodSpec{Containers: []corev1.Container{{Resources: corev1.ResourceRequirements{Requests: req}}}},
+		Spec: corev1.PodSpec{
+			NodeName:   "node-a",
+			Containers: []corev1.Container{{Resources: corev1.ResourceRequirements{Requests: req}}},
+		},
 	}
 	done := running.DeepCopy()
 	done.Status.Phase = corev1.PodSucceeded
+	pending := running.DeepCopy()
+	pending.Spec.NodeName = ""
+	pending.Status.Phase = corev1.PodPending
 
-	cr := computeCapacityRequests(nodes, []*corev1.Pod{running, done})
+	cr := computeCapacityRequests(nodes, []*corev1.Pod{running, done, pending})
 	if cr.cpuCapMillis != 4000 {
-		t.Errorf("cpuCap = %d, want 4000", cr.cpuCapMillis)
+		t.Errorf("cpuCap = %d, want 4000 allocatable", cr.cpuCapMillis)
 	}
 	if cr.cpuReqMillis != 500 {
-		t.Errorf("cpuReq = %d, want 500 (completed pod excluded)", cr.cpuReqMillis)
+		t.Errorf("cpuReq = %d, want 500 (terminal and unassigned pods excluded)", cr.cpuReqMillis)
 	}
 }
 

@@ -29,6 +29,11 @@
   --color-error-light: #F87171;
   --color-error-dark: #DC2626;
   --color-info: #3B82F6;
+  /* alert = the orange tier between warning (amber) and error (red). The
+     .status-alert class predates these tokens and inlines the same hues. */
+  --color-alert: #F97316;
+  --color-alert-light: #FB923C;
+  --color-alert-dark: #EA580C;
 
   /* ── Backgrounds (elevation scale) ──
      sidebar  = primary nav rail — the DEEPEST layer, its own token so the rail

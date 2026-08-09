@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+
+	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 const (
@@ -143,7 +145,7 @@ func fetchLatestRelease(ctx context.Context) *UpdateInfo {
 		"method": {string(method)},
 		"mode":   {mode},
 	}
-	if t := radarDirBirthtime(); t != 0 {
+	if t := installTimestamp(ctx, mode); t != 0 {
 		params.Set("t", strconv.FormatInt(t, 10))
 	}
 	proxyURL := fmt.Sprintf("%s?%s", releasesURL, params.Encode())
@@ -224,6 +226,19 @@ func truncateNotes(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// installTimestamp reports when this install was set up. In-cluster that is the
+// Deployment's creation time; ~/.radar is an emptyDir whose birthtime resets
+// with the pod. The birthtime is the weaker answer but still a better one than
+// none when the Deployment can't be read.
+func installTimestamp(ctx context.Context, mode string) int64 {
+	if mode == "in-cluster" {
+		if installed := k8s.InstalledAt(ctx); installed != 0 {
+			return installed
+		}
+	}
+	return radarDirBirthtime()
 }
 
 // radarDirBirthtime returns the creation timestamp of ~/.radar/ as Unix epoch

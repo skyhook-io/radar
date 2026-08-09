@@ -13,17 +13,22 @@ import (
 // may pass the K8s Kind or a normalized form); group is exact, including the
 // empty core API group, so core/CRD kind collisions cannot bleed into each
 // other's resourceContext.
-func RelatedIssues(p Provider, namespaces []string, group, kind, namespace, name string) []Issue {
+func RelatedIssues(p Provider, opts RelatedIssueOptions, group, kind, namespace, name string) []Issue {
 	// Compose FLAT (uncapped) then group: matching against the flat evidence —
 	// not the grouped issue's inline Members (capped at maxInlineMembers) — is
 	// what makes member #11..#N in a large fan-out resolve correctly.
-	flat := Compose(p, Filters{Namespaces: namespaces, Limit: NoLimit})
+	flat := Compose(p, Filters{
+		Namespaces:           opts.Namespaces,
+		Limit:                NoLimit,
+		CanReadClusterScoped: opts.CanReadClusterScoped,
+		CanReadRelated:       opts.CanReadRelated,
+	})
 	grouped := GroupIssues(flat)
 	// Run the grouped-mode enrichment (mirrors the cluster path) so the grouped
 	// issues get coverage-gated incident_parent pointers — GroupIssues alone only
 	// carries the representative's DiagnosticContext, never the reverse pointer.
-	grouped = enrichDiagnosticContext(grouped, flat, grouped, p)
-	return RelatedIssuesFrom(flat, grouped, group, kind, namespace, name)
+	grouped = enrichDiagnosticContextAuthorized(grouped, flat, grouped, p, opts.CanReadClusterScoped)
+	return RelatedIssuesFrom(flat, grouped, opts, group, kind, namespace, name)
 }
 
 // RelatedIssuesFrom is the matching half of RelatedIssues over an
@@ -33,7 +38,7 @@ func RelatedIssues(p Provider, namespaces []string, group, kind, namespace, name
 // match repeatedly, instead of running a full cluster Compose per resource.
 // It only matches — grouped-mode enrichment is the caller's responsibility, so
 // a bare GroupIssues pair yields rows without incident_parent.
-func RelatedIssuesFrom(flat, grouped []Issue, group, kind, namespace, name string) []Issue {
+func RelatedIssuesFrom(flat, grouped []Issue, opts RelatedIssueOptions, group, kind, namespace, name string) []Issue {
 	// Normalize the query group so a caller passing a raw API group — e.g. the
 	// GitOps L4 bridge forwarding Argo's status.resources[].group, which is ""
 	// for core kinds and "apps" for Deployments — matches composed issues, whose
@@ -45,12 +50,27 @@ func RelatedIssuesFrom(flat, grouped []Issue, group, kind, namespace, name strin
 	}
 	matched := make(map[string]bool) // grouped issue IDs the resource touches
 	for _, g := range grouped {      // as the grouped SUBJECT (owner-collapsed)
-		if match(g.Group, g.Kind, g.Namespace, g.Name) {
+		if match(g.Group, g.Kind, g.Namespace, g.Name) && CanReadIssueRelatedRefs(g, opts.CanReadRelated) {
 			matched[g.ID] = true
+		}
+		if g.DiagnosticContext != nil {
+			for _, fact := range g.DiagnosticContext.Facts {
+				if fact.Type != karpenterFactReferencedByNodePools {
+					continue
+				}
+				for _, ref := range fact.Refs {
+					if match(ref.Group, ref.Kind, ref.Namespace, ref.Name) && opts.CanReadRelated != nil && opts.CanReadRelated(Ref{
+						Group: g.Group, Kind: g.Kind, Namespace: g.Namespace, Name: g.Name,
+					}) {
+						matched[g.ID] = true
+						break
+					}
+				}
+			}
 		}
 	}
 	for _, f := range flat { // as ANY evidence row (uncapped)
-		if match(f.Group, f.Kind, f.Namespace, f.Name) {
+		if match(f.Group, f.Kind, f.Namespace, f.Name) && CanReadIssueRelatedRefs(f, opts.CanReadRelated) {
 			matched[f.ID] = true
 		}
 	}
@@ -130,6 +150,7 @@ func foldGroup(members []Issue) Issue {
 		RestartCount:         rep.RestartCount,
 		LastTerminatedReason: rep.LastTerminatedReason,
 		FirstSeen:            rep.FirstSeen,
+		OnsetUnknown:         rep.OnsetUnknown,
 		LastSeen:             rep.LastSeen,
 		// Per-issue context carries from the representative, like Reason/Message.
 		// In the cluster-wide path grouping runs before enrichment, so these are
@@ -155,7 +176,9 @@ func foldGroup(members []Issue) Issue {
 	}
 
 	var refs []Ref
+	anyOnsetUnknown := rep.OnsetUnknown
 	for _, m := range members {
+		anyOnsetUnknown = anyOnsetUnknown || m.OnsetUnknown
 		if !m.FirstSeen.IsZero() && (g.FirstSeen.IsZero() || m.FirstSeen.Before(g.FirstSeen)) {
 			g.FirstSeen = m.FirstSeen
 		}
@@ -167,6 +190,7 @@ func foldGroup(members []Issue) Issue {
 			refs = append(refs, own)
 		}
 	}
+	g.OnsetUnknown = anyOnsetUnknown && g.FirstSeen.IsZero()
 	sortRefs(refs)
 
 	// IssueTiming: keep only if all members with issue_timing agree; any mix of
@@ -194,6 +218,17 @@ func foldGroup(members []Issue) Issue {
 	}
 	g.IssueTiming = groupIssueTiming
 	g.IssueTimingBasis = groupBasis
+
+	// CapacityRelevant: a group is capacity-relevant if ANY folded member is
+	// (an unschedulable pod pinned to a Karpenter NodePool) — so a workload
+	// rollup of NodePool-pinned pods keeps the "View in Capacity" link even
+	// when the representative member happens not to carry the flag.
+	for _, m := range members {
+		if m.CapacityRelevant {
+			g.CapacityRelevant = true
+			break
+		}
+	}
 
 	// IncidentParent is deliberately NOT carried through foldGroup: members of one
 	// grouped symptom share an issue ID, so carrying a member's pointer can't honor

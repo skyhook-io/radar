@@ -1,0 +1,53 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.skyhook-io/radar",
+  "title": "Radar",
+  "description": "Kubernetes visibility for AI agents: query workloads, events, logs, topology, and Helm releases.",
+  "repository": {
+    "url": "https://github.com/skyhook-io/radar",
+    "source": "github"
+  },
+  "websiteUrl": "https://radarhq.io",
+  "version": "1.8.6",
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/skyhook-io/radar:1.8.6",
+      "runtimeHint": "docker",
+      "runtimeArguments": [
+        {
+          "type": "named",
+          "name": "-p",
+          "value": "127.0.0.1:9280:9280",
+          "isRequired": true,
+          "description": "Expose Radar's HTTP server (UI + MCP) on 127.0.0.1:9280 only"
+        },
+        {
+          "type": "named",
+          "name": "-v",
+          "value": "{kubeconfig_path}:/kubeconfig:ro",
+          "isRequired": true,
+          "description": "Mount your kubeconfig into the container (read-only)",
+          "variables": {
+            "kubeconfig_path": {
+              "description": "Absolute path to your kubeconfig file on the host, e.g. /home/you/.kube/config (a leading ~ is not expanded when the client execs docker directly)",
+              "format": "filepath",
+              "isRequired": true
+            }
+          }
+        },
+        {
+          "type": "named",
+          "name": "-e",
+          "value": "KUBECONFIG=/kubeconfig",
+          "isRequired": true,
+          "description": "Point Radar at the mounted kubeconfig"
+        }
+      ],
+      "transport": {
+        "type": "streamable-http",
+        "url": "http://127.0.0.1:9280/mcp"
+      }
+    }
+  ]
+}

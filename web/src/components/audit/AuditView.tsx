@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react'
+import { useLocation } from 'react-router-dom'
 import { useAudit, useAuditSettings, useUpdateAuditSettings, useCloudRole } from '../../api/client'
 import type { SelectedResource } from '../../types'
 import { ChecksView, PaneLoader, PageHeader, FreshnessControl, type CheckResourceRef } from '@skyhook-io/k8s-ui'
@@ -6,6 +7,8 @@ import { ShieldCheck, Settings } from 'lucide-react'
 import { AuditSettingsDialog } from './AuditSettingsDialog'
 import { Tooltip } from '../ui/Tooltip'
 import { useConnection } from '../../context/ConnectionContext'
+import { ChecksViewTabs } from './ChecksViewTabs'
+import { UpgradeReadinessView } from './UpgradeReadinessView'
 
 interface AuditViewProps {
   namespaces: string[]
@@ -19,6 +22,14 @@ interface AuditViewProps {
 // ~/.radar settings are this cluster's "policy" and the row hide-menu writes to
 // them.
 export function AuditView({ namespaces, onNavigateToResource }: AuditViewProps) {
+  const { pathname } = useLocation()
+  if (pathname.startsWith('/checks/upgrade')) {
+    return <UpgradeReadinessView namespaces={namespaces} onNavigateToResource={onNavigateToResource} />
+  }
+  return <BestPracticesView namespaces={namespaces} onNavigateToResource={onNavigateToResource} />
+}
+
+function BestPracticesView({ namespaces, onNavigateToResource }: AuditViewProps) {
   const { data, isLoading, error, dataUpdatedAt, refetch } = useAudit(namespaces)
   const { data: auditSettings } = useAuditSettings()
   const updateSettings = useUpdateAuditSettings()
@@ -103,6 +114,8 @@ export function AuditView({ namespaces, onNavigateToResource }: AuditViewProps) 
           </>
         }
       />
+
+      <ChecksViewTabs />
 
       <ChecksView
         checks={data.groupedChecks ?? []}

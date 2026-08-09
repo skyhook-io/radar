@@ -77,7 +77,7 @@ func handleResourceHealth(ctx context.Context, req *mcp.ReadResourceRequest) (*m
 	}
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return jsonErrorResource("cluster://health", "not connected to cluster"), nil
+		return jsonErrorResource("cluster://health", errNotConnected().Error()), nil
 	}
 
 	dashboard := buildDashboard(ctx, cache, "", canReadClusterScopedKind(ctx, "nodes", "", "list"), canReadClusterScopedKind(ctx, "namespaces", "", "list"))
@@ -107,7 +107,7 @@ func handleResourceEvents(ctx context.Context, req *mcp.ReadResourceRequest) (*m
 	}
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return jsonErrorResource("cluster://events", "not connected to cluster"), nil
+		return jsonErrorResource("cluster://events", errNotConnected().Error()), nil
 	}
 
 	eventLister := cache.Events()

@@ -1,8 +1,10 @@
 package topology
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -1047,5 +1049,44 @@ func TestAnnotateNodePolicyCoverage(t *testing.T) {
 	// service should have no policyStatus (not a workload)
 	if _, ok := nodes[2].Data["policyStatus"]; ok {
 		t.Errorf("service should not have policyStatus, got %v", nodes[2].Data["policyStatus"])
+	}
+}
+
+func TestBuildEmptyClusterMarshalsEmptyArraysNeverNull(t *testing.T) {
+	topo, err := NewBuilder(&mockProvider{}).Build(DefaultBuildOptions())
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	// A nil slice marshals as JSON null and crashes every consumer typed
+	// against the documented wire shape — the post-context-switch empty
+	// window is exactly when the frontend reads this.
+	data, err := json.Marshal(topo)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, key := range []string{`"nodes":null`, `"edges":null`} {
+		if strings.Contains(string(data), key) {
+			t.Fatalf("empty topology marshaled %s: %s", key, data)
+		}
+	}
+	if topo.Nodes == nil || topo.Edges == nil {
+		t.Fatalf("empty topology slices nil: nodes=%v edges=%v", topo.Nodes == nil, topo.Edges == nil)
+	}
+
+	// The contract holds at the marshal boundary regardless of producer —
+	// append-based clones and strip-everything paths reintroduce nil slices
+	// too easily to rely on per-producer discipline.
+	for name, victim := range map[string]*Topology{
+		"zero value":     {},
+		"append clone":   {Nodes: append([]Node(nil), topo.Nodes...), Edges: append([]Edge(nil), topo.Edges...)},
+		"nil after wipe": {Nodes: nil, Edges: nil},
+	} {
+		data, err := json.Marshal(victim)
+		if err != nil {
+			t.Fatalf("%s: marshal: %v", name, err)
+		}
+		if strings.Contains(string(data), `"nodes":null`) || strings.Contains(string(data), `"edges":null`) {
+			t.Fatalf("%s marshaled null arrays: %s", name, data)
+		}
 	}
 }

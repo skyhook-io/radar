@@ -48,6 +48,13 @@ type SQLiteStore struct {
 	lastCleanupAt time.Time
 	lastCleanupN  int64
 	lastCleanupEr string
+	// evictedRows is process-lifetime: whether any retention/size pruning has
+	// deleted rows since this store opened. Cursor-eviction detection needs a
+	// sticky flag, not just the last sweep's count — an "older" cursor issued
+	// before a prune must read as a gap, not a clean end of history. Restart
+	// amnesia is fine: the activity epoch changes with the process, so stale
+	// cursors already get an epoch-changed gap.
+	evictedRows bool
 
 	// nextSeq is a process-lifetime monotonic arrival counter, seeded from
 	// MAX(seq) at open. It survives retention emptying the table, so a new
@@ -537,14 +544,21 @@ func (s *SQLiteStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 		query.WriteString(" AND seq > ?")
 		args = append(args, opts.SinceSeq)
 	}
+	if opts.UntilSeq > 0 {
+		query.WriteString(" AND seq < ?")
+		args = append(args, opts.UntilSeq)
+	}
 
 	// Delta reads (seq paging) page by ascending arrival order: the server
 	// advances the client cursor by the max seq in the page, so a burst larger
 	// than the limit must resume from the lowest unseen seq — timestamp DESC
 	// would return the newest matches and silently drop the mid-seq ones. The
-	// client merges by id, so ascending is fine. Non-delta reads page newest-first.
-	if seqPaging {
+	// client merges by id, so ascending is fine. Sequence snapshots and backwards
+	// pages are newest-arrival-first; ordinary timeline reads remain newest-time-first.
+	if seqPaging || opts.SequenceOrder == pkgtimeline.SequenceOrderAscending {
 		query.WriteString(" ORDER BY seq ASC")
+	} else if opts.UntilSeq > 0 || opts.SequenceOrder == pkgtimeline.SequenceOrderDescending {
+		query.WriteString(" ORDER BY seq DESC")
 	} else {
 		query.WriteString(" ORDER BY timestamp DESC")
 	}
@@ -773,6 +787,8 @@ func (s *SQLiteStore) Stats() StoreStats {
 	if newest.Valid {
 		stats.NewestEvent, _ = time.Parse(time.RFC3339Nano, newest.String)
 	}
+	row = s.db.QueryRow("SELECT COALESCE(MIN(seq), 0), COALESCE(MAX(seq), 0) FROM events")
+	_ = row.Scan(&stats.OldestSeq, &stats.NewestSeq)
 
 	// Get database file size
 	stats.StorageBytes = s.storageBytes()
@@ -787,6 +803,7 @@ func (s *SQLiteStore) Stats() StoreStats {
 	stats.LastCleanupAt = s.lastCleanupAt
 	stats.LastCleanupDeletedRows = s.lastCleanupN
 	stats.LastCleanupError = s.lastCleanupEr
+	stats.EventsEvicted = s.evictedRows
 	s.cleanupMu.RUnlock()
 
 	return stats
@@ -808,13 +825,27 @@ func (s *SQLiteStore) Cleanup(ctx context.Context, maxAge time.Duration) (int64,
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected()
+	n, err := result.RowsAffected()
+	s.recordEviction(n)
+	return n, err
 }
 
-func (s *SQLiteStore) PruneToMaxSize(ctx context.Context, maxBytes int64) (int64, error) {
+// recordEviction stickies the fact that rows were pruned — cursor-eviction
+// detection must survive later sweeps that delete nothing.
+func (s *SQLiteStore) recordEviction(rows int64) {
+	if rows <= 0 {
+		return
+	}
+	s.cleanupMu.Lock()
+	s.evictedRows = true
+	s.cleanupMu.Unlock()
+}
+
+func (s *SQLiteStore) PruneToMaxSize(ctx context.Context, maxBytes int64) (totalDeletedOut int64, errOut error) {
 	if maxBytes <= 0 {
 		return 0, nil
 	}
+	defer func() { s.recordEviction(totalDeletedOut) }()
 	if current := s.storageBytes(); current <= maxBytes {
 		return 0, nil
 	}

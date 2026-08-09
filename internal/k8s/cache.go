@@ -119,6 +119,9 @@ type ResourceCache struct {
 	// continuously OutOfSync. Lives here so its lifecycle is the cache's:
 	// recreated per cluster, dropped on a kubeconfig context switch.
 	argoDrift *argoDriftTracker
+	// cronJobScheduleObservations only counts schedule changes observed by this cache, so
+	// restart and context-switch boundaries cannot manufacture run history.
+	cronJobScheduleObservations *cronJobScheduleObservationTracker
 	// secretWriteTimes preserves verified Secret data-owner write times that
 	// the shared informer transform intentionally strips before caching.
 	secretWriteTimes *secretDataManagerWriteIndex
@@ -320,7 +323,8 @@ var tombstones = timeline.NewTombstoneCache(15*time.Minute, 4000)
 func InitResourceCache(ctx context.Context) error {
 	var initErr error
 	cacheOnce.Do(func() {
-		if k8sClient == nil {
+		client := GetClient()
+		if client == nil {
 			initErr = fmt.Errorf("cannot create resource cache: k8s client not initialized")
 			return
 		}
@@ -357,9 +361,10 @@ func InitResourceCache(ctx context.Context) error {
 		// cluster they came from.
 		recordClusterContext := ActiveClusterContext()
 		secretWriteTimes := newSecretDataManagerWriteIndex()
+		cronJobScheduleObservations := newCronJobScheduleObservationTracker()
 
 		cfg := k8score.CacheConfig{
-			Client:                  k8sClient,
+			Client:                  client,
 			ResourceScopes:          scopes,
 			ResourceScopeNamespaces: permResult.ScopeNamespaces,
 			DeferredTypes:           deferredResources,
@@ -382,6 +387,9 @@ func InitResourceCache(ctx context.Context) error {
 
 			OnObservedChange: func(change k8score.ResourceChange, obj, _ any) {
 				secretWriteTimes.reconcile(change, obj)
+				if cj, ok := obj.(*batchv1.CronJob); ok {
+					cronJobScheduleObservations.observe(change.Operation, cj)
+				}
 			},
 
 			OnChange: func(change k8score.ResourceChange, obj, oldObj any) {
@@ -426,10 +434,11 @@ func InitResourceCache(ctx context.Context) error {
 		initialSyncComplete = core.IsSyncComplete()
 
 		resourceCache = &ResourceCache{
-			ResourceCache:    core,
-			secretsEnabled:   scopes["secrets"].Enabled,
-			argoDrift:        newArgoDriftTracker(),
-			secretWriteTimes: secretWriteTimes,
+			ResourceCache:               core,
+			secretsEnabled:              scopes["secrets"].Enabled,
+			argoDrift:                   newArgoDriftTracker(),
+			cronJobScheduleObservations: cronJobScheduleObservations,
+			secretWriteTimes:            secretWriteTimes,
 		}
 	})
 	return initErr
@@ -1234,7 +1243,7 @@ func (c *ResourceCache) ListDynamicWithGroup(ctx context.Context, kind string, n
 
 	discovery := GetResourceDiscovery()
 	if discovery == nil {
-		return nil, fmt.Errorf("resource discovery not initialized")
+		return nil, fmt.Errorf("%w: resource discovery", ErrDynamicNotReady)
 	}
 
 	var gvr schema.GroupVersionResource
@@ -1259,7 +1268,7 @@ func (c *ResourceCache) ListDynamicWithGroup(ctx context.Context, kind string, n
 
 	dynamicCache := GetDynamicResourceCache()
 	if dynamicCache == nil {
-		return nil, fmt.Errorf("dynamic resource cache not initialized")
+		return nil, fmt.Errorf("%w: dynamic cache", ErrDynamicNotReady)
 	}
 
 	if shouldBypassDynamicInformer(gvr) {
@@ -1292,6 +1301,13 @@ func shouldBypassDynamicInformer(gvr schema.GroupVersionResource) bool {
 // layer translates this to 400 Bad Request.
 var ErrUnknownDynamicKind = errors.New("unknown resource kind")
 
+// ErrDynamicNotReady is returned when API discovery or the dynamic cache hasn't
+// been wired (early startup / a context without dynamic support). It is a
+// definitive "dynamic support isn't available" - distinct from a transient List
+// failure (RBAC / cache-not-synced) against an available CRD - so callers can
+// treat it as a clean no-match rather than as actionable uncertainty.
+var ErrDynamicNotReady = errors.New("dynamic resource support not initialized")
+
 // GetDynamic returns a single resource of any type using the dynamic cache
 func (c *ResourceCache) GetDynamic(ctx context.Context, kind string, namespace string, name string) (*unstructured.Unstructured, error) {
 	return c.GetDynamicWithGroup(ctx, kind, namespace, name, "")
@@ -1323,7 +1339,7 @@ func (c *ResourceCache) getDynamicWithGroup(ctx context.Context, kind string, na
 
 	discovery := GetResourceDiscovery()
 	if discovery == nil {
-		return nil, fmt.Errorf("resource discovery not initialized")
+		return nil, fmt.Errorf("%w: resource discovery", ErrDynamicNotReady)
 	}
 
 	var gvr schema.GroupVersionResource
@@ -1348,7 +1364,7 @@ func (c *ResourceCache) getDynamicWithGroup(ctx context.Context, kind string, na
 
 	dynamicCache := GetDynamicResourceCache()
 	if dynamicCache == nil {
-		return nil, fmt.Errorf("dynamic resource cache not initialized")
+		return nil, fmt.Errorf("%w: dynamic cache", ErrDynamicNotReady)
 	}
 
 	// CRD detail views need spec.versions[].schema and spec.conversion, which

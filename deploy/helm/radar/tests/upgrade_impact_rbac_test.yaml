@@ -1,0 +1,59 @@
+suite: Upgrade impact service account RBAC
+templates:
+  - clusterrole.yaml
+tests:
+  - it: grants source manifest evidence reads
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["storage.k8s.io"]
+            resources: ["csistoragecapacities"]
+            verbs: ["list"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["storage.k8s.io"]
+            resources: ["storageclasses"]
+            verbs: ["get", "list", "watch"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["flowcontrol.apiserver.k8s.io"]
+            resources: ["flowschemas", "prioritylevelconfigurations"]
+            verbs: ["list"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["policy"]
+            resources: ["podsecuritypolicies"]
+            verbs: ["list"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["policy"]
+            resources: ["poddisruptionbudgets"]
+            verbs: ["get", "list", "watch"]
+      - notContains:
+          path: rules[*].nonResourceURLs
+          content: /metrics
+      - notContains:
+          path: rules[*].resources
+          content: nodes/proxy
+      - notContains:
+          path: rules[*].apiGroups
+          content: rbac.authorization.k8s.io
+      - notContains:
+          path: rules[?(@.resources[?(@ == "secrets")])].verbs
+          content: list
+
+  - it: omits the role when chart RBAC is disabled
+    set:
+      rbac:
+        create: false
+    asserts:
+      - hasDocuments:
+          count: 0

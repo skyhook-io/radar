@@ -9,7 +9,7 @@ import { DebugOverlay } from './components/DebugOverlay'
 import { GlobalDiagnoseButton } from './components/diagnose/LocalDiagnoseAction'
 import { useDiagnoseLayout } from './components/diagnose/DiagnoseContext'
 import { DiagnoseSurface } from './components/diagnose/DiagnoseSurface'
-import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader } from '@skyhook-io/k8s-ui'
+import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader, assetUrl } from '@skyhook-io/k8s-ui'
 import { initNavigationMap } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useAPIResources, findAPIResourceForRoute } from './api/apiResources'
 import { TimelineView } from './components/timeline/TimelineView'
@@ -22,6 +22,7 @@ import { HelmView } from './components/helm/HelmView'
 import { HelmCompareRoute } from './components/helm/HelmCompareRoute'
 import { TrafficView } from './components/traffic/TrafficView'
 import { CostView } from './components/cost/CostView'
+import { CapacityView } from './components/capacity/CapacityView'
 import { AuditView } from './components/audit/AuditView'
 import { IssuesPane } from './components/issues/IssuesPane'
 import { GitOpsView } from './components/gitops/GitOpsView'
@@ -32,6 +33,7 @@ import { DockProvider, BottomDock, useDock, useDockReservedHeight, useOpenLocalT
 import { DURATION_DOCK } from '@skyhook-io/k8s-ui/utils/animation'
 import { ContextSwitcher } from './components/ContextSwitcher'
 import { NamespaceSwitcher, type NamespaceSwitcherHandle } from './components/NamespaceSwitcher'
+import { CloudFunnelButton } from './components/CloudFunnelButton'
 import { useNavCustomization } from './context/NavCustomization'
 import type { FleetTakeoverTarget } from './context/NavCustomization'
 import { PrimaryNavRail } from './components/nav/PrimaryNavRail'
@@ -56,7 +58,7 @@ import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
 import { useDocumentTitle } from './hooks/useDocumentTitle'
 import type { ClusterLoadState } from './types/clusterLoadState'
 import { useClusterLoadState } from './hooks/useClusterLoadState'
-import { Network, List, Clock, Package, Sun, Moon, Activity, Home, Star, Search, Bug, SquareTerminal, ShieldCheck, GitBranch, HelpCircle, Loader2, RefreshCw } from 'lucide-react'
+import { Network, List, Clock, Package, Sun, Moon, Activity, Home, Star, Search, Bug, SquareTerminal, ShieldCheck, GitBranch, Gauge, HelpCircle, Loader2, RefreshCw } from 'lucide-react'
 import { useTheme } from './context/ThemeContext'
 import { Tooltip } from './components/ui/Tooltip'
 import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNamespacePicker'
@@ -66,6 +68,8 @@ import { kindToPlural, pluralToKind, openExternal, apiVersionToGroup, relatedRes
 import { type OmnibarHandle } from './components/ui/Omnibar'
 import { RadarOmnibar } from './components/ui/RadarOmnibar'
 import type { ContextSwitcherHandle } from './components/ContextSwitcher'
+
+const radarLogoUrl = assetUrl('/images/radar/radar-icon.svg')
 
 // All possible node kinds (core + GitOps)
 const ALL_NODE_KINDS: NodeKind[] = [
@@ -114,7 +118,7 @@ const FLEET_MODE_KINDS = new Set<NodeKind>([
 
 // Convert API resource name back to topology node ID prefix
 // Extended MainView type that includes traffic and cost
-type ExtendedMainView = MainView | 'traffic' | 'cost' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications'
+type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications'
 
 // Extract view from URL path
 function getViewFromPath(pathname: string): ExtendedMainView {
@@ -127,6 +131,7 @@ function getViewFromPath(pathname: string): ExtendedMainView {
   if (path === 'helm') return 'helm'
   if (path === 'traffic') return 'traffic'
   if (path === 'cost') return 'cost'
+  if (path === 'capacity') return 'capacity'
   if (path === 'workload') return 'workload'
   if (path === 'checks' || path === 'audit') return 'checks'  // /audit = legacy → checks
   if (path === 'gitops') return 'gitops'
@@ -143,6 +148,8 @@ function getViewFromPath(pathname: string): ExtendedMainView {
 //     breakdown; a filter would only hide rows).
 //   - A GitOps detail tree spans namespaces — its controller lives in one
 //     namespace but manages workloads across many.
+//   - Upgrade impact evaluates the full readable cluster scope rather than a
+//     browsing filter.
 //   - A cluster-scoped resource kind (Nodes, PVs, ClusterRoles…) has no
 //     namespace at all.
 // The pick itself is preserved so it re-applies when the user returns to a
@@ -160,6 +167,18 @@ function namespaceFilterDisabled(
     return {
       disabled: true,
       tooltip: 'Cost is reported per namespace across the whole cluster — the namespace filter doesn’t apply here.',
+    }
+  }
+  if (view === 'capacity') {
+    return {
+      disabled: true,
+      tooltip: 'Capacity is reported across the cluster — the namespace filter doesn’t apply here.',
+    }
+  }
+  if (view === 'checks' && pathname.startsWith('/checks/upgrade')) {
+    return {
+      disabled: true,
+      tooltip: 'Upgrade impact scans every namespace you can access — the namespace filter doesn’t apply.',
     }
   }
   const segments = pathname.replace(/^\//, '').split('/')
@@ -225,7 +244,15 @@ function radarPageTitle(pathname: string, search = '', apiResources?: APIResourc
     return slash >= 0 && slash < decoded.length - 1 ? decoded.slice(slash + 1) : decoded
   }
 
+  if (view === 'checks' && pathSegments[1] === 'upgrade') return 'Upgrade impact'
+
   // The landing view reads "Overview" rather than "Home" in the tab.
+  if (view === 'capacity') {
+    if (pathSegments[1] === 'pools') return decode(pathSegments[2] ?? '') || 'Capacity'
+    if (pathSegments[1] === 'demand') return 'Capacity Demand'
+    if (pathSegments[1] === 'activity') return 'Capacity Activity'
+  }
+
   if (view === 'home') return 'Overview'
   // Every other view's label is its id capitalized — getViewFromPath has already
   // normalized aliases (e.g. /audit → 'checks'), so no lookup table is needed.
@@ -387,6 +414,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
   // Get mainView from URL path
   const mainView = getViewFromPath(location.pathname)
+  const upgradeReadinessRoute = location.pathname.startsWith('/checks/upgrade')
 
   // Initialize the kind→plural discovery map app-wide (not just on ResourcesView
   // mount) so the omnibar can open a CRD hit with an irregular plural from any
@@ -471,7 +499,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // The host's URL for the CURRENT view, if taken over. Drives the redirect
   // effect and the "Opening…" splash.
   const viewTakeoverHref =
-    mainView === 'issues' || mainView === 'gitops' || mainView === 'checks'
+    (mainView === 'issues' || mainView === 'gitops' || mainView === 'checks') && !upgradeReadinessRoute
       ? takeover[mainView]
       : undefined
   useEffect(() => {
@@ -684,6 +712,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     newParams.delete('kind')
     newParams.delete('mode')
     newParams.delete('group')
+    newParams.delete('target')
     // Open as a normal drawer — never inherit a stale ?full=1/tab from an
     // expanded view we're navigating away from (only expand/drill set those).
     newParams.delete('full')
@@ -785,7 +814,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const VIEW_SHORTCUT_KEYS: Record<ExtendedMainView, string> = {
     home: 'g h', resources: 'g r', issues: 'g i', topology: 'g t',
     applications: 'g a', timeline: 'g l', traffic: 'g f', helm: 'g m',
-    gitops: 'g o', checks: 'g u', cost: 'g c',
+    gitops: 'g o', checks: 'g u', cost: 'g c', capacity: 'g p',
     // Non-rail views (reachable via deep links / actions, not the rail) get no
     // dedicated mnemonic — listed for exhaustiveness so the type stays total.
     workload: '', compare: '', helmCompare: '',
@@ -965,9 +994,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const fastInvalidationRef = useRef<{
     changedKinds: Set<string>   // every changed kind (any op) → detail drawer
     structuralKinds: Set<string> // add/delete kinds → list membership + counts + dashboard
+    environmentNamespaces: Set<string>
+    environmentPods: Map<string, Set<string>>
     secretsChanged: boolean
     timer: number | null
-  }>({ changedKinds: new Set(), structuralKinds: new Set(), secretsChanged: false, timer: null })
+  }>({ changedKinds: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null })
   const slowInvalidationRef = useRef<{
     updatedKinds: Set<string>    // update-only churn → throttled list + dashboard
     timer: number | null
@@ -1002,6 +1033,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     fast.changedKinds.add(kind)
     if (structural) fast.structuralKinds.add(kind)
     if (kind === 'secrets') fast.secretsChanged = true
+    if ((kind === 'configmaps' || kind === 'secrets') && event.namespace) fast.environmentNamespaces.add(event.namespace)
+    if (kind === 'pods' && event.namespace && event.name) {
+      const names = fast.environmentPods.get(event.namespace) ?? new Set<string>()
+      names.add(event.name)
+      fast.environmentPods.set(event.namespace, names)
+    }
 
     const slow = slowInvalidationRef.current
     if (!structural) slow.updatedKinds.add(kind)
@@ -1023,11 +1060,19 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         if (f.secretsChanged) {
           queryClient.invalidateQueries({ queryKey: ['secret-cert-expiry'] })
         }
+        for (const namespace of f.environmentNamespaces) {
+          queryClient.invalidateQueries({ queryKey: ['pod-environment', namespace] })
+        }
+        for (const [namespace, names] of f.environmentPods) {
+          for (const name of names) {
+            queryClient.invalidateQueries({ queryKey: ['pod-environment', namespace, name] })
+          }
+        }
         // GitOps behavior unchanged from before — refreshes every batch when a
         // GitOps view is mounted (Phase 2 will make this relevance-aware).
         queryClient.invalidateQueries({ queryKey: ['gitops-tree'] })
         queryClient.invalidateQueries({ queryKey: ['gitops-insights'] })
-        fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), secretsChanged: false, timer: null }
+        fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
       }, 3000)
     }
 
@@ -1053,7 +1098,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     if (fastInvalidationRef.current.timer !== null) clearTimeout(fastInvalidationRef.current.timer)
     if (slowInvalidationRef.current.timer !== null) clearTimeout(slowInvalidationRef.current.timer)
     if (timelineInvalidationRef.current.timer !== null) clearTimeout(timelineInvalidationRef.current.timer)
-    fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), secretsChanged: false, timer: null }
+    fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
     slowInvalidationRef.current = { updatedKinds: new Set(), timer: null }
     timelineInvalidationRef.current = { timer: null }
   }, [])
@@ -1076,7 +1121,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       if (fastInvalidationRef.current.timer !== null) clearTimeout(fastInvalidationRef.current.timer)
       if (slowInvalidationRef.current.timer !== null) clearTimeout(slowInvalidationRef.current.timer)
       if (timelineInvalidationRef.current.timer !== null) clearTimeout(timelineInvalidationRef.current.timer)
-      fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), secretsChanged: false, timer: null }
+      fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
       slowInvalidationRef.current = { updatedKinds: new Set(), timer: null }
       timelineInvalidationRef.current = { timer: null }
 
@@ -1729,6 +1774,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             { view: 'home' as const, icon: Home, label: 'Home' },
             { view: 'topology' as const, icon: Network, label: 'Topology' },
             { view: 'resources' as const, icon: List, label: 'Resources' },
+            { view: 'capacity' as const, icon: Gauge, label: 'Capacity' },
             { view: 'timeline' as const, icon: Clock, label: 'Timeline' },
             { view: 'helm' as const, icon: Package, label: 'Helm' },
             { view: 'gitops' as const, icon: GitBranch, label: 'GitOps' },
@@ -1834,6 +1880,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
           {/* AI investigations (self-hides when no agent CLI is present) */}
           <GlobalDiagnoseButton />
+
+          {/* Radar Cloud funnel — OSS-only chrome, same gate as the star.
+              Cloud embeds render chromeless anyway; the explicit gate is
+              belt-and-braces for future chrome-bearing embedders. */}
+          {!navCustomization.embedded && <CloudFunnelButton />}
 
           {/* Local terminal */}
           {capabilities.localTerminal && (
@@ -2238,6 +2289,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           <CostView namespaces={namespaces} onBack={() => setMainView('home')} onOpenResource={navigateToResource} />
         )}
 
+        {mainView === 'capacity' && (
+          <CapacityView onOpenResource={navigateToResource} />
+        )}
+
         {/* Takeover splash. When the host claims the current view via
             fleetTakeoverHref, the redirect effect above is mid-flight — render a
             brief splash instead of the inline view (which would flash + fire its
@@ -2250,9 +2305,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           />
         )}
 
-        {/* Best practices detail view (inline only when the host hasn't taken
-            Checks over — standalone OSS, or Cloud without a checks takeover). */}
-        {mainView === 'checks' && !isViewTakenOver('checks') && (
+        {/* Checks detail view. Cloud can take over fleet best practices while
+            the target-specific upgrade route continues to render locally. */}
+        {mainView === 'checks' && (!isViewTakenOver('checks') || upgradeReadinessRoute) && (
           <AuditView
             namespaces={namespaces}
             onNavigateToResource={navigateToResourceList}
@@ -2519,7 +2574,7 @@ function Logo() {
     <div className="flex items-center gap-2.5">
       <div className="relative w-7 h-7 rounded-lg overflow-hidden flex-shrink-0 bg-emerald-500/10 border border-emerald-500/20">
         <img
-          src="/images/radar/radar-icon.svg"
+          src={radarLogoUrl}
           alt=""
           aria-hidden
           className="w-full h-full p-0.5"

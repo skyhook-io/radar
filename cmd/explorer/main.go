@@ -11,6 +11,7 @@ import (
 	neturl "net/url"
 	"os"
 	"os/signal"
+	"regexp"
 	"sort"
 	"strings"
 	"syscall"
@@ -24,8 +25,13 @@ import (
 	"github.com/skyhook-io/radar/internal/diagnosecli"
 	"github.com/skyhook-io/radar/internal/k8s"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
+	"github.com/skyhook-io/radar/internal/reachability"
 	"github.com/skyhook-io/radar/internal/server"
+	versionpkg "github.com/skyhook-io/radar/internal/version"
 	"golang.org/x/net/http/httpguts"
+	authv1 "k8s.io/api/authorization/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 	_ "k8s.io/client-go/plugin/pkg/client/auth" // Register all auth provider plugins (OIDC, GCP, Azure, etc.)
 	"k8s.io/klog/v2"
 )
@@ -33,6 +39,10 @@ import (
 var (
 	version = "dev"
 )
+
+// releaseVersionRe matches a published release version ("1.10.3", "v1.10.3").
+// Anything else - git-describe suffixes, "dev", "-dirty" - is a dev build.
+var releaseVersionRe = regexp.MustCompile(`^v?\d+\.\d+\.\d+$`)
 
 func main() {
 	// Subcommand dispatch (before flag parsing — subcommands own their flags).
@@ -45,12 +55,39 @@ func main() {
 
 	startupStart := time.Now()
 
+	// Subcommand dispatch: `radar probe` runs a one-shot reachability probe and
+	// exits - no server, no cluster client. The in-cluster reachability runner
+	// executes this binary in that mode. Intercept before the server flag
+	// parsing, since "probe" is a positional argument, not a flag.
+	if len(os.Args) > 1 && os.Args[1] == "probe" {
+		os.Exit(runProbeCommand(os.Args[2:]))
+	}
+
 	// Propagate the build-time version to the cloud dialer so the agent
 	// advertises the real version (e.g. "1.5.5") on the tunnel handshake
 	// instead of the "dev" default. Dockerfile + Makefile inject
 	// `-X main.version=...`; mirror it here rather than adding a second
 	// ldflags target so there's a single source of truth.
 	cloud.Version = version
+
+	// The in-cluster reachability probe Job runs the version-matched published
+	// Radar image by default (overridable via --reachability-image / RADAR_IMAGE).
+	// The flag override is applied just after it is parsed (see below) so BOTH the
+	// REST handler and the MCP diagnose(inCluster) path resolve the same image.
+	reachability.DefaultImageRef = "ghcr.io/skyhook-io/radar:" + version
+	// A dev build's git-describe version ("1.10.3-78-gabc123", "dev") is never a
+	// published image tag, so its version-matched default ImagePullBackOffs on
+	// every in-cluster test. Fall back to the latest published release instead -
+	// only for dev-shaped versions; a released binary keeps its exact match.
+	// CheckForUpdate is cached and cheap relative to the probe run it precedes.
+	if !releaseVersionRe.MatchString(version) {
+		reachability.LatestReleaseImage = func() string {
+			if u := versionpkg.CheckForUpdate(context.Background()); u != nil && u.LatestVersion != "" {
+				return "ghcr.io/skyhook-io/radar:" + u.LatestVersion
+			}
+			return ""
+		}
+	}
 
 	// `radar cloud <sub>` — the one subcommand family, dispatched before flag
 	// parsing. Supported subcommands handle themselves and exit; the reserved
@@ -70,6 +107,7 @@ func main() {
 	namespaces := flag.String("namespaces", fileCfg.NamespacesFlag(), "Initial namespace filters as a comma-separated list (e.g. ns1,ns2,ns3). Use this when you can list resources in specific namespaces but cannot list namespaces cluster-wide.")
 	port := flag.Int("port", fileCfg.PortOr(9280), "Server port")
 	listenAddress := flag.String("listen-address", server.DefaultListenAddress, "HTTP listen address: 127.0.0.1 or localhost for local-only access; 0.0.0.0 for remote/shared access")
+	basePath := flag.String("base-path", "", "URL path prefix to serve Radar under, e.g. /radar (empty = root). Use when an ingress forwards a subpath without stripping it.")
 	noBrowser := flag.Bool("no-browser", fileCfg.NoBrowser, "Don't auto-open browser")
 	browser := flag.String("browser", fileCfg.Browser, "Browser to use when opening the UI (default: OS default browser; macOS app names supported)")
 	devMode := flag.Bool("dev", false, "Development mode (serve frontend from filesystem)")
@@ -82,6 +120,7 @@ func main() {
 	disableLocalTerminal := flag.Bool("disable-local-terminal", false, "Disable local terminal feature")
 	podShellDefault := flag.String("pod-shell-default", "", "Override the default pod exec shell command (runs as 'sh -c <value>'; empty = built-in bash -il → ash → sh cascade)")
 	debugImage := flag.String("debug-image", fileCfg.DebugImage, "Image for ephemeral debug containers and node debug pods (empty = busybox:latest; point at a mirror for air-gapped/private-registry clusters)")
+	reachabilityImage := flag.String("reachability-image", fileCfg.ReachabilityImage, "Image for the in-cluster reachability probe Job (empty = RADAR_IMAGE env, then the version-matched published Radar image; point at a mirror for air-gapped clusters)")
 	listPageSize := flag.Int64("list-page-size", 0, "Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) at this page size on clusters without WatchList streaming. 0 = off (single LIST). Try 2000 if a very large cluster fails to sync.")
 	namespaceScope := flag.Bool("namespace-scope", false, "Scope namespaced informer caches to a single namespace (multiple namespaces are not supported yet). Requires --namespace or a kubeconfig context namespace. Local mode can rescope by switching namespaces; auth/cloud mode locks to the startup namespace.")
 	// Timeline storage options
@@ -112,6 +151,11 @@ func main() {
 	authGroupsHeader := flag.String("auth-groups-header", "X-Forwarded-Groups", "Header for groups (proxy mode)")
 	authProxyLogoutURL := flag.String("auth-proxy-logout-url", "", "URL the logout button redirects to in proxy mode, to tear down the upstream proxy session (e.g. oauth2-proxy's /oauth2/sign_out). The proxy must actually invalidate the session at this URL — Radar only clears its own cookie (Basic Auth has no logout). Empty = clear Radar's cookie only.")
 	authOIDCIssuer := flag.String("auth-oidc-issuer", "", "OIDC issuer URL")
+	authOIDCInternalIssuer := flag.String("auth-oidc-internal-issuer", "", "Internal OIDC issuer base URL used by Radar for discovery and derived server-side endpoints; tokens are still validated against --auth-oidc-issuer")
+	authOIDCAuthorizationURL := flag.String("auth-oidc-authorization-url", "", "Browser-facing OIDC authorization endpoint URL (overrides discovery)")
+	authOIDCTokenURL := flag.String("auth-oidc-token-url", "", "Server-side OIDC token endpoint URL (overrides discovery)")
+	authOIDCUserInfoURL := flag.String("auth-oidc-userinfo-url", "", "Server-side OIDC userinfo endpoint URL (overrides discovery)")
+	authOIDCJWKSURL := flag.String("auth-oidc-jwks-url", "", "Server-side OIDC JWKS endpoint URL (overrides discovery)")
 	authOIDCClientID := flag.String("auth-oidc-client-id", "", "OIDC client ID")
 	authOIDCClientSecret := flag.String("auth-oidc-client-secret", "", "OIDC client secret")
 	authOIDCRedirectURL := flag.String("auth-oidc-redirect-url", "", "OIDC redirect URL")
@@ -123,6 +167,7 @@ func main() {
 	authOIDCInsecureSkipVerify := flag.Bool("auth-oidc-insecure-skip-verify", false, "Skip TLS certificate verification for OIDC provider (insecure, dev/test only)")
 	authOIDCCACert := flag.String("auth-oidc-ca-cert", "", "Path to CA certificate file for OIDC provider TLS verification")
 	authOIDCBackchannelLogout := flag.Bool("auth-oidc-backchannel-logout", false, "Enable OIDC Back-Channel Logout endpoint (single-replica only)")
+	authOIDCEnablePKCE := flag.Bool("auth-oidc-enable-pkce", false, "Enable PKCE (S256) for the OIDC authorization-code flow (opt-in)")
 	// Radar Hub flags — enable connected mode when --cloud-url is set.
 	// Local-binary behavior is unchanged when these flags are empty. Each
 	// flag falls back to an env var so Kubernetes deployments can source
@@ -141,6 +186,16 @@ func main() {
 	namespaceListTimeout := flag.Duration("namespace-list-timeout", k8s.EnvDurationOr("RADAR_NAMESPACE_LIST_TIMEOUT", 5*time.Second), "Timeout for the cluster-wide namespace LIST used to decide if the user is RBAC-namespace-restricted (default: 5s). Widen to 30s or more on slow control planes — a timeout here is misreported in the UI as 'Limited list — RBAC'. Env: RADAR_NAMESPACE_LIST_TIMEOUT")
 	maxScopeCandidates := flag.Int("max-scope-candidates", k8s.EnvIntOr("RADAR_MAX_SCOPE_CANDIDATES", 20), "Cap on the namespace-fallback probe fanout for users who can list namespaces cluster-wide but not list a specific kind cluster-wide (default: 20). Raise for clusters with more than 20 namespaces to avoid silently marking kinds as denied in dropped namespaces. Env: RADAR_MAX_SCOPE_CANDIDATES")
 	flag.Parse()
+
+	// An explicit --reachability-image override applies to BOTH probe paths. It must
+	// win over the in-cluster self-read, so record it as the configured override
+	// (checked ABOVE self-read), not as DefaultImageRef (the last-resort fallback,
+	// below self-read - which would let radar's own pod image beat the operator's
+	// explicit choice on the MCP path). REST passes the config as the override arg;
+	// MCP has no server config, so it relies on this. Air-gapped mirrors work on both.
+	if *reachabilityImage != "" {
+		reachability.SetConfiguredImage(*reachabilityImage)
+	}
 
 	// Cloud-mode: Radar runs inside a customer cluster and connects to Radar Hub.
 	// The ordinary TCP listener is health-only; the full handler is served over
@@ -198,6 +253,18 @@ func main() {
 	if err != nil {
 		log.Fatalf("Invalid --listen-address %q: %v", *listenAddress, err)
 	}
+	normalizedBasePath, err := server.NormalizeBasePath(*basePath)
+	if err != nil {
+		log.Fatalf("Invalid --base-path %q: %v", *basePath, err)
+	}
+	// Radar Hub forwards root-relative paths over the tunnel and the ordinary
+	// listener is health-only at the literal /api/health, so a prefixed router
+	// would 404 both. Fail loudly instead of coming up broken. Both Cloud
+	// signals are checked because the chart sets them together but they are
+	// independent inputs, and either one alone is enough to break the prefix.
+	if normalizedBasePath != "" && (*cloudURL != "" || cloud.Mode()) {
+		log.Fatalf("--base-path is not supported in Radar Cloud mode (--cloud-url / RADAR_CLOUD_MODE): Radar Cloud owns the URL path")
+	}
 	timelineMaxSizeBytes, err := config.ParseByteSize(*timelineMaxSize)
 	if err != nil {
 		log.Fatalf("Invalid --timeline-max-size %q: %v", *timelineMaxSize, err)
@@ -244,6 +311,15 @@ func main() {
 		mcpEnabled = true
 	}
 
+	// Hub origin overrides for self-hosted control planes. When only the API
+	// origin is set, the frontend origin defaults to the same host — the
+	// self-hosted stack serves web + API from one origin; the hosted pair
+	// (api./app.radarhq.io) stays the default otherwise.
+	hubAPIURL, hubAppURL, err := cloud.ResolveHubOriginsFromEnv()
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+
 	cfg := app.AppConfig{
 		Kubeconfig:               *kubeconfig,
 		KubeconfigDirs:           app.ParseKubeconfigDirs(*kubeconfigDir),
@@ -252,6 +328,7 @@ func main() {
 		Port:                     *port,
 		ListenAddress:            normalizedListenAddress,
 		ShowRemoteAccessHint:     true,
+		BasePath:                 normalizedBasePath,
 		NoBrowser:                *noBrowser,
 		Browser:                  *browser,
 		DevMode:                  *devMode,
@@ -263,6 +340,7 @@ func main() {
 		DisableLocalTerminal:     *disableLocalTerminal,
 		PodShellDefault:          *podShellDefault,
 		DebugImage:               *debugImage,
+		ReachabilityImage:        *reachabilityImage,
 		ListPageSize:             *listPageSize,
 		NamespaceScope:           *namespaceScope,
 		TimelineStorage:          *timelineStorage,
@@ -277,6 +355,9 @@ func main() {
 		AIHistory:                *aiHistory,
 		AIHistoryDBPath:          fileCfg.AIHistoryDBPath,
 		Version:                  version,
+		HubAPIURL:                hubAPIURL,
+		HubAppURL:                hubAppURL,
+		CloudTunnelConfigured:    *cloudURL != "",
 		AuthConfig: auth.Config{
 			Mode:                      *authMode,
 			Secret:                    *authSecret,
@@ -285,6 +366,11 @@ func main() {
 			GroupsHeader:              *authGroupsHeader,
 			ProxyLogoutURL:            *authProxyLogoutURL,
 			OIDCIssuer:                *authOIDCIssuer,
+			OIDCInternalIssuer:        *authOIDCInternalIssuer,
+			OIDCAuthorizationURL:      *authOIDCAuthorizationURL,
+			OIDCTokenURL:              *authOIDCTokenURL,
+			OIDCUserInfoURL:           *authOIDCUserInfoURL,
+			OIDCJWKSURL:               *authOIDCJWKSURL,
 			OIDCClientID:              *authOIDCClientID,
 			OIDCClientSecret:          *authOIDCClientSecret,
 			OIDCRedirectURL:           *authOIDCRedirectURL,
@@ -296,6 +382,7 @@ func main() {
 			OIDCInsecureSkipVerify:    *authOIDCInsecureSkipVerify,
 			OIDCCACert:                *authOIDCCACert,
 			OIDCBackchannelLogout:     *authOIDCBackchannelLogout,
+			OIDCEnablePKCE:            *authOIDCEnablePKCE,
 		},
 	}
 
@@ -372,7 +459,10 @@ func main() {
 
 	// Open browser — server is confirmed ready to accept connections
 	if !cfg.NoBrowser {
-		targetURL := fmt.Sprintf("http://localhost:%d", cfg.Port)
+		targetURL := fmt.Sprintf("http://localhost:%d%s", cfg.Port, cfg.BasePath)
+		if cfg.BasePath != "" {
+			targetURL += "/"
+		}
 		if len(cfg.Namespaces) > 0 {
 			targetURL += "?namespaces=" + neturl.QueryEscape(strings.Join(cfg.Namespaces, ","))
 		} else if cfg.Namespace != "" {
@@ -417,9 +507,13 @@ func main() {
 				Namespace:          namespace,
 				APIServerURL:       apiServerURL,
 				InsecureSkipVerify: *cloudInsecureSkipVerify,
-				// The chart sets both env vars only when rbac.selfUpgrade is
-				// enabled. Match handleSelfUpgrade's configuration gate exactly.
-				SelfUpgradeAvailable: namespace != "" && deploymentName != "",
+				// Ask the apiserver whether this ServiceAccount may actually
+				// patch its own Deployment. Env presence is NOT the signal:
+				// identity ships on every install for read-only
+				// self-description, and a chart-set marker would go stale on
+				// exactly the path that matters — Hub's self-upgrade patches
+				// only the image, leaving an older pod template in place.
+				SelfUpgradeAvailable: func() bool { return canSelfUpgrade(rootCtx, k8s.GetClient(), namespace, deploymentName) },
 				Handler:              srv.Handler(),
 			})
 			if runErr != nil && !errors.Is(runErr, context.Canceled) {
@@ -467,7 +561,7 @@ func startServer(srv *server.Server, startupStart time.Time) (context.Context, c
 	k8s.LogTiming(" Server listening: %v (since start)", time.Since(startupStart))
 
 	// Write port file so MCP clients can discover the running server
-	app.WriteMCPPortFile(srv.ActualPort())
+	app.WriteMCPPortFile(srv.ActualPort(), srv.BasePath())
 
 	return rootCtx, rootCancel
 }
@@ -632,4 +726,46 @@ func (h *headerFromEnvFlag) Set(raw string) error {
 	}
 	h.m[key] = envName
 	return nil
+}
+
+// canSelfUpgrade reports whether Radar's ServiceAccount may patch its own
+// Deployment, which is what rbac.selfUpgrade's Role grants. Advertising this
+// to Hub from anything other than the apiserver's own answer produces an
+// upgrade button that 403s: a chart-set env marker is invisible to an
+// image-only self-upgrade, and identity env vars ship unconditionally.
+func canSelfUpgrade(ctx context.Context, client kubernetes.Interface, namespace, deploymentName string) bool {
+	if namespace == "" || deploymentName == "" {
+		return false
+	}
+	if client == nil {
+		return false
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	// Every operation the endpoint performs, not just the mutation: it gets the
+	// Deployment, reads the Helm release manifest out of the storage Secrets,
+	// then patches. A stock chart grants these together, but a BYO-RBAC install
+	// can pass a patch-only probe and still fail mid-upgrade.
+	//
+	// The Deployment reviews MUST name it: rbac.selfUpgrade's Role is scoped
+	// with resourceNames, so an unnamed "can I patch deployments here" review
+	// answers no even where self-upgrade is correctly enabled.
+	for _, probe := range []authv1.ResourceAttributes{
+		{Namespace: namespace, Group: "apps", Resource: "deployments", Name: deploymentName, Verb: "get"},
+		{Namespace: namespace, Group: "apps", Resource: "deployments", Name: deploymentName, Verb: "patch"},
+		{Namespace: namespace, Resource: "secrets", Verb: "list"},
+	} {
+		review := &authv1.SelfSubjectAccessReview{
+			Spec: authv1.SelfSubjectAccessReviewSpec{ResourceAttributes: &probe},
+		}
+		result, err := client.AuthorizationV1().SelfSubjectAccessReviews().Create(probeCtx, review, metav1.CreateOptions{})
+		if err != nil {
+			log.Printf("[cloud] self-upgrade capability probe failed, advertising unavailable: %v", err)
+			return false
+		}
+		if !result.Status.Allowed {
+			return false
+		}
+	}
+	return true
 }

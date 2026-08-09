@@ -165,6 +165,9 @@ func (s *Server) invalidatePostContextSwitchCaches() {
 	if s.rbacMemo != nil {
 		s.rbacMemo.Invalidate()
 	}
+	if s.capacityIssueMemo != nil {
+		s.capacityIssueMemo.clear()
+	}
 	k8s.InvalidateUserCapabilitiesCache()
 	clearPackagesCache()
 	clearApplicationsCache()

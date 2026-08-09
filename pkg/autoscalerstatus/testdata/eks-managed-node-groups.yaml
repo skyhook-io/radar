@@ -1,0 +1,70 @@
+time: 2026-07-19 06:53:58.945597758 +0000 UTC
+autoscalerStatus: Running
+clusterWide:
+  health:
+    status: Healthy
+    nodeCounts:
+      registered:
+        total: 9
+        ready: 9
+        notStarted: 0
+      longUnregistered: 0
+      unregistered: 0
+    lastProbeTime: "2026-07-19T06:53:58.945597758Z"
+    lastTransitionTime: "2026-07-19T06:53:58.945597758Z"
+  scaleUp:
+    status: NoActivity
+    lastProbeTime: "2026-07-19T06:53:58.945597758Z"
+    lastTransitionTime: "2026-07-19T06:53:58.945597758Z"
+  scaleDown:
+    status: NoCandidates
+    lastProbeTime: "2026-07-19T06:53:58.945597758Z"
+    lastTransitionTime: "2026-07-19T06:53:58.945597758Z"
+nodeGroups:
+- name: eks-loadtest-od-26cf0a34-4af9-ec18-066e-a8b0142e7d03
+  health:
+    status: Healthy
+    cloudProviderTarget: 0
+    minSize: 0
+    maxSize: 1
+  scaleUp:
+    status: NoActivity
+  scaleDown:
+    status: NoCandidates
+    lastProbeTime: "2026-07-19T06:53:58.945597758Z"
+    lastTransitionTime: "2026-07-19T06:53:58.945597758Z"
+- name: eks-loadtest-sp-78cf0a34-507a-506b-a84c-a854bbcb70dc
+  health:
+    status: Healthy
+    cloudProviderTarget: 0
+    minSize: 0
+    maxSize: 1
+  scaleUp:
+    status: NoActivity
+  scaleDown:
+    status: NoCandidates
+    lastProbeTime: "2026-07-19T06:53:58.945597758Z"
+    lastTransitionTime: "2026-07-19T06:53:58.945597758Z"
+- name: eks-system-pool-28cf09b0-ae43-f32a-94c0-27fea5fc8bdc
+  health:
+    status: Healthy
+    nodeCounts:
+      registered:
+        total: 2
+        ready: 2
+        notStarted: 0
+      longUnregistered: 0
+      unregistered: 0
+    cloudProviderTarget: 2
+    minSize: 2
+    maxSize: 4
+    lastProbeTime: "2026-07-19T06:53:58.945597758Z"
+    lastTransitionTime: "2026-07-19T06:53:58.945597758Z"
+  scaleUp:
+    status: NoActivity
+    lastProbeTime: "2026-07-19T06:53:58.945597758Z"
+    lastTransitionTime: "2026-07-19T06:53:58.945597758Z"
+  scaleDown:
+    status: NoCandidates
+    lastProbeTime: "2026-07-19T06:53:58.945597758Z"
+    lastTransitionTime: "2026-07-19T06:53:58.945597758Z"

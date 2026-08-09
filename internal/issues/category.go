@@ -38,7 +38,7 @@ func Classify(in classifyInput) issuesapi.Category {
 			// Pod Security admission (built-in PSA) is NOT a webhook — don't
 			// mislabel it as such.
 			return issuesapi.CategoryPodSecurityViolation
-		case "WebhookDenied":
+		case "WebhookDenied", "WebhookUnavailable":
 			return issuesapi.CategoryAdmissionWebhookBlocking
 		case "RBACForbidden":
 			return issuesapi.CategoryRBACForbidden
@@ -57,6 +57,8 @@ func Classify(in classifyInput) issuesapi.Category {
 		switch in.Reason {
 		case "Missing backend Service", "Missing backend Service port":
 			return issuesapi.CategoryIngressBackendMissing
+		case "Missing IngressClass":
+			return issuesapi.CategoryIngressClassMissing
 		case "Missing Gateway backend Service", "Missing Gateway backend Service port", "Missing Gateway ReferenceGrant":
 			return issuesapi.CategoryGatewayRouteInvalid
 		case "Missing webhook backend Service":
@@ -72,6 +74,14 @@ func Classify(in classifyInput) issuesapi.Category {
 		return issuesapi.CategoryMissingConfigRef
 
 	case SourceCondition:
+		switch in.Reason {
+		case ReasonKarpenterNodePoolNotReady,
+			ReasonKarpenterNodeClassNotReady,
+			ReasonKarpenterNodeClassNotFound,
+			ReasonKarpenterNodeClassKindNotInstalled,
+			ReasonKarpenterNodeClaimProvisioningFailed:
+			return issuesapi.CategoryNodeProvisioningFail
+		}
 		// Generic CRD .status.conditions[]=False fallback. Discriminate the
 		// well-known controller families by API group.
 		g := strings.ToLower(in.APIGroup)
@@ -104,6 +114,14 @@ func Classify(in classifyInput) issuesapi.Category {
 			return issuesapi.CategoryOperatorConditionFail
 		case g == "apiregistration.k8s.io" && in.Kind == "APIService":
 			return issuesapi.CategoryAPIServiceUnavailable
+		case g == "velero.io":
+			// The location/repository kinds are the backup *target* being
+			// unreachable, which is a different fix from a run that failed.
+			switch in.Kind {
+			case "BackupStorageLocation", "VolumeSnapshotLocation", "BackupRepository":
+				return issuesapi.CategoryBackupTargetUnavailable
+			}
+			return issuesapi.CategoryBackupFailed
 		case g == "external-secrets.io":
 			return issuesapi.CategorySecretSyncFailed
 		case g == "keda.sh":
@@ -265,10 +283,10 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		return issuesapi.CategoryJobFailed
 
 	case "CronJob":
-		// "stale" (no recent run) / "never-scheduled" — the CronJob is not
-		// producing the Jobs it's meant to.
+		// CronJob schedule-level failures: no recent run, no run at all, or
+		// repeated schedules without a recorded success.
 		switch in.Reason {
-		case "stale", "never-scheduled":
+		case "stale", "never-scheduled", "repeated-without-success":
 			return issuesapi.CategoryCronJobFailed
 		}
 		return issuesapi.CategoryUnknown
@@ -329,7 +347,7 @@ func isBatchFailureProblem(kind, reason string) bool {
 	if kind == "Job" {
 		return true
 	}
-	return kind == "CronJob" && (reason == "stale" || reason == "never-scheduled")
+	return kind == "CronJob" && (reason == "stale" || reason == "never-scheduled" || reason == "repeated-without-success")
 }
 
 // classifyGitOpsReason maps a GitOps detector/condition reason to a specific

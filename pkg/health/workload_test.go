@@ -140,3 +140,81 @@ func TestWorkloadGoldenVectors(t *testing.T) {
 		})
 	}
 }
+
+// TestWorkloadConvergenceGrace covers the window between a spec change and the
+// controller acting on it. Without it, replicaVerdict graded purely on
+// ready-vs-desired, so a Deployment scaled 3->10 read NoneReady/PartiallyReady
+// the instant the spec changed — before the controller had created a single
+// pod. That is controller lag, not an outage.
+//
+// The contract is Neutral, never Healthy: radar declines to call it broken
+// without claiming it is fine.
+func TestWorkloadConvergenceGrace(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	old := metav1.NewTime(now.Add(-30 * 24 * time.Hour))
+	fresh := metav1.NewTime(now.Add(-30 * time.Second))
+
+	tests := []struct {
+		name      string
+		dep       *appsv1.Deployment
+		wantLevel Level
+	}{
+		{
+			name: "long-lived deployment scaled up, controller has not observed the new spec",
+			dep: &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: old, Generation: 7},
+				Spec:       appsv1.DeploymentSpec{Replicas: ptr32(10)},
+				Status: appsv1.DeploymentStatus{
+					ObservedGeneration: 6, // one behind: spec moved, controller hasn't
+					ReadyReplicas:      3, AvailableReplicas: 3,
+				},
+			},
+			wantLevel: LevelNeutral,
+		},
+		{
+			// Age alone must NOT buy grace. A deploy that is broken on arrival is
+			// still broken, and softening it is worst exactly when it matters
+			// most: an earlier revision granted every workload a 5-minute window
+			// and reported an unschedulable Deployment as neutral while that same
+			// object carried a critical workload_degraded issue.
+			name: "freshly created but controller caught up is graded normally",
+			dep: &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: fresh, Generation: 1},
+				Spec:       appsv1.DeploymentSpec{Replicas: ptr32(3)},
+				Status:     appsv1.DeploymentStatus{ObservedGeneration: 1},
+			},
+			wantLevel: LevelUnhealthy,
+		},
+		{
+			// Past the window with the controller caught up and still nothing
+			// ready — this is a real outage and must not be softened.
+			name: "settled deployment with zero ready is unhealthy",
+			dep: &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: old, Generation: 7},
+				Spec:       appsv1.DeploymentSpec{Replicas: ptr32(3)},
+				Status:     appsv1.DeploymentStatus{ObservedGeneration: 7},
+			},
+			wantLevel: LevelUnhealthy,
+		},
+		{
+			// Converged: grace must never downgrade a genuinely healthy result.
+			name: "settled and fully ready is healthy",
+			dep: &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: old, Generation: 7},
+				Spec:       appsv1.DeploymentSpec{Replicas: ptr32(3)},
+				Status: appsv1.DeploymentStatus{
+					ObservedGeneration: 7, ReadyReplicas: 3, AvailableReplicas: 3,
+				},
+			},
+			wantLevel: LevelHealthy,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Workload(tt.dep, now).Level; got != tt.wantLevel {
+				t.Errorf("Level = %v, want %v", got, tt.wantLevel)
+			}
+		})
+	}
+}

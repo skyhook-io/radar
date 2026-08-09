@@ -74,6 +74,17 @@ type CheckInput struct {
 	// Traefik route → Service references, including cross-namespace ones.
 	AllServices []*corev1.Service
 
+	// CloudNativePG CRDs arrive unstructured (no shared typed schema). Clusters
+	// are the subjects of the declarative-backup check; ScheduledBackups are the
+	// targets it looks for. Both nil when CNPG isn't installed or RBAC denies it.
+	CNPGClusters         []*unstructured.Unstructured
+	CNPGScheduledBackups []*unstructured.Unstructured
+	// CNPGScheduledBackupsAuthoritative is true only when a synced cluster-wide
+	// ScheduledBackup informer backs the inventory. False → the cache may know a
+	// subset of namespaces, so "no schedule found" doesn't prove "none exists"
+	// and the check must not run at all.
+	CNPGScheduledBackupsAuthoritative bool
+
 	// GitOpsToolsPresent gates the GitOps coverage check (checkGitOpsCoverage).
 	// True when at least one GitOps root OBJECT exists (Argo CD Application,
 	// Flux Kustomization, or Flux HelmRelease) — not merely the CRDs, which

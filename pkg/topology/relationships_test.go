@@ -10,6 +10,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // stubProvider supplies a typed K8s resource for the kinds GetRelationships
@@ -48,6 +49,117 @@ func (s *stubProvider) NetworkPolicies() ([]*networkingv1.NetworkPolicy, error) 
 func (s *stubProvider) Nodes() ([]*corev1.Node, error)                          { return nil, nil }
 func (s *stubProvider) GetResourceStatus(kind, namespace, name string) *ResourceStatus {
 	return nil
+}
+
+func TestGetCascadeDeletePreview_GroupQualifiedCollisions(t *testing.T) {
+	capiGVR := schema.GroupVersionResource{Group: "cluster.x-k8s.io", Version: "v1beta1", Resource: "clusters"}
+	cnpgGVR := schema.GroupVersionResource{Group: "postgresql.cnpg.io", Version: "v1", Resource: "clusters"}
+	dp := &stubDP{
+		gvrByGroup: map[string]schema.GroupVersionResource{
+			"cluster.x-k8s.io/clusters":   capiGVR,
+			"postgresql.cnpg.io/clusters": cnpgGVR,
+		},
+		kindByGVR: map[schema.GroupVersionResource]string{
+			capiGVR: "Cluster",
+			cnpgGVR: "Cluster",
+		},
+	}
+	topo := &Topology{
+		Nodes: []Node{
+			{ID: "capicluster/fleet/prod", Kind: KindCAPICluster, Name: "prod", Data: map[string]any{"namespace": "fleet", "apiVersion": "cluster.x-k8s.io/v1beta1"}},
+			{ID: "machinedeployment/fleet/capi-workers", Kind: KindMachineDeployment, Name: "capi-workers", Data: map[string]any{"namespace": "fleet", "apiVersion": "cluster.x-k8s.io/v1beta1"}},
+			{ID: "machine/fleet/capi-worker-1", Kind: KindMachine, Name: "capi-worker-1", Data: map[string]any{"namespace": "fleet", "apiVersion": "cluster.x-k8s.io/v1beta1"}},
+			{ID: "cluster/fleet/prod", Kind: NodeKind("Cluster"), Name: "prod", Data: map[string]any{"namespace": "fleet", "apiVersion": "postgresql.cnpg.io/v1"}},
+			{ID: "backup/fleet/cnpg-backup", Kind: NodeKind("Backup"), Name: "cnpg-backup", Data: map[string]any{"namespace": "fleet", "apiVersion": "postgresql.cnpg.io/v1"}},
+		},
+		Edges: []Edge{
+			{Source: "capicluster/fleet/prod", Target: "machinedeployment/fleet/capi-workers", Type: EdgeManages},
+			{Source: "machinedeployment/fleet/capi-workers", Target: "machine/fleet/capi-worker-1", Type: EdgeManages},
+			{Source: "cluster/fleet/prod", Target: "backup/fleet/cnpg-backup", Type: EdgeManages},
+		},
+	}
+
+	capi := GetCascadeDeletePreview(ResourceRef{Kind: "clusters", Namespace: "fleet", Name: "prod", Group: "cluster.x-k8s.io"}, topo, dp)
+	if !capi.RootResolved {
+		t.Fatal("expected CAPI root to resolve")
+	}
+	if len(capi.Dependents) != 2 || capi.Dependents[0].Name != "capi-workers" || capi.Dependents[1].Name != "capi-worker-1" {
+		t.Fatalf("CAPI dependents = %+v, want its MachineDeployment and transitive Machine", capi.Dependents)
+	}
+	for _, dep := range capi.Dependents {
+		if dep.Group != "cluster.x-k8s.io" {
+			t.Errorf("CAPI dependent %s group = %q, want cluster.x-k8s.io", dep.Name, dep.Group)
+		}
+	}
+
+	cnpg := GetCascadeDeletePreview(ResourceRef{Kind: "clusters", Namespace: "fleet", Name: "prod", Group: "postgresql.cnpg.io"}, topo, dp)
+	if !cnpg.RootResolved {
+		t.Fatal("expected CNPG root to resolve")
+	}
+	if len(cnpg.Dependents) != 1 || cnpg.Dependents[0].Name != "cnpg-backup" {
+		t.Fatalf("CNPG dependents = %+v, want only cnpg-backup", cnpg.Dependents)
+	}
+	if cnpg.Dependents[0].Group != "postgresql.cnpg.io" {
+		t.Errorf("CNPG dependent group = %q, want postgresql.cnpg.io", cnpg.Dependents[0].Group)
+	}
+
+	dp.gvr = map[string]schema.GroupVersionResource{"clusters": cnpgGVR}
+	unqualified := GetCascadeDeletePreview(ResourceRef{Kind: "clusters", Namespace: "fleet", Name: "prod"}, topo, dp)
+	if unqualified.RootResolved {
+		t.Fatalf("unqualified collided root = %+v, want unresolved rather than an arbitrary group", unqualified)
+	}
+}
+
+func TestGetCascadeDeletePreview_ResolutionState(t *testing.T) {
+	topo := &Topology{Nodes: []Node{{ID: "pod/demo/leaf", Kind: KindPod, Name: "leaf", Data: map[string]any{"namespace": "demo"}}}}
+
+	leaf := GetCascadeDeletePreview(ResourceRef{Kind: "pods", Namespace: "demo", Name: "leaf"}, topo, nil)
+	if !leaf.RootResolved || len(leaf.Dependents) != 0 {
+		t.Fatalf("resolved leaf preview = %+v, want resolved with zero dependents", leaf)
+	}
+
+	absent := GetCascadeDeletePreview(ResourceRef{Kind: "pods", Namespace: "demo", Name: "missing"}, topo, nil)
+	if absent.RootResolved || len(absent.Dependents) != 0 {
+		t.Fatalf("absent preview = %+v, want unresolved with zero dependents", absent)
+	}
+
+	discoveryMiss := GetCascadeDeletePreview(ResourceRef{Kind: "clusters", Namespace: "fleet", Name: "prod", Group: "cluster.x-k8s.io"}, topo, &stubDP{})
+	if discoveryMiss.RootResolved {
+		t.Fatalf("discovery miss preview = %+v, want unresolved without group-blind fallback", discoveryMiss)
+	}
+}
+
+func TestGetCascadeDeletePreview_RouteCollisionUsesGroup(t *testing.T) {
+	knativeGVR := schema.GroupVersionResource{Group: "serving.knative.dev", Version: "v1", Resource: "routes"}
+	openshiftGVR := schema.GroupVersionResource{Group: "route.openshift.io", Version: "v1", Resource: "routes"}
+	dp := &stubDP{
+		gvrByGroup: map[string]schema.GroupVersionResource{
+			"serving.knative.dev/routes": knativeGVR,
+			"route.openshift.io/routes":  openshiftGVR,
+		},
+		kindByGVR: map[schema.GroupVersionResource]string{knativeGVR: "Route", openshiftGVR: "Route"},
+	}
+	topo := &Topology{
+		Nodes: []Node{
+			{ID: "knativeroute/demo/shop", Kind: KindKnativeRoute, Name: "shop", Data: map[string]any{"namespace": "demo", "apiVersion": "serving.knative.dev/v1"}},
+			{ID: "revision/demo/shop-v1", Kind: KindKnativeRevision, Name: "shop-v1", Data: map[string]any{"namespace": "demo", "apiVersion": "serving.knative.dev/v1"}},
+			{ID: "route/demo/shop", Kind: NodeKind("Route"), Name: "shop", Data: map[string]any{"namespace": "demo", "apiVersion": "route.openshift.io/v1"}},
+			{ID: "service/demo/shop", Kind: KindService, Name: "shop", Data: map[string]any{"namespace": "demo"}},
+		},
+		Edges: []Edge{
+			{Source: "knativeroute/demo/shop", Target: "revision/demo/shop-v1", Type: EdgeManages},
+			{Source: "route/demo/shop", Target: "service/demo/shop", Type: EdgeManages},
+		},
+	}
+
+	knative := GetCascadeDeletePreview(ResourceRef{Kind: "routes", Namespace: "demo", Name: "shop", Group: "serving.knative.dev"}, topo, dp)
+	if !knative.RootResolved || len(knative.Dependents) != 1 || knative.Dependents[0].Name != "shop-v1" {
+		t.Fatalf("Knative preview = %+v, want only shop-v1", knative)
+	}
+	openshift := GetCascadeDeletePreview(ResourceRef{Kind: "routes", Namespace: "demo", Name: "shop", Group: "route.openshift.io"}, topo, dp)
+	if !openshift.RootResolved || len(openshift.Dependents) != 1 || openshift.Dependents[0].Kind != "Service" {
+		t.Fatalf("OpenShift preview = %+v, want only Service/shop", openshift)
+	}
 }
 
 // TestGetRelationships_PodHygieneFields covers T2: pods carry

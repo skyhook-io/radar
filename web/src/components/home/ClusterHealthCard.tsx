@@ -10,11 +10,16 @@ import { clsx } from 'clsx'
 import { formatCPUMillicores, formatMemoryMiB } from '../../utils/format'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
 import { MCPSetupDialog } from './MCPSetupDialog'
-import { pluralize, parseContextName } from '@skyhook-io/k8s-ui'
+import { assetUrl, pluralize, parseContextName } from '@skyhook-io/k8s-ui'
 import { Tooltip } from '../ui/Tooltip'
+import { routePath } from '../../api/config'
 import gkeIcon from '../../assets/platform-icons/google_kubernetes_engine.png'
 import eksIcon from '../../assets/platform-icons/aws_eks.png'
 import aksIcon from '../../assets/platform-icons/azure-aks.svg'
+
+const gkeIconUrl = assetUrl(gkeIcon)
+const eksIconUrl = assetUrl(eksIcon)
+const aksIconUrl = assetUrl(aksIcon)
 
 interface ClusterHealthCardProps {
   health: DashboardResponse['health']
@@ -74,13 +79,13 @@ function MetricsUnavailableHint({ platform, metricsServerAvailable }: { platform
 function getPlatformInfo(platform: string): { name: string; icon: string | null } {
   const platformLower = platform.toLowerCase()
   if (platformLower.includes('gke') || platformLower.includes('google')) {
-    return { name: 'Google Kubernetes Engine', icon: gkeIcon }
+    return { name: 'Google Kubernetes Engine', icon: gkeIconUrl }
   }
   if (platformLower.includes('eks') || platformLower.includes('amazon') || platformLower.includes('aws')) {
-    return { name: 'Amazon EKS', icon: eksIcon }
+    return { name: 'Amazon EKS', icon: eksIconUrl }
   }
   if (platformLower.includes('aks') || platformLower.includes('azure')) {
-    return { name: 'Azure Kubernetes Service', icon: aksIcon }
+    return { name: 'Azure Kubernetes Service', icon: aksIconUrl }
   }
   if (platformLower.includes('openshift')) {
     return { name: 'OpenShift', icon: null }
@@ -138,7 +143,7 @@ export function ClusterHealthCard({
   const mcpEnabled = caps.mcpEnabled
   const isCloud = deployment.mode === 'cloud'
   const isInCluster = deployment.mode === 'in-cluster' || deployment.mode === 'cloud'
-  const mcpUrl = `${window.location.origin}/mcp`
+  const mcpUrl = `${window.location.origin}${routePath('/mcp')}`
   // In Cloud, MCP is org-wide and PAT-authed (api.radarhq.io/mcp). The OSS
   // "this binary is your local MCP server" framing is wrong there — Cloud
   // surfaces MCP from the hub Home dashboard instead.

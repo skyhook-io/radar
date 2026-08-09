@@ -235,3 +235,67 @@
   }
 
 } /* end @layer components */
+
+/* Brief pulse the trace panel uses to flash the broken hop after the
+   verdict banner's "Show me" button scrolls it into view. Outside the
+   components layer so it's not subject to specificity tweaks. */
+@keyframes trace-broken-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+  35% { box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.45); }
+  100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+}
+.trace-broken-pulse {
+  animation: trace-broken-pulse 1.2s ease-out;
+}
+
+/* reach-flash: briefly highlights a value that just CHANGED after a probe run, so a
+   fast/identical-looking result is still visibly "new". Fades from the accent tint. */
+@keyframes reach-flash {
+  0%   { background-color: var(--accent-muted); }
+  100% { background-color: transparent; }
+}
+.reach-flash {
+  animation: reach-flash 1.6s ease-out;
+  border-radius: 4px;
+}
+
+/* reach-edge-testing: a request is IN FLIGHT along this edge right now.
+   The dash pattern flows toward the target, so the graph shows the probe
+   travelling the path it is testing rather than the page just saying
+   "running" in a button. Semantic, not decorative: only edges the running
+   vantage is actually exercising get it. */
+@keyframes reach-edge-flow {
+  to { stroke-dashoffset: -24; }
+}
+.reach-edge-testing {
+  animation: reach-edge-flow 0.9s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .reach-edge-testing { animation: none; }
+}
+
+/* reach-node-testing: the vantage a test is running FROM, while it runs.
+   The edge already shows the request travelling; the capsule it leaves from
+   stayed inert, so the source of the work looked as static as everything else.
+   A slow border breathe + a lifted surface says "this one is working" without
+   competing with the flowing edge. Semantic: only the running origin gets it. */
+@keyframes reach-node-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); }
+  50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 12%, transparent); }
+}
+.reach-node-testing {
+  animation: reach-node-breathe 1.6s ease-in-out infinite;
+}
+/* The label itself pulses gently - "testing now" that never changes reads as
+   a stuck state on a long run. */
+@keyframes reach-label-fade {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+.reach-label-testing {
+  animation: reach-label-fade 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .reach-node-testing,
+  .reach-label-testing { animation: none; }
+}

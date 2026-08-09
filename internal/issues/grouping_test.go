@@ -63,6 +63,24 @@ func TestGroupIssues_FoldsMembersUnderOwner(t *testing.T) {
 	}
 }
 
+func TestGroupIssuesPreservesUnknownOnsetOnlyWithoutKnownMemberTime(t *testing.T) {
+	dep := Ref{Group: "apps", Kind: "Deployment", Namespace: "ns", Name: "web"}
+	unknownA := flatPod("web-a", "CrashLoopBackOff", SeverityWarning, dep, time.Time{}, time.Unix(2000, 0))
+	unknownA.OnsetUnknown = true
+	unknownB := flatPod("web-b", "CrashLoopBackOff", SeverityWarning, dep, time.Time{}, time.Unix(3000, 0))
+	unknownB.OnsetUnknown = true
+	grouped := GroupIssues([]Issue{unknownA, unknownB})
+	if len(grouped) != 1 || !grouped[0].OnsetUnknown || !grouped[0].FirstSeen.IsZero() {
+		t.Fatalf("all-unknown group = %+v", grouped)
+	}
+
+	known := flatPod("web-c", "CrashLoopBackOff", SeverityWarning, dep, time.Unix(1000, 0), time.Unix(3000, 0))
+	grouped = GroupIssues([]Issue{unknownA, known})
+	if len(grouped) != 1 || grouped[0].OnsetUnknown || !grouped[0].FirstSeen.Equal(time.Unix(1000, 0)) {
+		t.Fatalf("mixed known/unknown group = %+v", grouped)
+	}
+}
+
 func TestGroupIssues_RolloutSubjectIsWorkload(t *testing.T) {
 	ro := Ref{Group: "argoproj.io", Kind: "Rollout", Namespace: "ns", Name: "web"}
 	i := Issue{
@@ -247,6 +265,47 @@ func TestComposeWithStats_GroupedCapsOnGroups(t *testing.T) {
 	}
 }
 
+// TestCompose_PropagatesCapacityRelevant pins that a scheduling detection's
+// CapacityRelevant flag (an unschedulable pod pinned to a Karpenter NodePool)
+// survives Detection→Issue compose and the fold onto the grouped row, so the
+// frontend can link the issue to the Capacity view without parsing messages.
+func TestCompose_PropagatesCapacityRelevant(t *testing.T) {
+	p := &fakeProvider{
+		scheduling: []k8s.Detection{
+			{Kind: "Pod", Namespace: "prod", Name: "web-0", Reason: "Unschedulable", Severity: "critical",
+				OwnerGroup: "apps", OwnerKind: "Deployment", OwnerName: "web", CapacityRelevant: true},
+			{Kind: "Pod", Namespace: "prod", Name: "cache-0", Reason: "Unschedulable", Severity: "critical"},
+		},
+	}
+	flat := Compose(p, Filters{Limit: NoLimit})
+	var web, cache *Issue
+	for i := range flat {
+		switch flat[i].Name {
+		case "web-0":
+			web = &flat[i]
+		case "cache-0":
+			cache = &flat[i]
+		}
+	}
+	if web == nil || !web.CapacityRelevant {
+		t.Fatalf("flat web-0 CapacityRelevant not propagated: %+v", web)
+	}
+	if cache == nil || cache.CapacityRelevant {
+		t.Fatalf("flat cache-0 must not be capacity-relevant: %+v", cache)
+	}
+
+	grouped := GroupIssues(flat)
+	var webGroup *Issue
+	for i := range grouped {
+		if grouped[i].Kind == "Deployment" && grouped[i].Name == "web" {
+			webGroup = &grouped[i]
+		}
+	}
+	if webGroup == nil || !webGroup.CapacityRelevant {
+		t.Fatalf("grouped web Deployment must keep CapacityRelevant, got %+v", webGroup)
+	}
+}
+
 // TestRelatedIssues_SubjectAndMember pins what diagnose relies on: querying a
 // resource returns the grouped issues where it's the SUBJECT or an affected
 // MEMBER. A Pod-evidenced crashloop under a Deployment is returned for both the
@@ -256,13 +315,13 @@ func TestRelatedIssues_SubjectAndMember(t *testing.T) {
 		{Kind: "Pod", Namespace: "prod", Name: "web-abc-1", Reason: "CrashLoopBackOff", Severity: "critical",
 			OwnerGroup: "apps", OwnerKind: "Deployment", OwnerName: "web"},
 	}}
-	if got := RelatedIssues(p, nil, "apps", "Deployment", "prod", "web"); len(got) != 1 {
+	if got := RelatedIssues(p, RelatedIssueOptions{}, "apps", "Deployment", "prod", "web"); len(got) != 1 {
 		t.Fatalf("RelatedIssues(owning Deployment) = %d, want 1 (subject match)", len(got))
 	}
-	if got := RelatedIssues(p, nil, "", "pod", "prod", "web-abc-1"); len(got) != 1 {
+	if got := RelatedIssues(p, RelatedIssueOptions{}, "", "pod", "prod", "web-abc-1"); len(got) != 1 {
 		t.Errorf("RelatedIssues(evidence Pod, case-insensitive) = %d, want 1 (member match)", len(got))
 	}
-	if got := RelatedIssues(p, nil, "apps", "Deployment", "prod", "other"); len(got) != 0 {
+	if got := RelatedIssues(p, RelatedIssueOptions{}, "apps", "Deployment", "prod", "other"); len(got) != 0 {
 		t.Errorf("RelatedIssues(unrelated) = %d, want 0", len(got))
 	}
 }
@@ -281,7 +340,7 @@ func TestRelatedIssues_PopulatesIncidentParent(t *testing.T) {
 		},
 		podsMountingPVC: map[string][]Ref{"prod/data": {{Kind: "Pod", Namespace: "prod", Name: "db-0"}}},
 	}
-	got := RelatedIssues(p, nil, "", "Pod", "prod", "db-0")
+	got := RelatedIssues(p, RelatedIssueOptions{}, "", "Pod", "prod", "db-0")
 	if len(got) != 1 {
 		t.Fatalf("RelatedIssues(db-0) = %d, want 1", len(got))
 	}
@@ -316,7 +375,7 @@ func TestRelatedIssues_IncidentParentCoverageGate(t *testing.T) {
 			{Kind: "Pod", Namespace: "prod", Name: "db-1"},
 		}},
 	}
-	got := RelatedIssues(p, nil, "", "Pod", "prod", "db-0")
+	got := RelatedIssues(p, RelatedIssueOptions{}, "", "Pod", "prod", "db-0")
 	if len(got) != 1 {
 		t.Fatalf("RelatedIssues(db-0) = %d, want 1", len(got))
 	}
@@ -338,10 +397,10 @@ func TestRelatedIssuesFrom_MatchesPrecomposed(t *testing.T) {
 	}}
 	flat := Compose(p, Filters{Limit: NoLimit})
 	grouped := GroupIssues(flat)
-	if got := RelatedIssuesFrom(flat, grouped, "apps", "Deployment", "prod", "web"); len(got) != 1 {
+	if got := RelatedIssuesFrom(flat, grouped, RelatedIssueOptions{}, "apps", "Deployment", "prod", "web"); len(got) != 1 {
 		t.Errorf("RelatedIssuesFrom(owning Deployment) = %d, want 1", len(got))
 	}
-	if got := RelatedIssuesFrom(flat, grouped, "apps", "Deployment", "prod", "other"); len(got) != 0 {
+	if got := RelatedIssuesFrom(flat, grouped, RelatedIssueOptions{}, "apps", "Deployment", "prod", "other"); len(got) != 0 {
 		t.Errorf("RelatedIssuesFrom(unrelated) = %d, want 0", len(got))
 	}
 }
@@ -364,7 +423,7 @@ func TestRelatedIssuesFrom_NoIncidentParentOnBarePair(t *testing.T) {
 	}
 	flat := Compose(p, Filters{Limit: NoLimit})
 	grouped := GroupIssues(flat)
-	got := RelatedIssuesFrom(flat, grouped, "", "Pod", "prod", "db-0")
+	got := RelatedIssuesFrom(flat, grouped, RelatedIssueOptions{}, "", "Pod", "prod", "db-0")
 	if len(got) != 1 {
 		t.Fatalf("RelatedIssuesFrom(db-0) = %d, want 1", len(got))
 	}
@@ -385,7 +444,7 @@ func TestRelatedIssuesFrom_NormalizesGroup(t *testing.T) {
 	}}
 	flat := Compose(p, Filters{Limit: NoLimit})
 	grouped := GroupIssues(flat)
-	if got := RelatedIssuesFrom(flat, grouped, "", "Deployment", "prod", "web"); len(got) != 1 {
+	if got := RelatedIssuesFrom(flat, grouped, RelatedIssueOptions{}, "", "Deployment", "prod", "web"); len(got) != 1 {
 		t.Errorf("raw empty query group should normalize to apps and match, got %d", len(got))
 	}
 }
@@ -396,11 +455,11 @@ func TestRelatedIssues_GroupIsExact(t *testing.T) {
 		{Kind: "Service", Group: "serving.knative.dev", Namespace: "prod", Name: "api", Reason: "0/1 selected pods ready", Severity: "critical"},
 	}}
 
-	core := RelatedIssues(p, nil, "", "Service", "prod", "api")
+	core := RelatedIssues(p, RelatedIssueOptions{}, "", "Service", "prod", "api")
 	if len(core) != 1 || core[0].Group != "" {
 		t.Fatalf("core Service lookup should match only core-group issue, got %+v", core)
 	}
-	knative := RelatedIssues(p, nil, "serving.knative.dev", "Service", "prod", "api")
+	knative := RelatedIssues(p, RelatedIssueOptions{}, "serving.knative.dev", "Service", "prod", "api")
 	if len(knative) != 1 || knative[0].Group != "serving.knative.dev" {
 		t.Fatalf("Knative Service lookup should match only serving.knative.dev issue, got %+v", knative)
 	}
@@ -419,10 +478,10 @@ func TestRelatedIssues_UncappedMembers(t *testing.T) {
 		})
 	}
 	p := &fakeProvider{problems: probs}
-	if got := RelatedIssues(p, nil, "", "Pod", "prod", "web-abc-11"); len(got) != 1 {
+	if got := RelatedIssues(p, RelatedIssueOptions{}, "", "Pod", "prod", "web-abc-11"); len(got) != 1 {
 		t.Errorf("pod beyond the inline-Members cap = %d related issues, want 1 (uncapped lookup)", len(got))
 	}
-	if got := RelatedIssues(p, nil, "apps", "Deployment", "prod", "web"); len(got) != 1 {
+	if got := RelatedIssues(p, RelatedIssueOptions{}, "apps", "Deployment", "prod", "web"); len(got) != 1 {
 		t.Errorf("owning Deployment = %d related issues, want 1", len(got))
 	}
 }
@@ -442,5 +501,62 @@ func TestGroupIssuesPreservesDiagnosticContext(t *testing.T) {
 	}
 	if grouped[0].DiagnosticContext.Facts[0].Confidence != issuesapi.ConfidenceHigh {
 		t.Fatalf("confidence lost in regroup")
+	}
+}
+
+func TestComposeCapacityRelevanceCorrelationRequiresNodePoolAccess(t *testing.T) {
+	detection := k8s.Detection{
+		Kind: "Pod", Namespace: "shop", Name: "web-1", Severity: "warning",
+		Reason: "Unschedulable", Message: "0/3 nodes are available",
+		CapacityRelevantCorrelated: true,
+	}
+	structural := k8s.Detection{
+		Kind: "Pod", Namespace: "shop", Name: "pinned-1", Severity: "warning",
+		Reason: "Unschedulable", Message: "0/3 nodes are available",
+		CapacityRelevant: true,
+	}
+	provider := &fakeProvider{scheduling: []k8s.Detection{detection, structural}}
+
+	denyNodePools := func(kind, group string) bool {
+		return !(kind == "NodePool" && group == "karpenter.sh")
+	}
+	byName := func(issues []Issue) map[string]Issue {
+		out := map[string]Issue{}
+		for _, issue := range issues {
+			out[issue.Name] = issue
+		}
+		return out
+	}
+
+	denied := byName(Compose(provider, Filters{Limit: NoLimit, CanReadClusterScoped: denyNodePools}))
+	if denied["web-1"].CapacityRelevant {
+		t.Fatal("correlated capacity relevance leaked to a caller denied list-nodepools")
+	}
+	if !denied["pinned-1"].CapacityRelevant {
+		t.Fatal("structural capacity relevance (pod's own spec) must survive denial")
+	}
+
+	allowed := byName(Compose(provider, Filters{Limit: NoLimit}))
+	if !allowed["web-1"].CapacityRelevant || !allowed["pinned-1"].CapacityRelevant {
+		t.Fatalf("authorized caller lost capacity relevance: %+v", allowed)
+	}
+
+	// The per-resource path composes its own rows, so it needs the same gate —
+	// otherwise a caller denied list-nodepools reads correlated pool state by
+	// asking about one pod at a time.
+	relatedDenied := RelatedIssues(provider, RelatedIssueOptions{
+		Namespaces:           []string{"shop"},
+		CanReadClusterScoped: denyNodePools,
+	}, "", "Pod", "shop", "web-1")
+	if len(relatedDenied) != 1 {
+		t.Fatalf("RelatedIssues denied caller: want 1 issue, got %d", len(relatedDenied))
+	}
+	if relatedDenied[0].CapacityRelevant {
+		t.Fatal("correlated capacity relevance leaked through RelatedIssues to a caller denied list-nodepools")
+	}
+
+	relatedAllowed := RelatedIssues(provider, RelatedIssueOptions{Namespaces: []string{"shop"}}, "", "Pod", "shop", "web-1")
+	if len(relatedAllowed) != 1 || !relatedAllowed[0].CapacityRelevant {
+		t.Fatalf("authorized caller lost capacity relevance through RelatedIssues: %+v", relatedAllowed)
 	}
 }

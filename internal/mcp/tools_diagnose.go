@@ -19,16 +19,22 @@ import (
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
+	"github.com/skyhook-io/radar/internal/reachability"
+	"github.com/skyhook-io/radar/internal/trace"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/probe"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
 
 // diagnoseInput is the one-shot debug bundle request. Workloads resolve to a
 // pod set for log fan-out; GitOps reconcilers take a no-pods status path.
 type diagnoseInput struct {
-	Kind      string `json:"kind" jsonschema:"kind to diagnose: a workload (pod, deployment, statefulset, daemonset) for logs+events+startup blockers, or a GitOps reconciler (application, kustomization, Flux HelmRelease) for sync/health summary + parsed failure cause"`
+	Kind      string `json:"kind" jsonschema:"kind to diagnose: a workload (pod, deployment, statefulset, daemonset) for logs+events+startup blockers, a GitOps reconciler (application, kustomization, Flux HelmRelease) for sync/health summary + parsed failure cause, or a network entry kind (service, ingress, httproute, grpcroute, gateway) for a path-shaped trace of which hop drops traffic"`
+	Probe     bool   `json:"probe,omitempty" jsonschema:"active reachability test for network entry kinds: when true, augment the static trace with DNS/TCP/TLS/HTTP probes as applicable. Explicitly non-HTTP Service ports stop at TCP; Radar does not send them an unrelated HTTP request. Uses direct TCP when radar is in-cluster, K8s API server proxy from a laptop - the same call works either way. Probes can escalate the static verdict when failures are unanimous on a hop, but never soften broken or unknown. Probe failures attributable to the vantage (e.g. NetworkPolicy blocking radar's path) can produce false-positive escalations; the per-hop chip carries the granular signal. Costs 0-3s wall time. No effect for non-network kinds."`
+	InCluster bool   `json:"in_cluster,omitempty" jsonschema:"run the reachability probe from INSIDE the cluster (real dataplane), not from where radar runs. HTTP(S) routes test their declared request; explicitly non-HTTP Service ports use TCP only. Radar creates UP TO 5 short-lived, self-destructing probe pods (one per intended route, run sequentially) under YOUR RBAC (restricted, non-root, no service-account token); each runs the probe and is deleted within ~60s. USE THIS when a prior diagnose (with probe=true) returned a route with confidence:indirect or verdict:unknown - i.e. 'reached via API server, real-traffic path NOT confirmed' - and you need to confirm the live path; or to test from where NetworkPolicy / service-mesh mTLS actually applies, which the apiserver-proxy vantage cannot. EFFECT: this CREATES pods (the only mutating diagnose option); it needs create-jobs + list-pods + get-pods/log RBAC in the namespace. On success the tested route's confidence becomes 'real' and the verdict/headline reflect the live result. For a front-doored route the in-cluster dial bypasses the entry: rows carry segment:'backend' and the headline notes the entry path was not exercised - not proof of the whole route; if a probe pod can't start (unschedulable, image pull, an admission webhook injecting init containers) you get a plain-English reason; if you can't create pods you get a copyable kubectl command to run by hand. Runtime scales with the number of routes (each probe pod can take a few seconds, up to ~5x). probe=true is forced on when this is set; only meaningful for network entry kinds."`
 	Namespace string `json:"namespace" jsonschema:"resource namespace"`
 	Name      string `json:"name" jsonschema:"resource name"`
 	Container string `json:"container,omitempty" jsonschema:"specific container; defaults to all containers across the workload's pods"`
@@ -176,9 +182,16 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 	if gk, group, resource, tool, ok := gitopsDiagnoseTarget(input.Kind); ok {
 		return handleGitOpsDiagnose(ctx, input, gk, group, resource, tool)
 	}
+	// Network entry kinds get a path-shaped trace instead of pod-log fan-out
+	// - "this Service is broken because the upstream Route's parent Gateway
+	// is not Accepted" is a different shape of answer than logs+events. See
+	// internal/trace.
+	if traceKind, ok := networkTraceKind(input.Kind); ok {
+		return handleNetworkTraceDiagnose(ctx, input, traceKind)
+	}
 	kindNorm := normalizeDiagnoseKind(input.Kind)
 	if kindNorm == "" {
-		return nil, nil, fmt.Errorf("invalid kind %q: must be pod, deployment, statefulset, daemonset, application, kustomization, or Flux HelmRelease", input.Kind)
+		return nil, nil, fmt.Errorf("invalid kind %q: must be pod, deployment, statefulset, daemonset, application, kustomization, Flux HelmRelease, or a network entry kind (service, ingress, httproute, grpcroute, gateway)", input.Kind)
 	}
 
 	if !checkNamespaceAccess(ctx, input.Namespace) {
@@ -187,7 +200,7 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 
 	obj, err := k8s.FetchResource(cache, kindNorm, input.Namespace, input.Name)
@@ -240,7 +253,11 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 		// Surface the issues Radar already classified for this object (subject
 		// or affected member), scoped to its namespace — so the agent sees
 		// "crashloop + missing ConfigMap" up front, not just raw logs.
-		RelatedIssues: issues.RelatedIssues(issues.NewCacheProvider(), []string{input.Namespace}, canonicalGroup, canonicalKind, input.Namespace, input.Name),
+		RelatedIssues: issues.RelatedIssues(issues.NewCacheProvider(), issues.RelatedIssueOptions{
+			Namespaces:           issueNamespacesForResource(input.Namespace),
+			CanReadClusterScoped: issueClusterScopedAccess(ctx),
+			CanReadRelated:       issueRelatedResourceAccess(ctx),
+		}, canonicalGroup, canonicalKind, input.Namespace, input.Name),
 	}
 
 	// Cap the log fan-out so a DaemonSet with 50 nodes doesn't trigger
@@ -388,7 +405,7 @@ func handleGitOpsDiagnose(ctx context.Context, input diagnoseInput, canonicalKin
 	}
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 	u, err := cache.GetDynamicWithGroup(ctx, canonicalKind, input.Namespace, input.Name, group)
 	if err != nil {
@@ -418,8 +435,12 @@ func handleGitOpsDiagnose(ctx context.Context, input diagnoseInput, canonicalKin
 	resp := diagnoseResponse{
 		Resource:        minified,
 		GitOpsDiagnosis: gd,
-		RelatedIssues:   issues.RelatedIssues(issues.NewCacheProvider(), []string{input.Namespace}, group, canonicalKind, input.Namespace, input.Name),
-		Warnings:        k8score.EnrichRuntimeObjectWarnings(u),
+		RelatedIssues: issues.RelatedIssues(issues.NewCacheProvider(), issues.RelatedIssueOptions{
+			Namespaces:           issueNamespacesForResource(input.Namespace),
+			CanReadClusterScoped: issueClusterScopedAccess(ctx),
+			CanReadRelated:       issueRelatedResourceAccess(ctx),
+		}, group, canonicalKind, input.Namespace, input.Name),
+		Warnings: k8score.EnrichRuntimeObjectWarnings(u),
 	}
 	return toJSONResult(resp)
 }
@@ -676,6 +697,226 @@ func fetchEventsForResource(cache *k8s.ResourceCache, kind, namespace, name stri
 // reading as "things worth diagnosing" when they're just lifecycle
 // breadcrumbs.
 //
+// networkTraceKind returns the canonical entry-kind name for trace
+// diagnostics, accepting plural and lowercase forms the way agents tend to
+// write them. Empty string + false means "not a network entry kind" - the
+// caller falls through to the workload/pod branch.
+func networkTraceKind(kind string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "service", "services":
+		return "Service", true
+	case "ingress", "ingresses":
+		return "Ingress", true
+	case "httproute", "httproutes":
+		return "HTTPRoute", true
+	case "grpcroute", "grpcroutes":
+		return "GRPCRoute", true
+	case "gateway", "gateways":
+		return "Gateway", true
+	}
+	return "", false
+}
+
+// networkDiagnoseResponse is the coverage-honest, agent-shaped output for a
+// network entry kind. The summary headline + counts are the primary read;
+// routes/notTested carry the per-intended-route truth; brokenRoute NAMES the
+// culprit (no raw array index). path keeps each hop's static findings (so the
+// targetPort/missing-ref/scale-0 diagnosis isn't lost) without the verbose
+// per-probe dump - that story is already projected into routes + localization.
+// No flat RelatedIssues: the per-hop Findings are the non-duplicated home for it.
+type networkDiagnoseResponse struct {
+	Subject trace.ResourceRef `json:"subject"`
+	// Verdict is a coarse rollup enum (healthy | degraded | broken | unknown) that
+	// agents may key follow-up actions on. It is intentionally lossy: `healthy`
+	// means "no failing route was found" - it can include routes that were only
+	// REACHED (a 3xx/4xx response, or a transport-only TCP/TLS connection) rather
+	// than verified with a real 2xx, and can reflect a static-config-only
+	// assessment (probe=false) or partial coverage. Consumers that need certainty
+	// must read Routes[].Outcome (verified vs reached vs not-tested), each route's
+	// Confidence (real vs indirect), and the Summary.Headline / Diagnosis text
+	// rather than keying solely on Verdict. (Wire vocabulary reshape is deferred to
+	// a later wave; this field's meaning is unchanged here.)
+	Verdict string `json:"verdict"`
+	Reason  string `json:"reason,omitempty"`
+	// Diagnosis is the lead: the one finding that matters - cause, the named
+	// culprit, the next action - hoisted from path[] so the agent reads the
+	// "why + what next" without walking the hop chain. nil when there is
+	// nothing to diagnose (every route verified over real traffic).
+	Diagnosis   *trace.Diagnosis    `json:"diagnosis,omitempty"`
+	Summary     coverageSummary     `json:"summary"`
+	Routes      []trace.RouteResult `json:"routes,omitempty"`
+	NotTested   []trace.RouteSkip   `json:"notTested,omitempty"`
+	BrokenRoute *trace.ResourceRef  `json:"brokenRoute,omitempty"`
+	Path        []networkHop        `json:"path,omitempty"`
+	Upstreams   []networkHop        `json:"upstreams,omitempty"`
+	// InClusterTests is present only when in_cluster=true: the raw result of each
+	// route's live in-cluster probe (vantage in-cluster). On success the matching
+	// routes[] entry is already upgraded to confidence:real; this section carries
+	// the per-probe detail and, when the probe couldn't run, the honest status +
+	// a copyable kubectl command to run by hand.
+	InClusterTests []reachability.InClusterTestResult `json:"inClusterTests,omitempty"`
+}
+
+type coverageSummary struct {
+	Tested int `json:"tested"`
+	Passed int `json:"passed"`
+	Failed int `json:"failed"`
+	// Derived counts routes known broken WITHOUT being dialled - a backendRef
+	// naming nothing, or a backend with no ready endpoints. They are real breaks
+	// but not test results, so they are reported apart from passed/failed. An
+	// agent that reads only passed/failed would otherwise see a trace with a
+	// missing backend as entirely clean.
+	Derived  int    `json:"derived,omitempty"`
+	Skipped  int    `json:"skipped"`
+	Headline string `json:"headline"`
+}
+
+// networkHop is a slimmed hop for the agent: identity, edge, static findings,
+// and meta - no probes/config dump (the probe story lives in routes).
+type networkHop struct {
+	Resource trace.ResourceRef `json:"resource"`
+	Edge     string            `json:"edge,omitempty"`
+	Findings []trace.Finding   `json:"findings,omitempty"`
+	Meta     map[string]any    `json:"meta,omitempty"`
+}
+
+// buildNetworkDiagnoseResponse projects a finalized Trace into the coverage-
+// honest agent shape. Pure (no cluster I/O) so it is unit-testable.
+func buildNetworkDiagnoseResponse(tr *trace.Trace) networkDiagnoseResponse {
+	resp := networkDiagnoseResponse{
+		Subject:     tr.Subject,
+		Verdict:     trace.CoverageVerdict(tr),
+		Diagnosis:   tr.Diagnosis,
+		Routes:      tr.Routes,
+		NotTested:   tr.NotTested,
+		BrokenRoute: tr.BrokenRoute,
+		Summary:     coverageSummary{Headline: tr.Headline},
+		Path:        slimNetworkHops(tr.Downstream, false, tr.Subject),
+		// Upstreams are OTHER entries that share this subject as a backend; their
+		// missing-ref findings are usually about THEIR sibling routes, not the
+		// subject's path - scope those out so they don't leak into this diagnosis
+		// (B1). But a missing-ref that NAMES the subject (e.g. an upstream Ingress
+		// referencing the subject Service on a port it doesn't expose) is a real
+		// subject break represented only on the upstream hop - keep it.
+		Upstreams: slimNetworkHops(tr.Upstreams, true, tr.Subject),
+	}
+	// Keep the legacy reason only for a special-shape unknown (selectorless, RBAC
+	// denied, lookup failure, timed out), where it carries the honest reason the
+	// coverage counts cannot. Those set UnknownClass (classifyUnknown always assigns
+	// one). A verdict collapsed to unknown from a healthy static path, reached only
+	// via the apiserver proxy or nothing tested from here, leaves UnknownClass empty;
+	// its headline and routes already explain, and surfacing tr.Reason there would
+	// risk the B3 contradiction (a stale "verified via API server" beside a "couldn't
+	// test any route" headline).
+	if tr.Verdict == trace.VerdictUnknown && tr.UnknownClass != "" {
+		resp.Reason = tr.Reason
+	} else if (tr.Verdict == trace.VerdictBroken || tr.Verdict == trace.VerdictDegraded) && tr.Reason != "" {
+		// A broken/degraded verdict can come from probe evidence with no static
+		// finding - e.g. all entry paths unreachable while the subject itself is
+		// healthy. Without the reason an agent sees verdict=broken beside a
+		// "Reachable" headline with no cause; surface it.
+		resp.Reason = tr.Reason
+	}
+	if tr.Coverage != nil {
+		resp.Summary.Tested = tr.Coverage.Tested
+		resp.Summary.Passed = tr.Coverage.Passed
+		resp.Summary.Failed = tr.Coverage.Failed
+		resp.Summary.Derived = tr.Coverage.Derived
+		resp.Summary.Skipped = tr.Coverage.Skipped
+	}
+	return resp
+}
+
+func slimNetworkHops(hops []trace.Hop, scopeUpstream bool, subject trace.ResourceRef) []networkHop {
+	if len(hops) == 0 {
+		return nil
+	}
+	out := make([]networkHop, 0, len(hops))
+	for _, h := range hops {
+		findings := h.Findings
+		if scopeUpstream {
+			findings = withoutMissingRef(findings, subject)
+		}
+		out = append(out, networkHop{Resource: h.Resource, Edge: h.Edge, Findings: findings, Meta: h.Meta})
+	}
+	return out
+}
+
+// withoutMissingRef drops missing-backend-ref findings that belong to an
+// upstream's OWN sibling routes (not about the subject this response is about).
+// A missing-ref that NAMES the subject is a genuine subject break represented
+// only on the upstream hop (e.g. an Ingress pointing at the subject Service on a
+// port it doesn't expose), so it is kept. Reuses the trace predicates so the rule
+// has one definition.
+func withoutMissingRef(fs []trace.Finding, subject trace.ResourceRef) []trace.Finding {
+	var out []trace.Finding
+	for _, f := range fs {
+		if trace.IsMissingRefCode(f.Code) && !trace.MissingRefNamesSubject(f.Message, subject.Name, subject.Namespace) {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+// handleNetworkTraceDiagnose is the diagnose tool's response for a network
+// entry kind. It deliberately skips the pod-log fan-out path - the trace IS
+// the diagnosis, projected into a coverage-honest shape (see networkDiagnoseResponse).
+func handleNetworkTraceDiagnose(ctx context.Context, input diagnoseInput, kind string) (*mcp.CallToolResult, any, error) {
+	if !checkNamespaceAccess(ctx, input.Namespace) {
+		return nil, nil, fmt.Errorf("forbidden: no access to namespace %q", input.Namespace)
+	}
+	cache := k8s.GetResourceCache()
+	if cache == nil {
+		return nil, nil, fmt.Errorf("not connected to cluster")
+	}
+	deps := trace.Deps{
+		Cache:     cache,
+		Dynamic:   k8s.GetDynamicResourceCache(),
+		Discovery: k8s.GetResourceDiscovery(),
+		Issues:    issues.NewCacheProvider(),
+		// Probes call services/proxy + pods/proxy on this client. Use the
+		// per-request impersonated identity (or the SA when auth is disabled)
+		// so the apiserver enforces the caller's RBAC on the proxy verbs.
+		// ClientFromContext returns nil on impersonation failure; the probe
+		// layer treats nil as "skip the apiserver path."
+		Client: k8s.ClientFromContext(ctx),
+		// Carry the caller's namespace scope into the trace walk so
+		// cross-namespace fan-out (Route backendRefs, parent Gateways,
+		// upstream Routes) is redacted when the dependent is outside
+		// scope. filterNamespacesForUser returns the caller's allowed
+		// set; passing only the subject namespace would be too narrow
+		// (every cross-namespace dependency would redact even ones the
+		// caller can read), so pass the full allowed set.
+		AllowedNamespaces: filterNamespacesForUser(ctx, nil),
+	}
+	// in_cluster only has routes to test when probing ran (static known-break routes
+	// carry no InClusterRequest). Force the probe path when the caller asked to
+	// confirm the live path, so in_cluster:true without probe:true isn't a silent no-op.
+	tr, err := trace.BuildTraceWithOptions(ctx, deps, kind, input.Namespace, input.Name, trace.Options{Probe: input.Probe || input.InCluster})
+	if err != nil {
+		return nil, nil, fmt.Errorf("trace failed: %w", err)
+	}
+	var inClusterTests []reachability.InClusterTestResult
+	if input.InCluster {
+		// Creating transient probe pods is a mutating, product-gated action. Mirror
+		// the REST handler (reachability_run.go requireCloudRole) and the helm
+		// precedent (tools_helm.go) so a sub-Member Cloud Viewer can't bypass the
+		// RoleMember gate via MCP. probe=true / static paths stay viewer-accessible.
+		if role := pkgauth.CloudRoleFromContext(ctx); !role.AtLeast(pkgauth.RoleMember) {
+			return nil, nil, fmt.Errorf("Radar Cloud role %q cannot run an in-cluster reachability test (requires member or higher)", role.String())
+		}
+		var byTarget map[string][]probe.Result
+		inClusterTests, byTarget = reachability.RunInClusterTests(ctx, tr, input.Namespace)
+		// Fold the live results back in: an in-cluster pass upgrades the route to
+		// confidence:real and re-derives counts/headline/diagnosis/verdict.
+		trace.ApplyInClusterResults(tr, byTarget)
+	}
+	resp := buildNetworkDiagnoseResponse(tr)
+	resp.InClusterTests = inClusterTests
+	return toJSONResult(resp)
+}
+
 // Shared between diagnose (passes resolved pod names for full workload
 // coverage) and attachResourceExtras / get_resource include=events
 // (passes nil — supplemental fetch; callers wanting pod-level events should

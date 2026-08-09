@@ -12,9 +12,10 @@ import (
 type MemoryStore struct {
 	records       []TimelineEvent
 	maxSize       int
-	head          int   // next write position
+	head          int // next write position
 	count         int
 	lastSeq       int64 // arrival counter; every head write (incl. upsert re-append) takes the next value
+	eventsEvicted bool
 	index         map[string]int // event id -> ring slot, for dedup + upsert
 	mu            sync.RWMutex
 	seenResources map[string]bool
@@ -116,6 +117,7 @@ func (m *MemoryStore) writeAtHead(event TimelineEvent) {
 	// Drop the slot's current occupant from the index before overwriting it,
 	// so a wrapped-over id can't leave a dangling mapping.
 	if evicted := m.records[m.head]; evicted.ID != "" {
+		m.eventsEvicted = true
 		if idx, ok := m.index[evicted.ID]; ok && idx == m.head {
 			delete(m.index, evicted.ID)
 		}
@@ -165,8 +167,8 @@ func (m *MemoryStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 	// max seq in the page, so the next poll must resume from the lowest unseen
 	// seq. Ring position tracks arrival order (each writeAtHead takes the next
 	// seq), so oldest-first iteration yields ascending seq. Non-delta reads page
-	// newest-first.
-	deltaAscending := opts.SeqPaging || opts.SinceSeq > 0
+	// newest-first in arrival order unless ascending sequence order is explicit.
+	deltaAscending := opts.SeqPaging || opts.SinceSeq > 0 || opts.SequenceOrder == SequenceOrderAscending
 
 	for i := 0; i < m.count && len(results) < limit; i++ {
 		var idx int
@@ -336,6 +338,7 @@ func (m *MemoryStore) Stats() StoreStats {
 	defer m.seenMu.RUnlock()
 
 	var oldest, newest time.Time
+	var oldestSeq, newestSeq int64
 	// count is the ring window span, which can include holes left by upsert
 	// vacating a slot — count live records instead of reporting the span.
 	var total int64
@@ -346,11 +349,18 @@ func (m *MemoryStore) Stats() StoreStats {
 		}
 		total++
 		ts := m.records[idx].Timestamp
+		seq := m.records[idx].Seq
 		if newest.IsZero() || ts.After(newest) {
 			newest = ts
 		}
 		if oldest.IsZero() || ts.Before(oldest) {
 			oldest = ts
+		}
+		if oldestSeq == 0 || seq < oldestSeq {
+			oldestSeq = seq
+		}
+		if seq > newestSeq {
+			newestSeq = seq
 		}
 	}
 
@@ -358,6 +368,10 @@ func (m *MemoryStore) Stats() StoreStats {
 		TotalEvents:    total,
 		OldestEvent:    oldest,
 		NewestEvent:    newest,
+		OldestSeq:      oldestSeq,
+		NewestSeq:      newestSeq,
+		MaxEvents:      m.maxSize,
+		EventsEvicted:  m.eventsEvicted,
 		SeenResources:  len(m.seenResources),
 		Degraded:       m.degradedReason != "",
 		DegradedReason: m.degradedReason,
@@ -382,6 +396,10 @@ func (m *MemoryStore) matchesFilters(event *TimelineEvent, opts QueryOptions, cf
 	}
 
 	if (opts.SeqPaging || opts.SinceSeq > 0) && event.Seq <= opts.SinceSeq {
+		return false
+	}
+
+	if opts.UntilSeq > 0 && event.Seq >= opts.UntilSeq {
 		return false
 	}
 

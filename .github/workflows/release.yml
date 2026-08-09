@@ -142,6 +142,45 @@ jobs:
           push: true
           tags: ${{ steps.tags.outputs.tags }}
 
+  mcp-registry:
+    name: MCP Registry
+    runs-on: ubuntu-latest
+    # Needs the labeled image on GHCR first — the registry validates the
+    # io.modelcontextprotocol.server.name label on the exact tag in server.json.
+    needs: [release, docker]
+    if: needs.release.outputs.is_prerelease != 'true'
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Stamp version into server.json
+        run: |
+          VERSION="${{ needs.release.outputs.version }}"
+          jq --arg v "$VERSION" --arg repo "${{ env.DOCKER_REPO }}" \
+            '.version = $v | .packages[0].identifier = $repo + ":" + $v' \
+            server.json > server.json.tmp && mv server.json.tmp server.json
+
+      # Pinned + checksum-verified: this job holds id-token: write, so a
+      # mutable "latest" binary would be an unauditable path to our registry
+      # namespace. Bump the version and hash together (checksums file:
+      # registry_<ver>_checksums.txt on the modelcontextprotocol/registry release).
+      - name: Install mcp-publisher
+        env:
+          MCP_PUBLISHER_VERSION: "1.8.0"
+          MCP_PUBLISHER_SHA256: "1370446bbe74d562608e8005a6ccce02d146a661fbd78674e11cc70b9618d6cf"
+        run: |
+          curl -fsSL -o mcp-publisher.tar.gz "https://github.com/modelcontextprotocol/registry/releases/download/v${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
+          echo "${MCP_PUBLISHER_SHA256}  mcp-publisher.tar.gz" | sha256sum -c -
+          tar xzf mcp-publisher.tar.gz mcp-publisher
+
+      - name: Authenticate to MCP Registry
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish to MCP Registry
+        run: ./mcp-publisher publish
+
   helm:
     name: Helm Chart
     runs-on: ubuntu-latest

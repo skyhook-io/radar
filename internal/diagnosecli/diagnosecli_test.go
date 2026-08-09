@@ -2,6 +2,7 @@ package diagnosecli
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -155,5 +156,72 @@ func TestStandaloneEffectiveAgentHonorsCLIOverride(t *testing.T) {
 	}
 	if got := standaloneEffectiveAgent(context.Background(), "codex"); got != "cursor-agent" {
 		t.Fatalf("unsupported explicit pick should fall back to the override, got %q", got)
+	}
+}
+
+func TestResolveServerReadsBasePathFromDiscoveryFile(t *testing.T) {
+	tests := []struct {
+		name     string
+		contents string
+		want     string
+	}{
+		{name: "port only (older instance)", contents: "9280\n", want: "http://localhost:9280"},
+		{name: "port and base path", contents: "9280\n/radar\n", want: "http://localhost:9280/radar"},
+		{name: "nested base path", contents: "9280\n/tools/radar\n", want: "http://localhost:9280/tools/radar"},
+		{name: "trailing slash trimmed", contents: "9280\n/radar/\n", want: "http://localhost:9280/radar"},
+		{name: "no trailing newline", contents: "9280\n/radar", want: "http://localhost:9280/radar"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			if err := os.MkdirAll(filepath.Join(home, ".radar"), 0o755); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(home, ".radar", "mcp-port"), []byte(tc.contents), 0o644); err != nil {
+				t.Fatalf("write port file: %v", err)
+			}
+			got, err := resolveServer("")
+			if err != nil {
+				t.Fatalf("resolveServer: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("resolveServer() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// probeListening receives the discovered base URL, which carries the server's
+// --base-path when it has one. A path suffix is not a dialable address, so
+// leaving it in makes a healthy prefixed instance look dead and sends the CLI
+// off to spawn a throwaway standalone server instead of attaching.
+func TestProbeListeningIgnoresBasePathSuffix(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	addr := ln.Addr().String()
+
+	for _, base := range []string{
+		"http://" + addr,
+		"http://" + addr + "/radar",
+		"http://" + addr + "/tools/radar",
+		addr + "/radar",
+	} {
+		if !probeListening(base) {
+			t.Errorf("probeListening(%q) = false, want true", base)
+		}
+	}
+
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	deadAddr := closed.Addr().String()
+	closed.Close()
+	if probeListening("http://" + deadAddr + "/radar") {
+		t.Error("probeListening on a closed port = true, want false")
 	}
 }

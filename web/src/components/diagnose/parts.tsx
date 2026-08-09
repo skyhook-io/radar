@@ -649,11 +649,17 @@ function ConsentCardShell({
   settingsLabel,
   approveLabel = "Approve & investigate",
   warning = false,
+  error,
   onOpenSettings,
   onApprove,
   onCancel,
 }: DiagnoseConsentCopy & {
   warning?: boolean;
+  // Why the last approval failed, straight from the server. The card stays up on
+  // failure so retrying works in place, which means this is the ONLY chance to
+  // say why — a host that records consent above the individual refuses the
+  // wrong person here, and only its message knows who to ask.
+  error?: string | null;
   onOpenSettings?: () => void;
   onApprove: () => void;
   onCancel: () => void;
@@ -698,6 +704,19 @@ function ConsentCardShell({
           {resolvedSettingsLabel}
         </button>
       )}
+      {/* Red, not amber: the full-local card is itself amber, so an amber box on
+          it reads as another paragraph of body copy. role="alert" because nothing
+          else moves on failure — focus stays on Approve, so without it a screen
+          reader says nothing and the user re-presses a button that cannot succeed. */}
+      {error && (
+        <div
+          role="alert"
+          className="mt-3 flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/10 p-2 text-xs text-theme-text-primary"
+        >
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-400" />
+          <span>{error}</span>
+        </div>
+      )}
       <div className="mt-4 flex gap-2">
         <button
           onClick={onCancel}
@@ -731,6 +750,7 @@ export function ConsentCard({
   agent,
   profile,
   copy,
+  error,
   onOpenSettings,
   onApprove,
   onCancel,
@@ -739,11 +759,12 @@ export function ConsentCard({
   agent?: string;
   profile: ExecutionProfile;
   copy?: DiagnoseConsentCopy;
+  error?: string | null;
   onOpenSettings?: () => void;
   onApprove: () => void;
   onCancel: () => void;
 }) {
-  const chrome = { onOpenSettings, onApprove, onCancel };
+  const chrome = { onOpenSettings, onApprove, onCancel, error };
 
   // Tier 1: a host (e.g. radar-hub-web) supplied its own copy — use it verbatim.
   if (copy) return <ConsentCardShell {...copy} {...chrome} />;

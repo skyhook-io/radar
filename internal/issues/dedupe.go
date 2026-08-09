@@ -82,14 +82,39 @@ var childCategories = map[issuesapi.Category]bool{
 // Job, so a BackoffLimitExceeded Job whose pods crashloop/OOM/can't-pull is one
 // incident — the pod cause is the root. A DeadlineExceeded job (the controller
 // killed a slow-but-not-crashing pod) has no qualifying child, so the severity
-// gate keeps its row. cronjob_failed is deliberately NOT here: "stale" /
-// "never-scheduled" means no Jobs were produced at all — an orthogonal failure
-// with no symptom children to fold into (a failed child Job surfaces as
-// job_failed on that Job, which already resolves to the CronJob subject).
+// gate keeps its row. CronJob failures use a narrower pass below because stale
+// and never-scheduled rows must survive even when an unrelated child symptom
+// shares the subject.
 var parentRollupCategories = map[issuesapi.Category]bool{
 	issuesapi.CategoryWorkloadDegraded: true,
 	issuesapi.CategoryRolloutStalled:   true,
 	issuesapi.CategoryJobFailed:        true,
+}
+
+func dedupeRepeatedCronJobFailureOverChild(in []Issue) []Issue {
+	maxChildSev := map[string]int{}
+	for _, i := range in {
+		if childCategories[i.Category] {
+			key := subjectKeyOf(subjectRef(i))
+			if rank := SeverityRank(i.Severity); rank > maxChildSev[key] {
+				maxChildSev[key] = rank
+			}
+		}
+	}
+	if len(maxChildSev) == 0 {
+		return in
+	}
+
+	out := in[:0]
+	for _, i := range in {
+		if i.Category == issuesapi.CategoryCronJobFailed && i.Reason == "repeated-without-success" {
+			if rank, ok := maxChildSev[subjectKeyOf(subjectRef(i))]; ok && rank >= SeverityRank(i.Severity) {
+				continue
+			}
+		}
+		out = append(out, i)
+	}
+	return out
 }
 
 // dedupeWorkloadDegradedOverChild drops the parent workload rollup row
@@ -245,14 +270,16 @@ func dedupePVCPendingOverMissingRef(in []Issue) []Issue {
 	return out
 }
 
-// missingConfigCausesWaiting are the by-name dangling references whose failure
+// missingConfigCausesWaiting are the required configuration references whose failure
 // surfaces as a container stuck in Waiting (CreateContainerConfigError): the
-// referenced ConfigMap/Secret/ServiceAccount/imagePullSecret doesn't exist, so
+// referenced ConfigMap/Secret/key/ServiceAccount/imagePullSecret doesn't exist, so
 // the kubelet can't build the container config. "Missing PVC" is excluded — it
 // blocks scheduling (unschedulable), not container creation.
 var missingConfigCausesWaiting = map[string]bool{
 	"Missing ConfigMap":       true,
+	"Missing ConfigMap key":   true,
 	"Missing Secret":          true,
+	"Missing Secret key":      true,
 	"Missing ServiceAccount":  true,
 	"Missing imagePullSecret": true,
 }

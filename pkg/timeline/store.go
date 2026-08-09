@@ -6,6 +6,13 @@ import (
 	"time"
 )
 
+type SequenceOrder string
+
+const (
+	SequenceOrderAscending  SequenceOrder = "ascending"
+	SequenceOrderDescending SequenceOrder = "descending"
+)
+
 // EventStore is the interface for timeline event storage backends.
 // Implementations must be safe for concurrent use.
 type EventStore interface {
@@ -75,6 +82,16 @@ type QueryOptions struct {
 	// GroupBy — both are defined for the newest-first shape only and their
 	// delta-mode behavior is unspecified.
 	SinceSeq int64
+	// UntilSeq returns only events whose arrival number (Seq) is less than
+	// this value. It provides stable backwards pagination without relying on
+	// event timestamps, which may arrive out of order. Do not combine it with
+	// SinceSeq.
+	UntilSeq int64
+	// SequenceOrder explicitly orders a bounded snapshot by arrival number.
+	// Use it when the result becomes the baseline for sequence cursors: timestamp
+	// ordering can omit a late arrival with an older event time and then advance
+	// the cursor past it. SinceSeq and UntilSeq still apply their filters.
+	SequenceOrder SequenceOrder
 
 	// SeqPaging forces the delta-read shape (seq > SinceSeq, ascending seq)
 	// even when SinceSeq is 0 — i.e. "every row the query's OTHER filters
@@ -119,6 +136,10 @@ type StoreStats struct {
 	TotalEvents   int64     `json:"totalEvents"`
 	OldestEvent   time.Time `json:"oldestEvent"`
 	NewestEvent   time.Time `json:"newestEvent"`
+	OldestSeq     int64     `json:"oldestSeq,omitempty"`
+	NewestSeq     int64     `json:"newestSeq,omitempty"`
+	MaxEvents     int       `json:"maxEvents,omitempty"`
+	EventsEvicted bool      `json:"eventsEvicted,omitempty"`
 	StorageBytes  int64     `json:"storageBytes,omitempty"`
 	SeenResources int       `json:"seenResources"`
 

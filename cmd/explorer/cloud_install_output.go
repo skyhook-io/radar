@@ -14,46 +14,9 @@ import (
 )
 
 // cloudCommandTarget keeps copy-paste follow-up commands on the same cluster
-// the installer inspected, even when --context or config.json's kubeconfig
-// override differs from the user's later current context.
-type cloudCommandTarget struct {
-	Context    string
-	Kubeconfig string
-}
-
-func (t cloudCommandTarget) kubectl() string {
-	command := "kubectl"
-	if t.Kubeconfig != "" {
-		command += " --kubeconfig " + shellArgument(t.Kubeconfig)
-	}
-	if t.Context != "" {
-		command += " --context " + shellArgument(t.Context)
-	}
-	return command
-}
-
-func (t cloudCommandTarget) helm() string {
-	command := "helm"
-	if t.Kubeconfig != "" {
-		command += " --kubeconfig " + shellArgument(t.Kubeconfig)
-	}
-	if t.Context != "" {
-		command += " --kube-context " + shellArgument(t.Context)
-	}
-	return command
-}
-
-func (t cloudCommandTarget) cloudStatus(namespace, release string) string {
-	command := "radar cloud status"
-	if t.Context != "" {
-		command += " --context " + shellArgument(t.Context)
-	}
-	return command + " --namespace " + shellArgument(namespace) + " --release " + shellArgument(release)
-}
-
-func shellArgument(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
-}
+// the installer inspected — shared with the Cloud install flow's status API so
+// the two presenters render identical recovery commands.
+type cloudCommandTarget = cloudinstall.CommandTarget
 
 func printPreparedInstallPlan(w io.Writer, prepared *cloudinstall.PreparedProvision, enableCloudFeatures, noSelfUpgrade bool) {
 	fmt.Fprintln(w, cliui.New(w).Bold("Plan:"))
@@ -218,9 +181,15 @@ func printGitOpsPendingHandoff(w io.Writer, err error, clusterID, clusterURL str
 }
 
 func printAdoptionRollbackGuidance(w io.Writer, recovery cloudProvisionRecovery, clusterURL string, target cloudCommandTarget) {
-	fmt.Fprintln(w, "  To deliberately undo this adoption later:")
-	fmt.Fprintf(w, "    1. %s rollback %s %d -n %s\n", target.helm(), recovery.ReleaseName, recovery.CurrentRevision, recovery.Namespace)
-	fmt.Fprintf(w, "    2. %s -n %s delete secret/%s\n", target.kubectl(), recovery.Namespace, cloudinstall.CloudTokenSecretName)
-	fmt.Fprintf(w, "    3. Have an organization owner delete the connected cluster at %s\n", clusterURL)
-	fmt.Fprintln(w, "  The Helm rollback restores the exact pre-adoption chart, image pin, values, and RBAC. Delete the Secret and connected cluster only after that rollback succeeds; otherwise the fleet row would remain disconnected.")
+	g := cloudinstall.AdoptionRollbackGuidance(recovery, clusterURL, target)
+	fmt.Fprintf(w, "  %s\n", g.Summary)
+	for i, step := range g.Inspect {
+		fmt.Fprintf(w, "    %d. %s\n", i+1, step)
+	}
+	for _, line := range g.Lines {
+		fmt.Fprintf(w, "  %s\n", line)
+	}
+	if g.ClusterURL != "" {
+		fmt.Fprintf(w, "  Open: %s\n", g.ClusterURL)
+	}
 }

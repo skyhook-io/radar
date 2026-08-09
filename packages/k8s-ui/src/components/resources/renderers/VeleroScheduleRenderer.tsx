@@ -1,5 +1,4 @@
 import { Clock, Archive } from 'lucide-react'
-import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
 import {
   getScheduleStatus,
@@ -8,7 +7,9 @@ import {
   getSchedulePaused,
   getScheduleTemplate,
   getScheduleUseOwnerReferences,
+  getScheduleValidationErrors,
 } from '../resource-utils-velero'
+import { VeleroPhaseValue } from './velero-cells'
 
 interface VeleroScheduleRendererProps {
   data: any
@@ -21,6 +22,7 @@ export function VeleroScheduleRenderer({ data }: VeleroScheduleRendererProps) {
   const scheduleStatus = getScheduleStatus(data)
   const isPaused = getSchedulePaused(data)
   const template = getScheduleTemplate(data)
+  const validationErrors = getScheduleValidationErrors(data)
 
   const templateIncludedNs = template.includedNamespaces || []
   const templateExcludedNs = template.excludedNamespaces || []
@@ -37,11 +39,17 @@ export function VeleroScheduleRenderer({ data }: VeleroScheduleRendererProps) {
           message="This backup schedule is currently paused. No new backups will be created."
         />
       )}
-      {scheduleStatus.text === 'FailedValidation' && (
+      {/* Gated on the errors themselves, not on the badge: a paused schedule
+          badges as "Paused", which would otherwise hide the validation errors
+          the user needs to fix before resuming. */}
+      {(validationErrors.length > 0 || status.phase === 'FailedValidation') && (
         <AlertBanner
           variant="error"
           title="Validation Failed"
-          message="The schedule spec failed validation and is not active."
+          message={isPaused
+            ? 'The schedule spec failed validation. It will not create backups when resumed until this is fixed.'
+            : 'The schedule spec failed validation and is not active — no backups are being created.'}
+          items={validationErrors.length > 0 ? validationErrors : undefined}
         />
       )}
 
@@ -49,9 +57,7 @@ export function VeleroScheduleRenderer({ data }: VeleroScheduleRendererProps) {
       <Section title="Schedule" icon={Clock} defaultExpanded>
         <PropertyList>
           <Property label="Status" value={
-            <span className={clsx('badge', scheduleStatus.color)}>
-              {scheduleStatus.text}
-            </span>
+            <VeleroPhaseValue status={scheduleStatus} phase={status.phase || ''} />
           } />
           <Property label="Cron Schedule" value={
             <span className="font-mono text-sm">{getScheduleCron(data)}</span>

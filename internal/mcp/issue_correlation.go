@@ -113,19 +113,13 @@ func correlateIssue(ctx context.Context, iss *issuesapi.Issue, window time.Durat
 		log.Printf("[mcp] issue change correlation failed for %s %s/%s: %v", iss.Kind, iss.Namespace, iss.Name, err)
 		return // marker omitted = unknown, never a false "no changes"
 	}
-	// Per-kind RBAC: a workload subject's correlated changes include its consumed
-	// ConfigMaps, which the caller may not be able to read even when authorized on
-	// the workload. Drop what they can't read before building the marker.
-	changes = filterRecentChangesRBAC(ctx, changes)
-	// The marker's contract is non-status evidence: status churn on a
-	// failing workload is the SYMPTOM, not a change that could explain it
-	// — including it would make every failing issue read as "correlated".
-	changes = filterSpecConfigChanges(changes)
+	changes, rbacHidden := applyCorrelationVisibilityFilters(ctx, changes)
 	if len(changes) == 0 {
 		// A saturated candidate fetch may have missed older changes in
-		// the window (churn-heavy subjects overflow the newest-N query) —
-		// that's unknown, not "no changes".
-		if saturated {
+		// the window (churn-heavy subjects overflow the newest-N query),
+		// and an RBAC-hidden change exists even though this caller can't
+		// see it — both are unknown, not "no changes".
+		if saturated || rbacHidden {
 			return
 		}
 		iss.NoRecentChanges = &issuesapi.NoRecentChangesMarker{
@@ -137,6 +131,25 @@ func correlateIssue(ctx context.Context, iss *issuesapi.Issue, window time.Durat
 		changes = changes[:correlationChangeCap]
 	}
 	iss.CorrelatedChanges = changes
+}
+
+// applyCorrelationVisibilityFilters reduces candidate changes to the evidence
+// this caller may see. The marker's contract is non-status evidence: status
+// churn on a failing workload is the SYMPTOM, not a change that could explain
+// it — including it would make every failing issue read as "correlated". The
+// category filter runs first so rbacHidden only reflects rows that would have
+// counted as evidence; per-kind RBAC then drops rows the caller can't read (a
+// workload subject's correlated changes include its consumed ConfigMaps).
+//
+// rbacHidden=true means relevant evidence exists that this caller can't see —
+// the marker path must treat that as unknown, never as an affirmative
+// no_recent_changes claim (the consumer would read "chronic issue, nothing
+// changed" for a workload whose consumed ConfigMap just rotated).
+func applyCorrelationVisibilityFilters(ctx context.Context, changes []issuesapi.RecentChange) (visible []issuesapi.RecentChange, rbacHidden bool) {
+	changes = filterSpecConfigChanges(changes)
+	relevant := len(changes)
+	changes = filterRecentChangesRBAC(ctx, changes)
+	return changes, len(changes) < relevant
 }
 
 func filterSpecConfigChanges(changes []issuesapi.RecentChange) []issuesapi.RecentChange {

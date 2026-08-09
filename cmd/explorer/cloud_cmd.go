@@ -18,7 +18,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -446,13 +445,11 @@ func normalizeCloudInstallNames(namespace, release string) (string, string, erro
 
 func normalizeHubOrigin(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
-	if err := cloud.ValidateHubOrigin(raw); err != nil {
+	origin, err := cloud.NormalizeHubOrigin(raw)
+	if err != nil {
 		return "", fmt.Errorf("invalid --hub-url %q: %w", raw, err)
 	}
-	u, _ := url.Parse(raw) // ValidateHubOrigin already parsed and validated it.
-	u.Path = ""
-	u.RawPath = ""
-	return u.String(), nil
+	return origin, nil
 }
 
 func cloudInstallUsesExactTarget(explicitNamespace, explicitRelease bool) bool {
@@ -470,16 +467,11 @@ func resolveCloudInstallClusterName(explicit, contextName string) string {
 }
 
 func cloudClusterURL(connectURL, clusterID string) string {
-	return cloudFrontendOrigin(connectURL) + "/c/" + url.PathEscape(clusterID)
+	return cloud.ClusterURL(connectURL, clusterID)
 }
 
 func cloudClustersURL(connectURL string) string {
-	return cloudFrontendOrigin(connectURL) + "/clusters"
-}
-
-func cloudFrontendOrigin(connectURL string) string {
-	u, _ := url.Parse(connectURL)
-	return (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()
+	return cloud.ClustersURL(connectURL)
 }
 
 func printConnectFailure(w io.Writer, err error, clustersURL string) {
@@ -490,7 +482,7 @@ func printConnectFailure(w io.Writer, err error, clustersURL string) {
 func printInstallSuccess(w io.Writer, clusterName, clusterURL string, deployment helm.DeploymentRef, target cloudCommandTarget) {
 	fmt.Fprintf(w, "\n  %s Cluster %q is connected to Radar.\n", cliui.New(w).Marker(cliui.Success), clusterName)
 	fmt.Fprintf(w, "    Open: %s\n", clusterURL)
-	fmt.Fprintf(w, "    Track it: %s -n %s rollout status deployment/%s\n\n", target.kubectl(), deployment.Namespace, deployment.Name)
+	fmt.Fprintf(w, "    Track it: %s -n %s rollout status deployment/%s\n\n", target.Kubectl(), deployment.Namespace, deployment.Name)
 }
 
 func printFreshInstallConflict(w io.Writer, err error, target cloudCommandTarget) bool {
@@ -509,7 +501,7 @@ func printFreshInstallConflict(w io.Writer, err error, target cloudCommandTarget
 		} else {
 			fmt.Fprintln(w, "Radar cannot safely determine how to continue this Helm release. Inspect its state with:")
 		}
-		fmt.Fprintf(w, "  %s status %s -n %s\n", target.helm(), pending.Name, pending.Namespace)
+		fmt.Fprintf(w, "  %s status %s -n %s\n", target.Helm(), pending.Name, pending.Namespace)
 		fmt.Fprintln(w, "Resolve that release before retrying; Radar installation will not overwrite it.")
 		return true
 	}
@@ -518,7 +510,7 @@ func printFreshInstallConflict(w io.Writer, err error, target cloudCommandTarget
 	if errors.As(err, &history) {
 		fmt.Fprintf(w, "Helm release %q in namespace %q has retained %q history (revision %d).\n", history.Name, history.Namespace, history.Status, history.Revision)
 		fmt.Fprintln(w, "Radar installation will not adopt or replace prior Helm history. Inspect it with:")
-		fmt.Fprintf(w, "  %s history %s -n %s\n", target.helm(), history.Name, history.Namespace)
+		fmt.Fprintf(w, "  %s history %s -n %s\n", target.Helm(), history.Name, history.Namespace)
 		fmt.Fprintln(w, "Then choose a new --release name, or deliberately remove the old release history before retrying.")
 		return true
 	}
@@ -533,98 +525,54 @@ func printTokenSecretConflict(w io.Writer, err error, releaseName string, target
 	}
 	fmt.Fprintf(w, "Cloud token Secret %q already exists in namespace %q; Radar will not overwrite it.\n", secret.Name, secret.Namespace)
 	fmt.Fprintln(w, "Inspect the existing installation and its Cloud pairing:")
-	fmt.Fprintf(w, "  %s\n", target.cloudStatus(secret.Namespace, releaseName))
+	fmt.Fprintf(w, "  %s\n", target.CloudStatus(secret.Namespace, releaseName))
 	fmt.Fprintln(w, "Recover that installation if it belongs to an earlier approval.")
 	fmt.Fprintln(w, "If it was abandoned, clean up its Helm release and Secret and delete the corresponding Hub cluster before starting a fresh flow.")
 	return true
 }
 
 func printCanceledAfterApproval(w io.Writer, clusterID, clusterURL string) {
-	fmt.Fprintf(w, "\n%s The Hub approved cluster %q, but this command was canceled before Kubernetes provisioning began.\n", cliui.New(w).Marker(cliui.Attention), clusterID)
-	fmt.Fprintln(w, "No token Secret or Helm release was written. Rerun `radar cloud install` to try again.")
-	fmt.Fprintln(w, "The previous approval may remain as a pending cluster in Radar. An organization owner can delete it later:")
-	fmt.Fprintf(w, "  %s\n", clusterURL)
+	g := cloudinstall.CanceledAfterApprovalGuidance(clusterID, clusterURL, "Rerun `radar cloud install` to try again.")
+	fmt.Fprintf(w, "\n%s %s\n", cliui.New(w).Marker(cliui.Attention), g.Summary)
+	printGuidanceBody(w, g)
 }
 
-type cloudProvisionRecovery struct {
-	Mode            cloudinstall.ProvisionMode
-	ReleaseName     string
-	Namespace       string
-	Deployment      helm.DeploymentRef
-	CurrentRevision int
-}
+type cloudProvisionRecovery = cloudinstall.ProvisionRecovery
 
 func provisionRecoveryFrom(prepared *cloudinstall.PreparedProvision) cloudProvisionRecovery {
-	return cloudProvisionRecovery{
-		Mode:            prepared.Mode(),
-		ReleaseName:     prepared.ReleaseName(),
-		Namespace:       prepared.Namespace(),
-		Deployment:      prepared.Deployment(),
-		CurrentRevision: prepared.CurrentRevision(),
-	}
+	return cloudinstall.ProvisionRecoveryFrom(prepared)
 }
 
 func printPostApprovalRecoveryGuidance(w io.Writer, clusterID, clusterURL string, recovery cloudProvisionRecovery, provisionErr error, target cloudCommandTarget) {
-	fmt.Fprintf(w, "Hub cluster %q already exists. Do not rerun the installer; first inspect the existing attempt.\n", clusterID)
-	fmt.Fprintf(w, "Open: %s\n", clusterURL)
-	if recovery.Mode == cloudinstall.ProvisionAdopt {
-		var adoptionErr *cloudinstall.AdoptionUpgradeError
-		var preMutationErr *cloudinstall.ProvisionPreMutationError
-		switch {
-		case errors.As(provisionErr, &preMutationErr):
-			fmt.Fprintln(w, "The Helm upgrade did not start, so there was no rollback to verify.")
-			if preMutationErr.TokenSecretMayExist {
-				fmt.Fprintln(w, "Kubernetes did not confirm whether the Cloud token Secret was created. Inspect the fixed Secret name before deciding how to recover this Hub cluster.")
-			} else {
-				fmt.Fprintln(w, "This attempt created no Cloud token Secret and made no change to the existing Helm release.")
-				fmt.Fprintln(w, "Use this Hub cluster's owner-only Resume install flow to generate fresh credentials, or delete it before deliberately starting over.")
-			}
-		case errors.As(provisionErr, &adoptionErr) && adoptionErr.RollbackVerified:
-			fmt.Fprintf(w, "Helm's atomic rollback restored the original release after the failed adoption (the pre-adoption revision was %d).\n", recovery.CurrentRevision)
-			if adoptionErr.TokenSecretPreserved {
-				fmt.Fprintln(w, "The Cloud token Secret could not be safely removed; keep it while you inspect the release and recover this same Hub cluster.")
-			} else {
-				fmt.Fprintln(w, "The unchanged Cloud token Secret created by this attempt was removed after rollback verification.")
-			}
-		default:
-			fmt.Fprintln(w, "Radar could not prove that the original release was fully restored, so it preserved the Cloud token Secret. Inspect and recover this same Hub cluster before any cleanup.")
-		}
-		fmt.Fprintln(w, "Inspect:")
-		fmt.Fprintf(w, "  %s status %s -n %s\n", target.helm(), recovery.ReleaseName, recovery.Namespace)
-		fmt.Fprintf(w, "  %s history %s -n %s\n", target.helm(), recovery.ReleaseName, recovery.Namespace)
-		fmt.Fprintf(w, "  %s -n %s get secret/%s\n", target.kubectl(), recovery.Namespace, cloudinstall.CloudTokenSecretName)
-		fmt.Fprintf(w, "  %s -n %s get deployment/%s\n", target.kubectl(), recovery.Deployment.Namespace, recovery.Deployment.Name)
-		return
-	}
-
-	releaseName, namespace, deployment := recovery.ReleaseName, recovery.Namespace, recovery.Deployment
-	fmt.Fprintln(w, "Inspect:")
-	fmt.Fprintf(w, "  %s status %s -n %s\n", target.helm(), releaseName, namespace)
-	fmt.Fprintf(w, "  %s -n %s get secret/%s\n", target.kubectl(), namespace, cloudinstall.CloudTokenSecretName)
-	fmt.Fprintf(w, "  %s -n %s get deployment/%s\n", target.kubectl(), deployment.Namespace, deployment.Name)
-	fmt.Fprintln(w, "The installer removes only the unchanged token Secret it created when a Helm failure can be cleaned up safely; verify the actual release and Secret state.")
-	fmt.Fprintln(w, "If the token Secret remains, recover the partial install with this Hub cluster. If the Secret was cleaned up, the token is no longer recoverable: clean up any partial Helm release, then delete this Hub cluster before starting a fresh flow.")
+	g := cloudinstall.PostApprovalProvisionGuidance(clusterID, clusterURL, recovery, provisionErr, target)
+	fmt.Fprintln(w, g.Summary)
+	printGuidanceBody(w, g)
 }
 
 func printTunnelConfirmationFailure(w io.Writer, err error, clusterID, cloudURL, clusterURL string, deployment helm.DeploymentRef, target cloudCommandTarget) {
-	reason := err.Error()
-	switch {
-	case errors.Is(err, cloud.ErrConnectConsumptionTimeout):
-		reason = "the five-minute confirmation window elapsed"
-	case errors.Is(err, cloud.ErrConnectPickupExpired):
-		reason = "the Hub stopped reporting the approved request before the agent connected"
-	case errors.Is(err, context.Canceled):
-		reason = "confirmation was canceled"
-	}
+	g := cloudinstall.TunnelConfirmationGuidance(err, clusterID, cloudURL, clusterURL, deployment, target)
+	fmt.Fprintf(w, "\n%s %s\n", cliui.New(w).Marker(cliui.Attention), g.Summary)
+	printGuidanceBody(w, g)
+}
 
-	fmt.Fprintf(w, "\n%s Radar was provisioned and Hub cluster %q already exists, but its tunnel could not be confirmed: %s.\n", cliui.New(w).Marker(cliui.Attention), clusterID, reason)
-	fmt.Fprintf(w, "Open: %s\n", clusterURL)
-	fmt.Fprintln(w, "Do not rerun the installer or delete the cluster by default; the existing agent can still connect after you resolve its startup or egress issue.")
-	fmt.Fprintln(w, "Inspect:")
-	fmt.Fprintf(w, "  %s -n %s rollout status deployment/%s\n", target.kubectl(), deployment.Namespace, deployment.Name)
-	fmt.Fprintf(w, "  %s -n %s logs deployment/%s --all-containers=true --tail=200\n", target.kubectl(), deployment.Namespace, deployment.Name)
-	fmt.Fprintf(w, "Verify cluster DNS and outbound WSS/HTTPS access to %s.\n", cloudURL)
-	fmt.Fprintln(w, "Keep using this Hub cluster and token Secret for recovery. Only if you deliberately abandon the installation should you clean up Helm and the Secret, then delete the Hub cluster before starting a fresh flow.")
+// printGuidanceBody renders shared RecoveryGuidance below a presenter-specific
+// summary line: prose lines, copyable inspect commands, then the cluster link.
+// The link comes last so guidance that ends by pointing at it ("…an owner can
+// delete it later:") reads correctly — and so this matches the order the UI's
+// GuidanceBlock renders.
+func printGuidanceBody(w io.Writer, g cloudinstall.RecoveryGuidance) {
+	for _, line := range g.Lines {
+		fmt.Fprintln(w, line)
+	}
+	if len(g.Inspect) > 0 {
+		fmt.Fprintln(w, "Inspect:")
+		for _, cmd := range g.Inspect {
+			fmt.Fprintf(w, "  %s\n", cmd)
+		}
+	}
+	if g.ClusterURL != "" {
+		fmt.Fprintf(w, "Open: %s\n", g.ClusterURL)
+	}
 }
 
 // buildLocalInstallClients resolves a kube clientset + Helm client from the

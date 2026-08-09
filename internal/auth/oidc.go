@@ -7,11 +7,15 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -19,6 +23,7 @@ import (
 )
 
 const oidcStateCookieName = "radar_oidc_state"
+const oidcVerifierCookieName = "radar_oidc_verifier"
 const oidcForceLoginCookieName = "radar_force_login"
 
 // OIDCHandler handles the OIDC login flow
@@ -30,15 +35,68 @@ type OIDCHandler struct {
 	endSessionEndpoint string                // from OIDC discovery; empty if IdP doesn't support RP-Initiated Logout
 	httpClient         *http.Client          // custom TLS client for OIDC provider calls; nil = default
 	revoker            *MemoryRevoker        // session revocation store; nil = backchannel logout disabled
+	pkceEnabled        bool                  // opt-in PKCE (S256) for the authorization-code flow
+
+	// basePath is the URL prefix Radar serves under ("" at the root). Where Radar
+	// is mounted is the server's concern, not part of the shared auth config, but
+	// the post-login redirect has to land inside the app: under a no-strip subpath
+	// ingress only {basePath}/* is routed here, so "/" would leave the app.
+	basePath string
 
 	// Discovery: backchannel logout support
 	backchannelLogoutSupported        bool
 	backchannelLogoutSessionSupported bool
 }
 
-// NewOIDCHandler creates a new OIDC handler. Returns an error if the provider
-// cannot be discovered (network error, invalid issuer URL, etc.).
-func NewOIDCHandler(ctx context.Context, cfg Config) (*OIDCHandler, error) {
+type oidcDiscoveryClaims struct {
+	EndSessionEndpoint                string `json:"end_session_endpoint"`
+	BackchannelLogoutSupported        bool   `json:"backchannel_logout_supported"`
+	BackchannelLogoutSessionSupported bool   `json:"backchannel_logout_session_supported"`
+}
+
+type oidcProviderMetadata struct {
+	oidc.ProviderConfig
+	oidcDiscoveryClaims
+}
+
+var supportedOIDCSigningAlgorithms = map[string]bool{
+	oidc.RS256: true,
+	oidc.RS384: true,
+	oidc.RS512: true,
+	oidc.ES256: true,
+	oidc.ES384: true,
+	oidc.ES512: true,
+	oidc.PS256: true,
+	oidc.PS384: true,
+	oidc.PS512: true,
+	oidc.EdDSA: true,
+}
+
+// NewOIDCHandler creates a new OIDC handler. basePath is the URL prefix Radar is
+// served under ("" at the root), which the post-login redirect must target.
+// Returns an error if the provider cannot be discovered (network error, invalid
+// issuer URL, etc.).
+// warnIfInsecureOIDCOrigin logs a prominent warning when OIDC is configured on a
+// non-secure origin. Session cookies are issued Secure, so the browser silently
+// drops them over plain HTTP and the user loops on login with no server-side
+// error. localhost is exempt — browsers treat it as a secure context.
+func warnIfInsecureOIDCOrigin(redirectURL string) {
+	u, err := url.Parse(redirectURL)
+	if err != nil || u.Scheme != "http" || isLoopbackHost(u.Hostname()) {
+		return
+	}
+	log.Printf("[oidc] WARNING: redirect URL %s is not HTTPS — the browser will drop the Secure session cookie and login will loop. Serve Radar over HTTPS, or ensure your TLS-terminating proxy sets X-Forwarded-Proto: https.", redirectURL)
+}
+
+func isLoopbackHost(host string) bool {
+	switch host {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return strings.HasSuffix(host, ".localhost")
+}
+
+func NewOIDCHandler(ctx context.Context, cfg Config, basePath string) (*OIDCHandler, error) {
 	// Build a custom HTTP client for OIDC provider TLS when configured
 	var httpClient *http.Client
 	if cfg.OIDCCACert != "" {
@@ -68,7 +126,9 @@ func NewOIDCHandler(ctx context.Context, cfg Config) (*OIDCHandler, error) {
 		ctx = context.WithValue(ctx, oauth2.HTTPClient, httpClient)
 	}
 
-	provider, err := oidc.NewProvider(ctx, cfg.OIDCIssuer)
+	warnIfInsecureOIDCOrigin(cfg.OIDCRedirectURL)
+
+	provider, providerClaims, err := newOIDCProvider(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -87,16 +147,7 @@ func NewOIDCHandler(ctx context.Context, cfg Config) (*OIDCHandler, error) {
 	log.Printf("[oidc] Requesting scopes: %v", scopes)
 
 	verifier := provider.Verifier(&oidc.Config{ClientID: cfg.OIDCClientID})
-
-	// Extract endpoints and feature flags from OIDC discovery document
-	var providerClaims struct {
-		EndSessionEndpoint                string `json:"end_session_endpoint"`
-		BackchannelLogoutSupported        bool   `json:"backchannel_logout_supported"`
-		BackchannelLogoutSessionSupported bool   `json:"backchannel_logout_session_supported"`
-	}
-	if err := provider.Claims(&providerClaims); err != nil {
-		log.Printf("[oidc] Warning: failed to parse end_session_endpoint from discovery document: %v", err)
-	} else if providerClaims.EndSessionEndpoint != "" {
+	if providerClaims.EndSessionEndpoint != "" {
 		log.Printf("[oidc] RP-Initiated Logout enabled (end_session_endpoint discovered)")
 	} else {
 		log.Printf("[oidc] IdP does not advertise end_session_endpoint — will use prompt=login on next auth after logout")
@@ -104,6 +155,7 @@ func NewOIDCHandler(ctx context.Context, cfg Config) (*OIDCHandler, error) {
 
 	h := &OIDCHandler{
 		cfg:                               cfg,
+		basePath:                          basePath,
 		provider:                          provider,
 		oauth:                             oauthCfg,
 		verifier:                          verifier,
@@ -111,6 +163,11 @@ func NewOIDCHandler(ctx context.Context, cfg Config) (*OIDCHandler, error) {
 		httpClient:                        httpClient,
 		backchannelLogoutSupported:        providerClaims.BackchannelLogoutSupported,
 		backchannelLogoutSessionSupported: providerClaims.BackchannelLogoutSessionSupported,
+		pkceEnabled:                       cfg.OIDCEnablePKCE,
+	}
+
+	if h.pkceEnabled {
+		log.Printf("[oidc] PKCE (S256) enabled")
 	}
 
 	if cfg.OIDCBackchannelLogout {
@@ -127,6 +184,255 @@ func NewOIDCHandler(ctx context.Context, cfg Config) (*OIDCHandler, error) {
 	return h, nil
 }
 
+func newOIDCProvider(ctx context.Context, cfg Config) (*oidc.Provider, oidcDiscoveryClaims, error) {
+	if !hasCustomOIDCEndpoints(cfg) {
+		provider, err := oidc.NewProvider(ctx, cfg.OIDCIssuer)
+		if err != nil {
+			return nil, oidcDiscoveryClaims{}, err
+		}
+		var claims oidcDiscoveryClaims
+		if err := provider.Claims(&claims); err != nil {
+			log.Printf("[oidc] Warning: failed to parse optional OIDC discovery claims: %v", err)
+		}
+		return provider, claims, nil
+	}
+
+	metadata, err := resolveOIDCProviderMetadata(ctx, cfg)
+	if err != nil {
+		return nil, oidcDiscoveryClaims{}, err
+	}
+	return metadata.ProviderConfig.NewProvider(ctx), metadata.oidcDiscoveryClaims, nil
+}
+
+func hasCustomOIDCEndpoints(cfg Config) bool {
+	return cfg.OIDCInternalIssuer != "" ||
+		cfg.OIDCAuthorizationURL != "" ||
+		cfg.OIDCTokenURL != "" ||
+		cfg.OIDCUserInfoURL != "" ||
+		cfg.OIDCJWKSURL != ""
+}
+
+func resolveOIDCProviderMetadata(ctx context.Context, cfg Config) (*oidcProviderMetadata, error) {
+	var metadata oidcProviderMetadata
+	if cfg.OIDCInternalIssuer != "" || !hasExplicitRequiredOIDCEndpoints(cfg) {
+		discoveryIssuer := cfg.OIDCIssuer
+		if cfg.OIDCInternalIssuer != "" {
+			discoveryIssuer = cfg.OIDCInternalIssuer
+		}
+		discovered, err := fetchOIDCProviderMetadata(ctx, discoveryIssuer)
+		if err != nil {
+			return nil, err
+		}
+		metadata = *discovered
+		if metadata.IssuerURL != cfg.OIDCIssuer {
+			return nil, fmt.Errorf("oidc: issuer URL configured for Radar (%q) did not match the issuer URL returned by provider discovery (%q)", cfg.OIDCIssuer, metadata.IssuerURL)
+		}
+	} else {
+		// Explicit-endpoint mode skips discovery, so the provider advertises no
+		// signing algorithms. go-oidc then narrows the verifier to RS256 only,
+		// which would reject valid ES256/PS256/EdDSA tokens; seed the full
+		// supported set so the JWKS keys alone constrain which algorithms verify.
+		metadata.ProviderConfig.IssuerURL = cfg.OIDCIssuer
+		metadata.ProviderConfig.Algorithms = supportedOIDCSigningAlgorithmList()
+	}
+
+	metadata.ProviderConfig.IssuerURL = cfg.OIDCIssuer
+	metadata.ProviderConfig.Algorithms = filterOIDCSigningAlgorithms(metadata.ProviderConfig.Algorithms)
+	applyOIDCEndpointConfig(&metadata, cfg)
+	if stuck := unreachableInternalEndpoints(cfg, metadata.ProviderConfig); len(stuck) > 0 {
+		log.Printf("[oidc] WARNING: these server-side endpoints were not rewritten to the internal issuer host: %s. If the Radar pod cannot reach these hosts, set the matching --auth-oidc-<endpoint>-url override.", strings.Join(stuck, ", "))
+	}
+	if err := validateOIDCProviderMetadata(metadata.ProviderConfig); err != nil {
+		return nil, err
+	}
+	return &metadata, nil
+}
+
+// unreachableInternalEndpoints reports server-side endpoints (token, JWKS,
+// userinfo) that resolve to a host other than the internal issuer's when an
+// internal issuer is configured. Those endpoints were not derivable from the
+// public issuer base (the IdP serves them elsewhere), so the rewrite left them
+// pointing at a host the pod may not reach. Endpoints with an explicit override
+// are trusted as configured and skipped.
+func unreachableInternalEndpoints(cfg Config, metadata oidc.ProviderConfig) []string {
+	if cfg.OIDCInternalIssuer == "" {
+		return nil
+	}
+	internalHost := oidcURLHost(cfg.OIDCInternalIssuer)
+	if internalHost == "" {
+		return nil
+	}
+	var stuck []string
+	if cfg.OIDCTokenURL == "" && metadata.TokenURL != "" && oidcURLHost(metadata.TokenURL) != internalHost {
+		stuck = append(stuck, "token")
+	}
+	if cfg.OIDCJWKSURL == "" && metadata.JWKSURL != "" && oidcURLHost(metadata.JWKSURL) != internalHost {
+		stuck = append(stuck, "jwks")
+	}
+	if cfg.OIDCUserInfoURL == "" && metadata.UserInfoURL != "" && oidcURLHost(metadata.UserInfoURL) != internalHost {
+		stuck = append(stuck, "userinfo")
+	}
+	return stuck
+}
+
+func oidcURLHost(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return u.Host
+}
+
+func hasExplicitRequiredOIDCEndpoints(cfg Config) bool {
+	return cfg.OIDCAuthorizationURL != "" && cfg.OIDCTokenURL != "" && cfg.OIDCJWKSURL != ""
+}
+
+func supportedOIDCSigningAlgorithmList() []string {
+	algs := make([]string, 0, len(supportedOIDCSigningAlgorithms))
+	for alg := range supportedOIDCSigningAlgorithms {
+		algs = append(algs, alg)
+	}
+	sort.Strings(algs)
+	return algs
+}
+
+func filterOIDCSigningAlgorithms(algs []string) []string {
+	if len(algs) == 0 {
+		return nil
+	}
+	filtered := make([]string, 0, len(algs))
+	for _, alg := range algs {
+		if supportedOIDCSigningAlgorithms[alg] {
+			filtered = append(filtered, alg)
+		}
+	}
+	return filtered
+}
+
+func fetchOIDCProviderMetadata(ctx context.Context, issuer string) (*oidcProviderMetadata, error) {
+	wellKnown := strings.TrimSuffix(issuer, "/") + "/.well-known/openid-configuration"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, wellKnown, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	client := http.DefaultClient
+	if c, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok && c != nil {
+		client = c
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("unable to read response body: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s: %s", resp.Status, body)
+	}
+
+	var metadata oidcProviderMetadata
+	if err := json.Unmarshal(body, &metadata); err != nil {
+		return nil, fmt.Errorf("oidc: failed to decode provider discovery object: %w", err)
+	}
+	return &metadata, nil
+}
+
+func applyOIDCEndpointConfig(metadata *oidcProviderMetadata, cfg Config) {
+	publicIssuer := cfg.OIDCIssuer
+	internalIssuer := cfg.OIDCInternalIssuer
+
+	if cfg.OIDCAuthorizationURL != "" {
+		metadata.AuthURL = cfg.OIDCAuthorizationURL
+	} else if internalIssuer != "" {
+		metadata.AuthURL = replaceOIDCURLBase(metadata.AuthURL, internalIssuer, publicIssuer)
+	}
+
+	if cfg.OIDCTokenURL != "" {
+		metadata.TokenURL = cfg.OIDCTokenURL
+	} else if internalIssuer != "" {
+		metadata.TokenURL = replaceOIDCURLBase(metadata.TokenURL, publicIssuer, internalIssuer)
+	}
+
+	if cfg.OIDCUserInfoURL != "" {
+		metadata.UserInfoURL = cfg.OIDCUserInfoURL
+	} else if internalIssuer != "" {
+		metadata.UserInfoURL = replaceOIDCURLBase(metadata.UserInfoURL, publicIssuer, internalIssuer)
+	}
+
+	if cfg.OIDCJWKSURL != "" {
+		metadata.JWKSURL = cfg.OIDCJWKSURL
+	} else if internalIssuer != "" {
+		metadata.JWKSURL = replaceOIDCURLBase(metadata.JWKSURL, publicIssuer, internalIssuer)
+	}
+
+	if internalIssuer != "" {
+		metadata.EndSessionEndpoint = replaceOIDCURLBase(metadata.EndSessionEndpoint, internalIssuer, publicIssuer)
+	}
+}
+
+func validateOIDCProviderMetadata(metadata oidc.ProviderConfig) error {
+	if metadata.AuthURL == "" {
+		return fmt.Errorf("oidc: authorization endpoint is empty")
+	}
+	if metadata.TokenURL == "" {
+		return fmt.Errorf("oidc: token endpoint is empty")
+	}
+	if metadata.JWKSURL == "" {
+		return fmt.Errorf("oidc: JWKS endpoint is empty")
+	}
+	return nil
+}
+
+func replaceOIDCURLBase(raw, fromBase, toBase string) string {
+	if raw == "" || fromBase == "" || toBase == "" {
+		return raw
+	}
+	from := strings.TrimRight(fromBase, "/")
+	to := strings.TrimRight(toBase, "/")
+	if raw == from {
+		return to
+	}
+	if strings.HasPrefix(raw, from+"/") {
+		return to + strings.TrimPrefix(raw, from)
+	}
+	return raw
+}
+
+// newFlowCookie builds a short-lived (5 min) HttpOnly cookie for a login-flow
+// secret (state nonce, PKCE verifier). Secure is derived from the request so
+// HTTP/loopback logins can still return the cookie; both the state and verifier
+// cookies go through here so their attributes can't drift apart.
+func (h *OIDCHandler) newFlowCookie(name, value string, r *http.Request) *http.Cookie {
+	return &http.Cookie{
+		Name:     name,
+		Value:    value,
+		Path:     "/",
+		MaxAge:   300, // 5 minutes
+		HttpOnly: true,
+		Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
+		SameSite: http.SameSiteLaxMode,
+	}
+}
+
+// clearFlowCookie builds the deletion cookie for a flow cookie. Path and Secure
+// must match the cookie being cleared — some browsers won't evict a Secure
+// cookie with a non-Secure deletion, so over HTTPS the secret would otherwise
+// linger until its own expiry.
+func (h *OIDCHandler) clearFlowCookie(name string, r *http.Request) *http.Cookie {
+	return &http.Cookie{
+		Name:     name,
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
+		SameSite: http.SameSiteLaxMode,
+	}
+}
+
 // HandleLogin redirects to the OIDC provider for authentication
 func (h *OIDCHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	// Generate random state nonce and store in a short-lived cookie for CSRF protection
@@ -138,15 +444,7 @@ func (h *OIDCHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	state := hex.EncodeToString(b)
 
-	http.SetCookie(w, &http.Cookie{
-		Name:     oidcStateCookieName,
-		Value:    state,
-		Path:     "/",
-		MaxAge:   300, // 5 minutes
-		HttpOnly: true,
-		Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
-		SameSite: http.SameSiteLaxMode,
-	})
+	http.SetCookie(w, h.newFlowCookie(oidcStateCookieName, state, r))
 
 	// If the user just logged out, force the IdP to show a login prompt instead
 	// of silently re-authenticating with an existing SSO session.
@@ -159,6 +457,14 @@ func (h *OIDCHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 			Path:   "/",
 			MaxAge: -1,
 		})
+	}
+
+	// PKCE (opt-in): generate a per-request verifier, stash it in a cookie for
+	// the callback, and send its S256 challenge to the IdP.
+	if h.pkceEnabled {
+		verifier := oauth2.GenerateVerifier()
+		http.SetCookie(w, h.newFlowCookie(oidcVerifierCookieName, verifier, r))
+		authOpts = append(authOpts, oauth2.S256ChallengeOption(verifier))
 	}
 
 	http.Redirect(w, r, h.oauth.AuthCodeURL(state, authOpts...), http.StatusFound)
@@ -184,12 +490,32 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid state parameter", http.StatusBadRequest)
 		return
 	}
-	// Clear the state cookie
+
+	// Read the PKCE verifier before clearing it. When PKCE is disabled this stays
+	// empty and the flow is byte-for-byte identical to the non-PKCE path.
+	var verifier string
+	if h.pkceEnabled {
+		if c, err := r.Cookie(oidcVerifierCookieName); err == nil {
+			verifier = c.Value
+		}
+	}
+
+	// Clear the state cookie. Clear the verifier cookie at the same point (after
+	// state is validated) so a stale PKCE secret never lingers past a successful
+	// state check, regardless of what happens next in the exchange.
 	http.SetCookie(w, &http.Cookie{
 		Name:   oidcStateCookieName,
 		Path:   "/",
 		MaxAge: -1,
 	})
+	if h.pkceEnabled {
+		http.SetCookie(w, h.clearFlowCookie(oidcVerifierCookieName, r))
+	}
+
+	if h.pkceEnabled && verifier == "" {
+		http.Error(w, "missing PKCE verifier — please retry login", http.StatusBadRequest)
+		return
+	}
 
 	// Exchange code for token
 	code := r.URL.Query().Get("code")
@@ -198,8 +524,20 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := h.oauth.Exchange(ctx, code)
+	var exchangeOpts []oauth2.AuthCodeOption
+	if h.pkceEnabled {
+		exchangeOpts = append(exchangeOpts, oauth2.VerifierOption(verifier))
+	}
+	token, err := h.oauth.Exchange(ctx, code, exchangeOpts...)
 	if err != nil {
+		// The browser navigating away mid-login (common during a first-load 401
+		// burst) cancels this request's context. That's the client's doing, not a
+		// server fault — don't log it as an error or return 500. A deadline
+		// (context.DeadlineExceeded) is a real IdP timeout and still falls through.
+		if errors.Is(err, context.Canceled) {
+			log.Printf("[oidc] Token exchange canceled (client disconnected)")
+			return
+		}
 		log.Printf("[oidc] Token exchange failed: %v", err)
 		http.Error(w, "authentication failed", http.StatusInternalServerError)
 		return
@@ -303,8 +641,10 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[oidc] User %s authenticated (groups: %v)", username, groups)
 
-	// Redirect to app
-	http.Redirect(w, r, "/", http.StatusFound)
+	// Redirect to the app root under its base path. A bare "/" would leave the
+	// user outside Radar on a subpath deployment, where the ingress routes only
+	// the prefix to this service.
+	http.Redirect(w, r, h.basePath+"/", http.StatusFound)
 }
 
 // sessionIssued reports whether a CreateSessionCookie result actually

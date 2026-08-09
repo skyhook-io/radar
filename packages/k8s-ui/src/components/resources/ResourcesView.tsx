@@ -153,9 +153,14 @@ import { ResourceClaimCell, ResourceClaimTemplateCell, DeviceClassCell, Resource
 import { NvidiaClusterPolicyCell, NvidiaDriverCell } from './renderers/nvidia-cells'
 import { ServiceMonitorCell, PrometheusRuleCell, PodMonitorCell } from './renderers/prometheus-cells'
 import { PolicyReportCell, ClusterPolicyReportCell, KyvernoPolicyCell, ClusterPolicyCell } from './renderers/kyverno-cells'
+import { KyvernoModernPolicyCell, KyvernoPolicyExceptionCell, KyvernoCleanupPolicyCell } from './renderers/kyverno-modern-cells'
+import { KYVERNO_MODERN_PLURALS, isModernKyvernoPolicy } from './resource-utils-kyverno-modern'
+import { isAnyKyvernoPolicyException } from './resource-utils-kyverno-exceptions'
 import { ExternalSecretCell, ClusterExternalSecretCell, SecretStoreCell, ClusterSecretStoreCell } from './renderers/eso-cells'
-import { BackupCell, RestoreCell, ScheduleCell, BackupStorageLocationCell } from './renderers/velero-cells'
+import { BackupCell, RestoreCell, ScheduleCell, BackupStorageLocationCell, VolumeSnapshotLocationCell, BackupRepositoryCell } from './renderers/velero-cells'
+import { isVeleroResource } from './resource-utils-velero'
 import { CNPGClusterCell, CNPGBackupCell, CNPGScheduledBackupCell, CNPGPoolerCell } from './renderers/cnpg-cells'
+import { isApiGroup, CNPG_GROUP } from './resource-utils-cnpg'
 import { ManagedResourceCell, CompositeResourceCell, CrossplaneProviderCell, CrossplaneProviderConfigCell, CompositionCell, XRDCell } from './renderers/crossplane-cells'
 import { isManagedResource, isComposite } from './resource-utils-crossplane'
 import { VirtualServiceCell, DestinationRuleCell, IstioGatewayCell, ServiceEntryCell, PeerAuthenticationCell, AuthorizationPolicyCell } from './renderers/istio-cells'
@@ -702,20 +707,20 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   policyreports: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'status', label: 'Status', width: 'w-32' },
     { key: 'pass', label: 'Pass', width: 'w-16' },
     { key: 'fail', label: 'Fail', width: 'w-16' },
-    { key: 'warn', label: 'Warn', width: 'w-16' },
+    { key: 'warn', label: 'Warn', width: 'w-20' },
     { key: 'error', label: 'Err', width: 'w-16' },
     { key: 'skip', label: 'Skip', width: 'w-16' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   clusterpolicyreports: [
     { key: 'name', label: 'Name' },
-    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'status', label: 'Status', width: 'w-32' },
     { key: 'pass', label: 'Pass', width: 'w-16' },
     { key: 'fail', label: 'Fail', width: 'w-16' },
-    { key: 'warn', label: 'Warn', width: 'w-16' },
+    { key: 'warn', label: 'Warn', width: 'w-20' },
     { key: 'error', label: 'Err', width: 'w-16' },
     { key: 'skip', label: 'Skip', width: 'w-16' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -733,6 +738,119 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'action', label: 'Action', width: 'w-24', tooltip: 'Validation failure action (Enforce or Audit)' },
     { key: 'rules', label: 'Rules', width: 'w-16' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  // Kyverno modern CEL family (policies.kyverno.io). "Enforcement" is the
+  // effective posture, not spec.validationActions verbatim — a policy that
+  // declares Deny with admission evaluation disabled blocks nothing.
+  validatingpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Enforcement', width: 'w-44', tooltip: 'Effective enforcement posture, accounting for whether admission evaluation is enabled' },
+    { key: 'appliesTo', label: 'Applies To', width: 'min-w-40', tooltip: 'Resources matched by spec.matchConstraints' },
+    { key: 'rules', label: 'Rules', width: 'w-20', tooltip: 'CEL validation expressions' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  namespacedvalidatingpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Enforcement', width: 'w-44', tooltip: 'Effective enforcement posture, accounting for whether admission evaluation is enabled' },
+    { key: 'appliesTo', label: 'Applies To', width: 'min-w-40' },
+    { key: 'rules', label: 'Rules', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  imagevalidatingpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Enforcement', width: 'w-44' },
+    { key: 'images', label: 'Images', width: 'min-w-40', tooltip: 'Image references this policy verifies' },
+    { key: 'attestors', label: 'Attestors', width: 'w-20', tooltip: 'Trusted signing authorities' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  namespacedimagevalidatingpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Enforcement', width: 'w-44' },
+    { key: 'images', label: 'Images', width: 'min-w-40' },
+    { key: 'attestors', label: 'Attestors', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  mutatingpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Enforcement', width: 'w-44' },
+    { key: 'appliesTo', label: 'Applies To', width: 'min-w-40' },
+    { key: 'rules', label: 'Mutations', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  namespacedmutatingpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Enforcement', width: 'w-44' },
+    { key: 'appliesTo', label: 'Applies To', width: 'min-w-40' },
+    { key: 'rules', label: 'Mutations', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  generatingpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Enforcement', width: 'w-44' },
+    { key: 'appliesTo', label: 'Applies To', width: 'min-w-40' },
+    { key: 'rules', label: 'Generates', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  namespacedgeneratingpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Enforcement', width: 'w-44' },
+    { key: 'appliesTo', label: 'Applies To', width: 'min-w-40' },
+    { key: 'rules', label: 'Generates', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  // The Deleting kinds are the only modern family whose headline column is the
+  // schedule rather than the enforcement posture, so they carry their own
+  // health signal. It is Last Run, NOT readiness: Kyverno 1.18.2 declares a
+  // READY printer column on these CRDs but never populates
+  // status.conditionStatus.ready, so `kubectl get deletingpolicies` prints it
+  // blank and a Ready column here would read "unknown" on every row forever.
+  // It also has nothing to catch — an uncompilable policy is rejected at
+  // admission and never exists. What does go wrong is a policy that exists and
+  // silently never fires, which lastExecutionTime shows.
+  //
+  // The other eight kinds deliberately have no readiness column either: their
+  // status cell already returns "Not Ready" IN PLACE OF the posture (see
+  // getModernKyvernoPolicyStatus), so a second one would be redundant.
+  deletingpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'lastRun', label: 'Last Run', width: 'w-28', tooltip: 'When the schedule last fired. A scheduled policy that has never run is the failure worth catching — Kyverno rejects uncompilable policies at admission, so a broken one never exists to flag.' },
+    { key: 'schedule', label: 'Schedule', width: 'w-32', tooltip: 'Cron schedule on which matched resources are deleted' },
+    { key: 'appliesTo', label: 'Deletes', width: 'min-w-40' },
+    { key: 'rules', label: 'Conditions', width: 'w-28', tooltip: 'CEL conditions narrowing what is deleted; none means every matched resource' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  namespaceddeletingpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'lastRun', label: 'Last Run', width: 'w-28', tooltip: 'When the schedule last fired. A scheduled policy that has never run is the failure worth catching — Kyverno rejects uncompilable policies at admission, so a broken one never exists to flag.' },
+    { key: 'schedule', label: 'Schedule', width: 'w-32' },
+    { key: 'appliesTo', label: 'Deletes', width: 'min-w-40' },
+    { key: 'rules', label: 'Conditions', width: 'w-28' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  policyexceptions: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Exempts', width: 'w-28', tooltip: 'How many policies this exception bypasses' },
+    { key: 'policies', label: 'Policies', width: 'min-w-40' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  cleanuppolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'schedule', label: 'Schedule', width: 'w-32' },
+    { key: 'appliesTo', label: 'Deletes', width: 'min-w-40' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  clustercleanuppolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'schedule', label: 'Schedule', width: 'w-32' },
+    { key: 'appliesTo', label: 'Deletes', width: 'min-w-40' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   grpcroutes: [
@@ -1100,39 +1218,64 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   backups: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'status', label: 'Status', width: 'w-36' },
     { key: 'storageLocation', label: 'Storage', width: 'w-36' },
     { key: 'namespaces', label: 'Scope', width: 'w-24', tooltip: 'Included namespaces (* = all)' },
     { key: 'duration', label: 'Duration', width: 'w-24' },
     { key: 'expiry', label: 'Expires', width: 'w-24' },
-    { key: 'errors', label: 'Errors', width: 'w-20' },
+    { key: 'errors', label: 'Errors', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
-  restores: [
+  // `restores` and `schedules` are keyed group-qualified (see
+  // GROUP_QUALIFIED_COLUMN_KEYS): rancher/backup-restore-operator ships
+  // restores.resources.cattle.io and several operators ship their own
+  // `schedules` kind. Only velero.io resolves to these column sets;
+  // everything else falls through to the generic columns.
+  velerorestores: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'status', label: 'Status', width: 'w-36' },
     { key: 'backupName', label: 'Backup', width: 'w-40' },
     { key: 'duration', label: 'Duration', width: 'w-24' },
-    { key: 'errors', label: 'Errors', width: 'w-20' },
+    { key: 'errors', label: 'Errors', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
-  schedules: [
+  veleroschedules: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'schedule', label: 'Schedule', width: 'w-32' },
-    { key: 'lastBackup', label: 'Last Backup', width: 'w-28' },
-    { key: 'paused', label: 'Paused', width: 'w-16' },
+    { key: 'status', label: 'Status', width: 'w-36' },
+    { key: 'schedule', label: 'Schedule', width: 'w-40' },
+    { key: 'lastBackup', label: 'Last Backup', width: 'w-32' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  // No status column on purpose: the VSL controller never populates
+  // status.phase, so a badge would read "Unknown" on every row forever.
+  volumesnapshotlocations: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'provider', label: 'Provider', width: 'w-32' },
+    { key: 'config', label: 'Config' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  // repositoryType is kopia|restic, and it is what `kubectl get
+  // backuprepositories` shows. It earns a column because restic is being retired
+  // (no new backups since v1.17, restore dropped in v1.19), which makes it a
+  // migration liability worth spotting by scanning rather than by opening each
+  // repository one at a time.
+  backuprepositories: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-36' },
+    { key: 'repositoryType', label: 'Type', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   backupstoragelocations: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'status', label: 'Status', width: 'w-36' },
     { key: 'provider', label: 'Provider', width: 'w-24' },
     { key: 'bucket', label: 'Bucket', width: 'w-40' },
-    { key: 'default', label: 'Default', width: 'w-16' },
+    { key: 'default', label: 'Default', width: 'w-24' },
     { key: 'lastValidation', label: 'Validated', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -1142,11 +1285,34 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   cnpgclusters: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-28' },
+    // w-28 leaves the "Status" label 0.23px short once the sort AND filter
+    // affordances are both present, which renders "STAT…" — a sub-pixel miss
+    // costs two characters because the ellipsis needs its own room. The filter
+    // icon appears as soon as a column holds more than one distinct value, so
+    // this is latent on any status column, not specific to the current data.
+    // w-44 fits "WAL Archiving Failing" (120.2px against a 127px label budget).
+    // CNPG's own phases are mapped to short display states — see
+    // getCNPGClusterDisplayState; a 315px sentence fits no column at all.
+    { key: 'status', label: 'Status', width: 'w-44' },
     { key: 'instances', label: 'Instances', width: 'w-28', tooltip: 'Ready/Total' },
     { key: 'primary', label: 'Primary', width: 'w-36' },
     { key: 'image', label: 'Image', width: 'w-28' },
-    { key: 'storage', label: 'Storage', width: 'w-28' },
+    // No Storage column: it rendered spec.storage.size, the configured REQUEST.
+    // The useful number is actual usage (kubectl cnpg status shows "Size: 158M")
+    // and that isn't in the CR. A plausible-but-wrong-meaning number is worse
+    // than an absent one — the reader can't tell which meaning they're getting.
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  cnpgbackups: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-44' },
+    { key: 'cluster', label: 'Cluster', width: 'w-36' },
+    // `barmanObjectStore` is the longest method and the field that decides how
+    // the rest of the row reads; at w-36 it was permanently ellipsised.
+    { key: 'method', label: 'Method', width: 'w-40' },
+    { key: 'started', label: 'Started', width: 'w-24' },
+    { key: 'duration', label: 'Duration', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   scheduledbackups: [
@@ -1162,11 +1328,19 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   poolers: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-24' },
+    // "Not Scheduled" (83.5px) is kept rather than shortened to "Unscheduled":
+    // ScheduledBackup also renders a literal "Scheduled" badge in this same
+    // column, so a standalone adjective would read as "has no cron" — a claim
+    // about a field Poolers don't have. w-36 buys the words.
+    { key: 'status', label: 'Status', width: 'w-36' },
     { key: 'cluster', label: 'Cluster', width: 'w-36' },
-    { key: 'type', label: 'Type', width: 'w-16' },
+    // Sized for the HEADER, not the value: `rw`/`ro` need 27px, but "Type" plus
+    // the sort affordance needs more than w-16 leaves, and the label rendered
+    // as "T…".
+    { key: 'type', label: 'Type', width: 'w-24' },
     { key: 'poolMode', label: 'Pool Mode', width: 'w-32' },
-    { key: 'instances', label: 'Instances', width: 'w-28', tooltip: 'Ready/Total' },
+    // status.instances counts pods trying to be scheduled, not ready ones.
+    { key: 'instances', label: 'Instances', width: 'w-28', tooltip: 'Scheduled/Total' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   // ============================================================================
@@ -1694,6 +1868,9 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
 // Map (plural, group) → KNOWN_COLUMNS key for kinds that collide with core K8s
 const GROUP_QUALIFIED_COLUMN_KEYS: Record<string, Record<string, string>> = {
   clusters: { 'postgresql.cnpg.io': 'cnpgclusters', 'cluster.x-k8s.io': 'capiclusters' },
+  // Velero owns the unqualified `backups` column set; CNPG Backups carry a
+  // completely different shape (cluster + method, no storage location/expiry).
+  backups: { 'postgresql.cnpg.io': 'cnpgbackups' },
   clusterpolicies: { 'nvidia.com': 'nvidiaclusterpolicies' },
   services: { 'serving.knative.dev': 'knativeservices' },
   configurations: { 'serving.knative.dev': 'knativeconfigurations' },
@@ -1701,6 +1878,8 @@ const GROUP_QUALIFIED_COLUMN_KEYS: Record<string, Record<string, string>> = {
   routes: { 'serving.knative.dev': 'knativeroutes' },
   ingresses: { 'networking.internal.knative.dev': 'knativeingresses' },
   certificates: { 'networking.internal.knative.dev': 'knativecertificates' },
+  restores: { 'velero.io': 'velerorestores' },
+  schedules: { 'velero.io': 'veleroschedules' },
 }
 
 // Normalize a kind name to its plural API form used in KNOWN_COLUMNS keys.
@@ -5455,6 +5634,29 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
 
   // Kind-specific columns (normalize CRD singular names like 'ScaledObject' → 'scaledobjects')
   const kindLower = normalizeKindToPlural(kind, group)
+
+  // Kyverno cells are group-gated ahead of the switch so a non-matching CR
+  // falls through to the switch's default (GenericCell) instead of being
+  // described in Kyverno's vocabulary. These plurals are generic enough that
+  // another vendor could ship them, and `policyexceptions` is served by BOTH
+  // Kyverno API families with different spec shapes. The stakes are higher
+  // here than in the drawer: an absent `validationActions` legitimately means
+  // Deny for a real Kyverno policy, so an ungated foreign CR would render a
+  // red "Deny" badge purely because it lacks a field it never had.
+  if (KYVERNO_MODERN_PLURALS.has(kindLower) && isModernKyvernoPolicy(resource)) {
+    return <KyvernoModernPolicyCell resource={resource} column={column} />
+  }
+  if (kindLower === 'policyexceptions' && isAnyKyvernoPolicyException(resource)) {
+    return <KyvernoPolicyExceptionCell resource={resource} column={column} />
+  }
+  if (
+    (kindLower === 'cleanuppolicies' || kindLower === 'clustercleanuppolicies') &&
+    typeof resource?.apiVersion === 'string' &&
+    resource.apiVersion.startsWith('kyverno.io/')
+  ) {
+    return <KyvernoCleanupPolicyCell resource={resource} column={column} />
+  }
+
   switch (kindLower) {
     case 'pods':
       return <PodCell resource={resource} column={column} />
@@ -5644,26 +5846,53 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
     case 'clustersecretstores':
       return <ClusterSecretStoreCell resource={resource} column={column} />
     // Velero
+    case 'cnpgbackups':
+      return <CNPGBackupCell resource={resource} column={column} />
     case 'backups':
-      // Disambiguate CNPG vs Velero backups by apiVersion
-      if (resource.apiVersion?.includes('cnpg.io')) {
+      // Reached only when the group is unknown to normalizeKindToPlural. Both
+      // engines are matched positively so a third `backups` CRD renders generic
+      // rather than inheriting whichever branch happened to be the fallback.
+      if (isApiGroup(resource.apiVersion, CNPG_GROUP)) {
         return <CNPGBackupCell resource={resource} column={column} />
       }
-      return <BackupCell resource={resource} column={column} />
-    case 'restores':
+      if (isApiGroup(resource.apiVersion, 'velero.io')) {
+        return <BackupCell resource={resource} column={column} />
+      }
+      return <GenericCell resource={resource} column={column} />
+    case 'velerorestores':
       return <RestoreCell resource={resource} column={column} />
-    case 'schedules':
+    case 'veleroschedules':
       return <ScheduleCell resource={resource} column={column} />
     case 'backupstoragelocations':
+      if (!isVeleroResource(resource)) return <GenericCell resource={resource} column={column} />
       return <BackupStorageLocationCell resource={resource} column={column} />
+    case 'volumesnapshotlocations':
+      if (!isVeleroResource(resource)) return <GenericCell resource={resource} column={column} />
+      return <VolumeSnapshotLocationCell resource={resource} column={column} />
+    case 'backuprepositories':
+      if (!isVeleroResource(resource)) return <GenericCell resource={resource} column={column} />
+      return <BackupRepositoryCell resource={resource} column={column} />
     // CloudNativePG
     case 'cnpgclusters':
-    case 'clusters':
       return <CNPGClusterCell resource={resource} column={column} />
+    case 'clusters':
+      // Positive guard: `clusters` is one of the most collided CRD plurals
+      // (CNPG, CAPI, KubeBlocks, Redis/Valkey operators). Anything else gets
+      // the generic cell instead of a fabricated Postgres status.
+      if (isApiGroup(resource.apiVersion, CNPG_GROUP)) {
+        return <CNPGClusterCell resource={resource} column={column} />
+      }
+      return <GenericCell resource={resource} column={column} />
     case 'scheduledbackups':
-      return <CNPGScheduledBackupCell resource={resource} column={column} />
+      if (isApiGroup(resource.apiVersion, CNPG_GROUP)) {
+        return <CNPGScheduledBackupCell resource={resource} column={column} />
+      }
+      return <GenericCell resource={resource} column={column} />
     case 'poolers':
-      return <CNPGPoolerCell resource={resource} column={column} />
+      if (isApiGroup(resource.apiVersion, CNPG_GROUP)) {
+        return <CNPGPoolerCell resource={resource} column={column} />
+      }
+      return <GenericCell resource={resource} column={column} />
     // Istio Service Mesh
     case 'virtualservices':
       return <VirtualServiceCell resource={resource} column={column} />

@@ -9,7 +9,7 @@ import {
 import { clsx } from 'clsx'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
-import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
+import { apiUrl, getAuthHeaders, getCredentialsMode, routePath } from '../../api/config'
 import {
   useCloudRole, useVersionCheck, useClusterInfo, usePrometheusStatus, useArgoStatus,
 } from '../../api/client'
@@ -19,6 +19,14 @@ import { Tooltip } from '../ui/Tooltip'
 import { AISettingsSection, type AIDraft } from '../diagnose/AISettings'
 import { MyPermissionsContent } from './MyPermissionsDialog'
 import { useDiagnose } from '../diagnose/DiagnoseContext'
+
+// The loopback URL an MCP client is told to connect to. Shared by the overview
+// row and the MCP section: both must carry the base path, or the URL they
+// advertise 404s under a subpath deployment.
+function mcpLoopbackUrl(): string {
+  const port = Number(window.location.port) || 80
+  return `http://localhost:${port}${routePath('/mcp')}`
+}
 
 interface Config {
   kubeconfig?: string
@@ -842,8 +850,7 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
   const agentLabel =
     diag.agents.find((a) => a.name === diag.selectedAgent)?.label ?? diag.agents[0]?.label
   const mcpOn = capabilities.mcpEnabled
-  const port = Number(window.location.port) || 80
-  const mcpUrl = `http://localhost:${port}/mcp`
+  const mcpUrl = mcpLoopbackUrl()
 
   const rows: OverviewRow[] = [
     {
@@ -964,8 +971,10 @@ function AIUnavailableNotice() {
     <div className="rounded-md border border-theme-border bg-theme-elevated/50 p-3">
       <p className="text-sm font-medium text-theme-text-primary">No supported agent CLI found</p>
       <p className="mt-1 text-xs text-theme-text-tertiary">
-        Install <span className="text-theme-text-secondary">Claude Code</span> or{' '}
-        <span className="text-theme-text-secondary">Codex</span>, then restart Radar — this tab
+        Install <span className="text-theme-text-secondary">Claude Code</span>,{' '}
+        <span className="text-theme-text-secondary">Codex</span>, or{' '}
+        <span className="text-theme-text-secondary">Cursor</span> (
+        <span className="font-mono">cursor-agent</span>), then restart Radar — this tab
         will show the agent, model, and effort controls.
       </p>
     </div>
@@ -1117,7 +1126,7 @@ function MCPSection({
   const [copied, setCopied] = useState(false)
 
   const currentPort = Number(window.location.port) || 80
-  const mcpUrl = `http://localhost:${currentPort}/mcp`
+  const mcpUrl = mcpLoopbackUrl()
 
   const handleCopy = () => {
     navigator.clipboard.writeText(mcpUrl)

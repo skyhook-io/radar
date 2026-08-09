@@ -80,9 +80,10 @@ type DashboardProblem struct {
 	Reason          string `json:"reason"`
 	Message         string `json:"message"`
 	Age             string `json:"age"`
-	AgeSeconds      int64  `json:"ageSeconds"`         // For sorting: lower = more recent
-	Duration        string `json:"duration"`           // How long the problem has persisted
-	DurationSeconds int64  `json:"durationSeconds"`    // For sorting by problem age
+	AgeSeconds      int64  `json:"ageSeconds"`      // For sorting: lower = more recent
+	Duration        string `json:"duration"`        // How long the problem has persisted
+	DurationSeconds int64  `json:"durationSeconds"` // For sorting by problem age
+	OnsetUnknown    bool   `json:"onsetUnknown,omitempty"`
 	PodCount        int    `json:"podCount,omitempty"` // For workload rollups: number of affected pods
 }
 
@@ -630,18 +631,7 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 			}
 			seenPodReason[key] = true
 		}
-		problems = append(problems, DashboardProblem{
-			Kind:            p.Kind,
-			Namespace:       p.Namespace,
-			Name:            p.Name,
-			Severity:        p.Severity,
-			Reason:          p.Reason,
-			Message:         p.Message,
-			Age:             p.Age,
-			AgeSeconds:      p.AgeSeconds,
-			Duration:        p.Duration,
-			DurationSeconds: p.DurationSeconds,
-		})
+		problems = append(problems, detectionToDashboardProblem(p))
 	}
 
 	// Scheduling problems: unschedulable pods (with the offending node
@@ -655,35 +645,12 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 	sched = append(sched, k8s.DetectAdmissionProblems(cache, namespace)...)
 	sched = append(sched, postBind...)
 	for _, p := range sched {
-		problems = append(problems, DashboardProblem{
-			Kind:            p.Kind,
-			Namespace:       p.Namespace,
-			Name:            p.Name,
-			Severity:        p.Severity,
-			Reason:          p.Reason,
-			Message:         p.Message,
-			Age:             p.Age,
-			AgeSeconds:      p.AgeSeconds,
-			Duration:        p.Duration,
-			DurationSeconds: p.DurationSeconds,
-		})
+		problems = append(problems, detectionToDashboardProblem(p))
 	}
 
 	// CAPI problems (Cluster API resources)
 	for _, p := range k8s.DetectCAPIProblems(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery(), namespace) {
-		problems = append(problems, DashboardProblem{
-			Kind:            p.Kind,
-			Namespace:       p.Namespace,
-			Name:            p.Name,
-			Group:           p.Group,
-			Severity:        p.Severity,
-			Reason:          p.Reason,
-			Message:         p.Message,
-			Age:             p.Age,
-			AgeSeconds:      p.AgeSeconds,
-			Duration:        p.Duration,
-			DurationSeconds: p.DurationSeconds,
-		})
+		problems = append(problems, detectionToDashboardProblem(p))
 	}
 
 	// Sort: critical first, then high, then medium; within each group sort by age (most recent first)
@@ -707,6 +674,23 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 	})
 
 	return dh, problems
+}
+
+func detectionToDashboardProblem(p k8s.Detection) DashboardProblem {
+	return DashboardProblem{
+		Kind:            p.Kind,
+		Namespace:       p.Namespace,
+		Name:            p.Name,
+		Group:           p.Group,
+		Severity:        p.Severity,
+		Reason:          p.Reason,
+		Message:         p.Message,
+		Age:             p.Age,
+		AgeSeconds:      p.AgeSeconds,
+		Duration:        p.Duration,
+		DurationSeconds: p.DurationSeconds,
+		OnsetUnknown:    p.OnsetUnknown,
+	}
 }
 
 func podToProblem(pod *corev1.Pod, severity string, now time.Time) DashboardProblem {

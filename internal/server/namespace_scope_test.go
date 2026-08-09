@@ -288,6 +288,24 @@ func TestResolveHelmNamespaces_AuthenticatedClusterWideUserDoesNotUseBackendFall
 	}
 }
 
+func TestResolveHelmNamespacesForScope_ClusterWideWorkloadReaderUsesPerNamespaceSecretAccess(t *testing.T) {
+	s := newTestServer(t)
+	perms := &pkgauth.UserPermissions{AllowedNamespaces: nil}
+	perms.SetCanI("list", "", "secrets", "", false)
+	perms.SetCanI("list", "", "secrets", "default", true)
+	perms.SetCanI("list", "", "secrets", "broken", false)
+	s.permCache = pkgauth.NewPermissionCache()
+	s.permCache.Set("alice", perms)
+
+	got, ok := s.resolveHelmNamespacesForScope(reqAs("alice"), nil)
+	if !ok {
+		t.Fatal("resolveHelmNamespacesForScope returned ok=false")
+	}
+	if !slices.Equal(got, []string{"default"}) {
+		t.Fatalf("namespaces = %v, want the namespace with per-namespace Secret access", got)
+	}
+}
+
 func restoreHelmNamespaceFallbackState(t *testing.T) {
 	t.Helper()
 

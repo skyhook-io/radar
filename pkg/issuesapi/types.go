@@ -56,6 +56,7 @@ const (
 	CategorySecretSyncFailed         Category = "secret_sync_failed"
 	CategoryServiceNoEndpoints       Category = "service_no_endpoints"
 	CategoryIngressBackendMissing    Category = "ingress_backend_missing"
+	CategoryIngressClassMissing      Category = "ingress_class_missing"
 	CategoryLoadBalancerPending      Category = "load_balancer_pending"
 	CategoryGatewayNotReady          Category = "gateway_not_ready"
 	CategoryGatewayRouteInvalid      Category = "gateway_route_invalid"
@@ -67,6 +68,8 @@ const (
 	CategoryPVCResizeFailed          Category = "pvc_resize_failed"
 	CategoryVolumeMountFailed        Category = "volume_mount_failed"
 	CategoryVolumeAccessModeConflict Category = "volume_access_mode_conflict"
+	CategoryBackupFailed             Category = "backup_failed"
+	CategoryBackupTargetUnavailable  Category = "backup_target_unavailable"
 	CategoryRolloutStalled           Category = "rollout_stalled"
 	CategoryHPALimitedOrFailed       Category = "hpa_limited_or_failed"
 	CategoryRBACForbidden            Category = "rbac_forbidden"
@@ -131,6 +134,7 @@ var categoryGroup = map[Category]CategoryGroup{
 	CategorySecretSyncFailed:         GroupConfiguration,
 	CategoryServiceNoEndpoints:       GroupNetworking,
 	CategoryIngressBackendMissing:    GroupNetworking,
+	CategoryIngressClassMissing:      GroupNetworking,
 	CategoryLoadBalancerPending:      GroupNetworking,
 	CategoryGatewayNotReady:          GroupNetworking,
 	CategoryGatewayRouteInvalid:      GroupNetworking,
@@ -142,6 +146,8 @@ var categoryGroup = map[Category]CategoryGroup{
 	CategoryPVCResizeFailed:          GroupStorage,
 	CategoryVolumeMountFailed:        GroupStorage,
 	CategoryVolumeAccessModeConflict: GroupStorage,
+	CategoryBackupFailed:             GroupStorage,
+	CategoryBackupTargetUnavailable:  GroupStorage,
 	CategoryRolloutStalled:           GroupScaling,
 	CategoryHPALimitedOrFailed:       GroupScaling,
 	CategoryRBACForbidden:            GroupSecurity,
@@ -371,9 +377,17 @@ type Issue struct {
 	// "(retried N times)") — distinct from RestartCount, which is pod/container
 	// restarts. Stuck means the issue is not expected to self-recover (retries
 	// exhausted, or a self-perpetuating drift loop).
-	OperationRetryCount  int                `json:"operation_retry_count,omitempty"`
-	Stuck                bool               `json:"stuck,omitempty"`
+	OperationRetryCount int  `json:"operation_retry_count,omitempty"`
+	Stuck               bool `json:"stuck,omitempty"`
+	// CapacityRelevant marks an unschedulable pod Capacity can diagnose — the
+	// frontend links these to the Capacity/Demand view. Two paths set it: the
+	// pod's own spec explicitly requiring a Karpenter NodePool (structural, not
+	// a message parse), and a correlation against observed NodePool specs. The
+	// correlated path is authorized — a caller who cannot list NodePools never
+	// sees it set, since the bit would otherwise leak cluster-scoped pool state.
+	CapacityRelevant     bool               `json:"capacity_relevant,omitempty"`
 	FirstSeen            time.Time          `json:"first_seen,omitzero"`
+	OnsetUnknown         bool               `json:"onset_unknown,omitempty"`
 	LastSeen             time.Time          `json:"last_seen,omitzero"`
 	Count                int                `json:"count,omitempty"`
 	Owner                Ref                `json:"owner,omitzero"`

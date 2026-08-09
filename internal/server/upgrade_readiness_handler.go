@@ -1,0 +1,477 @@
+package server
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"io"
+	"log"
+	"math"
+	"net/http"
+	"net/url"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+
+	dto "github.com/prometheus/client_model/go"
+	"github.com/prometheus/common/expfmt"
+	"github.com/prometheus/common/model"
+	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/skyhook-io/radar/internal/audit"
+	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/helm"
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/upgradereadiness"
+)
+
+const (
+	upgradeSourceObjectCollectionTimeout = 10 * time.Second
+	upgradeNodeRuntimeCollectionTimeout  = 20 * time.Second
+	upgradeNodeMetricsResponseLimit      = 8 << 20
+	upgradeAPIMetricsCollectionTimeout   = 10 * time.Second
+	upgradeAPIMetricsResponseLimit       = 16 << 20
+)
+
+func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
+	cache := k8s.GetResourceCache()
+	if cache == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Cache not initialized")
+		return
+	}
+	currentVersion := k8s.GetServerVersion()
+	targetVersion := r.URL.Query().Get("target")
+	if err := upgradereadiness.ValidateTarget(currentVersion, targetVersion); err != nil {
+		s.writeUpgradeReadinessError(w, err)
+		return
+	}
+
+	namespaces := s.upgradeReadinessNamespaces(r)
+	noAccess := noNamespaceAccess(namespaces)
+	var scanInput *k8s.ResourceCache
+	if !noAccess {
+		scanInput = cache
+	}
+
+	var manifestResources []upgradereadiness.ManifestResource
+	var helmUnavailableNamespaces []string
+	var helmScopedNamespaces []string
+	var manifestParseErrors int
+	var deprecatedRequests []upgradereadiness.DeprecatedAPIRequest
+	var deprecatedMetricsWindow string
+	var prometheusRules []*unstructured.Unstructured
+	var prometheusUnavailableNamespaces []string
+	var prometheusInstalled, discoveryAvailable bool
+	var sourceObjects []metav1.Object
+	var sourceObjectUnavailableKinds []string
+	var admissionConfigs, crds []*unstructured.Unstructured
+	var admissionConfigUnavailableKinds []string
+	var apiServices []*unstructured.Unstructured
+	var endpointSlices []*discoveryv1.EndpointSlice
+	var additionalServices []*corev1.Service
+	var nodeRuntimeEvidence []upgradereadiness.NodeRuntimeEvidence
+	canReadNodes := !noAccess && s.canRead(r, "", "nodes", "", "list")
+	if !noAccess {
+		if helmNamespaces, ok := s.resolveHelmNamespacesForScope(r, namespaces); ok {
+			manifestResources, helmUnavailableNamespaces, manifestParseErrors = collectUpgradeHelmManifests(r, helmNamespaces)
+			if !sameNamespaceScope(namespaces, helmNamespaces) {
+				helmScopedNamespaces = make([]string, len(helmNamespaces))
+				copy(helmScopedNamespaces, helmNamespaces)
+			}
+		}
+		deprecatedRequests, deprecatedMetricsWindow = collectDeprecatedAPIRequests(r)
+		prometheusRules, prometheusInstalled, discoveryAvailable, prometheusUnavailableNamespaces = s.collectUpgradePrometheusRules(r, namespaces)
+		sourceObjectCtx, cancelSourceObjectCollection := context.WithTimeout(r.Context(), upgradeSourceObjectCollectionTimeout)
+		sourceObjects, sourceObjectUnavailableKinds = collectUpgradeSourceObjects(sourceObjectCtx, namespaces)
+		cancelSourceObjectCollection()
+		admissionConfigs, admissionConfigUnavailableKinds, crds, endpointSlices, additionalServices = s.collectUpgradeWebhookEvidence(r)
+		apiServices = s.collectUpgradeAPIServices(r)
+		if canReadNodes && s.canReadSubresource(r, "", "nodes", "proxy", "", "get") && cache.Nodes() != nil {
+			nodes, _ := cache.Nodes().List(labels.Everything())
+			nodeRuntimeCtx, cancelNodeRuntimeCollection := context.WithTimeout(r.Context(), upgradeNodeRuntimeCollectionTimeout)
+			nodeRuntimeEvidence = collectUpgradeNodeRuntimeEvidence(nodeRuntimeCtx, nodes)
+			cancelNodeRuntimeCollection()
+		}
+	}
+	if r.Context().Err() != nil {
+		return
+	}
+	platform, _ := k8s.GetClusterPlatform(r.Context())
+	results, err := audit.RunUpgradeReadinessFromCache(scanInput, namespaces, audit.UpgradeReadinessOptions{
+		CurrentVersion:                      currentVersion,
+		TargetVersion:                       targetVersion,
+		Platform:                            platform,
+		ManifestResources:                   manifestResources,
+		HelmUnavailableNamespaces:           helmUnavailableNamespaces,
+		HelmScopedNamespaces:                helmScopedNamespaces,
+		ManifestParseErrors:                 manifestParseErrors,
+		DeprecatedAPIRequests:               deprecatedRequests,
+		DeprecatedAPIMetricsWindow:          deprecatedMetricsWindow,
+		PrometheusRules:                     prometheusRules,
+		PrometheusRulesInstalled:            prometheusInstalled,
+		PrometheusRulesDiscoveryAvailable:   discoveryAvailable,
+		PrometheusRuleUnavailableNamespaces: prometheusUnavailableNamespaces,
+		CanReadNodes:                        canReadNodes,
+		CanReadPersistentVolumes:            !noAccess && s.canRead(r, "", "persistentvolumes", "", "list"),
+		SourceObjects:                       sourceObjects,
+		SourceObjectUnavailableKinds:        sourceObjectUnavailableKinds,
+		AdmissionWebhookConfigurations:      admissionConfigs,
+		AdmissionWebhookUnavailableKinds:    admissionConfigUnavailableKinds,
+		CustomResourceDefinitions:           crds,
+		APIServices:                         apiServices,
+		EndpointSlices:                      endpointSlices,
+		WebhookServices:                     additionalServices,
+		NodeRuntimeEvidence:                 nodeRuntimeEvidence,
+	})
+	if err != nil {
+		s.writeUpgradeReadinessError(w, err)
+		return
+	}
+	if noAccess {
+		results.Coverage.State = "no_access"
+		results.Coverage.UnavailableKinds = nil
+	}
+
+	s.writeJSON(w, results)
+}
+
+func (s *Server) writeUpgradeReadinessError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, upgradereadiness.ErrInvalidTargetVersion), errors.Is(err, upgradereadiness.ErrNonForwardTarget):
+		s.writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, upgradereadiness.ErrInvalidCurrentVersion):
+		s.writeError(w, http.StatusServiceUnavailable, "Unable to determine the cluster Kubernetes version")
+	default:
+		s.writeError(w, http.StatusInternalServerError, "Upgrade impact scan failed")
+	}
+}
+
+func sameNamespaceScope(a, b []string) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	a = append([]string(nil), a...)
+	b = append([]string(nil), b...)
+	slices.Sort(a)
+	slices.Sort(b)
+	return slices.Equal(a, b)
+}
+
+// upgradeReadinessNamespaces intentionally ignores the active namespace picker:
+// an upgrade affects the cluster, while the picker is only a browsing filter.
+// Authenticated users are still limited to their full RBAC namespace ceiling,
+// and --namespace-scope remains an explicit hard boundary on cached evidence.
+func (s *Server) upgradeReadinessNamespaces(r *http.Request) []string {
+	if k8s.ForceNamespaceScope {
+		if namespace := k8s.GetNamespaceScopeTarget(); namespace != "" {
+			return s.getUserNamespaces(r, []string{namespace})
+		}
+		return []string{}
+	}
+	return s.getUserNamespaces(r, nil)
+}
+
+func (s *Server) canReadSubresource(r *http.Request, group, resource, subresource, namespace, verb string) bool {
+	user := auth.UserFromContext(r.Context())
+	if user == nil {
+		return true
+	}
+	client := k8s.GetClient()
+	if client == nil {
+		return false
+	}
+	allowed, err := auth.SubjectCanISubresource(r.Context(), client, user.Username, user.Groups, namespace, group, resource, subresource, verb)
+	if err != nil {
+		log.Printf("[upgrade-impact] authorization failed for %s on %s/%s: %v", verb, resource, subresource, err)
+		return false
+	}
+	return allowed
+}
+
+func collectUpgradeHelmManifests(r *http.Request, namespaces []string) ([]upgradereadiness.ManifestResource, []string, int) {
+	client := helm.GetClient()
+	if client == nil {
+		return nil, nil, 0
+	}
+	username, groups := "", []string(nil)
+	if user := auth.UserFromContext(r.Context()); user != nil {
+		username, groups = user.Username, user.Groups
+	}
+	resources, unavailableNamespaces, parseErrors, err := client.ListManifestResourcesAcrossNamespaces(r.Context(), namespaces, username, groups)
+	if err != nil {
+		if !helm.IsForbiddenError(err) {
+			log.Printf("[upgrade-impact] failed to inspect Helm manifests: %v", err)
+		}
+		if len(unavailableNamespaces) == 0 {
+			return nil, nil, parseErrors
+		}
+	}
+	result := make([]upgradereadiness.ManifestResource, 0, len(resources))
+	for _, resource := range resources {
+		result = append(result, upgradereadiness.ManifestResource{
+			APIVersion:      resource.Resource.APIVersion,
+			Kind:            resource.Resource.Kind,
+			Namespace:       resource.Resource.Namespace,
+			Name:            resource.Resource.Name,
+			Source:          "Helm",
+			SourceNamespace: resource.ReleaseNamespace,
+			SourceName:      resource.ReleaseName,
+			Object:          resource.Object,
+		})
+	}
+	return result, unavailableNamespaces, parseErrors
+}
+
+func collectDeprecatedAPIRequests(r *http.Request) ([]upgradereadiness.DeprecatedAPIRequest, string) {
+	client := k8s.ClientFromContext(r.Context())
+	if client == nil || client.Discovery().RESTClient() == nil {
+		return nil, ""
+	}
+	metricsCtx, cancel := context.WithTimeout(r.Context(), upgradeAPIMetricsCollectionTimeout)
+	defer cancel()
+	stream, err := client.Discovery().RESTClient().Get().AbsPath("/metrics").Stream(metricsCtx)
+	if err != nil {
+		return nil, ""
+	}
+	raw, err := readBoundedUpgradeResponse(stream, upgradeAPIMetricsResponseLimit)
+	if err != nil {
+		return nil, ""
+	}
+	requests, processStartedAt, err := parseDeprecatedAPIRequests(raw)
+	if err != nil {
+		log.Printf("[upgrade-impact] failed to parse API server metrics: %v", err)
+		return nil, ""
+	}
+	window := ""
+	if !processStartedAt.IsZero() {
+		age := time.Since(processStartedAt)
+		if age >= 0 {
+			window = k8s.FormatAge(age)
+		}
+	}
+	return requests, window
+}
+
+func readBoundedUpgradeResponse(stream io.ReadCloser, limit int64) ([]byte, error) {
+	defer stream.Close()
+	raw, err := io.ReadAll(io.LimitReader(stream, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) > limit {
+		return nil, errors.New("upgrade evidence response exceeds limit")
+	}
+	return raw, nil
+}
+
+func parseDeprecatedAPIRequests(raw []byte) ([]upgradereadiness.DeprecatedAPIRequest, time.Time, error) {
+	parser := expfmt.NewTextParser(model.LegacyValidation)
+	families, err := parser.TextToMetricFamilies(bytes.NewReader(raw))
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	var processStartedAt time.Time
+	if processFamily := families["process_start_time_seconds"]; processFamily != nil && len(processFamily.Metric) > 0 {
+		if startedAt := metricValue(processFamily.GetType(), processFamily.Metric[0]); startedAt > 0 {
+			seconds, fraction := math.Modf(startedAt)
+			processStartedAt = time.Unix(int64(seconds), int64(fraction*float64(time.Second)))
+		}
+	}
+	family := families["apiserver_requested_deprecated_apis"]
+	if family == nil {
+		return []upgradereadiness.DeprecatedAPIRequest{}, processStartedAt, nil
+	}
+	requests := make([]upgradereadiness.DeprecatedAPIRequest, 0, len(family.Metric))
+	for _, metric := range family.Metric {
+		labels := metricLabels(metric)
+		removed := labels["removed_release"]
+		version, resource := labels["version"], labels["resource"]
+		if removed == "" || version == "" || resource == "" {
+			continue
+		}
+		requests = append(requests, upgradereadiness.DeprecatedAPIRequest{
+			Group: labels["group"], Version: version, Resource: resource,
+			Subresource: labels["subresource"], RemovedRelease: removed,
+			Requests: metricValue(family.GetType(), metric),
+		})
+	}
+	return requests, processStartedAt, nil
+}
+
+func metricLabels(metric *dto.Metric) map[string]string {
+	labels := make(map[string]string, len(metric.Label))
+	for _, label := range metric.Label {
+		labels[label.GetName()] = label.GetValue()
+	}
+	return labels
+}
+
+func metricValue(metricType dto.MetricType, metric *dto.Metric) float64 {
+	switch metricType {
+	case dto.MetricType_COUNTER:
+		return metric.GetCounter().GetValue()
+	case dto.MetricType_GAUGE:
+		return metric.GetGauge().GetValue()
+	case dto.MetricType_UNTYPED:
+		return metric.GetUntyped().GetValue()
+	default:
+		return 0
+	}
+}
+
+func (s *Server) collectUpgradePrometheusRules(r *http.Request, namespaces []string) (rules []*unstructured.Unstructured, installed, discoveryAvailable bool, unavailableNamespaces []string) {
+	discovery := k8s.GetResourceDiscovery()
+	gvr, installed, discoveryAvailable := discoverUpgradePrometheusRule(discovery)
+	if !discoveryAvailable {
+		return nil, false, false, nil
+	}
+	if !installed {
+		return []*unstructured.Unstructured{}, false, true, nil
+	}
+	if len(namespaces) == 0 {
+		if !s.canRead(r, gvr.Group, gvr.Resource, "", "list") {
+			return nil, true, true, nil
+		}
+	} else {
+		readable := make([]string, 0, len(namespaces))
+		for _, namespace := range namespaces {
+			if s.canRead(r, gvr.Group, gvr.Resource, namespace, "list") {
+				readable = append(readable, namespace)
+			} else {
+				unavailableNamespaces = append(unavailableNamespaces, namespace)
+			}
+		}
+		if len(readable) == 0 {
+			return nil, true, true, unavailableNamespaces
+		}
+		namespaces = readable
+	}
+	dynamicCache := k8s.GetDynamicResourceCache()
+	if dynamicCache == nil {
+		return nil, true, true, unavailableNamespaces
+	}
+	rules, synced, err := listSyncedUpgradeResources(dynamicCache, gvr, namespaces)
+	if err != nil {
+		log.Printf("[upgrade-impact] failed to inspect PrometheusRules: %v", err)
+		return nil, true, true, unavailableNamespaces
+	}
+	if !synced {
+		return nil, true, true, unavailableNamespaces
+	}
+	if rules == nil {
+		rules = []*unstructured.Unstructured{}
+	}
+	return rules, true, true, unavailableNamespaces
+}
+
+func discoverUpgradePrometheusRule(discovery *k8s.ResourceDiscovery) (schema.GroupVersionResource, bool, bool) {
+	if discovery == nil {
+		return schema.GroupVersionResource{}, false, false
+	}
+	gvr, ok := discovery.GetGVRWithGroup("PrometheusRule", "monitoring.coreos.com")
+	if ok {
+		return gvr, true, true
+	}
+	return schema.GroupVersionResource{}, false, !discovery.GroupHadPartialDiscovery("monitoring.coreos.com")
+}
+
+type upgradeResourceLister interface {
+	ListNamespaces(schema.GroupVersionResource, []string) ([]*unstructured.Unstructured, error)
+	WaitForSync(schema.GroupVersionResource, time.Duration) bool
+	IsClusterWideSynced(schema.GroupVersionResource) bool
+}
+
+func listSyncedUpgradeResources(cache upgradeResourceLister, gvr schema.GroupVersionResource, namespaces []string) ([]*unstructured.Unstructured, bool, error) {
+	// The first list starts any informer that has not already been used. Its
+	// result cannot support an absence assertion until that informer syncs.
+	if _, err := cache.ListNamespaces(gvr, namespaces); err != nil {
+		return nil, false, err
+	}
+	if !cache.WaitForSync(gvr, 5*time.Second) {
+		return nil, false, nil
+	}
+	if len(namespaces) == 0 && !cache.IsClusterWideSynced(gvr) {
+		return nil, false, nil
+	}
+	rules, err := cache.ListNamespaces(gvr, namespaces)
+	return rules, err == nil, err
+}
+
+func collectUpgradeNodeRuntimeEvidence(ctx context.Context, nodes []*corev1.Node) []upgradereadiness.NodeRuntimeEvidence {
+	client := k8s.ClientFromContext(ctx)
+	if client == nil || client.CoreV1().RESTClient() == nil {
+		return nil
+	}
+	results := make([]upgradereadiness.NodeRuntimeEvidence, len(nodes))
+	type nodeRuntimeJob struct {
+		index int
+		node  *corev1.Node
+	}
+	jobs := make(chan nodeRuntimeJob)
+	workerCount := min(8, len(nodes))
+	var wg sync.WaitGroup
+	for range workerCount {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				result := upgradereadiness.NodeRuntimeEvidence{NodeName: job.node.Name}
+				probeCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+				stream, err := client.CoreV1().RESTClient().Get().AbsPath("/api/v1/nodes/" + url.PathEscape(job.node.Name) + "/proxy/metrics").Stream(probeCtx)
+				var raw []byte
+				if err == nil {
+					raw, err = readBoundedUpgradeResponse(stream, upgradeNodeMetricsResponseLimit)
+				}
+				cancel()
+				if err == nil {
+					parser := expfmt.NewTextParser(model.LegacyValidation)
+					families, parseErr := parser.TextToMetricFamilies(bytes.NewReader(raw))
+					if parseErr == nil {
+						result.MetricsAvailable = true
+						if family := families["kubelet_cgroup_version"]; family != nil && len(family.Metric) > 0 {
+							result.CgroupVersionAvailable = true
+							result.CgroupVersion = int(metricValue(family.GetType(), family.Metric[0]))
+						}
+						if family := families["kubelet_cri_losing_support"]; family != nil {
+							for _, metric := range family.Metric {
+								if metricValue(family.GetType(), metric) > 0 {
+									result.CRILosingSupportAvailable = true
+									result.CRILosingSupportVersion = metricLabels(metric)["version"]
+									break
+								}
+							}
+						}
+					}
+				}
+				results[job.index] = result
+			}
+		}()
+	}
+dispatch:
+	for i, node := range nodes {
+		if node == nil {
+			continue
+		}
+		results[i].NodeName = node.Name
+		if strings.EqualFold(node.Status.NodeInfo.OperatingSystem, "windows") {
+			continue
+		}
+		select {
+		case jobs <- nodeRuntimeJob{index: i, node: node}:
+		case <-ctx.Done():
+			break dispatch
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	return results
+}

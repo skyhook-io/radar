@@ -52,6 +52,28 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 		}
 		return events
 	}
+	queryBefore := func(t *testing.T, store timeline.EventStore, untilSeq int64, limit int) []timeline.TimelineEvent {
+		t.Helper()
+		events, err := store.Query(ctx, timeline.QueryOptions{
+			Limit: limit, UntilSeq: untilSeq,
+			IncludeManaged: true, IncludeK8sEvents: true,
+		})
+		if err != nil {
+			t.Fatalf("Query(untilSeq=%d): %v", untilSeq, err)
+		}
+		return events
+	}
+	queryLatestArrivals := func(t *testing.T, store timeline.EventStore, limit int) []timeline.TimelineEvent {
+		t.Helper()
+		events, err := store.Query(ctx, timeline.QueryOptions{
+			Limit: limit, SequenceOrder: timeline.SequenceOrderDescending,
+			IncludeManaged: true, IncludeK8sEvents: true,
+		})
+		if err != nil {
+			t.Fatalf("Query(sequenceOrder=descending): %v", err)
+		}
+		return events
+	}
 	frontier := func(t *testing.T, store timeline.EventStore) int64 {
 		t.Helper()
 		var max int64
@@ -106,6 +128,10 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 				t.Fatalf("seq not increasing with arrival: ev-%d=%d, ev-%d=%d", i-1, prev, i, cur)
 			}
 		}
+		stats := store.Stats()
+		if stats.OldestSeq != seqs["ev-0"] || stats.NewestSeq != seqs["ev-4"] {
+			t.Fatalf("store seq bounds = %d..%d, want %d..%d", stats.OldestSeq, stats.NewestSeq, seqs["ev-0"], seqs["ev-4"])
+		}
 	})
 
 	t.Run("delta pages resume a burst beyond the page limit losslessly", func(t *testing.T) {
@@ -147,6 +173,50 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 		}
 		if len(seen) != 10 {
 			t.Fatalf("burst paging lost events: delivered %d of 10", len(seen))
+		}
+	})
+
+	t.Run("backwards pages use arrival order rather than event time", func(t *testing.T) {
+		store := newStore(t)
+		mustAppend(t, store, informer("first-arrival", 30*time.Second))
+		mustAppend(t, store, informer("second-arrival", 10*time.Second))
+		mustAppend(t, store, informer("third-arrival", 20*time.Second))
+
+		latest := queryAll(t, store, 0, 10)
+		var thirdSeq int64
+		for _, event := range latest {
+			if event.ID == "third-arrival" {
+				thirdSeq = event.Seq
+			}
+		}
+		page := queryBefore(t, store, thirdSeq, 10)
+		if len(page) != 2 || page[0].ID != "second-arrival" || page[1].ID != "first-arrival" {
+			t.Fatalf("backwards page = %#v, want descending arrival order", page)
+		}
+	})
+
+	t.Run("bounded sequence snapshots retain late arrivals with old timestamps", func(t *testing.T) {
+		store := newStore(t)
+		mustAppend(t, store, informer("first-arrival", 30*time.Second))
+		mustAppend(t, store, informer("second-arrival", 40*time.Second))
+		mustAppend(t, store, informer("late-old-timestamp", -time.Hour))
+
+		page := queryLatestArrivals(t, store, 2)
+		if len(page) != 2 || page[0].ID != "late-old-timestamp" || page[1].ID != "second-arrival" {
+			t.Fatalf("sequence snapshot = %#v, want the two latest arrivals", page)
+		}
+		if page[0].Seq <= page[1].Seq {
+			t.Fatalf("sequence snapshot not descending: %d then %d", page[0].Seq, page[1].Seq)
+		}
+		earliest, err := store.Query(ctx, timeline.QueryOptions{
+			Limit: 2, SequenceOrder: timeline.SequenceOrderAscending,
+			IncludeManaged: true, IncludeK8sEvents: true,
+		})
+		if err != nil {
+			t.Fatalf("Query(sequenceOrder=ascending): %v", err)
+		}
+		if len(earliest) != 2 || earliest[0].ID != "first-arrival" || earliest[1].ID != "second-arrival" {
+			t.Fatalf("ascending sequence snapshot = %#v, want the two earliest arrivals", earliest)
 		}
 	})
 

@@ -361,7 +361,7 @@ func computePackagesInternal(ctx context.Context, namespaces []string) ([]packag
 
 	// Helm releases (source H). Inventory reads pass empty user/groups
 	// so the SA does the read — see deploy/helm/radar/templates/clusterrole.yaml
-	// for the secrets-rule rationale (cloud:viewer → K8s `view` excludes
+	// for the secrets-rule rationale (radar:viewer → K8s `view` excludes
 	// secrets, so impersonating would 403 viewers on inventory metadata
 	// that isn't credential data). Sensitive Helm reads (GetValues,
 	// GetManifest) and all writes still impersonate.

@@ -3,13 +3,8 @@ package audit
 import (
 	"log"
 
-	appsv1 "k8s.io/api/apps/v1"
-	autoscalingv2 "k8s.io/api/autoscaling/v2"
-	batchv1 "k8s.io/api/batch/v1"
-	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
-	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -32,23 +27,7 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 		return &bp.ScanResults{Summary: bp.ScanSummary{Categories: map[string]bp.CategorySummary{}}}
 	}
 
-	input := &bp.CheckInput{
-		Pods:                     listNamespaced(cache.Pods(), namespaces),
-		Deployments:              listNamespaced(cache.Deployments(), namespaces),
-		StatefulSets:             listNamespaced(cache.StatefulSets(), namespaces),
-		DaemonSets:               listNamespaced(cache.DaemonSets(), namespaces),
-		Jobs:                     listNamespaced(cache.Jobs(), namespaces),
-		CronJobs:                 listNamespaced(cache.CronJobs(), namespaces),
-		Services:                 listNamespaced(cache.Services(), namespaces),
-		Ingresses:                listNamespaced(cache.Ingresses(), namespaces),
-		HorizontalPodAutoscalers: listNamespaced(cache.HorizontalPodAutoscalers(), namespaces),
-		PodDisruptionBudgets:     listNamespaced(cache.PodDisruptionBudgets(), namespaces),
-		ConfigMaps:               listNamespaced(cache.ConfigMaps(), namespaces),
-		Secrets:                  listNamespaced(cache.Secrets(), namespaces),
-		ServiceAccounts:          listNamespaced(cache.ServiceAccounts(), namespaces),
-		ServiceAccountsNamespace: serviceAccountScopeNamespace(),
-		LimitRanges:              listNamespaced(cache.LimitRanges(), namespaces),
-	}
+	input := collectTypedInput(cache, namespaces)
 	input.GitOpsToolsPresent, input.ArgoAppNames = gitOpsRoots()
 
 	if opts != nil {
@@ -86,7 +65,36 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 		input.AllServices = listNamespaced(cache.Services(), nil)
 	}
 
+	// CloudNativePG clusters + their backup schedules for the declarative-backup
+	// posture check. Nil inventory (CNPG absent / RBAC denied) → check no-ops.
+	input.CNPGClusters, input.CNPGScheduledBackups, input.CNPGScheduledBackupsAuthoritative = listCNPGDynamic(namespaces)
+
 	return bp.RunChecks(input)
+}
+
+func collectTypedInput(cache *k8s.ResourceCache, namespaces []string) *bp.CheckInput {
+	input := collectWorkloadInput(cache, namespaces)
+	input.Services = listNamespaced(cache.Services(), namespaces)
+	input.Ingresses = listNamespaced(cache.Ingresses(), namespaces)
+	input.HorizontalPodAutoscalers = listNamespaced(cache.HorizontalPodAutoscalers(), namespaces)
+	input.PodDisruptionBudgets = listNamespaced(cache.PodDisruptionBudgets(), namespaces)
+	input.ConfigMaps = listNamespaced(cache.ConfigMaps(), namespaces)
+	input.Secrets = listNamespaced(cache.Secrets(), namespaces)
+	input.ServiceAccounts = listNamespaced(cache.ServiceAccounts(), namespaces)
+	input.ServiceAccountsNamespace = serviceAccountScopeNamespace()
+	input.LimitRanges = listNamespaced(cache.LimitRanges(), namespaces)
+	return input
+}
+
+func collectWorkloadInput(cache *k8s.ResourceCache, namespaces []string) *bp.CheckInput {
+	return &bp.CheckInput{
+		Pods:         listNamespaced(cache.Pods(), namespaces),
+		Deployments:  listNamespaced(cache.Deployments(), namespaces),
+		StatefulSets: listNamespaced(cache.StatefulSets(), namespaces),
+		DaemonSets:   listNamespaced(cache.DaemonSets(), namespaces),
+		Jobs:         listNamespaced(cache.Jobs(), namespaces),
+		CronJobs:     listNamespaced(cache.CronJobs(), namespaces),
+	}
 }
 
 // listCrossplaneDynamic enumerates the dynamic cache's already-watching
@@ -148,6 +156,64 @@ func listCrossplaneDynamic(namespaces []string) (mrs, xrs []*unstructured.Unstru
 		}
 	}
 	return mrs, xrs
+}
+
+const cnpgGroup = "postgresql.cnpg.io"
+
+// listCNPGDynamic gathers CNPG Clusters (scoped to the audited namespaces —
+// they're the subjects the check reports on) plus ScheduledBackups. A
+// ScheduledBackup always lives in its Cluster's namespace, so the targets need
+// no cross-namespace widening; what they DO need is absence-authority.
+//
+// `scheduledAuthoritative` is true only when a synced cluster-wide
+// ScheduledBackup informer backs the list. Under a namespace-scoped fallback the
+// cache knows a subset of namespaces, so "no schedule targets this cluster"
+// could just mean "not listed" — the check must not run at all there.
+func listCNPGDynamic(namespaces []string) (clusters, scheduledBackups []*unstructured.Unstructured, scheduledAuthoritative bool) {
+	cache := k8s.GetDynamicResourceCache()
+	if cache == nil {
+		return nil, nil, false
+	}
+
+	clustersGVR := schema.GroupVersionResource{Group: cnpgGroup, Version: "v1", Resource: "clusters"}
+	scheduledGVR := schema.GroupVersionResource{Group: cnpgGroup, Version: "v1", Resource: "scheduledbackups"}
+	_ = cache.EnsureWatching(clustersGVR) // best-effort; unserved/denied → no-op
+	_ = cache.EnsureWatching(scheduledGVR)
+
+	nsSet := make(map[string]bool, len(namespaces))
+	for _, ns := range namespaces {
+		nsSet[ns] = true
+	}
+	inScope := func(u *unstructured.Unstructured) bool {
+		if len(namespaces) == 0 {
+			return true
+		}
+		ns := u.GetNamespace()
+		return ns == "" || nsSet[ns]
+	}
+
+	list := func(gvr schema.GroupVersionResource) []*unstructured.Unstructured {
+		items, err := cache.ListWatched(gvr)
+		if err != nil {
+			if !apierrors.IsForbidden(err) && !apierrors.IsUnauthorized(err) {
+				log.Printf("[audit] CNPG scan: skipping %s: %v", gvr.GroupResource(), err)
+			}
+			return nil
+		}
+		var out []*unstructured.Unstructured
+		for _, u := range items {
+			if u == nil || !inScope(u) {
+				continue
+			}
+			out = append(out, u)
+		}
+		return out
+	}
+
+	clusters = list(clustersGVR)
+	scheduledBackups = list(scheduledGVR)
+	scheduledAuthoritative = cache.IsClusterWideSynced(scheduledGVR)
+	return clusters, scheduledBackups, scheduledAuthoritative
 }
 
 // traefikGroups are the two CRD groups Traefik has shipped — current and legacy.
@@ -349,46 +415,23 @@ func listNamespaced[T any, L lister[T]](l L, namespaces []string) []*T {
 	}
 	filtered := []*T{}
 	for _, item := range all {
-		if ns := extractNamespace(item); ns == "" || nsSet[ns] {
+		ns, ok := extractNamespace(item)
+		if !ok {
+			continue
+		}
+		if ns == "" || nsSet[ns] {
 			filtered = append(filtered, item)
 		}
 	}
 	return filtered
 }
 
-// extractNamespace uses type assertions for known types to get namespace.
-func extractNamespace(obj any) string {
-	switch v := obj.(type) {
-	case *corev1.Pod:
-		return v.Namespace
-	case *appsv1.Deployment:
-		return v.Namespace
-	case *appsv1.StatefulSet:
-		return v.Namespace
-	case *appsv1.DaemonSet:
-		return v.Namespace
-	case *batchv1.Job:
-		return v.Namespace
-	case *batchv1.CronJob:
-		return v.Namespace
-	case *corev1.Service:
-		return v.Namespace
-	case *networkingv1.Ingress:
-		return v.Namespace
-	case *autoscalingv2.HorizontalPodAutoscaler:
-		return v.Namespace
-	case *policyv1.PodDisruptionBudget:
-		return v.Namespace
-	case *corev1.ConfigMap:
-		return v.Namespace
-	case *corev1.Secret:
-		return v.Namespace
-	case *corev1.ServiceAccount:
-		return v.Namespace
-	case *corev1.LimitRange:
-		return v.Namespace
+func extractNamespace(obj any) (string, bool) {
+	metadata, ok := obj.(metav1.Object)
+	if !ok {
+		return "", false
 	}
-	return ""
+	return metadata.GetNamespace(), true
 }
 
 // gitOpsRoots reports whether the cluster actually does GitOps — at least one

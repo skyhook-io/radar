@@ -110,6 +110,7 @@ func makeNodeClassNode(name string) *topology.Node {
 		Data: map[string]any{
 			// No namespace — NodeClass is cluster-scoped.
 			"apiVersion": "karpenter.k8s.aws/v1",
+			"resource":   "ec2nodeclasses",
 		},
 	}
 }
@@ -182,6 +183,7 @@ func TestCanReadNeighborhoodNodeMCP_NodeClassPerVariantDeniesWrongProvider(t *te
 		Status: topology.StatusHealthy,
 		Data: map[string]any{
 			"apiVersion": "karpenter.azure.com/v1beta1",
+			"resource":   "aksnodeclasses",
 		},
 	}
 	if canReadNeighborhoodNodeMCP(ctx, aks) {
@@ -195,10 +197,32 @@ func TestCanReadNeighborhoodNodeMCP_NodeClassPerVariantDeniesWrongProvider(t *te
 		Status: topology.StatusHealthy,
 		Data: map[string]any{
 			"apiVersion": "karpenter.k8s.aws/v1",
+			"resource":   "ec2nodeclasses",
 		},
 	}
 	if !canReadNeighborhoodNodeMCP(ctx, ec2) {
 		t.Error("EC2 NodeClass denied to user with EC2 RBAC — per-variant gate must allow the matching provider")
+	}
+}
+
+func TestApplyClusterScopedTopologyRBACMCPFiltersExactNodeClassProvider(t *testing.T) {
+	ctx := withTestUserPerms(t, "topology-reader", nil, nil)
+	perms := getPermCache().Get("topology-reader")
+	perms.SetCanI("list", "eks.amazonaws.com", "nodeclasses", "", true)
+	perms.SetCanI("list", "infra.example.io", "customnodeclasses", "", false)
+
+	eksID := "nodeclass//shared/eks.amazonaws.com/nodeclass"
+	customID := "nodeclass//shared/infra.example.io/customnodeclass"
+	topo := &topology.Topology{
+		Nodes: []topology.Node{
+			{ID: eksID, Kind: topology.KindNodeClass, Name: "shared", Data: map[string]any{"apiVersion": "eks.amazonaws.com/v1", "resource": "nodeclasses"}},
+			{ID: customID, Kind: topology.KindNodeClass, Name: "shared", Data: map[string]any{"apiVersion": "infra.example.io/v1", "resource": "customnodeclasses"}},
+		},
+	}
+
+	applyClusterScopedTopologyRBAC(ctx, topo)
+	if len(topo.Nodes) != 1 || topo.Nodes[0].ID != eksID {
+		t.Fatalf("nodes = %+v, want authorized EKS NodeClass only", topo.Nodes)
 	}
 }
 
@@ -226,10 +250,9 @@ func pseudoKindTuplesForTestMCP(kind, group string) (tuples []topology.SARTuple,
 	return t, fa
 }
 
-// TestAllowPseudoKindTuplesMCP_NodeClass pins the MCP-side root-preflight
-// helper: kind-only lookup (no node yet) iterates every table row under that
-// kind and allows on any pass. Mirrors the REST test of the same name.
-func TestAllowPseudoKindTuplesMCP_NodeClass_DeniedWithoutSAR(t *testing.T) {
+// Unqualified NodeClass preflight defers to the exact node gate because the
+// provider API is open-ended and cannot be represented by a static table.
+func TestAllowPseudoKindTuplesMCP_NodeClass_DefersToExactNode(t *testing.T) {
 	ctx := withTestUserPerms(t, "alice", nil, nil)
 	perms := getPermCache().Get("alice")
 	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", false)
@@ -237,11 +260,11 @@ func TestAllowPseudoKindTuplesMCP_NodeClass_DeniedWithoutSAR(t *testing.T) {
 	perms.SetCanI("get", "karpenter.k8s.gcp", "gcenodeclasses", "", false)
 
 	tuples, fallthroughAllow := pseudoKindTuplesForTestMCP("nodeclass", "")
-	if len(tuples) == 0 {
-		t.Fatal("RBACTuplesForKind returned 0 tuples for nodeclass — table wiring is broken")
+	if len(tuples) != 0 || !fallthroughAllow {
+		t.Fatalf("NodeClass preflight must defer: tuples=%+v fallthroughAllow=%v", tuples, fallthroughAllow)
 	}
-	if allowPseudoKindTuplesMCP(ctx, tuples, fallthroughAllow) {
-		t.Error("nodeclass root preflight allowed user without any provider get-SAR — must deny")
+	if !allowPseudoKindTuplesMCP(ctx, tuples, fallthroughAllow) {
+		t.Error("NodeClass preflight did not defer to exact per-node authorization")
 	}
 }
 
@@ -259,18 +282,8 @@ func TestAllowPseudoKindTuplesMCP_NodeClass_AllowedWithProviderSAR(t *testing.T)
 	}
 }
 
-// TestHandleGetNeighborhoodMCP_NodeClassRootNotNamespaceRequired pins the
-// integration fix on the MCP surface: an agent calling get_neighborhood with
-// kind="nodeclass" and Namespace="" (which is what get_topology output
-// suggests) must NOT receive "namespace is required" — that's the bug we're
-// closing.
-//
-// Two cases:
-//   - Unauthorized user (no provider SAR): error must mention "forbidden",
-//     not "namespace is required".
-//   - Authorized user (EC2 SAR): preflight passes, BFS runs against the
-//     seeded cache (no NodeClass nodes there), root lookup misses → "not
-//     found" error, also not "namespace is required".
+// Unqualified NodeClass roots defer provider authorization until the concrete
+// topology node resolves its API group and resource.
 func TestHandleGetNeighborhoodMCP_NodeClassRootNotNamespaceRequired(t *testing.T) {
 	setupSecretRefCacheMCP(t)
 
@@ -285,13 +298,13 @@ func TestHandleGetNeighborhoodMCP_NodeClassRootNotNamespaceRequired(t *testing.T
 		Name: "foo",
 	})
 	if err == nil {
-		t.Fatal("unauthorized nodeclass call succeeded — preflight must deny")
+		t.Fatal("missing nodeclass unexpectedly returned a result")
 	}
 	if strings.Contains(err.Error(), "namespace is required") {
-		t.Errorf("unauthorized nodeclass returned namespace error %q — regression: pseudo-kind misclassified as namespaced", err)
+		t.Errorf("unqualified nodeclass was misclassified as namespaced: %q", err)
 	}
-	if !strings.Contains(err.Error(), "forbidden") {
-		t.Errorf("unauthorized nodeclass error = %q, want 'forbidden' substring", err)
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("unauthorized missing nodeclass error = %q, want 'not found' substring", err)
 	}
 
 	// Authorized
@@ -308,15 +321,14 @@ func TestHandleGetNeighborhoodMCP_NodeClassRootNotNamespaceRequired(t *testing.T
 		t.Fatal("authorized nodeclass call succeeded for nonexistent node — expected 'not found' error from empty subgraph")
 	}
 	if strings.Contains(err2.Error(), "namespace is required") {
-		t.Errorf("authorized nodeclass returned namespace error %q even WITH EC2 SAR — regression", err2)
+		t.Errorf("unqualified nodeclass was misclassified as namespaced: %q", err2)
 	}
 	if !strings.Contains(err2.Error(), "not found") {
 		t.Errorf("authorized nodeclass error = %q, want 'not found' substring (preflight passed, BFS empty)", err2)
 	}
 }
 
-// Same shape for NodePool — sanity that the fix covers every cluster-scoped
-// pseudo-kind in the table, not just NodeClass.
+// NodePool roots are cluster-scoped and never require a namespace.
 func TestHandleGetNeighborhoodMCP_NodePoolRootNotNamespaceRequired(t *testing.T) {
 	setupSecretRefCacheMCP(t)
 
@@ -348,7 +360,7 @@ func TestHandleGetNeighborhoodMCP_NodePoolRootNotNamespaceRequired(t *testing.T)
 		t.Fatal("authorized nodepool call succeeded for nonexistent node — expected 'not found'")
 	}
 	if strings.Contains(err2.Error(), "namespace is required") {
-		t.Errorf("authorized nodepool returned namespace error %q even with SAR — regression", err2)
+		t.Errorf("nodepool was misclassified as namespaced: %q", err2)
 	}
 	if !strings.Contains(err2.Error(), "not found") {
 		t.Errorf("authorized nodepool error = %q, want 'not found' substring", err2)

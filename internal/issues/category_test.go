@@ -85,6 +85,7 @@ func TestClassify(t *testing.T) {
 		{"deploy replica failure", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "ReplicaFailure"}, issuesapi.CategoryRolloutStalled},
 		{"statefulset degraded", classifyInput{Source: SourceProblem, Kind: "StatefulSet", Reason: "2/3 ready"}, issuesapi.CategoryWorkloadDegraded},
 		{"daemonset degraded", classifyInput{Source: SourceProblem, Kind: "DaemonSet", Reason: "1 unavailable"}, issuesapi.CategoryWorkloadDegraded},
+		{"webhook backend unavailable", classifyInput{Source: SourceScheduling, Kind: "Deployment", Reason: "WebhookUnavailable"}, issuesapi.CategoryAdmissionWebhookBlocking},
 
 		// problem / service
 		{"service no pods", classifyInput{Source: SourceProblem, Kind: "Service", Reason: "Selector matches no pods"}, issuesapi.CategoryServiceNoEndpoints},
@@ -111,6 +112,7 @@ func TestClassify(t *testing.T) {
 		{"cronjob stale", classifyInput{Source: SourceProblem, Kind: "CronJob", Reason: "stale"}, issuesapi.CategoryCronJobFailed},
 		{"cronjob stale reason beats embedded forbidden message", classifyInput{Source: SourceProblem, Kind: "CronJob", Reason: "stale", Message: `jobs.batch is forbidden: User "system:serviceaccount:ci:default" cannot create resource "jobs"`}, issuesapi.CategoryCronJobFailed},
 		{"cronjob never scheduled", classifyInput{Source: SourceProblem, Kind: "CronJob", Reason: "never-scheduled"}, issuesapi.CategoryCronJobFailed},
+		{"cronjob repeated without success", classifyInput{Source: SourceProblem, Kind: "CronJob", Reason: "repeated-without-success"}, issuesapi.CategoryCronJobFailed},
 		{"argo workflow rbac forbidden", classifyInput{Source: SourceProblem, Kind: "Workflow", APIGroup: "argoproj.io", Reason: "Completed", Message: `workflowtaskresults.argoproj.io is forbidden: User "system:serviceaccount:radar-batch-visual:default" cannot create resource "workflowtaskresults" in API group "argoproj.io" in the namespace "radar-batch-visual"`}, issuesapi.CategoryRBACForbidden},
 		{"argo workflow completed without forbidden stays unknown", classifyInput{Source: SourceProblem, Kind: "Workflow", APIGroup: "argoproj.io", Reason: "Completed", Message: "child 'example' failed"}, issuesapi.CategoryUnknown},
 
@@ -120,6 +122,7 @@ func TestClassify(t *testing.T) {
 		{"missing pvc", classifyInput{Source: SourceMissingRef, Kind: "Pod", Reason: "Missing PVC"}, issuesapi.CategoryMissingConfigRef},
 		{"missing sa", classifyInput{Source: SourceMissingRef, Kind: "Pod", Reason: "Missing ServiceAccount"}, issuesapi.CategoryMissingConfigRef},
 		{"ingress backend missing", classifyInput{Source: SourceMissingRef, Kind: "Ingress", APIGroup: "networking.k8s.io", Reason: "Missing backend Service"}, issuesapi.CategoryIngressBackendMissing},
+		{"ingress class missing", classifyInput{Source: SourceMissingRef, Kind: "Ingress", APIGroup: "networking.k8s.io", Reason: "Missing IngressClass"}, issuesapi.CategoryIngressClassMissing},
 		{"gateway backend missing", classifyInput{Source: SourceMissingRef, Kind: "HTTPRoute", APIGroup: "gateway.networking.k8s.io", Reason: "Missing Gateway backend Service"}, issuesapi.CategoryGatewayRouteInvalid},
 		{"gateway reference grant missing", classifyInput{Source: SourceMissingRef, Kind: "HTTPRoute", APIGroup: "gateway.networking.k8s.io", Reason: "Missing Gateway ReferenceGrant"}, issuesapi.CategoryGatewayRouteInvalid},
 		{"ingress tls secret is config", classifyInput{Source: SourceMissingRef, Kind: "Ingress", APIGroup: "networking.k8s.io", Reason: "Missing TLS Secret"}, issuesapi.CategoryMissingConfigRef},

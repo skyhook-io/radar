@@ -1,7 +1,9 @@
 package mcp
 
 import (
+	"context"
 	"sort"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -19,14 +21,25 @@ import (
 // internal/server/ai_handlers.go — keeping the projection narrow here lets
 // pkg/policyreports.Finding evolve without perturbing the wire contract.
 type mcpPolicyReportLookupAdapter struct {
-	idx *policyreports.Index
+	idx    *policyreports.Index
+	status k8s.PolicyReportStatus
+}
+
+// Unavailable implements resourcecontext.PolicyReportAvailability so an agent
+// can tell "no violations" from "Radar could not read the policy reports".
+func (a mcpPolicyReportLookupAdapter) Unavailable() (resourcecontext.OmittedReason, bool) {
+	return a.status.OmittedReason()
 }
 
 func (a mcpPolicyReportLookupAdapter) FindingsFor(group, kind, namespace, name string) []resourcecontext.KyvernoFinding {
 	if a.idx == nil {
 		return nil
 	}
-	findings := a.idx.FindingsFor(group, kind, namespace, name)
+	// Filtered, not FindingsFor: this projection fills `policySummary.kyverno`,
+	// and the index is shared with every other producer writing into the same
+	// report families — Trivy, Falco adapters, VAP evaluation. An unfiltered
+	// read would inflate the Kyverno rollup with enforcement Kyverno never did.
+	findings := a.idx.FindingsForAnyEngine(group, kind, namespace, name, policyreports.EnginesAttributableToKyverno...)
 	if len(findings) == 0 {
 		return nil
 	}
@@ -64,7 +77,7 @@ func (l mcpServiceBackendLookup) PodsForServiceSelector(namespace string, select
 // Pascal-singular kind required: the composer's Filters.Kinds matcher
 // case-folds both sides but doesn't plural-to-singular convert. Callers
 // pass canonicalKind from obj's TypeMeta.
-func computeMCPIssueSummary(cache *k8s.ResourceCache, group, kind, namespace, name string) *resourcecontext.IssueSummary {
+func computeMCPIssueSummary(ctx context.Context, cache *k8s.ResourceCache, group, kind, namespace, name string) *resourcecontext.IssueSummary {
 	if cache == nil {
 		return nil
 	}
@@ -72,15 +85,16 @@ func computeMCPIssueSummary(cache *k8s.ResourceCache, group, kind, namespace, na
 	if provider == nil {
 		return nil
 	}
-	var namespaces []string
-	if namespace != "" {
-		namespaces = []string{namespace}
-	}
+	namespaces := issueNamespacesForResource(namespace)
 	// RelatedIssues is owner-aware and uncapped: get_resource on a workload
 	// surfaces the GROUPED issues its pods are evidence for (was empty — the
 	// old flat-by-exact-resource match looked for Kind=Deployment rows, but the
 	// evidence is Kind=Pod), and on a pod past the inline-Members cap too.
-	matched := issues.RelatedIssues(provider, namespaces, group, kind, namespace, name)
+	matched := issues.RelatedIssues(provider, issues.RelatedIssueOptions{
+		Namespaces:           namespaces,
+		CanReadClusterScoped: issueClusterScopedAccess(ctx),
+		CanReadRelated:       issueRelatedResourceAccess(ctx),
+	}, group, kind, namespace, name)
 	if len(matched) == 0 {
 		return nil
 	}
@@ -101,6 +115,42 @@ func computeMCPIssueSummary(cache *k8s.ResourceCache, group, kind, namespace, na
 		HighestSeverity: string(matched[0].Severity),
 		TopReason:       matched[0].Reason,
 		BySource:        bySource,
+	}
+}
+
+func issueNamespacesForResource(namespace string) []string {
+	if namespace == "" {
+		return nil
+	}
+	return []string{namespace}
+}
+
+// issueClusterScopedAccess mirrors the issues_list gate so every composer entry
+// point applies the same cluster-scoped authorization — both to the rows
+// themselves and to the cluster-scoped state (NodePool specs) folded into them.
+func issueClusterScopedAccess(ctx context.Context) func(kind, group string) bool {
+	return func(kind, group string) bool {
+		return canReadClusterScopedKind(ctx, kind, group, "list")
+	}
+}
+
+func issueRelatedResourceAccess(ctx context.Context) func(issues.Ref) bool {
+	return func(ref issues.Ref) bool {
+		user, _ := resolveUserPerms(ctx)
+		if user == nil {
+			return true
+		}
+		if ref.Namespace != "" {
+			if !checkNamespaceAccess(ctx, ref.Namespace) {
+				return false
+			}
+			if strings.EqualFold(ref.Kind, "Secret") {
+				return canReadInNamespace(ctx, ref.Group, "secrets", ref.Namespace, "get")
+			}
+			return true
+		}
+		clusterScoped, _, _ := k8s.ClassifyKindScope(ref.Kind, ref.Group)
+		return clusterScoped && canReadClusterScopedKind(ctx, ref.Kind, ref.Group, "get")
 	}
 }
 

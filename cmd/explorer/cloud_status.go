@@ -126,7 +126,7 @@ func cloudStatus(args []string, out, errOut io.Writer) int {
 		return 1
 	}
 
-	targets := discoveredRadarTargets(result, exactTarget)
+	targets := cloudinstall.DiscoveredTargets(result, exactTarget)
 	var tunnel hubTunnelResult
 	if len(targets) == 1 {
 		tunnel = checkHubTunnelStatus(ctx, clients.Kubernetes, targets[0])
@@ -181,7 +181,7 @@ func printCloudDiscoveryStatus(out, errOut io.Writer, targets []cloudinstall.Rad
 		}
 		return 1
 	default:
-		fmt.Fprintf(errOut, "cloud status: found multiple Radar installations; choose one explicitly with --namespace and --release:\n%s\n", formatRadarTargets(targets))
+		fmt.Fprintf(errOut, "cloud status: found multiple Radar installations; choose one explicitly with --namespace and --release:\n%s\n", cloudinstall.FormatTargets(targets))
 		return 1
 	}
 }

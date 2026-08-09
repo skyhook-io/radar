@@ -10,6 +10,14 @@ Radar automatically discovers and displays **any** Custom Resource Definition (C
 
 ### What Radar Shows
 
+**Capacity view:** When Radar discovers Karpenter NodePools (and the current identity can list them), a cluster-wide **Capacity** view appears in navigation — a read-only diagnosis surface across four screens:
+- **Overview** — fleet KPIs with claim lifecycle detail, a cluster scheduling-capacity bar (scheduled requests vs allocatable, in-flight claim capacity beyond the allocatable edge, pending demand as a not-to-scale count), prioritized operational signals, and the NodePool inventory
+- **NodePool detail** — the capacity ledger (configured limit, provisioned, headroom, allocatable, scheduled requests, unallocated, actual usage) plus claim lifecycle, fleet composition, and workload attribution
+- **Demand** — pending pods grouped by scheduling signature, each group evaluated against every NodePool's declared constraints with per-predicate evidence
+- **Activity** — provisioning, disruption, interruption, and termination episodes classified from Karpenter's exact event vocabulary
+
+Every quantity carries per-value certainty (`= ≥ ≤ ?`): unavailable is never rendered as zero, partial is never rendered as exact, and **scheduling capacity is kept structurally distinct from actual usage** — Karpenter schedules on pod requests, so usage is an efficiency signal, never scheduler headroom. Issues, Pending-pod drawers, and the Home posture card deep-link into the right diagnosis. Full reference: [Capacity documentation](capacity.md).
+
 **Topology:** Full provisioning chain — NodePool → NodeClaim → Node → Pod. See which NodePool owns which NodeClaims, which Nodes they provisioned, and what Pods are running on them. NodePool → NodeClass edges show the provider-specific configuration each pool uses.
 
 <p align="center">
@@ -22,6 +30,7 @@ Radar automatically discovers and displays **any** Custom Resource Definition (C
 - Clickable NodeClass reference (EC2NodeClass, AKSNodeClass, or generic)
 - Resource limits (CPU, memory)
 - Disruption policy and consolidation settings
+- Disruption budget reasons, termination grace period, and requirement `minValues`
 - Instance requirements (types, zones, architectures)
 - Template labels applied to provisioned nodes
 
@@ -543,7 +552,7 @@ See the main [README](../README.md#gitops) for the user-facing overview. This se
 - **Operation-failure parser** recognizes 11 patterns: annotation-too-large, label-too-long, hook failure, admission webhook denial, RBAC, conflict, immutable field, schema migration, connectivity, etc.
 
 **Limitations**:
-- SSA-applied resources (`ServerSideApply=true` sync-option) lack the `last-applied-configuration` annotation; per-resource diff is unavailable for those rows. SSA fallback via `metadata.managedFields` and Argo API integration for canonical Git-rendered diffs are tracked in [#601](https://github.com/skyhook-io/radar/issues/601).
+- SSA-applied resources (`ServerSideApply=true` sync-option) lack the `last-applied-configuration` annotation, so the local diff described above is unavailable for those rows. Configuring the [Argo CD API integration](gitops.md#argo-cd-api-integration-deep-diff) covers them: Radar then asks argocd-server for the Git-rendered desired state and diffs against that, which is canonical rather than annotation-derived. An annotation-free local fallback via `metadata.managedFields` is still tracked in [#601](https://github.com/skyhook-io/radar/issues/601).
 - Single-cluster only: Application↔resource edges only render when Radar is connected to the cluster where the managed resources live (not necessarily the cluster running the Argo controller).
 
 ---
@@ -661,17 +670,44 @@ See the main [README](../README.md#gitops) for the user-facing overview. This se
 **VolumeSnapshotLocation Detail View:**
 - Provider name and configuration parameters
 
-**Resource Browser:** Smart columns show phase badges, storage location, namespace counts, duration, expiry (with color-coded warnings), and error/warning counts.
+**Resource Browser:** Smart columns show phase badges, storage location, namespace counts, duration, expiry (with color-coded warnings), and error/warning counts. VolumeSnapshotLocation shows provider and config — deliberately no status column, since the VSL controller never populates `status.phase`.
+
+### Backup failures on the Problems surface
+
+Velero reports every outcome through `status.phase` and has no `status.conditions` on any of its CRDs, so Radar reads phases directly rather than through the generic CRD-condition fallback. These become Issues (`/api/issues`, the Problems surface, MCP `issues`):
+
+| Detection | Trigger | Severity |
+|-----------|---------|----------|
+| `BackupFailed` | `Backup.status.phase == Failed` | critical |
+| `BackupValidationFailed` | `phase == FailedValidation`; message from `status.validationErrors` | critical |
+| `BackupPartiallyFailed` | `PartiallyFailed`, `FinalizingPartiallyFailed`, `WaitingForPluginOperationsPartiallyFailed` | warning |
+| `RestoreFailed` / `RestoreValidationFailed` / `RestorePartiallyFailed` | the same phases on `Restore` | critical / critical / warning |
+| `ScheduleValidationFailed` | `phase == FailedValidation`, or non-empty `status.validationErrors` | critical |
+| `BackupStorageLocationUnavailable` | `BSL.status.phase == Unavailable` | critical |
+| `BackupRepositoryNotReady` | `BackupRepository.status.phase == NotReady` | warning |
+
+They roll up under two categories: `backup_failed` for runs, and `backup_target_unavailable` for the location/repository kinds — an unreachable destination is a different fix from a run that failed.
+
+**Supersession.** Velero retains failed `Backup` objects until their TTL expires, so a raw phase-to-issue mapping would keep one bad night red for days. Backups group by the `velero.io/schedule-name` label; only the newest run that reached a verdict raises an issue, a later `Completed` clears the series, and an in-progress run neither clears nor raises. Ad-hoc (unlabelled) backups are their own series, so nothing supersedes them. Restores get no supersession — they are one-off operator actions, not a recurring series.
+
+**A paused Schedule is not an issue.** Pausing is operator intent; the Schedule list and detail view show the state without adding queue noise.
+
+**Namespace attribution.** Issues attribute to the Velero object's own namespace (`velero`, or `kommander` on NKP). They are therefore admin-visible, but *not* visible to a user whose namespace view-filter excludes the Velero namespace — including one scoped only to the namespace whose data was lost. Surfacing a failure against the *protected* namespaces needs the protection-coverage model and is not part of this.
+
+**What is not detected yet.** Every detection above is driven by a phase Velero actually wrote. Radar does not yet detect the *absence* of a run — a schedule that quietly stopped firing (controller down, wrong cron, schedule deleted) leaves its last run `Completed`, so no issue is raised even though backups have silently stopped. The same applies to a run wedged in an active phase past its `itemOperationTimeout`. Both need the schedule cadence modelled against Velero's real controller semantics (a due run is *skipped* while a prior backup is in flight, and `itemOperationTimeout` is configurable), which is tracked separately. **Treat "no Velero issues" as "no run reported a failure", not as "backups are healthy."**
 
 ### Supported CRDs
 
-| CRD | Group | Topology | Detail View | AI Summary |
-|-----|-------|----------|-------------|------------|
-| Backup | `velero.io/v1` | — | Yes | — |
-| Restore | `velero.io/v1` | — | Yes | — |
-| Schedule | `velero.io/v1` | — | Yes | — |
-| BackupStorageLocation | `velero.io/v1` | — | Yes | — |
-| VolumeSnapshotLocation | `velero.io/v1` | — | Yes | — |
+| CRD | Group | Topology | Detail View | Issues | AI Summary |
+|-----|-------|----------|-------------|--------|------------|
+| Backup | `velero.io/v1` | — | Yes | Yes | — |
+| Restore | `velero.io/v1` | — | Yes | Yes | — |
+| Schedule | `velero.io/v1` | — | Yes | Yes | — |
+| BackupStorageLocation | `velero.io/v1` | — | Yes | Yes | — |
+| VolumeSnapshotLocation | `velero.io/v1` | — | Yes | — | — |
+| BackupRepository | `velero.io/v1` | — | — | Yes | — |
+
+**Kind collisions.** `restores` and `schedules` are shared plurals — `rancher/backup-restore-operator` ships `restores.resources.cattle.io`, and several operators ship their own `schedules` kind. For those two, Radar's renderers, status readers, column sets and cells all select on the `velero.io` group, so a foreign resource with the same plural falls through to the generic renderer instead of being dressed up as a backup. `backupstoragelocations` and `volumesnapshotlocations` are keyed on the plural alone — no other operator is known to claim those names — though their renderers and cells still group-guard. The kind→colour and kind→icon tables have no group awareness at all, so only Velero-unique kinds appear in them: `Backup`, `Restore` and `Schedule` are deliberately left unstyled rather than risk decorating a foreign resource.
 
 ---
 
@@ -728,9 +764,11 @@ See the main [README](../README.md#gitops) for the user-facing overview. This se
 - Storage configuration: data size, storage class, WAL storage
 - Backup configuration: destination, retention policy, last successful backup, recovery point
 - Monitoring: PodMonitor integration, custom query ConfigMaps
-- Replication settings (for replica clusters)
+- Replication settings (for replica clusters), with per-instance role and timeline ID
 - PostgreSQL parameters
 - Health detection (AlertBanner for degraded clusters, failover/switchover in progress)
+- **WAL archiving failure** — a first-class AlertBanner driven by the `ContinuousArchiving` condition. This is the classic silent CNPG incident: the cluster keeps serving traffic normally while the recovery point stops advancing. The condition proves the last archive attempt failed, so Radar reports "archiving failing since &lt;time&gt; — the recovery point may not be advancing" and deliberately does not claim an exact RPO
+- **Last-backup failure** — driven by the `LastBackupSucceeded` condition. CNPG also sets this condition False with reason `BackupStarted` while a backup is merely in flight; Radar ignores that state rather than alerting on every backup run
 
 **Backup Detail View:**
 - Phase, backup method, duration, start/stop timestamps
@@ -746,12 +784,34 @@ See the main [README](../README.md#gitops) for the user-facing overview. This se
 
 **Pooler Detail View:**
 - Type (read-write/read-only) with colored badge, pool mode
-- Instances ready/desired
+- Instances scheduled/desired (not readiness — see below)
 - Cluster reference with clickable link
 - PgBouncer parameters
-- Degraded state detection (AlertBanner when not all instances ready)
+- Degraded state detection (AlertBanner when not all instances are scheduled)
+
+Note `Pooler.status.instances` counts pods *trying to be scheduled*, not ready pods — a Pooler whose PgBouncer pods are all Pending still reports the full count. Radar therefore labels the healthy state **Scheduled** rather than Ready; actual readiness lives on the Deployment CNPG generates for the Pooler (same name, same namespace).
 
 **Resource Browser:** Smart columns show status, instance counts (with degraded highlighting), primary instance, image tag, storage size, cluster reference, and schedule expressions.
+
+### Phase classification
+
+Cluster phases are full English sentences (`Cluster is unrecoverable and needs manual intervention`), not enum tokens, and are matched on equality. They are bucketed as healthy / transient / failing / terminal / attention; terminal phases outrank instance counts, so an unrecoverable cluster whose pods happen to still be Ready is still rendered red. An unrecognized phase from a newer CNPG minor surfaces verbatim as unknown rather than being guessed at.
+
+Backup phases are lowercase tokens. `walArchivingFailing` is treated as a cluster-level signal, not an ordinary backup failure — archiving is broken upstream of that Backup, so the whole recovery window is affected.
+
+The taxonomy is defined twice — TypeScript for the badge, Go for the issue detector — and pinned by `TestCNPGPhaseTaxonomyMatchesFrontend`, which fails if the two drift.
+
+### Backup: in-tree vs the barman-cloud plugin
+
+In-tree `spec.backup.barmanObjectStore` is deprecated as of CNPG 1.26. Clusters migrated to the [barman-cloud plugin](https://github.com/cloudnative-pg/plugin-barman-cloud) keep their config in an `ObjectStore` CR (`barmancloud.cnpg.io/v1`), and CNPG stops populating `status.lastSuccessfulBackup` / `firstRecoverabilityPoint` by design. Radar detects the plugin from `spec.plugins[]`, names the ObjectStore and resolved server key, and says so explicitly — rather than rendering an empty backup section that reads identically to "no backups configured". Reading the ObjectStore's recovery window is not yet implemented.
+
+### Cluster Audit checks
+
+| Check | What it catches |
+|-------|-----------------|
+| `cnpgNoDeclarativeBackup` | A CNPG Cluster with no ScheduledBackup targeting it |
+
+Deliberately narrow: the absence of a ScheduledBackup does not prove a cluster is unprotected (on-demand Backups, volume snapshots and external schedulers all exist), so the finding asserts only that no schedule is *declared*, at posture severity. All three `spec.method` values — `barmanObjectStore`, `volumeSnapshot` and `plugin` — count as a declared schedule. Suspended schedules count as present, since suspension is deliberate operator intent. The check does not run at all unless a synced cluster-wide ScheduledBackup informer backs the inventory, because absence would otherwise be unprovable.
 
 ### Supported CRDs
 
@@ -761,6 +821,8 @@ See the main [README](../README.md#gitops) for the user-facing overview. This se
 | Backup | `postgresql.cnpg.io/v1` | — | Yes | — |
 | ScheduledBackup | `postgresql.cnpg.io/v1` | — | Yes | — |
 | Pooler | `postgresql.cnpg.io/v1` | — | Yes | — |
+
+The `clusters` and `backups` plurals collide with Cluster API and Velero respectively. Radar resolves both with positive API-group guards, so a third operator's CRD sharing either plural (KubeBlocks, Redis/Valkey operators) falls through to the generic renderer instead of inheriting a fabricated PostgreSQL status.
 
 ---
 

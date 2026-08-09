@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"k8s.io/client-go/kubernetes"
@@ -81,12 +82,17 @@ var (
 	sessionStopFunc func()
 
 	// contextOpMu serializes the destructive context-changing operations
-	// (PerformContextSwitch, PerformNamespaceRescope). operationGen only decides
-	// which operation gets to roll back / notify; it does NOT stop two operations
-	// from running ResetAllSubsystems + InitAllSubsystems concurrently on the
-	// shared cache singletons. This mutex does — a second request waits for the
-	// first to finish rather than interleaving teardown/init.
+	// (PerformContextSwitch, PerformNamespaceRescope, and runtime auth-loss
+	// demotion). operationGen only decides which operation gets to roll back /
+	// notify; it does NOT stop two operations from running ResetAllSubsystems +
+	// InitAllSubsystems concurrently on the shared cache singletons. This mutex
+	// does — a second request waits for the first to finish rather than
+	// interleaving teardown/init.
 	contextOpMu sync.Mutex
+	// Incremented BEFORE contextOpMu is acquired — that ordering is the
+	// mechanism: it makes a queued-but-blocked operation visible to runtime
+	// auth-loss candidate intake, which a try-lock could never see.
+	activeContextOperations atomic.Int32
 
 	// operationCtx is canceled at the start of every context switch and retry.
 	// API calls that should not survive a context switch (RBAC checks, capability
@@ -95,10 +101,11 @@ var (
 	operationCancel context.CancelFunc
 	operationMu     sync.Mutex
 	// operationGen bumps on every CancelOngoingOperations (i.e. at the start of
-	// every context switch / rescope). An operation captures the generation it
-	// owns; if a newer operation has since started, the older one must not apply
-	// destructive side effects (e.g. a namespace-rescope rollback against the
-	// context a newer switch already moved to).
+	// every context switch / rescope, and on runtime auth-loss demotion). An
+	// operation captures the generation it owns; if a newer operation has since
+	// started, the older one must not apply destructive side effects (e.g. a
+	// namespace-rescope rollback against the context a newer switch already
+	// moved to).
 	operationGen uint64
 )
 
@@ -108,7 +115,8 @@ func init() {
 
 // CancelOngoingOperations cancels any in-flight API calls from previous
 // operations (capabilities checks, RBAC checks, etc.) and creates a fresh
-// operation context. Called at the start of context switch and retry.
+// operation context. Called at the start of context switch and retry, and by
+// runtime auth-loss demotion.
 func CancelOngoingOperations() {
 	operationMu.Lock()
 	defer operationMu.Unlock()
@@ -133,6 +141,16 @@ func NewOperationContext(timeout time.Duration) (context.Context, context.Cancel
 	parent := operationCtx
 	operationMu.Unlock()
 	return context.WithTimeout(parent, timeout)
+}
+
+func newOperationContextForGeneration(generation uint64, timeout time.Duration) (context.Context, context.CancelFunc, bool) {
+	operationMu.Lock()
+	defer operationMu.Unlock()
+	if operationGen != generation {
+		return nil, nil, false
+	}
+	ctx, cancel := context.WithTimeout(operationCtx, timeout)
+	return ctx, cancel, true
 }
 
 // OperationContext returns the current operation context. Callers that need
@@ -165,7 +183,10 @@ func stopActiveSessions() {
 // OnBeforeContextSwitch registers a callback fired at the very start of
 // PerformContextSwitch, BEFORE the client is repointed at the new cluster — for
 // teardown that must happen against the old context (e.g. cancelling in-flight
-// AI investigations so their agent can't touch the new cluster).
+// AI investigations so their agent can't touch the new cluster). Runtime
+// auth-loss demotion also fires it as a quiesce-in-place: no switch follows and
+// the argument is the CURRENT context, so callbacks must not infer "changed"
+// by comparing it against the active context name.
 func OnBeforeContextSwitch(callback ContextSwitchCallback) {
 	contextSwitchMu.Lock()
 	defer contextSwitchMu.Unlock()
@@ -334,14 +355,40 @@ func connectionProbeHTTPTimeout(ctx context.Context) time.Duration {
 // connected to the current cluster" and NOT mark the connection disconnected.
 var ErrContextSwitchPreflight = errors.New("context switch preflight rejected")
 
+// ErrReconnectSuperseded is returned by PerformContextSwitchIfOperationCurrent
+// when another operation started after the caller captured its generation.
+var ErrReconnectSuperseded = errors.New("reconnect superseded by a newer operation")
+
 func PerformContextSwitch(newContext string) error {
+	return performContextSwitch(newContext, 0, false)
+}
+
+// PerformContextSwitchIfOperationCurrent is the conditional variant used by
+// automatic recovery: it aborts with ErrReconnectSuperseded — before any
+// teardown — if any other operation (user switch, rescope, retry) started
+// since observedOperationGen was captured. The check runs under contextOpMu,
+// which closes the TOCTOU a check-then-switch caller would have: a user
+// switch that started mid-probe bumps the generation before this can.
+func PerformContextSwitchIfOperationCurrent(newContext string, observedOperationGen uint64) error {
+	return performContextSwitch(newContext, observedOperationGen, true)
+}
+
+func performContextSwitch(newContext string, observedOperationGen uint64, requireOperationCurrent bool) error {
 	switchStart := time.Now()
 	log.Printf("[ops] Context switch START → %q", newContext)
 
 	// Serialize against any other in-flight switch / rescope so their teardown +
 	// init can't interleave on the shared cache. A queued request waits here.
+	activeContextOperations.Add(1)
 	contextOpMu.Lock()
-	defer contextOpMu.Unlock()
+	defer func() {
+		activeContextOperations.Add(-1)
+		contextOpMu.Unlock()
+	}()
+
+	if requireOperationCurrent && currentOperationGen() != observedOperationGen {
+		return ErrReconnectSuperseded
+	}
 
 	// Under --namespace-scope, validate the new context has a usable scope target
 	// BEFORE tearing anything down. Otherwise a switch to a context with no
@@ -446,6 +493,16 @@ func PerformContextSwitch(newContext string) error {
 		callback(newContext)
 	}
 
+	// Publish success while still holding contextOpMu: a caller publishing
+	// after this returns races the next queued operation's teardown, and the
+	// window would advertise Connected over dead caches. HTTP handlers'
+	// duplicate publishes dedupe inside SetConnectionStatus.
+	SetConnectionStatus(ConnectionStatus{
+		State:       StateConnected,
+		Context:     newContext,
+		ClusterName: GetClusterName(),
+	})
+
 	return nil
 }
 
@@ -467,8 +524,12 @@ func PerformNamespaceRescope(namespace string) error {
 	// Serialize against any other in-flight switch / rescope (see contextOpMu).
 	// previousNamespace is read under the lock so two rescopes can't both decide
 	// the namespace changed and run teardown/init concurrently.
+	activeContextOperations.Add(1)
 	contextOpMu.Lock()
-	defer contextOpMu.Unlock()
+	defer func() {
+		activeContextOperations.Add(-1)
+		contextOpMu.Unlock()
+	}()
 	previousNamespace := GetNamespaceScopeTarget()
 	if namespace == previousNamespace {
 		return nil

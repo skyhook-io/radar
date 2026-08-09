@@ -1,0 +1,119 @@
+suite: Cloud cluster-scoped read RBAC
+templates:
+  - cloud-rbac-cluster-read.yaml
+tests:
+  - it: grants Upgrade impact extension metadata without broad metrics access
+    set:
+      cloud:
+        enabled: true
+        token: dummy
+        url: "wss://cloud.example"
+        clusterName: test-cluster
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["apiextensions.k8s.io"]
+            resources: ["customresourcedefinitions"]
+            verbs: ["get", "list", "watch"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["admissionregistration.k8s.io"]
+            resources: ["mutatingwebhookconfigurations", "validatingwebhookconfigurations"]
+            verbs: ["get", "list", "watch"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["storage.k8s.io"]
+            resources: ["storageclasses"]
+            verbs: ["get", "list", "watch"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["storage.k8s.io"]
+            resources: ["csistoragecapacities"]
+            verbs: ["list"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["flowcontrol.apiserver.k8s.io"]
+            resources: ["flowschemas", "prioritylevelconfigurations"]
+            verbs: ["list"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["policy"]
+            resources: ["podsecuritypolicies"]
+            verbs: ["list"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["apiregistration.k8s.io"]
+            resources: ["apiservices"]
+            verbs: ["get", "list", "watch"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["monitoring.coreos.com"]
+            resources: ["prometheusrules"]
+            verbs: ["get", "list", "watch"]
+      - notContains:
+          path: rules[*].nonResourceURLs
+          content: /metrics
+      - notContains:
+          path: rules[*].resources
+          content: nodes/proxy
+      - notContains:
+          path: rules[*].apiGroups
+          content: rbac.authorization.k8s.io
+      - notContains:
+          path: rules[*].resources
+          content: secrets
+
+  - it: follows the API registration collection gate
+    set:
+      cloud:
+        enabled: true
+        token: dummy
+        url: "wss://cloud.example"
+        clusterName: test-cluster
+      rbac:
+        crdGroups:
+          apiRegistration: false
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["apiregistration.k8s.io"]
+            resources: ["apiservices"]
+            verbs: ["get", "list", "watch"]
+          any: true
+
+  - it: follows the Prometheus collection gate
+    set:
+      cloud:
+        enabled: true
+        token: dummy
+        url: "wss://cloud.example"
+        clusterName: test-cluster
+      rbac:
+        crdGroups:
+          prometheus: false
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["monitoring.coreos.com"]
+            resources: ["prometheusrules"]
+            verbs: ["get", "list", "watch"]
+          any: true

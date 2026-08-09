@@ -103,7 +103,7 @@ func buildMutationVerification(ctx context.Context, dynClient dynamic.Interface,
 		out["pods"] = pods
 		cacheSnapshot = true
 	}
-	if related := relatedIssuesForObject(post); len(related) > 0 {
+	if related := relatedIssuesForObject(ctx, post); len(related) > 0 {
 		out["currentIssues"] = related
 		cacheSnapshot = true
 	}
@@ -747,7 +747,7 @@ func podContainerStatus(pod *corev1.Pod) (bool, int32, string) {
 	return allReady, restarts, waiting
 }
 
-func relatedIssuesForObject(obj *unstructured.Unstructured) []map[string]any {
+func relatedIssuesForObject(ctx context.Context, obj *unstructured.Unstructured) []map[string]any {
 	if obj == nil {
 		return nil
 	}
@@ -760,11 +760,12 @@ func relatedIssuesForObject(obj *unstructured.Unstructured) []map[string]any {
 	if kind == "" {
 		kind = obj.GetKind()
 	}
-	var namespaces []string
-	if obj.GetNamespace() != "" {
-		namespaces = []string{obj.GetNamespace()}
-	}
-	matched := issues.RelatedIssues(provider, namespaces, gvk.Group, kind, obj.GetNamespace(), obj.GetName())
+	namespaces := issueNamespacesForResource(obj.GetNamespace())
+	matched := issues.RelatedIssues(provider, issues.RelatedIssueOptions{
+		Namespaces:           namespaces,
+		CanReadClusterScoped: issueClusterScopedAccess(ctx),
+		CanReadRelated:       issueRelatedResourceAccess(ctx),
+	}, gvk.Group, kind, obj.GetNamespace(), obj.GetName())
 	if len(matched) == 0 {
 		return nil
 	}

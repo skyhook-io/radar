@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
+	"sync"
 	"testing"
 )
 
@@ -132,5 +134,63 @@ func TestSaveCreatesDirectory(t *testing.T) {
 	path := filepath.Join(dir, ".radar", "settings.json")
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("settings.json should exist: %v", err)
+	}
+}
+
+func TestRolloutKeyMintsOnceAndPersists(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+
+	id := RolloutKey()
+	if id == "" {
+		t.Fatal("RolloutKey returned empty with a writable home")
+	}
+	if RolloutKey() != id {
+		t.Fatal("RolloutKey is not stable across calls")
+	}
+	// Its own file, never the settings struct: /api/settings serializes
+	// Settings verbatim, so the identifier must not be reachable from it.
+	if raw, err := json.Marshal(Load()); err != nil || strings.Contains(string(raw), id) {
+		t.Fatalf("install ID leaked into serialized settings: %s (%v)", raw, err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, ".radar", "install-id"))
+	if err != nil || strings.TrimSpace(string(data)) != id {
+		t.Fatalf("persisted id = %q (%v), want %q", data, err, id)
+	}
+}
+
+func TestRolloutKeyConcurrentMintResolvesToOneWinner(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+
+	// Simulates the CLI and Desktop starting together: every racer must end
+	// up with the same identity (O_EXCL create; losers adopt the winner).
+	const racers = 16
+	ids := make([]string, racers)
+	var wg sync.WaitGroup
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			ids[i] = RolloutKey()
+		}(i)
+	}
+	wg.Wait()
+
+	for i, id := range ids {
+		if id == "" {
+			// A loser may observe the winner's file before its bytes land —
+			// "" (out of cohort this start) is the allowed fail-safe, a
+			// DIFFERENT id is not.
+			continue
+		}
+		if id != ids[0] && ids[0] != "" {
+			t.Fatalf("racer %d minted %q while racer 0 got %q", i, id, ids[0])
+		}
+	}
+	if RolloutKey() == "" {
+		t.Fatal("no identity persisted after the race")
 	}
 }

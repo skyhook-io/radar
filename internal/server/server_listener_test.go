@@ -28,7 +28,7 @@ func TestLocalTCPHandlerCloudModeExposesExactHealthOnly(t *testing.T) {
 		t.Run(tc.path, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
 			req.Header.Set("X-Forwarded-User", "attacker")
-			req.Header.Set("X-Forwarded-Groups", "cloud:owner")
+			req.Header.Set("X-Forwarded-Groups", "radar:owner")
 			rec := httptest.NewRecorder()
 
 			handler.ServeHTTP(rec, req)

@@ -34,6 +34,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	corev1 "k8s.io/api/core/v1"
@@ -61,14 +62,26 @@ import (
 // here lets unrelated changes to policyreports.Finding evolve without
 // perturbing the wire contract that downstream callers depend on.
 type policyReportLookupAdapter struct {
-	idx *policyreports.Index
+	idx    *policyreports.Index
+	status k8s.PolicyReportStatus
+}
+
+// Unavailable implements resourcecontext.PolicyReportAvailability so a
+// resource whose policy findings could not be read says so, instead of being
+// indistinguishable from a resource with no violations.
+func (a policyReportLookupAdapter) Unavailable() (resourcecontext.OmittedReason, bool) {
+	return a.status.OmittedReason()
 }
 
 func (a policyReportLookupAdapter) FindingsFor(group, kind, namespace, name string) []resourcecontext.KyvernoFinding {
 	if a.idx == nil {
 		return nil
 	}
-	findings := a.idx.FindingsFor(group, kind, namespace, name)
+	// Filtered, not FindingsFor: this projection fills `policySummary.kyverno`,
+	// and the index is shared with every other producer writing into the same
+	// report families — Trivy, Falco adapters, VAP evaluation. An unfiltered
+	// read would inflate the Kyverno rollup with enforcement Kyverno never did.
+	findings := a.idx.FindingsForAnyEngine(group, kind, namespace, name, policyreports.EnginesAttributableToKyverno...)
 	if len(findings) == 0 {
 		return nil
 	}
@@ -422,7 +435,7 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	}
 	canonicalGroup := gvk.Group
 
-	issueSum := computeIssueSummaryForResource(cache, canonicalGroup, canonicalKind, namespace, name)
+	issueSum := computeIssueSummaryForResource(cache, s.issueClusterScopedAccess(r), s.issueRelatedResourceAccess(r), canonicalGroup, canonicalKind, namespace, name)
 	auditSum := computeAuditSummaryForResource(cache, canonicalGroup, canonicalKind, namespace, name)
 
 	opts := resourcecontext.Options{
@@ -436,15 +449,18 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 			k8s.FindRemovedServiceEnvChecksForObject(r.Context(), cache, obj),
 			k8s.FindStaleSecretEnvChecksForObject(r.Context(), cache, obj),
 		),
+		ContainerCompletionSplit: resourcecontextrefs.ContainerCompletionSplitFromShape(
+			k8s.FindContainerCompletionSplitForObject(cache, obj, time.Now()),
+		),
 		ServiceBackends: serviceBackendLookup{cache: cache},
 	}
 
 	// Wire the PolicyReport index when Kyverno is installed. Build emits a
 	// counts-only `policySummary.kyverno` on the basic tier; diagnostic
 	// tier (T10) will surface the top[] findings.
-	if idx := k8s.GetPolicyReportIndex(); idx != nil {
-		opts.PolicyReports = policyReportLookupAdapter{idx: idx}
-	}
+	// Wired unconditionally: a nil index is exactly the case that needs to
+	// report WHY it is nil.
+	opts.PolicyReports = policyReportLookupAdapter{idx: k8s.GetPolicyReportIndex(), status: k8s.GetPolicyReportStatus()}
 
 	if topo, prov, dyn, ok := s.topologyForContext(namespace); ok {
 		opts.Topology = topo
@@ -505,15 +521,15 @@ func (s *Server) topologyForContext(namespace string) (*topology.Topology, topol
 // summary silently collapses to nil.
 //
 // Returns nil when no issues match — Build then omits the IssueSummary field.
-func computeIssueSummaryForResource(cache *k8s.ResourceCache, group, kind, namespace, name string) *resourcecontext.IssueSummary {
-	sum, _ := computeIssueSummaryAndRows(cache, group, kind, namespace, name)
+func computeIssueSummaryForResource(cache *k8s.ResourceCache, canReadClusterScoped func(kind, group string) bool, canReadRelated func(issues.Ref) bool, group, kind, namespace, name string) *resourcecontext.IssueSummary {
+	sum, _ := computeIssueSummaryAndRows(cache, canReadClusterScoped, canReadRelated, group, kind, namespace, name)
 	return sum
 }
 
 // computeIssueSummaryAndRows additionally returns the matched rows sorted by
 // (severity desc, reason asc) — the diagnose health frame shows the actual
 // lines, not just the rollup.
-func computeIssueSummaryAndRows(cache *k8s.ResourceCache, group, kind, namespace, name string) (*resourcecontext.IssueSummary, []issues.Issue) {
+func computeIssueSummaryAndRows(cache *k8s.ResourceCache, canReadClusterScoped func(kind, group string) bool, canReadRelated func(issues.Ref) bool, group, kind, namespace, name string) (*resourcecontext.IssueSummary, []issues.Issue) {
 	if cache == nil {
 		return nil, nil
 	}
@@ -529,7 +545,11 @@ func computeIssueSummaryAndRows(cache *k8s.ResourceCache, group, kind, namespace
 	// surfaces the grouped issues its pods are evidence for, and on a pod beyond
 	// the inline-Members cap too. The old flat-by-exact-resource match missed
 	// both (a Deployment matched no Kind=Pod evidence rows → empty summary).
-	matched := issues.RelatedIssues(provider, namespaces, group, kind, namespace, name)
+	matched := issues.RelatedIssues(provider, issues.RelatedIssueOptions{
+		Namespaces:           namespaces,
+		CanReadClusterScoped: canReadClusterScoped,
+		CanReadRelated:       canReadRelated,
+	}, group, kind, namespace, name)
 	if len(matched) == 0 {
 		return nil, nil
 	}

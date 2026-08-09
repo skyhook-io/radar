@@ -34,6 +34,41 @@ func TestDeniedKindsKey(t *testing.T) {
 	}
 }
 
+func TestNodeClassAuthorizationGroupsUseExactProviderResource(t *testing.T) {
+	eksTuple := topology.SARTuple{Group: "eks.amazonaws.com", Resource: "nodeclasses"}
+	customTuple := topology.SARTuple{Group: "infra.example.io", Resource: "customnodeclasses"}
+	topo := &topology.Topology{
+		Nodes: []topology.Node{
+			{ID: "nodepool//default", Kind: topology.KindNodePool, Name: "default"},
+			{ID: "nodeclass//shared/eks.amazonaws.com/nodeclass", Kind: topology.KindNodeClass, Name: "shared", Data: map[string]any{"apiVersion": "eks.amazonaws.com/v1", "resource": "nodeclasses"}},
+			{ID: "nodeclass//shared/infra.example.io/customnodeclass", Kind: topology.KindNodeClass, Name: "shared", Data: map[string]any{"apiVersion": "infra.example.io/v1", "resource": "customnodeclasses"}},
+		},
+		Edges: []topology.Edge{
+			{Source: "nodepool//default", Target: "nodeclass//shared/eks.amazonaws.com/nodeclass", Type: topology.EdgeConfigures},
+			{Source: "nodepool//default", Target: "nodeclass//shared/infra.example.io/customnodeclass", Type: topology.EdgeConfigures},
+		},
+	}
+
+	allowed := authorizedNodeClassTuples(topo, func(tuple topology.SARTuple) bool {
+		return tuple == eksTuple
+	})
+	if !allowed[eksTuple] || allowed[customTuple] {
+		t.Fatalf("allowed tuples = %+v, want EKS only", allowed)
+	}
+	if nodeClassTuplesKey(allowed) == nodeClassTuplesKey(map[topology.SARTuple]bool{customTuple: true}) {
+		t.Fatal("different provider grants collapsed to one SSE authorization group")
+	}
+
+	filtered := cloneTopology(topo)
+	filtered.StripNodeClassesExcept(allowed)
+	if len(filtered.Nodes) != 2 || len(filtered.Edges) != 1 || filtered.Edges[0].Target != "nodeclass//shared/eks.amazonaws.com/nodeclass" {
+		t.Fatalf("exact provider filter produced nodes=%+v edges=%+v", filtered.Nodes, filtered.Edges)
+	}
+	if len(topo.Nodes) != 3 || len(topo.Edges) != 2 {
+		t.Fatal("filtering one SSE authorization group mutated the shared base topology")
+	}
+}
+
 // clientCanSeeChange gates k8s_event (diff-bearing) frames per client. Without
 // an authorizer wired (auth off / tests) it falls back to the namespace +
 // topology-denied-kind gate; with one it authorizes the exact (group, resource)

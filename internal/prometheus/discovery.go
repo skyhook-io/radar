@@ -85,16 +85,14 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 		return "", "", fmt.Errorf("manual Prometheus URL %s not reachable", addr)
 	}
 
-	// Layer 2: Reuse traffic system's existing port-forward if present
-	if pfAddr := portforward.GetAddress(portforward.OwnerPrometheus, contextName); pfAddr != "" {
-		if c.probe(ctx, pfAddr) {
-			log.Printf("[prometheus] connected via traffic port-forward %s (%s)", pfAddr, took(start))
-			if !c.markConnected(pfAddr, "", startGen) {
-				return "", "", errDiscoverySuperseded
-			}
-			return pfAddr, "", nil
-		}
-	}
+	// Reuse of an existing managed port-forward happens later, per candidate, in
+	// the port-forward fallback loop below — not here as a blind cross-owner
+	// shortcut. A generic probe can't tell the traffic source's caretta-vm
+	// (traffic-specific, may lack workload metrics) apart from a general
+	// Prometheus, so adopting whatever forward is up before enumeration would let
+	// resource metrics bind to caretta-vm and silently lose workload data. Reusing
+	// only a forward that targets a discovered candidate ties reuse to the same
+	// candidate ranking the port-forward attempts already follow.
 
 	if k8sClient == nil {
 		return "", "", fmt.Errorf("no Kubernetes client available for discovery")
@@ -174,9 +172,45 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 			logDiscoveryEnded(start, err)
 			return "", "", err
 		}
+		c.setDiscoveryServiceFromCandidate(cand)
+
+		// Reuse an existing managed forward (this owner's own, or a peer's such as
+		// the traffic source) only when it already targets THIS candidate. Matching
+		// on (namespace, service) avoids adopting a forward bound to a different
+		// backend — the reason resource metrics could otherwise land on caretta-vm
+		// via a blind cross-owner shortcut. Reuse follows the same per-candidate
+		// order as the port-forward attempts below.
+		if pfAddr := portforward.GetAddressForService(portforward.OwnerPrometheus, contextName, cand.Namespace, cand.Name); pfAddr != "" {
+			if c.probe(ctx, pfAddr+cand.BasePath) {
+				if !c.markConnected(pfAddr, cand.BasePath, startGen) {
+					// Superseded mid-reuse: drop the stale service metadata we just
+					// published, same as the port-forward path below. The forward
+					// itself is pre-existing (own from a prior run, or a peer's), so
+					// unlike that path we must not Stop it here.
+					c.mu.Lock()
+					c.discoveryService = nil
+					c.mu.Unlock()
+					return "", "", errDiscoverySuperseded
+				}
+				log.Printf("[prometheus] reusing managed port-forward %s for %s/%s (%s)",
+					pfAddr, cand.Namespace, cand.Name, took(start))
+				return pfAddr, cand.BasePath, nil
+			}
+			// The reuse probe failed. If that is because the run was superseded
+			// (ctx cancelled) rather than the reused forward being genuinely
+			// unreachable, bail now instead of falling through to Start: Start
+			// would fast-path this same pre-existing forward and the doomed
+			// re-probe below would then Stop a tunnel we must leave up (a newer
+			// generation may already own it) — the very teardown the reuse
+			// supersession path above deliberately avoids.
+			if err := ctx.Err(); err != nil {
+				logDiscoveryEnded(start, err)
+				return "", "", err
+			}
+		}
+
 		log.Printf("[prometheus] port-forward → %s/%s:%d (source=%s, score=%d)...",
 			cand.Namespace, cand.Name, cand.TargetPort, cand.Source, cand.Score)
-		c.setDiscoveryServiceFromCandidate(cand)
 
 		connInfo, pfErr := portforward.Start(portforward.OwnerPrometheus, ctx, cand.Namespace, cand.Name, cand.TargetPort, contextName)
 		if pfErr != nil {

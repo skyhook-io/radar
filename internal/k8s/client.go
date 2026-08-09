@@ -289,24 +289,18 @@ func doInit(opts InitOptions) error {
 	config.QPS = 50
 	config.Burst = 100
 
+	clients, err := newSharedKubernetesClients(config)
+	if err != nil {
+		return err
+	}
+
+	clientMu.Lock()
 	k8sConfig = config
-
-	k8sClient, err = kubernetes.NewForConfig(config)
-	if err != nil {
-		return fmt.Errorf("failed to create k8s clientset: %w", err)
-	}
-
-	// Create discovery client for API resource discovery
-	discoveryClient, err = discovery.NewDiscoveryClientForConfig(config)
-	if err != nil {
-		return fmt.Errorf("failed to create discovery client: %w", err)
-	}
-
-	// Create dynamic client for CRD access
-	dynamicClient, err = dynamic.NewForConfig(config)
-	if err != nil {
-		return fmt.Errorf("failed to create dynamic client: %w", err)
-	}
+	k8sClient = clients.clientset
+	discoveryClient = clients.discovery
+	dynamicClient = clients.dynamic
+	activeClientGeneration = clients.generation
+	clientMu.Unlock()
 
 	return nil
 }
@@ -662,6 +656,77 @@ func activeClusterContextLocked() string {
 	return "in-cluster"
 }
 
+var (
+	clusterUIDMu      sync.Mutex
+	clusterUIDCache   = map[string]string{}    // context name → "cluster-<kube-system uid>"
+	clusterUIDRetryAt = map[string]time.Time{} // context name → when a FAILED lookup may retry
+)
+
+// clusterUIDNegativeTTL bounds how long a failed kube-system lookup is
+// remembered. Short on purpose: long enough that an RBAC-denied install doesn't
+// re-issue the doomed GET on every resource navigation, short enough that a
+// permission fix self-heals within a minute instead of after a restart.
+const clusterUIDNegativeTTL = 45 * time.Second
+
+// ClusterIdentity returns a stable per-cluster identifier for scoping
+// cluster-keyed client state (e.g. the in-cluster-test consent memory). A real
+// kubeconfig context name wins. In-cluster deployments all report the SAME
+// "in-cluster" sentinel - useless as an identity when one shared origin (Radar
+// Hub) fronts many clusters - so they fall back to the kube-system namespace
+// UID: immutable, unique per cluster, readable with radar's existing RBAC.
+// Returns "" when even that read fails; callers must treat empty as "no stable
+// identity" and never persist per-cluster state under a shared fallback key.
+func ClusterIdentity(ctx context.Context) string {
+	clientMu.RLock()
+	name, mode := contextName, kubeconfigMode
+	clientMu.RUnlock()
+	if name != "" && mode != "in-cluster" {
+		return name
+	}
+	return cachedClusterUIDIdentity(ctx, name, GetClient())
+}
+
+// cachedClusterUIDIdentity memoizes the kube-system UID lookup per context name:
+// a success is cached forever (the UID is immutable), a failure is cached for
+// clusterUIDNegativeTTL so an install that can't read kube-system doesn't hammer
+// the apiserver with a doomed GET per request. Split from ClusterIdentity so the
+// caching is testable with a fake client.
+func cachedClusterUIDIdentity(ctx context.Context, name string, client kubernetes.Interface) string {
+	clusterUIDMu.Lock()
+	cached, ok := clusterUIDCache[name]
+	retryAt := clusterUIDRetryAt[name]
+	clusterUIDMu.Unlock()
+	if ok {
+		return cached
+	}
+	if time.Now().Before(retryAt) {
+		return ""
+	}
+	if client == nil {
+		return ""
+	}
+	id := clusterUIDIdentity(ctx, client)
+	clusterUIDMu.Lock()
+	defer clusterUIDMu.Unlock()
+	if id == "" {
+		clusterUIDRetryAt[name] = time.Now().Add(clusterUIDNegativeTTL)
+		return ""
+	}
+	delete(clusterUIDRetryAt, name)
+	clusterUIDCache[name] = id
+	return id
+}
+
+// clusterUIDIdentity derives the fallback cluster identity from the kube-system
+// namespace UID. Split from ClusterIdentity so it is testable with a fake client.
+func clusterUIDIdentity(ctx context.Context, client kubernetes.Interface) string {
+	ns, err := client.CoreV1().Namespaces().Get(ctx, "kube-system", metav1.GetOptions{})
+	if err != nil || ns == nil || ns.UID == "" {
+		return ""
+	}
+	return "cluster-" + string(ns.UID)
+}
+
 // GetClusterName returns the current cluster name from kubeconfig
 func GetClusterName() string {
 	clientMu.RLock()
@@ -934,6 +999,12 @@ var ForceInCluster bool
 
 // IsInCluster returns true if running inside a Kubernetes cluster
 func IsInCluster() bool {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	return isInClusterLocked()
+}
+
+func isInClusterLocked() bool {
 	return ForceInCluster || (kubeconfigPath == "" && len(kubeconfigPaths) == 0)
 }
 
@@ -1126,20 +1197,9 @@ func SwitchContext(name string) error {
 	config.QPS = 50
 	config.Burst = 100
 
-	// Create new clients
-	newK8sClient, err := kubernetes.NewForConfig(config)
+	clients, err := newSharedKubernetesClients(config)
 	if err != nil {
-		return fmt.Errorf("failed to create k8s client for context %q: %w", name, err)
-	}
-
-	newDiscoveryClient, err := discovery.NewDiscoveryClientForConfig(config)
-	if err != nil {
-		return fmt.Errorf("failed to create discovery client for context %q: %w", name, err)
-	}
-
-	newDynamicClient, err := dynamic.NewForConfig(config)
-	if err != nil {
-		return fmt.Errorf("failed to create dynamic client for context %q: %w", name, err)
+		return fmt.Errorf("failed to create clients for context %q: %w", name, err)
 	}
 
 	// Update global variables atomically
@@ -1165,9 +1225,10 @@ func SwitchContext(name string) error {
 
 	clientMu.Lock()
 	k8sConfig = config
-	k8sClient = newK8sClient
-	discoveryClient = newDiscoveryClient
-	dynamicClient = newDynamicClient
+	k8sClient = clients.clientset
+	discoveryClient = clients.discovery
+	dynamicClient = clients.dynamic
+	activeClientGeneration = clients.generation
 	contextName = name
 	clusterName = ctx.Cluster
 	contextNamespace = ctx.Namespace

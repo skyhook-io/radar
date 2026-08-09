@@ -12,9 +12,10 @@ import { getArgoApplicationStatus, getArgoApplicationSetStatus, getArgoApplicati
 import { getPolicyReportStatus as _getPolicyReportStatus, getKyvernoPolicyStatus as _getKyvernoPolicyStatus } from './resource-utils-kyverno'
 import { getResourceClaimStatus as _getResourceClaimStatus, getResourceClaimDeviceClasses as _getResourceClaimDeviceClasses, getResourceClaimTemplateDeviceClasses as _getResourceClaimTemplateDeviceClasses, getResourceClaimAllocation as _getResourceClaimAllocation, getResourceClaimReservedFor as _getResourceClaimReservedFor } from './resource-utils-dra'
 import { getNvidiaClusterPolicyStatus as _getNvidiaClusterPolicyStatus, getNvidiaClusterPolicyEnabledComponents as _getNvidiaClusterPolicyEnabledComponents, getNvidiaDriverStatus as _getNvidiaDriverStatus } from './resource-utils-nvidia'
-import { getBackupStatus as _getBackupStatus, getRestoreStatus as _getRestoreStatus, getScheduleStatus as _getScheduleStatus, getBSLStatus as _getBSLStatus } from './resource-utils-velero'
+import { getBackupStatus as _getBackupStatus, getRestoreStatus as _getRestoreStatus, getScheduleStatus as _getScheduleStatus, getBSLStatus as _getBSLStatus, getBackupRepositoryStatus as _getBackupRepositoryStatus } from './resource-utils-velero'
 import { getExternalSecretStatus as _getExternalSecretStatus, getClusterExternalSecretStatus as _getClusterExternalSecretStatus, getSecretStoreStatus as _getSecretStoreStatus, getClusterSecretStoreStatus as _getClusterSecretStoreStatus, getSecretStoreProviderType as _getSecretStoreProviderType } from './resource-utils-eso'
 import { getHPATableState, hpaStatusFromState } from './resource-utils-hpa'
+import { getCNPGClusterStatus as _getCNPGClusterStatus, getCNPGBackupStatus as _getCNPGBackupStatus, getCNPGScheduledBackupStatus as _getCNPGScheduledBackupStatus, getCNPGPoolerStatus as _getCNPGPoolerStatus, isApiGroup as _isApiGroup, CNPG_GROUP as _CNPG_GROUP } from './resource-utils-cnpg'
 
 // ============================================================================
 // STATUS & HEALTH UTILITIES
@@ -290,6 +291,14 @@ export function getPodStatus(pod: any): StatusBadge {
       const unsettled = containerStatuses.filter((c: any) => !containerSettledOk(c)).length
       if (unsettled > 0) {
         return { text: `Running (${ready}/${total})`, color: healthColors.degraded, level: 'degraded' }
+      }
+      // Batch work in flight is not an all-clear. The Job itself already grades
+      // neutral while running; without the same call here its pods would read
+      // healthy — one piece of work graded two ways. Last, after every failure
+      // check above, so a broken Job pod keeps its real verdict.
+      // Mirrors pkg/health.classifyPodLevel.
+      if (isOwnedByJob(pod)) {
+        return { text: 'Running', color: healthColors.neutral, level: 'neutral' }
       }
       return { text: 'Running', color: healthColors.healthy, level: 'healthy' }
     }
@@ -741,6 +750,30 @@ export function getContainerSquareStates(pod: any): ContainerSquareState[] {
 // WORKLOAD UTILITIES (Deployment, StatefulSet, DaemonSet, ReplicaSet)
 // ============================================================================
 
+/**
+ * Whether the controller has not yet acted on this workload's current spec, so
+ * grading against that spec would report controller lag as an outage. The
+ * scale-up case: spec says 10, the controller is still working from the previous
+ * generation and has created 3.
+ *
+ * Deliberately NOT age-based — "created recently" guesses wrong exactly when a
+ * deploy is broken on arrival. Mirrors pkg/health.converging; keep in step.
+ */
+function isConverging(resource: any): boolean {
+  const generation = resource?.metadata?.generation
+  const observed = resource?.status?.observedGeneration
+  return typeof generation === 'number' && typeof observed === 'number' && observed > 0 && observed < generation
+}
+
+/** Whether the pod was created by a batch Job. The owner's API group is checked
+ *  so a CRD that merely uses Kind "Job" doesn't match. Mirrors
+ *  pkg/health.isOwnedByJob. */
+function isOwnedByJob(pod: any): boolean {
+  const refs = pod?.metadata?.ownerReferences
+  if (!Array.isArray(refs)) return false
+  return refs.some((r: any) => r?.kind === 'Job' && typeof r?.apiVersion === 'string' && r.apiVersion.startsWith('batch/'))
+}
+
 export function getWorkloadStatus(resource: any, kind: string): StatusBadge {
   const status = resource.status || {}
   const spec = resource.spec || {}
@@ -756,6 +789,12 @@ export function getWorkloadStatus(resource: any, kind: string): StatusBadge {
     if (ready === desired && updated === desired) {
       return { text: `${ready}/${desired}`, color: healthColors.healthy, level: 'healthy' }
     }
+    // Convergence grace, same as the replica kinds below. pkg/health.Workload
+    // passes this signal for DaemonSets too, so omitting it here would render a
+    // mid-reconcile DaemonSet unhealthy while the backend calls it neutral.
+    if (isConverging(resource)) {
+      return { text: `${ready}/${desired}`, color: healthColors.neutral, level: 'neutral' }
+    }
     if (ready > 0) {
       return { text: `${ready}/${desired}`, color: healthColors.degraded, level: 'degraded' }
     }
@@ -770,6 +809,16 @@ export function getWorkloadStatus(resource: any, kind: string): StatusBadge {
 
   if (desired === 0) {
     return { text: 'Scaled to 0', color: healthColors.neutral, level: 'neutral' }
+  }
+
+  // Convergence grace — mirrors pkg/health.replicaVerdict. A workload whose
+  // spec just changed (or that was created moments ago) has not had a chance to
+  // reach its target, so grading against that target reports controller lag as
+  // an outage. Neutral, never healthy: declining to call it broken is not the
+  // same as calling it fine. Guarded on "not already fully ready" so a
+  // converged workload still takes the healthy path below, matching Go's order.
+  if (isConverging(resource) && !(ready === desired && available === desired)) {
+    return { text: `${ready}/${desired}`, color: healthColors.neutral, level: 'neutral' }
   }
 
   // Check if updating
@@ -2091,13 +2140,31 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'nvidiadrivers') return _getNvidiaDriverStatus(resource).text
       if (kindLower === 'resourceclaims') return _getResourceClaimStatus(resource).text
       if (kindLower === 'backups') return _getBackupStatus(resource).text
-      if (kindLower === 'restores') return _getRestoreStatus(resource).text
-      if (kindLower === 'schedules') return _getScheduleStatus(resource).text
+      // Velero's Restore/Schedule keys are group-qualified (see
+      // GROUP_QUALIFIED_COLUMN_KEYS) because those plurals are shared with
+      // rancher/backup-restore-operator and others. The unqualified plural
+      // deliberately does not match: a foreign CRD falls through to the generic
+      // reader below rather than being filtered as though it were Velero.
+      if (kindLower === 'velerorestores') return _getRestoreStatus(resource).text
+      if (kindLower === 'veleroschedules') return _getScheduleStatus(resource).text
       if (kindLower === 'backupstoragelocations') return _getBSLStatus(resource).text
+      if (kindLower === 'backuprepositories') return _getBackupRepositoryStatus(resource).text
       if (kindLower === 'externalsecrets') return _getExternalSecretStatus(resource).text
       if (kindLower === 'clusterexternalsecrets') return _getClusterExternalSecretStatus(resource).text
       if (kindLower === 'secretstores') return _getSecretStoreStatus(resource).text
       if (kindLower === 'clustersecretstores') return _getClusterSecretStoreStatus(resource).text
+      // CNPG. The filter must read the same text the cell renders, or the
+      // dropdown offers strings that appear on no row: CNPG's phase is prose
+      // ("Cluster in healthy state") while the badge is a short state
+      // ("Healthy"). Worse for `cnpgclusters` — a WAL-archiving failure leaves
+      // the phase healthy, so filtering on the raw phase cannot express the
+      // badge at all. `cnpgclusters`/`cnpgbackups` arrive group-qualified;
+      // `scheduledbackups`/`poolers` are bare plurals, so gate those on the
+      // group rather than assume nobody else ships the name.
+      if (kindLower === 'cnpgclusters') return _getCNPGClusterStatus(resource).text
+      if (kindLower === 'cnpgbackups') return _getCNPGBackupStatus(resource).text
+      if (kindLower === 'scheduledbackups' && _isApiGroup(resource.apiVersion, _CNPG_GROUP)) return _getCNPGScheduledBackupStatus(resource).text
+      if (kindLower === 'poolers' && _isApiGroup(resource.apiVersion, _CNPG_GROUP)) return _getCNPGPoolerStatus(resource).text
       // Generic CRDs: try status.phase, then Ready condition
       if (resource.status?.phase) return resource.status.phase
       {

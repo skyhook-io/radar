@@ -148,6 +148,20 @@ func GetClient() *Client {
 	return globalClient
 }
 
+// NewStandaloneClient returns a Helm client bound to an explicit rest.Config,
+// independent of the process-global client. Every action configuration it
+// builds targets exactly this config (restConfig wins in restClientGetter), so
+// a later kubeconfig context switch in the host process cannot retarget its
+// writes — the property the Cloud install flow depends on while a prepared
+// install waits for Hub approval.
+func NewStandaloneClient(restCfg *rest.Config) *Client {
+	ensureHelmWritablePaths()
+	return &Client{
+		settings:   cli.New(),
+		restConfig: rest.CopyConfig(restCfg),
+	}
+}
+
 // ResetClient clears the Helm client instance
 // This must be called before ReinitClient when switching contexts
 func ResetClient() {
@@ -362,6 +376,99 @@ func (c *Client) ListReleasesAcrossNamespaces(namespaces []string, username stri
 		return all[i].Name < all[j].Name
 	})
 	return all, nil
+}
+
+// ListManifestResourcesAcrossNamespaces returns resource declarations from the
+// latest stored manifest of each visible Helm release. It follows the same
+// namespace and impersonation rules as ListReleasesAcrossNamespaces.
+func (c *Client) ListManifestResourcesAcrossNamespaces(ctx context.Context, namespaces []string, username string, groups []string) ([]ReleaseManifestResource, []string, int, error) {
+	if namespaces == nil {
+		resources, parseErrors, err := c.listManifestResourcesAsUser(ctx, "", username, groups)
+		return resources, nil, parseErrors, err
+	}
+	all := []ReleaseManifestResource{}
+	var unavailable []string
+	var firstError error
+	parseErrors := 0
+	for index, namespace := range namespaces {
+		if err := ctx.Err(); err != nil {
+			unavailable = append(unavailable, namespaces[index:]...)
+			return all, unavailable, parseErrors, err
+		}
+		resources, namespaceParseErrors, err := c.listManifestResourcesAsUser(ctx, namespace, username, groups)
+		parseErrors += namespaceParseErrors
+		if err != nil {
+			unavailable = append(unavailable, namespace)
+			if IsForbiddenError(err) {
+				continue
+			}
+			if firstError == nil {
+				firstError = err
+			}
+			continue
+		}
+		all = append(all, resources...)
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].ReleaseNamespace != all[j].ReleaseNamespace {
+			return all[i].ReleaseNamespace < all[j].ReleaseNamespace
+		}
+		if all[i].ReleaseName != all[j].ReleaseName {
+			return all[i].ReleaseName < all[j].ReleaseName
+		}
+		return resourceRefKey(ResourceRef{
+			Kind: all[i].Resource.Kind, APIVersion: all[i].Resource.APIVersion,
+			Name: all[i].Resource.Name, Namespace: all[i].Resource.Namespace,
+		}) < resourceRefKey(ResourceRef{
+			Kind: all[j].Resource.Kind, APIVersion: all[j].Resource.APIVersion,
+			Name: all[j].Resource.Name, Namespace: all[j].Resource.Namespace,
+		})
+	})
+	return all, unavailable, parseErrors, firstError
+}
+
+func (c *Client) listManifestResourcesAsUser(ctx context.Context, namespace, username string, groups []string) ([]ReleaseManifestResource, int, error) {
+	var actionConfig *action.Configuration
+	var err error
+	if username == "" {
+		actionConfig, err = c.getActionConfig(namespace)
+	} else {
+		actionConfig, err = c.getActionConfigForUser(namespace, username, groups)
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := actionConfig.KubeClient.IsReachable(); err != nil {
+		return nil, 0, fmt.Errorf("failed to inspect helm manifests: %w", err)
+	}
+	client, err := helmStorageClient(username, groups)
+	if err != nil {
+		return nil, 0, err
+	}
+	snapshot, err := helmReleaseStorageSnapshotWithClient(client, namespace)
+	if err != nil {
+		return nil, 0, err
+	}
+	resources := []ReleaseManifestResource{}
+	parseErrors := 0
+	for _, rel := range snapshot.latest {
+		if err := ctx.Err(); err != nil {
+			return resources, parseErrors, err
+		}
+		if rel == nil {
+			continue
+		}
+		rendered, errors := parseManifestResourceObjects(rel.Manifest, rel.Namespace)
+		parseErrors += errors
+		for _, resource := range rendered {
+			resources = append(resources, ReleaseManifestResource{
+				ReleaseName: rel.Name, ReleaseNamespace: rel.Namespace,
+				Resource: OwnedResource{Kind: resource.Ref.Kind, APIVersion: resource.Ref.APIVersion, Name: resource.Ref.Name, Namespace: resource.Ref.Namespace},
+				Object:   resource.Object,
+			})
+		}
+	}
+	return resources, parseErrors, nil
 }
 
 func listReleasesWith(actionConfig *action.Configuration, namespace, username string, groups []string) ([]HelmRelease, error) {

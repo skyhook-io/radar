@@ -3,7 +3,7 @@
 // queue's identically-named helpers when both land. Issue-prefixed public
 // names are safe to surface.
 export { IssueRow, IssuesView } from './IssuesView';
-export type { IssueRowProps, IssueRowSlotContext, IssuesViewProps } from './IssuesView';
+export type { IssueDiagnosisSource, IssueRowProps, IssueRowSlotContext, IssuesViewProps } from './IssuesView';
 export { ResourceIssuesSection } from './ResourceIssuesSection';
 export { issueTiming } from './issue-timing';
 export type { IssueTimingDisplay, IssueTimingDisplayKind } from './issue-timing';

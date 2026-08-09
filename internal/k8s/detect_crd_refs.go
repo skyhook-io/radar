@@ -48,7 +48,7 @@ func detectRolloutMissingServices(cache *ResourceCache, dynamicCache *DynamicRes
 			}
 			seen[ref.name] = true
 			_, err := svcLister.Services(ro.GetNamespace()).Get(ref.name)
-			checked, exists := rolloutServiceLookupResult(ro.GetNamespace(), ro.GetName(), ref.name, err)
+			checked, exists := rolloutServiceLookupResult(cache, ro.GetNamespace(), ro.GetName(), ref.name, err)
 			if !checked || exists {
 				continue
 			}
@@ -63,15 +63,19 @@ func detectRolloutMissingServices(cache *ResourceCache, dynamicCache *DynamicRes
 	return out
 }
 
-func rolloutServiceLookupResult(namespace, rolloutName, serviceName string, err error) (checked bool, exists bool) {
-	if err == nil {
-		return true, true
+// rolloutServiceLookupResult applies the same coverage-gated tri-state as the
+// core missing-ref checks (refLookupResult): a lister miss is an authoritative
+// "Service missing" ONLY when the Services informer covers the Rollout's
+// namespace AND the error is a genuine NotFound. On a namespace-restricted
+// install the informer answers NotFound for every namespace it doesn't watch —
+// indistinguishable from true absence — so an uncovered miss is "couldn't
+// verify" (checked=false), never a false-warning. Non-NotFound errors are
+// likewise unverifiable; log them for observability but stay silent.
+func rolloutServiceLookupResult(cache *ResourceCache, namespace, rolloutName, serviceName string, err error) (checked bool, exists bool) {
+	if err != nil && !apierrors.IsNotFound(err) {
+		log.Printf("[missing-refs] failed to verify Rollout %s/%s service ref %s: %s", logsafe.Sanitize(namespace), logsafe.Sanitize(rolloutName), logsafe.Sanitize(serviceName), logsafe.Sanitize(err.Error()))
 	}
-	if apierrors.IsNotFound(err) {
-		return true, false
-	}
-	log.Printf("[missing-refs] failed to verify Rollout %s/%s service ref %s: %s", logsafe.Sanitize(namespace), logsafe.Sanitize(rolloutName), logsafe.Sanitize(serviceName), logsafe.Sanitize(err.Error()))
-	return false, false
+	return refLookupResult(cache, "services", namespace, err)
 }
 
 type namedRef struct {
@@ -159,7 +163,7 @@ func scaleTargetExists(cache *ResourceCache, dynamicCache *DynamicResourceCache,
 			return false, false
 		}
 		_, err := l.Deployments(namespace).Get(ref.name)
-		return scaleTargetLookupResult("Deployment", namespace, ref.name, err)
+		return scaleTargetLookupResult(cache, "deployments", "Deployment", namespace, ref.name, err)
 	case "StatefulSet":
 		if ref.apiGroup != "" && ref.apiGroup != "apps" {
 			return false, false
@@ -169,7 +173,7 @@ func scaleTargetExists(cache *ResourceCache, dynamicCache *DynamicResourceCache,
 			return false, false
 		}
 		_, err := l.StatefulSets(namespace).Get(ref.name)
-		return scaleTargetLookupResult("StatefulSet", namespace, ref.name, err)
+		return scaleTargetLookupResult(cache, "statefulsets", "StatefulSet", namespace, ref.name, err)
 	case "DaemonSet":
 		if ref.apiGroup != "" && ref.apiGroup != "apps" {
 			return false, false
@@ -179,7 +183,7 @@ func scaleTargetExists(cache *ResourceCache, dynamicCache *DynamicResourceCache,
 			return false, false
 		}
 		_, err := l.DaemonSets(namespace).Get(ref.name)
-		return scaleTargetLookupResult("DaemonSet", namespace, ref.name, err)
+		return scaleTargetLookupResult(cache, "daemonsets", "DaemonSet", namespace, ref.name, err)
 	case "Rollout":
 		if ref.apiGroup != "" && ref.apiGroup != "argoproj.io" {
 			return false, false
@@ -194,15 +198,18 @@ func scaleTargetExists(cache *ResourceCache, dynamicCache *DynamicResourceCache,
 	}
 }
 
-func scaleTargetLookupResult(kind, namespace, name string, err error) (checked bool, exists bool) {
-	if err == nil {
-		return true, true
+// scaleTargetLookupResult applies refLookupResult's coverage-gated tri-state to
+// a scaleTargetRef workload lookup. resource is the plural lowercase informer
+// key ("deployments", "statefulsets", "daemonsets"). A lister miss counts as an
+// authoritative "target missing" ONLY when that informer covers the namespace
+// and the error is NotFound; an uncovered miss (namespace-scoped RBAC) or a
+// non-NotFound error is "couldn't verify" so KEDA never gets a false
+// missing-scaleTargetRef warning on a scope-divergent install.
+func scaleTargetLookupResult(cache *ResourceCache, resource, kind, namespace, name string, err error) (checked bool, exists bool) {
+	if err != nil && !apierrors.IsNotFound(err) {
+		log.Printf("[missing-refs] failed to verify %s %s/%s scaleTargetRef: %s", logsafe.Sanitize(kind), logsafe.Sanitize(namespace), logsafe.Sanitize(name), logsafe.Sanitize(err.Error()))
 	}
-	if apierrors.IsNotFound(err) {
-		return true, false
-	}
-	log.Printf("[missing-refs] failed to verify %s %s/%s scaleTargetRef: %s", logsafe.Sanitize(kind), logsafe.Sanitize(namespace), logsafe.Sanitize(name), logsafe.Sanitize(err.Error()))
-	return false, false
+	return refLookupResult(cache, resource, namespace, err)
 }
 
 func dynamicScaleTargetExists(dynamicCache *DynamicResourceCache, gvr schema.GroupVersionResource, namespace, kind, name string) (checked bool, exists bool) {

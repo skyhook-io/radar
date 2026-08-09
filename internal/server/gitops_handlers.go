@@ -855,10 +855,20 @@ func (r *insightsResolver) ResourceProblems(group, kind, namespace, name string)
 		return nil
 	}
 	r.composeOnce.Do(func() {
-		r.composedFlat = issues.Compose(issues.NewCacheProvider(), issues.Filters{Namespaces: r.allowedNamespaces, Limit: issues.NoLimit})
+		r.composedFlat = issues.Compose(issues.NewCacheProvider(), issues.Filters{
+			Namespaces: r.allowedNamespaces,
+			Limit:      issues.NoLimit,
+			CanReadRelated: func(ref issues.Ref) bool {
+				return r.canAccess != nil && r.canAccess(ref.Group, ref.Kind, ref.Namespace, ref.Name)
+			},
+		})
 		r.composedGrouped = issues.GroupIssues(r.composedFlat)
 	})
-	related := issues.RelatedIssuesFrom(r.composedFlat, r.composedGrouped, group, kind, namespace, name)
+	related := issues.RelatedIssuesFrom(r.composedFlat, r.composedGrouped, issues.RelatedIssueOptions{
+		CanReadRelated: func(ref issues.Ref) bool {
+			return r.canAccess != nil && r.canAccess(ref.Group, ref.Kind, ref.Namespace, ref.Name)
+		},
+	}, group, kind, namespace, name)
 	out := make([]gitopsinsights.ResourceProblem, 0, len(related))
 	for _, iss := range related {
 		out = append(out, gitopsinsights.ResourceProblem{

@@ -597,6 +597,13 @@ func topOwnerForPodResolved(cache *ResourceCache, pod *corev1.Pod) *TopOwnerInfo
 	return topOwnerForPod(pod)
 }
 
+func TopOwnerForPod(cache *ResourceCache, pod *corev1.Pod) *TopOwnerInfo {
+	if pod == nil {
+		return nil
+	}
+	return topOwnerForPodResolved(cache, pod)
+}
+
 // controllerOwnerRef returns the controller=true ownerReference. Non-controller
 // ownerRefs are descriptive, not identity, and must not group issues.
 func controllerOwnerRef(refs []metav1.OwnerReference) *metav1.OwnerReference {

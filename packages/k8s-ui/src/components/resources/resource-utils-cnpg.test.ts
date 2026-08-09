@@ -1,5 +1,30 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { getCNPGClusterCertificateExpirations } from './resource-utils-cnpg'
+import {
+  getCNPGClusterCertificateExpirations,
+  getCNPGClusterStatus,
+  getCNPGBackupStatus,
+  getCNPGPoolerStatus,
+  getCNPGClusterInstancesReportedState,
+  getCNPGClusterBackupConfig,
+  getCNPGClusterBarmanPlugin,
+  getCNPGWALArchivingFailure,
+  getCNPGLastBackupFailure,
+  classifyCNPGClusterPhase,
+  classifyCNPGBackupPhase,
+  CNPG_CLUSTER_PHASES_HEALTHY,
+  CNPG_CLUSTER_PHASES_TRANSIENT,
+  CNPG_CLUSTER_PHASES_FAILING,
+  CNPG_CLUSTER_PHASES_TERMINAL,
+  CNPG_CLUSTER_PHASES_ATTENTION,
+  CNPG_BACKUP_PHASES_TRANSIENT,
+  CNPG_BARMAN_PLUGIN_NAME,
+  CNPG_GROUP,
+  isApiGroup,
+  getCNPGClusterDisplayState,
+  getCNPGClusterInstances,
+  getCNPGPoolerInstances,
+} from './resource-utils-cnpg'
+import { getCellFilterValue } from './resource-utils'
 
 describe('getCNPGClusterCertificateExpirations', () => {
   beforeEach(() => {
@@ -71,5 +96,506 @@ describe('getCNPGClusterCertificateExpirations', () => {
   it('returns empty list when no expirations are present', () => {
     expect(getCNPGClusterCertificateExpirations({})).toEqual([])
     expect(getCNPGClusterCertificateExpirations({ status: {} })).toEqual([])
+  })
+})
+
+// ============================================================================
+// PHASE TAXONOMY
+// ============================================================================
+
+const cluster = (status: any = {}, spec: any = {}) => ({ spec, status })
+
+describe('classifyCNPGClusterPhase', () => {
+  it('buckets every phase constant shipped by CNPG 1.27', () => {
+    for (const p of CNPG_CLUSTER_PHASES_HEALTHY) expect(classifyCNPGClusterPhase(p)).toBe('healthy')
+    for (const p of CNPG_CLUSTER_PHASES_TRANSIENT) expect(classifyCNPGClusterPhase(p)).toBe('transient')
+    for (const p of CNPG_CLUSTER_PHASES_FAILING) expect(classifyCNPGClusterPhase(p)).toBe('failing')
+    for (const p of CNPG_CLUSTER_PHASES_TERMINAL) expect(classifyCNPGClusterPhase(p)).toBe('terminal')
+    for (const p of CNPG_CLUSTER_PHASES_ATTENTION) expect(classifyCNPGClusterPhase(p)).toBe('attention')
+  })
+
+  it('matches on equality, not substring', () => {
+    // The bug this pins: "Upgrading Postgres major version" contains neither
+    // "Upgrading cluster" nor vice versa, but a sloppy includes() over the
+    // transient list would still have to enumerate it. Both must classify.
+    expect(classifyCNPGClusterPhase('Upgrading cluster')).toBe('transient')
+    expect(classifyCNPGClusterPhase('Upgrading Postgres major version')).toBe('transient')
+    // A phase that merely CONTAINS a known one must not inherit its bucket.
+    expect(classifyCNPGClusterPhase('Cluster in healthy state (probably)')).toBe('unknown')
+  })
+
+  it('classifies an unknown phase from a future CNPG minor as unknown', () => {
+    expect(classifyCNPGClusterPhase('Reticulating splines')).toBe('unknown')
+    expect(classifyCNPGClusterPhase('')).toBe('unknown')
+  })
+
+  it('has no invented entries — every listed phase is a real CNPG constant', () => {
+    // "Creating replica" was the shipped typo; CNPG emits "Creating a new replica".
+    expect(CNPG_CLUSTER_PHASES_TRANSIENT).toContain('Creating a new replica')
+    expect(CNPG_CLUSTER_PHASES_TRANSIENT).not.toContain('Creating replica')
+    // PhaseDefinitionInvalid is absent from 1.27 and 1.28 but present upstream
+    // after 1.28. Matching is by equality, so carrying it is inert against an
+    // operator that never emits it, and correct once one does.
+    expect(CNPG_CLUSTER_PHASES_TERMINAL).toContain('Invalid cluster definition')
+    expect(classifyCNPGClusterPhase('Invalid cluster definition')).toBe('terminal')
+  })
+})
+
+describe('getCNPGClusterStatus', () => {
+  it('renders an unrecoverable cluster red even when all pods are ready', () => {
+    // The shipped bug: readiness was checked first, so this fell through every
+    // phase list and landed on the neutral-grey fallback.
+    const s = getCNPGClusterStatus(cluster(
+      { phase: 'Cluster is unrecoverable and needs manual intervention', readyInstances: 3 },
+      { instances: 3 },
+    ))
+    expect(s.level).toBe('unhealthy')
+    expect(s.text).toBe('Unrecoverable')
+  })
+
+  it('renders both plugin-failure phases red', () => {
+    for (const phase of [
+      'Cluster cannot proceed to reconciliation due to an unknown plugin being required',
+      'Cluster cannot proceed to reconciliation due to an error while interacting with plugins',
+    ]) {
+      expect(getCNPGClusterStatus(cluster({ phase, readyInstances: 2 }, { instances: 2 })).level).toBe('unhealthy')
+    }
+  })
+
+  it('renders a major-version upgrade as transient, not unknown', () => {
+    const s = getCNPGClusterStatus(cluster({ phase: 'Upgrading Postgres major version', readyInstances: 1 }, { instances: 3 }))
+    expect(s.level).toBe('degraded')
+    expect(s.text).toBe('Major Upgrade')
+  })
+
+  it('uses the alert tier for failover, between degraded and unhealthy', () => {
+    expect(getCNPGClusterStatus(cluster({ phase: 'Failing over', readyInstances: 2 }, { instances: 3 })).level).toBe('alert')
+  })
+
+  it('treats zero ready instances as down regardless of phase', () => {
+    const s = getCNPGClusterStatus(cluster({ phase: 'Cluster in healthy state', readyInstances: 0 }, { instances: 3 }))
+    expect(s.level).toBe('unhealthy')
+    expect(s.text).toBe('Not Ready')
+  })
+
+  it('is healthy when the phase is healthy and all instances are ready', () => {
+    expect(getCNPGClusterStatus(cluster({ phase: 'Cluster in healthy state', readyInstances: 2 }, { instances: 2 })).level).toBe('healthy')
+  })
+
+  it('surfaces an unrecognized phase verbatim at unknown rather than guessing', () => {
+    const s = getCNPGClusterStatus(cluster({ phase: 'Some future phase', readyInstances: 2 }, { instances: 2 }))
+    expect(s.level).toBe('unknown')
+    expect(s.text).toBe('Some future phase')
+  })
+})
+
+describe('getCNPGBackupStatus', () => {
+  it('escalates walArchivingFailing instead of rendering it neutral', () => {
+    // The shipped bug: this phase hit the default branch and rendered grey,
+    // while it is CNPG telling you the recovery point is drifting.
+    const s = getCNPGBackupStatus({ status: { phase: 'walArchivingFailing' } })
+    expect(s.level).toBe('unhealthy')
+    expect(s.text).toBe('WAL Archiving Failing')
+  })
+
+  it('classifies every backup phase constant shipped by CNPG 1.27', () => {
+    expect(classifyCNPGBackupPhase('completed')).toBe('healthy')
+    expect(classifyCNPGBackupPhase('failed')).toBe('failed')
+    expect(classifyCNPGBackupPhase('walArchivingFailing')).toBe('walArchivingFailing')
+    for (const p of CNPG_BACKUP_PHASES_TRANSIENT) expect(classifyCNPGBackupPhase(p)).toBe('transient')
+  })
+
+  it('handles started and finalizing, which previously fell through to unknown', () => {
+    expect(getCNPGBackupStatus({ status: { phase: 'started' } }).level).toBe('degraded')
+    expect(getCNPGBackupStatus({ status: { phase: 'finalizing' } }).level).toBe('degraded')
+  })
+
+  it('leaves an unrecognized phase at unknown', () => {
+    expect(getCNPGBackupStatus({ status: { phase: 'wat' } }).level).toBe('unknown')
+    expect(getCNPGBackupStatus({}).level).toBe('unknown')
+  })
+})
+
+// ============================================================================
+// CONDITIONS — WAL ARCHIVING / LAST BACKUP
+// ============================================================================
+
+const withConditions = (...conds: any[]) => ({ status: { conditions: conds } })
+
+describe('getCNPGWALArchivingFailure', () => {
+  it('fires only when ContinuousArchiving is False', () => {
+    expect(getCNPGWALArchivingFailure(withConditions(
+      { type: 'ContinuousArchiving', status: 'True', reason: 'ContinuousArchivingSuccess' },
+    ))).toBeNull()
+
+    const f = getCNPGWALArchivingFailure(withConditions(
+      { type: 'ContinuousArchiving', status: 'False', reason: 'ContinuousArchivingFailing', message: 'boom', lastTransitionTime: '2026-04-28T10:00:00Z' },
+    ))
+    expect(f?.reason).toBe('ContinuousArchivingFailing')
+    expect(f?.lastTransitionTime).toBe('2026-04-28T10:00:00Z')
+  })
+
+  it('returns null when the condition is absent', () => {
+    expect(getCNPGWALArchivingFailure({})).toBeNull()
+    expect(getCNPGWALArchivingFailure(withConditions({ type: 'Ready', status: 'True' }))).toBeNull()
+  })
+})
+
+describe('getCNPGLastBackupFailure', () => {
+  it('ignores the in-flight BackupStarted state', () => {
+    // CNPG sets LastBackupSucceeded=False/BackupStarted while a backup is merely
+    // starting. Alerting on it would light the banner on every backup run.
+    expect(getCNPGLastBackupFailure(withConditions(
+      { type: 'LastBackupSucceeded', status: 'False', reason: 'BackupStarted' },
+    ))).toBeNull()
+  })
+
+  it('fires on a real LastBackupFailed', () => {
+    const f = getCNPGLastBackupFailure(withConditions(
+      { type: 'LastBackupSucceeded', status: 'False', reason: 'LastBackupFailed', message: 'no credentials' },
+    ))
+    expect(f?.reason).toBe('LastBackupFailed')
+    expect(f?.message).toBe('no credentials')
+  })
+})
+
+// ============================================================================
+// BUG 7 — timeLineID
+// ============================================================================
+
+describe('getCNPGClusterInstancesReportedState', () => {
+  it('reads CNPG\'s timeLineID spelling (capital L)', () => {
+    const state = getCNPGClusterInstancesReportedState({
+      status: {
+        instancesReportedState: {
+          'pg-main-1': { ip: '10.244.0.9', isPrimary: true, timeLineID: 3 },
+          'pg-main-2': { ip: '10.244.0.12', isPrimary: false, timeLineID: 3 },
+        },
+      },
+    })
+    expect(state).toHaveLength(2)
+    expect(state[0]).toMatchObject({ podName: 'pg-main-1', isPrimary: true, timelineID: 3, ip: '10.244.0.9' })
+    expect(state[1].timelineID).toBe(3)
+  })
+
+  it('does not read the lowercase timelineID spelling, which CNPG never emits', () => {
+    const state = getCNPGClusterInstancesReportedState({
+      status: { instancesReportedState: { 'pg-1': { isPrimary: true, timelineID: 9 } } },
+    })
+    expect(state[0].timelineID).toBeUndefined()
+  })
+})
+
+// ============================================================================
+// POOLER
+// ============================================================================
+
+describe('getCNPGPoolerStatus', () => {
+  it('does not claim readiness from status.instances, which counts scheduled pods', () => {
+    // Verified live: a Pooler whose 2 PgBouncer pods are both Pending (0/1
+    // ready) still reports status.instances=2. Calling that "Ready" renders a
+    // broken Pooler green.
+    const s = getCNPGPoolerStatus({ spec: { instances: 2 }, status: { instances: 2 } })
+    expect(s.level).toBe('healthy')
+    expect(s.text).toBe('Scheduled')
+    expect(s.text).not.toBe('Ready')
+  })
+
+  it('flags a shortfall in scheduled pods', () => {
+    expect(getCNPGPoolerStatus({ spec: { instances: 3 }, status: { instances: 1 } })).toMatchObject({ level: 'degraded' })
+    expect(getCNPGPoolerStatus({ spec: { instances: 3 }, status: { instances: 0 } })).toMatchObject({ level: 'unhealthy', text: 'Not Scheduled' })
+  })
+})
+
+// ============================================================================
+// BUG 6 — PLUGIN-AWARE BACKUP
+// ============================================================================
+
+describe('getCNPGClusterBarmanPlugin', () => {
+  it('detects the barman-cloud plugin and resolves the ObjectStore + server key', () => {
+    const p = getCNPGClusterBarmanPlugin({
+      metadata: { name: 'pg-main' },
+      spec: { plugins: [{ name: CNPG_BARMAN_PLUGIN_NAME, isWALArchiver: true, parameters: { barmanObjectName: 'store-a' } }] },
+    })
+    expect(p).toMatchObject({ barmanObjectName: 'store-a', isWALArchiver: true, serverName: 'pg-main' })
+  })
+
+  it('prefers an explicit serverName parameter over the cluster name', () => {
+    const p = getCNPGClusterBarmanPlugin({
+      metadata: { name: 'pg-main' },
+      spec: { plugins: [{ name: CNPG_BARMAN_PLUGIN_NAME, parameters: { barmanObjectName: 'store-a', serverName: 'custom' } }] },
+    })
+    expect(p?.serverName).toBe('custom')
+  })
+
+  it('ignores an explicitly disabled plugin and unrelated plugins', () => {
+    expect(getCNPGClusterBarmanPlugin({
+      spec: { plugins: [{ name: CNPG_BARMAN_PLUGIN_NAME, enabled: false }] },
+    })).toBeNull()
+    expect(getCNPGClusterBarmanPlugin({
+      spec: { plugins: [{ name: 'some-other.plugin.io' }] },
+    })).toBeNull()
+    expect(getCNPGClusterBarmanPlugin({ spec: {} })).toBeNull()
+  })
+})
+
+describe('getCNPGClusterBackupConfig', () => {
+  it('reports configured for a plugin-managed cluster with no in-tree stanza', () => {
+    // The shipped bug: plugin-migrated clusters render the whole backup section
+    // blank, indistinguishable from "no backups configured".
+    const cfg = getCNPGClusterBackupConfig({
+      metadata: { name: 'pg-main' },
+      spec: { plugins: [{ name: CNPG_BARMAN_PLUGIN_NAME, parameters: { barmanObjectName: 'store-a' } }] },
+      status: {},
+    })
+    expect(cfg.configured).toBe(true)
+    expect(cfg.rpoTrackedOnObjectStore).toBe(true)
+    expect(cfg.plugin?.barmanObjectName).toBe('store-a')
+  })
+
+  it('still reports in-tree config the old way', () => {
+    const cfg = getCNPGClusterBackupConfig({
+      spec: { backup: { barmanObjectStore: { destinationPath: 's3://b' }, retentionPolicy: '30d' } },
+      status: { lastSuccessfulBackup: '2026-04-28T00:00:00Z' },
+    })
+    expect(cfg).toMatchObject({ configured: true, destinationPath: 's3://b', retentionPolicy: '30d', plugin: null, rpoTrackedOnObjectStore: false })
+  })
+
+  it('reports not-configured when neither path is present', () => {
+    expect(getCNPGClusterBackupConfig({ spec: {}, status: {} }).configured).toBe(false)
+  })
+})
+
+describe('isApiGroup', () => {
+  it('matches the exact group, not a substring of it', () => {
+    expect(isApiGroup('postgresql.cnpg.io/v1', CNPG_GROUP)).toBe(true)
+    // A vendor sub-group contains the CNPG group as a substring but is not it.
+    expect(isApiGroup('extension.postgresql.cnpg.io/v1', CNPG_GROUP)).toBe(false)
+    expect(isApiGroup('barmancloud.cnpg.io/v1', CNPG_GROUP)).toBe(false)
+    expect(isApiGroup('backup.velero.io/v1', 'velero.io')).toBe(false)
+    expect(isApiGroup('velero.io/v1', 'velero.io')).toBe(true)
+  })
+
+  it('rejects core-group and malformed apiVersions', () => {
+    expect(isApiGroup('v1', CNPG_GROUP)).toBe(false)
+    expect(isApiGroup('/v1', CNPG_GROUP)).toBe(false)
+    expect(isApiGroup(undefined, CNPG_GROUP)).toBe(false)
+    expect(isApiGroup(null, CNPG_GROUP)).toBe(false)
+  })
+})
+
+describe('CNPG_CLUSTER_PHASES_ATTENTION', () => {
+  it('excludes the operator-driven rollout delay', () => {
+    // "Cluster upgrade delayed" is postponed by the operator's own config and
+    // requeued — nothing waits on a human.
+    expect(CNPG_CLUSTER_PHASES_ATTENTION).not.toContain('Cluster upgrade delayed')
+    expect(CNPG_CLUSTER_PHASES_TRANSIENT).toContain('Cluster upgrade delayed')
+    expect(classifyCNPGClusterPhase('Cluster upgrade delayed')).toBe('transient')
+  })
+})
+
+// The badge and the Go issue detector must agree on the same object. These
+// fixtures are mirrored in internal/issues/source_cnpg_test.go
+// (TestCNPGBadgeAndIssueAgreeOnReadiness) — change one, change both.
+describe('badge/issue agreement on instance readiness', () => {
+  it('does not render Healthy while the detector reports a shortfall', () => {
+    // CNPG sets "Cluster in healthy state" once reconciliation settles, which
+    // can be true while instances are still missing. Returning Healthy here put
+    // a green badge on a cluster the Go side flags CNPGClusterDegraded.
+    const s = getCNPGClusterStatus(cluster({ phase: 'Cluster in healthy state', readyInstances: 1 }, { instances: 3 }))
+    expect(s.level).toBe('degraded')
+    expect(s.text).toBe('Degraded')
+  })
+
+  it('still renders Healthy only when the count is actually met', () => {
+    expect(getCNPGClusterStatus(cluster({ phase: 'Cluster in healthy state', readyInstances: 3 }, { instances: 3 })).level).toBe('healthy')
+  })
+
+  it('lets a transient phase explain a legitimate shortfall', () => {
+    // Go marks these phaseExplained and raises no issue, so the badge must not
+    // say "Degraded" either — it shows the phase, at the same amber tier.
+    const s = getCNPGClusterStatus(cluster({ phase: 'Creating a new replica', readyInstances: 1 }, { instances: 3 }))
+    expect(s.level).toBe('degraded')
+    expect(s.text).toBe('Creating Replica')
+  })
+
+  it('lets an attention phase explain a shortfall, matching the supervised Go path', () => {
+    // Go marks attention phases phaseExplained regardless of update strategy,
+    // so a supervised cluster waiting on a human raises no shortfall issue —
+    // the badge must show the phase, not "Degraded".
+    const s = getCNPGClusterStatus(cluster({ phase: 'Waiting for user action', readyInstances: 1 }, { instances: 3 }))
+    expect(s.level).toBe('degraded')
+    expect(s.text).toBe('Needs Action')
+  })
+
+  it('flags a shortfall under an unrecognized phase, matching the Go fallthrough', () => {
+    expect(getCNPGClusterStatus(cluster({ phase: 'Some future phase', readyInstances: 1 }, { instances: 3 })).level).toBe('degraded')
+  })
+})
+
+// ============================================================================
+// DISPLAY STATES — a badge carries a state, the drawer carries the prose
+// ============================================================================
+
+describe('getCNPGClusterDisplayState', () => {
+  it('maps every mapped phase to something a badge can hold', () => {
+    // 127px is the label budget at w-44. The longest state must clear it with
+    // real headroom — not the 0.2px kind that has bitten three times.
+    const all = [
+      ...CNPG_CLUSTER_PHASES_TERMINAL,
+      ...CNPG_CLUSTER_PHASES_TRANSIENT,
+      ...CNPG_CLUSTER_PHASES_ATTENTION,
+    ]
+    for (const phase of all) {
+      const state = getCNPGClusterDisplayState(phase)
+      expect(state, `${phase} has no display state`).not.toBe(phase)
+      // Rough proxy for width in a unit test; the real measurement is in the
+      // PR. 22 chars ≈ 120px at this typography.
+      expect(state.length, `${state} is too long for a badge`).toBeLessThanOrEqual(22)
+    }
+  })
+
+  it('passes an unmapped phase through verbatim rather than inventing one', () => {
+    // A phase from a newer CNPG minor. Inventing a state for a string we have
+    // never seen would be worse than showing the operator's words.
+    expect(getCNPGClusterDisplayState('Reticulating splines')).toBe('Reticulating splines')
+    expect(getCNPGClusterDisplayState('')).toBe('')
+  })
+
+  it('collapses both restart phases to one state — a documented loss', () => {
+    // You cannot tell from the table which restart mechanism is in play. The
+    // exact phase stays in the drawer; splitting them needs ~140px.
+    expect(getCNPGClusterDisplayState('Primary instance is being restarted in-place')).toBe('Restarting Primary')
+    expect(getCNPGClusterDisplayState('Primary instance is being restarted without a switchover')).toBe('Restarting Primary')
+  })
+
+  it('renders the state, not the sentence, on the badge', () => {
+    const s = getCNPGClusterStatus(cluster(
+      { phase: 'Cluster is unrecoverable and needs manual intervention', readyInstances: 2 },
+      { instances: 2 },
+    ))
+    expect(s.text).toBe('Unrecoverable')
+    expect(s.level).toBe('unhealthy')
+  })
+})
+
+describe('status column filter reads the badge, not the raw phase', () => {
+  // Deliberately asserts LITERAL strings rather than comparing against
+  // getCNPGClusterStatus(...).text — both sides would call the same reader and
+  // the test would pass while both were wrong. These are the strings a user
+  // sees on a badge, so the dropdown must offer exactly them.
+  const CLUSTER = 'cnpgclusters'
+
+  it('offers the short state, not CNPG prose', () => {
+    expect(getCellFilterValue(
+      cluster({ phase: 'Cluster is unrecoverable and needs manual intervention', readyInstances: 2 }, { instances: 2 }),
+      'status', CLUSTER,
+    )).toBe('Unrecoverable')
+
+    expect(getCellFilterValue(
+      cluster({ phase: 'Cluster in healthy state', readyInstances: 2 }, { instances: 2 }),
+      'status', CLUSTER,
+    )).toBe('Healthy')
+  })
+
+  it('separates a WAL-archiving failure from healthy — they share a phase', () => {
+    // The defect this pins: both clusters report `Cluster in healthy state`,
+    // so filtering on the raw phase collapsed them into one option and the
+    // headline state of this integration could not be filtered for at all.
+    const healthy = cluster({ phase: 'Cluster in healthy state', readyInstances: 2 }, { instances: 2 })
+    const walFailing = cluster({
+      phase: 'Cluster in healthy state',
+      readyInstances: 2,
+      conditions: [{ type: 'ContinuousArchiving', status: 'False', reason: 'ContinuousArchivingFailing' }],
+    }, { instances: 2 })
+
+    expect(healthy.status.phase).toBe(walFailing.status.phase)
+    expect(getCellFilterValue(healthy, 'status', CLUSTER)).toBe('Healthy')
+    expect(getCellFilterValue(walFailing, 'status', CLUSTER)).toBe('WAL Archiving Failing')
+  })
+
+  it('covers the other three CNPG kinds', () => {
+    expect(getCellFilterValue({ status: { phase: 'completed' } }, 'status', 'cnpgbackups')).toBe('Completed')
+    expect(getCellFilterValue(
+      { apiVersion: 'postgresql.cnpg.io/v1', spec: { suspend: true } }, 'status', 'scheduledbackups',
+    )).toBe('Suspended')
+    expect(getCellFilterValue(
+      { apiVersion: 'postgresql.cnpg.io/v1', spec: { instances: 2 }, status: { instances: 2 } }, 'status', 'poolers',
+    )).toBe('Scheduled')
+  })
+
+  it('leaves a foreign CRD sharing the plural on the generic path', () => {
+    // `poolers`/`scheduledbackups` are bare plurals — another operator could
+    // ship them, and it must not be read through a CNPG accessor.
+    expect(getCellFilterValue(
+      { apiVersion: 'pooling.example.com/v1', status: { phase: 'Running' } }, 'status', 'poolers',
+    )).toBe('Running')
+  })
+})
+
+describe('an unknown phase outranks the Ready condition', () => {
+  // The decision this pins: a phase from a newer CNPG minor renders verbatim.
+  // A Ready=True condition read first would turn it into a green "Ready" badge
+  // — health asserted from a signal that does not establish it.
+  const withPhase = (phase: string, ready?: string) => ({
+    spec: { instances: 2 },
+    status: {
+      phase,
+      readyInstances: 2,
+      ...(ready ? { conditions: [{ type: 'Ready', status: ready, reason: 'ClusterIsReady' }] } : {}),
+    },
+  })
+
+  it('shows the operator words, not Ready, when Ready=True', () => {
+    const s = getCNPGClusterStatus(withPhase('Rebalancing shards across zones', 'True'))
+    expect(s.text).toBe('Rebalancing shards across zones')
+    expect(s.level).toBe('unknown')
+  })
+
+  it('keeps the red when Ready=False, still showing the phase', () => {
+    const s = getCNPGClusterStatus(withPhase('Rebalancing shards across zones', 'False'))
+    expect(s.text).toBe('Rebalancing shards across zones')
+    expect(s.level).toBe('unhealthy')
+  })
+
+  it('falls back to the condition only when there is no phase at all', () => {
+    expect(getCNPGClusterStatus(withPhase('', 'True')).text).toBe('Ready')
+    expect(getCNPGClusterStatus(withPhase('', 'False')).text).toBe('ClusterIsReady')
+    expect(getCNPGClusterStatus({ spec: {}, status: {} }).text).toBe('Unknown')
+  })
+})
+
+describe('an absent count is unknown, never zero', () => {
+  // The window this covers is ordinary: between creation and the operator's
+  // first status write. Brief, common, and exactly when someone is watching.
+  it('Cluster instances cell renders a dash, not 0', () => {
+    expect(getCNPGClusterInstances({ spec: { instances: 3 }, status: {} })).toBe('-/3')
+    expect(getCNPGClusterInstances({ spec: {}, status: {} })).toBe('-/-')
+    expect(getCNPGClusterInstances({ spec: { instances: 3 }, status: { readyInstances: 0 } })).toBe('0/3')
+    expect(getCNPGClusterInstances({ spec: { instances: 3 }, status: { readyInstances: 3 } })).toBe('3/3')
+  })
+
+  it('does not contradict the badge during that window', () => {
+    // The pairing IS the claim: a cell reading 0/3 beside a badge that does not
+    // say degraded is the contradiction this integration exists to remove.
+    const fresh = { spec: { instances: 3 }, status: { phase: 'Setting up primary' } }
+    expect(getCNPGClusterInstances(fresh)).toBe('-/3')
+    expect(getCNPGClusterStatus(fresh).level).not.toBe('unhealthy')
+  })
+
+  it('Pooler instances cell renders a dash, not 0', () => {
+    expect(getCNPGPoolerInstances({ spec: { instances: 2 }, status: {} })).toBe('-/2')
+    expect(getCNPGPoolerInstances({ spec: { instances: 2 }, status: { instances: 0 } })).toBe('0/2')
+  })
+
+  it('Pooler badge says Unknown, not a red Not Scheduled', () => {
+    // Sharper than the cell: reading absence as 0 fabricated a FAILURE, so an
+    // unreconciled Pooler went red on a state nobody had reported yet.
+    const fresh = { spec: { instances: 2 }, status: {} }
+    expect(getCNPGPoolerStatus(fresh)).toMatchObject({ text: 'Unknown', level: 'unknown' })
+    expect(getCNPGPoolerStatus({ spec: { instances: 2 }, status: { instances: 0 } }))
+      .toMatchObject({ text: 'Not Scheduled', level: 'unhealthy' })
+    expect(getCNPGPoolerStatus({ spec: { instances: 2 }, status: { instances: 2 } }))
+      .toMatchObject({ text: 'Scheduled', level: 'healthy' })
   })
 })

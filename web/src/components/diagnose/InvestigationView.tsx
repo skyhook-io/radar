@@ -46,10 +46,21 @@ export function InvestigationView({
   const { kind, namespace, name } = run;
   // Apply is off for hosted agents (read-only server-side). Keyed on the selected
   // agent, which matches run.agent unless a deployment mixes hosted + local agents.
-  const { refreshRuns, openInvestigation, startError, hosted } = useDiagnose();
+  const { refreshRuns, openInvestigation, startError, dismissError, hosted } =
+    useDiagnose();
+  // Re-run means look again, so it asks for a new session explicitly and only
+  // carries the issue forward — being handed the previous answer is the one
+  // thing someone clicking this doesn't want.
   const retryDiagnosis = useCallback(
-    () => openInvestigation({ kind, namespace, name }),
-    [openInvestigation, kind, namespace, name],
+    () =>
+      openInvestigation({
+        kind,
+        namespace,
+        name,
+        issueId: run.issueId,
+        fresh: true,
+      }),
+    [openInvestigation, kind, namespace, name, run.issueId],
   );
   const queryClient = useQueryClient();
   const [turns, setTurns] = useState<Turn[]>([]);
@@ -470,7 +481,7 @@ export function InvestigationView({
                   </span>
                 </div>
                 <button
-                  onClick={() => openInvestigation({ kind, namespace, name })}
+                  onClick={retryDiagnosis}
                   className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-amber-500/50 px-2.5 py-1 font-medium text-amber-600 hover:bg-amber-500/10 dark:text-amber-400"
                 >
                   <Send className="h-3 w-3" />
@@ -489,7 +500,7 @@ export function InvestigationView({
                   </span>
                 </div>
                 <button
-                  onClick={() => openInvestigation({ kind, namespace, name })}
+                  onClick={retryDiagnosis}
                   className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-theme-border px-2.5 py-1 font-medium text-theme-text-primary hover:bg-theme-hover"
                 >
                   <Send className="h-3 w-3" />
@@ -525,10 +536,36 @@ export function InvestigationView({
                 />
               );
             })}
-            {(actionError || startError) && (
+            {actionError && (
               <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-theme-text-primary">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
-                <span>{actionError || startError}</span>
+                <span>{actionError}</span>
+              </div>
+            )}
+            {/* A start that failed belongs to the investigation that never began,
+                not to the one on screen. Unlabelled at the foot of a finished
+                transcript — verdict directly above — it reads as "this
+                investigation failed". It also outlives the click that caused it,
+                and this is the only place it surfaces while a run is focused, so
+                it needs a way out. */}
+            {startError && (
+              <div
+                role="alert"
+                className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-theme-text-primary"
+              >
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium">
+                    Couldn&apos;t start a new investigation
+                  </div>
+                  <div className="text-theme-text-secondary">{startError}</div>
+                </div>
+                <button
+                  onClick={dismissError}
+                  className="shrink-0 rounded px-1.5 py-0.5 text-xs text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
+                >
+                  Dismiss
+                </button>
               </div>
             )}
           </div>

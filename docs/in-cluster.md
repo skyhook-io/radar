@@ -39,6 +39,65 @@ helm upgrade --install radar skyhook/radar \
   -n radar -f values.yaml
 ```
 
+### Subpath Ingress (No Strip-Prefix)
+
+If your ingress forwards `/radar/...` to the Radar service as `/radar/...`, set `basePath` to the same prefix:
+
+```yaml
+# values.yaml
+basePath: /radar
+
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: tools.your-domain.com
+      paths:
+        - path: /radar
+          pathType: Prefix
+```
+
+Then open `https://tools.your-domain.com/radar/`. Do not set `basePath` when your ingress already rewrites `/radar` to `/`.
+
+Path segments accept letters, digits, `-`, `_`, `.` and `~`. Radar serves the app
+**only** under the prefix — requests to unprefixed paths get a 404, so update any
+external health checks or scrapers that hit `/api/health` or `/metrics` directly
+(the chart's own probes follow `basePath` automatically). `basePath` is not
+supported together with Radar Cloud (`--cloud-url`), which owns the URL path
+itself.
+
+**Every URL you hand to an external system must include the prefix.** With OIDC
+that means the values you register with your identity provider:
+
+```yaml
+basePath: /radar
+auth:
+  oidc:
+    redirectURL: https://tools.your-domain.com/radar/auth/callback           # not /auth/callback
+    postLogoutRedirectURL: https://tools.your-domain.com/radar/              # not /
+    # With backchannelLogout, the URI registered at the IdP is likewise
+    # https://tools.your-domain.com/radar/auth/backchannel-logout
+```
+
+Radar's callback route lives at `{basePath}/auth/callback`, so a redirect URL
+without the prefix sends the IdP to a path the ingress doesn't route to Radar and
+login ends in a 404.
+
+**Give each instance its own hostname.** Two Radars behind subpaths on one
+hostname (`/radar-a`, `/radar-b`) are the same browser origin, so they share
+browser state: the session cookie is set at `Path=/`, and `localStorage` — which
+holds the theme, log-viewer preferences and similar per-instance settings — is
+scoped per origin with no path-scoped equivalent in the platform at all. Logging
+into one can end the other's session, and preferences set in one show up in the
+other. A hostname each keeps them properly separate.
+
+Separately from that: a Radar per cluster gives you a view per cluster. Each
+watches only its own cluster and carries its own upgrades, ingress and auth
+config, with no cross-cluster search or combined issue list across them. If you
+want several clusters in one view, that is what
+[Radar Cloud](https://radarhq.io) is for, and its agent dials out so there is no
+per-cluster ingress to wire up.
+
 ### With Basic Authentication
 
 1. **Create the auth secret:**
@@ -310,6 +369,7 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `ingress.enabled` | Enable ingress | `false` |
 | `ingress.className` | Ingress class | `""` |
 | `service.port` | Service port | `9280` |
+| `basePath` | URL prefix Radar serves under, e.g. `/radar` for no-strip-prefix subpath ingress | `""` |
 | `mcp.enabled` | Enable MCP server for AI tools | `true` |
 | `debug.image` | Image for ephemeral debug containers and node debug pods. In built-in restricted PodSecurity namespaces, pod debug containers may retry as the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. | `""` (busybox:latest) |
 | `listPageSize` | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) on very large clusters that fail to sync; `0` = off, try `2000`. Only used when the apiserver lacks WatchList streaming. | `0` |

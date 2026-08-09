@@ -130,6 +130,52 @@ func TestDedupeWorkloadDegradedOverChild_Phase0(t *testing.T) {
 	})
 }
 
+func TestDedupeRepeatedCronJobFailureOverChild(t *testing.T) {
+	cronSubject := Ref{Group: "batch", Kind: "CronJob", Namespace: "ns", Name: "nightly"}
+	repeated := Issue{
+		Source: SourceProblem, Group: "batch", Kind: "CronJob", Namespace: "ns", Name: "nightly",
+		Category: issuesapi.CategoryCronJobFailed, Severity: SeverityWarning, Reason: "repeated-without-success",
+	}
+	child := Issue{
+		Source: SourceProblem, Kind: "Pod", Namespace: "ns", Name: "nightly-123",
+		Owner: cronSubject, Category: issuesapi.CategoryCrashLoop, Severity: SeverityWarning,
+	}
+
+	t.Run("equal-or-worse child symptom replaces the schedule rollup", func(t *testing.T) {
+		out := dedupeRepeatedCronJobFailureOverChild([]Issue{repeated, child})
+		if len(out) != 1 || out[0].Category != issuesapi.CategoryCrashLoop {
+			t.Fatalf("got %+v", out)
+		}
+	})
+
+	t.Run("stale CronJob remains an independent schedule failure", func(t *testing.T) {
+		stale := repeated
+		stale.Reason = "stale"
+		out := dedupeRepeatedCronJobFailureOverChild([]Issue{stale, child})
+		if len(out) != 2 {
+			t.Fatalf("stale row was folded: %+v", out)
+		}
+	})
+
+	t.Run("different subject does not fold", func(t *testing.T) {
+		other := child
+		other.Owner.Name = "other"
+		out := dedupeRepeatedCronJobFailureOverChild([]Issue{repeated, other})
+		if len(out) != 2 {
+			t.Fatalf("unrelated child folded the CronJob: %+v", out)
+		}
+	})
+
+	t.Run("lower-severity child does not downgrade the rollup", func(t *testing.T) {
+		critical := repeated
+		critical.Severity = SeverityCritical
+		out := dedupeRepeatedCronJobFailureOverChild([]Issue{critical, child})
+		if len(out) != 2 {
+			t.Fatalf("critical rollup was folded into warning child: %+v", out)
+		}
+	})
+}
+
 func TestStructuralRootOverSymptom_Phase1(t *testing.T) {
 	dep := Ref{Group: "apps", Kind: "Deployment", Namespace: "ns", Name: "web"}
 
@@ -161,6 +207,17 @@ func TestStructuralRootOverSymptom_Phase1(t *testing.T) {
 		}
 		if !has(out, SourceMissingRef, issuesapi.CategoryMissingConfigRef, "web-abc") {
 			t.Fatalf("missing-ref root should survive, got %+v", out)
+		}
+	})
+
+	t.Run("missing required key folds container_waiting on same pod", func(t *testing.T) {
+		missing := Issue{Source: SourceMissingRef, Kind: "Pod", Namespace: "ns", Name: "web-abc", Owner: dep,
+			Category: issuesapi.CategoryMissingConfigRef, Reason: "Missing ConfigMap key", Severity: SeverityCritical}
+		waiting := Issue{Source: SourceProblem, Kind: "Pod", Namespace: "ns", Name: "web-abc", Owner: dep,
+			Category: issuesapi.CategoryContainerWaiting, Reason: "CreateContainerConfigError", Severity: SeverityCritical}
+		out := dedupeContainerWaitingOverMissingRef([]Issue{missing, waiting})
+		if has(out, SourceProblem, issuesapi.CategoryContainerWaiting, "web-abc") || !has(out, SourceMissingRef, issuesapi.CategoryMissingConfigRef, "web-abc") {
+			t.Fatalf("missing-key root should replace container-waiting symptom, got %+v", out)
 		}
 	})
 

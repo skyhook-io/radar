@@ -1,5 +1,4 @@
 import { ArchiveRestore, Filter } from 'lucide-react'
-import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
 import {
   getRestoreStatus,
@@ -13,7 +12,11 @@ import {
   getRestoreWarnings,
   getRestorePVs,
   getRestoreExistingResourcePolicy,
+  getRestoreValidationErrors,
+  isBackupActivePhase,
+  isBackupPartialFailurePhase,
 } from '../resource-utils-velero'
+import { VeleroPhaseValue } from './velero-cells'
 import { formatAge } from '../resource-utils'
 
 interface VeleroRestoreRendererProps {
@@ -32,9 +35,12 @@ export function VeleroRestoreRenderer({ data }: VeleroRestoreRendererProps) {
   const includedResources = getRestoreIncludedResources(data)
   const excludedResources = getRestoreExcludedResources(data)
 
+  const phase = status.phase || ''
+  const validationErrors = getRestoreValidationErrors(data)
   const isFailed = restoreStatus.level === 'unhealthy'
-  const isPartiallyFailed = restoreStatus.text === 'PartiallyFailed'
-  const isInProgress = restoreStatus.text === 'InProgress'
+  const isValidationFailure = phase === 'FailedValidation'
+  const isPartiallyFailed = isBackupPartialFailurePhase(phase)
+  const isInProgress = isBackupActivePhase(phase)
 
   // Progress data
   const progress = status.progress
@@ -45,14 +51,31 @@ export function VeleroRestoreRenderer({ data }: VeleroRestoreRendererProps) {
   return (
     <>
       {/* Problem alerts */}
-      {(isFailed || isPartiallyFailed) && (
+      {isValidationFailure && (
         <AlertBanner
           variant="error"
-          title={isFailed ? 'Restore Failed' : 'Restore Partially Failed'}
-          message={status.failureReason || `${errors} error(s) occurred during restore.`}
+          title="Restore Validation Failed"
+          message={status.failureReason || 'Velero rejected this restore before it started — nothing was restored.'}
+          items={validationErrors.length > 0 ? validationErrors : undefined}
         />
       )}
-      {warnings > 0 && !isFailed && (
+      {isFailed && !isValidationFailure && (
+        <AlertBanner
+          variant="error"
+          title="Restore Failed"
+          message={status.failureReason || `${errors} error(s) occurred during restore.`}
+          items={validationErrors.length > 0 ? validationErrors : undefined}
+        />
+      )}
+      {isPartiallyFailed && (
+        <AlertBanner
+          variant="warning"
+          title="Restore Partially Failed"
+          message={status.failureReason || `${errors} error(s) occurred — some items were not restored.`}
+          items={validationErrors.length > 0 ? validationErrors : undefined}
+        />
+      )}
+      {warnings > 0 && !isFailed && !isPartiallyFailed && (
         <AlertBanner
           variant="warning"
           title={`${warnings} Warning(s)`}
@@ -64,9 +87,7 @@ export function VeleroRestoreRenderer({ data }: VeleroRestoreRendererProps) {
       <Section title="Status" icon={ArchiveRestore} defaultExpanded>
         <PropertyList>
           <Property label="Phase" value={
-            <span className={clsx('badge', restoreStatus.color)}>
-              {restoreStatus.text}
-            </span>
+            <VeleroPhaseValue status={restoreStatus} phase={phase} />
           } />
           <Property label="Backup" value={getRestoreBackupName(data)} />
           {status.startTimestamp && (

@@ -1,6 +1,8 @@
 import { Server, Settings, Shield, Cpu, Tag, BarChart3 } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown } from '../../ui/drawer-components'
 import { kindToPlural } from '../../../utils/navigation'
+import { formatCPUString, formatMemoryString } from '../../../utils/format'
+import { Badge } from '../../ui/Badge'
 import {
   getNodePoolStatus,
   getNodePoolNodeClassRef,
@@ -9,22 +11,14 @@ import {
   getNodePoolWeight,
 } from '../resource-utils-karpenter'
 
-function formatCpuCores(value: unknown): string {
-  const quantity = String(value)
-  if (quantity.endsWith('m')) {
-    const millis = parseInt(quantity, 10)
-    if (!isNaN(millis)) return String(millis / 1000)
-  }
-  return quantity
-}
-
-
 interface KarpenterNodePoolRendererProps {
   data: any
   onNavigate?: (ref: { kind: string; namespace: string; name: string; group?: string }) => void
+  /** Host-wired: opens this pool in the Capacity view (only hosts that ship it pass this). */
+  onOpenCapacity?: () => void
 }
 
-export function KarpenterNodePoolRenderer({ data, onNavigate }: KarpenterNodePoolRendererProps) {
+export function KarpenterNodePoolRenderer({ data, onNavigate, onOpenCapacity }: KarpenterNodePoolRendererProps) {
   const status = data.status || {}
   const spec = data.spec || {}
   const conditions = status.conditions || []
@@ -38,6 +32,7 @@ export function KarpenterNodePoolRenderer({ data, onNavigate }: KarpenterNodePoo
   const disruption = spec.disruption || {}
   const templateLabels = spec.template?.metadata?.labels || {}
   const templateExpireAfter = spec.template?.spec?.expireAfter
+  const terminationGracePeriod = spec.template?.spec?.terminationGracePeriod
   const nodeClassRef = spec.template?.spec?.nodeClassRef
   const templateTaints = spec.template?.spec?.taints || []
   const templateStartupTaints = spec.template?.spec?.startupTaints || []
@@ -45,6 +40,18 @@ export function KarpenterNodePoolRenderer({ data, onNavigate }: KarpenterNodePoo
 
   return (
     <>
+      {onOpenCapacity && (
+        <div className="mb-3">
+          <button
+            type="button"
+            onClick={onOpenCapacity}
+            className="text-xs font-medium text-accent-text hover:underline"
+          >
+            Open in Capacity — ledger, workloads, demand →
+          </button>
+        </div>
+      )}
+
       {/* Problem alert */}
       {isNotReady && !operationalIssuesShown && (
         <AlertBanner
@@ -91,20 +98,23 @@ export function KarpenterNodePoolRenderer({ data, onNavigate }: KarpenterNodePoo
         </PropertyList>
       </Section>
 
-      {/* Resource Usage — from status.resources vs spec.limits */}
+      {/* Karpenter reports provisioned resources here, not workload utilization. */}
       {(statusResources.cpu || statusResources.memory) && (
-        <Section title="Resource Usage" icon={BarChart3} defaultExpanded>
+        <Section title="Provisioned Capacity" icon={BarChart3} defaultExpanded>
+          <p className="mb-2 text-xs text-theme-text-tertiary">
+            Resources provisioned by this NodePool versus its configured ceiling. This is not live workload usage.
+          </p>
           <PropertyList>
             {statusResources.cpu && (
               <Property
                 label="CPU"
-                value={`${formatCpuCores(statusResources.cpu)}${spec.limits?.cpu ? ` / ${formatCpuCores(spec.limits.cpu)}` : ''}`}
+                value={`${formatCPUString(String(statusResources.cpu))} provisioned${spec.limits?.cpu ? ` / ${formatCPUString(String(spec.limits.cpu))} limit` : ''}`}
               />
             )}
             {statusResources.memory && (
               <Property
                 label="Memory"
-                value={`${statusResources.memory}${spec.limits?.memory ? ` / ${spec.limits.memory}` : ''}`}
+                value={`${formatMemoryString(String(statusResources.memory))} provisioned${spec.limits?.memory ? ` / ${formatMemoryString(String(spec.limits.memory))} limit` : ''}`}
               />
             )}
           </PropertyList>
@@ -121,6 +131,9 @@ export function KarpenterNodePoolRenderer({ data, onNavigate }: KarpenterNodePoo
           {(disruption.expireAfter || templateExpireAfter) && (
             <Property label="Expire After" value={disruption.expireAfter || templateExpireAfter} />
           )}
+          {terminationGracePeriod && (
+            <Property label="Termination Grace Period" value={terminationGracePeriod} />
+          )}
         </PropertyList>
         {disruption.budgets && disruption.budgets.length > 0 && (
           <div className="mt-2 space-y-1">
@@ -130,6 +143,11 @@ export function KarpenterNodePoolRenderer({ data, onNavigate }: KarpenterNodePoo
                 {budget.nodes && <span>Nodes: {budget.nodes}</span>}
                 {budget.schedule && <span className="ml-2">Schedule: {budget.schedule}</span>}
                 {budget.duration && <span className="ml-2">Duration: {budget.duration}</span>}
+                {budget.reasons?.length > 0 && (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {budget.reasons.map((reason: string) => <Badge key={reason} tone="structural" size="sm">{reason}</Badge>)}
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -193,6 +211,7 @@ export function KarpenterNodePoolRenderer({ data, onNavigate }: KarpenterNodePoo
                 <div className="flex items-center gap-2 text-sm">
                   <span className="text-theme-text-primary font-medium">{req.key}</span>
                   <span className="text-theme-text-tertiary">{req.operator}</span>
+                  {req.minValues !== undefined && <Badge tone="note" size="sm">min {req.minValues}</Badge>}
                 </div>
                 {req.values && req.values.length > 0 && (
                   <div className="mt-1 flex flex-wrap gap-1">

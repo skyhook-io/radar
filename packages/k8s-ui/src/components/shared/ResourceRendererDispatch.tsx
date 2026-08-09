@@ -51,9 +51,19 @@ import { getNodePoolStatus, getNodeClaimStatus, getEC2NodeClassStatus } from '..
 import { getScaledObjectStatus, getScaledJobStatus } from '../resources/resource-utils-keda'
 import { getServiceMonitorStatus, getPrometheusRuleStatus, getPodMonitorStatus } from '../resources/resource-utils-prometheus'
 import { getPolicyReportStatus, getKyvernoPolicyStatus } from '../resources/resource-utils-kyverno'
+import {
+  KYVERNO_MODERN_PLURALS,
+  getModernKyvernoPolicyStatus,
+  isModernKyvernoPolicy,
+} from '../resources/resource-utils-kyverno-modern'
+import {
+  getKyvernoCleanupPolicyStatus,
+  getKyvernoPolicyExceptionStatus,
+  isAnyKyvernoPolicyException,
+} from '../resources/resource-utils-kyverno-exceptions'
 import { getResourceClaimStatus, getResourceClaimTemplateStatus, getDeviceClassStatus, getResourceSliceStatus } from '../resources/resource-utils-dra'
 import { getNvidiaClusterPolicyStatus, getNvidiaDriverStatus } from '../resources/resource-utils-nvidia'
-import { getBackupStatus, getRestoreStatus, getScheduleStatus, getBSLStatus } from '../resources/resource-utils-velero'
+import { getBackupStatus, getRestoreStatus, getScheduleStatus, getBSLStatus, isVeleroResource } from '../resources/resource-utils-velero'
 import {
   getVirtualServiceStatus,
   getDestinationRuleStatus,
@@ -62,7 +72,7 @@ import {
   getPeerAuthenticationStatus,
   getAuthorizationPolicyStatus,
 } from '../resources/resource-utils-istio'
-import { getCNPGClusterStatus, getCNPGBackupStatus, getCNPGScheduledBackupStatus, getCNPGPoolerStatus } from '../resources/resource-utils-cnpg'
+import { getCNPGClusterStatus, getCNPGBackupStatus, getCNPGScheduledBackupStatus, getCNPGPoolerStatus, isApiGroup, CNPG_GROUP } from '../resources/resource-utils-cnpg'
 import { getExternalSecretStatus, getClusterExternalSecretStatus, getSecretStoreStatus, getClusterSecretStoreStatus } from '../resources/resource-utils-eso'
 import {
   getKnativeConditionStatus,
@@ -140,6 +150,13 @@ import {
   PodMonitorRenderer,
   PolicyReportRenderer,
   KyvernoPolicyRenderer,
+  KyvernoValidatingPolicyRenderer,
+  KyvernoImageValidatingPolicyRenderer,
+  KyvernoMutatingPolicyRenderer,
+  KyvernoGeneratingPolicyRenderer,
+  KyvernoDeletingPolicyRenderer,
+  KyvernoPolicyExceptionRenderer,
+  KyvernoCleanupPolicyRenderer,
   VeleroBackupRenderer,
   VeleroRestoreRenderer,
   VeleroScheduleRenderer,
@@ -256,6 +273,10 @@ export interface RendererOverrides {
   NodeRenderer?: React.ComponentType<{
     data: any; relationships?: Relationships
   }>
+  KarpenterNodePoolRenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
   ServiceRenderer?: React.ComponentType<{
     data: any; onCopy: CopyHandler; copied: string | null
     onNavigate?: (ref: ResourceRef) => void
@@ -335,6 +356,13 @@ const KNOWN_KINDS = new Set([
   'triggerauthentications', 'clustertriggerauthentications',
   'servicemonitors', 'prometheusrules', 'podmonitors',
   'policyreports', 'clusterpolicyreports', 'kyvernopolicies', 'clusterpolicies',
+  // Kyverno modern CEL family (policies.kyverno.io) + its namespaced twins.
+  'validatingpolicies', 'namespacedvalidatingpolicies',
+  'imagevalidatingpolicies', 'namespacedimagevalidatingpolicies',
+  'mutatingpolicies', 'namespacedmutatingpolicies',
+  'generatingpolicies', 'namespacedgeneratingpolicies',
+  'deletingpolicies', 'namespaceddeletingpolicies',
+  'policyexceptions', 'cleanuppolicies', 'clustercleanuppolicies',
   'resourceclaims', 'resourceclaimtemplates', 'deviceclasses', 'resourceslices',
   'nvidiadrivers',
   'vulnerabilityreports', 'configauditreports', 'exposedsecretreports',
@@ -484,9 +512,58 @@ export function ResourceRendererDispatch({
   )
   const crossplaneCollisionFallthrough = isCollisionGatedKind && !crossplaneApiVersionMatched
 
+  // Kyverno's modern CEL family uses plurals generic enough that another
+  // vendor could ship the same ones (`validatingpolicies`, `mutatingpolicies`,
+  // `generatingpolicies`, ...), and `policyexceptions` collides with Kyverno
+  // ITSELF — the same Kind and plural exists in both kyverno.io and
+  // policies.kyverno.io with different spec shapes. Every render line below is
+  // therefore group-gated, which means each needs the same fall-through the
+  // Crossplane block documents above: without it a foreign CR with a colliding
+  // plural matches no renderer and, being in KNOWN_KINDS, renders blank.
+  const isKyvernoModernPlural = KYVERNO_MODERN_PLURALS.has(kind)
+  const kyvernoModernMatched = isKyvernoModernPlural && isModernKyvernoPolicy(data)
+  const isKyvernoLegacyExtraPlural = kind === 'cleanuppolicies' || kind === 'clustercleanuppolicies'
+  const kyvernoLegacyExtraMatched =
+    isKyvernoLegacyExtraPlural && data?.apiVersion?.startsWith('kyverno.io/')
+  // PolicyException is served by both families; either group is a match.
+  const isPolicyExceptionPlural = kind === 'policyexceptions'
+  const policyExceptionMatched = isPolicyExceptionPlural && isAnyKyvernoPolicyException(data)
+  const kyvernoCollisionFallthrough =
+    (isKyvernoModernPlural && !kyvernoModernMatched) ||
+    (isKyvernoLegacyExtraPlural && !kyvernoLegacyExtraMatched) ||
+    (isPolicyExceptionPlural && !policyExceptionMatched)
+
+  // Same shape as the Crossplane fall-through above: these Velero plurals are
+  // in KNOWN_KINDS but their render lines are gated on the velero.io group, so
+  // a foreign CR with the same plural (rancher/backup-restore-operator ships
+  // restores.resources.cattle.io; several operators ship `schedules`) matches
+  // no renderer AND is suppressed from GenericRenderer — i.e. renders blank.
+  // `backups` is deliberately absent here — it is shared with CNPG, so both of
+  // its render lines are positively group-gated and it falls through via
+  // isGroupGatedKind below rather than through this Velero-only check.
+  const isVeleroCollisionGatedKind =
+    kind === 'restores' || kind === 'schedules'
+    || kind === 'backupstoragelocations' || kind === 'volumesnapshotlocations'
+  const veleroCollisionFallthrough = isVeleroCollisionGatedKind && !isVeleroResource(data)
+
+  // Same rule as the Crossplane block above, for the plurals shared by two
+  // named operators: `clusters` (CNPG / CAPI — plus KubeBlocks, Redis/Valkey
+  // and friends in the wild) and `backups` (CNPG / Velero). Both render lines
+  // are positively apiVersion-gated, so a third CRD with the plural matches
+  // neither and needs an explicit fall-through or the drawer renders blank.
+  const isGroupGatedKind =
+    kind === 'clusters' || kind === 'backups' || kind === 'scheduledbackups' || kind === 'poolers'
+  const isCNPGApiVersion = isApiGroup(data?.apiVersion, CNPG_GROUP)
+  const groupGatedMatched =
+    (kind === 'clusters' && (isCNPGApiVersion || isApiGroup(data?.apiVersion, 'cluster.x-k8s.io')))
+    || (kind === 'backups' && (isCNPGApiVersion || isApiGroup(data?.apiVersion, 'velero.io')))
+    || ((kind === 'scheduledbackups' || kind === 'poolers') && isCNPGApiVersion)
+  const groupGatedFallthrough = isGroupGatedKind && !groupGatedMatched
+
   const isKnownKind = KNOWN_KINDS.has(kind) || isCrossplaneMR || isCrossplaneClaim || isCrossplaneXR
 
   const PodComp = rendererOverrides?.PodRenderer ?? PodRenderer
+  const KarpenterNodePoolComp = rendererOverrides?.KarpenterNodePoolRenderer ?? KarpenterNodePoolRenderer
   const WorkloadComp = rendererOverrides?.WorkloadRenderer ?? WorkloadRenderer
   const NodeComp = rendererOverrides?.NodeRenderer ?? NodeRenderer
   const ServiceComp = rendererOverrides?.ServiceRenderer ?? ServiceRenderer
@@ -570,7 +647,7 @@ export function ResourceRendererDispatch({
         {kind === 'helmreleases' && <FluxHelmReleaseRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'alerts' && <AlertRenderer data={data} />}
         {kind === 'applications' && <ArgoApplicationRenderer data={data} />}
-        {kind === 'nodepools' && <KarpenterNodePoolRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'nodepools' && <KarpenterNodePoolComp data={data} onNavigate={onNavigate} />}
         {kind === 'nodeclaims' && <KarpenterNodeClaimRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'ec2nodeclasses' && <KarpenterEC2NodeClassRenderer data={data} />}
         {kind === 'scaledobjects' && <KedaScaledObjectRenderer data={data} onNavigate={onNavigate} />}
@@ -589,25 +666,34 @@ export function ResourceRendererDispatch({
         {(kind === 'policyreports' || kind === 'clusterpolicyreports') && <PolicyReportRenderer data={data} />}
         {(kind === 'kyvernopolicies' || (kind === 'clusterpolicies' && !data?.apiVersion?.startsWith('nvidia.com/'))) && <KyvernoPolicyRenderer data={data} />}
         {(kind === 'clusterpolicies' && data?.apiVersion?.startsWith('nvidia.com/')) && <NvidiaClusterPolicyRenderer data={data} />}
+        {/* Kyverno modern CEL family. Each Namespaced* twin shares its
+            cluster-scoped counterpart's renderer — same spec, narrower scope. */}
+        {kyvernoModernMatched && (kind === 'validatingpolicies' || kind === 'namespacedvalidatingpolicies') && <KyvernoValidatingPolicyRenderer data={data} />}
+        {kyvernoModernMatched && (kind === 'imagevalidatingpolicies' || kind === 'namespacedimagevalidatingpolicies') && <KyvernoImageValidatingPolicyRenderer data={data} />}
+        {kyvernoModernMatched && (kind === 'mutatingpolicies' || kind === 'namespacedmutatingpolicies') && <KyvernoMutatingPolicyRenderer data={data} />}
+        {kyvernoModernMatched && (kind === 'generatingpolicies' || kind === 'namespacedgeneratingpolicies') && <KyvernoGeneratingPolicyRenderer data={data} />}
+        {kyvernoModernMatched && (kind === 'deletingpolicies' || kind === 'namespaceddeletingpolicies') && <KyvernoDeletingPolicyRenderer data={data} />}
+        {policyExceptionMatched && <KyvernoPolicyExceptionRenderer data={data} />}
+        {kyvernoLegacyExtraMatched && <KyvernoCleanupPolicyRenderer data={data} />}
         {kind === 'nvidiadrivers' && <NvidiaDriverRenderer data={data} />}
         {/* DRA (resource.k8s.io) */}
         {kind === 'resourceclaims' && <ResourceClaimRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'resourceclaimtemplates' && <ResourceClaimTemplateRenderer data={data} />}
         {kind === 'deviceclasses' && <DeviceClassRenderer data={data} />}
         {kind === 'resourceslices' && <ResourceSliceRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'backups' && data.apiVersion?.includes('cnpg.io') && <CNPGBackupRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'backups' && !data.apiVersion?.includes('cnpg.io') && <VeleroBackupRenderer data={data} />}
-        {kind === 'restores' && <VeleroRestoreRenderer data={data} />}
-        {kind === 'schedules' && <VeleroScheduleRenderer data={data} />}
-        {kind === 'backupstoragelocations' && <VeleroBSLRenderer data={data} />}
-        {kind === 'volumesnapshotlocations' && <VeleroVSLRenderer data={data} />}
+        {kind === 'backups' && isApiGroup(data.apiVersion, CNPG_GROUP) && <CNPGBackupRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'backups' && isApiGroup(data.apiVersion, 'velero.io') && <VeleroBackupRenderer data={data} />}
+        {kind === 'restores' && isVeleroResource(data) && <VeleroRestoreRenderer data={data} />}
+        {kind === 'schedules' && isVeleroResource(data) && <VeleroScheduleRenderer data={data} />}
+        {kind === 'backupstoragelocations' && isVeleroResource(data) && <VeleroBSLRenderer data={data} />}
+        {kind === 'volumesnapshotlocations' && isVeleroResource(data) && <VeleroVSLRenderer data={data} />}
         {kind === 'externalsecrets' && <ExternalSecretRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'clusterexternalsecrets' && <ClusterExternalSecretRenderer data={data} onNavigate={onNavigate} />}
         {(kind === 'secretstores' || kind === 'clustersecretstores') && <SecretStoreRenderer data={data} />}
-        {kind === 'clusters' && !data?.apiVersion?.includes('cluster.x-k8s.io') && <CNPGClusterRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'clusters' && data?.apiVersion?.includes('cluster.x-k8s.io') && <CAPIClusterRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'scheduledbackups' && <CNPGScheduledBackupRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'poolers' && <CNPGPoolerRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'clusters' && isApiGroup(data?.apiVersion, CNPG_GROUP) && <CNPGClusterRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'clusters' && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io') && <CAPIClusterRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'scheduledbackups' && isApiGroup(data?.apiVersion, CNPG_GROUP) && <CNPGScheduledBackupRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'poolers' && isApiGroup(data?.apiVersion, CNPG_GROUP) && <CNPGPoolerRenderer data={data} onNavigate={onNavigate} />}
         {/* Cluster API (CAPI) */}
         {'topology.cluster.x-k8s.io/owned' in (data?.metadata?.labels ?? {}) && data?.apiVersion?.includes('cluster.x-k8s.io') && (
           <AlertBanner
@@ -701,7 +787,7 @@ export function ResourceRendererDispatch({
             for known-plural collisions where no apiVersion-gated renderer
             matched (e.g. a Knative Configuration sharing the `configurations`
             plural with Crossplane Configuration). */}
-        {(!isKnownKind || crossplaneCollisionFallthrough) && <GenericRenderer data={data} />}
+        {(!isKnownKind || crossplaneCollisionFallthrough || kyvernoCollisionFallthrough || veleroCollisionFallthrough || groupGatedFallthrough) && <GenericRenderer data={data} />}
 
         {/* Common sections - can be disabled when parent handles them separately */}
         {showCommonSections && (
@@ -828,25 +914,38 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
     if (data?.apiVersion?.startsWith('nvidia.com/')) return getNvidiaClusterPolicyStatus(data)
     return getKyvernoPolicyStatus(data)
   }
+  // Modern CEL family — group-gated so a foreign CRD sharing one of these
+  // generic plurals falls through to the default status rather than being
+  // described in Kyverno's vocabulary.
+  if (KYVERNO_MODERN_PLURALS.has(k) && isModernKyvernoPolicy(data)) return getModernKyvernoPolicyStatus(data)
+  if (k === 'policyexceptions' && isAnyKyvernoPolicyException(data)) return getKyvernoPolicyExceptionStatus(data)
+  if ((k === 'cleanuppolicies' || k === 'clustercleanuppolicies') && data?.apiVersion?.startsWith('kyverno.io/')) {
+    return getKyvernoCleanupPolicyStatus(data)
+  }
   if (k === 'nvidiadrivers') return getNvidiaDriverStatus(data)
   if (k === 'resourceclaims') return getResourceClaimStatus(data)
   if (k === 'resourceclaimtemplates') return getResourceClaimTemplateStatus(data)
   if (k === 'deviceclasses') return getDeviceClassStatus(data)
   if (k === 'resourceslices') return getResourceSliceStatus(data)
+  // Positive guards both ways. A third `backups` CRD matches neither and falls
+  // through to the generic phase/conditions handling at the end of this
+  // function, rather than borrowing whichever engine used to be the fallback.
   if (k === 'backups') {
-    if (data.apiVersion?.includes('cnpg.io')) return getCNPGBackupStatus(data)
-    return getBackupStatus(data)
+    if (isApiGroup(data.apiVersion, CNPG_GROUP)) return getCNPGBackupStatus(data)
+    if (isApiGroup(data.apiVersion, 'velero.io')) return getBackupStatus(data)
   }
-  if (k === 'restores') return getRestoreStatus(data)
-  if (k === 'schedules') return getScheduleStatus(data)
-  if (k === 'backupstoragelocations') return getBSLStatus(data)
+  if (k === 'restores' && isVeleroResource(data)) return getRestoreStatus(data)
+  if (k === 'schedules' && isVeleroResource(data)) return getScheduleStatus(data)
+  if (k === 'backupstoragelocations' && isVeleroResource(data)) return getBSLStatus(data)
   if (k === 'externalsecrets') return getExternalSecretStatus(data)
   if (k === 'clusterexternalsecrets') return getClusterExternalSecretStatus(data)
   if (k === 'secretstores') return getSecretStoreStatus(data)
   if (k === 'clustersecretstores') return getClusterSecretStoreStatus(data)
   if (k === 'clusters') {
-    if (data.apiVersion?.includes('cluster.x-k8s.io')) return getCAPIClusterStatus(data)
-    return getCNPGClusterStatus(data)
+    if (isApiGroup(data.apiVersion, 'cluster.x-k8s.io')) return getCAPIClusterStatus(data)
+    if (isApiGroup(data.apiVersion, CNPG_GROUP)) return getCNPGClusterStatus(data)
+    // Third-party `clusters` CRDs (KubeBlocks, Redis/Valkey) fall through to the
+    // generic handling below instead of getting a fabricated PostgreSQL status.
   }
   if (k === 'machines' && data.apiVersion?.includes('cluster.x-k8s.io')) return getMachineStatus(data)
   if (k === 'machinedeployments') return getMachineDeploymentStatus(data)
@@ -870,8 +969,8 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'azuremanagedmachinepools') return getAzureMMPStatus(data)
   if (k === 'azuremachines') return getAzureMachineStatus(data)
   if (k === 'azuremanagedclusters') return getAzureManagedClusterStatus(data)
-  if (k === 'scheduledbackups') return getCNPGScheduledBackupStatus(data)
-  if (k === 'poolers') return getCNPGPoolerStatus(data)
+  if (k === 'scheduledbackups' && isApiGroup(data.apiVersion, CNPG_GROUP)) return getCNPGScheduledBackupStatus(data)
+  if (k === 'poolers' && isApiGroup(data.apiVersion, CNPG_GROUP)) return getCNPGPoolerStatus(data)
   if (k === 'virtualservices') return getVirtualServiceStatus(data)
   if (k === 'destinationrules') return getDestinationRuleStatus(data)
   if (k === 'serviceentries') return getServiceEntryStatus(data)

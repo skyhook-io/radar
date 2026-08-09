@@ -5,7 +5,6 @@ import (
 	"crypto/x509"
 	"errors"
 	"net"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -28,7 +27,7 @@ type ConnectionStatus struct {
 	Context     string          `json:"context"`
 	ClusterName string          `json:"clusterName,omitempty"`
 	Error       string          `json:"error,omitempty"`
-	ErrorType   string          `json:"errorType,omitempty"` // config, auth, rbac, network, timeout, tls, unknown
+	ErrorType   string          `json:"errorType,omitempty"` // config, auth, auth-rejected, auth-plugin-stuck, rbac, network, timeout, tls, unknown
 	ProgressMsg string          `json:"progressMessage,omitempty"`
 }
 
@@ -60,7 +59,29 @@ func SetConnectionStatus(status ConnectionStatus) {
 	connectionStatus = status
 	connectionStatusMu.Unlock()
 
-	// Notify callbacks
+	// Publish-side recovery ownership: every route into an auth-shaped
+	// disconnect (bootstrap with expired credentials, failed retry, failed
+	// context switch) must leave a reconnect loop running — the browser no
+	// longer auto-retries auth failures. Owed survives later non-auth
+	// republications (a hung-plugin retry classifies "timeout") and is only
+	// settled by a successful connect.
+	switch status.State {
+	case StateConnected:
+		runtimeAuthRecoveryOwed.Store(false)
+		resetInconclusiveStreak()
+	case StateDisconnected:
+		if isAuthClassification(status.ErrorType) {
+			runtimeAuthRecoveryOwed.Store(true)
+		}
+		if runtimeAuthRecoveryOwed.Load() {
+			startRuntimeAuthRecovery()
+		}
+	}
+
+	notifyConnectionChange(status)
+}
+
+func notifyConnectionChange(status ConnectionStatus) {
 	connectionCallbacksMu.RLock()
 	callbacks := make([]ConnectionChangeCallback, len(connectionCallbacks))
 	copy(callbacks, connectionCallbacks)
@@ -74,6 +95,19 @@ func SetConnectionStatus(status ConnectionStatus) {
 // MarkDisconnectedIfClusterUnreachable updates the shared connection state when
 // a live Kubernetes request proves that the current cluster endpoint is gone.
 func MarkDisconnectedIfClusterUnreachable(message string) bool {
+	if isAuthClassification(ClassifyError(errors.New(message))) {
+		// Credential loss must go through the demotion pipeline — it confirms
+		// with a fresh probe, gates on endpoint reachability, and quiesces
+		// cluster-backed work. Publishing disconnected directly would skip
+		// the teardown AND disarm the pipeline (candidate intake requires
+		// StateConnected), leaving informers hammering the dead credential
+		// for the whole outage.
+		clientMu.RLock()
+		generation := activeClientGeneration
+		clientMu.RUnlock()
+		reportRuntimeAuthFailure(generation, errors.New(message))
+		return false
+	}
 	if !isClusterUnreachableMessage(message) {
 		return false
 	}
@@ -195,10 +229,11 @@ func isTransportTimeoutMessage(lower string) bool {
 	return false
 }
 
+// isAuthErrorMessage matches client-side credential acquisition failures (exec
+// plugins, SSO sessions) — no request reached the API server, and
+// re-authenticating locally is the fix.
 func isAuthErrorMessage(lower string) bool {
 	authMarkers := []string{
-		"unauthorized",
-		"authentication required",
 		"token has expired",
 		"expired token",
 		"sso session",
@@ -206,19 +241,52 @@ func isAuthErrorMessage(lower string) bool {
 		"ssoproviderinvalidtoken",
 		"aws sso login",
 		"getting credentials",
-		"provide credentials",
 		"credentials expired",
 		"credential plugin",
 		"exec credential",
 		"exec plugin",
 		"gke-gcloud-auth-plugin",
+		// client-go's in-tree oidc auth provider returns refresh failures RAW
+		// from RoundTrip (no "getting credentials:" wrapper) — Keycloak/Dex/
+		// IBM IKS kubeconfigs die here. "invalid_grant" is the RFC 6749 code
+		// every IdP emits for an expired/revoked refresh token.
+		"failed to refresh token",
+		"invalid_grant",
+		"cannot refresh without refresh-token",
+		// The exec plugin's TLS client-certificate path (e.g. tsh) fails
+		// without the "getting credentials:" wrapper; this phrasing is
+		// produced only by client-go's exec plugin runner.
+		"exec: executable ",
+		"failed to read token file",
+		"read empty token from file",
 	}
 	for _, marker := range authMarkers {
 		if strings.Contains(lower, marker) {
 			return true
 		}
 	}
-	return strings.Contains(lower, "unable to connect to the server") && strings.Contains(lower, "oauth2")
+	return false
+}
+
+// isAuthRejectedMessage matches HTTP 401 responses: the request reached the API
+// server but could not be authenticated. Checked only after isAuthErrorMessage
+// so exec-plugin stderr that quotes a server error (e.g. "UnauthorizedException")
+// still classifies as client-side auth.
+func isAuthRejectedMessage(lower string) bool {
+	if strings.Contains(lower, "proxy authentication required") {
+		return false
+	}
+	rejectedMarkers := []string{
+		"unauthorized",
+		"authentication required",
+		"the server has asked for the client to provide credentials",
+	}
+	for _, marker := range rejectedMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func isRBACErrorMessage(lower string) bool {
@@ -242,6 +310,7 @@ func isConfigErrorMessage(lower string) bool {
 		"k8s config not initialized",
 		"kubernetes client is not initialized",
 		"kubernetes discovery client is not initialized",
+		"no auth provider found for name",
 	}
 	for _, marker := range configMarkers {
 		if strings.Contains(lower, marker) {
@@ -257,7 +326,17 @@ func isTLSCertificateMessage(lower string) bool {
 		strings.Contains(lower, "certificate is valid for") ||
 		strings.Contains(lower, "cannot validate certificate") ||
 		strings.Contains(lower, "certificate has expired") ||
-		strings.Contains(lower, "certificate is not yet valid")
+		strings.Contains(lower, "certificate is not yet valid") ||
+		// TLS alerts rejecting OUR certificate come from mTLS-terminating
+		// proxies in front of the cluster (Teleport, nginx/HAProxy with
+		// client verification) — kube-apiserver itself never sends these; it
+		// uses RequestClientCert and returns 401 instead. Without these
+		// markers the alerts fall through to "network".
+		strings.Contains(lower, "tls: bad certificate") ||
+		strings.Contains(lower, "tls: certificate required") ||
+		strings.Contains(lower, "tls: expired certificate") ||
+		strings.Contains(lower, "tls: unknown certificate") ||
+		strings.Contains(lower, "tls: revoked certificate")
 }
 
 // UpdateConnectionProgress updates the progress message while connecting
@@ -268,15 +347,7 @@ func UpdateConnectionProgress(msg string) {
 	connectionStatus = status
 	connectionStatusMu.Unlock()
 
-	// Notify callbacks
-	connectionCallbacksMu.RLock()
-	callbacks := make([]ConnectionChangeCallback, len(connectionCallbacks))
-	copy(callbacks, connectionCallbacks)
-	connectionCallbacksMu.RUnlock()
-
-	for _, cb := range callbacks {
-		cb(status)
-	}
+	notifyConnectionChange(status)
 }
 
 // OnConnectionChange registers a callback to be called when connection status changes
@@ -296,7 +367,7 @@ func ClassifyError(err error) string {
 		return "rbac"
 	}
 	if apierrors.IsUnauthorized(err) {
-		return "auth"
+		return "auth-rejected"
 	}
 	if apierrors.IsTimeout(err) || apierrors.IsServerTimeout(err) || errors.Is(err, context.DeadlineExceeded) {
 		return "timeout"
@@ -320,6 +391,9 @@ func ClassifyError(err error) string {
 	if isAuthErrorMessage(errLower) {
 		return "auth"
 	}
+	if isAuthRejectedMessage(errLower) {
+		return "auth-rejected"
+	}
 
 	if isTLSCertificateError(err) || isTLSCertificateMessage(errLower) {
 		return "tls"
@@ -333,10 +407,12 @@ func ClassifyError(err error) string {
 	if errors.As(err, &opErr) {
 		return "network"
 	}
-	var urlErr *url.Error
-	if errors.As(err, &urlErr) {
-		return "network"
-	}
+	// Deliberately NO *url.Error → "network" mapping: genuine transport
+	// failures unwrap into the typed branches above, so the only errors a
+	// bare url.Error match would catch are RoundTripper-level failures — and
+	// in a Kubernetes client the RoundTripper chain IS the credential chain.
+	// An unrecognized credential error must classify "unknown", not earn a
+	// confidently wrong "network" verdict.
 
 	// Network errors
 	if isTransportNetworkMessage(errLower) {

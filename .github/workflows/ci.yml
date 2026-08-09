@@ -129,6 +129,12 @@ jobs:
 
       - name: Install Helm
         uses: azure/setup-helm@v5
+        with:
+          # Explicit pin (never `latest` — runner caches made green/red a
+          # lottery). Helm 4 on purpose: it's what new users install with,
+          # and lint/template/negative-tests are the chart's user-facing
+          # surface. The unittest step below stays on Helm 3.
+          version: v4.2.3
 
       - name: Lint
         run: helm lint deploy/helm/radar
@@ -201,6 +207,10 @@ jobs:
         uses: helmfile/helmfile-action@v2.2.0
         with:
           helmfile-auto-init: 'true'
+          # Helm 3 ONLY here: helm-unittest cannot run under Helm 4's plugin
+          # layout (fork/exec untt: no such file) — upstream tracking issue
+          # helm-unittest/helm-unittest#777. Lift to 4 when that closes.
+          helm-version: v3.19.0
           helm-plugins: >
             https://github.com/helm-unittest/helm-unittest@v1.1.0
 

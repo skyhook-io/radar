@@ -18,14 +18,14 @@ var (
 	serverVersionMu     sync.Mutex
 )
 
-// getServerVersion returns the cached Kubernetes server version.
+// GetServerVersion returns the cached Kubernetes server version.
 // The version is fetched once and cached for the lifetime of the context.
-func getServerVersion() string {
+func GetServerVersion() string {
 	serverVersionMu.Lock()
 	defer serverVersionMu.Unlock()
 	serverVersionOnce.Do(func() {
-		if k8sClient != nil {
-			if v, err := k8sClient.Discovery().ServerVersion(); err == nil {
+		if client := GetClient(); client != nil {
+			if v, err := client.Discovery().ServerVersion(); err == nil {
 				cachedServerVersion = v.GitVersion
 			}
 		}
@@ -67,7 +67,7 @@ func GetClusterInfo(ctx context.Context) (*ClusterInfo, error) {
 	}
 
 	// Get version info (cached — only fetched once per context)
-	info.KubernetesVersion = getServerVersion()
+	info.KubernetesVersion = GetServerVersion()
 
 	// Get counts from cache (listers may be nil when RBAC restricts access)
 	cache := GetResourceCache()
@@ -114,8 +114,8 @@ func GetClusterPlatform(ctx context.Context) (string, error) {
 	}
 
 	// Fallback to direct API if cache unavailable
-	if len(nodes) == 0 && k8sClient != nil {
-		nodeList, err := k8sClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{
+	if client := GetClient(); len(nodes) == 0 && client != nil {
+		nodeList, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{
 			Limit: 1,
 		})
 		if err != nil {
@@ -179,8 +179,8 @@ func IsGKEAutopilot(ctx context.Context) (bool, error) {
 		}
 	}
 
-	if len(nodes) == 0 && k8sClient != nil {
-		nodeList, err := k8sClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{Limit: 1})
+	if client := GetClient(); len(nodes) == 0 && client != nil {
+		nodeList, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{Limit: 1})
 		if err == nil && len(nodeList.Items) > 0 {
 			nodes = nodeList.Items
 		}
@@ -222,8 +222,8 @@ func checkAutopilotViaAnnotations(ctx context.Context) (bool, bool) {
 		}
 	}
 
-	if len(pods) == 0 && k8sClient != nil {
-		podList, err := k8sClient.CoreV1().Pods("kube-system").List(ctx, metav1.ListOptions{Limit: 10})
+	if client := GetClient(); len(pods) == 0 && client != nil {
+		podList, err := client.CoreV1().Pods("kube-system").List(ctx, metav1.ListOptions{Limit: 10})
 		if err == nil {
 			pods = podList.Items
 		}

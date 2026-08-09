@@ -61,8 +61,18 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		DestructiveHint: boolPtr(true),
 		OpenWorldHint:   boolPtr(false),
 	}
+	// diagnose is read-only EXCEPT when in_cluster=true, which creates UP TO
+	// maxInClusterProbes transient, self-destructing probe pods (one per intended
+	// route, sequentially) to test the real dataplane. That makes it non-read-only
+	// (a client gating on readOnlyHint must know the in_cluster arg can create pods),
+	// but NOT destructive - each pod is additive and deletes itself within ~60s - so
+	// DestructiveHint stays false.
+	diagnoseAnno := &mcp.ToolAnnotations{
+		DestructiveHint: boolPtr(false),
+		OpenWorldHint:   boolPtr(false),
+	}
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_dashboard",
 		Description: "Use for inventory-style cluster or namespace health triage, like " +
 			"`kubectl get all` plus detected problems and warning events in one call. " +
@@ -80,7 +90,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: readOnly,
 	}, logToolCall("get_dashboard", handleGetDashboard))
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "top_resources",
 		Description: "Use when investigating high CPU, memory pressure, OOMKills, " +
 			"slow services, noisy pods, or uneven node load. Returns live metrics " +
@@ -93,7 +103,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: readOnly,
 	}, logToolCall("top_resources", handleTopResources))
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "list_resources",
 		Description: "Use for a jq-like namespace sweep when you know the resource kind " +
 			"(pods/po, deployments/deploy, services/svc, configmaps/cm, CRDs). Returns compact Kubernetes-shaped " +
@@ -104,7 +114,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: readOnly,
 	}, logToolCall("list_resources", handleListResources))
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_resource",
 		Description: "Use AFTER narrowing to one resource. Returns the resource's " +
 			"Kubernetes-shaped spec/status/metadata plus resourceContext when available " +
@@ -125,7 +135,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: readOnly,
 	}, logToolCall("get_resource", handleGetResource))
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_topology",
 		Description: "Use to map a multi-service incident or dependency graph, preferably " +
 			"scoped to a namespace. " +
@@ -141,7 +151,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: readOnly,
 	}, logToolCall("get_topology", handleGetTopology))
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_neighborhood",
 		Description: "Use when investigating cross-resource failures around a known " +
 			"resource: service routing, targetPort/selector/endpoints problems, dependency " +
@@ -158,7 +168,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: readOnly,
 	}, logToolCall("get_neighborhood", handleGetNeighborhood))
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_events",
 		Description: "Use for recent Kubernetes events after an overview points " +
 			"at a namespace or resource, or when the symptom is scheduling, pulling images, " +
@@ -171,7 +181,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: readOnly,
 	}, logToolCall("get_events", handleGetEvents))
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_pod_logs",
 		Description: "Use only after narrowing to a specific Pod/container. Returns " +
 			"diagnostically relevant log lines (errors, panics, stack traces, warnings) " +
@@ -185,10 +195,11 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: readOnly,
 	}, logToolCall("get_pod_logs", handleGetPodLogs))
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "diagnose",
 		Description: "Use for CrashLoopBackOff, OOMKilled, image-pull, readiness, scheduling, " +
-			"or GitOps sync/health symptoms after narrowing to one broken workload or reconciler. " +
+			"or GitOps sync/health symptoms after narrowing to one broken workload or reconciler, " +
+			"or for 'traffic is not reaching this service / route / ingress'. " +
 			"For workload symptoms, it replaces a get_resource → get_events(type=Warning) → " +
 			"current/previous-log chain in one round-trip. For a Pod, " +
 			"Deployment, StatefulSet, or DaemonSet, it " +
@@ -206,19 +217,29 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"`application_configuration_change: true` is a factual edit classification " +
 			"and narrow ranking hint, not a causal or universal relevance verdict. " +
 			"For Application, Kustomization, or Flux HelmRelease, returns reconciler status " +
-			"and parsed issues without pod-log fan-out. Prefer a targeted resource/log/event " +
-			"tool when you need only one facet; use get_resource for other kinds.",
-		Annotations: readOnly,
+			"and parsed issues without pod-log fan-out. " +
+			"For network entry kinds (Service/Ingress/HTTPRoute/GRPCRoute/Gateway), returns a " +
+			"per-route reachability diagnosis whose fields carry their own explanations - trust " +
+			"`routes[].outcome` + `confidence` and the `headline`/`diagnosis` text over the coarse " +
+			"`verdict` rollup, and treat `indirect` confidence as reached only via the API-server " +
+			"proxy, never the live-traffic path. " +
+			"Prefer a targeted resource/log/event " +
+			"tool when you need only one facet; use get_resource for other kinds. " +
+			"Read-only EXCEPT the optional in_cluster=true arg (network kinds), which creates up to 5 " +
+			"transient, self-destructing probe pods to test the real dataplane.",
+		// NOT readOnly: in_cluster=true creates pods. A client gating on
+		// readOnlyHint must be told that.
+		Annotations: diagnoseAnno,
 	}, logToolCall("diagnose", handleDiagnose))
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "list_namespaces",
 		Description: "List all Kubernetes namespaces with their status. " +
 			"Use to discover available namespaces before filtering other queries.",
 		Annotations: readOnly,
 	}, logToolCall("list_namespaces", handleListNamespaces))
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_changes",
 		Description: "Use when the symptom is 'this worked earlier' or 'something broke " +
 			"after a deploy/config change.' Returns recent meaningful changes ranked with " +
@@ -243,7 +264,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 
 	// --- Audit tool (read-only) ---
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_cluster_audit",
 		Description: "Use when the agent's decision is 'is this cluster well-configured / " +
 			"compliant?' — STATIC CONFIG POSTURE, not live operational state. Returns " +
@@ -251,8 +272,8 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"capabilities, hostPath/hostNetwork, secret-in-ConfigMap), Reliability (single " +
 			"replicas, missing PDB, missing TopologySpread, podHARisk, Service/Ingress " +
 			"without matching backends, stuckTerminating, deprecatedAPIVersion), and " +
-			"Efficiency (missing resource requests/limits, orphaned ConfigMaps/Secrets, " +
-			"under/over-utilization). Each finding has remediation guidance. " +
+			"Efficiency (missing resource requests/limits, orphaned ConfigMaps/Secrets). " +
+			"Each finding has remediation guidance. " +
 			"INDEPENDENT of operational health: a healthy pod can have many audit findings " +
 			"(badly configured but working), a crashing pod can have zero (cleanly " +
 			"configured but failing). Finding severity and the explicit critical/high/medium/low " +
@@ -270,7 +291,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 
 	// --- Helm tools (read-only) ---
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "list_helm_releases",
 		Description: "List all Helm releases in the cluster with their status, resource health, " +
 			"storage namespace, Flux ownership when detected, lastOperation when Helm history " +
@@ -282,7 +303,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: readOnly,
 	}, logToolCall("list_helm_releases", handleListHelmReleases))
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_helm_release",
 		Description: "Use after identifying a specific native Helm release to inspect owned " +
 			"resources, health, current or recovered operation failures, and hook diagnostics. " +
@@ -303,7 +324,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 	// channels voted "this is installed" — H, L, C, A, F — and the
 	// MCP response includes sourceLegend so those terse stable codes
 	// are interpretable without external docs.
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "list_packages",
 		Description: "Use for a unified inventory of installed packages, versions, and health " +
 			"across Helm, workload labels, CRDs, Argo, and Flux. `sources` and the returned " +
@@ -319,7 +340,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 
 	// --- Issues (read-only) ---
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "issues",
 		Description: "Use for 'what's broken right now?': live operational state, not static " +
 			"posture. Returns a ranked, grouped stream " +
@@ -370,7 +391,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 
 	// --- Search (read-only) ---
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "search",
 		Description: "Find resources by content/term match when you do not know which object " +
 			"contains a string, config key, env ref, image, label/annotation value, " +
@@ -390,7 +411,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 
 	// --- RBAC reverse-lookup (read-only) ---
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_subject_permissions",
 		Description: "Use without verb/resource to inspect effective RBAC, granting bindings, " +
 			"flat rules, and, for ServiceAccounts, Pods running under it (`usedByPods`). " +
@@ -404,14 +425,18 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"check. In that mode, `resource_namespace` defaults to the ServiceAccount " +
 			"namespace; set it to an empty string for cluster-scoped or cluster-wide access. " +
 			"The caller must be allowed to create SubjectAccessReviews. Radar never retries " +
-			"with a privileged identity, so authorization errors are explicit. ServiceAccounts " +
-			"require a subject namespace; omit it for Users and Groups.",
+			"with a privileged identity, so authorization errors are explicit. Identify the " +
+			"subject with `kind` (ServiceAccount, User, or Group) and `name`. For " +
+			"ServiceAccounts `name` is the bare object name (`cleanup-controller`) with " +
+			"`namespace` set — not a qualified form like `system:serviceaccount:ns:sa`. For " +
+			"Users and Groups `name` is the opaque identity verbatim, which may contain " +
+			"colons or spaces (`system:authenticated`), and `namespace` is omitted.",
 		Annotations: readOnly,
 	}, logToolCall("get_subject_permissions", handleGetSubjectPermissions))
 
 	// --- Prometheus tools (read-only) ---
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "query_prometheus",
 		Description: "Use when the question needs metric VALUES or history: CPU/memory over time, " +
 			"request rates, error ratios, saturation, restarts trend, 'was there a spike?'. Executes " +
@@ -426,7 +451,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: readOnly,
 	}, logToolCall("query_prometheus", handleQueryPrometheus))
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "discover_metrics",
 		Description: "Use BEFORE query_prometheus when unsure of exact metric or label names. " +
 			"Lists metric names matching a selector (match={__name__=~\"node_cpu.*\"}) with their " +
@@ -437,7 +462,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: readOnly,
 	}, logToolCall("discover_metrics", handleDiscoverMetrics))
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_prometheus_rules",
 		Description: "List Prometheus alerting and recording rules with their PromQL definitions, " +
 			"state (firing/pending/inactive), labels, annotations, and active alert instances. " +
@@ -448,7 +473,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: readOnly,
 	}, logToolCall("get_prometheus_rules", handleGetPrometheusRules))
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "get_workload_logs",
 		Description: "Get aggregated logs from all pods of a workload (Deployment, StatefulSet, " +
 			"DaemonSet, Job, or Argo Workflow). Logs are collected from all matching pods concurrently, then " +
@@ -469,7 +494,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		return
 	}
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "manage_workload",
 		Description: "Perform operations on a Kubernetes workload (Deployment, StatefulSet, or DaemonSet). " +
 			"Supported actions: 'restart' triggers a rolling restart, 'scale' changes the replica count " +
@@ -478,7 +503,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: writeTool,
 	}, logToolCall("manage_workload", handleManageWorkload))
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "manage_cronjob",
 		Description: "Perform operations on a Kubernetes CronJob. Supported actions: " +
 			"'trigger' creates a manual Job run from the CronJob's template, " +
@@ -487,7 +512,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: writeTool,
 	}, logToolCall("manage_cronjob", handleManageCronJob))
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "manage_gitops",
 		Description: "Perform operations on GitOps resources (ArgoCD or FluxCD). " +
 			"For ArgoCD: actions are 'sync' (trigger deployment), 'refresh', 'terminate', 'rollback', " +
@@ -497,7 +522,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: writeTool,
 	}, logToolCall("manage_gitops", handleManageGitOps))
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "apply_resource",
 		Description: "Create or update a Kubernetes resource from a YAML manifest. " +
 			"In 'apply' mode (default), performs a server-side apply with FieldManager=radar " +
@@ -515,7 +540,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: writeTool,
 	}, logToolCall("apply_resource", handleApplyResource))
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "patch_resource",
 		Description: "Patch one existing Kubernetes resource with JSON Patch, JSON Merge Patch, or strategic merge patch. " +
 			"Use this for precise field/list mutations such as removing a bad dnsConfig, hostPort, " +
@@ -531,7 +556,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: writeTool,
 	}, logToolCall("patch_resource", handlePatchResource))
 
-	mcp.AddTool(server, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name: "manage_node",
 		Description: "Perform operations on a Kubernetes node. " +
 			"Supported actions: 'cordon' marks the node as unschedulable (no new pods will be scheduled), " +
@@ -618,7 +643,7 @@ type issuesInput struct {
 	Severity  string `json:"severity,omitempty" jsonschema:"comma-separated: critical,warning"`
 	Kind      string `json:"kind,omitempty" jsonschema:"comma-separated kind filter (e.g. Deployment,Pod)"`
 	Limit     int    `json:"limit,omitempty" jsonschema:"max issues returned (default 200, max 1000)"`
-	Filter    string `json:"filter,omitempty" jsonschema:"optional CEL boolean expression run against each composed Issue. Bindings: severity (critical|warning), category (e.g. crashloop, image_pull_failed, missing_config_ref, gitops_sync_failed), category_group (startup|runtime|scheduling|configuration|networking|storage|scaling|security|control_plane; runtime here is an issue taxonomy group, not issue_timing), source (problem=built-in Radar detector, missing_ref=dangling by-name reference, scheduling=pod startup blocker, condition=False controller/CRD condition), kind, group, ns (the namespace — use 'ns', not 'namespace' which is a CEL reserved word), name, reason, message, cause, action, remediation_kind, remediation_target, count (int, the affected-resource fan-out), grouping_scope (workload|service|node|…), restart_count (int), last_terminated_reason, operation_retry_count (int, a GitOps controller's sync-operation retries — distinct from restart_count), stuck (bool, issue not expected to self-recover), issue_timing (string timing evidence: 'started_at_resource_creation' = evidence places the failing state during resource creation or first reconciliation; 'started_after_resource_was_healthy' = evidence shows a meaningful healthy window before the failing condition appeared; absent = Radar has no clean signal, do NOT infer timing from age alone; this is timing evidence, not a root-cause verdict), issue_timing_basis (string: evidence used — 'condition' | 'owner_condition' | 'pod_creation' | 'deletion' | 'phase' | 'spec'), first_seen + last_seen (unix seconds — prefer first_seen for onset/age; last_seen churns to compose-time). For cross-cluster scoping use clusters= (not a CEL predicate). Examples: 'severity == \"critical\" && count > 5', 'category_group == \"startup\"', 'restart_count > 10', 'remediation_kind == \"create-namespace\"', 'stuck && operation_retry_count >= 5', 'issue_timing == \"started_after_resource_was_healthy\"', 'first_seen < timestamp(\"2026-05-01T00:00:00Z\").getSeconds()'"`
+	Filter    string `json:"filter,omitempty" jsonschema:"optional CEL boolean expression run against each composed Issue. Bindings: severity (critical|warning), category (e.g. crashloop, image_pull_failed, missing_config_ref, gitops_sync_failed), category_group (startup|runtime|scheduling|configuration|networking|storage|scaling|security|control_plane; runtime here is an issue taxonomy group, not issue_timing), source (problem=built-in Radar detector, missing_ref=dangling by-name reference, scheduling=pod startup blocker, condition=False controller/CRD condition), kind, group, ns (the namespace — use 'ns', not 'namespace' which is a CEL reserved word), name, reason, message, cause, action, remediation_kind, remediation_target, count (int, the affected-resource fan-out), grouping_scope (workload|service|node|…), restart_count (int), last_terminated_reason, operation_retry_count (int, a GitOps controller's sync-operation retries — distinct from restart_count), stuck (bool, issue not expected to self-recover), issue_timing (string timing evidence: 'started_at_resource_creation' = evidence places the failing state during resource creation or first reconciliation; 'started_after_resource_was_healthy' = evidence shows a meaningful healthy window before the failing condition appeared; absent = Radar has no clean signal, do NOT infer timing from age alone; this is timing evidence, not a root-cause verdict), issue_timing_basis (string: evidence used — 'condition' | 'owner_condition' | 'pod_creation' | 'deletion' | 'phase' | 'spec'), first_seen + last_seen (unix seconds — prefer first_seen for onset/age; first_seen=0 means onset is unknown, so age comparisons must guard first_seen != 0; last_seen churns to compose-time). For cross-cluster scoping use clusters= (not a CEL predicate). Examples: 'severity == \"critical\" && count > 5', 'category_group == \"startup\"', 'restart_count > 10', 'remediation_kind == \"create-namespace\"', 'stuck && operation_retry_count >= 5', 'issue_timing == \"started_after_resource_was_healthy\"', 'first_seen != 0 && first_seen < timestamp(\"2026-05-01T00:00:00Z\").getSeconds()'"`
 }
 
 // Tool handlers
@@ -626,7 +651,7 @@ type issuesInput struct {
 func handleGetDashboard(ctx context.Context, req *mcp.CallToolRequest, input dashboardInput) (*mcp.CallToolResult, any, error) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 
 	// Dashboard summary doesn't currently take a multi-namespace input, so we
@@ -746,7 +771,7 @@ type topResourcesResponseMCP struct {
 func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input listResourcesInput) (*mcp.CallToolResult, any, error) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 
 	kind := strings.ToLower(input.Kind)
@@ -921,7 +946,7 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, g
 func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getResourceInput) (*mcp.CallToolResult, any, error) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 
 	kind := strings.ToLower(input.Kind)
@@ -1107,7 +1132,7 @@ func buildMCPResourceContextWithStaleChecks(ctx context.Context, obj runtime.Obj
 	}
 	canonicalGroup := gvk.Group
 
-	issueSum := computeMCPIssueSummary(cache, canonicalGroup, canonicalKind, namespace, name)
+	issueSum := computeMCPIssueSummary(ctx, cache, canonicalGroup, canonicalKind, namespace, name)
 	auditSum := computeMCPAuditSummary(cache, canonicalGroup, canonicalKind, namespace, name)
 
 	opts := resourcecontext.Options{
@@ -1121,12 +1146,15 @@ func buildMCPResourceContextWithStaleChecks(ctx context.Context, obj runtime.Obj
 			k8s.FindRemovedServiceEnvChecksForObject(ctx, cache, obj),
 			staleChecks,
 		),
+		ContainerCompletionSplit: resourcecontextrefs.ContainerCompletionSplitFromShape(
+			k8s.FindContainerCompletionSplitForObject(cache, obj, time.Now()),
+		),
 		ServiceBackends: mcpServiceBackendLookup{cache: cache},
 	}
 
-	if idx := k8s.GetPolicyReportIndex(); idx != nil {
-		opts.PolicyReports = mcpPolicyReportLookupAdapter{idx: idx}
-	}
+	// Wired unconditionally: a nil index is exactly the case that needs to
+	// report WHY it is nil.
+	opts.PolicyReports = mcpPolicyReportLookupAdapter{idx: k8s.GetPolicyReportIndex(), status: k8s.GetPolicyReportStatus()}
 
 	if topo, prov, dyn, ok := mcpTopologyForContext(namespace); ok {
 		opts.Topology = topo
@@ -1392,9 +1420,7 @@ func handleGetTopology(ctx context.Context, req *mcp.CallToolRequest, input topo
 	// restricted user can't enumerate cluster infrastructure via the
 	// topology tool. Cluster-wide pod access does NOT imply cluster-scoped
 	// reads; per-kind SAR is the gate.
-	if deny := deniedClusterScopedTopoKinds(ctx); len(deny) > 0 {
-		topo.StripNodeKinds(deny)
-	}
+	applyClusterScopedTopologyRBAC(ctx, topo)
 
 	if strings.ToLower(input.Format) == "summary" {
 		return toJSONResult(buildTopologySummary(topo))
@@ -1420,11 +1446,30 @@ func handleGetTopology(ctx context.Context, req *mcp.CallToolRequest, input topo
 func deniedClusterScopedTopoKinds(ctx context.Context) map[topology.NodeKind]bool {
 	deny := make(map[topology.NodeKind]bool)
 	for _, ck := range topology.ClusterScopedKinds {
+		if ck.Kind == topology.KindNodeClass {
+			continue
+		}
 		if !canReadClusterScopedKind(ctx, ck.Resource, ck.Group, "list") {
 			deny[ck.Kind] = true
 		}
 	}
 	return deny
+}
+
+func applyClusterScopedTopologyRBAC(ctx context.Context, topo *topology.Topology) {
+	if topo == nil {
+		return
+	}
+	if deny := deniedClusterScopedTopoKinds(ctx); len(deny) > 0 {
+		topo.StripNodeKinds(deny)
+	}
+	allowedNodeClasses := make(map[topology.SARTuple]bool)
+	for _, tuple := range topo.NodeClassRBACTuples() {
+		if canReadInNamespace(ctx, tuple.Group, tuple.Resource, "", "list") {
+			allowedNodeClasses[tuple] = true
+		}
+	}
+	topo.StripNodeClassesExcept(allowedNodeClasses)
 }
 
 // topologySummary is an LLM-friendly text representation of the topology.
@@ -1622,7 +1667,7 @@ func resolveEventTypeFilter(t string) (string, error) {
 func handleGetEvents(ctx context.Context, req *mcp.CallToolRequest, input eventsInput) (*mcp.CallToolResult, any, error) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 
 	eventLister := cache.Events()
@@ -1738,7 +1783,7 @@ func handleGetPodLogs(ctx context.Context, req *mcp.CallToolRequest, input podLo
 
 	clientset := k8s.ClientFromContext(ctx)
 	if clientset == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 
 	tailLines := int64(200)
@@ -1938,7 +1983,7 @@ type podLogsResponseMCP struct {
 func handleListNamespaces(ctx context.Context, req *mcp.CallToolRequest, input struct{}) (*mcp.CallToolResult, any, error) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 
 	lister := cache.Namespaces()
@@ -2715,7 +2760,7 @@ func countResources(cache *k8s.ResourceCache, namespace string, d *mcpDashboard,
 func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesInput) (*mcp.CallToolResult, any, error) {
 	provider := issues.NewCacheProvider()
 	if provider == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 	var allowedNamespaces []string
 	if input.Namespace != "" {
@@ -2747,6 +2792,7 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 		CanReadClusterScoped: func(kind, group string) bool {
 			return canReadClusterScopedKind(ctx, kind, group, "list")
 		},
+		CanReadRelated: issueRelatedResourceAccess(ctx),
 	}
 	if input.Filter != "" {
 		f, err := filter.CachedIssueFilter(input.Filter)
@@ -2986,7 +3032,7 @@ func mcpSearchSecretsRBAC(ctx context.Context, scanNamespaces []string) (decisio
 func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInput) (*mcp.CallToolResult, any, error) {
 	provider := search.NewCacheProvider()
 	if provider == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 	query := input.Query
 	if query == "" {

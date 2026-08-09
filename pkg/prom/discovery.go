@@ -55,14 +55,18 @@ type DiscoverOptions struct {
 	Logger func(format string, args ...interface{})
 }
 
-// WellKnownLocations is the ordered list of namespaces + service names where
-// Prometheus-compatible services are commonly installed.
-var WellKnownLocations = []struct {
+// wellKnownLoc is a namespace + service name where a Prometheus-compatible
+// service is commonly installed.
+type wellKnownLoc struct {
 	Namespace string
 	Name      string
 	Port      int    // 0 = use service's first port
 	BasePath  string // sub-path for Prometheus API
-}{
+}
+
+// WellKnownLocations is the ordered list of primary Prometheus-compatible
+// service locations, ranked ahead of dynamically-discovered candidates.
+var WellKnownLocations = []wellKnownLoc{
 	// VictoriaMetrics — monitoring namespace first (workload metrics)
 	{"monitoring", "victoria-metrics-victoria-metrics-single-server", 8428, ""},
 	{"monitoring", "victoria-metrics-single-server", 8428, ""},
@@ -84,7 +88,15 @@ var WellKnownLocations = []struct {
 	{"metrics", "prometheus-server", 0, ""},
 	{"kube-system", "prometheus", 0, ""},
 	{"default", "prometheus", 0, ""},
-	// VictoriaMetrics — caretta namespace (traffic-specific, may lack workload metrics)
+}
+
+// fallbackWellKnownLocations are last-resort well-known metrics services, ranked
+// AFTER dynamically-discovered candidates. caretta-vm serves the traffic source's
+// eBPF link metrics and commonly lacks cluster workload (node/pod) metrics, so it
+// must never outrank a real Prometheus — whether that Prometheus is in the primary
+// well-known list or is only turned up by the dynamic scan. It is still returned
+// as a candidate so a cluster whose only metrics backend is caretta-vm keeps working.
+var fallbackWellKnownLocations = []wellKnownLoc{
 	{"caretta", "caretta-vm", 8428, ""},
 }
 
@@ -204,66 +216,24 @@ func Discover(ctx context.Context, k8sClient kubernetes.Interface, opts Discover
 		logf = func(string, ...interface{}) {}
 	}
 
-	var out []Candidate
-
 	// seen de-duplicates candidates by namespace/name/port/basePath so a
-	// service reachable via both the well-known list and the dynamic scan is
-	// probed and port-forwarded only once. Well-known wins ties because it is
-	// appended first.
+	// service reachable via more than one layer is probed and port-forwarded only
+	// once. Earlier layers win ties because they populate seen first.
 	seen := map[string]bool{}
 
-	// Layer 1: well-known locations. Fetch them concurrently — this is ~20
-	// targeted Gets, which run serially would dominate discovery latency against
-	// a remote API server — then assemble in declared order for deterministic
-	// priority. Targeted Gets (not a cluster-wide List) keep this working for
-	// callers with get-but-not-list on Services.
-	found := make([]*corev1.Service, len(WellKnownLocations))
-	getErrs := make([]error, len(WellKnownLocations))
-	sem := make(chan struct{}, wellKnownConcurrency)
-	var wg sync.WaitGroup
-	for i, loc := range WellKnownLocations {
-		wg.Go(func() {
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			svc, err := k8sClient.CoreV1().Services(loc.Namespace).Get(ctx, loc.Name, metav1.GetOptions{})
-			if err != nil {
-				getErrs[i] = err
-				return
-			}
-			found[i] = svc
-		})
-	}
-	wg.Wait()
+	// Layer 1: primary well-known locations, ranked ahead of everything else.
+	out := collectWellKnownLocations(ctx, k8sClient, WellKnownLocations, seen, logf)
 
-	// Assemble in declared order, logging serially — DiscoverOptions.Logger has
-	// no concurrency contract, so it must not be called from the workers above.
-	for i, loc := range WellKnownLocations {
-		svc := found[i]
-		if svc == nil {
-			if err := getErrs[i]; err != nil && !apierrors.IsNotFound(err) {
-				logf("prom.Discover: error checking %s/%s: %v", loc.Namespace, loc.Name, err)
-			}
-			continue
-		}
-		port := resolvePort(*svc, loc.Port)
-		key := candidateKey(svc.Namespace, svc.Name, port, loc.BasePath)
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		out = append(out, Candidate{
-			Namespace:   svc.Namespace,
-			Name:        svc.Name,
-			Port:        port,
-			TargetPort:  resolveTargetPort(*svc, port),
-			ClusterAddr: buildClusterAddr(svc.Name, svc.Namespace, svc.Spec.ClusterIP, port),
-			BasePath:    loc.BasePath,
-			Source:      CandidateSourceWellKnown,
-		})
-	}
+	// Fallback locations (caretta-vm) are fetched now — so their keys enter `seen`
+	// and the dynamic scan below can't re-surface them as ordinary scored
+	// candidates — but they are held and appended LAST. caretta-vm serves only the
+	// traffic source's link metrics and commonly lacks cluster workload metrics, so
+	// a real Prometheus (well-known or dynamically discovered) must always outrank
+	// it; it stays a candidate only so a caretta-vm-only cluster keeps working.
+	fallback := collectWellKnownLocations(ctx, k8sClient, fallbackWellKnownLocations, seen, logf)
 
 	if !opts.IncludeDynamic {
-		return out, nil
+		return append(out, fallback...), nil
 	}
 
 	// Layer 2: dynamic cluster-wide scan. The score only *ranks* candidates; it
@@ -274,12 +244,27 @@ func Discover(ctx context.Context, k8sClient kubernetes.Interface, opts Discover
 	// lightly-labeled Prometheus. MaxDynamic still bounds how many are returned.
 	svcs, err := k8sClient.CoreV1().Services("").List(ctx, metav1.ListOptions{})
 	if err != nil {
+		// The cluster-wide list failed, but the well-known + fallback Gets above
+		// still succeeded — return them (including the caretta-vm fallback) rather
+		// than dropping the fallback tier. This is the get-but-not-list RBAC case.
 		logf("prom.Discover: failed to list services: %v", err)
-		return out, nil // well-known results still useful
+		return append(out, fallback...), nil
+	}
+
+	// Services already claimed by the fallback tier must never resurface among the
+	// dynamic candidates — that would rank caretta-vm by score instead of forcing
+	// it last. Match by namespace/name (not the port-keyed `seen`), so a caretta-vm
+	// Service fronted by a non-8428 service port is still suppressed here.
+	fallbackNames := make(map[string]bool, len(fallback))
+	for _, c := range fallback {
+		fallbackNames[c.Namespace+"/"+c.Name] = true
 	}
 
 	var scored []Candidate
 	for _, svc := range svcs.Items {
+		if fallbackNames[svc.Namespace+"/"+svc.Name] {
+			continue
+		}
 		score, bp, identity := ScoreService(svc)
 		// Admit on a Prometheus-family identity signal, not on score alone: a
 		// namespace-only match (score without identity) would send the operator's
@@ -310,7 +295,66 @@ func Discover(ctx context.Context, k8sClient kubernetes.Interface, opts Discover
 	if len(scored) > opts.MaxDynamic {
 		scored = scored[:opts.MaxDynamic]
 	}
-	return append(out, scored...), nil
+	out = append(out, scored...)
+
+	// Fallback tier last: after both the primary well-known list and the dynamic
+	// scan, so a real Prometheus always wins over caretta-vm when one exists.
+	out = append(out, fallback...)
+	return out, nil
+}
+
+// collectWellKnownLocations fetches the given well-known locations concurrently
+// (targeted Gets, not a cluster-wide List, so it works for callers with
+// get-but-not-list on Services) and returns the ones that exist as candidates in
+// declared order. Locations whose key is already in seen are skipped; newly
+// added keys are recorded so later layers de-duplicate against them.
+func collectWellKnownLocations(ctx context.Context, k8sClient kubernetes.Interface, locs []wellKnownLoc, seen map[string]bool, logf func(string, ...interface{})) []Candidate {
+	found := make([]*corev1.Service, len(locs))
+	getErrs := make([]error, len(locs))
+	sem := make(chan struct{}, wellKnownConcurrency)
+	var wg sync.WaitGroup
+	for i, loc := range locs {
+		wg.Go(func() {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			svc, err := k8sClient.CoreV1().Services(loc.Namespace).Get(ctx, loc.Name, metav1.GetOptions{})
+			if err != nil {
+				getErrs[i] = err
+				return
+			}
+			found[i] = svc
+		})
+	}
+	wg.Wait()
+
+	// Assemble in declared order, logging serially — DiscoverOptions.Logger has
+	// no concurrency contract, so it must not be called from the workers above.
+	var out []Candidate
+	for i, loc := range locs {
+		svc := found[i]
+		if svc == nil {
+			if err := getErrs[i]; err != nil && !apierrors.IsNotFound(err) {
+				logf("prom.Discover: error checking %s/%s: %v", loc.Namespace, loc.Name, err)
+			}
+			continue
+		}
+		port := resolvePort(*svc, loc.Port)
+		key := candidateKey(svc.Namespace, svc.Name, port, loc.BasePath)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, Candidate{
+			Namespace:   svc.Namespace,
+			Name:        svc.Name,
+			Port:        port,
+			TargetPort:  resolveTargetPort(*svc, port),
+			ClusterAddr: buildClusterAddr(svc.Name, svc.Namespace, svc.Spec.ClusterIP, port),
+			BasePath:    loc.BasePath,
+			Source:      CandidateSourceWellKnown,
+		})
+	}
+	return out
 }
 
 // promPortScore returns the heuristic weight for a port number matching a
@@ -332,11 +376,12 @@ func promPortScore(port int32) int {
 // ScoreService computes a heuristic score for a service being
 // Prometheus-compatible. It returns the ranking score, an inferred BasePath for
 // vmselect-style services, and whether the service carries a Prometheus-family
-// *identity* signal (a name/label/port match). identity gates admission:
-// namespace membership alone contributes to the score for ranking but must not,
-// on its own, make an unrelated Service a candidate — discovery probes
-// candidates with the operator's configured Prometheus headers, so an
-// unrecognized neighbor must not be admitted just for sharing a namespace.
+// *identity* signal (a name, label, or port-NAME match — NOT a bare port number).
+// identity gates admission: a matched port number and namespace membership
+// contribute to the score for ranking but must not, on their own, make an
+// unrelated Service a candidate — discovery probes candidates with the operator's
+// configured Prometheus headers, so a neighbor that merely shares a popular port
+// (9090 is a common gRPC/plugin default too) or a namespace must not be admitted.
 func ScoreService(svc corev1.Service) (score int, basePath string, identity bool) {
 	if svc.Spec.Type == corev1.ServiceTypeExternalName {
 		return 0, "", false
@@ -356,23 +401,30 @@ func ScoreService(svc corev1.Service) (score int, basePath string, identity bool
 	switch appName {
 	case "prometheus":
 		score += 100
+		identity = true
 	case "victoria-metrics-single", "vmsingle":
 		score += 100
+		identity = true
 	case "vmselect":
 		score += 90
 		basePath = "/select/0/prometheus"
+		identity = true
 	case "thanos-query", "thanos-querier":
 		score += 80
+		identity = true
 	}
 
 	switch appLabel {
 	case "prometheus", "prometheus-server":
 		score += 80
+		identity = true
 	case "vmsingle":
 		score += 80
+		identity = true
 	case "vmselect":
 		score += 80
 		basePath = "/select/0/prometheus"
+		identity = true
 	}
 
 	if score > 0 && component == "server" {
@@ -382,7 +434,12 @@ func ScoreService(svc corev1.Service) (score int, basePath string, identity bool
 	for _, p := range svc.Spec.Ports {
 		// Credit a recognized port on either the service port or the container
 		// targetPort — a real Prometheus is often fronted by a service port of
-		// 80/http with targetPort 9090 — but only once per port entry.
+		// 80/http with targetPort 9090 — but only once per port entry. A bare port
+		// NUMBER is a ranking signal only: it must NOT set identity, because
+		// popular defaults like 9090 are shared with unrelated components (e.g. a
+		// gRPC plugin), and admitting on the number alone sends the operator's
+		// Prometheus headers to — and wastes a doomed port-forward on — that
+		// neighbor. A port explicitly NAMED "prometheus" is a genuine family signal.
 		if s := promPortScore(p.Port); s > 0 {
 			score += s
 		} else {
@@ -390,27 +447,32 @@ func ScoreService(svc corev1.Service) (score int, basePath string, identity bool
 		}
 		if strings.Contains(strings.ToLower(p.Name), "prometheus") {
 			score += 10
+			identity = true
 		}
 	}
 
 	nameLower := strings.ToLower(svc.Name)
 	if strings.Contains(nameLower, "prometheus") {
 		score += 20
+		identity = true
 	}
 	if strings.Contains(nameLower, "victoria") || strings.Contains(nameLower, "vmsingle") || strings.Contains(nameLower, "vmselect") {
 		score += 20
+		identity = true
 		if strings.Contains(nameLower, "vmselect") && basePath == "" {
 			basePath = "/select/0/prometheus"
 		}
 	}
 	if strings.Contains(nameLower, "thanos") {
 		score += 15
+		identity = true
 	}
 
-	// Everything above is a Prometheus-family identity signal; the namespace
-	// bonus below only nudges ranking and must not admit on its own.
-	identity = score > 0
-
+	// identity is set above only by a name, label, or port-name signal — genuine
+	// Prometheus-family membership. A bare port number and the metrics-namespace
+	// bonus below rank a candidate but must never admit one on their own, so the
+	// caller never probes (and never sends the operator's configured Prometheus
+	// headers to) an unrelated neighbor that merely shares port 9090 or a namespace.
 	if metricsNamespaces[svc.Namespace] {
 		score += 10
 	}

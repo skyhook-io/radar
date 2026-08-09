@@ -1315,3 +1315,91 @@ func indexOf(s, sub string) int {
 var (
 	_ = policyv1.PodDisruptionBudget{}
 )
+
+func TestBuild_ContainerCompletionSplit_GatedByAccess(t *testing.T) {
+	cj := &batchv1.CronJob{
+		TypeMeta:   metav1.TypeMeta{Kind: "CronJob", APIVersion: "batch/v1"},
+		ObjectMeta: metav1.ObjectMeta{Name: "audit-log-archiver", Namespace: "prod"},
+		Spec:       batchv1.CronJobSpec{Schedule: "* * * * *"},
+	}
+	obs := &ContainerCompletionSplit{
+		Pod: "audit-log-archiver-1-pod", Job: "audit-log-archiver-1",
+		ExitedContainer: "archiver", RunningContainers: []string{"fluent-bit-sidecar"},
+	}
+
+	t.Run("attached when Pod and Job are readable", func(t *testing.T) {
+		rc := Build(context.Background(), cj, Options{
+			Tier: TierBasic, AccessChecker: allowAllChecker{}, ContainerCompletionSplit: obs,
+		})
+		if rc.CronJobSummary == nil || rc.CronJobSummary.ContainerCompletionSplit == nil {
+			t.Fatalf("want ContainerCompletionSplit attached, got %+v", rc.CronJobSummary)
+		}
+	})
+
+	for _, denied := range []denyChecker{
+		{group: "", kind: "Pod", namespace: "prod"},
+		{group: "batch", kind: "Job", namespace: "prod"},
+	} {
+		t.Run("omitted when "+denied.kind+" read is denied", func(t *testing.T) {
+			rc := Build(context.Background(), cj, Options{
+				Tier: TierBasic, AccessChecker: denied, ContainerCompletionSplit: obs,
+			})
+			if rc.CronJobSummary != nil && rc.CronJobSummary.ContainerCompletionSplit != nil {
+				t.Fatalf("want ContainerCompletionSplit omitted when %s read denied", denied.kind)
+			}
+			found := false
+			for _, o := range rc.Omitted {
+				if o.Field == "cronJobSummary.containerCompletionSplit" && o.Reason == OmittedRBACDenied {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("want omitted [cronJobSummary.containerCompletionSplit, rbac_denied]; got %+v", rc.Omitted)
+			}
+		})
+	}
+
+	job := &batchv1.Job{
+		TypeMeta:   metav1.TypeMeta{Kind: "Job", APIVersion: "batch/v1"},
+		ObjectMeta: metav1.ObjectMeta{Name: "audit-log-archiver-1", Namespace: "prod"},
+	}
+	t.Run("attached to Job summary", func(t *testing.T) {
+		rc := Build(context.Background(), job, Options{
+			Tier: TierBasic, AccessChecker: allowAllChecker{}, ContainerCompletionSplit: obs,
+		})
+		if rc.JobSummary == nil || rc.JobSummary.ContainerCompletionSplit == nil {
+			t.Fatalf("want ContainerCompletionSplit attached, got %+v", rc.JobSummary)
+		}
+	})
+
+	for _, denied := range []denyChecker{
+		{group: "", kind: "Pod", namespace: "prod"},
+		{group: "batch", kind: "Job", namespace: "prod"},
+	} {
+		t.Run("Job summary omitted when "+denied.kind+" read is denied", func(t *testing.T) {
+			rc := Build(context.Background(), job, Options{
+				Tier: TierBasic, AccessChecker: denied, ContainerCompletionSplit: obs,
+			})
+			if rc.JobSummary != nil && rc.JobSummary.ContainerCompletionSplit != nil {
+				t.Fatalf("want ContainerCompletionSplit omitted when %s read denied", denied.kind)
+			}
+			found := false
+			for _, o := range rc.Omitted {
+				if o.Field == "jobSummary.containerCompletionSplit" && o.Reason == OmittedRBACDenied {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("want omitted [jobSummary.containerCompletionSplit, rbac_denied]; got %+v", rc.Omitted)
+			}
+		})
+	}
+
+	t.Run("unrelated kind is not gated", func(t *testing.T) {
+		tracker := newOmittedTracker()
+		deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: "prod"}}
+		if got := gateContainerCompletionSplit(context.Background(), allowAllChecker{}, deployment, obs, "unused", tracker); got != nil {
+			t.Fatalf("want nil for Deployment, got %+v", got)
+		}
+	})
+}

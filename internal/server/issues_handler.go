@@ -95,17 +95,9 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 		// Grouped is the product default — one row per subject+category.
 		// ?view=flat returns the raw pre-fold evidence rows for debugging
 		// ("what folded into this group?") and internal inspection.
-		Grouped: q.Get("view") != "flat",
-		CanReadClusterScoped: func(kind, group string) bool {
-			if auth.UserFromContext(r.Context()) == nil {
-				return true
-			}
-			clusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(kind, group)
-			if !clusterScoped {
-				return false
-			}
-			return s.canRead(r, gvrGroup, gvrResource, "", "list")
-		},
+		Grouped:              q.Get("view") != "flat",
+		CanReadClusterScoped: s.issueClusterScopedAccess(r),
+		CanReadRelated:       s.issueRelatedResourceAccess(r),
 	}
 	if expr := q.Get("filter"); expr != "" {
 		f, err := filter.CachedIssueFilter(expr)
@@ -160,6 +152,33 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.writeJSON(w, resp)
+}
+
+func (s *Server) issueClusterScopedAccess(r *http.Request) func(kind, group string) bool {
+	return func(kind, group string) bool {
+		if auth.UserFromContext(r.Context()) == nil {
+			return true
+		}
+		clusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(kind, group)
+		if !clusterScoped {
+			return false
+		}
+		return s.canRead(r, gvrGroup, gvrResource, "", "list")
+	}
+}
+
+func (s *Server) issueRelatedResourceAccess(r *http.Request) func(issues.Ref) bool {
+	return func(ref issues.Ref) bool {
+		if auth.UserFromContext(r.Context()) == nil {
+			return true
+		}
+		if ref.Namespace != "" || strings.EqualFold(ref.Kind, "Namespace") {
+			_, _, ok := s.preflightResourceGet(r, normalizeKind(ref.Kind), ref.Namespace, ref.Name, ref.Group)
+			return ok
+		}
+		clusterScoped, group, resource := k8s.ClassifyKindScope(ref.Kind, ref.Group)
+		return clusterScoped && s.canRead(r, group, resource, "", "get")
+	}
 }
 
 func (s *Server) nativeHelmIssuesForRequest(r *http.Request, namespaces []string, filters issues.Filters) []issues.Issue {
@@ -251,7 +270,11 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 		namespaces = []string{namespace}
 	}
 
-	related := issues.RelatedIssues(provider, namespaces, group, kind, namespace, name)
+	related := issues.RelatedIssues(provider, issues.RelatedIssueOptions{
+		Namespaces:           namespaces,
+		CanReadClusterScoped: s.issueClusterScopedAccess(r),
+		CanReadRelated:       s.issueRelatedResourceAccess(r),
+	}, group, kind, namespace, name)
 	if related == nil {
 		related = []issues.Issue{}
 	}

@@ -13,6 +13,10 @@
  * - < 1 core: 2 decimal places (e.g., "0.05 cores")
  */
 function formatCoresValue(cores: number): string {
+  // Zero and negatives are real values (a pool over its limit has negative
+  // headroom) — collapsing them into "<0.01 cores" fabricates a near-zero.
+  if (cores === 0) return '0 cores'
+  if (cores < 0) return `-${formatCoresValue(-cores)}`
   if (cores >= 1) {
     // Round to 1 decimal
     const rounded = Math.round(cores * 10) / 10
@@ -91,6 +95,7 @@ export function formatCPUString(cpuString: string): string {
  * @returns Formatted string like "1.5 GiB" or "256 MiB"
  */
 export function formatMemoryBytes(bytes: number): string {
+  if (bytes < 0) return `-${formatMemoryBytes(-bytes)}`
   if (bytes >= 1024 * 1024 * 1024) {
     const gib = bytes / (1024 * 1024 * 1024)
     return gib >= 10 ? `${gib.toFixed(1)} GiB` : `${gib.toFixed(2)} GiB`
@@ -115,7 +120,7 @@ export function parseMemoryToBytes(memString: string): number {
   if (!memString) return 0
 
   const str = memString.trim()
-  const match = str.match(/^(\d+(?:\.\d+)?)\s*([A-Za-z]*)$/)
+  const match = str.match(/^(-?\d+(?:\.\d+)?)\s*([A-Za-z]*)$/)
   if (!match) return 0
 
   const num = parseFloat(match[1])

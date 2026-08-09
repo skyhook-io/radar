@@ -3,6 +3,7 @@ package k8score
 import (
 	"errors"
 	"testing"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -91,5 +92,29 @@ func TestParseCPU(t *testing.T) {
 		if got := parseCPU(tt.input); got != tt.want {
 			t.Errorf("parseCPU(%q) = %d, want %d", tt.input, got, tt.want)
 		}
+	}
+}
+
+func TestGetAllNodeMetricsLatestPreservesSampleTimestamp(t *testing.T) {
+	first := time.Date(2026, time.July, 13, 8, 0, 0, 0, time.UTC)
+	latest := first.Add(30 * time.Second)
+	buffer := newRingBuffer(MetricsHistorySize)
+	buffer.Add(MetricsDataPoint{Timestamp: first, CPU: 100, Memory: 200})
+	buffer.Add(MetricsDataPoint{Timestamp: latest, CPU: 300, Memory: 400})
+	store := &MetricsHistoryStore{
+		nodeMetrics: map[string]*nodeMetricsBuffer{
+			"node-a": {name: "node-a", buffer: buffer},
+		},
+	}
+
+	got := store.GetAllNodeMetricsLatest()
+	if len(got) != 1 {
+		t.Fatalf("latest node metrics count = %d, want 1", len(got))
+	}
+	if !got[0].ObservedAt.Equal(latest) {
+		t.Fatalf("observedAt = %s, want sample timestamp %s", got[0].ObservedAt, latest)
+	}
+	if got[0].CPU != 300 || got[0].Memory != 400 {
+		t.Fatalf("latest node metrics = %+v, want CPU=300 Memory=400", got[0])
 	}
 }

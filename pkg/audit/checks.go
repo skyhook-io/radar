@@ -153,6 +153,12 @@ func RunChecks(input *CheckInput) *ScanResults {
 	// missing input (the gate is "not applicable here", not "couldn't list").
 	findings = append(findings, checkGitOpsCoverage(tr, input)...)
 
+	// --- CloudNativePG: clusters with no declarative backup schedule ---
+	// Self-gates on a nil Cluster inventory (CNPG not installed / RBAC denied)
+	// and on ScheduledBackup absence-authority — records nothing rather than
+	// reporting a missing input.
+	findings = append(findings, checkCNPGDeclarativeBackup(tr, input)...)
+
 	return buildResults(findings, tr, missingInputs)
 }
 

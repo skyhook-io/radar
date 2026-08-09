@@ -122,6 +122,43 @@ export interface IssueRowSlotContext {
   open: boolean;
 }
 
+/** Substitutes the SOURCE of the diagnosis prose in the expanded body.
+ *
+ *  For hosts that can diagnose an issue better than the detectors can — today
+ *  that means an AI investigation that actually read the logs and cross-checked
+ *  the resource, where `issue.action` is a static template keyed off the reason
+ *  code ("Open the resource drawer for events, logs, and YAML."). Showing both
+ *  makes the reader arbitrate between navigation and an answer.
+ *
+ *  Only the PROSE is the host's. The meta line (restarts, timing, change
+ *  context), the raw detector text, the reason-code eyebrow, tone and spacing
+ *  stay here — a host that rebuilt those would have to re-implement
+ *  `issueTiming` and `changeContextText` and would drift from this file.
+ *
+ *  Raw error is deliberately not overridable: it is the verbatim
+ *  kubelet/containerd string operators grep for, and a summary is not a
+ *  substitute for it.
+ *
+ *  Pass a field as undefined to leave that section alone — an override with
+ *  nothing to say is not an improvement over the detector's own text. */
+export interface IssueDiagnosisSource {
+  /** Replaces the prose under "What's wrong". The meta line still follows it. */
+  cause?: ReactNode;
+  /** Replaces the body of "Next step", and makes the section render even when
+   *  the detector supplied no `action` of its own. */
+  nextStep?: ReactNode;
+  /** Provenance — who is talking and how stale they are. Rendered once, in the
+   *  header of the first overridden section, because it is a fact about the
+   *  source rather than about either section. Name the source in words a reader
+   *  already knows from elsewhere in the product; an initialism sitting beside a
+   *  reason code reads as one more terse token, not as a claim about authorship. */
+  attribution?: ReactNode;
+  /** Section icon for the overridden sections. Usually leave unset: the stock
+   *  icons carry the section's TONE (warn / fix), which the source doesn't
+   *  change, and `attribution` is the better place to say who wrote the prose. */
+  icon?: ComponentType<{ className?: string }>;
+}
+
 export interface IssueRowProps {
   issue: Issue;
   clusterLabel?: (issue: Issue) => string | undefined;
@@ -139,6 +176,13 @@ export interface IssueRowProps {
   renderBadges?: (ctx: IssueRowSlotContext) => ReactNode;
   renderMeta?: (ctx: IssueRowSlotContext) => ReactNode;
   renderActions?: (ctx: IssueRowSlotContext) => ReactNode;
+  /** See IssueDiagnosisSource — replaces the diagnosis prose, not its framing. */
+  diagnosisSource?: IssueDiagnosisSource;
+  /** Appends a section to the end of the expanded body's stack. Unlike
+   *  `diagnosisSource` this only adds: it lands after Affected resources and
+   *  inherits the stack's dividers and rhythm, so the host section needs no
+   *  chrome of its own. */
+  renderDetailSection?: (ctx: IssueRowSlotContext) => ReactNode;
   ResourceLinkIcon?: ComponentType<{ className?: string }>;
 }
 
@@ -156,6 +200,8 @@ export function IssueRow({
   renderBadges,
   renderMeta,
   renderActions,
+  diagnosisSource,
+  renderDetailSection,
   ResourceLinkIcon = ExternalLink,
 }: IssueRowProps) {
   const cluster = clusterLabel?.(issue);
@@ -194,6 +240,13 @@ export function IssueRow({
             </Tooltip>
           ) : null}
         </>
+      ) : issue.onset_unknown ? (
+        <Tooltip content="Radar can confirm this issue is active, but current Kubernetes state does not reveal when it began." delay={200} wrapperClassName="shrink-0">
+          <span className="flex items-center gap-1 text-xs text-theme-text-tertiary">
+            <Clock className="h-3 w-3" aria-hidden />
+            Onset unknown
+          </span>
+        </Tooltip>
       ) : null}
     </div>
   );
@@ -329,7 +382,7 @@ export function IssueRow({
                 text keeps enough contrast. */}
             <div className="border-t border-theme-border bg-theme-surface py-4 pl-6 pr-4">
               <div className="flex flex-col divide-y divide-theme-border/70 [&>*]:py-4 [&>*:first-child]:pt-0 [&>*:last-child]:pb-0">
-                <Diagnosis issue={issue} />
+                <Diagnosis issue={issue} source={diagnosisSource} />
                 {issue.incident_parent ? (
                   <section className="flex flex-col gap-1">
                     <h4 className="text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
@@ -349,6 +402,7 @@ export function IssueRow({
                 ) : null}
                 <DiagnosticContext issue={issue} resourceHref={resourceHref} onResourceClick={onResourceClick} ResourceLinkIcon={ResourceLinkIcon} />
                 <AffectedResources issue={issue} hideSubject={hideSubject} resourceHref={resourceHref} onResourceClick={onResourceClick} ResourceLinkIcon={ResourceLinkIcon} />
+                {renderDetailSection?.(slotCtx)}
               </div>
             </div>
           </div>
@@ -361,7 +415,12 @@ export function IssueRow({
 // Diagnosis: WHAT'S WRONG (amber) → NEXT STEP (emerald) → RAW ERROR (monochrome
 // terminal block). Status/timing facts share one muted meta line under the
 // diagnosis so the body reads as three beats rather than a stack of one-liners.
-function Diagnosis({ issue }: { issue: Issue }) {
+//
+// `source` lets a host supply the prose of the first two beats (see
+// IssueDiagnosisSource). It is a swap of WORDS ONLY: the meta line, the raw
+// error, the reason-code eyebrow and the tones are computed here either way, so
+// an overridden card loses none of the facts an un-overridden one shows.
+function Diagnosis({ issue, source }: { issue: Issue; source?: IssueDiagnosisSource }) {
   const crash =
     issue.restart_count || issue.last_terminated_reason
       ? [issue.restart_count ? `${issue.restart_count} restart${issue.restart_count === 1 ? '' : 's'}` : null, issue.last_terminated_reason ? `last exit: ${issue.last_terminated_reason}` : null]
@@ -399,13 +458,44 @@ function Diagnosis({ issue }: { issue: Issue }) {
     meta.push(timing.meta);
   } else if (issue.first_seen) {
     meta.push(`started ${formatRelativeAgeTime(issue.first_seen)}`);
+  } else if (issue.onset_unknown) {
+    meta.push('onset unknown');
   }
   if (issue.first_seen) {
     if (issue.last_seen && timing?.kind !== 'creation') meta.push(`last seen ${formatRelativeAgeTime(issue.last_seen)}`);
   }
   if (issue.change_context) meta.push(changeContextText(issue.change_context));
 
-  const hasNextStep = !!issue.action || (issue.remediation_kind === 'create-namespace' && !!issue.remediation_target);
+  // A host's prose, when it has better. Each section falls back independently:
+  // supplying a cause and no next step leaves the detector's own action standing,
+  // which is the honest outcome when the host found a cause but no fix.
+  const sourceCause = source?.cause;
+  const sourceNextStep = source?.nextStep;
+  const SourceIcon = source?.icon;
+
+  // Stated once, on whichever overridden section comes first. Marking every
+  // overridden section reads as repetition rather than emphasis, and hosts tend
+  // to hang a control off the attribution — one that appeared twice in a single
+  // card would be a choice the reader has to make between identical options.
+  const attributionOn = sourceCause ? 'cause' : sourceNextStep ? 'nextStep' : null;
+  const causeAttribution = attributionOn === 'cause' ? source?.attribution : null;
+  const nextStepAttribution = attributionOn === 'nextStep' ? source?.attribution : null;
+
+  // The reason code rides the eyebrow whenever the prose above it isn't the
+  // detector's own — true for a parsed cause and for a host's alike, since in
+  // both cases the greppable token is otherwise nowhere on an open row.
+  const reasonEyebrow = (issue.cause || sourceCause) && issue.reason ? `· ${issue.reason}` : null;
+  const causeLabelExtra =
+    reasonEyebrow || causeAttribution ? (
+      <>
+        {reasonEyebrow}
+        {reasonEyebrow && causeAttribution ? ' ' : null}
+        {causeAttribution}
+      </>
+    ) : undefined;
+
+  const hasNextStep =
+    !!issue.action || !!sourceNextStep || (issue.remediation_kind === 'create-namespace' && !!issue.remediation_target);
 
   return (
     <div className="flex flex-col divide-y divide-theme-border/70 [&>*]:py-4 [&>*:first-child]:pt-0 [&>*:last-child]:pb-0">
@@ -414,12 +504,14 @@ function Diagnosis({ issue }: { issue: Issue }) {
           identifier operators anchor on, and the collapsed header drops it while
           open. The non-cause branch already leads with it in the prose. */}
       <CardSection
-        icon={AlertTriangle}
+        icon={sourceCause && SourceIcon ? SourceIcon : AlertTriangle}
         label="What's wrong"
         tone="warn"
-        labelExtra={issue.cause && issue.reason ? `· ${issue.reason}` : undefined}
+        labelExtra={causeLabelExtra}
       >
-        {issue.cause ? (
+        {sourceCause ? (
+          <div className="text-sm leading-relaxed text-theme-text-primary">{sourceCause}</div>
+        ) : issue.cause ? (
           <p className="text-sm leading-relaxed text-theme-text-primary">{issue.cause}</p>
         ) : (
           <p className="text-sm leading-relaxed text-theme-text-primary">
@@ -427,12 +519,22 @@ function Diagnosis({ issue }: { issue: Issue }) {
             {headline ? <span className="text-theme-text-secondary"> — {headline}</span> : null}
           </p>
         )}
+        {/* Always the detector's, never the host's: restarts, timing and change
+            context are measurements, and a narrative account of the issue is not
+            a substitute for them. */}
         {meta.length > 0 ? <p className="text-xs leading-relaxed text-theme-text-tertiary tabular-nums">{meta.join(' · ')}</p> : null}
       </CardSection>
 
       {hasNextStep ? (
-        <CardSection icon={ArrowRight} label="Next step" tone="fix">
-          {issue.action ? <CardBody>{issue.action}</CardBody> : null}
+        <CardSection
+          icon={sourceNextStep && SourceIcon ? SourceIcon : ArrowRight}
+          label="Next step"
+          tone="fix"
+          labelExtra={nextStepAttribution ?? undefined}
+        >
+          {sourceNextStep ?? (issue.action ? <CardBody>{issue.action}</CardBody> : null)}
+          {/* Survives an override: this is a structured one-click fix with an
+              apply path, not advice competing with the host's. */}
           {issue.remediation_kind === 'create-namespace' && issue.remediation_target ? (
             <p className="text-xs text-theme-text-tertiary">
               Suggested fix: create namespace <code className="inline-code">{issue.remediation_target}</code> — apply it from the GitOps detail page.

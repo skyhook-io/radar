@@ -347,6 +347,27 @@ func TestMemoryStore_RingBufferOverflow(t *testing.T) {
 	if stats.TotalEvents != 5 {
 		t.Errorf("Expected TotalEvents=5, got %d", stats.TotalEvents)
 	}
+	if stats.MaxEvents != 5 || !stats.EventsEvicted {
+		t.Errorf("Expected bounded, evicted memory stats, got %+v", stats)
+	}
+}
+
+func TestMemoryStore_StatsDistinguishesFullFromEvicted(t *testing.T) {
+	store := NewMemoryStore(3)
+	ctx := context.Background()
+	if stats := store.Stats(); stats.MaxEvents != 3 || stats.EventsEvicted {
+		t.Fatalf("empty stats = %+v, want maxEvents=3 without eviction", stats)
+	}
+	for index := range 3 {
+		_ = store.Append(ctx, TimelineEvent{ID: "full-" + string(rune('a'+index)), Timestamp: time.Now(), Kind: "Deployment", Name: "app", Source: SourceInformer})
+	}
+	if stats := store.Stats(); stats.TotalEvents != 3 || stats.EventsEvicted {
+		t.Fatalf("full stats = %+v, filling the ring must not count as eviction", stats)
+	}
+	_ = store.Append(ctx, TimelineEvent{ID: "overflow", Timestamp: time.Now(), Kind: "Deployment", Name: "app", Source: SourceInformer})
+	if stats := store.Stats(); stats.TotalEvents != 3 || !stats.EventsEvicted {
+		t.Fatalf("overflow stats = %+v, want eviction disclosure", stats)
+	}
 }
 
 func TestMemoryStore_GetEvent(t *testing.T) {

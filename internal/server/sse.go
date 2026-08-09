@@ -650,7 +650,7 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() {
 		namespaces       []string
 		showPolicyEffect bool
 		deniedKinds      map[topology.NodeKind]bool
-		channels         []chan SSEEvent
+		clients          map[chan SSEEvent]ClientInfo
 	}
 	clientGroups := make(map[clientKey]*clientGroup)
 	for ch, info := range clients {
@@ -660,9 +660,9 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() {
 		// rather than the unfiltered bytes of a more-privileged peer.
 		key := clientKey{namespacesKey: nsKey, deniedKindsKey: deniedKindsKey(info.DeniedKinds), viewMode: info.ViewMode, showPolicyEffect: info.ShowPolicyEffect}
 		if clientGroups[key] == nil {
-			clientGroups[key] = &clientGroup{namespaces: info.Namespaces, showPolicyEffect: info.ShowPolicyEffect, deniedKinds: info.DeniedKinds}
+			clientGroups[key] = &clientGroup{namespaces: info.Namespaces, showPolicyEffect: info.ShowPolicyEffect, deniedKinds: info.DeniedKinds, clients: make(map[chan SSEEvent]ClientInfo)}
 		}
-		clientGroups[key].channels = append(clientGroups[key].channels, ch)
+		clientGroups[key].clients[ch] = info
 	}
 
 	// Build topology for each group and send. Pre-marshal once per group so
@@ -691,20 +691,35 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() {
 			maxEstimated = int64(topo.EstimatedNodes)
 		}
 
-		data, marshalErr := json.Marshal(topo)
-		if marshalErr != nil {
-			log.Printf("Error marshaling topology for broadcast: %v", marshalErr)
-			continue
+		// A synthesized NodeClass kind can contain several independently
+		// authorized provider APIs. Regroup against the exact tuples present in
+		// this build, then marshal once per effective provider permission set.
+		type nodeClassGroup struct {
+			allowed  map[topology.SARTuple]bool
+			channels []chan SSEEvent
 		}
-		perfstats.RecordTopologyPayload(len(data))
-
-		event := SSEEvent{
-			Event: "topology",
-			Data:  json.RawMessage(data),
+		nodeClassGroups := make(map[string]*nodeClassGroup)
+		for ch, info := range group.clients {
+			allowed := authorizedNodeClassTuples(topo, nodeClassAuthorizer(info.Authorize))
+			authKey := nodeClassTuplesKey(allowed)
+			if nodeClassGroups[authKey] == nil {
+				nodeClassGroups[authKey] = &nodeClassGroup{allowed: allowed}
+			}
+			nodeClassGroups[authKey].channels = append(nodeClassGroups[authKey].channels, ch)
 		}
-
-		for _, ch := range group.channels {
-			safeSend(ch, event)
+		for _, authGroup := range nodeClassGroups {
+			filtered := cloneTopology(topo)
+			filtered.StripNodeClassesExcept(authGroup.allowed)
+			data, marshalErr := json.Marshal(filtered)
+			if marshalErr != nil {
+				log.Printf("Error marshaling topology for broadcast: %v", marshalErr)
+				continue
+			}
+			perfstats.RecordTopologyPayload(len(data))
+			event := SSEEvent{Event: "topology", Data: json.RawMessage(data)}
+			for _, ch := range authGroup.channels {
+				safeSend(ch, event)
+			}
 		}
 	}
 
@@ -727,6 +742,56 @@ func deniedKindsKey(deny map[topology.NodeKind]bool) string {
 	}
 	sort.Strings(kinds)
 	return strings.Join(kinds, ",")
+}
+
+// nodeClassAuthorizer narrows the per-kind change authorizer to the exact
+// provider resource carried by a NodeClass topology node. NodeClass kinds are
+// cluster-scoped and unbounded (one CRD per provider), so the gate must ask
+// about the node's own group/resource rather than a finite kind table. A nil
+// authorizer fails closed: an unwired caller must not widen NodeClass
+// visibility.
+func nodeClassAuthorizer(authorize func(group, resource, namespace, verb string) bool) func(topology.SARTuple) bool {
+	return func(tuple topology.SARTuple) bool {
+		if authorize == nil {
+			return false
+		}
+		return authorize(tuple.Group, tuple.Resource, "", "list")
+	}
+}
+
+func authorizedNodeClassTuples(topo *topology.Topology, authorize func(topology.SARTuple) bool) map[topology.SARTuple]bool {
+	allowed := make(map[topology.SARTuple]bool)
+	if authorize == nil {
+		return allowed
+	}
+	for _, tuple := range topo.NodeClassRBACTuples() {
+		if authorize(tuple) {
+			allowed[tuple] = true
+		}
+	}
+	return allowed
+}
+
+func nodeClassTuplesKey(tuples map[topology.SARTuple]bool) string {
+	if len(tuples) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(tuples))
+	for tuple := range tuples {
+		keys = append(keys, tuple.Group+"\x00"+tuple.Resource)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, "\x01")
+}
+
+func cloneTopology(topo *topology.Topology) *topology.Topology {
+	if topo == nil {
+		return nil
+	}
+	clone := *topo
+	clone.Nodes = append([]topology.Node(nil), topo.Nodes...)
+	clone.Edges = append([]topology.Edge(nil), topo.Edges...)
+	return &clone
 }
 
 // heartbeat sends periodic heartbeats to keep connections alive
@@ -1055,6 +1120,7 @@ func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request, denie
 		opts.ShowPolicyEffect = policyEffect
 		if topo, err := builder.Build(opts); err == nil {
 			topo.StripNodeKinds(deniedKinds)
+			topo.StripNodeClassesExcept(authorizedNodeClassTuples(topo, nodeClassAuthorizer(authorize)))
 			data, marshalErr := json.Marshal(topo)
 			if marshalErr != nil {
 				log.Printf("SSE: failed to marshal initial topology: %v", marshalErr)

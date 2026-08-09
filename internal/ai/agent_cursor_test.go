@@ -5,9 +5,75 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+// writeCursorShim writes a fake cursor-agent that mimics a Cursor release where
+// --trust was removed: --help lists only -f/--force/--yolo, passing --trust aborts
+// with "unknown option '--trust'", a headless run with no trust flag aborts at the
+// workspace-trust gate, and --force/-f/--yolo let the run emit stream-json.
+func writeCursorShim(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell shim not portable to windows")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cursor-agent")
+	const script = `#!/bin/sh
+if [ "$1" = "--help" ]; then
+  printf '%s\n' 'Options:' '  -f, --force  Force allow commands unless explicitly denied' '  --yolo  Alias for --force' '  --sandbox <mode>  sandbox' '  --approve-mcps  approve mcps'
+  exit 0
+fi
+trusted=""
+for a in "$@"; do
+  case "$a" in
+    --trust) echo "error: unknown option '--trust'" >&2; exit 1 ;;
+    --force|-f|--yolo) trusted=1 ;;
+  esac
+done
+if [ -z "$trusted" ]; then
+  echo "cursor-agent stopped unexpectedly: Workspace Trust Required" >&2
+  exit 1
+fi
+echo '{"type":"system","subtype":"init","session_id":"sess-shim"}'
+echo '{"type":"result","subtype":"success","is_error":false,"result":"ok"}'
+exit 0
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestCursorTrustFallbackEndToEnd is the regression guard for issue #1272: against
+// a cursor-agent without --trust, dropping the flag entirely leaves the headless
+// run stuck at the workspace-trust gate. command() must probe --help, fall back to
+// --force, and the spawned run must clear the gate and produce stream-json.
+func TestCursorTrustFallbackEndToEnd(t *testing.T) {
+	a := &cursorAgent{bin: writeCursorShim(t)}
+	cmd, cleanup, err := a.command(context.Background(), turnSpec{
+		mcpURL: "http://localhost:9/mcp-readonly", prompt: "investigate",
+		workdir: t.TempDir(), profile: ExecutionProfileFullLocal,
+	})
+	if err != nil {
+		t.Fatalf("command(): %v", err)
+	}
+	defer cleanup()
+
+	args := strings.Join(cmd.Args, " ")
+	if strings.Contains(args, "--trust") || !strings.Contains(args, "--force") {
+		t.Fatalf("expected --force fallback (no --trust); got %q", args)
+	}
+	out, runErr := cmd.CombinedOutput()
+	if runErr != nil {
+		t.Fatalf("run must succeed via --force; got %v\n%s", runErr, out)
+	}
+	if strings.Contains(string(out), "Workspace Trust Required") {
+		t.Fatalf("run still hit the trust gate:\n%s", out)
+	}
+}
 
 // TestCursorParseStream_FormatPin locks the Cursor `-p --output-format stream-json`
 // JSONL schema we depend on, captured from a live MCP tool call: system/init carries
@@ -93,7 +159,7 @@ func TestCursorParseStream_ErrorResultNotVerdict(t *testing.T) {
 // stream-json output, sandboxed shell, MCP auto-approval, a workspace-local
 // mcp.json pointed at radar, and --resume only on a continued session.
 func TestCursorCommandFlags(t *testing.T) {
-	a := &cursorAgent{bin: "cursor-agent", trustKnown: true, trust: true}
+	a := &cursorAgent{bin: "cursor-agent", trustKnown: true, trustArg: "--trust"}
 	dir := t.TempDir()
 	const url = "http://localhost:9/mcp-readonly"
 
@@ -156,8 +222,10 @@ func TestCursorCommandFlags(t *testing.T) {
 	}
 }
 
-func TestCursorCommandOmitsTrustWhenUnsupported(t *testing.T) {
-	a := &cursorAgent{bin: "cursor-agent", trustKnown: true}
+// A Cursor without --trust must fall back to --force so the headless run can
+// clear the workspace-trust gate — omitting a trust flag entirely aborts the run.
+func TestCursorCommandFallsBackToForceWhenTrustUnsupported(t *testing.T) {
+	a := &cursorAgent{bin: "cursor-agent", trustKnown: true, trustArg: "--force"}
 	cmd, cleanup, err := a.command(context.Background(), turnSpec{
 		mcpURL: "http://localhost:9/mcp-readonly", prompt: "go", workdir: t.TempDir(),
 		profile: ExecutionProfileFullLocal,
@@ -166,8 +234,24 @@ func TestCursorCommandOmitsTrustWhenUnsupported(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cleanup()
-	if strings.Contains(strings.Join(cmd.Args, " "), "--trust") {
-		t.Errorf("unsupported Cursor must not receive --trust: %q", cmd.Args)
+	args := strings.Join(cmd.Args, " ")
+	if strings.Contains(args, "--trust") {
+		t.Errorf("Cursor without --trust must not receive --trust: %q", args)
+	}
+	if !strings.Contains(args, "--force") {
+		t.Errorf("Cursor without --trust must fall back to --force: %q", args)
+	}
+}
+
+// When no known trust flag is supported, command() must error rather than spawn a
+// run that will abort at the trust gate.
+func TestCursorCommandErrorsWhenNoTrustFlag(t *testing.T) {
+	a := &cursorAgent{bin: "cursor-agent", trustKnown: true, trustArg: ""}
+	if _, _, err := a.command(context.Background(), turnSpec{
+		mcpURL: "http://localhost:9/mcp-readonly", prompt: "go", workdir: t.TempDir(),
+		profile: ExecutionProfileFullLocal,
+	}); err == nil || !strings.Contains(err.Error(), "trust flag") {
+		t.Fatalf("no supported trust flag = %v, want trust-flag error", err)
 	}
 }
 
@@ -191,18 +275,29 @@ func TestCursorCommandRejectsInconclusiveTrustProbe(t *testing.T) {
 	}
 }
 
-func TestCursorHelpSupportsTrust(t *testing.T) {
-	if !cursorHelpSupportsTrust("  --trust  Trust the current workspace without prompting") {
-		t.Fatal("expected --trust to be detected from Cursor help")
+func TestCursorHelpTrustFlag(t *testing.T) {
+	// --trust present => prefer it (narrowest grant).
+	if got := cursorHelpTrustFlag("  --trust  Trust the current workspace without prompting"); got != "--trust" {
+		t.Fatalf("expected --trust detected, got %q", got)
 	}
+	// --trust gone, --force/-f present => fall back to --force.
 	for _, help := range []string{
-		"  --force  Run everything",
+		"  -f, --force  Force allow commands unless explicitly denied",
+		"  --yolo  Alias for --force (Run Everything)",
+	} {
+		if got := cursorHelpTrustFlag(help); got != "--force" {
+			t.Fatalf("expected --force fallback from %q, got %q", help, got)
+		}
+	}
+	// Neither a real trust nor a force flag => empty (caller errors).
+	for _, help := range []string{
 		"  --trusted-domains  Trust listed domains",
 		"  --no-trust  Disable workspace trust",
 		"Removed: --trust is no longer supported",
+		"  --enforce  something unrelated",
 	} {
-		if cursorHelpSupportsTrust(help) {
-			t.Fatalf("must not infer --trust from %q", help)
+		if got := cursorHelpTrustFlag(help); got != "" {
+			t.Fatalf("must not infer a trust flag from %q, got %q", help, got)
 		}
 	}
 }

@@ -83,7 +83,7 @@ func handleManageWorkload(ctx context.Context, req *mcp.CallToolRequest, input m
 
 	dynClient := k8s.DynamicClientFromContext(ctx)
 	if dynClient == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 
 	switch strings.ToLower(input.Action) {
@@ -138,7 +138,7 @@ func handleManageWorkload(ctx context.Context, req *mcp.CallToolRequest, input m
 func handleManageCronJob(ctx context.Context, req *mcp.CallToolRequest, input manageCronJobInput) (*mcp.CallToolResult, any, error) {
 	dynClient := k8s.DynamicClientFromContext(ctx)
 	if dynClient == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 
 	switch strings.ToLower(input.Action) {
@@ -188,12 +188,12 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 
 	client := k8s.ClientFromContext(ctx)
 	if client == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 
 	// Get the workload's label selector
@@ -644,7 +644,7 @@ func handleManageNode(ctx context.Context, req *mcp.CallToolRequest, input manag
 
 	client := k8s.ClientFromContext(ctx)
 	if client == nil {
-		return nil, nil, fmt.Errorf("not connected to cluster")
+		return nil, nil, errNotConnected()
 	}
 
 	switch strings.ToLower(input.Action) {

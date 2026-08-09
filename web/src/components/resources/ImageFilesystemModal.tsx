@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { X, Folder, File, Link2, ChevronRight, ChevronDown, AlertTriangle, Loader2, Search, Download, HardDrive, Shield, ShieldCheck, Terminal, Copy, Check, RefreshCw } from 'lucide-react'
 import radarLoadingIcon from '@skyhook-io/k8s-ui/assets/radar/radar-icon-loading.svg'
+import { assetUrl } from '@skyhook-io/k8s-ui'
 import { clsx } from 'clsx'
 import { useImageMetadata, ApiError } from '../../api/client'
 import type { FileNode, ImageFilesystem } from '../../types'
@@ -10,6 +11,8 @@ import { downloadBlob, filterTree } from './file-browser-utils'
 import { Tooltip } from '../ui/Tooltip'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { Input } from '@skyhook-io/k8s-ui'
+
+const radarLoadingIconUrl = assetUrl(radarLoadingIcon)
 
 // Manual fetch function for filesystem (not a hook - gives us full control)
 async function fetchImageFilesystem(
@@ -182,7 +185,7 @@ export function ImageFilesystemModal({
           {/* Loading state */}
           {isLoading && (
             <div className="flex flex-col items-center justify-center gap-3 h-64">
-              <img src={radarLoadingIcon} alt="" aria-hidden className="w-11 h-11" />
+              <img src={radarLoadingIconUrl} alt="" aria-hidden className="w-11 h-11" />
               <span className="text-sm text-theme-text-secondary">
                 {isLoadingMetadata ? 'Checking image…' : 'Downloading image layers…'}
               </span>

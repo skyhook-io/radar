@@ -2,11 +2,13 @@
 Cluster-scoped READ for the Cloud tiers.
 
 The built-in admin/edit/view ClusterRoles the tiers bind to (see cloud-rbac.yaml)
-are namespace roles — by design they grant nothing on cluster-scoped resources
-(Nodes, PersistentVolumes, StorageClasses, IngressClasses, PriorityClasses). For a
-cluster-wide observability tool that means owners and viewers can't see core
-infrastructure. This add-on grants get/list/watch on those kinds via EXPLICIT
-bindings to the cloud:* groups — deliberately NOT via `aggregate-to-view` labels,
+cover common namespaced resources but exclude core cluster infrastructure and
+some Upgrade impact source types (including CSIStorageCapacities and API
+flow-control configuration). For a cluster-wide observability tool that means
+owners and viewers can't see core infrastructure or complete those checks. This
+add-on grants get/list/watch on infrastructure and list-only access to Upgrade
+impact evidence through EXPLICIT
+bindings to the radar:* groups — deliberately NOT via `aggregate-to-view` labels,
 which would widen the shared built-in `view`/`edit` roles cluster-wide for every
 other subject bound to them (mirrors the radar-helm add-on pattern).
 
@@ -27,7 +29,7 @@ Scoping — cluster-scoped read is its own axis, per tier:
     own that tier's RBAC entirely.
   - Want a DIFFERENT cluster-read set for a tier (e.g. Nodes but not PVs)? Don't
     fork this role: set clusterScopedRead.<tier>=false and bind your own ClusterRole
-    to the cloud:<tier> group. The cloud:* groups are injected by Cloud regardless,
+    to the radar:<tier> group. The radar:* groups are injected by Cloud regardless,
     so your binding composes with the built-in namespaced one.
 */}}
 {{- /*
@@ -54,9 +56,7 @@ metadata:
   labels:
     {{- include "radar.labels" . | nindent 4 }}
 rules:
-  # Namespaces are intentionally NOT here — the built-in view/edit/admin roles
-  # already grant namespace read, so this add-on stays scoped to the resources
-  # the built-ins actually exclude.
+  # Common namespaced resources are intentionally not duplicated here.
   - apiGroups: [""]
     resources: ["nodes", "persistentvolumes"]
     verbs: ["get", "list", "watch"]
@@ -76,6 +76,54 @@ rules:
   - apiGroups: ["node.k8s.io"]
     resources: ["runtimeclasses"]
     verbs: ["get", "list", "watch"]
+  # Upgrade impact evaluates cluster extension readiness per caller. These are
+  # read-only API registration and admission metadata: no Secrets, RBAC objects,
+  # writes, API-server metrics, or kubelet proxy access. The latter two remain
+  # explicitly permission-gated because their read surface is materially broader.
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["mutatingwebhookconfigurations", "validatingwebhookconfigurations"]
+    verbs: ["get", "list", "watch"]
+  # Upgrade impact source evidence. These kinds are not cached or browsable;
+  # the collector only lists them to inspect kubectl last-applied annotations.
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["csistoragecapacities"]
+    verbs: ["list"]
+  - apiGroups: ["flowcontrol.apiserver.k8s.io"]
+    resources: ["flowschemas", "prioritylevelconfigurations"]
+    verbs: ["list"]
+  # Removed in Kubernetes 1.25, but required to assess clusters upgrading
+  # from a release where PodSecurityPolicy is still served.
+  - apiGroups: ["policy"]
+    resources: ["podsecuritypolicies"]
+    verbs: ["list"]
+  {{- if .Values.rbac.crdGroups.apiRegistration }}
+  - apiGroups: ["apiregistration.k8s.io"]
+    resources: ["apiservices"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.prometheus }}
+  - apiGroups: ["monitoring.coreos.com"]
+    resources: ["prometheusrules"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.karpenter }}
+  # The Capacity view gates per-CALLER: the page on "list nodes" (granted
+  # above), the Karpenter screens on "list nodepools". Without this rule every
+  # Cloud tier lands in the denied-NodePools shape on Karpenter clusters even
+  # though the SA caches everything. Same benign-infra class as the rest of
+  # this role — cluster-scoped provisioning config, no secrets. Group-wide
+  # read (not named kinds) because Karpenter's kind set moves with its
+  # versions (NodeOverlays, provider NodeClass variants) and a named list
+  # would strand new kinds in an unexplainable denied state. Gated on the SA's
+  # own karpenter collection for the same reason metrics is below: caller
+  # read is meaningless for data the SA never caches.
+  - apiGroups: ["karpenter.sh", "karpenter.k8s.aws", "karpenter.azure.com", "karpenter.k8s.gcp", "eks.amazonaws.com"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.metrics }}
   # On clusters with a standard metrics-server install this is usually
   # redundant — its aggregated-metrics-reader role carries aggregate-to-view

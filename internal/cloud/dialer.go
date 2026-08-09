@@ -18,7 +18,7 @@ const selfUpgradeAvailableHeader = "X-Radar-Self-Upgrade-Available"
 // dial establishes a WebSocket to Radar Cloud, authenticates with the
 // cluster bearer token, and returns a yamux session with this side as the
 // *server*. Cloud opens streams (one per browser request); we accept them.
-func dial(ctx context.Context, cfg Config) (*yamux.Session, error) {
+func dial(ctx context.Context, cfg Config, selfUpgrade bool) (*yamux.Session, error) {
 	u, err := url.Parse(cfg.URL)
 	if err != nil {
 		return nil, fmt.Errorf("parse cloud URL: %w", err)
@@ -28,7 +28,7 @@ func dial(ctx context.Context, cfg Config) (*yamux.Session, error) {
 	q.Set("cluster_name", cfg.ClusterName)
 	u.RawQuery = q.Encode()
 
-	headers := cloudHandshakeHeaders(cfg)
+	headers := cloudHandshakeHeaders(cfg, selfUpgrade)
 
 	dialer := *websocket.DefaultDialer
 	dialer.HandshakeTimeout = 10 * time.Second
@@ -67,11 +67,11 @@ func dial(ctx context.Context, cfg Config) (*yamux.Session, error) {
 // Cloud tunnel. The self-upgrade capability is deliberately always present:
 // false is meaningful for GitOps and --no-self-upgrade installations and must
 // not be confused with an older agent that predates the capability contract.
-func cloudHandshakeHeaders(cfg Config) http.Header {
+func cloudHandshakeHeaders(cfg Config, selfUpgrade bool) http.Header {
 	headers := http.Header{}
 	headers.Set("Authorization", "Bearer "+cfg.Token)
 	headers.Set("X-Radar-Version", Version)
-	headers.Set(selfUpgradeAvailableHeader, strconv.FormatBool(cfg.SelfUpgradeAvailable))
+	headers.Set(selfUpgradeAvailableHeader, strconv.FormatBool(selfUpgrade))
 	if cfg.Namespace != "" {
 		headers.Set("X-Radar-Namespace", cfg.Namespace)
 	}
