@@ -1650,6 +1650,91 @@ func TestDynamicResourceCache_ClusterWideSupersedesNamespaceInformers(t *testing
 	}
 }
 
+func TestDynamicResourceCache_HasWatchedInSyncedNamespace(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"}
+	listKinds := map[schema.GroupVersionResource]string{gvr: "WidgetList"}
+
+	t.Run("unsynced informer is not authoritative", func(t *testing.T) {
+		dyn := fakeDynamicForListAccess(t, listKinds, func(schema.GroupVersionResource, string) bool { return true })
+		listStarted := make(chan struct{})
+		releaseList := make(chan struct{})
+		var startOnce sync.Once
+		dyn.PrependReactor("list", "widgets", func(k8stesting.Action) (bool, runtime.Object, error) {
+			startOnce.Do(func() { close(listStarted) })
+			<-releaseList
+			return false, nil, nil
+		})
+		d, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: dyn})
+		if err != nil {
+			t.Fatalf("NewDynamicResourceCache failed: %v", err)
+		}
+		defer d.Stop()
+
+		if err := d.startWatching(gvr, "team-a"); err != nil {
+			t.Fatalf("startWatching failed: %v", err)
+		}
+		select {
+		case <-listStarted:
+		case <-time.After(2 * time.Second):
+			t.Fatal("informer did not begin its initial list")
+		}
+		if found, authoritative := d.HasWatchedInSyncedNamespace(gvr, "team-a", "absent"); found || authoritative {
+			t.Fatalf("unsynced lookup = (%t, %t), want (false, false)", found, authoritative)
+		}
+		close(releaseList)
+		if !d.WaitForSync(gvr, 2*time.Second) {
+			t.Fatal("informer did not sync")
+		}
+		if found, authoritative := d.HasWatchedInSyncedNamespace(gvr, "team-a", "absent"); found || !authoritative {
+			t.Fatalf("synced lookup = (%t, %t), want (false, true)", found, authoritative)
+		}
+	})
+
+	t.Run("scope replacement is not authoritative before replacement sync", func(t *testing.T) {
+		dyn := fakeDynamicForListAccess(t, listKinds, func(schema.GroupVersionResource, string) bool { return true })
+		d, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: dyn})
+		if err != nil {
+			t.Fatalf("NewDynamicResourceCache failed: %v", err)
+		}
+		defer d.Stop()
+
+		if err := d.startWatching(gvr, "team-a"); err != nil {
+			t.Fatalf("startWatching team-a failed: %v", err)
+		}
+		if !d.WaitForSync(gvr, 2*time.Second) {
+			t.Fatal("team-a informer did not sync")
+		}
+		if found, authoritative := d.HasWatchedInSyncedNamespace(gvr, "team-a", "absent"); found || !authoritative {
+			t.Fatalf("synced team-a absence = (%t, %t), want (false, true)", found, authoritative)
+		}
+
+		listStarted := make(chan struct{})
+		releaseList := make(chan struct{})
+		defer close(releaseList)
+		var startOnce sync.Once
+		dyn.PrependReactor("list", "widgets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+			listAction, ok := action.(k8stesting.ListAction)
+			if !ok || listAction.GetNamespace() != "" {
+				return false, nil, nil
+			}
+			startOnce.Do(func() { close(listStarted) })
+			<-releaseList
+			return false, nil, nil
+		})
+		if err := d.startWatching(gvr, ""); err != nil {
+			t.Fatalf("startWatching cluster-wide failed: %v", err)
+		}
+		select {
+		case <-listStarted:
+		case <-time.After(2 * time.Second):
+			t.Fatal("replacement informer did not begin its initial list")
+		}
+		if found, authoritative := d.HasWatchedInSyncedNamespace(gvr, "team-a", "absent"); found || authoritative {
+			t.Fatalf("unsynced replacement lookup = (%t, %t), want (false, false)", found, authoritative)
+		}
+	})
+}
+
 // A handler registered via AddGVRChangeHandler must reach informers created
 // AFTER registration (lazy per-namespace watches, reap re-creations) — not
 // only those present at call time — or derived caches miss those events.

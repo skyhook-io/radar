@@ -226,24 +226,50 @@ var restartCycleCategories = map[issuesapi.Category]bool{
 // Service/port and works before controller reconciliation, so it is the richer
 // row.
 func dedupeConditionOverMissingRef(in []Issue) []Issue {
-	structural := map[string]bool{}
+	structuralEchoes := map[string]map[string]bool{}
 	for _, i := range in {
 		if i.Source != SourceMissingRef {
 			continue
 		}
-		structural[issueResourceCategoryKey(i)] = true
+		prefixes := missingRefConditionEchoPrefixes(i)
+		if len(prefixes) == 0 {
+			continue
+		}
+		key := issueResourceCategoryKey(i)
+		if structuralEchoes[key] == nil {
+			structuralEchoes[key] = map[string]bool{}
+		}
+		for _, prefix := range prefixes {
+			structuralEchoes[key][prefix] = true
+		}
 	}
-	if len(structural) == 0 {
+	if len(structuralEchoes) == 0 {
 		return in
 	}
 	out := in[:0]
 	for _, i := range in {
-		if i.Source == SourceCondition && structural[issueResourceCategoryKey(i)] && isMissingRefEchoCondition(i) {
+		if i.Source == SourceCondition && isMissingRefEchoCondition(i, structuralEchoes[issueResourceCategoryKey(i)]) {
 			continue
 		}
 		out = append(out, i)
 	}
 	return out
+}
+
+func missingRefConditionEchoPrefixes(i Issue) []string {
+	if i.Group != "gateway.networking.k8s.io" {
+		return nil
+	}
+	switch i.Reason {
+	case "Missing Gateway backend Service":
+		return []string{"ResolvedRefs: BackendNotFound"}
+	case "Missing Gateway backend Service port":
+		return []string{"ResolvedRefs: BackendNotFound", "ResolvedRefs: PortNotFound"}
+	case "Missing Gateway ReferenceGrant":
+		return []string{"ResolvedRefs: RefNotPermitted"}
+	default:
+		return nil
+	}
 }
 
 // dedupePVCPendingOverMissingRef drops the generic phase-Pending PVC row when
@@ -375,13 +401,18 @@ func dedupeHPAOverMissingTarget(in []Issue) []Issue {
 		})
 }
 
-func isMissingRefEchoCondition(i Issue) bool {
-	if i.Group != "gateway.networking.k8s.io" {
+func isMissingRefEchoCondition(i Issue, prefixes map[string]bool) bool {
+	if len(prefixes) == 0 || i.Group != "gateway.networking.k8s.io" {
 		return false
 	}
 	switch i.Kind {
 	case "HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute":
-		return strings.HasPrefix(i.Reason, "ResolvedRefs:")
+		for prefix := range prefixes {
+			if strings.HasPrefix(i.Reason, prefix) {
+				return true
+			}
+		}
+		return false
 	default:
 		return false
 	}

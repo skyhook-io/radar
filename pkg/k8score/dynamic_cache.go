@@ -659,7 +659,7 @@ func (d *DynamicResourceCache) enqueueDynamicChange(kind string, gvr schema.Grou
 	isSyncAdd := false
 	if op == OpAdd {
 		d.mu.RLock()
-		synced := d.gvrSyncedLocked(gvr, namespace)
+		synced := d.gvrInitialAddSuppressionDoneLocked(gvr, namespace)
 		d.mu.RUnlock()
 
 		if !synced {
@@ -826,10 +826,11 @@ func indexerItems(entries []*informerEntry, namespace string) ([]any, error) {
 	return items, nil
 }
 
-// gvrSyncedLocked reports whether the informer holding objects of gvr in
-// namespace has finished its initial sync (cluster-wide informer first, else
-// the namespace-scoped one). Caller must hold d.mu.
-func (d *DynamicResourceCache) gvrSyncedLocked(gvr schema.GroupVersionResource, namespace string) bool {
+// gvrInitialAddSuppressionDoneLocked reports whether initial add-event
+// suppression has ended, either after sync or its bounded timeout. It is not
+// an authority check; absence assertions must use the informer's HasSynced.
+// Caller must hold d.mu.
+func (d *DynamicResourceCache) gvrInitialAddSuppressionDoneLocked(gvr schema.GroupVersionResource, namespace string) bool {
 	if e, ok := d.informers[informerKey{gvr: gvr}]; ok {
 		return e.synced
 	}
@@ -1774,6 +1775,37 @@ func (d *DynamicResourceCache) IsClusterWideSynced(gvr schema.GroupVersionResour
 	_, clusterWide := d.informers[informerKey{gvr: gvr}]
 	d.mu.RUnlock()
 	return clusterWide && d.IsSynced(gvr)
+}
+
+// HasWatchedInSyncedNamespace checks existence in the same synced informer
+// generation whose namespace coverage it validates.
+// It is only valid for namespaced GVRs; cluster-scoped kinds use IsClusterWideSynced and GetWatched.
+func (d *DynamicResourceCache) HasWatchedInSyncedNamespace(gvr schema.GroupVersionResource, namespace, name string) (found, authoritative bool) {
+	if d == nil || namespace == "" || name == "" {
+		return false, false
+	}
+	d.mu.RLock()
+	key := informerKey{gvr: gvr}
+	e := d.informers[key]
+	if e == nil {
+		key = informerKey{gvr: gvr, ns: namespace}
+		e = d.informers[key]
+	}
+	stopped := d.stopped
+	d.mu.RUnlock()
+	if e == nil || stopped || !e.informer.HasSynced() {
+		return false, false
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.stopped || d.informers[key] != e {
+		return false, false
+	}
+	_, found, err := e.informer.GetIndexer().GetByKey(namespace + "/" + name)
+	if err != nil {
+		return false, false
+	}
+	return found, true
 }
 
 // ---------------------------------------------------------------------------

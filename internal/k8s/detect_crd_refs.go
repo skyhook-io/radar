@@ -190,7 +190,7 @@ func scaleTargetExists(cache *ResourceCache, dynamicCache *DynamicResourceCache,
 		if !ok {
 			return false, false
 		}
-		return dynamicScaleTargetExists(dynamicCache, gvr, namespace, "Rollout", ref.name)
+		return dynamicScaleTargetExists(dynamicCache, gvr, namespace, ref.name)
 	default:
 		return false, false
 	}
@@ -210,18 +210,9 @@ func scaleTargetLookupResult(cache *ResourceCache, resource, kind, namespace, na
 	return refLookupResult(cache, resource, namespace, err)
 }
 
-func dynamicScaleTargetExists(dynamicCache *DynamicResourceCache, gvr schema.GroupVersionResource, namespace, kind, name string) (checked bool, exists bool) {
-	items, err := dynamicCache.ListWatched(gvr)
-	if err != nil {
-		log.Printf("[missing-refs] failed to verify %s %s/%s scaleTargetRef: %s", logsafe.Sanitize(kind), logsafe.Sanitize(namespace), logsafe.Sanitize(name), logsafe.Sanitize(err.Error()))
-		return false, false
-	}
-	for _, item := range items {
-		if item.GetNamespace() == namespace && item.GetName() == name {
-			return true, true
-		}
-	}
-	return true, false
+func dynamicScaleTargetExists(dynamicCache *DynamicResourceCache, gvr schema.GroupVersionResource, namespace, name string) (checked bool, exists bool) {
+	found, authoritative := dynamicCache.HasWatchedInSyncedNamespace(gvr, namespace, name)
+	return authoritative, found
 }
 
 func listDynamicForMissingRefs(dynamicCache *DynamicResourceCache, gvr schema.GroupVersionResource, namespace, kind string) []*unstructured.Unstructured {

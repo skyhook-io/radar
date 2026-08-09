@@ -124,6 +124,8 @@ func TestClassify(t *testing.T) {
 		{"missing sa", classifyInput{Source: SourceMissingRef, Kind: "Pod", Reason: "Missing ServiceAccount"}, issuesapi.CategoryMissingConfigRef},
 		{"ingress backend missing", classifyInput{Source: SourceMissingRef, Kind: "Ingress", APIGroup: "networking.k8s.io", Reason: "Missing backend Service"}, issuesapi.CategoryIngressBackendMissing},
 		{"ingress class missing", classifyInput{Source: SourceMissingRef, Kind: "Ingress", APIGroup: "networking.k8s.io", Reason: "Missing IngressClass"}, issuesapi.CategoryIngressClassMissing},
+		{"gateway class missing", classifyInput{Source: SourceMissingRef, Kind: "Gateway", APIGroup: "gateway.networking.k8s.io", Reason: "Missing GatewayClass"}, issuesapi.CategoryGatewayNotReady},
+		{"gateway parent missing", classifyInput{Source: SourceMissingRef, Kind: "HTTPRoute", APIGroup: "gateway.networking.k8s.io", Reason: "Missing Gateway parent"}, issuesapi.CategoryGatewayRouteInvalid},
 		{"gateway backend missing", classifyInput{Source: SourceMissingRef, Kind: "HTTPRoute", APIGroup: "gateway.networking.k8s.io", Reason: "Missing Gateway backend Service"}, issuesapi.CategoryGatewayRouteInvalid},
 		{"gateway reference grant missing", classifyInput{Source: SourceMissingRef, Kind: "HTTPRoute", APIGroup: "gateway.networking.k8s.io", Reason: "Missing Gateway ReferenceGrant"}, issuesapi.CategoryGatewayRouteInvalid},
 		{"ingress tls secret is config", classifyInput{Source: SourceMissingRef, Kind: "Ingress", APIGroup: "networking.k8s.io", Reason: "Missing TLS Secret"}, issuesapi.CategoryMissingConfigRef},

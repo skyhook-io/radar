@@ -292,6 +292,7 @@ func TestDedupeConditionOverMissingRef(t *testing.T) {
 		Kind:      "HTTPRoute",
 		Namespace: "prod",
 		Name:      "broken",
+		Reason:    "Missing Gateway backend Service",
 		Category:  issuesapi.CategoryGatewayRouteInvalid,
 	}
 	conditionEcho := Issue{
@@ -305,25 +306,73 @@ func TestDedupeConditionOverMissingRef(t *testing.T) {
 	}
 	conditionAccepted := conditionEcho
 	conditionAccepted.Reason = "Accepted: NoMatchingParent"
+	conditionFilterNotFound := conditionEcho
+	conditionFilterNotFound.Reason = "ResolvedRefs: FilterNotFound"
+	conditionInvalidKind := conditionEcho
+	conditionInvalidKind.Reason = "ResolvedRefs: InvalidKind"
+	conditionPortNotFound := conditionEcho
+	conditionPortNotFound.Reason = "ResolvedRefs: PortNotFound"
 	conditionOtherCategory := conditionEcho
 	conditionOtherCategory.Category = issuesapi.CategoryGatewayNotReady
 	conditionOtherObject := conditionEcho
 	conditionOtherObject.Name = "other"
 
-	out := dedupeConditionOverMissingRef([]Issue{missing, conditionEcho, conditionAccepted, conditionOtherCategory, conditionOtherObject})
-	if len(out) != 4 {
+	out := dedupeConditionOverMissingRef([]Issue{missing, conditionEcho, conditionAccepted, conditionFilterNotFound, conditionInvalidKind, conditionPortNotFound, conditionOtherCategory, conditionOtherObject})
+	if len(out) != 7 {
 		t.Fatalf("expected only the ResolvedRefs echo to be dropped, got %+v", out)
 	}
-	var keptAccepted bool
+	kept := map[string]bool{}
 	for _, i := range out {
 		if i.Source == SourceCondition && i.Name == "broken" && i.Category == issuesapi.CategoryGatewayRouteInvalid && i.Reason == "ResolvedRefs: BackendNotFound" {
 			t.Fatalf("same-object ResolvedRefs echo survived: %+v", out)
 		}
-		if i.Source == SourceCondition && i.Name == "broken" && i.Reason == "Accepted: NoMatchingParent" {
-			keptAccepted = true
+		if i.Source == SourceCondition && i.Name == "broken" {
+			kept[i.Reason] = true
 		}
 	}
-	if !keptAccepted {
-		t.Fatalf("non-ResolvedRefs route condition was incorrectly dropped: %+v", out)
+	for _, reason := range []string{"Accepted: NoMatchingParent", "ResolvedRefs: FilterNotFound", "ResolvedRefs: InvalidKind", "ResolvedRefs: PortNotFound"} {
+		if !kept[reason] {
+			t.Fatalf("unrelated route condition %q was incorrectly dropped: %+v", reason, out)
+		}
 	}
+
+	missingParent := missing
+	missingParent.Reason = "Missing Gateway parent"
+	out = dedupeConditionOverMissingRef([]Issue{missingParent, conditionEcho, conditionAccepted})
+	if len(out) != 3 {
+		t.Fatalf("missing parent must preserve controller conditions that may describe another parent: %+v", out)
+	}
+	if !hasReason(out, conditionAccepted.Reason) || !hasReason(out, conditionEcho.Reason) {
+		t.Fatalf("missing parent incorrectly hid a controller condition: %+v", out)
+	}
+
+	out = dedupeConditionOverMissingRef([]Issue{missing, missingParent, conditionEcho, conditionAccepted})
+	if len(out) != 3 || hasReason(out, conditionEcho.Reason) || !hasReason(out, conditionAccepted.Reason) {
+		t.Fatalf("each structural root must hide only its matching condition family: %+v", out)
+	}
+
+	missingPort := missing
+	missingPort.Reason = "Missing Gateway backend Service port"
+	out = dedupeConditionOverMissingRef([]Issue{missingPort, conditionEcho, conditionPortNotFound, conditionFilterNotFound})
+	if len(out) != 2 || hasReason(out, conditionEcho.Reason) || hasReason(out, conditionPortNotFound.Reason) || !hasReason(out, conditionFilterNotFound.Reason) {
+		t.Fatalf("missing Service port must hide only backend/port-not-found echoes: %+v", out)
+	}
+
+	missingGrant := missing
+	missingGrant.Reason = "Missing Gateway ReferenceGrant"
+	conditionRefNotPermitted := conditionEcho
+	conditionRefNotPermitted.Reason = "ResolvedRefs: RefNotPermitted"
+	out = dedupeConditionOverMissingRef([]Issue{missingGrant, conditionRefNotPermitted, conditionEcho})
+	if len(out) != 2 || hasReason(out, conditionRefNotPermitted.Reason) || !hasReason(out, conditionEcho.Reason) {
+		t.Fatalf("ReferenceGrant root must hide only RefNotPermitted: %+v", out)
+	}
+}
+
+func hasReason(in []Issue, reason string) bool {
+	for _, issue := range in {
+		if issue.Reason == reason {
+			return true
+		}
+	}
+	return false
 }

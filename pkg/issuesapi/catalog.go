@@ -118,8 +118,8 @@ var categoryDescription = map[Category]string{
 	CategoryIngressBackendMissing: "An Ingress points at a Service that doesn't exist — incoming requests get 503s.",
 	CategoryIngressClassMissing:   "An Ingress names an IngressClass that doesn't exist, so no matching controller can serve it.",
 	CategoryLoadBalancerPending:   "A LoadBalancer Service is stuck Pending — the cloud controller hasn't provisioned an external IP.",
-	CategoryGatewayNotReady:       "A Gateway (Gateway API) isn't accepted or programmed — its listeners aren't serving.",
-	CategoryGatewayRouteInvalid:   "An HTTPRoute (or other route) was rejected or not accepted by its parent Gateway.",
+	CategoryGatewayNotReady:       "A Gateway (Gateway API) isn't accepted or programmed, or names a GatewayClass that doesn't exist — its listeners aren't serving.",
+	CategoryGatewayRouteInvalid:   "An HTTPRoute (or other route) names a parent Gateway that doesn't exist, or was rejected or not accepted by its parent.",
 	CategoryDNSFailure:            "CoreDNS's Corefile has a rule (an NXDOMAIN template or a rewrite) that can override Kubernetes service DNS — a misconfiguration that risks breaking in-cluster name resolution.",
 	// Storage
 	CategoryPVCPending:               "A PersistentVolumeClaim is stuck Pending — no matching volume and provisioning hasn't completed.",

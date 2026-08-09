@@ -3,6 +3,7 @@ package k8s
 import (
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func TestMissingRefProblemUsesInjectedClockForResourceAge(t *testing.T) {
@@ -1008,6 +1010,10 @@ func TestDetectMissingGatewayRefs(t *testing.T) {
 	if len(problems) != 4 {
 		t.Fatalf("expected exactly 4 Gateway missing-ref problems, got %+v", problems)
 	}
+	withoutServices := DetectMissingGatewayRefs(&ResourceCache{ResourceCache: &k8score.ResourceCache{}}, dynCache, GetResourceDiscovery(), "")
+	if len(withoutServices) != 0 {
+		t.Fatalf("Gateway backend checks must stay disabled when the Service lister is unavailable: %+v", withoutServices)
+	}
 	assertProblemActionOrder(t, problems, "HTTPRoute", "prod", "broken", "Missing Gateway backend Service", "missing", "existing Service", "create Service")
 	assertProblemActionOrder(t, problems, "HTTPRoute", "prod", "broken", "Missing Gateway backend Service port", "9090", "already exposes", "add port")
 	assertProblemActionStarts(t, problems, "HTTPRoute", "prod", "broken", "Missing Gateway ReferenceGrant", "Create a ReferenceGrant")
@@ -1026,6 +1032,299 @@ func TestDetectMissingGatewayRefs(t *testing.T) {
 	scoped := DetectMissingGatewayRefs(GetResourceCache(), dynCache, GetResourceDiscovery(), "prod")
 	if len(scoped) != 4 {
 		t.Fatalf("namespace-scoped Gateway refs should include prod route problems, got %+v", scoped)
+	}
+}
+
+func TestDetectMissingGatewayTopologyRefs(t *testing.T) {
+	defer ResetTestState()
+	defer ResetTestDynamicState()
+
+	old := metav1.NewTime(time.Now().Add(-5 * time.Minute))
+	young := metav1.NewTime(time.Now().Add(-time.Minute))
+	if err := InitTestResourceCache(fake.NewClientset()); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+
+	classGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gatewayclasses"}
+	gatewayGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}
+	routeGVRs := map[string]schema.GroupVersionResource{
+		"HTTPRoute": {Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"},
+		"GRPCRoute": {Group: "gateway.networking.k8s.io", Version: "v1", Resource: "grpcroutes"},
+		"TCPRoute":  {Group: "gateway.networking.k8s.io", Version: "v1alpha2", Resource: "tcproutes"},
+		"TLSRoute":  {Group: "gateway.networking.k8s.io", Version: "v1alpha2", Resource: "tlsroutes"},
+	}
+	listKinds := map[schema.GroupVersionResource]string{
+		classGVR:   "GatewayClassList",
+		gatewayGVR: "GatewayList",
+	}
+	for kind, gvr := range routeGVRs {
+		listKinds[gvr] = kind + "List"
+	}
+
+	objects := []runtime.Object{
+		gatewayRouteWithParents("HTTPRoute", "missing-default", "prod", old, []any{
+			map[string]any{"name": "absent-http"},
+			map[string]any{"name": "absent-http"},
+		}),
+		gatewayRouteWithParents("HTTPRoute", "existing", "prod", old, []any{
+			map[string]any{"name": "existing-parent"},
+		}),
+		gatewayRouteWithParents("HTTPRoute", "missing-cross-namespace", "prod", old, []any{
+			map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "namespace": "platform", "name": "absent-cross"},
+		}),
+		gatewayRouteWithParents("HTTPRoute", "unsupported-parent-kind", "prod", old, []any{
+			map[string]any{"group": "example.io", "kind": "Mesh", "name": "ignored"},
+		}),
+		gatewayRouteWithParents("HTTPRoute", "young-missing-parent", "prod", young, []any{
+			map[string]any{"name": "young-absent"},
+		}),
+		gatewayRouteWithParents("GRPCRoute", "missing-grpc", "prod", old, []any{map[string]any{"name": "absent-grpc"}}),
+		gatewayRouteWithParents("TCPRoute", "missing-tcp", "prod", old, []any{map[string]any{"name": "absent-tcp"}}),
+		gatewayRouteWithParents("TLSRoute", "missing-tls", "prod", old, []any{map[string]any{"name": "absent-tls"}}),
+	}
+	dynClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds, objects...)
+	if _, err := dynClient.Resource(classGVR).Create(t.Context(), gatewayClass("installed", old), metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed GatewayClass: %v", err)
+	}
+	for _, gateway := range []*unstructured.Unstructured{
+		gatewayObject("missing-class", "prod", "absent-class", old),
+		gatewayObject("existing-parent", "prod", "installed", old),
+		gatewayObject("young-missing-class", "prod", "young-absent", young),
+	} {
+		if _, err := dynClient.Resource(gatewayGVR).Namespace(gateway.GetNamespace()).Create(t.Context(), gateway, metav1.CreateOptions{}); err != nil {
+			t.Fatalf("seed Gateway %s: %v", gateway.GetName(), err)
+		}
+	}
+	resources := []APIResource{
+		{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "GatewayClass", Name: "gatewayclasses", Verbs: []string{"list", "watch"}},
+		{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "Gateway", Name: "gateways", Verbs: []string{"list", "watch"}},
+		{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute", Name: "httproutes", Verbs: []string{"list", "watch"}},
+		{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "GRPCRoute", Name: "grpcroutes", Verbs: []string{"list", "watch"}},
+		{Group: "gateway.networking.k8s.io", Version: "v1alpha2", Kind: "TCPRoute", Name: "tcproutes", Verbs: []string{"list", "watch"}},
+		{Group: "gateway.networking.k8s.io", Version: "v1alpha2", Kind: "TLSRoute", Name: "tlsroutes", Verbs: []string{"list", "watch"}},
+	}
+	if err := InitTestDynamicResourceCache(dynClient, resources); err != nil {
+		t.Fatalf("InitTestDynamicResourceCache: %v", err)
+	}
+	dynCache := GetDynamicResourceCache()
+	for _, gvr := range append([]schema.GroupVersionResource{classGVR, gatewayGVR}, routeGVRs["HTTPRoute"], routeGVRs["GRPCRoute"], routeGVRs["TCPRoute"], routeGVRs["TLSRoute"]) {
+		if err := dynCache.EnsureWatching(gvr); err != nil {
+			t.Fatalf("EnsureWatching %s: %v", gvr.Resource, err)
+		}
+		if !dynCache.WaitForSync(gvr, 2*time.Second) {
+			t.Fatalf("%s cache did not sync", gvr.Resource)
+		}
+	}
+
+	problems := DetectMissingGatewayRefs(GetResourceCache(), dynCache, GetResourceDiscovery(), "")
+	if !findProblem(problems, "Gateway", "prod", "missing-class", "Missing GatewayClass") {
+		t.Fatalf("missing GatewayClass not detected: %+v", problems)
+	}
+	for _, route := range []struct{ kind, name string }{
+		{"HTTPRoute", "missing-default"},
+		{"HTTPRoute", "missing-cross-namespace"},
+		{"GRPCRoute", "missing-grpc"},
+		{"TCPRoute", "missing-tcp"},
+		{"TLSRoute", "missing-tls"},
+	} {
+		if !findProblem(problems, route.kind, "prod", route.name, "Missing Gateway parent") {
+			t.Errorf("missing parent not detected for %s/%s: %+v", route.kind, route.name, problems)
+		}
+	}
+	for _, silent := range []string{"existing", "unsupported-parent-kind", "young-missing-parent", "young-missing-class"} {
+		for _, problem := range problems {
+			if problem.Name == silent && (problem.Reason == "Missing GatewayClass" || problem.Reason == "Missing Gateway parent") {
+				t.Errorf("%s must not produce a topology missing-ref issue: %+v", silent, problem)
+			}
+		}
+	}
+	missingDefaultCount := 0
+	for _, problem := range problems {
+		if problem.Name == "missing-default" && problem.Reason == "Missing Gateway parent" {
+			missingDefaultCount++
+		}
+		if problem.Reason == "Missing GatewayClass" || problem.Reason == "Missing Gateway parent" {
+			if problem.Severity != "warning" || !problem.OnsetUnknown || problem.Fingerprint == "" {
+				t.Errorf("Gateway topology issue must be warning with unknown onset and stable fingerprint: %+v", problem)
+			}
+		}
+	}
+	if missingDefaultCount != 1 {
+		t.Fatalf("repeated identical parentRefs produced %d issues, want 1", missingDefaultCount)
+	}
+
+	withoutServices := DetectMissingGatewayRefs(&ResourceCache{ResourceCache: &k8score.ResourceCache{}}, dynCache, GetResourceDiscovery(), "")
+	if !findProblem(withoutServices, "Gateway", "prod", "missing-class", "Missing GatewayClass") ||
+		!findProblem(withoutServices, "HTTPRoute", "prod", "missing-default", "Missing Gateway parent") {
+		t.Fatalf("Gateway topology checks must run when the Service lister is unavailable: %+v", withoutServices)
+	}
+	for _, problem := range withoutServices {
+		if problem.Reason == "Missing Gateway backend Service" || problem.Reason == "Missing Gateway backend Service port" || problem.Reason == "Missing Gateway ReferenceGrant" {
+			t.Fatalf("backend checks must stay disabled when the Service lister is unavailable: %+v", problem)
+		}
+	}
+
+	for _, target := range []*unstructured.Unstructured{
+		gatewayObject("absent-http", "prod", "installed", old),
+		gatewayObject("absent-cross", "platform", "installed", old),
+		gatewayObject("absent-grpc", "prod", "installed", old),
+		gatewayObject("absent-tcp", "prod", "installed", old),
+		gatewayObject("absent-tls", "prod", "installed", old),
+	} {
+		if _, err := dynClient.Resource(gatewayGVR).Namespace(target.GetNamespace()).Create(t.Context(), target, metav1.CreateOptions{}); err != nil {
+			t.Fatalf("create Gateway %s/%s: %v", target.GetNamespace(), target.GetName(), err)
+		}
+	}
+	if _, err := dynClient.Resource(classGVR).Create(t.Context(), gatewayClass("absent-class", old), metav1.CreateOptions{}); err != nil {
+		t.Fatalf("create GatewayClass: %v", err)
+	}
+	waitForGatewayTopologyIssueCount(t, func() []Detection {
+		return DetectMissingGatewayRefs(GetResourceCache(), dynCache, GetResourceDiscovery(), "")
+	}, 0)
+
+	if err := dynClient.Resource(gatewayGVR).Namespace("prod").Delete(t.Context(), "absent-http", metav1.DeleteOptions{}); err != nil {
+		t.Fatalf("delete Gateway: %v", err)
+	}
+	waitForGatewayTopologyIssueCount(t, func() []Detection {
+		return DetectMissingGatewayRefs(GetResourceCache(), dynCache, GetResourceDiscovery(), "")
+	}, 1)
+}
+
+func TestDetectMissingGatewayTopologyRefsRequiresSyncedTargetCoverage(t *testing.T) {
+	defer ResetTestState()
+	defer ResetTestDynamicState()
+
+	old := metav1.NewTime(time.Now().Add(-5 * time.Minute))
+	if err := InitTestResourceCache(fake.NewClientset()); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	classGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gatewayclasses"}
+	gatewayGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}
+	routeGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}
+	dynClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{classGVR: "GatewayClassList", gatewayGVR: "GatewayList", routeGVR: "HTTPRouteList"},
+		gatewayRouteWithParents("HTTPRoute", "missing-parent", "prod", old, []any{map[string]any{"name": "absent"}}),
+		gatewayRouteWithParents("HTTPRoute", "uncovered-parent-namespace", "prod", old, []any{map[string]any{"namespace": "platform", "name": "absent-cross"}}),
+	)
+	if _, err := dynClient.Resource(gatewayGVR).Namespace("prod").Create(t.Context(), gatewayObject("missing-class", "prod", "absent-class", old), metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed Gateway: %v", err)
+	}
+	if err := InitTestDynamicResourceCache(dynClient, []APIResource{
+		{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "GatewayClass", Name: "gatewayclasses", Verbs: []string{"list", "watch"}},
+		{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "Gateway", Name: "gateways", Verbs: []string{"list", "watch"}},
+		{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute", Name: "httproutes", Verbs: []string{"list", "watch"}},
+	}); err != nil {
+		t.Fatalf("InitTestDynamicResourceCache: %v", err)
+	}
+	dynCache := GetDynamicResourceCache()
+	if err := dynCache.EnsureWatching(routeGVR); err != nil {
+		t.Fatalf("EnsureWatching route: %v", err)
+	}
+	if !dynCache.WaitForSync(routeGVR, 2*time.Second) {
+		t.Fatal("route cache did not sync")
+	}
+
+	problems := DetectMissingGatewayRefs(GetResourceCache(), dynCache, GetResourceDiscovery(), "")
+	for _, problem := range problems {
+		if problem.Reason == "Missing GatewayClass" || problem.Reason == "Missing Gateway parent" {
+			t.Fatalf("unwatched target inventories must not assert absence: %+v", problems)
+		}
+	}
+}
+
+func TestDetectMissingGatewayTopologyRefsConcreteNamespaceWaitsForTargetSync(t *testing.T) {
+	defer ResetTestState()
+	defer ResetTestDynamicState()
+
+	old := metav1.NewTime(time.Now().Add(-5 * time.Minute))
+	if err := InitTestResourceCache(fake.NewClientset()); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	classGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gatewayclasses"}
+	gatewayGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}
+	routeGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}
+	dynClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{classGVR: "GatewayClassList", gatewayGVR: "GatewayList", routeGVR: "HTTPRouteList"},
+		gatewayRouteWithParents("HTTPRoute", "missing-parent", "prod", old, []any{map[string]any{"name": "absent"}}),
+		gatewayRouteWithParents("HTTPRoute", "uncovered-parent-namespace", "prod", old,
+			[]any{map[string]any{"namespace": "platform", "name": "absent-cross"}}),
+	)
+	if _, err := dynClient.Resource(gatewayGVR).Namespace("prod").Create(t.Context(), gatewayObject("missing-class", "prod", "absent-class", old), metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed Gateway: %v", err)
+	}
+	listStarted := make(chan struct{})
+	releaseList := make(chan struct{})
+	var gatewayListMu sync.Mutex
+	gatewayProdLists := 0
+	dynClient.PrependReactor("list", "*", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		listAction, ok := action.(k8stesting.ListAction)
+		if !ok {
+			return false, nil, nil
+		}
+		gvr := listAction.GetResource()
+		if gvr != gatewayGVR && gvr != routeGVR {
+			return false, nil, nil
+		}
+		if listAction.GetNamespace() == "" {
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: gvr.Group, Resource: gvr.Resource}, "", nil)
+		}
+		if gvr == gatewayGVR && listAction.GetNamespace() == "prod" {
+			gatewayListMu.Lock()
+			gatewayProdLists++
+			call := gatewayProdLists
+			gatewayListMu.Unlock()
+			if call == 2 {
+				close(listStarted)
+				<-releaseList
+			}
+		}
+		return false, nil, nil
+	})
+	if err := InitTestDynamicResourceCache(dynClient, []APIResource{
+		{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "GatewayClass", Name: "gatewayclasses", Verbs: []string{"list", "watch"}},
+		{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "Gateway", Name: "gateways", Namespaced: true, Verbs: []string{"list", "watch"}},
+		{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute", Name: "httproutes", Namespaced: true, Verbs: []string{"list", "watch"}},
+	}); err != nil {
+		t.Fatalf("InitTestDynamicResourceCache: %v", err)
+	}
+	dynCache := GetDynamicResourceCache()
+	if err := dynCache.EnsureWatching(classGVR); err != nil {
+		t.Fatalf("EnsureWatching GatewayClass: %v", err)
+	}
+	if !dynCache.WaitForSync(classGVR, 2*time.Second) {
+		t.Fatal("GatewayClass cache did not sync")
+	}
+	if _, err := dynCache.ListBlocking(routeGVR, "prod", 2*time.Second); err != nil {
+		t.Fatalf("ListBlocking HTTPRoute/prod: %v", err)
+	}
+
+	problems := DetectMissingGatewayRefs(GetResourceCache(), dynCache, GetResourceDiscovery(), "prod")
+	select {
+	case <-listStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Gateway informer did not begin its initial namespace list")
+	}
+	for _, problem := range problems {
+		if problem.Reason == "Missing GatewayClass" || problem.Reason == "Missing Gateway parent" {
+			t.Fatalf("unsynced namespace target inventory must not assert absence: %+v", problems)
+		}
+	}
+
+	close(releaseList)
+	if !dynCache.WaitForSync(gatewayGVR, 2*time.Second) {
+		t.Fatal("Gateway namespace cache did not sync")
+	}
+	problems = DetectMissingGatewayRefs(GetResourceCache(), dynCache, GetResourceDiscovery(), "prod")
+	if !findProblem(problems, "Gateway", "prod", "missing-class", "Missing GatewayClass") {
+		t.Fatalf("concrete-namespace scan did not detect missing GatewayClass after sync: %+v", problems)
+	}
+	if !findProblem(problems, "HTTPRoute", "prod", "missing-parent", "Missing Gateway parent") {
+		t.Fatalf("concrete-namespace scan did not detect missing parent after sync: %+v", problems)
+	}
+	if findProblem(problems, "HTTPRoute", "prod", "uncovered-parent-namespace", "Missing Gateway parent") {
+		t.Fatalf("synced prod informer must not assert absence in uncovered platform namespace: %+v", problems)
 	}
 }
 
@@ -1069,6 +1368,8 @@ func TestDetectMissingCRDRefs(t *testing.T) {
 		kedaScaledObject("ok", "prod", now, "apps/v1", "Deployment", "web"),
 		kedaScaledObject("missing-target", "prod", now, "apps/v1", "Deployment", "ghost"),
 		kedaScaledObject("missing-default-deployment-target", "prod", now, "apps/v1", "", "also-ghost"),
+		kedaScaledObject("existing-rollout-target", "prod", now, "argoproj.io/v1alpha1", "Rollout", "checkout"),
+		kedaScaledObject("missing-rollout-target", "prod", now, "argoproj.io/v1alpha1", "Rollout", "ghost-rollout"),
 		kedaScaledObject("wrong-group-target", "prod", now, "example.com/v1", "Deployment", "ghost"),
 		kedaScaledObject("unsupported-target", "prod", now, "example.com/v1", "Widget", "ghost"),
 	)
@@ -1079,13 +1380,21 @@ func TestDetectMissingCRDRefs(t *testing.T) {
 		t.Fatalf("InitTestDynamicResourceCache: %v", err)
 	}
 	dynCache := GetDynamicResourceCache()
-	for _, gvr := range []schema.GroupVersionResource{rolloutGVR, scaledObjectGVR} {
-		if err := dynCache.EnsureWatching(gvr); err != nil {
-			t.Fatalf("EnsureWatching %s: %v", gvr.String(), err)
-		}
-		if !dynCache.WaitForSync(gvr, 2*time.Second) {
-			t.Fatalf("%s dynamic cache did not sync", gvr.String())
-		}
+	if err := dynCache.EnsureWatching(scaledObjectGVR); err != nil {
+		t.Fatalf("EnsureWatching %s: %v", scaledObjectGVR.String(), err)
+	}
+	if !dynCache.WaitForSync(scaledObjectGVR, 2*time.Second) {
+		t.Fatalf("%s dynamic cache did not sync", scaledObjectGVR.String())
+	}
+	beforeRolloutSync := DetectMissingCRDRefs(GetResourceCache(), dynCache, GetResourceDiscovery(), "")
+	if findProblem(beforeRolloutSync, "ScaledObject", "prod", "missing-rollout-target", "Missing scaleTargetRef") {
+		t.Fatalf("unwatched Rollout inventory must not assert a missing scaleTargetRef: %+v", beforeRolloutSync)
+	}
+	if err := dynCache.EnsureWatching(rolloutGVR); err != nil {
+		t.Fatalf("EnsureWatching %s: %v", rolloutGVR.String(), err)
+	}
+	if !dynCache.WaitForSync(rolloutGVR, 2*time.Second) {
+		t.Fatalf("%s dynamic cache did not sync", rolloutGVR.String())
 	}
 
 	problems := DetectMissingCRDRefs(GetResourceCache(), dynCache, GetResourceDiscovery(), "")
@@ -1101,8 +1410,14 @@ func TestDetectMissingCRDRefs(t *testing.T) {
 	if !findProblem(problems, "ScaledObject", "prod", "missing-default-deployment-target", "Missing scaleTargetRef") {
 		t.Fatalf("KEDA scaleTargetRef with omitted kind should default to Deployment: %+v", problems)
 	}
-	if len(problems) != 4 {
-		t.Fatalf("expected exactly 4 curated CRD missing refs, got %+v", problems)
+	if !findProblem(problems, "ScaledObject", "prod", "missing-rollout-target", "Missing scaleTargetRef") {
+		t.Fatalf("missing KEDA Rollout scaleTargetRef not detected after target cache sync: %+v", problems)
+	}
+	if findProblem(problems, "ScaledObject", "prod", "existing-rollout-target", "Missing scaleTargetRef") {
+		t.Fatalf("existing KEDA Rollout scaleTargetRef incorrectly reported missing: %+v", problems)
+	}
+	if len(problems) != 5 {
+		t.Fatalf("expected exactly 5 curated CRD missing refs, got %+v", problems)
 	}
 	assertProblemActionOrder(t, problems, "Rollout", "prod", "checkout", "Missing Rollout Service", "missing-canary", "existing Service", "create Service")
 	assertProblemActionContains(t, problems, "Rollout", "prod", "checkout", "Missing Rollout Service", "spec.strategy.canary.canaryService")
@@ -1118,7 +1433,7 @@ func TestDetectMissingCRDRefs(t *testing.T) {
 	}
 
 	scoped := DetectMissingCRDRefs(GetResourceCache(), dynCache, GetResourceDiscovery(), "prod")
-	if len(scoped) != 4 {
+	if len(scoped) != 5 {
 		t.Fatalf("namespace-scoped CRD refs should include prod problems, got %+v", scoped)
 	}
 }
@@ -1150,6 +1465,70 @@ func gatewayRoute(name, namespace string, ts metav1.Time, backendRefs []any) *un
 			},
 		},
 	}}
+}
+
+func gatewayClass(name string, ts metav1.Time) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "gateway.networking.k8s.io/v1",
+		"kind":       "GatewayClass",
+		"metadata": map[string]any{
+			"name":              name,
+			"creationTimestamp": ts.Format(time.RFC3339),
+		},
+		"spec": map[string]any{"controllerName": "example.io/controller"},
+	}}
+}
+
+func gatewayObject(name, namespace, className string, ts metav1.Time) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "gateway.networking.k8s.io/v1",
+		"kind":       "Gateway",
+		"metadata": map[string]any{
+			"name":              name,
+			"namespace":         namespace,
+			"creationTimestamp": ts.Format(time.RFC3339),
+		},
+		"spec": map[string]any{"gatewayClassName": className},
+	}}
+}
+
+func gatewayRouteWithParents(kind, name, namespace string, ts metav1.Time, parentRefs []any) *unstructured.Unstructured {
+	version := "v1"
+	if kind == "TCPRoute" || kind == "TLSRoute" {
+		version = "v1alpha2"
+	}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "gateway.networking.k8s.io/" + version,
+		"kind":       kind,
+		"metadata": map[string]any{
+			"name":              name,
+			"namespace":         namespace,
+			"creationTimestamp": ts.Format(time.RFC3339),
+		},
+		"spec": map[string]any{"parentRefs": parentRefs},
+	}}
+}
+
+func waitForGatewayTopologyIssueCount(t *testing.T, detect func() []Detection, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		count := 0
+		var problems []Detection
+		for _, problem := range detect() {
+			if problem.Reason == "Missing GatewayClass" || problem.Reason == "Missing Gateway parent" {
+				count++
+				problems = append(problems, problem)
+			}
+		}
+		if count == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Gateway topology issue count = %d, want %d: %+v", count, want, problems)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 func argoRollout(name, namespace string, ts metav1.Time, strategy map[string]any) *unstructured.Unstructured {

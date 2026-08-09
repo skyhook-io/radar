@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"log"
@@ -11,6 +12,7 @@ import (
 	"github.com/skyhook-io/radar/internal/ingressstatus"
 	"github.com/skyhook-io/radar/internal/logsafe"
 	"github.com/skyhook-io/radar/pkg/envresolve"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
@@ -19,6 +21,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	corev1listers "k8s.io/client-go/listers/core/v1"
 )
 
@@ -988,48 +991,159 @@ func sortedWebhookMissingBackendKeys(in map[string]*webhookMissingBackend) []str
 	return keys
 }
 
-// DetectMissingGatewayRefs scans Gateway API Routes for backend Service refs
-// that point at missing Services or missing Service ports. Controller status
-// usually reports these via ResolvedRefs=False, but this structural check still
-// works before a controller reconciles and on clusters where route status is
-// sparse.
+const missingGatewayRefGrace = 2 * time.Minute
+
+// DetectMissingGatewayRefs scans Gateway API resources for dangling
+// GatewayClass, parent Gateway, backend Service, Service port, and
+// ReferenceGrant references.
 func DetectMissingGatewayRefs(cache *ResourceCache, dynamicCache *DynamicResourceCache, discovery *ResourceDiscovery, namespace string) []Detection {
 	if cache == nil || dynamicCache == nil || discovery == nil {
 		return nil
 	}
 	svcLister := cache.Services()
-	if svcLister == nil {
-		return nil
-	}
 	now := time.Now()
-	getReferenceGrants := gatewayReferenceGrantGetter(dynamicCache, discovery)
 	var out []Detection
+
+	gatewayGVR, hasGateways := discovery.GetGVRWithGroup("Gateway", "gateway.networking.k8s.io")
+	if hasGateways {
+		gateways, ok := listGatewaySourceObjects(dynamicCache, gatewayGVR, "Gateway", namespace)
+		if ok {
+			out = append(out, detectGatewayMissingClasses(dynamicCache, discovery, gateways, now)...)
+		}
+	}
+
+	getReferenceGrants := gatewayReferenceGrantGetter(dynamicCache, discovery)
 	for _, kind := range []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute"} {
 		gvr, ok := discovery.GetGVRWithGroup(kind, "gateway.networking.k8s.io")
 		if !ok {
 			continue
 		}
-		var routes []*unstructured.Unstructured
-		if namespace != "" {
-			items, err := dynamicCache.List(gvr, namespace)
-			if err != nil {
-				log.Printf("[missing-refs] failed to list %s.gateway.networking.k8s.io in %s: %s", logsafe.Sanitize(kind), logsafe.Sanitize(namespace), logsafe.Sanitize(err.Error()))
-				continue
-			}
-			routes = items
-		} else {
-			items, err := dynamicCache.ListWatched(gvr)
-			if err != nil {
-				log.Printf("[missing-refs] failed to list %s.gateway.networking.k8s.io: %s", logsafe.Sanitize(kind), logsafe.Sanitize(err.Error()))
-				continue
-			}
-			routes = items
+		routes, ok := listGatewaySourceObjects(dynamicCache, gvr, kind, namespace)
+		if !ok {
+			continue
 		}
 		for _, route := range routes {
-			out = append(out, detectGatewayRouteMissingBackends(cache, svcLister, getReferenceGrants, kind, route, now)...)
+			if hasGateways {
+				out = append(out, detectGatewayRouteMissingParents(dynamicCache, gatewayGVR, kind, route, now)...)
+			}
+			if svcLister != nil {
+				out = append(out, detectGatewayRouteMissingBackends(cache, svcLister, getReferenceGrants, kind, route, now)...)
+			}
 		}
 	}
 	return out
+}
+
+func listGatewaySourceObjects(dynamicCache *DynamicResourceCache, gvr schema.GroupVersionResource, kind, namespace string) ([]*unstructured.Unstructured, bool) {
+	var (
+		items []*unstructured.Unstructured
+		err   error
+	)
+	if namespace == "" {
+		items, err = dynamicCache.ListWatched(gvr)
+	} else {
+		items, err = dynamicCache.List(gvr, namespace)
+	}
+	if err != nil {
+		if namespace == "" {
+			log.Printf("[missing-refs] failed to list %s.gateway.networking.k8s.io: %s", logsafe.Sanitize(kind), logsafe.Sanitize(err.Error()))
+		} else {
+			log.Printf("[missing-refs] failed to list %s.gateway.networking.k8s.io in %s: %s", logsafe.Sanitize(kind), logsafe.Sanitize(namespace), logsafe.Sanitize(err.Error()))
+		}
+		return nil, false
+	}
+	return items, true
+}
+
+func detectGatewayMissingClasses(dynamicCache *DynamicResourceCache, discovery *ResourceDiscovery, gateways []*unstructured.Unstructured, now time.Time) []Detection {
+	classGVR, ok := discovery.GetGVRWithGroup("GatewayClass", "gateway.networking.k8s.io")
+	if !ok || !dynamicCache.IsClusterWideSynced(classGVR) {
+		return nil
+	}
+	var out []Detection
+	for _, gateway := range gateways {
+		if !gatewayRefGraceElapsed(gateway, now) {
+			continue
+		}
+		className, _, _ := unstructured.NestedString(gateway.Object, "spec", "gatewayClassName")
+		className = strings.TrimSpace(className)
+		if className == "" {
+			continue
+		}
+		_, err := dynamicCache.GetWatched(classGVR, "", className)
+		if err == nil || !errors.Is(err, k8score.ErrResourceNotFound) {
+			continue
+		}
+		detection := withFix(missingRefProblemSev(now, "Gateway", "gateway.networking.k8s.io", gateway.GetNamespace(), gateway.GetName(), "warning",
+			"Missing GatewayClass",
+			fmt.Sprintf("spec.gatewayClassName references GatewayClass %q which does not exist", className),
+			gateway.GetCreationTimestamp().Time),
+			fmt.Sprintf("GatewayClass %q is not installed, so no Gateway controller can accept this Gateway.", className),
+			"Set spec.gatewayClassName to an installed class, or install the intended Gateway controller and GatewayClass.")
+		detection.Fingerprint = missingRefFingerprint(detection.Reason, "spec.gatewayClassName:"+className)
+		out = append(out, detection)
+	}
+	return out
+}
+
+func detectGatewayRouteMissingParents(dynamicCache *DynamicResourceCache, gatewayGVR schema.GroupVersionResource, kind string, route *unstructured.Unstructured, now time.Time) []Detection {
+	if !gatewayRefGraceElapsed(route, now) {
+		return nil
+	}
+	parentRefs, found, err := unstructured.NestedSlice(route.Object, "spec", "parentRefs")
+	if err != nil || !found {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []Detection
+	for index, parentRef := range parentRefs {
+		ref, ok := parentRef.(map[string]any)
+		if !ok {
+			continue
+		}
+		group, _ := ref["group"].(string)
+		if group == "" {
+			group = "gateway.networking.k8s.io"
+		}
+		parentKind, _ := ref["kind"].(string)
+		if parentKind == "" {
+			parentKind = "Gateway"
+		}
+		if group != "gateway.networking.k8s.io" || parentKind != "Gateway" {
+			continue
+		}
+		name, _ := ref["name"].(string)
+		if name == "" {
+			continue
+		}
+		parentNamespace, _ := ref["namespace"].(string)
+		if parentNamespace == "" {
+			parentNamespace = route.GetNamespace()
+		}
+		key := group + "/" + parentKind + "/" + parentNamespace + "/" + name
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		found, authoritative := dynamicCache.HasWatchedInSyncedNamespace(gatewayGVR, parentNamespace, name)
+		if !authoritative || found {
+			continue
+		}
+		detection := withFix(missingRefProblemSev(now, kind, "gateway.networking.k8s.io", route.GetNamespace(), route.GetName(), "warning",
+			"Missing Gateway parent",
+			fmt.Sprintf("spec.parentRefs[%d] references Gateway %q in namespace %q which does not exist", index, name, parentNamespace),
+			route.GetCreationTimestamp().Time),
+			fmt.Sprintf("Gateway %q in namespace %q doesn't exist, so this route cannot attach to that parent.", name, parentNamespace),
+			fmt.Sprintf("Point the parentRef at an existing Gateway in namespace %q, remove the stale parentRef, or create Gateway %q if it should still receive this route.", parentNamespace, name))
+		detection.Fingerprint = missingRefFingerprint(detection.Reason, "spec.parentRefs:"+key)
+		out = append(out, detection)
+	}
+	return out
+}
+
+func gatewayRefGraceElapsed(resource *unstructured.Unstructured, now time.Time) bool {
+	createdAt := resource.GetCreationTimestamp().Time
+	return !createdAt.IsZero() && !createdAt.After(now) && now.Sub(createdAt) >= missingGatewayRefGrace
 }
 
 type referenceGrantGetter func(namespace string) ([]*unstructured.Unstructured, bool)
