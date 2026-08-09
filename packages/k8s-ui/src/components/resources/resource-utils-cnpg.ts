@@ -203,20 +203,32 @@ export function getCNPGClusterStatus(resource: any): StatusBadge {
     return { text: 'Healthy', color: healthColors.healthy, level: 'healthy' }
   }
 
-  // Conditions fallback
   const conditions = status.conditions || []
   const readyCond = conditions.find((c: any) => c.type === 'Ready')
+
+  // Unrecognized phase — surface the operator's own words rather than inventing
+  // a health level. A new CNPG minor adding a phase lands here, not in "Healthy".
+  //
+  // This must outrank the Ready condition below. Ready=True says the instances
+  // are serving; it does not say the cluster is fine, and CNPG sets it during
+  // phases we have never seen. Reading it first turned an unknown phase into a
+  // green "Ready" badge — asserting health from a signal that doesn't establish
+  // it, and defeating the pass-through this branch exists for. Ready=False
+  // still colors the phase red: showing the operator's words in red loses
+  // nothing and keeps a real failure signal.
+  if (phase) {
+    if (readyCond?.status === 'False') {
+      return { text: phase, color: healthColors.unhealthy, level: 'unhealthy' }
+    }
+    return { text: phase, color: healthColors.unknown, level: 'unknown' }
+  }
+
+  // No phase at all — conditions are the only signal left.
   if (readyCond?.status === 'True') {
     return { text: 'Ready', color: healthColors.healthy, level: 'healthy' }
   }
   if (readyCond?.status === 'False') {
     return { text: readyCond.reason || 'Not Ready', color: healthColors.unhealthy, level: 'unhealthy' }
-  }
-
-  // Unrecognized phase — surface the operator's own words rather than inventing
-  // a health level. A new CNPG minor adding a phase lands here, not in "Healthy".
-  if (phase) {
-    return { text: phase, color: healthColors.unknown, level: 'unknown' }
   }
 
   return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }

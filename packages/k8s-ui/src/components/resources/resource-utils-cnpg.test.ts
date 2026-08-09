@@ -530,3 +530,35 @@ describe('status column filter reads the badge, not the raw phase', () => {
     )).toBe('Running')
   })
 })
+
+describe('an unknown phase outranks the Ready condition', () => {
+  // The decision this pins: a phase from a newer CNPG minor renders verbatim.
+  // A Ready=True condition read first would turn it into a green "Ready" badge
+  // — health asserted from a signal that does not establish it.
+  const withPhase = (phase: string, ready?: string) => ({
+    spec: { instances: 2 },
+    status: {
+      phase,
+      readyInstances: 2,
+      ...(ready ? { conditions: [{ type: 'Ready', status: ready, reason: 'ClusterIsReady' }] } : {}),
+    },
+  })
+
+  it('shows the operator words, not Ready, when Ready=True', () => {
+    const s = getCNPGClusterStatus(withPhase('Rebalancing shards across zones', 'True'))
+    expect(s.text).toBe('Rebalancing shards across zones')
+    expect(s.level).toBe('unknown')
+  })
+
+  it('keeps the red when Ready=False, still showing the phase', () => {
+    const s = getCNPGClusterStatus(withPhase('Rebalancing shards across zones', 'False'))
+    expect(s.text).toBe('Rebalancing shards across zones')
+    expect(s.level).toBe('unhealthy')
+  })
+
+  it('falls back to the condition only when there is no phase at all', () => {
+    expect(getCNPGClusterStatus(withPhase('', 'True')).text).toBe('Ready')
+    expect(getCNPGClusterStatus(withPhase('', 'False')).text).toBe('ClusterIsReady')
+    expect(getCNPGClusterStatus({ spec: {}, status: {} }).text).toBe('Unknown')
+  })
+})

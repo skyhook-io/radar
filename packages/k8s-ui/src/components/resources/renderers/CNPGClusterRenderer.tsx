@@ -73,10 +73,28 @@ export function CNPGClusterRenderer({ data, onNavigate }: CNPGClusterRendererPro
 
   // Problem detection
   const isDown = countsKnown && readyInstances === 0
-  const isDegraded = countsKnown && readyInstances < instances && readyInstances > 0
+  // A shortfall the PHASE already explains is not a separate problem. Mirrors
+  // source_cnpg.go's phaseExplained gate and the badge's ordering, both of
+  // which check the phase before the instance counts: mid-switchover or waiting
+  // on a supervised update, running below the desired count is the operation,
+  // not a fault. Without this the drawer raised "Degraded Cluster" while the
+  // badge deliberately said "Switchover" — the same two-surfaces-one-cluster
+  // disagreement this integration exists to remove, inverted.
+  const phaseExplainsShortfall =
+    phaseBucket === 'terminal' || phaseBucket === 'failing'
+    || phaseBucket === 'attention' || phaseBucket === 'transient'
+  const isDegraded = countsKnown && readyInstances < instances && readyInstances > 0 && !phaseExplainsShortfall
   const isFailover = phaseBucket === 'failing'
   const isSwitchover = phase === 'Switchover in progress'
   const isTerminal = phaseBucket === 'terminal'
+  // "The cluster is otherwise serving normally, so nothing else here will look
+  // wrong" is a claim about the REST OF THIS DRAWER, so any other banner
+  // falsifies it. It can no longer lean on isDegraded now that a
+  // phase-explained shortfall doesn't set it: a cluster mid-switchover at 2/3
+  // would assert nothing else looks wrong directly beneath a Switchover banner.
+  const hasOtherProblemBanner =
+    isDown || isDegraded || primaryMismatch || hasSplitBrain
+    || (phaseBucket !== 'healthy' && phaseBucket !== 'unknown')
 
   return (
     <>
@@ -148,7 +166,7 @@ export function CNPGClusterRenderer({ data, onNavigate }: CNPGClusterRendererPro
             // Cluster Down banner would be plainly false.
             `CNPG reports that the last WAL archival did not complete${walArchivingFailure.lastTransitionTime ? `, and archiving has been in this state for ${formatAge(walArchivingFailure.lastTransitionTime)}` : ''}. ` +
             'Recovery-point advancement is uncertain — check the backup destination before relying on point-in-time recovery.' +
-            (isDown || isDegraded || isFailover || isTerminal
+            (hasOtherProblemBanner
               ? ''
               : ' The cluster is otherwise serving normally, so nothing else here will look wrong.') +
             (walArchivingFailure.message ? ` Operator reported: ${walArchivingFailure.message}` : '')
@@ -156,8 +174,13 @@ export function CNPGClusterRenderer({ data, onNavigate }: CNPGClusterRendererPro
         />
       )}
       {lastBackupFailure && (
+        // Warning, not error: the badge renders this at the degraded tier and
+        // the issue detector reports SeverityWarning. One failed attempt puts
+        // the recovery window at risk and CNPG will retry — unlike the
+        // archiving failure above, which is continuous and stays red on all
+        // three surfaces.
         <AlertBanner
-          variant="error"
+          variant="warning"
           title="Last backup failed"
           message={
             `The most recent backup attempt failed${lastBackupFailure.lastTransitionTime ? ` ${formatAge(lastBackupFailure.lastTransitionTime)} ago` : ''}.` +
