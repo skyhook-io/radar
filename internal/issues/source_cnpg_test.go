@@ -45,8 +45,8 @@ func findIssue(t *testing.T, issues []Issue, reason string) Issue {
 	return Issue{}
 }
 
-// The whole point of RAD-318: a cluster whose pods are all Ready but whose
-// phase says it is unrecoverable must not read as fine.
+// A cluster whose pods are all Ready but whose phase says it is unrecoverable
+// must not read as fine.
 func TestCNPGTerminalPhasesAreCriticalDespiteReadyInstances(t *testing.T) {
 	cases := []struct {
 		phase      string

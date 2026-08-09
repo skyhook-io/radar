@@ -115,10 +115,10 @@ func namesOf(issues []Issue) []string {
 	return out
 }
 
-// The whole point of RAD-314: every terminal Backup phase Velero can report
-// must produce an Issue with the right severity, and no phase may fall through
-// to silence. FailedValidation is the one that used to render as a grey
-// "Unknown" pill and produced nothing at all.
+// Every terminal Backup phase Velero can report must produce an Issue with the
+// right severity, and no phase may fall through to silence. FailedValidation is
+// the one that used to render as a grey "Unknown" pill and produced nothing at
+// all.
 func TestVeleroBackupPhaseToIssue(t *testing.T) {
 	cases := []struct {
 		phase        string
