@@ -26,28 +26,26 @@ func NativeHelmReleaseIssues(releases []helm.HelmRelease, now time.Time) []Issue
 		if firstSeen.IsZero() {
 			firstSeen = rel.Updated
 		}
-		if firstSeen.IsZero() {
-			firstSeen = now
-		}
 		storageNamespace := rel.StorageNamespace
 		if storageNamespace == "" {
 			storageNamespace = rel.Namespace
 		}
 		iss := Issue{
-			Severity:   severity,
-			Source:     SourceProblem,
-			Kind:       "HelmRelease",
-			Group:      NativeHelmGroup,
-			Namespace:  storageNamespace,
-			Name:       rel.Name,
-			Reason:     reason,
-			Message:    nativeHelmIssueMessage(rel, *op),
-			RawMessage: nativeHelmIssueRawMessage(*op),
-			Cause:      nativeHelmIssueCause(*op),
-			Action:     nativeHelmIssueAction(*op),
-			Stuck:      true,
-			FirstSeen:  firstSeen,
-			LastSeen:   now,
+			Severity:     severity,
+			Source:       SourceProblem,
+			Kind:         "HelmRelease",
+			Group:        NativeHelmGroup,
+			Namespace:    storageNamespace,
+			Name:         rel.Name,
+			Reason:       reason,
+			Message:      nativeHelmIssueMessage(rel, *op),
+			RawMessage:   nativeHelmIssueRawMessage(*op),
+			Cause:        nativeHelmIssueCause(*op),
+			Action:       nativeHelmIssueAction(*op),
+			Stuck:        true,
+			FirstSeen:    firstSeen,
+			OnsetUnknown: firstSeen.IsZero(),
+			LastSeen:     now,
 		}
 		classifyIssue(&iss)
 		enrichIdentity(&iss)

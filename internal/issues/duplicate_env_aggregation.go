@@ -61,33 +61,33 @@ func duplicateEnvAggregationKey(issue Issue) (string, bool) {
 func newDuplicateEnvAggregate(members []Issue) Issue {
 	first := members[0]
 	severity := first.Severity
-	firstSeen := first.FirstSeen
 	lastSeen := first.LastSeen
 	for _, member := range members[1:] {
 		if SeverityRank(member.Severity) > SeverityRank(severity) {
 			severity = member.Severity
 		}
-		if !member.FirstSeen.IsZero() && (firstSeen.IsZero() || member.FirstSeen.Before(firstSeen)) {
-			firstSeen = member.FirstSeen
-		}
 		if member.LastSeen.After(lastSeen) {
 			lastSeen = member.LastSeen
 		}
 	}
+	firstSeen, onsetUnknown, onsetCoverage, resourceCreatedAt := foldIssueOnset(members)
 
 	issue := Issue{
-		Severity:    severity,
-		Source:      SourceProblem,
-		Kind:        first.Kind,
-		Group:       resolveGroup(first.Group, first.Kind),
-		Namespace:   first.Namespace,
-		Name:        first.Name,
-		Reason:      "DuplicateEnvVar",
-		Message:     duplicateEnvAggregateMessage(members),
-		Action:      "Remove duplicate entries from the workload manifest or chart so each environment variable is declared once per container, then redeploy through the normal delivery path.",
-		Fingerprint: duplicateEnvAggregateFingerprint,
-		FirstSeen:   firstSeen,
-		LastSeen:    lastSeen,
+		Severity:          severity,
+		Source:            SourceProblem,
+		Kind:              first.Kind,
+		Group:             resolveGroup(first.Group, first.Kind),
+		Namespace:         first.Namespace,
+		Name:              first.Name,
+		Reason:            "DuplicateEnvVar",
+		Message:           duplicateEnvAggregateMessage(members),
+		Action:            "Remove duplicate entries from the workload manifest or chart so each environment variable is declared once per container, then redeploy through the normal delivery path.",
+		Fingerprint:       duplicateEnvAggregateFingerprint,
+		FirstSeen:         firstSeen,
+		OnsetUnknown:      onsetUnknown,
+		OnsetCoverage:     onsetCoverage,
+		ResourceCreatedAt: resourceCreatedAt,
+		LastSeen:          lastSeen,
 	}
 	classifyIssue(&issue)
 	enrichIdentity(&issue)

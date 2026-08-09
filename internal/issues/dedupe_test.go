@@ -2,6 +2,7 @@ package issues
 
 import (
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
@@ -249,10 +250,13 @@ func TestStructuralRootOverSymptom_Phase1(t *testing.T) {
 	})
 
 	t.Run("HPA missing target folds the hpa condition row and promotes severity", func(t *testing.T) {
+		now := time.Now()
 		missing := Issue{Source: SourceMissingRef, Kind: "HorizontalPodAutoscaler", Group: "autoscaling", Namespace: "ns", Name: "web-hpa",
-			Category: issuesapi.CategoryMissingConfigRef, Reason: "Missing scaleTargetRef", Severity: SeverityWarning}
+			Category: issuesapi.CategoryMissingConfigRef, Reason: "Missing scaleTargetRef", Severity: SeverityWarning,
+			OnsetUnknown: true, ResourceCreatedAt: now.Add(-24 * time.Hour)}
 		cond := Issue{Source: SourceProblem, Kind: "HorizontalPodAutoscaler", Group: "autoscaling", Namespace: "ns", Name: "web-hpa",
-			Category: issuesapi.CategoryHPALimitedOrFailed, Severity: SeverityCritical}
+			Category: issuesapi.CategoryHPALimitedOrFailed, Severity: SeverityCritical,
+			FirstSeen: now.Add(-time.Hour), IssueTiming: "started_after_resource_was_healthy", IssueTimingBasis: "condition"}
 		out := dedupeHPAOverMissingTarget([]Issue{missing, cond})
 		if has(out, SourceProblem, issuesapi.CategoryHPALimitedOrFailed, "web-hpa") {
 			t.Fatalf("hpa condition should fold into the missing-target root, got %+v", out)
@@ -260,6 +264,14 @@ func TestStructuralRootOverSymptom_Phase1(t *testing.T) {
 		// Floor preserved: warning root absorbing a critical symptom is promoted.
 		if sevOf(out, issuesapi.CategoryMissingConfigRef, "web-hpa") != SeverityCritical {
 			t.Fatalf("surviving root must be promoted to critical so folding doesn't downgrade, got %s", sevOf(out, issuesapi.CategoryMissingConfigRef, "web-hpa"))
+		}
+		for _, issue := range out {
+			if issue.Category != issuesapi.CategoryMissingConfigRef {
+				continue
+			}
+			if !issue.FirstSeen.IsZero() || !issue.OnsetUnknown || issue.IssueTiming != "" || issue.IssueTimingBasis != "" {
+				t.Fatalf("symptom timing must not be donated to a structural root: %+v", issue)
+			}
 		}
 	})
 

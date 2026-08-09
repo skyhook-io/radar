@@ -5,7 +5,7 @@
 export { IssueRow, IssuesView } from './IssuesView';
 export type { IssueDiagnosisSource, IssueRowProps, IssueRowSlotContext, IssuesViewProps } from './IssuesView';
 export { ResourceIssuesSection } from './ResourceIssuesSection';
-export { issueTiming } from './issue-timing';
+export { issueOnsetUnknownTitle, issueResourceCreatedTitle, issueTiming, partialIssueOnsetTitle } from './issue-timing';
 export type { IssueTimingDisplay, IssueTimingDisplayKind } from './issue-timing';
 export {
   ISSUE_SEVERITIES,
@@ -13,6 +13,8 @@ export {
   isIssueSeverity,
   subjectRef,
   memberRef,
+  issueSortAnchor,
+  compareIssueSortAnchors,
 } from './types';
 export type { Issue, IssueSeverity, IssueAffected, IssueResourceRef, IssueDiagnosticContext, IssueDiagnosticFact, IssueDiagnosticConfidence, IssueDiagnosticIssueRef, IssueDiagnosticRole, IssueIncidentParent, IssueChangeContext, IssueRecentChange, IssueRecentChangeField } from './types';
 export {

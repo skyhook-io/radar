@@ -2,6 +2,7 @@ package issues
 
 import (
 	"fmt"
+	"sort"
 	"testing"
 	"time"
 
@@ -52,6 +53,9 @@ func TestGroupIssues_FoldsMembersUnderOwner(t *testing.T) {
 	if !g.FirstSeen.Equal(t0) {
 		t.Errorf("first_seen = %v, want oldest %v", g.FirstSeen, t0)
 	}
+	if g.OnsetCoverage == nil || g.OnsetCoverage.Known != 3 || g.OnsetCoverage.Unknown != 0 {
+		t.Errorf("onset coverage = %+v, want 3 known / 0 unknown", g.OnsetCoverage)
+	}
 	if !g.LastSeen.Equal(t2) {
 		t.Errorf("last_seen = %v, want newest %v", g.LastSeen, t2)
 	}
@@ -67,17 +71,48 @@ func TestGroupIssuesPreservesUnknownOnsetOnlyWithoutKnownMemberTime(t *testing.T
 	dep := Ref{Group: "apps", Kind: "Deployment", Namespace: "ns", Name: "web"}
 	unknownA := flatPod("web-a", "CrashLoopBackOff", SeverityWarning, dep, time.Time{}, time.Unix(2000, 0))
 	unknownA.OnsetUnknown = true
+	unknownA.ResourceCreatedAt = time.Unix(900, 0)
 	unknownB := flatPod("web-b", "CrashLoopBackOff", SeverityWarning, dep, time.Time{}, time.Unix(3000, 0))
 	unknownB.OnsetUnknown = true
+	unknownB.ResourceCreatedAt = time.Unix(800, 0)
 	grouped := GroupIssues([]Issue{unknownA, unknownB})
 	if len(grouped) != 1 || !grouped[0].OnsetUnknown || !grouped[0].FirstSeen.IsZero() {
 		t.Fatalf("all-unknown group = %+v", grouped)
 	}
+	if grouped[0].OnsetCoverage == nil || grouped[0].OnsetCoverage.Known != 0 || grouped[0].OnsetCoverage.Unknown != 2 {
+		t.Fatalf("all-unknown coverage = %+v, want 0 known / 2 unknown", grouped[0].OnsetCoverage)
+	}
+	if !grouped[0].ResourceCreatedAt.Equal(time.Unix(800, 0)) {
+		t.Fatalf("all-unknown resource creation = %v, want oldest member", grouped[0].ResourceCreatedAt)
+	}
 
 	known := flatPod("web-c", "CrashLoopBackOff", SeverityWarning, dep, time.Unix(1000, 0), time.Unix(3000, 0))
+	known.ResourceCreatedAt = time.Unix(700, 0)
 	grouped = GroupIssues([]Issue{unknownA, known})
 	if len(grouped) != 1 || grouped[0].OnsetUnknown || !grouped[0].FirstSeen.Equal(time.Unix(1000, 0)) {
 		t.Fatalf("mixed known/unknown group = %+v", grouped)
+	}
+	if grouped[0].OnsetCoverage == nil || grouped[0].OnsetCoverage.Known != 1 || grouped[0].OnsetCoverage.Unknown != 1 {
+		t.Fatalf("mixed coverage = %+v, want 1 known / 1 unknown", grouped[0].OnsetCoverage)
+	}
+	if !grouped[0].ResourceCreatedAt.Equal(time.Unix(700, 0)) {
+		t.Fatalf("mixed resource creation = %v, want oldest member", grouped[0].ResourceCreatedAt)
+	}
+}
+
+func TestLessIssueUsesResourceCreationOnlyAsUnknownOnsetFallback(t *testing.T) {
+	known := Issue{Name: "known", Severity: SeverityWarning, Source: SourceProblem, FirstSeen: time.Unix(2000, 0), ResourceCreatedAt: time.Unix(500, 0)}
+	unknownNewerResource := Issue{Name: "unknown-new", Severity: SeverityWarning, Source: SourceProblem, OnsetUnknown: true, ResourceCreatedAt: time.Unix(3000, 0)}
+	unknownOlderResource := Issue{Name: "unknown-old", Severity: SeverityWarning, Source: SourceProblem, OnsetUnknown: true, ResourceCreatedAt: time.Unix(1000, 0)}
+	unknownNoMetadata := Issue{Name: "unknown-none", Severity: SeverityWarning, Source: SourceProblem, OnsetUnknown: true}
+
+	issues := []Issue{unknownOlderResource, unknownNoMetadata, known, unknownNewerResource}
+	sort.SliceStable(issues, func(i, j int) bool { return lessIssue(issues[i], issues[j]) })
+	want := []string{"unknown-new", "known", "unknown-old", "unknown-none"}
+	for idx, name := range want {
+		if issues[idx].Name != name {
+			t.Fatalf("sort = %+v, want %v", issues, want)
+		}
 	}
 }
 

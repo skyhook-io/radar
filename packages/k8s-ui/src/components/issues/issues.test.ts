@@ -1,10 +1,10 @@
 import { afterEach, describe, it, expect, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToString } from 'react-dom/server'
-import { compareIssues, subjectRef, memberRef, normalizeImagePullMessage, issueMessageParts, type Issue } from './types'
+import { compareIssues, issueSortAnchor, subjectRef, memberRef, normalizeImagePullMessage, issueMessageParts, type Issue } from './types'
 import { categoryLabel, groupBadgeClass, groupLabel } from './severity'
 import { IssueRow } from './IssuesView'
-import { issueTiming } from './issue-timing'
+import { issueOnsetUnknownTitle, issueTiming, partialIssueOnsetTitle } from './issue-timing'
 
 const base: Issue = {
   id: 'id-0',
@@ -36,6 +36,12 @@ describe('compareIssues', () => {
     expect([older, newer].sort(compareIssues).map((i) => i.id)).toEqual(['n', 'o'])
   })
 
+  it('compares sort anchors as instants across timezone formats', () => {
+    const newerLocal = mk({ id: 'local', first_seen: '2026-08-09T23:00:00-07:00' })
+    const olderUTC = mk({ id: 'utc', onset_unknown: true, resource_created_at: '2026-08-10T01:00:00Z' })
+    expect([olderUTC, newerLocal].sort(compareIssues).map((i) => i.id)).toEqual(['local', 'utc'])
+  })
+
   it('orders direct startup blockers before generic problem rows at same severity', () => {
     const generic = mk({ id: 'generic', source: 'problem', first_seen: '2026-05-01T00:00:00Z' })
     const blocker = mk({ id: 'blocker', source: 'scheduling', first_seen: '2026-01-01T00:00:00Z' })
@@ -55,6 +61,21 @@ describe('compareIssues', () => {
     const aRefetched = mk({ ...a, last_seen: '2026-06-01T00:00:00Z' })
     const after = [aRefetched, b].sort(compareIssues).map((i) => i.id)
     expect(after).toEqual(before)
+  })
+
+  it('uses resource creation as the stable fallback only when onset is unknown', () => {
+    const unknownOlder = mk({ id: 'unknown-old', name: 'unknown-old', onset_unknown: true, resource_created_at: '2026-01-01T00:00:00Z' })
+    const unknownNewer = mk({ id: 'unknown-new', name: 'unknown-new', onset_unknown: true, resource_created_at: '2026-05-01T00:00:00Z' })
+    const known = mk({ id: 'known', name: 'known', first_seen: '2026-03-01T00:00:00Z', resource_created_at: '2025-01-01T00:00:00Z' })
+    const noMetadata = mk({ id: 'none', name: 'none', onset_unknown: true })
+
+    expect(issueSortAnchor(known)).toBe('2026-03-01T00:00:00Z')
+    expect([unknownOlder, noMetadata, known, unknownNewer].sort(compareIssues).map((i) => i.id)).toEqual([
+      'unknown-new',
+      'known',
+      'unknown-old',
+      'none',
+    ])
   })
 })
 
@@ -136,6 +157,73 @@ describe('IssueRow', () => {
 
     expect(html).toContain('Onset unknown')
     expect(html).not.toContain('0s')
+  })
+
+  it('renders mixed groups as a lower-bound age and suppresses a group-wide timing claim', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-30T12:00:00Z'))
+
+    const html = renderToString(createElement(IssueRow, {
+      issue: mk({
+        first_seen: '2026-06-30T10:00:00Z',
+        onset_coverage: { known: 2, unknown: 1 },
+        issue_timing: 'started_after_resource_was_healthy',
+      }),
+      open: true,
+      onToggle: () => undefined,
+    }))
+
+    expect(html).toContain('≥')
+    expect(html).toContain('onset unknown for 1 contributing signal')
+    expect(html).not.toContain('after healthy')
+  })
+})
+
+describe('onset provenance copy', () => {
+  it('describes a partial group as a lower bound', () => {
+    const title = partialIssueOnsetTitle(mk({
+      first_seen: '2026-06-30T10:00:00Z',
+      onset_coverage: { known: 2, unknown: 1 },
+    }))
+
+    expect(title).toContain('Active at least since')
+    expect(title).toContain('onset unknown for 1 contributing signal')
+  })
+
+  it('uses grouped language and oldest-resource context when every onset is unknown', () => {
+    const title = issueOnsetUnknownTitle(mk({
+      onset_unknown: true,
+      onset_coverage: { known: 0, unknown: 3 },
+      resource_created_at: '2026-06-30T10:00:00Z',
+      count: 3,
+    }))
+
+    expect(title).toContain('3 contributing signals')
+    expect(title).toContain('does not reveal when any')
+    expect(title).toContain('Oldest affected resource created')
+  })
+
+  it('does not describe one resource with multiple status signals as multiple resources', () => {
+    const title = issueOnsetUnknownTitle(mk({
+      onset_unknown: true,
+      onset_coverage: { known: 0, unknown: 3 },
+      resource_created_at: '2026-06-30T10:00:00Z',
+    }))
+
+    expect(title).toContain('3 contributing signals')
+    expect(title).toContain('Resource created')
+    expect(title).not.toContain('Oldest affected resource')
+  })
+
+  it('keeps singular resource context for an ungrouped issue', () => {
+    const title = issueOnsetUnknownTitle(mk({
+      onset_unknown: true,
+      resource_created_at: '2026-06-30T10:00:00Z',
+    }))
+
+    expect(title).toContain('does not reveal when it began')
+    expect(title).toContain('Resource created')
+    expect(title).not.toContain('Oldest affected')
   })
 })
 

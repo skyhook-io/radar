@@ -176,6 +176,7 @@ type CronJobProblem struct {
 	Problem   string // "stale", "never-scheduled", or "repeated-without-success"
 	Reason    string
 	Duration  time.Duration
+	OnsetAt   time.Time
 }
 
 // DetectCronJobProblems finds non-suspended CronJobs whose schedule or success
@@ -196,6 +197,7 @@ func DetectCronJobProblems(cronjobs []*batchv1.CronJob, jobs []*batchv1.Job, tra
 					Namespace: cj.Namespace,
 					Problem:   "stale",
 					Reason:    fmt.Sprintf("last run %dh ago", int(sinceLast.Hours())),
+					OnsetAt:   cj.Status.LastScheduleTime.Add(threshold),
 				})
 				continue
 			}
@@ -207,6 +209,7 @@ func DetectCronJobProblems(cronjobs []*batchv1.CronJob, jobs []*batchv1.Job, tra
 						Problem:   "repeated-without-success",
 						Reason:    reason,
 						Duration:  duration,
+						OnsetAt:   now.Add(-duration),
 					})
 				}
 			}
@@ -216,6 +219,7 @@ func DetectCronJobProblems(cronjobs []*batchv1.CronJob, jobs []*batchv1.Job, tra
 				Namespace: cj.Namespace,
 				Problem:   "never-scheduled",
 				Reason:    "created but never ran",
+				OnsetAt:   cj.CreationTimestamp.Add(threshold),
 			})
 		}
 	}

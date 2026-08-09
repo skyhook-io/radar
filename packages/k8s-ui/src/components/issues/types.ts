@@ -201,6 +201,13 @@ export interface Issue {
   /** Radar can confirm the issue is active, but current cluster evidence does
    *  not establish when the failing state began. */
   onset_unknown?: boolean;
+  onset_coverage?: {
+    known: number;
+    unknown: number;
+  };
+  /** Kubernetes object creation time. Context and a stable sort fallback only;
+   *  it is not evidence that the issue began then. */
+  resource_created_at?: string;
   last_seen?: string;
   /** Affected-resource fan-out, EXCLUDING the subject (the row header).
    *  0/omitted for a single-resource issue; e.g. 50 for one Deployment's
@@ -279,14 +286,23 @@ export function memberRef(issue: Issue, member: IssueResourceRef): IssueResource
  * (cluster → namespace → name → id) are a fully deterministic tiebreak so the
  * order never churns under auto-refresh.
  */
+export function issueSortAnchor(issue: Issue): string {
+  return issue.first_seen ?? issue.resource_created_at ?? '';
+}
+
+export function compareIssueSortAnchors(a: Issue, b: Issue): number {
+  const ta = Date.parse(issueSortAnchor(a)) || 0;
+  const tb = Date.parse(issueSortAnchor(b)) || 0;
+  return tb - ta;
+}
+
 export function compareIssues(a: Issue, b: Issue): number {
   const r = ISSUE_SEVERITY_RANK[b.severity] - ISSUE_SEVERITY_RANK[a.severity];
   if (r !== 0) return r;
   const sr = (ISSUE_SOURCE_RANK[b.source] ?? 0) - (ISSUE_SOURCE_RANK[a.source] ?? 0);
   if (sr !== 0) return sr;
-  const fa = a.first_seen ?? '';
-  const fb = b.first_seen ?? '';
-  if (fa !== fb) return fb.localeCompare(fa);
+  const onset = compareIssueSortAnchors(a, b);
+  if (onset !== 0) return onset;
   const c = (a.cluster_name ?? '').localeCompare(b.cluster_name ?? '');
   if (c !== 0) return c;
   const ns = (a.namespace ?? '').localeCompare(b.namespace ?? '');

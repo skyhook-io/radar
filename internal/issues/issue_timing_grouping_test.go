@@ -78,6 +78,22 @@ func TestFoldGroupIssueTimingMerge(t *testing.T) {
 		}
 	})
 
+	t.Run("unknown onset member prevents a group-wide timing claim", func(t *testing.T) {
+		m1 := withID(base, "pod-1")
+		m1.IssueTiming, m1.IssueTimingBasis = "started_after_resource_was_healthy", "condition"
+		m2 := withID(base, "pod-2")
+		m2.FirstSeen = time.Time{}
+		m2.OnsetUnknown = true
+
+		g := foldGroup([]Issue{m1, m2})
+		if g.IssueTiming != "" || g.IssueTimingBasis != "" {
+			t.Errorf("mixed onset provenance must omit group timing, got (%q, %q)", g.IssueTiming, g.IssueTimingBasis)
+		}
+		if g.OnsetCoverage == nil || g.OnsetCoverage.Known != 1 || g.OnsetCoverage.Unknown != 1 {
+			t.Errorf("mixed onset coverage = %+v, want 1 known / 1 unknown", g.OnsetCoverage)
+		}
+	})
+
 	t.Run("all members without issue_timing → omit", func(t *testing.T) {
 		m1 := withID(base, "pod-1")
 		m2 := withID(base, "pod-2")

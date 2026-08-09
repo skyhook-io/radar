@@ -22,6 +22,14 @@ type State struct {
 	Message string
 }
 
+type FalseCondition struct {
+	Type                  string
+	Reason                string
+	Message               string
+	LastTransitionTime    time.Time
+	HasLastTransitionTime bool
+}
+
 // Find returns the first condition with the requested type. The v1beta2 shape
 // is checked first to match FindFalseCondition's established precedence.
 func Find(obj *unstructured.Unstructured, condType string) (State, bool) {
@@ -73,13 +81,23 @@ var DefaultFalseConditionTypes = []string{
 // consumer (issues generic fallback, the CAPI detector, the Flux detector) so
 // they can't drift.
 func FindFalseCondition(obj *unstructured.Unstructured, condTypes ...string) (condType, reason, message string, since time.Duration, found bool) {
-	if obj == nil {
+	condition, found := FindFalseConditionWithTime(obj, condTypes...)
+	if !found {
 		return "", "", "", 0, false
+	}
+	if condition.HasLastTransitionTime {
+		since = time.Since(condition.LastTransitionTime)
+	}
+	return condition.Type, condition.Reason, condition.Message, since, true
+}
+
+func FindFalseConditionWithTime(obj *unstructured.Unstructured, condTypes ...string) (FalseCondition, bool) {
+	if obj == nil {
+		return FalseCondition{}, false
 	}
 	if len(condTypes) == 0 {
 		condTypes = DefaultFalseConditionTypes
 	}
-	now := time.Now()
 	condSlices := [][]any{}
 	if v1b2, ok, _ := unstructured.NestedSlice(obj.Object, "status", "v1beta2", "conditions"); ok {
 		condSlices = append(condSlices, v1b2)
@@ -101,18 +119,19 @@ func FindFalseCondition(obj *unstructured.Unstructured, condTypes ...string) (co
 				if ct == wanted {
 					r, _ := cond["reason"].(string)
 					m, _ := cond["message"].(string)
-					var dur time.Duration
+					result := FalseCondition{Type: ct, Reason: r, Message: m}
 					if ts, _ := cond["lastTransitionTime"].(string); ts != "" {
 						if t, err := time.Parse(time.RFC3339, ts); err == nil {
-							dur = now.Sub(t)
+							result.LastTransitionTime = t
+							result.HasLastTransitionTime = true
 						}
 					}
-					return ct, r, m, dur, true
+					return result, true
 				}
 			}
 		}
 	}
-	return "", "", "", 0, false
+	return FalseCondition{}, false
 }
 
 // transientConditionReasons is the canonical set of controller condition reasons

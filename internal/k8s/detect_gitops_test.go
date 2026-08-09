@@ -715,7 +715,7 @@ func TestDetectArgoStale(t *testing.T) {
 	stale := now.Add(-2 * time.Hour).UTC().Format(time.RFC3339)
 	fresh := now.Add(-5 * time.Minute).UTC().Format(time.RFC3339)
 	ctrl := func(ready int) argoControllerHealth {
-		return argoControllerHealth{visible: true, ready: ready, subjectKind: "StatefulSet", subjectName: "argocd-application-controller", subjectNamespace: "argocd"}
+		return argoControllerHealth{visible: true, ready: ready, subjectKind: "StatefulSet", subjectName: "argocd-application-controller", subjectNamespace: "argocd", subjectCreatedAt: now.Add(-24 * time.Hour)}
 	}
 	ctrlDown := ctrl(0)
 	ctrlUp := ctrl(1)
@@ -736,11 +736,11 @@ func TestDetectArgoStale(t *testing.T) {
 		if got[0].Kind != "StatefulSet" || got[0].Name != "argocd-application-controller" || got[0].Group != "apps" {
 			t.Errorf("rollup subject = %s.%s/%s, want the controller workload", got[0].Group, got[0].Kind, got[0].Name)
 		}
-		// The rollup must carry the freeze age (anchored to the oldest reconcile),
-		// not 0 — otherwise the issues layer resets FirstSeen to now every poll and a
-		// chronic outage keeps sorting as brand new.
-		if got[0].DurationSeconds == 0 {
-			t.Errorf("controller-down rollup DurationSeconds = 0, want the ~2h staleness so FirstSeen is stable")
+		if !got[0].OnsetAt.IsZero() || !got[0].OnsetUnknown || got[0].DurationSeconds != 0 {
+			t.Errorf("controller-down rollup onset = %v unknown=%v (%ds), want unknown without controller transition evidence", got[0].OnsetAt, got[0].OnsetUnknown, got[0].DurationSeconds)
+		}
+		if !got[0].ResourceCreatedAt.Equal(ctrlDown.subjectCreatedAt) {
+			t.Errorf("controller-down resource creation = %v, want controller creation %v", got[0].ResourceCreatedAt, ctrlDown.subjectCreatedAt)
 		}
 	})
 
@@ -759,21 +759,26 @@ func TestDetectArgoStale(t *testing.T) {
 		if got[0].Severity != "warning" || got[0].DurationSeconds == 0 {
 			t.Errorf("per-app stale = %q sev, %ds dur; want warning with a non-zero comparison age", got[0].Severity, got[0].DurationSeconds)
 		}
+		wantOnset := now.Add(-2 * time.Hour).UTC().Truncate(time.Second).Add(threshold)
+		if !got[0].OnsetAt.Equal(wantOnset) {
+			t.Errorf("per-app stale onset = %v, want threshold crossing %v", got[0].OnsetAt, wantOnset)
+		}
 	})
 
 	t.Run("stale majority of >=3 eligible rolls up to one warning", func(t *testing.T) {
 		apps := []*unstructured.Unstructured{
-			staleArgoApp("a", "argocd", stale, ""),
-			staleArgoApp("b", "argocd", stale, ""),
-			staleArgoApp("c", "argocd", stale, ""),
+			staleArgoApp("a", "argocd", now.Add(-30*time.Hour).Format(time.RFC3339), ""),
+			staleArgoApp("b", "argocd", now.Add(-2*time.Hour).Format(time.RFC3339), ""),
+			staleArgoApp("c", "argocd", now.Add(-90*time.Minute).Format(time.RFC3339), ""),
 			staleArgoApp("d", "argocd", fresh, ""),
 		}
 		got := detectArgoStale(apps, ctrlUp, threshold, now)
 		if len(got) != 1 || got[0].Reason != "GitOpsComparisonsStale" || got[0].Severity != "warning" {
 			t.Fatalf("want one GitOpsComparisonsStale rollup, got %+v", got)
 		}
-		if got[0].DurationSeconds == 0 {
-			t.Errorf("comparisons-stale rollup DurationSeconds = 0, want the freeze age so FirstSeen is stable")
+		wantOnset := now.Add(-90 * time.Minute).UTC().Truncate(time.Second).Add(threshold)
+		if got[0].DurationSeconds == 0 || !got[0].OnsetAt.Equal(wantOnset) {
+			t.Errorf("comparisons-stale rollup onset = %v (%ds), want majority threshold crossing %v", got[0].OnsetAt, got[0].DurationSeconds, wantOnset)
 		}
 	})
 
@@ -810,6 +815,15 @@ func TestDetectArgoStale(t *testing.T) {
 			t.Fatalf("hidden controller should fall back to per-app rows, got %+v", got)
 		}
 	})
+}
+
+func TestGitOpsProblemUsesInjectedClockForResourceAge(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	createdAt := now.Add(-90 * time.Minute)
+	got := gitopsProblem(now, "Application", argoGroup, "argocd", "shop", "warning", "ComparisonStale", "stale", createdAt)
+	if got.AgeSeconds != int64((90*time.Minute).Seconds()) || got.Age != "1h" {
+		t.Fatalf("resource age = %q/%ds, want injected-clock age 1h/5400s", got.Age, got.AgeSeconds)
+	}
 }
 
 func TestArgoStaleThresholdFromValue(t *testing.T) {
