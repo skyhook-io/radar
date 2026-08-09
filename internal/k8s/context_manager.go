@@ -373,18 +373,24 @@ func PerformContextSwitch(newContext string) error {
 	ResetAllSubsystems()
 	logTiming("   [ops] ResetAllSubsystems: %v", time.Since(t))
 
-	// Step 2: Switch the K8s client to the new context
+	// Step 2: Switch the K8s client to the new context. In-cluster mode has a
+	// single fixed context (context switching is disabled there, per
+	// docs/configuration.md), so /connection/retry's reconnect-to-current-context
+	// would otherwise always fail here on SwitchContext's own in-cluster guard —
+	// skip straight to the connectivity test + reinit below.
 	reportProgress("Connecting to cluster...")
 	t = time.Now()
-	log.Printf("Switching K8s client to context %q...", newContext)
-	if err := SwitchContext(newContext); err != nil {
-		elapsed := time.Since(switchStart).Truncate(time.Millisecond)
-		log.Printf("[ops] Context switch FAILED at SwitchContext: %v (%v since switch start)", err, elapsed)
-		errorlog.Record("context-switch", "error",
-			"stage=SwitchContext target=%q elapsed=%v: %v", newContext, elapsed, err)
-		return fmt.Errorf("failed to switch context: %w", err)
+	if !IsInCluster() {
+		log.Printf("Switching K8s client to context %q...", newContext)
+		if err := SwitchContext(newContext); err != nil {
+			elapsed := time.Since(switchStart).Truncate(time.Millisecond)
+			log.Printf("[ops] Context switch FAILED at SwitchContext: %v (%v since switch start)", err, elapsed)
+			errorlog.Record("context-switch", "error",
+				"stage=SwitchContext target=%q elapsed=%v: %v", newContext, elapsed, err)
+			return fmt.Errorf("failed to switch context: %w", err)
+		}
+		logTiming("   [ops] SwitchContext: %v", time.Since(t))
 	}
-	logTiming("   [ops] SwitchContext: %v", time.Since(t))
 	ClearNamespaceScopeOverride()
 	RestoreNamespaceScopePreference(GetContextName())
 	if err := requireNamespaceScopeTarget(newContext); err != nil {
