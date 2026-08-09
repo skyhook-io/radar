@@ -32,9 +32,9 @@ import (
 //     specific Role/ClusterRole to inspect)
 
 type subjectPermissionsInput struct {
-	Kind              string  `json:"kind" jsonschema:"subject kind: ServiceAccount, User, or Group; access checks support ServiceAccount only"`
-	Namespace         string  `json:"namespace,omitempty" jsonschema:"subject namespace (required for ServiceAccount, omit for User/Group)"`
-	Name              string  `json:"name" jsonschema:"subject name"`
+	Kind      string `json:"kind" jsonschema:"subject kind: ServiceAccount, User, or Group; access checks support ServiceAccount only. A serviceAccountName read off a pod spec can be passed directly as service_account instead of kind+name"`
+	Namespace string `json:"namespace,omitempty" jsonschema:"subject namespace (required for ServiceAccount, omit for User/Group)"`
+	Name      string `json:"name" jsonschema:"subject name"`
 	Verb              string  `json:"verb,omitempty" jsonschema:"access check only: Kubernetes API verb; must be supplied together with resource"`
 	Resource          string  `json:"resource,omitempty" jsonschema:"access check only: plural Kubernetes API resource, e.g. configmaps; must be supplied together with verb"`
 	Group             string  `json:"group,omitempty" jsonschema:"access check only: resource API group; omit for core/v1"`
@@ -51,6 +51,13 @@ type subjectPermissionsResult struct {
 	UsedByPods []string            `json:"usedByPods,omitempty"` // "ns/name" pairs
 	PodsTotal  int                 `json:"podsTotal,omitempty"`  // >0 when usedByPods was truncated
 	NarrowHint string              `json:"narrowHint,omitempty"`
+	// SubjectWarning fires when the answer is empty for a reason other than
+	// "this subject has no permissions". The rules are computed from the RBAC
+	// index alone — no lookup of the subject itself — so a mistyped or
+	// wrong-namespace ServiceAccount produces exactly the same empty result as
+	// a real account with nothing bound to it. Without this the caller cannot
+	// tell those apart, and an empty set reads as a confident negative.
+	SubjectWarning string `json:"subjectWarning,omitempty"`
 }
 
 type mcpSubject struct {
@@ -219,6 +226,21 @@ func handleGetSubjectPermissions(ctx context.Context, _ *mcp.CallToolRequest, in
 		Bindings:  make([]mcpBindingLite, 0, len(er.ViaBindings)),
 		FlatRules: er.Flat,
 		Truncated: er.Truncated,
+	}
+
+	// Only worth saying when the answer is empty — a subject with bindings is
+	// self-evidently real, and the note would be noise on every other call.
+	if subj.Kind == "ServiceAccount" && len(er.ViaBindings) == 0 && len(er.Flat) == 0 {
+		switch verifiable, exists := k8s.ServiceAccountPresence(cache, subj.Namespace, subj.Name); {
+		case verifiable && !exists:
+			result.SubjectWarning = fmt.Sprintf(
+				"no ServiceAccount %q exists in namespace %q — this empty result reflects a subject that was never found, not an account without permissions. Check the name and namespace.",
+				subj.Name, subj.Namespace)
+		case !verifiable:
+			result.SubjectWarning = fmt.Sprintf(
+				"could not confirm ServiceAccount %q exists in namespace %q (not observable by Radar), so an empty result may mean either no permissions or a subject that does not exist.",
+				subj.Name, subj.Namespace)
+		}
 	}
 	if er.Truncated {
 		result.NarrowHint = "rule list truncated — the subject has more rules than shown; do not treat this list as the subject's complete permissions"

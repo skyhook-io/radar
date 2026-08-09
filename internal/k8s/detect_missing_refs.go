@@ -145,6 +145,24 @@ func refKnownMissing(cache *ResourceCache, resource, ns string, err error) bool 
 	return verifiable && !exists
 }
 
+// ServiceAccountPresence reports whether a ServiceAccount could be observed.
+//
+// Callers outside this package need the same three-way answer the detectors
+// use — present, absent, or unobservable — because "absent" and "we could not
+// look" mean opposite things to a reader. A namespace-restricted install or a
+// cold informer must never be reported as a missing account.
+func ServiceAccountPresence(cache *ResourceCache, namespace, name string) (verifiable, exists bool) {
+	if cache == nil || namespace == "" || name == "" {
+		return false, false
+	}
+	lister := cache.ServiceAccounts()
+	if lister == nil {
+		return false, false
+	}
+	_, err := lister.ServiceAccounts(namespace).Get(name)
+	return refLookupResult(cache, "serviceaccounts", namespace, err)
+}
+
 // withFix attaches the plain-English consequence (cause) and the concrete fix
 // (action) to a dangling-ref Detection. message stays the precise locator (which
 // field/path references what); cause is the lead the operator reads; action is

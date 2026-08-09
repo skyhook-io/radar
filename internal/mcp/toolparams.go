@@ -7,6 +7,7 @@ import (
 	"log"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -89,15 +90,24 @@ func isRegisteredTool(tool string) bool {
 // is the same false-negative class this file exists to remove.
 //
 // Only aliases whose value means the same thing under the target parameter
-// qualify, as decided by aliasValueKeepsMeaning below. `pod` and `workload`
-// were considered and rejected: an agent may reasonably send
-// `pod: "prod/api-0"` or `workload: "deployment/api"`, which are not names.
+// qualify, as decided by aliasValueKeepsMeaning below. `workload` stays
+// rejected: `workload: "deployment/api"` names a kind *and* an object, and no
+// single canonical parameter carries both.
+//
+// `pod` was rejected here originally on the same reasoning — a caller may send
+// `pod: "prod/api-0"`. That risk is real but already covered: the alias target
+// is `name`, so aliasValueKeepsMeaning runs and refuses anything that is not a
+// DNS-1123 subdomain, leaving the qualified form on the rejection-with-help
+// path exactly as before. Plain pod names, which is what callers actually
+// send, now repair instead of failing the call.
 //
 // Cross-tool spelling differences do NOT belong here — those are pure
 // orthography and are handled generically below.
 var perToolAliases = map[string]map[string]string{
 	// RBAC subjects are naturally called "subjects", so an agent reaching for
 	// this tool tends to send subject/subjectKind rather than name/kind.
+	// (`serviceAccount` is not here: it carries the kind as well as the name,
+	// so it needs the expansion in perToolKindShorthand below, not a rename.)
 	"get_subject_permissions": {
 		"subject":      "name",
 		"subjectkind":  "kind",
@@ -105,6 +115,84 @@ var perToolAliases = map[string]map[string]string{
 		"subjectname":  "name",
 		"subject_name": "name",
 	},
+	// The tool takes pods and nothing else, and every caller-facing description
+	// of it — kubectl's `logs POD`, radar's own "pod name" — calls the argument
+	// a pod. Observed in the wild: get_pod_logs(pod=…, container=…) rejected
+	// mid-investigation.
+	"get_pod_logs": {
+		"pod": "name",
+	},
+}
+
+// perToolKindShorthand handles the one shape a rename cannot: a key that
+// carries BOTH the kind and the name. `serviceAccount: "cleanup-controller"`
+// is not a renamed `name` — it also says the subject is a ServiceAccount.
+//
+// Deliberately a hand-written table for one tool, NOT inference over the
+// cluster's kind set. Sourcing kinds from API discovery would make the accepted
+// arguments depend on which CRDs happen to be installed, so a key rejected
+// today would be accepted tomorrow, and on a write tool an unknown property
+// matching an installed Kind could be reinterpreted into a real mutation
+// target. The value of this repair does not justify a schema that varies by
+// cluster.
+//
+// Why this key: radar's own get_resource returns `serviceAccountName` on a pod
+// spec. A caller that reads that value and asks about it is using radar's own
+// vocabulary; rejecting it sent one investigation to a wrong conclusion after
+// it had already identified the right subject.
+var perToolKindShorthand = map[string]map[string]string{
+	"get_subject_permissions": {
+		"serviceaccount":     "ServiceAccount",
+		"service_account":    "ServiceAccount",
+		"serviceaccountname": "ServiceAccount",
+	},
+}
+
+// expandKindShorthand rewrites a shorthand key into kind+name in place.
+//
+// Every guard here is load-bearing:
+//   - an explicit kind or name always wins; a caller who supplied both meant
+//     something we cannot infer, and guessing risks answering about a different
+//     subject than the one asked about
+//   - two shorthand keys at once is ambiguous, so neither expands — map
+//     iteration order must never decide which subject gets answered
+//   - the value must be a real ServiceAccount name (DNS-1123). A qualified
+//     "prod/cleanup" would otherwise validate and have the handler report an
+//     empty permission set for an account that cannot exist: a confident wrong
+//     answer, where a rejection carrying the accepted names lets the caller
+//     retry.
+func expandKindShorthand(tool string, args map[string]json.RawMessage, isAccepted func(string) bool, repairs *[]string) {
+	table := perToolKindShorthand[tool]
+	if len(table) == 0 || !isAccepted("kind") || !isAccepted("name") {
+		return
+	}
+	if _, ok := args["kind"]; ok {
+		return
+	}
+	if _, ok := args["name"]; ok {
+		return
+	}
+
+	var foundKey, foundKind string
+	var foundVal json.RawMessage
+	for key, val := range args {
+		kind, ok := table[strings.ToLower(key)]
+		if !ok {
+			continue
+		}
+		if foundKey != "" {
+			return // ambiguous: more than one shorthand supplied
+		}
+		foundKey, foundKind, foundVal = key, kind, val
+	}
+	if foundKey == "" || !aliasValueKeepsMeaning(foundKind, foundVal) {
+		return
+	}
+
+	delete(args, foundKey)
+	args["name"] = foundVal
+	args["kind"] = json.RawMessage(strconv.Quote(foundKind))
+	*repairs = append(*repairs, fmt.Sprintf("%s->kind+name", foundKey))
 }
 
 // aliasValueKeepsMeaning reports whether moving val into the canonical
@@ -311,6 +399,8 @@ func repairToolArgs(tool string, raw json.RawMessage) (fixed json.RawMessage, re
 		}
 		return ""
 	}
+
+	expandKindShorthand(tool, args, isAccepted, &repairs)
 
 	for key, val := range args {
 		if isAccepted(key) {

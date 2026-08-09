@@ -617,3 +617,115 @@ func TestAliasTargetsExist(t *testing.T) {
 		}
 	}
 }
+
+// TestServiceAccountShorthandExpands covers the shape a rename cannot express:
+// a key carrying both the subject kind and its name.
+//
+// The first case is the exact call that lost a benchmark investigation. The
+// agent had already identified cleanup-controller as the finalizer's owner and
+// asked the right question; the rejection sent it to an unrelated crashloop and
+// a wrong conclusion. It had read "cleanup-controller" out of radar's own
+// get_resource output, under the field name serviceAccountName.
+func TestServiceAccountShorthandExpands(t *testing.T) {
+	registerToolsOnce(t)
+	tests := []struct {
+		name      string
+		args      map[string]any
+		wantKind  string
+		wantName  string
+		wantFixed bool
+	}{
+		{
+			name:      "the observed call",
+			args:      map[string]any{"namespace": "hotel-reservation", "serviceAccount": "cleanup-controller"},
+			wantKind:  "ServiceAccount",
+			wantName:  "cleanup-controller",
+			wantFixed: true,
+		},
+		{
+			name:      "snake spelling",
+			args:      map[string]any{"namespace": "ns", "service_account": "builder"},
+			wantKind:  "ServiceAccount",
+			wantName:  "builder",
+			wantFixed: true,
+		},
+		{
+			name:      "the spelling k8s itself uses on a pod spec",
+			args:      map[string]any{"namespace": "ns", "serviceAccountName": "builder"},
+			wantKind:  "ServiceAccount",
+			wantName:  "builder",
+			wantFixed: true,
+		},
+		{
+			// A qualified value is not a ServiceAccount name. Expanding it would
+			// validate and then report an empty permission set for an account
+			// that cannot exist — a confident wrong answer.
+			name:      "qualified value is refused, not reinterpreted",
+			args:      map[string]any{"namespace": "ns", "serviceAccount": "prod/cleanup"},
+			wantFixed: false,
+		},
+		{
+			// An explicit subject always wins; the caller who sent both meant
+			// something we cannot infer.
+			name:      "explicit kind and name are never overwritten",
+			args:      map[string]any{"kind": "User", "name": "alice", "serviceAccount": "builder"},
+			wantKind:  "User",
+			wantName:  "alice",
+			wantFixed: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw, err := json.Marshal(tt.args)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			fixed, repairs, _ := repairToolArgs("get_subject_permissions", raw)
+			var got map[string]any
+			if err := json.Unmarshal(fixed, &got); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			expanded := false
+			for _, r := range repairs {
+				if strings.Contains(r, "->kind+name") {
+					expanded = true
+				}
+			}
+			if expanded != tt.wantFixed {
+				t.Errorf("expanded = %v, want %v (repairs %v)", expanded, tt.wantFixed, repairs)
+			}
+			if tt.wantKind != "" {
+				if got["kind"] != tt.wantKind {
+					t.Errorf("kind = %v, want %q", got["kind"], tt.wantKind)
+				}
+				if got["name"] != tt.wantName {
+					t.Errorf("name = %v, want %q", got["name"], tt.wantName)
+				}
+			}
+		})
+	}
+}
+
+// TestPodAliasRepairsPlainNamesOnly restores an alias this file originally
+// rejected. The reasoning for rejecting it — a caller may send "prod/api-0" —
+// is handled by the value guard, since the alias target is `name`: plain names
+// repair, qualified ones still fall through to the rejection carrying help.
+func TestPodAliasRepairsPlainNamesOnly(t *testing.T) {
+	registerToolsOnce(t)
+	for _, tt := range []struct {
+		val       string
+		wantFixed bool
+	}{
+		{"wrk2-job-frr7c", true},
+		{"prod/api-0", false},
+	} {
+		raw, _ := json.Marshal(map[string]any{"namespace": "ns", "pod": tt.val, "container": "app"})
+		fixed, repairs, _ := repairToolArgs("get_pod_logs", raw)
+		var got map[string]any
+		_ = json.Unmarshal(fixed, &got)
+		if fixedOK := got["name"] == tt.val; fixedOK != tt.wantFixed {
+			t.Errorf("pod=%q: name set = %v, want %v (repairs %v)", tt.val, fixedOK, tt.wantFixed, repairs)
+		}
+	}
+}
