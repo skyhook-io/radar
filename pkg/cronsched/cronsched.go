@@ -102,11 +102,14 @@ func maxDomGapDays(field string) (time.Duration, bool) {
 	if len(reliable) == 0 {
 		return 62 * day, true // e.g. the 31st: Jan 31 → Mar 31
 	}
-	// Wrap from the last reliable day to the first of the next month, measured
-	// against the SHORTEST month. Longer months only add firings, which can
-	// only narrow gaps, so this stays an upper bound. A single day yields a
-	// full 28-day cycle, which is the monthly case.
-	maxGap := (28 - reliable[len(reliable)-1]) + reliable[0]
+	// Wrap from the last reliable day to the first of the following month,
+	// measured against the LONGEST month. A 31-day month only adds firings if
+	// those extra days are in the set — and 29-31 were filtered out above
+	// precisely because they aren't dependable — so a long month simply
+	// stretches the wrap rather than narrowing it. A single day therefore
+	// yields a 31-day cycle, which is the true monthly case: Jan 1 -> Feb 1 is
+	// 31 days, not 28.
+	maxGap := (31 - reliable[len(reliable)-1]) + reliable[0]
 	for i := 1; i < len(reliable); i++ {
 		if g := reliable[i] - reliable[i-1]; g > maxGap {
 			maxGap = g

@@ -788,6 +788,12 @@ export function getWorkloadStatus(resource: any, kind: string): StatusBadge {
     if (ready === desired && updated === desired) {
       return { text: `${ready}/${desired}`, color: healthColors.healthy, level: 'healthy' }
     }
+    // Convergence grace, same as the replica kinds below. pkg/health.Workload
+    // passes this signal for DaemonSets too, so omitting it here would render a
+    // mid-reconcile DaemonSet unhealthy while the backend calls it neutral.
+    if (isConverging(resource)) {
+      return { text: `${ready}/${desired}`, color: healthColors.neutral, level: 'neutral' }
+    }
     if (ready > 0) {
       return { text: `${ready}/${desired}`, color: healthColors.degraded, level: 'degraded' }
     }

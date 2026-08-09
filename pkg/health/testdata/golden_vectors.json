@@ -180,6 +180,18 @@
       "kind": "Deployment",
       "level": "unhealthy",
       "object": { "metadata": { "generation": 7 }, "spec": { "replicas": 3 }, "status": { "observedGeneration": 7, "replicas": 3, "readyReplicas": 0, "availableReplicas": 0 } }
+    },
+    {
+      "name": "daemonset whose controller has not observed the new spec is converging",
+      "kind": "DaemonSet",
+      "level": "neutral",
+      "object": { "metadata": { "generation": 5 }, "status": { "observedGeneration": 4, "desiredNumberScheduled": 3, "numberReady": 1, "updatedNumberScheduled": 1 } }
+    },
+    {
+      "name": "daemonset settled with none ready is unhealthy",
+      "kind": "DaemonSet",
+      "level": "unhealthy",
+      "object": { "metadata": { "generation": 5 }, "status": { "observedGeneration": 5, "desiredNumberScheduled": 3, "numberReady": 0, "updatedNumberScheduled": 3 } }
     }
   ]
 }
