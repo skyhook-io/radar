@@ -367,7 +367,14 @@ func TestRebuildPolicyReportIndex_PublishesCurrentGeneration(t *testing.T) {
 		return []*unstructured.Unstructured{report}
 	})
 
-	findings := idx.FindingsFor("", "Pod", "default", "current-pod")
+	if findings := idx.FindingsFor("", "Pod", "default", "current-pod"); len(findings) != 0 {
+		t.Fatalf("rebuild mutated the previously published snapshot: %+v", findings)
+	}
+	current := policyReportIndex.Load()
+	if current == idx {
+		t.Fatal("rebuild did not publish a new index snapshot")
+	}
+	findings := current.FindingsFor("", "Pod", "default", "current-pod")
 	if len(findings) != 1 || findings[0].Policy != "current-policy" {
 		t.Fatalf("current rebuild findings = %+v, want current-policy", findings)
 	}

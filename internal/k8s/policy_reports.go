@@ -192,8 +192,9 @@ var (
 // The reason isn't tracked yet because there's no consumer to need it;
 // adding it speculatively is YAGNI surface.
 //
-// Returned indexes are safe for concurrent reads; the index swaps its
-// internal state atomically during rebuilds.
+// Returned indexes are safe for concurrent reads. Rebuilds publish a new
+// index snapshot atomically, so a caller that already loaded an index sees a
+// stable snapshot for the rest of its synchronous computation.
 func GetPolicyReportIndex() *policyreports.Index {
 	return policyReportIndex.Load()
 }
@@ -632,11 +633,12 @@ func listPolicyReportsAll(gvrs []schema.GroupVersionResource) []*unstructured.Un
 // scheduleRebuild coalesces back-to-back informer events into a single
 // rebuild. The first event in a burst arms a timer; subsequent events
 // during the debounce window do nothing (the pending flag is already
-// set). When the timer fires, we re-list and Replace the index contents.
+// set). When the timer fires, we re-list and publish a replacement index
+// snapshot.
 //
-// The debounce window (rebuildDebounce) is well under any realistic
-// staleness budget: agents reading the index see at most ~500ms-stale
-// data, which is well below Kyverno's own reconcile cadence.
+// The first rebuild starts after rebuildDebounce. Under sustained churn, a
+// follow-up also waits at least as long as the preceding rebuild took so index
+// maintenance cannot monopolize a core.
 func scheduleRebuild() {
 	if !policyReportPending.CompareAndSwap(false, true) {
 		return // rebuild already scheduled
@@ -704,14 +706,14 @@ func rebuildPolicyReportIndexOnce(listReports func([]schema.GroupVersionResource
 		return
 	}
 	reports := listReports(gvrs)
+	next := policyreports.BuildIndex(reports)
 
 	policyReportMu.Lock()
-	stale := kyvernoWarmupGen.Load() != generation
-	policyReportMu.Unlock()
-	if stale {
+	defer policyReportMu.Unlock()
+	if kyvernoWarmupGen.Load() != generation || policyReportIndex.Load() != idx {
 		return
 	}
-	idx.Replace(reports)
+	policyReportIndex.Store(next)
 }
 
 // ResetPolicyReportIndex clears the index and re-arms warmup-once. Called
@@ -730,6 +732,9 @@ func ResetPolicyReportIndex() {
 	policyReportIndex.Store(nil)
 	policyReportWatched = nil
 	policyReportPending.Store(false)
+	// The rebuild coordinator deliberately survives reset. Clearing its active
+	// flag while the old loop still owns it could start a second loop in parallel;
+	// generation and pointer validation make the old iteration harmless.
 	// Clear the warmup decision too — the new cluster gets a fresh
 	// detection pass, and GetKyvernoStatus should report "warmup" until
 	// the new pass completes (not whatever the previous cluster decided).

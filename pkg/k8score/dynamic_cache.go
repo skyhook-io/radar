@@ -1186,8 +1186,10 @@ func (d *DynamicResourceCache) ListWatched(gvr schema.GroupVersionResource) ([]*
 }
 
 // ListWatchedReadOnly returns the cached objects covered by ListWatched
-// without copying them. Callers must not mutate the objects or retain them
-// beyond the synchronous computation that requested them.
+// without copying them. Informer transforms run before objects enter the store,
+// and updates replace stored objects rather than mutating them in place. Callers
+// must not mutate the returned objects or retain them beyond the synchronous
+// computation that requested them.
 func (d *DynamicResourceCache) ListWatchedReadOnly(gvr schema.GroupVersionResource) ([]*unstructured.Unstructured, error) {
 	if d == nil {
 		return nil, fmt.Errorf("dynamic resource cache not initialized")
