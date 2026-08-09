@@ -92,7 +92,33 @@ func (f *fakeProvider) ChangeContextForIssue(i Issue) *issuesapi.ChangeContext {
 }
 
 func (f *fakeProvider) AdmissionWebhookRefsForService(namespace, name string) []AdmissionWebhookRef {
-	return f.webhookRefs[namespace+"/"+name]
+	refs := f.webhookRefs[namespace+"/"+name]
+	out := make([]AdmissionWebhookRef, 0, len(refs))
+	for _, ref := range refs {
+		ref.ServiceNamespace = namespace
+		ref.ServiceName = name
+		out = append(out, ref)
+	}
+	return out
+}
+
+func (f *fakeProvider) AdmissionWebhookRefsForConfiguration(group, kind, name string) []AdmissionWebhookRef {
+	var out []AdmissionWebhookRef
+	for serviceKey, refs := range f.webhookRefs {
+		parts := strings.SplitN(serviceKey, "/", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		for _, ref := range refs {
+			if ref.Configuration.Group != group || ref.Configuration.Kind != kind || ref.Configuration.Name != name {
+				continue
+			}
+			ref.ServiceNamespace = parts[0]
+			ref.ServiceName = parts[1]
+			out = append(out, ref)
+		}
+	}
+	return out
 }
 
 func (f *fakeProvider) WorkloadBacksService(group, kind, namespace, name, serviceNamespace, serviceName string) bool {
@@ -177,6 +203,227 @@ func TestComposeAdmissionWebhookBackendCorrelation(t *testing.T) {
 	}
 }
 
+func TestComposeMissingAdmissionWebhookServiceCorrelation(t *testing.T) {
+	message := `failed calling webhook "missing.example.com": Post "https://missing-webhook.hooks.svc:443/validate": service "missing-webhook" not found`
+	p := &fakeProvider{
+		missingRefs: []k8s.Detection{
+			{
+				Kind: "ValidatingWebhookConfiguration", Group: "admissionregistration.k8s.io", Name: "policy", Severity: "critical",
+				Reason: k8s.MissingWebhookBackendReason, Fingerprint: k8s.WebhookBackendFingerprint("hooks", "missing-webhook"), OnsetUnknown: true,
+			},
+			{
+				Kind: "ValidatingWebhookConfiguration", Group: "admissionregistration.k8s.io", Name: "policy", Severity: "critical",
+				Reason: k8s.MissingWebhookBackendReason, Fingerprint: k8s.WebhookBackendFingerprint("hooks", "other-missing-webhook"), OnsetUnknown: true,
+			},
+		},
+		scheduling: []k8s.Detection{{
+			Kind: "ReplicaSet", Group: "apps", Namespace: "apps", Name: "catalog-7d9f", Severity: "critical",
+			Reason: "WebhookUnavailable", Message: message,
+			OwnerGroup: "apps", OwnerKind: "Deployment", OwnerName: "catalog",
+		}},
+		webhookRefs: map[string][]AdmissionWebhookRef{
+			"hooks/missing-webhook": {{
+				Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "policy"},
+				WebhookName:   "missing.example.com", FailurePolicy: "Fail",
+			}},
+			"hooks/other-missing-webhook": {{
+				Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "policy"},
+				WebhookName:   "other.example.com", FailurePolicy: "Fail",
+			}},
+		},
+	}
+	out := Compose(p, Filters{Limit: NoLimit, Grouped: true, CanReadClusterScoped: func(string, string) bool { return true }})
+	if len(out) != 3 {
+		t.Fatalf("missing-Service correlation = %+v, want two configuration roots and blocked Deployment", out)
+	}
+	var root, unrelatedRoot, deployment Issue
+	for _, issue := range out {
+		switch issue.Kind {
+		case "ValidatingWebhookConfiguration":
+			if issue.Fingerprint == k8s.WebhookBackendFingerprint("hooks", "missing-webhook") {
+				root = issue
+			} else {
+				unrelatedRoot = issue
+			}
+		case "Deployment":
+			deployment = issue
+		case "Service":
+			t.Fatalf("missing backend must not create a synthetic Service issue: %+v", issue)
+		}
+	}
+	if root.ID == "" || root.DiagnosticContext == nil {
+		t.Fatalf("missing webhook root lacks diagnostic context: %+v", root)
+	}
+	if unrelatedRoot.ID == "" {
+		t.Fatalf("second missing backend root was collapsed: %+v", out)
+	}
+	if deployment.IncidentParent == nil || deployment.IncidentParent.ID != root.ID || deployment.IncidentParent.FactType != factAdmissionWebhook {
+		t.Fatalf("blocked Deployment incident parent = %+v, want configuration %q", deployment.IncidentParent, root.ID)
+	}
+	var webhookFact issuesapi.DiagnosticFact
+	for _, fact := range root.DiagnosticContext.Facts {
+		if fact.Type == factAdmissionWebhook {
+			webhookFact = fact
+		}
+	}
+	if len(webhookFact.RelatedIssues) != 1 || len(webhookFact.Refs) != 0 ||
+		!strings.Contains(webhookFact.Message, `Service "missing-webhook" in namespace "hooks"`) {
+		t.Fatalf("missing webhook root fact = %+v, want exact backend identity, one symptom, and no dead-link ref", webhookFact)
+	}
+	if unrelatedRoot.DiagnosticContext != nil {
+		for _, fact := range unrelatedRoot.DiagnosticContext.Facts {
+			if fact.Type == factAdmissionWebhook && len(fact.RelatedIssues) != 0 {
+				t.Fatalf("different missing backend fingerprint was correlated: %+v", fact)
+			}
+		}
+	}
+}
+
+func TestAdmissionWebhookFailureKindMustMatchRootShape(t *testing.T) {
+	refs := []AdmissionWebhookRef{{
+		WebhookName: "validate.example.com", ServiceNamespace: "hooks", ServiceName: "policy-webhook", FailurePolicy: "Fail",
+	}}
+	noEndpoints := k8s.AdmissionWebhookBackendFailure{
+		WebhookName: "validate.example.com", ServiceNamespace: "hooks", ServiceName: "policy-webhook", Kind: k8s.AdmissionWebhookNoReadyEndpoints,
+	}
+	serviceMissing := noEndpoints
+	serviceMissing.Kind = k8s.AdmissionWebhookServiceNotFound
+	if !admissionWebhookFailureMatchesRefs(noEndpoints, refs, false) || admissionWebhookFailureMatchesRefs(noEndpoints, refs, true) {
+		t.Fatal("no-endpoints failure must match only an existing-Service root")
+	}
+	if !admissionWebhookFailureMatchesRefs(serviceMissing, refs, true) || admissionWebhookFailureMatchesRefs(serviceMissing, refs, false) {
+		t.Fatal("service-not-found failure must match only a missing-Service configuration root")
+	}
+	refs[0].FailurePolicy = "Ignore"
+	if admissionWebhookFailureMatchesRefs(noEndpoints, refs, false) || admissionWebhookFailureMatchesRefs(serviceMissing, refs, true) {
+		t.Fatal("fail-open webhook reference must never create an incident edge")
+	}
+}
+
+func TestMissingAdmissionWebhookServiceFailOpenHasNoIncidentEdge(t *testing.T) {
+	message := `failed calling webhook "audit.example.com": Post "https://audit-webhook.hooks.svc:443/mutate": service "audit-webhook" not found`
+	p := &fakeProvider{
+		missingRefs: []k8s.Detection{{
+			Kind: "MutatingWebhookConfiguration", Group: "admissionregistration.k8s.io", Name: "audit", Severity: "warning",
+			Reason: k8s.MissingWebhookBackendReason, Fingerprint: k8s.WebhookBackendFingerprint("hooks", "audit-webhook"), OnsetUnknown: true,
+		}},
+		scheduling: []k8s.Detection{{
+			Kind: "Deployment", Group: "apps", Namespace: "apps", Name: "catalog", Severity: "critical",
+			Reason: "WebhookUnavailable", Message: message,
+		}},
+		webhookRefs: map[string][]AdmissionWebhookRef{
+			"hooks/audit-webhook": {{
+				Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "MutatingWebhookConfiguration", Name: "audit"},
+				WebhookName:   "audit.example.com", FailurePolicy: "Ignore",
+			}},
+		},
+	}
+	out := Compose(p, Filters{Limit: NoLimit, Grouped: true, CanReadClusterScoped: func(string, string) bool { return true }})
+	foundRoot := false
+	for _, issue := range out {
+		if issue.Kind == "Deployment" && issue.IncidentParent != nil {
+			t.Fatalf("fail-open webhook symptom received incident parent: %+v", issue.IncidentParent)
+		}
+		if issue.Kind != "MutatingWebhookConfiguration" {
+			continue
+		}
+		foundRoot = true
+		var fact issuesapi.DiagnosticFact
+		for _, candidate := range issue.DiagnosticContext.Facts {
+			if candidate.Type == factAdmissionWebhook {
+				fact = candidate
+			}
+		}
+		if !strings.Contains(fact.Message, "fail-open") || !strings.Contains(fact.Message, `Service "audit-webhook" in namespace "hooks"`) || len(fact.RelatedIssues) != 0 {
+			t.Fatalf("fail-open missing-Service fact = %+v", fact)
+		}
+	}
+	if !foundRoot {
+		t.Fatalf("fail-open missing-Service root not found: %+v", out)
+	}
+}
+
+func TestMissingAdmissionWebhookServiceRootAmbiguity(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		secondWebhookName string
+		wantParent        bool
+		wantRelatedRoots  int
+	}{
+		{name: "same webhook has two roots", secondWebhookName: "validate.example.com", wantRelatedRoots: 2},
+		{name: "webhook identity selects one root", secondWebhookName: "other.example.com", wantParent: true, wantRelatedRoots: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fingerprint := k8s.WebhookBackendFingerprint("hooks", "missing-webhook")
+			p := &fakeProvider{
+				missingRefs: []k8s.Detection{
+					{Kind: "ValidatingWebhookConfiguration", Group: "admissionregistration.k8s.io", Name: "policy-a", Severity: "critical", Reason: k8s.MissingWebhookBackendReason, Fingerprint: fingerprint},
+					{Kind: "ValidatingWebhookConfiguration", Group: "admissionregistration.k8s.io", Name: "policy-b", Severity: "critical", Reason: k8s.MissingWebhookBackendReason, Fingerprint: fingerprint},
+				},
+				scheduling: []k8s.Detection{{
+					Kind: "Deployment", Group: "apps", Namespace: "apps", Name: "catalog", Severity: "critical", Reason: "WebhookUnavailable",
+					Message: `failed calling webhook "validate.example.com": Post "https://missing-webhook.hooks.svc:443/validate": service "missing-webhook" not found`,
+				}},
+				webhookRefs: map[string][]AdmissionWebhookRef{
+					"hooks/missing-webhook": {
+						{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "policy-a"}, WebhookName: "validate.example.com", FailurePolicy: "Fail"},
+						{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "policy-b"}, WebhookName: tc.secondWebhookName, FailurePolicy: "Fail"},
+					},
+				},
+			}
+			out := Compose(p, Filters{Limit: NoLimit, Grouped: true, CanReadClusterScoped: func(string, string) bool { return true }})
+			relatedRoots := 0
+			for _, issue := range out {
+				if issue.Kind == "Deployment" {
+					if (issue.IncidentParent != nil) != tc.wantParent {
+						t.Fatalf("Deployment incident parent = %+v, want present=%v", issue.IncidentParent, tc.wantParent)
+					}
+					if issue.IncidentParent != nil && issue.IncidentParent.Ref.Name != "policy-a" {
+						t.Fatalf("selected incident root = %+v, want policy-a", issue.IncidentParent)
+					}
+				}
+				if issue.Kind == "ValidatingWebhookConfiguration" && issue.DiagnosticContext != nil {
+					for _, fact := range issue.DiagnosticContext.Facts {
+						if fact.Type == factAdmissionWebhook && len(fact.RelatedIssues) == 1 {
+							relatedRoots++
+						}
+					}
+				}
+			}
+			if relatedRoots != tc.wantRelatedRoots {
+				t.Fatalf("roots listing the symptom = %d, want %d: %+v", relatedRoots, tc.wantRelatedRoots, out)
+			}
+		})
+	}
+}
+
+func TestAdmissionWebhookCorrelationRequiresExactWebhookReference(t *testing.T) {
+	message := `failed calling webhook "unrelated.example.com": Post "https://policy-webhook.hooks.svc:443/validate": no endpoints available for service "policy-webhook"`
+	p := &fakeProvider{
+		problems:   []k8s.Detection{{Kind: "Service", Namespace: "hooks", Name: "policy-webhook", Severity: "warning", Reason: k8s.SelectorMatchesNoPodsReason}},
+		scheduling: []k8s.Detection{{Kind: "Deployment", Group: "apps", Namespace: "apps", Name: "catalog", Severity: "critical", Reason: "WebhookUnavailable", Message: message}},
+		webhookRefs: map[string][]AdmissionWebhookRef{
+			"hooks/policy-webhook": {{
+				Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "policy"},
+				WebhookName:   "validate.example.com", FailurePolicy: "Fail",
+			}},
+		},
+	}
+	out := Compose(p, Filters{Limit: NoLimit, Grouped: true, CanReadClusterScoped: func(string, string) bool { return true }})
+	for _, issue := range out {
+		if issue.Kind == "Deployment" && issue.IncidentParent != nil {
+			t.Fatalf("unreferenced webhook name received incident parent: %+v", issue.IncidentParent)
+		}
+		if issue.Kind == "Service" && issue.DiagnosticContext != nil {
+			for _, fact := range issue.DiagnosticContext.Facts {
+				if fact.Type == factAdmissionWebhook && len(fact.RelatedIssues) != 0 {
+					t.Fatalf("unreferenced webhook name was correlated: %+v", fact)
+				}
+			}
+		}
+	}
+}
+
 func TestAdmissionWebhookSelfDeadlockSuppressesCircularIncidentEdge(t *testing.T) {
 	p := &fakeProvider{
 		problems: []k8s.Detection{{Kind: "Service", Namespace: "hooks", Name: "policy-webhook", Severity: "warning", Reason: k8s.SelectorMatchesNoPodsReason}},
@@ -185,7 +432,7 @@ func TestAdmissionWebhookSelfDeadlockSuppressesCircularIncidentEdge(t *testing.T
 			Message: `failed calling webhook "validate.example.com": Post "https://policy-webhook.hooks.svc:443/validate": no endpoints available for service "policy-webhook"`,
 		}},
 		webhookRefs: map[string][]AdmissionWebhookRef{
-			"hooks/policy-webhook": {{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "policy"}, FailurePolicy: "Fail"}},
+			"hooks/policy-webhook": {{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "policy"}, WebhookName: "validate.example.com", FailurePolicy: "Fail"}},
 		},
 		workloadBacks: map[string]bool{"apps/Deployment/hooks/policy->hooks/policy-webhook": true},
 	}
@@ -223,7 +470,7 @@ func TestAdmissionWebhookCorrelationSurvivesReplicaSetWorkloadGrouping(t *testin
 		webhookRefs: map[string][]AdmissionWebhookRef{
 			"hooks/policy-webhook": {{
 				Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "policy"},
-				FailurePolicy: "Fail",
+				WebhookName:   "validate.example.com", FailurePolicy: "Fail",
 			}},
 		},
 	}
@@ -267,7 +514,7 @@ func TestAdmissionWebhookCorrelationRequiresWholeGroupedIssueCoverage(t *testing
 		webhookRefs: map[string][]AdmissionWebhookRef{
 			"hooks/policy-webhook": {{
 				Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "policy"},
-				FailurePolicy: "Fail",
+				WebhookName:   "validate.example.com", FailurePolicy: "Fail",
 			}},
 		},
 	}
@@ -307,7 +554,7 @@ func TestAdmissionWebhookCorrelationCountsGroupedSubjectRow(t *testing.T) {
 		webhookRefs: map[string][]AdmissionWebhookRef{
 			"hooks/policy-webhook": {{
 				Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "policy"},
-				FailurePolicy: "Fail",
+				WebhookName:   "validate.example.com", FailurePolicy: "Fail",
 			}},
 		},
 	}
@@ -393,8 +640,8 @@ func TestAdmissionWebhookPartialRBACKeepsObjectiveFailureMode(t *testing.T) {
 		}},
 		webhookRefs: map[string][]AdmissionWebhookRef{
 			"hooks/policy-webhook": {
-				{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "MutatingWebhookConfiguration", Name: "visible-open"}, FailurePolicy: "Ignore"},
-				{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "hidden-closed"}, FailurePolicy: "Fail"},
+				{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "MutatingWebhookConfiguration", Name: "visible-open"}, WebhookName: "other.example.com", FailurePolicy: "Ignore"},
+				{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "hidden-closed"}, WebhookName: "validate.example.com", FailurePolicy: "Fail"},
 			},
 		},
 	}
@@ -445,8 +692,8 @@ func TestAdmissionWebhookTwoServiceRootsLeaveIncidentParentAmbiguous(t *testing.
 			{Kind: "Deployment", Group: "apps", Namespace: "apps", Name: "catalog", Severity: "critical", Reason: "WebhookUnavailable", Message: message("webhook-b")},
 		},
 		webhookRefs: map[string][]AdmissionWebhookRef{
-			"hooks/webhook-a": {{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "a"}, FailurePolicy: "Fail"}},
-			"hooks/webhook-b": {{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "b"}, FailurePolicy: "Fail"}},
+			"hooks/webhook-a": {{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "a"}, WebhookName: "validate.example.com", FailurePolicy: "Fail"}},
+			"hooks/webhook-b": {{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "b"}, WebhookName: "validate.example.com", FailurePolicy: "Fail"}},
 		},
 	}
 	out := Compose(p, Filters{Limit: NoLimit, Grouped: true, CanReadClusterScoped: func(string, string) bool { return true }})

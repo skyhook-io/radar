@@ -33,13 +33,16 @@ type serviceBackendIssueProvider interface {
 }
 
 type AdmissionWebhookRef struct {
-	Configuration Ref
-	WebhookName   string
-	FailurePolicy string
+	Configuration    Ref
+	WebhookName      string
+	ServiceNamespace string
+	ServiceName      string
+	FailurePolicy    string
 }
 
 type admissionWebhookContextProvider interface {
 	AdmissionWebhookRefsForService(namespace, name string) []AdmissionWebhookRef
+	AdmissionWebhookRefsForConfiguration(group, kind, name string) []AdmissionWebhookRef
 	WorkloadBacksService(group, kind, namespace, name, serviceNamespace, serviceName string) bool
 }
 
@@ -51,6 +54,11 @@ func isAdmissionWebhookBackendService(issue Issue) bool {
 		return true
 	}
 	return issue.Reason == k8s.SelectorMatchesNoPodsReason || issue.Reason == k8s.SelectorMatchesOnlyCompletedPodsReason
+}
+
+func isMissingAdmissionWebhookBackend(issue Issue) bool {
+	return issue.Source == SourceMissingRef && issue.Category == issuesapi.CategoryWebhookBackendDown &&
+		issue.Reason == k8s.MissingWebhookBackendReason
 }
 
 func elevateAdmissionWebhookBackendSeverity(issues []Issue, p Provider) []Issue {
@@ -280,7 +288,7 @@ func enrichDiagnosticContextAuthorized(shaped, flat, grouped []Issue, p Provider
 			addServiceBackendContext(&b, *i, serviceProvider, flatByResource, groupedByID)
 		}
 
-		if webhookProvider != nil && isAdmissionWebhookBackendService(*i) {
+		if webhookProvider != nil && (isAdmissionWebhookBackendService(*i) || isMissingAdmissionWebhookBackend(*i)) {
 			addAdmissionWebhookContext(&b, *i, &incidentEdges, webhookProvider, canReadClusterScoped, flat, groupedByID, flatRowsByID)
 		}
 
@@ -471,7 +479,18 @@ func addServiceBackendContext(b *diagnosticContextBuilder, issue Issue, serviceP
 }
 
 func addAdmissionWebhookContext(b *diagnosticContextBuilder, root Issue, edges *[]incidentEdge, provider admissionWebhookContextProvider, canReadClusterScoped func(kind, group string) bool, flat []Issue, groupedByID map[string]Issue, flatRowsByID map[string]int) {
+	missingServiceRoot := isMissingAdmissionWebhookBackend(root)
 	refs := provider.AdmissionWebhookRefsForService(root.Namespace, root.Name)
+	if missingServiceRoot {
+		refs = provider.AdmissionWebhookRefsForConfiguration(root.Group, root.Kind, root.Name)
+		matching := make([]AdmissionWebhookRef, 0, len(refs))
+		for _, ref := range refs {
+			if root.Fingerprint == k8s.WebhookBackendFingerprint(ref.ServiceNamespace, ref.ServiceName) {
+				matching = append(matching, ref)
+			}
+		}
+		refs = matching
+	}
 	var configRefs []Ref
 	failClosed := false
 	for _, ref := range refs {
@@ -490,6 +509,13 @@ func addAdmissionWebhookContext(b *diagnosticContextBuilder, root Issue, edges *
 	if failClosed {
 		message = "A fail-closed admission webhook depends on this Service; matching admission requests are blocked while it has no ready backend."
 	}
+	if missingServiceRoot {
+		backend := refs[0]
+		message = fmt.Sprintf("A fail-open admission webhook declared by this configuration points to missing Service %q in namespace %q; admission continues while its validation or mutation is bypassed.", backend.ServiceName, backend.ServiceNamespace)
+		if failClosed {
+			message = fmt.Sprintf("A fail-closed admission webhook declared by this configuration points to missing Service %q in namespace %q; matching admission requests are blocked.", backend.ServiceName, backend.ServiceNamespace)
+		}
+	}
 
 	type matchedGroup struct {
 		issue Issue
@@ -505,8 +531,9 @@ func addAdmissionWebhookContext(b *diagnosticContextBuilder, root Issue, edges *
 			if candidate.Category != issuesapi.CategoryAdmissionWebhookBlocking {
 				continue
 			}
-			failure, ok := k8s.ParseAdmissionWebhookNoEndpoints(diagnosticMessage(candidate))
-			if !ok || failure.ServiceNamespace != root.Namespace || failure.ServiceName != root.Name {
+			failure, ok := k8s.ParseAdmissionWebhookBackendFailure(diagnosticMessage(candidate))
+			if !ok || (!missingServiceRoot && (failure.ServiceNamespace != root.Namespace || failure.ServiceName != root.Name)) ||
+				!admissionWebhookFailureMatchesRefs(failure, refs, missingServiceRoot) {
 				continue
 			}
 			shaped := candidate
@@ -524,7 +551,7 @@ func addAdmissionWebhookContext(b *diagnosticContextBuilder, root Issue, edges *
 		for _, id := range matchedOrder {
 			matched := matchedByID[id]
 			related = append(related, issueRef(matched.issue))
-			if provider.WorkloadBacksService(matched.issue.Group, matched.issue.Kind, matched.issue.Namespace, matched.issue.Name, root.Namespace, root.Name) {
+			if !missingServiceRoot && provider.WorkloadBacksService(matched.issue.Group, matched.issue.Kind, matched.issue.Namespace, matched.issue.Name, root.Namespace, root.Name) {
 				selfDeadlock = true
 				continue
 			}
@@ -538,13 +565,30 @@ func addAdmissionWebhookContext(b *diagnosticContextBuilder, root Issue, edges *
 	}
 	sortIssueRefs(related)
 	recordIncidentEdges(edges, root, factAdmissionWebhook, issuesapi.ConfidenceHigh, edgeIDs)
+	factRefs := configRefs
+	if missingServiceRoot {
+		factRefs = nil
+	}
 	b.add(issuesapi.DiagnosticRoleCandidate, issuesapi.DiagnosticFact{
 		Type:          factAdmissionWebhook,
 		Message:       message,
 		Confidence:    issuesapi.ConfidenceHigh,
-		Refs:          limitRefs(configRefs, maxDiagnosticRefs),
+		Refs:          limitRefs(factRefs, maxDiagnosticRefs),
 		RelatedIssues: limitIssueRefs(related, maxDiagnosticIssueRefs),
 	})
+}
+
+func admissionWebhookFailureMatchesRefs(failure k8s.AdmissionWebhookBackendFailure, refs []AdmissionWebhookRef, missingServiceRoot bool) bool {
+	if missingServiceRoot != (failure.Kind == k8s.AdmissionWebhookServiceNotFound) {
+		return false
+	}
+	for _, ref := range refs {
+		if ref.FailurePolicy == "Fail" && ref.WebhookName == failure.WebhookName &&
+			ref.ServiceNamespace == failure.ServiceNamespace && ref.ServiceName == failure.ServiceName {
+			return true
+		}
+	}
+	return false
 }
 
 // linkBlastRadius adds a candidate-role fact linking a root issue to the

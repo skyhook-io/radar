@@ -761,15 +761,16 @@ func TestDetectMissingWebhookRefs(t *testing.T) {
 	}
 
 	problems := DetectMissingWebhookRefs(GetResourceCache(), dynCache, discovery, "")
-	if !findProblem(problems, "ValidatingWebhookConfiguration", "", "validate-hooks", "Missing webhook backend Service") {
+	if !findProblem(problems, "ValidatingWebhookConfiguration", "", "validate-hooks", MissingWebhookBackendReason) {
 		t.Fatalf("missing validating webhook Service not detected: %+v", problems)
 	}
-	if !findProblem(problems, "MutatingWebhookConfiguration", "", "mutate-hooks", "Missing webhook backend Service") {
+	if !findProblem(problems, "MutatingWebhookConfiguration", "", "mutate-hooks", MissingWebhookBackendReason) {
 		t.Fatalf("missing mutating webhook Service not detected: %+v", problems)
 	}
 	if len(problems) != 2 {
 		t.Fatalf("expected exactly 2 missing webhook refs, got %+v", problems)
 	}
+	foundValidatingMissing := false
 	for _, p := range problems {
 		if p.Namespace != "" {
 			t.Errorf("webhook configs are cluster-scoped; got namespace on problem: %+v", p)
@@ -780,13 +781,36 @@ func TestDetectMissingWebhookRefs(t *testing.T) {
 		if !p.OnsetUnknown || p.Duration != "" || p.DurationSeconds != 0 {
 			t.Errorf("missing webhook Service must not use configuration age as outage onset: %+v", p)
 		}
+		if p.Kind == "ValidatingWebhookConfiguration" && p.Name == "validate-hooks" {
+			foundValidatingMissing = true
+			if p.Fingerprint != WebhookBackendFingerprint("hooks", "does-not-exist") {
+				t.Errorf("missing webhook Service fingerprint = %q, want exact backend identity", p.Fingerprint)
+			}
+		}
+	}
+	if !foundValidatingMissing {
+		t.Fatal("validating webhook missing-Service row not found for fingerprint assertion")
 	}
 	refs := AdmissionWebhookServiceReferences(dynCache, discovery)
 	if len(refs) != 3 {
 		t.Fatalf("service-backed webhook refs = %+v, want three and no URL-backed ref", refs)
 	}
-	if watched := AdmissionWebhookServiceReferencesWatched(dynCache, discovery); len(watched) != len(refs) {
+	watched := AdmissionWebhookServiceReferencesWatched(dynCache, discovery)
+	if len(watched) != len(refs) {
 		t.Fatalf("watched service-backed webhook refs = %+v, want %+v", watched, refs)
+	}
+	for _, problem := range problems {
+		matched := false
+		for _, ref := range watched {
+			if ref.ConfigurationKind == problem.Kind && ref.ConfigurationName == problem.Name &&
+				WebhookBackendFingerprint(ref.ServiceNamespace, ref.ServiceName) == problem.Fingerprint {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			t.Errorf("missing webhook row fingerprint has no matching watched inventory ref: problem=%+v refs=%+v", problem, watched)
+		}
 	}
 	if refs[0].FailurePolicy != "Fail" {
 		t.Fatalf("omitted failurePolicy must normalize to Fail: %+v", refs[0])
