@@ -1571,6 +1571,22 @@ func TestDynamicResourceCache_ListWatchedUnionsNamespaceInformers(t *testing.T) 
 			t.Fatalf("ListWatchedReadOnly copied cached object %s", item.GetName())
 		}
 	}
+
+	item, err := d.GetWatched(gvr, nsB, "w-"+nsB)
+	if err != nil {
+		t.Fatalf("GetWatched failed: %v", err)
+	}
+	if item.GetNamespace() != nsB || item.GetName() != "w-"+nsB {
+		t.Fatalf("GetWatched returned %s/%s, want %s/%s", item.GetNamespace(), item.GetName(), nsB, "w-"+nsB)
+	}
+	item.SetName("mutated-copy")
+	again, err := d.GetWatched(gvr, nsB, "w-"+nsB)
+	if err != nil || again.GetName() != "w-"+nsB {
+		t.Fatalf("GetWatched mutated informer object: item=%v err=%v", again, err)
+	}
+	if _, err := d.GetWatched(gvr, nsB, "absent"); !errors.Is(err, ErrResourceNotFound) {
+		t.Fatalf("GetWatched missing object error = %v, want ErrResourceNotFound", err)
+	}
 }
 
 // ListNamespaces must short-circuit a cluster-scoped GVR to a cluster-wide

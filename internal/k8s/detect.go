@@ -245,11 +245,10 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				ageDur := now.Sub(d.CreationTimestamp.Time)
 				onsetAt := replicaFailure.LastTransitionTime.Time
 				timingR := IssueTimingFromConditionLTT(replicaFailure.LastTransitionTime.Time, d.CreationTimestamp.Time, "condition")
-				if neverHealthyAt, ok := deploymentNeverHealthySince(d); ok {
-					timingR = IssueTimingResult{IssueTiming: "started_at_resource_creation", Basis: "condition"}
-					if onsetAt.IsZero() {
-						onsetAt = neverHealthyAt
-					}
+				if _, neverHealthy := deploymentNeverHealthySince(d); neverHealthy && timingR.IssueTiming == "started_after_resource_was_healthy" {
+					// Available=False since creation disproves a healthy window, but
+					// cannot backdate a distinct ReplicaFailure condition.
+					timingR = IssueTimingResult{}
 				}
 				detection := Detection{
 					Kind:              "Deployment",
@@ -322,9 +321,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				timingR := IssueTimingFromConditionLTT(onsetAt, d.CreationTimestamp.Time, "condition")
 				if neverHealthyAt, ok := deploymentNeverHealthySince(d); ok {
 					timingR = IssueTimingResult{IssueTiming: "started_at_resource_creation", Basis: "condition"}
-					if onsetAt.IsZero() {
-						onsetAt = neverHealthyAt
-					}
+					onsetAt = neverHealthyAt
 				} else if timingR.IssueTiming == "" && d.Status.ObservedGeneration == 1 {
 					// observedGeneration==1 rescues only the no-verdict case for
 					// first-ever rollouts (slow clusters can exceed
@@ -2218,7 +2215,11 @@ func deploymentNeverHealthySince(dep *appsv1.Deployment) (time.Time, bool) {
 	for i := range dep.Status.Conditions {
 		cond := &dep.Status.Conditions[i]
 		if cond.Type == appsv1.DeploymentAvailable && cond.Status == corev1.ConditionFalse && !cond.LastTransitionTime.IsZero() {
-			if cond.LastTransitionTime.Time.Sub(dep.CreationTimestamp.Time) < 30*time.Second {
+			delta := cond.LastTransitionTime.Time.Sub(dep.CreationTimestamp.Time)
+			if delta < 0 {
+				return dep.CreationTimestamp.Time, true
+			}
+			if delta < 30*time.Second {
 				return cond.LastTransitionTime.Time, true
 			}
 			return time.Time{}, false

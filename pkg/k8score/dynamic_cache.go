@@ -1208,6 +1208,30 @@ func (d *DynamicResourceCache) ListWatchedReadOnly(gvr schema.GroupVersionResour
 	return result, nil
 }
 
+// GetWatched reads one object only from already-watched informer stores. It
+// never probes RBAC, starts an informer, or waits for a cache sync.
+func (d *DynamicResourceCache) GetWatched(gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error) {
+	if d == nil {
+		return nil, fmt.Errorf("dynamic resource cache not initialized")
+	}
+	key := name
+	if namespace != "" {
+		key = namespace + "/" + name
+	}
+	item, found, err := getByKeyFromEntries(d.entriesForGVR(gvr), key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get resource: %w", err)
+	}
+	if !found {
+		return nil, fmt.Errorf("%w: %s", ErrResourceNotFound, key)
+	}
+	u, ok := item.(*unstructured.Unstructured)
+	if !ok {
+		return nil, fmt.Errorf("unexpected type in cache")
+	}
+	return StripUnstructuredFields(u), nil
+}
+
 // ListNamespaces returns resources of gvr unioned across an explicit set of
 // namespaces. This is the sanctioned multi-namespace path — callers with a
 // known, RBAC-filtered namespace set use it instead of List(gvr, ""), so the
