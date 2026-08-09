@@ -514,6 +514,22 @@ func staleSecretEnvSubjectCreatedAt(cache *ResourceCache, pod *corev1.Pod, group
 		if obj, err := cache.CronJobs().CronJobs(pod.Namespace).Get(name); err == nil {
 			return obj.CreationTimestamp.Time
 		}
+	case group == "argoproj.io" && kind == "Rollout":
+		dynamicCache := GetDynamicResourceCache()
+		discovery := GetResourceDiscovery()
+		if dynamicCache == nil || discovery == nil {
+			break
+		}
+		gvr, ok := discovery.GetGVRWithGroup("Rollout", "argoproj.io")
+		if !ok {
+			break
+		}
+		// This request path must not probe RBAC or start an informer on a miss.
+		obj, err := dynamicCache.GetWatched(gvr, pod.Namespace, name)
+		if err != nil {
+			break
+		}
+		return obj.GetCreationTimestamp().Time
 	}
 	return time.Time{}
 }

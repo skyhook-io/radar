@@ -1599,6 +1599,7 @@ func TestDetectProblems_DeploymentReplicaFailure(t *testing.T) {
 	defer ResetTestState()
 
 	old := metav1.NewTime(time.Now().Add(-10 * time.Minute))
+	retried := metav1.NewTime(time.Now().Add(-2 * time.Minute))
 	client := fake.NewClientset(
 		&appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "prod", CreationTimestamp: old},
@@ -1608,12 +1609,17 @@ func TestDetectProblems_DeploymentReplicaFailure(t *testing.T) {
 					Status:             corev1.ConditionTrue,
 					Reason:             "FailedCreate",
 					Message:            "pods is forbidden: exceeded quota",
-					LastTransitionTime: old,
+					LastTransitionTime: retried,
 				}, {
 					Type:               appsv1.DeploymentProgressing,
 					Status:             corev1.ConditionFalse,
 					Reason:             "ProgressDeadlineExceeded",
 					Message:            "ReplicaSet has timed out progressing",
+					LastTransitionTime: old,
+				}, {
+					Type:               appsv1.DeploymentAvailable,
+					Status:             corev1.ConditionFalse,
+					Reason:             "MinimumReplicasUnavailable",
 					LastTransitionTime: old,
 				}},
 			},
@@ -1644,6 +1650,25 @@ func TestDetectProblems_DeploymentReplicaFailure(t *testing.T) {
 	}
 	if p, ok := lookupProblem(problems, "Deployment", "api", "ReplicaFailure"); !ok || !strings.Contains(p.Message, "exceeded quota") {
 		t.Fatalf("replica failure problem = %+v, want controller message", p)
+	} else if !p.OnsetAt.Equal(retried.Time) || p.IssueTiming != "" || p.IssueTimingBasis != "" {
+		t.Fatalf("late replica failure on never-healthy Deployment = onset:%v timing:%q/%q, want exact condition onset %v and no false healthy-window claim", p.OnsetAt, p.IssueTiming, p.IssueTimingBasis, retried.Time)
+	}
+}
+
+func TestDeploymentNeverHealthySinceClampsPreCreationCondition(t *testing.T) {
+	createdAt := time.Now().UTC().Truncate(time.Second)
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{CreationTimestamp: metav1.NewTime(createdAt)},
+		Status: appsv1.DeploymentStatus{Conditions: []appsv1.DeploymentCondition{{
+			Type:               appsv1.DeploymentAvailable,
+			Status:             corev1.ConditionFalse,
+			LastTransitionTime: metav1.NewTime(createdAt.Add(-24 * time.Hour)),
+		}}},
+	}
+
+	got, ok := deploymentNeverHealthySince(dep)
+	if !ok || !got.Equal(createdAt) {
+		t.Fatalf("never-healthy onset = %v, ok=%v; want resource creation %v", got, ok, createdAt)
 	}
 }
 
@@ -2425,6 +2450,8 @@ func TestDetectProblems_RolloutStuckIssueTimingGen1(t *testing.T) {
 	nh, ok := lookupProblem(problems, "Deployment", "never-healthy", "Rollout stuck")
 	if !ok || nh.IssueTiming != "started_at_resource_creation" || nh.IssueTimingBasis != "condition" {
 		t.Errorf("never-healthy issue_timing = (%q, %q), want (started_at_resource_creation, condition); ok=%v", nh.IssueTiming, nh.IssueTimingBasis, ok)
+	} else if !nh.OnsetAt.Equal(now.Add(-2 * time.Hour)) {
+		t.Errorf("never-healthy onset = %v, want resource creation %v", nh.OnsetAt, now.Add(-2*time.Hour))
 	}
 	for _, problem := range problems {
 		if problem.IssueTiming != "" && problem.OnsetAt.IsZero() {
