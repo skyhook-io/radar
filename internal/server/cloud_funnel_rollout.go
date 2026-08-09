@@ -22,7 +22,7 @@ import (
 // anyone already inside a lower percentage stays inside a higher one. Older
 // releases keep whatever value they were built with, so during a ramp the fleet
 // runs several percentages at once.
-const cloudFunnelRolloutPercent = 20
+const cloudFunnelRolloutPercent = 30
 
 // cloudFunnelInCohort decides whether this installation sees the Cloud
 // funnel during the staged rollout. RADAR_CLOUD_FUNNEL=on|off overrides in
