@@ -81,18 +81,17 @@ func newArgoDriftTracker() *argoDriftTracker {
 	return &argoDriftTracker{entries: map[types.UID]argoDriftEntry{}}
 }
 
-// observe records the app's current sync state and returns how long it has been
-// continuously OutOfSync. An in-sync observation clears the entry (drift
-// resolved) and returns 0.
-func (t *argoDriftTracker) observe(uid types.UID, outOfSync bool, now time.Time) time.Duration {
+// observe records the app's current sync state and returns the exact first
+// OutOfSync observation. An in-sync observation clears the entry.
+func (t *argoDriftTracker) observe(uid types.UID, outOfSync bool, now time.Time) time.Time {
 	if t == nil || uid == "" {
-		return 0
+		return time.Time{}
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !outOfSync {
 		delete(t.entries, uid)
-		return 0
+		return time.Time{}
 	}
 	e, ok := t.entries[uid]
 	if !ok {
@@ -100,7 +99,7 @@ func (t *argoDriftTracker) observe(uid types.UID, outOfSync bool, now time.Time)
 	}
 	e.lastObserved = now
 	t.entries[uid] = e
-	return now.Sub(e.firstSeen)
+	return e.firstSeen
 }
 
 // purge drops entries not observed within retain, covering apps deleted without
@@ -236,7 +235,11 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 		// warning; auto-synced apps use it to require SUSTAINED OutOfSync before a
 		// stuck-drift-loop verdict, so a transient post-sync snapshot doesn't trip
 		// a false critical.
-		outOfSyncFor := tracker.observe(app.GetUID(), outOfSync, now)
+		outOfSyncAt := tracker.observe(app.GetUID(), outOfSync, now)
+		var outOfSyncFor time.Duration
+		if !outOfSyncAt.IsZero() {
+			outOfSyncFor = now.Sub(outOfSyncAt)
+		}
 		var manualDriftFor time.Duration
 		if !automated {
 			manualDriftFor = outOfSyncFor
@@ -346,7 +349,7 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 			if isArgoStuckDriftLoop(app, now) && outOfSyncFor >= argoStuckDriftMinDuration {
 				d := gitopsProblem(now, "Application", argoGroup, ns, name, "critical",
 					"StuckDriftLoop", "Sync succeeded but the application is still OutOfSync — a controller or admission webhook is likely mutating resources after each apply.", createdAt)
-				setDetectionOnset(&d, now, now.Add(-outOfSyncFor))
+				setDetectionOnset(&d, now, outOfSyncAt)
 				d.Stuck = true
 				d.Cause = "Auto-sync applied cleanly and reconciled recently, yet live state keeps diverging from Git. Common causes: a mutating admission webhook adds defaults Argo isn't told to ignore; a sibling controller (Karpenter, Istio, cert-manager) writes back into spec; or a conversion webhook rewrites a deprecated API schema."
 				d.Action = "Open Changes to see the per-resource drift, then match it against your Git manifest, the resource's controller, and any mutating webhooks."
@@ -355,7 +358,7 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 				dd := gitopsProblem(now, "Application", argoGroup, ns, name, "high",
 					"OutOfSync", "auto-synced Application has drifted from the desired manifests", createdAt)
 				if outOfSyncFor > 0 {
-					setDetectionOnset(&dd, now, now.Add(-outOfSyncFor))
+					setDetectionOnset(&dd, now, outOfSyncAt)
 				}
 				dd.Action = "Review the diff, then fix Git (or ignoreDifferences / the mutating controller) and refresh; check Argo events if it keeps drifting."
 				out = append(out, dd)
@@ -368,7 +371,7 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 		if !automated && outOfSync && manualDriftFor >= manualDriftGate {
 			dd := gitopsProblem(now, "Application", argoGroup, ns, name, "warning", "OutOfSyncManual",
 				fmt.Sprintf("Application has been out of sync for %s and auto-sync is not enabled", FormatAge(manualDriftFor)), createdAt)
-			setDetectionOnset(&dd, now, now.Add(-manualDriftFor))
+			setDetectionOnset(&dd, now, outOfSyncAt)
 			dd.Action = "Review the drift in Changes, then Sync the application (or enable auto-sync) if the drift is unintended."
 			out = append(out, dd)
 		}

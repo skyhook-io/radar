@@ -574,6 +574,9 @@ func TestCronJobScheduleDetectionUsesObservedHistory(t *testing.T) {
 		if got[0].Duration != 3*time.Hour {
 			t.Fatalf("duration = %s, want observed 3h failure window", got[0].Duration)
 		}
+		if !got[0].OnsetAt.Equal(now.Add(-3 * time.Hour)) {
+			t.Fatalf("onset = %v, want exact first failed schedule %v", got[0].OnsetAt, now.Add(-3*time.Hour))
+		}
 		if !strings.Contains(got[0].Reason, "3 consecutive schedules") {
 			t.Fatalf("reason = %q", got[0].Reason)
 		}

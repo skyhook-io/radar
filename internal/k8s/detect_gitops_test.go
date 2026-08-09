@@ -445,6 +445,24 @@ func TestDetectArgoAppProblems_StuckDriftLoop(t *testing.T) {
 	}
 }
 
+func TestDetectArgoAppProblems_ObservedDriftOnsetIsStable(t *testing.T) {
+	base := time.Date(2026, 8, 9, 14, 46, 53, 140112208, time.UTC)
+	app := argoApp("drifting", "argocd", "Healthy", "OutOfSync", "", true, nil)
+	app.SetUID(types.UID("drifting-uid"))
+	tracker := newArgoDriftTracker()
+
+	detectArgoAppProblems([]*unstructured.Unstructured{app}, tracker, base)
+	for _, observedAt := range []time.Time{base.Add(time.Second), base.Add(5 * time.Minute)} {
+		detection, ok := findDetectionReason(detectArgoAppProblems([]*unstructured.Unstructured{app}, tracker, observedAt), "OutOfSync")
+		if !ok {
+			t.Fatalf("OutOfSync detection missing at %v", observedAt)
+		}
+		if !detection.OnsetAt.Equal(base) {
+			t.Fatalf("onset at %v = %v, want exact first observation %v", observedAt, detection.OnsetAt, base)
+		}
+	}
+}
+
 // insightsOpDiagnosis extracts the operation-failure issue's parsed diagnosis
 // from a detail-page Insight (the operation scope, excluding the in-flight /
 // stuck-drift / manual-drift rows that share that scope).
@@ -657,6 +675,9 @@ func TestDetectArgoAppProblems_ManualDriftGate(t *testing.T) {
 		}
 		if d.DurationSeconds != int64((25 * time.Hour).Seconds()) {
 			t.Errorf("DurationSeconds = %d, want the observed 25h drift", d.DurationSeconds)
+		}
+		if !d.OnsetAt.Equal(base) {
+			t.Errorf("OnsetAt = %v, want exact first observation %v", d.OnsetAt, base)
 		}
 		if d.Action == "" {
 			t.Error("OutOfSyncManual should carry an Action")
