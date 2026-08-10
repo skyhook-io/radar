@@ -4,7 +4,7 @@ import { renderToString } from 'react-dom/server'
 import { compareIssues, issueSortAnchor, subjectRef, memberRef, normalizeImagePullMessage, issueMessageParts, type Issue } from './types'
 import { categoryLabel, groupBadgeClass, groupLabel } from './severity'
 import { IssueRow } from './IssuesView'
-import { issueOnsetUnknownTitle, issueTiming, partialIssueOnsetTitle } from './issue-timing'
+import { issueFirstSeenTitle, issueOnsetUnknownTitle, issueTiming, partialIssueOnsetTitle } from './issue-timing'
 
 const base: Issue = {
   id: 'id-0',
@@ -174,8 +174,22 @@ describe('IssueRow', () => {
     }))
 
     expect(html).toContain('≥')
-    expect(html).toContain('onset unknown for 1 contributing signal')
+    expect(html).toContain('timing unknown for 1 contributing signal')
     expect(html).not.toContain('after healthy')
+  })
+
+  it('presents ordinary first-seen time as a conservative active lower bound', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-30T12:00:00Z'))
+
+    const html = renderToString(createElement(IssueRow, {
+      issue: mk({ first_seen: '2026-06-30T10:00:00Z' }),
+      open: true,
+      onToggle: () => undefined,
+    }))
+
+    expect(html).toContain('active at least 2h ago')
+    expect(html).not.toContain('started 2h ago')
   })
 })
 
@@ -187,7 +201,14 @@ describe('onset provenance copy', () => {
     }))
 
     expect(title).toContain('Active at least since')
-    expect(title).toContain('onset unknown for 1 contributing signal')
+    expect(title).toContain('timing unknown for 1 contributing signal')
+  })
+
+  it('describes a known first-seen value as an active lower bound', () => {
+    const title = issueFirstSeenTitle(mk({ first_seen: '2026-06-30T10:00:00Z' }))
+
+    expect(title).toContain('Active at least since')
+    expect(title).not.toContain('started')
   })
 
   it('uses grouped language and oldest-resource context when every onset is unknown', () => {
@@ -284,10 +305,7 @@ describe('issueTiming', () => {
     })
   })
 
-  it('describes after-healthy timing without implying root cause or safety', () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-06-30T12:00:00Z'))
-
+  it('describes direct after-healthy timing without coupling it to first_seen', () => {
     const display = issueTiming(mk({
       first_seen: '2026-06-30T10:00:00Z',
       issue_timing: 'started_after_resource_was_healthy',
@@ -297,10 +315,26 @@ describe('issueTiming', () => {
     expect(display).toMatchObject({
       kind: 'regression',
       chip: 'after healthy',
-      meta: 'started 2h ago after being healthy',
-      tooltip: 'Previously healthy before this failing signal.',
+      meta: 'failing evidence followed a healthy period',
     })
+    expect(`${display?.chip} ${display?.meta} ${display?.tooltip}`).not.toContain('2h')
     expect(`${display?.chip} ${display?.meta} ${display?.tooltip}`).not.toMatch(/baseline|safe|ignore/i)
+  })
+
+  it('presents owner-condition timing as workload-level rather than cause-specific', () => {
+    const display = issueTiming(mk({
+      first_seen: '2026-06-30T10:00:00Z',
+      issue_timing: 'started_after_resource_was_healthy',
+      issue_timing_basis: 'owner_condition',
+    }))
+
+    expect(display).toMatchObject({
+      kind: 'regression',
+      chip: 'health regressed',
+      meta: 'workload health regressed',
+    })
+    expect(display?.tooltip).toContain('does not date or attribute this specific issue')
+    expect(`${display?.chip} ${display?.meta} ${display?.tooltip}`).not.toContain('2h')
   })
 
   it('returns null when there is no confident timing signal', () => {

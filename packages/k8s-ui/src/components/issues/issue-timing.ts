@@ -1,4 +1,3 @@
-import { formatRelativeAgeTime } from '../../utils/format';
 import { isDeploymentLikeWorkloadKind } from '../../types';
 import type { Issue } from './types';
 
@@ -11,10 +10,18 @@ export interface IssueTimingDisplay {
   tooltip: string;
 }
 
+export function issueFirstSeenTitle(issue: Issue): string | null {
+  if (!issue.first_seen) return null;
+  const unknown = issue.onset_coverage?.unknown ?? 0;
+  const base = `Active at least since ${new Date(issue.first_seen).toLocaleString()}`;
+  if (unknown === 0) return `${base}.`;
+  return `${base}; timing unknown for ${unknown} contributing ${unknown === 1 ? 'signal' : 'signals'}.`;
+}
+
 export function partialIssueOnsetTitle(issue: Issue): string | null {
   const unknown = issue.onset_coverage?.unknown ?? 0;
-  if (!issue.first_seen || unknown === 0) return null;
-  return `Active at least since ${new Date(issue.first_seen).toLocaleString()}; onset unknown for ${unknown} contributing ${unknown === 1 ? 'signal' : 'signals'}.`;
+  if (unknown === 0) return null;
+  return issueFirstSeenTitle(issue);
 }
 
 export function issueResourceCreatedTitle(issue: Issue): string | null {
@@ -47,12 +54,19 @@ function isDeploymentLikeCreation(issue: Issue): boolean {
 export function issueTiming(issue: Issue): IssueTimingDisplay | null {
   switch (issue.issue_timing) {
     case 'started_after_resource_was_healthy': {
-      const started = issue.first_seen ? `started ${formatRelativeAgeTime(issue.first_seen)} after being healthy` : 'started after being healthy';
+      if (issue.issue_timing_basis === 'owner_condition') {
+        return {
+          kind: 'regression',
+          chip: 'health regressed',
+          meta: 'workload health regressed',
+          tooltip: 'The owner workload had a healthy period before its current failing condition. This does not date or attribute this specific issue.',
+        };
+      }
       return {
         kind: 'regression',
         chip: 'after healthy',
-        meta: started,
-        tooltip: 'Previously healthy before this failing signal.',
+        meta: 'failing evidence followed a healthy period',
+        tooltip: 'A healthy period preceded this failing evidence.',
       };
     }
     case 'started_at_resource_creation': {

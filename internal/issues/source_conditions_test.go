@@ -303,6 +303,9 @@ func TestDetectGatewayRouteParentIssues_CollapsesPerListenerDupes(t *testing.T) 
 	if got[0].Reason != "Accepted: NoMatchingListenerHostname" {
 		t.Fatalf("reason = %q, want Accepted: NoMatchingListenerHostname", got[0].Reason)
 	}
+	if got[0].OnsetCoverage != nil {
+		t.Fatalf("all-known listener coverage should be omitted, got %+v", got[0].OnsetCoverage)
+	}
 	// Names the gateway and BOTH affected listeners, and the shared detail once.
 	for _, want := range []string{"Gateway infra/primary-gateway", "listeners http, https", "no hostname intersections"} {
 		if !strings.Contains(got[0].Message, want) {

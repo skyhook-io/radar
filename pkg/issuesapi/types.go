@@ -352,9 +352,10 @@ type ClusterDNSFinding struct {
 	Evidence  string `json:"evidence,omitempty"`
 }
 
-// OnsetCoverage counts the contributing failure signals whose onset is or is
-// not known. A signal is usually one affected resource, but controllers may
-// collapse multiple status entries for one resource into a single issue.
+// OnsetCoverage counts contributing failure signals when at least one signal
+// has no evidence-backed active-time anchor. A signal is usually one affected
+// resource, but controllers may collapse multiple status entries for one
+// resource into a single issue. All-known coverage is omitted as redundant.
 type OnsetCoverage struct {
 	Known   int `json:"known"`
 	Unknown int `json:"unknown"`
@@ -395,7 +396,10 @@ type Issue struct {
 	// a message parse), and a correlation against observed NodePool specs. The
 	// correlated path is authorized — a caller who cannot list NodePools never
 	// sees it set, since the bit would otherwise leak cluster-scoped pool state.
-	CapacityRelevant     bool               `json:"capacity_relevant,omitempty"`
+	CapacityRelevant bool `json:"capacity_relevant,omitempty"`
+	// FirstSeen is the earliest evidence-backed time the issue was active. It
+	// may be the time Radar first observed a state rather than its exact onset,
+	// so consumers should read it as "active at least since".
 	FirstSeen            time.Time          `json:"first_seen,omitzero"`
 	OnsetUnknown         bool               `json:"onset_unknown,omitempty"`
 	OnsetCoverage        *OnsetCoverage     `json:"onset_coverage,omitempty"`
@@ -426,7 +430,9 @@ type Issue struct {
 	//                                        condition appeared.
 	//
 	// This is timing evidence, not a root-cause verdict. A bad rollout or bad
-	// config change can legitimately fail at resource creation.
+	// config change can legitimately fail at resource creation. Owner-condition
+	// evidence is workload-level, not timing or attribution for this specific
+	// reason, and need not share FirstSeen's anchor.
 	IssueTiming string `json:"issue_timing,omitempty"`
 	// IssueTimingBasis documents the evidence used to derive IssueTiming so the
 	// classification is auditable, not magic.
@@ -524,7 +530,6 @@ var CELBindings = []CELBinding{
 	{Name: "count", Type: BindingInt},
 	{Name: "first_seen", Type: BindingInt},
 	{Name: "onset_unknown", Type: BindingBool},
-	{Name: "onset_coverage_known", Type: BindingInt},
 	{Name: "onset_coverage_unknown", Type: BindingInt},
 	{Name: "resource_created_at", Type: BindingInt},
 	{Name: "last_seen", Type: BindingInt},
@@ -535,6 +540,8 @@ var CELBindings = []CELBinding{
 	// issue_timing == "started_at_resource_creation"        — failing state began during creation/first reconciliation.
 	// issue_timing == "started_after_resource_was_healthy"  — a meaningful healthy window preceded the failing state.
 	// issue_timing == ""                                    — no confident timing signal.
+	// Owner-condition evidence is workload-level, not timing or attribution for
+	// this specific reason, and need not share first_seen's active-time anchor.
 	{Name: "issue_timing", Type: BindingString},
 	{Name: "issue_timing_basis", Type: BindingString},
 	{Name: "operation_retry_count", Type: BindingInt},

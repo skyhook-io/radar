@@ -53,8 +53,8 @@ func TestGroupIssues_FoldsMembersUnderOwner(t *testing.T) {
 	if !g.FirstSeen.Equal(t0) {
 		t.Errorf("first_seen = %v, want oldest %v", g.FirstSeen, t0)
 	}
-	if g.OnsetCoverage == nil || g.OnsetCoverage.Known != 3 || g.OnsetCoverage.Unknown != 0 {
-		t.Errorf("onset coverage = %+v, want 3 known / 0 unknown", g.OnsetCoverage)
+	if g.OnsetCoverage != nil {
+		t.Errorf("onset coverage = %+v, want omitted when every onset is known", g.OnsetCoverage)
 	}
 	if !g.LastSeen.Equal(t2) {
 		t.Errorf("last_seen = %v, want newest %v", g.LastSeen, t2)

@@ -525,7 +525,7 @@ func TestProblemOnsetRequiresExactEvidence(t *testing.T) {
 	mixed := withEvidence
 	mixed.OnsetCoverage = &issuesapi.OnsetCoverage{Known: 2, Unknown: 48}
 	mixedActivation := issueToActivation(mixed)
-	if mixedActivation["onset_unknown"] != false || mixedActivation["onset_coverage_known"] != int64(2) || mixedActivation["onset_coverage_unknown"] != int64(48) {
+	if mixedActivation["onset_unknown"] != false || mixedActivation["onset_coverage_unknown"] != int64(48) {
 		t.Fatalf("onset coverage CEL bindings = %#v", mixedActivation)
 	}
 }

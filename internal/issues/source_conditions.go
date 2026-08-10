@@ -323,7 +323,7 @@ func detectGatewayRouteParentIssues(gvr schema.GroupVersionResource, kind string
 		fp := g.condType + ":" + g.gwKey + ":" + g.reason
 		message := gatewayRouteMessage(g.gwLabel, g.members)
 		issue := newConditionIssue(gvr, kind, ns, name, SeverityWarning, condTypeReason(g.condType, g.reason), message, oldest, !oldest.IsZero(), fp, createdAt)
-		if len(g.members) > 1 {
+		if unknown > 0 && len(g.members) > 1 {
 			issue.OnsetCoverage = &issuesapi.OnsetCoverage{Known: known, Unknown: unknown}
 		}
 		if known > 0 && unknown > 0 {

@@ -197,6 +197,9 @@ export interface Issue {
    *  message. The Issues view uses it to link these — and only these — to the
    *  Capacity / Demand view, so a generic scheduling failure never links. */
   capacity_relevant?: boolean;
+  /** Earliest evidence-backed time the issue was active. This may be when Radar
+   *  first observed the state rather than exact onset: read as "active at least
+   *  since", never as proof of a healthy-duration boundary. */
   first_seen?: string;
   /** Radar can confirm the issue is active, but current cluster evidence does
    *  not establish when the failing state began. */
@@ -233,7 +236,9 @@ export interface Issue {
    * "started_at_resource_creation"        — failing state began during resource
    *                                        creation or first reconciliation.
    * "started_after_resource_was_healthy"  — a meaningful healthy window preceded
-   *                                        the failing state.
+   *                                        the failing state. Owner-condition
+   *                                        evidence is workload-level, not timing
+   *                                        or attribution for this specific reason.
    */
   issue_timing?: 'started_at_resource_creation' | 'started_after_resource_was_healthy';
   /** The evidence that determined issue_timing (for auditability). */
@@ -280,7 +285,8 @@ export function memberRef(issue: Issue, member: IssueResourceRef): IssueResource
 /**
  * compareIssues is the queue's stable sort order (extracted from IssuesView so
  * it can be unit-tested). Severity first (critical before warning), then
- * direct-blocker source priority, then ONSET — first_seen DESC, deliberately
+ * direct-blocker source priority, then the evidence-backed active-time anchor —
+ * first_seen DESC, deliberately
  * NOT last_seen: last_seen bumps to compose-time on every poll, so sorting by
  * it would reshuffle same-severity rows on each refetch. The remaining keys
  * (cluster → namespace → name → id) are a fully deterministic tiebreak so the

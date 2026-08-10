@@ -4,7 +4,7 @@ import { CardBody, CardSection, ClusterName, EmptyState, KIND_CHIP_CLASS, Termin
 import { Tooltip } from '../ui/Tooltip';
 import { formatCompactAge, formatRelativeAgeTime } from '../../utils/format';
 import { diagnosticRoleLabel, diagnosticFactLabel, confidenceTitle, incidentParentLabel } from './diagnostic';
-import { issueOnsetUnknownTitle, issueResourceCreatedTitle, issueTiming, partialIssueOnsetTitle } from './issue-timing';
+import { issueFirstSeenTitle, issueOnsetUnknownTitle, issueResourceCreatedTitle, issueTiming } from './issue-timing';
 import {
   ISSUE_SEVERITY_BADGE_CLASS,
   ISSUE_SEVERITY_HEADER_BAND_CLASS,
@@ -460,10 +460,13 @@ function Diagnosis({ issue, source }: { issue: Issue; source?: IssueDiagnosisSou
   if (crash) meta.push(crash);
   if (timing) {
     meta.push(timing.meta);
+    if (timing.kind === 'regression' && issue.first_seen) {
+      meta.push(`active at least ${formatRelativeAgeTime(issue.first_seen)}`);
+    }
   } else if (partialOnset && issue.first_seen) {
-    meta.push(`active at least ${formatRelativeAgeTime(issue.first_seen)}; onset unknown for ${partialUnknown} contributing ${partialUnknown === 1 ? 'signal' : 'signals'}`);
+    meta.push(`active at least ${formatRelativeAgeTime(issue.first_seen)}; timing unknown for ${partialUnknown} contributing ${partialUnknown === 1 ? 'signal' : 'signals'}`);
   } else if (issue.first_seen) {
-    meta.push(`started ${formatRelativeAgeTime(issue.first_seen)}`);
+    meta.push(`active at least ${formatRelativeAgeTime(issue.first_seen)}`);
   } else if (issue.onset_unknown) {
     meta.push('onset unknown');
   }
@@ -640,12 +643,8 @@ function ageTitle(issue: Issue): string {
   const timing = issueTiming(issue);
   const partialUnknown = issue.onset_coverage?.unknown ?? 0;
   if (timing && partialUnknown === 0) parts.push(timing.tooltip);
-  const partialTitle = partialIssueOnsetTitle(issue);
-  if (partialTitle) {
-    parts.push(partialTitle);
-  } else if (issue.first_seen) {
-    parts.push(`First seen ${new Date(issue.first_seen).toLocaleString()}`);
-  }
+  const firstSeenTitle = issueFirstSeenTitle(issue);
+  if (firstSeenTitle) parts.push(firstSeenTitle);
   const resourceContext = issueResourceCreatedTitle(issue);
   if (resourceContext) parts.push(resourceContext);
   if (issue.last_seen) parts.push(`Last seen ${formatRelativeAgeTime(issue.last_seen)}`);

@@ -117,9 +117,9 @@ func GroupIssues(flat []Issue) []Issue {
 
 // foldGroup collapses one group's member rows into a single grouped issue,
 // applying the representative rules: the worst member drives severity +
-// reason/message/crash context; first_seen is the earliest proven member onset,
-// resource_created_at is the oldest member creation time, and last_seen is the
-// newest observation. members are the folded underlying resources (the
+// reason/message/crash context; first_seen is the earliest member active-time
+// anchor, resource_created_at is the oldest member creation time, and last_seen
+// is the newest observation. members are the folded underlying resources (the
 // fan-out), excluding the subject itself.
 func foldGroup(members []Issue) Issue {
 	rep := members[0]
@@ -274,7 +274,7 @@ func foldIssueOnset(members []Issue) (time.Time, bool, *issuesapi.OnsetCoverage,
 		}
 	}
 	var coverage *issuesapi.OnsetCoverage
-	if known+unknown > 1 {
+	if unknown > 0 && known+unknown > 1 {
 		coverage = &issuesapi.OnsetCoverage{Known: known, Unknown: unknown}
 	}
 	return firstSeen, known == 0, coverage, resourceCreatedAt

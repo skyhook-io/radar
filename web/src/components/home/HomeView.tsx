@@ -22,9 +22,9 @@ import {
   StatusDot,
   categoryLabel,
   groupLabel,
+  issueFirstSeenTitle,
   issueOnsetUnknownTitle,
   issueTiming,
-  partialIssueOnsetTitle,
   subjectRef,
   type Issue,
 } from '@skyhook-io/k8s-ui'
@@ -411,11 +411,11 @@ function ProblemsPanel({
                           <span className="text-xs text-theme-text-primary truncate font-medium">{issue.name}</span>
                           {(age || timing || issue.onset_unknown) && (
                             <span className="ml-auto flex shrink-0 items-center gap-1">
-                              {age && (partialOnset ? (
-                                <Tooltip content={partialIssueOnsetTitle(issue)} delay={100}>
+                              {age && (
+                                <Tooltip content={issueFirstSeenTitle(issue)} delay={100}>
                                   <span className="text-[10px] text-theme-text-tertiary tabular-nums">{age}</span>
                                 </Tooltip>
-                              ) : <span className="text-[10px] text-theme-text-tertiary tabular-nums">{age}</span>)}
+                              )}
                               {issue.onset_unknown && (
                                 <Tooltip content={issueOnsetUnknownTitle(issue)} delay={100}>
                                   <span className="text-[10px] text-theme-text-tertiary">Onset unknown</span>
