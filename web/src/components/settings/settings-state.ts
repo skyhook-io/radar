@@ -1,6 +1,7 @@
 export type SettingsSectionId =
   | 'overview'
   | 'perms'
+  | 'preferences'
   | 'connection'
   | 'prometheus'
   | 'cost'

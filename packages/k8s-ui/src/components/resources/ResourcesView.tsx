@@ -3071,6 +3071,22 @@ export function getCellFilterKind(kind: string, group?: string): string {
   return `__generic_${normalized}`
 }
 
+// The user's sort preference names a single column, but each kind has its own
+// column set — Age exists everywhere, Restarts only on Pods. Applying a column
+// the current kind doesn't have would sort by an absent value and leave no
+// header arrow to undo it from, so the preference yields to the kind's
+// built-in order there.
+export function resolveDefaultSort(
+  defaultSort: { column: string; direction: 'asc' | 'desc' } | null | undefined,
+  kind: string,
+  group?: string,
+): { column: string | null; direction: SortDirection } {
+  if (!defaultSort?.column) return { column: null, direction: null }
+  const known = getColumnsForKind(kind, group).some(c => c.key === defaultSort.column)
+  if (!known) return { column: null, direction: null }
+  return { column: defaultSort.column, direction: defaultSort.direction }
+}
+
 // Get the default visible columns for a kind
 function getDefaultVisibleColumns(columns: Column[]): Set<string> {
   return new Set(columns.filter(c => c.defaultVisible !== false).map(c => c.key))
@@ -3384,6 +3400,13 @@ interface ResourcesViewProps {
   onCreateResource?: (kind: { name: string; kind: string; group: string } | null) => void
   /** Default kind when the URL does not include one. */
   defaultKind?: SelectedKindInfo
+  /** The user's preferred sort. Applied on mount, on every kind switch, and
+   *  whenever this prop changes; a kind whose table lacks the column keeps its
+   *  built-in order. Omit for the built-in "reset sort on kind change". */
+  defaultSort?: { column: string; direction: 'asc' | 'desc' } | null
+  /** Fires when the user sorts from a column header, so the host can persist it
+   *  as the new preference. Null when they cycle the sort back off. */
+  onSortChange?: (sort: { column: string; direction: 'asc' | 'desc' } | null) => void
   /** Columns prepended to KNOWN_COLUMNS for every kind. For example, a
    *  multi-cluster host can inject a leading Cluster column. Each extra
    *  column is self-contained (own render/sort/filter), so the host
@@ -3624,6 +3647,8 @@ export function ResourcesView({
   hideSidebar = false,
   onCreateResource,
   defaultKind = DEFAULT_KIND_INFO,
+  defaultSort = null,
+  onSortChange,
   extraLeadingColumns,
   printerTable,
   onRowSelect,
@@ -3672,8 +3697,12 @@ export function ResourcesView({
   const deferredSearchTerm = useDeferredValue(searchTerm)
   const debouncedSearchTerm = useDebouncedValue(searchTerm, 300, (v) => v === '')
   const [regexMode, setRegexMode] = useState(initialFilters.regex)
-  const [sortColumn, setSortColumn] = useState<string | null>(null)
-  const [sortDirection, setSortDirection] = useState<SortDirection>(null)
+  const [sortColumn, setSortColumn] = useState<string | null>(
+    () => resolveDefaultSort(defaultSort, selectedKind.name, selectedKind.group).column,
+  )
+  const [sortDirection, setSortDirection] = useState<SortDirection>(
+    () => resolveDefaultSort(defaultSort, selectedKind.name, selectedKind.group).direction,
+  )
   // Filter state
   const [columnFilters, setColumnFilters] = useState<Record<string, string[]>>(initialFilters.columnFilters)
   const [columnFilterExcludes, setColumnFilterExcludes] = useState<Record<string, boolean>>(initialFilters.columnFilterExcludes)
@@ -5016,7 +5045,7 @@ export function ResourcesView({
     isForbiddenError(selectedQueryError) ||
     (!selectedHasRows && !selectedQueryError && forbiddenKinds.has(selectedKindCountKey))
 
-  // Reset sort and filters when kind changes (but not when syncing from URL navigation)
+  // Reset filters when kind changes (but not when syncing from URL navigation)
   // Track previous kind to skip on mount (where the effect fires but kind hasn't actually changed)
   // Keyed on group as well as plural: two CRDs can share a plural across API
   // groups, and their printer columns are unrelated. Resetting on the plural
@@ -5029,8 +5058,6 @@ export function ResourcesView({
       return
     }
     prevKindRef.current = selectedKindIdentity
-    setSortColumn(null)
-    setSortDirection(null)
     setOpenColumnFilter(null)
     if (!isSyncingFromURL.current) {
       setColumnFilters({})
@@ -5039,23 +5066,45 @@ export function ResourcesView({
     setProblemFilters([])
   }, [selectedKindIdentity])
 
+  // Sort falls back to the preference on kind change, when the preference is
+  // edited in Settings, and when it arrives from the server after mount. All
+  // three are the same operation, so one effect owns them; without the
+  // preference this is the old "reset sort on kind change".
+  const applyDefaultSort = useCallback(() => {
+    const { column, direction } = resolveDefaultSort(defaultSort, selectedKind.name, selectedKind.group)
+    setSortColumn(column)
+    setSortDirection(direction)
+  }, [defaultSort, selectedKind.name, selectedKind.group])
+  useEffect(() => {
+    applyDefaultSort()
+  }, [applyDefaultSort])
+
   // Toggle sort for a column
   const handleSort = useCallback((column: string) => {
+    let newColumn: string | null
+    let newDirection: SortDirection
+
     if (sortColumn === column) {
       // Cycle: asc -> desc -> null
       if (sortDirection === 'asc') {
-        setSortDirection('desc')
+        newColumn = column
+        newDirection = 'desc'
       } else if (sortDirection === 'desc') {
-        setSortColumn(null)
-        setSortDirection(null)
+        newColumn = null
+        newDirection = null
       } else {
-        setSortDirection('asc')
+        newColumn = column
+        newDirection = 'asc'
       }
     } else {
-      setSortColumn(column)
-      setSortDirection('asc')
+      newColumn = column
+      newDirection = 'asc'
     }
-  }, [sortColumn, sortDirection])
+
+    setSortColumn(newColumn)
+    setSortDirection(newDirection)
+    onSortChange?.(newColumn && newDirection ? { column: newColumn, direction: newDirection } : null)
+  }, [sortColumn, sortDirection, onSortChange])
 
   // Get sortable value from a resource for a given column
   const getSortValue = useCallback((resource: any, column: string, kind?: string): string | number => {

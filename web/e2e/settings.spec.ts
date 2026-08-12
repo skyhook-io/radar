@@ -125,4 +125,51 @@ test.describe('Settings API', () => {
     // Clean up
     await request.put('/api/settings', { data: { theme: 'system' } })
   })
+
+  test('PUT /api/settings with defaultSort persists and clears', async ({ request }) => {
+    const putRes = await request.put('/api/settings', {
+      data: { defaultSort: { column: 'name', direction: 'asc' } },
+    })
+    expect(putRes.ok()).toBeTruthy()
+    const body = await putRes.json()
+    expect(body.defaultSort?.column).toBe('name')
+    expect(body.defaultSort?.direction).toBe('asc')
+
+    // Read back
+    const getRes = await request.get('/api/settings')
+    const getBody = await getRes.json()
+    expect(getBody.defaultSort?.column).toBe('name')
+    expect(getBody.defaultSort?.direction).toBe('asc')
+
+    // An explicit null clears it — "no preference" has to be reachable
+    const clearRes = await request.put('/api/settings', { data: { defaultSort: null } })
+    expect(clearRes.ok()).toBeTruthy()
+    const cleared = await (await request.get('/api/settings')).json()
+    expect(cleared.defaultSort ?? null).toBeNull()
+  })
+})
+
+test.describe('Settings dialog — preferences', () => {
+  test('default sort preference round-trips through the dialog', async ({ page, request }) => {
+    await request.put('/api/settings', { data: { defaultSort: null } })
+
+    await page.goto('/')
+    await page.waitForSelector('header', { timeout: 10000 })
+
+    await page.locator('button[title="Settings"]').click()
+    await page.getByRole('tab', { name: 'Preferences' }).first().click()
+
+    const columnSelect = page.locator('#default-sort-column')
+    await expect(columnSelect).toBeVisible()
+    await columnSelect.selectOption('age')
+    await page.getByRole('button', { name: 'Descending' }).click()
+
+    await expect
+      .poll(async () => (await (await request.get('/api/settings')).json()).defaultSort)
+      .toEqual({ column: 'age', direction: 'desc' })
+
+    // Clean up
+    await columnSelect.selectOption('')
+    await request.put('/api/settings', { data: { defaultSort: null } })
+  })
 })

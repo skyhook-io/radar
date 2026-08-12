@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import {
   Settings, X, RotateCcw, RotateCw, Loader2, Copy, Check, Pin, Shield, Lock, Plug,
   Plus, Terminal, Boxes, Activity, GitBranch, Sparkles, SlidersHorizontal, Zap,
-  LayoutDashboard, ChevronRight, ExternalLink, Download, AlertTriangle, Coins,
+  LayoutDashboard, ChevronRight, ExternalLink, Download, AlertTriangle, Coins, ArrowDownUp,
   type LucideIcon,
 } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -34,6 +34,7 @@ import { costSourceApplyLabel, prometheusHeadersFromRows, shouldOfferCostReview,
 import type { SettingsSectionId } from './settings-state'
 import { OperatorManagedNotice } from './OperatorManagedNotice'
 export type { SettingsSectionId } from './settings-state'
+import { useDefaultSort, type DefaultSort } from '../../hooks/useDefaultSort'
 
 function mcpEndpointUrl(): string {
   return `${window.location.origin}${routePath('/mcp')}`
@@ -108,7 +109,8 @@ interface SettingsDialogProps {
 //     the owner-gated footer and applied after restart.
 //   • Live integrations (Prometheus, cost source, Argo CD) — their own Apply/Connect endpoints
 //     re-point the running server; effect immediately, NOT part of footer dirty.
-//   • Self-saving preferences (cost currency, AI investigations) — applied immediately.
+//   • Self-saving preferences (resource table sort, cost currency, AI
+//     investigations) — applied immediately.
 // Integration fields (prometheusUrl, argoCdUrl, argoCdInsecureTls) apply through
 // their own controls and are excluded here. Every field is normalized so
 // unset≡default doesn't read as a change.
@@ -159,6 +161,7 @@ export function SettingsDialog({
   const { data: argoSectionStatus, refetch: refetchArgoSectionStatus } = useArgoStatus(
     open && section === 'argocd'
   )
+  const { defaultSort, setDefaultSort } = useDefaultSort()
 
   // Local AI preferences save independently of the owner-gated server settings.
   const diag = useDiagnose()
@@ -444,6 +447,7 @@ export function SettingsDialog({
   const navItems: NavItemDef[] = [
     { id: 'overview', label: 'Overview', icon: LayoutDashboard, ownerOnly: false, dirty: false },
     { id: 'perms', label: 'My permissions', icon: Shield, ownerOnly: false, dirty: false },
+    { id: 'preferences', label: 'Preferences', icon: ArrowDownUp, ownerOnly: false, dirty: false },
     { id: 'connection', label: 'Connection', icon: Boxes, ownerOnly: true, dirty: connectionDirty },
     { id: 'prometheus', label: 'Metrics', icon: Activity, ownerOnly: true, dirty: false },
     { id: 'cost', label: 'Cost', icon: Coins, ownerOnly: true, dirty: costIntegrationDirty },
@@ -565,7 +569,7 @@ export function SettingsDialog({
             {!configData && !['overview', 'perms', 'ai'].includes(section) ? (
               <p className="text-sm text-theme-text-secondary">{loadError ? 'Configuration is unavailable. Close Settings and try again.' : 'Loading configuration…'}</p>
             ) : <>
-            {operatorManaged && section !== 'perms' && section !== 'ai' && <div className="mb-4"><OperatorManagedNotice /></div>}
+            {operatorManaged && section !== 'perms' && section !== 'ai' && section !== 'preferences' && <div className="mb-4"><OperatorManagedNotice /></div>}
             {/* Overview — status at a glance; the landing section */}
             <div className={clsx(section !== 'overview' && 'hidden')} role="tabpanel" inert={section !== 'overview' || undefined}>
               <div className="mb-1">
@@ -592,6 +596,17 @@ export function SettingsDialog({
                 <MyPermissionsContent active={section === 'perms'} />
               </div>
             </div>
+
+            {/* Preferences — personal, self-saving (like AI diagnose), not owner-gated */}
+            <SectionPane
+              id="preferences"
+              active={section}
+              title="Preferences"
+              caption="Saved as you change them — no restart."
+              live
+            >
+              <DefaultSortSection defaultSort={defaultSort} onDefaultSortChange={setDefaultSort} />
+            </SectionPane>
 
             {/* Connection — Cluster + Server merged */}
             <SectionPane
@@ -941,6 +956,74 @@ export function SettingsDialog({
       </div>
     </div>,
     document.body
+  )
+}
+
+// -- Default sort preference --------------------------------------------------
+
+// Kind-agnostic columns only: this preference applies to every resource table,
+// and a kind that lacks the chosen column falls back to its built-in order.
+const SORT_COLUMNS = [
+  { value: '', label: 'Each table’s own default' },
+  { value: 'name', label: 'Name' },
+  { value: 'namespace', label: 'Namespace' },
+  { value: 'status', label: 'Status' },
+  { value: 'age', label: 'Age' },
+]
+
+function DefaultSortSection({
+  defaultSort,
+  onDefaultSortChange,
+}: {
+  defaultSort: DefaultSort | null
+  onDefaultSortChange: (sort: DefaultSort | null) => void
+}) {
+  return (
+    <div>
+      <label htmlFor="default-sort-column" className="block text-sm font-medium text-theme-text-primary mb-1">
+        Resource table sort
+      </label>
+      <p className="text-xs text-theme-text-tertiary mb-2">
+        Applied on load and when switching resource kinds. Sorting a table from its
+        column header updates this too.
+      </p>
+      <div className="flex flex-col sm:flex-row gap-2">
+        <select
+          id="default-sort-column"
+          value={defaultSort?.column ?? ''}
+          onChange={(e) =>
+            onDefaultSortChange(
+              e.target.value ? { column: e.target.value, direction: defaultSort?.direction ?? 'asc' } : null
+            )
+          }
+          className="flex-1 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary focus:outline-none focus:border-skyhook-500"
+        >
+          {SORT_COLUMNS.map((col) => (
+            <option key={col.value} value={col.value}>{col.label}</option>
+          ))}
+        </select>
+        {defaultSort && (
+          <div className="flex gap-2 sm:w-56 shrink-0" role="group" aria-label="Sort direction">
+            {(['asc', 'desc'] as const).map((dir) => (
+              <button
+                key={dir}
+                type="button"
+                aria-pressed={defaultSort.direction === dir}
+                onClick={() => onDefaultSortChange({ column: defaultSort.column, direction: dir })}
+                className={clsx(
+                  'flex-1 px-3 py-1.5 text-sm rounded-md border transition-colors',
+                  defaultSort.direction === dir
+                    ? 'btn-brand border-transparent'
+                    : 'bg-theme-elevated border-theme-border text-theme-text-secondary hover:text-theme-text-primary'
+                )}
+              >
+                {dir === 'asc' ? 'Ascending' : 'Descending'}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
   )
 }
 

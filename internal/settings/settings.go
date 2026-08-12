@@ -32,11 +32,19 @@ func DefaultAuditConfig() AuditConfig {
 	}
 }
 
+// DefaultSort is the user's preferred sort for the resource table. Absent
+// (nil) means "use each kind's built-in default".
+type DefaultSort struct {
+	Column    string `json:"column"`    // a resource-table column id, e.g. "age"
+	Direction string `json:"direction"` // "asc" or "desc"
+}
+
 // Settings holds user preferences persisted across restarts.
 type Settings struct {
 	Theme       string       `json:"theme,omitempty"`
 	PinnedKinds []PinnedKind `json:"pinnedKinds,omitempty"`
 	Audit       *AuditConfig `json:"audit,omitempty"`
+	DefaultSort *DefaultSort `json:"defaultSort,omitempty"`
 	// ActiveNamespaces maps kubeconfig context name → the user's namespace
 	// picks (the in-app multi-select switcher's last selection per cluster).
 	// Tri-state: a missing key means the user never chose — the view defaults
