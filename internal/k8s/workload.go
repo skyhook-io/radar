@@ -9,6 +9,23 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+const DefaultContainerAnnotation = "kubectl.kubernetes.io/default-container"
+
+// DefaultContainerName follows kubectl's container-selection convention.
+func DefaultContainerName(pod *corev1.Pod) string {
+	if name := pod.Annotations[DefaultContainerAnnotation]; name != "" {
+		for _, container := range pod.Spec.Containers {
+			if container.Name == name {
+				return name
+			}
+		}
+	}
+	if len(pod.Spec.Containers) > 0 {
+		return pod.Spec.Containers[0].Name
+	}
+	return ""
+}
+
 var ErrWorkloadAccessDenied = errors.New("workload access denied")
 
 // GetWorkloadSelector returns the label selector for a workload from cache.

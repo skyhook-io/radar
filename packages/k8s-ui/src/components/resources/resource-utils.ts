@@ -674,6 +674,17 @@ export function getDefaultContainerName(pod: any): string | undefined {
   return containers[0]?.name
 }
 
+export function getDefaultRunningContainerName(pod: any): string | undefined {
+  const running = new Set(
+    (pod?.status?.containerStatuses || [])
+      .filter((status: any) => status.state?.running != null)
+      .map((status: any) => status.name),
+  )
+  const preferred = getDefaultContainerName(pod)
+  if (preferred && running.has(preferred)) return preferred
+  return (pod?.spec?.containers || []).find((container: any) => running.has(container.name))?.name
+}
+
 export function getContainerSquareStates(pod: any): ContainerSquareState[] {
   const result: ContainerSquareState[] = []
   const initStatuses = pod.status?.initContainerStatuses || []

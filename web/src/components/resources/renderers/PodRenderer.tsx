@@ -10,6 +10,7 @@ import { podAwaitsScheduling } from '../../capacity/podDemandGate'
 import { PortForwardInlineButton } from '../../portforward/PortForwardButton'
 import { ImageFilesystemModal } from '../ImageFilesystemModal'
 import { PodFilesystemModal } from '../PodFilesystemModal'
+import { LiveDebugSection } from './LiveDebugSection'
 
 interface PodRendererProps {
   data: any
@@ -120,6 +121,7 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
       metricsHistory={metricsHistory}
       metricsUnavailable={metricsUnavailable}
       hideMetricsServer={hideMetricsServer}
+      renderLiveDebug={<LiveDebugSection data={data} onNavigate={onNavigate} />}
       renderImageBrowser={({ image, namespace: ns, podName: pod, pullSecrets, onClose, onSwitchToPodFiles }) => (
         <ImageFilesystemModal
           open={true}

@@ -17,6 +17,7 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/helm"
+	"github.com/skyhook-io/radar/internal/igdebug"
 	"github.com/skyhook-io/radar/internal/k8s"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
@@ -52,6 +53,7 @@ type AppConfig struct {
 	PodShellDefault          string
 	DebugImage               string
 	ReachabilityImage        string
+	IGGadgetRegistry         string
 	ListPageSize             int64
 	NamespaceScope           bool
 	TimelineStorage          string
@@ -84,6 +86,7 @@ func SetGlobals(cfg AppConfig) {
 	k8s.ListPageSize = cfg.ListPageSize
 	k8s.ForceNamespaceScope = cfg.NamespaceScope
 	server.DefaultPodShellCommand = cfg.PodShellDefault
+	igdebug.SetGadgetRegistry(cfg.IGGadgetRegistry)
 	versionpkg.SetCurrent(cfg.Version)
 }
 
@@ -275,6 +278,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 		PrometheusHeadersFromEnv: cfg.PrometheusHeadersFromEnv,
 		DebugImage:               cfg.DebugImage,
 		ReachabilityImage:        cfg.ReachabilityImage,
+		IGGadgetRegistry:         cfg.IGGadgetRegistry,
 		MCP:                      &cfg.MCPEnabled,
 	}
 

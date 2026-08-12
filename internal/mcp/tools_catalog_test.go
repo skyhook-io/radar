@@ -231,7 +231,7 @@ func TestToolCatalogContextBudget(t *testing.T) {
 	// These caps guard against description accretion, not against new tools or
 	// load-bearing routing and uncertainty contracts. Raise them deliberately.
 	const (
-		maxCatalogBytes         = 49000
+		maxCatalogBytes         = 51000
 		maxToolDescriptionBytes = 3000
 	)
 
@@ -383,6 +383,7 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 		"patch_resource":  true,
 		"manage_node":     true,
 	}
+	instrumentTools := map[string]bool{"inspect_pod_runtime": true}
 
 	seenWriteTools := map[string]bool{}
 	for _, tool := range tools {
@@ -404,13 +405,22 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 		}
 		// diagnose is read-only EXCEPT its optional in_cluster=true arg, which creates
 		// ONE transient, self-destructing probe pod - so it is non-read-only but NOT
-		// destructive (additive + self-deleting). It is the only such tool.
+		// destructive (additive + self-deleting).
 		if tool.Name == "diagnose" {
 			if tool.Annotations.ReadOnlyHint {
 				t.Errorf("diagnose must NOT set readOnlyHint=true - in_cluster=true creates a transient pod")
 			}
 			if tool.Annotations.DestructiveHint == nil || *tool.Annotations.DestructiveHint {
 				t.Errorf("diagnose should set destructiveHint=false (the probe pod self-deletes; nothing existing is mutated)")
+			}
+			continue
+		}
+		if instrumentTools[tool.Name] {
+			if tool.Annotations.ReadOnlyHint {
+				t.Errorf("instrumentation tool %q should not set readOnlyHint=true", tool.Name)
+			}
+			if tool.Annotations.DestructiveHint == nil || *tool.Annotations.DestructiveHint {
+				t.Errorf("instrumentation tool %q should set destructiveHint=false", tool.Name)
 			}
 			continue
 		}
@@ -432,7 +442,7 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 // writeToolNames is the mutating tool set the read-only mount must exclude.
 var writeToolNames = []string{
 	"manage_workload", "manage_cronjob", "manage_gitops",
-	"apply_resource", "patch_resource", "manage_node",
+	"apply_resource", "patch_resource", "manage_node", "inspect_pod_runtime",
 }
 
 // TestReadOnlyServerExcludesWriteTools is the load-bearing guarantee of the

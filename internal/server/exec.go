@@ -93,29 +93,8 @@ func defaultExecCommand(override, fallback, podOS string) []string {
 	return []string{"sh", "-c", defaultShellScript}
 }
 
-// defaultContainerAnnotation is the client-side convention kubectl, k9s, and
-// Lens use to mark the "main" container of a multi-container pod. Service
-// meshes (Istio, Linkerd, ASM) set it during injection to point past their
-// sidecar — without it, an unspecified container defaults to containers[0],
-// which on a mesh pod is the distroless proxy with no shell.
-const defaultContainerAnnotation = "kubectl.kubernetes.io/default-container"
-
-// defaultExecContainer picks the container to target when the request doesn't
-// name one. It honors defaultContainerAnnotation (matching kubectl exec
-// behavior), falling back to the first container. Returns "" only for a pod
-// with no containers.
 func defaultExecContainer(pod *corev1.Pod) string {
-	if name := pod.Annotations[defaultContainerAnnotation]; name != "" {
-		for _, c := range pod.Spec.Containers {
-			if c.Name == name {
-				return name
-			}
-		}
-	}
-	if len(pod.Spec.Containers) > 0 {
-		return pod.Spec.Containers[0].Name
-	}
-	return ""
+	return k8s.DefaultContainerName(pod)
 }
 
 // osNodeLabelsLookup is injected so detectPodOS is unit-testable without a

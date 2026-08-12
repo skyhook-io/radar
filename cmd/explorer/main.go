@@ -121,6 +121,7 @@ func main() {
 	podShellDefault := flag.String("pod-shell-default", "", "Override the default pod exec shell command (runs as 'sh -c <value>'; empty = built-in bash -il → ash → sh cascade)")
 	debugImage := flag.String("debug-image", fileCfg.DebugImage, "Image for ephemeral debug containers and node debug pods (empty = busybox:latest; point at a mirror for air-gapped/private-registry clusters)")
 	reachabilityImage := flag.String("reachability-image", fileCfg.ReachabilityImage, "Image for the in-cluster reachability probe Job (empty = RADAR_IMAGE env, then the version-matched published Radar image; point at a mirror for air-gapped clusters)")
+	igGadgetRegistry := flag.String("ig-gadget-registry", fileCfg.IGGadgetRegistry, "Registry prefix for mirrored Inspektor Gadget OCI artifacts (empty = ghcr.io/inspektor-gadget/gadget)")
 	listPageSize := flag.Int64("list-page-size", 0, "Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) at this page size on clusters without WatchList streaming. 0 = off (single LIST). Try 2000 if a very large cluster fails to sync.")
 	namespaceScope := flag.Bool("namespace-scope", false, "Scope namespaced informer caches to a single namespace (multiple namespaces are not supported yet). Requires --namespace or a kubeconfig context namespace. Local mode can rescope by switching namespaces; auth/cloud mode locks to the startup namespace.")
 	// Timeline storage options
@@ -341,6 +342,7 @@ func main() {
 		PodShellDefault:          *podShellDefault,
 		DebugImage:               *debugImage,
 		ReachabilityImage:        *reachabilityImage,
+		IGGadgetRegistry:         *igGadgetRegistry,
 		ListPageSize:             *listPageSize,
 		NamespaceScope:           *namespaceScope,
 		TimelineStorage:          *timelineStorage,

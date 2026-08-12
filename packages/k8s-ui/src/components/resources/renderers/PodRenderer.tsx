@@ -91,6 +91,7 @@ interface PodRendererProps {
   // Filesystem browser render props
   renderImageBrowser?: (props: { image: string; namespace: string; podName: string; pullSecrets: string[]; onClose: () => void; onSwitchToPodFiles?: () => void }) => ReactNode
   renderPodBrowser?: (props: { namespace: string; podName: string; containers: string[]; initialContainer: string; onClose: () => void; onSwitchToImageFiles: () => void }) => ReactNode
+  renderLiveDebug?: ReactNode
   /**
    * Resolved content for envFrom references.
    * When provided, expands ConfigMap/Secret keys inline instead of showing "(all keys)".
@@ -279,6 +280,7 @@ export function PodRenderer({
   hideMetricsServer,
   renderImageBrowser,
   renderPodBrowser,
+  renderLiveDebug,
   resolvedEnvFrom,
   environment,
   environmentLoading,
@@ -751,6 +753,8 @@ export function PodRenderer({
           })}
         </div>
       </Section>
+
+      {renderLiveDebug}
 
       {/* Environment Variables */}
       {environment && hasResolvedEnvironmentRows && (

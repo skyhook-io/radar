@@ -60,7 +60,7 @@ jobs:
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
 
       - name: Build macOS .app (universal)
-        run: cd cmd/desktop && wails build -platform darwin/universal -ldflags "-X main.version=${GITHUB_REF_NAME#v}"
+        run: cd cmd/desktop && wails build -platform darwin/universal -tags withoutebpf -ldflags "-X main.version=${GITHUB_REF_NAME#v}"
 
       - name: Update bundle identifier
         run: plutil -replace CFBundleIdentifier -string "io.skyhook.radar" build/bin/radar-desktop.app/Contents/Info.plist
@@ -179,7 +179,7 @@ jobs:
 
       - name: Build Windows exe
         shell: bash
-        run: cd cmd/desktop && wails build -platform windows/amd64 -ldflags "-X main.version=${GITHUB_REF_NAME#v}"
+        run: cd cmd/desktop && wails build -platform windows/amd64 -tags withoutebpf -ldflags "-X main.version=${GITHUB_REF_NAME#v}"
 
       - name: Create archive
         shell: bash
@@ -273,7 +273,7 @@ jobs:
 
       - name: Build Linux binary
         run: |
-          cd cmd/desktop && wails build -platform linux/amd64 -tags webkit2_41 -ldflags "-X main.version=${GITHUB_REF_NAME#v}"
+          cd cmd/desktop && wails build -platform linux/amd64 -tags "webkit2_41,withoutebpf" -ldflags "-X main.version=${GITHUB_REF_NAME#v}"
           mv ../../build/bin/Radar ../../build/bin/radar-desktop
 
       - name: Create archive

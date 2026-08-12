@@ -55,7 +55,7 @@ ARG GOEXPERIMENT=""
 
 # Build the binary
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOEXPERIMENT=${GOEXPERIMENT} \
-    go build -ldflags "-s -w -X main.version=${VERSION}" \
+    go build -tags withoutebpf -ldflags "-s -w -X main.version=${VERSION}" \
     -o /radar ./cmd/explorer
 
 # =============================================================================

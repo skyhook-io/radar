@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+
+	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 // TestDefaultExecCommand pins the argv precedence: ?shell= override wins
@@ -93,7 +95,7 @@ func TestDefaultExecContainer(t *testing.T) {
 	podWith := func(annotation string, containers ...string) *corev1.Pod {
 		pod := &corev1.Pod{}
 		if annotation != "" {
-			pod.Annotations = map[string]string{defaultContainerAnnotation: annotation}
+			pod.Annotations = map[string]string{k8s.DefaultContainerAnnotation: annotation}
 		}
 		for _, name := range containers {
 			pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{Name: name})

@@ -7,6 +7,7 @@ LDFLAGS := -X main.version=$(VERSION)
 DOCKER_REPO ?= ghcr.io/skyhook-io/radar
 RADAR_FLAGS ?=
 PORT ?= 9280
+GO_TAGS ?= withoutebpf
 
 ## Quick in-cluster test deploy (full build: frontend + embed + Go binary)
 # Usage: make deploy-test   (or make deploy-test TEST_IMAGE=... CLUSTER_NS=... CLUSTER_DEPLOY=...)
@@ -17,7 +18,7 @@ CLUSTER_DEPLOY ?= radar
 deploy-test: frontend embed
 	@echo "=== Fast test deploy: Go build → push → rollout ==="
 	@echo "Building Go binary for linux/amd64..."
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o /tmp/radar-linux ./cmd/explorer
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -tags "$(GO_TAGS)" -ldflags "$(LDFLAGS)" -o /tmp/radar-linux ./cmd/explorer
 	@echo "Building minimal Docker image..."
 	@echo 'FROM gcr.io/distroless/static-debian12:nonroot' > /tmp/Dockerfile.test
 	@echo 'COPY radar-linux /app/radar' >> /tmp/Dockerfile.test
@@ -60,7 +61,7 @@ install: build
 # Build Go backend with embedded frontend
 backend:
 	@echo "Building Go backend..."
-	go build -ldflags "$(LDFLAGS)" -o radar ./cmd/explorer
+	go build -tags "$(GO_TAGS)" -ldflags "$(LDFLAGS)" -o radar ./cmd/explorer
 
 # Build frontend (auto-installs deps if needed)
 frontend:
@@ -148,11 +149,11 @@ clean:
 
 # Run tests
 test:
-	go test -v ./...
+	go test -tags "$(GO_TAGS)" -v ./...
 
 # Run e2e tests against the current kubeconfig cluster (on-demand, not in CI)
 test-e2e:
-	go test -tags e2e -v -timeout 5m ./internal/k8s/
+	go test -tags "$(GO_TAGS),e2e" -v -timeout 5m ./internal/k8s/
 
 # Smoke-test the Helm chart's template rendering (requires `helm` on PATH)
 test-chart:
@@ -174,6 +175,15 @@ gitops-demo-status:
 gitops-demo-drift:
 	./scripts/gitops-demo.sh drift
 
+ig-demo:
+	./scripts/ig-demo.sh up
+
+ig-demo-down:
+	./scripts/ig-demo.sh down
+
+ig-demo-status:
+	./scripts/ig-demo.sh status
+
 # Bootstrap a kind cluster pre-loaded with curated Crossplane fixtures
 # (core + provider-kubernetes + function-patch-and-transform + XRD/Composition/XRs).
 # Useful for visual-testing Crossplane UI changes against realistic state.
@@ -189,7 +199,7 @@ crossplane-demo-status:
 
 # Run linter
 lint:
-	go vet ./...
+	go vet -tags "$(GO_TAGS)" ./...
 
 # Type check frontend
 tsc:
@@ -250,29 +260,29 @@ desktop: frontend embed desktop-binary
 # Build desktop binary only (assumes frontend is already in internal/static/dist)
 desktop-binary:
 	@echo "Building desktop binary..."
-	CGO_ENABLED=1 CGO_LDFLAGS="-framework UniformTypeIdentifiers" go build -tags production -ldflags "$(LDFLAGS)" -o radar-desktop ./cmd/desktop
+	CGO_ENABLED=1 CGO_LDFLAGS="-framework UniformTypeIdentifiers" go build -tags "production,$(GO_TAGS)" -ldflags "$(LDFLAGS)" -o radar-desktop ./cmd/desktop
 
 # Run desktop app in Wails dev mode with Go hot reload.
 # wails.json lives in cmd/desktop/ (Wails requires it next to the main package).
 # Requires wails CLI: go install github.com/wailsapp/wails/v2/cmd/wails@latest
 desktop-dev:
 	@command -v wails >/dev/null 2>&1 || { echo "Error: wails CLI not found. Install with: go install github.com/wailsapp/wails/v2/cmd/wails@latest"; exit 1; }
-	cd cmd/desktop && wails dev -ldflags "$(LDFLAGS)"
+	cd cmd/desktop && wails dev -tags "$(GO_TAGS)" -ldflags "$(LDFLAGS)"
 
 # Package macOS .app bundle
 desktop-package-darwin:
 	@command -v wails >/dev/null 2>&1 || { echo "Error: wails CLI not found"; exit 1; }
-	cd cmd/desktop && wails build -platform darwin/universal -ldflags "$(LDFLAGS)"
+	cd cmd/desktop && wails build -platform darwin/universal -tags "$(GO_TAGS)" -ldflags "$(LDFLAGS)"
 
 # Package Windows .exe
 desktop-package-windows:
 	@command -v wails >/dev/null 2>&1 || { echo "Error: wails CLI not found"; exit 1; }
-	cd cmd/desktop && wails build -platform windows/amd64 -ldflags "$(LDFLAGS)"
+	cd cmd/desktop && wails build -platform windows/amd64 -tags "$(GO_TAGS)" -ldflags "$(LDFLAGS)"
 
 # Package Linux binary
 desktop-package-linux:
 	@command -v wails >/dev/null 2>&1 || { echo "Error: wails CLI not found"; exit 1; }
-	cd cmd/desktop && wails build -platform linux/amd64 -ldflags "$(LDFLAGS)"
+	cd cmd/desktop && wails build -platform linux/amd64 -tags "$(GO_TAGS)" -ldflags "$(LDFLAGS)"
 
 # ============================================================================
 # Release Targets

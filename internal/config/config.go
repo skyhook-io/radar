@@ -42,6 +42,8 @@ type Config struct {
 	// (`radar probe`). Empty falls back to RADAR_IMAGE, then the version-matched
 	// published Radar image; set it to a reachable mirror for air-gapped clusters.
 	ReachabilityImage string `json:"reachabilityImage,omitempty"`
+
+	IGGadgetRegistry string `json:"igGadgetRegistry,omitempty"`
 	// ArgoCDURL is the Argo CD API server URL. Empty enables auto-discovery.
 	ArgoCDURL string `json:"argoCdUrl,omitempty"`
 	// ArgoCDToken is the Argo CD API bearer token. Stored in plain text in
