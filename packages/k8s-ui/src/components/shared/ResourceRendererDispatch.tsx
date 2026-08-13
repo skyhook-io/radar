@@ -249,6 +249,7 @@ import {
   ResourceSliceRenderer,
   NvidiaClusterPolicyRenderer,
   NvidiaDriverRenderer,
+  CalicoIPPoolRenderer,
 } from '../resources/renderers'
 import type { ComposedRefStatus } from '../resources/renderers/CompositeRenderer'
 import {
@@ -410,6 +411,7 @@ const KNOWN_KINDS = new Set([
   'policyexceptions', 'cleanuppolicies', 'clustercleanuppolicies',
   'resourceclaims', 'resourceclaimtemplates', 'deviceclasses', 'resourceslices',
   'nvidiadrivers',
+  'ippools',
   'vulnerabilityreports', 'configauditreports', 'exposedsecretreports',
   'rbacassessmentreports', 'clusterrbacassessmentreports',
   'clustercompliancereports', 'sbomreports', 'clustersbomreports',
@@ -623,6 +625,12 @@ export function ResourceRendererDispatch({
     || (kind === 'policies' && isApiGroup(data?.apiVersion, 'kyverno.io'))
   const groupGatedFallthrough = isGroupGatedKind && !groupGatedMatched
 
+  const isCalicoIPPool = kind === 'ippools' && (
+    data?.apiVersion?.startsWith('crd.projectcalico.org/')
+    || data?.apiVersion?.startsWith('projectcalico.org/')
+  )
+  const calicoIPPoolFallthrough = kind === 'ippools' && !isCalicoIPPool
+
   const isKnownKind = KNOWN_KINDS.has(kind) || isCrossplaneMR || isCrossplaneClaim || isCrossplaneXR
 
   const PodComp = rendererOverrides?.PodRenderer ?? PodRenderer
@@ -756,6 +764,7 @@ export function ResourceRendererDispatch({
         {policyExceptionMatched && <KyvernoPolicyExceptionRenderer data={data} />}
         {kyvernoLegacyExtraMatched && <KyvernoCleanupPolicyRenderer data={data} />}
         {kind === 'nvidiadrivers' && <NvidiaDriverRenderer data={data} />}
+        {isCalicoIPPool && <CalicoIPPoolRenderer data={data} />}
         {/* DRA (resource.k8s.io) */}
         {kind === 'resourceclaims' && <ResourceClaimRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'resourceclaimtemplates' && <ResourceClaimTemplateRenderer data={data} />}
@@ -874,7 +883,7 @@ export function ResourceRendererDispatch({
             for known-plural collisions where no apiVersion-gated renderer
             matched (e.g. a Knative Configuration sharing the `configurations`
             plural with Crossplane Configuration). */}
-        {(!isKnownKind || crossplaneCollisionFallthrough || kyvernoCollisionFallthrough || veleroCollisionFallthrough || groupGatedFallthrough) && <GenericRenderer data={data} />}
+        {(!isKnownKind || crossplaneCollisionFallthrough || kyvernoCollisionFallthrough || veleroCollisionFallthrough || groupGatedFallthrough || calicoIPPoolFallthrough) && <GenericRenderer data={data} />}
 
         {/* Common sections - can be disabled when parent handles them separately */}
         {showCommonSections && (

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { Database, Server, Puzzle } from 'lucide-react'
+import { Database, Network, Server, Puzzle } from 'lucide-react'
 import { getResourceIcon, DEFAULT_RESOURCE_ICON } from './resource-icons'
 
 describe('getResourceIcon', () => {
@@ -14,6 +14,14 @@ describe('getResourceIcon', () => {
     // A third operator's `clusters` CRD must not inherit a Postgres icon.
     expect(getResourceIcon('Cluster', 'apps.kubeblocks.io')).toBe(DEFAULT_RESOURCE_ICON)
     expect(getResourceIcon('Backup', 'kubevirt.io')).toBe(DEFAULT_RESOURCE_ICON)
+    expect(getResourceIcon('IPPool', 'networking.example.io')).toBe(DEFAULT_RESOURCE_ICON)
+    expect(getResourceIcon('IPPool', 'extension.projectcalico.org')).toBe(DEFAULT_RESOURCE_ICON)
+  })
+
+  it('resolves Calico IPPool only for Calico API groups', () => {
+    expect(getResourceIcon('IPPool', 'crd.projectcalico.org')).toBe(Network)
+    expect(getResourceIcon('IPPool', 'projectcalico.org')).toBe(Network)
+    expect(getResourceIcon('IPPool')).toBe(DEFAULT_RESOURCE_ICON)
   })
 
   it('ignores the group for kinds that do not collide', () => {

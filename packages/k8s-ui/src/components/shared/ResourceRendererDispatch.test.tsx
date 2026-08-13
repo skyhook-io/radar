@@ -257,6 +257,51 @@ describe('ResourceRendererDispatch — colliding plurals fall through', () => {
   })
 })
 
+describe('Calico IPPool collision handling', () => {
+  it.each(['crd.projectcalico.org/v1', 'projectcalico.org/v3'])('renders IPPool details for %s', (apiVersion) => {
+    const html = renderKind('ippools', {
+      apiVersion,
+      kind: 'IPPool',
+      metadata: { name: 'workloads' },
+      spec: {
+        allowedUses: ['Workload', 'Tunnel'],
+        assignmentMode: 'Automatic',
+        blockSize: 26,
+        cidr: '172.16.0.0/16',
+        natOutgoing: true,
+        nodeSelector: 'all()',
+      },
+    })
+
+    expect(html).toContain('IP Pool')
+    expect(html).toContain('Allowed Uses')
+    expect(html).toContain('Workload, Tunnel')
+    expect(html).toContain('Assignment Mode')
+    expect(html).toContain('Automatic')
+    expect(html).toContain('Block Size')
+    expect(html).toContain('26')
+    expect(html).toContain('CIDR')
+    expect(html).toContain('172.16.0.0/16')
+    expect(html).toContain('NAT Outgoing')
+    expect(html).toContain('Yes')
+    expect(html).toContain('Node Selector')
+    expect(html).toContain('all()')
+  })
+
+  it.each(['networking.example.io/v1', 'extension.projectcalico.org/v1'])('uses the generic renderer for %s', (apiVersion) => {
+    const html = renderKind('ippools', {
+      apiVersion,
+      kind: 'IPPool',
+      metadata: { name: 'foreign-pool' },
+      spec: { providerSpecificField: 'preserved' },
+    })
+
+    expect(html).toContain('Specification')
+    expect(html).toContain('Provider Specific Field')
+    expect(html).not.toContain('IP Pool')
+  })
+})
+
 describe('colliding plurals — near-match API groups', () => {
   // A substring guard would hand these to CNPG/Velero. They are different groups.
   it.each([

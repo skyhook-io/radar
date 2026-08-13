@@ -20,6 +20,7 @@ import {
   ShieldAlert,
   Radio,
   Globe,
+  Network,
 
   // Config
   FileSliders,
@@ -291,6 +292,7 @@ const GROUP_QUALIFIED_KIND_ICONS: Record<string, Record<string, LucideIcon>> = {
   backup: { 'postgresql.cnpg.io': DatabaseBackup },
   scheduledbackup: { 'postgresql.cnpg.io': DatabaseBackup },
   pooler: { 'postgresql.cnpg.io': Waypoints },
+  ippool: { 'crd.projectcalico.org': Network, 'projectcalico.org': Network },
 }
 
 export function getResourceIcon(kind: string, group?: string): LucideIcon {
