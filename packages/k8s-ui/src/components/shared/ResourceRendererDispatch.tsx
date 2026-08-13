@@ -249,6 +249,7 @@ import {
   ResourceSliceRenderer,
   NvidiaClusterPolicyRenderer,
   NvidiaDriverRenderer,
+  CalicoHostEndpointRenderer,
   CalicoIPPoolRenderer,
 } from '../resources/renderers'
 import type { ComposedRefStatus } from '../resources/renderers/CompositeRenderer'
@@ -411,7 +412,7 @@ const KNOWN_KINDS = new Set([
   'policyexceptions', 'cleanuppolicies', 'clustercleanuppolicies',
   'resourceclaims', 'resourceclaimtemplates', 'deviceclasses', 'resourceslices',
   'nvidiadrivers',
-  'ippools',
+  'hostendpoints', 'ippools',
   'vulnerabilityreports', 'configauditreports', 'exposedsecretreports',
   'rbacassessmentreports', 'clusterrbacassessmentreports',
   'clustercompliancereports', 'sbomreports', 'clustersbomreports',
@@ -625,11 +626,13 @@ export function ResourceRendererDispatch({
     || (kind === 'policies' && isApiGroup(data?.apiVersion, 'kyverno.io'))
   const groupGatedFallthrough = isGroupGatedKind && !groupGatedMatched
 
-  const isCalicoIPPool = kind === 'ippools' && (
+  const isCalicoApiVersion = (
     data?.apiVersion?.startsWith('crd.projectcalico.org/')
     || data?.apiVersion?.startsWith('projectcalico.org/')
   )
-  const calicoIPPoolFallthrough = kind === 'ippools' && !isCalicoIPPool
+  const isCalicoHostEndpoint = kind === 'hostendpoints' && isCalicoApiVersion
+  const isCalicoIPPool = kind === 'ippools' && isCalicoApiVersion
+  const calicoCollisionFallthrough = (kind === 'hostendpoints' || kind === 'ippools') && !isCalicoApiVersion
 
   const isKnownKind = KNOWN_KINDS.has(kind) || isCrossplaneMR || isCrossplaneClaim || isCrossplaneXR
 
@@ -764,6 +767,7 @@ export function ResourceRendererDispatch({
         {policyExceptionMatched && <KyvernoPolicyExceptionRenderer data={data} />}
         {kyvernoLegacyExtraMatched && <KyvernoCleanupPolicyRenderer data={data} />}
         {kind === 'nvidiadrivers' && <NvidiaDriverRenderer data={data} />}
+        {isCalicoHostEndpoint && <CalicoHostEndpointRenderer data={data} onNavigate={onNavigate} />}
         {isCalicoIPPool && <CalicoIPPoolRenderer data={data} />}
         {/* DRA (resource.k8s.io) */}
         {kind === 'resourceclaims' && <ResourceClaimRenderer data={data} onNavigate={onNavigate} />}
@@ -883,7 +887,7 @@ export function ResourceRendererDispatch({
             for known-plural collisions where no apiVersion-gated renderer
             matched (e.g. a Knative Configuration sharing the `configurations`
             plural with Crossplane Configuration). */}
-        {(!isKnownKind || crossplaneCollisionFallthrough || kyvernoCollisionFallthrough || veleroCollisionFallthrough || groupGatedFallthrough || calicoIPPoolFallthrough) && <GenericRenderer data={data} />}
+        {(!isKnownKind || crossplaneCollisionFallthrough || kyvernoCollisionFallthrough || veleroCollisionFallthrough || groupGatedFallthrough || calicoCollisionFallthrough) && <GenericRenderer data={data} />}
 
         {/* Common sections - can be disabled when parent handles them separately */}
         {showCommonSections && (

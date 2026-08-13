@@ -292,6 +292,7 @@ const GROUP_QUALIFIED_KIND_ICONS: Record<string, Record<string, LucideIcon>> = {
   backup: { 'postgresql.cnpg.io': DatabaseBackup },
   scheduledbackup: { 'postgresql.cnpg.io': DatabaseBackup },
   pooler: { 'postgresql.cnpg.io': Waypoints },
+  hostendpoint: { 'crd.projectcalico.org': Network, 'projectcalico.org': Network },
   ippool: { 'crd.projectcalico.org': Network, 'projectcalico.org': Network },
 }
 

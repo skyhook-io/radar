@@ -792,6 +792,7 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
   const hasRelationships =
     relationships.owner ||
     relationships.deployment ||
+    relationships.node ||
     (relationships.children && relationships.children.length > 0) ||
     (relationships.services && relationships.services.length > 0) ||
     (relationships.ingresses && relationships.ingresses.length > 0) ||
@@ -817,6 +818,9 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
         )}
         {relationships.deployment && (
           <RelationshipGroup label="Deployment" refs={[relationships.deployment]} onNavigate={onNavigate} />
+        )}
+        {relationships.node && (
+          <RelationshipGroup label="Node" refs={[relationships.node]} onNavigate={onNavigate} />
         )}
         {relationships.children && relationships.children.length > 0 && (
           <RelationshipGroup label="Children" refs={dedupeRefs(relationships.children)} onNavigate={onNavigate} />

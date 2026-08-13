@@ -44,13 +44,14 @@ describe('ResourceRendererDispatch', () => {
   })
 })
 
-function renderKind(kind: string, data: any, namespace = ''): string {
+function renderKind(kind: string, data: any, namespace = '', onNavigate?: (ref: ResourceRef) => void): string {
   return renderToString(
     <ResourceRendererDispatch
       resource={{ kind, namespace, name: data?.metadata?.name || 'x' }}
       data={data}
       onCopy={() => {}}
       copied={null}
+      onNavigate={onNavigate}
       showCommonSections={false}
     />,
   )
@@ -299,6 +300,46 @@ describe('Calico IPPool collision handling', () => {
     expect(html).toContain('Specification')
     expect(html).toContain('Provider Specific Field')
     expect(html).not.toContain('IP Pool')
+  })
+})
+
+describe('Calico HostEndpoint collision handling', () => {
+  it.each(['crd.projectcalico.org/v1', 'projectcalico.org/v3'])('renders HostEndpoint details for %s', (apiVersion) => {
+    const html = renderKind('hostendpoints', {
+      apiVersion,
+      kind: 'HostEndpoint',
+      metadata: { name: 'infra-1' },
+      spec: {
+        expectedIPs: ['172.20.16.133', '172.16.199.199'],
+        interfaceName: '*',
+        node: 'gdn-test-k8s-infra-1',
+        profiles: ['projectcalico-default-allow'],
+      },
+    }, '', () => {})
+
+    expect(html).toContain('Host Endpoint')
+    expect(html).toContain('Expected IPs')
+    expect(html).toContain('172.20.16.133')
+    expect(html).toContain('172.16.199.199')
+    expect(html).toContain('Interface Name')
+    expect(html).toContain('Node')
+    expect(html).toContain('<button')
+    expect(html).toContain('gdn-test-k8s-infra-1')
+    expect(html).toContain('Profiles')
+    expect(html).toContain('projectcalico-default-allow')
+  })
+
+  it.each(['networking.example.io/v1', 'extension.projectcalico.org/v1'])('uses the generic renderer for %s', (apiVersion) => {
+    const html = renderKind('hostendpoints', {
+      apiVersion,
+      kind: 'HostEndpoint',
+      metadata: { name: 'foreign-endpoint' },
+      spec: { providerSpecificField: 'preserved' },
+    })
+
+    expect(html).toContain('Specification')
+    expect(html).toContain('Provider Specific Field')
+    expect(html).not.toContain('Host Endpoint')
   })
 })
 

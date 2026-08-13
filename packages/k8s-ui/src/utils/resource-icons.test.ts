@@ -14,6 +14,7 @@ describe('getResourceIcon', () => {
     // A third operator's `clusters` CRD must not inherit a Postgres icon.
     expect(getResourceIcon('Cluster', 'apps.kubeblocks.io')).toBe(DEFAULT_RESOURCE_ICON)
     expect(getResourceIcon('Backup', 'kubevirt.io')).toBe(DEFAULT_RESOURCE_ICON)
+    expect(getResourceIcon('HostEndpoint', 'networking.example.io')).toBe(DEFAULT_RESOURCE_ICON)
     expect(getResourceIcon('IPPool', 'networking.example.io')).toBe(DEFAULT_RESOURCE_ICON)
     expect(getResourceIcon('IPPool', 'extension.projectcalico.org')).toBe(DEFAULT_RESOURCE_ICON)
   })
@@ -22,6 +23,12 @@ describe('getResourceIcon', () => {
     expect(getResourceIcon('IPPool', 'crd.projectcalico.org')).toBe(Network)
     expect(getResourceIcon('IPPool', 'projectcalico.org')).toBe(Network)
     expect(getResourceIcon('IPPool')).toBe(DEFAULT_RESOURCE_ICON)
+  })
+
+  it('resolves Calico HostEndpoint only for Calico API groups', () => {
+    expect(getResourceIcon('HostEndpoint', 'crd.projectcalico.org')).toBe(Network)
+    expect(getResourceIcon('HostEndpoint', 'projectcalico.org')).toBe(Network)
+    expect(getResourceIcon('HostEndpoint')).toBe(DEFAULT_RESOURCE_ICON)
   })
 
   it('ignores the group for kinds that do not collide', () => {

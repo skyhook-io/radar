@@ -544,6 +544,15 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			}
 		}
 	}
+	if endpoint, ok := queriedObj.(*unstructured.Unstructured); ok &&
+		(kindLower == "hostendpoint" || kindLower == "hostendpoints") &&
+		(endpoint.GroupVersionKind().Group == "crd.projectcalico.org" || endpoint.GroupVersionKind().Group == "projectcalico.org") {
+		if nodeName, _, _ := unstructured.NestedString(endpoint.Object, "spec", "node"); nodeName != "" {
+			nodeRef := ResourceRef{Kind: "Node", Name: nodeName}
+			enrichRef(&nodeRef, dp)
+			rel.Node = &nodeRef
+		}
+	}
 	// ResourceClaim → DeviceClass (what it requests) + reservedFor Pods (who holds it).
 	if kindLower == "resourceclaim" || kindLower == "resourceclaims" {
 		if u, ok := queriedObj.(*unstructured.Unstructured); ok && u.GroupVersionKind().Group == "resource.k8s.io" {

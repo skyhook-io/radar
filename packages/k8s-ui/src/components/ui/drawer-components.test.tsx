@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
-import { ProblemAlerts, OperationalIssuesShownContext } from './drawer-components'
+import { ProblemAlerts, OperationalIssuesShownContext, RelatedResourcesSection } from './drawer-components'
 
 const problems = [
   { color: 'red' as const, message: 'Application is Degraded' },
@@ -31,5 +31,21 @@ describe('ProblemAlerts', () => {
     )
     expect(html).toContain('Application is Degraded')
     expect(html).toContain('Application is OutOfSync')
+  })
+})
+
+describe('RelatedResourcesSection', () => {
+  it('renders an associated Node', () => {
+    const html = renderToString(
+      <RelatedResourcesSection
+        relationships={{ node: { kind: 'Node', namespace: '', name: 'worker-1' } }}
+        onNavigate={() => {}}
+      />,
+    )
+
+    expect(html).toContain('Related Resources')
+    expect(html).toContain('Node')
+    expect(html).toContain('worker-1')
+    expect(html).toContain('<button')
   })
 })
