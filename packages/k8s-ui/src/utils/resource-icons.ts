@@ -294,6 +294,7 @@ const GROUP_QUALIFIED_KIND_ICONS: Record<string, Record<string, LucideIcon>> = {
   pooler: { 'postgresql.cnpg.io': Waypoints },
   hostendpoint: { 'crd.projectcalico.org': Network, 'projectcalico.org': Network },
   ippool: { 'crd.projectcalico.org': Network, 'projectcalico.org': Network },
+  tier: { 'crd.projectcalico.org': Network, 'projectcalico.org': Network },
 }
 
 export function getResourceIcon(kind: string, group?: string): LucideIcon {

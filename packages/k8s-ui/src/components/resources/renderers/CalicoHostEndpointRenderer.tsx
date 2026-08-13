@@ -11,6 +11,7 @@ export function CalicoHostEndpointRenderer({ data, onNavigate }: CalicoHostEndpo
   const spec = data?.spec ?? {}
   const expectedIPs: string[] = spec.expectedIPs ?? []
   const profiles: string[] = spec.profiles ?? []
+  const ports: Array<{ name?: string; port?: number; protocol?: string }> = spec.ports ?? []
 
   return (
     <Section title="Host Endpoint" icon={Network}>
@@ -47,6 +48,19 @@ export function CalicoHostEndpointRenderer({ data, onNavigate }: CalicoHostEndpo
             <div className="flex flex-wrap gap-1">
               {profiles.map((profile) => (
                 <Badge key={profile} tone="structural" size="sm">{profile}</Badge>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {ports.length > 0 && (
+          <div className="border-t border-theme-border-subtle pt-3">
+            <div className="text-xs text-theme-text-tertiary mb-1.5">Named Ports</div>
+            <div className="flex flex-wrap gap-1">
+              {ports.map((port, index) => (
+                <Badge key={`${port.name}-${port.protocol}-${port.port}-${index}`} tone="structural" size="sm" className="font-mono">
+                  {`${port.name ? `${port.name}: ` : ''}${port.protocol}/${port.port}`}
+                </Badge>
               ))}
             </div>
           </div>

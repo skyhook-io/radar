@@ -251,6 +251,7 @@ import {
   NvidiaDriverRenderer,
   CalicoHostEndpointRenderer,
   CalicoIPPoolRenderer,
+  CalicoTierRenderer,
 } from '../resources/renderers'
 import type { ComposedRefStatus } from '../resources/renderers/CompositeRenderer'
 import {
@@ -412,7 +413,7 @@ const KNOWN_KINDS = new Set([
   'policyexceptions', 'cleanuppolicies', 'clustercleanuppolicies',
   'resourceclaims', 'resourceclaimtemplates', 'deviceclasses', 'resourceslices',
   'nvidiadrivers',
-  'hostendpoints', 'ippools',
+  'hostendpoints', 'ippools', 'tiers',
   'vulnerabilityreports', 'configauditreports', 'exposedsecretreports',
   'rbacassessmentreports', 'clusterrbacassessmentreports',
   'clustercompliancereports', 'sbomreports', 'clustersbomreports',
@@ -632,7 +633,8 @@ export function ResourceRendererDispatch({
   )
   const isCalicoHostEndpoint = kind === 'hostendpoints' && isCalicoApiVersion
   const isCalicoIPPool = kind === 'ippools' && isCalicoApiVersion
-  const calicoCollisionFallthrough = (kind === 'hostendpoints' || kind === 'ippools') && !isCalicoApiVersion
+  const isCalicoTier = kind === 'tiers' && isCalicoApiVersion
+  const calicoCollisionFallthrough = (kind === 'hostendpoints' || kind === 'ippools' || kind === 'tiers') && !isCalicoApiVersion
 
   const isKnownKind = KNOWN_KINDS.has(kind) || isCrossplaneMR || isCrossplaneClaim || isCrossplaneXR
 
@@ -769,6 +771,7 @@ export function ResourceRendererDispatch({
         {kind === 'nvidiadrivers' && <NvidiaDriverRenderer data={data} />}
         {isCalicoHostEndpoint && <CalicoHostEndpointRenderer data={data} onNavigate={onNavigate} />}
         {isCalicoIPPool && <CalicoIPPoolRenderer data={data} />}
+        {isCalicoTier && <CalicoTierRenderer data={data} />}
         {/* DRA (resource.k8s.io) */}
         {kind === 'resourceclaims' && <ResourceClaimRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'resourceclaimtemplates' && <ResourceClaimTemplateRenderer data={data} />}

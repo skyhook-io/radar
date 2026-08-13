@@ -269,8 +269,13 @@ describe('Calico IPPool collision handling', () => {
         assignmentMode: 'Automatic',
         blockSize: 26,
         cidr: '172.16.0.0/16',
+        ipipMode: 'CrossSubnet',
+        vxlanMode: 'Never',
         natOutgoing: true,
+        disabled: false,
+        disableBGPExport: true,
         nodeSelector: 'all()',
+        namespaceSelector: "environment == 'production'",
       },
     })
 
@@ -283,9 +288,34 @@ describe('Calico IPPool collision handling', () => {
     expect(html).toContain('26')
     expect(html).toContain('CIDR')
     expect(html).toContain('172.16.0.0/16')
+    expect(html).toContain('IP-in-IP Mode')
+    expect(html).toContain('CrossSubnet')
+    expect(html).toContain('VXLAN Mode')
+    expect(html).toContain('Never')
     expect(html).toContain('NAT Outgoing')
     expect(html).toContain('Yes')
+    expect(html).toContain('Disabled')
+    expect(html).toContain('No')
+    expect(html).toContain('BGP Export Disabled')
     expect(html).toContain('Node Selector')
+    expect(html).toContain('all()')
+    expect(html).toContain('Namespace Selector')
+    expect(html).toContain('environment == &#x27;production&#x27;')
+  })
+
+  it('renders documented defaults when fields are omitted', () => {
+    const html = renderKind('ippools', {
+      apiVersion: 'projectcalico.org/v3',
+      kind: 'IPPool',
+      metadata: { name: 'default-ipv6' },
+      spec: { cidr: 'fd00::/48' },
+    })
+
+    expect(html).toContain('Workload, Tunnel')
+    expect(html).toContain('Automatic')
+    expect(html).toContain('122')
+    expect(html.match(/Never/g)).toHaveLength(2)
+    expect(html.match(/>No</g)).toHaveLength(3)
     expect(html).toContain('all()')
   })
 
@@ -314,6 +344,7 @@ describe('Calico HostEndpoint collision handling', () => {
         interfaceName: '*',
         node: 'gdn-test-k8s-infra-1',
         profiles: ['projectcalico-default-allow'],
+        ports: [{ name: 'ssh', protocol: 'TCP', port: 22 }],
       },
     }, '', () => {})
 
@@ -327,6 +358,8 @@ describe('Calico HostEndpoint collision handling', () => {
     expect(html).toContain('gdn-test-k8s-infra-1')
     expect(html).toContain('Profiles')
     expect(html).toContain('projectcalico-default-allow')
+    expect(html).toContain('Named Ports')
+    expect(html).toContain('ssh: TCP/22')
   })
 
   it.each(['networking.example.io/v1', 'extension.projectcalico.org/v1'])('uses the generic renderer for %s', (apiVersion) => {
@@ -340,6 +373,48 @@ describe('Calico HostEndpoint collision handling', () => {
     expect(html).toContain('Specification')
     expect(html).toContain('Provider Specific Field')
     expect(html).not.toContain('Host Endpoint')
+  })
+})
+
+describe('Calico Tier collision handling', () => {
+  it.each(['crd.projectcalico.org/v1', 'projectcalico.org/v3'])('renders Tier details for %s', (apiVersion) => {
+    const html = renderKind('tiers', {
+      apiVersion,
+      kind: 'Tier',
+      metadata: { name: 'default' },
+      spec: { defaultAction: 'Deny', order: 1000000 },
+    })
+
+    expect(html).toContain('Tier')
+    expect(html).toContain('Default Action')
+    expect(html).toContain('Deny')
+    expect(html).toContain('Order')
+    expect(html).toContain('1000000')
+  })
+
+  it('renders documented defaults when fields are omitted', () => {
+    const html = renderKind('tiers', {
+      apiVersion: 'projectcalico.org/v3',
+      kind: 'Tier',
+      metadata: { name: 'default' },
+      spec: {},
+    })
+
+    expect(html).toContain('Deny')
+    expect(html).toContain('Last (lowest precedence)')
+  })
+
+  it.each(['networking.example.io/v1', 'extension.projectcalico.org/v1'])('uses the generic renderer for %s', (apiVersion) => {
+    const html = renderKind('tiers', {
+      apiVersion,
+      kind: 'Tier',
+      metadata: { name: 'foreign-tier' },
+      spec: { providerSpecificField: 'preserved' },
+    })
+
+    expect(html).toContain('Specification')
+    expect(html).toContain('Provider Specific Field')
+    expect(html).not.toContain('Default Action')
   })
 })
 

@@ -17,6 +17,7 @@ describe('getResourceIcon', () => {
     expect(getResourceIcon('HostEndpoint', 'networking.example.io')).toBe(DEFAULT_RESOURCE_ICON)
     expect(getResourceIcon('IPPool', 'networking.example.io')).toBe(DEFAULT_RESOURCE_ICON)
     expect(getResourceIcon('IPPool', 'extension.projectcalico.org')).toBe(DEFAULT_RESOURCE_ICON)
+    expect(getResourceIcon('Tier', 'extension.projectcalico.org')).toBe(DEFAULT_RESOURCE_ICON)
   })
 
   it('resolves Calico IPPool only for Calico API groups', () => {
@@ -29,6 +30,12 @@ describe('getResourceIcon', () => {
     expect(getResourceIcon('HostEndpoint', 'crd.projectcalico.org')).toBe(Network)
     expect(getResourceIcon('HostEndpoint', 'projectcalico.org')).toBe(Network)
     expect(getResourceIcon('HostEndpoint')).toBe(DEFAULT_RESOURCE_ICON)
+  })
+
+  it('resolves Calico Tier only for Calico API groups', () => {
+    expect(getResourceIcon('Tier', 'crd.projectcalico.org')).toBe(Network)
+    expect(getResourceIcon('Tier', 'projectcalico.org')).toBe(Network)
+    expect(getResourceIcon('Tier')).toBe(DEFAULT_RESOURCE_ICON)
   })
 
   it('ignores the group for kinds that do not collide', () => {
