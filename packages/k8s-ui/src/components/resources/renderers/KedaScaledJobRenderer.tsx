@@ -36,7 +36,7 @@ export function KedaScaledJobRenderer({ data }: KedaScaledJobRendererProps) {
       {/* Job Target section */}
       <Section title="Job Scaling" icon={Cpu}>
         <PropertyList>
-          <Property label="Job Target" value={getScaledJobTarget(data)} />
+          <Property label="Job Image" value={getScaledJobTarget(data)} />
           <Property label="Strategy" value={getScaledJobStrategy(data)} />
           {spec.pollingInterval !== undefined && (
             <Property label="Polling Interval" value={`${spec.pollingInterval}s`} />

@@ -80,20 +80,25 @@ export function getClusterVersion(resource: any): string {
   return resource.spec?.topology?.version || '-'
 }
 
+// Replica counts moved to status.controlPlane / status.workers in the v1beta2
+// contract. While v1beta1 is still served, the same counts are mirrored under
+// status.v1beta2 so a v1beta1 read can reach them; plain v1beta1 has no worker
+// counts on the Cluster at all.
+function replicaGroup(resource: any, group: 'controlPlane' | 'workers'): any {
+  return resource.status?.[group] ?? resource.status?.v1beta2?.[group]
+}
+
 export function getClusterCPReplicas(resource: any): string {
-  // v1beta2: status.controlPlane.readyReplicas / status.controlPlane.desiredReplicas
-  const cpReady = resource.status?.controlPlane?.readyReplicas ?? resource.status?.controlPlaneReady
-  const cpDesired = resource.status?.controlPlane?.desiredReplicas
-  if (cpDesired != null) return `${cpReady ?? 0}/${cpDesired}`
-  return typeof cpReady === 'boolean' ? (cpReady ? 'Ready' : 'NotReady') : '-'
+  const cp = replicaGroup(resource, 'controlPlane')
+  if (cp?.desiredReplicas != null) return `${cp.readyReplicas ?? 0}/${cp.desiredReplicas}`
+  const ready = resource.status?.controlPlaneReady
+  return typeof ready === 'boolean' ? (ready ? 'Ready' : 'NotReady') : '-'
 }
 
 export function getClusterWorkerReplicas(resource: any): string {
-  // v1beta2: status.workers.readyReplicas / status.workers.desiredReplicas
-  const wReady = resource.status?.workers?.readyReplicas ?? resource.status?.workersReady
-  const wDesired = resource.status?.workers?.desiredReplicas
-  if (wDesired != null) return `${wReady ?? 0}/${wDesired}`
-  return typeof wReady === 'boolean' ? (wReady ? 'Ready' : 'NotReady') : '-'
+  const workers = replicaGroup(resource, 'workers')
+  if (workers?.desiredReplicas != null) return `${workers.readyReplicas ?? 0}/${workers.desiredReplicas}`
+  return '-'
 }
 
 export function getClusterEndpoint(resource: any): string {

@@ -155,8 +155,13 @@ export function getScaledJobStatus(resource: any): StatusBadge {
   return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
 }
 
+// ScaledJob has no scale target — `jobTargetRef` is a batch/v1 JobSpec, so
+// there is no name to read. The image the generated Jobs run is the closest
+// answer to "what does this scale".
 export function getScaledJobTarget(resource: any): string {
-  return resource.spec?.jobTargetRef?.name || '-'
+  const containers = resource.spec?.jobTargetRef?.template?.spec?.containers
+  if (!Array.isArray(containers) || containers.length === 0) return '-'
+  return containers[0]?.image || '-'
 }
 
 export function getScaledJobStrategy(resource: any): string {

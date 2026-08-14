@@ -10,6 +10,8 @@ import {
   getCNPGClusterBackupConfig,
   getCNPGClusterBarmanPlugin,
   getCNPGWALArchivingFailure,
+  getCNPGClusterIsReplica,
+  getCNPGClusterReplicaSource,
   getCNPGLastBackupFailure,
   classifyCNPGClusterPhase,
   classifyCNPGBackupPhase,
@@ -660,5 +662,40 @@ describe('volume health', () => {
   it('ignores malformed entries rather than rendering them', () => {
     const h = getCNPGVolumeHealth({ status: { pvcCount: 1, healthyPVC: ['ok', 42, null] } })
     expect(h?.healthy).toEqual(['ok'])
+  })
+})
+
+describe('CNPG replica clusters', () => {
+  // The field is spec.replica. Reading spec.replicaCluster - which CNPG has
+  // never declared - resolved to undefined, so the drawer's Replica Cluster
+  // section never rendered for any replica.
+  it('identifies a replica declared the simple way', () => {
+    const c = { spec: { replica: { enabled: true, source: 'origin-cluster' } } }
+    expect(getCNPGClusterIsReplica(c)).toBe(true)
+    expect(getCNPGClusterReplicaSource(c)).toBe('origin-cluster')
+  })
+
+  it('does not call a promoted cluster a replica', () => {
+    // Promotion flips enabled and leaves the block behind, so presence alone
+    // would keep asserting replica-hood after the cluster became primary.
+    const c = { spec: { replica: { enabled: false, source: 'origin-cluster' } } }
+    expect(getCNPGClusterIsReplica(c)).toBe(false)
+  })
+
+  it('resolves role from the distributed topology when enabled is absent', () => {
+    const replica = { spec: { replica: { primary: 'eu-cluster', self: 'us-cluster', source: 'eu' } } }
+    const primary = { spec: { replica: { primary: 'eu-cluster', self: 'eu-cluster', source: 'eu' } } }
+    expect(getCNPGClusterIsReplica(replica)).toBe(true)
+    expect(getCNPGClusterIsReplica(primary)).toBe(false)
+  })
+
+  it('falls back to the cluster name when self is omitted', () => {
+    const c = { metadata: { name: 'us-cluster' }, spec: { replica: { primary: 'eu-cluster' } } }
+    expect(getCNPGClusterIsReplica(c)).toBe(true)
+  })
+
+  it('reports nothing for a cluster with no replica block', () => {
+    expect(getCNPGClusterIsReplica({ spec: {} })).toBe(false)
+    expect(getCNPGClusterReplicaSource({ spec: {} })).toBe('-')
   })
 })

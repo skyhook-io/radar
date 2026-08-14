@@ -656,7 +656,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'target', label: 'Job Target', width: 'w-48' },
+    { key: 'target', label: 'Job Image', width: 'w-48' },
     { key: 'strategy', label: 'Strategy', width: 'w-28' },
     { key: 'triggerTypes', label: 'Trigger Types', width: 'w-40' },
     { key: 'age', label: 'Age', width: 'w-24' },

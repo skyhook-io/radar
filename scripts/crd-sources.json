@@ -1,0 +1,162 @@
+{
+  "$comment": [
+    "Pinned upstream CRD schemas that Radar's resource accessors read.",
+    "Each entry is regenerated into testdata/crd-schemas/<key>.json by",
+    "scripts/crd-schema-sync.mjs. The generated files are committed so CI can",
+    "validate offline; re-run the sync deliberately when bumping a pin.",
+    "",
+    "Pick the version Radar actually targets, not simply the newest. The accessors",
+    "are written against a specific upstream release and a pin that trails it will",
+    "report correct code as broken (velero status.queuePosition landed in 1.18)."
+  ],
+  "integrations": {
+    "velero": {
+      "accessors": "resource-utils-velero.ts",
+      "version": "v1.18.0",
+      "urls": [
+        "https://raw.githubusercontent.com/vmware-tanzu/velero/v1.18.0/config/crd/v1/bases/velero.io_backups.yaml",
+        "https://raw.githubusercontent.com/vmware-tanzu/velero/v1.18.0/config/crd/v1/bases/velero.io_restores.yaml",
+        "https://raw.githubusercontent.com/vmware-tanzu/velero/v1.18.0/config/crd/v1/bases/velero.io_schedules.yaml",
+        "https://raw.githubusercontent.com/vmware-tanzu/velero/v1.18.0/config/crd/v1/bases/velero.io_backupstoragelocations.yaml",
+        "https://raw.githubusercontent.com/vmware-tanzu/velero/v1.18.0/config/crd/v1/bases/velero.io_volumesnapshotlocations.yaml",
+        "https://raw.githubusercontent.com/vmware-tanzu/velero/v1.18.0/config/crd/v1/bases/velero.io_backuprepositories.yaml"
+      ]
+    },
+    "cnpg": {
+      "accessors": "resource-utils-cnpg.ts",
+      "version": "release-1.27",
+      "urls": [
+        "https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.27/config/crd/bases/postgresql.cnpg.io_clusters.yaml",
+        "https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.27/config/crd/bases/postgresql.cnpg.io_poolers.yaml",
+        "https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.27/config/crd/bases/postgresql.cnpg.io_backups.yaml",
+        "https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.27/config/crd/bases/postgresql.cnpg.io_scheduledbackups.yaml"
+      ]
+    },
+    "certmanager": {
+      "accessors": "resource-utils-certmanager.ts",
+      "version": "v1.16.2",
+      "urls": [
+        "https://github.com/cert-manager/cert-manager/releases/download/v1.16.2/cert-manager.crds.yaml"
+      ]
+    },
+    "keda": {
+      "accessors": "resource-utils-keda.ts",
+      "version": "v2.16.1",
+      "urls": [
+        "https://github.com/kedacore/keda/releases/download/v2.16.1/keda-2.16.1-crds.yaml"
+      ]
+    },
+    "karpenter": {
+      "$comment": "The accessors span karpenter core and the AWS provider's EC2NodeClass; both belong in the path set.",
+      "accessors": "resource-utils-karpenter.ts",
+      "version": "v1.1.1",
+      "urls": [
+        "https://raw.githubusercontent.com/kubernetes-sigs/karpenter/v1.1.1/pkg/apis/crds/karpenter.sh_nodepools.yaml",
+        "https://raw.githubusercontent.com/kubernetes-sigs/karpenter/v1.1.1/pkg/apis/crds/karpenter.sh_nodeclaims.yaml",
+        "https://raw.githubusercontent.com/aws/karpenter-provider-aws/v1.1.1/pkg/apis/crds/karpenter.k8s.aws_ec2nodeclasses.yaml"
+      ]
+    },
+    "trivy": {
+      "accessors": "resource-utils-trivy.ts",
+      "version": "v0.23.0",
+      "urls": [
+        "https://raw.githubusercontent.com/aquasecurity/trivy-operator/v0.23.0/deploy/helm/crds/aquasecurity.github.io_vulnerabilityreports.yaml",
+        "https://raw.githubusercontent.com/aquasecurity/trivy-operator/v0.23.0/deploy/helm/crds/aquasecurity.github.io_configauditreports.yaml",
+        "https://raw.githubusercontent.com/aquasecurity/trivy-operator/v0.23.0/deploy/helm/crds/aquasecurity.github.io_clustercompliancereports.yaml",
+        "https://raw.githubusercontent.com/aquasecurity/trivy-operator/v0.23.0/deploy/helm/crds/aquasecurity.github.io_rbacassessmentreports.yaml",
+        "https://raw.githubusercontent.com/aquasecurity/trivy-operator/v0.23.0/deploy/helm/crds/aquasecurity.github.io_exposedsecretreports.yaml",
+        "https://raw.githubusercontent.com/aquasecurity/trivy-operator/v0.23.0/deploy/helm/crds/aquasecurity.github.io_sbomreports.yaml"
+      ]
+    },
+    "eso": {
+      "accessors": "resource-utils-eso.ts",
+      "version": "v0.12.1",
+      "urls": [
+        "https://raw.githubusercontent.com/external-secrets/external-secrets/v0.12.1/deploy/crds/bundle.yaml"
+      ]
+    },
+    "argo": {
+      "accessors": "resource-utils-argo.ts",
+      "version": "v2.13.2",
+      "urls": [
+        "https://raw.githubusercontent.com/argoproj/argo-cd/v2.13.2/manifests/crds/application-crd.yaml",
+        "https://raw.githubusercontent.com/argoproj/argo-cd/v2.13.2/manifests/crds/applicationset-crd.yaml",
+        "https://raw.githubusercontent.com/argoproj/argo-cd/v2.13.2/manifests/crds/appproject-crd.yaml"
+      ]
+    },
+    "flux": {
+      "$comment": "Flux ships one controller per API group; each pins independently upstream.",
+      "accessors": "resource-utils-flux.ts",
+      "version": "kustomize-1.4.0 / helm-1.1.0 / source-1.4.1 / notification-1.4.0",
+      "urls": [
+        "https://raw.githubusercontent.com/fluxcd/kustomize-controller/v1.4.0/config/crd/bases/kustomize.toolkit.fluxcd.io_kustomizations.yaml",
+        "https://raw.githubusercontent.com/fluxcd/helm-controller/v1.1.0/config/crd/bases/helm.toolkit.fluxcd.io_helmreleases.yaml",
+        "https://raw.githubusercontent.com/fluxcd/source-controller/v1.4.1/config/crd/bases/source.toolkit.fluxcd.io_gitrepositories.yaml",
+        "https://raw.githubusercontent.com/fluxcd/source-controller/v1.4.1/config/crd/bases/source.toolkit.fluxcd.io_helmrepositories.yaml",
+        "https://raw.githubusercontent.com/fluxcd/source-controller/v1.4.1/config/crd/bases/source.toolkit.fluxcd.io_helmcharts.yaml",
+        "https://raw.githubusercontent.com/fluxcd/source-controller/v1.4.1/config/crd/bases/source.toolkit.fluxcd.io_ocirepositories.yaml",
+        "https://raw.githubusercontent.com/fluxcd/source-controller/v1.4.1/config/crd/bases/source.toolkit.fluxcd.io_buckets.yaml",
+        "https://raw.githubusercontent.com/fluxcd/notification-controller/v1.4.0/config/crd/bases/notification.toolkit.fluxcd.io_alerts.yaml",
+        "https://raw.githubusercontent.com/fluxcd/notification-controller/v1.4.0/config/crd/bases/notification.toolkit.fluxcd.io_providers.yaml",
+        "https://raw.githubusercontent.com/fluxcd/notification-controller/v1.4.0/config/crd/bases/notification.toolkit.fluxcd.io_receivers.yaml"
+      ]
+    },
+    "istio": {
+      "accessors": "resource-utils-istio.ts",
+      "version": "1.24.2",
+      "urls": [
+        "https://raw.githubusercontent.com/istio/istio/1.24.2/manifests/charts/base/files/crd-all.gen.yaml"
+      ]
+    },
+    "knative": {
+      "accessors": "resource-utils-knative.ts",
+      "version": "serving-v1.16.1 / eventing-v1.16.4",
+      "urls": [
+        "https://github.com/knative/serving/releases/download/knative-v1.16.1/serving-crds.yaml",
+        "https://github.com/knative/eventing/releases/download/knative-v1.16.4/eventing-crds.yaml"
+      ]
+    },
+    "traefik": {
+      "accessors": "resource-utils-traefik.ts",
+      "version": "v3.2.3",
+      "urls": [
+        "https://raw.githubusercontent.com/traefik/traefik/v3.2.3/integration/fixtures/k8s/01-traefik-crd.yml"
+      ]
+    },
+    "contour": {
+      "accessors": "resource-utils-contour.ts",
+      "version": "v1.30.1",
+      "urls": [
+        "https://raw.githubusercontent.com/projectcontour/contour/v1.30.1/examples/contour/01-crds.yaml"
+      ]
+    },
+    "capi": {
+      "$comment": "Full release manifest; only its CRDs are read. Pinned to a release serving v1beta2 - the accessors read the v1beta2 contract first and fall back to v1beta1, so a v1beta1-only pin reports the forward half as broken.",
+      "accessors": "resource-utils-capi.ts",
+      "version": "v1.11.1",
+      "urls": [
+        "https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.11.1/cluster-api-components.yaml"
+      ]
+    },
+    "prometheus": {
+      "accessors": "resource-utils-prometheus.ts",
+      "version": "v0.79.2",
+      "urls": [
+        "https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.79.2/example/prometheus-operator-crd/monitoring.coreos.com_servicemonitors.yaml",
+        "https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.79.2/example/prometheus-operator-crd/monitoring.coreos.com_podmonitors.yaml",
+        "https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.79.2/example/prometheus-operator-crd/monitoring.coreos.com_prometheusrules.yaml",
+        "https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.79.2/example/prometheus-operator-crd/monitoring.coreos.com_prometheuses.yaml",
+        "https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.79.2/example/prometheus-operator-crd/monitoring.coreos.com_alertmanagers.yaml"
+      ]
+    },
+    "kyverno": {
+      "accessors": "resource-utils-kyverno.ts",
+      "version": "v1.13.2",
+      "urls": [
+        "https://raw.githubusercontent.com/kyverno/kyverno/v1.13.2/config/crds/kyverno/kyverno.io_clusterpolicies.yaml",
+        "https://raw.githubusercontent.com/kyverno/kyverno/v1.13.2/config/crds/kyverno/kyverno.io_policies.yaml",
+        "https://raw.githubusercontent.com/kyverno/kyverno/v1.13.2/config/crds/kyverno/kyverno.io_policyexceptions.yaml"
+      ]
+    }
+  }
+}

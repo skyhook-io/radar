@@ -1,7 +1,7 @@
 // Kyverno / Policy Report CRD utility functions
 
 import type { StatusBadge } from './resource-utils'
-import { healthColors, formatAge } from './resource-utils'
+import { healthColors } from './resource-utils'
 
 // ============================================================================
 // SHARED HELPERS
@@ -184,7 +184,10 @@ export function getKyvernoPolicyRuleCountByType(resource: any): {
       validate: statusCount.validate ?? 0,
       mutate: statusCount.mutate ?? 0,
       generate: statusCount.generate ?? 0,
-      verifyImages: statusCount.verifyImages ?? 0,
+      // Kyverno spells this one all-lowercase in status while the spec rule is
+      // camelCase, so the obvious read silently counts zero on every policy the
+      // controller has reconciled.
+      verifyImages: statusCount.verifyimages ?? 0,
     }
   }
 
@@ -202,12 +205,6 @@ export function getKyvernoPolicyRuleCountByType(resource: any): {
 export function getKyvernoPolicyAutogenRules(resource: any): string[] {
   const autogen = resource.status?.autogen?.rules || []
   return autogen.map((r: any) => r.name).filter(Boolean)
-}
-
-export function getKyvernoPolicyLastScheduleTime(resource: any): string {
-  const lastSchedule = resource.status?.lastScheduleTime
-  if (!lastSchedule) return '-'
-  return formatAge(lastSchedule)
 }
 
 // ============================================================================

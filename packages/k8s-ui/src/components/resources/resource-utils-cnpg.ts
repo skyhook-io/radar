@@ -368,11 +368,22 @@ export function getCNPGClusterMonitoring(resource: any): {
 }
 
 export function getCNPGClusterIsReplica(resource: any): boolean {
-  return !!resource.spec?.replicaCluster
+  const replica = resource.spec?.replica
+  if (!replica) return false
+  // Presence of the block is not replica-hood: promoting a replica leaves the
+  // block in place and flips `enabled` to false.
+  if (typeof replica.enabled === 'boolean') return replica.enabled
+  // Distributed topology carries no `enabled`. CNPG decides the role by
+  // comparing `self` against `primary`, defaulting `self` to the cluster name.
+  if (replica.primary) {
+    const self = replica.self || resource.metadata?.name
+    return !!self && self !== replica.primary
+  }
+  return false
 }
 
 export function getCNPGClusterReplicaSource(resource: any): string {
-  const replica = resource.spec?.replicaCluster
+  const replica = resource.spec?.replica
   if (!replica) return '-'
   return replica.source || replica.primary || '-'
 }

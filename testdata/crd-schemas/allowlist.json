@@ -1,0 +1,15 @@
+{
+  "$comment": [
+    "Paths the pinned CRDs do not declare but an accessor legitimately reads.",
+    "Every entry needs a reason. Prefer fixing the accessor or bumping the pin;",
+    "an allowlist entry is the right answer only when the path is real and the",
+    "pinned schema genuinely cannot describe it."
+  ],
+  "allow": [
+    {
+      "integration": "karpenter",
+      "path": "status.instanceType",
+      "reason": "karpenter.sh/v1beta1 NodeClaim carried status.instanceType; v1 dropped it in favour of the node.kubernetes.io/instance-type label. getNodeClaimInstanceType reads it first and falls back, so it stays correct on clusters still serving v1beta1. Pinning v1beta1 as well would drag an entire superseded API surface into the path set."
+    }
+  ]
+}
