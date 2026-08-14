@@ -24,10 +24,14 @@ type AgentInfo struct {
 
 // knownAgents are the CLI names we probe for — a FIXED list. We never exec a
 // user-supplied name/path: only these literals, resolved through PATH, are run.
-var knownAgents = []string{"claude", "codex", "gemini", "cursor-agent"}
+// Note "copilot" is GitHub's standalone Copilot CLI, not the older `gh copilot`
+// gh-extension — that one has no headless agent mode and never lands on PATH
+// under this name.
+var knownAgents = []string{"claude", "codex", "gemini", "cursor-agent", "copilot"}
 
 var agentLabels = map[string]string{
-	"claude": "Claude Code", "codex": "Codex", "gemini": "Gemini CLI", "cursor-agent": "Cursor Agent",
+	"claude": "Claude Code", "codex": "Codex", "gemini": "Gemini CLI",
+	"cursor-agent": "Cursor Agent", "copilot": "GitHub Copilot CLI",
 }
 
 // AgentLabel is the display name for an agent CLI — the ONE table every
@@ -70,9 +74,42 @@ func ProfilesFor(agent string) []ExecutionProfile {
 		return []ExecutionProfile{ExecutionProfileSafeguarded, ExecutionProfileFullLocal}
 	case "cursor-agent":
 		return []ExecutionProfile{ExecutionProfileFullLocal}
+	case "copilot":
+		return []ExecutionProfile{ExecutionProfileSafeguarded, ExecutionProfileFullLocal}
 	default:
 		return nil
 	}
+}
+
+// ReasoningEfforts returns the reasoning-effort levels an agent accepts. Kept
+// beside ProfilesFor for the same reason: the API validator, the UI menu, and the
+// arg builder must not drift. The levels are CLI vocabulary, not Radar's — Codex
+// and Copilot name them differently and Copilot's range is wider. An agent with no
+// effort knob returns nil, so only the empty (default) value validates.
+func ReasoningEfforts(agent string) []string {
+	switch agent {
+	case "codex":
+		return []string{"minimal", "low", "medium", "high"}
+	case "copilot":
+		return []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+	default:
+		return nil
+	}
+}
+
+// SupportsEffort reports whether an effort value may be passed to this agent. The
+// empty string (the CLI's own default) is always allowed; anything else must be a
+// listed literal, because the value is interpolated into CLI arguments.
+func SupportsEffort(agent, effort string) bool {
+	if effort == "" {
+		return true
+	}
+	for _, candidate := range ReasoningEfforts(agent) {
+		if candidate == effort {
+			return true
+		}
+	}
+	return false
 }
 
 func DefaultProfileFor(agent string) ExecutionProfile {

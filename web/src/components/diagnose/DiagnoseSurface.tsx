@@ -38,10 +38,10 @@ function capWord(s: string): string {
   return s ? s[0].toUpperCase() + s.slice(1) : s;
 }
 
-// buildConfigLine renders the active AI config as the header subtitle. Codex shows
-// its execution profile + effective reasoning effort (Default → medium); a model
-// override is shown for either agent. Reflects a run's recorded settings, or the
-// current defaults on Home.
+// buildConfigLine renders the active AI config as the header subtitle. The agents
+// with a reasoning-effort knob (Codex, Copilot) show their execution profile +
+// effective effort (Default → medium); a model override is shown for any agent.
+// Reflects a run's recorded settings, or the current defaults on Home.
 function buildConfigLine(cfg: {
   agent?: string;
   profile?: ExecutionProfile;
@@ -54,7 +54,7 @@ function buildConfigLine(cfg: {
       cfg.profile === "full-local" ? "Your agent setup" : "Radar safeguards",
     );
   }
-  if (cfg.agent === "codex") {
+  if (cfg.agent === "codex" || cfg.agent === "copilot") {
     parts.push(`${capWord(cfg.effort || "medium")} effort`);
   }
   if (cfg.model) parts.push(capWord(cfg.model));

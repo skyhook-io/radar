@@ -218,20 +218,18 @@ func (s *Server) handleDiagnoseConsent(w http.ResponseWriter, r *http.Request) {
 // writes the error) when unavailable.
 func (s *Server) aiReady(w http.ResponseWriter) bool {
 	if s.aiRuns == nil {
-		s.writeError(w, http.StatusNotImplemented, "no agent CLI available — install Claude Code, Codex, or Cursor (cursor-agent) to enable AI diagnosis")
+		s.writeError(w, http.StatusNotImplemented, "no agent CLI available — install Claude Code, Codex, Cursor (cursor-agent), or GitHub Copilot (copilot) to enable AI diagnosis")
 		return false
 	}
 	return s.requireConnected(w)
 }
 
-// validReasoningEffort allows the empty (default) value or one of Codex's
-// reasoning-effort levels — never an arbitrary string passed into CLI config.
-func validReasoningEffort(e string) bool {
-	switch e {
-	case "", "minimal", "low", "medium", "high":
-		return true
-	}
-	return false
+// validReasoningEffort allows the empty (default) value or one of the levels the
+// SELECTED agent accepts — never an arbitrary string passed into CLI config, and
+// never one agent's vocabulary handed to another (Copilot has xhigh/max, Codex
+// does not). The per-agent table lives in ai.ReasoningEfforts.
+func validReasoningEffort(agent, e string) bool {
+	return ai.SupportsEffort(agent, e)
 }
 
 // localOriginOK rejects cross-origin POSTs to these state-changing, process-
@@ -311,8 +309,8 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	effort := strings.TrimSpace(body.Effort)
-	if !validReasoningEffort(effort) {
-		s.writeError(w, http.StatusBadRequest, "invalid reasoning effort")
+	if !validReasoningEffort(agent, effort) {
+		s.writeError(w, http.StatusBadRequest, "invalid reasoning effort for this agent")
 		return
 	}
 	// Authoritatively detect whether a GitOps/Helm controller owns this resource, so

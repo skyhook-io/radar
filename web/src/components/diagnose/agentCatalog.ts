@@ -27,4 +27,10 @@ export const SUPPORTED_AGENTS: AgentInstall[] = [
     install: "curl https://cursor.com/install -fsS | bash",
     docs: "https://docs.cursor.com/en/cli/overview",
   },
+  {
+    name: "copilot",
+    label: "GitHub Copilot CLI",
+    install: "npm install -g @github/copilot",
+    docs: "https://docs.github.com/en/copilot/how-tos/use-copilot-agents/use-copilot-cli",
+  },
 ];
