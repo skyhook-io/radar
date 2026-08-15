@@ -369,6 +369,7 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `timeline.retention` | SQLite retention (Go duration; `0` disables) | `168h` |
 | `timeline.maxSize` | SQLite max DB + WAL size before oldest events are pruned (`0` disables) | `800Mi` |
 | `traffic.prometheusUrl` | Manual Prometheus/VictoriaMetrics URL | `""` (auto-discover) |
+| `traffic.hubbleAddress` | Manual Hubble Relay gRPC address (host:port) | `""` (discover; direct-dial the Service, port-forward fallback) |
 | `traffic.prometheusHeadersFromEnv` | Prometheus headers sourced from environment variables, for secret-backed auth headers | `{}` |
 | `persistence.enabled` | Enable PVC for SQLite storage | `false` |
 | `persistence.size` | PVC size | `1Gi` |

@@ -132,6 +132,7 @@ func main() {
 	aiHistory := flag.Bool("ai-history", fileCfg.AIHistoryOr(true), "Persist AI investigations (transcripts + verdicts) to ~/.radar/ai-runs.db so they survive restarts")
 	// Traffic/metrics options
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
+	hubbleAddress := flag.String("hubble-address", fileCfg.HubbleAddress, "Manual Hubble Relay gRPC address (host:port, e.g. hubble-relay.kube-system.svc:80; skips discovery and port-forwarding)")
 	// --prometheus-header Key=Value, repeatable. Defaults populated from
 	// config file; any --prometheus-header flag replaces the file value rather
 	// than merging — matches kubectl semantics (file is the default, CLI wins).
@@ -350,6 +351,7 @@ func main() {
 		PrometheusURL:            *prometheusURL,
 		PrometheusHeaders:        resolvedPrometheusHeaders,
 		PrometheusHeadersFromEnv: promHeadersFromEnv.value(),
+		HubbleAddress:            *hubbleAddress,
 		MCPEnabled:               mcpEnabled,
 		AIHistory:                *aiHistory,
 		AIHistoryDBPath:          fileCfg.AIHistoryDBPath,

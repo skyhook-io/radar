@@ -97,6 +97,9 @@ spec:
             {{- range $k, $v := .Values.traffic.prometheusHeadersFromEnv }}
             - {{ printf "--prometheus-header-from-env=%s=%s" $k $v | quote }}
             {{- end }}
+            {{- if .Values.traffic.hubbleAddress }}
+            - --hubble-address={{ .Values.traffic.hubbleAddress }}
+            {{- end }}
             {{- if not .Values.mcp.enabled }}
             - --no-mcp
             {{- end }}
