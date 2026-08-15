@@ -32,6 +32,9 @@ type Config struct {
 	// Stored in plain text in ~/.radar/config.json — protect the file accordingly.
 	PrometheusHeaders        map[string]string `json:"prometheusHeaders,omitempty"`
 	PrometheusHeadersFromEnv map[string]string `json:"prometheusHeadersFromEnv,omitempty"`
+	// HubbleAddress is a manual Hubble Relay gRPC address (host:port), dialed
+	// directly instead of discovering the relay Service.
+	HubbleAddress string `json:"hubbleAddress,omitempty"`
 	MCP                      *bool             `json:"mcp,omitempty"` // nil = default (true), false = disabled
 	// DebugImage is the image used for ephemeral debug containers and node debug
 	// pods. Empty falls back to busybox:latest; set it to a reachable mirror for

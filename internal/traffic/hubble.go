@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +30,11 @@ const (
 	hubbleRelayService    = "hubble-relay"
 	hubbleRelayLabel      = "k8s-app=hubble-relay"
 	hubbleRelayCertSecret = "hubble-relay-client-certs"
+
+	// directDialBudget caps the direct pass at the relay's Service address
+	// before falling back to port-forwarding. Its real job is the case where
+	// the address resolves but blackholes; unroutable DNS fails fast anyway.
+	directDialBudget = 4 * time.Second
 )
 
 // allowedHTTPHeaders is the curated set of safe, useful HTTP headers to extract.
@@ -45,6 +51,7 @@ type HubbleSource struct {
 	grpcConn       *grpc.ClientConn
 	observerClient observerpb.ObserverClient
 	localPort      int    // Port-forward local port
+	directAddr     string // Address of a live direct (non-port-forward) gRPC connection; empty when port-forwarded
 	currentContext string // K8s context for port-forward validation
 	relayNamespace string // Discovered namespace where hubble-relay lives
 	relayPort      int    // Hubble relay container port (for port-forward)
@@ -314,7 +321,10 @@ func (h *HubbleSource) resolveTargetPort(ctx context.Context, svc *corev1.Servic
 	return 80
 }
 
-// Connect establishes connection to Hubble Relay via port-forward and gRPC
+// Connect establishes a connection to Hubble Relay: a manual --hubble-address
+// is dialed as-is; otherwise the relay's Service address is dialed directly
+// (no pods/portforward RBAC needed), with a port-forward through the API
+// server as the fallback — the primary off-cluster path.
 func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portforward.ConnectionInfo, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -328,14 +338,7 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 	if h.grpcConn != nil && h.currentContext == contextName {
 		// Test the connection
 		if h.testConnection(ctx) {
-			return &portforward.ConnectionInfo{
-				Connected:   true,
-				LocalPort:   h.localPort,
-				Address:     fmt.Sprintf("localhost:%d", h.localPort),
-				Namespace:   namespace,
-				ServiceName: hubbleRelayService,
-				ContextName: contextName,
-			}, nil
+			return h.connectionInfoLocked(namespace, contextName), nil
 		}
 		// Connection lost, clean up
 		h.closeConnectionLocked()
@@ -347,8 +350,27 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 		h.currentContext = contextName
 	}
 
-	// Get the relay port from detection if not already set
-	if h.relayPort == 0 {
+	// Manual address wins: dialed as-is, no fallback — an explicit endpoint
+	// should fail loudly rather than silently connect somewhere else.
+	if manual := hubbleAddress(); manual != "" {
+		log.Printf("[hubble] Dialing configured address %s (--hubble-address)", manual)
+		if connected, lastErr := h.establishGRPC(ctx, manual, addrPort(manual) == 443); !connected {
+			return &portforward.ConnectionInfo{
+				Connected:   false,
+				Namespace:   namespace,
+				ServiceName: hubbleRelayService,
+				Error:       fmt.Sprintf("Failed to connect to Hubble Relay at %s (--hubble-address): %v", manual, lastErr),
+			}, nil
+		}
+		h.directAddr = manual
+		// Drop any leftover traffic port-forward (prior fallback session or
+		// Caretta run) so it can't be misreported as the live connection later.
+		portforward.Stop(portforward.OwnerTraffic)
+		return h.connectionInfoLocked(namespace, contextName), nil
+	}
+
+	// Get the relay ports from detection if not already set
+	if h.relayPort == 0 || h.servicePort == 0 {
 		relaySvc, err := h.k8sClient.CoreV1().Services(namespace).Get(ctx, hubbleRelayService, metav1.GetOptions{})
 		if err != nil {
 			return &portforward.ConnectionInfo{
@@ -357,9 +379,27 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 			}, nil
 		}
 		h.relayPort = h.resolveTargetPort(ctx, relaySvc)
+		h.servicePort = 80
+		if len(relaySvc.Spec.Ports) > 0 {
+			h.servicePort = int(relaySvc.Spec.Ports[0].Port)
+		}
 	}
 
-	// Start port-forward to Hubble Relay
+	// Direct pass: dial the relay's Service address — reachable in-cluster and
+	// on networks that route Service DNS; the reachability of the address
+	// decides, not how the kubeconfig was loaded.
+	serviceAddr := fmt.Sprintf("%s.%s.svc.cluster.local:%d", hubbleRelayService, namespace, h.servicePort)
+	directCtx, cancelDirect := context.WithTimeout(ctx, directDialBudget)
+	directConnected, directErr := h.establishGRPC(directCtx, serviceAddr, h.servicePort == 443)
+	cancelDirect()
+	if directConnected {
+		h.directAddr = serviceAddr
+		portforward.Stop(portforward.OwnerTraffic) // see the manual-address path
+		return h.connectionInfoLocked(namespace, contextName), nil
+	}
+	log.Printf("[hubble] Service address %s not reachable directly (%v); falling back to port-forward", serviceAddr, directErr)
+
+	// Fallback: port-forward through the API server (requires pods/portforward RBAC)
 	log.Printf("[hubble] Starting port-forward to %s/%s:%d", namespace, hubbleRelayService, h.relayPort)
 	connInfo, err := portforward.Start(portforward.OwnerTraffic, ctx, namespace, hubbleRelayService, h.relayPort, contextName)
 	if err != nil {
@@ -375,12 +415,83 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 		return connInfo, nil
 	}
 
-	h.localPort = connInfo.LocalPort
-	grpcAddr := fmt.Sprintf("localhost:%d", h.localPort)
+	// A failed attempt inside establishGRPC resets localPort; restore it after.
+	localPort := connInfo.LocalPort
+	h.localPort = localPort
 
-	// Use service port as heuristic: port 443 suggests TLS, otherwise try plaintext first
-	// This avoids unnecessary latency from failed connection attempts
-	tryTLSFirst := h.servicePort == 443 && h.tlsConfig != nil
+	connected, lastErr := h.establishGRPC(ctx, fmt.Sprintf("localhost:%d", localPort), h.servicePort == 443)
+	if connected {
+		h.localPort = localPort
+		return h.connectionInfoLocked(namespace, contextName), nil
+	}
+
+	// Both attempts failed
+	portforward.Stop(portforward.OwnerTraffic)
+	h.localPort = 0
+	return &portforward.ConnectionInfo{
+		Connected: false,
+		Error:     fmt.Sprintf("Failed to connect to Hubble Relay: %v", lastErr),
+	}, nil
+}
+
+// connectionInfoLocked builds the ConnectionInfo for the current live
+// connection. Caller must hold the lock.
+func (h *HubbleSource) connectionInfoLocked(namespace, contextName string) *portforward.ConnectionInfo {
+	info := &portforward.ConnectionInfo{
+		Connected:   true,
+		Namespace:   namespace,
+		ServiceName: hubbleRelayService,
+		ContextName: contextName,
+	}
+	if h.directAddr != "" {
+		info.Address = h.directAddr
+	} else {
+		info.LocalPort = h.localPort
+		info.Address = fmt.Sprintf("localhost:%d", h.localPort)
+	}
+	return info
+}
+
+// DirectConnectionInfo returns live connection info when this source holds a
+// direct (non-port-forward) connection, nil otherwise — direct connections
+// never appear in the port-forward registry.
+func (h *HubbleSource) DirectConnectionInfo() *portforward.ConnectionInfo {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if !h.isConnected || h.directAddr == "" {
+		return nil
+	}
+	namespace := h.relayNamespace
+	if namespace == "" {
+		namespace = "kube-system"
+	}
+	return &portforward.ConnectionInfo{
+		Connected:   true,
+		Address:     h.directAddr,
+		Namespace:   namespace,
+		ServiceName: hubbleRelayService,
+		ContextName: h.currentContext,
+	}
+}
+
+// addrPort returns the numeric port of a host:port address, 0 if unparseable.
+func addrPort(addr string) int {
+	_, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 0
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return 0
+	}
+	return port
+}
+
+// establishGRPC dials grpcAddr, trying plaintext and TLS in the order tlsHint
+// suggests (true = endpoint looks TLS-terminated, e.g. Service port 443), and
+// installs the connection on success. Caller must hold the lock.
+func (h *HubbleSource) establishGRPC(ctx context.Context, grpcAddr string, tlsHint bool) (bool, error) {
+	tryTLSFirst := tlsHint && h.tlsConfig != nil
 
 	var conn *grpc.ClientConn
 	var lastErr error
@@ -466,32 +577,14 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 		return false
 	}
 
-	// Try connections in order based on service port heuristic
+	// Try connections in order based on the TLS hint
 	var connected bool
 	if tryTLSFirst {
 		connected = tryTLS() || tryPlaintext()
 	} else {
 		connected = tryPlaintext() || tryTLS()
 	}
-
-	if connected {
-		return &portforward.ConnectionInfo{
-			Connected:   true,
-			LocalPort:   h.localPort,
-			Address:     grpcAddr,
-			Namespace:   namespace,
-			ServiceName: hubbleRelayService,
-			ContextName: contextName,
-		}, nil
-	}
-
-	// Both attempts failed
-	portforward.Stop(portforward.OwnerTraffic)
-	h.localPort = 0
-	return &portforward.ConnectionInfo{
-		Connected: false,
-		Error:     fmt.Sprintf("Failed to connect to Hubble Relay: %v", lastErr),
-	}, nil
+	return connected, lastErr
 }
 
 // testConnection tests the gRPC connection by calling ServerStatus
@@ -520,6 +613,7 @@ func (h *HubbleSource) closeConnectionLocked() {
 	h.observerClient = nil
 	h.isConnected = false
 	h.localPort = 0
+	h.directAddr = ""
 }
 
 // GetFlows retrieves flows from Hubble via gRPC

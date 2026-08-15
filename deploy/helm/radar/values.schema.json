@@ -305,6 +305,7 @@
       "additionalProperties": true,
       "properties": {
         "prometheusUrl": { "type": "string" },
+        "hubbleAddress": { "type": "string", "description": "Manual Hubble Relay gRPC address (host:port); skips discovery and port-forwarding." },
         "prometheusHeaders": {
           "type": "object",
           "additionalProperties": { "type": "string" }
