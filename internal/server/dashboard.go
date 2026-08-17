@@ -1639,6 +1639,7 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 	}
 
 	var calicoPolicies []dashboardCalicoPolicy
+	seenCalicoPolicies := make(map[string]struct{})
 	if dynamicCache := k8s.GetDynamicResourceCache(); dynamicCache != nil {
 		if discovery := k8s.GetResourceDiscovery(); discovery != nil {
 			if cnpGVR, ok := discovery.GetGVRWithGroup("CiliumNetworkPolicy", "cilium.io"); ok {
@@ -1709,6 +1710,11 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 						continue
 					}
 					for _, policy := range policies {
+						identity := definition.kind + "\x00" + policy.GetNamespace() + "\x00" + policy.GetName()
+						if _, seen := seenCalicoPolicies[identity]; seen {
+							continue
+						}
+						seenCalicoPolicies[identity] = struct{}{}
 						calicoPolicies = append(calicoPolicies, dashboardCalicoPolicy{policy: policy, namespaced: definition.namespaced, staged: definition.staged})
 					}
 				}

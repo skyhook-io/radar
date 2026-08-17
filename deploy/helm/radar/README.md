@@ -252,6 +252,7 @@ This overrides individual settings below. Simpler but broader — some orgs may 
 | `apiRegistration` | `apiregistration.k8s.io` |
 | `argo` | `argoproj.io` |
 | `awx` | `awx.ansible.com` |
+| `calico` | `projectcalico.org`, `crd.projectcalico.org` |
 | `certManager` | `cert-manager.io`, `acme.cert-manager.io` |
 | `cilium` | `cilium.io` |
 | `cloudnativePg` | `postgresql.cnpg.io`, `barmancloud.cnpg.io` |
@@ -289,7 +290,7 @@ This overrides individual settings below. Simpler but broader — some orgs may 
 | `velero` | `velero.io` |
 | `verticalPodAutoscaler` | `autoscaling.k8s.io` |
 
-**Disable groups:** `--set rbac.crdGroups.istio=false`
+**Disable groups:** `--set rbac.crdGroups.calico=false`
 
 **Add unlisted CRDs:**
 ```yaml

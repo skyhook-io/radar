@@ -1213,15 +1213,15 @@ The [NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-op
 
 ## Network Policies
 
-[Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/) control pod-to-pod and pod-to-external traffic at the network level. Radar supports standard Kubernetes NetworkPolicy as well as Cilium's CiliumNetworkPolicy and CiliumClusterwideNetworkPolicy CRDs, providing visibility into what traffic is allowed, denied, and which workloads are unprotected.
+[Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/) control pod-to-pod and pod-to-external traffic at the network level. Radar supports standard Kubernetes NetworkPolicy, Cilium policies, and [Calico policies](https://docs.tigera.io/calico/latest/network-policy/), providing visibility into what traffic is allowed, denied, and which workloads are unprotected.
 
 ### What Radar Shows
 
-**Topology:** NetworkPolicy and CiliumNetworkPolicy nodes appear in the topology graph with edges connecting them to the workloads they protect. See at a glance which deployments have network policies applied and which are exposed.
+**Topology:** Kubernetes, Cilium, and Calico policy nodes appear in the topology graph with edges connecting them to the Deployments, StatefulSets, and DaemonSets they protect. Calico matching evaluates workload, namespace, and service-account selectors. Staged Calico policies use dashed edges and preview styling so they are not mistaken for enforced protection.
 
 <p align="center">
-  <img src="screenshots/integrations/netpol-topology.png" alt="Network Policy Topology" width="800">
-  <br><em>Network Policies in Topology View — policies connected to protected workloads</em>
+  <img src="screenshots/integrations/calico-policy-topology.png" alt="Calico policy topology" width="900">
+  <br><em>Calico policy topology — enforced relationships use solid edges; staged previews use dashed edges</em>
 </p>
 
 **Policy Flow Diagram:** Each NetworkPolicy detail drawer includes a visual flow diagram showing ingress and egress rules as a directional graph — sources on the left, targets on the right, with ports and protocols labeled. Quickly understand what a policy allows without reading YAML.
@@ -1231,11 +1231,11 @@ The [NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-op
   <br><em>Policy Flow Diagram — visual representation of ingress and egress rules</em>
 </p>
 
-**Dashboard Coverage Card:** The home dashboard includes a Network Policy Coverage card showing total policy count, the percentage of workloads covered by at least one policy, and a count of uncovered workloads. Click through to browse all policies.
+**Dashboard Coverage Card:** The home dashboard includes a Network Policy Coverage card showing total policy count, the percentage of workloads covered by at least one enforced policy, and a count of uncovered workloads. When staged Calico policies exist, it separately shows projected coverage if those policies were applied. Policies exposed through both Calico API groups during an upgrade count once, with `projectcalico.org` preferred over `crd.projectcalico.org`.
 
 <p align="center">
-  <img src="screenshots/integrations/netpol-dashboard-card.png" alt="Network Policy Coverage Card" width="400">
-  <br><em>Dashboard Coverage Card — policy count, coverage percentage, and uncovered workloads</em>
+  <img src="screenshots/integrations/calico-dashboard-coverage.png" alt="Network Policy Coverage Card with staged Calico coverage" width="354">
+  <br><em>Dashboard coverage separates enforced protection from the projected result of applying staged policies</em>
 </p>
 
 **Cilium Policy Detail View:**
@@ -1244,6 +1244,24 @@ The [NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-op
 - Cilium-specific entity selectors (world, cluster, host)
 - CIDR rules, port/protocol specifications
 - Related workloads with clickable links
+
+**Calico Policy Detail View:**
+- Flow diagram for ordered ingress and egress rules, including Allow, Deny, Log, and Pass actions
+- Workload, namespace, and service-account selectors
+- Tier, order, policy types, pre-DNAT, apply-on-forward, and do-not-track settings
+- Calico entities, CIDRs, ports, protocols, HTTP matches, and ICMP matches
+- Staged action and preview styling for staged policy variants
+
+<p align="center">
+  <img src="screenshots/integrations/calico-networkpolicy-detail.png" alt="Calico NetworkPolicy detail" width="380">
+  &nbsp;&nbsp;
+  <img src="screenshots/integrations/calico-staged-policy-detail.png" alt="Calico staged NetworkPolicy detail" width="380">
+  <br><em>Enforced and staged policy flows — staged rules are explicitly marked as evaluated but not enforced</em>
+</p>
+
+**Calico Infrastructure Detail Views:** IPPool details show CIDR, encapsulation, NAT, block size, assignment mode, and node selectors. HostEndpoints show interface, expected IP addresses, profiles, and a link to the owning Node. Tier details show order and default action, and policies link back to their Tier.
+
+Radar recognizes both `projectcalico.org` and `crd.projectcalico.org`. The API group remains part of resource navigation and authorization, which also keeps Calico `NetworkPolicy` distinct from Kubernetes `networking.k8s.io` NetworkPolicy.
 
 <p align="center">
   <img src="screenshots/integrations/netpol-cilium-renderer.png" alt="CiliumNetworkPolicy Detail" width="400">
@@ -1270,6 +1288,18 @@ The [NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-op
 | NetworkPolicy | `networking.k8s.io/v1` | Yes | Yes | Yes |
 | CiliumNetworkPolicy | `cilium.io/v2` | Yes | Yes | Yes |
 | CiliumClusterwideNetworkPolicy | `cilium.io/v2` | Yes | Yes | Yes |
+| NetworkPolicy | `projectcalico.org/v3`, `crd.projectcalico.org/v1` | Yes | Yes | Yes |
+| GlobalNetworkPolicy | `projectcalico.org/v3`, `crd.projectcalico.org/v1` | Yes | Yes | Yes |
+| StagedNetworkPolicy | `projectcalico.org/v3`, `crd.projectcalico.org/v1` | Yes (preview) | Yes | Yes |
+| StagedGlobalNetworkPolicy | `projectcalico.org/v3`, `crd.projectcalico.org/v1` | Yes (preview) | Yes | Yes |
+| StagedKubernetesNetworkPolicy | `projectcalico.org/v3`, `crd.projectcalico.org/v1` | Yes (preview) | Yes | Yes |
+| IPPool | `projectcalico.org/v3`, `crd.projectcalico.org/v1` | No | Yes | Yes |
+| HostEndpoint | `projectcalico.org/v3`, `crd.projectcalico.org/v1` | No | Yes | Yes |
+| Tier | `projectcalico.org/v3`, `crd.projectcalico.org/v1` | No | Yes | Yes |
+
+### Calico Coverage Limits
+
+Radar statically evaluates Calico selectors against workload pod templates and the Namespace and ServiceAccount objects it can read. The result describes declared policy coverage, not live CNI enforcement or packet-level behavior. Missing labels or RBAC-restricted resources can prevent a relationship from being inferred, and staged policies are never included in enforced coverage.
 
 ---
 

@@ -232,6 +232,7 @@ rbac:
     all: false          # Wildcard — grant read access to ALL API groups
     # Individual groups (all default to true):
     argo: true          # argoproj.io
+    calico: true        # projectcalico.org, crd.projectcalico.org
     certManager: true   # cert-manager.io
     flux: true          # *.toolkit.fluxcd.io
     istio: true         # networking.istio.io, security.istio.io
@@ -245,6 +246,8 @@ rbac:
   additionalCrdGroups: []   # Add custom API groups
   additionalRules: []       # Arbitrary extra ClusterRole rules
 ```
+
+Calico access is read-only (`get`, `list`, and `watch`) for both API groups and is enabled by default. Set `rbac.crdGroups.calico=false` to disable it. If chart-managed Calico access is disabled, grant only the resources you need through `rbac.additionalRules`; both groups may be required while a cluster exposes modern and legacy Calico APIs.
 
 ### Graceful RBAC Degradation
 

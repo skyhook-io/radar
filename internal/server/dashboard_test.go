@@ -135,6 +135,7 @@ func TestDashboardCalicoCoverageUsesNamespaceAwareReadsAndCalicoFallback(t *test
 			"podSelector": map[string]any{"matchLabels": map[string]any{"app": "preview"}},
 			"policyTypes": []any{"Ingress"},
 		}),
+		dashboardTestCalicoPolicy(legacyNetworkPolicy, "NetworkPolicy", "ns-a", "frontend-policy", map[string]any{"selector": "app == 'not-frontend'"}),
 		dashboardTestCalicoPolicy(legacyNetworkPolicy, "NetworkPolicy", "ns-c", "preview-legacy", map[string]any{"selector": "app == 'preview'"}),
 	}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds, objects...)
