@@ -226,6 +226,34 @@ func TestApplyClusterScopedTopologyRBACMCPFiltersExactNodeClassProvider(t *testi
 	}
 }
 
+func TestApplyClusterScopedTopologyRBACMCPFiltersCalicoByExactGroup(t *testing.T) {
+	ctx := withTestUserPerms(t, "topology-reader", nil, nil)
+	perms := getPermCache().Get("topology-reader")
+	perms.SetCanI("list", "projectcalico.org", "globalnetworkpolicies", "", true)
+	perms.SetCanI("list", "crd.projectcalico.org", "globalnetworkpolicies", "", false)
+
+	projectID := "calicoglobalnetworkpolicy//shared/projectcalico.org"
+	legacyID := "calicoglobalnetworkpolicy//shared/crd.projectcalico.org"
+	nativeID := "networkpolicy/demo/native"
+	topo := &topology.Topology{
+		Nodes: []topology.Node{
+			{ID: projectID, Kind: topology.KindCalicoGlobalNetworkPolicy, Name: "shared", Data: map[string]any{"apiVersion": "projectcalico.org/v3"}},
+			{ID: legacyID, Kind: topology.KindCalicoGlobalNetworkPolicy, Name: "shared", Data: map[string]any{"apiVersion": "crd.projectcalico.org/v1"}},
+			{ID: nativeID, Kind: topology.KindNetworkPolicy, Name: "native", Data: map[string]any{"namespace": "demo", "apiVersion": "networking.k8s.io/v1"}},
+		},
+	}
+
+	applyClusterScopedTopologyRBAC(ctx, topo)
+	if len(topo.Nodes) != 2 {
+		t.Fatalf("nodes = %+v, want project Calico policy and native NetworkPolicy", topo.Nodes)
+	}
+	for _, node := range topo.Nodes {
+		if node.ID == legacyID {
+			t.Fatal("crd.projectcalico.org policy survived exact MCP topology filtering")
+		}
+	}
+}
+
 // KnativeService is a namespaced pseudo-kind. The cluster-scoped table
 // shouldn't match it; the helper must fall through to the namespaced branch
 // and ride on namespace access alone (no per-kind tightening for Knative).

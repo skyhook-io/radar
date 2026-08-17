@@ -174,6 +174,8 @@ import { CAPIClusterCell, CAPIMachineCell, CAPIMachineDeploymentCell, CAPIMachin
 import { AWSManagedControlPlaneCell, AWSManagedMachinePoolCell, AWSMachineCell, AWSMachineTemplateCell, AWSManagedClusterCell } from './renderers/aws-capi-cells'
 import { GCPManagedControlPlaneCell, GCPManagedMachinePoolCell, GCPMachineCell, GCPMachineTemplateCell, GCPManagedClusterCell } from './renderers/gcp-capi-cells'
 import { AzureManagedControlPlaneCell, AzureManagedMachinePoolCell, AzureMachineCell, AzureMachineTemplateCell, AzureManagedClusterCell } from './renderers/azure-capi-cells'
+import { CalicoPolicyCell } from './renderers/calico-cells'
+import { isCalicoPolicyResource, isCoreNetworkPolicyKind } from './resource-utils-calico'
 import { useRegisterShortcut, useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { ResourcesSidebar } from './ResourcesSidebar'
 import type { SelectedKindInfo } from './ResourcesSidebar'
@@ -941,6 +943,63 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'policyTypes', label: 'Types', width: 'w-28' },
     { key: 'selector', label: 'Pod Selector', width: 'w-48' },
+    { key: 'rules', label: 'Rules', width: 'w-24', tooltip: 'Ingress / Egress rule count' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  caliconetworkpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'selector', label: 'Selector', width: 'w-48' },
+    { key: 'namespaceSelector', label: 'Namespace Selector', width: 'w-48', defaultVisible: false },
+    { key: 'serviceAccountSelector', label: 'Service Account Selector', width: 'w-48', defaultVisible: false },
+    { key: 'tier', label: 'Tier', width: 'w-28' },
+    { key: 'order', label: 'Order', width: 'w-24' },
+    { key: 'types', label: 'Types', width: 'w-28' },
+    { key: 'rules', label: 'Rules', width: 'w-24', tooltip: 'Ingress / Egress rule count' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  calicoglobalnetworkpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'selector', label: 'Selector', width: 'w-48' },
+    { key: 'namespaceSelector', label: 'Namespace Selector', width: 'w-48', defaultVisible: false },
+    { key: 'serviceAccountSelector', label: 'Service Account Selector', width: 'w-48', defaultVisible: false },
+    { key: 'tier', label: 'Tier', width: 'w-28' },
+    { key: 'order', label: 'Order', width: 'w-24' },
+    { key: 'types', label: 'Types', width: 'w-28' },
+    { key: 'rules', label: 'Rules', width: 'w-24', tooltip: 'Ingress / Egress rule count' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  calicostagednetworkpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'selector', label: 'Selector', width: 'w-48' },
+    { key: 'namespaceSelector', label: 'Namespace Selector', width: 'w-48', defaultVisible: false },
+    { key: 'serviceAccountSelector', label: 'Service Account Selector', width: 'w-48', defaultVisible: false },
+    { key: 'tier', label: 'Tier', width: 'w-28' },
+    { key: 'order', label: 'Order', width: 'w-24' },
+    { key: 'stagedAction', label: 'Staged Action', width: 'w-32' },
+    { key: 'types', label: 'Types', width: 'w-28' },
+    { key: 'rules', label: 'Rules', width: 'w-24', tooltip: 'Ingress / Egress rule count' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  calicostagedglobalnetworkpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'selector', label: 'Selector', width: 'w-48' },
+    { key: 'namespaceSelector', label: 'Namespace Selector', width: 'w-48', defaultVisible: false },
+    { key: 'serviceAccountSelector', label: 'Service Account Selector', width: 'w-48', defaultVisible: false },
+    { key: 'tier', label: 'Tier', width: 'w-28' },
+    { key: 'order', label: 'Order', width: 'w-24' },
+    { key: 'stagedAction', label: 'Staged Action', width: 'w-32' },
+    { key: 'types', label: 'Types', width: 'w-28' },
+    { key: 'rules', label: 'Rules', width: 'w-24', tooltip: 'Ingress / Egress rule count' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  calicostagedkubernetesnetworkpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'selector', label: 'Pod Selector', width: 'w-48' },
+    { key: 'stagedAction', label: 'Staged Action', width: 'w-32' },
+    { key: 'types', label: 'Types', width: 'w-28' },
     { key: 'rules', label: 'Rules', width: 'w-24', tooltip: 'Ingress / Egress rule count' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -1989,6 +2048,16 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
 
 // Map (plural, group) → KNOWN_COLUMNS key for kinds that collide with core K8s
 const GROUP_QUALIFIED_COLUMN_KEYS: Record<string, Record<string, string>> = {
+  networkpolicy: {
+    'networking.k8s.io': 'networkpolicies',
+    'projectcalico.org': 'caliconetworkpolicies',
+    'crd.projectcalico.org': 'caliconetworkpolicies',
+  },
+  networkpolicies: {
+    'networking.k8s.io': 'networkpolicies',
+    'projectcalico.org': 'caliconetworkpolicies',
+    'crd.projectcalico.org': 'caliconetworkpolicies',
+  },
   clusters: { 'postgresql.cnpg.io': 'cnpgclusters', 'cluster.x-k8s.io': 'capiclusters' },
   // Velero owns the unqualified `backups` column set; CNPG Backups carry a
   // completely different shape (cluster + method, no storage location/expiry).
@@ -2014,7 +2083,53 @@ const GROUP_QUALIFIED_COLUMN_KEYS: Record<string, Record<string, string>> = {
   imagecatalogs: { 'postgresql.cnpg.io': 'cnpgimagecatalogs' },
   clusterimagecatalogs: { 'postgresql.cnpg.io': 'cnpgclusterimagecatalogs' },
   objectstores: { 'barmancloud.cnpg.io': 'barmanobjectstores' },
+  globalnetworkpolicies: {
+    'projectcalico.org': 'calicoglobalnetworkpolicies',
+    'crd.projectcalico.org': 'calicoglobalnetworkpolicies',
+  },
+  globalnetworkpolicy: {
+    'projectcalico.org': 'calicoglobalnetworkpolicies',
+    'crd.projectcalico.org': 'calicoglobalnetworkpolicies',
+  },
+  stagednetworkpolicies: {
+    'projectcalico.org': 'calicostagednetworkpolicies',
+    'crd.projectcalico.org': 'calicostagednetworkpolicies',
+  },
+  stagednetworkpolicy: {
+    'projectcalico.org': 'calicostagednetworkpolicies',
+    'crd.projectcalico.org': 'calicostagednetworkpolicies',
+  },
+  stagedglobalnetworkpolicies: {
+    'projectcalico.org': 'calicostagedglobalnetworkpolicies',
+    'crd.projectcalico.org': 'calicostagedglobalnetworkpolicies',
+  },
+  stagedglobalnetworkpolicy: {
+    'projectcalico.org': 'calicostagedglobalnetworkpolicies',
+    'crd.projectcalico.org': 'calicostagedglobalnetworkpolicies',
+  },
+  stagedkubernetesnetworkpolicies: {
+    'projectcalico.org': 'calicostagedkubernetesnetworkpolicies',
+    'crd.projectcalico.org': 'calicostagedkubernetesnetworkpolicies',
+  },
+  stagedkubernetesnetworkpolicy: {
+    'projectcalico.org': 'calicostagedkubernetesnetworkpolicies',
+    'crd.projectcalico.org': 'calicostagedkubernetesnetworkpolicies',
+  },
 }
+
+const GROUP_QUALIFIED_ONLY_COLUMN_KEYS = new Set([
+  'networkpolicy', 'networkpolicies',
+  'globalnetworkpolicy', 'globalnetworkpolicies',
+  'stagednetworkpolicy', 'stagednetworkpolicies',
+  'stagedglobalnetworkpolicy', 'stagedglobalnetworkpolicies',
+  'stagedkubernetesnetworkpolicy', 'stagedkubernetesnetworkpolicies',
+])
+const CALICO_ONLY_COLUMN_KEYS = new Set([
+  'globalnetworkpolicy', 'globalnetworkpolicies',
+  'stagednetworkpolicy', 'stagednetworkpolicies',
+  'stagedglobalnetworkpolicy', 'stagedglobalnetworkpolicies',
+  'stagedkubernetesnetworkpolicy', 'stagedkubernetesnetworkpolicies',
+])
 
 // Normalize a kind name to its plural API form used in KNOWN_COLUMNS keys.
 // Handles CRD singular names from URLs: 'ScaledObject' → 'scaledobjects', 'NodePool' → 'nodepools'
@@ -2025,6 +2140,8 @@ function normalizeKindToPlural(kind: string, group?: string): string {
   if (group && GROUP_QUALIFIED_COLUMN_KEYS[lower]?.[group]) {
     return GROUP_QUALIFIED_COLUMN_KEYS[lower][group]
   }
+  if (group && GROUP_QUALIFIED_ONLY_COLUMN_KEYS.has(lower)) return `__generic_${lower}`
+  if (CALICO_ONLY_COLUMN_KEYS.has(lower)) return `__generic_${lower}`
   if (KNOWN_COLUMNS[lower]) return lower
   // Try adding 's' but avoid double-s (e.g., "ingress" → "ingresss")
   if (!lower.endsWith('s') && KNOWN_COLUMNS[lower + 's']) return lower + 's'
@@ -5868,7 +5985,17 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
     case 'clusterworkflowtemplates':
       return <WorkflowTemplateCell resource={resource} column={column} />
     case 'networkpolicies':
+      if (!isCoreNetworkPolicyKind(resource.kind ?? kind, resource.apiVersion, group)) {
+        return <GenericCell resource={resource} column={column} />
+      }
       return <NetworkPolicyCell resource={resource} column={column} />
+    case 'caliconetworkpolicies':
+    case 'calicoglobalnetworkpolicies':
+    case 'calicostagednetworkpolicies':
+    case 'calicostagedglobalnetworkpolicies':
+    case 'calicostagedkubernetesnetworkpolicies':
+      if (!isCalicoPolicyResource(resource)) return <GenericCell resource={resource} column={column} />
+      return <CalicoPolicyCell resource={resource} column={column} />
     case 'poddisruptionbudgets':
       return <PDBCell resource={resource} column={column} />
     case 'serviceaccounts':

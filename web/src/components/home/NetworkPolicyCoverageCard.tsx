@@ -8,9 +8,15 @@ interface NetworkPolicyCoverageCardProps {
 }
 
 export function NetworkPolicyCoverageCard({ data, onNavigate }: NetworkPolicyCoverageCardProps) {
+  const hasStagedPolicies = (data.stagedPolicies ?? 0) > 0
+  const coveredIfStaged = Math.max(data.coveredWorkloads, data.coveredWorkloadsIfStaged ?? data.coveredWorkloads)
   const percentage = data.totalWorkloads > 0
     ? Math.round((data.coveredWorkloads / data.totalWorkloads) * 100)
     : 0
+  const percentageIfStaged = data.totalWorkloads > 0
+    ? Math.round((coveredIfStaged / data.totalWorkloads) * 100)
+    : 0
+  const stagedOnlyPercentage = Math.max(0, percentageIfStaged - percentage)
   const hasPolicies = data.totalPolicies > 0
   const accentColor = !hasPolicies
     ? 'text-theme-text-tertiary'
@@ -54,22 +60,41 @@ export function NetworkPolicyCoverageCard({ data, onNavigate }: NetworkPolicyCov
                       style={{ width: `${percentage}%` }}
                     />
                   )}
-                  {data.totalWorkloads - data.coveredWorkloads > 0 && (
+                  {hasStagedPolicies && stagedOnlyPercentage > 0 && (
+                    <div
+                      className="h-full text-yellow-500"
+                      title={`${coveredIfStaged - data.coveredWorkloads} additional workloads if staged policies are applied`}
+                      style={{
+                        width: `${stagedOnlyPercentage}%`,
+                        backgroundImage: 'repeating-linear-gradient(135deg, currentColor 0, currentColor 2px, transparent 2px, transparent 5px)',
+                      }}
+                    />
+                  )}
+                  {data.totalWorkloads - coveredIfStaged > 0 && (
                     <div
                       className="h-full bg-theme-hover"
-                      style={{ width: `${100 - percentage}%` }}
+                      style={{ width: `${100 - percentageIfStaged}%` }}
                     />
                   )}
                 </div>
-                <span className={clsx('text-sm font-semibold tabular-nums', accentColor)}>
-                  {percentage}%
-                </span>
+                <div className="flex shrink-0 flex-col items-end tabular-nums">
+                  <span className={clsx('text-sm font-semibold', accentColor)}>{percentage}%</span>
+                  {hasStagedPolicies && (
+                    <span className="text-[10px] text-theme-text-tertiary">({percentageIfStaged}% if staged applied)</span>
+                  )}
+                </div>
               </div>
 
               <div className="grid grid-cols-1 gap-y-2 mt-4 w-full">
                 <StatRow label="Policies" value={data.totalPolicies} />
                 <StatRow label="Covered workloads" value={data.coveredWorkloads} total={data.totalWorkloads} />
+                {hasStagedPolicies && (
+                  <StatRow label="Covered if staged" value={coveredIfStaged} total={data.totalWorkloads} />
+                )}
                 <StatRow label="Uncovered workloads" value={data.totalWorkloads - data.coveredWorkloads} warn />
+                {hasStagedPolicies && (
+                  <StatRow label="Uncovered if staged" value={data.totalWorkloads - coveredIfStaged} warn />
+                )}
               </div>
             </>
           )}

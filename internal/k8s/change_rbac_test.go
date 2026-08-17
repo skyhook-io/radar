@@ -36,6 +36,8 @@ func TestResolveChangeGVR_StaticCatalogue(t *testing.T) {
 		{"ClusterRole no hint", "ClusterRole", "", "rbac.authorization.k8s.io", "clusterroles", true, true},
 		{"webhook cfg cluster-scoped", "ValidatingWebhookConfiguration", "", "admissionregistration.k8s.io", "validatingwebhookconfigurations", true, true},
 		{"PersistentVolume cluster-scoped", "PersistentVolume", "", "", "persistentvolumes", true, true},
+		{"Calico global policy", "GlobalNetworkPolicy", "projectcalico.org", "projectcalico.org", "globalnetworkpolicies", true, true},
+		{"Calico legacy staged global policy", "StagedGlobalNetworkPolicy", "crd.projectcalico.org", "crd.projectcalico.org", "stagedglobalnetworkpolicies", true, true},
 		// CRD colliding on Kind with a builtin: hint group disagrees → static
 		// catalogue skipped, no discovery → fail closed (NOT the builtin GVR).
 		{"ClusterRole CRD collision fails closed", "ClusterRole", "example.com", "", "", false, false},

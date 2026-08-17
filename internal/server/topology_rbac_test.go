@@ -36,3 +36,33 @@ func TestApplyClusterScopedTopologyRBACFiltersNodeClassesByExactProvider(t *test
 		t.Fatal("NodeClass re-entered the kind-level deny set")
 	}
 }
+
+func TestApplyClusterScopedTopologyRBACFiltersCalicoByExactGroup(t *testing.T) {
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	perms := &auth.UserPermissions{AllowedNamespaces: nil}
+	perms.SetCanI("list", "projectcalico.org", "globalnetworkpolicies", "", true)
+	perms.SetCanI("list", "crd.projectcalico.org", "globalnetworkpolicies", "", false)
+	s.permCache.Set("alice", perms)
+	r := requestWithUser("GET", "/api/topology", &auth.User{Username: "alice"})
+
+	projectID := "calicoglobalnetworkpolicy//shared/projectcalico.org"
+	legacyID := "calicoglobalnetworkpolicy//shared/crd.projectcalico.org"
+	nativeID := "networkpolicy/demo/native"
+	topo := &topology.Topology{
+		Nodes: []topology.Node{
+			{ID: projectID, Kind: topology.KindCalicoGlobalNetworkPolicy, Name: "shared", Data: map[string]any{"apiVersion": "projectcalico.org/v3"}},
+			{ID: legacyID, Kind: topology.KindCalicoGlobalNetworkPolicy, Name: "shared", Data: map[string]any{"apiVersion": "crd.projectcalico.org/v1"}},
+			{ID: nativeID, Kind: topology.KindNetworkPolicy, Name: "native", Data: map[string]any{"namespace": "demo", "apiVersion": "networking.k8s.io/v1"}},
+		},
+	}
+
+	s.applyClusterScopedTopologyRBAC(r, topo)
+	if len(topo.Nodes) != 2 {
+		t.Fatalf("nodes = %+v, want project Calico policy and native NetworkPolicy", topo.Nodes)
+	}
+	for _, node := range topo.Nodes {
+		if node.ID == legacyID {
+			t.Fatal("crd.projectcalico.org policy survived exact REST topology filtering")
+		}
+	}
+}

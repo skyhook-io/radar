@@ -80,6 +80,12 @@ import {
   getRevisionStatus,
 } from '../resources/resource-utils-knative'
 import { getHTTPProxyStatus } from '../resources/resource-utils-contour'
+import {
+  isCalicoApiVersion,
+  isCalicoPolicyKind,
+  isCalicoStagedKubernetesNetworkPolicyKind,
+  isCoreNetworkPolicyKind,
+} from '../resources/resource-utils-calico'
 import { getClusterStatus as getCAPIClusterStatus, getMachineStatus, getMachineDeploymentStatus, getMachineSetStatus, getMachinePoolStatus, getKCPStatus, getClusterClassStatus, getMachineHealthCheckStatus } from '../resources/resource-utils-capi'
 import { getAWSMCPStatus, getAWSMMPStatus, getAWSMachineStatus, getAWSManagedClusterStatus } from '../resources/resource-utils-aws-capi'
 import { getGCPMCPStatus, getGCPMMPStatus, getGCPMachineStatus, getGCPManagedClusterStatus } from '../resources/resource-utils-gcp-capi'
@@ -251,6 +257,7 @@ import {
   NvidiaDriverRenderer,
   CalicoHostEndpointRenderer,
   CalicoIPPoolRenderer,
+  CalicoNetworkPolicyRenderer,
   CalicoTierRenderer,
 } from '../resources/renderers'
 import type { ComposedRefStatus } from '../resources/renderers/CompositeRenderer'
@@ -390,6 +397,10 @@ const KNOWN_KINDS = new Set([
   'orders', 'challenges',
   'gateways', 'gatewayclasses', 'httproutes', 'grpcroutes', 'tcproutes', 'tlsroutes', 'sealedsecrets', 'workflowtemplates', 'clusterworkflowtemplates',
   'networkpolicies', 'networkpolicy',
+  'globalnetworkpolicies', 'globalnetworkpolicy',
+  'stagednetworkpolicies', 'stagednetworkpolicy',
+  'stagedglobalnetworkpolicies', 'stagedglobalnetworkpolicy',
+  'stagedkubernetesnetworkpolicies', 'stagedkubernetesnetworkpolicy',
   'ciliumnetworkpolicies', 'ciliumnetworkpolicy', 'ciliumclusterwidenetworkpolicies', 'ciliumclusterwidenetworkpolicy',
   'clusternetworkpolicies', 'clusternetworkpolicy',
   'poddisruptionbudgets', 'serviceaccounts', 'namespaces',
@@ -627,14 +638,17 @@ export function ResourceRendererDispatch({
     || (kind === 'policies' && isApiGroup(data?.apiVersion, 'kyverno.io'))
   const groupGatedFallthrough = isGroupGatedKind && !groupGatedMatched
 
-  const isCalicoApiVersion = (
-    data?.apiVersion?.startsWith('crd.projectcalico.org/')
-    || data?.apiVersion?.startsWith('projectcalico.org/')
-  )
-  const isCalicoHostEndpoint = kind === 'hostendpoints' && isCalicoApiVersion
-  const isCalicoIPPool = kind === 'ippools' && isCalicoApiVersion
-  const isCalicoTier = kind === 'tiers' && isCalicoApiVersion
-  const calicoCollisionFallthrough = (kind === 'hostendpoints' || kind === 'ippools' || kind === 'tiers') && !isCalicoApiVersion
+  const calicoApiVersionMatched = isCalicoApiVersion(data?.apiVersion)
+  const isCalicoPolicy = isCalicoPolicyKind(kind) && calicoApiVersionMatched
+  const isCalicoStagedKubernetesPolicy =
+    isCalicoPolicy && isCalicoStagedKubernetesNetworkPolicyKind(kind)
+  const isCoreNetworkPolicy = isCoreNetworkPolicyKind(kind, data?.apiVersion, resource.group)
+  const isCalicoHostEndpoint = kind === 'hostendpoints' && calicoApiVersionMatched
+  const isCalicoIPPool = kind === 'ippools' && calicoApiVersionMatched
+  const isCalicoTier = kind === 'tiers' && calicoApiVersionMatched
+  const calicoCollisionFallthrough = (
+    isCalicoPolicyKind(kind) || kind === 'hostendpoints' || kind === 'ippools' || kind === 'tiers'
+  ) && !isCoreNetworkPolicy && !((isCalicoPolicy || isCalicoHostEndpoint || isCalicoIPPool || isCalicoTier))
 
   const isKnownKind = KNOWN_KINDS.has(kind) || isCrossplaneMR || isCrossplaneClaim || isCrossplaneXR
 
@@ -719,7 +733,9 @@ export function ResourceRendererDispatch({
         {kind === 'tlsroutes' && <SimpleRouteRenderer data={data} kind="TLSRoute" onNavigate={onNavigate} />}
         {kind === 'sealedsecrets' && <SealedSecretRenderer data={data} onNavigate={onNavigate} />}
         {(kind === 'workflowtemplates' || kind === 'clusterworkflowtemplates') && <WorkflowTemplateRenderer data={data} />}
-        {(kind === 'networkpolicies' || kind === 'networkpolicy') && <NetworkPolicyRenderer data={data} />}
+        {isCoreNetworkPolicy && <NetworkPolicyRenderer data={data} />}
+        {isCalicoStagedKubernetesPolicy && <NetworkPolicyRenderer data={data} staged />}
+        {isCalicoPolicy && !isCalicoStagedKubernetesPolicy && <CalicoNetworkPolicyRenderer data={data} onNavigate={onNavigate} />}
         {(kind === 'ciliumnetworkpolicies' || kind === 'ciliumnetworkpolicy' || kind === 'ciliumclusterwidenetworkpolicies' || kind === 'ciliumclusterwidenetworkpolicy') && <CiliumNetworkPolicyRenderer data={data} />}
         {(kind === 'clusternetworkpolicies' || kind === 'clusternetworkpolicy') && <ClusterNetworkPolicyRenderer data={data} />}
         {kind === 'poddisruptionbudgets' && <PodDisruptionBudgetRenderer data={data} />}

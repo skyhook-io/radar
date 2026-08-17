@@ -100,6 +100,11 @@ export function kindToPlural(kind: string): string {
     horizontalpodautoscaler: 'horizontalpodautoscalers',
     pvc: 'persistentvolumeclaims',
     podgroup: 'pods',
+    caliconetworkpolicy: 'networkpolicies',
+    calicoglobalnetworkpolicy: 'globalnetworkpolicies',
+    calicostagednetworkpolicy: 'stagednetworkpolicies',
+    calicostagedglobalnetworkpolicy: 'stagedglobalnetworkpolicies',
+    calicostagedkubernetesnetworkpolicy: 'stagedkubernetesnetworkpolicies',
   }
   if (aliases[kindLower]) return aliases[kindLower]
 

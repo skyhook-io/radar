@@ -27,6 +27,9 @@ func TestKindForGVK(t *testing.T) {
 		{"capi cluster", "Cluster", "cluster.x-k8s.io", "capicluster"},
 		// Istio Gateway collision (vs Gateway API's gateway.networking.k8s.io/Gateway).
 		{"istio gateway", "Gateway", "networking.istio.io", "istiogateway"},
+		{"calico network policy", "NetworkPolicy", "projectcalico.org", "caliconetworkpolicy"},
+		{"calico legacy global policy", "globalnetworkpolicies", "crd.projectcalico.org", "calicoglobalnetworkpolicy"},
+		{"calico staged Kubernetes policy", "StagedKubernetesNetworkPolicy", "projectcalico.org", "calicostagedkubernetesnetworkpolicy"},
 
 		// Pass-through: core kinds (group == "").
 		{"core service passthrough", "Service", "", "Service"},

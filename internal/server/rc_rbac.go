@@ -76,6 +76,9 @@ func lookupResourceName(kind, group string) string {
 	if kind == "" {
 		return ""
 	}
+	if clusterScoped, _, resource := k8s.ClassifyKindScope(kind, group); clusterScoped {
+		return resource
+	}
 	if g, r, ok := k8s.ClusterOnlyKindGVR(kind); ok && (group == "" || group == g) {
 		return r
 	}

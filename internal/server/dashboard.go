@@ -397,12 +397,12 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	k8s.LogTiming("  [dashboard] changes: %v", time.Since(t))
 
 	t = time.Now()
-	resp.TopologySummary = s.getDashboardTopologySummary(namespaces)
+	resp.TopologySummary = s.getDashboardTopologySummary(r, namespaces)
 	k8s.LogTiming("  [dashboard] topology: %v", time.Since(t))
 
 	// Cert health is derived from TLS Secrets — gate by per-user secrets RBAC.
 	resp.CertificateHealth = s.getDashboardCertificateHealth(s.secretReadableNamespaces(r, namespaces))
-	resp.NetworkPolicyCoverage = s.getDashboardNetworkPolicyCoverage(cache, namespaces)
+	resp.NetworkPolicyCoverage = s.getDashboardNetworkPolicyCoverage(r, cache, namespaces)
 	resp.Audit = getDashboardAudit(cache, namespaces)
 	resp.GitOpsControllers = s.getDashboardGitOpsControllers(cache, namespaces)
 
@@ -1171,28 +1171,30 @@ func (s *Server) getDashboardRecentChanges(ctx context.Context, namespaces []str
 	return result
 }
 
-func (s *Server) getDashboardTopologySummary(namespaces []string) DashboardTopologySummary {
+func (s *Server) getDashboardTopologySummary(r *http.Request, namespaces []string) DashboardTopologySummary {
+	var topo *topology.Topology
 	// Use cached topology only when no namespace filter is active,
 	// since the cached topology's namespace scope may not match the request.
-	if namespaces == nil {
+	if namespaces == nil && s.broadcaster != nil {
 		if cachedTopo := s.broadcaster.GetCachedTopology(); cachedTopo != nil {
-			return DashboardTopologySummary{
-				NodeCount: len(cachedTopo.Nodes),
-				EdgeCount: len(cachedTopo.Edges),
-			}
+			topo = cloneTopology(cachedTopo)
 		}
 	}
 
-	// Build topology with the requested namespace filter
-	opts := topology.DefaultBuildOptions()
-	opts.Namespaces = namespaces
-	builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(k8s.GetResourceCache())).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
-	topo, err := builder.Build(opts)
-	if err != nil {
-		log.Printf("[dashboard] Failed to build topology summary: %v", err)
-		return DashboardTopologySummary{}
+	if topo == nil {
+		// Build topology with the requested namespace filter
+		opts := topology.DefaultBuildOptions()
+		opts.Namespaces = namespaces
+		builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(k8s.GetResourceCache())).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
+		var err error
+		topo, err = builder.Build(opts)
+		if err != nil {
+			log.Printf("[dashboard] Failed to build topology summary: %v", err)
+			return DashboardTopologySummary{}
+		}
 	}
 
+	s.applyClusterScopedTopologyRBAC(r, topo)
 	return DashboardTopologySummary{
 		NodeCount: len(topo.Nodes),
 		EdgeCount: len(topo.Edges),
@@ -1557,9 +1559,11 @@ func mergeCRDCounts(a, b []DashboardCRDCount) []DashboardCRDCount {
 
 // DashboardNetworkPolicyCoverage reports how many workloads are covered by at least one NetworkPolicy.
 type DashboardNetworkPolicyCoverage struct {
-	TotalPolicies    int `json:"totalPolicies"`
-	CoveredWorkloads int `json:"coveredWorkloads"`
-	TotalWorkloads   int `json:"totalWorkloads"`
+	TotalPolicies            int `json:"totalPolicies"`
+	StagedPolicies           int `json:"stagedPolicies,omitempty"`
+	CoveredWorkloads         int `json:"coveredWorkloads"`
+	CoveredWorkloadsIfStaged int `json:"coveredWorkloadsIfStaged,omitempty"`
+	TotalWorkloads           int `json:"totalWorkloads"`
 }
 
 type npSelector struct {
@@ -1567,32 +1571,47 @@ type npSelector struct {
 	selector  labels.Selector
 }
 
-func (s *Server) getDashboardNetworkPolicyCoverage(cache *k8s.ResourceCache, namespaces []string) *DashboardNetworkPolicyCoverage {
-	npLister := cache.NetworkPolicies()
-	if npLister == nil {
-		return nil
+type dashboardCalicoPolicy struct {
+	policy     *unstructured.Unstructured
+	namespaced bool
+	staged     bool
+}
+
+type dashboardPolicyWorkload struct {
+	key            string
+	namespace      string
+	labels         map[string]string
+	serviceAccount string
+}
+
+func (s *Server) dashboardPolicyReadScope(r *http.Request, namespaces []string, group, resource string) (clusterWide bool, readable []string) {
+	allNamespaces := namespaces == nil || (len(namespaces) == 0 && auth.UserFromContext(r.Context()) == nil)
+	if allNamespaces {
+		return s.canRead(r, group, resource, "", "list"), nil
 	}
+	if len(namespaces) == 0 {
+		return false, nil
+	}
+	for _, namespace := range namespaces {
+		if s.canRead(r, group, resource, namespace, "list") {
+			readable = append(readable, namespace)
+		}
+	}
+	return false, readable
+}
+
+func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.ResourceCache, namespaces []string) *DashboardNetworkPolicyCoverage {
+	npLister := cache.NetworkPolicies()
+	allNamespaces := namespaces == nil || (len(namespaces) == 0 && auth.UserFromContext(r.Context()) == nil)
 
 	var allNPs []npSelector
-	if len(namespaces) == 0 {
-		nps, err := npLister.List(labels.Everything())
-		if err != nil {
-			log.Printf("[dashboard] Failed to list NetworkPolicies: %v", err)
-			return nil
-		}
-		for _, np := range nps {
-			sel, err := metav1.LabelSelectorAsSelector(&np.Spec.PodSelector)
+	if npLister != nil {
+		clusterWide, readableNamespaces := s.dashboardPolicyReadScope(r, namespaces, "", "networkpolicies")
+		if clusterWide {
+			nps, err := npLister.List(labels.Everything())
 			if err != nil {
-				continue
-			}
-			allNPs = append(allNPs, npSelector{np.Namespace, sel})
-		}
-	} else {
-		for _, ns := range namespaces {
-			nps, err := npLister.NetworkPolicies(ns).List(labels.Everything())
-			if err != nil {
-				log.Printf("[dashboard] Failed to list NetworkPolicies in namespace %s: %v", ns, err)
-				continue
+				log.Printf("[dashboard] Failed to list NetworkPolicies: %v", err)
+				return nil
 			}
 			for _, np := range nps {
 				sel, err := metav1.LabelSelectorAsSelector(&np.Spec.PodSelector)
@@ -1601,21 +1620,40 @@ func (s *Server) getDashboardNetworkPolicyCoverage(cache *k8s.ResourceCache, nam
 				}
 				allNPs = append(allNPs, npSelector{np.Namespace, sel})
 			}
+		} else {
+			for _, ns := range readableNamespaces {
+				nps, err := npLister.NetworkPolicies(ns).List(labels.Everything())
+				if err != nil {
+					log.Printf("[dashboard] Failed to list NetworkPolicies in namespace %s: %v", ns, err)
+					continue
+				}
+				for _, np := range nps {
+					sel, err := metav1.LabelSelectorAsSelector(&np.Spec.PodSelector)
+					if err != nil {
+						continue
+					}
+					allNPs = append(allNPs, npSelector{np.Namespace, sel})
+				}
+			}
 		}
 	}
 
+	var calicoPolicies []dashboardCalicoPolicy
 	if dynamicCache := k8s.GetDynamicResourceCache(); dynamicCache != nil {
 		if discovery := k8s.GetResourceDiscovery(); discovery != nil {
-			if cnpGVR, ok := discovery.GetGVR("CiliumNetworkPolicy"); ok {
-				nsFilter := ""
-				if len(namespaces) == 1 {
-					nsFilter = namespaces[0]
+			if cnpGVR, ok := discovery.GetGVRWithGroup("CiliumNetworkPolicy", "cilium.io"); ok {
+				clusterWide, readableNamespaces := s.dashboardPolicyReadScope(r, namespaces, cnpGVR.Group, cnpGVR.Resource)
+				var cnps []*unstructured.Unstructured
+				var err error
+				if clusterWide {
+					cnps, err = dynamicCache.List(cnpGVR, "")
+				} else if len(readableNamespaces) > 0 {
+					cnps, err = dynamicCache.ListNamespaces(cnpGVR, readableNamespaces)
 				}
-				cnps, err := dynamicCache.List(cnpGVR, nsFilter)
 				if err == nil {
 					for _, cnp := range cnps {
 						ns := cnp.GetNamespace()
-						if len(namespaces) > 1 && !slices.Contains(namespaces, ns) {
+						if !clusterWide && !slices.Contains(readableNamespaces, ns) {
 							continue
 						}
 						selectorMap, _, _ := unstructured.NestedMap(cnp.Object, "spec", "endpointSelector", "matchLabels")
@@ -1635,78 +1673,188 @@ func (s *Server) getDashboardNetworkPolicyCoverage(cache *k8s.ResourceCache, nam
 					}
 				}
 			}
+
+			calicoDefinitions := []struct {
+				kind       string
+				namespaced bool
+				staged     bool
+			}{
+				{kind: "NetworkPolicy", namespaced: true},
+				{kind: "GlobalNetworkPolicy"},
+				{kind: "StagedNetworkPolicy", namespaced: true, staged: true},
+				{kind: "StagedGlobalNetworkPolicy", staged: true},
+				{kind: "StagedKubernetesNetworkPolicy", namespaced: true, staged: true},
+			}
+			for _, group := range []string{"projectcalico.org", "crd.projectcalico.org"} {
+				for _, definition := range calicoDefinitions {
+					gvr, ok := discovery.GetGVRWithGroup(definition.kind, group)
+					if !ok {
+						continue
+					}
+					var policies []*unstructured.Unstructured
+					var err error
+					if definition.namespaced {
+						clusterWide, readableNamespaces := s.dashboardPolicyReadScope(r, namespaces, group, gvr.Resource)
+						if clusterWide {
+							policies, err = dynamicCache.List(gvr, "")
+						} else if len(readableNamespaces) > 0 {
+							policies, err = dynamicCache.ListNamespaces(gvr, readableNamespaces)
+						}
+					} else {
+						if s.canRead(r, group, gvr.Resource, "", "list") {
+							policies, err = dynamicCache.List(gvr, "")
+						}
+					}
+					if err != nil {
+						continue
+					}
+					for _, policy := range policies {
+						calicoPolicies = append(calicoPolicies, dashboardCalicoPolicy{policy: policy, namespaced: definition.namespaced, staged: definition.staged})
+					}
+				}
+			}
 		}
 	}
 
-	covered := make(map[string]bool)
-	totalWorkloads := 0
-
-	checkCoverage := func(kind, ns, name string, templateLabels map[string]string) {
-		key := kind + "/" + ns + "/" + name
-		totalWorkloads++
-		for _, np := range allNPs {
-			if np.namespace != ns {
-				continue
-			}
-			if np.selector.Matches(labels.Set(templateLabels)) {
-				covered[key] = true
-				break
-			}
+	workloads := make([]dashboardPolicyWorkload, 0)
+	addWorkload := func(kind, ns, name string, templateLabels map[string]string, serviceAccount string) {
+		if serviceAccount == "" {
+			serviceAccount = "default"
 		}
+		workloads = append(workloads, dashboardPolicyWorkload{
+			key:            kind + "/" + ns + "/" + name,
+			namespace:      ns,
+			labels:         templateLabels,
+			serviceAccount: serviceAccount,
+		})
 	}
 
 	if depLister := cache.Deployments(); depLister != nil {
-		if len(namespaces) == 0 {
+		if allNamespaces {
 			deps, _ := depLister.List(labels.Everything())
 			for _, d := range deps {
-				checkCoverage("Deployment", d.Namespace, d.Name, d.Spec.Template.Labels)
+				addWorkload("Deployment", d.Namespace, d.Name, d.Spec.Template.Labels, d.Spec.Template.Spec.ServiceAccountName)
 			}
 		} else {
 			for _, ns := range namespaces {
 				deps, _ := depLister.Deployments(ns).List(labels.Everything())
 				for _, d := range deps {
-					checkCoverage("Deployment", d.Namespace, d.Name, d.Spec.Template.Labels)
+					addWorkload("Deployment", d.Namespace, d.Name, d.Spec.Template.Labels, d.Spec.Template.Spec.ServiceAccountName)
 				}
 			}
 		}
 	}
 
 	if stsLister := cache.StatefulSets(); stsLister != nil {
-		if len(namespaces) == 0 {
+		if allNamespaces {
 			stss, _ := stsLister.List(labels.Everything())
 			for _, s := range stss {
-				checkCoverage("StatefulSet", s.Namespace, s.Name, s.Spec.Template.Labels)
+				addWorkload("StatefulSet", s.Namespace, s.Name, s.Spec.Template.Labels, s.Spec.Template.Spec.ServiceAccountName)
 			}
 		} else {
 			for _, ns := range namespaces {
 				stss, _ := stsLister.StatefulSets(ns).List(labels.Everything())
 				for _, s := range stss {
-					checkCoverage("StatefulSet", s.Namespace, s.Name, s.Spec.Template.Labels)
+					addWorkload("StatefulSet", s.Namespace, s.Name, s.Spec.Template.Labels, s.Spec.Template.Spec.ServiceAccountName)
 				}
 			}
 		}
 	}
 
 	if dsLister := cache.DaemonSets(); dsLister != nil {
-		if len(namespaces) == 0 {
+		if allNamespaces {
 			dss, _ := dsLister.List(labels.Everything())
 			for _, d := range dss {
-				checkCoverage("DaemonSet", d.Namespace, d.Name, d.Spec.Template.Labels)
+				addWorkload("DaemonSet", d.Namespace, d.Name, d.Spec.Template.Labels, d.Spec.Template.Spec.ServiceAccountName)
 			}
 		} else {
 			for _, ns := range namespaces {
 				dss, _ := dsLister.DaemonSets(ns).List(labels.Everything())
 				for _, d := range dss {
-					checkCoverage("DaemonSet", d.Namespace, d.Name, d.Spec.Template.Labels)
+					addWorkload("DaemonSet", d.Namespace, d.Name, d.Spec.Template.Labels, d.Spec.Template.Spec.ServiceAccountName)
 				}
 			}
 		}
 	}
 
+	covered := make(map[string]bool)
+	coveredIfStaged := make(map[string]bool)
+	namespaceLabels := make(map[string]map[string]string)
+	if namespaceLister := cache.Namespaces(); namespaceLister != nil {
+		if items, err := namespaceLister.List(labels.Everything()); err == nil {
+			for _, namespace := range items {
+				itemLabels := make(map[string]string, len(namespace.Labels)+2)
+				for key, value := range namespace.Labels {
+					itemLabels[key] = value
+				}
+				itemLabels["kubernetes.io/metadata.name"] = namespace.Name
+				itemLabels["projectcalico.org/name"] = namespace.Name
+				namespaceLabels[namespace.Name] = itemLabels
+			}
+		}
+	}
+	serviceAccountLabels := make(map[string]map[string]string)
+	if serviceAccountLister := cache.ServiceAccounts(); serviceAccountLister != nil {
+		if items, err := serviceAccountLister.List(labels.Everything()); err == nil {
+			for _, account := range items {
+				itemLabels := make(map[string]string, len(account.Labels)+2)
+				for key, value := range account.Labels {
+					itemLabels[key] = value
+				}
+				itemLabels["projectcalico.org/name"] = account.Name
+				itemLabels["kubernetes.io/service-account.name"] = account.Name
+				serviceAccountLabels[account.Namespace+"/"+account.Name] = itemLabels
+			}
+		}
+	}
+
+	for _, workload := range workloads {
+		for _, np := range allNPs {
+			if np.namespace == workload.namespace && np.selector.Matches(labels.Set(workload.labels)) {
+				covered[workload.key] = true
+				coveredIfStaged[workload.key] = true
+				break
+			}
+		}
+		calicoEndpointLabels := topology.CalicoEndpointLabels(workload.namespace, workload.labels)
+		for _, policy := range calicoPolicies {
+			if policy.namespaced && policy.policy.GetNamespace() != workload.namespace {
+				continue
+			}
+			policyLabels := calicoEndpointLabels
+			if strings.EqualFold(policy.policy.GetKind(), "StagedKubernetesNetworkPolicy") {
+				policyLabels = workload.labels
+			}
+			matched, valid := topology.CalicoPolicyMatchesWorkload(
+				policy.policy,
+				policyLabels,
+				namespaceLabels[workload.namespace],
+				workload.serviceAccount,
+				serviceAccountLabels[workload.namespace+"/"+workload.serviceAccount],
+			)
+			if !valid || !matched {
+				continue
+			}
+			coveredIfStaged[workload.key] = true
+			if !policy.staged {
+				covered[workload.key] = true
+			}
+		}
+	}
+
+	stagedPolicies := 0
+	for _, policy := range calicoPolicies {
+		if policy.staged {
+			stagedPolicies++
+		}
+	}
+
 	return &DashboardNetworkPolicyCoverage{
-		TotalPolicies:    len(allNPs),
-		CoveredWorkloads: len(covered),
-		TotalWorkloads:   totalWorkloads,
+		TotalPolicies:            len(allNPs) + len(calicoPolicies),
+		StagedPolicies:           stagedPolicies,
+		CoveredWorkloads:         len(covered),
+		CoveredWorkloadsIfStaged: len(coveredIfStaged),
+		TotalWorkloads:           len(workloads),
 	}
 }
 

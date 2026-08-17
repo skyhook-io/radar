@@ -1,6 +1,6 @@
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../api/config'
-import { kindToPlural } from '@skyhook-io/k8s-ui/utils/navigation'
-import type { SelectedResource } from '@skyhook-io/k8s-ui/types/core'
+import { apiVersionToGroup, kindToPlural } from '@skyhook-io/k8s-ui/utils/navigation'
+import type { SelectedResource, Topology } from '@skyhook-io/k8s-ui/types/core'
 import type { SearchHit } from '../api/client'
 
 /**
@@ -16,6 +16,48 @@ export function searchHitToSelectedResource(hit: SearchHit): SelectedResource {
 // Re-export shared navigation utilities from @skyhook-io/k8s-ui.
 export { kindToPlural, pluralToKind, refToSelectedResource, apiVersionToGroup } from '@skyhook-io/k8s-ui/utils/navigation'
 export type { NavigateToResource } from '@skyhook-io/k8s-ui/utils/navigation'
+
+const NETWORK_POLICY_TOPOLOGY_KINDS = new Set([
+  'NetworkPolicy',
+  'CalicoNetworkPolicy',
+  'CalicoGlobalNetworkPolicy',
+  'CalicoStagedNetworkPolicy',
+  'CalicoStagedGlobalNetworkPolicy',
+  'CalicoStagedKubernetesNetworkPolicy',
+  'CiliumNetworkPolicy',
+  'CiliumClusterwideNetworkPolicy',
+  'ClusterNetworkPolicy',
+])
+
+function networkPolicyGroup(node: Topology['nodes'][number]): string | undefined {
+  const apiVersionGroup = apiVersionToGroup(node.data.apiVersion as string | undefined)
+  if (apiVersionGroup) return apiVersionGroup
+
+  const sourceGroup = node.data.sourceGroup
+  if (typeof sourceGroup === 'string' && sourceGroup) return sourceGroup
+
+  if (node.kind === 'NetworkPolicy') return 'networking.k8s.io'
+  return undefined
+}
+
+/** Return a resource route only when the policy aggregate has one target. */
+export function getNetworkPolicyResourceTarget(topology: Topology | null): { kind: string; group?: string } | undefined {
+  const targets = new Map<string, { kind: string; group?: string }>()
+  for (const node of topology?.nodes ?? []) {
+    if (!NETWORK_POLICY_TOPOLOGY_KINDS.has(node.kind)) continue
+
+    const group = networkPolicyGroup(node)
+    const target = {
+      kind: kindToPlural(node.kind),
+      ...(group ? { group } : {}),
+    }
+    targets.set(`${target.kind}\u0000${target.group ?? ''}`, target)
+  }
+
+  if (targets.size !== 1) return undefined
+  for (const target of targets.values()) return target
+  return undefined
+}
 
 /**
  * Build a /workload/:kind/:namespace/:name URL, preserving the API group as a

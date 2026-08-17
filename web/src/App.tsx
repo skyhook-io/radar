@@ -65,6 +65,7 @@ import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNam
 import { SettingsDialog, type SettingsSectionId } from './components/settings/SettingsDialog'
 import type { APIResource, TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, TopologyMode, Topology, K8sEvent } from './types'
 import { kindToPlural, pluralToKind, openExternal, apiVersionToGroup, relatedResourcePath, searchHitToSelectedResource } from './utils/navigation'
+import { findSelectedTopologyNode } from './utils/topology-selection'
 import { type OmnibarHandle } from './components/ui/Omnibar'
 import { RadarOmnibar } from './components/ui/RadarOmnibar'
 import type { ContextSwitcherHandle } from './components/ContextSwitcher'
@@ -1605,12 +1606,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // collisions — rebuilding the string can't match those reliably.
   const selectedNodeId = useMemo(() => {
     if (!selectedResource) return undefined
-    const ns = selectedResource.namespace || ''
-    const match = topology?.nodes.find(n =>
-      ((n.data.namespace as string) || '') === ns &&
-      n.name === selectedResource.name &&
-      (kindToPlural(n.kind) === selectedResource.kind || n.kind === selectedResource.kind)
-    )
+    const match = findSelectedTopologyNode(topology, selectedResource)
     return match?.id
   }, [selectedResource, topology])
 

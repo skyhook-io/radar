@@ -68,15 +68,15 @@ const EDGE_LEGEND: { label: string; color: string }[] = [
 // Memoized edge style cache to avoid creating new objects on every render
 const edgeStyleCache = new Map<string, React.CSSProperties>()
 
-function getEdgeStyle(type: string, isTrafficView: boolean, isTrafficEdge: boolean, animated: boolean): React.CSSProperties {
-  const cacheKey = `${type}-${isTrafficView}-${isTrafficEdge}-${animated}`
+function getEdgeStyle(type: string, isTrafficView: boolean, isTrafficEdge: boolean, animated: boolean, partial: boolean): React.CSSProperties {
+  const cacheKey = `${type}-${isTrafficView}-${isTrafficEdge}-${animated}-${partial}`
   let style = edgeStyleCache.get(cacheKey)
   if (!style) {
     const edgeColor = getEdgeColor(type, isTrafficView)
     style = {
       stroke: edgeColor,
       strokeWidth: isTrafficView ? 2 : 1.5,
-      strokeDasharray: isTrafficView && isTrafficEdge && animated ? '5 5' : undefined,
+      strokeDasharray: partial ? '6 3' : isTrafficView && isTrafficEdge && animated ? '5 5' : undefined,
     }
     edgeStyleCache.set(cacheKey, style)
   }
@@ -168,7 +168,7 @@ function buildEdges(
     // label in the key: two route edges between the same source/target/type but
     // with different outcomes (one verified, one unreachable) are DISTINCT routes -
     // collapsing them would drop the failing route from the diagram.
-    const edgeId = `${source}-${target}-${edge.type}${edge.reachOutcome ? `-${edge.reachOutcome}` : ''}${edge.label ? `-${edge.label}` : ''}`
+    const edgeId = `${source}-${target}-${edge.type}${edge.partial ? '-partial' : ''}${edge.reachOutcome ? `-${edge.reachOutcome}` : ''}${edge.label ? `-${edge.label}` : ''}`
     if (seenEdgeIds.has(edgeId)) continue
     seenEdgeIds.add(edgeId)
 
@@ -176,7 +176,7 @@ function buildEdges(
     const edgeColor = reach ? (REACH_COLORS[reach] || '#94a3b8') : getEdgeColor(edge.type, isTrafficView)
     const isTrafficEdge = edge.type === 'routes-to' || edge.type === 'exposes'
     // A reachability edge never animates (a dashed "blocked" must not look like flow).
-    const animated = enableAnimations && isTrafficView && isTrafficEdge && !reach
+    const animated = enableAnimations && isTrafficView && isTrafficEdge && !reach && !edge.partial
 
     edges.push({
       id: edgeId,
@@ -196,7 +196,7 @@ function buildEdges(
         width: 12,
         height: 12,
       },
-      style: reach ? reachEdgeStyle(reach) : getEdgeStyle(edge.type, isTrafficView, isTrafficEdge, animated),
+      style: reach ? reachEdgeStyle(reach) : getEdgeStyle(edge.type, isTrafficView, isTrafficEdge, animated, edge.partial === true),
     })
   }
 

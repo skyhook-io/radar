@@ -1451,11 +1451,15 @@ func handleGetTopology(ctx context.Context, req *mcp.CallToolRequest, input topo
 // NodeKinds the calling user cannot list. Walks topology.ClusterScopedKinds
 // (centralized table — see pkg/topology/cluster_scoped_kinds.go). Reuses
 // canReadClusterScopedKind's per-user canI cache so subsequent topology
-// calls within the same TTL don't re-SAR.
+// calls within the same TTL don't re-SAR. Calico policy kinds are filtered
+// separately by exact API group because both Calico APIs share one NodeKind.
 func deniedClusterScopedTopoKinds(ctx context.Context) map[topology.NodeKind]bool {
 	deny := make(map[topology.NodeKind]bool)
 	for _, ck := range topology.ClusterScopedKinds {
 		if ck.Kind == topology.KindNodeClass {
+			continue
+		}
+		if topology.IsCalicoPolicyKind(ck.Kind) {
 			continue
 		}
 		if !canReadClusterScopedKind(ctx, ck.Resource, ck.Group, "list") {
@@ -1472,6 +1476,13 @@ func applyClusterScopedTopologyRBAC(ctx context.Context, topo *topology.Topology
 	if deny := deniedClusterScopedTopoKinds(ctx); len(deny) > 0 {
 		topo.StripNodeKinds(deny)
 	}
+	allowedCalico := make(map[topology.SARTuple]bool)
+	for _, tuple := range topo.CalicoPolicyRBACTuples() {
+		if canReadInNamespace(ctx, tuple.Group, tuple.Resource, tuple.Namespace, "list") {
+			allowedCalico[tuple] = true
+		}
+	}
+	topo.StripCalicoPoliciesExcept(allowedCalico)
 	allowedNodeClasses := make(map[topology.SARTuple]bool)
 	for _, tuple := range topo.NodeClassRBACTuples() {
 		if canReadInNamespace(ctx, tuple.Group, tuple.Resource, "", "list") {

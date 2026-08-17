@@ -40,6 +40,10 @@ var ClusterScopedKinds = []ClusterScopedKindEntry{
 	{KindClusterWorkflowTemplate, "argoproj.io", "clusterworkflowtemplates"},
 	{KindCiliumClusterwideNetworkPolicy, "cilium.io", "ciliumclusterwidenetworkpolicies"},
 	{KindClusterNetworkPolicy, "policy.networking.k8s.io", "clusternetworkpolicies"},
+	{KindCalicoGlobalNetworkPolicy, "projectcalico.org", "globalnetworkpolicies"},
+	{KindCalicoGlobalNetworkPolicy, "crd.projectcalico.org", "globalnetworkpolicies"},
+	{KindCalicoStagedGlobalNetworkPolicy, "projectcalico.org", "stagedglobalnetworkpolicies"},
+	{KindCalicoStagedGlobalNetworkPolicy, "crd.projectcalico.org", "stagedglobalnetworkpolicies"},
 }
 
 // SARTuple is a (group, resource, namespace) triple suitable for handing to
@@ -268,10 +272,25 @@ func RBACTuplesForNode(n *Node, disc PseudoKindDiscoveryLookup) (decision NodeRB
 	}
 	ns := nodeNamespaceFromData(n)
 	if ns != "" {
+		if IsCalicoPolicyKind(n.Kind) {
+			tuple, ok := CalicoPolicyRBACTuple(n)
+			if !ok {
+				return NodeRBACDeny, nil
+			}
+			return NodeRBACCheckTuples, []SARTuple{tuple}
+		}
 		if n.Kind == KindSecret {
 			return NodeRBACCheckTuples, []SARTuple{{Group: "", Resource: "secrets", Namespace: ns}}
 		}
 		return NodeRBACAllow, nil
+	}
+
+	if IsCalicoPolicyKind(n.Kind) {
+		tuple, ok := CalicoPolicyRBACTuple(n)
+		if !ok {
+			return NodeRBACDeny, nil
+		}
+		return NodeRBACCheckTuples, []SARTuple{tuple}
 	}
 
 	// NodeClass provider kinds are open-ended. The builder resolves each

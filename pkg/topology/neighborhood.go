@@ -398,6 +398,9 @@ func edgeTypesForAuto(rootKind NodeKind) map[EdgeType]bool {
 	// Policies / protectors: who they attach to.
 	case KindNetworkPolicy, KindCiliumNetworkPolicy,
 		KindCiliumClusterwideNetworkPolicy, KindClusterNetworkPolicy,
+		KindCalicoNetworkPolicy, KindCalicoGlobalNetworkPolicy,
+		KindCalicoStagedNetworkPolicy, KindCalicoStagedGlobalNetworkPolicy,
+		KindCalicoStagedKubernetesNetworkPolicy,
 		KindPDB, KindMachineHealthCheck,
 		KindPeerAuthentication, KindAuthorizationPolicy:
 		return policyEdgeTypes()
@@ -514,6 +517,19 @@ func pseudoKindFor(kind, group string) string {
 		switch strings.ToLower(kind) {
 		case "gateway", "gateways":
 			return string(KindIstioGateway)
+		}
+	case "projectcalico.org", "crd.projectcalico.org":
+		switch strings.ToLower(kind) {
+		case "networkpolicy", "networkpolicies", "caliconetworkpolicy":
+			return string(KindCalicoNetworkPolicy)
+		case "globalnetworkpolicy", "globalnetworkpolicies", "calicoglobalnetworkpolicy":
+			return string(KindCalicoGlobalNetworkPolicy)
+		case "stagednetworkpolicy", "stagednetworkpolicies", "calicostagednetworkpolicy":
+			return string(KindCalicoStagedNetworkPolicy)
+		case "stagedglobalnetworkpolicy", "stagedglobalnetworkpolicies", "calicostagedglobalnetworkpolicy":
+			return string(KindCalicoStagedGlobalNetworkPolicy)
+		case "stagedkubernetesnetworkpolicy", "stagedkubernetesnetworkpolicies", "calicostagedkubernetesnetworkpolicy":
+			return string(KindCalicoStagedKubernetesNetworkPolicy)
 		}
 	}
 	return kind

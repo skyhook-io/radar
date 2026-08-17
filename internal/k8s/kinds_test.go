@@ -101,6 +101,31 @@ func TestClassifyKindScope_StaticCatalogue(t *testing.T) {
 	if clusterScoped {
 		t.Error("nodes with a foreign group must not resolve to the builtin (collision guard)")
 	}
+
+	for _, tc := range []struct {
+		kind, group, resource string
+	}{
+		{"GlobalNetworkPolicy", "projectcalico.org", "globalnetworkpolicies"},
+		{"globalnetworkpolicies", "projectcalico.org", "globalnetworkpolicies"},
+		{"CalicoGlobalNetworkPolicy", "projectcalico.org", "globalnetworkpolicies"},
+		{"StagedGlobalNetworkPolicy", "projectcalico.org", "stagedglobalnetworkpolicies"},
+		{"stagedglobalnetworkpolicies", "projectcalico.org", "stagedglobalnetworkpolicies"},
+		{"CalicoStagedGlobalNetworkPolicy", "projectcalico.org", "stagedglobalnetworkpolicies"},
+		{"GlobalNetworkPolicy", "crd.projectcalico.org", "globalnetworkpolicies"},
+		{"globalnetworkpolicies", "crd.projectcalico.org", "globalnetworkpolicies"},
+		{"CalicoGlobalNetworkPolicy", "crd.projectcalico.org", "globalnetworkpolicies"},
+		{"StagedGlobalNetworkPolicy", "crd.projectcalico.org", "stagedglobalnetworkpolicies"},
+		{"stagedglobalnetworkpolicies", "crd.projectcalico.org", "stagedglobalnetworkpolicies"},
+		{"CalicoStagedGlobalNetworkPolicy", "crd.projectcalico.org", "stagedglobalnetworkpolicies"},
+	} {
+		clusterScoped, gotGroup, gotResource := ClassifyKindScope(tc.kind, tc.group)
+		if !clusterScoped || gotGroup != tc.group || gotResource != tc.resource {
+			t.Errorf("%s/%s: got (%v, %q, %q), want (true, %q, %q)", tc.group, tc.kind, clusterScoped, gotGroup, gotResource, tc.group, tc.resource)
+		}
+	}
+	if clusterScoped, _, _ := ClassifyKindScope("GlobalNetworkPolicy", "example.com"); clusterScoped {
+		t.Error("GlobalNetworkPolicy with an unrelated group must not resolve to Calico")
+	}
 }
 
 func TestClassifyKindScope_NoDiscovery(t *testing.T) {

@@ -132,6 +132,7 @@ rbac:
     awx: true               # awx.ansible.com
     certManager: true       # cert-manager.io, acme.cert-manager.io
     cilium: true            # cilium.io (CiliumClusterwideNetworkPolicy etc. in topology)
+    calico: true             # projectcalico.org and crd.projectcalico.org (Calico policies)
     cloudnativePg: true     # postgresql.cnpg.io, barmancloud.cnpg.io (CloudNativePG: Clusters, Poolers, Backups, ObjectStores)
     clusterApi: true        # *.cluster.x-k8s.io (CAPI core + infrastructure / controlplane / bootstrap / addons)
     contour: true           # projectcontour.io

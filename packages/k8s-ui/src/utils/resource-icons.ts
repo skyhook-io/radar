@@ -97,6 +97,11 @@ const KIND_ICON_MAP: Record<string, LucideIcon> = {
   service: Plug,
   ingress: DoorOpen,
   networkpolicy: ShieldCheck,
+  caliconetworkpolicy: ShieldCheck,
+  calicoglobalnetworkpolicy: ShieldCheck,
+  calicostagednetworkpolicy: ShieldCheck,
+  calicostagedglobalnetworkpolicy: ShieldCheck,
+  calicostagedkubernetesnetworkpolicy: ShieldCheck,
   ciliumnetworkpolicy: ShieldCheck,
   ciliumclusterwidenetworkpolicy: ShieldCheck,
   clusternetworkpolicy: ShieldCheck,
@@ -292,16 +297,33 @@ const GROUP_QUALIFIED_KIND_ICONS: Record<string, Record<string, LucideIcon>> = {
   backup: { 'postgresql.cnpg.io': DatabaseBackup },
   scheduledbackup: { 'postgresql.cnpg.io': DatabaseBackup },
   pooler: { 'postgresql.cnpg.io': Waypoints },
+  networkpolicy: {
+    'networking.k8s.io': ShieldCheck,
+    'crd.projectcalico.org': ShieldCheck,
+    'projectcalico.org': ShieldCheck,
+  },
   hostendpoint: { 'crd.projectcalico.org': Network, 'projectcalico.org': Network },
   ippool: { 'crd.projectcalico.org': Network, 'projectcalico.org': Network },
   tier: { 'crd.projectcalico.org': Network, 'projectcalico.org': Network },
+  globalnetworkpolicy: { 'crd.projectcalico.org': ShieldCheck, 'projectcalico.org': ShieldCheck },
+  stagednetworkpolicy: { 'crd.projectcalico.org': ShieldCheck, 'projectcalico.org': ShieldCheck },
+  stagedglobalnetworkpolicy: { 'crd.projectcalico.org': ShieldCheck, 'projectcalico.org': ShieldCheck },
+  stagedkubernetesnetworkpolicy: { 'crd.projectcalico.org': ShieldCheck, 'projectcalico.org': ShieldCheck },
+}
+
+const TOPOLOGY_KIND_ICONS: Record<string, LucideIcon> = {
+  CalicoNetworkPolicy: ShieldCheck,
+  CalicoGlobalNetworkPolicy: ShieldCheck,
+  CalicoStagedNetworkPolicy: ShieldCheck,
+  CalicoStagedGlobalNetworkPolicy: ShieldCheck,
+  CalicoStagedKubernetesNetworkPolicy: ShieldCheck,
 }
 
 export function getResourceIcon(kind: string, group?: string): LucideIcon {
   const k = kind.toLowerCase()
   if (group) {
-    const byGroup = GROUP_QUALIFIED_KIND_ICONS[k]?.[group]
-    if (byGroup) return byGroup
+    const groupMap = GROUP_QUALIFIED_KIND_ICONS[k]
+    if (groupMap) return groupMap[group] ?? DEFAULT_RESOURCE_ICON
   }
   return KIND_ICON_MAP[k] ?? Puzzle
 }
@@ -310,6 +332,7 @@ export function getResourceIcon(kind: string, group?: string): LucideIcon {
 export function getTopologyIcon(kind: string): LucideIcon {
   if (kind === 'Internet') return Globe
   if (kind === 'PodGroup') return Boxes
+  if (TOPOLOGY_KIND_ICONS[kind]) return TOPOLOGY_KIND_ICONS[kind]
   return getResourceIcon(kind)
 }
 

@@ -169,7 +169,8 @@ func TestClientCanSeeChange_Authorizer(t *testing.T) {
 	allowed := map[string]bool{
 		"|pods|a":       true, // core pods in ns a
 		"|configmaps|a": true,
-		"rbac.authorization.k8s.io|clusterroles|": true, // cluster-scoped clusterroles
+		"rbac.authorization.k8s.io|clusterroles|":  true, // cluster-scoped clusterroles
+		"projectcalico.org|globalnetworkpolicies|": true, // exact Calico group
 	}
 	authorize := func(group, resource, namespace, verb string) bool {
 		return allowed[group+"|"+resource+"|"+namespace]
@@ -194,6 +195,8 @@ func TestClientCanSeeChange_Authorizer(t *testing.T) {
 		// Gap B: cluster-scoped kind outside the topology denied set.
 		{"clusterroles allowed by SAR", "", "rbac.authorization.k8s.io", "clusterroles", "ClusterRole", true},
 		{"webhookconfigs denied by SAR", "", "admissionregistration.k8s.io", "validatingwebhookconfigurations", "ValidatingWebhookConfiguration", false},
+		{"Calico project group allowed", "", "projectcalico.org", "globalnetworkpolicies", "GlobalNetworkPolicy", true},
+		{"Calico CRD group denied", "", "crd.projectcalico.org", "globalnetworkpolicies", "GlobalNetworkPolicy", false},
 		// Unresolved kind (empty resource) fails closed under auth.
 		{"unresolved namespaced kind fails closed", "a", "", "", "MysteryCRD", false},
 		{"unresolved cluster-scoped kind fails closed", "", "", "", "MysteryCRD", false},
@@ -204,5 +207,23 @@ func TestClientCanSeeChange_Authorizer(t *testing.T) {
 				t.Fatalf("clientCanSeeChange(ns=%q, %q/%q) = %v, want %v", tc.namespace, tc.group, tc.resource, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestAuthorizedCalicoPolicyTuplesFilterSSETopologyByExactGroup(t *testing.T) {
+	projectID := "calicoglobalnetworkpolicy//shared/projectcalico.org"
+	legacyID := "calicoglobalnetworkpolicy//shared/crd.projectcalico.org"
+	topo := &topology.Topology{Nodes: []topology.Node{
+		{ID: projectID, Kind: topology.KindCalicoGlobalNetworkPolicy, Name: "shared", Data: map[string]any{"apiVersion": "projectcalico.org/v3"}},
+		{ID: legacyID, Kind: topology.KindCalicoGlobalNetworkPolicy, Name: "shared", Data: map[string]any{"apiVersion": "crd.projectcalico.org/v1"}},
+	}}
+
+	allowed := authorizedCalicoPolicyTuples(topo, func(group, resource, namespace, verb string) bool {
+		return group == "projectcalico.org" && resource == "globalnetworkpolicies" && namespace == "" && verb == "list"
+	})
+	filtered := cloneTopology(topo)
+	filtered.StripCalicoPoliciesExcept(allowed)
+	if len(filtered.Nodes) != 1 || filtered.Nodes[0].ID != projectID {
+		t.Fatalf("SSE Calico filter nodes = %+v, want project group only", filtered.Nodes)
 	}
 }

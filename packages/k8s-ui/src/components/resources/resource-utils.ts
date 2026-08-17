@@ -16,6 +16,7 @@ import { getBackupStatus as _getBackupStatus, getRestoreStatus as _getRestoreSta
 import { getExternalSecretStatus as _getExternalSecretStatus, getClusterExternalSecretStatus as _getClusterExternalSecretStatus, getSecretStoreStatus as _getSecretStoreStatus, getClusterSecretStoreStatus as _getClusterSecretStoreStatus, getSecretStoreProviderType as _getSecretStoreProviderType } from './resource-utils-eso'
 import { getHPATableState, hpaStatusFromState } from './resource-utils-hpa'
 import { getCNPGClusterStatus as _getCNPGClusterStatus, getCNPGBackupStatus as _getCNPGBackupStatus, getCNPGScheduledBackupStatus as _getCNPGScheduledBackupStatus, getCNPGPoolerStatus as _getCNPGPoolerStatus, isApiGroup as _isApiGroup, CNPG_GROUP as _CNPG_GROUP } from './resource-utils-cnpg'
+import { getCalicoPolicyNamespaceSelector, getCalicoPolicyRuleCount, getCalicoPolicySelector, getCalicoPolicyServiceAccountSelector, getCalicoPolicyTypes, isCalicoPolicyResource } from './resource-utils-calico'
 
 // ============================================================================
 // STATUS & HEALTH UTILITIES
@@ -2200,6 +2201,33 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       return getServiceAccountAutomount(resource)
     case 'policyTypes':
       return getNetworkPolicyTypes(resource)
+    case 'types':
+      if (isCalicoPolicyResource(resource)) return getCalicoPolicyTypes(resource).join(', ')
+      break
+    case 'selector':
+      if (isCalicoPolicyResource(resource)) return getCalicoPolicySelector(resource)
+      break
+    case 'namespaceSelector':
+      if (isCalicoPolicyResource(resource)) return getCalicoPolicyNamespaceSelector(resource)
+      break
+    case 'serviceAccountSelector':
+      if (isCalicoPolicyResource(resource)) return getCalicoPolicyServiceAccountSelector(resource)
+      break
+    case 'tier':
+      if (isCalicoPolicyResource(resource)) return String(resource.spec?.tier ?? 'default')
+      break
+    case 'order':
+      if (isCalicoPolicyResource(resource) && resource.spec?.order !== undefined) return String(resource.spec.order)
+      break
+    case 'stagedAction':
+      if (isCalicoPolicyResource(resource)) return String(resource.spec?.stagedAction ?? '')
+      break
+    case 'rules':
+      if (isCalicoPolicyResource(resource)) {
+        const counts = getCalicoPolicyRuleCount(resource)
+        return `${counts.ingress}i / ${counts.egress}e`
+      }
+      break
     case 'node':
       return resource.spec?.nodeName || ''
     case 'version':

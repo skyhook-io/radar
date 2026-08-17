@@ -34,6 +34,11 @@ const RESOURCE_KINDS: {
   { kind: 'TCPRoute', label: 'TCPRoute', icon: getTopologyIcon('TCPRoute'), color: 'text-purple-300', category: 'networking' },
   { kind: 'TLSRoute', label: 'TLSRoute', icon: getTopologyIcon('TLSRoute'), color: 'text-purple-300', category: 'networking' },
   { kind: 'Service', label: 'Service', icon: getTopologyIcon('Service'), color: 'text-blue-400', category: 'networking' },
+  { kind: 'CalicoNetworkPolicy', label: 'Calico NetworkPolicy', icon: getTopologyIcon('CalicoNetworkPolicy'), color: 'text-teal-400', category: 'custom' },
+  { kind: 'CalicoGlobalNetworkPolicy', label: 'Calico GlobalNetworkPolicy', icon: getTopologyIcon('CalicoGlobalNetworkPolicy'), color: 'text-teal-400', category: 'custom' },
+  { kind: 'CalicoStagedNetworkPolicy', label: 'Calico StagedNetworkPolicy', icon: getTopologyIcon('CalicoStagedNetworkPolicy'), color: 'text-amber-400', category: 'custom' },
+  { kind: 'CalicoStagedGlobalNetworkPolicy', label: 'Calico StagedGlobalNetworkPolicy', icon: getTopologyIcon('CalicoStagedGlobalNetworkPolicy'), color: 'text-amber-400', category: 'custom' },
+  { kind: 'CalicoStagedKubernetesNetworkPolicy', label: 'Calico StagedKubernetesNetworkPolicy', icon: getTopologyIcon('CalicoStagedKubernetesNetworkPolicy'), color: 'text-amber-400', category: 'custom' },
 
   // Workloads
   { kind: 'Deployment', label: 'Deployment', icon: getTopologyIcon('Deployment'), color: 'text-emerald-400', category: 'workloads' },

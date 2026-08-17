@@ -508,7 +508,9 @@ export interface DashboardCertificateHealth {
 
 export interface DashboardNetworkPolicyCoverage {
   totalPolicies: number;
+  stagedPolicies?: number;
   coveredWorkloads: number;
+  coveredWorkloadsIfStaged?: number;
   totalWorkloads: number;
 }
 

@@ -1,5 +1,7 @@
 package topology
 
+import "strings"
+
 // KindForGVK maps a (kind, group) pair to the topology-internal pseudo-kind
 // the builder uses for node IDs. The topology builder synthesizes pseudo-kinds
 // for a handful of CRDs whose Kind collides with a core kind under a different
@@ -18,30 +20,47 @@ package topology
 //	serving.knative.dev/Route         → "knativeroute"
 //	cluster.x-k8s.io/Cluster          → "capicluster"
 //	networking.istio.io/Gateway       → "istiogateway"
+//	projectcalico.org/NetworkPolicy   → "caliconetworkpolicy"
+//	projectcalico.org/GlobalNetworkPolicy → "calicoglobalnetworkpolicy"
+//	projectcalico.org/StagedNetworkPolicy → "calicostagednetworkpolicy"
+//	projectcalico.org/StagedGlobalNetworkPolicy → "calicostagedglobalnetworkpolicy"
 //
 // For any other (kind, group) pair — including core kinds with group=="" and
 // non-colliding CRDs — KindForGVK returns kind unchanged. buildNodeID's own
 // kindMap then handles URL-plural-to-singular flattening.
 func KindForGVK(kind, group string) string {
-	switch group {
+	switch strings.ToLower(group) {
 	case "serving.knative.dev":
-		switch kind {
-		case "Service":
+		switch strings.ToLower(kind) {
+		case "service", "services":
 			return "knativeservice"
-		case "Configuration":
+		case "configuration", "configurations":
 			return "knativeconfiguration"
-		case "Revision":
+		case "revision", "revisions":
 			return "knativerevision"
-		case "Route":
+		case "route", "routes":
 			return "knativeroute"
 		}
 	case "cluster.x-k8s.io":
-		if kind == "Cluster" {
+		if strings.EqualFold(kind, "Cluster") || strings.EqualFold(kind, "Clusters") {
 			return "capicluster"
 		}
 	case "networking.istio.io":
-		if kind == "Gateway" {
+		if strings.EqualFold(kind, "Gateway") || strings.EqualFold(kind, "Gateways") {
 			return "istiogateway"
+		}
+	case "projectcalico.org", "crd.projectcalico.org":
+		switch strings.ToLower(kind) {
+		case "networkpolicy", "networkpolicies", "caliconetworkpolicy":
+			return "caliconetworkpolicy"
+		case "globalnetworkpolicy", "globalnetworkpolicies", "calicoglobalnetworkpolicy":
+			return "calicoglobalnetworkpolicy"
+		case "stagednetworkpolicy", "stagednetworkpolicies", "calicostagednetworkpolicy":
+			return "calicostagednetworkpolicy"
+		case "stagedglobalnetworkpolicy", "stagedglobalnetworkpolicies", "calicostagedglobalnetworkpolicy":
+			return "calicostagedglobalnetworkpolicy"
+		case "stagedkubernetesnetworkpolicy", "stagedkubernetesnetworkpolicies", "calicostagedkubernetesnetworkpolicy":
+			return "calicostagedkubernetesnetworkpolicy"
 		}
 	}
 	return kind

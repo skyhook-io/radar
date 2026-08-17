@@ -506,6 +506,9 @@ export function WorkloadView({
       Service: 1, Ingress: 1, HTTPRoute: 1,
       ConfigMap: 2, Secret: 2,
       HorizontalPodAutoscaler: 3, PodDisruptionBudget: 3, NetworkPolicy: 3,
+      CalicoNetworkPolicy: 3, CalicoGlobalNetworkPolicy: 3,
+      CalicoStagedNetworkPolicy: 3, CalicoStagedGlobalNetworkPolicy: 3,
+      CalicoStagedKubernetesNetworkPolicy: 3,
       ReplicaSet: 4, Pod: 5,
     }
     return neighborhood.nodes

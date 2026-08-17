@@ -693,13 +693,14 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() {
 			maxEstimated = int64(topo.EstimatedNodes)
 		}
 
-		// A synthesized NodeClass kind, and cluster-scoped Crossplane XR/MR
-		// nodes, each contain independently authorized provider APIs. Regroup
-		// against the exact tuples present in this build, then marshal once per
-		// effective provider permission set.
+		// A synthesized NodeClass kind, cluster-scoped Crossplane XR/MR nodes,
+		// and Calico policy nodes each contain independently authorized provider
+		// APIs. Regroup against the exact tuples present in this build, then
+		// marshal once per effective provider permission set.
 		type nodeClassGroup struct {
 			allowed        map[topology.SARTuple]bool
 			allowedDynamic map[topology.SARTuple]bool
+			allowedCalico  map[topology.SARTuple]bool
 			channels       []chan SSEEvent
 		}
 		nodeClassGroups := make(map[string]*nodeClassGroup)
@@ -707,9 +708,10 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() {
 			authorize := nodeClassAuthorizer(info.Authorize)
 			allowed := authorizedNodeClassTuples(topo, authorize)
 			allowedDynamic := authorizedClusterScopedDynamicTuples(topo, authorize)
-			authKey := nodeClassTuplesKey(allowed) + "\x02" + nodeClassTuplesKey(allowedDynamic)
+			allowedCalico := authorizedCalicoPolicyTuples(topo, info.Authorize)
+			authKey := nodeClassTuplesKey(allowed) + "\x02" + nodeClassTuplesKey(allowedDynamic) + "\x03" + calicoTuplesKey(allowedCalico)
 			if nodeClassGroups[authKey] == nil {
-				nodeClassGroups[authKey] = &nodeClassGroup{allowed: allowed, allowedDynamic: allowedDynamic}
+				nodeClassGroups[authKey] = &nodeClassGroup{allowed: allowed, allowedDynamic: allowedDynamic, allowedCalico: allowedCalico}
 			}
 			nodeClassGroups[authKey].channels = append(nodeClassGroups[authKey].channels, ch)
 		}
@@ -717,6 +719,7 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() {
 			filtered := cloneTopology(topo)
 			filtered.StripNodeClassesExcept(authGroup.allowed)
 			filtered.StripClusterScopedDynamicExcept(authGroup.allowedDynamic)
+			filtered.StripCalicoPoliciesExcept(authGroup.allowedCalico)
 			data, marshalErr := json.Marshal(filtered)
 			if marshalErr != nil {
 				log.Printf("Error marshaling topology for broadcast: %v", marshalErr)
@@ -790,6 +793,35 @@ func authorizedClusterScopedDynamicTuples(topo *topology.Topology, authorize fun
 		}
 	}
 	return allowed
+}
+
+// authorizedCalicoPolicyTuples applies the client's exact API-group and
+// namespace authorization to the Calico policy identities present in a
+// topology. A nil authorizer is used by direct broadcaster tests and means no
+// additional user-level filtering.
+func authorizedCalicoPolicyTuples(topo *topology.Topology, authorize func(group, resource, namespace, verb string) bool) map[topology.SARTuple]bool {
+	allowed := make(map[topology.SARTuple]bool)
+	if topo == nil {
+		return allowed
+	}
+	for _, tuple := range topo.CalicoPolicyRBACTuples() {
+		if authorize == nil || authorize(tuple.Group, tuple.Resource, tuple.Namespace, "list") {
+			allowed[tuple] = true
+		}
+	}
+	return allowed
+}
+
+func calicoTuplesKey(tuples map[topology.SARTuple]bool) string {
+	if len(tuples) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(tuples))
+	for tuple := range tuples {
+		keys = append(keys, tuple.Group+"\x00"+tuple.Resource+"\x00"+tuple.Namespace)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, "\x01")
 }
 
 func nodeClassTuplesKey(tuples map[topology.SARTuple]bool) string {
@@ -1142,6 +1174,7 @@ func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request, denie
 			topo.StripNodeKinds(deniedKinds)
 			topo.StripNodeClassesExcept(authorizedNodeClassTuples(topo, nodeClassAuthorizer(authorize)))
 			topo.StripClusterScopedDynamicExcept(authorizedClusterScopedDynamicTuples(topo, nodeClassAuthorizer(authorize)))
+			topo.StripCalicoPoliciesExcept(authorizedCalicoPolicyTuples(topo, authorize))
 			data, marshalErr := json.Marshal(topo)
 			if marshalErr != nil {
 				log.Printf("SSE: failed to marshal initial topology: %v", marshalErr)

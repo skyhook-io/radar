@@ -210,11 +210,10 @@ func walkTopmostOwner(kind, namespace, name string, topo *Topology, dp DynamicPr
 			break
 		}
 		visited[next] = true
-		ref := parseNodeID(next, dp)
+		ref := resourceRefForNodeID(next, topo, dp)
 		if ref == nil {
 			break
 		}
-		enrichRef(ref, dp)
 		topRef = ref
 		cur = next
 	}

@@ -163,6 +163,53 @@ func TestGetCascadeDeletePreview_RouteCollisionUsesGroup(t *testing.T) {
 	}
 }
 
+func TestGetCascadeDeletePreview_CalicoGroupCollisionUsesQualifiedRoot(t *testing.T) {
+	projectGVR := schema.GroupVersionResource{Group: "projectcalico.org", Version: "v3", Resource: "networkpolicies"}
+	legacyGVR := schema.GroupVersionResource{Group: "crd.projectcalico.org", Version: "v1", Resource: "networkpolicies"}
+	dp := &stubDP{
+		gvrByGroup: map[string]schema.GroupVersionResource{
+			"projectcalico.org/networkpolicies":     projectGVR,
+			"projectcalico.org/networkpolicy":       projectGVR,
+			"crd.projectcalico.org/networkpolicies": legacyGVR,
+			"crd.projectcalico.org/networkpolicy":   legacyGVR,
+		},
+		kindByGVR: map[schema.GroupVersionResource]string{
+			projectGVR: "NetworkPolicy",
+			legacyGVR:  "NetworkPolicy",
+		},
+	}
+	projectID := "caliconetworkpolicy/demo/shared/projectcalico.org"
+	legacyID := "caliconetworkpolicy/demo/shared/crd.projectcalico.org"
+	topo := &Topology{
+		Nodes: []Node{
+			{ID: projectID, Kind: KindCalicoNetworkPolicy, Name: "shared", Data: map[string]any{"namespace": "demo", "apiVersion": "projectcalico.org/v3"}},
+			{ID: legacyID, Kind: KindCalicoNetworkPolicy, Name: "shared", Data: map[string]any{"namespace": "demo", "apiVersion": "crd.projectcalico.org/v1"}},
+			{ID: "deployment/demo/project", Kind: KindDeployment, Name: "project", Data: map[string]any{"namespace": "demo"}},
+			{ID: "deployment/demo/legacy", Kind: KindDeployment, Name: "legacy", Data: map[string]any{"namespace": "demo"}},
+		},
+		Edges: []Edge{
+			{Source: projectID, Target: "deployment/demo/project", Type: EdgeManages},
+			{Source: legacyID, Target: "deployment/demo/legacy", Type: EdgeManages},
+		},
+	}
+
+	for _, test := range []struct {
+		group, wantDependent string
+	}{
+		{"projectcalico.org", "project"},
+		{"crd.projectcalico.org", "legacy"},
+	} {
+		t.Run(test.group, func(t *testing.T) {
+			preview := GetCascadeDeletePreview(ResourceRef{
+				Kind: "networkpolicies", Namespace: "demo", Name: "shared", Group: test.group,
+			}, topo, dp)
+			if !preview.RootResolved || len(preview.Dependents) != 1 || preview.Dependents[0].Name != test.wantDependent {
+				t.Fatalf("%s preview = %+v, want only %s dependent", test.group, preview, test.wantDependent)
+			}
+		})
+	}
+}
+
 // TestGetRelationships_PodHygieneFields covers T2: pods carry
 // ServiceAccount, Node, and ManagedBy refs derived from spec + labels.
 func TestGetRelationships_PodHygieneFields(t *testing.T) {

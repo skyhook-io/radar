@@ -24,6 +24,11 @@ describe('kindToPlural', () => {
 
   test('handles kinds ending in consonant+y (changes to -ies)', () => {
     expect(kindToPlural('NetworkPolicy')).toBe('networkpolicies')
+    expect(kindToPlural('CalicoNetworkPolicy')).toBe('networkpolicies')
+    expect(kindToPlural('CalicoGlobalNetworkPolicy')).toBe('globalnetworkpolicies')
+    expect(kindToPlural('CalicoStagedNetworkPolicy')).toBe('stagednetworkpolicies')
+    expect(kindToPlural('CalicoStagedGlobalNetworkPolicy')).toBe('stagedglobalnetworkpolicies')
+    expect(kindToPlural('CalicoStagedKubernetesNetworkPolicy')).toBe('stagedkubernetesnetworkpolicies')
   })
 
   test('handles already-plural kind names (Endpoints)', () => {

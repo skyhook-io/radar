@@ -136,6 +136,14 @@ func (a *topologyResourceProvider) ServiceAccounts() ([]*corev1.ServiceAccount, 
 	return lister.List(labels.Everything())
 }
 
+func (a *topologyResourceProvider) Namespaces() ([]*corev1.Namespace, error) {
+	lister := a.cache.Namespaces()
+	if lister == nil {
+		return nil, fmt.Errorf("namespaces not available (RBAC not granted)")
+	}
+	return lister.List(labels.Everything())
+}
+
 func (a *topologyResourceProvider) PersistentVolumeClaims() ([]*corev1.PersistentVolumeClaim, error) {
 	lister := a.cache.PersistentVolumeClaims()
 	if lister == nil {

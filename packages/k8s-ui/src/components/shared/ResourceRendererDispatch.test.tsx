@@ -418,6 +418,113 @@ describe('Calico Tier collision handling', () => {
   })
 })
 
+describe('Calico network policy collision handling', () => {
+  const calicoPolicies = [
+    ['NetworkPolicy', 'networkpolicies', 'CalicoNetworkPolicy'],
+    ['GlobalNetworkPolicy', 'globalnetworkpolicies', 'CalicoGlobalNetworkPolicy'],
+    ['StagedNetworkPolicy', 'stagednetworkpolicies', 'CalicoStagedNetworkPolicy'],
+    ['StagedGlobalNetworkPolicy', 'stagedglobalnetworkpolicies', 'CalicoStagedGlobalNetworkPolicy'],
+    ['StagedKubernetesNetworkPolicy', 'stagedkubernetesnetworkpolicies', 'CalicoStagedKubernetesNetworkPolicy'],
+  ] as const
+
+  it.each(calicoPolicies)('renders %s for both supported Calico groups', (kind, plural, label) => {
+    for (const apiVersion of ['crd.projectcalico.org/v1', 'projectcalico.org/v3']) {
+      const spec = kind === 'StagedKubernetesNetworkPolicy'
+        ? {
+            podSelector: { matchLabels: { app: 'api' } },
+            policyTypes: ['Ingress'],
+            stagedAction: 'Deny',
+            ingress: [{ from: [{ ipBlock: { cidr: '10.0.0.0/8' } }] }],
+          }
+        : {
+            selector: "app == 'api'",
+            tier: 'security',
+            order: 100,
+            types: ['Ingress'],
+            stagedAction: 'Deny',
+            ingress: [{ action: 'Log', protocol: 'TCP', source: { nets: ['10.0.0.0/8'] } }],
+          }
+      const html = renderKind(plural, {
+        apiVersion,
+        kind,
+        metadata: { name: 'policy', namespace: 'default' },
+        spec,
+      }, 'default')
+
+      if (kind === 'StagedKubernetesNetworkPolicy') {
+        expect(html).toContain('Target')
+        expect(html).toContain('Ingress Rules')
+        expect(html).toContain('Pod Selector')
+        expect(html).toContain('Staged preview')
+        expect(html).toContain('Dashed paths are evaluated but not enforced')
+        expect(html).toContain('stroke-dasharray="4 3"')
+        expect(html).not.toContain('CalicoStagedKubernetesNetworkPolicy')
+        expect(html).not.toContain('Allow')
+      } else {
+        expect(html).toContain(label)
+        expect(html).toContain('security')
+        expect(html).toContain('Log')
+      }
+      expect(html).toContain('10.0.0.0/8')
+      if (kind.startsWith('Staged') && kind !== 'StagedKubernetesNetworkPolicy') expect(html).toContain('Deny')
+    }
+  })
+
+  it('keeps core networking.k8s.io NetworkPolicy on the core renderer', () => {
+    const html = renderKind('networkpolicies', {
+      apiVersion: 'networking.k8s.io/v1',
+      kind: 'NetworkPolicy',
+      metadata: { name: 'core', namespace: 'default' },
+      spec: { podSelector: {}, policyTypes: ['Ingress'], ingress: [] },
+    }, 'default')
+
+    expect(html).toContain('Pod Selector')
+    expect(html).toContain('Deny all ingress')
+    expect(html).not.toContain('Calico NetworkPolicy')
+  })
+
+  it('uses the native staged Kubernetes presentation without an Allow action', () => {
+    const html = renderKind('stagedkubernetesnetworkpolicies', {
+      apiVersion: 'projectcalico.org/v3',
+      kind: 'StagedKubernetesNetworkPolicy',
+      metadata: { name: 'staged', namespace: 'default' },
+      spec: {
+        podSelector: { matchLabels: { app: 'api' } },
+        policyTypes: ['Ingress'],
+        ingress: [{}],
+      },
+    }, 'default')
+
+    expect(html).toContain('Target')
+    expect(html).toContain('Ingress Rules')
+    expect(html).toContain('All sources')
+    expect(html).toContain('Staged preview')
+    expect(html).toContain('Dashed paths are evaluated but not enforced')
+    expect(html).toContain('stroke-dasharray="4 3"')
+    expect(html).not.toContain('Allow')
+  })
+
+  it.each([
+    ['networkpolicies', 'other.example.io/v1', 'NetworkPolicy'],
+    ['networkpolicies', 'extension.projectcalico.org/v1', 'NetworkPolicy'],
+    ['globalnetworkpolicies', 'other.example.io/v1', 'GlobalNetworkPolicy'],
+    ['stagednetworkpolicies', 'other.example.io/v1', 'StagedNetworkPolicy'],
+    ['stagedglobalnetworkpolicies', 'other.example.io/v1', 'StagedGlobalNetworkPolicy'],
+    ['stagedkubernetesnetworkpolicies', 'other.example.io/v1', 'StagedKubernetesNetworkPolicy'],
+  ])('uses GenericRenderer for foreign %s/%s', (plural, apiVersion, kind) => {
+    const html = renderKind(plural, {
+      apiVersion,
+      kind,
+      metadata: { name: 'foreign', namespace: 'default' },
+      spec: { providerSpecificField: 'preserved' },
+    }, 'default')
+
+    expect(html).toContain('Specification')
+    expect(html).toContain('Provider Specific Field')
+    expect(html).not.toContain('Calico')
+  })
+})
+
 describe('colliding plurals — near-match API groups', () => {
   // A substring guard would hand these to CNPG/Velero. They are different groups.
   it.each([

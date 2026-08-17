@@ -96,6 +96,7 @@ func handleResourceTopology(ctx context.Context, req *mcp.ReadResourceRequest) (
 	if err != nil {
 		return jsonErrorResource("cluster://topology", err.Error()), nil
 	}
+	applyClusterScopedTopologyRBAC(ctx, topo)
 
 	data, _ := json.Marshal(topo)
 	return textResource("cluster://topology", string(data)), nil

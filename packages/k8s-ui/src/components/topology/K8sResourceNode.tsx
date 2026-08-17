@@ -249,6 +249,11 @@ export const NODE_DIMENSIONS: Record<
   KubeadmControlPlane: { width: 300, height: 84 },
   ClusterClass: { width: 280, height: 84 },
   MachineHealthCheck: { width: 300, height: 84 },
+  CalicoNetworkPolicy: { width: 300, height: 84 },
+  CalicoGlobalNetworkPolicy: { width: 300, height: 84 },
+  CalicoStagedNetworkPolicy: { width: 300, height: 84 },
+  CalicoStagedGlobalNetworkPolicy: { width: 300, height: 84 },
+  CalicoStagedKubernetesNetworkPolicy: { width: 300, height: 84 },
 };
 
 // Status indicator color (for dot and left bar) - uses centralized severity colors
@@ -367,6 +372,12 @@ export function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>):
       const port = nodeData.port;
       return port ? `${svcType} :${port}` : svcType;
     }
+    case "CalicoNetworkPolicy":
+    case "CalicoGlobalNetworkPolicy":
+    case "CalicoStagedNetworkPolicy":
+    case "CalicoStagedGlobalNetworkPolicy":
+    case "CalicoStagedKubernetesNetworkPolicy":
+      return (nodeData.selector as string) || "all workloads";
     case "Ingress":
       return (nodeData.hostname as string) || "No host";
     case "Gateway": {

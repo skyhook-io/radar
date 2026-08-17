@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { Database, Network, Server, Puzzle } from 'lucide-react'
-import { getResourceIcon, DEFAULT_RESOURCE_ICON } from './resource-icons'
+import { Database, Network, Server, ShieldCheck, Puzzle } from 'lucide-react'
+import { getResourceIcon, getTopologyIcon, DEFAULT_RESOURCE_ICON } from './resource-icons'
 
 describe('getResourceIcon', () => {
   it('disambiguates colliding kinds by API group', () => {
@@ -36,6 +36,31 @@ describe('getResourceIcon', () => {
     expect(getResourceIcon('Tier', 'crd.projectcalico.org')).toBe(Network)
     expect(getResourceIcon('Tier', 'projectcalico.org')).toBe(Network)
     expect(getResourceIcon('Tier')).toBe(DEFAULT_RESOURCE_ICON)
+  })
+
+  it('disambiguates NetworkPolicy and Calico policy kinds by API group', () => {
+    expect(getResourceIcon('NetworkPolicy', 'networking.k8s.io')).toBe(ShieldCheck)
+    expect(getResourceIcon('NetworkPolicy', 'projectcalico.org')).toBe(ShieldCheck)
+    expect(getResourceIcon('NetworkPolicy', 'crd.projectcalico.org')).toBe(ShieldCheck)
+    expect(getResourceIcon('NetworkPolicy', 'networking.example.io')).toBe(DEFAULT_RESOURCE_ICON)
+    expect(getResourceIcon('GlobalNetworkPolicy', 'projectcalico.org')).toBe(ShieldCheck)
+    expect(getResourceIcon('StagedNetworkPolicy', 'crd.projectcalico.org')).toBe(ShieldCheck)
+    expect(getResourceIcon('StagedGlobalNetworkPolicy', 'projectcalico.org')).toBe(ShieldCheck)
+    expect(getResourceIcon('StagedKubernetesNetworkPolicy', 'crd.projectcalico.org')).toBe(ShieldCheck)
+    expect(getResourceIcon('GlobalNetworkPolicy', 'networking.example.io')).toBe(DEFAULT_RESOURCE_ICON)
+  })
+
+  it('uses ShieldCheck for all Calico policy topology nodes', () => {
+    for (const kind of [
+      'CalicoNetworkPolicy',
+      'CalicoGlobalNetworkPolicy',
+      'CalicoStagedNetworkPolicy',
+      'CalicoStagedGlobalNetworkPolicy',
+      'CalicoStagedKubernetesNetworkPolicy',
+    ]) {
+      expect(getTopologyIcon(kind)).toBe(ShieldCheck)
+      expect(getResourceIcon(kind)).toBe(ShieldCheck)
+    }
   })
 
   it('ignores the group for kinds that do not collide', () => {

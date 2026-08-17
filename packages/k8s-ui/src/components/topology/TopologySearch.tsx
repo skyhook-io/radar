@@ -51,6 +51,13 @@ function getKindColor(kind: string): string {
       return 'text-purple-300'
     case 'Service':
       return 'text-blue-400'
+    case 'CalicoNetworkPolicy':
+    case 'CalicoGlobalNetworkPolicy':
+      return 'text-teal-400'
+    case 'CalicoStagedNetworkPolicy':
+    case 'CalicoStagedGlobalNetworkPolicy':
+    case 'CalicoStagedKubernetesNetworkPolicy':
+      return 'text-amber-400'
     case 'Deployment':
     case 'Rollout':
       return 'text-emerald-400'

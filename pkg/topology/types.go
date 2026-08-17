@@ -123,6 +123,14 @@ const (
 	KindMachineHealthCheck             NodeKind = "MachineHealthCheck"  // Cluster API MachineHealthCheck
 )
 
+const (
+	KindCalicoNetworkPolicy                 NodeKind = "CalicoNetworkPolicy"
+	KindCalicoGlobalNetworkPolicy           NodeKind = "CalicoGlobalNetworkPolicy"
+	KindCalicoStagedNetworkPolicy           NodeKind = "CalicoStagedNetworkPolicy"
+	KindCalicoStagedGlobalNetworkPolicy     NodeKind = "CalicoStagedGlobalNetworkPolicy"
+	KindCalicoStagedKubernetesNetworkPolicy NodeKind = "CalicoStagedKubernetesNetworkPolicy"
+)
+
 // HealthStatus represents the health status of a node
 type HealthStatus string
 
@@ -164,6 +172,7 @@ type Edge struct {
 	Target            string   `json:"target"`
 	Type              EdgeType `json:"type"`
 	Label             string   `json:"label,omitempty"`
+	Partial           bool     `json:"partial,omitempty"`
 	SkipIfKindVisible string   `json:"skipIfKindVisible,omitempty"` // Hide this edge if this kind is visible (for shortcut edges)
 	PolicyEffect      string   `json:"policyEffect,omitempty"`      // "allowed", "blocked", or "unprotected" — set when ShowPolicyEffect is true
 }
@@ -512,6 +521,13 @@ type ResourceProvider interface {
 // ServiceAccountProvider is implemented by providers that can expose workload identities.
 type ServiceAccountProvider interface {
 	ServiceAccounts() ([]*corev1.ServiceAccount, error)
+}
+
+// NamespaceProvider is optional. Calico global-policy namespace selectors can
+// only be evaluated when namespace labels are available; callers that do not
+// implement it fail closed for those selectors.
+type NamespaceProvider interface {
+	Namespaces() ([]*corev1.Namespace, error)
 }
 
 // DynamicProvider adds CRD/dynamic resource support (pass nil to skip CRD nodes).

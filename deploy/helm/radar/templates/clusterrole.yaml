@@ -247,6 +247,11 @@ rules:
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
+  {{- if .Values.rbac.crdGroups.calico }}
+  - apiGroups: ["projectcalico.org", "crd.projectcalico.org"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.cloudnativePg }}
   # barmancloud.cnpg.io is the barman-cloud backup plugin's own group. Its
   # ObjectStore holds the backup destination that recent CNPG Clusters point at

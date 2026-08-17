@@ -5,9 +5,10 @@ import { NetworkPolicyDiagram } from './NetworkPolicyDiagram'
 
 interface NetworkPolicyRendererProps {
   data: any
+  staged?: boolean
 }
 
-export function NetworkPolicyRenderer({ data }: NetworkPolicyRendererProps) {
+export function NetworkPolicyRenderer({ data, staged = false }: NetworkPolicyRendererProps) {
   const spec = data.spec || {}
   const podSelector = spec.podSelector || {}
   const policyTypes: string[] = spec.policyTypes || []
@@ -23,7 +24,7 @@ export function NetworkPolicyRenderer({ data }: NetworkPolicyRendererProps) {
     <>
       {hasDiagramContent && (
         <Section title="Policy Flow" icon={GitFork} defaultExpanded>
-          <NetworkPolicyDiagram spec={spec} />
+          <NetworkPolicyDiagram spec={spec} staged={staged} />
         </Section>
       )}
 
@@ -125,7 +126,9 @@ function IngressEgressRuleCard({
       )}
 
       {peers.length === 0 && ports.length === 0 && (
-        <div className="text-xs text-theme-text-tertiary">Allow all</div>
+        <div className="text-xs text-theme-text-tertiary">
+          {direction === 'from' ? 'All sources' : 'All destinations'}
+        </div>
       )}
     </div>
   )

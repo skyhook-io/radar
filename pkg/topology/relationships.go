@@ -6,6 +6,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // RelationshipsIndex is a precomputed map from node ID to the edges touching
@@ -112,20 +113,32 @@ func GetCascadeDeletePreview(root ResourceRef, topo *Topology, dp DynamicProvide
 		}
 		rootID = strings.ToLower(KindForGVK(resolvedKind, root.Group)) + "/" + root.Namespace + "/" + root.Name
 	}
-
 	nodeByID := make(map[string]*Node, len(topo.Nodes))
 	for i := range topo.Nodes {
 		nodeByID[topo.Nodes[i].ID] = &topo.Nodes[i]
 	}
+
 	rootNode, ok := nodeByID[rootID]
-	if !ok {
-		return preview
-	}
 	if root.Group != "" {
-		if nodeGroup := nodeAPIGroupFromData(rootNode); nodeGroup != "" && nodeGroup != root.Group {
-			return preview
+		if ok && nodeAPIGroupFromData(rootNode) != root.Group {
+			ok = false
+		}
+		if !ok {
+			// Calico's legacy and modern APIs can contain the same identity.
+			// Their topology IDs are group-qualified only once that collision is
+			// observed, so the deterministic kind/ns/name ID above may not exist.
+			// Resolve against the node's recorded API group instead of falling
+			// back to whichever duplicate was inserted last.
+			if matched, _ := findNodeByRef(topo.Nodes, root); matched != nil {
+				rootNode = matched
+				rootID = matched.ID
+				ok = true
+			}
 		}
 	} else {
+		if !ok {
+			return preview
+		}
 		rootKind := string(rootNode.Kind)
 		if externalKind, found := collisionKindToK8sKind[rootNode.Kind]; found {
 			rootKind = externalKind
@@ -144,6 +157,9 @@ func GetCascadeDeletePreview(root ResourceRef, topo *Topology, dp DynamicProvide
 		if matches > 1 {
 			return preview
 		}
+	}
+	if !ok {
+		return preview
 	}
 	preview.RootResolved = true
 
@@ -281,19 +297,46 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	}
 
 	// Build the node ID for this resource (matches format used in builder.go)
-	nodeID := buildNodeID(kind, namespace, name, dp)
+	resolvedKind := kind
+	if objectKind, objectGroup := objectGVK(obj); objectGroup != "" {
+		if objectKind != "" {
+			resolvedKind = objectKind
+		}
+		resolvedKind = KindForGVK(resolvedKind, objectGroup)
+	}
+	nodeID := buildNodeID(resolvedKind, namespace, name, dp)
+	nodeByID := make(map[string]*Node, len(topo.Nodes))
+	for i := range topo.Nodes {
+		nodeByID[topo.Nodes[i].ID] = &topo.Nodes[i]
+	}
+	if _, exists := nodeByID[nodeID]; !exists {
+		_, objectGroup := objectGVK(obj)
+		if matched, _ := findNodeByRef(topo.Nodes, ResourceRef{Kind: resolvedKind, Namespace: namespace, Name: name, Group: objectGroup}); matched != nil {
+			nodeID = matched.ID
+		}
+	}
 	incomingEdges, outgoingEdges := edgesForNode(topo, idx, nodeID)
+	refForNodeID := func(id string) *ResourceRef {
+		ref := parseNodeID(id, dp)
+		if ref == nil {
+			return nil
+		}
+		if node := nodeByID[id]; node != nil {
+			ref.Group = nodeAPIGroupFromData(node)
+		}
+		enrichRef(ref, dp)
+		return ref
+	}
 
 	rel := &Relationships{}
 	kindLower := strings.ToLower(kind)
 
 	for _, edge := range outgoingEdges {
 		// This resource points TO something (outgoing edge)
-		ref := parseNodeID(edge.Target, dp)
+		ref := refForNodeID(edge.Target)
 		if ref == nil {
 			continue
 		}
-		enrichRef(ref, dp)
 
 		switch edge.Type {
 		case EdgeManages:
@@ -351,11 +394,10 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 
 	for _, edge := range incomingEdges {
 		// Something points TO this resource (incoming edge)
-		ref := parseNodeID(edge.Source, dp)
+		ref := refForNodeID(edge.Source)
 		if ref == nil {
 			continue
 		}
-		enrichRef(ref, dp)
 
 		switch edge.Type {
 		case EdgeManages:
@@ -391,7 +433,8 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			switch ref.Kind {
 			case "PodDisruptionBudget":
 				rel.PDBs = append(rel.PDBs, *ref)
-			case "NetworkPolicy", "CiliumNetworkPolicy", "ClusterNetworkPolicy", "CiliumClusterwideNetworkPolicy":
+			case "NetworkPolicy", "CiliumNetworkPolicy", "ClusterNetworkPolicy", "CiliumClusterwideNetworkPolicy",
+				"CalicoNetworkPolicy", "CalicoGlobalNetworkPolicy", "CalicoStagedNetworkPolicy", "CalicoStagedGlobalNetworkPolicy", "CalicoStagedKubernetesNetworkPolicy":
 				rel.NetworkPolicies = append(rel.NetworkPolicies, *ref)
 			}
 		case EdgeConfigures:
@@ -422,9 +465,8 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 					if edge.Type != EdgeManages {
 						continue
 					}
-					podRef := parseNodeID(edge.Target, dp)
+					podRef := refForNodeID(edge.Target)
 					if podRef != nil && strings.EqualFold(podRef.Kind, "Pod") {
-						enrichRef(podRef, dp)
 						rel.Pods = append(rel.Pods, *podRef)
 					}
 				}
@@ -441,9 +483,8 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				if edge.Type != EdgeManages {
 					continue
 				}
-				deployRef := parseNodeID(edge.Source, dp)
+				deployRef := refForNodeID(edge.Source)
 				if deployRef != nil && strings.EqualFold(deployRef.Kind, "Deployment") {
-					enrichRef(deployRef, dp)
 					rel.Deployment = deployRef
 					break
 				}
@@ -607,7 +648,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	if m, ok := queriedObj.(metav1.Object); ok {
 		managedByMeta = m
 	}
-	if mb := SynthesizeManagedBy(managedByMeta, kind, namespace, name, topo, dp, idx); len(mb) > 0 {
+	if mb := SynthesizeManagedBy(managedByMeta, resolvedKind, namespace, name, topo, dp, idx); len(mb) > 0 {
 		rel.ManagedBy = mb
 	}
 
@@ -636,11 +677,10 @@ func addServiceEntrypoints(rel *Relationships, topo *Topology, idx *Relationship
 			if edge.Type != EdgeRoutesTo && edge.Type != EdgeExposes {
 				continue
 			}
-			ref := parseNodeID(edge.Source, dp)
+			ref := resourceRefForNodeID(edge.Source, topo, dp)
 			if ref == nil {
 				continue
 			}
-			enrichRef(ref, dp)
 			kind := strings.ToLower(ref.Kind)
 			switch kind {
 			case "ingress":
@@ -654,6 +694,39 @@ func addServiceEntrypoints(rel *Relationships, topo *Topology, idx *Relationship
 			}
 		}
 	}
+}
+
+func resourceRefForNodeID(nodeID string, topo *Topology, dp DynamicProvider) *ResourceRef {
+	ref := parseNodeID(nodeID, dp)
+	if ref == nil {
+		return nil
+	}
+	if topo != nil {
+		for i := range topo.Nodes {
+			if topo.Nodes[i].ID == nodeID {
+				ref.Group = nodeAPIGroupFromData(&topo.Nodes[i])
+				break
+			}
+		}
+	}
+	enrichRef(ref, dp)
+	return ref
+}
+
+type objectGVKReader interface {
+	GetAPIVersion() string
+	GetKind() string
+}
+
+func objectGVK(obj any) (kind, group string) {
+	if reader, ok := obj.(objectGVKReader); ok {
+		return reader.GetKind(), APIVersionGroup(reader.GetAPIVersion())
+	}
+	if object, ok := obj.(runtime.Object); ok {
+		gvk := object.GetObjectKind().GroupVersionKind()
+		return gvk.Kind, gvk.Group
+	}
+	return "", ""
 }
 
 func appendResourceRef(refs []ResourceRef, candidate ResourceRef) []ResourceRef {
@@ -846,6 +919,26 @@ func lookupTypedMetadata(kindLower, namespace, name string, provider ResourcePro
 func buildNodeID(kind, namespace, name string, dp DynamicProvider) string {
 	// Normalize kind to match topology builder format
 	k := strings.ToLower(kind)
+	switch k {
+	case "globalnetworkpolicy":
+		k = "calicoglobalnetworkpolicy"
+	case "stagednetworkpolicy":
+		k = "calicostagednetworkpolicy"
+	case "stagedglobalnetworkpolicy":
+		k = "calicostagedglobalnetworkpolicy"
+	case "stagedkubernetesnetworkpolicy":
+		k = "calicostagedkubernetesnetworkpolicy"
+	case "caliconetworkpolicies":
+		k = "caliconetworkpolicy"
+	case "globalnetworkpolicies":
+		k = "calicoglobalnetworkpolicy"
+	case "stagednetworkpolicies":
+		k = "calicostagednetworkpolicy"
+	case "stagedglobalnetworkpolicies":
+		k = "calicostagedglobalnetworkpolicy"
+	case "stagedkubernetesnetworkpolicies":
+		k = "calicostagedkubernetesnetworkpolicy"
+	}
 
 	// Handle plural to singular conversion for common types
 	kindMap := map[string]string{
@@ -1020,6 +1113,18 @@ func normalizeKindWithGroup(kind, group string, dp DynamicProvider) string {
 
 // normalizeKind converts internal kind format to display format
 func normalizeKind(kind string, dp DynamicProvider) string {
+	switch strings.ToLower(kind) {
+	case "caliconetworkpolicy", "caliconetworkpolicies":
+		return string(KindCalicoNetworkPolicy)
+	case "calicoglobalnetworkpolicy", "globalnetworkpolicy", "globalnetworkpolicies":
+		return string(KindCalicoGlobalNetworkPolicy)
+	case "calicostagednetworkpolicy", "stagednetworkpolicy", "stagednetworkpolicies":
+		return string(KindCalicoStagedNetworkPolicy)
+	case "calicostagedglobalnetworkpolicy", "stagedglobalnetworkpolicy", "stagedglobalnetworkpolicies":
+		return string(KindCalicoStagedGlobalNetworkPolicy)
+	case "calicostagedkubernetesnetworkpolicy", "stagedkubernetesnetworkpolicy", "stagedkubernetesnetworkpolicies":
+		return string(KindCalicoStagedKubernetesNetworkPolicy)
+	}
 	kindMap := map[string]string{
 		"pod":                            "Pod",
 		"service":                        "Service",
