@@ -2,7 +2,7 @@
 // the GPU views. Keep all effective-request math here — K8s semantics for
 // extended resources are subtle and must not be reimplemented per call site.
 
-import { parseMemoryToBytes } from './format'
+import { parseQuantityToNumber } from './format'
 
 const STANDARD_NODE_RESOURCES = new Set(['cpu', 'memory', 'pods', 'ephemeral-storage'])
 
@@ -48,14 +48,14 @@ export function getEffectiveResources(resources: any): Record<string, string> {
 }
 
 // K8s quantity → number. Counts are usually plain integers, but quantities may
-// legally carry suffixes: "3000m" is 3, "3k" is 3000.
+// legally carry suffixes: "3000m" is 3, "3k" is 3000. This went through the
+// memory parser, which covered the suffixes an extended resource realistically
+// carries but was the wrong contract to borrow — and left the same class of bug
+// live wherever a count had no parser at all (#1441). The shared quantity
+// parser is now the one place that knows the suffix table.
 function asCount(value: unknown): number {
   if (typeof value === 'number') return Number.isFinite(value) ? value : 0
-  const s = String(value ?? '').trim()
-  if (!s) return 0
-  if (/^\d+(\.\d+)?m$/.test(s)) return Number(s.slice(0, -1)) / 1000
-  const n = parseMemoryToBytes(s)
-  return Number.isFinite(n) ? n : 0
+  return parseQuantityToNumber(String(value ?? ''))
 }
 
 function containerGpuCount(container: any): number {

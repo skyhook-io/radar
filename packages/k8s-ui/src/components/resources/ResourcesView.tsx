@@ -137,6 +137,7 @@ import {
 import { SEVERITY_BADGE, EVENT_TYPE_COLORS } from '../../utils/badge-colors'
 import { pluralize } from '../../utils/pluralize'
 import { getPodGpuCount, getNodeGpuCount } from '../../utils/extended-resources'
+import { parseQuantityToNumber } from '../../utils/format'
 import { type CustomColumnDef, type CustomColumnSource, customColumnKey, readCustomColumnValue, sanitizeCustomColumnDefs } from '../../utils/custom-columns'
 import { FreshnessControl, type FreshnessConnection } from '../ui/FreshnessControl'
 import { Tooltip } from '../ui/Tooltip'
@@ -7335,8 +7336,10 @@ function NodeCell({ resource, column, majorityNodeMinorVersion }: { resource: an
       const allocatable = resource.status?.allocatable?.pods
       const podCount = m?.podCount ?? 0
       if (!allocatable) return <span className="text-sm text-theme-text-tertiary font-mono">{podCount || '-'}</span>
-      const max = parseInt(allocatable, 10)
-      if (isNaN(max) || max <= 0) return <span className="text-sm text-theme-text-tertiary font-mono">{podCount || '-'}</span>
+      // Allocatable pods is a Quantity, so a 1000-pod node reports "1k" —
+      // parseInt read that as 1 and pegged the bar at 21600% (#1441).
+      const max = parseQuantityToNumber(allocatable)
+      if (!Number.isFinite(max) || max <= 0) return <span className="text-sm text-theme-text-tertiary font-mono">{podCount || '-'}</span>
       const pct = (podCount / max) * 100
       return <ResourceBar used={String(podCount)} total={String(max)} percent={pct} colorScheme="count" />
     }

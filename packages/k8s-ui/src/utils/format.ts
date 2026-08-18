@@ -165,6 +165,80 @@ export function formatMemoryString(memString: string): string {
 }
 
 // =============================================================================
+// Quantity Parsing (counts)
+// =============================================================================
+
+/**
+ * Every suffix a `resource.Quantity` can carry, in the API's own groupings:
+ * decimal SI in powers of 1000 (including the sub-unit n/u/m), and binary SI in
+ * powers of 1024. `K` is not canonical Kubernetes — only lowercase `k` is — but
+ * it is accepted here for the same leniency `parseMemoryToBytes` already has.
+ */
+const QUANTITY_SUFFIXES: Record<string, number> = {
+  n: 1e-9,
+  u: 1e-6,
+  m: 1e-3,
+  k: 1e3,
+  K: 1e3,
+  M: 1e6,
+  G: 1e9,
+  T: 1e12,
+  P: 1e15,
+  E: 1e18,
+  Ki: 1024,
+  Mi: 1024 ** 2,
+  Gi: 1024 ** 3,
+  Ti: 1024 ** 4,
+  Pi: 1024 ** 5,
+  Ei: 1024 ** 6,
+}
+
+/**
+ * Parse a Kubernetes `resource.Quantity` into a plain number.
+ *
+ * Counts are the surface that needs this. A Quantity's canonical serialization
+ * collapses trailing zeros into an SI suffix, so a node started with
+ * `--max-pods=1000` reports `"1k"` and not `"1000"`. Read with `parseInt` that
+ * is 1, which rendered a node running 216 pods as `216 / 1` and pegged its
+ * usage bar at 21600% (#1441). Any count that is a multiple of 1000 hits it.
+ *
+ * Unlike `parseMemoryToBytes`, an unrecognised suffix yields 0 rather than the
+ * bare number: a Quantity this cannot read is better reported as unknown by the
+ * caller than silently turned into a plausible-looking wrong number.
+ *
+ * @param quantity - K8s quantity like "1k", "216", "3000m", "2Gi", "1e3"
+ * @returns The value as a number, or 0 when it cannot be parsed
+ */
+export function parseQuantityToNumber(quantity: string | number | null | undefined): number {
+  if (typeof quantity === 'number') return Number.isFinite(quantity) ? quantity : 0
+  if (!quantity) return 0
+
+  const str = String(quantity).trim()
+  if (!str) return 0
+
+  // Decimal-exponent form. A Quantity's suffix is either an SI suffix or an
+  // exponent, never both, so this is decided before the suffix table — which
+  // also keeps "1E3" (1000) from being read as exa (1e18).
+  const exponent = str.match(/^([+-]?\d+(?:\.\d+)?)[eE]([+-]?\d+)$/)
+  if (exponent) {
+    const value = Number(`${exponent[1]}e${exponent[2]}`)
+    return Number.isFinite(value) ? value : 0
+  }
+
+  const match = str.match(/^([+-]?\d+(?:\.\d+)?)\s*([A-Za-z]*)$/)
+  if (!match) return 0
+
+  const num = parseFloat(match[1])
+  if (!Number.isFinite(num)) return 0
+
+  const suffix = match[2]
+  if (!suffix) return num
+
+  const multiplier = QUANTITY_SUFFIXES[suffix]
+  return multiplier === undefined ? 0 : num * multiplier
+}
+
+// =============================================================================
 // Dashboard Metrics Formatting (different units from metrics-server)
 // =============================================================================
 
