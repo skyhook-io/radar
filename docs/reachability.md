@@ -15,7 +15,7 @@ The trace has two layers:
 
 The active layer can escalate the static verdict when probes give clear evidence of a real failure on a hop (every non-skipped probe failed → that hop counts toward broken; over half failed → counts toward degraded). It never softens a static verdict: a critical static finding outranks probe state, and an unverifiable path stays unverifiable.
 
-Probes run from the operator's current vantage (laptop or in-cluster). A failure caused by the vantage itself - NetworkPolicy blocking Radar's path, a service-mesh mTLS handshake without a client cert, an API-server-proxy probe that can't reach an internal address - is **never** allowed to set the headline. Only a real-traffic (data-path) result escalates the verdict; an API-server-proxy-only or otherwise vantage-attributable failure annotates the hop and localizes the symptom but leaves the verdict at *unknown* / *not confirmed* rather than condemning a path that real traffic may well reach. This is the fail-toward-silence rule: Radar would rather say "couldn't confirm from here" than false-condemn a healthy path. See "What it deliberately does NOT do" below for the boundaries of what probes can and cannot tell you.
+Probes run from wherever Radar is running - your laptop, or inside the cluster - and where they run from changes what they can prove. When a probe fails for a reason that belongs to the vantage rather than the workload, Radar marks the hop and leaves the verdict at *unknown* instead of reporting the path as broken; only a result from the real traffic path sets the headline. The **Limits** section below lists the cases where this happens and what to do about each one.
 
 ![A Service reached by both an Ingress and an HTTPRoute: parallel entry points on the left, the path graph, and the journey inspector on the right](images/reachability/reachability-parallel-entries.png)
 
@@ -89,9 +89,6 @@ Each row reports outcome (`ok` / `fail` / `skipped`), latency, the path it trave
 
 Every claim on the page carries its evidence: the verdict band states the live-check volume ("8 live checks from 2 vantages", with the DNS/TCP/TLS/HTTP breakdown on hover), a skipped route states WHY it was skipped from the exact vantage that skipped it, and node dots show each resource's own health - cluster state, never a test result (edges carry the test truth).
 
-**RBAC for active probes (from a laptop):** the user identity reading the trace must hold `get services/proxy` and `get pods/proxy` in the target namespace. In-cluster Radar uses the data path directly and doesn't need these. To disable the active layer entirely, deny those permissions to the role Radar uses.
-
-
 ![A Redis Service after an in-cluster TCP test: the probe capsule reports what it saw, and the coverage line states that only the transport was checked](images/reachability/reachability-non-http-service.png)
 
 *A non-HTTP Service (Redis on 6379) after an in-cluster test: the throwaway Pod connected over TCP, and the coverage line states the ceiling of that proof - "TCP connections only - application protocol not checked".*
@@ -103,6 +100,39 @@ Every claim on the page carries its evidence: the verdict band states the live-c
 ![An Ingress subject: the front door is dialled from outside and the backend answers, with the entry path called out as unexercised](images/reachability/reachability-ingress-front-door.png)
 
 *A front-door subject. Radar dials the declared hostname from your machine (DNS, TCP, TLS, then HTTP) - here a 308 redirect - while the headline stays honest that a backend-only confirmation does not exercise the entry path.*
+
+## Security model
+
+The active layer is the only part of Reachability that puts traffic on the wire. What it can reach is bounded by Kubernetes, not by Radar.
+
+**Probes run as the requesting user.** Radar has no permission system of its own - it delegates to Kubernetes RBAC by impersonating the signed-in user ([Authentication](authentication.md)). A probe can only reach what that person could already reach with kubectl, and the API server evaluates the request under their identity. If impersonation can't be established, the probe fails rather than falling back to Radar's own ServiceAccount, which would silently widen the caller's reach. (In the local single-user binary, or a deployment running `auth.mode=none`, there is no user to impersonate and Radar acts as its own credential; per-user scoping begins when authentication is enabled.)
+
+**Two separate permission gates**, depending on how the test runs:
+
+| How the test runs | RBAC checked in the target namespace |
+|---|---|
+| Relayed through the API server (from a laptop) | `get services/proxy` and/or `get pods/proxy` |
+| From inside the cluster, as a probe Job | `create jobs`, `list pods`, and `get pods/log` |
+
+Radar running in-cluster dials the data path directly and needs neither proxy verb. To switch the active layer off, remove those verbs from the identity Radar impersonates - there is no application-level flag to bypass, because the API server is what enforces it. A denial is reported as a denial ("your identity lacks `get services/proxy` in this namespace"), never scored as an unreachable service.
+
+**The in-cluster test creates something, so it asks first.** Nothing is created until someone clicks, and the consent dialog names the exact requests the probe will send (for example, `TCP connection to redis-master:6379`). The three verbs above are checked with a `SelfSubjectAccessReview` *before* anything is created; if any is missing, Radar returns a copyable `kubectl run` mirroring what it would have done rather than half-running. On Radar Cloud the probe additionally requires org role Member or higher.
+
+The probe pod itself is built to be the least interesting workload in the namespace:
+
+- At most 5 per run, one per intended route
+- **No ServiceAccount token mounted** - the probe holds no Kubernetes API credentials at all
+- Non-root (UID 65532), read-only root filesystem, all capabilities dropped, no privilege escalation - it satisfies the `restricted` Pod Security Standard
+- 50m CPU / 32Mi memory, request equal to limit; no retries
+- Killed at 25 seconds, deleted right after the run, TTL-reaped 60 seconds later as a backstop
+
+### What an agent gets
+
+Reachability reaches agents through the same MCP `diagnose` tool described below, and the shape of that surface is the point.
+
+An agent talking to Radar over MCP does not hold a kubeconfig and cannot run kubectl. It calls typed tools with fixed schemas, fixed at build time, with no raw-request, `exec`, or shell escape hatch to fall back on - and its calls go out under the same impersonated identity as the human driving it, so RBAC bounds the agent exactly as it bounds them and the audit log names a person rather than a shared robot account. Radar also serves a strictly read-only MCP endpoint at `/mcp-readonly`, where the mutating tools are never registered: they aren't gated behind a check an agent could be talked past, they don't exist on that endpoint.
+
+Within that surface, Reachability is one of the narrowest capabilities you can delegate. It reads a declared path and sends probes along it. The only object it can create is the probe Job above - capped, credential-less, self-deleting - and only when `inCluster: true` is passed explicitly. Compare that with the usual alternative of handing an agent a kubeconfig and a shell, where the capability surface is every verb on every resource and the only limit is the model's own judgement.
 
 ## What it deliberately does NOT do
 
