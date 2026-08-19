@@ -36,7 +36,7 @@ require (
 	k8s.io/client-go v0.36.3
 	k8s.io/component-helpers v0.36.3
 	k8s.io/klog/v2 v2.140.0
-	modernc.org/sqlite v1.55.0
+	modernc.org/sqlite v1.56.0
 	sigs.k8s.io/yaml v1.6.0
 )
 
@@ -113,7 +113,7 @@ require (
 	github.com/lib/pq v1.12.3 // indirect
 	github.com/liggitt/tabwriter v0.0.0-20181228230101-89fcab3d43de // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
-	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mattn/go-runewidth v0.0.19 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/go-wordwrap v1.0.1 // indirect
@@ -171,7 +171,7 @@ require (
 	k8s.io/kubectl v0.36.3 // indirect
 	k8s.io/streaming v0.36.3 // indirect
 	k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3 // indirect
-	modernc.org/libc v1.74.1 // indirect
+	modernc.org/libc v1.74.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 	oras.land/oras-go/v2 v2.6.2 // indirect
