@@ -35,6 +35,7 @@ import type { SelectedResource, APIResource } from '../../types'
 import { isForbiddenError } from '../../types/fetch-error'
 import type { NavigateToResource } from '../../utils/navigation'
 import { categorizeResources, CORE_RESOURCES, findAPIResourceForRoute } from '../../utils/api-resources'
+import { copyText } from '../../utils/clipboard'
 import {
   getPodStatus,
   getPodRestarts,
@@ -5838,10 +5839,11 @@ function CopyNameButton({ name }: { name: string }) {
     <button
       onClick={(e) => {
         e.stopPropagation()
-        navigator.clipboard.writeText(name).then(() => {
+        void copyText(name).then((didCopy) => {
+          if (!didCopy) return
           setCopied(true)
           setTimeout(() => setCopied(false), 1500)
-        }).catch(() => {})
+        })
       }}
       className="shrink-0 p-0.5 text-theme-text-tertiary hover:text-theme-text-primary opacity-0 group-hover/row:opacity-100 transition-opacity"
       title="Copy name"
