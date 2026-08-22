@@ -54,8 +54,13 @@ func extractZip(zipPath, destDir string) error {
 			return err
 		}
 
-		outFile.Close()
+		// A failed close can mean a truncated write; swallowing it would let
+		// the updater install a corrupt binary.
+		closeErr := outFile.Close()
 		rc.Close()
+		if closeErr != nil {
+			return fmt.Errorf("close %s: %w", f.Name, closeErr)
+		}
 	}
 	return nil
 }

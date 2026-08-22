@@ -152,7 +152,11 @@ func extractTarGz(archivePath, destDir string) error {
 				outFile.Close()
 				return err
 			}
-			outFile.Close()
+			// A failed close can mean a truncated write; swallowing it would let
+			// the updater install a corrupt binary.
+			if err := outFile.Close(); err != nil {
+				return fmt.Errorf("close %s: %w", header.Name, err)
+			}
 		}
 	}
 	return nil
