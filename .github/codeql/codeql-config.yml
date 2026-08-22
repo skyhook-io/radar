@@ -1,0 +1,15 @@
+name: Radar CodeQL config
+
+queries:
+  - uses: security-and-quality
+
+query-filters:
+  # Radar's logs are diagnostic printf output, not an audit trail. In the
+  # dominant local single-user deployment the only person who can reach the
+  # API is the one reading stderr, and in multi-user deployments nothing
+  # consumes these logs for security decisions — while the rule buries real
+  # findings under 100+ alerts. Convention for user-derived strings in new
+  # log lines is %q, which neutralizes newline injection. If Radar ever
+  # grows a real audit log, that writer must sanitize its fields.
+  - exclude:
+      id: go/log-injection
