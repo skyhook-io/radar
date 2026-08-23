@@ -48,11 +48,8 @@ export function getEffectiveResources(resources: any): Record<string, string> {
 }
 
 // K8s quantity → number. Counts are usually plain integers, but quantities may
-// legally carry suffixes: "3000m" is 3, "3k" is 3000. This went through the
-// memory parser, which covered the suffixes an extended resource realistically
-// carries but was the wrong contract to borrow — and left the same class of bug
-// live wherever a count had no parser at all (#1441). The shared quantity
-// parser is now the one place that knows the suffix table.
+// legally carry suffixes: "3000m" is 3, "3k" is 3000. The shared quantity
+// parser is the one place that knows the suffix table.
 function asCount(value: unknown): number {
   if (typeof value === 'number') return Number.isFinite(value) ? value : 0
   return parseQuantityToNumber(String(value ?? ''))

@@ -7337,7 +7337,7 @@ function NodeCell({ resource, column, majorityNodeMinorVersion }: { resource: an
       const podCount = m?.podCount ?? 0
       if (!allocatable) return <span className="text-sm text-theme-text-tertiary font-mono">{podCount || '-'}</span>
       // Allocatable pods is a Quantity, so a 1000-pod node reports "1k" —
-      // parseInt read that as 1 and pegged the bar at 21600% (#1441).
+      // a raw-integer read would see 1 and peg the bar at 21600%.
       const max = parseQuantityToNumber(allocatable)
       if (!Number.isFinite(max) || max <= 0) return <span className="text-sm text-theme-text-tertiary font-mono">{podCount || '-'}</span>
       const pct = (podCount / max) * 100

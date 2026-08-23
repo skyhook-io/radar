@@ -198,9 +198,9 @@ const QUANTITY_SUFFIXES: Record<string, number> = {
  *
  * Counts are the surface that needs this. A Quantity's canonical serialization
  * collapses trailing zeros into an SI suffix, so a node started with
- * `--max-pods=1000` reports `"1k"` and not `"1000"`. Read with `parseInt` that
- * is 1, which rendered a node running 216 pods as `216 / 1` and pegged its
- * usage bar at 21600% (#1441). Any count that is a multiple of 1000 hits it.
+ * `--max-pods=1000` reports `"1k"` and not `"1000"` — read as a raw integer
+ * that is 1, so a usage bar divides by 1 instead of 1000. Any count that is
+ * a multiple of 1000 hits it.
  *
  * Unlike `parseMemoryToBytes`, an unrecognised suffix yields 0 rather than the
  * bare number: a Quantity this cannot read is better reported as unknown by the
