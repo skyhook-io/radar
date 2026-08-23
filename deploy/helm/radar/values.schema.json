@@ -301,6 +301,17 @@
         "enabled": { "type": "boolean" }
       }
     },
+    "cost": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "currency": {
+          "type": "string",
+          "pattern": "^$|^[A-Za-z]{3}$",
+          "description": "ISO 4217 code describing OpenCost values; Radar labels but does not convert them."
+        }
+      }
+    },
     "traffic": {
       "type": "object",
       "additionalProperties": true,

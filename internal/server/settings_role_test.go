@@ -8,12 +8,47 @@ import (
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/config"
 )
 
 // userWithGroups builds an authenticated user carrying the given groups, used
 // to drive the Cloud-role gate (radar:<tier> prefix).
 func userWithGroups(groups ...string) *auth.User {
 	return &auth.User{Username: "u@example.com", Groups: groups}
+}
+
+func TestPutConfigPersistsHiddenOpenCostCurrency(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	s := &Server{}
+	r := httptest.NewRequest(http.MethodPut, "/api/config", strings.NewReader(`{"port":9280,"opencostCurrency":" gbp "}`))
+	w := httptest.NewRecorder()
+
+	s.handlePutConfig(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if got := config.Load().OpenCostCurrency; got != "GBP" {
+		t.Errorf("opencostCurrency = %q, want GBP", got)
+	}
+}
+
+func TestPutConfigRejectsInvalidOpenCostCurrency(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	s := &Server{}
+	r := httptest.NewRequest(http.MethodPut, "/api/config", strings.NewReader(`{"opencostCurrency":"EURO"}`))
+	w := httptest.NewRecorder()
+
+	s.handlePutConfig(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if got := config.Load().OpenCostCurrency; got != "" {
+		t.Errorf("opencostCurrency = %q, want config unchanged", got)
+	}
 }
 
 func putConfigStatus(t *testing.T, user *auth.User) (int, string) {

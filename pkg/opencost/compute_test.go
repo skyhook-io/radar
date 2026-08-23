@@ -101,12 +101,12 @@ func TestComputeCostSummary_HappyPath(t *testing.T) {
 		{contains: "node_total_hourly_cost", body: scalarBody(8.0)}, // exceeds sum of namespaces, so it wins
 	})
 
-	got := ComputeCostSummaryFromProm(context.Background(), client, SummaryOptions{})
+	got := ComputeCostSummaryFromProm(context.Background(), client, SummaryOptions{Currency: "GBP"})
 	if !got.Available {
 		t.Fatalf("summary unavailable: %+v", got)
 	}
-	if got.Currency != "USD" || got.Window != "1h" {
-		t.Errorf("currency/window defaults: %+v", got)
+	if got.Currency != "GBP" || got.Window != "1h" {
+		t.Errorf("currency/window: %+v", got)
 	}
 	if got.TotalHourlyCost != 8.0 {
 		t.Errorf("TotalHourlyCost=%v, want 8.0 (node_total_hourly_cost ceiling)", got.TotalHourlyCost)
@@ -132,6 +132,13 @@ func TestComputeCostSummary_HappyPath(t *testing.T) {
 	}
 	if got.Namespaces[0].HourlyCost != 5.05 {
 		t.Errorf("checkout.HourlyCost=%v, want 5.05", got.Namespaces[0].HourlyCost)
+	}
+}
+
+func TestComputeCostSummary_NilClientIncludesCurrency(t *testing.T) {
+	got := ComputeCostSummaryFromProm(context.Background(), nil, SummaryOptions{Currency: "GBP"})
+	if got.Available || got.Reason != ReasonNoPrometheus || got.Currency != "GBP" {
+		t.Fatalf("unexpected unavailable summary: %+v", got)
 	}
 }
 

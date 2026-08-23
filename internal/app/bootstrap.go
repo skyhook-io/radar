@@ -59,6 +59,7 @@ type AppConfig struct {
 	TimelineRetention        time.Duration
 	TimelineMaxSizeBytes     int64
 	PrometheusURL            string
+	OpenCostCurrency         string
 	PrometheusHeaders        map[string]string
 	PrometheusHeadersFromEnv map[string]string
 	BeylaJobSelector         string
@@ -275,6 +276,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 		TimelineMaxSize:          fmt.Sprintf("%d", cfg.TimelineMaxSizeBytes),
 		HistoryLimit:             cfg.HistoryLimit,
 		PrometheusURL:            cfg.PrometheusURL,
+		OpenCostCurrency:         cfg.OpenCostCurrency,
 		PrometheusHeaders:        cfg.PrometheusHeaders,
 		PrometheusHeadersFromEnv: cfg.PrometheusHeadersFromEnv,
 		DebugImage:               cfg.DebugImage,
@@ -292,6 +294,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 		StaticFS:         static.FS,
 		StaticRoot:       "dist",
 		EffectiveConfig:  effectiveCfg,
+		OpenCostCurrency: cfg.OpenCostCurrency,
 		DiagConfig: &server.DiagConfig{
 			Port:                 cfg.Port,
 			DevMode:              cfg.DevMode,
@@ -300,6 +303,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 			HistoryLimit:         cfg.HistoryLimit,
 			DebugEvents:          cfg.DebugEvents,
 			MCPEnabled:           cfg.MCPEnabled,
+			OpenCostCurrency:     cfg.OpenCostCurrency,
 			HasPrometheusURL:     cfg.PrometheusURL != "",
 			HasPrometheusHeaders: len(cfg.PrometheusHeaders) > 0,
 		},

@@ -448,6 +448,12 @@ mcp:
   # Set to false to disable the MCP server (useful when deployed behind authentication)
   enabled: true
 
+# OpenCost display configuration
+cost:
+  # ISO 4217 code describing the currency of OpenCost values. Radar labels
+  # values with this code but does not convert them. Empty defaults to USD.
+  currency: ""
+
 # Traffic source configuration
 traffic:
   # Manual Prometheus/VictoriaMetrics URL (bypasses auto-discovery)

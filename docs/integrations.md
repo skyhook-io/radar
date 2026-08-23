@@ -1166,7 +1166,9 @@ PolicyReport findings are policy posture, not live operational failure, so they 
 
 [OpenCost](https://www.opencost.io/) is a CNCF tool for Kubernetes cost monitoring, exposing cloud provider pricing and workload resource allocation as Prometheus metrics.
 
-Radar discovers if OpenCost metrics are available in the already-discovered Prometheus. If OpenCost is installed and scraping into Prometheus, cost data appears automatically with no additional configuration. The integration is passive and read-only.
+Radar discovers if OpenCost metrics are available in the already-discovered Prometheus. If OpenCost is installed and scraping into Prometheus, cost data appears automatically. The integration is passive and read-only.
+
+OpenCost's Prometheus metrics contain numeric values but no currency metadata. Radar labels them as USD by default. If OpenCost is configured for another currency, set Radar's `--opencost-currency` flag to the matching ISO 4217 code (Helm: `cost.currency`). Radar labels the values but does not convert them.
 
 ### What Radar Shows
 
@@ -1186,7 +1188,7 @@ Radar discovers if OpenCost metrics are available in the already-discovered Prom
 
 1. OpenCost (or Kubecost) deployed in your cluster, with its metrics being scraped by Prometheus
 
-OpenCost cost data is not CRD-based — no custom resources are required. Cost views appear automatically when metrics are detected; they are hidden when no OpenCost metrics are found in Prometheus.
+OpenCost cost data is not CRD-based — no custom resources are required. Cost views appear automatically when metrics are detected; they are hidden when no OpenCost metrics are found in Prometheus. Non-USD values require the currency label configuration described above.
 
 ---
 

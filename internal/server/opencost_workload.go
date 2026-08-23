@@ -39,6 +39,7 @@ func (s *Server) handleOpenCostWorkload(w http.ResponseWriter, r *http.Request) 
 		Namespace: namespace,
 		Kind:      kind,
 		Name:      name,
+		Currency:  s.openCostCurrency,
 	}
 
 	client := prometheuspkg.GetClient()
@@ -57,7 +58,9 @@ func (s *Server) handleOpenCostWorkload(w http.ResponseWriter, r *http.Request) 
 	}
 
 	workloads := pkgopencost.ComputeWorkloadsFromProm(r.Context(), client.Prom(), namespace, internalopencost.BuildPodOwnerLookup(namespace))
-	s.writeJSON(w, focusOpenCostWorkload(workloads, kind, namespace, name, desiredReplicas))
+	result := focusOpenCostWorkload(workloads, kind, namespace, name, desiredReplicas)
+	result.Currency = s.openCostCurrency
+	s.writeJSON(w, result)
 }
 
 func (s *Server) handleOpenCostWorkloadTrend(w http.ResponseWriter, r *http.Request) {
@@ -78,6 +81,7 @@ func (s *Server) handleOpenCostWorkloadTrend(w http.ResponseWriter, r *http.Requ
 		Kind:      kind,
 		Name:      name,
 		Range:     r.URL.Query().Get("range"),
+		Currency:  s.openCostCurrency,
 	}
 
 	client := prometheuspkg.GetClient()
@@ -95,12 +99,14 @@ func (s *Server) handleOpenCostWorkloadTrend(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	s.writeJSON(w, pkgopencost.ComputeWorkloadCostTrendFromProm(r.Context(), client.Prom(), pkgopencost.WorkloadTrendOptions{
+	result := pkgopencost.ComputeWorkloadCostTrendFromProm(r.Context(), client.Prom(), pkgopencost.WorkloadTrendOptions{
 		Range:     r.URL.Query().Get("range"),
 		Namespace: namespace,
 		Kind:      kind,
 		Name:      name,
-	}))
+	})
+	result.Currency = s.openCostCurrency
+	s.writeJSON(w, result)
 }
 
 func (s *Server) parseOpenCostWorkloadRequest(w http.ResponseWriter, r *http.Request) (kind, namespace, name string, ok bool) {

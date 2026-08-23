@@ -99,7 +99,7 @@ type SummaryOptions struct {
 //   - Numbers rounded to 4dp for JSON cleanliness.
 func ComputeCostSummary(ctx context.Context, client *RESTClient, opts SummaryOptions) *CostSummary {
 	if opts.Currency == "" {
-		opts.Currency = "USD"
+		opts.Currency = DefaultCurrency
 	}
 	if opts.Window == "" {
 		opts.Window = "1h"
@@ -339,11 +339,11 @@ func safeRatio(num, den float64) float64 {
 //     the typed reason to the UI.
 //   - Numbers are rounded to 4 decimal places for cleaner JSON.
 func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts SummaryOptions) *CostSummary {
-	if client == nil {
-		return &CostSummary{Available: false, Reason: ReasonNoPrometheus}
-	}
 	if opts.Currency == "" {
-		opts.Currency = "USD"
+		opts.Currency = DefaultCurrency
+	}
+	if client == nil {
+		return &CostSummary{Available: false, Reason: ReasonNoPrometheus, Currency: opts.Currency}
 	}
 	if opts.Window == "" {
 		opts.Window = "1h"
@@ -357,7 +357,7 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 			`sum by (namespace) (label_replace(rate(opencost_container_cpu_cost_total[1h]), "namespace", "$1", "exported_namespace", "(.+)"))`)
 		if err != nil {
 			log.Printf("[opencost] CPU allocation fallback query also failed: %v", err)
-			return &CostSummary{Available: false, Reason: ReasonQueryError}
+			return &CostSummary{Available: false, Reason: ReasonQueryError, Currency: opts.Currency}
 		}
 	}
 
@@ -369,12 +369,12 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 			`sum by (namespace) (label_replace(rate(opencost_container_memory_cost_total[1h]), "namespace", "$1", "exported_namespace", "(.+)"))`)
 		if err != nil {
 			log.Printf("[opencost] memory allocation fallback query also failed: %v", err)
-			return &CostSummary{Available: false, Reason: ReasonQueryError}
+			return &CostSummary{Available: false, Reason: ReasonQueryError, Currency: opts.Currency}
 		}
 	}
 
 	if len(cpuResult.Series) == 0 && len(memResult.Series) == 0 {
-		return &CostSummary{Available: false, Reason: ReasonNoMetrics}
+		return &CostSummary{Available: false, Reason: ReasonNoMetrics, Currency: opts.Currency}
 	}
 
 	// Usage queries are best-effort: efficiency / idle are derived from them

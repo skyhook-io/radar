@@ -30,7 +30,7 @@ import {
   BarChart3,
   Network,
   Stethoscope,
-  DollarSign,
+  Coins,
 } from 'lucide-react'
 import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom, Topology, TopologyNode, HPADiagnosis, WorkloadPodInfo } from '../../types'
 import type { GitOpsStatus } from '../../types/gitops'
@@ -722,7 +722,7 @@ export function WorkloadView({
       icon: <Stethoscope className="w-4 h-4" />,
       hidden: !(renderDiagnoseTab && (isDiagnoseKind(apiKind, group) || (reachableVia?.length ?? 0) > 0)),
     },
-    { id: 'cost', label: 'Cost', icon: <DollarSign className="w-4 h-4" />, hidden: !costTabVisible },
+    { id: 'cost', label: 'Cost', icon: <Coins className="w-4 h-4" />, hidden: !costTabVisible },
     { id: 'yaml', label: 'YAML', icon: <FileText className="w-4 h-4" /> },
   ]
   const requestedTabAvailable = tabs.some((tab) => tab.id === requestedTab && !tab.hidden)

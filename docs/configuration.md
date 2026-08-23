@@ -46,6 +46,7 @@ Persistent defaults for CLI flags. CLI flags always override these values. Manag
   "timelineMaxSize": "0",
   "historyLimit": 10000,
   "prometheusUrl": "",
+  "opencostCurrency": "USD",
   "prometheusHeaders": {},
   "mcp": true,
   "debugImage": ""
@@ -68,6 +69,7 @@ All fields are optional — omitted fields use built-in defaults.
 | `timelineMaxSize` | Max SQLite DB + WAL size before pruning oldest events (`0` disables) |
 | `historyLimit` | Max timeline events to retain |
 | `prometheusUrl` | Manual Prometheus/VictoriaMetrics URL — skips auto-discovery. Useful when Prometheus is not in the same cluster or uses a non-standard service name. |
+| `opencostCurrency` | ISO 4217 code describing the values produced by OpenCost (default `USD`). Radar labels values with this code but does not convert them. Equivalent CLI: `--opencost-currency`. |
 | `prometheusHeaders` | HTTP headers sent with every Prometheus request. Required for auth-protected backends — e.g. `{"X-Scope-OrgID": "my-org"}`. Equivalent CLI: `--prometheus-header Key=Value` (repeatable). Stored in plain text in `config.json` — protect the file accordingly. |
 | `argoCdUrl` | Manual argocd-server URL for the Argo CD API integration — skips auto-discovery. |
 | `argoCdToken` | Argo CD API token (get-only account recommended). Stored in plain text — the file is written `0600`; the token is redacted from `GET /api/config`. |

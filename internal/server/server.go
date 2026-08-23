@@ -58,6 +58,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/conditions"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	pkgopencost "github.com/skyhook-io/radar/pkg/opencost"
 	"github.com/skyhook-io/radar/pkg/perfstats"
 	"github.com/skyhook-io/radar/pkg/rbac"
 	topology "github.com/skyhook-io/radar/pkg/topology"
@@ -82,6 +83,7 @@ type Server struct {
 	mcpReadOnlyHandler http.Handler
 	diagConfig         *DiagConfig
 	effectiveConfig    *config.Config // running config for GET /api/config
+	openCostCurrency   string
 	authConfig         auth.Config
 	permCache          *auth.PermissionCache
 	oidcHandler        *auth.OIDCHandler
@@ -166,6 +168,7 @@ type Config struct {
 	MCPReadOnlyHandler http.Handler   // read-only MCP handler (read tools only)
 	DiagConfig         *DiagConfig    // Sanitized config for diagnostics endpoint
 	EffectiveConfig    *config.Config // Running startup config for GET /api/config
+	OpenCostCurrency   string         // ISO 4217 code labeling values returned by OpenCost endpoints
 	AuthConfig         auth.Config    // Authentication configuration
 	AIHistoryDB        string         // AI run-history SQLite path ("" = memory-only runs)
 	CloudConnect       CloudConnectConfig
@@ -174,6 +177,9 @@ type Config struct {
 // New creates a new server instance
 func New(cfg Config) *Server {
 	cfg.AuthConfig.Defaults()
+	if cfg.OpenCostCurrency == "" {
+		cfg.OpenCostCurrency = pkgopencost.DefaultCurrency
+	}
 	basePath, err := NormalizeBasePath(cfg.BasePath)
 	if err != nil {
 		log.Fatalf("Invalid base path %q: %v", cfg.BasePath, err)
@@ -198,6 +204,7 @@ func New(cfg Config) *Server {
 		mcpReadOnlyHandler:    cfg.MCPReadOnlyHandler,
 		diagConfig:            cfg.DiagConfig,
 		effectiveConfig:       cfg.EffectiveConfig,
+		openCostCurrency:      cfg.OpenCostCurrency,
 		authConfig:            cfg.AuthConfig,
 		cloudConnectCfg:       cfg.CloudConnect,
 		topoMemo:              topology.NewMemoizer(5 * time.Second),
@@ -706,7 +713,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Post("/opencost/application/trend", s.handleOpenCostApplicationTrend)
 			r.Get("/opencost/workload/{kind}/{namespace}/{name}", s.handleOpenCostWorkload)
 			r.Get("/opencost/workload/{kind}/{namespace}/{name}/trend", s.handleOpenCostWorkloadTrend)
-			opencost.RegisterRoutes(r)
+			opencost.RegisterRoutes(r, s.openCostCurrency)
 
 			// FluxCD routes
 			r.Post("/flux/{kind}/{namespace}/{name}/reconcile", s.handleFluxReconcile)
@@ -5185,6 +5192,12 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	normalizedCurrency, err := config.NormalizeOpenCostCurrency(updated.OpenCostCurrency)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid OpenCost currency: "+err.Error())
+		return
+	}
+	updated.OpenCostCurrency = normalizedCurrency
 	result, err := config.Update(func(c *config.Config) {
 		// Integration connection fields are owned exclusively by the live
 		// /api/integrations/* endpoints, not this startup-config PUT. Preserve

@@ -39,6 +39,7 @@ interface Config {
   timelineDbPath?: string
   historyLimit?: number
   prometheusUrl?: string
+  opencostCurrency?: string
   argoCdUrl?: string
   argoCdInsecureTls?: boolean
   mcp?: boolean | null

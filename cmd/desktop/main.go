@@ -66,6 +66,7 @@ func main() {
 	timelineRetention := flag.Duration("timeline-retention", fileCfg.TimelineRetentionOr(7*24*time.Hour), "How long to retain timeline events when --timeline-storage=sqlite (e.g. 168h, 720h). 0 disables age-based cleanup.")
 	timelineMaxSize := flag.String("timeline-max-size", fileCfg.TimelineMaxSizeOr("1Gi"), "Maximum SQLite timeline storage size before pruning oldest events (e.g. 800Mi, 8Gi). 0 disables size-based pruning.")
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
+	openCostCurrency := flag.String("opencost-currency", fileCfg.OpenCostCurrency, "ISO 4217 currency code used by OpenCost values (default: USD)")
 	flag.Parse()
 
 	if *showVersion {
@@ -120,6 +121,11 @@ func main() {
 		log.Printf("ERROR: invalid --timeline-max-size %q: %v", *timelineMaxSize, err)
 		os.Exit(1)
 	}
+	normalizedOpenCostCurrency, err := config.NormalizeOpenCostCurrency(*openCostCurrency)
+	if err != nil {
+		log.Printf("ERROR: invalid --opencost-currency %q: %v", *openCostCurrency, err)
+		os.Exit(1)
+	}
 	resolvedPrometheusHeaders, err := app.ResolvePrometheusHeaders(fileCfg.PrometheusHeaders, fileCfg.PrometheusHeadersFromEnv)
 	if err != nil {
 		log.Printf("ERROR: invalid Prometheus header configuration: %v", err)
@@ -163,6 +169,7 @@ func main() {
 		TimelineRetention:        *timelineRetention,
 		TimelineMaxSizeBytes:     timelineMaxSizeBytes,
 		PrometheusURL:            *prometheusURL,
+		OpenCostCurrency:         normalizedOpenCostCurrency,
 		PrometheusHeaders:        resolvedPrometheusHeaders,
 		PrometheusHeadersFromEnv: fileCfg.PrometheusHeadersFromEnv,
 		Version:                  version,

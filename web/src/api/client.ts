@@ -937,6 +937,7 @@ export interface OpenCostWorkloadCost {
 export interface OpenCostWorkloadResponse {
   available: boolean;
   reason?: CostUnavailableReason;
+  currency?: string;
   namespace: string;
   workloads: OpenCostWorkloadCost[];
 }
@@ -964,6 +965,7 @@ export function useOpenCostWorkloads(
 export interface OpenCostWorkloadDetailResponse {
   available: boolean;
   reason?: CostUnavailableReason;
+  currency?: string;
   namespace: string;
   kind: string;
   name: string;
@@ -1008,6 +1010,7 @@ export interface OpenCostTrendSeries {
 export interface OpenCostTrendResponse {
   available: boolean;
   reason?: CostUnavailableReason;
+  currency?: string;
   range: string;
   series?: OpenCostTrendSeries[];
 }
@@ -1029,6 +1032,7 @@ export function useOpenCostTrend(range_: CostTimeRange = "24h") {
 export interface OpenCostWorkloadTrendResponse {
   available: boolean;
   reason?: CostUnavailableReason;
+  currency?: string;
   namespace: string;
   kind: string;
   name: string;
@@ -1101,6 +1105,7 @@ export interface OpenCostApplicationWorkloadCost extends OpenCostApplicationWork
 export interface OpenCostApplicationCostResponse {
   available: boolean;
   reason?: CostUnavailableReason;
+  currency?: string;
   partial?: boolean;
   totals: OpenCostApplicationCostTotals;
   coverage: OpenCostApplicationCostCoverage;
@@ -1115,6 +1120,7 @@ export interface OpenCostApplicationCostTrendSeries extends OpenCostApplicationW
 export interface OpenCostApplicationCostTrendResponse {
   available: boolean;
   reason?: CostUnavailableReason;
+  currency?: string;
   range: string;
   partial?: boolean;
   windowTotalCost?: number;
@@ -1206,6 +1212,7 @@ export interface OpenCostNodeCost {
 export interface OpenCostNodeResponse {
   available: boolean;
   reason?: CostUnavailableReason;
+  currency?: string;
   nodes?: OpenCostNodeCost[];
 }
 

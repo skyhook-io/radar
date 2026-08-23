@@ -8,7 +8,7 @@ import {
   Activity,
   Sun,
   Stethoscope,
-  DollarSign,
+  Coins,
   Gauge,
   ShieldCheck,
   GitBranch,
@@ -151,7 +151,7 @@ const VIEW_ENTRIES: {
   { view: "traffic", label: "Live Traffic", icon: Activity, shortcut: "g f" },
   { view: "checks", label: "Checks", icon: ShieldCheck, shortcut: "g u" },
   { view: "capacity", label: "Capacity", icon: Gauge, shortcut: "g p" },
-  { view: "cost", label: "Cost", icon: DollarSign, shortcut: "g c" },
+  { view: "cost", label: "Cost", icon: Coins, shortcut: "g c" },
 ];
 
 // The static command-palette items (Views, Resource Kinds, Contexts,

@@ -29,6 +29,7 @@ type DiagConfig struct {
 	HistoryLimit         int    `json:"historyLimit"`
 	DebugEvents          bool   `json:"debugEvents"`
 	MCPEnabled           bool   `json:"mcpEnabled"`
+	OpenCostCurrency     string `json:"opencostCurrency"`
 	HasPrometheusURL     bool   `json:"hasPrometheusURL"`
 	HasPrometheusHeaders bool   `json:"hasPrometheusHeaders"`
 }

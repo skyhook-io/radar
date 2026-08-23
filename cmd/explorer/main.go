@@ -132,6 +132,7 @@ func main() {
 	aiHistory := flag.Bool("ai-history", fileCfg.AIHistoryOr(true), "Persist AI investigations (transcripts + verdicts) to ~/.radar/ai-runs.db so they survive restarts")
 	// Traffic/metrics options
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
+	openCostCurrency := flag.String("opencost-currency", fileCfg.OpenCostCurrency, "ISO 4217 currency code used by OpenCost values (default: USD)")
 	// --prometheus-header Key=Value, repeatable. Defaults populated from
 	// config file; any --prometheus-header flag replaces the file value rather
 	// than merging — matches kubectl semantics (file is the default, CLI wins).
@@ -270,6 +271,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("Invalid --timeline-max-size %q: %v", *timelineMaxSize, err)
 	}
+	normalizedOpenCostCurrency, err := config.NormalizeOpenCostCurrency(*openCostCurrency)
+	if err != nil {
+		log.Fatalf("Invalid --opencost-currency %q: %v", *openCostCurrency, err)
+	}
 	noMCPFlagSet := false
 	namespaceFlagSet := false
 	namespacesFlagSet := false
@@ -349,6 +354,7 @@ func main() {
 		TimelineRetention:        *timelineRetention,
 		TimelineMaxSizeBytes:     timelineMaxSizeBytes,
 		PrometheusURL:            *prometheusURL,
+		OpenCostCurrency:         normalizedOpenCostCurrency,
 		PrometheusHeaders:        resolvedPrometheusHeaders,
 		PrometheusHeadersFromEnv: promHeadersFromEnv.value(),
 		BeylaJobSelector:         *beylaJobSelector,

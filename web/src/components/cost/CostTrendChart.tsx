@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, useCallback } from 'react'
 import { clsx } from 'clsx'
 import { Loader2, TrendingUp } from 'lucide-react'
 import { useOpenCostTrend, type CostTimeRange, type OpenCostTrendSeries } from '../../api/client'
-import { formatCostAxis, formatCostPerHour } from './format'
+import { DEFAULT_COST_CURRENCY, formatCostAxis, formatCostPerHour } from './format'
 
 const SERIES_COLORS = [
   '#3b82f6', // blue-500
@@ -41,6 +41,8 @@ export function CostTrendChart() {
     return null
   }
 
+  const currency = data.currency ?? DEFAULT_COST_CURRENCY
+
   return (
     <div className="rounded-lg border border-theme-border bg-theme-surface/50">
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-theme-border">
@@ -48,20 +50,28 @@ export function CostTrendChart() {
           <TrendingUp className="w-4 h-4 text-theme-text-tertiary" />
           <div>
             <div className="text-xs font-medium text-theme-text-secondary">Cost rate trend</div>
-            <div className="text-[10px] text-theme-text-tertiary">Historical OpenCost allocation rate ($/hr)</div>
+            <div className="text-[10px] text-theme-text-tertiary">
+              Historical OpenCost allocation rate ({currency}/hr)
+            </div>
           </div>
         </div>
         <CostTimeRangeSelector value={timeRange} onChange={setTimeRange} />
       </div>
       <div className="p-4">
-        <StackedAreaChart series={data.series} />
+        <StackedAreaChart series={data.series} currency={currency} />
         <ChartLegend series={data.series} />
       </div>
     </div>
   )
 }
 
-export function StackedAreaChart({ series }: { series: OpenCostTrendSeries[] }) {
+export function StackedAreaChart({
+  series,
+  currency,
+}: {
+  series: OpenCostTrendSeries[]
+  currency: string
+}) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [hoverX, setHoverX] = useState<number | null>(null)
 
@@ -123,7 +133,7 @@ export function StackedAreaChart({ series }: { series: OpenCostTrendSeries[] }) 
     const tickCount = 4
     const yTicks = Array.from({ length: tickCount + 1 }, (_, i) => {
       const val = (yMax / tickCount) * i
-      return { val, y: toY(val), label: formatCostAxis(val) }
+      return { val, y: toY(val), label: formatCostAxis(val, currency) }
     })
 
     // X axis ticks
@@ -175,7 +185,7 @@ export function StackedAreaChart({ series }: { series: OpenCostTrendSeries[] }) 
       xTicks,
       paths,
     }
-  }, [series, plotHeight, plotWidth])
+  }, [series, currency, plotHeight, plotWidth])
 
   // Hover data — depends on hoverX + chartData, must be a separate hook (called unconditionally)
   const hoverData = useMemo(() => {
@@ -341,14 +351,14 @@ export function StackedAreaChart({ series }: { series: OpenCostTrendSeries[] }) 
                   <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: p.color }} />
                   <span className="text-theme-text-secondary">{p.namespace}</span>
                   <span className="text-theme-text-primary font-semibold ml-auto pl-3 tabular-nums">
-                    {formatCostTooltip(p.value)}
+                    {formatCostTooltip(p.value, currency)}
                   </span>
                 </div>
               ))}
             {series.length > 1 && (
               <div className="border-t border-theme-border/50 mt-1 pt-1 flex justify-between text-theme-text-primary font-semibold">
                 <span>Total</span>
-                <span className="tabular-nums">{formatCostTooltip(hoverData.total)}</span>
+                <span className="tabular-nums">{formatCostTooltip(hoverData.total, currency)}</span>
               </div>
             )}
           </div>
@@ -403,8 +413,8 @@ export function CostTimeRangeSelector({
   )
 }
 
-function formatCostTooltip(value: number): string {
-  return formatCostPerHour(value)
+function formatCostTooltip(value: number, currency: string): string {
+  return formatCostPerHour(value, currency)
 }
 
 function formatTimestamp(unix: number): string {
