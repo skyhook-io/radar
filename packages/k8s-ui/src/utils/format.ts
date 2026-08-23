@@ -126,12 +126,15 @@ export function parseMemoryToBytes(memString: string): number {
   const num = parseFloat(match[1])
   const suffix = match[2]
 
-  // Binary suffixes (powers of 1024)
+  // Binary suffixes (powers of 1024). Pi/Ei are real inputs at cluster scale —
+  // an aggregate of a thousand 1TiB nodes serializes as "1Pi".
   const binarySuffixes: Record<string, number> = {
     'Ki': 1024,
     'Mi': 1024 ** 2,
     'Gi': 1024 ** 3,
     'Ti': 1024 ** 4,
+    'Pi': 1024 ** 5,
+    'Ei': 1024 ** 6,
   }
 
   // Decimal suffixes (powers of 1000)
@@ -141,6 +144,8 @@ export function parseMemoryToBytes(memString: string): number {
     'M': 1000 ** 2,
     'G': 1000 ** 3,
     'T': 1000 ** 4,
+    'P': 1000 ** 5,
+    'E': 1000 ** 6,
   }
 
   if (suffix in binarySuffixes) {

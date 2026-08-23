@@ -32,6 +32,15 @@ describe('parseMemoryToBytes', () => {
     expect(parseMemoryToBytes('-1Ki')).toBe(-1024)
     expect(parseMemoryToBytes('1Ki')).toBe(1024)
   })
+
+  // Aggregate cluster memory reaches suffixes a single node never carries —
+  // "1Pi" must not fall through to the bare-number fallback and read as 1 byte.
+  it('parses the large suffixes an aggregate capacity can carry', () => {
+    expect(parseMemoryToBytes('1Pi')).toBe(1024 ** 5)
+    expect(parseMemoryToBytes('1Ei')).toBe(1024 ** 6)
+    expect(parseMemoryToBytes('1P')).toBe(1000 ** 5)
+    expect(parseMemoryToBytes('1E')).toBe(1000 ** 6)
+  })
 })
 
 describe('parseQuantityToNumber', () => {
