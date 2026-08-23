@@ -3,18 +3,19 @@ import { describe, expect, it, vi } from 'vitest'
 import { copyText } from './clipboard'
 
 function fallbackDocument(copied: boolean) {
-  const textarea = {
-    value: '',
-    style: {} as CSSStyleDeclaration,
-    setAttribute: vi.fn(),
-    select: vi.fn(),
-    setSelectionRange: vi.fn(),
-    remove: vi.fn(),
-  }
   const document = {
     createElement: vi.fn(() => textarea),
     body: { appendChild: vi.fn() },
     execCommand: vi.fn(() => copied),
+    activeElement: null as unknown,
+  }
+  const textarea = {
+    value: '',
+    style: {} as CSSStyleDeclaration,
+    setAttribute: vi.fn(),
+    select: vi.fn(() => { document.activeElement = textarea }),
+    setSelectionRange: vi.fn(),
+    remove: vi.fn(),
   }
   return { document, textarea }
 }
@@ -40,6 +41,38 @@ describe('copyText', () => {
     expect(textarea.select).toHaveBeenCalledOnce()
     expect(document.execCommand).toHaveBeenCalledWith('copy')
     expect(textarea.remove).toHaveBeenCalledOnce()
+  })
+
+  it('restores focus to the previously active element without scrolling', async () => {
+    const { document } = fallbackDocument(true)
+    const previouslyFocused = { focus: vi.fn(), isConnected: true }
+    document.activeElement = previouslyFocused
+
+    await expect(copyText('busybox', undefined, document as unknown as Document)).resolves.toBe(true)
+
+    expect(previouslyFocused.focus).toHaveBeenCalledWith({ preventScroll: true })
+  })
+
+  it('leaves focus alone when a copy handler focused something else', async () => {
+    const { document, textarea } = fallbackDocument(true)
+    const previouslyFocused = { focus: vi.fn(), isConnected: true }
+    document.activeElement = previouslyFocused
+    const somethingElse = {}
+    textarea.select.mockImplementation(() => { document.activeElement = somethingElse })
+
+    await expect(copyText('busybox', undefined, document as unknown as Document)).resolves.toBe(true)
+
+    expect(previouslyFocused.focus).not.toHaveBeenCalled()
+  })
+
+  it('does not refocus an element that left the DOM during the copy', async () => {
+    const { document } = fallbackDocument(true)
+    const previouslyFocused = { focus: vi.fn(), isConnected: false }
+    document.activeElement = previouslyFocused
+
+    await expect(copyText('busybox', undefined, document as unknown as Document)).resolves.toBe(true)
+
+    expect(previouslyFocused.focus).not.toHaveBeenCalled()
   })
 
   it('does not create a fallback element when the Clipboard API succeeds', async () => {

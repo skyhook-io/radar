@@ -21,6 +21,7 @@ export async function copyText(
 
   if (!doc?.body) return false
 
+  const previouslyFocused = doc.activeElement as { focus?: (options?: FocusOptions) => void; isConnected?: boolean } | null
   const textarea = doc.createElement('textarea')
   textarea.value = text
   textarea.readOnly = true
@@ -37,6 +38,13 @@ export async function copyText(
   } catch {
     return false
   } finally {
+    // Restore focus only when the textarea still owns it — a copy handler may
+    // have legitimately focused something else — and without scrolling a
+    // now-offscreen element back into view.
+    const textareaOwnsFocus = doc.activeElement === (textarea as unknown as Element)
     textarea.remove()
+    if (textareaOwnsFocus && previouslyFocused?.isConnected !== false) {
+      previouslyFocused?.focus?.({ preventScroll: true })
+    }
   }
 }
