@@ -5,7 +5,7 @@ import type { RBACNamespaceResponse, RBACBindingWithSubjects, RBACSubject, Resou
 import { rbacKindBadgeClass } from '../../../utils/rbac-badges'
 import { RBACErrorSection } from './RBACErrorSection'
 import { SEVERITY_TEXT, SEVERITY_DOT } from '../../../utils/badge-colors'
-import { parseCPUToNanocores, parseMemoryToBytes } from '../../../utils/format'
+import { parseCPUToNanocores, parseMemoryToBytes, parseQuantityToNumber } from '../../../utils/format'
 
 interface NamespaceRendererProps {
   data: any
@@ -95,11 +95,15 @@ export function NamespaceRenderer({ data, rbacData, rbacLoading, rbacError, quot
 // right unit parser by resource name (cpu → millicores, memory/storage →
 // bytes, everything else → plain count). Returns null when hard is unset or
 // unparseable so the row falls back to showing the raw strings.
-function quotaUsageRatio(resourceName: string, used: string, hard: string): number | null {
+// Count values are Quantities too: the quota controller computes status.used
+// with quantity arithmetic, which re-serializes canonically — a used pod count
+// of 1000 arrives as "1k". Read with parseFloat that is 1, and a saturated
+// quota renders as barely used.
+export function quotaUsageRatio(resourceName: string, used: string, hard: string): number | null {
   if (!hard) return null
   const isCPU = /(^|\.)cpu$/i.test(resourceName)
   const isBytes = /(memory|storage)$/i.test(resourceName)
-  const parse = isCPU ? parseCPUToNanocores : isBytes ? parseMemoryToBytes : (v: string) => parseFloat(v) || 0
+  const parse = isCPU ? parseCPUToNanocores : isBytes ? parseMemoryToBytes : parseQuantityToNumber
   const h = parse(hard)
   if (!h) return null
   return parse(used || '0') / h
