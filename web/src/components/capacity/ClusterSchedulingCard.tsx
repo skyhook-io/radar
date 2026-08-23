@@ -7,7 +7,7 @@ import {
 import { Badge } from "@skyhook-io/k8s-ui/components/ui/Badge";
 import {
   parseCPUToNanocores,
-  parseMemoryToBytes,
+  parseQuantityToNumber,
 } from "@skyhook-io/k8s-ui/utils/format";
 import {
   CertaintyGlyph,
@@ -96,16 +96,15 @@ export function quantityToNumber(
     }
     return null;
   }
-  // Milli quantities before the byte parser — it ignores the `m` suffix and
-  // would read 3000m as 3000, a 1000× distortion.
-  const milli = /^(-?\d+(?:\.\d+)?)m$/.exec(value);
-  if (milli) return Number(milli[1]) / 1000;
-  const parsed = parseMemoryToBytes(value);
-  if (Number.isFinite(parsed) && (parsed !== 0 || /^[0.]+\D*$/.test(value))) {
+  // The shared parser knows the full suffix table — the byte parser stops at
+  // Ti, so a 1PiB aggregate would read as 1 byte. It returns 0 for input it
+  // cannot parse, so distinguish a real zero to preserve the null (= unknown,
+  // not zero) contract of this card.
+  const parsed = parseQuantityToNumber(value);
+  if (parsed !== 0 || /^[+-]?[0.]+\D*$/.test(value)) {
     return parsed;
   }
-  const plain = Number(value);
-  return Number.isFinite(plain) ? plain : null;
+  return null;
 }
 
 function worstCertainty(

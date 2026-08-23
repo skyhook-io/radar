@@ -202,6 +202,16 @@ describe("quantityToNumber", () => {
     expect(quantityToNumber("example.com/widget", "3000m")).toBe(3);
     expect(quantityToNumber("cpu", "1500m")).toBe(1.5e9);
   });
+
+  // Aggregate memory on a large cluster reaches suffixes the byte parser
+  // never knew (its table stops at Ti) — "1Pi" must not read as 1 byte.
+  it("parses the large suffixes an aggregate capacity can carry", () => {
+    expect(quantityToNumber("memory", "1Pi")).toBe(1024 ** 5);
+    expect(quantityToNumber("memory", "1Ei")).toBe(1024 ** 6);
+    expect(quantityToNumber("pods", "1k")).toBe(1000);
+    expect(quantityToNumber("pods", "1e3")).toBe(1000);
+    expect(quantityToNumber("memory", "0Gi")).toBe(0);
+  });
 });
 
 describe("claimStagesDetail", () => {
