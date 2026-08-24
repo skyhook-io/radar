@@ -290,6 +290,12 @@ func (c *Client) GetStatus() prom.Status {
 	}
 }
 
+func (c *Client) HasManualURL() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.manualURL != ""
+}
+
 // EnsureConnected attempts to discover and connect to Prometheus if not
 // already connected. Returns the base URL and base path, or an error.
 func (c *Client) EnsureConnected(ctx context.Context) (string, string, error) {

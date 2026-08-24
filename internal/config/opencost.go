@@ -7,12 +7,10 @@ import (
 	"golang.org/x/text/currency"
 )
 
-const defaultOpenCostCurrency = "USD"
-
 func NormalizeOpenCostCurrency(raw string) (string, error) {
 	code := strings.ToUpper(strings.TrimSpace(raw))
 	if code == "" {
-		return defaultOpenCostCurrency, nil
+		return "", nil
 	}
 	if code == "XXX" || code == "XTS" {
 		return "", fmt.Errorf("must be a monetary ISO 4217 currency code")

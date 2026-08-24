@@ -317,7 +317,7 @@ export function ApplicationCostTab({
       <div className="text-xs text-theme-text-tertiary">
         Powered by OpenCost via Prometheus.{' '}
         {currentCurrency !== DEFAULT_COST_CURRENCY && (
-          <>Radar labels OpenCost values as {currentCurrency}; no currency conversion. </>
+          <>Labeled {currentCurrency}; no conversion. </>
         )}
         Historical spend uses the selected range; projected monthly values multiply current hourly
         allocation. Batch/job cost is separate; storage/PVC and network costs remain at namespace

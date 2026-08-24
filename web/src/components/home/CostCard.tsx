@@ -89,7 +89,7 @@ function CostCardContent({ data, onNavigate }: { data: OpenCostSummary; onNaviga
           <span className="text-[10px] text-theme-text-tertiary">
             {currency} &middot; projected monthly from {data.window ?? '1h'} window
             {currency !== DEFAULT_COST_CURRENCY && (
-              <> &middot; Radar labels OpenCost values as {currency}; no currency conversion</>
+              <> &middot; no conversion</>
             )}
           </span>
           <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-accent-text">

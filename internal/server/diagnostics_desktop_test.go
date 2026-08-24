@@ -7,8 +7,26 @@ import (
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/desktopenv"
+	internalopencost "github.com/skyhook-io/radar/internal/opencost"
 	"github.com/skyhook-io/radar/internal/version"
 )
+
+func TestDiagnosticsReportsRunningOpenCostCurrency(t *testing.T) {
+	rec := httptest.NewRecorder()
+	s := &Server{
+		diagConfig:       &DiagConfig{OpenCostCurrency: "USD"},
+		openCostCurrency: internalopencost.NewCurrencyResolver("GBP"),
+	}
+	s.handleDiagnostics(rec, httptest.NewRequest(http.MethodGet, "/api/diagnostics", nil))
+
+	var snapshot DiagnosticsSnapshot
+	if err := json.Unmarshal(rec.Body.Bytes(), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Config == nil || snapshot.Config.OpenCostCurrency != "GBP" {
+		t.Fatalf("diagnostics currency = %#v, want GBP", snapshot.Config)
+	}
+}
 
 // The CLI and the desktop app share this endpoint. A CLI snapshot must not
 // carry a Desktop section at all — an empty one in a bug report reads as

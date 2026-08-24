@@ -132,7 +132,7 @@ func main() {
 	aiHistory := flag.Bool("ai-history", fileCfg.AIHistoryOr(true), "Persist AI investigations (transcripts + verdicts) to ~/.radar/ai-runs.db so they survive restarts")
 	// Traffic/metrics options
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
-	openCostCurrency := flag.String("opencost-currency", fileCfg.OpenCostCurrency, "ISO 4217 currency code used by OpenCost values (default: USD)")
+	openCostCurrency := flag.String("opencost-currency", fileCfg.OpenCostCurrency, "Override the ISO 4217 currency label for OpenCost values (empty: auto-detect, then USD)")
 	// --prometheus-header Key=Value, repeatable. Defaults populated from
 	// config file; any --prometheus-header flag replaces the file value rather
 	// than merging — matches kubectl semantics (file is the default, CLI wins).

@@ -3,10 +3,11 @@ import { createPortal } from 'react-dom'
 import {
   Settings, X, RotateCcw, RotateCw, Loader2, Copy, Check, Pin, Shield, Lock, Plug,
   Plus, Terminal, Boxes, Activity, GitBranch, Sparkles, SlidersHorizontal, Zap,
-  LayoutDashboard, ChevronRight, ExternalLink, Download, AlertTriangle,
+  LayoutDashboard, ChevronRight, ExternalLink, Download, AlertTriangle, Coins,
   type LucideIcon,
 } from 'lucide-react'
 import { clsx } from 'clsx'
+import { useQueryClient } from '@tanstack/react-query'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
 import { apiUrl, getAuthHeaders, getCredentialsMode, routePath } from '../../api/config'
@@ -73,17 +74,18 @@ interface SettingsDialogProps {
 }
 
 // The settings surface splits into three honest apply buckets:
-//   • Startup config (kubeconfig, server, timeline, MCP) — persisted by the
-//     owner-gated footer to the config file; effect on next launch.
+//   • Persisted config (kubeconfig, server, timeline, MCP, cost currency) —
+//     saved by the owner-gated footer. Currency applies live; the rest restart.
 //   • Live integrations (Prometheus, Argo CD) — their own Apply/Connect endpoints
 //     re-point the running server; effect immediately, NOT part of footer dirty.
 //   • AI diagnose — client-side prefs, self-saving, editable by everyone.
 export type SettingsSectionId =
-  | 'overview' | 'perms' | 'connection' | 'prometheus' | 'argocd' | 'ai' | 'advanced'
+  | 'overview' | 'perms' | 'connection' | 'prometheus' | 'cost' | 'argocd' | 'ai' | 'advanced'
 
-// Only STARTUP fields count toward footer dirty. Integration fields (prometheusUrl,
-// argoCdUrl, argoCdInsecureTls) apply live and are excluded here. Every field is
-// normalized so unset≡default doesn't read as a change.
+// Persisted footer fields include startup settings plus the live currency override.
+// Integration fields (prometheusUrl, argoCdUrl, argoCdInsecureTls) apply through
+// their own controls and are excluded here. Every field is normalized so
+// unset≡default doesn't read as a change.
 function normalizeStartup(c: Config) {
   return {
     kubeconfig: c.kubeconfig ?? '',
@@ -96,6 +98,7 @@ function normalizeStartup(c: Config) {
     timelineDbPath: c.timelineDbPath ?? '',
     historyLimit: c.historyLimit ?? null,
     mcp: c.mcp ?? true,
+    opencostCurrency: c.opencostCurrency?.trim().toUpperCase() ?? '',
   }
 }
 
@@ -104,6 +107,7 @@ export function SettingsDialog({
   onClose,
   initialSection = 'overview',
 }: SettingsDialogProps) {
+  const queryClient = useQueryClient()
   const dialogRef = useRef<HTMLDivElement>(null)
   const { shouldRender, isOpen } = useAnimatedUnmount(open, 200)
   const { data: versionInfo } = useVersionCheck()
@@ -157,10 +161,11 @@ export function SettingsDialog({
     edN.timelineStorage !== svN.timelineStorage ||
     edN.timelineDbPath !== svN.timelineDbPath ||
     edN.historyLimit !== svN.historyLimit
+  const costDirty = edN.opencostCurrency !== svN.opencostCurrency
   // Merged-pane dirty for the flat nav (Connection = cluster+server, Advanced = mcp+timeline).
   const connectionDirty = clusterDirty || serverDirty
   const advancedDirty = mcpDirty || timelineDirty
-  const startupDirty = configData != null && (connectionDirty || advancedDirty)
+  const configDirty = configData != null && (connectionDirty || costDirty || advancedDirty)
 
   // Load config on open + snapshot AI prefs + pick a default section that's
   // actually accessible to the current identity.
@@ -238,9 +243,21 @@ export function SettingsDialog({
         setSaveMessage(`Error: ${data?.error || res.statusText}`)
         return false
       }
-      // Advance the committed snapshot so startupDirty settles to false.
-      setConfigData((prev) => (prev ? { ...prev, file: body } : prev))
-      setSaveMessage('Saved. Restart Radar to apply.')
+      const saved = await res.json() as Config
+      const committed = { ...body, opencostCurrency: saved.opencostCurrency }
+      setEditedConfig(committed)
+      setConfigData((prev) => (prev ? { ...prev, file: committed } : prev))
+      if (costDirty) {
+        void queryClient.invalidateQueries({
+          predicate: (query) =>
+            typeof query.queryKey[0] === 'string' && query.queryKey[0].startsWith('opencost-'),
+        })
+      }
+      setSaveMessage(connectionDirty || advancedDirty
+        ? costDirty
+          ? 'Saved. Currency applied immediately; restart Radar for other changes.'
+          : 'Saved. Restart Radar to apply.'
+        : 'Saved. Applied immediately.')
       return true
     } catch (err) {
       setSaveMessage(`Error: ${err}`)
@@ -248,7 +265,7 @@ export function SettingsDialog({
     } finally {
       setSaving(false)
     }
-  }, [editedConfig, configData])
+  }, [editedConfig, configData, costDirty, connectionDirty, advancedDirty, queryClient])
 
   // AI prefs are client-side (localStorage) — commit the staged draft now.
   // setSelectedAgent clears model/effort (they're agent-specific), so set the
@@ -281,7 +298,7 @@ export function SettingsDialog({
   // drop it on close. Held in a ref so the ESC listener reads current dirtiness.
   const requestCloseRef = useRef<() => void>(() => {})
   requestCloseRef.current = () => {
-    if (canEditConfig && startupDirty) setConfirmingClose(true)
+    if (canEditConfig && configDirty) setConfirmingClose(true)
     else onClose()
   }
 
@@ -327,12 +344,13 @@ export function SettingsDialog({
     { id: 'perms', label: 'My permissions', icon: Shield, ownerOnly: false, dirty: false },
     { id: 'connection', label: 'Connection', icon: Boxes, ownerOnly: true, dirty: connectionDirty },
     { id: 'prometheus', label: 'Prometheus', icon: Activity, ownerOnly: true, dirty: false },
+    { id: 'cost', label: 'Cost', icon: Coins, ownerOnly: true, dirty: costDirty },
     { id: 'argocd', label: 'Argo CD', icon: GitBranch, ownerOnly: true, dirty: false },
     { id: 'ai', label: 'AI diagnose', icon: Sparkles, ownerOnly: false, dirty: aiDirty },
     { id: 'advanced', label: 'Advanced', icon: SlidersHorizontal, ownerOnly: true, dirty: advancedDirty },
   ]
 
-  const showFooter = canEditConfig && (confirmingClose || startupDirty || !!saveMessage)
+  const showFooter = canEditConfig && (confirmingClose || configDirty || !!saveMessage)
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -499,6 +517,20 @@ export function SettingsDialog({
               />
             </SectionPane>
 
+            <SectionPane
+              id="cost"
+              active={section}
+              title="Cost"
+              caption="Saved to config and applied immediately."
+              live
+              locked={!canEditConfig}
+            >
+              <CostSection
+                currency={editedConfig.opencostCurrency ?? ''}
+                onChange={(value) => updateConfigField('opencostCurrency', value || undefined)}
+              />
+            </SectionPane>
+
             {/* Argo CD — live */}
             <SectionPane
               id="argocd"
@@ -610,8 +642,8 @@ export function SettingsDialog({
           </div>
         </div>
 
-        {/* Footer — owner-gated. Startup config only: AI self-saves, integrations
-            apply live. Shown whenever a startup edit is pending (any section),
+        {/* Footer — owner-gated persisted config. AI self-saves and integrations
+            apply separately. Shown whenever an edit is pending (any section),
             while confirming a close, or briefly after a save. */}
         <div
           className={clsx(
@@ -654,7 +686,7 @@ export function SettingsDialog({
                   <Tooltip content="Discard unsaved changes and revert to the last saved values">
                     <button
                       onClick={discardChanges}
-                      disabled={saving || !startupDirty}
+                      disabled={saving || !configDirty}
                       className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50 disabled:pointer-events-none"
                     >
                       <RotateCcw className="w-3.5 h-3.5" />
@@ -669,7 +701,7 @@ export function SettingsDialog({
                 </div>
                 <button
                   onClick={saveConfig}
-                  disabled={saving || !startupDirty}
+                  disabled={saving || !configDirty}
                   className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
                 >
                   {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
@@ -1106,6 +1138,24 @@ function TimelineSection({
         onChange={(v) => onChange('historyLimit', v)}
       />
     </>
+  )
+}
+
+function CostSection({
+  currency,
+  onChange,
+}: {
+  currency: string
+  onChange: (value: string) => void
+}) {
+  return (
+    <ConfigField
+      label="Currency override"
+      help="Enter an ISO 4217 code, or leave blank to detect currencyCode from a running OpenCost pricing configuration and then fall back to USD. Radar labels values but does not convert them. A CLI flag or Helm value remains authoritative after restart."
+      value={currency}
+      placeholder="Auto"
+      onChange={onChange}
+    />
   )
 }
 

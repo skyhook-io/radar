@@ -35,8 +35,8 @@ describe('cost formatters', () => {
     expect(formatCostAxis(0.000001, 'GBP')).toBe('<£0.00001')
   })
 
-  it('normalizes codes and falls back to USD for malformed currencies', () => {
+  it('normalizes codes and labels malformed currencies without impersonating USD', () => {
     expect(formatProjectedMonthlyCost(1, ' eur ')).toBe('~€730.00')
-    expect(formatProjectedMonthlyCost(1, 'not-a-code')).toBe('~$730.00')
+    expect(formatProjectedMonthlyCost(1, 'not-a-code')).toBe('~NOT-A-CODE 730.00')
   })
 })

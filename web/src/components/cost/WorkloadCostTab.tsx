@@ -227,7 +227,7 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
       <div className="text-xs text-theme-text-tertiary">
         Powered by OpenCost via Prometheus.{' '}
         {currentCurrency !== DEFAULT_COST_CURRENCY && (
-          <>Radar labels OpenCost values as {currentCurrency}; no currency conversion. </>
+          <>Labeled {currentCurrency}; no conversion. </>
         )}
         Historical spend uses the selected range; projected monthly values multiply the current
         hourly allocation. Storage/PVC attribution remains at namespace and cluster level.

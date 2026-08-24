@@ -58,7 +58,6 @@ import (
 	"github.com/skyhook-io/radar/pkg/conditions"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
 	"github.com/skyhook-io/radar/pkg/k8score"
-	pkgopencost "github.com/skyhook-io/radar/pkg/opencost"
 	"github.com/skyhook-io/radar/pkg/perfstats"
 	"github.com/skyhook-io/radar/pkg/rbac"
 	topology "github.com/skyhook-io/radar/pkg/topology"
@@ -83,7 +82,7 @@ type Server struct {
 	mcpReadOnlyHandler http.Handler
 	diagConfig         *DiagConfig
 	effectiveConfig    *config.Config // running config for GET /api/config
-	openCostCurrency   string
+	openCostCurrency   *opencost.CurrencyResolver
 	authConfig         auth.Config
 	permCache          *auth.PermissionCache
 	oidcHandler        *auth.OIDCHandler
@@ -177,9 +176,6 @@ type Config struct {
 // New creates a new server instance
 func New(cfg Config) *Server {
 	cfg.AuthConfig.Defaults()
-	if cfg.OpenCostCurrency == "" {
-		cfg.OpenCostCurrency = pkgopencost.DefaultCurrency
-	}
 	basePath, err := NormalizeBasePath(cfg.BasePath)
 	if err != nil {
 		log.Fatalf("Invalid base path %q: %v", cfg.BasePath, err)
@@ -204,7 +200,7 @@ func New(cfg Config) *Server {
 		mcpReadOnlyHandler:    cfg.MCPReadOnlyHandler,
 		diagConfig:            cfg.DiagConfig,
 		effectiveConfig:       cfg.EffectiveConfig,
-		openCostCurrency:      cfg.OpenCostCurrency,
+		openCostCurrency:      opencost.NewCurrencyResolver(cfg.OpenCostCurrency),
 		authConfig:            cfg.AuthConfig,
 		cloudConnectCfg:       cfg.CloudConnect,
 		topoMemo:              topology.NewMemoizer(5 * time.Second),
@@ -713,7 +709,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Post("/opencost/application/trend", s.handleOpenCostApplicationTrend)
 			r.Get("/opencost/workload/{kind}/{namespace}/{name}", s.handleOpenCostWorkload)
 			r.Get("/opencost/workload/{kind}/{namespace}/{name}/trend", s.handleOpenCostWorkloadTrend)
-			opencost.RegisterRoutes(r, s.openCostCurrency)
+			opencost.RegisterRoutes(r, s.resolvedOpenCostCurrency)
 
 			// FluxCD routes
 			r.Post("/flux/{kind}/{namespace}/{name}/reconcile", s.handleFluxReconcile)
@@ -5178,7 +5174,8 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, resp)
 }
 
-// handlePutConfig replaces the entire config file. Changes take effect on next restart.
+// handlePutConfig replaces the entire config file. Most changes take effect on next restart;
+// the OpenCost currency override is also applied to the running server.
 // Unlike handlePutSettings (which merges fields), this is a full replacement.
 // PrometheusHeaders and the Argo CD token are preserved from the on-disk file: the GET
 // response redacts them, so a UI round-trip would otherwise silently wipe the user's
@@ -5229,6 +5226,9 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[config] Failed to save config: %v", err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if s.openCostCurrency != nil {
+		s.openCostCurrency.SetOverride(result.OpenCostCurrency)
 	}
 	result.PrometheusHeaders = nil
 	result.ArgoCDToken = ""
@@ -5305,6 +5305,9 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 		traffic.SetMetricsHeaders(headers)
 	}
 	prometheuspkg.Reset()
+	if s.openCostCurrency != nil {
+		s.openCostCurrency.Invalidate()
+	}
 
 	resp := struct {
 		Connected bool   `json:"connected"`

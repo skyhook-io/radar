@@ -349,7 +349,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
             {currency} &middot; current rates based on last 1h average &middot;
             *monthly projections assume {COST_HOURS_PER_MONTH} hrs/mo
             {currency !== DEFAULT_COST_CURRENCY && (
-              <> &middot; Radar labels OpenCost values as {currency}; no currency conversion</>
+              <> &middot; no conversion</>
             )}
           </span>
           <span className="text-indigo-500 font-medium">Powered by OpenCost</span>
@@ -815,9 +815,10 @@ function CostHelpDialog({ currency, onClose }: { currency: string; onClose: () =
               Which currency is shown?
             </h3>
             <p>
-              Values are labeled <strong>{currency}</strong>. If OpenCost prices your cluster in
-              another currency, start Radar with <code>--opencost-currency</code> (Helm:{' '}
-              <code>cost.currency</code>). Radar labels the values but does not convert them.
+              Radar labels these values <strong>{currency}</strong> and does not convert them. Auto
+              detects <code>currencyCode</code> from a running OpenCost pricing configuration when
+              Prometheus is cluster-discovered, then falls back to USD. Override it in <strong>Settings → Cost</strong> or,
+              for automation, with <code>--opencost-currency</code> (Helm: <code>cost.currency</code>).
             </p>
           </section>
 

@@ -73,23 +73,8 @@ type SummaryOptions struct {
 	NamespaceFilter string
 }
 
-// ComputeCostSummary is the default compute path: asks OpenCost's REST API
-// for namespace-level allocation over the window and maps the response into
-// our normalized CostSummary.
-//
-// Why REST by default: OpenCost computes cost internally (cloud pricing +
-// Kubernetes allocation data) and exposes the results two ways — REST at
-// /allocation/assets/cloudCost and Prometheus metrics at /metrics. REST
-// works wherever OpenCost works; the Prometheus path requires a scrape
-// config that's often missing on clusters where OpenCost was installed
-// manually. REST is also simpler (one pre-aggregated call instead of ~6
-// PromQL queries + client-side math).
-//
-// When to reach for ComputeCostSummaryFromProm instead:
-//   - You need custom label aggregations beyond what /allocation exposes.
-//   - You want per-node hourly pricing as time series.
-//   - You're correlating cost with live Prometheus metrics (deploy events,
-//     HPA state, container_cpu_usage, etc.) in the same query.
+// ComputeCostSummary asks OpenCost's REST API for namespace-level allocation
+// over the window and maps the response into our normalized CostSummary.
 //
 // Contract:
 //   - REST unreachable or returns error → Available=false, Reason=ReasonQueryError.
@@ -326,10 +311,8 @@ func safeRatio(num, den float64) float64 {
 	return num / den
 }
 
-// ComputeCostSummaryFromProm is the PromQL-based compute path, for callers
-// that have a scraped-OpenCost Prometheus available rather than the REST
-// API (or that need to correlate cost with live Prometheus metrics in the
-// same query).
+// ComputeCostSummaryFromProm is the PromQL-based compute path used by Radar's
+// server handlers and other callers with scraped OpenCost metrics.
 //
 // Contract:
 //   - If the primary OpenCost allocation metrics are absent entirely, the

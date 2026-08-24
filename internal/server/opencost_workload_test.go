@@ -17,7 +17,7 @@ import (
 )
 
 func TestOpenCostDetailResponsesIncludeCurrencyWhenUnavailable(t *testing.T) {
-	s := &Server{openCostCurrency: "GBP"}
+	s := &Server{openCostCurrency: internalopencost.NewCurrencyResolver("GBP")}
 	tests := []struct {
 		name   string
 		method string

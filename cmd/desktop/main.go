@@ -66,7 +66,7 @@ func main() {
 	timelineRetention := flag.Duration("timeline-retention", fileCfg.TimelineRetentionOr(7*24*time.Hour), "How long to retain timeline events when --timeline-storage=sqlite (e.g. 168h, 720h). 0 disables age-based cleanup.")
 	timelineMaxSize := flag.String("timeline-max-size", fileCfg.TimelineMaxSizeOr("1Gi"), "Maximum SQLite timeline storage size before pruning oldest events (e.g. 800Mi, 8Gi). 0 disables size-based pruning.")
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
-	openCostCurrency := flag.String("opencost-currency", fileCfg.OpenCostCurrency, "ISO 4217 currency code used by OpenCost values (default: USD)")
+	openCostCurrency := flag.String("opencost-currency", fileCfg.OpenCostCurrency, "Override the ISO 4217 currency label for OpenCost values (empty: auto-detect, then USD)")
 	flag.Parse()
 
 	if *showVersion {

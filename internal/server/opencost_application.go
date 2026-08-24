@@ -32,14 +32,14 @@ func (s *Server) handleOpenCostApplication(w http.ResponseWriter, r *http.Reques
 	client := prometheuspkg.GetClient()
 	if client == nil {
 		resp := pkgopencost.UnavailableApplicationCostResponse(inputs, unavailable, unsupported, pkgopencost.ReasonNoPrometheus)
-		resp.Currency = s.openCostCurrency
+		resp.Currency = s.resolvedOpenCostCurrency()
 		s.writeJSON(w, resp)
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
 		log.Print("[opencost] EnsureConnected failed for application cost")
 		resp := pkgopencost.UnavailableApplicationCostResponse(inputs, unavailable, unsupported, internalopencost.ConnectionFailureReason(err))
-		resp.Currency = s.openCostCurrency
+		resp.Currency = s.resolvedOpenCostCurrency()
 		s.writeJSON(w, resp)
 		return
 	}
@@ -51,7 +51,7 @@ func (s *Server) handleOpenCostApplication(w http.ResponseWriter, r *http.Reques
 	}
 
 	resp := pkgopencost.BuildApplicationCostResponse(inputs, unavailable, unsupported, namespaceCosts)
-	resp.Currency = s.openCostCurrency
+	resp.Currency = s.resolvedOpenCostCurrency()
 	s.writeJSON(w, resp)
 }
 
@@ -77,7 +77,7 @@ func (s *Server) handleOpenCostApplicationTrend(w http.ResponseWriter, r *http.R
 			Workloads:   refs,
 			Unavailable: unavailable,
 		})
-		resp.Currency = s.openCostCurrency
+		resp.Currency = s.resolvedOpenCostCurrency()
 		s.writeJSON(w, resp)
 		return
 	}
@@ -89,7 +89,7 @@ func (s *Server) handleOpenCostApplicationTrend(w http.ResponseWriter, r *http.R
 			Unavailable:       unavailable,
 			UnavailableReason: internalopencost.ConnectionFailureReason(err),
 		})
-		resp.Currency = s.openCostCurrency
+		resp.Currency = s.resolvedOpenCostCurrency()
 		s.writeJSON(w, resp)
 		return
 	}
@@ -99,7 +99,7 @@ func (s *Server) handleOpenCostApplicationTrend(w http.ResponseWriter, r *http.R
 		Workloads:   refs,
 		Unavailable: unavailable,
 	})
-	resp.Currency = s.openCostCurrency
+	resp.Currency = s.resolvedOpenCostCurrency()
 	s.writeJSON(w, resp)
 }
 

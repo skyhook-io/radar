@@ -9,7 +9,7 @@ func TestNormalizeOpenCostCurrency(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{name: "default", want: "USD"},
+		{name: "auto", want: ""},
 		{name: "trim and uppercase", raw: " gbp ", want: "GBP"},
 		{name: "zero decimal currency", raw: "jpy", want: "JPY"},
 		{name: "unknown", raw: "ZZZ", wantErr: true},

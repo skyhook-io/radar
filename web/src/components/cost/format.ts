@@ -2,9 +2,11 @@ export const COST_HOURS_PER_DAY = 24
 export const COST_HOURS_PER_MONTH = 730
 export const DEFAULT_COST_CURRENCY = 'USD'
 
-const currencyFormatters = new Map<string, Intl.NumberFormat>()
+type CurrencyFormat = { formatter: Intl.NumberFormat; prefix: string }
 
-function currencyFormatter(currency: string, digits?: number): Intl.NumberFormat {
+const currencyFormatters = new Map<string, CurrencyFormat>()
+
+function currencyFormatter(currency: string, digits?: number): CurrencyFormat {
   const normalized = currency.trim().toUpperCase() || DEFAULT_COST_CURRENCY
   const key = `${normalized}:${digits ?? 'default'}`
   const cached = currencyFormatters.get(key)
@@ -20,15 +22,27 @@ function currencyFormatter(currency: string, digits?: number): Intl.NumberFormat
       options.maximumFractionDigits = digits
     }
     const formatter = new Intl.NumberFormat('en-US', options)
-    currencyFormatters.set(key, formatter)
-    return formatter
+    const result = { formatter, prefix: '' }
+    currencyFormatters.set(key, result)
+    return result
   } catch {
-    return currencyFormatter(DEFAULT_COST_CURRENCY, digits)
+    const fallbackDigits = digits ?? 2
+    const options: Intl.NumberFormatOptions = {
+      minimumFractionDigits: fallbackDigits,
+      maximumFractionDigits: fallbackDigits,
+    }
+    const result = {
+      formatter: new Intl.NumberFormat('en-US', options),
+      prefix: `${normalized} `,
+    }
+    currencyFormatters.set(key, result)
+    return result
   }
 }
 
 function formatCurrency(value: number, currency: string, digits?: number): string {
-  return currencyFormatter(currency, digits).format(value)
+  const { formatter, prefix } = currencyFormatter(currency, digits)
+  return `${prefix}${formatter.format(value)}`
 }
 
 export function formatCostAxis(value: number, currency: string): string {

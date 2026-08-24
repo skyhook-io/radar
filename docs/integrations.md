@@ -1168,7 +1168,7 @@ PolicyReport findings are policy posture, not live operational failure, so they 
 
 Radar discovers if OpenCost metrics are available in the already-discovered Prometheus. If OpenCost is installed and scraping into Prometheus, cost data appears automatically. The integration is passive and read-only.
 
-OpenCost's Prometheus metrics contain numeric values but no currency metadata. Radar labels them as USD by default. If OpenCost is configured for another currency, set Radar's `--opencost-currency` flag to the matching ISO 4217 code (Helm: `cost.currency`). Radar labels the values but does not convert them.
+OpenCost's Prometheus metrics contain numeric values but no currency metadata. When Radar auto-discovers Prometheus in the connected cluster, it looks for `currencyCode` in the pricing ConfigMap referenced by a running OpenCost deployment. If that evidence is unavailable or ambiguous, Radar uses USD. Radar skips cluster inference for a manually configured Prometheus URL because it may serve another cluster. Override the label in Settings → Cost or `opencostCurrency` (CLI: `--opencost-currency`; Helm: `cost.currency`). CLI and Helm overrides remain authoritative after restart. Radar labels the values but does not convert them.
 
 ### What Radar Shows
 
@@ -1188,7 +1188,7 @@ OpenCost's Prometheus metrics contain numeric values but no currency metadata. R
 
 1. OpenCost (or Kubecost) deployed in your cluster, with its metrics being scraped by Prometheus
 
-OpenCost cost data is not CRD-based — no custom resources are required. Cost views appear automatically when metrics are detected; they are hidden when no OpenCost metrics are found in Prometheus. Non-USD values require the currency label configuration described above.
+OpenCost cost data is not CRD-based — no custom resources are required. Cost views appear automatically when metrics are detected; they are hidden when no OpenCost metrics are found in Prometheus.
 
 ---
 

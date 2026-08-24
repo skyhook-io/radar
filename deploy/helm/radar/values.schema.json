@@ -308,7 +308,7 @@
         "currency": {
           "type": "string",
           "pattern": "^$|^[A-Za-z]{3}$",
-          "description": "ISO 4217 code describing OpenCost values; Radar labels but does not convert them."
+          "description": "Optional ISO 4217 override for OpenCost values; empty auto-detects from a running OpenCost pricing config, then uses USD."
         }
       }
     },

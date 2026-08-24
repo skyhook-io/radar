@@ -172,7 +172,7 @@ lands in the Helm release state. Rotation requires a pod restart. See
 | `timeline.retention` | SQLite retention (Go duration; `0` disables) | `168h` |
 | `timeline.maxSize` | SQLite max DB + WAL size before oldest events are pruned (`0` disables) | `800Mi` |
 | `persistence.enabled` | Enable PVC for SQLite | `false` |
-| `cost.currency` | ISO 4217 code describing OpenCost values; Radar labels but does not convert them | `""` (USD) |
+| `cost.currency` | Optional ISO 4217 override for OpenCost values; empty auto-detects, then uses USD | `""` |
 | `traffic.prometheusUrl` | Manual Prometheus/VictoriaMetrics URL (skips auto-discovery) | `""` |
 | `traffic.prometheusHeaders` | HTTP headers sent with every Prometheus request (auth-protected backends) | `{}` |
 | `traffic.prometheusHeadersFromEnv` | Prometheus headers sourced from environment variables, for secret-backed auth headers | `{}` |

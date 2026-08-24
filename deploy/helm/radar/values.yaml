@@ -450,8 +450,8 @@ mcp:
 
 # OpenCost display configuration
 cost:
-  # ISO 4217 code describing the currency of OpenCost values. Radar labels
-  # values with this code but does not convert them. Empty defaults to USD.
+  # Optional ISO 4217 override for OpenCost values. Empty detects currencyCode
+  # from a running OpenCost pricing config when available, then uses USD.
   currency: ""
 
 # Traffic source configuration
