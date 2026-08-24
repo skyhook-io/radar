@@ -6405,10 +6405,12 @@ export interface DiagnosticsSnapshot {
     errorType?: string;
   };
   kubeconfig?: {
-    mode: "" | "in-cluster" | "single" | "multi-env" | "multi-dir";
+    mode: "" | "in-cluster" | "single" | "multi-file" | "multi-env" | "multi-dir" | "multi-source";
     fileCount: number;
+    directoryFileCount: number;
     contextCount: number;
     enrichedFromShell: boolean;
+    kubeconfigEnvIgnored: boolean;
     currentContextUsesExec: boolean;
     execPluginsPresent?: string[];
     execPluginsMissing?: string[];

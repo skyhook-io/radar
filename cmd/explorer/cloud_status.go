@@ -90,18 +90,23 @@ func cloudStatus(args []string, out, errOut io.Writer) int {
 	}
 
 	fileCfg := config.Load()
-	if len(fileCfg.KubeconfigDirs) > 0 {
-		fmt.Fprintln(errOut, "`radar cloud status` cannot choose one cluster while config.json's `kubeconfigDirs` setting is enabled.")
-		fmt.Fprintln(errOut, "Clear `kubeconfigDirs` in Radar Settings (or ~/.radar/config.json), then select one current context with KUBECONFIG or config.json's `kubeconfig`.")
+	kubeconfigSelection, err := selectCloudCommandKubeconfig(fileCfg)
+	if err != nil {
+		fmt.Fprintf(errOut, "cloud status: %v\n", err)
+		fmt.Fprintln(errOut, "Set the Kubeconfig field in Radar Settings (or config.json's `kubeconfig`) to select the primary cluster.")
 		return 1
 	}
-	ctxName, err := resolveCloudInstallContext(fileCfg.Kubeconfig, strings.TrimSpace(*contextName))
+	ctxName, err := resolveCloudInstallContext(kubeconfigSelection.path, strings.TrimSpace(*contextName))
 	if err != nil {
 		fmt.Fprintf(errOut, "cloud status: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(out, "Kubernetes context: %q\n", ctxName)
-	clients, err := buildLocalKubernetesClients(fileCfg.Kubeconfig, ctxName)
+	fmt.Fprintf(out, "Kubernetes context: %q", ctxName)
+	if ignoredSources := kubeconfigSelection.ignoredSourcesLabel(); ignoredSources != "" {
+		fmt.Fprintf(out, " (%s ignored)", ignoredSources)
+	}
+	fmt.Fprintln(out)
+	clients, err := buildLocalKubernetesClients(kubeconfigSelection.path, ctxName)
 	if err != nil {
 		fmt.Fprintf(errOut, "cloud status: %v\n", err)
 		return 1

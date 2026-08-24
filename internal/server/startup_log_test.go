@@ -91,6 +91,40 @@ func TestFormatStartupLogSummaryCloudListener(t *testing.T) {
 	}
 }
 
+func TestFormatStartupKubeconfigMultiSource(t *testing.T) {
+	got := formatStartupKubeconfig("", k8s.KubeconfigSummary{
+		Mode:               "multi-source",
+		FileCount:          3,
+		DirectoryFileCount: 2,
+		ContextCount:       7,
+	})
+	if got != "configured file + directories · 1 primary file + 2 directory files · 7 contexts" {
+		t.Fatalf("formatStartupKubeconfig() = %q", got)
+	}
+}
+
+func TestFormatStartupKubeconfigMultiSourceWithEmptyDirectories(t *testing.T) {
+	got := formatStartupKubeconfig("", k8s.KubeconfigSummary{
+		Mode:         "multi-source",
+		FileCount:    1,
+		ContextCount: 7,
+	})
+	if got != "configured file + directories · 1 primary file + 0 directory files · 7 contexts" {
+		t.Fatalf("formatStartupKubeconfig() = %q", got)
+	}
+}
+
+func TestFormatStartupKubeconfigConfiguredPathList(t *testing.T) {
+	got := formatStartupKubeconfig("", k8s.KubeconfigSummary{
+		Mode:         "multi-file",
+		FileCount:    2,
+		ContextCount: 7,
+	})
+	if got != "configured kubeconfig paths · 2 files · 7 contexts" {
+		t.Fatalf("formatStartupKubeconfig() = %q", got)
+	}
+}
+
 func TestFormatStartupLogSummaryProxyWarning(t *testing.T) {
 	got := strings.Join(formatStartupLogSummary(startupLogSummary{
 		listenAddress:     AllInterfacesAddress,

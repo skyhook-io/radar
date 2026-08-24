@@ -27,19 +27,21 @@ import (
 )
 
 var (
-	k8sClient         *kubernetes.Clientset
-	k8sConfig         *rest.Config
-	discoveryClient   *discovery.DiscoveryClient
-	dynamicClient     dynamic.Interface
-	initOnce          sync.Once
-	initErr           error
-	kubeconfigPath    string
-	kubeconfigPaths   []string // Multiple kubeconfig paths when using --kubeconfig-dir or KUBECONFIG env
-	kubeconfigMode    string   // One of: "in-cluster", "single", "multi-env", "multi-dir"
-	totalContextCount int      // Total number of contexts exposed across all kubeconfig files
+	k8sClient                    *kubernetes.Clientset
+	k8sConfig                    *rest.Config
+	discoveryClient              *discovery.DiscoveryClient
+	dynamicClient                dynamic.Interface
+	initOnce                     sync.Once
+	initErr                      error
+	kubeconfigPath               string
+	kubeconfigPaths              []string // Multiple kubeconfig paths when using directories, KUBECONFIG, or combined sources
+	kubeconfigMode               string   // One of: "in-cluster", "single", "multi-file", "multi-env", "multi-dir", "multi-source"
+	kubeconfigDirectoryFileCount int
+	kubeconfigEnvWasIgnored      bool
+	totalContextCount            int // Total number of contexts exposed across all kubeconfig files
 	// contextRegistry maps each user-facing context name to its source file and
-	// the name it has inside that file. Populated when Radar loads more than one
-	// kubeconfig file (multi-dir, multi-env with >1 paths, or CAPI-added files).
+	// the name it has inside that file. Populated for directory-backed loading,
+	// multiple explicit paths, or CAPI-added files.
 	// Each file is loaded in isolation via ExplicitPath rather than merged via
 	// Precedence — a shared user/cluster/context name across files no longer
 	// clobbers anything, which is the whole point of the registry. See issue
@@ -73,7 +75,7 @@ var (
 	namespaceScopeResolver   func(contextName string) (string, bool)
 	contextUsesExec          bool // True when the current context uses an exec credential plugin
 	// execPluginCommands is the set of unique exec-auth plugin command basenames
-	// referenced by any context in the merged kubeconfig. Populated from
+	// referenced by any context in the resolved kubeconfig sources. Populated from
 	// rawConfig.AuthInfos at load time and refreshed on SwitchContext. Stored
 	// as basenames only so diagnostics never leak full binary paths. Used by
 	// GetKubeconfigSummary() to produce present/missing lists against the
@@ -107,6 +109,15 @@ type InitOptions struct {
 	KubeconfigDirs []string // Directories containing kubeconfig files
 }
 
+type kubeconfigSources struct {
+	paths                []string
+	mode                 string
+	useRegistry          bool
+	tryInCluster         bool
+	ignoredKubeconfigEnv bool
+	directoryFileCount   int
+}
+
 // Initialize initializes the K8s client with the given options
 func Initialize(opts InitOptions) error {
 	initOnce.Do(func() {
@@ -126,18 +137,19 @@ func doInit(opts InitOptions) error {
 	var config *rest.Config
 	var err error
 
-	// Configuration precedence (matches kubectl behavior):
-	//   1. --kubeconfig flag (opts.KubeconfigPath)
-	//   2. KUBECONFIG environment variable
-	//   3. --kubeconfig-dir flag (opts.KubeconfigDirs)
-	//   4. In-cluster config (when KUBERNETES_SERVICE_HOST is set)
-	//   5. Default ~/.kube/config
-	//
-	// We only try in-cluster config if no explicit kubeconfig is specified.
-	// This handles the case where KUBERNETES_SERVICE_HOST is set (e.g., inside
-	// a pod) but the user wants to connect to a different cluster via kubeconfig.
-	// See: https://github.com/kubernetes/kubernetes/issues/43662
-	if opts.KubeconfigPath == "" && os.Getenv("KUBECONFIG") == "" && len(opts.KubeconfigDirs) == 0 {
+	sources, err := resolveKubeconfigSources(opts, os.Getenv("KUBECONFIG"), homedir.HomeDir())
+	if err != nil {
+		return err
+	}
+	kubeconfigEnvWasIgnored = sources.ignoredKubeconfigEnv
+	kubeconfigDirectoryFileCount = sources.directoryFileCount
+	if sources.ignoredKubeconfigEnv {
+		log.Printf("KUBECONFIG is set but ignored because kubeconfig directories are configured without a primary kubeconfig")
+		errorlog.Record("k8s-init", "warning",
+			"KUBECONFIG was ignored because kubeconfig directories are configured without a primary kubeconfig")
+	}
+
+	if sources.tryInCluster {
 		config, err = rest.InClusterConfig()
 		if err == nil {
 			contextName = "in-cluster"
@@ -147,62 +159,28 @@ func doInit(opts InitOptions) error {
 	}
 
 	if config == nil {
-		// Use kubeconfig (for local development / CLI usage)
+		if len(sources.paths) == 0 {
+			return fmt.Errorf("in-cluster config is unavailable and no home directory was found for the default kubeconfig")
+		}
 		var loadingRules *clientcmd.ClientConfigLoadingRules
 		configOverrides := &clientcmd.ConfigOverrides{}
 
-		if len(opts.KubeconfigDirs) > 0 {
-			// Multi-kubeconfig mode: discover files and, if more than one,
-			// load them in isolation via the context registry (see issue #519).
-			configs, err := discoverKubeconfigs(opts.KubeconfigDirs)
+		if sources.useRegistry {
+			kubeconfigPaths = sources.paths
+			kubeconfigMode = sources.mode
+			lr, ovr, err := setupIsolatedLoad(sources.paths)
 			if err != nil {
-				return fmt.Errorf("failed to discover kubeconfigs: %w", err)
+				return err
 			}
-			if len(configs) == 0 {
-				return fmt.Errorf("no valid kubeconfig files found in directories: %v", opts.KubeconfigDirs)
-			}
-			log.Printf("Discovered %d kubeconfig files from %d directories", len(configs), len(opts.KubeconfigDirs))
-			kubeconfigPaths = configs
-			kubeconfigMode = "multi-dir"
-			if len(configs) == 1 {
-				loadingRules = &clientcmd.ClientConfigLoadingRules{ExplicitPath: configs[0]}
-			} else {
-				lr, ovr, err := setupIsolatedLoad(configs)
-				if err != nil {
-					return err
-				}
-				loadingRules, configOverrides = lr, ovr
-			}
+			loadingRules, configOverrides = lr, ovr
+			log.Printf("Using %d kubeconfig files in %s isolated-load mode", len(sources.paths), sources.mode)
 		} else {
-			// Single kubeconfig mode (existing behavior)
-			kubeconfig := opts.KubeconfigPath
-			if kubeconfig == "" {
-				kubeconfig = os.Getenv("KUBECONFIG")
+			if len(sources.paths) != 1 {
+				return fmt.Errorf("resolved kubeconfig source has %d paths in direct mode", len(sources.paths))
 			}
-			if kubeconfig == "" {
-				if home := homedir.HomeDir(); home != "" {
-					kubeconfig = filepath.Join(home, ".kube", "config")
-				}
-			}
-
-			// KUBECONFIG can contain multiple paths separated by the OS path
-			// list separator (colon on Unix, semicolon on Windows). With more
-			// than one path we go through the isolated-load path rather than
-			// client-go's Precedence merge — same reason as multi-dir.
-			if paths := filepath.SplitList(kubeconfig); len(paths) > 1 {
-				kubeconfigPaths = paths
-				kubeconfigMode = "multi-env"
-				lr, ovr, err := setupIsolatedLoad(paths)
-				if err != nil {
-					return err
-				}
-				loadingRules, configOverrides = lr, ovr
-				log.Printf("KUBECONFIG contains %d paths, using isolated per-file loading", len(paths))
-			} else {
-				kubeconfigPath = kubeconfig
-				kubeconfigMode = "single"
-				loadingRules = &clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfig}
-			}
+			kubeconfigPath = sources.paths[0]
+			kubeconfigMode = sources.mode
+			loadingRules = &clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfigPath}
 		}
 
 		kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
@@ -305,10 +283,183 @@ func doInit(opts InitOptions) error {
 	return nil
 }
 
+func resolveKubeconfigSources(opts InitOptions, kubeconfigEnv, homeDir string) (kubeconfigSources, error) {
+	primaryPaths, err := normalizeKubeconfigPathList(opts.KubeconfigPath, homeDir)
+	if err != nil {
+		return kubeconfigSources{}, fmt.Errorf("normalize configured kubeconfig: %w", err)
+	}
+
+	if len(opts.KubeconfigDirs) > 0 {
+		dirs, err := normalizeKubeconfigDirectories(opts.KubeconfigDirs, homeDir)
+		if err != nil {
+			return kubeconfigSources{}, fmt.Errorf("normalize kubeconfig directories: %w", err)
+		}
+		discovered := discoverKubeconfigs(dirs)
+		if len(primaryPaths) > 0 {
+			if ok, cause := hasUsableKubeconfig(primaryPaths); !ok {
+				if cause != nil {
+					errorlog.Record("k8s-init", "error", "primary kubeconfig unusable: %v", cause)
+					return kubeconfigSources{}, fmt.Errorf("configured primary kubeconfig is unusable (%v)", cause)
+				}
+				errorlog.Record("k8s-init", "error", "primary kubeconfig contains no contexts")
+				return kubeconfigSources{}, fmt.Errorf("configured primary kubeconfig contains no usable contexts")
+			}
+		}
+		if len(primaryPaths) == 0 && len(discovered) == 0 {
+			return kubeconfigSources{}, fmt.Errorf("no valid kubeconfig files found in directories: %v", opts.KubeconfigDirs)
+		}
+
+		primaryPaths = dedupeKubeconfigPaths(primaryPaths)
+		paths := dedupeKubeconfigPaths(append(append([]string(nil), primaryPaths...), discovered...))
+		mode := "multi-dir"
+		if len(primaryPaths) > 0 {
+			mode = "multi-source"
+		}
+		return kubeconfigSources{
+			paths:                paths,
+			mode:                 mode,
+			useRegistry:          true,
+			ignoredKubeconfigEnv: len(primaryPaths) == 0 && kubeconfigEnv != "",
+			directoryFileCount:   len(paths) - len(primaryPaths),
+		}, nil
+	}
+
+	selected := opts.KubeconfigPath
+	configuredPath := selected != ""
+	if selected == "" {
+		selected = kubeconfigEnv
+	}
+	tryInCluster := selected == ""
+	if selected == "" {
+		if homeDir != "" {
+			selected = filepath.Join(homeDir, ".kube", "config")
+		}
+	}
+	if selected == "" {
+		return kubeconfigSources{mode: "single", tryInCluster: tryInCluster}, nil
+	}
+	paths, err := normalizeKubeconfigPathList(selected, homeDir)
+	if err != nil {
+		return kubeconfigSources{}, fmt.Errorf("normalize kubeconfig: %w", err)
+	}
+	if len(paths) == 0 {
+		return kubeconfigSources{}, fmt.Errorf("no kubeconfig paths resolved")
+	}
+	paths = dedupeKubeconfigPaths(paths)
+	if len(paths) > 1 {
+		mode := "multi-env"
+		if configuredPath {
+			mode = "multi-file"
+		}
+		return kubeconfigSources{paths: paths, mode: mode, useRegistry: true}, nil
+	}
+	return kubeconfigSources{paths: paths, mode: "single", tryInCluster: tryInCluster}, nil
+}
+
+func normalizeKubeconfigPathList(value, homeDir string) ([]string, error) {
+	if value == "" {
+		return nil, nil
+	}
+	var paths []string
+	for _, path := range filepath.SplitList(value) {
+		if path == "" {
+			continue
+		}
+		normalized, err := normalizeKubeconfigPath(path, homeDir)
+		if err != nil {
+			return nil, err
+		}
+		paths = append(paths, normalized)
+	}
+	return paths, nil
+}
+
+func normalizeKubeconfigDirectories(dirs []string, homeDir string) ([]string, error) {
+	result := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		normalized, err := normalizeKubeconfigPath(dir, homeDir)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, normalized)
+	}
+	return result, nil
+}
+
+func normalizeKubeconfigPath(path, homeDir string) (string, error) {
+	if path == "~" {
+		if homeDir == "" {
+			return "", fmt.Errorf("cannot expand %q without a home directory", path)
+		}
+		path = homeDir
+	} else if strings.HasPrefix(path, "~/") || strings.HasPrefix(path, `~\`) {
+		if homeDir == "" {
+			return "", fmt.Errorf("cannot expand %q without a home directory", path)
+		}
+		path = filepath.Join(homeDir, path[2:])
+	}
+	absolute, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return "", err
+	}
+	return absolute, nil
+}
+
+// NormalizeKubeconfigPaths applies the same path-list semantics used by Radar's main client loader.
+func NormalizeKubeconfigPaths(value string) ([]string, error) {
+	return normalizeKubeconfigPathList(value, homedir.HomeDir())
+}
+
+func hasUsableKubeconfig(paths []string) (bool, error) {
+	var firstErr error
+	for _, path := range paths {
+		cfg, err := clientcmd.LoadFromFile(path)
+		if err == nil {
+			if len(cfg.Contexts) > 0 {
+				return true, nil
+			}
+			continue
+		}
+		if firstErr == nil {
+			firstErr = fmt.Errorf("%q: %s", filepath.Base(path), scrubKubeconfigLoadError(path, err))
+		}
+	}
+	return false, firstErr
+}
+
+func dedupeKubeconfigPaths(paths []string) []string {
+	type fileIdentity struct {
+		path string
+		info os.FileInfo
+	}
+	seen := make([]fileIdentity, 0, len(paths))
+	result := make([]string, 0, len(paths))
+	for _, path := range paths {
+		info, _ := os.Stat(path)
+		duplicate := false
+		for _, existing := range seen {
+			if path == existing.path || (info != nil && existing.info != nil && os.SameFile(info, existing.info)) {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
+		seen = append(seen, fileIdentity{path: path, info: info})
+		result = append(result, path)
+	}
+	return result
+}
+
 // discoverKubeconfigs scans directories for valid kubeconfig files
-func discoverKubeconfigs(dirs []string) ([]string, error) {
+func discoverKubeconfigs(dirs []string) []string {
 	var configs []string
 	for _, dir := range dirs {
+		before := len(configs)
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			log.Printf("Warning: cannot read kubeconfig directory %s: %v", dir, err)
@@ -347,8 +498,13 @@ func discoverKubeconfigs(dirs []string) ([]string, error) {
 					filepath.Base(path))
 			}
 		}
+		if len(configs) == before {
+			errorlog.Record("k8s-init", "warning",
+				"kubeconfig dir %q yielded no valid files",
+				filepath.Base(dir))
+		}
 	}
-	return configs, nil
+	return configs
 }
 
 // scrubPathError returns the underlying error cause (e.g. "permission denied",
@@ -368,6 +524,14 @@ func scrubPathError(err error) string {
 		return pErr.Op + ": " + pErr.Err.Error()
 	}
 	return "(unscrubbable error — omitted to avoid leaking paths)"
+}
+
+func scrubKubeconfigLoadError(path string, err error) string {
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return scrubPathError(err)
+	}
+	return strings.ReplaceAll(err.Error(), path, filepath.Base(path))
 }
 
 // isValidKubeconfig checks if a file is a valid kubeconfig
@@ -435,10 +599,12 @@ func GetKubeconfigPath() string {
 // suitable for inclusion in diagnostic output. It never includes the resolved
 // paths themselves, only counts, mode flags, and exec plugin basenames.
 type KubeconfigSummary struct {
-	Mode                   string   // "in-cluster", "single", "multi-env", "multi-dir", or "" if not initialized
+	Mode                   string   // "in-cluster", "single", "multi-file", "multi-env", "multi-dir", "multi-source", or "" if not initialized
 	FileCount              int      // Number of kubeconfig files loaded (0 for in-cluster)
-	ContextCount           int      // Number of contexts exposed after client-go merged all files
+	DirectoryFileCount     int      // Number of loaded files discovered from configured directories
+	ContextCount           int      // Number of contexts exposed after source resolution
 	EnrichedFromShell      bool     // Desktop app captured KUBECONFIG from login shell
+	KubeconfigEnvIgnored   bool     // KUBECONFIG was suppressed by a directories-only configuration
 	CurrentContextUsesExec bool     // Current context's AuthInfo uses an exec credential plugin
 	ExecPluginsPresent     []string // Unique exec plugin command basenames (any context) resolvable on $PATH
 	ExecPluginsMissing     []string // Unique exec plugin command basenames (any context) NOT resolvable on $PATH
@@ -461,7 +627,9 @@ func GetKubeconfigSummary() KubeconfigSummary {
 		fileCount = 1
 	}
 	contextCount := totalContextCount
+	directoryFileCount := kubeconfigDirectoryFileCount
 	enriched := enrichedKubeconfigFromShell
+	envIgnored := kubeconfigEnvWasIgnored
 	currentExec := contextUsesExec
 	cmds := append([]string(nil), execPluginCommands...)
 	clientMu.RUnlock()
@@ -480,8 +648,10 @@ func GetKubeconfigSummary() KubeconfigSummary {
 	return KubeconfigSummary{
 		Mode:                   mode,
 		FileCount:              fileCount,
+		DirectoryFileCount:     directoryFileCount,
 		ContextCount:           contextCount,
 		EnrichedFromShell:      enriched,
+		KubeconfigEnvIgnored:   envIgnored,
 		CurrentContextUsesExec: currentExec,
 		ExecPluginsPresent:     present,
 		ExecPluginsMissing:     missing,
@@ -1379,13 +1549,18 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 			newFileMtimes[tmpPath] = info.ModTime()
 		}
 		newPaths = append(append([]string(nil), kubeconfigPaths...), tmpPath)
+		var qualifications []string
 		for name := range cfg.Contexts {
 			qName := qualifyContextName(newRegistry, name, tmpPath)
+			if qualification := logContextQualification(name, qName, tmpPath); qualification != "" {
+				qualifications = append(qualifications, qualification)
+			}
 			newRegistry[qName] = contextEntry{
 				SourceFile: tmpPath,
 				InFileName: name,
 			}
 		}
+		recordContextQualifications(qualifications)
 	}
 
 	qualifiedName := findQualifiedNameForPath(newRegistry, tmpPath, contextName)
@@ -1415,4 +1590,18 @@ func findQualifiedNameForPath(registry map[string]contextEntry, file, inFileName
 		}
 	}
 	return ""
+}
+
+// GetContextSource resolves a switcher-visible context name to its isolated
+// kubeconfig file and original in-file context name.
+func GetContextSource(name string) (sourceFile, inFileName string, ok bool) {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	if entry, found := contextRegistry[name]; found {
+		return entry.SourceFile, entry.InFileName, true
+	}
+	if contextRegistry == nil && kubeconfigPath != "" && name == contextName {
+		return kubeconfigPath, name, true
+	}
+	return "", "", false
 }

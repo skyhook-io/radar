@@ -56,8 +56,8 @@ All fields are optional — omitted fields use built-in defaults.
 
 | Field | Description |
 |-------|-------------|
-| `kubeconfig` | Path to kubeconfig file (same as `--kubeconfig`) |
-| `kubeconfigDirs` | Directories containing kubeconfig files (same as `--kubeconfig-dir`) |
+| `kubeconfig` | Primary kubeconfig file (same as `--kubeconfig`) |
+| `kubeconfigDirs` | Directories containing additional kubeconfig files (same as `--kubeconfig-dir`) |
 | `namespace` | Initial namespace filter |
 | `namespaces` | Initial namespace filters as a list (same as `--namespaces ns1,ns2,ns3`) |
 | `port` | Server port (default 9280) |
@@ -96,20 +96,32 @@ User preferences for the UI. Managed via the Settings dialog or `PUT /api/settin
 
 ## Cluster Connection Precedence
 
-Radar connects to Kubernetes clusters using the same configuration sources as `kubectl`:
+Radar resolves configured sources first, then falls back to the same environment,
+in-cluster, and default-file sources as `kubectl`:
 
 | Priority | Source | Description |
 |----------|--------|-------------|
-| 1 | `--kubeconfig` flag | Explicit path to kubeconfig file |
-| 2 | `KUBECONFIG` env var / `--kubeconfig-dir` flag | Either can provide kubeconfig(s); mutually exclusive alternatives |
-| 3 | In-cluster config | Automatic when running inside a Kubernetes pod (`KUBERNETES_SERVICE_HOST` is set) |
-| 4 | `~/.kube/config` | Default kubeconfig location |
+| 1 | Configured kubeconfig file and directories | The primary file loads first, followed by valid files found in configured directories |
+| 2 | `KUBECONFIG` env var | Used only when neither a configured primary file nor directories are present |
+| 3 | In-cluster config | Tried when no configured source or `KUBECONFIG` exists |
+| 4 | `~/.kube/config` | Used when the in-cluster attempt is unavailable |
+
+The Settings values and their matching flags form one source pair. With no
+explicit flags, Radar uses both saved values. Passing only `--kubeconfig`
+replaces saved directories; passing only `--kubeconfig-dir` replaces the saved
+primary file. Passing both flags explicitly combines both sources.
+`--kubeconfig` also accepts an OS-separated path list, using `:` on Linux/macOS
+and `;` on Windows.
+
+For compatibility with existing directory-mode installations, directories
+configured without a primary file suppress ambient `KUBECONFIG`. Radar reports
+that suppression in startup logs and diagnostics.
 
 ## KUBECONFIG vs In-Cluster Detection
 
 When Radar runs inside a Kubernetes pod, Kubernetes automatically sets the `KUBERNETES_SERVICE_HOST` environment variable. This normally triggers in-cluster configuration using the pod's service account credentials.
 
-However, **explicit kubeconfig takes precedence**. If you set `KUBECONFIG` or pass `--kubeconfig`, Radar uses that instead of in-cluster config. This allows you to:
+However, **explicit kubeconfig takes precedence**. If you set `KUBECONFIG` or pass `--kubeconfig`, Radar uses that instead of in-cluster config. Configured directories also prevent in-cluster detection. This allows you to:
 
 - Run Radar inside a pod but connect to a different cluster
 - Use specific credentials instead of the pod's service account
@@ -126,18 +138,46 @@ This behavior matches `kubectl` and follows the [Kubernetes client-go precedence
 
 ## Multiple Kubeconfig Files
 
-`KUBECONFIG` can contain multiple file paths (colon-separated on Linux/macOS, semicolon-separated on Windows). Radar merges these files following Kubernetes conventions:
+`KUBECONFIG` can contain multiple file paths (colon-separated on Linux/macOS,
+semicolon-separated on Windows):
 
 ```bash
 export KUBECONFIG=~/.kube/config:~/.kube/staging-config:~/.kube/prod-config
 kubectl radar
 ```
 
-Alternatively, use `--kubeconfig-dir` to load all kubeconfig files from a directory:
+Alternatively, use `--kubeconfig-dir` to load valid kubeconfig files from one or
+more directories. Discovery is non-recursive:
 
 ```bash
 kubectl radar --kubeconfig-dir ~/.kube/configs/
 ```
+
+The primary file and directories can be combined:
+
+```bash
+kubectl radar --kubeconfig ~/.kube/config --kubeconfig-dir ~/.kube/configs/
+```
+
+Radar keeps every file isolated rather than merging their cluster and user maps.
+This prevents identical user or cluster names in different files from selecting
+the wrong credentials. Context names remain unchanged unless two files use the
+same name; later collisions receive a source suffix in the context switcher.
+Saved namespace selections and integration credentials are keyed by that visible
+context name. If adding an earlier source causes a collision suffix to appear,
+the renamed context does not inherit preferences stored under its former name;
+Radar reports the rename in startup logs and diagnostics so it can be reconfigured.
+
+Files are ordered with primary paths first, followed by directory order and then
+filename order. A primary file's `current-context` wins when it declares one;
+otherwise Radar uses the first source in order that declares a current context.
+Leading `~/` paths are expanded, and references to the same underlying file are
+loaded once even when they use different absolute, relative, or symlink paths.
+
+An unusable additional directory does not prevent a valid primary file from
+loading. A configured primary source group that contains no usable contexts fails
+initialization rather than silently connecting to a directory cluster. Desktop
+Radar keeps its window open so the source can be repaired in Settings.
 
 ## Context Switching
 
@@ -181,6 +221,10 @@ optional, and nothing else depends on it.
 
 To connect a cluster from the command line, use `radar cloud install`
 (`--hub-url` for a self-hosted Hub).
+`radar cloud install` and `radar cloud status` target one cluster, so they use
+the first configured primary kubeconfig path and report any later paths or
+configured directories they ignore. Directory-only configuration must add a
+primary kubeconfig before these commands can run.
 
 ### What Radar sends
 

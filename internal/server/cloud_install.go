@@ -128,6 +128,7 @@ type cloudInstallClients struct {
 // the real discovery/prepare/preflight/provision/Hub machinery.
 type cloudInstallBackend struct {
 	captureClients   func() (cloudInstallClients, string, error)
+	contextSource    func(name string) (sourceFile, inFileName string, ok bool)
 	inspectPlan      func(ctx context.Context, c cloudInstallClients, namespace, release string) (cloudinstall.InstallPlan, error)
 	prepare          func(ctx context.Context, c cloudInstallClients, cfg cloudinstall.PrepareConfig) (preparedInstall, error)
 	preflight        func(ctx context.Context, c cloudInstallClients, prepared preparedInstall) (cloudinstall.PreflightResult, error)
@@ -182,13 +183,14 @@ type cloudInstallBlocked struct {
 }
 
 type cloudInstallFlow struct {
-	id          string
-	state       string
-	contextName string
-	clients     cloudInstallClients
-	plan        cloudinstall.InstallPlan
-	prepared    preparedInstall
-	summary     cloudInstallPlanSummary
+	id            string
+	state         string
+	contextName   string
+	commandTarget cloudinstall.CommandTarget
+	clients       cloudInstallClients
+	plan          cloudinstall.InstallPlan
+	prepared      preparedInstall
+	summary       cloudInstallPlanSummary
 
 	clusterName string
 	connectURL  string
@@ -220,6 +222,7 @@ type cloudInstallManager struct {
 func newCloudInstallManager(cfg CloudConnectConfig) *cloudInstallManager {
 	m := &cloudInstallManager{cfg: cfg}
 	m.backend = cloudInstallBackend{
+		contextSource: k8s.GetContextSource,
 		captureClients: func() (cloudInstallClients, string, error) {
 			base, contextName := k8s.GetConfigSnapshot()
 			if base == nil {
@@ -309,6 +312,11 @@ func newCloudFlowID() string {
 }
 
 func (m *cloudInstallManager) commandTarget(contextName string) cloudinstall.CommandTarget {
+	if m.backend.contextSource != nil {
+		if sourceFile, inFileName, ok := m.backend.contextSource(contextName); ok {
+			return cloudinstall.CommandTarget{Context: inFileName, Kubeconfig: sourceFile}
+		}
+	}
 	return cloudinstall.CommandTarget{Context: contextName, Kubeconfig: m.cfg.Kubeconfig}
 }
 
@@ -343,6 +351,7 @@ func (m *cloudInstallManager) runPrepare(ctx context.Context, flow *cloudInstall
 	}
 	flow.clients = clients
 	flow.contextName = contextName
+	flow.commandTarget = m.commandTarget(contextName)
 
 	plan, err := m.backend.inspectPlan(ctx, clients, cloudinstall.DefaultInstallNamespace, cloudinstall.DefaultReleaseName)
 	if err != nil {
@@ -607,7 +616,7 @@ func (m *cloudInstallManager) run(ctx context.Context, flow *cloudInstallFlow, c
 	flow.state = cloudFlowProvisioning
 	prepared := flow.prepared
 	clients := flow.clients
-	target := m.commandTarget(flow.contextName)
+	target := flow.commandTarget
 	m.mu.Unlock()
 
 	recovery := cloudinstall.ProvisionRecovery{

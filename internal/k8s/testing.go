@@ -284,6 +284,8 @@ func ResetTestState() {
 	dynamicClient = nil
 	activeClientGeneration = 0
 	kubeconfigMode = ""
+	kubeconfigDirectoryFileCount = 0
+	kubeconfigEnvWasIgnored = false
 	clientMu.Unlock()
 
 	// Reset capabilities cache

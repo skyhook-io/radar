@@ -219,11 +219,19 @@ function KubeconfigSection({ data }: { data: DiagnosticsSnapshot }) {
   const present = k.execPluginsPresent ?? []
   const hasMissing = missing.length > 0
   return (
-    <Section title="Kubeconfig" warn={hasMissing}>
+    <Section title="Kubeconfig" warn={hasMissing || k.kubeconfigEnvIgnored}>
       <Row label="Mode" value={k.mode || '(not initialized)'} />
       <Row label="Files Loaded" value={k.fileCount} />
-      <Row label="Contexts (post-merge)" value={k.contextCount} />
-      <Row label="Enriched From Shell" value={k.enrichedFromShell ? 'Yes' : 'No'} />
+      {(k.mode === 'multi-dir' || k.mode === 'multi-source') && (
+        <Row label="Directory Files Loaded" value={k.directoryFileCount} />
+      )}
+      <Row label="Contexts (after source resolution)" value={k.contextCount} />
+      <Row label="KUBECONFIG Captured From Shell" value={k.enrichedFromShell ? 'Yes' : 'No'} />
+      <Row
+        label="KUBECONFIG Ignored"
+        value={k.kubeconfigEnvIgnored ? 'Yes — directories-only configuration' : 'No'}
+        warn={k.kubeconfigEnvIgnored}
+      />
       <Row
         label="Current Context Uses Exec"
         value={k.currentContextUsesExec ? 'Yes' : 'No'}
@@ -631,7 +639,11 @@ export function formatForGitHub(data: DiagnosticsSnapshot, frontendPerf?: K8sUIP
   if (data.kubeconfig) {
     const k = data.kubeconfig
     lines.push(`### Kubeconfig`)
-    lines.push(`- Mode: \`${k.mode || '(not initialized)'}\` | Files: ${k.fileCount} | Contexts (post-merge): ${k.contextCount} | Enriched From Shell: ${k.enrichedFromShell ? 'Yes' : 'No'}`)
+    const directoryFiles = k.mode === 'multi-dir' || k.mode === 'multi-source'
+      ? ` | Directory Files: ${k.directoryFileCount}`
+      : ''
+    lines.push(`- Mode: \`${k.mode || '(not initialized)'}\` | Files: ${k.fileCount}${directoryFiles} | Contexts (after source resolution): ${k.contextCount}`)
+    lines.push(`- KUBECONFIG Captured From Shell: ${k.enrichedFromShell ? 'Yes' : 'No'} | Ignored: ${k.kubeconfigEnvIgnored ? 'Yes — directories-only configuration' : 'No'}`)
     lines.push(`- Current Context Uses Exec: ${k.currentContextUsesExec ? 'Yes' : 'No'}`)
     if (k.execPluginsPresent && k.execPluginsPresent.length > 0) {
       lines.push(`- Exec Plugins on PATH: \`${k.execPluginsPresent.join('`, `')}\``)

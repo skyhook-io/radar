@@ -21,8 +21,8 @@ import (
 // inside initOnce, so no concurrent readers exist yet — writes to the globals
 // are safe without clientMu.
 //
-// This is how Radar avoids client-go's Precedence merge when there's more
-// than one kubeconfig file: each file stays an island. A SwitchContext later
+// This is how Radar avoids client-go's Precedence merge for registry-backed
+// loading: each file stays an island. A SwitchContext later
 // looks up the target entry in the registry and loads that one file, so
 // shared user/cluster names across files never collide — see issue #519.
 func setupIsolatedLoad(paths []string) (
@@ -79,6 +79,7 @@ type contextEntry struct {
 func buildContextRegistry(paths []string) (map[string]contextEntry, map[string]*clientcmdapi.Config) {
 	registry := make(map[string]contextEntry)
 	fileConfigs := make(map[string]*clientcmdapi.Config)
+	var qualifications []string
 	for _, path := range paths {
 		cfg, err := clientcmd.LoadFromFile(path)
 		if err != nil {
@@ -95,12 +96,16 @@ func buildContextRegistry(paths []string) (map[string]contextEntry, map[string]*
 		fileConfigs[path] = cfg
 		for name := range cfg.Contexts {
 			qName := qualifyContextName(registry, name, path)
+			if qualification := logContextQualification(name, qName, path); qualification != "" {
+				qualifications = append(qualifications, qualification)
+			}
 			registry[qName] = contextEntry{
 				SourceFile: path,
 				InFileName: name,
 			}
 		}
 	}
+	recordContextQualifications(qualifications)
 	return registry, fileConfigs
 }
 
@@ -148,6 +153,33 @@ func qualifyContextName(registry map[string]contextEntry, name, path string) str
 			return candidate
 		}
 	}
+}
+
+func logContextQualification(name, qualifiedName, path string) string {
+	if qualifiedName == name {
+		return ""
+	}
+	log.Printf("[k8s-init] context %q from %q renamed to %q after a name collision; saved namespace and integration preferences for %q will not apply",
+		name, filepath.Base(path), qualifiedName, name)
+	return fmt.Sprintf("%q from %q as %q", name, filepath.Base(path), qualifiedName)
+}
+
+func recordContextQualifications(qualifications []string) {
+	if len(qualifications) == 0 {
+		return
+	}
+	const maxListed = 10
+	listed := qualifications
+	if len(listed) > maxListed {
+		listed = listed[:maxListed]
+	}
+	suffix := ""
+	if len(qualifications) > maxListed {
+		suffix = fmt.Sprintf(" (+%d more)", len(qualifications)-maxListed)
+	}
+	errorlog.Record("k8s-init", "warning",
+		"%d context(s) renamed after name collisions; saved namespace and integration preferences will not apply to the renamed contexts: %v%s",
+		len(qualifications), listed, suffix)
 }
 
 // pickInitialContext chooses which context Radar should start in when
@@ -268,6 +300,7 @@ func refreshContextRegistry(
 	newFileConfigs := fileConfigs
 	newFileMtimes := fileMtimes
 	changed := false
+	var qualifications []string
 	cloneOnce := func() {
 		if changed {
 			return
@@ -353,12 +386,16 @@ func refreshContextRegistry(
 				continue
 			}
 			qName := qualifyContextName(newRegistry, name, path)
+			if qualification := logContextQualification(name, qName, path); qualification != "" {
+				qualifications = append(qualifications, qualification)
+			}
 			newRegistry[qName] = contextEntry{
 				SourceFile: path,
 				InFileName: name,
 			}
 		}
 	}
+	recordContextQualifications(qualifications)
 	return newRegistry, newFileConfigs, newFileMtimes, changed
 }
 

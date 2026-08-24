@@ -50,8 +50,8 @@ func main() {
 	fileCfg := config.Load()
 
 	// Parse flags (defaults come from config file, falling back to hardcoded values)
-	kubeconfig := flag.String("kubeconfig", fileCfg.Kubeconfig, "Path to kubeconfig file (default: ~/.kube/config)")
-	kubeconfigDir := flag.String("kubeconfig-dir", fileCfg.KubeconfigDirsFlag(), "Comma-separated directories containing kubeconfig files (mutually exclusive with --kubeconfig)")
+	kubeconfig := flag.String("kubeconfig", fileCfg.Kubeconfig, "Kubeconfig file or OS-separated path list (default: ~/.kube/config)")
+	kubeconfigDir := flag.String("kubeconfig-dir", fileCfg.KubeconfigDirsFlag(), "Comma-separated directories containing additional kubeconfig files")
 	namespace := flag.String("namespace", fileCfg.Namespace, "Initial namespace filter (empty = all namespaces)")
 	namespaces := flag.String("namespaces", fileCfg.NamespacesFlag(), "Initial namespace filters as a comma-separated list (e.g. ns1,ns2,ns3). Use this when you can list resources in specific namespaces but cannot list namespaces cluster-wide.")
 	showVersion := flag.Bool("version", false, "Show version and exit")
@@ -101,14 +101,16 @@ func main() {
 	// set GTK_THEME so WebKitGTK's prefers-color-scheme media query works.
 	applySystemTheme()
 
-	if *kubeconfig != "" && *kubeconfigDir != "" {
-		log.Printf("ERROR: --kubeconfig and --kubeconfig-dir are mutually exclusive")
-		os.Exit(1)
-	}
+	kubeconfigFlagSet := false
+	kubeconfigDirsFlagSet := false
 	namespaceFlagSet := false
 	namespacesFlagSet := false
 	flag.Visit(func(f *flag.Flag) {
 		switch f.Name {
+		case "kubeconfig":
+			kubeconfigFlagSet = true
+		case "kubeconfig-dir":
+			kubeconfigDirsFlagSet = true
 		case "namespace":
 			namespaceFlagSet = true
 		case "namespaces":
@@ -134,6 +136,9 @@ func main() {
 		log.Printf("ERROR: --namespaces lists %d namespaces but the RBAC probe fanout cap is %d", len(resolvedNamespaces), k8s.MaxScopeCandidates)
 		os.Exit(1)
 	}
+	resolvedKubeconfig, resolvedKubeconfigDirs := app.ResolveKubeconfigSelection(
+		*kubeconfig, *kubeconfigDir, kubeconfigFlagSet, kubeconfigDirsFlagSet,
+	)
 
 	// The device flow and consent page must identify this build and target the
 	// same control plane the CLI would — Desktop starts the same shared server.
@@ -145,8 +150,8 @@ func main() {
 	}
 
 	cfg := app.AppConfig{
-		Kubeconfig:               *kubeconfig,
-		KubeconfigDirs:           app.ParseKubeconfigDirs(*kubeconfigDir),
+		Kubeconfig:               resolvedKubeconfig,
+		KubeconfigDirs:           resolvedKubeconfigDirs,
 		Namespace:                resolvedNamespace,
 		Namespaces:               resolvedNamespaces,
 		Port:                     fileCfg.PortOr(0), // Configured port, or random to avoid conflicts with CLI

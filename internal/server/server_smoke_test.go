@@ -1765,7 +1765,7 @@ func TestSmokeGetConfig(t *testing.T) {
 func TestSmokePutConfig(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	resp := put(t, "/api/config", `{"kubeconfig":"/tmp/test-kube","port":9999,"namespace":"staging","browser":"Safari"}`)
+	resp := put(t, "/api/config", `{"kubeconfig":"/tmp/test-kube","kubeconfigDirs":["/tmp/kubeconfigs-a","/tmp/kubeconfigs-b"],"port":9999,"namespace":"staging","browser":"Safari"}`)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
@@ -1776,6 +1776,9 @@ func TestSmokePutConfig(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&saved)
 	if saved["kubeconfig"] != "/tmp/test-kube" {
 		t.Errorf("kubeconfig = %v, want /tmp/test-kube", saved["kubeconfig"])
+	}
+	if dirs, ok := saved["kubeconfigDirs"].([]any); !ok || len(dirs) != 2 || dirs[0] != "/tmp/kubeconfigs-a" || dirs[1] != "/tmp/kubeconfigs-b" {
+		t.Errorf("kubeconfigDirs = %v", saved["kubeconfigDirs"])
 	}
 	if saved["port"] != float64(9999) {
 		t.Errorf("port = %v, want 9999", saved["port"])
@@ -1790,6 +1793,9 @@ func TestSmokePutConfig(t *testing.T) {
 	file, _ := got["file"].(map[string]any)
 	if file["kubeconfig"] != "/tmp/test-kube" {
 		t.Errorf("persisted kubeconfig = %v", file["kubeconfig"])
+	}
+	if dirs, ok := file["kubeconfigDirs"].([]any); !ok || len(dirs) != 2 || dirs[0] != "/tmp/kubeconfigs-a" || dirs[1] != "/tmp/kubeconfigs-b" {
+		t.Errorf("persisted kubeconfigDirs = %v", file["kubeconfigDirs"])
 	}
 	if file["browser"] != "Safari" {
 		t.Errorf("persisted browser = %v", file["browser"])

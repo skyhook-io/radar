@@ -195,6 +195,33 @@ func assertNoTokenInStatus(t *testing.T, m *cloudInstallManager) {
 	}
 }
 
+func TestCloudInstallCommandTargetUsesContextSource(t *testing.T) {
+	m := &cloudInstallManager{
+		cfg: CloudConnectConfig{Kubeconfig: "/primary/config"},
+		backend: cloudInstallBackend{
+			contextSource: func(name string) (string, string, bool) {
+				if name != "prod (paris)" {
+					t.Fatalf("context source lookup = %q", name)
+				}
+				return "/clusters/paris.yaml", "prod", true
+			},
+		},
+	}
+
+	got := m.commandTarget("prod (paris)")
+	if got.Kubeconfig != "/clusters/paris.yaml" || got.Context != "prod" {
+		t.Fatalf("command target = %+v", got)
+	}
+}
+
+func TestCloudInstallCommandTargetFallsBackOutsideRegistry(t *testing.T) {
+	m := &cloudInstallManager{cfg: CloudConnectConfig{Kubeconfig: "/primary/config"}}
+	got := m.commandTarget("prod")
+	if got.Kubeconfig != "/primary/config" || got.Context != "prod" {
+		t.Fatalf("command target = %+v", got)
+	}
+}
+
 func TestCloudInstallHappyPathFreshNeverLeaksToken(t *testing.T) {
 	fx := newManagerFixture(cloudinstall.ProvisionFresh, cloudinstall.InstallModeFresh, nil)
 

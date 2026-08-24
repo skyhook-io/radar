@@ -613,6 +613,26 @@ func ParseKubeconfigDirs(dirs string) []string {
 	return result
 }
 
+// ResolveKubeconfigSelection applies CLI-over-config precedence across the
+// kubeconfig source pair. Passing one non-empty flag replaces the saved source
+// pair; an explicit empty value clears only that member for compatibility.
+func ResolveKubeconfigSelection(kubeconfig, kubeconfigDirs string, kubeconfigSet, kubeconfigDirsSet bool) (string, []string) {
+	parsedDirs := ParseKubeconfigDirs(kubeconfigDirs)
+	if kubeconfigSet && !kubeconfigDirsSet {
+		if kubeconfig == "" {
+			return "", parsedDirs
+		}
+		return kubeconfig, nil
+	}
+	if kubeconfigDirsSet && !kubeconfigSet {
+		if len(parsedDirs) == 0 {
+			return kubeconfig, nil
+		}
+		return "", parsedDirs
+	}
+	return kubeconfig, parsedDirs
+}
+
 // ParseNamespaces splits a comma-separated namespace string into a de-duplicated
 // slice. Empty items are ignored so flags like "--namespaces a,,b" behave like
 // kubectl's comma-separated lists instead of creating an empty namespace pick.

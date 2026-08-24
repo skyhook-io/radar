@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -11,6 +12,8 @@ import (
 
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
+
+	"github.com/skyhook-io/radar/internal/errorlog"
 )
 
 // writeKubeconfig writes a minimal but valid kubeconfig to a temp file in
@@ -130,6 +133,8 @@ func TestBuildContextRegistry_SharedUserAndCluster_DistinctContexts(t *testing.T
 // When context names themselves collide across files, later files get their
 // context name qualified with the source file's basename.
 func TestBuildContextRegistry_ContextNameCollision(t *testing.T) {
+	errorlog.Reset()
+	t.Cleanup(errorlog.Reset)
 	dir := t.TempDir()
 	f1 := writeKubeconfig(t, dir, "prod.yaml", "my-ctx", []kubeEntry{
 		{ctxName: "my-ctx", userName: "user-a", clusterName: "cluster-a"},
@@ -163,12 +168,18 @@ func TestBuildContextRegistry_ContextNameCollision(t *testing.T) {
 	if registry["my-ctx (staging)"].InFileName != "my-ctx" {
 		t.Errorf("original name must remain 'my-ctx' inside f2")
 	}
+	entries := errorlog.GetEntries()
+	if len(entries) != 1 || !strings.Contains(entries[0].Message, "saved namespace and integration preferences") {
+		t.Fatalf("collision warnings = %+v", entries)
+	}
 }
 
 // Three-way collision: same context name across three files, all sharing the
 // same basename (two with different extensions). Third should fall back to
 // the numeric-suffix form.
 func TestBuildContextRegistry_ThreeWayCollision(t *testing.T) {
+	errorlog.Reset()
+	t.Cleanup(errorlog.Reset)
 	dirA := t.TempDir()
 	dirB := t.TempDir()
 	dirC := t.TempDir()
@@ -204,6 +215,10 @@ func TestBuildContextRegistry_ThreeWayCollision(t *testing.T) {
 		}
 		sort.Strings(names)
 		t.Errorf("'ctx (env #2)' should resolve to f3; registry has: %v", names)
+	}
+	entries := errorlog.GetEntries()
+	if len(entries) != 1 || !strings.Contains(entries[0].Message, "2 context(s)") {
+		t.Fatalf("collision warnings = %+v", entries)
 	}
 }
 
@@ -353,6 +368,74 @@ func TestGetAvailableContexts_PopulatesSourceInMultiFileMode(t *testing.T) {
 	}
 }
 
+func TestGetAvailableContexts_OneDirectoryFileUsesRegistry(t *testing.T) {
+	dir := t.TempDir()
+	path := writeKubeconfig(t, dir, "only.yaml", "only", []kubeEntry{
+		{ctxName: "only", userName: "user", clusterName: "cluster"},
+	})
+	registry, fileConfigs := buildContextRegistry([]string{path})
+
+	clientMu.Lock()
+	prevRegistry := contextRegistry
+	prevConfigs := perFileConfigs
+	prevMtimes := perFileMtimes
+	prevPaths := kubeconfigPaths
+	prevPath := kubeconfigPath
+	prevName := contextName
+	contextRegistry = registry
+	perFileConfigs = fileConfigs
+	perFileMtimes = map[string]time.Time{}
+	kubeconfigPaths = []string{path}
+	kubeconfigPath = ""
+	contextName = "only"
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextRegistry = prevRegistry
+		perFileConfigs = prevConfigs
+		perFileMtimes = prevMtimes
+		kubeconfigPaths = prevPaths
+		kubeconfigPath = prevPath
+		contextName = prevName
+		clientMu.Unlock()
+	})
+
+	contexts, err := GetAvailableContexts()
+	if err != nil {
+		t.Fatalf("GetAvailableContexts: %v", err)
+	}
+	if len(contexts) != 1 || contexts[0].Name != "only" || contexts[0].Source != "only" {
+		t.Fatalf("contexts = %+v", contexts)
+	}
+	sourceFile, inFileName, ok := GetContextSource("only")
+	if !ok || sourceFile != path || inFileName != "only" {
+		t.Fatalf("context source = (%q, %q, %t)", sourceFile, inFileName, ok)
+	}
+}
+
+func TestGetContextSourceDirectModeUsesResolvedPath(t *testing.T) {
+	clientMu.Lock()
+	prevRegistry := contextRegistry
+	prevPath := kubeconfigPath
+	prevName := contextName
+	contextRegistry = nil
+	kubeconfigPath = "/resolved/home/.kube/config"
+	contextName = "prod"
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextRegistry = prevRegistry
+		kubeconfigPath = prevPath
+		contextName = prevName
+		clientMu.Unlock()
+	})
+
+	sourceFile, inFileName, ok := GetContextSource("prod")
+	if !ok || sourceFile != "/resolved/home/.kube/config" || inFileName != "prod" {
+		t.Fatalf("context source = (%q, %q, %t)", sourceFile, inFileName, ok)
+	}
+}
+
 func TestPickInitialContext_PrefersFirstFileCurrentContext(t *testing.T) {
 	dir := t.TempDir()
 	f1 := writeKubeconfig(t, dir, "first.yaml", "from-first", []kubeEntry{
@@ -394,6 +477,26 @@ func TestPickInitialContext_FallsBackWhenCurrentContextEmpty(t *testing.T) {
 	}
 	if qName != "from-second" {
 		t.Errorf("expected 'from-second', got %q", qName)
+	}
+}
+
+func TestPickInitialContext_UsesLaterCurrentWhenPrimaryHasNone(t *testing.T) {
+	dir := t.TempDir()
+	primary := writeKubeconfig(t, dir, "primary.yaml", "", []kubeEntry{
+		{ctxName: "primary", userName: "u1", clusterName: "c1"},
+	})
+	additional := writeKubeconfig(t, dir, "additional.yaml", "additional", []kubeEntry{
+		{ctxName: "additional", userName: "u2", clusterName: "c2"},
+	})
+
+	paths := []string{primary, additional}
+	registry, fileConfigs := buildContextRegistry(paths)
+	qName, entry, ok := pickInitialContext(paths, registry, fileConfigs)
+	if !ok {
+		t.Fatal("expected initial context")
+	}
+	if qName != "additional" || entry.SourceFile != additional {
+		t.Fatalf("initial context = %q from %q, want additional from %q", qName, entry.SourceFile, additional)
 	}
 }
 

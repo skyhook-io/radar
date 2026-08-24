@@ -996,7 +996,7 @@ function ClusterSection({
     <>
       <ConfigField
         label="Kubeconfig"
-        help="Path to kubeconfig file"
+        help="Primary kubeconfig file — loads first when additional directories are configured"
         value={config.kubeconfig ?? ''}
         effectiveValue={effectiveConfig?.kubeconfig}
         placeholder="~/.kube/config"
@@ -1004,7 +1004,7 @@ function ClusterSection({
       />
       <ConfigArrayField
         label="Kubeconfig Directories"
-        help="Comma-separated directories containing kubeconfig files"
+        help="Additional kubeconfig directories. Without a primary file, they replace KUBECONFIG"
         value={config.kubeconfigDirs}
         effectiveValue={effectiveConfig?.kubeconfigDirs}
         placeholder="/path/to/dir1, /path/to/dir2"
