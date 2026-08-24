@@ -103,20 +103,20 @@ Every claim on the page carries its evidence: the verdict band states the live-c
 
 ## Security model
 
-Relayed and Job-based probes are bounded by Kubernetes RBAC in the target namespace:
+Relayed and Job-based probes are bounded by Kubernetes RBAC, but they do not always use the same namespace:
 
-| Probe path | Required permission |
-|---|---|
-| API-server relay | `get services/proxy` and/or `get pods/proxy` |
-| In-cluster probe Job | `create jobs`, `list pods`, and `get pods/log` |
+| Probe path | Namespace | Required permission |
+|---|---|---|
+| API-server relay | Namespace of the Service or Pod being proxied | `get services/proxy` and/or `get pods/proxy` |
+| In-cluster probe Job | Namespace of the resource being diagnosed | `create jobs`, `list pods`, and `get pods/log` |
 
-With authentication enabled, Radar uses the signed-in user's identity. The API server enforces relay permissions at request time; Radar preflights all three Job permissions before creating anything. If impersonation is unavailable, the relay is skipped rather than falling back to Radar's ServiceAccount. A proxy denial can mark that route *unreachable via the API server*, but the headline stays *unknown* because the real path was not confirmed.
+With authentication enabled, Radar uses the signed-in user's identity. Without authentication, Kubernetes-authorized probes use Radar's own client identity: your kubeconfig identity locally, or Radar's ServiceAccount when it runs in-cluster. The API server enforces relay permissions at request time; Radar preflights all three Job permissions before creating anything. If impersonation is unavailable, the relay is skipped rather than falling back to Radar's ServiceAccount. A proxy denial can mark that route *unreachable via the API server*, but the headline stays *unknown* because the real path was not confirmed.
 
 The UI asks before the first in-cluster run for a cluster and names the requests it will send (unless that consent was previously remembered). MCP has no dialog: callers must explicitly pass `in_cluster: true`, and the same RBAC preflight applies. Radar Cloud also requires org role Member or higher.
 
-The caller's identity authorizes Job creation, but network and mesh policy see the probe pod, not that person. The pod uses the target namespace's default ServiceAccount identity but mounts no ServiceAccount token. Each run creates at most five Jobs; their containers run non-root with a read-only filesystem, all capabilities dropped, a 25-second deadline, no retries, and a 60-second TTL backstop.
+The caller's identity authorizes Job creation, but network and mesh policy see the probe pod, not that person. The Job runs in the diagnosed resource's namespace; its pod uses that namespace's default ServiceAccount identity but mounts no ServiceAccount token. Each run creates at most five Jobs; their containers run non-root with a read-only filesystem, all capabilities dropped, a 25-second deadline, no retries, and a 60-second TTL backstop.
 
-Remove the proxy verbs to disable relayed probes, or `create jobs` to disable probe Jobs. Radar running in-cluster can still dial directly from its own pod. The full `/mcp` endpoint also exposes RBAC-bounded write tools; `/mcp-readonly` excludes `apply_resource`, `patch_resource`, and the `manage_*` tools while retaining `diagnose`. Its `in_cluster` option is the same explicit, capped Job path described above.
+The default Helm chart grants neither proxy-subresource access nor Job creation, so those probe paths stay unavailable unless the relevant identity receives the permissions above. Radar running in-cluster can still dial directly from its own pod. The full `/mcp` endpoint also exposes RBAC-bounded write tools; `/mcp-readonly` excludes `apply_resource`, `patch_resource`, and the `manage_*` tools while retaining `diagnose`. Its `in_cluster` option is the same explicit, capped Job path described above.
 
 ### Agent boundary
 

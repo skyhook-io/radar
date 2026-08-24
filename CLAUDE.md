@@ -191,7 +191,7 @@ WebSocket pod exec: `internal/server/exec.go` — xterm.js terminal, container/s
 - Two view modes: `traffic` (network flow: Ingress/Gateway → HTTPRoute → Service → Pod) and `resources` (hierarchy: Deployment → ReplicaSet → Pod)
 - **Edge type semantics** (drive UI grouping): `EdgeManages` (owner), `EdgeUses` (HPA/VPA/KEDA), `EdgeProtects` (PDB/NetworkPolicy), `EdgeConfigures` (ConfigMap/Secret/DestinationRule), `EdgeExposes` (Service/Ingress/Gateway). Choose the right type — don't reuse.
 - **CRD collision pattern**: When a CRD kind collides with core K8s (e.g., Knative Service, CAPI Cluster), use `GetGVRWithGroup("Kind", "group")` and prefix node IDs (`knativeservice/`, `capicluster/`). Frontend disambiguates via `data?.apiVersion?.includes('group.name')`.
-- Supported integrations: Core K8s, Gateway API, Istio, Knative, Traefik, Contour, CAPI, Karpenter, KEDA, Calico, cert-manager, GitOps (Argo/Flux). See `docs/integrations.md` for full list.
+- Supported topology integrations are tracked by the **Topology** column in `docs/integrations.md`; keep that table and the implementation in sync.
 - GitOps nodes: Application (ArgoCD), Kustomization, HelmRelease, GitRepository (FluxCD)
   - `/api/gitops/tree/{kind}/{namespace}/{name}` — resource tree (managed resources + ownership edges)
   - `/api/gitops/insights/{kind}/{namespace}/{name}` — curated diagnosis (summary, issues, drift, events, plan, history, capabilities)
