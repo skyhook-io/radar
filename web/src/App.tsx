@@ -1664,8 +1664,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {/* `relative` makes this column the containing block for the absolute
           overlays it hosts (BottomDock, expanded ResourceDetailDrawer) so they
           span the content area AFTER the rail rather than the full viewport
-          under it. `fixed` splashes (connecting/switching) are unaffected. */}
-      <div className="relative flex flex-col flex-1 min-w-0 h-full">
+          under it. Horizontal clipping keeps translated-offscreen drawers from
+          contributing document overflow. `fixed` splashes are unaffected. */}
+      <div className="relative flex flex-col flex-1 min-w-0 h-full overflow-x-clip">
       {/* Header — suppressed in chromeless embed; the host owns the chrome.
           @container: the header's responsive layout keys off its OWN width (≈ viewport
           − nav rail), not the viewport, so it collapses gracefully on narrow windows.
