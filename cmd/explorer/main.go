@@ -278,6 +278,7 @@ func main() {
 	noMCPFlagSet := false
 	namespaceFlagSet := false
 	namespacesFlagSet := false
+	openCostCurrencyFlagSet := false
 	flag.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "no-mcp":
@@ -286,6 +287,8 @@ func main() {
 			namespaceFlagSet = true
 		case "namespaces":
 			namespacesFlagSet = true
+		case "opencost-currency":
+			openCostCurrencyFlagSet = true
 		}
 	})
 	if *mcpCatalogOnly && noMCPFlagSet && *noMCP {
@@ -355,6 +358,7 @@ func main() {
 		TimelineMaxSizeBytes:     timelineMaxSizeBytes,
 		PrometheusURL:            *prometheusURL,
 		OpenCostCurrency:         normalizedOpenCostCurrency,
+		OpenCostFlagSet:          openCostCurrencyFlagSet,
 		PrometheusHeaders:        resolvedPrometheusHeaders,
 		PrometheusHeadersFromEnv: promHeadersFromEnv.value(),
 		BeylaJobSelector:         *beylaJobSelector,

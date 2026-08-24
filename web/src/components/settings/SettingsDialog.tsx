@@ -50,6 +50,7 @@ interface ConfigResponse {
   file: Config
   effective: Config
   isDesktop: boolean
+  openCostCurrencyManaged?: boolean
   prometheusHeaderKeys?: string[]
   // True when an Argo CD auth token is stored. The token itself is never
   // returned — the card shows a "configured" placeholder and omits the token
@@ -75,7 +76,8 @@ interface SettingsDialogProps {
 
 // The settings surface splits into three honest apply buckets:
 //   • Persisted config (kubeconfig, server, timeline, MCP, cost currency) —
-//     saved by the owner-gated footer. Currency applies live; the rest restart.
+//     saved by the owner-gated footer. Currency applies live unless a startup
+//     flag owns it; the rest restart.
 //   • Live integrations (Prometheus, Argo CD) — their own Apply/Connect endpoints
 //     re-point the running server; effect immediately, NOT part of footer dirty.
 //   • AI diagnose — client-side prefs, self-saving, editable by everyone.
@@ -247,17 +249,23 @@ export function SettingsDialog({
       const committed = { ...body, opencostCurrency: saved.opencostCurrency }
       setEditedConfig(committed)
       setConfigData((prev) => (prev ? { ...prev, file: committed } : prev))
-      if (costDirty) {
+      if (costDirty && !configData.openCostCurrencyManaged) {
         void queryClient.invalidateQueries({
           predicate: (query) =>
             typeof query.queryKey[0] === 'string' && query.queryKey[0].startsWith('opencost-'),
         })
       }
-      setSaveMessage(connectionDirty || advancedDirty
-        ? costDirty
-          ? 'Saved. Currency applied immediately; restart Radar for other changes.'
-          : 'Saved. Restart Radar to apply.'
-        : 'Saved. Applied immediately.')
+      if (costDirty && configData.openCostCurrencyManaged) {
+        setSaveMessage(connectionDirty || advancedDirty
+          ? 'Saved. CLI/Helm currency remains active; restart without that override to apply it. Restart Radar for other changes.'
+          : 'Saved. CLI/Helm currency remains active; restart without that override to apply this setting.')
+      } else {
+        setSaveMessage(connectionDirty || advancedDirty
+          ? costDirty
+            ? 'Saved. Currency applied immediately; restart Radar for other changes.'
+            : 'Saved. Restart Radar to apply.'
+          : 'Saved. Applied immediately.')
+      }
       return true
     } catch (err) {
       setSaveMessage(`Error: ${err}`)
@@ -521,12 +529,16 @@ export function SettingsDialog({
               id="cost"
               active={section}
               title="Cost"
-              caption="Saved to config and applied immediately."
-              live
+              caption={configData?.openCostCurrencyManaged
+                ? 'Saved to config. A CLI or Helm override is currently active.'
+                : 'Saved to config and applied immediately.'}
+              live={!configData?.openCostCurrencyManaged}
               locked={!canEditConfig}
             >
               <CostSection
                 currency={editedConfig.opencostCurrency ?? ''}
+                managed={configData?.openCostCurrencyManaged ?? false}
+                effectiveCurrency={configData?.effective.opencostCurrency ?? ''}
                 onChange={(value) => updateConfigField('opencostCurrency', value || undefined)}
               />
             </SectionPane>
@@ -1143,19 +1155,31 @@ function TimelineSection({
 
 function CostSection({
   currency,
+  managed,
+  effectiveCurrency,
   onChange,
 }: {
   currency: string
+  managed: boolean
+  effectiveCurrency: string
   onChange: (value: string) => void
 }) {
   return (
-    <ConfigField
-      label="Currency override"
-      help="Enter an ISO 4217 code, or leave blank to detect currencyCode from a running OpenCost pricing configuration and then fall back to USD. Radar labels values but does not convert them. A CLI flag or Helm value remains authoritative after restart."
-      value={currency}
-      placeholder="Auto"
-      onChange={onChange}
-    />
+    <div>
+      <ConfigField
+        label="Currency override"
+        help="Enter an ISO 4217 code, or leave blank to detect currencyCode from a running OpenCost pricing configuration and then fall back to USD. Radar labels values but does not convert them."
+        value={currency}
+        placeholder="Auto"
+        onChange={onChange}
+      />
+      {managed && (
+        <p className="mt-1 text-xs text-amber-600 dark:text-amber-400/80">
+          Currently managed by CLI or Helm: {effectiveCurrency || 'Auto'}. Saved changes apply
+          after Radar starts without that override.
+        </p>
+      )}
+    </div>
   )
 }
 

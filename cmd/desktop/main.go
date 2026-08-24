@@ -108,12 +108,15 @@ func main() {
 	}
 	namespaceFlagSet := false
 	namespacesFlagSet := false
+	openCostCurrencyFlagSet := false
 	flag.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "namespace":
 			namespaceFlagSet = true
 		case "namespaces":
 			namespacesFlagSet = true
+		case "opencost-currency":
+			openCostCurrencyFlagSet = true
 		}
 	})
 	timelineMaxSizeBytes, err := config.ParseByteSize(*timelineMaxSize)
@@ -170,6 +173,7 @@ func main() {
 		TimelineMaxSizeBytes:     timelineMaxSizeBytes,
 		PrometheusURL:            *prometheusURL,
 		OpenCostCurrency:         normalizedOpenCostCurrency,
+		OpenCostFlagSet:          openCostCurrencyFlagSet,
 		PrometheusHeaders:        resolvedPrometheusHeaders,
 		PrometheusHeadersFromEnv: fileCfg.PrometheusHeadersFromEnv,
 		Version:                  version,

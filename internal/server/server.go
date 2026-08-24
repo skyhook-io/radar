@@ -83,6 +83,7 @@ type Server struct {
 	diagConfig         *DiagConfig
 	effectiveConfig    *config.Config // running config for GET /api/config
 	openCostCurrency   *opencost.CurrencyResolver
+	currencyManaged    bool
 	authConfig         auth.Config
 	permCache          *auth.PermissionCache
 	oidcHandler        *auth.OIDCHandler
@@ -168,6 +169,7 @@ type Config struct {
 	DiagConfig         *DiagConfig    // Sanitized config for diagnostics endpoint
 	EffectiveConfig    *config.Config // Running startup config for GET /api/config
 	OpenCostCurrency   string         // ISO 4217 code labeling values returned by OpenCost endpoints
+	OpenCostManaged    bool           // true when an explicit CLI/Helm flag owns the running value
 	AuthConfig         auth.Config    // Authentication configuration
 	AIHistoryDB        string         // AI run-history SQLite path ("" = memory-only runs)
 	CloudConnect       CloudConnectConfig
@@ -201,6 +203,7 @@ func New(cfg Config) *Server {
 		diagConfig:            cfg.DiagConfig,
 		effectiveConfig:       cfg.EffectiveConfig,
 		openCostCurrency:      opencost.NewCurrencyResolver(cfg.OpenCostCurrency),
+		currencyManaged:       cfg.OpenCostManaged,
 		authConfig:            cfg.AuthConfig,
 		cloudConnectCfg:       cfg.CloudConnect,
 		topoMemo:              topology.NewMemoizer(5 * time.Second),
@@ -5101,6 +5104,9 @@ type configResponse struct {
 	File      config.Config `json:"file"`
 	Effective config.Config `json:"effective"`
 	IsDesktop bool          `json:"isDesktop"`
+	// OpenCostManaged tells Settings that an explicit startup flag owns the
+	// running value even when the persisted file changes.
+	OpenCostManaged bool `json:"openCostCurrencyManaged,omitempty"`
 	// PrometheusHeaderKeys lists the configured Prometheus header names so the UI
 	// can show what's set without ever receiving the (secret) values.
 	PrometheusHeaderKeys []string `json:"prometheusHeaderKeys,omitempty"`
@@ -5155,6 +5161,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	resp := configResponse{
 		File:                 file,
 		IsDesktop:            version.IsDesktop(),
+		OpenCostManaged:      s.currencyManaged,
 		PrometheusHeaderKeys: headerKeys,
 		ArgoCDTokenSet:       tokenSet,
 		ArgoCDEnvManaged:     envManaged,
@@ -5175,7 +5182,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePutConfig replaces the entire config file. Most changes take effect on next restart;
-// the OpenCost currency override is also applied to the running server.
+// the OpenCost currency override is also applied unless an explicit startup flag owns it.
 // Unlike handlePutSettings (which merges fields), this is a full replacement.
 // PrometheusHeaders and the Argo CD token are preserved from the on-disk file: the GET
 // response redacts them, so a UI round-trip would otherwise silently wipe the user's
@@ -5227,7 +5234,7 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if s.openCostCurrency != nil {
+	if s.openCostCurrency != nil && !s.currencyManaged {
 		s.openCostCurrency.SetOverride(result.OpenCostCurrency)
 	}
 	result.PrometheusHeaders = nil

@@ -60,6 +60,7 @@ type AppConfig struct {
 	TimelineMaxSizeBytes     int64
 	PrometheusURL            string
 	OpenCostCurrency         string
+	OpenCostFlagSet          bool
 	PrometheusHeaders        map[string]string
 	PrometheusHeadersFromEnv map[string]string
 	BeylaJobSelector         string
@@ -295,6 +296,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 		StaticRoot:       "dist",
 		EffectiveConfig:  effectiveCfg,
 		OpenCostCurrency: cfg.OpenCostCurrency,
+		OpenCostManaged:  cfg.OpenCostFlagSet,
 		DiagConfig: &server.DiagConfig{
 			Port:                 cfg.Port,
 			DevMode:              cfg.DevMode,
