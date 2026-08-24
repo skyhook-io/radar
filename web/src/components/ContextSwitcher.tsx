@@ -25,7 +25,7 @@ export interface ContextSwitcherHandle {
 
 interface ParsedContext extends ParsedContextName {
   context: ContextInfo
-  displayName: string
+  nameQualifier?: string
 }
 
 function shouldSuppressSwitchErrorToast(error: unknown): boolean {
@@ -56,8 +56,8 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
       hasMultipleSources: false,
     }
     // Parse the source-free name so backend qualification doesn't hide the
-    // provider metadata. The qualified form is restored below only when two
-    // rows would otherwise have the same visible name.
+    // provider metadata. Its suffix is rendered separately below only when
+    // two rows would otherwise have the same visible name.
     const stripSourceSuffix = (name: string, source?: string): string => {
       if (!source) return name
       const escaped = source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -71,7 +71,9 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
     for (const p of unqualified) nameCounts.set(p.raw, (nameCounts.get(p.raw) ?? 0) + 1)
     const parsed: ParsedContext[] = unqualified.map(p => ({
       ...p,
-      displayName: (nameCounts.get(p.raw) ?? 0) > 1 ? p.context.name : p.raw,
+      nameQualifier: (nameCounts.get(p.raw) ?? 0) > 1 && p.context.name !== p.raw
+        ? p.context.name.slice(p.raw.length).trim()
+        : undefined,
     }))
     const accounts = new Set(parsed.map(p => `${p.provider}:${p.account}`))
     const sources = new Set(contexts.map(c => c.source).filter(Boolean))
@@ -105,7 +107,8 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
           : undefined
       return {
         id: p.context.name,
-        name: p.displayName,
+        name: p.raw,
+        nameQualifier: p.nameQualifier,
         secondary: p.provider ? p.raw : undefined,
         badge: p.region || undefined,
         sourceLabel: hasMultipleSources ? p.context.source : undefined,
@@ -194,12 +197,13 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
 
   const currentCtx = contexts?.find(c => c.isCurrent)
   const currentId = currentCtx?.name
-  // Keep the trigger source-stripped unless that would make two contexts
-  // indistinguishable; collisions retain the backend-qualified name.
+  // Keep the trigger name parseable and render any collision qualifier as a
+  // separate suffix so cloud-provider metadata remains intact.
   // Fall back to clusterInfo.context for the very-early window before
   // /api/contexts has resolved.
   const currentParsed = currentId ? parsedById.get(currentId) : undefined
-  const currentRaw = triggerName || currentParsed?.displayName || clusterInfo?.context || currentCtx?.name || 'Unknown'
+  const currentRaw = triggerName || currentParsed?.raw || clusterInfo?.context || currentCtx?.name || 'Unknown'
+  const currentNameQualifier = triggerName ? undefined : currentParsed?.nameQualifier
   const currentSourceLabel = triggerName ? undefined : hasMultipleSources ? currentCtx?.source || undefined : undefined
 
   return (
@@ -211,6 +215,7 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
         label={label}
         currentId={currentId}
         currentName={currentRaw}
+        currentNameQualifier={currentNameQualifier}
         currentSourceLabel={currentSourceLabel}
         items={items}
         onSelect={handleSelect}

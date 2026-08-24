@@ -18,6 +18,9 @@ export interface ClusterSwitcherItem {
   /** Raw context / display string. ClusterName collapses GKE/EKS/AKS
    *  shapes; user-named clusters pass through unchanged. */
   name: string
+  /** Short qualifier rendered after the parsed name without affecting
+   *  provider detection, e.g. a source suffix for colliding contexts. */
+  nameQualifier?: string
   secondary?: string
   badge?: string
   /** Origin label, rendered as a folder-icon line under the name.
@@ -44,6 +47,8 @@ export interface ClusterSwitcherProps {
   /** Raw context / display string. Pass it as-is — the trigger renders
    *  through ClusterName, which handles parse + provider badge + tooltip. */
   currentName: string
+  /** Trigger-side counterpart to {@link ClusterSwitcherItem.nameQualifier}. */
+  currentNameQualifier?: string
   /** Trigger-side counterpart to {@link ClusterSwitcherItem.sourceLabel}.
    *  Only pass when 2+ kubeconfig sources are loaded. */
   currentSourceLabel?: string
@@ -80,6 +85,7 @@ const TRIGGER_NAME_MAX_WIDTH = 'max-w-[140px] sm:max-w-[220px] xl:max-w-[340px]'
 export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcherProps>(({
   currentId,
   currentName,
+  currentNameQualifier,
   currentSourceLabel,
   items,
   onSelect,
@@ -114,6 +120,7 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
       if (!q) return true
       return (
         item.name.toLowerCase().includes(q) ||
+        item.nameQualifier?.toLowerCase().includes(q) ||
         item.secondary?.toLowerCase().includes(q) ||
         item.badge?.toLowerCase().includes(q) ||
         item.sourceLabel?.toLowerCase().includes(q) ||
@@ -242,6 +249,11 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
               className={variant === 'segment' ? 'min-w-0 max-w-[214px]' : TRIGGER_NAME_MAX_WIDTH}
               noTooltip={isOpen}
             />
+            {currentNameQualifier && (
+              <span className="shrink-0 text-xs font-normal text-theme-text-tertiary">
+                {currentNameQualifier}
+              </span>
+            )}
             {currentSourceLabel && (
               // Icon-only on the trigger: long folder paths (the very case
               // that motivates the chip) middle-truncate to something
@@ -358,6 +370,11 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
                                     : 'text-theme-text-primary'
                               }`}
                             />
+                            {item.nameQualifier && (
+                              <span className="shrink-0 text-xs font-normal text-theme-text-tertiary">
+                                {item.nameQualifier}
+                              </span>
+                            )}
                             {item.badge && (
                               <span className="shrink-0 text-[10px] text-theme-text-tertiary bg-theme-elevated px-1 rounded">
                                 {item.badge}
