@@ -209,6 +209,8 @@ Update these files to support new topology node kinds:
 | `README.md` | Add to "Supported Resources" table |
 | `CLAUDE.md` | Add to renderers list and topology builder section |
 
+`radar-docs` splits `docs/integrations.md` at `##` headings. When adding or renaming an integration heading, coordinate the matching `INTEGRATION_META` entry in `skyhook-dev/radar-docs/scripts/sync-oss-docs.mjs`; otherwise the downstream sync fails instead of publishing a partial page.
+
 ---
 
 ## Verification Checklist

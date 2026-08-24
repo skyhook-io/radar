@@ -1,6 +1,6 @@
 # Configuration
 
-This document covers Radar's cluster connection behavior. For CLI flags and basic usage, see the [README](../README.md#usage).
+This document covers Radar's cluster connection behavior. For commands and flags, see the [CLI reference](cli.md).
 
 ## HTTP Listener
 
@@ -145,6 +145,10 @@ Radar supports switching between Kubernetes contexts at runtime through the UI. 
 
 When running in-cluster (using the pod's service account), context switching is disabled.
 
+### Expired credentials
+
+If an active context's credentials expire or are rejected, Radar disconnects cluster-backed work and retries automatically. After you re-authenticate, exec-based credentials are re-probed and static credentials are reloaded from kubeconfig on disk, so Radar can reconnect without a restart. Retries start after 30 seconds and back off to 5 minutes; a credential plugin that stops responding is retried less frequently.
+
 ## Namespace Picker
 
 The header has a namespace picker on the right. Pick a single namespace to focus the view, or **All namespaces** to see everything you have access to. Cluster-scoped resources (Nodes, Namespaces, PVs, StorageClasses) appear regardless of the pick if your RBAC permits them — they have no namespace to filter on. Namespace-restricted users without their own cluster-scoped RBAC won't see cluster-scoped sections at all.
@@ -205,6 +209,6 @@ above, which happen either way.
 
 ## Related Documentation
 
-- [README](../README.md#usage) — CLI flags and basic usage
+- [CLI reference](cli.md) — Commands and operator-facing flags
 - [In-Cluster Deployment](in-cluster.md) — Deploy Radar inside your cluster with Helm
 - [Authentication & Authorization](authentication.md) — Proxy and OIDC auth for shared deployments

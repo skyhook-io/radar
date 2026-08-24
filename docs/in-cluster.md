@@ -18,6 +18,22 @@ kubectl port-forward svc/radar 9280:9280 -n radar
 open http://localhost:9280
 ```
 
+## Exposing with Gateway API
+
+If your cluster uses Gateway API, the chart can create an `HTTPRoute`:
+
+```yaml
+# values.yaml
+httpRoute:
+  enabled: true
+  parentRefs:
+    - name: public-gateway
+  hostnames:
+    - radar.your-domain.com
+```
+
+With no custom `rules`, the chart routes `/` to Radar. `httpRoute` and `ingress` are mutually exclusive, and at least one `parentRefs` entry is required. See the [chart reference](../deploy/helm/radar/README.md#with-gateway-api-httproute) for custom rules and timeouts.
+
 ## Exposing with Ingress
 
 ### Basic (No Authentication)

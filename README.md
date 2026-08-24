@@ -200,6 +200,8 @@ output) for plain text. URLs, tokens, and suggested commands remain unstyled.
 
 **CLI Flags**
 
+The table below covers common startup flags. See the [CLI reference](docs/cli.md) for commands and grouped operator options; `radar --help` is authoritative for the installed version.
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--kubeconfig` | `~/.kube/config` | Path to kubeconfig file |
@@ -588,7 +590,7 @@ Radar reads your cluster through your own credentials and keeps cluster data loc
 
 ## Development
 
-See the **[Development Guide](DEVELOPMENT.md)** for building from source, architecture details, API reference, and contributing.
+See the **[Development Guide](DEVELOPMENT.md)** for building from source and contributing. For automation and integrations, see the [HTTP API reference](docs/api.md).
 
 Quick start:
 ```bash

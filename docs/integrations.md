@@ -931,6 +931,8 @@ The `clusters` and `backups` plurals collide with Cluster API and Velero respect
 
 **Resource Browser:** MR list shows kind / external name / provider config / status; Provider list shows package, revision, status; Composition list shows mode, composite kind, function count; XRD list shows generated kind and claim kind.
 
+**Topology:** Radar connects a v1 Claim to its bound XR, and an XR to its composed Managed Resources. Edges follow Crossplane's v1 and v2 spec references; only resources Radar already watches and can read are shown.
+
 **Cluster Audit:** New `crossplaneStuck` check flags MRs/XRs/Claims reporting `Ready=False` or `Synced=False` for more than 5 minutes (Medium) or 30 minutes (High). Synced=False takes priority over Ready=False because it usually indicates the actionable problem (bad ProviderConfig, malformed spec, missing IAM). Same severity ramp as `stuckTerminating` for cross-surface consistency. Paused resources are deliberately suppressed.
 
 ### v1 vs v2 Path Handling
@@ -964,9 +966,9 @@ For Upbound provider CRDs (`s3.aws.upbound.io`, `compute.gcp.upbound.io`, etc.),
 
 | CRD | Group | Topology | Detail View | AI Summary |
 |-----|-------|----------|-------------|------------|
-| Managed Resources (any provider) | `*.upbound.io`, `kubernetes.crossplane.io`, `helm.crossplane.io`, `*.crossplane.io` | — | Yes | — |
-| Composite Resources (XRs) | user-defined groups | — | Yes | — |
-| Claims (v1) | user-defined groups | — | Yes | — |
+| Managed Resources (any provider) | `*.upbound.io`, `kubernetes.crossplane.io`, `helm.crossplane.io`, `*.crossplane.io` | Yes | Yes | — |
+| Composite Resources (XRs) | user-defined groups | Yes | Yes | — |
+| Claims (v1) | user-defined groups | Yes | Yes | — |
 | CompositeResourceDefinition | `apiextensions.crossplane.io/v1`, `v2` | — | Yes | — |
 | Composition | `apiextensions.crossplane.io/v1` | — | Yes | — |
 | CompositionRevision | `apiextensions.crossplane.io/v1` | — | Yes | — |
@@ -979,7 +981,6 @@ For Upbound provider CRDs (`s3.aws.upbound.io`, `compute.gcp.upbound.io`, etc.),
 
 Deferred to a future "full Crossplane" pass:
 
-- Topology edges (XR → composed MRs in the graph view)
 - `Usage` / `ClusterUsage` rendering (delete-protection visualization)
 - Cloud-console deep links from `external-name`
 - Provider controller pod link with one-click log access

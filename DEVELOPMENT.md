@@ -141,7 +141,7 @@ radar/
 
 ## API Reference
 
-For the full API reference, see [CLAUDE.md](CLAUDE.md#api-endpoints).
+See the operator-facing [HTTP API reference](docs/api.md). Route definitions in `internal/server/server.go` remain the source of truth when adding or changing an endpoint.
 
 ## Adding Features
 
