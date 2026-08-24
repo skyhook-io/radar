@@ -171,10 +171,10 @@ function Section({ title, children, warn }: { title: string; children: React.Rea
 
 function Row({ label, value, warn }: { label: string; value: React.ReactNode; warn?: boolean }) {
   return (
-    <div className="flex items-baseline justify-between gap-4 text-xs">
+    <div className="flex items-start justify-between gap-4 text-xs">
       <span className="text-theme-text-secondary shrink-0">{label}</span>
       <span className={clsx(
-        'text-right truncate',
+        'min-w-0 text-right break-words',
         warn ? 'text-yellow-400' : 'text-theme-text-primary'
       )}>{value}</span>
     </div>

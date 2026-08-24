@@ -25,6 +25,7 @@ export interface ContextSwitcherHandle {
 
 interface ParsedContext extends ParsedContextName {
   context: ContextInfo
+  displayName: string
 }
 
 function shouldSuppressSwitchErrorToast(error: unknown): boolean {
@@ -54,18 +55,23 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
       hasMultipleAccounts: false,
       hasMultipleSources: false,
     }
-    // Strip the disambiguation suffix (" (<source>)" or " (<source> #N)")
-    // before parsing — qualified names won't match the GKE/EKS/AKS regexes
-    // otherwise, and the suffix is redundant with the source chip we
-    // render separately.
+    // Parse the source-free name so backend qualification doesn't hide the
+    // provider metadata. The qualified form is restored below only when two
+    // rows would otherwise have the same visible name.
     const stripSourceSuffix = (name: string, source?: string): string => {
       if (!source) return name
       const escaped = source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       return name.replace(new RegExp(`\\s+\\(${escaped}(?:\\s+#\\d+)?\\)$`), '')
     }
-    const parsed: ParsedContext[] = contexts.map(ctx => ({
+    const unqualified = contexts.map(ctx => ({
       context: ctx,
       ...parseContextName(stripSourceSuffix(ctx.name, ctx.source)),
+    }))
+    const nameCounts = new Map<string, number>()
+    for (const p of unqualified) nameCounts.set(p.raw, (nameCounts.get(p.raw) ?? 0) + 1)
+    const parsed: ParsedContext[] = unqualified.map(p => ({
+      ...p,
+      displayName: (nameCounts.get(p.raw) ?? 0) > 1 ? p.context.name : p.raw,
     }))
     const accounts = new Set(parsed.map(p => `${p.provider}:${p.account}`))
     const sources = new Set(contexts.map(c => c.source).filter(Boolean))
@@ -99,7 +105,7 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
           : undefined
       return {
         id: p.context.name,
-        name: p.raw,
+        name: p.displayName,
         secondary: p.provider ? p.raw : undefined,
         badge: p.region || undefined,
         sourceLabel: hasMultipleSources ? p.context.source : undefined,
@@ -188,12 +194,12 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
 
   const currentCtx = contexts?.find(c => c.isCurrent)
   const currentId = currentCtx?.name
-  // Use parsed.raw (the source-stripped form) for the trigger so the
-  // disambiguation suffix doesn't double up with the source chip.
+  // Keep the trigger source-stripped unless that would make two contexts
+  // indistinguishable; collisions retain the backend-qualified name.
   // Fall back to clusterInfo.context for the very-early window before
   // /api/contexts has resolved.
   const currentParsed = currentId ? parsedById.get(currentId) : undefined
-  const currentRaw = triggerName || currentParsed?.raw || clusterInfo?.context || currentCtx?.name || 'Unknown'
+  const currentRaw = triggerName || currentParsed?.displayName || clusterInfo?.context || currentCtx?.name || 'Unknown'
   const currentSourceLabel = triggerName ? undefined : hasMultipleSources ? currentCtx?.source || undefined : undefined
 
   return (

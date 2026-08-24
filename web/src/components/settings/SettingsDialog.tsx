@@ -992,14 +992,16 @@ function ClusterSection({
   effectiveConfig?: Config
   onChange: <K extends keyof Config>(field: K, value: Config[K]) => void
 }) {
+  const hasKubeconfigDirs = (config.kubeconfigDirs?.length ?? 0) > 0
+
   return (
     <>
       <ConfigField
-        label="Kubeconfig"
-        help="Primary kubeconfig file — loads first when additional directories are configured"
+        label="Primary Kubeconfig"
+        help="File path or OS-separated path list (: on macOS/Linux, ; on Windows). Loaded before additional directories"
         value={config.kubeconfig ?? ''}
         effectiveValue={effectiveConfig?.kubeconfig}
-        placeholder="~/.kube/config"
+        placeholder={hasKubeconfigDirs ? 'No primary file configured' : '~/.kube/config'}
         onChange={(v) => onChange('kubeconfig', v || undefined)}
       />
       <ConfigArrayField
