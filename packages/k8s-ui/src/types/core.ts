@@ -1273,8 +1273,8 @@ export interface AggregatedFlow {
 
 // Cluster info for traffic detection
 export interface TrafficClusterInfo {
-  platform: string // gke, eks, aks, generic
-  cni: string // cilium, calico, flannel, vpc-cni, azure-cni
+  platform: string // rke2, gke, eks, aks, minikube, kind, docker-desktop, openshift, rancher, generic
+  cni: string // cilium, canal, calico, flannel, vpc-cni, azure-cni, gke-native, unknown
   dataplaneV2: boolean
   clusterName?: string
   k8sVersion?: string

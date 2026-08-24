@@ -14,6 +14,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/portforward"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // Manager handles traffic source detection and management
@@ -232,6 +233,9 @@ func (m *Manager) detectClusterInfo(ctx context.Context) (*ClusterInfo, error) {
 	} else {
 		info.K8sVersion = version.GitVersion
 		log.Printf("[traffic] K8s version: %s", info.K8sVersion)
+		if platform := k8score.DetectPlatformFromVersion(info.K8sVersion); platform != "unknown" {
+			info.Platform = platform
+		}
 	}
 
 	// Detect platform from nodes
@@ -245,26 +249,19 @@ func (m *Manager) detectClusterInfo(ctx context.Context) (*ClusterInfo, error) {
 		providerID := node.Spec.ProviderID
 		log.Printf("[traffic] Node providerID: %q", providerID)
 
-		// Detect platform
-		switch {
-		case strings.HasPrefix(providerID, "gce://"):
-			info.Platform = "gke"
-			// Extract cluster name from labels
-			if cn, ok := node.Labels["cloud.google.com/gke-nodepool"]; ok {
-				// Parse cluster name from nodepool
-				parts := strings.Split(cn, "-")
-				if len(parts) > 0 {
-					info.ClusterName = parts[0]
+		platform := k8score.DetectNodePlatform(node)
+		if platform == "unknown" {
+			log.Printf("[traffic] Unknown node platform, platform remains generic")
+		} else if info.Platform == "generic" {
+			info.Platform = platform
+			if platform == "gke" {
+				if cn, ok := node.Labels["cloud.google.com/gke-nodepool"]; ok {
+					parts := strings.Split(cn, "-")
+					if len(parts) > 0 {
+						info.ClusterName = parts[0]
+					}
 				}
 			}
-		case strings.HasPrefix(providerID, "aws://"):
-			info.Platform = "eks"
-		case strings.HasPrefix(providerID, "azure://"):
-			info.Platform = "aks"
-		case strings.HasPrefix(providerID, "kind://"):
-			info.Platform = "kind"
-		default:
-			log.Printf("[traffic] Unknown providerID format, platform remains generic")
 		}
 	}
 
@@ -313,6 +310,14 @@ func (m *Manager) detectCNI(ctx context.Context, platform string) (string, bool)
 		log.Printf("[traffic] Found anetd DaemonSet (GKE Dataplane V2)")
 		// anetd is part of GKE Dataplane V2 which uses Cilium
 		return "cilium", hubbleEnabled
+	}
+
+	for _, name := range []string{"rke2-canal", "canal"} {
+		_, err = m.k8sClient.AppsV1().DaemonSets("kube-system").Get(ctx, name, metav1.GetOptions{})
+		if err == nil {
+			log.Printf("[traffic] Found %s DaemonSet", name)
+			return "canal", false
+		}
 	}
 
 	// Check for Calico
@@ -416,6 +421,14 @@ func (m *Manager) generateRecommendation(info *ClusterInfo, detected []SourceSta
 		return &Recommendation{
 			Name:      "caretta",
 			Reason:    "Caretta provides lightweight eBPF-based traffic visibility for Calico clusters.",
+			HelmChart: carettaHelmChart(),
+			DocsURL:   "https://github.com/groundcover-com/caretta",
+		}
+
+	case "canal":
+		return &Recommendation{
+			Name:      "caretta",
+			Reason:    "Caretta provides lightweight eBPF-based traffic visibility for Canal clusters.",
 			HelmChart: carettaHelmChart(),
 			DocsURL:   "https://github.com/groundcover-com/caretta",
 		}

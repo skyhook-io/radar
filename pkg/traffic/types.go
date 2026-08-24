@@ -148,8 +148,8 @@ type DetectionResult struct {
 
 // ClusterInfo contains cluster platform and CNI information.
 type ClusterInfo struct {
-	Platform    string `json:"platform"`    // gke, eks, aks, generic
-	CNI         string `json:"cni"`         // cilium, calico, flannel, vpc-cni, azure-cni, etc.
+	Platform    string `json:"platform"`    // rke2, gke, eks, aks, minikube, kind, docker-desktop, openshift, rancher, generic
+	CNI         string `json:"cni"`         // cilium, canal, calico, flannel, vpc-cni, azure-cni, gke-native, unknown
 	DataplaneV2 bool   `json:"dataplaneV2"` // GKE-specific: is Dataplane V2 enabled?
 	ClusterName string `json:"clusterName"` // Cluster name if available
 	K8sVersion  string `json:"k8sVersion"`  // Kubernetes version
