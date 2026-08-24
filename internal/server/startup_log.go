@@ -28,6 +28,7 @@ type startupLogSummary struct {
 	proxyUserHeader      string
 	proxyGroupsHeader    string
 	mcpEnabled           bool
+	mcpToken             string
 	aiAgent              string
 	cloudMode            bool
 	showRemoteAccessHint bool
@@ -50,6 +51,7 @@ func (s *Server) logStartupSummaryBlock() {
 		proxyUserHeader:      s.authConfig.UserHeader,
 		proxyGroupsHeader:    s.authConfig.GroupsHeader,
 		mcpEnabled:           s.mcpHandler != nil,
+		mcpToken:             s.mcpToken,
 		aiAgent:              aiAgent,
 		cloudMode:            cloud.Mode(),
 		showRemoteAccessHint: s.remoteAccessHint,
@@ -130,7 +132,14 @@ func formatStartupLogSummary(summary startupLogSummary, color bool) []string {
 	}
 
 	if summary.mcpEnabled {
-		lines = append(lines, row("MCP", "enabled at /mcp"))
+		if summary.mcpToken != "" {
+			lines = append(lines,
+				row("MCP", "session token required at /mcp"),
+				row("MCP token", summary.mcpToken+" (keep private; changes each start)"),
+			)
+		} else {
+			lines = append(lines, row("MCP", "enabled at /mcp"))
+		}
 	} else {
 		lines = append(lines, row("MCP", "disabled"))
 	}

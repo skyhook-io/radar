@@ -66,6 +66,7 @@ func main() {
 	timelineRetention := flag.Duration("timeline-retention", fileCfg.TimelineRetentionOr(7*24*time.Hour), "How long to retain timeline events when --timeline-storage=sqlite (e.g. 168h, 720h). 0 disables age-based cleanup.")
 	timelineMaxSize := flag.String("timeline-max-size", fileCfg.TimelineMaxSizeOr("1Gi"), "Maximum SQLite timeline storage size before pruning oldest events (e.g. 800Mi, 8Gi). 0 disables size-based pruning.")
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
+	mcpSessionToken := flag.Bool("mcp-session-token", false, "Require a generated per-session bearer token for the write-capable local MCP endpoint")
 	flag.Parse()
 
 	if *showVersion {
@@ -103,6 +104,10 @@ func main() {
 
 	if *kubeconfig != "" && *kubeconfigDir != "" {
 		log.Printf("ERROR: --kubeconfig and --kubeconfig-dir are mutually exclusive")
+		os.Exit(1)
+	}
+	if *mcpSessionToken && !fileCfg.MCPEnabledOr(true) {
+		log.Printf("ERROR: --mcp-session-token requires MCP to be enabled")
 		os.Exit(1)
 	}
 	namespaceFlagSet := false
@@ -169,6 +174,7 @@ func main() {
 		HubAPIURL:                hubAPIURL,
 		HubAppURL:                hubAppURL,
 		MCPEnabled:               fileCfg.MCPEnabledOr(true),
+		MCPSessionToken:          *mcpSessionToken,
 		AIHistory:                fileCfg.AIHistoryOr(true),
 		AIHistoryDBPath:          fileCfg.AIHistoryDBPath,
 	}

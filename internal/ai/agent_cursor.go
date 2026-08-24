@@ -68,7 +68,7 @@ func (a *cursorAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(
 		workdir = dir
 		cleanup = func() { _ = os.RemoveAll(dir) }
 	}
-	if err := writeCursorMCPConfig(workdir, s.mcpURL); err != nil {
+	if err := writeCursorMCPConfig(workdir, s.mcpURL, s.mcpToken); err != nil {
 		cleanup()
 		return nil, nil, err
 	}
@@ -160,14 +160,17 @@ func cursorHelpTrustFlag(help string) string {
 }
 
 // writeCursorMCPConfig points Cursor at radar's MCP via the workspace-local config
-// (<workdir>/.cursor/mcp.json). The endpoint is loopback-only in standalone mode,
-// so no auth header.
-func writeCursorMCPConfig(workdir, mcpURL string) error {
+// (<workdir>/.cursor/mcp.json).
+func writeCursorMCPConfig(workdir, mcpURL, token string) error {
 	dir := filepath.Join(workdir, ".cursor")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("ai: cursor mcp config dir: %w", err)
 	}
-	cfg := map[string]any{"mcpServers": map[string]any{"radar": map[string]any{"url": mcpURL}}}
+	server := map[string]any{"url": mcpURL}
+	if token != "" {
+		server["headers"] = map[string]string{"Authorization": "Bearer " + token}
+	}
+	cfg := map[string]any{"mcpServers": map[string]any{"radar": server}}
 	b, err := json.Marshal(cfg)
 	if err != nil {
 		return err

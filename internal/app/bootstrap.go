@@ -64,6 +64,7 @@ type AppConfig struct {
 	BeylaJobSelector         string
 	Version                  string
 	MCPEnabled               bool
+	MCPSessionToken          bool
 	AIHistory                bool   // persist AI investigations across restarts
 	AIHistoryDBPath          string // "" = ~/.radar/ai-runs.db
 	AuthConfig               auth.Config
@@ -325,7 +326,14 @@ func CreateServer(cfg AppConfig) *server.Server {
 	}
 
 	if cfg.MCPEnabled {
-		serverCfg.MCPHandler = mcppkg.NewHandler()
+		if cfg.MCPSessionToken && !cfg.AuthConfig.Enabled() {
+			token, err := mcppkg.NewSessionToken()
+			if err != nil {
+				log.Fatalf("[mcp] Failed to generate session token: %v", err)
+			}
+			serverCfg.MCPToken = token
+		}
+		serverCfg.MCPHandler = mcppkg.NewHandler(serverCfg.MCPToken)
 		serverCfg.MCPReadOnlyHandler = mcppkg.NewReadOnlyHandler()
 	}
 

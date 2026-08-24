@@ -50,6 +50,9 @@ func (a *codexAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func()
 	// the agent also gets the user's own MCP servers (possibly write/network/cloud
 	// capable) + local file reads: a deliberate trusted mode, not a contained one.
 	base := []string{"--json", "--skip-git-repo-check", "-c", mcpCfg}
+	if s.mcpToken != "" {
+		base = append(base, "-c", `mcp_servers.radar.env_http_headers.Authorization="RADAR_MCP_SESSION_TOKEN"`)
+	}
 	// Emit reasoning summaries so the UI can show the model's thinking between tool
 	// calls (off by default — without this the stream is only tool calls + the final
 	// message). The Codex parser maps these `reasoning` items to thinking events.
@@ -101,6 +104,12 @@ func (a *codexAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func()
 		cleanup = func() { _ = os.RemoveAll(dir) }
 		cmd.Dir = dir
 		cmd.Env = codexEnv()
+	}
+	if s.mcpToken != "" {
+		if cmd.Env == nil {
+			cmd.Env = os.Environ()
+		}
+		cmd.Env = append(cmd.Env, "RADAR_MCP_SESSION_TOKEN=Bearer "+s.mcpToken)
 	}
 	// Full-local: inherit radar's cwd + full env so the user's auth/config/MCPs work.
 

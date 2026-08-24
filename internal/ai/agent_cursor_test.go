@@ -75,6 +75,20 @@ func TestCursorTrustFallbackEndToEnd(t *testing.T) {
 	}
 }
 
+func TestWriteCursorMCPConfigIncludesSessionToken(t *testing.T) {
+	workdir := t.TempDir()
+	if err := writeCursorMCPConfig(workdir, "http://localhost:9280/mcp", "test-token"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(workdir, ".cursor", "mcp.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(data); !strings.Contains(got, `"Authorization":"Bearer test-token"`) {
+		t.Fatalf("Cursor MCP config missing bearer token: %s", got)
+	}
+}
+
 // TestCursorParseStream_FormatPin locks the Cursor `-p --output-format stream-json`
 // JSONL schema we depend on, captured from a live MCP tool call: system/init carries
 // the resumable session_id, thinking/delta is the reasoning channel, mcpToolCall
