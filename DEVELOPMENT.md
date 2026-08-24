@@ -141,7 +141,7 @@ radar/
 
 ## API Reference
 
-See the operator-facing [HTTP API reference](docs/api.md). Route definitions in `internal/server/server.go` remain the source of truth when adding or changing an endpoint.
+See the operator-facing [HTTP API reference](https://radarhq.io/docs/reference/api). Route definitions in [`internal/server/server.go`](internal/server/server.go) remain the source of truth when adding or changing an endpoint.
 
 ## Adding Features
 

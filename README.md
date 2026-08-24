@@ -131,42 +131,7 @@ helm repo add skyhook https://skyhook-io.github.io/helm-charts
 helm install radar skyhook/radar -n radar --create-namespace
 ```
 
-See the [In-Cluster Deployment Guide](docs/in-cluster.md) for ingress, authentication, and RBAC configuration.
-
-### Gateway API HTTPRoute
-
-Chart supports optional Gateway API `HTTPRoute` generation. Enable
-`httpRoute.enabled`, set `parentRefs`, and use `httpRoute.rules` for multiple
-path prefixes, per-route timeouts, filters, or custom backends. `hostnames`
-defaults to an empty list, and `apiVersion` can be overridden for older Gateway
-API installations. The generated default route has no chart-imposed timeout,
-so the Gateway deployment default applies. Set `httpRoute.defaultTimeout` for
-an explicit timeout; custom rules can define their own `timeouts`.
-
-`ingress` and `httpRoute` are mutually exclusive: enabling both stops the
-install with an error, so enable only one. When `httpRoute` is enabled you must
-set at least one `parentRefs` entry (the Gateway the route attaches to);
-otherwise the install fails instead of creating an HTTPRoute that is attached to
-no Gateway.
-
-```yaml
-httpRoute:
-  enabled: true
-  parentRefs:
-    - name: public-gateway
-  hostnames: []
-  rules:
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /
-      backendRefs:
-        - name: radar
-          port: 9280
-```
-
-See the [Helm Chart README](deploy/helm/radar/README.md#with-gateway-api-httproute)
-for full configuration details and timeout examples.
+See the [In-Cluster Deployment Guide](docs/in-cluster.md) for Gateway API and ingress exposure, authentication, and RBAC configuration.
 
 </details>
 
@@ -200,7 +165,7 @@ output) for plain text. URLs, tokens, and suggested commands remain unstyled.
 
 **CLI Flags**
 
-The table below covers common startup flags. See the [CLI reference](docs/cli.md) for commands and grouped operator options; `radar --help` is authoritative for the installed version.
+The table below covers common startup flags. See the [full CLI reference](https://radarhq.io/docs/configuration/cli); `radar --help` is authoritative for the installed version.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -590,7 +555,7 @@ Radar reads your cluster through your own credentials and keeps cluster data loc
 
 ## Development
 
-See the **[Development Guide](DEVELOPMENT.md)** for building from source and contributing. For automation and integrations, see the [HTTP API reference](docs/api.md).
+See the **[Development Guide](DEVELOPMENT.md)** for building from source and contributing. For automation and integrations, see the [HTTP API reference](https://radarhq.io/docs/reference/api).
 
 Quick start:
 ```bash

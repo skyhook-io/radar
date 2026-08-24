@@ -1,6 +1,6 @@
 # Configuration
 
-This document covers Radar's cluster connection behavior. For commands and flags, see the [CLI reference](cli.md).
+This document covers Radar's cluster connection behavior. For commands and flags, see the [CLI reference](https://radarhq.io/docs/configuration/cli).
 
 ## HTTP Listener
 
@@ -209,6 +209,6 @@ above, which happen either way.
 
 ## Related Documentation
 
-- [CLI reference](cli.md) — Commands and operator-facing flags
+- [CLI reference](https://radarhq.io/docs/configuration/cli) — Commands and operator-facing flags
 - [In-Cluster Deployment](in-cluster.md) — Deploy Radar inside your cluster with Helm
 - [Authentication & Authorization](authentication.md) — Proxy and OIDC auth for shared deployments
