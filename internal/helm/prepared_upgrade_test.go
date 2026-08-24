@@ -256,6 +256,10 @@ func TestPrepareCloudUpgradePinsReleaseAndUpgradesToChartAppVersion(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The on-disk chart carries a 0.0.0-dev placeholder, which the stable-version
+	// eligibility check rightly rejects — pin a stable version like a real release.
+	targetChart.Metadata.Version = "1.7.0"
+	targetChart.Metadata.AppVersion = "1.7.2"
 	server := preparedChartServer(t, targetChart)
 	defer server.Close()
 	request := InstallRequest{
@@ -321,6 +325,8 @@ func TestResolvePreparedChartSummaryUsesVerifiedArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	loaded.Metadata.Version = "1.7.0"
+	loaded.Metadata.AppVersion = "1.7.2"
 	server := preparedChartServer(t, loaded)
 	defer server.Close()
 	client := &Client{}
