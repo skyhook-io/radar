@@ -15,11 +15,12 @@ import {
   useCloudRole, useVersionCheck, useClusterInfo, usePrometheusStatus, useArgoStatus,
 } from '../../api/client'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
-import { Input } from '@skyhook-io/k8s-ui'
+import { Input, SelectMenu } from '@skyhook-io/k8s-ui'
 import { Tooltip } from '../ui/Tooltip'
 import { AISettingsSection, type AIDraft } from '../diagnose/AISettings'
 import { MyPermissionsContent } from './MyPermissionsDialog'
 import { useDiagnose } from '../diagnose/DiagnoseContext'
+import { CURRENCY_OPTIONS } from './currency-options'
 
 // The loopback URL an MCP client is told to connect to. Shared by the overview
 // row and the MCP section: both must carry the base path, or the URL they
@@ -1166,12 +1167,20 @@ function CostSection({
 }) {
   return (
     <div>
-      <ConfigField
-        label="Currency override"
-        help="Enter an ISO 4217 code, or leave blank to detect currencyCode from a running OpenCost pricing configuration and then fall back to USD. Radar labels values but does not convert them."
+      <label className="mb-1 block text-sm font-medium text-theme-text-primary">
+        Currency override
+      </label>
+      <p className="mb-1 text-xs text-theme-text-tertiary">
+        Choose a currency, or use Auto to detect it from a running OpenCost pricing configuration
+        and then fall back to USD. Radar labels values but does not convert them.
+      </p>
+      <SelectMenu
         value={currency}
-        placeholder="Auto"
+        options={CURRENCY_OPTIONS}
         onChange={onChange}
+        ariaLabel="Currency override"
+        searchPlaceholder="Search currencies by name or code"
+        className="w-full"
       />
       {managed && (
         <p className="mt-1 text-xs text-amber-600 dark:text-amber-400/80">
