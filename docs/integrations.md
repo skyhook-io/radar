@@ -722,13 +722,10 @@ They roll up under three categories, split by what you'd go and look at: `backup
 | VolumeSnapshotLocation | `velero.io/v1` | — | Yes | — | — |
 | BackupRepository | `velero.io/v1` | — | Yes | Yes | — |
 
-**Kind collisions.** `restores` and `schedules` are shared plurals — `rancher/backup-restore-operator` ships `restores.resources.cattle.io`, and several operators ship their own `schedules` kind. For those two, Radar's renderers, status readers, column sets and cells all select on the `velero.io` group, so a foreign resource with the same plural falls through to the generic renderer instead of being dressed up as a backup. `backupstoragelocations`, `volumesnapshotlocations` and `backuprepositories` are keyed on the plural alone — no other operator is known to claim those names — though their renderers and cells still group-guard, and each is listed in the fall-through so a foreign CRD with the plural reaches the generic renderer rather than a blank drawer. The kind→colour and kind→icon tables have no group awareness at all, so only Velero-unique kinds appear in them: `Backup`, `Restore` and `Schedule` are deliberately left unstyled rather than risk decorating a foreign resource.
-
 **Limitations**:
-- **A backup's phase is not its restorability.** `Completed` says the run finished, which stays true after the storage location holding it goes Unavailable or its TTL expires. The BackupStorageLocation page carries the consequence — what it holds and how much of it is worth planning a recovery around — because the Backup's own status cannot observe it. The two are distinguished deliberately: an Unavailable location means a restore cannot happen now, while an expired backup means Velero intends to delete it. Velero's restore controller does not check expiration, so until the garbage collector reaches it the data is still there and a restore would work; it is excluded from the restorable count because it is not something to depend on, not because it is already gone.
-- **A stalled run is inferred from elapsed time, and only one phase is measured against a real limit.** `spec.itemOperationTimeout` is, in Velero's own words, "the time used to wait for asynchronous BackupItemAction operations" — so it governs `WaitingForPluginOperations` and nothing else. A run past it *there* has outlived a limit Velero set, and the message says so. A run past it in `InProgress` or `Finalizing` has only been running a while: Velero puts no bound on walking and writing items, and a large cluster legitimately takes hours, so the message reports the elapsed time, states that Velero sets no limit on the phase, and offers the timeout only as a yardstick. Where the number comes from is named either way — the run's own field, or Velero's built-in four hours, which the controller's `--default-item-operation-timeout` can change and which is not readable from the CRs. Radar also does not check whether the Velero controller is running, so no message names a cause.
-- **The messages behind a run's counts need a live controller and reachable storage.** `POST /api/velero/{backups|restores}/{ns}/{name}/messages` fetches them on demand: Radar creates a `DownloadRequest`, Velero answers with a pre-signed URL, and Radar reads the results file from object storage. Both preconditions are real and are reported rather than hidden — a stopped controller never answers, and a URL signed for a host only the cluster can resolve cannot be fetched from a laptop (Velero's `publicUrl` on the storage location is what makes it reachable). Data-mover objects (`DataUpload`/`DataDownload`), full backup logs, and progress counters *while a run is in flight* remain out of reach. The final item count is not in that list — `live` takes a real backup and the count Radar renders is Velero's own.
-- **Partly verified against fixtures.** `./scripts/velero-demo.sh live` runs Velero against in-cluster object storage, so the restorability claims above are exercised against work Velero really did: a backup written to a bucket, a restore that recreated a deleted namespace, a location marked `Unavailable` by Velero's own validation while still holding a `Completed` backup, and a run left in flight past its own `itemOperationTimeout`. `PartiallyFailed` is produced there too, by a pre-backup hook that exits non-zero, and `FailedValidation` by aiming a backup at the location Velero has just marked `Unavailable`. The data-mover objects (`DataUpload`/`DataDownload`) appear in neither mode — `up` deliberately does not fake them, and `live` has no snapshot-capable CSI driver to make Velero emit them. Coverage matrix: `scripts/velero-demo/README.md`.
+- **A backup's phase is not its restorability.** A `Completed` backup can sit on an Unavailable storage location or be past its TTL. The BackupStorageLocation page shows stored and restorable counts. Unavailable means it cannot restore now; expired means Velero intends to delete it, so Radar excludes it even if garbage collection has not run yet.
+- **Stalled-run detection depends on the phase.** `WaitingForPluginOperations` is measured against Velero's `spec.itemOperationTimeout`. For `InProgress` and `Finalizing`, that duration is only a yardstick because Velero defines no deadline. Radar reports the distinction and elapsed time without guessing at a cause. If the field is absent, Radar uses Velero's built-in four-hour default; a controller-level override is not visible in the resource.
+- **Fetching run messages needs a live controller and reachable storage.** Radar creates a `DownloadRequest` and follows Velero's pre-signed object-storage URL. A stopped controller or a URL unreachable from Radar returns an explicit error; configure the storage location's `publicUrl` when needed. Data-mover objects (`DataUpload`/`DataDownload`) and full backup logs remain unavailable.
 
 ---
 
@@ -842,8 +839,6 @@ The names in these specs are PostgreSQL names, not Kubernetes names: a Publicati
 
 A declared object the operator could not apply raises an **Issue** (`CNPGDeclarativeNotApplied`, warning) carrying the operator's own message. This is the one CNPG failure with no other signal: the CR exists, the cluster is healthy, every count is green, and the database simply is not there. Only `applied: false` raises it — an absent `applied` means not yet reconciled, and reporting that would flag every declarative object for the first seconds of its life.
 
-`databases`, `publications` and `subscriptions` are crowded plurals — Knative owns `subscriptions`, and several database operators ship the other two — so the column sets are group-qualified and a foreign CRD gets the generic columns instead of a Cluster column it can never fill.
-
 ### Image catalogs
 
 `ImageCatalog` and `ClusterImageCatalog` pin one PostgreSQL image per major version. A Cluster that references one carries **no `spec.imageName` at all**; the resolved image lives in `status.image`, so anything reading spec alone shows a dash where an image is running.
@@ -873,11 +868,8 @@ Deliberately narrow: the absence of a ScheduledBackup does not prove a cluster i
 | ImageCatalog | `postgresql.cnpg.io/v1` | — | Yes | — |
 | ClusterImageCatalog | `postgresql.cnpg.io/v1` | — | Yes | — |
 
-The `clusters` and `backups` plurals collide with Cluster API and Velero respectively, and the declarative types add more: `subscriptions` is also Knative messaging's, while `databases` and `publications` are generic enough that several database operators ship them. Radar resolves all of them with positive API-group guards, so a third operator's CRD sharing any of these plurals (KubeBlocks, Redis/Valkey operators) falls through to the generic renderer instead of inheriting a fabricated PostgreSQL status.
-
 **Limitations**:
 - The image-catalog and backup views describe what the cluster reports. A `ScheduledBackup`'s cron is CloudNativePG's six-field form (seconds first) and is shown verbatim rather than translated, because reading it as a five-field expression would state the wrong time.
-- Verified against clusters of a few hundred resources. Neither the recovery-window table nor the declarative-object lists have been exercised on a fleet with thousands of Postgres clusters.
 
 ---
 
@@ -1016,28 +1008,23 @@ Deferred to a future "full Crossplane" pass:
 
 ### The per-policy resource view
 
-A resource page answers "which policies does this break". The policy page answers the other direction: **which resources does this policy cover, and what happens to them** — served by `/api/policy/policies/{policy}` off a reverse index built when reports are replaced, never per request.
+A resource page answers "which policies does this break". The policy page answers the other direction: **which resources does this policy cover, and what happens to them**, grouped by rule.
 
-Four things make it harder than a lookup:
+Keep these semantics in mind when reading the results:
 
-- **`results[].policy` is producer-defined.** It is not guaranteed to name a policy object; Trivy and Falco write their own identifiers into the same field. When results under this name came from another engine, the page says so rather than presenting them as this policy's own.
-- **The counts are cluster-true, the list is not.** Totals are taken before the namespace view filter and before RBAC, so the headline states the ground it covers first; what is hidden, and why, is named under the list.
-- **`fail` does not mean the same thing per family.** A mutating policy's `fail` carries "mutation is not applied" — nothing violated anything. On the legacy `kyverno.io` kinds the family is not in the kind at all: one ClusterPolicy carries any mix of validate, mutate and generate rules, so the vocabulary is resolved per rule from the rule block. A generate rule's `pass` reads "generated", not "passing".
-- **What enforcing would do depends on declared operations.** A policy matching CREATE only never rejects a change to something that already exists, so resources currently failing it are grandfathered until recreated. Verified on Kyverno 1.18.2: annotating a ConfigMap that fails a CREATE-only Deny policy is admitted; creating an identical one is rejected.
+- **Report producers share the same fields.** Trivy and Falco can write their own identifiers into `results[].policy`; Radar labels those results by producer instead of presenting them as Kyverno policy outcomes.
+- **Status wording follows the rule type.** For example, a mutating rule's `fail` means the mutation was not applied, while a generate rule's `pass` means the resource was generated.
+- **Enforcement follows declared operations.** A CREATE-only policy rejects new resources, not updates to existing ones. A resource already failing that rule is grandfathered until it is recreated.
 
-Passing resources are listed too, behind a disclosure — "all N passing" with no way to see which N is a dead end on the page that raises the question.
-
-Authorization is resolved **per subject scope**, not once per policy, and the resource name follows the scope. A ClusterPolicy has no namespace of its own, so asking the question once against `""` gates the whole view on cluster-scoped permission and withholds findings a namespace-restricted caller is entitled to see. And the two families serve findings from two resources each — `policyreports` / `clusterpolicyreports` and `reports` / `clusterreports` — so authorizing a cluster-scoped finding against the namespaced resource asks about the wrong object, and a grant of `policyreports` cluster-wide does not imply `clusterpolicyreports`. The per-resource view filters by the same families as the per-policy view; anything reading findings without their provenance cannot filter at all.
-
-The per-rule subject list is bounded so an ordinary drawer open stays small, and that bound is liftable: `?limit=` raises it to a server ceiling, and the footer offers it rather than ending at a sentence. A count with no way to reach what it counts is the same dead end in a different place.
+Passing resources are available behind an **all N passing** disclosure. Large subject lists are initially bounded, with a **Load the rest** control when more results are available.
 
 **GlobalContextEntry** gets its own view because a policy referencing an entry that never resolves fails at evaluation time with no obvious cause. Kyverno records success as `status.lastRefreshTime` and records failure as *nothing at all* — no message, no condition, no reason. So the page reports "has refreshed" versus "has never refreshed" (with the entry's age turning the second into a diagnosis) and says outright that Kyverno records no reason, rather than inventing one.
 
-The count of queued work also appears **on the policy itself**, above its configuration. The requests have their own page, but the failure worth catching is a backlog rather than one request — upstream reports describe thousands stuck in `Pending`, never cleaned up, taken up again on every reconcile — and nobody watches a page that is empty most of the time. The section is silent when a policy has queued nothing, so it never appears on the majority that only validate.
+The count of queued work appears **on the policy itself**, above its configuration. The section is silent when a policy has nothing queued, so it stays out of the way for policies that only validate.
 
-**UpdateRequest** is where a generation or a mutate-existing that silently stopped is diagnosed: the policy reports Ready, the target never appears, and the only evidence is a request sitting in `Pending`. The two request types share a kind and almost nothing else — a *generate* request leaves `spec.resource` empty and `spec.rule` blank, carrying every trigger in `spec.ruleContext[]`; a *mutate* request is one-per-trigger with `spec.resource` populated and no `ruleContext` at all. Reading the documented field alone renders half of them blank.
+**UpdateRequest** is where a generation or mutate-existing operation that silently stopped is diagnosed: the policy may report Ready while the target never appears, with a request sitting in `Pending` as the remaining evidence. Radar handles both Kyverno request shapes and links each request to the trigger resources it records.
 
-**EphemeralReport** holds a background scan's findings for one resource before they are folded into a PolicyReport. Its findings live in `spec`, not `status`; its `spec.owner` is present and blank, so the subject comes from the owner reference (and from the `audit.kyverno.io/resource.*` labels once the subject is gone); and its result timestamps are `{seconds, nanos}` objects rather than RFC 3339 strings. Both kinds are deleted within seconds of finishing, so an empty list is completed work, not an outage — which is what the empty states say.
+**EphemeralReport** holds a background scan's findings before they are folded into a PolicyReport. Kyverno deletes these reports quickly after processing, so an empty list normally means the work completed rather than that reporting is unavailable.
 
 ### Supported CRDs
 
@@ -1056,9 +1043,8 @@ PolicyReport findings are policy posture, not live operational failure, so they 
 
 **Limitations**:
 - Queued work (`UpdateRequest`) is only shown for policies that generate or mutate existing resources, and only while it is in flight — Kyverno deletes these seconds after the work completes, so an empty section is the normal resting state rather than evidence that nothing ran.
-- Coverage counts describe the whole cluster; the per-rule subject lists are capped by the server and follow the caller's namespace view filter. The screen states which number it is showing, but the two are not interchangeable.
-- Findings from a report family the caller cannot read are withheld from both lists and counts, and the number withheld is reported. A caller entitled to no family at all is told so rather than shown an empty result.
-- Verified against a cluster with a few hundred policy results. The 200-subject cap and its **Load the rest** control are unproven on a cluster with tens of thousands of findings; the load-test harness cannot synthesize PolicyReports.
+- Coverage counts describe the whole cluster within what the caller is authorized to read; per-rule subject lists are capped by the server and additionally follow the namespace view filter. The screen states which number it is showing, but the two are not interchangeable.
+- Radar authorizes the `wgpolicyk8s.io` and `openreports.io` report families separately at each subject scope. A grant to read `policyreports` does not imply `clusterpolicyreports`, while a namespace-restricted caller can still see findings for namespaces they may read. Findings from an unreadable family are withheld from both lists and counts, and the number withheld is reported.
 
 ---
 
@@ -1267,6 +1253,11 @@ The [NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-op
 - CIDR rules, port/protocol specifications
 - Related workloads with clickable links
 
+<p align="center">
+  <img src="screenshots/integrations/netpol-cilium-renderer.png" alt="CiliumNetworkPolicy Detail" width="400">
+  <br><em>CiliumNetworkPolicy Detail — endpoint selector, ingress deny from world, egress allow to cluster</em>
+</p>
+
 **Calico Policy Detail View:**
 - Flow diagram for ordered ingress and egress rules, including Allow, Deny, Log, and Pass actions
 - Workload, namespace, and service-account selectors
@@ -1290,11 +1281,6 @@ part of resource navigation and authorization — it is what keeps Calico
 `NetworkPolicy` distinct from Kubernetes `networking.k8s.io` NetworkPolicy — and
 a policy is shown to anyone authorized to list it under **either** group, since
 either grant is enough to read it.
-
-<p align="center">
-  <img src="screenshots/integrations/netpol-cilium-renderer.png" alt="CiliumNetworkPolicy Detail" width="400">
-  <br><em>CiliumNetworkPolicy Detail — endpoint selector, ingress deny from world, egress allow to cluster</em>
-</p>
 
 **Standard NetworkPolicy Detail View:**
 - Pod selector and namespace selector rules

@@ -6,7 +6,7 @@ The **Reachability** tab in the resource detail view answers one question for a 
 
 Available in Radar **v1.9.1+** (the in-cluster probe test also requires the probe image from v1.9.1+).
 
-Naming note: this is NOT the [AI Diagnose feature](mcp.md) - Reachability is deterministic path tracing and live probing, no AI involved. The general-purpose MCP `diagnose` tool (whose primary job is workload root-cause bundles: logs, events, crash evidence) returns this reachability trace as its answer when pointed at a network entry kind - see [MCP](#mcp).
+Naming note: this is NOT the [AI Diagnose feature](https://radarhq.io/docs/features/diagnose) - Reachability is deterministic path tracing and live probing, no AI involved. The general-purpose MCP `diagnose` tool (whose primary job is workload root-cause bundles: logs, events, crash evidence) returns this reachability trace as its answer when pointed at a network entry kind - see [MCP](#mcp).
 
 The trace has two layers:
 
@@ -110,17 +110,17 @@ Relayed and Job-based probes are bounded by Kubernetes RBAC, but they do not alw
 | API-server relay | Namespace of the Service or Pod being proxied | `get services/proxy` and/or `get pods/proxy` |
 | In-cluster probe Job | Namespace of the resource being diagnosed | `create jobs`, `list pods`, and `get pods/log` |
 
-With authentication enabled, Radar uses the signed-in user's identity. Without authentication, Kubernetes-authorized probes use Radar's own client identity: your kubeconfig identity locally, or Radar's ServiceAccount when it runs in-cluster. The API server enforces relay permissions at request time; Radar preflights all three Job permissions before creating anything. If impersonation is unavailable, the relay is skipped rather than falling back to Radar's ServiceAccount. A proxy denial can mark that route *unreachable via the API server*, but the headline stays *unknown* because the real path was not confirmed.
+With [authentication](authentication.md) enabled, Radar uses the signed-in user's identity. Without authentication, Kubernetes-authorized probes use Radar's own client identity: your kubeconfig identity locally, or Radar's ServiceAccount when it runs in-cluster. The API server enforces relay permissions at request time; Radar preflights all three Job permissions before creating anything. If impersonation is unavailable, the relay is skipped rather than falling back to Radar's ServiceAccount. A proxy denial can mark that route *unreachable via the API server*, but the headline stays *unknown* because the real path was not confirmed.
 
 The UI asks before the first in-cluster run for a cluster and names the requests it will send (unless that consent was previously remembered). MCP has no dialog: callers must explicitly pass `in_cluster: true`, and the same RBAC preflight applies. Radar Cloud also requires org role Member or higher.
 
-The caller's identity authorizes Job creation, but network and mesh policy see the probe pod, not that person. The Job runs in the diagnosed resource's namespace; its pod uses that namespace's default ServiceAccount identity but mounts no ServiceAccount token. Each run creates at most five Jobs; their containers run non-root with a read-only filesystem, all capabilities dropped, a 25-second deadline, no retries, and a 60-second TTL backstop.
+The active Kubernetes identity authorizes Job creation, but network and mesh policy see the probe pod, not that identity. The Job runs in the diagnosed resource's namespace; its pod uses that namespace's default ServiceAccount identity but mounts no ServiceAccount token. Each run creates at most five Jobs; their containers run non-root with a read-only filesystem, all capabilities dropped, a 25-second deadline, no retries, and a 60-second TTL backstop.
 
 The default Helm chart grants neither proxy-subresource access nor Job creation, so those probe paths stay unavailable unless the relevant identity receives the permissions above. Radar running in-cluster can still dial directly from its own pod. The full `/mcp` endpoint also exposes RBAC-bounded write tools; `/mcp-readonly` excludes `apply_resource`, `patch_resource`, and the `manage_*` tools while retaining `diagnose`. Its `in_cluster` option is the same explicit, capped Job path described above.
 
 ### Agent boundary
 
-`/mcp-readonly` gives agents typed tools with fixed schemas, not a kubeconfig or shell. Radar executes those operations under the caller's identity, so the same Kubernetes RBAC boundaries apply.
+`/mcp-readonly` gives agents typed tools with fixed schemas, not a kubeconfig or shell. With authentication enabled, Kubernetes operations are bounded by the signed-in user's RBAC: direct cluster operations run under impersonation, while cache-backed reads apply per-user authorization checks. Without authentication, operations use Radar's own Kubernetes identity. The typed tool surface independently limits which operations the agent can request.
 
 ## What it deliberately does NOT do
 
@@ -176,7 +176,7 @@ The UI shows the verdict at the top of the panel with a one-sentence reason. Tre
 
 ## MCP
 
-The general-purpose `diagnose` MCP tool - primarily a workload root-cause tool (logs, Warning events, crash evidence in one call) - returns the reachability trace for network entry kinds instead of the pod-log fan-out it does for workloads. An agent that calls `diagnose(kind=service, ...)` gets the path-shaped answer in one call, along with `relatedIssues` for raw-issue follow-up. Pass `probe: true` to add the active reachability test from Radar's vantage. Pass `in_cluster: true` to run the probe from inside the cluster - Radar creates up to 5 short-lived, self-destructing probe pods (one per intended route) under the caller's RBAC to test the real dataplane the API-server-proxy vantage can't reach (e.g. to confirm a route that came back `indirect`). This is the only mutating `diagnose` option; it needs `create jobs`, `list pods`, and `get pods/log`, and falls back to a copyable command when any permission is missing.
+The general-purpose `diagnose` MCP tool - primarily a workload root-cause tool (logs, Warning events, crash evidence in one call) - returns the reachability trace for network entry kinds instead of the pod-log fan-out it does for workloads. An agent that calls `diagnose(kind=service, ...)` gets the path-shaped answer in one call, along with `relatedIssues` for raw-issue follow-up. Pass `probe: true` to add the active reachability test from Radar's vantage. Pass `in_cluster: true` to run the probe from inside the cluster - Radar creates up to 5 short-lived, self-destructing probe pods (one per intended route) under the active Kubernetes identity's RBAC to test the real dataplane the API-server-proxy vantage can't reach (e.g. to confirm a route that came back `indirect`). This is the only mutating `diagnose` option; it needs `create jobs`, `list pods`, and `get pods/log`, and falls back to a copyable command when any permission is missing.
 
 ## In-cluster probe image
 
