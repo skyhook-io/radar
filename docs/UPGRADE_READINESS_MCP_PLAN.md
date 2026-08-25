@@ -26,6 +26,29 @@ an oversight, not a decision.
   built-in MCP server for AI agents". A flagship analysis that agents cannot reach undercuts
   that.
 
+### Does this earn a catalog slot?
+
+Catalog bloat is a real failure mode — every tool's description occupies every agent
+session's context, used or not. The bar a new tool should clear: **agents cannot compose the
+capability from existing tools, and the question it answers is one agents actually get
+asked.** This tool clears both. The evidence behind the 18 check families is outside every
+existing tool's reach (Helm stored manifests, `apiserver_requested_deprecated_apis` metrics,
+kubelet cgroup/CRI metrics behind `nodes/proxy`, last-applied annotations the informer cache
+deliberately strips) — an agent asked "can we upgrade to 1.34" will reconstruct the analysis
+from `list_resources` + `get_events` anyway and produce a confidently wrong answer. And it
+stays one tool, not an overview/detail pair — the `check` parameter is the drill-down.
+
+The same bar is why the other tool-less surfaces (Capacity, RBAC reverse-lookups, Velero,
+CNPG, policy reverse-lookups) do **not** get tools in this plan: their questions route
+acceptably through `query_prometheus`, `get_subject_permissions`, and `get_resource`. This
+is a capability gap, not a convenience gap.
+
+Fair counter-argument, named for completeness: in the local no-auth setup an agent with
+shell access can curl `/api/upgrade-readiness` directly. The tool still earns its place —
+raw `ScanResults` would flood an agent's context, curl bypasses RBAC in authenticated
+setups, and undiscoverable endpoints don't get used — but a reviewer weighing catalog size
+should weigh this too.
+
 ### Why it is not a trivial wire-up
 
 Three properties of the feature constrain the design; each maps to a section below.
