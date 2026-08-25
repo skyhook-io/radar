@@ -20,7 +20,7 @@ import { Tooltip } from '../ui/Tooltip'
 import { AISettingsSection, type AIDraft } from '../diagnose/AISettings'
 import { MyPermissionsContent } from './MyPermissionsDialog'
 import { useDiagnose } from '../diagnose/DiagnoseContext'
-import { CURRENCY_OPTIONS } from './currency-options'
+import { currencyOptionsForValue } from './currency-options'
 
 // The loopback URL an MCP client is told to connect to. Shared by the overview
 // row and the MCP section: both must carry the base path, or the URL they
@@ -1187,7 +1187,7 @@ function CostSection({
       </p>
       <SelectMenu
         value={currency}
-        options={CURRENCY_OPTIONS}
+        options={currencyOptionsForValue(currency)}
         onChange={onChange}
         ariaLabel="Currency override"
         searchPlaceholder="Search currencies by name or code"

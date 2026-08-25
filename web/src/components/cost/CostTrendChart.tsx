@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, useCallback } from 'react'
 import { clsx } from 'clsx'
 import { Loader2, TrendingUp } from 'lucide-react'
 import { useOpenCostTrend, type CostTimeRange, type OpenCostTrendSeries } from '../../api/client'
-import { formatCostAxis, formatCostPerHour } from './format'
+import { DEFAULT_COST_CURRENCY, formatCostAxis, formatCostPerHour } from './format'
 
 const SERIES_COLORS = [
   '#3b82f6', // blue-500
@@ -41,7 +41,7 @@ export function CostTrendChart() {
     return null
   }
 
-  const currency = data.currency
+  const currency = data.currency ?? DEFAULT_COST_CURRENCY
 
   return (
     <div className="rounded-lg border border-theme-border bg-theme-surface/50">

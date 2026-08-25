@@ -153,7 +153,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
   }
 
   const hourlyCost = data.totalHourlyCost ?? 0
-  const currency = data.currency
+  const currency = data.currency ?? DEFAULT_COST_CURRENCY
   const namespaces = data.namespaces ?? []
   const totalCpu = namespaces.reduce((sum, ns) => sum + ns.cpuCost, 0)
   const totalMem = namespaces.reduce((sum, ns) => sum + ns.memoryCost, 0)
@@ -168,7 +168,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
   const storagePct = allocTotal > 0 ? (totalStorage / allocTotal) * 100 : 0
 
   const nodes = nodeData?.available ? (nodeData.nodes ?? []) : []
-  const nodeCurrency = nodeData?.currency ?? data.currency
+  const nodeCurrency = nodeData?.currency ?? currency
   const clusterConsoleLink = clusterCloudConsoleLink(clusterInfo?.context)
 
   return (

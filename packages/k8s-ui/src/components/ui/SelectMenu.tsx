@@ -52,7 +52,11 @@ export function SelectMenu({
   }, [open])
 
   useEffect(() => {
-    if (!open || !searchPlaceholder) return
+    if (!open) return
+    if (!searchPlaceholder) {
+      triggerRef.current?.focus()
+      return
+    }
     listRef.current
       ?.querySelector<HTMLElement>('[role="option"][aria-selected="true"]')
       ?.scrollIntoView({ block: 'nearest' })

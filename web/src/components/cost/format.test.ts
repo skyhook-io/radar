@@ -39,4 +39,8 @@ describe('cost formatters', () => {
     expect(formatProjectedMonthlyCost(1, ' eur ')).toBe('~€730.00')
     expect(formatProjectedMonthlyCost(1, 'not-a-code')).toBe('~NOT-A-CODE 730.00')
   })
+
+  it('falls back to USD when an older backend omits currency', () => {
+    expect(formatProjectedMonthlyCost(1, undefined)).toBe('~$730.00')
+  })
 })
