@@ -43,10 +43,10 @@ Three properties of the feature constrain the design; each maps to a section bel
 
 ## 1. Tool definition
 
-One read-only tool: **`get_upgrade_readiness`**.
+One read-only tool: **`get_cluster_upgrade_readiness`**.
 
 ```
-get_upgrade_readiness
+get_cluster_upgrade_readiness
   target  (required)  target Kubernetes minor, e.g. "1.34"
   check   (optional)  check id to expand, e.g. "node-drain-feasibility"
   level   (optional)  minimum finding level when expanding: blocker | warning | review
@@ -279,9 +279,12 @@ Phases 1–3 can land as one PR with three commits, or split if phase 1 review r
 
 ## 8. Open questions
 
-- **Tool name**: `get_upgrade_readiness` vs `check_upgrade_impact`. The UI says "Upgrade
-  impact"; the endpoint says `upgrade-readiness`. Leaning `get_upgrade_readiness` to match
-  the endpoint and the `get_*` read-tool convention.
+- **Tool name**: leading candidate is **`get_cluster_upgrade_readiness`**. The `cluster`
+  qualifier matters: bare "upgrade" collides with Helm upgrades elsewhere in the catalog
+  (`get_helm_release`, `get_changes`), and `get_cluster_audit` is exact precedent. A
+  `check_*` verb was considered and rejected — the catalog has no `check_` vocabulary, and
+  it would suggest a yes/no answer the certainty contract explicitly disclaims. Length
+  (29 chars) is fine; agents select on description, not name brevity.
 - **Finding cap value** (25 proposed) and whether `level` filtering is worth the extra
   parameter in v1 or should wait for real usage.
 - **Should tier 1 include per-check `summary` text** (~18 sentences, ≈1 KB) or only on
