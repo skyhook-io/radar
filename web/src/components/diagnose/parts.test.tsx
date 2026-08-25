@@ -146,6 +146,15 @@ describe("reasoning-effort menus", () => {
     expect(values(EFFORT_OPTIONS)).toContain("");
     expect(values(COPILOT_EFFORT_OPTIONS)).toContain("");
   });
+
+  // Radar forces medium for Codex but passes no --effort at all for Copilot: the
+  // flag is rejected outright when the account's model resolves to "auto".
+  it("does not promise Copilot a Radar-chosen default", () => {
+    const copilotDefault = COPILOT_EFFORT_OPTIONS.find((o) => o.value === "");
+    expect(copilotDefault?.description).not.toContain("medium");
+    const codexDefault = EFFORT_OPTIONS.find((o) => o.value === "");
+    expect(codexDefault?.description).toContain("medium");
+  });
 });
 
 describe("ConsentCard execution profile treatment", () => {

@@ -10,10 +10,8 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"sort"
+	"path/filepath"
 	"strings"
-	"sync"
-	"time"
 )
 
 // copilotMCPServer is the name Radar's MCP server is registered under. Copilot
@@ -30,9 +28,13 @@ const copilotMCPServer = "radar"
 //     once the tools are gone);
 //   - --allow-tool <server> approves those tools without --allow-all-tools, so
 //     nothing else is auto-approved;
-//   - --disable-builtin-mcps drops github-mcp-server, and every server in the
-//     user's own config is disabled by name (see resolveUserMCPServers) — Copilot
-//     has no single "ignore user config" flag, so the set is enumerated;
+//   - COPILOT_HOME points at a Radar-owned directory, so NOTHING of the user's own
+//     Copilot setup loads: not their MCP servers ($COPILOT_HOME/mcp-config.json),
+//     not their settings, and — decisively — not their user-level hooks, which run
+//     shell in -p mode and which no flag can disable (the documented
+//     disableAllHooks setting does not take effect from a workspace in 1.0.80);
+//   - --disable-builtin-mcps drops github-mcp-server, which is built in rather
+//     than user config and so survives the COPILOT_HOME redirect;
 //   - cluster WRITE access is gated by the read-only MCP MOUNT, the same
 //     server-side gate the other backends rely on.
 //
@@ -41,9 +43,9 @@ const copilotMCPServer = "radar"
 type copilotAgent struct {
 	bin string
 
-	serversMu    sync.Mutex
-	serversKnown bool
-	userServers  []string
+	// homeDir resolves the user's home. Overridden in tests so a safeguarded run
+	// never writes into the developer's real ~/.radar.
+	homeDir func() (string, error)
 }
 
 func (a *copilotAgent) Name() string { return "copilot" }
@@ -89,6 +91,10 @@ func (a *copilotAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func
 		// The transcript contains cluster data — never publish it to GitHub's web
 		// and mobile surfaces, in either profile.
 		"--no-remote", "--no-remote-export",
+		// Copilot self-updates by default and its CI-environment detection can't
+		// fire under a minimized env: pin the binary for the duration of the run
+		// rather than let it swap itself mid-investigation.
+		"--no-auto-update",
 	}
 
 	if s.profile == ExecutionProfileSafeguarded {
@@ -100,13 +106,6 @@ func (a *copilotAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func
 			"--disable-builtin-mcps",
 			"--no-custom-instructions",
 		)
-		servers, err := a.resolveUserMCPServers(ctx)
-		if err != nil {
-			return nil, nil, err
-		}
-		for _, name := range servers {
-			args = append(args, "--disable-mcp-server", name)
-		}
 	} else {
 		// Full-local: the user's own tools, MCP servers and instructions are live.
 		// Cluster writes stay gated by the read-only MCP mount.
@@ -116,13 +115,13 @@ func (a *copilotAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func
 	if s.model != "" {
 		args = append(args, "--model", s.model)
 	}
-	// Default to medium rather than Copilot's bare default, matching the other
-	// backends: it gives a solid investigation without an unbounded token bill.
-	effort := s.effort
-	if effort == "" {
-		effort = "medium"
+	// Only when the user picked one. Copilot rejects --effort outright on accounts
+	// whose model resolves to "auto" ("Model \"auto\" does not support reasoning
+	// effort configuration", exit 1) — which is the free tier's default, so a Radar
+	// default here would fail every out-of-the-box run.
+	if s.effort != "" {
+		args = append(args, "--effort", s.effort)
 	}
-	args = append(args, "--effort", effort)
 
 	if s.sessionID != "" {
 		// --resume takes an OPTIONAL value, so it must use the "=" form: passed as a
@@ -134,21 +133,83 @@ func (a *copilotAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func
 
 	cleanup := func() {}
 	if s.profile == ExecutionProfileSafeguarded {
-		// Empty working dir so the model can't pick up a workspace .mcp.json or
-		// AGENTS.md, and so nothing in radar's cwd is reachable. Copilot's session
-		// store is global, so resume works from any directory — no per-run workdir
-		// is needed (unlike Cursor).
+		home, err := a.copilotHome()
+		if err != nil {
+			return nil, nil, err
+		}
+		// Empty working dir so the model can't pick up a workspace .mcp.json,
+		// .github/hooks/*.json or AGENTS.md, and so nothing in radar's cwd is
+		// reachable. The session store lives under COPILOT_HOME rather than the
+		// cwd, so resume still works from anywhere — no per-run workdir is needed
+		// (unlike Cursor).
 		dir, err := os.MkdirTemp("", "radar-copilot-")
 		if err != nil {
 			return nil, nil, fmt.Errorf("ai: copilot workdir: %w", err)
 		}
 		cleanup = func() { _ = os.RemoveAll(dir) }
 		cmd.Dir = dir
-		cmd.Env = copilotEnv()
+		cmd.Env = append(copilotEnv(), "COPILOT_HOME="+home)
 	}
 	// Full-local: inherit radar's cwd + full env so the user's auth/config work.
 
 	return cmd, cleanup, nil
+}
+
+// CopilotHomeDir is the Radar-owned COPILOT_HOME used by safeguarded runs. It
+// holds Copilot's config AND its session store, so it has to be a stable path
+// rather than per-run scratch: follow-up turns and the terminal hand-off both
+// resume sessions that live here, and the hand-off can come after a restart.
+//
+// The frontend reproduces this path as a shell expression when it builds the
+// hand-off command (web/src/components/diagnose/launch.ts) — keep the two in step.
+func CopilotHomeDir(home string) string {
+	return filepath.Join(home, ".radar", "copilot-home")
+}
+
+// copilotHome resolves and prepares the Radar-owned COPILOT_HOME. Failing to
+// create it is a hard error: the alternative is running against the user's own
+// Copilot home, which is the very thing safeguarded mode exists to exclude.
+//
+// Auth is NOT stored here on the platforms we've checked (macOS keeps the
+// `copilot login` credential in the keychain, and an explicit token var still
+// takes precedence), so the redirect does not force a second login.
+func (a *copilotAgent) copilotHome() (string, error) {
+	homeFn := a.homeDir
+	if homeFn == nil {
+		homeFn = os.UserHomeDir
+	}
+	home, err := homeFn()
+	if err != nil {
+		return "", fmt.Errorf("ai: copilot home: %w", err)
+	}
+	dir := CopilotHomeDir(home)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("ai: copilot home: %w", err)
+	}
+	seedCopilotConfig(dir)
+	return dir, nil
+}
+
+// seedCopilotConfig writes Radar's own Copilot config on first use. The redirect
+// already excludes the user's hooks; disableAllHooks makes it explicit for anything
+// that lands in this directory later. Best-effort: a config Copilot can start
+// without is not worth failing an investigation over.
+func seedCopilotConfig(dir string) {
+	path := filepath.Join(dir, "config.json")
+	if _, err := os.Stat(path); err == nil {
+		return
+	}
+	cfg, err := json.Marshal(map[string]any{
+		"disableAllHooks": true,
+		"autoUpdate":      false,
+		"banner":          "never",
+	})
+	if err != nil {
+		return
+	}
+	if err := os.WriteFile(path, cfg, 0o600); err != nil {
+		log.Printf("[ai] could not seed Copilot config in %s: %v", dir, err)
+	}
 }
 
 // copilotToolNames is the allowlist handed to --available-tools: Radar's MCP tools
@@ -166,83 +227,25 @@ func copilotToolNames(apply bool) []string {
 	return names
 }
 
-// copilotEnv is the minimal environment Copilot needs: auth (HOME/COPILOT_HOME
-// hold the credential store, or an explicit token var), the host overrides for
+// copilotEnv is the minimal environment Copilot needs: auth (an explicit token var,
+// or the OS credential store the CLI reaches on its own), the host overrides for
 // GHE, proxy settings, and enough to exec. Cloud-provider secrets are deliberately
 // omitted — the agent reaches the cluster only through Radar's MCP.
 //
-// COPILOT_HOME is passed through but never set by Radar: auth AND the session
-// store both live there, so redirecting it would break login and resume together.
+// The caller appends Radar's own COPILOT_HOME; the user's value is NOT kept, since
+// that directory is exactly what a safeguarded run must not load.
 func copilotEnv() []string {
-	keep := map[string]bool{
-		"HOME": true, "PATH": true, "TMPDIR": true,
-		"TERM": true, "LANG": true, "USER": true, "LOGNAME": true, "SHELL": true,
-		"COPILOT_HOME": true, "COPILOT_GITHUB_TOKEN": true,
-		"GH_TOKEN": true, "GITHUB_TOKEN": true,
-		"GH_HOST": true, "COPILOT_GH_HOST": true,
-		"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true,
-		"http_proxy": true, "https_proxy": true, "no_proxy": true,
-		"SSL_CERT_FILE": true, "SSL_CERT_DIR": true,
-	}
-	var out []string
-	for _, kv := range os.Environ() {
-		k, _, ok := strings.Cut(kv, "=")
-		if !ok {
-			continue
-		}
-		if keep[k] || strings.HasPrefix(k, "LC_") {
-			out = append(out, kv)
-		}
-	}
-	return out
-}
-
-// resolveUserMCPServers lists the MCP servers Copilot would otherwise load and
-// returns every one that isn't Radar's, so a safeguarded turn can disable them by
-// name. Copilot has no --strict-mcp-config / --ignore-user-config equivalent, so
-// the set has to be enumerated. Probed once and cached, like the Cursor trust flag.
-//
-// An unreadable or timed-out probe is an ERROR, not an empty list: silently
-// treating "we couldn't tell" as "the user has no servers" would quietly downgrade
-// safeguarded to a run with the user's other servers attached.
-func (a *copilotAgent) resolveUserMCPServers(ctx context.Context) ([]string, error) {
-	a.serversMu.Lock()
-	defer a.serversMu.Unlock()
-	if a.serversKnown {
-		return a.userServers, nil
-	}
-	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(cctx, a.bin, "mcp", "list", "--json")
-	// Probe from a neutral directory so a .mcp.json in radar's launch dir doesn't
-	// show up in a list that's cached for the process lifetime. A safeguarded turn
-	// runs in an empty temp dir anyway, where no workspace config applies.
-	cmd.Dir = os.TempDir()
-	out, err := cmd.Output()
-	if cctx.Err() != nil {
-		return nil, fmt.Errorf("ai: GitHub Copilot MCP-server probe timed out")
-	}
-	if err != nil {
-		return nil, fmt.Errorf("ai: GitHub Copilot MCP-server probe failed: %w", err)
-	}
-	var parsed struct {
-		MCPServers map[string]json.RawMessage `json:"mcpServers"`
-	}
-	if err := json.Unmarshal(bytes.TrimSpace(out), &parsed); err != nil {
-		return nil, fmt.Errorf("ai: GitHub Copilot MCP-server probe returned unreadable output: %w", err)
-	}
-	names := make([]string, 0, len(parsed.MCPServers))
-	for name := range parsed.MCPServers {
-		if name == copilotMCPServer {
-			continue
-		}
-		names = append(names, name)
-	}
-	sort.Strings(names) // stable args across turns
-	a.userServers = names
-	a.serversKnown = true
-	log.Printf("[ai] copilot user MCP servers disabled in safeguarded runs: %v", names)
-	return names, nil
+	return minimalEnv(
+		[]string{
+			"TERM", "LANG", "USER", "LOGNAME", "SHELL",
+			"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN",
+			"GH_HOST", "COPILOT_GH_HOST",
+			"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+			"http_proxy", "https_proxy", "no_proxy",
+			"SSL_CERT_FILE", "SSL_CERT_DIR",
+		},
+		[]string{"LC_"},
+	)
 }
 
 // Copilot JSONL event shapes (`copilot -p --output-format json`). Only the fields
@@ -285,6 +288,15 @@ type copilotServersLoaded struct {
 	} `json:"servers"`
 }
 
+// copilotServerStatus is the per-server lifecycle event. It is the ONLY signal
+// emitted when a server fails to attach (1.0.80 sends no mcp_servers_loaded in
+// that case), so the MCP guard has to read both shapes.
+type copilotServerStatus struct {
+	ServerName string `json:"serverName"`
+	Status     string `json:"status"` // pending | connected | failed
+	Error      string `json:"error"`
+}
+
 type copilotWarning struct {
 	Message     string `json:"message"`
 	WarningType string `json:"warningType"`
@@ -303,6 +315,24 @@ func (a *copilotAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagn
 	sawServers := false
 	mcpAttached := false
 	mcpErr := ""
+	// noteMCPStatus folds one status report for Radar's server into that state.
+	// The LAST report wins: a server can go pending → failed → connected across a
+	// retry, and only where it ended up says whether the turn had cluster access.
+	noteMCPStatus := func(status, errText string) {
+		sawServers = true
+		switch status {
+		case "connected":
+			mcpAttached, mcpErr = true, ""
+		case "pending", "starting":
+			// Not an outcome yet. A stream that ends here never attached, which the
+			// !mcpAttached check below already treats as a failure.
+		default:
+			mcpAttached = false
+			if mcpErr = strings.TrimSpace(errText); mcpErr == "" {
+				mcpErr = "server status: " + status
+			}
+		}
+	}
 
 	for sc.Scan() {
 		line := bytes.TrimSpace(sc.Bytes())
@@ -351,24 +381,36 @@ func (a *copilotAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagn
 			if json.Unmarshal(e.Data, &d) != nil {
 				continue
 			}
+			// The list is authoritative, so an EMPTY one is itself the answer:
+			// Radar's server was enumerated away (an org policy dropping
+			// third-party MCP servers looks exactly like this).
 			sawServers = true
 			for _, srv := range d.Servers {
-				if srv.Name != copilotMCPServer {
-					continue
-				}
-				if srv.Status == "connected" {
-					mcpAttached = true
-					break
-				}
-				mcpErr = strings.TrimSpace(srv.Error)
-				if mcpErr == "" {
-					mcpErr = "server status: " + srv.Status
+				if srv.Name == copilotMCPServer {
+					noteMCPStatus(srv.Status, srv.Error)
 				}
 			}
+		case "session.mcp_server_status_changed":
+			var d copilotServerStatus
+			if json.Unmarshal(e.Data, &d) != nil || d.ServerName != copilotMCPServer {
+				continue
+			}
+			noteMCPStatus(d.Status, d.Error)
 		case "session.warning":
 			var d copilotWarning
-			if json.Unmarshal(e.Data, &d) == nil && d.WarningType == "policy" && mcpErr == "" {
-				mcpErr = strings.TrimSpace(d.Message)
+			if json.Unmarshal(e.Data, &d) != nil || d.WarningType != "policy" {
+				continue
+			}
+			// A policy that blocks third-party MCP can drop Radar's server without
+			// any per-server event to report it, so this warning has to count as
+			// evidence on its own. Narrowed to MCP-mentioning messages: other policy
+			// warnings say nothing about cluster access and must not fail the turn.
+			msg := strings.TrimSpace(d.Message)
+			if strings.Contains(strings.ToLower(msg), "mcp") {
+				sawServers = true
+				if mcpErr == "" {
+					mcpErr = msg
+				}
 			}
 		case "result":
 			if e.SessionID != "" {

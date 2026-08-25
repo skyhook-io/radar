@@ -8,7 +8,7 @@ tmp_dir = "tmp"
   # Build command
   cmd = "go build -o ./tmp/radar ./cmd/explorer"
   # Binary to run
-  bin = "./tmp/radar --dev --no-browser --kubeconfig ~/.kube/config"
+  entrypoint = ["./tmp/radar", "--dev", "--no-browser"]
   # Watch these extensions
   include_ext = ["go", "tpl", "tmpl", "html"]
   # Exclude directories

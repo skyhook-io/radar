@@ -111,21 +111,10 @@ func (a *codexAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func()
 // to exec, locale). Cloud-provider secrets are deliberately omitted — the shell
 // can read env into context, and the agent reaches the cluster only via MCP.
 func codexEnv() []string {
-	keep := map[string]bool{
-		"HOME": true, "PATH": true, "CODEX_HOME": true, "TMPDIR": true,
-		"TERM": true, "LANG": true, "USER": true, "LOGNAME": true, "SHELL": true,
-	}
-	var out []string
-	for _, kv := range os.Environ() {
-		k, _, ok := strings.Cut(kv, "=")
-		if !ok {
-			continue
-		}
-		if keep[k] || strings.HasPrefix(k, "LC_") {
-			out = append(out, kv)
-		}
-	}
-	return out
+	return minimalEnv(
+		[]string{"CODEX_HOME", "TERM", "LANG", "USER", "LOGNAME", "SHELL"},
+		[]string{"LC_"},
+	)
 }
 
 // Codex JSONL event shapes (codex exec --json). Only the fields we consume.

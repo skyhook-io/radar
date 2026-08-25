@@ -631,12 +631,11 @@ func writeMCPConfig(mcpURL string) (string, func(), error) {
 }
 
 var (
-	envAllowExact = map[string]bool{
-		"PATH": true, "HOME": true, "USER": true, "LOGNAME": true,
-		"LANG": true, "LC_ALL": true, "LC_CTYPE": true, "TZ": true,
-		"TMPDIR": true, "SHELL": true, "SSL_CERT_FILE": true, "SSL_CERT_DIR": true,
+	envAllowExact = []string{
+		"USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE", "TZ",
+		"SHELL", "SSL_CERT_FILE", "SSL_CERT_DIR",
 		// AWS creds are passed through so BYO-Bedrock works; the user opted in.
-		"AWS_PROFILE": true, "AWS_REGION": true, "AWS_DEFAULT_REGION": true,
+		"AWS_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION",
 	}
 	envAllowPrefix = []string{"ANTHROPIC_", "CLAUDE_", "AWS_", "GOOGLE_", "CLOUD_ML_", "VERTEX_"}
 )
@@ -645,24 +644,7 @@ var (
 // data, so it shouldn't inherit unrelated host env. Provider-auth vars pass
 // through so subscription / API-key / Bedrock / Vertex all work.
 func scrubbedEnv() []string {
-	var out []string
-	for _, kv := range os.Environ() {
-		k, _, ok := strings.Cut(kv, "=")
-		if !ok {
-			continue
-		}
-		if envAllowExact[k] {
-			out = append(out, kv)
-			continue
-		}
-		for _, p := range envAllowPrefix {
-			if strings.HasPrefix(k, p) {
-				out = append(out, kv)
-				break
-			}
-		}
-	}
-	return out
+	return minimalEnv(envAllowExact, envAllowPrefix)
 }
 
 type cappedBuffer struct {

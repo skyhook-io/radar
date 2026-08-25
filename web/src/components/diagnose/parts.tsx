@@ -110,8 +110,15 @@ export const EFFORT_OPTIONS: Option[] = [
 ];
 // Copilot accepts a wider range than Codex; the extra tiers are its own vocabulary
 // and are rejected by Codex, so the menus stay separate (mirrors ai.ReasoningEfforts).
+// The default differs too: Radar passes no --effort at all for Copilot, because the
+// flag is rejected outright when the account's model resolves to "auto".
 export const COPILOT_EFFORT_OPTIONS: Option[] = [
-  ...EFFORT_OPTIONS,
+  {
+    value: "",
+    label: "Default",
+    description: "Recommended — your Copilot setting",
+  },
+  ...EFFORT_OPTIONS.slice(1),
   { value: "xhigh", label: "Extra high", description: "Deeper than High" },
   { value: "max", label: "Max", description: "Maximum reasoning, slowest" },
 ];
@@ -308,7 +315,7 @@ export function AgentControls({
                     : isCodex
                       ? "Radar excludes your Codex configuration and other MCP servers. Codex’s sandboxed shell can still read files on this machine; it cannot write or reach the network."
                       : isCopilot
-                        ? "Copilot can call only Radar’s read-only investigation tools — its shell, file edits and web access are removed entirely. Your other MCP servers, the GitHub MCP server, and your AGENTS.md instructions are all excluded."
+                        ? "Copilot can call only Radar’s read-only investigation tools — its shell, file edits and web access are removed entirely. The run uses a Radar-owned Copilot configuration, so your own MCP servers, hooks, and AGENTS.md instructions are all excluded."
                         : "Radar uses this agent’s safeguarded execution profile. Review the agent’s documented restrictions before continuing."}
                 </p>
               ) : (
@@ -838,8 +845,9 @@ export function ConsentCard({
                 <>
                   Radar safeguards leave Copilot with only Radar&apos;s read-only
                   investigation tools — no shell, no file edits, no web access.
-                  The GitHub MCP server, your other MCP servers, and your
-                  AGENTS.md instructions are all excluded from the run.
+                  The run uses a Radar-owned Copilot configuration, so the GitHub
+                  MCP server, your own MCP servers, your hooks, and your
+                  AGENTS.md instructions are all excluded.
                 </>
               ) : (
                 <>
@@ -852,8 +860,8 @@ export function ConsentCard({
                 ? [
                     <>
                       The session is never exported to GitHub&apos;s web or
-                      mobile surfaces, so the transcript and the cluster data in
-                      it stay on this machine.
+                      mobile surfaces; it exists only here and in your local
+                      Copilot session store.
                     </>,
                   ]
                 : []),
