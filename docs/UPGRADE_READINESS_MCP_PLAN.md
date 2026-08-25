@@ -49,6 +49,48 @@ raw `ScanResults` would flood an agent's context, curl bypasses RBAC in authenti
 setups, and undiscoverable endpoints don't get used — but a reviewer weighing catalog size
 should weigh this too.
 
+### Prior art and real-world validation
+
+**Existing upgrade-check tooling stops at deprecated APIs.** The established OSS tools —
+[Pluto](https://www.civo.com/learn/pluto-a-tool-to-manage-deprecated-kubernetes-apis)
+(manifests + Helm releases, CI-oriented),
+[kubent](https://github.com/doitintl/kube-no-trouble) (live cluster scan), kubepug, and the
+EKS-specific [eksup](https://clowdhaus.github.io/eksup/info/checks/) — detect deprecated
+API usage and little else ([comparison](https://medium.com/@rameshavutu/kubernetes-upgrade-deprecated-apis-kubent-pluto-30c917c77835),
+[survey](https://medium.com/@anupam_gupta86/tools-approaches-to-identify-kubernetes-deprecated-apis-c8b843243faf)).
+Radar's catalog subsumes both their modes (static manifest evidence *and* live API-server
+metrics) and adds the operational checks none of them attempt: drain/PDB feasibility,
+webhook backend readiness, node runtime evidence. The managed-cloud analogue,
+[EKS upgrade insights](https://docs.aws.amazon.com/eks/latest/userguide/cluster-insights.html),
+validates the verdict framing from the other direction: since 2025 EKS
+[enforces its insight checks as an upgrade gate](https://aws.amazon.com/about-aws/whats-new/2025/03/amazon-eks-enforces-upgrade-insights-check-cluster-upgrades)
+— a cloud provider decided pre-upgrade findings should *block* an upgrade, which is exactly
+the `blocked` verdict's posture. Radar's engine is the vendor-neutral equivalent (EKS
+insights are audit-log-based and EKS-only).
+
+**No tool in this space is agent-reachable.** The MCP-enabled Kubernetes tools that exist —
+[K8sGPT's MCP server](https://www.perfectscale.io/blog/kubernetes-clusters-ai) (general
+troubleshooting) and
+[kubernetes-mcp-server](https://dasroot.net/posts/2026/03/kubernetes-mcp-server-guide-ai-integration/)
+(general resource access) — have no upgrade-readiness capability, and none of the upgrade
+tools expose MCP. This tool would be the first agent-reachable upgrade analysis, which
+strengthens the positioning argument above.
+
+**Real upgrade failures validate the operational checks.** Reddit's Pi-Day 2023 outage
+(5+ hours) came from a 1.24 upgrade removing the `node-role.kubernetes.io/master` label
+from running nodes while Calico route-reflector selectors still targeted it; their
+[postmortem's own lesson](https://overmind.tech/blog/reddit-pi-day-outage) — teams were
+"evaluating the warnings in the CHANGELOG against a model of the system, not against the
+actual system" — is verbatim the thesis of Radar's evidenced-check model
+([incident analysis](https://geek-cookbook.funkypenguin.co.nz/blog/2023/03/24/post-mortem-reddit-pi-day-kube-1.25/)).
+The label-selector-vs-removed-label class of risk is a candidate for future catalog
+entries. Likewise, stuck drains from single-replica workloads behind
+`minAvailable: 1` PDBs are common enough that
+[AKS documents `PodDrainFailure` as a named upgrade error code](https://learn.microsoft.com/en-us/troubleshoot/azure/azure-kubernetes/create-upgrade-delete/error-code-poddrainfailure)
+— the exact state the `node-drain-feasibility` check evidences from authoritative PDB
+status. Making these findings agent-consumable is what turns them from a dashboard row
+into a fixed manifest.
+
 ### Why it is not a trivial wire-up
 
 Three properties of the feature constrain the design; each maps to a section below.
@@ -303,7 +345,23 @@ The repo enforces these; listing them so the PR is complete in one pass:
 
 Phases 1–3 can land as one PR with three commits, or split if phase 1 review runs long.
 
-## 8. Open questions
+## 8. Adjacent work, out of scope here
+
+**Kubernetes 1.37 catalog extension** (separate PR): 1.37 released 2026-08-26
+([sneak peek](https://kubernetes.io/blog/2026/07/31/kubernetes-v1-37-sneak-peek/)), so
+`target=1.37` scans currently hit the "coverage ends at 1.36" banner. The headline risk is
+blocker-class: static Pods may no longer reference Secrets/ConfigMaps and the
+`PreventStaticPodAPIReferences` opt-out gate is
+[removed](https://github.com/kubernetes/kubernetes/pull/140226) — a violating manifest under
+`/etc/kubernetes/manifests` produces no pod, control plane included
+([analysis](https://bex.co/blog/2026/08/24/kubernetes-137-sneak-peek-ipvs-static-pods-cgroup-v1)).
+That check is fully evidenced from Radar's informer cache (mirror-pod annotations + pod
+spec references). Also: kube-proxy `ipvs` deprecation warning (review-level), continued
+cgroup v1 phase-out (already covered by `node-cgroup-v1`), and a `ReviewedThrough` bump.
+Finalize against the official `CHANGELOG-1.37.md` urgent-upgrade notes, not the sneak peek.
+The MCP tool inherits whatever the catalog knows — no coupling between the two PRs.
+
+## 9. Open questions
 
 - **Tool name**: leading candidate is **`get_cluster_upgrade_readiness`**. The `cluster`
   qualifier matters: bare "upgrade" collides with Helm upgrades elsewhere in the catalog
