@@ -36,6 +36,12 @@ export function SelectMenu({
   }, [options, query])
   const selectedIsVisible = filteredOptions.some((option) => option.value === value)
 
+  const selectOption = (nextValue: string) => {
+    onChange(nextValue)
+    setOpen(false)
+    triggerRef.current?.focus()
+  }
+
   useEffect(() => {
     if (!open) return
     const onPointerDown = (event: MouseEvent) => {
@@ -104,8 +110,7 @@ export function SelectMenu({
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' && filteredOptions.length === 1) {
                     event.preventDefault()
-                    onChange(filteredOptions[0].value)
-                    setOpen(false)
+                    selectOption(filteredOptions[0].value)
                   } else if (event.key === 'ArrowDown') {
                     event.preventDefault()
                     listRef.current?.querySelector<HTMLButtonElement>('[role="option"]')?.focus()
@@ -155,10 +160,7 @@ export function SelectMenu({
                   role="option"
                   aria-selected={active}
                   tabIndex={active || (!selectedIsVisible && index === 0) ? 0 : -1}
-                  onClick={() => {
-                    onChange(option.value)
-                    setOpen(false)
-                  }}
+                  onClick={() => selectOption(option.value)}
                   className={clsx(
                     'flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary',
                     !searchPlaceholder && 'whitespace-nowrap'

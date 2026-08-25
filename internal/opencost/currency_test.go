@@ -186,6 +186,28 @@ func TestCurrencyResolverOverride(t *testing.T) {
 	}
 }
 
+func TestCurrencyResolverRetriesWhileDetectionInputsAreUnavailable(t *testing.T) {
+	now := time.Now()
+	resolver := NewCurrencyResolver("")
+	unavailable := testCurrencyCache{
+		deployments: newTestCurrencyCache(t).deployments,
+	}
+	if got := resolver.resolve(unavailable, true, now); got != pkgopencost.DefaultCurrency {
+		t.Fatalf("resolve(unavailable) = %q, want %s", got, pkgopencost.DefaultCurrency)
+	}
+	if !resolver.expiresAt.IsZero() {
+		t.Fatalf("resolve(unavailable) cached fallback until %s", resolver.expiresAt)
+	}
+
+	ready := newTestCurrencyCache(t,
+		openCostDeployment("opencost", "opencost", "custom-pricing-model"),
+		pricingConfigMap("opencost", "custom-pricing-model", map[string]string{"currencyCode": "EUR"}),
+	)
+	if got := resolver.resolve(ready, true, now.Add(time.Second)); got != "EUR" {
+		t.Fatalf("resolve(ready) = %q, want EUR", got)
+	}
+}
+
 func TestCurrencyResolverRetainsDetectedCurrencyWhileDeploymentIsUnavailable(t *testing.T) {
 	now := time.Now()
 	resolver := NewCurrencyResolver("")

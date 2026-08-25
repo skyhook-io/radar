@@ -53,6 +53,9 @@ func (r *CurrencyResolver) resolve(cache currencyCache, detectionAllowed bool, n
 	}
 
 	detection := detectOpenCostCurrencyState(cache)
+	if !detection.inputsAvailable {
+		return pkgopencost.DefaultCurrency
+	}
 	if detection.currency != "" {
 		r.cached = detection.currency
 		r.cachedDetected = true
@@ -98,6 +101,7 @@ func detectOpenCostCurrency(cache currencyCache) string {
 type currencyDetection struct {
 	currency            string
 	hasActiveDeployment bool
+	inputsAvailable     bool
 }
 
 func detectOpenCostCurrencyState(cache currencyCache) currencyDetection {
@@ -109,7 +113,7 @@ func detectOpenCostCurrencyState(cache currencyCache) currencyDetection {
 		return currencyDetection{}
 	}
 
-	detection := currencyDetection{}
+	detection := currencyDetection{inputsAvailable: true}
 	for _, deployment := range deployments {
 		if deployment.Status.AvailableReplicas == 0 ||
 			(deployment.Spec.Replicas != nil && *deployment.Spec.Replicas == 0) {
