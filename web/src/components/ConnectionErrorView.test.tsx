@@ -86,3 +86,20 @@ describe('ConnectionErrorView authentication guidance', () => {
     expect(markup).not.toContain('aria-label="Run command in terminal"')
   })
 })
+
+describe('ConnectionErrorView kubeconfig guidance', () => {
+  it('keeps the actionable error and context switch visible for a broken context', () => {
+    const markup = renderError('config', 'prod')
+
+    expect(markup).toContain('Cannot Load Cluster Configuration')
+    expect(markup).toContain('Kubeconfig Problem')
+    expect(markup).toContain('aria-expanded="true"')
+    expect(markup).toContain('Switch context')
+  })
+
+  it('does not offer context switching when no context was loaded', () => {
+    const markup = renderError('config', '')
+
+    expect(markup).not.toContain('Switch context')
+  })
+})

@@ -218,11 +218,11 @@ function getTimeoutHints(context: string): AuthHints | null {
 
 const errorHints: Record<string, { title: string; hints: string[] }> = {
   config: {
-    title: 'No Kubeconfig Found',
+    title: 'Kubeconfig Problem',
     hints: [
-      'Radar could not find a kubeconfig file at ~/.kube/config',
-      'If your kubeconfig is at a custom path, set the KUBECONFIG environment variable in your shell profile (~/.zshrc or ~/.bashrc)',
-      'You can also pass --kubeconfig <path> when launching from the terminal',
+      'Radar could not load a usable kubeconfig for this context',
+      'If the file exists, see the raw error below for the exact parse or load failure',
+      'If no kubeconfig is configured, Radar checks ~/.kube/config; set KUBECONFIG or pass --kubeconfig <path> for another location',
     ],
   },
   rbac: {
@@ -346,7 +346,7 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
   const errorInfo = commandInfo || errorHints[connection.errorType || 'unknown'] || errorHints.unknown
   const openLocalTerminal = useOpenLocalTerminal()
   const { data: authMe } = useAuthMe()
-  const rawErrorDefaultOpen = !connection.errorType || connection.errorType === 'unknown'
+  const rawErrorDefaultOpen = !connection.errorType || connection.errorType === 'unknown' || connection.errorType === 'config'
   const [showRawError, setShowRawError] = useState(rawErrorDefaultOpen)
 
   useEffect(() => {
@@ -384,7 +384,7 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
           </div>
 
           <h2 className="text-xl font-semibold text-theme-text-primary mb-2">
-            {connection.errorType === 'config' ? 'No Cluster Configuration' : 'Cannot Connect to Cluster'}
+            {connection.errorType === 'config' ? 'Cannot Load Cluster Configuration' : 'Cannot Connect to Cluster'}
           </h2>
 
           <div className="mb-6 space-y-1">
@@ -480,7 +480,7 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
               )}
             </button>
 
-            {connection.errorType !== 'config' && <ContextSwitcher triggerName="Switch context" />}
+            {connection.context && <ContextSwitcher triggerName="Switch context" />}
           </div>
 
           {isAuthError && (
