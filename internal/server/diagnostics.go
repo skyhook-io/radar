@@ -83,7 +83,7 @@ type DiagConnection struct {
 // collisions, shell env enrichment, or an exec auth plugin missing from
 // the desktop app's PATH.
 type DiagKubeconfig struct {
-	Mode                   string   `json:"mode"`                         // in-cluster, single, multi-file, multi-env, multi-dir, multi-source, or "" if not initialized
+	Mode                   string   `json:"mode"`                         // in-cluster, single, multi-env, multi-dir, multi-source, or "" if not initialized
 	FileCount              int      `json:"fileCount"`                    // Number of kubeconfig files loaded
 	DirectoryFileCount     int      `json:"directoryFileCount"`           // Loaded files discovered from configured directories
 	ContextCount           int      `json:"contextCount"`                 // Contexts exposed after source resolution

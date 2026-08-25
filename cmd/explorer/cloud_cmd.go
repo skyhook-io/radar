@@ -652,24 +652,19 @@ func connectLoadingRules(kubeconfig string) *clientcmd.ClientConfigLoadingRules 
 }
 
 type cloudKubeconfigSelection struct {
-	path                   string
-	additionalPathsIgnored bool
-	additionalDirsIgnored  bool
+	path                  string
+	additionalDirsIgnored bool
 }
 
 func selectCloudCommandKubeconfig(cfg config.Config) (cloudKubeconfigSelection, error) {
 	if cfg.Kubeconfig != "" {
-		paths, err := radark8s.NormalizeKubeconfigPaths(cfg.Kubeconfig)
+		path, err := radark8s.NormalizeKubeconfigPath(cfg.Kubeconfig)
 		if err != nil {
 			return cloudKubeconfigSelection{}, fmt.Errorf("normalize configured kubeconfig: %w", err)
 		}
-		if len(paths) == 0 {
-			return cloudKubeconfigSelection{}, errors.New("no kubeconfig paths resolved")
-		}
 		return cloudKubeconfigSelection{
-			path:                   paths[0],
-			additionalPathsIgnored: len(paths) > 1,
-			additionalDirsIgnored:  len(cfg.KubeconfigDirs) > 0,
+			path:                  path,
+			additionalDirsIgnored: len(cfg.KubeconfigDirs) > 0,
 		}, nil
 	}
 	if len(cfg.KubeconfigDirs) > 0 {
@@ -679,16 +674,10 @@ func selectCloudCommandKubeconfig(cfg config.Config) (cloudKubeconfigSelection, 
 }
 
 func (s cloudKubeconfigSelection) ignoredSourcesLabel() string {
-	switch {
-	case s.additionalPathsIgnored && s.additionalDirsIgnored:
-		return "additional kubeconfig paths and directories"
-	case s.additionalPathsIgnored:
-		return "additional kubeconfig paths"
-	case s.additionalDirsIgnored:
+	if s.additionalDirsIgnored {
 		return "additional kubeconfig directories"
-	default:
-		return ""
 	}
+	return ""
 }
 
 func resolveCloudInstallContext(kubeconfig, requested string) (string, error) {

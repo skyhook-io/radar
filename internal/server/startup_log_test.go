@@ -114,17 +114,6 @@ func TestFormatStartupKubeconfigMultiSourceWithEmptyDirectories(t *testing.T) {
 	}
 }
 
-func TestFormatStartupKubeconfigConfiguredPathList(t *testing.T) {
-	got := formatStartupKubeconfig("", k8s.KubeconfigSummary{
-		Mode:         "multi-file",
-		FileCount:    2,
-		ContextCount: 7,
-	})
-	if got != "configured kubeconfig paths · 2 files · 7 contexts" {
-		t.Fatalf("formatStartupKubeconfig() = %q", got)
-	}
-}
-
 func TestFormatStartupLogSummaryProxyWarning(t *testing.T) {
 	got := strings.Join(formatStartupLogSummary(startupLogSummary{
 		listenAddress:     AllInterfacesAddress,

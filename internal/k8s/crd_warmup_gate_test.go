@@ -78,10 +78,11 @@ func blockedDeferredCache(t *testing.T) (*k8score.ResourceCache, *fakeclientset.
 // two CRDs — one known-integration shaped (the WarmupCommonCRDs path) and one
 // small unknown (the DiscoverAllCRDs eager-watch path) — with a reactor
 // counting every LIST the dynamic client issues.
-func crdFixture(t *testing.T, typedClient *fakeclientset.Clientset) (*k8score.DynamicResourceCache, *atomic.Int64) {
+func crdFixture(t *testing.T) (*k8score.DynamicResourceCache, *atomic.Int64) {
 	t.Helper()
 
-	typedClient.Fake.Resources = []*metav1.APIResourceList{
+	discoveryClient := fakeclientset.NewSimpleClientset()
+	discoveryClient.Fake.Resources = []*metav1.APIResourceList{
 		{
 			GroupVersion: fatKnownCRD.Group + "/" + fatKnownCRD.Version,
 			APIResources: []metav1.APIResource{
@@ -95,7 +96,7 @@ func crdFixture(t *testing.T, typedClient *fakeclientset.Clientset) (*k8score.Dy
 			},
 		},
 	}
-	discovery, err := k8score.NewResourceDiscovery(typedClient.Discovery())
+	discovery, err := k8score.NewResourceDiscovery(discoveryClient.Discovery())
 	if err != nil {
 		t.Fatalf("NewResourceDiscovery failed: %v", err)
 	}
@@ -126,8 +127,8 @@ func crdFixture(t *testing.T, typedClient *fakeclientset.Clientset) (*k8score.Dy
 }
 
 func TestCRDWarmupSequenceGatedOnDeferredSync(t *testing.T) {
-	rc, typedClient, release := blockedDeferredCache(t)
-	dc, crdListCalls := crdFixture(t, typedClient)
+	rc, _, release := blockedDeferredCache(t)
+	dc, crdListCalls := crdFixture(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -202,7 +202,7 @@ output) for plain text. URLs, tokens, and suggested commands remain unstyled.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--kubeconfig` | `~/.kube/config` | Kubeconfig file or OS-separated path list |
+| `--kubeconfig` | `~/.kube/config` | Path to primary kubeconfig file |
 | `--kubeconfig-dir` | | Comma-separated directories containing additional kubeconfig files |
 | `--namespace` | (all) | Initial namespace filter (supports multi-select in the UI; also used as RBAC fallback for namespace-scoped users) |
 | `--namespaces` | (all) | Initial namespace filters as a comma-separated list, e.g. `--namespaces ns1,ns2,ns3`. Use this when your identity can list resources in specific namespaces but cannot list namespaces cluster-wide. |

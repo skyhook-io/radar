@@ -110,8 +110,6 @@ The Settings values and their matching flags form one source pair. With no
 explicit flags, Radar uses both saved values. Passing only `--kubeconfig`
 replaces saved directories; passing only `--kubeconfig-dir` replaces the saved
 primary file. Passing both flags explicitly combines both sources.
-`--kubeconfig` also accepts an OS-separated path list, using `:` on Linux/macOS
-and `;` on Windows.
 
 For compatibility with existing directory-mode installations, directories
 configured without a primary file suppress ambient `KUBECONFIG`. Radar reports

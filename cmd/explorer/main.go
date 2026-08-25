@@ -101,7 +101,7 @@ func main() {
 	fileCfg := config.Load()
 
 	// Parse flags (defaults come from config file, falling back to hardcoded values)
-	kubeconfig := flag.String("kubeconfig", fileCfg.Kubeconfig, "Kubeconfig file or OS-separated path list (default: ~/.kube/config)")
+	kubeconfig := flag.String("kubeconfig", fileCfg.Kubeconfig, "Path to primary kubeconfig file (default: ~/.kube/config)")
 	kubeconfigDir := flag.String("kubeconfig-dir", fileCfg.KubeconfigDirsFlag(), "Comma-separated directories containing additional kubeconfig files")
 	namespace := flag.String("namespace", fileCfg.Namespace, "Initial namespace filter (empty = all namespaces)")
 	namespaces := flag.String("namespaces", fileCfg.NamespacesFlag(), "Initial namespace filters as a comma-separated list (e.g. ns1,ns2,ns3). Use this when you can list resources in specific namespaces but cannot list namespaces cluster-wide.")

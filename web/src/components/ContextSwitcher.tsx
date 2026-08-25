@@ -10,7 +10,7 @@ import { useContextSwitch } from '../context/ContextSwitchContext'
 import { useToast } from '../components/ui/Toast'
 import { useDock } from '../components/dock'
 import type { ContextInfo } from '../types'
-import { parseContextName, type ParsedContextName } from '../utils/context-name'
+import { parseContextForSwitcher, type ParsedContextName } from '../utils/context-name'
 
 interface ContextSwitcherProps {
   className?: string
@@ -55,25 +55,9 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
       hasMultipleAccounts: false,
       hasMultipleSources: false,
     }
-    // Parse the source-free name so backend qualification doesn't hide the
-    // provider metadata. Its suffix is rendered separately below only when
-    // two rows would otherwise have the same visible name.
-    const stripSourceSuffix = (name: string, source?: string): string => {
-      if (!source) return name
-      const escaped = source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      return name.replace(new RegExp(`\\s+\\(${escaped}(?:\\s+#\\d+)?\\)$`), '')
-    }
-    const unqualified = contexts.map(ctx => ({
+    const parsed: ParsedContext[] = contexts.map(ctx => ({
       context: ctx,
-      ...parseContextName(stripSourceSuffix(ctx.name, ctx.source)),
-    }))
-    const nameCounts = new Map<string, number>()
-    for (const p of unqualified) nameCounts.set(p.raw, (nameCounts.get(p.raw) ?? 0) + 1)
-    const parsed: ParsedContext[] = unqualified.map(p => ({
-      ...p,
-      nameQualifier: (nameCounts.get(p.raw) ?? 0) > 1 && p.context.name !== p.raw
-        ? p.context.name.slice(p.raw.length).trim()
-        : undefined,
+      ...parseContextForSwitcher(ctx),
     }))
     const accounts = new Set(parsed.map(p => `${p.provider}:${p.account}`))
     const sources = new Set(contexts.map(c => c.source).filter(Boolean))

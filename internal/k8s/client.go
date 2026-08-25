@@ -35,7 +35,7 @@ var (
 	initErr                      error
 	kubeconfigPath               string
 	kubeconfigPaths              []string // Multiple kubeconfig paths when using directories, KUBECONFIG, or combined sources
-	kubeconfigMode               string   // One of: "in-cluster", "single", "multi-file", "multi-env", "multi-dir", "multi-source"
+	kubeconfigMode               string   // One of: "in-cluster", "single", "multi-env", "multi-dir", "multi-source"
 	kubeconfigDirectoryFileCount int
 	kubeconfigEnvWasIgnored      bool
 	totalContextCount            int // Total number of contexts exposed across all kubeconfig files
@@ -284,9 +284,13 @@ func doInit(opts InitOptions) error {
 }
 
 func resolveKubeconfigSources(opts InitOptions, kubeconfigEnv, homeDir string) (kubeconfigSources, error) {
-	primaryPaths, err := normalizeKubeconfigPathList(opts.KubeconfigPath, homeDir)
-	if err != nil {
-		return kubeconfigSources{}, fmt.Errorf("normalize configured kubeconfig: %w", err)
+	var primaryPaths []string
+	if opts.KubeconfigPath != "" {
+		primaryPath, err := normalizeKubeconfigPath(opts.KubeconfigPath, homeDir)
+		if err != nil {
+			return kubeconfigSources{}, fmt.Errorf("normalize configured kubeconfig: %w", err)
+		}
+		primaryPaths = []string{primaryPath}
 	}
 
 	if len(opts.KubeconfigDirs) > 0 {
@@ -296,7 +300,7 @@ func resolveKubeconfigSources(opts InitOptions, kubeconfigEnv, homeDir string) (
 		}
 		discovered := discoverKubeconfigs(dirs)
 		if len(primaryPaths) > 0 {
-			if ok, cause := hasUsableKubeconfig(primaryPaths); !ok {
+			if ok, cause := hasUsableKubeconfig(primaryPaths[0]); !ok {
 				if cause != nil {
 					errorlog.Record("k8s-init", "error", "primary kubeconfig unusable: %v", cause)
 					return kubeconfigSources{}, fmt.Errorf("configured primary kubeconfig is unusable (%v)", cause)
@@ -324,36 +328,33 @@ func resolveKubeconfigSources(opts InitOptions, kubeconfigEnv, homeDir string) (
 		}, nil
 	}
 
-	selected := opts.KubeconfigPath
-	configuredPath := selected != ""
-	if selected == "" {
-		selected = kubeconfigEnv
+	if len(primaryPaths) == 1 {
+		return kubeconfigSources{paths: primaryPaths, mode: "single"}, nil
 	}
-	tryInCluster := selected == ""
-	if selected == "" {
-		if homeDir != "" {
-			selected = filepath.Join(homeDir, ".kube", "config")
+
+	if kubeconfigEnv != "" {
+		paths, err := normalizeKubeconfigPathList(kubeconfigEnv, homeDir)
+		if err != nil {
+			return kubeconfigSources{}, fmt.Errorf("normalize KUBECONFIG: %w", err)
 		}
+		if len(paths) == 0 {
+			return kubeconfigSources{}, fmt.Errorf("no kubeconfig paths resolved")
+		}
+		paths = dedupeKubeconfigPaths(paths)
+		if len(paths) > 1 {
+			return kubeconfigSources{paths: paths, mode: "multi-env", useRegistry: true}, nil
+		}
+		return kubeconfigSources{paths: paths, mode: "single"}, nil
 	}
-	if selected == "" {
-		return kubeconfigSources{mode: "single", tryInCluster: tryInCluster}, nil
+
+	if homeDir == "" {
+		return kubeconfigSources{mode: "single", tryInCluster: true}, nil
 	}
-	paths, err := normalizeKubeconfigPathList(selected, homeDir)
+	defaultPath, err := normalizeKubeconfigPath(filepath.Join(homeDir, ".kube", "config"), homeDir)
 	if err != nil {
-		return kubeconfigSources{}, fmt.Errorf("normalize kubeconfig: %w", err)
+		return kubeconfigSources{}, fmt.Errorf("normalize default kubeconfig: %w", err)
 	}
-	if len(paths) == 0 {
-		return kubeconfigSources{}, fmt.Errorf("no kubeconfig paths resolved")
-	}
-	paths = dedupeKubeconfigPaths(paths)
-	if len(paths) > 1 {
-		mode := "multi-env"
-		if configuredPath {
-			mode = "multi-file"
-		}
-		return kubeconfigSources{paths: paths, mode: mode, useRegistry: true}, nil
-	}
-	return kubeconfigSources{paths: paths, mode: "single", tryInCluster: tryInCluster}, nil
+	return kubeconfigSources{paths: []string{defaultPath}, mode: "single", tryInCluster: true}, nil
 }
 
 func normalizeKubeconfigPathList(value, homeDir string) ([]string, error) {
@@ -408,26 +409,17 @@ func normalizeKubeconfigPath(path, homeDir string) (string, error) {
 	return absolute, nil
 }
 
-// NormalizeKubeconfigPaths applies the same path-list semantics used by Radar's main client loader.
-func NormalizeKubeconfigPaths(value string) ([]string, error) {
-	return normalizeKubeconfigPathList(value, homedir.HomeDir())
+// NormalizeKubeconfigPath applies Radar's path expansion to one explicitly configured file.
+func NormalizeKubeconfigPath(value string) (string, error) {
+	return normalizeKubeconfigPath(value, homedir.HomeDir())
 }
 
-func hasUsableKubeconfig(paths []string) (bool, error) {
-	var firstErr error
-	for _, path := range paths {
-		cfg, err := clientcmd.LoadFromFile(path)
-		if err == nil {
-			if len(cfg.Contexts) > 0 {
-				return true, nil
-			}
-			continue
-		}
-		if firstErr == nil {
-			firstErr = fmt.Errorf("%q: %s", filepath.Base(path), scrubKubeconfigLoadError(path, err))
-		}
+func hasUsableKubeconfig(path string) (bool, error) {
+	cfg, err := clientcmd.LoadFromFile(path)
+	if err != nil {
+		return false, fmt.Errorf("%q: %s", filepath.Base(path), scrubKubeconfigLoadError(path, err))
 	}
-	return false, firstErr
+	return len(cfg.Contexts) > 0, nil
 }
 
 func dedupeKubeconfigPaths(paths []string) []string {
@@ -599,7 +591,7 @@ func GetKubeconfigPath() string {
 // suitable for inclusion in diagnostic output. It never includes the resolved
 // paths themselves, only counts, mode flags, and exec plugin basenames.
 type KubeconfigSummary struct {
-	Mode                   string   // "in-cluster", "single", "multi-file", "multi-env", "multi-dir", "multi-source", or "" if not initialized
+	Mode                   string   // "in-cluster", "single", "multi-env", "multi-dir", "multi-source", or "" if not initialized
 	FileCount              int      // Number of kubeconfig files loaded (0 for in-cluster)
 	DirectoryFileCount     int      // Number of loaded files discovered from configured directories
 	ContextCount           int      // Number of contexts exposed after source resolution
@@ -1180,14 +1172,15 @@ func isInClusterLocked() bool {
 
 // ContextInfo represents information about a kubeconfig context
 type ContextInfo struct {
-	Name      string `json:"name"`
-	Cluster   string `json:"cluster"`
-	User      string `json:"user"`
-	Namespace string `json:"namespace"`
-	IsCurrent bool   `json:"isCurrent"`
+	Name         string `json:"name"`
+	OriginalName string `json:"originalName,omitempty"`
+	Cluster      string `json:"cluster"`
+	User         string `json:"user"`
+	Namespace    string `json:"namespace"`
+	IsCurrent    bool   `json:"isCurrent"`
 	// Source labels the kubeconfig file this context came from
-	// (e.g. "kube-cluster-paris" or "prod"). Set only in multi-file
-	// mode; populated for every context — not just colliding ones — so
+	// (e.g. "kube-cluster-paris" or "prod"). Set for registry-backed
+	// loading; populated for every context — not just colliding ones — so
 	// the dropdown can show provenance even without ambiguity.
 	Source string `json:"source,omitempty"`
 }
@@ -1260,12 +1253,13 @@ func GetAvailableContexts() ([]ContextInfo, error) {
 				continue
 			}
 			contexts = append(contexts, ContextInfo{
-				Name:      qName,
-				Cluster:   ctx.Cluster,
-				User:      ctx.AuthInfo,
-				Namespace: ctx.Namespace,
-				IsCurrent: qName == currentCtx,
-				Source:    kubeconfigSourceLabel(entry.SourceFile),
+				Name:         qName,
+				OriginalName: entry.InFileName,
+				Cluster:      ctx.Cluster,
+				User:         ctx.AuthInfo,
+				Namespace:    ctx.Namespace,
+				IsCurrent:    qName == currentCtx,
+				Source:       kubeconfigSourceLabel(entry.SourceFile),
 			})
 		}
 		return contexts, nil

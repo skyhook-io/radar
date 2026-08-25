@@ -52,17 +52,18 @@ func TestResolveKubeconfigSourcesDirectAndFallbackModes(t *testing.T) {
 		}
 	})
 
-	t.Run("multiple configured paths are not reported as environment", func(t *testing.T) {
+	t.Run("configured path is always one file", func(t *testing.T) {
 		second := writeKubeconfig(t, home, "configured-second", "second", []kubeEntry{
 			{ctxName: "second", userName: "user-2", clusterName: "cluster-2"},
 		})
+		configured := configPath + string(os.PathListSeparator) + second
 		got, err := resolveKubeconfigSources(InitOptions{
-			KubeconfigPath: configPath + string(os.PathListSeparator) + second,
+			KubeconfigPath: configured,
 		}, "", home)
 		if err != nil {
 			t.Fatalf("resolveKubeconfigSources: %v", err)
 		}
-		if got.mode != "multi-file" || !got.useRegistry || len(got.paths) != 2 {
+		if got.mode != "single" || got.useRegistry || len(got.paths) != 1 || got.paths[0] != configured {
 			t.Fatalf("resolution = %+v", got)
 		}
 	})
@@ -268,14 +269,4 @@ func TestResolveKubeconfigSourcesDeduplicatesFileIdentity(t *testing.T) {
 		t.Fatalf("resolution = %+v", got)
 	}
 
-	t.Chdir(configsDir)
-	relative, err := resolveKubeconfigSources(InitOptions{
-		KubeconfigPath: "config" + string(os.PathListSeparator) + configPath,
-	}, "", home)
-	if err != nil {
-		t.Fatalf("resolve relative/absolute duplicate: %v", err)
-	}
-	if len(relative.paths) != 1 || relative.paths[0] != configPath || relative.mode != "single" || relative.useRegistry {
-		t.Fatalf("relative resolution = %+v", relative)
-	}
 }

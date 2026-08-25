@@ -168,8 +168,6 @@ func formatStartupKubeconfig(path string, summary k8s.KubeconfigSummary) string 
 	source := path
 	if source == "" {
 		switch summary.Mode {
-		case "multi-file":
-			source = "configured kubeconfig paths"
 		case "multi-env":
 			source = "KUBECONFIG"
 		case "multi-dir":

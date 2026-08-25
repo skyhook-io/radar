@@ -455,12 +455,15 @@ export interface ClusterInfo {
 // Context info for context switching
 export interface ContextInfo {
   name: string
+  /** Original context name inside its source file. Set for isolated sources
+   *  so display code need not infer backend-added collision qualifiers. */
+  originalName?: string
   cluster: string
   user: string
   namespace: string
   isCurrent: boolean
-  /** Source kubeconfig label (e.g. "kube-cluster-paris"). Set by backend
-   *  only when 2+ kubeconfig files are loaded; empty otherwise. */
+  /** Source kubeconfig label (e.g. "kube-cluster-paris"). Set by the backend
+   *  for contexts loaded through the isolated source registry. */
   source?: string
 }
 

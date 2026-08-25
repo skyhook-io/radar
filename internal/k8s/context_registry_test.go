@@ -404,7 +404,7 @@ func TestGetAvailableContexts_OneDirectoryFileUsesRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAvailableContexts: %v", err)
 	}
-	if len(contexts) != 1 || contexts[0].Name != "only" || contexts[0].Source != "only" {
+	if len(contexts) != 1 || contexts[0].Name != "only" || contexts[0].OriginalName != "only" || contexts[0].Source != "only" {
 		t.Fatalf("contexts = %+v", contexts)
 	}
 	sourceFile, inFileName, ok := GetContextSource("only")
@@ -719,6 +719,38 @@ func TestRefreshContextRegistry_DropsRemovedFile(t *testing.T) {
 	}
 	if _, ok := mtimes[f2]; !ok {
 		t.Errorf("input mtimes was mutated; expected immutability")
+	}
+}
+
+func TestRefreshContextRegistry_PreservesQualifiedSurvivorIdentity(t *testing.T) {
+	errorlog.Reset()
+	t.Cleanup(errorlog.Reset)
+	dir := t.TempDir()
+	primary := writeKubeconfig(t, dir, "primary.yaml", "prod", []kubeEntry{
+		{ctxName: "prod", userName: "u1", clusterName: "c1"},
+	})
+	secondary := writeKubeconfig(t, dir, "secondary.yaml", "prod", []kubeEntry{
+		{ctxName: "prod", userName: "u2", clusterName: "c2"},
+	})
+
+	registry, fileConfigs, mtimes := loadFixture(t, []string{primary, secondary})
+	if _, ok := registry["prod (secondary)"]; !ok {
+		t.Fatalf("setup registry = %v", keysOf(registry))
+	}
+	if err := os.Remove(primary); err != nil {
+		t.Fatalf("remove primary fixture: %v", err)
+	}
+
+	newRegistry, _, _, changed := refreshContextRegistry(registry, fileConfigs, mtimes)
+	if !changed {
+		t.Fatal("expected refresh to report the removed primary source")
+	}
+	if _, ok := newRegistry["prod"]; ok {
+		t.Fatalf("removed primary context remains: %v", keysOf(newRegistry))
+	}
+	entry, ok := newRegistry["prod (secondary)"]
+	if !ok || entry.InFileName != "prod" || entry.SourceFile != secondary {
+		t.Fatalf("qualified survivor = %+v, found=%t", entry, ok)
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -333,9 +332,7 @@ func TestConfirmCloudInstallContextReportsIgnoredDirectories(t *testing.T) {
 func TestSelectCloudCommandKubeconfig(t *testing.T) {
 	dir := t.TempDir()
 	primary := filepath.Join(dir, "config")
-	other := filepath.Join(dir, "other-config")
 	additionalDir := filepath.Join(dir, "configs")
-	pathList := strings.Join([]string{primary, other}, string(os.PathListSeparator))
 	tests := []struct {
 		name      string
 		cfg       config.Config
@@ -350,12 +347,6 @@ func TestSelectCloudCommandKubeconfig(t *testing.T) {
 			cfg:       config.Config{Kubeconfig: primary, KubeconfigDirs: []string{additionalDir}},
 			wantPath:  primary,
 			wantLabel: "additional kubeconfig directories",
-		},
-		{
-			name:      "first primary path wins over later paths and directories",
-			cfg:       config.Config{Kubeconfig: pathList, KubeconfigDirs: []string{additionalDir}},
-			wantPath:  primary,
-			wantLabel: "additional kubeconfig paths and directories",
 		},
 		{name: "directories require primary", cfg: config.Config{KubeconfigDirs: []string{additionalDir}}, wantErr: true},
 	}
