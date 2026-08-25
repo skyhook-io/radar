@@ -578,6 +578,10 @@ func Reset() {
 	if manager != nil {
 		manager.Close()
 	}
+	// Stop again after Close: an in-flight Connect (Close blocks on the source
+	// mutex until it finishes) may have published a forward for the old cluster
+	// after the first Stop.
+	portforward.Stop(portforward.OwnerTraffic)
 	manager = nil
 	initOnce = sync.Once{}
 }
@@ -624,13 +628,31 @@ func (m *Manager) Connect(ctx context.Context) (*portforward.ConnectionInfo, err
 	}
 }
 
-// GetConnectionInfo returns live traffic connection status — traffic's own
-// metrics forward, read from the live registry so a forward that has since been
-// stopped isn't reported as connected. It deliberately does NOT report another
-// owner's forward: traffic's data path always uses its own (Caretta/Hubble bring
-// one up), so a Prometheus forward for the same context means Prometheus is
-// connected, not traffic.
+// ConnectionReporter is implemented by sources that can report their own live
+// connection state. Necessary because "traffic has an active port-forward" is
+// not the same thing as "traffic is connected": every source prefers a direct
+// in-cluster connection with no forward behind it, and the Prometheus-backed
+// sources (Istio, Beyla) ride the prometheus owner's forward, not traffic's.
+type ConnectionReporter interface {
+	ConnectionInfo() *portforward.ConnectionInfo
+}
+
+// GetConnectionInfo returns live traffic connection status, as reported by the
+// active source when it can (see ConnectionReporter). The registry fallback
+// deliberately does NOT report another owner's forward: a Prometheus forward
+// for the same context means Prometheus is connected, not traffic.
 func (m *Manager) GetConnectionInfo() *portforward.ConnectionInfo {
+	m.mu.RLock()
+	source := m.activeSource
+	m.mu.RUnlock()
+
+	if source == nil {
+		// A leftover forward with nothing querying it is not a connection.
+		return &portforward.ConnectionInfo{Connected: false}
+	}
+	if reporter, ok := source.(ConnectionReporter); ok {
+		return reporter.ConnectionInfo()
+	}
 	return portforward.GetConnectionInfo(portforward.OwnerTraffic)
 }
 

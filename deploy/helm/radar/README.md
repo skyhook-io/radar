@@ -221,7 +221,7 @@ Disabled by default for security:
 |---------|-------|-------------|
 | Secrets | `rbac.secrets: true` | View secrets in resource list |
 | Terminal | `rbac.podExec: true` | Shell access to pods |
-| Port Forward | `rbac.portForward: true` | Port forwarding to pods |
+| Port Forward | `rbac.portForward: true` | Port forwarding to pods. Also the fallback for traffic sources (Hubble/Caretta) — Radar dials the relay/metrics Service directly first, so in-cluster installs only need this when a NetworkPolicy or routing blocks Radar's namespace from reaching the service |
 | Logs | `rbac.podLogs: true` | View pod logs (**enabled by default**) |
 | Helm Write | `rbac.helm: true` | Install/upgrade/rollback/uninstall Helm releases. Under auth or cloud-mode, also emits a split helm add-on ClusterRole — `radar-helm` (member-safe: CRDs, storage, namespaces) and `radar-helm-admin` (owner-only: RBAC, webhooks, ApiServices) |
 | RBAC view | `rbac.viewRBAC: true` | Show ClusterRoles, ClusterRoleBindings, Roles, RoleBindings in the resource browser. Off by default — cache-served reads bypass per-user RBAC, so this exposes the cluster's authorization graph to every authenticated Radar user. Auto-enabled under auth or cloud mode (every read is re-checked per user there). |

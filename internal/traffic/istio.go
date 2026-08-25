@@ -488,6 +488,32 @@ func (s *IstioSource) Connect(ctx context.Context, contextName string) (*portfor
 	return info, nil
 }
 
+// ConnectionInfo implements ConnectionReporter. Istio's data path is the
+// shared Prometheus client (whose forwards belong to the prometheus owner, not
+// traffic), so its status is the only honest answer here.
+func (s *IstioSource) ConnectionInfo() *portforward.ConnectionInfo {
+	client, err := s.getPrometheusClient()
+	if err != nil {
+		return &portforward.ConnectionInfo{Connected: false}
+	}
+	return connectionInfoFromPromStatus(client.GetStatus())
+}
+
+// connectionInfoFromPromStatus maps the shared Prometheus client's status into
+// traffic connection info — used by the sources whose data path is that client.
+func connectionInfoFromPromStatus(status prom.Status) *portforward.ConnectionInfo {
+	info := &portforward.ConnectionInfo{
+		Connected:   status.Connected,
+		Address:     status.Address,
+		ContextName: status.ContextName,
+	}
+	if status.Service != nil {
+		info.Namespace = status.Service.Namespace
+		info.ServiceName = status.Service.Name
+	}
+	return info
+}
+
 // Close cleans up resources (no-op since we use the shared prometheus client)
 func (s *IstioSource) Close() error {
 	return nil

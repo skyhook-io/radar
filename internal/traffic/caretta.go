@@ -663,6 +663,34 @@ func (c *CarettaSource) revalidateBoundLocked(ctx context.Context, addr string) 
 	return true
 }
 
+// ConnectionInfo implements ConnectionReporter. A binding that rides a managed
+// forward defers to the live registry — a forward that has since died must not
+// read as connected — while direct in-cluster and manual-URL bindings report
+// the stored state their queries actually use.
+func (c *CarettaSource) ConnectionInfo() *portforward.ConnectionInfo {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	addr := c.prometheusAddr
+	if addr == "" {
+		return &portforward.ConnectionInfo{Connected: false}
+	}
+	if c.metricsURL == "" && strings.HasPrefix(addr, "http://localhost:") {
+		// Bound through a managed forward (traffic's own, or a reused peer's) —
+		// alive only while the registry still holds that exact address.
+		if live := portforward.GetAddressForService(portforward.OwnerTraffic, c.currentContext, c.metricsNamespace, c.metricsService); live != addr {
+			return &portforward.ConnectionInfo{Connected: false}
+		}
+	}
+	return &portforward.ConnectionInfo{
+		Connected:   true,
+		Address:     addr,
+		Namespace:   c.metricsNamespace,
+		ServiceName: c.metricsService,
+		ContextName: c.currentContext,
+	}
+}
+
 // stopStaleTrafficForward drops the traffic-owned forward when it points at a
 // service other than the one being bound. A candidate refused mid-walk can leave
 // its forward running, which would make the reported connection name a different
