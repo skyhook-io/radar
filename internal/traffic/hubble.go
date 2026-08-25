@@ -467,11 +467,16 @@ func (h *HubbleSource) connectionInfoLocked(namespace, contextName string) *port
 // Service) deliberately stops at ".svc" so clusters with a custom cluster
 // domain still resolve it through their search domains.
 func (h *HubbleSource) directAddressLocked(namespace string) string {
-	port := fmt.Sprintf("%d", h.servicePort)
 	if h.clusterIP != "" && h.clusterIP != corev1.ClusterIPNone {
-		return net.JoinHostPort(h.clusterIP, port)
+		return net.JoinHostPort(h.clusterIP, fmt.Sprintf("%d", h.servicePort))
 	}
-	return net.JoinHostPort(fmt.Sprintf("%s.%s.svc", hubbleRelayService, namespace), port)
+	name := fmt.Sprintf("%s.%s.svc", hubbleRelayService, namespace)
+	if h.clusterIP == corev1.ClusterIPNone {
+		// Headless DNS resolves to pod IPs, which do no service-to-container
+		// port mapping — dial the container port.
+		return net.JoinHostPort(name, fmt.Sprintf("%d", h.relayPort))
+	}
+	return net.JoinHostPort(name, fmt.Sprintf("%d", h.servicePort))
 }
 
 // tcpReachable reports whether addr accepts a TCP connection within timeout.

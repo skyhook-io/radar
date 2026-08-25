@@ -349,8 +349,10 @@ func TestDirectAddress(t *testing.T) {
 		t.Errorf("clusterIP address = %q", got)
 	}
 
-	headless := &HubbleSource{servicePort: 443, clusterIP: corev1.ClusterIPNone}
-	if got := headless.directAddressLocked("cilium"); got != "hubble-relay.cilium.svc:443" {
+	// Headless DNS resolves to pod IPs — the container port is the only one
+	// that answers there.
+	headless := &HubbleSource{servicePort: 443, relayPort: 4245, clusterIP: corev1.ClusterIPNone}
+	if got := headless.directAddressLocked("cilium"); got != "hubble-relay.cilium.svc:4245" {
 		t.Errorf("headless address = %q", got)
 	}
 }
