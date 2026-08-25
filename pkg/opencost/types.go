@@ -15,7 +15,7 @@ const (
 type CostSummary struct {
 	Available         bool            `json:"available"`
 	Reason            string          `json:"reason,omitempty"` // Set when available=false: no_prometheus, no_metrics, query_error
-	Currency          string          `json:"currency,omitempty"`
+	Currency          string          `json:"currency"`
 	Window            string          `json:"window,omitempty"`
 	TotalHourlyCost   float64         `json:"totalHourlyCost,omitempty"`
 	TotalStorageCost  float64         `json:"totalStorageCost,omitempty"`
@@ -47,7 +47,7 @@ type NamespaceCost struct {
 type WorkloadCostResponse struct {
 	Available bool           `json:"available"`
 	Reason    string         `json:"reason,omitempty"`
-	Currency  string         `json:"currency,omitempty"`
+	Currency  string         `json:"currency"`
 	Namespace string         `json:"namespace"`
 	Workloads []WorkloadCost `json:"workloads"`
 }
@@ -55,7 +55,7 @@ type WorkloadCostResponse struct {
 type WorkloadCostDetailResponse struct {
 	Available bool          `json:"available"`
 	Reason    string        `json:"reason,omitempty"`
-	Currency  string        `json:"currency,omitempty"`
+	Currency  string        `json:"currency"`
 	Namespace string        `json:"namespace"`
 	Kind      string        `json:"kind"`
 	Name      string        `json:"name"`
@@ -84,7 +84,7 @@ type WorkloadCost struct {
 type CostTrendResponse struct {
 	Available bool              `json:"available"`
 	Reason    string            `json:"reason,omitempty"`
-	Currency  string            `json:"currency,omitempty"`
+	Currency  string            `json:"currency"`
 	Range     string            `json:"range"`
 	Series    []CostTrendSeries `json:"series,omitempty"`
 }
@@ -92,7 +92,7 @@ type CostTrendResponse struct {
 type WorkloadCostTrendResponse struct {
 	Available       bool            `json:"available"`
 	Reason          string          `json:"reason,omitempty"`
-	Currency        string          `json:"currency,omitempty"`
+	Currency        string          `json:"currency"`
 	Namespace       string          `json:"namespace"`
 	Kind            string          `json:"kind"`
 	Name            string          `json:"name"`
@@ -149,7 +149,7 @@ type ApplicationWorkloadCost struct {
 type ApplicationCostResponse struct {
 	Available bool                      `json:"available"`
 	Reason    string                    `json:"reason,omitempty"`
-	Currency  string                    `json:"currency,omitempty"`
+	Currency  string                    `json:"currency"`
 	Partial   bool                      `json:"partial,omitempty"`
 	Totals    ApplicationCostTotals     `json:"totals"`
 	Coverage  ApplicationCostCoverage   `json:"coverage"`
@@ -165,7 +165,7 @@ type ApplicationCostTrendSeries struct {
 type ApplicationCostTrendResponse struct {
 	Available       bool                         `json:"available"`
 	Reason          string                       `json:"reason,omitempty"`
-	Currency        string                       `json:"currency,omitempty"`
+	Currency        string                       `json:"currency"`
 	Range           string                       `json:"range"`
 	Partial         bool                         `json:"partial,omitempty"`
 	WindowTotalCost float64                      `json:"windowTotalCost,omitempty"`
@@ -190,7 +190,7 @@ type CostDataPoint struct {
 type NodeCostResponse struct {
 	Available bool       `json:"available"`
 	Reason    string     `json:"reason,omitempty"`
-	Currency  string     `json:"currency,omitempty"`
+	Currency  string     `json:"currency"`
 	Nodes     []NodeCost `json:"nodes,omitempty"`
 }
 

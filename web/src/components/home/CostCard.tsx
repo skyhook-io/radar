@@ -22,7 +22,7 @@ export function CostCard({ onNavigate }: { onNavigate?: () => void }) {
 
 function CostCardContent({ data, onNavigate }: { data: OpenCostSummary; onNavigate?: () => void }) {
   const hourlyCost = data.totalHourlyCost ?? 0
-  const currency = data.currency ?? DEFAULT_COST_CURRENCY
+  const currency = data.currency
   const namespaces = data.namespaces ?? []
   const topNamespaces = namespaces.slice(0, 5)
 

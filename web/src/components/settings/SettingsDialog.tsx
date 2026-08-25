@@ -304,24 +304,23 @@ export function SettingsDialog({
 
   // Close guard: a pending startup edit prompts an inline confirm rather than
   // silently discarding. An unsaved AI draft is re-derivable, so it's fine to
-  // drop it on close. Held in a ref so the ESC listener reads current dirtiness.
+  // drop it on close.
   const requestCloseRef = useRef<() => void>(() => {})
   requestCloseRef.current = () => {
     if (canEditConfig && configDirty) setConfirmingClose(true)
     else onClose()
   }
 
-  // ESC key
   useEffect(() => {
     if (!open) return
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation()
-        requestCloseRef.current()
-      }
+    const handleDocumentKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || dialogRef.current?.contains(event.target as Node)) return
+      event.preventDefault()
+      event.stopPropagation()
+      requestCloseRef.current()
     }
-    document.addEventListener('keydown', handleKeyDown, true)
-    return () => document.removeEventListener('keydown', handleKeyDown, true)
+    document.addEventListener('keydown', handleDocumentKeyDown, true)
+    return () => document.removeEventListener('keydown', handleDocumentKeyDown, true)
   }, [open])
 
   // Post-save feedback ("Saved. Restart Radar to apply.") is scoped to the
@@ -377,6 +376,12 @@ export function SettingsDialog({
       <div
         ref={dialogRef}
         tabIndex={-1}
+        onKeyDown={(event) => {
+          if (event.key !== 'Escape') return
+          event.preventDefault()
+          event.stopPropagation()
+          requestCloseRef.current()
+        }}
         className={clsx(
           'relative bg-theme-surface border border-theme-border shadow-theme-lg w-full outline-none flex flex-col',
           'max-sm:inset-0 max-sm:absolute max-sm:rounded-none max-sm:max-h-full max-sm:border-0',

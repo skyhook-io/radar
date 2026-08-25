@@ -21,5 +21,7 @@ describe('currency options', () => {
     const codes = CURRENCY_OPTIONS.slice(1).map((option) => option.value)
     expect(new Set(codes).size).toBe(codes.length)
     expect(codes.every((code) => /^[A-Z]{3}$/.test(code))).toBe(true)
+    expect(codes).not.toContain('XTS')
+    expect(codes).not.toContain('XXX')
   })
 })

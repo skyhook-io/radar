@@ -6,6 +6,7 @@ describe('getWorkloadCostState', () => {
   it('treats scaled-to-zero as a valid zero state', () => {
     const current: OpenCostWorkloadDetailResponse = {
       available: true,
+      currency: 'USD',
       namespace: 'default',
       kind: 'Deployment',
       name: 'checkout',
@@ -24,6 +25,7 @@ describe('getWorkloadCostState', () => {
     }
     const trend: OpenCostWorkloadTrendResponse = {
       available: false,
+      currency: 'USD',
       reason: 'no_metrics',
       namespace: 'default',
       kind: 'Deployment',
@@ -37,6 +39,7 @@ describe('getWorkloadCostState', () => {
   it('keeps current cost visible when only historical owner metrics are missing', () => {
     const current: OpenCostWorkloadDetailResponse = {
       available: true,
+      currency: 'USD',
       namespace: 'default',
       kind: 'Deployment',
       name: 'checkout',
@@ -55,6 +58,7 @@ describe('getWorkloadCostState', () => {
     }
     const trend: OpenCostWorkloadTrendResponse = {
       available: false,
+      currency: 'USD',
       reason: 'no_metrics',
       namespace: 'default',
       kind: 'Deployment',
@@ -68,6 +72,7 @@ describe('getWorkloadCostState', () => {
   it('keeps current cost visible while historical owner metrics are still loading', () => {
     const current: OpenCostWorkloadDetailResponse = {
       available: true,
+      currency: 'USD',
       namespace: 'default',
       kind: 'Deployment',
       name: 'checkout',
@@ -91,6 +96,7 @@ describe('getWorkloadCostState', () => {
   it('uses historical data when current metrics are absent but history exists', () => {
     const current: OpenCostWorkloadDetailResponse = {
       available: false,
+      currency: 'USD',
       reason: 'no_metrics',
       namespace: 'default',
       kind: 'Deployment',
@@ -98,6 +104,7 @@ describe('getWorkloadCostState', () => {
     }
     const trend: OpenCostWorkloadTrendResponse = {
       available: true,
+      currency: 'USD',
       namespace: 'default',
       kind: 'Deployment',
       name: 'checkout',
@@ -118,6 +125,7 @@ describe('getWorkloadCostState', () => {
   it('surfaces workload access and existence failures', () => {
     const current: OpenCostWorkloadDetailResponse = {
       available: false,
+      currency: 'USD',
       reason: 'access_denied',
       namespace: 'prod',
       kind: 'Deployment',
@@ -126,6 +134,7 @@ describe('getWorkloadCostState', () => {
 
     const missing: OpenCostWorkloadTrendResponse = {
       available: false,
+      currency: 'USD',
       reason: 'not_found',
       namespace: 'prod',
       kind: 'Deployment',
@@ -142,6 +151,7 @@ describe('getWorkloadCostState', () => {
   it('shows Prometheus discovery as soon as one query reports it', () => {
     const current: OpenCostWorkloadDetailResponse = {
       available: false,
+      currency: 'USD',
       reason: 'no_prometheus',
       namespace: 'default',
       kind: 'Deployment',
