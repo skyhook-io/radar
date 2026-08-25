@@ -248,7 +248,7 @@ export function SettingsDialog({
       }
       const saved = await res.json() as Config
       const committed = { ...body, opencostCurrency: saved.opencostCurrency }
-      setEditedConfig(committed)
+      setEditedConfig((prev) => ({ ...prev, opencostCurrency: saved.opencostCurrency }))
       setConfigData((prev) => (prev ? { ...prev, file: committed } : prev))
       if (costDirty && !configData.openCostCurrencyManaged) {
         void queryClient.invalidateQueries({
@@ -314,7 +314,10 @@ export function SettingsDialog({
   useEffect(() => {
     if (!open) return
     const handleDocumentKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || dialogRef.current?.contains(event.target as Node)) return
+      if (event.key !== 'Escape') return
+      const modalDialogs = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"][aria-modal="true"]'))
+      const topDialog = modalDialogs[modalDialogs.length - 1]
+      if (topDialog !== dialogRef.current || dialogRef.current?.contains(event.target as Node)) return
       event.preventDefault()
       event.stopPropagation()
       requestCloseRef.current()
@@ -375,6 +378,9 @@ export function SettingsDialog({
       {/* Dialog */}
       <div
         ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-dialog-title"
         tabIndex={-1}
         onKeyDown={(event) => {
           if (event.key !== 'Escape') return
@@ -398,7 +404,7 @@ export function SettingsDialog({
           <div className="flex items-center gap-2">
             <Settings className="w-5 h-5 text-theme-text-secondary" />
             <div className="flex items-baseline gap-2">
-              <h2 className="text-lg font-semibold text-theme-text-primary">Settings</h2>
+              <h2 id="settings-dialog-title" className="text-lg font-semibold text-theme-text-primary">Settings</h2>
               <span className="text-[11px] text-theme-text-tertiary">
                 Radar{versionInfo?.currentVersion ? ` v${versionInfo.currentVersion}` : ''}
                 <span className="text-theme-text-disabled"> · by Skyhook</span>

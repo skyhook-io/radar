@@ -111,6 +111,32 @@ func TestGetConfigReportsManagedOpenCostCurrency(t *testing.T) {
 	}
 }
 
+func TestGetConfigNormalizesPersistedOpenCostCurrency(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := config.Save(config.Config{OpenCostCurrency: " eur "}); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{}
+	w := httptest.NewRecorder()
+
+	s.handleGetConfig(w, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var body struct {
+		File struct {
+			OpenCostCurrency string `json:"opencostCurrency"`
+		} `json:"file"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.File.OpenCostCurrency != "EUR" {
+		t.Fatalf("file opencostCurrency = %q, want EUR", body.File.OpenCostCurrency)
+	}
+}
+
 func TestPutConfigRejectsInvalidOpenCostCurrency(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("USERPROFILE", t.TempDir())

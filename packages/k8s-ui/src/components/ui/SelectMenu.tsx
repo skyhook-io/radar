@@ -26,6 +26,7 @@ export function SelectMenu({
   const [query, setQuery] = useState('')
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const selected = options.find((option) => option.value === value) ?? options[0]
   const filteredOptions = useMemo(() => {
@@ -33,6 +34,7 @@ export function SelectMenu({
     if (!normalized) return options
     return options.filter((option) => option.label.toLowerCase().includes(normalized))
   }, [options, query])
+  const selectedIsVisible = filteredOptions.some((option) => option.value === value)
 
   useEffect(() => {
     if (!open) return
@@ -48,6 +50,13 @@ export function SelectMenu({
   useEffect(() => {
     if (!open) setQuery('')
   }, [open])
+
+  useEffect(() => {
+    if (!open || !searchPlaceholder) return
+    listRef.current
+      ?.querySelector<HTMLElement>('[role="option"][aria-selected="true"]')
+      ?.scrollIntoView({ block: 'nearest' })
+  }, [open, searchPlaceholder])
 
   return (
     <div
@@ -84,6 +93,7 @@ export function SelectMenu({
             <div className="flex items-center gap-2 border-b border-theme-border px-2.5 py-2">
               <Search className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />
               <input
+                ref={searchInputRef}
                 autoFocus
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
@@ -103,11 +113,36 @@ export function SelectMenu({
               />
             </div>
           )}
-          <div ref={listRef} role="listbox" className="max-h-64 overflow-y-auto py-1">
+          <div
+            ref={listRef}
+            role="listbox"
+            onKeyDown={(event) => {
+              if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+              const optionElements = Array.from(
+                listRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]') ?? [],
+              )
+              const currentIndex = optionElements.indexOf(event.target as HTMLButtonElement)
+              if (currentIndex < 0) return
+              event.preventDefault()
+              if (event.key === 'ArrowUp' && currentIndex === 0 && searchPlaceholder) {
+                searchInputRef.current?.focus()
+                return
+              }
+              const nextIndex = event.key === 'Home'
+                ? 0
+                : event.key === 'End'
+                  ? optionElements.length - 1
+                  : event.key === 'ArrowDown'
+                    ? Math.min(currentIndex + 1, optionElements.length - 1)
+                    : Math.max(currentIndex - 1, 0)
+              optionElements[nextIndex]?.focus()
+            }}
+            className={clsx('py-1', searchPlaceholder && 'max-h-64 overflow-y-auto')}
+          >
             {filteredOptions.length === 0 && (
               <p className="px-3 py-2 text-xs text-theme-text-tertiary">No matches.</p>
             )}
-            {filteredOptions.map((option) => {
+            {filteredOptions.map((option, index) => {
               const active = option.value === value
               return (
                 <button
@@ -115,6 +150,7 @@ export function SelectMenu({
                   type="button"
                   role="option"
                   aria-selected={active}
+                  tabIndex={active || (!selectedIsVisible && index === 0) ? 0 : -1}
                   onClick={() => {
                     onChange(option.value)
                     setOpen(false)
