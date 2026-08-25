@@ -301,3 +301,12 @@ Phases 1–3 can land as one PR with three commits, or split if phase 1 review r
   expansion? Proposed: include — it is what lets an agent decide which checks to expand.
 - **TTL value** (60s proposed) — long enough for expansion bursts, short enough for
   fix-and-rescan loops; validate against real scan latency on a large cluster.
+- **Target discoverability**: an agent doesn't know the cluster's current version when it
+  first calls, so its first `target` can be invalid. The validation error should enumerate
+  what is valid — current version, the allowed forward range, and `reviewedThrough` — so the
+  agent self-corrects in one round-trip instead of probing with `get_dashboard` first.
+- **Scan stampede**: the memo only helps after a scan completes. Concurrent calls on an
+  empty memo (two agents, or one agent's parallel tool calls) would each run the full live
+  collection. The memo needs single-flight per key: concurrent callers wait on the in-flight
+  scan rather than starting their own. This also protects the HTTP handler once it shares
+  the memo.
