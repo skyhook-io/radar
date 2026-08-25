@@ -86,7 +86,10 @@ guaranteed to read:
 > `coverage.state: no_access` means the scan saw nothing namespaced and the verdict is
 > meaningless. Default output is one row per check; pass `check=<id>` for that check's
 > findings with evidence and remediation. Findings reference exact resources and fields —
-> pair with `patch_resource` / `apply_resource` to fix source manifests.
+> pair with `patch_resource` / `apply_resource` to fix source manifests. The first call runs
+> a live cluster-wide evidence scan and can take several seconds on large clusters; results
+> are briefly cached per caller, so follow-up `check=<id>` expansions of the same scan are
+> cheap.
 
 (Word count to be trimmed against the `maxCatalogBytes` budget in
 `internal/mcp/tools_catalog_test.go` — raise the budget deliberately if needed rather than
@@ -282,9 +285,16 @@ Phases 1–3 can land as one PR with three commits, or split if phase 1 review r
 - **Tool name**: leading candidate is **`get_cluster_upgrade_readiness`**. The `cluster`
   qualifier matters: bare "upgrade" collides with Helm upgrades elsewhere in the catalog
   (`get_helm_release`, `get_changes`), and `get_cluster_audit` is exact precedent. A
-  `check_*` verb was considered and rejected — the catalog has no `check_` vocabulary, and
-  it would suggest a yes/no answer the certainty contract explicitly disclaims. Length
-  (29 chars) is fine; agents select on description, not name brevity.
+  `check_*` verb was considered and rejected — the catalog has no `check_` vocabulary, it
+  doesn't reliably signal effort, and it suggests a yes/no answer the certainty contract
+  explicitly disclaims. If the name itself should signal non-trivial work, the in-catalog
+  precedent is `diagnose` (active analysis, not retrieval) and the honest alternative is
+  **`analyze_upgrade_readiness`**. Note the tension: the intended flow is overview →
+  several `check=<id>` expansions, and with the memo those follow-ups are nearly free — a
+  name radiating "heavy operation" discourages exactly the drill-in we want. The cost
+  profile therefore lives in the description ("first call runs a live scan… expansions are
+  cheap"), which is where agents actually read it. Length (29 chars) is fine; agents select
+  on description, not name brevity.
 - **Finding cap value** (25 proposed) and whether `level` filtering is worth the extra
   parameter in v1 or should wait for real usage.
 - **Should tier 1 include per-check `summary` text** (~18 sentences, ≈1 KB) or only on
