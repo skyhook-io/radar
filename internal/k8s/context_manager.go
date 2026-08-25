@@ -428,7 +428,7 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 		elapsed := time.Since(switchStart).Truncate(time.Millisecond)
 		log.Printf("[ops] Context switch FAILED at SwitchContext: %v (%v since switch start)", err, elapsed)
 		errorlog.Record("context-switch", "error",
-			"stage=SwitchContext target=%q elapsed=%v: %v", newContext, elapsed, err)
+			"stage=SwitchContext target=%q elapsed=%v: %s", newContext, elapsed, kubeconfigDiagnosticError(err))
 		return fmt.Errorf("failed to switch context: %w", err)
 	}
 	logTiming("   [ops] SwitchContext: %v", time.Since(t))

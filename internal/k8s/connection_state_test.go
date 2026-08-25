@@ -291,6 +291,11 @@ func TestClassifyError(t *testing.T) {
 			want: "config",
 		},
 		{
+			name: "context switch kubeconfig load failure is config",
+			err:  `failed to switch context: failed to load kubeconfig: error loading config file "/Users/alice/.kube/broken": yaml: line 3`,
+			want: "config",
+		},
+		{
 			name: "no context configured is config",
 			err:  "no context configured",
 			want: "config",
