@@ -229,11 +229,15 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	// Connection — always available, no cluster needed
 	collectSafe("connection", &errs, func() {
 		status := k8s.GetConnectionStatus()
+		connectionError := status.Error
+		if status.ErrorType == "config" && connectionError != "" {
+			connectionError = "Kubeconfig initialization failed; see local Radar logs for details"
+		}
 		snap.Connection = &DiagConnection{
 			State:       string(status.State),
 			Context:     status.Context,
 			ClusterName: status.ClusterName,
-			Error:       status.Error,
+			Error:       connectionError,
 			ErrorType:   status.ErrorType,
 		}
 	})

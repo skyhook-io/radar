@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/desktopenv"
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/version"
 )
 
@@ -33,6 +34,24 @@ func TestDiagnosticsIncludesDesktopSectionForDesktopApp(t *testing.T) {
 	want := desktopenv.Collect() != nil
 	if got != want {
 		t.Errorf("desktop section present = %v, want %v for this platform", got, want)
+	}
+}
+
+func TestDiagnosticsRedactsLocalKubeconfigError(t *testing.T) {
+	previous := k8s.GetConnectionStatus()
+	t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{
+		State:     k8s.StateDisconnected,
+		Error:     `failed to build kubeconfig from "/Users/alice/.kube/config": yaml: line 3`,
+		ErrorType: "config",
+	})
+
+	var connection DiagConnection
+	if err := json.Unmarshal(diagnosticsBody(t)["connection"], &connection); err != nil {
+		t.Fatalf("decode connection diagnostics: %v", err)
+	}
+	if connection.Error != "Kubeconfig initialization failed; see local Radar logs for details" {
+		t.Fatalf("connection error = %q", connection.Error)
 	}
 }
 

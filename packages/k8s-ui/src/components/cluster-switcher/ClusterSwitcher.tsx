@@ -216,7 +216,7 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
         disabled={disabled || loading}
         className={
           variant === 'segment'
-            ? `flex items-center gap-1.5 px-3 py-1.5 h-full min-w-[150px] max-w-[264px] text-[13px] font-medium
+            ? `flex items-center gap-1.5 px-3 py-1.5 h-full min-w-[150px] max-w-[264px] overflow-hidden text-[13px] font-medium
                text-theme-text-primary hover:bg-theme-hover transition-colors cursor-pointer
                disabled:opacity-50 disabled:cursor-not-allowed`
             : `flex items-center gap-1.5 px-2.5 py-1.5 min-w-[140px]
@@ -243,14 +243,19 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
           // context inline (per-row secondary line), and an extra hover
           // tooltip would just overlap the search input.
           <>
-            <ClusterName
-              name={currentName}
-              fallbackBadge={<Server className="w-3.5 h-3.5 text-theme-text-secondary" />}
-              className={variant === 'segment' ? 'min-w-0 max-w-[214px]' : TRIGGER_NAME_MAX_WIDTH}
-              noTooltip={isOpen}
-            />
+            <span className={variant === 'segment' ? 'min-w-0 flex-1' : 'min-w-0'}>
+              <ClusterName
+                name={currentName}
+                fallbackBadge={<Server className="w-3.5 h-3.5 text-theme-text-secondary" />}
+                className={variant === 'segment' ? 'min-w-0 max-w-full' : TRIGGER_NAME_MAX_WIDTH}
+                noTooltip={isOpen}
+              />
+            </span>
             {currentNameQualifier && (
-              <span className="shrink-0 text-xs font-normal text-theme-text-tertiary">
+              <span
+                className="shrink-0 max-w-[80px] truncate text-xs font-normal text-theme-text-tertiary"
+                title={currentNameQualifier}
+              >
                 {currentNameQualifier}
               </span>
             )}
@@ -371,7 +376,10 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
                               }`}
                             />
                             {item.nameQualifier && (
-                              <span className="shrink-0 text-xs font-normal text-theme-text-tertiary">
+                              <span
+                                className="shrink-0 max-w-[120px] truncate text-xs font-normal text-theme-text-tertiary"
+                                title={item.nameQualifier}
+                              >
                                 {item.nameQualifier}
                               </span>
                             )}

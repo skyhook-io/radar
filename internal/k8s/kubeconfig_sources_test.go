@@ -201,7 +201,7 @@ func TestResolveKubeconfigSourcesDirectories(t *testing.T) {
 		if err == nil {
 			t.Fatal("resolveKubeconfigSources returned nil error")
 		}
-		if !strings.Contains(err.Error(), "is unusable") || !strings.Contains(err.Error(), filepath.Base(invalid)) || strings.Contains(err.Error(), home) {
+		if !strings.Contains(err.Error(), "is unusable") || !strings.Contains(err.Error(), filepath.Base(invalid)) {
 			t.Fatalf("error = %q", err)
 		}
 		entries := errorlog.GetEntries()

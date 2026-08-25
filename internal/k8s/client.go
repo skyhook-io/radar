@@ -251,7 +251,6 @@ func doInit(opts InitOptions) error {
 
 		config, err = kubeConfig.ClientConfig()
 		if err != nil {
-			log.Printf("Kubeconfig client config failed (mode=%s): %v", kubeconfigMode, err)
 			// Record to errorlog so the failure lands in the diagnostics
 			// snapshot's recentErrors. Include only the file count and mode —
 			// never the kubeconfig paths — so the snapshot stays shareable.
@@ -259,11 +258,9 @@ func doInit(opts InitOptions) error {
 				"failed to build kubeconfig client config (mode=%s, files=%d): %s",
 				kubeconfigMode, len(kubeconfigPaths), kubeconfigDiagnosticError(err))
 			if len(kubeconfigPaths) > 0 {
-				return fmt.Errorf("failed to build kubeconfig from %d files: %s",
-					len(kubeconfigPaths), kubeconfigDiagnosticError(err))
+				return fmt.Errorf("failed to build kubeconfig from %d files: %w", len(kubeconfigPaths), err)
 			}
-			return fmt.Errorf("failed to build kubeconfig from %q: %s",
-				filepath.Base(kubeconfigPath), kubeconfigDiagnosticError(err))
+			return fmt.Errorf("failed to build kubeconfig from %s: %w", kubeconfigPath, err)
 		}
 	}
 
@@ -308,11 +305,10 @@ func resolveKubeconfigSources(opts InitOptions, kubeconfigEnv, homeDir string) (
 		if len(primaryPaths) > 0 {
 			if ok, cause := hasUsableKubeconfig(primaryPaths[0]); !ok {
 				if cause != nil {
-					log.Printf("Configured primary kubeconfig %s is unusable: %v", primaryPaths[0], cause)
 					errorlog.Record("k8s-init", "error", "primary kubeconfig unusable (%q): %s",
 						filepath.Base(primaryPaths[0]), kubeconfigDiagnosticError(cause))
-					return kubeconfigSources{}, fmt.Errorf("configured primary kubeconfig is unusable (%q: %s)",
-						filepath.Base(primaryPaths[0]), kubeconfigDiagnosticError(cause))
+					return kubeconfigSources{}, fmt.Errorf("configured primary kubeconfig is unusable (%q): %w",
+						filepath.Base(primaryPaths[0]), cause)
 				}
 				errorlog.Record("k8s-init", "error", "primary kubeconfig contains no contexts")
 				return kubeconfigSources{}, fmt.Errorf("configured primary kubeconfig contains no usable contexts")
