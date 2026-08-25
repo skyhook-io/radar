@@ -80,6 +80,14 @@ func TestDetectOpenCostCurrency(t *testing.T) {
 			want: "EUR",
 		},
 		{
+			name: "current currency missing from CLDR",
+			objects: []any{
+				openCostDeployment("opencost", "opencost", "custom-pricing-model"),
+				pricingConfigMap("opencost", "custom-pricing-model", map[string]string{"currencyCode": "ves"}),
+			},
+			want: "VES",
+		},
+		{
 			name: "custom referenced config map with json",
 			objects: []any{
 				openCostDeployment("finops", "cost-analyzer", "company-pricing"),

@@ -7,6 +7,17 @@ import (
 	"golang.org/x/text/currency"
 )
 
+var currentISO4217CodesMissingFromCLDR = map[string]struct{}{
+	"MRU": {},
+	"SLE": {},
+	"UYW": {},
+	"VED": {},
+	"VES": {},
+	"XAD": {},
+	"XCG": {},
+	"ZWG": {},
+}
+
 func NormalizeOpenCostCurrency(raw string) (string, error) {
 	code := strings.ToUpper(strings.TrimSpace(raw))
 	if code == "" {
@@ -17,7 +28,10 @@ func NormalizeOpenCostCurrency(raw string) (string, error) {
 	}
 	unit, err := currency.ParseISO(code)
 	if err != nil {
-		return "", fmt.Errorf("must be a recognized ISO 4217 currency code: %w", err)
+		if _, ok := currentISO4217CodesMissingFromCLDR[code]; !ok {
+			return "", fmt.Errorf("must be a recognized ISO 4217 currency code: %w", err)
+		}
+		return code, nil
 	}
 	return unit.String(), nil
 }

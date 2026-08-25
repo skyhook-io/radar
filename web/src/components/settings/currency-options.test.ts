@@ -15,6 +15,9 @@ describe('currency options', () => {
       value: 'USD',
       label: 'US Dollar (USD)',
     })
+    for (const code of ['MRU', 'SLE', 'UYW', 'VED', 'VES', 'XAD', 'XCG', 'ZWG']) {
+      expect(CURRENCY_OPTIONS.some((option) => option.value === code)).toBe(true)
+    }
   })
 
   it('contains unique uppercase three-letter currency codes', () => {
