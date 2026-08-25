@@ -992,7 +992,8 @@ function ClusterSection({
   effectiveConfig?: Config
   onChange: <K extends keyof Config>(field: K, value: Config[K]) => void
 }) {
-  const hasKubeconfigDirs = ((effectiveConfig?.kubeconfigDirs ?? config.kubeconfigDirs)?.length ?? 0) > 0
+  const kubeconfigDirs = effectiveConfig ? (effectiveConfig.kubeconfigDirs ?? []) : config.kubeconfigDirs
+  const hasKubeconfigDirs = (kubeconfigDirs?.length ?? 0) > 0
 
   return (
     <>

@@ -229,7 +229,7 @@ function KubeconfigSection({ data }: { data: DiagnosticsSnapshot }) {
       <Row label="KUBECONFIG Captured From Shell" value={k.enrichedFromShell ? 'Yes' : 'No'} />
       <Row
         label="KUBECONFIG Ignored"
-        value={k.kubeconfigEnvIgnored ? 'Yes — directories-only configuration' : 'No'}
+        value={k.kubeconfigEnvIgnored ? `Yes — ${k.kubeconfigEnvIgnoredReason}` : 'No'}
         warn={k.kubeconfigEnvIgnored}
       />
       <Row
@@ -643,7 +643,7 @@ export function formatForGitHub(data: DiagnosticsSnapshot, frontendPerf?: K8sUIP
       ? ` | Directory Files: ${k.directoryFileCount}`
       : ''
     lines.push(`- Mode: \`${k.mode || '(not initialized)'}\` | Files: ${k.fileCount}${directoryFiles} | Contexts (after source resolution): ${k.contextCount}`)
-    lines.push(`- KUBECONFIG Captured From Shell: ${k.enrichedFromShell ? 'Yes' : 'No'} | Ignored: ${k.kubeconfigEnvIgnored ? 'Yes — directories-only configuration' : 'No'}`)
+    lines.push(`- KUBECONFIG Captured From Shell: ${k.enrichedFromShell ? 'Yes' : 'No'} | Ignored: ${k.kubeconfigEnvIgnored ? `Yes — ${k.kubeconfigEnvIgnoredReason}` : 'No'}`)
     lines.push(`- Current Context Uses Exec: ${k.currentContextUsesExec ? 'Yes' : 'No'}`)
     if (k.execPluginsPresent && k.execPluginsPresent.length > 0) {
       lines.push(`- Exec Plugins on PATH: \`${k.execPluginsPresent.join('`, `')}\``)

@@ -29,6 +29,16 @@ func TestResolveKubeconfigSourcesDirectAndFallbackModes(t *testing.T) {
 		}
 	})
 
+	t.Run("configured path reports ignored environment", func(t *testing.T) {
+		got, err := resolveKubeconfigSources(InitOptions{KubeconfigPath: configPath}, "/ambient/config", home)
+		if err != nil {
+			t.Fatalf("resolveKubeconfigSources: %v", err)
+		}
+		if !got.ignoredKubeconfigEnv || got.ignoredKubeconfigEnvReason != "primary kubeconfig configured" {
+			t.Fatalf("resolution = %+v", got)
+		}
+	})
+
 	t.Run("environment path is used without configured sources", func(t *testing.T) {
 		got, err := resolveKubeconfigSources(InitOptions{}, configPath, home)
 		if err != nil {
@@ -111,7 +121,7 @@ func TestResolveKubeconfigSourcesDirectories(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveKubeconfigSources: %v", err)
 		}
-		if got.mode != "multi-dir" || !got.useRegistry || !got.ignoredKubeconfigEnv {
+		if got.mode != "multi-dir" || !got.useRegistry || !got.ignoredKubeconfigEnv || got.ignoredKubeconfigEnvReason != "directories-only configuration" {
 			t.Fatalf("resolution = %+v", got)
 		}
 		if len(got.paths) != 1 || got.paths[0] != additional {
@@ -123,11 +133,12 @@ func TestResolveKubeconfigSourcesDirectories(t *testing.T) {
 		got, err := resolveKubeconfigSources(InitOptions{
 			KubeconfigPath: primary,
 			KubeconfigDirs: []string{additionalDir},
-		}, "", home)
+		}, filepath.Join(home, "ambient"), home)
 		if err != nil {
 			t.Fatalf("resolveKubeconfigSources: %v", err)
 		}
-		if got.mode != "multi-source" || !got.useRegistry || got.directoryFileCount != 1 {
+		if got.mode != "multi-source" || !got.useRegistry || got.directoryFileCount != 1 ||
+			!got.ignoredKubeconfigEnv || got.ignoredKubeconfigEnvReason != "primary kubeconfig configured" {
 			t.Fatalf("resolution = %+v", got)
 		}
 		if len(got.paths) != 2 || got.paths[0] != primary || got.paths[1] != additional {
@@ -235,6 +246,18 @@ func TestScrubKubeconfigLoadErrorRemovesSourcePath(t *testing.T) {
 	got := scrubKubeconfigLoadError(path, errors.New("decode "+path+": line 3"))
 	if strings.Contains(got, filepath.Dir(path)) || !strings.Contains(got, "config: line 3") {
 		t.Fatalf("scrubbed error = %q", got)
+	}
+}
+
+func TestKubeconfigDiagnosticErrorOmitsParserDetails(t *testing.T) {
+	got := kubeconfigDiagnosticError(errors.New("server https://private.example and user alice"))
+	if got != "configuration parse error" {
+		t.Fatalf("diagnostic error = %q", got)
+	}
+
+	got = kubeconfigDiagnosticError(&os.PathError{Op: "open", Path: "/private/config", Err: os.ErrNotExist})
+	if strings.Contains(got, "/private/config") || !strings.Contains(got, "open: file does not exist") {
+		t.Fatalf("path diagnostic error = %q", got)
 	}
 }
 

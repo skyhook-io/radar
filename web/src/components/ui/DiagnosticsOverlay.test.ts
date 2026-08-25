@@ -85,6 +85,7 @@ describe('formatForGitHub kubeconfig section', () => {
         contextCount: 7,
         enrichedFromShell: true,
         kubeconfigEnvIgnored: true,
+        kubeconfigEnvIgnoredReason: 'directories-only configuration',
         currentContextUsesExec: false,
       },
     }, undefined, false)
@@ -103,6 +104,7 @@ describe('formatForGitHub kubeconfig section', () => {
         contextCount: 4,
         enrichedFromShell: false,
         kubeconfigEnvIgnored: false,
+        kubeconfigEnvIgnoredReason: '',
         currentContextUsesExec: true,
       },
     }, undefined, false)

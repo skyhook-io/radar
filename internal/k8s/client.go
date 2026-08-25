@@ -38,6 +38,7 @@ var (
 	kubeconfigMode               string   // One of: "in-cluster", "single", "multi-env", "multi-dir", "multi-source"
 	kubeconfigDirectoryFileCount int
 	kubeconfigEnvWasIgnored      bool
+	kubeconfigEnvIgnoredReason   string
 	totalContextCount            int // Total number of contexts exposed across all kubeconfig files
 	// contextRegistry maps each user-facing context name to its source file and
 	// the name it has inside that file. Populated for directory-backed loading,
@@ -110,12 +111,13 @@ type InitOptions struct {
 }
 
 type kubeconfigSources struct {
-	paths                []string
-	mode                 string
-	useRegistry          bool
-	tryInCluster         bool
-	ignoredKubeconfigEnv bool
-	directoryFileCount   int
+	paths                      []string
+	mode                       string
+	useRegistry                bool
+	tryInCluster               bool
+	ignoredKubeconfigEnv       bool
+	ignoredKubeconfigEnvReason string
+	directoryFileCount         int
 }
 
 // Initialize initializes the K8s client with the given options
@@ -142,11 +144,12 @@ func doInit(opts InitOptions) error {
 		return err
 	}
 	kubeconfigEnvWasIgnored = sources.ignoredKubeconfigEnv
+	kubeconfigEnvIgnoredReason = sources.ignoredKubeconfigEnvReason
 	kubeconfigDirectoryFileCount = sources.directoryFileCount
 	if sources.ignoredKubeconfigEnv {
-		log.Printf("KUBECONFIG is set but ignored because kubeconfig directories are configured without a primary kubeconfig")
+		log.Printf("KUBECONFIG is set but ignored: %s", sources.ignoredKubeconfigEnvReason)
 		errorlog.Record("k8s-init", "warning",
-			"KUBECONFIG was ignored because kubeconfig directories are configured without a primary kubeconfig")
+			"KUBECONFIG was ignored: %s", sources.ignoredKubeconfigEnvReason)
 	}
 
 	if sources.tryInCluster {
@@ -196,7 +199,7 @@ func doInit(opts InitOptions) error {
 		if rawErr != nil {
 			log.Printf("Kubeconfig metadata load failed (mode=%s): %v", kubeconfigMode, rawErr)
 			errorlog.Record("k8s-init", "error",
-				"RawConfig() failed; context metadata and diagnostic counts unavailable: %v", rawErr)
+				"RawConfig() failed; context metadata and diagnostic counts unavailable: %s", kubeconfigDiagnosticError(rawErr))
 		} else {
 			// In isolated-load mode, rawConfig reflects the single chosen
 			// file — which is all the current context needs, but the
@@ -252,8 +255,8 @@ func doInit(opts InitOptions) error {
 			// snapshot's recentErrors. Include only the file count and mode —
 			// never the kubeconfig paths — so the snapshot stays shareable.
 			errorlog.Record("k8s-init", "error",
-				"failed to build kubeconfig client config (mode=%s, files=%d): %v",
-				kubeconfigMode, len(kubeconfigPaths), err)
+				"failed to build kubeconfig client config (mode=%s, files=%d): %s",
+				kubeconfigMode, len(kubeconfigPaths), kubeconfigDiagnosticError(err))
 			if len(kubeconfigPaths) > 0 {
 				return fmt.Errorf("failed to build kubeconfig from %d files: %w", len(kubeconfigPaths), err)
 			}
@@ -302,8 +305,10 @@ func resolveKubeconfigSources(opts InitOptions, kubeconfigEnv, homeDir string) (
 		if len(primaryPaths) > 0 {
 			if ok, cause := hasUsableKubeconfig(primaryPaths[0]); !ok {
 				if cause != nil {
-					errorlog.Record("k8s-init", "error", "primary kubeconfig unusable: %v", cause)
-					return kubeconfigSources{}, fmt.Errorf("configured primary kubeconfig is unusable (%v)", cause)
+					errorlog.Record("k8s-init", "error", "primary kubeconfig unusable (%q): %s",
+						filepath.Base(primaryPaths[0]), kubeconfigDiagnosticError(cause))
+					return kubeconfigSources{}, fmt.Errorf("configured primary kubeconfig is unusable (%q: %s)",
+						filepath.Base(primaryPaths[0]), scrubKubeconfigLoadError(primaryPaths[0], cause))
 				}
 				errorlog.Record("k8s-init", "error", "primary kubeconfig contains no contexts")
 				return kubeconfigSources{}, fmt.Errorf("configured primary kubeconfig contains no usable contexts")
@@ -313,23 +318,39 @@ func resolveKubeconfigSources(opts InitOptions, kubeconfigEnv, homeDir string) (
 			return kubeconfigSources{}, fmt.Errorf("no valid kubeconfig files found in directories: %v", opts.KubeconfigDirs)
 		}
 
-		primaryPaths = dedupeKubeconfigPaths(primaryPaths)
 		paths := dedupeKubeconfigPaths(append(append([]string(nil), primaryPaths...), discovered...))
 		mode := "multi-dir"
+		ignoredReason := ""
 		if len(primaryPaths) > 0 {
 			mode = "multi-source"
 		}
+		if kubeconfigEnv != "" {
+			ignoredReason = "directories-only configuration"
+			if len(primaryPaths) > 0 {
+				ignoredReason = "primary kubeconfig configured"
+			}
+		}
 		return kubeconfigSources{
-			paths:                paths,
-			mode:                 mode,
-			useRegistry:          true,
-			ignoredKubeconfigEnv: len(primaryPaths) == 0 && kubeconfigEnv != "",
-			directoryFileCount:   len(paths) - len(primaryPaths),
+			paths:                      paths,
+			mode:                       mode,
+			useRegistry:                true,
+			ignoredKubeconfigEnv:       ignoredReason != "",
+			ignoredKubeconfigEnvReason: ignoredReason,
+			directoryFileCount:         len(paths) - len(primaryPaths),
 		}, nil
 	}
 
 	if len(primaryPaths) == 1 {
-		return kubeconfigSources{paths: primaryPaths, mode: "single"}, nil
+		ignoredReason := ""
+		if kubeconfigEnv != "" {
+			ignoredReason = "primary kubeconfig configured"
+		}
+		return kubeconfigSources{
+			paths:                      primaryPaths,
+			mode:                       "single",
+			ignoredKubeconfigEnv:       ignoredReason != "",
+			ignoredKubeconfigEnvReason: ignoredReason,
+		}, nil
 	}
 
 	if kubeconfigEnv != "" {
@@ -417,7 +438,7 @@ func NormalizeKubeconfigPath(value string) (string, error) {
 func hasUsableKubeconfig(path string) (bool, error) {
 	cfg, err := clientcmd.LoadFromFile(path)
 	if err != nil {
-		return false, fmt.Errorf("%q: %s", filepath.Base(path), scrubKubeconfigLoadError(path, err))
+		return false, err
 	}
 	return len(cfg.Contexts) > 0, nil
 }
@@ -526,6 +547,14 @@ func scrubKubeconfigLoadError(path string, err error) string {
 	return strings.ReplaceAll(err.Error(), path, filepath.Base(path))
 }
 
+func kubeconfigDiagnosticError(err error) string {
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return scrubPathError(err)
+	}
+	return "configuration parse error"
+}
+
 // isValidKubeconfig checks if a file is a valid kubeconfig
 func isValidKubeconfig(path string) bool {
 	// Try to load the file as a kubeconfig
@@ -591,15 +620,16 @@ func GetKubeconfigPath() string {
 // suitable for inclusion in diagnostic output. It never includes the resolved
 // paths themselves, only counts, mode flags, and exec plugin basenames.
 type KubeconfigSummary struct {
-	Mode                   string   // "in-cluster", "single", "multi-env", "multi-dir", "multi-source", or "" if not initialized
-	FileCount              int      // Number of kubeconfig files loaded (0 for in-cluster)
-	DirectoryFileCount     int      // Number of loaded files discovered from configured directories
-	ContextCount           int      // Number of contexts exposed after source resolution
-	EnrichedFromShell      bool     // Desktop app captured KUBECONFIG from login shell
-	KubeconfigEnvIgnored   bool     // KUBECONFIG was suppressed by a directories-only configuration
-	CurrentContextUsesExec bool     // Current context's AuthInfo uses an exec credential plugin
-	ExecPluginsPresent     []string // Unique exec plugin command basenames (any context) resolvable on $PATH
-	ExecPluginsMissing     []string // Unique exec plugin command basenames (any context) NOT resolvable on $PATH
+	Mode                       string   // "in-cluster", "single", "multi-env", "multi-dir", "multi-source", or "" if not initialized
+	FileCount                  int      // Number of kubeconfig files loaded (0 for in-cluster)
+	DirectoryFileCount         int      // Number of loaded files discovered from configured directories
+	ContextCount               int      // Number of contexts exposed after source resolution
+	EnrichedFromShell          bool     // Desktop app captured KUBECONFIG from login shell
+	KubeconfigEnvIgnored       bool     // KUBECONFIG was suppressed by configured sources
+	KubeconfigEnvIgnoredReason string   // Non-sensitive reason KUBECONFIG was suppressed
+	CurrentContextUsesExec     bool     // Current context's AuthInfo uses an exec credential plugin
+	ExecPluginsPresent         []string // Unique exec plugin command basenames (any context) resolvable on $PATH
+	ExecPluginsMissing         []string // Unique exec plugin command basenames (any context) NOT resolvable on $PATH
 }
 
 // GetKubeconfigSummary returns the current kubeconfig loading state for
@@ -622,6 +652,7 @@ func GetKubeconfigSummary() KubeconfigSummary {
 	directoryFileCount := kubeconfigDirectoryFileCount
 	enriched := enrichedKubeconfigFromShell
 	envIgnored := kubeconfigEnvWasIgnored
+	envIgnoredReason := kubeconfigEnvIgnoredReason
 	currentExec := contextUsesExec
 	cmds := append([]string(nil), execPluginCommands...)
 	clientMu.RUnlock()
@@ -638,15 +669,16 @@ func GetKubeconfigSummary() KubeconfigSummary {
 	}
 
 	return KubeconfigSummary{
-		Mode:                   mode,
-		FileCount:              fileCount,
-		DirectoryFileCount:     directoryFileCount,
-		ContextCount:           contextCount,
-		EnrichedFromShell:      enriched,
-		KubeconfigEnvIgnored:   envIgnored,
-		CurrentContextUsesExec: currentExec,
-		ExecPluginsPresent:     present,
-		ExecPluginsMissing:     missing,
+		Mode:                       mode,
+		FileCount:                  fileCount,
+		DirectoryFileCount:         directoryFileCount,
+		ContextCount:               contextCount,
+		EnrichedFromShell:          enriched,
+		KubeconfigEnvIgnored:       envIgnored,
+		KubeconfigEnvIgnoredReason: envIgnoredReason,
+		CurrentContextUsesExec:     currentExec,
+		ExecPluginsPresent:         present,
+		ExecPluginsMissing:         missing,
 	}
 }
 

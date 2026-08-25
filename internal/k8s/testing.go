@@ -286,6 +286,7 @@ func ResetTestState() {
 	kubeconfigMode = ""
 	kubeconfigDirectoryFileCount = 0
 	kubeconfigEnvWasIgnored = false
+	kubeconfigEnvIgnoredReason = ""
 	clientMu.Unlock()
 
 	// Reset capabilities cache
