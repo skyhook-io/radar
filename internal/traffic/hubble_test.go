@@ -189,6 +189,33 @@ func TestComposeConnectErrorForbiddenRemediation(t *testing.T) {
 	}
 }
 
+func TestConnectRefusedAfterClose(t *testing.T) {
+	h := NewHubbleSource(fake.NewSimpleClientset())
+	h.relayNamespace = "kube-system"
+	if err := h.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	info, err := h.Connect(context.Background(), "test-ctx")
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	if info.Connected || !strings.Contains(info.Error, "closed") {
+		t.Errorf("closed source Connect = {connected:%v err:%q}, want refusal", info.Connected, info.Error)
+	}
+
+	c := &CarettaSource{}
+	if err := c.Close(); err != nil {
+		t.Fatalf("caretta Close: %v", err)
+	}
+	cInfo, err := c.Connect(context.Background(), "test-ctx")
+	if err != nil {
+		t.Fatalf("caretta Connect: %v", err)
+	}
+	if cInfo.Connected || !strings.Contains(cInfo.Error, "closed") {
+		t.Errorf("closed caretta Connect = {connected:%v err:%q}, want refusal", cInfo.Connected, cInfo.Error)
+	}
+}
+
 func TestForwardMatches(t *testing.T) {
 	live := &portforward.ConnectionInfo{
 		Connected: true, Namespace: "kube-system", ServiceName: hubbleRelayService, ContextName: "ctx-a",

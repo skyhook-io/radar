@@ -91,6 +91,7 @@ type CarettaSource struct {
 	backendVerified     bool   // bound backend proved it holds Caretta metrics
 	boundIsCarettaStore bool   // bound backend is Caretta's own store, trusted on identity
 	backendWarning      string // why no backend could be bound, surfaced to the UI
+	closed              bool   // set by Close; a late Connect must not resurrect the source
 	mu                  sync.RWMutex
 }
 
@@ -885,6 +886,7 @@ func (c *CarettaSource) Close() error {
 	c.boundIsCarettaStore = false
 	c.backendVerified = false
 	c.backendWarning = ""
+	c.closed = true
 	return nil
 }
 
@@ -893,6 +895,16 @@ func (c *CarettaSource) Close() error {
 func (c *CarettaSource) Connect(ctx context.Context, contextName string) (*portforward.ConnectionInfo, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// A Connect that raced Close (context switch) must not resurrect the
+	// source — its forward would point at the previous cluster and outlive
+	// Reset's cleanup.
+	if c.closed {
+		return &portforward.ConnectionInfo{
+			Connected: false,
+			Error:     "traffic source closed (context switched)",
+		}, nil
+	}
 
 	// If already connected to the same context, check if still valid
 	if c.prometheusAddr != "" && c.currentContext == contextName {
