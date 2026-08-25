@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import {
   Settings, X, RotateCcw, RotateCw, Loader2, Copy, Check, Pin, Shield, Lock, Plug,
   Plus, Terminal, Boxes, Activity, GitBranch, Sparkles, SlidersHorizontal, Zap,
-  LayoutDashboard, ChevronRight, ExternalLink, Download, AlertTriangle,
+  LayoutDashboard, ChevronRight, ExternalLink, Download, AlertTriangle, ArrowDownUp,
   type LucideIcon,
 } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -14,11 +14,12 @@ import {
   useCloudRole, useVersionCheck, useClusterInfo, usePrometheusStatus, useArgoStatus,
 } from '../../api/client'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
-import { Input } from '@skyhook-io/k8s-ui'
+import { Input, sortColumnLabel, CROSS_KIND_SORT_COLUMNS } from '@skyhook-io/k8s-ui'
 import { Tooltip } from '../ui/Tooltip'
 import { AISettingsSection, type AIDraft } from '../diagnose/AISettings'
 import { MyPermissionsContent } from './MyPermissionsDialog'
 import { useDiagnose } from '../diagnose/DiagnoseContext'
+import { useDefaultSort, type DefaultSort } from '../../hooks/useDefaultSort'
 
 // The loopback URL an MCP client is told to connect to. Shared by the overview
 // row and the MCP section: both must carry the base path, or the URL they
@@ -76,9 +77,10 @@ interface SettingsDialogProps {
 //     owner-gated footer to the config file; effect on next launch.
 //   • Live integrations (Prometheus, Argo CD) — their own Apply/Connect endpoints
 //     re-point the running server; effect immediately, NOT part of footer dirty.
-//   • AI diagnose — client-side prefs, self-saving, editable by everyone.
+//   • Personal prefs (Preferences, AI diagnose) — client-side, self-saving,
+//     editable by everyone.
 export type SettingsSectionId =
-  | 'overview' | 'perms' | 'connection' | 'prometheus' | 'argocd' | 'ai' | 'advanced'
+  | 'overview' | 'perms' | 'preferences' | 'connection' | 'prometheus' | 'argocd' | 'ai' | 'advanced'
 
 // Only STARTUP fields count toward footer dirty. Integration fields (prometheusUrl,
 // argoCdUrl, argoCdInsecureTls) apply live and are excluded here. Every field is
@@ -122,6 +124,7 @@ export function SettingsDialog({
   const [loadError, setLoadError] = useState<string | null>(null)
   const [section, setSection] = useState<SettingsSectionId>('overview')
   const [confirmingClose, setConfirmingClose] = useState(false)
+  const { defaultSort, setDefaultSort } = useDefaultSort()
 
   // AI Diagnosis prefs are client-side (localStorage) and now SELF-SAVING: the
   // section has its own Save that commits the draft to DiagnoseContext, so it's
@@ -324,6 +327,7 @@ export function SettingsDialog({
   const navItems: NavItemDef[] = [
     { id: 'overview', label: 'Overview', icon: LayoutDashboard, ownerOnly: false, dirty: false },
     { id: 'perms', label: 'My permissions', icon: Shield, ownerOnly: false, dirty: false },
+    { id: 'preferences', label: 'Preferences', icon: ArrowDownUp, ownerOnly: false, dirty: false },
     { id: 'connection', label: 'Connection', icon: Boxes, ownerOnly: true, dirty: connectionDirty },
     { id: 'prometheus', label: 'Prometheus', icon: Activity, ownerOnly: true, dirty: false },
     { id: 'argocd', label: 'Argo CD', icon: GitBranch, ownerOnly: true, dirty: false },
@@ -448,6 +452,17 @@ export function SettingsDialog({
                 <MyPermissionsContent active={section === 'perms'} />
               </div>
             </div>
+
+            {/* Preferences — personal, self-saving (like AI diagnose), not owner-gated */}
+            <SectionPane
+              id="preferences"
+              active={section}
+              title="Preferences"
+              caption="Saved as you change them — no restart."
+              live
+            >
+              <DefaultSortSection defaultSort={defaultSort} onDefaultSortChange={setDefaultSort} />
+            </SectionPane>
 
             {/* Connection — Cluster + Server merged */}
             <SectionPane
@@ -681,6 +696,109 @@ export function SettingsDialog({
       </div>
     </div>,
     document.body
+  )
+}
+
+// -- Default sort preference --------------------------------------------------
+
+// Kind-agnostic columns only: this preference applies to every resource table,
+// and a kind that lacks the chosen column falls back to its built-in order.
+// Names come from the table's own column definitions so the two can't drift.
+const SORT_COLUMNS = [
+  { value: '', label: 'Each table’s own default' },
+  ...CROSS_KIND_SORT_COLUMNS.map((c) => ({ value: c.key, label: c.label })),
+]
+
+// "Ascending" reads backwards on Age: the table sorts on creationTimestamp, so
+// ascending puts the oldest resources — the largest "40d" values — at the top.
+// At the table you can see the result and correct yourself; here you are choosing
+// blind, so each column names its own directions. A column inherited from a
+// header click can be of any type, so those keep the generic pair.
+const SORT_DIRECTION_LABELS: Record<string, { asc: string; desc: string }> = {
+  name: { asc: 'A → Z', desc: 'Z → A' },
+  namespace: { asc: 'A → Z', desc: 'Z → A' },
+  status: { asc: 'A → Z', desc: 'Z → A' },
+  age: { asc: 'Oldest first', desc: 'Newest first' },
+}
+const GENERIC_DIRECTION_LABELS = { asc: 'Ascending', desc: 'Descending' }
+
+// A header sort saves whatever column the user clicked, including kind-specific
+// ones (Restarts) and user-defined label columns — none of which are in the
+// dropdown. Showing the raw key beats showing "no preference" over an active one.
+function describeSortColumn(key: string): string {
+  const known = sortColumnLabel(key)
+  if (known) return known
+  if (key.startsWith('label:')) return `Label: ${key.slice('label:'.length)}`
+  if (key.startsWith('annotation:')) return `Annotation: ${key.slice('annotation:'.length)}`
+  const spaced = key.replace(/([A-Z])/g, ' $1')
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1)
+}
+
+function DefaultSortSection({
+  defaultSort,
+  onDefaultSortChange,
+}: {
+  defaultSort: DefaultSort | null
+  onDefaultSortChange: (sort: DefaultSort | null) => void
+}) {
+  const isListed = SORT_COLUMNS.some((c) => c.value === (defaultSort?.column ?? ''))
+  const directionLabels =
+    (defaultSort && SORT_DIRECTION_LABELS[defaultSort.column]) || GENERIC_DIRECTION_LABELS
+  return (
+    <div>
+      <label htmlFor="default-sort-column" className="block text-sm font-medium text-theme-text-primary mb-1">
+        Resource table sort
+      </label>
+      <p className="text-xs text-theme-text-tertiary mb-2">
+        Applied on load and when switching resource kinds. Sorting a table from its
+        column header updates this too.
+      </p>
+      <div className="flex flex-col sm:flex-row gap-2">
+        <select
+          id="default-sort-column"
+          value={defaultSort?.column ?? ''}
+          onChange={(e) =>
+            onDefaultSortChange(
+              e.target.value ? { column: e.target.value, direction: defaultSort?.direction ?? 'asc' } : null
+            )
+          }
+          className="flex-1 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary focus:outline-none focus:border-skyhook-500"
+        >
+          {SORT_COLUMNS.map((col) => (
+            <option key={col.value} value={col.value}>{col.label}</option>
+          ))}
+          {defaultSort && !isListed && (
+            <option value={defaultSort.column}>{describeSortColumn(defaultSort.column)}</option>
+          )}
+        </select>
+        {defaultSort && (
+          <div className="flex gap-2 sm:w-56 shrink-0" role="group" aria-label="Sort direction">
+            {(['asc', 'desc'] as const).map((dir) => (
+              <button
+                key={dir}
+                type="button"
+                aria-pressed={defaultSort.direction === dir}
+                onClick={() => onDefaultSortChange({ column: defaultSort.column, direction: dir })}
+                className={clsx(
+                  'flex-1 px-3 py-1.5 text-sm rounded-md border transition-colors',
+                  defaultSort.direction === dir
+                    ? 'btn-brand border-transparent'
+                    : 'bg-theme-elevated border-theme-border text-theme-text-secondary hover:text-theme-text-primary'
+                )}
+              >
+                {directionLabels[dir]}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      {defaultSort && !isListed && (
+        <p className="mt-2 text-xs text-theme-text-tertiary">
+          Set by sorting a table. This column only exists on some resource kinds — the
+          rest keep their own order.
+        </p>
+      )}
+    </div>
   )
 }
 

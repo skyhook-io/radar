@@ -1674,6 +1674,7 @@ func TestSmokeCloudMode_SettingsGetStripsUserScoped(t *testing.T) {
 	// Seed real values into the persisted store so we can prove they're
 	// stripped at the HTTP boundary, not just missing from the file.
 	put(t, "/api/settings", `{"theme":"dark","pinnedKinds":[{"name":"pods","kind":"Pod","group":""}]}`)
+	put(t, "/api/settings", `{"defaultSort":{"column":"age","direction":"desc"}}`)
 
 	t.Setenv("RADAR_CLOUD_MODE", "true")
 
@@ -1684,6 +1685,9 @@ func TestSmokeCloudMode_SettingsGetStripsUserScoped(t *testing.T) {
 	}
 	if _, has := body["pinnedKinds"]; has && body["pinnedKinds"] != nil {
 		t.Errorf("pinnedKinds leaked under cloud mode: %v", body["pinnedKinds"])
+	}
+	if _, has := body["defaultSort"]; has && body["defaultSort"] != nil {
+		t.Errorf("defaultSort leaked under cloud mode: %v", body["defaultSort"])
 	}
 }
 
@@ -1706,6 +1710,131 @@ func TestSmokeCloudMode_SettingsPutRejectsUserScoped(t *testing.T) {
 	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusBadRequest {
 		t.Errorf("PUT with pinnedKinds under cloud mode got %d, want 400", resp2.StatusCode)
+	}
+
+	resp3 := put(t, "/api/settings", `{"defaultSort":{"column":"age","direction":"desc"}}`)
+	defer resp3.Body.Close()
+	if resp3.StatusCode != http.StatusBadRequest {
+		t.Errorf("PUT with defaultSort under cloud mode got %d, want 400", resp3.StatusCode)
+	}
+
+	// Clearing is a write too — an explicit null must be rejected, not treated
+	// as "field absent" and silently allowed through.
+	resp4 := put(t, "/api/settings", `{"defaultSort":null}`)
+	defer resp4.Body.Close()
+	if resp4.StatusCode != http.StatusBadRequest {
+		t.Errorf("PUT with defaultSort:null under cloud mode got %d, want 400", resp4.StatusCode)
+	}
+}
+
+func TestSmokePutSettingsDefaultSort(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	payload := `{"defaultSort":{"column":"age","direction":"desc"}}`
+	resp := put(t, "/api/settings", payload)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var body map[string]any
+	json.NewDecoder(resp.Body).Decode(&body)
+
+	ds, ok := body["defaultSort"].(map[string]any)
+	if !ok {
+		t.Fatalf("defaultSort missing or wrong type: %v", body["defaultSort"])
+	}
+	if ds["column"] != "age" {
+		t.Errorf("defaultSort.column = %v, want age", ds["column"])
+	}
+	if ds["direction"] != "desc" {
+		t.Errorf("defaultSort.direction = %v, want desc", ds["direction"])
+	}
+
+	// Verify it persists
+	var loaded map[string]any
+	assertOK(t, get(t, "/api/settings"), &loaded)
+	lds, _ := loaded["defaultSort"].(map[string]any)
+	if lds["column"] != "age" {
+		t.Errorf("persisted defaultSort.column = %v, want age", lds["column"])
+	}
+}
+
+// TestSmokePutSettingsDefaultSortClear: "no preference" is a real choice, so an
+// explicit null must erase a stored sort. A nil pointer alone can't be told
+// apart from an absent key, which would make the setting one-way.
+func TestSmokePutSettingsDefaultSortClear(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	put(t, "/api/settings", `{"defaultSort":{"column":"age","direction":"desc"}}`)
+
+	resp := put(t, "/api/settings", `{"defaultSort":null}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var loaded map[string]any
+	assertOK(t, get(t, "/api/settings"), &loaded)
+	if v, has := loaded["defaultSort"]; has && v != nil {
+		t.Errorf("defaultSort survived an explicit clear: %v", v)
+	}
+
+	// An omitted key still means "leave it alone".
+	put(t, "/api/settings", `{"defaultSort":{"column":"age","direction":"desc"}}`)
+	put(t, "/api/settings", `{"theme":"dark"}`)
+	var reloaded map[string]any
+	assertOK(t, get(t, "/api/settings"), &reloaded)
+	ds, _ := reloaded["defaultSort"].(map[string]any)
+	if ds["column"] != "age" {
+		t.Errorf("omitting defaultSort cleared it: %v", reloaded["defaultSort"])
+	}
+}
+
+// TestSmokePutSettingsDefaultSortRejectsInvalid: the value is echoed straight
+// back to every table, so a nonsense direction or an empty column is rejected
+// at the boundary rather than persisted for the UI to interpret.
+func TestSmokePutSettingsDefaultSortRejectsInvalid(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	for _, payload := range []string{
+		`{"defaultSort":{"column":"age","direction":"sideways"}}`,
+		`{"defaultSort":{"column":"age"}}`,
+		`{"defaultSort":{"column":"","direction":"asc"}}`,
+	} {
+		resp := put(t, "/api/settings", payload)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("PUT %s got %d, want 400", payload, resp.StatusCode)
+		}
+		resp.Body.Close()
+	}
+
+	var loaded map[string]any
+	assertOK(t, get(t, "/api/settings"), &loaded)
+	if v, has := loaded["defaultSort"]; has && v != nil {
+		t.Errorf("rejected defaultSort was persisted anyway: %v", v)
+	}
+}
+
+func TestSmokePutSettingsDefaultSortPreservesOther(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// Set theme first
+	put(t, "/api/settings", `{"theme":"dark"}`)
+
+	// Now set defaultSort — theme should be preserved
+	resp := put(t, "/api/settings", `{"defaultSort":{"column":"name","direction":"asc"}}`)
+	defer resp.Body.Close()
+
+	var body map[string]any
+	json.NewDecoder(resp.Body).Decode(&body)
+	if body["theme"] != "dark" {
+		t.Errorf("theme was overwritten: got %v", body["theme"])
+	}
+	ds, _ := body["defaultSort"].(map[string]any)
+	if ds["column"] != "name" {
+		t.Errorf("defaultSort.column = %v, want name", ds["column"])
 	}
 }
 

@@ -5051,23 +5051,48 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		// user_preferences. Audit stays because it's cluster-shared policy.
 		loaded.Theme = ""
 		loaded.PinnedKinds = nil
+		loaded.DefaultSort = nil
 	}
 	s.writeJSON(w, loaded)
 }
 
 func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
-	var patch settings.Settings
-	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
 		return
+	}
+	var patch settings.Settings
+	if err := json.Unmarshal(body, &patch); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	// defaultSort is tri-state — a column, or an explicit "no preference". A nil
+	// pointer can't tell `"defaultSort": null` (clear it) from an absent key
+	// (leave it), so the merge below keys off presence in the raw object.
+	var present map[string]json.RawMessage
+	if err := json.Unmarshal(body, &present); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	_, defaultSortPresent := present["defaultSort"]
+	if patch.DefaultSort != nil {
+		if patch.DefaultSort.Column == "" {
+			s.writeError(w, http.StatusBadRequest, "defaultSort.column is required")
+			return
+		}
+		if patch.DefaultSort.Direction != "asc" && patch.DefaultSort.Direction != "desc" {
+			s.writeError(w, http.StatusBadRequest, `defaultSort.direction must be "asc" or "desc"`)
+			return
+		}
 	}
 	// Under cloud mode, reject writes to user-scoped fields. Cloud's
 	// intercept layer splits the PUT before forwarding — this is a
 	// defense-in-depth check so a raw call that bypasses the intercept
 	// doesn't silently succeed and cause a cluster-shared settings.json
 	// to get mutated by one user.
-	if cloudMode() && (patch.Theme != "" || patch.PinnedKinds != nil) {
-		s.writeError(w, http.StatusBadRequest, "theme and pinnedKinds are managed by Radar Cloud; use /api/preferences instead")
+	if cloudMode() && (patch.Theme != "" || patch.PinnedKinds != nil || defaultSortPresent) {
+		s.writeError(w, http.StatusBadRequest, "theme, pinnedKinds, and defaultSort are managed by Radar Cloud; use /api/preferences instead")
 		return
 	}
 	result, err := settings.Update(func(current *settings.Settings) {
@@ -5076,6 +5101,9 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if patch.PinnedKinds != nil {
 			current.PinnedKinds = patch.PinnedKinds
+		}
+		if defaultSortPresent {
+			current.DefaultSort = patch.DefaultSort
 		}
 	})
 	if err != nil {
@@ -5086,6 +5114,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	if cloudMode() {
 		result.Theme = ""
 		result.PinnedKinds = nil
+		result.DefaultSort = nil
 	}
 	s.writeJSON(w, result)
 }

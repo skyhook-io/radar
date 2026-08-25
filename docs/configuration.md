@@ -85,7 +85,11 @@ User preferences for the UI. Managed via the Settings dialog or `PUT /api/settin
   "theme": "system",
   "pinnedKinds": [
     { "name": "Deployments", "kind": "Deployment", "group": "" }
-  ]
+  ],
+  "defaultSort": {
+    "column": "age",
+    "direction": "desc"
+  }
 }
 ```
 
@@ -93,6 +97,7 @@ User preferences for the UI. Managed via the Settings dialog or `PUT /api/settin
 |-------|--------|-------------|
 | `theme` | `light`, `dark`, `system` | UI theme preference |
 | `pinnedKinds` | Array of `{name, kind, group}` | Resource kinds pinned to the sidebar |
+| `defaultSort` | `{column, direction}` or `null` | Sort applied to the resource table on load and on every kind switch. `column` must be a **sortable** column — `name`, `namespace`, `status`, `age`, `ready`, `restarts`, `type`, `version`, `desired`, `available`, `upToDate`, `lastSeen`, `count`, `reason`, `object`, `cpu`, `memory`, `containers`, or a column you added yourself from the table's column picker. Most columns are display-only and are ignored here. `direction` is `asc` or `desc`. Both fields are required — a PUT with an empty column or any other direction is rejected. Any kind whose table cannot sort by that column keeps its built-in order, so a cross-kind value like `age` applies everywhere while `restarts` applies only where it exists. Sorting a table from its column header writes this field; the Settings dialog offers the columns every kind has. Send `null` (or omit the field on first write) for no preference. |
 
 ## Cluster Connection Precedence
 
