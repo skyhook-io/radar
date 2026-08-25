@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/errorlog"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 func TestResolveKubeconfigSourcesDirectAndFallbackModes(t *testing.T) {
@@ -200,7 +201,7 @@ func TestResolveKubeconfigSourcesDirectories(t *testing.T) {
 		if err == nil {
 			t.Fatal("resolveKubeconfigSources returned nil error")
 		}
-		if !strings.Contains(err.Error(), "is unusable") || !strings.Contains(err.Error(), filepath.Base(invalid)) {
+		if !strings.Contains(err.Error(), "is unusable") || !strings.Contains(err.Error(), filepath.Base(invalid)) || strings.Contains(err.Error(), home) {
 			t.Fatalf("error = %q", err)
 		}
 		entries := errorlog.GetEntries()
@@ -241,21 +242,25 @@ func TestNormalizeKubeconfigDirectoriesSkipsEmptyEntries(t *testing.T) {
 	}
 }
 
-func TestScrubKubeconfigLoadErrorRemovesSourcePath(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config")
-	got := scrubKubeconfigLoadError(path, errors.New("decode "+path+": line 3"))
-	if strings.Contains(got, filepath.Dir(path)) || !strings.Contains(got, "config: line 3") {
-		t.Fatalf("scrubbed error = %q", got)
+func TestKubeconfigDiagnosticErrorClassifiesWithoutDetails(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "empty", err: clientcmd.ErrEmptyConfig, want: "empty kubeconfig (no configuration provided)"},
+		{name: "context", err: errors.New("context was not found for specified context"), want: "selected context not found"},
+		{name: "unclassified", err: errors.New("server https://private.example and user alice"), want: "unclassified kubeconfig error"},
 	}
-}
-
-func TestKubeconfigDiagnosticErrorOmitsParserDetails(t *testing.T) {
-	got := kubeconfigDiagnosticError(errors.New("server https://private.example and user alice"))
-	if got != "configuration parse error" {
-		t.Fatalf("diagnostic error = %q", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := kubeconfigDiagnosticError(tt.err); got != tt.want {
+				t.Fatalf("diagnostic error = %q, want %q", got, tt.want)
+			}
+		})
 	}
 
-	got = kubeconfigDiagnosticError(&os.PathError{Op: "open", Path: "/private/config", Err: os.ErrNotExist})
+	got := kubeconfigDiagnosticError(&os.PathError{Op: "open", Path: "/private/config", Err: os.ErrNotExist})
 	if strings.Contains(got, "/private/config") || !strings.Contains(got, "open: file does not exist") {
 		t.Fatalf("path diagnostic error = %q", got)
 	}
