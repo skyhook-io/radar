@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"strconv"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -20,7 +21,6 @@ var removedFeatureGates137 = map[string]bool{
 	"AnyVolumeDataSource":                   true,
 	"BtreeWatchCache":                       true,
 	"ConsistentListFromCache":               true,
-	"DeclarativeValidationTakeover":         true,
 	"GangScheduling":                        true,
 	"OrderedNamespaceDeletion":              true,
 	"PreventStaticPodAPIReferences":         true,
@@ -33,13 +33,17 @@ var removedFeatureGates137 = map[string]bool{
 	"WorkloadAwarePreemption":               true,
 }
 
+var lockedAPIServerFeatureGates137 = map[string]bool{
+	"DeclarativeValidationTakeover": false,
+}
+
 var removedKubeadmFeatureGates137 = map[string]bool{
 	"NodeLocalCRISocket": true,
 	"PublicKeysECDSA":    true,
 }
 
 func scanRemovedFeatureGates(input *Input) Check {
-	check := Check{ID: "removed-feature-gates", Category: "Component configuration", Title: "Feature gates removed in Kubernetes 1.37", Status: CheckPassed, Summary: "No feature gate removed in Kubernetes 1.37 is explicitly configured in readable component configuration.", Scope: "Effective kubelet configuration and readable control-plane mirror Pods", AppliesFrom: "1.37", References: append(append([]Reference(nil), changelog137References...), staticPodReferences...)}
+	check := Check{ID: "removed-feature-gates", Category: "Component configuration", Title: "Feature gates removed or locked in Kubernetes 1.37", Status: CheckPassed, Summary: "No incompatible feature-gate settings were found in readable component configuration.", Scope: "Effective kubelet configuration and readable control-plane mirror Pods", AppliesFrom: "1.37", References: append(append([]Reference(nil), changelog137References...), staticPodReferences...)}
 	evidenceByNode := make(map[string]NodeRuntimeEvidence, len(input.NodeRuntimeEvidence))
 	for _, evidence := range input.NodeRuntimeEvidence {
 		evidenceByNode[evidence.NodeName] = evidence
@@ -85,10 +89,16 @@ func scanRemovedFeatureGates(input *Input) Check {
 					continue
 				}
 				for name, value := range parsedFeatureGates(container.Command, container.Args) {
-					if !removedFeatureGates137[name] {
+					if removedFeatureGates137[name] {
+						check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: name + " is removed", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("spec.containers[%d].args[--feature-gates].%s", containerIndex, name), Detail: value}, AppliesFrom: check.AppliesFrom, Impact: "This Kubernetes 1.37 control-plane component no longer recognizes the configured feature gate and can fail during startup.", Remediation: "Remove " + name + " from the component feature-gates argument before upgrading the control plane.", References: append([]Reference(nil), check.References...)})
 						continue
 					}
-					check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: name + " is removed", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("spec.containers[%d].args[--feature-gates].%s", containerIndex, name), Detail: value}, AppliesFrom: check.AppliesFrom, Impact: "This Kubernetes 1.37 control-plane component no longer recognizes the configured feature gate and can fail during startup.", Remediation: "Remove " + name + " from the component feature-gates argument before upgrading the control plane.", References: append([]Reference(nil), check.References...)})
+					defaultValue, locked := lockedAPIServerFeatureGates137[name]
+					configuredValue, err := strconv.ParseBool(value)
+					if container.Name != "kube-apiserver" || !locked || (err == nil && configuredValue == defaultValue) {
+						continue
+					}
+					check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: name + " must use its locked default", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("spec.containers[%d].args[--feature-gates].%s", containerIndex, name), Detail: value}, AppliesFrom: check.AppliesFrom, Impact: fmt.Sprintf("Kubernetes 1.37 locks this kube-apiserver feature gate to %t and rejects a different configured value during startup.", defaultValue), Remediation: fmt.Sprintf("Set %s=%t or remove the explicit setting before upgrading the control plane.", name, defaultValue), References: append([]Reference(nil), check.References...)})
 				}
 			}
 		}
@@ -101,7 +111,7 @@ func scanRemovedFeatureGates(input *Input) Check {
 		}
 	}
 	if len(check.Findings) > 0 {
-		check.Summary = fmt.Sprintf("%d removed feature-gate %s must be deleted before upgrading.", len(check.Findings), plural(len(check.Findings), "setting", "settings"))
+		check.Summary = fmt.Sprintf("%d incompatible feature-gate %s must be fixed before upgrading.", len(check.Findings), plural(len(check.Findings), "setting", "settings"))
 	}
 	return check
 }

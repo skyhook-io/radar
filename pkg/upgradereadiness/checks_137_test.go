@@ -80,6 +80,35 @@ func TestRemovedFeatureGates137(t *testing.T) {
 	}
 }
 
+func TestLockedAPIServerFeatureGate137(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		value      string
+		wantStatus CheckStatus
+	}{
+		{name: "locked default is accepted", value: "false", wantStatus: CheckPassed},
+		{name: "non-default is blocked", value: "true", wantStatus: CheckBlocked},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := completeInput()
+			input.Pods = []*corev1.Pod{{
+				ObjectMeta: metav1.ObjectMeta{Name: "kube-apiserver-node-a", Namespace: "kube-system", Annotations: map[string]string{corev1.MirrorPodAnnotationKey: "mirror"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "kube-apiserver", Args: []string{"--feature-gates=DeclarativeValidationTakeover=" + tc.value}}}},
+			}}
+			check := checkByID(t, scan137(t, input), "removed-feature-gates")
+			if check.Status != tc.wantStatus {
+				t.Fatalf("check = %+v, want status %s", check, tc.wantStatus)
+			}
+			if tc.wantStatus == CheckPassed && len(check.Findings) != 0 {
+				t.Fatalf("locked default produced findings: %+v", check.Findings)
+			}
+			if tc.wantStatus == CheckBlocked && (len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Impact, "locks this kube-apiserver feature gate to false")) {
+				t.Fatalf("non-default finding = %+v", check.Findings)
+			}
+		})
+	}
+}
+
 func TestRemovedControlPlaneConfigurationScope137(t *testing.T) {
 	input := completeInput()
 	input.Namespaces = []string{"apps"}
