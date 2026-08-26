@@ -1526,6 +1526,9 @@ func GetAvailableContexts() ([]ContextInfo, error) {
 	if kubeconfig == "" {
 		return nil, fmt.Errorf("kubeconfig path not set")
 	}
+	if err := validateKubeconfigFileType(kubeconfig); err != nil {
+		return nil, fmt.Errorf("kubeconfig source is unavailable: %w", err)
+	}
 	loadingRules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfig}
 	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, &clientcmd.ConfigOverrides{})
 	rawConfig, err := kubeConfig.RawConfig()
@@ -1590,6 +1593,9 @@ func SwitchContext(name string) error {
 		}
 		loadingRules = &clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfig}
 		overrideContextName = name
+	}
+	if err := validateKubeconfigFileType(loadingRules.ExplicitPath); err != nil {
+		return fmt.Errorf("kubeconfig source for context %q is unavailable: %w", name, err)
 	}
 
 	// Build config with the new context

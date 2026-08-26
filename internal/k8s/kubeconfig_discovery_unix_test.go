@@ -3,6 +3,7 @@
 package k8s
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,7 +83,7 @@ func TestBuildContextRegistrySkipsFIFOWithoutBlocking(t *testing.T) {
 	}
 }
 
-func TestRefreshContextRegistryKeepsExistingWhenSourceBecomesFIFO(t *testing.T) {
+func TestRefreshContextRegistryDropsSourceThatBecomesFIFO(t *testing.T) {
 	dir := t.TempDir()
 	path := writeKubeconfig(t, dir, "watched.yaml", "watched", []kubeEntry{
 		{ctxName: "watched", userName: "user", clusterName: "cluster"},
@@ -111,17 +112,176 @@ func TestRefreshContextRegistryKeepsExistingWhenSourceBecomesFIFO(t *testing.T) 
 
 	select {
 	case result := <-done:
-		if result.changed {
-			t.Fatal("non-regular replacement changed the registry")
+		if !result.changed {
+			t.Fatal("non-regular replacement did not change the registry")
 		}
-		if _, ok := result.registry["watched"]; !ok {
-			t.Fatal("non-regular replacement dropped the existing context")
+		if _, ok := result.registry["watched"]; ok {
+			t.Fatal("non-regular replacement remained selectable")
 		}
-		if result.configs[path] != configs[path] || !result.mtimes[path].Equal(mtimes[path]) {
-			t.Fatal("non-regular replacement changed cached source state")
+		if _, ok := result.configs[path]; ok {
+			t.Fatal("non-regular replacement retained its cached config")
+		}
+		if _, ok := result.mtimes[path]; ok {
+			t.Fatal("non-regular replacement retained its cached mtime")
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("registry refresh blocked while opening a FIFO")
+	}
+}
+
+func TestContextSwitchRejectsSourceThatBecomesFIFOBeforeTeardown(t *testing.T) {
+	dir := t.TempDir()
+	current := writeKubeconfig(t, dir, "current.yaml", "current", []kubeEntry{
+		{ctxName: "current", userName: "u1", clusterName: "c1"},
+	})
+	target := writeKubeconfig(t, dir, "target.yaml", "target", []kubeEntry{
+		{ctxName: "target", userName: "u2", clusterName: "c2"},
+	})
+	registry, configs, mtimes := loadFixture(t, []string{current, target})
+
+	clientMu.Lock()
+	previousRegistry := contextRegistry
+	previousConfigs := perFileConfigs
+	previousMtimes := perFileMtimes
+	previousPaths := kubeconfigPaths
+	previousMode := kubeconfigMode
+	previousStarted := initializationStarted
+	contextRegistry = registry
+	perFileConfigs = configs
+	perFileMtimes = mtimes
+	kubeconfigPaths = []string{current, target}
+	kubeconfigMode = "multi-dir"
+	initializationStarted = true
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextRegistry = previousRegistry
+		perFileConfigs = previousConfigs
+		perFileMtimes = previousMtimes
+		kubeconfigPaths = previousPaths
+		kubeconfigMode = previousMode
+		initializationStarted = previousStarted
+		clientMu.Unlock()
+	})
+
+	stopped := false
+	SetSessionStopper(func() { stopped = true })
+	t.Cleanup(func() { SetSessionStopper(nil) })
+	if err := os.Remove(target); err != nil {
+		t.Fatalf("remove target kubeconfig: %v", err)
+	}
+	if err := syscall.Mkfifo(target, 0o600); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- PerformContextSwitch("target") }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrContextSwitchPreflight) {
+			t.Fatalf("expected ErrContextSwitchPreflight, got %v", err)
+		}
+		if stopped {
+			t.Fatal("sessions were stopped for a non-regular context source")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("context-switch preflight blocked while opening a FIFO")
+	}
+}
+
+func TestSwitchContextRejectsFIFOSourceWithoutBlocking(t *testing.T) {
+	dir := t.TempDir()
+	target := writeKubeconfig(t, dir, "target.yaml", "target", []kubeEntry{
+		{ctxName: "target", userName: "u2", clusterName: "c2"},
+	})
+	registry, configs, mtimes := loadFixture(t, []string{target})
+	if err := os.Remove(target); err != nil {
+		t.Fatalf("remove target kubeconfig: %v", err)
+	}
+	if err := syscall.Mkfifo(target, 0o600); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+
+	clientMu.Lock()
+	previousRegistry := contextRegistry
+	previousConfigs := perFileConfigs
+	previousMtimes := perFileMtimes
+	previousPaths := kubeconfigPaths
+	previousMode := kubeconfigMode
+	previousStarted := initializationStarted
+	contextRegistry = registry
+	perFileConfigs = configs
+	perFileMtimes = mtimes
+	kubeconfigPaths = []string{target}
+	kubeconfigMode = "multi-dir"
+	initializationStarted = true
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextRegistry = previousRegistry
+		perFileConfigs = previousConfigs
+		perFileMtimes = previousMtimes
+		kubeconfigPaths = previousPaths
+		kubeconfigMode = previousMode
+		initializationStarted = previousStarted
+		clientMu.Unlock()
+	})
+
+	done := make(chan error, 1)
+	go func() { done <- SwitchContext("target") }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, errKubeconfigNotRegular) {
+			t.Fatalf("expected errKubeconfigNotRegular, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("SwitchContext blocked while opening a FIFO")
+	}
+}
+
+func TestGetAvailableContextsRejectsSingleFIFOSourceWithoutBlocking(t *testing.T) {
+	dir := t.TempDir()
+	path := writeKubeconfig(t, dir, "single.yaml", "single", []kubeEntry{
+		{ctxName: "single", userName: "user", clusterName: "cluster"},
+	})
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove kubeconfig: %v", err)
+	}
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+
+	clientMu.Lock()
+	previousRegistry := contextRegistry
+	previousPath := kubeconfigPath
+	previousMode := kubeconfigMode
+	previousStarted := initializationStarted
+	contextRegistry = nil
+	kubeconfigPath = path
+	kubeconfigMode = "single"
+	initializationStarted = true
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextRegistry = previousRegistry
+		kubeconfigPath = previousPath
+		kubeconfigMode = previousMode
+		initializationStarted = previousStarted
+		clientMu.Unlock()
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := GetAvailableContexts()
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, errKubeconfigNotRegular) {
+			t.Fatalf("expected errKubeconfigNotRegular, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("single-file context listing blocked while opening a FIFO")
 	}
 }
 

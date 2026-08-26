@@ -383,15 +383,25 @@ func refreshContextRegistry(
 		qNames := byFile[path]
 		sort.Strings(qNames)
 		info, statErr := os.Stat(path)
-		if statErr != nil {
+		if statErr != nil || !info.Mode().IsRegular() {
 			// File is gone (or unreadable). Drop every registry
 			// entry pointing at it AND its cached config. This
 			// is the CAPI-cluster-destroyed and
 			// "user removed file from kubeconfig dir" cases.
+			// A non-regular replacement is equally unusable and must not
+			// remain selectable: client-go would otherwise block while
+			// opening a FIFO after context-switch teardown has begun.
 			_, hadConfig := fileConfigs[path]
 			_, hadMtime := fileMtimes[path]
 			if len(qNames) == 0 && !hadConfig && !hadMtime {
 				continue
+			}
+			if statErr == nil {
+				log.Printf("[k8s-init] refresh: dropping kubeconfig %q: %v",
+					filepath.Base(path), errKubeconfigNotRegular)
+				errorlog.Record("k8s-init", "warning",
+					"refresh: kubeconfig %q failed to load: %s",
+					filepath.Base(path), errKubeconfigNotRegular)
 			}
 			cloneOnce()
 			for _, qName := range qNames {
@@ -402,14 +412,6 @@ func refreshContextRegistry(
 			continue
 		}
 		mtime := info.ModTime()
-		if !info.Mode().IsRegular() {
-			log.Printf("[k8s-init] refresh: skipping kubeconfig %q: %v",
-				filepath.Base(path), errKubeconfigNotRegular)
-			errorlog.Record("k8s-init", "warning",
-				"refresh: kubeconfig %q failed to load: %s",
-				filepath.Base(path), errKubeconfigNotRegular)
-			continue
-		}
 		if cached, ok := fileMtimes[path]; ok && cached.Equal(mtime) {
 			// Unchanged — keep the cached parse + entries.
 			continue
