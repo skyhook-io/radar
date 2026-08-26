@@ -324,10 +324,14 @@ func (h *HubbleSource) resolveTargetPort(ctx context.Context, svc *corev1.Servic
 
 const (
 	// directDialTimeout bounds the TCP reachability pre-check for the direct
-	// lane. Blackholed traffic (NetworkPolicy drop, off-cluster ClusterIP)
-	// costs exactly this much before the port-forward fallback starts;
-	// refused/unroutable fails in milliseconds.
-	directDialTimeout = 3 * time.Second
+	// lane. Blackholed traffic (NetworkPolicy drop, or a laptop dialing an
+	// unroutable ClusterIP — the usual local case) costs exactly this much on
+	// the first connect before the port-forward fallback starts, so it is
+	// deliberately tight: the pre-check is a single TCP handshake (one
+	// round-trip), which finishes well under a second on any network where it
+	// can succeed at all, including high-latency VPNs into the cluster.
+	// Refused/unroutable fails in milliseconds.
+	directDialTimeout = 1500 * time.Millisecond
 
 	// directConnectBudget bounds the full gRPC/TLS/SAN sequence against a
 	// TCP-reachable relay. Generous on purpose: once the endpoint answered TCP
