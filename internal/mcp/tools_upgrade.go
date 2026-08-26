@@ -12,7 +12,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/internal/server"
+	"github.com/skyhook-io/radar/internal/upgrade"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/upgradereadiness"
 )
@@ -91,7 +91,7 @@ type upgradeReadinessResult struct {
 	Check         *upgradeCheckDetail       `json:"check,omitempty"`
 }
 
-// mcpUpgradeAuthorizer implements server.UpgradeEvidenceAuthorizer over the
+// mcpUpgradeAuthorizer implements upgrade.EvidenceAuthorizer over the
 // MCP request context. It must reproduce the HTTP surface's authorization
 // decisions, not shortcut them: every method resolves through the same
 // SubjectAccessReview primitives Server.canRead / canReadSubresource /
@@ -150,7 +150,7 @@ func handleGetUpgradeReadiness(ctx context.Context, req *mcp.CallToolRequest, in
 	if k8s.GetResourceCache() == nil {
 		return nil, nil, errNotConnected()
 	}
-	outcome, err := server.RunUpgradeReadinessScanMemoized(ctx, mcpUpgradeAuthorizer{ctx: ctx}, input.Target, input.Refresh)
+	outcome, err := upgrade.ScanMemoized(ctx, mcpUpgradeAuthorizer{ctx: ctx}, input.Target, input.Refresh)
 	if err != nil {
 		return nil, nil, mapUpgradeScanError(err)
 	}
@@ -190,7 +190,7 @@ func mapUpgradeScanError(err error) error {
 		return fmt.Errorf("%s. The cluster is currently on %s and the check catalog is reviewed through %s — pass a forward minor version (e.g. \"1.34\") or omit target to analyze the next minor", err.Error(), current, upgradereadiness.ReviewedThrough)
 	case errors.Is(err, upgradereadiness.ErrInvalidCurrentVersion):
 		return fmt.Errorf("unable to determine the cluster's current Kubernetes version — the scan cannot run")
-	case errors.Is(err, server.ErrUpgradeScanNotReady):
+	case errors.Is(err, upgrade.ErrScanNotReady):
 		return errNotConnected()
 	default:
 		return err
@@ -225,7 +225,7 @@ var upgradeCheckStatusRank = map[upgradereadiness.CheckStatus]int{
 
 // shapeUpgradeReadiness minifies a scan into tier 1 (overview) or tier 2
 // (one check expanded). It never mutates the shared ScanResults.
-func shapeUpgradeReadiness(outcome server.UpgradeScanOutcome, input upgradeReadinessInput) (upgradeReadinessResult, error) {
+func shapeUpgradeReadiness(outcome upgrade.ScanOutcome, input upgradeReadinessInput) (upgradeReadinessResult, error) {
 	results := outcome.Results
 	out := upgradeReadinessResult{
 		CurrentVersion:  results.CurrentVersion,

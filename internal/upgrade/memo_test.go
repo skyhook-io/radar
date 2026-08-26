@@ -1,4 +1,4 @@
-package server
+package upgrade
 
 import (
 	"context"
@@ -96,7 +96,7 @@ func TestUpgradeScanMemoSingleFlightCoalesces(t *testing.T) {
 		}
 
 		var wg sync.WaitGroup
-		var leaderOut, joinerOut UpgradeScanOutcome
+		var leaderOut, joinerOut ScanOutcome
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -169,7 +169,7 @@ func TestUpgradeScanMemoContextSwitchDuringScanReturnsNoPayload(t *testing.T) {
 		memo.invalidate()
 		return &upgradereadiness.ScanResults{}, nil
 	})
-	if !errors.Is(err, ErrUpgradeScanStaleContext) || out.Results != nil {
+	if !errors.Is(err, ErrScanStaleContext) || out.Results != nil {
 		t.Fatalf("switch-during-scan = results=%v err=%v, want stale-context error with no payload", out.Results, err)
 	}
 	scans := 0
@@ -362,7 +362,7 @@ func TestUpgradeScanMemoRefusesGenerationCapturedBeforeSwitch(t *testing.T) {
 	memo.invalidate()
 	scans := 0
 	out, err := memo.get(context.Background(), "k", false, gen, countingScan(&scans))
-	if !errors.Is(err, ErrUpgradeScanStaleContext) || out.Results != nil || scans != 0 {
+	if !errors.Is(err, ErrScanStaleContext) || out.Results != nil || scans != 0 {
 		t.Fatalf("pre-switch generation = results=%v scans=%d err=%v, want refused with no scan run", out.Results, scans, err)
 	}
 }
@@ -383,7 +383,7 @@ func TestUpgradeScanMemoQueuedLeaderBailsAfterContextSwitch(t *testing.T) {
 	waitForQueuedLeader(t, memo, "k")
 	memo.invalidate()
 	<-memo.scanSlots
-	if err := <-result; !errors.Is(err, ErrUpgradeScanStaleContext) {
+	if err := <-result; !errors.Is(err, ErrScanStaleContext) {
 		t.Fatalf("queued-across-switch leader err = %v, want stale-context", err)
 	}
 	if scanned {
@@ -397,7 +397,7 @@ func TestUpgradeScanMemoObservedAtIsCollectionStartNotQueueTime(t *testing.T) {
 	memo.scanSlots <- struct{}{}
 	queuedAt := *clock
 	type res struct {
-		out UpgradeScanOutcome
+		out ScanOutcome
 		err error
 	}
 	result := make(chan res, 1)

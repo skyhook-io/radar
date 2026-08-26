@@ -318,36 +318,39 @@ identity flows through `auth.UserFromContext(r.Context())`, RBAC through
 with their own RBAC helpers (`internal/mcp/permissions.go`: `resolveUserPerms`,
 `filterNamespacesForUser`, `canReadClusterScopedKind`).
 
-Plan: extract collection behind a narrow seam **inside `internal/server`** rather than a new
-package:
+Plan: extract collection behind a narrow seam in a dedicated **`internal/upgrade`**
+package — the internal service layer for the whole feature, mirroring how
+`internal/capacity` owns Karpenter. It holds the runner (moved from
+`internal/audit/upgrade_runner.go` as `upgrade.RunFromCache`; posture audit and upgrade
+readiness are deliberately distinct engines and should not share a package), the live
+collectors, the seam, and the memo:
 
 ```go
-// internal/server/upgrade_evidence.go
-type upgradeEvidenceAuthorizer interface {
+// internal/upgrade/evidence.go
+type EvidenceAuthorizer interface {
     CanList(group, resource, namespace string) bool
     CanGetSubresource(group, resource, subresource string) bool
     Namespaces() []string            // nil = cluster-wide; empty = no access
-    Identity() (username string, groups []string)   // for impersonated Helm reads
+    FilterNamespacesByCanList(group, resource string, namespaces []string) []string
 }
 
-func collectUpgradeEvidence(ctx context.Context, authz upgradeEvidenceAuthorizer) (audit.UpgradeReadinessOptions, error)
+func ScanMemoized(ctx context.Context, authz EvidenceAuthorizer, target string, refresh bool) (ScanOutcome, error)
 ```
 
-- The HTTP handler implements the interface over `(s, r)` — behavior byte-for-byte
-  identical. The existing `upgrade_readiness_handler_test.go` covers the helpers
-  (`upgradeReadinessNamespaces`, bounded reads, discovery fallbacks) but never invokes the
-  full handler, so it alone cannot prove this — the extraction is preceded by
-  characterization tests around the real handler (§6).
+- Identity for impersonated reads (Helm, dynamic lists, kubelet metrics) is NOT part of the
+  interface: both surfaces attach the user to ctx via the shared `pkg/auth` context key and
+  the collectors read it from there.
+- The HTTP handler implements the interface over `(s, r)`, delegating every method to the
+  exact helper it called before the extraction — behavior byte-for-byte identical. The
+  existing handler tests cover helpers, not the full handler, so the extraction is preceded
+  by characterization tests (§6).
 - The MCP tool implements it over `ctx` using the `internal/mcp` permission helpers. The MCP
   side must reproduce the same authorization *decisions* (list probes / SAR per grant), not
-  shortcut them: cluster-wide pod visibility must still not imply cluster-scoped reads.
+  shortcut them: cluster-wide pod visibility must still not imply cluster-scoped reads —
+  and it depends only on `internal/upgrade`, never on the HTTP layer.
 - All timeouts, response-size bounds, and the worker pool stay in the shared collector.
-
-Both `internal/server` and `internal/mcp` already import `internal/audit`, and
-`internal/mcp` already imports `internal/server` (`tools_packages.go`) while the reverse
-edge does not exist — so placing the seam in `internal/server` adds no new package edges
-and cannot create a cycle. The MCP tool calls `collectUpgradeEvidence` +
-`audit.RunUpgradeReadinessFromCache` exactly as the handler does.
+- Import graph stays acyclic: `server → upgrade → audit` (typed-input collection) and
+  `mcp → upgrade`; nothing imports back.
 
 ### 4.2 Memoization (prerequisite, shared with HTTP)
 

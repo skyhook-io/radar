@@ -18,7 +18,7 @@ func (l testLister[T]) List(labels.Selector) ([]*T, error) {
 }
 
 func TestListNamespacedFiltersBatchResources(t *testing.T) {
-	jobs := listNamespaced(&testLister[batchv1.Job]{items: []*batchv1.Job{
+	jobs := ListNamespaced(&testLister[batchv1.Job]{items: []*batchv1.Job{
 		{ObjectMeta: metav1.ObjectMeta{Name: "keep-job", Namespace: "target"}},
 		{ObjectMeta: metav1.ObjectMeta{Name: "drop-job", Namespace: "other"}},
 	}}, []string{"target"})
@@ -26,7 +26,7 @@ func TestListNamespacedFiltersBatchResources(t *testing.T) {
 		t.Fatalf("expected only target namespace Job, got %#v", jobs)
 	}
 
-	cronJobs := listNamespaced(&testLister[batchv1.CronJob]{items: []*batchv1.CronJob{
+	cronJobs := ListNamespaced(&testLister[batchv1.CronJob]{items: []*batchv1.CronJob{
 		{ObjectMeta: metav1.ObjectMeta{Name: "keep-cronjob", Namespace: "target"}},
 		{ObjectMeta: metav1.ObjectMeta{Name: "drop-cronjob", Namespace: "other"}},
 	}}, []string{"target"})
@@ -36,7 +36,7 @@ func TestListNamespacedFiltersBatchResources(t *testing.T) {
 }
 
 func TestListNamespacedFiltersReplicaSetsAndUnknownTypesFailClosed(t *testing.T) {
-	replicaSets := listNamespaced(&testLister[appsv1.ReplicaSet]{items: []*appsv1.ReplicaSet{
+	replicaSets := ListNamespaced(&testLister[appsv1.ReplicaSet]{items: []*appsv1.ReplicaSet{
 		{ObjectMeta: metav1.ObjectMeta{Name: "keep", Namespace: "target"}},
 		{ObjectMeta: metav1.ObjectMeta{Name: "drop", Namespace: "other"}},
 	}}, []string{"target"})
@@ -44,7 +44,7 @@ func TestListNamespacedFiltersReplicaSetsAndUnknownTypesFailClosed(t *testing.T)
 		t.Fatalf("expected only target namespace ReplicaSet, got %#v", replicaSets)
 	}
 
-	unknown := listNamespaced(&testLister[string]{items: []*string{new(string)}}, []string{"target"})
+	unknown := ListNamespaced(&testLister[string]{items: []*string{new(string)}}, []string{"target"})
 	if len(unknown) != 0 {
 		t.Fatalf("unknown object type must fail closed, got %#v", unknown)
 	}

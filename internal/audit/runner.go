@@ -27,7 +27,7 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 		return &bp.ScanResults{Summary: bp.ScanSummary{Categories: map[string]bp.CategorySummary{}}}
 	}
 
-	input := collectTypedInput(cache, namespaces)
+	input := CollectTypedInput(cache, namespaces)
 	input.GitOpsToolsPresent, input.ArgoAppNames = gitOpsRoots()
 
 	if opts != nil {
@@ -45,7 +45,7 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 	input.CompositeResources = xrs
 	input.ConfigObjectRefs = listDynamicConfigObjectRefs(namespaces, dynamicConfigRefOptions{
 		ServiceAccounts: input.ServiceAccounts,
-		Deployments:     listNamespaced(cache.Deployments(), nil),
+		Deployments:     ListNamespaced(cache.Deployments(), nil),
 	})
 
 	// Traefik routers + their reference targets for the dangling-reference checks.
@@ -62,7 +62,7 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 	// dynamic Traefik kinds use. Namespace-scoped fallback → leave nil → skip.
 	// Middleware subjects (errors.service refs) need it too, not just routes.
 	if (len(input.IngressRoutes) > 0 || len(input.MiddlewareSubjects) > 0) && cache.IsKindClusterWide("services") {
-		input.AllServices = listNamespaced(cache.Services(), nil)
+		input.AllServices = ListNamespaced(cache.Services(), nil)
 	}
 
 	// CloudNativePG clusters + their backup schedules for the declarative-backup
@@ -72,28 +72,28 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 	return bp.RunChecks(input)
 }
 
-func collectTypedInput(cache *k8s.ResourceCache, namespaces []string) *bp.CheckInput {
+func CollectTypedInput(cache *k8s.ResourceCache, namespaces []string) *bp.CheckInput {
 	input := collectWorkloadInput(cache, namespaces)
-	input.Services = listNamespaced(cache.Services(), namespaces)
-	input.Ingresses = listNamespaced(cache.Ingresses(), namespaces)
-	input.HorizontalPodAutoscalers = listNamespaced(cache.HorizontalPodAutoscalers(), namespaces)
-	input.PodDisruptionBudgets = listNamespaced(cache.PodDisruptionBudgets(), namespaces)
-	input.ConfigMaps = listNamespaced(cache.ConfigMaps(), namespaces)
-	input.Secrets = listNamespaced(cache.Secrets(), namespaces)
-	input.ServiceAccounts = listNamespaced(cache.ServiceAccounts(), namespaces)
+	input.Services = ListNamespaced(cache.Services(), namespaces)
+	input.Ingresses = ListNamespaced(cache.Ingresses(), namespaces)
+	input.HorizontalPodAutoscalers = ListNamespaced(cache.HorizontalPodAutoscalers(), namespaces)
+	input.PodDisruptionBudgets = ListNamespaced(cache.PodDisruptionBudgets(), namespaces)
+	input.ConfigMaps = ListNamespaced(cache.ConfigMaps(), namespaces)
+	input.Secrets = ListNamespaced(cache.Secrets(), namespaces)
+	input.ServiceAccounts = ListNamespaced(cache.ServiceAccounts(), namespaces)
 	input.ServiceAccountsNamespace = serviceAccountScopeNamespace()
-	input.LimitRanges = listNamespaced(cache.LimitRanges(), namespaces)
+	input.LimitRanges = ListNamespaced(cache.LimitRanges(), namespaces)
 	return input
 }
 
 func collectWorkloadInput(cache *k8s.ResourceCache, namespaces []string) *bp.CheckInput {
 	return &bp.CheckInput{
-		Pods:         listNamespaced(cache.Pods(), namespaces),
-		Deployments:  listNamespaced(cache.Deployments(), namespaces),
-		StatefulSets: listNamespaced(cache.StatefulSets(), namespaces),
-		DaemonSets:   listNamespaced(cache.DaemonSets(), namespaces),
-		Jobs:         listNamespaced(cache.Jobs(), namespaces),
-		CronJobs:     listNamespaced(cache.CronJobs(), namespaces),
+		Pods:         ListNamespaced(cache.Pods(), namespaces),
+		Deployments:  ListNamespaced(cache.Deployments(), namespaces),
+		StatefulSets: ListNamespaced(cache.StatefulSets(), namespaces),
+		DaemonSets:   ListNamespaced(cache.DaemonSets(), namespaces),
+		Jobs:         ListNamespaced(cache.Jobs(), namespaces),
+		CronJobs:     ListNamespaced(cache.CronJobs(), namespaces),
 	}
 }
 
@@ -382,18 +382,18 @@ func isCrossplaneComposite(u *unstructured.Unstructured) bool {
 }
 
 // lister is a generic interface that all typed K8s listers satisfy.
-type lister[T any] interface {
+type Lister[T any] interface {
 	List(selector labels.Selector) ([]*T, error)
 }
 
-// listNamespaced fetches all objects from a lister, optionally filtered by
+// ListNamespaced fetches all objects from a lister, optionally filtered by
 // namespaces. Returns nil ONLY for a nil lister (kind disabled / RBAC denied);
 // an available lister with zero matches returns an empty non-nil slice.
 // CheckInput distinguishes the two — nil skips the dependent checks and lands
 // in ScanResults.MissingInputs, so conflating "none exist" with "couldn't
 // list" would both suppress findings (e.g. missingPDB on a PDB-less cluster)
 // and misreport scan completeness.
-func listNamespaced[T any, L lister[T]](l L, namespaces []string) []*T {
+func ListNamespaced[T any, L Lister[T]](l L, namespaces []string) []*T {
 	var zero L
 	if any(l) == any(zero) {
 		return nil

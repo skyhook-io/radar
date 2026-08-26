@@ -1,8 +1,7 @@
-package server
+package upgrade
 
 import (
 	"context"
-	"net/http"
 
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -10,21 +9,20 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 
-	"github.com/skyhook-io/radar/internal/audit"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/upgradereadiness"
 )
 
-// UpgradeEvidenceAuthorizer is the seam through which upgrade-readiness
+// EvidenceAuthorizer is the seam through which upgrade-readiness
 // evidence collection asks authorization questions, so the HTTP handler and
 // the MCP tool produce identical scans from identical decisions. Identity for
 // impersonated reads (Helm, dynamic lists, kubelet metrics) is NOT part of the
 // interface: both surfaces attach the user to ctx via the shared
 // pkg/auth context key, and the collectors read it from there
 // (k8s.ClientFromContext and friends).
-type UpgradeEvidenceAuthorizer interface {
+type EvidenceAuthorizer interface {
 	// Namespaces returns the identity's namespace ceiling for the scan:
 	// nil means cluster-wide, a non-nil empty slice means no namespaced
 	// access. Implementations must ignore the browsing namespace picker —
@@ -41,35 +39,18 @@ type UpgradeEvidenceAuthorizer interface {
 	FilterNamespacesByCanList(group, resource string, namespaces []string) []string
 }
 
-// httpUpgradeAuthorizer adapts (*Server, *http.Request) to the seam. Every
-// method delegates to the exact helper the handler called before the
-// extraction, so decisions are byte-for-byte identical.
-type httpUpgradeAuthorizer struct {
-	s *Server
-	r *http.Request
+// noNamespaceAccess returns true when a namespace filter explicitly grants no
+// access (non-nil empty slice from auth filtering). Mirrors the server-side
+// helper of the same name.
+func noNamespaceAccess(namespaces []string) bool {
+	return namespaces != nil && len(namespaces) == 0
 }
 
-func (a httpUpgradeAuthorizer) Namespaces() []string {
-	return a.s.upgradeReadinessNamespaces(a.r)
-}
-
-func (a httpUpgradeAuthorizer) CanList(group, resource, namespace string) bool {
-	return a.s.canRead(a.r, group, resource, namespace, "list")
-}
-
-func (a httpUpgradeAuthorizer) CanGetSubresource(group, resource, subresource string) bool {
-	return a.s.canReadSubresource(a.r, group, resource, subresource, "", "get")
-}
-
-func (a httpUpgradeAuthorizer) FilterNamespacesByCanList(group, resource string, namespaces []string) []string {
-	return a.s.filterNamespacesByCanRead(a.r, group, resource, "list", namespaces)
-}
-
-// resolveHelmNamespacesForAuthorizer applies Helm's Secret-specific RBAC and
+// ResolveHelmNamespaces applies Helm's Secret-specific RBAC and
 // no-auth fallback behavior to an already resolved workload namespace scope.
 // Shared by Server.resolveHelmNamespacesForScope (HTTP) and the upgrade scan
 // (both surfaces via the authorizer seam).
-func resolveHelmNamespacesForAuthorizer(ctx context.Context, authz UpgradeEvidenceAuthorizer, namespaces []string) ([]string, bool) {
+func ResolveHelmNamespaces(ctx context.Context, authz EvidenceAuthorizer, namespaces []string) ([]string, bool) {
 	if noNamespaceAccess(namespaces) {
 		return nil, false
 	}
@@ -93,7 +74,7 @@ func resolveHelmNamespacesForAuthorizer(ctx context.Context, authz UpgradeEviden
 			// per-namespace SAR memoized on the user's perms (2-min TTL), so
 			// repeat scans don't re-probe. Falls through to the cluster-wide
 			// path (→ honest 403) when they can't read secrets anywhere.
-			if allowed := authz.FilterNamespacesByCanList("", "secrets", allNamespaceNames()); len(allowed) > 0 {
+			if allowed := authz.FilterNamespacesByCanList("", "secrets", k8s.AllNamespaceNames()); len(allowed) > 0 {
 				return allowed, true
 			}
 		}
@@ -105,10 +86,10 @@ func resolveHelmNamespacesForAuthorizer(ctx context.Context, authz UpgradeEviden
 // authorizer's decisions and runs the scan. The body is the extracted
 // evidence-collection block of handleUpgradeReadiness; behavior must stay
 // byte-for-byte identical for the HTTP surface.
-func runUpgradeReadinessScan(ctx context.Context, authz UpgradeEvidenceAuthorizer, namespaces []string, currentVersion, targetVersion string) (*upgradereadiness.ScanResults, error) {
+func runUpgradeReadinessScan(ctx context.Context, authz EvidenceAuthorizer, namespaces []string, currentVersion, targetVersion string) (*upgradereadiness.ScanResults, error) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return nil, ErrUpgradeScanNotReady
+		return nil, ErrScanNotReady
 	}
 	noAccess := noNamespaceAccess(namespaces)
 	var scanInput *k8s.ResourceCache
@@ -135,7 +116,7 @@ func runUpgradeReadinessScan(ctx context.Context, authz UpgradeEvidenceAuthorize
 	var nodeRuntimeEvidence []upgradereadiness.NodeRuntimeEvidence
 	canReadNodes := !noAccess && authz.CanList("", "nodes", "")
 	if !noAccess {
-		if helmNamespaces, ok := resolveHelmNamespacesForAuthorizer(ctx, authz, namespaces); ok {
+		if helmNamespaces, ok := ResolveHelmNamespaces(ctx, authz, namespaces); ok {
 			manifestResources, helmUnavailableNamespaces, manifestParseErrors = collectUpgradeHelmManifests(ctx, helmNamespaces)
 			if !sameNamespaceScope(namespaces, helmNamespaces) {
 				helmScopedNamespaces = make([]string, len(helmNamespaces))
@@ -160,7 +141,7 @@ func runUpgradeReadinessScan(ctx context.Context, authz UpgradeEvidenceAuthorize
 		return nil, ctx.Err()
 	}
 	platform, _ := k8s.GetClusterPlatform(ctx)
-	results, err := audit.RunUpgradeReadinessFromCache(scanInput, namespaces, audit.UpgradeReadinessOptions{
+	results, err := RunFromCache(scanInput, namespaces, Options{
 		CurrentVersion:                      currentVersion,
 		TargetVersion:                       targetVersion,
 		Platform:                            platform,

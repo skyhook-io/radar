@@ -1,4 +1,4 @@
-package server
+package upgrade
 
 import (
 	"context"
@@ -124,7 +124,7 @@ var (
 	endpointSliceGVR     = schema.GroupVersionResource{Group: "discovery.k8s.io", Version: "v1", Resource: "endpointslices"}
 )
 
-func collectUpgradeAPIServices(ctx context.Context, authz UpgradeEvidenceAuthorizer) []*unstructured.Unstructured {
+func collectUpgradeAPIServices(ctx context.Context, authz EvidenceAuthorizer) []*unstructured.Unstructured {
 	client := k8s.DynamicClientFromContext(ctx)
 	if client == nil || !authz.CanList(apiServiceGVR.Group, apiServiceGVR.Resource, "") {
 		return nil
@@ -144,7 +144,7 @@ func collectUpgradeAPIServicesWithClient(ctx context.Context, client dynamic.Int
 	return apiServices
 }
 
-func collectUpgradeWebhookEvidence(ctx context.Context, authz UpgradeEvidenceAuthorizer) (configs []*unstructured.Unstructured, unavailableConfigKinds []string, crds []*unstructured.Unstructured, endpointSlices []*discoveryv1.EndpointSlice, services []*corev1.Service) {
+func collectUpgradeWebhookEvidence(ctx context.Context, authz EvidenceAuthorizer) (configs []*unstructured.Unstructured, unavailableConfigKinds []string, crds []*unstructured.Unstructured, endpointSlices []*discoveryv1.EndpointSlice, services []*corev1.Service) {
 	defer func() { sort.Strings(unavailableConfigKinds) }()
 	dynamicClient := k8s.DynamicClientFromContext(ctx)
 	typedClient := k8s.ClientFromContext(ctx)

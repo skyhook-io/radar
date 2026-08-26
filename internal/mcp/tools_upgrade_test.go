@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skyhook-io/radar/internal/server"
+	"github.com/skyhook-io/radar/internal/upgrade"
 	"github.com/skyhook-io/radar/pkg/upgradereadiness"
 )
 
@@ -64,8 +64,8 @@ func upgradeScanFixture() *upgradereadiness.ScanResults {
 	}
 }
 
-func upgradeFixtureOutcome() server.UpgradeScanOutcome {
-	return server.UpgradeScanOutcome{
+func upgradeFixtureOutcome() upgrade.ScanOutcome {
+	return upgrade.ScanOutcome{
 		Results:    upgradeScanFixture(),
 		ObservedAt: time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC),
 		ScanID:     "sc_fixture",

@@ -51,6 +51,7 @@ import (
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/settings"
 	"github.com/skyhook-io/radar/internal/timeline"
+	"github.com/skyhook-io/radar/internal/upgrade"
 	"github.com/skyhook-io/radar/internal/traffic"
 	"github.com/skyhook-io/radar/internal/updater"
 	"github.com/skyhook-io/radar/internal/version"
@@ -1428,7 +1429,7 @@ func (s *Server) resolveHelmNamespaces(r *http.Request) ([]string, bool) {
 // cluster upgrade scan) can reuse the same Helm resolution without rebuilding
 // it from request query state.
 func (s *Server) resolveHelmNamespacesForScope(r *http.Request, namespaces []string) ([]string, bool) {
-	return resolveHelmNamespacesForAuthorizer(r.Context(), httpUpgradeAuthorizer{s: s, r: r}, namespaces)
+	return upgrade.ResolveHelmNamespaces(r.Context(), httpUpgradeAuthorizer{s: s, r: r}, namespaces)
 }
 
 // allNamespaceNames returns every namespace name from the shared cache lister,

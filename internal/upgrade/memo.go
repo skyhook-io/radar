@@ -1,4 +1,4 @@
-package server
+package upgrade
 
 import (
 	"context"
@@ -37,20 +37,20 @@ const (
 )
 
 var (
-	// ErrUpgradeScanStaleContext is returned when the kubeconfig context
+	// ErrScanStaleContext is returned when the kubeconfig context
 	// changed between a scan starting (or a memo entry being written) and the
 	// result being returned. A scan whose collectors straddle a context switch
 	// can contain mixed-cluster evidence — failing is safer than serving it.
-	ErrUpgradeScanStaleContext = errors.New("cluster context changed during the scan — retry the request")
-	// ErrUpgradeScanNotReady mirrors the cache-not-initialized 503.
-	ErrUpgradeScanNotReady = errors.New("cluster cache not initialized")
+	ErrScanStaleContext = errors.New("cluster context changed during the scan — retry the request")
+	// ErrScanNotReady mirrors the cache-not-initialized 503.
+	ErrScanNotReady = errors.New("cluster cache not initialized")
 )
 
-// UpgradeScanOutcome is one served scan snapshot. ObservedAt is when the
+// ScanOutcome is one served scan snapshot. ObservedAt is when the
 // underlying scan started — a memoized outcome keeps the original stamp so
 // staleness stays visible. ScanID identifies the snapshot for paging
 // consumers.
-type UpgradeScanOutcome struct {
+type ScanOutcome struct {
 	Results    *upgradereadiness.ScanResults
 	ObservedAt time.Time
 	ScanID     string
@@ -164,11 +164,11 @@ func newUpgradeScanID() string {
 // server version, namespace ceiling) was resolved — a switch completing
 // between those reads and this call is then caught here as a mismatch instead
 // of caching inputs from one cluster under the other's generation.
-func (m *upgradeScanMemo) get(ctx context.Context, key string, refresh bool, gen uint64, scan func(context.Context) (*upgradereadiness.ScanResults, error)) (UpgradeScanOutcome, error) {
+func (m *upgradeScanMemo) get(ctx context.Context, key string, refresh bool, gen uint64, scan func(context.Context) (*upgradereadiness.ScanResults, error)) (ScanOutcome, error) {
 	m.mu.Lock()
 	if gen != m.generation {
 		m.mu.Unlock()
-		return UpgradeScanOutcome{}, ErrUpgradeScanStaleContext
+		return ScanOutcome{}, ErrScanStaleContext
 	}
 	now := m.now()
 	m.sweepLocked(now)
@@ -203,7 +203,7 @@ func (m *upgradeScanMemo) get(ctx context.Context, key string, refresh bool, gen
 	if err == nil && m.generation != leader.generation {
 		// The context switched while collectors ran; the evidence may mix
 		// clusters. Refuse to serve or cache it.
-		err = ErrUpgradeScanStaleContext
+		err = ErrScanStaleContext
 	}
 	leader.err = err
 	if err == nil {
@@ -225,7 +225,7 @@ func (m *upgradeScanMemo) get(ctx context.Context, key string, refresh bool, gen
 	m.mu.Unlock()
 
 	if err != nil {
-		return UpgradeScanOutcome{}, err
+		return ScanOutcome{}, err
 	}
 	return out, nil
 }
@@ -288,7 +288,7 @@ func (m *upgradeScanMemo) runBoundedScan(ctx context.Context, leader *upgradeSca
 	m.mu.Lock()
 	if leader.generation != m.generation {
 		m.mu.Unlock()
-		return nil, ErrUpgradeScanStaleContext
+		return nil, ErrScanStaleContext
 	}
 	// Only the leader writes entry fields before done closes, and waiters
 	// don't read them until it does, so re-stamping under mu is safe.
@@ -299,25 +299,25 @@ func (m *upgradeScanMemo) runBoundedScan(ctx context.Context, leader *upgradeSca
 
 // waitForEntry blocks until the in-flight entry completes, then revalidates
 // the context generation before returning its result.
-func (m *upgradeScanMemo) waitForEntry(ctx context.Context, entry *upgradeScanEntry) (UpgradeScanOutcome, error) {
+func (m *upgradeScanMemo) waitForEntry(ctx context.Context, entry *upgradeScanEntry) (ScanOutcome, error) {
 	select {
 	case <-entry.done:
 	case <-ctx.Done():
-		return UpgradeScanOutcome{}, ctx.Err()
+		return ScanOutcome{}, ctx.Err()
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if entry.err != nil {
-		return UpgradeScanOutcome{}, entry.err
+		return ScanOutcome{}, entry.err
 	}
 	if entry.generation != m.generation {
-		return UpgradeScanOutcome{}, ErrUpgradeScanStaleContext
+		return ScanOutcome{}, ErrScanStaleContext
 	}
 	return m.outcomeLocked(entry, true), nil
 }
 
-func (m *upgradeScanMemo) outcomeLocked(entry *upgradeScanEntry, fromCache bool) UpgradeScanOutcome {
-	return UpgradeScanOutcome{
+func (m *upgradeScanMemo) outcomeLocked(entry *upgradeScanEntry, fromCache bool) ScanOutcome {
+	return ScanOutcome{
 		Results:    entry.results,
 		ObservedAt: entry.startedAt,
 		ScanID:     entry.scanID,
@@ -325,17 +325,17 @@ func (m *upgradeScanMemo) outcomeLocked(entry *upgradeScanEntry, fromCache bool)
 	}
 }
 
-// RunUpgradeReadinessScanMemoized validates the target and serves the scan
+// ScanMemoized validates the target and serves the scan
 // through the shared identity-scoped memo. The HTTP handler and the MCP tool
 // both call this, so an agent's tier-2 expansions hit the tier-1 call's scan
 // and a user's ordinary UI refetch within the TTL is free. Callers map the
 // sentinel errors (upgradereadiness.ErrInvalidTargetVersion / ErrNonForwardTarget /
-// ErrInvalidCurrentVersion, ErrUpgradeScanNotReady, ErrUpgradeScanStaleContext)
+// ErrInvalidCurrentVersion, ErrScanNotReady, ErrScanStaleContext)
 // to their surface's error shape.
 //
 // Results are shared across callers of the same key — treat the ScanResults
 // as immutable; shape copies, never mutate in place.
-func RunUpgradeReadinessScanMemoized(ctx context.Context, authz UpgradeEvidenceAuthorizer, targetVersion string, refresh bool) (UpgradeScanOutcome, error) {
+func ScanMemoized(ctx context.Context, authz EvidenceAuthorizer, targetVersion string, refresh bool) (ScanOutcome, error) {
 	// The generation is captured BEFORE any cluster-dependent read below
 	// (cache, server version, namespace ceiling): a context switch completing
 	// after this line is caught as a mismatch in get, so inputs resolved
@@ -344,12 +344,12 @@ func RunUpgradeReadinessScanMemoized(ctx context.Context, authz UpgradeEvidenceA
 	memo := getUpgradeScanMemo()
 	gen := memo.currentGeneration()
 	if k8s.GetResourceCache() == nil {
-		return UpgradeScanOutcome{}, ErrUpgradeScanNotReady
+		return ScanOutcome{}, ErrScanNotReady
 	}
 	currentVersion := k8s.GetServerVersion()
 	targetVersion, err := upgradereadiness.EffectiveTarget(currentVersion, targetVersion)
 	if err != nil {
-		return UpgradeScanOutcome{}, err
+		return ScanOutcome{}, err
 	}
 	username, groups := "", []string(nil)
 	if user := auth.UserFromContext(ctx); user != nil {

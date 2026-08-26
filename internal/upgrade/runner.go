@@ -1,4 +1,4 @@
-package audit
+package upgrade
 
 import (
 	"slices"
@@ -8,15 +8,16 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/skyhook-io/radar/internal/audit"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/upgradereadiness"
 )
 
-// UpgradeReadinessOptions carries evidence that is not available from the
+// Options carries evidence that is not available from the
 // typed informer cache. A nil slice means the collector could not read that
 // source; an empty non-nil slice means it was inspected and had no matches.
-type UpgradeReadinessOptions struct {
+type Options struct {
 	CurrentVersion                      string
 	TargetVersion                       string
 	Platform                            string
@@ -43,7 +44,7 @@ type UpgradeReadinessOptions struct {
 	SourceObjectUnavailableKinds        []string
 }
 
-func RunUpgradeReadinessFromCache(cache *k8s.ResourceCache, namespaces []string, opts UpgradeReadinessOptions) (*upgradereadiness.ScanResults, error) {
+func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts Options) (*upgradereadiness.ScanResults, error) {
 	// Source manifest evidence must come from the direct collector: informer
 	// transforms intentionally remove kubectl's last-applied annotation.
 	input := &upgradereadiness.Input{
@@ -73,17 +74,17 @@ func RunUpgradeReadinessFromCache(cache *k8s.ResourceCache, namespaces []string,
 		return upgradereadiness.Scan(input, opts.CurrentVersion, opts.TargetVersion)
 	}
 
-	typed := collectTypedInput(cache, namespaces)
-	replicaSets := listNamespaced(cache.ReplicaSets(), namespaces)
+	typed := audit.CollectTypedInput(cache, namespaces)
+	replicaSets := audit.ListNamespaced(cache.ReplicaSets(), namespaces)
 	var persistentVolumes []*corev1.PersistentVolume
 	if opts.CanReadPersistentVolumes {
-		persistentVolumes = filterPersistentVolumesForNamespaces(listNamespaced(cache.PersistentVolumes(), nil), namespaces)
+		persistentVolumes = filterPersistentVolumesForNamespaces(audit.ListNamespaced(cache.PersistentVolumes(), nil), namespaces)
 	}
 	var nodes []*corev1.Node
 	if opts.CanReadNodes {
-		nodes = listNamespaced(cache.Nodes(), namespaces)
+		nodes = audit.ListNamespaced(cache.Nodes(), namespaces)
 	}
-	events := listNamespaced(cache.Events(), namespaces)
+	events := audit.ListNamespaced(cache.Events(), namespaces)
 
 	input.CacheScopedKinds = upgradeCacheScopedKinds(cache, namespaces)
 	input.Pods = typed.Pods
