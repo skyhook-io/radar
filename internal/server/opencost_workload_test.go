@@ -125,3 +125,10 @@ func TestFocusOpenCostWorkloadMissingTargetWithReplicasReturnsNoMetrics(t *testi
 		t.Fatalf("Reason = %q, want %q", resp.Reason, pkgopencost.ReasonNoMetrics)
 	}
 }
+
+func TestFocusOpenCostWorkloadHandlesNilResponse(t *testing.T) {
+	resp := focusOpenCostWorkload(nil, "Deployment", "default", "web", 1)
+	if resp.Available || resp.Reason != pkgopencost.ReasonQueryError {
+		t.Fatalf("unexpected response: %#v", resp)
+	}
+}

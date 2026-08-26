@@ -276,6 +276,13 @@ func runCRDWarmupSequence(ctx context.Context, deferredDone <-chan struct{}, sti
 func ResetAllSubsystems() {
 	// Step 4 subsystems (reverse): prometheus, traffic, helm, metrics history
 	contextSwitchMu.RLock()
+	costResetFn := costResetFunc
+	contextSwitchMu.RUnlock()
+	if costResetFn != nil {
+		safeReset("cost source", costResetFn)
+	}
+
+	contextSwitchMu.RLock()
 	promResetFn := prometheusResetFunc
 	contextSwitchMu.RUnlock()
 	if promResetFn != nil {

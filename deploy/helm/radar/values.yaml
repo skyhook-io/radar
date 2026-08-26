@@ -473,9 +473,25 @@ mcp:
 
 # OpenCost/Kubecost display configuration
 cost:
+  # Cost data source: "auto", "prometheus", or "kubecost". Empty keeps Radar's
+  # default Auto mode without making the Settings field deployment-managed.
+  source: ""
   # Optional ISO 4217 override for OpenCost/Kubecost values. Empty detects the
   # running cost tool's configured currency when available, then uses USD.
   currency: ""
+  kubecost:
+    # Kubecost 3 Aggregator base URL. Empty auto-discovers an Aggregator in the
+    # connected cluster. Federated agent-only clusters need the central URL.
+    # Both a root API URL and a URL ending in /model are accepted.
+    url: ""
+    # Cluster ID used to filter central/federated Aggregator results. Empty
+    # detects a literal CLUSTER_ID from an active FinOps Agent or Aggregator.
+    clusterId: ""
+    # Optional Secret containing a Kubecost service-account API key. Radar sends
+    # it only to the configured origin as X-API-KEY. Port 9008 deployments that
+    # are intentionally unauthenticated can leave this empty.
+    existingSecret: ""
+    existingSecretKey: "api-key"
 
 # Traffic source configuration
 traffic:

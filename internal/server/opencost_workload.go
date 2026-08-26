@@ -40,12 +40,43 @@ func (s *Server) handleOpenCostWorkload(w http.ResponseWriter, r *http.Request) 
 		Kind:      kind,
 		Name:      name,
 	}
+	connection, err := internalopencost.Selected(r.Context())
+	if err != nil {
+		resp.Reason = internalopencost.ConnectionFailureReason(err)
+		resp.Currency = s.resolvedOpenCostCurrency()
+		resp.Source = "kubecost"
+		s.writeJSON(w, resp)
+		return
+	}
+	if connection.Source == internalopencost.SourceKubecost {
+		workloads, err := pkgopencost.ComputeKubecostWorkloads(r.Context(), connection.Client, namespace, pkgopencost.KubecostCurrentOptions{
+			Currency: s.resolvedOpenCostCurrency(), ClusterID: connection.ClusterID, Owners: internalopencost.BuildPodOwnerLookup(namespace),
+		})
+		if err != nil {
+			log.Printf("[opencost] Kubecost workload cost failed for %s/%s: %v", namespace, name, err)
+			resp.Reason = internalopencost.ConnectionFailureReason(err)
+			resp.Currency = s.resolvedOpenCostCurrency()
+			resp.Source = "kubecost"
+			s.writeJSON(w, resp)
+			return
+		}
+		result := focusOpenCostWorkload(workloads, kind, namespace, name, desiredReplicas)
+		result.Currency = s.resolvedOpenCostCurrency()
+		result.Source = "kubecost"
+		result.DataThrough = workloads.DataThrough
+		if result.Current != nil {
+			result.Current.Replicas = desiredReplicas
+		}
+		s.writeJSON(w, result)
+		return
+	}
 
 	client := prometheuspkg.GetClient()
 	if client == nil {
 		resp.Available = false
 		resp.Reason = pkgopencost.ReasonNoPrometheus
 		resp.Currency = s.resolvedOpenCostCurrency()
+		resp.Source = "prometheus"
 		s.writeJSON(w, resp)
 		return
 	}
@@ -54,6 +85,7 @@ func (s *Server) handleOpenCostWorkload(w http.ResponseWriter, r *http.Request) 
 		resp.Available = false
 		resp.Reason = internalopencost.ConnectionFailureReason(err)
 		resp.Currency = s.resolvedOpenCostCurrency()
+		resp.Source = "prometheus"
 		s.writeJSON(w, resp)
 		return
 	}
@@ -61,6 +93,7 @@ func (s *Server) handleOpenCostWorkload(w http.ResponseWriter, r *http.Request) 
 	workloads := pkgopencost.ComputeWorkloadsFromProm(r.Context(), client.Prom(), namespace, internalopencost.BuildPodOwnerLookup(namespace))
 	result := focusOpenCostWorkload(workloads, kind, namespace, name, desiredReplicas)
 	result.Currency = s.resolvedOpenCostCurrency()
+	result.Source = "prometheus"
 	s.writeJSON(w, result)
 }
 
@@ -83,12 +116,28 @@ func (s *Server) handleOpenCostWorkloadTrend(w http.ResponseWriter, r *http.Requ
 		Name:      name,
 		Range:     r.URL.Query().Get("range"),
 	}
+	connection, err := internalopencost.Selected(r.Context())
+	if err != nil {
+		resp.Reason = internalopencost.ConnectionFailureReason(err)
+		resp.Currency = s.resolvedOpenCostCurrency()
+		resp.Source = "kubecost"
+		s.writeJSON(w, resp)
+		return
+	}
+	if connection.Source == internalopencost.SourceKubecost {
+		resp.Reason = pkgopencost.ReasonHistoryUnsupported
+		resp.Currency = s.resolvedOpenCostCurrency()
+		resp.Source = "kubecost"
+		s.writeJSON(w, resp)
+		return
+	}
 
 	client := prometheuspkg.GetClient()
 	if client == nil {
 		resp.Available = false
 		resp.Reason = pkgopencost.ReasonNoPrometheus
 		resp.Currency = s.resolvedOpenCostCurrency()
+		resp.Source = "prometheus"
 		s.writeJSON(w, resp)
 		return
 	}
@@ -97,6 +146,7 @@ func (s *Server) handleOpenCostWorkloadTrend(w http.ResponseWriter, r *http.Requ
 		resp.Available = false
 		resp.Reason = internalopencost.ConnectionFailureReason(err)
 		resp.Currency = s.resolvedOpenCostCurrency()
+		resp.Source = "prometheus"
 		s.writeJSON(w, resp)
 		return
 	}
@@ -108,6 +158,7 @@ func (s *Server) handleOpenCostWorkloadTrend(w http.ResponseWriter, r *http.Requ
 		Name:      name,
 	})
 	result.Currency = s.resolvedOpenCostCurrency()
+	result.Source = "prometheus"
 	s.writeJSON(w, result)
 }
 
@@ -241,6 +292,8 @@ func focusOpenCostWorkload(resp *pkgopencost.WorkloadCostResponse, kind, namespa
 		out.Reason = pkgopencost.ReasonQueryError
 		return out
 	}
+	out.Source = resp.Source
+	out.DataThrough = resp.DataThrough
 	if resp.Available {
 		for i := range resp.Workloads {
 			wl := resp.Workloads[i]

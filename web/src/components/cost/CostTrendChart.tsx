@@ -37,6 +37,23 @@ export function CostTrendChart() {
     )
   }
 
+  if (data?.reason === 'history_unsupported') {
+    return (
+      <div className="rounded-lg border border-theme-border bg-theme-surface/50 px-4 py-3">
+        <div className="flex items-start gap-2">
+          <TrendingUp className="mt-0.5 h-4 w-4 text-theme-text-tertiary" />
+          <div>
+            <div className="text-xs font-medium text-theme-text-secondary">Cost rate trend</div>
+            <div className="mt-0.5 text-xs text-theme-text-tertiary">
+              Historical charts aren&apos;t available for Kubecost yet. Current allocation and node
+              costs remain available above and below.
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   if (!data?.available || !data.series?.length) {
     return null
   }

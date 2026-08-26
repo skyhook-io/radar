@@ -86,6 +86,9 @@ func (r *CurrencyResolver) Invalidate() {
 }
 
 func clusterCurrencyDetectionAllowed() bool {
+	if ConfigSnapshot().Source == SourceKubecost || SelectedSourceSnapshot() == SourceKubecost {
+		return true
+	}
 	client := prometheuspkg.GetClient()
 	return client == nil || !client.HasManualURL()
 }

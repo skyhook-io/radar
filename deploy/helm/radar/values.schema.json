@@ -305,10 +305,29 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "source": {
+          "type": "string",
+          "enum": ["", "auto", "prometheus", "kubecost"],
+          "description": "Cost source selection. Empty uses Auto without making Settings deployment-managed."
+        },
         "currency": {
           "type": "string",
           "pattern": "^$|^[A-Za-z]{3}$",
           "description": "Optional ISO 4217 override for OpenCost/Kubecost values; empty auto-detects from a running cost tool, then uses USD."
+        },
+        "kubecost": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "url": {
+              "type": "string",
+              "pattern": "^$|^https?://[^?#]+$",
+              "description": "Kubecost 3 Aggregator base URL; empty auto-discovers a local Aggregator."
+            },
+            "clusterId": { "type": "string" },
+            "existingSecret": { "type": "string" },
+            "existingSecretKey": { "type": "string", "minLength": 1 }
+          }
         }
       }
     },

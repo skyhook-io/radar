@@ -3,18 +3,23 @@ package opencost
 // Unavailability reasons — returned in the "reason" field when available=false
 // so the frontend can show contextual guidance to the user.
 const (
-	DefaultCurrency    = "USD"
-	ReasonNoPrometheus = "no_prometheus" // Prometheus/VictoriaMetrics not found in cluster
-	ReasonNoMetrics    = "no_metrics"    // Prometheus found but OpenCost metrics not present
-	ReasonQueryError   = "query_error"   // Prometheus found but cost queries failed
-	ReasonAccessDenied = "access_denied" // user cannot access the requested resource
-	ReasonNotFound     = "not_found"     // requested resource no longer exists
+	DefaultCurrency          = "USD"
+	ReasonNoPrometheus       = "no_prometheus" // Prometheus/VictoriaMetrics not found in cluster
+	ReasonNoMetrics          = "no_metrics"    // Prometheus found but OpenCost metrics not present
+	ReasonQueryError         = "query_error"   // Prometheus found but cost queries failed
+	ReasonAccessDenied       = "access_denied" // user cannot access the requested resource
+	ReasonNotFound           = "not_found"     // requested resource no longer exists
+	ReasonSourceUnavailable  = "source_unavailable"
+	ReasonAuthentication     = "authentication_error"
+	ReasonHistoryUnsupported = "history_unsupported"
 )
 
 // CostSummary is the response for the /api/opencost/summary endpoint.
 type CostSummary struct {
 	Available         bool            `json:"available"`
 	Reason            string          `json:"reason,omitempty"` // Set when available=false: no_prometheus, no_metrics, query_error
+	Source            string          `json:"source,omitempty"`
+	DataThrough       string          `json:"dataThrough,omitempty"`
 	Currency          string          `json:"currency"`
 	Window            string          `json:"window,omitempty"`
 	TotalHourlyCost   float64         `json:"totalHourlyCost,omitempty"`
@@ -45,21 +50,25 @@ type NamespaceCost struct {
 
 // WorkloadCostResponse is the response for the /api/opencost/workloads endpoint.
 type WorkloadCostResponse struct {
-	Available bool           `json:"available"`
-	Reason    string         `json:"reason,omitempty"`
-	Currency  string         `json:"currency"`
-	Namespace string         `json:"namespace"`
-	Workloads []WorkloadCost `json:"workloads"`
+	Available   bool           `json:"available"`
+	Reason      string         `json:"reason,omitempty"`
+	Source      string         `json:"source,omitempty"`
+	DataThrough string         `json:"dataThrough,omitempty"`
+	Currency    string         `json:"currency"`
+	Namespace   string         `json:"namespace"`
+	Workloads   []WorkloadCost `json:"workloads"`
 }
 
 type WorkloadCostDetailResponse struct {
-	Available bool          `json:"available"`
-	Reason    string        `json:"reason,omitempty"`
-	Currency  string        `json:"currency"`
-	Namespace string        `json:"namespace"`
-	Kind      string        `json:"kind"`
-	Name      string        `json:"name"`
-	Current   *WorkloadCost `json:"current,omitempty"`
+	Available   bool          `json:"available"`
+	Reason      string        `json:"reason,omitempty"`
+	Source      string        `json:"source,omitempty"`
+	DataThrough string        `json:"dataThrough,omitempty"`
+	Currency    string        `json:"currency"`
+	Namespace   string        `json:"namespace"`
+	Kind        string        `json:"kind"`
+	Name        string        `json:"name"`
+	Current     *WorkloadCost `json:"current,omitempty"`
 }
 
 // WorkloadCost holds per-workload cost breakdown within a namespace.
@@ -84,6 +93,7 @@ type WorkloadCost struct {
 type CostTrendResponse struct {
 	Available bool              `json:"available"`
 	Reason    string            `json:"reason,omitempty"`
+	Source    string            `json:"source,omitempty"`
 	Currency  string            `json:"currency"`
 	Range     string            `json:"range"`
 	Series    []CostTrendSeries `json:"series,omitempty"`
@@ -92,6 +102,7 @@ type CostTrendResponse struct {
 type WorkloadCostTrendResponse struct {
 	Available       bool            `json:"available"`
 	Reason          string          `json:"reason,omitempty"`
+	Source          string          `json:"source,omitempty"`
 	Currency        string          `json:"currency"`
 	Namespace       string          `json:"namespace"`
 	Kind            string          `json:"kind"`
@@ -147,13 +158,15 @@ type ApplicationWorkloadCost struct {
 }
 
 type ApplicationCostResponse struct {
-	Available bool                      `json:"available"`
-	Reason    string                    `json:"reason,omitempty"`
-	Currency  string                    `json:"currency"`
-	Partial   bool                      `json:"partial,omitempty"`
-	Totals    ApplicationCostTotals     `json:"totals"`
-	Coverage  ApplicationCostCoverage   `json:"coverage"`
-	Workloads []ApplicationWorkloadCost `json:"workloads,omitempty"`
+	Available   bool                      `json:"available"`
+	Reason      string                    `json:"reason,omitempty"`
+	Source      string                    `json:"source,omitempty"`
+	DataThrough string                    `json:"dataThrough,omitempty"`
+	Currency    string                    `json:"currency"`
+	Partial     bool                      `json:"partial,omitempty"`
+	Totals      ApplicationCostTotals     `json:"totals"`
+	Coverage    ApplicationCostCoverage   `json:"coverage"`
+	Workloads   []ApplicationWorkloadCost `json:"workloads,omitempty"`
 }
 
 type ApplicationCostTrendSeries struct {
@@ -165,6 +178,7 @@ type ApplicationCostTrendSeries struct {
 type ApplicationCostTrendResponse struct {
 	Available       bool                         `json:"available"`
 	Reason          string                       `json:"reason,omitempty"`
+	Source          string                       `json:"source,omitempty"`
 	Currency        string                       `json:"currency"`
 	Range           string                       `json:"range"`
 	Partial         bool                         `json:"partial,omitempty"`
@@ -188,10 +202,12 @@ type CostDataPoint struct {
 
 // NodeCostResponse is the response for the /api/opencost/nodes endpoint.
 type NodeCostResponse struct {
-	Available bool       `json:"available"`
-	Reason    string     `json:"reason,omitempty"`
-	Currency  string     `json:"currency"`
-	Nodes     []NodeCost `json:"nodes,omitempty"`
+	Available   bool       `json:"available"`
+	Reason      string     `json:"reason,omitempty"`
+	Source      string     `json:"source,omitempty"`
+	DataThrough string     `json:"dataThrough,omitempty"`
+	Currency    string     `json:"currency"`
+	Nodes       []NodeCost `json:"nodes,omitempty"`
 }
 
 // NodeCost holds per-node cost breakdown.

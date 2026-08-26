@@ -885,11 +885,18 @@ export type CostUnavailableReason =
   | "no_metrics"
   | "query_error"
   | "access_denied"
-  | "not_found";
+  | "not_found"
+  | "source_unavailable"
+  | "authentication_error"
+  | "history_unsupported";
+
+export type CostDataSource = "prometheus" | "kubecost";
 
 export interface OpenCostSummary {
   available: boolean;
   reason?: CostUnavailableReason;
+  source?: CostDataSource;
+  dataThrough?: string;
   currency?: string;
   window?: string;
   totalHourlyCost?: number;
@@ -963,6 +970,8 @@ export interface OpenCostWorkloadCost {
 export interface OpenCostWorkloadResponse {
   available: boolean;
   reason?: CostUnavailableReason;
+  source?: CostDataSource;
+  dataThrough?: string;
   currency?: string;
   namespace: string;
   workloads: OpenCostWorkloadCost[];
@@ -991,6 +1000,8 @@ export function useOpenCostWorkloads(
 export interface OpenCostWorkloadDetailResponse {
   available: boolean;
   reason?: CostUnavailableReason;
+  source?: CostDataSource;
+  dataThrough?: string;
   currency?: string;
   namespace: string;
   kind: string;
@@ -1036,6 +1047,7 @@ export interface OpenCostTrendSeries {
 export interface OpenCostTrendResponse {
   available: boolean;
   reason?: CostUnavailableReason;
+  source?: CostDataSource;
   currency?: string;
   range: string;
   series?: OpenCostTrendSeries[];
@@ -1058,6 +1070,7 @@ export function useOpenCostTrend(range_: CostTimeRange = "24h") {
 export interface OpenCostWorkloadTrendResponse {
   available: boolean;
   reason?: CostUnavailableReason;
+  source?: CostDataSource;
   currency?: string;
   namespace: string;
   kind: string;
@@ -1131,6 +1144,8 @@ export interface OpenCostApplicationWorkloadCost extends OpenCostApplicationWork
 export interface OpenCostApplicationCostResponse {
   available: boolean;
   reason?: CostUnavailableReason;
+  source?: CostDataSource;
+  dataThrough?: string;
   currency?: string;
   partial?: boolean;
   totals: OpenCostApplicationCostTotals;
@@ -1146,6 +1161,7 @@ export interface OpenCostApplicationCostTrendSeries extends OpenCostApplicationW
 export interface OpenCostApplicationCostTrendResponse {
   available: boolean;
   reason?: CostUnavailableReason;
+  source?: CostDataSource;
   currency?: string;
   range: string;
   partial?: boolean;
@@ -1238,6 +1254,8 @@ export interface OpenCostNodeCost {
 export interface OpenCostNodeResponse {
   available: boolean;
   reason?: CostUnavailableReason;
+  source?: CostDataSource;
+  dataThrough?: string;
   currency?: string;
   nodes?: OpenCostNodeCost[];
 }

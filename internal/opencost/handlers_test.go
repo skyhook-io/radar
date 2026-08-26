@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
+	pkgopencost "github.com/skyhook-io/radar/pkg/opencost"
+	"github.com/skyhook-io/radar/pkg/prom"
 )
 
 func TestUnavailableResponsesIncludeCurrency(t *testing.T) {
@@ -39,6 +41,45 @@ func TestUnavailableResponsesIncludeCurrency(t *testing.T) {
 				t.Errorf("currency = %q, want GBP", body.Currency)
 			}
 		})
+	}
+}
+
+func TestCostRouteScopeRejectsUnreadableNamespaceAndNodes(t *testing.T) {
+	scope := RouteScope{
+		AllowedNamespaces: func(_ *http.Request, _ []string) []string { return []string{} },
+		CanReadNodes:      func(_ *http.Request) bool { return false },
+	}
+	workloads := httptest.NewRecorder()
+	handleWorkloadsScoped(workloads, httptest.NewRequest(http.MethodGet, "/opencost/workloads?namespace=private", nil), nil, scope)
+	if workloads.Code != http.StatusForbidden {
+		t.Fatalf("workloads status = %d, want 403", workloads.Code)
+	}
+	nodes := httptest.NewRecorder()
+	handleNodesScoped(nodes, httptest.NewRequest(http.MethodGet, "/opencost/nodes", nil), nil, scope)
+	if nodes.Code != http.StatusForbidden {
+		t.Fatalf("nodes status = %d, want 403", nodes.Code)
+	}
+}
+
+func TestFilterCostSummaryRecomputesVisibleTotals(t *testing.T) {
+	resp := &pkgopencost.CostSummary{
+		Available: true,
+		Namespaces: []pkgopencost.NamespaceCost{
+			{Name: "allowed", HourlyCost: 3, CPUCost: 2, MemoryCost: 1, CPUUsageCost: 1, MemoryUsageCost: 0.5, IdleCost: 1.5},
+			{Name: "private", HourlyCost: 8, CPUCost: 4, MemoryCost: 4, CPUUsageCost: 4, MemoryUsageCost: 4},
+		},
+	}
+	filterCostSummary(resp, []string{"allowed"})
+	if len(resp.Namespaces) != 1 || resp.Namespaces[0].Name != "allowed" || resp.TotalHourlyCost != 3 || resp.ClusterEfficiency != 50 {
+		t.Fatalf("unexpected filtered summary: %#v", resp)
+	}
+}
+
+func TestConnectionFailureReasonRecognizesHTTPAuthentication(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		if got := ConnectionFailureReason(&prom.HTTPError{StatusCode: status}); got != pkgopencost.ReasonAuthentication {
+			t.Fatalf("status %d reason = %q, want %q", status, got, pkgopencost.ReasonAuthentication)
+		}
 	}
 }
 

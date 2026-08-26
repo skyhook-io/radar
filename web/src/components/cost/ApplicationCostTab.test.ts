@@ -53,6 +53,31 @@ describe('getApplicationCostState', () => {
     ).toBe('partial_missing_history')
   })
 
+  it('keeps Kubecost application totals visible when history is unsupported', () => {
+    const current: OpenCostApplicationCostResponse = {
+      available: true,
+      source: 'kubecost',
+      currency: 'USD',
+      totals: {
+        hourlyCost: 0.4, cpuCost: 0.25, memoryCost: 0.15, replicas: 3,
+        cpuUsageAvailable: true, memoryUsageAvailable: true,
+        cpuAllocationUse: 40, memoryAllocationUse: 60,
+      },
+      coverage: { total: 1, included: 1 },
+      workloads: [],
+    }
+    const trend: OpenCostApplicationCostTrendResponse = {
+      available: false,
+      source: 'kubecost',
+      reason: 'history_unsupported',
+      currency: 'USD',
+      range: '24h',
+      coverage: { total: 1, included: 0 },
+    }
+
+    expect(getApplicationCostState(current, trend, {})).toBe('partial_missing_history')
+  })
+
   it('uses historical data when current app metrics are absent but history exists', () => {
     const current: OpenCostApplicationCostResponse = {
       available: false,

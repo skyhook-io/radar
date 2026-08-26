@@ -451,8 +451,10 @@ func TestCurrencyResolverDoesNotRetainDetectionWhenActiveConfigBecomesAmbiguous(
 
 func TestClusterCurrencyDetectionAllowed(t *testing.T) {
 	prometheuspkg.Initialize(nil, nil, "")
+	originalCostConfig := ConfigSnapshot()
 	t.Cleanup(func() {
 		prometheuspkg.SetManualURL("")
+		_ = Configure(originalCostConfig)
 	})
 
 	if !clusterCurrencyDetectionAllowed() {
@@ -461,6 +463,15 @@ func TestClusterCurrencyDetectionAllowed(t *testing.T) {
 	prometheuspkg.SetManualURL("https://prometheus.example.com")
 	if clusterCurrencyDetectionAllowed() {
 		t.Fatal("cluster currency detection enabled with a manual Prometheus URL")
+	}
+	if err := Configure(ManagerConfig{Source: SourceKubecost}); err != nil {
+		t.Fatal(err)
+	}
+	if !clusterCurrencyDetectionAllowed() {
+		t.Fatal("Kubecost source should use currency evidence from the connected cluster")
+	}
+	if err := Configure(ManagerConfig{Source: SourceAuto}); err != nil {
+		t.Fatal(err)
 	}
 	prometheuspkg.SetManualURL("")
 	if !clusterCurrencyDetectionAllowed() {

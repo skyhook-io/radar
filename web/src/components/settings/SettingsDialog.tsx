@@ -43,6 +43,9 @@ interface Config {
   historyLimit?: number
   prometheusUrl?: string
   opencostCurrency?: string
+  costSource?: 'auto' | 'prometheus' | 'kubecost'
+  kubecostUrl?: string
+  kubecostClusterId?: string
   argoCdUrl?: string
   argoCdInsecureTls?: boolean
   mcp?: boolean | null
@@ -55,6 +58,9 @@ interface ConfigResponse {
   isDesktop: boolean
   openCostCurrencyManaged?: boolean
   prometheusHeaderKeys?: string[]
+  kubecostApiKeySet?: boolean
+  kubecostEnvManaged?: boolean
+  kubecostEnvError?: string
   // True when an Argo CD auth token is stored. The token itself is never
   // returned — the card shows a "configured" placeholder and omits the token
   // from the PUT unless the user changes or clears it.
@@ -81,7 +87,7 @@ interface SettingsDialogProps {
 //   • Persisted config (kubeconfig, server, timeline, MCP, cost currency) —
 //     saved by the owner-gated footer. Currency applies live unless a startup
 //     flag owns it; the rest restart.
-//   • Live integrations (Prometheus, Argo CD) — their own Apply/Connect endpoints
+//   • Live integrations (Prometheus, cost source, Argo CD) — their own Apply/Connect endpoints
 //     re-point the running server; effect immediately, NOT part of footer dirty.
 //   • AI diagnose — client-side prefs, self-saving, editable by everyone.
 export type SettingsSectionId =
@@ -239,6 +245,9 @@ export function SettingsDialog({
       const body: Config = {
         ...editedConfig,
         prometheusUrl: configData.file.prometheusUrl,
+        costSource: configData.file.costSource,
+        kubecostUrl: configData.file.kubecostUrl,
+        kubecostClusterId: configData.file.kubecostClusterId,
         argoCdUrl: configData.file.argoCdUrl,
         argoCdInsecureTls: configData.file.argoCdInsecureTls,
       }
@@ -549,17 +558,37 @@ export function SettingsDialog({
               id="cost"
               active={section}
               title="Cost"
-              caption={configData?.openCostCurrencyManaged
-                ? 'Saved to config. A CLI or Helm override is currently active.'
-                : 'Saved to config and applied immediately.'}
-              live={!configData?.openCostCurrencyManaged}
+              caption={configData?.kubecostEnvManaged
+                ? 'Source is managed by the deployment. Currency saves with the footer.'
+                : 'Source applies immediately. Currency saves with the footer.'}
+              live
               locked={!canEditConfig}
             >
               <CostSection
                 currency={editedConfig.opencostCurrency ?? ''}
+                source={editedConfig.costSource ?? 'auto'}
+                url={editedConfig.kubecostUrl ?? ''}
+                clusterId={editedConfig.kubecostClusterId ?? ''}
+                apiKeySet={configData?.kubecostApiKeySet ?? false}
+                sourceEnvManaged={configData?.kubecostEnvManaged ?? false}
+                sourceEnvError={configData?.kubecostEnvError}
                 managed={configData?.openCostCurrencyManaged ?? false}
                 effectiveCurrency={configData?.effective.opencostCurrency ?? ''}
                 onChange={(value) => updateConfigField('opencostCurrency', value || undefined)}
+                onChangeSource={(value) => updateConfigField('costSource', value)}
+                onChangeUrl={(value) => updateConfigField('kubecostUrl', value || undefined)}
+                onChangeClusterId={(value) => updateConfigField('kubecostClusterId', value || undefined)}
+                onApplied={({ source, url, clusterId, apiKeySet }) => {
+                  setEditedConfig((prev) => ({ ...prev, costSource: source, kubecostUrl: url || undefined, kubecostClusterId: clusterId || undefined }))
+                  setConfigData((prev) => prev ? {
+                    ...prev,
+                    file: { ...prev.file, costSource: source, kubecostUrl: url || undefined, kubecostClusterId: clusterId || undefined },
+                    kubecostApiKeySet: apiKeySet,
+                  } : prev)
+                  void queryClient.invalidateQueries({
+                    predicate: (query) => typeof query.queryKey[0] === 'string' && query.queryKey[0].startsWith('opencost-'),
+                  })
+                }}
               />
             </SectionPane>
 
@@ -1196,34 +1225,219 @@ function TimelineSection({
 
 function CostSection({
   currency,
+  source,
+  url,
+  clusterId,
+  apiKeySet,
+  sourceEnvManaged,
+  sourceEnvError,
   managed,
   effectiveCurrency,
   onChange,
+  onChangeSource,
+  onChangeUrl,
+  onChangeClusterId,
+  onApplied,
 }: {
   currency: string
+  source: 'auto' | 'prometheus' | 'kubecost'
+  url: string
+  clusterId: string
+  apiKeySet: boolean
+  sourceEnvManaged: boolean
+  sourceEnvError?: string
   managed: boolean
   effectiveCurrency: string
   onChange: (value: string) => void
+  onChangeSource: (value: 'auto' | 'prometheus' | 'kubecost') => void
+  onChangeUrl: (value: string) => void
+  onChangeClusterId: (value: string) => void
+  onApplied: (value: { source: 'auto' | 'prometheus' | 'kubecost'; url: string; clusterId: string; apiKeySet: boolean }) => void
 }) {
+  const [apply, setApply] = useState<ApplyState>({ status: 'idle' })
+  const [apiKey, setApiKey] = useState('')
+  const [apiKeyTouched, setApiKeyTouched] = useState(false)
+  const [apiKeyCleared, setApiKeyCleared] = useState(false)
+
+  const applySource = async () => {
+    setApply({ status: 'applying' })
+    let nextKeySet = apiKeySet
+    let sentKey: string | undefined
+    if (apiKeyCleared) {
+      sentKey = ''
+      nextKeySet = false
+    } else if (apiKeyTouched && apiKey !== '') {
+      sentKey = apiKey
+      nextKeySet = true
+    }
+    try {
+      const res = await fetch(apiUrl('/integrations/kubecost'), {
+        method: 'PUT',
+        credentials: getCredentialsMode(),
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({
+          source,
+          url: url.trim(),
+          clusterId: clusterId.trim(),
+          ...(sentKey !== undefined ? { apiKey: sentKey } : {}),
+        }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) {
+        setApply({ status: 'failed', error: data?.error || res.statusText })
+        return
+      }
+      setApiKey('')
+      setApiKeyTouched(false)
+      setApiKeyCleared(false)
+      nextKeySet = data?.apiKeySet ?? nextKeySet
+      onApplied({ source, url: url.trim(), clusterId: clusterId.trim(), apiKeySet: nextKeySet })
+      setApply({ status: 'connected', address: data?.source || source })
+    } catch (err) {
+      setApply({ status: 'failed', error: String(err) })
+    }
+  }
+
   return (
-    <div>
-      <label className="mb-1 block text-sm font-medium text-theme-text-primary">
-        Currency override
-      </label>
-      <p className="mb-1 text-xs text-theme-text-tertiary">
-        Choose a currency, or use Auto to read <code>currencyCode</code> or{' '}
-        <code>DISPLAY_CURRENCY</code> from an active OpenCost/Kubecost installation, then fall back
-        to USD. A custom Prometheus URL disables detection. Radar labels values but does not convert
-        them.
-      </p>
-      <SelectMenu
-        value={currency}
-        options={currencyOptionsForValue(currency)}
-        onChange={onChange}
-        ariaLabel="Currency override"
-        searchPlaceholder="Search currencies by name or code"
-        className="w-full"
-      />
+    <div className="space-y-5">
+      {sourceEnvManaged && (
+        <div className={clsx(
+          'rounded-md border p-3',
+          sourceEnvError
+            ? 'border-red-500/30 bg-red-500/[0.07]'
+            : 'border-skyhook-500/30 bg-skyhook-500/[0.07]',
+        )}>
+          <p className={clsx(
+            'flex items-center gap-1.5 text-sm font-medium',
+            sourceEnvError ? 'text-red-600 dark:text-red-400/90' : 'text-theme-text-primary',
+          )}>
+            {sourceEnvError
+              ? <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+              : <Terminal className="h-3.5 w-3.5 shrink-0 text-skyhook-500" />}
+            {sourceEnvError ? 'Deployment cost configuration is invalid' : 'Configured by the deployment'}
+          </p>
+          <p className="mt-1 text-xs text-theme-text-tertiary">
+            {sourceEnvError ?? 'Edit the RADAR_COST_SOURCE and RADAR_KUBECOST_* environment variables or Helm values, then restart Radar to change the source.'}
+          </p>
+        </div>
+      )}
+
+      <div>
+        <label className="mb-1 block text-sm font-medium text-theme-text-primary">Cost source</label>
+        <p className="mb-1 text-xs text-theme-text-tertiary">
+          Auto keeps working OpenCost-compatible Prometheus metrics, then tries a local Kubecost 3
+          Aggregator when those metrics are absent.
+        </p>
+        <select
+          value={source}
+          onChange={(event) => { onChangeSource(event.target.value as typeof source); setApply({ status: 'idle' }) }}
+          disabled={sourceEnvManaged}
+          className="w-full rounded-md border border-theme-border bg-theme-elevated px-3 py-1.5 text-sm text-theme-text-primary focus:border-skyhook-500 focus:outline-none disabled:opacity-60"
+          aria-label="Cost source"
+        >
+          <option value="auto">Auto (recommended)</option>
+          <option value="prometheus">Prometheus metrics</option>
+          <option value="kubecost">Kubecost Aggregator</option>
+        </select>
+      </div>
+
+      {source !== 'prometheus' && (
+        <div className="space-y-3 rounded-lg border border-theme-border bg-theme-base/40 p-3">
+          <div>
+            <label className="mb-1 block text-sm font-medium text-theme-text-primary">Kubecost Aggregator URL</label>
+            <p className="mb-1 text-xs text-theme-text-tertiary">
+              Leave blank to discover a local Kubecost 3 Aggregator on port 9004. Agent-only or
+              federated clusters need the central Aggregator URL.
+            </p>
+            <Input
+              value={url}
+              onChange={(event) => { onChangeUrl(event.target.value); setApply({ status: 'idle' }) }}
+              disabled={sourceEnvManaged}
+              placeholder="auto-discover, or https://kubecost.example.com"
+              className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-theme-text-primary">Cluster ID</label>
+            <p className="mb-1 text-xs text-theme-text-tertiary">
+              Usually detected from the FinOps Agent&apos;s <code>CLUSTER_ID</code>. Enter it when the
+              value is indirect, ambiguous, or unavailable to Radar.
+            </p>
+            <Input
+              value={clusterId}
+              onChange={(event) => { onChangeClusterId(event.target.value); setApply({ status: 'idle' }) }}
+              disabled={sourceEnvManaged}
+              placeholder="auto-detect CLUSTER_ID"
+              className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-theme-text-primary">API key</label>
+            <p className="mb-1 text-xs text-theme-text-tertiary">
+              Optional Kubecost service-account key sent as <code>X-API-KEY</code>. The stored value
+              is write-only.{apiKeySet && !apiKeyCleared ? ' A key is configured.' : ''}
+            </p>
+            <div className="flex items-center gap-2">
+              <Input
+                type="password"
+                value={apiKey}
+                onChange={(event) => { setApiKey(event.target.value); setApiKeyTouched(true); setApiKeyCleared(false); setApply({ status: 'idle' }) }}
+                disabled={sourceEnvManaged}
+                placeholder={apiKeySet && !apiKeyCleared ? 'Configured — enter to replace' : 'Optional API key'}
+                className="min-w-0 flex-1 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
+              />
+              {apiKeySet && !apiKeyCleared && !sourceEnvManaged && (
+                <button
+                  type="button"
+                  onClick={() => { setApiKey(''); setApiKeyTouched(false); setApiKeyCleared(true); setApply({ status: 'idle' }) }}
+                  className="px-2 py-1.5 text-xs text-theme-text-tertiary hover:text-theme-text-primary"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!sourceEnvManaged && <div>
+        <button
+          type="button"
+          onClick={applySource}
+          disabled={apply.status === 'applying'}
+          className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium btn-brand disabled:opacity-50"
+        >
+          {apply.status === 'applying' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plug className="h-3.5 w-3.5" />}
+          Apply source
+        </button>
+        {apply.status === 'connected' && (
+          <p className="mt-1 flex items-center gap-1 text-xs text-green-600 dark:text-green-400/80">
+            <Check className="h-3 w-3" /> Applied · active source: {apply.address}
+          </p>
+        )}
+        {apply.status === 'failed' && (
+          <p className="mt-1 text-xs text-red-600 dark:text-red-400/80">{apply.error}</p>
+        )}
+      </div>}
+
+      <div className="border-t border-theme-border-subtle pt-4">
+        <label className="mb-1 block text-sm font-medium text-theme-text-primary">
+          Currency override
+        </label>
+        <p className="mb-1 text-xs text-theme-text-tertiary">
+          Choose a currency, or use Auto to read <code>currencyCode</code> or{' '}
+          <code>DISPLAY_CURRENCY</code> from an active OpenCost/Kubecost installation, then fall back
+          to USD. Radar labels values but does not convert them.
+        </p>
+        <SelectMenu
+          value={currency}
+          options={currencyOptionsForValue(currency)}
+          onChange={onChange}
+          ariaLabel="Currency override"
+          searchPlaceholder="Search currencies by name or code"
+          className="w-full"
+        />
+      </div>
       {managed && (
         <p className="mt-1 text-xs text-amber-600 dark:text-amber-400/80">
           Currently managed by CLI or Helm: {effectiveCurrency || 'Auto'}. Saved changes apply

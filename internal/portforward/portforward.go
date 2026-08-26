@@ -31,6 +31,7 @@ type Owner = string
 const (
 	OwnerPrometheus Owner = "prometheus"
 	OwnerTraffic    Owner = "traffic"
+	OwnerCost       Owner = "cost"
 )
 
 // metricsForward is one owner's active port-forward state.

@@ -190,6 +190,25 @@ spec:
               containerPort: {{ .Values.service.port }}
               protocol: TCP
           env:
+            {{- if .Values.cost.source }}
+            - name: RADAR_COST_SOURCE
+              value: {{ .Values.cost.source | quote }}
+            {{- end }}
+            {{- if .Values.cost.kubecost.url }}
+            - name: RADAR_KUBECOST_URL
+              value: {{ .Values.cost.kubecost.url | quote }}
+            {{- end }}
+            {{- if .Values.cost.kubecost.clusterId }}
+            - name: RADAR_KUBECOST_CLUSTER_ID
+              value: {{ .Values.cost.kubecost.clusterId | quote }}
+            {{- end }}
+            {{- if .Values.cost.kubecost.existingSecret }}
+            - name: RADAR_KUBECOST_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.cost.kubecost.existingSecret }}
+                  key: {{ .Values.cost.kubecost.existingSecretKey }}
+            {{- end }}
             {{- if and (ne .Values.auth.mode "none") (or .Values.auth.secret .Values.auth.existingSecret) }}
             - name: RADAR_AUTH_SECRET
               {{- if .Values.auth.existingSecret }}

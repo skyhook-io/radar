@@ -18,6 +18,9 @@ type TrendPromOptions struct {
 	// MaxSeries is the top-N namespaces kept; the rest are aggregated into
 	// a single "other" series. Defaults to 8 when zero.
 	MaxSeries int
+
+	// Namespaces limits results before top-N aggregation. Nil means all.
+	Namespaces []string
 }
 
 // ComputeCostTrendFromProm returns a stacked per-namespace cost trend from
@@ -59,11 +62,23 @@ func ComputeCostTrendFromProm(ctx context.Context, client *prom.Client, opts Tre
 		lastCost float64
 		idx      int
 	}
+	var allowed map[string]struct{}
+	if opts.Namespaces != nil {
+		allowed = make(map[string]struct{}, len(opts.Namespaces))
+		for _, namespace := range opts.Namespaces {
+			allowed[namespace] = struct{}{}
+		}
+	}
 	ranks := make([]nsRank, 0, len(result.Series))
 	for i, s := range result.Series {
 		ns := s.Labels["namespace"]
 		if ns == "" {
 			continue
+		}
+		if allowed != nil {
+			if _, ok := allowed[ns]; !ok {
+				continue
+			}
 		}
 		var last float64
 		if len(s.DataPoints) > 0 {
@@ -71,15 +86,16 @@ func ComputeCostTrendFromProm(ctx context.Context, client *prom.Client, opts Tre
 		}
 		ranks = append(ranks, nsRank{ns: ns, lastCost: last, idx: i})
 	}
+	if len(ranks) == 0 {
+		return &CostTrendResponse{Available: false, Reason: ReasonNoMetrics, Range: label}
+	}
 	sort.Slice(ranks, func(i, j int) bool { return ranks[i].lastCost > ranks[j].lastCost })
 
-	topSet := make(map[int]bool, maxSeries)
 	series := make([]CostTrendSeries, 0, maxSeries+1)
 	for i, r := range ranks {
 		if i >= maxSeries {
 			break
 		}
-		topSet[r.idx] = true
 		s := result.Series[r.idx]
 		dps := make([]CostDataPoint, 0, len(s.DataPoints))
 		for _, dp := range s.DataPoints {
@@ -90,10 +106,8 @@ func ComputeCostTrendFromProm(ctx context.Context, client *prom.Client, opts Tre
 
 	if len(ranks) > maxSeries {
 		otherMap := make(map[int64]float64)
-		for i, s := range result.Series {
-			if topSet[i] {
-				continue
-			}
+		for _, rank := range ranks[maxSeries:] {
+			s := result.Series[rank.idx]
 			for _, dp := range s.DataPoints {
 				otherMap[dp.Timestamp] += dp.Value
 			}

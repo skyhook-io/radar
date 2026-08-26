@@ -61,6 +61,8 @@ type PrometheusResetFunc func()
 // PrometheusReinitFunc is called to reinitialize the Prometheus metrics client
 type PrometheusReinitFunc func() error
 
+type CostResetFunc func()
+
 var (
 	beforeContextSwitchCallbacks   []ContextSwitchCallback
 	contextSwitchCallbacks         []ContextSwitchCallback
@@ -75,6 +77,7 @@ var (
 	trafficReinitFunc              TrafficReinitFunc
 	prometheusResetFunc            PrometheusResetFunc
 	prometheusReinitFunc           PrometheusReinitFunc
+	costResetFunc                  CostResetFunc
 	// sessionStopFunc terminates active port-forward / exec sessions. Invoked at
 	// the point of no return — immediately before the cache is torn down — so a
 	// pre-teardown failure (connectivity test, scope-target validation) doesn't
@@ -271,6 +274,12 @@ func RegisterPrometheusFuncs(reset PrometheusResetFunc, reinit PrometheusReinitF
 	defer contextSwitchMu.Unlock()
 	prometheusResetFunc = reset
 	prometheusReinitFunc = reinit
+}
+
+func RegisterCostResetFunc(reset CostResetFunc) {
+	contextSwitchMu.Lock()
+	defer contextSwitchMu.Unlock()
+	costResetFunc = reset
 }
 
 // TestClusterConnection tests connectivity to the current cluster.

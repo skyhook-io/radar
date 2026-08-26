@@ -69,6 +69,34 @@ describe('getWorkloadCostState', () => {
     expect(getWorkloadCostState(current, trend, false)).toBe('partial_missing_history')
   })
 
+  it('keeps Kubecost current cost visible when history is unsupported', () => {
+    const current: OpenCostWorkloadDetailResponse = {
+      available: true,
+      source: 'kubecost',
+      currency: 'USD',
+      namespace: 'default',
+      kind: 'StatefulSet',
+      name: 'queue',
+      current: {
+        name: 'queue', kind: 'StatefulSet', hourlyCost: 0.2, cpuCost: 0.12,
+        memoryCost: 0.08, replicas: 1, cpuUsageAvailable: true,
+        memoryUsageAvailable: true, cpuAllocationUse: 25, memoryAllocationUse: 25,
+      },
+    }
+    const trend: OpenCostWorkloadTrendResponse = {
+      available: false,
+      source: 'kubecost',
+      reason: 'history_unsupported',
+      currency: 'USD',
+      namespace: 'default',
+      kind: 'StatefulSet',
+      name: 'queue',
+      range: '24h',
+    }
+
+    expect(getWorkloadCostState(current, trend, false)).toBe('partial_missing_history')
+  })
+
   it('keeps current cost visible while historical owner metrics are still loading', () => {
     const current: OpenCostWorkloadDetailResponse = {
       available: true,

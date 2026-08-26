@@ -28,11 +28,43 @@ func (s *Server) handleOpenCostApplication(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
+	connection, err := internalopencost.Selected(r.Context())
+	if err != nil {
+		resp := pkgopencost.UnavailableApplicationCostResponse(inputs, unavailable, unsupported, internalopencost.ConnectionFailureReason(err))
+		resp.Currency = s.resolvedOpenCostCurrency()
+		resp.Source = "kubecost"
+		s.writeJSON(w, resp)
+		return
+	}
+	if connection.Source == internalopencost.SourceKubecost {
+		namespaceCosts := make(map[string]*pkgopencost.WorkloadCostResponse)
+		for _, namespace := range applicationInputNamespaces(inputs) {
+			costs, err := pkgopencost.ComputeKubecostWorkloads(r.Context(), connection.Client, namespace, pkgopencost.KubecostCurrentOptions{
+				Currency: s.resolvedOpenCostCurrency(), ClusterID: connection.ClusterID, Owners: internalopencost.BuildPodOwnerLookup(namespace),
+			})
+			if err != nil {
+				log.Printf("[opencost] Kubecost application cost failed for namespace %q: %v", namespace, err)
+				costs = &pkgopencost.WorkloadCostResponse{Namespace: namespace, Reason: internalopencost.ConnectionFailureReason(err), Source: "kubecost"}
+			}
+			namespaceCosts[namespace] = costs
+		}
+		resp := pkgopencost.BuildApplicationCostResponse(inputs, unavailable, unsupported, namespaceCosts)
+		resp.Currency = s.resolvedOpenCostCurrency()
+		resp.Source = "kubecost"
+		for _, costs := range namespaceCosts {
+			if costs != nil && costs.DataThrough > resp.DataThrough {
+				resp.DataThrough = costs.DataThrough
+			}
+		}
+		s.writeJSON(w, resp)
+		return
+	}
 
 	client := prometheuspkg.GetClient()
 	if client == nil {
 		resp := pkgopencost.UnavailableApplicationCostResponse(inputs, unavailable, unsupported, pkgopencost.ReasonNoPrometheus)
 		resp.Currency = s.resolvedOpenCostCurrency()
+		resp.Source = "prometheus"
 		s.writeJSON(w, resp)
 		return
 	}
@@ -40,6 +72,7 @@ func (s *Server) handleOpenCostApplication(w http.ResponseWriter, r *http.Reques
 		log.Print("[opencost] EnsureConnected failed for application cost")
 		resp := pkgopencost.UnavailableApplicationCostResponse(inputs, unavailable, unsupported, internalopencost.ConnectionFailureReason(err))
 		resp.Currency = s.resolvedOpenCostCurrency()
+		resp.Source = "prometheus"
 		s.writeJSON(w, resp)
 		return
 	}
@@ -52,6 +85,7 @@ func (s *Server) handleOpenCostApplication(w http.ResponseWriter, r *http.Reques
 
 	resp := pkgopencost.BuildApplicationCostResponse(inputs, unavailable, unsupported, namespaceCosts)
 	resp.Currency = s.resolvedOpenCostCurrency()
+	resp.Source = "prometheus"
 	s.writeJSON(w, resp)
 }
 
@@ -69,6 +103,25 @@ func (s *Server) handleOpenCostApplicationTrend(w http.ResponseWriter, r *http.R
 		refs = append(refs, input.ApplicationWorkloadRef)
 	}
 	refs = append(refs, unsupported...)
+	connection, err := internalopencost.Selected(r.Context())
+	if err != nil {
+		resp := pkgopencost.ComputeApplicationCostTrendFromProm(r.Context(), nil, pkgopencost.ApplicationTrendOptions{
+			Range: req.Range, Workloads: refs, Unavailable: unavailable, UnavailableReason: internalopencost.ConnectionFailureReason(err),
+		})
+		resp.Currency = s.resolvedOpenCostCurrency()
+		resp.Source = "kubecost"
+		s.writeJSON(w, resp)
+		return
+	}
+	if connection.Source == internalopencost.SourceKubecost {
+		resp := pkgopencost.ComputeApplicationCostTrendFromProm(r.Context(), nil, pkgopencost.ApplicationTrendOptions{
+			Range: req.Range, Workloads: refs, Unavailable: unavailable, UnavailableReason: pkgopencost.ReasonHistoryUnsupported,
+		})
+		resp.Currency = s.resolvedOpenCostCurrency()
+		resp.Source = "kubecost"
+		s.writeJSON(w, resp)
+		return
+	}
 
 	client := prometheuspkg.GetClient()
 	if client == nil {
@@ -78,6 +131,7 @@ func (s *Server) handleOpenCostApplicationTrend(w http.ResponseWriter, r *http.R
 			Unavailable: unavailable,
 		})
 		resp.Currency = s.resolvedOpenCostCurrency()
+		resp.Source = "prometheus"
 		s.writeJSON(w, resp)
 		return
 	}
@@ -90,6 +144,7 @@ func (s *Server) handleOpenCostApplicationTrend(w http.ResponseWriter, r *http.R
 			UnavailableReason: internalopencost.ConnectionFailureReason(err),
 		})
 		resp.Currency = s.resolvedOpenCostCurrency()
+		resp.Source = "prometheus"
 		s.writeJSON(w, resp)
 		return
 	}
@@ -100,6 +155,7 @@ func (s *Server) handleOpenCostApplicationTrend(w http.ResponseWriter, r *http.R
 		Unavailable: unavailable,
 	})
 	resp.Currency = s.resolvedOpenCostCurrency()
+	resp.Source = "prometheus"
 	s.writeJSON(w, resp)
 }
 

@@ -20,6 +20,7 @@ import (
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
+	internalopencost "github.com/skyhook-io/radar/internal/opencost"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/server"
 	"github.com/skyhook-io/radar/internal/settings"
@@ -65,6 +66,10 @@ type AppConfig struct {
 	PrometheusURL             string
 	OpenCostCurrency          string
 	OpenCostFlagSet           bool
+	CostSource                string
+	KubecostURL               string
+	KubecostAPIKey            string
+	KubecostClusterID         string
 	PrometheusHeaders         map[string]string
 	PrometheusHeadersFromEnv  map[string]string
 	BeylaJobSelector          string
@@ -258,6 +263,14 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 		traffic.SetMetricsHeaders(cfg.PrometheusHeaders)
 		prometheuspkg.SetHeaders(cfg.PrometheusHeaders)
 	}
+	if err := internalopencost.ConfigureStartup(internalopencost.ManagerConfig{
+		Source:    internalopencost.Source(cfg.CostSource),
+		URL:       cfg.KubecostURL,
+		APIKey:    cfg.KubecostAPIKey,
+		ClusterID: cfg.KubecostClusterID,
+	}); err != nil {
+		log.Printf("[opencost] Invalid cost source configuration: %v", err)
+	}
 	if cfg.BeylaJobSelector != "" {
 		traffic.SetBeylaJobSelector(cfg.BeylaJobSelector)
 	}
@@ -273,11 +286,23 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 		prometheuspkg.Reinitialize(k8s.GetClient(), k8s.GetConfig(), k8s.GetContextName())
 		return nil
 	})
+	k8s.RegisterCostResetFunc(internalopencost.Reset)
 }
 
 // CreateServer creates the HTTP server with the given configuration.
 func CreateServer(cfg AppConfig) *server.Server {
 	restoreLastDesktopContext := remembersLastContext(cfg)
+	costSource := cfg.CostSource
+	kubecostURL := cfg.KubecostURL
+	kubecostAPIKey := cfg.KubecostAPIKey
+	kubecostClusterID := cfg.KubecostClusterID
+	if internalopencost.IsEnvManaged() {
+		costConfig := internalopencost.ConfigSnapshot()
+		costSource = string(costConfig.Source)
+		kubecostURL = costConfig.URL
+		kubecostAPIKey = costConfig.APIKey
+		kubecostClusterID = costConfig.ClusterID
+	}
 	effectiveCfg := &config.Config{
 		Kubeconfig:                cfg.Kubeconfig,
 		KubeconfigDirs:            cfg.KubeconfigDirs,
@@ -292,6 +317,10 @@ func CreateServer(cfg AppConfig) *server.Server {
 		HistoryLimit:              cfg.HistoryLimit,
 		PrometheusURL:             cfg.PrometheusURL,
 		OpenCostCurrency:          cfg.OpenCostCurrency,
+		CostSource:                costSource,
+		KubecostURL:               kubecostURL,
+		KubecostAPIKey:            kubecostAPIKey,
+		KubecostClusterID:         kubecostClusterID,
 		PrometheusHeaders:         cfg.PrometheusHeaders,
 		PrometheusHeadersFromEnv:  cfg.PrometheusHeadersFromEnv,
 		DebugImage:                cfg.DebugImage,

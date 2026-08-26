@@ -87,9 +87,13 @@ func (t *HTTPTransport) Do(ctx context.Context, method, path string, params url.
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10 MiB cap
+	const maxResponseBytes = 10 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("prom.HTTPTransport: read body: %w", err)
+	}
+	if len(body) > maxResponseBytes {
+		return nil, fmt.Errorf("prom.HTTPTransport: response exceeds 10 MiB limit")
 	}
 
 	if resp.StatusCode != http.StatusOK {

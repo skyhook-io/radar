@@ -8,6 +8,7 @@ import {
   useOpenCostNodes,
 } from '../../api/client'
 import type {
+  CostUnavailableReason,
   OpenCostNamespaceCost,
   OpenCostWorkloadCost,
   OpenCostNodeCost,
@@ -39,6 +40,7 @@ import { kindToPlural, openExternal } from '../../utils/navigation'
 import { clusterCloudConsoleLink, nodeCloudConsoleLink } from './cloud-console'
 import { RightsizingScanView } from '../rightsizing/RightsizingScanView'
 import { CostViewTabs } from './CostViewTabs'
+import { costFreshnessLabel, costSourceLabel } from './source'
 
 interface CostViewProps {
   onBack: () => void
@@ -91,11 +93,11 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
               <Loader2 className="w-8 h-8 animate-spin text-theme-text-tertiary/60" />
               <div>
                 <p className="text-sm font-medium text-theme-text-primary">
-                  Looking for Prometheus cost data…
+                  Looking for cost data…
                 </p>
                 <p className="mt-1 text-xs text-theme-text-tertiary">
-                  First discovery can take a few seconds while Radar checks cluster services and
-                  opens a local port-forward.
+                  Radar is checking OpenCost-compatible Prometheus metrics and a local Kubecost 3
+                  Aggregator. First discovery can take a few seconds.
                 </p>
               </div>
               <button
@@ -113,14 +115,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
         </CostOverviewState>
       )
     }
-    const message =
-      reason === 'no_prometheus'
-        ? 'Prometheus not found — OpenCost requires Prometheus or VictoriaMetrics'
-        : reason === 'no_metrics'
-          ? 'OpenCost metrics not found — Prometheus is available but no cost metrics were detected'
-          : reason === 'query_error'
-            ? 'Cost data temporarily unavailable — Prometheus was found but queries failed'
-            : 'OpenCost not detected — install OpenCost for cost visibility'
+    const message = costUnavailableMessage(reason)
 
     return (
       <CostOverviewState>
@@ -134,7 +129,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
             >
               Back to Dashboard
             </button>
-            {reason === 'no_prometheus' && (
+            {(reason === 'no_prometheus' || reason === 'source_unavailable') && (
               <button
                 onClick={() => {
                   setNoPrometheusSince(Date.now())
@@ -229,7 +224,9 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
                 </span>
               </div>
               <span className="text-[10px] text-theme-text-quaternary">
-                projected from last 1h average
+                {data.source === 'kubecost'
+                  ? costFreshnessLabel(data.source, data.window, data.dataThrough)
+                  : `projected from ${costFreshnessLabel(data.source, data.window)}`}
               </span>
             </div>
           </div>
@@ -346,20 +343,39 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
         {/* Footer */}
         <div className="flex items-center justify-between text-xs text-theme-text-tertiary pb-4">
           <span>
-            {currency} &middot; current rates based on last 1h average &middot;
+            {currency} &middot; {costFreshnessLabel(data.source, data.window, data.dataThrough)} &middot;
             *monthly projections assume {COST_HOURS_PER_MONTH} hrs/mo
             {currency !== DEFAULT_COST_CURRENCY && (
               <> &middot; no conversion</>
             )}
           </span>
-          <span className="text-indigo-500 font-medium">Powered by OpenCost</span>
+          <span className="text-indigo-500 font-medium">{costSourceLabel(data.source)}</span>
         </div>
       </div>
 
       {/* Help dialog */}
-      {showHelp && <CostHelpDialog currency={currency} onClose={() => setShowHelp(false)} />}
+      {showHelp && <CostHelpDialog currency={currency} source={data.source} onClose={() => setShowHelp(false)} />}
     </div>
   )
+}
+
+export function costUnavailableMessage(reason?: CostUnavailableReason): string {
+  switch (reason) {
+    case 'no_prometheus':
+      return 'No compatible cost source found — connect OpenCost-compatible Prometheus metrics or configure Kubecost'
+    case 'no_metrics':
+      return 'Cost data is not ready — the selected source returned no allocation data'
+    case 'query_error':
+      return 'Cost data is temporarily unavailable — the selected source query failed'
+    case 'source_unavailable':
+      return 'Kubecost Aggregator is unavailable — check Settings → Cost, its network path, and cluster ID'
+    case 'authentication_error':
+      return 'Kubecost rejected the configured API key — update it in Settings → Cost'
+    case 'access_denied':
+      return 'You do not have access to view cluster cost data'
+    default:
+      return 'No compatible cost data was detected'
+  }
 }
 
 function CostOverviewState({ children }: { children: React.ReactNode }) {
@@ -632,7 +648,9 @@ function NodeCostTable({
               Per-machine cloud pricing — namespace costs above show how this capacity is allocated
             </p>
           </div>
-          <span className="text-xs text-theme-text-tertiary">{nodes.length} nodes</span>
+          <span className="text-xs text-theme-text-tertiary">
+            {nodes.length} {nodes.length === 1 ? 'node' : 'nodes'}
+          </span>
         </div>
       </div>
 
@@ -768,7 +786,7 @@ function apiGroupForCostWorkload(kind: string): string | undefined {
 
 // --- Help dialog ---
 
-function CostHelpDialog({ currency, onClose }: { currency: string; onClose: () => void }) {
+function CostHelpDialog({ currency, source, onClose }: { currency: string; source?: 'prometheus' | 'kubecost'; onClose: () => void }) {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
@@ -804,9 +822,9 @@ function CostHelpDialog({ currency, onClose }: { currency: string; onClose: () =
               Where do these costs come from?
             </h3>
             <p>
-              Cost data comes from <strong>OpenCost</strong>, an open-source tool that combines your
-              cloud provider's pricing (how much each node costs per hour) with Kubernetes resource
-              allocation data. This gives you a cost value for each workload running on your cluster.
+              Radar reads either OpenCost-compatible metrics from Prometheus or current allocation
+              and asset data from a Kubecost 3 Aggregator. This view is currently using{' '}
+              <strong>{costSourceLabel(source)}</strong>.
             </p>
           </section>
 
@@ -817,8 +835,8 @@ function CostHelpDialog({ currency, onClose }: { currency: string; onClose: () =
             <p>
               Radar labels these values <strong>{currency}</strong> and does not convert them. Auto
               reads <code>currencyCode</code> or <code>DISPLAY_CURRENCY</code> from an active
-              OpenCost/Kubecost installation when Prometheus is cluster-discovered, then falls back
-              to USD. Override it in <strong>Settings → Cost</strong> or, for automation, with{' '}
+              OpenCost/Kubecost installation in the connected cluster, then falls back to USD.
+              Override it in <strong>Settings → Cost</strong> or, for automation, with{' '}
               <code>--opencost-currency</code> (Helm: <code>cost.currency</code>).
             </p>
           </section>
@@ -846,13 +864,15 @@ function CostHelpDialog({ currency, onClose }: { currency: string; onClose: () =
               How fresh is this data?
             </h3>
             <p>
-              Cost rates and breakdowns are <strong>snapshots based on the last 1 hour</strong> of
-              data. They update automatically every minute. The trend chart shows historical hourly
-              allocation rate over the selected time range (6 hours, 24 hours, or 7 days).
+              {source === 'kubecost' ? (
+                <>Current rates use the latest completed Kubecost ETL window and show its data-through time. Historical charts are not available through this integration yet.</>
+              ) : (
+                <>Cost rates and breakdowns are <strong>snapshots based on the last 1 hour</strong> of data. They update automatically every minute. The trend chart shows historical hourly allocation rate over the selected time range.</>
+              )}
             </p>
             <p className="mt-1.5">
-              Because costs are based on a 1-hour window, short-lived spikes or dips may not be
-              reflected. The trend chart gives you the longer-term rate picture.
+              Short-lived spikes or dips may not be reflected in the current rate. Projected daily
+              and monthly values are estimates, not invoice totals.
             </p>
           </section>
 

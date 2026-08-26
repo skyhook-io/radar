@@ -79,6 +79,10 @@ Persistent defaults for CLI flags. CLI flags always override these values. Manag
   "historyLimit": 10000,
   "prometheusUrl": "",
   "opencostCurrency": "",
+  "costSource": "auto",
+  "kubecostUrl": "",
+  "kubecostClusterId": "",
+  "kubecostApiKey": "",
   "prometheusHeaders": {},
   "mcp": true,
   "debugImage": ""
@@ -102,7 +106,11 @@ All fields are optional — omitted fields use built-in defaults.
 | `timelineMaxSize` | Max SQLite DB + WAL size before pruning oldest events (`0` disables) |
 | `historyLimit` | Max timeline events to retain |
 | `prometheusUrl` | Manual Prometheus/VictoriaMetrics URL — skips auto-discovery. Useful when Prometheus is not in the same cluster or uses a non-standard service name. |
-| `opencostCurrency` | Optional ISO 4217 override for values produced by OpenCost or Kubecost. Empty reads `currencyCode` from the pricing ConfigMap referenced by an active OpenCost/Kubecost workload, or literal `DISPLAY_CURRENCY` from an active Kubecost Deployment or StatefulSet, when Radar auto-discovers cluster Prometheus; otherwise it falls back to `USD`. Radar labels values but does not convert them. Equivalent CLI: `--opencost-currency`; an explicit CLI value remains authoritative while Radar runs and after restart. |
+| `opencostCurrency` | Optional ISO 4217 override for values produced by OpenCost or Kubecost. Empty reads `currencyCode` from the pricing ConfigMap referenced by an active OpenCost/Kubecost workload, or literal `DISPLAY_CURRENCY` from an active Kubecost Deployment or StatefulSet, when the selected cost source is tied to the connected cluster; otherwise it falls back to `USD`. Radar labels values but does not convert them. Equivalent CLI: `--opencost-currency`; an explicit CLI value remains authoritative while Radar runs and after restart. |
+| `costSource` | `auto` (default), `prometheus`, or `kubecost`. Auto keeps working OpenCost-compatible Prometheus metrics, then tries a Kubecost 3 Aggregator. |
+| `kubecostUrl` | Optional Kubecost 3 Aggregator base URL. Empty discovers an active local Aggregator Service on its named `tcp-api` port (9004). Federated agent-only clusters need the central URL; root API URLs and URLs ending in `/model` are accepted. |
+| `kubecostClusterId` | Cluster ID used to filter a central Aggregator. Empty detects one distinct literal `CLUSTER_ID` from an active FinOps Agent or Aggregator; indirect or conflicting values require an override. |
+| `kubecostApiKey` | Optional Kubecost service-account key sent as `X-API-KEY`. Stored in the `0600` config file and redacted from `GET /api/config`; changing the URL origin clears a stored key unless it is supplied again. Prefer a Secret-backed Helm value for in-cluster deployments. |
 | `prometheusHeaders` | HTTP headers sent with every Prometheus request. Required for auth-protected backends — e.g. `{"X-Scope-OrgID": "my-org"}`. Equivalent CLI: `--prometheus-header Key=Value` (repeatable). Stored in plain text in `config.json` — protect the file accordingly. |
 | `argoCdUrl` | Manual argocd-server URL for the Argo CD API integration — skips auto-discovery. |
 | `argoCdToken` | Argo CD API token (get-only account recommended). Stored in plain text — the file is written `0600`; the token is redacted from `GET /api/config`. |
@@ -110,6 +118,11 @@ All fields are optional — omitted fields use built-in defaults.
 | `prometheusHeadersFromEnv` | Header values read from environment variables at startup — e.g. `{"Authorization": "PROMETHEUS_TOKEN"}`. Equivalent CLI: `--prometheus-header-from-env Key=ENV_VAR` (repeatable). Use this with Kubernetes Secret-backed env vars in Helm deployments. |
 | `mcp` | Enable/disable MCP server for AI tools (default: enabled) |
 | `debugImage` | Image for ephemeral debug containers and node debug pods (same as `--debug-image`). Empty = `busybox:latest`; point at a mirror for air-gapped / private-registry clusters. |
+
+For declarative deployments, `RADAR_COST_SOURCE`, `RADAR_KUBECOST_URL`,
+`RADAR_KUBECOST_CLUSTER_ID`, and `RADAR_KUBECOST_API_KEY` override these cost
+source fields. When any is set, the source controls are read-only in Settings;
+edit the deployment and restart Radar. The currency override remains separate.
 
 ### Settings File (`~/.radar/settings.json`)
 

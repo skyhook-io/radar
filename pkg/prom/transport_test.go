@@ -2,10 +2,28 @@ package prom
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
+
+func TestHTTPTransportRejectsOversizedResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("x", (10<<20)+1)))
+	}))
+	defer srv.Close()
+
+	_, err := NewHTTPTransport(srv.URL, "", nil).Do(context.Background(), http.MethodGet, "/api/v1/query", nil)
+	if err == nil || !strings.Contains(err.Error(), "exceeds 10 MiB") {
+		t.Fatalf("error = %v, want explicit response-size error", err)
+	}
+	var httpErr *HTTPError
+	if errors.As(err, &httpErr) {
+		t.Fatalf("oversized 200 response must not be classified as an HTTP status error: %v", err)
+	}
+}
 
 func TestHTTPTransport_AppliesHeaders(t *testing.T) {
 	var gotAuth, gotTenant, gotAccept string
