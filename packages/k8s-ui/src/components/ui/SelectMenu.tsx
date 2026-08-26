@@ -87,7 +87,7 @@ export function SelectMenu({
         triggerRef.current?.focus()
       }}
       onBlur={(event) => {
-        if (open && !rootRef.current?.contains(event.relatedTarget as Node | null)) setOpen(false)
+        if (open && event.relatedTarget && !rootRef.current?.contains(event.relatedTarget)) setOpen(false)
       }}
     >
       <button
