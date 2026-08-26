@@ -660,3 +660,25 @@ func TestScanUpgradePathCapsRenderedSequence(t *testing.T) {
 		t.Fatalf("uncapped upgrade sequence = %q", sequence)
 	}
 }
+
+func TestEffectiveTargetNormalizesEquivalentSpellings(t *testing.T) {
+	cases := []struct {
+		current, target, want string
+	}{
+		{"v1.33.4-gke.1", "", "1.34"},
+		{"v1.33.4-gke.1", "1.34", "1.34"},
+		{"v1.33.4-gke.1", "v1.34", "1.34"},
+	}
+	for _, c := range cases {
+		got, err := EffectiveTarget(c.current, c.target)
+		if err != nil || got != c.want {
+			t.Fatalf("EffectiveTarget(%q, %q) = (%q, %v), want %q — equivalent spellings must share one memo key", c.current, c.target, got, err, c.want)
+		}
+	}
+	if _, err := EffectiveTarget("v1.33.4", "1.33"); err == nil {
+		t.Fatal("EffectiveTarget accepted a non-forward target")
+	}
+	if _, err := EffectiveTarget("bogus", "1.34"); err == nil {
+		t.Fatal("EffectiveTarget accepted an unparseable current version")
+	}
+}

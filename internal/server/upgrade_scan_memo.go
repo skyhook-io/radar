@@ -118,9 +118,10 @@ func upgradeScanKey(username, target string, namespaces []string) string {
 
 func newUpgradeScanID() string {
 	raw := make([]byte, 8)
-	if _, err := rand.Read(raw); err != nil {
-		return "sc_unavailable"
-	}
+	// crypto/rand.Read cannot fail as of Go 1.24 — it aborts the process
+	// instead of returning an error, so there is no fallback path that could
+	// hand two snapshots the same id.
+	_, _ = rand.Read(raw)
 	return "sc_" + hex.EncodeToString(raw)
 }
 
@@ -224,7 +225,8 @@ func RunUpgradeReadinessScanMemoized(ctx context.Context, authz UpgradeEvidenceA
 		return UpgradeScanOutcome{}, ErrUpgradeScanNotReady
 	}
 	currentVersion := k8s.GetServerVersion()
-	if err := upgradereadiness.ValidateTarget(currentVersion, targetVersion); err != nil {
+	targetVersion, err := upgradereadiness.EffectiveTarget(currentVersion, targetVersion)
+	if err != nil {
 		return UpgradeScanOutcome{}, err
 	}
 	username := ""
