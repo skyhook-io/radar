@@ -187,6 +187,19 @@ func TestShapeUpgradeReadinessScanChangedError(t *testing.T) {
 	}
 }
 
+func TestShapeUpgradeReadinessRefreshSupersedesScanIDBinding(t *testing.T) {
+	// A fix-then-rescan caller may carry the previous scan_id alongside
+	// refresh=true; the id being replaced is the requested outcome, not a
+	// paging hazard — the fresh results must come back, not "scan changed".
+	out, err := shapeUpgradeReadiness(upgradeFixtureOutcome(), upgradeReadinessInput{Check: "blocked-drain", ScanID: "sc_older", Refresh: true})
+	if err != nil || out.Check == nil {
+		t.Fatalf("refresh with stale scan_id = check=%v err=%v, want the fresh scan's results", out.Check, err)
+	}
+	if out.ScanID != "sc_fixture" {
+		t.Fatalf("response scanId = %q, want the fresh snapshot's id for subsequent paging", out.ScanID)
+	}
+}
+
 func TestShapeUpgradeReadinessUnknownCheckListsValidIDs(t *testing.T) {
 	_, err := shapeUpgradeReadiness(upgradeFixtureOutcome(), upgradeReadinessInput{Check: "nope"})
 	if err == nil || !strings.Contains(err.Error(), "blocked-drain") || !strings.Contains(err.Error(), "passed-metrics") {

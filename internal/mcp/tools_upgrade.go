@@ -26,7 +26,7 @@ type upgradeReadinessInput struct {
 	Check   string `json:"check,omitempty" jsonschema:"check id to expand into findings with evidence and remediation, e.g. \"node-drain-feasibility\"; ids come from the overview's checks list"`
 	Level   string `json:"level,omitempty" jsonschema:"filter expanded findings to this level and above: blocker, warning, or review; omit to return all levels, most severe first"`
 	Offset  int    `json:"offset,omitempty" jsonschema:"skip the first N matching findings when expanding a check; requires scanId from the response being continued"`
-	ScanID  string `json:"scan_id,omitempty" jsonschema:"scan snapshot id from a previous response's scanId; required when offset > 0 so pages never silently mix two scans"`
+	ScanID  string `json:"scan_id,omitempty" jsonschema:"scan snapshot id from a previous response's scanId; required when offset > 0 so pages never silently mix two scans. Ignored when refresh=true (a refresh replaces the snapshot by design)"`
 	Refresh bool   `json:"refresh,omitempty" jsonschema:"bypass the cached scan and run a fresh live scan; use only after changing something; rejected when offset > 0"`
 }
 
@@ -236,7 +236,10 @@ func shapeUpgradeReadiness(outcome server.UpgradeScanOutcome, input upgradeReadi
 		FromCache:       outcome.FromCache,
 		Coverage:        results.Coverage,
 	}
-	if input.ScanID != "" && input.ScanID != outcome.ScanID {
+	// refresh supersedes the snapshot binding: the caller explicitly asked
+	// for a new scan, so the previous scan_id being replaced is the expected
+	// outcome, not the silent-page-mixing hazard the binding exists to catch.
+	if input.ScanID != "" && !input.Refresh && input.ScanID != outcome.ScanID {
 		return upgradeReadinessResult{}, fmt.Errorf("scan changed — the scan %s you were paging has been replaced by %s (observedAt %s); restart from offset 0", input.ScanID, outcome.ScanID, outcome.ObservedAt.UTC().Format(time.RFC3339))
 	}
 	if results.Coverage.State == "no_access" {
