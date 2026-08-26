@@ -112,14 +112,14 @@ func TestApplyKubecostConfigBindsExplicitClusterIDToContext(t *testing.T) {
 	}))
 	defer server.Close()
 
-	req := httptest.NewRequest(http.MethodPut, "/api/integrations/kubecost", strings.NewReader(`{"source":"kubecost","url":"`+server.URL+`/model","clusterId":"prod-a"}`))
+	req := httptest.NewRequest(http.MethodPut, "/api/integrations/kubecost", strings.NewReader(`{"source":"kubecost","url":"`+server.URL+`/model","apiKey":"secret","clusterId":"prod-a"}`))
 	rec := httptest.NewRecorder()
 	s.handleApplyKubecostConfig(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	if saved := config.Load(); saved.KubecostClusterIDContext != "cluster-a" {
-		t.Fatalf("cluster ID context = %q, want cluster-a", saved.KubecostClusterIDContext)
+	if saved := config.Load(); saved.KubecostClusterIDContext != "cluster-a" || saved.KubecostAPIKeyContext != "" {
+		t.Fatalf("cluster ID context = %q, API key context = %q; want cluster-a and reusable explicit-URL key", saved.KubecostClusterIDContext, saved.KubecostAPIKeyContext)
 	}
 }
 
@@ -133,5 +133,8 @@ func TestKubecostConnectionGuidanceUsesTypedErrors(t *testing.T) {
 	}
 	if got := kubecostConnectionGuidance(internalopencost.ErrKubecostAuthentication); !strings.Contains(got, "rejected the API key") {
 		t.Fatalf("typed authentication guidance = %q", got)
+	}
+	if got := kubecostConnectionGuidance(internalopencost.ErrKubecostContextMismatch); !strings.Contains(got, "another kubeconfig context") {
+		t.Fatalf("context mismatch guidance = %q", got)
 	}
 }

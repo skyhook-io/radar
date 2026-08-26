@@ -45,10 +45,18 @@ func (s *Server) handleApplyKubecostConfig(w http.ResponseWriter, r *http.Reques
 	}
 	previous := config.Load()
 	apiKey := previous.KubecostAPIKey
+	apiKeyContext := previous.KubecostAPIKeyContext
 	if body.APIKey != nil {
 		apiKey = *body.APIKey
+		apiKeyContext = ""
 	} else if apiKey != "" && !sameServerOrigin(rawURL, previous.KubecostURL) {
 		apiKey = ""
+		apiKeyContext = ""
+	}
+	if apiKey != "" && rawURL == "" && apiKeyContext == "" {
+		apiKeyContext = k8s.GetContextName()
+	} else if rawURL != "" {
+		apiKeyContext = ""
 	}
 	clusterID := strings.TrimSpace(body.ClusterID)
 	clusterIDContext := ""
@@ -59,6 +67,7 @@ func (s *Server) handleApplyKubecostConfig(w http.ResponseWriter, r *http.Reques
 		Source:           source,
 		URL:              rawURL,
 		APIKey:           apiKey,
+		APIKeyContext:    apiKeyContext,
 		ClusterID:        clusterID,
 		ClusterIDContext: clusterIDContext,
 	}
@@ -91,6 +100,7 @@ func (s *Server) handleApplyKubecostConfig(w http.ResponseWriter, r *http.Reques
 		c.CostSource = string(source)
 		c.KubecostURL = rawURL
 		c.KubecostAPIKey = apiKey
+		c.KubecostAPIKeyContext = apiKeyContext
 		c.KubecostClusterID = clusterID
 		c.KubecostClusterIDContext = clusterIDContext
 	}); err != nil {
@@ -127,7 +137,7 @@ func kubecostConnectionGuidance(err error) string {
 	case errors.Is(err, internalopencost.ErrKubecostAuthentication):
 		return "Kubecost rejected the API key — check the service-account key or use the deployment's intended API endpoint."
 	case errors.Is(err, internalopencost.ErrKubecostContextMismatch):
-		return "The configured Kubecost cluster ID belongs to another kubeconfig context — clear or update it for the current cluster."
+		return "The configured Kubecost cluster ID or local API key belongs to another kubeconfig context — clear or update it for the current cluster."
 	case errors.Is(err, internalopencost.ErrKubecostClusterID):
 		return "Kubecost cluster ID could not be determined — enter the CLUSTER_ID configured on this cluster's FinOps Agent."
 	case errors.Is(err, internalopencost.ErrKubecostNoData):

@@ -34,7 +34,11 @@ type Config struct {
 	CostSource                string   `json:"costSource,omitempty"`
 	KubecostURL               string   `json:"kubecostUrl,omitempty"`
 	KubecostAPIKey            string   `json:"kubecostApiKey,omitempty"`
-	KubecostClusterID         string   `json:"kubecostClusterId,omitempty"`
+	// KubecostAPIKeyContext binds a credential used with local auto-discovery to
+	// the kubeconfig context where it was configured. Explicit-URL credentials
+	// remain portable because their origin is stable across context switches.
+	KubecostAPIKeyContext string `json:"kubecostApiKeyContext,omitempty"`
+	KubecostClusterID     string `json:"kubecostClusterId,omitempty"`
 	// KubecostClusterIDContext prevents a cluster-specific central-Aggregator
 	// filter from silently following a local kubeconfig switch.
 	KubecostClusterIDContext string `json:"kubecostClusterIdContext,omitempty"`

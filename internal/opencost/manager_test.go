@@ -30,6 +30,26 @@ func TestResolveEnvironmentConfig(t *testing.T) {
 	if !managed || config.Source != SourceKubecost || config.URL != "https://cost.example.com/model/" || config.APIKey != "secret" || config.ClusterID != "prod-a" {
 		t.Fatalf("unexpected environment config: managed=%v config=%#v", managed, config)
 	}
+	if config.APIKeyContext != "" {
+		t.Fatalf("explicit URL API key context = %q, want reusable credential", config.APIKeyContext)
+	}
+}
+
+func TestResolveEnvironmentConfigBindsLocalAPIKeyToContext(t *testing.T) {
+	previousContext := k8s.SetTestContextName("cluster-a")
+	t.Cleanup(func() { k8s.SetTestContextName(previousContext) })
+	config, managed, err := resolveEnvironmentConfig(ManagerConfig{Source: SourceAuto}, func(key string) string {
+		if key == "RADAR_KUBECOST_API_KEY" {
+			return "secret"
+		}
+		return ""
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !managed || config.APIKeyContext != "cluster-a" {
+		t.Fatalf("managed=%v API key context=%q, want cluster-a", managed, config.APIKeyContext)
+	}
 }
 
 func TestConfigureStartupFailsClosedOnInvalidEnvironment(t *testing.T) {
@@ -154,6 +174,51 @@ func TestKubecostClusterIDContextMismatchFailsClosed(t *testing.T) {
 	k8s.SetTestContextName("cluster-b")
 	if _, err := m.Selected(context.Background()); !errors.Is(err, ErrKubecostContextMismatch) {
 		t.Fatalf("selection error = %v, want ErrKubecostContextMismatch", err)
+	}
+}
+
+func TestKubecostLocalAPIKeyContextMismatchFailsClosed(t *testing.T) {
+	previousContext := k8s.SetTestContextName("cluster-a")
+	t.Cleanup(func() { k8s.SetTestContextName(previousContext) })
+	m := &Manager{}
+	if err := m.Configure(ManagerConfig{Source: SourceKubecost, APIKey: "secret"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.ConfigSnapshot().APIKeyContext; got != "cluster-a" {
+		t.Fatalf("API key context = %q, want cluster-a", got)
+	}
+	k8s.SetTestContextName("cluster-b")
+	if _, err := m.Selected(context.Background()); !errors.Is(err, ErrKubecostContextMismatch) {
+		t.Fatalf("selection error = %v, want ErrKubecostContextMismatch", err)
+	}
+}
+
+func TestAutoSourceSurfacesKubecostContextMismatch(t *testing.T) {
+	previousContext := k8s.SetTestContextName("cluster-a")
+	t.Cleanup(func() { k8s.SetTestContextName(previousContext) })
+	promServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("query") == "up" {
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"job":"prometheus"},"value":[1700000000,"1"]}]}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+	}))
+	prometheuspkg.Initialize(nil, nil, "test")
+	prometheuspkg.SetManualURL(promServer.URL)
+	t.Cleanup(func() {
+		promServer.Close()
+		prometheuspkg.Reset()
+		prometheuspkg.Initialize(nil, nil, "")
+	})
+
+	m := &Manager{}
+	if err := m.Configure(ManagerConfig{Source: SourceAuto, URL: "https://cost.example.com/model", ClusterID: "prod-a"}); err != nil {
+		t.Fatal(err)
+	}
+	k8s.SetTestContextName("cluster-b")
+	if _, err := m.Selected(context.Background()); !errors.Is(err, ErrKubecostContextMismatch) {
+		t.Fatalf("selection error = %v, want ErrKubecostContextMismatch instead of Prometheus fallback", err)
 	}
 }
 

@@ -15,18 +15,18 @@ func TestUnavailableResponsesIncludeCurrency(t *testing.T) {
 	tests := []struct {
 		name    string
 		target  string
-		handler func(http.ResponseWriter, *http.Request, func() string)
+		handler func(http.ResponseWriter, *http.Request, func() string, RouteScope)
 	}{
-		{name: "summary", target: "/opencost/summary", handler: handleSummary},
-		{name: "workloads", target: "/opencost/workloads?namespace=default", handler: handleWorkloads},
-		{name: "trend", target: "/opencost/trend", handler: handleTrend},
-		{name: "nodes", target: "/opencost/nodes", handler: handleNodes},
+		{name: "summary", target: "/opencost/summary", handler: handleSummaryScoped},
+		{name: "workloads", target: "/opencost/workloads?namespace=default", handler: handleWorkloadsScoped},
+		{name: "trend", target: "/opencost/trend", handler: handleTrendScoped},
+		{name: "nodes", target: "/opencost/nodes", handler: handleNodesScoped},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, tt.target, nil)
 			w := httptest.NewRecorder()
-			tt.handler(w, req, func() string { return "GBP" })
+			tt.handler(w, req, func() string { return "GBP" }, RouteScope{})
 
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
@@ -58,6 +58,32 @@ func TestCostRouteScopeRejectsUnreadableNamespaceAndNodes(t *testing.T) {
 	handleNodesScoped(nodes, httptest.NewRequest(http.MethodGet, "/opencost/nodes", nil), nil, scope)
 	if nodes.Code != http.StatusForbidden {
 		t.Fatalf("nodes status = %d, want 403", nodes.Code)
+	}
+	for _, route := range []struct {
+		name   string
+		target string
+		call   func(http.ResponseWriter, *http.Request, func() string, RouteScope)
+	}{
+		{name: "summary", target: "/opencost/summary", call: handleSummaryScoped},
+		{name: "trend", target: "/opencost/trend?range=24h", call: handleTrendScoped},
+	} {
+		t.Run(route.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			route.call(recorder, httptest.NewRequest(http.MethodGet, route.target, nil), func() string { return "GBP" }, scope)
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+			}
+			var body struct {
+				Available bool   `json:"available"`
+				Reason    string `json:"reason"`
+			}
+			if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Available || body.Reason != pkgopencost.ReasonAccessDenied {
+				t.Fatalf("unexpected response: %#v", body)
+			}
+		})
 	}
 }
 
@@ -103,6 +129,9 @@ func TestConnectionFailureReasonDoesNotGuessAuthenticationFromText(t *testing.T)
 	if got := ConnectionFailureReason(ErrKubecostAuthentication); got != pkgopencost.ReasonAuthentication {
 		t.Fatalf("typed Kubecost auth reason = %q, want %q", got, pkgopencost.ReasonAuthentication)
 	}
+	if got := ConnectionFailureReason(ErrKubecostContextMismatch); got != pkgopencost.ReasonConfigMismatch {
+		t.Fatalf("context mismatch reason = %q, want %q", got, pkgopencost.ReasonConfigMismatch)
+	}
 }
 
 func TestConnectedResponsesIncludeCurrency(t *testing.T) {
@@ -129,17 +158,17 @@ func TestConnectedResponsesIncludeCurrency(t *testing.T) {
 	tests := []struct {
 		name    string
 		target  string
-		handler func(http.ResponseWriter, *http.Request, func() string)
+		handler func(http.ResponseWriter, *http.Request, func() string, RouteScope)
 	}{
-		{name: "summary", target: "/opencost/summary", handler: handleSummary},
-		{name: "workloads", target: "/opencost/workloads?namespace=default", handler: handleWorkloads},
-		{name: "trend", target: "/opencost/trend", handler: handleTrend},
-		{name: "nodes", target: "/opencost/nodes", handler: handleNodes},
+		{name: "summary", target: "/opencost/summary", handler: handleSummaryScoped},
+		{name: "workloads", target: "/opencost/workloads?namespace=default", handler: handleWorkloadsScoped},
+		{name: "trend", target: "/opencost/trend", handler: handleTrendScoped},
+		{name: "nodes", target: "/opencost/nodes", handler: handleNodesScoped},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			tt.handler(w, httptest.NewRequest(http.MethodGet, tt.target, nil), func() string { return "GBP" })
+			tt.handler(w, httptest.NewRequest(http.MethodGet, tt.target, nil), func() string { return "GBP" }, RouteScope{})
 
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())

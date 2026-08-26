@@ -183,6 +183,7 @@ func main() {
 		CostSource:                fileCfg.CostSource,
 		KubecostURL:               fileCfg.KubecostURL,
 		KubecostAPIKey:            fileCfg.KubecostAPIKey,
+		KubecostAPIKeyContext:     fileCfg.KubecostAPIKeyContext,
 		KubecostClusterID:         fileCfg.KubecostClusterID,
 		KubecostClusterIDContext:  fileCfg.KubecostClusterIDContext,
 		OpenCostFlagSet:           openCostCurrencyFlagSet,

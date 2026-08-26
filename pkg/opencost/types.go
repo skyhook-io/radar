@@ -11,6 +11,7 @@ const (
 	ReasonNotFound           = "not_found"     // requested resource no longer exists
 	ReasonSourceUnavailable  = "source_unavailable"
 	ReasonAuthentication     = "authentication_error"
+	ReasonConfigMismatch     = "configuration_mismatch"
 	ReasonHistoryUnsupported = "history_unsupported"
 )
 

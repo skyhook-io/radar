@@ -87,6 +87,7 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
     state === 'not_found' ||
     state === 'source_unavailable' ||
     state === 'authentication_error' ||
+    state === 'configuration_mismatch' ||
     state === 'history_unsupported' ||
     state === 'load_error'
   ) {
@@ -290,6 +291,7 @@ export function getWorkloadCostState(
     reason === 'not_found' ||
     reason === 'source_unavailable' ||
     reason === 'authentication_error' ||
+    reason === 'configuration_mismatch' ||
     reason === 'history_unsupported'
   )
     return reason
@@ -341,6 +343,8 @@ function WorkloadCostUnavailable({ state }: { state: CostUnavailableReason | 'lo
           ? 'Kubecost Aggregator is unavailable. Check the URL, network path, and cluster ID in Settings → Cost.'
           : state === 'authentication_error'
             ? 'Kubecost rejected the configured API key. Update it in Settings → Cost.'
+            : state === 'configuration_mismatch'
+              ? 'Saved Kubecost settings belong to another cluster. Update the cluster ID or local API key in Settings → Cost.'
             : state === 'history_unsupported'
               ? 'Historical workload cost is not available for Kubecost yet.'
         : state === 'access_denied'

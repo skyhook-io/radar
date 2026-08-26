@@ -174,6 +174,9 @@ describe('getWorkloadCostState', () => {
     expect(getWorkloadCostState(undefined, missing, false)).toBe('not_found')
     expect(getWorkloadCostState(undefined, undefined, { currentError: new ApiError('denied', 403) })).toBe('access_denied')
     expect(getWorkloadCostState(undefined, undefined, { trendError: new ApiError('missing', 404) })).toBe('not_found')
+
+    current.reason = 'configuration_mismatch'
+    expect(getWorkloadCostState(current, undefined, false)).toBe('configuration_mismatch')
   })
 
   it('shows Prometheus discovery as soon as one query reports it', () => {

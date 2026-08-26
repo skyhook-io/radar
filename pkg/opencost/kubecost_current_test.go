@@ -161,8 +161,18 @@ func TestComputeKubecostWorkloadsIncludesStandaloneAndStaticPods(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resp.Workloads) != 2 || resp.Workloads[0].Kind != "standalone" || resp.Workloads[0].Name != "api" || resp.Workloads[0].Replicas != 2 || resp.Workloads[1].Kind != "staticpod" || resp.Workloads[1].Name != "static-pod" {
+	if len(resp.Workloads) != 2 {
 		t.Fatalf("unexpected pod workloads: %#v", resp.Workloads)
+	}
+	byKind := map[string]WorkloadCost{}
+	for _, workload := range resp.Workloads {
+		byKind[workload.Kind] = workload
+	}
+	if standalone := byKind["standalone"]; standalone.Name != "api" || standalone.Replicas != 2 {
+		t.Fatalf("unexpected standalone workload: %#v", standalone)
+	}
+	if staticPod := byKind["staticpod"]; staticPod.Name != "static-pod" {
+		t.Fatalf("unexpected static pod workload: %#v", staticPod)
 	}
 }
 
@@ -203,8 +213,28 @@ func TestComputeKubecostNodesDoesNotSendUnsupportedAggregate(t *testing.T) {
 	if transport.requests[0].params.Has("aggregate") {
 		t.Fatalf("assets request must not send aggregate: %v", transport.requests[0].params)
 	}
+	if got := transport.requests[0].params.Get("window"); got != "1h" {
+		t.Fatalf("assets window = %q, want 1h", got)
+	}
 	if got := transport.requests[0].params.Get("filter"); got != `cluster:"cluster-a"+assetType:"node"` {
 		t.Fatalf("assets filter = %q", got)
+	}
+}
+
+func TestComputeKubecostNodesFallsBackToDailyAssets(t *testing.T) {
+	transport := &fakeKubecostTransport{responses: []string{
+		`{"code":200,"data":[null]}`,
+		`{"code":200,"data":[{"node":{"type":"Node","properties":{"cluster":"cluster-a","name":"worker"},"start":"2026-08-25T00:00:00Z","end":"2026-08-26T00:00:00Z","totalCost":24}}]}`,
+	}}
+	resp, err := ComputeKubecostNodes(context.Background(), NewKubecostClient(transport), KubecostCurrentOptions{ClusterID: "cluster-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Available || len(resp.Nodes) != 1 || resp.Nodes[0].HourlyCost != 1 {
+		t.Fatalf("unexpected response: %#v", resp)
+	}
+	if len(transport.requests) != 2 || transport.requests[0].params.Get("window") != "1h" || transport.requests[1].params.Get("window") != "1d" {
+		t.Fatalf("requests = %#v, want 1h then 1d", transport.requests)
 	}
 }
 

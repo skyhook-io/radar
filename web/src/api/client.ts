@@ -888,6 +888,7 @@ export type CostUnavailableReason =
   | "not_found"
   | "source_unavailable"
   | "authentication_error"
+  | "configuration_mismatch"
   | "history_unsupported";
 
 export type CostDataSource = "prometheus" | "kubecost";

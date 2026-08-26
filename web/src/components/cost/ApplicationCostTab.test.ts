@@ -231,5 +231,8 @@ describe('getApplicationCostState', () => {
       }),
     ).toBe('access_denied')
     expect(getApplicationCostState(current, undefined, { trendError: true })).toBe('access_denied')
+
+    current.reason = 'configuration_mismatch'
+    expect(getApplicationCostState(current, undefined, {})).toBe('configuration_mismatch')
   })
 })

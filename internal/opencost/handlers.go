@@ -31,13 +31,16 @@ func RegisterRoutes(r chi.Router, resolveCurrency func() string, scope RouteScop
 	r.Get("/opencost/nodes", func(w http.ResponseWriter, r *http.Request) { handleNodesScoped(w, r, resolveCurrency, scope) })
 }
 
-// handleSummary returns namespace-level cost summary from OpenCost Prometheus metrics.
-func handleSummary(w http.ResponseWriter, r *http.Request, resolveCurrency func() string) {
-	handleSummaryScoped(w, r, resolveCurrency, RouteScope{})
-}
-
 func handleSummaryScoped(w http.ResponseWriter, r *http.Request, resolveCurrency func() string, scope RouteScope) {
 	currency := resolvedCurrency(resolveCurrency)
+	var allowedNamespaces []string
+	if scope.AllowedNamespaces != nil {
+		allowedNamespaces = scope.AllowedNamespaces(r, nil)
+		if allowedNamespaces != nil && len(allowedNamespaces) == 0 {
+			writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: pkgopencost.ReasonAccessDenied, Currency: currency})
+			return
+		}
+	}
 	connection, err := Selected(r.Context())
 	if err != nil {
 		writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "kubecost"})
@@ -50,8 +53,8 @@ func handleSummaryScoped(w http.ResponseWriter, r *http.Request, resolveCurrency
 			writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "kubecost"})
 			return
 		}
-		if scope.AllowedNamespaces != nil {
-			filterCostSummary(resp, scope.AllowedNamespaces(r, nil))
+		if allowedNamespaces != nil {
+			filterCostSummary(resp, allowedNamespaces)
 		}
 		writeJSON(w, http.StatusOK, resp)
 		return
@@ -69,8 +72,8 @@ func handleSummaryScoped(w http.ResponseWriter, r *http.Request, resolveCurrency
 	resp := pkgopencost.ComputeCostSummaryFromProm(
 		r.Context(), client.Prom(), pkgopencost.SummaryOptions{Currency: currency})
 	resp.Source = "prometheus"
-	if scope.AllowedNamespaces != nil {
-		filterCostSummary(resp, scope.AllowedNamespaces(r, nil))
+	if allowedNamespaces != nil {
+		filterCostSummary(resp, allowedNamespaces)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -81,11 +84,6 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		log.Printf("[opencost] Failed to encode JSON response: %v", err)
 	}
-}
-
-// handleWorkloads returns workload-level cost breakdown for a namespace.
-func handleWorkloads(w http.ResponseWriter, r *http.Request, resolveCurrency func() string) {
-	handleWorkloadsScoped(w, r, resolveCurrency, RouteScope{})
 }
 
 func handleWorkloadsScoped(w http.ResponseWriter, r *http.Request, resolveCurrency func() string, scope RouteScope) {
@@ -178,12 +176,20 @@ func stripReplicaSetSuffix(name string) string {
 	return name
 }
 
-// handleTrend returns cost trend data over time as a stacked series per namespace.
-func handleTrend(w http.ResponseWriter, r *http.Request, resolveCurrency func() string) {
-	handleTrendScoped(w, r, resolveCurrency, RouteScope{})
-}
-
 func handleTrendScoped(w http.ResponseWriter, r *http.Request, resolveCurrency func() string, scope RouteScope) {
+	var namespaces []string
+	if scope.AllowedNamespaces != nil {
+		namespaces = scope.AllowedNamespaces(r, nil)
+		if namespaces != nil && len(namespaces) == 0 {
+			writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{
+				Available: false,
+				Reason:    pkgopencost.ReasonAccessDenied,
+				Currency:  resolvedCurrency(resolveCurrency),
+				Range:     r.URL.Query().Get("range"),
+			})
+			return
+		}
+	}
 	connection, err := Selected(r.Context())
 	if err != nil {
 		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: resolvedCurrency(resolveCurrency), Source: "kubecost", Range: r.URL.Query().Get("range")})
@@ -203,10 +209,6 @@ func handleTrendScoped(w http.ResponseWriter, r *http.Request, resolveCurrency f
 		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: resolvedCurrency(resolveCurrency), Source: "prometheus", Range: r.URL.Query().Get("range")})
 		return
 	}
-	var namespaces []string
-	if scope.AllowedNamespaces != nil {
-		namespaces = scope.AllowedNamespaces(r, nil)
-	}
 	resp := pkgopencost.ComputeCostTrendFromProm(r.Context(), client.Prom(), pkgopencost.TrendPromOptions{
 		Range:      r.URL.Query().Get("range"),
 		Namespaces: namespaces,
@@ -214,11 +216,6 @@ func handleTrendScoped(w http.ResponseWriter, r *http.Request, resolveCurrency f
 	resp.Currency = resolvedCurrency(resolveCurrency)
 	resp.Source = "prometheus"
 	writeJSON(w, http.StatusOK, resp)
-}
-
-// handleNodes returns per-node cost breakdown.
-func handleNodes(w http.ResponseWriter, r *http.Request, resolveCurrency func() string) {
-	handleNodesScoped(w, r, resolveCurrency, RouteScope{})
 }
 
 func handleNodesScoped(w http.ResponseWriter, r *http.Request, resolveCurrency func() string, scope RouteScope) {
@@ -365,12 +362,15 @@ func ConnectionFailureReason(err error) string {
 	if errors.Is(err, ErrKubecostAuthentication) {
 		return pkgopencost.ReasonAuthentication
 	}
+	if errors.Is(err, ErrKubecostContextMismatch) {
+		return pkgopencost.ReasonConfigMismatch
+	}
 	var httpErr *prom.HTTPError
 	if errors.As(err, &httpErr) && (httpErr.StatusCode == http.StatusUnauthorized || httpErr.StatusCode == http.StatusForbidden) {
 		return pkgopencost.ReasonAuthentication
 	}
 	message := strings.ToLower(err.Error())
-	if errors.Is(err, ErrKubecostClusterID) || errors.Is(err, ErrKubecostContextMismatch) || errors.Is(err, ErrKubecostUnavailable) || strings.Contains(message, "kubecost") || strings.Contains(message, "cost source") {
+	if errors.Is(err, ErrKubecostClusterID) || errors.Is(err, ErrKubecostUnavailable) || strings.Contains(message, "kubecost") || strings.Contains(message, "cost source") {
 		return pkgopencost.ReasonSourceUnavailable
 	}
 	return pkgopencost.ReasonQueryError

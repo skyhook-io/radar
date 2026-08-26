@@ -239,7 +239,7 @@ func ComputeKubecostNodes(ctx context.Context, client *KubecostClient, opts Kube
 	if clusterFilter := kubecostFilter(opts.ClusterID, ""); clusterFilter != "" {
 		filter = clusterFilter + "+" + filter
 	}
-	resp, err := client.GetAssets(ctx, KubecostAssetOptions{Window: "1d", Accumulate: "true", Filter: filter})
+	resp, err := kubecostAssetsWithFallback(ctx, client, KubecostAssetOptions{Accumulate: "true", Filter: filter})
 	if err != nil {
 		return nil, err
 	}
@@ -305,6 +305,25 @@ func kubecostAllocationWithFallback(ctx context.Context, client *KubecostClient,
 		return nil, "1d", lastErr
 	}
 	return nil, "1d", nil
+}
+
+func kubecostAssetsWithFallback(ctx context.Context, client *KubecostClient, opts KubecostAssetOptions) (*KubecostAssetsResponse, error) {
+	var lastErr error
+	for _, window := range []string{kubecostCurrentWindow, "1d"} {
+		opts.Window = window
+		resp, err := client.GetAssets(ctx, opts)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			lastErr = err
+			continue
+		}
+		if hasKubecostAssetData(resp) {
+			return resp, nil
+		}
+	}
+	return nil, lastErr
 }
 
 func kubecostAllocationRows(resp *KubecostAllocationResponse) map[string]*KubecostAllocation {

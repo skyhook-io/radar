@@ -69,6 +69,7 @@ type AppConfig struct {
 	CostSource                string
 	KubecostURL               string
 	KubecostAPIKey            string
+	KubecostAPIKeyContext     string
 	KubecostClusterID         string
 	KubecostClusterIDContext  string
 	PrometheusHeaders         map[string]string
@@ -268,6 +269,7 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 		Source:           internalopencost.Source(cfg.CostSource),
 		URL:              cfg.KubecostURL,
 		APIKey:           cfg.KubecostAPIKey,
+		APIKeyContext:    cfg.KubecostAPIKeyContext,
 		ClusterID:        cfg.KubecostClusterID,
 		ClusterIDContext: cfg.KubecostClusterIDContext,
 	}); err != nil {
@@ -297,6 +299,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 	costSource := cfg.CostSource
 	kubecostURL := cfg.KubecostURL
 	kubecostAPIKey := cfg.KubecostAPIKey
+	kubecostAPIKeyContext := cfg.KubecostAPIKeyContext
 	kubecostClusterID := cfg.KubecostClusterID
 	kubecostClusterIDContext := cfg.KubecostClusterIDContext
 	if internalopencost.IsEnvManaged() {
@@ -304,6 +307,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 		costSource = string(costConfig.Source)
 		kubecostURL = costConfig.URL
 		kubecostAPIKey = costConfig.APIKey
+		kubecostAPIKeyContext = costConfig.APIKeyContext
 		kubecostClusterID = costConfig.ClusterID
 		kubecostClusterIDContext = costConfig.ClusterIDContext
 	}
@@ -324,6 +328,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 		CostSource:                costSource,
 		KubecostURL:               kubecostURL,
 		KubecostAPIKey:            kubecostAPIKey,
+		KubecostAPIKeyContext:     kubecostAPIKeyContext,
 		KubecostClusterID:         kubecostClusterID,
 		KubecostClusterIDContext:  kubecostClusterIDContext,
 		PrometheusHeaders:         cfg.PrometheusHeaders,

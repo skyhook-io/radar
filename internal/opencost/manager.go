@@ -35,7 +35,7 @@ const (
 var (
 	ErrKubecostAuthentication  = errors.New("Kubecost authentication failed")
 	ErrKubecostClusterID       = errors.New("Kubecost cluster ID unavailable")
-	ErrKubecostContextMismatch = errors.New("Kubecost cluster ID context mismatch")
+	ErrKubecostContextMismatch = errors.New("Kubecost configuration context mismatch")
 	ErrKubecostNoData          = errors.New("Kubecost returned no allocation data")
 	ErrKubecostUnavailable     = errors.New("Kubecost Aggregator unavailable")
 )
@@ -44,6 +44,7 @@ type ManagerConfig struct {
 	Source           Source
 	URL              string
 	APIKey           string
+	APIKeyContext    string
 	ClusterID        string
 	ClusterIDContext string
 }
@@ -148,10 +149,14 @@ func (m *Manager) configure(config ManagerConfig, envManaged bool, envError stri
 	}
 	config.Source = source
 	config.URL = strings.TrimRight(strings.TrimSpace(config.URL), "/")
+	config.APIKeyContext = strings.TrimSpace(config.APIKeyContext)
 	config.ClusterID = strings.TrimSpace(config.ClusterID)
 	config.ClusterIDContext = strings.TrimSpace(config.ClusterIDContext)
 	if config.ClusterID != "" && config.ClusterIDContext == "" {
 		config.ClusterIDContext = k8s.GetContextName()
+	}
+	if config.URL == "" && config.APIKey != "" && config.APIKeyContext == "" {
+		config.APIKeyContext = k8s.GetContextName()
 	}
 	if err := ValidateKubecostURL(config.URL); err != nil {
 		return err
@@ -208,6 +213,11 @@ func resolveEnvironmentConfig(base ManagerConfig, getenv func(string) string) (M
 	}
 	if values[envAPIKey] != "" {
 		base.APIKey = values[envAPIKey]
+		if base.URL == "" {
+			base.APIKeyContext = k8s.GetContextName()
+		} else {
+			base.APIKeyContext = ""
+		}
 	}
 	if values[envClusterID] != "" {
 		base.ClusterID = values[envClusterID]
@@ -316,7 +326,7 @@ func (m *Manager) Selected(ctx context.Context) (Connection, error) {
 		if contextErr := ctx.Err(); contextErr != nil {
 			return Connection{}, contextErr
 		}
-		if config.Source == SourceAuto {
+		if config.Source == SourceAuto && !errors.Is(err, ErrKubecostContextMismatch) {
 			return m.commitAutoFallback(generation)
 		}
 		return m.commitSelectionFailure(generation, err)
@@ -435,7 +445,7 @@ func detectPrometheusCostState(ctx context.Context) prometheusCostState {
 func (m *Manager) connectKubecost(ctx context.Context, config ManagerConfig) (Connection, error) {
 	ctx, cancel := context.WithTimeout(ctx, kubecostConnectTimeout)
 	defer cancel()
-	if err := validateKubecostClusterIDContext(config, k8s.GetContextName()); err != nil {
+	if err := validateKubecostConfigContext(config, k8s.GetContextName()); err != nil {
 		return Connection{}, err
 	}
 	if config.URL != "" {
@@ -487,11 +497,17 @@ func (m *Manager) connectKubecost(ctx context.Context, config ManagerConfig) (Co
 	}, nil
 }
 
-func validateKubecostClusterIDContext(config ManagerConfig, currentContext string) error {
-	if config.ClusterID == "" || config.ClusterIDContext == "" || currentContext == "" || config.ClusterIDContext == currentContext {
+func validateKubecostConfigContext(config ManagerConfig, currentContext string) error {
+	if currentContext == "" {
 		return nil
 	}
-	return fmt.Errorf("%w: configured for kubeconfig context %q, current context is %q", ErrKubecostContextMismatch, config.ClusterIDContext, currentContext)
+	if config.ClusterID != "" && config.ClusterIDContext != "" && config.ClusterIDContext != currentContext {
+		return fmt.Errorf("%w: cluster ID configured for kubeconfig context %q, current context is %q", ErrKubecostContextMismatch, config.ClusterIDContext, currentContext)
+	}
+	if config.URL == "" && config.APIKey != "" && config.APIKeyContext != "" && config.APIKeyContext != currentContext {
+		return fmt.Errorf("%w: local API key configured for kubeconfig context %q, current context is %q", ErrKubecostContextMismatch, config.APIKeyContext, currentContext)
+	}
+	return nil
 }
 
 func resolveKubecostClusterID(configured string) (string, error) {
