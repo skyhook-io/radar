@@ -45,9 +45,11 @@ interface HomeViewProps {
    * standalone OSS → the card drills into secrets as before.
    */
   onNavigateToCerts?: () => void
+  // Omitted when an embedded host owns /checks, leaving the version as plain text.
+  onNavigateToUpgradeImpact?: () => void
 }
 
-export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNavigateToView, onNavigateToResourceKind, onNavigateToResource, onNavigateToCerts }: HomeViewProps) {
+export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNavigateToView, onNavigateToResourceKind, onNavigateToResource, onNavigateToCerts, onNavigateToUpgradeImpact }: HomeViewProps) {
   // The card itself decides whether the cluster has a capacity story
   // (available, softened-denied, or karpenterless-with-managers/groups) and
   // returns null otherwise — the outer gate only excludes states with nothing
@@ -143,6 +145,7 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
           nodeVersionSkew={data.nodeVersionSkew}
           onNavigateToKind={onNavigateToResourceKind}
           onNavigateToView={() => onNavigateToView('resources')}
+          onNavigateToUpgradeImpact={onNavigateToUpgradeImpact}
           onWarningEventsClick={() => onNavigateToView('timeline', { view: 'list', filter: 'warnings', time: 'all' })}
           onIssuesClick={() => onNavigateToView('issues')}
         />

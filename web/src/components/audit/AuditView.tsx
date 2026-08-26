@@ -88,9 +88,14 @@ function BestPracticesView({ namespaces, onNavigateToResource }: AuditViewProps)
 
   return (
     <div className="flex-1 flex flex-col min-h-0 p-4 gap-4 overflow-auto">
+      {/* Tabs above the header: the header describes best practices only, so
+          tabs rendered below it read as part of that page rather than as the
+          switch between the two Checks surfaces. */}
+      <ChecksViewTabs />
+
       <PageHeader
         icon={ShieldCheck}
-        title="Checks"
+        title="Best practices"
         description="Security, reliability, and efficiency best practices (NSA/CISA, CIS, Polaris, Kubescape), grouped into a remediation queue."
         actions={
           <>
@@ -114,8 +119,6 @@ function BestPracticesView({ namespaces, onNavigateToResource }: AuditViewProps)
           </>
         }
       />
-
-      <ChecksViewTabs />
 
       <ChecksView
         checks={data.groupedChecks ?? []}

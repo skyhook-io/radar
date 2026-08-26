@@ -292,6 +292,9 @@ export interface DashboardCluster {
   platform: string;
   version: string;
   connected: boolean;
+  // Newest Kubernetes minor the upgrade-impact catalog covers (e.g. "1.37").
+  // Static catalog fact — safe to compare against `version` without a scan.
+  upgradeReviewedThrough?: string;
 }
 
 export interface DashboardHealth {

@@ -2039,6 +2039,15 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             topology={topology}
             fallbackClusterLoadState={showHomeClusterLoadFallback ? clusterLoadState : undefined}
             onNavigateToView={setMainView}
+            // Upgrade impact lives under /checks, which a Cloud host takes
+            // over wholesale — its fleet pages have no upgrade sub-route, so
+            // the version line stays plain text there.
+            onNavigateToUpgradeImpact={takeover.checks ? undefined : () => {
+              const newParams = new URLSearchParams()
+              const globalNamespaces = searchParams.get('namespaces')
+              if (globalNamespaces) newParams.set('namespaces', globalNamespaces)
+              navigate({ pathname: '/checks/upgrade', search: newParams.toString() })
+            }}
             onNavigateToResourceKind={(kind, apiGroup, filters) => {
               // Navigate to resources view with kind in URL path
               console.debug('[filters] App.onNavigateToResourceKind:', { kind, apiGroup, filters })

@@ -127,6 +127,8 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
 
   return (
     <div aria-busy={isFetching} className="flex-1 flex flex-col min-h-0 p-4 gap-4 overflow-auto">
+      <ChecksViewTabs />
+
       <PageHeader
         icon={ShieldAlert}
         title="Upgrade impact"
@@ -161,8 +163,6 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
           </>
         }
       />
-
-      <ChecksViewTabs />
 
       {showingPreviousTarget && (
         <CoverageNotice
