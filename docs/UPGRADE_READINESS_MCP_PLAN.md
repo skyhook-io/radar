@@ -130,11 +130,11 @@ get_cluster_upgrade_readiness
                        return zero findings for a check whose tier-1 row reports some.)
   offset   (optional)  skip the first N findings when expanding (default 0). Paired with
                        the per-call cap this makes every finding retrievable.
-  scanId   (optional)  bind a paging request to the scan that produced the earlier page
-                       (every response carries its scanId). If the memoized scan has been
-                       replaced (TTL expiry, a refresh) the tool errors "scan changed —
-                       restart from offset 0" instead of silently paging a different
-                       snapshot. Recommended whenever offset > 0.
+  scanId   (conditional) binds a paging request to the scan that produced the earlier
+                       page (every response carries its scanId). REQUIRED whenever
+                       offset > 0 — a missing or mismatched scanId errors "scan changed —
+                       restart from offset 0", so a replaced snapshot (TTL expiry, a
+                       refresh) can never be silently paged as if it were the original.
   refresh  (optional)  bypass the memo and run a fresh scan (default false). For
                        fix-then-rescan loops; the description steers agents to use it
                        only after changing something. Rejected when combined with a
@@ -269,9 +269,9 @@ Findings are ordered most severe first and capped (proposed: 25 per call), with 
 kept distinct so a cap can never masquerade as completeness: `findingsTotal` (all findings on
 the check), the returned page, and `findingsTruncated` (matching findings beyond this page).
 Every finding is retrievable: `offset` pages through the remainder, and page consistency is
-*bound*, not assumed — pages read the memoized scan snapshot, and passing the response's
-`scanId` on continuation requests turns a replaced snapshot (TTL expiry, refresh) into an
-explicit "scan changed — restart" error rather than a silently different page with
+*bound*, not assumed — every nonzero-offset request must carry the `scanId` of the response
+it continues, and a missing or mismatched id turns a replaced snapshot (TTL expiry, refresh)
+into an explicit "scan changed — restart" error rather than a silently different page with
 duplicated or dropped findings. `level` narrows to the levels the agent cares
 about but is never a silent default — no filter, no cap may hide a finding without an
 explicit count saying so. References (doc URLs) are dropped from MCP output except the first
@@ -418,7 +418,8 @@ The repo enforces these; listing them so the PR is complete in one pass:
   covers helpers, not the handler, so these are written *before* phase 1 and must pass
   unmodified after it. This is the regression net for the extraction.
 - **Unit (mcp):** tier 1 / tier 2 shaping from a fixture `ScanResults`; `findingsTotal` /
-  cap / `findingsTruncated` / `offset` paging; `scanId` mismatch → "scan changed" error;
+  cap / `findingsTruncated` / `offset` paging; `scanId` missing-on-nonzero-offset and
+  mismatch both → "scan changed" error;
   `refresh` + nonzero `offset` rejected; `level` filter (and that no filter is applied
   by default); unknown-preservation (invariant §3.2); `no_access` short-circuit (§3.3);
   `evidenceNote` on a passed check and per-kind `scopedKinds` survival (§3.4/§3.6); unknown
