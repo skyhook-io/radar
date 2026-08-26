@@ -93,10 +93,15 @@ var (
 		"RelaxedServiceNameValidation":            append([]Reference(nil), featureGateLifecycleReferences137...),
 		"WatchCacheInitializationPostStartHook":   append([]Reference(nil), featureGateLifecycleReferences137...),
 	}
-	componentFlagReferences137      = []Reference{{Title: "Remove no-op cloud provider controller registrations", URL: "https://github.com/kubernetes/kubernetes/pull/138002"}}
-	podGroupAdmissionReferences137  = []Reference{{Title: "Remove the PodGroupWorkloadExists admission plugin", URL: "https://github.com/kubernetes/kubernetes/pull/139008"}, {Title: "Kubernetes 1.37 changelog", URL: "https://github.com/kubernetes/kubernetes/blob/release-1.37/CHANGELOG/CHANGELOG-1.37.md"}}
-	cAdvisorRemovalReferences137    = []Reference{{Title: "Remove deprecated cAdvisor flags and metrics", URL: "https://github.com/kubernetes/kubernetes/pull/139870"}, {Title: "Kubernetes 1.37 changelog", URL: "https://github.com/kubernetes/kubernetes/blob/release-1.37/CHANGELOG/CHANGELOG-1.37.md"}}
-	eventRecordQPSReferences137     = []Reference{{Title: "Make eventRecordQPS zero mean unlimited", URL: "https://github.com/kubernetes/kubernetes/pull/117119"}}
+	componentFlagReferences137     = []Reference{{Title: "Remove no-op cloud provider controller registrations", URL: "https://github.com/kubernetes/kubernetes/pull/138002"}}
+	podGroupAdmissionReferences137 = []Reference{{Title: "Remove the PodGroupWorkloadExists admission plugin", URL: "https://github.com/kubernetes/kubernetes/pull/139008"}, {Title: "Kubernetes 1.37 changelog", URL: "https://github.com/kubernetes/kubernetes/blob/release-1.37/CHANGELOG/CHANGELOG-1.37.md"}}
+	cAdvisorRemovalReferences137   = []Reference{{Title: "Remove deprecated cAdvisor flags and metrics", URL: "https://github.com/kubernetes/kubernetes/pull/139870"}, {Title: "Kubernetes 1.37 changelog", URL: "https://github.com/kubernetes/kubernetes/blob/release-1.37/CHANGELOG/CHANGELOG-1.37.md"}}
+	eventRecordQPSReferences137    = []Reference{
+		{Title: "Make eventRecordQPS zero mean unlimited", URL: "https://github.com/kubernetes/kubernetes/pull/117119"},
+		{Title: "Kubelet 1.36 passes eventRecordQPS to client-go", URL: "https://github.com/kubernetes/kubernetes/blob/v1.36.0/cmd/kubelet/app/server.go#L726-L730"},
+		{Title: "client-go 1.36 default QPS is 5", URL: "https://github.com/kubernetes/kubernetes/blob/v1.36.0/staging/src/k8s.io/client-go/rest/config.go#L46-L49"},
+		{Title: "client-go 1.36 applies its default when QPS is zero", URL: "https://github.com/kubernetes/kubernetes/blob/v1.36.0/staging/src/k8s.io/client-go/rest/config.go#L370-L375"},
+	}
 	schedulingAPIReferences137      = []Reference{{Title: "Promote Workload and PodGroup APIs to v1beta1", URL: "https://github.com/kubernetes/kubernetes/pull/140184"}}
 	kubeadmV1Beta3References137     = []Reference{{Title: "Remove kubeadm v1beta3 and PublicKeysECDSA", URL: "https://github.com/kubernetes/kubernetes/pull/136016"}}
 	kubeadmFeatureGateReferences137 = map[string][]Reference{

@@ -219,6 +219,17 @@ func TestRemovedFeatureGatesReportsManagedControlPlaneGap137(t *testing.T) {
 	if check.Status != CheckPassed || !strings.Contains(check.Caveat, "kube-controller-manager, kube-scheduler") {
 		t.Fatalf("partial control-plane evidence = %+v, want missing-component caveat", check)
 	}
+
+	input = completeInput()
+	input.Nodes = nil
+	input.Pods = []*corev1.Pod{{
+		ObjectMeta: metav1.ObjectMeta{Name: "kube-apiserver-node-a", Namespace: "kube-system", Annotations: map[string]string{corev1.MirrorPodAnnotationKey: "mirror"}},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "kube-apiserver", Args: []string{"--feature-gates=APIServerTracing=false"}}}},
+	}}
+	check = checkByID(t, scan137(t, input), "removed-feature-gates")
+	if check.Status != CheckBlocked || !strings.Contains(check.Caveat, "Node evidence was unavailable") {
+		t.Fatalf("control-plane blocker without node evidence = %+v, want blocker with kubelet coverage caveat", check)
+	}
 }
 
 func TestRemovedControlPlaneConfigurationScope137(t *testing.T) {
@@ -245,10 +256,11 @@ func TestKubeletEventRecordQPS137(t *testing.T) {
 	input := completeInput()
 	input.NodeRuntimeEvidence[0].EventRecordQPS = 0
 	check := checkByID(t, scan137(t, input), "kubelet-event-qps-change")
-	if check.Status != CheckWarning || len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Impact, "5 events per second") || !strings.Contains(check.Findings[0].Remediation, "kubelet default") || !strings.Contains(check.Findings[0].Remediation, "pre-1.37 effective rate") {
+	if check.Status != CheckWarning || len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Impact, "client-go") || !strings.Contains(check.Findings[0].Impact, "5 events per second") || !strings.Contains(check.Findings[0].Remediation, "upgrade note recommends 50") || !strings.Contains(check.Findings[0].Remediation, "matching the old explicit-zero runtime limit") {
 		t.Fatalf("zero eventRecordQPS = %+v, want behavior-change warning", check)
 	}
 	requireFindingReference(t, check.Findings, "/pull/117119")
+	requireFindingReference(t, check.Findings, "/blob/v1.36.0/")
 
 	input = completeInput()
 	input.NodeRuntimeEvidence[0].EventRecordQPSAvailable = false
