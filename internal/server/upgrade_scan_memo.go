@@ -23,6 +23,17 @@ const (
 	// live collection per key — within it, refresh returns the newest
 	// completed scan. Enforced control, not description guidance.
 	upgradeScanRefreshCooldown = 5 * time.Second
+	// upgradeScanMemoMaxEntries bounds memo cardinality: the key contains the
+	// caller-controlled target (any forward minor validates), so without a cap
+	// a caller iterating targets would retain one full ScanResults per key.
+	// Completed entries beyond the cap are evicted earliest-expiry-first;
+	// in-flight entries are never evicted.
+	upgradeScanMemoMaxEntries = 32
+	// upgradeScanMaxConcurrent bounds live collections across ALL keys —
+	// single-flight only dedupes within one key, and distinct targets are
+	// distinct keys. Excess leaders wait; the pre-memo endpoint had no bound
+	// at all, so this is strictly tighter than the status quo.
+	upgradeScanMaxConcurrent = 2
 )
 
 var (
@@ -70,15 +81,19 @@ type upgradeScanMemo struct {
 	entries    map[string]*upgradeScanEntry
 	ttl        time.Duration
 	cooldown   time.Duration
+	maxEntries int
+	scanSlots  chan struct{}
 	now        func() time.Time
 }
 
 func newUpgradeScanMemo() *upgradeScanMemo {
 	return &upgradeScanMemo{
-		entries:  map[string]*upgradeScanEntry{},
-		ttl:      upgradeScanMemoTTL,
-		cooldown: upgradeScanRefreshCooldown,
-		now:      time.Now,
+		entries:    map[string]*upgradeScanEntry{},
+		ttl:        upgradeScanMemoTTL,
+		cooldown:   upgradeScanRefreshCooldown,
+		maxEntries: upgradeScanMemoMaxEntries,
+		scanSlots:  make(chan struct{}, upgradeScanMaxConcurrent),
+		now:        time.Now,
 	}
 }
 
@@ -156,6 +171,7 @@ func (m *upgradeScanMemo) get(ctx context.Context, key string, refresh bool, gen
 		return UpgradeScanOutcome{}, ErrUpgradeScanStaleContext
 	}
 	now := m.now()
+	m.sweepLocked(now)
 	if entry := m.entries[key]; entry != nil {
 		select {
 		case <-entry.done:
@@ -177,9 +193,10 @@ func (m *upgradeScanMemo) get(ctx context.Context, key string, refresh bool, gen
 
 	leader := &upgradeScanEntry{done: make(chan struct{}), generation: gen, startedAt: now}
 	m.entries[key] = leader
+	m.evictOverCapLocked()
 	m.mu.Unlock()
 
-	results, err := scan(ctx)
+	results, err := m.runBoundedScan(ctx, scan)
 
 	m.mu.Lock()
 	completed := m.now()
@@ -207,6 +224,59 @@ func (m *upgradeScanMemo) get(ctx context.Context, key string, refresh bool, gen
 		return UpgradeScanOutcome{}, err
 	}
 	return out, nil
+}
+
+// sweepLocked drops completed entries that have expired or belong to a
+// previous generation — without it, distinct keys (the target is
+// caller-controlled) would retain their ScanResults until the next context
+// switch. In-flight entries are left for their leaders to settle.
+func (m *upgradeScanMemo) sweepLocked(now time.Time) {
+	for key, entry := range m.entries {
+		select {
+		case <-entry.done:
+			if entry.err != nil || entry.generation != m.generation || !now.Before(entry.expiresAt) {
+				delete(m.entries, key)
+			}
+		default:
+		}
+	}
+}
+
+// evictOverCapLocked bounds memo cardinality by dropping completed entries
+// earliest-expiry-first. In-flight entries are never evicted — their leaders
+// hold the done channel — but they carry no results, so their footprint is
+// small and their count is bounded by the scan-slot queue in practice.
+func (m *upgradeScanMemo) evictOverCapLocked() {
+	for len(m.entries) > m.maxEntries {
+		victimKey := ""
+		var victim *upgradeScanEntry
+		for key, entry := range m.entries {
+			select {
+			case <-entry.done:
+				if victim == nil || entry.expiresAt.Before(victim.expiresAt) {
+					victimKey, victim = key, entry
+				}
+			default:
+			}
+		}
+		if victim == nil {
+			return
+		}
+		delete(m.entries, victimKey)
+	}
+}
+
+// runBoundedScan gates the live collection behind the global concurrency
+// slots. Single-flight already dedupes per key; this bounds distinct keys
+// (distinct targets) from fanning out unbounded concurrent collections.
+func (m *upgradeScanMemo) runBoundedScan(ctx context.Context, scan func(context.Context) (*upgradereadiness.ScanResults, error)) (*upgradereadiness.ScanResults, error) {
+	select {
+	case m.scanSlots <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-m.scanSlots }()
+	return scan(ctx)
 }
 
 // waitForEntry blocks until the in-flight entry completes, then revalidates

@@ -228,6 +228,85 @@ func TestUpgradeScanKeySeparatesIdentityTargetAndScope(t *testing.T) {
 	}
 }
 
+func TestUpgradeScanMemoSweepsExpiredEntriesAcrossKeys(t *testing.T) {
+	// The key contains the caller-controlled target: without the sweep, a
+	// caller iterating targets would retain one ScanResults per key until the
+	// next context switch.
+	memo, clock := newTestUpgradeScanMemo(time.Now())
+	scans := 0
+	if _, err := memo.get(context.Background(), "target-a", false, memo.currentGeneration(), countingScan(&scans)); err != nil {
+		t.Fatal(err)
+	}
+	*clock = clock.Add(memo.ttl + time.Second)
+	if _, err := memo.get(context.Background(), "target-b", false, memo.currentGeneration(), countingScan(&scans)); err != nil {
+		t.Fatal(err)
+	}
+	memo.mu.Lock()
+	_, stale := memo.entries["target-a"]
+	size := len(memo.entries)
+	memo.mu.Unlock()
+	if stale || size != 1 {
+		t.Fatalf("after TTL, entries=%d staleRetained=%v — expired keys must be swept, not retained until context switch", size, stale)
+	}
+}
+
+func TestUpgradeScanMemoCapsEntryCardinality(t *testing.T) {
+	memo, _ := newTestUpgradeScanMemo(time.Now())
+	memo.maxEntries = 3
+	scans := 0
+	for _, key := range []string{"t1", "t2", "t3", "t4", "t5"} {
+		if _, err := memo.get(context.Background(), key, false, memo.currentGeneration(), countingScan(&scans)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	memo.mu.Lock()
+	size := len(memo.entries)
+	_, newest := memo.entries["t5"]
+	memo.mu.Unlock()
+	if size > 3 || !newest {
+		t.Fatalf("entries=%d newestRetained=%v — cardinality must stay capped with earliest-expiry eviction", size, newest)
+	}
+}
+
+func TestUpgradeScanMemoBoundsCrossKeyConcurrency(t *testing.T) {
+	memo, _ := newTestUpgradeScanMemo(time.Now())
+	memo.scanSlots = make(chan struct{}, 1)
+	inFlight := make(chan struct{}, 8)
+	release := make(chan struct{})
+	var maxSeen sync.Mutex
+	peak := 0
+	scan := func(context.Context) (*upgradereadiness.ScanResults, error) {
+		inFlight <- struct{}{}
+		maxSeen.Lock()
+		if n := len(inFlight); n > peak {
+			peak = n
+		}
+		maxSeen.Unlock()
+		<-release
+		<-inFlight
+		return &upgradereadiness.ScanResults{}, nil
+	}
+	var wg sync.WaitGroup
+	for _, key := range []string{"t1", "t2", "t3"} {
+		wg.Add(1)
+		go func(key string) {
+			defer wg.Done()
+			if _, err := memo.get(context.Background(), key, false, memo.currentGeneration(), scan); err != nil {
+				t.Errorf("get(%s): %v", key, err)
+			}
+		}(key)
+	}
+	go func() {
+		// Let the queue form, then release everyone; slots serialize them.
+		time.Sleep(50 * time.Millisecond)
+		close(release)
+	}()
+	wg.Wait()
+	if peak > 1 {
+		t.Fatalf("peak concurrent scans = %d, want distinct keys serialized by the global slots", peak)
+	}
+}
+
 func TestUpgradeScanMemoRefusesGenerationCapturedBeforeSwitch(t *testing.T) {
 	// The caller captures the generation before resolving cluster-dependent
 	// inputs; a switch completing after the capture must fail the request
