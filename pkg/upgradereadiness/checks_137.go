@@ -580,7 +580,7 @@ func scanKubeProxyModeTransition(input *Input) Check {
 	if unknown > 0 && len(check.Findings) == 0 {
 		check.Status, check.Summary = CheckUnknown, "kube-proxy was found, but its effective mode could not be determined."
 	} else if len(check.Findings) > 0 {
-		check.Summary = fmt.Sprintf("%d kube-proxy mode %s require migration review.", len(check.Findings), plural(len(check.Findings), "setting", "settings"))
+		check.Summary = fmt.Sprintf("%d kube-proxy mode %s migration review.", len(check.Findings), plural(len(check.Findings), "setting requires", "settings require"))
 	}
 	return check
 }

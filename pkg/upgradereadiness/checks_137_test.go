@@ -464,15 +464,16 @@ func kubeProxyDaemonSet(args ...string) *appsv1.DaemonSet {
 
 func TestKubeProxyModeTransition137(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		args       []string
-		wantStatus CheckStatus
-		wantRef    string
-		wantImpact string
+		name        string
+		args        []string
+		wantStatus  CheckStatus
+		wantRef     string
+		wantImpact  string
+		wantSummary string
 	}{
 		{name: "iptables explicit", args: []string{"--proxy-mode=iptables"}, wantStatus: CheckPassed},
 		{name: "ipvs deprecated", args: []string{"--proxy-mode=ipvs"}, wantStatus: CheckReview, wantRef: "5495-deprecate-ipvs-mode-in-kube-proxy"},
-		{name: "linux default changing", wantStatus: CheckReview, wantRef: "5343-nftables-to-default", wantImpact: "Kubernetes 1.40"},
+		{name: "linux default changing", wantStatus: CheckReview, wantRef: "5343-nftables-to-default", wantImpact: "Kubernetes 1.40", wantSummary: "1 kube-proxy mode setting requires migration review."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			input := completeInput()
@@ -486,6 +487,9 @@ func TestKubeProxyModeTransition137(t *testing.T) {
 			}
 			if tc.wantImpact != "" && (len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Impact, tc.wantImpact)) {
 				t.Fatalf("impact = %+v, want %q", check.Findings, tc.wantImpact)
+			}
+			if tc.wantSummary != "" && check.Summary != tc.wantSummary {
+				t.Fatalf("summary = %q, want %q", check.Summary, tc.wantSummary)
 			}
 		})
 	}
