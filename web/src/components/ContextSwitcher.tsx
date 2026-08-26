@@ -10,7 +10,7 @@ import { useContextSwitch } from '../context/ContextSwitchContext'
 import { useToast } from '../components/ui/Toast'
 import { useDock } from '../components/dock'
 import type { ContextInfo } from '../types'
-import { parseContextForSwitcher, type ParsedContextName } from '../utils/context-name'
+import { parseContextForSwitcher, visibleContextQualifier, type ParsedContextName } from '../utils/context-name'
 
 interface ContextSwitcherProps {
   className?: string
@@ -92,7 +92,7 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
       return {
         id: p.context.name,
         name: p.raw,
-        nameQualifier: p.nameQualifier,
+        nameQualifier: visibleContextQualifier(p.nameQualifier, p.context.source, hasMultipleSources),
         secondary: p.provider ? p.raw : undefined,
         badge: p.region || undefined,
         sourceLabel: hasMultipleSources ? p.context.source : undefined,
@@ -187,7 +187,9 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
   // /api/contexts has resolved.
   const currentParsed = currentId ? parsedById.get(currentId) : undefined
   const currentRaw = triggerName || currentParsed?.raw || clusterInfo?.context || currentCtx?.name || 'Unknown'
-  const currentNameQualifier = triggerName ? undefined : currentParsed?.nameQualifier
+  const currentNameQualifier = triggerName
+    ? undefined
+    : visibleContextQualifier(currentParsed?.nameQualifier, currentCtx?.source, hasMultipleSources)
   const currentSourceLabel = triggerName ? undefined : hasMultipleSources ? currentCtx?.source || undefined : undefined
 
   return (

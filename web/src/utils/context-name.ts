@@ -14,3 +14,11 @@ export function parseContextForSwitcher(context: ContextInfo) {
     nameQualifier,
   }
 }
+
+export function visibleContextQualifier(
+  qualifier: string | undefined,
+  source: string | undefined,
+  sourceLabelVisible: boolean,
+) {
+  return sourceLabelVisible && qualifier === `(${source})` ? undefined : qualifier
+}

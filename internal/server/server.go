@@ -51,9 +51,9 @@ import (
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/settings"
 	"github.com/skyhook-io/radar/internal/timeline"
-	"github.com/skyhook-io/radar/internal/upgrade"
 	"github.com/skyhook-io/radar/internal/traffic"
 	"github.com/skyhook-io/radar/internal/updater"
+	"github.com/skyhook-io/radar/internal/upgrade"
 	"github.com/skyhook-io/radar/internal/version"
 	"github.com/skyhook-io/radar/pkg/argoapi"
 	"github.com/skyhook-io/radar/pkg/conditions"
@@ -4533,13 +4533,21 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 	}
 
 	if err := k8s.PerformContextSwitch(qualifiedName); err != nil {
+		discarded := k8s.DiscardInactiveMergedContext(mergedPath)
 		if errors.Is(err, k8s.ErrContextSwitchPreflight) {
 			s.writeError(w, http.StatusBadRequest, "failed to switch context: "+err.Error())
 			return
 		}
+		if discarded {
+			log.Printf("[capi] Discarded inactive kubeconfig after failed switch to %q", qualifiedName)
+		}
+		statusContext := qualifiedName
+		if discarded {
+			statusContext = k8s.GetContextName()
+		}
 		k8s.SetConnectionStatus(k8s.ConnectionStatus{
 			State:     k8s.StateDisconnected,
-			Context:   qualifiedName,
+			Context:   statusContext,
 			Error:     err.Error(),
 			ErrorType: k8s.ClassifyError(err),
 		})

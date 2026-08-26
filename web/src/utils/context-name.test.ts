@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { ContextInfo } from '../types'
-import { parseContextForSwitcher } from './context-name'
+import { parseContextForSwitcher, visibleContextQualifier } from './context-name'
 
 function context(name: string, originalName?: string): ContextInfo {
   return {
@@ -45,5 +45,19 @@ describe('parseContextForSwitcher', () => {
 
     expect(parsed.raw).toBe('local')
     expect(parsed.nameQualifier).toBeUndefined()
+  })
+})
+
+describe('visibleContextQualifier', () => {
+  it('suppresses a qualifier repeated by the visible source label', () => {
+    expect(visibleContextQualifier('(secondary)', 'secondary', true)).toBeUndefined()
+  })
+
+  it('retains qualifiers that distinguish identical source labels', () => {
+    expect(visibleContextQualifier('(secondary #2)', 'secondary', true)).toBe('(secondary #2)')
+  })
+
+  it('retains the qualifier when the source label is hidden', () => {
+    expect(visibleContextQualifier('(secondary)', 'secondary', false)).toBe('(secondary)')
   })
 })

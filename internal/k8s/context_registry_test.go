@@ -1663,6 +1663,7 @@ func TestMergeAndSwitchContext_PromotionEntersRegistryMode(t *testing.T) {
 	prevPath := kubeconfigPath
 	prevMode := kubeconfigMode
 	prevCAPI := capiKubeconfigs
+	prevPromotions := capiPromotionSnapshots
 	prevStarted := initializationStarted
 	prevDirectoryCount := kubeconfigDirectoryFileCount
 	prevContextCount := totalContextCount
@@ -1673,6 +1674,7 @@ func TestMergeAndSwitchContext_PromotionEntersRegistryMode(t *testing.T) {
 	kubeconfigPath = primary
 	kubeconfigMode = "single"
 	capiKubeconfigs = map[string]string{}
+	capiPromotionSnapshots = map[string]capiPromotionSnapshot{}
 	initializationStarted = true
 	kubeconfigDirectoryFileCount = 0
 	totalContextCount = 1
@@ -1686,6 +1688,7 @@ func TestMergeAndSwitchContext_PromotionEntersRegistryMode(t *testing.T) {
 		kubeconfigPath = prevPath
 		kubeconfigMode = prevMode
 		capiKubeconfigs = prevCAPI
+		capiPromotionSnapshots = prevPromotions
 		initializationStarted = prevStarted
 		kubeconfigDirectoryFileCount = prevDirectoryCount
 		totalContextCount = prevContextCount
@@ -1712,6 +1715,114 @@ func TestMergeAndSwitchContext_PromotionEntersRegistryMode(t *testing.T) {
 	summary := GetKubeconfigSummary()
 	if summary.FileCount != 2 || summary.DirectoryFileCount != 0 || summary.ContextCount != 2 {
 		t.Fatalf("promoted kubeconfig summary = %+v", summary)
+	}
+	if !DiscardInactiveMergedContext(tmpPath) {
+		t.Fatal("inactive merged context was not discarded")
+	}
+	if got := GetKubeconfigPath(); got != primary {
+		t.Fatalf("restored kubeconfig path = %q, want %q", got, primary)
+	}
+	restoredSummary := GetKubeconfigSummary()
+	if restoredSummary.Mode != "single" || restoredSummary.FileCount != 1 || restoredSummary.ContextCount != 1 {
+		t.Fatalf("restored kubeconfig summary = %+v", restoredSummary)
+	}
+}
+
+func TestDiscardInactiveMergedContextRestoresInClusterPromotion(t *testing.T) {
+	dir := t.TempDir()
+	workload := writeKubeconfig(t, dir, "workload.yaml", "workload", []kubeEntry{
+		{ctxName: "workload", userName: "u2", clusterName: "c2"},
+	})
+	data, err := os.ReadFile(workload)
+	if err != nil {
+		t.Fatalf("read workload kubeconfig: %v", err)
+	}
+
+	clientMu.Lock()
+	previousRegistry := contextRegistry
+	previousConfigs := perFileConfigs
+	previousMtimes := perFileMtimes
+	previousPaths := kubeconfigPaths
+	previousPath := kubeconfigPath
+	previousMode := kubeconfigMode
+	previousCAPI := capiKubeconfigs
+	previousPromotions := capiPromotionSnapshots
+	previousStarted := initializationStarted
+	previousDirectoryCount := kubeconfigDirectoryFileCount
+	previousContextCount := totalContextCount
+	previousContextName := contextName
+	previousActiveSource := activeSourceFile
+	contextRegistry = nil
+	perFileConfigs = nil
+	perFileMtimes = nil
+	kubeconfigPaths = nil
+	kubeconfigPath = ""
+	kubeconfigMode = "in-cluster"
+	capiKubeconfigs = map[string]string{}
+	capiPromotionSnapshots = map[string]capiPromotionSnapshot{}
+	initializationStarted = true
+	kubeconfigDirectoryFileCount = 0
+	totalContextCount = 1
+	contextName = "in-cluster"
+	activeSourceFile = ""
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextRegistry = previousRegistry
+		perFileConfigs = previousConfigs
+		perFileMtimes = previousMtimes
+		kubeconfigPaths = previousPaths
+		kubeconfigPath = previousPath
+		kubeconfigMode = previousMode
+		capiKubeconfigs = previousCAPI
+		capiPromotionSnapshots = previousPromotions
+		initializationStarted = previousStarted
+		kubeconfigDirectoryFileCount = previousDirectoryCount
+		totalContextCount = previousContextCount
+		contextName = previousContextName
+		activeSourceFile = previousActiveSource
+		clientMu.Unlock()
+	})
+
+	_, tmpPath, err := MergeAndSwitchContext(data, "workload")
+	if err != nil {
+		t.Fatalf("MergeAndSwitchContext: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(tmpPath) })
+
+	clientMu.Lock()
+	activeSourceFile = tmpPath
+	clientMu.Unlock()
+	if DiscardInactiveMergedContext(tmpPath) {
+		t.Fatal("active merged context was discarded")
+	}
+	if _, err := os.Stat(tmpPath); err != nil {
+		t.Fatalf("active merged kubeconfig was removed: %v", err)
+	}
+
+	clientMu.Lock()
+	activeSourceFile = ""
+	clientMu.Unlock()
+	if !DiscardInactiveMergedContext(tmpPath) {
+		t.Fatal("inactive merged context was not discarded")
+	}
+	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		t.Fatalf("inactive merged kubeconfig still exists: %v", err)
+	}
+	if !IsInCluster() {
+		t.Fatal("discard did not restore in-cluster mode")
+	}
+
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	if contextRegistry != nil || perFileConfigs != nil || perFileMtimes != nil {
+		t.Fatal("discard left the promoted registry initialized")
+	}
+	if kubeconfigPath != "" || len(kubeconfigPaths) != 0 || kubeconfigMode != "in-cluster" {
+		t.Fatalf("discarded source state = path %q, paths %v, mode %q", kubeconfigPath, kubeconfigPaths, kubeconfigMode)
+	}
+	if len(capiKubeconfigs) != 0 || len(capiPromotionSnapshots) != 0 || totalContextCount != 1 {
+		t.Fatalf("discarded CAPI state = kubeconfigs %v, promotions %v, contexts %d", capiKubeconfigs, capiPromotionSnapshots, totalContextCount)
 	}
 }
 

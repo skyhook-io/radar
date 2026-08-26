@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -985,15 +986,6 @@ func GetContextName() string {
 	return contextName
 }
 
-// CurrentContextBinding returns an opaque identity for the active kubeconfig
-// source entry. It deliberately excludes the switcher-visible name because
-// collision qualifiers can change while the underlying source stays the same.
-func CurrentContextBinding() string {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	return contextBinding
-}
-
 // ClusterSafetyBinding scopes persisted safety decisions to the active source.
 // In-cluster mode has no kubeconfig source, so it uses the cluster UID identity;
 // if that identity cannot be established, callers receive an empty value and
@@ -1677,6 +1669,16 @@ func SwitchContext(name string) error {
 // capiKubeconfigs tracks temp kubeconfig files by context name to avoid accumulation.
 var capiKubeconfigs = make(map[string]string) // contextName -> tmpPath
 
+type capiPromotionSnapshot struct {
+	kubeconfigPath               string
+	kubeconfigPaths              []string
+	kubeconfigMode               string
+	kubeconfigDirectoryFileCount int
+	totalContextCount            int
+}
+
+var capiPromotionSnapshots = make(map[string]capiPromotionSnapshot) // tmpPath -> pre-promotion state
+
 // MergeAndSwitchContext writes the provided kubeconfig data to a temporary
 // file and registers its context so that Radar can switch to it. Returns
 // (qualifiedName, tmpPath, error): qualifiedName is the identifier the caller
@@ -1741,6 +1743,7 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 		}
 		dropKubeconfigSourceLocked(existingPath)
 		delete(capiKubeconfigs, contextName)
+		delete(capiPromotionSnapshots, existingPath)
 	}
 
 	// Write to a new temp file.
@@ -1764,7 +1767,15 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 	var newPaths []string
 
 	promotedToRegistry := contextRegistry == nil
+	var promotionSnapshot capiPromotionSnapshot
 	if promotedToRegistry {
+		promotionSnapshot = capiPromotionSnapshot{
+			kubeconfigPath:               kubeconfigPath,
+			kubeconfigPaths:              append([]string(nil), kubeconfigPaths...),
+			kubeconfigMode:               kubeconfigMode,
+			kubeconfigDirectoryFileCount: kubeconfigDirectoryFileCount,
+			totalContextCount:            totalContextCount,
+		}
 		// Promote single-file mode to isolated-load mode.
 		seedPaths := []string{}
 		if kubeconfigPath != "" {
@@ -1847,10 +1858,64 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 		kubeconfigPath = ""
 		kubeconfigMode = "multi-source"
 		kubeconfigDirectoryFileCount = 0
+		capiPromotionSnapshots[tmpPath] = promotionSnapshot
 	}
 
 	log.Printf("[capi] Added workload cluster kubeconfig: %q (context: %q)", tmpPath, qualifiedName)
 	return qualifiedName, tmpPath, nil
+}
+
+// DiscardInactiveMergedContext removes a CAPI kubeconfig that failed before
+// becoming the active client. Once SwitchContext publishes the source as
+// active, later connectivity or subsystem failures must retain it for retry.
+func DiscardInactiveMergedContext(path string) bool {
+	clientMu.Lock()
+	defer clientMu.Unlock()
+
+	if path == "" || activeSourceFile == path {
+		return false
+	}
+
+	trackedContext := ""
+	for name, source := range capiKubeconfigs {
+		if source == path {
+			trackedContext = name
+			break
+		}
+	}
+	if trackedContext == "" {
+		return false
+	}
+
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		log.Printf("[capi] Failed to remove inactive kubeconfig %q: %v", path, err)
+	}
+	dropKubeconfigSourceLocked(path)
+	delete(capiKubeconfigs, trackedContext)
+
+	snapshot, promoted := capiPromotionSnapshots[path]
+	delete(capiPromotionSnapshots, path)
+	if !promoted {
+		return true
+	}
+
+	expectedPaths := append([]string(nil), snapshot.kubeconfigPaths...)
+	if snapshot.kubeconfigPath != "" {
+		expectedPaths = append([]string{snapshot.kubeconfigPath}, expectedPaths...)
+	}
+	if !slices.Equal(kubeconfigPaths, expectedPaths) {
+		return true
+	}
+
+	contextRegistry = nil
+	perFileConfigs = nil
+	perFileMtimes = nil
+	kubeconfigPath = snapshot.kubeconfigPath
+	kubeconfigPaths = append([]string(nil), snapshot.kubeconfigPaths...)
+	kubeconfigMode = snapshot.kubeconfigMode
+	kubeconfigDirectoryFileCount = snapshot.kubeconfigDirectoryFileCount
+	totalContextCount = snapshot.totalContextCount
+	return true
 }
 
 func dropKubeconfigSourceLocked(path string) {

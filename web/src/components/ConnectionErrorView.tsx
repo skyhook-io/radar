@@ -349,7 +349,7 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
   const errorInfo = commandInfo || errorHints[connection.errorType || 'unknown'] || errorHints.unknown
   const openLocalTerminal = useOpenLocalTerminal()
   const { data: authMe } = useAuthMe()
-  const rawErrorDefaultOpen = !connection.errorType || connection.errorType === 'unknown' || connection.errorType === 'config'
+  const rawErrorDefaultOpen = !connection.errorType || connection.errorType === 'unknown'
   const [showRawError, setShowRawError] = useState(rawErrorDefaultOpen)
 
   useEffect(() => {

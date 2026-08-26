@@ -293,6 +293,8 @@ func ResetTestState() {
 	kubeconfigDirectoryPaths = nil
 	kubeconfigEnvWasIgnored = false
 	kubeconfigEnvIgnoredReason = ""
+	capiKubeconfigs = make(map[string]string)
+	capiPromotionSnapshots = make(map[string]capiPromotionSnapshot)
 	clientMu.Unlock()
 
 	// Reset capabilities cache
