@@ -286,6 +286,7 @@ func TestKubeconfigDiagnosticErrorClassifiesWithoutDetails(t *testing.T) {
 		{name: "context", err: errors.New("context was not found for specified context"), want: "selected context not found"},
 		{name: "switch context", err: fmt.Errorf("%w: prod", errKubeconfigContextNotFound), want: "selected context not found"},
 		{name: "client setup", err: fmt.Errorf("%w: private details", errKubeconfigClientSetupFailed), want: "selected context client setup failed"},
+		{name: "yaml syntax", err: errors.New("yaml: line 7: could not find expected ':' near private-value"), want: "invalid kubeconfig syntax"},
 		{name: "unclassified", err: errors.New("server https://private.example and user alice"), want: "unclassified error"},
 	}
 	for _, tt := range tests {
@@ -299,6 +300,22 @@ func TestKubeconfigDiagnosticErrorClassifiesWithoutDetails(t *testing.T) {
 	got := kubeconfigDiagnosticError(&os.PathError{Op: "open", Path: "/private/config", Err: os.ErrNotExist})
 	if strings.Contains(got, "/private/config") || !strings.Contains(got, "open: file does not exist") {
 		t.Fatalf("path diagnostic error = %q", got)
+	}
+}
+
+func TestInitMissingDefaultKubeconfigNamesLocalPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("KUBECONFIG", "")
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+	t.Setenv("KUBERNETES_SERVICE_PORT", "")
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+
+	err := doInit(InitOptions{})
+	wantPath := filepath.Join(home, ".kube", "config")
+	if err == nil || !strings.Contains(err.Error(), wantPath) {
+		t.Fatalf("doInit error = %v, want local path %q", err, wantPath)
 	}
 }
 

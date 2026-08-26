@@ -4523,7 +4523,8 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 	// Merge into the user's kubeconfig. The returned qualifiedName reflects
 	// any disambiguation the registry had to do (e.g. if another file already
 	// owned this context name). Always switch using the qualified name.
-	qualifiedName, mergedPath, created, err := k8s.MergeAndSwitchContext(kubeconfigData, contextName)
+	safetyBinding := k8s.CAPIClusterSafetyBinding(k8s.ClusterSafetyBinding(r.Context()), ns, name)
+	qualifiedName, mergedPath, created, err := k8s.MergeAndSwitchContext(kubeconfigData, contextName, safetyBinding)
 	if err != nil {
 		log.Printf("[capi] Failed to merge kubeconfig for cluster %s/%s: %v", ns, name, err)
 		s.writeError(w, http.StatusInternalServerError, "failed to connect: "+err.Error())

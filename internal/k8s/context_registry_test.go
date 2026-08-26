@@ -1514,7 +1514,7 @@ func TestMergeAndSwitchContext_ReusedPathPublishesFreshMaps(t *testing.T) {
 	contextOpMu.Lock()
 	merged := make(chan mergeResult, 1)
 	go func() {
-		qName, path, created, mergeErr := MergeAndSwitchContext(data, "workload")
+		qName, path, created, mergeErr := MergeAndSwitchContext(data, "workload", "workload")
 		merged <- mergeResult{qualifiedName: qName, path: path, created: created, err: mergeErr}
 	}()
 	deadline := time.Now().Add(time.Second)
@@ -1595,7 +1595,7 @@ func TestMergeAndSwitchContext_ReusedPathPublishesFreshMaps(t *testing.T) {
 		t.Fatalf("serialize renamed CAPI kubeconfig: %v", err)
 	}
 	time.Sleep(15 * time.Millisecond)
-	if _, _, created, err := MergeAndSwitchContext(renamedData, "workload"); err != nil {
+	if _, _, created, err := MergeAndSwitchContext(renamedData, "workload", "workload"); err != nil {
 		t.Fatalf("MergeAndSwitchContext after context rename: %v", err)
 	} else if created {
 		t.Fatal("renamed CAPI source refresh reported as newly created")
@@ -1619,6 +1619,181 @@ func TestMergeAndSwitchContext_ReusedPathPublishesFreshMaps(t *testing.T) {
 	}
 	if !foundStable {
 		t.Fatalf("renamed CAPI context was not registered: %+v", contexts)
+	}
+}
+
+func TestMergeAndSwitchContext_RecreatesMissingActiveSourceWithStableBinding(t *testing.T) {
+	dir := t.TempDir()
+	primary := writeKubeconfig(t, dir, "primary.yaml", "primary", []kubeEntry{
+		{ctxName: "primary", userName: "u1", clusterName: "c1"},
+	})
+	workload := writeKubeconfig(t, dir, "workload.yaml", "workload", []kubeEntry{
+		{ctxName: "workload", userName: "u2", clusterName: "c2"},
+	})
+	data, err := os.ReadFile(workload)
+	if err != nil {
+		t.Fatalf("read workload kubeconfig: %v", err)
+	}
+	registry, configs := buildContextRegistry([]string{primary, workload})
+	binding := CAPIClusterSafetyBinding("kcb1_management", "clusters", "workload")
+
+	clientMu.Lock()
+	previousRegistry := contextRegistry
+	previousConfigs := perFileConfigs
+	previousMtimes := perFileMtimes
+	previousPaths := kubeconfigPaths
+	previousMode := kubeconfigMode
+	previousCAPI := capiKubeconfigs
+	previousActiveFile := activeSourceFile
+	previousCount := totalContextCount
+	contextRegistry = registry
+	perFileConfigs = configs
+	perFileMtimes = map[string]time.Time{primary: {}, workload: {}}
+	kubeconfigPaths = []string{primary, workload}
+	kubeconfigMode = "multi-source"
+	capiKubeconfigs = map[string]string{binding: workload}
+	activeSourceFile = workload
+	totalContextCount = len(registry)
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextRegistry = previousRegistry
+		perFileConfigs = previousConfigs
+		perFileMtimes = previousMtimes
+		kubeconfigPaths = previousPaths
+		kubeconfigMode = previousMode
+		capiKubeconfigs = previousCAPI
+		activeSourceFile = previousActiveFile
+		totalContextCount = previousCount
+		clientMu.Unlock()
+	})
+
+	if err := os.Remove(workload); err != nil {
+		t.Fatalf("remove active workload kubeconfig: %v", err)
+	}
+	qualifiedName, path, created, err := MergeAndSwitchContext(data, "workload", binding)
+	if err != nil {
+		t.Fatalf("MergeAndSwitchContext: %v", err)
+	}
+	if qualifiedName != "workload" || path != workload || created {
+		t.Fatalf("refresh result = (%q, %q, %t)", qualifiedName, path, created)
+	}
+	if info, err := os.Stat(workload); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("recreated source is not a regular file: info=%v err=%v", info, err)
+	}
+	clientMu.Lock()
+	got := sourceSafetyBindingLocked(workload, "workload")
+	clientMu.Unlock()
+	if got != binding {
+		t.Fatalf("active CAPI binding = %q, want %q", got, binding)
+	}
+}
+
+func TestMergeAndSwitchContext_DoesNotReuseSameNamedDifferentCAPICluster(t *testing.T) {
+	dir := t.TempDir()
+	primary := writeKubeconfig(t, dir, "primary.yaml", "primary", []kubeEntry{
+		{ctxName: "primary", userName: "u1", clusterName: "c1"},
+	})
+	workload := writeKubeconfig(t, dir, "workload.yaml", "workload", []kubeEntry{
+		{ctxName: "workload", userName: "u2", clusterName: "c2"},
+	})
+	data, err := os.ReadFile(workload)
+	if err != nil {
+		t.Fatalf("read workload kubeconfig: %v", err)
+	}
+
+	clientMu.Lock()
+	previousRegistry := contextRegistry
+	previousConfigs := perFileConfigs
+	previousMtimes := perFileMtimes
+	previousPaths := kubeconfigPaths
+	previousPath := kubeconfigPath
+	previousMode := kubeconfigMode
+	previousCAPI := capiKubeconfigs
+	previousPromotion := preCapiPromotion
+	previousStarted := initializationStarted
+	previousDirectoryCount := kubeconfigDirectoryFileCount
+	previousCount := totalContextCount
+	contextRegistry = nil
+	perFileConfigs = nil
+	perFileMtimes = nil
+	kubeconfigPaths = nil
+	kubeconfigPath = primary
+	kubeconfigMode = "single"
+	capiKubeconfigs = map[string]string{}
+	preCapiPromotion = nil
+	initializationStarted = true
+	totalContextCount = 1
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextRegistry = previousRegistry
+		perFileConfigs = previousConfigs
+		perFileMtimes = previousMtimes
+		kubeconfigPaths = previousPaths
+		kubeconfigPath = previousPath
+		kubeconfigMode = previousMode
+		capiKubeconfigs = previousCAPI
+		preCapiPromotion = previousPromotion
+		initializationStarted = previousStarted
+		kubeconfigDirectoryFileCount = previousDirectoryCount
+		totalContextCount = previousCount
+		clientMu.Unlock()
+	})
+
+	firstBinding := CAPIClusterSafetyBinding("kcb1_management-a", "clusters", "workload")
+	secondBinding := CAPIClusterSafetyBinding("kcb1_management-b", "clusters", "workload")
+	firstName, firstPath, firstCreated, err := MergeAndSwitchContext(data, "workload", firstBinding)
+	if err != nil || !firstCreated {
+		t.Fatalf("first merge: created=%t, err=%v", firstCreated, err)
+	}
+	t.Cleanup(func() { _ = os.Remove(firstPath) })
+	secondName, secondPath, secondCreated, err := MergeAndSwitchContext(data, "workload", secondBinding)
+	if err != nil || !secondCreated {
+		t.Fatalf("second merge: created=%t, err=%v", secondCreated, err)
+	}
+	t.Cleanup(func() { _ = os.Remove(secondPath) })
+	if firstPath == secondPath || firstName == secondName {
+		t.Fatalf("same-named distinct CAPI clusters were conflated: first=(%q, %q), second=(%q, %q)", firstName, firstPath, secondName, secondPath)
+	}
+	clientMu.RLock()
+	firstTracked := capiKubeconfigs[firstBinding]
+	secondTracked := capiKubeconfigs[secondBinding]
+	clientMu.RUnlock()
+	if firstTracked != firstPath || secondTracked != secondPath {
+		t.Fatalf("tracked CAPI sources = (%q, %q), want (%q, %q)", firstTracked, secondTracked, firstPath, secondPath)
+	}
+}
+
+func TestSwitchContextMissingSourceErrorIsSanitizedAndClassified(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "private", "prod.yaml")
+	clientMu.Lock()
+	previousRegistry := contextRegistry
+	previousMode := kubeconfigMode
+	previousStarted := initializationStarted
+	contextRegistry = map[string]contextEntry{
+		"prod": {SourceFile: missing, InFileName: "prod"},
+	}
+	kubeconfigMode = "multi-source"
+	initializationStarted = true
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextRegistry = previousRegistry
+		kubeconfigMode = previousMode
+		initializationStarted = previousStarted
+		clientMu.Unlock()
+	})
+
+	err := SwitchContext("prod")
+	if err == nil {
+		t.Fatal("SwitchContext unexpectedly succeeded")
+	}
+	if strings.Contains(err.Error(), missing) || !strings.Contains(err.Error(), "stat: no such file or directory") {
+		t.Fatalf("SwitchContext error was not sanitized: %v", err)
+	}
+	if got := ClassifyError(err); got != "config" {
+		t.Fatalf("ClassifyError = %q, want config", got)
 	}
 }
 
@@ -1703,7 +1878,7 @@ func TestMergeAndSwitchContext_ReplacesPrunedCAPIPathWithoutDuplicate(t *testing
 		t.Fatalf("refresh after removing workload kubeconfig: %v", err)
 	}
 
-	qualifiedName, replacement, created, err := MergeAndSwitchContext(data, "workload")
+	qualifiedName, replacement, created, err := MergeAndSwitchContext(data, "workload", "workload")
 	if err != nil {
 		t.Fatalf("MergeAndSwitchContext: %v", err)
 	}
@@ -1802,7 +1977,7 @@ func TestMergeAndSwitchContext_PromotionEntersRegistryMode(t *testing.T) {
 		clientMu.Unlock()
 	})
 
-	qName, tmpPath, created, err := MergeAndSwitchContext(data, "workload")
+	qName, tmpPath, created, err := MergeAndSwitchContext(data, "workload", "workload")
 	if err != nil {
 		t.Fatalf("MergeAndSwitchContext: %v", err)
 	}
@@ -1844,12 +2019,12 @@ func TestMergeAndSwitchContext_PromotionEntersRegistryMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read second workload kubeconfig: %v", err)
 	}
-	_, firstPath, firstCreated, err := MergeAndSwitchContext(data, "workload")
+	_, firstPath, firstCreated, err := MergeAndSwitchContext(data, "workload", "workload")
 	if err != nil || !firstCreated {
 		t.Fatalf("recreate first workload: created=%t, err=%v", firstCreated, err)
 	}
 	t.Cleanup(func() { _ = os.Remove(firstPath) })
-	_, secondPath, secondCreated, err := MergeAndSwitchContext(secondData, "workload-two")
+	_, secondPath, secondCreated, err := MergeAndSwitchContext(secondData, "workload-two", "workload-two")
 	if err != nil || !secondCreated {
 		t.Fatalf("create second workload: created=%t, err=%v", secondCreated, err)
 	}
@@ -1930,7 +2105,7 @@ func TestDiscardFailedMergedContextRestoresInClusterPromotion(t *testing.T) {
 		clientMu.Unlock()
 	})
 
-	_, tmpPath, created, err := MergeAndSwitchContext(data, "workload")
+	_, tmpPath, created, err := MergeAndSwitchContext(data, "workload", "workload")
 	if err != nil {
 		t.Fatalf("MergeAndSwitchContext: %v", err)
 	}

@@ -203,6 +203,11 @@ func TestClassifyError(t *testing.T) {
 			want: "auth-rejected",
 		},
 		{
+			name: "missing context source is config",
+			err:  `kubeconfig source for context "prod" is unavailable: stat: no such file or directory`,
+			want: "config",
+		},
+		{
 			name: "http 401 authentication required is auth-rejected",
 			err:  `the server responded with the status code 401 but did not return more information: Authentication required`,
 			want: "auth-rejected",

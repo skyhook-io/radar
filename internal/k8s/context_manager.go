@@ -495,7 +495,7 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	}
 	if err := validateContextSwitchTarget(newContext); err != nil {
 		reason := kubeconfigDiagnosticError(err)
-		log.Printf("[ops] Context switch preflight rejected target %q: %s", newContext, reason)
+		log.Printf("[ops] Context switch preflight rejected target %q: %s (%v)", newContext, reason, err)
 		errorlog.Record("context-switch", "warning",
 			"preflight target=%q rejected before teardown: %s", newContext, reason)
 		return fmt.Errorf("%w: context %q cannot be loaded from its current source: %s", ErrContextSwitchPreflight, newContext, reason)

@@ -31,6 +31,30 @@ func TestSourceContextBinding(t *testing.T) {
 	}
 }
 
+func TestCAPIClusterSafetyBinding(t *testing.T) {
+	got := CAPIClusterSafetyBinding("kcb1_management", "clusters", "workload")
+	if got == "" || got != CAPIClusterSafetyBinding("kcb1_management", "clusters", "workload") {
+		t.Fatalf("CAPI binding is empty or unstable: %q", got)
+	}
+	if !strings.HasPrefix(got, "kcb1_") || strings.Contains(got, "management") || strings.Contains(got, "workload") {
+		t.Fatalf("CAPI binding is not opaque: %q", got)
+	}
+	for _, different := range []string{
+		CAPIClusterSafetyBinding("kcb1_other", "clusters", "workload"),
+		CAPIClusterSafetyBinding("kcb1_management", "other", "workload"),
+		CAPIClusterSafetyBinding("kcb1_management", "clusters", "other"),
+	} {
+		if different == got {
+			t.Fatal("different CAPI source identity produced the same binding")
+		}
+	}
+	if CAPIClusterSafetyBinding("", "clusters", "workload") != "" ||
+		CAPIClusterSafetyBinding("kcb1_management", "", "workload") != "" ||
+		CAPIClusterSafetyBinding("kcb1_management", "clusters", "") != "" {
+		t.Fatal("incomplete CAPI source identity must not produce a reusable binding")
+	}
+}
+
 // newExecAuthInfo builds an AuthInfo that uses an exec credential plugin
 // with the given command. A helper because clientcmdapi.AuthInfo has a lot
 // of fields we don't care about and we want test tables to stay readable.

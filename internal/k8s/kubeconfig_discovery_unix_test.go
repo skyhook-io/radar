@@ -456,7 +456,7 @@ func TestMergeAndSwitchContextErrorDoesNotPublishStaleReplacement(t *testing.T) 
 		t.Fatalf("lock directory: %v", err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
-	if _, _, _, err := MergeAndSwitchContext(data, "workload"); err == nil {
+	if _, _, _, err := MergeAndSwitchContext(data, "workload", "workload"); err == nil {
 		t.Fatal("stale source replacement unexpectedly succeeded")
 	}
 
@@ -530,7 +530,7 @@ func TestMergeAndSwitchContextReplacesFIFOWithoutBlocking(t *testing.T) {
 	}
 	done := make(chan mergeResult, 1)
 	go func() {
-		qualifiedName, path, created, mergeErr := MergeAndSwitchContext(data, "workload")
+		qualifiedName, path, created, mergeErr := MergeAndSwitchContext(data, "workload", "workload")
 		done <- mergeResult{qualifiedName: qualifiedName, path: path, created: created, err: mergeErr}
 	}()
 
@@ -623,7 +623,7 @@ func TestMergeAndSwitchContextKeepsActiveFIFORegistered(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, _, _, mergeErr := MergeAndSwitchContext(data, "workload")
+		_, _, _, mergeErr := MergeAndSwitchContext(data, "workload", "workload")
 		done <- mergeErr
 	}()
 	select {

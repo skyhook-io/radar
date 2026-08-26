@@ -221,7 +221,7 @@ const errorHints: Record<string, { title: string; hints: string[] }> = {
     title: 'Kubeconfig Problem',
     hints: [
       'Radar could not load a usable kubeconfig for this context',
-      'If the file exists, see the raw error below for the exact parse or load failure',
+      'If the file exists, check the local Radar logs for the exact parse or load failure',
       'If no kubeconfig is configured, Radar checks ~/.kube/config; set KUBECONFIG or pass --kubeconfig <path> for another location',
     ],
   },

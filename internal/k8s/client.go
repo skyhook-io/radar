@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"os/exec"
@@ -201,7 +202,7 @@ func doInit(opts InitOptions) error {
 				reason := kubeconfigDiagnosticError(err)
 				errorlog.Record("k8s-init", "error", "default kubeconfig %q is unusable: %s",
 					filepath.Base(path), reason)
-				return fmt.Errorf("default kubeconfig %q is unusable: %s", filepath.Base(path), reason)
+				return fmt.Errorf("default kubeconfig %q is unusable: %w", path, err)
 			}
 		}
 		var loadingRules *clientcmd.ClientConfigLoadingRules
@@ -571,6 +572,25 @@ func sourceContextBinding(sourceFile, inFileName string) string {
 	return "kcb1_" + base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
+// CAPIClusterSafetyBinding derives a stable workload-cluster identity from
+// the management-cluster source and the CAPI Cluster object that owns the
+// generated kubeconfig. Temporary kubeconfig paths are deliberately excluded.
+func CAPIClusterSafetyBinding(parentBinding, namespace, name string) string {
+	if parentBinding == "" || namespace == "" || name == "" {
+		return ""
+	}
+	return sourceContextBinding(parentBinding+"\x00capi-cluster\x00"+namespace, name)
+}
+
+func sourceSafetyBindingLocked(sourceFile, inFileName string) string {
+	for binding, path := range capiKubeconfigs {
+		if path == sourceFile {
+			return binding
+		}
+	}
+	return sourceContextBinding(sourceFile, inFileName)
+}
+
 // discoverKubeconfigs scans directories for valid kubeconfig files
 func discoverKubeconfigs(dirs []string) []string {
 	var configs []string
@@ -652,6 +672,10 @@ func scrubPathError(err error) string {
 
 func kubeconfigDiagnosticError(err error) string {
 	var pathErr *os.PathError
+	errText := ""
+	if err != nil {
+		errText = strings.ToLower(err.Error())
+	}
 	switch {
 	case err == nil:
 		return ""
@@ -669,6 +693,11 @@ func kubeconfigDiagnosticError(err error) string {
 		return "selected context not found"
 	case clientcmd.IsConfigurationInvalid(err):
 		return "invalid kubeconfig configuration"
+	case strings.Contains(errText, "yaml") ||
+		strings.Contains(errText, "json") ||
+		strings.Contains(errText, "cannot unmarshal") ||
+		strings.Contains(errText, "did not find expected"):
+		return "invalid kubeconfig syntax"
 	default:
 		return "unclassified error"
 	}
@@ -1641,7 +1670,10 @@ func SwitchContext(name string) error {
 		overrideContextName = name
 	}
 	if err := validateKubeconfigFileType(loadingRules.ExplicitPath); err != nil {
-		return fmt.Errorf("kubeconfig source for context %q is unavailable: %w", name, err)
+		if errors.Is(err, errKubeconfigNotRegular) {
+			return fmt.Errorf("kubeconfig source for context %q is unavailable: %w", name, errKubeconfigNotRegular)
+		}
+		return fmt.Errorf("kubeconfig source for context %q is unavailable: %s", name, kubeconfigDiagnosticError(err))
 	}
 
 	// Build config with the new context
@@ -1698,13 +1730,14 @@ func SwitchContext(name string) error {
 	}
 
 	clientMu.Lock()
+	newContextBinding := sourceSafetyBindingLocked(loadingRules.ExplicitPath, overrideContextName)
 	k8sConfig = config
 	k8sClient = clients.clientset
 	discoveryClient = clients.discovery
 	dynamicClient = clients.dynamic
 	activeClientGeneration = clients.generation
 	contextName = name
-	contextBinding = sourceContextBinding(loadingRules.ExplicitPath, overrideContextName)
+	contextBinding = newContextBinding
 	activeSourceFile = loadingRules.ExplicitPath
 	activeSourceName = overrideContextName
 	activeSourceConfig = rawConfig.DeepCopy()
@@ -1718,8 +1751,9 @@ func SwitchContext(name string) error {
 	return nil
 }
 
-// capiKubeconfigs tracks temp kubeconfig files by context name to avoid accumulation.
-var capiKubeconfigs = make(map[string]string) // contextName -> tmpPath
+// capiKubeconfigs tracks temp kubeconfig files by stable CAPI cluster binding
+// to avoid accumulation without treating same-named contexts as the same source.
+var capiKubeconfigs = make(map[string]string) // safetyBinding -> tmpPath
 
 type capiPromotionSnapshot struct {
 	kubeconfigPath               string
@@ -1747,10 +1781,13 @@ var preCapiPromotion *capiPromotionSnapshot
 //
 // Concurrency: contextOpMu keeps registry-visible files stable while a context
 // switch reads them, and clientMu serializes the reuse-check + registration
-// decision. The input contextName is the stable key for reuse across reconnects
-// (CAPI re-emits the same context name each time for the same workload cluster),
-// so we can dedupe without having to reverse-lookup the qualified form.
-func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, string, bool, error) {
+// decision. safetyBinding is derived from the management-cluster source plus
+// the CAPI Cluster object identity, so reconnects reuse the source without
+// conflating same-named contexts from different workload clusters.
+func MergeAndSwitchContext(kubeconfigData []byte, contextName, safetyBinding string) (string, string, bool, error) {
+	if safetyBinding == "" {
+		return "", "", false, fmt.Errorf("CAPI cluster safety binding is unavailable")
+	}
 	newConfig, err := clientcmd.Load(kubeconfigData)
 	if err != nil {
 		return "", "", false, fmt.Errorf("failed to parse kubeconfig: %w", err)
@@ -1775,10 +1812,10 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 	// Fast path: same CAPI context was registered before. Overwrite the
 	// existing temp file so the user gets a fresh exec plugin config, and
 	// return the qualified name we assigned on the original merge.
-	if existingPath, ok := capiKubeconfigs[contextName]; ok {
+	if existingPath, ok := capiKubeconfigs[safetyBinding]; ok {
 		pathErr := validateKubeconfigFileType(existingPath)
 		replacementErr := pathErr
-		if pathErr == nil {
+		if pathErr == nil || errors.Is(pathErr, fs.ErrNotExist) {
 			writeErr := clientcmd.WriteToFile(*newConfig, existingPath)
 			if writeErr != nil {
 				replacementErr = writeErr
@@ -1804,7 +1841,7 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 					log.Printf("[capi] Updated existing kubeconfig for context %q: %q", contextName, existingPath)
 					return qName, existingPath, false, nil
 				}
-				replacementErr = errors.New("context is no longer registered")
+				replacementErr = fmt.Errorf("%w after CAPI source refresh", errKubeconfigContextNotFound)
 			}
 		} else {
 			log.Printf("[capi] Replacing unusable kubeconfig for context %q: %v", contextName, pathErr)
@@ -1816,7 +1853,7 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 			return "", "", false, fmt.Errorf("failed to replace stale CAPI kubeconfig: %w", err)
 		}
 		dropKubeconfigSourceLocked(existingPath)
-		delete(capiKubeconfigs, contextName)
+		delete(capiKubeconfigs, safetyBinding)
 	}
 
 	// Write to a new temp file.
@@ -1925,7 +1962,7 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 	perFileConfigs = newFileConfigs
 	perFileMtimes = newFileMtimes
 	kubeconfigPaths = newPaths
-	capiKubeconfigs[contextName] = tmpPath
+	capiKubeconfigs[safetyBinding] = tmpPath
 	totalContextCount = len(newRegistry)
 	if promotedToRegistry {
 		kubeconfigPath = ""
@@ -1960,14 +1997,14 @@ func DiscardFailedMergedContext(path string, created bool) bool {
 		return false
 	}
 
-	trackedContext := ""
-	for name, source := range capiKubeconfigs {
+	trackedBinding := ""
+	for binding, source := range capiKubeconfigs {
 		if source == path {
-			trackedContext = name
+			trackedBinding = binding
 			break
 		}
 	}
-	if trackedContext == "" {
+	if trackedBinding == "" {
 		return false
 	}
 
@@ -1975,7 +2012,7 @@ func DiscardFailedMergedContext(path string, created bool) bool {
 		log.Printf("[capi] Failed to remove inactive kubeconfig %q: %v", path, err)
 	}
 	dropKubeconfigSourceLocked(path)
-	delete(capiKubeconfigs, trackedContext)
+	delete(capiKubeconfigs, trackedBinding)
 
 	if preCapiPromotion == nil {
 		return true
