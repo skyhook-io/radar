@@ -182,6 +182,27 @@ func TestCanceledKubecostSelectionIsNotCached(t *testing.T) {
 	}
 }
 
+func TestSupersededKubecostSelectionStopsItsPortForward(t *testing.T) {
+	stops := 0
+	m := &Manager{
+		generation:  2,
+		stopForward: func() { stops++ },
+	}
+	if _, err := m.commitSelection(1, Connection{Source: SourceKubecost}); err == nil {
+		t.Fatal("superseded selection unexpectedly committed")
+	}
+	if stops != 1 {
+		t.Fatalf("port-forward stops = %d, want 1", stops)
+	}
+
+	if _, err := m.commitSelection(1, Connection{Source: SourcePrometheus}); err == nil {
+		t.Fatal("superseded Prometheus selection unexpectedly committed")
+	}
+	if stops != 1 {
+		t.Fatalf("Prometheus supersession stopped cost port-forward: stops=%d", stops)
+	}
+}
+
 func TestKubecostAggregatorDiscoverySignals(t *testing.T) {
 	service := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app.kubernetes.io/name": "aggregator"}},

@@ -65,6 +65,7 @@ type Manager struct {
 	generation   uint64
 	envManaged   bool
 	envError     string
+	stopForward  func()
 }
 
 var defaultManager = &Manager{config: ManagerConfig{Source: SourceAuto}}
@@ -146,7 +147,7 @@ func (m *Manager) configure(config ManagerConfig, envManaged bool, envError stri
 	m.envManaged = envManaged
 	m.envError = envError
 	m.mu.Unlock()
-	portforward.Stop(portforward.OwnerCost)
+	m.stopCostForward()
 	return nil
 }
 
@@ -236,7 +237,7 @@ func (m *Manager) Reset() {
 	m.selectionErr = nil
 	m.generation++
 	m.mu.Unlock()
-	portforward.Stop(portforward.OwnerCost)
+	m.stopCostForward()
 }
 
 func Selected(ctx context.Context) (Connection, error) { return defaultManager.Selected(ctx) }
@@ -315,8 +316,11 @@ func ProbeKubecost(ctx context.Context, config ManagerConfig) (Connection, error
 
 func (m *Manager) commitSelection(generation uint64, connection Connection) (Connection, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.generation != generation {
+		m.mu.Unlock()
+		if connection.Source == SourceKubecost {
+			m.stopCostForward()
+		}
 		return Connection{}, fmt.Errorf("cost source selection was superseded")
 	}
 	m.selected = connection.Source
@@ -325,7 +329,16 @@ func (m *Manager) commitSelection(generation uint64, connection Connection) (Con
 	m.clusterID = connection.ClusterID
 	m.retryAt = time.Time{}
 	m.selectionErr = nil
+	m.mu.Unlock()
 	return connection, nil
+}
+
+func (m *Manager) stopCostForward() {
+	if m.stopForward != nil {
+		m.stopForward()
+		return
+	}
+	portforward.Stop(portforward.OwnerCost)
 }
 
 func (m *Manager) commitAutoFallback(generation uint64) (Connection, error) {
@@ -425,7 +438,7 @@ func (m *Manager) connectKubecost(ctx context.Context, config ManagerConfig) (Co
 	}
 	client, address, err := probeKubecostURL(ctx, forward.Address, config.APIKey, clusterID)
 	if err != nil {
-		portforward.Stop(portforward.OwnerCost)
+		m.stopCostForward()
 		return Connection{}, err
 	}
 	return Connection{Source: SourceKubecost, Client: client, Address: address, ClusterID: clusterID}, nil
