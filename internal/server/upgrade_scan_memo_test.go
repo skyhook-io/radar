@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -265,6 +266,51 @@ func TestUpgradeScanMemoCapsEntryCardinality(t *testing.T) {
 	memo.mu.Unlock()
 	if size > 3 || !newest {
 		t.Fatalf("entries=%d newestRetained=%v — cardinality must stay capped with earliest-expiry eviction", size, newest)
+	}
+}
+
+func TestUpgradeScanMemoCapHoldsUnderConcurrentDistinctKeys(t *testing.T) {
+	// Insert-time eviction alone is bypassable: while a burst of distinct
+	// keys is in flight there is no completed victim to evict, and each
+	// completion then stores a full ScanResults. Completion must re-enforce
+	// the cap so stored blobs stay bounded.
+	memo, _ := newTestUpgradeScanMemo(time.Now())
+	memo.maxEntries = 2
+	memo.scanSlots = make(chan struct{}, 8)
+	release := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range 6 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, _ = memo.get(context.Background(), fmt.Sprintf("t%d", i), false, memo.currentGeneration(), func(context.Context) (*upgradereadiness.ScanResults, error) {
+				<-release
+				return &upgradereadiness.ScanResults{}, nil
+			})
+		}(i)
+	}
+	for {
+		memo.mu.Lock()
+		pending := len(memo.entries)
+		memo.mu.Unlock()
+		if pending == 6 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	wg.Wait()
+	memo.mu.Lock()
+	completed := 0
+	for _, entry := range memo.entries {
+		if entry.results != nil {
+			completed++
+		}
+	}
+	size := len(memo.entries)
+	memo.mu.Unlock()
+	if completed > memo.maxEntries || size > memo.maxEntries {
+		t.Fatalf("after burst: entries=%d completed-with-results=%d, want both ≤ cap %d", size, completed, memo.maxEntries)
 	}
 }
 

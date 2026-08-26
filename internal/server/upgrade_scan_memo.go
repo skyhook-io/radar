@@ -218,6 +218,10 @@ func (m *upgradeScanMemo) get(ctx context.Context, key string, refresh bool, gen
 	}
 	out := m.outcomeLocked(leader, false)
 	close(leader.done)
+	// Insert-time eviction can find no completed victim when a burst of
+	// distinct keys is still in flight; re-enforcing at completion is what
+	// keeps stored ScanResults blobs — the actual memory — capped.
+	m.evictOverCapLocked()
 	m.mu.Unlock()
 
 	if err != nil {
