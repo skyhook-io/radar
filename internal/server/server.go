@@ -4533,10 +4533,7 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 	}
 
 	if err := k8s.PerformContextSwitch(qualifiedName); err != nil {
-		discarded := false
-		if created {
-			discarded = k8s.DiscardInactiveMergedContext(mergedPath)
-		}
+		discarded := k8s.DiscardFailedMergedContext(mergedPath, created)
 		if discarded {
 			log.Printf("[capi] Discarded inactive kubeconfig after failed switch to %q", qualifiedName)
 		}

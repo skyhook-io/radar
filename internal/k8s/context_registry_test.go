@@ -1472,7 +1472,41 @@ func TestMergeAndSwitchContext_ReusedPathPublishesFreshMaps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("serialize incoming kubeconfig: %v", err)
 	}
-	qName, path, created, err := MergeAndSwitchContext(data, "workload")
+	type mergeResult struct {
+		qualifiedName string
+		path          string
+		created       bool
+		err           error
+	}
+	operationBaseline := activeContextOperations.Load()
+	contextOpMu.Lock()
+	merged := make(chan mergeResult, 1)
+	go func() {
+		qName, path, created, mergeErr := MergeAndSwitchContext(data, "workload")
+		merged <- mergeResult{qualifiedName: qName, path: path, created: created, err: mergeErr}
+	}()
+	deadline := time.Now().Add(time.Second)
+	for activeContextOperations.Load() != operationBaseline+1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if activeContextOperations.Load() != operationBaseline+1 {
+		contextOpMu.Unlock()
+		t.Fatal("merge did not queue behind the context operation lock")
+	}
+	select {
+	case <-merged:
+		contextOpMu.Unlock()
+		t.Fatal("merge completed while another context operation held the lock")
+	default:
+	}
+	contextOpMu.Unlock()
+	var result mergeResult
+	select {
+	case result = <-merged:
+	case <-time.After(time.Second):
+		t.Fatal("merge did not finish after the context operation lock was released")
+	}
+	qName, path, created, err := result.qualifiedName, result.path, result.created, result.err
 	if err != nil {
 		t.Fatalf("MergeAndSwitchContext: %v", err)
 	}
@@ -1481,6 +1515,12 @@ func TestMergeAndSwitchContext_ReusedPathPublishesFreshMaps(t *testing.T) {
 	}
 	if qName != "workload" || path != workload {
 		t.Fatalf("reuse result = (%q, %q), want (%q, %q)", qName, path, "workload", workload)
+	}
+	if DiscardFailedMergedContext(path, created) {
+		t.Fatal("failed-switch cleanup discarded a reused CAPI source")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("reused CAPI source was removed by failed-switch cleanup: %v", err)
 	}
 	if got := publishedConfigs[workload].AuthInfos["u2"].Token; got == "rotated-token" {
 		t.Fatal("previously published config map was mutated in place")
@@ -1727,7 +1767,7 @@ func TestMergeAndSwitchContext_PromotionEntersRegistryMode(t *testing.T) {
 	if summary.FileCount != 2 || summary.DirectoryFileCount != 0 || summary.ContextCount != 2 {
 		t.Fatalf("promoted kubeconfig summary = %+v", summary)
 	}
-	if !DiscardInactiveMergedContext(tmpPath) {
+	if !DiscardFailedMergedContext(tmpPath, created) {
 		t.Fatal("inactive merged context was not discarded")
 	}
 	if got := GetKubeconfigPath(); got != primary {
@@ -1755,7 +1795,7 @@ func TestMergeAndSwitchContext_PromotionEntersRegistryMode(t *testing.T) {
 		t.Fatalf("create second workload: created=%t, err=%v", secondCreated, err)
 	}
 	t.Cleanup(func() { _ = os.Remove(secondPath) })
-	if !DiscardInactiveMergedContext(firstPath) {
+	if !DiscardFailedMergedContext(firstPath, firstCreated) {
 		t.Fatal("first inactive workload was not discarded")
 	}
 	clientMu.RLock()
@@ -1764,7 +1804,7 @@ func TestMergeAndSwitchContext_PromotionEntersRegistryMode(t *testing.T) {
 	if !snapshotDeferred {
 		t.Fatal("pre-promotion snapshot was consumed while another CAPI source remained")
 	}
-	if !DiscardInactiveMergedContext(secondPath) {
+	if !DiscardFailedMergedContext(secondPath, secondCreated) {
 		t.Fatal("second inactive workload was not discarded")
 	}
 	if got := GetKubeconfigPath(); got != primary {
@@ -1775,7 +1815,7 @@ func TestMergeAndSwitchContext_PromotionEntersRegistryMode(t *testing.T) {
 	}
 }
 
-func TestDiscardInactiveMergedContextRestoresInClusterPromotion(t *testing.T) {
+func TestDiscardFailedMergedContextRestoresInClusterPromotion(t *testing.T) {
 	dir := t.TempDir()
 	workload := writeKubeconfig(t, dir, "workload.yaml", "workload", []kubeEntry{
 		{ctxName: "workload", userName: "u2", clusterName: "c2"},
@@ -1844,7 +1884,7 @@ func TestDiscardInactiveMergedContextRestoresInClusterPromotion(t *testing.T) {
 	contextOpMu.Lock()
 	discarded := make(chan bool, 1)
 	go func() {
-		discarded <- DiscardInactiveMergedContext(tmpPath)
+		discarded <- DiscardFailedMergedContext(tmpPath, created)
 	}()
 	deadline := time.Now().Add(time.Second)
 	for activeContextOperations.Load() != operationBaseline+1 && time.Now().Before(deadline) {
@@ -1879,7 +1919,7 @@ func TestDiscardInactiveMergedContextRestoresInClusterPromotion(t *testing.T) {
 	clientMu.Lock()
 	activeSourceFile = ""
 	clientMu.Unlock()
-	if !DiscardInactiveMergedContext(tmpPath) {
+	if !DiscardFailedMergedContext(tmpPath, created) {
 		t.Fatal("inactive merged context was not discarded")
 	}
 	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {

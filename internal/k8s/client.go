@@ -1693,9 +1693,10 @@ var preCapiPromotion *capiPromotionSnapshot
 // kubeconfig plus the new CAPI file — otherwise subsequent CAPI merges
 // would silently revert to client-go's Precedence behavior (issue #519).
 //
-// Concurrency: the entire decision is serialized under clientMu.Lock. The
-// input contextName is the stable key for reuse across reconnects (CAPI
-// re-emits the same context name each time for the same workload cluster),
+// Concurrency: contextOpMu keeps registry-visible files stable while a context
+// switch reads them, and clientMu serializes the reuse-check + registration
+// decision. The input contextName is the stable key for reuse across reconnects
+// (CAPI re-emits the same context name each time for the same workload cluster),
 // so we can dedupe without having to reverse-lookup the qualified form.
 func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, string, bool, error) {
 	newConfig, err := clientcmd.Load(kubeconfigData)
@@ -1705,6 +1706,13 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 	if _, ok := newConfig.Contexts[contextName]; !ok {
 		return "", "", false, fmt.Errorf("context %q not found in provided kubeconfig", contextName)
 	}
+
+	activeContextOperations.Add(1)
+	contextOpMu.Lock()
+	defer func() {
+		activeContextOperations.Add(-1)
+		contextOpMu.Unlock()
+	}()
 
 	// Hold clientMu for the entire reuse-check + registration path so two
 	// concurrent CAPI merges for the same workload cluster can't both see
@@ -1865,10 +1873,14 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 	return qualifiedName, tmpPath, true, nil
 }
 
-// DiscardInactiveMergedContext removes a CAPI kubeconfig that failed before
-// becoming the active client. Once SwitchContext publishes the source as
-// active, later connectivity or subsystem failures must retain it for retry.
-func DiscardInactiveMergedContext(path string) bool {
+// DiscardFailedMergedContext removes a newly created CAPI kubeconfig that
+// failed before becoming the active client. Reused or active sources remain
+// registered because later connection attempts may still need them for retry.
+func DiscardFailedMergedContext(path string, created bool) bool {
+	if !created {
+		return false
+	}
+
 	activeContextOperations.Add(1)
 	contextOpMu.Lock()
 	defer func() {
