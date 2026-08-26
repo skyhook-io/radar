@@ -429,6 +429,8 @@ func refreshContextRegistry(
 			errorlog.Record("k8s-init", "warning",
 				"refresh: kubeconfig %q failed to load: %s",
 				filepath.Base(path), scrubPathError(err))
+			cloneOnce()
+			newFileMtimes[path] = mtime
 			continue
 		}
 		cloneOnce()

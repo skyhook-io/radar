@@ -1771,29 +1771,35 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 	// existing temp file so the user gets a fresh exec plugin config, and
 	// return the qualified name we assigned on the original merge.
 	if existingPath, ok := capiKubeconfigs[contextName]; ok {
-		if err := clientcmd.WriteToFile(*newConfig, existingPath); err == nil {
-			// Refresh the cached parsed config so subsequent GetAvailableContexts
-			// calls can use fresh credentials immediately. Leave the cached mtime
-			// untouched so the registry refresh still reconciles added, removed,
-			// or renamed contexts from the rewritten file.
-			parsed, parseErr := clientcmd.LoadFromFile(existingPath)
-			qName := findQualifiedNameForPath(contextRegistry, existingPath, contextName)
-			if qName != "" {
-				if parseErr != nil {
-					log.Printf("[capi] Failed to refresh cached kubeconfig for context %q: %v", contextName, parseErr)
+		pathErr := validateKubeconfigFileType(existingPath)
+		if pathErr == nil {
+			writeErr := clientcmd.WriteToFile(*newConfig, existingPath)
+			if writeErr != nil {
+				log.Printf("[capi] Failed to update existing kubeconfig for context %q: %v", contextName, writeErr)
+			} else {
+				// Refresh the cached parsed config so subsequent GetAvailableContexts
+				// calls can use fresh credentials immediately. Leave the cached mtime
+				// untouched so the registry refresh still reconciles added, removed,
+				// or renamed contexts from the rewritten file.
+				parsed, parseErr := clientcmd.LoadFromFile(existingPath)
+				qName := findQualifiedNameForPath(contextRegistry, existingPath, contextName)
+				if qName != "" {
+					if parseErr != nil {
+						log.Printf("[capi] Failed to refresh cached kubeconfig for context %q: %v", contextName, parseErr)
+						return qName, existingPath, false, nil
+					}
+					newFileConfigs := make(map[string]*clientcmdapi.Config, len(perFileConfigs))
+					for path, cfg := range perFileConfigs {
+						newFileConfigs[path] = cfg
+					}
+					newFileConfigs[existingPath] = parsed
+					perFileConfigs = newFileConfigs
+					log.Printf("[capi] Updated existing kubeconfig for context %q: %q", contextName, existingPath)
 					return qName, existingPath, false, nil
 				}
-				newFileConfigs := make(map[string]*clientcmdapi.Config, len(perFileConfigs))
-				for path, cfg := range perFileConfigs {
-					newFileConfigs[path] = cfg
-				}
-				newFileConfigs[existingPath] = parsed
-				perFileConfigs = newFileConfigs
-				log.Printf("[capi] Updated existing kubeconfig for context %q: %q", contextName, existingPath)
-				return qName, existingPath, false, nil
 			}
 		} else {
-			log.Printf("[capi] Failed to update existing kubeconfig for context %q: %v", contextName, err)
+			log.Printf("[capi] Replacing unusable kubeconfig for context %q: %v", contextName, pathErr)
 		}
 		if err := os.Remove(existingPath); err != nil && !os.IsNotExist(err) {
 			return "", "", false, fmt.Errorf("failed to replace stale CAPI kubeconfig: %w", err)

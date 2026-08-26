@@ -4364,21 +4364,19 @@ func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleConnectionRetry(w http.ResponseWriter, r *http.Request) {
-	if k8s.IsInCluster() {
-		s.writeError(w, http.StatusBadRequest, "connection retry is unavailable in in-cluster mode")
-		return
-	}
 	ctx := k8s.GetContextName()
 	if ctx == "" {
 		s.writeError(w, http.StatusBadRequest, "no context configured")
 		return
 	}
 
-	// Reconnect to the same context (reuses PerformContextSwitch which handles full
-	// reinit, including stopping active sessions at teardown)
-	if err := k8s.PerformContextSwitch(ctx); err != nil {
+	if err := k8s.RetryCurrentConnection(); err != nil {
 		if errors.Is(err, k8s.ErrContextSwitchPreflight) {
 			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if errors.Is(err, k8s.ErrReconnectSuperseded) {
+			s.writeError(w, http.StatusConflict, err.Error())
 			return
 		}
 		errorType := k8s.ClassifyError(err)
@@ -4396,7 +4394,7 @@ func (s *Server) handleConnectionRetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// PerformContextSwitch published the connected status under the
+	// RetryCurrentConnection published the connected status under the
 	// context-operation lock; a second publish here would race a queued
 	// operation's teardown.
 	s.writeJSON(w, k8s.GetConnectionStatus())

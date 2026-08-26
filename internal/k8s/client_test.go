@@ -529,6 +529,144 @@ func TestInClusterRuntimeReconnectReinitializesWithoutSwitchTeardown(t *testing.
 	}
 }
 
+func TestRetryCurrentConnectionInClusterProbesBeforeReinitialize(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+
+	clientMu.Lock()
+	previousName := contextName
+	previousMode := kubeconfigMode
+	previousStarted := initializationStarted
+	contextName = "in-cluster"
+	kubeconfigMode = "in-cluster"
+	initializationStarted = true
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextName = previousName
+		kubeconfigMode = previousMode
+		initializationStarted = previousStarted
+		clientMu.Unlock()
+	})
+
+	stopped := false
+	SetSessionStopper(func() { stopped = true })
+	t.Cleanup(func() { SetSessionStopper(nil) })
+	probeCalled := false
+	setRuntimeAuthProbe(func(context.Context) error {
+		probeCalled = true
+		return nil
+	})
+	reconnectCalled := false
+	setRuntimeAuthReconnect(func(name string, generation uint64) error {
+		reconnectCalled = true
+		if name != "in-cluster" || generation != currentOperationGen() {
+			t.Fatalf("reconnect inputs = (%q, %d), current generation %d", name, generation, currentOperationGen())
+		}
+		return nil
+	})
+
+	if err := RetryCurrentConnection(); err != nil {
+		t.Fatalf("RetryCurrentConnection: %v", err)
+	}
+	if !probeCalled || !reconnectCalled {
+		t.Fatalf("retry calls = probe %t, reconnect %t", probeCalled, reconnectCalled)
+	}
+	if stopped {
+		t.Fatal("in-cluster retry stopped active sessions")
+	}
+}
+
+func TestRetryCurrentConnectionInClusterProbeFailureKeepsCaches(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+
+	clientMu.Lock()
+	previousName := contextName
+	previousMode := kubeconfigMode
+	previousStarted := initializationStarted
+	contextName = "in-cluster"
+	kubeconfigMode = "in-cluster"
+	initializationStarted = true
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextName = previousName
+		kubeconfigMode = previousMode
+		initializationStarted = previousStarted
+		clientMu.Unlock()
+	})
+
+	stopped := false
+	SetSessionStopper(func() { stopped = true })
+	t.Cleanup(func() { SetSessionStopper(nil) })
+	probeErr := errors.New("probe failed")
+	setRuntimeAuthProbe(func(context.Context) error { return probeErr })
+	reconnectCalled := false
+	setRuntimeAuthReconnect(func(string, uint64) error {
+		reconnectCalled = true
+		return nil
+	})
+
+	err := RetryCurrentConnection()
+	if !errors.Is(err, probeErr) {
+		t.Fatalf("RetryCurrentConnection error = %v, want %v", err, probeErr)
+	}
+	if reconnectCalled {
+		t.Fatal("probe failure reinitialized in-cluster caches")
+	}
+	if stopped {
+		t.Fatal("probe failure stopped active sessions")
+	}
+}
+
+func TestRetryCurrentConnectionInClusterDoesNotOutliveNewerOperation(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+
+	clientMu.Lock()
+	previousName := contextName
+	previousMode := kubeconfigMode
+	previousStarted := initializationStarted
+	contextName = "in-cluster"
+	kubeconfigMode = "in-cluster"
+	initializationStarted = true
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextName = previousName
+		kubeconfigMode = previousMode
+		initializationStarted = previousStarted
+		clientMu.Unlock()
+	})
+
+	probeStarted := make(chan struct{})
+	releaseProbe := make(chan struct{})
+	setRuntimeAuthProbe(func(context.Context) error {
+		close(probeStarted)
+		<-releaseProbe
+		return nil
+	})
+	reconnectCalled := false
+	setRuntimeAuthReconnect(func(string, uint64) error {
+		reconnectCalled = true
+		return nil
+	})
+
+	done := make(chan error, 1)
+	go func() { done <- RetryCurrentConnection() }()
+	<-probeStarted
+	CancelOngoingOperations()
+	close(releaseProbe)
+
+	if err := <-done; !errors.Is(err, ErrReconnectSuperseded) {
+		t.Fatalf("RetryCurrentConnection error = %v, want ErrReconnectSuperseded", err)
+	}
+	if reconnectCalled {
+		t.Fatal("superseded retry reinitialized in-cluster caches")
+	}
+}
+
 func TestInClusterRuntimeReconnectPublishesConnectedAfterReinit(t *testing.T) {
 	ResetTestState()
 	t.Cleanup(ResetTestState)
@@ -597,6 +735,66 @@ func TestInClusterRuntimeReconnectPublishesConnectedAfterReinit(t *testing.T) {
 	status := GetConnectionStatus()
 	if status.State != StateConnected || status.Context != "in-cluster" || status.ClusterName != "service-account-cluster" {
 		t.Fatalf("connection status = %+v", status)
+	}
+}
+
+func TestInClusterRuntimeReconnectDoesNotPublishAfterSupersededInit(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+
+	clientMu.Lock()
+	previousName := contextName
+	previousMode := kubeconfigMode
+	previousStarted := initializationStarted
+	contextName = "in-cluster"
+	kubeconfigMode = "in-cluster"
+	initializationStarted = true
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextName = previousName
+		kubeconfigMode = previousMode
+		initializationStarted = previousStarted
+		clientMu.Unlock()
+	})
+
+	connectionStatusMu.Lock()
+	previousStatus := connectionStatus
+	connectionStatus = ConnectionStatus{State: StateDisconnected, Context: "in-cluster"}
+	connectionStatusMu.Unlock()
+	t.Cleanup(func() {
+		connectionStatusMu.Lock()
+		connectionStatus = previousStatus
+		connectionStatusMu.Unlock()
+	})
+
+	contextSwitchMu.Lock()
+	previousCallbacks := contextSwitchCallbacks
+	callbackCalled := false
+	contextSwitchCallbacks = []ContextSwitchCallback{func(string) { callbackCalled = true }}
+	contextSwitchMu.Unlock()
+	t.Cleanup(func() {
+		contextSwitchMu.Lock()
+		contextSwitchCallbacks = previousCallbacks
+		contextSwitchMu.Unlock()
+	})
+
+	err := reinitializeCurrentContextIfOperationCurrent(
+		"in-cluster",
+		currentOperationGen(),
+		func(context.Context, func(string)) error {
+			CancelOngoingOperations()
+			return nil
+		},
+	)
+	if !errors.Is(err, ErrReconnectSuperseded) {
+		t.Fatalf("reinitialize current context error = %v, want ErrReconnectSuperseded", err)
+	}
+	if callbackCalled {
+		t.Fatal("superseded reinitialize published its context callback")
+	}
+	if status := GetConnectionStatus(); status.State != StateDisconnected {
+		t.Fatalf("superseded reinitialize status = %+v", status)
 	}
 }
 

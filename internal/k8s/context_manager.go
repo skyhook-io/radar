@@ -363,6 +363,38 @@ func PerformContextSwitch(newContext string) error {
 	return performContextSwitch(newContext, 0, false)
 }
 
+// RetryCurrentConnection reconnects the active context. In-cluster mode has no
+// kubeconfig source to reload, so it verifies connectivity before rebuilding
+// caches around the existing client configuration.
+func RetryCurrentConnection() error {
+	contextName := GetContextName()
+	if contextName == "" {
+		return errors.New("no context configured")
+	}
+	if !IsInCluster() {
+		return PerformContextSwitch(contextName)
+	}
+
+	CancelOngoingOperations()
+	observedOperationGen := currentOperationGen()
+	probeCtx, probeCancel, ok := newOperationContextForGeneration(
+		observedOperationGen,
+		connectionTestOperationTimeout(),
+	)
+	if !ok {
+		return ErrReconnectSuperseded
+	}
+	probeErr := getRuntimeAuthProbe()(probeCtx)
+	probeCancel()
+	if currentOperationGen() != observedOperationGen {
+		return ErrReconnectSuperseded
+	}
+	if probeErr != nil {
+		return fmt.Errorf("cluster connection failed: %w", probeErr)
+	}
+	return getRuntimeAuthReconnect()(contextName, observedOperationGen)
+}
+
 // PerformContextSwitchIfOperationCurrent is the conditional variant used by
 // automatic recovery: it aborts with ErrReconnectSuperseded — before any
 // teardown — if any other operation (user switch, rescope, retry) started
@@ -408,6 +440,9 @@ func reinitializeCurrentContextIfOperationCurrent(
 	defer initCancel()
 	if err := initSubsystems(initCtx, reportProgress); err != nil {
 		return fmt.Errorf("subsystem init failed: %w", err)
+	}
+	if currentOperationGen() != observedOperationGen {
+		return ErrReconnectSuperseded
 	}
 
 	reportProgress("Building topology...")

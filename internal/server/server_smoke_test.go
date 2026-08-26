@@ -1022,9 +1022,13 @@ func TestSmokeConnectionStatusOnly(t *testing.T) {
 	}
 }
 
-func TestConnectionRetryRejectsInClusterBeforeTeardown(t *testing.T) {
+func TestConnectionRetryInClusterProbesBeforeTeardown(t *testing.T) {
 	k8s.ForceInCluster = true
 	t.Cleanup(func() { k8s.ForceInCluster = false })
+	previousContext := k8s.SetTestContextName("in-cluster")
+	t.Cleanup(func() { k8s.SetTestContextName(previousContext) })
+	previousStatus := k8s.GetConnectionStatus()
+	t.Cleanup(func() { k8s.SetConnectionStatus(previousStatus) })
 	stopped := false
 	k8s.SetSessionStopper(func() { stopped = true })
 	t.Cleanup(func() { k8s.SetSessionStopper(nil) })
@@ -1033,10 +1037,10 @@ func TestConnectionRetryRejectsInClusterBeforeTeardown(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/api/connection/retry", nil)
 	(&Server{}).handleConnectionRetry(recorder, request)
 
-	if recorder.Code != http.StatusBadRequest {
-		t.Fatalf("retry status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("retry status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
 	}
-	if !strings.Contains(recorder.Body.String(), "unavailable in in-cluster mode") {
+	if !strings.Contains(recorder.Body.String(), "K8s config not initialized") {
 		t.Fatalf("retry response = %q", recorder.Body.String())
 	}
 	if stopped {

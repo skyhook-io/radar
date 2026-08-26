@@ -1159,14 +1159,46 @@ func TestRefreshContextRegistry_BadParseDoesNotDropExisting(t *testing.T) {
 		{ctxName: "ctx-a", userName: "u", clusterName: "c1"},
 	})
 	registry, fileConfigs, mtimes := loadFixture(t, []string{f1})
+	errorlog.Reset()
+	t.Cleanup(errorlog.Reset)
 
 	if err := os.WriteFile(f1, []byte("not: valid: yaml: at: all"), 0o600); err != nil {
 		t.Fatalf("rewrite: %v", err)
 	}
+	firstBrokenMtime := mtimes[f1].Add(time.Second)
+	if err := os.Chtimes(f1, firstBrokenMtime, firstBrokenMtime); err != nil {
+		t.Fatalf("set broken mtime: %v", err)
+	}
 
-	newRegistry, _, _, _ := refreshContextRegistry(registry, fileConfigs, mtimes, []string{f1})
+	newRegistry, newFileConfigs, newMtimes, changed := refreshContextRegistry(registry, fileConfigs, mtimes, []string{f1})
+	if !changed || !newMtimes[f1].Equal(firstBrokenMtime) {
+		t.Fatalf("first broken revision = changed %t, mtime %v", changed, newMtimes[f1])
+	}
 	if _, ok := newRegistry["ctx-a"]; !ok {
 		t.Errorf("ctx-a was dropped on parse failure; expected to keep it: %v", keysOf(newRegistry))
+	}
+	if entries := errorlog.GetEntries(); len(entries) != 1 {
+		t.Fatalf("first broken revision warnings = %+v", entries)
+	}
+
+	newRegistry, newFileConfigs, newMtimes, changed = refreshContextRegistry(newRegistry, newFileConfigs, newMtimes, []string{f1})
+	if changed {
+		t.Fatal("unchanged broken revision should not refresh again")
+	}
+	if entries := errorlog.GetEntries(); len(entries) != 1 {
+		t.Fatalf("unchanged broken revision warnings = %+v", entries)
+	}
+
+	secondBrokenMtime := firstBrokenMtime.Add(time.Second)
+	if err := os.Chtimes(f1, secondBrokenMtime, secondBrokenMtime); err != nil {
+		t.Fatalf("set second broken mtime: %v", err)
+	}
+	_, _, newMtimes, changed = refreshContextRegistry(newRegistry, newFileConfigs, newMtimes, []string{f1})
+	if !changed || !newMtimes[f1].Equal(secondBrokenMtime) {
+		t.Fatalf("second broken revision = changed %t, mtime %v", changed, newMtimes[f1])
+	}
+	if entries := errorlog.GetEntries(); len(entries) != 2 {
+		t.Fatalf("second broken revision warnings = %+v", entries)
 	}
 }
 

@@ -352,6 +352,103 @@ func TestMergeAndSwitchContextErrorDoesNotPublishStaleReplacement(t *testing.T) 
 	}
 }
 
+func TestMergeAndSwitchContextReplacesFIFOWithoutBlocking(t *testing.T) {
+	dir := t.TempDir()
+	primary := writeKubeconfig(t, dir, "primary.yaml", "primary", []kubeEntry{
+		{ctxName: "primary", userName: "u1", clusterName: "c1"},
+	})
+	existing := writeKubeconfig(t, dir, "workload.yaml", "workload", []kubeEntry{
+		{ctxName: "workload", userName: "u2", clusterName: "c2"},
+	})
+	incoming := writeKubeconfig(t, t.TempDir(), "incoming.yaml", "workload", []kubeEntry{
+		{ctxName: "workload", userName: "u2", clusterName: "c2"},
+		{ctxName: "workload-canary", userName: "u3", clusterName: "c3"},
+	})
+	data, err := os.ReadFile(incoming)
+	if err != nil {
+		t.Fatalf("read incoming kubeconfig: %v", err)
+	}
+	registry, configs := buildContextRegistry([]string{primary, existing})
+
+	clientMu.Lock()
+	previousRegistry := contextRegistry
+	previousConfigs := perFileConfigs
+	previousMtimes := perFileMtimes
+	previousPaths := kubeconfigPaths
+	previousCAPI := capiKubeconfigs
+	previousCount := totalContextCount
+	contextRegistry = registry
+	perFileConfigs = configs
+	perFileMtimes = map[string]time.Time{}
+	kubeconfigPaths = []string{primary, existing}
+	capiKubeconfigs = map[string]string{"workload": existing}
+	totalContextCount = len(registry)
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextRegistry = previousRegistry
+		perFileConfigs = previousConfigs
+		perFileMtimes = previousMtimes
+		kubeconfigPaths = previousPaths
+		capiKubeconfigs = previousCAPI
+		totalContextCount = previousCount
+		clientMu.Unlock()
+	})
+
+	if err := os.Remove(existing); err != nil {
+		t.Fatalf("remove existing kubeconfig: %v", err)
+	}
+	if err := syscall.Mkfifo(existing, 0o600); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+
+	type mergeResult struct {
+		qualifiedName string
+		path          string
+		created       bool
+		err           error
+	}
+	done := make(chan mergeResult, 1)
+	go func() {
+		qualifiedName, path, created, mergeErr := MergeAndSwitchContext(data, "workload")
+		done <- mergeResult{qualifiedName: qualifiedName, path: path, created: created, err: mergeErr}
+	}()
+
+	var result mergeResult
+	select {
+	case result = <-done:
+	case <-time.After(2 * time.Second):
+		fd, unblockErr := syscall.Open(existing, syscall.O_RDONLY|syscall.O_NONBLOCK, 0)
+		if unblockErr != nil {
+			t.Fatalf("CAPI kubeconfig refresh blocked and FIFO could not be opened: %v", unblockErr)
+		}
+		select {
+		case result = <-done:
+		case <-time.After(time.Second):
+			_ = syscall.Close(fd)
+			t.Fatal("CAPI kubeconfig refresh remained blocked after opening the FIFO")
+		}
+		_ = syscall.Close(fd)
+		t.Fatal("CAPI kubeconfig refresh blocked while opening a FIFO")
+	}
+	if result.err != nil {
+		t.Fatalf("MergeAndSwitchContext: %v", result.err)
+	}
+	if !result.created || result.path == existing || result.qualifiedName != "workload" {
+		t.Fatalf("replacement result = (%q, %q, %t)", result.qualifiedName, result.path, result.created)
+	}
+	t.Cleanup(func() { _ = os.Remove(result.path) })
+	if info, err := os.Stat(result.path); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("replacement path is not a regular file: info=%v err=%v", info, err)
+	}
+	clientMu.RLock()
+	registeredPath := capiKubeconfigs["workload"]
+	clientMu.RUnlock()
+	if registeredPath != result.path {
+		t.Fatalf("registered CAPI path = %q, want %q", registeredPath, result.path)
+	}
+}
+
 func TestHasUsableKubeconfigRejectsFIFOWithoutBlocking(t *testing.T) {
 	fifo := filepath.Join(t.TempDir(), "primary.pipe")
 	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
