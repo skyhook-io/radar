@@ -1,14 +1,83 @@
 package server
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	pkgopencost "github.com/skyhook-io/radar/pkg/opencost"
 )
+
+func TestOpenCostDetailResponsesIncludeCurrencyWhenUnavailable(t *testing.T) {
+	s := &Server{openCostCurrency: internalopencost.NewCurrencyResolver("GBP")}
+	tests := []struct {
+		name   string
+		method string
+		target string
+		body   string
+		serve  func(http.ResponseWriter, *http.Request)
+		params map[string]string
+	}{
+		{
+			name: "workload current", method: http.MethodGet,
+			target: "/api/opencost/workload/Deployment/default/nginx",
+			serve:  s.handleOpenCostWorkload,
+			params: map[string]string{"kind": "Deployment", "namespace": "default", "name": "nginx"},
+		},
+		{
+			name: "workload trend", method: http.MethodGet,
+			target: "/api/opencost/workload/Deployment/default/nginx/trend?range=24h",
+			serve:  s.handleOpenCostWorkloadTrend,
+			params: map[string]string{"kind": "Deployment", "namespace": "default", "name": "nginx"},
+		},
+		{
+			name: "application current", method: http.MethodPost,
+			target: "/api/opencost/application",
+			body:   `{"workloads":[{"kind":"Deployment","namespace":"default","name":"nginx"}]}`,
+			serve:  s.handleOpenCostApplication,
+		},
+		{
+			name: "application trend", method: http.MethodPost,
+			target: "/api/opencost/application/trend",
+			body:   `{"range":"24h","workloads":[{"kind":"Deployment","namespace":"default","name":"nginx"}]}`,
+			serve:  s.handleOpenCostApplicationTrend,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, tt.target, strings.NewReader(tt.body))
+			if len(tt.params) > 0 {
+				rctx := chi.NewRouteContext()
+				for key, value := range tt.params {
+					rctx.URLParams.Add(key, value)
+				}
+				req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+			}
+			w := httptest.NewRecorder()
+			tt.serve(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+			}
+			var body struct {
+				Currency string `json:"currency"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Currency != "GBP" {
+				t.Errorf("currency = %q, want GBP", body.Currency)
+			}
+		})
+	}
+}
 
 func TestOpenCostConnectionFailureReason(t *testing.T) {
 	if got := internalopencost.ConnectionFailureReason(fmt.Errorf("wrapped: %w", prometheuspkg.ErrPrometheusNotFound)); got != pkgopencost.ReasonNoPrometheus {

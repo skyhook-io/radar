@@ -14,6 +14,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/portforward"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // Manager handles traffic source detection and management
@@ -232,6 +233,9 @@ func (m *Manager) detectClusterInfo(ctx context.Context) (*ClusterInfo, error) {
 	} else {
 		info.K8sVersion = version.GitVersion
 		log.Printf("[traffic] K8s version: %s", info.K8sVersion)
+		if platform := k8score.DetectPlatformFromVersion(info.K8sVersion); platform != "unknown" {
+			info.Platform = platform
+		}
 	}
 
 	// Detect platform from nodes
@@ -245,26 +249,19 @@ func (m *Manager) detectClusterInfo(ctx context.Context) (*ClusterInfo, error) {
 		providerID := node.Spec.ProviderID
 		log.Printf("[traffic] Node providerID: %q", providerID)
 
-		// Detect platform
-		switch {
-		case strings.HasPrefix(providerID, "gce://"):
-			info.Platform = "gke"
-			// Extract cluster name from labels
-			if cn, ok := node.Labels["cloud.google.com/gke-nodepool"]; ok {
-				// Parse cluster name from nodepool
-				parts := strings.Split(cn, "-")
-				if len(parts) > 0 {
-					info.ClusterName = parts[0]
+		platform := k8score.DetectNodePlatform(node)
+		if platform == "unknown" {
+			log.Printf("[traffic] Unknown node platform, platform remains generic")
+		} else if info.Platform == "generic" {
+			info.Platform = platform
+			if platform == "gke" {
+				if cn, ok := node.Labels["cloud.google.com/gke-nodepool"]; ok {
+					parts := strings.Split(cn, "-")
+					if len(parts) > 0 {
+						info.ClusterName = parts[0]
+					}
 				}
 			}
-		case strings.HasPrefix(providerID, "aws://"):
-			info.Platform = "eks"
-		case strings.HasPrefix(providerID, "azure://"):
-			info.Platform = "aks"
-		case strings.HasPrefix(providerID, "kind://"):
-			info.Platform = "kind"
-		default:
-			log.Printf("[traffic] Unknown providerID format, platform remains generic")
 		}
 	}
 
@@ -313,6 +310,14 @@ func (m *Manager) detectCNI(ctx context.Context, platform string) (string, bool)
 		log.Printf("[traffic] Found anetd DaemonSet (GKE Dataplane V2)")
 		// anetd is part of GKE Dataplane V2 which uses Cilium
 		return "cilium", hubbleEnabled
+	}
+
+	for _, name := range []string{"rke2-canal", "canal"} {
+		_, err = m.k8sClient.AppsV1().DaemonSets("kube-system").Get(ctx, name, metav1.GetOptions{})
+		if err == nil {
+			log.Printf("[traffic] Found %s DaemonSet", name)
+			return "canal", false
+		}
 	}
 
 	// Check for Calico
@@ -416,6 +421,14 @@ func (m *Manager) generateRecommendation(info *ClusterInfo, detected []SourceSta
 		return &Recommendation{
 			Name:      "caretta",
 			Reason:    "Caretta provides lightweight eBPF-based traffic visibility for Calico clusters.",
+			HelmChart: carettaHelmChart(),
+			DocsURL:   "https://github.com/groundcover-com/caretta",
+		}
+
+	case "canal":
+		return &Recommendation{
+			Name:      "caretta",
+			Reason:    "Caretta provides lightweight eBPF-based traffic visibility for Canal clusters.",
 			HelmChart: carettaHelmChart(),
 			DocsURL:   "https://github.com/groundcover-com/caretta",
 		}
@@ -565,6 +578,10 @@ func Reset() {
 	if manager != nil {
 		manager.Close()
 	}
+	// Stop again after Close: an in-flight Connect (Close blocks on the source
+	// mutex until it finishes) may have published a forward for the old cluster
+	// after the first Stop.
+	portforward.Stop(portforward.OwnerTraffic)
 	manager = nil
 	initOnce = sync.Once{}
 }
@@ -611,13 +628,31 @@ func (m *Manager) Connect(ctx context.Context) (*portforward.ConnectionInfo, err
 	}
 }
 
-// GetConnectionInfo returns live traffic connection status — traffic's own
-// metrics forward, read from the live registry so a forward that has since been
-// stopped isn't reported as connected. It deliberately does NOT report another
-// owner's forward: traffic's data path always uses its own (Caretta/Hubble bring
-// one up), so a Prometheus forward for the same context means Prometheus is
-// connected, not traffic.
+// ConnectionReporter is implemented by sources that can report their own live
+// connection state. Necessary because "traffic has an active port-forward" is
+// not the same thing as "traffic is connected": every source prefers a direct
+// in-cluster connection with no forward behind it, and the Prometheus-backed
+// sources (Istio, Beyla) ride the prometheus owner's forward, not traffic's.
+type ConnectionReporter interface {
+	ConnectionInfo() *portforward.ConnectionInfo
+}
+
+// GetConnectionInfo returns live traffic connection status, as reported by the
+// active source when it can (see ConnectionReporter). The registry fallback
+// deliberately does NOT report another owner's forward: a Prometheus forward
+// for the same context means Prometheus is connected, not traffic.
 func (m *Manager) GetConnectionInfo() *portforward.ConnectionInfo {
+	m.mu.RLock()
+	source := m.activeSource
+	m.mu.RUnlock()
+
+	if source == nil {
+		// A leftover forward with nothing querying it is not a connection.
+		return &portforward.ConnectionInfo{Connected: false}
+	}
+	if reporter, ok := source.(ConnectionReporter); ok {
+		return reporter.ConnectionInfo()
+	}
 	return portforward.GetConnectionInfo(portforward.OwnerTraffic)
 }
 

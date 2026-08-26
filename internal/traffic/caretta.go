@@ -18,6 +18,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/internal/errorlog"
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/portforward"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
@@ -36,6 +37,8 @@ const (
 
 	// maxMetricsCandidates bounds how many backends Connect will port-forward to
 	// and probe before giving up. Each rejected candidate costs a forward setup.
+	// It bounds the local walk only: in-cluster, candidates are reached by cluster
+	// address in single-digit ms and never port-forwarded, so the cap is dropped.
 	maxMetricsCandidates = 4
 )
 
@@ -91,7 +94,16 @@ type CarettaSource struct {
 	backendVerified     bool   // bound backend proved it holds Caretta metrics
 	boundIsCarettaStore bool   // bound backend is Caretta's own store, trusted on identity
 	backendWarning      string // why no backend could be bound, surfaced to the UI
-	mu                  sync.RWMutex
+	closed              bool   // set by Close; a late Connect must not resurrect the source
+	// inCluster records how Radar reaches the cluster, captured once at
+	// construction from the same detection the connection context reports as
+	// "in-cluster". It flips discovery's cost model: in-cluster a Service address
+	// resolves and answers in single-digit ms but pods/portforward is normally
+	// denied, so discovery probes every candidate by cluster address and never
+	// port-forwards; local is the reverse — a cluster address can't resolve and
+	// costs a guaranteed dead-wait, so discovery skips it and port-forwards.
+	inCluster bool
+	mu        sync.RWMutex
 }
 
 // applyHeaders attaches the configured custom headers to a Prometheus
@@ -113,6 +125,7 @@ func NewCarettaSource(client kubernetes.Interface) *CarettaSource {
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
+		inCluster: k8s.IsInCluster(),
 	}
 }
 
@@ -382,34 +395,44 @@ func (c *CarettaSource) discoverPrometheus(ctx context.Context) string {
 		return ""
 	}
 
-	var noData []string
+	var noData, unreachable []string
 	for _, info := range candidates {
 		wrongData := false
 
-		// Reuse an existing managed port-forward only if it targets the SAME service
-		// we just discovered. A generic reachability probe can't tell caretta-vm apart
-		// from the cluster's general Prometheus (both answer /api/v1/query), so match
-		// on (namespace, service) — otherwise we'd adopt the general-metrics forward
-		// and query it for caretta_links_observed, which returns 0 flows silently.
-		if pfAddr := portforward.GetAddressForService(portforward.OwnerTraffic, c.currentContext, info.namespace, info.name); pfAddr != "" {
-			switch c.acceptBackendLocked(ctx, info, pfAddr+info.basePath) {
+		if c.inCluster {
+			// In-cluster: the Service address resolves and answers in single-digit
+			// ms. Probe it directly — a managed forward isn't expected here (no
+			// pods/portforward RBAC), so a cluster-address probe is the only path,
+			// and one that can't be reached is a real diagnosis (not the local
+			// "Connect() will port-forward" case), so record it.
+			switch c.acceptBackendLocked(ctx, info, info.clusterAddr+info.basePath) {
 			case backendAccepted:
-				log.Printf("[caretta] Using managed port-forward at %s for %s/%s", pfAddr, info.namespace, info.name)
-				c.bindLocked(pfAddr, info)
-				return pfAddr
+				log.Printf("[caretta] Found metrics service at %s (basePath=%q)", info.clusterAddr, info.basePath)
+				c.bindLocked(info.clusterAddr, info)
+				return info.clusterAddr
 			case backendNoCarettaData:
 				wrongData = true
+			case backendUnreachable:
+				unreachable = append(unreachable, fmt.Sprintf("%s/%s", info.namespace, info.name))
 			}
-		}
-
-		// Try cluster address (works when running in-cluster)
-		switch c.acceptBackendLocked(ctx, info, info.clusterAddr+info.basePath) {
-		case backendAccepted:
-			log.Printf("[caretta] Found metrics service at %s (basePath=%q)", info.clusterAddr, info.basePath)
-			c.bindLocked(info.clusterAddr, info)
-			return info.clusterAddr
-		case backendNoCarettaData:
-			wrongData = true
+		} else {
+			// Local: a cluster address can't resolve from here, so only an already
+			// running managed forward is reachable. Reuse one only if it targets the
+			// SAME service we just discovered. A generic reachability probe can't tell
+			// caretta-vm apart from the cluster's general Prometheus (both answer
+			// /api/v1/query), so match on (namespace, service) — otherwise we'd adopt
+			// the general-metrics forward and query it for caretta_links_observed,
+			// which returns 0 flows silently. Starting a new forward is Connect()'s job.
+			if pfAddr := portforward.GetAddressForService(portforward.OwnerTraffic, c.currentContext, info.namespace, info.name); pfAddr != "" {
+				switch c.acceptBackendLocked(ctx, info, pfAddr+info.basePath) {
+				case backendAccepted:
+					log.Printf("[caretta] Using managed port-forward at %s for %s/%s", pfAddr, info.namespace, info.name)
+					c.bindLocked(pfAddr, info)
+					return pfAddr
+				case backendNoCarettaData:
+					wrongData = true
+				}
+			}
 		}
 
 		if wrongData {
@@ -417,11 +440,16 @@ func (c *CarettaSource) discoverPrometheus(ctx context.Context) string {
 		}
 	}
 
-	// Nothing bound. Either the candidates aren't reachable in-cluster (the local
-	// case — Connect() port-forwards to them) or none of them holds Caretta data.
-	// Only the latter is a diagnosis; unreachable here is the normal local case.
-	log.Printf("[caretta] No Caretta-backed metrics service reachable in-cluster. Call Connect() for port-forward.")
-	c.backendWarning = noBackendWarning(noData, nil)
+	// Nothing bound. In-cluster, a candidate that couldn't be reached is a real
+	// diagnosis, so name it. Local, a cluster address unreachable here is the
+	// normal case — Connect() port-forwards to the candidates — so nothing is
+	// recorded as unreachable and the warning falls back to the generic message.
+	if c.inCluster {
+		log.Printf("[caretta] No Caretta-backed metrics service reachable in-cluster.")
+	} else {
+		log.Printf("[caretta] No Caretta-backed metrics service reachable locally. Call Connect() for port-forward.")
+	}
+	c.backendWarning = noBackendWarning(noData, unreachable)
 	return ""
 }
 
@@ -455,10 +483,12 @@ func (c *CarettaSource) discoverServiceLocked(ctx context.Context) []*metricsSer
 		add(c.discoverMetricsServiceDynamic(ctx))
 	}
 
-	// The cap bounds how long a Connect can take — every candidate past the first
-	// costs a probe and possibly a port-forward. Log what it drops: a silent
-	// truncation reads as "nothing else was available".
-	if len(candidates) > maxMetricsCandidates {
+	// The cap bounds how long a local Connect can take — every candidate past the
+	// first costs a port-forward attempt. In-cluster each candidate costs only a
+	// cheap cluster-address probe and is never port-forwarded, so the cap is
+	// dropped there and every candidate is considered. Log what a local truncation
+	// drops: a silent truncation reads as "nothing else was available".
+	if !c.inCluster && len(candidates) > maxMetricsCandidates {
 		for _, dropped := range candidates[maxMetricsCandidates:] {
 			log.Printf("[caretta] Not trying %s/%s: candidate limit of %d reached", dropped.namespace, dropped.name, maxMetricsCandidates)
 		}
@@ -663,6 +693,34 @@ func (c *CarettaSource) revalidateBoundLocked(ctx context.Context, addr string) 
 	return true
 }
 
+// ConnectionInfo implements ConnectionReporter. A binding that rides a managed
+// forward defers to the live registry — a forward that has since died must not
+// read as connected — while direct in-cluster and manual-URL bindings report
+// the stored state their queries actually use.
+func (c *CarettaSource) ConnectionInfo() *portforward.ConnectionInfo {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	addr := c.prometheusAddr
+	if addr == "" {
+		return &portforward.ConnectionInfo{Connected: false}
+	}
+	if c.metricsURL == "" && strings.HasPrefix(addr, "http://localhost:") {
+		// Bound through a managed forward (traffic's own, or a reused peer's) —
+		// alive only while the registry still holds that exact address.
+		if live := portforward.GetAddressForService(portforward.OwnerTraffic, c.currentContext, c.metricsNamespace, c.metricsService); live != addr {
+			return &portforward.ConnectionInfo{Connected: false}
+		}
+	}
+	return &portforward.ConnectionInfo{
+		Connected:   true,
+		Address:     addr,
+		Namespace:   c.metricsNamespace,
+		ServiceName: c.metricsService,
+		ContextName: c.currentContext,
+	}
+}
+
 // stopStaleTrafficForward drops the traffic-owned forward when it points at a
 // service other than the one being bound. A candidate refused mid-walk can leave
 // its forward running, which would make the reported connection name a different
@@ -857,6 +915,7 @@ func (c *CarettaSource) Close() error {
 	c.boundIsCarettaStore = false
 	c.backendVerified = false
 	c.backendWarning = ""
+	c.closed = true
 	return nil
 }
 
@@ -865,6 +924,16 @@ func (c *CarettaSource) Close() error {
 func (c *CarettaSource) Connect(ctx context.Context, contextName string) (*portforward.ConnectionInfo, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// A Connect that raced Close (context switch) must not resurrect the
+	// source — its forward would point at the previous cluster and outlive
+	// Reset's cleanup.
+	if c.closed {
+		return &portforward.ConnectionInfo{
+			Connected: false,
+			Error:     "traffic source closed (context switched)",
+		}, nil
+	}
 
 	// If already connected to the same context, check if still valid
 	if c.prometheusAddr != "" && c.currentContext == contextName {
@@ -929,29 +998,38 @@ func (c *CarettaSource) Connect(ctx context.Context, contextName string) (*portf
 	for _, info := range candidates {
 		target := fmt.Sprintf("%s/%s", info.namespace, info.name)
 
-		// Try cluster-internal address first (works when running in-cluster)
-		switch c.acceptBackendLocked(ctx, info, info.clusterAddr+info.basePath) {
-		case backendAccepted:
-			log.Printf("[caretta] Connected to metrics service at %s (basePath=%q)", info.clusterAddr, info.basePath)
-			// Queries go to the cluster address from here, so the traffic module needs
-			// no forward of its own. An earlier candidate in this same walk may have
-			// left one up after being refused — keeping it would make the reported
-			// connection name a different service than the one being queried.
-			portforward.Stop(portforward.OwnerTraffic)
-			c.bindLocked(info.clusterAddr, info)
-			return &portforward.ConnectionInfo{
-				Connected:   true,
-				Address:     info.clusterAddr,
-				Namespace:   info.namespace,
-				ServiceName: info.name,
-				ContextName: contextName,
-			}, nil
-		case backendNoCarettaData:
-			// Already reached it and it holds no Caretta data — a port-forward to the
-			// same service would only reach the same database.
-			noData = append(noData, target)
+		if c.inCluster {
+			// In-cluster: the Service address resolves and answers in single-digit ms,
+			// and pods/portforward is normally denied — so probe the cluster address
+			// and never fall back to a forward that can't be opened. A rejected
+			// candidate here is terminal: record why and move to the next.
+			switch c.acceptBackendLocked(ctx, info, info.clusterAddr+info.basePath) {
+			case backendAccepted:
+				log.Printf("[caretta] Connected to metrics service at %s (basePath=%q)", info.clusterAddr, info.basePath)
+				// Queries go to the cluster address from here, so the traffic module needs
+				// no forward of its own. An earlier candidate in this same walk may have
+				// left one up after being refused — keeping it would make the reported
+				// connection name a different service than the one being queried.
+				portforward.Stop(portforward.OwnerTraffic)
+				c.bindLocked(info.clusterAddr, info)
+				return &portforward.ConnectionInfo{
+					Connected:   true,
+					Address:     info.clusterAddr,
+					Namespace:   info.namespace,
+					ServiceName: info.name,
+					ContextName: contextName,
+				}, nil
+			case backendNoCarettaData:
+				noData = append(noData, target)
+			case backendUnreachable:
+				unreachable = append(unreachable, target)
+			}
 			continue
 		}
+
+		// Local: a cluster address can't resolve from here, and probing it costs a
+		// guaranteed multi-second dead-wait per candidate — so skip it and go
+		// straight to a port-forward.
 
 		// Check if there's already a valid managed port-forward for this context that
 		// targets the SAME service we discovered. Matching on (namespace, service)
@@ -1256,31 +1334,37 @@ func (c *CarettaSource) discoverMetricsServiceDynamic(ctx context.Context) *metr
 			candidates[i].score, candidates[i].info.basePath)
 	}
 
-	// Validate top candidates via API probe (works when running in-cluster)
-	for i := range limit {
-		cand := &candidates[i]
-		addr := cand.info.clusterAddr
+	// Validate top candidates via API probe — only in-cluster, where a cluster
+	// address resolves. Locally the probe can't succeed and costs a dead-wait per
+	// candidate, so skip straight to returning the best candidate for the caller
+	// to port-forward.
+	if c.inCluster {
+		for i := range limit {
+			cand := &candidates[i]
+			addr := cand.info.clusterAddr
 
-		// Try root path first
-		if c.tryMetricsEndpointLocked(ctx, addr) {
-			log.Printf("[caretta] Dynamic discovery validated: %s/%s at %s", cand.info.namespace, cand.info.name, addr)
-			cand.info.basePath = ""
-			return &cand.info
-		}
-
-		// If candidate has a sub-path (e.g. vmselect), try that too
-		if cand.info.basePath != "" {
-			subAddr := addr + cand.info.basePath
-			if c.tryMetricsEndpointLocked(ctx, subAddr) {
-				log.Printf("[caretta] Dynamic discovery validated: %s/%s at %s (sub-path: %s)",
-					cand.info.namespace, cand.info.name, addr, cand.info.basePath)
+			// Try root path first
+			if c.tryMetricsEndpointLocked(ctx, addr) {
+				log.Printf("[caretta] Dynamic discovery validated: %s/%s at %s", cand.info.namespace, cand.info.name, addr)
+				cand.info.basePath = ""
 				return &cand.info
+			}
+
+			// If candidate has a sub-path (e.g. vmselect), try that too
+			if cand.info.basePath != "" {
+				subAddr := addr + cand.info.basePath
+				if c.tryMetricsEndpointLocked(ctx, subAddr) {
+					log.Printf("[caretta] Dynamic discovery validated: %s/%s at %s (sub-path: %s)",
+						cand.info.namespace, cand.info.name, addr, cand.info.basePath)
+					return &cand.info
+				}
 			}
 		}
 	}
 
-	// No candidate was reachable in-cluster (common when running locally).
-	// Return the highest-scored candidate — the caller can establish a port-forward.
+	// No candidate was reachable in-cluster (or running locally, where the probe
+	// was skipped). Return the highest-scored candidate — the caller can establish
+	// a port-forward.
 	best := &candidates[0]
 	log.Printf("[caretta] Dynamic discovery: no candidates reachable in-cluster, returning best candidate: %s/%s (score=%d)",
 		best.info.namespace, best.info.name, best.score)

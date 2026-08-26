@@ -51,6 +51,7 @@ import (
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/settings"
 	"github.com/skyhook-io/radar/internal/timeline"
+	"github.com/skyhook-io/radar/internal/upgrade"
 	"github.com/skyhook-io/radar/internal/traffic"
 	"github.com/skyhook-io/radar/internal/updater"
 	"github.com/skyhook-io/radar/internal/version"
@@ -82,6 +83,8 @@ type Server struct {
 	mcpReadOnlyHandler http.Handler
 	diagConfig         *DiagConfig
 	effectiveConfig    *config.Config // running config for GET /api/config
+	openCostCurrency   *opencost.CurrencyResolver
+	currencyManaged    bool
 	authConfig         auth.Config
 	permCache          *auth.PermissionCache
 	oidcHandler        *auth.OIDCHandler
@@ -166,6 +169,8 @@ type Config struct {
 	MCPReadOnlyHandler http.Handler   // read-only MCP handler (read tools only)
 	DiagConfig         *DiagConfig    // Sanitized config for diagnostics endpoint
 	EffectiveConfig    *config.Config // Running startup config for GET /api/config
+	OpenCostCurrency   string         // ISO 4217 code labeling values returned by OpenCost endpoints
+	OpenCostManaged    bool           // true when an explicit CLI/Helm flag owns the running value
 	AuthConfig         auth.Config    // Authentication configuration
 	AIHistoryDB        string         // AI run-history SQLite path ("" = memory-only runs)
 	CloudConnect       CloudConnectConfig
@@ -198,6 +203,8 @@ func New(cfg Config) *Server {
 		mcpReadOnlyHandler:    cfg.MCPReadOnlyHandler,
 		diagConfig:            cfg.DiagConfig,
 		effectiveConfig:       cfg.EffectiveConfig,
+		openCostCurrency:      opencost.NewCurrencyResolver(cfg.OpenCostCurrency),
+		currencyManaged:       cfg.OpenCostManaged,
 		authConfig:            cfg.AuthConfig,
 		cloudConnectCfg:       cfg.CloudConnect,
 		topoMemo:              topology.NewMemoizer(5 * time.Second),
@@ -706,7 +713,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Post("/opencost/application/trend", s.handleOpenCostApplicationTrend)
 			r.Get("/opencost/workload/{kind}/{namespace}/{name}", s.handleOpenCostWorkload)
 			r.Get("/opencost/workload/{kind}/{namespace}/{name}/trend", s.handleOpenCostWorkloadTrend)
-			opencost.RegisterRoutes(r)
+			opencost.RegisterRoutes(r, s.resolvedOpenCostCurrency)
 
 			// FluxCD routes
 			r.Post("/flux/{kind}/{namespace}/{name}/reconcile", s.handleFluxReconcile)
@@ -1428,36 +1435,7 @@ func (s *Server) resolveHelmNamespaces(r *http.Request) ([]string, bool) {
 // cluster upgrade scan) can reuse the same Helm resolution without rebuilding
 // it from request query state.
 func (s *Server) resolveHelmNamespacesForScope(r *http.Request, namespaces []string) ([]string, bool) {
-	if noNamespaceAccess(namespaces) {
-		return nil, false
-	}
-	if namespaces == nil {
-		if auth.UserFromContext(r.Context()) == nil {
-			// "All namespaces" in no-auth mode. A namespace-restricted
-			// ServiceAccount can't list cluster-wide; resolve to the namespaces
-			// it can actually see so the Helm list degrades gracefully instead
-			// of 403-ing. Authenticated users are handled below; Helm lists
-			// impersonate them directly, so narrowing them with the backend
-			// client's fallback namespaces would under-list users whose RBAC is
-			// wider than Radar's own ServiceAccount.
-			if fallback := helm.ResolveNoAuthListNamespaces(r.Context()); len(fallback) > 0 {
-				return fallback, true
-			}
-		} else if !s.canRead(r, "", "secrets", "", "list") {
-			// Authenticated user with cluster-wide pod access (parseNamespacesFor-
-			// User returned nil) but NOT cluster-wide `list secrets`. Helm storage
-			// is Secrets, so a single cluster-wide list would 403 wholesale and
-			// blank the view. Resolve to the namespaces where the user CAN list
-			// secrets — a per-namespace SAR memoized on the user's perms (2-min
-			// TTL), so repeat page loads don't re-probe. Falls through to the
-			// cluster-wide path (→ honest 403) when they can't read secrets
-			// anywhere.
-			if allowed := s.filterNamespacesByCanRead(r, "", "secrets", "list", s.allNamespaceNames()); len(allowed) > 0 {
-				return allowed, true
-			}
-		}
-	}
-	return namespaces, true
+	return upgrade.ResolveHelmNamespaces(r.Context(), httpUpgradeAuthorizer{s: s, r: r}, namespaces)
 }
 
 // allNamespaceNames returns every namespace name from the shared cache lister,
@@ -1465,7 +1443,7 @@ func (s *Server) resolveHelmNamespacesForScope(r *http.Request, namespaces []str
 // pool for per-user secrets-SAR filtering — the SAR is the authorization gate,
 // so the (cluster-wide) pool only needs to be a superset of what the user can
 // read.
-func (s *Server) allNamespaceNames() []string {
+func allNamespaceNames() []string {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return nil
@@ -5102,6 +5080,9 @@ type configResponse struct {
 	File      config.Config `json:"file"`
 	Effective config.Config `json:"effective"`
 	IsDesktop bool          `json:"isDesktop"`
+	// OpenCostManaged tells Settings that an explicit startup flag owns the
+	// running value even when the persisted file changes.
+	OpenCostManaged bool `json:"openCostCurrencyManaged,omitempty"`
 	// PrometheusHeaderKeys lists the configured Prometheus header names so the UI
 	// can show what's set without ever receiving the (secret) values.
 	PrometheusHeaderKeys []string `json:"prometheusHeaderKeys,omitempty"`
@@ -5125,6 +5106,11 @@ type configResponse struct {
 // diagnostics endpoint already masks them as a presence bool.
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	file := config.Load()
+	normalizedCurrency, err := config.NormalizeOpenCostCurrency(file.OpenCostCurrency)
+	if err != nil {
+		normalizedCurrency = ""
+	}
+	file.OpenCostCurrency = normalizedCurrency
 	headerKeys := make([]string, 0, len(file.PrometheusHeaders))
 	for k := range file.PrometheusHeaders {
 		headerKeys = append(headerKeys, k)
@@ -5156,6 +5142,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	resp := configResponse{
 		File:                 file,
 		IsDesktop:            version.IsDesktop(),
+		OpenCostManaged:      s.currencyManaged,
 		PrometheusHeaderKeys: headerKeys,
 		ArgoCDTokenSet:       tokenSet,
 		ArgoCDEnvManaged:     envManaged,
@@ -5175,7 +5162,8 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, resp)
 }
 
-// handlePutConfig replaces the entire config file. Changes take effect on next restart.
+// handlePutConfig replaces the entire config file. Most changes take effect on next restart;
+// the OpenCost currency override is also applied unless an explicit startup flag owns it.
 // Unlike handlePutSettings (which merges fields), this is a full replacement.
 // PrometheusHeaders and the Argo CD token are preserved from the on-disk file: the GET
 // response redacts them, so a UI round-trip would otherwise silently wipe the user's
@@ -5189,6 +5177,12 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	normalizedCurrency, err := config.NormalizeOpenCostCurrency(updated.OpenCostCurrency)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid OpenCost currency: "+err.Error())
+		return
+	}
+	updated.OpenCostCurrency = normalizedCurrency
 	result, err := config.Update(func(c *config.Config) {
 		// Integration connection fields are owned exclusively by the live
 		// /api/integrations/* endpoints, not this startup-config PUT. Preserve
@@ -5228,6 +5222,9 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[config] Failed to save config: %v", err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if s.openCostCurrency != nil && !s.currencyManaged {
+		s.openCostCurrency.SetOverride(result.OpenCostCurrency)
 	}
 	result.PrometheusHeaders = nil
 	result.ArgoCDToken = ""
@@ -5304,6 +5301,9 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 		traffic.SetMetricsHeaders(headers)
 	}
 	prometheuspkg.Reset()
+	if s.openCostCurrency != nil {
+		s.openCostCurrency.Invalidate()
+	}
 
 	resp := struct {
 		Connected bool   `json:"connected"`

@@ -29,6 +29,7 @@ type DiagConfig struct {
 	HistoryLimit         int    `json:"historyLimit"`
 	DebugEvents          bool   `json:"debugEvents"`
 	MCPEnabled           bool   `json:"mcpEnabled"`
+	OpenCostCurrency     string `json:"opencostCurrency"`
 	HasPrometheusURL     bool   `json:"hasPrometheusURL"`
 	HasPrometheusHeaders bool   `json:"hasPrometheusHeaders"`
 }
@@ -533,7 +534,9 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	// Config
 	collectSafe("config", &errs, func() {
 		if s.diagConfig != nil {
-			snap.Config = s.diagConfig
+			current := *s.diagConfig
+			current.OpenCostCurrency = s.resolvedOpenCostCurrency()
+			snap.Config = &current
 		}
 	})
 

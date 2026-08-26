@@ -98,7 +98,11 @@ rbac:
   # This is relatively safe - only reads logs, no write access
   podLogs: true
 
-  # Allow port forwarding (enables port forward feature)
+  # Allow port forwarding (enables port forward feature).
+  # Also the fallback path for traffic sources (Hubble/Caretta): Radar dials
+  # the metrics/relay Service directly first, so in-cluster installs normally
+  # don't need this — only enable it if network policy or routing blocks
+  # Radar's namespace from reaching the service directly.
   portForward: false
 
   # Allow Radar Cloud to trigger one-click in-app upgrades without customers
@@ -447,6 +451,12 @@ cloud:
 mcp:
   # Set to false to disable the MCP server (useful when deployed behind authentication)
   enabled: true
+
+# OpenCost/Kubecost display configuration
+cost:
+  # Optional ISO 4217 override for OpenCost/Kubecost values. Empty detects the
+  # running cost tool's configured currency when available, then uses USD.
+  currency: ""
 
 # Traffic source configuration
 traffic:

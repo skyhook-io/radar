@@ -11,6 +11,7 @@ describe('getApplicationCostState', () => {
   it('keeps current app cost visible when historical owner metrics are missing', () => {
     const current: OpenCostApplicationCostResponse = {
       available: true,
+      currency: 'USD',
       partial: true,
       totals: {
         hourlyCost: 0.4,
@@ -38,6 +39,7 @@ describe('getApplicationCostState', () => {
     }
     const trend: OpenCostApplicationCostTrendResponse = {
       available: false,
+      currency: 'USD',
       reason: 'no_metrics',
       range: '24h',
       coverage: { total: 3, included: 0 },
@@ -54,6 +56,7 @@ describe('getApplicationCostState', () => {
   it('uses historical data when current app metrics are absent but history exists', () => {
     const current: OpenCostApplicationCostResponse = {
       available: false,
+      currency: 'USD',
       reason: 'no_metrics',
       totals: {
         hourlyCost: 0,
@@ -69,6 +72,7 @@ describe('getApplicationCostState', () => {
     }
     const trend: OpenCostApplicationCostTrendResponse = {
       available: true,
+      currency: 'USD',
       range: '7d',
       windowTotalCost: 2,
       dataPoints: [
@@ -89,6 +93,7 @@ describe('getApplicationCostState', () => {
   it('treats all tracked workloads scaled to zero as valid zero state', () => {
     const current: OpenCostApplicationCostResponse = {
       available: true,
+      currency: 'USD',
       totals: {
         hourlyCost: 0,
         cpuCost: 0,
@@ -168,6 +173,7 @@ describe('getApplicationCostState', () => {
   it('surfaces app workload access and existence failures', () => {
     const current: OpenCostApplicationCostResponse = {
       available: false,
+      currency: 'USD',
       reason: 'access_denied',
       totals: {
         hourlyCost: 0,

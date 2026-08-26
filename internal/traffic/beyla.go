@@ -126,6 +126,16 @@ func (s *BeylaSource) Connect(ctx context.Context, contextName string) (*portfor
 	return info, nil
 }
 
+// ConnectionInfo implements ConnectionReporter. Beyla's data path is the
+// shared Prometheus client, so its status is the only honest answer here.
+func (s *BeylaSource) ConnectionInfo() *portforward.ConnectionInfo {
+	client := promclient.GetClient()
+	if client == nil {
+		return &portforward.ConnectionInfo{Connected: false}
+	}
+	return connectionInfoFromPromStatus(client.GetStatus())
+}
+
 func (s *BeylaSource) Close() error { return nil }
 
 func (s *BeylaSource) Detect(ctx context.Context) (*DetectionResult, error) {

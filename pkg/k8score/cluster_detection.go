@@ -10,7 +10,7 @@ import (
 )
 
 // DetectClusterPlatform detects the Kubernetes platform/provider by inspecting nodes.
-// Returns one of: gke, gke-autopilot, eks, aks, minikube, kind, docker-desktop, openshift, rancher, generic, unknown.
+// Returns one of: rke2, gke, gke-autopilot, eks, aks, minikube, kind, docker-desktop, openshift, rancher, generic, unknown.
 func DetectClusterPlatform(ctx context.Context, client kubernetes.Interface) (string, error) {
 	if client == nil {
 		return "unknown", nil
@@ -23,32 +23,41 @@ func DetectClusterPlatform(ctx context.Context, client kubernetes.Interface) (st
 
 	node := nodeList.Items[0]
 
-	platform := DetectByProviderID(node)
+	platform := DetectNodePlatform(node)
 	if platform != "unknown" {
 		if platform == "gke" {
 			if isAutopilot, _ := detectAutopilot(ctx, client); isAutopilot {
 				return "gke-autopilot", nil
 			}
 		}
-		return platform, nil
-	}
-
-	platform = DetectByLabels(node)
-	if platform != "unknown" {
-		if platform == "gke" {
-			if isAutopilot, _ := detectAutopilot(ctx, client); isAutopilot {
-				return "gke-autopilot", nil
-			}
-		}
-		return platform, nil
-	}
-
-	platform = DetectByNodeName(node)
-	if platform != "unknown" {
 		return platform, nil
 	}
 
 	return "generic", nil
+}
+
+// DetectNodePlatform classifies a sampled node. Distribution markers take
+// precedence over infrastructure labels because a Rancher-managed RKE2 node is
+// still operationally an RKE2 cluster.
+func DetectNodePlatform(node corev1.Node) string {
+	if platform := DetectPlatformFromVersion(node.Status.NodeInfo.KubeletVersion); platform != "unknown" {
+		return platform
+	}
+	if platform := DetectByProviderID(node); platform != "unknown" {
+		return platform
+	}
+	if platform := DetectByLabels(node); platform != "unknown" {
+		return platform
+	}
+	return DetectByNodeName(node)
+}
+
+// DetectPlatformFromVersion classifies distribution markers embedded in Kubernetes versions.
+func DetectPlatformFromVersion(gitVersion string) string {
+	if strings.Contains(gitVersion, "+rke2r") {
+		return "rke2"
+	}
+	return "unknown"
 }
 
 // DetectByProviderID detects the platform from a node's ProviderID field.
@@ -61,6 +70,8 @@ func DetectByProviderID(node corev1.Node) string {
 		return "eks"
 	case strings.HasPrefix(providerID, "azure://"):
 		return "aks"
+	case strings.HasPrefix(providerID, "kind://"):
+		return "kind"
 	default:
 		return "unknown"
 	}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { AlertCircle, DollarSign, HelpCircle, Loader2, TrendingUp } from 'lucide-react'
+import { AlertCircle, Coins, HelpCircle, Loader2, TrendingUp } from 'lucide-react'
 import {
   useOpenCostWorkload,
   useOpenCostWorkloadTrend,
@@ -12,6 +12,7 @@ import {
 import { Tooltip } from '../ui/Tooltip'
 import { CostTimeRangeSelector, StackedAreaChart } from './CostTrendChart'
 import {
+  DEFAULT_COST_CURRENCY,
   formatCostPerHour,
   formatHistoricalSpend,
   formatProjectedDailyRate,
@@ -110,10 +111,13 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
   const windowTotal = trend?.available ? (trend.windowTotalCost ?? 0) : 0
   const cpuCost = current?.cpuCost ?? 0
   const memoryCost = current?.memoryCost ?? 0
+  const currentCurrency = currentQuery.data?.currency ?? trend?.currency ?? DEFAULT_COST_CURRENCY
+  const trendCurrency = trend?.currency ?? currentQuery.data?.currency ?? DEFAULT_COST_CURRENCY
   const windowSpendValue = formatHistoricalSpend(
     points.length,
     windowTotal,
     trendLoading || state === 'partial_missing_history',
+    trendCurrency,
   )
 
   return (
@@ -127,10 +131,11 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
                 <div className="text-sm font-semibold text-theme-text-primary">
                   Historical compute cost
                 </div>
-                <MetricInfoTooltip content="Dollars are based on OpenCost CPU and memory allocation over time, not raw utilization. OpenCost allocation uses the greater of requested or observed resources." />
+                <MetricInfoTooltip content="Values are based on OpenCost CPU and memory allocation over time, not raw utilization. OpenCost allocation uses the greater of requested or observed resources." />
               </div>
               <div className="text-xs text-theme-text-tertiary">
-                OpenCost CPU and memory allocation rate ($/hr) attributed by workload ownership
+                OpenCost CPU and memory allocation rate ({trendCurrency}/hr) attributed by workload
+                ownership
               </div>
             </div>
           </div>
@@ -148,10 +153,10 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
             />
             <MetricBlock
               label="Projected monthly"
-              value={hasCurrent ? formatProjectedMonthlyCost(hourly) : '—'}
+              value={hasCurrent ? formatProjectedMonthlyCost(hourly, currentCurrency) : '—'}
               subvalue={
                 hasCurrent
-                  ? `${formatCostPerHour(hourly)} current rate`
+                  ? `${formatCostPerHour(hourly, currentCurrency)} current rate`
                   : 'Current allocation unavailable'
               }
             />
@@ -163,7 +168,10 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
                 Loading historical cost…
               </div>
             ) : hasTrend ? (
-              <StackedAreaChart series={[{ namespace: 'Allocation rate', dataPoints: points }]} />
+              <StackedAreaChart
+                series={[{ namespace: 'Allocation rate', dataPoints: points }]}
+                currency={trendCurrency}
+              />
             ) : (
               <div className="flex h-[240px] items-center justify-center rounded-md border border-dashed border-theme-border bg-theme-base/60 text-sm text-theme-text-tertiary">
                 No historical workload owner cost points for this range.
@@ -195,16 +203,17 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
         <MetricTile label="Replicas" value={hasCurrent ? String(current?.replicas ?? 0) : '—'} />
         <MetricTile
           label="Projected daily"
-          value={hasCurrent ? formatProjectedDailyRate(hourly) : '—'}
+          value={hasCurrent ? formatProjectedDailyRate(hourly, currentCurrency) : '—'}
           subvalue={
             hasCurrent
-              ? `${formatCostPerHour(hourly)} current hourly rate`
+              ? `${formatCostPerHour(hourly, currentCurrency)} current hourly rate`
               : 'Current allocation unavailable'
           }
         />
       </div>
 
       <CurrentAllocationUse
+        currency={currentCurrency}
         dataAvailable={hasCurrent}
         cpuCost={cpuCost}
         memoryCost={memoryCost}
@@ -216,9 +225,12 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
       />
 
       <div className="text-xs text-theme-text-tertiary">
-        Powered by OpenCost via Prometheus. Historical spend uses the selected range; projected
-        monthly values multiply the current hourly allocation. Storage/PVC attribution remains at
-        namespace and cluster level.
+        Powered by OpenCost via Prometheus.{' '}
+        {currentCurrency !== DEFAULT_COST_CURRENCY && (
+          <>Labeled {currentCurrency}; no conversion. </>
+        )}
+        Historical spend uses the selected range; projected monthly values multiply the current
+        hourly allocation. Storage/PVC attribution remains at namespace and cluster level.
       </div>
     </div>
   )
@@ -313,7 +325,7 @@ function WorkloadCostUnavailable({ state }: { state: CostUnavailableReason | 'lo
   return (
     <div className="flex h-full min-h-[320px] items-center justify-center">
       <div className="flex max-w-md flex-col items-center gap-3 text-center text-theme-text-secondary">
-        <DollarSign className="h-8 w-8 text-theme-text-tertiary/50" />
+        <Coins className="h-8 w-8 text-theme-text-tertiary/50" />
         <div className="text-sm">{message}</div>
       </div>
     </div>

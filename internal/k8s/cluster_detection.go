@@ -46,7 +46,7 @@ func InvalidateServerVersionCache() {
 type ClusterInfo struct {
 	Context            string `json:"context"`  // kubeconfig context name
 	Cluster            string `json:"cluster"`  // cluster name from kubeconfig
-	Platform           string `json:"platform"` // gke, gke-autopilot, eks, aks, minikube, kind, docker-desktop, generic
+	Platform           string `json:"platform"` // rke2, gke, gke-autopilot, eks, aks, minikube, kind, docker-desktop, openshift, rancher, generic
 	KubernetesVersion  string `json:"kubernetesVersion"`
 	NodeCount          int    `json:"nodeCount"`
 	PodCount           int    `json:"podCount"`
@@ -122,42 +122,24 @@ func GetClusterPlatform(ctx context.Context) (string, error) {
 			return detectPlatformFallback(ctx)
 		}
 		if len(nodeList.Items) == 0 {
-			return "unknown", nil
+			return detectPlatformFallback(ctx)
 		}
 		nodes = nodeList.Items
 	}
 
 	if len(nodes) == 0 {
-		return "unknown", nil
+		return detectPlatformFallback(ctx)
 	}
 
 	node := nodes[0]
 
-	// Primary detection: Provider ID
-	platform := detectByProviderID(node)
+	platform := k8score.DetectNodePlatform(node)
 	if platform != "unknown" {
 		if platform == "gke" {
 			if isAutopilot, _ := IsGKEAutopilot(ctx); isAutopilot {
 				return "gke-autopilot", nil
 			}
 		}
-		return platform, nil
-	}
-
-	// Secondary detection: Platform-specific labels
-	platform = detectByLabels(node)
-	if platform != "unknown" {
-		if platform == "gke" {
-			if isAutopilot, _ := IsGKEAutopilot(ctx); isAutopilot {
-				return "gke-autopilot", nil
-			}
-		}
-		return platform, nil
-	}
-
-	// Tertiary detection: Node name patterns
-	platform = detectByNodeName(node)
-	if platform != "unknown" {
 		return platform, nil
 	}
 
@@ -191,7 +173,7 @@ func IsGKEAutopilot(ctx context.Context) (bool, error) {
 		if val, exists := node.Labels["cloud.google.com/gke-autopilot"]; exists && val == "true" {
 			return true, nil
 		}
-		if !isNodeGKE(node) {
+		if !k8score.IsNodeGKE(node) {
 			return false, nil
 		}
 	}
@@ -240,16 +222,13 @@ func checkAutopilotViaAnnotations(ctx context.Context) (bool, bool) {
 	return false, len(pods) > 0
 }
 
-// Pure helpers delegate to pkg/k8score for reuse without singletons.
-func detectByProviderID(node corev1.Node) string { return k8score.DetectByProviderID(node) }
-func detectByLabels(node corev1.Node) string     { return k8score.DetectByLabels(node) }
-func detectByNodeName(node corev1.Node) string   { return k8score.DetectByNodeName(node) }
-func isNodeGKE(node corev1.Node) bool            { return k8score.IsNodeGKE(node) }
-
 func detectPlatformFallback(ctx context.Context) (string, error) {
 	isAutopilot, found := checkAutopilotViaAnnotations(ctx)
 	if found && isAutopilot {
 		return "gke-autopilot", nil
+	}
+	if platform := k8score.DetectPlatformFromVersion(GetServerVersion()); platform != "unknown" {
+		return platform, nil
 	}
 	return "unknown", nil
 }

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { AlertTriangle, DollarSign, ExternalLink, Gauge, Loader2, RefreshCw } from 'lucide-react'
+import { AlertTriangle, Coins, ExternalLink, Gauge, Loader2, RefreshCw } from 'lucide-react'
 import {
   Collapse,
   CollapseChevron,
@@ -194,7 +194,7 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
     <div className="flex-1 min-h-0 overflow-y-auto">
       <div className="mx-auto flex w-full max-w-[1920px] flex-col gap-4 px-6 py-6">
         <PageHeader
-          icon={DollarSign}
+          icon={Coins}
           title="Cost Insights"
           description="Understand current allocation and find CPU and memory requests worth tuning."
         />

@@ -45,6 +45,7 @@ func (s *Server) handleOpenCostWorkload(w http.ResponseWriter, r *http.Request) 
 	if client == nil {
 		resp.Available = false
 		resp.Reason = pkgopencost.ReasonNoPrometheus
+		resp.Currency = s.resolvedOpenCostCurrency()
 		s.writeJSON(w, resp)
 		return
 	}
@@ -52,12 +53,15 @@ func (s *Server) handleOpenCostWorkload(w http.ResponseWriter, r *http.Request) 
 		log.Print("[opencost] EnsureConnected failed for workload cost")
 		resp.Available = false
 		resp.Reason = internalopencost.ConnectionFailureReason(err)
+		resp.Currency = s.resolvedOpenCostCurrency()
 		s.writeJSON(w, resp)
 		return
 	}
 
 	workloads := pkgopencost.ComputeWorkloadsFromProm(r.Context(), client.Prom(), namespace, internalopencost.BuildPodOwnerLookup(namespace))
-	s.writeJSON(w, focusOpenCostWorkload(workloads, kind, namespace, name, desiredReplicas))
+	result := focusOpenCostWorkload(workloads, kind, namespace, name, desiredReplicas)
+	result.Currency = s.resolvedOpenCostCurrency()
+	s.writeJSON(w, result)
 }
 
 func (s *Server) handleOpenCostWorkloadTrend(w http.ResponseWriter, r *http.Request) {
@@ -84,6 +88,7 @@ func (s *Server) handleOpenCostWorkloadTrend(w http.ResponseWriter, r *http.Requ
 	if client == nil {
 		resp.Available = false
 		resp.Reason = pkgopencost.ReasonNoPrometheus
+		resp.Currency = s.resolvedOpenCostCurrency()
 		s.writeJSON(w, resp)
 		return
 	}
@@ -91,16 +96,26 @@ func (s *Server) handleOpenCostWorkloadTrend(w http.ResponseWriter, r *http.Requ
 		log.Print("[opencost] EnsureConnected failed for workload trend")
 		resp.Available = false
 		resp.Reason = internalopencost.ConnectionFailureReason(err)
+		resp.Currency = s.resolvedOpenCostCurrency()
 		s.writeJSON(w, resp)
 		return
 	}
 
-	s.writeJSON(w, pkgopencost.ComputeWorkloadCostTrendFromProm(r.Context(), client.Prom(), pkgopencost.WorkloadTrendOptions{
+	result := pkgopencost.ComputeWorkloadCostTrendFromProm(r.Context(), client.Prom(), pkgopencost.WorkloadTrendOptions{
 		Range:     r.URL.Query().Get("range"),
 		Namespace: namespace,
 		Kind:      kind,
 		Name:      name,
-	}))
+	})
+	result.Currency = s.resolvedOpenCostCurrency()
+	s.writeJSON(w, result)
+}
+
+func (s *Server) resolvedOpenCostCurrency() string {
+	if s.openCostCurrency == nil {
+		return pkgopencost.DefaultCurrency
+	}
+	return s.openCostCurrency.Resolve()
 }
 
 func (s *Server) parseOpenCostWorkloadRequest(w http.ResponseWriter, r *http.Request) (kind, namespace, name string, ok bool) {

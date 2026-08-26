@@ -1,6 +1,6 @@
 # Configuration
 
-This document covers Radar's cluster connection behavior. For CLI flags and basic usage, see the [README](../README.md#usage).
+This document covers Radar's cluster connection behavior. For commands and flags, see the [CLI reference](https://radarhq.io/docs/configuration/cli).
 
 ## HTTP Listener
 
@@ -46,6 +46,7 @@ Persistent defaults for CLI flags. CLI flags always override these values. Manag
   "timelineMaxSize": "0",
   "historyLimit": 10000,
   "prometheusUrl": "",
+  "opencostCurrency": "",
   "prometheusHeaders": {},
   "mcp": true,
   "debugImage": ""
@@ -68,6 +69,7 @@ All fields are optional — omitted fields use built-in defaults.
 | `timelineMaxSize` | Max SQLite DB + WAL size before pruning oldest events (`0` disables) |
 | `historyLimit` | Max timeline events to retain |
 | `prometheusUrl` | Manual Prometheus/VictoriaMetrics URL — skips auto-discovery. Useful when Prometheus is not in the same cluster or uses a non-standard service name. |
+| `opencostCurrency` | Optional ISO 4217 override for values produced by OpenCost or Kubecost. Empty reads `currencyCode` from the pricing ConfigMap referenced by an active OpenCost/Kubecost workload, or literal `DISPLAY_CURRENCY` from an active Kubecost Deployment or StatefulSet, when Radar auto-discovers cluster Prometheus; otherwise it falls back to `USD`. Radar labels values but does not convert them. Equivalent CLI: `--opencost-currency`; an explicit CLI value remains authoritative while Radar runs and after restart. |
 | `prometheusHeaders` | HTTP headers sent with every Prometheus request. Required for auth-protected backends — e.g. `{"X-Scope-OrgID": "my-org"}`. Equivalent CLI: `--prometheus-header Key=Value` (repeatable). Stored in plain text in `config.json` — protect the file accordingly. |
 | `argoCdUrl` | Manual argocd-server URL for the Argo CD API integration — skips auto-discovery. |
 | `argoCdToken` | Argo CD API token (get-only account recommended). Stored in plain text — the file is written `0600`; the token is redacted from `GET /api/config`. |
@@ -189,6 +191,10 @@ Radar supports switching between Kubernetes contexts at runtime through the UI. 
 
 When running in-cluster (using the pod's service account), context switching is disabled.
 
+### Expired credentials
+
+If an active context's credentials expire or are rejected, Radar disconnects cluster-backed work and retries automatically. After you re-authenticate, exec-based credentials are re-probed and static credentials are reloaded from kubeconfig on disk, so Radar can reconnect without a restart. Retries start after 30 seconds and back off to 5 minutes; a credential plugin that stops responding is retried less frequently.
+
 ## Namespace Picker
 
 The header has a namespace picker on the right. Pick a single namespace to focus the view, or **All namespaces** to see everything you have access to. Cluster-scoped resources (Nodes, Namespaces, PVs, StorageClasses) appear regardless of the pick if your RBAC permits them — they have no namespace to filter on. Namespace-restricted users without their own cluster-scoped RBAC won't see cluster-scoped sections at all.
@@ -254,6 +260,6 @@ above, which happen either way.
 
 ## Related Documentation
 
-- [README](../README.md#usage) — CLI flags and basic usage
+- [CLI reference](https://radarhq.io/docs/configuration/cli) — Commands and operator-facing flags
 - [In-Cluster Deployment](in-cluster.md) — Deploy Radar inside your cluster with Helm
 - [Authentication & Authorization](authentication.md) — Proxy and OIDC auth for shared deployments

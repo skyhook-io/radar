@@ -1220,6 +1220,18 @@ func ValidateTarget(currentVersion, targetVersion string) error {
 	return err
 }
 
+// EffectiveTarget returns the normalized minor the scan will evaluate for this
+// target: the explicit target reduced to "major.minor", or the next minor
+// above current when the target is empty. Anything keyed on the target (the
+// scan memo) must use this so "", "v1.34", and "1.34" share one entry.
+func EffectiveTarget(currentVersion, targetVersion string) (string, error) {
+	_, target, err := validateUpgradeVersions(currentVersion, targetVersion)
+	if err != nil {
+		return "", err
+	}
+	return minorString(target), nil
+}
+
 func validateUpgradeVersions(currentVersion, targetVersion string) (*utilversion.Version, *utilversion.Version, error) {
 	current, err := parseMinor(currentVersion)
 	if err != nil {

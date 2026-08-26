@@ -27,6 +27,7 @@ type Config struct {
 	TimelineMaxSize   string   `json:"timelineMaxSize,omitempty"`   // Byte size (e.g. "800Mi", "8Gi"); "0" disables
 	HistoryLimit      int      `json:"historyLimit,omitempty"`
 	PrometheusURL     string   `json:"prometheusUrl,omitempty"`
+	OpenCostCurrency  string   `json:"opencostCurrency,omitempty"`
 	// PrometheusHeaders are sent with every request to the Prometheus API.
 	// Required for auth-protected backends (Bearer tokens, X-Scope-OrgID, etc.).
 	// Stored in plain text in ~/.radar/config.json — protect the file accordingly.
@@ -140,6 +141,13 @@ func Load() Config {
 	if err := json.Unmarshal(data, &c); err != nil {
 		log.Printf("[config] Failed to parse %s: %v", path, err)
 		return Config{}
+	}
+	normalizedCurrency, err := NormalizeOpenCostCurrency(c.OpenCostCurrency)
+	if err != nil {
+		log.Printf("[config] Ignoring invalid opencostCurrency %q in %s: %v", c.OpenCostCurrency, path, err)
+		c.OpenCostCurrency = ""
+	} else {
+		c.OpenCostCurrency = normalizedCurrency
 	}
 	return c
 }

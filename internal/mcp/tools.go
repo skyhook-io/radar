@@ -32,6 +32,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	topology "github.com/skyhook-io/radar/pkg/topology"
+	"github.com/skyhook-io/radar/pkg/upgradereadiness"
 )
 
 // registerTools registers every MCP tool exposed at /mcp. The user-facing
@@ -288,6 +289,33 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"violations, not a failed check.",
 		Annotations: readOnly,
 	}, logToolCall("get_cluster_audit", handleGetAudit))
+
+	// --- Upgrade impact tool (read-only) ---
+
+	addTool(server, &mcp.Tool{
+		Name: "get_cluster_upgrade_readiness",
+		Description: "Analyze the impact of upgrading the cluster to a target Kubernetes minor " +
+			"version (default: the next minor above the current version). Runs the evidenced " +
+			"check catalog (reviewed through " + upgradereadiness.ReviewedThrough + "): version " +
+			"skew, removed/deprecated API usage (live manifests, Helm sources, API-server " +
+			"metrics), node runtime and cgroup evidence, drain feasibility, admission/conversion " +
+			"webhook readiness, and release-specific configuration checks. The verdict is NOT a " +
+			"readiness guarantee: checks with status `unknown` had incomplete evidence and may " +
+			"hide blockers — report them alongside the verdict, never as passed. `coverage` " +
+			"describes what could actually be inspected under the caller's RBAC; " +
+			"`coverage.state: no_access` means the scan saw nothing namespaced and no verdict is " +
+			"possible. Default output is one row per check; pass check=<id> for that check's " +
+			"findings with evidence and remediation (paged — continue with offset plus scan_id " +
+			"from the response's scanId). Findings reference exact resources and fields — fix them at the " +
+			"source of truth evidence.source names: live objects via patch_resource/apply_resource, " +
+			"Helm-sourced findings in the chart/values (patching the live object leaves the stored " +
+			"release manifest unfixed), GitOps-managed resources in Git. The first call runs a live " +
+			"cluster-wide evidence scan and can take several seconds on large clusters; results " +
+			"are briefly cached per caller (observedAt reports the scan time), so follow-up check " +
+			"expansions page over the same scan cheaply. Pass refresh=true only after changing " +
+			"something, to re-scan instead of reading the cache.",
+		Annotations: readOnly,
+	}, logToolCall("get_cluster_upgrade_readiness", handleGetUpgradeReadiness))
 
 	// --- Helm tools (read-only) ---
 

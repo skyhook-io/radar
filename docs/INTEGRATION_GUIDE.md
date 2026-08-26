@@ -207,7 +207,9 @@ Update these files to support new topology node kinds:
 |------|----------------|
 | `docs/integrations.md` | Full integration section (follow existing pattern) |
 | `README.md` | Add to "Supported Resources" table |
-| `CLAUDE.md` | Add to renderers list and topology builder section |
+| `CLAUDE.md` | Update only when the integration adds a new architectural pattern or invariant |
+
+`radar-docs` splits `docs/integrations.md` at `##` headings. Maintainers must add matching `INTEGRATION_META` metadata and a `docs.json` navigation entry in the internal docs repo before syncing a new heading. For a rename, update the metadata key but keep its slug unchanged to preserve the published URL. An unmatched heading fails the sync, and the orphan sweep removes the old generated page.
 
 ---
 

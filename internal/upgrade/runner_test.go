@@ -1,4 +1,4 @@
-package audit
+package upgrade
 
 import (
 	"testing"
@@ -14,14 +14,14 @@ import (
 
 func TestRunUpgradeReadinessWithoutCachePreservesCollectedEvidence(t *testing.T) {
 	apiServices := []*unstructured.Unstructured{}
-	results, err := RunUpgradeReadinessFromCache(nil, []string{}, UpgradeReadinessOptions{
+	results, err := RunFromCache(nil, []string{}, Options{
 		CurrentVersion:        "1.34",
 		TargetVersion:         "1.35",
 		DeprecatedAPIRequests: make([]upgradereadiness.DeprecatedAPIRequest, 0),
 		APIServices:           apiServices,
 	})
 	if err != nil {
-		t.Fatalf("RunUpgradeReadinessFromCache() error = %v", err)
+		t.Fatalf("RunFromCache() error = %v", err)
 	}
 	for _, check := range results.Checks {
 		if check.ID == "deprecated-api-requests" {
@@ -42,7 +42,7 @@ func TestRunUpgradeReadinessWithoutCachePreservesAPIServiceEvidence(t *testing.T
 		"spec":       map[string]any{"service": map[string]any{"namespace": "default", "name": "example"}},
 		"status":     map[string]any{"conditions": []any{map[string]any{"type": "Available", "status": "True"}}},
 	}}
-	results, err := RunUpgradeReadinessFromCache(nil, nil, UpgradeReadinessOptions{
+	results, err := RunFromCache(nil, nil, Options{
 		CurrentVersion: "1.35",
 		TargetVersion:  "1.36",
 		APIServices:    []*unstructured.Unstructured{apiService},
@@ -74,13 +74,13 @@ func TestRunUpgradeReadinessWithCachePreservesDirectSourceEvidence(t *testing.T)
 		}},
 	}}
 
-	results, err := RunUpgradeReadinessFromCache(k8s.GetResourceCache(), nil, UpgradeReadinessOptions{
+	results, err := RunFromCache(k8s.GetResourceCache(), nil, Options{
 		CurrentVersion: "1.24",
 		TargetVersion:  "1.25",
 		SourceObjects:  []metav1.Object{source},
 	})
 	if err != nil {
-		t.Fatalf("RunUpgradeReadinessFromCache() error = %v", err)
+		t.Fatalf("RunFromCache() error = %v", err)
 	}
 	for _, check := range results.Checks {
 		if check.ID == "manifest-api-compatibility" {
@@ -124,7 +124,7 @@ func TestFilterPersistentVolumesForNamespaces(t *testing.T) {
 }
 
 func TestRunUpgradeReadinessDoesNotTreatTargetedWebhookServicesAsFullServiceCoverage(t *testing.T) {
-	results, err := RunUpgradeReadinessFromCache(nil, nil, UpgradeReadinessOptions{
+	results, err := RunFromCache(nil, nil, Options{
 		CurrentVersion: "1.35",
 		TargetVersion:  "1.36",
 		WebhookServices: []*corev1.Service{{

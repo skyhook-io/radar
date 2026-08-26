@@ -12,6 +12,17 @@ import (
 	"github.com/skyhook-io/radar/internal/errorlog"
 )
 
+func TestHasManualURL(t *testing.T) {
+	client := &Client{}
+	if client.HasManualURL() {
+		t.Fatal("HasManualURL() = true without a configured URL")
+	}
+	client.manualURL = "https://prometheus.example.com"
+	if !client.HasManualURL() {
+		t.Fatal("HasManualURL() = false with a configured URL")
+	}
+}
+
 func TestProbe(t *testing.T) {
 	tests := []struct {
 		name           string

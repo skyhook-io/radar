@@ -1,8 +1,7 @@
-package server
+package upgrade
 
 import (
 	"context"
-	"net/http"
 	"slices"
 	"sort"
 
@@ -125,12 +124,12 @@ var (
 	endpointSliceGVR     = schema.GroupVersionResource{Group: "discovery.k8s.io", Version: "v1", Resource: "endpointslices"}
 )
 
-func (s *Server) collectUpgradeAPIServices(r *http.Request) []*unstructured.Unstructured {
-	client := k8s.DynamicClientFromContext(r.Context())
-	if client == nil || !s.canRead(r, apiServiceGVR.Group, apiServiceGVR.Resource, "", "list") {
+func collectUpgradeAPIServices(ctx context.Context, authz EvidenceAuthorizer) []*unstructured.Unstructured {
+	client := k8s.DynamicClientFromContext(ctx)
+	if client == nil || !authz.CanList(apiServiceGVR.Group, apiServiceGVR.Resource, "") {
 		return nil
 	}
-	return collectUpgradeAPIServicesWithClient(r.Context(), client)
+	return collectUpgradeAPIServicesWithClient(ctx, client)
 }
 
 func collectUpgradeAPIServicesWithClient(ctx context.Context, client dynamic.Interface) []*unstructured.Unstructured {
@@ -145,10 +144,10 @@ func collectUpgradeAPIServicesWithClient(ctx context.Context, client dynamic.Int
 	return apiServices
 }
 
-func (s *Server) collectUpgradeWebhookEvidence(r *http.Request) (configs []*unstructured.Unstructured, unavailableConfigKinds []string, crds []*unstructured.Unstructured, endpointSlices []*discoveryv1.EndpointSlice, services []*corev1.Service) {
+func collectUpgradeWebhookEvidence(ctx context.Context, authz EvidenceAuthorizer) (configs []*unstructured.Unstructured, unavailableConfigKinds []string, crds []*unstructured.Unstructured, endpointSlices []*discoveryv1.EndpointSlice, services []*corev1.Service) {
 	defer func() { sort.Strings(unavailableConfigKinds) }()
-	dynamicClient := k8s.DynamicClientFromContext(r.Context())
-	typedClient := k8s.ClientFromContext(r.Context())
+	dynamicClient := k8s.DynamicClientFromContext(ctx)
+	typedClient := k8s.ClientFromContext(ctx)
 	if dynamicClient == nil || typedClient == nil {
 		return nil, nil, nil, nil, nil
 	}
@@ -156,11 +155,11 @@ func (s *Server) collectUpgradeWebhookEvidence(r *http.Request) (configs []*unst
 	endpointSlices = []*discoveryv1.EndpointSlice{}
 	services = []*corev1.Service{}
 	for _, gvr := range []schema.GroupVersionResource{validatingWebhookGVR, mutatingWebhookGVR} {
-		if !s.canRead(r, gvr.Group, gvr.Resource, "", "list") {
+		if !authz.CanList(gvr.Group, gvr.Resource, "") {
 			unavailableConfigKinds = append(unavailableConfigKinds, gvr.Resource)
 			continue
 		}
-		list, err := dynamicClient.Resource(gvr).List(r.Context(), metav1.ListOptions{})
+		list, err := dynamicClient.Resource(gvr).List(ctx, metav1.ListOptions{})
 		if err != nil {
 			unavailableConfigKinds = append(unavailableConfigKinds, gvr.Resource)
 			continue
@@ -169,22 +168,22 @@ func (s *Server) collectUpgradeWebhookEvidence(r *http.Request) (configs []*unst
 			configs = append(configs, list.Items[i].DeepCopy())
 		}
 	}
-	if s.canRead(r, crdGVR.Group, crdGVR.Resource, "", "list") {
-		crds = collectUpgradeCRDs(r.Context(), dynamicClient)
+	if authz.CanList(crdGVR.Group, crdGVR.Resource, "") {
+		crds = collectUpgradeCRDs(ctx, dynamicClient)
 	}
 	referenced := webhookServiceNamespaces(configs, crds)
 	for _, namespace := range referenced {
-		if !s.canRead(r, "", "services", namespace, "list") || !s.canRead(r, endpointSliceGVR.Group, endpointSliceGVR.Resource, namespace, "list") {
+		if !authz.CanList("", "services", namespace) || !authz.CanList(endpointSliceGVR.Group, endpointSliceGVR.Resource, namespace) {
 			return configs, unavailableConfigKinds, crds, nil, nil
 		}
-		svcList, err := typedClient.CoreV1().Services(namespace).List(r.Context(), metav1.ListOptions{})
+		svcList, err := typedClient.CoreV1().Services(namespace).List(ctx, metav1.ListOptions{})
 		if err != nil {
 			return configs, unavailableConfigKinds, crds, nil, nil
 		}
 		for i := range svcList.Items {
 			services = append(services, svcList.Items[i].DeepCopy())
 		}
-		sliceList, err := dynamicClient.Resource(endpointSliceGVR).Namespace(namespace).List(r.Context(), metav1.ListOptions{})
+		sliceList, err := dynamicClient.Resource(endpointSliceGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
 		if err != nil {
 			return configs, unavailableConfigKinds, crds, nil, nil
 		}

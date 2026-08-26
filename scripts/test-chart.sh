@@ -59,6 +59,11 @@ assert_not_contains '^kind: RoleBinding$'           "no namespaced RoleBinding"
 assert_not_contains 'radar-self-upgrade'            "no self-upgrade Role/RoleBinding"
 assert_contains 'MY_POD_NAMESPACE'                  "identity ships for read-only self-description"
 assert_contains 'MY_DEPLOYMENT_NAME'                "identity ships for read-only self-description"
+assert_not_contains '--opencost-currency='          "default OpenCost currency flag omitted"
+echo
+
+render "cost.currency — explicit OpenCost currency label" --set cost.currency=GBP
+assert_contains '--opencost-currency=GBP'           "OpenCost currency flag rendered"
 echo
 
 render "prometheusHeadersFromEnv — flag and secret env stay separate" \

@@ -13,7 +13,7 @@ import {
   Boxes,
   ChevronDown,
   Clock3,
-  DollarSign,
+  Coins,
   ExternalLink,
   GitCommit,
   Layers,
@@ -988,7 +988,7 @@ function ApplicationViewTabs({
                 : "border-transparent text-theme-text-secondary hover:border-theme-border-light hover:text-theme-text-primary",
             )}
           >
-            <DollarSign className="h-4 w-4" />
+            <Coins className="h-4 w-4" />
             Cost
           </button>
         )}

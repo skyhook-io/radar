@@ -7,7 +7,7 @@ require (
 	github.com/cilium/cilium v1.20.0
 	github.com/coreos/go-oidc/v3 v3.20.0
 	github.com/creack/pty v1.1.24
-	github.com/go-chi/chi/v5 v5.3.1
+	github.com/go-chi/chi/v5 v5.3.2
 	github.com/go-chi/cors v1.2.2
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/google/cel-go v0.31.0
@@ -20,21 +20,22 @@ require (
 	github.com/prometheus/client_model v0.6.2
 	github.com/prometheus/common v0.70.1
 	github.com/skyhook-io/radar/pkg v0.0.0
-	github.com/wailsapp/wails/v2 v2.12.0
+	github.com/wailsapp/wails/v2 v2.15.0
 	golang.org/x/net v0.58.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sync v0.22.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/term v0.45.0
+	golang.org/x/text v0.41.0
 	google.golang.org/grpc v1.83.0
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
-	helm.sh/helm/v3 v3.21.3
-	k8s.io/api v0.36.3
-	k8s.io/apiextensions-apiserver v0.36.3
-	k8s.io/apimachinery v0.36.3
-	k8s.io/cli-runtime v0.36.3
-	k8s.io/client-go v0.36.3
-	k8s.io/component-helpers v0.36.3
+	helm.sh/helm/v3 v3.21.4
+	k8s.io/api v0.36.4
+	k8s.io/apiextensions-apiserver v0.36.4
+	k8s.io/apimachinery v0.36.4
+	k8s.io/cli-runtime v0.36.4
+	k8s.io/client-go v0.36.4
+	k8s.io/component-helpers v0.36.4
 	k8s.io/klog/v2 v2.140.0
 	modernc.org/sqlite v1.56.0
 	sigs.k8s.io/yaml v1.6.0
@@ -51,6 +52,7 @@ require (
 	github.com/Masterminds/goutils v1.1.1 // indirect
 	github.com/Masterminds/sprig/v3 v3.3.0 // indirect
 	github.com/Masterminds/squirrel v1.5.4 // indirect
+	github.com/ProtonMail/go-crypto v1.4.1 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -60,6 +62,7 @@ require (
 	github.com/chai2010/gettext-go v1.0.3 // indirect
 	github.com/clipperhouse/stringish v0.1.1 // indirect
 	github.com/clipperhouse/uax29/v2 v2.4.0 // indirect
+	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/cyphar/filepath-securejoin v0.7.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/docker/cli v29.6.2+incompatible // indirect
@@ -102,8 +105,8 @@ require (
 	github.com/jchv/go-winloader v0.0.0-20210711035445-715c2860da7e // indirect
 	github.com/jmoiron/sqlx v1.4.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/labstack/echo/v4 v4.13.3 // indirect
-	github.com/labstack/gommon v0.4.2 // indirect
+	github.com/labstack/echo/v4 v4.15.3 // indirect
+	github.com/labstack/gommon v0.5.0 // indirect
 	github.com/lann/builder v0.0.0-20180802200727-47ae307949d0 // indirect
 	github.com/lann/ps v0.0.0-20150810152359-62de8c46ede0 // indirect
 	github.com/leaanthony/go-ansi-parser v1.6.1 // indirect
@@ -157,7 +160,6 @@ require (
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/exp v0.0.0-20260611194520-c48552f49976 // indirect
-	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260622175928-b703f567277d // indirect
@@ -165,11 +167,11 @@ require (
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gotest.tools/v3 v3.5.2 // indirect
-	k8s.io/apiserver v0.36.3 // indirect
-	k8s.io/component-base v0.36.3 // indirect
+	k8s.io/apiserver v0.36.4 // indirect
+	k8s.io/component-base v0.36.4 // indirect
 	k8s.io/kube-openapi v0.0.0-20260501160325-927ab1f70cd6 // indirect
 	k8s.io/kubectl v0.36.3 // indirect
-	k8s.io/streaming v0.36.3 // indirect
+	k8s.io/streaming v0.36.4 // indirect
 	k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3 // indirect
 	modernc.org/libc v1.74.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

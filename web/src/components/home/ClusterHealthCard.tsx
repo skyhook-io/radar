@@ -90,6 +90,9 @@ function getPlatformInfo(platform: string): { name: string; icon: string | null 
   if (platformLower.includes('openshift')) {
     return { name: 'OpenShift', icon: null }
   }
+  if (platformLower.includes('rke2')) {
+    return { name: 'RKE2', icon: null }
+  }
   if (platformLower.includes('rancher')) {
     return { name: 'Rancher', icon: null }
   }

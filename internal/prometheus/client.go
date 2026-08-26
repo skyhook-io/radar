@@ -16,6 +16,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/skyhook-io/radar/internal/errorlog"
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/portforward"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
@@ -65,6 +66,15 @@ type Client struct {
 	k8sClient   kubernetes.Interface
 	k8sConfig   *rest.Config
 	contextName string
+
+	// inCluster records how Radar reaches the cluster, captured once at
+	// construction from the same detection the connection context reports as
+	// "in-cluster". In-cluster, discovery connects over the direct Service-address
+	// probe and does not fall back to a port-forward it cannot open (pods/
+	// portforward is normally denied); the port-forward fallback runs only when
+	// local. The direct probe pass itself runs in both modes — off-cluster it is
+	// bounded (see directProbeBudget) and also connects on routed networks.
+	inCluster bool
 
 	// Shared HTTP client used when constructing the underlying pkg/prom.Client.
 	httpClient *http.Client
@@ -132,6 +142,7 @@ func Initialize(client kubernetes.Interface, config *rest.Config, contextName st
 		k8sClient:     client,
 		k8sConfig:     config,
 		contextName:   contextName,
+		inCluster:     k8s.IsInCluster(),
 		httpClient:    &http.Client{Timeout: 10 * time.Second},
 		mcpHTTPClient: newMCPHTTPClient(),
 	}
@@ -263,6 +274,7 @@ func Reinitialize(client kubernetes.Interface, config *rest.Config, contextName 
 		k8sClient:     client,
 		k8sConfig:     config,
 		contextName:   contextName,
+		inCluster:     k8s.IsInCluster(),
 		manualURL:     manualURL,
 		headers:       headers,
 		httpClient:    &http.Client{Timeout: 10 * time.Second},
@@ -288,6 +300,12 @@ func (c *Client) GetStatus() prom.Status {
 		Service:     svc,
 		ContextName: c.contextName,
 	}
+}
+
+func (c *Client) HasManualURL() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.manualURL != ""
 }
 
 // EnsureConnected attempts to discover and connect to Prometheus if not
