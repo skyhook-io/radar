@@ -5199,9 +5199,16 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 			argoToken        string
 			argoInsecure     bool
 			argoTokenContext string
+			argoTokenBinding string
 		}{
-			c.PrometheusHeaders, c.PrometheusHeadersFromEnv, c.PrometheusURL,
-			c.ArgoCDURL, c.ArgoCDToken, c.ArgoCDInsecureTLS, c.ArgoCDTokenContext,
+			promHeaders:      c.PrometheusHeaders,
+			promHeadersEnv:   c.PrometheusHeadersFromEnv,
+			promURL:          c.PrometheusURL,
+			argoURL:          c.ArgoCDURL,
+			argoToken:        c.ArgoCDToken,
+			argoInsecure:     c.ArgoCDInsecureTLS,
+			argoTokenContext: c.ArgoCDTokenContext,
+			argoTokenBinding: c.ArgoCDTokenBinding,
 		}
 		*c = updated
 		c.PrometheusHeaders = preserved.promHeaders
@@ -5211,6 +5218,7 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		c.ArgoCDToken = preserved.argoToken
 		c.ArgoCDInsecureTLS = preserved.argoInsecure
 		c.ArgoCDTokenContext = preserved.argoTokenContext
+		c.ArgoCDTokenBinding = preserved.argoTokenBinding
 	})
 	if err != nil {
 		log.Printf("[config] Failed to save config: %v", err)

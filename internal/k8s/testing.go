@@ -284,6 +284,7 @@ func ResetTestState() {
 	dynamicClient = nil
 	activeClientGeneration = 0
 	kubeconfigMode = ""
+	contextBinding = ""
 	kubeconfigDirectoryFileCount = 0
 	kubeconfigEnvWasIgnored = false
 	kubeconfigEnvIgnoredReason = ""

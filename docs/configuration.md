@@ -171,6 +171,12 @@ filename order. A primary file's `current-context` wins when it declares one;
 otherwise Radar uses the first source in order that declares a current context.
 Leading `~/` paths are expanded, and references to the same underlying file are
 loaded once even when they use different absolute, relative, or symlink paths.
+Directory membership is scanned at startup. Changes inside a file that was
+already discovered, including added or removed contexts, are reflected while
+Radar is running; deleting that file also removes its contexts. A brand-new file
+added to a configured directory is discovered after Radar restarts. Directory
+entries must resolve to regular files: symlinks to regular kubeconfigs are
+accepted, while directories, sockets, pipes, and device files are ignored.
 
 An unusable additional directory does not prevent a valid primary file from
 loading. A configured primary source group that contains no usable contexts fails

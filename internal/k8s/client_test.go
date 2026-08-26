@@ -4,10 +4,30 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
+
+func TestSourceContextBinding(t *testing.T) {
+	got := sourceContextBinding("/configs/team-a.yaml", "prod")
+	if got == "" || got != sourceContextBinding("/configs/team-a.yaml", "prod") {
+		t.Fatalf("source binding is empty or unstable: %q", got)
+	}
+	if !strings.HasPrefix(got, "kcb1_") || strings.Contains(got, "team-a") || strings.Contains(got, "prod") {
+		t.Fatalf("source binding is not opaque: %q", got)
+	}
+	if got == sourceContextBinding("/configs/team-b.yaml", "prod") {
+		t.Fatal("different source files must not share a binding")
+	}
+	if got == sourceContextBinding("/configs/team-a.yaml", "staging") {
+		t.Fatal("different in-file contexts must not share a binding")
+	}
+	if sourceContextBinding("", "prod") != "" || sourceContextBinding("/configs/team-a.yaml", "") != "" {
+		t.Fatal("incomplete source identity must not produce a reusable binding")
+	}
+}
 
 // newExecAuthInfo builds an AuthInfo that uses an exec credential plugin
 // with the given command. A helper because clientcmdapi.AuthInfo has a lot

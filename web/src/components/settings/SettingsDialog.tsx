@@ -122,6 +122,9 @@ export function SettingsDialog({
   const [loadError, setLoadError] = useState<string | null>(null)
   const [section, setSection] = useState<SettingsSectionId>('overview')
   const [confirmingClose, setConfirmingClose] = useState(false)
+  const { data: argoSectionStatus, refetch: refetchArgoSectionStatus } = useArgoStatus(
+    open && section === 'argocd'
+  )
 
   // AI Diagnosis prefs are client-side (localStorage) and now SELF-SAVING: the
   // section has its own Save that commits the draft to DiagnoseContext, so it's
@@ -514,9 +517,14 @@ export function SettingsDialog({
                 envManaged={configData?.argoCdEnvManaged ?? false}
                 envError={configData?.argoCdEnvError}
                 cliSession={configData?.argoCdCliSession}
+                statusReason={
+                  argoSectionStatus?.configured && !argoSectionStatus.connected
+                    ? argoSectionStatus.reason
+                    : undefined
+                }
                 onChangeUrl={(v) => updateConfigField('argoCdUrl', v || undefined)}
                 onChangeInsecureTls={(v) => updateConfigField('argoCdInsecureTls', v || undefined)}
-                onApplied={({ url, insecureTls, tokenSet }) =>
+                onApplied={({ url, insecureTls, tokenSet }) => {
                   setConfigData((prev) =>
                     prev
                       ? {
@@ -526,7 +534,8 @@ export function SettingsDialog({
                         }
                       : prev
                   )
-                }
+                  void refetchArgoSectionStatus()
+                }}
               />
             </SectionPane>
 
@@ -872,7 +881,7 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
       // token, not a transient reconnect — "Not reachable" matches Prometheus and
       // doesn't imply it will recover on its own.
       value: argo?.connected ? 'Connected' : argo?.configured ? 'Not reachable' : 'Not connected',
-      detail: argo?.connected ? argo.address : undefined,
+      detail: argo?.connected ? argo.address : argo?.reason,
     },
     {
       id: 'advanced', icon: Zap, label: 'MCP',
@@ -1443,6 +1452,7 @@ function ArgoCDConfigField({
   envManaged,
   envError,
   cliSession,
+  statusReason,
   onChangeUrl,
   onChangeInsecureTls,
   onApplied,
@@ -1453,6 +1463,7 @@ function ArgoCDConfigField({
   envManaged?: boolean
   envError?: string
   cliSession?: { server: string; user: string; insecure?: boolean }
+  statusReason?: string
   onChangeUrl: (value: string) => void
   onChangeInsecureTls: (value: boolean) => void
   onApplied?: (v: { url: string; insecureTls: boolean; tokenSet: boolean }) => void
@@ -1466,6 +1477,7 @@ function ArgoCDConfigField({
       insecureTls={insecureTls}
       tokenSet={tokenSet}
       cliSession={cliSession}
+      statusReason={statusReason}
       onChangeUrl={onChangeUrl}
       onChangeInsecureTls={onChangeInsecureTls}
       onApplied={onApplied}
@@ -1558,6 +1570,7 @@ function ArgoCDEditableField({
   insecureTls,
   tokenSet,
   cliSession,
+  statusReason,
   onChangeUrl,
   onChangeInsecureTls,
   onApplied,
@@ -1566,6 +1579,7 @@ function ArgoCDEditableField({
   insecureTls: boolean
   tokenSet: boolean
   cliSession?: { server: string; user: string; insecure?: boolean }
+  statusReason?: string
   onChangeUrl: (value: string) => void
   onChangeInsecureTls: (value: boolean) => void
   onApplied?: (v: { url: string; insecureTls: boolean; tokenSet: boolean }) => void
@@ -1667,6 +1681,16 @@ function ArgoCDEditableField({
         Application pages — what Git declares vs what's actually running. Without it, Radar falls
         back to a lighter annotation-based drift that can miss fields.
       </p>
+
+      {statusReason && state.status !== 'connected' && (
+        <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/[0.07] p-3">
+          <p className="flex items-center gap-1.5 text-sm font-medium text-amber-700 dark:text-amber-400/90">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+            Argo CD token needs attention
+          </p>
+          <p className="mt-1 text-xs text-theme-text-secondary">{statusReason}</p>
+        </div>
+      )}
 
       <label className="block text-sm font-medium text-theme-text-primary mb-1">Server URL</label>
       <p className="text-xs text-theme-text-tertiary mb-1">

@@ -27,12 +27,15 @@ func (s *Server) handleArgoCDStatus(w http.ResponseWriter, r *http.Request) {
 		Configured bool   `json:"configured"`
 		Connected  bool   `json:"connected"`
 		Address    string `json:"address,omitempty"`
+		Reason     string `json:"reason,omitempty"`
 	}{
 		Configured: argocd.IsConfigured(),
 		Connected:  connected,
 	}
 	if connected {
 		resp.Address = argocd.Address()
+	} else if argocd.TokenBindingUpgradeRequired() {
+		resp.Reason = "Re-enter the Argo CD token in Settings to bind it to this kubeconfig source."
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
@@ -122,22 +125,27 @@ func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Capture the live token→context binding before the candidate SetConfig
+	// Capture the live token→source binding before the candidate SetConfig
 	// re-stamps it for a fresh token. If the probe fails we must restore THIS
 	// binding, not just the URL/token: a fresh-token SetConfig stamps
-	// tokenContext to the current cluster, and a plain re-point rollback would
+	// the binding to the current cluster, and a plain re-point rollback would
 	// leave that stamp on the restored (older) token — marking it valid for the
 	// wrong cluster and defeating the auto-discovery cross-cluster guard.
 	prevTokenContext := argocd.TokenContext()
+	prevTokenBinding := argocd.TokenBinding()
 	argocd.SetConfig(rawURL, token, body.ArgoCDInsecureTLS, suppliesNewToken)
 	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
 	defer cancel()
 	if err := argocd.Probe(ctx); err != nil {
-		argocd.RestoreConfig(prev.ArgoCDURL, prev.ArgoCDToken, prev.ArgoCDInsecureTLS, prevTokenContext)
+		argocd.RestoreConfig(prev.ArgoCDURL, prev.ArgoCDToken, prev.ArgoCDInsecureTLS, prevTokenContext, prevTokenBinding)
 		// The upstream error can embed the raw response body (proxy headers, a
 		// render error with Secret data). Log it server-side; return only the
 		// mapped guidance so nothing from Argo's body reaches the browser.
 		log.Printf("[argocd] Probe of candidate settings failed: %s", sanitizeForLog(argocd.RedactToken(err.Error())))
+		if errors.Is(err, argocd.ErrTokenBindingUpgrade) {
+			s.writeError(w, http.StatusBadRequest, "Re-enter the Argo CD token in Settings to bind it to this kubeconfig source.")
+			return
+		}
 		if errors.Is(err, argocd.ErrTokenInvalid) {
 			s.writeError(w, http.StatusBadRequest, "Argo CD rejected the token — check that it is valid and not expired.")
 			return
@@ -150,21 +158,23 @@ func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request)
 		c.ArgoCDURL = rawURL
 		c.ArgoCDToken = token
 		c.ArgoCDInsecureTLS = body.ArgoCDInsecureTLS
-		// Persist the token's context binding only when a new token was supplied
+		// Persist the token's source binding only when a new token was supplied
 		// (SetConfig just re-stamped it); a preserved token keeps the on-disk
 		// binding. An empty token has no binding. Without this the binding is
 		// lost on restart and an auto-discovery token can never reconnect.
 		if suppliesNewToken {
 			if token == "" {
 				c.ArgoCDTokenContext = ""
+				c.ArgoCDTokenBinding = ""
 			} else {
 				c.ArgoCDTokenContext = argocd.TokenContext()
+				c.ArgoCDTokenBinding = argocd.TokenBinding()
 			}
 		}
 	}); err != nil {
 		// The running client must agree with the on-disk config; roll it back —
-		// including the token's context binding (see prevTokenContext above).
-		argocd.RestoreConfig(prev.ArgoCDURL, prev.ArgoCDToken, prev.ArgoCDInsecureTLS, prevTokenContext)
+		// including the token's source binding captured above.
+		argocd.RestoreConfig(prev.ArgoCDURL, prev.ArgoCDToken, prev.ArgoCDInsecureTLS, prevTokenContext, prevTokenBinding)
 		log.Printf("[argocd] Failed to persist Argo CD config: %v", err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return

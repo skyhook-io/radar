@@ -172,6 +172,27 @@ func TestBuildContextRegistry_ContextNameCollision(t *testing.T) {
 	if len(entries) != 1 || !strings.Contains(entries[0].Message, "saved namespace and integration preferences") {
 		t.Fatalf("collision warnings = %+v", entries)
 	}
+	if strings.Contains(entries[0].Message, "my-ctx") {
+		t.Fatalf("shareable collision warning leaked context names: %q", entries[0].Message)
+	}
+}
+
+func TestRecordContextQualificationsDeduplicatesFiles(t *testing.T) {
+	errorlog.Reset()
+	t.Cleanup(errorlog.Reset)
+	recordContextQualifications([]string{"team-b.yaml", "team-b.yaml", "team-a.yaml"})
+
+	entries := errorlog.GetEntries()
+	if len(entries) != 1 {
+		t.Fatalf("collision warnings = %+v", entries)
+	}
+	message := entries[0].Message
+	if !strings.Contains(message, "3 context(s)") || !strings.Contains(message, "[team-a.yaml team-b.yaml]") {
+		t.Fatalf("collision warning = %q", message)
+	}
+	if strings.Count(message, "team-b.yaml") != 1 {
+		t.Fatalf("collision warning repeated a source filename: %q", message)
+	}
 }
 
 // Three-way collision: same context name across three files, all sharing the
@@ -517,6 +538,20 @@ func TestPickInitialContext_NoCurrentContextAnywhere(t *testing.T) {
 	}
 }
 
+func TestPickInitialContext_NoCurrentContextUsesAlphabeticalFallback(t *testing.T) {
+	dir := t.TempDir()
+	f1 := writeKubeconfig(t, dir, "first.yaml", "", []kubeEntry{
+		{ctxName: "zeta", userName: "u1", clusterName: "c1"},
+		{ctxName: "alpha", userName: "u2", clusterName: "c2"},
+	})
+
+	registry, fileConfigs := buildContextRegistry([]string{f1})
+	qName, _, ok := pickInitialContext([]string{f1}, registry, fileConfigs)
+	if !ok || qName != "alpha" {
+		t.Fatalf("fallback context = %q, found=%t; want alpha", qName, ok)
+	}
+}
+
 // Regression guard for the #519 class of bug. Simulates what SwitchContext does:
 // resolve the qualified name through the registry, then load the target with
 // ExplicitPath. Two files share user and cluster names but carry distinct
@@ -692,7 +727,7 @@ func TestRefreshContextRegistry_DropsRemovedFile(t *testing.T) {
 		t.Fatalf("remove fixture: %v", err)
 	}
 
-	newRegistry, newFileConfigs, newMtimes, changed := refreshContextRegistry(registry, fileConfigs, mtimes)
+	newRegistry, newFileConfigs, newMtimes, changed := refreshContextRegistry(registry, fileConfigs, mtimes, []string{f1, f2})
 	if !changed {
 		t.Errorf("expected refresh to report a change after deleting %s", filepath.Base(f2))
 	}
@@ -741,7 +776,7 @@ func TestRefreshContextRegistry_PreservesQualifiedSurvivorIdentity(t *testing.T)
 		t.Fatalf("remove primary fixture: %v", err)
 	}
 
-	newRegistry, _, _, changed := refreshContextRegistry(registry, fileConfigs, mtimes)
+	newRegistry, _, _, changed := refreshContextRegistry(registry, fileConfigs, mtimes, []string{primary, secondary})
 	if !changed {
 		t.Fatal("expected refresh to report the removed primary source")
 	}
@@ -773,7 +808,7 @@ func TestRefreshContextRegistry_DropsContextRemovedFromFile(t *testing.T) {
 		{ctxName: "ctx-keep", userName: "u", clusterName: "c1"},
 	})
 
-	newRegistry, _, _, changed := refreshContextRegistry(registry, fileConfigs, mtimes)
+	newRegistry, _, _, changed := refreshContextRegistry(registry, fileConfigs, mtimes, []string{f1})
 	if !changed {
 		t.Errorf("expected refresh to report a change after rewriting %s", filepath.Base(f1))
 	}
@@ -803,7 +838,7 @@ func TestRefreshContextRegistry_PicksUpNewContextInSameFile(t *testing.T) {
 		{ctxName: "ctx-new", userName: "u", clusterName: "c2"},
 	})
 
-	newRegistry, _, _, changed := refreshContextRegistry(registry, fileConfigs, mtimes)
+	newRegistry, _, _, changed := refreshContextRegistry(registry, fileConfigs, mtimes, []string{f1})
 	if !changed {
 		t.Errorf("expected refresh to report a change after add")
 	}
@@ -815,6 +850,33 @@ func TestRefreshContextRegistry_PicksUpNewContextInSameFile(t *testing.T) {
 	}
 }
 
+func TestRefreshContextRegistry_QualificationIsDeterministic(t *testing.T) {
+	dir := t.TempDir()
+	first := writeKubeconfig(t, dir, "a.yaml", "old-a", []kubeEntry{
+		{ctxName: "old-a", userName: "u1", clusterName: "c1"},
+	})
+	second := writeKubeconfig(t, dir, "b.yaml", "old-b", []kubeEntry{
+		{ctxName: "old-b", userName: "u2", clusterName: "c2"},
+	})
+	registry, fileConfigs := buildContextRegistry([]string{first, second})
+	rewriteKubeconfig(t, first, []kubeEntry{{ctxName: "prod", userName: "u1", clusterName: "c1"}})
+	rewriteKubeconfig(t, second, []kubeEntry{{ctxName: "prod", userName: "u2", clusterName: "c2"}})
+
+	for i := 0; i < 20; i++ {
+		mtimes := map[string]time.Time{first: {}, second: {}}
+		refreshed, _, _, changed := refreshContextRegistry(registry, fileConfigs, mtimes, []string{second, first})
+		if !changed {
+			t.Fatalf("iteration %d: expected changed registry", i)
+		}
+		if got := refreshed["prod"].SourceFile; got != second {
+			t.Fatalf("iteration %d: bare prod source = %q, want %q", i, got, second)
+		}
+		if got := refreshed["prod (a)"].SourceFile; got != first {
+			t.Fatalf("iteration %d: qualified prod source = %q, want %q", i, got, first)
+		}
+	}
+}
+
 func TestRefreshContextRegistry_NoOpWhenNothingChanged(t *testing.T) {
 	dir := t.TempDir()
 	f1 := writeKubeconfig(t, dir, "stable.yaml", "ctx-a", []kubeEntry{
@@ -823,7 +885,7 @@ func TestRefreshContextRegistry_NoOpWhenNothingChanged(t *testing.T) {
 	registry, fileConfigs, mtimes := loadFixture(t, []string{f1})
 	before := keysOf(registry)
 
-	newRegistry, _, _, changed := refreshContextRegistry(registry, fileConfigs, mtimes)
+	newRegistry, _, _, changed := refreshContextRegistry(registry, fileConfigs, mtimes, []string{f1})
 	if changed {
 		t.Errorf("expected no change on stable disk state, got changed=true")
 	}
@@ -852,7 +914,7 @@ func TestRefreshContextRegistry_NilMtimeMapNoOp(t *testing.T) {
 		}
 	}()
 	var nilMtimes map[string]time.Time
-	newRegistry, _, _, changed := refreshContextRegistry(registry, fileConfigs, nilMtimes)
+	newRegistry, _, _, changed := refreshContextRegistry(registry, fileConfigs, nilMtimes, []string{f1})
 	if changed {
 		t.Errorf("refresh on nil mtimes should report no-op (changed=false)")
 	}
@@ -893,7 +955,7 @@ func TestRefreshContextRegistry_SeedsByFileFromMtimesEvenWhenRegistryEmptyForFil
 		{ctxName: "ctx-a-fresh", userName: "u", clusterName: "c1"},
 		{ctxName: "ctx-b-fresh", userName: "u", clusterName: "c1"},
 	})
-	newRegistry, _, _, _ := refreshContextRegistry(registry, fileConfigs, mtimes)
+	newRegistry, _, _, _ := refreshContextRegistry(registry, fileConfigs, mtimes, []string{f1})
 	if _, ok := newRegistry["ctx-a-fresh"]; !ok {
 		t.Errorf("refresh should have picked up ctx-a-fresh; got %v", newRegistry)
 	}
@@ -918,7 +980,7 @@ func TestRefreshContextRegistry_BadParseDoesNotDropExisting(t *testing.T) {
 		t.Fatalf("rewrite: %v", err)
 	}
 
-	newRegistry, _, _, _ := refreshContextRegistry(registry, fileConfigs, mtimes)
+	newRegistry, _, _, _ := refreshContextRegistry(registry, fileConfigs, mtimes, []string{f1})
 	if _, ok := newRegistry["ctx-a"]; !ok {
 		t.Errorf("ctx-a was dropped on parse failure; expected to keep it: %v", keysOf(newRegistry))
 	}

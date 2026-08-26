@@ -47,6 +47,7 @@ func setupIsolatedLoad(paths []string) (
 		}
 	}
 	contextName = qName
+	contextBinding = sourceContextBinding(entry.SourceFile, entry.InFileName)
 	return &clientcmd.ClientConfigLoadingRules{ExplicitPath: entry.SourceFile},
 		&clientcmd.ConfigOverrides{CurrentContext: entry.InFileName},
 		nil
@@ -94,7 +95,7 @@ func buildContextRegistry(paths []string) (map[string]contextEntry, map[string]*
 			continue
 		}
 		fileConfigs[path] = cfg
-		for name := range cfg.Contexts {
+		for _, name := range sortedContextNames(cfg) {
 			qName := qualifyContextName(registry, name, path)
 			if qualification := logContextQualification(name, qName, path); qualification != "" {
 				qualifications = append(qualifications, qualification)
@@ -161,25 +162,46 @@ func logContextQualification(name, qualifiedName, path string) string {
 	}
 	log.Printf("[k8s-init] context %q from %q renamed to %q after a name collision; saved namespace and integration preferences for %q will not apply",
 		name, filepath.Base(path), qualifiedName, name)
-	return fmt.Sprintf("%q from %q as %q", name, filepath.Base(path), qualifiedName)
+	return filepath.Base(path)
 }
 
-func recordContextQualifications(qualifications []string) {
-	if len(qualifications) == 0 {
+func recordContextQualifications(renamedContextFiles []string) {
+	if len(renamedContextFiles) == 0 {
 		return
 	}
+	fileSet := make(map[string]struct{}, len(renamedContextFiles))
+	for _, file := range renamedContextFiles {
+		fileSet[file] = struct{}{}
+	}
+	files := make([]string, 0, len(fileSet))
+	for file := range fileSet {
+		files = append(files, file)
+	}
+	sort.Strings(files)
 	const maxListed = 10
-	listed := qualifications
+	listed := files
 	if len(listed) > maxListed {
 		listed = listed[:maxListed]
 	}
 	suffix := ""
-	if len(qualifications) > maxListed {
-		suffix = fmt.Sprintf(" (+%d more)", len(qualifications)-maxListed)
+	if len(files) > maxListed {
+		suffix = fmt.Sprintf(" (+%d more)", len(files)-maxListed)
 	}
 	errorlog.Record("k8s-init", "warning",
-		"%d context(s) renamed after name collisions; saved namespace and integration preferences will not apply to the renamed contexts: %v%s",
-		len(qualifications), listed, suffix)
+		"%d context(s) renamed after name collisions in kubeconfig files %v%s; saved namespace and integration preferences will not apply to the renamed contexts",
+		len(renamedContextFiles), listed, suffix)
+}
+
+func sortedContextNames(cfg *clientcmdapi.Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	names := make([]string, 0, len(cfg.Contexts))
+	for name := range cfg.Contexts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // pickInitialContext chooses which context Radar should start in when
@@ -216,9 +238,10 @@ func pickInitialContext(
 		if !ok {
 			continue
 		}
-		for name := range cfg.Contexts {
+		for _, name := range sortedContextNames(cfg) {
 			for qName, entry := range registry {
 				if entry.SourceFile == path && entry.InFileName == name {
+					log.Printf("[k8s-init] no kubeconfig declares a current context; selected %q from %q", qName, filepath.Base(path))
 					return qName, entry, true
 				}
 			}
@@ -258,6 +281,7 @@ func refreshContextRegistry(
 	registry map[string]contextEntry,
 	fileConfigs map[string]*clientcmdapi.Config,
 	fileMtimes map[string]time.Time,
+	sourceOrder []string,
 ) (
 	map[string]contextEntry,
 	map[string]*clientcmdapi.Config,
@@ -322,7 +346,26 @@ func refreshContextRegistry(
 		newFileConfigs = nfc
 		newFileMtimes = nm
 	}
-	for path, qNames := range byFile {
+	paths := make([]string, 0, len(byFile))
+	seenPaths := make(map[string]struct{}, len(byFile))
+	for _, path := range sourceOrder {
+		if _, ok := byFile[path]; !ok {
+			continue
+		}
+		paths = append(paths, path)
+		seenPaths[path] = struct{}{}
+	}
+	var remaining []string
+	for path := range byFile {
+		if _, seen := seenPaths[path]; !seen {
+			remaining = append(remaining, path)
+		}
+	}
+	sort.Strings(remaining)
+	paths = append(paths, remaining...)
+	for _, path := range paths {
+		qNames := byFile[path]
+		sort.Strings(qNames)
 		info, statErr := os.Stat(path)
 		if statErr != nil {
 			// File is gone (or unreadable). Drop every registry
@@ -374,7 +417,7 @@ func refreshContextRegistry(
 		// Add any contexts that are new in this file. We deliberately
 		// re-use qualifyContextName to keep the cross-file collision
 		// behaviour consistent with the initial build.
-		for name := range cfg.Contexts {
+		for _, name := range sortedContextNames(cfg) {
 			already := false
 			for _, qName := range qNames {
 				if e, ok := newRegistry[qName]; ok && e.SourceFile == path && e.InFileName == name {

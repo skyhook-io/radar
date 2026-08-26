@@ -1869,7 +1869,7 @@ function DiagnoseTabContent({
   // this is a safety confirm, not an authz check.
   const [pendingRunPath, setPendingRunPath] = useState<string | null>(null)
   const requestInClusterRun = useCallback((path: string) => {
-    if (inClusterConsentGiven(inClusterCap?.cluster)) runInClusterTest(path)
+    if (inClusterConsentGiven(inClusterCap?.clusterKey)) runInClusterTest(path)
     else setPendingRunPath(path)
   }, [inClusterCap, runInClusterTest])
   const confirmInClusterRun = useCallback(() => {
@@ -1991,6 +1991,7 @@ function DiagnoseTabContent({
       <InClusterConsentDialog
         open={pendingRunPath !== null}
         cluster={inClusterCap?.cluster}
+        clusterKey={inClusterCap?.clusterKey}
         namespace={inClusterCap?.namespace ?? namespace}
         requests={consentRequests}
         untestedCount={consentUntestedCount}

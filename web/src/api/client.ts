@@ -3104,6 +3104,7 @@ export interface ArgoStatus {
   configured: boolean;
   connected: boolean;
   address?: string;
+  reason?: string;
 }
 
 export function useArgoStatus(enabled = true) {

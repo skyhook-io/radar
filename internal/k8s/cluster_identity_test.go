@@ -47,6 +47,39 @@ func TestClusterUIDIdentity(t *testing.T) {
 	}
 }
 
+func TestClusterSafetyBindingFailsClosedWithoutInClusterIdentity(t *testing.T) {
+	clientMu.Lock()
+	oldBinding := contextBinding
+	oldMode := kubeconfigMode
+	oldName := contextName
+	oldClient := k8sClient
+	contextBinding = ""
+	kubeconfigMode = "in-cluster"
+	contextName = "in-cluster"
+	k8sClient = nil
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextBinding = oldBinding
+		kubeconfigMode = oldMode
+		contextName = oldName
+		k8sClient = oldClient
+		clientMu.Unlock()
+	})
+
+	if got := ClusterSafetyBinding(context.Background()); got != "" {
+		t.Fatalf("binding without a readable cluster UID = %q, want empty", got)
+	}
+
+	clientMu.Lock()
+	contextBinding = "kcb1_source"
+	kubeconfigMode = "single"
+	clientMu.Unlock()
+	if got := ClusterSafetyBinding(context.Background()); got != "kcb1_source" {
+		t.Fatalf("kubeconfig source binding = %q, want kcb1_source", got)
+	}
+}
+
 // countingDeniedClient returns a fake client whose kube-system Get always fails,
 // plus a counter of how many namespace GETs actually hit the (fake) apiserver.
 func countingDeniedClient() (*fake.Clientset, *int) {

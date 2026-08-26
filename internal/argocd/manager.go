@@ -72,6 +72,11 @@ type cacheEntry struct {
 	expires time.Time
 }
 
+// In-cluster mode cannot switch clusters, so a process-local sentinel is a
+// complete boundary. Requiring a cluster UID here would add a startup API read
+// that can fail under restricted RBAC and permanently strand env-provided tokens.
+const inClusterTokenBinding = "kcb1_incluster"
+
 // Manager holds the Argo CD connection state. Use NewManager (or the
 // package-level functions backed by the default instance).
 type Manager struct {
@@ -129,20 +134,28 @@ type Manager struct {
 	// re-hit argocd-server on every 2s insights poll. Reset on reconnect/switch.
 	repoRetryAfter time.Time
 
-	// tokenContext is the kubeconfig context the stored token is bound to when
-	// the URL is empty (auto-discovery). Discovery resolves whatever
+	// tokenContext is the readable kubeconfig context recorded alongside the stored
+	// token. A non-empty value without tokenBinding identifies a legacy config that
+	// must be confirmed again before its token can be used for auto-discovery.
+	// tokenBinding is the authorization boundary for auto-discovery: it identifies
+	// the source entry independently of mutable switcher labels. It does not detect
+	// edits that repoint the same context entry to a different cluster.
+	//
+	// When the URL is empty, auto-discovery resolves whatever
 	// argocd-server exists in the CURRENT cluster — and the in-cluster Service
 	// DNS is identical across clusters — so a token must never be sent to a
 	// discovered server in a DIFFERENT cluster than it was configured for.
 	// Empty means "not bound" (explicit-URL mode, where the origin guard
 	// governs instead).
 	tokenContext string
+	tokenBinding string
 
-	k8sClient   func() kubernetes.Interface
-	k8sConfig   func() *rest.Config
-	inCluster   func() bool
-	contextName func() string
-	loadConfig  func() config.Config
+	k8sClient      func() kubernetes.Interface
+	k8sConfig      func() *rest.Config
+	inCluster      func() bool
+	contextName    func() string
+	contextBinding func(context.Context) string
+	loadConfig     func() config.Config
 }
 
 // NewManager builds a Manager wired to the live internal/k8s connection.
@@ -158,10 +171,11 @@ func NewManager() *Manager {
 			}
 			return nil
 		},
-		k8sConfig:   k8s.GetConfig,
-		inCluster:   k8s.IsInCluster,
-		contextName: k8s.GetContextName,
-		loadConfig:  config.Load,
+		k8sConfig:      k8s.GetConfig,
+		inCluster:      k8s.IsInCluster,
+		contextName:    k8s.GetContextName,
+		contextBinding: k8s.ClusterSafetyBinding,
+		loadConfig:     config.Load,
 	}
 }
 
@@ -173,9 +187,9 @@ func SetConfig(url, token string, insecureTLS bool, tokenIsFresh bool) {
 }
 
 // RestoreConfig rolls the default manager back to a captured state, including
-// the token's context binding.
-func RestoreConfig(url, token string, insecureTLS bool, tokenContext string) {
-	defaultManager.RestoreConfig(url, token, insecureTLS, tokenContext)
+// the token's source binding.
+func RestoreConfig(url, token string, insecureTLS bool, tokenContext, tokenBinding string) {
+	defaultManager.RestoreConfig(url, token, insecureTLS, tokenContext, tokenBinding)
 }
 
 // Env var names for declarative (headless / in-cluster / Cloud) provisioning.
@@ -353,8 +367,15 @@ func ValidateServerURL(raw string) error { return validateEnvArgoURL(raw) }
 // IsConfigured reports whether the default manager has connection settings.
 func IsConfigured() bool { return defaultManager.IsConfigured() }
 
-// TokenContext returns the context the current token is bound to.
+// TokenContext returns the readable context recorded with the current token.
 func TokenContext() string { return defaultManager.TokenContext() }
+
+// TokenBinding returns the source identity the current token is bound to.
+func TokenBinding() string { return defaultManager.TokenBinding() }
+
+// TokenBindingUpgradeRequired reports whether an auto-discovery token has only
+// a name-based stamp and must be explicitly re-confirmed before use.
+func TokenBindingUpgradeRequired() bool { return defaultManager.TokenBindingUpgradeRequired() }
 
 // Reset clears the default manager's connection state (used on context switch).
 func Reset() { defaultManager.Reset() }
@@ -402,9 +423,18 @@ func CLISession() (*argoapi.CLISession, error) {
 // token is for this cluster" action — and false when it's the stored token
 // being carried forward. That distinction is load-bearing: re-saving other
 // settings after a context switch must NOT rebind a preserved token to the new
-// context (which would defeat the auto-discovery context guard), so tokenContext
-// is only re-stamped for a fresh token.
+// source (which would defeat the auto-discovery guard), so the binding is only
+// re-stamped for a fresh token.
 func (m *Manager) SetConfig(url, token string, insecureTLS bool, tokenIsFresh bool) {
+	normalizedURL := strings.TrimRight(strings.TrimSpace(url), "/")
+	tokenContext := ""
+	tokenBinding := ""
+	if tokenIsFresh && normalizedURL == "" && token != "" {
+		tokenBinding = m.contextBindingForConfig()
+		if tokenBinding != "" {
+			tokenContext = m.currentContextName()
+		}
+	}
 	m.mu.Lock()
 	m.seeded = true
 	// An explicit interactive config supersedes environment provisioning. In
@@ -413,30 +443,41 @@ func (m *Manager) SetConfig(url, token string, insecureTLS bool, tokenIsFresh bo
 	// invariant inside the manager rather than resting solely on that HTTP gate.
 	m.envManaged = false
 	m.envError = ""
-	m.manualURL = strings.TrimRight(strings.TrimSpace(url), "/")
+	m.manualURL = normalizedURL
 	m.token = token
 	m.insecureTLS = insecureTLS
 	if tokenIsFresh {
-		m.tokenContext = m.currentContextName()
+		m.tokenContext = tokenContext
+		m.tokenBinding = tokenBinding
 	}
 	m.bumpAndReset()
 }
 
 // SeedFromEnv provisions the manager from an environment-provided token. Like a
-// fresh SetConfig it binds the token to the current context (so the
+// fresh SetConfig it binds the token to the current source (so the
 // auto-discovery cross-cluster guard accepts it for the cluster it's deployed
 // in), and additionally marks the integration environment-managed: the apply
 // handler refuses UI changes and the token is never written to disk. Runs at
 // startup before the first Get, so the lazy config seed won't override it.
 func (m *Manager) SeedFromEnv(url, token string, insecureTLS bool) {
+	normalizedURL := strings.TrimRight(strings.TrimSpace(url), "/")
+	tokenContext := ""
+	tokenBinding := ""
+	if normalizedURL == "" && token != "" {
+		tokenBinding = m.contextBindingForConfig()
+		if tokenBinding != "" {
+			tokenContext = m.currentContextName()
+		}
+	}
 	m.mu.Lock()
 	m.seeded = true
 	m.envManaged = true
 	m.envError = ""
-	m.manualURL = strings.TrimRight(strings.TrimSpace(url), "/")
+	m.manualURL = normalizedURL
 	m.token = token
 	m.insecureTLS = insecureTLS
-	m.tokenContext = m.currentContextName()
+	m.tokenContext = tokenContext
+	m.tokenBinding = tokenBinding
 	m.bumpAndReset()
 }
 
@@ -457,6 +498,7 @@ func (m *Manager) SeedFromEnvFailed(reason string) {
 	m.token = ""
 	m.insecureTLS = false
 	m.tokenContext = ""
+	m.tokenBinding = ""
 	m.bumpAndReset()
 }
 
@@ -493,13 +535,13 @@ func (m *Manager) EnvManagedError() string {
 }
 
 // RestoreConfig rolls the manager back to a previously-captured state, INCLUDING
-// the token's context binding. It exists for the connect-rollback path: the
-// candidate SetConfig may have re-stamped tokenContext for a fresh token, and a
+// the token's source binding. It exists for the connect-rollback path: the
+// candidate SetConfig may have re-stamped the binding for a fresh token, and a
 // plain SetConfig(fresh=false) rollback leaves that stamp in place — which would
 // mark the restored (older) token as valid for the wrong cluster and defeat the
-// auto-discovery cross-cluster guard. Restoring tokenContext explicitly keeps the
+// auto-discovery cross-cluster guard. Restoring both stamps explicitly keeps the
 // guard intact.
-func (m *Manager) RestoreConfig(url, token string, insecureTLS bool, tokenContext string) {
+func (m *Manager) RestoreConfig(url, token string, insecureTLS bool, tokenContext, tokenBinding string) {
 	m.mu.Lock()
 	m.seeded = true
 	// A rollback restores a previously-captured state faithfully; it must not
@@ -511,6 +553,7 @@ func (m *Manager) RestoreConfig(url, token string, insecureTLS bool, tokenContex
 	m.token = token
 	m.insecureTLS = insecureTLS
 	m.tokenContext = tokenContext
+	m.tokenBinding = tokenBinding
 	m.bumpAndReset()
 }
 
@@ -531,6 +574,22 @@ func (m *Manager) currentContextName() string {
 		return ""
 	}
 	return m.contextName()
+}
+
+func (m *Manager) currentContextBinding(ctx context.Context) string {
+	if m.inCluster != nil && m.inCluster() {
+		return inClusterTokenBinding
+	}
+	if m.contextBinding == nil {
+		return ""
+	}
+	return m.contextBinding(ctx)
+}
+
+func (m *Manager) contextBindingForConfig() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return m.currentContextBinding(ctx)
 }
 
 // bumpAndReset invalidates in-flight probes (generation++), drops the live
@@ -640,19 +699,15 @@ func (m *Manager) Probe(ctx context.Context) error {
 	m.probeMu.Lock()
 	defer m.probeMu.Unlock()
 
+	bindingBefore := m.currentContextBinding(ctx)
 	m.mu.Lock()
 	m.ensureSeededLocked()
-	// Bracket the client/config capture with two context reads. The kubeconfig
-	// context lives in the k8s package, not under m.mu, so a switch could race
-	// this capture; if the name changed across the bracket, the captured
-	// client/config may be inconsistent with tokenContext — fail closed.
-	ctxBefore := m.currentContextName()
 	snap := m.snapshotLocked()
-	ctxAfter := m.currentContextName()
 	m.mu.Unlock()
+	bindingAfter := m.currentContextBinding(ctx)
 
 	// Auto-discovery (empty URL) resolves whatever argocd-server the CURRENT
-	// cluster exposes. A token bound to a different context must NOT be sent to
+	// cluster exposes. A token bound to a different source must NOT be sent to
 	// it — the in-cluster Service DNS is identical across clusters, so the URL
 	// can't distinguish them. When the configured token isn't bound to the
 	// captured context (or a switch raced the capture), refuse to connect at all
@@ -660,9 +715,17 @@ func (m *Manager) Probe(ctx context.Context) error {
 	// would light the deep-diff capability while every managed-resource call
 	// 403s. Stay disconnected until the user re-confirms the token for this
 	// cluster. Explicit-URL tokens are governed by the origin guard instead.
-	contextStable := ctxBefore == ctxAfter
-	if snap.manualURL == "" && snap.token != "" && (!contextStable || snap.tokenContext != ctxAfter) {
-		return errTokenContextMismatch
+	if snap.manualURL == "" && snap.token != "" {
+		if snap.tokenBinding == "" {
+			if snap.tokenContext != "" {
+				return ErrTokenBindingUpgrade
+			}
+			return errTokenContextMismatch
+		}
+		bindingStable := bindingBefore != "" && bindingBefore == bindingAfter
+		if !bindingStable || snap.tokenBinding != bindingAfter {
+			return errTokenContextMismatch
+		}
 	}
 
 	// All network I/O below uses `snap` — a single coherent (url-intent, token,
@@ -716,6 +779,7 @@ type probeSnapshot struct {
 	token        string
 	insecureTLS  bool
 	tokenContext string
+	tokenBinding string
 	// k8sClient + k8sConfig are captured at snapshot time so BOTH candidate
 	// discovery and the port-forward dial target the SAME cluster the token was
 	// captured against. If a context switch swaps the live client/config
@@ -741,6 +805,7 @@ func (m *Manager) snapshotLocked() probeSnapshot {
 		token:        m.token,
 		insecureTLS:  m.insecureTLS,
 		tokenContext: m.tokenContext,
+		tokenBinding: m.tokenBinding,
 		k8sClient:    k8sc,
 		k8sConfig:    cfg,
 	}
@@ -764,6 +829,11 @@ var errStaleProbe = errors.New("argocd: probe superseded by a config change")
 // this is effectively "the token isn't valid for this cluster", so it surfaces
 // as a re-authenticate prompt instead of a misleading 502/"unreachable".
 var errTokenContextMismatch = fmt.Errorf("argocd: token not valid for the current cluster context: %w", ErrTokenInvalid)
+
+// ErrTokenBindingUpgrade is returned when a persisted auto-discovery token has
+// only a mutable context-name stamp. The token is never sent until the operator
+// re-enters it, which records the source-scoped binding.
+var ErrTokenBindingUpgrade = fmt.Errorf("argocd: re-confirm this token for this kubeconfig source: %w", ErrTokenInvalid)
 
 // connectedClient returns a live client, probing on demand. Get() is called
 // first (so its background-reprobe nudge still fires); on a miss it probes
@@ -1052,16 +1122,33 @@ func (m *Manager) ensureSeededLocked() {
 	m.token = c.ArgoCDToken
 	m.insecureTLS = c.ArgoCDInsecureTLS
 	m.tokenContext = c.ArgoCDTokenContext
+	m.tokenBinding = c.ArgoCDTokenBinding
 }
 
-// TokenContext returns the kubeconfig context the current token is bound to
-// (empty for explicit-URL tokens). The server persists this so the binding
-// survives restarts.
+// TokenContext returns the readable kubeconfig context recorded with the token.
+// It is persisted as a diagnostic and legacy-config marker; authorization uses
+// TokenBinding.
 func (m *Manager) TokenContext() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.ensureSeededLocked()
 	return m.tokenContext
+}
+
+// TokenBinding returns the source identity the current token is bound to.
+func (m *Manager) TokenBinding() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ensureSeededLocked()
+	return m.tokenBinding
+}
+
+// TokenBindingUpgradeRequired reports whether source-bound confirmation is missing.
+func (m *Manager) TokenBindingUpgradeRequired() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ensureSeededLocked()
+	return m.manualURL == "" && m.token != "" && m.tokenBinding == "" && m.tokenContext != ""
 }
 
 // redactToken masks the bearer token if it appears verbatim in a string

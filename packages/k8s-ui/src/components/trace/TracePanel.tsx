@@ -87,6 +87,7 @@ export interface InClusterCapability {
   allowed: boolean
   reason?: string
   cluster?: string
+  clusterKey?: string
   namespace: string
   /** Per-call ceiling on probe Pods. Routes past it never run - ordering is
    *  deterministic, so re-running starts from the same first maxProbes. */
