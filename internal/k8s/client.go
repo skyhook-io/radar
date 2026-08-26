@@ -1729,23 +1729,24 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 			// calls can use fresh credentials immediately. Leave the cached mtime
 			// untouched so the registry refresh still reconciles added, removed,
 			// or renamed contexts from the rewritten file.
-			if parsed, perr := clientcmd.LoadFromFile(existingPath); perr == nil {
+			parsed, parseErr := clientcmd.LoadFromFile(existingPath)
+			qName := findQualifiedNameForPath(contextRegistry, existingPath, contextName)
+			if qName != "" {
+				if parseErr != nil {
+					log.Printf("[capi] Failed to refresh cached kubeconfig for context %q: %v", contextName, parseErr)
+					return qName, existingPath, false, nil
+				}
 				newFileConfigs := make(map[string]*clientcmdapi.Config, len(perFileConfigs))
 				for path, cfg := range perFileConfigs {
 					newFileConfigs[path] = cfg
 				}
 				newFileConfigs[existingPath] = parsed
 				perFileConfigs = newFileConfigs
-			}
-			qName := findQualifiedNameForPath(contextRegistry, existingPath, contextName)
-			if qName == "" {
-				// The file may have disappeared and been pruned by a registry
-				// refresh. Replacing it below must first discard this recreated
-				// source or the next refresh would expose both files.
-			} else {
 				log.Printf("[capi] Updated existing kubeconfig for context %q: %q", contextName, existingPath)
 				return qName, existingPath, false, nil
 			}
+		} else {
+			log.Printf("[capi] Failed to update existing kubeconfig for context %q: %v", contextName, err)
 		}
 		if err := os.Remove(existingPath); err != nil && !os.IsNotExist(err) {
 			return "", "", false, fmt.Errorf("failed to replace stale CAPI kubeconfig: %w", err)
@@ -1946,6 +1947,7 @@ func dropKubeconfigSourceLocked(path string) {
 	}
 	if contextRegistry != nil {
 		contextRegistry = newRegistry
+		totalContextCount = len(newRegistry)
 	}
 
 	newFileConfigs := make(map[string]*clientcmdapi.Config, len(perFileConfigs))
@@ -1975,7 +1977,6 @@ func dropKubeconfigSourceLocked(path string) {
 		}
 	}
 	kubeconfigPaths = paths
-	totalContextCount = len(contextRegistry)
 }
 
 // findQualifiedNameForPath returns the qualified registry name of the given

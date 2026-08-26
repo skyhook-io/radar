@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
 func TestDiscoverKubeconfigsSkipsFIFOAndKeepsRegularSymlink(t *testing.T) {
@@ -55,6 +57,138 @@ func TestDiscoverKubeconfigsSkipsFIFOAndKeepsRegularSymlink(t *testing.T) {
 	}
 	if found[directorySymlink] {
 		t.Fatalf("symlink to a directory must be skipped, got %v", discovered)
+	}
+}
+
+func TestBuildContextRegistrySkipsFIFOWithoutBlocking(t *testing.T) {
+	fifo := filepath.Join(t.TempDir(), "registry.pipe")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+
+	done := make(chan struct{}, 1)
+	go func() {
+		registry, configs := buildContextRegistry([]string{fifo})
+		if len(registry) != 0 || len(configs) != 0 {
+			t.Errorf("FIFO registry result = (%v, %v)", registry, configs)
+		}
+		done <- struct{}{}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("registry build blocked while opening a FIFO")
+	}
+}
+
+func TestRefreshContextRegistryKeepsExistingWhenSourceBecomesFIFO(t *testing.T) {
+	dir := t.TempDir()
+	path := writeKubeconfig(t, dir, "watched.yaml", "watched", []kubeEntry{
+		{ctxName: "watched", userName: "user", clusterName: "cluster"},
+	})
+	registry, configs, mtimes := loadFixture(t, []string{path})
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove kubeconfig: %v", err)
+	}
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+
+	type refreshResult struct {
+		registry map[string]contextEntry
+		configs  map[string]*clientcmdapi.Config
+		mtimes   map[string]time.Time
+		changed  bool
+	}
+	done := make(chan refreshResult, 1)
+	go func() {
+		refreshedRegistry, refreshedConfigs, refreshedMtimes, changed := refreshContextRegistry(
+			registry, configs, mtimes, []string{path},
+		)
+		done <- refreshResult{refreshedRegistry, refreshedConfigs, refreshedMtimes, changed}
+	}()
+
+	select {
+	case result := <-done:
+		if result.changed {
+			t.Fatal("non-regular replacement changed the registry")
+		}
+		if _, ok := result.registry["watched"]; !ok {
+			t.Fatal("non-regular replacement dropped the existing context")
+		}
+		if result.configs[path] != configs[path] || !result.mtimes[path].Equal(mtimes[path]) {
+			t.Fatal("non-regular replacement changed cached source state")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("registry refresh blocked while opening a FIFO")
+	}
+}
+
+func TestMergeAndSwitchContextErrorDoesNotPublishStaleReplacement(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("directory permissions do not prevent removal as root")
+	}
+	dir := t.TempDir()
+	primary := writeKubeconfig(t, dir, "primary.yaml", "primary", []kubeEntry{
+		{ctxName: "primary", userName: "u1", clusterName: "c1"},
+	})
+	existing := writeKubeconfig(t, dir, "workload.yaml", "workload", []kubeEntry{
+		{ctxName: "workload", userName: "u2", clusterName: "c2"},
+	})
+	incoming := writeKubeconfig(t, t.TempDir(), "incoming.yaml", "workload", []kubeEntry{
+		{ctxName: "workload", userName: "u2", clusterName: "c2"},
+		{ctxName: "workload-canary", userName: "u3", clusterName: "c3"},
+	})
+	data, err := os.ReadFile(incoming)
+	if err != nil {
+		t.Fatalf("read incoming kubeconfig: %v", err)
+	}
+	registry, configs := buildContextRegistry([]string{primary, existing})
+	delete(registry, "workload")
+
+	clientMu.Lock()
+	previousRegistry := contextRegistry
+	previousConfigs := perFileConfigs
+	previousMtimes := perFileMtimes
+	previousPaths := kubeconfigPaths
+	previousCAPI := capiKubeconfigs
+	previousCount := totalContextCount
+	contextRegistry = registry
+	perFileConfigs = configs
+	perFileMtimes = map[string]time.Time{}
+	kubeconfigPaths = []string{primary}
+	capiKubeconfigs = map[string]string{"workload": existing}
+	totalContextCount = len(registry)
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextRegistry = previousRegistry
+		perFileConfigs = previousConfigs
+		perFileMtimes = previousMtimes
+		kubeconfigPaths = previousPaths
+		capiKubeconfigs = previousCAPI
+		totalContextCount = previousCount
+		clientMu.Unlock()
+	})
+
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatalf("lock directory: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	if _, _, _, err := MergeAndSwitchContext(data, "workload"); err == nil {
+		t.Fatal("stale source replacement unexpectedly succeeded")
+	}
+
+	clientMu.RLock()
+	_, publishedCanary := perFileConfigs[existing].Contexts["workload-canary"]
+	registeredPath := capiKubeconfigs["workload"]
+	clientMu.RUnlock()
+	if publishedCanary {
+		t.Fatal("failed replacement published the rewritten config")
+	}
+	if registeredPath != existing {
+		t.Fatalf("failed replacement changed CAPI registration to %q", registeredPath)
 	}
 }
 

@@ -1590,6 +1590,33 @@ func TestMergeAndSwitchContext_ReusedPathPublishesFreshMaps(t *testing.T) {
 	}
 }
 
+func TestDropKubeconfigSourceKeepsSingleFileContextCount(t *testing.T) {
+	clientMu.Lock()
+	previousRegistry := contextRegistry
+	previousPaths := kubeconfigPaths
+	previousCount := totalContextCount
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextRegistry = previousRegistry
+		kubeconfigPaths = previousPaths
+		totalContextCount = previousCount
+		clientMu.Unlock()
+	})
+
+	clientMu.Lock()
+	contextRegistry = nil
+	kubeconfigPaths = []string{"single"}
+	totalContextCount = 1
+	dropKubeconfigSourceLocked("single")
+	got := totalContextCount
+	clientMu.Unlock()
+
+	if got != 1 {
+		t.Fatalf("single-file context count = %d, want 1", got)
+	}
+}
+
 func TestMergeAndSwitchContext_ReplacesPrunedCAPIPathWithoutDuplicate(t *testing.T) {
 	dir := t.TempDir()
 	primary := writeKubeconfig(t, dir, "primary.yaml", "primary", []kubeEntry{

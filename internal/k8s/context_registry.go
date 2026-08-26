@@ -84,6 +84,13 @@ func buildContextRegistry(paths []string) (map[string]contextEntry, map[string]*
 	fileConfigs := make(map[string]*clientcmdapi.Config)
 	var qualifications []string
 	for _, path := range paths {
+		if err := validateKubeconfigFileType(path); err != nil {
+			log.Printf("[k8s-init] skipping kubeconfig %q during registry build: %v", filepath.Base(path), err)
+			errorlog.Record("k8s-init", "warning",
+				"kubeconfig %q failed to load during registry build: %s",
+				filepath.Base(path), scrubPathError(err))
+			continue
+		}
 		cfg, err := clientcmd.LoadFromFile(path)
 		if err != nil {
 			// Non-fatal: skip and continue. discoverKubeconfigs has
@@ -395,6 +402,14 @@ func refreshContextRegistry(
 			continue
 		}
 		mtime := info.ModTime()
+		if !info.Mode().IsRegular() {
+			log.Printf("[k8s-init] refresh: skipping kubeconfig %q: %v",
+				filepath.Base(path), errKubeconfigNotRegular)
+			errorlog.Record("k8s-init", "warning",
+				"refresh: kubeconfig %q failed to load: %s",
+				filepath.Base(path), errKubeconfigNotRegular)
+			continue
+		}
 		if cached, ok := fileMtimes[path]; ok && cached.Equal(mtime) {
 			// Unchanged — keep the cached parse + entries.
 			continue
