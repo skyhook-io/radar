@@ -86,6 +86,9 @@ export function SelectMenu({
         setOpen(false)
         triggerRef.current?.focus()
       }}
+      onBlur={(event) => {
+        if (open && !rootRef.current?.contains(event.relatedTarget as Node | null)) setOpen(false)
+      }}
     >
       <button
         ref={triggerRef}
@@ -112,16 +115,18 @@ export function SelectMenu({
       </button>
       {open && (
         <div
-          onBlur={(event) => {
-            if (!rootRef.current?.contains(event.relatedTarget as Node | null)) setOpen(false)
-          }}
           className={clsx(
             'absolute top-full z-50 mt-1 min-w-full overflow-hidden rounded-md border border-theme-border bg-theme-surface shadow-theme-lg',
             searchPlaceholder ? 'left-0 right-0' : 'right-0'
           )}
         >
           {searchPlaceholder && (
-            <div className="flex items-center gap-2 border-b border-theme-border px-2.5 py-2">
+            <div
+              className="flex items-center gap-2 border-b border-theme-border px-2.5 py-2"
+              onMouseDown={(event) => {
+                if (event.target !== searchInputRef.current) event.preventDefault()
+              }}
+            >
               <Search className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />
               <input
                 ref={searchInputRef}
