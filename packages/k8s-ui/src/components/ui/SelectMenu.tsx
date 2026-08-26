@@ -30,6 +30,7 @@ export function SelectMenu({
   const triggerRef = useRef<HTMLButtonElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const pointerDownInsideRef = useRef(false)
   const selected = options.find((option) => option.value === value) ?? options[0]
   const filteredOptions = useMemo(() => {
     const normalized = query.trim().toLowerCase()
@@ -79,6 +80,12 @@ export function SelectMenu({
     <div
       ref={rootRef}
       className={clsx('relative', className)}
+      onMouseDownCapture={() => {
+        pointerDownInsideRef.current = true
+        requestAnimationFrame(() => {
+          pointerDownInsideRef.current = false
+        })
+      }}
       onKeyDown={(event) => {
         if (event.key !== 'Escape' || !open) return
         event.preventDefault()
@@ -87,7 +94,17 @@ export function SelectMenu({
         triggerRef.current?.focus()
       }}
       onBlur={(event) => {
-        if (open && event.relatedTarget && !rootRef.current?.contains(event.relatedTarget)) setOpen(false)
+        if (!open) return
+        if (event.relatedTarget && rootRef.current?.contains(event.relatedTarget)) return
+        if (!pointerDownInsideRef.current) {
+          setOpen(false)
+          return
+        }
+        requestAnimationFrame(() => {
+          if (!document.hasFocus() || !listRef.current) return
+          if (searchPlaceholder) searchInputRef.current?.focus()
+          else triggerRef.current?.focus()
+        })
       }}
     >
       <button
