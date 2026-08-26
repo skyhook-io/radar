@@ -1168,7 +1168,9 @@ PolicyReport findings are policy posture, not live operational failure, so they 
 
 Radar discovers if OpenCost metrics are available in the already-discovered Prometheus. If OpenCost is installed and scraping into Prometheus, cost data appears automatically. The integration is passive and read-only.
 
-OpenCost's Prometheus metrics contain numeric values but no currency metadata. When Radar auto-discovers Prometheus in the connected cluster, it looks for `currencyCode` in the pricing ConfigMap referenced by a running OpenCost deployment. If that evidence is unavailable or ambiguous, Radar uses USD. Radar skips cluster inference for a manually configured Prometheus URL because it may serve another cluster. Override the label in Settings → Cost or `opencostCurrency` (CLI: `--opencost-currency`; Helm: `cost.currency`). CLI and Helm overrides remain authoritative while Radar runs and after restart. Radar labels the values but does not convert them.
+OpenCost's Prometheus metrics contain numeric values but no currency metadata. When Radar auto-discovers Prometheus in the connected cluster, it looks for `currencyCode` in the pricing ConfigMap referenced by an active OpenCost or Kubecost workload, or a literal `DISPLAY_CURRENCY` on an active Kubecost Deployment or StatefulSet. `DISPLAY_CURRENCY` takes precedence over ConfigMap evidence; conflicting or indirect values are treated as ambiguous. If the evidence is unavailable or ambiguous, Radar uses USD. Radar skips cluster inference for a manually configured Prometheus URL because it may serve another cluster. Override the label in Settings → Cost or `opencostCurrency` (CLI: `--opencost-currency`; Helm: `cost.currency`). CLI and Helm overrides remain authoritative while Radar runs and after restart. Radar labels the values but does not convert them.
+
+Kubecost Enterprise 3.x agent-only federated clusters do not have the Aggregator workload or its Prometheus cost metrics in the connected cluster. Those clusters need an explicit currency override, and their cost data is outside this Prometheus-backed integration.
 
 ### What Radar Shows
 

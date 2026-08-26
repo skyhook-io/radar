@@ -816,9 +816,10 @@ function CostHelpDialog({ currency, onClose }: { currency: string; onClose: () =
             </h3>
             <p>
               Radar labels these values <strong>{currency}</strong> and does not convert them. Auto
-              detects <code>currencyCode</code> from a running OpenCost pricing configuration when
-              Prometheus is cluster-discovered, then falls back to USD. Override it in <strong>Settings → Cost</strong> or,
-              for automation, with <code>--opencost-currency</code> (Helm: <code>cost.currency</code>).
+              reads <code>currencyCode</code> or <code>DISPLAY_CURRENCY</code> from an active
+              OpenCost/Kubecost installation when Prometheus is cluster-discovered, then falls back
+              to USD. Override it in <strong>Settings → Cost</strong> or, for automation, with{' '}
+              <code>--opencost-currency</code> (Helm: <code>cost.currency</code>).
             </p>
           </section>
 

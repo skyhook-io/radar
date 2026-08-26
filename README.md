@@ -429,8 +429,8 @@ See [docs/capacity.md](docs/capacity.md) for the full reference.
 
 ### Cost Insights
 
-Track Kubernetes spending with OpenCost integration. Radar reads `currencyCode` from a running
-OpenCost pricing configuration when available and otherwise uses USD. Override the label in
+Track Kubernetes spending with OpenCost integration. Radar reads the configured currency from a
+running OpenCost or Kubecost workload when available and otherwise uses USD. Override the label in
 Settings → Cost, config, CLI, or Helm. Radar does not convert values between currencies.
 
 - Cluster hourly and projected monthly cost, top namespaces by spend

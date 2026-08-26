@@ -308,7 +308,7 @@
         "currency": {
           "type": "string",
           "pattern": "^$|^[A-Za-z]{3}$",
-          "description": "Optional ISO 4217 override for OpenCost values; empty auto-detects from a running OpenCost pricing config, then uses USD."
+          "description": "Optional ISO 4217 override for OpenCost/Kubecost values; empty auto-detects from a running cost tool, then uses USD."
         }
       }
     },

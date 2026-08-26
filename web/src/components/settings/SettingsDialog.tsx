@@ -1182,9 +1182,10 @@ function CostSection({
         Currency override
       </label>
       <p className="mb-1 text-xs text-theme-text-tertiary">
-        Choose a currency, or use Auto to detect it from a running OpenCost pricing configuration
-        and then fall back to USD. A custom Prometheus URL disables detection. Radar labels values
-        but does not convert them.
+        Choose a currency, or use Auto to read <code>currencyCode</code> or{' '}
+        <code>DISPLAY_CURRENCY</code> from an active OpenCost/Kubecost installation, then fall back
+        to USD. A custom Prometheus URL disables detection. Radar labels values but does not convert
+        them.
       </p>
       <SelectMenu
         value={currency}

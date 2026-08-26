@@ -19,7 +19,7 @@ const currencyCodes = [
 ]
 
 export const CURRENCY_OPTIONS: SelectMenuOption[] = [
-  { value: '', label: 'Auto (detect from OpenCost)' },
+  { value: '', label: 'Auto (detect from OpenCost/Kubecost)' },
   ...currencyCodes
     .filter((code) => code !== 'XTS' && code !== 'XXX')
     .map((code) => {

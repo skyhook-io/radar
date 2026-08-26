@@ -10,6 +10,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	pkgopencost "github.com/skyhook-io/radar/pkg/opencost"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	appslisters "k8s.io/client-go/listers/apps/v1"
@@ -59,7 +60,7 @@ func (r *CurrencyResolver) resolve(cache currencyCache, detectionAllowed bool, n
 	if detection.currency != "" {
 		r.cached = detection.currency
 		r.cachedDetected = true
-	} else if detection.hasActiveDeployment || !r.cachedDetected {
+	} else if detection.hasActiveWorkload || !r.cachedDetected {
 		r.cached = pkgopencost.DefaultCurrency
 		r.cachedDetected = false
 	}
@@ -91,6 +92,7 @@ func clusterCurrencyDetectionAllowed() bool {
 
 type currencyCache interface {
 	Deployments() appslisters.DeploymentLister
+	StatefulSets() appslisters.StatefulSetLister
 	ConfigMaps() corelisters.ConfigMapLister
 }
 
@@ -99,32 +101,95 @@ func detectOpenCostCurrency(cache currencyCache) string {
 }
 
 type currencyDetection struct {
-	currency            string
-	hasActiveDeployment bool
-	inputsAvailable     bool
+	currency          string
+	hasActiveWorkload bool
+	inputsAvailable   bool
 }
 
 func detectOpenCostCurrencyState(cache currencyCache) currencyDetection {
-	if cache == nil || cache.Deployments() == nil || cache.ConfigMaps() == nil {
+	if cache == nil {
 		return currencyDetection{}
 	}
-	deployments, err := cache.Deployments().List(labels.Everything())
-	if err != nil {
+	configMapLister := cache.ConfigMaps()
+	deploymentLister := cache.Deployments()
+	statefulSetLister := cache.StatefulSets()
+	if deploymentLister == nil && statefulSetLister == nil {
 		return currencyDetection{}
 	}
 
+	var deployments []*appsv1.Deployment
+	if deploymentLister != nil {
+		var err error
+		deployments, err = deploymentLister.List(labels.Everything())
+		if err != nil {
+			return currencyDetection{}
+		}
+	}
+	var statefulSets []*appsv1.StatefulSet
+	if statefulSetLister != nil {
+		var err error
+		statefulSets, err = statefulSetLister.List(labels.Everything())
+		if err != nil {
+			return currencyDetection{}
+		}
+	}
+
 	detection := currencyDetection{inputsAvailable: true}
-	for _, deployment := range deployments {
-		if deployment.Status.AvailableReplicas == 0 ||
-			(deployment.Spec.Replicas != nil && *deployment.Spec.Replicas == 0) {
-			continue
+	var displayCurrency, configMapCurrency string
+	var displayCurrencyDeclared, displayCurrencyAmbiguous, configMapCurrencyAmbiguous bool
+	considerCurrency := func(candidate *string, ambiguous *bool, code string) {
+		if code == "" {
+			return
 		}
-		if !isOpenCostDeployment(deployment.Name, deployment.Labels, deployment.Spec.Template.Spec.Containers) {
-			continue
+		if *candidate != "" && *candidate != code {
+			*candidate = ""
+			*ambiguous = true
+			return
 		}
-		detection.hasActiveDeployment = true
+		if !*ambiguous {
+			*candidate = code
+		}
+	}
+	considerWorkload := func(namespace, name string, objectLabels map[string]string, containers []corev1.Container, availableReplicas, readyReplicas int32, replicas *int32) {
+		if (availableReplicas == 0 && readyReplicas == 0) || (replicas != nil && *replicas == 0) {
+			return
+		}
+		if !isOpenCostWorkload(containers) {
+			return
+		}
+		detection.hasActiveWorkload = true
+
+		if isKubecostWorkload(name, objectLabels, containers) {
+			workloadDisplayCurrencyDeclared := false
+			for _, container := range containers {
+				for _, env := range container.Env {
+					if env.Name != "DISPLAY_CURRENCY" {
+						continue
+					}
+					if env.ValueFrom == nil && strings.TrimSpace(env.Value) == "" {
+						continue
+					}
+					displayCurrencyDeclared = true
+					workloadDisplayCurrencyDeclared = true
+					if env.ValueFrom != nil {
+						displayCurrencyAmbiguous = true
+						continue
+					}
+					code := normalizedDetectedCurrency(env.Value)
+					if code == "" {
+						displayCurrencyAmbiguous = true
+						continue
+					}
+					considerCurrency(&displayCurrency, &displayCurrencyAmbiguous, code)
+				}
+			}
+			if workloadDisplayCurrencyDeclared {
+				return
+			}
+		}
+
 		configMapNames := map[string]bool{}
-		for _, container := range deployment.Spec.Template.Spec.Containers {
+		for _, container := range containers {
 			for _, env := range container.Env {
 				if env.Name == "PRICING_CONFIGMAP_NAME" && strings.TrimSpace(env.Value) != "" {
 					configMapNames[strings.TrimSpace(env.Value)] = true
@@ -135,44 +200,98 @@ func detectOpenCostCurrencyState(cache currencyCache) currencyDetection {
 			configMapNames["custom-pricing-model"] = true
 			configMapNames["pricing-configs"] = true
 		}
+		if configMapLister == nil {
+			return
+		}
 		for name := range configMapNames {
-			configMap, getErr := cache.ConfigMaps().ConfigMaps(deployment.Namespace).Get(name)
+			configMap, getErr := configMapLister.ConfigMaps(namespace).Get(name)
 			if getErr != nil {
 				continue
 			}
-			code := currencyFromConfigMap(configMap.Data)
-			if code == "" {
-				continue
+			code, ambiguous := currencyFromConfigMap(configMap.Data)
+			if ambiguous {
+				configMapCurrencyAmbiguous = true
 			}
-			if detection.currency != "" && detection.currency != code {
-				detection.currency = ""
-				return detection
-			}
-			detection.currency = code
+			considerCurrency(&configMapCurrency, &configMapCurrencyAmbiguous, code)
 		}
+	}
+
+	for _, deployment := range deployments {
+		considerWorkload(
+			deployment.Namespace,
+			deployment.Name,
+			deployment.Labels,
+			deployment.Spec.Template.Spec.Containers,
+			deployment.Status.AvailableReplicas,
+			deployment.Status.ReadyReplicas,
+			deployment.Spec.Replicas,
+		)
+	}
+	for _, statefulSet := range statefulSets {
+		considerWorkload(
+			statefulSet.Namespace,
+			statefulSet.Name,
+			statefulSet.Labels,
+			statefulSet.Spec.Template.Spec.Containers,
+			statefulSet.Status.AvailableReplicas,
+			statefulSet.Status.ReadyReplicas,
+			statefulSet.Spec.Replicas,
+		)
+	}
+	if !displayCurrencyDeclared && configMapLister == nil {
+		return currencyDetection{}
+	}
+
+	if displayCurrencyDeclared {
+		if !displayCurrencyAmbiguous {
+			detection.currency = displayCurrency
+		}
+	} else if !configMapCurrencyAmbiguous {
+		detection.currency = configMapCurrency
 	}
 	return detection
 }
 
-func isOpenCostDeployment(name string, objectLabels map[string]string, containers []corev1.Container) bool {
+func isOpenCostWorkload(containers []corev1.Container) bool {
+	return containerIdentityContains(containers, "opencost", "cost-model", "cost-analyzer")
+}
+
+func isKubecostWorkload(name string, objectLabels map[string]string, containers []corev1.Container) bool {
+	if containerIdentityContains(containers, "kubecost", "cost-analyzer") {
+		return true
+	}
+	return containerIdentityContains(containers, "cost-model") && objectIdentityContains(name, objectLabels, "kubecost", "cost-analyzer")
+}
+
+func objectIdentityContains(name string, objectLabels map[string]string, values ...string) bool {
 	identities := []string{name}
 	for _, key := range []string{"app", "name", "component", "app.kubernetes.io/name", "app.kubernetes.io/instance", "app.kubernetes.io/component"} {
 		identities = append(identities, objectLabels[key])
 	}
+	return identityContains(identities, values...)
+}
+
+func containerIdentityContains(containers []corev1.Container, values ...string) bool {
+	identities := make([]string, 0, len(containers)*2)
 	for _, container := range containers {
 		identities = append(identities, container.Name, container.Image)
 	}
+	return identityContains(identities, values...)
+}
+
+func identityContains(identities []string, values ...string) bool {
 	for _, identity := range identities {
 		identity = strings.ToLower(identity)
-		if strings.Contains(identity, "opencost") || strings.Contains(identity, "kubecost") ||
-			strings.Contains(identity, "cost-model") || strings.Contains(identity, "cost-analyzer") {
-			return true
+		for _, value := range values {
+			if strings.Contains(identity, value) {
+				return true
+			}
 		}
 	}
 	return false
 }
 
-func currencyFromConfigMap(data map[string]string) string {
+func currencyFromConfigMap(data map[string]string) (string, bool) {
 	detected := ""
 	consider := func(value string) bool {
 		code := normalizedDetectedCurrency(value)
@@ -188,7 +307,7 @@ func currencyFromConfigMap(data map[string]string) string {
 	for key, value := range data {
 		if strings.EqualFold(key, "currencyCode") {
 			if !consider(value) {
-				return ""
+				return "", true
 			}
 		}
 	}
@@ -198,11 +317,11 @@ func currencyFromConfigMap(data map[string]string) string {
 		}
 		if json.Unmarshal([]byte(value), &pricing) == nil && pricing.CurrencyCode != "" {
 			if !consider(pricing.CurrencyCode) {
-				return ""
+				return "", true
 			}
 		}
 	}
-	return detected
+	return detected, false
 }
 
 func normalizedDetectedCurrency(value string) string {

@@ -15,22 +15,27 @@ import (
 )
 
 type testCurrencyCache struct {
-	deployments appslisters.DeploymentLister
-	configMaps  corelisters.ConfigMapLister
+	deployments  appslisters.DeploymentLister
+	statefulSets appslisters.StatefulSetLister
+	configMaps   corelisters.ConfigMapLister
 }
 
-func (c testCurrencyCache) Deployments() appslisters.DeploymentLister { return c.deployments }
-func (c testCurrencyCache) ConfigMaps() corelisters.ConfigMapLister   { return c.configMaps }
+func (c testCurrencyCache) Deployments() appslisters.DeploymentLister   { return c.deployments }
+func (c testCurrencyCache) StatefulSets() appslisters.StatefulSetLister { return c.statefulSets }
+func (c testCurrencyCache) ConfigMaps() corelisters.ConfigMapLister     { return c.configMaps }
 
 func newTestCurrencyCache(t *testing.T, objects ...any) testCurrencyCache {
 	t.Helper()
 	deploymentIndexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
+	statefulSetIndexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
 	configMapIndexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
 	for _, object := range objects {
 		var err error
 		switch value := object.(type) {
 		case *appsv1.Deployment:
 			err = deploymentIndexer.Add(value)
+		case *appsv1.StatefulSet:
+			err = statefulSetIndexer.Add(value)
 		case *corev1.ConfigMap:
 			err = configMapIndexer.Add(value)
 		default:
@@ -41,8 +46,9 @@ func newTestCurrencyCache(t *testing.T, objects ...any) testCurrencyCache {
 		}
 	}
 	return testCurrencyCache{
-		deployments: appslisters.NewDeploymentLister(deploymentIndexer),
-		configMaps:  corelisters.NewConfigMapLister(configMapIndexer),
+		deployments:  appslisters.NewDeploymentLister(deploymentIndexer),
+		statefulSets: appslisters.NewStatefulSetLister(statefulSetIndexer),
+		configMaps:   corelisters.NewConfigMapLister(configMapIndexer),
 	}
 }
 
@@ -60,8 +66,29 @@ func openCostDeployment(namespace, name, configMapName string) *appsv1.Deploymen
 	}
 }
 
+func kubecostDeployment(namespace, configMapName string) *appsv1.Deployment {
+	deployment := openCostDeployment(namespace, "kubecost-cost-analyzer", configMapName)
+	deployment.Labels = map[string]string{"app.kubernetes.io/instance": "kubecost"}
+	deployment.Spec.Template.Spec.Containers[0].Image = "gcr.io/kubecost1/cost-model:2.8.2"
+	return deployment
+}
+
 func pricingConfigMap(namespace, name string, data map[string]string) *corev1.ConfigMap {
 	return &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name}, Data: data}
+}
+
+func kubecostStatefulSet(namespace, currency string) *appsv1.StatefulSet {
+	return &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "kubecost-aggregator"},
+		Spec: appsv1.StatefulSetSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{
+			{
+				Name:  "aggregator",
+				Image: "icr.io/kubecost/cost-model:3.2.1",
+				Env:   []corev1.EnvVar{{Name: "DISPLAY_CURRENCY", Value: currency}},
+			},
+		}}}},
+		Status: appsv1.StatefulSetStatus{AvailableReplicas: 1},
+	}
 }
 
 func TestDetectOpenCostCurrency(t *testing.T) {
@@ -94,6 +121,106 @@ func TestDetectOpenCostCurrency(t *testing.T) {
 				pricingConfigMap("finops", "company-pricing", map[string]string{"default.json": `{"currencyCode":"gbp","CPU":"0.03"}`}),
 			},
 			want: "GBP",
+		},
+		{
+			name:    "kubecost 3 statefulset display currency",
+			objects: []any{kubecostStatefulSet("kubecost", " aud ")},
+			want:    "AUD",
+		},
+		{
+			name: "empty kubecost display currency falls through to config map",
+			objects: []any{
+				kubecostStatefulSet("kubecost", " "),
+				pricingConfigMap("kubecost", "pricing-configs", map[string]string{"currencyCode": "EUR"}),
+			},
+			want: "EUR",
+		},
+		{
+			name: "kubecost display currency takes precedence across workloads",
+			objects: []any{
+				kubecostDeployment("kubecost", "pricing-configs"),
+				kubecostStatefulSet("kubecost", "AUD"),
+				pricingConfigMap("kubecost", "pricing-configs", map[string]string{"currencyCode": "USD"}),
+			},
+			want: "AUD",
+		},
+		{
+			name: "invalid kubecost display currency is rejected",
+			objects: []any{
+				kubecostStatefulSet("kubecost", "dollars"),
+				pricingConfigMap("kubecost", "pricing-configs", map[string]string{"currencyCode": "USD"}),
+				openCostDeployment("opencost", "opencost", "custom-pricing-model"),
+				pricingConfigMap("opencost", "custom-pricing-model", map[string]string{"currencyCode": "EUR"}),
+			},
+			want: "",
+		},
+		{
+			name: "indirect kubecost display currency is not inferred",
+			objects: []any{
+				func() *appsv1.StatefulSet {
+					statefulSet := kubecostStatefulSet("kubecost", "")
+					statefulSet.Spec.Template.Spec.Containers[0].Env[0].ValueFrom = &corev1.EnvVarSource{
+						ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
+							LocalObjectReference: corev1.LocalObjectReference{Name: "runtime-config"},
+							Key:                  "currency",
+						},
+					}
+					return statefulSet
+				}(),
+				pricingConfigMap("kubecost", "pricing-configs", map[string]string{"currencyCode": "USD"}),
+			},
+			want: "",
+		},
+		{
+			name: "statefulset ready replicas support older kubernetes",
+			objects: []any{
+				func() *appsv1.StatefulSet {
+					statefulSet := kubecostStatefulSet("kubecost", "AUD")
+					statefulSet.Status.AvailableReplicas = 0
+					statefulSet.Status.ReadyReplicas = 1
+					return statefulSet
+				}(),
+			},
+			want: "AUD",
+		},
+		{
+			name: "conflicting kubecost display currencies are ambiguous",
+			objects: []any{
+				kubecostStatefulSet("kubecost-one", "AUD"),
+				kubecostStatefulSet("kubecost-two", "EUR"),
+			},
+			want: "",
+		},
+		{
+			name: "kubecost prometheus workload is ignored",
+			objects: []any{
+				&appsv1.StatefulSet{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: "monitoring",
+						Name:      "kubecost-prometheus-server",
+						Labels:    map[string]string{"app.kubernetes.io/instance": "kubecost"},
+					},
+					Spec: appsv1.StatefulSetSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{
+						{Name: "prometheus-server", Image: "quay.io/prometheus/prometheus:v2.53.0"},
+					}}}},
+					Status: appsv1.StatefulSetStatus{ReadyReplicas: 1},
+				},
+				pricingConfigMap("monitoring", "pricing-configs", map[string]string{"currencyCode": "JPY"}),
+				openCostDeployment("opencost", "opencost", "custom-pricing-model"),
+				pricingConfigMap("opencost", "custom-pricing-model", map[string]string{"currencyCode": "EUR"}),
+			},
+			want: "EUR",
+		},
+		{
+			name: "inactive kubecost statefulset is ignored",
+			objects: []any{
+				func() *appsv1.StatefulSet {
+					statefulSet := kubecostStatefulSet("kubecost", "AUD")
+					statefulSet.Status.AvailableReplicas = 0
+					return statefulSet
+				}(),
+			},
+			want: "",
 		},
 		{
 			name: "referenced config map takes precedence over stale default",
@@ -154,6 +281,19 @@ func TestDetectOpenCostCurrency(t *testing.T) {
 			},
 			want: "",
 		},
+		{
+			name: "conflicting config map remains ambiguous alongside valid config",
+			objects: []any{
+				openCostDeployment("one", "opencost", "custom-pricing-model"),
+				pricingConfigMap("one", "custom-pricing-model", map[string]string{
+					"aws.json": `{"currencyCode":"USD"}`,
+					"gcp.json": `{"currencyCode":"EUR"}`,
+				}),
+				openCostDeployment("two", "opencost", "custom-pricing-model"),
+				pricingConfigMap("two", "custom-pricing-model", map[string]string{"currencyCode": "EUR"}),
+			},
+			want: "",
+		},
 	}
 
 	for _, tt := range tests {
@@ -168,6 +308,37 @@ func TestDetectOpenCostCurrency(t *testing.T) {
 				t.Errorf("detectOpenCostCurrency() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDetectOpenCostCurrencyWithIndependentWorkloadListers(t *testing.T) {
+	deploymentCache := newTestCurrencyCache(t,
+		openCostDeployment("opencost", "opencost", "custom-pricing-model"),
+		pricingConfigMap("opencost", "custom-pricing-model", map[string]string{"currencyCode": "EUR"}),
+	)
+	deploymentCache.statefulSets = nil
+	if got := detectOpenCostCurrency(deploymentCache); got != "EUR" {
+		t.Fatalf("detectOpenCostCurrency(deployments only) = %q, want EUR", got)
+	}
+
+	statefulSetCache := newTestCurrencyCache(t, kubecostStatefulSet("kubecost", "AUD"))
+	statefulSetCache.deployments = nil
+	if got := detectOpenCostCurrency(statefulSetCache); got != "AUD" {
+		t.Fatalf("detectOpenCostCurrency(statefulsets only) = %q, want AUD", got)
+	}
+}
+
+func TestDetectOpenCostCurrencyWithoutConfigMapLister(t *testing.T) {
+	kubecostCache := newTestCurrencyCache(t, kubecostStatefulSet("kubecost", "AUD"))
+	kubecostCache.configMaps = nil
+	if got := detectOpenCostCurrencyState(kubecostCache); got.currency != "AUD" || !got.inputsAvailable {
+		t.Fatalf("detectOpenCostCurrencyState(kubecost) = %#v, want AUD with available inputs", got)
+	}
+
+	openCostCache := newTestCurrencyCache(t, openCostDeployment("opencost", "opencost", "custom-pricing-model"))
+	openCostCache.configMaps = nil
+	if got := detectOpenCostCurrencyState(openCostCache); got.inputsAvailable {
+		t.Fatalf("detectOpenCostCurrencyState(opencost) = %#v, want unavailable inputs", got)
 	}
 }
 
@@ -232,6 +403,27 @@ func TestCurrencyResolverRetainsDetectedCurrencyWhileDeploymentIsUnavailable(t *
 	resolver.Invalidate()
 	if got := resolver.resolve(inactive, true, now.Add(2*currencyDetectionTTL)); got != pkgopencost.DefaultCurrency {
 		t.Fatalf("resolve(inactive) after invalidation = %q, want %s", got, pkgopencost.DefaultCurrency)
+	}
+}
+
+func TestCurrencyResolverRetainsAndResetsStatefulSetDetection(t *testing.T) {
+	now := time.Now()
+	resolver := NewCurrencyResolver("")
+	active := newTestCurrencyCache(t, kubecostStatefulSet("kubecost", "AUD"))
+	if got := resolver.resolve(active, true, now); got != "AUD" {
+		t.Fatalf("resolve(active statefulset) = %q, want AUD", got)
+	}
+
+	inactiveStatefulSet := kubecostStatefulSet("kubecost", "AUD")
+	inactiveStatefulSet.Status.AvailableReplicas = 0
+	inactive := newTestCurrencyCache(t, inactiveStatefulSet)
+	if got := resolver.resolve(inactive, true, now.Add(currencyDetectionTTL)); got != "AUD" {
+		t.Fatalf("resolve(inactive statefulset) = %q, want last detected AUD", got)
+	}
+
+	invalid := newTestCurrencyCache(t, kubecostStatefulSet("kubecost", "dollars"))
+	if got := resolver.resolve(invalid, true, now.Add(2*currencyDetectionTTL)); got != pkgopencost.DefaultCurrency {
+		t.Fatalf("resolve(invalid active statefulset) = %q, want %s", got, pkgopencost.DefaultCurrency)
 	}
 }
 

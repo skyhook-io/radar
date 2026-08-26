@@ -448,10 +448,10 @@ mcp:
   # Set to false to disable the MCP server (useful when deployed behind authentication)
   enabled: true
 
-# OpenCost display configuration
+# OpenCost/Kubecost display configuration
 cost:
-  # Optional ISO 4217 override for OpenCost values. Empty detects currencyCode
-  # from a running OpenCost pricing config when available, then uses USD.
+  # Optional ISO 4217 override for OpenCost/Kubecost values. Empty detects the
+  # running cost tool's configured currency when available, then uses USD.
   currency: ""
 
 # Traffic source configuration

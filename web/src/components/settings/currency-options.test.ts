@@ -9,7 +9,7 @@ describe('currency options', () => {
   it('offers Auto followed by named ISO 4217 currencies', () => {
     expect(CURRENCY_OPTIONS[0]).toEqual({
       value: '',
-      label: 'Auto (detect from OpenCost)',
+      label: 'Auto (detect from OpenCost/Kubecost)',
     })
     expect(CURRENCY_OPTIONS).toContainEqual({
       value: 'EUR',
