@@ -48,15 +48,15 @@ func TestRemovedFeatureGates137(t *testing.T) {
 			wantRef:    "/pull/140226",
 		},
 		{
-			name: "control plane mirror pod",
+			name: "control plane mirror pod command",
 			configure: func(input *Input) {
 				input.Pods = []*corev1.Pod{{
 					ObjectMeta: metav1.ObjectMeta{Name: "kube-apiserver-node-a", Namespace: "kube-system", Annotations: map[string]string{corev1.MirrorPodAnnotationKey: "mirror"}},
-					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "kube-apiserver", Args: []string{"--feature-gates=APIServerTracing=false"}}}},
+					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "kube-apiserver", Command: []string{"kube-apiserver", "--feature-gates=APIServerTracing=false"}}}},
 				}}
 			},
 			wantStatus: CheckBlocked,
-			wantPath:   "spec.containers[0].args[--feature-gates].APIServerTracing",
+			wantPath:   "spec.containers[0].command[--feature-gates].APIServerTracing",
 			wantRef:    "/pull/138907",
 		},
 		{
@@ -197,12 +197,20 @@ func TestLockedFeatureGateAcrossComponents137(t *testing.T) {
 }
 
 func TestRemovedFeatureGatesReportsManagedControlPlaneGap137(t *testing.T) {
-	check := checkByID(t, scan137(t, completeInput()), "removed-feature-gates")
-	if check.Status != CheckPassed || !strings.Contains(check.Caveat, "provider may manage the control plane") {
-		t.Fatalf("managed control plane = %+v, want passed node evidence with control-plane caveat", check)
+	input := completeInput()
+	check := checkByID(t, scan137(t, input), "removed-feature-gates")
+	if check.Status != CheckUnknown || !strings.Contains(check.Caveat, "self-managed control-plane") {
+		t.Fatalf("unclassified control plane = %+v, want unknown without mirror Pod evidence", check)
 	}
 
-	input := completeInput()
+	input = completeInput()
+	input.Nodes[0].Labels = map[string]string{"eks.amazonaws.com/nodegroup": "workers"}
+	check = checkByID(t, scan137(t, input), "removed-feature-gates")
+	if check.Status != CheckPassed || !strings.Contains(check.Caveat, "provider manages the control plane") {
+		t.Fatalf("managed control plane = %+v, want passed node evidence with managed-control-plane caveat", check)
+	}
+
+	input = completeInput()
 	input.Pods = []*corev1.Pod{{
 		ObjectMeta: metav1.ObjectMeta{Name: "kube-apiserver-node-a", Namespace: "kube-system", Annotations: map[string]string{corev1.MirrorPodAnnotationKey: "mirror"}},
 		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "kube-apiserver"}}},
@@ -254,13 +262,42 @@ func TestRemovedComponentFlag137(t *testing.T) {
 	input := completeInput()
 	input.Pods = []*corev1.Pod{{
 		ObjectMeta: metav1.ObjectMeta{Name: "kube-controller-manager-node-a", Namespace: "kube-system", Annotations: map[string]string{corev1.MirrorPodAnnotationKey: "mirror"}},
-		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "kube-controller-manager", Args: []string{"--concurrent-service-syncs=10"}}}},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "kube-controller-manager", Command: []string{"kube-controller-manager", "--concurrent-service-syncs=10"}}}},
 	}}
 	check := checkByID(t, scan137(t, input), "removed-component-flags")
-	if check.Status != CheckBlocked || len(check.Findings) != 1 {
+	if check.Status != CheckBlocked || len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Evidence.Path, ".command[") {
 		t.Fatalf("removed component flag = %+v, want blocker", check)
 	}
 	requireFindingReference(t, check.Findings, "/pull/138002")
+
+	input = completeInput()
+	check = checkByID(t, scan137(t, input), "removed-component-flags")
+	if check.Status != CheckUnknown || !strings.Contains(check.Summary, "self-managed") {
+		t.Fatalf("unclassified control plane = %+v, want unknown", check)
+	}
+
+	input.Nodes[0].Labels = map[string]string{"cloud.google.com/gke-nodepool": "default"}
+	check = checkByID(t, scan137(t, input), "removed-component-flags")
+	if check.Status != CheckNotApplicable || !strings.Contains(check.Summary, "provider manages") {
+		t.Fatalf("managed control plane = %+v, want not applicable", check)
+	}
+}
+
+func TestRemovedKubeletCAdvisorOptions137(t *testing.T) {
+	wantFlags := []string{
+		"--application-metrics-count-limit", "--boot-id-file", "--container-hints", "--containerd", "--containerd-namespace",
+		"--enable-load-reader", "--event-storage-age-limit", "--event-storage-event-limit", "--global-housekeeping-interval",
+		"--log-cadvisor-usage", "--machine-id-file", "--storage-driver-user", "--storage-driver-password", "--storage-driver-host",
+		"--storage-driver-db", "--storage-driver-table", "--storage-driver-secure", "--storage-driver-buffer-duration",
+	}
+	if strings.Join(removedKubeletCAdvisorFlags137, "\n") != strings.Join(wantFlags, "\n") {
+		t.Fatalf("removed cAdvisor flags = %v, want exact upstream list %v", removedKubeletCAdvisorFlags137, wantFlags)
+	}
+	check := checkByID(t, scan137(t, completeInput()), "removed-kubelet-cadvisor-options")
+	if check.Status != CheckReview || len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Impact, "fails to start") || !strings.Contains(check.Findings[0].Remediation, "--housekeeping-interval remains supported") || !strings.Contains(check.Findings[0].Remediation, "container_application_*") {
+		t.Fatalf("cAdvisor manual review = %+v, want bounded review with startup and metric impact", check)
+	}
+	requireFindingReference(t, check.Findings, "/pull/139870")
 }
 
 func TestRemovedSchedulingAPIs137(t *testing.T) {
@@ -272,7 +309,7 @@ func TestRemovedSchedulingAPIs137(t *testing.T) {
 		"metadata":   map[string]any{"namespace": "batch", "name": "workers"},
 	}}}
 	check := checkByID(t, scan137(t, input), "removed-scheduling-apis")
-	if check.Status != CheckBlocked || len(check.Findings) != 1 || check.Findings[0].Resource.Kind != "PodGroup" {
+	if check.Status != CheckBlocked || len(check.Findings) != 1 || check.Findings[0].Resource.Kind != "PodGroup" || !strings.Contains(check.Findings[0].Remediation, "After the control plane reaches Kubernetes 1.37") {
 		t.Fatalf("stored alpha scheduling object = %+v, want blocker", check)
 	}
 	requireFindingReference(t, check.Findings, "/pull/140184")
@@ -344,10 +381,11 @@ func TestKubeProxyModeTransition137(t *testing.T) {
 		args       []string
 		wantStatus CheckStatus
 		wantRef    string
+		wantImpact string
 	}{
 		{name: "iptables explicit", args: []string{"--proxy-mode=iptables"}, wantStatus: CheckPassed},
 		{name: "ipvs deprecated", args: []string{"--proxy-mode=ipvs"}, wantStatus: CheckReview, wantRef: "5495-deprecate-ipvs-mode-in-kube-proxy"},
-		{name: "linux default changing", wantStatus: CheckReview, wantRef: "5343-nftables-to-default"},
+		{name: "linux default changing", wantStatus: CheckReview, wantRef: "5343-nftables-to-default", wantImpact: "Kubernetes 1.40"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			input := completeInput()
@@ -359,7 +397,21 @@ func TestKubeProxyModeTransition137(t *testing.T) {
 			if tc.wantRef != "" {
 				requireFindingReference(t, check.Findings, tc.wantRef)
 			}
+			if tc.wantImpact != "" && (len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Impact, tc.wantImpact)) {
+				t.Fatalf("impact = %+v, want %q", check.Findings, tc.wantImpact)
+			}
 		})
+	}
+}
+
+func TestKubeProxyCommandEvidencePath137(t *testing.T) {
+	input := completeInput()
+	daemonSet := kubeProxyDaemonSet()
+	daemonSet.Spec.Template.Spec.Containers[0].Command = []string{"kube-proxy", "--proxy-mode=ipvs"}
+	input.DaemonSets = []*appsv1.DaemonSet{daemonSet}
+	check := checkByID(t, scan137(t, input), "kube-proxy-mode-transition")
+	if check.Status != CheckReview || len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Evidence.Path, ".command[") {
+		t.Fatalf("command-based proxy mode = %+v, want command evidence path", check)
 	}
 }
 
@@ -463,8 +515,8 @@ func TestKubeProxyModeDiagnostics137(t *testing.T) {
 		t.Fatalf("ambiguous kube-proxy container = %+v, want actionable caveat", check)
 	}
 
-	if value, found := commandFlag(nil, []string{"--proxy-mode", "--config=/etc/kube-proxy.yaml"}, "--proxy-mode"); found || value != "" {
-		t.Fatalf("flag followed by another flag = (%q, %v), want absent value", value, found)
+	if value, field, found := commandFlag(nil, []string{"--proxy-mode", "--config=/etc/kube-proxy.yaml"}, "--proxy-mode"); found || value != "" || field != "" {
+		t.Fatalf("flag followed by another flag = (%q, %q, %v), want absent value", value, field, found)
 	}
 }
 
@@ -501,6 +553,24 @@ func TestRemovedControlPlaneMetrics137(t *testing.T) {
 		t.Fatalf("renamed DRA metric = %+v, want exact replacement", check)
 	}
 	requireFindingReference(t, check.Findings, "/pull/138542")
+
+	for _, metric := range []string{"container_cpu_load_average_10s", "container_cpu_load_d_average_10s", "container_tasks_state"} {
+		rule["expr"] = "sum(" + metric + ")"
+		check = checkByID(t, scan137(t, input), "removed-control-plane-metrics")
+		if check.Status != CheckWarning || len(check.Findings) != 1 || check.Findings[0].Evidence.Detail != metric || !strings.Contains(check.Findings[0].Remediation, "no replacement") {
+			t.Fatalf("removed cAdvisor metric %s = %+v, want warning without invented replacement", metric, check)
+		}
+		requireFindingReference(t, check.Findings, "/pull/139870")
+	}
+
+	rule["expr"] = "rate(container_application_http_requests_total[5m]) + container_application_queue_depth"
+	check = checkByID(t, scan137(t, input), "removed-control-plane-metrics")
+	if check.Status != CheckWarning || len(check.Findings) != 2 || check.Findings[0].Evidence.Detail != "container_application_http_requests_total" || check.Findings[1].Evidence.Detail != "container_application_queue_depth" {
+		t.Fatalf("removed custom cAdvisor metric = %+v, want prefix match", check)
+	}
+	for _, finding := range check.Findings {
+		requireFindingReference(t, []Finding{finding}, "/pull/139870")
+	}
 }
 
 func requireFindingReference(t *testing.T, findings []Finding, urlSubstring string) {
@@ -602,6 +672,19 @@ func TestSELinuxMountTransition137(t *testing.T) {
 				t.Fatalf("conditional SELinux finding = %+v, want applicability caveat and interim opt-out", check)
 			}
 		})
+	}
+}
+
+func TestSELinuxMountTransitionDetectsMultipleLabelsWithinOnePod137(t *testing.T) {
+	input := selinuxSharedVolumeInput(t, nil, nil, "s0:c1,c2", "s0:c1,c2")
+	input.Pods = input.Pods[:1]
+	input.Pods[0].Spec.Containers = append(input.Pods[0].Spec.Containers, corev1.Container{
+		Name: "sidecar", Image: "example", VolumeMounts: []corev1.VolumeMount{{Name: "data", MountPath: "/data"}},
+		SecurityContext: &corev1.SecurityContext{SELinuxOptions: &corev1.SELinuxOptions{Level: "s0:c3,c4"}},
+	})
+	check := checkByID(t, scan137(t, input), "selinux-mount-transition")
+	if check.Status != CheckReview || len(check.Findings) != 1 || check.Findings[0].Title != "Pod uses multiple SELinux labels on one volume" || strings.Contains(check.Findings[0].Title, "conflicting SELinux labels") {
+		t.Fatalf("single-Pod multi-label volume = %+v, want structural in-Pod review", check)
 	}
 }
 

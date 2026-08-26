@@ -94,6 +94,7 @@ var (
 		"WatchCacheInitializationPostStartHook":   append([]Reference(nil), featureGateLifecycleReferences137...),
 	}
 	componentFlagReferences137      = []Reference{{Title: "Remove no-op cloud provider controller registrations", URL: "https://github.com/kubernetes/kubernetes/pull/138002"}}
+	cAdvisorRemovalReferences137    = []Reference{{Title: "Remove deprecated cAdvisor flags and metrics", URL: "https://github.com/kubernetes/kubernetes/pull/139870"}, {Title: "Kubernetes 1.37 changelog", URL: "https://github.com/kubernetes/kubernetes/blob/release-1.37/CHANGELOG/CHANGELOG-1.37.md"}}
 	eventRecordQPSReferences137     = []Reference{{Title: "Make eventRecordQPS zero mean unlimited", URL: "https://github.com/kubernetes/kubernetes/pull/117119"}}
 	schedulingAPIReferences137      = []Reference{{Title: "Promote Workload and PodGroup APIs to v1beta1", URL: "https://github.com/kubernetes/kubernetes/pull/140184"}}
 	kubeadmV1Beta3References137     = []Reference{{Title: "Remove kubeadm v1beta3 and PublicKeysECDSA", URL: "https://github.com/kubernetes/kubernetes/pull/136016"}}
@@ -101,13 +102,17 @@ var (
 		"NodeLocalCRISocket": {{Title: "Remove the NodeLocalCRISocket feature gate", URL: "https://github.com/kubernetes/kubernetes/pull/138645"}},
 		"PublicKeysECDSA":    append([]Reference(nil), kubeadmV1Beta3References137...),
 	}
-	controlPlaneMetricReferences137 = map[string][]Reference{
+	metricReferences137 = map[string][]Reference{
 		"apiserver_cache_list_total":                  {{Title: "Deprecate API server cache-list metrics", URL: "https://github.com/kubernetes/kubernetes/pull/139154"}},
 		"apiserver_cache_list_fetched_objects_total":  {{Title: "Deprecate API server cache-list metrics", URL: "https://github.com/kubernetes/kubernetes/pull/139154"}},
 		"apiserver_cache_list_returned_objects_total": {{Title: "Deprecate API server cache-list metrics", URL: "https://github.com/kubernetes/kubernetes/pull/139154"}},
 		"resourceclaim_controller_creates_total":      {{Title: "Harmonize DRA ResourceClaim creation metrics", URL: "https://github.com/kubernetes/kubernetes/pull/138542"}},
 		"scheduler_resourceclaim_creates_total":       {{Title: "Harmonize DRA ResourceClaim creation metrics", URL: "https://github.com/kubernetes/kubernetes/pull/138542"}},
 		"resourceclaim_controller_resource_claims":    {{Title: "Harmonize DRA ResourceClaim creation metrics", URL: "https://github.com/kubernetes/kubernetes/pull/138542"}},
+		"container_cpu_load_average_10s":              append([]Reference(nil), cAdvisorRemovalReferences137...),
+		"container_cpu_load_d_average_10s":            append([]Reference(nil), cAdvisorRemovalReferences137...),
+		"container_tasks_state":                       append([]Reference(nil), cAdvisorRemovalReferences137...),
+		"container_application_*":                     append([]Reference(nil), cAdvisorRemovalReferences137...),
 	}
 	ipvsDeprecationReferences = []Reference{
 		{Title: "KEP-5495: Deprecate IPVS mode in kube-proxy", URL: "https://github.com/kubernetes/enhancements/tree/master/keps/sig-network/5495-deprecate-ipvs-mode-in-kube-proxy"},

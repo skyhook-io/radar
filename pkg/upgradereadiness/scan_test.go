@@ -566,8 +566,8 @@ func TestScanCoverageAndVerdictPrecedence(t *testing.T) {
 		}},
 	}}
 	got, _ = Scan(complete137, "1.36", "1.37")
-	if got.Verdict != VerdictNoKnownBlockers || got.ReviewedThrough != "1.37" {
-		t.Fatalf("reviewed 1.37 target should have no known blockers with complete clean evidence: %+v", got)
+	if got.Verdict != VerdictReview || got.ReviewedThrough != "1.37" {
+		t.Fatalf("reviewed 1.37 target should surface the manual cAdvisor review with otherwise clean evidence: %+v", got)
 	}
 }
 

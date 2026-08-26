@@ -65,6 +65,37 @@ var removedKubeadmFeatureGates137 = map[string]bool{
 	"PublicKeysECDSA":    true,
 }
 
+var removedKubeletCAdvisorFlags137 = []string{
+	"--application-metrics-count-limit",
+	"--boot-id-file",
+	"--container-hints",
+	"--containerd",
+	"--containerd-namespace",
+	"--enable-load-reader",
+	"--event-storage-age-limit",
+	"--event-storage-event-limit",
+	"--global-housekeeping-interval",
+	"--log-cadvisor-usage",
+	"--machine-id-file",
+	"--storage-driver-user",
+	"--storage-driver-password",
+	"--storage-driver-host",
+	"--storage-driver-db",
+	"--storage-driver-table",
+	"--storage-driver-secure",
+	"--storage-driver-buffer-duration",
+}
+
+type commandLineToken struct {
+	value string
+	field string
+}
+
+type commandFlagSetting struct {
+	value string
+	field string
+}
+
 func scanRemovedFeatureGates(input *Input) Check {
 	check := Check{ID: "removed-feature-gates", Category: "Component configuration", Title: "Feature gates removed or locked in Kubernetes 1.37", Status: CheckPassed, Summary: "No incompatible feature-gate settings were found in readable component configuration.", Scope: "Effective kubelet configuration and readable control-plane mirror Pods", AppliesFrom: "1.37", References: append([]Reference(nil), changelog137References...)}
 	controlPlaneEvidenceUnavailable := false
@@ -121,22 +152,27 @@ func scanRemovedFeatureGates(input *Input) Check {
 					continue
 				}
 				foundControlPlaneComponents[container.Name] = true
-				for name, value := range parsedFeatureGates(container.Command, container.Args) {
+				for name, setting := range parsedFeatureGates(container.Command, container.Args) {
 					if removedFeatureGates137[name] {
-						check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: name + " is removed", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("spec.containers[%d].args[--feature-gates].%s", containerIndex, name), Detail: value}, AppliesFrom: check.AppliesFrom, Impact: "This Kubernetes 1.37 control-plane component no longer recognizes the configured feature gate and can fail during startup.", Remediation: "Remove " + name + " from the component feature-gates argument before upgrading the control plane.", References: append([]Reference(nil), removedFeatureGateReferences137[name]...)})
+						check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: name + " is removed", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("spec.containers[%d].%s[--feature-gates].%s", containerIndex, setting.field, name), Detail: setting.value}, AppliesFrom: check.AppliesFrom, Impact: "This Kubernetes 1.37 control-plane component no longer recognizes the configured feature gate and can fail during startup.", Remediation: "Remove " + name + " from the component feature-gates argument before upgrading the control plane.", References: append([]Reference(nil), removedFeatureGateReferences137[name]...)})
 						continue
 					}
 					defaultValue, locked := lockedFeatureGates137[name]
-					configuredValue, err := strconv.ParseBool(value)
+					configuredValue, err := strconv.ParseBool(setting.value)
 					if !locked || (err == nil && configuredValue == defaultValue) {
 						continue
 					}
-					check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: name + " must use its locked default", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("spec.containers[%d].args[--feature-gates].%s", containerIndex, name), Detail: value}, AppliesFrom: check.AppliesFrom, Impact: fmt.Sprintf("Kubernetes 1.37 locks this %s feature gate to %t and rejects a different configured value during startup.", container.Name, defaultValue), Remediation: fmt.Sprintf("Set %s=%t or remove the explicit setting before upgrading the control plane.", name, defaultValue), References: append([]Reference(nil), lockedFeatureGateReferences137[name]...)})
+					check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: name + " must use its locked default", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("spec.containers[%d].%s[--feature-gates].%s", containerIndex, setting.field, name), Detail: setting.value}, AppliesFrom: check.AppliesFrom, Impact: fmt.Sprintf("Kubernetes 1.37 locks this %s feature gate to %t and rejects a different configured value during startup.", container.Name, defaultValue), Remediation: fmt.Sprintf("Set %s=%t or remove the explicit setting before upgrading the control plane.", name, defaultValue), References: append([]Reference(nil), lockedFeatureGateReferences137[name]...)})
 				}
 			}
 		}
 		if len(foundControlPlaneComponents) == 0 {
-			check.Caveat = appendCaveat(check.Caveat, "No control-plane mirror Pod was readable; the provider may manage the control plane, so component feature gates could not be inspected.")
+			if managedControlPlane(input) {
+				check.Caveat = appendCaveat(check.Caveat, "No control-plane mirror Pod was readable; the provider manages the control plane, so component feature gates are not exposed to Radar.")
+			} else {
+				controlPlaneEvidenceUnavailable = true
+				check.Caveat = appendCaveat(check.Caveat, "No control-plane mirror Pod was readable, so self-managed control-plane feature gates could not be inspected.")
+			}
 		} else {
 			missingComponents := []string{}
 			for _, component := range []string{"kube-apiserver", "kube-controller-manager", "kube-scheduler"} {
@@ -175,28 +211,40 @@ func isControlPlaneContainer(name string) bool {
 	}
 }
 
-func parsedFeatureGates(command, args []string) map[string]string {
-	values := append(append([]string{}, command...), args...)
-	result := map[string]string{}
-	for i := 0; i < len(values); i++ {
+func parsedFeatureGates(command, args []string) map[string]commandFlagSetting {
+	tokens := commandLineTokens(command, args)
+	result := map[string]commandFlagSetting{}
+	for i := 0; i < len(tokens); i++ {
 		value := ""
+		field := tokens[i].field
 		switch {
-		case strings.HasPrefix(values[i], "--feature-gates="):
-			value = strings.TrimPrefix(values[i], "--feature-gates=")
-		case values[i] == "--feature-gates" && i+1 < len(values):
+		case strings.HasPrefix(tokens[i].value, "--feature-gates="):
+			value = strings.TrimPrefix(tokens[i].value, "--feature-gates=")
+		case tokens[i].value == "--feature-gates" && i+1 < len(tokens):
 			i++
-			value = values[i]
+			value = tokens[i].value
 		default:
 			continue
 		}
 		for _, entry := range strings.Split(value, ",") {
 			name, enabled, ok := strings.Cut(strings.TrimSpace(entry), "=")
 			if ok && name != "" {
-				result[name] = enabled
+				result[name] = commandFlagSetting{value: enabled, field: field}
 			}
 		}
 	}
 	return result
+}
+
+func commandLineTokens(command, args []string) []commandLineToken {
+	tokens := make([]commandLineToken, 0, len(command)+len(args))
+	for _, value := range command {
+		tokens = append(tokens, commandLineToken{value: value, field: "command"})
+	}
+	for _, value := range args {
+		tokens = append(tokens, commandLineToken{value: value, field: "args"})
+	}
+	return tokens
 }
 
 func scanRemovedComponentFlags(input *Input) Check {
@@ -220,33 +268,44 @@ func scanRemovedComponentFlags(input *Input) Check {
 			}
 			foundControllerManager = true
 			check.Inspected++
-			if value, found := commandFlagPresence(container.Command, container.Args, "--concurrent-service-syncs"); found {
-				check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: "--concurrent-service-syncs is removed", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("spec.containers[%d].args[--concurrent-service-syncs]", containerIndex), Detail: value}, AppliesFrom: check.AppliesFrom, Impact: "kube-controller-manager 1.37 no longer recognizes this flag and can fail during startup.", Remediation: "Remove --concurrent-service-syncs from the kube-controller-manager arguments before upgrading the control plane.", References: append([]Reference(nil), check.References...)})
+			if value, field, found := commandFlagPresence(container.Command, container.Args, "--concurrent-service-syncs"); found {
+				check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: "--concurrent-service-syncs is removed", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("spec.containers[%d].%s[--concurrent-service-syncs]", containerIndex, field), Detail: value}, AppliesFrom: check.AppliesFrom, Impact: "kube-controller-manager 1.37 no longer recognizes this flag and can fail during startup.", Remediation: "Remove --concurrent-service-syncs from the kube-controller-manager arguments before upgrading the control plane.", References: append([]Reference(nil), check.References...)})
 			}
 		}
 	}
 	if !foundControllerManager {
-		check.Status, check.Summary = CheckNotApplicable, "No kube-controller-manager mirror Pod was readable; the provider may manage the control plane."
+		if managedControlPlane(input) {
+			check.Status, check.Summary = CheckNotApplicable, "The provider manages the control plane, so kube-controller-manager startup flags are not exposed to Radar."
+		} else {
+			check.Status, check.Summary = CheckUnknown, "No kube-controller-manager mirror Pod was readable, so self-managed control-plane flags could not be inspected."
+		}
 	} else if len(check.Findings) > 0 {
 		check.Summary = "The removed kube-controller-manager flag must be deleted before upgrading."
 	}
 	return check
 }
 
-func commandFlagPresence(command, args []string, name string) (string, bool) {
-	values := append(append([]string{}, command...), args...)
-	for i, value := range values {
-		if strings.HasPrefix(value, name+"=") {
-			return strings.TrimPrefix(value, name+"="), true
+func commandFlagPresence(command, args []string, name string) (string, string, bool) {
+	tokens := commandLineTokens(command, args)
+	for i, token := range tokens {
+		if strings.HasPrefix(token.value, name+"=") {
+			return strings.TrimPrefix(token.value, name+"="), token.field, true
 		}
-		if value == name {
-			if i+1 < len(values) && !strings.HasPrefix(values[i+1], "--") {
-				return values[i+1], true
+		if token.value == name {
+			if i+1 < len(tokens) && !strings.HasPrefix(tokens[i+1].value, "--") {
+				return tokens[i+1].value, token.field, true
 			}
-			return "set", true
+			return "set", token.field, true
 		}
 	}
-	return "", false
+	return "", "", false
+}
+
+func scanRemovedKubeletCAdvisorOptions() Check {
+	flags := strings.Join(removedKubeletCAdvisorFlags137, ", ")
+	check := Check{ID: "removed-kubelet-cadvisor-options", Category: "Node configuration", Title: "Kubelet cAdvisor options removed in Kubernetes 1.37", Status: CheckReview, Summary: "Kubelet startup arguments and direct cAdvisor metric consumers require manual review.", Scope: "Kubelet process arguments and direct cAdvisor API consumers", AppliesFrom: "1.37", References: append([]Reference(nil), cAdvisorRemovalReferences137...)}
+	check.Findings = []Finding{{RuleID: check.ID, Title: "Kubelet cAdvisor settings are not observable through the Kubernetes API", Level: LevelReview, Evidence: Evidence{Source: "Kubernetes 1.37 release notes", Path: "kubelet process arguments and cAdvisor metric consumers", Detail: "manual verification required"}, AppliesFrom: check.AppliesFrom, Impact: "Kubelet 1.37 fails to start if any of 18 removed cAdvisor flags is configured. Direct consumers also lose userDefinedMetrics, container_application_* metrics, and three removed /metrics/cadvisor series.", Remediation: "Inspect every node's kubelet service and bootstrap arguments and remove these flags before upgrading: " + flags + ". --housekeeping-interval remains supported. Audit direct /stats/summary consumers for userDefinedMetrics and /metrics/cadvisor consumers for container_application_*, container_cpu_load_average_10s, container_cpu_load_d_average_10s, and container_tasks_state.", References: append([]Reference(nil), check.References...)}}
+	return check
 }
 
 func scanKubeletEventQPS(input *Input) Check {
@@ -306,7 +365,7 @@ func scanRemovedSchedulingAPIs(input *Input) Check {
 		if object == nil {
 			continue
 		}
-		check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: "scheduling.k8s.io/v1alpha2 " + object.GetKind(), Level: LevelBlocker, Resource: &ResourceRef{Group: "scheduling.k8s.io", Kind: object.GetKind(), Namespace: object.GetNamespace(), Name: object.GetName()}, Evidence: Evidence{Source: "live", Path: "apiVersion", Detail: "scheduling.k8s.io/v1alpha2"}, AppliesFrom: check.AppliesFrom, Impact: "Kubernetes 1.37 no longer serves this alpha API and requires its stored objects to be removed before upgrade.", Remediation: "Migrate this object to scheduling.k8s.io/v1beta1 or delete it before upgrading.", References: append([]Reference(nil), check.References...)})
+		check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: "scheduling.k8s.io/v1alpha2 " + object.GetKind(), Level: LevelBlocker, Resource: &ResourceRef{Group: "scheduling.k8s.io", Kind: object.GetKind(), Namespace: object.GetNamespace(), Name: object.GetName()}, Evidence: Evidence{Source: "live", Path: "apiVersion", Detail: "scheduling.k8s.io/v1alpha2"}, AppliesFrom: check.AppliesFrom, Impact: "Kubernetes 1.37 no longer serves this alpha API and requires its stored objects to be removed before upgrade.", Remediation: "Delete this v1alpha2 object before upgrading. After the control plane reaches Kubernetes 1.37, recreate it with scheduling.k8s.io/v1beta1.", References: append([]Reference(nil), check.References...)})
 	}
 	if input.Namespaces != nil {
 		check.Caveat = appendCaveat(check.Caveat, scopedCoverageNote(input.Namespaces, "Workload and PodGroup objects"))
@@ -445,7 +504,7 @@ func scanKubeProxyModeTransition(input *Input) Check {
 		case "ipvs":
 			check.Findings = append(check.Findings, kubeProxyModeFinding(check, daemonSet, sourcePath, mode, "IPVS mode is deprecated", "IPVS is on a staged path to default-off in Kubernetes 1.40 and removal in 1.43.", "Plan and validate migration to nftables or iptables before the IPVS disablement timeline.", ipvsDeprecationReferences))
 		case "":
-			check.Findings = append(check.Findings, kubeProxyModeFinding(check, daemonSet, sourcePath, "unspecified", "Linux proxy mode is not explicit", "Kubernetes 1.37 warns because the implicit Linux default will change from iptables to nftables in a future release.", "Set mode explicitly to iptables or nftables after validating the selected backend.", nftablesDefaultReferences))
+			check.Findings = append(check.Findings, kubeProxyModeFinding(check, daemonSet, sourcePath, "unspecified", "Linux proxy mode is not explicit", "Kubernetes 1.37 warns because the implicit Linux default changes from iptables to nftables in Kubernetes 1.40.", "Set mode explicitly to iptables or nftables after validating the selected backend.", nftablesDefaultReferences))
 		default:
 			unknown++
 			check.Caveat = appendCaveat(check.Caveat, fmt.Sprintf("%s/%s uses unrecognized kube-proxy mode %q.", daemonSet.Namespace, daemonSet.Name, mode))
@@ -477,7 +536,7 @@ func kubeProxyContainer(daemonSet *appsv1.DaemonSet) *corev1.Container {
 }
 
 func kubeProxyMode(input *Input, daemonSet *appsv1.DaemonSet, container *corev1.Container) (string, string, bool, string) {
-	if configPath, ok := commandFlag(container.Command, container.Args, "--config"); ok {
+	if configPath, _, ok := commandFlag(container.Command, container.Args, "--config"); ok {
 		raw, evidencePath, err := mountedConfigMapFile(input.ConfigMaps, daemonSet, container, configPath)
 		if err != nil {
 			return "", "", false, fmt.Sprintf("%s/%s: %v", daemonSet.Namespace, daemonSet.Name, err)
@@ -495,23 +554,23 @@ func kubeProxyMode(input *Input, daemonSet *appsv1.DaemonSet, container *corev1.
 		}
 		return mode, evidencePath + ".mode", true, ""
 	}
-	if mode, ok := commandFlag(container.Command, container.Args, "--proxy-mode"); ok {
-		return mode, "spec.template.spec.containers[kube-proxy].args[--proxy-mode]", true, ""
+	if mode, field, ok := commandFlag(container.Command, container.Args, "--proxy-mode"); ok {
+		return mode, "spec.template.spec.containers[kube-proxy]." + field + "[--proxy-mode]", true, ""
 	}
-	return "", "spec.template.spec.containers[kube-proxy].args[--proxy-mode]", true, ""
+	return "", "spec.template.spec.containers[kube-proxy].command/args[--proxy-mode]", true, ""
 }
 
-func commandFlag(command, args []string, name string) (string, bool) {
-	values := append(append([]string{}, command...), args...)
-	for i := 0; i < len(values); i++ {
-		if strings.HasPrefix(values[i], name+"=") {
-			return strings.TrimPrefix(values[i], name+"="), true
+func commandFlag(command, args []string, name string) (string, string, bool) {
+	tokens := commandLineTokens(command, args)
+	for i := 0; i < len(tokens); i++ {
+		if strings.HasPrefix(tokens[i].value, name+"=") {
+			return strings.TrimPrefix(tokens[i].value, name+"="), tokens[i].field, true
 		}
-		if values[i] == name && i+1 < len(values) && !strings.HasPrefix(values[i+1], "--") {
-			return values[i+1], true
+		if tokens[i].value == name && i+1 < len(tokens) && !strings.HasPrefix(tokens[i+1].value, "--") {
+			return tokens[i+1].value, tokens[i].field, true
 		}
 	}
-	return "", false
+	return "", "", false
 }
 
 func mountedConfigMapFile(configMaps []*corev1.ConfigMap, daemonSet *appsv1.DaemonSet, container *corev1.Container, filePath string) ([]byte, string, error) {
@@ -566,7 +625,7 @@ func kubeProxyModeFinding(check Check, daemonSet *appsv1.DaemonSet, evidencePath
 }
 
 func scanRemovedControlPlaneMetrics(input *Input) Check {
-	check := Check{ID: "removed-control-plane-metrics", Category: "Observability", Title: "Control-plane metric changes in Kubernetes 1.37", Status: CheckPassed, Summary: "No inspected PrometheusRule references a control-plane metric hidden or renamed in Kubernetes 1.37.", Scope: "Prometheus Operator rule expressions", AppliesFrom: "1.37", References: append([]Reference(nil), changelog137References...)}
+	check := Check{ID: "removed-control-plane-metrics", Category: "Observability", Title: "Kubernetes metric changes in Kubernetes 1.37", Status: CheckPassed, Summary: "No inspected PrometheusRule references a metric hidden, renamed, or removed in Kubernetes 1.37.", Scope: "Prometheus Operator rule expressions", AppliesFrom: "1.37", References: append([]Reference(nil), changelog137References...)}
 	if !input.PrometheusRulesDiscoveryAvailable {
 		check.Status, check.Summary = CheckUnknown, "API discovery is unavailable; Radar could not determine whether PrometheusRule is installed."
 		return check
@@ -579,13 +638,20 @@ func scanRemovedControlPlaneMetrics(input *Input) Check {
 		check.Status, check.Summary = CheckUnknown, "PrometheusRule is installed but unavailable to Radar."
 		return check
 	}
-	removed := map[string]string{
-		"apiserver_cache_list_total":                  `apiserver_storage_list_total{storage="watchcache"}`,
-		"apiserver_cache_list_fetched_objects_total":  `apiserver_storage_list_fetched_objects_total{storage="watchcache"}`,
-		"apiserver_cache_list_returned_objects_total": `apiserver_storage_list_returned_objects_total{storage="watchcache"}`,
-		"resourceclaim_controller_creates_total":      "dynamic_resource_allocation_resourceclaim_creates_total",
-		"scheduler_resourceclaim_creates_total":       "dynamic_resource_allocation_resourceclaim_creates_total",
-		"resourceclaim_controller_resource_claims":    "dynamic_resource_allocation_resource_claims",
+	type metricChange struct {
+		impact      string
+		remediation string
+	}
+	changes := map[string]metricChange{
+		"apiserver_cache_list_total":                  {impact: "This alert or recording rule will stop receiving data by default when Kubernetes 1.37 hides the metric.", remediation: `Rewrite the expression using apiserver_storage_list_total{storage="watchcache"} before upgrading.`},
+		"apiserver_cache_list_fetched_objects_total":  {impact: "This alert or recording rule will stop receiving data by default when Kubernetes 1.37 hides the metric.", remediation: `Rewrite the expression using apiserver_storage_list_fetched_objects_total{storage="watchcache"} before upgrading.`},
+		"apiserver_cache_list_returned_objects_total": {impact: "This alert or recording rule will stop receiving data by default when Kubernetes 1.37 hides the metric.", remediation: `Rewrite the expression using apiserver_storage_list_returned_objects_total{storage="watchcache"} before upgrading.`},
+		"resourceclaim_controller_creates_total":      {impact: "This alert or recording rule will stop receiving data when Kubernetes 1.37 renames the metric.", remediation: "Rewrite the expression using dynamic_resource_allocation_resourceclaim_creates_total before upgrading."},
+		"scheduler_resourceclaim_creates_total":       {impact: "This alert or recording rule will stop receiving data when Kubernetes 1.37 renames the metric.", remediation: "Rewrite the expression using dynamic_resource_allocation_resourceclaim_creates_total before upgrading."},
+		"resourceclaim_controller_resource_claims":    {impact: "This alert or recording rule will stop receiving data when Kubernetes 1.37 renames the metric.", remediation: "Rewrite the expression using dynamic_resource_allocation_resource_claims before upgrading."},
+		"container_cpu_load_average_10s":              {impact: "This alert or recording rule will stop receiving data because Kubernetes 1.37 removes the cAdvisor metric.", remediation: "Remove or redesign the expression before upgrading; Kubernetes 1.37 provides no replacement for this metric."},
+		"container_cpu_load_d_average_10s":            {impact: "This alert or recording rule will stop receiving data because Kubernetes 1.37 removes the cAdvisor metric.", remediation: "Remove or redesign the expression before upgrading; Kubernetes 1.37 provides no replacement for this metric."},
+		"container_tasks_state":                       {impact: "This alert or recording rule will stop receiving data because Kubernetes 1.37 removes the cAdvisor metric.", remediation: "Remove or redesign the expression before upgrading; Kubernetes 1.37 provides no replacement for this metric."},
 	}
 	check.Inspected = len(input.PrometheusRules)
 	for _, rule := range input.PrometheusRules {
@@ -593,11 +659,14 @@ func scanRemovedControlPlaneMetrics(input *Input) Check {
 			continue
 		}
 		expressions := prometheusRuleExpressions(rule.Object)
-		for oldName, replacement := range removed {
+		for oldName, change := range changes {
 			if !containsMetric(expressions, oldName) {
 				continue
 			}
-			check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: oldName + " changes in Kubernetes 1.37", Level: LevelWarning, Resource: &ResourceRef{Group: "monitoring.coreos.com", Kind: "PrometheusRule", Namespace: rule.GetNamespace(), Name: rule.GetName()}, Evidence: Evidence{Source: "live", Path: "spec.groups[].rules[].expr", Detail: oldName}, AppliesFrom: check.AppliesFrom, Impact: "This alert or recording rule will stop receiving data by default when Kubernetes 1.37 hides or renames the metric.", Remediation: "Rewrite the expression using " + replacement + " before upgrading.", References: append([]Reference(nil), controlPlaneMetricReferences137[oldName]...)})
+			check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: oldName + " changes in Kubernetes 1.37", Level: LevelWarning, Resource: &ResourceRef{Group: "monitoring.coreos.com", Kind: "PrometheusRule", Namespace: rule.GetNamespace(), Name: rule.GetName()}, Evidence: Evidence{Source: "live", Path: "spec.groups[].rules[].expr", Detail: oldName}, AppliesFrom: check.AppliesFrom, Impact: change.impact, Remediation: change.remediation, References: append([]Reference(nil), metricReferences137[oldName]...)})
+		}
+		for _, metricName := range metricsWithPrefix(expressions, "container_application_") {
+			check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: metricName + " is removed in Kubernetes 1.37", Level: LevelWarning, Resource: &ResourceRef{Group: "monitoring.coreos.com", Kind: "PrometheusRule", Namespace: rule.GetNamespace(), Name: rule.GetName()}, Evidence: Evidence{Source: "live", Path: "spec.groups[].rules[].expr", Detail: metricName}, AppliesFrom: check.AppliesFrom, Impact: "This alert or recording rule will stop receiving data because Kubernetes 1.37 removes custom cAdvisor application metrics.", Remediation: "Remove or redesign the expression before upgrading; Kubernetes 1.37 no longer exports container_application_* metrics.", References: append([]Reference(nil), metricReferences137["container_application_*"]...)})
 		}
 	}
 	if input.Namespaces != nil {
@@ -607,7 +676,7 @@ func scanRemovedControlPlaneMetrics(input *Input) Check {
 		check.Caveat = appendCaveat(check.Caveat, "PrometheusRules could not be read in: "+formatBoundedList(input.PrometheusRuleUnavailableNamespaces, ", ")+".")
 	}
 	if len(check.Findings) > 0 {
-		check.Summary = fmt.Sprintf("%d %s reference a control-plane metric hidden or renamed in Kubernetes 1.37.", len(check.Findings), plural(len(check.Findings), "PrometheusRule", "PrometheusRules"))
+		check.Summary = fmt.Sprintf("%d PrometheusRule metric %s must be updated for Kubernetes 1.37.", len(check.Findings), plural(len(check.Findings), "reference", "references"))
 	} else if check.Caveat != "" {
 		check.Status, check.Summary = CheckUnknown, "No removed metrics were found in readable PrometheusRules, but rule coverage is incomplete."
 	}

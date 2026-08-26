@@ -98,6 +98,7 @@ func Scan(input *Input, currentVersion, targetVersion string) (*ScanResults, err
 		result.Checks = append(result.Checks,
 			scanRemovedFeatureGates(input),
 			scanRemovedComponentFlags(input),
+			scanRemovedKubeletCAdvisorOptions(),
 			scanKubeletEventQPS(input),
 			scanRemovedSchedulingAPIs(input),
 			scanKubeadmConfig(input),
@@ -1132,6 +1133,24 @@ func containsMetric(expressions []string, metric string) bool {
 		}
 	}
 	return false
+}
+
+func metricsWithPrefix(expressions []string, prefix string) []string {
+	pattern := regexp.MustCompile(`(^|[^a-zA-Z0-9_:])(` + regexp.QuoteMeta(prefix) + `[a-zA-Z_:][a-zA-Z0-9_:]*)`)
+	found := map[string]bool{}
+	for _, expression := range expressions {
+		for _, match := range pattern.FindAllStringSubmatch(expression, -1) {
+			if len(match) == 3 {
+				found[match[2]] = true
+			}
+		}
+	}
+	metrics := make([]string, 0, len(found))
+	for metric := range found {
+		metrics = append(metrics, metric)
+	}
+	sort.Strings(metrics)
+	return metrics
 }
 
 func workloadsUnavailable(input *Input) bool {
