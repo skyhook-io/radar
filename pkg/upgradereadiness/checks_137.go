@@ -248,39 +248,66 @@ func commandLineTokens(command, args []string) []commandLineToken {
 }
 
 func scanRemovedComponentFlags(input *Input) Check {
-	check := Check{ID: "removed-component-flags", Category: "Component configuration", Title: "Component flags removed in Kubernetes 1.37", Status: CheckPassed, Summary: "No readable control-plane mirror Pod uses a component flag removed in Kubernetes 1.37.", Scope: "Readable control-plane mirror Pods", AppliesFrom: "1.37", References: append([]Reference(nil), componentFlagReferences137...)}
+	references := append([]Reference(nil), componentFlagReferences137...)
+	references = append(references, podGroupAdmissionReferences137...)
+	check := Check{ID: "removed-component-flags", Category: "Component configuration", Title: "Component options removed in Kubernetes 1.37", Status: CheckPassed, Summary: "No readable control-plane mirror Pod uses a removed component flag or admission plugin.", Scope: "Readable control-plane mirror Pods", AppliesFrom: "1.37", References: references}
 	if !kubeSystemCovered(input, "pods") {
-		check.Status, check.Summary = CheckUnknown, "kube-system is outside the readable Pod scope, so control-plane component flags could not be inspected."
+		check.Status, check.Summary = CheckUnknown, "kube-system is outside the readable Pod scope, so control-plane component options could not be inspected."
 		return check
 	}
 	if input.Pods == nil {
-		check.Status, check.Summary = CheckUnknown, "Pods were unavailable, so control-plane component flags could not be inspected."
+		check.Status, check.Summary = CheckUnknown, "Pods were unavailable, so control-plane component options could not be inspected."
 		return check
 	}
 	foundControllerManager := false
+	foundAPIServer := false
 	for _, pod := range input.Pods {
 		if pod == nil || pod.Annotations[corev1.MirrorPodAnnotationKey] == "" {
 			continue
 		}
 		for containerIndex, container := range pod.Spec.Containers {
-			if container.Name != "kube-controller-manager" {
-				continue
-			}
-			foundControllerManager = true
-			check.Inspected++
-			if value, field, found := commandFlagPresence(container.Command, container.Args, "--concurrent-service-syncs"); found {
-				check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: "--concurrent-service-syncs is removed", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("spec.containers[%d].%s[--concurrent-service-syncs]", containerIndex, field), Detail: value}, AppliesFrom: check.AppliesFrom, Impact: "kube-controller-manager 1.37 no longer recognizes this flag and can fail during startup.", Remediation: "Remove --concurrent-service-syncs from the kube-controller-manager arguments before upgrading the control plane.", References: append([]Reference(nil), check.References...)})
+			switch container.Name {
+			case "kube-controller-manager":
+				foundControllerManager = true
+				check.Inspected++
+				if value, field, found := commandFlagPresence(container.Command, container.Args, "--concurrent-service-syncs"); found {
+					check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: "--concurrent-service-syncs is removed", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("spec.containers[%d].%s[--concurrent-service-syncs]", containerIndex, field), Detail: value}, AppliesFrom: check.AppliesFrom, Impact: "kube-controller-manager 1.37 no longer recognizes this flag and can fail during startup.", Remediation: "Remove --concurrent-service-syncs from the kube-controller-manager arguments before upgrading the control plane.", References: append([]Reference(nil), componentFlagReferences137...)})
+				}
+			case "kube-apiserver":
+				foundAPIServer = true
+				check.Inspected++
+				for _, flagName := range []string{"--enable-admission-plugins", "--disable-admission-plugins"} {
+					for _, setting := range commandFlagSettings(container.Command, container.Args, flagName) {
+						for _, plugin := range strings.Split(setting.value, ",") {
+							if strings.TrimSpace(plugin) != "PodGroupWorkloadExists" {
+								continue
+							}
+							check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: "PodGroupWorkloadExists admission plugin is removed", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("spec.containers[%d].%s[%s]", containerIndex, setting.field, flagName), Detail: "PodGroupWorkloadExists"}, AppliesFrom: check.AppliesFrom, Impact: "Kube-apiserver 1.37 rejects the removed admission plugin name and fails during startup.", Remediation: "Remove PodGroupWorkloadExists from " + flagName + " before upgrading the control plane.", References: append([]Reference(nil), podGroupAdmissionReferences137...)})
+						}
+					}
+				}
 			}
 		}
 	}
+	if !foundControllerManager && !foundAPIServer && managedControlPlane(input) {
+		check.Status, check.Summary = CheckNotApplicable, "The provider manages the control plane, so component startup options are not exposed to Radar."
+		return check
+	}
+	missingComponents := []string{}
+	if !foundAPIServer {
+		missingComponents = append(missingComponents, "kube-apiserver")
+	}
 	if !foundControllerManager {
-		if managedControlPlane(input) {
-			check.Status, check.Summary = CheckNotApplicable, "The provider manages the control plane, so kube-controller-manager startup flags are not exposed to Radar."
-		} else {
-			check.Status, check.Summary = CheckUnknown, "No kube-controller-manager mirror Pod was readable, so self-managed control-plane flags could not be inspected."
+		missingComponents = append(missingComponents, "kube-controller-manager")
+	}
+	if len(missingComponents) > 0 {
+		check.Caveat = "Component startup options could not be inspected for: " + strings.Join(missingComponents, ", ") + "."
+		if len(check.Findings) == 0 {
+			check.Status, check.Summary = CheckUnknown, "No removed component option was found, but self-managed control-plane coverage is incomplete."
 		}
-	} else if len(check.Findings) > 0 {
-		check.Summary = "The removed kube-controller-manager flag must be deleted before upgrading."
+	}
+	if len(check.Findings) > 0 {
+		check.Summary = fmt.Sprintf("%d removed component %s must be deleted before upgrading.", len(check.Findings), plural(len(check.Findings), "option", "options"))
 	}
 	return check
 }
@@ -299,6 +326,22 @@ func commandFlagPresence(command, args []string, name string) (string, string, b
 		}
 	}
 	return "", "", false
+}
+
+func commandFlagSettings(command, args []string, name string) []commandFlagSetting {
+	tokens := commandLineTokens(command, args)
+	settings := []commandFlagSetting{}
+	for i := 0; i < len(tokens); i++ {
+		if strings.HasPrefix(tokens[i].value, name+"=") {
+			settings = append(settings, commandFlagSetting{value: strings.TrimPrefix(tokens[i].value, name+"="), field: tokens[i].field})
+			continue
+		}
+		if tokens[i].value == name && i+1 < len(tokens) && !strings.HasPrefix(tokens[i+1].value, "--") {
+			settings = append(settings, commandFlagSetting{value: tokens[i+1].value, field: tokens[i].field})
+			i++
+		}
+	}
+	return settings
 }
 
 func scanRemovedKubeletCAdvisorOptions() Check {
@@ -404,6 +447,7 @@ func scanKubeadmConfig(input *Input) Check {
 	}
 	check.Status = CheckPassed
 	check.Summary = "The kubeadm cluster configuration does not use kubeadm.k8s.io/v1beta3."
+	check.Caveat = "Only the stored kubeadm-config ConfigMap was inspected; kubeadm configuration files passed with --config on control-plane hosts are not visible to Radar."
 	parsed := 0
 	parseErrors := 0
 	for key, value := range configMap.Data {
@@ -439,7 +483,7 @@ func scanKubeadmConfig(input *Input) Check {
 		}
 	}
 	if parseErrors > 0 || parsed == 0 {
-		check.Caveat = "The kubeadm ConfigMap contained configuration data that Radar could not fully parse."
+		check.Caveat = appendCaveat(check.Caveat, "The kubeadm ConfigMap contained configuration data that Radar could not fully parse.")
 		if len(check.Findings) == 0 {
 			check.Status, check.Summary = CheckUnknown, "The kubeadm ConfigMap was present but its configuration API could not be determined."
 		}

@@ -97,7 +97,7 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts Options) (
 	}
 	events := audit.ListNamespaced(cache.Events(), namespaces)
 
-	input.CacheScopedKinds = upgradeCacheScopedKinds(cache, namespaces)
+	input.CacheScopedKinds = upgradeCacheScopedKinds(cache, namespaces, opts.CurrentVersion, opts.TargetVersion)
 	input.Pods = typed.Pods
 	input.Deployments = typed.Deployments
 	input.ReplicaSets = replicaSets
@@ -115,16 +115,11 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts Options) (
 	return upgradereadiness.Scan(input, opts.CurrentVersion, opts.TargetVersion)
 }
 
-func upgradeCacheScopedKinds(cache *k8s.ResourceCache, scanNamespaces []string) map[string][]string {
+func upgradeCacheScopedKinds(cache *k8s.ResourceCache, scanNamespaces []string, currentVersion, targetVersion string) map[string][]string {
 	if cache == nil {
 		return nil
 	}
-	resources := []string{
-		string(k8score.Pods), string(k8score.Deployments), string(k8score.ReplicaSets),
-		string(k8score.StatefulSets), string(k8score.DaemonSets), string(k8score.Jobs),
-		string(k8score.CronJobs), string(k8score.Services), string(k8score.Events),
-		string(k8score.ConfigMaps), string(k8score.PersistentVolumeClaims), string(k8score.PodDisruptionBudgets),
-	}
+	resources := upgradeCacheScopeResources(currentVersion, targetVersion)
 	limited := map[string][]string{}
 	for _, resource := range resources {
 		if namespaces := cache.KindNamespaces(resource); len(namespaces) > 0 && !sameNamespaceSet(namespaces, scanNamespaces) {
@@ -135,6 +130,23 @@ func upgradeCacheScopedKinds(cache *k8s.ResourceCache, scanNamespaces []string) 
 		return nil
 	}
 	return limited
+}
+
+func upgradeCacheScopeResources(currentVersion, targetVersion string) []string {
+	resources := []string{
+		string(k8score.Pods), string(k8score.Deployments), string(k8score.ReplicaSets),
+		string(k8score.StatefulSets), string(k8score.DaemonSets), string(k8score.Jobs),
+		string(k8score.CronJobs), string(k8score.Services), string(k8score.PodDisruptionBudgets),
+	}
+	crosses135, _ := upgradereadiness.UpgradePathIncludesRelease(currentVersion, targetVersion, "1.35")
+	crosses137, _ := upgradereadiness.UpgradePathIncludesRelease(currentVersion, targetVersion, "1.37")
+	if crosses135 || crosses137 {
+		resources = append(resources, string(k8score.Events))
+	}
+	if crosses137 {
+		resources = append(resources, string(k8score.ConfigMaps), string(k8score.PersistentVolumeClaims))
+	}
+	return resources
 }
 
 func sameNamespaceSet(a, b []string) bool {

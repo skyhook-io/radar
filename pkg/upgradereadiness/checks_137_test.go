@@ -48,11 +48,11 @@ func TestRemovedFeatureGates137(t *testing.T) {
 			wantRef:    "/pull/140226",
 		},
 		{
-			name: "control plane mirror pod command",
+			name: "control plane mirror pod split command and args",
 			configure: func(input *Input) {
 				input.Pods = []*corev1.Pod{{
 					ObjectMeta: metav1.ObjectMeta{Name: "kube-apiserver-node-a", Namespace: "kube-system", Annotations: map[string]string{corev1.MirrorPodAnnotationKey: "mirror"}},
-					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "kube-apiserver", Command: []string{"kube-apiserver", "--feature-gates=APIServerTracing=false"}}}},
+					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "kube-apiserver", Command: []string{"kube-apiserver", "--feature-gates"}, Args: []string{"APIServerTracing=false"}}}},
 				}}
 			},
 			wantStatus: CheckBlocked,
@@ -283,6 +283,46 @@ func TestRemovedComponentFlag137(t *testing.T) {
 	}
 }
 
+func TestRemovedPodGroupAdmissionPlugin137(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		container corev1.Container
+		wantPath  string
+	}{
+		{name: "enabled in args", container: corev1.Container{Name: "kube-apiserver", Args: []string{"--enable-admission-plugins=NodeRestriction,PodGroupWorkloadExists"}}, wantPath: ".args[--enable-admission-plugins]"},
+		{name: "disabled with split command value", container: corev1.Container{Name: "kube-apiserver", Command: []string{"kube-apiserver", "--disable-admission-plugins"}, Args: []string{"PodGroupWorkloadExists"}}, wantPath: ".command[--disable-admission-plugins]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := completeInput()
+			input.Pods = []*corev1.Pod{{
+				ObjectMeta: metav1.ObjectMeta{Name: "control-plane-node-a", Namespace: "kube-system", Annotations: map[string]string{corev1.MirrorPodAnnotationKey: "mirror"}},
+				Spec: corev1.PodSpec{Containers: []corev1.Container{
+					tc.container,
+					{Name: "kube-controller-manager"},
+				}},
+			}}
+			check := checkByID(t, scan137(t, input), "removed-component-flags")
+			if check.Status != CheckBlocked || len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Evidence.Path, tc.wantPath) || !strings.Contains(check.Findings[0].Impact, "fails during startup") {
+				t.Fatalf("removed admission plugin = %+v, want source-anchored blocker", check)
+			}
+			requireFindingReference(t, check.Findings, "/pull/139008")
+		})
+	}
+
+	input := completeInput()
+	input.Pods = []*corev1.Pod{{
+		ObjectMeta: metav1.ObjectMeta{Name: "control-plane-node-a", Namespace: "kube-system", Annotations: map[string]string{corev1.MirrorPodAnnotationKey: "mirror"}},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{
+			{Name: "kube-apiserver", Args: []string{"--enable-admission-plugins=NodeRestriction"}},
+			{Name: "kube-controller-manager"},
+		}},
+	}}
+	check := checkByID(t, scan137(t, input), "removed-component-flags")
+	if check.Status != CheckPassed || check.Caveat != "" {
+		t.Fatalf("clean complete component options = %+v, want passed", check)
+	}
+}
+
 func TestRemovedKubeletCAdvisorOptions137(t *testing.T) {
 	wantFlags := []string{
 		"--application-metrics-count-limit", "--boot-id-file", "--container-hints", "--containerd", "--containerd-namespace",
@@ -350,8 +390,8 @@ func TestKubeadmV1Beta3Config137(t *testing.T) {
 
 	input.ConfigMaps[0].Data["ClusterConfiguration"] = "apiVersion: kubeadm.k8s.io/v1beta4\nkind: ClusterConfiguration\n"
 	check = checkByID(t, scan137(t, input), "kubeadm-config-v1beta3")
-	if check.Status != CheckPassed {
-		t.Fatalf("kubeadm v1beta4 = %+v, want pass", check)
+	if check.Status != CheckPassed || !strings.Contains(check.Caveat, "--config") || !strings.Contains(check.Caveat, "not visible") {
+		t.Fatalf("kubeadm v1beta4 = %+v, want pass with host-file evidence caveat", check)
 	}
 
 	input.ConfigMaps[0].Data["ClusterConfiguration"] = "apiVersion: kubeadm.k8s.io/v1beta4\nkind: ClusterConfiguration\nfeatureGates:\n  NodeLocalCRISocket: true\n"
@@ -363,8 +403,8 @@ func TestKubeadmV1Beta3Config137(t *testing.T) {
 
 	input.ConfigMaps[0].Data["ClusterConfiguration"] = "[not yaml"
 	check = checkByID(t, scan137(t, input), "kubeadm-config-v1beta3")
-	if check.Status != CheckUnknown {
-		t.Fatalf("unparseable kubeadm config = %+v, want unknown", check)
+	if check.Status != CheckUnknown || !strings.Contains(check.Caveat, "--config") || !strings.Contains(check.Caveat, "could not fully parse") {
+		t.Fatalf("unparseable kubeadm config = %+v, want unknown with both evidence boundaries", check)
 	}
 }
 
@@ -601,6 +641,9 @@ func TestEvery137ConfigurationRemovalHasAnUpstreamReference(t *testing.T) {
 		if len(kubeadmFeatureGateReferences137[name]) == 0 {
 			t.Errorf("removed kubeadm feature gate %s has no upstream reference", name)
 		}
+	}
+	if len(podGroupAdmissionReferences137) == 0 {
+		t.Error("removed PodGroupWorkloadExists admission plugin has no upstream reference")
 	}
 }
 

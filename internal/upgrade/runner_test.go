@@ -1,6 +1,7 @@
 package upgrade
 
 import (
+	"slices"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -9,6 +10,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/upgradereadiness"
 )
 
@@ -152,5 +154,34 @@ func TestSameNamespaceSet(t *testing.T) {
 	}
 	if sameNamespaceSet(nil, []string{}) || sameNamespaceSet([]string{"team-a"}, []string{"team-b"}) {
 		t.Fatal("cluster-wide, empty, and distinct scopes must remain different")
+	}
+}
+
+func TestUpgradeCacheScopeResourcesFollowCrossedReleases(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		current        string
+		target         string
+		wantEvents     bool
+		wantConfigMaps bool
+		wantPVCs       bool
+	}{
+		{name: "crosses 1.35", current: "1.34", target: "1.36", wantEvents: true},
+		{name: "crosses only 1.36", current: "1.35", target: "1.36"},
+		{name: "crosses 1.37", current: "1.36", target: "1.37", wantEvents: true, wantConfigMaps: true, wantPVCs: true},
+		{name: "already crossed 1.37", current: "1.37", target: "1.38"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resources := upgradeCacheScopeResources(tc.current, tc.target)
+			if got := slices.Contains(resources, string(k8score.Events)); got != tc.wantEvents {
+				t.Fatalf("Events included = %t, want %t in %v", got, tc.wantEvents, resources)
+			}
+			if got := slices.Contains(resources, string(k8score.ConfigMaps)); got != tc.wantConfigMaps {
+				t.Fatalf("ConfigMaps included = %t, want %t in %v", got, tc.wantConfigMaps, resources)
+			}
+			if got := slices.Contains(resources, string(k8score.PersistentVolumeClaims)); got != tc.wantPVCs {
+				t.Fatalf("PersistentVolumeClaims included = %t, want %t in %v", got, tc.wantPVCs, resources)
+			}
+		})
 	}
 }
