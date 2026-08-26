@@ -79,3 +79,68 @@ func TestHasUsableKubeconfigRejectsFIFOWithoutBlocking(t *testing.T) {
 		t.Fatal("primary kubeconfig validation blocked on a FIFO")
 	}
 }
+
+func TestResolveKubeconfigSourcesSkipsFIFOSecondaryWithoutBlocking(t *testing.T) {
+	dir := t.TempDir()
+	regular := writeKubeconfig(t, dir, "regular.yaml", "prod", []kubeEntry{
+		{ctxName: "prod", userName: "user", clusterName: "cluster"},
+	})
+	fifo := filepath.Join(dir, "secondary.pipe")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+
+	done := make(chan struct {
+		sources kubeconfigSources
+		err     error
+	}, 1)
+	go func() {
+		sources, err := resolveKubeconfigSources(InitOptions{}, regular+string(os.PathListSeparator)+fifo, dir)
+		done <- struct {
+			sources kubeconfigSources
+			err     error
+		}{sources: sources, err: err}
+	}()
+
+	select {
+	case result := <-done:
+		if result.err != nil {
+			t.Fatalf("resolveKubeconfigSources: %v", result.err)
+		}
+		if len(result.sources.paths) != 1 || result.sources.paths[0] != regular {
+			t.Fatalf("paths = %v, want [%q]", result.sources.paths, regular)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("KUBECONFIG resolution blocked on a FIFO secondary")
+	}
+}
+
+func TestInitRejectsDefaultFIFOWithoutBlockingAfterInClusterFallback(t *testing.T) {
+	home := t.TempDir()
+	kubeDir := filepath.Join(home, ".kube")
+	if err := os.Mkdir(kubeDir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	fifo := filepath.Join(kubeDir, "config")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("KUBECONFIG", "")
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+	t.Setenv("KUBERNETES_SERVICE_PORT", "")
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+
+	done := make(chan error, 1)
+	go func() { done <- doInit(InitOptions{}) }()
+
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Fatalf("doInit error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("default kubeconfig resolution blocked on a FIFO")
+	}
+}

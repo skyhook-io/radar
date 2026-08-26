@@ -63,11 +63,38 @@ func TestResolveKubeconfigSourcesDirectAndFallbackModes(t *testing.T) {
 		}
 	})
 
+	t.Run("unusable environment secondary is skipped", func(t *testing.T) {
+		errorlog.Reset()
+		t.Cleanup(errorlog.Reset)
+		missing := filepath.Join(home, "missing-secondary")
+		got, err := resolveKubeconfigSources(InitOptions{}, configPath+string(os.PathListSeparator)+missing, home)
+		if err != nil {
+			t.Fatalf("resolveKubeconfigSources: %v", err)
+		}
+		if got.mode != "single" || got.useRegistry || len(got.paths) != 1 || got.paths[0] != configPath {
+			t.Fatalf("resolution = %+v", got)
+		}
+		entries := errorlog.GetEntries()
+		if len(entries) != 1 || !strings.Contains(entries[0].Message, "missing-secondary") || strings.Contains(entries[0].Message, home) {
+			t.Fatalf("KUBECONFIG warnings = %+v", entries)
+		}
+	})
+
+	t.Run("single unusable environment path keeps actionable reason", func(t *testing.T) {
+		errorlog.Reset()
+		t.Cleanup(errorlog.Reset)
+		missing := filepath.Join(home, "typo-config")
+		_, err := resolveKubeconfigSources(InitOptions{}, missing, home)
+		if err == nil || !strings.Contains(err.Error(), "typo-config") || !strings.Contains(err.Error(), "no such file") || strings.Contains(err.Error(), home) {
+			t.Fatalf("error = %v", err)
+		}
+	})
+
 	t.Run("configured path is always one file", func(t *testing.T) {
-		second := writeKubeconfig(t, home, "configured-second", "second", []kubeEntry{
+		configuredName := "configured" + string(os.PathListSeparator) + "second"
+		configured := writeKubeconfig(t, home, configuredName, "second", []kubeEntry{
 			{ctxName: "second", userName: "user-2", clusterName: "cluster-2"},
 		})
-		configured := configPath + string(os.PathListSeparator) + second
 		got, err := resolveKubeconfigSources(InitOptions{
 			KubeconfigPath: configured,
 		}, "", home)

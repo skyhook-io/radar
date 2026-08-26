@@ -169,11 +169,13 @@ func doInit(opts InitOptions) error {
 		if len(sources.paths) == 0 {
 			return fmt.Errorf("in-cluster config is unavailable and no home directory was found for the default kubeconfig")
 		}
-		for _, path := range sources.paths {
+		if sources.tryInCluster {
+			path := sources.paths[0]
 			if err := validateKubeconfigFileType(path); err != nil {
 				reason := kubeconfigDiagnosticError(err)
-				errorlog.Record("k8s-init", "error", "kubeconfig %q is unusable: %s", filepath.Base(path), reason)
-				return fmt.Errorf("kubeconfig %q is unusable: %s", filepath.Base(path), reason)
+				errorlog.Record("k8s-init", "error", "default kubeconfig %q is unusable: %s",
+					filepath.Base(path), reason)
+				return fmt.Errorf("default kubeconfig %q is unusable: %s", filepath.Base(path), reason)
 			}
 		}
 		var loadingRules *clientcmd.ClientConfigLoadingRules
@@ -305,6 +307,12 @@ func resolveKubeconfigSources(opts InitOptions, kubeconfigEnv, homeDir string) (
 		if err != nil {
 			return kubeconfigSources{}, fmt.Errorf("normalize configured kubeconfig: %w", err)
 		}
+		if err := validateKubeconfigFileType(primaryPath); err != nil {
+			errorlog.Record("k8s-init", "error", "primary kubeconfig unusable (%q): %s",
+				filepath.Base(primaryPath), kubeconfigDiagnosticError(err))
+			return kubeconfigSources{}, fmt.Errorf("configured primary kubeconfig is unusable (%q): %w",
+				filepath.Base(primaryPath), err)
+		}
 		primaryPaths = []string{primaryPath}
 	}
 
@@ -372,6 +380,25 @@ func resolveKubeconfigSources(opts InitOptions, kubeconfigEnv, homeDir string) (
 		}
 		if len(paths) == 0 {
 			return kubeconfigSources{}, fmt.Errorf("no kubeconfig paths resolved")
+		}
+		regularPaths := make([]string, 0, len(paths))
+		firstSkipped := ""
+		for _, path := range paths {
+			if err := validateKubeconfigFileType(path); err != nil {
+				reason := kubeconfigDiagnosticError(err)
+				log.Printf("Skipping unusable KUBECONFIG entry %s: %v", path, err)
+				errorlog.Record("k8s-init", "warning", "skipping unusable KUBECONFIG entry %q: %s",
+					filepath.Base(path), reason)
+				if firstSkipped == "" {
+					firstSkipped = fmt.Sprintf("%q: %s", filepath.Base(path), reason)
+				}
+				continue
+			}
+			regularPaths = append(regularPaths, path)
+		}
+		paths = regularPaths
+		if len(paths) == 0 {
+			return kubeconfigSources{}, fmt.Errorf("KUBECONFIG contains no usable files (%s)", firstSkipped)
 		}
 		paths = dedupeKubeconfigPaths(paths)
 		if len(paths) > 1 {
@@ -458,13 +485,15 @@ func hasUsableKubeconfig(path string) (bool, error) {
 	return len(cfg.Contexts) > 0, nil
 }
 
+var errKubeconfigNotRegular = errors.New("not a regular file")
+
 func validateKubeconfigFileType(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		return err
 	}
 	if !info.Mode().IsRegular() {
-		return fmt.Errorf("not a regular file")
+		return errKubeconfigNotRegular
 	}
 	return nil
 }
@@ -588,6 +617,8 @@ func kubeconfigDiagnosticError(err error) string {
 		return ""
 	case errors.As(err, &pathErr):
 		return scrubPathError(err)
+	case errors.Is(err, errKubeconfigNotRegular):
+		return errKubeconfigNotRegular.Error()
 	case clientcmd.IsEmptyConfig(err):
 		return "empty kubeconfig (no configuration provided)"
 	case clientcmd.IsContextNotFound(err):

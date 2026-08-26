@@ -50,9 +50,7 @@ func (s *Server) handleProbeInClusterCapability(w http.ResponseWriter, r *http.R
 	// kube-system GET, which is a doomed API call while disconnected.
 	cluster := k8s.ActiveClusterContext()
 	clusterKey := k8s.ClusterSafetyBinding(r.Context())
-	if cluster == "in-cluster" && clusterKey != "" {
-		cluster = clusterKey
-	}
+	cluster = probeClusterDisplay(cluster, clusterKey, k8s.CurrentContextBinding())
 	resp := probeCapabilityResponse{
 		Cluster:    cluster,
 		ClusterKey: clusterKey,
@@ -92,6 +90,13 @@ func (s *Server) handleProbeInClusterCapability(w http.ResponseWriter, r *http.R
 		resp.Allowed = true
 	}
 	s.writeJSON(w, resp)
+}
+
+func probeClusterDisplay(cluster, clusterKey, sourceBinding string) string {
+	if cluster == "in-cluster" && sourceBinding == "" && clusterKey != "" {
+		return clusterKey
+	}
+	return cluster
 }
 
 type traceInClusterRequest struct {
