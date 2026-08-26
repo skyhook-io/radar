@@ -27,12 +27,12 @@ func countingScan(count *int) func(context.Context) (*upgradereadiness.ScanResul
 func TestUpgradeScanMemoServesCachedWithinTTL(t *testing.T) {
 	memo, clock := newTestUpgradeScanMemo(time.Now())
 	scans := 0
-	first, err := memo.get(context.Background(), "k", false, countingScan(&scans))
+	first, err := memo.get(context.Background(), "k", false, memo.currentGeneration(), countingScan(&scans))
 	if err != nil || first.FromCache {
 		t.Fatalf("first get = fromCache=%v err=%v, want fresh scan", first.FromCache, err)
 	}
 	*clock = clock.Add(30 * time.Second)
-	second, err := memo.get(context.Background(), "k", false, countingScan(&scans))
+	second, err := memo.get(context.Background(), "k", false, memo.currentGeneration(), countingScan(&scans))
 	if err != nil || !second.FromCache || scans != 1 {
 		t.Fatalf("second get = fromCache=%v scans=%d err=%v, want cached single scan", second.FromCache, scans, err)
 	}
@@ -44,9 +44,9 @@ func TestUpgradeScanMemoServesCachedWithinTTL(t *testing.T) {
 func TestUpgradeScanMemoExpiresAfterTTL(t *testing.T) {
 	memo, clock := newTestUpgradeScanMemo(time.Now())
 	scans := 0
-	first, _ := memo.get(context.Background(), "k", false, countingScan(&scans))
+	first, _ := memo.get(context.Background(), "k", false, memo.currentGeneration(), countingScan(&scans))
 	*clock = clock.Add(memo.ttl + time.Second)
-	second, err := memo.get(context.Background(), "k", false, countingScan(&scans))
+	second, err := memo.get(context.Background(), "k", false, memo.currentGeneration(), countingScan(&scans))
 	if err != nil || second.FromCache || scans != 2 {
 		t.Fatalf("post-TTL get = fromCache=%v scans=%d err=%v, want fresh rescan", second.FromCache, scans, err)
 	}
@@ -58,13 +58,13 @@ func TestUpgradeScanMemoExpiresAfterTTL(t *testing.T) {
 func TestUpgradeScanMemoRefreshReplacesEntryPastCooldown(t *testing.T) {
 	memo, clock := newTestUpgradeScanMemo(time.Now())
 	scans := 0
-	first, _ := memo.get(context.Background(), "k", false, countingScan(&scans))
+	first, _ := memo.get(context.Background(), "k", false, memo.currentGeneration(), countingScan(&scans))
 	*clock = clock.Add(memo.cooldown + time.Second)
-	second, err := memo.get(context.Background(), "k", true, countingScan(&scans))
+	second, err := memo.get(context.Background(), "k", true, memo.currentGeneration(), countingScan(&scans))
 	if err != nil || second.FromCache || scans != 2 || second.ScanID == first.ScanID {
 		t.Fatalf("refresh get = fromCache=%v scans=%d err=%v, want fresh replacement scan", second.FromCache, scans, err)
 	}
-	third, err := memo.get(context.Background(), "k", false, countingScan(&scans))
+	third, err := memo.get(context.Background(), "k", false, memo.currentGeneration(), countingScan(&scans))
 	if err != nil || !third.FromCache || third.ScanID != second.ScanID {
 		t.Fatalf("post-refresh get = fromCache=%v scanID=%s, want refreshed entry served", third.FromCache, third.ScanID)
 	}
@@ -73,9 +73,9 @@ func TestUpgradeScanMemoRefreshReplacesEntryPastCooldown(t *testing.T) {
 func TestUpgradeScanMemoRefreshCooldownServesNewestScan(t *testing.T) {
 	memo, clock := newTestUpgradeScanMemo(time.Now())
 	scans := 0
-	first, _ := memo.get(context.Background(), "k", false, countingScan(&scans))
+	first, _ := memo.get(context.Background(), "k", false, memo.currentGeneration(), countingScan(&scans))
 	*clock = clock.Add(memo.cooldown / 2)
-	second, err := memo.get(context.Background(), "k", true, countingScan(&scans))
+	second, err := memo.get(context.Background(), "k", true, memo.currentGeneration(), countingScan(&scans))
 	if err != nil || !second.FromCache || scans != 1 || second.ScanID != first.ScanID {
 		t.Fatalf("refresh within cooldown = fromCache=%v scans=%d, want newest completed scan without a rescan", second.FromCache, scans)
 	}
@@ -99,13 +99,13 @@ func TestUpgradeScanMemoSingleFlightCoalesces(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			leaderOut, _ = memo.get(context.Background(), "k", false, blockedScan)
+			leaderOut, _ = memo.get(context.Background(), "k", false, memo.currentGeneration(), blockedScan)
 		}()
 		<-started
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			joinerOut, _ = memo.get(context.Background(), "k", refreshJoiner, countingScan(&scans))
+			joinerOut, _ = memo.get(context.Background(), "k", refreshJoiner, memo.currentGeneration(), countingScan(&scans))
 		}()
 		close(release)
 		wg.Wait()
@@ -121,13 +121,13 @@ func TestUpgradeScanMemoSingleFlightCoalesces(t *testing.T) {
 func TestUpgradeScanMemoFailedScanNotCached(t *testing.T) {
 	memo, _ := newTestUpgradeScanMemo(time.Now())
 	scanErr := errors.New("collection failed")
-	if _, err := memo.get(context.Background(), "k", false, func(context.Context) (*upgradereadiness.ScanResults, error) {
+	if _, err := memo.get(context.Background(), "k", false, memo.currentGeneration(), func(context.Context) (*upgradereadiness.ScanResults, error) {
 		return nil, scanErr
 	}); !errors.Is(err, scanErr) {
 		t.Fatalf("failed scan error = %v, want %v", err, scanErr)
 	}
 	scans := 0
-	out, err := memo.get(context.Background(), "k", false, countingScan(&scans))
+	out, err := memo.get(context.Background(), "k", false, memo.currentGeneration(), countingScan(&scans))
 	if err != nil || out.FromCache || scans != 1 {
 		t.Fatalf("get after failure = fromCache=%v scans=%d err=%v, want a fresh scan (failures are not cached)", out.FromCache, scans, err)
 	}
@@ -164,7 +164,7 @@ func TestUpgradeScanMemoWaiterHonorsContextCancellation(t *testing.T) {
 
 func TestUpgradeScanMemoContextSwitchDuringScanReturnsNoPayload(t *testing.T) {
 	memo, _ := newTestUpgradeScanMemo(time.Now())
-	out, err := memo.get(context.Background(), "k", false, func(context.Context) (*upgradereadiness.ScanResults, error) {
+	out, err := memo.get(context.Background(), "k", false, memo.currentGeneration(), func(context.Context) (*upgradereadiness.ScanResults, error) {
 		memo.invalidate()
 		return &upgradereadiness.ScanResults{}, nil
 	})
@@ -172,7 +172,7 @@ func TestUpgradeScanMemoContextSwitchDuringScanReturnsNoPayload(t *testing.T) {
 		t.Fatalf("switch-during-scan = results=%v err=%v, want stale-context error with no payload", out.Results, err)
 	}
 	scans := 0
-	if next, err := memo.get(context.Background(), "k", false, countingScan(&scans)); err != nil || next.FromCache {
+	if next, err := memo.get(context.Background(), "k", false, memo.currentGeneration(), countingScan(&scans)); err != nil || next.FromCache {
 		t.Fatalf("get after stale scan = fromCache=%v err=%v, want fresh scan (stale result must not be cached)", next.FromCache, err)
 	}
 }
@@ -182,13 +182,13 @@ func TestUpgradeScanMemoStaleGenerationEntryNotServed(t *testing.T) {
 	// generation is behind. It must be rescanned, never served.
 	memo, _ := newTestUpgradeScanMemo(time.Now())
 	scans := 0
-	if _, err := memo.get(context.Background(), "k", false, countingScan(&scans)); err != nil {
+	if _, err := memo.get(context.Background(), "k", false, memo.currentGeneration(), countingScan(&scans)); err != nil {
 		t.Fatal(err)
 	}
 	memo.mu.Lock()
 	memo.generation++ // bump without clearing entries, simulating the read-before-clear window
 	memo.mu.Unlock()
-	out, err := memo.get(context.Background(), "k", false, countingScan(&scans))
+	out, err := memo.get(context.Background(), "k", false, memo.currentGeneration(), countingScan(&scans))
 	if err != nil || out.FromCache || scans != 2 {
 		t.Fatalf("stale-generation hit = fromCache=%v scans=%d err=%v, want fresh rescan under the new generation", out.FromCache, scans, err)
 	}
@@ -197,29 +197,47 @@ func TestUpgradeScanMemoStaleGenerationEntryNotServed(t *testing.T) {
 func TestUpgradeScanMemoContextSwitchDropsEntries(t *testing.T) {
 	memo, _ := newTestUpgradeScanMemo(time.Now())
 	scans := 0
-	if _, err := memo.get(context.Background(), "k", false, countingScan(&scans)); err != nil {
+	if _, err := memo.get(context.Background(), "k", false, memo.currentGeneration(), countingScan(&scans)); err != nil {
 		t.Fatal(err)
 	}
 	memo.invalidate()
-	out, err := memo.get(context.Background(), "k", false, countingScan(&scans))
+	out, err := memo.get(context.Background(), "k", false, memo.currentGeneration(), countingScan(&scans))
 	if err != nil || out.FromCache || scans != 2 {
 		t.Fatalf("post-switch get = fromCache=%v scans=%d err=%v, want fresh scan of the new cluster", out.FromCache, scans, err)
 	}
 }
 
 func TestUpgradeScanKeySeparatesIdentityTargetAndScope(t *testing.T) {
-	base := upgradeScanKey("alice", "1.34", nil)
+	base := upgradeScanKey("alice", nil, "1.34", nil)
 	for name, other := range map[string]string{
-		"different user":       upgradeScanKey("bob", "1.34", nil),
-		"different target":     upgradeScanKey("alice", "1.35", nil),
-		"namespace ceiling":    upgradeScanKey("alice", "1.34", []string{"team-a"}),
-		"no-access vs cluster": upgradeScanKey("alice", "1.34", []string{}),
+		"different user":       upgradeScanKey("bob", nil, "1.34", nil),
+		"different groups":     upgradeScanKey("alice", []string{"admins"}, "1.34", nil),
+		"different target":     upgradeScanKey("alice", nil, "1.35", nil),
+		"namespace ceiling":    upgradeScanKey("alice", nil, "1.34", []string{"team-a"}),
+		"no-access vs cluster": upgradeScanKey("alice", nil, "1.34", []string{}),
 	} {
 		if other == base {
 			t.Fatalf("%s produced the same memo key — identities would share scans", name)
 		}
 	}
-	if upgradeScanKey("alice", "1.34", []string{"b", "a"}) != upgradeScanKey("alice", "1.34", []string{"a", "b"}) {
+	if upgradeScanKey("alice", nil, "1.34", []string{"b", "a"}) != upgradeScanKey("alice", nil, "1.34", []string{"a", "b"}) {
 		t.Fatal("namespace order changed the memo key — the same ceiling would fork the memo")
+	}
+	if upgradeScanKey("alice", []string{"dev", "ops"}, "1.34", nil) != upgradeScanKey("alice", []string{"ops", "dev"}, "1.34", nil) {
+		t.Fatal("group order changed the memo key — the same identity would fork the memo")
+	}
+}
+
+func TestUpgradeScanMemoRefusesGenerationCapturedBeforeSwitch(t *testing.T) {
+	// The caller captures the generation before resolving cluster-dependent
+	// inputs; a switch completing after the capture must fail the request
+	// rather than cache those inputs under the new cluster's generation.
+	memo, _ := newTestUpgradeScanMemo(time.Now())
+	gen := memo.currentGeneration()
+	memo.invalidate()
+	scans := 0
+	out, err := memo.get(context.Background(), "k", false, gen, countingScan(&scans))
+	if !errors.Is(err, ErrUpgradeScanStaleContext) || out.Results != nil || scans != 0 {
+		t.Fatalf("pre-switch generation = results=%v scans=%d err=%v, want refused with no scan run", out.Results, scans, err)
 	}
 }

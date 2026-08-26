@@ -90,11 +90,24 @@ var (
 func getUpgradeScanMemo() *upgradeScanMemo {
 	upgradeScanMemoSingletonOnce.Do(func() {
 		upgradeScanMemoSingleton = newUpgradeScanMemo()
+		// Bump at switch START (old context still active) and again at
+		// completion: a scan straddling any part of the switch window sees a
+		// generation change and is refused, instead of racing the swap of the
+		// global clients and cache mid-collection.
+		k8s.OnBeforeContextSwitch(func(string) {
+			upgradeScanMemoSingleton.invalidate()
+		})
 		k8s.OnContextSwitch(func(string) {
 			upgradeScanMemoSingleton.invalidate()
 		})
 	})
 	return upgradeScanMemoSingleton
+}
+
+func (m *upgradeScanMemo) currentGeneration() uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.generation
 }
 
 func (m *upgradeScanMemo) invalidate() {
@@ -105,15 +118,21 @@ func (m *upgradeScanMemo) invalidate() {
 }
 
 // upgradeScanKey distinguishes a nil (cluster-wide) ceiling from an empty
-// (no-access) one, and is order-insensitive in the namespace list.
-func upgradeScanKey(username, target string, namespaces []string) string {
+// (no-access) one, and is order-insensitive in namespaces and groups. Groups
+// are part of the identity even though the SAR caches key on username alone:
+// per-kind grants can differ between two requests carrying the same username
+// with different group sets (forwarded-identity setups), and a whole scan is a
+// far bigger privileged blob than one cached SAR verdict.
+func upgradeScanKey(username string, groups []string, target string, namespaces []string) string {
+	sortedGroups := append([]string(nil), groups...)
+	slices.Sort(sortedGroups)
 	scope := "\x02cluster-wide"
 	if namespaces != nil {
 		sorted := append([]string(nil), namespaces...)
 		slices.Sort(sorted)
 		scope = strings.Join(sorted, "\x01")
 	}
-	return username + "\x00" + target + "\x00" + scope
+	return username + "\x00" + strings.Join(sortedGroups, "\x01") + "\x00" + target + "\x00" + scope
 }
 
 func newUpgradeScanID() string {
@@ -125,9 +144,17 @@ func newUpgradeScanID() string {
 	return "sc_" + hex.EncodeToString(raw)
 }
 
-func (m *upgradeScanMemo) get(ctx context.Context, key string, refresh bool, scan func(context.Context) (*upgradereadiness.ScanResults, error)) (UpgradeScanOutcome, error) {
+// get serves the memo under the caller's captured generation. gen must be
+// read via currentGeneration BEFORE any cluster-dependent input (cache,
+// server version, namespace ceiling) was resolved — a switch completing
+// between those reads and this call is then caught here as a mismatch instead
+// of caching inputs from one cluster under the other's generation.
+func (m *upgradeScanMemo) get(ctx context.Context, key string, refresh bool, gen uint64, scan func(context.Context) (*upgradereadiness.ScanResults, error)) (UpgradeScanOutcome, error) {
 	m.mu.Lock()
-	gen := m.generation
+	if gen != m.generation {
+		m.mu.Unlock()
+		return UpgradeScanOutcome{}, ErrUpgradeScanStaleContext
+	}
 	now := m.now()
 	if entry := m.entries[key]; entry != nil {
 		select {
@@ -221,6 +248,13 @@ func (m *upgradeScanMemo) outcomeLocked(entry *upgradeScanEntry, fromCache bool)
 // Results are shared across callers of the same key — treat the ScanResults
 // as immutable; shape copies, never mutate in place.
 func RunUpgradeReadinessScanMemoized(ctx context.Context, authz UpgradeEvidenceAuthorizer, targetVersion string, refresh bool) (UpgradeScanOutcome, error) {
+	// The generation is captured BEFORE any cluster-dependent read below
+	// (cache, server version, namespace ceiling): a context switch completing
+	// after this line is caught as a mismatch in get, so inputs resolved
+	// against one cluster can never be cached or served under the other's
+	// generation.
+	memo := getUpgradeScanMemo()
+	gen := memo.currentGeneration()
 	if k8s.GetResourceCache() == nil {
 		return UpgradeScanOutcome{}, ErrUpgradeScanNotReady
 	}
@@ -229,13 +263,13 @@ func RunUpgradeReadinessScanMemoized(ctx context.Context, authz UpgradeEvidenceA
 	if err != nil {
 		return UpgradeScanOutcome{}, err
 	}
-	username := ""
+	username, groups := "", []string(nil)
 	if user := auth.UserFromContext(ctx); user != nil {
-		username = user.Username
+		username, groups = user.Username, user.Groups
 	}
 	namespaces := authz.Namespaces()
-	key := upgradeScanKey(username, targetVersion, namespaces)
-	return getUpgradeScanMemo().get(ctx, key, refresh, func(ctx context.Context) (*upgradereadiness.ScanResults, error) {
+	key := upgradeScanKey(username, groups, targetVersion, namespaces)
+	return memo.get(ctx, key, refresh, gen, func(ctx context.Context) (*upgradereadiness.ScanResults, error) {
 		return runUpgradeReadinessScan(ctx, authz, namespaces, currentVersion, targetVersion)
 	})
 }

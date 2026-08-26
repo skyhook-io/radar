@@ -268,19 +268,38 @@ func canReadInNamespace(ctx context.Context, group, resource, namespace, verb st
 
 // filterNamespacesByCanRead returns the subset of `namespaces` where the
 // calling user passes a per-namespace SAR for (group, resource, verb). The
-// MCP-side mirror of Server.filterNamespacesByCanRead.
+// MCP-side mirror of Server.filterNamespacesByCanRead, with the same bounded
+// parallelism: each canReadInNamespace miss is a SAR round-trip, so a serial
+// loop over a large candidate set (a cluster-wide reader's full namespace
+// list) would block the tool call for N round-trips. Output is sorted so the
+// result is deterministic regardless of goroutine completion order — matching
+// the HTTP helper.
 //
 // nil or empty input is returned unchanged.
 func filterNamespacesByCanRead(ctx context.Context, group, resource, verb string, namespaces []string) []string {
 	if len(namespaces) == 0 {
 		return namespaces
 	}
+	const maxConcurrent = 16
+	sem := make(chan struct{}, maxConcurrent)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
 	out := make([]string, 0, len(namespaces))
 	for _, ns := range namespaces {
-		if canReadInNamespace(ctx, group, resource, ns, verb) {
-			out = append(out, ns)
-		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(ns string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if canReadInNamespace(ctx, group, resource, ns, verb) {
+				mu.Lock()
+				out = append(out, ns)
+				mu.Unlock()
+			}
+		}(ns)
 	}
+	wg.Wait()
+	slices.Sort(out)
 	return out
 }
 
