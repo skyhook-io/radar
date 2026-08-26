@@ -17,11 +17,20 @@ an oversight, not a decision.
   fixes. That transformation is what agents do, and today they can only get there by
   reconstructing the analysis from raw kubectl, badly — the exact failure mode
   [docs/mcp.md](mcp.md) argues against.
-- **The remediation loop closes inside Radar.** Findings carry `resource`, `evidence.path`,
-  and `remediation`. Roughly half the catalog is source-manifest problems (deprecated APIs in
-  Helm/last-applied manifests, non-canonical IP/CIDR, `gitRepo` volumes, `externalIPs`).
-  Radar already ships `apply_resource` / `patch_resource`. *Read finding → patch manifest* is
-  a workflow no other tool in the catalog enables.
+- **The remediation loop closes inside Radar — when routed by provenance.** Findings carry
+  `resource`, `evidence.source`, `evidence.path`, and `remediation`. Roughly half the catalog
+  is source-manifest problems (deprecated APIs in Helm/last-applied manifests, non-canonical
+  IP/CIDR, `gitRepo` volumes, `externalIPs`), and Radar already ships `apply_resource` /
+  `patch_resource`. But the pairing is only correct for findings whose evidence *is* the live
+  object (last-applied annotations, live spec fields) — there, an apply updates both the
+  object and the evidence the next scan reads. Findings sourced from **stored Helm release
+  manifests** are different: patching the live object leaves the release Secret — the actual
+  evidence — untouched, so the finding persists across rescans while the object drifts from
+  its chart. The tool output and description must route by `evidence.source`: live/
+  last-applied → `patch_resource`/`apply_resource`; Helm → fix the chart/values and upgrade
+  the release; GitOps-managed (`managedBy`) → fix in Git. *Read finding → fix at the source
+  of truth* is still a workflow no other tool in the catalog enables — the routing is what
+  keeps it from becoming *read finding → create drift*.
 - **Positioning.** The repo describes itself as "the missing open-source Kubernetes UI with a
   built-in MCP server for AI agents". A flagship analysis that agents cannot reach undercuts
   that.
@@ -112,10 +121,19 @@ One read-only tool: **`get_cluster_upgrade_readiness`**.
 
 ```
 get_cluster_upgrade_readiness
-  target  (required)  target Kubernetes minor, e.g. "1.34"
-  check   (optional)  check id to expand, e.g. "node-drain-feasibility"
-  level   (optional)  minimum finding level when expanding: blocker | warning | review
-                      (default blocker — expansion returns the most severe first)
+  target   (optional)  target Kubernetes minor, e.g. "1.34"; defaults to the next minor
+                       above the cluster's current version (engine behavior today)
+  check    (optional)  check id to expand, e.g. "node-drain-feasibility"
+  level    (optional)  filter expanded findings to this level and above:
+                       blocker | warning | review. No default — expansion returns ALL
+                       levels, most severe first. (A default threshold would make tier 2
+                       return zero findings for a check whose tier-1 row reports some.)
+  offset   (optional)  skip the first N findings when expanding (default 0). Paired with
+                       the per-call cap this makes every finding retrievable; offsets are
+                       stable because they page over one memoized scan snapshot.
+  refresh  (optional)  bypass the memo and run a fresh scan (default false). For
+                       fix-then-rescan loops; the description steers agents to use it
+                       only after changing something.
 ```
 
 Design decisions:
@@ -123,7 +141,7 @@ Design decisions:
 - **A new tool, not a `get_cluster_audit` parameter.** Different severity vocabulary
   (`blocker`/`warning`/`review` vs the Checks posture ladder), different cost class (live
   collection vs informer cache), different scope contract (deliberately cluster-wide vs
-  namespace-filtered), and a required `target` that audit has no concept of. Folding them
+  namespace-filtered), and a `target` version that audit has no concept of. Folding them
   together would corrupt a tool whose contract already takes effort to explain.
 - **No namespace parameter.** Matches the HTTP surface: an upgrade affects the cluster; the
   caller's RBAC ceiling and `--namespace-scope` still bound evidence (and surface in
@@ -131,17 +149,24 @@ Design decisions:
   readiness claim. The header namespace picker is likewise ignored, for the same reason
   `upgradeReadinessNamespaces` ignores it.
 - **Read-only annotations** (`readOnlyHint`), like every other read tool.
-- **`target` is validated** by the existing `upgradereadiness.ValidateTarget` — same-major,
-  forward, at most reviewable distance; validation errors return the sentinel-mapped message
-  (invalid target / non-forward / unknown current version) as a tool error, so the agent can
-  self-correct.
+- **`target` is validated** by the existing `upgradereadiness.ValidateTarget`, whose actual
+  contract is narrower than a gate: parseable minor + strictly forward. It does **not**
+  enforce same-major or a max distance — multi-minor and cross-major jumps are accepted and
+  the scan itself reports them as blockers (`control-plane-upgrade-path`), and targets beyond
+  `reviewedThrough` are accepted with the partial-review banner. The MCP tool keeps exactly
+  this engine contract rather than inventing a stricter one: the certainty machinery
+  (`reviewedThrough`, check statuses) already says what a hard gate would say, with evidence.
+  Validation errors (invalid target / non-forward / unknown current version) return the
+  sentinel-mapped message as a tool error; the error text enumerates the current version and
+  `reviewedThrough` so the agent self-corrects in one round-trip.
 
 ### Tool description (draft)
 
 The description must carry the certainty contract, because it is the only text the agent is
 guaranteed to read:
 
-> Analyze the impact of upgrading the cluster to a target Kubernetes minor version. Runs the
+> Analyze the impact of upgrading the cluster to a target Kubernetes minor version (default:
+> the next minor above the current version). Runs the
 > evidenced check catalog (reviewed through 1.36): version skew, removed/deprecated API usage
 > (live manifests, Helm sources, API-server metrics), node runtime and cgroup evidence, drain
 > feasibility, admission/conversion webhook readiness, and release-specific configuration
@@ -151,10 +176,13 @@ guaranteed to read:
 > `coverage.state: no_access` means the scan saw nothing namespaced and the verdict is
 > meaningless. Default output is one row per check; pass `check=<id>` for that check's
 > findings with evidence and remediation. Findings reference exact resources and fields —
-> pair with `patch_resource` / `apply_resource` to fix source manifests. The first call runs
-> a live cluster-wide evidence scan and can take several seconds on large clusters; results
-> are briefly cached per caller, so follow-up `check=<id>` expansions of the same scan are
-> cheap.
+> fix them at the source of truth `evidence.source` names: live objects via
+> `patch_resource`/`apply_resource`, Helm-sourced findings in the chart/values (patching the
+> live object leaves the stored release manifest unfixed), GitOps-managed resources in Git.
+> The first call runs a live cluster-wide evidence scan and can take several seconds on
+> large clusters; results are briefly cached per caller (`observedAt` reports the scan
+> time), so follow-up `check=<id>` expansions page over the same scan cheaply. Pass
+> `refresh=true` only after changing something, to re-scan instead of reading the cache.
 
 (Word count to be trimmed against the `maxCatalogBytes` budget in
 `internal/mcp/tools_catalog_test.go` — raise the budget deliberately if needed rather than
@@ -171,12 +199,14 @@ Two tiers, both minified structs in `internal/mcp` (not raw `ScanResults`).
   "currentVersion": "1.33",
   "targetVersion": "1.34",
   "reviewedThrough": "1.36",        // catalog ceiling — targets beyond it are partially reviewed
+  "observedAt": "2026-08-26T10:14:03Z",  // when the underlying scan ran — cached responses keep the original stamp
   "verdict": "blocked",             // blocked | warning | review | no_known_blockers | unknown
   "verdictCaveat": "2 checks had incomplete evidence and may hide blockers",  // omitted only when clean
   "summary": {"blocked": 1, "warnings": 2, "reviews": 3, "passed": 9, "unknown": 2, "notApplicable": 1, "findings": 14},
   "coverage": {
     "state": "partial",             // full | partial | no_access
     "scopedNamespaces": ["team-a"], // present when evidence was namespace-bounded
+    "scopedKinds": {"pods": ["team-a", "team-b"]},  // per-kind ceilings — mixed RBAC scopes can't collapse into scopedNamespaces
     "unavailableKinds": ["ValidatingWebhookConfiguration"]
   },
   "checks": [
@@ -187,7 +217,9 @@ Two tiers, both minified structs in `internal/mcp` (not raw `ScanResults`).
       "status": "blocked",
       "findings": 2,                // count only in tier 1
       "summary": "…",               // the check's one-line summary
-      "caveat": "…"                 // present when evidence for this check was incomplete
+      "caveat": "…",                // present when evidence for this check was incomplete
+      "evidenceNote": "…"           // present when evidence has known limits even on a pass
+                                    // (e.g. deprecated-API metrics cover one API-server process, not cluster-wide history)
     }
     // … all 18 families, ordered by required action (blocked → warning → review → unknown → passed → n/a)
   ]
@@ -209,7 +241,8 @@ findings:
   "check": {
     "id": "manifest-api-compatibility",
     "status": "blocked",
-    "summary": "…", "caveat": "…", "scope": "…", "inspected": 412,
+    "summary": "…", "caveat": "…", "evidenceNote": "…", "scope": "…", "inspected": 412,
+    "findingsTotal": 40,            // all findings on this check, before level filter and cap
     "findings": [
       {
         "title": "Helm manifest uses an API removed in 1.34",
@@ -221,15 +254,19 @@ findings:
         "remediation": "…"
       }
     ],
-    "findingsTruncated": 12         // count withheld beyond the cap, 0 omitted
+    "findingsTruncated": 12         // matching findings withheld beyond this page, 0 omitted
   }
 }
 ```
 
-Findings are capped (proposed: 25 per call, most severe first, then `level` filter) with the
-withheld count reported — the policy-tool convention of never letting a cap masquerade as
-completeness. References (doc URLs) are dropped from MCP output except the first per finding;
-they are the least token-efficient field and the remediation text stands alone.
+Findings are ordered most severe first and capped (proposed: 25 per call), with the counts
+kept distinct so a cap can never masquerade as completeness: `findingsTotal` (all findings on
+the check), the returned page, and `findingsTruncated` (matching findings beyond this page).
+Every finding is retrievable: `offset` pages through the remainder, and pages are consistent
+because they read one memoized scan snapshot. `level` narrows to the levels the agent cares
+about but is never a silent default — no filter, no cap may hide a finding without an
+explicit count saying so. References (doc URLs) are dropped from MCP output except the first
+per finding; they are the least token-efficient field and the remediation text stands alone.
 
 ## 3. The certainty contract (non-negotiable invariants)
 
@@ -243,10 +280,19 @@ review should hold the implementation to:
 3. **`no_access` short-circuits.** When `coverage.state` is `no_access` the tool returns the
    coverage object and an explicit sentence instead of a check table — same product contract
    the HTTP handler defends (see the declined Bugbot suggestion on #1195).
-4. **Caps are visible.** `findingsTruncated`, `scopedNamespaces`, `unavailableKinds` are
-   never silently dropped by minification.
+4. **Caps and ceilings are visible.** `findingsTotal`, `findingsTruncated`,
+   `scopedNamespaces`, `scopedKinds`, and `unavailableKinds` are never silently dropped by
+   minification. `scopedKinds` exists precisely because mixed per-kind RBAC ceilings cannot
+   be represented by one namespace list — collapsing it into `scopedNamespaces` would
+   overstate coverage.
 5. **`reviewedThrough` is always present** so an agent targeting a minor beyond the catalog
    ceiling can say so.
+6. **Evidence limits survive on passed checks.** `evidenceNote` records what a check could
+   not see even when it passed (deprecated-API metrics cover one API-server process, not
+   cluster-wide history); the minifier carries it in both tiers.
+7. **Staleness is visible.** `observedAt` always reports when the underlying scan ran;
+   cached responses keep the original stamp rather than the response time, so an agent in a
+   fix-then-rescan loop can tell pre-fix evidence from a failed fix.
 
 ## 4. Architecture
 
@@ -275,33 +321,47 @@ type upgradeEvidenceAuthorizer interface {
 func collectUpgradeEvidence(ctx context.Context, authz upgradeEvidenceAuthorizer) (audit.UpgradeReadinessOptions, error)
 ```
 
-- The HTTP handler implements the interface over `(s, r)` — behavior byte-for-byte identical,
-  proven by the existing handler tests running unmodified.
+- The HTTP handler implements the interface over `(s, r)` — behavior byte-for-byte
+  identical. The existing `upgrade_readiness_handler_test.go` covers the helpers
+  (`upgradeReadinessNamespaces`, bounded reads, discovery fallbacks) but never invokes the
+  full handler, so it alone cannot prove this — the extraction is preceded by
+  characterization tests around the real handler (§6).
 - The MCP tool implements it over `ctx` using the `internal/mcp` permission helpers. The MCP
   side must reproduce the same authorization *decisions* (list probes / SAR per grant), not
   shortcut them: cluster-wide pod visibility must still not imply cluster-scoped reads.
 - All timeouts, response-size bounds, and the worker pool stay in the shared collector.
 
-Both `internal/server` and `internal/mcp` already import `internal/audit`, so the seam adds
-no new package edges; the MCP tool calls `collectUpgradeEvidence` + 
-`audit.RunUpgradeReadinessFromCache` exactly as the handler does. (`internal/mcp` currently
-does not import `internal/server`; if that edge is unwanted, the collector moves to
-`internal/audit` — decide during implementation, whichever keeps the import graph acyclic.)
+Both `internal/server` and `internal/mcp` already import `internal/audit`, and
+`internal/mcp` already imports `internal/server` (`tools_packages.go`) while the reverse
+edge does not exist — so placing the seam in `internal/server` adds no new package edges
+and cannot create a cycle. The MCP tool calls `collectUpgradeEvidence` +
+`audit.RunUpgradeReadinessFromCache` exactly as the handler does.
 
 ### 4.2 Memoization (prerequisite, shared with HTTP)
 
-A short-TTL memo keyed on `(identity, target, namespace-ceiling-hash)`:
+A short-TTL memo keyed on `(cluster-context generation, identity, target,
+namespace-ceiling-hash)`:
 
-- Proposed TTL: 60s (long enough to absorb an agent's follow-up `check=<id>` expansions of
-  one scan; short enough that a fix-then-rescan loop sees fresh state). Tier 2 calls hit the
-  same memo as the tier 1 call that preceded them — this is the main point.
-- Follows the `rbac.Memoizer` precedent: invalidated by `finalizePostContextSwitch` so a
-  kubeconfig context switch never serves the previous cluster's scan.
+- Proposed TTL: 60s — long enough to absorb an agent's follow-up `check=<id>` expansions of
+  one scan. Tier 2 calls hit the same memo as the tier 1 call that preceded them — this is
+  the main point. Fix-then-rescan loops do **not** wait out the TTL: `refresh=true` bypasses
+  the memo (and replaces the entry), and `observedAt` in every response lets the agent see
+  it is reading a pre-fix scan.
+- **Context isolation is in the key, not just the invalidation.** The key includes a
+  monotonic context generation (bumped on every kubeconfig context switch);
+  `finalizePostContextSwitch` invalidation alone is insufficient — a racing read can hit the
+  old entry before the clear, and a pre-switch in-flight scan can complete after it and
+  repopulate the map. A completed scan is only inserted if the generation it started under
+  is still current.
+- **Single-flight per key**: concurrent callers on an empty entry (two agents, or one
+  agent's parallel tool calls) wait on the in-flight scan rather than each running the full
+  live collection. Failed scans are not cached; a canceled leader's waiters get the error,
+  not a poisoned entry. This also protects the HTTP handler once it shares the memo.
 - Applied at the `ScanResults` level (post-RBAC, per-identity), so it can also back the HTTP
   handler — resolving #1195's deferred "identity/scope-safe server-side result memoization"
   item as a side effect.
 - Memoizing means an agent's expansion sequence sees one consistent scan rather than three
-  slightly different clusters.
+  slightly different clusters — and makes `offset` paging stable.
 
 ### 4.3 What the MCP scan deliberately keeps
 
@@ -324,23 +384,32 @@ The repo enforces these; listing them so the PR is complete in one pass:
 
 ## 6. Testing
 
-- **Unit (mcp):** tier 1 / tier 2 shaping from a fixture `ScanResults`; finding cap +
-  `findingsTruncated`; `level` filter; unknown-preservation (invariant §3.2); `no_access`
-  short-circuit (§3.3); unknown `check` id → error listing valid ids.
+- **Characterization first (pre-refactor):** tests around the real HTTP handler pinning
+  which evidence is collected under each RBAC boundary (cluster-admin, namespace-restricted,
+  no-nodes/proxy, no-secrets, no-access) — the existing `upgrade_readiness_handler_test.go`
+  covers helpers, not the handler, so these are written *before* phase 1 and must pass
+  unmodified after it. This is the regression net for the extraction.
+- **Unit (mcp):** tier 1 / tier 2 shaping from a fixture `ScanResults`; `findingsTotal` /
+  cap / `findingsTruncated` / `offset` paging; `level` filter (and that no filter is applied
+  by default); unknown-preservation (invariant §3.2); `no_access` short-circuit (§3.3);
+  `evidenceNote` on a passed check and per-kind `scopedKinds` survival (§3.4/§3.6); unknown
+  `check` id → error listing valid ids.
 - **Unit (authorizer):** the MCP authorizer and the HTTP authorizer produce identical
-  decisions for a matrix of identities (cluster-admin, namespace-restricted, no-nodes,
-  no-secrets, no-access) — this is the regression net for the refactor.
-- **Handler regression:** existing `upgrade_readiness_handler_test.go` passes unmodified
-  after the extraction.
-- **Memo:** TTL expiry, identity separation, context-switch invalidation.
+  decisions for the same identity matrix — evidence-set equality, not just boolean parity.
+- **Memo:** TTL expiry; identity separation (restricted identity never reads an admin's
+  entry); `refresh` replacing the entry; single-flight — concurrent callers coalesce, a
+  failed scan is not cached, a canceled leader doesn't poison waiters; context-switch races
+  — switch-during-hit and switch-during-scan both refuse the stale generation.
 - **Live smoke:** against `kind-radar-gitops-demo` — a real scan through `/mcp` (tier 1, one
   expansion), plus the same via HTTP to confirm identical verdicts.
 
 ## 7. Phasing
 
-1. **Extract the evidence collector** behind the authorizer seam; HTTP handler tests prove
+1. **Characterization tests** around the current HTTP handler (evidence-per-RBAC-boundary),
+   then **extract the evidence collector** behind the authorizer seam; the new tests prove
    no behavior change. (Reviewable alone; no user-visible change.)
-2. **Memoization** at the `ScanResults` level, wired into the HTTP handler too.
+2. **Memoization** at the `ScanResults` level (context generation, single-flight), wired
+   into the HTTP handler too.
 3. **The tool**: registration, tiers, catalog sync, docs.
 
 Phases 1–3 can land as one PR with three commits, or split if phase 1 review runs long.
@@ -376,18 +445,16 @@ The MCP tool inherits whatever the catalog knows — no coupling between the two
   profile therefore lives in the description ("first call runs a live scan… expansions are
   cheap"), which is where agents actually read it. Length (29 chars) is fine; agents select
   on description, not name brevity.
-- **Finding cap value** (25 proposed) and whether `level` filtering is worth the extra
-  parameter in v1 or should wait for real usage.
+- **Finding cap value** (25 proposed). `level` and `offset` are settled: `level` is a pure
+  filter with no default (a default threshold made tier 2 contradict tier 1's counts), and
+  `offset` exists because a cap with no retrieval path would make findings beyond the first
+  page unreachable — fatal for the runbook/backlog workflow the tool exists for.
 - **Should tier 1 include per-check `summary` text** (~18 sentences, ≈1 KB) or only on
   expansion? Proposed: include — it is what lets an agent decide which checks to expand.
-- **TTL value** (60s proposed) — long enough for expansion bursts, short enough for
-  fix-and-rescan loops; validate against real scan latency on a large cluster.
-- **Target discoverability**: an agent doesn't know the cluster's current version when it
-  first calls, so its first `target` can be invalid. The validation error should enumerate
-  what is valid — current version, the allowed forward range, and `reviewedThrough` — so the
-  agent self-corrects in one round-trip instead of probing with `get_dashboard` first.
-- **Scan stampede**: the memo only helps after a scan completes. Concurrent calls on an
-  empty memo (two agents, or one agent's parallel tool calls) would each run the full live
-  collection. The memo needs single-flight per key: concurrent callers wait on the in-flight
-  scan rather than starting their own. This also protects the HTTP handler once it shares
-  the memo.
+- **TTL value** (60s proposed) — long enough for expansion bursts; `refresh=true` covers
+  fix-and-rescan, so the TTL no longer has to be short for that. Validate against real scan
+  latency on a large cluster.
+- **Post-mutation invalidation**: should Radar's own write tools (`apply_resource`,
+  `patch_resource`, Helm operations) invalidate the scan memo, making `refresh` mostly
+  unnecessary? Deferred unless cheap — the explicit `refresh` + `observedAt` contract
+  already keeps staleness visible; write-path coupling to the memo is easy to get wrong.
