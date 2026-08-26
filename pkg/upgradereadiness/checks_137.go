@@ -14,6 +14,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	k8syaml "k8s.io/apimachinery/pkg/util/yaml"
 	storageephemeral "k8s.io/component-helpers/storage/ephemeral"
+	csitranslation "k8s.io/csi-translation-lib"
+	"k8s.io/klog/v2"
 )
 
 var removedFeatureGates137 = map[string]bool{
@@ -140,14 +142,14 @@ func scanRemovedFeatureGates(input *Input) Check {
 	controlPlaneManaged := managedControlPlane(input)
 	if !kubeSystemCovered(input, "pods") {
 		if controlPlaneManaged {
-			check.Caveat = appendCaveat(check.Caveat, "The provider manages the control plane, so component feature gates are not exposed to Radar.")
+			check.EvidenceNote = appendCaveat(check.EvidenceNote, "The provider manages the control plane, so component feature gates are not exposed to Radar.")
 		} else {
 			controlPlaneEvidenceUnavailable = true
 			check.Caveat = appendCaveat(check.Caveat, "kube-system is outside the readable Pod scope, so control-plane feature gates could not be inspected.")
 		}
 	} else if input.Pods == nil {
 		if controlPlaneManaged {
-			check.Caveat = appendCaveat(check.Caveat, "The provider manages the control plane, so component feature gates are not exposed to Radar.")
+			check.EvidenceNote = appendCaveat(check.EvidenceNote, "The provider manages the control plane, so component feature gates are not exposed to Radar.")
 		} else {
 			controlPlaneEvidenceUnavailable = true
 			check.Caveat = appendCaveat(check.Caveat, "Pods were unavailable, so control-plane feature gates could not be inspected.")
@@ -178,7 +180,7 @@ func scanRemovedFeatureGates(input *Input) Check {
 		}
 		if len(foundControlPlaneComponents) == 0 {
 			if controlPlaneManaged {
-				check.Caveat = appendCaveat(check.Caveat, "No control-plane mirror Pod was readable; the provider manages the control plane, so component feature gates are not exposed to Radar.")
+				check.EvidenceNote = appendCaveat(check.EvidenceNote, "No control-plane mirror Pod was readable; the provider manages the control plane, so component feature gates are not exposed to Radar.")
 			} else {
 				controlPlaneEvidenceUnavailable = true
 				check.Caveat = appendCaveat(check.Caveat, "No control-plane mirror Pod was readable, so self-managed control-plane feature gates could not be inspected.")
@@ -230,7 +232,7 @@ func parsedFeatureGates(command, args []string) map[string]commandFlagSetting {
 		switch {
 		case strings.HasPrefix(tokens[i].value, "--feature-gates="):
 			value = strings.TrimPrefix(tokens[i].value, "--feature-gates=")
-		case tokens[i].value == "--feature-gates" && i+1 < len(tokens):
+		case tokens[i].value == "--feature-gates" && i+1 < len(tokens) && !strings.HasPrefix(tokens[i+1].value, "--"):
 			i++
 			value = tokens[i].value
 		default:
@@ -466,7 +468,7 @@ func scanKubeadmConfig(input *Input) Check {
 	}
 	check.Status = CheckPassed
 	check.Summary = "The kubeadm cluster configuration does not use kubeadm.k8s.io/v1beta3."
-	check.Caveat = "Only the stored kubeadm-config ConfigMap was inspected; kubeadm configuration files passed with --config on control-plane hosts are not visible to Radar."
+	check.EvidenceNote = "Only the stored kubeadm-config ConfigMap was inspected; kubeadm configuration files passed with --config on control-plane hosts are not visible to Radar."
 	parsed := 0
 	parseErrors := 0
 	for key, value := range configMap.Data {
@@ -565,9 +567,17 @@ func scanKubeProxyModeTransition(input *Input) Check {
 		case "iptables", "nftables", "kernelspace":
 			continue
 		case "ipvs":
-			check.Findings = append(check.Findings, kubeProxyModeFinding(check, daemonSet, sourcePath, mode, "IPVS mode is deprecated", "IPVS is on a staged path to default-off in Kubernetes 1.40 and removal in 1.43.", "Plan and validate migration to nftables or iptables before the IPVS disablement timeline.", ipvsDeprecationReferences))
+			remediation := "Plan and validate migration to nftables or iptables before the IPVS disablement timeline."
+			if managedControlPlane(input) {
+				remediation = "Use the provider-supported add-on or cluster configuration path to plan and validate migration to nftables or iptables before the IPVS disablement timeline; do not edit a reconciled kube-proxy DaemonSet directly."
+			}
+			check.Findings = append(check.Findings, kubeProxyModeFinding(check, daemonSet, sourcePath, mode, "IPVS mode is deprecated", "IPVS is on a staged path to default-off in Kubernetes 1.40 and removal in 1.43.", remediation, ipvsDeprecationReferences))
 		case "":
-			check.Findings = append(check.Findings, kubeProxyModeFinding(check, daemonSet, sourcePath, "unspecified", "Linux proxy mode is not explicit", "Kubernetes 1.37 warns because the implicit Linux default changes from iptables to nftables in Kubernetes 1.40.", "Set mode explicitly to iptables or nftables after validating the selected backend.", nftablesDefaultReferences))
+			remediation := "Set mode explicitly to iptables or nftables after validating the selected backend."
+			if managedControlPlane(input) {
+				remediation = "Use the provider-supported add-on or cluster configuration path to select and validate an explicit iptables or nftables mode; do not edit a reconciled kube-proxy DaemonSet directly."
+			}
+			check.Findings = append(check.Findings, kubeProxyModeFinding(check, daemonSet, sourcePath, "unspecified", "Linux proxy mode is not explicit", "Kubernetes 1.37 warns because the implicit Linux default changes from iptables to nftables in Kubernetes 1.40.", remediation, nftablesDefaultReferences))
 		default:
 			unknown++
 			check.Caveat = appendCaveat(check.Caveat, fmt.Sprintf("%s/%s uses unrecognized kube-proxy mode %q.", daemonSet.Namespace, daemonSet.Name, mode))
@@ -621,9 +631,9 @@ func kubeProxyMode(input *Input, daemonSet *appsv1.DaemonSet, container *corev1.
 		return mode, evidencePath + ".mode", true, ""
 	}
 	if mode, field, ok := commandFlag(container.Command, container.Args, "--proxy-mode"); ok {
-		return mode, "spec.template.spec.containers[kube-proxy]." + field + "[--proxy-mode]", true, ""
+		return mode, fmt.Sprintf("spec.template.spec.containers[%s].%s[--proxy-mode]", container.Name, field), true, ""
 	}
-	return "", "spec.template.spec.containers[kube-proxy].command/args[--proxy-mode]", true, ""
+	return "", fmt.Sprintf("spec.template.spec.containers[%s].command/args[--proxy-mode]", container.Name), true, ""
 }
 
 func commandFlag(command, args []string, name string) (string, string, bool) {
@@ -691,7 +701,7 @@ func kubeProxyModeFinding(check Check, daemonSet *appsv1.DaemonSet, evidencePath
 }
 
 func scanRemovedControlPlaneMetrics(input *Input) Check {
-	check := Check{ID: "removed-control-plane-metrics", Category: "Observability", Title: "Kubernetes metric changes in Kubernetes 1.37", Status: CheckPassed, Summary: "No inspected PrometheusRule references a metric hidden, renamed, or removed in Kubernetes 1.37.", Scope: "Prometheus Operator rule expressions", AppliesFrom: "1.37", References: append([]Reference(nil), changelog137References...)}
+	check := Check{ID: "removed-control-plane-metrics", Category: "Observability", Title: "Kubernetes metric changes in Kubernetes 1.37", Status: CheckPassed, Summary: "No inspected PrometheusRule references a metric renamed or removed in Kubernetes 1.37.", Scope: "Prometheus Operator rule expressions", AppliesFrom: "1.37", References: append([]Reference(nil), changelog137References...)}
 	if !input.PrometheusRulesDiscoveryAvailable {
 		check.Status, check.Summary = CheckUnknown, "API discovery is unavailable; Radar could not determine whether PrometheusRule is installed."
 		return check
@@ -709,15 +719,12 @@ func scanRemovedControlPlaneMetrics(input *Input) Check {
 		remediation string
 	}
 	changes := map[string]metricChange{
-		"apiserver_cache_list_total":                  {impact: "This alert or recording rule will stop receiving data by default when Kubernetes 1.37 hides the metric.", remediation: `Rewrite the expression using apiserver_storage_list_total{storage="watchcache"} before upgrading.`},
-		"apiserver_cache_list_fetched_objects_total":  {impact: "This alert or recording rule will stop receiving data by default when Kubernetes 1.37 hides the metric.", remediation: `Rewrite the expression using apiserver_storage_list_fetched_objects_total{storage="watchcache"} before upgrading.`},
-		"apiserver_cache_list_returned_objects_total": {impact: "This alert or recording rule will stop receiving data by default when Kubernetes 1.37 hides the metric.", remediation: `Rewrite the expression using apiserver_storage_list_returned_objects_total{storage="watchcache"} before upgrading.`},
-		"resourceclaim_controller_creates_total":      {impact: "This alert or recording rule will stop receiving data when Kubernetes 1.37 renames the metric.", remediation: "Rewrite the expression using dynamic_resource_allocation_resourceclaim_creates_total before upgrading."},
-		"scheduler_resourceclaim_creates_total":       {impact: "This alert or recording rule will stop receiving data when Kubernetes 1.37 renames the metric.", remediation: "Rewrite the expression using dynamic_resource_allocation_resourceclaim_creates_total before upgrading."},
-		"resourceclaim_controller_resource_claims":    {impact: "This alert or recording rule will stop receiving data when Kubernetes 1.37 renames the metric.", remediation: "Rewrite the expression using dynamic_resource_allocation_resource_claims before upgrading."},
-		"container_cpu_load_average_10s":              {impact: "This alert or recording rule will stop receiving data because Kubernetes 1.37 removes the cAdvisor metric.", remediation: "Remove or redesign the expression before upgrading; Kubernetes 1.37 provides no replacement for this metric."},
-		"container_cpu_load_d_average_10s":            {impact: "This alert or recording rule will stop receiving data because Kubernetes 1.37 removes the cAdvisor metric.", remediation: "Remove or redesign the expression before upgrading; Kubernetes 1.37 provides no replacement for this metric."},
-		"container_tasks_state":                       {impact: "This alert or recording rule will stop receiving data because Kubernetes 1.37 removes the cAdvisor metric.", remediation: "Remove or redesign the expression before upgrading; Kubernetes 1.37 provides no replacement for this metric."},
+		"resourceclaim_controller_creates_total":   {impact: "This alert or recording rule will stop receiving data when Kubernetes 1.37 renames the metric.", remediation: "Rewrite the expression using dynamic_resource_allocation_resourceclaim_creates_total before upgrading."},
+		"scheduler_resourceclaim_creates_total":    {impact: "This alert or recording rule will stop receiving data when Kubernetes 1.37 renames the metric.", remediation: "Rewrite the expression using dynamic_resource_allocation_resourceclaim_creates_total before upgrading."},
+		"resourceclaim_controller_resource_claims": {impact: "This alert or recording rule will stop receiving data when Kubernetes 1.37 renames the metric.", remediation: "Rewrite the expression using dynamic_resource_allocation_resource_claims before upgrading."},
+		"container_cpu_load_average_10s":           {impact: "This alert or recording rule will stop receiving data because Kubernetes 1.37 removes the cAdvisor metric.", remediation: "Remove or redesign the expression before upgrading; Kubernetes 1.37 provides no replacement for this metric."},
+		"container_cpu_load_d_average_10s":         {impact: "This alert or recording rule will stop receiving data because Kubernetes 1.37 removes the cAdvisor metric.", remediation: "Remove or redesign the expression before upgrading; Kubernetes 1.37 provides no replacement for this metric."},
+		"container_tasks_state":                    {impact: "This alert or recording rule will stop receiving data because Kubernetes 1.37 removes the cAdvisor metric.", remediation: "Remove or redesign the expression before upgrading; Kubernetes 1.37 provides no replacement for this metric."},
 	}
 	check.Inspected = len(input.PrometheusRules)
 	for _, rule := range input.PrometheusRules {
@@ -776,12 +783,12 @@ func scanSELinuxMountTransition(input *Input, targetAllowsOptOut bool) Check {
 		return check
 	}
 
-	missingRuntime, runtimeEvidenceAvailable := scanSELinuxRuntimeEvidence(input, &check)
+	missingRuntime, runtimeEvidenceAvailable := scanSELinuxRuntimeEvidence(input, &check, targetAllowsOptOut)
 	runtimeFindingCount := len(check.Findings)
-	usesByPV, eligibleUses, incomplete := selinuxPersistentVolumeUses(input, &check)
+	usesByPV, eligibleUses, incomplete := selinuxPersistentVolumeUses(input, &check, targetAllowsOptOut)
 	check.Inspected = eligibleUses
 	for pvName, uses := range usesByPV {
-		scanSELinuxSharedVolume(&check, pvName, uses)
+		scanSELinuxSharedVolume(&check, pvName, uses, targetAllowsOptOut)
 	}
 	structuralConflictFound := len(check.Findings) > runtimeFindingCount
 	if structuralConflictFound {
@@ -791,7 +798,7 @@ func scanSELinuxMountTransition(input *Input, targetAllowsOptOut bool) Check {
 	if input.Events == nil {
 		check.Caveat = appendCaveat(check.Caveat, "Kubernetes Events were unavailable, so observed SELinux volume conflicts could not be inspected.")
 	} else {
-		appendSELinuxEventFindings(input.Events, &check)
+		appendSELinuxEventFindings(input.Events, &check, targetAllowsOptOut)
 	}
 	if !runtimeEvidenceAvailable {
 		check.Caveat = appendCaveat(check.Caveat, "Node evidence was unavailable, so kubelet SELinux conflict metrics could not be inspected.")
@@ -853,11 +860,14 @@ func allLinuxKubeletsDisableSELinuxMount(input *Input) bool {
 	return foundLinuxNode
 }
 
-func selinuxMountRemediation(action string) string {
-	return action + " " + selinuxMountOptOutRemediation
+func selinuxMountRemediation(action string, targetAllowsOptOut bool) string {
+	if targetAllowsOptOut {
+		return action + " " + selinuxMountOptOutRemediation
+	}
+	return action + " The SELinuxMount feature-gate opt-out is limited to a Kubernetes 1.37 target; resolve this conflict before upgrading to Kubernetes 1.38 or later."
 }
 
-func scanSELinuxRuntimeEvidence(input *Input, check *Check) (int, bool) {
+func scanSELinuxRuntimeEvidence(input *Input, check *Check, targetAllowsOptOut bool) (int, bool) {
 	if input.Nodes == nil {
 		return 0, false
 	}
@@ -891,14 +901,14 @@ func scanSELinuxRuntimeEvidence(input *Input, check *Check) (int, bool) {
 			Evidence:    Evidence{Source: "kubelet metrics", Path: "volume_manager_selinux_volume_context_mismatch_*_total", Detail: fmt.Sprintf("warnings=%g errors=%g", evidence.SELinuxMismatchWarnings, evidence.SELinuxMismatchErrors)},
 			AppliesFrom: check.AppliesFrom,
 			Impact:      impact,
-			Remediation: selinuxMountRemediation("Enable the selinux-warning-controller in kube-controller-manager and inspect selinux_warning_controller_selinux_volume_conflict to identify both Pods, then align shared-volume SELinux labels and seLinuxChangePolicy values."),
+			Remediation: selinuxMountRemediation("Enable the selinux-warning-controller in kube-controller-manager and inspect selinux_warning_controller_selinux_volume_conflict to identify both Pods, then align shared-volume SELinux labels and seLinuxChangePolicy values.", targetAllowsOptOut),
 			References:  append([]Reference(nil), check.References...),
 		})
 	}
 	return missing, true
 }
 
-func selinuxPersistentVolumeUses(input *Input, check *Check) (map[string][]selinuxVolumeUse, int, bool) {
+func selinuxPersistentVolumeUses(input *Input, check *Check, targetAllowsOptOut bool) (map[string][]selinuxVolumeUse, int, bool) {
 	usesByPV := map[string][]selinuxVolumeUse{}
 	if input.Pods == nil {
 		return usesByPV, 0, true
@@ -975,7 +985,7 @@ func selinuxPersistentVolumeUses(input *Input, check *Check) (map[string][]selin
 					Evidence:    Evidence{Source: "live", Path: fmt.Sprintf("spec.volumes[%d]", volumeIndex), Detail: "persistentVolume=" + pv.Name},
 					AppliesFrom: check.AppliesFrom,
 					Impact:      "If the node enforces SELinux, Kubernetes cannot mount one volume with multiple SELinux contexts and the Pod can remain in ContainerCreating.",
-					Remediation: selinuxMountRemediation("Use one effective SELinux label for every container that mounts this volume, or explicitly set seLinuxChangePolicy: Recursive."),
+					Remediation: selinuxMountRemediation("Use one effective SELinux label for every container that mounts this volume, or explicitly set seLinuxChangePolicy: Recursive.", targetAllowsOptOut),
 					References:  append([]Reference(nil), check.References...),
 				})
 				continue
@@ -1020,13 +1030,22 @@ func selinuxMountNewlyApplies(pv *corev1.PersistentVolume, pvc *corev1.Persisten
 	if pv.Spec.FC != nil || pv.Spec.ISCSI != nil {
 		return true, true
 	}
-	if pv.Spec.CSI == nil {
+	effectivePV := pv
+	translator := csitranslation.New()
+	if translator.IsPVMigratable(pv) {
+		translated, err := translator.TranslateInTreePVToCSI(klog.Background(), pv)
+		if err != nil {
+			return false, false
+		}
+		effectivePV = translated
+	}
+	if effectivePV.Spec.CSI == nil {
 		return false, true
 	}
 	if !driverEvidenceAvailable {
 		return false, false
 	}
-	driver := drivers[pv.Spec.CSI.Driver]
+	driver := drivers[effectivePV.Spec.CSI.Driver]
 	return driver != nil && driver.Spec.SELinuxMount != nil && *driver.Spec.SELinuxMount, true
 }
 
@@ -1130,7 +1149,7 @@ func compatibleSELinuxLabel(labels map[string]bool) (string, bool) {
 	return strings.Join(parts[:], ":"), true
 }
 
-func scanSELinuxSharedVolume(check *Check, pvName string, uses []selinuxVolumeUse) {
+func scanSELinuxSharedVolume(check *Check, pvName string, uses []selinuxVolumeUse, targetAllowsOptOut bool) {
 	if len(uses) < 2 {
 		return
 	}
@@ -1151,31 +1170,31 @@ func scanSELinuxSharedVolume(check *Check, pvName string, uses []selinuxVolumeUs
 	}
 	if len(policies) > 1 {
 		if len(recursiveFallbacks) > 0 {
-			check.Findings = append(check.Findings, selinuxSharedVolumeFinding(check, pvName, "Shared volume falls back to recursive SELinux relabeling", "effectivePolicies=MountOption,Recursive recursiveFallbacks="+formatBoundedList(recursiveFallbacks, ", ")+" pods="+formatBoundedList(pods, ", "), "If the node enforces SELinux, one Pod cannot use mount-time labeling while another Pod requests it and kubelet can reject one of the mounts.", "Set an explicit SELinux level on every unprivileged container mounting the volume, or set seLinuxChangePolicy: Recursive on every Pod sharing it; privileged sharers require Recursive."))
+			check.Findings = append(check.Findings, selinuxSharedVolumeFinding(check, pvName, "Shared volume falls back to recursive SELinux relabeling", "effectivePolicies=MountOption,Recursive recursiveFallbacks="+formatBoundedList(recursiveFallbacks, ", ")+" pods="+formatBoundedList(pods, ", "), "If the node enforces SELinux, one Pod cannot use mount-time labeling while another Pod requests it and kubelet can reject one of the mounts.", "Set an explicit SELinux level on every unprivileged container mounting the volume, or set seLinuxChangePolicy: Recursive on every Pod sharing it; privileged sharers require Recursive.", targetAllowsOptOut))
 			return
 		}
-		check.Findings = append(check.Findings, selinuxSharedVolumeFinding(check, pvName, "Shared volume uses conflicting SELinux change policies", "policies=MountOption,Recursive pods="+formatBoundedList(pods, ", "), "If the node enforces SELinux, Pods sharing this volume use incompatible relabeling modes and kubelet can reject one of the mounts.", "Set the same seLinuxChangePolicy on every Pod sharing this volume; use Recursive when privileged and unprivileged Pods must share it."))
+		check.Findings = append(check.Findings, selinuxSharedVolumeFinding(check, pvName, "Shared volume uses conflicting SELinux change policies", "policies=MountOption,Recursive pods="+formatBoundedList(pods, ", "), "If the node enforces SELinux, Pods sharing this volume use incompatible relabeling modes and kubelet can reject one of the mounts.", "Set the same seLinuxChangePolicy on every Pod sharing this volume; use Recursive when privileged and unprivileged Pods must share it.", targetAllowsOptOut))
 		return
 	}
 	_, labelsCompatible := compatibleSELinuxLabel(labels)
 	if policies[corev1.SELinuxChangePolicyMountOption] && !labelsCompatible {
-		check.Findings = append(check.Findings, selinuxSharedVolumeFinding(check, pvName, "Shared volume uses conflicting SELinux labels", "labels="+fmt.Sprintf("%d", len(labels))+" pods="+formatBoundedList(pods, ", "), "If the node enforces SELinux, Kubernetes can mount a volume with only one context and Pods requesting different labels can remain in ContainerCreating.", "Align the effective SELinux label across every Pod sharing this volume, or explicitly set seLinuxChangePolicy: Recursive."))
+		check.Findings = append(check.Findings, selinuxSharedVolumeFinding(check, pvName, "Shared volume uses conflicting SELinux labels", "labels="+fmt.Sprintf("%d", len(labels))+" pods="+formatBoundedList(pods, ", "), "If the node enforces SELinux, Kubernetes can mount a volume with only one context and Pods requesting different labels can remain in ContainerCreating.", "Align the effective SELinux label across every Pod sharing this volume, or explicitly set seLinuxChangePolicy: Recursive.", targetAllowsOptOut))
 	}
 }
 
-func selinuxSharedVolumeFinding(check *Check, pvName, title, detail, impact, remediation string) Finding {
+func selinuxSharedVolumeFinding(check *Check, pvName, title, detail, impact, remediation string, targetAllowsOptOut bool) Finding {
 	return Finding{
 		RuleID: check.ID, Title: title, Level: LevelReview,
 		Resource:    &ResourceRef{Kind: "PersistentVolume", Name: pvName},
 		Evidence:    Evidence{Source: "live", Path: "spec.claimRef", Detail: detail},
 		AppliesFrom: check.AppliesFrom,
 		Impact:      impact,
-		Remediation: selinuxMountRemediation(remediation),
+		Remediation: selinuxMountRemediation(remediation, targetAllowsOptOut),
 		References:  append([]Reference(nil), check.References...),
 	}
 }
 
-func appendSELinuxEventFindings(events []*corev1.Event, check *Check) {
+func appendSELinuxEventFindings(events []*corev1.Event, check *Check, targetAllowsOptOut bool) {
 	seen := map[string]bool{}
 	for _, event := range events {
 		if event == nil || (event.Reason != "SELinuxLabelConflict" && event.Reason != "SELinuxChangePolicyConflict" && event.Reason != "MultipleSELinuxLabels") {
@@ -1203,7 +1222,7 @@ func appendSELinuxEventFindings(events []*corev1.Event, check *Check) {
 			Evidence:    Evidence{Source: "event", Path: "reason", Detail: event.Message},
 			AppliesFrom: check.AppliesFrom,
 			Impact:      impact,
-			Remediation: selinuxMountRemediation(remediation),
+			Remediation: selinuxMountRemediation(remediation, targetAllowsOptOut),
 			References:  append([]Reference(nil), check.References...),
 		})
 	}

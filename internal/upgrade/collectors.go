@@ -180,10 +180,14 @@ func collectSchedulingV1Alpha2Evidence(ctx context.Context, authz EvidenceAuthor
 	unavailable := []string{}
 	installed := false
 	for _, resource := range resources.APIResources {
-		if !isSchedulingV1Alpha2ListResource(resource) {
+		if !isSchedulingV1Alpha2Resource(resource) {
 			continue
 		}
 		installed = true
+		if !slices.Contains(resource.Verbs, "list") {
+			unavailable = append(unavailable, resource.Kind)
+			continue
+		}
 		gvr := schema.GroupVersionResource{Group: "scheduling.k8s.io", Version: "v1alpha2", Resource: resource.Name}
 		resourceUnavailable := false
 		if !resource.Namespaced || namespaces == nil {
@@ -215,9 +219,9 @@ func collectSchedulingV1Alpha2Evidence(ctx context.Context, authz EvidenceAuthor
 	return objects, installed, true, unavailable
 }
 
-func isSchedulingV1Alpha2ListResource(resource metav1.APIResource) bool {
+func isSchedulingV1Alpha2Resource(resource metav1.APIResource) bool {
 	return (resource.Kind == "Workload" || resource.Kind == "PodGroup") &&
-		!strings.Contains(resource.Name, "/") && slices.Contains(resource.Verbs, "list")
+		!strings.Contains(resource.Name, "/")
 }
 
 func listAllUpgradeObjects(ctx context.Context, resource dynamic.ResourceInterface) ([]*unstructured.Unstructured, error) {

@@ -95,6 +95,37 @@ func TestRunUpgradeReadinessWithCachePreservesDirectSourceEvidence(t *testing.T)
 	t.Fatal("source manifest API check not found")
 }
 
+func TestRunUpgradeReadinessDoesNotExposeUnauthorizedCached137Evidence(t *testing.T) {
+	configMap := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "kubeadm-config", Namespace: "kube-system"},
+		Data:       map[string]string{"ClusterConfiguration": "apiVersion: kubeadm.k8s.io/v1beta3\nkind: ClusterConfiguration\n"},
+	}
+	if err := k8s.InitTestResourceCache(fake.NewSimpleClientset(configMap)); err != nil {
+		t.Fatalf("InitTestResourceCache() error = %v", err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+
+	results, err := RunFromCache(k8s.GetResourceCache(), nil, Options{
+		CurrentVersion:                  "1.36",
+		TargetVersion:                   "1.37",
+		ConfigMapNamespaces:             []string{},
+		PersistentVolumeClaimNamespaces: []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range results.Checks {
+		if check.ID == "kubeadm-config-v1beta3" && (check.Status != upgradereadiness.CheckUnknown || len(check.Findings) != 0) {
+			t.Fatalf("unauthorized kubeadm evidence = %+v, want unknown without findings", check)
+		}
+	}
+	for _, kind := range []string{"configmaps", "persistentvolumeclaims"} {
+		if !slices.Contains(results.Coverage.UnavailableKinds, kind) {
+			t.Fatalf("unavailable kinds = %v, want %s", results.Coverage.UnavailableKinds, kind)
+		}
+	}
+}
+
 func TestFilterPersistentVolumesForNamespaces(t *testing.T) {
 	namespaced := func(name, namespace string) *corev1.PersistentVolume {
 		return &corev1.PersistentVolume{
@@ -154,6 +185,28 @@ func TestSameNamespaceSet(t *testing.T) {
 	}
 	if sameNamespaceSet(nil, []string{}) || sameNamespaceSet([]string{"team-a"}, []string{"team-b"}) {
 		t.Fatal("cluster-wide, empty, and distinct scopes must remain different")
+	}
+}
+
+func TestIntersectNamespaceScopes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		a    []string
+		b    []string
+		want []string
+	}{
+		{name: "two cluster-wide scopes", want: nil},
+		{name: "scan ceiling", a: []string{"team-a"}, want: []string{"team-a"}},
+		{name: "authorization ceiling", b: []string{"team-b"}, want: []string{"team-b"}},
+		{name: "intersection", a: []string{"team-a", "team-b"}, b: []string{"team-b", "team-c"}, want: []string{"team-b"}},
+		{name: "explicit no access", a: []string{}, b: []string{"team-b"}, want: []string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := intersectNamespaceScopes(tc.a, tc.b)
+			if !sameNamespaceSet(got, tc.want) {
+				t.Fatalf("intersection = %#v, want %#v", got, tc.want)
+			}
+		})
 	}
 }
 

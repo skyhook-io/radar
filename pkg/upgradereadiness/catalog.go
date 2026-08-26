@@ -109,9 +109,6 @@ var (
 		"PublicKeysECDSA":    append([]Reference(nil), kubeadmV1Beta3References137...),
 	}
 	metricReferences137 = map[string][]Reference{
-		"apiserver_cache_list_total":                  {{Title: "Deprecate API server cache-list metrics", URL: "https://github.com/kubernetes/kubernetes/pull/139154"}},
-		"apiserver_cache_list_fetched_objects_total":  {{Title: "Deprecate API server cache-list metrics", URL: "https://github.com/kubernetes/kubernetes/pull/139154"}},
-		"apiserver_cache_list_returned_objects_total": {{Title: "Deprecate API server cache-list metrics", URL: "https://github.com/kubernetes/kubernetes/pull/139154"}},
 		"resourceclaim_controller_creates_total":      {{Title: "Harmonize DRA ResourceClaim creation metrics", URL: "https://github.com/kubernetes/kubernetes/pull/138542"}},
 		"scheduler_resourceclaim_creates_total":       {{Title: "Harmonize DRA ResourceClaim creation metrics", URL: "https://github.com/kubernetes/kubernetes/pull/138542"}},
 		"resourceclaim_controller_resource_claims":    {{Title: "Harmonize DRA ResourceClaim creation metrics", URL: "https://github.com/kubernetes/kubernetes/pull/138542"}},

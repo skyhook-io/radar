@@ -13,7 +13,7 @@ import (
 	ktesting "k8s.io/client-go/testing"
 )
 
-func TestSchedulingV1Alpha2ListResourceFilter(t *testing.T) {
+func TestSchedulingV1Alpha2ResourceFilter(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		resource metav1.APIResource
@@ -22,12 +22,12 @@ func TestSchedulingV1Alpha2ListResourceFilter(t *testing.T) {
 		{name: "workload", resource: metav1.APIResource{Name: "workloads", Kind: "Workload", Verbs: metav1.Verbs{"get", "list"}}, want: true},
 		{name: "pod group", resource: metav1.APIResource{Name: "podgroups", Kind: "PodGroup", Verbs: metav1.Verbs{"list"}}, want: true},
 		{name: "status subresource", resource: metav1.APIResource{Name: "workloads/status", Kind: "Workload", Verbs: metav1.Verbs{"get", "patch"}}},
-		{name: "not listable", resource: metav1.APIResource{Name: "workloads", Kind: "Workload", Verbs: metav1.Verbs{"get"}}},
+		{name: "not listable", resource: metav1.APIResource{Name: "workloads", Kind: "Workload", Verbs: metav1.Verbs{"get"}}, want: true},
 		{name: "unrelated kind", resource: metav1.APIResource{Name: "priorities", Kind: "Priority", Verbs: metav1.Verbs{"list"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isSchedulingV1Alpha2ListResource(tc.resource); got != tc.want {
-				t.Fatalf("isSchedulingV1Alpha2ListResource(%+v) = %v, want %v", tc.resource, got, tc.want)
+			if got := isSchedulingV1Alpha2Resource(tc.resource); got != tc.want {
+				t.Fatalf("isSchedulingV1Alpha2Resource(%+v) = %v, want %v", tc.resource, got, tc.want)
 			}
 		})
 	}

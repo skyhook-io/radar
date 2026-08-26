@@ -32,6 +32,8 @@ type Options struct {
 	PrometheusRulesInstalled             bool
 	PrometheusRulesDiscoveryAvailable    bool
 	PrometheusRuleUnavailableNamespaces  []string
+	ConfigMapNamespaces                  []string
+	PersistentVolumeClaimNamespaces      []string
 	CanReadNodes                         bool
 	CanReadPersistentVolumes             bool
 	SourceObjects                        []metav1.Object
@@ -106,8 +108,20 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts Options) (
 	input.Jobs = typed.Jobs
 	input.CronJobs = typed.CronJobs
 	input.Services = typed.Services
-	input.ConfigMaps = typed.ConfigMaps
-	input.PersistentVolumeClaims = audit.ListNamespaced(cache.PersistentVolumeClaims(), namespaces)
+	if includesUpgradeEvidenceKind(opts.CurrentVersion, opts.TargetVersion, string(k8score.ConfigMaps)) {
+		configMapNamespaces := cachedEvidenceNamespaceScope(cache, string(k8score.ConfigMaps), namespaces, opts.ConfigMapNamespaces)
+		if !noNamespaceAccess(configMapNamespaces) {
+			input.ConfigMaps = audit.ListNamespaced(cache.ConfigMaps(), configMapNamespaces)
+		}
+		input.CacheScopedKinds = recordEvidenceNamespaceScope(input.CacheScopedKinds, string(k8score.ConfigMaps), configMapNamespaces, namespaces)
+	}
+	if includesUpgradeEvidenceKind(opts.CurrentVersion, opts.TargetVersion, string(k8score.PersistentVolumeClaims)) {
+		persistentVolumeClaimNamespaces := cachedEvidenceNamespaceScope(cache, string(k8score.PersistentVolumeClaims), namespaces, opts.PersistentVolumeClaimNamespaces)
+		if !noNamespaceAccess(persistentVolumeClaimNamespaces) {
+			input.PersistentVolumeClaims = audit.ListNamespaced(cache.PersistentVolumeClaims(), persistentVolumeClaimNamespaces)
+		}
+		input.CacheScopedKinds = recordEvidenceNamespaceScope(input.CacheScopedKinds, string(k8score.PersistentVolumeClaims), persistentVolumeClaimNamespaces, namespaces)
+	}
 	input.PersistentVolumes = persistentVolumes
 	input.Nodes = nodes
 	input.Events = events
@@ -147,6 +161,52 @@ func upgradeCacheScopeResources(currentVersion, targetVersion string) []string {
 		resources = append(resources, string(k8score.ConfigMaps), string(k8score.PersistentVolumeClaims))
 	}
 	return resources
+}
+
+func includesUpgradeEvidenceKind(currentVersion, targetVersion, kind string) bool {
+	return slices.Contains(upgradeCacheScopeResources(currentVersion, targetVersion), kind)
+}
+
+func cachedEvidenceNamespaceScope(cache *k8s.ResourceCache, kind string, scanNamespaces, authorizedNamespaces []string) []string {
+	scope := intersectNamespaceScopes(scanNamespaces, authorizedNamespaces)
+	if cacheNamespaces := cache.KindNamespaces(kind); len(cacheNamespaces) > 0 {
+		scope = intersectNamespaceScopes(scope, cacheNamespaces)
+	}
+	return scope
+}
+
+func intersectNamespaceScopes(a, b []string) []string {
+	if noNamespaceAccess(a) || noNamespaceAccess(b) {
+		return []string{}
+	}
+	if a == nil {
+		return cloneStrings(b)
+	}
+	if b == nil {
+		return cloneStrings(a)
+	}
+	allowed := make(map[string]bool, len(b))
+	for _, namespace := range b {
+		allowed[namespace] = true
+	}
+	intersection := make([]string, 0, len(a))
+	for _, namespace := range a {
+		if allowed[namespace] {
+			intersection = append(intersection, namespace)
+		}
+	}
+	return intersection
+}
+
+func recordEvidenceNamespaceScope(scopedKinds map[string][]string, kind string, evidenceNamespaces, scanNamespaces []string) map[string][]string {
+	if noNamespaceAccess(evidenceNamespaces) || sameNamespaceSet(evidenceNamespaces, scanNamespaces) {
+		return scopedKinds
+	}
+	if scopedKinds == nil {
+		scopedKinds = map[string][]string{}
+	}
+	scopedKinds[kind] = cloneStrings(evidenceNamespaces)
+	return scopedKinds
 }
 
 func sameNamespaceSet(a, b []string) bool {

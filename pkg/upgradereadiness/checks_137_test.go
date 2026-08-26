@@ -206,8 +206,8 @@ func TestRemovedFeatureGatesReportsManagedControlPlaneGap137(t *testing.T) {
 	input = completeInput()
 	input.Nodes[0].Labels = map[string]string{"eks.amazonaws.com/nodegroup": "workers"}
 	check = checkByID(t, scan137(t, input), "removed-feature-gates")
-	if check.Status != CheckPassed || !strings.Contains(check.Caveat, "provider manages the control plane") {
-		t.Fatalf("managed control plane = %+v, want passed node evidence with managed-control-plane caveat", check)
+	if check.Status != CheckPassed || check.Caveat != "" || !strings.Contains(check.EvidenceNote, "provider manages the control plane") {
+		t.Fatalf("managed control plane = %+v, want passed node evidence with a non-limiting provider note", check)
 	}
 
 	input = completeInput()
@@ -270,7 +270,7 @@ func TestManagedControlPlaneScopeDoesNotBecomeUnknown137(t *testing.T) {
 			tc.configure(input)
 
 			featureGates := checkByID(t, scan137(t, input), "removed-feature-gates")
-			if featureGates.Status != CheckPassed || !strings.Contains(featureGates.Caveat, "provider manages the control plane") || strings.Contains(featureGates.Caveat, "could not be inspected") {
+			if featureGates.Status != CheckPassed || featureGates.Caveat != "" || !strings.Contains(featureGates.EvidenceNote, "provider manages the control plane") {
 				t.Fatalf("managed feature-gate scope = %+v, want passed kubelet evidence with provider boundary", featureGates)
 			}
 			componentFlags := checkByID(t, scan137(t, input), "removed-component-flags")
@@ -280,7 +280,7 @@ func TestManagedControlPlaneScopeDoesNotBecomeUnknown137(t *testing.T) {
 
 			input.NodeRuntimeEvidence[0].FeatureGates["SidecarContainers"] = true
 			featureGates = checkByID(t, scan137(t, input), "removed-feature-gates")
-			if featureGates.Status != CheckBlocked || len(featureGates.Findings) != 1 || !strings.Contains(featureGates.Caveat, "provider manages the control plane") {
+			if featureGates.Status != CheckBlocked || len(featureGates.Findings) != 1 || featureGates.Caveat != "" || !strings.Contains(featureGates.EvidenceNote, "provider manages the control plane") {
 				t.Fatalf("managed control plane with kubelet blocker = %+v, want blocker with provider boundary", featureGates)
 			}
 		})
@@ -437,8 +437,8 @@ func TestKubeadmV1Beta3Config137(t *testing.T) {
 
 	input.ConfigMaps[0].Data["ClusterConfiguration"] = "apiVersion: kubeadm.k8s.io/v1beta4\nkind: ClusterConfiguration\n"
 	check = checkByID(t, scan137(t, input), "kubeadm-config-v1beta3")
-	if check.Status != CheckPassed || !strings.Contains(check.Caveat, "--config") || !strings.Contains(check.Caveat, "not visible") {
-		t.Fatalf("kubeadm v1beta4 = %+v, want pass with host-file evidence caveat", check)
+	if check.Status != CheckPassed || check.Caveat != "" || !strings.Contains(check.EvidenceNote, "--config") || !strings.Contains(check.EvidenceNote, "not visible") {
+		t.Fatalf("kubeadm v1beta4 = %+v, want pass with a non-limiting host-file evidence note", check)
 	}
 
 	input.ConfigMaps[0].Data["ClusterConfiguration"] = "apiVersion: kubeadm.k8s.io/v1beta4\nkind: ClusterConfiguration\nfeatureGates:\n  NodeLocalCRISocket: true\n"
@@ -450,7 +450,7 @@ func TestKubeadmV1Beta3Config137(t *testing.T) {
 
 	input.ConfigMaps[0].Data["ClusterConfiguration"] = "[not yaml"
 	check = checkByID(t, scan137(t, input), "kubeadm-config-v1beta3")
-	if check.Status != CheckUnknown || !strings.Contains(check.Caveat, "--config") || !strings.Contains(check.Caveat, "could not fully parse") {
+	if check.Status != CheckUnknown || !strings.Contains(check.EvidenceNote, "--config") || !strings.Contains(check.Caveat, "could not fully parse") {
 		t.Fatalf("unparseable kubeadm config = %+v, want unknown with both evidence boundaries", check)
 	}
 }
@@ -503,6 +503,28 @@ func TestKubeProxyCommandEvidencePath137(t *testing.T) {
 	check := checkByID(t, scan137(t, input), "kube-proxy-mode-transition")
 	if check.Status != CheckReview || len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Evidence.Path, ".command[") {
 		t.Fatalf("command-based proxy mode = %+v, want command evidence path", check)
+	}
+}
+
+func TestKubeProxySoleFallbackContainerUsesExactEvidencePath137(t *testing.T) {
+	input := completeInput()
+	daemonSet := kubeProxyDaemonSet()
+	daemonSet.Spec.Template.Spec.Containers[0].Name = "network-proxy"
+	daemonSet.Spec.Template.Spec.Containers[0].Args = []string{"--proxy-mode=ipvs"}
+	input.DaemonSets = []*appsv1.DaemonSet{daemonSet}
+	check := checkByID(t, scan137(t, input), "kube-proxy-mode-transition")
+	if check.Status != CheckReview || len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Evidence.Path, "containers[network-proxy]") {
+		t.Fatalf("fallback container evidence = %+v, want its actual name in the path", check)
+	}
+}
+
+func TestManagedKubeProxyUsesProviderRemediation137(t *testing.T) {
+	input := completeInput()
+	input.Nodes[0].Labels = map[string]string{"cloud.google.com/gke-nodepool": "default"}
+	input.DaemonSets = []*appsv1.DaemonSet{kubeProxyDaemonSet()}
+	check := checkByID(t, scan137(t, input), "kube-proxy-mode-transition")
+	if check.Status != CheckReview || len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Remediation, "provider-supported") || !strings.Contains(check.Findings[0].Remediation, "do not edit") {
+		t.Fatalf("managed kube-proxy remediation = %+v, want provider-aware action", check)
 	}
 }
 
@@ -674,6 +696,9 @@ func TestKubeProxyModeDiagnostics137(t *testing.T) {
 	if value, field, found := commandFlag(nil, []string{"--proxy-mode", "--config=/etc/kube-proxy.yaml"}, "--proxy-mode"); found || value != "" || field != "" {
 		t.Fatalf("flag followed by another flag = (%q, %q, %v), want absent value", value, field, found)
 	}
+	if gates := parsedFeatureGates(nil, []string{"--feature-gates", "--secure-port=6443"}); len(gates) != 0 {
+		t.Fatalf("feature-gates followed by another flag = %v, want no parsed gates", gates)
+	}
 }
 
 func TestRemovedControlPlaneMetrics137(t *testing.T) {
@@ -693,13 +718,9 @@ func TestRemovedControlPlaneMetrics137(t *testing.T) {
 		},
 	}}}
 	check := checkByID(t, scan137(t, input), "removed-control-plane-metrics")
-	if check.Status != CheckWarning || len(check.Findings) != 1 {
-		t.Fatalf("removed metric rule = %+v, want warning", check)
+	if check.Status != CheckPassed || len(check.Findings) != 0 {
+		t.Fatalf("cache-list metric deprecation = %+v, want no 1.37 compatibility warning", check)
 	}
-	if !strings.Contains(check.Findings[0].Remediation, `apiserver_storage_list_total{storage="watchcache"}`) {
-		t.Fatalf("cache-list remediation = %q, want the equivalent watchcache selector", check.Findings[0].Remediation)
-	}
-	requireFindingReference(t, check.Findings, "/pull/139154")
 
 	groups := input.PrometheusRules[0].Object["spec"].(map[string]any)["groups"].([]any)
 	rule := groups[0].(map[string]any)["rules"].([]any)[0].(map[string]any)
@@ -942,8 +963,20 @@ func TestSELinuxMountExplicitOptOut137(t *testing.T) {
 		t.Fatal(err)
 	}
 	check = checkByID(t, result, "selinux-mount-transition")
-	if check.Status != CheckReview {
+	if check.Status != CheckReview || len(check.Findings) != 1 || strings.Contains(check.Findings[0].Remediation, "For Kubernetes 1.37 only") || !strings.Contains(check.Findings[0].Remediation, "limited to a Kubernetes 1.37 target") {
 		t.Fatalf("1.37-only opt-out with a 1.38 target = %+v, want structural review", check)
+	}
+}
+
+func TestSELinuxMountTransitionTranslatesMigratedInTreeVolume137(t *testing.T) {
+	input := selinuxSharedVolumeInput(t, nil, nil, "s0:c1,c2", "s0:c3,c4")
+	input.CSIDrivers[0].Name = "ebs.csi.aws.com"
+	input.PersistentVolumes[0].Spec.PersistentVolumeSource = corev1.PersistentVolumeSource{
+		AWSElasticBlockStore: &corev1.AWSElasticBlockStoreVolumeSource{VolumeID: "aws://us-east-1a/vol-123"},
+	}
+	check := checkByID(t, scan137(t, input), "selinux-mount-transition")
+	if check.Status != CheckReview || len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Title, "conflicting SELinux labels") {
+		t.Fatalf("migrated in-tree EBS volume = %+v, want CSI-translated conflict review", check)
 	}
 }
 

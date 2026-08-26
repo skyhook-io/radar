@@ -169,6 +169,7 @@ require (
 	gotest.tools/v3 v3.5.2 // indirect
 	k8s.io/apiserver v0.36.4 // indirect
 	k8s.io/component-base v0.36.4 // indirect
+	k8s.io/csi-translation-lib v0.36.2 // indirect
 	k8s.io/kube-openapi v0.0.0-20260501160325-927ab1f70cd6 // indirect
 	k8s.io/kubectl v0.36.3 // indirect
 	k8s.io/streaming v0.36.4 // indirect

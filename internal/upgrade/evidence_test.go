@@ -72,3 +72,30 @@ func TestResolveHelmNamespacesForAuthorizerDecisions(t *testing.T) {
 		}
 	})
 }
+
+func TestResolveCachedEvidenceNamespaces(t *testing.T) {
+	t.Run("cluster-wide grant preserves cluster-wide scope", func(t *testing.T) {
+		authz := &fakeUpgradeAuthorizer{canList: map[string]bool{"/configmaps/": true}}
+		if got := resolveCachedEvidenceNamespaces(authz, "", "configmaps", nil); got != nil {
+			t.Fatalf("scope = %v, want nil cluster-wide scope", got)
+		}
+	})
+
+	t.Run("cluster-wide scan narrows to resource-specific grants", func(t *testing.T) {
+		authz := &fakeUpgradeAuthorizer{canList: map[string]bool{"/configmaps/": false}, filtered: []string{"team-a"}}
+		if got := resolveCachedEvidenceNamespaces(authz, "", "configmaps", nil); !slices.Equal(got, []string{"team-a"}) {
+			t.Fatalf("scope = %v, want [team-a]", got)
+		}
+		if !slices.Contains(authz.filterCalls, "/configmaps") {
+			t.Fatalf("filter calls = %v, want configmaps authorization", authz.filterCalls)
+		}
+	})
+
+	t.Run("no resource grant remains explicitly empty", func(t *testing.T) {
+		authz := &fakeUpgradeAuthorizer{canList: map[string]bool{"/persistentvolumeclaims/": false}}
+		got := resolveCachedEvidenceNamespaces(authz, "", "persistentvolumeclaims", []string{"team-a"})
+		if got == nil || len(got) != 0 {
+			t.Fatalf("scope = %#v, want explicit empty scope", got)
+		}
+	})
+}
