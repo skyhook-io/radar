@@ -27,6 +27,7 @@ func TestRemovedFeatureGates137(t *testing.T) {
 		wantStatus CheckStatus
 		wantPath   string
 		wantImpact string
+		wantRef    string
 	}{
 		{
 			name: "effective kubelet gate",
@@ -35,6 +36,7 @@ func TestRemovedFeatureGates137(t *testing.T) {
 			},
 			wantStatus: CheckBlocked,
 			wantPath:   "kubeletconfig.featureGates.SidecarContainers",
+			wantRef:    "/pull/137755",
 		},
 		{
 			name: "static pod API opt-out",
@@ -43,6 +45,7 @@ func TestRemovedFeatureGates137(t *testing.T) {
 			},
 			wantStatus: CheckBlocked,
 			wantImpact: "dependent static Pod cannot start",
+			wantRef:    "/pull/140226",
 		},
 		{
 			name: "control plane mirror pod",
@@ -54,6 +57,7 @@ func TestRemovedFeatureGates137(t *testing.T) {
 			},
 			wantStatus: CheckBlocked,
 			wantPath:   "spec.containers[0].args[--feature-gates].APIServerTracing",
+			wantRef:    "/pull/138907",
 		},
 		{
 			name: "configz unavailable",
@@ -75,6 +79,9 @@ func TestRemovedFeatureGates137(t *testing.T) {
 			}
 			if tc.wantImpact != "" && (len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Impact, tc.wantImpact)) {
 				t.Fatalf("findings = %+v, want impact containing %q", check.Findings, tc.wantImpact)
+			}
+			if tc.wantRef != "" {
+				requireFindingReference(t, check.Findings, tc.wantRef)
 			}
 		})
 	}
@@ -105,6 +112,9 @@ func TestLockedAPIServerFeatureGate137(t *testing.T) {
 			if tc.wantStatus == CheckBlocked && (len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Impact, "locks this kube-apiserver feature gate to false")) {
 				t.Fatalf("non-default finding = %+v", check.Findings)
 			}
+			if tc.wantStatus == CheckBlocked {
+				requireFindingReference(t, check.Findings, "/pull/139212")
+			}
 		})
 	}
 }
@@ -129,6 +139,7 @@ func TestKubeletEventRecordQPS137(t *testing.T) {
 	if check.Status != CheckWarning || len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Remediation, "50") {
 		t.Fatalf("zero eventRecordQPS = %+v, want behavior-change warning", check)
 	}
+	requireFindingReference(t, check.Findings, "/pull/117119")
 
 	input = completeInput()
 	input.NodeRuntimeEvidence[0].EventRecordQPSAvailable = false
@@ -148,6 +159,7 @@ func TestRemovedComponentFlag137(t *testing.T) {
 	if check.Status != CheckBlocked || len(check.Findings) != 1 {
 		t.Fatalf("removed component flag = %+v, want blocker", check)
 	}
+	requireFindingReference(t, check.Findings, "/pull/138002")
 }
 
 func TestRemovedSchedulingAPIs137(t *testing.T) {
@@ -162,6 +174,7 @@ func TestRemovedSchedulingAPIs137(t *testing.T) {
 	if check.Status != CheckBlocked || len(check.Findings) != 1 || check.Findings[0].Resource.Kind != "PodGroup" {
 		t.Fatalf("stored alpha scheduling object = %+v, want blocker", check)
 	}
+	requireFindingReference(t, check.Findings, "/pull/140184")
 
 	input = completeInput()
 	input.SchedulingV1Alpha2DiscoveryAvailable = false
@@ -187,6 +200,7 @@ func TestKubeadmV1Beta3Config137(t *testing.T) {
 	if check.Status != CheckBlocked || len(check.Findings) != 1 {
 		t.Fatalf("kubeadm v1beta3 = %+v, want blocker", check)
 	}
+	requireFindingReference(t, check.Findings, "/pull/136016")
 
 	input.ConfigMaps[0].Data["ClusterConfiguration"] = "apiVersion: kubeadm.k8s.io/v1beta4\nkind: ClusterConfiguration\n"
 	check = checkByID(t, scan137(t, input), "kubeadm-config-v1beta3")
@@ -199,6 +213,7 @@ func TestKubeadmV1Beta3Config137(t *testing.T) {
 	if check.Status != CheckBlocked || len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Title, "NodeLocalCRISocket") {
 		t.Fatalf("removed kubeadm feature gate = %+v, want blocker", check)
 	}
+	requireFindingReference(t, check.Findings, "/pull/138645")
 
 	input.ConfigMaps[0].Data["ClusterConfiguration"] = "[not yaml"
 	check = checkByID(t, scan137(t, input), "kubeadm-config-v1beta3")
@@ -232,8 +247,8 @@ func TestKubeProxyModeTransition137(t *testing.T) {
 			if check.Status != tc.wantStatus {
 				t.Fatalf("check = %+v, want %s", check, tc.wantStatus)
 			}
-			if tc.wantRef != "" && (len(check.Findings) != 1 || len(check.Findings[0].References) != 1 || !strings.Contains(check.Findings[0].References[0].URL, tc.wantRef)) {
-				t.Fatalf("finding references = %+v, want only %s", check.Findings, tc.wantRef)
+			if tc.wantRef != "" {
+				requireFindingReference(t, check.Findings, tc.wantRef)
 			}
 		})
 	}
@@ -364,6 +379,7 @@ func TestRemovedControlPlaneMetrics137(t *testing.T) {
 	if check.Status != CheckWarning || len(check.Findings) != 1 {
 		t.Fatalf("removed metric rule = %+v, want warning", check)
 	}
+	requireFindingReference(t, check.Findings, "/pull/139154")
 
 	groups := input.PrometheusRules[0].Object["spec"].(map[string]any)["groups"].([]any)
 	rule := groups[0].(map[string]any)["rules"].([]any)[0].(map[string]any)
@@ -371,6 +387,38 @@ func TestRemovedControlPlaneMetrics137(t *testing.T) {
 	check = checkByID(t, scan137(t, input), "removed-control-plane-metrics")
 	if check.Status != CheckWarning || len(check.Findings) != 1 || check.Findings[0].Evidence.Detail != "resourceclaim_controller_resource_claims" || !strings.Contains(check.Findings[0].Remediation, "dynamic_resource_allocation_resource_claims") {
 		t.Fatalf("renamed DRA metric = %+v, want exact replacement", check)
+	}
+	requireFindingReference(t, check.Findings, "/pull/138542")
+}
+
+func requireFindingReference(t *testing.T, findings []Finding, urlSubstring string) {
+	t.Helper()
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v, want one finding with reference containing %q", findings, urlSubstring)
+	}
+	for _, reference := range findings[0].References {
+		if strings.Contains(reference.URL, urlSubstring) {
+			return
+		}
+	}
+	t.Fatalf("finding references = %+v, want URL containing %q", findings[0].References, urlSubstring)
+}
+
+func TestEvery137ConfigurationRemovalHasAnUpstreamReference(t *testing.T) {
+	for name := range removedFeatureGates137 {
+		if len(removedFeatureGateReferences137[name]) == 0 {
+			t.Errorf("removed feature gate %s has no upstream reference", name)
+		}
+	}
+	for name := range lockedAPIServerFeatureGates137 {
+		if len(lockedFeatureGateReferences137[name]) == 0 {
+			t.Errorf("locked feature gate %s has no upstream reference", name)
+		}
+	}
+	for name := range removedKubeadmFeatureGates137 {
+		if len(kubeadmFeatureGateReferences137[name]) == 0 {
+			t.Errorf("removed kubeadm feature gate %s has no upstream reference", name)
+		}
 	}
 }
 

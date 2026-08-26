@@ -43,7 +43,7 @@ var removedKubeadmFeatureGates137 = map[string]bool{
 }
 
 func scanRemovedFeatureGates(input *Input) Check {
-	check := Check{ID: "removed-feature-gates", Category: "Component configuration", Title: "Feature gates removed or locked in Kubernetes 1.37", Status: CheckPassed, Summary: "No incompatible feature-gate settings were found in readable component configuration.", Scope: "Effective kubelet configuration and readable control-plane mirror Pods", AppliesFrom: "1.37", References: append(append([]Reference(nil), changelog137References...), staticPodReferences...)}
+	check := Check{ID: "removed-feature-gates", Category: "Component configuration", Title: "Feature gates removed or locked in Kubernetes 1.37", Status: CheckPassed, Summary: "No incompatible feature-gate settings were found in readable component configuration.", Scope: "Effective kubelet configuration and readable control-plane mirror Pods", AppliesFrom: "1.37", References: append([]Reference(nil), changelog137References...)}
 	evidenceByNode := make(map[string]NodeRuntimeEvidence, len(input.NodeRuntimeEvidence))
 	for _, evidence := range input.NodeRuntimeEvidence {
 		evidenceByNode[evidence.NodeName] = evidence
@@ -71,7 +71,7 @@ func scanRemovedFeatureGates(input *Input) Check {
 				if name == "PreventStaticPodAPIReferences" && !enabled {
 					impact = "Kubelet 1.37 removes this gate and the opt-out that allowed static Pods to reference API objects; the node configuration will be rejected and any dependent static Pod cannot start."
 				}
-				check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: name + " is removed", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Node", Name: node.Name}, Evidence: Evidence{Source: "kubelet configz", Path: "kubeletconfig.featureGates." + name, Detail: fmt.Sprintf("%t", enabled)}, AppliesFrom: check.AppliesFrom, Impact: impact, Remediation: "Remove " + name + " from the kubelet feature-gates configuration before upgrading this node.", References: append([]Reference(nil), check.References...)})
+				check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: name + " is removed", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Node", Name: node.Name}, Evidence: Evidence{Source: "kubelet configz", Path: "kubeletconfig.featureGates." + name, Detail: fmt.Sprintf("%t", enabled)}, AppliesFrom: check.AppliesFrom, Impact: impact, Remediation: "Remove " + name + " from the kubelet feature-gates configuration before upgrading this node.", References: append([]Reference(nil), removedFeatureGateReferences137[name]...)})
 			}
 		}
 	}
@@ -90,7 +90,7 @@ func scanRemovedFeatureGates(input *Input) Check {
 				}
 				for name, value := range parsedFeatureGates(container.Command, container.Args) {
 					if removedFeatureGates137[name] {
-						check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: name + " is removed", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("spec.containers[%d].args[--feature-gates].%s", containerIndex, name), Detail: value}, AppliesFrom: check.AppliesFrom, Impact: "This Kubernetes 1.37 control-plane component no longer recognizes the configured feature gate and can fail during startup.", Remediation: "Remove " + name + " from the component feature-gates argument before upgrading the control plane.", References: append([]Reference(nil), check.References...)})
+						check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: name + " is removed", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("spec.containers[%d].args[--feature-gates].%s", containerIndex, name), Detail: value}, AppliesFrom: check.AppliesFrom, Impact: "This Kubernetes 1.37 control-plane component no longer recognizes the configured feature gate and can fail during startup.", Remediation: "Remove " + name + " from the component feature-gates argument before upgrading the control plane.", References: append([]Reference(nil), removedFeatureGateReferences137[name]...)})
 						continue
 					}
 					defaultValue, locked := lockedAPIServerFeatureGates137[name]
@@ -98,7 +98,7 @@ func scanRemovedFeatureGates(input *Input) Check {
 					if container.Name != "kube-apiserver" || !locked || (err == nil && configuredValue == defaultValue) {
 						continue
 					}
-					check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: name + " must use its locked default", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("spec.containers[%d].args[--feature-gates].%s", containerIndex, name), Detail: value}, AppliesFrom: check.AppliesFrom, Impact: fmt.Sprintf("Kubernetes 1.37 locks this kube-apiserver feature gate to %t and rejects a different configured value during startup.", defaultValue), Remediation: fmt.Sprintf("Set %s=%t or remove the explicit setting before upgrading the control plane.", name, defaultValue), References: append([]Reference(nil), check.References...)})
+					check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: name + " must use its locked default", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("spec.containers[%d].args[--feature-gates].%s", containerIndex, name), Detail: value}, AppliesFrom: check.AppliesFrom, Impact: fmt.Sprintf("Kubernetes 1.37 locks this kube-apiserver feature gate to %t and rejects a different configured value during startup.", defaultValue), Remediation: fmt.Sprintf("Set %s=%t or remove the explicit setting before upgrading the control plane.", name, defaultValue), References: append([]Reference(nil), lockedFeatureGateReferences137[name]...)})
 				}
 			}
 		}
@@ -150,7 +150,7 @@ func parsedFeatureGates(command, args []string) map[string]string {
 }
 
 func scanRemovedComponentFlags(input *Input) Check {
-	check := Check{ID: "removed-component-flags", Category: "Component configuration", Title: "Component flags removed in Kubernetes 1.37", Status: CheckPassed, Summary: "No readable control-plane mirror Pod uses a component flag removed in Kubernetes 1.37.", Scope: "Readable control-plane mirror Pods", AppliesFrom: "1.37", References: append([]Reference(nil), changelog137References...)}
+	check := Check{ID: "removed-component-flags", Category: "Component configuration", Title: "Component flags removed in Kubernetes 1.37", Status: CheckPassed, Summary: "No readable control-plane mirror Pod uses a component flag removed in Kubernetes 1.37.", Scope: "Readable control-plane mirror Pods", AppliesFrom: "1.37", References: append([]Reference(nil), componentFlagReferences137...)}
 	if !kubeSystemCovered(input, "pods") {
 		check.Status, check.Summary = CheckUnknown, "kube-system is outside the readable Pod scope, so control-plane component flags could not be inspected."
 		return check
@@ -200,7 +200,7 @@ func commandFlagPresence(command, args []string, name string) (string, bool) {
 }
 
 func scanKubeletEventQPS(input *Input) Check {
-	check := Check{ID: "kubelet-event-qps-change", Category: "Node configuration", Title: "Kubelet event throttling behavior", Status: CheckPassed, Summary: "No readable kubelet config sets eventRecordQPS to zero.", Scope: "Effective kubelet configuration", AppliesFrom: "1.37", References: append([]Reference(nil), changelog137References...)}
+	check := Check{ID: "kubelet-event-qps-change", Category: "Node configuration", Title: "Kubelet event throttling behavior", Status: CheckPassed, Summary: "No readable kubelet config sets eventRecordQPS to zero.", Scope: "Effective kubelet configuration", AppliesFrom: "1.37", References: append([]Reference(nil), eventRecordQPSReferences137...)}
 	if input.Nodes == nil || input.NodeRuntimeEvidence == nil {
 		check.Status, check.Summary = CheckUnknown, "Effective kubelet configuration was unavailable."
 		return check
@@ -238,7 +238,7 @@ func scanKubeletEventQPS(input *Input) Check {
 }
 
 func scanRemovedSchedulingAPIs(input *Input) Check {
-	check := Check{ID: "removed-scheduling-apis", Category: "API compatibility", Title: "Scheduling APIs removed in Kubernetes 1.37", Status: CheckPassed, Summary: "No stored scheduling.k8s.io/v1alpha2 Workload or PodGroup objects were found.", Scope: "Stored Workload and PodGroup objects", AppliesFrom: "1.37", References: append([]Reference(nil), changelog137References...)}
+	check := Check{ID: "removed-scheduling-apis", Category: "API compatibility", Title: "Scheduling APIs removed in Kubernetes 1.37", Status: CheckPassed, Summary: "No stored scheduling.k8s.io/v1alpha2 Workload or PodGroup objects were found.", Scope: "Stored Workload and PodGroup objects", AppliesFrom: "1.37", References: append([]Reference(nil), schedulingAPIReferences137...)}
 	if !input.SchedulingV1Alpha2DiscoveryAvailable {
 		check.Status, check.Summary = CheckUnknown, "API discovery was unavailable for scheduling.k8s.io/v1alpha2."
 		return check
@@ -315,14 +315,14 @@ func scanKubeadmConfig(input *Input) Check {
 			parsed++
 			apiVersion, _, _ := unstructured.NestedString(object, "apiVersion")
 			if apiVersion == "kubeadm.k8s.io/v1beta3" {
-				check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: "kubeadm v1beta3 configuration is removed", Level: LevelBlocker, Resource: &ResourceRef{Kind: "ConfigMap", Namespace: configMap.Namespace, Name: configMap.Name}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("data.%s.document[%d].apiVersion", key, document), Detail: apiVersion}, AppliesFrom: check.AppliesFrom, Impact: "kubeadm 1.37 no longer accepts the v1beta3 configuration API, which can block upgrade operations using this configuration.", Remediation: "Use a supported pre-1.37 kubeadm binary to run kubeadm config migrate and store v1beta4 configuration before upgrading.", References: append([]Reference(nil), check.References...)})
+				check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: "kubeadm v1beta3 configuration is removed", Level: LevelBlocker, Resource: &ResourceRef{Kind: "ConfigMap", Namespace: configMap.Namespace, Name: configMap.Name}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("data.%s.document[%d].apiVersion", key, document), Detail: apiVersion}, AppliesFrom: check.AppliesFrom, Impact: "kubeadm 1.37 no longer accepts the v1beta3 configuration API, which can block upgrade operations using this configuration.", Remediation: "Use a supported pre-1.37 kubeadm binary to run kubeadm config migrate and store v1beta4 configuration before upgrading.", References: append([]Reference(nil), kubeadmV1Beta3References137...)})
 			}
 			featureGates, _, _ := unstructured.NestedMap(object, "featureGates")
 			for name, value := range featureGates {
 				if !removedKubeadmFeatureGates137[name] {
 					continue
 				}
-				check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: name + " kubeadm feature gate is removed", Level: LevelBlocker, Resource: &ResourceRef{Kind: "ConfigMap", Namespace: configMap.Namespace, Name: configMap.Name}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("data.%s.document[%d].featureGates.%s", key, document, name), Detail: fmt.Sprint(value)}, AppliesFrom: check.AppliesFrom, Impact: "kubeadm 1.37 no longer recognizes this feature gate and can reject the configuration.", Remediation: "Remove " + name + " from kubeadm featureGates before upgrading.", References: append([]Reference(nil), check.References...)})
+				check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: name + " kubeadm feature gate is removed", Level: LevelBlocker, Resource: &ResourceRef{Kind: "ConfigMap", Namespace: configMap.Namespace, Name: configMap.Name}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("data.%s.document[%d].featureGates.%s", key, document, name), Detail: fmt.Sprint(value)}, AppliesFrom: check.AppliesFrom, Impact: "kubeadm 1.37 no longer recognizes this feature gate and can reject the configuration.", Remediation: "Remove " + name + " from kubeadm featureGates before upgrading.", References: append([]Reference(nil), kubeadmFeatureGateReferences137[name]...)})
 			}
 		}
 	}
@@ -544,7 +544,7 @@ func scanRemovedControlPlaneMetrics(input *Input) Check {
 			if !containsMetric(expressions, oldName) {
 				continue
 			}
-			check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: oldName + " changes in Kubernetes 1.37", Level: LevelWarning, Resource: &ResourceRef{Group: "monitoring.coreos.com", Kind: "PrometheusRule", Namespace: rule.GetNamespace(), Name: rule.GetName()}, Evidence: Evidence{Source: "live", Path: "spec.groups[].rules[].expr", Detail: oldName}, AppliesFrom: check.AppliesFrom, Impact: "This alert or recording rule will stop receiving data by default when Kubernetes 1.37 hides or renames the metric.", Remediation: "Rewrite the expression using " + replacement + " before upgrading.", References: append([]Reference(nil), check.References...)})
+			check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: oldName + " changes in Kubernetes 1.37", Level: LevelWarning, Resource: &ResourceRef{Group: "monitoring.coreos.com", Kind: "PrometheusRule", Namespace: rule.GetNamespace(), Name: rule.GetName()}, Evidence: Evidence{Source: "live", Path: "spec.groups[].rules[].expr", Detail: oldName}, AppliesFrom: check.AppliesFrom, Impact: "This alert or recording rule will stop receiving data by default when Kubernetes 1.37 hides or renames the metric.", Remediation: "Rewrite the expression using " + replacement + " before upgrading.", References: append([]Reference(nil), controlPlaneMetricReferences137[oldName]...)})
 		}
 	}
 	if input.Namespaces != nil {

@@ -41,15 +41,58 @@ var (
 		{Title: "Admission webhook failure policy", URL: "https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/#failure-policy"},
 		{Title: "Webhook availability guidance", URL: "https://kubernetes.io/docs/concepts/cluster-administration/admission-webhooks-good-practices/#ha-deployment"},
 	}
-	admissionAuthReviewReferences = []Reference{{Title: "Limit admission webhook scope", URL: "https://kubernetes.io/docs/concepts/cluster-administration/admission-webhooks-good-practices/#webhook-limit-scope"}}
-	crdConversionReferences       = []Reference{{Title: "CRD webhook conversion", URL: "https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definition-versioning/#webhook-conversion"}}
-	apiServiceReferences          = []Reference{{Title: "Kubernetes API aggregation layer", URL: "https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/apiserver-aggregation/"}, {Title: "APIService API", URL: "https://kubernetes.io/docs/reference/kubernetes-api/apiregistration/api-service-v1/"}}
-	strictIPReferences            = []Reference{{Title: "KEP-4858: stricter validation of IP and CIDR fields", URL: "https://github.com/kubernetes/enhancements/tree/master/keps/sig-network/4858-ip-cidr-validation"}}
-	gkeExecProbeReferences        = []Reference{{Title: "GKE exec probe timeout behavior", URL: "https://cloud.google.com/kubernetes-engine/docs/deprecations/exec-probe-timeouts"}}
-	changelog137References        = []Reference{{Title: "Kubernetes 1.37 release notes", URL: "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.37.md"}}
-	staticPodReferences           = []Reference{{Title: "Prevent static Pods from referencing API objects", URL: "https://github.com/kubernetes/kubernetes/pull/140226"}}
-	ipvsDeprecationReferences     = []Reference{{Title: "KEP-5495: Deprecate IPVS mode in kube-proxy", URL: "https://github.com/kubernetes/enhancements/tree/master/keps/sig-network/5495-deprecate-ipvs-mode-in-kube-proxy"}}
-	nftablesDefaultReferences     = []Reference{{Title: "KEP-5343: Make nftables the default kube-proxy backend", URL: "https://github.com/kubernetes/enhancements/tree/master/keps/sig-network/5343-nftables-to-default"}}
-	kubeProxyModeReferences       = append(append([]Reference(nil), ipvsDeprecationReferences...), nftablesDefaultReferences...)
-	selinuxMountReferences        = []Reference{{Title: "SELinux volume label changes", URL: "https://kubernetes.io/blog/2026/04/22/breaking-changes-in-selinux-volume-labeling/"}}
+	admissionAuthReviewReferences   = []Reference{{Title: "Limit admission webhook scope", URL: "https://kubernetes.io/docs/concepts/cluster-administration/admission-webhooks-good-practices/#webhook-limit-scope"}}
+	crdConversionReferences         = []Reference{{Title: "CRD webhook conversion", URL: "https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definition-versioning/#webhook-conversion"}}
+	apiServiceReferences            = []Reference{{Title: "Kubernetes API aggregation layer", URL: "https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/apiserver-aggregation/"}, {Title: "APIService API", URL: "https://kubernetes.io/docs/reference/kubernetes-api/apiregistration/api-service-v1/"}}
+	strictIPReferences              = []Reference{{Title: "KEP-4858: stricter validation of IP and CIDR fields", URL: "https://github.com/kubernetes/enhancements/tree/master/keps/sig-network/4858-ip-cidr-validation"}}
+	gkeExecProbeReferences          = []Reference{{Title: "GKE exec probe timeout behavior", URL: "https://cloud.google.com/kubernetes-engine/docs/deprecations/exec-probe-timeouts"}}
+	changelog137References          = []Reference{{Title: "Kubernetes 1.37 release notes", URL: "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.37.md"}}
+	removedFeatureGateReferences137 = map[string][]Reference{
+		"APIServerTracing":                      {{Title: "Remove locked GA feature gates", URL: "https://github.com/kubernetes/kubernetes/pull/138907"}},
+		"AnyVolumeDataSource":                   {{Title: "Remove the AnyVolumeDataSource feature gate", URL: "https://github.com/kubernetes/kubernetes/pull/135336"}},
+		"BtreeWatchCache":                       {{Title: "Remove locked GA feature gates", URL: "https://github.com/kubernetes/kubernetes/pull/138907"}},
+		"ConsistentListFromCache":               {{Title: "Remove locked GA feature gates", URL: "https://github.com/kubernetes/kubernetes/pull/138907"}},
+		"GangScheduling":                        {{Title: "Merge scheduling feature gates into GenericWorkload", URL: "https://github.com/kubernetes/kubernetes/pull/139520"}},
+		"OrderedNamespaceDeletion":              {{Title: "Remove locked GA feature gates", URL: "https://github.com/kubernetes/kubernetes/pull/138907"}},
+		"PreventStaticPodAPIReferences":         {{Title: "Remove PreventStaticPodAPIReferences", URL: "https://github.com/kubernetes/kubernetes/pull/140226"}},
+		"RelaxedDNSSearchValidation":            {{Title: "Remove RelaxedDNSSearchValidation", URL: "https://github.com/kubernetes/kubernetes/pull/139217"}},
+		"ResilientWatchCacheInitialization":     {{Title: "Remove locked GA feature gates", URL: "https://github.com/kubernetes/kubernetes/pull/138907"}},
+		"RetryGenerateName":                     {{Title: "Remove locked GA feature gates", URL: "https://github.com/kubernetes/kubernetes/pull/138907"}},
+		"SidecarContainers":                     {{Title: "Remove SidecarContainers", URL: "https://github.com/kubernetes/kubernetes/pull/137755"}},
+		"StreamingCollectionEncodingToJSON":     {{Title: "Remove locked GA feature gates", URL: "https://github.com/kubernetes/kubernetes/pull/138907"}},
+		"StreamingCollectionEncodingToProtobuf": {{Title: "Remove locked GA feature gates", URL: "https://github.com/kubernetes/kubernetes/pull/138907"}},
+		"WorkloadAwarePreemption":               {{Title: "Merge scheduling feature gates into GenericWorkload", URL: "https://github.com/kubernetes/kubernetes/pull/139520"}},
+	}
+	lockedFeatureGateReferences137 = map[string][]Reference{
+		"DeclarativeValidationTakeover": {{Title: "Lock DeclarativeValidationTakeover to its default", URL: "https://github.com/kubernetes/kubernetes/pull/139212"}},
+	}
+	componentFlagReferences137      = []Reference{{Title: "Remove no-op cloud provider controller registrations", URL: "https://github.com/kubernetes/kubernetes/pull/138002"}}
+	eventRecordQPSReferences137     = []Reference{{Title: "Make eventRecordQPS zero mean unlimited", URL: "https://github.com/kubernetes/kubernetes/pull/117119"}}
+	schedulingAPIReferences137      = []Reference{{Title: "Promote Workload and PodGroup APIs to v1beta1", URL: "https://github.com/kubernetes/kubernetes/pull/140184"}}
+	kubeadmV1Beta3References137     = []Reference{{Title: "Remove kubeadm v1beta3 and PublicKeysECDSA", URL: "https://github.com/kubernetes/kubernetes/pull/136016"}}
+	kubeadmFeatureGateReferences137 = map[string][]Reference{
+		"NodeLocalCRISocket": {{Title: "Remove the NodeLocalCRISocket feature gate", URL: "https://github.com/kubernetes/kubernetes/pull/138645"}},
+		"PublicKeysECDSA":    append([]Reference(nil), kubeadmV1Beta3References137...),
+	}
+	controlPlaneMetricReferences137 = map[string][]Reference{
+		"apiserver_cache_list_total":                  {{Title: "Deprecate API server cache-list metrics", URL: "https://github.com/kubernetes/kubernetes/pull/139154"}},
+		"apiserver_cache_list_fetched_objects_total":  {{Title: "Deprecate API server cache-list metrics", URL: "https://github.com/kubernetes/kubernetes/pull/139154"}},
+		"apiserver_cache_list_returned_objects_total": {{Title: "Deprecate API server cache-list metrics", URL: "https://github.com/kubernetes/kubernetes/pull/139154"}},
+		"resourceclaim_controller_creates_total":      {{Title: "Harmonize DRA ResourceClaim creation metrics", URL: "https://github.com/kubernetes/kubernetes/pull/138542"}},
+		"scheduler_resourceclaim_creates_total":       {{Title: "Harmonize DRA ResourceClaim creation metrics", URL: "https://github.com/kubernetes/kubernetes/pull/138542"}},
+		"resourceclaim_controller_resource_claims":    {{Title: "Harmonize DRA ResourceClaim creation metrics", URL: "https://github.com/kubernetes/kubernetes/pull/138542"}},
+	}
+	ipvsDeprecationReferences = []Reference{
+		{Title: "KEP-5495: Deprecate IPVS mode in kube-proxy", URL: "https://github.com/kubernetes/enhancements/tree/master/keps/sig-network/5495-deprecate-ipvs-mode-in-kube-proxy"},
+		{Title: "Add the KubeProxyIPVS feature gate", URL: "https://github.com/kubernetes/kubernetes/pull/139397"},
+	}
+	nftablesDefaultReferences = []Reference{
+		{Title: "KEP-5343: Make nftables the default kube-proxy backend", URL: "https://github.com/kubernetes/enhancements/tree/master/keps/sig-network/5343-nftables-to-default"},
+		{Title: "Warn when kube-proxy mode uses the implicit default", URL: "https://github.com/kubernetes/kubernetes/pull/139957"},
+	}
+	kubeProxyModeReferences = append(append([]Reference(nil), ipvsDeprecationReferences...), nftablesDefaultReferences...)
+	selinuxMountReferences  = []Reference{
+		{Title: "SELinux volume label changes", URL: "https://kubernetes.io/blog/2026/04/22/breaking-changes-in-selinux-volume-labeling/"},
+		{Title: "Graduate SELinuxMount to GA", URL: "https://github.com/kubernetes/kubernetes/pull/139956"},
+	}
 )

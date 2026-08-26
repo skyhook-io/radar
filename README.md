@@ -434,7 +434,7 @@ Hop-ordered diagnosis for Service, Ingress, HTTPRoute, GRPCRoute, and Gateway - 
 
 Open **Checks → Upgrade impact** before upgrading the control plane. Radar compares the current cluster with a target Kubernetes minor and orders evidenced compatibility, health, admission, drain, runtime, and configuration checks by required action. Release-specific checks appear only when their Kubernetes minor lies in the selected upgrade path; the current catalog is reviewed through Kubernetes 1.37.
 
-- Finds blockers such as skipped minor versions, APIs removed in the target release, unsupported kubelet or kube-proxy skew, overlapping PodDisruptionBudgets, the `gitRepo` volume driver disabled in Kubernetes 1.36, and removed Kubernetes 1.37 feature gates or `scheduling.k8s.io/v1alpha2` objects
+- Finds blockers such as skipped minor versions, APIs removed in the target release, unsupported kubelet or kube-proxy skew, overlapping PodDisruptionBudgets, the `gitRepo` volume driver disabled in Kubernetes 1.36, and removed or locked Kubernetes 1.37 feature gates or `scheduling.k8s.io/v1alpha2` objects
 - Flags likely operational impact such as FlexVolume exposure and renamed control-plane metrics as warnings, while intent-dependent configuration such as deprecated Service `externalIPs` remains review
 - Inspects live resources, aggregated API availability, Helm release manifests, kubectl last-applied configuration, API server usage metrics, and PrometheusRule expressions
 - Distinguishes **Passed**, **Review**, **Warning**, **Blocked**, **Incomplete**, and **Not applicable** instead of flattening advisory findings, likely impact, and missing evidence into one state
