@@ -140,6 +140,13 @@ func Load() Config {
 		log.Printf("[config] Failed to parse %s: %v", path, err)
 		return Config{}
 	}
+	normalizedCurrency, err := NormalizeOpenCostCurrency(c.OpenCostCurrency)
+	if err != nil {
+		log.Printf("[config] Ignoring invalid opencostCurrency %q in %s: %v", c.OpenCostCurrency, path, err)
+		c.OpenCostCurrency = ""
+	} else {
+		c.OpenCostCurrency = normalizedCurrency
+	}
 	return c
 }
 
