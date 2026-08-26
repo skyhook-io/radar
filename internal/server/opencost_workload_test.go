@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/skyhook-io/radar/internal/k8s"
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	pkgopencost "github.com/skyhook-io/radar/pkg/opencost"
@@ -85,6 +86,49 @@ func TestOpenCostConnectionFailureReason(t *testing.T) {
 	}
 	if got := internalopencost.ConnectionFailureReason(errors.New("manual URL unreachable")); got != pkgopencost.ReasonQueryError {
 		t.Fatalf("connection-error reason = %q, want %q", got, pkgopencost.ReasonQueryError)
+	}
+}
+
+func TestOpenCostApplicationUsesLatestKubecostDataThrough(t *testing.T) {
+	originalConfig := internalopencost.ConfigSnapshot()
+	t.Cleanup(func() {
+		if err := internalopencost.Configure(originalConfig); err != nil {
+			t.Errorf("restore OpenCost config: %v", err)
+		}
+	})
+	previousContext := k8s.SetTestContextName("fake-test")
+	t.Cleanup(func() { k8s.SetTestContextName(previousContext) })
+
+	kubecost := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		filter := r.URL.Query().Get("filter")
+		switch {
+		case strings.Contains(filter, `namespace:"default"`):
+			_, _ = w.Write([]byte(`{"code":200,"data":[{"default":{"properties":{"cluster":"cluster-a","namespace":"default","pod":"nginx-abc","controllerKind":"deployment","controller":"nginx"},"start":"2026-08-26T09:00:00+0300","end":"2026-08-26T10:00:00+0300","cpuCost":1}}]}`))
+		case strings.Contains(filter, `namespace:"broken"`):
+			_, _ = w.Write([]byte(`{"code":200,"data":[{"broken":{"properties":{"cluster":"cluster-a","namespace":"broken","pod":"stuck-abc","controllerKind":"deployment","controller":"stuck-app"},"start":"2026-08-26T07:30:00Z","end":"2026-08-26T08:30:00Z","cpuCost":1}}]}`))
+		default:
+			_, _ = w.Write([]byte(`{"code":200,"data":[{"cluster-a":{"properties":{"cluster":"cluster-a"}}}]}`))
+		}
+	}))
+	t.Cleanup(kubecost.Close)
+	if err := internalopencost.Configure(internalopencost.ManagerConfig{
+		Source: internalopencost.SourceKubecost, URL: kubecost.URL, ClusterID: "cluster-a",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/opencost/application", strings.NewReader(`{"workloads":[{"kind":"Deployment","namespace":"default","name":"nginx"},{"kind":"Deployment","namespace":"broken","name":"stuck-app"}]}`))
+	rec := httptest.NewRecorder()
+	(&Server{}).handleOpenCostApplication(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var resp pkgopencost.ApplicationCostResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.DataThrough != "2026-08-26T08:30:00Z" {
+		t.Fatalf("dataThrough = %q, want latest instant", resp.DataThrough)
 	}
 }
 
