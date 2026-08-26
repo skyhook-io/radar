@@ -252,6 +252,41 @@ func TestRemovedControlPlaneConfigurationScope137(t *testing.T) {
 	}
 }
 
+func TestManagedControlPlaneScopeDoesNotBecomeUnknown137(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		configure func(*Input)
+	}{
+		{name: "kube-system outside Pod informer", configure: func(input *Input) {
+			input.CacheScopedKinds = map[string][]string{"pods": {"team-a"}}
+		}},
+		{name: "Pods unavailable", configure: func(input *Input) {
+			input.Pods = nil
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := completeInput()
+			input.Nodes[0].Labels = map[string]string{"eks.amazonaws.com/nodegroup": "workers"}
+			tc.configure(input)
+
+			featureGates := checkByID(t, scan137(t, input), "removed-feature-gates")
+			if featureGates.Status != CheckPassed || !strings.Contains(featureGates.Caveat, "provider manages the control plane") || strings.Contains(featureGates.Caveat, "could not be inspected") {
+				t.Fatalf("managed feature-gate scope = %+v, want passed kubelet evidence with provider boundary", featureGates)
+			}
+			componentFlags := checkByID(t, scan137(t, input), "removed-component-flags")
+			if componentFlags.Status != CheckNotApplicable || !strings.Contains(componentFlags.Summary, "provider manages the control plane") {
+				t.Fatalf("managed component-option scope = %+v, want not applicable", componentFlags)
+			}
+
+			input.NodeRuntimeEvidence[0].FeatureGates["SidecarContainers"] = true
+			featureGates = checkByID(t, scan137(t, input), "removed-feature-gates")
+			if featureGates.Status != CheckBlocked || len(featureGates.Findings) != 1 || !strings.Contains(featureGates.Caveat, "provider manages the control plane") {
+				t.Fatalf("managed control plane with kubelet blocker = %+v, want blocker with provider boundary", featureGates)
+			}
+		})
+	}
+}
+
 func TestKubeletEventRecordQPS137(t *testing.T) {
 	input := completeInput()
 	input.NodeRuntimeEvidence[0].EventRecordQPS = 0

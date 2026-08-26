@@ -137,12 +137,21 @@ func scanRemovedFeatureGates(input *Input) Check {
 		}
 	}
 	foundControlPlaneComponents := map[string]bool{}
+	controlPlaneManaged := managedControlPlane(input)
 	if !kubeSystemCovered(input, "pods") {
-		controlPlaneEvidenceUnavailable = true
-		check.Caveat = appendCaveat(check.Caveat, "kube-system is outside the readable Pod scope, so control-plane feature gates could not be inspected.")
+		if controlPlaneManaged {
+			check.Caveat = appendCaveat(check.Caveat, "The provider manages the control plane, so component feature gates are not exposed to Radar.")
+		} else {
+			controlPlaneEvidenceUnavailable = true
+			check.Caveat = appendCaveat(check.Caveat, "kube-system is outside the readable Pod scope, so control-plane feature gates could not be inspected.")
+		}
 	} else if input.Pods == nil {
-		controlPlaneEvidenceUnavailable = true
-		check.Caveat = appendCaveat(check.Caveat, "Pods were unavailable, so control-plane feature gates could not be inspected.")
+		if controlPlaneManaged {
+			check.Caveat = appendCaveat(check.Caveat, "The provider manages the control plane, so component feature gates are not exposed to Radar.")
+		} else {
+			controlPlaneEvidenceUnavailable = true
+			check.Caveat = appendCaveat(check.Caveat, "Pods were unavailable, so control-plane feature gates could not be inspected.")
+		}
 	} else {
 		for _, pod := range input.Pods {
 			if pod == nil || pod.Annotations[corev1.MirrorPodAnnotationKey] == "" {
@@ -168,7 +177,7 @@ func scanRemovedFeatureGates(input *Input) Check {
 			}
 		}
 		if len(foundControlPlaneComponents) == 0 {
-			if managedControlPlane(input) {
+			if controlPlaneManaged {
 				check.Caveat = appendCaveat(check.Caveat, "No control-plane mirror Pod was readable; the provider manages the control plane, so component feature gates are not exposed to Radar.")
 			} else {
 				controlPlaneEvidenceUnavailable = true
@@ -252,11 +261,20 @@ func scanRemovedComponentFlags(input *Input) Check {
 	references := append([]Reference(nil), componentFlagReferences137...)
 	references = append(references, podGroupAdmissionReferences137...)
 	check := Check{ID: "removed-component-flags", Category: "Component configuration", Title: "Component options removed in Kubernetes 1.37", Status: CheckPassed, Summary: "No readable control-plane mirror Pod uses a removed component flag or admission plugin.", Scope: "Readable control-plane mirror Pods", AppliesFrom: "1.37", References: references}
+	controlPlaneManaged := managedControlPlane(input)
 	if !kubeSystemCovered(input, "pods") {
+		if controlPlaneManaged {
+			check.Status, check.Summary = CheckNotApplicable, "The provider manages the control plane, so component startup options are not exposed to Radar."
+			return check
+		}
 		check.Status, check.Summary = CheckUnknown, "kube-system is outside the readable Pod scope, so control-plane component options could not be inspected."
 		return check
 	}
 	if input.Pods == nil {
+		if controlPlaneManaged {
+			check.Status, check.Summary = CheckNotApplicable, "The provider manages the control plane, so component startup options are not exposed to Radar."
+			return check
+		}
 		check.Status, check.Summary = CheckUnknown, "Pods were unavailable, so control-plane component options could not be inspected."
 		return check
 	}
@@ -290,7 +308,7 @@ func scanRemovedComponentFlags(input *Input) Check {
 			}
 		}
 	}
-	if !foundControllerManager && !foundAPIServer && managedControlPlane(input) {
+	if !foundControllerManager && !foundAPIServer && controlPlaneManaged {
 		check.Status, check.Summary = CheckNotApplicable, "The provider manages the control plane, so component startup options are not exposed to Radar."
 		return check
 	}
