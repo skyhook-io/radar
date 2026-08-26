@@ -3,11 +3,14 @@ package upgrade
 import (
 	"slices"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -250,4 +253,57 @@ func TestUpgradeCacheScopeResourcesFollowCrossedReleases(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunUpgradeReadinessDoesNotAssertKubeadmAbsenceFromColdConfigMapCache(t *testing.T) {
+	configMap := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "kubeadm-config", Namespace: "kube-system"},
+		Data:       map[string]string{"ClusterConfiguration": "apiVersion: kubeadm.k8s.io/v1beta3\nkind: ClusterConfiguration\n"},
+	}
+	client := fake.NewSimpleClientset(configMap)
+	listStarted := make(chan struct{})
+	releaseList := make(chan struct{})
+	client.PrependReactor("list", "configmaps", func(k8stesting.Action) (bool, runtime.Object, error) {
+		select {
+		case <-listStarted:
+		default:
+			close(listStarted)
+		}
+		<-releaseList
+		return false, nil, nil
+	})
+
+	coreCache, err := k8score.NewResourceCache(k8score.CacheConfig{
+		Client:        client,
+		ResourceTypes: map[string]bool{string(k8score.ConfigMaps): true},
+		DeferredTypes: map[string]bool{string(k8score.ConfigMaps): true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(coreCache.Stop)
+	t.Cleanup(func() { close(releaseList) })
+	select {
+	case <-listStarted:
+	case <-time.After(time.Second):
+		t.Fatal("ConfigMap informer did not start")
+	}
+
+	results, err := RunFromCache(&k8s.ResourceCache{ResourceCache: coreCache}, nil, Options{
+		CurrentVersion:      "1.36",
+		TargetVersion:       "1.37",
+		ConfigMapNamespaces: nil,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range results.Checks {
+		if check.ID == "kubeadm-config-v1beta3" {
+			if check.Status != upgradereadiness.CheckUnknown || len(check.Findings) != 0 {
+				t.Fatalf("cold ConfigMap evidence = %+v, want unknown without findings", check)
+			}
+			return
+		}
+	}
+	t.Fatal("kubeadm configuration check not found")
 }

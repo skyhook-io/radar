@@ -109,13 +109,13 @@ var (
 		"PublicKeysECDSA":    append([]Reference(nil), kubeadmV1Beta3References137...),
 	}
 	metricReferences137 = map[string][]Reference{
-		"resourceclaim_controller_creates_total":      {{Title: "Harmonize DRA ResourceClaim creation metrics", URL: "https://github.com/kubernetes/kubernetes/pull/138542"}},
-		"scheduler_resourceclaim_creates_total":       {{Title: "Harmonize DRA ResourceClaim creation metrics", URL: "https://github.com/kubernetes/kubernetes/pull/138542"}},
-		"resourceclaim_controller_resource_claims":    {{Title: "Harmonize DRA ResourceClaim creation metrics", URL: "https://github.com/kubernetes/kubernetes/pull/138542"}},
-		"container_cpu_load_average_10s":              append([]Reference(nil), cAdvisorRemovalReferences137...),
-		"container_cpu_load_d_average_10s":            append([]Reference(nil), cAdvisorRemovalReferences137...),
-		"container_tasks_state":                       append([]Reference(nil), cAdvisorRemovalReferences137...),
-		"container_application_*":                     append([]Reference(nil), cAdvisorRemovalReferences137...),
+		"resourceclaim_controller_creates_total":   {{Title: "Harmonize DRA ResourceClaim creation metrics", URL: "https://github.com/kubernetes/kubernetes/pull/138542"}},
+		"scheduler_resourceclaim_creates_total":    {{Title: "Harmonize DRA ResourceClaim creation metrics", URL: "https://github.com/kubernetes/kubernetes/pull/138542"}},
+		"resourceclaim_controller_resource_claims": {{Title: "Harmonize DRA ResourceClaim creation metrics", URL: "https://github.com/kubernetes/kubernetes/pull/138542"}},
+		"container_cpu_load_average_10s":           append([]Reference(nil), cAdvisorRemovalReferences137...),
+		"container_cpu_load_d_average_10s":         append([]Reference(nil), cAdvisorRemovalReferences137...),
+		"container_tasks_state":                    append([]Reference(nil), cAdvisorRemovalReferences137...),
+		"container_application_*":                  append([]Reference(nil), cAdvisorRemovalReferences137...),
 	}
 	ipvsDeprecationReferences = []Reference{
 		{Title: "KEP-5495: Deprecate IPVS mode in kube-proxy", URL: "https://github.com/kubernetes/enhancements/tree/master/keps/sig-network/5495-deprecate-ipvs-mode-in-kube-proxy"},

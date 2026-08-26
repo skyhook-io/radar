@@ -1243,9 +1243,11 @@ func unavailableKinds(input *Input, current, target *utilversion.Version) []stri
 		{"customresourcedefinitions", input.CustomResourceDefinitions != nil},
 		{"apiservices", input.APIServices != nil},
 	}
+	if includesKubeProxyModeTransition(current, target) {
+		checks = append(checks, availability{"configmaps", input.ConfigMaps != nil})
+	}
 	if crossesRelease(current, target, "1.37") {
 		checks = append(checks,
-			availability{"configmaps", input.ConfigMaps != nil},
 			availability{"persistentvolumeclaims", input.PersistentVolumeClaims != nil},
 		)
 	}

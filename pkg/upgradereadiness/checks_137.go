@@ -108,6 +108,7 @@ func scanRemovedFeatureGates(input *Input) Check {
 		evidenceByNode[evidence.NodeName] = evidence
 	}
 	missingNodes := 0
+	inspectedNodes := 0
 	if input.Nodes == nil {
 		check.Status = CheckUnknown
 		check.Summary = "Node evidence was unavailable; Radar could not inspect effective kubelet feature gates."
@@ -118,6 +119,7 @@ func scanRemovedFeatureGates(input *Input) Check {
 				continue
 			}
 			check.Inspected++
+			inspectedNodes++
 			evidence, ok := evidenceByNode[node.Name]
 			if !ok || !evidence.ConfigAvailable {
 				missingNodes++
@@ -177,6 +179,7 @@ func scanRemovedFeatureGates(input *Input) Check {
 				if !isControlPlaneContainer(container.Name) {
 					continue
 				}
+				check.Inspected++
 				foundControlPlaneComponents[container.Name] = true
 				for name, setting := range parsedFeatureGates(container.Command, container.Args) {
 					if removedFeatureGates137[name] {
@@ -218,7 +221,7 @@ func scanRemovedFeatureGates(input *Input) Check {
 			check.Summary = "No removed feature gates were found in readable component configuration, but kubelet configuration coverage is incomplete."
 		}
 	}
-	if controlPlaneEvidenceUnavailable && len(check.Findings) == 0 {
+	if controlPlaneEvidenceUnavailable && len(check.Findings) == 0 && inspectedNodes > 0 {
 		check.Status = CheckUnknown
 		check.Summary = "No incompatible feature gates were found in readable kubelet configuration, but control-plane coverage is unavailable."
 	}
@@ -480,6 +483,7 @@ func scanKubeadmConfig(input *Input) Check {
 	if configMap == nil {
 		return check
 	}
+	check.Inspected = 1
 	check.Status = CheckPassed
 	check.Summary = "The kubeadm cluster configuration does not use kubeadm.k8s.io/v1beta3."
 	check.EvidenceNote = "Only the stored kubeadm-config ConfigMap was inspected; kubeadm configuration files passed with --config on control-plane hosts are not visible to Radar."
@@ -1249,15 +1253,15 @@ func scanSELinuxSharedVolume(check *Check, pvName string, uses []selinuxVolumeUs
 	}
 	if len(policies) > 1 {
 		if len(recursiveFallbacks) > 0 {
-			check.Findings = append(check.Findings, selinuxSharedVolumeFinding(check, pvName, "Shared volume falls back to recursive SELinux relabeling", "effectivePolicies=MountOption,Recursive recursiveFallbacks="+formatBoundedList(recursiveFallbacks, ", ")+" pods="+formatBoundedList(pods, ", "), "If the node enforces SELinux, one Pod cannot use mount-time labeling while another Pod requests it and kubelet can reject one of the mounts.", "Set an explicit SELinux level on every unprivileged container mounting the volume, or set seLinuxChangePolicy: Recursive on every Pod sharing it; privileged sharers require Recursive.", targetAllowsOptOut))
+			check.Findings = append(check.Findings, selinuxSharedVolumeFinding(check, pvName, "Shared volume falls back to recursive SELinux relabeling", "effectivePolicies=MountOption,Recursive recursiveFallbacks="+formatBoundedList(recursiveFallbacks, ", ")+" pods="+formatBoundedList(pods, ", "), "If these Pods run on the same SELinux-enforcing node, one Pod cannot use mount-time labeling while another Pod requests it and kubelet can reject one of the mounts.", "Set an explicit SELinux level on every unprivileged container mounting the volume, or set seLinuxChangePolicy: Recursive on every Pod sharing it; privileged sharers require Recursive.", targetAllowsOptOut))
 			return
 		}
-		check.Findings = append(check.Findings, selinuxSharedVolumeFinding(check, pvName, "Shared volume uses conflicting SELinux change policies", "policies=MountOption,Recursive pods="+formatBoundedList(pods, ", "), "If the node enforces SELinux, Pods sharing this volume use incompatible relabeling modes and kubelet can reject one of the mounts.", "Set the same seLinuxChangePolicy on every Pod sharing this volume; use Recursive when privileged and unprivileged Pods must share it.", targetAllowsOptOut))
+		check.Findings = append(check.Findings, selinuxSharedVolumeFinding(check, pvName, "Shared volume uses conflicting SELinux change policies", "policies=MountOption,Recursive pods="+formatBoundedList(pods, ", "), "If these Pods run on the same SELinux-enforcing node, their incompatible relabeling modes can cause kubelet to reject one of the mounts.", "Set the same seLinuxChangePolicy on every Pod sharing this volume; use Recursive when privileged and unprivileged Pods must share it.", targetAllowsOptOut))
 		return
 	}
 	_, labelsCompatible := compatibleSELinuxLabel(labels)
 	if policies[corev1.SELinuxChangePolicyMountOption] && !labelsCompatible {
-		check.Findings = append(check.Findings, selinuxSharedVolumeFinding(check, pvName, "Shared volume uses conflicting SELinux labels", "labels="+fmt.Sprintf("%d", len(labels))+" pods="+formatBoundedList(pods, ", "), "If the node enforces SELinux, Kubernetes can mount a volume with only one context and Pods requesting different labels can remain in ContainerCreating.", "Align the effective SELinux label across every Pod sharing this volume, or explicitly set seLinuxChangePolicy: Recursive.", targetAllowsOptOut))
+		check.Findings = append(check.Findings, selinuxSharedVolumeFinding(check, pvName, "Shared volume uses conflicting SELinux labels", "labels="+fmt.Sprintf("%d", len(labels))+" pods="+formatBoundedList(pods, ", "), "If these Pods run on the same SELinux-enforcing node, the volume can be mounted with only one context and Pods requesting different labels can remain in ContainerCreating.", "Align the effective SELinux label across every Pod sharing this volume, or explicitly set seLinuxChangePolicy: Recursive.", targetAllowsOptOut))
 	}
 }
 

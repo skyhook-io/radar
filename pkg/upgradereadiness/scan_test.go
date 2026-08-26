@@ -720,6 +720,14 @@ func TestUnavailableKindsIncludes137CachedEvidence(t *testing.T) {
 			t.Fatalf("unavailable kinds = %v, did not want unused %s evidence", got.Coverage.UnavailableKinds, kind)
 		}
 	}
+
+	got, err = Scan(input, "1.37", "1.38")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(got.Coverage.UnavailableKinds, "configmaps") {
+		t.Fatalf("unavailable kinds = %v, want configmaps while the kube-proxy transition review remains active", got.Coverage.UnavailableKinds)
+	}
 }
 
 func TestScanUpgradePathCapsRenderedSequence(t *testing.T) {

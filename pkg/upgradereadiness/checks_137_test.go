@@ -152,6 +152,9 @@ func TestLockedAPIServerFeatureGate137(t *testing.T) {
 			if check.Status != tc.wantStatus {
 				t.Fatalf("check = %+v, want status %s", check, tc.wantStatus)
 			}
+			if check.Inspected != 2 {
+				t.Fatalf("inspected = %d, want one node and one control-plane container", check.Inspected)
+			}
 			if tc.wantStatus == CheckPassed && len(check.Findings) != 0 {
 				t.Fatalf("locked default produced findings: %+v", check.Findings)
 			}
@@ -229,6 +232,16 @@ func TestRemovedFeatureGatesReportsManagedControlPlaneGap137(t *testing.T) {
 	check = checkByID(t, scan137(t, input), "removed-feature-gates")
 	if check.Status != CheckBlocked || !strings.Contains(check.Caveat, "Node evidence was unavailable") {
 		t.Fatalf("control-plane blocker without node evidence = %+v, want blocker with kubelet coverage caveat", check)
+	}
+}
+
+func TestRemovedFeatureGatesPreservesMissingNodeSummary137(t *testing.T) {
+	input := completeInput()
+	input.Nodes = nil
+	input.Pods = nil
+	check := checkByID(t, scan137(t, input), "removed-feature-gates")
+	if check.Status != CheckUnknown || !strings.Contains(check.Summary, "Node evidence was unavailable") || strings.Contains(check.Summary, "readable kubelet configuration") {
+		t.Fatalf("missing node and control-plane evidence = %+v, want the node evidence boundary in the summary", check)
 	}
 }
 
@@ -430,7 +443,7 @@ func TestKubeadmV1Beta3Config137(t *testing.T) {
 		Data:       map[string]string{"ClusterConfiguration": "apiVersion: kubeadm.k8s.io/v1beta3\nkind: ClusterConfiguration\n"},
 	}}
 	check := checkByID(t, scan137(t, input), "kubeadm-config-v1beta3")
-	if check.Status != CheckBlocked || len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Remediation, "config migrate") || !strings.Contains(check.Findings[0].Remediation, "upload-config kubeadm") {
+	if check.Status != CheckBlocked || check.Inspected != 1 || len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Remediation, "config migrate") || !strings.Contains(check.Findings[0].Remediation, "upload-config kubeadm") {
 		t.Fatalf("kubeadm v1beta3 = %+v, want blocker", check)
 	}
 	requireFindingReference(t, check.Findings, "/pull/136016")
@@ -877,6 +890,9 @@ func TestSELinuxMountTransition137(t *testing.T) {
 			}
 			if tc.wantStatus == CheckReview && (!strings.Contains(check.Caveat, "could not confirm") || !strings.Contains(check.Findings[0].Remediation, "Kubernetes 1.37 only")) {
 				t.Fatalf("conditional SELinux finding = %+v, want applicability caveat and interim opt-out", check)
+			}
+			if tc.wantStatus == CheckReview && !strings.Contains(check.Findings[0].Impact, "same SELinux-enforcing node") {
+				t.Fatalf("conditional SELinux impact = %q, want the same-node precondition", check.Findings[0].Impact)
 			}
 		})
 	}

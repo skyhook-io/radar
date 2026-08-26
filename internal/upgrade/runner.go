@@ -118,7 +118,7 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts Options) (
 	input.Services = typed.Services
 	if includesUpgradeEvidenceKind(opts.CurrentVersion, opts.TargetVersion, string(k8score.ConfigMaps)) {
 		configMapNamespaces := cachedEvidenceNamespaceScope(cache, string(k8score.ConfigMaps), namespaces, opts.ConfigMapNamespaces)
-		if !noNamespaceAccess(configMapNamespaces) {
+		if !noNamespaceAccess(configMapNamespaces) && cacheKindSynced(cache, string(k8score.ConfigMaps)) {
 			input.ConfigMaps = audit.ListNamespaced(cache.ConfigMaps(), configMapNamespaces)
 		}
 		input.CacheScopedKinds = recordEvidenceNamespaceScope(input.CacheScopedKinds, string(k8score.ConfigMaps), configMapNamespaces, namespaces)
@@ -185,6 +185,20 @@ func cachedEvidenceNamespaceScope(cache *k8s.ResourceCache, kind string, scanNam
 		scope = intersectNamespaceScopes(scope, cacheNamespaces)
 	}
 	return scope
+}
+
+func cacheKindSynced(cache *k8s.ResourceCache, kind string) bool {
+	found := false
+	for _, status := range cache.GetSyncStatus().Informers {
+		if status.Key != kind {
+			continue
+		}
+		found = true
+		if !status.Synced {
+			return false
+		}
+	}
+	return found
 }
 
 func intersectNamespaceScopes(a, b []string) []string {
