@@ -51,6 +51,8 @@ type ResourceCache struct {
 	informerMu       sync.RWMutex
 	promotedKinds    []string // set when SyncTimeout fires; empty on normal sync
 	syncStartTime    time.Time
+	criticalSyncMs   atomic.Int64
+	deferredSyncMs   atomic.Int64
 }
 
 // InformerSyncStatus tracks the sync state of a single informer.
@@ -78,9 +80,13 @@ const (
 
 // CacheSyncStatus is the overall sync status exposed for diagnostics.
 type CacheSyncStatus struct {
-	Phase           SyncPhase            `json:"phase"`
-	SyncStarted     string               `json:"syncStarted,omitempty"` // RFC3339
-	ElapsedSec      float64              `json:"elapsedSec"`
+	Phase       SyncPhase `json:"phase"`
+	SyncStarted string    `json:"syncStarted,omitempty"` // RFC3339
+	ElapsedSec  float64   `json:"elapsedSec"`
+	// Wall time of each phase, set once that phase ends. Deferred covers the
+	// informers phase 2 waits on; Events sync independently and are not in it.
+	CriticalSyncMs  int64                `json:"criticalSyncMs,omitempty"`
+	DeferredSyncMs  int64                `json:"deferredSyncMs,omitempty"`
 	CriticalTotal   int                  `json:"criticalTotal"`
 	CriticalSynced  int                  `json:"criticalSynced"`
 	DeferredTotal   int                  `json:"deferredTotal"`
@@ -872,6 +878,10 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 		logf("    Phase 1 sync (%d critical informers): %v", len(criticalSyncFuncs), time.Since(syncStart))
 		stdlog.Printf("Critical resource caches synced in %v — UI can render", time.Since(syncStart))
 	}
+	// Recorded for every exit of the switch, timeout and patience included: a
+	// phase that ended early because it gave up still describes what the user
+	// waited through.
+	rc.criticalSyncMs.Store(time.Since(syncStart).Milliseconds())
 
 	if cfg.SyncProgress != nil {
 		// Count via e.synced() (same source as the Phase 1 loop) rather than
@@ -1027,6 +1037,7 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 				logf("    Phase 2 sync (%d deferred informers): %v", len(deferredSyncFuncs), time.Since(deferredStart))
 				stdlog.Printf("Deferred resource caches synced in %v (total: %v)", time.Since(deferredStart), time.Since(syncStart))
 			}
+			rc.deferredSyncMs.Store(time.Since(deferredStart).Milliseconds())
 			close(deferredDone)
 		}()
 	} else {
@@ -1646,6 +1657,8 @@ func (rc *ResourceCache) GetSyncStatus() CacheSyncStatus {
 	result := CacheSyncStatus{
 		Phase:           phase,
 		ElapsedSec:      time.Since(rc.syncStartTime).Seconds(),
+		CriticalSyncMs:  rc.criticalSyncMs.Load(),
+		DeferredSyncMs:  rc.deferredSyncMs.Load(),
 		CriticalTotal:   critTotal,
 		CriticalSynced:  critSynced,
 		DeferredTotal:   defTotal,

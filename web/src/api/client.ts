@@ -6353,6 +6353,9 @@ export interface DiagCacheSyncStatus {
   phase: DiagSyncPhase;
   syncStarted?: string;
   elapsedSec: number;
+  /** Wall time of each phase, set once that phase ends. */
+  criticalSyncMs?: number;
+  deferredSyncMs?: number;
   criticalTotal: number;
   criticalSynced: number;
   deferredTotal: number;
@@ -6373,18 +6376,59 @@ export interface DiagSampleWindow {
   max: number;
 }
 
+export interface DiagTopologyStats {
+  totalBuilds: number;
+  durationUs: DiagSampleWindow;
+  nodeCount: DiagSampleWindow;
+  edgeCount: DiagSampleWindow;
+  payloadBytes: DiagSampleWindow;
+  estimatedNodes: DiagSampleWindow;
+}
+
+/** Per-kind stats carry no payload size: payload is measured at marshal time,
+ *  downstream of the build and with no record of which kind produced it. */
+export interface DiagTopologyKindWindow {
+  totalBuilds: number;
+  durationUs: DiagSampleWindow;
+  nodeCount: DiagSampleWindow;
+  edgeCount: DiagSampleWindow;
+  estimatedNodes: DiagSampleWindow;
+}
+
 export interface DiagPerfSnapshot {
-  topology: {
-    totalBuilds: number;
-    durationUs: DiagSampleWindow;
-    nodeCount: DiagSampleWindow;
-    edgeCount: DiagSampleWindow;
-    payloadBytes: DiagSampleWindow;
-    estimatedNodes: DiagSampleWindow;
+  topology: DiagTopologyStats;
+  topologyByKind?: {
+    full: DiagTopologyKindWindow;
+    scoped: DiagTopologyKindWindow;
+    refused: DiagTopologyKindWindow;
   };
   sse: {
     totalBroadcasts: number;
     totalDrops: number;
+    abandoned?: number;
+    coalesced?: number;
+    retries?: number;
+    debounceMs?: number;
+  };
+  sseCycle?: {
+    cycleDurationUs: DiagSampleWindow;
+    /** One graph build each. */
+    clientGroups: DiagSampleWindow;
+    /** One clone + strip + marshal each — the real fan-out multiplier. */
+    authGroups: DiagSampleWindow;
+    marshalUs: DiagSampleWindow;
+  };
+  changes?: {
+    received: number;
+    queueDepth: DiagSampleWindow;
+    queueCap: number;
+    highWater: number;
+  };
+  relationshipCache?: {
+    onDemandRebuilds: number;
+    onDemandRebuildUs: DiagSampleWindow;
+    indexBuilds: number;
+    indexBuildUs: DiagSampleWindow;
   };
 }
 
@@ -6434,11 +6478,19 @@ export interface DiagnosticsSnapshot {
   };
   timeline?: {
     storageType: string;
+    degraded?: boolean;
+    degradedReason?: string;
     totalEvents: number;
     oldestEvent?: string;
     newestEvent?: string;
+    storageBytes?: number;
     storeErrors: number;
     totalDrops: number;
+    retentionAge?: string;
+    maxStorageBytes?: number;
+    lastCleanupAt?: string;
+    lastCleanupDeletedRows?: number;
+    lastCleanupError?: string;
   };
   eventPipeline?: {
     received: Record<string, number>;

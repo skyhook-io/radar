@@ -57,7 +57,7 @@ func (b *Builder) Build(opts BuildOptions) (*Topology, error) {
 	// ForRelationshipCache bypasses this guard — internal builds need the full graph
 	// for resource detail "Related Resources" lookups.
 	if isLargeCluster && len(opts.Namespaces) == 0 && !opts.ForRelationshipCache {
-		perfstats.RecordTopologyBuild(time.Since(start), 0, 0, estimatedNodes)
+		perfstats.RecordTopologyBuild(perfstats.BuildRefused, time.Since(start), 0, 0, estimatedNodes)
 		return &Topology{
 			Nodes:                   []Node{},
 			Edges:                   []Edge{},
@@ -101,7 +101,14 @@ func (b *Builder) Build(opts BuildOptions) (*Topology, error) {
 	topo.EstimatedNodes = estimatedNodes
 	topo.SummaryMode = opts.SummaryMode
 
-	perfstats.RecordTopologyBuild(time.Since(start), len(topo.Nodes), len(topo.Edges), estimatedNodes)
+	// Keyed on scope, not on ForRelationshipCache: a namespace filter is what
+	// bounds the cost, and both the broadcaster and the relationship-cache
+	// callers produce cluster-wide and scoped builds alike.
+	kind := perfstats.BuildScoped
+	if len(opts.Namespaces) == 0 {
+		kind = perfstats.BuildFull
+	}
+	perfstats.RecordTopologyBuild(kind, time.Since(start), len(topo.Nodes), len(topo.Edges), estimatedNodes)
 	return topo, nil
 }
 

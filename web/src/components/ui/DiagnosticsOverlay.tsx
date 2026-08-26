@@ -4,7 +4,7 @@ import { clsx } from 'clsx'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
 import { openExternal } from '../../utils/navigation'
 import { useDiagnostics } from '../../api/client'
-import type { DiagnosticsSnapshot, DiagEnvVar, DiagMetricsSourceHealth, DiagDropRecord, DiagErrorEntry, DiagCacheSyncStatus, DiagInformerSyncStatus, DiagSyncPhase, DiagSampleWindow } from '../../api/client'
+import type { DiagnosticsSnapshot, DiagEnvVar, DiagMetricsSourceHealth, DiagDropRecord, DiagErrorEntry, DiagCacheSyncStatus, DiagInformerSyncStatus, DiagSyncPhase, DiagSampleWindow, DiagPerfSnapshot } from '../../api/client'
 import { getK8sUIPerfSnapshot, type K8sUIPerfSnapshot } from '@skyhook-io/k8s-ui'
 
 interface DiagnosticsOverlayProps {
@@ -346,6 +346,9 @@ function InformersSection({ data }: { data: DiagnosticsSnapshot }) {
             label="Deferred Synced"
             value={`${sync.deferredSynced} / ${sync.deferredTotal}`}
           />
+          {((sync.criticalSyncMs ?? 0) > 0 || (sync.deferredSyncMs ?? 0) > 0) && (
+            <Row label="Phase Durations" value={formatSyncPhases(sync)} />
+          )}
           {promoted.length > 0 && (
             <Row label="Promoted to Deferred" value={promoted.join(', ')} warn />
           )}
@@ -387,6 +390,18 @@ function getPendingInformers(sync: DiagCacheSyncStatus): DiagInformerSyncStatus[
   return sync.informers
     .filter((i) => pendingNames.has(i.kind))
     .sort((a, b) => Number(a.deferred) - Number(b.deferred) || a.kind.localeCompare(b.kind))
+}
+
+function formatSyncPhases(sync: DiagCacheSyncStatus): string {
+  const parts: string[] = []
+  if (sync.criticalSyncMs) parts.push(`critical ${formatMs(sync.criticalSyncMs)}`)
+  if (sync.deferredSyncMs) parts.push(`deferred ${formatMs(sync.deferredSyncMs)}`)
+  return parts.join(' \u00b7 ')
+}
+
+function formatMs(ms: number): string {
+  if (ms < 1000) return `${ms}ms`
+  return `${(ms / 1000).toFixed(1)}s`
 }
 
 function formatSyncPhase(phase: DiagSyncPhase): string {
@@ -463,6 +478,10 @@ function APIDiscoverySection({ data }: { data: DiagnosticsSnapshot }) {
   )
 }
 
+// A rebuild past this point stalled the request that triggered it long enough
+// for the user to feel it.
+const SLOW_REBUILD_US = 1_000_000
+
 function PerfSection({ data }: { data: DiagnosticsSnapshot }) {
   const backend = data.perf
   const frontend = getK8sUIPerfSnapshot()
@@ -470,9 +489,16 @@ function PerfSection({ data }: { data: DiagnosticsSnapshot }) {
   // Warn when SSE has dropped frames, the topology payload window's p95 exceeds
   // 5 MB, or the frontend ELK layout p95 exceeds 1s — these are the load-bearing
   // thresholds for "the tab is going to feel bad."
+  const queue = backend?.changes
+  // An on-demand rebuild is ordinary — the broadcaster dirties the cache
+  // whenever no client is watching or warmup is still running, so a healthy
+  // session records one. Only a rebuild slow enough to stall the request that
+  // triggered it is worth flagging.
+  const slowRebuild = (backend?.relationshipCache?.onDemandRebuildUs.p95 ?? 0) > SLOW_REBUILD_US
   const warn =
     (backend?.sse.totalDrops ?? 0) > 0 ||
     (backend?.topology.payloadBytes.p95 ?? 0) > 5 * 1024 * 1024 ||
+    slowRebuild ||
     frontend.layoutMs.p95 > 1000
   return (
     <Section title="Performance" warn={warn}>
@@ -484,8 +510,33 @@ function PerfSection({ data }: { data: DiagnosticsSnapshot }) {
           <Row label="  Edge Count" value={formatSampleCount(backend.topology.edgeCount)} />
           <Row label="  Payload" value={formatSampleBytes(backend.topology.payloadBytes)} warn={backend.topology.payloadBytes.p95 > 5 * 1024 * 1024} />
           <Row label="  Estimated Nodes" value={formatSampleCount(backend.topology.estimatedNodes)} />
+          <BuildKindRows byKind={backend.topologyByKind} />
           <Row label="SSE Broadcasts" value={backend.sse.totalBroadcasts.toLocaleString()} />
           <Row label="SSE Drops" value={backend.sse.totalDrops.toLocaleString()} warn={backend.sse.totalDrops > 0} />
+          <Row label="SSE Cycles" value={formatCycleCounters(backend.sse)} />
+          {backend.sseCycle && backend.sseCycle.cycleDurationUs.count > 0 && (
+            <>
+              <Row label="  Cycle Duration" value={formatSampleDuration(backend.sseCycle.cycleDurationUs)} />
+              <Row label="  Fan-out" value={formatFanout(backend.sseCycle)} />
+              <Row label="  Marshal" value={formatSampleDuration(backend.sseCycle.marshalUs)} />
+            </>
+          )}
+          {queue && queue.received > 0 && (
+            <Row label="Change Queue" value={formatChangeQueue(queue)} />
+          )}
+          {backend.relationshipCache && backend.relationshipCache.onDemandRebuilds > 0 && (
+            <Row
+              label="On-demand Rebuilds"
+              value={`${backend.relationshipCache.onDemandRebuilds.toLocaleString()} · ${formatSampleDuration(backend.relationshipCache.onDemandRebuildUs)}`}
+              warn={slowRebuild}
+            />
+          )}
+          {backend.relationshipCache && backend.relationshipCache.indexBuilds > 0 && (
+            <Row
+              label="Relationship Index"
+              value={`${backend.relationshipCache.indexBuilds.toLocaleString()} builds · ${formatSampleDuration(backend.relationshipCache.indexBuildUs)}`}
+            />
+          )}
         </>
       )}
       {(frontend.totalLayouts > 0 || frontend.totalStructureKeyComputes > 0) && (
@@ -499,6 +550,50 @@ function PerfSection({ data }: { data: DiagnosticsSnapshot }) {
       )}
     </Section>
   )
+}
+
+function BuildKindRows({ byKind }: { byKind?: DiagPerfSnapshot['topologyByKind'] }) {
+  if (!byKind) return null
+  const rows = ([
+    ['full', byKind.full],
+    ['scoped', byKind.scoped],
+    ['refused', byKind.refused],
+  ] as const).filter(([, s]) => s.totalBuilds > 0)
+  if (rows.length === 0) return null
+  return (
+    <>
+      {rows.map(([kind, stats]) => (
+        <Row
+          key={kind}
+          label={`  by kind: ${kind}`}
+          value={`${stats.totalBuilds.toLocaleString()} builds · ${formatSampleDuration(stats.durationUs)}`}
+        />
+      ))}
+    </>
+  )
+}
+
+function formatCycleCounters(sse: DiagPerfSnapshot['sse']): string {
+  const parts = [`${sse.totalBroadcasts.toLocaleString()} published`]
+  if (sse.coalesced) parts.push(`${sse.coalesced.toLocaleString()} coalesced`)
+  if (sse.abandoned) parts.push(`${sse.abandoned.toLocaleString()} abandoned`)
+  if (sse.retries) parts.push(`${sse.retries.toLocaleString()} retries`)
+  if (sse.debounceMs) parts.push(`debounce ${(sse.debounceMs / 1000).toFixed(0)}s`)
+  return parts.join(' \u00b7 ')
+}
+
+// Auth groups exceed client groups when users in one namespace group hold
+// different provider permissions: each is an independent clone + marshal of the
+// whole graph, so this ratio is what turns one slow build into a slow cycle.
+function formatFanout(cycle: NonNullable<DiagPerfSnapshot['sseCycle']>): string {
+  return `${formatSampleCount(cycle.clientGroups)} client groups \u2192 ${formatSampleCount(cycle.authGroups)} auth groups`
+}
+
+function formatChangeQueue(changes: NonNullable<DiagPerfSnapshot['changes']>): string {
+  const depth = changes.queueDepth.count > 0
+    ? `depth p95 ${changes.queueDepth.p95.toLocaleString()} / max ${changes.queueDepth.max.toLocaleString()}`
+    : 'depth not sampled'
+  return `${changes.received.toLocaleString()} received \u00b7 ${depth} \u00b7 high-water ${changes.highWater.toLocaleString()} / ${changes.queueCap.toLocaleString()}`
 }
 
 function formatSampleDuration(w: DiagSampleWindow): string {
@@ -695,6 +790,9 @@ export function formatForGitHub(data: DiagnosticsSnapshot, frontendPerf?: K8sUIP
       const sync = inf.syncStatus
       lines.push(`- Sync Phase: \`${sync.phase}\` (${formatElapsed(sync.elapsedSec)})`)
       lines.push(`- Critical: ${sync.criticalSynced}/${sync.criticalTotal} synced | Deferred: ${sync.deferredSynced}/${sync.deferredTotal} synced`)
+      if ((sync.criticalSyncMs ?? 0) > 0 || (sync.deferredSyncMs ?? 0) > 0) {
+        lines.push(`- Phase Durations: ${formatSyncPhases(sync)}`)
+      }
       if (sync.promotedKinds && sync.promotedKinds.length > 0) {
         lines.push(`- **Promoted to Deferred:** ${sync.promotedKinds.join(', ')}`)
       }
@@ -771,7 +869,30 @@ export function formatForGitHub(data: DiagnosticsSnapshot, frontendPerf?: K8sUIP
         lines.push(`  - Payload: last ${fmtKB(p.topology.payloadBytes.last)} · p95 ${fmtKB(p.topology.payloadBytes.p95)} · max ${fmtKB(p.topology.payloadBytes.max)}`)
         lines.push(`  - Estimated Nodes: last ${p.topology.estimatedNodes.last} · p95 ${p.topology.estimatedNodes.p95}`)
       }
-      lines.push(`- SSE: ${p.sse.totalBroadcasts.toLocaleString()} broadcasts, ${p.sse.totalDrops.toLocaleString()} drops`)
+      if (p.topologyByKind) {
+        // Full and scoped builds differ by orders of magnitude; the aggregate
+        // p95 above describes neither on its own.
+        for (const [kind, stats] of [['full', p.topologyByKind.full], ['scoped', p.topologyByKind.scoped], ['refused', p.topologyByKind.refused]] as const) {
+          if (stats.totalBuilds === 0) continue
+          lines.push(`  - ${kind}: ${stats.totalBuilds.toLocaleString()} builds \u00b7 p50 ${fmtMs(stats.durationUs.p50)}ms \u00b7 p95 ${fmtMs(stats.durationUs.p95)}ms \u00b7 max ${fmtMs(stats.durationUs.max)}ms`)
+        }
+      }
+      lines.push(`- SSE: ${p.sse.totalBroadcasts.toLocaleString()} broadcasts, ${p.sse.totalDrops.toLocaleString()} drops${p.sse.coalesced ? `, ${p.sse.coalesced.toLocaleString()} coalesced` : ''}${p.sse.abandoned ? `, ${p.sse.abandoned.toLocaleString()} abandoned` : ''}${p.sse.retries ? `, ${p.sse.retries.toLocaleString()} retries` : ''}${p.sse.debounceMs ? ` (debounce ${(p.sse.debounceMs / 1000).toFixed(0)}s)` : ''}`)
+      if (p.sseCycle && p.sseCycle.cycleDurationUs.count > 0) {
+        const c = p.sseCycle
+        lines.push(`  - Cycle (ms): p50 ${fmtMs(c.cycleDurationUs.p50)} \u00b7 p95 ${fmtMs(c.cycleDurationUs.p95)} \u00b7 max ${fmtMs(c.cycleDurationUs.max)}`)
+        lines.push(`  - Fan-out: client groups p95 ${c.clientGroups.p95} / max ${c.clientGroups.max} \u2192 auth groups p95 ${c.authGroups.p95} / max ${c.authGroups.max} \u00b7 marshal p95 ${fmtMs(c.marshalUs.p95)}ms`)
+      }
+      if (p.changes && p.changes.received > 0) {
+        lines.push(`- Change Queue: ${formatChangeQueue(p.changes)}`)
+      }
+      if (p.relationshipCache && (p.relationshipCache.onDemandRebuilds > 0 || p.relationshipCache.indexBuilds > 0)) {
+        const r = p.relationshipCache
+        const parts: string[] = []
+        if (r.onDemandRebuilds > 0) parts.push(`${r.onDemandRebuilds.toLocaleString()} on-demand rebuilds (p95 ${fmtMs(r.onDemandRebuildUs.p95)}ms, max ${fmtMs(r.onDemandRebuildUs.max)}ms)`)
+        if (r.indexBuilds > 0) parts.push(`${r.indexBuilds.toLocaleString()} index builds (p95 ${fmtMs(r.indexBuildUs.p95)}ms)`)
+        lines.push(`- Relationship Cache: ${parts.join(' \u00b7 ')}`)
+      }
     }
     if (frontendPerf && (frontendPerf.totalLayouts > 0 || frontendPerf.totalStructureKeyComputes > 0)) {
       const fmt = (v: number) => v < 100 ? v.toFixed(1) : Math.round(v).toString()

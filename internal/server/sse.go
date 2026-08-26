@@ -226,6 +226,7 @@ func (b *SSEBroadcaster) requestTopologyBroadcast() {
 	case b.topoTrigger <- struct{}{}:
 	default:
 		// A request is already queued; it will pick up the current state.
+		perfstats.IncSSECoalesced()
 	}
 }
 
@@ -252,6 +253,7 @@ func (b *SSEBroadcaster) topologyWorker() {
 			case <-b.stopCh:
 				return
 			case <-time.After(topologyRetryDelay):
+				perfstats.IncSSERetry()
 				b.requestTopologyBroadcast()
 			}
 		}
@@ -610,6 +612,10 @@ func (b *SSEBroadcaster) watchResourceChanges() {
 			if !ok {
 				return
 			}
+			// Sampled here rather than at the producer: this is the only point
+			// that sees the queue as the consumer left it, which is what says
+			// whether the consumer is keeping up.
+			perfstats.RecordChangeReceived(len(changes), cap(changes))
 
 			// Broadcast K8s event immediately for important events
 			if change.Kind == "Event" || change.Operation == "delete" ||
@@ -659,6 +665,7 @@ func (b *SSEBroadcaster) watchResourceChanges() {
 				if warmupComplete {
 					dur = topologyDebounceFor(b.lastBroadcastMaxEstimated.Load(), cache)
 				}
+				perfstats.SetSSEDebounce(dur)
 				debounceTimer.Reset(dur)
 				pendingUpdate = true
 			}
@@ -702,6 +709,18 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() bool {
 		b.lastBroadcastMaxEstimated.Store(0)
 		return true
 	}
+
+	// Clock starts past the no-clients exit: that path does no work, and
+	// recording it would bury real cycles under zero-duration samples.
+	// Recorded from a defer so the epoch checks below — which return after the
+	// full build, and again after each group's build and marshal — report the
+	// wall time they spent rather than looking like they never ran.
+	cycleStart := time.Now()
+	var clientGroupCount, authGroupCount int
+	var marshalTotal time.Duration
+	defer func() {
+		perfstats.RecordBroadcastCycle(time.Since(cycleStart), clientGroupCount, authGroupCount, marshalTotal)
+	}()
 
 	// Checked before the full-topology build, which is the most expensive one
 	// in the cycle (every namespace, ReplicaSets included): a switch that has
@@ -762,6 +781,7 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() bool {
 		}
 		clientGroups[key].clients[ch] = info
 	}
+	clientGroupCount = len(clientGroups)
 
 	// Build topology for each group and send. Pre-marshal once per group so
 	// the same bytes go out to every client in the group (the per-client SSE
@@ -822,12 +842,15 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() bool {
 			}
 			nodeClassGroups[authKey].channels = append(nodeClassGroups[authKey].channels, ch)
 		}
+		authGroupCount += len(nodeClassGroups)
 		for _, authGroup := range nodeClassGroups {
 			filtered := cloneTopology(topo)
 			filtered.StripNodeClassesExcept(authGroup.allowed)
 			filtered.StripClusterScopedDynamicExcept(authGroup.allowedDynamic)
 			filtered.StripCalicoPoliciesExcept(authGroup.allowedCalico)
+			marshalStart := time.Now()
 			data, marshalErr := json.Marshal(filtered)
+			marshalTotal += time.Since(marshalStart)
 			if marshalErr != nil {
 				log.Printf("Error marshaling topology for broadcast: %v", marshalErr)
 				continue
@@ -1187,7 +1210,9 @@ func (b *SSEBroadcaster) GetCachedTopologyWithIndex() (*topology.Topology, *topo
 	}
 
 	// Build outside the lock — IndexByResource is O(edges).
+	indexStart := time.Now()
 	built := topology.IndexByResource(topo)
+	perfstats.RecordRelationshipIndex(time.Since(indexStart))
 	b.cachedTopologyMu.Lock()
 	if b.cachedTopology == topo {
 		b.cachedTopologyIndex = built
@@ -1203,6 +1228,12 @@ func (b *SSEBroadcaster) rebuildCachedTopology() bool {
 	if cache == nil {
 		return false
 	}
+	// Only reached from GetCachedTopology's dirty path, i.e. on whichever
+	// request goroutine happened to read next. A full build here blocks that
+	// request for its entire duration.
+	rebuildStart := time.Now()
+	defer func() { perfstats.RecordRelationshipRebuild(time.Since(rebuildStart)) }()
+
 	epoch := b.topoEpoch.Load()
 	if fullTopo, err := buildFullTopology(); err == nil {
 		// A rejected write leaves nothing cached for the new cluster, so the
@@ -1221,6 +1252,7 @@ func (b *SSEBroadcaster) rebuildCachedTopology() bool {
 // topology". Reports the cycle as run — the reset queued its own trigger, so
 // there is nothing for the worker to re-arm.
 func (b *SSEBroadcaster) abandonCycleForNewCluster() bool {
+	perfstats.IncSSEAbandoned()
 	b.markCachedTopologyDirty()
 	return true
 }
