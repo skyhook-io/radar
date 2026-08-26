@@ -245,6 +245,20 @@ func Stop(owner Owner) {
 	}
 }
 
+// StopIfAddress stops the owner's forward only when it is still the connection
+// identified by address. This keeps cleanup for a stale caller from tearing down
+// a replacement that claimed the same owner in the meantime.
+func StopIfAddress(owner Owner, address string) bool {
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	f := reg.forwards[owner]
+	if f == nil || !f.active || f.info().Address != address {
+		return false
+	}
+	stopForwardLocked(f)
+	return true
+}
+
 // stopForwardLocked stops one owner's forward (caller must hold reg.mu).
 func stopForwardLocked(f *metricsForward) {
 	if f == nil {

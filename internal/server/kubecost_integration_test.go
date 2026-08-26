@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,7 +9,9 @@ import (
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/k8s"
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
+	"github.com/skyhook-io/radar/pkg/prom"
 )
 
 func setupKubecostIntegrationTest(t *testing.T) *Server {
@@ -97,5 +100,38 @@ func TestGetConfigUsesLiveKubecostConfigWithoutMutatingEffectiveConfig(t *testin
 	}
 	if s.effectiveConfig.KubecostURL != "https://stale.example.com/model" || s.effectiveConfig.KubecostAPIKey != "stale" {
 		t.Fatalf("effective config was mutated: %#v", s.effectiveConfig)
+	}
+}
+
+func TestApplyKubecostConfigBindsExplicitClusterIDToContext(t *testing.T) {
+	s := setupKubecostIntegrationTest(t)
+	previousContext := k8s.SetTestContextName("cluster-a")
+	t.Cleanup(func() { k8s.SetTestContextName(previousContext) })
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"code":200,"data":[{"prod-a":{"properties":{"cluster":"prod-a"}}}]}`))
+	}))
+	defer server.Close()
+
+	req := httptest.NewRequest(http.MethodPut, "/api/integrations/kubecost", strings.NewReader(`{"source":"kubecost","url":"`+server.URL+`/model","clusterId":"prod-a"}`))
+	rec := httptest.NewRecorder()
+	s.handleApplyKubecostConfig(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if saved := config.Load(); saved.KubecostClusterIDContext != "cluster-a" {
+		t.Fatalf("cluster ID context = %q, want cluster-a", saved.KubecostClusterIDContext)
+	}
+}
+
+func TestKubecostConnectionGuidanceUsesTypedErrors(t *testing.T) {
+	if got := kubecostConnectionGuidance(context.DeadlineExceeded); !strings.Contains(got, "timed out") {
+		t.Fatalf("deadline guidance = %q", got)
+	}
+	upstream := &prom.HTTPError{StatusCode: http.StatusBadGateway, Body: []byte("authentication service unavailable")}
+	if got := kubecostConnectionGuidance(upstream); strings.Contains(got, "rejected the API key") {
+		t.Fatalf("upstream text was misclassified as authentication: %q", got)
+	}
+	if got := kubecostConnectionGuidance(internalopencost.ErrKubecostAuthentication); !strings.Contains(got, "rejected the API key") {
+		t.Fatalf("typed authentication guidance = %q", got)
 	}
 }

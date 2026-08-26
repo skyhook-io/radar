@@ -1167,7 +1167,9 @@ which have a FinOps Agent but no local Aggregator, and for alternate endpoints s
 intentionally unauthenticated port 9008. Radar accepts either a root API URL or one ending in
 `/model`, can send an optional service-account key as `X-API-KEY`, and requires an exact cluster ID
 to filter a central Aggregator. It detects one literal `CLUSTER_ID` from an active FinOps Agent or
-Aggregator; indirect, missing, or conflicting values require an override.
+Aggregator; indirect, missing, or conflicting values require an override. Radar binds an override
+saved in Settings to the active kubeconfig context and fails closed after a context switch until the
+override is cleared or updated; the central Aggregator URL and key may still be shared.
 
 OpenCost-compatible Prometheus data powers current cost and historical charts. Kubecost REST powers
 the current namespace summary, workload/application compute allocation, and node costs; historical

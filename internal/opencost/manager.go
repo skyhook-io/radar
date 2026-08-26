@@ -24,17 +24,28 @@ import (
 type Source string
 
 const (
-	SourceAuto       Source = "auto"
-	SourcePrometheus Source = "prometheus"
-	SourceKubecost   Source = "kubecost"
-	autoRetryDelay          = time.Minute
+	SourceAuto             Source = "auto"
+	SourcePrometheus       Source = "prometheus"
+	SourceKubecost         Source = "kubecost"
+	autoRetryDelay                = time.Minute
+	kubecostConnectTimeout        = 25 * time.Second
+	kubecostHTTPTimeout           = 12 * time.Second
+)
+
+var (
+	ErrKubecostAuthentication  = errors.New("Kubecost authentication failed")
+	ErrKubecostClusterID       = errors.New("Kubecost cluster ID unavailable")
+	ErrKubecostContextMismatch = errors.New("Kubecost cluster ID context mismatch")
+	ErrKubecostNoData          = errors.New("Kubecost returned no allocation data")
+	ErrKubecostUnavailable     = errors.New("Kubecost Aggregator unavailable")
 )
 
 type ManagerConfig struct {
-	Source    Source
-	URL       string
-	APIKey    string
-	ClusterID string
+	Source           Source
+	URL              string
+	APIKey           string
+	ClusterID        string
+	ClusterIDContext string
 }
 
 type Connection struct {
@@ -138,6 +149,10 @@ func (m *Manager) configure(config ManagerConfig, envManaged bool, envError stri
 	config.Source = source
 	config.URL = strings.TrimRight(strings.TrimSpace(config.URL), "/")
 	config.ClusterID = strings.TrimSpace(config.ClusterID)
+	config.ClusterIDContext = strings.TrimSpace(config.ClusterIDContext)
+	if config.ClusterID != "" && config.ClusterIDContext == "" {
+		config.ClusterIDContext = k8s.GetContextName()
+	}
 	if err := ValidateKubecostURL(config.URL); err != nil {
 		return err
 	}
@@ -196,6 +211,7 @@ func resolveEnvironmentConfig(base ManagerConfig, getenv func(string) string) (M
 	}
 	if values[envClusterID] != "" {
 		base.ClusterID = values[envClusterID]
+		base.ClusterIDContext = k8s.GetContextName()
 	}
 	return base, true, nil
 }
@@ -417,6 +433,11 @@ func detectPrometheusCostState(ctx context.Context) prometheusCostState {
 }
 
 func (m *Manager) connectKubecost(ctx context.Context, config ManagerConfig) (Connection, error) {
+	ctx, cancel := context.WithTimeout(ctx, kubecostConnectTimeout)
+	defer cancel()
+	if err := validateKubecostClusterIDContext(config, k8s.GetContextName()); err != nil {
+		return Connection{}, err
+	}
 	if config.URL != "" {
 		clusterID, err := resolveKubecostClusterID(config.ClusterID)
 		if err != nil {
@@ -431,19 +452,23 @@ func (m *Manager) connectKubecost(ctx context.Context, config ManagerConfig) (Co
 
 	service, port, err := discoverKubecostAggregator()
 	if err != nil {
-		return Connection{}, err
+		return Connection{}, fmt.Errorf("%w: %w", ErrKubecostUnavailable, err)
 	}
 	clusterID, err := resolveKubecostClusterID(config.ClusterID)
 	if err != nil {
 		return Connection{}, err
 	}
-	directURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", service.Name, service.Namespace, port)
-	if client, address, directErr := probeKubecostURL(ctx, directURL, config.APIKey, clusterID); directErr == nil {
-		return Connection{Source: SourceKubecost, Client: client, Address: address, ClusterID: clusterID}, nil
+	if k8s.IsInCluster() {
+		directURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", service.Name, service.Namespace, port)
+		if client, address, directErr := probeKubecostURL(ctx, directURL, config.APIKey, clusterID); directErr == nil {
+			return Connection{Source: SourceKubecost, Client: client, Address: address, ClusterID: clusterID}, nil
+		} else if errors.Is(directErr, ErrKubecostAuthentication) || errors.Is(directErr, ErrKubecostNoData) {
+			return Connection{}, directErr
+		}
 	}
 	forward, err := portforward.Start(portforward.OwnerCost, ctx, service.Namespace, service.Name, port, k8s.GetContextName())
 	if err != nil {
-		return Connection{}, fmt.Errorf("Kubecost Aggregator port-forward failed: %w", err)
+		return Connection{}, fmt.Errorf("%w: port-forward failed: %w", ErrKubecostUnavailable, err)
 	}
 	client, address, err := probeKubecostURL(ctx, forward.Address, config.APIKey, clusterID)
 	if err != nil {
@@ -457,16 +482,27 @@ func (m *Manager) connectKubecost(ctx context.Context, config ManagerConfig) (Co
 				info := portforward.GetConnectionInfo(portforward.OwnerCost)
 				return info.Connected && info.Address == forward.Address
 			},
-			release: func() { portforward.Stop(portforward.OwnerCost) },
+			release: func() { portforward.StopIfAddress(portforward.OwnerCost, forward.Address) },
 		},
 	}, nil
+}
+
+func validateKubecostClusterIDContext(config ManagerConfig, currentContext string) error {
+	if config.ClusterID == "" || config.ClusterIDContext == "" || currentContext == "" || config.ClusterIDContext == currentContext {
+		return nil
+	}
+	return fmt.Errorf("%w: configured for kubeconfig context %q, current context is %q", ErrKubecostContextMismatch, config.ClusterIDContext, currentContext)
 }
 
 func resolveKubecostClusterID(configured string) (string, error) {
 	if configured != "" {
 		return configured, nil
 	}
-	return detectKubecostClusterID()
+	clusterID, err := detectKubecostClusterID()
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", ErrKubecostClusterID, err)
+	}
+	return clusterID, nil
 }
 
 func probeKubecostURL(ctx context.Context, rawURL, apiKey, clusterID string) (*pkgopencost.KubecostClient, string, error) {
@@ -483,7 +519,7 @@ func probeKubecostURL(ctx context.Context, rawURL, apiKey, clusterID string) (*p
 	var lastErr error
 	for _, basePath := range paths {
 		httpClient := &http.Client{
-			Timeout: 12 * time.Second,
+			Timeout: kubecostHTTPTimeout,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) > 0 && !sameOrigin(via[0].URL, req.URL) {
 					return fmt.Errorf("cross-origin redirect refused")
@@ -511,17 +547,21 @@ func probeKubecostURL(ctx context.Context, rawURL, apiKey, clusterID string) (*p
 		}
 		var httpErr *prom.HTTPError
 		if errors.As(err, &httpErr) && (httpErr.StatusCode == http.StatusUnauthorized || httpErr.StatusCode == http.StatusForbidden) {
-			return nil, "", fmt.Errorf("Kubecost authentication failed")
+			lastErr = ErrKubecostAuthentication
+			continue
 		}
 		lastErr = err
 	}
 	if noData {
-		return nil, "", fmt.Errorf("Kubecost returned no allocation data for cluster %q", clusterID)
+		return nil, "", fmt.Errorf("%w for cluster %q", ErrKubecostNoData, clusterID)
 	}
 	if lastErr != nil {
-		return nil, "", fmt.Errorf("Kubecost Aggregator is unreachable or did not return its allocation API: %w", lastErr)
+		if errors.Is(lastErr, ErrKubecostAuthentication) {
+			return nil, "", lastErr
+		}
+		return nil, "", fmt.Errorf("%w or did not return its allocation API: %w", ErrKubecostUnavailable, lastErr)
 	}
-	return nil, "", fmt.Errorf("Kubecost Aggregator is unreachable or did not return its allocation API")
+	return nil, "", fmt.Errorf("%w or did not return its allocation API", ErrKubecostUnavailable)
 }
 
 func kubecostProbeHasClusterData(resp *pkgopencost.KubecostAllocationResponse, clusterID string) bool {

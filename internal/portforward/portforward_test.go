@@ -106,3 +106,24 @@ func TestStopBumpsEpochWhileEstablishing(t *testing.T) {
 		t.Fatal("epoch not bumped for an inactive forward — a Stop during establishment would be silently lost")
 	}
 }
+
+func TestStopIfAddressDoesNotStopReplacement(t *testing.T) {
+	saved := reg
+	t.Cleanup(func() { reg = saved })
+	reg = &registry{forwards: map[Owner]*metricsForward{
+		OwnerCost: {active: true, localPort: 2222},
+	}}
+
+	if StopIfAddress(OwnerCost, "http://localhost:1111") {
+		t.Fatal("stale address unexpectedly stopped the current forward")
+	}
+	if !GetConnectionInfo(OwnerCost).Connected {
+		t.Fatal("stale cleanup stopped the replacement forward")
+	}
+	if !StopIfAddress(OwnerCost, "http://localhost:2222") {
+		t.Fatal("current address did not stop its forward")
+	}
+	if GetConnectionInfo(OwnerCost).Connected {
+		t.Fatal("current forward remains connected after address-scoped stop")
+	}
+}

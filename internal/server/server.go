@@ -5278,6 +5278,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		file.CostSource = string(effectiveCost.Source)
 		file.KubecostURL = effectiveCost.URL
 		file.KubecostClusterID = effectiveCost.ClusterID
+		file.KubecostClusterIDContext = effectiveCost.ClusterIDContext
 		kubecostAPIKeySet = effectiveCost.APIKey != ""
 		if kubecostEnvError != "" {
 			kubecostAPIKeySet = false
@@ -5328,6 +5329,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		effective.CostSource = string(effectiveCost.Source)
 		effective.KubecostURL = effectiveCost.URL
 		effective.KubecostClusterID = effectiveCost.ClusterID
+		effective.KubecostClusterIDContext = effectiveCost.ClusterIDContext
 		effective.PrometheusHeaders = nil
 		effective.KubecostAPIKey = ""
 		effective.ArgoCDToken = ""
@@ -5363,31 +5365,33 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		// never disturb a live integration — even if it races an in-flight
 		// Apply/Connect or echoes back the redacted token as empty.
 		preserved := struct {
-			promHeaders       map[string]string
-			promHeadersEnv    map[string]string
-			promURL           string
-			argoURL           string
-			argoToken         string
-			argoInsecure      bool
-			argoTokenContext  string
-			argoTokenBinding  string
-			costSource        string
-			kubecostURL       string
-			kubecostAPIKey    string
-			kubecostClusterID string
+			promHeaders              map[string]string
+			promHeadersEnv           map[string]string
+			promURL                  string
+			argoURL                  string
+			argoToken                string
+			argoInsecure             bool
+			argoTokenContext         string
+			argoTokenBinding         string
+			costSource               string
+			kubecostURL              string
+			kubecostAPIKey           string
+			kubecostClusterID        string
+			kubecostClusterIDContext string
 		}{
-			promHeaders:       c.PrometheusHeaders,
-			promHeadersEnv:    c.PrometheusHeadersFromEnv,
-			promURL:           c.PrometheusURL,
-			argoURL:           c.ArgoCDURL,
-			argoToken:         c.ArgoCDToken,
-			argoInsecure:      c.ArgoCDInsecureTLS,
-			argoTokenContext:  c.ArgoCDTokenContext,
-			argoTokenBinding:  c.ArgoCDTokenBinding,
-			costSource:        c.CostSource,
-			kubecostURL:       c.KubecostURL,
-			kubecostAPIKey:    c.KubecostAPIKey,
-			kubecostClusterID: c.KubecostClusterID,
+			promHeaders:              c.PrometheusHeaders,
+			promHeadersEnv:           c.PrometheusHeadersFromEnv,
+			promURL:                  c.PrometheusURL,
+			argoURL:                  c.ArgoCDURL,
+			argoToken:                c.ArgoCDToken,
+			argoInsecure:             c.ArgoCDInsecureTLS,
+			argoTokenContext:         c.ArgoCDTokenContext,
+			argoTokenBinding:         c.ArgoCDTokenBinding,
+			costSource:               c.CostSource,
+			kubecostURL:              c.KubecostURL,
+			kubecostAPIKey:           c.KubecostAPIKey,
+			kubecostClusterID:        c.KubecostClusterID,
+			kubecostClusterIDContext: c.KubecostClusterIDContext,
 		}
 		*c = updated
 		c.PrometheusHeaders = preserved.promHeaders
@@ -5402,6 +5406,7 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		c.KubecostURL = preserved.kubecostURL
 		c.KubecostAPIKey = preserved.kubecostAPIKey
 		c.KubecostClusterID = preserved.kubecostClusterID
+		c.KubecostClusterIDContext = preserved.kubecostClusterIDContext
 	})
 	if err != nil {
 		log.Printf("[config] Failed to save config: %v", err)

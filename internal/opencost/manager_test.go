@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/k8s"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -70,6 +71,41 @@ func TestProbeKubecostUsesModelPathAndAPIKey(t *testing.T) {
 	}
 }
 
+func TestProbeKubecostTriesModelPathAfterRootAuthenticationFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/allocation" {
+			http.Error(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"code":200,"data":[{"prod-a":{"properties":{"cluster":"prod-a"}}}]}`))
+	}))
+	defer server.Close()
+
+	connection, err := ProbeKubecost(context.Background(), ManagerConfig{
+		Source: SourceKubecost, URL: server.URL, ClusterID: "prod-a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if connection.Address != server.URL+"/model" {
+		t.Fatalf("address = %q, want /model fallback", connection.Address)
+	}
+}
+
+func TestProbeKubecostReturnsTypedAuthenticationFailureAfterAllPaths(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "denied", http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	_, err := ProbeKubecost(context.Background(), ManagerConfig{
+		Source: SourceKubecost, URL: server.URL, ClusterID: "prod-a",
+	})
+	if !errors.Is(err, ErrKubecostAuthentication) {
+		t.Fatalf("error = %v, want ErrKubecostAuthentication", err)
+	}
+}
+
 func TestProbeKubecostRejectsClusterWithoutAllocationData(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"code":200,"data":[{"__idle__":{"properties":{"cluster":"__idle__"}}}]}`))
@@ -102,6 +138,22 @@ func TestProbeKubecostRequiresExplicitURL(t *testing.T) {
 	_, err := ProbeKubecost(context.Background(), ManagerConfig{Source: SourceKubecost})
 	if err == nil || !strings.Contains(err.Error(), "requires an Aggregator URL") {
 		t.Fatalf("error = %v, want explicit URL requirement", err)
+	}
+}
+
+func TestKubecostClusterIDContextMismatchFailsClosed(t *testing.T) {
+	previousContext := k8s.SetTestContextName("cluster-a")
+	t.Cleanup(func() { k8s.SetTestContextName(previousContext) })
+	m := &Manager{}
+	if err := m.Configure(ManagerConfig{Source: SourceKubecost, URL: "https://cost.example.com/model", ClusterID: "prod-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.ConfigSnapshot().ClusterIDContext; got != "cluster-a" {
+		t.Fatalf("cluster ID context = %q, want cluster-a", got)
+	}
+	k8s.SetTestContextName("cluster-b")
+	if _, err := m.Selected(context.Background()); !errors.Is(err, ErrKubecostContextMismatch) {
+		t.Fatalf("selection error = %v, want ErrKubecostContextMismatch", err)
 	}
 }
 

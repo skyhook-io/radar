@@ -264,6 +264,17 @@ func filterCostSummary(resp *pkgopencost.CostSummary, allowed []string) {
 	if resp == nil || allowed == nil {
 		return
 	}
+	if len(allowed) == 0 {
+		resp.Available = false
+		resp.Reason = pkgopencost.ReasonAccessDenied
+		resp.Namespaces = nil
+		resp.TotalHourlyCost = 0
+		resp.TotalStorageCost = 0
+		resp.TotalNetworkCost = 0
+		resp.TotalIdleCost = 0
+		resp.ClusterEfficiency = 0
+		return
+	}
 	allow := make(map[string]struct{}, len(allowed))
 	for _, namespace := range allowed {
 		allow[namespace] = struct{}{}
@@ -348,15 +359,18 @@ func ConnectionFailureReason(err error) string {
 	if errors.Is(err, prometheuspkg.ErrPrometheusNotFound) {
 		return pkgopencost.ReasonNoPrometheus
 	}
+	if errors.Is(err, ErrKubecostNoData) {
+		return pkgopencost.ReasonNoMetrics
+	}
+	if errors.Is(err, ErrKubecostAuthentication) {
+		return pkgopencost.ReasonAuthentication
+	}
 	var httpErr *prom.HTTPError
 	if errors.As(err, &httpErr) && (httpErr.StatusCode == http.StatusUnauthorized || httpErr.StatusCode == http.StatusForbidden) {
 		return pkgopencost.ReasonAuthentication
 	}
 	message := strings.ToLower(err.Error())
-	if strings.Contains(message, "authentication") {
-		return pkgopencost.ReasonAuthentication
-	}
-	if strings.Contains(message, "kubecost") || strings.Contains(message, "cost source") {
+	if errors.Is(err, ErrKubecostClusterID) || errors.Is(err, ErrKubecostContextMismatch) || errors.Is(err, ErrKubecostUnavailable) || strings.Contains(message, "kubecost") || strings.Contains(message, "cost source") {
 		return pkgopencost.ReasonSourceUnavailable
 	}
 	return pkgopencost.ReasonQueryError

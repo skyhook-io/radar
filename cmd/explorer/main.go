@@ -364,6 +364,7 @@ func main() {
 		KubecostURL:              fileCfg.KubecostURL,
 		KubecostAPIKey:           fileCfg.KubecostAPIKey,
 		KubecostClusterID:        fileCfg.KubecostClusterID,
+		KubecostClusterIDContext: fileCfg.KubecostClusterIDContext,
 		PrometheusHeaders:        resolvedPrometheusHeaders,
 		PrometheusHeadersFromEnv: promHeadersFromEnv.value(),
 		BeylaJobSelector:         *beylaJobSelector,

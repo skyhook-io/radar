@@ -75,11 +75,33 @@ func TestFilterCostSummaryRecomputesVisibleTotals(t *testing.T) {
 	}
 }
 
+func TestFilterCostSummaryReportsNoNamespaceAccess(t *testing.T) {
+	resp := &pkgopencost.CostSummary{
+		Available:       true,
+		TotalHourlyCost: 11,
+		Namespaces:      []pkgopencost.NamespaceCost{{Name: "private", HourlyCost: 11}},
+	}
+	filterCostSummary(resp, []string{})
+	if resp.Available || resp.Reason != pkgopencost.ReasonAccessDenied || resp.TotalHourlyCost != 0 || resp.Namespaces != nil {
+		t.Fatalf("unexpected zero-access summary: %#v", resp)
+	}
+}
+
 func TestConnectionFailureReasonRecognizesHTTPAuthentication(t *testing.T) {
 	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
 		if got := ConnectionFailureReason(&prom.HTTPError{StatusCode: status}); got != pkgopencost.ReasonAuthentication {
 			t.Fatalf("status %d reason = %q, want %q", status, got, pkgopencost.ReasonAuthentication)
 		}
+	}
+}
+
+func TestConnectionFailureReasonDoesNotGuessAuthenticationFromText(t *testing.T) {
+	err := &prom.HTTPError{StatusCode: http.StatusBadGateway, Body: []byte("authentication service unavailable")}
+	if got := ConnectionFailureReason(err); got != pkgopencost.ReasonQueryError {
+		t.Fatalf("reason = %q, want %q", got, pkgopencost.ReasonQueryError)
+	}
+	if got := ConnectionFailureReason(ErrKubecostAuthentication); got != pkgopencost.ReasonAuthentication {
+		t.Fatalf("typed Kubecost auth reason = %q, want %q", got, pkgopencost.ReasonAuthentication)
 	}
 }
 

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/k8s"
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
 )
 
@@ -48,11 +50,17 @@ func (s *Server) handleApplyKubecostConfig(w http.ResponseWriter, r *http.Reques
 	} else if apiKey != "" && !sameServerOrigin(rawURL, previous.KubecostURL) {
 		apiKey = ""
 	}
+	clusterID := strings.TrimSpace(body.ClusterID)
+	clusterIDContext := ""
+	if clusterID != "" {
+		clusterIDContext = k8s.GetContextName()
+	}
 	candidate := internalopencost.ManagerConfig{
-		Source:    source,
-		URL:       rawURL,
-		APIKey:    apiKey,
-		ClusterID: strings.TrimSpace(body.ClusterID),
+		Source:           source,
+		URL:              rawURL,
+		APIKey:           apiKey,
+		ClusterID:        clusterID,
+		ClusterIDContext: clusterIDContext,
 	}
 	previousManager := internalopencost.ConfigSnapshot()
 	if source != internalopencost.SourcePrometheus && rawURL != "" {
@@ -69,7 +77,7 @@ func (s *Server) handleApplyKubecostConfig(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	connection, connectErr := internalopencost.Selected(ctx)
 	if connectErr != nil {
@@ -83,7 +91,8 @@ func (s *Server) handleApplyKubecostConfig(w http.ResponseWriter, r *http.Reques
 		c.CostSource = string(source)
 		c.KubecostURL = rawURL
 		c.KubecostAPIKey = apiKey
-		c.KubecostClusterID = strings.TrimSpace(body.ClusterID)
+		c.KubecostClusterID = clusterID
+		c.KubecostClusterIDContext = clusterIDContext
 	}); err != nil {
 		_ = internalopencost.Configure(previousManager)
 		log.Printf("[config] Failed to persist Kubecost configuration: %v", err)
@@ -113,11 +122,15 @@ func sameServerOrigin(a, b string) bool {
 func kubecostConnectionGuidance(err error) string {
 	message := strings.ToLower(err.Error())
 	switch {
-	case strings.Contains(message, "authentication"):
+	case errors.Is(err, context.DeadlineExceeded):
+		return "Kubecost discovery timed out — the Aggregator did not answer in time; retry or enter its URL directly."
+	case errors.Is(err, internalopencost.ErrKubecostAuthentication):
 		return "Kubecost rejected the API key — check the service-account key or use the deployment's intended API endpoint."
-	case strings.Contains(message, "cluster id"):
+	case errors.Is(err, internalopencost.ErrKubecostContextMismatch):
+		return "The configured Kubecost cluster ID belongs to another kubeconfig context — clear or update it for the current cluster."
+	case errors.Is(err, internalopencost.ErrKubecostClusterID):
 		return "Kubecost cluster ID could not be determined — enter the CLUSTER_ID configured on this cluster's FinOps Agent."
-	case strings.Contains(message, "no allocation data"):
+	case errors.Is(err, internalopencost.ErrKubecostNoData):
 		return "Kubecost has no allocation data for this cluster ID yet — check the ID and wait for its ETL pipeline to become ready."
 	case strings.Contains(message, "access to services") || strings.Contains(message, "no active kubecost"):
 		return "Kubecost could not be auto-discovered — enter the central Aggregator URL manually."

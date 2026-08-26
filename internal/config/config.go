@@ -35,6 +35,9 @@ type Config struct {
 	KubecostURL               string   `json:"kubecostUrl,omitempty"`
 	KubecostAPIKey            string   `json:"kubecostApiKey,omitempty"`
 	KubecostClusterID         string   `json:"kubecostClusterId,omitempty"`
+	// KubecostClusterIDContext prevents a cluster-specific central-Aggregator
+	// filter from silently following a local kubeconfig switch.
+	KubecostClusterIDContext string `json:"kubecostClusterIdContext,omitempty"`
 	// PrometheusHeaders are sent with every request to the Prometheus API.
 	// Required for auth-protected backends (Bearer tokens, X-Scope-OrgID, etc.).
 	// Stored in plain text in ~/.radar/config.json — protect the file accordingly.
