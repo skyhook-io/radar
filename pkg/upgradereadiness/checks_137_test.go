@@ -541,6 +541,71 @@ func TestKubeProxyConfigFileOverridesFlag137(t *testing.T) {
 	}
 }
 
+func TestKubeSystemCacheScopesFollowActualEvidence137(t *testing.T) {
+	input := completeInput()
+	input.Pods = []*corev1.Pod{
+		{ObjectMeta: metav1.ObjectMeta{Name: "kube-apiserver-node-a", Namespace: "kube-system", Annotations: map[string]string{corev1.MirrorPodAnnotationKey: "mirror"}}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "kube-apiserver"}}}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "kube-controller-manager-node-a", Namespace: "kube-system", Annotations: map[string]string{corev1.MirrorPodAnnotationKey: "mirror"}}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "kube-controller-manager"}}}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "kube-scheduler-node-a", Namespace: "kube-system", Annotations: map[string]string{corev1.MirrorPodAnnotationKey: "mirror"}}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "kube-scheduler"}}}},
+	}
+	input.ConfigMaps = []*corev1.ConfigMap{{ObjectMeta: metav1.ObjectMeta{Name: "kubeadm-config", Namespace: "kube-system"}, Data: map[string]string{"ClusterConfiguration": "apiVersion: kubeadm.k8s.io/v1beta4\nkind: ClusterConfiguration\n"}}}
+	input.DaemonSets = []*appsv1.DaemonSet{kubeProxyDaemonSet("--proxy-mode=iptables")}
+	input.CacheScopedKinds = map[string][]string{
+		"pods":       {"kube-system"},
+		"configmaps": {"team-a"},
+		"daemonsets": {"kube-system"},
+	}
+
+	result := scan137(t, input)
+	for _, id := range []string{"removed-feature-gates", "removed-component-flags"} {
+		check := checkByID(t, result, id)
+		if check.Status != CheckPassed || strings.Contains(check.Caveat, "Cached evidence is namespace-limited") {
+			t.Fatalf("%s = %+v, kube-system Pod coverage should be sufficient", id, check)
+		}
+	}
+	kubeadm := checkByID(t, result, "kubeadm-config-v1beta3")
+	if kubeadm.Status != CheckUnknown || !strings.Contains(kubeadm.Summary, "kube-system is outside") {
+		t.Fatalf("kubeadm scope = %+v, want unknown because ConfigMaps exclude kube-system", kubeadm)
+	}
+	proxy := checkByID(t, result, "kube-proxy-mode-transition")
+	if proxy.Status != CheckPassed || proxy.Caveat != "" {
+		t.Fatalf("flag-based kube-proxy mode = %+v, ConfigMap scope should be irrelevant", proxy)
+	}
+
+	input.CacheScopedKinds["pods"] = []string{"team-a"}
+	input.CacheScopedKinds["daemonsets"] = []string{"team-a"}
+	result = scan137(t, input)
+	for _, id := range []string{"removed-feature-gates", "removed-component-flags", "kube-proxy-mode-transition"} {
+		check := checkByID(t, result, id)
+		if check.Status != CheckUnknown || !strings.Contains(check.Summary+" "+check.Caveat, "kube-system is outside") {
+			t.Fatalf("%s = %+v, want unknown when its informer excludes kube-system", id, check)
+		}
+	}
+	input.CacheScopedKinds["pods"] = []string{"kube-system"}
+	input.CacheScopedKinds["daemonsets"] = []string{"kube-system"}
+
+	configMap := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "kube-proxy", Namespace: "kube-system"}, Data: map[string]string{"config.conf": "mode: nftables\n"}}
+	configuredProxy := kubeProxyDaemonSet("--config=/var/lib/kube-proxy/config.conf")
+	configuredProxy.Spec.Template.Spec.Volumes = []corev1.Volume{{Name: "config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "kube-proxy"}}}}}
+	configuredProxy.Spec.Template.Spec.Containers[0].VolumeMounts = []corev1.VolumeMount{{Name: "config", MountPath: "/var/lib/kube-proxy"}}
+	input.DaemonSets = []*appsv1.DaemonSet{configuredProxy}
+	input.ConfigMaps = append(input.ConfigMaps, configMap)
+	result = scan137(t, input)
+	proxy = checkByID(t, result, "kube-proxy-mode-transition")
+	if proxy.Status != CheckUnknown || !strings.Contains(proxy.Caveat, "outside the readable ConfigMap scope") {
+		t.Fatalf("file-based kube-proxy mode = %+v, want ConfigMap scope boundary", proxy)
+	}
+
+	input.CacheScopedKinds["configmaps"] = []string{"kube-system"}
+	result = scan137(t, input)
+	for _, id := range []string{"kubeadm-config-v1beta3", "kube-proxy-mode-transition"} {
+		check := checkByID(t, result, id)
+		if check.Status != CheckPassed || strings.Contains(check.Caveat, "Cached evidence is namespace-limited") {
+			t.Fatalf("%s = %+v, kube-system ConfigMap coverage should be sufficient", id, check)
+		}
+	}
+}
+
 func TestKubeProxyConfigMapItemSubPath137(t *testing.T) {
 	input := completeInput()
 	daemonSet := kubeProxyDaemonSet("--config=/var/lib/kube-proxy/config.yaml")

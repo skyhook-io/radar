@@ -165,10 +165,6 @@ var cacheKindsByCheck = map[string][]string{
 	"service-externalips-deprecated": {"services"},
 	"node-drain-feasibility":         {"pods", "poddisruptionbudgets"},
 	"gke-exec-probe-timeout":         {"pods", "deployments", "replicasets", "statefulsets", "daemonsets", "jobs", "cronjobs"},
-	"removed-feature-gates":          {"pods"},
-	"removed-component-flags":        {"pods"},
-	"kubeadm-config-v1beta3":         {"configmaps"},
-	"kube-proxy-mode-transition":     {"daemonsets", "configmaps"},
 	"selinux-mount-transition":       {"pods", "persistentvolumeclaims", "events"},
 }
 

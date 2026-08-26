@@ -582,6 +582,9 @@ func kubeProxyContainer(daemonSet *appsv1.DaemonSet) *corev1.Container {
 
 func kubeProxyMode(input *Input, daemonSet *appsv1.DaemonSet, container *corev1.Container) (string, string, bool, string) {
 	if configPath, _, ok := commandFlag(container.Command, container.Args, "--config"); ok {
+		if !kubeSystemCovered(input, "configmaps") {
+			return "", "", false, fmt.Sprintf("%s/%s: kube-system is outside the readable ConfigMap scope, so --config=%s could not be inspected", daemonSet.Namespace, daemonSet.Name, configPath)
+		}
 		raw, evidencePath, err := mountedConfigMapFile(input.ConfigMaps, daemonSet, container, configPath)
 		if err != nil {
 			return "", "", false, fmt.Sprintf("%s/%s: %v", daemonSet.Namespace, daemonSet.Name, err)
