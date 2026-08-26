@@ -42,6 +42,12 @@ type Connection struct {
 	Client    *pkgopencost.KubecostClient
 	Address   string
 	ClusterID string
+	lease     *connectionLease
+}
+
+type connectionLease struct {
+	alive   func() bool
+	release func()
 }
 
 type prometheusCostState int
@@ -62,10 +68,10 @@ type Manager struct {
 	clusterID    string
 	retryAt      time.Time
 	selectionErr error
+	lease        *connectionLease
 	generation   uint64
 	envManaged   bool
 	envError     string
-	stopForward  func()
 }
 
 var defaultManager = &Manager{config: ManagerConfig{Source: SourceAuto}}
@@ -143,11 +149,12 @@ func (m *Manager) configure(config ManagerConfig, envManaged bool, envError stri
 	m.clusterID = ""
 	m.retryAt = time.Time{}
 	m.selectionErr = nil
+	m.lease = nil
 	m.generation++
 	m.envManaged = envManaged
 	m.envError = envError
 	m.mu.Unlock()
-	m.stopCostForward()
+	portforward.Stop(portforward.OwnerCost)
 	return nil
 }
 
@@ -235,9 +242,10 @@ func (m *Manager) Reset() {
 	m.clusterID = ""
 	m.retryAt = time.Time{}
 	m.selectionErr = nil
+	m.lease = nil
 	m.generation++
 	m.mu.Unlock()
-	m.stopCostForward()
+	portforward.Stop(portforward.OwnerCost)
 }
 
 func Selected(ctx context.Context) (Connection, error) { return defaultManager.Selected(ctx) }
@@ -311,6 +319,9 @@ func ProbeKubecost(ctx context.Context, config ManagerConfig) (Connection, error
 	if err := ValidateKubecostURL(config.URL); err != nil {
 		return Connection{}, err
 	}
+	if config.URL == "" {
+		return Connection{}, fmt.Errorf("Kubecost probe requires an Aggregator URL")
+	}
 	return defaultManager.connectKubecost(ctx, config)
 }
 
@@ -318,8 +329,8 @@ func (m *Manager) commitSelection(generation uint64, connection Connection) (Con
 	m.mu.Lock()
 	if m.generation != generation {
 		m.mu.Unlock()
-		if connection.Source == SourceKubecost {
-			m.stopCostForward()
+		if connection.lease != nil && connection.lease.release != nil {
+			connection.lease.release()
 		}
 		return Connection{}, fmt.Errorf("cost source selection was superseded")
 	}
@@ -329,16 +340,9 @@ func (m *Manager) commitSelection(generation uint64, connection Connection) (Con
 	m.clusterID = connection.ClusterID
 	m.retryAt = time.Time{}
 	m.selectionErr = nil
+	m.lease = connection.lease
 	m.mu.Unlock()
 	return connection, nil
-}
-
-func (m *Manager) stopCostForward() {
-	if m.stopForward != nil {
-		m.stopForward()
-		return
-	}
-	portforward.Stop(portforward.OwnerCost)
 }
 
 func (m *Manager) commitAutoFallback(generation uint64) (Connection, error) {
@@ -354,6 +358,7 @@ func (m *Manager) commitAutoFallback(generation uint64) (Connection, error) {
 	m.clusterID = ""
 	m.retryAt = time.Now().Add(autoRetryDelay)
 	m.selectionErr = nil
+	m.lease = nil
 	return connection, nil
 }
 
@@ -369,6 +374,7 @@ func (m *Manager) commitSelectionFailure(generation uint64, selectionErr error) 
 	m.clusterID = ""
 	m.retryAt = time.Now().Add(autoRetryDelay)
 	m.selectionErr = selectionErr
+	m.lease = nil
 	return Connection{}, selectionErr
 }
 
@@ -379,7 +385,10 @@ func (m *Manager) cachedSelectionLocked(now time.Time) (Connection, error, bool)
 	if m.selected == "" || m.autoRetryDueLocked(now) {
 		return Connection{}, nil, false
 	}
-	return Connection{Source: m.selected, Client: m.client, Address: m.address, ClusterID: m.clusterID}, nil, true
+	if m.lease != nil && m.lease.alive != nil && !m.lease.alive() {
+		return Connection{}, nil, false
+	}
+	return Connection{Source: m.selected, Client: m.client, Address: m.address, ClusterID: m.clusterID, lease: m.lease}, nil, true
 }
 
 func (m *Manager) autoRetryDueLocked(now time.Time) bool {
@@ -438,10 +447,19 @@ func (m *Manager) connectKubecost(ctx context.Context, config ManagerConfig) (Co
 	}
 	client, address, err := probeKubecostURL(ctx, forward.Address, config.APIKey, clusterID)
 	if err != nil {
-		m.stopCostForward()
+		portforward.Stop(portforward.OwnerCost)
 		return Connection{}, err
 	}
-	return Connection{Source: SourceKubecost, Client: client, Address: address, ClusterID: clusterID}, nil
+	return Connection{
+		Source: SourceKubecost, Client: client, Address: address, ClusterID: clusterID,
+		lease: &connectionLease{
+			alive: func() bool {
+				info := portforward.GetConnectionInfo(portforward.OwnerCost)
+				return info.Connected && info.Address == forward.Address
+			},
+			release: func() { portforward.Stop(portforward.OwnerCost) },
+		},
+	}, nil
 }
 
 func resolveKubecostClusterID(configured string) (string, error) {

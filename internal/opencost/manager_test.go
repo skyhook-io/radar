@@ -98,6 +98,13 @@ func TestProbeKubecostPreservesUpstreamFailure(t *testing.T) {
 	}
 }
 
+func TestProbeKubecostRequiresExplicitURL(t *testing.T) {
+	_, err := ProbeKubecost(context.Background(), ManagerConfig{Source: SourceKubecost})
+	if err == nil || !strings.Contains(err.Error(), "requires an Aggregator URL") {
+		t.Fatalf("error = %v, want explicit URL requirement", err)
+	}
+}
+
 func TestAutoPrometheusFallbackExpires(t *testing.T) {
 	m := &Manager{config: ManagerConfig{Source: SourceAuto}}
 	connection, err := m.commitAutoFallback(0)
@@ -182,24 +189,42 @@ func TestCanceledKubecostSelectionIsNotCached(t *testing.T) {
 	}
 }
 
-func TestSupersededKubecostSelectionStopsItsPortForward(t *testing.T) {
+func TestSupersededSelectionReleasesOnlyItsOwnedConnection(t *testing.T) {
 	stops := 0
-	m := &Manager{
-		generation:  2,
-		stopForward: func() { stops++ },
+	m := &Manager{generation: 2}
+	owned := Connection{
+		Source: SourceKubecost,
+		lease:  &connectionLease{release: func() { stops++ }},
 	}
-	if _, err := m.commitSelection(1, Connection{Source: SourceKubecost}); err == nil {
+	if _, err := m.commitSelection(1, owned); err == nil {
 		t.Fatal("superseded selection unexpectedly committed")
 	}
 	if stops != 1 {
-		t.Fatalf("port-forward stops = %d, want 1", stops)
+		t.Fatalf("connection releases = %d, want 1", stops)
 	}
 
-	if _, err := m.commitSelection(1, Connection{Source: SourcePrometheus}); err == nil {
-		t.Fatal("superseded Prometheus selection unexpectedly committed")
+	if _, err := m.commitSelection(1, Connection{Source: SourceKubecost}); err == nil {
+		t.Fatal("superseded direct Kubecost selection unexpectedly committed")
 	}
 	if stops != 1 {
-		t.Fatalf("Prometheus supersession stopped cost port-forward: stops=%d", stops)
+		t.Fatalf("direct Kubecost supersession released another connection: releases=%d", stops)
+	}
+}
+
+func TestDeadConnectionLeaseInvalidatesCachedSelection(t *testing.T) {
+	alive := true
+	m := &Manager{
+		config:   ManagerConfig{Source: SourceKubecost},
+		selected: SourceKubecost,
+		address:  "http://localhost:12345/model",
+		lease:    &connectionLease{alive: func() bool { return alive }},
+	}
+	if _, _, ok := m.cachedSelectionLocked(time.Now()); !ok {
+		t.Fatal("live port-forward-backed selection was not cached")
+	}
+	alive = false
+	if _, _, ok := m.cachedSelectionLocked(time.Now()); ok {
+		t.Fatal("dead port-forward-backed selection remained cached")
 	}
 }
 
