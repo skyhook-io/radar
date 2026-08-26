@@ -1472,9 +1472,12 @@ func TestMergeAndSwitchContext_ReusedPathPublishesFreshMaps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("serialize incoming kubeconfig: %v", err)
 	}
-	qName, path, err := MergeAndSwitchContext(data, "workload")
+	qName, path, created, err := MergeAndSwitchContext(data, "workload")
 	if err != nil {
 		t.Fatalf("MergeAndSwitchContext: %v", err)
+	}
+	if created {
+		t.Fatal("reused CAPI source reported as newly created")
 	}
 	if qName != "workload" || path != workload {
 		t.Fatalf("reuse result = (%q, %q), want (%q, %q)", qName, path, "workload", workload)
@@ -1520,8 +1523,10 @@ func TestMergeAndSwitchContext_ReusedPathPublishesFreshMaps(t *testing.T) {
 		t.Fatalf("serialize renamed CAPI kubeconfig: %v", err)
 	}
 	time.Sleep(15 * time.Millisecond)
-	if _, _, err := MergeAndSwitchContext(renamedData, "workload"); err != nil {
+	if _, _, created, err := MergeAndSwitchContext(renamedData, "workload"); err != nil {
 		t.Fatalf("MergeAndSwitchContext after context rename: %v", err)
+	} else if created {
+		t.Fatal("renamed CAPI source refresh reported as newly created")
 	}
 	future := time.Now().Add(time.Second)
 	if err := os.Chtimes(workload, future, future); err != nil {
@@ -1599,9 +1604,12 @@ func TestMergeAndSwitchContext_ReplacesPrunedCAPIPathWithoutDuplicate(t *testing
 		t.Fatalf("refresh after removing workload kubeconfig: %v", err)
 	}
 
-	qualifiedName, replacement, err := MergeAndSwitchContext(data, "workload")
+	qualifiedName, replacement, created, err := MergeAndSwitchContext(data, "workload")
 	if err != nil {
 		t.Fatalf("MergeAndSwitchContext: %v", err)
+	}
+	if !created {
+		t.Fatal("replacement CAPI source was not reported as newly created")
 	}
 	t.Cleanup(func() { _ = os.Remove(replacement) })
 	if qualifiedName != "workload" {
@@ -1663,7 +1671,7 @@ func TestMergeAndSwitchContext_PromotionEntersRegistryMode(t *testing.T) {
 	prevPath := kubeconfigPath
 	prevMode := kubeconfigMode
 	prevCAPI := capiKubeconfigs
-	prevPromotions := capiPromotionSnapshots
+	prevPromotion := preCapiPromotion
 	prevStarted := initializationStarted
 	prevDirectoryCount := kubeconfigDirectoryFileCount
 	prevContextCount := totalContextCount
@@ -1674,7 +1682,7 @@ func TestMergeAndSwitchContext_PromotionEntersRegistryMode(t *testing.T) {
 	kubeconfigPath = primary
 	kubeconfigMode = "single"
 	capiKubeconfigs = map[string]string{}
-	capiPromotionSnapshots = map[string]capiPromotionSnapshot{}
+	preCapiPromotion = nil
 	initializationStarted = true
 	kubeconfigDirectoryFileCount = 0
 	totalContextCount = 1
@@ -1688,16 +1696,19 @@ func TestMergeAndSwitchContext_PromotionEntersRegistryMode(t *testing.T) {
 		kubeconfigPath = prevPath
 		kubeconfigMode = prevMode
 		capiKubeconfigs = prevCAPI
-		capiPromotionSnapshots = prevPromotions
+		preCapiPromotion = prevPromotion
 		initializationStarted = prevStarted
 		kubeconfigDirectoryFileCount = prevDirectoryCount
 		totalContextCount = prevContextCount
 		clientMu.Unlock()
 	})
 
-	qName, tmpPath, err := MergeAndSwitchContext(data, "workload")
+	qName, tmpPath, created, err := MergeAndSwitchContext(data, "workload")
 	if err != nil {
 		t.Fatalf("MergeAndSwitchContext: %v", err)
+	}
+	if !created {
+		t.Fatal("promoting CAPI source was not reported as newly created")
 	}
 	t.Cleanup(func() { _ = os.Remove(tmpPath) })
 	if qName != "workload" {
@@ -1726,6 +1737,42 @@ func TestMergeAndSwitchContext_PromotionEntersRegistryMode(t *testing.T) {
 	if restoredSummary.Mode != "single" || restoredSummary.FileCount != 1 || restoredSummary.ContextCount != 1 {
 		t.Fatalf("restored kubeconfig summary = %+v", restoredSummary)
 	}
+
+	secondWorkload := writeKubeconfig(t, dir, "workload-two.yaml", "workload-two", []kubeEntry{
+		{ctxName: "workload-two", userName: "u3", clusterName: "c3"},
+	})
+	secondData, err := os.ReadFile(secondWorkload)
+	if err != nil {
+		t.Fatalf("read second workload kubeconfig: %v", err)
+	}
+	_, firstPath, firstCreated, err := MergeAndSwitchContext(data, "workload")
+	if err != nil || !firstCreated {
+		t.Fatalf("recreate first workload: created=%t, err=%v", firstCreated, err)
+	}
+	t.Cleanup(func() { _ = os.Remove(firstPath) })
+	_, secondPath, secondCreated, err := MergeAndSwitchContext(secondData, "workload-two")
+	if err != nil || !secondCreated {
+		t.Fatalf("create second workload: created=%t, err=%v", secondCreated, err)
+	}
+	t.Cleanup(func() { _ = os.Remove(secondPath) })
+	if !DiscardInactiveMergedContext(firstPath) {
+		t.Fatal("first inactive workload was not discarded")
+	}
+	clientMu.RLock()
+	snapshotDeferred := preCapiPromotion != nil
+	clientMu.RUnlock()
+	if !snapshotDeferred {
+		t.Fatal("pre-promotion snapshot was consumed while another CAPI source remained")
+	}
+	if !DiscardInactiveMergedContext(secondPath) {
+		t.Fatal("second inactive workload was not discarded")
+	}
+	if got := GetKubeconfigPath(); got != primary {
+		t.Fatalf("kubeconfig path after final discard = %q, want %q", got, primary)
+	}
+	if summary := GetKubeconfigSummary(); summary.Mode != "single" || summary.FileCount != 1 || summary.ContextCount != 1 {
+		t.Fatalf("summary after final discard = %+v", summary)
+	}
 }
 
 func TestDiscardInactiveMergedContextRestoresInClusterPromotion(t *testing.T) {
@@ -1746,7 +1793,7 @@ func TestDiscardInactiveMergedContextRestoresInClusterPromotion(t *testing.T) {
 	previousPath := kubeconfigPath
 	previousMode := kubeconfigMode
 	previousCAPI := capiKubeconfigs
-	previousPromotions := capiPromotionSnapshots
+	previousPromotion := preCapiPromotion
 	previousStarted := initializationStarted
 	previousDirectoryCount := kubeconfigDirectoryFileCount
 	previousContextCount := totalContextCount
@@ -1759,7 +1806,7 @@ func TestDiscardInactiveMergedContextRestoresInClusterPromotion(t *testing.T) {
 	kubeconfigPath = ""
 	kubeconfigMode = "in-cluster"
 	capiKubeconfigs = map[string]string{}
-	capiPromotionSnapshots = map[string]capiPromotionSnapshot{}
+	preCapiPromotion = nil
 	initializationStarted = true
 	kubeconfigDirectoryFileCount = 0
 	totalContextCount = 1
@@ -1775,7 +1822,7 @@ func TestDiscardInactiveMergedContextRestoresInClusterPromotion(t *testing.T) {
 		kubeconfigPath = previousPath
 		kubeconfigMode = previousMode
 		capiKubeconfigs = previousCAPI
-		capiPromotionSnapshots = previousPromotions
+		preCapiPromotion = previousPromotion
 		initializationStarted = previousStarted
 		kubeconfigDirectoryFileCount = previousDirectoryCount
 		totalContextCount = previousContextCount
@@ -1784,17 +1831,46 @@ func TestDiscardInactiveMergedContextRestoresInClusterPromotion(t *testing.T) {
 		clientMu.Unlock()
 	})
 
-	_, tmpPath, err := MergeAndSwitchContext(data, "workload")
+	_, tmpPath, created, err := MergeAndSwitchContext(data, "workload")
 	if err != nil {
 		t.Fatalf("MergeAndSwitchContext: %v", err)
 	}
+	if !created {
+		t.Fatal("promoting CAPI source was not reported as newly created")
+	}
 	t.Cleanup(func() { _ = os.Remove(tmpPath) })
 
+	operationBaseline := activeContextOperations.Load()
+	contextOpMu.Lock()
+	discarded := make(chan bool, 1)
+	go func() {
+		discarded <- DiscardInactiveMergedContext(tmpPath)
+	}()
+	deadline := time.Now().Add(time.Second)
+	for activeContextOperations.Load() != operationBaseline+1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if activeContextOperations.Load() != operationBaseline+1 {
+		contextOpMu.Unlock()
+		t.Fatal("discard did not queue behind the context operation lock")
+	}
+	select {
+	case <-discarded:
+		contextOpMu.Unlock()
+		t.Fatal("discard completed while another context operation held the lock")
+	default:
+	}
 	clientMu.Lock()
 	activeSourceFile = tmpPath
 	clientMu.Unlock()
-	if DiscardInactiveMergedContext(tmpPath) {
-		t.Fatal("active merged context was discarded")
+	contextOpMu.Unlock()
+	select {
+	case wasDiscarded := <-discarded:
+		if wasDiscarded {
+			t.Fatal("active merged context was discarded")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("discard did not finish after the context operation lock was released")
 	}
 	if _, err := os.Stat(tmpPath); err != nil {
 		t.Fatalf("active merged kubeconfig was removed: %v", err)
@@ -1821,8 +1897,8 @@ func TestDiscardInactiveMergedContextRestoresInClusterPromotion(t *testing.T) {
 	if kubeconfigPath != "" || len(kubeconfigPaths) != 0 || kubeconfigMode != "in-cluster" {
 		t.Fatalf("discarded source state = path %q, paths %v, mode %q", kubeconfigPath, kubeconfigPaths, kubeconfigMode)
 	}
-	if len(capiKubeconfigs) != 0 || len(capiPromotionSnapshots) != 0 || totalContextCount != 1 {
-		t.Fatalf("discarded CAPI state = kubeconfigs %v, promotions %v, contexts %d", capiKubeconfigs, capiPromotionSnapshots, totalContextCount)
+	if len(capiKubeconfigs) != 0 || preCapiPromotion != nil || totalContextCount != 1 {
+		t.Fatalf("discarded CAPI state = kubeconfigs %v, promotion %v, contexts %d", capiKubeconfigs, preCapiPromotion, totalContextCount)
 	}
 }
 

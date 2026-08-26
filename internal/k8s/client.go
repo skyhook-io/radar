@@ -1677,15 +1677,16 @@ type capiPromotionSnapshot struct {
 	totalContextCount            int
 }
 
-var capiPromotionSnapshots = make(map[string]capiPromotionSnapshot) // tmpPath -> pre-promotion state
+var preCapiPromotion *capiPromotionSnapshot
 
 // MergeAndSwitchContext writes the provided kubeconfig data to a temporary
 // file and registers its context so that Radar can switch to it. Returns
-// (qualifiedName, tmpPath, error): qualifiedName is the identifier the caller
-// must pass to PerformContextSwitch, and may differ from the input contextName
-// if another file already owns that name (the registry disambiguates via
-// qualifyContextName). tmpPath is the on-disk location of the kubeconfig,
-// exposed for diagnostics / logging only.
+// (qualifiedName, tmpPath, created, error): qualifiedName is the identifier the
+// caller must pass to PerformContextSwitch, and may differ from the input
+// contextName if another file already owns that name (the registry disambiguates
+// via qualifyContextName). tmpPath is the on-disk location of the kubeconfig,
+// exposed for diagnostics / logging only. created is false when an existing,
+// previously published CAPI source was refreshed in place.
 //
 // If Radar started in single-file mode, the first CAPI merge promotes it
 // into isolated-load mode by seeding the registry with the original
@@ -1696,13 +1697,13 @@ var capiPromotionSnapshots = make(map[string]capiPromotionSnapshot) // tmpPath -
 // input contextName is the stable key for reuse across reconnects (CAPI
 // re-emits the same context name each time for the same workload cluster),
 // so we can dedupe without having to reverse-lookup the qualified form.
-func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, string, error) {
+func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, string, bool, error) {
 	newConfig, err := clientcmd.Load(kubeconfigData)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to parse kubeconfig: %w", err)
+		return "", "", false, fmt.Errorf("failed to parse kubeconfig: %w", err)
 	}
 	if _, ok := newConfig.Contexts[contextName]; !ok {
-		return "", "", fmt.Errorf("context %q not found in provided kubeconfig", contextName)
+		return "", "", false, fmt.Errorf("context %q not found in provided kubeconfig", contextName)
 	}
 
 	// Hold clientMu for the entire reuse-check + registration path so two
@@ -1735,27 +1736,26 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 				// source or the next refresh would expose both files.
 			} else {
 				log.Printf("[capi] Updated existing kubeconfig for context %q: %q", contextName, existingPath)
-				return qName, existingPath, nil
+				return qName, existingPath, false, nil
 			}
 		}
 		if err := os.Remove(existingPath); err != nil && !os.IsNotExist(err) {
-			return "", "", fmt.Errorf("failed to replace stale CAPI kubeconfig: %w", err)
+			return "", "", false, fmt.Errorf("failed to replace stale CAPI kubeconfig: %w", err)
 		}
 		dropKubeconfigSourceLocked(existingPath)
 		delete(capiKubeconfigs, contextName)
-		delete(capiPromotionSnapshots, existingPath)
 	}
 
 	// Write to a new temp file.
 	tmpFile, err := os.CreateTemp("", "radar-capi-kubeconfig-*.yaml")
 	if err != nil {
-		return "", "", fmt.Errorf("failed to create temp kubeconfig: %w", err)
+		return "", "", false, fmt.Errorf("failed to create temp kubeconfig: %w", err)
 	}
 	tmpPath := tmpFile.Name()
 	tmpFile.Close()
 	if err := clientcmd.WriteToFile(*newConfig, tmpPath); err != nil {
 		os.Remove(tmpPath)
-		return "", "", fmt.Errorf("failed to write kubeconfig: %w", err)
+		return "", "", false, fmt.Errorf("failed to write kubeconfig: %w", err)
 	}
 
 	// Build a local snapshot of the registry additions we're about to make,
@@ -1785,7 +1785,7 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 		registry, fileConfigs := buildContextRegistry(seedPaths)
 		if _, hasTmp := fileConfigs[tmpPath]; !hasTmp {
 			os.Remove(tmpPath)
-			return "", "", fmt.Errorf("internal: failed to register CAPI kubeconfig %s", tmpPath)
+			return "", "", false, fmt.Errorf("internal: failed to register CAPI kubeconfig %s", tmpPath)
 		}
 		newRegistry = registry
 		newFileConfigs = fileConfigs
@@ -1806,7 +1806,7 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 		cfg, err := clientcmd.LoadFromFile(tmpPath)
 		if err != nil {
 			os.Remove(tmpPath)
-			return "", "", fmt.Errorf("failed to re-load temp kubeconfig: %w", err)
+			return "", "", false, fmt.Errorf("failed to re-load temp kubeconfig: %w", err)
 		}
 		// Copy-on-write: stage new maps / slice so we don't publish a
 		// partially-updated registry on any error path below.
@@ -1844,7 +1844,7 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 	qualifiedName := findQualifiedNameForPath(newRegistry, tmpPath, contextName)
 	if qualifiedName == "" {
 		os.Remove(tmpPath)
-		return "", "", fmt.Errorf("internal: failed to register context %q from %s", contextName, tmpPath)
+		return "", "", false, fmt.Errorf("internal: failed to register context %q from %s", contextName, tmpPath)
 	}
 
 	// Commit. All globals updated atomically under the single Lock held above.
@@ -1858,17 +1858,24 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 		kubeconfigPath = ""
 		kubeconfigMode = "multi-source"
 		kubeconfigDirectoryFileCount = 0
-		capiPromotionSnapshots[tmpPath] = promotionSnapshot
+		preCapiPromotion = &promotionSnapshot
 	}
 
 	log.Printf("[capi] Added workload cluster kubeconfig: %q (context: %q)", tmpPath, qualifiedName)
-	return qualifiedName, tmpPath, nil
+	return qualifiedName, tmpPath, true, nil
 }
 
 // DiscardInactiveMergedContext removes a CAPI kubeconfig that failed before
 // becoming the active client. Once SwitchContext publishes the source as
 // active, later connectivity or subsystem failures must retain it for retry.
 func DiscardInactiveMergedContext(path string) bool {
+	activeContextOperations.Add(1)
+	contextOpMu.Lock()
+	defer func() {
+		activeContextOperations.Add(-1)
+		contextOpMu.Unlock()
+	}()
+
 	clientMu.Lock()
 	defer clientMu.Unlock()
 
@@ -1893,11 +1900,10 @@ func DiscardInactiveMergedContext(path string) bool {
 	dropKubeconfigSourceLocked(path)
 	delete(capiKubeconfigs, trackedContext)
 
-	snapshot, promoted := capiPromotionSnapshots[path]
-	delete(capiPromotionSnapshots, path)
-	if !promoted {
+	if preCapiPromotion == nil {
 		return true
 	}
+	snapshot := *preCapiPromotion
 
 	expectedPaths := append([]string(nil), snapshot.kubeconfigPaths...)
 	if snapshot.kubeconfigPath != "" {
@@ -1915,6 +1921,7 @@ func DiscardInactiveMergedContext(path string) bool {
 	kubeconfigMode = snapshot.kubeconfigMode
 	kubeconfigDirectoryFileCount = snapshot.kubeconfigDirectoryFileCount
 	totalContextCount = snapshot.totalContextCount
+	preCapiPromotion = nil
 	return true
 }
 

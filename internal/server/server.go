@@ -4525,7 +4525,7 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 	// Merge into the user's kubeconfig. The returned qualifiedName reflects
 	// any disambiguation the registry had to do (e.g. if another file already
 	// owned this context name). Always switch using the qualified name.
-	qualifiedName, mergedPath, err := k8s.MergeAndSwitchContext(kubeconfigData, contextName)
+	qualifiedName, mergedPath, created, err := k8s.MergeAndSwitchContext(kubeconfigData, contextName)
 	if err != nil {
 		log.Printf("[capi] Failed to merge kubeconfig for cluster %s/%s: %v", ns, name, err)
 		s.writeError(w, http.StatusInternalServerError, "failed to connect: "+err.Error())
@@ -4533,13 +4533,16 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 	}
 
 	if err := k8s.PerformContextSwitch(qualifiedName); err != nil {
-		discarded := k8s.DiscardInactiveMergedContext(mergedPath)
-		if errors.Is(err, k8s.ErrContextSwitchPreflight) {
-			s.writeError(w, http.StatusBadRequest, "failed to switch context: "+err.Error())
-			return
+		discarded := false
+		if created {
+			discarded = k8s.DiscardInactiveMergedContext(mergedPath)
 		}
 		if discarded {
 			log.Printf("[capi] Discarded inactive kubeconfig after failed switch to %q", qualifiedName)
+		}
+		if errors.Is(err, k8s.ErrContextSwitchPreflight) {
+			s.writeError(w, http.StatusBadRequest, "failed to switch context: "+err.Error())
+			return
 		}
 		statusContext := qualifiedName
 		if discarded {

@@ -128,6 +128,8 @@ describe('ConnectionErrorView kubeconfig guidance', () => {
     expect(markup).toContain('Cannot Load Cluster Configuration')
     expect(markup).toContain('Kubeconfig Problem')
     expect(markup).toContain('aria-expanded="false"')
+    expect(markup).toContain('id="connection-raw-error"')
+    expect(markup).toContain('safe error')
     expect(markup).toContain('Switch context')
   })
 
