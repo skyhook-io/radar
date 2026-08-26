@@ -140,6 +140,9 @@ func TestInitRejectsDefaultFIFOWithoutBlockingAfterInClusterFallback(t *testing.
 		if err == nil || !strings.Contains(err.Error(), "not a regular file") {
 			t.Fatalf("doInit error = %v", err)
 		}
+		if IsInCluster() {
+			t.Fatal("failed local kubeconfig initialization was classified as in-cluster")
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("default kubeconfig resolution blocked on a FIFO")
 	}

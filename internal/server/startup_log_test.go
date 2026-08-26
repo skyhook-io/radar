@@ -114,6 +114,17 @@ func TestFormatStartupKubeconfigMultiSourceWithEmptyDirectories(t *testing.T) {
 	}
 }
 
+func TestFormatStartupKubeconfigRuntimeSourcePromotion(t *testing.T) {
+	got := formatStartupKubeconfig("", k8s.KubeconfigSummary{
+		Mode:         "multi-source",
+		FileCount:    2,
+		ContextCount: 2,
+	})
+	if got != "configured sources · 2 files · 2 contexts" {
+		t.Fatalf("formatStartupKubeconfig() = %q", got)
+	}
+}
+
 func TestFormatStartupLogSummaryProxyWarning(t *testing.T) {
 	got := strings.Join(formatStartupLogSummary(startupLogSummary{
 		listenAddress:     AllInterfacesAddress,

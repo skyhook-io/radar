@@ -16,27 +16,6 @@ import (
 	"github.com/skyhook-io/radar/pkg/probe"
 )
 
-func TestProbeClusterDisplayDistinguishesModeFromContextName(t *testing.T) {
-	tests := []struct {
-		name          string
-		cluster       string
-		clusterKey    string
-		sourceBinding string
-		want          string
-	}{
-		{name: "real in-cluster install", cluster: "in-cluster", clusterKey: "cluster-uid", want: "cluster-uid"},
-		{name: "kubeconfig context named in-cluster", cluster: "in-cluster", clusterKey: "kcb1_source", sourceBinding: "kcb1_source", want: "in-cluster"},
-		{name: "ordinary kubeconfig context", cluster: "prod", clusterKey: "kcb1_source", sourceBinding: "kcb1_source", want: "prod"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := probeClusterDisplay(tt.cluster, tt.clusterKey, tt.sourceBinding); got != tt.want {
-				t.Fatalf("probeClusterDisplay() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 // TestStampInClusterProbes_DemotesDegraded pins that a throwaway-pod result that
 // reached the backend but degraded (OK=true, ToneDegraded - a 5xx or TLS/cert
 // problem) is stamped as a SKIP, not a live degraded probe. The fold logic keeps

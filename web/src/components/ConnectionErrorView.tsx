@@ -4,7 +4,7 @@ import type { ConnectionState } from '../context/ConnectionContext'
 import { ContextSwitcher } from './ContextSwitcher'
 import { parseContextName } from '../utils/context-name'
 import { useOpenLocalTerminal, ClusterName } from '@skyhook-io/k8s-ui'
-import { useAuthMe } from '../api/client'
+import { useAuthMe, useContexts } from '../api/client'
 import { Tooltip } from './ui/Tooltip'
 import { allShellSafe } from '../utils/shell-safe'
 import { apiUrl } from '../api/config'
@@ -321,16 +321,17 @@ export function CopyableCommand({ command, onRunInTerminal }: { command: string;
   )
 }
 
-export function selectConnectionHints(errorType: string | undefined, context: string): AuthHints | null {
+export function selectConnectionHints(errorType: string | undefined, context: string, originalContext?: string): AuthHints | null {
+  const parsedContext = originalContext || context
   switch (errorType) {
     case 'auth':
-      return getAuthHints(context)
+      return getAuthHints(parsedContext)
     case 'auth-rejected':
-      return getAuthRejectedHints(context)
+      return getAuthRejectedHints(parsedContext)
     case 'auth-plugin-stuck':
       return getAuthPluginStuckHints()
     case 'timeout':
-      return getTimeoutHints(context)
+      return getTimeoutHints(parsedContext)
     default:
       return null
   }
@@ -342,7 +343,9 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
   const isAuthRejected = connection.errorType === 'auth-rejected'
   const isAuthPluginStuck = connection.errorType === 'auth-plugin-stuck'
   const isAuthError = isAuth || isAuthRejected || isAuthPluginStuck
-  const commandInfo = selectConnectionHints(connection.errorType, connection.context || '')
+  const { data: contexts } = useContexts()
+  const originalContext = contexts?.find((context) => context.name === connection.context)?.originalName
+  const commandInfo = selectConnectionHints(connection.errorType, connection.context || '', originalContext)
   const errorInfo = commandInfo || errorHints[connection.errorType || 'unknown'] || errorHints.unknown
   const openLocalTerminal = useOpenLocalTerminal()
   const { data: authMe } = useAuthMe()

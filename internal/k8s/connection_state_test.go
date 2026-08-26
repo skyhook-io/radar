@@ -296,6 +296,16 @@ func TestClassifyError(t *testing.T) {
 			want: "config",
 		},
 		{
+			name: "context switch missing context is config",
+			err:  `failed to switch context: selected context not found: "prod"`,
+			want: "config",
+		},
+		{
+			name: "context switch client setup failure is config",
+			err:  `failed to switch context: selected context client setup failed for "prod": unable to read certificate-authority /Users/alice/acme/ca.crt`,
+			want: "config",
+		},
+		{
 			name: "no context configured is config",
 			err:  "no context configured",
 			want: "config",

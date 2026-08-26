@@ -4386,6 +4386,10 @@ func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleConnectionRetry(w http.ResponseWriter, r *http.Request) {
+	if k8s.IsInCluster() {
+		s.writeError(w, http.StatusBadRequest, "connection retry is unavailable in in-cluster mode")
+		return
+	}
 	ctx := k8s.GetContextName()
 	if ctx == "" {
 		s.writeError(w, http.StatusBadRequest, "no context configured")

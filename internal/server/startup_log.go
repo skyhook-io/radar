@@ -173,14 +173,18 @@ func formatStartupKubeconfig(path string, summary k8s.KubeconfigSummary) string 
 		case "multi-dir":
 			source = "configured directories"
 		case "multi-source":
-			source = "configured file + directories"
+			if summary.DirectoryFileCount == 0 && summary.FileCount > 1 {
+				source = "configured sources"
+			} else {
+				source = "configured file + directories"
+			}
 		default:
 			source = summary.Mode
 		}
 	}
 
 	parts := []string{source}
-	if summary.Mode == "multi-source" {
+	if summary.Mode == "multi-source" && (summary.DirectoryFileCount > 0 || summary.FileCount <= 1) {
 		directoryNoun := "files"
 		if summary.DirectoryFileCount == 1 {
 			directoryNoun = "file"

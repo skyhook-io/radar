@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -155,6 +156,9 @@ func TestResolveKubeconfigSourcesDirectories(t *testing.T) {
 		if len(got.paths) != 1 || got.paths[0] != additional {
 			t.Fatalf("paths = %v, want only %q", got.paths, additional)
 		}
+		if len(got.directoryPaths) != 1 || got.directoryPaths[0] != additional {
+			t.Fatalf("directory paths = %v, want only %q", got.directoryPaths, additional)
+		}
 	})
 
 	t.Run("configured primary precedes directory files", func(t *testing.T) {
@@ -171,6 +175,9 @@ func TestResolveKubeconfigSourcesDirectories(t *testing.T) {
 		}
 		if len(got.paths) != 2 || got.paths[0] != primary || got.paths[1] != additional {
 			t.Fatalf("paths = %v, want [%q %q]", got.paths, primary, additional)
+		}
+		if len(got.directoryPaths) != 1 || got.directoryPaths[0] != additional {
+			t.Fatalf("directory paths = %v, want only %q", got.directoryPaths, additional)
 		}
 	})
 
@@ -277,7 +284,9 @@ func TestKubeconfigDiagnosticErrorClassifiesWithoutDetails(t *testing.T) {
 	}{
 		{name: "empty", err: clientcmd.ErrEmptyConfig, want: "empty kubeconfig (no configuration provided)"},
 		{name: "context", err: errors.New("context was not found for specified context"), want: "selected context not found"},
-		{name: "unclassified", err: errors.New("server https://private.example and user alice"), want: "unclassified kubeconfig error"},
+		{name: "switch context", err: fmt.Errorf("%w: prod", errKubeconfigContextNotFound), want: "selected context not found"},
+		{name: "client setup", err: fmt.Errorf("%w: private details", errKubeconfigClientSetupFailed), want: "selected context client setup failed"},
+		{name: "unclassified", err: errors.New("server https://private.example and user alice"), want: "unclassified error"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

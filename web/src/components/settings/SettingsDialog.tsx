@@ -1683,8 +1683,8 @@ function ArgoCDEditableField({
       </p>
 
       {statusReason && state.status !== 'connected' && (
-        <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/[0.07] p-3">
-          <p className="flex items-center gap-1.5 text-sm font-medium text-amber-700 dark:text-amber-400/90">
+        <div className="mb-3 rounded-md border border-theme-border bg-theme-elevated p-3">
+          <p className="flex items-center gap-1.5 text-sm font-medium text-warning-text">
             <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
             Argo CD token needs attention
           </p>

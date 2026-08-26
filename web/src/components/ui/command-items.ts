@@ -19,15 +19,7 @@ import {
 import { useNamespaces, useContexts } from "../../api/client";
 import { CORE_RESOURCES, useAPIResources } from "../../api/apiResources";
 import { getResourceIcon } from "../../utils/resource-icons";
-import { parseContextName } from "../../utils/context-name";
-
-// Drop the disambiguating " (source)" suffix the context list appends, so the
-// GKE/EKS/AKS parser sees the bare context name (mirrors the cluster picker).
-function stripSourceSuffix(name: string, source?: string): string {
-  if (!source) return name;
-  const escaped = source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return name.replace(new RegExp(`\\s+\\(${escaped}(?:\\s+#\\d+)?\\)$`), "");
-}
+import { parseContextForSwitcher, parseContextName } from "../../utils/context-name";
 
 export type MainView =
   | "home"
@@ -204,9 +196,7 @@ export function useCommandItems(cb: CommandItemCallbacks): CommandItem[] {
       // it. Count display names so genuine duplicates (same cluster name from
       // different kubeconfig sources) stay distinguishable; unique ones stay clean.
       const parsedCtx = contexts.map((ctx) => {
-        const parsed = parseContextName(
-          stripSourceSuffix(ctx.name, ctx.source),
-        );
+        const parsed = parseContextForSwitcher(ctx);
         const fromCluster = ctx.cluster ? parseContextName(ctx.cluster) : null;
         const meta = [
           parsed.provider ?? fromCluster?.provider,

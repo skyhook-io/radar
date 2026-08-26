@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -327,6 +328,194 @@ func TestContextSwitchPreflightLeavesSessionsAlone(t *testing.T) {
 	}
 	if stopped {
 		t.Fatal("sessions were stopped before a switch that failed pre-flight")
+	}
+}
+
+func TestContextSwitchMissingSourceLeavesSessionsAlone(t *testing.T) {
+	dir := t.TempDir()
+	current := writeKubeconfig(t, dir, "current.yaml", "current", []kubeEntry{
+		{ctxName: "current", userName: "u1", clusterName: "c1"},
+	})
+	target := writeKubeconfig(t, dir, "target.yaml", "target", []kubeEntry{
+		{ctxName: "target", userName: "u2", clusterName: "c2"},
+	})
+	registry, configs, mtimes := loadFixture(t, []string{current, target})
+
+	clientMu.Lock()
+	prevRegistry := contextRegistry
+	prevConfigs := perFileConfigs
+	prevMtimes := perFileMtimes
+	prevPaths := kubeconfigPaths
+	prevMode := kubeconfigMode
+	prevStarted := initializationStarted
+	contextRegistry = registry
+	perFileConfigs = configs
+	perFileMtimes = mtimes
+	kubeconfigPaths = []string{current, target}
+	kubeconfigMode = "multi-dir"
+	initializationStarted = true
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextRegistry = prevRegistry
+		perFileConfigs = prevConfigs
+		perFileMtimes = prevMtimes
+		kubeconfigPaths = prevPaths
+		kubeconfigMode = prevMode
+		initializationStarted = prevStarted
+		clientMu.Unlock()
+	})
+
+	stopped := false
+	SetSessionStopper(func() { stopped = true })
+	t.Cleanup(func() { SetSessionStopper(nil) })
+	if err := os.Remove(target); err != nil {
+		t.Fatalf("remove target kubeconfig: %v", err)
+	}
+
+	err := PerformContextSwitch("target")
+	if !errors.Is(err, ErrContextSwitchPreflight) {
+		t.Fatalf("expected ErrContextSwitchPreflight, got %v", err)
+	}
+	if stopped {
+		t.Fatal("sessions were stopped for a context whose source disappeared")
+	}
+}
+
+func TestLiteralInClusterContextNameDoesNotEnableInClusterMode(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+
+	clientMu.Lock()
+	previousName := contextName
+	previousPath := kubeconfigPath
+	previousMode := kubeconfigMode
+	previousStarted := initializationStarted
+	contextName = "in-cluster"
+	kubeconfigPath = "/tmp/literal-in-cluster-context"
+	kubeconfigMode = "single"
+	initializationStarted = true
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextName = previousName
+		kubeconfigPath = previousPath
+		kubeconfigMode = previousMode
+		initializationStarted = previousStarted
+		clientMu.Unlock()
+	})
+
+	if IsInCluster() {
+		t.Fatal("a kubeconfig context literally named in-cluster enabled in-cluster mode")
+	}
+}
+
+func TestInClusterRuntimeReconnectReinitializesWithoutSwitchTeardown(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+
+	clientMu.Lock()
+	previousName := contextName
+	previousMode := kubeconfigMode
+	previousStarted := initializationStarted
+	contextName = "in-cluster"
+	kubeconfigMode = "in-cluster"
+	initializationStarted = true
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextName = previousName
+		kubeconfigMode = previousMode
+		initializationStarted = previousStarted
+		clientMu.Unlock()
+	})
+
+	stopped := false
+	SetSessionStopper(func() { stopped = true })
+	t.Cleanup(func() { SetSessionStopper(nil) })
+	beforeSwitch := false
+	OnBeforeContextSwitch(func(string) { beforeSwitch = true })
+
+	err := getRuntimeAuthReconnect()("in-cluster", currentOperationGen())
+	if err == nil {
+		t.Fatal("runtime reconnect unexpectedly initialized without a Kubernetes client")
+	}
+	if errors.Is(err, ErrContextSwitchPreflight) {
+		t.Fatalf("in-cluster reconnect incorrectly attempted a context switch: %v", err)
+	}
+	if stopped || beforeSwitch {
+		t.Fatalf("in-cluster reconnect ran teardown: stopped=%t beforeSwitch=%t", stopped, beforeSwitch)
+	}
+}
+
+func TestInClusterRuntimeReconnectPublishesConnectedAfterReinit(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+
+	clientMu.Lock()
+	previousName := contextName
+	previousCluster := clusterName
+	previousMode := kubeconfigMode
+	previousStarted := initializationStarted
+	contextName = "in-cluster"
+	clusterName = "service-account-cluster"
+	kubeconfigMode = "in-cluster"
+	initializationStarted = true
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextName = previousName
+		clusterName = previousCluster
+		kubeconfigMode = previousMode
+		initializationStarted = previousStarted
+		clientMu.Unlock()
+	})
+
+	connectionStatusMu.Lock()
+	previousStatus := connectionStatus
+	connectionStatus = ConnectionStatus{State: StateDisconnected, Context: "in-cluster", ErrorType: "auth"}
+	connectionStatusMu.Unlock()
+	t.Cleanup(func() {
+		connectionStatusMu.Lock()
+		connectionStatus = previousStatus
+		connectionStatusMu.Unlock()
+	})
+
+	contextSwitchMu.Lock()
+	previousCallbacks := contextSwitchCallbacks
+	callbackContext := ""
+	contextSwitchCallbacks = []ContextSwitchCallback{func(name string) { callbackContext = name }}
+	contextSwitchMu.Unlock()
+	t.Cleanup(func() {
+		contextSwitchMu.Lock()
+		contextSwitchCallbacks = previousCallbacks
+		contextSwitchMu.Unlock()
+	})
+
+	initialized := false
+	err := reinitializeCurrentContextIfOperationCurrent(
+		"in-cluster",
+		currentOperationGen(),
+		func(ctx context.Context, progress func(string)) error {
+			if ctx.Err() != nil || progress == nil {
+				t.Fatalf("invalid subsystem init inputs: ctxErr=%v progressNil=%t", ctx.Err(), progress == nil)
+			}
+			initialized = true
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("reinitialize current context: %v", err)
+	}
+	if !initialized {
+		t.Fatal("subsystems were not initialized")
+	}
+	if callbackContext != "in-cluster" {
+		t.Fatalf("completion callback context = %q, want in-cluster", callbackContext)
+	}
+	status := GetConnectionStatus()
+	if status.State != StateConnected || status.Context != "in-cluster" || status.ClusterName != "service-account-cluster" {
+		t.Fatalf("connection status = %+v", status)
 	}
 }
 

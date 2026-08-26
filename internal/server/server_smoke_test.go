@@ -1022,6 +1022,28 @@ func TestSmokeConnectionStatusOnly(t *testing.T) {
 	}
 }
 
+func TestConnectionRetryRejectsInClusterBeforeTeardown(t *testing.T) {
+	k8s.ForceInCluster = true
+	t.Cleanup(func() { k8s.ForceInCluster = false })
+	stopped := false
+	k8s.SetSessionStopper(func() { stopped = true })
+	t.Cleanup(func() { k8s.SetSessionStopper(nil) })
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/connection/retry", nil)
+	(&Server{}).handleConnectionRetry(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("retry status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	if !strings.Contains(recorder.Body.String(), "unavailable in in-cluster mode") {
+		t.Fatalf("retry response = %q", recorder.Body.String())
+	}
+	if stopped {
+		t.Fatal("in-cluster retry stopped active sessions")
+	}
+}
+
 func TestSmokeSessions(t *testing.T) {
 	var body map[string]any
 	assertOK(t, get(t, "/api/sessions"), &body)

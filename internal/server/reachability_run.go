@@ -48,9 +48,7 @@ func (s *Server) handleProbeInClusterCapability(w http.ResponseWriter, r *http.R
 	}
 	// Resolved only past the connected gate: the fallback path issues a live
 	// kube-system GET, which is a doomed API call while disconnected.
-	cluster := k8s.ActiveClusterContext()
-	clusterKey := k8s.ClusterSafetyBinding(r.Context())
-	cluster = probeClusterDisplay(cluster, clusterKey, k8s.CurrentContextBinding())
+	cluster, clusterKey := k8s.ClusterSafetySnapshot(r.Context())
 	resp := probeCapabilityResponse{
 		Cluster:    cluster,
 		ClusterKey: clusterKey,
@@ -90,13 +88,6 @@ func (s *Server) handleProbeInClusterCapability(w http.ResponseWriter, r *http.R
 		resp.Allowed = true
 	}
 	s.writeJSON(w, resp)
-}
-
-func probeClusterDisplay(cluster, clusterKey, sourceBinding string) string {
-	if cluster == "in-cluster" && sourceBinding == "" && clusterKey != "" {
-		return clusterKey
-	}
-	return cluster
 }
 
 type traceInClusterRequest struct {

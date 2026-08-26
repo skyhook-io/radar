@@ -1,8 +1,10 @@
 package k8s
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -439,21 +441,168 @@ func TestGetContextSourceDirectModeUsesResolvedPath(t *testing.T) {
 	prevRegistry := contextRegistry
 	prevPath := kubeconfigPath
 	prevName := contextName
+	prevActiveFile := activeSourceFile
+	prevActiveName := activeSourceName
 	contextRegistry = nil
 	kubeconfigPath = "/resolved/home/.kube/config"
 	contextName = "prod"
+	activeSourceFile = ""
+	activeSourceName = ""
 	clientMu.Unlock()
 	t.Cleanup(func() {
 		clientMu.Lock()
 		contextRegistry = prevRegistry
 		kubeconfigPath = prevPath
 		contextName = prevName
+		activeSourceFile = prevActiveFile
+		activeSourceName = prevActiveName
 		clientMu.Unlock()
 	})
 
 	sourceFile, inFileName, ok := GetContextSource("prod")
 	if !ok || sourceFile != "/resolved/home/.kube/config" || inFileName != "prod" {
 		t.Fatalf("context source = (%q, %q, %t)", sourceFile, inFileName, ok)
+	}
+}
+
+func TestActiveContextSourceSurvivesRegistryRefresh(t *testing.T) {
+	dir := t.TempDir()
+	primary := writeKubeconfig(t, dir, "primary.yaml", "primary", []kubeEntry{
+		{ctxName: "primary", userName: "u1", clusterName: "c1"},
+	})
+	secondary := writeKubeconfig(t, dir, "secondary.yaml", "prod", []kubeEntry{
+		{ctxName: "prod", userName: "u2", clusterName: "c2"},
+	})
+	secondaryConfig, err := clientcmd.LoadFromFile(secondary)
+	if err != nil {
+		t.Fatalf("load secondary: %v", err)
+	}
+	secondaryConfig.Clusters["c2"].InsecureSkipTLSVerify = false
+	secondaryConfig.Clusters["c2"].CertificateAuthority = "ca.crt"
+	if err := clientcmd.WriteToFile(*secondaryConfig, secondary); err != nil {
+		t.Fatalf("add relative certificate authority: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ca.crt"), []byte("test-ca"), 0o600); err != nil {
+		t.Fatalf("write certificate authority: %v", err)
+	}
+	registry, fileConfigs, mtimes := loadFixture(t, []string{primary, secondary})
+	activeConfig, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		&clientcmd.ClientConfigLoadingRules{ExplicitPath: secondary},
+		&clientcmd.ConfigOverrides{},
+	).RawConfig()
+	if err != nil {
+		t.Fatalf("load active config: %v", err)
+	}
+
+	clientMu.Lock()
+	prevRegistry := contextRegistry
+	prevConfigs := perFileConfigs
+	prevMtimes := perFileMtimes
+	prevPaths := kubeconfigPaths
+	prevPath := kubeconfigPath
+	prevName := contextName
+	prevMode := kubeconfigMode
+	prevContextCount := totalContextCount
+	prevDirectoryCount := kubeconfigDirectoryFileCount
+	prevActiveFile := activeSourceFile
+	prevActiveName := activeSourceName
+	prevActiveConfig := activeSourceConfig
+	contextRegistry = registry
+	perFileConfigs = fileConfigs
+	perFileMtimes = mtimes
+	kubeconfigPaths = []string{primary, secondary}
+	kubeconfigPath = ""
+	contextName = "prod"
+	kubeconfigMode = "multi-source"
+	totalContextCount = 2
+	kubeconfigDirectoryFileCount = 1
+	activeSourceFile = secondary
+	activeSourceName = "prod"
+	activeSourceConfig = activeConfig.DeepCopy()
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextRegistry = prevRegistry
+		perFileConfigs = prevConfigs
+		perFileMtimes = prevMtimes
+		kubeconfigPaths = prevPaths
+		kubeconfigPath = prevPath
+		contextName = prevName
+		kubeconfigMode = prevMode
+		totalContextCount = prevContextCount
+		kubeconfigDirectoryFileCount = prevDirectoryCount
+		activeSourceFile = prevActiveFile
+		activeSourceName = prevActiveName
+		activeSourceConfig = prevActiveConfig
+		clientMu.Unlock()
+	})
+
+	rotated := fileConfigs[secondary].DeepCopy()
+	rotated.AuthInfos["u2"].Token = "rotated-token"
+	if err := clientcmd.WriteToFile(*rotated, secondary); err != nil {
+		t.Fatalf("rotate secondary credentials: %v", err)
+	}
+	rotatedPath, err := WriteKubeconfigForCurrentContext()
+	if err != nil {
+		t.Fatalf("WriteKubeconfigForCurrentContext after credential rotation: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(rotatedPath) })
+	rotatedWritten, err := clientcmd.LoadFromFile(rotatedPath)
+	if err != nil {
+		t.Fatalf("load generated rotated kubeconfig: %v", err)
+	}
+	if got := rotatedWritten.AuthInfos["u2"].Token; got != "rotated-token" {
+		t.Fatalf("generated credential = %q, want rotated-token", got)
+	}
+
+	repointed := rotated.DeepCopy()
+	repointed.Clusters["c2"].Server = "https://replacement.example"
+	if err := clientcmd.WriteToFile(*repointed, secondary); err != nil {
+		t.Fatalf("repoint secondary target: %v", err)
+	}
+	repointedPath, err := WriteKubeconfigForCurrentContext()
+	if err != nil {
+		t.Fatalf("WriteKubeconfigForCurrentContext after target change: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(repointedPath) })
+	repointedWritten, err := clientcmd.LoadFromFile(repointedPath)
+	if err != nil {
+		t.Fatalf("load generated target-safe kubeconfig: %v", err)
+	}
+	if got := repointedWritten.Clusters["c2"].Server; got != "https://c2" {
+		t.Fatalf("generated target = %q, want active target https://c2", got)
+	}
+
+	if err := os.Remove(secondary); err != nil {
+		t.Fatalf("remove secondary: %v", err)
+	}
+	contexts, err := GetAvailableContexts()
+	if err != nil {
+		t.Fatalf("GetAvailableContexts: %v", err)
+	}
+	for _, context := range contexts {
+		if context.Name == "prod" {
+			t.Fatalf("deleted active source remains in switcher: %+v", contexts)
+		}
+	}
+	summary := GetKubeconfigSummary()
+	if summary.FileCount != 1 || summary.DirectoryFileCount != 0 || summary.ContextCount != 1 {
+		t.Fatalf("summary after deletion = %+v", summary)
+	}
+	if sourceFile, inFileName, ok := GetContextSource("prod"); !ok || sourceFile != secondary || inFileName != "prod" {
+		t.Fatalf("active source after deletion = (%q, %q, %t)", sourceFile, inFileName, ok)
+	}
+	tmpPath, err := WriteKubeconfigForCurrentContext()
+	if err != nil {
+		t.Fatalf("WriteKubeconfigForCurrentContext: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(tmpPath) })
+	written, err := clientcmd.LoadFromFile(tmpPath)
+	if err != nil {
+		t.Fatalf("load generated kubeconfig: %v", err)
+	}
+	if written.CurrentContext != "prod" || written.Contexts["prod"] == nil || written.Clusters["c2"] == nil {
+		t.Fatalf("generated active snapshot = %+v", written)
 	}
 }
 
@@ -754,6 +903,41 @@ func TestRefreshContextRegistry_DropsRemovedFile(t *testing.T) {
 	}
 	if _, ok := mtimes[f2]; !ok {
 		t.Errorf("input mtimes was mutated; expected immutability")
+	}
+}
+
+func TestRefreshContextRegistry_RestoresRemovedFile(t *testing.T) {
+	dir := t.TempDir()
+	f1 := writeKubeconfig(t, dir, "restored.yaml", "ctx-old", []kubeEntry{
+		{ctxName: "ctx-old", userName: "u", clusterName: "c1"},
+	})
+	registry, fileConfigs, mtimes := loadFixture(t, []string{f1})
+	if err := os.Remove(f1); err != nil {
+		t.Fatalf("remove fixture: %v", err)
+	}
+
+	registry, fileConfigs, mtimes, changed := refreshContextRegistry(registry, fileConfigs, mtimes, []string{f1})
+	if !changed || len(registry) != 0 {
+		t.Fatalf("refresh after removal = changed %t, registry %v", changed, keysOf(registry))
+	}
+	_, _, _, changed = refreshContextRegistry(registry, fileConfigs, mtimes, []string{f1})
+	if changed {
+		t.Fatal("missing source should remain a no-op until restored")
+	}
+
+	rewriteKubeconfig(t, f1, []kubeEntry{
+		{ctxName: "ctx-restored", userName: "u", clusterName: "c2"},
+	})
+	registry, fileConfigs, mtimes, changed = refreshContextRegistry(registry, fileConfigs, mtimes, []string{f1})
+	if !changed {
+		t.Fatal("restored source should report a registry change")
+	}
+	entry, ok := registry["ctx-restored"]
+	if !ok || entry.SourceFile != f1 || entry.InFileName != "ctx-restored" {
+		t.Fatalf("restored context = %+v, found=%t", entry, ok)
+	}
+	if fileConfigs[f1] == nil || mtimes[f1].IsZero() {
+		t.Fatalf("restored source caches missing: config=%t mtime=%v", fileConfigs[f1] != nil, mtimes[f1])
 	}
 }
 
@@ -1141,6 +1325,408 @@ func TestGetAvailableContexts_ConcurrentRefreshAndSnapshotIterate(t *testing.T) 
 	}
 
 	wg.Wait()
+}
+
+func TestGetAvailableContexts_ConcurrentSingleToRegistryPromotion(t *testing.T) {
+	dir := t.TempDir()
+	primary := writeKubeconfig(t, dir, "primary.yaml", "primary", []kubeEntry{
+		{ctxName: "primary", userName: "u1", clusterName: "c1"},
+	})
+	workload := writeKubeconfig(t, dir, "workload.yaml", "workload", []kubeEntry{
+		{ctxName: "workload", userName: "u2", clusterName: "c2"},
+	})
+	registryState, configState, mtimeState := loadFixture(t, []string{primary, workload})
+
+	clientMu.Lock()
+	prevRegistry := contextRegistry
+	prevConfigs := perFileConfigs
+	prevMtimes := perFileMtimes
+	prevPaths := kubeconfigPaths
+	prevPath := kubeconfigPath
+	prevMode := kubeconfigMode
+	prevName := contextName
+	prevStarted := initializationStarted
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextRegistry = prevRegistry
+		perFileConfigs = prevConfigs
+		perFileMtimes = prevMtimes
+		kubeconfigPaths = prevPaths
+		kubeconfigPath = prevPath
+		kubeconfigMode = prevMode
+		contextName = prevName
+		initializationStarted = prevStarted
+		clientMu.Unlock()
+	})
+
+	setSingle := func() {
+		contextRegistry = nil
+		perFileConfigs = nil
+		perFileMtimes = nil
+		kubeconfigPaths = nil
+		kubeconfigPath = primary
+		kubeconfigMode = "single"
+	}
+	setRegistry := func() {
+		contextRegistry = registryState
+		perFileConfigs = configState
+		perFileMtimes = mtimeState
+		kubeconfigPaths = []string{primary, workload}
+		kubeconfigPath = ""
+		kubeconfigMode = "multi-source"
+	}
+	clientMu.Lock()
+	initializationStarted = true
+	contextName = "primary"
+	setSingle()
+	clientMu.Unlock()
+
+	const iterations = 500
+	const readers = 4
+	start := make(chan struct{})
+	errs := make(chan error, readers)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < iterations; i++ {
+			clientMu.Lock()
+			if i%2 == 0 {
+				setRegistry()
+			} else {
+				setSingle()
+			}
+			clientMu.Unlock()
+			runtime.Gosched()
+		}
+	}()
+	for range readers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for i := 0; i < iterations; i++ {
+				contexts, err := GetAvailableContexts()
+				if err != nil {
+					errs <- err
+					return
+				}
+				if len(contexts) == 0 {
+					errs <- errors.New("context snapshot was empty")
+					return
+				}
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+}
+
+func TestMergeAndSwitchContext_ReusedPathPublishesFreshMaps(t *testing.T) {
+	dir := t.TempDir()
+	primary := writeKubeconfig(t, dir, "primary.yaml", "primary", []kubeEntry{
+		{ctxName: "primary", userName: "u1", clusterName: "c1"},
+	})
+	workload := writeKubeconfig(t, dir, "workload.yaml", "workload", []kubeEntry{
+		{ctxName: "workload", userName: "u2", clusterName: "c2"},
+	})
+	registry, fileConfigs := buildContextRegistry([]string{primary, workload})
+	mtimes := map[string]time.Time{primary: {}, workload: {}}
+
+	clientMu.Lock()
+	prevRegistry := contextRegistry
+	prevConfigs := perFileConfigs
+	prevMtimes := perFileMtimes
+	prevPaths := kubeconfigPaths
+	prevCAPI := capiKubeconfigs
+	contextRegistry = registry
+	perFileConfigs = fileConfigs
+	perFileMtimes = mtimes
+	kubeconfigPaths = []string{primary, workload}
+	capiKubeconfigs = map[string]string{"workload": workload}
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextRegistry = prevRegistry
+		perFileConfigs = prevConfigs
+		perFileMtimes = prevMtimes
+		kubeconfigPaths = prevPaths
+		capiKubeconfigs = prevCAPI
+		clientMu.Unlock()
+	})
+
+	publishedConfigs := fileConfigs
+	publishedMtimes := mtimes
+	incoming := fileConfigs[workload].DeepCopy()
+	incoming.AuthInfos["u2"].Token = "rotated-token"
+	incoming.Contexts["workload-canary"] = &clientcmdapi.Context{Cluster: "c3", AuthInfo: "u3"}
+	incoming.Clusters["c3"] = &clientcmdapi.Cluster{Server: "https://c3", InsecureSkipTLSVerify: true}
+	incoming.AuthInfos["u3"] = &clientcmdapi.AuthInfo{Token: "canary-token"}
+	data, err := clientcmd.Write(*incoming)
+	if err != nil {
+		t.Fatalf("serialize incoming kubeconfig: %v", err)
+	}
+	qName, path, err := MergeAndSwitchContext(data, "workload")
+	if err != nil {
+		t.Fatalf("MergeAndSwitchContext: %v", err)
+	}
+	if qName != "workload" || path != workload {
+		t.Fatalf("reuse result = (%q, %q), want (%q, %q)", qName, path, "workload", workload)
+	}
+	if got := publishedConfigs[workload].AuthInfos["u2"].Token; got == "rotated-token" {
+		t.Fatal("previously published config map was mutated in place")
+	}
+	if got := publishedMtimes[workload]; !got.IsZero() {
+		t.Fatalf("previously published mtime map was mutated in place: %v", got)
+	}
+
+	clientMu.RLock()
+	refreshedConfig := perFileConfigs[workload]
+	refreshedMtime := perFileMtimes[workload]
+	clientMu.RUnlock()
+	if got := refreshedConfig.AuthInfos["u2"].Token; got != "rotated-token" {
+		t.Fatalf("current cached credential = %q, want rotated-token", got)
+	}
+	if !refreshedMtime.IsZero() {
+		t.Fatalf("cached mtime advanced before registry reconciliation: %v", refreshedMtime)
+	}
+
+	contexts, err := GetAvailableContexts()
+	if err != nil {
+		t.Fatalf("GetAvailableContexts after CAPI rewrite: %v", err)
+	}
+	var foundCanary bool
+	for _, context := range contexts {
+		if context.OriginalName == "workload-canary" {
+			foundCanary = true
+			break
+		}
+	}
+	if !foundCanary {
+		t.Fatalf("rewritten CAPI context was not reconciled: %+v", contexts)
+	}
+
+	renamed := refreshedConfig.DeepCopy()
+	delete(renamed.Contexts, "workload-canary")
+	renamed.Contexts["workload-stable"] = &clientcmdapi.Context{Cluster: "c3", AuthInfo: "u3"}
+	renamedData, err := clientcmd.Write(*renamed)
+	if err != nil {
+		t.Fatalf("serialize renamed CAPI kubeconfig: %v", err)
+	}
+	time.Sleep(15 * time.Millisecond)
+	if _, _, err := MergeAndSwitchContext(renamedData, "workload"); err != nil {
+		t.Fatalf("MergeAndSwitchContext after context rename: %v", err)
+	}
+	future := time.Now().Add(time.Second)
+	if err := os.Chtimes(workload, future, future); err != nil {
+		t.Fatalf("advance rewritten CAPI mtime: %v", err)
+	}
+	contexts, err = GetAvailableContexts()
+	if err != nil {
+		t.Fatalf("GetAvailableContexts after CAPI context rename: %v", err)
+	}
+	foundStable := false
+	for _, context := range contexts {
+		switch context.OriginalName {
+		case "workload-canary":
+			t.Fatalf("removed CAPI context remained registered: %+v", contexts)
+		case "workload-stable":
+			foundStable = true
+		}
+	}
+	if !foundStable {
+		t.Fatalf("renamed CAPI context was not registered: %+v", contexts)
+	}
+}
+
+func TestMergeAndSwitchContext_ReplacesPrunedCAPIPathWithoutDuplicate(t *testing.T) {
+	dir := t.TempDir()
+	primary := writeKubeconfig(t, dir, "primary.yaml", "primary", []kubeEntry{
+		{ctxName: "primary", userName: "u1", clusterName: "c1"},
+	})
+	workload := writeKubeconfig(t, dir, "workload.yaml", "workload", []kubeEntry{
+		{ctxName: "workload", userName: "u2", clusterName: "c2"},
+	})
+	data, err := os.ReadFile(workload)
+	if err != nil {
+		t.Fatalf("read workload kubeconfig: %v", err)
+	}
+	registry, fileConfigs := buildContextRegistry([]string{primary, workload})
+	mtimes := map[string]time.Time{}
+	for _, path := range []string{primary, workload} {
+		info, statErr := os.Stat(path)
+		if statErr != nil {
+			t.Fatalf("stat %s: %v", path, statErr)
+		}
+		mtimes[path] = info.ModTime()
+	}
+
+	clientMu.Lock()
+	previousRegistry := contextRegistry
+	previousConfigs := perFileConfigs
+	previousMtimes := perFileMtimes
+	previousPaths := kubeconfigPaths
+	previousCAPI := capiKubeconfigs
+	previousCount := totalContextCount
+	contextRegistry = registry
+	perFileConfigs = fileConfigs
+	perFileMtimes = mtimes
+	kubeconfigPaths = []string{primary, workload}
+	capiKubeconfigs = map[string]string{"workload": workload}
+	totalContextCount = len(registry)
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextRegistry = previousRegistry
+		perFileConfigs = previousConfigs
+		perFileMtimes = previousMtimes
+		kubeconfigPaths = previousPaths
+		capiKubeconfigs = previousCAPI
+		totalContextCount = previousCount
+		clientMu.Unlock()
+	})
+
+	if err := os.Remove(workload); err != nil {
+		t.Fatalf("remove workload kubeconfig: %v", err)
+	}
+	if _, err := GetAvailableContexts(); err != nil {
+		t.Fatalf("refresh after removing workload kubeconfig: %v", err)
+	}
+
+	qualifiedName, replacement, err := MergeAndSwitchContext(data, "workload")
+	if err != nil {
+		t.Fatalf("MergeAndSwitchContext: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(replacement) })
+	if qualifiedName != "workload" {
+		t.Fatalf("qualified name = %q, want workload", qualifiedName)
+	}
+	if replacement == workload {
+		t.Fatalf("replacement reused pruned source %q", workload)
+	}
+	if _, err := os.Stat(workload); !os.IsNotExist(err) {
+		t.Fatalf("pruned source still exists after replacement: %v", err)
+	}
+
+	contexts, err := GetAvailableContexts()
+	if err != nil {
+		t.Fatalf("GetAvailableContexts after replacement: %v", err)
+	}
+	workloadContexts := 0
+	for _, context := range contexts {
+		if context.OriginalName == "workload" {
+			workloadContexts++
+		}
+	}
+	if workloadContexts != 1 {
+		t.Fatalf("workload context count = %d, want 1: %+v", workloadContexts, contexts)
+	}
+
+	clientMu.RLock()
+	paths := append([]string(nil), kubeconfigPaths...)
+	registeredPath := capiKubeconfigs["workload"]
+	clientMu.RUnlock()
+	if registeredPath != replacement {
+		t.Fatalf("registered CAPI path = %q, want %q", registeredPath, replacement)
+	}
+	for _, path := range paths {
+		if path == workload {
+			t.Fatalf("pruned source remained in kubeconfig path order: %v", paths)
+		}
+	}
+}
+
+func TestMergeAndSwitchContext_PromotionEntersRegistryMode(t *testing.T) {
+	dir := t.TempDir()
+	primary := writeKubeconfig(t, dir, "primary.yaml", "primary", []kubeEntry{
+		{ctxName: "primary", userName: "u1", clusterName: "c1"},
+	})
+	workload := writeKubeconfig(t, dir, "workload.yaml", "workload", []kubeEntry{
+		{ctxName: "workload", userName: "u2", clusterName: "c2"},
+	})
+	data, err := os.ReadFile(workload)
+	if err != nil {
+		t.Fatalf("read workload kubeconfig: %v", err)
+	}
+
+	clientMu.Lock()
+	prevRegistry := contextRegistry
+	prevConfigs := perFileConfigs
+	prevMtimes := perFileMtimes
+	prevPaths := kubeconfigPaths
+	prevPath := kubeconfigPath
+	prevMode := kubeconfigMode
+	prevCAPI := capiKubeconfigs
+	prevStarted := initializationStarted
+	prevDirectoryCount := kubeconfigDirectoryFileCount
+	prevContextCount := totalContextCount
+	contextRegistry = nil
+	perFileConfigs = nil
+	perFileMtimes = nil
+	kubeconfigPaths = nil
+	kubeconfigPath = primary
+	kubeconfigMode = "single"
+	capiKubeconfigs = map[string]string{}
+	initializationStarted = true
+	kubeconfigDirectoryFileCount = 0
+	totalContextCount = 1
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextRegistry = prevRegistry
+		perFileConfigs = prevConfigs
+		perFileMtimes = prevMtimes
+		kubeconfigPaths = prevPaths
+		kubeconfigPath = prevPath
+		kubeconfigMode = prevMode
+		capiKubeconfigs = prevCAPI
+		initializationStarted = prevStarted
+		kubeconfigDirectoryFileCount = prevDirectoryCount
+		totalContextCount = prevContextCount
+		clientMu.Unlock()
+	})
+
+	qName, tmpPath, err := MergeAndSwitchContext(data, "workload")
+	if err != nil {
+		t.Fatalf("MergeAndSwitchContext: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(tmpPath) })
+	if qName != "workload" {
+		t.Fatalf("qualified name = %q, want workload", qName)
+	}
+	if got := GetKubeconfigPath(); got != "" {
+		t.Fatalf("registry-backed kubeconfig path = %q, want empty for rest.Config consumers", got)
+	}
+	if got := GetKubeconfigSummary().Mode; got != "multi-source" {
+		t.Fatalf("promoted kubeconfig mode = %q, want multi-source", got)
+	}
+	if IsInCluster() {
+		t.Fatal("registry promotion was misclassified as in-cluster after clearing the single-file path")
+	}
+	summary := GetKubeconfigSummary()
+	if summary.FileCount != 2 || summary.DirectoryFileCount != 0 || summary.ContextCount != 2 {
+		t.Fatalf("promoted kubeconfig summary = %+v", summary)
+	}
+}
+
+func TestLoadedDirectoryKubeconfigCountExcludesPrimaryAndCAPI(t *testing.T) {
+	configs := map[string]*clientcmdapi.Config{
+		"/primary": {},
+		"/dir/a":   {},
+		"/dir/b":   {},
+		"/capi":    {},
+	}
+	directoryPaths := map[string]struct{}{"/dir/a": {}, "/dir/b": {}}
+
+	if got := loadedDirectoryKubeconfigCount(configs, directoryPaths); got != 2 {
+		t.Fatalf("directory count = %d, want 2", got)
+	}
 }
 
 func TestAggregateExecPluginCommands_UniqueAcrossFiles(t *testing.T) {

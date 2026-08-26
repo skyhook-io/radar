@@ -285,7 +285,12 @@ func ResetTestState() {
 	activeClientGeneration = 0
 	kubeconfigMode = ""
 	contextBinding = ""
+	activeSourceFile = ""
+	activeSourceName = ""
+	activeSourceConfig = nil
+	initializationStarted = false
 	kubeconfigDirectoryFileCount = 0
+	kubeconfigDirectoryPaths = nil
 	kubeconfigEnvWasIgnored = false
 	kubeconfigEnvIgnoredReason = ""
 	clientMu.Unlock()

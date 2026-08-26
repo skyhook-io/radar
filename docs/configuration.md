@@ -226,9 +226,10 @@ optional, and nothing else depends on it.
 To connect a cluster from the command line, use `radar cloud install`
 (`--hub-url` for a self-hosted Hub).
 `radar cloud install` and `radar cloud status` target one cluster, so they use
-the first configured primary kubeconfig path and report any later paths or
-configured directories they ignore. Directory-only configuration must add a
-primary kubeconfig before these commands can run.
+the configured primary kubeconfig and report configured directories they
+ignore. With no configured source, they use the normal `KUBECONFIG` / default
+kubeconfig loading rules. Directory-only configuration must add a primary
+kubeconfig before these commands can run.
 
 ### What Radar sends
 

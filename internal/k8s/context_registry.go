@@ -17,9 +17,8 @@ import (
 
 // setupIsolatedLoad populates contextRegistry, perFileConfigs, and contextName
 // from the given kubeconfig files, then returns LoadingRules + Overrides that
-// load *only* the initial file via ExplicitPath. Only called from doInit,
-// inside initOnce, so no concurrent readers exist yet — writes to the globals
-// are safe without clientMu.
+// load *only* the initial file via ExplicitPath. Only called from doInit while
+// clientMu is held.
 //
 // This is how Radar avoids client-go's Precedence merge for registry-backed
 // loading: each file stays an island. A SwitchContext later
@@ -48,6 +47,9 @@ func setupIsolatedLoad(paths []string) (
 	}
 	contextName = qName
 	contextBinding = sourceContextBinding(entry.SourceFile, entry.InFileName)
+	activeSourceFile = entry.SourceFile
+	activeSourceName = entry.InFileName
+	activeSourceConfig = fileConfigs[entry.SourceFile].DeepCopy()
 	return &clientcmd.ClientConfigLoadingRules{ExplicitPath: entry.SourceFile},
 		&clientcmd.ConfigOverrides{CurrentContext: entry.InFileName},
 		nil
@@ -300,18 +302,25 @@ func refreshContextRegistry(
 	}
 	// Group registry entries by source file so we can decide
 	// per-file: keep, re-parse, or drop everything pointing at it.
-	// Seed byFile from BOTH the registry AND fileMtimes — if a
+	// Seed byFile from the registry, fileMtimes, AND sourceOrder — if a
 	// previous refresh dropped every context for a file (e.g. user
 	// removed all kubectl-config-delete-context'd from a single
 	// file), the file's path stays in fileMtimes but no longer
 	// appears in registry. Without seeding from fileMtimes, that
 	// file would never be re-stat'd and any newly-added contexts
 	// to it would be invisible until the user restarted Radar.
+	// sourceOrder additionally retains deleted paths so restoring a
+	// watched file brings it back without a restart.
 	byFile := make(map[string][]string)
 	for qName, entry := range registry {
 		byFile[entry.SourceFile] = append(byFile[entry.SourceFile], qName)
 	}
 	for path := range fileMtimes {
+		if _, ok := byFile[path]; !ok {
+			byFile[path] = nil
+		}
+	}
+	for _, path := range sourceOrder {
 		if _, ok := byFile[path]; !ok {
 			byFile[path] = nil
 		}
@@ -372,6 +381,11 @@ func refreshContextRegistry(
 			// entry pointing at it AND its cached config. This
 			// is the CAPI-cluster-destroyed and
 			// "user removed file from kubeconfig dir" cases.
+			_, hadConfig := fileConfigs[path]
+			_, hadMtime := fileMtimes[path]
+			if len(qNames) == 0 && !hadConfig && !hadMtime {
+				continue
+			}
 			cloneOnce()
 			for _, qName := range qNames {
 				delete(newRegistry, qName)
@@ -440,6 +454,19 @@ func refreshContextRegistry(
 	}
 	recordContextQualifications(qualifications)
 	return newRegistry, newFileConfigs, newFileMtimes, changed
+}
+
+func loadedDirectoryKubeconfigCount(
+	fileConfigs map[string]*clientcmdapi.Config,
+	directoryPaths map[string]struct{},
+) int {
+	count := 0
+	for path := range fileConfigs {
+		if _, fromDirectory := directoryPaths[path]; fromDirectory {
+			count++
+		}
+	}
+	return count
 }
 
 // aggregateExecPluginCommands walks every context across every per-file

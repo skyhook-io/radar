@@ -36,8 +36,8 @@ var (
 	// out the previous episode's backoff — worst case the 30min hung-plugin
 	// interval.
 	runtimeAuthRecoveryNudge = make(chan struct{}, 1)
-	// nil means PerformContextSwitchIfOperationCurrent; a direct initializer
-	// would form an init cycle through SetConnectionStatus's recovery hook.
+	// nil selects the production reconnect path; tests replace it to isolate
+	// recovery-loop timing and retry behavior.
 	runtimeAuthReconnect func(string, uint64) error
 )
 
@@ -191,9 +191,16 @@ func getRuntimeAuthReconnect() func(string, uint64) error {
 	runtimeAuthChecksMu.Lock()
 	defer runtimeAuthChecksMu.Unlock()
 	if runtimeAuthReconnect == nil {
-		return PerformContextSwitchIfOperationCurrent
+		return reconnectRuntimeAuth
 	}
 	return runtimeAuthReconnect
+}
+
+func reconnectRuntimeAuth(contextName string, observedOperationGen uint64) error {
+	if IsInCluster() {
+		return reinitializeCurrentContextIfOperationCurrent(contextName, observedOperationGen, InitAllSubsystems)
+	}
+	return PerformContextSwitchIfOperationCurrent(contextName, observedOperationGen)
 }
 
 func setRuntimeAuthReconnect(fn func(string, uint64) error) {
