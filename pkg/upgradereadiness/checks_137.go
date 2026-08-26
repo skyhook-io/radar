@@ -225,6 +225,12 @@ func scanRemovedFeatureGates(input *Input) Check {
 		check.Status = CheckUnknown
 		check.Summary = "No incompatible feature gates were found in readable kubelet configuration, but control-plane coverage is unavailable."
 	}
+	if len(check.Findings) == 0 && check.Inspected == 0 {
+		check.Status = CheckUnknown
+		if input.Nodes != nil {
+			check.Summary = "No kubelet or control-plane feature-gate configuration was available to inspect."
+		}
+	}
 	if len(check.Findings) > 0 {
 		check.Summary = fmt.Sprintf("%d incompatible feature-gate %s must be fixed before upgrading.", len(check.Findings), plural(len(check.Findings), "setting", "settings"))
 	}

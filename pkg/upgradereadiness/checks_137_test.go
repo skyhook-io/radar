@@ -243,6 +243,14 @@ func TestRemovedFeatureGatesPreservesMissingNodeSummary137(t *testing.T) {
 	if check.Status != CheckUnknown || !strings.Contains(check.Summary, "Node evidence was unavailable") || strings.Contains(check.Summary, "readable kubelet configuration") {
 		t.Fatalf("missing node and control-plane evidence = %+v, want the node evidence boundary in the summary", check)
 	}
+
+	input = completeInput()
+	input.Nodes = []*corev1.Node{}
+	input.Pods = []*corev1.Pod{}
+	check = checkByID(t, scan137(t, input), "removed-feature-gates")
+	if check.Status != CheckUnknown || check.Inspected != 0 || !strings.Contains(check.Summary, "No kubelet or control-plane") {
+		t.Fatalf("empty node and control-plane evidence = %+v, want unknown without a clean claim", check)
+	}
 }
 
 func TestRemovedControlPlaneConfigurationScope137(t *testing.T) {
