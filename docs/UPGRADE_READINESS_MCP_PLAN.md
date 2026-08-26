@@ -129,11 +129,16 @@ get_cluster_upgrade_readiness
                        levels, most severe first. (A default threshold would make tier 2
                        return zero findings for a check whose tier-1 row reports some.)
   offset   (optional)  skip the first N findings when expanding (default 0). Paired with
-                       the per-call cap this makes every finding retrievable; offsets are
-                       stable because they page over one memoized scan snapshot.
+                       the per-call cap this makes every finding retrievable.
+  scanId   (optional)  bind a paging request to the scan that produced the earlier page
+                       (every response carries its scanId). If the memoized scan has been
+                       replaced (TTL expiry, a refresh) the tool errors "scan changed —
+                       restart from offset 0" instead of silently paging a different
+                       snapshot. Recommended whenever offset > 0.
   refresh  (optional)  bypass the memo and run a fresh scan (default false). For
                        fix-then-rescan loops; the description steers agents to use it
-                       only after changing something.
+                       only after changing something. Rejected when combined with a
+                       nonzero offset — a fresh scan invalidates the page sequence.
 ```
 
 Design decisions:
@@ -200,6 +205,7 @@ Two tiers, both minified structs in `internal/mcp` (not raw `ScanResults`).
   "targetVersion": "1.34",
   "reviewedThrough": "1.36",        // catalog ceiling — targets beyond it are partially reviewed
   "observedAt": "2026-08-26T10:14:03Z",  // when the underlying scan ran — cached responses keep the original stamp
+  "scanId": "sc_9f2e",              // identifies this scan snapshot; echo as scanId when paging with offset
   "verdict": "blocked",             // blocked | warning | review | no_known_blockers | unknown
   "verdictCaveat": "2 checks had incomplete evidence and may hide blockers",  // omitted only when clean
   "summary": {"blocked": 1, "warnings": 2, "reviews": 3, "passed": 9, "unknown": 2, "notApplicable": 1, "findings": 14},
@@ -262,8 +268,11 @@ findings:
 Findings are ordered most severe first and capped (proposed: 25 per call), with the counts
 kept distinct so a cap can never masquerade as completeness: `findingsTotal` (all findings on
 the check), the returned page, and `findingsTruncated` (matching findings beyond this page).
-Every finding is retrievable: `offset` pages through the remainder, and pages are consistent
-because they read one memoized scan snapshot. `level` narrows to the levels the agent cares
+Every finding is retrievable: `offset` pages through the remainder, and page consistency is
+*bound*, not assumed — pages read the memoized scan snapshot, and passing the response's
+`scanId` on continuation requests turns a replaced snapshot (TTL expiry, refresh) into an
+explicit "scan changed — restart" error rather than a silently different page with
+duplicated or dropped findings. `level` narrows to the levels the agent cares
 about but is never a silent default — no filter, no cap may hide a finding without an
 explicit count saying so. References (doc URLs) are dropped from MCP output except the first
 per finding; they are the least token-efficient field and the remediation text stands alone.
@@ -347,19 +356,38 @@ namespace-ceiling-hash)`:
   the main point. Fix-then-rescan loops do **not** wait out the TTL: `refresh=true` bypasses
   the memo (and replaces the entry), and `observedAt` in every response lets the agent see
   it is reading a pre-fix scan.
-- **Context isolation is in the key, not just the invalidation.** The key includes a
+- **Context isolation is in the key AND at the return boundary.** The key includes a
   monotonic context generation (bumped on every kubeconfig context switch);
   `finalizePostContextSwitch` invalidation alone is insufficient — a racing read can hit the
   old entry before the clear, and a pre-switch in-flight scan can complete after it and
-  repopulate the map. A completed scan is only inserted if the generation it started under
-  is still current.
-- **Single-flight per key**: concurrent callers on an empty entry (two agents, or one
-  agent's parallel tool calls) wait on the in-flight scan rather than each running the full
-  live collection. Failed scans are not cached; a canceled leader's waiters get the error,
-  not a poisoned entry. This also protects the HTTP handler once it shares the memo.
+  repopulate the map. Insertion refusal is necessary but not sufficient: a scan whose
+  collectors straddle a switch can contain mixed-cluster evidence, and returning it (cached
+  or fresh) is worse than failing. So the generation is captured together with the
+  client/cache snapshot at scan start and **revalidated immediately before returning any
+  result**; on mismatch the caller gets a retryable "cluster context changed — re-run the
+  scan" error with no payload. Tests assert no stale data is *returned* (switch-during-hit,
+  switch-during-scan), not merely that insertion is refused.
+- **Single-flight per key covers refresh too**: concurrent callers on an empty entry (two
+  agents, or one agent's parallel tool calls) wait on the in-flight scan rather than each
+  running the full live collection — and a `refresh` call issued while a scan is already in
+  flight joins that scan instead of starting another. Consecutive refreshes are additionally
+  bounded by a short per-key cooldown (proposed 5s: within it, refresh returns the newest
+  completed scan) so a looping agent cannot turn `refresh` into a scan stampede.
+  Description text asking agents to behave is guidance, not the control — the coalescing and
+  cooldown are. (Today's HTTP endpoint is fully uncached and unlimited, so this is strictly
+  tighter than the status quo.) Failed scans are not cached; a canceled leader's waiters get
+  the error, not a poisoned entry.
 - Applied at the `ScanResults` level (post-RBAC, per-identity), so it can also back the HTTP
   handler — resolving #1195's deferred "identity/scope-safe server-side result memoization"
   item as a side effect.
+- **Memoizing HTTP obligates an HTTP refresh contract.** The Upgrade impact view's Refresh
+  button today is a plain React Query `refetch()` of the same GET — if the endpoint silently
+  gains a 60s memo, a user who fixes a finding and clicks Refresh gets the pre-fix scan
+  while `dataUpdatedAt` advances, i.e. stale evidence presented as fresh. So the endpoint
+  gains `?refresh=true` with the same coalescing/cooldown semantics as the MCP parameter,
+  the UI's manual Refresh passes it (ordinary/background fetches stay memoized), and the
+  view surfaces the response's `observedAt` as the scan time instead of implying the fetch
+  time. A post-fix manual-refresh regression test covers this path.
 - Memoizing means an agent's expansion sequence sees one consistent scan rather than three
   slightly different clusters — and makes `offset` paging stable.
 
@@ -390,16 +418,22 @@ The repo enforces these; listing them so the PR is complete in one pass:
   covers helpers, not the handler, so these are written *before* phase 1 and must pass
   unmodified after it. This is the regression net for the extraction.
 - **Unit (mcp):** tier 1 / tier 2 shaping from a fixture `ScanResults`; `findingsTotal` /
-  cap / `findingsTruncated` / `offset` paging; `level` filter (and that no filter is applied
+  cap / `findingsTruncated` / `offset` paging; `scanId` mismatch → "scan changed" error;
+  `refresh` + nonzero `offset` rejected; `level` filter (and that no filter is applied
   by default); unknown-preservation (invariant §3.2); `no_access` short-circuit (§3.3);
   `evidenceNote` on a passed check and per-kind `scopedKinds` survival (§3.4/§3.6); unknown
   `check` id → error listing valid ids.
 - **Unit (authorizer):** the MCP authorizer and the HTTP authorizer produce identical
   decisions for the same identity matrix — evidence-set equality, not just boolean parity.
 - **Memo:** TTL expiry; identity separation (restricted identity never reads an admin's
-  entry); `refresh` replacing the entry; single-flight — concurrent callers coalesce, a
-  failed scan is not cached, a canceled leader doesn't poison waiters; context-switch races
-  — switch-during-hit and switch-during-scan both refuse the stale generation.
+  entry); `refresh` replacing the entry, concurrent refreshes coalescing into one scan, the
+  refresh cooldown; single-flight — concurrent callers coalesce, a failed scan is not
+  cached, a canceled leader doesn't poison waiters; context-switch races — switch-during-hit
+  and switch-during-scan both return the retryable stale-context error with **no payload**,
+  not merely refuse insertion.
+- **HTTP refresh:** post-fix manual refresh returns fresh evidence (`?refresh=true`
+  bypasses the memo); ordinary refetch within the TTL serves the memoized scan with its
+  original `observedAt`.
 - **Live smoke:** against `kind-radar-gitops-demo` — a real scan through `/mcp` (tier 1, one
   expansion), plus the same via HTTP to confirm identical verdicts.
 
@@ -409,7 +443,9 @@ The repo enforces these; listing them so the PR is complete in one pass:
    then **extract the evidence collector** behind the authorizer seam; the new tests prove
    no behavior change. (Reviewable alone; no user-visible change.)
 2. **Memoization** at the `ScanResults` level (context generation, single-flight), wired
-   into the HTTP handler too.
+   into the HTTP handler together with its `?refresh=true` contract, the UI Refresh button
+   passing it, and the view surfacing `observedAt` — the memo and the UI truth-telling land
+   as one change, never the memo alone.
 3. **The tool**: registration, tiers, catalog sync, docs.
 
 Phases 1–3 can land as one PR with three commits, or split if phase 1 review runs long.
