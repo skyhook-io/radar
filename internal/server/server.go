@@ -4469,7 +4469,7 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	client := s.getClientForRequest(r)
+	client, managementBinding := s.getClientSafetySnapshotForRequest(r)
 	if client == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
 		return
@@ -4523,7 +4523,7 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 	// Merge into the user's kubeconfig. The returned qualifiedName reflects
 	// any disambiguation the registry had to do (e.g. if another file already
 	// owned this context name). Always switch using the qualified name.
-	safetyBinding := k8s.CAPIClusterSafetyBinding(k8s.ClusterSafetyBinding(r.Context()), ns, name)
+	safetyBinding := k8s.CAPIClusterSafetyBinding(managementBinding, ns, name)
 	qualifiedName, mergedPath, created, err := k8s.MergeAndSwitchContext(kubeconfigData, contextName, safetyBinding)
 	if err != nil {
 		log.Printf("[capi] Failed to merge kubeconfig for cluster %s/%s: %v", ns, name, err)
@@ -4757,6 +4757,22 @@ func (s *Server) getClientForRequest(r *http.Request) kubernetes.Interface {
 		return c
 	}
 	return nil
+}
+
+func (s *Server) getClientSafetySnapshotForRequest(r *http.Request) (kubernetes.Interface, string) {
+	if user := auth.UserFromContext(r.Context()); user != nil {
+		client, binding, err := k8s.ImpersonatedClientSafetySnapshot(user.Username, user.Groups)
+		if err != nil {
+			log.Printf("[auth] Impersonation failed for %s: %v", k8s.SanitizeForLog(user.Username), err)
+			return nil, binding
+		}
+		return client, binding
+	}
+	client, binding := k8s.GetClientSafetySnapshot()
+	if client == nil {
+		return nil, binding
+	}
+	return client, binding
 }
 
 // getUserNamespaces returns namespace filtering for the current user.

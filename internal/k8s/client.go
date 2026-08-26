@@ -721,6 +721,12 @@ func GetClient() *kubernetes.Clientset {
 	return k8sClient
 }
 
+func GetClientSafetySnapshot() (*kubernetes.Clientset, string) {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	return k8sClient, contextBinding
+}
+
 // GetConfig returns the K8s rest config
 func GetConfig() *rest.Config {
 	clientMu.RLock()
@@ -1842,6 +1848,42 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName, safetyBinding str
 					perFileConfigs = newFileConfigs
 					log.Printf("[capi] Updated existing kubeconfig for context %q: %q", contextName, existingPath)
 					return qName, existingPath, false, nil
+				}
+				if parseErr == nil && activeSourceFile == existingPath {
+					newRegistry := make(map[string]contextEntry, len(contextRegistry)+len(parsed.Contexts))
+					for name, entry := range contextRegistry {
+						newRegistry[name] = entry
+					}
+					var qualifications []string
+					for _, name := range sortedContextNames(parsed) {
+						qualifiedName := qualifyContextName(newRegistry, name, existingPath)
+						if qualification := logContextQualification(name, qualifiedName, existingPath); qualification != "" {
+							qualifications = append(qualifications, qualification)
+						}
+						newRegistry[qualifiedName] = contextEntry{SourceFile: existingPath, InFileName: name}
+					}
+					qName = findQualifiedNameForPath(newRegistry, existingPath, contextName)
+					if qName != "" {
+						newFileConfigs := make(map[string]*clientcmdapi.Config, len(perFileConfigs)+1)
+						for path, cfg := range perFileConfigs {
+							newFileConfigs[path] = cfg
+						}
+						newFileConfigs[existingPath] = parsed
+						newFileMtimes := make(map[string]time.Time, len(perFileMtimes)+1)
+						for path, mtime := range perFileMtimes {
+							newFileMtimes[path] = mtime
+						}
+						if info, statErr := os.Stat(existingPath); statErr == nil {
+							newFileMtimes[existingPath] = info.ModTime()
+						}
+						contextRegistry = newRegistry
+						perFileConfigs = newFileConfigs
+						perFileMtimes = newFileMtimes
+						totalContextCount = len(newRegistry)
+						recordContextQualifications(qualifications)
+						log.Printf("[capi] Restored kubeconfig for context %q: %q", contextName, existingPath)
+						return qName, existingPath, false, nil
+					}
 				}
 				replacementErr = fmt.Errorf("%w after CAPI source refresh", errKubeconfigContextNotFound)
 			}

@@ -1645,6 +1645,8 @@ func TestMergeAndSwitchContext_RecreatesMissingActiveSourceWithStableBinding(t *
 	previousMode := kubeconfigMode
 	previousCAPI := capiKubeconfigs
 	previousActiveFile := activeSourceFile
+	previousActiveName := activeSourceName
+	previousContextName := contextName
 	previousCount := totalContextCount
 	contextRegistry = registry
 	perFileConfigs = configs
@@ -1653,6 +1655,8 @@ func TestMergeAndSwitchContext_RecreatesMissingActiveSourceWithStableBinding(t *
 	kubeconfigMode = "multi-source"
 	capiKubeconfigs = map[string]string{binding: workload}
 	activeSourceFile = workload
+	activeSourceName = "workload"
+	contextName = "workload"
 	totalContextCount = len(registry)
 	clientMu.Unlock()
 	t.Cleanup(func() {
@@ -1664,12 +1668,23 @@ func TestMergeAndSwitchContext_RecreatesMissingActiveSourceWithStableBinding(t *
 		kubeconfigMode = previousMode
 		capiKubeconfigs = previousCAPI
 		activeSourceFile = previousActiveFile
+		activeSourceName = previousActiveName
+		contextName = previousContextName
 		totalContextCount = previousCount
 		clientMu.Unlock()
 	})
 
 	if err := os.Remove(workload); err != nil {
 		t.Fatalf("remove active workload kubeconfig: %v", err)
+	}
+	contexts, err := GetAvailableContexts()
+	if err != nil {
+		t.Fatalf("refresh after removing active workload kubeconfig: %v", err)
+	}
+	for _, context := range contexts {
+		if context.OriginalName == "workload" {
+			t.Fatalf("deleted active workload remained selectable: %+v", contexts)
+		}
 	}
 	qualifiedName, path, created, err := MergeAndSwitchContext(data, "workload", binding)
 	if err != nil {
@@ -1680,6 +1695,19 @@ func TestMergeAndSwitchContext_RecreatesMissingActiveSourceWithStableBinding(t *
 	}
 	if info, err := os.Stat(workload); err != nil || !info.Mode().IsRegular() {
 		t.Fatalf("recreated source is not a regular file: info=%v err=%v", info, err)
+	}
+	contexts, err = GetAvailableContexts()
+	if err != nil {
+		t.Fatalf("refresh after recreating active workload kubeconfig: %v", err)
+	}
+	foundWorkload := false
+	for _, context := range contexts {
+		if context.Name == qualifiedName && context.OriginalName == "workload" {
+			foundWorkload = true
+		}
+	}
+	if !foundWorkload {
+		t.Fatalf("recreated active workload is not selectable: %+v", contexts)
 	}
 	clientMu.Lock()
 	got := sourceSafetyBindingLocked(workload, "workload")

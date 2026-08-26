@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 	k8stesting "k8s.io/client-go/testing"
 )
 
@@ -93,6 +94,37 @@ func TestClusterSafetyBindingFailsClosedWithoutInClusterIdentity(t *testing.T) {
 	display, binding = ClusterSafetySnapshot(context.Background())
 	if display != "in-cluster" || binding != "kcb1_source" {
 		t.Fatalf("safety snapshot = (%q, %q), want (%q, %q)", display, binding, "in-cluster", "kcb1_source")
+	}
+}
+
+func TestClientSafetySnapshotsUseOneBinding(t *testing.T) {
+	sharedClient := &kubernetes.Clientset{}
+	clientMu.Lock()
+	oldClient := k8sClient
+	oldConfig := k8sConfig
+	oldBinding := contextBinding
+	k8sClient = sharedClient
+	k8sConfig = &rest.Config{Host: "https://management.example"}
+	contextBinding = "kcb1_management"
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		k8sClient = oldClient
+		k8sConfig = oldConfig
+		contextBinding = oldBinding
+		clientMu.Unlock()
+	})
+
+	client, binding := GetClientSafetySnapshot()
+	if client != sharedClient || binding != "kcb1_management" {
+		t.Fatalf("client safety snapshot = (%p, %q), want (%p, %q)", client, binding, sharedClient, "kcb1_management")
+	}
+	impersonated, impersonatedBinding, err := ImpersonatedClientSafetySnapshot("alice", []string{"operators"})
+	if err != nil {
+		t.Fatalf("ImpersonatedClientSafetySnapshot: %v", err)
+	}
+	if impersonated == nil || impersonatedBinding != "kcb1_management" {
+		t.Fatalf("impersonated safety snapshot = (%v, %q), want non-nil client and %q", impersonated, impersonatedBinding, "kcb1_management")
 	}
 }
 
