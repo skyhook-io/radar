@@ -5130,9 +5130,11 @@ type configResponse struct {
 // diagnostics endpoint already masks them as a presence bool.
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	file := config.Load()
-	if normalizedCurrency, err := config.NormalizeOpenCostCurrency(file.OpenCostCurrency); err == nil {
-		file.OpenCostCurrency = normalizedCurrency
+	normalizedCurrency, err := config.NormalizeOpenCostCurrency(file.OpenCostCurrency)
+	if err != nil {
+		normalizedCurrency = ""
 	}
+	file.OpenCostCurrency = normalizedCurrency
 	headerKeys := make([]string, 0, len(file.PrometheusHeaders))
 	for k := range file.PrometheusHeaders {
 		headerKeys = append(headerKeys, k)

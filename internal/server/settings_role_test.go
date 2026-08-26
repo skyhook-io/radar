@@ -137,6 +137,44 @@ func TestGetConfigNormalizesPersistedOpenCostCurrency(t *testing.T) {
 	}
 }
 
+func TestGetConfigClearsInvalidPersistedOpenCostCurrency(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	if err := config.Save(config.Config{OpenCostCurrency: "EURO"}); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{}
+	w := httptest.NewRecorder()
+
+	s.handleGetConfig(w, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var body struct {
+		File config.Config `json:"file"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.File.OpenCostCurrency != "" {
+		t.Fatalf("file opencostCurrency = %q, want auto", body.File.OpenCostCurrency)
+	}
+
+	requestBody, err := json.Marshal(body.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	put := httptest.NewRecorder()
+	s.handlePutConfig(put, httptest.NewRequest(http.MethodPut, "/api/config", strings.NewReader(string(requestBody))))
+	if put.Code != http.StatusOK {
+		t.Fatalf("save status = %d, body = %s", put.Code, put.Body.String())
+	}
+	if got := config.Load().OpenCostCurrency; got != "" {
+		t.Fatalf("saved opencostCurrency = %q, want auto", got)
+	}
+}
+
 func TestPutConfigRejectsInvalidOpenCostCurrency(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("USERPROFILE", t.TempDir())

@@ -224,7 +224,10 @@ export function SelectMenu({
             })}
           </div>
           {filteredOptions.length === 0 && (
-            <p className="px-3 py-2 text-xs text-theme-text-tertiary">
+            <p
+              onMouseDown={(event) => event.preventDefault()}
+              className="px-3 py-2 text-xs text-theme-text-tertiary"
+            >
               No matches.
             </p>
           )}
