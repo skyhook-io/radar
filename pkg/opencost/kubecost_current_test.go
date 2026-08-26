@@ -254,6 +254,42 @@ func TestKubecostAllocationFallbackRetriesAfterHourlyError(t *testing.T) {
 	}
 }
 
+func TestKubecostAllocationFallbackPrefersSuccessfulEmptyResponse(t *testing.T) {
+	transport := &fakeKubecostTransport{
+		errors:    []error{errors.New("hourly ETL unavailable"), nil},
+		responses: []string{`{"code":200,"data":[null]}`},
+	}
+	resp, err := ComputeKubecostSummary(context.Background(), NewKubecostClient(transport), KubecostCurrentOptions{ClusterID: "cluster-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Available || resp.Reason != ReasonNoMetrics || len(transport.requests) != 2 {
+		t.Fatalf("unexpected fallback response=%#v requests=%#v", resp, transport.requests)
+	}
+}
+
+func TestKubecostAssetsFallbackPrefersSuccessfulEmptyResponse(t *testing.T) {
+	transport := &fakeKubecostTransport{
+		errors:    []error{errors.New("hourly ETL unavailable"), nil},
+		responses: []string{`{"code":200,"data":[null]}`},
+	}
+	resp, err := ComputeKubecostNodes(context.Background(), NewKubecostClient(transport), KubecostCurrentOptions{ClusterID: "cluster-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Available || resp.Reason != ReasonNoMetrics || len(transport.requests) != 2 {
+		t.Fatalf("unexpected fallback response=%#v requests=%#v", resp, transport.requests)
+	}
+}
+
+func TestLatestKubecostTimestampComparesInstants(t *testing.T) {
+	current := "2026-08-26T10:00:00+0300"
+	candidate := "2026-08-26T08:30:00Z"
+	if got := LatestKubecostTimestamp(current, candidate); got != candidate {
+		t.Fatalf("latest timestamp = %q, want %q", got, candidate)
+	}
+}
+
 func TestKubecostUsageCostDistinguishesUnavailableFromZero(t *testing.T) {
 	if _, available := kubecostUsageCost(1, nil, floatPointer(0)); available {
 		t.Fatal("missing request must be unavailable")

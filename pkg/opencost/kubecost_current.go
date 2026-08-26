@@ -61,7 +61,7 @@ func ComputeKubecostSummary(ctx context.Context, client *KubecostClient, opts Ku
 				return nil, fmt.Errorf("allocation %q: %w", key, err)
 			}
 			out.TotalIdleCost += maxZero((allocation.CPUCost + allocation.RAMCost) / hours)
-			out.DataThrough = laterTimestamp(out.DataThrough, allocation.End)
+			out.DataThrough = LatestKubecostTimestamp(out.DataThrough, allocation.End)
 			continue
 		}
 		if err := requireKubecostCluster(allocation.Properties, opts.ClusterID); err != nil {
@@ -110,7 +110,7 @@ func ComputeKubecostSummary(ctx context.Context, client *KubecostClient, opts Ku
 		out.TotalNetworkCost += row.NetworkCost
 		out.TotalIdleCost += row.IdleCost
 		out.Namespaces = append(out.Namespaces, row)
-		out.DataThrough = laterTimestamp(out.DataThrough, allocation.End)
+		out.DataThrough = LatestKubecostTimestamp(out.DataThrough, allocation.End)
 	}
 	if len(out.Namespaces) == 0 {
 		return &CostSummary{Available: false, Reason: ReasonNoMetrics, Currency: opts.Currency, Source: "kubecost", DataThrough: out.DataThrough}, nil
@@ -193,7 +193,7 @@ func ComputeKubecostWorkloads(ctx context.Context, client *KubecostClient, names
 		if pod := propertyString(allocation.Properties, "pod"); pod != "" {
 			row.pods[pod] = struct{}{}
 		}
-		out.DataThrough = laterTimestamp(out.DataThrough, allocation.End)
+		out.DataThrough = LatestKubecostTimestamp(out.DataThrough, allocation.End)
 	}
 	for _, workload := range workloads {
 		hours := workload.durationHours
@@ -275,7 +275,7 @@ func ComputeKubecostNodes(ctx context.Context, client *KubecostClient, opts Kube
 			CPUCost:      roundTo(asset.CPUCost/hours, 4),
 			MemoryCost:   roundTo(asset.RAMCost/hours, 4),
 		})
-		out.DataThrough = laterTimestamp(out.DataThrough, asset.End)
+		out.DataThrough = LatestKubecostTimestamp(out.DataThrough, asset.End)
 	}
 	if len(out.Nodes) == 0 {
 		out.Available = false
@@ -287,6 +287,7 @@ func ComputeKubecostNodes(ctx context.Context, client *KubecostClient, opts Kube
 
 func kubecostAllocationWithFallback(ctx context.Context, client *KubecostClient, opts KubecostAllocationOptions) (*KubecostAllocationResponse, string, error) {
 	var lastErr error
+	sawEmpty := false
 	for _, window := range []string{kubecostCurrentWindow, "1d"} {
 		opts.Window = window
 		resp, err := client.GetAllocation(ctx, opts)
@@ -300,6 +301,10 @@ func kubecostAllocationWithFallback(ctx context.Context, client *KubecostClient,
 		if hasKubecostAllocationData(resp) {
 			return resp, window, nil
 		}
+		sawEmpty = true
+	}
+	if sawEmpty {
+		return nil, "1d", nil
 	}
 	if lastErr != nil {
 		return nil, "1d", lastErr
@@ -309,6 +314,7 @@ func kubecostAllocationWithFallback(ctx context.Context, client *KubecostClient,
 
 func kubecostAssetsWithFallback(ctx context.Context, client *KubecostClient, opts KubecostAssetOptions) (*KubecostAssetsResponse, error) {
 	var lastErr error
+	sawEmpty := false
 	for _, window := range []string{kubecostCurrentWindow, "1d"} {
 		opts.Window = window
 		resp, err := client.GetAssets(ctx, opts)
@@ -322,6 +328,10 @@ func kubecostAssetsWithFallback(ctx context.Context, client *KubecostClient, opt
 		if hasKubecostAssetData(resp) {
 			return resp, nil
 		}
+		sawEmpty = true
+	}
+	if sawEmpty {
+		return nil, nil
 	}
 	return nil, lastErr
 }
@@ -553,7 +563,7 @@ func roundWorkloadCost(row *WorkloadCost) {
 	row.IdleCost = roundTo(row.IdleCost, 4)
 }
 
-func laterTimestamp(current, candidate string) string {
+func LatestKubecostTimestamp(current, candidate string) string {
 	if candidate == "" {
 		return current
 	}
