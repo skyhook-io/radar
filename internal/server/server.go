@@ -1428,36 +1428,7 @@ func (s *Server) resolveHelmNamespaces(r *http.Request) ([]string, bool) {
 // cluster upgrade scan) can reuse the same Helm resolution without rebuilding
 // it from request query state.
 func (s *Server) resolveHelmNamespacesForScope(r *http.Request, namespaces []string) ([]string, bool) {
-	if noNamespaceAccess(namespaces) {
-		return nil, false
-	}
-	if namespaces == nil {
-		if auth.UserFromContext(r.Context()) == nil {
-			// "All namespaces" in no-auth mode. A namespace-restricted
-			// ServiceAccount can't list cluster-wide; resolve to the namespaces
-			// it can actually see so the Helm list degrades gracefully instead
-			// of 403-ing. Authenticated users are handled below; Helm lists
-			// impersonate them directly, so narrowing them with the backend
-			// client's fallback namespaces would under-list users whose RBAC is
-			// wider than Radar's own ServiceAccount.
-			if fallback := helm.ResolveNoAuthListNamespaces(r.Context()); len(fallback) > 0 {
-				return fallback, true
-			}
-		} else if !s.canRead(r, "", "secrets", "", "list") {
-			// Authenticated user with cluster-wide pod access (parseNamespacesFor-
-			// User returned nil) but NOT cluster-wide `list secrets`. Helm storage
-			// is Secrets, so a single cluster-wide list would 403 wholesale and
-			// blank the view. Resolve to the namespaces where the user CAN list
-			// secrets — a per-namespace SAR memoized on the user's perms (2-min
-			// TTL), so repeat page loads don't re-probe. Falls through to the
-			// cluster-wide path (→ honest 403) when they can't read secrets
-			// anywhere.
-			if allowed := s.filterNamespacesByCanRead(r, "", "secrets", "list", s.allNamespaceNames()); len(allowed) > 0 {
-				return allowed, true
-			}
-		}
-	}
-	return namespaces, true
+	return resolveHelmNamespacesForAuthorizer(r.Context(), httpUpgradeAuthorizer{s: s, r: r}, namespaces)
 }
 
 // allNamespaceNames returns every namespace name from the shared cache lister,
@@ -1465,7 +1436,7 @@ func (s *Server) resolveHelmNamespacesForScope(r *http.Request, namespaces []str
 // pool for per-user secrets-SAR filtering — the SAR is the authorization gate,
 // so the (cluster-wide) pool only needs to be a superset of what the user can
 // read.
-func (s *Server) allNamespaceNames() []string {
+func allNamespaceNames() []string {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return nil

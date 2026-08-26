@@ -18,13 +18,9 @@ import (
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
 	corev1 "k8s.io/api/core/v1"
-	discoveryv1 "k8s.io/api/discovery/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/skyhook-io/radar/internal/audit"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -39,109 +35,36 @@ const (
 	upgradeAPIMetricsResponseLimit       = 16 << 20
 )
 
+// upgradeReadinessResponse wraps the scan with serving-layer freshness fields:
+// observedAt is when the underlying scan ran (a memoized response keeps the
+// original stamp, not the response time), and scanId identifies the snapshot
+// so paging consumers can bind follow-up reads to it.
+type upgradeReadinessResponse struct {
+	*upgradereadiness.ScanResults
+	ObservedAt time.Time `json:"observedAt"`
+	ScanID     string    `json:"scanId"`
+	FromCache  bool      `json:"fromCache,omitempty"`
+}
+
 func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "Cache not initialized")
-		return
-	}
-	currentVersion := k8s.GetServerVersion()
-	targetVersion := r.URL.Query().Get("target")
-	if err := upgradereadiness.ValidateTarget(currentVersion, targetVersion); err != nil {
-		s.writeUpgradeReadinessError(w, err)
-		return
-	}
-
-	namespaces := s.upgradeReadinessNamespaces(r)
-	noAccess := noNamespaceAccess(namespaces)
-	var scanInput *k8s.ResourceCache
-	if !noAccess {
-		scanInput = cache
-	}
-
-	var manifestResources []upgradereadiness.ManifestResource
-	var helmUnavailableNamespaces []string
-	var helmScopedNamespaces []string
-	var manifestParseErrors int
-	var deprecatedRequests []upgradereadiness.DeprecatedAPIRequest
-	var deprecatedMetricsWindow string
-	var prometheusRules []*unstructured.Unstructured
-	var prometheusUnavailableNamespaces []string
-	var prometheusInstalled, discoveryAvailable bool
-	var sourceObjects []metav1.Object
-	var sourceObjectUnavailableKinds []string
-	var admissionConfigs, crds []*unstructured.Unstructured
-	var admissionConfigUnavailableKinds []string
-	var apiServices []*unstructured.Unstructured
-	var endpointSlices []*discoveryv1.EndpointSlice
-	var additionalServices []*corev1.Service
-	var nodeRuntimeEvidence []upgradereadiness.NodeRuntimeEvidence
-	canReadNodes := !noAccess && s.canRead(r, "", "nodes", "", "list")
-	if !noAccess {
-		if helmNamespaces, ok := s.resolveHelmNamespacesForScope(r, namespaces); ok {
-			manifestResources, helmUnavailableNamespaces, manifestParseErrors = collectUpgradeHelmManifests(r, helmNamespaces)
-			if !sameNamespaceScope(namespaces, helmNamespaces) {
-				helmScopedNamespaces = make([]string, len(helmNamespaces))
-				copy(helmScopedNamespaces, helmNamespaces)
-			}
-		}
-		deprecatedRequests, deprecatedMetricsWindow = collectDeprecatedAPIRequests(r)
-		prometheusRules, prometheusInstalled, discoveryAvailable, prometheusUnavailableNamespaces = s.collectUpgradePrometheusRules(r, namespaces)
-		sourceObjectCtx, cancelSourceObjectCollection := context.WithTimeout(r.Context(), upgradeSourceObjectCollectionTimeout)
-		sourceObjects, sourceObjectUnavailableKinds = collectUpgradeSourceObjects(sourceObjectCtx, namespaces)
-		cancelSourceObjectCollection()
-		admissionConfigs, admissionConfigUnavailableKinds, crds, endpointSlices, additionalServices = s.collectUpgradeWebhookEvidence(r)
-		apiServices = s.collectUpgradeAPIServices(r)
-		if canReadNodes && s.canReadSubresource(r, "", "nodes", "proxy", "", "get") && cache.Nodes() != nil {
-			nodes, _ := cache.Nodes().List(labels.Everything())
-			nodeRuntimeCtx, cancelNodeRuntimeCollection := context.WithTimeout(r.Context(), upgradeNodeRuntimeCollectionTimeout)
-			nodeRuntimeEvidence = collectUpgradeNodeRuntimeEvidence(nodeRuntimeCtx, nodes)
-			cancelNodeRuntimeCollection()
-		}
-	}
-	if r.Context().Err() != nil {
-		return
-	}
-	platform, _ := k8s.GetClusterPlatform(r.Context())
-	results, err := audit.RunUpgradeReadinessFromCache(scanInput, namespaces, audit.UpgradeReadinessOptions{
-		CurrentVersion:                      currentVersion,
-		TargetVersion:                       targetVersion,
-		Platform:                            platform,
-		ManifestResources:                   manifestResources,
-		HelmUnavailableNamespaces:           helmUnavailableNamespaces,
-		HelmScopedNamespaces:                helmScopedNamespaces,
-		ManifestParseErrors:                 manifestParseErrors,
-		DeprecatedAPIRequests:               deprecatedRequests,
-		DeprecatedAPIMetricsWindow:          deprecatedMetricsWindow,
-		PrometheusRules:                     prometheusRules,
-		PrometheusRulesInstalled:            prometheusInstalled,
-		PrometheusRulesDiscoveryAvailable:   discoveryAvailable,
-		PrometheusRuleUnavailableNamespaces: prometheusUnavailableNamespaces,
-		CanReadNodes:                        canReadNodes,
-		CanReadPersistentVolumes:            !noAccess && s.canRead(r, "", "persistentvolumes", "", "list"),
-		SourceObjects:                       sourceObjects,
-		SourceObjectUnavailableKinds:        sourceObjectUnavailableKinds,
-		AdmissionWebhookConfigurations:      admissionConfigs,
-		AdmissionWebhookUnavailableKinds:    admissionConfigUnavailableKinds,
-		CustomResourceDefinitions:           crds,
-		APIServices:                         apiServices,
-		EndpointSlices:                      endpointSlices,
-		WebhookServices:                     additionalServices,
-		NodeRuntimeEvidence:                 nodeRuntimeEvidence,
-	})
+	refresh := r.URL.Query().Get("refresh") == "true"
+	outcome, err := RunUpgradeReadinessScanMemoized(r.Context(), httpUpgradeAuthorizer{s: s, r: r}, r.URL.Query().Get("target"), refresh)
 	if err != nil {
+		if r.Context().Err() != nil {
+			return
+		}
 		s.writeUpgradeReadinessError(w, err)
 		return
 	}
-	if noAccess {
-		results.Coverage.State = "no_access"
-		results.Coverage.UnavailableKinds = nil
-	}
-
-	s.writeJSON(w, results)
+	s.writeJSON(w, upgradeReadinessResponse{
+		ScanResults: outcome.Results,
+		ObservedAt:  outcome.ObservedAt,
+		ScanID:      outcome.ScanID,
+		FromCache:   outcome.FromCache,
+	})
 }
 
 func (s *Server) writeUpgradeReadinessError(w http.ResponseWriter, err error) {
@@ -150,6 +73,10 @@ func (s *Server) writeUpgradeReadinessError(w http.ResponseWriter, err error) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, upgradereadiness.ErrInvalidCurrentVersion):
 		s.writeError(w, http.StatusServiceUnavailable, "Unable to determine the cluster Kubernetes version")
+	case errors.Is(err, ErrUpgradeScanNotReady):
+		s.writeError(w, http.StatusServiceUnavailable, "Cache not initialized")
+	case errors.Is(err, ErrUpgradeScanStaleContext):
+		s.writeError(w, http.StatusServiceUnavailable, err.Error())
 	default:
 		s.writeError(w, http.StatusInternalServerError, "Upgrade impact scan failed")
 	}
@@ -197,16 +124,16 @@ func (s *Server) canReadSubresource(r *http.Request, group, resource, subresourc
 	return allowed
 }
 
-func collectUpgradeHelmManifests(r *http.Request, namespaces []string) ([]upgradereadiness.ManifestResource, []string, int) {
+func collectUpgradeHelmManifests(ctx context.Context, namespaces []string) ([]upgradereadiness.ManifestResource, []string, int) {
 	client := helm.GetClient()
 	if client == nil {
 		return nil, nil, 0
 	}
 	username, groups := "", []string(nil)
-	if user := auth.UserFromContext(r.Context()); user != nil {
+	if user := auth.UserFromContext(ctx); user != nil {
 		username, groups = user.Username, user.Groups
 	}
-	resources, unavailableNamespaces, parseErrors, err := client.ListManifestResourcesAcrossNamespaces(r.Context(), namespaces, username, groups)
+	resources, unavailableNamespaces, parseErrors, err := client.ListManifestResourcesAcrossNamespaces(ctx, namespaces, username, groups)
 	if err != nil {
 		if !helm.IsForbiddenError(err) {
 			log.Printf("[upgrade-impact] failed to inspect Helm manifests: %v", err)
@@ -231,12 +158,12 @@ func collectUpgradeHelmManifests(r *http.Request, namespaces []string) ([]upgrad
 	return result, unavailableNamespaces, parseErrors
 }
 
-func collectDeprecatedAPIRequests(r *http.Request) ([]upgradereadiness.DeprecatedAPIRequest, string) {
-	client := k8s.ClientFromContext(r.Context())
+func collectDeprecatedAPIRequests(ctx context.Context) ([]upgradereadiness.DeprecatedAPIRequest, string) {
+	client := k8s.ClientFromContext(ctx)
 	if client == nil || client.Discovery().RESTClient() == nil {
 		return nil, ""
 	}
-	metricsCtx, cancel := context.WithTimeout(r.Context(), upgradeAPIMetricsCollectionTimeout)
+	metricsCtx, cancel := context.WithTimeout(ctx, upgradeAPIMetricsCollectionTimeout)
 	defer cancel()
 	stream, err := client.Discovery().RESTClient().Get().AbsPath("/metrics").Stream(metricsCtx)
 	if err != nil {
@@ -328,7 +255,7 @@ func metricValue(metricType dto.MetricType, metric *dto.Metric) float64 {
 	}
 }
 
-func (s *Server) collectUpgradePrometheusRules(r *http.Request, namespaces []string) (rules []*unstructured.Unstructured, installed, discoveryAvailable bool, unavailableNamespaces []string) {
+func collectUpgradePrometheusRules(ctx context.Context, authz UpgradeEvidenceAuthorizer, namespaces []string) (rules []*unstructured.Unstructured, installed, discoveryAvailable bool, unavailableNamespaces []string) {
 	discovery := k8s.GetResourceDiscovery()
 	gvr, installed, discoveryAvailable := discoverUpgradePrometheusRule(discovery)
 	if !discoveryAvailable {
@@ -338,13 +265,13 @@ func (s *Server) collectUpgradePrometheusRules(r *http.Request, namespaces []str
 		return []*unstructured.Unstructured{}, false, true, nil
 	}
 	if len(namespaces) == 0 {
-		if !s.canRead(r, gvr.Group, gvr.Resource, "", "list") {
+		if !authz.CanList(gvr.Group, gvr.Resource, "") {
 			return nil, true, true, nil
 		}
 	} else {
 		readable := make([]string, 0, len(namespaces))
 		for _, namespace := range namespaces {
-			if s.canRead(r, gvr.Group, gvr.Resource, namespace, "list") {
+			if authz.CanList(gvr.Group, gvr.Resource, namespace) {
 				readable = append(readable, namespace)
 			} else {
 				unavailableNamespaces = append(unavailableNamespaces, namespace)

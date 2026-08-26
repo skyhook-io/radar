@@ -241,7 +241,7 @@ func (s *Server) readableRunNamespaces(r *http.Request, group, resource string, 
 		if s.canRead(r, group, resource, "", "list") {
 			return nil, true
 		}
-		allowed := s.filterNamespacesByCanRead(r, group, resource, "list", s.allNamespaceNames())
+		allowed := s.filterNamespacesByCanRead(r, group, resource, "list", allNamespaceNames())
 		return allowed, len(allowed) > 0
 	}
 	allowed := s.filterNamespacesByCanRead(r, group, resource, "list", namespaces)
