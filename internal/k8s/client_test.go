@@ -456,6 +456,12 @@ func TestContextSwitchInvalidCachedSourceLeavesSessionsAlone(t *testing.T) {
 			if !errors.Is(err, ErrContextSwitchPreflight) {
 				t.Fatalf("expected ErrContextSwitchPreflight, got %v", err)
 			}
+			if !strings.Contains(err.Error(), "current source:") {
+				t.Fatalf("preflight error omits the classified source failure: %v", err)
+			}
+			if strings.Contains(err.Error(), target) {
+				t.Fatalf("preflight error leaked the kubeconfig path: %v", err)
+			}
 			if stopped {
 				t.Fatal("sessions were stopped for an invalid cached context source")
 			}
@@ -795,6 +801,29 @@ func TestInClusterRuntimeReconnectDoesNotPublishAfterSupersededInit(t *testing.T
 	}
 	if status := GetConnectionStatus(); status.State != StateDisconnected {
 		t.Fatalf("superseded reinitialize status = %+v", status)
+	}
+}
+
+func TestInClusterRuntimeReconnectClassifiesCancelledSupersededInit(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+
+	clientMu.Lock()
+	contextName = "in-cluster"
+	kubeconfigMode = "in-cluster"
+	initializationStarted = true
+	clientMu.Unlock()
+
+	err := reinitializeCurrentContextIfOperationCurrent(
+		"in-cluster",
+		currentOperationGen(),
+		func(ctx context.Context, _ func(string)) error {
+			CancelOngoingOperations()
+			return ctx.Err()
+		},
+	)
+	if !errors.Is(err, ErrReconnectSuperseded) {
+		t.Fatalf("reinitialize current context error = %v, want ErrReconnectSuperseded", err)
 	}
 }
 

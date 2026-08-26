@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
@@ -285,6 +286,125 @@ func TestGetAvailableContextsRejectsSingleFIFOSourceWithoutBlocking(t *testing.T
 	}
 }
 
+func TestWriteKubeconfigForCurrentContextDoesNotReadFIFO(t *testing.T) {
+	dir := t.TempDir()
+	path := writeKubeconfig(t, dir, "active.yaml", "active", []kubeEntry{
+		{ctxName: "active", userName: "user", clusterName: "cluster"},
+	})
+	loaded, err := clientcmd.LoadFromFile(path)
+	if err != nil {
+		t.Fatalf("load active config: %v", err)
+	}
+	activeConfig := loaded
+
+	clientMu.Lock()
+	previousRegistry := contextRegistry
+	previousConfigs := perFileConfigs
+	previousPath := kubeconfigPath
+	previousName := contextName
+	previousActiveFile := activeSourceFile
+	previousActiveName := activeSourceName
+	previousActiveConfig := activeSourceConfig
+	contextRegistry = map[string]contextEntry{"active": {SourceFile: path, InFileName: "active"}}
+	perFileConfigs = map[string]*clientcmdapi.Config{path: activeConfig.DeepCopy()}
+	kubeconfigPath = ""
+	contextName = "active"
+	activeSourceFile = path
+	activeSourceName = "active"
+	activeSourceConfig = activeConfig.DeepCopy()
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextRegistry = previousRegistry
+		perFileConfigs = previousConfigs
+		kubeconfigPath = previousPath
+		contextName = previousName
+		activeSourceFile = previousActiveFile
+		activeSourceName = previousActiveName
+		activeSourceConfig = previousActiveConfig
+		clientMu.Unlock()
+	})
+
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove active kubeconfig: %v", err)
+	}
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+
+	type result struct {
+		path string
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		tmpPath, writeErr := WriteKubeconfigForCurrentContext()
+		done <- result{path: tmpPath, err: writeErr}
+	}()
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("WriteKubeconfigForCurrentContext: %v", got.err)
+		}
+		t.Cleanup(func() { _ = os.Remove(got.path) })
+		written, loadErr := clientcmd.LoadFromFile(got.path)
+		if loadErr != nil {
+			t.Fatalf("load generated active snapshot: %v", loadErr)
+		}
+		if written.CurrentContext != "active" {
+			t.Fatalf("generated active snapshot context = %q", written.CurrentContext)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("current-context kubeconfig export blocked while opening a FIFO")
+	}
+}
+
+func TestWriteKubeconfigForCurrentContextRejectsSingleFIFOWithoutBlocking(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "single.pipe")
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+
+	clientMu.Lock()
+	previousRegistry := contextRegistry
+	previousPath := kubeconfigPath
+	previousName := contextName
+	previousActiveFile := activeSourceFile
+	previousActiveName := activeSourceName
+	previousActiveConfig := activeSourceConfig
+	contextRegistry = nil
+	kubeconfigPath = path
+	contextName = "single"
+	activeSourceFile = ""
+	activeSourceName = ""
+	activeSourceConfig = nil
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextRegistry = previousRegistry
+		kubeconfigPath = previousPath
+		contextName = previousName
+		activeSourceFile = previousActiveFile
+		activeSourceName = previousActiveName
+		activeSourceConfig = previousActiveConfig
+		clientMu.Unlock()
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := WriteKubeconfigForCurrentContext()
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, errKubeconfigNotRegular) {
+			t.Fatalf("expected errKubeconfigNotRegular, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("single-file kubeconfig export blocked while opening a FIFO")
+	}
+}
+
 func TestMergeAndSwitchContextErrorDoesNotPublishStaleReplacement(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("directory permissions do not prevent removal as root")
@@ -446,6 +566,84 @@ func TestMergeAndSwitchContextReplacesFIFOWithoutBlocking(t *testing.T) {
 	clientMu.RUnlock()
 	if registeredPath != result.path {
 		t.Fatalf("registered CAPI path = %q, want %q", registeredPath, result.path)
+	}
+}
+
+func TestMergeAndSwitchContextKeepsActiveFIFORegistered(t *testing.T) {
+	dir := t.TempDir()
+	primary := writeKubeconfig(t, dir, "primary.yaml", "primary", []kubeEntry{
+		{ctxName: "primary", userName: "u1", clusterName: "c1"},
+	})
+	existing := writeKubeconfig(t, dir, "workload.yaml", "workload", []kubeEntry{
+		{ctxName: "workload", userName: "u2", clusterName: "c2"},
+	})
+	incoming := writeKubeconfig(t, t.TempDir(), "incoming.yaml", "workload", []kubeEntry{
+		{ctxName: "workload", userName: "u2", clusterName: "c2"},
+	})
+	data, err := os.ReadFile(incoming)
+	if err != nil {
+		t.Fatalf("read incoming kubeconfig: %v", err)
+	}
+	registry, configs := buildContextRegistry([]string{primary, existing})
+
+	clientMu.Lock()
+	previousRegistry := contextRegistry
+	previousConfigs := perFileConfigs
+	previousMtimes := perFileMtimes
+	previousPaths := kubeconfigPaths
+	previousCAPI := capiKubeconfigs
+	previousActiveFile := activeSourceFile
+	previousCount := totalContextCount
+	contextRegistry = registry
+	perFileConfigs = configs
+	perFileMtimes = map[string]time.Time{}
+	kubeconfigPaths = []string{primary, existing}
+	capiKubeconfigs = map[string]string{"workload": existing}
+	activeSourceFile = existing
+	totalContextCount = len(registry)
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextRegistry = previousRegistry
+		perFileConfigs = previousConfigs
+		perFileMtimes = previousMtimes
+		kubeconfigPaths = previousPaths
+		capiKubeconfigs = previousCAPI
+		activeSourceFile = previousActiveFile
+		totalContextCount = previousCount
+		clientMu.Unlock()
+	})
+
+	if err := os.Remove(existing); err != nil {
+		t.Fatalf("remove existing kubeconfig: %v", err)
+	}
+	if err := syscall.Mkfifo(existing, 0o600); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, _, _, mergeErr := MergeAndSwitchContext(data, "workload")
+		done <- mergeErr
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "failed to refresh active CAPI kubeconfig") {
+			t.Fatalf("active CAPI refresh error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("active CAPI kubeconfig refresh blocked while opening a FIFO")
+	}
+
+	clientMu.RLock()
+	registeredPath := capiKubeconfigs["workload"]
+	_, stillRegistered := contextRegistry["workload"]
+	clientMu.RUnlock()
+	if registeredPath != existing || !stillRegistered {
+		t.Fatalf("active source was dropped: path=%q registered=%t", registeredPath, stillRegistered)
+	}
+	if info, err := os.Stat(existing); err != nil || info.Mode()&os.ModeNamedPipe == 0 {
+		t.Fatalf("active FIFO was replaced: info=%v err=%v", info, err)
 	}
 }
 

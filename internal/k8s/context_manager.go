@@ -439,6 +439,9 @@ func reinitializeCurrentContextIfOperationCurrent(
 	initCtx, initCancel := NewOperationContext(ContextSwitchTimeout)
 	defer initCancel()
 	if err := initSubsystems(initCtx, reportProgress); err != nil {
+		if currentOperationGen() != observedOperationGen {
+			return ErrReconnectSuperseded
+		}
 		return fmt.Errorf("subsystem init failed: %w", err)
 	}
 	if currentOperationGen() != observedOperationGen {
@@ -495,7 +498,7 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 		log.Printf("[ops] Context switch preflight rejected target %q: %s", newContext, reason)
 		errorlog.Record("context-switch", "warning",
 			"preflight target=%q rejected before teardown: %s", newContext, reason)
-		return fmt.Errorf("%w: context %q cannot be loaded from its current source", ErrContextSwitchPreflight, newContext)
+		return fmt.Errorf("%w: context %q cannot be loaded from its current source: %s", ErrContextSwitchPreflight, newContext, reason)
 	}
 
 	// Under --namespace-scope, validate the new context has a usable scope target

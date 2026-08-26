@@ -907,11 +907,13 @@ func WriteKubeconfigForCurrentContext() (string, error) {
 
 	if activeFile != "" && activeName != "" && activeConfig != nil {
 		candidate := fileConfigs[activeFile]
-		loadingRules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: activeFile}
-		if loaded, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-			loadingRules, &clientcmd.ConfigOverrides{},
-		).RawConfig(); err == nil {
-			candidate = &loaded
+		if validateKubeconfigFileType(activeFile) == nil {
+			loadingRules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: activeFile}
+			if loaded, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+				loadingRules, &clientcmd.ConfigOverrides{},
+			).RawConfig(); err == nil {
+				candidate = &loaded
+			}
 		}
 		if sameKubeconfigTarget(activeConfig, candidate, activeName) {
 			rawConfig = *candidate.DeepCopy()
@@ -937,6 +939,9 @@ func WriteKubeconfigForCurrentContext() (string, error) {
 	} else {
 		if singlePath == "" {
 			return "", fmt.Errorf("kubeconfig path not set")
+		}
+		if err := validateKubeconfigFileType(singlePath); err != nil {
+			return "", fmt.Errorf("failed to load kubeconfig: %w", err)
 		}
 		loadingRules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: singlePath}
 		loaded, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
@@ -1772,9 +1777,11 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 	// return the qualified name we assigned on the original merge.
 	if existingPath, ok := capiKubeconfigs[contextName]; ok {
 		pathErr := validateKubeconfigFileType(existingPath)
+		replacementErr := pathErr
 		if pathErr == nil {
 			writeErr := clientcmd.WriteToFile(*newConfig, existingPath)
 			if writeErr != nil {
+				replacementErr = writeErr
 				log.Printf("[capi] Failed to update existing kubeconfig for context %q: %v", contextName, writeErr)
 			} else {
 				// Refresh the cached parsed config so subsequent GetAvailableContexts
@@ -1797,9 +1804,13 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 					log.Printf("[capi] Updated existing kubeconfig for context %q: %q", contextName, existingPath)
 					return qName, existingPath, false, nil
 				}
+				replacementErr = errors.New("context is no longer registered")
 			}
 		} else {
 			log.Printf("[capi] Replacing unusable kubeconfig for context %q: %v", contextName, pathErr)
+		}
+		if activeSourceFile == existingPath {
+			return "", "", false, fmt.Errorf("failed to refresh active CAPI kubeconfig: %s", kubeconfigDiagnosticError(replacementErr))
 		}
 		if err := os.Remove(existingPath); err != nil && !os.IsNotExist(err) {
 			return "", "", false, fmt.Errorf("failed to replace stale CAPI kubeconfig: %w", err)
