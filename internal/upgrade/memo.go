@@ -347,10 +347,11 @@ func ScanMemoized(ctx context.Context, authz EvidenceAuthorizer, targetVersion s
 		return ScanOutcome{}, ErrScanNotReady
 	}
 	currentVersion := k8s.GetServerVersion()
-	targetVersion, err := upgradereadiness.EffectiveTarget(currentVersion, targetVersion)
+	resolvedTarget, err := upgradereadiness.EffectiveTarget(currentVersion, targetVersion)
 	if err != nil {
 		return ScanOutcome{}, err
 	}
+	targetVersion = resolvedTarget
 	username, groups := "", []string(nil)
 	if user := auth.UserFromContext(ctx); user != nil {
 		username, groups = user.Username, user.Groups

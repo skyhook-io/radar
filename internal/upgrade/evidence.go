@@ -5,6 +5,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -32,7 +33,7 @@ type EvidenceAuthorizer interface {
 	// check.
 	CanList(group, resource, namespace string) bool
 	// CanGetSubresource authorizes a cluster-scoped subresource get
-	// (nodes/proxy for kubelet metrics).
+	// (nodes/proxy for kubelet metrics and effective configuration).
 	CanGetSubresource(group, resource, subresource string) bool
 	// FilterNamespacesByCanList returns the subset of namespaces where the
 	// identity can list the resource.
@@ -91,6 +92,15 @@ func runUpgradeReadinessScan(ctx context.Context, authz EvidenceAuthorizer, name
 	if cache == nil {
 		return nil, ErrScanNotReady
 	}
+	resolvedTarget, err := upgradereadiness.EffectiveTarget(currentVersion, targetVersion)
+	if err != nil {
+		return nil, err
+	}
+	targetVersion = resolvedTarget
+	collect137Evidence, err := upgradereadiness.UpgradePathIncludesRelease(currentVersion, targetVersion, "1.37")
+	if err != nil {
+		return nil, err
+	}
 	noAccess := noNamespaceAccess(namespaces)
 	var scanInput *k8s.ResourceCache
 	if !noAccess {
@@ -114,6 +124,10 @@ func runUpgradeReadinessScan(ctx context.Context, authz EvidenceAuthorizer, name
 	var endpointSlices []*discoveryv1.EndpointSlice
 	var additionalServices []*corev1.Service
 	var nodeRuntimeEvidence []upgradereadiness.NodeRuntimeEvidence
+	var csiDrivers []*storagev1.CSIDriver
+	var schedulingV1Alpha2Objects []*unstructured.Unstructured
+	var schedulingV1Alpha2UnavailableKinds []string
+	var schedulingV1Alpha2Installed, schedulingV1Alpha2DiscoveryAvailable bool
 	canReadNodes := !noAccess && authz.CanList("", "nodes", "")
 	if !noAccess {
 		if helmNamespaces, ok := ResolveHelmNamespaces(ctx, authz, namespaces); ok {
@@ -130,10 +144,14 @@ func runUpgradeReadinessScan(ctx context.Context, authz EvidenceAuthorizer, name
 		cancelSourceObjectCollection()
 		admissionConfigs, admissionConfigUnavailableKinds, crds, endpointSlices, additionalServices = collectUpgradeWebhookEvidence(ctx, authz)
 		apiServices = collectUpgradeAPIServices(ctx, authz)
+		if collect137Evidence {
+			csiDrivers = collectUpgradeCSIDrivers(ctx, authz)
+			schedulingV1Alpha2Objects, schedulingV1Alpha2Installed, schedulingV1Alpha2DiscoveryAvailable, schedulingV1Alpha2UnavailableKinds = collectSchedulingV1Alpha2Evidence(ctx, authz, namespaces)
+		}
 		if canReadNodes && authz.CanGetSubresource("", "nodes", "proxy") && cache.Nodes() != nil {
 			nodes, _ := cache.Nodes().List(labels.Everything())
 			nodeRuntimeCtx, cancelNodeRuntimeCollection := context.WithTimeout(ctx, upgradeNodeRuntimeCollectionTimeout)
-			nodeRuntimeEvidence = collectUpgradeNodeRuntimeEvidence(nodeRuntimeCtx, nodes)
+			nodeRuntimeEvidence = collectUpgradeNodeRuntimeEvidence(nodeRuntimeCtx, nodes, collect137Evidence)
 			cancelNodeRuntimeCollection()
 		}
 	}
@@ -142,30 +160,35 @@ func runUpgradeReadinessScan(ctx context.Context, authz EvidenceAuthorizer, name
 	}
 	platform, _ := k8s.GetClusterPlatform(ctx)
 	results, err := RunFromCache(scanInput, namespaces, Options{
-		CurrentVersion:                      currentVersion,
-		TargetVersion:                       targetVersion,
-		Platform:                            platform,
-		ManifestResources:                   manifestResources,
-		HelmUnavailableNamespaces:           helmUnavailableNamespaces,
-		HelmScopedNamespaces:                helmScopedNamespaces,
-		ManifestParseErrors:                 manifestParseErrors,
-		DeprecatedAPIRequests:               deprecatedRequests,
-		DeprecatedAPIMetricsWindow:          deprecatedMetricsWindow,
-		PrometheusRules:                     prometheusRules,
-		PrometheusRulesInstalled:            prometheusInstalled,
-		PrometheusRulesDiscoveryAvailable:   discoveryAvailable,
-		PrometheusRuleUnavailableNamespaces: prometheusUnavailableNamespaces,
-		CanReadNodes:                        canReadNodes,
-		CanReadPersistentVolumes:            !noAccess && authz.CanList("", "persistentvolumes", ""),
-		SourceObjects:                       sourceObjects,
-		SourceObjectUnavailableKinds:        sourceObjectUnavailableKinds,
-		AdmissionWebhookConfigurations:      admissionConfigs,
-		AdmissionWebhookUnavailableKinds:    admissionConfigUnavailableKinds,
-		CustomResourceDefinitions:           crds,
-		APIServices:                         apiServices,
-		EndpointSlices:                      endpointSlices,
-		WebhookServices:                     additionalServices,
-		NodeRuntimeEvidence:                 nodeRuntimeEvidence,
+		CurrentVersion:                       currentVersion,
+		TargetVersion:                        targetVersion,
+		Platform:                             platform,
+		ManifestResources:                    manifestResources,
+		HelmUnavailableNamespaces:            helmUnavailableNamespaces,
+		HelmScopedNamespaces:                 helmScopedNamespaces,
+		ManifestParseErrors:                  manifestParseErrors,
+		DeprecatedAPIRequests:                deprecatedRequests,
+		DeprecatedAPIMetricsWindow:           deprecatedMetricsWindow,
+		PrometheusRules:                      prometheusRules,
+		PrometheusRulesInstalled:             prometheusInstalled,
+		PrometheusRulesDiscoveryAvailable:    discoveryAvailable,
+		PrometheusRuleUnavailableNamespaces:  prometheusUnavailableNamespaces,
+		CanReadNodes:                         canReadNodes,
+		CanReadPersistentVolumes:             !noAccess && authz.CanList("", "persistentvolumes", ""),
+		SourceObjects:                        sourceObjects,
+		SourceObjectUnavailableKinds:         sourceObjectUnavailableKinds,
+		AdmissionWebhookConfigurations:       admissionConfigs,
+		AdmissionWebhookUnavailableKinds:     admissionConfigUnavailableKinds,
+		CustomResourceDefinitions:            crds,
+		APIServices:                          apiServices,
+		EndpointSlices:                       endpointSlices,
+		WebhookServices:                      additionalServices,
+		NodeRuntimeEvidence:                  nodeRuntimeEvidence,
+		CSIDrivers:                           csiDrivers,
+		SchedulingV1Alpha2Objects:            schedulingV1Alpha2Objects,
+		SchedulingV1Alpha2Installed:          schedulingV1Alpha2Installed,
+		SchedulingV1Alpha2DiscoveryAvailable: schedulingV1Alpha2DiscoveryAvailable,
+		SchedulingV1Alpha2UnavailableKinds:   schedulingV1Alpha2UnavailableKinds,
 	})
 	if err != nil {
 		return nil, err

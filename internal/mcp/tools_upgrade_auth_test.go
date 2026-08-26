@@ -18,7 +18,9 @@ func TestMCPUpgradeAuthorizerDecisionMatrix(t *testing.T) {
 	perms := getPermCache().Get("upgrade-matrix")
 	perms.SetCanI("list", "", "nodes", "", true)
 	perms.SetCanI("list", "", "persistentvolumes", "", false)
+	perms.SetCanI("list", "storage.k8s.io", "csidrivers", "", true)
 	perms.SetCanI("list", "admissionregistration.k8s.io", "validatingwebhookconfigurations", "", true)
+	perms.SetCanI("list", "scheduling.k8s.io", "workloads", "team-a", true)
 	perms.SetCanI("list", "", "secrets", "team-a", true)
 	perms.SetCanI("list", "", "secrets", "team-b", false)
 
@@ -29,7 +31,9 @@ func TestMCPUpgradeAuthorizerDecisionMatrix(t *testing.T) {
 	}{
 		{"", "nodes", "", true},
 		{"", "persistentvolumes", "", false},
+		{"storage.k8s.io", "csidrivers", "", true},
 		{"admissionregistration.k8s.io", "validatingwebhookconfigurations", "", true},
+		{"scheduling.k8s.io", "workloads", "team-a", true},
 		// Unseeded → SAR against a nil client → fail closed. Cluster-wide pod
 		// visibility must not imply cluster-scoped reads.
 		{"apiregistration.k8s.io", "apiservices", "", false},

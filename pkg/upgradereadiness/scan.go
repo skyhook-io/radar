@@ -61,7 +61,7 @@ func Scan(input *Input, currentVersion, targetVersion string) (*ScanResults, err
 			result.Coverage.ScopedKinds[kind] = copied
 		}
 	}
-	result.Coverage.UnavailableKinds = unavailableKinds(input)
+	result.Coverage.UnavailableKinds = unavailableKinds(input, current, target)
 	if len(result.Coverage.UnavailableKinds) > 0 {
 		result.Coverage.State = "partial"
 	}
@@ -91,6 +91,19 @@ func Scan(input *Input, currentVersion, targetVersion string) (*ScanResults, err
 			scanServiceExternalIPs(input),
 			scanRenamedMetrics(input),
 			scanStrictIPCIDRValidation(input),
+		)
+	}
+
+	if crossesRelease(current, target, "1.37") {
+		result.Checks = append(result.Checks,
+			scanRemovedFeatureGates(input),
+			scanRemovedComponentFlags(input),
+			scanKubeletEventQPS(input),
+			scanRemovedSchedulingAPIs(input),
+			scanKubeadmConfig(input),
+			scanRemovedControlPlaneMetrics(input),
+			scanSELinuxMountTransition(input),
+			scanKubeProxyModeTransition(input),
 		)
 	}
 
@@ -151,6 +164,11 @@ var cacheKindsByCheck = map[string][]string{
 	"service-externalips-deprecated": {"services"},
 	"node-drain-feasibility":         {"pods", "poddisruptionbudgets"},
 	"gke-exec-probe-timeout":         {"pods", "deployments", "replicasets", "statefulsets", "daemonsets", "jobs", "cronjobs"},
+	"removed-feature-gates":          {"pods"},
+	"removed-component-flags":        {"pods"},
+	"kubeadm-config-v1beta3":         {"configmaps"},
+	"kube-proxy-mode-transition":     {"daemonsets", "configmaps"},
+	"selinux-mount-transition":       {"pods", "persistentvolumeclaims", "events"},
 }
 
 func applyCacheScope(check *Check, input *Input) {
@@ -1183,12 +1201,13 @@ func appendSourceManifestCoverageCaveats(check *Check, input *Input, lastApplied
 	}
 }
 
-func unavailableKinds(input *Input) []string {
+func unavailableKinds(input *Input, current, target *utilversion.Version) []string {
 	unavailable := append([]string(nil), input.AdmissionWebhookUnavailableKinds...)
-	checks := []struct {
+	type availability struct {
 		name      string
 		available bool
-	}{
+	}
+	checks := []availability{
 		{"pods", input.Pods != nil},
 		{"deployments", input.Deployments != nil},
 		{"replicasets", input.ReplicaSets != nil},
@@ -1202,6 +1221,15 @@ func unavailableKinds(input *Input) []string {
 		{"nodes", input.Nodes != nil},
 		{"customresourcedefinitions", input.CustomResourceDefinitions != nil},
 		{"apiservices", input.APIServices != nil},
+	}
+	if crossesRelease(current, target, "1.37") {
+		checks = append(checks,
+			availability{"configmaps", input.ConfigMaps != nil},
+			availability{"persistentvolumeclaims", input.PersistentVolumeClaims != nil},
+		)
+	}
+	if crossesRelease(current, target, "1.35") || crossesRelease(current, target, "1.37") {
+		checks = append(checks, availability{"events", input.Events != nil})
 	}
 	for _, item := range checks {
 		if !item.available {
@@ -1230,6 +1258,18 @@ func EffectiveTarget(currentVersion, targetVersion string) (string, error) {
 		return "", err
 	}
 	return minorString(target), nil
+}
+
+func UpgradePathIncludesRelease(currentVersion, targetVersion, release string) (bool, error) {
+	current, target, err := validateUpgradeVersions(currentVersion, targetVersion)
+	if err != nil {
+		return false, err
+	}
+	boundary, err := parseTargetMinor(release)
+	if err != nil {
+		return false, err
+	}
+	return current.LessThan(boundary) && target.AtLeast(boundary), nil
 }
 
 func validateUpgradeVersions(currentVersion, targetVersion string) (*utilversion.Version, *utilversion.Version, error) {

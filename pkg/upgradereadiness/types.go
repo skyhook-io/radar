@@ -6,6 +6,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -56,15 +57,23 @@ type Input struct {
 	Jobs         []*batchv1.Job
 	CronJobs     []*batchv1.CronJob
 	Services     []*corev1.Service
+	ConfigMaps   []*corev1.ConfigMap
 	// WebhookServices contains the explicitly collected Service backends
 	// referenced by admission and CRD conversion webhooks. It must not be
 	// inferred from Services, whose informer may have a different RBAC scope.
-	WebhookServices      []*corev1.Service
-	PersistentVolumes    []*corev1.PersistentVolume
-	Nodes                []*corev1.Node
-	Events               []*corev1.Event
-	PodDisruptionBudgets []*policyv1.PodDisruptionBudget
-	EndpointSlices       []*discoveryv1.EndpointSlice
+	WebhookServices        []*corev1.Service
+	PersistentVolumeClaims []*corev1.PersistentVolumeClaim
+	PersistentVolumes      []*corev1.PersistentVolume
+	Nodes                  []*corev1.Node
+	Events                 []*corev1.Event
+	PodDisruptionBudgets   []*policyv1.PodDisruptionBudget
+	EndpointSlices         []*discoveryv1.EndpointSlice
+	CSIDrivers             []*storagev1.CSIDriver
+
+	SchedulingV1Alpha2Objects            []*unstructured.Unstructured
+	SchedulingV1Alpha2Installed          bool
+	SchedulingV1Alpha2DiscoveryAvailable bool
+	SchedulingV1Alpha2UnavailableKinds   []string
 
 	// AdmissionWebhookConfigurations, CustomResourceDefinitions, and
 	// APIServices are nil
@@ -77,7 +86,7 @@ type Input struct {
 	AdmissionWebhookUnavailableKinds []string
 	CustomResourceDefinitions        []*unstructured.Unstructured
 	APIServices                      []*unstructured.Unstructured
-	// NodeRuntimeEvidence is nil when kubelet metrics could not be inspected.
+	// NodeRuntimeEvidence is nil when kubelet metrics and configuration could not be inspected.
 	NodeRuntimeEvidence []NodeRuntimeEvidence
 
 	// SourceObjects are live typed objects whose kubectl last-applied annotation
@@ -123,8 +132,8 @@ type ManifestResource struct {
 	Object          *unstructured.Unstructured
 }
 
-// NodeRuntimeEvidence preserves the upgrade-related kubelet metrics sampled
-// from one node. Missing metric flags are distinct from zero-valued metrics.
+// NodeRuntimeEvidence preserves upgrade-related kubelet metrics and effective
+// configuration sampled from one node. Availability is distinct from zero values.
 type NodeRuntimeEvidence struct {
 	NodeName                  string
 	MetricsAvailable          bool
@@ -132,6 +141,12 @@ type NodeRuntimeEvidence struct {
 	CgroupVersionAvailable    bool
 	CRILosingSupportVersion   string
 	CRILosingSupportAvailable bool
+	ConfigAvailable           bool
+	EventRecordQPS            int32
+	EventRecordQPSAvailable   bool
+	FeatureGates              map[string]bool
+	SELinuxMismatchWarnings   float64
+	SELinuxMismatchErrors     float64
 }
 
 type DeprecatedAPIRequest struct {

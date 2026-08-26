@@ -1,6 +1,6 @@
 package upgradereadiness
 
-const ReviewedThrough = "1.36"
+const ReviewedThrough = "1.37"
 
 var (
 	versionSkewReferences = []Reference{{
@@ -46,4 +46,10 @@ var (
 	apiServiceReferences          = []Reference{{Title: "Kubernetes API aggregation layer", URL: "https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/apiserver-aggregation/"}, {Title: "APIService API", URL: "https://kubernetes.io/docs/reference/kubernetes-api/apiregistration/api-service-v1/"}}
 	strictIPReferences            = []Reference{{Title: "KEP-4858: stricter validation of IP and CIDR fields", URL: "https://github.com/kubernetes/enhancements/tree/master/keps/sig-network/4858-ip-cidr-validation"}}
 	gkeExecProbeReferences        = []Reference{{Title: "GKE exec probe timeout behavior", URL: "https://cloud.google.com/kubernetes-engine/docs/deprecations/exec-probe-timeouts"}}
+	changelog137References        = []Reference{{Title: "Kubernetes 1.37 release notes", URL: "https://github.com/kubernetes/kubernetes/blob/master/CHANGELOG/CHANGELOG-1.37.md"}}
+	staticPodReferences           = []Reference{{Title: "Prevent static Pods from referencing API objects", URL: "https://github.com/kubernetes/kubernetes/pull/140226"}}
+	ipvsDeprecationReferences     = []Reference{{Title: "KEP-5495: Deprecate IPVS mode in kube-proxy", URL: "https://github.com/kubernetes/enhancements/tree/master/keps/sig-network/5495-deprecate-ipvs-mode-in-kube-proxy"}}
+	nftablesDefaultReferences     = []Reference{{Title: "KEP-5343: Make nftables the default kube-proxy backend", URL: "https://github.com/kubernetes/enhancements/tree/master/keps/sig-network/5343-nftables-to-default"}}
+	kubeProxyModeReferences       = append(append([]Reference(nil), ipvsDeprecationReferences...), nftablesDefaultReferences...)
+	selinuxMountReferences        = []Reference{{Title: "SELinux volume label changes", URL: "https://kubernetes.io/blog/2026/04/22/breaking-changes-in-selinux-volume-labeling/"}}
 )

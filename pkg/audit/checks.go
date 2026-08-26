@@ -14,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	utilversion "k8s.io/apimachinery/pkg/util/version"
 
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/rolloutdiag"
@@ -1455,6 +1456,7 @@ func checkDeprecatedAPIs(tr *evalTracker, servedAPIs []string, clusterVersion st
 	if len(servedAPIs) == 0 || clusterVersion == "" {
 		return nil
 	}
+	current, currentErr := utilversion.ParseGeneric(strings.TrimPrefix(strings.TrimSpace(clusterVersion), "v"))
 
 	deprecations := DeprecationsByGroupVersion()
 	var findings []Finding
@@ -1466,6 +1468,9 @@ func checkDeprecatedAPIs(tr *evalTracker, servedAPIs []string, clusterVersion st
 			continue
 		}
 		for _, entry := range entries {
+			if currentErr == nil && current.LessThan(utilversion.MustParseGeneric(entry.DeprecatedIn)) {
+				continue
+			}
 			msg := fmt.Sprintf("API %s is deprecated (since %s, removed in %s) — use %s",
 				gv, entry.DeprecatedIn, entry.RemovedIn, entry.Replacement)
 			if entry.Kind != "" {

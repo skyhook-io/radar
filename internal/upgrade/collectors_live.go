@@ -3,7 +3,9 @@ package upgrade
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"math"
@@ -19,6 +21,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/rest"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/helm"
@@ -29,7 +32,7 @@ import (
 const (
 	upgradeSourceObjectCollectionTimeout = 10 * time.Second
 	upgradeNodeRuntimeCollectionTimeout  = 20 * time.Second
-	upgradeNodeMetricsResponseLimit      = 8 << 20
+	upgradeNodeEvidenceResponseLimit     = 8 << 20
 	upgradeAPIMetricsCollectionTimeout   = 10 * time.Second
 	upgradeAPIMetricsResponseLimit       = 16 << 20
 )
@@ -254,7 +257,7 @@ func listSyncedUpgradeResources(cache upgradeResourceLister, gvr schema.GroupVer
 	return rules, err == nil, err
 }
 
-func collectUpgradeNodeRuntimeEvidence(ctx context.Context, nodes []*corev1.Node) []upgradereadiness.NodeRuntimeEvidence {
+func collectUpgradeNodeRuntimeEvidence(ctx context.Context, nodes []*corev1.Node, includeConfig bool) []upgradereadiness.NodeRuntimeEvidence {
 	client := k8s.ClientFromContext(ctx)
 	if client == nil || client.CoreV1().RESTClient() == nil {
 		return nil
@@ -273,33 +276,42 @@ func collectUpgradeNodeRuntimeEvidence(ctx context.Context, nodes []*corev1.Node
 			defer wg.Done()
 			for job := range jobs {
 				result := upgradereadiness.NodeRuntimeEvidence{NodeName: job.node.Name}
-				probeCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
-				stream, err := client.CoreV1().RESTClient().Get().AbsPath("/api/v1/nodes/" + url.PathEscape(job.node.Name) + "/proxy/metrics").Stream(probeCtx)
-				var raw []byte
-				if err == nil {
-					raw, err = readBoundedUpgradeResponse(stream, upgradeNodeMetricsResponseLimit)
-				}
-				cancel()
-				if err == nil {
-					parser := expfmt.NewTextParser(model.LegacyValidation)
-					families, parseErr := parser.TextToMetricFamilies(bytes.NewReader(raw))
-					if parseErr == nil {
-						result.MetricsAvailable = true
-						if family := families["kubelet_cgroup_version"]; family != nil && len(family.Metric) > 0 {
-							result.CgroupVersionAvailable = true
-							result.CgroupVersion = int(metricValue(family.GetType(), family.Metric[0]))
+				metricsCh := make(chan upgradereadiness.NodeRuntimeEvidence, 1)
+				configCh := make(chan upgradereadiness.NodeRuntimeEvidence, 1)
+				if strings.EqualFold(job.node.Status.NodeInfo.OperatingSystem, "windows") {
+					metricsCh <- upgradereadiness.NodeRuntimeEvidence{}
+				} else {
+					go func() {
+						raw, err := fetchUpgradeNodeEvidence(ctx, client.CoreV1().RESTClient(), job.node.Name, "metrics")
+						if err != nil {
+							metricsCh <- upgradereadiness.NodeRuntimeEvidence{}
+							return
 						}
-						if family := families["kubelet_cri_losing_support"]; family != nil {
-							for _, metric := range family.Metric {
-								if metricValue(family.GetType(), metric) > 0 {
-									result.CRILosingSupportAvailable = true
-									result.CRILosingSupportVersion = metricLabels(metric)["version"]
-									break
-								}
-							}
+						parsed, err := parseUpgradeNodeMetrics(raw)
+						if err != nil {
+							parsed = upgradereadiness.NodeRuntimeEvidence{}
 						}
-					}
+						metricsCh <- parsed
+					}()
 				}
+				if includeConfig {
+					go func() {
+						raw, err := fetchUpgradeNodeEvidence(ctx, client.CoreV1().RESTClient(), job.node.Name, "configz")
+						if err != nil {
+							configCh <- upgradereadiness.NodeRuntimeEvidence{}
+							return
+						}
+						parsed, err := parseUpgradeNodeConfig(raw)
+						if err != nil {
+							parsed = upgradereadiness.NodeRuntimeEvidence{}
+						}
+						configCh <- parsed
+					}()
+				} else {
+					configCh <- upgradereadiness.NodeRuntimeEvidence{}
+				}
+				mergeNodeRuntimeEvidence(&result, <-metricsCh)
+				mergeNodeRuntimeEvidence(&result, <-configCh)
 				results[job.index] = result
 			}
 		}()
@@ -310,7 +322,7 @@ dispatch:
 			continue
 		}
 		results[i].NodeName = node.Name
-		if strings.EqualFold(node.Status.NodeInfo.OperatingSystem, "windows") {
+		if !includeConfig && strings.EqualFold(node.Status.NodeInfo.OperatingSystem, "windows") {
 			continue
 		}
 		select {
@@ -322,4 +334,93 @@ dispatch:
 	close(jobs)
 	wg.Wait()
 	return results
+}
+
+func fetchUpgradeNodeEvidence(ctx context.Context, client rest.Interface, nodeName, endpoint string) ([]byte, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	stream, err := client.Get().AbsPath("/api/v1/nodes/" + url.PathEscape(nodeName) + "/proxy/" + endpoint).Stream(probeCtx)
+	if err != nil {
+		return nil, err
+	}
+	return readBoundedUpgradeResponse(stream, upgradeNodeEvidenceResponseLimit)
+}
+
+func parseUpgradeNodeMetrics(raw []byte) (upgradereadiness.NodeRuntimeEvidence, error) {
+	parser := expfmt.NewTextParser(model.LegacyValidation)
+	families, err := parser.TextToMetricFamilies(bytes.NewReader(raw))
+	if err != nil {
+		return upgradereadiness.NodeRuntimeEvidence{}, err
+	}
+	result := upgradereadiness.NodeRuntimeEvidence{MetricsAvailable: true}
+	if family := families["kubelet_cgroup_version"]; family != nil && len(family.Metric) > 0 {
+		result.CgroupVersionAvailable = true
+		result.CgroupVersion = int(metricValue(family.GetType(), family.Metric[0]))
+	}
+	if family := families["kubelet_cri_losing_support"]; family != nil {
+		for _, metric := range family.Metric {
+			if metricValue(family.GetType(), metric) > 0 {
+				result.CRILosingSupportAvailable = true
+				result.CRILosingSupportVersion = metricLabels(metric)["version"]
+				break
+			}
+		}
+	}
+	result.SELinuxMismatchWarnings = metricFamilySum(families["volume_manager_selinux_volume_context_mismatch_warnings_total"])
+	result.SELinuxMismatchErrors = metricFamilySum(families["volume_manager_selinux_volume_context_mismatch_errors_total"])
+	return result, nil
+}
+
+func parseUpgradeNodeConfig(raw []byte) (upgradereadiness.NodeRuntimeEvidence, error) {
+	var payload struct {
+		KubeletConfig *struct {
+			EventRecordQPS *int32          `json:"eventRecordQPS"`
+			FeatureGates   map[string]bool `json:"featureGates"`
+		} `json:"kubeletconfig"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return upgradereadiness.NodeRuntimeEvidence{}, err
+	}
+	if payload.KubeletConfig == nil {
+		return upgradereadiness.NodeRuntimeEvidence{}, fmt.Errorf("configz response does not contain kubeletconfig")
+	}
+	result := upgradereadiness.NodeRuntimeEvidence{ConfigAvailable: true}
+	if payload.KubeletConfig.EventRecordQPS != nil {
+		result.EventRecordQPSAvailable = true
+		result.EventRecordQPS = *payload.KubeletConfig.EventRecordQPS
+	}
+	result.FeatureGates = make(map[string]bool, len(payload.KubeletConfig.FeatureGates))
+	for name, enabled := range payload.KubeletConfig.FeatureGates {
+		result.FeatureGates[name] = enabled
+	}
+	return result, nil
+}
+
+func mergeNodeRuntimeEvidence(target *upgradereadiness.NodeRuntimeEvidence, source upgradereadiness.NodeRuntimeEvidence) {
+	if source.MetricsAvailable {
+		target.MetricsAvailable = true
+		target.CgroupVersion = source.CgroupVersion
+		target.CgroupVersionAvailable = source.CgroupVersionAvailable
+		target.CRILosingSupportVersion = source.CRILosingSupportVersion
+		target.CRILosingSupportAvailable = source.CRILosingSupportAvailable
+		target.SELinuxMismatchWarnings = source.SELinuxMismatchWarnings
+		target.SELinuxMismatchErrors = source.SELinuxMismatchErrors
+	}
+	if source.ConfigAvailable {
+		target.ConfigAvailable = true
+		target.EventRecordQPS = source.EventRecordQPS
+		target.EventRecordQPSAvailable = source.EventRecordQPSAvailable
+		target.FeatureGates = source.FeatureGates
+	}
+}
+
+func metricFamilySum(family *dto.MetricFamily) float64 {
+	if family == nil {
+		return 0
+	}
+	total := 0.0
+	for _, metric := range family.Metric {
+		total += metricValue(family.GetType(), metric)
+	}
+	return total
 }

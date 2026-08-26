@@ -18,6 +18,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/upgradereadiness"
 )
 
 func TestReadBoundedUpgradeResponse(t *testing.T) {
@@ -167,5 +168,57 @@ func TestParseDeprecatedAPIRequestsMissingMetricIsObservedEmpty(t *testing.T) {
 	}
 	if !startedAt.IsZero() {
 		t.Fatalf("process start = %v, want zero", startedAt)
+	}
+}
+
+func TestParseUpgradeNodeConfigPreservesExplicitZero(t *testing.T) {
+	raw := []byte(`{"kubeletconfig":{"eventRecordQPS":0,"featureGates":{"PreventStaticPodAPIReferences":false,"SidecarContainers":true}}}`)
+	got, err := parseUpgradeNodeConfig(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.ConfigAvailable || !got.EventRecordQPSAvailable || got.EventRecordQPS != 0 {
+		t.Fatalf("config evidence = %+v, want observed explicit zero", got)
+	}
+	if got.FeatureGates["PreventStaticPodAPIReferences"] || !got.FeatureGates["SidecarContainers"] {
+		t.Fatalf("feature gates = %+v", got.FeatureGates)
+	}
+
+	got, err = parseUpgradeNodeConfig([]byte(`{"kubeletconfig":{"featureGates":{}}}`))
+	if err != nil || !got.ConfigAvailable || got.EventRecordQPSAvailable {
+		t.Fatalf("missing eventRecordQPS = %+v err=%v, want available config with absent field", got, err)
+	}
+
+	if _, err = parseUpgradeNodeConfig([]byte(`{"other":{}}`)); err == nil {
+		t.Fatal("configz payload without kubeletconfig must fail")
+	}
+}
+
+func TestParseUpgradeNodeMetricsIncludesSELinuxEvidence(t *testing.T) {
+	raw := []byte(`# TYPE kubelet_cgroup_version gauge
+kubelet_cgroup_version 2
+# TYPE kubelet_cri_losing_support gauge
+kubelet_cri_losing_support{version="1.37"} 1
+# TYPE volume_manager_selinux_volume_context_mismatch_warnings_total counter
+volume_manager_selinux_volume_context_mismatch_warnings_total{access_mode="ReadWriteMany"} 2
+volume_manager_selinux_volume_context_mismatch_warnings_total{access_mode="ReadWriteOnce"} 3
+# TYPE volume_manager_selinux_volume_context_mismatch_errors_total counter
+volume_manager_selinux_volume_context_mismatch_errors_total{access_mode="ReadWriteMany"} 1
+`)
+	got, err := parseUpgradeNodeMetrics(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.MetricsAvailable || !got.CgroupVersionAvailable || got.CgroupVersion != 2 || !got.CRILosingSupportAvailable || got.CRILosingSupportVersion != "1.37" || got.SELinuxMismatchWarnings != 5 || got.SELinuxMismatchErrors != 1 {
+		t.Fatalf("metrics evidence = %+v", got)
+	}
+}
+
+func TestMergeNodeRuntimeEvidenceKeepsIndependentSources(t *testing.T) {
+	target := upgradereadiness.NodeRuntimeEvidence{NodeName: "node-a"}
+	mergeNodeRuntimeEvidence(&target, upgradereadiness.NodeRuntimeEvidence{MetricsAvailable: true, CgroupVersionAvailable: true, CgroupVersion: 2, SELinuxMismatchWarnings: 4})
+	mergeNodeRuntimeEvidence(&target, upgradereadiness.NodeRuntimeEvidence{ConfigAvailable: true, EventRecordQPSAvailable: true, EventRecordQPS: 50, FeatureGates: map[string]bool{"AnyVolumeDataSource": true}})
+	if !target.MetricsAvailable || !target.ConfigAvailable || target.CgroupVersion != 2 || target.EventRecordQPS != 50 || target.SELinuxMismatchWarnings != 4 || !target.FeatureGates["AnyVolumeDataSource"] {
+		t.Fatalf("merged evidence = %+v", target)
 	}
 }
