@@ -61,8 +61,12 @@ type HubbleSource struct {
 	// Cached direct-lane reachability, probed off the request path (kicked at
 	// detection) so Connect's lane decision costs nothing inline. Keyed by the
 	// probed address: a stale entry for a different endpoint is a cache miss.
+	// Generations order concurrent writers so an older in-flight probe can't
+	// overwrite a newer verdict.
 	probedAddr     string
 	probeReachable bool
+	probeSeq       uint64 // last launched probe generation
+	probeApplied   uint64 // generation whose result is cached
 
 	mu sync.RWMutex
 }
@@ -414,41 +418,53 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 
 	// Direct lane. A raw TCP dial decides whether the address is reachable at
 	// all; only then does the full gRPC/TLS sequence run against it, with its
-	// normal per-step timeouts intact.
+	// normal per-step timeouts intact. A cached-unreachable verdict from the
+	// background probe skips the lane without paying the pre-check timeout —
+	// but only as a fast-path hint: if the fallback also fails, the lane is
+	// retried for real below.
 	directAddr := h.directAddressLocked(namespace)
 	var directErr error
-	if h.probedAddr == directAddr && !h.probeReachable {
-		// The background probe already found the address unreachable — the
-		// usual off-cluster case. Skip the lane without paying the pre-check
-		// timeout, and re-probe off the request path so a network change (a
-		// VPN coming up) can restore the direct lane on a later connect.
+	skippedDirect := h.probedAddr == directAddr && !h.probeReachable
+	if skippedDirect {
 		directErr = errDirectUnreachable
+		// Re-probe off the request path so a network change (a VPN coming up)
+		// can restore the direct lane on a later connect.
 		go h.probeDirectAsync(directAddr)
-	} else if tcpReachable(directAddr, directDialTimeout) {
-		h.probedAddr, h.probeReachable = directAddr, true
-		directCtx, cancelDirect := context.WithTimeout(ctx, directConnectBudget)
-		directErr = h.connectGRPCLocked(directCtx, directAddr)
-		cancelDirect()
-		if directErr == nil {
-			h.viaPortForward = false
-			h.localPort = 0
-			h.stopOwnStaleForwardLocked(namespace)
-			log.Printf("[hubble] Connected to Hubble Relay directly at %s", directAddr)
-			return h.connectionInfoLocked(namespace, contextName), nil
-		}
 	} else {
-		h.probedAddr, h.probeReachable = directAddr, false
-		directErr = errDirectUnreachable
+		directErr = h.tryDirectLocked(ctx, directAddr)
+		if directErr == nil {
+			return h.commitDirectLocked(directAddr, namespace, contextName), nil
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	log.Printf("[hubble] Direct connection to %s failed (%v); falling back to port-forward", directAddr, directErr)
 
+	// The cached verdict that skipped the direct lane may itself be stale (a
+	// probe that raced relay startup); once the fallback is dead too, paying
+	// the pre-check inline is free — try the lane for real before reporting
+	// failure. Covers every fallback failure, including a reused forward that
+	// turns out to be broken.
+	retryDirectAfterSkip := func() *portforward.ConnectionInfo {
+		if !skippedDirect || ctx.Err() != nil {
+			return nil
+		}
+		if retryErr := h.tryDirectLocked(ctx, directAddr); retryErr == nil {
+			return h.commitDirectLocked(directAddr, namespace, contextName)
+		} else {
+			directErr = retryErr
+		}
+		return nil
+	}
+
 	// Fallback lane: managed port-forward, which needs pods/portforward RBAC.
 	log.Printf("[hubble] Starting port-forward to %s/%s:%d", namespace, hubbleRelayService, h.relayPort)
 	connInfo, err := portforward.Start(portforward.OwnerTraffic, ctx, namespace, hubbleRelayService, h.relayPort, contextName)
 	if err != nil {
+		if info := retryDirectAfterSkip(); info != nil {
+			return info, nil
+		}
 		return &portforward.ConnectionInfo{
 			Connected:   false,
 			Namespace:   namespace,
@@ -466,6 +482,9 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 	if err := h.connectGRPCLocked(ctx, grpcAddr); err != nil {
 		portforward.Stop(portforward.OwnerTraffic)
 		h.localPort = 0
+		if info := retryDirectAfterSkip(); info != nil {
+			return info, nil
+		}
 		return &portforward.ConnectionInfo{
 			Connected: false,
 			Error:     fmt.Sprintf("Failed to connect to Hubble Relay via port-forward: %v (direct connection to %s also failed: %v)", err, directAddr, directErr),
@@ -473,6 +492,30 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 	}
 	h.viaPortForward = true
 	return h.connectionInfoLocked(namespace, contextName), nil
+}
+
+// tryDirectLocked attempts the direct lane: TCP pre-check, then the full
+// gRPC/TLS sequence. Records the reachability observation either way. Caller
+// must hold h.mu.
+func (h *HubbleSource) tryDirectLocked(ctx context.Context, directAddr string) error {
+	if !tcpReachable(directAddr, directDialTimeout) {
+		h.recordProbeLocked(directAddr, false)
+		return errDirectUnreachable
+	}
+	h.recordProbeLocked(directAddr, true)
+	directCtx, cancel := context.WithTimeout(ctx, directConnectBudget)
+	defer cancel()
+	return h.connectGRPCLocked(directCtx, directAddr)
+}
+
+// commitDirectLocked finalizes a successful direct connection. Caller must
+// hold h.mu.
+func (h *HubbleSource) commitDirectLocked(directAddr, namespace, contextName string) *portforward.ConnectionInfo {
+	h.viaPortForward = false
+	h.localPort = 0
+	h.stopOwnStaleForwardLocked(namespace)
+	log.Printf("[hubble] Connected to Hubble Relay directly at %s", directAddr)
+	return h.connectionInfoLocked(namespace, contextName)
 }
 
 // connectionInfoLocked builds the ConnectionInfo for the live connection.
@@ -518,16 +561,43 @@ func tcpReachable(addr string, timeout time.Duration) bool {
 
 // probeDirectAsync measures TCP reachability of the direct relay address off
 // the request path and caches the outcome for Connect's lane decision. The
-// dial runs before taking the lock, so an in-flight Connect is never blocked.
+// dial runs before taking the lock, so an in-flight Connect is never blocked;
+// the generation check keeps a slow older probe from overwriting a newer
+// verdict (including Connect's own inline observations).
 func (h *HubbleSource) probeDirectAsync(addr string) {
-	reachable := tcpReachable(addr, directDialTimeout)
 	h.mu.Lock()
-	h.probedAddr = addr
-	h.probeReachable = reachable
+	h.probeSeq++
+	gen := h.probeSeq
 	h.mu.Unlock()
-	if !reachable {
+
+	reachable := tcpReachable(addr, directDialTimeout)
+
+	if h.applyProbeResult(gen, addr, reachable) && !reachable {
 		log.Printf("[hubble] Direct address %s unreachable (background probe); connects will use port-forward", addr)
 	}
+}
+
+// applyProbeResult commits a probe outcome unless a newer generation already
+// landed; reports whether the write was applied.
+func (h *HubbleSource) applyProbeResult(gen uint64, addr string, reachable bool) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if gen <= h.probeApplied {
+		return false
+	}
+	h.probeApplied = gen
+	h.probedAddr = addr
+	h.probeReachable = reachable
+	return true
+}
+
+// recordProbeLocked caches an inline reachability observation as the newest
+// verdict. Caller must hold h.mu.
+func (h *HubbleSource) recordProbeLocked(addr string, reachable bool) {
+	h.probeSeq++
+	h.probeApplied = h.probeSeq
+	h.probedAddr = addr
+	h.probeReachable = reachable
 }
 
 // errDirectUnreachable marks a direct lane that failed at TCP reachability
@@ -538,7 +608,7 @@ var errDirectUnreachable = errors.New("tcp dial failed (unreachable or blocked)"
 // composeConnectError reports both failed lanes so the user sees the whole
 // picture; an RBAC-denied port-forward additionally names the real fixes.
 func composeConnectError(directAddr string, directErr, pfErr error) string {
-	msg := fmt.Sprintf("direct connection to %s failed (%v); port-forward fallback failed: %v", directAddr, directErr, pfErr)
+	msg := fmt.Sprintf("direct connection to %s (%s) failed (%v); port-forward fallback failed: %v", hubbleRelayService, directAddr, directErr, pfErr)
 	if isForbiddenPortForward(pfErr) {
 		msg += " — grant Radar port-forward permission (Helm: rbac.portForward=true)"
 		if errors.Is(directErr, errDirectUnreachable) {

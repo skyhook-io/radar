@@ -189,7 +189,7 @@ func TestComposeConnectErrorForbiddenRemediation(t *testing.T) {
 	}
 }
 
-func TestConnectSkipsDirectLaneOnCachedUnreachable(t *testing.T) {
+func TestStaleUnreachableCacheHealsViaDirectRetry(t *testing.T) {
 	port := startStubRelay(t, nil)
 	client := fake.NewSimpleClientset(relayService(port, intstr.FromInt(4245)))
 
@@ -198,8 +198,10 @@ func TestConnectSkipsDirectLaneOnCachedUnreachable(t *testing.T) {
 	h.servicePort = port
 	h.relayPort = 4245
 	h.clusterIP = "127.0.0.1"
-	// Cached probe verdict: unreachable — even though the stub actually
-	// answers. Connect must trust the cache and skip the direct lane.
+	// Stale cached verdict: unreachable, though the relay actually answers —
+	// e.g. a background probe that raced relay startup. The port-forward
+	// fallback is dead here too (no K8s clients wired), so Connect must
+	// retry the direct lane for real instead of failing on the stale cache.
 	h.probedAddr = fmt.Sprintf("127.0.0.1:%d", port)
 	h.probeReachable = false
 
@@ -207,26 +209,50 @@ func TestConnectSkipsDirectLaneOnCachedUnreachable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
-	if info.Connected {
-		t.Fatal("expected direct lane to be skipped on cached-unreachable")
+	if !info.Connected {
+		t.Fatalf("stale cache should not defeat a reachable relay: %s", info.Error)
 	}
-	if !strings.Contains(info.Error, "direct connection to") {
-		t.Errorf("error %q should report the skipped direct lane", info.Error)
+	if info.LocalPort != 0 {
+		t.Errorf("LocalPort = %d, want 0 (direct mode)", info.LocalPort)
+	}
+	h.mu.RLock()
+	healed := h.probeReachable
+	h.mu.RUnlock()
+	if !healed {
+		t.Error("successful retry should refresh the cached verdict")
+	}
+}
+
+func TestProbeGenerationsKeepNewestVerdict(t *testing.T) {
+	h := NewHubbleSource(fake.NewSimpleClientset())
+
+	// A probe launches, then an inline observation lands first as a newer
+	// generation: the probe's late write must be refused.
+	h.mu.Lock()
+	h.probeSeq++
+	earlyGen := h.probeSeq
+	h.recordProbeLocked("10.0.0.1:80", true)
+	h.mu.Unlock()
+
+	if h.applyProbeResult(earlyGen, "10.0.0.1:80", false) {
+		t.Error("stale probe generation was applied over a newer verdict")
+	}
+	h.mu.RLock()
+	reachable := h.probeReachable
+	h.mu.RUnlock()
+	if !reachable {
+		t.Error("older probe overwrote a newer inline verdict")
 	}
 
-	// The skip fires a background re-probe; against the live stub it must
-	// flip the cache so a later connect can use the direct lane again.
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		h.mu.RLock()
-		flipped := h.probeReachable
-		h.mu.RUnlock()
-		if flipped {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
+	// A probe launched after the inline observation is newer information and
+	// must win.
+	h.mu.Lock()
+	h.probeSeq++
+	lateGen := h.probeSeq
+	h.mu.Unlock()
+	if !h.applyProbeResult(lateGen, "10.0.0.1:80", false) {
+		t.Error("newer probe generation was refused")
 	}
-	t.Error("background re-probe did not refresh the cached verdict")
 }
 
 func TestDetectKicksBackgroundProbe(t *testing.T) {
