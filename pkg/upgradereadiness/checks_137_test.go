@@ -60,6 +60,18 @@ func TestRemovedFeatureGates137(t *testing.T) {
 			wantRef:    "/pull/138907",
 		},
 		{
+			name: "gate present only in the lifecycle diff",
+			configure: func(input *Input) {
+				input.Pods = []*corev1.Pod{{
+					ObjectMeta: metav1.ObjectMeta{Name: "kube-scheduler-node-a", Namespace: "kube-system", Annotations: map[string]string{corev1.MirrorPodAnnotationKey: "mirror"}},
+					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "kube-scheduler", Args: []string{"--feature-gates=SchedulerQueueingHints=false"}}}},
+				}}
+			},
+			wantStatus: CheckBlocked,
+			wantPath:   "spec.containers[0].args[--feature-gates].SchedulerQueueingHints",
+			wantRef:    "versioned_feature_list.yaml",
+		},
+		{
 			name: "configz unavailable",
 			configure: func(input *Input) {
 				input.NodeRuntimeEvidence[0].ConfigAvailable = false
@@ -84,6 +96,40 @@ func TestRemovedFeatureGates137(t *testing.T) {
 				requireFindingReference(t, check.Findings, tc.wantRef)
 			}
 		})
+	}
+}
+
+func TestFeatureGateLifecycleCatalog137(t *testing.T) {
+	removed := []string{
+		"AnonymousAuthConfigurableEndpoints", "APIServerTracing", "AnyVolumeDataSource", "AuthorizeNodeWithSelectors", "AuthorizeWithSelectors",
+		"BtreeWatchCache", "ConsistentListFromCache", "GangScheduling", "JobBackoffLimitPerIndex", "JobPodReplacementPolicy",
+		"JobSuccessPolicy", "LogarithmicScaleDown", "OrderedNamespaceDeletion", "PodLifecycleSleepAction", "PodLifecycleSleepActionAllowZero",
+		"PreventStaticPodAPIReferences", "RelaxedDNSSearchValidation", "ResilientWatchCacheInitialization", "RetryGenerateName", "SchedulerQueueingHints",
+		"SidecarContainers", "StreamingCollectionEncodingToJSON", "StreamingCollectionEncodingToProtobuf", "StructuredAuthenticationConfiguration", "WorkloadAwarePreemption",
+	}
+	if len(removedFeatureGates137) != len(removed) {
+		t.Fatalf("removed feature-gate count = %d, want %d from the 1.36→1.37 lifecycle diff", len(removedFeatureGates137), len(removed))
+	}
+	for _, name := range removed {
+		if !removedFeatureGates137[name] {
+			t.Errorf("removed feature-gate catalog is missing %s", name)
+		}
+	}
+
+	locked := map[string]bool{
+		"DeclarativeValidationTakeover": false, "DisableCPUQuotaWithExclusiveCPUs": true, "DRAExtendedResource": true,
+		"DRAPrioritizedList": true, "DRAResourceClaimDeviceStatus": true, "HostnameOverride": true,
+		"HPAConfigurableTolerance": true, "InPlacePodVerticalScalingInitContainers": true, "NodeDeclaredFeatures": true,
+		"PLEGOnDemandRelist": true, "PodReadyToStartContainersCondition": true, "RelaxedServiceNameValidation": true,
+		"WatchCacheInitializationPostStartHook": true,
+	}
+	if len(lockedFeatureGates137) != len(locked) {
+		t.Fatalf("newly locked feature-gate count = %d, want %d from the 1.37 lifecycle", len(lockedFeatureGates137), len(locked))
+	}
+	for name, wantDefault := range locked {
+		if gotDefault, ok := lockedFeatureGates137[name]; !ok || gotDefault != wantDefault {
+			t.Errorf("locked feature gate %s = (%t, %t), want default %t", name, gotDefault, ok, wantDefault)
+		}
 	}
 }
 
@@ -140,6 +186,14 @@ func TestLockedFeatureGateAcrossComponents137(t *testing.T) {
 	if check.Status != CheckBlocked || len(check.Findings) != 1 || check.Findings[0].Resource.Kind != "Node" {
 		t.Fatalf("kubelet locked gate = %+v, want node blocker", check)
 	}
+
+	input = completeInput()
+	input.NodeRuntimeEvidence[0].FeatureGates["DisableCPUQuotaWithExclusiveCPUs"] = false
+	check = checkByID(t, scan137(t, input), "removed-feature-gates")
+	if check.Status != CheckBlocked || len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Impact, "locks this kubelet feature gate to true") {
+		t.Fatalf("newly locked kubelet gate = %+v, want blocker", check)
+	}
+	requireFindingReference(t, check.Findings, "versioned_feature_list.yaml")
 }
 
 func TestRemovedFeatureGatesReportsManagedControlPlaneGap137(t *testing.T) {
@@ -163,12 +217,19 @@ func TestRemovedControlPlaneConfigurationScope137(t *testing.T) {
 	input := completeInput()
 	input.Namespaces = []string{"apps"}
 	featureGates := checkByID(t, scan137(t, input), "removed-feature-gates")
-	if featureGates.Status != CheckPassed || !strings.Contains(featureGates.Caveat, "kube-system") {
-		t.Fatalf("scoped feature-gate evidence = %+v, want kube-system caveat with readable node evidence", featureGates)
+	if featureGates.Status != CheckUnknown || !strings.Contains(featureGates.Caveat, "kube-system") {
+		t.Fatalf("scoped feature-gate evidence = %+v, want unknown with kube-system caveat", featureGates)
 	}
 	componentFlags := checkByID(t, scan137(t, input), "removed-component-flags")
 	if componentFlags.Status != CheckUnknown || !strings.Contains(componentFlags.Summary, "kube-system") {
 		t.Fatalf("scoped component-flag evidence = %+v, want unknown", componentFlags)
+	}
+
+	input = completeInput()
+	input.Pods = nil
+	featureGates = checkByID(t, scan137(t, input), "removed-feature-gates")
+	if featureGates.Status != CheckUnknown || !strings.Contains(featureGates.Caveat, "Pods were unavailable") {
+		t.Fatalf("unavailable Pod evidence = %+v, want unknown", featureGates)
 	}
 }
 
@@ -176,7 +237,7 @@ func TestKubeletEventRecordQPS137(t *testing.T) {
 	input := completeInput()
 	input.NodeRuntimeEvidence[0].EventRecordQPS = 0
 	check := checkByID(t, scan137(t, input), "kubelet-event-qps-change")
-	if check.Status != CheckWarning || len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Remediation, "50") {
+	if check.Status != CheckWarning || len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Impact, "5 events per second") || !strings.Contains(check.Findings[0].Remediation, "kubelet default") || !strings.Contains(check.Findings[0].Remediation, "pre-1.37 effective rate") {
 		t.Fatalf("zero eventRecordQPS = %+v, want behavior-change warning", check)
 	}
 	requireFindingReference(t, check.Findings, "/pull/117119")
@@ -427,6 +488,9 @@ func TestRemovedControlPlaneMetrics137(t *testing.T) {
 	if check.Status != CheckWarning || len(check.Findings) != 1 {
 		t.Fatalf("removed metric rule = %+v, want warning", check)
 	}
+	if !strings.Contains(check.Findings[0].Remediation, `apiserver_storage_list_total{storage="watchcache"}`) {
+		t.Fatalf("cache-list remediation = %q, want the equivalent watchcache selector", check.Findings[0].Remediation)
+	}
 	requireFindingReference(t, check.Findings, "/pull/139154")
 
 	groups := input.PrometheusRules[0].Object["spec"].(map[string]any)["groups"].([]any)
@@ -565,6 +629,16 @@ func TestSELinuxMountTransitionEvidenceBoundaries137(t *testing.T) {
 		t.Fatalf("conflict event remediation = %q, want the controller metric that identifies both Pods", check.Findings[0].Remediation)
 	}
 
+	input = completeInput()
+	input.Events = []*corev1.Event{{Reason: "MultipleSELinuxLabels", Message: "Volume shared is mounted twice with different SELinux labels inside this pod", InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "apps", Name: "api"}}}
+	check = checkByID(t, scan137(t, input), "selinux-mount-transition")
+	if check.Status != CheckWarning || len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Impact, "this Pod mounts one volume more than once") || strings.Contains(check.Findings[0].Impact, "same node") {
+		t.Fatalf("single-Pod SELinux event = %+v, want unconditional in-Pod conflict", check)
+	}
+	if !strings.Contains(check.Findings[0].Remediation, "securityContext.seLinuxOptions") || strings.Contains(check.Findings[0].Remediation, "identify both Pods") {
+		t.Fatalf("single-Pod SELinux remediation = %q, want this Pod's security contexts", check.Findings[0].Remediation)
+	}
+
 	input = selinuxSharedVolumeInput(t, nil, nil, "s0:c1,c2", "s0:c1,c2")
 	input.CSIDrivers = nil
 	check = checkByID(t, scan137(t, input), "selinux-mount-transition")
@@ -606,7 +680,7 @@ func TestSELinuxMountExplicitOptOut137(t *testing.T) {
 	input := completeInput()
 	input.NodeRuntimeEvidence[0].FeatureGates["SELinuxMount"] = false
 	check := checkByID(t, scan137(t, input), "selinux-mount-transition")
-	if check.Status != CheckNotApplicable || !strings.Contains(check.Summary, "every readable Linux kubelet") || !strings.Contains(check.EvidenceNote, "1.38") || check.Caveat != "" {
+	if check.Status != CheckNotApplicable || !strings.Contains(check.Summary, "every readable Linux kubelet") || !strings.Contains(check.Summary, "1.38") || !strings.Contains(check.EvidenceNote, "configz") || check.Caveat != "" {
 		t.Fatalf("complete 1.37 opt-out = %+v, want not applicable with expiry", check)
 	}
 

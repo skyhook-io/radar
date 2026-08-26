@@ -17,24 +17,47 @@ import (
 )
 
 var removedFeatureGates137 = map[string]bool{
+	"AnonymousAuthConfigurableEndpoints":    true,
 	"APIServerTracing":                      true,
 	"AnyVolumeDataSource":                   true,
+	"AuthorizeNodeWithSelectors":            true,
+	"AuthorizeWithSelectors":                true,
 	"BtreeWatchCache":                       true,
 	"ConsistentListFromCache":               true,
 	"GangScheduling":                        true,
+	"JobBackoffLimitPerIndex":               true,
+	"JobPodReplacementPolicy":               true,
+	"JobSuccessPolicy":                      true,
+	"LogarithmicScaleDown":                  true,
 	"OrderedNamespaceDeletion":              true,
+	"PodLifecycleSleepAction":               true,
+	"PodLifecycleSleepActionAllowZero":      true,
 	"PreventStaticPodAPIReferences":         true,
 	"RelaxedDNSSearchValidation":            true,
 	"ResilientWatchCacheInitialization":     true,
 	"RetryGenerateName":                     true,
+	"SchedulerQueueingHints":                true,
 	"SidecarContainers":                     true,
 	"StreamingCollectionEncodingToJSON":     true,
 	"StreamingCollectionEncodingToProtobuf": true,
+	"StructuredAuthenticationConfiguration": true,
 	"WorkloadAwarePreemption":               true,
 }
 
 var lockedFeatureGates137 = map[string]bool{
-	"DeclarativeValidationTakeover": false,
+	"DeclarativeValidationTakeover":           false,
+	"DisableCPUQuotaWithExclusiveCPUs":        true,
+	"DRAExtendedResource":                     true,
+	"DRAPrioritizedList":                      true,
+	"DRAResourceClaimDeviceStatus":            true,
+	"HostnameOverride":                        true,
+	"HPAConfigurableTolerance":                true,
+	"InPlacePodVerticalScalingInitContainers": true,
+	"NodeDeclaredFeatures":                    true,
+	"PLEGOnDemandRelist":                      true,
+	"PodReadyToStartContainersCondition":      true,
+	"RelaxedServiceNameValidation":            true,
+	"WatchCacheInitializationPostStartHook":   true,
 }
 
 var removedKubeadmFeatureGates137 = map[string]bool{
@@ -44,6 +67,7 @@ var removedKubeadmFeatureGates137 = map[string]bool{
 
 func scanRemovedFeatureGates(input *Input) Check {
 	check := Check{ID: "removed-feature-gates", Category: "Component configuration", Title: "Feature gates removed or locked in Kubernetes 1.37", Status: CheckPassed, Summary: "No incompatible feature-gate settings were found in readable component configuration.", Scope: "Effective kubelet configuration and readable control-plane mirror Pods", AppliesFrom: "1.37", References: append([]Reference(nil), changelog137References...)}
+	controlPlaneEvidenceUnavailable := false
 	evidenceByNode := make(map[string]NodeRuntimeEvidence, len(input.NodeRuntimeEvidence))
 	for _, evidence := range input.NodeRuntimeEvidence {
 		evidenceByNode[evidence.NodeName] = evidence
@@ -82,8 +106,10 @@ func scanRemovedFeatureGates(input *Input) Check {
 	}
 	foundControlPlaneComponents := map[string]bool{}
 	if !kubeSystemCovered(input, "pods") {
+		controlPlaneEvidenceUnavailable = true
 		check.Caveat = appendCaveat(check.Caveat, "kube-system is outside the readable Pod scope, so control-plane feature gates could not be inspected.")
 	} else if input.Pods == nil {
+		controlPlaneEvidenceUnavailable = true
 		check.Caveat = appendCaveat(check.Caveat, "Pods were unavailable, so control-plane feature gates could not be inspected.")
 	} else {
 		for _, pod := range input.Pods {
@@ -129,6 +155,10 @@ func scanRemovedFeatureGates(input *Input) Check {
 			check.Status = CheckUnknown
 			check.Summary = "No removed feature gates were found in readable component configuration, but kubelet configuration coverage is incomplete."
 		}
+	}
+	if controlPlaneEvidenceUnavailable && len(check.Findings) == 0 {
+		check.Status = CheckUnknown
+		check.Summary = "No incompatible feature gates were found in readable kubelet configuration, but control-plane coverage is unavailable."
 	}
 	if len(check.Findings) > 0 {
 		check.Summary = fmt.Sprintf("%d incompatible feature-gate %s must be fixed before upgrading.", len(check.Findings), plural(len(check.Findings), "setting", "settings"))
@@ -243,7 +273,7 @@ func scanKubeletEventQPS(input *Input) Check {
 		if evidence.EventRecordQPS != 0 {
 			continue
 		}
-		check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: "eventRecordQPS zero becomes unlimited", Level: LevelWarning, Resource: &ResourceRef{Kind: "Node", Name: node.Name}, Evidence: Evidence{Source: "kubelet configz", Path: "kubeletconfig.eventRecordQPS", Detail: "0"}, AppliesFrom: check.AppliesFrom, Impact: "Kubernetes 1.37 fixes zero to mean unlimited event recording instead of the previous effective default, which can sharply increase event traffic.", Remediation: "Set eventRecordQPS to 50 to preserve the pre-1.37 effective limit, or choose another deliberate limit after reviewing event volume.", References: append([]Reference(nil), check.References...)})
+		check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: "eventRecordQPS zero becomes unlimited", Level: LevelWarning, Resource: &ResourceRef{Kind: "Node", Name: node.Name}, Evidence: Evidence{Source: "kubelet configz", Path: "kubeletconfig.eventRecordQPS", Detail: "0"}, AppliesFrom: check.AppliesFrom, Impact: "Kubernetes 1.37 makes an explicit zero mean unlimited event recording; before 1.37 it fell back to client-go's default of 5 events per second, so event traffic can increase sharply.", Remediation: "Upstream recommends setting eventRecordQPS to 50, the kubelet default, before upgrading. Set it to 5 to preserve this node's pre-1.37 effective rate, or choose another deliberate limit after reviewing event volume.", References: append([]Reference(nil), check.References...)})
 	}
 	if missing > 0 {
 		check.Caveat = fmt.Sprintf("eventRecordQPS was unavailable for %d %s; kubelets with debugging handlers disabled do not serve configz.", missing, plural(missing, "node", "nodes"))
@@ -550,9 +580,9 @@ func scanRemovedControlPlaneMetrics(input *Input) Check {
 		return check
 	}
 	removed := map[string]string{
-		"apiserver_cache_list_total":                  "apiserver_storage_list_*",
-		"apiserver_cache_list_fetched_objects_total":  "apiserver_storage_list_*",
-		"apiserver_cache_list_returned_objects_total": "apiserver_storage_list_*",
+		"apiserver_cache_list_total":                  `apiserver_storage_list_total{storage="watchcache"}`,
+		"apiserver_cache_list_fetched_objects_total":  `apiserver_storage_list_fetched_objects_total{storage="watchcache"}`,
+		"apiserver_cache_list_returned_objects_total": `apiserver_storage_list_returned_objects_total{storage="watchcache"}`,
 		"resourceclaim_controller_creates_total":      "dynamic_resource_allocation_resourceclaim_creates_total",
 		"scheduler_resourceclaim_creates_total":       "dynamic_resource_allocation_resourceclaim_creates_total",
 		"resourceclaim_controller_resource_claims":    "dynamic_resource_allocation_resource_claims",
@@ -606,8 +636,8 @@ func scanSELinuxMountTransition(input *Input, targetAllowsOptOut bool) Check {
 	}
 	if targetAllowsOptOut && allLinuxKubeletsDisableSELinuxMount(input) {
 		check.Status = CheckNotApplicable
-		check.Summary = "SELinuxMount is explicitly disabled on every readable Linux kubelet for the Kubernetes 1.37 target."
-		check.EvidenceNote = "This opt-out is available for Kubernetes 1.37 only; SELinuxMount is expected to lock enabled in Kubernetes 1.38."
+		check.Summary = "SELinuxMount is disabled on every readable Linux kubelet; this opt-out is valid for Kubernetes 1.37 only and is expected to disappear in 1.38."
+		check.EvidenceNote = "Effective kubelet configz reported SELinuxMount=false on every readable Linux node."
 		return check
 	}
 
@@ -1026,13 +1056,19 @@ func appendSELinuxEventFindings(events []*corev1.Event, check *Check) {
 		if apiGroup, _, ok := strings.Cut(ref.APIVersion, "/"); ok {
 			group = apiGroup
 		}
+		impact := "The selinux-warning-controller reported a potential volume-labeling conflict that can prevent the workload from starting if the affected Pods land on the same node."
+		remediation := "Inspect selinux_warning_controller_selinux_volume_conflict to identify both Pods, then align SELinux labels and seLinuxChangePolicy values for every Pod sharing the affected volume."
+		if event.Reason == "MultipleSELinuxLabels" {
+			impact = "The selinux-warning-controller reported that this Pod mounts one volume more than once with different SELinux labels; the conflict can prevent the workload from starting."
+			remediation = "Inspect this Pod's pod- and container-level securityContext.seLinuxOptions values, then align the SELinux labels for every mount of the affected volume inside the Pod."
+		}
 		check.Findings = append(check.Findings, Finding{
 			RuleID: check.ID, Title: event.Reason, Level: LevelWarning,
 			Resource:    &ResourceRef{Group: group, Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name},
 			Evidence:    Evidence{Source: "event", Path: "reason", Detail: event.Message},
 			AppliesFrom: check.AppliesFrom,
-			Impact:      "The selinux-warning-controller reported a potential volume-labeling conflict that can prevent the workload from starting if the affected Pods land on the same node.",
-			Remediation: selinuxMountRemediation("Inspect selinux_warning_controller_selinux_volume_conflict to identify both Pods, then align SELinux labels and seLinuxChangePolicy values for every Pod sharing the affected volume."),
+			Impact:      impact,
+			Remediation: selinuxMountRemediation(remediation),
 			References:  append([]Reference(nil), check.References...),
 		})
 	}
