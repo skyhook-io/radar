@@ -112,6 +112,9 @@ export function SelectMenu({
       </button>
       {open && (
         <div
+          onBlur={(event) => {
+            if (!rootRef.current?.contains(event.relatedTarget as Node | null)) setOpen(false)
+          }}
           className={clsx(
             'absolute top-full z-50 mt-1 min-w-full overflow-hidden rounded-md border border-theme-border bg-theme-surface shadow-theme-lg',
             searchPlaceholder ? 'left-0 right-0' : 'right-0'
@@ -144,14 +147,21 @@ export function SelectMenu({
                 aria-autocomplete="list"
                 aria-controls={listboxId}
                 aria-expanded="true"
+                aria-activedescendant={
+                  filteredOptions.length > 0
+                    ? `${listboxId}-option-${Math.min(highlightedIndex, filteredOptions.length - 1)}`
+                    : undefined
+                }
                 placeholder={searchPlaceholder}
                 className="min-w-0 flex-1 bg-transparent text-xs text-theme-text-primary outline-none placeholder:text-theme-text-tertiary"
               />
             </div>
           )}
-          {searchPlaceholder && filteredOptions.length > 0 && (
+          {searchPlaceholder && (
             <span className="sr-only" aria-live="polite">
-              {filteredOptions.length} {filteredOptions.length === 1 ? 'option' : 'options'} available.
+              {filteredOptions.length === 0
+                ? 'No matches.'
+                : `${filteredOptions.length} ${filteredOptions.length === 1 ? 'option' : 'options'} available.`}
             </span>
           )}
           <div
@@ -187,6 +197,7 @@ export function SelectMenu({
               return (
                 <button
                   key={option.value}
+                  id={`${listboxId}-option-${index}`}
                   type="button"
                   role="option"
                   aria-selected={active}
@@ -208,7 +219,7 @@ export function SelectMenu({
             })}
           </div>
           {filteredOptions.length === 0 && (
-            <p role="status" className="px-3 py-2 text-xs text-theme-text-tertiary">
+            <p className="px-3 py-2 text-xs text-theme-text-tertiary">
               No matches.
             </p>
           )}
