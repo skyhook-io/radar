@@ -34,6 +34,7 @@ type Options struct {
 	PrometheusRuleUnavailableNamespaces  []string
 	ConfigMapNamespaces                  []string
 	PersistentVolumeClaimNamespaces      []string
+	EventNamespaces                      []string
 	CanReadNodes                         bool
 	CanReadPersistentVolumes             bool
 	SourceObjects                        []metav1.Object
@@ -97,9 +98,16 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts Options) (
 	if opts.CanReadNodes {
 		nodes = audit.ListNamespaced(cache.Nodes(), namespaces)
 	}
-	events := audit.ListNamespaced(cache.Events(), namespaces)
-
 	input.CacheScopedKinds = upgradeCacheScopedKinds(cache, namespaces, opts.CurrentVersion, opts.TargetVersion)
+	var events []*corev1.Event
+	if includesUpgradeEvidenceKind(opts.CurrentVersion, opts.TargetVersion, string(k8score.Events)) {
+		eventNamespaces := cachedEvidenceNamespaceScope(cache, string(k8score.Events), namespaces, opts.EventNamespaces)
+		if !noNamespaceAccess(eventNamespaces) {
+			events = audit.ListNamespaced(cache.Events(), eventNamespaces)
+		}
+		input.CacheScopedKinds = recordEvidenceNamespaceScope(input.CacheScopedKinds, string(k8score.Events), eventNamespaces, namespaces)
+	}
+
 	input.Pods = typed.Pods
 	input.Deployments = typed.Deployments
 	input.ReplicaSets = replicaSets
@@ -154,11 +162,15 @@ func upgradeCacheScopeResources(currentVersion, targetVersion string) []string {
 	}
 	crosses135, _ := upgradereadiness.UpgradePathIncludesRelease(currentVersion, targetVersion, "1.35")
 	crosses137, _ := upgradereadiness.UpgradePathIncludesRelease(currentVersion, targetVersion, "1.37")
+	includesKubeProxyModeTransition, _ := upgradereadiness.UpgradePathIncludesKubeProxyModeTransition(currentVersion, targetVersion)
 	if crosses135 || crosses137 {
 		resources = append(resources, string(k8score.Events))
 	}
+	if crosses137 || includesKubeProxyModeTransition {
+		resources = append(resources, string(k8score.ConfigMaps))
+	}
 	if crosses137 {
-		resources = append(resources, string(k8score.ConfigMaps), string(k8score.PersistentVolumeClaims))
+		resources = append(resources, string(k8score.PersistentVolumeClaims))
 	}
 	return resources
 }

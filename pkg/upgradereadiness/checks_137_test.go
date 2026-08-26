@@ -280,7 +280,7 @@ func TestManagedControlPlaneScopeDoesNotBecomeUnknown137(t *testing.T) {
 
 			input.NodeRuntimeEvidence[0].FeatureGates["SidecarContainers"] = true
 			featureGates = checkByID(t, scan137(t, input), "removed-feature-gates")
-			if featureGates.Status != CheckBlocked || len(featureGates.Findings) != 1 || featureGates.Caveat != "" || !strings.Contains(featureGates.EvidenceNote, "provider manages the control plane") {
+			if featureGates.Status != CheckBlocked || len(featureGates.Findings) != 1 || featureGates.Caveat != "" || !strings.Contains(featureGates.EvidenceNote, "provider manages the control plane") || !strings.Contains(featureGates.EvidenceNote, "does not reveal") || !strings.Contains(featureGates.Findings[0].Remediation, "provider-supported") {
 				t.Fatalf("managed control plane with kubelet blocker = %+v, want blocker with provider boundary", featureGates)
 			}
 		})
@@ -430,7 +430,7 @@ func TestKubeadmV1Beta3Config137(t *testing.T) {
 		Data:       map[string]string{"ClusterConfiguration": "apiVersion: kubeadm.k8s.io/v1beta3\nkind: ClusterConfiguration\n"},
 	}}
 	check := checkByID(t, scan137(t, input), "kubeadm-config-v1beta3")
-	if check.Status != CheckBlocked || len(check.Findings) != 1 {
+	if check.Status != CheckBlocked || len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Remediation, "config migrate") || !strings.Contains(check.Findings[0].Remediation, "upload-config kubeadm") {
 		t.Fatalf("kubeadm v1beta3 = %+v, want blocker", check)
 	}
 	requireFindingReference(t, check.Findings, "/pull/136016")
@@ -528,7 +528,7 @@ func TestManagedKubeProxyUsesProviderRemediation137(t *testing.T) {
 	}
 }
 
-func TestKubeProxyModeTransitionOnlyAppliesWhenCrossing137(t *testing.T) {
+func TestKubeProxyModeTransitionPersistsUntilDefaultChange(t *testing.T) {
 	input := completeInput()
 	input.DaemonSets = []*appsv1.DaemonSet{kubeProxyDaemonSet("--proxy-mode=ipvs")}
 	for _, tc := range []struct {
@@ -538,8 +538,10 @@ func TestKubeProxyModeTransitionOnlyAppliesWhenCrossing137(t *testing.T) {
 	}{
 		{current: "1.36", target: "1.37", want: true},
 		{current: "1.36", target: "1.38", want: true},
-		{current: "1.37", target: "1.38", want: false},
-		{current: "1.38", target: "1.39", want: false},
+		{current: "1.37", target: "1.38", want: true},
+		{current: "1.38", target: "1.39", want: true},
+		{current: "1.39", target: "1.40", want: true},
+		{current: "1.40", target: "1.41", want: false},
 	} {
 		result, err := Scan(input, tc.current, tc.target)
 		if err != nil {
@@ -555,6 +557,31 @@ func TestKubeProxyModeTransitionOnlyAppliesWhenCrossing137(t *testing.T) {
 		if found != tc.want {
 			t.Fatalf("Scan(%s, %s) includes kube-proxy transition = %v, want %v", tc.current, tc.target, found, tc.want)
 		}
+	}
+}
+
+func TestKubeProxyModeTransitionInspectsMirrorPods137(t *testing.T) {
+	input := completeInput()
+	input.Pods = []*corev1.Pod{{
+		ObjectMeta: metav1.ObjectMeta{Name: "kube-proxy-node-a", Namespace: "kube-system", Annotations: map[string]string{corev1.MirrorPodAnnotationKey: "mirror"}},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "kube-proxy", Args: []string{"--proxy-mode=ipvs"}}}},
+	}}
+	check := checkByID(t, scan137(t, input), "kube-proxy-mode-transition")
+	if check.Status != CheckReview || len(check.Findings) != 1 || check.Findings[0].Resource == nil || check.Findings[0].Resource.Kind != "Pod" || check.Findings[0].Evidence.Detail != "ipvs" {
+		t.Fatalf("mirror Pod kube-proxy = %+v, want Pod-backed IPVS review", check)
+	}
+
+	input.Pods[0].Spec.Containers[0].Args = []string{"--config=/var/lib/kube-proxy/config.yaml"}
+	check = checkByID(t, scan137(t, input), "kube-proxy-mode-transition")
+	if check.Status != CheckUnknown || !strings.Contains(check.Caveat, "not readable through the Kubernetes API") {
+		t.Fatalf("mirror Pod file config = %+v, want unknown", check)
+	}
+}
+
+func TestKubeProxyModeTransitionWithoutObservableWorkloadIsUnknown137(t *testing.T) {
+	check := checkByID(t, scan137(t, completeInput()), "kube-proxy-mode-transition")
+	if check.Status != CheckUnknown || !strings.Contains(check.Summary, "DaemonSet or mirror Pod") {
+		t.Fatalf("unobservable kube-proxy = %+v, want unknown", check)
 	}
 }
 
@@ -937,6 +964,13 @@ func TestSELinuxMountTransitionEvidenceBoundaries137(t *testing.T) {
 	if check.Status != CheckUnknown || !strings.Contains(check.Caveat, "Pods, PersistentVolumeClaims and Events") {
 		t.Fatalf("namespace-scoped SELinux evidence = %+v, want unknown with scope caveat", check)
 	}
+
+	input = completeInput()
+	input.CacheScopedKinds = map[string][]string{"pods": {"team-a"}, "persistentvolumeclaims": {"team-a"}, "events": {"team-a"}}
+	check = checkByID(t, scan137(t, input), "selinux-mount-transition")
+	if check.Status != CheckUnknown || !strings.Contains(check.Caveat, "Cached evidence is namespace-limited") {
+		t.Fatalf("informer-scoped SELinux evidence = %+v, want unknown with cache-scope caveat", check)
+	}
 }
 
 func TestSELinuxMountExplicitOptOut137(t *testing.T) {
@@ -977,6 +1011,9 @@ func TestSELinuxMountTransitionTranslatesMigratedInTreeVolume137(t *testing.T) {
 	check := checkByID(t, scan137(t, input), "selinux-mount-transition")
 	if check.Status != CheckReview || len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Title, "conflicting SELinux labels") {
 		t.Fatalf("migrated in-tree EBS volume = %+v, want CSI-translated conflict review", check)
+	}
+	if input.PersistentVolumes[0].Spec.AWSElasticBlockStore == nil || input.PersistentVolumes[0].Spec.CSI != nil {
+		t.Fatalf("scan mutated source PV = %+v", input.PersistentVolumes[0].Spec.PersistentVolumeSource)
 	}
 }
 

@@ -119,6 +119,14 @@ func runUpgradeReadinessScan(ctx context.Context, authz EvidenceAuthorizer, name
 	if err != nil {
 		return nil, err
 	}
+	collect135Evidence, err := upgradereadiness.UpgradePathIncludesRelease(currentVersion, targetVersion, "1.35")
+	if err != nil {
+		return nil, err
+	}
+	collectKubeProxyModeEvidence, err := upgradereadiness.UpgradePathIncludesKubeProxyModeTransition(currentVersion, targetVersion)
+	if err != nil {
+		return nil, err
+	}
 	noAccess := noNamespaceAccess(namespaces)
 	var scanInput *k8s.ResourceCache
 	if !noAccess {
@@ -148,6 +156,7 @@ func runUpgradeReadinessScan(ctx context.Context, authz EvidenceAuthorizer, name
 	var schedulingV1Alpha2Installed, schedulingV1Alpha2DiscoveryAvailable bool
 	configMapNamespaces := cloneStrings(namespaces)
 	persistentVolumeClaimNamespaces := cloneStrings(namespaces)
+	eventNamespaces := cloneStrings(namespaces)
 	canReadNodes := !noAccess && authz.CanList("", "nodes", "")
 	if !noAccess {
 		if helmNamespaces, ok := ResolveHelmNamespaces(ctx, authz, namespaces); ok {
@@ -167,8 +176,13 @@ func runUpgradeReadinessScan(ctx context.Context, authz EvidenceAuthorizer, name
 		if collect137Evidence {
 			csiDrivers = collectUpgradeCSIDrivers(ctx, authz)
 			schedulingV1Alpha2Objects, schedulingV1Alpha2Installed, schedulingV1Alpha2DiscoveryAvailable, schedulingV1Alpha2UnavailableKinds = collectSchedulingV1Alpha2Evidence(ctx, authz, namespaces)
-			configMapNamespaces = resolveCachedEvidenceNamespaces(authz, "", "configmaps", namespaces)
 			persistentVolumeClaimNamespaces = resolveCachedEvidenceNamespaces(authz, "", "persistentvolumeclaims", namespaces)
+		}
+		if collect137Evidence || collectKubeProxyModeEvidence {
+			configMapNamespaces = resolveCachedEvidenceNamespaces(authz, "", "configmaps", namespaces)
+		}
+		if collect135Evidence || collect137Evidence {
+			eventNamespaces = resolveCachedEvidenceNamespaces(authz, "", "events", namespaces)
 		}
 		if canReadNodes && authz.CanGetSubresource("", "nodes", "proxy") && cache.Nodes() != nil {
 			nodes, _ := cache.Nodes().List(labels.Everything())
@@ -197,6 +211,7 @@ func runUpgradeReadinessScan(ctx context.Context, authz EvidenceAuthorizer, name
 		PrometheusRuleUnavailableNamespaces:  prometheusUnavailableNamespaces,
 		ConfigMapNamespaces:                  configMapNamespaces,
 		PersistentVolumeClaimNamespaces:      persistentVolumeClaimNamespaces,
+		EventNamespaces:                      eventNamespaces,
 		CanReadNodes:                         canReadNodes,
 		CanReadPersistentVolumes:             !noAccess && authz.CanList("", "persistentvolumes", ""),
 		SourceObjects:                        sourceObjects,

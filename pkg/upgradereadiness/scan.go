@@ -104,8 +104,10 @@ func Scan(input *Input, currentVersion, targetVersion string) (*ScanResults, err
 			scanKubeadmConfig(input),
 			scanRemovedControlPlaneMetrics(input),
 			scanSELinuxMountTransition(input, target.Major() == 1 && target.Minor() == 37),
-			scanKubeProxyModeTransition(input),
 		)
+	}
+	if includesKubeProxyModeTransition(current, target) {
+		result.Checks = append(result.Checks, scanKubeProxyModeTransition(input))
 	}
 
 	result.Checks = append(result.Checks,
@@ -219,6 +221,10 @@ func cacheScopedCoverageNote(input *Input, kinds []string) string {
 func crossesRelease(current, target *utilversion.Version, release string) bool {
 	v := utilversion.MustParseGeneric(release)
 	return current.LessThan(v) && target.AtLeast(v)
+}
+
+func includesKubeProxyModeTransition(current, target *utilversion.Version) bool {
+	return target.AtLeast(utilversion.MustParseGeneric("1.37")) && current.LessThan(utilversion.MustParseGeneric("1.40"))
 }
 
 func scanUpgradePath(current, target *utilversion.Version) Check {
@@ -1285,6 +1291,14 @@ func UpgradePathIncludesRelease(currentVersion, targetVersion, release string) (
 		return false, err
 	}
 	return current.LessThan(boundary) && target.AtLeast(boundary), nil
+}
+
+func UpgradePathIncludesKubeProxyModeTransition(currentVersion, targetVersion string) (bool, error) {
+	current, target, err := validateUpgradeVersions(currentVersion, targetVersion)
+	if err != nil {
+		return false, err
+	}
+	return includesKubeProxyModeTransition(current, target), nil
 }
 
 func validateUpgradeVersions(currentVersion, targetVersion string) (*utilversion.Version, *utilversion.Version, error) {

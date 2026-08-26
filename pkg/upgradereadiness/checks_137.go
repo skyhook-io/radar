@@ -100,6 +100,8 @@ type commandFlagSetting struct {
 
 func scanRemovedFeatureGates(input *Input) Check {
 	check := Check{ID: "removed-feature-gates", Category: "Component configuration", Title: "Feature gates removed or locked in Kubernetes 1.37", Status: CheckPassed, Summary: "No incompatible feature-gate settings were found in readable component configuration.", Scope: "Effective kubelet configuration and readable control-plane mirror Pods", AppliesFrom: "1.37", References: append([]Reference(nil), changelog137References...)}
+	controlPlaneManaged := managedControlPlane(input)
+	managedNodeFinding := false
 	controlPlaneEvidenceUnavailable := false
 	evidenceByNode := make(map[string]NodeRuntimeEvidence, len(input.NodeRuntimeEvidence))
 	for _, evidence := range input.NodeRuntimeEvidence {
@@ -127,19 +129,31 @@ func scanRemovedFeatureGates(input *Input) Check {
 					if name == "PreventStaticPodAPIReferences" && !enabled {
 						impact = "Kubelet 1.37 removes this gate and the opt-out that allowed static Pods to reference API objects; the node configuration will be rejected and any dependent static Pod cannot start."
 					}
-					check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: name + " is removed", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Node", Name: node.Name}, Evidence: Evidence{Source: "kubelet configz", Path: "kubeletconfig.featureGates." + name, Detail: fmt.Sprintf("%t", enabled)}, AppliesFrom: check.AppliesFrom, Impact: impact, Remediation: "Remove " + name + " from the kubelet feature-gates configuration before upgrading this node.", References: append([]Reference(nil), removedFeatureGateReferences137[name]...)})
+					remediation := "Remove " + name + " from the kubelet feature-gates configuration before upgrading this node."
+					if controlPlaneManaged {
+						managedNodeFinding = true
+						remediation = "If this setting comes from node-pool or bootstrap configuration, remove " + name + ". Otherwise, upgrade or replace the node through the provider-supported path and verify the target node image no longer emits it."
+					}
+					check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: name + " is removed", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Node", Name: node.Name}, Evidence: Evidence{Source: "kubelet configz", Path: "kubeletconfig.featureGates." + name, Detail: fmt.Sprintf("%t", enabled)}, AppliesFrom: check.AppliesFrom, Impact: impact, Remediation: remediation, References: append([]Reference(nil), removedFeatureGateReferences137[name]...)})
 					continue
 				}
 				defaultValue, locked := lockedFeatureGates137[name]
 				if !locked || enabled == defaultValue {
 					continue
 				}
-				check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: name + " must use its locked default", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Node", Name: node.Name}, Evidence: Evidence{Source: "kubelet configz", Path: "kubeletconfig.featureGates." + name, Detail: fmt.Sprintf("%t", enabled)}, AppliesFrom: check.AppliesFrom, Impact: fmt.Sprintf("Kubernetes 1.37 locks this kubelet feature gate to %t and rejects a different configured value during startup.", defaultValue), Remediation: fmt.Sprintf("Set %s=%t or remove the explicit setting before upgrading this node.", name, defaultValue), References: append([]Reference(nil), lockedFeatureGateReferences137[name]...)})
+				remediation := fmt.Sprintf("Set %s=%t or remove the explicit setting before upgrading this node.", name, defaultValue)
+				if controlPlaneManaged {
+					managedNodeFinding = true
+					remediation = fmt.Sprintf("If this setting comes from node-pool or bootstrap configuration, set %s=%t or remove it. Otherwise, upgrade or replace the node through the provider-supported path and verify the target node image uses the locked default.", name, defaultValue)
+				}
+				check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: name + " must use its locked default", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Node", Name: node.Name}, Evidence: Evidence{Source: "kubelet configz", Path: "kubeletconfig.featureGates." + name, Detail: fmt.Sprintf("%t", enabled)}, AppliesFrom: check.AppliesFrom, Impact: fmt.Sprintf("Kubernetes 1.37 locks this kubelet feature gate to %t and rejects a different configured value during startup.", defaultValue), Remediation: remediation, References: append([]Reference(nil), lockedFeatureGateReferences137[name]...)})
 			}
 		}
 	}
+	if managedNodeFinding {
+		check.EvidenceNote = appendCaveat(check.EvidenceNote, "On managed Kubernetes, configz does not reveal whether kubelet feature gates come from operator-controlled node settings or a provider-owned node image.")
+	}
 	foundControlPlaneComponents := map[string]bool{}
-	controlPlaneManaged := managedControlPlane(input)
 	if !kubeSystemCovered(input, "pods") {
 		if controlPlaneManaged {
 			check.EvidenceNote = appendCaveat(check.EvidenceNote, "The provider manages the control plane, so component feature gates are not exposed to Radar.")
@@ -492,7 +506,7 @@ func scanKubeadmConfig(input *Input) Check {
 			parsed++
 			apiVersion, _, _ := unstructured.NestedString(object, "apiVersion")
 			if apiVersion == "kubeadm.k8s.io/v1beta3" {
-				check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: "kubeadm v1beta3 configuration is removed", Level: LevelBlocker, Resource: &ResourceRef{Kind: "ConfigMap", Namespace: configMap.Namespace, Name: configMap.Name}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("data.%s.document[%d].apiVersion", key, document), Detail: apiVersion}, AppliesFrom: check.AppliesFrom, Impact: "kubeadm 1.37 no longer accepts the v1beta3 configuration API, which can block upgrade operations using this configuration.", Remediation: "Use a supported pre-1.37 kubeadm binary to run kubeadm config migrate and store v1beta4 configuration before upgrading.", References: append([]Reference(nil), kubeadmV1Beta3References137...)})
+				check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: "kubeadm v1beta3 configuration is removed", Level: LevelBlocker, Resource: &ResourceRef{Kind: "ConfigMap", Namespace: configMap.Namespace, Name: configMap.Name}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("data.%s.document[%d].apiVersion", key, document), Detail: apiVersion}, AppliesFrom: check.AppliesFrom, Impact: "kubeadm 1.37 no longer accepts the v1beta3 configuration API, which can block upgrade operations using this configuration.", Remediation: "Use a supported pre-1.37 kubeadm binary to migrate the source file with kubeadm config migrate, then upload the migrated ClusterConfiguration with kubeadm init phase upload-config kubeadm --config <file> before upgrading.", References: append([]Reference(nil), kubeadmV1Beta3References137...)})
 			}
 			featureGates, _, _ := unstructured.NestedMap(object, "featureGates")
 			for name, value := range featureGates {
@@ -526,7 +540,7 @@ func kubeSystemCovered(input *Input, kind string) bool {
 }
 
 func scanKubeProxyModeTransition(input *Input) Check {
-	check := Check{ID: "kube-proxy-mode-transition", Category: "Networking", Title: "kube-proxy mode transition", Status: CheckPassed, Summary: "Readable kube-proxy configuration uses an explicit supported mode.", Scope: "kube-proxy DaemonSet and mounted configuration", AppliesFrom: "1.37", References: append([]Reference(nil), kubeProxyModeReferences...)}
+	check := Check{ID: "kube-proxy-mode-transition", Category: "Networking", Title: "kube-proxy mode transition", Status: CheckPassed, Summary: "Readable kube-proxy configuration uses an explicit supported mode.", Scope: "kube-proxy DaemonSet or mirror Pod configuration", AppliesFrom: "1.37", References: append([]Reference(nil), kubeProxyModeReferences...)}
 	if !kubeSystemCovered(input, "daemonsets") {
 		check.Status, check.Summary = CheckUnknown, "kube-system is outside the readable DaemonSet scope, so kube-proxy mode could not be inspected."
 		return check
@@ -559,32 +573,26 @@ func scanKubeProxyModeTransition(input *Input) Check {
 		if daemonSet.Spec.Template.Spec.OS != nil {
 			osName = strings.ToLower(string(daemonSet.Spec.Template.Spec.OS.Name))
 		}
-		mode = strings.ToLower(strings.TrimSpace(mode))
-		if mode == "" && osName == "windows" {
-			mode = "kernelspace"
-		}
-		switch mode {
-		case "iptables", "nftables", "kernelspace":
-			continue
-		case "ipvs":
-			remediation := "Plan and validate migration to nftables or iptables before the IPVS disablement timeline."
-			if managedControlPlane(input) {
-				remediation = "Use the provider-supported add-on or cluster configuration path to plan and validate migration to nftables or iptables before the IPVS disablement timeline; do not edit a reconciled kube-proxy DaemonSet directly."
-			}
-			check.Findings = append(check.Findings, kubeProxyModeFinding(check, daemonSet, sourcePath, mode, "IPVS mode is deprecated", "IPVS is on a staged path to default-off in Kubernetes 1.40 and removal in 1.43.", remediation, ipvsDeprecationReferences))
-		case "":
-			remediation := "Set mode explicitly to iptables or nftables after validating the selected backend."
-			if managedControlPlane(input) {
-				remediation = "Use the provider-supported add-on or cluster configuration path to select and validate an explicit iptables or nftables mode; do not edit a reconciled kube-proxy DaemonSet directly."
-			}
-			check.Findings = append(check.Findings, kubeProxyModeFinding(check, daemonSet, sourcePath, "unspecified", "Linux proxy mode is not explicit", "Kubernetes 1.37 warns because the implicit Linux default changes from iptables to nftables in Kubernetes 1.40.", remediation, nftablesDefaultReferences))
-		default:
+		resource := &ResourceRef{Group: "apps", Kind: "DaemonSet", Namespace: daemonSet.Namespace, Name: daemonSet.Name}
+		if !appendKubeProxyModeResult(&check, resource, sourcePath, mode, osName, managedControlPlane(input)) {
 			unknown++
-			check.Caveat = appendCaveat(check.Caveat, fmt.Sprintf("%s/%s uses unrecognized kube-proxy mode %q.", daemonSet.Namespace, daemonSet.Name, mode))
 		}
 	}
 	if found == 0 {
-		check.Status, check.Summary = CheckNotApplicable, "No kube-proxy DaemonSet was found; the provider may manage service proxying outside the cluster."
+		if !kubeSystemCovered(input, "pods") {
+			check.Status, check.Summary = CheckUnknown, "No kube-proxy DaemonSet was found, and kube-system is outside the readable Pod scope."
+			return check
+		}
+		if input.Pods == nil {
+			check.Status, check.Summary = CheckUnknown, "No kube-proxy DaemonSet was found, and Pods were unavailable for static kube-proxy inspection."
+			return check
+		}
+		mirrorFound, mirrorUnknown := scanKubeProxyMirrorPods(input, &check)
+		found += mirrorFound
+		unknown += mirrorUnknown
+	}
+	if found == 0 {
+		check.Status, check.Summary = CheckUnknown, "No kube-proxy DaemonSet or mirror Pod was found; a host process or provider dataplane may be in use."
 		return check
 	}
 	if unknown > 0 && len(check.Findings) == 0 {
@@ -593,6 +601,72 @@ func scanKubeProxyModeTransition(input *Input) Check {
 		check.Summary = fmt.Sprintf("%d kube-proxy mode %s migration review.", len(check.Findings), plural(len(check.Findings), "setting requires", "settings require"))
 	}
 	return check
+}
+
+func scanKubeProxyMirrorPods(input *Input, check *Check) (int, int) {
+	found := 0
+	unknown := 0
+	for _, pod := range input.Pods {
+		if pod == nil || pod.Namespace != "kube-system" || pod.Annotations[corev1.MirrorPodAnnotationKey] == "" {
+			continue
+		}
+		for i := range pod.Spec.Containers {
+			container := &pod.Spec.Containers[i]
+			if container.Name != "kube-proxy" {
+				continue
+			}
+			found++
+			check.Inspected++
+			resource := &ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}
+			if configPath, _, ok := commandFlag(container.Command, container.Args, "--config"); ok {
+				unknown++
+				check.Caveat = appendCaveat(check.Caveat, fmt.Sprintf("%s/%s: static kube-proxy --config=%s is not readable through the Kubernetes API.", pod.Namespace, pod.Name, configPath))
+				break
+			}
+			mode, field, configured := commandFlag(container.Command, container.Args, "--proxy-mode")
+			evidencePath := fmt.Sprintf("spec.containers[%s].command/args[--proxy-mode]", container.Name)
+			if configured {
+				evidencePath = fmt.Sprintf("spec.containers[%s].%s[--proxy-mode]", container.Name, field)
+			}
+			osName := strings.ToLower(pod.Spec.NodeSelector[corev1.LabelOSStable])
+			if pod.Spec.OS != nil {
+				osName = strings.ToLower(string(pod.Spec.OS.Name))
+			}
+			if !appendKubeProxyModeResult(check, resource, evidencePath, mode, osName, managedControlPlane(input)) {
+				unknown++
+			}
+			break
+		}
+	}
+	return found, unknown
+}
+
+func appendKubeProxyModeResult(check *Check, resource *ResourceRef, evidencePath, mode, osName string, managed bool) bool {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" && osName == "windows" {
+		mode = "kernelspace"
+	}
+	switch mode {
+	case "iptables", "nftables", "kernelspace":
+		return true
+	case "ipvs":
+		remediation := "Plan and validate migration to nftables or iptables before the IPVS disablement timeline."
+		if managed {
+			remediation = "Use the provider-supported add-on or cluster configuration path to plan and validate migration to nftables or iptables before the IPVS disablement timeline; do not edit a reconciled kube-proxy workload directly."
+		}
+		check.Findings = append(check.Findings, kubeProxyModeFinding(*check, resource, evidencePath, mode, "IPVS mode is deprecated", "IPVS is on a staged path to default-off in Kubernetes 1.40 and removal in 1.43.", remediation, ipvsDeprecationReferences))
+		return true
+	case "":
+		remediation := "Set mode explicitly to iptables or nftables after validating the selected backend."
+		if managed {
+			remediation = "Use the provider-supported add-on or cluster configuration path to select and validate an explicit iptables or nftables mode; do not edit a reconciled kube-proxy workload directly."
+		}
+		check.Findings = append(check.Findings, kubeProxyModeFinding(*check, resource, evidencePath, "unspecified", "Linux proxy mode is not explicit", "Kubernetes 1.37 warns because the implicit Linux default changes from iptables to nftables in Kubernetes 1.40.", remediation, nftablesDefaultReferences))
+		return true
+	default:
+		check.Caveat = appendCaveat(check.Caveat, fmt.Sprintf("%s %s/%s uses unrecognized kube-proxy mode %q.", resource.Kind, resource.Namespace, resource.Name, mode))
+		return false
+	}
 }
 
 func kubeProxyContainer(daemonSet *appsv1.DaemonSet) *corev1.Container {
@@ -696,8 +770,8 @@ func mountedConfigMapFile(configMaps []*corev1.ConfigMap, daemonSet *appsv1.Daem
 	return nil, "", fmt.Errorf("--config=%s is not backed by a mounted ConfigMap", filePath)
 }
 
-func kubeProxyModeFinding(check Check, daemonSet *appsv1.DaemonSet, evidencePath, detail, title, impact, remediation string, references []Reference) Finding {
-	return Finding{RuleID: check.ID, Title: title, Level: LevelReview, Resource: &ResourceRef{Group: "apps", Kind: "DaemonSet", Namespace: daemonSet.Namespace, Name: daemonSet.Name}, Evidence: Evidence{Source: "live", Path: evidencePath, Detail: detail}, AppliesFrom: check.AppliesFrom, Impact: impact, Remediation: remediation, References: append([]Reference(nil), references...)}
+func kubeProxyModeFinding(check Check, resource *ResourceRef, evidencePath, detail, title, impact, remediation string, references []Reference) Finding {
+	return Finding{RuleID: check.ID, Title: title, Level: LevelReview, Resource: resource, Evidence: Evidence{Source: "live", Path: evidencePath, Detail: detail}, AppliesFrom: check.AppliesFrom, Impact: impact, Remediation: remediation, References: append([]Reference(nil), references...)}
 }
 
 func scanRemovedControlPlaneMetrics(input *Input) Check {
@@ -825,8 +899,13 @@ func scanSELinuxMountTransition(input *Input, targetAllowsOptOut bool) Check {
 		check.Status = CheckUnknown
 		check.Summary = "No SELinux volume conflict was found in the selected namespaces, but cluster-wide coverage is incomplete."
 	} else if eligibleUses == 0 && len(check.Findings) == 0 {
-		check.Status = CheckNotApplicable
-		check.Summary = "No Linux Pod uses a persistent volume newly affected by the Kubernetes 1.37 SELinux mount behavior."
+		if len(input.CacheScopedKinds["pods"]) > 0 || len(input.CacheScopedKinds["persistentvolumeclaims"]) > 0 || len(input.CacheScopedKinds["events"]) > 0 {
+			check.Status = CheckUnknown
+			check.Summary = "No affected Linux Pod volume was found in readable cached evidence, but namespace coverage is incomplete."
+		} else {
+			check.Status = CheckNotApplicable
+			check.Summary = "No Linux Pod uses a persistent volume newly affected by the Kubernetes 1.37 SELinux mount behavior."
+		}
 	}
 	if len(check.Findings) > 0 {
 		check.Summary = fmt.Sprintf("%d SELinux volume-labeling compatibility %s require attention before upgrading.", len(check.Findings), plural(len(check.Findings), "signal", "signals"))
@@ -1033,7 +1112,7 @@ func selinuxMountNewlyApplies(pv *corev1.PersistentVolume, pvc *corev1.Persisten
 	effectivePV := pv
 	translator := csitranslation.New()
 	if translator.IsPVMigratable(pv) {
-		translated, err := translator.TranslateInTreePVToCSI(klog.Background(), pv)
+		translated, err := translator.TranslateInTreePVToCSI(klog.Background(), pv.DeepCopy())
 		if err != nil {
 			return false, false
 		}

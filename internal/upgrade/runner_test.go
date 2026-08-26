@@ -100,7 +100,13 @@ func TestRunUpgradeReadinessDoesNotExposeUnauthorizedCached137Evidence(t *testin
 		ObjectMeta: metav1.ObjectMeta{Name: "kubeadm-config", Namespace: "kube-system"},
 		Data:       map[string]string{"ClusterConfiguration": "apiVersion: kubeadm.k8s.io/v1beta3\nkind: ClusterConfiguration\n"},
 	}
-	if err := k8s.InitTestResourceCache(fake.NewSimpleClientset(configMap)); err != nil {
+	event := &corev1.Event{
+		ObjectMeta:     metav1.ObjectMeta{Name: "selinux-conflict", Namespace: "secret-team"},
+		Reason:         "SELinuxLabelConflict",
+		Message:        "sensitive volume conflict detail",
+		InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "secret-team", Name: "private"},
+	}
+	if err := k8s.InitTestResourceCache(fake.NewSimpleClientset(configMap, event)); err != nil {
 		t.Fatalf("InitTestResourceCache() error = %v", err)
 	}
 	t.Cleanup(k8s.ResetTestState)
@@ -110,6 +116,7 @@ func TestRunUpgradeReadinessDoesNotExposeUnauthorizedCached137Evidence(t *testin
 		TargetVersion:                   "1.37",
 		ConfigMapNamespaces:             []string{},
 		PersistentVolumeClaimNamespaces: []string{},
+		EventNamespaces:                 []string{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -118,8 +125,13 @@ func TestRunUpgradeReadinessDoesNotExposeUnauthorizedCached137Evidence(t *testin
 		if check.ID == "kubeadm-config-v1beta3" && (check.Status != upgradereadiness.CheckUnknown || len(check.Findings) != 0) {
 			t.Fatalf("unauthorized kubeadm evidence = %+v, want unknown without findings", check)
 		}
+		for _, finding := range check.Findings {
+			if finding.Evidence.Source == "event" {
+				t.Fatalf("unauthorized Event evidence leaked through %s: %+v", check.ID, finding)
+			}
+		}
 	}
-	for _, kind := range []string{"configmaps", "persistentvolumeclaims"} {
+	for _, kind := range []string{"configmaps", "persistentvolumeclaims", "events"} {
 		if !slices.Contains(results.Coverage.UnavailableKinds, kind) {
 			t.Fatalf("unavailable kinds = %v, want %s", results.Coverage.UnavailableKinds, kind)
 		}
@@ -222,7 +234,8 @@ func TestUpgradeCacheScopeResourcesFollowCrossedReleases(t *testing.T) {
 		{name: "crosses 1.35", current: "1.34", target: "1.36", wantEvents: true},
 		{name: "crosses only 1.36", current: "1.35", target: "1.36"},
 		{name: "crosses 1.37", current: "1.36", target: "1.37", wantEvents: true, wantConfigMaps: true, wantPVCs: true},
-		{name: "already crossed 1.37", current: "1.37", target: "1.38"},
+		{name: "kube-proxy review persists after 1.37", current: "1.37", target: "1.38", wantConfigMaps: true},
+		{name: "kube-proxy review ends at 1.40", current: "1.40", target: "1.41"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resources := upgradeCacheScopeResources(tc.current, tc.target)

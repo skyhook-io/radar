@@ -675,6 +675,12 @@ func TestScanValidatesVersions(t *testing.T) {
 	if got, err := UpgradePathIncludesRelease("v1.37.1", "1.38", "1.37"); err != nil || got {
 		t.Fatalf("UpgradePathIncludesRelease already crossed = %v, %v, want false", got, err)
 	}
+	if got, err := UpgradePathIncludesKubeProxyModeTransition("v1.37.1", "1.38"); err != nil || !got {
+		t.Fatalf("UpgradePathIncludesKubeProxyModeTransition before 1.40 = %v, %v, want true", got, err)
+	}
+	if got, err := UpgradePathIncludesKubeProxyModeTransition("v1.40.0", "1.41"); err != nil || got {
+		t.Fatalf("UpgradePathIncludesKubeProxyModeTransition after 1.40 = %v, %v, want false", got, err)
+	}
 }
 
 func TestUnavailableKindsIncludes137CachedEvidence(t *testing.T) {
