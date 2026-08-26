@@ -366,3 +366,71 @@ func TestUpgradeScanMemoRefusesGenerationCapturedBeforeSwitch(t *testing.T) {
 		t.Fatalf("pre-switch generation = results=%v scans=%d err=%v, want refused with no scan run", out.Results, scans, err)
 	}
 }
+
+func TestUpgradeScanMemoQueuedLeaderBailsAfterContextSwitch(t *testing.T) {
+	memo, _ := newTestUpgradeScanMemo(time.Now())
+	memo.scanSlots = make(chan struct{}, 1)
+	memo.scanSlots <- struct{}{}
+	scanned := false
+	result := make(chan error, 1)
+	go func() {
+		_, err := memo.get(context.Background(), "k", false, memo.currentGeneration(), func(context.Context) (*upgradereadiness.ScanResults, error) {
+			scanned = true
+			return &upgradereadiness.ScanResults{}, nil
+		})
+		result <- err
+	}()
+	waitForQueuedLeader(t, memo, "k")
+	memo.invalidate()
+	<-memo.scanSlots
+	if err := <-result; !errors.Is(err, ErrUpgradeScanStaleContext) {
+		t.Fatalf("queued-across-switch leader err = %v, want stale-context", err)
+	}
+	if scanned {
+		t.Fatal("a leader that queued across a context switch ran the doomed collection anyway, occupying a scan slot")
+	}
+}
+
+func TestUpgradeScanMemoObservedAtIsCollectionStartNotQueueTime(t *testing.T) {
+	memo, clock := newTestUpgradeScanMemo(time.Now())
+	memo.scanSlots = make(chan struct{}, 1)
+	memo.scanSlots <- struct{}{}
+	queuedAt := *clock
+	type res struct {
+		out UpgradeScanOutcome
+		err error
+	}
+	result := make(chan res, 1)
+	go func() {
+		out, err := memo.get(context.Background(), "k", false, memo.currentGeneration(), func(context.Context) (*upgradereadiness.ScanResults, error) {
+			return &upgradereadiness.ScanResults{}, nil
+		})
+		result <- res{out, err}
+	}()
+	waitForQueuedLeader(t, memo, "k")
+	*clock = clock.Add(30 * time.Second)
+	<-memo.scanSlots
+	got := <-result
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	if !got.out.ObservedAt.Equal(queuedAt.Add(30 * time.Second)) {
+		t.Fatalf("observedAt = %v (queued at %v), want the collection start after the 30s slot wait — queue time would overstate staleness", got.out.ObservedAt, queuedAt)
+	}
+}
+
+// waitForQueuedLeader blocks until the key's leader entry exists, i.e. the
+// goroutine has passed insertion and is queueing on the scan slots.
+func waitForQueuedLeader(t *testing.T, memo *upgradeScanMemo, key string) {
+	t.Helper()
+	for range 200 {
+		memo.mu.Lock()
+		_, ok := memo.entries[key]
+		memo.mu.Unlock()
+		if ok {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("leader never queued")
+}

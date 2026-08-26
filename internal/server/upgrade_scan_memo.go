@@ -196,7 +196,7 @@ func (m *upgradeScanMemo) get(ctx context.Context, key string, refresh bool, gen
 	m.evictOverCapLocked()
 	m.mu.Unlock()
 
-	results, err := m.runBoundedScan(ctx, scan)
+	results, err := m.runBoundedScan(ctx, leader, scan)
 
 	m.mu.Lock()
 	completed := m.now()
@@ -273,13 +273,27 @@ func (m *upgradeScanMemo) evictOverCapLocked() {
 // runBoundedScan gates the live collection behind the global concurrency
 // slots. Single-flight already dedupes per key; this bounds distinct keys
 // (distinct targets) from fanning out unbounded concurrent collections.
-func (m *upgradeScanMemo) runBoundedScan(ctx context.Context, scan func(context.Context) (*upgradereadiness.ScanResults, error)) (*upgradereadiness.ScanResults, error) {
+// Queueing for a slot is not scanning: the generation is re-checked once the
+// slot is acquired so a leader that queued across a context switch bails
+// instead of running a doomed full collection in one of the few slots, and
+// startedAt is re-stamped so ObservedAt reports when evidence collection
+// actually began rather than when the request joined the queue.
+func (m *upgradeScanMemo) runBoundedScan(ctx context.Context, leader *upgradeScanEntry, scan func(context.Context) (*upgradereadiness.ScanResults, error)) (*upgradereadiness.ScanResults, error) {
 	select {
 	case m.scanSlots <- struct{}{}:
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
 	defer func() { <-m.scanSlots }()
+	m.mu.Lock()
+	if leader.generation != m.generation {
+		m.mu.Unlock()
+		return nil, ErrUpgradeScanStaleContext
+	}
+	// Only the leader writes entry fields before done closes, and waiters
+	// don't read them until it does, so re-stamping under mu is safe.
+	leader.startedAt = m.now()
+	m.mu.Unlock()
 	return scan(ctx)
 }
 
