@@ -148,6 +148,18 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
     ],
   },
   {
+    name: 'get_cluster_upgrade_readiness',
+    desc: 'Upgrade impact analysis for a target Kubernetes minor: the evidenced check catalog (version skew, removed/deprecated APIs, node runtime, drain feasibility, webhook readiness) with per-check coverage and caveats, expandable into findings with evidence and remediation. The first call runs a live scan; results are briefly cached per caller.',
+    params: [
+      { arg: 'target', desc: 'target Kubernetes minor (default: next minor above current)' },
+      { arg: 'check', desc: 'check id to expand into findings' },
+      { arg: 'level', desc: 'filter expanded findings: blocker, warning, or review' },
+      { arg: 'offset', desc: 'page through findings beyond the per-call cap' },
+      { arg: 'scan_id', desc: 'binds paging to one scan snapshot (required with offset)' },
+      { arg: 'refresh', desc: 'bypass the cached scan after changing something' },
+    ],
+  },
+  {
     name: 'list_helm_releases',
     desc: 'All Helm releases with status, resource health, storage namespace, Flux ownership, current lastOperation, and capped operation trails for failed upgrades, rollbacks, or stuck pending operations.',
     params: [{ arg: 'namespace', desc: 'filter to a specific namespace' }],

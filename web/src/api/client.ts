@@ -481,6 +481,12 @@ export interface UpgradeReadinessResponse {
   currentVersion: string
   targetVersion: string
   reviewedThrough: string
+  // When the underlying scan ran. The server memoizes scans (~60s), so a
+  // response can be older than the fetch that returned it — surface this,
+  // not dataUpdatedAt, as the scan time.
+  observedAt: string
+  scanId: string
+  fromCache?: boolean
   verdict: UpgradeReadinessVerdict
   summary: { blocked: number; warnings: number; reviews: number; passed: number; unknown: number; notApplicable: number; findings: number }
   checks: UpgradeReadinessCheck[]
@@ -590,15 +596,28 @@ export function useAudit(namespaces: string[] = []) {
 }
 
 export function useUpgradeReadiness(target?: string) {
-  const params = new URLSearchParams()
-  if (target) params.set('target', target)
-  const query = params.toString()
-  return useQuery<UpgradeReadinessResponse>({
+  // The server memoizes scans per caller (~60s). Ordinary and background
+  // refetches read that memo; only the explicit manual refresh passes
+  // refresh=true to force a fresh live scan (e.g. after fixing a finding).
+  const forceRefresh = useRef(false)
+  const query = useQuery<UpgradeReadinessResponse>({
     queryKey: ['upgrade-readiness', target ?? 'next'],
-    queryFn: ({ signal }) => fetchJSON(`/upgrade-readiness${query ? `?${query}` : ''}`, signal),
+    queryFn: ({ signal }) => {
+      const params = new URLSearchParams()
+      if (target) params.set('target', target)
+      if (forceRefresh.current) params.set('refresh', 'true')
+      forceRefresh.current = false
+      const qs = params.toString()
+      return fetchJSON(`/upgrade-readiness${qs ? `?${qs}` : ''}`, signal)
+    },
     staleTime: 30000,
     placeholderData: (previous) => previous,
   })
+  const refreshScan = () => {
+    forceRefresh.current = true
+    return query.refetch()
+  }
+  return { ...query, refreshScan }
 }
 
 // Live cluster Issues — the grouped triage queue (radar's /api/issues =

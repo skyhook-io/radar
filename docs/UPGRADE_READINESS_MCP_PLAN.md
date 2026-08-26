@@ -1,6 +1,9 @@
 # Plan: Expose Upgrade Impact Analysis via MCP
 
-Status: **proposal** — no code yet. This document is the design to agree on before implementation.
+Status: **implemented** in this PR. The document is the agreed design (4 adversarial
+cross-review rounds); §4.1's `Identity()` interface method was dropped during
+implementation — both surfaces resolve the user from the same `pkg/auth` context key, so
+identity rides on ctx and the seam needs only the four authorization methods.
 
 ## Background
 

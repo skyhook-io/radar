@@ -76,7 +76,7 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
   const location = useLocation()
   const navigate = useNavigate()
   const requestedTarget = new URLSearchParams(location.search).get('target') ?? undefined
-  const { data, isLoading, isFetching, isPlaceholderData, error, dataUpdatedAt, refetch } = useUpgradeReadiness(requestedTarget)
+  const { data, isLoading, isFetching, isPlaceholderData, error, dataUpdatedAt, refreshScan } = useUpgradeReadiness(requestedTarget)
   const { connection } = useConnection()
   const targetOptions = useMemo(
     () => buildTargetOptions(data?.currentVersion, data?.reviewedThrough, requestedTarget ?? data?.targetVersion),
@@ -153,8 +153,8 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
             )}
             <FreshnessControl
               mode="snapshot"
-              dataUpdatedAt={dataUpdatedAt}
-              onRefresh={() => refetch()}
+              dataUpdatedAt={data.observedAt ? Date.parse(data.observedAt) : dataUpdatedAt}
+              onRefresh={() => refreshScan()}
               connectionState={connection.state}
               isFetching={isFetching}
             />
