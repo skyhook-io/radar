@@ -15,6 +15,6 @@ describe('costUnavailableMessage', () => {
   it('gives actionable Kubecost source and authentication guidance', () => {
     expect(costUnavailableMessage('source_unavailable')).toContain('Settings → Cost')
     expect(costUnavailableMessage('authentication_error')).toContain('API key')
-    expect(costUnavailableMessage('configuration_mismatch')).toContain('another cluster')
+    expect(costUnavailableMessage('configuration_mismatch')).toContain('not valid for this cluster')
   })
 })

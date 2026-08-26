@@ -112,7 +112,7 @@ func TestOpenCostApplicationUsesLatestKubecostDataThrough(t *testing.T) {
 	}))
 	t.Cleanup(kubecost.Close)
 	if err := internalopencost.Configure(internalopencost.ManagerConfig{
-		Source: internalopencost.SourceKubecost, URL: kubecost.URL, ClusterID: "cluster-a",
+		Source: internalopencost.SourceKubecost, URL: kubecost.URL, ClusterID: "cluster-a", ClusterIDContext: "fake-test",
 	}); err != nil {
 		t.Fatal(err)
 	}

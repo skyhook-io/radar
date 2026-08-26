@@ -372,7 +372,7 @@ export function costUnavailableMessage(reason?: CostUnavailableReason): string {
     case 'authentication_error':
       return 'Kubecost rejected the configured API key — update it in Settings → Cost'
     case 'configuration_mismatch':
-      return 'Saved Kubecost settings belong to another cluster — update the cluster ID or local API key in Settings → Cost'
+      return 'Saved Kubecost settings are not valid for this cluster — update the cluster ID or local API key in Settings → Cost'
     case 'access_denied':
       return 'You do not have access to view cluster cost data'
     default:

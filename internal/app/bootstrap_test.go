@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/settings"
 )
@@ -121,6 +122,57 @@ func TestResolveKubeconfigSelection(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPersistKubecostContextBindings(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	k8s.ResetTestState()
+	t.Cleanup(k8s.ResetTestState)
+	k8s.SetTestContextName("cluster-a")
+
+	if err := config.Save(config.Config{
+		CostSource:        "kubecost",
+		KubecostAPIKey:    "secret",
+		KubecostClusterID: "prod-a",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := persistKubecostContextBindings(AppConfig{
+		CostSource:        "kubecost",
+		KubecostAPIKey:    "secret",
+		KubecostClusterID: "prod-a",
+	})
+	if cfg.KubecostAPIKeyContext != "cluster-a" || cfg.KubecostClusterIDContext != "cluster-a" {
+		t.Fatalf("runtime bindings = api key %q, cluster ID %q; want cluster-a", cfg.KubecostAPIKeyContext, cfg.KubecostClusterIDContext)
+	}
+	stored := config.Load()
+	if stored.KubecostAPIKeyContext != "cluster-a" || stored.KubecostClusterIDContext != "cluster-a" {
+		t.Fatalf("persisted bindings = api key %q, cluster ID %q; want cluster-a", stored.KubecostAPIKeyContext, stored.KubecostClusterIDContext)
+	}
+
+	k8s.SetTestContextName("cluster-b")
+	second := persistKubecostContextBindings(AppConfig{
+		CostSource:               "kubecost",
+		KubecostAPIKey:           stored.KubecostAPIKey,
+		KubecostAPIKeyContext:    stored.KubecostAPIKeyContext,
+		KubecostClusterID:        stored.KubecostClusterID,
+		KubecostClusterIDContext: stored.KubecostClusterIDContext,
+	})
+	if second.KubecostAPIKeyContext != "cluster-a" || second.KubecostClusterIDContext != "cluster-a" {
+		t.Fatalf("restart rebound settings to cluster-b: %#v", second)
+	}
+}
+
+func TestPersistKubecostContextBindingsIgnoresProgrammaticConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	k8s.ResetTestState()
+	t.Cleanup(k8s.ResetTestState)
+	k8s.SetTestContextName("cluster-a")
+
+	cfg := persistKubecostContextBindings(AppConfig{KubecostAPIKey: "not-from-file", KubecostClusterID: "not-from-file"})
+	if cfg.KubecostAPIKeyContext != "" || cfg.KubecostClusterIDContext != "" {
+		t.Fatalf("programmatic config was treated as persisted: %#v", cfg)
 	}
 }
 

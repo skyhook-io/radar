@@ -152,12 +152,6 @@ func (m *Manager) configure(config ManagerConfig, envManaged bool, envError stri
 	config.APIKeyContext = strings.TrimSpace(config.APIKeyContext)
 	config.ClusterID = strings.TrimSpace(config.ClusterID)
 	config.ClusterIDContext = strings.TrimSpace(config.ClusterIDContext)
-	if config.ClusterID != "" && config.ClusterIDContext == "" {
-		config.ClusterIDContext = k8s.GetContextName()
-	}
-	if config.URL == "" && config.APIKey != "" && config.APIKeyContext == "" {
-		config.APIKeyContext = k8s.GetContextName()
-	}
 	if err := ValidateKubecostURL(config.URL); err != nil {
 		return err
 	}
@@ -210,6 +204,10 @@ func resolveEnvironmentConfig(base ManagerConfig, getenv func(string) string) (M
 			return base, true, fmt.Errorf("invalid %s: %w", envURL, err)
 		}
 		base.URL = values[envURL]
+		if values[envAPIKey] == "" {
+			base.APIKey = ""
+			base.APIKeyContext = ""
+		}
 	}
 	if values[envAPIKey] != "" {
 		base.APIKey = values[envAPIKey]
@@ -501,11 +499,21 @@ func validateKubecostConfigContext(config ManagerConfig, currentContext string) 
 	if currentContext == "" {
 		return nil
 	}
-	if config.ClusterID != "" && config.ClusterIDContext != "" && config.ClusterIDContext != currentContext {
-		return fmt.Errorf("%w: cluster ID configured for kubeconfig context %q, current context is %q", ErrKubecostContextMismatch, config.ClusterIDContext, currentContext)
+	if config.ClusterID != "" {
+		if config.ClusterIDContext == "" {
+			return fmt.Errorf("%w: cluster ID has no durable kubeconfig context binding", ErrKubecostContextMismatch)
+		}
+		if config.ClusterIDContext != currentContext {
+			return fmt.Errorf("%w: cluster ID configured for kubeconfig context %q, current context is %q", ErrKubecostContextMismatch, config.ClusterIDContext, currentContext)
+		}
 	}
-	if config.URL == "" && config.APIKey != "" && config.APIKeyContext != "" && config.APIKeyContext != currentContext {
-		return fmt.Errorf("%w: local API key configured for kubeconfig context %q, current context is %q", ErrKubecostContextMismatch, config.APIKeyContext, currentContext)
+	if config.URL == "" && config.APIKey != "" {
+		if config.APIKeyContext == "" {
+			return fmt.Errorf("%w: local API key has no durable kubeconfig context binding", ErrKubecostContextMismatch)
+		}
+		if config.APIKeyContext != currentContext {
+			return fmt.Errorf("%w: local API key configured for kubeconfig context %q, current context is %q", ErrKubecostContextMismatch, config.APIKeyContext, currentContext)
+		}
 	}
 	return nil
 }

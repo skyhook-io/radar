@@ -134,7 +134,7 @@ func TestKubecostConnectionGuidanceUsesTypedErrors(t *testing.T) {
 	if got := kubecostConnectionGuidance(internalopencost.ErrKubecostAuthentication); !strings.Contains(got, "rejected the API key") {
 		t.Fatalf("typed authentication guidance = %q", got)
 	}
-	if got := kubecostConnectionGuidance(internalopencost.ErrKubecostContextMismatch); !strings.Contains(got, "another kubeconfig context") {
+	if got := kubecostConnectionGuidance(internalopencost.ErrKubecostContextMismatch); !strings.Contains(got, "not bound to the current kubeconfig context") {
 		t.Fatalf("context mismatch guidance = %q", got)
 	}
 }

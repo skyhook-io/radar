@@ -109,8 +109,8 @@ All fields are optional — omitted fields use built-in defaults.
 | `opencostCurrency` | Optional ISO 4217 override for values produced by OpenCost or Kubecost. Empty reads `currencyCode` from the pricing ConfigMap referenced by an active OpenCost/Kubecost workload, or literal `DISPLAY_CURRENCY` from an active Kubecost Deployment or StatefulSet, when the selected cost source is tied to the connected cluster; otherwise it falls back to `USD`. Radar labels values but does not convert them. Equivalent CLI: `--opencost-currency`; an explicit CLI value remains authoritative while Radar runs and after restart. |
 | `costSource` | `auto` (default), `prometheus`, or `kubecost`. Auto keeps working OpenCost-compatible Prometheus metrics, then tries a Kubecost 3 Aggregator. |
 | `kubecostUrl` | Optional Kubecost 3 Aggregator base URL. Empty discovers an active local Aggregator Service on its named `tcp-api` port (9004). Federated agent-only clusters need the central URL; root API URLs and URLs ending in `/model` are accepted. |
-| `kubecostClusterId` | Cluster ID used to filter a central Aggregator. Empty detects one distinct literal `CLUSTER_ID` from an active FinOps Agent or Aggregator; indirect or conflicting values require an override. An override saved in Settings is bound to the active kubeconfig context so switching clusters cannot silently reuse the wrong cluster's costs. |
-| `kubecostApiKey` | Optional Kubecost service-account key sent as `X-API-KEY`. Stored in the `0600` config file and redacted from `GET /api/config`; changing the URL origin clears a stored key unless it is supplied again. With a blank URL, a key saved in Settings is bound to the active kubeconfig context because Radar will auto-discover that cluster's local Aggregator. A key paired with an explicit central URL can be reused across contexts. Prefer a Secret-backed Helm value for in-cluster deployments. |
+| `kubecostClusterId` | Cluster ID used to filter a central Aggregator. Empty detects one distinct literal `CLUSTER_ID` from an active FinOps Agent or Aggregator; indirect or conflicting values require an override. An override saved in Settings is bound to the active kubeconfig context so switching clusters cannot silently reuse the wrong cluster's costs. A value added directly to the config file is bound and persisted on its first startup with an available kubeconfig context. |
+| `kubecostApiKey` | Optional Kubecost service-account key sent as `X-API-KEY`. Stored in the `0600` config file and redacted from `GET /api/config`; changing the URL origin clears a stored key unless it is supplied again. With a blank URL, a key saved in Settings is bound to the active kubeconfig context because Radar will auto-discover that cluster's local Aggregator; a key added directly to the config file is bound and persisted on its first startup with an available kubeconfig context. A key paired with an explicit central URL can be reused across contexts. Prefer a Secret-backed Helm value for in-cluster deployments. |
 | `prometheusHeaders` | HTTP headers sent with every Prometheus request. Required for auth-protected backends — e.g. `{"X-Scope-OrgID": "my-org"}`. Equivalent CLI: `--prometheus-header Key=Value` (repeatable). Stored in plain text in `config.json` — protect the file accordingly. |
 | `argoCdUrl` | Manual argocd-server URL for the Argo CD API integration — skips auto-discovery. |
 | `argoCdToken` | Argo CD API token (get-only account recommended). Stored in plain text — the file is written `0600`; the token is redacted from `GET /api/config`. |
@@ -122,7 +122,9 @@ All fields are optional — omitted fields use built-in defaults.
 For declarative deployments, `RADAR_COST_SOURCE`, `RADAR_KUBECOST_URL`,
 `RADAR_KUBECOST_CLUSTER_ID`, and `RADAR_KUBECOST_API_KEY` override these cost
 source fields. When any is set, the source controls are read-only in Settings;
-edit the deployment and restart Radar. The currency override remains separate.
+edit the deployment and restart Radar. `RADAR_KUBECOST_URL` does not carry an
+API key over from the config file; set `RADAR_KUBECOST_API_KEY` explicitly when
+the environment-managed endpoint requires one. The currency override remains separate.
 
 ### Settings File (`~/.radar/settings.json`)
 

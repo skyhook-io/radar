@@ -52,6 +52,25 @@ func TestResolveEnvironmentConfigBindsLocalAPIKeyToContext(t *testing.T) {
 	}
 }
 
+func TestResolveEnvironmentConfigDoesNotSendStoredKeyToEnvironmentURL(t *testing.T) {
+	config, managed, err := resolveEnvironmentConfig(ManagerConfig{
+		Source:        SourceAuto,
+		APIKey:        "stored-secret",
+		APIKeyContext: "cluster-a",
+	}, func(key string) string {
+		if key == "RADAR_KUBECOST_URL" {
+			return "https://cost.example.com/model"
+		}
+		return ""
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !managed || config.APIKey != "" || config.APIKeyContext != "" {
+		t.Fatalf("managed=%v API key=%q context=%q, want environment URL without inherited credentials", managed, config.APIKey, config.APIKeyContext)
+	}
+}
+
 func TestConfigureStartupFailsClosedOnInvalidEnvironment(t *testing.T) {
 	m := &Manager{}
 	err := m.configureStartup(ManagerConfig{Source: SourceAuto}, func(key string) string {
@@ -65,6 +84,35 @@ func TestConfigureStartupFailsClosedOnInvalidEnvironment(t *testing.T) {
 	}
 	if _, selectedErr := m.Selected(context.Background()); selectedErr == nil {
 		t.Fatal("Selected must fail while the environment configuration is invalid")
+	}
+}
+
+func TestConfigureStartupRequiresDurableContextBindings(t *testing.T) {
+	previousContext := k8s.SetTestContextName("cluster-a")
+	t.Cleanup(func() { k8s.SetTestContextName(previousContext) })
+	tests := []struct {
+		name   string
+		config ManagerConfig
+	}{
+		{
+			name:   "cluster ID",
+			config: ManagerConfig{Source: SourceKubecost, URL: "https://cost.example.com/model", ClusterID: "prod-a"},
+		},
+		{
+			name:   "local API key",
+			config: ManagerConfig{Source: SourceKubecost, APIKey: "secret"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &Manager{}
+			if err := m.configureStartup(tt.config, func(string) string { return "" }); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := m.Selected(context.Background()); !errors.Is(err, ErrKubecostContextMismatch) {
+				t.Fatalf("selection error = %v, want ErrKubecostContextMismatch", err)
+			}
+		})
 	}
 }
 
@@ -165,7 +213,7 @@ func TestKubecostClusterIDContextMismatchFailsClosed(t *testing.T) {
 	previousContext := k8s.SetTestContextName("cluster-a")
 	t.Cleanup(func() { k8s.SetTestContextName(previousContext) })
 	m := &Manager{}
-	if err := m.Configure(ManagerConfig{Source: SourceKubecost, URL: "https://cost.example.com/model", ClusterID: "prod-a"}); err != nil {
+	if err := m.Configure(ManagerConfig{Source: SourceKubecost, URL: "https://cost.example.com/model", ClusterID: "prod-a", ClusterIDContext: "cluster-a"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := m.ConfigSnapshot().ClusterIDContext; got != "cluster-a" {
@@ -181,7 +229,7 @@ func TestKubecostLocalAPIKeyContextMismatchFailsClosed(t *testing.T) {
 	previousContext := k8s.SetTestContextName("cluster-a")
 	t.Cleanup(func() { k8s.SetTestContextName(previousContext) })
 	m := &Manager{}
-	if err := m.Configure(ManagerConfig{Source: SourceKubecost, APIKey: "secret"}); err != nil {
+	if err := m.Configure(ManagerConfig{Source: SourceKubecost, APIKey: "secret", APIKeyContext: "cluster-a"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := m.ConfigSnapshot().APIKeyContext; got != "cluster-a" {
@@ -213,7 +261,7 @@ func TestAutoSourceSurfacesKubecostContextMismatch(t *testing.T) {
 	})
 
 	m := &Manager{}
-	if err := m.Configure(ManagerConfig{Source: SourceAuto, URL: "https://cost.example.com/model", ClusterID: "prod-a"}); err != nil {
+	if err := m.Configure(ManagerConfig{Source: SourceAuto, URL: "https://cost.example.com/model", ClusterID: "prod-a", ClusterIDContext: "cluster-a"}); err != nil {
 		t.Fatal(err)
 	}
 	k8s.SetTestContextName("cluster-b")

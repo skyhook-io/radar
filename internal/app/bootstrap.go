@@ -265,6 +265,7 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 		traffic.SetMetricsHeaders(cfg.PrometheusHeaders)
 		prometheuspkg.SetHeaders(cfg.PrometheusHeaders)
 	}
+	cfg = persistKubecostContextBindings(cfg)
 	if err := internalopencost.ConfigureStartup(internalopencost.ManagerConfig{
 		Source:           internalopencost.Source(cfg.CostSource),
 		URL:              cfg.KubecostURL,
@@ -291,6 +292,40 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 		return nil
 	})
 	k8s.RegisterCostResetFunc(internalopencost.Reset)
+}
+
+func persistKubecostContextBindings(cfg AppConfig) AppConfig {
+	contextName := strings.TrimSpace(k8s.GetContextName())
+	if contextName == "" {
+		return cfg
+	}
+	stored := config.Load()
+	bindAPIKey := strings.TrimSpace(cfg.KubecostURL) == "" && cfg.KubecostAPIKey != "" && strings.TrimSpace(cfg.KubecostAPIKeyContext) == "" &&
+		strings.TrimSpace(stored.KubecostURL) == "" && stored.KubecostAPIKey == cfg.KubecostAPIKey && strings.TrimSpace(stored.KubecostAPIKeyContext) == ""
+	bindClusterID := strings.TrimSpace(cfg.KubecostClusterID) != "" && strings.TrimSpace(cfg.KubecostClusterIDContext) == "" &&
+		stored.KubecostClusterID == cfg.KubecostClusterID && strings.TrimSpace(stored.KubecostClusterIDContext) == ""
+	if !bindAPIKey && !bindClusterID {
+		return cfg
+	}
+	updated, err := config.Update(func(c *config.Config) {
+		if bindAPIKey && strings.TrimSpace(c.KubecostURL) == "" && c.KubecostAPIKey == cfg.KubecostAPIKey && strings.TrimSpace(c.KubecostAPIKeyContext) == "" {
+			c.KubecostAPIKeyContext = contextName
+		}
+		if bindClusterID && c.KubecostClusterID == cfg.KubecostClusterID && strings.TrimSpace(c.KubecostClusterIDContext) == "" {
+			c.KubecostClusterIDContext = contextName
+		}
+	})
+	if err != nil {
+		log.Printf("[opencost] Failed to persist Kubecost context binding: %v", err)
+		return cfg
+	}
+	if updated.KubecostAPIKey == cfg.KubecostAPIKey && strings.TrimSpace(updated.KubecostURL) == strings.TrimSpace(cfg.KubecostURL) {
+		cfg.KubecostAPIKeyContext = updated.KubecostAPIKeyContext
+	}
+	if updated.KubecostClusterID == cfg.KubecostClusterID {
+		cfg.KubecostClusterIDContext = updated.KubecostClusterIDContext
+	}
+	return cfg
 }
 
 // CreateServer creates the HTTP server with the given configuration.

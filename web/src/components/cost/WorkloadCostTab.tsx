@@ -344,7 +344,7 @@ function WorkloadCostUnavailable({ state }: { state: CostUnavailableReason | 'lo
           : state === 'authentication_error'
             ? 'Kubecost rejected the configured API key. Update it in Settings → Cost.'
             : state === 'configuration_mismatch'
-              ? 'Saved Kubecost settings belong to another cluster. Update the cluster ID or local API key in Settings → Cost.'
+              ? 'Saved Kubecost settings are not valid for this cluster. Update the cluster ID or local API key in Settings → Cost.'
             : state === 'history_unsupported'
               ? 'Historical workload cost is not available for Kubecost yet.'
         : state === 'access_denied'

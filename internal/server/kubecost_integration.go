@@ -137,7 +137,7 @@ func kubecostConnectionGuidance(err error) string {
 	case errors.Is(err, internalopencost.ErrKubecostAuthentication):
 		return "Kubecost rejected the API key — check the service-account key or use the deployment's intended API endpoint."
 	case errors.Is(err, internalopencost.ErrKubecostContextMismatch):
-		return "The configured Kubecost cluster ID or local API key belongs to another kubeconfig context — clear or update it for the current cluster."
+		return "The configured Kubecost cluster ID or local API key is not bound to the current kubeconfig context — clear or update it in Settings."
 	case errors.Is(err, internalopencost.ErrKubecostClusterID):
 		return "Kubecost cluster ID could not be determined — enter the CLUSTER_ID configured on this cluster's FinOps Agent."
 	case errors.Is(err, internalopencost.ErrKubecostNoData):

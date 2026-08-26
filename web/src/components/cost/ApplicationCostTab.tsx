@@ -494,7 +494,7 @@ function reasonLabel(reason?: CostUnavailableReason) {
   if (reason === 'query_error') return 'Cost query failed'
   if (reason === 'access_denied') return 'No access to this workload'
   if (reason === 'not_found') return 'Workload not found'
-  if (reason === 'configuration_mismatch') return 'Kubecost settings belong to another cluster'
+  if (reason === 'configuration_mismatch') return 'Kubecost settings are not valid for this cluster'
   return 'No workload cost metrics'
 }
 
@@ -548,7 +548,7 @@ function ApplicationCostUnavailable({
           : state === 'authentication_error'
             ? 'Kubecost rejected the configured API key. Update it in Settings → Cost.'
             : state === 'configuration_mismatch'
-              ? 'Saved Kubecost settings belong to another cluster. Update the cluster ID or local API key in Settings → Cost.'
+              ? 'Saved Kubecost settings are not valid for this cluster. Update the cluster ID or local API key in Settings → Cost.'
             : state === 'history_unsupported'
               ? 'Historical application cost is not available for Kubecost yet.'
         : state === 'access_denied'
