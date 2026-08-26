@@ -1553,6 +1553,47 @@ func GetAvailableContexts() ([]ContextInfo, error) {
 	return contexts, nil
 }
 
+func validateContextSwitchTarget(name string) error {
+	clientMu.RLock()
+	registry := contextRegistry
+	singlePath := kubeconfigPath
+	clientMu.RUnlock()
+
+	var sourcePath, inFileName string
+	if registry != nil {
+		entry, ok := registry[name]
+		if !ok {
+			return fmt.Errorf("%w: %q", errKubeconfigContextNotFound, name)
+		}
+		sourcePath = entry.SourceFile
+		inFileName = entry.InFileName
+	} else {
+		if singlePath == "" {
+			return fmt.Errorf("kubeconfig path not set")
+		}
+		sourcePath = singlePath
+		inFileName = name
+	}
+	if err := validateKubeconfigFileType(sourcePath); err != nil {
+		return err
+	}
+
+	loadingRules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: sourcePath}
+	overrides := &clientcmd.ConfigOverrides{CurrentContext: inFileName}
+	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides)
+	rawConfig, err := kubeConfig.RawConfig()
+	if err != nil {
+		return err
+	}
+	if _, ok := rawConfig.Contexts[inFileName]; !ok {
+		return fmt.Errorf("%w: %q", errKubeconfigContextNotFound, name)
+	}
+	if _, err := kubeConfig.ClientConfig(); err != nil {
+		return fmt.Errorf("%w for %q: %w", errKubeconfigClientSetupFailed, name, err)
+	}
+	return nil
+}
+
 // SwitchContext switches the K8s client to use a different context
 // This reinitializes all clients (k8sClient, discoveryClient, dynamicClient)
 func SwitchContext(name string) error {

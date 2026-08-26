@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
@@ -379,6 +380,86 @@ func TestContextSwitchMissingSourceLeavesSessionsAlone(t *testing.T) {
 	}
 	if stopped {
 		t.Fatal("sessions were stopped for a context whose source disappeared")
+	}
+}
+
+func TestContextSwitchInvalidCachedSourceLeavesSessionsAlone(t *testing.T) {
+	tests := []struct {
+		name    string
+		rewrite func(t *testing.T, path string)
+	}{
+		{
+			name: "malformed",
+			rewrite: func(t *testing.T, path string) {
+				t.Helper()
+				if err := os.WriteFile(path, []byte("contexts: ["), 0o600); err != nil {
+					t.Fatalf("write malformed kubeconfig: %v", err)
+				}
+			},
+		},
+		{
+			name: "invalid context references",
+			rewrite: func(t *testing.T, path string) {
+				t.Helper()
+				cfg := clientcmdapi.NewConfig()
+				cfg.CurrentContext = "target"
+				cfg.Contexts["target"] = &clientcmdapi.Context{Cluster: "missing", AuthInfo: "missing"}
+				if err := clientcmd.WriteToFile(*cfg, path); err != nil {
+					t.Fatalf("write invalid kubeconfig: %v", err)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			current := writeKubeconfig(t, dir, "current.yaml", "current", []kubeEntry{
+				{ctxName: "current", userName: "u1", clusterName: "c1"},
+			})
+			target := writeKubeconfig(t, dir, "target.yaml", "target", []kubeEntry{
+				{ctxName: "target", userName: "u2", clusterName: "c2"},
+			})
+			registry, configs, mtimes := loadFixture(t, []string{current, target})
+
+			clientMu.Lock()
+			previousRegistry := contextRegistry
+			previousConfigs := perFileConfigs
+			previousMtimes := perFileMtimes
+			previousPaths := kubeconfigPaths
+			previousMode := kubeconfigMode
+			previousStarted := initializationStarted
+			contextRegistry = registry
+			perFileConfigs = configs
+			perFileMtimes = mtimes
+			kubeconfigPaths = []string{current, target}
+			kubeconfigMode = "multi-dir"
+			initializationStarted = true
+			clientMu.Unlock()
+			t.Cleanup(func() {
+				clientMu.Lock()
+				contextRegistry = previousRegistry
+				perFileConfigs = previousConfigs
+				perFileMtimes = previousMtimes
+				kubeconfigPaths = previousPaths
+				kubeconfigMode = previousMode
+				initializationStarted = previousStarted
+				clientMu.Unlock()
+			})
+
+			stopped := false
+			SetSessionStopper(func() { stopped = true })
+			t.Cleanup(func() { SetSessionStopper(nil) })
+			tt.rewrite(t, target)
+
+			err := PerformContextSwitch("target")
+			if !errors.Is(err, ErrContextSwitchPreflight) {
+				t.Fatalf("expected ErrContextSwitchPreflight, got %v", err)
+			}
+			if stopped {
+				t.Fatal("sessions were stopped for an invalid cached context source")
+			}
+		})
 	}
 }
 

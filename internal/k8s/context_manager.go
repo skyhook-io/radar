@@ -455,6 +455,13 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	if !targetAvailable {
 		return fmt.Errorf("%w: context %q is no longer available", ErrContextSwitchPreflight, newContext)
 	}
+	if err := validateContextSwitchTarget(newContext); err != nil {
+		reason := kubeconfigDiagnosticError(err)
+		log.Printf("[ops] Context switch preflight rejected target %q: %s", newContext, reason)
+		errorlog.Record("context-switch", "warning",
+			"preflight target=%q rejected before teardown: %s", newContext, reason)
+		return fmt.Errorf("%w: context %q cannot be loaded from its current source", ErrContextSwitchPreflight, newContext)
+	}
 
 	// Under --namespace-scope, validate the new context has a usable scope target
 	// BEFORE tearing anything down. Otherwise a switch to a context with no
