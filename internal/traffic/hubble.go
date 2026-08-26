@@ -57,7 +57,14 @@ type HubbleSource struct {
 	tlsConfig      *tls.Config
 	isConnected    bool
 	closed         bool // Set by Close; a late Connect must not resurrect the source
-	mu             sync.RWMutex
+
+	// Cached direct-lane reachability, probed off the request path (kicked at
+	// detection) so Connect's lane decision costs nothing inline. Keyed by the
+	// probed address: a stale entry for a different endpoint is a cache miss.
+	probedAddr     string
+	probeReachable bool
+
+	mu sync.RWMutex
 }
 
 // NewHubbleSource creates a new Hubble traffic source
@@ -140,7 +147,14 @@ func (h *HubbleSource) Detect(ctx context.Context) (*DetectionResult, error) {
 	h.clusterIP = relaySvc.Spec.ClusterIP
 	h.useTLS = useTLS
 	h.tlsConfig = tlsConfig
+	directAddr := h.directAddressLocked(relayNamespace)
 	h.mu.Unlock()
+
+	// Detection always precedes Connect in the UI flow, so probing here means
+	// the lane decision is already cached when the user connects — the common
+	// local case (unroutable ClusterIP) skips the direct lane without paying
+	// the pre-check timeout inline.
+	go h.probeDirectAsync(directAddr)
 
 	// Determine if this is GKE native Hubble
 	isNative := h.isNativeHubble(ctx)
@@ -403,7 +417,15 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 	// normal per-step timeouts intact.
 	directAddr := h.directAddressLocked(namespace)
 	var directErr error
-	if tcpReachable(directAddr, directDialTimeout) {
+	if h.probedAddr == directAddr && !h.probeReachable {
+		// The background probe already found the address unreachable — the
+		// usual off-cluster case. Skip the lane without paying the pre-check
+		// timeout, and re-probe off the request path so a network change (a
+		// VPN coming up) can restore the direct lane on a later connect.
+		directErr = errDirectUnreachable
+		go h.probeDirectAsync(directAddr)
+	} else if tcpReachable(directAddr, directDialTimeout) {
+		h.probedAddr, h.probeReachable = directAddr, true
 		directCtx, cancelDirect := context.WithTimeout(ctx, directConnectBudget)
 		directErr = h.connectGRPCLocked(directCtx, directAddr)
 		cancelDirect()
@@ -415,6 +437,7 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 			return h.connectionInfoLocked(namespace, contextName), nil
 		}
 	} else {
+		h.probedAddr, h.probeReachable = directAddr, false
 		directErr = errDirectUnreachable
 	}
 	if err := ctx.Err(); err != nil {
@@ -491,6 +514,20 @@ func tcpReachable(addr string, timeout time.Duration) bool {
 	}
 	conn.Close()
 	return true
+}
+
+// probeDirectAsync measures TCP reachability of the direct relay address off
+// the request path and caches the outcome for Connect's lane decision. The
+// dial runs before taking the lock, so an in-flight Connect is never blocked.
+func (h *HubbleSource) probeDirectAsync(addr string) {
+	reachable := tcpReachable(addr, directDialTimeout)
+	h.mu.Lock()
+	h.probedAddr = addr
+	h.probeReachable = reachable
+	h.mu.Unlock()
+	if !reachable {
+		log.Printf("[hubble] Direct address %s unreachable (background probe); connects will use port-forward", addr)
+	}
 }
 
 // errDirectUnreachable marks a direct lane that failed at TCP reachability

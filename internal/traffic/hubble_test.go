@@ -189,6 +189,83 @@ func TestComposeConnectErrorForbiddenRemediation(t *testing.T) {
 	}
 }
 
+func TestConnectSkipsDirectLaneOnCachedUnreachable(t *testing.T) {
+	port := startStubRelay(t, nil)
+	client := fake.NewSimpleClientset(relayService(port, intstr.FromInt(4245)))
+
+	h := NewHubbleSource(client)
+	h.relayNamespace = "kube-system"
+	h.servicePort = port
+	h.relayPort = 4245
+	h.clusterIP = "127.0.0.1"
+	// Cached probe verdict: unreachable — even though the stub actually
+	// answers. Connect must trust the cache and skip the direct lane.
+	h.probedAddr = fmt.Sprintf("127.0.0.1:%d", port)
+	h.probeReachable = false
+
+	info, err := h.Connect(context.Background(), "test-ctx")
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	if info.Connected {
+		t.Fatal("expected direct lane to be skipped on cached-unreachable")
+	}
+	if !strings.Contains(info.Error, "direct connection to") {
+		t.Errorf("error %q should report the skipped direct lane", info.Error)
+	}
+
+	// The skip fires a background re-probe; against the live stub it must
+	// flip the cache so a later connect can use the direct lane again.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		h.mu.RLock()
+		flipped := h.probeReachable
+		h.mu.RUnlock()
+		if flipped {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Error("background re-probe did not refresh the cached verdict")
+}
+
+func TestDetectKicksBackgroundProbe(t *testing.T) {
+	port := startStubRelay(t, nil)
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "hubble-relay-abc", Namespace: "kube-system",
+			Labels: map[string]string{"k8s-app": "hubble-relay"},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	client := fake.NewSimpleClientset(pod, relayService(port, intstr.FromInt(4245)))
+
+	h := NewHubbleSource(client)
+	result, err := h.Detect(context.Background())
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if !result.Available {
+		t.Fatalf("expected detection, got: %s", result.Message)
+	}
+
+	wantAddr := fmt.Sprintf("127.0.0.1:%d", port)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		h.mu.RLock()
+		addr, reachable := h.probedAddr, h.probeReachable
+		h.mu.RUnlock()
+		if addr == wantAddr {
+			if !reachable {
+				t.Errorf("probe of live stub reported unreachable")
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Error("Detect did not populate the background probe cache")
+}
+
 func TestConnectRefusedAfterClose(t *testing.T) {
 	h := NewHubbleSource(fake.NewSimpleClientset())
 	h.relayNamespace = "kube-system"
