@@ -1852,7 +1852,9 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName, safetyBinding str
 				if parseErr == nil && activeSourceFile == existingPath {
 					newRegistry := make(map[string]contextEntry, len(contextRegistry)+len(parsed.Contexts))
 					for name, entry := range contextRegistry {
-						newRegistry[name] = entry
+						if entry.SourceFile != existingPath {
+							newRegistry[name] = entry
+						}
 					}
 					var qualifications []string
 					for _, name := range sortedContextNames(parsed) {

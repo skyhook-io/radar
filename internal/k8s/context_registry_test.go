@@ -1477,11 +1477,17 @@ func TestMergeAndSwitchContext_ReusedPathPublishesFreshMaps(t *testing.T) {
 	prevMtimes := perFileMtimes
 	prevPaths := kubeconfigPaths
 	prevCAPI := capiKubeconfigs
+	prevActiveFile := activeSourceFile
+	prevActiveName := activeSourceName
+	prevContextName := contextName
 	contextRegistry = registry
 	perFileConfigs = fileConfigs
 	perFileMtimes = mtimes
 	kubeconfigPaths = []string{primary, workload}
 	capiKubeconfigs = map[string]string{"workload": workload}
+	activeSourceFile = workload
+	activeSourceName = "workload"
+	contextName = "workload"
 	clientMu.Unlock()
 	t.Cleanup(func() {
 		clientMu.Lock()
@@ -1490,6 +1496,9 @@ func TestMergeAndSwitchContext_ReusedPathPublishesFreshMaps(t *testing.T) {
 		perFileMtimes = prevMtimes
 		kubeconfigPaths = prevPaths
 		capiKubeconfigs = prevCAPI
+		activeSourceFile = prevActiveFile
+		activeSourceName = prevActiveName
+		contextName = prevContextName
 		clientMu.Unlock()
 	})
 
@@ -1619,6 +1628,38 @@ func TestMergeAndSwitchContext_ReusedPathPublishesFreshMaps(t *testing.T) {
 	}
 	if !foundStable {
 		t.Fatalf("renamed CAPI context was not registered: %+v", contexts)
+	}
+
+	renamedRoot := renamed.DeepCopy()
+	delete(renamedRoot.Contexts, "workload")
+	renamedRoot.Contexts["workload-renamed"] = &clientcmdapi.Context{Cluster: "c2", AuthInfo: "u2"}
+	renamedRoot.CurrentContext = "workload-renamed"
+	renamedRootData, err := clientcmd.Write(*renamedRoot)
+	if err != nil {
+		t.Fatalf("serialize CAPI kubeconfig with renamed root context: %v", err)
+	}
+	qualifiedName, reusedPath, created, err := MergeAndSwitchContext(renamedRootData, "workload-renamed", "workload")
+	if err != nil {
+		t.Fatalf("MergeAndSwitchContext after root context rename: %v", err)
+	}
+	if qualifiedName != "workload-renamed" || reusedPath != workload || created {
+		t.Fatalf("root rename result = (%q, %q, %t)", qualifiedName, reusedPath, created)
+	}
+	contexts, err = GetAvailableContexts()
+	if err != nil {
+		t.Fatalf("GetAvailableContexts after root context rename: %v", err)
+	}
+	foundRenamedRoot := false
+	for _, context := range contexts {
+		switch context.OriginalName {
+		case "workload":
+			t.Fatalf("stale root CAPI context remained registered: %+v", contexts)
+		case "workload-renamed":
+			foundRenamedRoot = true
+		}
+	}
+	if !foundRenamedRoot {
+		t.Fatalf("renamed root CAPI context was not registered: %+v", contexts)
 	}
 }
 
