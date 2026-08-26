@@ -1797,6 +1797,45 @@ func TestSwitchContextMissingSourceErrorIsSanitizedAndClassified(t *testing.T) {
 	}
 }
 
+func TestSwitchContextMalformedSourceErrorIsSanitizedAndClassified(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "private", "prod.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("create kubeconfig directory: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("contexts: ["), 0o600); err != nil {
+		t.Fatalf("write malformed kubeconfig: %v", err)
+	}
+
+	clientMu.Lock()
+	previousRegistry := contextRegistry
+	previousMode := kubeconfigMode
+	previousStarted := initializationStarted
+	contextRegistry = map[string]contextEntry{
+		"prod": {SourceFile: path, InFileName: "prod"},
+	}
+	kubeconfigMode = "multi-source"
+	initializationStarted = true
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextRegistry = previousRegistry
+		kubeconfigMode = previousMode
+		initializationStarted = previousStarted
+		clientMu.Unlock()
+	})
+
+	err := SwitchContext("prod")
+	if err == nil {
+		t.Fatal("SwitchContext unexpectedly succeeded")
+	}
+	if strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "invalid kubeconfig syntax") {
+		t.Fatalf("SwitchContext error was not sanitized: %v", err)
+	}
+	if got := ClassifyError(err); got != "config" {
+		t.Fatalf("ClassifyError = %q, want config", got)
+	}
+}
+
 func TestDropKubeconfigSourceKeepsSingleFileContextCount(t *testing.T) {
 	clientMu.Lock()
 	previousRegistry := contextRegistry

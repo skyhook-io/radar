@@ -1683,7 +1683,8 @@ func SwitchContext(name string) error {
 	// Verify the context exists
 	rawConfig, err := kubeConfig.RawConfig()
 	if err != nil {
-		return fmt.Errorf("failed to load kubeconfig: %w", err)
+		log.Printf("[k8s] Failed to load kubeconfig for context %q: %v", name, err)
+		return fmt.Errorf("failed to load kubeconfig for context %q: %s", name, kubeconfigDiagnosticError(err))
 	}
 
 	ctx, ok := rawConfig.Contexts[overrideContextName]
@@ -1694,7 +1695,8 @@ func SwitchContext(name string) error {
 	// Build the REST config for the new context
 	config, err := kubeConfig.ClientConfig()
 	if err != nil {
-		return fmt.Errorf("%w for %q: %w", errKubeconfigClientSetupFailed, name, err)
+		log.Printf("[k8s] Failed to build client config for context %q: %v", name, err)
+		return fmt.Errorf("%w for %q: %s", errKubeconfigClientSetupFailed, name, kubeconfigDiagnosticError(err))
 	}
 
 	// Apply the same QPS/Burst settings as initial client creation.
