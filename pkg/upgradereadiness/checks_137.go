@@ -33,7 +33,7 @@ var removedFeatureGates137 = map[string]bool{
 	"WorkloadAwarePreemption":               true,
 }
 
-var lockedAPIServerFeatureGates137 = map[string]bool{
+var lockedFeatureGates137 = map[string]bool{
 	"DeclarativeValidationTakeover": false,
 }
 
@@ -64,17 +64,23 @@ func scanRemovedFeatureGates(input *Input) Check {
 				continue
 			}
 			for name, enabled := range evidence.FeatureGates {
-				if !removedFeatureGates137[name] {
+				if removedFeatureGates137[name] {
+					impact := "Kubelet 1.37 no longer recognizes this feature gate and can reject the configuration during startup."
+					if name == "PreventStaticPodAPIReferences" && !enabled {
+						impact = "Kubelet 1.37 removes this gate and the opt-out that allowed static Pods to reference API objects; the node configuration will be rejected and any dependent static Pod cannot start."
+					}
+					check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: name + " is removed", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Node", Name: node.Name}, Evidence: Evidence{Source: "kubelet configz", Path: "kubeletconfig.featureGates." + name, Detail: fmt.Sprintf("%t", enabled)}, AppliesFrom: check.AppliesFrom, Impact: impact, Remediation: "Remove " + name + " from the kubelet feature-gates configuration before upgrading this node.", References: append([]Reference(nil), removedFeatureGateReferences137[name]...)})
 					continue
 				}
-				impact := "Kubelet 1.37 no longer recognizes this feature gate and can reject the configuration during startup."
-				if name == "PreventStaticPodAPIReferences" && !enabled {
-					impact = "Kubelet 1.37 removes this gate and the opt-out that allowed static Pods to reference API objects; the node configuration will be rejected and any dependent static Pod cannot start."
+				defaultValue, locked := lockedFeatureGates137[name]
+				if !locked || enabled == defaultValue {
+					continue
 				}
-				check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: name + " is removed", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Node", Name: node.Name}, Evidence: Evidence{Source: "kubelet configz", Path: "kubeletconfig.featureGates." + name, Detail: fmt.Sprintf("%t", enabled)}, AppliesFrom: check.AppliesFrom, Impact: impact, Remediation: "Remove " + name + " from the kubelet feature-gates configuration before upgrading this node.", References: append([]Reference(nil), removedFeatureGateReferences137[name]...)})
+				check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: name + " must use its locked default", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Node", Name: node.Name}, Evidence: Evidence{Source: "kubelet configz", Path: "kubeletconfig.featureGates." + name, Detail: fmt.Sprintf("%t", enabled)}, AppliesFrom: check.AppliesFrom, Impact: fmt.Sprintf("Kubernetes 1.37 locks this kubelet feature gate to %t and rejects a different configured value during startup.", defaultValue), Remediation: fmt.Sprintf("Set %s=%t or remove the explicit setting before upgrading this node.", name, defaultValue), References: append([]Reference(nil), lockedFeatureGateReferences137[name]...)})
 			}
 		}
 	}
+	foundControlPlaneComponents := map[string]bool{}
 	if !kubeSystemCovered(input, "pods") {
 		check.Caveat = appendCaveat(check.Caveat, "kube-system is outside the readable Pod scope, so control-plane feature gates could not be inspected.")
 	} else if input.Pods == nil {
@@ -88,18 +94,32 @@ func scanRemovedFeatureGates(input *Input) Check {
 				if !isControlPlaneContainer(container.Name) {
 					continue
 				}
+				foundControlPlaneComponents[container.Name] = true
 				for name, value := range parsedFeatureGates(container.Command, container.Args) {
 					if removedFeatureGates137[name] {
 						check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: name + " is removed", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("spec.containers[%d].args[--feature-gates].%s", containerIndex, name), Detail: value}, AppliesFrom: check.AppliesFrom, Impact: "This Kubernetes 1.37 control-plane component no longer recognizes the configured feature gate and can fail during startup.", Remediation: "Remove " + name + " from the component feature-gates argument before upgrading the control plane.", References: append([]Reference(nil), removedFeatureGateReferences137[name]...)})
 						continue
 					}
-					defaultValue, locked := lockedAPIServerFeatureGates137[name]
+					defaultValue, locked := lockedFeatureGates137[name]
 					configuredValue, err := strconv.ParseBool(value)
-					if container.Name != "kube-apiserver" || !locked || (err == nil && configuredValue == defaultValue) {
+					if !locked || (err == nil && configuredValue == defaultValue) {
 						continue
 					}
-					check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: name + " must use its locked default", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("spec.containers[%d].args[--feature-gates].%s", containerIndex, name), Detail: value}, AppliesFrom: check.AppliesFrom, Impact: fmt.Sprintf("Kubernetes 1.37 locks this kube-apiserver feature gate to %t and rejects a different configured value during startup.", defaultValue), Remediation: fmt.Sprintf("Set %s=%t or remove the explicit setting before upgrading the control plane.", name, defaultValue), References: append([]Reference(nil), lockedFeatureGateReferences137[name]...)})
+					check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: name + " must use its locked default", Level: LevelBlocker, Resource: &ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, Evidence: Evidence{Source: "live", Path: fmt.Sprintf("spec.containers[%d].args[--feature-gates].%s", containerIndex, name), Detail: value}, AppliesFrom: check.AppliesFrom, Impact: fmt.Sprintf("Kubernetes 1.37 locks this %s feature gate to %t and rejects a different configured value during startup.", container.Name, defaultValue), Remediation: fmt.Sprintf("Set %s=%t or remove the explicit setting before upgrading the control plane.", name, defaultValue), References: append([]Reference(nil), lockedFeatureGateReferences137[name]...)})
 				}
+			}
+		}
+		if len(foundControlPlaneComponents) == 0 {
+			check.Caveat = appendCaveat(check.Caveat, "No control-plane mirror Pod was readable; the provider may manage the control plane, so component feature gates could not be inspected.")
+		} else {
+			missingComponents := []string{}
+			for _, component := range []string{"kube-apiserver", "kube-controller-manager", "kube-scheduler"} {
+				if !foundControlPlaneComponents[component] {
+					missingComponents = append(missingComponents, component)
+				}
+			}
+			if len(missingComponents) > 0 {
+				check.Caveat = appendCaveat(check.Caveat, "Control-plane feature gates could not be inspected for: "+strings.Join(missingComponents, ", ")+".")
 			}
 		}
 	}
@@ -258,11 +278,14 @@ func scanRemovedSchedulingAPIs(input *Input) Check {
 		}
 		check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: "scheduling.k8s.io/v1alpha2 " + object.GetKind(), Level: LevelBlocker, Resource: &ResourceRef{Group: "scheduling.k8s.io", Kind: object.GetKind(), Namespace: object.GetNamespace(), Name: object.GetName()}, Evidence: Evidence{Source: "live", Path: "apiVersion", Detail: "scheduling.k8s.io/v1alpha2"}, AppliesFrom: check.AppliesFrom, Impact: "Kubernetes 1.37 no longer serves this alpha API and requires its stored objects to be removed before upgrade.", Remediation: "Migrate this object to scheduling.k8s.io/v1beta1 or delete it before upgrading.", References: append([]Reference(nil), check.References...)})
 	}
+	if input.Namespaces != nil {
+		check.Caveat = appendCaveat(check.Caveat, scopedCoverageNote(input.Namespaces, "Workload and PodGroup objects"))
+	}
 	if len(input.SchedulingV1Alpha2UnavailableKinds) > 0 {
-		check.Caveat = "Could not inspect: " + formatBoundedList(input.SchedulingV1Alpha2UnavailableKinds, ", ") + "."
-		if len(check.Findings) == 0 {
-			check.Status, check.Summary = CheckUnknown, "No removed scheduling objects were found in readable kinds, but API coverage is incomplete."
-		}
+		check.Caveat = appendCaveat(check.Caveat, "Could not inspect: "+formatBoundedList(input.SchedulingV1Alpha2UnavailableKinds, ", ")+".")
+	}
+	if check.Caveat != "" && len(check.Findings) == 0 {
+		check.Status, check.Summary = CheckUnknown, "No removed scheduling objects were found in readable kinds, but API coverage is incomplete."
 	}
 	if len(check.Findings) > 0 {
 		check.Summary = fmt.Sprintf("%d stored scheduling %s must be migrated or removed before upgrading.", len(check.Findings), plural(len(check.Findings), "object", "objects"))
@@ -568,7 +591,9 @@ type selinuxVolumeUse struct {
 	recursiveReason string
 }
 
-func scanSELinuxMountTransition(input *Input) Check {
+const selinuxMountOptOutRemediation = "For Kubernetes 1.37 only, setting the SELinuxMount feature gate to false on every kubelet defers this transition; the gate is expected to lock enabled in Kubernetes 1.38."
+
+func scanSELinuxMountTransition(input *Input, targetAllowsOptOut bool) Check {
 	check := Check{
 		ID:          "selinux-mount-transition",
 		Category:    "Storage",
@@ -579,12 +604,23 @@ func scanSELinuxMountTransition(input *Input) Check {
 		AppliesFrom: "1.37",
 		References:  append([]Reference(nil), selinuxMountReferences...),
 	}
+	if targetAllowsOptOut && allLinuxKubeletsDisableSELinuxMount(input) {
+		check.Status = CheckNotApplicable
+		check.Summary = "SELinuxMount is explicitly disabled on every readable Linux kubelet for the Kubernetes 1.37 target."
+		check.EvidenceNote = "This opt-out is available for Kubernetes 1.37 only; SELinuxMount is expected to lock enabled in Kubernetes 1.38."
+		return check
+	}
 
 	missingRuntime, runtimeEvidenceAvailable := scanSELinuxRuntimeEvidence(input, &check)
+	runtimeFindingCount := len(check.Findings)
 	usesByPV, eligibleUses, incomplete := selinuxPersistentVolumeUses(input, &check)
 	check.Inspected = eligibleUses
 	for pvName, uses := range usesByPV {
 		scanSELinuxSharedVolume(&check, pvName, uses)
+	}
+	structuralConflictFound := len(check.Findings) > runtimeFindingCount
+	if structuralConflictFound {
+		check.Caveat = appendCaveat(check.Caveat, "Radar could not confirm whether the affected nodes enforce SELinux; structural findings do not apply where SELinux is disabled.")
 	}
 
 	if input.Events == nil {
@@ -596,6 +632,9 @@ func scanSELinuxMountTransition(input *Input) Check {
 		check.Caveat = appendCaveat(check.Caveat, "Node evidence was unavailable, so kubelet SELinux conflict metrics could not be inspected.")
 	} else if missingRuntime > 0 {
 		check.Caveat = appendCaveat(check.Caveat, fmt.Sprintf("Kubelet SELinux conflict metrics were unavailable for %d %s.", missingRuntime, plural(missingRuntime, "Linux node", "Linux nodes")))
+	}
+	if input.Namespaces != nil {
+		check.Caveat = appendCaveat(check.Caveat, scopedCoverageNote(input.Namespaces, "Pods, PersistentVolumeClaims and Events"))
 	}
 
 	if input.Pods == nil {
@@ -610,6 +649,9 @@ func scanSELinuxMountTransition(input *Input) Check {
 			check.Status = CheckUnknown
 			check.Summary = "No SELinux volume conflict was found in readable evidence, but storage coverage is incomplete."
 		}
+	} else if input.Namespaces != nil && len(check.Findings) == 0 {
+		check.Status = CheckUnknown
+		check.Summary = "No SELinux volume conflict was found in the selected namespaces, but cluster-wide coverage is incomplete."
 	} else if eligibleUses == 0 && len(check.Findings) == 0 {
 		check.Status = CheckNotApplicable
 		check.Summary = "No Linux Pod uses a persistent volume newly affected by the Kubernetes 1.37 SELinux mount behavior."
@@ -618,6 +660,36 @@ func scanSELinuxMountTransition(input *Input) Check {
 		check.Summary = fmt.Sprintf("%d SELinux volume-labeling compatibility %s require attention before upgrading.", len(check.Findings), plural(len(check.Findings), "signal", "signals"))
 	}
 	return check
+}
+
+func allLinuxKubeletsDisableSELinuxMount(input *Input) bool {
+	if input.Nodes == nil {
+		return false
+	}
+	evidenceByNode := make(map[string]NodeRuntimeEvidence, len(input.NodeRuntimeEvidence))
+	for _, evidence := range input.NodeRuntimeEvidence {
+		evidenceByNode[evidence.NodeName] = evidence
+	}
+	foundLinuxNode := false
+	for _, node := range input.Nodes {
+		if node == nil || strings.EqualFold(node.Status.NodeInfo.OperatingSystem, "windows") {
+			continue
+		}
+		foundLinuxNode = true
+		evidence, ok := evidenceByNode[node.Name]
+		if !ok || !evidence.ConfigAvailable {
+			return false
+		}
+		enabled, configured := evidence.FeatureGates["SELinuxMount"]
+		if !configured || enabled {
+			return false
+		}
+	}
+	return foundLinuxNode
+}
+
+func selinuxMountRemediation(action string) string {
+	return action + " " + selinuxMountOptOutRemediation
 }
 
 func scanSELinuxRuntimeEvidence(input *Input, check *Check) (int, bool) {
@@ -654,7 +726,7 @@ func scanSELinuxRuntimeEvidence(input *Input, check *Check) (int, bool) {
 			Evidence:    Evidence{Source: "kubelet metrics", Path: "volume_manager_selinux_volume_context_mismatch_*_total", Detail: fmt.Sprintf("warnings=%g errors=%g", evidence.SELinuxMismatchWarnings, evidence.SELinuxMismatchErrors)},
 			AppliesFrom: check.AppliesFrom,
 			Impact:      impact,
-			Remediation: "Inspect the kubelet SELinuxLabelConflict and SELinuxChangePolicyConflict events, then align shared-volume SELinux labels and seLinuxChangePolicy values.",
+			Remediation: selinuxMountRemediation("Enable the selinux-warning-controller in kube-controller-manager and inspect selinux_warning_controller_selinux_volume_conflict to identify both Pods, then align shared-volume SELinux labels and seLinuxChangePolicy values."),
 			References:  append([]Reference(nil), check.References...),
 		})
 	}
@@ -733,12 +805,12 @@ func selinuxPersistentVolumeUses(input *Input, check *Check) (map[string][]selin
 			eligibleUses++
 			if !consistent {
 				check.Findings = append(check.Findings, Finding{
-					RuleID: check.ID, Title: "Pod uses multiple SELinux labels on one volume", Level: LevelWarning,
+					RuleID: check.ID, Title: "Pod uses multiple SELinux labels on one volume", Level: LevelReview,
 					Resource:    &ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name},
 					Evidence:    Evidence{Source: "live", Path: fmt.Sprintf("spec.volumes[%d]", volumeIndex), Detail: "persistentVolume=" + pv.Name},
 					AppliesFrom: check.AppliesFrom,
-					Impact:      "Kubernetes cannot mount one volume with multiple SELinux contexts; the Pod can remain in ContainerCreating.",
-					Remediation: "Use one effective SELinux label for every container that mounts this volume, or explicitly set seLinuxChangePolicy: Recursive.",
+					Impact:      "If the node enforces SELinux, Kubernetes cannot mount one volume with multiple SELinux contexts and the Pod can remain in ContainerCreating.",
+					Remediation: selinuxMountRemediation("Use one effective SELinux label for every container that mounts this volume, or explicitly set seLinuxChangePolicy: Recursive."),
 					References:  append([]Reference(nil), check.References...),
 				})
 				continue
@@ -914,26 +986,26 @@ func scanSELinuxSharedVolume(check *Check, pvName string, uses []selinuxVolumeUs
 	}
 	if len(policies) > 1 {
 		if len(recursiveFallbacks) > 0 {
-			check.Findings = append(check.Findings, selinuxSharedVolumeFinding(check, pvName, "Shared volume falls back to recursive SELinux relabeling", "effectivePolicies=MountOption,Recursive recursiveFallbacks="+formatBoundedList(recursiveFallbacks, ", ")+" pods="+formatBoundedList(pods, ", "), "At least one Pod cannot use mount-time labeling while another Pod requests it; kubelet can reject one of the mounts.", "Set an explicit SELinux level on every unprivileged container mounting the volume, or set seLinuxChangePolicy: Recursive on every Pod sharing it; privileged sharers require Recursive."))
+			check.Findings = append(check.Findings, selinuxSharedVolumeFinding(check, pvName, "Shared volume falls back to recursive SELinux relabeling", "effectivePolicies=MountOption,Recursive recursiveFallbacks="+formatBoundedList(recursiveFallbacks, ", ")+" pods="+formatBoundedList(pods, ", "), "If the node enforces SELinux, one Pod cannot use mount-time labeling while another Pod requests it and kubelet can reject one of the mounts.", "Set an explicit SELinux level on every unprivileged container mounting the volume, or set seLinuxChangePolicy: Recursive on every Pod sharing it; privileged sharers require Recursive."))
 			return
 		}
-		check.Findings = append(check.Findings, selinuxSharedVolumeFinding(check, pvName, "Shared volume uses conflicting SELinux change policies", "policies=MountOption,Recursive pods="+formatBoundedList(pods, ", "), "Pods sharing this volume use both recursive relabeling and mount-time labeling; kubelet can reject one of the mounts.", "Set the same seLinuxChangePolicy on every Pod sharing this volume; use Recursive when privileged and unprivileged Pods must share it."))
+		check.Findings = append(check.Findings, selinuxSharedVolumeFinding(check, pvName, "Shared volume uses conflicting SELinux change policies", "policies=MountOption,Recursive pods="+formatBoundedList(pods, ", "), "If the node enforces SELinux, Pods sharing this volume use incompatible relabeling modes and kubelet can reject one of the mounts.", "Set the same seLinuxChangePolicy on every Pod sharing this volume; use Recursive when privileged and unprivileged Pods must share it."))
 		return
 	}
 	_, labelsCompatible := compatibleSELinuxLabel(labels)
 	if policies[corev1.SELinuxChangePolicyMountOption] && !labelsCompatible {
-		check.Findings = append(check.Findings, selinuxSharedVolumeFinding(check, pvName, "Shared volume uses conflicting SELinux labels", "labels="+fmt.Sprintf("%d", len(labels))+" pods="+formatBoundedList(pods, ", "), "Kubernetes can mount a volume with only one SELinux context; Pods requesting different labels can remain in ContainerCreating.", "Align the effective SELinux label across every Pod sharing this volume, or explicitly set seLinuxChangePolicy: Recursive."))
+		check.Findings = append(check.Findings, selinuxSharedVolumeFinding(check, pvName, "Shared volume uses conflicting SELinux labels", "labels="+fmt.Sprintf("%d", len(labels))+" pods="+formatBoundedList(pods, ", "), "If the node enforces SELinux, Kubernetes can mount a volume with only one context and Pods requesting different labels can remain in ContainerCreating.", "Align the effective SELinux label across every Pod sharing this volume, or explicitly set seLinuxChangePolicy: Recursive."))
 	}
 }
 
 func selinuxSharedVolumeFinding(check *Check, pvName, title, detail, impact, remediation string) Finding {
 	return Finding{
-		RuleID: check.ID, Title: title, Level: LevelWarning,
+		RuleID: check.ID, Title: title, Level: LevelReview,
 		Resource:    &ResourceRef{Kind: "PersistentVolume", Name: pvName},
 		Evidence:    Evidence{Source: "live", Path: "spec.claimRef", Detail: detail},
 		AppliesFrom: check.AppliesFrom,
 		Impact:      impact,
-		Remediation: remediation,
+		Remediation: selinuxMountRemediation(remediation),
 		References:  append([]Reference(nil), check.References...),
 	}
 }
@@ -959,8 +1031,8 @@ func appendSELinuxEventFindings(events []*corev1.Event, check *Check) {
 			Resource:    &ResourceRef{Group: group, Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name},
 			Evidence:    Evidence{Source: "event", Path: "reason", Detail: event.Message},
 			AppliesFrom: check.AppliesFrom,
-			Impact:      "Kubelet reported an active SELinux volume-labeling conflict that can prevent the workload from starting.",
-			Remediation: "Align SELinux labels and seLinuxChangePolicy values for every Pod sharing the affected volume.",
+			Impact:      "The selinux-warning-controller reported a potential volume-labeling conflict that can prevent the workload from starting if the affected Pods land on the same node.",
+			Remediation: selinuxMountRemediation("Inspect selinux_warning_controller_selinux_volume_conflict to identify both Pods, then align SELinux labels and seLinuxChangePolicy values for every Pod sharing the affected volume."),
 			References:  append([]Reference(nil), check.References...),
 		})
 	}

@@ -119,6 +119,46 @@ func TestLockedAPIServerFeatureGate137(t *testing.T) {
 	}
 }
 
+func TestLockedFeatureGateAcrossComponents137(t *testing.T) {
+	for _, component := range []string{"kube-controller-manager", "kube-scheduler"} {
+		t.Run(component, func(t *testing.T) {
+			input := completeInput()
+			input.Pods = []*corev1.Pod{{
+				ObjectMeta: metav1.ObjectMeta{Name: component + "-node-a", Namespace: "kube-system", Annotations: map[string]string{corev1.MirrorPodAnnotationKey: "mirror"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: component, Args: []string{"--feature-gates=DeclarativeValidationTakeover=true"}}}},
+			}}
+			check := checkByID(t, scan137(t, input), "removed-feature-gates")
+			if check.Status != CheckBlocked || len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Impact, component) {
+				t.Fatalf("%s locked gate = %+v, want component-specific blocker", component, check)
+			}
+		})
+	}
+
+	input := completeInput()
+	input.NodeRuntimeEvidence[0].FeatureGates["DeclarativeValidationTakeover"] = true
+	check := checkByID(t, scan137(t, input), "removed-feature-gates")
+	if check.Status != CheckBlocked || len(check.Findings) != 1 || check.Findings[0].Resource.Kind != "Node" {
+		t.Fatalf("kubelet locked gate = %+v, want node blocker", check)
+	}
+}
+
+func TestRemovedFeatureGatesReportsManagedControlPlaneGap137(t *testing.T) {
+	check := checkByID(t, scan137(t, completeInput()), "removed-feature-gates")
+	if check.Status != CheckPassed || !strings.Contains(check.Caveat, "provider may manage the control plane") {
+		t.Fatalf("managed control plane = %+v, want passed node evidence with control-plane caveat", check)
+	}
+
+	input := completeInput()
+	input.Pods = []*corev1.Pod{{
+		ObjectMeta: metav1.ObjectMeta{Name: "kube-apiserver-node-a", Namespace: "kube-system", Annotations: map[string]string{corev1.MirrorPodAnnotationKey: "mirror"}},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "kube-apiserver"}}},
+	}}
+	check = checkByID(t, scan137(t, input), "removed-feature-gates")
+	if check.Status != CheckPassed || !strings.Contains(check.Caveat, "kube-controller-manager, kube-scheduler") {
+		t.Fatalf("partial control-plane evidence = %+v, want missing-component caveat", check)
+	}
+}
+
 func TestRemovedControlPlaneConfigurationScope137(t *testing.T) {
 	input := completeInput()
 	input.Namespaces = []string{"apps"}
@@ -187,6 +227,14 @@ func TestRemovedSchedulingAPIs137(t *testing.T) {
 	check = checkByID(t, scan137(t, input), "removed-scheduling-apis")
 	if check.Status != CheckNotApplicable {
 		t.Fatalf("absent scheduling API = %+v, want not applicable", check)
+	}
+
+	input = completeInput()
+	input.SchedulingV1Alpha2Installed = true
+	input.Namespaces = []string{"apps"}
+	check = checkByID(t, scan137(t, input), "removed-scheduling-apis")
+	if check.Status != CheckUnknown || !strings.Contains(check.Caveat, "Only namespace apps was inspected") {
+		t.Fatalf("namespace-scoped scheduling evidence = %+v, want unknown with scope caveat", check)
 	}
 }
 
@@ -410,7 +458,7 @@ func TestEvery137ConfigurationRemovalHasAnUpstreamReference(t *testing.T) {
 			t.Errorf("removed feature gate %s has no upstream reference", name)
 		}
 	}
-	for name := range lockedAPIServerFeatureGates137 {
+	for name := range lockedFeatureGates137 {
 		if len(lockedFeatureGateReferences137[name]) == 0 {
 			t.Errorf("locked feature gate %s has no upstream reference", name)
 		}
@@ -471,9 +519,9 @@ func TestSELinuxMountTransition137(t *testing.T) {
 		wantStatus CheckStatus
 		wantTitle  string
 	}{
-		{name: "different labels conflict", input: selinuxSharedVolumeInput(t, nil, nil, "s0:c1,c2", "s0:c3,c4"), wantStatus: CheckWarning, wantTitle: "conflicting SELinux labels"},
-		{name: "different policies conflict", input: selinuxSharedVolumeInput(t, &mountOption, &recursive, "s0:c1,c2", "s0:c1,c2"), wantStatus: CheckWarning, wantTitle: "conflicting SELinux change policies"},
-		{name: "unlabeled pod falls back to recursive policy", input: selinuxSharedVolumeInput(t, nil, nil, "s0:c1,c2", ""), wantStatus: CheckWarning, wantTitle: "falls back to recursive SELinux relabeling"},
+		{name: "different labels conflict", input: selinuxSharedVolumeInput(t, nil, nil, "s0:c1,c2", "s0:c3,c4"), wantStatus: CheckReview, wantTitle: "conflicting SELinux labels"},
+		{name: "different policies conflict", input: selinuxSharedVolumeInput(t, &mountOption, &recursive, "s0:c1,c2", "s0:c1,c2"), wantStatus: CheckReview, wantTitle: "conflicting SELinux change policies"},
+		{name: "unlabeled pod falls back to recursive policy", input: selinuxSharedVolumeInput(t, nil, nil, "s0:c1,c2", ""), wantStatus: CheckReview, wantTitle: "falls back to recursive SELinux relabeling"},
 		{name: "recursive opt out", input: selinuxSharedVolumeInput(t, &recursive, &recursive, "s0:c1,c2", "s0:c3,c4"), wantStatus: CheckPassed},
 		{name: "matching mount labels", input: selinuxSharedVolumeInput(t, nil, nil, "s0:c1,c2", "s0:c1,c2"), wantStatus: CheckPassed},
 		{name: "defaultable label components", input: compatibleLabels, wantStatus: CheckPassed},
@@ -486,6 +534,9 @@ func TestSELinuxMountTransition137(t *testing.T) {
 			if tc.wantTitle != "" && (len(check.Findings) != 1 || !strings.Contains(check.Findings[0].Title, tc.wantTitle)) {
 				t.Fatalf("findings = %+v, want title containing %q", check.Findings, tc.wantTitle)
 			}
+			if tc.wantStatus == CheckReview && (!strings.Contains(check.Caveat, "could not confirm") || !strings.Contains(check.Findings[0].Remediation, "Kubernetes 1.37 only")) {
+				t.Fatalf("conditional SELinux finding = %+v, want applicability caveat and interim opt-out", check)
+			}
 		})
 	}
 }
@@ -497,12 +548,21 @@ func TestSELinuxMountTransitionEvidenceBoundaries137(t *testing.T) {
 	if check.Status != CheckWarning || len(check.Findings) != 1 || check.Findings[0].Resource.Kind != "Node" {
 		t.Fatalf("positive kubelet metric = %+v, want node warning", check)
 	}
+	if !strings.Contains(check.Findings[0].Remediation, "selinux_warning_controller_selinux_volume_conflict") || !strings.Contains(check.Findings[0].Remediation, "Kubernetes 1.37 only") {
+		t.Fatalf("kubelet metric remediation = %q, want controller diagnostics and interim opt-out", check.Findings[0].Remediation)
+	}
 
 	input = completeInput()
 	input.Events = []*corev1.Event{{Reason: "SELinuxLabelConflict", Message: "volume already mounted with a different context", InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "apps", Name: "api"}}}
 	check = checkByID(t, scan137(t, input), "selinux-mount-transition")
 	if check.Status != CheckWarning || len(check.Findings) != 1 || check.Findings[0].Evidence.Source != "event" {
 		t.Fatalf("positive conflict event = %+v, want warning", check)
+	}
+	if !strings.Contains(check.Findings[0].Impact, "selinux-warning-controller") || !strings.Contains(check.Findings[0].Impact, "potential") {
+		t.Fatalf("conflict event impact = %q, want accurate producer and semantics", check.Findings[0].Impact)
+	}
+	if !strings.Contains(check.Findings[0].Remediation, "selinux_warning_controller_selinux_volume_conflict") {
+		t.Fatalf("conflict event remediation = %q, want the controller metric that identifies both Pods", check.Findings[0].Remediation)
 	}
 
 	input = selinuxSharedVolumeInput(t, nil, nil, "s0:c1,c2", "s0:c1,c2")
@@ -532,6 +592,42 @@ func TestSELinuxMountTransitionEvidenceBoundaries137(t *testing.T) {
 	check = checkByID(t, scan137(t, input), "selinux-mount-transition")
 	if check.Status != CheckUnknown || !strings.Contains(check.Caveat, "Pods were unavailable") || strings.Contains(check.Caveat, "Persistent-volume or CSI-driver evidence") {
 		t.Fatalf("missing Pod evidence = %+v, want Pod-specific incomplete coverage", check)
+	}
+
+	input = completeInput()
+	input.Namespaces = []string{"apps"}
+	check = checkByID(t, scan137(t, input), "selinux-mount-transition")
+	if check.Status != CheckUnknown || !strings.Contains(check.Caveat, "Pods, PersistentVolumeClaims and Events") {
+		t.Fatalf("namespace-scoped SELinux evidence = %+v, want unknown with scope caveat", check)
+	}
+}
+
+func TestSELinuxMountExplicitOptOut137(t *testing.T) {
+	input := completeInput()
+	input.NodeRuntimeEvidence[0].FeatureGates["SELinuxMount"] = false
+	check := checkByID(t, scan137(t, input), "selinux-mount-transition")
+	if check.Status != CheckNotApplicable || !strings.Contains(check.Summary, "every readable Linux kubelet") || !strings.Contains(check.EvidenceNote, "1.38") || check.Caveat != "" {
+		t.Fatalf("complete 1.37 opt-out = %+v, want not applicable with expiry", check)
+	}
+
+	input = selinuxSharedVolumeInput(t, nil, nil, "s0:c1,c2", "s0:c3,c4")
+	input.NodeRuntimeEvidence[0].FeatureGates["SELinuxMount"] = false
+	input.Nodes = append(input.Nodes, readyNode("node-b", "v1.35.7"))
+	input.NodeRuntimeEvidence = append(input.NodeRuntimeEvidence, NodeRuntimeEvidence{NodeName: "node-b", ConfigAvailable: true, FeatureGates: map[string]bool{}})
+	check = checkByID(t, scan137(t, input), "selinux-mount-transition")
+	if check.Status != CheckReview {
+		t.Fatalf("partial node opt-out = %+v, want structural review", check)
+	}
+
+	input = selinuxSharedVolumeInput(t, nil, nil, "s0:c1,c2", "s0:c3,c4")
+	input.NodeRuntimeEvidence[0].FeatureGates["SELinuxMount"] = false
+	result, err := Scan(input, "1.36", "1.38")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check = checkByID(t, result, "selinux-mount-transition")
+	if check.Status != CheckReview {
+		t.Fatalf("1.37-only opt-out with a 1.38 target = %+v, want structural review", check)
 	}
 }
 

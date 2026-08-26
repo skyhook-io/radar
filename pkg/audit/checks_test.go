@@ -1999,15 +1999,8 @@ func TestDeprecatedAPIVersion_NoServedAPIs(t *testing.T) {
 	}
 }
 
-func TestDeprecatedAPIVersionSkipsFutureDeprecations(t *testing.T) {
+func TestDeprecatedAPIVersionReportsSchedulingV1Alpha2BeforeRemoval(t *testing.T) {
 	input := &CheckInput{ClusterVersion: "v1.36.4", ServedAPIs: []string{"scheduling.k8s.io/v1alpha2"}}
-	for _, finding := range RunChecks(input).Findings {
-		if finding.CheckID == "deprecatedAPIVersion" {
-			t.Fatalf("future deprecation produced finding on Kubernetes 1.36: %+v", finding)
-		}
-	}
-
-	input.ClusterVersion = "1.37"
 	found := false
 	for _, finding := range RunChecks(input).Findings {
 		if finding.CheckID == "deprecatedAPIVersion" {
@@ -2015,7 +2008,7 @@ func TestDeprecatedAPIVersionSkipsFutureDeprecations(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatal("Kubernetes 1.37 did not report served scheduling.k8s.io/v1alpha2")
+		t.Fatal("Kubernetes 1.36 did not report scheduling.k8s.io/v1alpha2 before its 1.37 removal")
 	}
 }
 

@@ -102,7 +102,7 @@ func Scan(input *Input, currentVersion, targetVersion string) (*ScanResults, err
 			scanRemovedSchedulingAPIs(input),
 			scanKubeadmConfig(input),
 			scanRemovedControlPlaneMetrics(input),
-			scanSELinuxMountTransition(input),
+			scanSELinuxMountTransition(input, target.Major() == 1 && target.Minor() == 37),
 			scanKubeProxyModeTransition(input),
 		)
 	}

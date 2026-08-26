@@ -556,7 +556,16 @@ func TestScanCoverageAndVerdictPrecedence(t *testing.T) {
 		t.Fatalf("definite blocker must win over unknown coverage: %+v", got)
 	}
 
-	got, _ = Scan(completeInput(), "1.36", "1.37")
+	complete137 := completeInput()
+	complete137.Pods = []*corev1.Pod{{
+		ObjectMeta: metav1.ObjectMeta{Name: "control-plane-node-a", Namespace: "kube-system", Annotations: map[string]string{corev1.MirrorPodAnnotationKey: "mirror"}},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{
+			{Name: "kube-apiserver"},
+			{Name: "kube-controller-manager"},
+			{Name: "kube-scheduler"},
+		}},
+	}}
+	got, _ = Scan(complete137, "1.36", "1.37")
 	if got.Verdict != VerdictNoKnownBlockers || got.ReviewedThrough != "1.37" {
 		t.Fatalf("reviewed 1.37 target should have no known blockers with complete clean evidence: %+v", got)
 	}
