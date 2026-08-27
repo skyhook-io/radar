@@ -91,6 +91,13 @@ rbac:
   # plane visibility.
   viewWebhooks: false
 
+  # Allow the no-auth in-cluster Radar identity to read kubelet metrics and
+  # effective configuration through nodes/proxy for upgrade-impact checks.
+  # This exposes node-level runtime and configuration details to anyone who
+  # can reach that Radar instance. Enable only when that audience is trusted.
+  # Authenticated users need this permission on their own Kubernetes identity.
+  viewNodeRuntime: false
+
   # Allow pod exec (enables terminal feature)
   podExec: false
 

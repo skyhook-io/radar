@@ -258,7 +258,7 @@ func TestScanMultiMinorControlPlaneJumpIsBlocked(t *testing.T) {
 		t.Fatal(err)
 	}
 	check := checkByID(t, got, "control-plane-upgrade-path")
-	if check.Status != CheckBlocked || len(check.Findings) != 1 || check.Findings[0].Evidence.Detail != "1.32 → 1.33 → 1.34 → 1.35 → 1.36" {
+	if check.Status != CheckBlocked || len(check.Findings) != 1 || check.Findings[0].Evidence.Detail != "1.32 → 1.33 → 1.34 → 1.35 → 1.36" || check.Findings[0].AppliesFrom != "" {
 		t.Fatalf("unexpected upgrade path result: %+v", check)
 	}
 }
@@ -269,7 +269,7 @@ func TestScanMajorControlPlaneJumpIsBlocked(t *testing.T) {
 		t.Fatal(err)
 	}
 	check := checkByID(t, got, "control-plane-upgrade-path")
-	if check.Status != CheckBlocked || len(check.Findings) != 1 || check.Findings[0].Evidence.Detail != "1.35 → 2.0" || !strings.Contains(check.Findings[0].Remediation, "1.36") {
+	if check.Status != CheckBlocked || len(check.Findings) != 1 || check.Findings[0].Evidence.Detail != "1.35 → 2.0" || check.Findings[0].AppliesFrom != "" || !strings.Contains(check.Findings[0].Remediation, "1.36") {
 		t.Fatalf("unexpected major-version path result: %+v", check)
 	}
 }

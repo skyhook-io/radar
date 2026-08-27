@@ -202,7 +202,7 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
       {data.coverage.state !== 'no_access' && (data.coverage.unavailableKinds?.length ?? 0) > 0 && (
         <CoverageNotice
           headline="Some live resources were unavailable"
-          body={`Radar could not inspect: ${(data.coverage.unavailableKinds ?? []).join(', ')}. Affected checks are marked incomplete.`}
+          body={upgradeUnavailableKindsMessage(data.coverage.unavailableKinds ?? [])}
         />
       )}
       {data.coverage.state !== 'no_access' && scopedKinds.length > 0 && (
@@ -212,7 +212,7 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
         />
       )}
       {data.coverage.state === 'partial' && !data.coverage.scopedNamespaces?.length && !data.coverage.unavailableKinds?.length && scopedKinds.length === 0 && (
-        <CoverageNotice headline="Some evidence is incomplete" body="Rows marked Partial evidence explain what Radar could not verify." />
+        <CoverageNotice headline="Some evidence is incomplete" body="Evidence labels on affected rows explain what Radar could not verify." />
       )}
       {data.coverage.state === 'no_access' ? (
         <section className="shrink-0">
@@ -291,8 +291,17 @@ export function incompleteUpgradeCheckCount(checks: Pick<UpgradeReadinessCheck, 
 
 export function upgradeEvaluationSummary(total: number, summary: UpgradeReadinessResponse['summary'], incomplete = summary.unknown) {
   const applicable = Math.max(0, total - summary.notApplicable)
-  const partialEvidenceLabel = incomplete > 0 ? ` · ${incomplete} with partial evidence` : ''
-  return `${total} evaluated · ${applicable} applicable${partialEvidenceLabel} · ${summary.notApplicable} not applicable`
+  const incompleteEvidenceLabel = incomplete > 0 ? ` · ${incomplete} with incomplete evidence` : ''
+  return `${total} evaluated · ${applicable} applicable${incompleteEvidenceLabel} · ${summary.notApplicable} not applicable`
+}
+
+export function upgradeUnavailableKindsMessage(unavailableKinds: string[]) {
+  return `Radar could not inspect: ${unavailableKinds.join(', ')}. Affected checks are marked incomplete.`
+}
+
+export function upgradeEvidenceCoverageLabel(check: Pick<UpgradeReadinessCheck, 'status' | 'inspected' | 'caveat'>) {
+  if (!check.caveat) return ''
+  return check.status === 'unknown' && (check.inspected ?? 0) === 0 ? 'No evidence' : 'Partial evidence'
 }
 
 function CoverageMethodology({ data }: { data: UpgradeReadinessResponse }) {
@@ -323,7 +332,7 @@ function CoverageMethodology({ data }: { data: UpgradeReadinessResponse }) {
           </p>
           <p>
             Results use live cluster resources and the row-specific evidence scope shown below. {unavailable.length > 0
-              ? `Radar could not inspect ${unavailable.join(', ')}; affected checks are marked incomplete.`
+              ? upgradeUnavailableKindsMessage(unavailable)
               : scopedKinds.length > 0
                 ? `Cached evidence has per-kind namespace ceilings for ${formatScopedKinds(scopedKinds)}.`
               : data.coverage.state === 'complete'
@@ -433,6 +442,7 @@ function CheckRow({ check, onNavigateToResource }: { check: UpgradeReadinessChec
   const detailID = `upgrade-check-${check.id}`
   const findingGroups = groupFindings(check.findings)
   const label = evidenceLabel(check)
+  const coverageLabel = upgradeEvidenceCoverageLabel(check)
   const checkReferences = check.references ?? []
   return (
     <div>
@@ -456,10 +466,10 @@ function CheckRow({ check, onNavigateToResource }: { check: UpgradeReadinessChec
           <div className="min-w-0">
             <Badge severity={meta.badgeSeverity}>{meta.label}</Badge>
             {label && <div className="mt-1 text-[11px] text-theme-text-tertiary">{label}</div>}
-            {check.caveat && (
+            {coverageLabel && (
               <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-amber-700 dark:text-amber-300">
                 <AlertTriangle className="h-3 w-3 shrink-0" />
-                Partial evidence
+                {coverageLabel}
               </div>
             )}
           </div>

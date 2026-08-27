@@ -63,3 +63,18 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+  - it: grants node runtime evidence only when explicitly enabled
+    set:
+      rbac:
+        viewNodeRuntime: true
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["nodes/proxy"]
+            verbs: ["get"]

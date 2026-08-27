@@ -167,6 +167,16 @@ rules:
     verbs: ["get", "list", "watch"]
   {{- end }}
 
+  {{- if .Values.rbac.viewNodeRuntime }}
+  # Kubelet runtime evidence (opt-in): upgrade-impact checks inspect kubelet
+  # metrics and effective configuration through the Node proxy. In no-auth
+  # mode this makes node-level details visible to anyone who can reach Radar.
+  - apiGroups: [""]
+    resources:
+      - nodes/proxy
+    verbs: ["get"]
+  {{- end }}
+
   {{- if .Values.rbac.podLogs }}
   # Pod logs (opt-in - enables log viewer)
   - apiGroups: [""]

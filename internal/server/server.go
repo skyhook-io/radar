@@ -1503,9 +1503,14 @@ func noNamespaceAccess(namespaces []string) bool {
 //
 // Pass namespace="" for a cluster-scoped check.
 func (s *Server) canRead(r *http.Request, group, resource, namespace, verb string) bool {
+	allowed, _ := s.canReadDecision(r, group, resource, namespace, verb)
+	return allowed
+}
+
+func (s *Server) canReadDecision(r *http.Request, group, resource, namespace, verb string) (bool, bool) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil || s.permCache == nil {
-		return true
+		return true, true
 	}
 	if s.permCache.Get(user.Username) == nil {
 		// Trigger namespace discovery so SAR cache has a parent UserPermissions
@@ -1513,7 +1518,7 @@ func (s *Server) canRead(r *http.Request, group, resource, namespace, verb strin
 		// this; if it hasn't run yet, canReadUser falls through to a fresh SAR.
 		_ = s.getUserNamespaces(r, []string{})
 	}
-	return s.canReadUser(r.Context(), user, group, resource, namespace, verb)
+	return s.canReadUserDecision(r.Context(), user, group, resource, namespace, verb)
 }
 
 // canReadUser is the request-free core of canRead: it authorizes a single
@@ -1528,13 +1533,18 @@ func (s *Server) canRead(r *http.Request, group, resource, namespace, verb strin
 // Fail-closed: no apiserver / SAR error → deny. Returns true only when auth is
 // disabled (nil user) or the SAR allows it.
 func (s *Server) canReadUser(ctx context.Context, user *auth.User, group, resource, namespace, verb string) bool {
+	allowed, _ := s.canReadUserDecision(ctx, user, group, resource, namespace, verb)
+	return allowed
+}
+
+func (s *Server) canReadUserDecision(ctx context.Context, user *auth.User, group, resource, namespace, verb string) (bool, bool) {
 	if user == nil || s.permCache == nil {
-		return true
+		return true, true
 	}
 	perms := s.permCache.Get(user.Username)
 	if perms != nil {
 		if v, ok := perms.CanI(verb, group, resource, namespace); ok {
-			return v
+			return v, true
 		}
 	}
 	allowed, authoritative := s.canReadUserSAR(ctx, user, group, resource, namespace, verb)
@@ -1544,7 +1554,7 @@ func (s *Server) canReadUser(ctx context.Context, user *auth.User, group, resour
 	if authoritative && perms != nil {
 		perms.SetCanI(verb, group, resource, namespace, allowed)
 	}
-	return allowed
+	return allowed, authoritative
 }
 
 // canReadUserSAR runs a single fresh SubjectAccessReview for (group, resource,

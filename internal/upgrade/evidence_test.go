@@ -9,18 +9,27 @@ import (
 )
 
 type fakeUpgradeAuthorizer struct {
-	namespaces  []string
-	canList     map[string]bool
-	filterCalls []string
-	filtered    []string
+	namespaces        []string
+	canList           map[string]bool
+	listDecisions     map[string]EvidenceAuthorizationDecision
+	nodeProxyDecision *EvidenceAuthorizationDecision
+	filterCalls       []string
+	filtered          []string
 }
 
 func (f *fakeUpgradeAuthorizer) Namespaces() []string { return f.namespaces }
-func (f *fakeUpgradeAuthorizer) CanList(group, resource, namespace string) bool {
-	return f.canList[group+"/"+resource+"/"+namespace]
+func (f *fakeUpgradeAuthorizer) CanList(group, resource, namespace string) EvidenceAuthorizationDecision {
+	key := group + "/" + resource + "/" + namespace
+	if decision, ok := f.listDecisions[key]; ok {
+		return decision
+	}
+	return EvidenceAuthorizationDecision{Allowed: f.canList[key], Authoritative: true}
 }
-func (f *fakeUpgradeAuthorizer) CanGetSubresource(group, resource, subresource string) bool {
-	return false
+func (f *fakeUpgradeAuthorizer) CanGetSubresource(group, resource, subresource string) EvidenceAuthorizationDecision {
+	if f.nodeProxyDecision != nil {
+		return *f.nodeProxyDecision
+	}
+	return EvidenceAuthorizationDecision{Authoritative: true}
 }
 func (f *fakeUpgradeAuthorizer) FilterNamespacesByCanList(group, resource string, namespaces []string) []string {
 	f.filterCalls = append(f.filterCalls, group+"/"+resource)

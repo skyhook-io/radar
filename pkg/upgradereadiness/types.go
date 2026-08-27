@@ -84,8 +84,14 @@ type Input struct {
 	// kinds that could not be listed while preserving evidence from readable
 	// kinds.
 	AdmissionWebhookUnavailableKinds []string
-	CustomResourceDefinitions        []*unstructured.Unstructured
-	APIServices                      []*unstructured.Unstructured
+	// AdmissionWebhookDeniedKinds is the subset of unavailable webhook
+	// configuration kinds whose list request was denied.
+	AdmissionWebhookDeniedKinds []string
+	CustomResourceDefinitions   []*unstructured.Unstructured
+	APIServices                 []*unstructured.Unstructured
+	// NodeProxyForbidden records that authorization or an observed request
+	// denied access to kubelet metrics or effective configuration.
+	NodeProxyForbidden bool
 	// NodeRuntimeEvidence is nil when kubelet metrics and configuration could not be inspected.
 	NodeRuntimeEvidence []NodeRuntimeEvidence
 

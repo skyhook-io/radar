@@ -3,8 +3,10 @@ package upgrade
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -184,5 +186,61 @@ func TestCollectUpgradeAPIServicesReturnsObjects(t *testing.T) {
 	got := collectUpgradeAPIServicesWithClient(context.Background(), client)
 	if len(got) != 1 || got[0].GetName() != "v1.example.io" {
 		t.Fatalf("APIServices = %#v, want v1.example.io", got)
+	}
+}
+
+func TestCollectUpgradeWebhookConfigurationsSeparatesDeniedFromErrored(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
+		validatingWebhookGVR: "ValidatingWebhookConfigurationList",
+		mutatingWebhookGVR:   "MutatingWebhookConfigurationList",
+	})
+	client.PrependReactor("list", "validatingwebhookconfigurations", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("transient apiserver failure")
+	})
+	authz := &fakeUpgradeAuthorizer{canList: map[string]bool{
+		validatingWebhookGVR.Group + "/" + validatingWebhookGVR.Resource + "/": true,
+		mutatingWebhookGVR.Group + "/" + mutatingWebhookGVR.Resource + "/":     false,
+	}}
+
+	configs, unavailable, denied := collectUpgradeWebhookConfigurations(t.Context(), client, authz)
+	if len(configs) != 0 || !slices.Equal(unavailable, []string{"mutatingwebhookconfigurations", "validatingwebhookconfigurations"}) || !slices.Equal(denied, []string{"mutatingwebhookconfigurations"}) {
+		t.Fatalf("webhook evidence = configs=%v unavailable=%v denied=%v", configs, unavailable, denied)
+	}
+}
+
+func TestCollectUpgradeWebhookConfigurationsClassifiesObservedForbidden(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
+		validatingWebhookGVR: "ValidatingWebhookConfigurationList",
+		mutatingWebhookGVR:   "MutatingWebhookConfigurationList",
+	})
+	client.PrependReactor("list", "validatingwebhookconfigurations", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(validatingWebhookGVR.GroupResource(), "", errors.New("denied"))
+	})
+	authz := &fakeUpgradeAuthorizer{canList: map[string]bool{
+		validatingWebhookGVR.Group + "/" + validatingWebhookGVR.Resource + "/": true,
+		mutatingWebhookGVR.Group + "/" + mutatingWebhookGVR.Resource + "/":     true,
+	}}
+
+	configs, unavailable, denied := collectUpgradeWebhookConfigurations(t.Context(), client, authz)
+	if len(configs) != 0 || !slices.Equal(unavailable, []string{"validatingwebhookconfigurations"}) || !slices.Equal(denied, []string{"validatingwebhookconfigurations"}) {
+		t.Fatalf("webhook evidence = configs=%v unavailable=%v denied=%v", configs, unavailable, denied)
+	}
+}
+
+func TestCollectUpgradeWebhookConfigurationsDoesNotClassifyFailedAuthorizationAsDenial(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
+		validatingWebhookGVR: "ValidatingWebhookConfigurationList",
+		mutatingWebhookGVR:   "MutatingWebhookConfigurationList",
+	})
+	authz := &fakeUpgradeAuthorizer{listDecisions: map[string]EvidenceAuthorizationDecision{
+		validatingWebhookGVR.Group + "/" + validatingWebhookGVR.Resource + "/": {},
+		mutatingWebhookGVR.Group + "/" + mutatingWebhookGVR.Resource + "/": {
+			Allowed: true, Authoritative: true,
+		},
+	}}
+
+	configs, unavailable, denied := collectUpgradeWebhookConfigurations(t.Context(), client, authz)
+	if len(configs) != 0 || !slices.Equal(unavailable, []string{"validatingwebhookconfigurations"}) || len(denied) != 0 {
+		t.Fatalf("webhook evidence = configs=%v unavailable=%v denied=%v, want an unattributed authorization-check failure", configs, unavailable, denied)
 	}
 }

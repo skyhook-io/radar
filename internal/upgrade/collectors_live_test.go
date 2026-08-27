@@ -3,9 +3,12 @@ package upgrade
 import (
 	"bytes"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -13,7 +16,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
 	fakediscovery "k8s.io/client-go/discovery/fake"
+	"k8s.io/client-go/kubernetes"
 	fakeclientset "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -220,5 +225,29 @@ func TestMergeNodeRuntimeEvidenceKeepsIndependentSources(t *testing.T) {
 	mergeNodeRuntimeEvidence(&target, upgradereadiness.NodeRuntimeEvidence{ConfigAvailable: true, EventRecordQPSAvailable: true, EventRecordQPS: 50, FeatureGates: map[string]bool{"AnyVolumeDataSource": true}})
 	if !target.MetricsAvailable || !target.ConfigAvailable || target.CgroupVersion != 2 || target.EventRecordQPS != 50 || target.SELinuxMismatchWarnings != 4 || !target.FeatureGates["AnyVolumeDataSource"] {
 		t.Fatalf("merged evidence = %+v", target)
+	}
+}
+
+func TestCollectUpgradeNodeRuntimeEvidenceClassifiesObservedForbidden(t *testing.T) {
+	requestedPath := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Failure","message":"forbidden","reason":"Forbidden","code":403}`))
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := []*corev1.Node{{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}, Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{OperatingSystem: "linux"}}}}
+	evidence, forbidden := collectUpgradeNodeRuntimeEvidenceWithClient(t.Context(), client.CoreV1().RESTClient(), nodes, false)
+	if !forbidden || len(evidence) != 1 || evidence[0].NodeName != "node-a" || evidence[0].MetricsAvailable {
+		t.Fatalf("node runtime result = evidence=%+v forbidden=%v, want observed forbidden with unavailable metrics", evidence, forbidden)
+	}
+	if requestedPath != "/api/v1/nodes/node-a/proxy/metrics" {
+		t.Fatalf("request path = %q, want node metrics proxy path", requestedPath)
 	}
 }

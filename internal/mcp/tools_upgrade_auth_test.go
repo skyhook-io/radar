@@ -26,20 +26,20 @@ func TestMCPUpgradeAuthorizerDecisionMatrix(t *testing.T) {
 
 	authz := mcpUpgradeAuthorizer{ctx: ctx}
 	for _, tc := range []struct {
-		group, resource, namespace string
-		want                       bool
+		group, resource, namespace     string
+		wantAllowed, wantAuthoritative bool
 	}{
-		{"", "nodes", "", true},
-		{"", "persistentvolumes", "", false},
-		{"storage.k8s.io", "csidrivers", "", true},
-		{"admissionregistration.k8s.io", "validatingwebhookconfigurations", "", true},
-		{"scheduling.k8s.io", "workloads", "team-a", true},
+		{"", "nodes", "", true, true},
+		{"", "persistentvolumes", "", false, true},
+		{"storage.k8s.io", "csidrivers", "", true, true},
+		{"admissionregistration.k8s.io", "validatingwebhookconfigurations", "", true, true},
+		{"scheduling.k8s.io", "workloads", "team-a", true, true},
 		// Unseeded → SAR against a nil client → fail closed. Cluster-wide pod
 		// visibility must not imply cluster-scoped reads.
-		{"apiregistration.k8s.io", "apiservices", "", false},
+		{"apiregistration.k8s.io", "apiservices", "", false, false},
 	} {
-		if got := authz.CanList(tc.group, tc.resource, tc.namespace); got != tc.want {
-			t.Fatalf("CanList(%q,%q,%q) = %v, want %v", tc.group, tc.resource, tc.namespace, got, tc.want)
+		if got := authz.CanList(tc.group, tc.resource, tc.namespace); got.Allowed != tc.wantAllowed || got.Authoritative != tc.wantAuthoritative {
+			t.Fatalf("CanList(%q,%q,%q) = %+v, want allowed=%v authoritative=%v", tc.group, tc.resource, tc.namespace, got, tc.wantAllowed, tc.wantAuthoritative)
 		}
 	}
 	filtered := authz.FilterNamespacesByCanList("", "secrets", []string{"team-a", "team-b"})
@@ -48,11 +48,11 @@ func TestMCPUpgradeAuthorizerDecisionMatrix(t *testing.T) {
 	}
 	// Subresource SARs are not memoized; with no apiserver they fail closed
 	// for an authenticated user and pass through when auth is off.
-	if authz.CanGetSubresource("", "nodes", "proxy") {
-		t.Fatal("authenticated nodes/proxy with no apiserver to ask must fail closed")
+	if decision := authz.CanGetSubresource("", "nodes", "proxy"); decision.Allowed || decision.Authoritative {
+		t.Fatalf("authenticated nodes/proxy with no apiserver = %+v, want non-authoritative failure", decision)
 	}
-	if noAuth := (mcpUpgradeAuthorizer{ctx: context.Background()}); !noAuth.CanGetSubresource("", "nodes", "proxy") {
-		t.Fatal("auth-off subresource check must pass through (SA RBAC applies at the client layer)")
+	if decision := (mcpUpgradeAuthorizer{ctx: context.Background()}).CanGetSubresource("", "nodes", "proxy"); !decision.Allowed || !decision.Authoritative {
+		t.Fatalf("auth-off subresource decision = %+v, want authoritative pass-through", decision)
 	}
 }
 

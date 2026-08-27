@@ -241,29 +241,34 @@ func canReadClusterScopedKind(ctx context.Context, kind, group, verb string) boo
 // Returns true (passthrough) when no user is on context — auth-mode=none
 // applies the SA's RBAC at the cache layer.
 func canReadInNamespace(ctx context.Context, group, resource, namespace, verb string) bool {
+	allowed, _ := canReadInNamespaceDecision(ctx, group, resource, namespace, verb)
+	return allowed
+}
+
+func canReadInNamespaceDecision(ctx context.Context, group, resource, namespace, verb string) (bool, bool) {
 	user, perms := resolveUserPerms(ctx)
 	if user == nil {
-		return true
+		return true, true
 	}
 	if perms != nil {
 		if v, ok := perms.CanI(verb, group, resource, namespace); ok {
-			return v
+			return v, true
 		}
 	}
 	client := k8s.GetClient()
 	if client == nil {
 		log.Printf("[mcp] canReadInNamespace: no K8s client, denying %s on %s/%s in %q for %s", k8s.SanitizeForLog(verb), k8s.SanitizeForLog(group), k8s.SanitizeForLog(resource), k8s.SanitizeForLog(namespace), k8s.SanitizeForLog(user.Username))
-		return false
+		return false, false
 	}
 	allowed, err := subjectCanI(ctx, client, user.Username, user.Groups, namespace, group, resource, verb)
 	if err != nil {
 		log.Printf("[mcp] canReadInNamespace SAR failed for %s on %s/%s in %q: %v", k8s.SanitizeForLog(user.Username), k8s.SanitizeForLog(group), k8s.SanitizeForLog(resource), k8s.SanitizeForLog(namespace), err)
-		return false
+		return false, false
 	}
 	if perms != nil {
 		perms.SetCanI(verb, group, resource, namespace, allowed)
 	}
-	return allowed
+	return allowed, true
 }
 
 // filterNamespacesByCanRead returns the subset of `namespaces` where the

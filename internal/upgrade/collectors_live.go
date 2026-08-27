@@ -19,6 +19,7 @@ import (
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
@@ -189,13 +190,13 @@ func collectUpgradePrometheusRules(ctx context.Context, authz EvidenceAuthorizer
 		return []*unstructured.Unstructured{}, false, true, nil
 	}
 	if len(namespaces) == 0 {
-		if !authz.CanList(gvr.Group, gvr.Resource, "") {
+		if !canListEvidence(authz, gvr.Group, gvr.Resource, "") {
 			return nil, true, true, nil
 		}
 	} else {
 		readable := make([]string, 0, len(namespaces))
 		for _, namespace := range namespaces {
-			if authz.CanList(gvr.Group, gvr.Resource, namespace) {
+			if canListEvidence(authz, gvr.Group, gvr.Resource, namespace) {
 				readable = append(readable, namespace)
 			} else {
 				unavailableNamespaces = append(unavailableNamespaces, namespace)
@@ -257,15 +258,27 @@ func listSyncedUpgradeResources(cache upgradeResourceLister, gvr schema.GroupVer
 	return rules, err == nil, err
 }
 
-func collectUpgradeNodeRuntimeEvidence(ctx context.Context, nodes []*corev1.Node, includeConfig bool) []upgradereadiness.NodeRuntimeEvidence {
+func collectUpgradeNodeRuntimeEvidence(ctx context.Context, nodes []*corev1.Node, includeConfig bool) ([]upgradereadiness.NodeRuntimeEvidence, bool) {
 	client := k8s.ClientFromContext(ctx)
 	if client == nil || client.CoreV1().RESTClient() == nil {
-		return nil
+		return nil, false
 	}
+	return collectUpgradeNodeRuntimeEvidenceWithClient(ctx, client.CoreV1().RESTClient(), nodes, includeConfig)
+}
+
+func collectUpgradeNodeRuntimeEvidenceWithClient(ctx context.Context, client rest.Interface, nodes []*corev1.Node, includeConfig bool) ([]upgradereadiness.NodeRuntimeEvidence, bool) {
 	results := make([]upgradereadiness.NodeRuntimeEvidence, len(nodes))
+	forbiddenByNode := make([]bool, len(nodes))
+	failureCountByNode := make([]int, len(nodes))
+	firstFailureByNode := make([]error, len(nodes))
 	type nodeRuntimeJob struct {
 		index int
 		node  *corev1.Node
+	}
+	type nodeRuntimeFetch struct {
+		evidence  upgradereadiness.NodeRuntimeEvidence
+		forbidden bool
+		err       error
 	}
 	jobs := make(chan nodeRuntimeJob)
 	workerCount := min(8, len(nodes))
@@ -276,43 +289,66 @@ func collectUpgradeNodeRuntimeEvidence(ctx context.Context, nodes []*corev1.Node
 			defer wg.Done()
 			for job := range jobs {
 				result := upgradereadiness.NodeRuntimeEvidence{NodeName: job.node.Name}
-				metricsCh := make(chan upgradereadiness.NodeRuntimeEvidence, 1)
-				configCh := make(chan upgradereadiness.NodeRuntimeEvidence, 1)
+				metricsCh := make(chan nodeRuntimeFetch, 1)
+				configCh := make(chan nodeRuntimeFetch, 1)
 				if strings.EqualFold(job.node.Status.NodeInfo.OperatingSystem, "windows") {
-					metricsCh <- upgradereadiness.NodeRuntimeEvidence{}
+					metricsCh <- nodeRuntimeFetch{}
 				} else {
 					go func() {
-						raw, err := fetchUpgradeNodeEvidence(ctx, client.CoreV1().RESTClient(), job.node.Name, "metrics")
+						raw, err := fetchUpgradeNodeEvidence(ctx, client, job.node.Name, "metrics")
 						if err != nil {
-							metricsCh <- upgradereadiness.NodeRuntimeEvidence{}
+							forbidden := apierrors.IsForbidden(err)
+							if forbidden {
+								err = nil
+							}
+							metricsCh <- nodeRuntimeFetch{forbidden: forbidden, err: err}
 							return
 						}
 						parsed, err := parseUpgradeNodeMetrics(raw)
 						if err != nil {
 							parsed = upgradereadiness.NodeRuntimeEvidence{}
 						}
-						metricsCh <- parsed
+						metricsCh <- nodeRuntimeFetch{evidence: parsed, err: err}
 					}()
 				}
 				if includeConfig {
 					go func() {
-						raw, err := fetchUpgradeNodeEvidence(ctx, client.CoreV1().RESTClient(), job.node.Name, "configz")
+						raw, err := fetchUpgradeNodeEvidence(ctx, client, job.node.Name, "configz")
 						if err != nil {
-							configCh <- upgradereadiness.NodeRuntimeEvidence{}
+							forbidden := apierrors.IsForbidden(err)
+							if forbidden {
+								err = nil
+							}
+							configCh <- nodeRuntimeFetch{forbidden: forbidden, err: err}
 							return
 						}
 						parsed, err := parseUpgradeNodeConfig(raw)
 						if err != nil {
 							parsed = upgradereadiness.NodeRuntimeEvidence{}
 						}
-						configCh <- parsed
+						configCh <- nodeRuntimeFetch{evidence: parsed, err: err}
 					}()
 				} else {
-					configCh <- upgradereadiness.NodeRuntimeEvidence{}
+					configCh <- nodeRuntimeFetch{}
 				}
-				mergeNodeRuntimeEvidence(&result, <-metricsCh)
-				mergeNodeRuntimeEvidence(&result, <-configCh)
+				metricsResult := <-metricsCh
+				configResult := <-configCh
+				mergeNodeRuntimeEvidence(&result, metricsResult.evidence)
+				mergeNodeRuntimeEvidence(&result, configResult.evidence)
 				results[job.index] = result
+				forbiddenByNode[job.index] = metricsResult.forbidden || configResult.forbidden
+				for _, fetch := range []struct {
+					endpoint string
+					result   nodeRuntimeFetch
+				}{{"metrics", metricsResult}, {"configz", configResult}} {
+					if fetch.result.err == nil {
+						continue
+					}
+					failureCountByNode[job.index]++
+					if firstFailureByNode[job.index] == nil {
+						firstFailureByNode[job.index] = fmt.Errorf("%s/%s: %w", job.node.Name, fetch.endpoint, fetch.result.err)
+					}
+				}
 			}
 		}()
 	}
@@ -333,7 +369,26 @@ dispatch:
 	}
 	close(jobs)
 	wg.Wait()
-	return results
+	forbiddenObserved := false
+	failedRequests := 0
+	failedNodes := 0
+	var firstFailure error
+	for i, forbidden := range forbiddenByNode {
+		if forbidden {
+			forbiddenObserved = true
+		}
+		if failureCountByNode[i] > 0 {
+			failedRequests += failureCountByNode[i]
+			failedNodes++
+			if firstFailure == nil {
+				firstFailure = firstFailureByNode[i]
+			}
+		}
+	}
+	if failedRequests > 0 {
+		log.Printf("[upgrade-impact] node runtime evidence had %d non-authorization failures across %d/%d nodes (first: %v)", failedRequests, failedNodes, len(nodes), firstFailure)
+	}
+	return results, forbiddenObserved
 }
 
 func fetchUpgradeNodeEvidence(ctx context.Context, client rest.Interface, nodeName, endpoint string) ([]byte, error) {

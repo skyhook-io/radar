@@ -115,28 +115,29 @@ func (a mcpUpgradeAuthorizer) Namespaces() []string {
 	return filterNamespacesForUser(a.ctx, nil)
 }
 
-func (a mcpUpgradeAuthorizer) CanList(group, resource, namespace string) bool {
-	return canReadInNamespace(a.ctx, group, resource, namespace, "list")
+func (a mcpUpgradeAuthorizer) CanList(group, resource, namespace string) upgrade.EvidenceAuthorizationDecision {
+	allowed, authoritative := canReadInNamespaceDecision(a.ctx, group, resource, namespace, "list")
+	return upgrade.EvidenceAuthorizationDecision{Allowed: allowed, Authoritative: authoritative}
 }
 
 // subjectCanISubresource is overridden in tests to bypass the live apiserver.
 var subjectCanISubresource = pkgauth.SubjectCanISubresource
 
-func (a mcpUpgradeAuthorizer) CanGetSubresource(group, resource, subresource string) bool {
+func (a mcpUpgradeAuthorizer) CanGetSubresource(group, resource, subresource string) upgrade.EvidenceAuthorizationDecision {
 	user := pkgauth.UserFromContext(a.ctx)
 	if user == nil {
-		return true
+		return upgrade.EvidenceAuthorizationDecision{Allowed: true, Authoritative: true}
 	}
 	client := k8s.GetClient()
 	if client == nil {
-		return false
+		return upgrade.EvidenceAuthorizationDecision{}
 	}
 	allowed, err := subjectCanISubresource(a.ctx, client, user.Username, user.Groups, "", group, resource, subresource, "get")
 	if err != nil {
 		log.Printf("[mcp] upgrade authorization failed for get on %s/%s: %v", resource, subresource, err)
-		return false
+		return upgrade.EvidenceAuthorizationDecision{}
 	}
-	return allowed
+	return upgrade.EvidenceAuthorizationDecision{Allowed: allowed, Authoritative: true}
 }
 
 func (a mcpUpgradeAuthorizer) FilterNamespacesByCanList(group, resource string, namespaces []string) []string {
