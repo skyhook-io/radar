@@ -105,7 +105,7 @@ func TestNodeCompatibilityEvidence(t *testing.T) {
 
 	input = completeInput()
 	input.Nodes[0].Status.NodeInfo.OperatingSystem = "windows"
-	input.NodeRuntimeEvidence[0] = NodeRuntimeEvidence{NodeName: input.Nodes[0].Name}
+	input.NodeRuntimeEvidence = nil
 	result, _ = Scan(input, "1.34", "1.35")
 	cgroup = checkByID(t, result, "node-cgroup-v1")
 	if cgroup.Status != CheckNotApplicable || cgroup.Inspected != 0 {
@@ -403,6 +403,9 @@ func TestNodeRuntimeCoverageExplainsMissingNodeProxyPermission(t *testing.T) {
 		check := checkByID(t, result, id)
 		if !strings.Contains(check.Caveat, "nodes/proxy request was forbidden") || !strings.Contains(check.Caveat, "grant the current identity get access to nodes/proxy") {
 			t.Fatalf("%s caveat = %q, want actionable nodes/proxy RBAC attribution", id, check.Caveat)
+		}
+		if id == "container-runtime-support" && check.Inspected != 0 {
+			t.Fatalf("%s inspected = %d, want zero when all runtime evidence is unavailable", id, check.Inspected)
 		}
 	}
 }

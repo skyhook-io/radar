@@ -321,8 +321,19 @@ func TestKubeletEventRecordQPS137(t *testing.T) {
 	input = completeInput()
 	input.NodeRuntimeEvidence[0].EventRecordQPSAvailable = false
 	check = checkByID(t, scan137(t, input), "kubelet-event-qps-change")
-	if check.Status != CheckUnknown {
+	if check.Status != CheckUnknown || !strings.Contains(check.Caveat, "debugging handlers disabled") {
 		t.Fatalf("missing eventRecordQPS = %+v, want unknown", check)
+	}
+}
+
+func TestKubeletEventQPSObservedProxyDenialDoesNotBlameDebuggingHandlers(t *testing.T) {
+	input := completeInput()
+	input.NodeProxyForbidden = true
+	input.NodeRuntimeEvidence = []NodeRuntimeEvidence{{NodeName: "node-a", FeatureGates: map[string]bool{}}}
+
+	check := checkByID(t, scan137(t, input), "kubelet-event-qps-change")
+	if !strings.Contains(check.Caveat, "nodes/proxy request was forbidden") || strings.Contains(check.Caveat, "debugging handlers disabled") {
+		t.Fatalf("observed proxy denial caveat = %q, want RBAC attribution without a configz explanation", check.Caveat)
 	}
 }
 

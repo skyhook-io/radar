@@ -102,6 +102,11 @@ func scanContainerRuntimeSupport(input *Input, target *utilversion.Version) Chec
 		check.Status, check.Summary = CheckNotApplicable, "Container runtime support for this upgrade does not apply to Windows nodes."
 		return check
 	}
+	if input.NodeRuntimeEvidence == nil {
+		check.Status, check.Summary = CheckUnknown, "Container runtime support metrics were unavailable."
+		check.Caveat = nodeRuntimeCoverageCaveat(input, "Container runtime support metrics could not be inspected.")
+		return check
+	}
 	metrics := make(map[string]NodeRuntimeEvidence, len(input.NodeRuntimeEvidence))
 	for _, evidence := range input.NodeRuntimeEvidence {
 		metrics[evidence.NodeName] = evidence

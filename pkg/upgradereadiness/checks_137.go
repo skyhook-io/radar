@@ -427,7 +427,11 @@ func scanKubeletEventQPS(input *Input) Check {
 		check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: "eventRecordQPS zero becomes unlimited", Level: LevelWarning, Resource: &ResourceRef{Kind: "Node", Name: node.Name}, Evidence: Evidence{Source: "kubelet configz", Path: "kubeletconfig.eventRecordQPS", Detail: "0"}, AppliesFrom: check.AppliesFrom, Impact: "Kubernetes 1.37 makes an explicit zero mean unlimited event recording. In Kubernetes 1.36, that zero reached client-go and used its fallback limit of 5 events per second, so event traffic can increase sharply.", Remediation: "Choose an explicit limit before upgrading. The Kubernetes upgrade note recommends 50, the normal kubelet default. Use 5 only when intentionally matching the old explicit-zero runtime limit, or choose another value after reviewing event volume.", References: append([]Reference(nil), check.References...)})
 	}
 	if missing > 0 {
-		check.Caveat = nodeRuntimeCoverageCaveat(input, fmt.Sprintf("eventRecordQPS was unavailable for %d %s; kubelets with debugging handlers disabled do not serve configz.", missing, plural(missing, "node", "nodes")))
+		unavailable := fmt.Sprintf("eventRecordQPS was unavailable for %d %s.", missing, plural(missing, "node", "nodes"))
+		if !input.NodeProxyForbidden {
+			unavailable += " Kubelets with debugging handlers disabled do not serve configz."
+		}
+		check.Caveat = nodeRuntimeCoverageCaveat(input, unavailable)
 		if len(check.Findings) == 0 {
 			check.Status, check.Summary = CheckUnknown, "No eventRecordQPS behavior change was found in readable kubelet configuration, but coverage is incomplete."
 		}
