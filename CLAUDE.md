@@ -139,6 +139,7 @@ After `make <name>-demo`, run `kubectl config use-context kind-radar-<name>-demo
 | CloudNativePG | `make cnpg-demo` | CNPG renderers/badges. `-live` for real failovers; fixtures have strict ordering constraints |
 | Beyla | `make beyla-demo` | `internal/traffic/beyla.go` — which labels exist depends on Beyla config, not code. Modes `attrs` / `no-network` |
 | Cilium | `make cilium-demo` | `internal/traffic/hubble.go` — every Hubble connection lane. Modes `tls` / `netpol` / `install-radar` |
+| Kubecost | `make kubecost-demo` | Kubecost 3 current costs — real allocation/assets, local port-forward and in-cluster Service DNS. Modes `query` / `install-radar` / `radar-smoke` |
 | Calico | `make calico-demo` | Calico surfaces — both API groups, staged policies, tiers |
 | Crossplane | `make crossplane-demo` | Crossplane renderers and spec-shape dispatch |
 | Rollouts | `make rollouts-demo` | Argo Rollouts progression. `-roll` advances a rollout |
