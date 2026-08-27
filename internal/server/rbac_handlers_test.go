@@ -245,7 +245,7 @@ func assertForbiddenWhenDeniedRBACList(t *testing.T, path, deniedResource string
 		allowed := resource != deniedResource
 		perms.SetCanI("list", "rbac.authorization.k8s.io", resource, "", allowed)
 	}
-	testServerSrv.permCache.Set(username, perms)
+	testServerSrv.permCache.Set(username, nil, perms)
 	// Entry is keyed by the unique "denied-user" name and TTL'd by the
 	// cache; no cleanup needed — other tests don't use this username.
 

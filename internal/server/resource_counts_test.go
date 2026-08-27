@@ -343,7 +343,7 @@ func TestResourceCountsOmitsClusterScopedCRDWhenCanReadDenies(t *testing.T) {
 	user := &auth.User{Username: "alice"}
 	perms := &auth.UserPermissions{AllowedNamespaces: nil}
 	perms.SetCanI("list", "karpenter.sh", "nodepools", "", false)
-	s.permCache.Set(user.Username, perms)
+	s.permCache.Set(user.Username, nil, perms)
 	req := requestWithUser(http.MethodGet, "/api/resource-counts", user)
 
 	rec := httptest.NewRecorder()
@@ -371,7 +371,7 @@ func TestResourceCountsSurfacesDeniedCoreClusterScopedKindAsForbidden(t *testing
 	user := &auth.User{Username: "alice"}
 	perms := &auth.UserPermissions{AllowedNamespaces: nil}
 	perms.SetCanI("list", "", "nodes", "", false)
-	s.permCache.Set(user.Username, perms)
+	s.permCache.Set(user.Username, nil, perms)
 	req := requestWithUser(http.MethodGet, "/api/resource-counts", user)
 
 	rec := httptest.NewRecorder()

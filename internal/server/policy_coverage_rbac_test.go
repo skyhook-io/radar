@@ -102,7 +102,7 @@ func TestPolicyCoverage_WithholdsTheFamilyTheCallerCannotRead(t *testing.T) {
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"app"}}
 	allow(perms, "wgpolicyk8s.io", "policyreports", "app", true)
 	allow(perms, "openreports.io", "reports", "app", false)
-	env.srv.permCache.Set("alice", perms)
+	env.srv.permCache.Set("alice", nil, perms)
 
 	got := coverageFor(t, env, "alice", "require-limits")
 
@@ -142,7 +142,7 @@ func TestPolicyCoverage_WithholdsANamespaceItCannotReadAtAll(t *testing.T) {
 	allow(perms, "openreports.io", "reports", "app", false)
 	allow(perms, "wgpolicyk8s.io", "policyreports", "other", false)
 	allow(perms, "openreports.io", "reports", "other", false)
-	env.srv.permCache.Set("alice", perms)
+	env.srv.permCache.Set("alice", nil, perms)
 
 	got := coverageFor(t, env, "alice", "require-limits")
 
@@ -184,7 +184,7 @@ func TestPolicyCoverage_AuthorizesClusterScopedSubjectsAgainstTheClusterScopedKi
 	// Denied on the namespaced names, which must not be what this is gated on.
 	allow(perms, "wgpolicyk8s.io", "policyreports", "", false)
 	allow(perms, "openreports.io", "reports", "", false)
-	env.srv.permCache.Set("alice", perms)
+	env.srv.permCache.Set("alice", nil, perms)
 
 	got := coverageFor(t, env, "alice", "require-limits")
 
@@ -209,7 +209,7 @@ func TestPolicyCoverage_WithholdsClusterScopedSubjectsWhenDenied(t *testing.T) {
 	allow(perms, "wgpolicyk8s.io", "clusterpolicyreports", "", false)
 	allow(perms, "openreports.io", "clusterreports", "", false)
 	allow(perms, "wgpolicyk8s.io", "policyreports", "app", true)
-	env.srv.permCache.Set("alice", perms)
+	env.srv.permCache.Set("alice", nil, perms)
 
 	got := coverageFor(t, env, "alice", "require-limits")
 
@@ -240,7 +240,7 @@ func TestPolicyCoverage_AuthorizesPerSubjectNamespaceNotPerPolicy(t *testing.T) 
 	// Cluster-scoped denied, which must not remove the namespace they can read.
 	allow(perms, "wgpolicyk8s.io", "clusterpolicyreports", "", false)
 	allow(perms, "openreports.io", "clusterreports", "", false)
-	env.srv.permCache.Set("alice", perms)
+	env.srv.permCache.Set("alice", nil, perms)
 
 	got := coverageFor(t, env, "alice", "require-limits")
 
@@ -277,7 +277,7 @@ func TestPolicyCoverage_CountsResourcesApartFromChecks(t *testing.T) {
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"app"}}
 	allow(perms, "wgpolicyk8s.io", "policyreports", "app", true)
 	allow(perms, "openreports.io", "reports", "app", false)
-	env.srv.permCache.Set("alice", perms)
+	env.srv.permCache.Set("alice", nil, perms)
 
 	got := coverageFor(t, env, "alice", "two-rules")
 
@@ -309,7 +309,7 @@ func TestPolicyCoverage_FailingResourceCountExcludesPassingOnes(t *testing.T) {
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"app"}}
 	allow(perms, "wgpolicyk8s.io", "policyreports", "app", true)
 	allow(perms, "openreports.io", "reports", "app", false)
-	env.srv.permCache.Set("alice", perms)
+	env.srv.permCache.Set("alice", nil, perms)
 
 	got := coverageFor(t, env, "alice", "mixed")
 
@@ -339,7 +339,7 @@ func TestPolicyCoverage_OnlyRealFailuresCountAsFailingResources(t *testing.T) {
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"app"}}
 	allow(perms, "wgpolicyk8s.io", "policyreports", "app", true)
 	allow(perms, "openreports.io", "reports", "app", false)
-	env.srv.permCache.Set("alice", perms)
+	env.srv.permCache.Set("alice", nil, perms)
 
 	got := coverageFor(t, env, "alice", "no-verdict")
 

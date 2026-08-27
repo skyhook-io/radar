@@ -35,7 +35,7 @@ func seedServerSecretGetCanI(t *testing.T, env *authTestEnv, username string, al
 
 func seedServerSecretCanIVerb(t *testing.T, env *authTestEnv, username, verb string, allowedNamespaces []string, deniedNamespaces []string) {
 	t.Helper()
-	perms := env.srv.permCache.Get(username)
+	perms := env.srv.permCache.Get(username, nil)
 	if perms == nil {
 		t.Fatalf("user %q not in perm cache; call permCache.Set first", username)
 	}
@@ -53,7 +53,7 @@ func TestProxyAuth_SecretsList_NamespaceRestricted_Denied(t *testing.T) {
 	// The cache reads as the SA and may carry secrets her ClusterRole
 	// excludes — the per-namespace SAR gate must intercept.
 	env := newAuthTestServer(t)
-	env.srv.permCache.Set("alice", &auth.UserPermissions{
+	env.srv.permCache.Set("alice", nil, &auth.UserPermissions{
 		AllowedNamespaces: []string{"default"},
 	})
 	seedServerSecretListCanI(t, env, "alice", nil, []string{"default"})
@@ -75,7 +75,7 @@ func TestProxyAuth_SecretsList_NamespaceRestricted_Allowed(t *testing.T) {
 	// bob has both namespace access AND per-namespace secret RBAC for
 	// default. The gate must pass through.
 	env := newAuthTestServer(t)
-	env.srv.permCache.Set("bob", &auth.UserPermissions{
+	env.srv.permCache.Set("bob", nil, &auth.UserPermissions{
 		AllowedNamespaces: []string{"default"},
 	})
 	seedServerSecretListCanI(t, env, "bob", []string{"default"}, nil)
@@ -100,10 +100,10 @@ func TestProxyAuth_SecretsList_ClusterWideShape_NoSecretRBAC(t *testing.T) {
 	// visibility and still lack secrets RBAC. Pin the cluster-scope SAR
 	// gate so this conflation doesn't return.
 	env := newAuthTestServer(t)
-	env.srv.permCache.Set("broad-reader", &auth.UserPermissions{
+	env.srv.permCache.Set("broad-reader", nil, &auth.UserPermissions{
 		AllowedNamespaces: nil,
 	})
-	perms := env.srv.permCache.Get("broad-reader")
+	perms := env.srv.permCache.Get("broad-reader", nil)
 	perms.SetCanI("list", "", "secrets", "", false)
 
 	resp := env.authGet(t, "/api/resources/secrets", "broad-reader", "")
@@ -123,10 +123,10 @@ func TestProxyAuth_SecretsList_ClusterWideShape_WithSecretRBAC(t *testing.T) {
 	// Same cluster-wide-namespace shape, but with explicit cluster-scope
 	// `list secrets` RBAC seeded. Cache returns every secret.
 	env := newAuthTestServer(t)
-	env.srv.permCache.Set("admin", &auth.UserPermissions{
+	env.srv.permCache.Set("admin", []string{"system:masters"}, &auth.UserPermissions{
 		AllowedNamespaces: nil,
 	})
-	perms := env.srv.permCache.Get("admin")
+	perms := env.srv.permCache.Get("admin", []string{"system:masters"})
 	perms.SetCanI("list", "", "secrets", "", true)
 
 	resp := env.authGet(t, "/api/resources/secrets", "admin", "system:masters")
@@ -147,7 +147,7 @@ func TestProxyAuth_SecretsGet_Denied(t *testing.T) {
 	// 404 would let the user probe secret existence by observing 200 vs 404;
 	// 403 is the explicit deny.
 	env := newAuthTestServer(t)
-	env.srv.permCache.Set("alice", &auth.UserPermissions{
+	env.srv.permCache.Set("alice", nil, &auth.UserPermissions{
 		AllowedNamespaces: []string{"default"},
 	})
 	seedServerSecretGetCanI(t, env, "alice", nil, []string{"default"})
@@ -161,7 +161,7 @@ func TestProxyAuth_SecretsGet_Denied(t *testing.T) {
 
 func TestProxyAuth_SecretsGet_Allowed(t *testing.T) {
 	env := newAuthTestServer(t)
-	env.srv.permCache.Set("bob", &auth.UserPermissions{
+	env.srv.permCache.Set("bob", nil, &auth.UserPermissions{
 		AllowedNamespaces: []string{"default"},
 	})
 	seedServerSecretGetCanI(t, env, "bob", []string{"default"}, nil)
@@ -180,7 +180,7 @@ func TestProxyAuth_SecretsGet_Allowed(t *testing.T) {
 // namespace-bounded user.
 func TestProxyAuth_SearchSecrets_PerNamespaceFanout(t *testing.T) {
 	env := newAuthTestServer(t)
-	env.srv.permCache.Set("alice", &auth.UserPermissions{
+	env.srv.permCache.Set("alice", nil, &auth.UserPermissions{
 		AllowedNamespaces: []string{"default"},
 	})
 	seedServerSecretListCanI(t, env, "alice", []string{"default"}, nil)
@@ -214,7 +214,7 @@ func TestProxyAuth_SearchSecrets_NamespaceDenied(t *testing.T) {
 	// Same alice setup but per-namespace secret denied — search should drop
 	// Secret entirely (no hits) instead of leaking through.
 	env := newAuthTestServer(t)
-	env.srv.permCache.Set("alice", &auth.UserPermissions{
+	env.srv.permCache.Set("alice", nil, &auth.UserPermissions{
 		AllowedNamespaces: []string{"default"},
 	})
 	seedServerSecretListCanI(t, env, "alice", nil, []string{"default"})
@@ -280,7 +280,7 @@ func TestSmokeSecretsList_NoAuthPassthrough(t *testing.T) {
 // equivalent MCP test alone doesn't pin this code.
 func TestProxyAuth_SecretsList_PartialNamespaceAccess(t *testing.T) {
 	env := newAuthTestServer(t)
-	env.srv.permCache.Set("alice", &auth.UserPermissions{
+	env.srv.permCache.Set("alice", nil, &auth.UserPermissions{
 		AllowedNamespaces: []string{"default", "kube-system"},
 	})
 	seedServerSecretListCanI(t, env, "alice", []string{"default"}, []string{"kube-system"})

@@ -164,7 +164,7 @@ func TestTraceInClusterRequiresCloudMember(t *testing.T) {
 func TestTraceInClusterDoesNotLeakExistenceAcrossNamespaces(t *testing.T) {
 	s := newTestServer(t)
 	s.permCache = auth.NewPermissionCache()
-	s.permCache.Set("u@example.com", &auth.UserPermissions{AllowedNamespaces: []string{"ns-a"}})
+	s.permCache.Set("u@example.com", nil, &auth.UserPermissions{AllowedNamespaces: []string{"ns-a"}})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/trace/Service/ns-b/secret-svc/in-cluster", strings.NewReader(`{}`))
 	rctx := chi.NewRouteContext()

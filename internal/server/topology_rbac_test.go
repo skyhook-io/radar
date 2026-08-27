@@ -12,7 +12,7 @@ func TestApplyClusterScopedTopologyRBACFiltersNodeClassesByExactProvider(t *test
 	perms := &auth.UserPermissions{AllowedNamespaces: nil}
 	perms.SetCanI("list", "eks.amazonaws.com", "nodeclasses", "", true)
 	perms.SetCanI("list", "infra.example.io", "customnodeclasses", "", false)
-	s.permCache.Set("alice", perms)
+	s.permCache.Set("alice", nil, perms)
 	r := requestWithUser("GET", "/api/topology", &auth.User{Username: "alice"})
 
 	eksID := "nodeclass//shared/eks.amazonaws.com/nodeclass"
@@ -42,7 +42,7 @@ func TestApplyClusterScopedTopologyRBACFiltersCalicoByExactGroup(t *testing.T) {
 	perms := &auth.UserPermissions{AllowedNamespaces: nil}
 	perms.SetCanI("list", "projectcalico.org", "globalnetworkpolicies", "", true)
 	perms.SetCanI("list", "crd.projectcalico.org", "globalnetworkpolicies", "", false)
-	s.permCache.Set("alice", perms)
+	s.permCache.Set("alice", nil, perms)
 	r := requestWithUser("GET", "/api/topology", &auth.User{Username: "alice"})
 
 	projectID := "calicoglobalnetworkpolicy//shared/projectcalico.org"

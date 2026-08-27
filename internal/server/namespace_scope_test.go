@@ -209,14 +209,14 @@ func TestFinalizePostContextSwitch_ClearsBothCaches(t *testing.T) {
 	// that drops either side leaves stale state attached to the new cluster.
 	s := newTestServer(t)
 	s.permCache = pkgauth.NewPermissionCache()
-	s.permCache.Set("alice", &pkgauth.UserPermissions{AllowedNamespaces: []string{"alpha"}})
+	s.permCache.Set("alice", nil, &pkgauth.UserPermissions{AllowedNamespaces: []string{"alpha"}})
 	s.setActiveNamespaceForUser(reqAs("alice"), []string{"alpha"})
 	s.setActiveNamespaceForUser(reqAs("bob"), []string{"beta", "gamma"})
 
 	s.finalizePostContextSwitch()
 
-	if got := s.permCache.Get("alice"); got != nil {
-		t.Errorf("permCache.Get(alice) = %+v after finalize, want nil", got)
+	if got := s.permCache.Get("alice", nil); got != nil {
+		t.Errorf("permCache.Get(alice, nil) = %+v after finalize, want nil", got)
 	}
 	if got := s.getActiveNamespaceForUser(reqAs("alice")); len(got) != 0 {
 		t.Errorf("alice ns pick survived: %v", got)
@@ -331,7 +331,7 @@ func TestResolveHelmNamespaces_AuthenticatedClusterWideUserDoesNotUseBackendFall
 	restoreHelmNamespaceFallbackState(t)
 
 	s.permCache = pkgauth.NewPermissionCache()
-	s.permCache.Set("alice", &pkgauth.UserPermissions{AllowedNamespaces: nil})
+	s.permCache.Set("alice", nil, &pkgauth.UserPermissions{AllowedNamespaces: nil})
 
 	got, ok := s.resolveHelmNamespaces(reqAs("alice"))
 	if !ok {
@@ -349,7 +349,7 @@ func TestResolveHelmNamespacesForScope_ClusterWideWorkloadReaderUsesPerNamespace
 	perms.SetCanI("list", "", "secrets", "default", true)
 	perms.SetCanI("list", "", "secrets", "broken", false)
 	s.permCache = pkgauth.NewPermissionCache()
-	s.permCache.Set("alice", perms)
+	s.permCache.Set("alice", nil, perms)
 
 	got, ok := s.resolveHelmNamespacesForScope(reqAs("alice"), nil)
 	if !ok {

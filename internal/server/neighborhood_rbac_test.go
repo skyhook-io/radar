@@ -46,11 +46,11 @@ func makeConfigMapNode(ns, name string) *topology.Node {
 // denied. Same setup as the existing handleGetResource secrets RBAC tests.
 func TestCanReadNeighborhoodNode_SecretRequiresPerKindRBAC(t *testing.T) {
 	s := newAuthServer(auth.Config{Mode: "proxy"})
-	s.permCache.Set("alice", &auth.UserPermissions{
+	s.permCache.Set("alice", nil, &auth.UserPermissions{
 		AllowedNamespaces: []string{"default"},
 	})
 	// alice has namespace access to default but NOT per-namespace secrets-get.
-	perms := s.permCache.Get("alice")
+	perms := s.permCache.Get("alice", nil)
 	perms.SetCanI("get", "", "secrets", "default", false)
 
 	r := requestWithUser("GET", "/api/ai/neighborhood/pod/default/anything", &auth.User{
@@ -67,10 +67,10 @@ func TestCanReadNeighborhoodNode_SecretRequiresPerKindRBAC(t *testing.T) {
 // must be allowed. Locks down the positive path so the gate isn't blanket-deny.
 func TestCanReadNeighborhoodNode_SecretAllowedWithPerKindRBAC(t *testing.T) {
 	s := newAuthServer(auth.Config{Mode: "proxy"})
-	s.permCache.Set("bob", &auth.UserPermissions{
+	s.permCache.Set("bob", nil, &auth.UserPermissions{
 		AllowedNamespaces: []string{"default"},
 	})
-	perms := s.permCache.Get("bob")
+	perms := s.permCache.Get("bob", nil)
 	perms.SetCanI("get", "", "secrets", "default", true)
 
 	r := requestWithUser("GET", "/api/ai/neighborhood/pod/default/anything", &auth.User{
@@ -87,7 +87,7 @@ func TestCanReadNeighborhoodNode_SecretAllowedWithPerKindRBAC(t *testing.T) {
 // gate alone — adding the Secret-specific tightening must not regress that.
 func TestCanReadNeighborhoodNode_ConfigMapStaysOnNamespaceGate(t *testing.T) {
 	s := newAuthServer(auth.Config{Mode: "proxy"})
-	s.permCache.Set("alice", &auth.UserPermissions{
+	s.permCache.Set("alice", nil, &auth.UserPermissions{
 		AllowedNamespaces: []string{"default"},
 	})
 	// alice has no configmap-specific SAR seeded — namespace access alone
@@ -147,7 +147,7 @@ func TestCanReadNeighborhoodNode_NodeClassDeniedWithoutSAR(t *testing.T) {
 	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", false)
 	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
 	perms.SetCanI("get", "karpenter.k8s.gcp", "gcenodeclasses", "", false)
-	s.permCache.Set("alice", perms)
+	s.permCache.Set("alice", nil, perms)
 
 	r := requestWithUser("GET", "/api/ai/neighborhood/nodeclass/_/x", &auth.User{Username: "alice"})
 	n := makeNodeClassNode("default-class")
@@ -166,7 +166,7 @@ func TestCanReadNeighborhoodNode_NodeClassAllowedWithProviderSAR(t *testing.T) {
 	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", true)
 	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
 	perms.SetCanI("get", "karpenter.k8s.gcp", "gcenodeclasses", "", false)
-	s.permCache.Set("bob", perms)
+	s.permCache.Set("bob", nil, perms)
 
 	r := requestWithUser("GET", "/api/ai/neighborhood/nodeclass/_/x", &auth.User{Username: "bob"})
 	n := makeNodeClassNode("default-class")
@@ -192,7 +192,7 @@ func TestCanReadNeighborhoodNode_NodeClassPerVariantDeniesWrongProvider(t *testi
 	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", true)
 	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
 	perms.SetCanI("get", "karpenter.k8s.gcp", "gcenodeclasses", "", false)
-	s.permCache.Set("bob", perms)
+	s.permCache.Set("bob", nil, perms)
 
 	r := requestWithUser("GET", "/api/ai/neighborhood/nodeclass/_/x", &auth.User{Username: "bob"})
 
@@ -233,7 +233,7 @@ func TestCanReadNeighborhoodNode_NodeClassPerVariantDeniesWrongProvider(t *testi
 // and ride on namespace access alone (no per-kind tightening for Knative).
 func TestCanReadNeighborhoodNode_KnativeServiceUsesNamespaceGate(t *testing.T) {
 	s := newAuthServer(auth.Config{Mode: "proxy"})
-	s.permCache.Set("alice", &auth.UserPermissions{AllowedNamespaces: []string{"prod"}})
+	s.permCache.Set("alice", nil, &auth.UserPermissions{AllowedNamespaces: []string{"prod"}})
 
 	r := requestWithUser("GET", "/api/ai/neighborhood/service/prod/api", &auth.User{Username: "alice"})
 	n := makeKnativeServiceNode("prod", "api")
@@ -242,7 +242,7 @@ func TestCanReadNeighborhoodNode_KnativeServiceUsesNamespaceGate(t *testing.T) {
 	}
 
 	// Sanity: user without namespace access → denied.
-	s.permCache.Set("carol", &auth.UserPermissions{AllowedNamespaces: []string{"staging"}})
+	s.permCache.Set("carol", nil, &auth.UserPermissions{AllowedNamespaces: []string{"staging"}})
 	r2 := requestWithUser("GET", "/api/ai/neighborhood/service/prod/api", &auth.User{Username: "carol"})
 	if s.canReadNeighborhoodNode(r2, n) {
 		t.Error("KnativeService allowed for user without namespace access — namespace gate must apply")
@@ -267,7 +267,7 @@ func TestAllowPseudoKindTuples_NodeClass_DefersToExactNode(t *testing.T) {
 	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", false)
 	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
 	perms.SetCanI("get", "karpenter.k8s.gcp", "gcenodeclasses", "", false)
-	s.permCache.Set("alice", perms)
+	s.permCache.Set("alice", nil, perms)
 
 	r := requestWithUser("GET", "/api/ai/neighborhood/nodeclass/_/x", &auth.User{Username: "alice"})
 	tuples, fallthroughAllow := pseudoKindTuplesForTest("nodeclass", "")
@@ -289,7 +289,7 @@ func TestAllowPseudoKindTuples_NodeClass_AllowedWithProviderSAR(t *testing.T) {
 	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", true)
 	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
 	perms.SetCanI("get", "karpenter.k8s.gcp", "gcenodeclasses", "", false)
-	s.permCache.Set("bob", perms)
+	s.permCache.Set("bob", nil, perms)
 
 	r := requestWithUser("GET", "/api/ai/neighborhood/nodeclass/_/x", &auth.User{Username: "bob"})
 	tuples, fallthroughAllow := pseudoKindTuplesForTest("nodeclass", "")
@@ -304,11 +304,11 @@ func TestAllowPseudoKindTuples_NodePool(t *testing.T) {
 	s := newAuthServer(auth.Config{Mode: "proxy"})
 	denyPerms := &auth.UserPermissions{AllowedNamespaces: nil}
 	denyPerms.SetCanI("get", "karpenter.sh", "nodepools", "", false)
-	s.permCache.Set("alice", denyPerms)
+	s.permCache.Set("alice", nil, denyPerms)
 
 	allowPerms := &auth.UserPermissions{AllowedNamespaces: nil}
 	allowPerms.SetCanI("get", "karpenter.sh", "nodepools", "", true)
-	s.permCache.Set("bob", allowPerms)
+	s.permCache.Set("bob", nil, allowPerms)
 
 	tuples, fallthroughAllow := pseudoKindTuplesForTest("nodepool", "")
 	if len(tuples) != 1 {
@@ -334,7 +334,7 @@ func TestNeighborhood_NodeClassRootPreflightNotBadRequest(t *testing.T) {
 	denyPerms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", false)
 	denyPerms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
 	denyPerms.SetCanI("get", "karpenter.k8s.gcp", "gcenodeclasses", "", false)
-	env.srv.permCache.Set("alice", denyPerms)
+	env.srv.permCache.Set("alice", nil, denyPerms)
 
 	resp := env.authGet(t, "/api/ai/neighborhood/nodeclass/_/foo", "alice", "")
 	resp.Body.Close()
@@ -351,7 +351,7 @@ func TestNeighborhood_NodeClassRootPreflightNotBadRequest(t *testing.T) {
 	allowPerms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", true)
 	allowPerms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
 	allowPerms.SetCanI("get", "karpenter.k8s.gcp", "gcenodeclasses", "", false)
-	env.srv.permCache.Set("bob", allowPerms)
+	env.srv.permCache.Set("bob", nil, allowPerms)
 
 	resp2 := env.authGet(t, "/api/ai/neighborhood/nodeclass/_/foo", "bob", "")
 	resp2.Body.Close()
@@ -369,7 +369,7 @@ func TestNeighborhood_NodePoolRootPreflightNotBadRequest(t *testing.T) {
 
 	denyPerms := &auth.UserPermissions{AllowedNamespaces: nil}
 	denyPerms.SetCanI("get", "karpenter.sh", "nodepools", "", false)
-	env.srv.permCache.Set("alice", denyPerms)
+	env.srv.permCache.Set("alice", nil, denyPerms)
 	resp := env.authGet(t, "/api/ai/neighborhood/nodepool/_/foo", "alice", "")
 	resp.Body.Close()
 	if resp.StatusCode == http.StatusBadRequest {
@@ -381,7 +381,7 @@ func TestNeighborhood_NodePoolRootPreflightNotBadRequest(t *testing.T) {
 
 	allowPerms := &auth.UserPermissions{AllowedNamespaces: nil}
 	allowPerms.SetCanI("get", "karpenter.sh", "nodepools", "", true)
-	env.srv.permCache.Set("bob", allowPerms)
+	env.srv.permCache.Set("bob", nil, allowPerms)
 	resp2 := env.authGet(t, "/api/ai/neighborhood/nodepool/_/foo", "bob", "")
 	resp2.Body.Close()
 	if resp2.StatusCode == http.StatusBadRequest {
@@ -409,10 +409,10 @@ func TestNeighborhood_SecretRootIncluded(t *testing.T) {
 	// Authorized user: namespace access to default + per-namespace
 	// `get secrets` SAR. Both Allow checks (namespace + per-kind Secret)
 	// must pass.
-	env.srv.permCache.Set("bob", &auth.UserPermissions{
+	env.srv.permCache.Set("bob", nil, &auth.UserPermissions{
 		AllowedNamespaces: []string{"default"},
 	})
-	bobPerms := env.srv.permCache.Get("bob")
+	bobPerms := env.srv.permCache.Get("bob", nil)
 	bobPerms.SetCanI("get", "", "secrets", "default", true)
 
 	resp := env.authGet(t, "/api/ai/neighborhood/secret/default/nginx-tls", "bob", "")
@@ -425,10 +425,10 @@ func TestNeighborhood_SecretRootIncluded(t *testing.T) {
 	// `get secrets` SAR. Allow rejects the root → empty subgraph → 404.
 	// Existence-hiding preserved: same 404 the IncludeSecrets=false path
 	// produced, but now driven by RBAC instead of topology elision.
-	env.srv.permCache.Set("alice", &auth.UserPermissions{
+	env.srv.permCache.Set("alice", nil, &auth.UserPermissions{
 		AllowedNamespaces: []string{"default"},
 	})
-	alicePerms := env.srv.permCache.Get("alice")
+	alicePerms := env.srv.permCache.Get("alice", nil)
 	alicePerms.SetCanI("get", "", "secrets", "default", false)
 
 	resp2 := env.authGet(t, "/api/ai/neighborhood/secret/default/nginx-tls", "alice", "")

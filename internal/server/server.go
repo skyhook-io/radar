@@ -1518,7 +1518,7 @@ func (s *Server) canReadDecision(r *http.Request, group, resource, namespace, ve
 	if user == nil || s.permCache == nil {
 		return true, true
 	}
-	if s.permCache.Get(user.Username) == nil {
+	if s.permCache.Get(user.Username, user.Groups) == nil {
 		// Trigger namespace discovery so SAR cache has a parent UserPermissions
 		// entry. parseNamespacesForUser is the canonical path that populates
 		// this; if it hasn't run yet, canReadUser falls through to a fresh SAR.
@@ -1547,7 +1547,7 @@ func (s *Server) canReadUserDecision(ctx context.Context, user *auth.User, group
 	if user == nil || s.permCache == nil {
 		return true, true
 	}
-	perms := s.permCache.Get(user.Username)
+	perms := s.permCache.Get(user.Username, user.Groups)
 	if perms != nil {
 		if v, ok := perms.CanI(verb, group, resource, namespace); ok {
 			return v, true
@@ -3636,7 +3636,7 @@ func (s *Server) filterEventsByRBAC(r *http.Request, events []timeline.TimelineE
 
 	// Prime the parent UserPermissions entry once so the parallel canReadUser
 	// calls below share its SAR memo instead of racing to populate it.
-	if s.permCache.Get(user.Username) == nil {
+	if s.permCache.Get(user.Username, user.Groups) == nil {
 		_ = s.getUserNamespaces(r, []string{})
 	}
 
@@ -4869,7 +4869,7 @@ func (s *Server) getUserNamespaces(r *http.Request, requested []string) []string
 		return requested
 	}
 
-	perms := s.permCache.Get(user.Username)
+	perms := s.permCache.Get(user.Username, user.Groups)
 	if perms != nil {
 		log.Printf("[auth] Using cached permissions for %s: allowed=%v", user.Username, perms.AllowedNamespaces == nil)
 	}
@@ -4912,7 +4912,7 @@ func (s *Server) getUserNamespaces(r *http.Request, requested []string) []string
 
 		log.Printf("[auth] DiscoverNamespaces result for %s: allowed=%v (nil=all, []=none)", user.Username, allowed)
 		perms = &auth.UserPermissions{AllowedNamespaces: allowed}
-		s.permCache.Set(user.Username, perms)
+		s.permCache.Set(user.Username, user.Groups, perms)
 	}
 
 	return auth.FilterNamespacesForUser(requested, user, perms)
@@ -4966,7 +4966,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	// available) so the closure's canReadUser calls hit the memo. When auth is
 	// off, UserFromContext is nil and canReadUser short-circuits to allow.
 	user := auth.UserFromContext(r.Context())
-	if user != nil && s.permCache != nil && s.permCache.Get(user.Username) == nil {
+	if user != nil && s.permCache != nil && s.permCache.Get(user.Username, user.Groups) == nil {
 		_ = s.getUserNamespaces(r, []string{})
 	}
 	s.broadcaster.HandleSSE(w, r, deny, s.newSSEChangeAuthorizer(r.Context(), user))

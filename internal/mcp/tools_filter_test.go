@@ -73,7 +73,7 @@ func setupFakeCacheForFilterTests(t *testing.T) {
 func withRestrictedUser(t *testing.T, username string, allowed []string) context.Context {
 	t.Helper()
 	ctx := pkgauth.ContextWithUser(context.Background(), &pkgauth.User{Username: username, Groups: nil})
-	getPermCache().Set(username, &pkgauth.UserPermissions{AllowedNamespaces: allowed})
+	getPermCache().Set(username, nil, &pkgauth.UserPermissions{AllowedNamespaces: allowed})
 	return ctx
 }
 
@@ -84,7 +84,7 @@ func withRestrictedUser(t *testing.T, username string, allowed []string) context
 func withClusterAdmin(t *testing.T, username string) context.Context {
 	t.Helper()
 	ctx := pkgauth.ContextWithUser(context.Background(), &pkgauth.User{Username: username, Groups: nil})
-	getPermCache().Set(username, &pkgauth.UserPermissions{AllowedNamespaces: nil})
+	getPermCache().Set(username, nil, &pkgauth.UserPermissions{AllowedNamespaces: nil})
 	return ctx
 }
 
@@ -94,7 +94,7 @@ func withClusterAdmin(t *testing.T, username string) context.Context {
 // Sets both list and get verbs.
 func grantClusterRead(t *testing.T, username string, gvrs ...string) {
 	t.Helper()
-	perms := getPermCache().Get(username)
+	perms := getPermCache().Get(username, nil)
 	if perms == nil {
 		t.Fatalf("user %q not in perm cache; call withRestrictedUser/withClusterAdmin first", username)
 	}
@@ -112,7 +112,7 @@ func grantClusterRead(t *testing.T, username string, gvrs ...string) {
 // scoped reads are gated even when the cache contains the resource.
 func denyClusterRead(t *testing.T, username string, gvrs ...string) {
 	t.Helper()
-	perms := getPermCache().Get(username)
+	perms := getPermCache().Get(username, nil)
 	if perms == nil {
 		t.Fatalf("user %q not in perm cache", username)
 	}
@@ -490,7 +490,7 @@ func seedSecretGetCanI(t *testing.T, username string, allowedNamespaces []string
 
 func seedSecretCanIVerb(t *testing.T, username, verb string, allowedNamespaces []string, deniedNamespaces []string) {
 	t.Helper()
-	perms := getPermCache().Get(username)
+	perms := getPermCache().Get(username, nil)
 	if perms == nil {
 		t.Fatalf("user %q not in perm cache", username)
 	}
@@ -547,7 +547,7 @@ func TestHandleListResources_Secrets_ClusterWideShape_NoSecretRBAC(t *testing.T)
 	// can't return.
 	setupFakeCacheForFilterTests(t)
 	ctx := withClusterAdmin(t, "broad-reader")
-	perms := getPermCache().Get("broad-reader")
+	perms := getPermCache().Get("broad-reader", nil)
 	if perms == nil {
 		t.Fatalf("broad-reader not in cache")
 	}
@@ -570,7 +570,7 @@ func TestHandleListResources_Secrets_ClusterWideShape_WithSecretRBAC(t *testing.
 	// allowed — user sees every secret in the cache.
 	setupFakeCacheForFilterTests(t)
 	ctx := withClusterAdmin(t, "broad-reader")
-	perms := getPermCache().Get("broad-reader")
+	perms := getPermCache().Get("broad-reader", nil)
 	if perms == nil {
 		t.Fatalf("broad-reader not in cache")
 	}
@@ -727,7 +727,7 @@ func TestHandleSearch_Secrets_ClusterWideShape_NsFilter(t *testing.T) {
 	// `list secrets` SAR.
 	setupFakeCacheForFilterTests(t)
 	ctx := withClusterAdmin(t, "broad-reader")
-	perms := getPermCache().Get("broad-reader")
+	perms := getPermCache().Get("broad-reader", nil)
 	if perms == nil {
 		t.Fatalf("broad-reader not in cache")
 	}
