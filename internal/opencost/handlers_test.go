@@ -44,6 +44,39 @@ func TestUnavailableResponsesIncludeCurrency(t *testing.T) {
 	}
 }
 
+func TestCostRoutesResolveCurrencyAfterSourceSelection(t *testing.T) {
+	originalConfig := ConfigSnapshot()
+	t.Cleanup(func() { _ = Configure(originalConfig) })
+
+	tests := []struct {
+		name    string
+		target  string
+		handler func(http.ResponseWriter, *http.Request, func() string, RouteScope)
+	}{
+		{name: "summary", target: "/opencost/summary", handler: handleSummaryScoped},
+		{name: "workloads", target: "/opencost/workloads?namespace=default", handler: handleWorkloadsScoped},
+		{name: "trend", target: "/opencost/trend", handler: handleTrendScoped},
+		{name: "nodes", target: "/opencost/nodes", handler: handleNodesScoped},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := Configure(ManagerConfig{Source: SourcePrometheus}); err != nil {
+				t.Fatal(err)
+			}
+			w := httptest.NewRecorder()
+			tt.handler(w, httptest.NewRequest(http.MethodGet, tt.target, nil), func() string {
+				if selected := SelectedSourceSnapshot(); selected != SourcePrometheus {
+					t.Fatalf("currency resolved before source selection: selected = %q", selected)
+				}
+				return "GBP"
+			}, RouteScope{})
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
 func TestCostRouteScopeRejectsUnreadableNamespaceAndNodes(t *testing.T) {
 	scope := RouteScope{
 		AllowedNamespaces: func(_ *http.Request, _ []string) []string { return []string{} },

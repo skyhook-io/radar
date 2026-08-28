@@ -32,16 +32,16 @@ func RegisterRoutes(r chi.Router, resolveCurrency func() string, scope RouteScop
 }
 
 func handleSummaryScoped(w http.ResponseWriter, r *http.Request, resolveCurrency func() string, scope RouteScope) {
-	currency := resolvedCurrency(resolveCurrency)
 	var allowedNamespaces []string
 	if scope.AllowedNamespaces != nil {
 		allowedNamespaces = scope.AllowedNamespaces(r, nil)
 		if allowedNamespaces != nil && len(allowedNamespaces) == 0 {
-			writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: pkgopencost.ReasonAccessDenied, Currency: currency})
+			writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: pkgopencost.ReasonAccessDenied, Currency: resolvedCurrency(resolveCurrency)})
 			return
 		}
 	}
 	connection, err := Selected(r.Context())
+	currency := resolvedCurrency(resolveCurrency)
 	if err != nil {
 		writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "kubecost"})
 		return
@@ -96,8 +96,8 @@ func handleWorkloadsScoped(w http.ResponseWriter, r *http.Request, resolveCurren
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "no access to namespace " + ns})
 		return
 	}
-	currency := resolvedCurrency(resolveCurrency)
 	connection, err := Selected(r.Context())
+	currency := resolvedCurrency(resolveCurrency)
 	if err != nil {
 		writeJSON(w, http.StatusOK, pkgopencost.WorkloadCostResponse{Namespace: ns, Reason: ConnectionFailureReason(err), Currency: currency, Source: "kubecost"})
 		return
@@ -191,29 +191,30 @@ func handleTrendScoped(w http.ResponseWriter, r *http.Request, resolveCurrency f
 		}
 	}
 	connection, err := Selected(r.Context())
+	currency := resolvedCurrency(resolveCurrency)
 	if err != nil {
-		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: resolvedCurrency(resolveCurrency), Source: "kubecost", Range: r.URL.Query().Get("range")})
+		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "kubecost", Range: r.URL.Query().Get("range")})
 		return
 	}
 	if connection.Source == SourceKubecost {
-		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: pkgopencost.ReasonHistoryUnsupported, Currency: resolvedCurrency(resolveCurrency), Source: "kubecost", Range: r.URL.Query().Get("range")})
+		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: pkgopencost.ReasonHistoryUnsupported, Currency: currency, Source: "kubecost", Range: r.URL.Query().Get("range")})
 		return
 	}
 	client := prometheuspkg.GetClient()
 	if client == nil {
-		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: pkgopencost.ReasonNoPrometheus, Currency: resolvedCurrency(resolveCurrency), Source: "prometheus", Range: r.URL.Query().Get("range")})
+		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: pkgopencost.ReasonNoPrometheus, Currency: currency, Source: "prometheus", Range: r.URL.Query().Get("range")})
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
 		log.Printf("[opencost] EnsureConnected failed (trend): %v", err)
-		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: resolvedCurrency(resolveCurrency), Source: "prometheus", Range: r.URL.Query().Get("range")})
+		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "prometheus", Range: r.URL.Query().Get("range")})
 		return
 	}
 	resp := pkgopencost.ComputeCostTrendFromProm(r.Context(), client.Prom(), pkgopencost.TrendPromOptions{
 		Range:      r.URL.Query().Get("range"),
 		Namespaces: namespaces,
 	})
-	resp.Currency = resolvedCurrency(resolveCurrency)
+	resp.Currency = currency
 	resp.Source = "prometheus"
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -223,8 +224,8 @@ func handleNodesScoped(w http.ResponseWriter, r *http.Request, resolveCurrency f
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "no access to nodes"})
 		return
 	}
-	currency := resolvedCurrency(resolveCurrency)
 	connection, err := Selected(r.Context())
+	currency := resolvedCurrency(resolveCurrency)
 	if err != nil {
 		writeJSON(w, http.StatusOK, pkgopencost.NodeCostResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "kubecost"})
 		return
@@ -242,12 +243,12 @@ func handleNodesScoped(w http.ResponseWriter, r *http.Request, resolveCurrency f
 	}
 	client := prometheuspkg.GetClient()
 	if client == nil {
-		writeJSON(w, http.StatusOK, pkgopencost.NodeCostResponse{Available: false, Reason: pkgopencost.ReasonNoPrometheus, Currency: resolvedCurrency(resolveCurrency), Source: "prometheus"})
+		writeJSON(w, http.StatusOK, pkgopencost.NodeCostResponse{Available: false, Reason: pkgopencost.ReasonNoPrometheus, Currency: currency, Source: "prometheus"})
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
 		log.Printf("[opencost] EnsureConnected failed (nodes): %v", err)
-		writeJSON(w, http.StatusOK, pkgopencost.NodeCostResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: resolvedCurrency(resolveCurrency), Source: "prometheus"})
+		writeJSON(w, http.StatusOK, pkgopencost.NodeCostResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "prometheus"})
 		return
 	}
 	resp := pkgopencost.ComputeNodeCosts(r.Context(), client.Prom())
