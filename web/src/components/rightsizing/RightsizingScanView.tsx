@@ -38,6 +38,9 @@ export const RIGHTSIZING_SCAN_DESCRIPTION =
   'Find CPU and memory requests to increase, reduce, or review. Radar never changes them.'
 export const RIGHTSIZING_SCAN_METHODOLOGY =
   'Based on 7 days of history: CPU P95 and memory maximum, plus 15% headroom. Memory reductions require verifiable restart history.'
+export const RIGHTSIZING_METRICS_REQUIRED_TITLE = 'Metrics history is required'
+export const RIGHTSIZING_METRICS_REQUIRED_BODY =
+  'Rightsizing needs 7 days of Kubernetes workload history from a PromQL-compatible metrics backend. Cost Overview remains available without it.'
 
 export type RightsizingScanSurfaceState =
   | 'discovering'
@@ -242,8 +245,8 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
           />
         ) : surfaceState === 'prometheus_required' ? (
           <CenteredState
-            title="Prometheus is required"
-            body="Rightsizing uses Prometheus history. Cost Overview can still use OpenCost independently."
+            title={RIGHTSIZING_METRICS_REQUIRED_TITLE}
+            body={RIGHTSIZING_METRICS_REQUIRED_BODY}
             action={
               <button
                 type="button"

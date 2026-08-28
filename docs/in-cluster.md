@@ -502,7 +502,7 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `cost.kubecost.url` | Kubecost 3 Aggregator URL; required for federated agent-only clusters | `""` (discover local) |
 | `cost.kubecost.clusterId` | Cluster ID filter for a central Aggregator | `""` (detect literal `CLUSTER_ID`) |
 | `cost.kubecost.existingSecret` | Secret containing an optional Kubecost API key | `""` |
-| `traffic.prometheusUrl` | Manual Prometheus/VictoriaMetrics URL | `""` (auto-discover) |
+| `traffic.prometheusUrl` | Manual PromQL-compatible query URL (Prometheus, VictoriaMetrics, Thanos, Mimir) | `""` (auto-discover) |
 | `traffic.prometheusHeadersFromEnv` | Prometheus headers sourced from environment variables, for secret-backed auth headers | `{}` |
 | `persistence.enabled` | Enable PVC for SQLite storage | `false` |
 | `persistence.size` | PVC size | `1Gi` |

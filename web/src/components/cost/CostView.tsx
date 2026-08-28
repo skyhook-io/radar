@@ -96,8 +96,8 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
                   Looking for cost data…
                 </p>
                 <p className="mt-1 text-xs text-theme-text-tertiary">
-                  Radar is checking OpenCost-compatible Prometheus metrics and a local Kubecost 3
-                  Aggregator. First discovery can take a few seconds.
+                  Radar is checking OpenCost metrics in a PromQL-compatible backend and a local
+                  Kubecost 3 Aggregator. First discovery can take a few seconds.
                 </p>
               </div>
               <button
@@ -362,7 +362,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
 export function costUnavailableMessage(reason?: CostUnavailableReason): string {
   switch (reason) {
     case 'no_prometheus':
-      return 'No compatible cost source found — connect OpenCost-compatible Prometheus metrics or configure Kubecost'
+      return 'No compatible cost source found — connect OpenCost metrics through a PromQL-compatible backend or configure Kubecost'
     case 'no_metrics':
       return 'Cost data is not ready — the selected source returned no allocation data'
     case 'query_error':

@@ -370,7 +370,7 @@ export function SettingsDialog({
     { id: 'overview', label: 'Overview', icon: LayoutDashboard, ownerOnly: false, dirty: false },
     { id: 'perms', label: 'My permissions', icon: Shield, ownerOnly: false, dirty: false },
     { id: 'connection', label: 'Connection', icon: Boxes, ownerOnly: true, dirty: connectionDirty },
-    { id: 'prometheus', label: 'Prometheus', icon: Activity, ownerOnly: true, dirty: false },
+    { id: 'prometheus', label: 'Metrics', icon: Activity, ownerOnly: true, dirty: false },
     { id: 'cost', label: 'Cost', icon: Coins, ownerOnly: true, dirty: costDirty },
     { id: 'argocd', label: 'Argo CD', icon: GitBranch, ownerOnly: true, dirty: false },
     { id: 'ai', label: 'AI diagnose', icon: Sparkles, ownerOnly: false, dirty: aiDirty },
@@ -533,11 +533,11 @@ export function SettingsDialog({
               </div>
             </SectionPane>
 
-            {/* Prometheus — live */}
+            {/* Metrics backend — live */}
             <SectionPane
               id="prometheus"
               active={section}
-              title="Prometheus"
+              title="Metrics"
               caption="Applies immediately — no restart."
               live
               locked={!canEditConfig}
@@ -962,7 +962,7 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
       detail: cluster ? `Kubernetes ${cluster.kubernetesVersion} · ${cluster.nodeCount} nodes` : undefined,
     },
     {
-      id: 'prometheus', icon: Activity, label: 'Prometheus',
+      id: 'prometheus', icon: Activity, label: 'Metrics',
       tone: prom?.connected ? 'ok' : prom?.available ? 'warn' : 'off',
       value: prom?.connected ? 'Connected' : prom?.available ? 'Not reachable' : 'Not configured',
       detail: prom?.connected ? prom.address : undefined,
@@ -1325,8 +1325,8 @@ function CostSection({
       <div>
         <label className="mb-1 block text-sm font-medium text-theme-text-primary">Cost source</label>
         <p className="mb-1 text-xs text-theme-text-tertiary">
-          Auto keeps working OpenCost-compatible Prometheus metrics, then tries a local Kubecost 3
-          Aggregator when those metrics are absent.
+          Auto keeps working OpenCost metrics from a PromQL-compatible backend, then tries a local
+          Kubecost 3 Aggregator when those metrics are absent.
         </p>
         <select
           value={source}
@@ -1336,7 +1336,7 @@ function CostSection({
           aria-label="Cost source"
         >
           <option value="auto">Auto (recommended)</option>
-          <option value="prometheus">Prometheus metrics</option>
+          <option value="prometheus">OpenCost metrics (PromQL)</option>
           <option value="kubecost">Kubecost Aggregator</option>
         </select>
       </div>
@@ -1641,7 +1641,8 @@ function PrometheusConfigField({
         Server URL
       </label>
       <p className="text-xs text-theme-text-tertiary mb-1">
-        Manual Prometheus / VictoriaMetrics URL — set this to skip auto-discovery.
+        Manual PromQL-compatible query URL — works with Prometheus, VictoriaMetrics, Thanos, and
+        Mimir. Set this to skip auto-discovery.
       </p>
       <div className="flex items-center gap-2">
         <Input

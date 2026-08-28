@@ -490,7 +490,7 @@ function applicationCostKey(ref: { kind: string; namespace: string; name: string
 }
 
 function reasonLabel(reason?: CostUnavailableReason) {
-  if (reason === 'no_prometheus') return 'Prometheus not found'
+  if (reason === 'no_prometheus') return 'Metrics backend not found'
   if (reason === 'query_error') return 'Cost query failed'
   if (reason === 'access_denied') return 'No access to this workload'
   if (reason === 'not_found') return 'Workload not found'
@@ -514,8 +514,8 @@ function ApplicationCostDiscovering({
             Looking for cost data…
           </p>
           <p className="mt-1 text-xs text-theme-text-tertiary">
-            Radar is checking OpenCost-compatible Prometheus metrics and a local Kubecost 3
-            Aggregator. First discovery can take a few seconds.
+            Radar is checking OpenCost metrics in a PromQL-compatible backend and a local Kubecost
+            3 Aggregator. First discovery can take a few seconds.
           </p>
         </div>
         <button
@@ -540,9 +540,9 @@ function ApplicationCostUnavailable({
   const text =
     message ??
     (state === 'no_prometheus'
-      ? 'Prometheus not found. OpenCost application cost requires Prometheus or VictoriaMetrics.'
+      ? 'No compatible metrics backend was found. OpenCost application cost requires OpenCost metrics in a PromQL-compatible backend.'
       : state === 'query_error'
-        ? 'Cost data is temporarily unavailable. Prometheus was found, but application cost queries failed.'
+        ? 'Cost data is temporarily unavailable. A metrics backend was found, but application cost queries failed.'
         : state === 'source_unavailable'
           ? 'Kubecost Aggregator is unavailable. Check the URL, network path, and cluster ID in Settings → Cost.'
           : state === 'authentication_error'
