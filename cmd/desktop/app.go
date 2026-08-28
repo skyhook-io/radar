@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -77,20 +79,7 @@ func (a *DesktopApp) startup(ctx context.Context) {
 // We write directly to ~/Downloads instead of showing a native save dialog
 // because Wails' SaveFileDialog is immediately dismissed by the webview on macOS.
 func (a *DesktopApp) saveFile(defaultFilename string, data []byte) (string, error) {
-	f, err := claimDownloadFile(defaultFilename)
-	if err != nil {
-		return "", err
-	}
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		os.Remove(f.Name())
-		return "", err
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(f.Name())
-		return "", err
-	}
-	return f.Name(), nil
+	return a.saveFileStream(defaultFilename, bytes.NewReader(data))
 }
 
 // saveFileStream writes a streamed file to the user's Downloads folder. The
@@ -108,9 +97,10 @@ func (a *DesktopApp) saveFileStream(defaultFilename string, r io.Reader) (string
 	}
 	defer os.Remove(partial.Name()) // no-op once the rename below has moved it
 
-	if _, err := io.Copy(partial, r); err != nil {
-		partial.Close()
-		return "", err
+	if _, copyErr := io.Copy(partial, r); copyErr != nil {
+		// A close failure on a write handle can be the one that lost the data,
+		// so it is reported alongside the copy error rather than dropped.
+		return "", errors.Join(copyErr, partial.Close())
 	}
 	if err := partial.Close(); err != nil {
 		return "", err

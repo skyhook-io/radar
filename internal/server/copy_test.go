@@ -231,6 +231,36 @@ func TestClassifyPodFileOpenErrorNamesANonRegularFile(t *testing.T) {
 	}
 }
 
+// A shell says "can't open" for a file that is absent and for one it may not
+// read. Calling the second case not-found sends the reader looking for a file
+// that is sitting right there.
+func TestClassifyPodFileOpenErrorSeparatesPermissionFromMissing(t *testing.T) {
+	err := classifyPodFileOpenError("/output/secret.txt",
+		io.EOF,
+		k8sexec.CodeExitError{Err: errors.New("command terminated with exit code 1"), Code: 1},
+		"sh: can't open /output/secret.txt: Permission denied")
+	if err.notFound {
+		t.Error("a file the container cannot read must not be reported as missing")
+	}
+	if !strings.Contains(err.message, "Permission denied") {
+		t.Errorf("message = %q, want it to name the permission problem", err.message)
+	}
+}
+
+// tar words the same problem differently, and it has to land the same way.
+func TestClassifyPodFileOpenErrorNamesAPermissionProblemFromTar(t *testing.T) {
+	err := classifyPodFileOpenError("/output/locked/secret.txt",
+		io.EOF,
+		k8sexec.CodeExitError{Err: errors.New("command terminated with exit code 1"), Code: 1},
+		"tar: can't change directory to '/output/locked': Permission denied")
+	if err.notFound || err.notAFile || err.commandMissing {
+		t.Errorf("a permission problem was misrouted: %+v", err)
+	}
+	if !strings.Contains(err.message, "Permission denied") {
+		t.Errorf("message = %q, want it to name the permission problem", err.message)
+	}
+}
+
 func TestClassifyPodFileOpenErrorNamesAMissingFile(t *testing.T) {
 	// busybox ash words it without "or directory" and in lower case.
 	err := classifyPodFileOpenError("/output/nope",

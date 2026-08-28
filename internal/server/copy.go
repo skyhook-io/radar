@@ -550,11 +550,18 @@ func classifyPodFileOpenError(filePath string, readErr, streamErr error, stderr 
 		return &podFileOpenError{err: streamErr, stderr: stderr, notAFile: true,
 			message: fmt.Sprintf("Not a regular file: %s", filePath)}
 	}
+	lowered := strings.ToLower(combined)
+	// Checked before the missing-file shapes below: a shell says "can't open"
+	// for both, and answering "not found" for a file the container simply may
+	// not read sends the reader looking for the wrong thing.
+	if strings.Contains(lowered, "permission denied") || strings.Contains(lowered, "operation not permitted") {
+		return &podFileOpenError{err: streamErr, stderr: stderr,
+			message: fmt.Sprintf("Permission denied: the container user cannot read %s", filePath)}
+	}
 	// Shells and tars disagree on the wording — "No such file or directory",
 	// "can't open ...: no such file" — so match on the shared shape, folded.
-	lowered := strings.ToLower(combined)
 	if strings.Contains(lowered, "no such file") || strings.Contains(lowered, "not found") ||
-		strings.Contains(lowered, "can't open") || (streamErr == nil && readErr == io.EOF) {
+		(streamErr == nil && readErr == io.EOF) {
 		return &podFileOpenError{err: streamErr, stderr: stderr, notFound: true,
 			message: fmt.Sprintf("File not found: %s", filePath)}
 	}
