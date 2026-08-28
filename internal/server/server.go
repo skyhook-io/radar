@@ -1344,6 +1344,14 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		caps.Visibility = k8s.BuildVisibilitySummary(result, r.URL.Query().Get("namespace"))
 	} else if k8s.GetResourceCache() != nil {
 		if result := k8s.CheckResourcePermissions(r.Context()); result != nil {
+			// Prefer what the cache holds: a probe superseded by a context
+			// switch describes the cluster it probed, not the one being
+			// rendered. The probe's own result is still the fallback, because
+			// it is also what an uninitialized client returns and this response
+			// must always carry a resources object.
+			if current := k8s.GetCachedPermissionResult(); current != nil {
+				result = current
+			}
 			caps.Resources = result.Perms
 			caps.Visibility = k8s.BuildVisibilitySummary(result, r.URL.Query().Get("namespace"))
 		}
