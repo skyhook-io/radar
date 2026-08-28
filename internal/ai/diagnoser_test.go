@@ -7,6 +7,22 @@ import (
 	"testing"
 )
 
+func TestWriteMCPConfigIncludesSessionToken(t *testing.T) {
+	path, cleanup, err := writeMCPConfig("http://localhost:9280/mcp", "test-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(data); !strings.Contains(got, `"Authorization":"Bearer test-token"`) {
+		t.Fatalf("MCP config missing bearer token: %s", got)
+	}
+}
+
 func TestDiagnosisFromText_ParsesJSONBlock(t *testing.T) {
 	text := "The pod crashloops.\n\n```json\n" +
 		`{"root_cause": "bad image tag", "remediation": ["roll back"], "confidence": 0.9}` +

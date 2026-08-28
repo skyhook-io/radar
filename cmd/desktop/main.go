@@ -67,6 +67,7 @@ func main() {
 	timelineMaxSize := flag.String("timeline-max-size", fileCfg.TimelineMaxSizeOr("1Gi"), "Maximum SQLite timeline storage size before pruning oldest events (e.g. 800Mi, 8Gi). 0 disables size-based pruning.")
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
 	openCostCurrency := flag.String("opencost-currency", fileCfg.OpenCostCurrency, "Override the ISO 4217 currency label for OpenCost values (empty: auto-detect, then USD)")
+	mcpSessionToken := flag.Bool("mcp-session-token", false, "Require a generated per-session bearer token for the write-capable local MCP endpoint")
 	flag.Parse()
 
 	if *showVersion {
@@ -148,6 +149,10 @@ func main() {
 	resolvedKubeconfig, resolvedKubeconfigDirs := app.ResolveKubeconfigSelection(
 		*kubeconfig, *kubeconfigDir, kubeconfigFlagSet, kubeconfigDirsFlagSet,
 	)
+	if *mcpSessionToken && !fileCfg.MCPEnabledOr(true) {
+		log.Printf("ERROR: --mcp-session-token requires MCP to be enabled")
+		os.Exit(1)
+	}
 
 	// The device flow and consent page must identify this build and target the
 	// same control plane the CLI would — Desktop starts the same shared server.
@@ -185,6 +190,7 @@ func main() {
 		HubAPIURL:                hubAPIURL,
 		HubAppURL:                hubAppURL,
 		MCPEnabled:               fileCfg.MCPEnabledOr(true),
+		MCPSessionToken:          *mcpSessionToken,
 		AIHistory:                fileCfg.AIHistoryOr(true),
 		AIHistoryDBPath:          fileCfg.AIHistoryDBPath,
 	}

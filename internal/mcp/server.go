@@ -2,6 +2,9 @@ package mcp
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/base64"
 	"log"
 	"net/http"
 	"os"
@@ -38,13 +41,43 @@ func RunStdio(ctx context.Context) error {
 	return newServer(true).Run(ctx, &mcpsdk.StdioTransport{})
 }
 
-// NewHandler creates the full MCP HTTP handler (read + write tools) to mount on chi.
-func NewHandler() http.Handler { return handlerForServer(newServer(true)) }
+// NewSessionToken returns a cryptographically random token for one Radar process.
+func NewSessionToken() (string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+// NewHandler creates the full MCP HTTP handler (read + write tools) to mount on
+// chi. A non-empty token requires clients to send it as an Authorization bearer
+// token. An empty token adds no authentication here; local sessions keep the
+// default behavior, while shared deployments use Radar's proxy/OIDC middleware.
+func NewHandler(token string) http.Handler {
+	handler := handlerForServer(newServer(true))
+	if token == "" {
+		return handler
+	}
+	return requireBearerToken(token, handler)
+}
 
 // NewReadOnlyHandler creates an MCP handler exposing only read tools. Radar points
 // read-only AI investigations here so a mutating tool can't even be discovered —
 // server-side enforcement that doesn't depend on the agent CLI restricting itself.
 func NewReadOnlyHandler() http.Handler { return handlerForServer(newServer(false)) }
+
+func requireBearerToken(token string, next http.Handler) http.Handler {
+	want := []byte("Bearer " + token)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), want) != 1 {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="radar-mcp"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 func handlerForServer(server *mcpsdk.Server) http.Handler {
 	streamOpts := &mcpsdk.StreamableHTTPOptions{Stateless: true}

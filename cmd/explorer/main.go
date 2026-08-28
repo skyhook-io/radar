@@ -143,6 +143,7 @@ func main() {
 	beylaJobSelector := flag.String("beyla-job-selector", "", `PromQL job-label matcher fragment Beyla traffic queries use to scope Prometheus series, e.g. 'job=~"my-beyla.*"' (empty = built-in default matching *beyla* or *alloy* job names)`)
 	// MCP server
 	noMCP := flag.Bool("no-mcp", !fileCfg.MCPEnabledOr(true), "Disable MCP (Model Context Protocol) server for AI tools")
+	mcpSessionToken := flag.Bool("mcp-session-token", false, "Require a generated per-session bearer token for the write-capable local MCP endpoint")
 	mcpCatalogStdio := flag.Bool("mcp-catalog-stdio", false, "Start only the MCP catalog over stdio for registry/inspector introspection; skips Kubernetes initialization")
 	mcpCatalogOnly := flag.Bool("mcp-catalog-only", false, "Start only the MCP endpoint for registry/inspector catalog introspection; skips Kubernetes initialization")
 	// Auth flags
@@ -300,6 +301,15 @@ func main() {
 	if *mcpCatalogStdio && noMCPFlagSet && *noMCP {
 		log.Fatalf("--mcp-catalog-stdio cannot be combined with --no-mcp")
 	}
+	if *mcpSessionToken && *noMCP {
+		log.Fatalf("--mcp-session-token cannot be combined with --no-mcp")
+	}
+	if *mcpSessionToken && *mcpCatalogStdio {
+		log.Fatalf("--mcp-session-token applies to HTTP only and cannot be combined with --mcp-catalog-stdio")
+	}
+	if *mcpSessionToken && *authMode != "none" {
+		log.Fatalf("--mcp-session-token is for local auth-mode=none sessions and cannot be combined with --auth-mode=%q", *authMode)
+	}
 	resolvedPrometheusHeaders, err := app.ResolvePrometheusHeaders(promHeaders.value(), promHeadersFromEnv.value())
 	if err != nil {
 		log.Fatalf("Invalid Prometheus header configuration: %v", err)
@@ -369,6 +379,7 @@ func main() {
 		PrometheusHeadersFromEnv: promHeadersFromEnv.value(),
 		BeylaJobSelector:         *beylaJobSelector,
 		MCPEnabled:               mcpEnabled,
+		MCPSessionToken:          *mcpSessionToken,
 		AIHistory:                *aiHistory,
 		AIHistoryDBPath:          fileCfg.AIHistoryDBPath,
 		Version:                  version,

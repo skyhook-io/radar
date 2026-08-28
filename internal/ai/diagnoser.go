@@ -4,8 +4,9 @@
 //
 // This is the OSS / local-first counterpart to Radar Hub's Cloud engine: the
 // CLI IS the agent loop (tool-use + MCP + streaming), it runs on the user's
-// machine against http://localhost:<port>/mcp (no tunnel, no token), and Radar
-// never calls an LLM itself — the model auth lives entirely in the user's CLI.
+// machine against http://localhost:<port>/mcp (no tunnel; optional local session
+// token), and Radar never calls an LLM itself — the model auth lives entirely in
+// the user's CLI.
 //
 // Security posture (see DiagnoseStream for the enforced flags):
 //   - read-only: only the Radar MCP READ tools are pre-approved.
@@ -45,6 +46,9 @@ type Request struct {
 	// MCPBasePath is Radar's --base-path prefix ("" at the root). The MCP mounts
 	// live under it, so the loopback URL handed to the agent must carry it too.
 	MCPBasePath string
+	// MCPToken authenticates write-capable turns against the local /mcp mount.
+	// Read-only turns do not send it.
+	MCPToken string
 	// SessionID, when set, resumes a prior CLI session (multi-turn) so the agent
 	// keeps full context (prior tool results + reasoning) without re-investigating.
 	SessionID string
@@ -392,6 +396,10 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 		path = "/mcp-readonly"
 	}
 	mcpURL := fmt.Sprintf("http://localhost:%d%s%s", req.MCPPort, req.MCPBasePath, path)
+	mcpToken := ""
+	if req.Apply {
+		mcpToken = req.MCPToken
+	}
 
 	// An apply turn runs in a FRESH session, not a resume: it acts only on the
 	// user-confirmed fix text + target, so untrusted cluster data ingested during
@@ -413,7 +421,7 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 	}
 
 	cmd, cleanup, err := agent.command(ctx, turnSpec{
-		mcpURL: mcpURL, prompt: prompt, systemPrompt: sys,
+		mcpURL: mcpURL, mcpToken: mcpToken, prompt: prompt, systemPrompt: sys,
 		sessionID: sessionID, apply: req.Apply, profile: profile,
 		model: req.Model, effort: req.Effort, maxTurns: maxTurns(),
 		workdir: req.WorkDir,
@@ -587,12 +595,14 @@ func sweepStaleMCPConfigs() {
 	}
 }
 
-// writeMCPConfig points the CLI at Radar's own local MCP. No auth header — the
-// endpoint is loopback-only in standalone mode.
-func writeMCPConfig(mcpURL string) (string, func(), error) {
-	cfg := map[string]any{"mcpServers": map[string]any{"radar": map[string]any{
-		"type": "http", "url": mcpURL,
-	}}}
+// writeMCPConfig points the CLI at Radar's own local MCP and includes the
+// per-session bearer token for write-capable turns when enabled.
+func writeMCPConfig(mcpURL, token string) (string, func(), error) {
+	server := map[string]any{"type": "http", "url": mcpURL}
+	if token != "" {
+		server["headers"] = map[string]string{"Authorization": "Bearer " + token}
+	}
+	cfg := map[string]any{"mcpServers": map[string]any{"radar": server}}
 	b, err := json.Marshal(cfg)
 	if err != nil {
 		return "", func() {}, err
