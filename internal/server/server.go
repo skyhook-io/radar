@@ -89,6 +89,7 @@ type Server struct {
 	permCache          *auth.PermissionCache
 	oidcHandler        *auth.OIDCHandler
 	saveFileFunc       func(defaultFilename string, data []byte) (string, error)
+	saveFileStreamFunc func(defaultFilename string, r io.Reader) (string, error)
 	cloudConnectCfg    CloudConnectConfig
 	cloudInstall       *cloudInstallManager
 
@@ -474,6 +475,10 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 		r.Get("/pods/{namespace}/{name}/exec", s.handlePodExec)
 		r.Get("/local-terminal", s.handleLocalTerminal)
 		r.Get("/pods/{namespace}/{name}/files/download", s.handlePodFileDownload)
+		// Desktop-only: streams a pod file to disk server-side. Sits outside the
+		// 60s timeout group for the same reason the download does — a large file
+		// over a slow cluster link legitimately takes longer than that.
+		r.Post("/pods/{namespace}/{name}/files/save", s.handlePodFileSave)
 		r.Get("/workloads/{kind}/{namespace}/{name}/logs/stream", s.handleWorkloadLogsStream)
 		// AI investigation event stream via SSE — long-lived; lives outside the
 		// 60s timeout group. The run keeps going server-side after disconnect.
@@ -1132,6 +1137,16 @@ func (s *Server) SetUpdater(u *updater.Updater) {
 // Only used by the desktop app.
 func (s *Server) SetSaveFileFunc(fn func(defaultFilename string, data []byte) (string, error)) {
 	s.saveFileFunc = fn
+}
+
+// SetSaveFileStreamFunc attaches a native save callback that consumes the file
+// as a stream, enabling the /api/pods/{ns}/{name}/files/save endpoint. It exists
+// so a large file can go from the cluster to disk without a copy of it passing
+// through the webview. The callback should write the stream to the chosen path
+// and return that path, leaving nothing behind if the write fails.
+// Only used by the desktop app.
+func (s *Server) SetSaveFileStreamFunc(fn func(defaultFilename string, r io.Reader) (string, error)) {
+	s.saveFileStreamFunc = fn
 }
 
 // Handler returns the full application handler for the authenticated Cloud

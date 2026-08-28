@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/skyhook-io/radar/internal/app"
@@ -61,6 +63,7 @@ func (a *DesktopApp) startup(ctx context.Context) {
 	a.ctx = ctx
 	startNativeMouseMonitor(ctx)
 	a.srv.SetSaveFileFunc(a.saveFile)
+	a.srv.SetSaveFileStreamFunc(a.saveFileStream)
 
 	// The OS titlebar must track the active kubeconfig context for the same
 	// reason the in-page selector does: a fleet UI showing the wrong cluster
@@ -74,6 +77,91 @@ func (a *DesktopApp) startup(ctx context.Context) {
 // We write directly to ~/Downloads instead of showing a native save dialog
 // because Wails' SaveFileDialog is immediately dismissed by the webview on macOS.
 func (a *DesktopApp) saveFile(defaultFilename string, data []byte) (string, error) {
+	f, err := claimDownloadFile(defaultFilename)
+	if err != nil {
+		return "", err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
+}
+
+// saveFileStream writes a streamed file to the user's Downloads folder. The
+// bytes land in a partial file first, so an interrupted transfer leaves nothing
+// that looks like a finished download and nothing that a second transfer of the
+// same name can collide with.
+func (a *DesktopApp) saveFileStream(defaultFilename string, r io.Reader) (string, error) {
+	dir, err := downloadsDir()
+	if err != nil {
+		return "", err
+	}
+	partial, err := os.CreateTemp(dir, sanitizeDownloadName(defaultFilename)+".*.part")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(partial.Name()) // no-op once the rename below has moved it
+
+	if _, err := io.Copy(partial, r); err != nil {
+		partial.Close()
+		return "", err
+	}
+	if err := partial.Close(); err != nil {
+		return "", err
+	}
+
+	claimed, err := claimDownloadFile(defaultFilename)
+	if err != nil {
+		return "", err
+	}
+	if err := claimed.Close(); err != nil {
+		os.Remove(claimed.Name())
+		return "", err
+	}
+	if err := os.Rename(partial.Name(), claimed.Name()); err != nil {
+		os.Remove(claimed.Name())
+		return "", err
+	}
+	return claimed.Name(), nil
+}
+
+// claimDownloadFile creates and returns an empty file in ~/Downloads named
+// after defaultFilename, working around collisions the way a browser does:
+// file.txt → file (1).txt. The name is claimed with O_EXCL rather than tested
+// with Stat first, so two downloads of the same name cannot pick it together
+// and a symlink planted at the path cannot be written through.
+func claimDownloadFile(defaultFilename string) (*os.File, error) {
+	dir, err := downloadsDir()
+	if err != nil {
+		return nil, err
+	}
+
+	base := sanitizeDownloadName(defaultFilename)
+	ext := filepath.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+	for i := 0; i <= 1000; i++ {
+		candidate := filepath.Join(dir, base)
+		if i > 0 {
+			candidate = filepath.Join(dir, fmt.Sprintf("%s (%d)%s", stem, i, ext))
+		}
+		f, err := os.OpenFile(candidate, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err == nil {
+			return f, nil
+		}
+		if !os.IsExist(err) {
+			return nil, fmt.Errorf("cannot create file %q: %w", candidate, err)
+		}
+	}
+	return nil, fmt.Errorf("could not find a free name for %q in %s", base, dir)
+}
+
+func downloadsDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -82,27 +170,55 @@ func (a *DesktopApp) saveFile(defaultFilename string, data []byte) (string, erro
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", fmt.Errorf("cannot access Downloads folder: %w", err)
 	}
+	return dir, nil
+}
 
-	// Collision handling: file.txt → file (1).txt → file (2).txt
-	base := defaultFilename
-	ext := filepath.Ext(base)
-	name := strings.TrimSuffix(base, ext)
-	path := filepath.Join(dir, base)
-	for i := 1; i <= 1000; i++ {
-		_, statErr := os.Stat(path)
-		if os.IsNotExist(statErr) {
-			break
-		}
-		if statErr != nil {
-			return "", fmt.Errorf("cannot check file %q: %w", path, statErr)
-		}
-		path = filepath.Join(dir, fmt.Sprintf("%s (%d)%s", name, i, ext))
+// sanitizeDownloadName reduces a name from inside a container to one this host
+// will accept, and keeps it from reaching outside the Downloads folder. Linux
+// file names are freer than Windows ones — the timestamped exports people pull
+// out of pods routinely carry colons — so the Windows rules are applied only
+// where they hold, leaving names untouched elsewhere.
+func sanitizeDownloadName(name string) string {
+	name = filepath.Base(strings.ReplaceAll(name, "\x00", ""))
+	if name == "." || name == ".." || name == string(filepath.Separator) {
+		return "download"
 	}
+	if runtime.GOOS == "windows" {
+		return windowsSafeName(name)
+	}
+	return name
+}
 
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		return "", err
+// windowsReservedNames cannot be used as a file name on Windows whatever the
+// extension: CON.txt is still the console.
+var windowsReservedNames = map[string]bool{
+	"con": true, "prn": true, "aux": true, "nul": true,
+	"com1": true, "com2": true, "com3": true, "com4": true, "com5": true,
+	"com6": true, "com7": true, "com8": true, "com9": true,
+	"lpt1": true, "lpt2": true, "lpt3": true, "lpt4": true, "lpt5": true,
+	"lpt6": true, "lpt7": true, "lpt8": true, "lpt9": true,
+}
+
+func windowsSafeName(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r < 0x20, r == '<', r == '>', r == ':', r == '"', r == '/', r == '\\', r == '|', r == '?', r == '*':
+			b.WriteByte('-')
+		default:
+			b.WriteRune(r)
+		}
 	}
-	return path, nil
+	// Windows silently drops a trailing dot or space, which would leave the
+	// name pointing at a file nobody asked for.
+	safe := strings.TrimRight(b.String(), " .")
+	if safe == "" {
+		return "download"
+	}
+	if windowsReservedNames[strings.ToLower(strings.TrimSuffix(safe, filepath.Ext(safe)))] {
+		safe = "_" + safe
+	}
+	return safe
 }
 
 // domReady is called when the webview DOM is ready.
