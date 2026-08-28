@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +13,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	clienttesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -529,5 +532,95 @@ func TestProbeResourceAccess_ClusterOnlyKindsNoNsFallback(t *testing.T) {
 
 	if len(nsProbedClusterOnly) > 0 {
 		t.Errorf("cluster-scoped kinds were probed namespace-scoped (would 404 in real cluster): %v", nsProbedClusterOnly)
+	}
+}
+
+// TestCheckResourcePermissionsDiscardsSupersededProbe covers the publish side
+// of the probe cache: the probe runs outside resourcePermsMu, so a probe that
+// started before an invalidation must not overwrite the result of the probe
+// that ran against the cluster and scope now in effect.
+func TestCheckResourcePermissionsDiscardsSupersededProbe(t *testing.T) {
+	defer ResetTestState()
+
+	const previousNs, currentNs = "previous-cluster-ns", "current-cluster-ns"
+
+	// Points at a dead port: buildScopeCandidates' namespace discovery fails
+	// fast and falls back to the configured candidates, which is what makes the
+	// two probe results distinguishable.
+	typed, err := kubernetes.NewForConfig(&rest.Config{Host: "http://localhost:1"})
+	if err != nil {
+		t.Fatalf("creating typed client: %v", err)
+	}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var enteredOnce sync.Once
+	previousDyn := fakeDyn(t, func(gvr schema.GroupVersionResource, namespace string) bool {
+		enteredOnce.Do(func() { close(entered) })
+		<-release
+		return gvr.Group == "" && gvr.Resource == "pods" && namespace == previousNs
+	})
+	currentDyn := fakeDyn(t, func(gvr schema.GroupVersionResource, namespace string) bool {
+		return gvr.Group == "" && gvr.Resource == "pods" && namespace == currentNs
+	})
+
+	setProbeClients := func(dyn dynamic.Interface) {
+		clientMu.Lock()
+		k8sClient = typed
+		dynamicClient = dyn
+		clientMu.Unlock()
+	}
+
+	setProbeClients(previousDyn)
+	SetFallbackNamespace(previousNs)
+	InvalidateResourcePermissionsCache()
+
+	superseded := make(chan *PermissionCheckResult, 1)
+	go func() {
+		superseded <- CheckResourcePermissions(context.Background())
+	}()
+	select {
+	case <-entered: // the probe is inside the client, holding the previous scope
+	case <-time.After(10 * time.Second):
+		t.Fatal("probe never reached the dynamic client; the race window this test needs no longer exists")
+	}
+
+	// What a context switch or namespace rescope does: new client, new scope,
+	// cache invalidated, fresh probe published.
+	setProbeClients(currentDyn)
+	SetFallbackNamespace(currentNs)
+	InvalidateResourcePermissionsCache()
+
+	current := CheckResourcePermissions(context.Background())
+	if current.Namespace != currentNs {
+		t.Fatalf("current probe resolved namespace %q, want %q", current.Namespace, currentNs)
+	}
+	if cached := GetCachedPermissionResult(); cached == nil || cached.Namespace != currentNs {
+		t.Fatalf("current probe did not publish: %+v", cached)
+	}
+
+	close(release)
+	var stale *PermissionCheckResult
+	select {
+	case stale = <-superseded:
+	case <-time.After(10 * time.Second):
+		t.Fatal("superseded probe did not return after release")
+	}
+	if stale.Namespace != previousNs {
+		t.Fatalf("superseded probe resolved namespace %q, want the previous scope %q", stale.Namespace, previousNs)
+	}
+
+	cached := GetCachedPermissionResult()
+	if cached == nil {
+		t.Fatal("no cached permission result after the race")
+	}
+	if cached.Namespace != currentNs {
+		t.Fatalf("superseded probe republished namespace %q over the current %q", cached.Namespace, currentNs)
+	}
+	if !reflect.DeepEqual(cached.ScopeCandidates, []string{currentNs}) {
+		t.Fatalf("cached ScopeCandidates = %v, want [%s]", cached.ScopeCandidates, currentNs)
+	}
+	if !cached.Perms.Pods {
+		t.Fatal("cached result lost the current cluster's Pods grant")
 	}
 }

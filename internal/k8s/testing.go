@@ -472,7 +472,7 @@ func ResetTestState() {
 
 	// Reset resource permissions cache
 	resourcePermsMu.Lock()
-	cachedPermResult = nil
+	invalidateResourcePermissionsCacheLocked()
 	resourcePermsMu.Unlock()
 	ForceNamespaceScope = false
 	SetFallbackNamespace("")
