@@ -18,6 +18,7 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/rollouts"
 )
 
@@ -40,6 +41,7 @@ func TestWriteRolloutErrorStatusMapping(t *testing.T) {
 		{"no steps", fmt.Errorf("wrapped: %w", rollouts.ErrNoSteps), http.StatusBadRequest},
 		{"unsupported workloadRef", fmt.Errorf("wrapped: %w", rollouts.ErrWorkloadRefUnsupported), http.StatusBadRequest},
 		{"deadline exceeded", fmt.Errorf("wrapped: %w", context.DeadlineExceeded), http.StatusGatewayTimeout},
+		{"controller not caught up", fmt.Errorf("wrapped: %w", rollouts.ErrControllerNotCaughtUp), http.StatusServiceUnavailable},
 		{"unknown", errors.New("boom"), http.StatusInternalServerError},
 	}
 
@@ -144,9 +146,13 @@ func TestRestartTerminatingRolloutReturns409(t *testing.T) {
 // write the referenced workload, and hides it from those who can.
 func TestRollbackAuthTargetFollowsTheObjectUndoPatches(t *testing.T) {
 	ref := func(kind string) *unstructured.Unstructured {
+		apiVersion := "apps/v1"
+		if kind == "PodTemplate" {
+			apiVersion = "v1"
+		}
 		return &unstructured.Unstructured{Object: map[string]any{
 			"spec": map[string]any{
-				"workloadRef": map[string]any{"kind": kind, "name": "target"},
+				"workloadRef": map[string]any{"apiVersion": apiVersion, "kind": kind, "name": "target"},
 			},
 		}}
 	}
@@ -173,6 +179,84 @@ func TestRollbackAuthTargetFollowsTheObjectUndoPatches(t *testing.T) {
 			if group != tc.wantGroup || resource != tc.wantResource || ok != tc.wantOK {
 				t.Errorf("rollbackAuthTarget() = (%q, %q, %v), want (%q, %q, %v)",
 					group, resource, ok, tc.wantGroup, tc.wantResource, tc.wantOK)
+			}
+		})
+	}
+}
+
+// Promoting a workloadRef Rollout reads the referenced workload, so the capability has
+// to depend on that read — otherwise the button is offered and then denied.
+func TestCanReadWorkloadRefSourceCoversTheTemplateSource(t *testing.T) {
+	ref := func(kind string) *unstructured.Unstructured {
+		apiVersion := "apps/v1"
+		if kind == "PodTemplate" {
+			apiVersion = "v1"
+		}
+		return &unstructured.Unstructured{Object: map[string]any{
+			"spec": map[string]any{
+				"workloadRef": map[string]any{"apiVersion": apiVersion, "kind": kind, "name": "target"},
+			},
+		}}
+	}
+	inline := &unstructured.Unstructured{Object: map[string]any{
+		"spec": map[string]any{"template": map[string]any{}},
+	}}
+	// A ref that cannot be resolved has no readable template source to gate on, so the
+	// capability is left alone and the operation reports the problem itself.
+	unresolvable := &unstructured.Unstructured{Object: map[string]any{
+		"spec": map[string]any{
+			"workloadRef": map[string]any{"kind": "Deployment", "name": "target"},
+		},
+	}}
+
+	tests := []struct {
+		name string
+		ro   *unstructured.Unstructured
+		want bool
+	}{
+		{"inline template needs no extra read", inline, true},
+		{"Deployment ref is readable without a permission cache", ref("Deployment"), true},
+		{"unsupported ref is not gated on a read it never makes", ref("StatefulSet"), true},
+		{"unresolvable ref is not gated on a read it never makes", unresolvable, true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			if got := (&Server{}).canReadWorkloadRefSource(req, tc.ro, "prod"); got != tc.want {
+				t.Errorf("canReadWorkloadRefSource() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// The whole point of the helper is the denied case: without it the UI offers Promote
+// full and the operation then fails on a read the caller was never allowed to make.
+func TestCanReadWorkloadRefSourceFollowsTheDeniedRead(t *testing.T) {
+	workloadRef := &unstructured.Unstructured{Object: map[string]any{
+		"spec": map[string]any{
+			"workloadRef": map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "name": "target"},
+		},
+	}}
+
+	for _, tc := range []struct {
+		name    string
+		allowed bool
+	}{
+		{"denied read hides the action", false},
+		{"allowed read keeps it", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := &Server{permCache: auth.NewPermissionCache()}
+			perms := &auth.UserPermissions{AllowedNamespaces: []string{"prod"}}
+			perms.SetCanI("get", "apps", "deployments", "prod", tc.allowed)
+			srv.permCache.Set("alice", perms)
+
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req = req.WithContext(auth.ContextWithUser(req.Context(), &auth.User{Username: "alice"}))
+
+			if got := srv.canReadWorkloadRefSource(req, workloadRef, "prod"); got != tc.allowed {
+				t.Errorf("canReadWorkloadRefSource() = %v, want %v", got, tc.allowed)
 			}
 		})
 	}

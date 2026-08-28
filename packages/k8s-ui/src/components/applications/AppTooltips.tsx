@@ -1,4 +1,4 @@
-import { provenanceSource, HEALTH_META, appSourceLabel, isDeclaredAppSource, APP_IDENTITY_ANNOTATION, type AppWorkload } from '../../utils/applications'
+import { provenanceSource, HEALTH_META, appSourceLabel, isDeclaredAppSource, APP_IDENTITY_ANNOTATION, type AppRolloutSummary, type AppWorkload } from '../../utils/applications'
 import { midTruncate } from '../../utils/format'
 
 // Structured tooltip content for the application chips. Both render a short
@@ -55,6 +55,18 @@ export function VersionTooltip({ workloads }: { workloads: Pick<AppWorkload, 'na
           </li>
         ))}
       </ul>
+    </div>
+  )
+}
+
+export function RolloutSummaryTooltip({ summary }: { summary: AppRolloutSummary }) {
+  const details = summary.details.slice(0, 8)
+  return (
+    <div className="max-w-xs space-y-1">
+      {details.map((detail, index) => <div key={index}>{detail}</div>)}
+      {summary.details.length > details.length && (
+        <div className="text-theme-text-tertiary">+{summary.details.length - details.length} more</div>
+      )}
     </div>
   )
 }

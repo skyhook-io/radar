@@ -17,12 +17,11 @@ import (
 
 // setupIsolatedLoad populates contextRegistry, perFileConfigs, and contextName
 // from the given kubeconfig files, then returns LoadingRules + Overrides that
-// load *only* the initial file via ExplicitPath. Only called from doInit,
-// inside initOnce, so no concurrent readers exist yet — writes to the globals
-// are safe without clientMu.
+// load *only* the initial file via ExplicitPath. Only called from doInit while
+// clientMu is held.
 //
-// This is how Radar avoids client-go's Precedence merge when there's more
-// than one kubeconfig file: each file stays an island. A SwitchContext later
+// This is how Radar avoids client-go's Precedence merge for registry-backed
+// loading: each file stays an island. A SwitchContext later
 // looks up the target entry in the registry and loads that one file, so
 // shared user/cluster names across files never collide — see issue #519.
 func setupIsolatedLoad(paths []string) (
@@ -47,6 +46,10 @@ func setupIsolatedLoad(paths []string) (
 		}
 	}
 	contextName = qName
+	contextBinding = sourceContextBinding(entry.SourceFile, entry.InFileName)
+	activeSourceFile = entry.SourceFile
+	activeSourceName = entry.InFileName
+	activeSourceConfig = fileConfigs[entry.SourceFile].DeepCopy()
 	return &clientcmd.ClientConfigLoadingRules{ExplicitPath: entry.SourceFile},
 		&clientcmd.ConfigOverrides{CurrentContext: entry.InFileName},
 		nil
@@ -79,7 +82,15 @@ type contextEntry struct {
 func buildContextRegistry(paths []string) (map[string]contextEntry, map[string]*clientcmdapi.Config) {
 	registry := make(map[string]contextEntry)
 	fileConfigs := make(map[string]*clientcmdapi.Config)
+	var qualifications []string
 	for _, path := range paths {
+		if err := validateKubeconfigFileType(path); err != nil {
+			log.Printf("[k8s-init] skipping kubeconfig %q during registry build: %v", filepath.Base(path), err)
+			errorlog.Record("k8s-init", "warning",
+				"kubeconfig %q failed to load during registry build: %s",
+				filepath.Base(path), scrubPathError(err))
+			continue
+		}
 		cfg, err := clientcmd.LoadFromFile(path)
 		if err != nil {
 			// Non-fatal: skip and continue. discoverKubeconfigs has
@@ -93,14 +104,18 @@ func buildContextRegistry(paths []string) (map[string]contextEntry, map[string]*
 			continue
 		}
 		fileConfigs[path] = cfg
-		for name := range cfg.Contexts {
+		for _, name := range sortedContextNames(cfg) {
 			qName := qualifyContextName(registry, name, path)
+			if qualification := logContextQualification(name, qName, path); qualification != "" {
+				qualifications = append(qualifications, qualification)
+			}
 			registry[qName] = contextEntry{
 				SourceFile: path,
 				InFileName: name,
 			}
 		}
 	}
+	recordContextQualifications(qualifications)
 	return registry, fileConfigs
 }
 
@@ -150,6 +165,54 @@ func qualifyContextName(registry map[string]contextEntry, name, path string) str
 	}
 }
 
+func logContextQualification(name, qualifiedName, path string) string {
+	if qualifiedName == name {
+		return ""
+	}
+	log.Printf("[k8s-init] context %q from %q renamed to %q after a name collision; saved namespace and integration preferences for %q will not apply",
+		name, filepath.Base(path), qualifiedName, name)
+	return filepath.Base(path)
+}
+
+func recordContextQualifications(renamedContextFiles []string) {
+	if len(renamedContextFiles) == 0 {
+		return
+	}
+	fileSet := make(map[string]struct{}, len(renamedContextFiles))
+	for _, file := range renamedContextFiles {
+		fileSet[file] = struct{}{}
+	}
+	files := make([]string, 0, len(fileSet))
+	for file := range fileSet {
+		files = append(files, file)
+	}
+	sort.Strings(files)
+	const maxListed = 10
+	listed := files
+	if len(listed) > maxListed {
+		listed = listed[:maxListed]
+	}
+	suffix := ""
+	if len(files) > maxListed {
+		suffix = fmt.Sprintf(" (+%d more)", len(files)-maxListed)
+	}
+	errorlog.Record("k8s-init", "warning",
+		"%d context(s) renamed after name collisions in kubeconfig files %v%s; saved namespace and integration preferences will not apply to the renamed contexts",
+		len(renamedContextFiles), listed, suffix)
+}
+
+func sortedContextNames(cfg *clientcmdapi.Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	names := make([]string, 0, len(cfg.Contexts))
+	for name := range cfg.Contexts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 // pickInitialContext chooses which context Radar should start in when
 // using per-file isolated loading. It walks `paths` in order and returns
 // the first non-empty CurrentContext from any file — matching client-go's
@@ -184,9 +247,10 @@ func pickInitialContext(
 		if !ok {
 			continue
 		}
-		for name := range cfg.Contexts {
+		for _, name := range sortedContextNames(cfg) {
 			for qName, entry := range registry {
 				if entry.SourceFile == path && entry.InFileName == name {
+					log.Printf("[k8s-init] no kubeconfig declares a current context; selected %q from %q", qName, filepath.Base(path))
 					return qName, entry, true
 				}
 			}
@@ -226,6 +290,7 @@ func refreshContextRegistry(
 	registry map[string]contextEntry,
 	fileConfigs map[string]*clientcmdapi.Config,
 	fileMtimes map[string]time.Time,
+	sourceOrder []string,
 ) (
 	map[string]contextEntry,
 	map[string]*clientcmdapi.Config,
@@ -244,18 +309,25 @@ func refreshContextRegistry(
 	}
 	// Group registry entries by source file so we can decide
 	// per-file: keep, re-parse, or drop everything pointing at it.
-	// Seed byFile from BOTH the registry AND fileMtimes — if a
+	// Seed byFile from the registry, fileMtimes, AND sourceOrder — if a
 	// previous refresh dropped every context for a file (e.g. user
 	// removed all kubectl-config-delete-context'd from a single
 	// file), the file's path stays in fileMtimes but no longer
 	// appears in registry. Without seeding from fileMtimes, that
 	// file would never be re-stat'd and any newly-added contexts
 	// to it would be invisible until the user restarted Radar.
+	// sourceOrder additionally retains deleted paths so restoring a
+	// watched file brings it back without a restart.
 	byFile := make(map[string][]string)
 	for qName, entry := range registry {
 		byFile[entry.SourceFile] = append(byFile[entry.SourceFile], qName)
 	}
 	for path := range fileMtimes {
+		if _, ok := byFile[path]; !ok {
+			byFile[path] = nil
+		}
+	}
+	for _, path := range sourceOrder {
 		if _, ok := byFile[path]; !ok {
 			byFile[path] = nil
 		}
@@ -268,6 +340,7 @@ func refreshContextRegistry(
 	newFileConfigs := fileConfigs
 	newFileMtimes := fileMtimes
 	changed := false
+	var qualifications []string
 	cloneOnce := func() {
 		if changed {
 			return
@@ -289,13 +362,47 @@ func refreshContextRegistry(
 		newFileConfigs = nfc
 		newFileMtimes = nm
 	}
-	for path, qNames := range byFile {
+	paths := make([]string, 0, len(byFile))
+	seenPaths := make(map[string]struct{}, len(byFile))
+	for _, path := range sourceOrder {
+		if _, ok := byFile[path]; !ok {
+			continue
+		}
+		paths = append(paths, path)
+		seenPaths[path] = struct{}{}
+	}
+	var remaining []string
+	for path := range byFile {
+		if _, seen := seenPaths[path]; !seen {
+			remaining = append(remaining, path)
+		}
+	}
+	sort.Strings(remaining)
+	paths = append(paths, remaining...)
+	for _, path := range paths {
+		qNames := byFile[path]
+		sort.Strings(qNames)
 		info, statErr := os.Stat(path)
-		if statErr != nil {
+		if statErr != nil || !info.Mode().IsRegular() {
 			// File is gone (or unreadable). Drop every registry
 			// entry pointing at it AND its cached config. This
 			// is the CAPI-cluster-destroyed and
 			// "user removed file from kubeconfig dir" cases.
+			// A non-regular replacement is equally unusable and must not
+			// remain selectable: client-go would otherwise block while
+			// opening a FIFO after context-switch teardown has begun.
+			_, hadConfig := fileConfigs[path]
+			_, hadMtime := fileMtimes[path]
+			if len(qNames) == 0 && !hadConfig && !hadMtime {
+				continue
+			}
+			if statErr == nil {
+				log.Printf("[k8s-init] refresh: dropping kubeconfig %q: %v",
+					filepath.Base(path), errKubeconfigNotRegular)
+				errorlog.Record("k8s-init", "warning",
+					"refresh: kubeconfig %q failed to load: %s",
+					filepath.Base(path), errKubeconfigNotRegular)
+			}
 			cloneOnce()
 			for _, qName := range qNames {
 				delete(newRegistry, qName)
@@ -322,6 +429,8 @@ func refreshContextRegistry(
 			errorlog.Record("k8s-init", "warning",
 				"refresh: kubeconfig %q failed to load: %s",
 				filepath.Base(path), scrubPathError(err))
+			cloneOnce()
+			newFileMtimes[path] = mtime
 			continue
 		}
 		cloneOnce()
@@ -341,7 +450,7 @@ func refreshContextRegistry(
 		// Add any contexts that are new in this file. We deliberately
 		// re-use qualifyContextName to keep the cross-file collision
 		// behaviour consistent with the initial build.
-		for name := range cfg.Contexts {
+		for _, name := range sortedContextNames(cfg) {
 			already := false
 			for _, qName := range qNames {
 				if e, ok := newRegistry[qName]; ok && e.SourceFile == path && e.InFileName == name {
@@ -353,13 +462,30 @@ func refreshContextRegistry(
 				continue
 			}
 			qName := qualifyContextName(newRegistry, name, path)
+			if qualification := logContextQualification(name, qName, path); qualification != "" {
+				qualifications = append(qualifications, qualification)
+			}
 			newRegistry[qName] = contextEntry{
 				SourceFile: path,
 				InFileName: name,
 			}
 		}
 	}
+	recordContextQualifications(qualifications)
 	return newRegistry, newFileConfigs, newFileMtimes, changed
+}
+
+func loadedDirectoryKubeconfigCount(
+	fileConfigs map[string]*clientcmdapi.Config,
+	directoryPaths map[string]struct{},
+) int {
+	count := 0
+	for path := range fileConfigs {
+		if _, fromDirectory := directoryPaths[path]; fromDirectory {
+			count++
+		}
+	}
+	return count
 }
 
 // aggregateExecPluginCommands walks every context across every per-file

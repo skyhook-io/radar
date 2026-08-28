@@ -1,0 +1,129 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: native-paused
+  namespace: demo-rollouts
+  labels:
+    app.kubernetes.io/name: rollout-visibility
+    app.kubernetes.io/part-of: rollout-visibility
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: native-paused
+  template:
+    metadata:
+      labels:
+        app: native-paused
+        app.kubernetes.io/name: rollout-visibility
+        app.kubernetes.io/part-of: rollout-visibility
+    spec:
+      containers:
+        - name: demo
+          image: argoproj/rollouts-demo:blue
+          resources:
+            requests: { cpu: 5m, memory: 16Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: image-failure
+  namespace: demo-rollouts
+  labels:
+    app.kubernetes.io/name: rollout-visibility
+    app.kubernetes.io/part-of: rollout-visibility
+spec:
+  replicas: 2
+  progressDeadlineSeconds: 600
+  selector:
+    matchLabels:
+      app: image-failure
+  template:
+    metadata:
+      labels:
+        app: image-failure
+        app.kubernetes.io/name: rollout-visibility
+        app.kubernetes.io/part-of: rollout-visibility
+    spec:
+      containers:
+        - name: demo
+          image: argoproj/rollouts-demo:blue
+          resources:
+            requests: { cpu: 5m, memory: 16Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ondelete-stateful
+  namespace: demo-rollouts
+  labels:
+    app.kubernetes.io/name: rollout-visibility
+    app.kubernetes.io/part-of: rollout-visibility
+spec:
+  serviceName: ondelete-stateful
+  replicas: 2
+  updateStrategy:
+    type: OnDelete
+  selector:
+    matchLabels:
+      app: ondelete-stateful
+  template:
+    metadata:
+      labels:
+        app: ondelete-stateful
+        app.kubernetes.io/name: rollout-visibility
+        app.kubernetes.io/part-of: rollout-visibility
+    spec:
+      containers:
+        - name: demo
+          image: argoproj/rollouts-demo:blue
+          resources:
+            requests: { cpu: 5m, memory: 16Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ondelete-stateful
+  namespace: demo-rollouts
+  labels:
+    app.kubernetes.io/name: rollout-visibility
+    app.kubernetes.io/part-of: rollout-visibility
+spec:
+  clusterIP: None
+  selector:
+    app: ondelete-stateful
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: ondelete-daemon
+  namespace: demo-rollouts
+  labels:
+    app.kubernetes.io/name: rollout-visibility
+    app.kubernetes.io/part-of: rollout-visibility
+spec:
+  updateStrategy:
+    type: OnDelete
+  selector:
+    matchLabels:
+      app: ondelete-daemon
+  template:
+    metadata:
+      labels:
+        app: ondelete-daemon
+        app.kubernetes.io/name: rollout-visibility
+        app.kubernetes.io/part-of: rollout-visibility
+    spec:
+      containers:
+        - name: demo
+          image: argoproj/rollouts-demo:blue
+          resources:
+            requests: { cpu: 5m, memory: 16Mi }
+            limits: { cpu: 100m, memory: 64Mi }

@@ -10,7 +10,7 @@ import {
   GitBranch,
   Boxes,
   Activity,
-  DollarSign,
+  Coins,
   Gauge,
   ShieldCheck,
   Settings,
@@ -80,7 +80,7 @@ const NAV_ITEMS: NavItemDef[] = [
   { view: "gitops", icon: GitBranch, label: "GitOps" },
   { view: "checks", icon: ShieldCheck, label: "Checks" },
   { view: "capacity", icon: Gauge, label: "Capacity" },
-  { view: "cost", icon: DollarSign, label: "Cost" },
+  { view: "cost", icon: Coins, label: "Cost" },
 ];
 
 interface PrimaryNavRailProps {

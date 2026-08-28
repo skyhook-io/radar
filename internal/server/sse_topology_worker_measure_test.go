@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/loadtest"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -52,19 +51,7 @@ func TestMeasureConsumerStallPerDebounceFire(t *testing.T) {
 
 	census := loadtest.LargeMultiTenantEKS.Scale(scale)
 	client := fake.NewClientset(loadtest.CensusObjects(census, "registry.example/app:v1")...)
-	// Init swaps the global without stopping what was there, so the caches are
-	// stopped explicitly on the way in and out. Otherwise the census informers
-	// and their objects stay resident for the rest of the package's run.
-	k8s.ResetResourceCache()
-	if err := k8s.InitTestResourceCache(client); err != nil {
-		t.Fatalf("init census-shaped resource cache: %v", err)
-	}
-	t.Cleanup(func() {
-		k8s.ResetResourceCache()
-		if err := k8s.InitTestResourceCache(testFakeClient); err != nil {
-			t.Fatalf("restore package fixture cache: %v", err)
-		}
-	})
+	useTestResourceCache(t, client)
 
 	// What the consumer used to pay per debounce fire: a full build, inline.
 	start := time.Now()

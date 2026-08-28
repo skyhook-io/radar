@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -53,6 +54,10 @@ var (
 	ErrNoSteps                = errors.New("rollout has no canary steps")
 	ErrAlreadyAtLastStep      = errors.New("rollout is already at its last step")
 	ErrResourceTerminating    = errors.New("rollout is pending deletion")
+
+	// ErrControllerNotCaughtUp means the Argo Rollouts controller has not reconciled the
+	// change yet: a lagging dependency, not a bad request.
+	ErrControllerNotCaughtUp = errors.New("Argo Rollouts controller has not reconciled the latest change")
 )
 
 type OperationResult struct {
@@ -62,6 +67,10 @@ type OperationResult struct {
 	Name      string `json:"name"`
 	Revision  int64  `json:"revision,omitempty"`
 	StepIndex *int64 `json:"stepIndex,omitempty"`
+	// NoChange marks a promotion that found nothing to promote, so callers can report
+	// what happened rather than what was asked for. Set by Promote and PromoteFull,
+	// which are the verbs that can legitimately be a no-op.
+	NoChange bool `json:"noChange,omitempty"`
 }
 
 type Strategy string
@@ -132,6 +141,60 @@ func currentIsStable(ro *unstructured.Unstructured) bool {
 	current, _, _ := unstructured.NestedString(ro.Object, "status", "currentPodHash")
 	stable, _, _ := unstructured.NestedString(ro.Object, "status", "stableRS")
 	return current == stable
+}
+
+// controllerObservedSpec reports that the controller has reconciled the pod template as
+// it stands now. Until it has, status still describes the PREVIOUS revision, so
+// currentIsStable is not evidence that there is nothing left to promote.
+//
+// A workloadRef Rollout keeps its template on another object, and an undo patches THAT
+// object — the Rollout's own generation never moves, so it cannot answer the question.
+// Argo publishes workloadObservedGeneration for that case.
+func controllerObservedSpec(ctx context.Context, client dynamic.Interface, ro *unstructured.Unstructured) (bool, error) {
+	refKind, _, ok := WorkloadRef(ro)
+	if !ok {
+		return observedAtLeast(ro, "observedGeneration", ro.GetGeneration()), nil
+	}
+	target, err := ResolveTemplateTarget(ro)
+	if err != nil {
+		// No known template source to read a generation from, so there is nothing to wait on.
+		return true, nil
+	}
+	ref, err := client.Resource(target.GVR).Namespace(ro.GetNamespace()).Get(ctx, target.Name, metav1.GetOptions{})
+	if err != nil {
+		// Treating an unreadable template source as "observed" would silently skip the
+		// wait, which is the failure this check exists to prevent.
+		return false, fmt.Errorf("cannot tell whether the controller has reconciled %s %s/%s, the template source for Rollout %s: %w",
+			refKind, ro.GetNamespace(), target.Name, ro.GetName(), err)
+	}
+	return observedAtLeast(ro, "workloadObservedGeneration", ref.GetGeneration()), nil
+}
+
+// Argo writes these counters as strings, but the field is typed loosely enough that a
+// numeric value has to be handled too — reading only strings would silently skip the wait.
+//
+// An absent counter, or one that is not a number at all, falls back to trusting status:
+// older Argo wrote a spec hash here, and refusing to promote on those would break the
+// operation outright.
+func observedAtLeast(ro *unstructured.Unstructured, field string, generation int64) bool {
+	value, found, err := unstructured.NestedFieldNoCopy(ro.Object, "status", field)
+	if err != nil || !found {
+		return true
+	}
+	switch observed := value.(type) {
+	case string:
+		parsed, err := strconv.ParseInt(observed, 10, 64)
+		if err != nil {
+			return true
+		}
+		return parsed >= generation
+	case int64:
+		return observed >= generation
+	case float64:
+		return int64(observed) >= generation
+	default:
+		return true
+	}
 }
 
 func pauseConditionCount(ro *unstructured.Unstructured) int {

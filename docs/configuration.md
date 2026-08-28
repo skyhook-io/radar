@@ -1,6 +1,6 @@
 # Configuration
 
-This document covers Radar's cluster connection behavior. For CLI flags and basic usage, see the [README](../README.md#usage).
+This document covers Radar's cluster connection behavior. For commands and flags, see the [CLI reference](https://radarhq.io/docs/configuration/cli).
 
 ## HTTP Listener
 
@@ -46,6 +46,7 @@ Persistent defaults for CLI flags. CLI flags always override these values. Manag
   "timelineMaxSize": "0",
   "historyLimit": 10000,
   "prometheusUrl": "",
+  "opencostCurrency": "",
   "prometheusHeaders": {},
   "mcp": true,
   "debugImage": ""
@@ -56,8 +57,8 @@ All fields are optional — omitted fields use built-in defaults.
 
 | Field | Description |
 |-------|-------------|
-| `kubeconfig` | Path to kubeconfig file (same as `--kubeconfig`) |
-| `kubeconfigDirs` | Directories containing kubeconfig files (same as `--kubeconfig-dir`) |
+| `kubeconfig` | Primary kubeconfig file (same as `--kubeconfig`) |
+| `kubeconfigDirs` | Directories containing additional kubeconfig files (same as `--kubeconfig-dir`) |
 | `namespace` | Initial namespace filter |
 | `namespaces` | Initial namespace filters as a list (same as `--namespaces ns1,ns2,ns3`) |
 | `port` | Server port (default 9280) |
@@ -68,6 +69,7 @@ All fields are optional — omitted fields use built-in defaults.
 | `timelineMaxSize` | Max SQLite DB + WAL size before pruning oldest events (`0` disables) |
 | `historyLimit` | Max timeline events to retain |
 | `prometheusUrl` | Manual Prometheus/VictoriaMetrics URL — skips auto-discovery. Useful when Prometheus is not in the same cluster or uses a non-standard service name. |
+| `opencostCurrency` | Optional ISO 4217 override for values produced by OpenCost or Kubecost. Empty reads `currencyCode` from the pricing ConfigMap referenced by an active OpenCost/Kubecost workload, or literal `DISPLAY_CURRENCY` from an active Kubecost Deployment or StatefulSet, when Radar auto-discovers cluster Prometheus; otherwise it falls back to `USD`. Radar labels values but does not convert them. Equivalent CLI: `--opencost-currency`; an explicit CLI value remains authoritative while Radar runs and after restart. |
 | `prometheusHeaders` | HTTP headers sent with every Prometheus request. Required for auth-protected backends — e.g. `{"X-Scope-OrgID": "my-org"}`. Equivalent CLI: `--prometheus-header Key=Value` (repeatable). Stored in plain text in `config.json` — protect the file accordingly. |
 | `argoCdUrl` | Manual argocd-server URL for the Argo CD API integration — skips auto-discovery. |
 | `argoCdToken` | Argo CD API token (get-only account recommended). Stored in plain text — the file is written `0600`; the token is redacted from `GET /api/config`. |
@@ -96,20 +98,30 @@ User preferences for the UI. Managed via the Settings dialog or `PUT /api/settin
 
 ## Cluster Connection Precedence
 
-Radar connects to Kubernetes clusters using the same configuration sources as `kubectl`:
+Radar resolves configured sources first, then falls back to the same environment,
+in-cluster, and default-file sources as `kubectl`:
 
 | Priority | Source | Description |
 |----------|--------|-------------|
-| 1 | `--kubeconfig` flag | Explicit path to kubeconfig file |
-| 2 | `KUBECONFIG` env var / `--kubeconfig-dir` flag | Either can provide kubeconfig(s); mutually exclusive alternatives |
-| 3 | In-cluster config | Automatic when running inside a Kubernetes pod (`KUBERNETES_SERVICE_HOST` is set) |
-| 4 | `~/.kube/config` | Default kubeconfig location |
+| 1 | Configured kubeconfig file and directories | The primary file loads first, followed by valid files found in configured directories |
+| 2 | `KUBECONFIG` env var | Used only when neither a configured primary file nor directories are present |
+| 3 | In-cluster config | Tried when no configured source or `KUBECONFIG` exists |
+| 4 | `~/.kube/config` | Used when the in-cluster attempt is unavailable |
+
+The Settings values and their matching flags form one source pair. With no
+explicit flags, Radar uses both saved values. Passing only `--kubeconfig`
+replaces saved directories; passing only `--kubeconfig-dir` replaces the saved
+primary file. Passing both flags explicitly combines both sources.
+
+For compatibility with existing directory-mode installations, directories
+configured without a primary file suppress ambient `KUBECONFIG`. Radar reports
+that suppression in startup logs and diagnostics.
 
 ## KUBECONFIG vs In-Cluster Detection
 
 When Radar runs inside a Kubernetes pod, Kubernetes automatically sets the `KUBERNETES_SERVICE_HOST` environment variable. This normally triggers in-cluster configuration using the pod's service account credentials.
 
-However, **explicit kubeconfig takes precedence**. If you set `KUBECONFIG` or pass `--kubeconfig`, Radar uses that instead of in-cluster config. This allows you to:
+However, **explicit kubeconfig takes precedence**. If you set `KUBECONFIG` or pass `--kubeconfig`, Radar uses that instead of in-cluster config. Configured directories also prevent in-cluster detection. This allows you to:
 
 - Run Radar inside a pod but connect to a different cluster
 - Use specific credentials instead of the pod's service account
@@ -126,24 +138,62 @@ This behavior matches `kubectl` and follows the [Kubernetes client-go precedence
 
 ## Multiple Kubeconfig Files
 
-`KUBECONFIG` can contain multiple file paths (colon-separated on Linux/macOS, semicolon-separated on Windows). Radar merges these files following Kubernetes conventions:
+`KUBECONFIG` can contain multiple file paths (colon-separated on Linux/macOS,
+semicolon-separated on Windows):
 
 ```bash
 export KUBECONFIG=~/.kube/config:~/.kube/staging-config:~/.kube/prod-config
 kubectl radar
 ```
 
-Alternatively, use `--kubeconfig-dir` to load all kubeconfig files from a directory:
+Alternatively, use `--kubeconfig-dir` to load valid kubeconfig files from one or
+more directories. Discovery is non-recursive:
 
 ```bash
 kubectl radar --kubeconfig-dir ~/.kube/configs/
 ```
+
+The primary file and directories can be combined:
+
+```bash
+kubectl radar --kubeconfig ~/.kube/config --kubeconfig-dir ~/.kube/configs/
+```
+
+Radar keeps every file isolated rather than merging their cluster and user maps.
+This prevents identical user or cluster names in different files from selecting
+the wrong credentials. Context names remain unchanged unless two files use the
+same name; later collisions receive a source suffix in the context switcher.
+Saved namespace selections and integration credentials are keyed by that visible
+context name. If adding an earlier source causes a collision suffix to appear,
+the renamed context does not inherit preferences stored under its former name;
+Radar reports the rename in startup logs and diagnostics so it can be reconfigured.
+
+Files are ordered with primary paths first, followed by directory order and then
+filename order. A primary file's `current-context` wins when it declares one;
+otherwise Radar uses the first source in order that declares a current context.
+Leading `~/` paths are expanded, and references to the same underlying file are
+loaded once even when they use different absolute, relative, or symlink paths.
+Directory membership is scanned at startup. Changes inside a file that was
+already discovered, including added or removed contexts, are reflected while
+Radar is running; deleting that file also removes its contexts. A brand-new file
+added to a configured directory is discovered after Radar restarts. Directory
+entries must resolve to regular files: symlinks to regular kubeconfigs are
+accepted, while directories, sockets, pipes, and device files are ignored.
+
+An unusable additional directory does not prevent a valid primary file from
+loading. A configured primary source group that contains no usable contexts fails
+initialization rather than silently connecting to a directory cluster. Desktop
+Radar keeps its window open so the source can be repaired in Settings.
 
 ## Context Switching
 
 Radar supports switching between Kubernetes contexts at runtime through the UI. Click the context selector in the header to switch between available contexts.
 
 When running in-cluster (using the pod's service account), context switching is disabled.
+
+### Expired credentials
+
+If an active context's credentials expire or are rejected, Radar disconnects cluster-backed work and retries automatically. After you re-authenticate, exec-based credentials are re-probed and static credentials are reloaded from kubeconfig on disk, so Radar can reconnect without a restart. Retries start after 30 seconds and back off to 5 minutes; a credential plugin that stops responding is retried less frequently.
 
 ## Namespace Picker
 
@@ -181,6 +231,11 @@ optional, and nothing else depends on it.
 
 To connect a cluster from the command line, use `radar cloud install`
 (`--hub-url` for a self-hosted Hub).
+`radar cloud install` and `radar cloud status` target one cluster, so they use
+the configured primary kubeconfig and report configured directories they
+ignore. With no configured source, they use the normal `KUBECONFIG` / default
+kubeconfig loading rules. Directory-only configuration must add a primary
+kubeconfig before these commands can run.
 
 ### What Radar sends
 
@@ -205,6 +260,6 @@ above, which happen either way.
 
 ## Related Documentation
 
-- [README](../README.md#usage) — CLI flags and basic usage
+- [CLI reference](https://radarhq.io/docs/configuration/cli) — Commands and operator-facing flags
 - [In-Cluster Deployment](in-cluster.md) — Deploy Radar inside your cluster with Helm
 - [Authentication & Authorization](authentication.md) — Proxy and OIDC auth for shared deployments

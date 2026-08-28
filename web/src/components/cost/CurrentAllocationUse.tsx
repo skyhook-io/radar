@@ -4,6 +4,7 @@ import { Tooltip } from '../ui/Tooltip'
 import { formatCostPerHour, formatProjectedMonthlyRate } from './format'
 
 interface CurrentAllocationUseProps {
+  currency: string
   dataAvailable: boolean
   cpuCost: number
   memoryCost: number
@@ -32,6 +33,7 @@ export function formatAllocatedUse(
 }
 
 export function CurrentAllocationUse({
+  currency,
   dataAvailable,
   cpuCost,
   memoryCost,
@@ -63,11 +65,11 @@ export function CurrentAllocationUse({
         </div>
         <div className="text-right">
           <div className="text-sm font-medium text-theme-text-primary tabular-nums">
-            {dataAvailable ? formatProjectedMonthlyRate(hourlyCost) : '—'}
+            {dataAvailable ? formatProjectedMonthlyRate(hourlyCost, currency) : '—'}
           </div>
           {dataAvailable && (
             <div className="text-[10px] text-theme-text-tertiary tabular-nums">
-              {formatCostPerHour(hourlyCost)} current rate
+              {formatCostPerHour(hourlyCost, currency)} current rate
             </div>
           )}
         </div>
@@ -86,13 +88,13 @@ export function CurrentAllocationUse({
         <AllocationUseItem
           colorClass="bg-accent"
           label="CPU"
-          allocation={dataAvailable ? formatProjectedMonthlyRate(cpuCost) : '—'}
+          allocation={dataAvailable ? formatProjectedMonthlyRate(cpuCost, currency) : '—'}
           use={formatAllocatedUse(cpuCost, cpuAllocationUse, cpuUsageAvailable, dataAvailable)}
         />
         <AllocationUseItem
           colorClass="bg-amber-500"
           label="Memory"
-          allocation={dataAvailable ? formatProjectedMonthlyRate(memoryCost) : '—'}
+          allocation={dataAvailable ? formatProjectedMonthlyRate(memoryCost, currency) : '—'}
           use={formatAllocatedUse(memoryCost, memoryAllocationUse, memoryUsageAvailable, dataAvailable)}
         />
       </div>

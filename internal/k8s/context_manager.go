@@ -363,6 +363,38 @@ func PerformContextSwitch(newContext string) error {
 	return performContextSwitch(newContext, 0, false)
 }
 
+// RetryCurrentConnection reconnects the active context. In-cluster mode has no
+// kubeconfig source to reload, so it verifies connectivity before rebuilding
+// caches around the existing client configuration.
+func RetryCurrentConnection() error {
+	contextName := GetContextName()
+	if contextName == "" {
+		return errors.New("no context configured")
+	}
+	if !IsInCluster() {
+		return PerformContextSwitch(contextName)
+	}
+
+	CancelOngoingOperations()
+	observedOperationGen := currentOperationGen()
+	probeCtx, probeCancel, ok := newOperationContextForGeneration(
+		observedOperationGen,
+		connectionTestOperationTimeout(),
+	)
+	if !ok {
+		return ErrReconnectSuperseded
+	}
+	probeErr := getRuntimeAuthProbe()(probeCtx)
+	probeCancel()
+	if currentOperationGen() != observedOperationGen {
+		return ErrReconnectSuperseded
+	}
+	if probeErr != nil {
+		return fmt.Errorf("cluster connection failed: %w", probeErr)
+	}
+	return getRuntimeAuthReconnect()(contextName, observedOperationGen)
+}
+
 // PerformContextSwitchIfOperationCurrent is the conditional variant used by
 // automatic recovery: it aborts with ErrReconnectSuperseded — before any
 // teardown — if any other operation (user switch, rescope, retry) started
@@ -371,6 +403,60 @@ func PerformContextSwitch(newContext string) error {
 // switch that started mid-probe bumps the generation before this can.
 func PerformContextSwitchIfOperationCurrent(newContext string, observedOperationGen uint64) error {
 	return performContextSwitch(newContext, observedOperationGen, true)
+}
+
+// reinitializeCurrentContextIfOperationCurrent restores subsystems after an
+// in-cluster auth failure. There is no kubeconfig source to reload or context
+// to switch; projected credentials are read by the existing rest.Config. The
+// generation check keeps a user operation that started during the recovery
+// probe authoritative.
+func reinitializeCurrentContextIfOperationCurrent(
+	contextName string,
+	observedOperationGen uint64,
+	initSubsystems func(context.Context, func(string)) error,
+) error {
+	reconnectStart := time.Now()
+	activeContextOperations.Add(1)
+	contextOpMu.Lock()
+	defer func() {
+		activeContextOperations.Add(-1)
+		contextOpMu.Unlock()
+	}()
+
+	if currentOperationGen() != observedOperationGen {
+		return ErrReconnectSuperseded
+	}
+	if !IsInCluster() || GetContextName() != contextName {
+		return ErrReconnectSuperseded
+	}
+
+	reportProgress("Restoring cluster caches...")
+	ResetAllSubsystems()
+	InvalidateCapabilitiesCache()
+	InvalidateResourcePermissionsCache()
+	InvalidateServerVersionCache()
+
+	initCtx, initCancel := NewOperationContext(ContextSwitchTimeout)
+	defer initCancel()
+	if err := initSubsystems(initCtx, reportProgress); err != nil {
+		if currentOperationGen() != observedOperationGen {
+			return ErrReconnectSuperseded
+		}
+		return fmt.Errorf("subsystem init failed: %w", err)
+	}
+	if currentOperationGen() != observedOperationGen {
+		return ErrReconnectSuperseded
+	}
+
+	reportProgress("Building topology...")
+	notifyContextSwitchCallbacks(contextName)
+	SetConnectionStatus(ConnectionStatus{
+		State:       StateConnected,
+		Context:     contextName,
+		ClusterName: GetClusterName(),
+	})
+	log.Printf("[ops] In-cluster reconnect to %q COMPLETE (%v total)", contextName, time.Since(reconnectStart))
+	return nil
 }
 
 func performContextSwitch(newContext string, observedOperationGen uint64, requireOperationCurrent bool) error {
@@ -388,6 +474,31 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 
 	if requireOperationCurrent && currentOperationGen() != observedOperationGen {
 		return ErrReconnectSuperseded
+	}
+	if IsInCluster() {
+		return fmt.Errorf("%w: context switching is unavailable in in-cluster mode", ErrContextSwitchPreflight)
+	}
+
+	contexts, err := GetAvailableContexts()
+	if err != nil {
+		return fmt.Errorf("%w: target context is unavailable", ErrContextSwitchPreflight)
+	}
+	targetAvailable := false
+	for _, context := range contexts {
+		if context.Name == newContext {
+			targetAvailable = true
+			break
+		}
+	}
+	if !targetAvailable {
+		return fmt.Errorf("%w: context %q is no longer available", ErrContextSwitchPreflight, newContext)
+	}
+	if err := validateContextSwitchTarget(newContext); err != nil {
+		reason := kubeconfigDiagnosticError(err)
+		log.Printf("[ops] Context switch preflight rejected target %q: %s (%v)", newContext, reason, err)
+		errorlog.Record("context-switch", "warning",
+			"preflight target=%q rejected before teardown: %s", newContext, reason)
+		return fmt.Errorf("%w: context %q cannot be loaded from its current source: %s", ErrContextSwitchPreflight, newContext, reason)
 	}
 
 	// Under --namespace-scope, validate the new context has a usable scope target
@@ -428,7 +539,7 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 		elapsed := time.Since(switchStart).Truncate(time.Millisecond)
 		log.Printf("[ops] Context switch FAILED at SwitchContext: %v (%v since switch start)", err, elapsed)
 		errorlog.Record("context-switch", "error",
-			"stage=SwitchContext target=%q elapsed=%v: %v", newContext, elapsed, err)
+			"stage=SwitchContext target=%q elapsed=%v: %s", newContext, elapsed, kubeconfigDiagnosticError(err))
 		return fmt.Errorf("failed to switch context: %w", err)
 	}
 	logTiming("   [ops] SwitchContext: %v", time.Since(t))
@@ -478,14 +589,7 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	// Step 5: Notify all registered callbacks
 	reportProgress("Building topology...")
 	log.Printf("[ops] Context switch to %q COMPLETE (%v total)", newContext, time.Since(switchStart))
-	contextSwitchMu.RLock()
-	callbacks := make([]ContextSwitchCallback, len(contextSwitchCallbacks))
-	copy(callbacks, contextSwitchCallbacks)
-	contextSwitchMu.RUnlock()
-
-	for _, callback := range callbacks {
-		callback(newContext)
-	}
+	notifyContextSwitchCallbacks(newContext)
 
 	// Publish success while still holding contextOpMu: a caller publishing
 	// after this returns races the next queued operation's teardown, and the
@@ -498,6 +602,17 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	})
 
 	return nil
+}
+
+func notifyContextSwitchCallbacks(contextName string) {
+	contextSwitchMu.RLock()
+	callbacks := make([]ContextSwitchCallback, len(contextSwitchCallbacks))
+	copy(callbacks, contextSwitchCallbacks)
+	contextSwitchMu.RUnlock()
+
+	for _, callback := range callbacks {
+		callback(contextName)
+	}
 }
 
 func requireNamespaceScopeTarget(contextName string) error {

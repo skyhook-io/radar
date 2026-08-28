@@ -31,6 +31,7 @@ import (
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/contextname"
 	"github.com/skyhook-io/radar/internal/helm"
+	radark8s "github.com/skyhook-io/radar/internal/k8s"
 	"golang.org/x/term"
 	"helm.sh/helm/v3/pkg/chartutil"
 	k8svalidation "k8s.io/apimachinery/pkg/api/validation"
@@ -219,12 +220,13 @@ func cloudInstall(args []string) {
 	if *browserPref == "" {
 		*browserPref = fileCfg.Browser
 	}
-	if len(fileCfg.KubeconfigDirs) > 0 {
-		fmt.Fprintln(os.Stderr, "`radar cloud install` cannot choose one cluster while config.json's `kubeconfigDirs` setting is enabled.")
-		fmt.Fprintln(os.Stderr, "Clear `kubeconfigDirs` in Radar Settings (or ~/.radar/config.json), then select one current context with KUBECONFIG or config.json's `kubeconfig`.")
+	kubeconfigSelection, err := selectCloudCommandKubeconfig(fileCfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cloud install: %v\n", err)
+		fmt.Fprintln(os.Stderr, "Set the Kubeconfig field in Radar Settings (or config.json's `kubeconfig`) to select the primary cluster.")
 		os.Exit(1)
 	}
-	kubeconfig := fileCfg.Kubeconfig
+	kubeconfig := kubeconfigSelection.path
 	requestedContext := strings.TrimSpace(*contextName)
 	ctxName, err := resolveCloudInstallContext(kubeconfig, requestedContext)
 	if err != nil {
@@ -232,7 +234,7 @@ func cloudInstall(args []string) {
 		os.Exit(1)
 	}
 	commandTarget := cloudCommandTarget{Context: ctxName, Kubeconfig: kubeconfig}
-	if !confirmCloudInstallContext(os.Stdin, os.Stderr, ctxName, requestedContext != "", yes, term.IsTerminal(int(os.Stdin.Fd()))) {
+	if !confirmCloudInstallContext(os.Stdin, os.Stderr, ctxName, requestedContext != "", yes, term.IsTerminal(int(os.Stdin.Fd())), kubeconfigSelection.ignoredSourcesLabel()) {
 		fmt.Fprintln(os.Stderr, "\nRadar installation canceled. Pass --context NAME or -y/--yes to run without this prompt.")
 		os.Exit(1)
 	}
@@ -649,6 +651,35 @@ func connectLoadingRules(kubeconfig string) *clientcmd.ClientConfigLoadingRules 
 	return rules
 }
 
+type cloudKubeconfigSelection struct {
+	path                  string
+	additionalDirsIgnored bool
+}
+
+func selectCloudCommandKubeconfig(cfg config.Config) (cloudKubeconfigSelection, error) {
+	if cfg.Kubeconfig != "" {
+		path, err := radark8s.NormalizeKubeconfigPath(cfg.Kubeconfig)
+		if err != nil {
+			return cloudKubeconfigSelection{}, fmt.Errorf("normalize configured kubeconfig: %w", err)
+		}
+		return cloudKubeconfigSelection{
+			path:                  path,
+			additionalDirsIgnored: len(cfg.KubeconfigDirs) > 0,
+		}, nil
+	}
+	if len(cfg.KubeconfigDirs) > 0 {
+		return cloudKubeconfigSelection{}, errors.New("kubeconfig directories are configured without a primary kubeconfig")
+	}
+	return cloudKubeconfigSelection{}, nil
+}
+
+func (s cloudKubeconfigSelection) ignoredSourcesLabel() string {
+	if s.additionalDirsIgnored {
+		return "additional kubeconfig directories"
+	}
+	return ""
+}
+
 func resolveCloudInstallContext(kubeconfig, requested string) (string, error) {
 	cfg, err := connectLoadingRules(kubeconfig).Load()
 	if err != nil {
@@ -670,8 +701,12 @@ func resolveCloudInstallContext(kubeconfig, requested string) (string, error) {
 	return contextName, nil
 }
 
-func confirmCloudInstallContext(in io.Reader, out io.Writer, contextName string, contextExplicit, yes, interactive bool) bool {
-	fmt.Fprintf(out, "Kubernetes context: %q\n", contextName)
+func confirmCloudInstallContext(in io.Reader, out io.Writer, contextName string, contextExplicit, yes, interactive bool, ignoredSources string) bool {
+	fmt.Fprintf(out, "Kubernetes context: %q", contextName)
+	if ignoredSources != "" {
+		fmt.Fprintf(out, " (%s ignored)", ignoredSources)
+	}
+	fmt.Fprintln(out)
 	if contextExplicit || yes {
 		return true
 	}

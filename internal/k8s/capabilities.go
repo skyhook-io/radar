@@ -122,8 +122,9 @@ type CloudConnectCapability struct {
 }
 
 type FeatureCapabilities struct {
-	YAMLReview  bool `json:"yamlReview"`
-	YAMLSchemas bool `json:"yamlSchemas"`
+	YAMLReview     bool `json:"yamlReview"`
+	YAMLSchemas    bool `json:"yamlSchemas"`
+	WorkloadImages bool `json:"workloadImages"`
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.

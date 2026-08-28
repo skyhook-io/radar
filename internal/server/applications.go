@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -24,7 +25,9 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
 	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/packages"
+	"github.com/skyhook-io/radar/pkg/rollouts"
 	"github.com/skyhook-io/radar/pkg/subject"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
@@ -78,19 +81,26 @@ type workloadRef struct {
 	Name      string `json:"name"`
 }
 
-const applicationsCacheTTL = 60 * time.Second
+const (
+	applicationsCacheTTL      = 10 * time.Second
+	applicationsGraphCacheTTL = 60 * time.Second
+)
 
 var applicationsCacheMaxEntries = 256
 
 var (
-	applicationsCacheMu sync.Mutex
-	applicationsCache   = map[string]applicationsCacheEntry{}
+	applicationsCacheMu         sync.Mutex
+	applicationsCache           = map[string]applicationsCacheEntry{}
+	applicationsBuildSF         singleflight.Group
+	applicationsCacheGeneration uint64
 )
 
 type applicationsCacheEntry struct {
-	at     time.Time
-	rows   []appRow
-	claims []argoClaim
+	at      time.Time
+	rows    []appRow
+	claims  []argoClaim
+	graph   *appGraph
+	graphAt time.Time
 }
 
 // appRow is one logical app in this cluster.
@@ -220,20 +230,21 @@ type appEvent struct {
 // appWorkload is one concrete workload belonging to an app, with its primary
 // container image as the version anchor when the workload has a pod template.
 type appWorkload struct {
-	Kind          string           `json:"kind"`
-	Group         string           `json:"group,omitempty"`
-	Namespace     string           `json:"namespace"`
-	Name          string           `json:"name"`
-	WorkloadClass string           `json:"workload_class,omitempty"` // service | worker | job | unknown
-	Image         string           `json:"image,omitempty"`          // full primary-container image ref
-	Version       string           `json:"version,omitempty"`        // image tag (digest-only → empty)
-	AppVersion    string           `json:"appVersion,omitempty"`     // app.kubernetes.io/version label (upstream release, e.g. v2.49.1)
-	Health        string           `json:"health"`
-	Ready         int              `json:"ready"`            // ready/available replicas
-	Desired       int              `json:"desired"`          // desired replicas
-	Restarts      int              `json:"restarts"`         // total container restarts across the workload's pods
-	Reason        string           `json:"reason,omitempty"` // last-terminated reason of the worst pod (CrashLoopBackOff/OOMKilled/…)
-	Batch         *appBatchSummary `json:"batch,omitempty"`
+	Kind          string                          `json:"kind"`
+	Group         string                          `json:"group,omitempty"`
+	Namespace     string                          `json:"namespace"`
+	Name          string                          `json:"name"`
+	WorkloadClass string                          `json:"workload_class,omitempty"` // service | worker | job | unknown
+	Image         string                          `json:"image,omitempty"`          // full primary-container image ref
+	Version       string                          `json:"version,omitempty"`        // image tag (digest-only → empty)
+	AppVersion    string                          `json:"appVersion,omitempty"`     // app.kubernetes.io/version label (upstream release, e.g. v2.49.1)
+	Health        string                          `json:"health"`
+	Ready         int                             `json:"ready"`            // ready/available replicas
+	Desired       int                             `json:"desired"`          // desired replicas
+	Restarts      int                             `json:"restarts"`         // total container restarts across the workload's pods
+	Reason        string                          `json:"reason,omitempty"` // last-terminated reason of the worst pod (CrashLoopBackOff/OOMKilled/…)
+	Rollout       *health.WorkloadRolloutActivity `json:"rollout,omitempty"`
+	Batch         *appBatchSummary                `json:"batch,omitempty"`
 
 	// envLabel is the explicit environment label, when the workload carries
 	// one (see envLabelOf) — app-identity resolver input, not on the wire.
@@ -560,30 +571,51 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 	if cache == nil {
 		return nil, errResourceCacheUnavailable
 	}
-	cacheKey := applicationsCacheKeyFor(namespaces, canListClusterWorkflowTemplates)
 	applicationsCacheMu.Lock()
+	cacheKey := fmt.Sprintf("%d|%s", applicationsCacheGeneration, applicationsCacheKeyFor(namespaces, canListClusterWorkflowTemplates))
 	entry, hit := applicationsCache[cacheKey]
 	applicationsCacheMu.Unlock()
 	if hit && time.Since(entry.at) < applicationsCacheTTL {
 		return &applicationsResponse{Applications: entry.rows, ArgoClaims: entry.claims}, nil
 	}
 
-	g := buildAppGraph(cache, namespaces)
-	wls := collectAppWorkloads(ctx, cache, namespaces, g, canListClusterWorkflowTemplates)
-	rows := groupApplications(wls)
-	sourcePaths, appSetChildren, argoItems := argoApplicationFacts(ctx, cache)
-	appSetByKey := appSetFanouts(appSetChildren)
-	enrichRowsWithManagedSourceRefs(ctx, cache, rows, argoItems)
-	enrichRowsWithArgoStatus(rows, argoItems)
-	resolveAppIdentities(rows, sourcePaths, appSetByKey, namespaceEnvLabels(cache), fluxKustomizationFacts(ctx, cache))
-	claims := collectArgoClaims(argoItems, sourcePaths, appSetByKey, namespaces)
-	applicationsCacheMu.Lock()
-	if len(applicationsCache) >= applicationsCacheMaxEntries {
-		evictOldestApplicationsCacheEntry()
+	value, err, _ := applicationsBuildSF.Do(cacheKey, func() (any, error) {
+		applicationsCacheMu.Lock()
+		entry, hit := applicationsCache[cacheKey]
+		applicationsCacheMu.Unlock()
+		if hit && time.Since(entry.at) < applicationsCacheTTL {
+			return &applicationsResponse{Applications: entry.rows, ArgoClaims: entry.claims}, nil
+		}
+
+		buildCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+
+		g := entry.graph
+		graphAt := entry.graphAt
+		if g == nil || time.Since(graphAt) >= applicationsGraphCacheTTL {
+			g = buildAppGraph(cache, namespaces)
+			graphAt = time.Now()
+		}
+		wls := collectAppWorkloads(buildCtx, cache, namespaces, g, canListClusterWorkflowTemplates)
+		rows := groupApplications(wls)
+		sourcePaths, appSetChildren, argoItems := argoApplicationFacts(buildCtx, cache)
+		appSetByKey := appSetFanouts(appSetChildren)
+		enrichRowsWithManagedSourceRefs(buildCtx, cache, rows, argoItems)
+		enrichRowsWithArgoStatus(rows, argoItems)
+		resolveAppIdentities(rows, sourcePaths, appSetByKey, namespaceEnvLabels(cache), fluxKustomizationFacts(buildCtx, cache))
+		claims := collectArgoClaims(argoItems, sourcePaths, appSetByKey, namespaces)
+		applicationsCacheMu.Lock()
+		if len(applicationsCache) >= applicationsCacheMaxEntries {
+			evictOldestApplicationsCacheEntry()
+		}
+		applicationsCache[cacheKey] = applicationsCacheEntry{at: time.Now(), rows: rows, claims: claims, graph: g, graphAt: graphAt}
+		applicationsCacheMu.Unlock()
+		return &applicationsResponse{Applications: rows, ArgoClaims: claims}, nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	applicationsCache[cacheKey] = applicationsCacheEntry{at: time.Now(), rows: rows, claims: claims}
-	applicationsCacheMu.Unlock()
-	return &applicationsResponse{Applications: rows, ArgoClaims: claims}, nil
+	return value.(*applicationsResponse), nil
 }
 
 func evictOldestApplicationsCacheEntry() {
@@ -605,6 +637,7 @@ func evictOldestApplicationsCacheEntry() {
 func clearApplicationsCache() {
 	applicationsCacheMu.Lock()
 	applicationsCache = map[string]applicationsCacheEntry{}
+	applicationsCacheGeneration++
 	applicationsCacheMu.Unlock()
 }
 
@@ -816,9 +849,24 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 	cronJobBatches := cronJobBatchSummaries(cache, namespaces)
 	scaledJobBatches := scaledJobBatchSummaries(cache, namespaces)
 	cronWorkflowBatches := cronWorkflowBatchSummaries(ctx, cache, namespaces)
+	argoRollouts := listDynamicByNamespacesGroup(ctx, cache, namespaces, "Rollout", "argoproj.io")
+	var updatedRevisionTargets map[string]workloadRevisionTarget
+	var updatedRevisionTargetsOnce sync.Once
+	rolloutReferencedDeployments := map[string]bool{}
+	for _, rollout := range argoRollouts {
+		if target, err := rollouts.ResolveTemplateTarget(rollout); err == nil && target.GVR.Resource == "deployments" {
+			rolloutReferencedDeployments[rollout.GetNamespace()+"/"+target.Name] = true
+		}
+	}
 
-	add := func(kind, ns, name string, lbls, anns map[string]string, image string, health packages.Health, ready, desired int, selector *metav1.LabelSelector, batch *appBatchSummary) {
+	add := func(kind, ns, name string, lbls, anns map[string]string, image string, workloadHealth packages.Health, ready, desired int, selector *metav1.LabelSelector, rollout *health.WorkloadRolloutActivity, batch *appBatchSummary) {
 		pods := podsForSelector(podsByNS[ns], selector)
+		if rollout != nil && (rollout.Active || rollout.Phase == health.RolloutStalled) && rollout.Phase != health.RolloutApplying {
+			updatedRevisionTargetsOnce.Do(func() {
+				updatedRevisionTargets = applicationRevisionTargets(ctx, cache, namespaces, argoRollouts)
+			})
+			rollout = attributeApplicationRolloutFailure(rollout, pods, updatedRevisionTargets[kind+"/"+ns+"/"+name])
+		}
 		restarts, reason := podsRestarts(pods)
 		meta := metav1.ObjectMeta{Namespace: ns, Name: name, Labels: lbls, Annotations: anns}
 		overlay := subject.ResolveOverlay(&meta, false)
@@ -835,11 +883,12 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 				Image:         image,
 				Version:       imageTag(image),
 				AppVersion:    lbls["app.kubernetes.io/version"],
-				Health:        string(health),
+				Health:        string(workloadHealth),
 				Ready:         ready,
 				Desired:       desired,
 				Restarts:      restarts,
 				Reason:        reason,
+				Rollout:       rollout,
 				Batch:         batch,
 				envLabel:      envLabelOf(lbls),
 				nameLabel:     lbls["app.kubernetes.io/name"],
@@ -875,10 +924,13 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 				items, _ = depLister.Deployments(ns).List(labels.Everything())
 			}
 			for _, d := range items {
+				if rolloutReferencedDeployments[d.Namespace+"/"+d.Name] {
+					continue
+				}
 				add("Deployment", d.Namespace, d.Name, d.Labels, d.Annotations,
 					primaryImage(d.Spec.Template.Spec.Containers),
 					levelToPackagesHealth(health.Workload(d, time.Now()).Level),
-					int(d.Status.AvailableReplicas), int(d.Status.Replicas), d.Spec.Selector, nil)
+					int(d.Status.AvailableReplicas), appDesiredReplicas(d.Spec.Replicas), d.Spec.Selector, visibleRolloutActivity(health.WorkloadRollout(d)), nil)
 			}
 		})
 	}
@@ -894,7 +946,7 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 				add("DaemonSet", d.Namespace, d.Name, d.Labels, d.Annotations,
 					primaryImage(d.Spec.Template.Spec.Containers),
 					levelToPackagesHealth(health.Workload(d, time.Now()).Level),
-					int(d.Status.NumberReady), int(d.Status.DesiredNumberScheduled), d.Spec.Selector, nil)
+					int(d.Status.NumberReady), int(d.Status.DesiredNumberScheduled), d.Spec.Selector, visibleRolloutActivity(health.WorkloadRollout(d)), nil)
 			}
 		})
 	}
@@ -910,9 +962,21 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 				add("StatefulSet", d.Namespace, d.Name, d.Labels, d.Annotations,
 					primaryImage(d.Spec.Template.Spec.Containers),
 					levelToPackagesHealth(health.Workload(d, time.Now()).Level),
-					int(d.Status.ReadyReplicas), int(d.Status.Replicas), d.Spec.Selector, nil)
+					int(d.Status.ReadyReplicas), appDesiredReplicas(d.Spec.Replicas), d.Spec.Selector, visibleRolloutActivity(health.WorkloadRollout(d)), nil)
 			}
 		})
+	}
+	for _, rollout := range argoRollouts {
+		selector, image, referencedDesired := rolloutApplicationFields(cache, rollout)
+		activity := health.WorkloadRollout(rollout)
+		desired := int(activity.Desired)
+		if referencedDesired > 0 && !rolloutSpecifiesReplicas(rollout) {
+			desired = referencedDesired
+			activity.Desired = int32(desired)
+		}
+		ready := int(activity.Available)
+		add("Rollout", rollout.GetNamespace(), rollout.GetName(), rollout.GetLabels(), rollout.GetAnnotations(),
+			image, applicationServingHealth(ready, desired), ready, desired, selector, visibleRolloutActivity(activity), nil)
 	}
 	if jobLister := cache.Jobs(); jobLister != nil {
 		forEachNamespace(func(ns string) {
@@ -933,7 +997,7 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 				add("Job", j.Namespace, j.Name, j.Labels, j.Annotations,
 					primaryImage(j.Spec.Template.Spec.Containers),
 					batchHealth(batch, levelToPackagesHealth(health.Workload(j, time.Now()).Level)),
-					0, 0, j.Spec.Selector, batch)
+					0, 0, j.Spec.Selector, nil, batch)
 			}
 		})
 	}
@@ -957,7 +1021,7 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 				add("CronJob", cj.Namespace, cj.Name, cj.Labels, cj.Annotations,
 					primaryImage(cj.Spec.JobTemplate.Spec.Template.Spec.Containers),
 					batchHealth(batch, levelToPackagesHealth(health.Workload(cj, time.Now()).Level)),
-					0, 0, nil, batch)
+					0, 0, nil, nil, batch)
 			}
 		})
 	}
@@ -966,7 +1030,172 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 	return out
 }
 
-type addAppWorkloadFunc func(kind, ns, name string, lbls, anns map[string]string, image string, health packages.Health, ready, desired int, selector *metav1.LabelSelector, batch *appBatchSummary)
+type addAppWorkloadFunc func(kind, ns, name string, lbls, anns map[string]string, image string, workloadHealth packages.Health, ready, desired int, selector *metav1.LabelSelector, rollout *health.WorkloadRolloutActivity, batch *appBatchSummary)
+
+func visibleRolloutActivity(activity health.WorkloadRolloutActivity) *health.WorkloadRolloutActivity {
+	if !activity.Active && activity.Phase != health.RolloutStalled {
+		return nil
+	}
+	return &activity
+}
+
+func rolloutSpecifiesReplicas(rollout *unstructured.Unstructured) bool {
+	_, found, _ := unstructured.NestedFieldNoCopy(rollout.Object, "spec", "replicas")
+	return found
+}
+
+func rolloutApplicationFields(cache *k8s.ResourceCache, rollout *unstructured.Unstructured) (*metav1.LabelSelector, string, int) {
+	selector, _ := k8s.ResolveRolloutSelector(cache, rollout)
+	image := primaryUnstructuredImage(rollout.Object, "spec", "template", "spec", "containers")
+	target, err := rollouts.ResolveTemplateTarget(rollout)
+	if err != nil || target.GVR.Resource != "deployments" || cache.Deployments() == nil {
+		return selector, image, 0
+	}
+	deployment, err := cache.Deployments().Deployments(rollout.GetNamespace()).Get(target.Name)
+	if err != nil {
+		return selector, image, 0
+	}
+	if image == "" {
+		image = primaryImage(deployment.Spec.Template.Spec.Containers)
+	}
+	return selector, image, appDesiredReplicas(deployment.Spec.Replicas)
+}
+
+func primaryUnstructuredImage(object map[string]any, fields ...string) string {
+	containers, found, _ := unstructured.NestedSlice(object, fields...)
+	if !found || len(containers) == 0 {
+		return ""
+	}
+	container, ok := containers[0].(map[string]any)
+	if !ok {
+		return ""
+	}
+	image, _ := container["image"].(string)
+	return image
+}
+
+func applicationServingHealth(ready, desired int) packages.Health {
+	if desired <= 0 {
+		return packages.HealthNeutral
+	}
+	if ready >= desired {
+		return packages.HealthHealthy
+	}
+	if ready > 0 {
+		return packages.HealthDegraded
+	}
+	return packages.HealthUnhealthy
+}
+
+func applicationRevisionTargets(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, argoRollouts []*unstructured.Unstructured) map[string]workloadRevisionTarget {
+	targets := map[string]workloadRevisionTarget{}
+	if cache.ReplicaSets() != nil {
+		var allReplicaSets []*appsv1.ReplicaSet
+		forEachWorkloadNamespace(namespaces, func(namespace string) {
+			var replicaSets []*appsv1.ReplicaSet
+			if namespace == "" {
+				replicaSets, _ = cache.ReplicaSets().List(labels.Everything())
+			} else {
+				replicaSets, _ = cache.ReplicaSets().ReplicaSets(namespace).List(labels.Everything())
+			}
+			allReplicaSets = append(allReplicaSets, replicaSets...)
+		})
+		currentHashes := k8score.CurrentDeploymentRevisionPodHashes(allReplicaSets)
+		if cache.Deployments() != nil {
+			forEachWorkloadNamespace(namespaces, func(namespace string) {
+				var deployments []*appsv1.Deployment
+				if namespace == "" {
+					deployments, _ = cache.Deployments().List(labels.Everything())
+				} else {
+					deployments, _ = cache.Deployments().Deployments(namespace).List(labels.Everything())
+				}
+				for _, deployment := range deployments {
+					if deployment.Status.UpdatedReplicas == 0 {
+						continue
+					}
+					if hash := currentHashes[deployment.UID]; hash != "" {
+						targets["Deployment/"+deployment.Namespace+"/"+deployment.Name] = workloadRevisionTarget{label: appsv1.DefaultDeploymentUniqueLabelKey, value: hash}
+					}
+				}
+			})
+		}
+	}
+	if cache.StatefulSets() != nil {
+		forEachWorkloadNamespace(namespaces, func(namespace string) {
+			var statefulSets []*appsv1.StatefulSet
+			if namespace == "" {
+				statefulSets, _ = cache.StatefulSets().List(labels.Everything())
+			} else {
+				statefulSets, _ = cache.StatefulSets().StatefulSets(namespace).List(labels.Everything())
+			}
+			for _, statefulSet := range statefulSets {
+				if statefulSet.Status.UpdateRevision != "" {
+					targets["StatefulSet/"+statefulSet.Namespace+"/"+statefulSet.Name] = workloadRevisionTarget{label: appsv1.ControllerRevisionHashLabelKey, value: statefulSet.Status.UpdateRevision}
+				}
+			}
+		})
+	}
+	if cache.DaemonSets() != nil {
+		controllerRevisions := listDynamicByNamespacesGroup(ctx, cache, namespaces, "ControllerRevision", "apps")
+		controllerRevisionItems := make([]unstructured.Unstructured, 0, len(controllerRevisions))
+		for _, revision := range controllerRevisions {
+			controllerRevisionItems = append(controllerRevisionItems, *revision)
+		}
+		currentHashes := k8score.CurrentControllerRevisionPodHashes(controllerRevisionItems)
+		forEachWorkloadNamespace(namespaces, func(namespace string) {
+			var daemonSets []*appsv1.DaemonSet
+			if namespace == "" {
+				daemonSets, _ = cache.DaemonSets().List(labels.Everything())
+			} else {
+				daemonSets, _ = cache.DaemonSets().DaemonSets(namespace).List(labels.Everything())
+			}
+			for _, daemonSet := range daemonSets {
+				if hash := currentHashes[daemonSet.UID]; hash != "" {
+					targets["DaemonSet/"+daemonSet.Namespace+"/"+daemonSet.Name] = workloadRevisionTarget{label: appsv1.ControllerRevisionHashLabelKey, value: hash}
+				}
+			}
+		})
+	}
+	for _, rollout := range argoRollouts {
+		if hash, found, _ := unstructured.NestedString(rollout.Object, "status", "currentPodHash"); found && hash != "" {
+			targets["Rollout/"+rollout.GetNamespace()+"/"+rollout.GetName()] = workloadRevisionTarget{label: rollouts.PodTemplateHashLabel, value: hash}
+		}
+	}
+	return targets
+}
+
+func attributeApplicationRolloutFailure(activity *health.WorkloadRolloutActivity, pods []*corev1.Pod, target workloadRevisionTarget) *health.WorkloadRolloutActivity {
+	if activity == nil || (!activity.Active && activity.Phase != health.RolloutStalled) || activity.Phase == health.RolloutApplying || target.label == "" || target.value == "" {
+		return activity
+	}
+	now := time.Now()
+	var failed *corev1.Pod
+	for _, pod := range pods {
+		if pod.Labels[target.label] != target.value || health.Pod(pod, now).Level != health.LevelUnhealthy {
+			continue
+		}
+		if failed == nil || pod.Name < failed.Name {
+			failed = pod
+		}
+	}
+	if failed == nil {
+		return activity
+	}
+	copy := *activity
+	copy.Phase = health.RolloutStalled
+	copy.Active = false
+	copy.Manual = false
+	copy.Label = "New revision cannot start"
+	copy.Detail = fmt.Sprintf("%s · Pod %s", health.PodProblemReason(failed, now), failed.Name)
+	return &copy
+}
+
+func appDesiredReplicas(replicas *int32) int {
+	if replicas == nil {
+		return 1
+	}
+	return int(*replicas)
+}
 
 func jobBatchSummary(job *batchv1.Job) *appBatchSummary {
 	b := &appBatchSummary{}
@@ -1054,7 +1283,7 @@ func addScaledJobWorkloads(ctx context.Context, cache *k8s.ResourceCache, namesp
 			batch = &appBatchSummary{}
 		}
 		add("ScaledJob", sj.GetNamespace(), sj.GetName(), sj.GetLabels(), sj.GetAnnotations(),
-			scaledJobPrimaryImage(sj), batchHealth(batch, scaledJobHealth(sj)), 0, 0, nil, batch)
+			scaledJobPrimaryImage(sj), batchHealth(batch, scaledJobHealth(sj)), 0, 0, nil, nil, batch)
 	}
 }
 
@@ -1081,7 +1310,7 @@ func addArgoBatchWorkloads(ctx context.Context, cache *k8s.ResourceCache, namesp
 		batch := &appBatchSummary{}
 		applyRunToBatch(batch, run)
 		add("Workflow", wf.GetNamespace(), wf.GetName(), wf.GetLabels(), wf.GetAnnotations(),
-			workflowPrimaryImage(wf), workflowHealth(run.Phase), 0, 0, nil, batch)
+			workflowPrimaryImage(wf), workflowHealth(run.Phase), 0, 0, nil, nil, batch)
 	}
 
 	templateKeys := make([]string, 0, len(templateInfos))
@@ -1096,7 +1325,7 @@ func addArgoBatchWorkloads(ctx context.Context, cache *k8s.ResourceCache, namesp
 			batch = &appBatchSummary{}
 		}
 		add(info.kind, info.namespace, info.name, info.labels, info.annotations,
-			templateImage(info.object, "spec", "templates"), batchHealth(batch, packages.HealthNeutral), 0, 0, nil, batch)
+			templateImage(info.object, "spec", "templates"), batchHealth(batch, packages.HealthNeutral), 0, 0, nil, nil, batch)
 	}
 
 	for _, cwf := range cronWorkflows {
@@ -1110,7 +1339,7 @@ func addArgoBatchWorkloads(ctx context.Context, cache *k8s.ResourceCache, namesp
 		lastScheduled, _, _ := unstructured.NestedString(cwf.Object, "status", "lastScheduledTime")
 		setLatestBatchTime(&batch.LastScheduledAt, lastScheduled)
 		add("CronWorkflow", cwf.GetNamespace(), cwf.GetName(), cwf.GetLabels(), cwf.GetAnnotations(),
-			cronWorkflowPrimaryImage(cwf), batchHealth(batch, packages.HealthNeutral), 0, 0, nil, batch)
+			cronWorkflowPrimaryImage(cwf), batchHealth(batch, packages.HealthNeutral), 0, 0, nil, nil, batch)
 	}
 }
 
@@ -2023,7 +2252,7 @@ func classifyWorkload(kind string, rels *appRelationships) string {
 	switch kind {
 	case "Job", "CronJob", "Workflow", "CronWorkflow", "WorkflowTemplate", "ClusterWorkflowTemplate", "ScaledJob":
 		return "job"
-	case "Deployment", "StatefulSet", "DaemonSet":
+	case "Deployment", "StatefulSet", "DaemonSet", "Rollout":
 		if rels != nil && (len(rels.Services) > 0 || len(rels.Ingresses) > 0 || len(rels.Routes) > 0 ||
 			len(rels.serviceRefs) > 0 || len(rels.ingressRefs) > 0 || len(rels.routeRefs) > 0) {
 			return "service"
@@ -2036,7 +2265,7 @@ func classifyWorkload(kind string, rels *appRelationships) string {
 
 func appWorkloadAPIGroup(kind string) string {
 	switch kind {
-	case "Workflow", "CronWorkflow", "WorkflowTemplate", "ClusterWorkflowTemplate":
+	case "Workflow", "CronWorkflow", "WorkflowTemplate", "ClusterWorkflowTemplate", "Rollout":
 		return "argoproj.io"
 	case "ScaledJob":
 		return "keda.sh"

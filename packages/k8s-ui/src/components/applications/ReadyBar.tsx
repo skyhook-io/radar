@@ -6,7 +6,8 @@ export function ReadyBar({ ready, desired, width = 'w-12' }: { ready: number; de
   if (desired <= 0) {
     return <span className="font-mono text-xs tabular-nums text-theme-text-tertiary">—</span>
   }
-  const pct = Math.min(100, Math.round((ready / desired) * 100))
+  const targetReady = Math.min(ready, desired)
+  const pct = Math.min(100, Math.round((targetReady / desired) * 100))
   const ok = ready >= desired
   // Text matches the bar's tier: amber for partial readiness, red only when
   // nothing is ready — partial must not read as fully down.
@@ -16,7 +17,7 @@ export function ReadyBar({ ready, desired, width = 'w-12' }: { ready: number; de
       <span className={`inline-block h-1.5 ${width} rounded-full bg-theme-hover`}>
         <span className={`block h-1.5 rounded-full ${tier.bar}`} style={{ width: `${pct}%` }} />
       </span>
-      <span className={`font-mono text-xs tabular-nums ${ok ? 'text-theme-text-secondary' : tier.text}`}>{ready}/{desired || '—'}</span>
+      <span className={`font-mono text-xs tabular-nums ${ok ? 'text-theme-text-secondary' : tier.text}`}>{targetReady}/{desired || '—'}</span>
     </span>
   )
 }

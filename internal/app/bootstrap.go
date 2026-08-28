@@ -59,6 +59,8 @@ type AppConfig struct {
 	TimelineRetention        time.Duration
 	TimelineMaxSizeBytes     int64
 	PrometheusURL            string
+	OpenCostCurrency         string
+	OpenCostFlagSet          bool
 	PrometheusHeaders        map[string]string
 	PrometheusHeadersFromEnv map[string]string
 	BeylaJobSelector         string
@@ -276,6 +278,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 		TimelineMaxSize:          fmt.Sprintf("%d", cfg.TimelineMaxSizeBytes),
 		HistoryLimit:             cfg.HistoryLimit,
 		PrometheusURL:            cfg.PrometheusURL,
+		OpenCostCurrency:         cfg.OpenCostCurrency,
 		PrometheusHeaders:        cfg.PrometheusHeaders,
 		PrometheusHeadersFromEnv: cfg.PrometheusHeadersFromEnv,
 		DebugImage:               cfg.DebugImage,
@@ -293,6 +296,8 @@ func CreateServer(cfg AppConfig) *server.Server {
 		StaticFS:         static.FS,
 		StaticRoot:       "dist",
 		EffectiveConfig:  effectiveCfg,
+		OpenCostCurrency: cfg.OpenCostCurrency,
+		OpenCostManaged:  cfg.OpenCostFlagSet,
 		DiagConfig: &server.DiagConfig{
 			Port:                 cfg.Port,
 			DevMode:              cfg.DevMode,
@@ -301,6 +306,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 			HistoryLimit:         cfg.HistoryLimit,
 			DebugEvents:          cfg.DebugEvents,
 			MCPEnabled:           cfg.MCPEnabled,
+			OpenCostCurrency:     cfg.OpenCostCurrency,
 			HasPrometheusURL:     cfg.PrometheusURL != "",
 			HasPrometheusHeaders: len(cfg.PrometheusHeaders) > 0,
 		},
@@ -619,6 +625,26 @@ func ParseKubeconfigDirs(dirs string) []string {
 		}
 	}
 	return result
+}
+
+// ResolveKubeconfigSelection applies CLI-over-config precedence across the
+// kubeconfig source pair. Passing one non-empty flag replaces the saved source
+// pair; an explicit empty value clears only that member for compatibility.
+func ResolveKubeconfigSelection(kubeconfig, kubeconfigDirs string, kubeconfigSet, kubeconfigDirsSet bool) (string, []string) {
+	parsedDirs := ParseKubeconfigDirs(kubeconfigDirs)
+	if kubeconfigSet && !kubeconfigDirsSet {
+		if kubeconfig == "" {
+			return "", parsedDirs
+		}
+		return kubeconfig, nil
+	}
+	if kubeconfigDirsSet && !kubeconfigSet {
+		if len(parsedDirs) == 0 {
+			return kubeconfig, nil
+		}
+		return "", parsedDirs
+	}
+	return kubeconfig, parsedDirs
 }
 
 // ParseNamespaces splits a comma-separated namespace string into a de-duplicated

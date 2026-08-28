@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Server, ExternalLink, Scale, Minus, Plus, Loader2, Shield } from 'lucide-react'
+import { Server, ExternalLink, Scale, Minus, Plus, Shield } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PolicySection } from './PolicySection'
 import type { PolicyResourceResponse } from '../../../types/policy'
@@ -7,7 +7,7 @@ import { Section, PropertyList, Property, ConditionsSection, PodTemplateSection,
 import { DialogPortal } from '../../ui/DialogPortal'
 import { Tooltip } from '../../ui/Tooltip'
 import { Badge, type BadgeSeverity } from '../../ui/Badge'
-import type { RBACSubjectResponse, RBACPolicyRule, ResourceRef, HPADiagnosis } from '../../../types'
+import type { RBACSubjectResponse, RBACPolicyRule, ResourceRef, HPADiagnosis, WorkloadPodInfo } from '../../../types'
 import { detectBlastRadius, rulePermissivenessScore } from '../../../utils/rbac-blast-radius'
 import { RBACErrorSection, isRBACUnavailable } from './RBACErrorSection'
 import { hpaStateLabel, hpaStateLevel } from '../resource-utils-hpa'
@@ -16,6 +16,9 @@ import {
   rbacResourceBadgeClass,
   rbacApiGroupBadgeClass,
 } from '../../../utils/rbac-badges'
+import { getWorkloadRolloutActivity } from '../../../utils/workload-rollout'
+import { useProgressiveRefresh } from '../../../hooks/useProgressiveRefresh'
+import { WorkloadRolloutNotice } from '../../workload/WorkloadRolloutNotice'
 
 export interface ScalerDiagnosis {
   ref: ResourceRef
@@ -33,6 +36,7 @@ interface WorkloadRendererProps {
   isScalePending?: boolean
   scaleBlockedBy?: ResourceRef[]
   scalerDiagnostics?: ScalerDiagnosis[]
+  workloadPods?: WorkloadPodInfo[]
   onRequestRefresh?: () => void
   /**
    * RBAC reverse-lookup for the workload's pod-template ServiceAccount.
@@ -52,21 +56,13 @@ interface WorkloadRendererProps {
   policyError?: Error | null
 }
 
-// Check if the workload is actively progressing (scaling, rolling update)
-function isWorkloadProgressing(status: any): boolean {
-  const conditions = status.conditions || []
-  const progressing = conditions.find((c: any) => c.type === 'Progressing')
-  return progressing?.status === 'True' && progressing?.reason !== 'ProgressDeadlineExceeded'
-}
-
 // Extract real problems from workload status (excludes normal rollout progress)
-function getWorkloadProblems(status: any, spec: any, kind: string): string[] {
+function getWorkloadProblems(status: any, spec: any, kind: string, rolloutExplainsShortfall: boolean): string[] {
   const problems: string[] = []
-  const progressing = isWorkloadProgressing(status)
   const isDaemonSet = kind === 'daemonsets'
 
   // Check replica/pod counts — only flag as problem if NOT actively progressing
-  if (!progressing) {
+  if (!rolloutExplainsShortfall) {
     if (isDaemonSet) {
       const ready = status.numberReady || 0
       const desired = status.desiredNumberScheduled || 0
@@ -78,7 +74,7 @@ function getWorkloadProblems(status: any, spec: any, kind: string): string[] {
       }
     } else {
       const ready = status.readyReplicas || 0
-      const desired = spec.replicas || 0
+      const desired = spec.replicas ?? 1
       if (desired > 0 && ready < desired) {
         problems.push(`${desired - ready} of ${desired} replicas are not ready`)
       }
@@ -96,33 +92,12 @@ function getWorkloadProblems(status: any, spec: any, kind: string): string[] {
     }
     // Show condition failures, but skip Available=False during active rollout (that's expected)
     if (cond.status === 'False' && cond.message) {
-      if (progressing && cond.type === 'Available') continue
+      if (rolloutExplainsShortfall && cond.type === 'Available') continue
       problems.push(`${cond.type}: ${cond.message}`)
     }
   }
 
   return problems
-}
-
-// Get progress info for active rollouts
-function getWorkloadProgress(status: any, spec: any, kind: string): string | null {
-  if (!isWorkloadProgressing(status)) return null
-
-  const isDaemonSet = kind === 'daemonsets'
-  if (isDaemonSet) {
-    const ready = status.numberReady || 0
-    const desired = status.desiredNumberScheduled || 0
-    if (desired > 0 && ready < desired) {
-      return `${ready} of ${desired} pods ready`
-    }
-  } else {
-    const ready = status.readyReplicas || 0
-    const desired = spec.replicas || 0
-    if (desired > 0 && ready < desired) {
-      return `${ready} of ${desired} replicas ready`
-    }
-  }
-  return null
 }
 
 function formatScalerLabel(ref: ResourceRef): string {
@@ -150,7 +125,7 @@ function compactHPASummary(diagnosis: HPADiagnosis): string {
   return diagnosis.summary
 }
 
-export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, isScalePending, scaleBlockedBy, scalerDiagnostics, onRequestRefresh, rbacData, rbacLoading, rbacError, policyData, policyLoading, policyError }: WorkloadRendererProps) {
+export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, isScalePending, scaleBlockedBy, scalerDiagnostics, workloadPods, onRequestRefresh, rbacData, rbacLoading, rbacError, policyData, policyLoading, policyError }: WorkloadRendererProps) {
   const status = data.status || {}
   const spec = data.spec || {}
   const metadata = data.metadata || {}
@@ -165,7 +140,7 @@ export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, 
 
   // Scale dialog state
   const [showScaleDialog, setShowScaleDialog] = useState(false)
-  const [targetReplicas, setTargetReplicas] = useState(spec.replicas || 0)
+  const [targetReplicas, setTargetReplicas] = useState(spec.replicas ?? 1)
   const [scaledTo, setScaledTo] = useState<number | null>(null)
 
   // Clear scaledTo once the backend data catches up
@@ -179,19 +154,15 @@ export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, 
   // Issues section is shown — it carries the workload's own issues plus its pods'
   // (richer, with cause/action), so the workload-status problems would duplicate.
   const operationalIssuesShown = useOperationalIssuesShown()
-  const problems = operationalIssuesShown ? [] : getWorkloadProblems(status, spec, kind)
+  const rolloutActivity = getWorkloadRolloutActivity(data, kind, workloadPods)
+  const rolloutExplainsShortfall = rolloutActivity.phase === 'applying' || rolloutActivity.phase === 'progressing'
+  const problems = operationalIssuesShown ? [] : getWorkloadProblems(status, spec, kind, rolloutExplainsShortfall)
   const hasProblems = problems.length > 0
-  const progressMessage = getWorkloadProgress(status, spec, kind)
+  const displayedActivity = scaledTo !== null && rolloutActivity.phase === 'idle'
+    ? { ...rolloutActivity, phase: 'applying' as const, active: true, label: 'Scaling workload', detail: `Waiting for the controller to apply ${scaledTo} replicas` }
+    : rolloutActivity
 
-  // Request data refresh while scaling is in progress
-  const isScaling = scaledTo !== null || progressMessage !== null
-  useEffect(() => {
-    if (!isScaling || !onRequestRefresh) return
-    const interval = setInterval(() => {
-      onRequestRefresh()
-    }, 2000)
-    return () => clearInterval(interval)
-  }, [isScaling, onRequestRefresh])
+  useProgressiveRefresh(scaledTo !== null, onRequestRefresh)
 
   useEffect(() => {
     if (isScaleBlocked) {
@@ -211,24 +182,13 @@ export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, 
   }
 
   const openScaleDialog = () => {
-    setTargetReplicas(spec.replicas || 0)
+    setTargetReplicas(spec.replicas ?? 1)
     setShowScaleDialog(true)
   }
 
   return (
     <>
-      {/* Scaling in progress banner — amber: replicas short of desired is an
-          attention state, not an info note (it may be a stuck rollout). */}
-      {(scaledTo !== null || progressMessage) && !hasProblems && (
-        <div className="mb-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg">
-          <div className="flex items-center gap-2">
-            <Loader2 className="w-4 h-4 text-amber-500 animate-spin shrink-0" />
-            <div className="text-sm text-amber-700 dark:text-amber-300">
-              {progressMessage || `Scaling to ${scaledTo} replicas...`}
-            </div>
-          </div>
-        </div>
-      )}
+      {(!hasProblems || displayedActivity.phase === 'stalled') && <WorkloadRolloutNotice activity={displayedActivity} className="mb-4" />}
 
       {/* Problems alert - shown at top when there are real issues */}
       {hasProblems && (
@@ -262,7 +222,7 @@ export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, 
             </>
           ) : (
             <>
-              <Property label="Replicas" value={`${status.readyReplicas || 0}/${spec.replicas || 0}`} />
+              <Property label="Replicas" value={`${status.readyReplicas || 0}/${spec.replicas ?? 1}`} />
               {scaleBlockedBy && scaleBlockedBy.length > 0 && (
                 <Property
                   label="Controlled by"
@@ -357,8 +317,8 @@ export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, 
         </div>
 
         <div className="text-xs text-theme-text-tertiary text-center mb-4">
-          Current: {spec.replicas || 0} replicas
-          {targetReplicas !== (spec.replicas || 0) && (
+          Current: {spec.replicas ?? 1} replicas
+          {targetReplicas !== (spec.replicas ?? 1) && (
             <span className="text-theme-text-secondary">
               {' '}→ {targetReplicas}
             </span>
@@ -374,7 +334,7 @@ export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, 
           </button>
           <button
             onClick={handleScale}
-            disabled={isScalePending || targetReplicas === (spec.replicas || 0)}
+            disabled={isScalePending || targetReplicas === (spec.replicas ?? 1)}
             className="flex-1 px-3 py-2 text-sm btn-brand disabled:cursor-not-allowed rounded-lg"
           >
             {isScalePending ? 'Scaling...' : 'Apply'}

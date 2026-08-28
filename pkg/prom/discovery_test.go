@@ -501,7 +501,7 @@ func TestDiscover_SkipsDynamicWhenDisabled(t *testing.T) {
 	}
 }
 
-func TestDiscover_HeadlessServiceProducesPod0Addr(t *testing.T) {
+func TestDiscover_HeadlessServiceUsesPlainServiceDNS(t *testing.T) {
 	headless := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: "prometheus-server", Namespace: "monitoring"},
 		Spec: corev1.ServiceSpec{
@@ -517,7 +517,10 @@ func TestDiscover_HeadlessServiceProducesPod0Addr(t *testing.T) {
 	if len(cands) != 1 {
 		t.Fatalf("want 1 candidate, got %d", len(cands))
 	}
-	want := "http://prometheus-server-0.prometheus-server.monitoring.svc.cluster.local:9090"
+	// A headless Service publishes A records for its ready pods under its own
+	// name; the old {service}-0. pod prefix assumed the StatefulSet was named
+	// after the Service and left non-conforming backends unreachable.
+	want := "http://prometheus-server.monitoring.svc.cluster.local:9090"
 	if cands[0].ClusterAddr != want {
 		t.Errorf("cluster addr = %q, want %q", cands[0].ClusterAddr, want)
 	}
@@ -778,5 +781,32 @@ func TestScoreService_IdentityRequiresFamilySignal(t *testing.T) {
 				t.Fatalf("identity=%v, want %v", identity, tc.wantIdent)
 			}
 		})
+	}
+}
+
+// A headless Service publishes A records for its ready pods under its own name.
+// Addressing it as {service}-0.{service} assumes the StatefulSet is named after
+// the Service — true for caretta-vm, false for kube-prometheus-stack's
+// prometheus-operated, whose pod is
+// prometheus-{release}-kube-prometheus-stack-prometheus-0 — and made a reachable
+// backend look unreachable in-cluster.
+func TestBuildClusterAddrUsesPlainServiceDNS(t *testing.T) {
+	tests := []struct {
+		name, namespace string
+		port            int
+		want            string
+	}{
+		// Headless kube-prometheus-stack Service: its pod is not named
+		// prometheus-operated-0, so the old {service}-0. prefix never resolved.
+		{"prometheus-operated", "monitoring", 9090, "http://prometheus-operated.monitoring.svc.cluster.local:9090"},
+		// Headless caretta store: must still resolve under its own name.
+		{"caretta-vm", "default", 8428, "http://caretta-vm.default.svc.cluster.local:8428"},
+		// Regular ClusterIP Service: unchanged.
+		{"kube-prometheus-stack-prometheus", "monitoring", 9090, "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"},
+	}
+	for _, tc := range tests {
+		if got := buildClusterAddr(tc.name, tc.namespace, tc.port); got != tc.want {
+			t.Errorf("buildClusterAddr(%s/%s) = %q, want %q", tc.namespace, tc.name, got, tc.want)
+		}
 	}
 }

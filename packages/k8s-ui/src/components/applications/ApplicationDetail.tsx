@@ -13,7 +13,7 @@ import {
   Boxes,
   ChevronDown,
   Clock3,
-  DollarSign,
+  Coins,
   ExternalLink,
   GitCommit,
   Layers,
@@ -67,6 +67,8 @@ import {
   batchSignalForApp,
   batchActivityForApp,
   batchRuntimeForApp,
+  rolloutSummaryForApps,
+  rolloutDisplayHealth,
   applicationDisplayHealth,
   sourceReportedHealth,
   sourceSyncHealth,
@@ -80,7 +82,7 @@ import {
 } from "../../utils/applications";
 import { PaneLoader } from "../ui/PaneLoader";
 import { midTruncate } from "../../utils/format";
-import { VersionTooltip, AppIdentityTooltip } from "./AppTooltips";
+import { VersionTooltip, AppIdentityTooltip, RolloutSummaryTooltip } from "./AppTooltips";
 import {
   ProvenanceBadge,
   ClassBadge,
@@ -359,6 +361,10 @@ export function ApplicationDetail({
   );
   const workloadClass = workloadClassOf(app.workload_class);
   const batchRuntime = batchRuntimeForApp(app);
+  const rolloutSummary = useMemo(
+    () => rolloutSummaryForApps([{ ...app, workloads }]),
+    [app, workloads],
+  );
   const overall = applicationDisplayHealth(app);
   const verdictTone = HEALTH_META[overall].pill;
   const verdictLabel =
@@ -702,8 +708,16 @@ export function ApplicationDetail({
         {workloadClass === "job" ? (
           <ContextFact label="Runtime">{batchRuntime.label}</ContextFact>
         ) : desired > 0 ? (
-          <ContextFact label="Ready">
-            <ReadyBar ready={ready} desired={desired} width="w-16" />
+          <ContextFact label="Ready"><ReadyBar ready={ready} desired={desired} width="w-16" /></ContextFact>
+        ) : null}
+        {workloadClass !== "job" && rolloutSummary ? (
+          <ContextFact label="Runtime">
+            <Tooltip content={<RolloutSummaryTooltip summary={rolloutSummary} />} delay={150}>
+              <span className="inline-flex items-center gap-1.5">
+                <StatusDot tone={mapHealthToTone(rolloutSummary.health)} />
+                {rolloutSummary.label}
+              </span>
+            </Tooltip>
           </ContextFact>
         ) : null}
         {(app.appVersion || versions.length > 0) && (
@@ -988,7 +1002,7 @@ function ApplicationViewTabs({
                 : "border-transparent text-theme-text-secondary hover:border-theme-border-light hover:text-theme-text-primary",
             )}
           >
-            <DollarSign className="h-4 w-4" />
+            <Coins className="h-4 w-4" />
             Cost
           </button>
         )}
@@ -1074,6 +1088,10 @@ function ApplicationOverview({
     app.runtimeHealth ??
       worstHealth(workloads.map((workload) => workload.health)),
   );
+  const rolloutSummary = useMemo(
+    () => rolloutSummaryForApps([{ ...app, workloads }]),
+    [app, workloads],
+  );
   const hasDeliveryStatus = Boolean(
     app.sourceStatus?.sync || app.sourceStatus?.health,
   );
@@ -1116,11 +1134,17 @@ function ApplicationOverview({
               value={
                 pureBatch
                   ? batchRuntimeForApp(app).label
-                  : HEALTH_META[runtimeHealth].label
+                  : rolloutSummary
+                    ? runtimeHealth === 'healthy' || runtimeHealth === 'neutral'
+                      ? rolloutSummary.label
+                      : `${HEALTH_META[runtimeHealth].label} · ${rolloutSummary.label}`
+                    : HEALTH_META[runtimeHealth].label
               }
               detail={
                 pureBatch
                   ? batchStats.activeDetail
+                  : rolloutSummary
+                    ? `${rolloutSummary.count} workload${rolloutSummary.count === 1 ? "" : "s"} affected · ${ready}/${desired} ready`
                   : desired > 0
                     ? `${ready}/${desired} ready`
                     : "No desired replicas"
@@ -2023,6 +2047,12 @@ function workloadRuntimeStatus(workload: AppWorkload): {
   label: string;
   health: AppHealth;
 } {
+  if (workload.rollout && (workload.rollout.active || workload.rollout.phase === 'stalled')) {
+    return {
+      label: workload.rollout.label,
+      health: rolloutDisplayHealth(workload.rollout, workload.health),
+    }
+  }
   const batch = workload.batch;
   if (!batch) {
     const health = healthOf(workload.health);
@@ -2039,6 +2069,7 @@ function workloadRuntimeStatus(workload: AppWorkload): {
 }
 
 function workloadRuntimeDetail(workload: AppWorkload): string {
+  if (workload.rollout && (workload.rollout.active || workload.rollout.phase === 'stalled')) return workload.rollout.detail || `${workload.ready}/${workload.desired} ready`
   const batch = workload.batch;
   if (!batch) return `${workload.ready}/${workload.desired} ready`;
   if ((batch.activeRuns ?? 0) > 0)

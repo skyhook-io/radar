@@ -15,17 +15,21 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/rollouts"
 )
 
 // WorkloadPodContainerInfo contains compact per-container runtime status for the UI.
@@ -53,6 +57,8 @@ type WorkloadPodInfo struct {
 	StepID                string                     `json:"stepID,omitempty"`
 	StepName              string                     `json:"stepName,omitempty"`
 	StepPhase             string                     `json:"stepPhase,omitempty"`
+	RevisionIdentity      string                     `json:"revisionIdentity,omitempty"`
+	UpdatedRevision       *bool                      `json:"updatedRevision,omitempty"`
 }
 
 // workloadLogEntry is an internal structure for log lines from pods
@@ -118,6 +124,8 @@ var validWorkloadKinds = map[string]bool{
 	"jobs":         true,
 	"workflow":     true,
 	"workflows":    true,
+	"rollout":      true,
+	"rollouts":     true,
 }
 
 // handleWorkloadPods returns the list of pods for a workload
@@ -137,8 +145,10 @@ func (s *Server) handleWorkloadPods(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	dynamicClient, contextName := s.getDynamicClientSnapshotForRequest(r)
+	target := s.workloadRevisionTargetForRequest(r, k8s.GetResourceCache(), dynamicClient, contextName, kind, namespace, name)
 	s.writeJSON(w, map[string]any{
-		"pods": buildPodInfos(pods),
+		"pods": buildPodInfosForRevision(pods, target),
 	})
 }
 
@@ -241,7 +251,7 @@ func (s *Server) readableRunNamespaces(r *http.Request, group, resource string, 
 		if s.canRead(r, group, resource, "", "list") {
 			return nil, true
 		}
-		allowed := s.filterNamespacesByCanRead(r, group, resource, "list", s.allNamespaceNames())
+		allowed := s.filterNamespacesByCanRead(r, group, resource, "list", allNamespaceNames())
 		return allowed, len(allowed) > 0
 	}
 	allowed := s.filterNamespacesByCanRead(r, group, resource, "list", namespaces)
@@ -576,10 +586,22 @@ func isPodReady(pod *corev1.Pod) bool {
 
 // buildPodInfos converts pods to WorkloadPodInfo slice
 func buildPodInfos(pods []*corev1.Pod) []WorkloadPodInfo {
+	return buildPodInfosForRevision(pods, workloadRevisionTarget{})
+}
+
+func buildPodInfosForRevision(pods []*corev1.Pod, target workloadRevisionTarget) []WorkloadPodInfo {
 	infos := make([]WorkloadPodInfo, 0, len(pods))
 	now := time.Now()
 	for _, pod := range pods {
-		infos = append(infos, buildPodInfo(pod, now))
+		info := buildPodInfo(pod, now)
+		if target.label != "" && target.value != "" {
+			if identity := pod.Labels[target.label]; identity != "" {
+				updated := identity == target.value
+				info.RevisionIdentity = identity
+				info.UpdatedRevision = &updated
+			}
+		}
+		infos = append(infos, info)
 	}
 	return infos
 }
@@ -664,7 +686,7 @@ func (e *workloadError) Error() string { return e.message }
 // getWorkloadPods validates the kind, retrieves cache, and returns pods for a workload
 func (s *Server) getWorkloadPods(kind, namespace, name string) ([]*corev1.Pod, *workloadError) {
 	if !validWorkloadKinds[kind] {
-		return nil, &workloadError{http.StatusBadRequest, "only deployments, statefulsets, daemonsets, jobs, and workflows are supported"}
+		return nil, &workloadError{http.StatusBadRequest, "only deployments, statefulsets, daemonsets, rollouts, jobs, and workflows are supported"}
 	}
 
 	cache := k8s.GetResourceCache()
@@ -680,12 +702,125 @@ func (s *Server) getWorkloadPods(kind, namespace, name string) ([]*corev1.Pod, *
 	return cache.GetPodsForWorkload(namespace, selector), nil
 }
 
+type workloadRevisionTarget struct {
+	label string
+	value string
+}
+
+const workloadRevisionTargetTTL = 5 * time.Second
+
+type workloadRevisionTargetCacheEntry struct {
+	target    workloadRevisionTarget
+	expiresAt time.Time
+}
+
+func (s *Server) workloadRevisionTargetForRequest(r *http.Request, cache *k8s.ResourceCache, dynamicClient dynamic.Interface, contextName, kind, namespace, name string) workloadRevisionTarget {
+	if (kind != "daemonset" && kind != "daemonsets") || cache == nil || cache.DaemonSets() == nil {
+		return workloadRevisionTargetFor(r.Context(), cache, dynamicClient, kind, namespace, name)
+	}
+	workload, err := cache.DaemonSets().DaemonSets(namespace).Get(name)
+	if err != nil {
+		return workloadRevisionTarget{}
+	}
+	key := contextName + "\x00" + requestCachePrincipal(r) + "\x00" + string(workload.UID) + "\x00" + strconv.FormatInt(workload.Generation, 10)
+	now := time.Now()
+	s.workloadRevisionMu.Lock()
+	entry, ok := s.workloadRevisionCache[key]
+	s.workloadRevisionMu.Unlock()
+	if ok && now.Before(entry.expiresAt) {
+		return entry.target
+	}
+
+	target := daemonSetRevisionTarget(r.Context(), dynamicClient, workload)
+	s.workloadRevisionMu.Lock()
+	if s.workloadRevisionCache == nil {
+		s.workloadRevisionCache = make(map[string]workloadRevisionTargetCacheEntry)
+	}
+	for existingKey, existing := range s.workloadRevisionCache {
+		if !now.Before(existing.expiresAt) {
+			delete(s.workloadRevisionCache, existingKey)
+		}
+	}
+	if len(s.workloadRevisionCache) < 256 {
+		s.workloadRevisionCache[key] = workloadRevisionTargetCacheEntry{target: target, expiresAt: now.Add(workloadRevisionTargetTTL)}
+	}
+	s.workloadRevisionMu.Unlock()
+	return target
+}
+
+func workloadRevisionTargetFor(ctx context.Context, cache *k8s.ResourceCache, dynamicClient dynamic.Interface, kind, namespace, name string) workloadRevisionTarget {
+	if cache == nil {
+		return workloadRevisionTarget{}
+	}
+	switch kind {
+	case "deployment", "deployments":
+		if cache.Deployments() == nil || cache.ReplicaSets() == nil {
+			return workloadRevisionTarget{}
+		}
+		deployment, err := cache.Deployments().Deployments(namespace).Get(name)
+		if err != nil {
+			return workloadRevisionTarget{}
+		}
+		if deployment.Status.UpdatedReplicas == 0 {
+			return workloadRevisionTarget{}
+		}
+		replicaSets, err := cache.ReplicaSets().ReplicaSets(namespace).List(labels.Everything())
+		if err != nil {
+			return workloadRevisionTarget{}
+		}
+		if hash := k8score.CurrentDeploymentRevisionPodHashes(replicaSets)[deployment.UID]; hash != "" {
+			return workloadRevisionTarget{label: appsv1.DefaultDeploymentUniqueLabelKey, value: hash}
+		}
+	case "statefulset", "statefulsets":
+		if cache.StatefulSets() != nil {
+			if workload, err := cache.StatefulSets().StatefulSets(namespace).Get(name); err == nil {
+				return workloadRevisionTarget{label: appsv1.ControllerRevisionHashLabelKey, value: workload.Status.UpdateRevision}
+			}
+		}
+	case "daemonset", "daemonsets":
+		if cache.DaemonSets() != nil {
+			if workload, err := cache.DaemonSets().DaemonSets(namespace).Get(name); err == nil {
+				return daemonSetRevisionTarget(ctx, dynamicClient, workload)
+			}
+		}
+	case "rollout", "rollouts":
+		if workload, err := cache.GetDynamicWithGroup(ctx, "Rollout", namespace, name, "argoproj.io"); err == nil {
+			if hash, found, _ := unstructured.NestedString(workload.Object, "status", "currentPodHash"); found {
+				return workloadRevisionTarget{label: rollouts.PodTemplateHashLabel, value: hash}
+			}
+		}
+	}
+	return workloadRevisionTarget{}
+}
+
+func daemonSetRevisionTarget(ctx context.Context, dynamicClient dynamic.Interface, workload *appsv1.DaemonSet) workloadRevisionTarget {
+	if dynamicClient == nil {
+		return workloadRevisionTarget{}
+	}
+	selector, err := metav1.LabelSelectorAsSelector(workload.Spec.Selector)
+	if err != nil {
+		return workloadRevisionTarget{}
+	}
+	controllerRevisions, err := dynamicClient.Resource(schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "controllerrevisions"}).Namespace(workload.Namespace).List(ctx, metav1.ListOptions{LabelSelector: selector.String()})
+	if err != nil {
+		log.Printf("[workload-pods] DaemonSet revision attribution unavailable for %s/%s: %v", workload.Namespace, workload.Name, err)
+		return workloadRevisionTarget{}
+	}
+	if hash := k8score.CurrentControllerRevisionPodHashes(controllerRevisions.Items)[workload.UID]; hash != "" {
+		return workloadRevisionTarget{label: appsv1.ControllerRevisionHashLabelKey, value: hash}
+	}
+	return workloadRevisionTarget{}
+}
+
 func workloadSelectorGetError(err error) *workloadError {
 	if errors.Is(err, k8s.ErrWorkloadAccessDenied) || apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
 		return &workloadError{http.StatusForbidden, err.Error()}
 	}
 	if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
 		return &workloadError{http.StatusNotFound, err.Error()}
+	}
+	if errors.Is(err, k8s.ErrWorkloadSelectorUnavailable) || errors.Is(err, rollouts.ErrWorkloadRefUnsupported) {
+		return &workloadError{http.StatusBadRequest, err.Error()}
 	}
 	return &workloadError{http.StatusInternalServerError, err.Error()}
 }

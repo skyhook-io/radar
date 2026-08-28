@@ -1,5 +1,6 @@
 .PHONY: build install clean dev frontend backend test test-e2e test-chart lint help restart restart-fe kill watch-backend watch-frontend loadtest
 .PHONY: calico-demo calico-demo-down calico-demo-status
+.PHONY: cilium-demo cilium-demo-down cilium-demo-status
 .PHONY: release release-binaries-dry docker docker-test docker-multiarch docker-push
 .PHONY: desktop desktop-binary desktop-dev desktop-package-darwin desktop-package-windows desktop-package-linux
 
@@ -286,6 +287,21 @@ beyla-demo-down:
 beyla-demo-status:
 	./scripts/beyla-demo.sh status
 
+# Bootstrap a kind cluster with Cilium + Hubble Relay and traffic workloads,
+# for exercising every Hubble connection lane: direct in-cluster dial
+# (plaintext and TLS/SAN-discovery via `tls`), and the port-forward fallback
+# when `netpol` blocks the direct path. `install-radar` builds the current
+# tree into the cluster with DEFAULT chart RBAC to prove pods/portforward
+# stays unneeded. See scripts/cilium-demo/README.md.
+cilium-demo:
+	./scripts/cilium-demo.sh up
+
+cilium-demo-down:
+	./scripts/cilium-demo.sh down
+
+cilium-demo-status:
+	./scripts/cilium-demo.sh status
+
 # Bootstrap a kind cluster running real Calico with its aggregated API server,
 # plus the policy shapes the Calico surfaces render (both API groups serving the
 # same objects, all three staged kinds including a staged deletion, a non-default
@@ -425,6 +441,7 @@ help:
 	@echo "  make velero-demo      - Velero fixtures, all 13 backup phases at once"
 	@echo "  make velero-demo-live - Velero with real object storage; states produced by the controller"
 	@echo "  make beyla-demo       - Grafana Beyla eBPF traffic fixtures"
+	@echo "  make cilium-demo      - Cilium + Hubble Relay, all Radar connection lanes"
 	@echo "  make calico-demo      - Real Calico, both API groups, staged policies"
 	@echo ""
 	@echo "Desktop:"

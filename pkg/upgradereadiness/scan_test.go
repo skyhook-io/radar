@@ -11,6 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	utilversion "k8s.io/apimachinery/pkg/util/version"
@@ -28,16 +29,19 @@ func completeInput() *Input {
 		Jobs:                           []*batchv1.Job{},
 		CronJobs:                       []*batchv1.CronJob{},
 		Services:                       []*corev1.Service{},
+		ConfigMaps:                     []*corev1.ConfigMap{},
 		WebhookServices:                []*corev1.Service{},
+		PersistentVolumeClaims:         []*corev1.PersistentVolumeClaim{},
 		PersistentVolumes:              []*corev1.PersistentVolume{},
 		Nodes:                          []*corev1.Node{readyNode("node-a", "v1.35.7")},
 		Events:                         []*corev1.Event{},
 		PodDisruptionBudgets:           []*policyv1.PodDisruptionBudget{},
 		EndpointSlices:                 []*discoveryv1.EndpointSlice{},
+		CSIDrivers:                     []*storagev1.CSIDriver{},
 		AdmissionWebhookConfigurations: []*unstructured.Unstructured{},
 		CustomResourceDefinitions:      []*unstructured.Unstructured{},
 		APIServices:                    []*unstructured.Unstructured{},
-		NodeRuntimeEvidence:            []NodeRuntimeEvidence{{NodeName: "node-a", MetricsAvailable: true, CgroupVersion: 2, CgroupVersionAvailable: true}},
+		NodeRuntimeEvidence:            []NodeRuntimeEvidence{{NodeName: "node-a", MetricsAvailable: true, CgroupVersion: 2, CgroupVersionAvailable: true, ConfigAvailable: true, EventRecordQPS: 50, EventRecordQPSAvailable: true, FeatureGates: map[string]bool{}}},
 		ManifestResources: []ManifestResource{{
 			APIVersion: "apps/v1", Kind: "Deployment", Namespace: "default", Name: "api", Source: "Helm",
 			Object: &unstructured.Unstructured{Object: map[string]any{
@@ -45,11 +49,13 @@ func completeInput() *Input {
 				"metadata": map[string]any{"name": "api", "namespace": "default"},
 			}},
 		}},
-		DeprecatedAPIRequests:             []DeprecatedAPIRequest{},
-		PrometheusRules:                   []*unstructured.Unstructured{},
-		PrometheusRulesInstalled:          false,
-		PrometheusRulesDiscoveryAvailable: true,
-		Platform:                          "generic",
+		DeprecatedAPIRequests:                []DeprecatedAPIRequest{},
+		PrometheusRules:                      []*unstructured.Unstructured{},
+		PrometheusRulesInstalled:             false,
+		PrometheusRulesDiscoveryAvailable:    true,
+		SchedulingV1Alpha2Objects:            []*unstructured.Unstructured{},
+		SchedulingV1Alpha2DiscoveryAvailable: true,
+		Platform:                             "generic",
 	}
 }
 
@@ -550,9 +556,18 @@ func TestScanCoverageAndVerdictPrecedence(t *testing.T) {
 		t.Fatalf("definite blocker must win over unknown coverage: %+v", got)
 	}
 
-	got, _ = Scan(completeInput(), "1.36", "1.37")
-	if got.Verdict != VerdictUnknown {
-		t.Fatalf("target beyond reviewed catalog must be unknown: %+v", got)
+	complete137 := completeInput()
+	complete137.Pods = []*corev1.Pod{{
+		ObjectMeta: metav1.ObjectMeta{Name: "control-plane-node-a", Namespace: "kube-system", Annotations: map[string]string{corev1.MirrorPodAnnotationKey: "mirror"}},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{
+			{Name: "kube-apiserver"},
+			{Name: "kube-controller-manager"},
+			{Name: "kube-scheduler"},
+		}},
+	}}
+	got, _ = Scan(complete137, "1.36", "1.37")
+	if got.Verdict != VerdictReview || got.ReviewedThrough != "1.37" {
+		t.Fatalf("reviewed 1.37 target should surface the manual cAdvisor review with otherwise clean evidence: %+v", got)
 	}
 }
 
@@ -648,6 +663,71 @@ func TestScanValidatesVersions(t *testing.T) {
 			t.Fatalf("Scan(%q, %q) error = %v, want %v", tc.current, tc.target, err, tc.want)
 		}
 	}
+	if got, err := EffectiveTarget("v1.36.4", ""); err != nil || got != "1.37" {
+		t.Fatalf("EffectiveTarget default = %q, %v, want 1.37", got, err)
+	}
+	if got, err := EffectiveTarget("v1.36.4", "v1.38"); err != nil || got != "1.38" {
+		t.Fatalf("EffectiveTarget explicit = %q, %v, want 1.38", got, err)
+	}
+	if got, err := UpgradePathIncludesRelease("v1.36.4", "v1.38", "1.37"); err != nil || !got {
+		t.Fatalf("UpgradePathIncludesRelease crossing = %v, %v, want true", got, err)
+	}
+	if got, err := UpgradePathIncludesRelease("v1.37.1", "1.38", "1.37"); err != nil || got {
+		t.Fatalf("UpgradePathIncludesRelease already crossed = %v, %v, want false", got, err)
+	}
+	if got, err := UpgradePathIncludesKubeProxyModeTransition("v1.37.1", "1.38"); err != nil || !got {
+		t.Fatalf("UpgradePathIncludesKubeProxyModeTransition before 1.40 = %v, %v, want true", got, err)
+	}
+	if got, err := UpgradePathIncludesKubeProxyModeTransition("v1.40.0", "1.41"); err != nil || got {
+		t.Fatalf("UpgradePathIncludesKubeProxyModeTransition after 1.40 = %v, %v, want false", got, err)
+	}
+}
+
+func TestUnavailableKindsIncludes137CachedEvidence(t *testing.T) {
+	input := completeInput()
+	input.ConfigMaps = nil
+	input.PersistentVolumeClaims = nil
+	input.Events = nil
+	got, err := Scan(input, "1.36", "1.37")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"configmaps", "persistentvolumeclaims", "events"} {
+		if !slices.Contains(got.Coverage.UnavailableKinds, kind) {
+			t.Fatalf("unavailable kinds = %v, want %s", got.Coverage.UnavailableKinds, kind)
+		}
+	}
+
+	got, err = Scan(input, "1.35", "1.36")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"configmaps", "persistentvolumeclaims", "events"} {
+		if slices.Contains(got.Coverage.UnavailableKinds, kind) {
+			t.Fatalf("unavailable kinds = %v, did not want unused %s evidence", got.Coverage.UnavailableKinds, kind)
+		}
+	}
+
+	got, err = Scan(input, "1.34", "1.36")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(got.Coverage.UnavailableKinds, "events") {
+		t.Fatalf("unavailable kinds = %v, want Events for the crossed 1.35 check", got.Coverage.UnavailableKinds)
+	}
+	for _, kind := range []string{"configmaps", "persistentvolumeclaims"} {
+		if slices.Contains(got.Coverage.UnavailableKinds, kind) {
+			t.Fatalf("unavailable kinds = %v, did not want unused %s evidence", got.Coverage.UnavailableKinds, kind)
+		}
+	}
+
+	got, err = Scan(input, "1.37", "1.38")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(got.Coverage.UnavailableKinds, "configmaps") {
+		t.Fatalf("unavailable kinds = %v, want configmaps while the kube-proxy transition review remains active", got.Coverage.UnavailableKinds)
+	}
 }
 
 func TestScanUpgradePathCapsRenderedSequence(t *testing.T) {
@@ -658,5 +738,27 @@ func TestScanUpgradePathCapsRenderedSequence(t *testing.T) {
 	sequence := check.Findings[0].Evidence.Detail
 	if !strings.Contains(sequence, "…") || !strings.HasSuffix(sequence, "1.9999") || strings.Count(sequence, "→") != 9 || len(sequence) > 100 {
 		t.Fatalf("uncapped upgrade sequence = %q", sequence)
+	}
+}
+
+func TestEffectiveTargetNormalizesEquivalentSpellings(t *testing.T) {
+	cases := []struct {
+		current, target, want string
+	}{
+		{"v1.33.4-gke.1", "", "1.34"},
+		{"v1.33.4-gke.1", "1.34", "1.34"},
+		{"v1.33.4-gke.1", "v1.34", "1.34"},
+	}
+	for _, c := range cases {
+		got, err := EffectiveTarget(c.current, c.target)
+		if err != nil || got != c.want {
+			t.Fatalf("EffectiveTarget(%q, %q) = (%q, %v), want %q — equivalent spellings must share one memo key", c.current, c.target, got, err, c.want)
+		}
+	}
+	if _, err := EffectiveTarget("v1.33.4", "1.33"); err == nil {
+		t.Fatal("EffectiveTarget accepted a non-forward target")
+	}
+	if _, err := EffectiveTarget("bogus", "1.34"); err == nil {
+		t.Fatal("EffectiveTarget accepted an unparseable current version")
 	}
 }

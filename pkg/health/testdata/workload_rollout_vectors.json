@@ -1,0 +1,587 @@
+{
+  "vectors": [
+    {
+      "name": "deployment defaults replicas to one",
+      "kind": "Deployment",
+      "phase": "idle",
+      "active": false,
+      "manual": false,
+      "label": "Stable",
+      "detail": "1/1 available",
+      "desired": 1,
+      "updated": 1,
+      "ready": 1,
+      "available": 1,
+      "object": {
+        "metadata": { "generation": 2 },
+        "spec": { "strategy": { "type": "RollingUpdate" } },
+        "status": { "observedGeneration": 2, "replicas": 1, "updatedReplicas": 1, "readyReplicas": 1, "availableReplicas": 1 }
+      }
+    },
+    {
+      "name": "deployment controller has not observed image change",
+      "kind": "Deployment",
+      "phase": "applying",
+      "active": true,
+      "manual": false,
+      "label": "Applying change",
+      "detail": "Waiting for the Deployment controller to observe generation",
+      "desired": 3,
+      "updated": 3,
+      "ready": 3,
+      "available": 3,
+      "object": {
+        "metadata": { "generation": 4 },
+        "spec": { "replicas": 3 },
+        "status": { "observedGeneration": 3, "replicas": 3, "updatedReplicas": 3, "readyReplicas": 3, "availableReplicas": 3 }
+      }
+    },
+    {
+      "name": "deployment new generation supersedes stale failure",
+      "kind": "Deployment",
+      "phase": "applying",
+      "active": true,
+      "manual": false,
+      "label": "Applying change",
+      "detail": "Waiting for the Deployment controller to observe generation",
+      "desired": 3,
+      "updated": 1,
+      "ready": 3,
+      "available": 3,
+      "object": {
+        "metadata": { "generation": 5 },
+        "spec": { "replicas": 3 },
+        "status": {
+          "observedGeneration": 4,
+          "replicas": 3,
+          "updatedReplicas": 1,
+          "readyReplicas": 3,
+          "availableReplicas": 3,
+          "conditions": [{ "type": "Progressing", "status": "False", "reason": "ProgressDeadlineExceeded", "message": "previous revision timed out" }]
+        }
+      }
+    },
+    {
+      "name": "deployment surge remains visibly progressing",
+      "kind": "Deployment",
+      "phase": "progressing",
+      "active": true,
+      "manual": false,
+      "label": "Rolling out",
+      "detail": "2/3 updated · 4 available",
+      "desired": 3,
+      "updated": 2,
+      "ready": 4,
+      "available": 4,
+      "object": {
+        "metadata": { "generation": 4 },
+        "spec": { "replicas": 3 },
+        "status": { "observedGeneration": 4, "replicas": 4, "updatedReplicas": 2, "readyReplicas": 4, "availableReplicas": 4 }
+      }
+    },
+    {
+      "name": "deployment pure scale up is scaling",
+      "kind": "Deployment",
+      "phase": "progressing",
+      "active": true,
+      "manual": false,
+      "label": "Scaling",
+      "detail": "3/5 updated · 3 available",
+      "desired": 5,
+      "updated": 3,
+      "ready": 3,
+      "available": 3,
+      "object": {
+        "metadata": { "generation": 5 },
+        "spec": { "replicas": 5 },
+        "status": { "observedGeneration": 5, "replicas": 3, "updatedReplicas": 3, "readyReplicas": 3, "availableReplicas": 3 }
+      }
+    },
+    {
+      "name": "deployment progress deadline is stalled",
+      "kind": "Deployment",
+      "phase": "stalled",
+      "active": false,
+      "manual": false,
+      "label": "Rollout stalled",
+      "detail": "ReplicaSet timed out",
+      "desired": 3,
+      "updated": 1,
+      "ready": 2,
+      "available": 2,
+      "object": {
+        "metadata": { "generation": 4 },
+        "spec": { "replicas": 3 },
+        "status": {
+          "observedGeneration": 4,
+          "replicas": 3,
+          "updatedReplicas": 1,
+          "readyReplicas": 2,
+          "availableReplicas": 2,
+          "conditions": [{ "type": "Progressing", "status": "False", "reason": "ProgressDeadlineExceeded", "message": "ReplicaSet timed out" }]
+        }
+      }
+    },
+    {
+      "name": "paused deployment with pending revision",
+      "kind": "Deployment",
+      "phase": "paused",
+      "active": true,
+      "manual": false,
+      "label": "Rollout paused",
+      "detail": "Paused at 1/3 updated",
+      "desired": 3,
+      "updated": 1,
+      "ready": 3,
+      "available": 3,
+      "object": {
+        "metadata": { "generation": 4 },
+        "spec": { "replicas": 3, "paused": true },
+        "status": { "observedGeneration": 4, "replicas": 3, "updatedReplicas": 1, "readyReplicas": 3, "availableReplicas": 3 }
+      }
+    },
+    {
+      "name": "statefulset partition target is terminal",
+      "kind": "StatefulSet",
+      "phase": "partition-reached",
+      "active": false,
+      "manual": false,
+      "label": "Partition reached",
+      "detail": "2/5 Pods intentionally retained",
+      "desired": 5,
+      "updated": 3,
+      "ready": 5,
+      "available": 5,
+      "object": {
+        "metadata": { "generation": 5 },
+        "spec": { "replicas": 5, "updateStrategy": { "type": "RollingUpdate", "rollingUpdate": { "partition": 2 } } },
+        "status": { "observedGeneration": 5, "replicas": 5, "updatedReplicas": 3, "readyReplicas": 5, "currentRevision": "old", "updateRevision": "new" }
+      }
+    },
+    {
+      "name": "statefulset partition at rest is stable",
+      "kind": "StatefulSet",
+      "phase": "idle",
+      "active": false,
+      "manual": false,
+      "label": "Stable",
+      "detail": "5/5 ready",
+      "desired": 5,
+      "updated": 5,
+      "ready": 5,
+      "available": 5,
+      "object": {
+        "metadata": { "generation": 5 },
+        "spec": { "replicas": 5, "updateStrategy": { "type": "RollingUpdate", "rollingUpdate": { "partition": 2 } } },
+        "status": { "observedGeneration": 5, "replicas": 5, "updatedReplicas": 5, "readyReplicas": 5, "currentRevision": "same", "updateRevision": "same" }
+      }
+    },
+    {
+      "name": "statefulset ondelete waits for restart",
+      "kind": "StatefulSet",
+      "phase": "waiting",
+      "active": true,
+      "manual": true,
+      "label": "Waiting for Pod restart",
+      "detail": "OnDelete strategy · 0/3 updated",
+      "desired": 3,
+      "updated": 0,
+      "ready": 3,
+      "available": 3,
+      "object": {
+        "metadata": { "generation": 5 },
+        "spec": { "replicas": 3, "updateStrategy": { "type": "OnDelete" } },
+        "status": { "observedGeneration": 5, "replicas": 3, "updatedReplicas": 0, "readyReplicas": 3 }
+      }
+    },
+    {
+      "name": "daemonset with no matching nodes has no targets",
+      "kind": "DaemonSet",
+      "phase": "idle",
+      "active": false,
+      "manual": false,
+      "label": "No targets",
+      "detail": "Selector matches no nodes",
+      "desired": 0,
+      "updated": 0,
+      "ready": 0,
+      "available": 0,
+      "object": {
+        "metadata": { "generation": 1 },
+        "spec": { "updateStrategy": { "type": "RollingUpdate" } },
+        "status": { "observedGeneration": 1, "desiredNumberScheduled": 0 }
+      }
+    },
+    {
+      "name": "daemonset ondelete waits for restart",
+      "kind": "DaemonSet",
+      "phase": "waiting",
+      "active": true,
+      "manual": true,
+      "label": "Waiting for Pod restart",
+      "detail": "OnDelete strategy · 1/3 updated",
+      "desired": 3,
+      "updated": 1,
+      "ready": 3,
+      "available": 3,
+      "object": {
+        "metadata": { "generation": 3 },
+        "spec": { "updateStrategy": { "type": "OnDelete" } },
+        "status": { "observedGeneration": 3, "desiredNumberScheduled": 3, "updatedNumberScheduled": 1, "numberReady": 3, "numberAvailable": 3 }
+      }
+    },
+    {
+      "name": "argo rollout manual pause",
+      "kind": "Rollout",
+      "phase": "paused",
+      "active": true,
+      "manual": false,
+      "label": "Rollout paused",
+      "detail": "Step 2 · 2/4 updated · 4 available",
+      "desired": 4,
+      "updated": 2,
+      "ready": 4,
+      "available": 4,
+      "object": {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Rollout",
+        "spec": { "replicas": 4, "strategy": { "canary": { "steps": [{ "setWeight": 50 }, { "pause": {} }] } } },
+        "status": { "phase": "Paused", "currentStepIndex": 1, "updatedReplicas": 2, "readyReplicas": 4, "availableReplicas": 4 }
+      }
+    },
+    {
+      "name": "argo rollout workloadref still owns progress",
+      "kind": "Rollout",
+      "phase": "progressing",
+      "active": true,
+      "manual": false,
+      "label": "Rolling out",
+      "detail": "1/2 updated · 2 available",
+      "desired": 2,
+      "updated": 1,
+      "ready": 2,
+      "available": 2,
+      "object": {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Rollout",
+        "spec": { "replicas": 2, "workloadRef": { "apiVersion": "apps/v1", "kind": "Deployment", "name": "target" }, "strategy": { "canary": {} } },
+        "status": { "phase": "Progressing", "updatedReplicas": 1, "readyReplicas": 2, "availableReplicas": 2 }
+      }
+    },
+    {
+      "name": "deployment steady unavailability is health not rollout activity",
+      "kind": "Deployment",
+      "phase": "idle",
+      "active": false,
+      "manual": false,
+      "label": "Stable",
+      "detail": "2/3 available",
+      "desired": 3,
+      "updated": 3,
+      "ready": 2,
+      "available": 2,
+      "object": {
+        "metadata": { "generation": 4 },
+        "spec": { "replicas": 3 },
+        "status": { "observedGeneration": 4, "replicas": 3, "updatedReplicas": 3, "readyReplicas": 2, "availableReplicas": 2 }
+      }
+    },
+    {
+      "name": "deployment scaled to zero is neutral idle",
+      "kind": "Deployment",
+      "phase": "idle",
+      "active": false,
+      "manual": false,
+      "label": "Scaled to zero",
+      "detail": "No replicas requested",
+      "desired": 0,
+      "updated": 0,
+      "ready": 0,
+      "available": 0,
+      "object": {
+        "metadata": { "generation": 2 },
+        "spec": { "replicas": 0 },
+        "status": { "observedGeneration": 2 }
+      }
+    },
+    {
+      "name": "deployment recreate waits for old replicas",
+      "kind": "Deployment",
+      "phase": "waiting",
+      "active": true,
+      "manual": false,
+      "label": "Replacing replicas",
+      "detail": "Waiting for old replicas to stop · 3 available",
+      "desired": 3,
+      "updated": 0,
+      "ready": 3,
+      "available": 3,
+      "object": {
+        "metadata": { "generation": 5 },
+        "spec": { "replicas": 3, "strategy": { "type": "Recreate" } },
+        "status": { "observedGeneration": 5, "replicas": 3, "readyReplicas": 3, "availableReplicas": 3 }
+      }
+    },
+    {
+      "name": "statefulset partition target in progress",
+      "kind": "StatefulSet",
+      "phase": "progressing",
+      "active": true,
+      "manual": false,
+      "label": "Rolling out",
+      "detail": "2/3 target Pods updated · 5/5 ready",
+      "desired": 5,
+      "updated": 2,
+      "ready": 5,
+      "available": 5,
+      "object": {
+        "metadata": { "generation": 5 },
+        "spec": { "replicas": 5, "updateStrategy": { "type": "RollingUpdate", "rollingUpdate": { "partition": 2 } } },
+        "status": { "observedGeneration": 5, "updatedReplicas": 2, "readyReplicas": 5 }
+      }
+    },
+    {
+      "name": "statefulset retained pod unready does not reopen rollout",
+      "kind": "StatefulSet",
+      "phase": "partition-reached",
+      "active": false,
+      "manual": false,
+      "label": "Partition reached",
+      "detail": "2/5 Pods intentionally retained",
+      "desired": 5,
+      "updated": 3,
+      "ready": 4,
+      "available": 4,
+      "object": {
+        "metadata": { "generation": 5 },
+        "spec": { "replicas": 5, "updateStrategy": { "type": "RollingUpdate", "rollingUpdate": { "partition": 2 } } },
+        "status": { "observedGeneration": 5, "updatedReplicas": 3, "readyReplicas": 4, "currentRevision": "old", "updateRevision": "new" }
+      }
+    },
+    {
+      "name": "argo rollout abort is stalled",
+      "kind": "Rollout",
+      "phase": "stalled",
+      "active": false,
+      "manual": false,
+      "label": "Rollout stalled",
+      "detail": "The Rollout was aborted",
+      "desired": 2,
+      "updated": 1,
+      "ready": 1,
+      "available": 1,
+      "object": {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Rollout",
+        "spec": { "replicas": 2 },
+        "status": { "phase": "Progressing", "abort": true, "updatedReplicas": 1, "readyReplicas": 1, "availableReplicas": 1 }
+      }
+    },
+    {
+      "name": "argo rollout invalid spec is stalled",
+      "kind": "Rollout",
+      "phase": "stalled",
+      "active": false,
+      "manual": false,
+      "label": "Rollout stalled",
+      "detail": "bad stable service",
+      "desired": 2,
+      "updated": 0,
+      "ready": 0,
+      "available": 0,
+      "object": {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Rollout",
+        "spec": { "replicas": 2 },
+        "status": { "phase": "Degraded", "conditions": [{ "type": "InvalidSpec", "status": "True", "reason": "InvalidSpec", "message": "bad stable service" }] }
+      }
+    },
+    {
+      "name": "argo workloadref uses observed replica count",
+      "kind": "Rollout",
+      "phase": "idle",
+      "active": false,
+      "manual": false,
+      "label": "Stable",
+      "detail": "5/5 available",
+      "desired": 5,
+      "updated": 5,
+      "ready": 5,
+      "available": 5,
+      "object": {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Rollout",
+        "spec": { "workloadRef": { "apiVersion": "apps/v1", "kind": "Deployment", "name": "target" } },
+        "status": { "phase": "Healthy", "replicas": 5, "updatedReplicas": 5, "readyReplicas": 5, "availableReplicas": 5 }
+      }
+    },
+    {
+      "name": "argo completed step index is clamped to the final step",
+      "kind": "Rollout",
+      "phase": "progressing",
+      "active": true,
+      "manual": false,
+      "label": "Rolling out",
+      "detail": "Step 2 · 2/2 updated · 2 available",
+      "desired": 2,
+      "updated": 2,
+      "ready": 2,
+      "available": 2,
+      "object": {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Rollout",
+        "spec": { "replicas": 2, "strategy": { "canary": { "steps": [{ "setWeight": 50 }, { "pause": {} }] } } },
+        "status": { "phase": "Progressing", "currentStepIndex": 2, "updatedReplicas": 2, "readyReplicas": 2, "availableReplicas": 2 }
+      }
+    },
+    {
+      "name": "argo default replica count applies before status is populated",
+      "kind": "Rollout",
+      "phase": "applying",
+      "active": true,
+      "manual": false,
+      "label": "Applying change",
+      "detail": "0/1 updated · 0 available",
+      "desired": 1,
+      "updated": 0,
+      "ready": 0,
+      "available": 0,
+      "object": {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Rollout",
+        "spec": { "strategy": { "canary": {} } },
+        "status": { "replicas": 0 }
+      }
+    },
+    {
+      "name": "argo failed condition without detail is still stalled",
+      "kind": "Rollout",
+      "phase": "stalled",
+      "active": false,
+      "manual": false,
+      "label": "Rollout stalled",
+      "detail": "The Rollout controller reported a failed revision",
+      "desired": 2,
+      "updated": 0,
+      "ready": 0,
+      "available": 0,
+      "object": {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Rollout",
+        "spec": { "replicas": 2, "strategy": { "canary": {} } },
+        "status": { "phase": "Progressing", "conditions": [{ "type": "Progressing", "status": "False" }] }
+      }
+    },
+    {
+      "name": "argo controller has not observed image change",
+      "kind": "Rollout",
+      "phase": "applying",
+      "active": true,
+      "manual": false,
+      "label": "Applying change",
+      "detail": "Waiting for the Rollout controller to observe generation",
+      "desired": 2,
+      "updated": 2,
+      "ready": 2,
+      "available": 2,
+      "object": {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Rollout",
+        "metadata": { "generation": 5 },
+        "spec": { "replicas": 2, "strategy": { "canary": {} } },
+        "status": { "observedGeneration": "4", "phase": "Healthy", "updatedReplicas": 2, "readyReplicas": 2, "availableReplicas": 2 }
+      }
+    },
+    {
+      "name": "argo new generation supersedes stale failure",
+      "kind": "Rollout",
+      "phase": "applying",
+      "active": true,
+      "manual": false,
+      "label": "Applying change",
+      "detail": "Waiting for the Rollout controller to observe generation",
+      "desired": 2,
+      "updated": 1,
+      "ready": 2,
+      "available": 2,
+      "object": {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Rollout",
+        "metadata": { "generation": 6 },
+        "spec": { "replicas": 2, "strategy": { "canary": {} } },
+        "status": {
+          "observedGeneration": "5",
+          "phase": "Degraded",
+          "updatedReplicas": 1,
+          "readyReplicas": 2,
+          "availableReplicas": 2,
+          "conditions": [{ "type": "Progressing", "status": "False", "reason": "ProgressDeadlineExceeded" }]
+        }
+      }
+    },
+    {
+      "name": "argo step index without declared steps is omitted",
+      "kind": "Rollout",
+      "phase": "progressing",
+      "active": true,
+      "manual": false,
+      "label": "Rolling out",
+      "detail": "1/2 updated · 2 available",
+      "desired": 2,
+      "updated": 1,
+      "ready": 2,
+      "available": 2,
+      "object": {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Rollout",
+        "spec": { "replicas": 2, "strategy": { "canary": {} } },
+        "status": { "phase": "Progressing", "currentStepIndex": 3, "updatedReplicas": 1, "readyReplicas": 2, "availableReplicas": 2 }
+      }
+    },
+    {
+      "name": "argo failed condition reason precedes status message",
+      "kind": "Rollout",
+      "phase": "stalled",
+      "active": false,
+      "manual": false,
+      "label": "Rollout stalled",
+      "detail": "ProgressDeadlineExceeded",
+      "desired": 2,
+      "updated": 1,
+      "ready": 1,
+      "available": 1,
+      "object": {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Rollout",
+        "spec": { "replicas": 2, "strategy": { "canary": {} } },
+        "status": {
+          "phase": "Progressing",
+          "message": "less specific status message",
+          "updatedReplicas": 1,
+          "readyReplicas": 1,
+          "availableReplicas": 1,
+          "conditions": [{ "type": "Progressing", "status": "False", "reason": "ProgressDeadlineExceeded" }]
+        }
+      }
+    },
+    {
+      "name": "non argo rollout kind collision is ignored",
+      "kind": "Rollout",
+      "phase": "idle",
+      "active": false,
+      "manual": false,
+      "label": "Stable",
+      "detail": "",
+      "desired": 0,
+      "updated": 0,
+      "ready": 0,
+      "available": 0,
+      "object": {
+        "apiVersion": "rollouts.kruise.io/v1beta1",
+        "kind": "Rollout",
+        "spec": { "replicas": 2 },
+        "status": { "phase": "Progressing", "updatedReplicas": 1, "readyReplicas": 1, "availableReplicas": 1 }
+      }
+    }
+  ]
+}

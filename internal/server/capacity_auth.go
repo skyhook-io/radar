@@ -33,7 +33,7 @@ func (s *Server) capacityNamespacesForSource(r *http.Request, namespaces []strin
 		if s.canRead(r, group, resource, "", "list") {
 			return nil
 		}
-		return s.filterNamespacesByCanRead(r, group, resource, "list", s.allNamespaceNames())
+		return s.filterNamespacesByCanRead(r, group, resource, "list", allNamespaceNames())
 	}
 	return s.filterNamespacesByCanRead(r, group, resource, "list", namespaces)
 }

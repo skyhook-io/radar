@@ -41,11 +41,16 @@ rules:
       - storageclasses
     verbs: ["get", "list", "watch"]
 
-  # Upgrade impact source evidence. These kinds are not cached or browsable;
-  # the collector only lists them to inspect kubectl last-applied annotations.
+  # Upgrade impact evidence. These kinds are not cached or browsable.
   - apiGroups: ["storage.k8s.io"]
     resources:
+      - csidrivers
       - csistoragecapacities
+    verbs: ["list"]
+  - apiGroups: ["scheduling.k8s.io"]
+    resources:
+      - workloads
+      - podgroups
     verbs: ["list"]
   - apiGroups: ["flowcontrol.apiserver.k8s.io"]
     resources:

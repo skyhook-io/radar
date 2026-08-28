@@ -28,6 +28,12 @@ func TestCrossedReleaseCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(result.Checks) != 19 {
+		t.Fatalf("checks = %d, want 19", len(result.Checks))
+	}
+	for _, id := range []string{"removed-feature-gates", "removed-component-flags", "removed-kubelet-cadvisor-options", "kubelet-event-qps-change", "removed-scheduling-apis", "kubeadm-config-v1beta3", "removed-control-plane-metrics", "selinux-mount-transition", "kube-proxy-mode-transition"} {
+		_ = checkByID(t, result, id)
+	}
 	for _, check := range result.Checks {
 		if check.AppliesFrom == "1.35" || check.AppliesFrom == "1.36" {
 			t.Fatalf("already-crossed release check remained: %+v", check)

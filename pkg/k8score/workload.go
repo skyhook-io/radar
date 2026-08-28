@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -963,6 +964,7 @@ func BuildDeploymentRevisions(rsList []unstructured.Unstructured, workloadUID st
 			Image:     image,
 			Replicas:  replicas,
 			Template:  templateStr,
+			PodHash:   rs.GetLabels()["pod-template-hash"],
 		})
 	}
 
@@ -975,6 +977,67 @@ func BuildDeploymentRevisions(rsList []unstructured.Unstructured, workloadUID st
 	sort.Slice(revisions, func(i, j int) bool { return revisions[i].Number > revisions[j].Number })
 
 	return revisions
+}
+
+func CurrentDeploymentRevisionPodHashes(replicaSets []*appsv1.ReplicaSet) map[types.UID]string {
+	type revisionHash struct {
+		revision int64
+		hash     string
+	}
+	current := make(map[types.UID]revisionHash)
+	for _, replicaSet := range replicaSets {
+		revision, err := strconv.ParseInt(replicaSet.Annotations["deployment.kubernetes.io/revision"], 10, 64)
+		if err != nil {
+			continue
+		}
+		for _, owner := range replicaSet.OwnerReferences {
+			if owner.Kind != "Deployment" || owner.UID == "" {
+				continue
+			}
+			if existing, ok := current[owner.UID]; !ok || revision > existing.revision {
+				current[owner.UID] = revisionHash{revision: revision, hash: replicaSet.Labels[appsv1.DefaultDeploymentUniqueLabelKey]}
+			}
+			break
+		}
+	}
+	hashes := make(map[types.UID]string, len(current))
+	for uid, revision := range current {
+		if revision.hash != "" {
+			hashes[uid] = revision.hash
+		}
+	}
+	return hashes
+}
+
+func CurrentControllerRevisionPodHashes(revisions []unstructured.Unstructured) map[types.UID]string {
+	type revisionHash struct {
+		revision int64
+		hash     string
+	}
+	current := make(map[types.UID]revisionHash)
+	for i := range revisions {
+		revision := &revisions[i]
+		number, found, _ := unstructured.NestedInt64(revision.Object, "revision")
+		if !found {
+			continue
+		}
+		for _, owner := range revision.GetOwnerReferences() {
+			if (owner.Kind != "StatefulSet" && owner.Kind != "DaemonSet") || owner.UID == "" {
+				continue
+			}
+			if existing, ok := current[owner.UID]; !ok || number > existing.revision {
+				current[owner.UID] = revisionHash{revision: number, hash: revision.GetLabels()[appsv1.ControllerRevisionHashLabelKey]}
+			}
+			break
+		}
+	}
+	hashes := make(map[types.UID]string, len(current))
+	for uid, revision := range current {
+		if revision.hash != "" {
+			hashes[uid] = revision.hash
+		}
+	}
+	return hashes
 }
 
 func (m *WorkloadManager) listControllerRevisions(ctx context.Context, namespace, name, workloadUID string) ([]WorkloadRevision, error) {
@@ -998,11 +1061,13 @@ func BuildControllerRevisions(crList []unstructured.Unstructured, workloadUID st
 	var maxRevision int64
 
 	for _, cr := range crList {
+		ownerKind := ""
 		if workloadUID != "" {
 			owned := false
 			for _, ref := range cr.GetOwnerReferences() {
 				if string(ref.UID) == workloadUID {
 					owned = true
+					ownerKind = ref.Kind
 					break
 				}
 			}
@@ -1035,11 +1100,16 @@ func BuildControllerRevisions(crList []unstructured.Unstructured, workloadUID st
 			maxRevision = revNum
 		}
 
+		podHash := cr.GetLabels()[appsv1.ControllerRevisionHashLabelKey]
+		if ownerKind == "StatefulSet" {
+			podHash = cr.GetName()
+		}
 		revisions = append(revisions, WorkloadRevision{
 			Number:    revNum,
 			CreatedAt: cr.GetCreationTimestamp().Time,
 			Image:     image,
 			Template:  templateStr,
+			PodHash:   podHash,
 		})
 	}
 

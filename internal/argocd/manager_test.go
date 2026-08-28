@@ -57,13 +57,15 @@ func (f *fakeArgo) handler() http.Handler {
 }
 
 func newTestManager(cfg config.Config) *Manager {
-	return &Manager{
+	m := &Manager{
 		k8sClient:   func() kubernetes.Interface { return nil },
 		k8sConfig:   func() *rest.Config { return nil },
 		inCluster:   func() bool { return false },
 		contextName: func() string { return "" },
 		loadConfig:  func() config.Config { return cfg },
 	}
+	m.contextBinding = func(context.Context) string { return m.currentContextName() }
+	return m
 }
 
 // TestAutoDiscoveryTokenBoundToContext pins that an auto-discovery token
@@ -140,7 +142,7 @@ func TestRestoreConfigRestoresTokenContextBinding(t *testing.T) {
 	}
 
 	// The probe fails, so the handler rolls back to the prior token + binding.
-	m.RestoreConfig("", "token-a", false, "cluster-a")
+	m.RestoreConfig("", "token-a", false, "cluster-a", "cluster-a")
 	if m.tokenContext != "cluster-a" {
 		t.Fatalf("tokenContext after rollback = %q, want cluster-a restored", m.tokenContext)
 	}
@@ -407,6 +409,7 @@ func TestSeedRestoresTokenContext(t *testing.T) {
 	m := newTestManager(config.Config{
 		ArgoCDToken:        "secret-token",
 		ArgoCDTokenContext: "cluster-a",
+		ArgoCDTokenBinding: "cluster-a",
 	})
 	m.contextName = func() string { return ctx }
 
@@ -422,6 +425,80 @@ func TestSeedRestoresTokenContext(t *testing.T) {
 	m.Reset()
 	if err := m.Probe(context.Background()); !errors.Is(err, errTokenContextMismatch) {
 		t.Fatalf("different context must still mismatch, got %v", err)
+	}
+}
+
+func TestSeedRejectsLegacyNameOnlyBinding(t *testing.T) {
+	m := newTestManager(config.Config{
+		ArgoCDToken:        "secret-token",
+		ArgoCDTokenContext: "cluster-a",
+	})
+	m.contextName = func() string { return "cluster-a" }
+	m.contextBinding = func(context.Context) string { return "source-a" }
+
+	if err := m.Probe(context.Background()); !errors.Is(err, ErrTokenBindingUpgrade) {
+		t.Fatalf("Probe with name-only token stamp = %v, want ErrTokenBindingUpgrade", err)
+	}
+	if !m.TokenBindingUpgradeRequired() {
+		t.Fatal("name-only auto-discovery token must report that re-confirmation is required")
+	}
+}
+
+func TestAutoDiscoveryBindingIgnoresVisibleQualifierChanges(t *testing.T) {
+	visibleName := "prod"
+	binding := "source-a"
+	m := newTestManager(config.Config{})
+	m.contextName = func() string { return visibleName }
+	m.contextBinding = func(context.Context) string { return binding }
+
+	m.SetConfig("", "secret-token", false, true)
+	visibleName = "prod (team-a)"
+	if err := m.Probe(context.Background()); errors.Is(err, errTokenContextMismatch) {
+		t.Fatalf("visible qualifier change rejected stable source binding: %v", err)
+	}
+
+	binding = "source-b"
+	if err := m.Probe(context.Background()); !errors.Is(err, errTokenContextMismatch) {
+		t.Fatalf("source change = %v, want errTokenContextMismatch", err)
+	}
+}
+
+func TestAutoDiscoveryWithoutSourceIdentityFailsClosed(t *testing.T) {
+	m := newTestManager(config.Config{})
+	m.contextName = func() string { return "identity-less" }
+	m.contextBinding = func(context.Context) string { return "" }
+
+	m.SetConfig("", "secret-token", false, true)
+	if m.tokenBinding != "" {
+		t.Fatalf("tokenBinding = %q, want empty", m.tokenBinding)
+	}
+	if err := m.Probe(context.Background()); !errors.Is(err, errTokenContextMismatch) {
+		t.Fatalf("Probe without a source identity = %v, want errTokenContextMismatch", err)
+	}
+}
+
+func TestInClusterEnvSeedUsesDeterministicBindingWithoutClusterLookup(t *testing.T) {
+	resolverCalls := 0
+	m := newTestManager(config.Config{})
+	m.inCluster = func() bool { return true }
+	m.contextName = func() string { return "in-cluster" }
+	m.contextBinding = func(context.Context) string {
+		resolverCalls++
+		return ""
+	}
+
+	m.SeedFromEnv("", "secret-token", false)
+	if m.tokenBinding != inClusterTokenBinding {
+		t.Fatalf("tokenBinding = %q, want %q", m.tokenBinding, inClusterTokenBinding)
+	}
+	if resolverCalls != 0 {
+		t.Fatalf("source binding resolver called %d time(s), want none in-cluster", resolverCalls)
+	}
+	if err := m.Probe(context.Background()); errors.Is(err, errTokenContextMismatch) {
+		t.Fatalf("in-cluster env token rejected by its deterministic binding: %v", err)
+	}
+	if resolverCalls != 0 {
+		t.Fatalf("source binding resolver called %d time(s) during probe, want none in-cluster", resolverCalls)
 	}
 }
 

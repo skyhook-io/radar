@@ -15,7 +15,7 @@ import type {
 import {
   ChevronDown,
   ChevronRight,
-  DollarSign,
+  Coins,
   ExternalLink,
   HelpCircle,
   Loader2,
@@ -26,6 +26,7 @@ import { PaneLoader, FreshnessControl, PageHeader } from '@skyhook-io/k8s-ui'
 import { CostTrendChart } from './CostTrendChart'
 import {
   COST_HOURS_PER_MONTH,
+  DEFAULT_COST_CURRENCY,
   formatCostPerHour,
   formatProjectedDailyRate,
   formatProjectedMonthlyCost,
@@ -125,7 +126,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
       <CostOverviewState>
         <div className="flex min-h-64 items-center justify-center">
           <div className="flex flex-col items-center gap-3 text-theme-text-secondary">
-            <DollarSign className="w-8 h-8 text-theme-text-tertiary/40" />
+            <Coins className="w-8 h-8 text-theme-text-tertiary/40" />
             <p className="text-sm">{message}</p>
             <button
               onClick={onBack}
@@ -152,6 +153,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
   }
 
   const hourlyCost = data.totalHourlyCost ?? 0
+  const currency = data.currency ?? DEFAULT_COST_CURRENCY
   const namespaces = data.namespaces ?? []
   const totalCpu = namespaces.reduce((sum, ns) => sum + ns.cpuCost, 0)
   const totalMem = namespaces.reduce((sum, ns) => sum + ns.memoryCost, 0)
@@ -166,6 +168,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
   const storagePct = allocTotal > 0 ? (totalStorage / allocTotal) * 100 : 0
 
   const nodes = nodeData?.available ? (nodeData.nodes ?? []) : []
+  const nodeCurrency = nodeData?.currency ?? currency
   const clusterConsoleLink = clusterCloudConsoleLink(clusterInfo?.context)
 
   return (
@@ -175,7 +178,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2">
-              <DollarSign className="w-5 h-5 text-indigo-500" />
+              <Coins className="w-5 h-5 text-indigo-500" />
               <h1 className="text-lg font-semibold text-theme-text-primary">Cost Insights</h1>
             </div>
             <span className="text-theme-text-quaternary">·</span>
@@ -212,17 +215,17 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
             <div className="flex flex-col items-end">
               <div className="flex items-baseline gap-1">
                 <span className="text-2xl font-bold text-theme-text-primary tabular-nums">
-                  {formatProjectedMonthlyCost(hourlyCost)}
+                  {formatProjectedMonthlyCost(hourlyCost, currency)}
                 </span>
                 <span className="text-xs text-theme-text-tertiary">/mo</span>
               </div>
               <div className="mt-0.5 flex items-baseline gap-2 text-theme-text-secondary">
                 <span className="text-sm font-medium tabular-nums">
-                  {formatProjectedDailyRate(hourlyCost)}
+                  {formatProjectedDailyRate(hourlyCost, currency)}
                 </span>
                 <span className="text-[10px] text-theme-text-quaternary">·</span>
                 <span className="text-sm font-medium tabular-nums">
-                  {formatCostPerHour(hourlyCost)}
+                  {formatCostPerHour(hourlyCost, currency)}
                 </span>
               </div>
               <span className="text-[10px] text-theme-text-quaternary">
@@ -243,16 +246,16 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
             <div className="flex items-center gap-4 text-xs text-theme-text-tertiary">
               <span className="flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 rounded-sm bg-accent" />
-                CPU {formatProjectedMonthlyRate(totalCpu)}
+                CPU {formatProjectedMonthlyRate(totalCpu, currency)}
               </span>
               <span className="flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 rounded-sm bg-amber-500" />
-                Memory {formatProjectedMonthlyRate(totalMem)}
+                Memory {formatProjectedMonthlyRate(totalMem, currency)}
               </span>
               {hasStorage && (
                 <span className="flex items-center gap-1.5">
                   <span className="w-2.5 h-2.5 rounded-sm bg-teal-500" />
-                  Storage {formatProjectedMonthlyRate(totalStorage)}
+                  Storage {formatProjectedMonthlyRate(totalStorage, currency)}
                 </span>
               )}
             </div>
@@ -324,6 +327,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
                 ns={ns}
                 maxCost={namespaces[0]?.hourlyCost ?? 0}
                 hasStorage={hasStorage}
+                currency={currency}
                 onOpenResource={onOpenResource}
               />
             ))}
@@ -331,20 +335,29 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
         </div>
 
         {/* Node cost table */}
-        {nodes.length > 0 && <NodeCostTable nodes={nodes} onOpenResource={onOpenResource} />}
+        {nodes.length > 0 && (
+          <NodeCostTable
+            nodes={nodes}
+            currency={nodeCurrency}
+            onOpenResource={onOpenResource}
+          />
+        )}
 
         {/* Footer */}
         <div className="flex items-center justify-between text-xs text-theme-text-tertiary pb-4">
           <span>
-            {data.currency ?? 'USD'} &middot; current rates based on last 1h average &middot;
+            {currency} &middot; current rates based on last 1h average &middot;
             *monthly projections assume {COST_HOURS_PER_MONTH} hrs/mo
+            {currency !== DEFAULT_COST_CURRENCY && (
+              <> &middot; no conversion</>
+            )}
           </span>
           <span className="text-indigo-500 font-medium">Powered by OpenCost</span>
         </div>
       </div>
 
       {/* Help dialog */}
-      {showHelp && <CostHelpDialog onClose={() => setShowHelp(false)} />}
+      {showHelp && <CostHelpDialog currency={currency} onClose={() => setShowHelp(false)} />}
     </div>
   )
 }
@@ -354,7 +367,7 @@ function CostOverviewState({ children }: { children: React.ReactNode }) {
     <div className="flex-1 overflow-y-auto">
       <div className="mx-auto flex w-full max-w-[1920px] flex-col gap-4 px-6 py-6">
         <PageHeader
-          icon={DollarSign}
+          icon={Coins}
           title="Cost Insights"
           description="Understand current allocation and find CPU and memory requests worth tuning."
         />
@@ -369,11 +382,13 @@ function NamespaceCostRow({
   ns,
   maxCost,
   hasStorage,
+  currency,
   onOpenResource,
 }: {
   ns: OpenCostNamespaceCost
   maxCost: number
   hasStorage: boolean
+  currency: string
   onOpenResource?: (resource: SelectedResource) => void
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -410,10 +425,10 @@ function NamespaceCostRow({
           )}
         </span>
         <span className="text-sm font-medium text-theme-text-primary tabular-nums text-right">
-          {formatProjectedMonthlyCost(ns.hourlyCost)}
+          {formatProjectedMonthlyCost(ns.hourlyCost, currency)}
         </span>
         <span className="text-sm text-theme-text-secondary tabular-nums text-right">
-          {formatCostPerHour(ns.hourlyCost)}
+          {formatCostPerHour(ns.hourlyCost, currency)}
         </span>
         <span className="flex items-center gap-2">
           <div
@@ -428,10 +443,11 @@ function NamespaceCostRow({
           </div>
         </span>
         <span className="text-[11px] text-theme-text-tertiary tabular-nums text-right">
-          {formatProjectedMonthlyCost(ns.cpuCost)} / {formatProjectedMonthlyCost(ns.memoryCost)}
+          {formatProjectedMonthlyCost(ns.cpuCost, currency)} /{' '}
+          {formatProjectedMonthlyCost(ns.memoryCost, currency)}
           {hasStorage &&
             (ns.storageCost ?? 0) > 0 &&
-            ` / ${formatProjectedMonthlyCost(ns.storageCost ?? 0)}`}
+            ` / ${formatProjectedMonthlyCost(ns.storageCost ?? 0, currency)}`}
         </span>
       </button>
 
@@ -439,7 +455,13 @@ function NamespaceCostRow({
       {expanded && isSystemCostNamespace(ns.name) && (
         <SystemNamespaceCostNote namespace={ns.name} />
       )}
-      {expanded && <WorkloadRows namespace={ns.name} onOpenResource={onOpenResource} />}
+      {expanded && (
+        <WorkloadRows
+          namespace={ns.name}
+          fallbackCurrency={currency}
+          onOpenResource={onOpenResource}
+        />
+      )}
     </div>
   )
 }
@@ -471,9 +493,11 @@ function SystemNamespacesCostNote() {
 
 function WorkloadRows({
   namespace,
+  fallbackCurrency,
   onOpenResource,
 }: {
   namespace: string
+  fallbackCurrency: string
   onOpenResource?: (resource: SelectedResource) => void
 }) {
   const { data, isLoading } = useOpenCostWorkloads(namespace)
@@ -488,6 +512,7 @@ function WorkloadRows({
   }
 
   const workloads = data?.workloads ?? []
+  const currency = data?.currency ?? fallbackCurrency
   if (workloads.length === 0) {
     return (
       <div className="px-4 py-3 text-xs text-theme-text-tertiary bg-theme-elevated/30 pl-10">
@@ -504,6 +529,7 @@ function WorkloadRows({
           wl={wl}
           namespace={namespace}
           maxCost={workloads[0]?.hourlyCost ?? 0}
+          currency={currency}
           onOpenResource={onOpenResource}
         />
       ))}
@@ -515,11 +541,13 @@ function WorkloadCostRow({
   wl,
   namespace,
   maxCost,
+  currency,
   onOpenResource,
 }: {
   wl: OpenCostWorkloadCost
   namespace: string
   maxCost: number
+  currency: string
   onOpenResource?: (resource: SelectedResource) => void
 }) {
   const cpuPct = wl.hourlyCost > 0 ? (wl.cpuCost / wl.hourlyCost) * 100 : 50
@@ -541,10 +569,10 @@ function WorkloadCostRow({
         )}
       </span>
       <span className="text-xs font-medium text-theme-text-secondary tabular-nums text-right">
-        {formatProjectedMonthlyCost(wl.hourlyCost)}
+        {formatProjectedMonthlyCost(wl.hourlyCost, currency)}
       </span>
       <span className="text-xs text-theme-text-tertiary tabular-nums text-right">
-        {formatCostPerHour(wl.hourlyCost)}
+        {formatCostPerHour(wl.hourlyCost, currency)}
       </span>
       <span className="flex items-center gap-2">
         <div
@@ -556,7 +584,8 @@ function WorkloadCostRow({
         </div>
       </span>
       <span className="text-[10px] text-theme-text-tertiary tabular-nums text-right">
-        {formatProjectedMonthlyCost(wl.cpuCost)} / {formatProjectedMonthlyCost(wl.memoryCost)}
+        {formatProjectedMonthlyCost(wl.cpuCost, currency)} /{' '}
+        {formatProjectedMonthlyCost(wl.memoryCost, currency)}
       </span>
     </>
   )
@@ -582,9 +611,11 @@ function WorkloadCostRow({
 
 function NodeCostTable({
   nodes,
+  currency,
   onOpenResource,
 }: {
   nodes: OpenCostNodeCost[]
+  currency: string
   onOpenResource?: (resource: SelectedResource) => void
 }) {
   return (
@@ -627,7 +658,12 @@ function NodeCostTable({
       {/* Node rows */}
       <div className="divide-y divide-theme-border/50">
         {nodes.map((node) => (
-          <NodeCostRow key={node.name} node={node} onOpenResource={onOpenResource} />
+          <NodeCostRow
+            key={node.name}
+            node={node}
+            currency={currency}
+            onOpenResource={onOpenResource}
+          />
         ))}
       </div>
     </div>
@@ -636,9 +672,11 @@ function NodeCostTable({
 
 function NodeCostRow({
   node,
+  currency,
   onOpenResource,
 }: {
   node: OpenCostNodeCost
+  currency: string
   onOpenResource?: (resource: SelectedResource) => void
 }) {
   const cloudLink = nodeCloudConsoleLink(node.providerID)
@@ -680,13 +718,14 @@ function NodeCostRow({
         {node.region && <span className="text-theme-text-quaternary ml-1.5">({node.region})</span>}
       </span>
       <span className="text-sm font-medium text-theme-text-primary tabular-nums text-right">
-        {formatProjectedMonthlyCost(node.hourlyCost)}
+        {formatProjectedMonthlyCost(node.hourlyCost, currency)}
       </span>
       <span className="text-sm text-theme-text-secondary tabular-nums text-right">
-        {formatCostPerHour(node.hourlyCost)}
+        {formatCostPerHour(node.hourlyCost, currency)}
       </span>
       <span className="text-[11px] text-theme-text-tertiary tabular-nums text-right">
-        {formatProjectedMonthlyCost(node.cpuCost)} / {formatProjectedMonthlyCost(node.memoryCost)}
+        {formatProjectedMonthlyCost(node.cpuCost, currency)} /{' '}
+        {formatProjectedMonthlyCost(node.memoryCost, currency)}
       </span>
     </div>
   )
@@ -729,7 +768,7 @@ function apiGroupForCostWorkload(kind: string): string | undefined {
 
 // --- Help dialog ---
 
-function CostHelpDialog({ onClose }: { onClose: () => void }) {
+function CostHelpDialog({ currency, onClose }: { currency: string; onClose: () => void }) {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
@@ -767,8 +806,20 @@ function CostHelpDialog({ onClose }: { onClose: () => void }) {
             <p>
               Cost data comes from <strong>OpenCost</strong>, an open-source tool that combines your
               cloud provider's pricing (how much each node costs per hour) with Kubernetes resource
-              allocation data. This gives you a dollar value for each workload running on your
-              cluster.
+              allocation data. This gives you a cost value for each workload running on your cluster.
+            </p>
+          </section>
+
+          <section>
+            <h3 className="text-sm font-semibold text-theme-text-primary mb-1.5">
+              Which currency is shown?
+            </h3>
+            <p>
+              Radar labels these values <strong>{currency}</strong> and does not convert them. Auto
+              reads <code>currencyCode</code> or <code>DISPLAY_CURRENCY</code> from an active
+              OpenCost/Kubecost installation when Prometheus is cluster-discovered, then falls back
+              to USD. Override it in <strong>Settings → Cost</strong> or, for automation, with{' '}
+              <code>--opencost-currency</code> (Helm: <code>cost.currency</code>).
             </p>
           </section>
 

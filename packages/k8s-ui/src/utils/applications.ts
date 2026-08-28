@@ -1,4 +1,5 @@
 import type { ResourceRef } from '../types/core'
+import { rolloutActivityLevel, type WorkloadRolloutActivity } from './workload-rollout'
 
 // Shared model for the Applications surface — host-agnostic. The OSS single-
 // cluster view and (eventually) the Cloud fleet view both build on these types
@@ -26,7 +27,56 @@ export interface AppWorkload {
   desired: number;
   restarts: number;
   reason?: string;
+  rollout?: WorkloadRolloutActivity;
   batch?: AppBatchSummary;
+}
+
+export interface AppRolloutSummary {
+  count: number
+  label: string
+  detail: string
+  details: string[]
+  health: AppHealth
+}
+
+export function rolloutDisplayHealth(activity: WorkloadRolloutActivity, workloadHealth: string): AppHealth {
+  const rolloutHealth: AppHealth = rolloutActivityLevel(activity)
+  const servingHealth = healthOf(workloadHealth)
+  return servingHealth === 'healthy' || servingHealth === 'neutral'
+    ? rolloutHealth
+    : worstHealth([rolloutHealth, servingHealth])
+}
+
+export function rolloutSummaryForApps(apps: AppRow[]): AppRolloutSummary | null {
+  const entries = apps.flatMap((app) => app.workloads
+    .filter((workload) => workload.rollout && (workload.rollout.active || workload.rollout.phase === 'stalled'))
+    .map((workload) => ({ app, workload, rollout: workload.rollout! })))
+  if (entries.length === 0) return null
+  const rank = (phase: WorkloadRolloutActivity['phase']) => {
+    if (phase === 'stalled') return 3
+    if (phase === 'paused') return 2
+    return 1
+  }
+  const worst = entries.reduce((current, entry) => rank(entry.rollout.phase) > rank(current.rollout.phase) ? entry : current)
+  const health = entries.reduce<AppHealth>(
+    (current, entry) => worstHealth([current, rolloutDisplayHealth(entry.rollout, entry.workload.health)]),
+    'neutral',
+  )
+  const stalled = entries.filter((entry) => entry.rollout.phase === 'stalled').length
+  const label = entries.length === 1
+    ? worst.rollout.label
+    : stalled > 0
+      ? stalled === entries.length
+        ? `${stalled} stalled`
+        : `${stalled} stalled · ${entries.length - stalled} waiting`
+      : `${entries.length} updating`
+  const details = entries.map(({ app, workload, rollout }) => {
+    const prefix = apps.length > 1 ? `${app.name} / ` : ''
+    return `${prefix}${workload.name}: ${rollout.label}${rollout.detail ? ` — ${rollout.detail}` : ''}`
+  })
+  const visibleDetails = details.slice(0, 8)
+  const detail = `${visibleDetails.join(' · ')}${details.length > visibleDetails.length ? ` · +${details.length - visibleDetails.length} more` : ''}`
+  return { count: entries.length, label, detail, details, health }
 }
 
 export interface AppBatchSummary {

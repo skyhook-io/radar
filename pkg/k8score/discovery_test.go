@@ -178,3 +178,60 @@ func TestSupportsWatchGVRCoreResourceUsesExactEmptyGroup(t *testing.T) {
 		t.Fatal("Knative Service GVR should not inherit watch support from core Service")
 	}
 }
+
+// TestGetGVRBareKindPrefersListWatchAcrossGroups covers the kueue LocalQueue
+// collision: the plural "localqueues" exists as a real CRD in kueue.x-k8s.io
+// (supports list/watch) and as kueue's aggregated visibility APIService in
+// visibility.kueue.x-k8s.io (no list/watch). Both are CRD-typed and live in
+// different groups, so the bare-kind pick is decided by the list/watch verbs:
+// GetGVR must resolve to the list/watch-capable CRD regardless of insertion
+// order, since cross-group discovery order is unstable in production.
+func TestGetGVRBareKindPrefersListWatchAcrossGroups(t *testing.T) {
+	visibility := APIResource{
+		Group:      "visibility.kueue.x-k8s.io",
+		Version:    "v1beta2",
+		Kind:       "LocalQueue",
+		Name:       "localqueues",
+		Namespaced: true,
+		IsCRD:      true,
+		Verbs:      []string{"get"},
+	}
+	realCRD := APIResource{
+		Group:      "kueue.x-k8s.io",
+		Version:    "v1beta1",
+		Kind:       "LocalQueue",
+		Name:       "localqueues",
+		Namespaced: true,
+		IsCRD:      true,
+		Verbs:      []string{"get", "list", "watch"},
+	}
+	want := schema.GroupVersionResource{Group: "kueue.x-k8s.io", Version: "v1beta1", Resource: "localqueues"}
+
+	cases := []struct {
+		name  string
+		first APIResource
+		last  APIResource
+	}{
+		{name: "visibility discovered first", first: visibility, last: realCRD},
+		{name: "real CRD discovered first", first: realCRD, last: visibility},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &ResourceDiscovery{
+				resourceMap: make(map[string]APIResource),
+				gvrMap:      make(map[string]schema.GroupVersionResource),
+			}
+			d.AddAPIResource(tc.first)
+			d.AddAPIResource(tc.last)
+
+			gvr, ok := d.GetGVR("localqueues")
+			if !ok {
+				t.Fatal("expected bare-kind localqueues lookup to resolve")
+			}
+			if gvr != want {
+				t.Fatalf("GetGVR(localqueues) = %v, want %v (list/watch-capable CRD)", gvr, want)
+			}
+		})
+	}
+}

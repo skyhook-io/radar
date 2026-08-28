@@ -31,12 +31,16 @@ func (s *Server) handleOpenCostApplication(w http.ResponseWriter, r *http.Reques
 
 	client := prometheuspkg.GetClient()
 	if client == nil {
-		s.writeJSON(w, pkgopencost.UnavailableApplicationCostResponse(inputs, unavailable, unsupported, pkgopencost.ReasonNoPrometheus))
+		resp := pkgopencost.UnavailableApplicationCostResponse(inputs, unavailable, unsupported, pkgopencost.ReasonNoPrometheus)
+		resp.Currency = s.resolvedOpenCostCurrency()
+		s.writeJSON(w, resp)
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
 		log.Print("[opencost] EnsureConnected failed for application cost")
-		s.writeJSON(w, pkgopencost.UnavailableApplicationCostResponse(inputs, unavailable, unsupported, internalopencost.ConnectionFailureReason(err)))
+		resp := pkgopencost.UnavailableApplicationCostResponse(inputs, unavailable, unsupported, internalopencost.ConnectionFailureReason(err))
+		resp.Currency = s.resolvedOpenCostCurrency()
+		s.writeJSON(w, resp)
 		return
 	}
 
@@ -46,7 +50,9 @@ func (s *Server) handleOpenCostApplication(w http.ResponseWriter, r *http.Reques
 			r.Context(), client.Prom(), namespace, internalopencost.BuildPodOwnerLookup(namespace))
 	}
 
-	s.writeJSON(w, pkgopencost.BuildApplicationCostResponse(inputs, unavailable, unsupported, namespaceCosts))
+	resp := pkgopencost.BuildApplicationCostResponse(inputs, unavailable, unsupported, namespaceCosts)
+	resp.Currency = s.resolvedOpenCostCurrency()
+	s.writeJSON(w, resp)
 }
 
 func (s *Server) handleOpenCostApplicationTrend(w http.ResponseWriter, r *http.Request) {
@@ -66,29 +72,35 @@ func (s *Server) handleOpenCostApplicationTrend(w http.ResponseWriter, r *http.R
 
 	client := prometheuspkg.GetClient()
 	if client == nil {
-		s.writeJSON(w, pkgopencost.ComputeApplicationCostTrendFromProm(r.Context(), nil, pkgopencost.ApplicationTrendOptions{
+		resp := pkgopencost.ComputeApplicationCostTrendFromProm(r.Context(), nil, pkgopencost.ApplicationTrendOptions{
 			Range:       req.Range,
 			Workloads:   refs,
 			Unavailable: unavailable,
-		}))
+		})
+		resp.Currency = s.resolvedOpenCostCurrency()
+		s.writeJSON(w, resp)
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
 		log.Print("[opencost] EnsureConnected failed for application trend")
-		s.writeJSON(w, pkgopencost.ComputeApplicationCostTrendFromProm(r.Context(), nil, pkgopencost.ApplicationTrendOptions{
+		resp := pkgopencost.ComputeApplicationCostTrendFromProm(r.Context(), nil, pkgopencost.ApplicationTrendOptions{
 			Range:             req.Range,
 			Workloads:         refs,
 			Unavailable:       unavailable,
 			UnavailableReason: internalopencost.ConnectionFailureReason(err),
-		}))
+		})
+		resp.Currency = s.resolvedOpenCostCurrency()
+		s.writeJSON(w, resp)
 		return
 	}
 
-	s.writeJSON(w, pkgopencost.ComputeApplicationCostTrendFromProm(r.Context(), client.Prom(), pkgopencost.ApplicationTrendOptions{
+	resp := pkgopencost.ComputeApplicationCostTrendFromProm(r.Context(), client.Prom(), pkgopencost.ApplicationTrendOptions{
 		Range:       req.Range,
 		Workloads:   refs,
 		Unavailable: unavailable,
-	}))
+	})
+	resp.Currency = s.resolvedOpenCostCurrency()
+	s.writeJSON(w, resp)
 }
 
 func (s *Server) parseOpenCostApplicationRequest(w http.ResponseWriter, r *http.Request) (openCostApplicationRequest, []pkgopencost.ApplicationWorkloadCostInput, []pkgopencost.ApplicationWorkloadStatus, []pkgopencost.ApplicationWorkloadRef, bool) {

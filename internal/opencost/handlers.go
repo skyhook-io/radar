@@ -17,27 +17,29 @@ import (
 )
 
 // RegisterRoutes registers OpenCost routes on the given router.
-func RegisterRoutes(r chi.Router) {
-	r.Get("/opencost/summary", handleSummary)
-	r.Get("/opencost/workloads", handleWorkloads)
-	r.Get("/opencost/trend", handleTrend)
-	r.Get("/opencost/nodes", handleNodes)
+func RegisterRoutes(r chi.Router, resolveCurrency func() string) {
+	r.Get("/opencost/summary", func(w http.ResponseWriter, r *http.Request) { handleSummary(w, r, resolveCurrency) })
+	r.Get("/opencost/workloads", func(w http.ResponseWriter, r *http.Request) { handleWorkloads(w, r, resolveCurrency) })
+	r.Get("/opencost/trend", func(w http.ResponseWriter, r *http.Request) { handleTrend(w, r, resolveCurrency) })
+	r.Get("/opencost/nodes", func(w http.ResponseWriter, r *http.Request) { handleNodes(w, r, resolveCurrency) })
 }
 
 // handleSummary returns namespace-level cost summary from OpenCost Prometheus metrics.
-func handleSummary(w http.ResponseWriter, r *http.Request) {
+func handleSummary(w http.ResponseWriter, r *http.Request, resolveCurrency func() string) {
 	client := prometheuspkg.GetClient()
 	if client == nil {
-		writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: pkgopencost.ReasonNoPrometheus})
+		writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: pkgopencost.ReasonNoPrometheus, Currency: resolvedCurrency(resolveCurrency)})
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
 		log.Printf("[opencost] EnsureConnected failed (summary): %v", err)
-		writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: ConnectionFailureReason(err)})
+		writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: ConnectionFailureReason(err), Currency: resolvedCurrency(resolveCurrency)})
 		return
 	}
-	writeJSON(w, http.StatusOK, pkgopencost.ComputeCostSummaryFromProm(
-		r.Context(), client.Prom(), pkgopencost.SummaryOptions{}))
+	currency := resolvedCurrency(resolveCurrency)
+	resp := pkgopencost.ComputeCostSummaryFromProm(
+		r.Context(), client.Prom(), pkgopencost.SummaryOptions{Currency: currency})
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
@@ -49,7 +51,7 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 }
 
 // handleWorkloads returns workload-level cost breakdown for a namespace.
-func handleWorkloads(w http.ResponseWriter, r *http.Request) {
+func handleWorkloads(w http.ResponseWriter, r *http.Request, resolveCurrency func() string) {
 	ns := r.URL.Query().Get("namespace")
 	if ns == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "namespace parameter is required"})
@@ -58,17 +60,18 @@ func handleWorkloads(w http.ResponseWriter, r *http.Request) {
 
 	client := prometheuspkg.GetClient()
 	if client == nil {
-		writeJSON(w, http.StatusOK, pkgopencost.WorkloadCostResponse{Namespace: ns, Reason: pkgopencost.ReasonNoPrometheus})
+		writeJSON(w, http.StatusOK, pkgopencost.WorkloadCostResponse{Namespace: ns, Reason: pkgopencost.ReasonNoPrometheus, Currency: resolvedCurrency(resolveCurrency)})
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
 		log.Printf("[opencost] EnsureConnected failed (workloads): %v", err)
-		writeJSON(w, http.StatusOK, pkgopencost.WorkloadCostResponse{Namespace: ns, Reason: ConnectionFailureReason(err)})
+		writeJSON(w, http.StatusOK, pkgopencost.WorkloadCostResponse{Namespace: ns, Reason: ConnectionFailureReason(err), Currency: resolvedCurrency(resolveCurrency)})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, pkgopencost.ComputeWorkloadsFromProm(
-		r.Context(), client.Prom(), ns, BuildPodOwnerLookup(ns)))
+	resp := pkgopencost.ComputeWorkloadsFromProm(r.Context(), client.Prom(), ns, BuildPodOwnerLookup(ns))
+	resp.Currency = resolvedCurrency(resolveCurrency)
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // BuildPodOwnerLookup snapshots radar's pod informer for `ns` so
@@ -117,36 +120,48 @@ func stripReplicaSetSuffix(name string) string {
 }
 
 // handleTrend returns cost trend data over time as a stacked series per namespace.
-func handleTrend(w http.ResponseWriter, r *http.Request) {
+func handleTrend(w http.ResponseWriter, r *http.Request, resolveCurrency func() string) {
 	client := prometheuspkg.GetClient()
 	if client == nil {
-		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: pkgopencost.ReasonNoPrometheus})
+		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: pkgopencost.ReasonNoPrometheus, Currency: resolvedCurrency(resolveCurrency)})
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
 		log.Printf("[opencost] EnsureConnected failed (trend): %v", err)
-		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: ConnectionFailureReason(err)})
+		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: resolvedCurrency(resolveCurrency)})
 		return
 	}
-	writeJSON(w, http.StatusOK, pkgopencost.ComputeCostTrendFromProm(
-		r.Context(), client.Prom(), pkgopencost.TrendPromOptions{Range: r.URL.Query().Get("range")}))
+	resp := pkgopencost.ComputeCostTrendFromProm(r.Context(), client.Prom(), pkgopencost.TrendPromOptions{Range: r.URL.Query().Get("range")})
+	resp.Currency = resolvedCurrency(resolveCurrency)
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleNodes returns per-node cost breakdown.
-func handleNodes(w http.ResponseWriter, r *http.Request) {
+func handleNodes(w http.ResponseWriter, r *http.Request, resolveCurrency func() string) {
 	client := prometheuspkg.GetClient()
 	if client == nil {
-		writeJSON(w, http.StatusOK, pkgopencost.NodeCostResponse{Available: false, Reason: pkgopencost.ReasonNoPrometheus})
+		writeJSON(w, http.StatusOK, pkgopencost.NodeCostResponse{Available: false, Reason: pkgopencost.ReasonNoPrometheus, Currency: resolvedCurrency(resolveCurrency)})
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
 		log.Printf("[opencost] EnsureConnected failed (nodes): %v", err)
-		writeJSON(w, http.StatusOK, pkgopencost.NodeCostResponse{Available: false, Reason: ConnectionFailureReason(err)})
+		writeJSON(w, http.StatusOK, pkgopencost.NodeCostResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: resolvedCurrency(resolveCurrency)})
 		return
 	}
 	resp := pkgopencost.ComputeNodeCosts(r.Context(), client.Prom())
+	resp.Currency = resolvedCurrency(resolveCurrency)
 	attachNodeProviderIDs(resp)
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func resolvedCurrency(resolve func() string) string {
+	if resolve == nil {
+		return pkgopencost.DefaultCurrency
+	}
+	if currency := resolve(); currency != "" {
+		return currency
+	}
+	return pkgopencost.DefaultCurrency
 }
 
 func ConnectionFailureReason(err error) string {

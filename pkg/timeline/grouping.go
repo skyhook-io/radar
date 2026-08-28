@@ -105,14 +105,13 @@ func groupByOwner(events []TimelineEvent) []EventGroup {
 
 func groupByApp(events []TimelineEvent) []EventGroup {
 	groupMap := make(map[string]*EventGroup)
+	// appNameToKey maps a real app label to the group key of the first namespaced
+	// group carrying it, so the second pass can merge cluster-scoped resources
+	// (Namespace == "") into their app's group instead of keying them under the
+	// empty namespace (which would never collide with "namespace/app").
+	appNameToKey := make(map[string]string)
 
-	for _, event := range events {
-		appLabel := event.GetAppLabel()
-		if appLabel == "" {
-			appLabel = "__ungrouped__"
-		}
-
-		key := event.Namespace + "/" + appLabel
+	addToGroup := func(key, name string, event TimelineEvent) {
 		if group, exists := groupMap[key]; exists {
 			group.Events = append(group.Events, event)
 			group.EventCount++
@@ -121,13 +120,49 @@ func groupByApp(events []TimelineEvent) []EventGroup {
 			groupMap[key] = &EventGroup{
 				ID:          key,
 				Kind:        "App",
-				Name:        appLabel,
+				Name:        name,
 				Namespace:   event.Namespace,
 				Events:      []TimelineEvent{event},
 				EventCount:  1,
 				HealthState: event.HealthState,
 			}
 		}
+	}
+
+	// First pass: namespaced events (and cluster-scoped events with no app label)
+	// group by "namespace/appLabel", exactly as before. Cluster-scoped events that
+	// carry a real app label are deferred so they can merge into a namespaced group.
+	var clusterScoped []TimelineEvent
+	for _, event := range events {
+		appLabel := event.GetAppLabel()
+		if event.Namespace == "" && appLabel != "" {
+			clusterScoped = append(clusterScoped, event)
+			continue
+		}
+
+		name := appLabel
+		if name == "" {
+			name = "__ungrouped__"
+		}
+		key := event.Namespace + "/" + name
+		addToGroup(key, name, event)
+		if appLabel != "" && event.Namespace != "" {
+			if _, ok := appNameToKey[appLabel]; !ok {
+				appNameToKey[appLabel] = key
+			}
+		}
+	}
+
+	// Second pass: attach each cluster-scoped event to the existing namespaced
+	// group for its app label when one exists; otherwise fall back to an
+	// appLabel-only bucket (keyed solely by label, namespace "").
+	for _, event := range clusterScoped {
+		appLabel := event.GetAppLabel()
+		key, ok := appNameToKey[appLabel]
+		if !ok {
+			key = appLabel
+		}
+		addToGroup(key, appLabel, event)
 	}
 
 	var groups []EventGroup

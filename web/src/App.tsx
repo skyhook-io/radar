@@ -1029,6 +1029,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
     const kind = kindToPlural(event.kind)
     const structural = event.operation === 'add' || event.operation === 'delete'
+    const applicationWorkload = ['deployments', 'statefulsets', 'daemonsets', 'rollouts'].includes(kind)
 
     const fast = fastInvalidationRef.current
     fast.changedKinds.add(kind)
@@ -1042,7 +1043,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     }
 
     const slow = slowInvalidationRef.current
-    if (!structural) slow.updatedKinds.add(kind)
+    if (!structural || applicationWorkload) slow.updatedKinds.add(kind)
 
     // FAST tier — membership-sensitive + cheap, bounded 3s latency.
     if (fast.timer === null) {
@@ -1077,13 +1078,16 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       }, 3000)
     }
 
-    // SLOW tier — throttle the expensive queries for status-only churn. Only
-    // updates schedule it; structural changes are fully handled by the fast tier.
-    if (!structural && slow.timer === null) {
+    // SLOW tier — throttle expensive status churn. Workload membership changes
+    // also pass through here so the Applications refetch lands after its cache TTL.
+    if ((!structural || applicationWorkload) && slow.timer === null) {
       slow.timer = window.setTimeout(() => {
         const s = slowInvalidationRef.current
         for (const k of s.updatedKinds) {
           queryClient.invalidateQueries({ queryKey: ['resources', k] })
+        }
+        if ([...s.updatedKinds].some((k) => ['deployments', 'statefulsets', 'daemonsets', 'rollouts'].includes(k))) {
+          queryClient.invalidateQueries({ queryKey: ['applications'] })
         }
         queryClient.invalidateQueries({ queryKey: ['dashboard'] }) // health reflects status updates
         slowInvalidationRef.current = { updatedKinds: new Set(), timer: null }
@@ -2031,7 +2035,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           retained background list out of the focus order + a11y tree (the visual
           cover already blocks pointer events). */}
       {contentReady && <div className="flex-1 flex overflow-hidden" inert={expandedView}>
-        <ErrorBoundary>
+        {/* Search included, not just the path: selection inside a view rides in
+            the query (?resource=, ?release=), so a path-only key would still
+            strand a crash on the view that produced it. */}
+        <ErrorBoundary resetKey={location.pathname + location.search}>
         {/* Home dashboard */}
         {mainView === 'home' && (
           <HomeView

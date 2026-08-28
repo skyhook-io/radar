@@ -18,6 +18,22 @@ kubectl port-forward svc/radar 9280:9280 -n radar
 open http://localhost:9280
 ```
 
+## Exposing with Gateway API
+
+If your cluster uses Gateway API, the chart can create an `HTTPRoute`:
+
+```yaml
+# values.yaml
+httpRoute:
+  enabled: true
+  parentRefs:
+    - name: public-gateway
+  hostnames:
+    - radar.your-domain.com
+```
+
+With no custom `rules`, the chart routes `/` to Radar. `httpRoute` and `ingress` are mutually exclusive, and at least one `parentRefs` entry is required. See the [chart reference](../deploy/helm/radar/README.md#with-gateway-api-httproute) for custom rules and timeouts.
+
 ## Exposing with Ingress
 
 ### Basic (No Authentication)
@@ -192,7 +208,7 @@ Some features require additional permissions. Most are disabled by default for s
 |---------|-------|---------|-------------|
 | Secrets | `rbac.secrets: true` | `false` | Show secrets in resource list |
 | Terminal | `rbac.podExec: true` | `false` | Shell access to pods |
-| Port Forward | `rbac.portForward: true` | `false` | Port forwarding to pods/services |
+| Port Forward | `rbac.portForward: true` | `false` | Port forwarding to pods/services. Also the traffic-source fallback (Hubble/Caretta): Radar dials the relay/metrics Service directly first, so this is only needed when a NetworkPolicy or routing blocks that direct path |
 | Logs | `rbac.podLogs: true` | `true` | View pod logs |
 | Helm Write | `rbac.helm: true` | `false` | Install/upgrade/rollback/uninstall Helm releases (grants broad write access; auto-enables secrets). When auth or cloud is on, also emits a split helm add-on: `radar-helm` (CRDs/storage/PDBs/namespaces, bound to owner+member) and `radar-helm-admin` (RBAC/webhooks/APIServices, owner-only) — see [authentication.md](authentication.md#cloud-mode-helm-bindings) |
 | RBAC view | `rbac.viewRBAC: true` | `false` | Show ClusterRoles, ClusterRoleBindings, Roles, RoleBindings in the resource browser. Off by default: cache-served reads bypass per-user RBAC, so granting this exposes the cluster's authorization graph to every authenticated Radar user |

@@ -310,6 +310,10 @@ func isConfigErrorMessage(lower string) bool {
 		"k8s config not initialized",
 		"kubernetes client is not initialized",
 		"kubernetes discovery client is not initialized",
+		"failed to load kubeconfig",
+		"kubeconfig source for context",
+		"selected context not found",
+		"selected context client setup failed",
 		"no auth provider found for name",
 	}
 	for _, marker := range configMarkers {

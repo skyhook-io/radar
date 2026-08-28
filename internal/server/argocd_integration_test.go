@@ -74,6 +74,25 @@ func TestArgoCDStatus(t *testing.T) {
 	}
 }
 
+func TestArgoCDStatusExplainsNameOnlyTokenBinding(t *testing.T) {
+	s := setupArgoCDTest(t)
+	argocd.RestoreConfig("", "legacy-token", false, "prod", "")
+	rec := httptest.NewRecorder()
+	s.handleArgoCDStatus(rec, httptest.NewRequest(http.MethodGet, "/api/integrations/argocd/status", nil))
+
+	var out struct {
+		Configured bool   `json:"configured"`
+		Connected  bool   `json:"connected"`
+		Reason     string `json:"reason"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !out.Configured || out.Connected || !strings.Contains(out.Reason, "Re-enter the Argo CD token") {
+		t.Fatalf("status = %+v, want actionable source-binding guidance", out)
+	}
+}
+
 // setupArgoCDTest isolates the on-disk config and the live argocd manager.
 func setupArgoCDTest(t *testing.T) *Server {
 	t.Helper()
@@ -459,7 +478,11 @@ func TestPutConfigPreservesIntegrationFields(t *testing.T) {
 		c.ArgoCDURL = "https://argo.internal:8080"
 		c.ArgoCDToken = "tok"
 		c.ArgoCDInsecureTLS = true
+		c.ArgoCDTokenContext = "prod"
+		c.ArgoCDTokenBinding = "kcb1_source"
 		c.PrometheusURL = "http://prom.internal:9090"
+		c.PrometheusHeaders = map[string]string{"Authorization": "Bearer disk"}
+		c.PrometheusHeadersFromEnv = map[string]string{"X-Tenant": "env-tenant"}
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -483,8 +506,14 @@ func TestPutConfigPreservesIntegrationFields(t *testing.T) {
 	if !saved.ArgoCDInsecureTLS {
 		t.Error("argoCdInsecureTls flipped by a startup PUT")
 	}
+	if saved.ArgoCDTokenContext != "prod" || saved.ArgoCDTokenBinding != "kcb1_source" {
+		t.Errorf("Argo token binding changed: context=%q binding=%q", saved.ArgoCDTokenContext, saved.ArgoCDTokenBinding)
+	}
 	if saved.PrometheusURL != "http://prom.internal:9090" {
 		t.Errorf("prometheusUrl = %q, want unchanged", saved.PrometheusURL)
+	}
+	if saved.PrometheusHeaders["Authorization"] != "Bearer disk" || saved.PrometheusHeadersFromEnv["X-Tenant"] != "env-tenant" {
+		t.Errorf("Prometheus headers changed: disk=%v env=%v", saved.PrometheusHeaders, saved.PrometheusHeadersFromEnv)
 	}
 	if saved.Port != 9999 {
 		t.Errorf("Port = %d, want the startup field applied", saved.Port)

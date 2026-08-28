@@ -18,6 +18,9 @@ export interface ClusterSwitcherItem {
   /** Raw context / display string. ClusterName collapses GKE/EKS/AKS
    *  shapes; user-named clusters pass through unchanged. */
   name: string
+  /** Short qualifier rendered after the parsed name without affecting
+   *  provider detection, e.g. a source suffix for colliding contexts. */
+  nameQualifier?: string
   secondary?: string
   badge?: string
   /** Origin label, rendered as a folder-icon line under the name.
@@ -44,6 +47,8 @@ export interface ClusterSwitcherProps {
   /** Raw context / display string. Pass it as-is — the trigger renders
    *  through ClusterName, which handles parse + provider badge + tooltip. */
   currentName: string
+  /** Trigger-side counterpart to {@link ClusterSwitcherItem.nameQualifier}. */
+  currentNameQualifier?: string
   /** Trigger-side counterpart to {@link ClusterSwitcherItem.sourceLabel}.
    *  Only pass when 2+ kubeconfig sources are loaded. */
   currentSourceLabel?: string
@@ -80,6 +85,7 @@ const TRIGGER_NAME_MAX_WIDTH = 'max-w-[140px] sm:max-w-[220px] xl:max-w-[340px]'
 export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcherProps>(({
   currentId,
   currentName,
+  currentNameQualifier,
   currentSourceLabel,
   items,
   onSelect,
@@ -114,6 +120,7 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
       if (!q) return true
       return (
         item.name.toLowerCase().includes(q) ||
+        item.nameQualifier?.toLowerCase().includes(q) ||
         item.secondary?.toLowerCase().includes(q) ||
         item.badge?.toLowerCase().includes(q) ||
         item.sourceLabel?.toLowerCase().includes(q) ||
@@ -209,7 +216,7 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
         disabled={disabled || loading}
         className={
           variant === 'segment'
-            ? `flex items-center gap-1.5 px-3 py-1.5 h-full min-w-[150px] max-w-[264px] text-[13px] font-medium
+            ? `flex items-center gap-1.5 px-3 py-1.5 h-full min-w-[150px] max-w-[264px] overflow-hidden text-[13px] font-medium
                text-theme-text-primary hover:bg-theme-hover transition-colors cursor-pointer
                disabled:opacity-50 disabled:cursor-not-allowed`
             : `flex items-center gap-1.5 px-2.5 py-1.5 min-w-[140px]
@@ -236,12 +243,22 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
           // context inline (per-row secondary line), and an extra hover
           // tooltip would just overlap the search input.
           <>
-            <ClusterName
-              name={currentName}
-              fallbackBadge={<Server className="w-3.5 h-3.5 text-theme-text-secondary" />}
-              className={variant === 'segment' ? 'min-w-0 max-w-[214px]' : TRIGGER_NAME_MAX_WIDTH}
-              noTooltip={isOpen}
-            />
+            <span className={variant === 'segment' ? 'min-w-0 flex-1' : 'min-w-0'}>
+              <ClusterName
+                name={currentName}
+                fallbackBadge={<Server className="w-3.5 h-3.5 text-theme-text-secondary" />}
+                className={variant === 'segment' ? 'min-w-0 max-w-full' : TRIGGER_NAME_MAX_WIDTH}
+                noTooltip={isOpen}
+              />
+            </span>
+            {currentNameQualifier && (
+              <span
+                className="shrink-0 max-w-[80px] truncate text-xs font-normal text-theme-text-tertiary"
+                title={currentNameQualifier}
+              >
+                {currentNameQualifier}
+              </span>
+            )}
             {currentSourceLabel && (
               // Icon-only on the trigger: long folder paths (the very case
               // that motivates the chip) middle-truncate to something
@@ -358,6 +375,14 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
                                     : 'text-theme-text-primary'
                               }`}
                             />
+                            {item.nameQualifier && (
+                              <span
+                                className="shrink-0 max-w-[120px] truncate text-xs font-normal text-theme-text-tertiary"
+                                title={item.nameQualifier}
+                              >
+                                {item.nameQualifier}
+                              </span>
+                            )}
                             {item.badge && (
                               <span className="shrink-0 text-[10px] text-theme-text-tertiary bg-theme-elevated px-1 rounded">
                                 {item.badge}

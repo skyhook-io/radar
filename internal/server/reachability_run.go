@@ -20,10 +20,11 @@ import (
 )
 
 type probeCapabilityResponse struct {
-	Allowed   bool   `json:"allowed"`
-	Reason    string `json:"reason,omitempty"`
-	Cluster   string `json:"cluster,omitempty"`
-	Namespace string `json:"namespace"`
+	Allowed    bool   `json:"allowed"`
+	Reason     string `json:"reason,omitempty"`
+	Cluster    string `json:"cluster,omitempty"`
+	ClusterKey string `json:"clusterKey,omitempty"`
+	Namespace  string `json:"namespace"`
 	// MaxProbes is the per-call ceiling on probe Pods. Reported so the consent
 	// screen can state what a run actually covers: route order is deterministic,
 	// so routes past the cap are not merely deferred - re-running starts from the
@@ -36,10 +37,10 @@ type probeCapabilityResponse struct {
 // button that 403s mid-incident is worse than none). It also names the cluster +
 // namespace the probe pod would be created in - the safety rail, since the
 // runner creates pods in whatever cluster Radar is connected to. Cluster is the
-// stable per-cluster identity (context name, or a kube-system-UID fallback for
-// in-cluster deployments) - the frontend keys its "don't ask again" consent on
-// it, so a shared sentinel here would let one cluster's consent silently
-// suppress the pod-creating confirm on every cluster a shared Hub origin serves.
+// readable context label, or the opaque cluster UID when an in-cluster install
+// has no distinguishing label. ClusterKey is the separate source-scoped identity
+// the frontend uses for "don't ask again"; keeping the two separate avoids
+// exposing kubeconfig paths or trusting mutable collision qualifiers.
 func (s *Server) handleProbeInClusterCapability(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	if !s.requireConnected(w) {
@@ -47,10 +48,12 @@ func (s *Server) handleProbeInClusterCapability(w http.ResponseWriter, r *http.R
 	}
 	// Resolved only past the connected gate: the fallback path issues a live
 	// kube-system GET, which is a doomed API call while disconnected.
+	cluster, clusterKey := k8s.ClusterSafetySnapshot(r.Context())
 	resp := probeCapabilityResponse{
-		Cluster:   k8s.ClusterIdentity(r.Context()),
-		Namespace: namespace,
-		MaxProbes: reachability.MaxInClusterProbes,
+		Cluster:    cluster,
+		ClusterKey: clusterKey,
+		Namespace:  namespace,
+		MaxProbes:  reachability.MaxInClusterProbes,
 	}
 	client := s.getClientForRequest(r)
 	if client == nil {

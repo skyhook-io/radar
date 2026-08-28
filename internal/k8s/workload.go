@@ -7,9 +7,14 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+
+	"github.com/skyhook-io/radar/pkg/rollouts"
 )
 
 var ErrWorkloadAccessDenied = errors.New("workload access denied")
+var ErrWorkloadSelectorUnavailable = errors.New("workload selector unavailable")
 
 // GetWorkloadSelector returns the label selector for a workload from cache.
 // kind is case-insensitive and accepts either singular ("deployment") or plural
@@ -73,9 +78,84 @@ func GetWorkloadSelector(cache *ResourceCache, kind, namespace, name string) (*m
 			MatchLabels: map[string]string{"workflows.argoproj.io/workflow": name},
 		}, nil
 
+	case "rollout", "rollouts":
+		rollout, err := cache.GetDynamicWithGroup(context.Background(), "Rollout", namespace, name, "argoproj.io")
+		if err != nil {
+			return nil, fmt.Errorf("rollout %s/%s: %w", namespace, name, err)
+		}
+		return ResolveRolloutSelector(cache, rollout)
+
 	default:
 		return nil, fmt.Errorf("unsupported workload kind: %s", kind)
 	}
+}
+
+// ResolveRolloutSelector returns only pods created by the Rollout controller,
+// even while a workloadRef Deployment is still running with the same labels.
+func ResolveRolloutSelector(cache *ResourceCache, rollout *unstructured.Unstructured) (*metav1.LabelSelector, error) {
+	namespace, name := rollout.GetNamespace(), rollout.GetName()
+	raw, found, err := unstructured.NestedFieldNoCopy(rollout.Object, "spec", "selector")
+	if err != nil {
+		return nil, fmt.Errorf("rollout %s/%s selector: %w", namespace, name, err)
+	}
+	if found && raw != nil {
+		selectorMap, ok := raw.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("rollout %s/%s selector has type %T, want object", namespace, name, raw)
+		}
+		var selector metav1.LabelSelector
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(selectorMap, &selector); err != nil {
+			return nil, fmt.Errorf("rollout %s/%s selector: %w", namespace, name, err)
+		}
+		return rolloutPodSelector(&selector), nil
+	}
+
+	target, err := rollouts.ResolveTemplateTarget(rollout)
+	if err != nil {
+		return nil, err
+	}
+	if target.GVR == rollouts.GVR {
+		return nil, fmt.Errorf("rollout %s/%s has no selector: %w", namespace, name, ErrWorkloadSelectorUnavailable)
+	}
+
+	var selector *metav1.LabelSelector
+	switch target.GVR.Resource {
+	case "deployments":
+		lister := cache.Deployments()
+		if lister == nil {
+			return nil, fmt.Errorf("%w: list deployments", ErrWorkloadAccessDenied)
+		}
+		deployment, err := lister.Deployments(namespace).Get(target.Name)
+		if err != nil {
+			return nil, fmt.Errorf("deployment %s/%s referenced by rollout %s: %w", namespace, target.Name, name, err)
+		}
+		selector = deployment.Spec.Selector
+	case "replicasets":
+		lister := cache.ReplicaSets()
+		if lister == nil {
+			return nil, fmt.Errorf("%w: list replicasets", ErrWorkloadAccessDenied)
+		}
+		replicaSet, err := lister.ReplicaSets(namespace).Get(target.Name)
+		if err != nil {
+			return nil, fmt.Errorf("replicaset %s/%s referenced by rollout %s: %w", namespace, target.Name, name, err)
+		}
+		selector = replicaSet.Spec.Selector
+	default:
+		return nil, fmt.Errorf("rollout %s/%s cannot derive a selector from %s %s: %w", namespace, name, target.GVR.Resource, target.Name, ErrWorkloadSelectorUnavailable)
+	}
+	if selector == nil {
+		return nil, fmt.Errorf("rollout %s/%s referenced workload has no selector: %w", namespace, name, ErrWorkloadSelectorUnavailable)
+	}
+	return rolloutPodSelector(selector), nil
+}
+
+func rolloutPodSelector(selector *metav1.LabelSelector) *metav1.LabelSelector {
+	selector = selector.DeepCopy()
+	selector.MatchExpressions = append(selector.MatchExpressions, metav1.LabelSelectorRequirement{
+		Key:      rollouts.PodTemplateHashLabel,
+		Operator: metav1.LabelSelectorOpExists,
+	})
+	return selector
 }
 
 // GetContainersForPod returns container names to target for log collection.

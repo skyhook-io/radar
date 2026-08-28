@@ -4,7 +4,7 @@ import type { ConnectionState } from '../context/ConnectionContext'
 import { ContextSwitcher } from './ContextSwitcher'
 import { parseContextName } from '../utils/context-name'
 import { useOpenLocalTerminal, ClusterName } from '@skyhook-io/k8s-ui'
-import { useAuthMe } from '../api/client'
+import { useAuthMe, useContexts } from '../api/client'
 import { Tooltip } from './ui/Tooltip'
 import { allShellSafe } from '../utils/shell-safe'
 import { apiUrl } from '../api/config'
@@ -218,11 +218,11 @@ function getTimeoutHints(context: string): AuthHints | null {
 
 const errorHints: Record<string, { title: string; hints: string[] }> = {
   config: {
-    title: 'No Kubeconfig Found',
+    title: 'Kubeconfig Problem',
     hints: [
-      'Radar could not find a kubeconfig file at ~/.kube/config',
-      'If your kubeconfig is at a custom path, set the KUBECONFIG environment variable in your shell profile (~/.zshrc or ~/.bashrc)',
-      'You can also pass --kubeconfig <path> when launching from the terminal',
+      'Radar could not load a usable kubeconfig for this context',
+      'If the file exists, check the local Radar logs for the exact parse or load failure',
+      'If no kubeconfig is configured, Radar checks ~/.kube/config; set KUBECONFIG or pass --kubeconfig <path> for another location',
     ],
   },
   rbac: {
@@ -321,16 +321,17 @@ export function CopyableCommand({ command, onRunInTerminal }: { command: string;
   )
 }
 
-export function selectConnectionHints(errorType: string | undefined, context: string): AuthHints | null {
+export function selectConnectionHints(errorType: string | undefined, context: string, originalContext?: string): AuthHints | null {
+  const parsedContext = originalContext || context
   switch (errorType) {
     case 'auth':
-      return getAuthHints(context)
+      return getAuthHints(parsedContext)
     case 'auth-rejected':
-      return getAuthRejectedHints(context)
+      return getAuthRejectedHints(parsedContext)
     case 'auth-plugin-stuck':
       return getAuthPluginStuckHints()
     case 'timeout':
-      return getTimeoutHints(context)
+      return getTimeoutHints(parsedContext)
     default:
       return null
   }
@@ -342,7 +343,9 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
   const isAuthRejected = connection.errorType === 'auth-rejected'
   const isAuthPluginStuck = connection.errorType === 'auth-plugin-stuck'
   const isAuthError = isAuth || isAuthRejected || isAuthPluginStuck
-  const commandInfo = selectConnectionHints(connection.errorType, connection.context || '')
+  const { data: contexts } = useContexts()
+  const originalContext = contexts?.find((context) => context.name === connection.context)?.originalName
+  const commandInfo = selectConnectionHints(connection.errorType, connection.context || '', originalContext)
   const errorInfo = commandInfo || errorHints[connection.errorType || 'unknown'] || errorHints.unknown
   const openLocalTerminal = useOpenLocalTerminal()
   const { data: authMe } = useAuthMe()
@@ -384,7 +387,7 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
           </div>
 
           <h2 className="text-xl font-semibold text-theme-text-primary mb-2">
-            {connection.errorType === 'config' ? 'No Cluster Configuration' : 'Cannot Connect to Cluster'}
+            {connection.errorType === 'config' ? 'Cannot Load Cluster Configuration' : 'Cannot Connect to Cluster'}
           </h2>
 
           <div className="mb-6 space-y-1">
@@ -480,7 +483,7 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
               )}
             </button>
 
-            {connection.errorType !== 'config' && <ContextSwitcher triggerName="Switch context" />}
+            {connection.context && <ContextSwitcher triggerName="Switch context" />}
           </div>
 
           {isAuthError && (

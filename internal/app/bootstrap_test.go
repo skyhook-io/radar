@@ -50,6 +50,80 @@ func TestParseNamespaces(t *testing.T) {
 	}
 }
 
+func TestResolveKubeconfigSelection(t *testing.T) {
+	tests := []struct {
+		name              string
+		kubeconfig        string
+		dirs              string
+		kubeconfigSet     bool
+		dirsSet           bool
+		wantKubeconfig    string
+		wantKubeconfigDir []string
+	}{
+		{
+			name:              "saved values combine",
+			kubeconfig:        "/saved/config",
+			dirs:              "/saved/a,/saved/b",
+			wantKubeconfig:    "/saved/config",
+			wantKubeconfigDir: []string{"/saved/a", "/saved/b"},
+		},
+		{
+			name:           "explicit file drops saved directories",
+			kubeconfig:     "/flag/config",
+			dirs:           "/saved/a",
+			kubeconfigSet:  true,
+			wantKubeconfig: "/flag/config",
+		},
+		{
+			name:              "explicit directories drop saved file",
+			kubeconfig:        "/saved/config",
+			dirs:              "/flag/a,/flag/b",
+			dirsSet:           true,
+			wantKubeconfigDir: []string{"/flag/a", "/flag/b"},
+		},
+		{
+			name:              "both explicit combine",
+			kubeconfig:        "/flag/config",
+			dirs:              "/flag/a",
+			kubeconfigSet:     true,
+			dirsSet:           true,
+			wantKubeconfig:    "/flag/config",
+			wantKubeconfigDir: []string{"/flag/a"},
+		},
+		{
+			name:              "explicit empty file clears only saved file",
+			dirs:              "/saved/a",
+			kubeconfigSet:     true,
+			wantKubeconfigDir: []string{"/saved/a"},
+		},
+		{
+			name:           "explicit empty directories clear only saved directories",
+			kubeconfig:     "/saved/config",
+			dirsSet:        true,
+			wantKubeconfig: "/saved/config",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotKubeconfig, gotDirs := ResolveKubeconfigSelection(
+				tt.kubeconfig, tt.dirs, tt.kubeconfigSet, tt.dirsSet,
+			)
+			if gotKubeconfig != tt.wantKubeconfig {
+				t.Fatalf("kubeconfig = %q, want %q", gotKubeconfig, tt.wantKubeconfig)
+			}
+			if len(gotDirs) != len(tt.wantKubeconfigDir) {
+				t.Fatalf("directories = %v, want %v", gotDirs, tt.wantKubeconfigDir)
+			}
+			for i := range tt.wantKubeconfigDir {
+				if gotDirs[i] != tt.wantKubeconfigDir[i] {
+					t.Fatalf("directories[%d] = %q, want %q", i, gotDirs[i], tt.wantKubeconfigDir[i])
+				}
+			}
+		})
+	}
+}
+
 func TestResolveNamespaceSelection(t *testing.T) {
 	t.Run("namespaces default wins over namespace config", func(t *testing.T) {
 		ns, nss, err := ResolveNamespaceSelection("legacy", "team-a,team-b", false, false)

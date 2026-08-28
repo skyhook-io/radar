@@ -40,6 +40,8 @@ import {
   getPodStatus,
   getPodRestarts,
   getPodProblems,
+  getWorkloadDisplayStatus,
+  workloadStatusLabel,
   getWorkloadProblems,
   workloadMatchesProblemCategory,
   getContainerSquareStates,
@@ -79,7 +81,6 @@ import {
   getPVCStatus,
   getPVCCapacity,
   getPVCAccessModes,
-  getRolloutStatus,
   getAnalysisRunStatus,
   summarizeAnalysisMetrics,
   getRolloutStrategy,
@@ -142,6 +143,7 @@ import { pluralize } from '../../utils/pluralize'
 import { getPodGpuCount, getNodeGpuCount } from '../../utils/extended-resources'
 import { parseQuantityToNumber } from '../../utils/format'
 import { type CustomColumnDef, type CustomColumnSource, customColumnKey, readCustomColumnValue, sanitizeCustomColumnDefs } from '../../utils/custom-columns'
+import { isRolloutActivityVisible } from '../../utils/workload-rollout'
 import { FreshnessControl, type FreshnessConnection } from '../ui/FreshnessControl'
 import { Tooltip } from '../ui/Tooltip'
 import { AuditBadgeTooltip, type AuditBadgeMessage } from '../audit/AuditBadgeTooltip'
@@ -357,6 +359,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   deployments: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
+    { key: 'status', label: 'Status', width: 'w-40' },
     { key: 'ready', label: 'Ready', width: 'w-24', tooltip: 'Ready pods / Desired replicas' },
     { key: 'upToDate', label: 'Up-to-date', width: 'w-32', hideOnMobile: true, tooltip: 'Number of pods running the current pod template' },
     { key: 'available', label: 'Available', width: 'w-28', hideOnMobile: true, tooltip: 'Number of pods available (ready for minReadySeconds)' },
@@ -366,6 +369,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   daemonsets: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
+    { key: 'status', label: 'Status', width: 'w-40' },
     { key: 'desired', label: 'Desired', width: 'w-20', tooltip: 'Number of nodes that should run the daemon pod (based on node selector)' },
     { key: 'ready', label: 'Ready', width: 'w-20', tooltip: 'Number of pods that are ready (passing readiness probes)' },
     { key: 'upToDate', label: 'Up-to-date', width: 'w-32', hideOnMobile: true, tooltip: 'Number of pods running the current pod template spec' },
@@ -376,6 +380,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   statefulsets: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
+    { key: 'status', label: 'Status', width: 'w-40' },
     { key: 'ready', label: 'Ready', width: 'w-24', tooltip: 'Ready pods / Desired replicas' },
     { key: 'upToDate', label: 'Up-to-date', width: 'w-32', hideOnMobile: true, tooltip: 'Number of pods running the current pod template' },
     { key: 'images', label: 'Images', width: 'w-48', hideOnMobile: true },
@@ -494,7 +499,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   rollouts: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'status', label: 'Phase', width: 'w-28' },
+    { key: 'status', label: 'Status', width: 'w-32' },
     { key: 'ready', label: 'Ready', width: 'w-24', tooltip: 'Available / Desired replicas' },
     { key: 'strategy', label: 'Strategy', width: 'w-24' },
     { key: 'step', label: 'Step', width: 'w-20', hideOnMobile: true, tooltip: 'Current canary step / Total steps' },
@@ -5998,6 +6003,9 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
     case 'persistentvolumeclaims':
       return <PVCCell resource={resource} column={column} />
     case 'rollouts':
+      if (!resource.apiVersion?.startsWith('argoproj.io/')) {
+        return <GenericCell resource={resource} column={column} />
+      }
       return <RolloutCell resource={resource} column={column} />
     case 'analysisruns':
       return <AnalysisRunCell resource={resource} column={column} />
@@ -6763,15 +6771,25 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
   }
 }
 
+function WorkloadStatusCell({ resource, kind }: { resource: any; kind: string }) {
+  const { activity, status } = getWorkloadDisplayStatus(resource, kind)
+  const rolloutVisible = isRolloutActivityVisible(activity)
+  const label = rolloutVisible ? status.text : workloadStatusLabel(status)
+  const detail = rolloutVisible && activity.detail ? `${activity.detail} · ${status.text}` : status.text
+  return <Tooltip content={detail}><span className={clsx('badge', status.color)}>{label}</span></Tooltip>
+}
+
 function WorkloadCell({ resource, column, kind }: { resource: any; kind: string; column: string }) {
   const status = resource.status || {}
   const spec = resource.spec || {}
 
   switch (column) {
+    case 'status':
+      return <WorkloadStatusCell resource={resource} kind={kind} />
     case 'ready': {
-      const desired = spec.replicas ?? 0
+      const desired = spec.replicas ?? 1
       const ready = status.readyReplicas || 0
-      const allReady = ready === desired && desired > 0
+      const allReady = ready >= desired && desired > 0
       const problems = getWorkloadProblems(resource, kind)
       return (
         <div className="flex items-center gap-1.5">
@@ -6779,7 +6797,7 @@ function WorkloadCell({ resource, column, kind }: { resource: any; kind: string;
             'text-sm font-medium',
             desired === 0 ? 'text-theme-text-secondary' : allReady ? 'text-green-400' : ready > 0 ? 'text-yellow-400' : 'text-red-400'
           )}>
-            {ready}/{desired}
+            {Math.min(ready, desired)}/{desired}
           </span>
           {problems.length > 0 && (
             <Tooltip content={
@@ -6842,12 +6860,14 @@ function DaemonSetCell({ resource, column }: { resource: any; column: string }) 
   const status = resource.status || {}
 
   switch (column) {
+    case 'status':
+      return <WorkloadStatusCell resource={resource} kind="daemonsets" />
     case 'desired':
       return <span className="text-sm text-theme-text-secondary">{status.desiredNumberScheduled || 0}</span>
     case 'ready': {
       const desired = status.desiredNumberScheduled || 0
       const ready = status.numberReady || 0
-      const allReady = ready === desired && desired > 0
+      const allReady = ready >= desired && desired > 0
       const problems = getWorkloadProblems(resource, 'daemonsets')
       return (
         <div className="flex items-center gap-1.5">
@@ -6855,7 +6875,7 @@ function DaemonSetCell({ resource, column }: { resource: any; column: string }) 
             'text-sm font-medium',
             allReady ? 'text-green-400' : ready > 0 ? 'text-yellow-400' : 'text-red-400'
           )}>
-            {ready}
+            {Math.min(ready, desired)}
           </span>
           {problems.length > 0 && (
             <Tooltip content={
@@ -6903,7 +6923,7 @@ function ReplicaSetCell({ resource, column }: { resource: any; column: string })
 
   switch (column) {
     case 'ready': {
-      const desired = spec.replicas ?? 0
+      const desired = spec.replicas ?? 1
       const ready = status.readyReplicas || 0
       const allReady = ready === desired && desired > 0
       return (
@@ -7571,14 +7591,8 @@ function PVCCell({ resource, column }: { resource: any; column: string }) {
 
 function RolloutCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
-    case 'status': {
-      const status = getRolloutStatus(resource)
-      return (
-        <span className={clsx('badge', status.color)}>
-          {status.text}
-        </span>
-      )
-    }
+    case 'status':
+      return <WorkloadStatusCell resource={resource} kind="rollouts" />
     case 'ready': {
       const ready = getRolloutReady(resource)
       const parts = ready.split('/')

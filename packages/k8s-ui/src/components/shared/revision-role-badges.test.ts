@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   completePromoteAfterRollback,
   offersPromoteAfterRollback,
+  promoteFailureGuidance,
   revisionRoleBadges,
 } from './ResourceActionsBar'
 import type { WorkloadRevision } from '../../types/core'
@@ -92,17 +93,44 @@ describe('completePromoteAfterRollback', () => {
     expect(pending).toEqual([true, false])
   })
 
-  // A rejected promote must not stop the dialog from closing — the rollback itself
-  // already succeeded, and the failure is reported by the mutation's toast.
-  it('swallows a promote-full rejection and clears the pending flag', async () => {
+  // A rejected promote leaves the Rollout replaying the canary steps the operator asked
+  // to skip, so the caller has to be able to tell that half of the pair did not land.
+  it('reports a promote-full rejection and clears the pending flag', async () => {
     const pending: boolean[] = []
     await expect(
       completePromoteAfterRollback(
         () => Promise.reject(new Error('403 forbidden')),
         (p) => pending.push(p),
       ),
-    ).resolves.toBeUndefined()
+    ).resolves.toEqual({
+      promoted: false,
+      error: { message: '403 forbidden', controllerLagging: false },
+    })
     expect(pending).toEqual([true, false])
+  })
+
+  // Keyed on the server's error code, not the status: a lost cluster connection answers
+  // 503 on this route too, and offering "retry, it clears in a few seconds" for that
+  // would invent a cause.
+  it('marks only the controller-lag code as recoverable', async () => {
+    const lagging = Object.assign(new Error('controller has not reconciled'), {
+      status: 503,
+      data: { error_code: 'controller_not_caught_up' },
+    })
+    await expect(
+      completePromoteAfterRollback(() => Promise.reject(lagging), () => {}),
+    ).resolves.toEqual({
+      promoted: false,
+      error: { message: 'controller has not reconciled', controllerLagging: true },
+    })
+
+    const disconnected = Object.assign(new Error('cluster client not available'), { status: 503 })
+    await expect(
+      completePromoteAfterRollback(() => Promise.reject(disconnected), () => {}),
+    ).resolves.toEqual({
+      promoted: false,
+      error: { message: 'cluster client not available', controllerLagging: false },
+    })
   })
 
   it('supports a void-returning callback', async () => {
@@ -116,5 +144,29 @@ describe('completePromoteAfterRollback', () => {
     )
     expect(called).toBe(true)
     expect(pending).toEqual([true, false])
+  })
+})
+
+describe('promoteFailureGuidance', () => {
+  // The status alone cannot carry this: a lost cluster connection answers 503 on the
+  // same route, and telling the operator to retry that would be a fabricated cause.
+  it('offers a retry only when the controller was lagging', () => {
+    const lagging = promoteFailureGuidance({ message: 'x', controllerLagging: true })
+    expect(lagging.canRetry).toBe(true)
+    expect(lagging.body).toContain('had not caught up')
+
+    const other = promoteFailureGuidance({ message: 'forbidden', controllerLagging: false })
+    expect(other.canRetry).toBe(false)
+    expect(other.body).not.toContain('had not caught up')
+  })
+
+  // A canary pause is the usual reason to want promote-full, and it will not clear on
+  // its own — "it is still running" would read as "wait" when the answer is "act".
+  it('warns that a manual pause will not resolve itself', () => {
+    for (const controllerLagging of [true, false]) {
+      const { body } = promoteFailureGuidance({ message: 'x', controllerLagging })
+      expect(body).toContain('manual pause')
+      expect(body).not.toContain('progressing normally')
+    }
   })
 })

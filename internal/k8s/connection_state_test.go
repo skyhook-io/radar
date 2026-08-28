@@ -203,6 +203,11 @@ func TestClassifyError(t *testing.T) {
 			want: "auth-rejected",
 		},
 		{
+			name: "missing context source is config",
+			err:  `kubeconfig source for context "prod" is unavailable: stat: no such file or directory`,
+			want: "config",
+		},
+		{
 			name: "http 401 authentication required is auth-rejected",
 			err:  `the server responded with the status code 401 but did not return more information: Authentication required`,
 			want: "auth-rejected",
@@ -288,6 +293,21 @@ func TestClassifyError(t *testing.T) {
 		{
 			name: "missing kubeconfig is config",
 			err:  "failed to build kubeconfig from /Users/alice/.kube/config: invalid configuration: no configuration has been provided, try setting KUBERNETES_MASTER environment variable",
+			want: "config",
+		},
+		{
+			name: "context switch kubeconfig load failure is config",
+			err:  `failed to switch context: failed to load kubeconfig: error loading config file "/Users/alice/.kube/broken": yaml: line 3`,
+			want: "config",
+		},
+		{
+			name: "context switch missing context is config",
+			err:  `failed to switch context: selected context not found: "prod"`,
+			want: "config",
+		},
+		{
+			name: "context switch client setup failure is config",
+			err:  `failed to switch context: selected context client setup failed for "prod": unable to read certificate-authority /Users/alice/acme/ca.crt`,
 			want: "config",
 		},
 		{

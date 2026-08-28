@@ -11,7 +11,7 @@ import (
 )
 
 func ptr32(v int32) *int32 { return &v }
-func ptrBool(b bool) *bool  { return &b }
+func ptrBool(b bool) *bool { return &b }
 
 func TestWorkloadGoldenVectors(t *testing.T) {
 	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
@@ -204,6 +204,17 @@ func TestWorkloadConvergenceGrace(t *testing.T) {
 				Spec:       appsv1.DeploymentSpec{Replicas: ptr32(3)},
 				Status: appsv1.DeploymentStatus{
 					ObservedGeneration: 7, ReadyReplicas: 3, AvailableReplicas: 3,
+				},
+			},
+			wantLevel: LevelHealthy,
+		},
+		{
+			name: "surge replicas do not degrade serving health",
+			dep: &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: old, Generation: 8},
+				Spec:       appsv1.DeploymentSpec{Replicas: ptr32(1)},
+				Status: appsv1.DeploymentStatus{
+					ObservedGeneration: 8, ReadyReplicas: 2, AvailableReplicas: 1,
 				},
 			},
 			wantLevel: LevelHealthy,

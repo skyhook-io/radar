@@ -114,6 +114,47 @@ func TestSaveAndLoad(t *testing.T) {
 	}
 }
 
+func TestLoadNormalizesOpenCostCurrency(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+
+	if err := Save(Config{OpenCostCurrency: " eur "}); err != nil {
+		t.Fatal(err)
+	}
+	if got := Load().OpenCostCurrency; got != "EUR" {
+		t.Fatalf("OpenCostCurrency = %q, want EUR", got)
+	}
+}
+
+func TestLoadIgnoresInvalidOpenCostCurrencyAndUpdateRepairsIt(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+
+	if err := Save(Config{OpenCostCurrency: "EURO"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := Load().OpenCostCurrency; got != "" {
+		t.Fatalf("OpenCostCurrency = %q, want auto", got)
+	}
+	if _, err := Update(func(c *Config) { c.Port = 8080 }); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, ".radar", "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted Config
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.OpenCostCurrency != "" {
+		t.Fatalf("persisted OpenCostCurrency = %q, want auto", persisted.OpenCostCurrency)
+	}
+}
+
 func TestSaveFileMode(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("file modes are not meaningful on Windows")

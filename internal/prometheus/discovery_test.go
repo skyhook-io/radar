@@ -11,6 +11,10 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
+
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
@@ -264,6 +268,34 @@ func TestDiscover_StaleFlightGenerationDoesNotCommit(t *testing.T) {
 	}
 	if c.baseURL != "" {
 		t.Fatalf("stale-generation discovery published baseURL=%q", c.baseURL)
+	}
+}
+
+// In-cluster, pods/portforward is normally denied, so when no candidate answers
+// the direct Service-address probe discovery must fail closed rather than burn
+// ~10s per candidate on a port-forward it cannot open. A well-known Prometheus
+// exists (so enumeration yields a candidate) but its cluster address is
+// unreachable from the test — the fixed code returns ErrPrometheusNotFound; the
+// pre-fix code fell through to the port-forward fallback and returned its error.
+func TestDiscover_InClusterDoesNotFallBackToPortForward(t *testing.T) {
+	cs := fake.NewSimpleClientset(&corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "monitoring", Name: "prometheus-server"},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "10.0.0.50",
+			Ports:     []corev1.ServicePort{{Name: "http", Port: 9090}},
+		},
+	})
+
+	c := &Client{
+		httpClient:  &http.Client{Timeout: time.Second},
+		k8sClient:   cs,
+		contextName: "in-cluster",
+		inCluster:   true,
+	}
+
+	_, _, err := c.discover(context.Background(), c.discoveryGen)
+	if !errors.Is(err, ErrPrometheusNotFound) {
+		t.Fatalf("in-cluster discovery fell back to port-forward: err=%v, want ErrPrometheusNotFound", err)
 	}
 }
 

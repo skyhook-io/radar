@@ -488,6 +488,15 @@ func isTransientCRDCondition(u *unstructured.Unstructured, reason string) bool {
 	if conditions.IsInProgressForIssues(reason) {
 		return true
 	}
+	if u.GetKind() == "Rollout" && strings.HasPrefix(strings.ToLower(u.GetAPIVersion()), "argoproj.io/") {
+		phase, _, _ := unstructured.NestedString(u.Object, "status", "phase")
+		pauseConditions, _, _ := unstructured.NestedSlice(u.Object, "status", "pauseConditions")
+		if phase == "Paused" || len(pauseConditions) > 0 {
+			if _, _, _, failed := argoRolloutFailure(u); !failed {
+				return true
+			}
+		}
+	}
 	if suspend, ok, _ := unstructured.NestedBool(u.Object, "spec", "suspend"); ok && suspend {
 		return true
 	}

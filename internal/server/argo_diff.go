@@ -445,6 +445,8 @@ func manifestToYAML(obj map[string]any) string {
 // everything else is a logged 500.
 func (s *Server) writeArgoDiffError(w http.ResponseWriter, namespace, name string, err error) {
 	switch {
+	case errors.Is(err, argocd.ErrTokenBindingUpgrade):
+		s.writeError(w, http.StatusForbidden, "Re-enter the Argo CD token in Settings to bind it to this kubeconfig source.")
 	case errors.Is(err, argocd.ErrTokenInvalid) || errors.Is(err, argoapi.ErrUnauthorized):
 		s.writeError(w, http.StatusForbidden, "Argo CD rejected the configured token; re-authenticate the integration in Settings.")
 	case errors.Is(err, argocd.ErrUnreachable):
@@ -675,6 +677,8 @@ func (s *Server) handleArgoRevisionMetadata(w http.ResponseWriter, r *http.Reque
 	})
 	if err != nil {
 		switch {
+		case errors.Is(err, argocd.ErrTokenBindingUpgrade):
+			s.writeError(w, http.StatusForbidden, "Re-enter the Argo CD token in Settings to bind it to this kubeconfig source.")
 		case errors.Is(err, argocd.ErrTokenInvalid) || errors.Is(err, argoapi.ErrUnauthorized):
 			s.writeError(w, http.StatusForbidden, "Argo CD rejected the configured token; re-authenticate the integration in Settings.")
 		case errors.Is(err, argocd.ErrUnreachable):

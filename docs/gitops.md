@@ -151,10 +151,11 @@ Behavior and guarantees:
 - The token lives in `~/.radar/config.json` (written `0600`) and is redacted
   from `GET /api/config`; saving settings never erases it.
 - A token is bound to the server it was issued for: changing the Argo CD URL
-  requires re-entering the token, and a token saved in auto-discovery mode
-  (empty URL) is bound to the kubeconfig context it was saved under — after a
-  context switch or a Radar restart it must be re-confirmed in Settings, so it
-  is never sent to a different cluster's argocd-server.
+  requires re-entering the token. In auto-discovery mode (empty URL), the token
+  is bound to its kubeconfig source entry, survives restarts and display-name
+  qualification changes, and fails closed after a source switch so it is never
+  sent to another cluster's argocd-server. Existing name-only token bindings
+  require a one-time re-entry in Settings after upgrading.
 - Argo CD *core* installs have no argocd-server — Radar degrades to the
   annotation-based drift view. Same when the server is unreachable or the
   token expires; the Changes tab keeps working, only the deep diff goes away.

@@ -3,16 +3,23 @@ package server
 import (
 	"errors"
 	"fmt"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/kubernetes/fake"
+	clienttesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -34,6 +41,59 @@ func TestSortRunsPrefersActiveThenNewest(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("order[%d] = %q, want %q; full order %v", i, got[i], want[i], got)
 		}
+	}
+}
+
+func TestBuildPodInfosForRevisionAttributesOnlyKnownIdentities(t *testing.T) {
+	pods := []*corev1.Pod{
+		{ObjectMeta: metav1.ObjectMeta{Name: "new", Labels: map[string]string{"pod-template-hash": "rev-2"}}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "old", Labels: map[string]string{"pod-template-hash": "rev-1"}}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "unknown"}},
+	}
+
+	infos := buildPodInfosForRevision(pods, workloadRevisionTarget{label: "pod-template-hash", value: "rev-2"})
+	if infos[0].UpdatedRevision == nil || !*infos[0].UpdatedRevision {
+		t.Fatalf("new revision attribution = %#v", infos[0])
+	}
+	if infos[1].UpdatedRevision == nil || *infos[1].UpdatedRevision {
+		t.Fatalf("old revision attribution = %#v", infos[1])
+	}
+	if infos[2].UpdatedRevision != nil {
+		t.Fatalf("unknown revision was guessed: %#v", infos[2])
+	}
+}
+
+func TestDaemonSetRevisionLookupUsesWorkloadSelector(t *testing.T) {
+	uid := types.UID("daemonset-uid")
+	daemonSet := &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ops", Name: "agent", UID: uid},
+		Spec: appsv1.DaemonSetSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "agent"}},
+		},
+	}
+	useTestResourceCache(t, fake.NewSimpleClientset(daemonSet))
+
+	controllerRevisionsGVR := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "controllerrevisions"}
+	dynamicClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
+		controllerRevisionsGVR: "ControllerRevisionList",
+	})
+	var selector string
+	listCalls := 0
+	dynamicClient.PrependReactor("list", "controllerrevisions", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		listCalls++
+		selector = action.(clienttesting.ListAction).GetListRestrictions().Labels.String()
+		return true, &unstructured.UnstructuredList{}, nil
+	})
+
+	server := &Server{}
+	request := httptest.NewRequest("GET", "/api/workloads/daemonsets/ops/agent/pods", nil)
+	server.workloadRevisionTargetForRequest(request, k8s.GetResourceCache(), dynamicClient, "test-context", "daemonsets", "ops", "agent")
+	server.workloadRevisionTargetForRequest(request, k8s.GetResourceCache(), dynamicClient, "test-context", "daemonsets", "ops", "agent")
+	if selector != "app=agent" {
+		t.Fatalf("ControllerRevision selector = %q, want app=agent", selector)
+	}
+	if listCalls != 1 {
+		t.Fatalf("ControllerRevision list calls = %d, want 1 within memo TTL", listCalls)
 	}
 }
 
@@ -342,6 +402,9 @@ func TestWorkloadSelectorGetErrorPreservesKubernetesStatus(t *testing.T) {
 	}
 	if got := workloadSelectorGetError(fmt.Errorf("%w: list jobs", k8s.ErrWorkloadAccessDenied)); got.statusCode != 403 {
 		t.Fatalf("cache permission statusCode = %d, want 403", got.statusCode)
+	}
+	if got := workloadSelectorGetError(fmt.Errorf("rollout selector: %w", k8s.ErrWorkloadSelectorUnavailable)); got.statusCode != 400 {
+		t.Fatalf("invalid selector statusCode = %d, want 400", got.statusCode)
 	}
 }
 

@@ -6,7 +6,7 @@ The **Reachability** tab in the resource detail view answers one question for a 
 
 Available in Radar **v1.9.1+** (the in-cluster probe test also requires the probe image from v1.9.1+).
 
-Naming note: this is NOT the [AI Diagnose feature](mcp.md) - Reachability is deterministic path tracing and live probing, no AI involved. The general-purpose MCP `diagnose` tool (whose primary job is workload root-cause bundles: logs, events, crash evidence) returns this reachability trace as its answer when pointed at a network entry kind - see [MCP](#mcp).
+Naming note: this is NOT the [AI Diagnose feature](https://radarhq.io/docs/features/diagnose) - Reachability is deterministic path tracing and live probing, no AI involved. The general-purpose MCP `diagnose` tool (whose primary job is workload root-cause bundles: logs, events, crash evidence) returns this reachability trace as its answer when pointed at a network entry kind - see [MCP](#mcp).
 
 The trace has two layers:
 
@@ -15,7 +15,7 @@ The trace has two layers:
 
 The active layer can escalate the static verdict when probes give clear evidence of a real failure on a hop (every non-skipped probe failed → that hop counts toward broken; over half failed → counts toward degraded). It never softens a static verdict: a critical static finding outranks probe state, and an unverifiable path stays unverifiable.
 
-Probes run from the operator's current vantage (laptop or in-cluster). A failure caused by the vantage itself - NetworkPolicy blocking Radar's path, a service-mesh mTLS handshake without a client cert, an API-server-proxy probe that can't reach an internal address - is **never** allowed to set the headline. Only a real-traffic (data-path) result escalates the verdict; an API-server-proxy-only or otherwise vantage-attributable failure annotates the hop and localizes the symptom but leaves the verdict at *unknown* / *not confirmed* rather than condemning a path that real traffic may well reach. This is the fail-toward-silence rule: Radar would rather say "couldn't confirm from here" than false-condemn a healthy path. See "What it deliberately does NOT do" below for the boundaries of what probes can and cannot tell you.
+Probes run from wherever Radar is running - your laptop or inside the cluster - and that vantage changes what they can prove. A vantage-attributable failure can localize the symptom, but the headline stays *unknown* when the real traffic path was not confirmed. Radar would rather say "couldn't confirm from here" than falsely condemn a healthy path.
 
 ![A Service reached by both an Ingress and an HTTPRoute: parallel entry points on the left, the path graph, and the journey inspector on the right](images/reachability/reachability-parallel-entries.png)
 
@@ -89,9 +89,6 @@ Each row reports outcome (`ok` / `fail` / `skipped`), latency, the path it trave
 
 Every claim on the page carries its evidence: the verdict band states the live-check volume ("8 live checks from 2 vantages", with the DNS/TCP/TLS/HTTP breakdown on hover), a skipped route states WHY it was skipped from the exact vantage that skipped it, and node dots show each resource's own health - cluster state, never a test result (edges carry the test truth).
 
-**RBAC for active probes (from a laptop):** the user identity reading the trace must hold `get services/proxy` and `get pods/proxy` in the target namespace. In-cluster Radar uses the data path directly and doesn't need these. To disable the active layer entirely, deny those permissions to the role Radar uses.
-
-
 ![A Redis Service after an in-cluster TCP test: the probe capsule reports what it saw, and the coverage line states that only the transport was checked](images/reachability/reachability-non-http-service.png)
 
 *A non-HTTP Service (Redis on 6379) after an in-cluster test: the throwaway Pod connected over TCP, and the coverage line states the ceiling of that proof - "TCP connections only - application protocol not checked".*
@@ -103,6 +100,27 @@ Every claim on the page carries its evidence: the verdict band states the live-c
 ![An Ingress subject: the front door is dialled from outside and the backend answers, with the entry path called out as unexercised](images/reachability/reachability-ingress-front-door.png)
 
 *A front-door subject. Radar dials the declared hostname from your machine (DNS, TCP, TLS, then HTTP) - here a 308 redirect - while the headline stays honest that a backend-only confirmation does not exercise the entry path.*
+
+## Security model
+
+Relayed and Job-based probes are bounded by Kubernetes RBAC, but they do not always use the same namespace:
+
+| Probe path | Namespace | Required permission |
+|---|---|---|
+| API-server relay | Namespace of the Service or Pod being proxied | `get services/proxy` and/or `get pods/proxy` |
+| In-cluster probe Job | Namespace of the resource being diagnosed | `create jobs`, `list pods`, and `get pods/log` |
+
+With [authentication](authentication.md) enabled, Radar uses the signed-in user's identity. Without authentication, Kubernetes-authorized probes use Radar's own client identity: your kubeconfig identity locally, or Radar's ServiceAccount when it runs in-cluster. The API server enforces relay permissions at request time; Radar preflights all three Job permissions before creating anything. If impersonation is unavailable, the relay is skipped rather than falling back to Radar's ServiceAccount. A proxy denial can mark that route *unreachable via the API server*, but the headline stays *unknown* because the real path was not confirmed.
+
+The UI asks before the first in-cluster run for a cluster and names the requests it will send (unless that consent was previously remembered). MCP has no dialog: callers must explicitly pass `in_cluster: true`, and the same RBAC preflight applies. Radar Cloud also requires org role Member or higher.
+
+The active Kubernetes identity authorizes Job creation, but network and mesh policy see the probe pod, not that identity. The Job runs in the diagnosed resource's namespace; its pod uses that namespace's default ServiceAccount identity but mounts no ServiceAccount token. Each run creates at most five Jobs; their containers run non-root with a read-only filesystem, all capabilities dropped, a 25-second deadline, no retries, and a 60-second TTL backstop.
+
+The default Helm chart grants neither proxy-subresource access nor Job creation, so those probe paths stay unavailable unless the relevant identity receives the permissions above. Radar running in-cluster can still dial directly from its own pod. The full `/mcp` endpoint also exposes RBAC-bounded write tools; `/mcp-readonly` excludes `apply_resource`, `patch_resource`, and the `manage_*` tools while retaining `diagnose`. Its `in_cluster` option is the same explicit, capped Job path described above.
+
+### Agent boundary
+
+`/mcp-readonly` gives agents typed tools with fixed schemas, not a kubeconfig or shell. With authentication enabled, Kubernetes operations are bounded by the signed-in user's RBAC: direct cluster operations run under impersonation, while cache-backed reads apply per-user authorization checks. Without authentication, operations use Radar's own Kubernetes identity. The typed tool surface independently limits which operations the agent can request.
 
 ## What it deliberately does NOT do
 
@@ -120,8 +138,9 @@ A probe reports what *Radar's vantage* observed. Real traffic can flow fine whil
 - **Service mesh mTLS (Istio / Linkerd / Consul).** A mesh with strict mTLS rejects any connection without a valid mesh client certificate. A probe from your laptop (or any caller outside the mesh) has no such cert, so the TLS/HTTP layer fails even though sidecar-to-sidecar traffic is healthy. Recognize it: the pods carry a mesh sidecar (`istio-proxy`, `linkerd-proxy`) or mesh labels (`istio.io/rev`, `linkerd.io/inject`). Trust real in-mesh traffic over an out-of-mesh probe.
 - **NetworkPolicy.** A policy can allow real workload-to-workload traffic while blocking Radar's API-server-proxy identity (or the reverse). A failed probe next to healthy config is often this. The trace statically predicts a would-block from the caller-independent ingress rules, but the CNI is the only enforcement authority - so the prediction is confirmed or downgraded only by the live in-cluster probe.
 - **DNS split-horizon.** A probe resolves hostnames from *your* vantage, not the cluster's. An internal name that resolves inside the cluster may not resolve (or may resolve differently) from your laptop; those probes skip with a reason rather than failing.
+- **API-server relay limits.** The relay may be denied or unable to dial an internal-only address. That result describes the relay vantage, not the workload's real traffic path.
 
-When config is healthy but a probe fails, suspect the vantage before the workload. Run the **in-cluster** test (or `diagnose(inCluster: true)`) to probe from the real dataplane, where mesh certs and in-cluster DNS apply.
+When config is healthy but a probe fails, suspect the vantage before the workload. Run the **in-cluster** test (or `diagnose(in_cluster: true)`) to probe from the real dataplane, where mesh certs and in-cluster DNS apply.
 
 ## Verdict semantics
 
@@ -157,7 +176,7 @@ The UI shows the verdict at the top of the panel with a one-sentence reason. Tre
 
 ## MCP
 
-The general-purpose `diagnose` MCP tool - primarily a workload root-cause tool (logs, Warning events, crash evidence in one call) - returns the reachability trace for network entry kinds instead of the pod-log fan-out it does for workloads. An agent that calls `diagnose(kind=service, ...)` gets the path-shaped answer in one call, along with `relatedIssues` for raw-issue follow-up. Pass `probe: true` to add the active reachability test from Radar's vantage. Pass `inCluster: true` to run the probe from inside the cluster - Radar creates up to 5 short-lived, self-destructing probe pods (one per intended route) under the caller's RBAC to test the real dataplane the API-server-proxy vantage can't reach (e.g. to confirm a route that came back `indirect`). This is the only mutating `diagnose` option; it needs `create jobs` + `list`/`get` pods RBAC, and falls back to a copyable command when pod-create is denied.
+The general-purpose `diagnose` MCP tool - primarily a workload root-cause tool (logs, Warning events, crash evidence in one call) - returns the reachability trace for network entry kinds instead of the pod-log fan-out it does for workloads. An agent that calls `diagnose(kind=service, ...)` gets the path-shaped answer in one call, along with `relatedIssues` for raw-issue follow-up. Pass `probe: true` to add the active reachability test from Radar's vantage. Pass `in_cluster: true` to run the probe from inside the cluster - Radar creates up to 5 short-lived, self-destructing probe pods (one per intended route) under the active Kubernetes identity's RBAC to test the real dataplane the API-server-proxy vantage can't reach (e.g. to confirm a route that came back `indirect`). This is the only mutating `diagnose` option; it needs `create jobs`, `list pods`, and `get pods/log`, and falls back to a copyable command when any permission is missing.
 
 ## In-cluster probe image
 

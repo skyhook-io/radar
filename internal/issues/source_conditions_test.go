@@ -74,6 +74,38 @@ func TestArgoRolloutFailure(t *testing.T) {
 	}
 }
 
+func TestIsTransientCRDConditionArgoRolloutPause(t *testing.T) {
+	paused := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1",
+		"kind":       "Rollout",
+		"status": map[string]any{
+			"phase": "Paused",
+			"conditions": []any{
+				map[string]any{"type": "Healthy", "status": "False", "reason": "RolloutHealthy"},
+			},
+		},
+	}}
+	if !isTransientCRDCondition(paused, "RolloutHealthy") {
+		t.Fatal("an intentional Argo Rollout pause must not become a stalled-rollout issue")
+	}
+
+	paused.Object["status"].(map[string]any)["phase"] = "Progressing"
+	paused.Object["status"].(map[string]any)["pauseConditions"] = []any{
+		map[string]any{"reason": "InconclusiveAnalysisRun"},
+	}
+	if !isTransientCRDCondition(paused, "RolloutHealthy") {
+		t.Fatal("a Rollout paused mid-analysis must not become a stalled-rollout issue")
+	}
+
+	paused.Object["status"].(map[string]any)["conditions"] = []any{
+		map[string]any{"type": "Healthy", "status": "False", "reason": "RolloutHealthy"},
+		map[string]any{"type": "InvalidSpec", "status": "True", "reason": "InvalidSpec"},
+	}
+	if isTransientCRDCondition(paused, "RolloutHealthy") {
+		t.Fatal("a paused Rollout with a definitive failure must remain an issue")
+	}
+}
+
 // TestNewConditionIssue_IssueTimingSinceGuard pins the since=0 guard: a condition
 // with no lastTransitionTime must not produce an issue_timing. Without the guard,
 // lastSeen=now makes failingFor≈0 and any old resource looks like it was

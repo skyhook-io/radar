@@ -29,6 +29,7 @@ type DiagConfig struct {
 	HistoryLimit         int    `json:"historyLimit"`
 	DebugEvents          bool   `json:"debugEvents"`
 	MCPEnabled           bool   `json:"mcpEnabled"`
+	OpenCostCurrency     string `json:"opencostCurrency"`
 	HasPrometheusURL     bool   `json:"hasPrometheusURL"`
 	HasPrometheusHeaders bool   `json:"hasPrometheusHeaders"`
 }
@@ -79,17 +80,20 @@ type DiagConnection struct {
 // command basenames suitable for inclusion in a public bug report. Helps
 // triage issues like "some clusters don't show up in the switcher" or
 // "can't switch clusters on the desktop app" (radar#411) — the answer
-// typically lives in one of: kubeconfig loading mode, context merge
+// typically lives in one of: kubeconfig loading mode, context-name
 // collisions, shell env enrichment, or an exec auth plugin missing from
 // the desktop app's PATH.
 type DiagKubeconfig struct {
-	Mode                   string   `json:"mode"`                         // in-cluster, single, multi-env, multi-dir, or "" if not initialized
-	FileCount              int      `json:"fileCount"`                    // Number of kubeconfig files loaded
-	ContextCount           int      `json:"contextCount"`                 // Contexts exposed after client-go merge
-	EnrichedFromShell      bool     `json:"enrichedFromShell"`            // Desktop app captured KUBECONFIG from login shell
-	CurrentContextUsesExec bool     `json:"currentContextUsesExec"`       // Current context's AuthInfo uses an exec credential plugin
-	ExecPluginsPresent     []string `json:"execPluginsPresent,omitempty"` // Exec plugin command basenames resolvable on $PATH
-	ExecPluginsMissing     []string `json:"execPluginsMissing,omitempty"` // Exec plugin command basenames NOT resolvable on $PATH (smoking gun for desktop-app multi-cluster failures)
+	Mode                       string   `json:"mode"`                         // in-cluster, single, multi-env, multi-dir, multi-source, or "" if not initialized
+	FileCount                  int      `json:"fileCount"`                    // Number of kubeconfig files loaded
+	DirectoryFileCount         int      `json:"directoryFileCount"`           // Loaded files discovered from configured directories
+	ContextCount               int      `json:"contextCount"`                 // Contexts exposed after source resolution
+	EnrichedFromShell          bool     `json:"enrichedFromShell"`            // Desktop app captured KUBECONFIG from login shell
+	KubeconfigEnvIgnored       bool     `json:"kubeconfigEnvIgnored"`         // KUBECONFIG suppressed by configured sources
+	KubeconfigEnvIgnoredReason string   `json:"kubeconfigEnvIgnoredReason"`   // Non-sensitive reason KUBECONFIG was suppressed
+	CurrentContextUsesExec     bool     `json:"currentContextUsesExec"`       // Current context's AuthInfo uses an exec credential plugin
+	ExecPluginsPresent         []string `json:"execPluginsPresent,omitempty"` // Exec plugin command basenames resolvable on $PATH
+	ExecPluginsMissing         []string `json:"execPluginsMissing,omitempty"` // Exec plugin command basenames NOT resolvable on $PATH (smoking gun for desktop-app multi-cluster failures)
 }
 
 // DiagCluster holds cluster detection info.
@@ -226,11 +230,15 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	// Connection — always available, no cluster needed
 	collectSafe("connection", &errs, func() {
 		status := k8s.GetConnectionStatus()
+		connectionError := status.Error
+		if status.ErrorType == "config" && connectionError != "" {
+			connectionError = "Kubeconfig initialization failed; see local Radar logs for details"
+		}
 		snap.Connection = &DiagConnection{
 			State:       string(status.State),
 			Context:     status.Context,
 			ClusterName: status.ClusterName,
-			Error:       status.Error,
+			Error:       connectionError,
 			ErrorType:   status.ErrorType,
 		}
 	})
@@ -239,13 +247,16 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	collectSafe("kubeconfig", &errs, func() {
 		summary := k8s.GetKubeconfigSummary()
 		snap.Kubeconfig = &DiagKubeconfig{
-			Mode:                   summary.Mode,
-			FileCount:              summary.FileCount,
-			ContextCount:           summary.ContextCount,
-			EnrichedFromShell:      summary.EnrichedFromShell,
-			CurrentContextUsesExec: summary.CurrentContextUsesExec,
-			ExecPluginsPresent:     summary.ExecPluginsPresent,
-			ExecPluginsMissing:     summary.ExecPluginsMissing,
+			Mode:                       summary.Mode,
+			FileCount:                  summary.FileCount,
+			DirectoryFileCount:         summary.DirectoryFileCount,
+			ContextCount:               summary.ContextCount,
+			EnrichedFromShell:          summary.EnrichedFromShell,
+			KubeconfigEnvIgnored:       summary.KubeconfigEnvIgnored,
+			KubeconfigEnvIgnoredReason: summary.KubeconfigEnvIgnoredReason,
+			CurrentContextUsesExec:     summary.CurrentContextUsesExec,
+			ExecPluginsPresent:         summary.ExecPluginsPresent,
+			ExecPluginsMissing:         summary.ExecPluginsMissing,
 		}
 	})
 
@@ -523,7 +534,9 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	// Config
 	collectSafe("config", &errs, func() {
 		if s.diagConfig != nil {
-			snap.Config = s.diagConfig
+			current := *s.diagConfig
+			current.OpenCostCurrency = s.resolvedOpenCostCurrency()
+			snap.Config = &current
 		}
 	})
 

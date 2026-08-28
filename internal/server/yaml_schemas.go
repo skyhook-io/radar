@@ -134,7 +134,7 @@ func (s *Server) handleResourceSchemas(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusServiceUnavailable, "cluster OpenAPI schemas are unavailable: cluster config not available — check cluster connection")
 		return
 	}
-	principal := contextName + "\x00" + config.Host + "\x00" + yamlSchemaCachePrincipal(r)
+	principal := contextName + "\x00" + config.Host + "\x00" + requestCachePrincipal(r)
 	paths, err := s.yamlSchemaPathsForRequest(config, principal)
 	if err != nil {
 		s.writeError(w, http.StatusServiceUnavailable, "cluster OpenAPI schemas are unavailable: "+err.Error())
@@ -242,7 +242,7 @@ func (s *Server) yamlSchemaSourceForRequest(gv openapi.GroupVersion, cacheKey st
 	return result.([]byte), nil
 }
 
-func yamlSchemaCachePrincipal(r *http.Request) string {
+func requestCachePrincipal(r *http.Request) string {
 	user := auth.UserFromContext(r.Context())
 	if user == nil {
 		return "local"

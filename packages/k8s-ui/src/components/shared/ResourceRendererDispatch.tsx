@@ -1,7 +1,9 @@
 import { clsx } from 'clsx'
 import { SEVERITY_BADGE } from '../../utils/badge-colors'
+import { isArgoRolloutResource } from '../../utils/workload-rollout'
 import {
   getPodStatus,
+  getWorkloadDisplayStatus,
   getWorkloadStatus,
   getJobStatus,
   getCronJobStatus,
@@ -9,7 +11,6 @@ import {
   getServiceStatus,
   getNodeStatus,
   getPVCStatus,
-  getRolloutStatus,
   getAnalysisRunStatus,
   getWorkflowStatus,
   getCronWorkflowStatus,
@@ -272,7 +273,7 @@ import {
   isComposite,
   isClaim,
 } from '../resources/resource-utils-crossplane'
-import type { SelectedResource, Relationships, ResourceRef, SecretCertificateInfo, ResolvedEnvFrom, TimelineEvent, HPADiagnosis } from '../../types'
+import type { SelectedResource, Relationships, ResourceRef, SecretCertificateInfo, ResolvedEnvFrom, TimelineEvent, HPADiagnosis, WorkloadPodInfo } from '../../types'
 import type { CopyHandler } from '../ui/drawer-components'
 import { AlertBanner } from '../ui/drawer-components'
 import { replicaScalers } from '../../utils/replica-scalers'
@@ -310,6 +311,7 @@ export interface RendererOverrides {
     relationships?: Relationships
     scaleBlockedBy?: ResourceRef[]
     scalerDiagnostics?: ScalerDiagnosis[]
+    workloadPods?: WorkloadPodInfo[]
   }>
   // Optional override for Crossplane Composite / Claim — host wraps the
   // package renderer to fan out per-composed-ref status fetches via React Query.
@@ -500,6 +502,7 @@ interface ResourceRendererDispatchProps {
   certificateInfo?: SecretCertificateInfo
   hpaDiagnosis?: HPADiagnosis
   scalerDiagnostics?: ScalerDiagnosis[]
+  workloadPods?: WorkloadPodInfo[]
   onCopy: (text: string, key: string) => void
   copied: string | null
   onNavigate?: (ref: ResourceRef) => void
@@ -545,6 +548,7 @@ export function ResourceRendererDispatch({
   certificateInfo,
   hpaDiagnosis,
   scalerDiagnostics,
+  workloadPods,
   onCopy,
   copied,
   onNavigate,
@@ -646,7 +650,7 @@ export function ResourceRendererDispatch({
     kind === 'clusters' || kind === 'backups' || kind === 'scheduledbackups' || kind === 'poolers'
     || kind === 'objectstores' || kind === 'databases' || kind === 'publications'
     || kind === 'subscriptions' || kind === 'imagecatalogs' || kind === 'clusterimagecatalogs'
-    || kind === 'policies'
+    || kind === 'policies' || kind === 'rollouts'
   const isCNPGApiVersion = isApiGroup(data?.apiVersion, CNPG_GROUP)
   const groupGatedMatched =
     (kind === 'clusters' && (isCNPGApiVersion || isApiGroup(data?.apiVersion, 'cluster.x-k8s.io')))
@@ -658,6 +662,7 @@ export function ResourceRendererDispatch({
     || (kind === 'subscriptions'
       && (isCNPGApiVersion || isApiGroup(data?.apiVersion, 'messaging.knative.dev')))
     || (kind === 'policies' && isApiGroup(data?.apiVersion, 'kyverno.io'))
+    || (kind === 'rollouts' && isArgoRolloutResource(data))
   const groupGatedFallthrough = isGroupGatedKind && !groupGatedMatched
 
   const calicoApiVersionMatched = isCalicoApiVersion(data?.apiVersion)
@@ -727,6 +732,7 @@ export function ResourceRendererDispatch({
             relationships={relationships}
             scaleBlockedBy={scaleBlockedBy}
             scalerDiagnostics={scalerDiagnostics}
+            workloadPods={workloadPods}
           />
         )}
         {kind === 'replicasets' && <ReplicaSetRenderer data={data} />}
@@ -741,7 +747,7 @@ export function ResourceRendererDispatch({
         {(kind === 'hpas' || kind === 'horizontalpodautoscalers') && <HPAComp data={data} onNavigate={onNavigate} hpaDiagnosis={hpaDiagnosis} />}
         {kind === 'nodes' && <NodeComp data={data} relationships={relationships} />}
         {kind === 'persistentvolumeclaims' && <PVCComp data={data} onNavigate={onNavigate} />}
-        {kind === 'rollouts' && <RolloutComp data={data} onNavigate={onNavigate} />}
+        {kind === 'rollouts' && isArgoRolloutResource(data) && <RolloutComp data={data} onNavigate={onNavigate} />}
         {kind === 'analysisruns' && <AnalysisRunRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'certificates' && !data?.apiVersion?.includes('networking.internal.knative.dev') && <CertificateRenderer data={data} />}
         {kind === 'workflows' && <WorkflowRenderer data={data} onNavigate={onNavigate} />}
@@ -988,7 +994,10 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   const k = kind.toLowerCase()
 
   if (k === 'pods') return getPodStatus(data)
-  if (['deployments', 'statefulsets', 'replicasets', 'daemonsets'].includes(k)) return getWorkloadStatus(data, k)
+  if (['deployments', 'statefulsets', 'daemonsets', 'rollouts'].includes(k)) {
+    return getWorkloadDisplayStatus(data, k).status
+  }
+  if (k === 'replicasets') return getWorkloadStatus(data, k)
   if (k === 'services') {
     if (data.apiVersion?.includes('serving.knative.dev')) {
       const status = getKnativeConditionStatus(data)
@@ -1011,7 +1020,6 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'hpas' || k === 'horizontalpodautoscalers') return getHPAStatus(data)
   if (k === 'nodes') return getNodeStatus(data)
   if (k === 'persistentvolumeclaims') return getPVCStatus(data)
-  if (k === 'rollouts') return getRolloutStatus(data)
   if (k === 'analysisruns') return getAnalysisRunStatus(data)
   if (k === 'workflows') return getWorkflowStatus(data)
   if (k === 'cronworkflows') return getCronWorkflowStatus(data)

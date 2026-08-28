@@ -36,7 +36,7 @@ type TrendOptions struct {
 //     — always including a "__total__" aggregate — ordered by bucket
 //     timestamp ascending.
 //
-// Each data point's Value is normalized to $/hr for the bucket (OpenCost's
+// Each data point's Value is normalized to cost per hour for the bucket (OpenCost's
 // per-bucket totalCost ÷ bucket duration), matching the hourly-rate
 // convention used throughout the Costs UI. The UI multiplies by 730 for
 // monthly projections or hours-in-period for retrospective totals.
@@ -95,7 +95,7 @@ func ComputeCostTrend(ctx context.Context, client *RESTClient, opts TrendOptions
 			}
 			// Normalize to hourly rate for this bucket. OpenCost returns
 			// totalCost summed across the bucket; dividing by bucket
-			// duration (hours) gives the $/hr rate the UI consumes.
+			// duration (hours) gives the hourly rate the UI consumes.
 			value := a.TotalCost / bucketHours
 			seriesByName[name] = append(seriesByName[name], CostDataPoint{
 				Timestamp: ts,

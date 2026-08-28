@@ -9,6 +9,13 @@ export function canBulkRestartKind(
   kind: BulkWorkloadKindInfo | null | undefined,
   writes: WorkloadWritePermissions | undefined,
 ): boolean {
+  return canPatchWorkloadKind(kind, writes)
+}
+
+export function canPatchWorkloadKind(
+  kind: BulkWorkloadKindInfo | null | undefined,
+  writes: WorkloadWritePermissions | undefined,
+): boolean {
   switch (kind?.name.toLowerCase()) {
     case 'deployments':
       return kind.group === 'apps' && writes?.deployments === true
@@ -21,6 +28,14 @@ export function canBulkRestartKind(
     default:
       return false
   }
+}
+
+export function canSetWorkloadImages(
+  kind: BulkWorkloadKindInfo | null | undefined,
+  writes: WorkloadWritePermissions | undefined,
+  supported: boolean,
+): boolean {
+  return supported && canPatchWorkloadKind(kind, writes)
 }
 
 export function canBulkScaleKind(

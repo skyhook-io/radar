@@ -67,6 +67,7 @@ release:
     name: radar
   draft: false
   prerelease: auto
+  replace_existing_artifacts: true
   name_template: "v{{.Version}}"
   header: |
     ## Radar v{{.Version}}

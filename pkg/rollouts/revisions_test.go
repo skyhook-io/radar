@@ -317,6 +317,22 @@ func TestUndoRejectsUnsupportedWorkloadRefKind(t *testing.T) {
 	}
 }
 
+func TestResolveTemplateTargetRejectsWrongAPIGroup(t *testing.T) {
+	ro := rolloutForTest("prod", "web", func(o map[string]any) {
+		spec := o["spec"].(map[string]any)
+		spec["workloadRef"] = map[string]any{
+			"apiVersion": "example.io/v1",
+			"kind":       "Deployment",
+			"name":       "web-deploy",
+		}
+	})
+
+	_, err := ResolveTemplateTarget(ro)
+	if !errors.Is(err, ErrWorkloadRefUnsupported) {
+		t.Fatalf("err = %v, want ErrWorkloadRefUnsupported", err)
+	}
+}
+
 func TestUndoRejectsTerminatingRollout(t *testing.T) {
 	ro := rolloutForTest("prod", "web", func(o map[string]any) {
 		meta := o["metadata"].(map[string]any)

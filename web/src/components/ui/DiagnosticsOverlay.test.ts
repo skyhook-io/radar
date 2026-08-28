@@ -73,3 +73,43 @@ describe('formatForGitHub desktop section', () => {
     expect(md).toContain('Desktop: `(unset)`')
   })
 })
+
+describe('formatForGitHub kubeconfig section', () => {
+  it('reports combined source counts and ignored ambient configuration', () => {
+    const md = formatForGitHub({
+      ...baseSnapshot,
+      kubeconfig: {
+        mode: 'multi-source',
+        fileCount: 3,
+        directoryFileCount: 2,
+        contextCount: 7,
+        enrichedFromShell: true,
+        kubeconfigEnvIgnored: true,
+        kubeconfigEnvIgnoredReason: 'directories-only configuration',
+        currentContextUsesExec: false,
+      },
+    }, undefined, false)
+
+    expect(md).toContain('Mode: `multi-source` | Files: 3 | Directory Files: 2 | Contexts (after source resolution): 7')
+    expect(md).toContain('KUBECONFIG Captured From Shell: Yes | Ignored: Yes — directories-only configuration')
+  })
+
+  it('omits directory counts for environment path lists', () => {
+    const md = formatForGitHub({
+      ...baseSnapshot,
+      kubeconfig: {
+        mode: 'multi-env',
+        fileCount: 2,
+        directoryFileCount: 0,
+        contextCount: 4,
+        enrichedFromShell: false,
+        kubeconfigEnvIgnored: false,
+        kubeconfigEnvIgnoredReason: '',
+        currentContextUsesExec: true,
+      },
+    }, undefined, false)
+
+    expect(md).toContain('Mode: `multi-env` | Files: 2 | Contexts (after source resolution): 4')
+    expect(md).not.toContain('Directory Files:')
+  })
+})

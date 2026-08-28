@@ -2,6 +2,8 @@
 
 import { formatCPUString, formatMemoryString, formatBytes } from '../../utils/format'
 import { pluralize } from '../../utils/pluralize'
+import type { WorkloadPodInfo } from '../../types/core'
+import { getArgoRolloutStepNumber, getObservedGeneration, getWorkloadRolloutActivity, isArgoRolloutResource, isRolloutActivityVisible, rolloutActivityBadge, type WorkloadRolloutActivity } from '../../utils/workload-rollout'
 
 // Import functions from sub-modules used internally by getCellFilterValue
 import { getCertificateStatus, getCertificateRequestStatus, getClusterIssuerStatus, getClusterIssuerType, getOrderState, getChallengeState, getChallengeType } from './resource-utils-certmanager'
@@ -762,8 +764,8 @@ export function getContainerSquareStates(pod: any): ContainerSquareState[] {
  */
 function isConverging(resource: any): boolean {
   const generation = resource?.metadata?.generation
-  const observed = resource?.status?.observedGeneration
-  return typeof generation === 'number' && typeof observed === 'number' && observed > 0 && observed < generation
+  const observed = getObservedGeneration(resource)
+  return typeof generation === 'number' && observed > 0 && observed < generation
 }
 
 /** Whether the pod was created by a batch Job. The owner's API group is checked
@@ -787,8 +789,8 @@ export function getWorkloadStatus(resource: any, kind: string): StatusBadge {
     // 0 desired = the node selector matches no nodes — intentional/idle, not a
     // fault and not "unknown" (matches pkg/health.Workload). Sky.
     if (desired === 0) return { text: '0 nodes', color: healthColors.neutral, level: 'neutral' }
-    if (ready === desired && updated === desired) {
-      return { text: `${ready}/${desired}`, color: healthColors.healthy, level: 'healthy' }
+    if (ready >= desired && updated >= desired) {
+      return { text: `${Math.min(ready, desired)}/${desired}`, color: healthColors.healthy, level: 'healthy' }
     }
     // Convergence grace, same as the replica kinds below. pkg/health.Workload
     // passes this signal for DaemonSets too, so omitting it here would render a
@@ -803,7 +805,7 @@ export function getWorkloadStatus(resource: any, kind: string): StatusBadge {
   }
 
   // Deployment, StatefulSet, ReplicaSet
-  const desired = spec.replicas ?? status.replicas ?? 0
+  const desired = spec.replicas ?? 1
   const ready = status.readyReplicas || 0
   const updated = status.updatedReplicas || 0
   const available = status.availableReplicas || 0
@@ -818,22 +820,66 @@ export function getWorkloadStatus(resource: any, kind: string): StatusBadge {
   // an outage. Neutral, never healthy: declining to call it broken is not the
   // same as calling it fine. Guarded on "not already fully ready" so a
   // converged workload still takes the healthy path below, matching Go's order.
-  if (isConverging(resource) && !(ready === desired && available === desired)) {
+  if (isConverging(resource) && !(ready >= desired && available >= desired)) {
     return { text: `${ready}/${desired}`, color: healthColors.neutral, level: 'neutral' }
   }
 
-  // Check if updating
-  if (updated < desired && updated > 0) {
-    return { text: `Updating ${updated}/${desired}`, color: healthColors.degraded, level: 'degraded' }
+  if (ready >= desired && available >= desired) {
+    return { text: `${Math.min(ready, desired)}/${desired}`, color: healthColors.healthy, level: 'healthy' }
   }
-
-  if (ready === desired && available === desired) {
-    return { text: `${ready}/${desired}`, color: healthColors.healthy, level: 'healthy' }
+  const partition = kind === 'statefulsets' ? (spec.updateStrategy?.rollingUpdate?.partition ?? 0) : 0
+  const updateTarget = Math.max(0, desired - partition)
+  if (updated < updateTarget && updated > 0) {
+    return { text: `Updating ${updated}/${updateTarget}`, color: healthColors.degraded, level: 'degraded' }
   }
   if (ready > 0) {
     return { text: `${ready}/${desired}`, color: healthColors.degraded, level: 'degraded' }
   }
   return { text: `${ready}/${desired}`, color: healthColors.unhealthy, level: 'unhealthy' }
+}
+
+export function getWorkloadDisplayStatus(
+  resource: any,
+  kind: string,
+  workloadPods?: WorkloadPodInfo[],
+): { activity: WorkloadRolloutActivity; status: StatusBadge } {
+  const normalizedKind = kind.toLowerCase().replace(/s$/, '')
+  const activity = getWorkloadRolloutActivity(resource, normalizedKind, workloadPods)
+  if (normalizedKind === 'rollout' && !isArgoRolloutResource(resource)) {
+    return { activity, status: getRolloutStatus(resource) }
+  }
+  const healthStatus = getWorkloadStatus(resource, `${normalizedKind}s`)
+  if (!isRolloutActivityVisible(activity)) {
+    return { activity, status: healthStatus }
+  }
+  const status: StatusBadge = rolloutActivityBadge(activity)
+  if (workloadStatusLevelRank[healthStatus.level] > workloadStatusLevelRank[status.level]) {
+    status.level = healthStatus.level
+    status.color = healthStatus.color
+    status.text = `${workloadStatusLabel(healthStatus)} · ${status.text}`
+  }
+  return { activity, status }
+}
+
+export function workloadStatusLabel(status: StatusBadge): string {
+  if (status.text === 'Scaled to 0') return status.text
+  return {
+    healthy: 'Healthy',
+    degraded: 'Degraded',
+    alert: 'Alert',
+    unhealthy: 'Unhealthy',
+    neutral: 'Neutral',
+    unknown: 'Unknown',
+  }[status.level]
+}
+
+const workloadStatusLevelRank: Record<HealthLevel, number> = {
+  neutral: 0,
+  healthy: 0,
+  unknown: 2,
+  degraded: 3,
+  alert: 4,
+  unhealthy: 5,
 }
 
 /** Detect problems for Deployments, StatefulSets, DaemonSets. Parallel to getPodProblems. */
@@ -1478,19 +1524,10 @@ export function getPVCAccessModes(pvc: any): string {
 // ============================================================================
 
 export function getRolloutStatus(rollout: any): StatusBadge {
-  const phase = rollout.status?.phase || 'Unknown'
-  switch (phase) {
-    case 'Healthy':
-      return { text: 'Healthy', color: healthColors.healthy, level: 'healthy' }
-    case 'Paused':
-      return { text: 'Paused', color: healthColors.degraded, level: 'degraded' }
-    case 'Progressing':
-      return { text: 'Progressing', color: healthColors.degraded, level: 'degraded' }
-    case 'Degraded':
-      return { text: 'Degraded', color: healthColors.unhealthy, level: 'unhealthy' }
-    default:
-      return { text: phase, color: healthColors.unknown, level: 'unknown' }
+  if (!isArgoRolloutResource(rollout)) {
+    return { text: rollout.status?.phase || 'Unknown', color: healthColors.unknown, level: 'unknown' }
   }
+  return rolloutActivityBadge(getWorkloadRolloutActivity(rollout, 'rollout'))
 }
 
 export function getAnalysisRunStatus(run: any): StatusBadge {
@@ -1543,9 +1580,9 @@ export function getRolloutReady(rollout: any): string {
 
 export function getRolloutStep(rollout: any): string | null {
   const steps = rollout.spec?.strategy?.canary?.steps || []
-  const currentIndex = rollout.status?.currentStepIndex
-  if (steps.length === 0 || currentIndex === undefined) return null
-  return `${currentIndex}/${steps.length}`
+  const stepNumber = getArgoRolloutStepNumber(rollout)
+  if (stepNumber === null) return null
+  return `${stepNumber}/${steps.length}`
 }
 
 // ============================================================================
@@ -2134,13 +2171,16 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       return resource.spec?.type || resource.type || ''
     case 'status':
       if (kindLower === 'pods') return getPodStatus(resource).text
-      if (['deployments', 'statefulsets', 'daemonsets', 'replicasets'].includes(kindLower)) {
-        const status = getWorkloadStatus(resource, kindLower)
-        if (status.text === 'Scaled to 0') return 'Scaled to 0'
-        if (status.level === 'healthy') return 'Healthy'
-        if (status.level === 'degraded') return 'Degraded'
-        if (status.level === 'unhealthy') return 'Unhealthy'
-        return 'Unknown'
+      if (['deployments', 'statefulsets', 'daemonsets', 'replicasets', 'rollouts'].includes(kindLower)) {
+        let status: StatusBadge
+        if (kindLower === 'replicasets') {
+          status = getWorkloadStatus(resource, kindLower)
+        } else {
+          const display = getWorkloadDisplayStatus(resource, kindLower)
+          if (isRolloutActivityVisible(display.activity)) return display.status.text
+          status = display.status
+        }
+        return workloadStatusLabel(status)
       }
       if (kindLower === 'nodes') return getNodeStatus(resource).text
       if (kindLower === 'jobs') return getJobStatus(resource).text
@@ -2150,7 +2190,6 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'clusterissuers' || kindLower === 'issuers') return getClusterIssuerStatus(resource).text
       if (kindLower === 'persistentvolumeclaims') return getPVCStatus(resource).text
       if (kindLower === 'persistentvolumes') return getPVStatus(resource).text
-      if (kindLower === 'rollouts') return getRolloutStatus(resource).text
       if (kindLower === 'analysisruns') return getAnalysisRunStatus(resource).text
       if (kindLower === 'workflows') return getWorkflowStatus(resource).text
       if (kindLower === 'cronworkflows') return getCronWorkflowStatus(resource).text

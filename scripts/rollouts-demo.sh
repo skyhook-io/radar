@@ -10,6 +10,7 @@
 #   roll      Push a new image on canary-manual so it parks mid-canary again
 #             (use after promoting or aborting it from the UI).
 #   reset     down + up.
+#   visibility Re-park only the native rollout-visibility workloads.
 #   status    Inventory the Rollouts and their AnalysisRuns.
 #   help      Show this message.
 #
@@ -159,6 +160,7 @@ drive_scenarios() {
   park_bluegreen
   break_canary_degraded
   park_workloadref
+  park_native_visibility
 }
 
 # Rollback needs targets, so canary-manual gets three fully-promoted
@@ -296,6 +298,44 @@ park_workloadref() {
   fi
 }
 
+park_native_visibility() {
+  step "Parking native workloads in rollout visibility states"
+
+  kc -n demo-rollouts patch deployment native-paused --type merge \
+    -p '{"spec":{"paused":false,"template":{"spec":{"containers":[{"name":"demo","image":"argoproj/rollouts-demo:blue"}]}}}}' >/dev/null
+  kc -n demo-rollouts patch deployment image-failure --type json \
+    -p '[{"op":"replace","path":"/spec/template/spec/containers/0/image","value":"argoproj/rollouts-demo:blue"}]' >/dev/null
+  kc -n demo-rollouts patch statefulset ondelete-stateful --type json \
+    -p '[{"op":"replace","path":"/spec/template/spec/containers/0/image","value":"argoproj/rollouts-demo:blue"}]' >/dev/null
+  kc -n demo-rollouts patch daemonset ondelete-daemon --type json \
+    -p '[{"op":"replace","path":"/spec/template/spec/containers/0/image","value":"argoproj/rollouts-demo:blue"}]' >/dev/null
+
+  for workload in deployment/native-paused deployment/image-failure; do
+    kc -n demo-rollouts rollout status "$workload" --timeout=180s >/dev/null \
+      || { warn "$workload did not become Ready; leaving its current state"; return; }
+  done
+
+  kc -n demo-rollouts delete pod -l app=ondelete-stateful >/dev/null
+  kc -n demo-rollouts delete pod -l app=ondelete-daemon >/dev/null
+  kc -n demo-rollouts wait --for=jsonpath='{.status.readyReplicas}'=2 \
+    statefulset/ondelete-stateful --timeout=180s >/dev/null \
+    || { warn "statefulset/ondelete-stateful did not become Ready; leaving its current state"; return; }
+  kc -n demo-rollouts wait --for=jsonpath='{.status.numberReady}'=1 \
+    daemonset/ondelete-daemon --timeout=180s >/dev/null \
+    || { warn "daemonset/ondelete-daemon did not become Ready; leaving its current state"; return; }
+
+  kc -n demo-rollouts patch deployment native-paused --type merge \
+    -p '{"spec":{"paused":true,"template":{"spec":{"containers":[{"name":"demo","image":"argoproj/rollouts-demo:yellow"}]}}}}' >/dev/null
+  kc -n demo-rollouts patch statefulset ondelete-stateful --type json \
+    -p '[{"op":"replace","path":"/spec/template/spec/containers/0/image","value":"argoproj/rollouts-demo:yellow"}]' >/dev/null
+  kc -n demo-rollouts patch daemonset ondelete-daemon --type json \
+    -p '[{"op":"replace","path":"/spec/template/spec/containers/0/image","value":"argoproj/rollouts-demo:yellow"}]' >/dev/null
+  kc -n demo-rollouts patch deployment image-failure --type json \
+    -p '[{"op":"replace","path":"/spec/template/spec/containers/0/image","value":"registry.invalid/radar/does-not-exist:visual-test"}]' >/dev/null
+
+  ok "native-paused, OnDelete, and new-revision image failure states parked"
+}
+
 # --- Re-roll ---------------------------------------------------------------
 
 cmd_roll() {
@@ -321,6 +361,12 @@ cmd_roll() {
   else
     warn "canary-manual didn't park after rolling to :${next}"
   fi
+}
+
+cmd_visibility() {
+  require_cmd kubectl "https://kubernetes.io/docs/tasks/tools/"
+  cluster_exists || fail "Cluster '${CLUSTER_NAME}' does not exist. Run: $0 up"
+  park_native_visibility
 }
 
 # --- Status ----------------------------------------------------------------
@@ -380,6 +426,7 @@ print_summary() {
   Other commands:
     $0 status    # inventory Rollouts + AnalysisRuns
     $0 roll      # re-park canary-manual mid-canary after promoting it
+    $0 visibility # re-park only the native rollout-visibility workloads
     $0 reset     # nuke + recreate
     $0 down      # delete cluster
 
@@ -397,6 +444,7 @@ case "${1:-help}" in
   down)   cmd_down   ;;
   reset)  cmd_reset  ;;
   roll)   cmd_roll   ;;
+  visibility) cmd_visibility ;;
   status) cmd_status ;;
   help|-h|--help) cmd_help ;;
   *)

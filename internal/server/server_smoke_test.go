@@ -45,6 +45,20 @@ var (
 // replace the resource cache restore it from here.
 var testFakeClient *fake.Clientset
 
+func useTestResourceCache(t *testing.T, client *fake.Clientset) {
+	t.Helper()
+	t.Cleanup(func() {
+		k8s.ResetResourceCache()
+		if err := k8s.InitTestResourceCache(testFakeClient); err != nil {
+			t.Fatalf("restore package fixture cache: %v", err)
+		}
+	})
+	k8s.ResetResourceCache()
+	if err := k8s.InitTestResourceCache(client); err != nil {
+		t.Fatalf("initialize test resource cache: %v", err)
+	}
+}
+
 func TestMain(m *testing.M) {
 	// The Cloud-funnel rollout gate mints an install ID in ~/.radar on first
 	// use; redirect HOME so no test run touches the developer's real settings.
@@ -1022,6 +1036,32 @@ func TestSmokeConnectionStatusOnly(t *testing.T) {
 	}
 }
 
+func TestConnectionRetryInClusterProbesBeforeTeardown(t *testing.T) {
+	k8s.ForceInCluster = true
+	t.Cleanup(func() { k8s.ForceInCluster = false })
+	previousContext := k8s.SetTestContextName("in-cluster")
+	t.Cleanup(func() { k8s.SetTestContextName(previousContext) })
+	previousStatus := k8s.GetConnectionStatus()
+	t.Cleanup(func() { k8s.SetConnectionStatus(previousStatus) })
+	stopped := false
+	k8s.SetSessionStopper(func() { stopped = true })
+	t.Cleanup(func() { k8s.SetSessionStopper(nil) })
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/connection/retry", nil)
+	(&Server{}).handleConnectionRetry(recorder, request)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("retry status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+	if !strings.Contains(recorder.Body.String(), "K8s config not initialized") {
+		t.Fatalf("retry response = %q", recorder.Body.String())
+	}
+	if stopped {
+		t.Fatal("in-cluster retry stopped active sessions")
+	}
+}
+
 func TestSmokeSessions(t *testing.T) {
 	var body map[string]any
 	assertOK(t, get(t, "/api/sessions"), &body)
@@ -1765,7 +1805,7 @@ func TestSmokeGetConfig(t *testing.T) {
 func TestSmokePutConfig(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	resp := put(t, "/api/config", `{"kubeconfig":"/tmp/test-kube","port":9999,"namespace":"staging","browser":"Safari"}`)
+	resp := put(t, "/api/config", `{"kubeconfig":"/tmp/test-kube","kubeconfigDirs":["/tmp/kubeconfigs-a","/tmp/kubeconfigs-b"],"port":9999,"namespace":"staging","browser":"Safari"}`)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
@@ -1776,6 +1816,9 @@ func TestSmokePutConfig(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&saved)
 	if saved["kubeconfig"] != "/tmp/test-kube" {
 		t.Errorf("kubeconfig = %v, want /tmp/test-kube", saved["kubeconfig"])
+	}
+	if dirs, ok := saved["kubeconfigDirs"].([]any); !ok || len(dirs) != 2 || dirs[0] != "/tmp/kubeconfigs-a" || dirs[1] != "/tmp/kubeconfigs-b" {
+		t.Errorf("kubeconfigDirs = %v", saved["kubeconfigDirs"])
 	}
 	if saved["port"] != float64(9999) {
 		t.Errorf("port = %v, want 9999", saved["port"])
@@ -1790,6 +1833,9 @@ func TestSmokePutConfig(t *testing.T) {
 	file, _ := got["file"].(map[string]any)
 	if file["kubeconfig"] != "/tmp/test-kube" {
 		t.Errorf("persisted kubeconfig = %v", file["kubeconfig"])
+	}
+	if dirs, ok := file["kubeconfigDirs"].([]any); !ok || len(dirs) != 2 || dirs[0] != "/tmp/kubeconfigs-a" || dirs[1] != "/tmp/kubeconfigs-b" {
+		t.Errorf("persisted kubeconfigDirs = %v", file["kubeconfigDirs"])
 	}
 	if file["browser"] != "Safari" {
 		t.Errorf("persisted browser = %v", file["browser"])
@@ -1891,8 +1937,8 @@ func TestSmokeCapabilitiesShape(t *testing.T) {
 		}
 	}
 
-	if !body.Features["yamlReview"] || !body.Features["yamlSchemas"] {
-		t.Fatalf("capabilities.features = %v, want YAML review and schemas enabled", body.Features)
+	if !body.Features["yamlReview"] || !body.Features["yamlSchemas"] || !body.Features["workloadImages"] {
+		t.Fatalf("capabilities.features = %v, want YAML review, schemas, and workload images enabled", body.Features)
 	}
 }
 

@@ -142,7 +142,7 @@ func handleManageWorkload(ctx context.Context, req *mcp.CallToolRequest, input m
 		}
 		resp := map[string]any{
 			"status":   "ok",
-			"message":  fmt.Sprintf("Rolled back %s %s/%s to revision %d", kind, input.Namespace, input.Name, *input.Revision),
+			"message":  fmt.Sprintf("Rollback of %s %s/%s to revision %d initiated — the controller applies it", kind, input.Namespace, input.Name, *input.Revision),
 			"revision": *input.Revision,
 		}
 		if kind == "rollouts" {
@@ -180,6 +180,9 @@ func handleManageRollout(ctx context.Context, req *mcp.CallToolRequest, input ma
 	}
 	if result.StepIndex != nil {
 		resp["stepIndex"] = *result.StepIndex
+	}
+	if result.NoChange {
+		resp["noChange"] = true
 	}
 	if action == "abort" {
 		resp["note"] = "The Rollout stays aborted until manage_rollout action=retry, or a new revision is pushed."
@@ -353,6 +356,9 @@ func workloadSelectorMCPError(ctx context.Context, err error, kind, namespace, n
 	}
 	if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
 		return notFoundError(ctx, err, kind, namespace, name)
+	}
+	if errors.Is(err, k8s.ErrWorkloadSelectorUnavailable) || errors.Is(err, rollouts.ErrWorkloadRefUnsupported) {
+		return fmt.Errorf("invalid %s %s/%s: %w", kind, namespace, name, err)
 	}
 	return fmt.Errorf("get %s %s/%s: %w", kind, namespace, name, err)
 }

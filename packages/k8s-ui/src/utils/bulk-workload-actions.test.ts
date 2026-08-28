@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   canBulkRestartKind,
   canBulkScaleKind,
+  canPatchWorkloadKind,
+  canSetWorkloadImages,
   intersectWorkloadWrites,
 } from './bulk-workload-actions'
 import type { Capabilities, WorkloadWritePermissions } from '../types/core'
@@ -26,6 +28,24 @@ describe('bulk workload action gating', () => {
     expect(canBulkRestartKind({ name: 'daemonsets', group: 'apps' }, all)).toBe(true)
     expect(canBulkRestartKind({ name: 'statefulsets', group: 'apps' }, all)).toBe(true)
     expect(canBulkRestartKind({ name: 'rollouts', group: 'argoproj.io' }, all)).toBe(true)
+  })
+
+  it('shares exact group and kind checks with detail patch actions', () => {
+    const all = writes({ deployments: true, daemonSets: true, statefulSets: true, rollouts: true })
+
+    expect(canPatchWorkloadKind({ name: 'deployments', group: 'apps' }, all)).toBe(true)
+    expect(canPatchWorkloadKind({ name: 'rollouts', group: 'argoproj.io' }, all)).toBe(true)
+    expect(canPatchWorkloadKind({ name: 'deployments', group: 'example.com' }, all)).toBe(false)
+    expect(canPatchWorkloadKind({ name: 'services', group: '' }, all)).toBe(false)
+    expect(canPatchWorkloadKind({ name: 'deployments', group: 'apps' }, undefined)).toBe(false)
+  })
+
+  it('requires an explicit server advertisement for image updates', () => {
+    const all = writes({ deployments: true })
+
+    expect(canSetWorkloadImages({ name: 'deployments', group: 'apps' }, all, true)).toBe(true)
+    expect(canSetWorkloadImages({ name: 'deployments', group: 'apps' }, all, false)).toBe(false)
+    expect(canSetWorkloadImages({ name: 'deployments', group: 'apps' }, undefined, true)).toBe(false)
   })
 
   it('requires the apps group for built-in workload restart', () => {

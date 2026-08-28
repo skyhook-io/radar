@@ -54,7 +54,7 @@ func replicaVerdict(desired, ready, available int32, requireAvailable, convergin
 	if desired == 0 {
 		return Verdict{Level: LevelNeutral, Reason: "ScaledToZero"}
 	}
-	if ready == desired && (!requireAvailable || available == desired) {
+	if ready >= desired && (!requireAvailable || available >= desired) {
 		return Verdict{Level: LevelHealthy}
 	}
 	// Convergence grace. Without it every ordinary rollout and every scale-up

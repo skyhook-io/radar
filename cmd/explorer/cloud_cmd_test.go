@@ -10,6 +10,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/cloudinstall"
+	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/helm"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
@@ -300,7 +301,7 @@ func TestConfirmCloudInstallContext(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var out bytes.Buffer
-			got := confirmCloudInstallContext(strings.NewReader(tc.input), &out, "prod-context", tc.contextExplicit, tc.yes, tc.interactive)
+			got := confirmCloudInstallContext(strings.NewReader(tc.input), &out, "prod-context", tc.contextExplicit, tc.yes, tc.interactive, "")
 			if got != tc.want {
 				t.Fatalf("confirmCloudInstallContext() = %v, want %v", got, tc.want)
 			}
@@ -313,6 +314,51 @@ func TestConfirmCloudInstallContext(t *testing.T) {
 			}
 			if gotNoTerminal := strings.Contains(text, "No interactive terminal"); gotNoTerminal != tc.wantNoTerminal {
 				t.Errorf("non-interactive message presence = %v, want %v: %q", gotNoTerminal, tc.wantNoTerminal, text)
+			}
+		})
+	}
+}
+
+func TestConfirmCloudInstallContextReportsIgnoredDirectories(t *testing.T) {
+	var out bytes.Buffer
+	if !confirmCloudInstallContext(strings.NewReader(""), &out, "prod-context", false, true, false, "additional kubeconfig directories") {
+		t.Fatal("yes confirmation was rejected")
+	}
+	if !strings.Contains(out.String(), `Kubernetes context: "prod-context" (additional kubeconfig directories ignored)`) {
+		t.Fatalf("context output = %q", out.String())
+	}
+}
+
+func TestSelectCloudCommandKubeconfig(t *testing.T) {
+	dir := t.TempDir()
+	primary := filepath.Join(dir, "config")
+	additionalDir := filepath.Join(dir, "configs")
+	tests := []struct {
+		name      string
+		cfg       config.Config
+		wantPath  string
+		wantLabel string
+		wantErr   bool
+	}{
+		{name: "default loading rules", cfg: config.Config{}},
+		{name: "primary only", cfg: config.Config{Kubeconfig: primary}, wantPath: primary},
+		{
+			name:      "primary wins over additional directories",
+			cfg:       config.Config{Kubeconfig: primary, KubeconfigDirs: []string{additionalDir}},
+			wantPath:  primary,
+			wantLabel: "additional kubeconfig directories",
+		},
+		{name: "directories require primary", cfg: config.Config{KubeconfigDirs: []string{additionalDir}}, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := selectCloudCommandKubeconfig(tt.cfg)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if got.path != tt.wantPath || got.ignoredSourcesLabel() != tt.wantLabel {
+				t.Fatalf("selection = %+v, want path=%q ignored=%q", got, tt.wantPath, tt.wantLabel)
 			}
 		})
 	}

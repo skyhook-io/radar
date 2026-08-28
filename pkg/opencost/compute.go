@@ -73,23 +73,8 @@ type SummaryOptions struct {
 	NamespaceFilter string
 }
 
-// ComputeCostSummary is the default compute path: asks OpenCost's REST API
-// for namespace-level allocation over the window and maps the response into
-// our normalized CostSummary.
-//
-// Why REST by default: OpenCost computes cost internally (cloud pricing +
-// Kubernetes allocation data) and exposes the results two ways — REST at
-// /allocation/assets/cloudCost and Prometheus metrics at /metrics. REST
-// works wherever OpenCost works; the Prometheus path requires a scrape
-// config that's often missing on clusters where OpenCost was installed
-// manually. REST is also simpler (one pre-aggregated call instead of ~6
-// PromQL queries + client-side math).
-//
-// When to reach for ComputeCostSummaryFromProm instead:
-//   - You need custom label aggregations beyond what /allocation exposes.
-//   - You want per-node hourly pricing as time series.
-//   - You're correlating cost with live Prometheus metrics (deploy events,
-//     HPA state, container_cpu_usage, etc.) in the same query.
+// ComputeCostSummary asks OpenCost's REST API for namespace-level allocation
+// over the window and maps the response into our normalized CostSummary.
 //
 // Contract:
 //   - REST unreachable or returns error → Available=false, Reason=ReasonQueryError.
@@ -99,7 +84,7 @@ type SummaryOptions struct {
 //   - Numbers rounded to 4dp for JSON cleanliness.
 func ComputeCostSummary(ctx context.Context, client *RESTClient, opts SummaryOptions) *CostSummary {
 	if opts.Currency == "" {
-		opts.Currency = "USD"
+		opts.Currency = DefaultCurrency
 	}
 	if opts.Window == "" {
 		opts.Window = "1h"
@@ -326,10 +311,8 @@ func safeRatio(num, den float64) float64 {
 	return num / den
 }
 
-// ComputeCostSummaryFromProm is the PromQL-based compute path, for callers
-// that have a scraped-OpenCost Prometheus available rather than the REST
-// API (or that need to correlate cost with live Prometheus metrics in the
-// same query).
+// ComputeCostSummaryFromProm is the PromQL-based compute path used by Radar's
+// server handlers and other callers with scraped OpenCost metrics.
 //
 // Contract:
 //   - If the primary OpenCost allocation metrics are absent entirely, the
@@ -339,11 +322,11 @@ func safeRatio(num, den float64) float64 {
 //     the typed reason to the UI.
 //   - Numbers are rounded to 4 decimal places for cleaner JSON.
 func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts SummaryOptions) *CostSummary {
-	if client == nil {
-		return &CostSummary{Available: false, Reason: ReasonNoPrometheus}
-	}
 	if opts.Currency == "" {
-		opts.Currency = "USD"
+		opts.Currency = DefaultCurrency
+	}
+	if client == nil {
+		return &CostSummary{Available: false, Reason: ReasonNoPrometheus, Currency: opts.Currency}
 	}
 	if opts.Window == "" {
 		opts.Window = "1h"
@@ -357,7 +340,7 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 			`sum by (namespace) (label_replace(rate(opencost_container_cpu_cost_total[1h]), "namespace", "$1", "exported_namespace", "(.+)"))`)
 		if err != nil {
 			log.Printf("[opencost] CPU allocation fallback query also failed: %v", err)
-			return &CostSummary{Available: false, Reason: ReasonQueryError}
+			return &CostSummary{Available: false, Reason: ReasonQueryError, Currency: opts.Currency}
 		}
 	}
 
@@ -369,12 +352,12 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 			`sum by (namespace) (label_replace(rate(opencost_container_memory_cost_total[1h]), "namespace", "$1", "exported_namespace", "(.+)"))`)
 		if err != nil {
 			log.Printf("[opencost] memory allocation fallback query also failed: %v", err)
-			return &CostSummary{Available: false, Reason: ReasonQueryError}
+			return &CostSummary{Available: false, Reason: ReasonQueryError, Currency: opts.Currency}
 		}
 	}
 
 	if len(cpuResult.Series) == 0 && len(memResult.Series) == 0 {
-		return &CostSummary{Available: false, Reason: ReasonNoMetrics}
+		return &CostSummary{Available: false, Reason: ReasonNoMetrics, Currency: opts.Currency}
 	}
 
 	// Usage queries are best-effort: efficiency / idle are derived from them

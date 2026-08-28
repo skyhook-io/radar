@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AlertCircle, DollarSign, HelpCircle, Loader2, TrendingUp } from 'lucide-react'
+import { AlertCircle, Coins, HelpCircle, Loader2, TrendingUp } from 'lucide-react'
 import type { AppRow, AppWorkload } from '@skyhook-io/k8s-ui'
 import {
   COST_DISCOVERY_GRACE_MS,
@@ -15,6 +15,7 @@ import {
 import { Tooltip } from '../ui/Tooltip'
 import { ChartLegend, CostTimeRangeSelector, StackedAreaChart } from './CostTrendChart'
 import {
+  DEFAULT_COST_CURRENCY,
   formatCostPerHour,
   formatHistoricalSpend,
   formatProjectedDailyRate,
@@ -148,6 +149,8 @@ export function ApplicationCostTab({
   const hasTrend = points.length >= 2 && points.some((p) => p.value > 0)
   const rows = current?.workloads ?? []
   const maxCost = Math.max(...rows.map((row) => row.current?.hourlyCost ?? 0), 0)
+  const currentCurrency = current?.currency ?? trend?.currency ?? DEFAULT_COST_CURRENCY
+  const trendCurrency = trend?.currency ?? current?.currency ?? DEFAULT_COST_CURRENCY
 
   return (
     <div className="mx-auto w-full max-w-[1600px] space-y-4">
@@ -182,11 +185,11 @@ export function ApplicationCostTab({
                 <div className="text-sm font-semibold text-theme-text-primary">
                   Application compute cost
                 </div>
-                <CostInfoTooltip content="Dollars are based on OpenCost CPU and memory allocation over time, grouped by the workloads in this application. OpenCost allocation uses the greater of requested or observed resources." />
+                <CostInfoTooltip content="Values are based on OpenCost CPU and memory allocation over time, grouped by the workloads in this application. OpenCost allocation uses the greater of requested or observed resources." />
               </div>
               <div className="text-xs text-theme-text-tertiary">
-                OpenCost CPU and memory allocation rate ($/hr) for Deployment, StatefulSet, and
-                DaemonSet workloads
+                OpenCost CPU and memory allocation rate ({trendCurrency}/hr) for Deployment,
+                StatefulSet, and DaemonSet workloads
               </div>
             </div>
           </div>
@@ -201,6 +204,7 @@ export function ApplicationCostTab({
                 points.length,
                 trend?.windowTotalCost ?? 0,
                 trendLoading || state === 'partial_missing_history',
+                trendCurrency,
               )}
               subvalue={
                 state === 'partial_missing_history'
@@ -210,10 +214,10 @@ export function ApplicationCostTab({
             />
             <CostMetricBlock
               label="Projected monthly"
-              value={totals ? formatProjectedMonthlyCost(hourly) : '—'}
+              value={totals ? formatProjectedMonthlyCost(hourly, currentCurrency) : '—'}
               subvalue={
                 totals
-                  ? `${formatCostPerHour(hourly)} current rate`
+                  ? `${formatCostPerHour(hourly, currentCurrency)} current rate`
                   : 'Current allocation unavailable'
               }
             />
@@ -226,7 +230,7 @@ export function ApplicationCostTab({
               </div>
             ) : hasTrend && chartSeries.length > 0 ? (
               <div className="min-w-0">
-                <StackedAreaChart series={chartSeries} />
+                <StackedAreaChart series={chartSeries} currency={trendCurrency} />
                 <ChartLegend series={chartSeries} />
               </div>
             ) : (
@@ -250,16 +254,17 @@ export function ApplicationCostTab({
         />
         <CostMetricTile
           label="Projected daily"
-          value={totals ? formatProjectedDailyRate(hourly) : '—'}
+          value={totals ? formatProjectedDailyRate(hourly, currentCurrency) : '—'}
           subvalue={
             totals
-              ? `${formatCostPerHour(hourly)} current hourly rate`
+              ? `${formatCostPerHour(hourly, currentCurrency)} current hourly rate`
               : 'Current allocation unavailable'
           }
         />
       </div>
 
       <CurrentAllocationUse
+        currency={currentCurrency}
         dataAvailable={Boolean(totals)}
         cpuCost={totals?.cpuCost ?? 0}
         memoryCost={totals?.memoryCost ?? 0}
@@ -296,6 +301,7 @@ export function ApplicationCostTab({
                   key={applicationCostKey(row)}
                   row={row}
                   maxCost={maxCost}
+                  currency={currentCurrency}
                   onOpen={
                     appWorkload && onSelectWorkloadCost
                       ? () => onSelectWorkloadCost(appWorkload)
@@ -309,9 +315,13 @@ export function ApplicationCostTab({
       </section>
 
       <div className="text-xs text-theme-text-tertiary">
-        Powered by OpenCost via Prometheus. Historical spend uses the selected range; projected
-        monthly values multiply current hourly allocation. Batch/job cost is separate; storage/PVC
-        and network costs remain at namespace and cluster level.
+        Powered by OpenCost via Prometheus.{' '}
+        {currentCurrency !== DEFAULT_COST_CURRENCY && (
+          <>Labeled {currentCurrency}; no conversion. </>
+        )}
+        Historical spend uses the selected range; projected monthly values multiply current hourly
+        allocation. Batch/job cost is separate; storage/PVC and network costs remain at namespace
+        and cluster level.
       </div>
     </div>
   )
@@ -361,10 +371,12 @@ export function applicationCostWorkloads(workloads: AppWorkload[]): AppWorkload[
 function ApplicationWorkloadCostRow({
   row,
   maxCost,
+  currency,
   onOpen,
 }: {
   row: OpenCostApplicationWorkloadCost
   maxCost: number
+  currency: string
   onOpen?: () => void
 }) {
   const current = row.current
@@ -392,10 +404,10 @@ function ApplicationWorkloadCostRow({
         )}
       </div>
       <div className="text-right text-sm font-medium tabular-nums text-theme-text-primary">
-        {current ? formatProjectedMonthlyRate(hourly) : '—'}
+        {current ? formatProjectedMonthlyRate(hourly, currency) : '—'}
       </div>
       <div className="hidden text-right text-xs tabular-nums text-theme-text-tertiary sm:block">
-        {current ? formatCostPerHour(hourly) : '—'}
+        {current ? formatCostPerHour(hourly, currency) : '—'}
       </div>
       <div className="hidden min-w-0 items-center gap-2 md:flex">
         <div
@@ -410,7 +422,7 @@ function ApplicationWorkloadCostRow({
       </div>
       <div className="hidden text-right text-xs tabular-nums text-theme-text-tertiary lg:block">
         {current
-          ? `${formatProjectedMonthlyCost(current.cpuCost)} / ${formatProjectedMonthlyCost(current.memoryCost)}`
+          ? `${formatProjectedMonthlyCost(current.cpuCost, currency)} / ${formatProjectedMonthlyCost(current.memoryCost, currency)}`
           : '—'}
       </div>
     </>
@@ -512,7 +524,7 @@ function ApplicationCostUnavailable({
   return (
     <div className="flex h-full min-h-[320px] items-center justify-center">
       <div className="flex max-w-md flex-col items-center gap-3 text-center text-theme-text-secondary">
-        <DollarSign className="h-8 w-8 text-theme-text-tertiary/50" />
+        <Coins className="h-8 w-8 text-theme-text-tertiary/50" />
         <div className="text-sm">{text}</div>
       </div>
     </div>

@@ -19,6 +19,9 @@ type PreviewUpdateResourceResult = k8score.PreviewUpdateResourceResult
 type DeleteResourceOptions = k8score.DeleteResourceOptions
 type ApplyResourceOptions = k8score.ApplyResourceOptions
 type ApplyResourceResult = k8score.ApplyResourceResult
+type WorkloadImageInventory = k8score.WorkloadImageInventory
+type WorkloadImageUpdate = k8score.WorkloadImageUpdate
+type SetWorkloadImagesResult = k8score.SetWorkloadImagesResult
 
 func getWorkloadManager() *k8score.WorkloadManager {
 	var disc *k8score.ResourceDiscovery
@@ -122,6 +125,14 @@ func RestartWorkload(ctx context.Context, kind, namespace, name string) error {
 // RestartWorkloadWithClient performs a rolling restart using the provided client.
 func RestartWorkloadWithClient(ctx context.Context, kind, namespace, name string, client dynamic.Interface) error {
 	return getWorkloadManagerWithClient(client).RestartWorkload(ctx, kind, namespace, name)
+}
+
+func GetWorkloadImagesWithClient(ctx context.Context, kind, namespace, name string, client dynamic.Interface) (*WorkloadImageInventory, error) {
+	return getWorkloadManagerWithClient(client).GetWorkloadImages(ctx, kind, namespace, name)
+}
+
+func SetWorkloadImagesWithClient(ctx context.Context, kind, namespace, name string, updates []WorkloadImageUpdate, client dynamic.Interface) (*SetWorkloadImagesResult, error) {
+	return getWorkloadManagerWithClient(client).SetWorkloadImages(ctx, kind, namespace, name, updates)
 }
 
 // ScaleWorkload scales a Deployment or StatefulSet to the specified replica count.

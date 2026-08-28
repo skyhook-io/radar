@@ -131,42 +131,7 @@ helm repo add skyhook https://skyhook-io.github.io/helm-charts
 helm install radar skyhook/radar -n radar --create-namespace
 ```
 
-See the [In-Cluster Deployment Guide](docs/in-cluster.md) for ingress, authentication, and RBAC configuration.
-
-### Gateway API HTTPRoute
-
-Chart supports optional Gateway API `HTTPRoute` generation. Enable
-`httpRoute.enabled`, set `parentRefs`, and use `httpRoute.rules` for multiple
-path prefixes, per-route timeouts, filters, or custom backends. `hostnames`
-defaults to an empty list, and `apiVersion` can be overridden for older Gateway
-API installations. The generated default route has no chart-imposed timeout,
-so the Gateway deployment default applies. Set `httpRoute.defaultTimeout` for
-an explicit timeout; custom rules can define their own `timeouts`.
-
-`ingress` and `httpRoute` are mutually exclusive: enabling both stops the
-install with an error, so enable only one. When `httpRoute` is enabled you must
-set at least one `parentRefs` entry (the Gateway the route attaches to);
-otherwise the install fails instead of creating an HTTPRoute that is attached to
-no Gateway.
-
-```yaml
-httpRoute:
-  enabled: true
-  parentRefs:
-    - name: public-gateway
-  hostnames: []
-  rules:
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /
-      backendRefs:
-        - name: radar
-          port: 9280
-```
-
-See the [Helm Chart README](deploy/helm/radar/README.md#with-gateway-api-httproute)
-for full configuration details and timeout examples.
+See the [In-Cluster Deployment Guide](docs/in-cluster.md) for Gateway API and ingress exposure, authentication, and RBAC configuration.
 
 </details>
 
@@ -200,10 +165,12 @@ output) for plain text. URLs, tokens, and suggested commands remain unstyled.
 
 **CLI Flags**
 
+The table below covers common startup flags. See the [full CLI reference](https://radarhq.io/docs/configuration/cli); `radar --help` is authoritative for the installed version.
+
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--kubeconfig` | `~/.kube/config` | Path to kubeconfig file |
-| `--kubeconfig-dir` | | Comma-separated directories containing kubeconfig files |
+| `--kubeconfig` | `~/.kube/config` | Path to primary kubeconfig file |
+| `--kubeconfig-dir` | | Comma-separated directories containing additional kubeconfig files |
 | `--namespace` | (all) | Initial namespace filter (supports multi-select in the UI; also used as RBAC fallback for namespace-scoped users) |
 | `--namespaces` | (all) | Initial namespace filters as a comma-separated list, e.g. `--namespaces ns1,ns2,ns3`. Use this when your identity can list resources in specific namespaces but cannot list namespaces cluster-wide. |
 | `--namespace-scope` | `false` | Pin namespaced informer caches to a **single** namespace for large clusters (scoping to multiple namespaces is not supported yet). Requires `--namespace`, a kubeconfig context namespace, or a saved local single-namespace pick. Local mode can rebuild the cache when switching namespaces; auth/cloud mode locks the shared cache to the startup namespace. |
@@ -228,6 +195,7 @@ output) for plain text. URLs, tokens, and suggested commands remain unstyled.
 | `--prometheus-url` | (auto-discover) | Manual Prometheus/VictoriaMetrics URL (skips auto-discovery) |
 | `--prometheus-header` | | HTTP header sent with every Prometheus request, format `Key=Value` (repeatable). Required for auth-protected backends. |
 | `--prometheus-header-from-env` | | HTTP header sent with every Prometheus request, sourced from an environment variable, format `Key=ENV_VAR` (repeatable). |
+| `--opencost-currency` | (auto-detect, then USD) | Override the ISO 4217 currency label for OpenCost values. Radar labels values but does not convert them. |
 | `--auth-mode` | `none` | Authentication mode: `none`, `proxy`, or `oidc` ([details](docs/authentication.md)) |
 | `--no-mcp` | `false` | Disable MCP server for AI tool integration |
 | `--mcp-catalog-stdio` | `false` | Start only the MCP catalog over stdio for registry introspection |
@@ -305,6 +273,7 @@ Table-based resource browser with smart columns per resource kind.
 - Search by name, filter by status or problems (CrashLoopBackOff, ImagePullBackOff, etc.)
 - Add custom columns from any label or annotation — sortable, filterable, and resizable
 - Click any resource for YAML manifest, related resources, logs, and events
+- Set regular or init-container images on Deployments, StatefulSets, DaemonSets, and Argo Rollouts, with live rollout progress in tables, drawers, workload views, and Applications
 
 ### Image Filesystem Viewer
 
@@ -428,7 +397,9 @@ See [docs/capacity.md](docs/capacity.md) for the full reference.
 
 ### Cost Insights
 
-Track Kubernetes spending with OpenCost integration — no additional configuration needed.
+Track Kubernetes spending with OpenCost integration. Radar reads the configured currency from a
+running OpenCost or Kubecost workload when available and otherwise uses USD. Override the label in
+Settings → Cost, config, CLI, or Helm. Radar does not convert values between currencies.
 
 - Cluster hourly and projected monthly cost, top namespaces by spend
 - Cost trend charts with 6h/24h/7d range selector
@@ -462,9 +433,9 @@ Hop-ordered diagnosis for Service, Ingress, HTTPRoute, GRPCRoute, and Gateway - 
 - Exposed via the **Reachability** tab in the resource detail view (and via the network branch of the MCP `diagnose` tool for AI consumers) - see [docs/reachability.md](docs/reachability.md)
 ### Kubernetes Upgrade Impact
 
-Open **Checks → Upgrade impact** before upgrading the control plane. Radar compares the current cluster with a target Kubernetes minor and orders evidenced compatibility, health, admission, drain, runtime, and configuration checks by required action. Release-specific checks appear only when their Kubernetes minor lies in the selected upgrade path; the current catalog contains 18 checks through Kubernetes 1.36.
+Open **Checks → Upgrade impact** before upgrading the control plane. Radar compares the current cluster with a target Kubernetes minor and orders evidenced compatibility, health, admission, drain, runtime, and configuration checks by required action. Release-specific checks appear only when their Kubernetes minor lies in the selected upgrade path; the current catalog is reviewed through Kubernetes 1.37.
 
-- Finds blockers such as skipped minor versions, APIs removed in the target release, unsupported kubelet or kube-proxy skew, overlapping PodDisruptionBudgets, and the `gitRepo` volume driver disabled in Kubernetes 1.36
+- Finds blockers such as skipped minor versions, APIs removed in the target release, unsupported kubelet or kube-proxy skew, overlapping PodDisruptionBudgets, the `gitRepo` volume driver disabled in Kubernetes 1.36, and removed or locked Kubernetes 1.37 feature gates or `scheduling.k8s.io/v1alpha2` objects
 - Flags likely operational impact such as FlexVolume exposure and renamed control-plane metrics as warnings, while intent-dependent configuration such as deprecated Service `externalIPs` remains review
 - Inspects live resources, aggregated API availability, Helm release manifests, kubectl last-applied configuration, API server usage metrics, and PrometheusRule expressions
 - Distinguishes **Passed**, **Review**, **Warning**, **Blocked**, **Incomplete**, and **Not applicable** instead of flattening advisory findings, likely impact, and missing evidence into one state
@@ -588,7 +559,7 @@ Radar reads your cluster through your own credentials and keeps cluster data loc
 
 ## Development
 
-See the **[Development Guide](DEVELOPMENT.md)** for building from source, architecture details, API reference, and contributing.
+See the **[Development Guide](DEVELOPMENT.md)** for building from source and contributing. For automation and integrations, see the [HTTP API reference](https://radarhq.io/docs/reference/api).
 
 Quick start:
 ```bash

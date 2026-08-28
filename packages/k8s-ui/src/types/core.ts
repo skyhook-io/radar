@@ -59,6 +59,55 @@ export interface WorkloadWritePermissions {
   rollouts: boolean
 }
 
+export type WorkloadContainerType = 'container' | 'initContainer'
+
+export interface WorkloadContainerImage {
+  type: WorkloadContainerType
+  name: string
+  image: string
+}
+
+export interface WorkloadImageTarget {
+  group: string
+  resource: string
+  kind: string
+  namespace: string
+  name: string
+}
+
+export type WorkloadUpdateBehaviorType =
+  | 'rolling'
+  | 'recreate'
+  | 'paused'
+  | 'onDelete'
+  | 'partitioned'
+  | 'canary'
+  | 'blueGreen'
+
+export interface WorkloadUpdateBehavior {
+  type: WorkloadUpdateBehaviorType
+  partition?: number
+  autoPromote?: boolean
+  gated?: boolean
+}
+
+export interface WorkloadImageInventory {
+  target: WorkloadImageTarget
+  containers: WorkloadContainerImage[]
+  behavior: WorkloadUpdateBehavior
+}
+
+export interface WorkloadImageUpdate {
+  type: WorkloadContainerType
+  name: string
+  previousImage: string
+  image: string
+}
+
+export interface SetWorkloadImagesResult extends WorkloadImageInventory {
+  object: Record<string, unknown>
+}
+
 export interface IntegrationCapability {
   state: CapacityIntegrationState
   reasonCode?: string
@@ -112,6 +161,7 @@ export interface CloudConnectCapability {
 export interface FeatureCapabilities {
   yamlReview?: boolean
   yamlSchemas?: boolean
+  workloadImages?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.
@@ -455,12 +505,15 @@ export interface ClusterInfo {
 // Context info for context switching
 export interface ContextInfo {
   name: string
+  /** Original context name inside its source file. Set for isolated sources
+   *  so display code need not infer backend-added collision qualifiers. */
+  originalName?: string
   cluster: string
   user: string
   namespace: string
   isCurrent: boolean
-  /** Source kubeconfig label (e.g. "kube-cluster-paris"). Set by backend
-   *  only when 2+ kubeconfig files are loaded; empty otherwise. */
+  /** Source kubeconfig label (e.g. "kube-cluster-paris"). Set by the backend
+   *  for contexts loaded through the isolated source registry. */
   source?: string
 }
 
@@ -1431,6 +1484,8 @@ export interface WorkloadPodInfo {
   stepID?: string
   stepName?: string
   stepPhase?: string
+  revisionIdentity?: string
+  updatedRevision?: boolean
 }
 
 // SSE event types for workload log streaming

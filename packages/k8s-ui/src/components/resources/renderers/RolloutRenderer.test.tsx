@@ -102,6 +102,33 @@ describe('rolloutActions state gating', () => {
     expect(blockedReason(settled, 'abort')).toBe('Rollout is fully promoted — roll back instead')
   })
 
+  it('offers the promotion verbs while the controller is still behind the spec', () => {
+    // A rollback bumps the generation; until the controller writes status the phase is
+    // still the pre-rollback one, and this is exactly when Promote full is needed.
+    const settled = canaryRollout({ phase: 'Healthy', currentStepIndex: 4 }, 4)
+    const stale = {
+      ...settled,
+      metadata: { ...settled.metadata, generation: 4 },
+      status: { ...settled.status, observedGeneration: '3' },
+    }
+    expect(blockedReason(stale, 'promote-full')).toBeUndefined()
+    // Abort deliberately keeps its phase-based gate: in this window status.stable still
+    // points at the revision the operator just rolled away from.
+    expect(blockedReason(stale, 'abort')).toBe('Rollout is fully promoted — roll back instead')
+    // Once the controller catches up the settled reading is trustworthy again.
+    const caughtUp = { ...stale, status: { ...settled.status, observedGeneration: '4' } }
+    expect(blockedReason(caughtUp, 'promote-full')).toBe('Nothing left to promote')
+  })
+
+  it('keeps Promote full offered on a workloadRef Rollout, whose template lives elsewhere', () => {
+    const settled = canaryRollout({ phase: 'Healthy', currentStepIndex: 4 }, 4)
+    const workloadRef = {
+      ...settled,
+      spec: { ...settled.spec, workloadRef: { kind: 'Deployment', name: 'web' } },
+    }
+    expect(blockedReason(workloadRef, 'promote-full')).toBeUndefined()
+  })
+
   it('routes an aborted rollout through Retry before it will promote again', () => {
     const aborted = canaryRollout({ phase: 'Degraded', abort: true, currentStepIndex: 1 })
     expect(blockedReason(aborted, 'promote-full')).toBe('Retry the rollout first')
@@ -135,6 +162,14 @@ describe('rolloutActions state gating', () => {
     expect(blockedReason({ spec: {} }, 'promote')).toBe(
       'Rollout is not paused and no analysis is running',
     )
+  })
+})
+
+describe('RolloutRenderer step display', () => {
+  it('does not render beyond the final declared canary step', () => {
+    const html = renderToString(<RolloutRenderer data={canaryRollout({ phase: 'Healthy', currentStepIndex: 4 }, 4)} />)
+    expect(html).toContain('4/4')
+    expect(html).not.toContain('5/4')
   })
 })
 

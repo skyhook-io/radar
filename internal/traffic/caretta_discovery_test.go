@@ -3,11 +3,13 @@ package traffic
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -398,7 +400,8 @@ func TestWellKnownLayerOffersEveryMatch(t *testing.T) {
 	}
 }
 
-// The candidate list is walked with a port-forward per attempt, so it stays bounded.
+// Local, the candidate list is walked with a port-forward per attempt, so it
+// stays bounded by the cap.
 func TestCandidateListIsCapped(t *testing.T) {
 	svcs := kubePrometheusStackSvcs()
 	svcs = append(svcs,
@@ -407,10 +410,85 @@ func TestCandidateListIsCapped(t *testing.T) {
 		metricsSvc("monitoring", "prometheus-server", 9090, "10.0.0.11", nil),
 		metricsSvc("prometheus", "prometheus-server", 9090, "10.0.0.12", nil),
 	)
-	c := sourceWithServices(t, "caretta", svcs...)
+	c := sourceWithServices(t, "caretta", svcs...) // inCluster defaults to false (local)
 
 	if got := discover(t, c); len(got) > maxMetricsCandidates {
 		t.Errorf("got %d candidates, want at most %d", len(got), maxMetricsCandidates)
+	}
+}
+
+// recordingTransport captures every URL a probe dials and fails the request, so
+// a test can assert which addresses discovery attempted without a live backend.
+type recordingTransport struct {
+	mu   sync.Mutex
+	urls []string
+}
+
+func (rt *recordingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	rt.mu.Lock()
+	rt.urls = append(rt.urls, req.URL.String())
+	rt.mu.Unlock()
+	return nil, fmt.Errorf("recorded, not dialed")
+}
+
+func (rt *recordingTransport) probedClusterAddress() bool {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	for _, u := range rt.urls {
+		if strings.Contains(u, "svc.cluster.local") {
+			return true
+		}
+	}
+	return false
+}
+
+// In-cluster each candidate costs only a cheap cluster-address probe and is never
+// port-forwarded, so the local port-forward cap must not truncate the list — a cap
+// there silently drops reachable backends from consideration.
+func TestInClusterProbesEveryCandidateNoCap(t *testing.T) {
+	svcs := kubePrometheusStackSvcs()
+	svcs = append(svcs,
+		metricsSvc("monitoring", "victoria-metrics-single-server", 8428, "10.0.0.9", nil),
+		metricsSvc("monitoring", "vmsingle", 8428, "10.0.0.10", nil),
+		metricsSvc("monitoring", "prometheus-server", 9090, "10.0.0.11", nil),
+		metricsSvc("prometheus", "prometheus-server", 9090, "10.0.0.12", nil),
+	)
+	c := sourceWithServices(t, "caretta", svcs...)
+	c.inCluster = true
+
+	if got := discover(t, c); len(got) <= maxMetricsCandidates {
+		t.Errorf("in-cluster returned %d candidates, want more than the local cap of %d", len(got), maxMetricsCandidates)
+	}
+}
+
+// Local, a cluster address (*.svc.cluster.local) cannot resolve and each probe
+// costs a guaranteed multi-second dead-wait. Discovery must skip it and rely on
+// port-forwards (started by Connect), never probe the cluster address.
+func TestLocalDiscoveryDoesNotProbeClusterAddresses(t *testing.T) {
+	rec := &recordingTransport{}
+	c := sourceWithServices(t, "caretta", append(kubePrometheusStackSvcs(), carettaStoreSvc("caretta", "caretta-vm"))...)
+	c.httpClient = &http.Client{Transport: rec, Timeout: time.Second}
+	c.inCluster = false
+
+	_ = c.discoverPrometheus(context.Background())
+
+	if rec.probedClusterAddress() {
+		t.Errorf("local discovery probed a cluster address; probed=%v", rec.urls)
+	}
+}
+
+// In-cluster the cluster address resolves in single-digit ms, so discovery must
+// probe it directly (the fast path this whole branch exists to take).
+func TestInClusterDiscoveryProbesClusterAddress(t *testing.T) {
+	rec := &recordingTransport{}
+	c := sourceWithServices(t, "caretta", carettaStoreSvc("caretta", "caretta-vm"))
+	c.httpClient = &http.Client{Transport: rec, Timeout: time.Second}
+	c.inCluster = true
+
+	_ = c.discoverPrometheus(context.Background())
+
+	if !rec.probedClusterAddress() {
+		t.Errorf("in-cluster discovery did not probe the cluster address; probed=%v", rec.urls)
 	}
 }
 

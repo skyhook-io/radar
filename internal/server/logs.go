@@ -151,6 +151,17 @@ func (s *Server) handlePodLogsStream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Flush the 200 + SSE headers and a connection event to the client before
+	// opening the follow stream. GetContainerLogs with Follow issues a live,
+	// blocking apiserver call that can stall (and a buffering OIDC/ALB proxy in
+	// front of Radar holds back unflushed bytes); flushing first means the
+	// browser EventSource opens immediately instead of pending with 0 bytes.
+	sendSSEEvent(w, flusher, "connected", map[string]any{
+		"pod":       podName,
+		"namespace": namespace,
+		"container": container,
+	})
+
 	stream, err := k8score.GetContainerLogs(r.Context(), client, namespace, podName, container, k8score.LogOptions{
 		TailLines:    &tailLines,
 		SinceSeconds: sinceSeconds,
@@ -159,17 +170,12 @@ func (s *Server) handlePodLogsStream(w http.ResponseWriter, r *http.Request) {
 		Follow:       true,
 	})
 	if err != nil {
+		// The connection is already open, so surface the failure as an SSE
+		// error event rather than an HTTP error the client would never see.
 		sendSSEError(w, flusher, fmt.Sprintf("Failed to open log stream: %v", err))
 		return
 	}
 	defer stream.Close()
-
-	// Send initial connection event
-	sendSSEEvent(w, flusher, "connected", map[string]any{
-		"pod":       podName,
-		"namespace": namespace,
-		"container": container,
-	})
 
 	// Stream logs line by line
 	reader := bufio.NewReader(stream)

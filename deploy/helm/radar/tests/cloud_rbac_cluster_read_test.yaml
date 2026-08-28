@@ -35,7 +35,13 @@ tests:
           path: rules
           content:
             apiGroups: ["storage.k8s.io"]
-            resources: ["csistoragecapacities"]
+            resources: ["csidrivers", "csistoragecapacities"]
+            verbs: ["list"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["scheduling.k8s.io"]
+            resources: ["workloads", "podgroups"]
             verbs: ["list"]
       - contains:
           path: rules

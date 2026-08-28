@@ -15,12 +15,12 @@ import (
 
 func TestYAMLSchemaCachePrincipalSeparatesUsersAndGroups(t *testing.T) {
 	request := httptest.NewRequest("POST", "/", nil)
-	if got := yamlSchemaCachePrincipal(request); got != "local" {
+	if got := requestCachePrincipal(request); got != "local" {
 		t.Fatalf("local principal = %q", got)
 	}
 	alice := &auth.User{Username: "alice", Groups: []string{"viewers", "devs"}}
 	request = request.WithContext(auth.ContextWithUser(context.Background(), alice))
-	got := yamlSchemaCachePrincipal(request)
+	got := requestCachePrincipal(request)
 	if got != "alice\x00devs\x00viewers" {
 		t.Fatalf("principal = %q", got)
 	}

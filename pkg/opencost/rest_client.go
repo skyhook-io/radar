@@ -17,9 +17,9 @@ import (
 //  2. Prometheus-format metrics at /metrics — requires a scrape config
 //     in a reachable Prometheus instance. Covered by pkg/prom.
 //
-// Many clusters have (1) working but (2) not wired up (Prometheus exists
-// but no scrape job for OpenCost's /metrics). REST works everywhere OpenCost
-// works, so it's the default compute path.
+// This client supports callers that can reach OpenCost directly. Radar's server
+// handlers currently use the Prometheus path because they already discover and
+// connect to a cluster metrics backend.
 type RESTClient struct {
 	t Transport
 }

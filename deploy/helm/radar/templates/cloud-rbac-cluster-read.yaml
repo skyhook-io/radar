@@ -86,10 +86,12 @@ rules:
   - apiGroups: ["admissionregistration.k8s.io"]
     resources: ["mutatingwebhookconfigurations", "validatingwebhookconfigurations"]
     verbs: ["get", "list", "watch"]
-  # Upgrade impact source evidence. These kinds are not cached or browsable;
-  # the collector only lists them to inspect kubectl last-applied annotations.
+  # Upgrade impact evidence. These kinds are not cached or browsable.
   - apiGroups: ["storage.k8s.io"]
-    resources: ["csistoragecapacities"]
+    resources: ["csidrivers", "csistoragecapacities"]
+    verbs: ["list"]
+  - apiGroups: ["scheduling.k8s.io"]
+    resources: ["workloads", "podgroups"]
     verbs: ["list"]
   - apiGroups: ["flowcontrol.apiserver.k8s.io"]
     resources: ["flowschemas", "prioritylevelconfigurations"]

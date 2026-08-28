@@ -27,6 +27,7 @@ type Config struct {
 	TimelineMaxSize   string   `json:"timelineMaxSize,omitempty"`   // Byte size (e.g. "800Mi", "8Gi"); "0" disables
 	HistoryLimit      int      `json:"historyLimit,omitempty"`
 	PrometheusURL     string   `json:"prometheusUrl,omitempty"`
+	OpenCostCurrency  string   `json:"opencostCurrency,omitempty"`
 	// PrometheusHeaders are sent with every request to the Prometheus API.
 	// Required for auth-protected backends (Bearer tokens, X-Scope-OrgID, etc.).
 	// Stored in plain text in ~/.radar/config.json — protect the file accordingly.
@@ -50,12 +51,14 @@ type Config struct {
 	// ArgoCDInsecureTLS disables TLS certificate verification for the Argo CD
 	// API client only.
 	ArgoCDInsecureTLS bool `json:"argoCdInsecureTls,omitempty"`
-	// ArgoCDTokenContext is the kubeconfig context an auto-discovery (empty-URL)
-	// token was bound to. Persisted so a restart can restore the binding instead
-	// of losing it — without it the token can never reconnect after a restart,
-	// and restoring it to the *current* context would defeat the cross-cluster
-	// guard. Empty for explicit-URL tokens (the origin guard governs those).
+	// ArgoCDTokenContext is the readable kubeconfig context recorded with an
+	// auto-discovery token. A value without ArgoCDTokenBinding marks a legacy
+	// config that needs the token confirmed again.
 	ArgoCDTokenContext string `json:"argoCdTokenContext,omitempty"`
+	// ArgoCDTokenBinding is the opaque kubeconfig source binding for an
+	// auto-discovery token. Authorization relies on this field rather than the
+	// mutable display context.
+	ArgoCDTokenBinding string `json:"argoCdTokenBinding,omitempty"`
 	// AIHistory persists AI investigations (transcripts + verdicts) to a local
 	// SQLite file so they survive restarts. nil = default (true), false = off.
 	AIHistory *bool `json:"aiHistory,omitempty"`
@@ -138,6 +141,13 @@ func Load() Config {
 	if err := json.Unmarshal(data, &c); err != nil {
 		log.Printf("[config] Failed to parse %s: %v", path, err)
 		return Config{}
+	}
+	normalizedCurrency, err := NormalizeOpenCostCurrency(c.OpenCostCurrency)
+	if err != nil {
+		log.Printf("[config] Ignoring invalid opencostCurrency %q in %s: %v", c.OpenCostCurrency, path, err)
+		c.OpenCostCurrency = ""
+	} else {
+		c.OpenCostCurrency = normalizedCurrency
 	}
 	return c
 }

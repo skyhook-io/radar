@@ -281,7 +281,7 @@ func Discover(ctx context.Context, k8sClient kubernetes.Interface, opts Discover
 			Name:        svc.Name,
 			Port:        port,
 			TargetPort:  resolveTargetPort(svc, port),
-			ClusterAddr: buildClusterAddr(svc.Name, svc.Namespace, svc.Spec.ClusterIP, port),
+			ClusterAddr: buildClusterAddr(svc.Name, svc.Namespace, port),
 			BasePath:    bp,
 			Score:       score,
 			Source:      CandidateSourceDynamic,
@@ -349,7 +349,7 @@ func collectWellKnownLocations(ctx context.Context, k8sClient kubernetes.Interfa
 			Name:        svc.Name,
 			Port:        port,
 			TargetPort:  resolveTargetPort(*svc, port),
-			ClusterAddr: buildClusterAddr(svc.Name, svc.Namespace, svc.Spec.ClusterIP, port),
+			ClusterAddr: buildClusterAddr(svc.Name, svc.Namespace, port),
 			BasePath:    loc.BasePath,
 			Source:      CandidateSourceWellKnown,
 		})
@@ -513,12 +513,13 @@ func resolveTargetPort(svc corev1.Service, servicePort int) int {
 	return servicePort
 }
 
-// buildClusterAddr returns the in-cluster HTTP URL for a service. Headless
-// services (ClusterIP=None) use a pod-0 hostname; this is best-effort and
-// really meant for stateful Prometheus deployments with predictable names.
-func buildClusterAddr(name, namespace, clusterIP string, port int) string {
-	if clusterIP == "None" {
-		return fmt.Sprintf("http://%s-0.%s.%s.svc.cluster.local:%d", name, name, namespace, port)
-	}
+// buildClusterAddr returns the in-cluster HTTP URL for a service.
+// A headless Service publishes A records for its ready pods under its own name,
+// so the plain service address works for both kinds. Addressing a headless one as
+// {service}-0.{service} assumes the StatefulSet is named after the Service: true
+// for caretta-vm, false for kube-prometheus-stack's prometheus-operated, whose
+// pod is prometheus-{release}-kube-prometheus-stack-prometheus-0. That guess made
+// a reachable backend look unreachable in-cluster.
+func buildClusterAddr(name, namespace string, port int) string {
 	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", name, namespace, port)
 }

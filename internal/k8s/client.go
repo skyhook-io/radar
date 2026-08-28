@@ -2,12 +2,17 @@ package k8s
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -27,19 +32,23 @@ import (
 )
 
 var (
-	k8sClient         *kubernetes.Clientset
-	k8sConfig         *rest.Config
-	discoveryClient   *discovery.DiscoveryClient
-	dynamicClient     dynamic.Interface
-	initOnce          sync.Once
-	initErr           error
-	kubeconfigPath    string
-	kubeconfigPaths   []string // Multiple kubeconfig paths when using --kubeconfig-dir or KUBECONFIG env
-	kubeconfigMode    string   // One of: "in-cluster", "single", "multi-env", "multi-dir"
-	totalContextCount int      // Total number of contexts exposed across all kubeconfig files
+	k8sClient                    *kubernetes.Clientset
+	k8sConfig                    *rest.Config
+	discoveryClient              *discovery.DiscoveryClient
+	dynamicClient                dynamic.Interface
+	initOnce                     sync.Once
+	initErr                      error
+	kubeconfigPath               string
+	kubeconfigPaths              []string // Multiple kubeconfig paths when using directories, KUBECONFIG, or combined sources
+	kubeconfigMode               string   // One of: "in-cluster", "single", "multi-env", "multi-dir", "multi-source"
+	kubeconfigDirectoryFileCount int
+	kubeconfigDirectoryPaths     map[string]struct{}
+	kubeconfigEnvWasIgnored      bool
+	kubeconfigEnvIgnoredReason   string
+	totalContextCount            int // Total number of contexts exposed across all kubeconfig files
 	// contextRegistry maps each user-facing context name to its source file and
-	// the name it has inside that file. Populated when Radar loads more than one
-	// kubeconfig file (multi-dir, multi-env with >1 paths, or CAPI-added files).
+	// the name it has inside that file. Populated for directory-backed loading,
+	// multiple explicit paths, or CAPI-added files.
 	// Each file is loaded in isolation via ExplicitPath rather than merged via
 	// Precedence — a shared user/cluster/context name across files no longer
 	// clobbers anything, which is the whole point of the registry. See issue
@@ -56,6 +65,10 @@ var (
 	// Same lifecycle / lock as perFileConfigs.
 	perFileMtimes      map[string]time.Time
 	contextName        string
+	contextBinding     string
+	activeSourceFile   string
+	activeSourceName   string
+	activeSourceConfig *clientcmdapi.Config
 	clusterName        string
 	contextNamespace   string   // Default namespace from kubeconfig context
 	fallbackNamespace  string   // Explicit namespace from --namespace flag
@@ -73,7 +86,7 @@ var (
 	namespaceScopeResolver   func(contextName string) (string, bool)
 	contextUsesExec          bool // True when the current context uses an exec credential plugin
 	// execPluginCommands is the set of unique exec-auth plugin command basenames
-	// referenced by any context in the merged kubeconfig. Populated from
+	// referenced by any context in the resolved kubeconfig sources. Populated from
 	// rawConfig.AuthInfos at load time and refreshed on SwitchContext. Stored
 	// as basenames only so diagnostics never leak full binary paths. Used by
 	// GetKubeconfigSummary() to produce present/missing lists against the
@@ -89,6 +102,11 @@ var (
 	// clientMu protects access to client variables during context switches.
 	// Readers use RLock, context switch uses Lock.
 	clientMu sync.RWMutex
+	// initializationStarted distinguishes package state that has not been
+	// initialized yet from a failed local initialization. Several tests and
+	// embedded callers inspect IsInCluster before initialization, where the
+	// historical empty-path heuristic still applies.
+	initializationStarted bool
 )
 
 // SetEnrichedKubeconfigFromShell records that the desktop app's enrichEnv()
@@ -105,6 +123,17 @@ func SetEnrichedKubeconfigFromShell(v bool) {
 type InitOptions struct {
 	KubeconfigPath string
 	KubeconfigDirs []string // Directories containing kubeconfig files
+}
+
+type kubeconfigSources struct {
+	paths                      []string
+	mode                       string
+	useRegistry                bool
+	tryInCluster               bool
+	ignoredKubeconfigEnv       bool
+	ignoredKubeconfigEnvReason string
+	directoryFileCount         int
+	directoryPaths             []string
 }
 
 // Initialize initializes the K8s client with the given options
@@ -125,84 +154,77 @@ func MustInitialize(opts InitOptions) {
 func doInit(opts InitOptions) error {
 	var config *rest.Config
 	var err error
+	// Publish initialization as one coherent state transition. Readers may run
+	// concurrently in embedded uses and on startup failure paths; holding the
+	// same lock they use keeps them from observing a mode without its matching
+	// paths, registry, or clients.
+	clientMu.Lock()
+	defer clientMu.Unlock()
+	initializationStarted = true
 
-	// Configuration precedence (matches kubectl behavior):
-	//   1. --kubeconfig flag (opts.KubeconfigPath)
-	//   2. KUBECONFIG environment variable
-	//   3. --kubeconfig-dir flag (opts.KubeconfigDirs)
-	//   4. In-cluster config (when KUBERNETES_SERVICE_HOST is set)
-	//   5. Default ~/.kube/config
-	//
-	// We only try in-cluster config if no explicit kubeconfig is specified.
-	// This handles the case where KUBERNETES_SERVICE_HOST is set (e.g., inside
-	// a pod) but the user wants to connect to a different cluster via kubeconfig.
-	// See: https://github.com/kubernetes/kubernetes/issues/43662
-	if opts.KubeconfigPath == "" && os.Getenv("KUBECONFIG") == "" && len(opts.KubeconfigDirs) == 0 {
+	sources, err := resolveKubeconfigSources(opts, os.Getenv("KUBECONFIG"), homedir.HomeDir())
+	if err != nil {
+		return err
+	}
+	kubeconfigEnvWasIgnored = sources.ignoredKubeconfigEnv
+	kubeconfigEnvIgnoredReason = sources.ignoredKubeconfigEnvReason
+	kubeconfigDirectoryFileCount = sources.directoryFileCount
+	kubeconfigDirectoryPaths = make(map[string]struct{}, len(sources.directoryPaths))
+	for _, path := range sources.directoryPaths {
+		kubeconfigDirectoryPaths[path] = struct{}{}
+	}
+	if sources.ignoredKubeconfigEnv {
+		log.Printf("KUBECONFIG is set but ignored: %s", sources.ignoredKubeconfigEnvReason)
+		errorlog.Record("k8s-init", "warning",
+			"KUBECONFIG was ignored: %s", sources.ignoredKubeconfigEnvReason)
+	}
+
+	if sources.tryInCluster {
 		config, err = rest.InClusterConfig()
 		if err == nil {
 			contextName = "in-cluster"
+			contextBinding = ""
+			activeSourceFile = ""
+			activeSourceName = ""
+			activeSourceConfig = nil
 			clusterName = "in-cluster"
 			kubeconfigMode = "in-cluster"
 		}
 	}
 
 	if config == nil {
-		// Use kubeconfig (for local development / CLI usage)
+		if len(sources.paths) == 0 {
+			return fmt.Errorf("in-cluster config is unavailable and no home directory was found for the default kubeconfig")
+		}
+		if sources.tryInCluster {
+			path := sources.paths[0]
+			if err := validateKubeconfigFileType(path); err != nil {
+				reason := kubeconfigDiagnosticError(err)
+				errorlog.Record("k8s-init", "error", "default kubeconfig %q is unusable: %s",
+					filepath.Base(path), reason)
+				return fmt.Errorf("default kubeconfig %q is unusable: %w", path, err)
+			}
+		}
 		var loadingRules *clientcmd.ClientConfigLoadingRules
 		configOverrides := &clientcmd.ConfigOverrides{}
 
-		if len(opts.KubeconfigDirs) > 0 {
-			// Multi-kubeconfig mode: discover files and, if more than one,
-			// load them in isolation via the context registry (see issue #519).
-			configs, err := discoverKubeconfigs(opts.KubeconfigDirs)
+		if sources.useRegistry {
+			kubeconfigPaths = sources.paths
+			kubeconfigMode = sources.mode
+			lr, ovr, err := setupIsolatedLoad(sources.paths)
 			if err != nil {
-				return fmt.Errorf("failed to discover kubeconfigs: %w", err)
+				return err
 			}
-			if len(configs) == 0 {
-				return fmt.Errorf("no valid kubeconfig files found in directories: %v", opts.KubeconfigDirs)
-			}
-			log.Printf("Discovered %d kubeconfig files from %d directories", len(configs), len(opts.KubeconfigDirs))
-			kubeconfigPaths = configs
-			kubeconfigMode = "multi-dir"
-			if len(configs) == 1 {
-				loadingRules = &clientcmd.ClientConfigLoadingRules{ExplicitPath: configs[0]}
-			} else {
-				lr, ovr, err := setupIsolatedLoad(configs)
-				if err != nil {
-					return err
-				}
-				loadingRules, configOverrides = lr, ovr
-			}
+			kubeconfigDirectoryFileCount = loadedDirectoryKubeconfigCount(perFileConfigs, kubeconfigDirectoryPaths)
+			loadingRules, configOverrides = lr, ovr
+			log.Printf("Using %d kubeconfig files in %s isolated-load mode", len(sources.paths), sources.mode)
 		} else {
-			// Single kubeconfig mode (existing behavior)
-			kubeconfig := opts.KubeconfigPath
-			if kubeconfig == "" {
-				kubeconfig = os.Getenv("KUBECONFIG")
+			if len(sources.paths) != 1 {
+				return fmt.Errorf("resolved kubeconfig source has %d paths in direct mode", len(sources.paths))
 			}
-			if kubeconfig == "" {
-				if home := homedir.HomeDir(); home != "" {
-					kubeconfig = filepath.Join(home, ".kube", "config")
-				}
-			}
-
-			// KUBECONFIG can contain multiple paths separated by the OS path
-			// list separator (colon on Unix, semicolon on Windows). With more
-			// than one path we go through the isolated-load path rather than
-			// client-go's Precedence merge — same reason as multi-dir.
-			if paths := filepath.SplitList(kubeconfig); len(paths) > 1 {
-				kubeconfigPaths = paths
-				kubeconfigMode = "multi-env"
-				lr, ovr, err := setupIsolatedLoad(paths)
-				if err != nil {
-					return err
-				}
-				loadingRules, configOverrides = lr, ovr
-				log.Printf("KUBECONFIG contains %d paths, using isolated per-file loading", len(paths))
-			} else {
-				kubeconfigPath = kubeconfig
-				kubeconfigMode = "single"
-				loadingRules = &clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfig}
-			}
+			kubeconfigPath = sources.paths[0]
+			kubeconfigMode = sources.mode
+			loadingRules = &clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfigPath}
 		}
 
 		kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
@@ -218,7 +240,7 @@ func doInit(opts InitOptions) error {
 		if rawErr != nil {
 			log.Printf("Kubeconfig metadata load failed (mode=%s): %v", kubeconfigMode, rawErr)
 			errorlog.Record("k8s-init", "error",
-				"RawConfig() failed; context metadata and diagnostic counts unavailable: %v", rawErr)
+				"RawConfig() failed; context metadata and diagnostic counts unavailable: %s", kubeconfigDiagnosticError(rawErr))
 		} else {
 			// In isolated-load mode, rawConfig reflects the single chosen
 			// file — which is all the current context needs, but the
@@ -239,6 +261,9 @@ func doInit(opts InitOptions) error {
 				// the registry-resolved file. rawConfig.Contexts is keyed by
 				// the *original* name inside the chosen file.
 				if entry, ok := contextRegistry[contextName]; ok {
+					activeSourceFile = entry.SourceFile
+					activeSourceName = entry.InFileName
+					activeSourceConfig = rawConfig.DeepCopy()
 					if ctx, ok := rawConfig.Contexts[entry.InFileName]; ok {
 						clusterName = ctx.Cluster
 						contextNamespace = ctx.Namespace
@@ -249,6 +274,10 @@ func doInit(opts InitOptions) error {
 				}
 			} else {
 				contextName = rawConfig.CurrentContext
+				contextBinding = sourceContextBinding(kubeconfigPath, contextName)
+				activeSourceFile = kubeconfigPath
+				activeSourceName = contextName
+				activeSourceConfig = rawConfig.DeepCopy()
 				totalContextCount = len(rawConfig.Contexts)
 				cmds, emptyAIs := collectExecPluginCommands(&rawConfig)
 				execPluginCommands = cmds
@@ -274,8 +303,8 @@ func doInit(opts InitOptions) error {
 			// snapshot's recentErrors. Include only the file count and mode —
 			// never the kubeconfig paths — so the snapshot stays shareable.
 			errorlog.Record("k8s-init", "error",
-				"failed to build kubeconfig client config (mode=%s, files=%d): %v",
-				kubeconfigMode, len(kubeconfigPaths), err)
+				"failed to build kubeconfig client config (mode=%s, files=%d): %s",
+				kubeconfigMode, len(kubeconfigPaths), kubeconfigDiagnosticError(err))
 			if len(kubeconfigPaths) > 0 {
 				return fmt.Errorf("failed to build kubeconfig from %d files: %w", len(kubeconfigPaths), err)
 			}
@@ -294,21 +323,279 @@ func doInit(opts InitOptions) error {
 		return err
 	}
 
-	clientMu.Lock()
 	k8sConfig = config
 	k8sClient = clients.clientset
 	discoveryClient = clients.discovery
 	dynamicClient = clients.dynamic
 	activeClientGeneration = clients.generation
-	clientMu.Unlock()
 
 	return nil
 }
 
+func resolveKubeconfigSources(opts InitOptions, kubeconfigEnv, homeDir string) (kubeconfigSources, error) {
+	var primaryPaths []string
+	if opts.KubeconfigPath != "" {
+		primaryPath, err := normalizeKubeconfigPath(opts.KubeconfigPath, homeDir)
+		if err != nil {
+			return kubeconfigSources{}, fmt.Errorf("normalize configured kubeconfig: %w", err)
+		}
+		if err := validateKubeconfigFileType(primaryPath); err != nil {
+			errorlog.Record("k8s-init", "error", "primary kubeconfig unusable (%q): %s",
+				filepath.Base(primaryPath), kubeconfigDiagnosticError(err))
+			return kubeconfigSources{}, fmt.Errorf("configured primary kubeconfig is unusable (%q): %w",
+				filepath.Base(primaryPath), err)
+		}
+		primaryPaths = []string{primaryPath}
+	}
+
+	if len(opts.KubeconfigDirs) > 0 {
+		dirs, err := normalizeKubeconfigDirectories(opts.KubeconfigDirs, homeDir)
+		if err != nil {
+			return kubeconfigSources{}, fmt.Errorf("normalize kubeconfig directories: %w", err)
+		}
+		discovered := discoverKubeconfigs(dirs)
+		if len(primaryPaths) > 0 {
+			if ok, cause := hasUsableKubeconfig(primaryPaths[0]); !ok {
+				if cause != nil {
+					errorlog.Record("k8s-init", "error", "primary kubeconfig unusable (%q): %s",
+						filepath.Base(primaryPaths[0]), kubeconfigDiagnosticError(cause))
+					return kubeconfigSources{}, fmt.Errorf("configured primary kubeconfig is unusable (%q): %w",
+						filepath.Base(primaryPaths[0]), cause)
+				}
+				errorlog.Record("k8s-init", "error", "primary kubeconfig contains no contexts")
+				return kubeconfigSources{}, fmt.Errorf("configured primary kubeconfig contains no usable contexts")
+			}
+		}
+		if len(primaryPaths) == 0 && len(discovered) == 0 {
+			return kubeconfigSources{}, fmt.Errorf("no valid kubeconfig files found in directories: %v", opts.KubeconfigDirs)
+		}
+
+		paths := dedupeKubeconfigPaths(append(append([]string(nil), primaryPaths...), discovered...))
+		directoryPaths := paths
+		if len(primaryPaths) > 0 {
+			directoryPaths = paths[1:]
+		}
+		mode := "multi-dir"
+		ignoredReason := ""
+		if len(primaryPaths) > 0 {
+			mode = "multi-source"
+		}
+		if kubeconfigEnv != "" {
+			ignoredReason = "directories-only configuration"
+			if len(primaryPaths) > 0 {
+				ignoredReason = "primary kubeconfig configured"
+			}
+		}
+		return kubeconfigSources{
+			paths:                      paths,
+			mode:                       mode,
+			useRegistry:                true,
+			ignoredKubeconfigEnv:       ignoredReason != "",
+			ignoredKubeconfigEnvReason: ignoredReason,
+			directoryFileCount:         len(paths) - len(primaryPaths),
+			directoryPaths:             directoryPaths,
+		}, nil
+	}
+
+	if len(primaryPaths) == 1 {
+		ignoredReason := ""
+		if kubeconfigEnv != "" {
+			ignoredReason = "primary kubeconfig configured"
+		}
+		return kubeconfigSources{
+			paths:                      primaryPaths,
+			mode:                       "single",
+			ignoredKubeconfigEnv:       ignoredReason != "",
+			ignoredKubeconfigEnvReason: ignoredReason,
+		}, nil
+	}
+
+	if kubeconfigEnv != "" {
+		paths, err := normalizeKubeconfigPathList(kubeconfigEnv, homeDir)
+		if err != nil {
+			return kubeconfigSources{}, fmt.Errorf("normalize KUBECONFIG: %w", err)
+		}
+		if len(paths) == 0 {
+			return kubeconfigSources{}, fmt.Errorf("no kubeconfig paths resolved")
+		}
+		regularPaths := make([]string, 0, len(paths))
+		firstSkipped := ""
+		for _, path := range paths {
+			if err := validateKubeconfigFileType(path); err != nil {
+				reason := kubeconfigDiagnosticError(err)
+				log.Printf("Skipping unusable KUBECONFIG entry %s: %v", path, err)
+				errorlog.Record("k8s-init", "warning", "skipping unusable KUBECONFIG entry %q: %s",
+					filepath.Base(path), reason)
+				if firstSkipped == "" {
+					firstSkipped = fmt.Sprintf("%q: %s", filepath.Base(path), reason)
+				}
+				continue
+			}
+			regularPaths = append(regularPaths, path)
+		}
+		paths = regularPaths
+		if len(paths) == 0 {
+			return kubeconfigSources{}, fmt.Errorf("KUBECONFIG contains no usable files (%s)", firstSkipped)
+		}
+		paths = dedupeKubeconfigPaths(paths)
+		if len(paths) > 1 {
+			return kubeconfigSources{paths: paths, mode: "multi-env", useRegistry: true}, nil
+		}
+		return kubeconfigSources{paths: paths, mode: "single"}, nil
+	}
+
+	if homeDir == "" {
+		return kubeconfigSources{mode: "single", tryInCluster: true}, nil
+	}
+	defaultPath, err := normalizeKubeconfigPath(filepath.Join(homeDir, ".kube", "config"), homeDir)
+	if err != nil {
+		return kubeconfigSources{}, fmt.Errorf("normalize default kubeconfig: %w", err)
+	}
+	return kubeconfigSources{paths: []string{defaultPath}, mode: "single", tryInCluster: true}, nil
+}
+
+func normalizeKubeconfigPathList(value, homeDir string) ([]string, error) {
+	if value == "" {
+		return nil, nil
+	}
+	var paths []string
+	for _, path := range filepath.SplitList(value) {
+		if path == "" {
+			continue
+		}
+		normalized, err := normalizeKubeconfigPath(path, homeDir)
+		if err != nil {
+			return nil, err
+		}
+		paths = append(paths, normalized)
+	}
+	return paths, nil
+}
+
+func normalizeKubeconfigDirectories(dirs []string, homeDir string) ([]string, error) {
+	result := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		normalized, err := normalizeKubeconfigPath(dir, homeDir)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, normalized)
+	}
+	return result, nil
+}
+
+func normalizeKubeconfigPath(path, homeDir string) (string, error) {
+	if path == "~" {
+		if homeDir == "" {
+			return "", fmt.Errorf("cannot expand %q without a home directory", path)
+		}
+		path = homeDir
+	} else if strings.HasPrefix(path, "~/") || strings.HasPrefix(path, `~\`) {
+		if homeDir == "" {
+			return "", fmt.Errorf("cannot expand %q without a home directory", path)
+		}
+		path = filepath.Join(homeDir, path[2:])
+	}
+	absolute, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return "", err
+	}
+	return absolute, nil
+}
+
+// NormalizeKubeconfigPath applies Radar's path expansion to one explicitly configured file.
+func NormalizeKubeconfigPath(value string) (string, error) {
+	return normalizeKubeconfigPath(value, homedir.HomeDir())
+}
+
+func hasUsableKubeconfig(path string) (bool, error) {
+	if err := validateKubeconfigFileType(path); err != nil {
+		return false, err
+	}
+	cfg, err := clientcmd.LoadFromFile(path)
+	if err != nil {
+		return false, err
+	}
+	return len(cfg.Contexts) > 0, nil
+}
+
+var (
+	errKubeconfigNotRegular        = errors.New("not a regular file")
+	errKubeconfigContextNotFound   = errors.New("selected context not found")
+	errKubeconfigClientSetupFailed = errors.New("selected context client setup failed")
+)
+
+func validateKubeconfigFileType(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return errKubeconfigNotRegular
+	}
+	return nil
+}
+
+func dedupeKubeconfigPaths(paths []string) []string {
+	type fileIdentity struct {
+		path string
+		info os.FileInfo
+	}
+	seen := make([]fileIdentity, 0, len(paths))
+	result := make([]string, 0, len(paths))
+	for _, path := range paths {
+		info, _ := os.Stat(path)
+		duplicate := false
+		for _, existing := range seen {
+			if path == existing.path || (info != nil && existing.info != nil && os.SameFile(info, existing.info)) {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
+		seen = append(seen, fileIdentity{path: path, info: info})
+		result = append(result, path)
+	}
+	return result
+}
+
+func sourceContextBinding(sourceFile, inFileName string) string {
+	if sourceFile == "" || inFileName == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(sourceFile + "\x00" + inFileName))
+	return "kcb1_" + base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+// CAPIClusterSafetyBinding derives a stable workload-cluster identity from
+// the management-cluster source and the CAPI Cluster object that owns the
+// generated kubeconfig. Temporary kubeconfig paths are deliberately excluded.
+func CAPIClusterSafetyBinding(parentBinding, namespace, name string) string {
+	if parentBinding == "" || namespace == "" || name == "" {
+		return ""
+	}
+	return sourceContextBinding(parentBinding+"\x00capi-cluster\x00"+namespace, name)
+}
+
+func sourceSafetyBindingLocked(sourceFile, inFileName string) string {
+	for binding, path := range capiKubeconfigs {
+		if path == sourceFile {
+			return binding
+		}
+	}
+	return sourceContextBinding(sourceFile, inFileName)
+}
+
 // discoverKubeconfigs scans directories for valid kubeconfig files
-func discoverKubeconfigs(dirs []string) ([]string, error) {
+func discoverKubeconfigs(dirs []string) []string {
 	var configs []string
 	for _, dir := range dirs {
+		before := len(configs)
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			log.Printf("Warning: cannot read kubeconfig directory %s: %v", dir, err)
@@ -332,6 +619,14 @@ func discoverKubeconfigs(dirs []string) ([]string, error) {
 				continue
 			}
 			path := filepath.Join(dir, name)
+			info, statErr := os.Stat(path)
+			if statErr != nil || !info.Mode().IsRegular() {
+				log.Printf("Skipping non-regular kubeconfig candidate %s", path)
+				errorlog.Record("k8s-init", "warning",
+					"skipping kubeconfig candidate %q because it is not a readable regular file",
+					filepath.Base(path))
+				continue
+			}
 			if isValidKubeconfig(path) {
 				configs = append(configs, path)
 				log.Printf("Found kubeconfig: %s", path)
@@ -347,8 +642,13 @@ func discoverKubeconfigs(dirs []string) ([]string, error) {
 					filepath.Base(path))
 			}
 		}
+		if len(configs) == before {
+			errorlog.Record("k8s-init", "warning",
+				"kubeconfig dir %q yielded no valid files",
+				filepath.Base(dir))
+		}
 	}
-	return configs, nil
+	return configs
 }
 
 // scrubPathError returns the underlying error cause (e.g. "permission denied",
@@ -370,6 +670,39 @@ func scrubPathError(err error) string {
 	return "(unscrubbable error — omitted to avoid leaking paths)"
 }
 
+func kubeconfigDiagnosticError(err error) string {
+	var pathErr *os.PathError
+	errText := ""
+	if err != nil {
+		errText = strings.ToLower(err.Error())
+	}
+	switch {
+	case err == nil:
+		return ""
+	case errors.As(err, &pathErr):
+		return scrubPathError(err)
+	case errors.Is(err, errKubeconfigNotRegular):
+		return errKubeconfigNotRegular.Error()
+	case errors.Is(err, errKubeconfigContextNotFound):
+		return errKubeconfigContextNotFound.Error()
+	case errors.Is(err, errKubeconfigClientSetupFailed):
+		return errKubeconfigClientSetupFailed.Error()
+	case clientcmd.IsEmptyConfig(err):
+		return "empty kubeconfig (no configuration provided)"
+	case clientcmd.IsContextNotFound(err):
+		return "selected context not found"
+	case clientcmd.IsConfigurationInvalid(err):
+		return "invalid kubeconfig configuration"
+	case strings.Contains(errText, "yaml") ||
+		strings.Contains(errText, "json") ||
+		strings.Contains(errText, "cannot unmarshal") ||
+		strings.Contains(errText, "did not find expected"):
+		return "invalid kubeconfig syntax"
+	default:
+		return "unclassified error"
+	}
+}
+
 // isValidKubeconfig checks if a file is a valid kubeconfig
 func isValidKubeconfig(path string) bool {
 	// Try to load the file as a kubeconfig
@@ -386,6 +719,12 @@ func GetClient() *kubernetes.Clientset {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
 	return k8sClient
+}
+
+func GetClientSafetySnapshot() (*kubernetes.Clientset, string) {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	return k8sClient, contextBinding
 }
 
 // GetConfig returns the K8s rest config
@@ -428,6 +767,9 @@ func GetDynamicClientSnapshot() (dynamic.Interface, string) {
 func GetKubeconfigPath() string {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
+	if contextRegistry != nil {
+		return ""
+	}
 	return kubeconfigPath
 }
 
@@ -435,13 +777,16 @@ func GetKubeconfigPath() string {
 // suitable for inclusion in diagnostic output. It never includes the resolved
 // paths themselves, only counts, mode flags, and exec plugin basenames.
 type KubeconfigSummary struct {
-	Mode                   string   // "in-cluster", "single", "multi-env", "multi-dir", or "" if not initialized
-	FileCount              int      // Number of kubeconfig files loaded (0 for in-cluster)
-	ContextCount           int      // Number of contexts exposed after client-go merged all files
-	EnrichedFromShell      bool     // Desktop app captured KUBECONFIG from login shell
-	CurrentContextUsesExec bool     // Current context's AuthInfo uses an exec credential plugin
-	ExecPluginsPresent     []string // Unique exec plugin command basenames (any context) resolvable on $PATH
-	ExecPluginsMissing     []string // Unique exec plugin command basenames (any context) NOT resolvable on $PATH
+	Mode                       string   // "in-cluster", "single", "multi-env", "multi-dir", "multi-source", or "" if not initialized
+	FileCount                  int      // Number of kubeconfig files loaded (0 for in-cluster)
+	DirectoryFileCount         int      // Number of loaded files discovered from configured directories
+	ContextCount               int      // Number of contexts exposed after source resolution
+	EnrichedFromShell          bool     // Desktop app captured KUBECONFIG from login shell
+	KubeconfigEnvIgnored       bool     // KUBECONFIG was suppressed by configured sources
+	KubeconfigEnvIgnoredReason string   // Non-sensitive reason KUBECONFIG was suppressed
+	CurrentContextUsesExec     bool     // Current context's AuthInfo uses an exec credential plugin
+	ExecPluginsPresent         []string // Unique exec plugin command basenames (any context) resolvable on $PATH
+	ExecPluginsMissing         []string // Unique exec plugin command basenames (any context) NOT resolvable on $PATH
 }
 
 // GetKubeconfigSummary returns the current kubeconfig loading state for
@@ -456,12 +801,17 @@ type KubeconfigSummary struct {
 func GetKubeconfigSummary() KubeconfigSummary {
 	clientMu.RLock()
 	mode := kubeconfigMode
-	fileCount := len(kubeconfigPaths)
-	if fileCount == 0 && kubeconfigPath != "" {
+	fileCount := 0
+	if contextRegistry != nil {
+		fileCount = len(perFileConfigs)
+	} else if kubeconfigPath != "" {
 		fileCount = 1
 	}
 	contextCount := totalContextCount
+	directoryFileCount := kubeconfigDirectoryFileCount
 	enriched := enrichedKubeconfigFromShell
+	envIgnored := kubeconfigEnvWasIgnored
+	envIgnoredReason := kubeconfigEnvIgnoredReason
 	currentExec := contextUsesExec
 	cmds := append([]string(nil), execPluginCommands...)
 	clientMu.RUnlock()
@@ -478,13 +828,16 @@ func GetKubeconfigSummary() KubeconfigSummary {
 	}
 
 	return KubeconfigSummary{
-		Mode:                   mode,
-		FileCount:              fileCount,
-		ContextCount:           contextCount,
-		EnrichedFromShell:      enriched,
-		CurrentContextUsesExec: currentExec,
-		ExecPluginsPresent:     present,
-		ExecPluginsMissing:     missing,
+		Mode:                       mode,
+		FileCount:                  fileCount,
+		DirectoryFileCount:         directoryFileCount,
+		ContextCount:               contextCount,
+		EnrichedFromShell:          enriched,
+		KubeconfigEnvIgnored:       envIgnored,
+		KubeconfigEnvIgnoredReason: envIgnoredReason,
+		CurrentContextUsesExec:     currentExec,
+		ExecPluginsPresent:         present,
+		ExecPluginsMissing:         missing,
 	}
 }
 
@@ -576,6 +929,9 @@ func recordEmptyCommandWarning(source string, authInfos []string) {
 func WriteKubeconfigForCurrentContext() (string, error) {
 	clientMu.RLock()
 	ctx := contextName
+	activeFile := activeSourceFile
+	activeName := activeSourceName
+	activeConfig := activeSourceConfig
 	registry := contextRegistry
 	fileConfigs := perFileConfigs
 	singlePath := kubeconfigPath
@@ -584,7 +940,23 @@ func WriteKubeconfigForCurrentContext() (string, error) {
 	var rawConfig clientcmdapi.Config
 	var currentContextForFile string
 
-	if registry != nil {
+	if activeFile != "" && activeName != "" && activeConfig != nil {
+		candidate := fileConfigs[activeFile]
+		if validateKubeconfigFileType(activeFile) == nil {
+			loadingRules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: activeFile}
+			if loaded, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+				loadingRules, &clientcmd.ConfigOverrides{},
+			).RawConfig(); err == nil {
+				candidate = &loaded
+			}
+		}
+		if sameKubeconfigTarget(activeConfig, candidate, activeName) {
+			rawConfig = *candidate.DeepCopy()
+		} else {
+			rawConfig = *activeConfig.DeepCopy()
+		}
+		currentContextForFile = activeName
+	} else if registry != nil {
 		// Isolated-load mode: write only the current context's source file,
 		// with CurrentContext set to the name it has inside that file. This
 		// avoids leaking other files' (possibly colliding) definitions into
@@ -602,6 +974,9 @@ func WriteKubeconfigForCurrentContext() (string, error) {
 	} else {
 		if singlePath == "" {
 			return "", fmt.Errorf("kubeconfig path not set")
+		}
+		if err := validateKubeconfigFileType(singlePath); err != nil {
+			return "", fmt.Errorf("failed to load kubeconfig: %w", err)
 		}
 		loadingRules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: singlePath}
 		loaded, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
@@ -632,11 +1007,55 @@ func WriteKubeconfigForCurrentContext() (string, error) {
 	return tmpFile.Name(), nil
 }
 
+func sameKubeconfigTarget(active, candidate *clientcmdapi.Config, contextName string) bool {
+	if active == nil || candidate == nil {
+		return false
+	}
+	activeContext := active.Contexts[contextName]
+	candidateContext := candidate.Contexts[contextName]
+	if activeContext == nil || candidateContext == nil || activeContext.Cluster != candidateContext.Cluster {
+		return false
+	}
+	return reflect.DeepEqual(active.Clusters[activeContext.Cluster], candidate.Clusters[candidateContext.Cluster])
+}
+
 // GetContextName returns the current kubeconfig context name
 func GetContextName() string {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
 	return contextName
+}
+
+// ClusterSafetyBinding scopes persisted safety decisions to the active source.
+// In-cluster mode has no kubeconfig source, so it uses the cluster UID identity;
+// if that identity cannot be established, callers receive an empty value and
+// must not persist the decision.
+func ClusterSafetyBinding(ctx context.Context) string {
+	_, binding := ClusterSafetySnapshot(ctx)
+	return binding
+}
+
+// ClusterSafetySnapshot returns the readable active-cluster label and the
+// opaque identity used to scope persisted safety decisions from one coherent
+// client-state snapshot. In-cluster mode replaces its generic display sentinel
+// with the cluster UID identity when one can be established.
+func ClusterSafetySnapshot(ctx context.Context) (display, binding string) {
+	clientMu.RLock()
+	display = activeClusterContextLocked()
+	binding = contextBinding
+	mode := kubeconfigMode
+	clientMu.RUnlock()
+	if binding != "" {
+		return display, binding
+	}
+	if mode != "in-cluster" {
+		return display, ""
+	}
+	binding = ClusterIdentity(ctx)
+	if display == "in-cluster" && binding != "" {
+		display = binding
+	}
+	return display, binding
 }
 
 // ActiveClusterContext is the cluster-identity stamp for timeline events and
@@ -683,7 +1102,11 @@ func ClusterIdentity(ctx context.Context) string {
 	if name != "" && mode != "in-cluster" {
 		return name
 	}
-	return cachedClusterUIDIdentity(ctx, name, GetClient())
+	client := GetClient()
+	if client == nil {
+		return ""
+	}
+	return cachedClusterUIDIdentity(ctx, name, client)
 }
 
 // cachedClusterUIDIdentity memoizes the kube-system UID lookup per context name:
@@ -1005,19 +1428,26 @@ func IsInCluster() bool {
 }
 
 func isInClusterLocked() bool {
-	return ForceInCluster || (kubeconfigPath == "" && len(kubeconfigPaths) == 0)
+	if ForceInCluster {
+		return true
+	}
+	if initializationStarted {
+		return kubeconfigMode == "in-cluster"
+	}
+	return kubeconfigPath == "" && len(kubeconfigPaths) == 0
 }
 
 // ContextInfo represents information about a kubeconfig context
 type ContextInfo struct {
-	Name      string `json:"name"`
-	Cluster   string `json:"cluster"`
-	User      string `json:"user"`
-	Namespace string `json:"namespace"`
-	IsCurrent bool   `json:"isCurrent"`
+	Name         string `json:"name"`
+	OriginalName string `json:"originalName,omitempty"`
+	Cluster      string `json:"cluster"`
+	User         string `json:"user"`
+	Namespace    string `json:"namespace"`
+	IsCurrent    bool   `json:"isCurrent"`
 	// Source labels the kubeconfig file this context came from
-	// (e.g. "kube-cluster-paris" or "prod"). Set only in multi-file
-	// mode; populated for every context — not just colliding ones — so
+	// (e.g. "kube-cluster-paris" or "prod"). Set for registry-backed
+	// loading; populated for every context — not just colliding ones — so
 	// the dropdown can show provenance even without ambiguity.
 	Source string `json:"source,omitempty"`
 }
@@ -1049,6 +1479,7 @@ func GetAvailableContexts() ([]ContextInfo, error) {
 	// bare references under RLock and use them after the unlock — that
 	// pattern is only safe as long as the maps they captured are never
 	// mutated. Returning fresh maps preserves that invariant.
+	var refreshEmptyAIs []string
 	clientMu.Lock()
 	if contextRegistry != nil {
 		// Lazy init: a future code path that promotes single-file mode
@@ -1059,18 +1490,40 @@ func GetAvailableContexts() ([]ContextInfo, error) {
 			perFileMtimes = make(map[string]time.Time, len(perFileConfigs))
 		}
 		newRegistry, newFileConfigs, newFileMtimes, changed := refreshContextRegistry(
-			contextRegistry, perFileConfigs, perFileMtimes,
+			contextRegistry, perFileConfigs, perFileMtimes, kubeconfigPaths,
 		)
 		if changed {
 			contextRegistry = newRegistry
 			perFileConfigs = newFileConfigs
 			perFileMtimes = newFileMtimes
+			totalContextCount = len(newRegistry)
+			summaryConfigs := newFileConfigs
+			if activeSourceConfig != nil {
+				if _, found := summaryConfigs[activeSourceFile]; !found {
+					summaryConfigs = make(map[string]*clientcmdapi.Config, len(newFileConfigs)+1)
+					for path, cfg := range newFileConfigs {
+						summaryConfigs[path] = cfg
+					}
+					summaryConfigs[activeSourceFile] = activeSourceConfig
+				}
+			}
+			execPluginCommands, refreshEmptyAIs = aggregateExecPluginCommands(kubeconfigPaths, summaryConfigs)
+			switch kubeconfigMode {
+			case "multi-dir", "multi-source":
+				kubeconfigDirectoryFileCount = loadedDirectoryKubeconfigCount(
+					newFileConfigs, kubeconfigDirectoryPaths,
+				)
+			}
 		}
 	}
 	registry := contextRegistry
 	fileConfigs := perFileConfigs
 	currentCtx := contextName
+	singlePath := kubeconfigPath
 	clientMu.Unlock()
+	if len(refreshEmptyAIs) > 0 {
+		recordEmptyCommandWarning("kubeconfig-refresh", refreshEmptyAIs)
+	}
 
 	if registry != nil {
 		// Isolated-load mode: enumerate every registered context, pulling
@@ -1080,7 +1533,13 @@ func GetAvailableContexts() ([]ContextInfo, error) {
 		// fresh maps on change rather than mutating in place, so the
 		// snapshot we captured is frozen.
 		contexts := make([]ContextInfo, 0, len(registry))
-		for qName, entry := range registry {
+		qualifiedNames := make([]string, 0, len(registry))
+		for qName := range registry {
+			qualifiedNames = append(qualifiedNames, qName)
+		}
+		sort.Strings(qualifiedNames)
+		for _, qName := range qualifiedNames {
+			entry := registry[qName]
 			cfg, ok := fileConfigs[entry.SourceFile]
 			if !ok {
 				continue
@@ -1090,21 +1549,25 @@ func GetAvailableContexts() ([]ContextInfo, error) {
 				continue
 			}
 			contexts = append(contexts, ContextInfo{
-				Name:      qName,
-				Cluster:   ctx.Cluster,
-				User:      ctx.AuthInfo,
-				Namespace: ctx.Namespace,
-				IsCurrent: qName == currentCtx,
-				Source:    kubeconfigSourceLabel(entry.SourceFile),
+				Name:         qName,
+				OriginalName: entry.InFileName,
+				Cluster:      ctx.Cluster,
+				User:         ctx.AuthInfo,
+				Namespace:    ctx.Namespace,
+				IsCurrent:    qName == currentCtx,
+				Source:       kubeconfigSourceLabel(entry.SourceFile),
 			})
 		}
 		return contexts, nil
 	}
 
 	// Single-file fallback: load the one file and enumerate its contexts.
-	kubeconfig := kubeconfigPath
+	kubeconfig := singlePath
 	if kubeconfig == "" {
 		return nil, fmt.Errorf("kubeconfig path not set")
+	}
+	if err := validateKubeconfigFileType(kubeconfig); err != nil {
+		return nil, fmt.Errorf("kubeconfig source is unavailable: %w", err)
 	}
 	loadingRules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfig}
 	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, &clientcmd.ConfigOverrides{})
@@ -1117,7 +1580,8 @@ func GetAvailableContexts() ([]ContextInfo, error) {
 		currentCtx = rawConfig.CurrentContext
 	}
 	contexts := make([]ContextInfo, 0, len(rawConfig.Contexts))
-	for name, ctx := range rawConfig.Contexts {
+	for _, name := range sortedContextNames(&rawConfig) {
+		ctx := rawConfig.Contexts[name]
 		contexts = append(contexts, ContextInfo{
 			Name:      name,
 			Cluster:   ctx.Cluster,
@@ -1127,6 +1591,47 @@ func GetAvailableContexts() ([]ContextInfo, error) {
 		})
 	}
 	return contexts, nil
+}
+
+func validateContextSwitchTarget(name string) error {
+	clientMu.RLock()
+	registry := contextRegistry
+	singlePath := kubeconfigPath
+	clientMu.RUnlock()
+
+	var sourcePath, inFileName string
+	if registry != nil {
+		entry, ok := registry[name]
+		if !ok {
+			return fmt.Errorf("%w: %q", errKubeconfigContextNotFound, name)
+		}
+		sourcePath = entry.SourceFile
+		inFileName = entry.InFileName
+	} else {
+		if singlePath == "" {
+			return fmt.Errorf("kubeconfig path not set")
+		}
+		sourcePath = singlePath
+		inFileName = name
+	}
+	if err := validateKubeconfigFileType(sourcePath); err != nil {
+		return err
+	}
+
+	loadingRules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: sourcePath}
+	overrides := &clientcmd.ConfigOverrides{CurrentContext: inFileName}
+	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides)
+	rawConfig, err := kubeConfig.RawConfig()
+	if err != nil {
+		return err
+	}
+	if _, ok := rawConfig.Contexts[inFileName]; !ok {
+		return fmt.Errorf("%w: %q", errKubeconfigContextNotFound, name)
+	}
+	if _, err := kubeConfig.ClientConfig(); err != nil {
+		return fmt.Errorf("%w for %q: %w", errKubeconfigClientSetupFailed, name, err)
+	}
+	return nil
 }
 
 // SwitchContext switches the K8s client to use a different context
@@ -1140,6 +1645,7 @@ func SwitchContext(name string) error {
 	// can mutate all three concurrently, so reads have to be atomic as a set.
 	clientMu.RLock()
 	registry := contextRegistry
+	singlePath := kubeconfigPath
 	pathsSnapshot := append([]string(nil), kubeconfigPaths...)
 	configsSnapshot := make(map[string]*clientcmdapi.Config, len(perFileConfigs))
 	for k, v := range perFileConfigs {
@@ -1157,17 +1663,23 @@ func SwitchContext(name string) error {
 		// context's credentials (issue #519).
 		entry, ok := registry[name]
 		if !ok {
-			return fmt.Errorf("context %q not found in kubeconfig", name)
+			return fmt.Errorf("%w: %q", errKubeconfigContextNotFound, name)
 		}
 		loadingRules = &clientcmd.ClientConfigLoadingRules{ExplicitPath: entry.SourceFile}
 		overrideContextName = entry.InFileName
 	} else {
-		kubeconfig := kubeconfigPath
+		kubeconfig := singlePath
 		if kubeconfig == "" {
 			return fmt.Errorf("kubeconfig path not set")
 		}
 		loadingRules = &clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfig}
 		overrideContextName = name
+	}
+	if err := validateKubeconfigFileType(loadingRules.ExplicitPath); err != nil {
+		if errors.Is(err, errKubeconfigNotRegular) {
+			return fmt.Errorf("kubeconfig source for context %q is unavailable: %w", name, errKubeconfigNotRegular)
+		}
+		return fmt.Errorf("kubeconfig source for context %q is unavailable: %s", name, kubeconfigDiagnosticError(err))
 	}
 
 	// Build config with the new context
@@ -1177,18 +1689,20 @@ func SwitchContext(name string) error {
 	// Verify the context exists
 	rawConfig, err := kubeConfig.RawConfig()
 	if err != nil {
-		return fmt.Errorf("failed to load kubeconfig: %w", err)
+		log.Printf("[k8s] Failed to load kubeconfig for context %q: %v", name, err)
+		return fmt.Errorf("failed to load kubeconfig for context %q: %s", name, kubeconfigDiagnosticError(err))
 	}
 
 	ctx, ok := rawConfig.Contexts[overrideContextName]
 	if !ok {
-		return fmt.Errorf("context %q not found in kubeconfig", name)
+		return fmt.Errorf("%w: %q", errKubeconfigContextNotFound, name)
 	}
 
 	// Build the REST config for the new context
 	config, err := kubeConfig.ClientConfig()
 	if err != nil {
-		return fmt.Errorf("failed to build config for context %q: %w", name, err)
+		log.Printf("[k8s] Failed to build client config for context %q: %v", name, err)
+		return fmt.Errorf("%w for %q: %s", errKubeconfigClientSetupFailed, name, kubeconfigDiagnosticError(err))
 	}
 
 	// Apply the same QPS/Burst settings as initial client creation.
@@ -1199,7 +1713,7 @@ func SwitchContext(name string) error {
 
 	clients, err := newSharedKubernetesClients(config)
 	if err != nil {
-		return fmt.Errorf("failed to create clients for context %q: %w", name, err)
+		return fmt.Errorf("%w for %q: %w", errKubeconfigClientSetupFailed, name, err)
 	}
 
 	// Update global variables atomically
@@ -1224,12 +1738,17 @@ func SwitchContext(name string) error {
 	}
 
 	clientMu.Lock()
+	newContextBinding := sourceSafetyBindingLocked(loadingRules.ExplicitPath, overrideContextName)
 	k8sConfig = config
 	k8sClient = clients.clientset
 	discoveryClient = clients.discovery
 	dynamicClient = clients.dynamic
 	activeClientGeneration = clients.generation
 	contextName = name
+	contextBinding = newContextBinding
+	activeSourceFile = loadingRules.ExplicitPath
+	activeSourceName = overrideContextName
+	activeSourceConfig = rawConfig.DeepCopy()
 	clusterName = ctx.Cluster
 	contextNamespace = ctx.Namespace
 	contextUsesExec = usesExec
@@ -1240,34 +1759,57 @@ func SwitchContext(name string) error {
 	return nil
 }
 
-// capiKubeconfigs tracks temp kubeconfig files by context name to avoid accumulation.
-var capiKubeconfigs = make(map[string]string) // contextName -> tmpPath
+// capiKubeconfigs tracks temp kubeconfig files by stable CAPI cluster binding
+// to avoid accumulation without treating same-named contexts as the same source.
+var capiKubeconfigs = make(map[string]string) // safetyBinding -> tmpPath
+
+type capiPromotionSnapshot struct {
+	kubeconfigPath               string
+	kubeconfigPaths              []string
+	kubeconfigMode               string
+	kubeconfigDirectoryFileCount int
+	totalContextCount            int
+}
+
+var preCapiPromotion *capiPromotionSnapshot
 
 // MergeAndSwitchContext writes the provided kubeconfig data to a temporary
 // file and registers its context so that Radar can switch to it. Returns
-// (qualifiedName, tmpPath, error): qualifiedName is the identifier the caller
-// must pass to PerformContextSwitch, and may differ from the input contextName
-// if another file already owns that name (the registry disambiguates via
-// qualifyContextName). tmpPath is the on-disk location of the kubeconfig,
-// exposed for diagnostics / logging only.
+// (qualifiedName, tmpPath, created, error): qualifiedName is the identifier the
+// caller must pass to PerformContextSwitch, and may differ from the input
+// contextName if another file already owns that name (the registry disambiguates
+// via qualifyContextName). tmpPath is the on-disk location of the kubeconfig,
+// exposed for diagnostics / logging only. created is false when an existing,
+// previously published CAPI source was refreshed in place.
 //
 // If Radar started in single-file mode, the first CAPI merge promotes it
 // into isolated-load mode by seeding the registry with the original
 // kubeconfig plus the new CAPI file — otherwise subsequent CAPI merges
 // would silently revert to client-go's Precedence behavior (issue #519).
 //
-// Concurrency: the entire decision is serialized under clientMu.Lock. The
-// input contextName is the stable key for reuse across reconnects (CAPI
-// re-emits the same context name each time for the same workload cluster),
-// so we can dedupe without having to reverse-lookup the qualified form.
-func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, string, error) {
+// Concurrency: contextOpMu keeps registry-visible files stable while a context
+// switch reads them, and clientMu serializes the reuse-check + registration
+// decision. safetyBinding is derived from the management-cluster source plus
+// the CAPI Cluster object identity, so reconnects reuse the source without
+// conflating same-named contexts from different workload clusters.
+func MergeAndSwitchContext(kubeconfigData []byte, contextName, safetyBinding string) (string, string, bool, error) {
+	if safetyBinding == "" {
+		return "", "", false, fmt.Errorf("CAPI cluster safety binding is unavailable")
+	}
 	newConfig, err := clientcmd.Load(kubeconfigData)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to parse kubeconfig: %w", err)
+		return "", "", false, fmt.Errorf("failed to parse kubeconfig: %w", err)
 	}
 	if _, ok := newConfig.Contexts[contextName]; !ok {
-		return "", "", fmt.Errorf("context %q not found in provided kubeconfig", contextName)
+		return "", "", false, fmt.Errorf("context %q not found in provided kubeconfig", contextName)
 	}
+
+	activeContextOperations.Add(1)
+	contextOpMu.Lock()
+	defer func() {
+		activeContextOperations.Add(-1)
+		contextOpMu.Unlock()
+	}()
 
 	// Hold clientMu for the entire reuse-check + registration path so two
 	// concurrent CAPI merges for the same workload cluster can't both see
@@ -1278,45 +1820,98 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 	// Fast path: same CAPI context was registered before. Overwrite the
 	// existing temp file so the user gets a fresh exec plugin config, and
 	// return the qualified name we assigned on the original merge.
-	if existingPath, ok := capiKubeconfigs[contextName]; ok {
-		if err := clientcmd.WriteToFile(*newConfig, existingPath); err == nil {
-			// Refresh the cached parsed config so subsequent GetAvailableContexts
-			// calls reflect any changes in the incoming YAML. Also bump the
-			// cached mtime so the next refresh doesn't see a stale value
-			// (the WriteToFile above just changed the file's mtime) and
-			// uselessly re-parse a file we've already re-parsed here.
-			if parsed, perr := clientcmd.LoadFromFile(existingPath); perr == nil {
-				perFileConfigs[existingPath] = parsed
-				if perFileMtimes != nil {
-					if info, serr := os.Stat(existingPath); serr == nil {
-						perFileMtimes[existingPath] = info.ModTime()
+	if existingPath, ok := capiKubeconfigs[safetyBinding]; ok {
+		pathErr := validateKubeconfigFileType(existingPath)
+		replacementErr := pathErr
+		if pathErr == nil || errors.Is(pathErr, fs.ErrNotExist) {
+			writeErr := clientcmd.WriteToFile(*newConfig, existingPath)
+			if writeErr != nil {
+				replacementErr = writeErr
+				log.Printf("[capi] Failed to update existing kubeconfig for context %q: %v", contextName, writeErr)
+			} else {
+				// Refresh the cached parsed config so subsequent GetAvailableContexts
+				// calls can use fresh credentials immediately. Leave the cached mtime
+				// untouched so the registry refresh still reconciles added, removed,
+				// or renamed contexts from the rewritten file.
+				parsed, parseErr := clientcmd.LoadFromFile(existingPath)
+				qName := findQualifiedNameForPath(contextRegistry, existingPath, contextName)
+				if qName != "" {
+					if parseErr != nil {
+						log.Printf("[capi] Failed to refresh cached kubeconfig for context %q: %v", contextName, parseErr)
+						return qName, existingPath, false, nil
+					}
+					newFileConfigs := make(map[string]*clientcmdapi.Config, len(perFileConfigs))
+					for path, cfg := range perFileConfigs {
+						newFileConfigs[path] = cfg
+					}
+					newFileConfigs[existingPath] = parsed
+					perFileConfigs = newFileConfigs
+					log.Printf("[capi] Updated existing kubeconfig for context %q: %q", contextName, existingPath)
+					return qName, existingPath, false, nil
+				}
+				if parseErr == nil && activeSourceFile == existingPath {
+					newRegistry := make(map[string]contextEntry, len(contextRegistry)+len(parsed.Contexts))
+					for name, entry := range contextRegistry {
+						if entry.SourceFile != existingPath {
+							newRegistry[name] = entry
+						}
+					}
+					var qualifications []string
+					for _, name := range sortedContextNames(parsed) {
+						qualifiedName := qualifyContextName(newRegistry, name, existingPath)
+						if qualification := logContextQualification(name, qualifiedName, existingPath); qualification != "" {
+							qualifications = append(qualifications, qualification)
+						}
+						newRegistry[qualifiedName] = contextEntry{SourceFile: existingPath, InFileName: name}
+					}
+					qName = findQualifiedNameForPath(newRegistry, existingPath, contextName)
+					if qName != "" {
+						newFileConfigs := make(map[string]*clientcmdapi.Config, len(perFileConfigs)+1)
+						for path, cfg := range perFileConfigs {
+							newFileConfigs[path] = cfg
+						}
+						newFileConfigs[existingPath] = parsed
+						newFileMtimes := make(map[string]time.Time, len(perFileMtimes)+1)
+						for path, mtime := range perFileMtimes {
+							newFileMtimes[path] = mtime
+						}
+						if info, statErr := os.Stat(existingPath); statErr == nil {
+							newFileMtimes[existingPath] = info.ModTime()
+						}
+						contextRegistry = newRegistry
+						perFileConfigs = newFileConfigs
+						perFileMtimes = newFileMtimes
+						totalContextCount = len(newRegistry)
+						recordContextQualifications(qualifications)
+						log.Printf("[capi] Restored kubeconfig for context %q: %q", contextName, existingPath)
+						return qName, existingPath, false, nil
 					}
 				}
+				replacementErr = fmt.Errorf("%w after CAPI source refresh", errKubeconfigContextNotFound)
 			}
-			qName := findQualifiedNameForPath(contextRegistry, existingPath, contextName)
-			if qName == "" {
-				// Registry is missing the entry somehow — rebuild it below by
-				// falling through to the new-file path. Scrub the stale map
-				// entry so we don't keep returning it.
-				delete(capiKubeconfigs, contextName)
-			} else {
-				log.Printf("[capi] Updated existing kubeconfig for context %q: %q", contextName, existingPath)
-				return qName, existingPath, nil
-			}
+		} else {
+			log.Printf("[capi] Replacing unusable kubeconfig for context %q: %v", contextName, pathErr)
 		}
-		// Overwrite failed — fall through to create a new temp file.
+		if activeSourceFile == existingPath {
+			return "", "", false, fmt.Errorf("failed to refresh active CAPI kubeconfig: %s", kubeconfigDiagnosticError(replacementErr))
+		}
+		if err := os.Remove(existingPath); err != nil && !os.IsNotExist(err) {
+			return "", "", false, fmt.Errorf("failed to replace stale CAPI kubeconfig: %w", err)
+		}
+		dropKubeconfigSourceLocked(existingPath)
+		delete(capiKubeconfigs, safetyBinding)
 	}
 
 	// Write to a new temp file.
 	tmpFile, err := os.CreateTemp("", "radar-capi-kubeconfig-*.yaml")
 	if err != nil {
-		return "", "", fmt.Errorf("failed to create temp kubeconfig: %w", err)
+		return "", "", false, fmt.Errorf("failed to create temp kubeconfig: %w", err)
 	}
 	tmpPath := tmpFile.Name()
 	tmpFile.Close()
 	if err := clientcmd.WriteToFile(*newConfig, tmpPath); err != nil {
 		os.Remove(tmpPath)
-		return "", "", fmt.Errorf("failed to write kubeconfig: %w", err)
+		return "", "", false, fmt.Errorf("failed to write kubeconfig: %w", err)
 	}
 
 	// Build a local snapshot of the registry additions we're about to make,
@@ -1327,7 +1922,16 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 	var newFileMtimes map[string]time.Time
 	var newPaths []string
 
-	if contextRegistry == nil {
+	promotedToRegistry := contextRegistry == nil
+	var promotionSnapshot capiPromotionSnapshot
+	if promotedToRegistry {
+		promotionSnapshot = capiPromotionSnapshot{
+			kubeconfigPath:               kubeconfigPath,
+			kubeconfigPaths:              append([]string(nil), kubeconfigPaths...),
+			kubeconfigMode:               kubeconfigMode,
+			kubeconfigDirectoryFileCount: kubeconfigDirectoryFileCount,
+			totalContextCount:            totalContextCount,
+		}
 		// Promote single-file mode to isolated-load mode.
 		seedPaths := []string{}
 		if kubeconfigPath != "" {
@@ -1337,7 +1941,7 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 		registry, fileConfigs := buildContextRegistry(seedPaths)
 		if _, hasTmp := fileConfigs[tmpPath]; !hasTmp {
 			os.Remove(tmpPath)
-			return "", "", fmt.Errorf("internal: failed to register CAPI kubeconfig %s", tmpPath)
+			return "", "", false, fmt.Errorf("internal: failed to register CAPI kubeconfig %s", tmpPath)
 		}
 		newRegistry = registry
 		newFileConfigs = fileConfigs
@@ -1358,7 +1962,7 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 		cfg, err := clientcmd.LoadFromFile(tmpPath)
 		if err != nil {
 			os.Remove(tmpPath)
-			return "", "", fmt.Errorf("failed to re-load temp kubeconfig: %w", err)
+			return "", "", false, fmt.Errorf("failed to re-load temp kubeconfig: %w", err)
 		}
 		// Copy-on-write: stage new maps / slice so we don't publish a
 		// partially-updated registry on any error path below.
@@ -1379,19 +1983,24 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 			newFileMtimes[tmpPath] = info.ModTime()
 		}
 		newPaths = append(append([]string(nil), kubeconfigPaths...), tmpPath)
-		for name := range cfg.Contexts {
+		var qualifications []string
+		for _, name := range sortedContextNames(cfg) {
 			qName := qualifyContextName(newRegistry, name, tmpPath)
+			if qualification := logContextQualification(name, qName, tmpPath); qualification != "" {
+				qualifications = append(qualifications, qualification)
+			}
 			newRegistry[qName] = contextEntry{
 				SourceFile: tmpPath,
 				InFileName: name,
 			}
 		}
+		recordContextQualifications(qualifications)
 	}
 
 	qualifiedName := findQualifiedNameForPath(newRegistry, tmpPath, contextName)
 	if qualifiedName == "" {
 		os.Remove(tmpPath)
-		return "", "", fmt.Errorf("internal: failed to register context %q from %s", contextName, tmpPath)
+		return "", "", false, fmt.Errorf("internal: failed to register context %q from %s", contextName, tmpPath)
 	}
 
 	// Commit. All globals updated atomically under the single Lock held above.
@@ -1399,10 +2008,122 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 	perFileConfigs = newFileConfigs
 	perFileMtimes = newFileMtimes
 	kubeconfigPaths = newPaths
-	capiKubeconfigs[contextName] = tmpPath
+	capiKubeconfigs[safetyBinding] = tmpPath
+	totalContextCount = len(newRegistry)
+	if promotedToRegistry {
+		kubeconfigPath = ""
+		kubeconfigMode = "multi-source"
+		kubeconfigDirectoryFileCount = 0
+		preCapiPromotion = &promotionSnapshot
+	}
 
 	log.Printf("[capi] Added workload cluster kubeconfig: %q (context: %q)", tmpPath, qualifiedName)
-	return qualifiedName, tmpPath, nil
+	return qualifiedName, tmpPath, true, nil
+}
+
+// DiscardFailedMergedContext removes a newly created CAPI kubeconfig that
+// failed before becoming the active client. Reused or active sources remain
+// registered because later connection attempts may still need them for retry.
+func DiscardFailedMergedContext(path string, created bool) bool {
+	if !created {
+		return false
+	}
+
+	activeContextOperations.Add(1)
+	contextOpMu.Lock()
+	defer func() {
+		activeContextOperations.Add(-1)
+		contextOpMu.Unlock()
+	}()
+
+	clientMu.Lock()
+	defer clientMu.Unlock()
+
+	if path == "" || activeSourceFile == path {
+		return false
+	}
+
+	trackedBinding := ""
+	for binding, source := range capiKubeconfigs {
+		if source == path {
+			trackedBinding = binding
+			break
+		}
+	}
+	if trackedBinding == "" {
+		return false
+	}
+
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		log.Printf("[capi] Failed to remove inactive kubeconfig %q: %v", path, err)
+	}
+	dropKubeconfigSourceLocked(path)
+	delete(capiKubeconfigs, trackedBinding)
+
+	if preCapiPromotion == nil {
+		return true
+	}
+	snapshot := *preCapiPromotion
+
+	expectedPaths := append([]string(nil), snapshot.kubeconfigPaths...)
+	if snapshot.kubeconfigPath != "" {
+		expectedPaths = append([]string{snapshot.kubeconfigPath}, expectedPaths...)
+	}
+	if !slices.Equal(kubeconfigPaths, expectedPaths) {
+		return true
+	}
+
+	contextRegistry = nil
+	perFileConfigs = nil
+	perFileMtimes = nil
+	kubeconfigPath = snapshot.kubeconfigPath
+	kubeconfigPaths = append([]string(nil), snapshot.kubeconfigPaths...)
+	kubeconfigMode = snapshot.kubeconfigMode
+	kubeconfigDirectoryFileCount = snapshot.kubeconfigDirectoryFileCount
+	totalContextCount = snapshot.totalContextCount
+	preCapiPromotion = nil
+	return true
+}
+
+func dropKubeconfigSourceLocked(path string) {
+	newRegistry := make(map[string]contextEntry, len(contextRegistry))
+	for name, entry := range contextRegistry {
+		if entry.SourceFile != path {
+			newRegistry[name] = entry
+		}
+	}
+	if contextRegistry != nil {
+		contextRegistry = newRegistry
+		totalContextCount = len(newRegistry)
+	}
+
+	newFileConfigs := make(map[string]*clientcmdapi.Config, len(perFileConfigs))
+	for source, config := range perFileConfigs {
+		if source != path {
+			newFileConfigs[source] = config
+		}
+	}
+	if perFileConfigs != nil {
+		perFileConfigs = newFileConfigs
+	}
+
+	newFileMtimes := make(map[string]time.Time, len(perFileMtimes))
+	for source, mtime := range perFileMtimes {
+		if source != path {
+			newFileMtimes[source] = mtime
+		}
+	}
+	if perFileMtimes != nil {
+		perFileMtimes = newFileMtimes
+	}
+
+	paths := make([]string, 0, len(kubeconfigPaths))
+	for _, source := range kubeconfigPaths {
+		if source != path {
+			paths = append(paths, source)
+		}
+	}
+	kubeconfigPaths = paths
 }
 
 // findQualifiedNameForPath returns the qualified registry name of the given
@@ -1415,4 +2136,23 @@ func findQualifiedNameForPath(registry map[string]contextEntry, file, inFileName
 		}
 	}
 	return ""
+}
+
+// GetContextSource resolves a switcher-visible context name to its isolated
+// kubeconfig file and original in-file context name. Registry-backed loading
+// can resolve any visible name; direct single-file loading can resolve only the
+// active name because no registry is maintained in that mode.
+func GetContextSource(name string) (sourceFile, inFileName string, ok bool) {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	if name == contextName && activeSourceFile != "" && activeSourceName != "" {
+		return activeSourceFile, activeSourceName, true
+	}
+	if entry, found := contextRegistry[name]; found {
+		return entry.SourceFile, entry.InFileName, true
+	}
+	if contextRegistry == nil && kubeconfigPath != "" && name == contextName {
+		return kubeconfigPath, name, true
+	}
+	return "", "", false
 }

@@ -5,7 +5,7 @@ import { useRBACSubject } from '../../../api/rbac'
 import { usePolicyResource } from '../../../api/policy'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
 import { kindToPlural } from '@skyhook-io/k8s-ui/utils/navigation'
-import type { Relationships, ResourceRef, ResourceWithRelationships } from '../../../types'
+import type { Relationships, ResourceRef, ResourceWithRelationships, WorkloadPodInfo } from '../../../types'
 import type { ScalerDiagnosis } from '@skyhook-io/k8s-ui/components/resources/renderers/WorkloadRenderer'
 
 // Map plural lowercase kind to singular PascalCase for ownerReferences matching
@@ -26,9 +26,10 @@ interface WorkloadRendererProps {
   onNavigate?: (ref: ResourceRef) => void
   relationships?: Relationships
   scaleBlockedBy?: ResourceRef[]
+  workloadPods?: WorkloadPodInfo[]
 }
 
-export function WorkloadRenderer({ kind, data, onNavigate, scaleBlockedBy }: WorkloadRendererProps) {
+export function WorkloadRenderer({ kind, data, onNavigate, scaleBlockedBy, workloadPods }: WorkloadRendererProps) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const scaleMutation = useScaleWorkload()
@@ -90,6 +91,7 @@ export function WorkloadRenderer({ kind, data, onNavigate, scaleBlockedBy }: Wor
       policyLoading={policyLoading}
       policyError={policyError as Error | null}
       scaleBlockedBy={scaleBlockedBy}
+      workloadPods={workloadPods}
       scalerDiagnostics={scalerDiagnostics}
       onScale={async (replicas) => {
         await scaleMutation.mutateAsync({

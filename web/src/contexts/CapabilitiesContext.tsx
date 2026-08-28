@@ -145,7 +145,7 @@ export function useHasLimitedAccess(): boolean {
 // capability check; callers use global capability values until it resolves.
 export function useNamespacedCapabilities(namespace: string | undefined) {
   const globalCaps = useContext(CapabilitiesContext)
-  const { data: nsCaps, error } = useNamespaceCapabilities(namespace, globalCaps)
+  const { data: nsCaps, error, isPending } = useNamespaceCapabilities(namespace, globalCaps)
 
   if (error) {
     console.warn(`Failed to fetch namespace capabilities for ${namespace}, using global:`, error)
@@ -156,5 +156,6 @@ export function useNamespacedCapabilities(namespace: string | undefined) {
     canViewLogs: nsCaps?.logs ?? globalCaps.logs,
     canPortForward: nsCaps?.portForward ?? globalCaps.portForward,
     workloadWrites: nsCaps?.workloadWrites ?? globalCaps.workloadWrites,
-  }), [globalCaps.exec, globalCaps.logs, globalCaps.portForward, globalCaps.workloadWrites, nsCaps])
+    workloadWritesPending: Boolean(namespace && isPending),
+  }), [globalCaps.exec, globalCaps.logs, globalCaps.portForward, globalCaps.workloadWrites, isPending, namespace, nsCaps])
 }

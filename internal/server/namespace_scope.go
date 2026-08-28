@@ -168,6 +168,9 @@ func (s *Server) invalidatePostContextSwitchCaches() {
 	if s.capacityIssueMemo != nil {
 		s.capacityIssueMemo.clear()
 	}
+	if s.openCostCurrency != nil {
+		s.openCostCurrency.Invalidate()
+	}
 	k8s.InvalidateUserCapabilitiesCache()
 	clearPackagesCache()
 	clearApplicationsCache()
@@ -255,7 +258,7 @@ func (s *Server) loadSavedNamespacePreference(r *http.Request) {
 	// Pruned against known namespaces so a stale kubeconfig value can't
 	// narrow the view to nothing and then churn through the prune-reseed
 	// cycle on every read.
-	seed = pruneToExistingNamespaces(seed, s.allNamespaceNames())
+	seed = pruneToExistingNamespaces(seed, allNamespaceNames())
 	if len(seed) > 0 {
 		s.seedPick(ctxName, key, seed)
 	}
@@ -372,7 +375,7 @@ func (s *Server) commitPickMutation(r *http.Request, ctxName string, expected, s
 // re-reading the live context, so a switch between the caller's snapshot and
 // this prune can't persist old-context survivors under the new context's key.
 func (s *Server) pruneDeletedNamespacePicks(r *http.Request, ctxName string, picks []string) []string {
-	survivors := pruneToExistingNamespaces(picks, s.allNamespaceNames())
+	survivors := pruneToExistingNamespaces(picks, allNamespaceNames())
 	// Compare contents, not just length: skip the write only when nothing
 	// actually changed. A length check would rely on the prune being a pure
 	// order-preserving filter; equality holds regardless of how it evolves.

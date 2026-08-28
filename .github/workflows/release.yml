@@ -39,6 +39,21 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version: '1.26'
+          cache: false
+
+      # CI runs claim setup-go's default cache key with linux/amd64 objects only,
+      # so release cross-compiles (darwin/windows/arm64) always started cold.
+      # A release-scoped key keeps all five targets' build cache warm.
+      - name: Release build cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: release-go-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            release-go-${{ hashFiles('go.sum') }}-
+            release-go-
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -66,8 +81,12 @@ jobs:
             dist/radar_linux_arm64_v8.0/kubectl-radar
           retention-days: 1
 
+      # The krew webhook is a community-run single instance; a timeout or
+      # conflict there must not block Docker/Helm/MCP publishing. A miss is
+      # recoverable manually (krew-index PR) — the rest of the release is not.
       - name: Update krew-index
         if: "!contains(github.ref_name, '-')"
+        continue-on-error: true
         uses: rajatjindal/krew-release-bot@v0.0.51
 
       - name: Release summary

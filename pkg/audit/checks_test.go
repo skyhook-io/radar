@@ -1999,6 +1999,19 @@ func TestDeprecatedAPIVersion_NoServedAPIs(t *testing.T) {
 	}
 }
 
+func TestDeprecatedAPIVersionReportsSchedulingV1Alpha2BeforeRemoval(t *testing.T) {
+	input := &CheckInput{ClusterVersion: "v1.36.4", ServedAPIs: []string{"scheduling.k8s.io/v1alpha2"}}
+	found := false
+	for _, finding := range RunChecks(input).Findings {
+		if finding.CheckID == "deprecatedAPIVersion" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("Kubernetes 1.36 did not report scheduling.k8s.io/v1alpha2 before its 1.37 removal")
+	}
+}
+
 func TestDockerSocketMount(t *testing.T) {
 	input := &CheckInput{
 		Deployments: []*appsv1.Deployment{{

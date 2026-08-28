@@ -1,7 +1,8 @@
 import type { OpenCostSummary } from '../../api/client'
 import { useOpenCostSummary } from '../../api/client'
-import { DollarSign } from 'lucide-react'
+import { Coins } from 'lucide-react'
 import {
+  DEFAULT_COST_CURRENCY,
   formatCostPerHour,
   formatProjectedDailyRate,
   formatProjectedMonthlyCost,
@@ -21,6 +22,7 @@ export function CostCard({ onNavigate }: { onNavigate?: () => void }) {
 
 function CostCardContent({ data, onNavigate }: { data: OpenCostSummary; onNavigate?: () => void }) {
   const hourlyCost = data.totalHourlyCost ?? 0
+  const currency = data.currency ?? DEFAULT_COST_CURRENCY
   const namespaces = data.namespaces ?? []
   const topNamespaces = namespaces.slice(0, 5)
 
@@ -35,7 +37,7 @@ function CostCardContent({ data, onNavigate }: { data: OpenCostSummary; onNaviga
       <div className="flex flex-col h-full w-full">
         <div className="flex items-center justify-between px-5 py-3 border-b border-theme-border/50">
           <div className="flex items-center gap-2">
-            <DollarSign className="w-4 h-4 text-accent-text" />
+            <Coins className="w-4 h-4 text-accent-text" />
             <span className="text-xs font-semibold uppercase tracking-wider text-accent-text">Cost Insights</span>
             {namespaces.length > 0 && (
               <span className="badge-sm border border-theme-border bg-accent-muted text-accent-text">
@@ -50,14 +52,14 @@ function CostCardContent({ data, onNavigate }: { data: OpenCostSummary; onNaviga
           <div className="flex items-baseline gap-3 mb-3">
             <div className="flex items-baseline gap-1">
               <span className="text-2xl font-bold text-theme-text-primary tabular-nums">
-                {formatProjectedMonthlyCost(hourlyCost)}
+                {formatProjectedMonthlyCost(hourlyCost, currency)}
               </span>
               <span className="text-xs text-theme-text-tertiary">/mo</span>
             </div>
             <div className="flex items-baseline gap-1.5 text-theme-text-secondary">
-              <span className="text-xs font-medium tabular-nums">{formatProjectedDailyRate(hourlyCost)}</span>
+              <span className="text-xs font-medium tabular-nums">{formatProjectedDailyRate(hourlyCost, currency)}</span>
               <span className="text-[10px] text-theme-text-quaternary">·</span>
-              <span className="text-xs font-medium tabular-nums">{formatCostPerHour(hourlyCost)}</span>
+              <span className="text-xs font-medium tabular-nums">{formatCostPerHour(hourlyCost, currency)}</span>
             </div>
           </div>
 
@@ -72,7 +74,7 @@ function CostCardContent({ data, onNavigate }: { data: OpenCostSummary; onNaviga
                     <div className="h-full rounded-full bg-indigo-500/60" style={{ width: `${Math.max(pct, 2)}%` }} />
                   </div>
                   <span className="text-[10px] text-theme-text-tertiary tabular-nums w-20 text-right shrink-0">
-                    {formatProjectedMonthlyRate(ns.hourlyCost)}
+                    {formatProjectedMonthlyRate(ns.hourlyCost, currency)}
                   </span>
                 </div>
               )
@@ -85,7 +87,10 @@ function CostCardContent({ data, onNavigate }: { data: OpenCostSummary; onNaviga
 
         <div className="px-4 py-1.5 border-t border-theme-border/50 flex items-center justify-between">
           <span className="text-[10px] text-theme-text-tertiary">
-            {data.currency ?? 'USD'} &middot; projected monthly from {data.window ?? '1h'} window
+            {currency} &middot; projected monthly from {data.window ?? '1h'} window
+            {currency !== DEFAULT_COST_CURRENCY && (
+              <> &middot; no conversion</>
+            )}
           </span>
           <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-accent-text">
             OpenCost

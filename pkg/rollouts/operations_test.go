@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -202,7 +204,7 @@ func TestRetryClearsAbort(t *testing.T) {
 }
 
 func TestPromoteFullSetsPromoteFullAndUnpauses(t *testing.T) {
-	shortenNewRevisionWait(t)
+	shortenSettleWaits(t)
 	client := newFakeRollouts(rolloutForTest("prod", "web", func(o map[string]any) {
 		o["spec"].(map[string]any)["paused"] = true
 		o["status"] = map[string]any{"currentPodHash": "hash-v2", "stableRS": "hash-v1"}
@@ -228,7 +230,7 @@ func TestPromoteFullSetsPromoteFullAndUnpauses(t *testing.T) {
 }
 
 func TestPromoteFullSkipsUnpauseWhenNotPaused(t *testing.T) {
-	shortenNewRevisionWait(t)
+	shortenSettleWaits(t)
 	client := newFakeRollouts(rolloutForTest("prod", "web", nil))
 
 	if _, err := PromoteFull(context.Background(), client, "prod", "web"); err != nil {
@@ -369,7 +371,7 @@ func TestPromoteBlueGreenClearsBlueGreenPause(t *testing.T) {
 }
 
 func TestPromoteFullBlueGreenSkipsPostPromotionAnalysis(t *testing.T) {
-	shortenNewRevisionWait(t)
+	shortenSettleWaits(t)
 	client := newFakeRollouts(blueGreenRolloutForTest(func(o map[string]any) {
 		o["status"] = map[string]any{
 			"currentPodHash":  "hash-v2",
@@ -533,7 +535,7 @@ func TestOperationsRejectTerminatingRollout(t *testing.T) {
 // Argo's CLI omits the promoteFull patch when currentPodHash already equals
 // stableRS; the spec unpause still applies.
 func TestPromoteFullSkipsStatusPatchWhenAlreadyStable(t *testing.T) {
-	shortenNewRevisionWait(t)
+	shortenSettleWaits(t)
 	client := newFakeRollouts(rolloutForTest("prod", "web", func(o map[string]any) {
 		o["spec"].(map[string]any)["paused"] = true
 		o["status"] = map[string]any{"currentPodHash": "hash-v2", "stableRS": "hash-v2"}
@@ -556,7 +558,7 @@ func TestPromoteFullSkipsStatusPatchWhenAlreadyStable(t *testing.T) {
 }
 
 // Keeps the settle loop from dominating unit-test runtime.
-func shortenNewRevisionWait(t *testing.T) {
+func shortenSettleWaits(t *testing.T) {
 	t.Helper()
 	timeout, interval := promoteFullSettleTimeout, promoteFullSettleInterval
 	promoteFullSettleTimeout, promoteFullSettleInterval = 20*time.Millisecond, 5*time.Millisecond
@@ -566,7 +568,7 @@ func shortenNewRevisionWait(t *testing.T) {
 // A single patch loses to the controller's concurrent status writes, so a Rollout still
 // mid-revision with the flag missing has to be patched again.
 func TestPromoteFullRepatchesWhenTheFlagIsDropped(t *testing.T) {
-	shortenNewRevisionWait(t)
+	shortenSettleWaits(t)
 	client := newFakeRollouts(rolloutForTest("prod", "web", func(o map[string]any) {
 		o["status"] = map[string]any{"currentPodHash": "hash-v3", "stableRS": "hash-v2"}
 	}))
@@ -586,7 +588,7 @@ func TestPromoteFullRepatchesWhenTheFlagIsDropped(t *testing.T) {
 
 // Once the controller has taken it to stable there is nothing left to re-apply.
 func TestPromoteFullStopsRepatchingOnceStable(t *testing.T) {
-	shortenNewRevisionWait(t)
+	shortenSettleWaits(t)
 	client := newFakeRollouts(rolloutForTest("prod", "web", func(o map[string]any) {
 		o["status"] = map[string]any{"currentPodHash": "hash-v3", "stableRS": "hash-v2"}
 	}))
@@ -613,7 +615,7 @@ func TestPromoteFullStopsRepatchingOnceStable(t *testing.T) {
 // A fresh Rollout has neither hash set; Argo's != comparison is false there too,
 // so parity means no promoteFull patch rather than treating empty as a new revision.
 func TestPromoteFullTreatsUnsetHashesAsStable(t *testing.T) {
-	shortenNewRevisionWait(t)
+	shortenSettleWaits(t)
 	client := newFakeRollouts(rolloutForTest("prod", "web", nil))
 
 	if _, err := PromoteFull(context.Background(), client, "prod", "web"); err != nil {
@@ -621,5 +623,329 @@ func TestPromoteFullTreatsUnsetHashesAsStable(t *testing.T) {
 	}
 	if bodies := statusPatchBodies(t, client); len(bodies) != 0 {
 		t.Errorf("patched status with no revision to promote: %v", bodies)
+	}
+}
+
+// A rollback changes the template while status still describes the previous revision.
+// Promoting in that window is discarded by the controller, so PromoteFull has to wait
+// for observedGeneration to catch up before it patches.
+func TestPromoteFullWaitsForTheControllerBeforePromoting(t *testing.T) {
+	shortenSettleWaits(t)
+	stale := rolloutForTest("prod", "web", func(o map[string]any) {
+		o["metadata"].(map[string]any)["generation"] = int64(4)
+		o["status"] = map[string]any{
+			"currentPodHash":     "hash-v2",
+			"stableRS":           "hash-v2",
+			"observedGeneration": "3",
+		}
+	})
+	client := newFakeRollouts(stale)
+
+	// The controller catches up on the second read, and the rollback's revision appears.
+	var gets int
+	client.PrependReactor("get", "rollouts", func(clienttesting.Action) (bool, runtime.Object, error) {
+		gets++
+		if gets < 2 {
+			return false, nil, nil
+		}
+		caught := stale.DeepCopy()
+		_ = unstructured.SetNestedField(caught.Object, "4", "status", "observedGeneration")
+		_ = unstructured.SetNestedField(caught.Object, "hash-v1", "status", "currentPodHash")
+		return true, caught, nil
+	})
+
+	if _, err := PromoteFull(context.Background(), client, "prod", "web"); err != nil {
+		t.Fatalf("PromoteFull: %v", err)
+	}
+
+	bodies := statusPatchBodies(t, client)
+	if len(bodies) == 0 {
+		t.Fatal("promoteFull was never patched once the controller had observed the rollback")
+	}
+	status, _ := bodies[0]["status"].(map[string]any)
+	if status["promoteFull"] != true {
+		t.Errorf("first status patch = %v, want status.promoteFull true", bodies[0])
+	}
+}
+
+// A promotion the controller would discard must not be reported as one that happened.
+func TestPromoteFullFailsWhenTheControllerNeverCatchesUp(t *testing.T) {
+	shortenSettleWaits(t)
+	client := newFakeRollouts(rolloutForTest("prod", "web", func(o map[string]any) {
+		o["metadata"].(map[string]any)["generation"] = int64(4)
+		o["status"] = map[string]any{
+			"currentPodHash":     "hash-v2",
+			"stableRS":           "hash-v2",
+			"observedGeneration": "3",
+		}
+	}))
+
+	_, err := PromoteFull(context.Background(), client, "prod", "web")
+	if err == nil {
+		t.Fatal("PromoteFull reported success while the controller was still behind the rollback")
+	}
+	if !errors.Is(err, ErrControllerNotCaughtUp) {
+		t.Errorf("err = %v, want it to wrap ErrControllerNotCaughtUp", err)
+	}
+	if bodies := statusPatchBodies(t, client); len(bodies) != 0 {
+		t.Errorf("patched a status the controller was about to overwrite: %v", bodies)
+	}
+}
+
+// workloadRefRollout builds a Rollout whose pod template lives on a Deployment, plus
+// that Deployment at the given generation. An undo patches the Deployment, so the
+// Rollout's own generation never moves and cannot report whether the controller has
+// caught up — status.workloadObservedGeneration is the counter that can.
+func workloadRefRollout(t *testing.T, workloadObserved string, deployGeneration int64) (*unstructured.Unstructured, *unstructured.Unstructured) {
+	t.Helper()
+	ro := rolloutForTest("prod", "web", func(o map[string]any) {
+		spec := o["spec"].(map[string]any)
+		delete(spec, "template")
+		spec["workloadRef"] = map[string]any{
+			"apiVersion": "apps/v1",
+			"kind":       "Deployment",
+			"name":       "web-deploy",
+		}
+		o["metadata"].(map[string]any)["generation"] = int64(1)
+		o["status"] = map[string]any{
+			"currentPodHash":             "hash-v2",
+			"stableRS":                   "hash-v2",
+			"observedGeneration":         "1",
+			"workloadObservedGeneration": workloadObserved,
+		}
+	})
+	deploy := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apps/v1",
+		"kind":       "Deployment",
+		"metadata": map[string]any{
+			"namespace":  "prod",
+			"name":       "web-deploy",
+			"generation": deployGeneration,
+		},
+		"spec": map[string]any{"template": map[string]any{}},
+	}}
+	return ro, deploy
+}
+
+// For workloadRef Rollouts the rollback lands on the Deployment, so the Rollout's
+// generation is untouched and its stable hashes still describe the revision the
+// controller has not replaced. Promoting there is discarded in silence.
+func TestPromoteFullWaitsForTheWorkloadRefRollback(t *testing.T) {
+	shortenSettleWaits(t)
+	ro, deploy := workloadRefRollout(t, "2", 3)
+	client := newFakeRollouts(ro, deploy)
+
+	_, err := PromoteFull(context.Background(), client, "prod", "web")
+	if err == nil {
+		t.Fatal("PromoteFull reported success while the controller was still behind the workloadRef rollback")
+	}
+	if !errors.Is(err, ErrControllerNotCaughtUp) {
+		t.Errorf("err = %v, want it to wrap ErrControllerNotCaughtUp", err)
+	}
+	if bodies := statusPatchBodies(t, client); len(bodies) != 0 {
+		t.Errorf("patched a status the controller was about to overwrite: %v", bodies)
+	}
+}
+
+// Once the controller has observed the referenced workload, the Rollout's own
+// generation is still 1 — the workload counter is what says it is safe to promote.
+func TestPromoteFullPromotesOnceWorkloadRefIsObserved(t *testing.T) {
+	shortenSettleWaits(t)
+	ro, deploy := workloadRefRollout(t, "3", 3)
+	_ = unstructured.SetNestedField(ro.Object, "hash-v1", "status", "currentPodHash")
+	client := newFakeRollouts(ro, deploy)
+
+	if _, err := PromoteFull(context.Background(), client, "prod", "web"); err != nil {
+		t.Fatalf("PromoteFull: %v", err)
+	}
+	bodies := statusPatchBodies(t, client)
+	if len(bodies) == 0 {
+		t.Fatal("promoteFull was never patched once the controller had observed the referenced workload")
+	}
+	status, _ := bodies[0]["status"].(map[string]any)
+	if status["promoteFull"] != true {
+		t.Errorf("first status patch = %v, want status.promoteFull true", bodies[0])
+	}
+}
+
+// An unreadable template source means the controller's progress cannot be judged.
+// Assuming it caught up is exactly the bug this check exists to prevent.
+func TestPromoteFullFailsWhenTheReferencedWorkloadCannotBeRead(t *testing.T) {
+	shortenSettleWaits(t)
+	ro, deploy := workloadRefRollout(t, "2", 3)
+	client := newFakeRollouts(ro, deploy)
+	client.PrependReactor("get", "deployments", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "apps", Resource: "deployments"}, "web-deploy", errors.New("nope"))
+	})
+
+	_, err := PromoteFull(context.Background(), client, "prod", "web")
+	if err == nil {
+		t.Fatal("PromoteFull succeeded without being able to read the template source")
+	}
+	if !strings.Contains(err.Error(), "cannot tell whether the controller has reconciled") {
+		t.Errorf("err = %v, want it to name the unreadable template source", err)
+	}
+	if bodies := statusPatchBodies(t, client); len(bodies) != 0 {
+		t.Errorf("patched status without knowing the controller had caught up: %v", bodies)
+	}
+}
+
+// The counters are strings today, but a numeric value must not silently disable the check.
+func TestPromoteFullHonoursNumericObservedGeneration(t *testing.T) {
+	shortenSettleWaits(t)
+	client := newFakeRollouts(rolloutForTest("prod", "web", func(o map[string]any) {
+		o["metadata"].(map[string]any)["generation"] = int64(4)
+		o["status"] = map[string]any{
+			"currentPodHash":     "hash-v2",
+			"stableRS":           "hash-v2",
+			"observedGeneration": int64(3),
+		}
+	}))
+
+	_, err := PromoteFull(context.Background(), client, "prod", "web")
+	if !errors.Is(err, ErrControllerNotCaughtUp) {
+		t.Fatalf("err = %v, want ErrControllerNotCaughtUp for a numeric observedGeneration", err)
+	}
+}
+
+// A stalled controller is a lagging dependency, not a malformed request.
+func TestPromoteFullTimeoutCarriesTheControllerSentinel(t *testing.T) {
+	shortenSettleWaits(t)
+	client := newFakeRollouts(rolloutForTest("prod", "web", func(o map[string]any) {
+		o["metadata"].(map[string]any)["generation"] = int64(4)
+		o["status"] = map[string]any{
+			"currentPodHash":     "hash-v2",
+			"stableRS":           "hash-v2",
+			"observedGeneration": "3",
+		}
+	}))
+
+	_, err := PromoteFull(context.Background(), client, "prod", "web")
+	if !errors.Is(err, ErrControllerNotCaughtUp) {
+		t.Fatalf("err = %v, want it to wrap ErrControllerNotCaughtUp", err)
+	}
+}
+
+// Reporting a promotion that never happened is the failure this package exists to avoid,
+// so a Rollout with nothing paused has to say so rather than claim it was promoted.
+func TestPromoteReportsNoChangeWhenNothingIsPaused(t *testing.T) {
+	client := newFakeRollouts(rolloutForTest("prod", "web", func(o map[string]any) {
+		o["spec"].(map[string]any)["strategy"] = map[string]any{"blueGreen": map[string]any{}}
+		o["status"] = map[string]any{"currentPodHash": "hash-v2", "stableRS": "hash-v1"}
+	}))
+
+	res, err := Promote(context.Background(), client, "prod", "web")
+	if err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+	if !res.NoChange {
+		t.Errorf("NoChange = false, want true when no patch was issued")
+	}
+	if strings.Contains(res.Message, "promoted") {
+		t.Errorf("message = %q, want it not to claim a promotion", res.Message)
+	}
+	if patches := recordedPatches(t, client); len(patches) != 0 {
+		t.Errorf("issued %d patches for a no-op promote", len(patches))
+	}
+}
+
+// The already-at-final case must report itself rather than reuse the promoted wording.
+func TestPromoteFullReportsNoChangeWhenAlreadyAtFinalRevision(t *testing.T) {
+	shortenSettleWaits(t)
+	client := newFakeRollouts(rolloutForTest("prod", "web", func(o map[string]any) {
+		o["status"] = map[string]any{"currentPodHash": "hash-v2", "stableRS": "hash-v2"}
+	}))
+
+	res, err := PromoteFull(context.Background(), client, "prod", "web")
+	if err != nil {
+		t.Fatalf("PromoteFull: %v", err)
+	}
+	if !res.NoChange {
+		t.Errorf("NoChange = false, want true when nothing was promoted")
+	}
+	if strings.Contains(res.Message, "promoted to full") {
+		t.Errorf("message = %q, want it not to claim a promotion", res.Message)
+	}
+}
+
+// Claiming the steps were skipped without seeing the Rollout reach its final revision is
+// the same guess this package exists to stop making.
+func TestPromoteFullDoesNotClaimSuccessTheControllerNeverConfirmed(t *testing.T) {
+	shortenSettleWaits(t)
+	client := newFakeRollouts(rolloutForTest("prod", "web", func(o map[string]any) {
+		o["status"] = map[string]any{"currentPodHash": "hash-v2", "stableRS": "hash-v1"}
+	}))
+
+	res, err := PromoteFull(context.Background(), client, "prod", "web")
+	if err != nil {
+		t.Fatalf("PromoteFull: %v", err)
+	}
+	if strings.Contains(res.Message, "remaining steps, pauses, and analysis skipped") {
+		t.Errorf("message = %q, want it not to claim a promotion the controller never confirmed", res.Message)
+	}
+	if !strings.Contains(res.Message, "not confirmed") {
+		t.Errorf("message = %q, want it to say the promotion is unconfirmed", res.Message)
+	}
+}
+
+// A paused Rollout still gets spec.paused cleared, which is a real mutation.
+func TestPromoteFullDoesNotReportNoChangeWhenItUnpauses(t *testing.T) {
+	shortenSettleWaits(t)
+	client := newFakeRollouts(rolloutForTest("prod", "web", func(o map[string]any) {
+		o["spec"].(map[string]any)["paused"] = true
+		o["status"] = map[string]any{"currentPodHash": "hash-v2", "stableRS": "hash-v2"}
+	}))
+
+	res, err := PromoteFull(context.Background(), client, "prod", "web")
+	if err != nil {
+		t.Fatalf("PromoteFull: %v", err)
+	}
+	if res.NoChange {
+		t.Errorf("NoChange = true after clearing spec.paused")
+	}
+}
+
+// None of these verbs reads the Rollout back, so none of them can claim the cluster
+// reached a state — with the controller down the patch lands and nothing else happens.
+func TestRequestOnlyVerbsDoNotClaimAnOutcome(t *testing.T) {
+	claims := []string{"aborted", "retried", " promoted", "advanced to step"}
+
+	ops := map[string]func(context.Context, *fake.FakeDynamicClient) (OperationResult, error){
+		"abort": func(ctx context.Context, c *fake.FakeDynamicClient) (OperationResult, error) {
+			return Abort(ctx, c, "prod", "web")
+		},
+		"retry": func(ctx context.Context, c *fake.FakeDynamicClient) (OperationResult, error) {
+			return Retry(ctx, c, "prod", "web")
+		},
+		"promote": func(ctx context.Context, c *fake.FakeDynamicClient) (OperationResult, error) {
+			return Promote(ctx, c, "prod", "web")
+		},
+		"skip-step": func(ctx context.Context, c *fake.FakeDynamicClient) (OperationResult, error) {
+			return SkipCurrentStep(ctx, c, "prod", "web")
+		},
+	}
+
+	for name, op := range ops {
+		t.Run(name, func(t *testing.T) {
+			client := newFakeRollouts(rolloutForTest("prod", "web", func(o map[string]any) {
+				o["status"] = map[string]any{
+					"currentPodHash": "hash-v2",
+					"stableRS":       "hash-v1",
+					"pauseConditions": []any{
+						map[string]any{"reason": "CanaryPauseStep"},
+					},
+				}
+			}))
+
+			res, err := op(context.Background(), client)
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			for _, claim := range claims {
+				if strings.Contains(res.Message, claim) {
+					t.Errorf("message %q claims %q, which nothing read back", res.Message, claim)
+				}
+			}
+		})
 	}
 }

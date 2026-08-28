@@ -47,7 +47,7 @@ func Abort(ctx context.Context, client dynamic.Interface, namespace, name string
 		return OperationResult{}, err
 	}
 	return result("abort", namespace, name,
-		fmt.Sprintf("Rollout %s/%s aborted — traffic reverted to the stable version", namespace, name)), nil
+		fmt.Sprintf("Rollout %s/%s: abort sent — traffic reverts to the stable revision once the controller applies it", namespace, name)), nil
 }
 
 // Retry clears an abort so the rollout resumes from its current step.
@@ -58,7 +58,8 @@ func Retry(ctx context.Context, client dynamic.Interface, namespace, name string
 	if err := patchStatusThenSpec(ctx, client, namespace, name, []byte(retryPatch), nil); err != nil {
 		return OperationResult{}, err
 	}
-	return result("retry", namespace, name, fmt.Sprintf("Rollout %s/%s retried", namespace, name)), nil
+	return result("retry", namespace, name,
+		fmt.Sprintf("Rollout %s/%s: retry sent — the controller resumes the rollout from its current step", namespace, name)), nil
 }
 
 // Promote clears the current pause. The controller advances the step itself once
@@ -86,10 +87,18 @@ func Promote(ctx context.Context, client dynamic.Interface, namespace, name stri
 		statusPatch = []byte(fmt.Sprintf(clearPauseConditionsPatchWithStep, next))
 	}
 
-	if err := patchStatusThenSpec(ctx, client, namespace, name, statusPatch, unpauseSpecPatch(ro)); err != nil {
+	specPatch := unpauseSpecPatch(ro)
+	if err := patchStatusThenSpec(ctx, client, namespace, name, statusPatch, specPatch); err != nil {
 		return OperationResult{}, err
 	}
-	res := result("promote", namespace, name, fmt.Sprintf("Rollout %s/%s promoted", namespace, name))
+	if statusPatch == nil && specPatch == nil {
+		res := result("promote", namespace, name,
+			fmt.Sprintf("Rollout %s/%s has nothing paused to promote", namespace, name))
+		res.NoChange = true
+		return res, nil
+	}
+	res := result("promote", namespace, name,
+		fmt.Sprintf("Rollout %s/%s: promote sent — the controller advances the rollout once it applies it", namespace, name))
 	res.StepIndex = stepIndex
 	return res, nil
 }
@@ -102,17 +111,37 @@ func PromoteFull(ctx context.Context, client dynamic.Interface, namespace, name 
 		return OperationResult{}, err
 	}
 
+	// A rollback changes the pod template moments before this runs. Until the controller
+	// has observed it, it reconciles from a status copy that predates the patch and drops
+	// promoteFull, and the stable hashes below still describe the pre-rollback revision.
+	deadline := time.Now().Add(promoteFullSettleTimeout)
+	ro, err = awaitObservedSpec(ctx, client, namespace, name, ro, deadline)
+	if err != nil {
+		return OperationResult{}, err
+	}
+
 	// CLI parity: Argo omits the promoteFull patch when there is no new revision.
 	var statusPatch []byte
 	if !currentIsStable(ro) {
 		statusPatch = []byte(promoteFullPatch)
 	}
+	specPatch := unpauseSpecPatch(ro)
 
-	if err := patchStatusThenSpec(ctx, client, namespace, name, statusPatch, unpauseSpecPatch(ro)); err != nil {
+	if err := patchStatusThenSpec(ctx, client, namespace, name, statusPatch, specPatch); err != nil {
 		return OperationResult{}, err
 	}
 
-	repatchUntilPromoted(ctx, client, namespace, name)
+	if statusPatch == nil && specPatch == nil {
+		res := result("promote-full", namespace, name,
+			fmt.Sprintf("Rollout %s/%s is already at its final revision — there was nothing to skip", namespace, name))
+		res.NoChange = true
+		return res, nil
+	}
+
+	if !repatchUntilPromoted(ctx, client, namespace, name, deadline) {
+		return result("promote-full", namespace, name,
+			fmt.Sprintf("Rollout %s/%s: promotion sent, but the controller has not confirmed it — check the Rollout before relying on it", namespace, name)), nil
+	}
 
 	return result("promote-full", namespace, name,
 		fmt.Sprintf("Rollout %s/%s promoted to full — remaining steps, pauses, and analysis skipped", namespace, name)), nil
@@ -124,28 +153,56 @@ var (
 )
 
 // Reconciling a new template, the controller writes status from a copy read before the
-// promoteFull patch and silently drops it. Best effort: the rollback already landed.
-func repatchUntilPromoted(ctx context.Context, client dynamic.Interface, namespace, name string) {
-	deadline := time.Now().Add(promoteFullSettleTimeout)
+// promoteFull patch and silently drops it, so the patch is reapplied until the Rollout
+// reaches its final revision. Reports whether it got there: a caller that claims the
+// steps were skipped without this confirmation is guessing.
+func repatchUntilPromoted(ctx context.Context, client dynamic.Interface, namespace, name string, deadline time.Time) bool {
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
-			return
+			return false
 		case <-time.After(promoteFullSettleInterval):
 		}
 
 		ro, err := get(ctx, client, namespace, name)
 		if err != nil {
-			return
+			return false
 		}
 		if currentIsStable(ro) {
-			return
+			return true
 		}
 		if promoteFullPending(ro) {
 			continue
 		}
 		if err := patchStatusThenSpec(ctx, client, namespace, name, []byte(promoteFullPatch), unpauseSpecPatch(ro)); err != nil {
-			return
+			return false
+		}
+	}
+	return false
+}
+
+// awaitObservedSpec blocks until the controller has reconciled the template as it stands,
+// returning the Rollout as it looked then. Promoting earlier is discarded in silence.
+func awaitObservedSpec(ctx context.Context, client dynamic.Interface, namespace, name string, ro *unstructured.Unstructured, deadline time.Time) (*unstructured.Unstructured, error) {
+	for {
+		observed, err := controllerObservedSpec(ctx, client, ro)
+		if err != nil {
+			return nil, err
+		}
+		if observed {
+			return ro, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("Rollout %s/%s: promoting now would be discarded — check that the controller is running, then retry: %w",
+				namespace, name, ErrControllerNotCaughtUp)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(promoteFullSettleInterval):
+		}
+		if ro, err = get(ctx, client, namespace, name); err != nil {
+			return nil, err
 		}
 	}
 }
@@ -181,7 +238,7 @@ func SkipCurrentStep(ctx context.Context, client dynamic.Interface, namespace, n
 		return OperationResult{}, err
 	}
 	res := result("skip-step", namespace, name,
-		fmt.Sprintf("Rollout %s/%s advanced to step %d of %d", namespace, name, next, len(steps)))
+		fmt.Sprintf("Rollout %s/%s: step index moved to %d of %d", namespace, name, next, len(steps)))
 	res.StepIndex = &next
 	return res, nil
 }

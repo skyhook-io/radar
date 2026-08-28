@@ -158,12 +158,28 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 		logDiscoveryEnded(start, err)
 		return "", "", err
 	}
+
+	// In-cluster, the direct Service-address probe is the whole story: pods/
+	// portforward is normally denied, so falling back to a forward here only
+	// burns ~10s per candidate on an attempt that cannot open. Fail closed on the
+	// direct pass instead of chasing a port-forward Radar can't establish.
+	if c.inCluster {
+		log.Printf("[prometheus] no candidate reachable via direct probe (%s); in-cluster, not attempting port-forward", took(directStart))
+		c.mu.Lock()
+		c.discoveryService = nil
+		c.mu.Unlock()
+		if !discoveryDiagnosticsSuppressed(ctx) {
+			errorlog.Record("prometheus", "warning", "no Prometheus service reachable in cluster")
+		}
+		return "", "", ErrPrometheusNotFound
+	}
+
 	log.Printf("[prometheus] no candidate reachable via direct probe (%s); falling back to port-forward", took(directStart))
 
 	// Fallback: try port-forwarding candidates in priority order. This is the
 	// primary path off-cluster (where Service DNS can't resolve from the user's
-	// machine) and a backstop in-cluster. Serial by necessity — port-forwarding
-	// mutates the owner's shared forward state.
+	// machine). Serial by necessity — port-forwarding mutates the owner's shared
+	// forward state.
 	var lastErr error
 	for _, cand := range candidates {
 		// Bail promptly if the run was superseded mid-fallback (Reset / context

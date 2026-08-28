@@ -10,7 +10,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 	k8stesting "k8s.io/client-go/testing"
 )
 
@@ -44,6 +46,85 @@ func TestClusterUIDIdentity(t *testing.T) {
 	noUID := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system"}})
 	if got := clusterUIDIdentity(context.Background(), noUID); got != "" {
 		t.Errorf("empty UID must yield empty identity, got %q", got)
+	}
+}
+
+func TestClusterSafetyBindingFailsClosedWithoutInClusterIdentity(t *testing.T) {
+	clientMu.Lock()
+	oldBinding := contextBinding
+	oldMode := kubeconfigMode
+	oldName := contextName
+	oldClient := k8sClient
+	contextBinding = ""
+	kubeconfigMode = "in-cluster"
+	contextName = "in-cluster"
+	k8sClient = nil
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextBinding = oldBinding
+		kubeconfigMode = oldMode
+		contextName = oldName
+		k8sClient = oldClient
+		clientMu.Unlock()
+	})
+
+	if got := ClusterSafetyBinding(context.Background()); got != "" {
+		t.Fatalf("binding without a readable cluster UID = %q, want empty", got)
+	}
+	clusterUIDMu.Lock()
+	clusterUIDCache["in-cluster"] = "cluster-uid"
+	clusterUIDMu.Unlock()
+	t.Cleanup(func() { resetClusterUIDCaches("in-cluster") })
+	clientMu.Lock()
+	k8sClient = &kubernetes.Clientset{}
+	clientMu.Unlock()
+	display, binding := ClusterSafetySnapshot(context.Background())
+	if display != "cluster-uid" || binding != "cluster-uid" {
+		t.Fatalf("in-cluster safety snapshot = (%q, %q), want (%q, %q)", display, binding, "cluster-uid", "cluster-uid")
+	}
+
+	clientMu.Lock()
+	contextBinding = "kcb1_source"
+	kubeconfigMode = "single"
+	clientMu.Unlock()
+	if got := ClusterSafetyBinding(context.Background()); got != "kcb1_source" {
+		t.Fatalf("kubeconfig source binding = %q, want kcb1_source", got)
+	}
+	display, binding = ClusterSafetySnapshot(context.Background())
+	if display != "in-cluster" || binding != "kcb1_source" {
+		t.Fatalf("safety snapshot = (%q, %q), want (%q, %q)", display, binding, "in-cluster", "kcb1_source")
+	}
+}
+
+func TestClientSafetySnapshotsUseOneBinding(t *testing.T) {
+	sharedClient := &kubernetes.Clientset{}
+	clientMu.Lock()
+	oldClient := k8sClient
+	oldConfig := k8sConfig
+	oldBinding := contextBinding
+	k8sClient = sharedClient
+	k8sConfig = &rest.Config{Host: "https://management.example"}
+	contextBinding = "kcb1_management"
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		k8sClient = oldClient
+		k8sConfig = oldConfig
+		contextBinding = oldBinding
+		clientMu.Unlock()
+	})
+
+	client, binding := GetClientSafetySnapshot()
+	if client != sharedClient || binding != "kcb1_management" {
+		t.Fatalf("client safety snapshot = (%p, %q), want (%p, %q)", client, binding, sharedClient, "kcb1_management")
+	}
+	impersonated, impersonatedBinding, err := ImpersonatedClientSafetySnapshot("alice", []string{"operators"})
+	if err != nil {
+		t.Fatalf("ImpersonatedClientSafetySnapshot: %v", err)
+	}
+	if impersonated == nil || impersonatedBinding != "kcb1_management" {
+		t.Fatalf("impersonated safety snapshot = (%v, %q), want non-nil client and %q", impersonated, impersonatedBinding, "kcb1_management")
 	}
 }
 

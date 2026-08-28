@@ -26,6 +26,15 @@ describe('inClusterConsent', () => {
     expect(inClusterConsentGiven('prod')).toBe(false)
   })
 
+  it('does not trust consent stored under the visible-name key format', () => {
+    const store: Record<string, string> = { 'radar.inClusterConsent.prod': '1' }
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => (k in store ? store[k] : null),
+      setItem: (k: string, v: string) => { store[k] = v },
+    })
+    expect(inClusterConsentGiven('prod')).toBe(false)
+  })
+
   it('does not throw when localStorage is unavailable, and reports not-given', () => {
     vi.stubGlobal('localStorage', {
       getItem: () => { throw new Error('denied') },

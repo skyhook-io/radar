@@ -76,6 +76,31 @@ function renderDetail(props: Partial<ApplicationDetailProps> = {}) {
 }
 
 describe("ApplicationDetail shell", () => {
+  it("shows rollout activity in the application summary and workload matrix", () => {
+    const rolling: AppRow = {
+      ...app,
+      workloads: app.workloads.map((workload, index) => index === 0 ? {
+        ...workload,
+        rollout: {
+          phase: 'progressing',
+          active: true,
+          manual: false,
+          label: 'Rolling out',
+          detail: '2/3 updated · 3 available',
+          desired: 3,
+          updated: 2,
+          ready: 3,
+          available: 3,
+        },
+      } : workload),
+    }
+    const html = renderDetail({ app: rolling })
+
+    expect(html).toContain('Rolling out')
+    expect(html).toContain('1 workload affected · 4/4 ready')
+    expect(html).toContain('2/3 updated · 3 available')
+  })
+
   it("preserves the built-in issue surface when the host slot is omitted", () => {
     const html = renderDetail({ renderOverviewIssues: undefined });
 

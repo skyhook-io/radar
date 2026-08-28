@@ -72,6 +72,11 @@ func TestWorkloadSelectorMCPError(t *testing.T) {
 			),
 			want: "resource not found:",
 		},
+		{
+			name: "invalid selector is explicit",
+			err:  fmt.Errorf("rollout selector: %w", k8s.ErrWorkloadSelectorUnavailable),
+			want: "invalid job ci/nightly:",
+		},
 	}
 
 	for _, tt := range tests {

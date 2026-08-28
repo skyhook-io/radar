@@ -197,12 +197,39 @@ func TestScaleDownAfterPartialProgressLeavesNoOrphanApps(t *testing.T) {
 	if !res.Converged || count("Pod") != 200 {
 		t.Fatalf("pods=%d converged=%v want 200/true", count("Pod"), res.Converged)
 	}
-	// 200 pods / 200 per app = 1 app. Every other app kind must match — no orphans.
-	for _, kind := range []string{"Deployment", "Service", "ConfigMap"} {
-		if got := count(kind); got != 1 {
-			t.Fatalf("orphan %s skeletons: %s=%d want 1", kind, kind, got)
+	// 200 pods / 200 per app = 1 app. Every other app kind must match — no
+	// orphans. Assert against the client (authoritative truth): ScaleTo only
+	// paces the Deployment informer and converges on Pods, so the other kinds'
+	// informer stores may still be draining delete events when it returns.
+	assertClientCount := func(kind string, list func() (int, error)) {
+		n, err := list()
+		if err != nil {
+			t.Fatalf("list %s: %v", kind, err)
+		}
+		if n != 1 {
+			t.Fatalf("orphan %s skeletons in client: %d want 1", kind, n)
 		}
 	}
+	assertClientCount("Deployment", func() (int, error) {
+		l, e := client.AppsV1().Deployments("").List(ctx, metav1.ListOptions{})
+		return len(l.Items), e
+	})
+	assertClientCount("ReplicaSet", func() (int, error) {
+		l, e := client.AppsV1().ReplicaSets("").List(ctx, metav1.ListOptions{})
+		return len(l.Items), e
+	})
+	assertClientCount("Service", func() (int, error) {
+		l, e := client.CoreV1().Services("").List(ctx, metav1.ListOptions{})
+		return len(l.Items), e
+	})
+	assertClientCount("ConfigMap", func() (int, error) {
+		l, e := client.CoreV1().ConfigMaps("").List(ctx, metav1.ListOptions{})
+		return len(l.Items), e
+	})
+	assertClientCount("Secret", func() (int, error) {
+		l, e := client.CoreV1().Secrets("").List(ctx, metav1.ListOptions{})
+		return len(l.Items), e
+	})
 }
 
 // TestScaleUpCreateFailureThenScaleDownLeavesNoOrphanApps reproduces a scale-up

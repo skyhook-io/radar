@@ -50,8 +50,8 @@ func main() {
 	fileCfg := config.Load()
 
 	// Parse flags (defaults come from config file, falling back to hardcoded values)
-	kubeconfig := flag.String("kubeconfig", fileCfg.Kubeconfig, "Path to kubeconfig file (default: ~/.kube/config)")
-	kubeconfigDir := flag.String("kubeconfig-dir", fileCfg.KubeconfigDirsFlag(), "Comma-separated directories containing kubeconfig files (mutually exclusive with --kubeconfig)")
+	kubeconfig := flag.String("kubeconfig", fileCfg.Kubeconfig, "Path to primary kubeconfig file (default: ~/.kube/config)")
+	kubeconfigDir := flag.String("kubeconfig-dir", fileCfg.KubeconfigDirsFlag(), "Comma-separated directories containing additional kubeconfig files")
 	namespace := flag.String("namespace", fileCfg.Namespace, "Initial namespace filter (empty = all namespaces)")
 	namespaces := flag.String("namespaces", fileCfg.NamespacesFlag(), "Initial namespace filters as a comma-separated list (e.g. ns1,ns2,ns3). Use this when you can list resources in specific namespaces but cannot list namespaces cluster-wide.")
 	showVersion := flag.Bool("version", false, "Show version and exit")
@@ -66,6 +66,7 @@ func main() {
 	timelineRetention := flag.Duration("timeline-retention", fileCfg.TimelineRetentionOr(7*24*time.Hour), "How long to retain timeline events when --timeline-storage=sqlite (e.g. 168h, 720h). 0 disables age-based cleanup.")
 	timelineMaxSize := flag.String("timeline-max-size", fileCfg.TimelineMaxSizeOr("1Gi"), "Maximum SQLite timeline storage size before pruning oldest events (e.g. 800Mi, 8Gi). 0 disables size-based pruning.")
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
+	openCostCurrency := flag.String("opencost-currency", fileCfg.OpenCostCurrency, "Override the ISO 4217 currency label for OpenCost values (empty: auto-detect, then USD)")
 	mcpSessionToken := flag.Bool("mcp-session-token", false, "Require a generated per-session bearer token for the write-capable local MCP endpoint")
 	flag.Parse()
 
@@ -102,27 +103,33 @@ func main() {
 	// set GTK_THEME so WebKitGTK's prefers-color-scheme media query works.
 	applySystemTheme()
 
-	if *kubeconfig != "" && *kubeconfigDir != "" {
-		log.Printf("ERROR: --kubeconfig and --kubeconfig-dir are mutually exclusive")
-		os.Exit(1)
-	}
-	if *mcpSessionToken && !fileCfg.MCPEnabledOr(true) {
-		log.Printf("ERROR: --mcp-session-token requires MCP to be enabled")
-		os.Exit(1)
-	}
+	kubeconfigFlagSet := false
+	kubeconfigDirsFlagSet := false
 	namespaceFlagSet := false
 	namespacesFlagSet := false
+	openCostCurrencyFlagSet := false
 	flag.Visit(func(f *flag.Flag) {
 		switch f.Name {
+		case "kubeconfig":
+			kubeconfigFlagSet = true
+		case "kubeconfig-dir":
+			kubeconfigDirsFlagSet = true
 		case "namespace":
 			namespaceFlagSet = true
 		case "namespaces":
 			namespacesFlagSet = true
+		case "opencost-currency":
+			openCostCurrencyFlagSet = true
 		}
 	})
 	timelineMaxSizeBytes, err := config.ParseByteSize(*timelineMaxSize)
 	if err != nil {
 		log.Printf("ERROR: invalid --timeline-max-size %q: %v", *timelineMaxSize, err)
+		os.Exit(1)
+	}
+	normalizedOpenCostCurrency, err := config.NormalizeOpenCostCurrency(*openCostCurrency)
+	if err != nil {
+		log.Printf("ERROR: invalid --opencost-currency %q: %v", *openCostCurrency, err)
 		os.Exit(1)
 	}
 	resolvedPrometheusHeaders, err := app.ResolvePrometheusHeaders(fileCfg.PrometheusHeaders, fileCfg.PrometheusHeadersFromEnv)
@@ -139,6 +146,13 @@ func main() {
 		log.Printf("ERROR: --namespaces lists %d namespaces but the RBAC probe fanout cap is %d", len(resolvedNamespaces), k8s.MaxScopeCandidates)
 		os.Exit(1)
 	}
+	resolvedKubeconfig, resolvedKubeconfigDirs := app.ResolveKubeconfigSelection(
+		*kubeconfig, *kubeconfigDir, kubeconfigFlagSet, kubeconfigDirsFlagSet,
+	)
+	if *mcpSessionToken && !fileCfg.MCPEnabledOr(true) {
+		log.Printf("ERROR: --mcp-session-token requires MCP to be enabled")
+		os.Exit(1)
+	}
 
 	// The device flow and consent page must identify this build and target the
 	// same control plane the CLI would — Desktop starts the same shared server.
@@ -150,8 +164,8 @@ func main() {
 	}
 
 	cfg := app.AppConfig{
-		Kubeconfig:               *kubeconfig,
-		KubeconfigDirs:           app.ParseKubeconfigDirs(*kubeconfigDir),
+		Kubeconfig:               resolvedKubeconfig,
+		KubeconfigDirs:           resolvedKubeconfigDirs,
 		Namespace:                resolvedNamespace,
 		Namespaces:               resolvedNamespaces,
 		Port:                     fileCfg.PortOr(0), // Configured port, or random to avoid conflicts with CLI
@@ -168,6 +182,8 @@ func main() {
 		TimelineRetention:        *timelineRetention,
 		TimelineMaxSizeBytes:     timelineMaxSizeBytes,
 		PrometheusURL:            *prometheusURL,
+		OpenCostCurrency:         normalizedOpenCostCurrency,
+		OpenCostFlagSet:          openCostCurrencyFlagSet,
 		PrometheusHeaders:        resolvedPrometheusHeaders,
 		PrometheusHeadersFromEnv: fileCfg.PrometheusHeadersFromEnv,
 		Version:                  version,

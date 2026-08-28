@@ -13,6 +13,7 @@ export interface ConsentRequest {
 interface InClusterConsentDialogProps {
   open: boolean
   cluster?: string
+  clusterKey?: string
   namespace: string
   /** The requests this run will send, one per declared route. */
   requests?: ConsentRequest[]
@@ -85,7 +86,7 @@ function cluster(name?: string): string {
 // Confirms the mutating in-cluster reachability test before it spawns a Job/pod,
 // naming the cluster it lands in. Permission is enforced upstream (the button only
 // renders when the capability SSAR allows), so this is a safety confirm, not authz.
-export function InClusterConsentDialog({ open, cluster, namespace, requests, untestedCount, maxProbes, onClose, onConfirm }: InClusterConsentDialogProps) {
+export function InClusterConsentDialog({ open, cluster, clusterKey, namespace, requests, untestedCount, maxProbes, onClose, onConfirm }: InClusterConsentDialogProps) {
   const [dontAskAgain, setDontAskAgain] = useState(false)
 
   function handleClose() {
@@ -94,7 +95,7 @@ export function InClusterConsentDialog({ open, cluster, namespace, requests, unt
   }
 
   function handleConfirm() {
-    if (dontAskAgain && cluster) rememberInClusterConsent(cluster)
+    if (dontAskAgain && clusterKey) rememberInClusterConsent(clusterKey)
     setDontAskAgain(false)
     onConfirm()
   }
@@ -117,11 +118,11 @@ export function InClusterConsentDialog({ open, cluster, namespace, requests, unt
       cancelLabel="Cancel"
       variant="warning"
     >
-      {/* "Don't ask again" is stored per cluster. Without a cluster identity
+      {/* "Don't ask again" is stored per cluster source. Without a source identity
           there is nothing safe to key it on (one origin can front many
           clusters), so consent is never remembered - hide the checkbox rather
           than promise a persistence that doesn't stick. */}
-      {cluster ? (
+      {clusterKey ? (
         <label className="flex items-center gap-2 text-sm text-theme-text-secondary">
           <input
             type="checkbox"

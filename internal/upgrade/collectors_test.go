@@ -1,16 +1,37 @@
-package server
+package upgrade
 
 import (
 	"context"
 	"errors"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	ktesting "k8s.io/client-go/testing"
 )
+
+func TestSchedulingV1Alpha2ResourceFilter(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		resource metav1.APIResource
+		want     bool
+	}{
+		{name: "workload", resource: metav1.APIResource{Name: "workloads", Kind: "Workload", Verbs: metav1.Verbs{"get", "list"}}, want: true},
+		{name: "pod group", resource: metav1.APIResource{Name: "podgroups", Kind: "PodGroup", Verbs: metav1.Verbs{"list"}}, want: true},
+		{name: "status subresource", resource: metav1.APIResource{Name: "workloads/status", Kind: "Workload", Verbs: metav1.Verbs{"get", "patch"}}},
+		{name: "not listable", resource: metav1.APIResource{Name: "workloads", Kind: "Workload", Verbs: metav1.Verbs{"get"}}, want: true},
+		{name: "unrelated kind", resource: metav1.APIResource{Name: "priorities", Kind: "Priority", Verbs: metav1.Verbs{"list"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isSchedulingV1Alpha2Resource(tc.resource); got != tc.want {
+				t.Fatalf("isSchedulingV1Alpha2Resource(%+v) = %v, want %v", tc.resource, got, tc.want)
+			}
+		})
+	}
+}
 
 var testUpgradeSourceResources = []upgradeSourceResource{
 	{gvr: schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}, namespaced: true},

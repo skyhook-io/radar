@@ -1,8 +1,13 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ReactNode } from 'react'
 import { describe, expect, it, vi } from 'vitest'
+import type { ContextInfo } from '../types'
 
 vi.stubGlobal('window', { location: { host: 'localhost:9280' } })
+
+const useContextsMock = vi.hoisted(() => vi.fn(
+  (): { data: ContextInfo[] | undefined } => ({ data: undefined }),
+))
 
 vi.mock('@skyhook-io/k8s-ui', () => ({
   ClusterName: ({ name }: { name: string }) => <span>{name}</span>,
@@ -10,6 +15,7 @@ vi.mock('@skyhook-io/k8s-ui', () => ({
 }))
 vi.mock('../api/client', () => ({
   useAuthMe: () => ({ data: { authEnabled: false } }),
+  useContexts: useContextsMock,
 }))
 vi.mock('./ContextSwitcher', () => ({
   ContextSwitcher: () => <button>Switch context</button>,
@@ -72,6 +78,34 @@ describe('ConnectionErrorView authentication guidance', () => {
     expect(markup).not.toContain('aws sso login')
   })
 
+  it('uses the original context for collision-qualified auth guidance', () => {
+    const original = 'arn:aws:eks:us-east-1:123456789012:cluster/prod'
+    const hints = selectConnectionHints('auth', `${original} (secondary)`, original)
+
+    expect(hints?.title).toBe('EKS Authentication Failed')
+    expect(hints?.fallbackCommand?.command).toBe(
+      'aws eks update-kubeconfig --name prod --region us-east-1',
+    )
+  })
+
+  it('wires the current context original name into auth guidance', () => {
+    const original = 'arn:aws:eks:us-east-1:123456789012:cluster/prod'
+    useContextsMock.mockReturnValueOnce({
+      data: [{
+        name: `${original} (secondary)`,
+        originalName: original,
+        cluster: original,
+        user: 'prod',
+        namespace: '',
+        isCurrent: true,
+      }],
+    })
+
+    const markup = renderError('auth', `${original} (secondary)`)
+    expect(markup).toContain('update-kubeconfig')
+    expect(markup).toContain('us-east-1')
+  })
+
   it('renders placeholder AKS commands without a run affordance', () => {
     const markup = renderError('auth-rejected', 'clusterUser_platform_prod')
 
@@ -84,5 +118,24 @@ describe('ConnectionErrorView authentication guidance', () => {
     const markup = renderToStaticMarkup(<CopyableCommand command="placeholder" />)
 
     expect(markup).not.toContain('aria-label="Run command in terminal"')
+  })
+})
+
+describe('ConnectionErrorView kubeconfig guidance', () => {
+  it('keeps the actionable error and context switch visible for a broken context', () => {
+    const markup = renderError('config', 'prod')
+
+    expect(markup).toContain('Cannot Load Cluster Configuration')
+    expect(markup).toContain('Kubeconfig Problem')
+    expect(markup).toContain('aria-expanded="false"')
+    expect(markup).toContain('id="connection-raw-error"')
+    expect(markup).toContain('safe error')
+    expect(markup).toContain('Switch context')
+  })
+
+  it('does not offer context switching when no context was loaded', () => {
+    const markup = renderError('config', '')
+
+    expect(markup).not.toContain('Switch context')
   })
 })

@@ -36,6 +36,7 @@ All fixtures live in namespace `demo-rollouts`.
 | `success-rate-fail` | AnalysisTemplate | Web metric returning `0` → Failed, which aborts the Rollout. |
 | `radar-demo-smoke-test` | ClusterAnalysisTemplate | Job provider, cluster-scoped — covers the cluster-scoped analysis kind. |
 | `metric-endpoint` | Deployment + Service + ConfigMap | nginx serving three static JSON files. Lets the web metric provider produce every verdict with no Prometheus in the cluster. |
+| `rollout-visibility` | Deployment + StatefulSet + DaemonSet | One grouped Application with a paused Deployment, OnDelete StatefulSet and DaemonSet waiting for manual Pod restarts, and a Deployment whose updated revision fails image pull while its old revision stays available. Covers Applications, resource tables, drawers, and full WorkloadView. |
 
 ## Why a static JSON endpoint
 
