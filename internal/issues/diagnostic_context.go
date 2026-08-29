@@ -504,6 +504,9 @@ func addAdmissionWebhookContext(b *diagnosticContextBuilder, root Issue, edges *
 	if len(configRefs) == 0 {
 		return
 	}
+	if missingServiceRoot && !failClosed {
+		return
+	}
 
 	message := "This Service is the backend for a fail-open admission webhook; admission continues while its validation or mutation is bypassed."
 	if failClosed {
@@ -511,10 +514,7 @@ func addAdmissionWebhookContext(b *diagnosticContextBuilder, root Issue, edges *
 	}
 	if missingServiceRoot {
 		backend := refs[0]
-		message = fmt.Sprintf("A fail-open admission webhook declared by this configuration points to missing Service %q in namespace %q; admission continues while its validation or mutation is bypassed.", backend.ServiceName, backend.ServiceNamespace)
-		if failClosed {
-			message = fmt.Sprintf("A fail-closed admission webhook declared by this configuration points to missing Service %q in namespace %q; matching admission requests are blocked.", backend.ServiceName, backend.ServiceNamespace)
-		}
+		message = fmt.Sprintf("A fail-closed admission webhook declared by this configuration points to missing Service %q in namespace %q; matching admission requests are blocked.", backend.ServiceName, backend.ServiceNamespace)
 	}
 
 	type matchedGroup struct {
@@ -564,6 +564,9 @@ func addAdmissionWebhookContext(b *diagnosticContextBuilder, root Issue, edges *
 		message += " The blocked workload also backs this Service, creating a startup deadlock; restore an independent ready backend or make bootstrap admission fail-open."
 	}
 	sortIssueRefs(related)
+	if missingServiceRoot && len(related) == 0 {
+		return
+	}
 	recordIncidentEdges(edges, root, factAdmissionWebhook, issuesapi.ConfidenceHigh, edgeIDs)
 	factRefs := configRefs
 	if missingServiceRoot {

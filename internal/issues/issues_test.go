@@ -270,11 +270,12 @@ func TestComposeMissingAdmissionWebhookServiceCorrelation(t *testing.T) {
 		!strings.Contains(webhookFact.Message, `Service "missing-webhook" in namespace "hooks"`) {
 		t.Fatalf("missing webhook root fact = %+v, want exact backend identity, one symptom, and no dead-link ref", webhookFact)
 	}
-	if unrelatedRoot.DiagnosticContext != nil {
-		for _, fact := range unrelatedRoot.DiagnosticContext.Facts {
-			if fact.Type == factAdmissionWebhook && len(fact.RelatedIssues) != 0 {
-				t.Fatalf("different missing backend fingerprint was correlated: %+v", fact)
-			}
+	if unrelatedRoot.DiagnosticContext == nil {
+		t.Fatalf("unrelated missing backend lost its explicit-reference context: %+v", unrelatedRoot)
+	}
+	for _, fact := range unrelatedRoot.DiagnosticContext.Facts {
+		if fact.Type == factAdmissionWebhook {
+			t.Fatalf("missing backend without an observed blocked workload should not repeat its cause as an admission fact: %+v", fact)
 		}
 	}
 }
@@ -328,14 +329,15 @@ func TestMissingAdmissionWebhookServiceFailOpenHasNoIncidentEdge(t *testing.T) {
 			continue
 		}
 		foundRoot = true
-		var fact issuesapi.DiagnosticFact
+		foundExplicitReference := false
 		for _, candidate := range issue.DiagnosticContext.Facts {
 			if candidate.Type == factAdmissionWebhook {
-				fact = candidate
+				t.Fatalf("fail-open missing-Service root should not repeat its cause as an admission fact: %+v", candidate)
 			}
+			foundExplicitReference = foundExplicitReference || candidate.Type == factExplicitReference
 		}
-		if !strings.Contains(fact.Message, "fail-open") || !strings.Contains(fact.Message, `Service "audit-webhook" in namespace "hooks"`) || len(fact.RelatedIssues) != 0 {
-			t.Fatalf("fail-open missing-Service fact = %+v", fact)
+		if !foundExplicitReference {
+			t.Fatalf("fail-open missing-Service root lost its explicit-reference context: %+v", issue.DiagnosticContext)
 		}
 	}
 	if !foundRoot {
