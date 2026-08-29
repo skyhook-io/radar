@@ -97,6 +97,25 @@ describe('getWorkloadCostState', () => {
     expect(getWorkloadCostState(current, trend, false)).toBe('partial_missing_history')
   })
 
+  it('does not let unsupported history mask current loading or errors', () => {
+    const trend: OpenCostWorkloadTrendResponse = {
+      available: false,
+      source: 'kubecost',
+      reason: 'history_unsupported',
+      currency: 'USD',
+      namespace: 'default',
+      kind: 'StatefulSet',
+      name: 'queue',
+      range: '24h',
+    }
+
+    expect(getWorkloadCostState(undefined, trend, { currentLoading: true })).toBe('loading')
+    expect(getWorkloadCostState(undefined, trend, { currentError: true })).toBe('load_error')
+    expect(
+      getWorkloadCostState(undefined, trend, { currentError: new ApiError('denied', 403) }),
+    ).toBe('access_denied')
+  })
+
   it('keeps current cost visible while historical owner metrics are still loading', () => {
     const current: OpenCostWorkloadDetailResponse = {
       available: true,

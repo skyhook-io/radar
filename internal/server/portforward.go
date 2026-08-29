@@ -367,12 +367,12 @@ func findPodForService(ctx context.Context, client kubernetes.Interface, namespa
 	}
 
 	// Find the matching service port entry
-	var targetPort intstr.IntOrString
+	var servicePortSpec corev1.ServicePort
 	var scheme string
 	found := false
 	for _, port := range svc.Spec.Ports {
 		if int(port.Port) == servicePort {
-			targetPort = port.TargetPort
+			servicePortSpec = port
 			appProto := ""
 			if port.AppProtocol != nil {
 				appProto = *port.AppProtocol
@@ -408,23 +408,18 @@ func findPodForService(ctx context.Context, client kubernetes.Interface, namespa
 		return "", 0, "", fmt.Errorf("no running pod found")
 	}
 
-	// Named targetPort: resolve against running pods by looking up container port names
-	if targetPort.Type == intstr.String && targetPort.StrVal != "" {
+	if servicePortSpec.TargetPort.Type == intstr.String && servicePortSpec.TargetPort.StrVal != "" {
 		for _, pod := range pods.Items {
 			if pod.Status.Phase == corev1.PodRunning {
-				if resolved, ok := resolveNamedPort(&pod, targetPort.StrVal); ok {
+				if resolved, ok := k8score.ResolveServiceTargetPort(servicePortSpec, pod.Spec.Containers); ok {
 					return pod.Name, resolved, scheme, nil
 				}
 			}
 		}
-		return "", 0, "", fmt.Errorf("no running pod found with named port %q", targetPort.StrVal)
+		return "", 0, "", fmt.Errorf("no running pod found with named port %q", servicePortSpec.TargetPort.StrVal)
 	}
 
-	// Numeric targetPort: use the value, or default to the service port if unset
-	containerPort := servicePort
-	if targetPort.IntVal > 0 {
-		containerPort = int(targetPort.IntVal)
-	}
+	containerPort, _ := k8score.ResolveServiceTargetPort(servicePortSpec, nil)
 
 	// Return the first running pod — the service spec is authoritative for the port,
 	// and containers can listen on ports without declaring them in the pod spec.
@@ -435,18 +430,6 @@ func findPodForService(ctx context.Context, client kubernetes.Interface, namespa
 	}
 
 	return "", 0, "", fmt.Errorf("no running pod found")
-}
-
-// resolveNamedPort looks up a named port in a pod's containers and returns the container port number.
-func resolveNamedPort(pod *corev1.Pod, portName string) (int, bool) {
-	for _, container := range pod.Spec.Containers {
-		for _, p := range container.Ports {
-			if p.Name == portName {
-				return int(p.ContainerPort), true
-			}
-		}
-	}
-	return 0, false
 }
 
 // validatePodPort checks if the pod actually exposes the requested port and

@@ -139,6 +139,8 @@ export function SettingsDialog({
   const [loadError, setLoadError] = useState<string | null>(null)
   const [section, setSection] = useState<SettingsSectionId>('overview')
   const [confirmingClose, setConfirmingClose] = useState(false)
+  const [costCredentialDirty, setCostCredentialDirty] = useState(false)
+  const [costDraftReset, setCostDraftReset] = useState(0)
   const { data: argoSectionStatus, refetch: refetchArgoSectionStatus } = useArgoStatus(
     open && section === 'argocd'
   )
@@ -178,6 +180,11 @@ export function SettingsDialog({
     edN.timelineDbPath !== svN.timelineDbPath ||
     edN.historyLimit !== svN.historyLimit
   const costDirty = edN.opencostCurrency !== svN.opencostCurrency
+  const costSourceDirty =
+    (editedConfig.costSource ?? 'auto') !== (configData?.file.costSource ?? 'auto') ||
+    (editedConfig.kubecostUrl ?? '').trim() !== (configData?.file.kubecostUrl ?? '').trim() ||
+    (editedConfig.kubecostClusterId ?? '').trim() !== (configData?.file.kubecostClusterId ?? '').trim()
+  const costIntegrationDirty = costSourceDirty || costCredentialDirty
   // Merged-pane dirty for the flat nav (Connection = cluster+server, Advanced = mcp+timeline).
   const connectionDirty = clusterDirty || serverDirty
   const advancedDirty = mcpDirty || timelineDirty
@@ -190,6 +197,8 @@ export function SettingsDialog({
     setSaveMessage(null)
     setLoadError(null)
     setConfirmingClose(false)
+    setCostCredentialDirty(false)
+    setCostDraftReset((current) => current + 1)
     setAiSaved(false)
     setAiDraft({
       agent: diag.selectedAgent,
@@ -310,6 +319,8 @@ export function SettingsDialog({
     // what's saved.
     if (!configData) return
     setEditedConfig(configData.file)
+    setCostCredentialDirty(false)
+    setCostDraftReset((current) => current + 1)
     setSaveMessage(null)
   }, [configData])
 
@@ -318,12 +329,22 @@ export function SettingsDialog({
     if (ok) onClose()
   }, [saveConfig, onClose])
 
+  const reviewCostDraft = useCallback(() => {
+    setConfirmingClose(false)
+    setSection('cost')
+    requestAnimationFrame(() => {
+      const applyButton = document.getElementById('cost-apply-source')
+      applyButton?.scrollIntoView({ block: 'center' })
+      applyButton?.focus()
+    })
+  }, [])
+
   // Close guard: a pending startup edit prompts an inline confirm rather than
   // silently discarding. An unsaved AI draft is re-derivable, so it's fine to
   // drop it on close.
   const requestCloseRef = useRef<() => void>(() => {})
   requestCloseRef.current = () => {
-    if (canEditConfig && configDirty) setConfirmingClose(true)
+    if (canEditConfig && (configDirty || costIntegrationDirty)) setConfirmingClose(true)
     else onClose()
   }
 
@@ -371,13 +392,13 @@ export function SettingsDialog({
     { id: 'perms', label: 'My permissions', icon: Shield, ownerOnly: false, dirty: false },
     { id: 'connection', label: 'Connection', icon: Boxes, ownerOnly: true, dirty: connectionDirty },
     { id: 'prometheus', label: 'Metrics', icon: Activity, ownerOnly: true, dirty: false },
-    { id: 'cost', label: 'Cost', icon: Coins, ownerOnly: true, dirty: costDirty },
+    { id: 'cost', label: 'Cost', icon: Coins, ownerOnly: true, dirty: costDirty || costIntegrationDirty },
     { id: 'argocd', label: 'Argo CD', icon: GitBranch, ownerOnly: true, dirty: false },
     { id: 'ai', label: 'AI diagnose', icon: Sparkles, ownerOnly: false, dirty: aiDirty },
     { id: 'advanced', label: 'Advanced', icon: SlidersHorizontal, ownerOnly: true, dirty: advancedDirty },
   ]
 
-  const showFooter = canEditConfig && (confirmingClose || configDirty || !!saveMessage)
+  const showFooter = canEditConfig && (confirmingClose || configDirty || costIntegrationDirty || !!saveMessage)
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -560,7 +581,7 @@ export function SettingsDialog({
               title="Cost"
               caption={configData?.kubecostEnvManaged
                 ? 'Source is managed by the deployment. Currency saves with the footer.'
-                : 'Source applies immediately. Currency saves with the footer.'}
+                : 'Test and apply source changes here. Currency saves with the footer.'}
               live
               locked={!canEditConfig}
             >
@@ -572,13 +593,17 @@ export function SettingsDialog({
                 apiKeySet={configData?.kubecostApiKeySet ?? false}
                 sourceEnvManaged={configData?.kubecostEnvManaged ?? false}
                 sourceEnvError={configData?.kubecostEnvError}
+                draftDirty={costIntegrationDirty}
+                resetVersion={costDraftReset}
                 managed={configData?.openCostCurrencyManaged ?? false}
                 effectiveCurrency={configData?.effective.opencostCurrency ?? ''}
                 onChange={(value) => updateConfigField('opencostCurrency', value || undefined)}
                 onChangeSource={(value) => updateConfigField('costSource', value)}
                 onChangeUrl={(value) => updateConfigField('kubecostUrl', value || undefined)}
                 onChangeClusterId={(value) => updateConfigField('kubecostClusterId', value || undefined)}
+                onCredentialDirtyChange={setCostCredentialDirty}
                 onApplied={({ source, url, clusterId, apiKeySet }) => {
+                  setCostCredentialDirty(false)
                   setEditedConfig((prev) => ({ ...prev, costSource: source, kubecostUrl: url || undefined, kubecostClusterId: clusterId || undefined }))
                   setConfigData((prev) => prev ? {
                     ...prev,
@@ -721,7 +746,13 @@ export function SettingsDialog({
           <div className="flex items-center justify-between gap-3 px-4 py-2.5">
             {confirmingClose ? (
               <>
-                <span className="text-xs text-theme-text-secondary">Unsaved changes.</span>
+                <span className="text-xs text-theme-text-secondary">
+                  {costIntegrationDirty && configDirty
+                    ? 'Cost source changes are not applied, and other changes are unsaved.'
+                    : costIntegrationDirty
+                      ? 'Cost source changes have not been applied.'
+                      : 'Unsaved changes.'}
+                </span>
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => setConfirmingClose(false)}
@@ -737,14 +768,29 @@ export function SettingsDialog({
                   >
                     Discard
                   </button>
-                  <button
-                    onClick={handleSaveAndClose}
-                    disabled={saving}
-                    className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
-                  >
-                    {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                    Save
-                  </button>
+                  {costIntegrationDirty && (
+                    <button
+                      onClick={reviewCostDraft}
+                      className={clsx(
+                        'flex items-center gap-1.5 rounded-md px-4 py-1.5 text-sm font-medium',
+                        configDirty
+                          ? 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary'
+                          : 'btn-brand',
+                      )}
+                    >
+                      Review Cost
+                    </button>
+                  )}
+                  {configDirty && (
+                    <button
+                      onClick={costIntegrationDirty ? saveConfig : handleSaveAndClose}
+                      disabled={saving}
+                      className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
+                    >
+                      {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                      {costIntegrationDirty ? 'Save other changes' : 'Save'}
+                    </button>
+                  )}
                 </div>
               </>
             ) : (
@@ -753,7 +799,7 @@ export function SettingsDialog({
                   <Tooltip content="Discard unsaved changes and revert to the last saved values">
                     <button
                       onClick={discardChanges}
-                      disabled={saving || !configDirty}
+                      disabled={saving || (!configDirty && !costIntegrationDirty)}
                       className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50 disabled:pointer-events-none"
                     >
                       <RotateCcw className="w-3.5 h-3.5" />
@@ -766,14 +812,31 @@ export function SettingsDialog({
                     </span>
                   )}
                 </div>
-                <button
-                  onClick={saveConfig}
-                  disabled={saving || !configDirty}
-                  className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
-                >
-                  {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                  Save
-                </button>
+                <div className="flex items-center gap-2">
+                  {costIntegrationDirty && (
+                    <button
+                      onClick={reviewCostDraft}
+                      className={clsx(
+                        'flex items-center gap-1.5 rounded-md px-4 py-1.5 text-sm font-medium',
+                        configDirty
+                          ? 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary'
+                          : 'btn-brand',
+                      )}
+                    >
+                      Review Cost
+                    </button>
+                  )}
+                  {configDirty && (
+                    <button
+                      onClick={saveConfig}
+                      disabled={saving}
+                      className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
+                    >
+                      {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                      Save
+                    </button>
+                  )}
+                </div>
               </>
             )}
           </div>
@@ -1231,12 +1294,15 @@ function CostSection({
   apiKeySet,
   sourceEnvManaged,
   sourceEnvError,
+  draftDirty,
+  resetVersion,
   managed,
   effectiveCurrency,
   onChange,
   onChangeSource,
   onChangeUrl,
   onChangeClusterId,
+  onCredentialDirtyChange,
   onApplied,
 }: {
   currency: string
@@ -1246,18 +1312,34 @@ function CostSection({
   apiKeySet: boolean
   sourceEnvManaged: boolean
   sourceEnvError?: string
+  draftDirty: boolean
+  resetVersion: number
   managed: boolean
   effectiveCurrency: string
   onChange: (value: string) => void
   onChangeSource: (value: 'auto' | 'prometheus' | 'kubecost') => void
   onChangeUrl: (value: string) => void
   onChangeClusterId: (value: string) => void
+  onCredentialDirtyChange: (dirty: boolean) => void
   onApplied: (value: { source: 'auto' | 'prometheus' | 'kubecost'; url: string; clusterId: string; apiKeySet: boolean }) => void
 }) {
   const [apply, setApply] = useState<ApplyState>({ status: 'idle' })
   const [apiKey, setApiKey] = useState('')
   const [apiKeyTouched, setApiKeyTouched] = useState(false)
   const [apiKeyCleared, setApiKeyCleared] = useState(false)
+  const apiKeyWillBeUsed = !apiKeyCleared && ((apiKeyTouched && apiKey !== '') || apiKeySet)
+  const apiKeyUsesPlainHTTP = apiKeyWillBeUsed && /^http:\/\//i.test(url.trim())
+
+  useEffect(() => {
+    setApiKey('')
+    setApiKeyTouched(false)
+    setApiKeyCleared(false)
+    setApply({ status: 'idle' })
+  }, [resetVersion])
+
+  useEffect(() => {
+    onCredentialDirtyChange(apiKeyTouched || apiKeyCleared)
+  }, [apiKeyCleared, apiKeyTouched, onCredentialDirtyChange])
 
   const applySource = async () => {
     setApply({ status: 'applying' })
@@ -1323,31 +1405,34 @@ function CostSection({
       )}
 
       <div>
-        <label className="mb-1 block text-sm font-medium text-theme-text-primary">Cost source</label>
+        <label className="mb-1 block text-sm font-medium text-theme-text-primary">Cost data source</label>
         <p className="mb-1 text-xs text-theme-text-tertiary">
-          Auto keeps working OpenCost metrics from a PromQL-compatible backend, then tries a local
-          Kubecost 3 Aggregator when those metrics are absent.
+          Automatic uses existing OpenCost metrics first, then Kubecost. Leave it selected unless
+          you need to force one source.
         </p>
         <select
           value={source}
           onChange={(event) => { onChangeSource(event.target.value as typeof source); setApply({ status: 'idle' }) }}
           disabled={sourceEnvManaged}
           className="w-full rounded-md border border-theme-border bg-theme-elevated px-3 py-1.5 text-sm text-theme-text-primary focus:border-skyhook-500 focus:outline-none disabled:opacity-60"
-          aria-label="Cost source"
+          aria-label="Cost data source"
         >
-          <option value="auto">Auto (recommended)</option>
-          <option value="prometheus">OpenCost metrics (PromQL)</option>
-          <option value="kubecost">Kubecost Aggregator</option>
+          <option value="auto">Automatic (recommended)</option>
+          <option value="prometheus">OpenCost metrics only</option>
+          <option value="kubecost">Kubecost only</option>
         </select>
       </div>
 
       {source !== 'prometheus' && (
         <div className="space-y-3 rounded-lg border border-theme-border bg-theme-base/40 p-3">
+          <p className="text-xs font-medium text-theme-text-secondary">
+            {source === 'auto' ? 'Kubecost fallback' : 'Kubecost connection'}
+          </p>
           <div>
-            <label className="mb-1 block text-sm font-medium text-theme-text-primary">Kubecost Aggregator URL</label>
+            <label className="mb-1 block text-sm font-medium text-theme-text-primary">Kubecost URL (advanced)</label>
             <p className="mb-1 text-xs text-theme-text-tertiary">
-              Leave blank to discover a local Kubecost 3 Aggregator on port 9004. Agent-only or
-              federated clusters need the central Aggregator URL.
+              Leave blank when Kubecost runs in this cluster. Enter the central URL only for an
+              agent-only or federated Kubecost setup.
             </p>
             <Input
               value={url}
@@ -1360,8 +1445,8 @@ function CostSection({
           <div>
             <label className="mb-1 block text-sm font-medium text-theme-text-primary">Cluster ID</label>
             <p className="mb-1 text-xs text-theme-text-tertiary">
-              Usually detected from the FinOps Agent&apos;s <code>CLUSTER_ID</code>. Enter it when the
-              value is indirect, ambiguous, or unavailable to Radar.
+              Usually detected automatically. Set it only if detection fails or the Kubecost
+              server contains data for more than one cluster.
             </p>
             <Input
               value={clusterId}
@@ -1372,10 +1457,11 @@ function CostSection({
             />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-theme-text-primary">API key</label>
+            <label className="mb-1 block text-sm font-medium text-theme-text-primary">API key (optional)</label>
             <p className="mb-1 text-xs text-theme-text-tertiary">
-              Optional Kubecost service-account key sent as <code>X-API-KEY</code>. The stored value
-              is write-only.{apiKeySet && !apiKeyCleared ? ' A key is configured.' : ''}
+              Only needed when Kubecost requires authentication. Radar stores it unencrypted in this
+              instance&apos;s owner-only config file and never shows it again. For shared deployments, use
+              a Kubernetes Secret through Helm.{apiKeySet && !apiKeyCleared ? ' A key is configured.' : ''}
             </p>
             <div className="flex items-center gap-2">
               <Input
@@ -1396,19 +1482,25 @@ function CostSection({
                 </button>
               )}
             </div>
+            {apiKeyUsesPlainHTTP && (
+              <p className="mt-1 flex items-center gap-1 text-xs text-warning-text">
+                <AlertTriangle className="h-3 w-3 shrink-0" /> The API key will be sent over unencrypted HTTP. Use HTTPS unless this is a trusted private network.
+              </p>
+            )}
           </div>
         </div>
       )}
 
       {!sourceEnvManaged && <div>
         <button
+          id="cost-apply-source"
           type="button"
           onClick={applySource}
           disabled={apply.status === 'applying'}
           className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium btn-brand disabled:opacity-50"
         >
           {apply.status === 'applying' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plug className="h-3.5 w-3.5" />}
-          Apply source
+          Test &amp; apply
         </button>
         {apply.status === 'connected' && (
           <p className="mt-1 flex items-center gap-1 text-xs text-green-600 dark:text-green-400/80">
@@ -1418,6 +1510,11 @@ function CostSection({
         {apply.status === 'failed' && (
           <p className="mt-1 text-xs text-red-600 dark:text-red-400/80">{apply.error}</p>
         )}
+        {draftDirty && apply.status !== 'applying' && (
+          <p className="mt-1 flex items-center gap-1 text-xs text-warning-text">
+            <AlertTriangle className="h-3 w-3" /> Unapplied source changes
+          </p>
+        )}
       </div>}
 
       <div className="border-t border-theme-border-subtle pt-4">
@@ -1425,9 +1522,9 @@ function CostSection({
           Currency override
         </label>
         <p className="mb-1 text-xs text-theme-text-tertiary">
-          Choose a currency, or use Auto to read <code>currencyCode</code> or{' '}
-          <code>DISPLAY_CURRENCY</code> from an active OpenCost/Kubecost installation, then fall back
-          to USD. Radar labels values but does not convert them.
+          Auto reads currency from cluster-discovered OpenCost or the active Kubecost source, and
+          otherwise uses USD. A manually configured Prometheus URL disables OpenCost currency
+          detection. Radar changes only the label; it does not convert amounts.
         </p>
         <SelectMenu
           value={currency}

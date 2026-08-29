@@ -44,7 +44,6 @@ func (s *Server) handleOpenCostWorkload(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		resp.Reason = internalopencost.ConnectionFailureReason(err)
 		resp.Currency = s.resolvedOpenCostCurrency()
-		resp.Source = "kubecost"
 		s.writeJSON(w, resp)
 		return
 	}
@@ -53,7 +52,7 @@ func (s *Server) handleOpenCostWorkload(w http.ResponseWriter, r *http.Request) 
 			Currency: s.resolvedOpenCostCurrency(), ClusterID: connection.ClusterID, Owners: internalopencost.BuildPodOwnerLookup(namespace),
 		})
 		if err != nil {
-			log.Printf("[opencost] Kubecost workload cost failed for %s/%s: %v", namespace, name, err)
+			log.Printf("[opencost] Kubecost workload cost failed for %s/%s: %s", sanitizeForLog(namespace), sanitizeForLog(name), sanitizeForLog(err.Error()))
 			resp.Reason = internalopencost.ConnectionFailureReason(err)
 			resp.Currency = s.resolvedOpenCostCurrency()
 			resp.Source = "kubecost"
@@ -64,9 +63,6 @@ func (s *Server) handleOpenCostWorkload(w http.ResponseWriter, r *http.Request) 
 		result.Currency = s.resolvedOpenCostCurrency()
 		result.Source = "kubecost"
 		result.DataThrough = workloads.DataThrough
-		if result.Current != nil {
-			result.Current.Replicas = desiredReplicas
-		}
 		s.writeJSON(w, result)
 		return
 	}
@@ -120,7 +116,6 @@ func (s *Server) handleOpenCostWorkloadTrend(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		resp.Reason = internalopencost.ConnectionFailureReason(err)
 		resp.Currency = s.resolvedOpenCostCurrency()
-		resp.Source = "kubecost"
 		s.writeJSON(w, resp)
 		return
 	}

@@ -101,11 +101,15 @@ func TestOpenCostApplicationUsesLatestKubecostDataThrough(t *testing.T) {
 
 	kubecost := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		filter := r.URL.Query().Get("filter")
+		if !strings.Contains(filter, `cluster:"cluster-a"`) {
+			_, _ = w.Write([]byte(`{"code":200,"data":[{"cluster-a":{"properties":{"cluster":"cluster-a"}}}]}`))
+			return
+		}
 		switch {
-		case strings.Contains(filter, `namespace:"default"`):
-			_, _ = w.Write([]byte(`{"code":200,"data":[{"default":{"properties":{"cluster":"cluster-a","namespace":"default","pod":"nginx-abc","controllerKind":"deployment","controller":"nginx"},"start":"2026-08-26T09:00:00+0300","end":"2026-08-26T10:00:00+0300","cpuCost":1}}]}`))
 		case strings.Contains(filter, `namespace:"broken"`):
 			_, _ = w.Write([]byte(`{"code":200,"data":[{"broken":{"properties":{"cluster":"cluster-a","namespace":"broken","pod":"stuck-abc","controllerKind":"deployment","controller":"stuck-app"},"start":"2026-08-26T07:30:00Z","end":"2026-08-26T08:30:00Z","cpuCost":1}}]}`))
+		case strings.Contains(filter, `namespace:"default"`):
+			_, _ = w.Write([]byte(`{"code":200,"data":[{"default":{"properties":{"cluster":"cluster-a","namespace":"default","pod":"nginx-abc","controllerKind":"deployment","controller":"nginx"},"start":"2026-08-26T09:00:00+0300","end":"2026-08-26T10:00:00+0300","cpuCost":1}}]}`))
 		default:
 			_, _ = w.Write([]byte(`{"code":200,"data":[{"cluster-a":{"properties":{"cluster":"cluster-a"}}}]}`))
 		}

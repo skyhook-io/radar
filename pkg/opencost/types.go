@@ -12,6 +12,7 @@ const (
 	ReasonSourceUnavailable  = "source_unavailable"
 	ReasonAuthentication     = "authentication_error"
 	ReasonConfigMismatch     = "configuration_mismatch"
+	ReasonDeploymentConfig   = "deployment_configuration_error"
 	ReasonHistoryUnsupported = "history_unsupported"
 )
 
@@ -28,6 +29,7 @@ type CostSummary struct {
 	TotalNetworkCost  float64         `json:"totalNetworkCost,omitempty"`
 	TotalIdleCost     float64         `json:"totalIdleCost,omitempty"`
 	ClusterEfficiency float64         `json:"clusterEfficiency,omitempty"` // 0-100
+	NamespaceScope    []string        `json:"namespaceScope,omitempty"`
 	Namespaces        []NamespaceCost `json:"namespaces,omitempty"`
 }
 

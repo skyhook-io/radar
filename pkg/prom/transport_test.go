@@ -25,6 +25,20 @@ func TestHTTPTransportRejectsOversizedResponse(t *testing.T) {
 	}
 }
 
+func TestHTTPErrorDiagnosticIsBoundedAndSingleLine(t *testing.T) {
+	err := (&HTTPError{
+		StatusCode: http.StatusBadGateway,
+		URL:        "https://cost.example.com/allocation",
+		Body:       []byte("first\nsecond\tthird\vfourth\ffifth\u2028sixth\u2029" + strings.Repeat("x", 600)),
+	}).Error()
+	if strings.ContainsAny(err, "\r\n\t\v\f\u2028\u2029") {
+		t.Fatalf("error contains log control characters: %q", err)
+	}
+	if !strings.Contains(err, "first second third fourth fifth sixth ") || !strings.HasPrefix(err, "upstream returned 502") || !strings.HasSuffix(err, "…") {
+		t.Fatalf("unexpected bounded diagnostic: %q", err)
+	}
+}
+
 func TestHTTPTransport_AppliesHeaders(t *testing.T) {
 	var gotAuth, gotTenant, gotAccept string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

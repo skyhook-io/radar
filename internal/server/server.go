@@ -729,14 +729,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Post("/opencost/application/trend", s.handleOpenCostApplicationTrend)
 			r.Get("/opencost/workload/{kind}/{namespace}/{name}", s.handleOpenCostWorkload)
 			r.Get("/opencost/workload/{kind}/{namespace}/{name}/trend", s.handleOpenCostWorkloadTrend)
-			opencost.RegisterRoutes(r, s.resolvedOpenCostCurrency, opencost.RouteScope{
-				AllowedNamespaces: func(req *http.Request, requested []string) []string {
-					return s.getUserNamespaces(req, requested)
-				},
-				CanReadNodes: func(req *http.Request) bool {
-					return s.canRead(req, "", "nodes", "", "list")
-				},
-			})
+			opencost.RegisterRoutes(r, s.resolvedOpenCostCurrency, s.openCostRouteScope())
 
 			// FluxCD routes
 			r.Post("/flux/{kind}/{namespace}/{name}/reconcile", s.handleFluxReconcile)
@@ -886,6 +879,27 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	} else if s.devMode {
 		// In dev mode, serve from web/dist
 		r.Handle("/*", frontendHandler(http.Dir("web/dist"), s.basePath))
+	}
+}
+
+func (s *Server) openCostRouteScope() opencost.RouteScope {
+	return opencost.RouteScope{
+		AllowedNamespaces: func(req *http.Request, requested []string) []string {
+			if requested != nil {
+				if k8s.ForceNamespaceScope {
+					target := k8s.GetNamespaceScopeTarget()
+					if target == "" || !slices.Contains(requested, target) {
+						return []string{}
+					}
+					requested = []string{target}
+				}
+				return s.getUserNamespaces(req, requested)
+			}
+			return s.parseNamespacesForUser(req)
+		},
+		CanReadNodes: func(req *http.Request) bool {
+			return s.canRead(req, "", "nodes", "", "list")
+		},
 	}
 }
 

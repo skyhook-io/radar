@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/portforward"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	pkgopencost "github.com/skyhook-io/radar/pkg/opencost"
 	"github.com/skyhook-io/radar/pkg/prom"
 	appsv1 "k8s.io/api/apps/v1"
@@ -38,6 +40,7 @@ var (
 	ErrKubecostContextMismatch = errors.New("Kubecost configuration context mismatch")
 	ErrKubecostNoData          = errors.New("Kubecost returned no allocation data")
 	ErrKubecostUnavailable     = errors.New("Kubecost Aggregator unavailable")
+	ErrCostSourceEnvConfig     = errors.New("cost source environment configuration is invalid")
 )
 
 type ManagerConfig struct {
@@ -279,7 +282,7 @@ func (m *Manager) Selected(ctx context.Context) (Connection, error) {
 	if m.envError != "" {
 		err := m.envError
 		m.mu.RUnlock()
-		return Connection{}, fmt.Errorf("cost source environment configuration is invalid: %s", err)
+		return Connection{}, fmt.Errorf("%w: %s", ErrCostSourceEnvConfig, err)
 	}
 	if connection, err, ok := m.cachedSelectionLocked(time.Now()); ok {
 		m.mu.RUnlock()
@@ -293,7 +296,7 @@ func (m *Manager) Selected(ctx context.Context) (Connection, error) {
 	if m.envError != "" {
 		err := m.envError
 		m.mu.RUnlock()
-		return Connection{}, fmt.Errorf("cost source environment configuration is invalid: %s", err)
+		return Connection{}, fmt.Errorf("%w: %s", ErrCostSourceEnvConfig, err)
 	}
 	if connection, err, ok := m.cachedSelectionLocked(time.Now()); ok {
 		m.mu.RUnlock()
@@ -324,12 +327,17 @@ func (m *Manager) Selected(ctx context.Context) (Connection, error) {
 		if contextErr := ctx.Err(); contextErr != nil {
 			return Connection{}, contextErr
 		}
-		if config.Source == SourceAuto && !errors.Is(err, ErrKubecostContextMismatch) {
+		if config.Source == SourceAuto && !errors.Is(err, ErrKubecostContextMismatch) && !hasExplicitKubecostConfig(config) {
+			log.Printf("[opencost] Auto mode could not use local Kubecost; retrying source discovery later: %s", k8s.SanitizeForLog(err.Error()))
 			return m.commitAutoFallback(generation)
 		}
 		return m.commitSelectionFailure(generation, err)
 	}
 	return m.commitSelection(generation, connection)
+}
+
+func hasExplicitKubecostConfig(config ManagerConfig) bool {
+	return config.URL != "" || config.APIKey != "" || config.ClusterID != ""
 }
 
 func ProbeKubecost(ctx context.Context, config ManagerConfig) (Connection, error) {
@@ -458,7 +466,7 @@ func (m *Manager) connectKubecost(ctx context.Context, config ManagerConfig) (Co
 		return Connection{Source: SourceKubecost, Client: client, Address: address, ClusterID: clusterID}, nil
 	}
 
-	service, port, err := discoverKubecostAggregator()
+	service, servicePort, targetPort, err := discoverKubecostAggregator()
 	if err != nil {
 		return Connection{}, fmt.Errorf("%w: %w", ErrKubecostUnavailable, err)
 	}
@@ -467,14 +475,14 @@ func (m *Manager) connectKubecost(ctx context.Context, config ManagerConfig) (Co
 		return Connection{}, err
 	}
 	if k8s.IsInCluster() {
-		directURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", service.Name, service.Namespace, port)
+		directURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", service.Name, service.Namespace, servicePort)
 		if client, address, directErr := probeKubecostURL(ctx, directURL, config.APIKey, clusterID); directErr == nil {
 			return Connection{Source: SourceKubecost, Client: client, Address: address, ClusterID: clusterID}, nil
 		} else if errors.Is(directErr, ErrKubecostAuthentication) || errors.Is(directErr, ErrKubecostNoData) {
 			return Connection{}, directErr
 		}
 	}
-	forward, err := portforward.Start(portforward.OwnerCost, ctx, service.Namespace, service.Name, port, k8s.GetContextName())
+	forward, err := portforward.Start(portforward.OwnerCost, ctx, service.Namespace, service.Name, targetPort, k8s.GetContextName())
 	if err != nil {
 		return Connection{}, fmt.Errorf("%w: port-forward failed: %w", ErrKubecostUnavailable, err)
 	}
@@ -576,14 +584,16 @@ func probeKubecostURL(ctx context.Context, rawURL, apiKey, clusterID string) (*p
 		}
 		lastErr = err
 	}
-	if noData {
-		return nil, "", fmt.Errorf("%w for cluster %q", ErrKubecostNoData, clusterID)
-	}
 	if lastErr != nil {
 		if errors.Is(lastErr, ErrKubecostAuthentication) {
 			return nil, "", lastErr
 		}
-		return nil, "", fmt.Errorf("%w or did not return its allocation API: %w", ErrKubecostUnavailable, lastErr)
+		if !noData {
+			return nil, "", fmt.Errorf("%w or did not return its allocation API: %w", ErrKubecostUnavailable, lastErr)
+		}
+	}
+	if noData {
+		return nil, "", fmt.Errorf("%w for cluster %q", ErrKubecostNoData, clusterID)
 	}
 	return nil, "", fmt.Errorf("%w or did not return its allocation API", ErrKubecostUnavailable)
 }
@@ -618,22 +628,22 @@ func kubecostClusterFilter(clusterID string) string {
 	return `cluster:"` + escaped + `"`
 }
 
-func discoverKubecostAggregator() (*corev1.Service, int, error) {
+func discoverKubecostAggregator() (*corev1.Service, int, int, error) {
 	cache := k8s.GetResourceCache()
 	if cache == nil || cache.Services() == nil || cache.StatefulSets() == nil {
-		return nil, 0, fmt.Errorf("Kubecost auto-discovery requires access to Services and StatefulSets; configure the Aggregator URL manually")
+		return nil, 0, 0, fmt.Errorf("Kubecost auto-discovery requires access to Services and StatefulSets; configure the Aggregator URL manually")
 	}
 	services, err := cache.Services().List(labels.Everything())
 	if err != nil {
-		return nil, 0, fmt.Errorf("list Services for Kubecost discovery: %w", err)
+		return nil, 0, 0, fmt.Errorf("list Services for Kubecost discovery: %w", err)
 	}
 	statefulSets, err := cache.StatefulSets().List(labels.Everything())
 	if err != nil {
-		return nil, 0, fmt.Errorf("list StatefulSets for Kubecost discovery: %w", err)
+		return nil, 0, 0, fmt.Errorf("list StatefulSets for Kubecost discovery: %w", err)
 	}
 	for _, service := range services {
-		port := aggregatorServicePort(service)
-		if port == 0 {
+		port, ok := aggregatorServicePort(service)
+		if !ok {
 			continue
 		}
 		for _, statefulSet := range statefulSets {
@@ -642,23 +652,27 @@ func discoverKubecostAggregator() (*corev1.Service, int, error) {
 			}
 			selector := labels.SelectorFromSet(service.Spec.Selector)
 			if len(service.Spec.Selector) > 0 && selector.Matches(labels.Set(statefulSet.Spec.Template.Labels)) {
-				return service, port, nil
+				targetPort, ok := k8score.ResolveServiceTargetPort(port, statefulSet.Spec.Template.Spec.Containers)
+				if !ok {
+					continue
+				}
+				return service, int(port.Port), targetPort, nil
 			}
 		}
 	}
-	return nil, 0, fmt.Errorf("no active Kubecost 3 Aggregator Service found; configure the central Aggregator URL manually")
+	return nil, 0, 0, fmt.Errorf("no active Kubecost 3 Aggregator Service found; configure the central Aggregator URL manually")
 }
 
-func aggregatorServicePort(service *corev1.Service) int {
+func aggregatorServicePort(service *corev1.Service) (corev1.ServicePort, bool) {
 	if service == nil || (service.Labels["app.kubernetes.io/name"] != "aggregator" && service.Labels["app"] != "aggregator") {
-		return 0
+		return corev1.ServicePort{}, false
 	}
 	for _, port := range service.Spec.Ports {
 		if port.Name == "tcp-api" && port.Port == 9004 {
-			return int(port.Port)
+			return port, true
 		}
 	}
-	return 0
+	return corev1.ServicePort{}, false
 }
 
 func activeKubecostAggregator(statefulSet *appsv1.StatefulSet) bool {

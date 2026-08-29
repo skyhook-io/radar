@@ -119,6 +119,7 @@ export function ApplicationCostTab({
     state === 'source_unavailable' ||
     state === 'authentication_error' ||
     state === 'configuration_mismatch' ||
+    state === 'deployment_configuration_error' ||
     state === 'history_unsupported' ||
     state === 'load_error'
   ) {
@@ -372,8 +373,8 @@ export function getApplicationCostState(
   if (trendHasData) return 'partial_missing_current'
   const reason =
     current?.reason ??
-    trend?.reason ??
     costUnavailableReasonFromError(status.currentError) ??
+    trend?.reason ??
     costUnavailableReasonFromError(status.trendError)
   if (
     reason === 'no_prometheus' ||
@@ -383,7 +384,7 @@ export function getApplicationCostState(
     reason === 'source_unavailable' ||
     reason === 'authentication_error' ||
     reason === 'configuration_mismatch' ||
-    reason === 'history_unsupported'
+    reason === 'deployment_configuration_error'
   )
     return reason
   if (queryError) return 'load_error'
@@ -495,6 +496,7 @@ function reasonLabel(reason?: CostUnavailableReason) {
   if (reason === 'access_denied') return 'No access to this workload'
   if (reason === 'not_found') return 'Workload not found'
   if (reason === 'configuration_mismatch') return 'Kubecost settings are not valid for this cluster'
+  if (reason === 'deployment_configuration_error') return 'Radar cost deployment is misconfigured'
   return 'No workload cost metrics'
 }
 
@@ -545,6 +547,8 @@ function ApplicationCostUnavailable({
         ? 'Cost data is temporarily unavailable. A metrics backend was found, but application cost queries failed.'
         : state === 'source_unavailable'
           ? 'Kubecost Aggregator is unavailable. Check the URL, network path, and cluster ID in Settings → Cost.'
+          : state === 'deployment_configuration_error'
+            ? 'Cost collection is misconfigured by this Radar deployment. Update its environment variables or Helm cost values, then restart Radar.'
           : state === 'authentication_error'
             ? 'Kubecost rejected the configured API key. Update it in Settings → Cost.'
             : state === 'configuration_mismatch'

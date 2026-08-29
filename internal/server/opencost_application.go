@@ -32,24 +32,32 @@ func (s *Server) handleOpenCostApplication(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		resp := pkgopencost.UnavailableApplicationCostResponse(inputs, unavailable, unsupported, internalopencost.ConnectionFailureReason(err))
 		resp.Currency = s.resolvedOpenCostCurrency()
-		resp.Source = "kubecost"
 		s.writeJSON(w, resp)
 		return
 	}
 	if connection.Source == internalopencost.SourceKubecost {
-		namespaceCosts := make(map[string]*pkgopencost.WorkloadCostResponse)
-		for _, namespace := range applicationInputNamespaces(inputs) {
-			costs, err := pkgopencost.ComputeKubecostWorkloads(r.Context(), connection.Client, namespace, pkgopencost.KubecostCurrentOptions{
-				Currency: s.resolvedOpenCostCurrency(), ClusterID: connection.ClusterID, Owners: internalopencost.BuildPodOwnerLookup(namespace),
-			})
-			if err != nil {
-				log.Printf("[opencost] Kubecost application cost failed for namespace %q: %v", namespace, err)
-				costs = &pkgopencost.WorkloadCostResponse{Namespace: namespace, Reason: internalopencost.ConnectionFailureReason(err), Source: "kubecost"}
+		namespaces := applicationInputNamespaces(inputs)
+		currency := s.resolvedOpenCostCurrency()
+		namespaceCosts := make(map[string]*pkgopencost.WorkloadCostResponse, len(namespaces))
+		if len(namespaces) > 0 {
+			owners := make(map[string]pkgopencost.PodOwnerLookup, len(namespaces))
+			for _, namespace := range namespaces {
+				owners[namespace] = internalopencost.BuildPodOwnerLookup(namespace)
 			}
-			namespaceCosts[namespace] = costs
+			var queryErr error
+			namespaceCosts, queryErr = pkgopencost.ComputeKubecostWorkloadsForNamespaces(r.Context(), connection.Client, owners, pkgopencost.KubecostCurrentOptions{
+				Currency: currency, ClusterID: connection.ClusterID,
+			})
+			if queryErr != nil {
+				log.Printf("[opencost] Kubecost application cost failed: %s", sanitizeForLog(queryErr.Error()))
+				namespaceCosts = make(map[string]*pkgopencost.WorkloadCostResponse, len(namespaces))
+				for _, namespace := range namespaces {
+					namespaceCosts[namespace] = &pkgopencost.WorkloadCostResponse{Namespace: namespace, Reason: internalopencost.ConnectionFailureReason(queryErr), Source: "kubecost"}
+				}
+			}
 		}
 		resp := pkgopencost.BuildApplicationCostResponse(inputs, unavailable, unsupported, namespaceCosts)
-		resp.Currency = s.resolvedOpenCostCurrency()
+		resp.Currency = currency
 		resp.Source = "kubecost"
 		for _, costs := range namespaceCosts {
 			if costs != nil {
@@ -109,7 +117,6 @@ func (s *Server) handleOpenCostApplicationTrend(w http.ResponseWriter, r *http.R
 			Range: req.Range, Workloads: refs, Unavailable: unavailable, UnavailableReason: internalopencost.ConnectionFailureReason(err),
 		})
 		resp.Currency = s.resolvedOpenCostCurrency()
-		resp.Source = "kubecost"
 		s.writeJSON(w, resp)
 		return
 	}

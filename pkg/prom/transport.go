@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Transport is the pluggable HTTP transport used by Client to issue requests
@@ -107,7 +108,7 @@ func (t *HTTPTransport) Address() string {
 	return t.BaseURL + t.BasePath
 }
 
-// HTTPError is returned when Prometheus responds with a non-2xx status.
+// HTTPError is returned when an HTTP-backed metrics or cost source responds with a non-2xx status.
 type HTTPError struct {
 	StatusCode int
 	URL        string
@@ -115,5 +116,16 @@ type HTTPError struct {
 }
 
 func (e *HTTPError) Error() string {
-	return fmt.Sprintf("prometheus returned %d for %s: %s", e.StatusCode, e.URL, string(e.Body))
+	body := strings.ToValidUTF8(string(e.Body), "�")
+	body = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
+			return ' '
+		}
+		return r
+	}, body)
+	const maxDiagnosticRunes = 512
+	if runes := []rune(body); len(runes) > maxDiagnosticRunes {
+		body = string(runes[:maxDiagnosticRunes]) + "…"
+	}
+	return fmt.Sprintf("upstream returned %d for %s: %s", e.StatusCode, e.URL, body)
 }

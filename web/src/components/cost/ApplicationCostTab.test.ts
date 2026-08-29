@@ -78,6 +78,23 @@ describe('getApplicationCostState', () => {
     expect(getApplicationCostState(current, trend, {})).toBe('partial_missing_history')
   })
 
+  it('does not let unsupported history mask current loading or errors', () => {
+    const trend: OpenCostApplicationCostTrendResponse = {
+      available: false,
+      source: 'kubecost',
+      reason: 'history_unsupported',
+      currency: 'USD',
+      range: '24h',
+      coverage: { total: 1, included: 0 },
+    }
+
+    expect(getApplicationCostState(undefined, trend, { currentLoading: true })).toBe('loading')
+    expect(getApplicationCostState(undefined, trend, { currentError: true })).toBe('load_error')
+    expect(
+      getApplicationCostState(undefined, trend, { currentError: new ApiError('denied', 403) }),
+    ).toBe('access_denied')
+  })
+
   it('uses historical data when current app metrics are absent but history exists', () => {
     const current: OpenCostApplicationCostResponse = {
       available: false,

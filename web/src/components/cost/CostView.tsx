@@ -165,6 +165,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
   const nodes = nodeData?.available ? (nodeData.nodes ?? []) : []
   const nodeCurrency = nodeData?.currency ?? currency
   const clusterConsoleLink = clusterCloudConsoleLink(clusterInfo?.context)
+  const namespaceScopeCount = data.namespaceScope?.length ?? 0
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -234,11 +235,19 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
 
         <CostViewTabs />
 
+        {namespaceScopeCount > 0 && (
+          <div className="rounded-lg border border-theme-border bg-theme-surface/50 px-4 py-3 text-xs text-theme-text-secondary">
+            Resource totals, trend, and namespace breakdown are scoped to {namespaceScopeCount}{' '}
+            {namespaceScopeCount === 1 ? 'namespace' : 'namespaces'}.
+            {nodes.length > 0 && ' Node costs below remain cluster-wide.'}
+          </div>
+        )}
+
         {/* CPU vs Memory (vs Storage) split bar */}
         <div className="rounded-lg border border-theme-border bg-theme-surface/50 p-4">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-medium text-theme-text-secondary">
-              Cluster Resource Cost
+              {namespaceScopeCount > 0 ? 'Scoped Resource Cost' : 'Cluster Resource Cost'}
             </span>
             <div className="flex items-center gap-4 text-xs text-theme-text-tertiary">
               <span className="flex items-center gap-1.5">
@@ -373,6 +382,8 @@ export function costUnavailableMessage(reason?: CostUnavailableReason): string {
       return 'Kubecost rejected the configured API key — update it in Settings → Cost'
     case 'configuration_mismatch':
       return 'Saved Kubecost settings are not valid for this cluster — update the cluster ID or local API key in Settings → Cost'
+    case 'deployment_configuration_error':
+      return 'Cost collection is misconfigured by this Radar deployment — update its environment variables or Helm cost values, then restart Radar'
     case 'access_denied':
       return 'You do not have access to view cluster cost data'
     default:
@@ -836,8 +847,10 @@ function CostHelpDialog({ currency, source, onClose }: { currency: string; sourc
             </h3>
             <p>
               Radar labels these values <strong>{currency}</strong> and does not convert them. Auto
-              reads <code>currencyCode</code> or <code>DISPLAY_CURRENCY</code> from an active
-              OpenCost/Kubecost installation in the connected cluster, then falls back to USD.
+              reads <code>currencyCode</code> or <code>DISPLAY_CURRENCY</code> from a
+              cluster-discovered OpenCost installation or any active Kubecost installation, then
+              falls back to USD. A manually configured Prometheus URL disables OpenCost currency
+              detection.
               Override it in <strong>Settings → Cost</strong> or, for automation, with{' '}
               <code>--opencost-currency</code> (Helm: <code>cost.currency</code>).
             </p>

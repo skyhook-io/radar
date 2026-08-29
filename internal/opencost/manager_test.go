@@ -14,6 +14,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 func TestResolveEnvironmentConfig(t *testing.T) {
@@ -82,8 +83,8 @@ func TestConfigureStartupFailsClosedOnInvalidEnvironment(t *testing.T) {
 	if err == nil || !m.IsEnvManaged() || m.EnvManagedError() == "" {
 		t.Fatalf("configureStartup error=%v managed=%v envError=%q", err, m.IsEnvManaged(), m.EnvManagedError())
 	}
-	if _, selectedErr := m.Selected(context.Background()); selectedErr == nil {
-		t.Fatal("Selected must fail while the environment configuration is invalid")
+	if _, selectedErr := m.Selected(context.Background()); !errors.Is(selectedErr, ErrCostSourceEnvConfig) {
+		t.Fatalf("Selected error = %v, want ErrCostSourceEnvConfig", selectedErr)
 	}
 }
 
@@ -162,6 +163,24 @@ func TestProbeKubecostTriesModelPathAfterRootAuthenticationFailure(t *testing.T)
 
 func TestProbeKubecostReturnsTypedAuthenticationFailureAfterAllPaths(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "denied", http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	_, err := ProbeKubecost(context.Background(), ManagerConfig{
+		Source: SourceKubecost, URL: server.URL, ClusterID: "prod-a",
+	})
+	if !errors.Is(err, ErrKubecostAuthentication) {
+		t.Fatalf("error = %v, want ErrKubecostAuthentication", err)
+	}
+}
+
+func TestProbeKubecostAuthenticationOutranksEmptyAlternatePath(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/allocation" {
+			_, _ = w.Write([]byte(`{"code":200,"data":[{}]}`))
+			return
+		}
 		http.Error(w, "denied", http.StatusUnauthorized)
 	}))
 	defer server.Close()
@@ -267,6 +286,40 @@ func TestAutoSourceSurfacesKubecostContextMismatch(t *testing.T) {
 	k8s.SetTestContextName("cluster-b")
 	if _, err := m.Selected(context.Background()); !errors.Is(err, ErrKubecostContextMismatch) {
 		t.Fatalf("selection error = %v, want ErrKubecostContextMismatch instead of Prometheus fallback", err)
+	}
+}
+
+func TestAutoSourceSurfacesExplicitKubecostFailureAfterPrometheusIsAbsent(t *testing.T) {
+	previousContext := k8s.SetTestContextName("cluster-a")
+	t.Cleanup(func() { k8s.SetTestContextName(previousContext) })
+	promServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("query") == "up" {
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"job":"prometheus"},"value":[1700000000,"1"]}]}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+	}))
+	kubecostServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "denied", http.StatusUnauthorized)
+	}))
+	prometheuspkg.Initialize(nil, nil, "test")
+	prometheuspkg.SetManualURL(promServer.URL)
+	t.Cleanup(func() {
+		promServer.Close()
+		kubecostServer.Close()
+		prometheuspkg.Reset()
+		prometheuspkg.Initialize(nil, nil, "")
+	})
+
+	m := &Manager{}
+	if err := m.Configure(ManagerConfig{
+		Source: SourceAuto, URL: kubecostServer.URL, ClusterID: "prod-a", ClusterIDContext: "cluster-a",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Selected(context.Background()); !errors.Is(err, ErrKubecostAuthentication) {
+		t.Fatalf("selection error = %v, want ErrKubecostAuthentication", err)
 	}
 }
 
@@ -396,17 +449,18 @@ func TestDeadConnectionLeaseInvalidatesCachedSelection(t *testing.T) {
 func TestKubecostAggregatorDiscoverySignals(t *testing.T) {
 	service := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app.kubernetes.io/name": "aggregator"}},
-		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "tcp-api", Port: 9004}}},
+		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "tcp-api", Port: 9004, TargetPort: intstr.FromString("api")}}},
 	}
 	statefulSet := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app.kubernetes.io/name": "aggregator"}},
 		Status:     appsv1.StatefulSetStatus{ReadyReplicas: 1},
 	}
-	if aggregatorServicePort(service) != 9004 || !activeKubecostAggregator(statefulSet) {
+	port, ok := aggregatorServicePort(service)
+	if !ok || port.Port != 9004 || port.TargetPort.StrVal != "api" || !activeKubecostAggregator(statefulSet) {
 		t.Fatal("official Kubecost 3 Aggregator signals were not recognized")
 	}
 	service.Spec.Ports[0].Port = 9008
-	if aggregatorServicePort(service) != 0 {
+	if _, ok := aggregatorServicePort(service); ok {
 		t.Fatal("port 9008 must not be auto-selected")
 	}
 }

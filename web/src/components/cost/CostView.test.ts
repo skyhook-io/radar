@@ -16,5 +16,6 @@ describe('costUnavailableMessage', () => {
     expect(costUnavailableMessage('source_unavailable')).toContain('Settings → Cost')
     expect(costUnavailableMessage('authentication_error')).toContain('API key')
     expect(costUnavailableMessage('configuration_mismatch')).toContain('not valid for this cluster')
+    expect(costUnavailableMessage('deployment_configuration_error')).toContain('Helm cost values')
   })
 })

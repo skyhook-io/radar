@@ -2,9 +2,12 @@ package opencost
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	pkgopencost "github.com/skyhook-io/radar/pkg/opencost"
@@ -120,6 +123,27 @@ func TestCostRouteScopeRejectsUnreadableNamespaceAndNodes(t *testing.T) {
 	}
 }
 
+func TestWorkloadCostAuthorizesSingularNamespaceDirectly(t *testing.T) {
+	scope := RouteScope{
+		AllowedNamespaces: func(_ *http.Request, requested []string) []string {
+			if len(requested) == 1 && requested[0] == "my-team" {
+				return requested
+			}
+			return []string{}
+		},
+	}
+	recorder := httptest.NewRecorder()
+	handleWorkloadsScoped(
+		recorder,
+		httptest.NewRequest(http.MethodGet, "/opencost/workloads?namespace=finance-prod&namespaces=my-team", nil),
+		nil,
+		scope,
+	)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", recorder.Code)
+	}
+}
+
 func TestFilterCostSummaryRecomputesVisibleTotals(t *testing.T) {
 	resp := &pkgopencost.CostSummary{
 		Available: true,
@@ -129,7 +153,7 @@ func TestFilterCostSummaryRecomputesVisibleTotals(t *testing.T) {
 		},
 	}
 	filterCostSummary(resp, []string{"allowed"})
-	if len(resp.Namespaces) != 1 || resp.Namespaces[0].Name != "allowed" || resp.TotalHourlyCost != 3 || resp.ClusterEfficiency != 50 {
+	if len(resp.Namespaces) != 1 || resp.Namespaces[0].Name != "allowed" || resp.TotalHourlyCost != 3 || resp.ClusterEfficiency != 50 || len(resp.NamespaceScope) != 1 || resp.NamespaceScope[0] != "allowed" {
 		t.Fatalf("unexpected filtered summary: %#v", resp)
 	}
 }
@@ -143,6 +167,40 @@ func TestFilterCostSummaryReportsNoNamespaceAccess(t *testing.T) {
 	filterCostSummary(resp, []string{})
 	if resp.Available || resp.Reason != pkgopencost.ReasonAccessDenied || resp.TotalHourlyCost != 0 || resp.Namespaces != nil {
 		t.Fatalf("unexpected zero-access summary: %#v", resp)
+	}
+}
+
+func TestFilterCostSummaryReportsNoMetricsForVisibleNamespacesWithoutRows(t *testing.T) {
+	resp := &pkgopencost.CostSummary{
+		Available:  true,
+		Namespaces: []pkgopencost.NamespaceCost{{Name: "private", HourlyCost: 11}},
+	}
+	filterCostSummary(resp, []string{"allowed"})
+	if resp.Available || resp.Reason != pkgopencost.ReasonNoMetrics || len(resp.Namespaces) != 0 {
+		t.Fatalf("unexpected empty visible summary: %#v", resp)
+	}
+}
+
+func TestConnectionSelectionFailuresDoNotClaimKubecostSource(t *testing.T) {
+	originalConfig := ConfigSnapshot()
+	t.Cleanup(func() { _ = Configure(originalConfig) })
+	defaultManager.mu.Lock()
+	defaultManager.selectionErr = errors.New("cost source selection was superseded")
+	defaultManager.retryAt = time.Now().Add(time.Minute)
+	defaultManager.selected = ""
+	defaultManager.mu.Unlock()
+
+	recorder := httptest.NewRecorder()
+	handleSummaryScoped(recorder, httptest.NewRequest(http.MethodGet, "/opencost/summary", nil), nil, RouteScope{})
+	var body struct {
+		Source string `json:"source"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Source != "" || body.Reason != pkgopencost.ReasonQueryError {
+		t.Fatalf("unexpected selection failure response: %#v", body)
 	}
 }
 
@@ -164,6 +222,9 @@ func TestConnectionFailureReasonDoesNotGuessAuthenticationFromText(t *testing.T)
 	}
 	if got := ConnectionFailureReason(ErrKubecostContextMismatch); got != pkgopencost.ReasonConfigMismatch {
 		t.Fatalf("context mismatch reason = %q, want %q", got, pkgopencost.ReasonConfigMismatch)
+	}
+	if got := ConnectionFailureReason(fmt.Errorf("%w: invalid source", ErrCostSourceEnvConfig)); got != pkgopencost.ReasonDeploymentConfig {
+		t.Fatalf("environment config reason = %q, want %q", got, pkgopencost.ReasonDeploymentConfig)
 	}
 }
 

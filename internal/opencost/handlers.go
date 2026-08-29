@@ -43,13 +43,13 @@ func handleSummaryScoped(w http.ResponseWriter, r *http.Request, resolveCurrency
 	connection, err := Selected(r.Context())
 	currency := resolvedCurrency(resolveCurrency)
 	if err != nil {
-		writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "kubecost"})
+		writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: ConnectionFailureReason(err), Currency: currency})
 		return
 	}
 	if connection.Source == SourceKubecost {
 		resp, err := pkgopencost.ComputeKubecostSummary(r.Context(), connection.Client, pkgopencost.KubecostCurrentOptions{Currency: currency, ClusterID: connection.ClusterID})
 		if err != nil {
-			log.Printf("[opencost] Kubecost summary failed: %v", err)
+			log.Printf("[opencost] Kubecost summary failed: %s", k8s.SanitizeForLog(err.Error()))
 			writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "kubecost"})
 			return
 		}
@@ -99,17 +99,16 @@ func handleWorkloadsScoped(w http.ResponseWriter, r *http.Request, resolveCurren
 	connection, err := Selected(r.Context())
 	currency := resolvedCurrency(resolveCurrency)
 	if err != nil {
-		writeJSON(w, http.StatusOK, pkgopencost.WorkloadCostResponse{Namespace: ns, Reason: ConnectionFailureReason(err), Currency: currency, Source: "kubecost"})
+		writeJSON(w, http.StatusOK, pkgopencost.WorkloadCostResponse{Namespace: ns, Reason: ConnectionFailureReason(err), Currency: currency})
 		return
 	}
 	if connection.Source == SourceKubecost {
 		resp, err := pkgopencost.ComputeKubecostWorkloads(r.Context(), connection.Client, ns, pkgopencost.KubecostCurrentOptions{Currency: currency, ClusterID: connection.ClusterID, Owners: BuildPodOwnerLookup(ns)})
 		if err != nil {
-			log.Printf("[opencost] Kubecost workloads failed for namespace %q: %v", ns, err)
+			log.Printf("[opencost] Kubecost workloads failed for namespace %q: %s", k8s.SanitizeForLog(ns), k8s.SanitizeForLog(err.Error()))
 			writeJSON(w, http.StatusOK, pkgopencost.WorkloadCostResponse{Namespace: ns, Reason: ConnectionFailureReason(err), Currency: currency, Source: "kubecost"})
 			return
 		}
-		attachDesiredReplicas(resp, ns)
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
@@ -193,7 +192,7 @@ func handleTrendScoped(w http.ResponseWriter, r *http.Request, resolveCurrency f
 	connection, err := Selected(r.Context())
 	currency := resolvedCurrency(resolveCurrency)
 	if err != nil {
-		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "kubecost", Range: r.URL.Query().Get("range")})
+		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Range: r.URL.Query().Get("range")})
 		return
 	}
 	if connection.Source == SourceKubecost {
@@ -227,13 +226,13 @@ func handleNodesScoped(w http.ResponseWriter, r *http.Request, resolveCurrency f
 	connection, err := Selected(r.Context())
 	currency := resolvedCurrency(resolveCurrency)
 	if err != nil {
-		writeJSON(w, http.StatusOK, pkgopencost.NodeCostResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "kubecost"})
+		writeJSON(w, http.StatusOK, pkgopencost.NodeCostResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: currency})
 		return
 	}
 	if connection.Source == SourceKubecost {
 		resp, err := pkgopencost.ComputeKubecostNodes(r.Context(), connection.Client, pkgopencost.KubecostCurrentOptions{Currency: currency, ClusterID: connection.ClusterID})
 		if err != nil {
-			log.Printf("[opencost] Kubecost nodes failed: %v", err)
+			log.Printf("[opencost] Kubecost nodes failed: %s", k8s.SanitizeForLog(err.Error()))
 			writeJSON(w, http.StatusOK, pkgopencost.NodeCostResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "kubecost"})
 			return
 		}
@@ -277,6 +276,11 @@ func filterCostSummary(resp *pkgopencost.CostSummary, allowed []string) {
 	for _, namespace := range allowed {
 		allow[namespace] = struct{}{}
 	}
+	resp.NamespaceScope = make([]string, 0, len(allow))
+	for namespace := range allow {
+		resp.NamespaceScope = append(resp.NamespaceScope, namespace)
+	}
+	sort.Strings(resp.NamespaceScope)
 	filtered := make([]pkgopencost.NamespaceCost, 0, len(resp.Namespaces))
 	resp.TotalHourlyCost = 0
 	resp.TotalStorageCost = 0
@@ -296,51 +300,16 @@ func filterCostSummary(resp *pkgopencost.CostSummary, allowed []string) {
 		usage += row.CPUUsageCost + row.MemoryUsageCost
 	}
 	resp.Namespaces = filtered
+	if resp.Available && len(filtered) == 0 {
+		resp.Available = false
+		resp.Reason = pkgopencost.ReasonNoMetrics
+	}
 	if allocated > 0 {
 		resp.ClusterEfficiency = usage / allocated * 100
 	} else {
 		resp.ClusterEfficiency = 0
 	}
 	sort.Slice(resp.Namespaces, func(i, j int) bool { return resp.Namespaces[i].HourlyCost > resp.Namespaces[j].HourlyCost })
-}
-
-func attachDesiredReplicas(resp *pkgopencost.WorkloadCostResponse, namespace string) {
-	if resp == nil || len(resp.Workloads) == 0 {
-		return
-	}
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		return
-	}
-	for i := range resp.Workloads {
-		workload := &resp.Workloads[i]
-		switch workload.Kind {
-		case "Deployment":
-			if cache.Deployments() != nil {
-				if deployment, err := cache.Deployments().Deployments(namespace).Get(workload.Name); err == nil {
-					workload.Replicas = 1
-					if deployment.Spec.Replicas != nil {
-						workload.Replicas = int(*deployment.Spec.Replicas)
-					}
-				}
-			}
-		case "StatefulSet":
-			if cache.StatefulSets() != nil {
-				if statefulSet, err := cache.StatefulSets().StatefulSets(namespace).Get(workload.Name); err == nil {
-					workload.Replicas = 1
-					if statefulSet.Spec.Replicas != nil {
-						workload.Replicas = int(*statefulSet.Spec.Replicas)
-					}
-				}
-			}
-		case "DaemonSet":
-			if cache.DaemonSets() != nil {
-				if daemonSet, err := cache.DaemonSets().DaemonSets(namespace).Get(workload.Name); err == nil {
-					workload.Replicas = int(daemonSet.Status.DesiredNumberScheduled)
-				}
-			}
-		}
-	}
 }
 
 func resolvedCurrency(resolve func() string) string {
@@ -366,12 +335,15 @@ func ConnectionFailureReason(err error) string {
 	if errors.Is(err, ErrKubecostContextMismatch) {
 		return pkgopencost.ReasonConfigMismatch
 	}
+	if errors.Is(err, ErrCostSourceEnvConfig) {
+		return pkgopencost.ReasonDeploymentConfig
+	}
 	var httpErr *prom.HTTPError
 	if errors.As(err, &httpErr) && (httpErr.StatusCode == http.StatusUnauthorized || httpErr.StatusCode == http.StatusForbidden) {
 		return pkgopencost.ReasonAuthentication
 	}
 	message := strings.ToLower(err.Error())
-	if errors.Is(err, ErrKubecostClusterID) || errors.Is(err, ErrKubecostUnavailable) || strings.Contains(message, "kubecost") || strings.Contains(message, "cost source") {
+	if errors.Is(err, ErrKubecostClusterID) || errors.Is(err, ErrKubecostUnavailable) || strings.Contains(message, "kubecost") {
 		return pkgopencost.ReasonSourceUnavailable
 	}
 	return pkgopencost.ReasonQueryError

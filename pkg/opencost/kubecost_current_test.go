@@ -118,6 +118,43 @@ func TestComputeKubecostWorkloadsReturnsUsageAvailability(t *testing.T) {
 	}
 }
 
+func TestComputeKubecostWorkloadsForNamespacesBoundsQueriesByNamespace(t *testing.T) {
+	transport := &fakeKubecostTransport{responses: []string{
+		`{"code":200,"data":[{"a":{"properties":{"cluster":"cluster-a","namespace":"team-a","pod":"api-a","controllerKind":"deployment","controller":"api"},"start":"2026-08-26T00:00:00Z","end":"2026-08-26T01:00:00Z","cpuCost":1,"ramCost":1}}]}`,
+		`{"code":200,"data":[{"b":{"properties":{"cluster":"cluster-a","namespace":"team-b","pod":"worker-b","controllerKind":"statefulset","controller":"worker"},"start":"2026-08-26T00:00:00Z","end":"2026-08-26T01:00:00Z","cpuCost":2,"ramCost":2}}]}`,
+	}}
+	responses, err := ComputeKubecostWorkloadsForNamespaces(context.Background(), NewKubecostClient(transport), map[string]PodOwnerLookup{
+		"team-a": nil,
+		"team-b": nil,
+	}, KubecostCurrentOptions{ClusterID: "cluster-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(transport.requests) != 2 ||
+		transport.requests[0].params.Get("filter") != `cluster:"cluster-a"+namespace:"team-a"` ||
+		transport.requests[1].params.Get("filter") != `cluster:"cluster-a"+namespace:"team-b"` {
+		t.Fatalf("requests = %#v, want one bounded allocation query per namespace", transport.requests)
+	}
+	if got := responses["team-a"]; !got.Available || len(got.Workloads) != 1 || got.Workloads[0].Name != "api" {
+		t.Fatalf("team-a response = %#v", got)
+	}
+	if got := responses["team-b"]; !got.Available || len(got.Workloads) != 1 || got.Workloads[0].Name != "worker" {
+		t.Fatalf("team-b response = %#v", got)
+	}
+}
+
+func TestComputeKubecostWorkloadsForNamespacesRejectsRowsOutsideRequestedNamespace(t *testing.T) {
+	transport := &fakeKubecostTransport{responses: []string{
+		`{"code":200,"data":[{"private":{"properties":{"cluster":"cluster-a","namespace":"private","pod":"hidden","controllerKind":"deployment","controller":"hidden"},"start":"2026-08-26T00:00:00Z","end":"2026-08-26T01:00:00Z","cpuCost":10,"ramCost":10}}]}`,
+	}}
+	_, err := ComputeKubecostWorkloadsForNamespaces(context.Background(), NewKubecostClient(transport), map[string]PodOwnerLookup{
+		"team-a": nil,
+	}, KubecostCurrentOptions{ClusterID: "cluster-a"})
+	if err == nil || !strings.Contains(err.Error(), `has namespace "private", expected "team-a"`) {
+		t.Fatalf("error = %v, want mismatched namespace rejection", err)
+	}
+}
+
 func TestComputeKubecostWorkloadsIncludesBatchControllers(t *testing.T) {
 	transport := &fakeKubecostTransport{responses: []string{
 		`{"code":200,"data":[{"cluster-a/demo/job/migrate":{"properties":{"cluster":"cluster-a","namespace":"demo","controllerKind":"job","controller":"migrate"},"start":"2026-08-26T00:00:00Z","end":"2026-08-26T01:00:00Z","cpuCost":5,"ramCost":5},"cluster-a/demo/deployment/web":{"properties":{"cluster":"cluster-a","namespace":"demo","controllerKind":"deployment","controller":"web"},"start":"2026-08-26T00:00:00Z","end":"2026-08-26T01:00:00Z","cpuCost":1,"ramCost":1}}]}`,
