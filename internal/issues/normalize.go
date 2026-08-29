@@ -86,10 +86,10 @@ func independentTimingSummary(i Issue) string {
 			}
 		case "pod_creation":
 			if i.IssueTiming == "started_at_resource_creation" {
-				return "Pod-level evidence shows startup failure during the affected workload revision."
+				return "Pod-level evidence shows failures in pods created during workload startup."
 			}
 			if i.IssueTiming == "started_after_resource_was_healthy" {
-				return "Pod-level evidence ties the failures to a later workload revision after an earlier healthy period."
+				return "Pod-level evidence shows failing pods were created after an earlier healthy period."
 			}
 		case "spec":
 			if i.IssueTiming == "started_at_resource_creation" {

@@ -450,12 +450,16 @@ function Diagnosis({ issue, source }: { issue: Issue; source?: IssueDiagnosisSou
   if (issue.operation_retry_count) meta.push(`retried ${issue.operation_retry_count}×`);
   if (crash) meta.push(crash);
   if (timing) {
+    if (partialOnset && issue.first_seen) {
+      meta.push(`some signals active at least ${formatRelativeAgeTime(issue.first_seen)}`);
+    }
     meta.push(timing.meta);
-    if (timing.kind === 'regression' && issue.first_seen) {
+    if (!partialOnset && timing.kind === 'regression' && issue.first_seen) {
       meta.push(`active at least ${formatRelativeAgeTime(issue.first_seen)}`);
     }
   } else if (partialOnset && issue.first_seen) {
-    meta.push(`active at least ${formatRelativeAgeTime(issue.first_seen)}; timing unknown for ${partialUnknown} contributing ${partialUnknown === 1 ? 'signal' : 'signals'}`);
+    const total = (issue.onset_coverage?.known ?? 0) + partialUnknown;
+    meta.push(`some signals active at least ${formatRelativeAgeTime(issue.first_seen)}; timing unknown for ${partialUnknown} of ${total} signals`);
   } else if (issue.first_seen) {
     meta.push(`active at least ${formatRelativeAgeTime(issue.first_seen)}`);
   }
@@ -463,7 +467,7 @@ function Diagnosis({ issue, source }: { issue: Issue; source?: IssueDiagnosisSou
     meta.push('exact onset unknown');
   }
   if (issue.first_seen) {
-    if (issue.last_seen && timing?.kind !== 'creation') meta.push(`last seen ${formatRelativeAgeTime(issue.last_seen)}`);
+    if (issue.last_seen && (timing?.kind !== 'creation' || partialOnset)) meta.push(`last seen ${formatRelativeAgeTime(issue.last_seen)}`);
   }
   if (issue.change_context) meta.push(changeContextText(issue.change_context));
 

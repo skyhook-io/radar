@@ -585,6 +585,11 @@ func TestTimingSummaryExplainsIndependentAndPartialProvenance(t *testing.T) {
 			want:  "Exact onset is unknown for all 3 contributing signals. Workload-level evidence shows the owner never became healthy after deployment.",
 		},
 		{
+			name:  "grouped pod evidence does not claim one revision",
+			issue: Issue{OnsetCoverage: &issuesapi.OnsetCoverage{Unknown: 3}, IssueTiming: "started_at_resource_creation", IssueTimingBasis: "pod_creation"},
+			want:  "Exact onset is unknown for all 3 contributing signals. Pod-level evidence shows failures in pods created during workload startup.",
+		},
+		{
 			name:  "exact onset needs no explanation",
 			issue: Issue{FirstSeen: now, IssueTiming: "started_at_resource_creation", IssueTimingBasis: "owner_condition"},
 			want:  "",

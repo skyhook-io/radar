@@ -207,7 +207,7 @@ describe('IssueRow', () => {
     }))
 
     expect(html).toContain('≥')
-    expect(html).toContain('timing unknown for 1 contributing signal')
+    expect(html).toContain('timing unknown for 1 of 3 signals')
     expect(html).not.toContain('after healthy')
   })
 
@@ -222,12 +222,39 @@ describe('IssueRow', () => {
         issue_timing: 'started_after_resource_was_healthy',
         issue_timing_basis: 'owner_condition',
       }),
-      open: false,
+      open: true,
       onToggle: () => undefined,
     }))
 
     expect(html).toContain('≥')
-    expect(html).toContain('workload regressed · onset unknown')
+    expect(html).toContain('health regressed')
+    expect(html).not.toContain('workload regressed')
+    expect(html).not.toContain('workload regressed · onset unknown')
+    expect(html).toContain('exact onset unknown for 1 of 2 signals')
+    expect(html).toContain('some signals active at least 2h ago')
+    expect(html).not.toContain('exact onset unknown;')
+  })
+
+  it('keeps lower-bound age, unknown count, and freshness for mixed creation groups', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-30T12:00:00Z'))
+
+    const html = renderToString(createElement(IssueRow, {
+      issue: mk({
+        first_seen: '2026-06-30T10:00:00Z',
+        last_seen: '2026-06-30T11:30:00Z',
+        onset_coverage: { known: 1, unknown: 1 },
+        issue_timing: 'started_at_resource_creation',
+        issue_timing_basis: 'owner_condition',
+      }),
+      open: true,
+      onToggle: () => undefined,
+    }))
+
+    expect(html).toContain('workload never healthy')
+    expect(html).toContain('exact onset unknown for 1 of 2 signals')
+    expect(html).toContain('some signals active at least 2h ago')
+    expect(html).toContain('last seen 30m ago')
   })
 
   it('presents ordinary first-seen time as a conservative active lower bound', () => {
@@ -253,7 +280,7 @@ describe('onset provenance copy', () => {
     }))
 
     expect(title).toContain('Active at least since')
-    expect(title).toContain('timing unknown for 1 contributing signal')
+    expect(title).toContain('timing unknown for 1 of 3 signals')
   })
 
   it('describes a known first-seen value as an active lower bound', () => {
@@ -376,6 +403,28 @@ describe('issueTiming', () => {
     }))).toMatchObject({
       chip: 'invalid at first reconcile',
       meta: 'exact onset unknown; initial spec was failing from first reconciliation',
+    })
+  })
+
+  it('uses group-safe pod timing copy for multiple contributing signals', () => {
+    expect(issueTiming(mk({
+      kind: 'Deployment',
+      onset_coverage: { known: 0, unknown: 3 },
+      issue_timing: 'started_at_resource_creation',
+      issue_timing_basis: 'pod_creation',
+    }))).toMatchObject({
+      chip: 'startup pod failures',
+      meta: 'exact onset unknown; failures occurred in pods created during workload startup',
+    })
+
+    expect(issueTiming(mk({
+      kind: 'Deployment',
+      onset_coverage: { known: 0, unknown: 3 },
+      issue_timing: 'started_after_resource_was_healthy',
+      issue_timing_basis: 'pod_creation',
+    }))).toMatchObject({
+      chip: 'new pods failed after healthy',
+      meta: 'exact onset unknown; failing pods were created after an earlier healthy period',
     })
   })
 
