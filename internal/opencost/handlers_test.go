@@ -186,6 +186,18 @@ func TestFilterCostSummaryReportsNoMetricsForVisibleNamespacesWithoutRows(t *tes
 	}
 }
 
+func TestFilterCostSummaryPreservesSourceEmptyReason(t *testing.T) {
+	resp := &pkgopencost.CostSummary{
+		Available:      false,
+		Reason:         pkgopencost.ReasonNoMetrics,
+		NamespaceScope: []string{"stale"},
+	}
+	filterCostSummary(resp, []string{"allowed"})
+	if resp.Available || resp.Reason != pkgopencost.ReasonNoMetrics || len(resp.NamespaceScope) != 0 {
+		t.Fatalf("unexpected source-empty summary: %#v", resp)
+	}
+}
+
 func TestConnectionSelectionFailuresDoNotClaimKubecostSource(t *testing.T) {
 	originalConfig := ConfigSnapshot()
 	t.Cleanup(func() { _ = Configure(originalConfig) })

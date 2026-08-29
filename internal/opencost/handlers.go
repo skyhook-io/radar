@@ -262,11 +262,15 @@ func filterCostSummary(resp *pkgopencost.CostSummary, allowed []string) {
 	for _, namespace := range allowed {
 		allow[namespace] = struct{}{}
 	}
-	resp.NamespaceScope = make([]string, 0, len(allow))
-	for namespace := range allow {
-		resp.NamespaceScope = append(resp.NamespaceScope, namespace)
+	sourceAvailable := resp.Available
+	resp.NamespaceScope = nil
+	if sourceAvailable {
+		resp.NamespaceScope = make([]string, 0, len(allow))
+		for namespace := range allow {
+			resp.NamespaceScope = append(resp.NamespaceScope, namespace)
+		}
+		sort.Strings(resp.NamespaceScope)
 	}
-	sort.Strings(resp.NamespaceScope)
 	filtered := make([]pkgopencost.NamespaceCost, 0, len(resp.Namespaces))
 	resp.TotalHourlyCost = 0
 	resp.TotalStorageCost = 0
@@ -286,7 +290,7 @@ func filterCostSummary(resp *pkgopencost.CostSummary, allowed []string) {
 		usage += row.CPUUsageCost + row.MemoryUsageCost
 	}
 	resp.Namespaces = filtered
-	if resp.Available && len(filtered) == 0 {
+	if sourceAvailable && len(filtered) == 0 {
 		resp.Available = false
 		resp.Reason = pkgopencost.ReasonNoMetrics
 	}
