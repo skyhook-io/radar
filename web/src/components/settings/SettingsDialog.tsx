@@ -1348,14 +1348,11 @@ function CostSection({
 
   const applySource = async () => {
     setApply({ status: 'applying' })
-    let nextKeySet = apiKeySet
     let sentKey: string | undefined
     if (apiKeyCleared) {
       sentKey = ''
-      nextKeySet = false
     } else if (apiKeyTouched && apiKey !== '') {
       sentKey = apiKey
-      nextKeySet = true
     }
     try {
       const res = await fetch(apiUrl('/integrations/kubecost'), {
@@ -1395,8 +1392,7 @@ function CostSection({
       setApiKey('')
       setApiKeyTouched(false)
       setApiKeyCleared(false)
-      nextKeySet = applied.apiKeySet
-      onApplied({ source, url: url.trim(), clusterId: clusterId.trim(), apiKeySet: nextKeySet })
+      onApplied({ source, url: url.trim(), clusterId: clusterId.trim(), apiKeySet: applied.apiKeySet })
       setApply({ status: 'connected', address: applied.source })
     } catch (err) {
       setApply({ status: 'failed', error: String(err) })
