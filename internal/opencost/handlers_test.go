@@ -158,18 +158,6 @@ func TestFilterCostSummaryRecomputesVisibleTotals(t *testing.T) {
 	}
 }
 
-func TestFilterCostSummaryReportsNoNamespaceAccess(t *testing.T) {
-	resp := &pkgopencost.CostSummary{
-		Available:       true,
-		TotalHourlyCost: 11,
-		Namespaces:      []pkgopencost.NamespaceCost{{Name: "private", HourlyCost: 11}},
-	}
-	filterCostSummary(resp, []string{})
-	if resp.Available || resp.Reason != pkgopencost.ReasonAccessDenied || resp.TotalHourlyCost != 0 || resp.Namespaces != nil {
-		t.Fatalf("unexpected zero-access summary: %#v", resp)
-	}
-}
-
 func TestFilterCostSummaryReportsNoMetricsForVisibleNamespacesWithoutRows(t *testing.T) {
 	resp := &pkgopencost.CostSummary{
 		Available:  true,

@@ -40,7 +40,11 @@ import { kindToPlural, openExternal } from '../../utils/navigation'
 import { clusterCloudConsoleLink, nodeCloudConsoleLink } from './cloud-console'
 import { RightsizingScanView } from '../rightsizing/RightsizingScanView'
 import { CostViewTabs } from './CostViewTabs'
-import { costFreshnessLabel, costSourceLabel } from './source'
+import {
+  costFreshnessLabel,
+  costIntegrationUnavailableMessage,
+  costSourceLabel,
+} from './source'
 
 interface CostViewProps {
   onBack: () => void
@@ -369,6 +373,9 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
 }
 
 export function costUnavailableMessage(reason?: CostUnavailableReason): string {
+  const integrationMessage = costIntegrationUnavailableMessage(reason)
+  if (integrationMessage) return integrationMessage
+
   switch (reason) {
     case 'no_prometheus':
       return 'No compatible cost source found — connect OpenCost metrics through a PromQL-compatible backend or configure Kubecost'
@@ -376,14 +383,6 @@ export function costUnavailableMessage(reason?: CostUnavailableReason): string {
       return 'Cost data is not ready — the selected source returned no allocation data'
     case 'query_error':
       return 'Cost data is temporarily unavailable — the selected source query failed'
-    case 'source_unavailable':
-      return 'Kubecost Aggregator is unavailable — check Settings → Cost, its network path, and cluster ID'
-    case 'authentication_error':
-      return 'Kubecost rejected the configured API key — update it in Settings → Cost'
-    case 'configuration_mismatch':
-      return 'Saved Kubecost settings are not valid for this cluster — update the cluster ID or local API key in Settings → Cost'
-    case 'deployment_configuration_error':
-      return 'Cost collection is misconfigured by this Radar deployment — update its environment variables or Helm cost values, then restart Radar'
     case 'access_denied':
       return 'You do not have access to view cluster cost data'
     default:

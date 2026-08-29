@@ -128,11 +128,7 @@ func ComputeKubecostWorkloads(ctx context.Context, client *KubecostClient, names
 	if namespace == "" {
 		return nil, fmt.Errorf("namespace is required")
 	}
-	responses, err := computeKubecostWorkloads(ctx, client, map[string]PodOwnerLookup{namespace: opts.Owners}, namespace, opts)
-	if err != nil {
-		return nil, err
-	}
-	return responses[namespace], nil
+	return computeKubecostWorkloads(ctx, client, namespace, opts.Owners, opts)
 }
 
 func ComputeKubecostWorkloadsForNamespaces(ctx context.Context, client *KubecostClient, ownersByNamespace map[string]PodOwnerLookup, opts KubecostCurrentOptions) (map[string]*WorkloadCostResponse, map[string]error, error) {
@@ -150,17 +146,17 @@ func ComputeKubecostWorkloadsForNamespaces(ctx context.Context, client *Kubecost
 	responses := make(map[string]*WorkloadCostResponse, len(namespaces))
 	failures := make(map[string]error)
 	for _, namespace := range namespaces {
-		response, err := computeKubecostWorkloads(ctx, client, map[string]PodOwnerLookup{namespace: ownersByNamespace[namespace]}, namespace, opts)
+		response, err := computeKubecostWorkloads(ctx, client, namespace, ownersByNamespace[namespace], opts)
 		if err != nil {
 			failures[namespace] = err
 			continue
 		}
-		responses[namespace] = response[namespace]
+		responses[namespace] = response
 	}
 	return responses, failures, nil
 }
 
-func computeKubecostWorkloads(ctx context.Context, client *KubecostClient, ownersByNamespace map[string]PodOwnerLookup, queryNamespace string, opts KubecostCurrentOptions) (map[string]*WorkloadCostResponse, error) {
+func computeKubecostWorkloads(ctx context.Context, client *KubecostClient, namespace string, owners PodOwnerLookup, opts KubecostCurrentOptions) (*WorkloadCostResponse, error) {
 	if client == nil {
 		return nil, fmt.Errorf("kubecost client is not configured")
 	}
@@ -172,23 +168,18 @@ func computeKubecostWorkloads(ctx context.Context, client *KubecostClient, owner
 		Accumulate: "true",
 		Idle:       false,
 		ShareIdle:  false,
-		Filter:     kubecostFilter(opts.ClusterID, queryNamespace),
+		Filter:     kubecostFilter(opts.ClusterID, namespace),
 	})
 	if err != nil {
 		return nil, err
 	}
-	responses := make(map[string]*WorkloadCostResponse, len(ownersByNamespace))
-	for namespace := range ownersByNamespace {
-		responses[namespace] = &WorkloadCostResponse{Namespace: namespace, Currency: opts.Currency, Source: "kubecost"}
-	}
+	response := &WorkloadCostResponse{Namespace: namespace, Currency: opts.Currency, Source: "kubecost"}
 	if !hasKubecostAllocationData(resp) {
-		for _, response := range responses {
-			response.Reason = ReasonNoMetrics
-		}
-		return responses, nil
+		response.Reason = ReasonNoMetrics
+		return response, nil
 	}
 
-	workloadsByNamespace := make(map[string]map[string]*kubecostWorkloadAccumulator, len(ownersByNamespace))
+	workloads := map[string]*kubecostWorkloadAccumulator{}
 	for key, allocation := range kubecostAllocationRows(resp) {
 		if allocation == nil || kubecostIdleRow(key, allocation) {
 			continue
@@ -200,12 +191,8 @@ func computeKubecostWorkloads(ctx context.Context, client *KubecostClient, owner
 		if rowNamespace == "" {
 			return nil, fmt.Errorf("allocation %q is missing namespace identity", key)
 		}
-		owners, wanted := ownersByNamespace[rowNamespace]
-		if !wanted {
-			if queryNamespace != "" {
-				return nil, fmt.Errorf("allocation %q has namespace %q, expected %q", key, rowNamespace, queryNamespace)
-			}
-			continue
+		if rowNamespace != namespace {
+			return nil, fmt.Errorf("allocation %q has namespace %q, expected %q", key, rowNamespace, namespace)
 		}
 		kind, name, skip, err := kubecostWorkloadIdentity(key, allocation, owners)
 		if err != nil {
@@ -221,11 +208,6 @@ func computeKubecostWorkloads(ctx context.Context, client *KubecostClient, owner
 		cpuUsage, cpuAvailable := kubecostUsageCost(allocation.CPUCost, allocation.CPUCoreRequestAverage, allocation.CPUCoreUsageAverage)
 		ramUsage, ramAvailable := kubecostUsageCost(allocation.RAMCost, allocation.RAMByteRequestAverage, allocation.RAMByteUsageAverage)
 		identity := kind + "/" + name
-		workloads := workloadsByNamespace[rowNamespace]
-		if workloads == nil {
-			workloads = map[string]*kubecostWorkloadAccumulator{}
-			workloadsByNamespace[rowNamespace] = workloads
-		}
 		row := workloads[identity]
 		if row == nil {
 			row = &kubecostWorkloadAccumulator{
@@ -244,42 +226,39 @@ func computeKubecostWorkloads(ctx context.Context, client *KubecostClient, owner
 		if pod := propertyString(allocation.Properties, "pod"); pod != "" {
 			row.pods[pod] = struct{}{}
 		}
-		response := responses[rowNamespace]
 		response.DataThrough = LatestKubecostTimestamp(response.DataThrough, allocation.End)
 	}
-	for namespace, response := range responses {
-		for _, workload := range workloadsByNamespace[namespace] {
-			hours := workload.durationHours
-			if hours <= 0 {
-				return nil, fmt.Errorf("workload %s/%s is missing valid allocation duration", workload.row.Kind, workload.row.Name)
-			}
-			row := &workload.row
-			row.CPUCost = workload.cpuCost / hours
-			row.MemoryCost = workload.memoryCost / hours
-			row.HourlyCost = row.CPUCost + row.MemoryCost
-			row.CPUUsageCost = workload.cpuUsageCost / hours
-			row.MemoryUsageCost = workload.memoryUsageCost / hours
-			row.Replicas = len(workload.pods)
-			if row.CPUUsageAvailable {
-				row.CPUAllocationUse = efficiencyPct(row.CPUUsageCost, row.CPUCost)
-			}
-			if row.MemoryUsageAvailable {
-				row.MemoryAllocationUse = efficiencyPct(row.MemoryUsageCost, row.MemoryCost)
-			}
-			if row.CPUUsageAvailable && row.MemoryUsageAvailable {
-				row.Efficiency = efficiencyPct(row.CPUUsageCost+row.MemoryUsageCost, row.CPUCost+row.MemoryCost)
-				row.IdleCost = idleFromUsage(row.CPUUsageCost+row.MemoryUsageCost, row.CPUCost+row.MemoryCost)
-			}
-			roundWorkloadCost(row)
-			response.Workloads = append(response.Workloads, *row)
+	for _, workload := range workloads {
+		hours := workload.durationHours
+		if hours <= 0 {
+			return nil, fmt.Errorf("workload %s/%s is missing valid allocation duration", workload.row.Kind, workload.row.Name)
 		}
-		response.Available = len(response.Workloads) > 0
-		if !response.Available {
-			response.Reason = ReasonNoMetrics
+		row := &workload.row
+		row.CPUCost = workload.cpuCost / hours
+		row.MemoryCost = workload.memoryCost / hours
+		row.HourlyCost = row.CPUCost + row.MemoryCost
+		row.CPUUsageCost = workload.cpuUsageCost / hours
+		row.MemoryUsageCost = workload.memoryUsageCost / hours
+		row.Replicas = len(workload.pods)
+		if row.CPUUsageAvailable {
+			row.CPUAllocationUse = efficiencyPct(row.CPUUsageCost, row.CPUCost)
 		}
-		sort.Slice(response.Workloads, func(i, j int) bool { return response.Workloads[i].HourlyCost > response.Workloads[j].HourlyCost })
+		if row.MemoryUsageAvailable {
+			row.MemoryAllocationUse = efficiencyPct(row.MemoryUsageCost, row.MemoryCost)
+		}
+		if row.CPUUsageAvailable && row.MemoryUsageAvailable {
+			row.Efficiency = efficiencyPct(row.CPUUsageCost+row.MemoryUsageCost, row.CPUCost+row.MemoryCost)
+			row.IdleCost = idleFromUsage(row.CPUUsageCost+row.MemoryUsageCost, row.CPUCost+row.MemoryCost)
+		}
+		roundWorkloadCost(row)
+		response.Workloads = append(response.Workloads, *row)
 	}
-	return responses, nil
+	response.Available = len(response.Workloads) > 0
+	if !response.Available {
+		response.Reason = ReasonNoMetrics
+	}
+	sort.Slice(response.Workloads, func(i, j int) bool { return response.Workloads[i].HourlyCost > response.Workloads[j].HourlyCost })
+	return response, nil
 }
 
 func ComputeKubecostNodes(ctx context.Context, client *KubecostClient, opts KubecostCurrentOptions) (*NodeCostResponse, error) {

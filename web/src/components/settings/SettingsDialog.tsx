@@ -77,6 +77,11 @@ interface ConfigResponse {
   argoCdCliSession?: { server: string; user: string; insecure?: boolean }
 }
 
+interface KubecostApplyResponse {
+  source: 'prometheus' | 'kubecost'
+  apiKeySet: boolean
+}
+
 interface SettingsDialogProps {
   open: boolean
   onClose: () => void
@@ -1364,17 +1369,35 @@ function CostSection({
           ...(sentKey !== undefined ? { apiKey: sentKey } : {}),
         }),
       })
-      const data = await res.json().catch(() => null)
+      const data: unknown = await res.json().catch(() => null)
       if (!res.ok) {
-        setApply({ status: 'failed', error: data?.error || res.statusText })
+        const error =
+          data !== null &&
+          typeof data === 'object' &&
+          'error' in data &&
+          typeof data.error === 'string'
+            ? data.error
+            : res.statusText
+        setApply({ status: 'failed', error })
         return
       }
+      if (
+        data === null ||
+        typeof data !== 'object' ||
+        !('source' in data) ||
+        (data.source !== 'prometheus' && data.source !== 'kubecost') ||
+        !('apiKeySet' in data) ||
+        typeof data.apiKeySet !== 'boolean'
+      ) {
+        throw new Error('Radar returned an invalid Kubecost configuration response')
+      }
+      const applied = data as KubecostApplyResponse
       setApiKey('')
       setApiKeyTouched(false)
       setApiKeyCleared(false)
-      nextKeySet = data?.apiKeySet ?? nextKeySet
+      nextKeySet = applied.apiKeySet
       onApplied({ source, url: url.trim(), clusterId: clusterId.trim(), apiKeySet: nextKeySet })
-      setApply({ status: 'connected', address: data?.source || source })
+      setApply({ status: 'connected', address: applied.source })
     } catch (err) {
       setApply({ status: 'failed', error: String(err) })
     }

@@ -23,8 +23,6 @@ type KubecostAllocationOptions struct {
 	Idle       bool
 	ShareIdle  bool
 	Filter     string
-	Limit      int
-	Offset     int
 }
 
 func (o KubecostAllocationOptions) toQuery() url.Values {
@@ -44,12 +42,6 @@ func (o KubecostAllocationOptions) toQuery() url.Values {
 	q.Set("shareIdle", strconv.FormatBool(o.ShareIdle))
 	if o.Filter != "" {
 		q.Set("filter", o.Filter)
-	}
-	if o.Limit > 0 {
-		q.Set("limit", strconv.Itoa(o.Limit))
-	}
-	if o.Offset > 0 {
-		q.Set("offset", strconv.Itoa(o.Offset))
 	}
 	return q
 }
@@ -102,8 +94,6 @@ type KubecostAssetOptions struct {
 	Window     string
 	Accumulate string
 	Filter     string
-	Limit      int
-	Offset     int
 }
 
 func (o KubecostAssetOptions) toQuery() url.Values {
@@ -118,12 +108,6 @@ func (o KubecostAssetOptions) toQuery() url.Values {
 	}
 	if o.Filter != "" {
 		q.Set("filter", o.Filter)
-	}
-	if o.Limit > 0 {
-		q.Set("limit", strconv.Itoa(o.Limit))
-	}
-	if o.Offset > 0 {
-		q.Set("offset", strconv.Itoa(o.Offset))
 	}
 	return q
 }

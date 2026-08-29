@@ -258,20 +258,6 @@ func handleNodesScoped(w http.ResponseWriter, r *http.Request, resolveCurrency f
 }
 
 func filterCostSummary(resp *pkgopencost.CostSummary, allowed []string) {
-	if resp == nil || allowed == nil {
-		return
-	}
-	if len(allowed) == 0 {
-		resp.Available = false
-		resp.Reason = pkgopencost.ReasonAccessDenied
-		resp.Namespaces = nil
-		resp.TotalHourlyCost = 0
-		resp.TotalStorageCost = 0
-		resp.TotalNetworkCost = 0
-		resp.TotalIdleCost = 0
-		resp.ClusterEfficiency = 0
-		return
-	}
 	allow := make(map[string]struct{}, len(allowed))
 	for _, namespace := range allowed {
 		allow[namespace] = struct{}{}

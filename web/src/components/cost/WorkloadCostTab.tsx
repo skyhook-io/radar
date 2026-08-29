@@ -20,7 +20,11 @@ import {
 } from './format'
 import { CurrentAllocationUse } from './CurrentAllocationUse'
 import { costUnavailableReasonFromError } from './errors'
-import { costFreshnessLabel, costSourceLabel } from './source'
+import {
+  costFreshnessLabel,
+  costIntegrationUnavailableMessage,
+  costSourceLabel,
+} from './source'
 
 type WorkloadCostState =
   | 'loading'
@@ -336,27 +340,20 @@ function WorkloadCostDiscovering({
 
 function WorkloadCostUnavailable({ state }: { state: CostUnavailableReason | 'load_error' }) {
   const message =
-    state === 'no_prometheus'
+    costIntegrationUnavailableMessage(state) ??
+    (state === 'no_prometheus'
       ? 'No compatible metrics backend was found. OpenCost workload cost requires OpenCost metrics in a PromQL-compatible backend.'
       : state === 'query_error'
         ? 'Cost data is temporarily unavailable. A metrics backend was found, but workload cost queries failed.'
-        : state === 'source_unavailable'
-          ? 'Kubecost Aggregator is unavailable. Check the URL, network path, and cluster ID in Settings → Cost.'
-          : state === 'deployment_configuration_error'
-            ? 'Cost collection is misconfigured by this Radar deployment. Update its environment variables or Helm cost values, then restart Radar.'
-          : state === 'authentication_error'
-            ? 'Kubecost rejected the configured API key. Update it in Settings → Cost.'
-            : state === 'configuration_mismatch'
-              ? 'Saved Kubecost settings are not valid for this cluster. Update the cluster ID or local API key in Settings → Cost.'
-            : state === 'history_unsupported'
-              ? 'Historical workload cost is not available for Kubecost yet.'
+        : state === 'history_unsupported'
+          ? 'Historical workload cost is not available for Kubecost yet.'
         : state === 'access_denied'
           ? 'You do not have access to view cost for this workload.'
           : state === 'not_found'
             ? 'This workload no longer exists.'
             : state === 'load_error'
               ? 'Could not load workload cost data. Check access to this workload and try again.'
-              : 'OpenCost workload metrics were not found for this workload.'
+              : 'OpenCost workload metrics were not found for this workload.')
 
   return (
     <div className="flex h-full min-h-[320px] items-center justify-center">
