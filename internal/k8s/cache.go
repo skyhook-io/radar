@@ -335,7 +335,10 @@ func InitResourceCache(ctx context.Context) error {
 		// others are namespace-scoped to the same fallback namespace).
 		rbacStart := time.Now()
 		rbacCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		permResult := CheckResourcePermissions(rbacCtx)
+		// A superseded result is still the right one to wire from: the client
+		// captured above belongs to the same cluster this probe describes, and
+		// the operation that superseded it tears this cache down anyway.
+		permResult, _ := CheckResourcePermissions(rbacCtx)
 		cancel()
 		logTiming("    Resource access probes: %v", time.Since(rbacStart))
 

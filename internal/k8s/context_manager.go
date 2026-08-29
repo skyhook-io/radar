@@ -721,9 +721,12 @@ func reinitializeNamespaceScope(namespace, resetMessage string) error {
 	ResetAllSubsystems()
 	logTiming("   [ops] ResetAllSubsystems: %v", time.Since(t))
 
+	// Retire in-flight permission probes BEFORE the scope they were computed
+	// against changes. A rescope keeps the same clients, so the probe cache's
+	// own generation is the only thing that can retire them.
+	InvalidateResourcePermissionsCache()
 	SetNamespaceScopeOverride(namespace)
 	InvalidateCapabilitiesCache()
-	InvalidateResourcePermissionsCache()
 	InvalidateServerVersionCache()
 
 	t = time.Now()

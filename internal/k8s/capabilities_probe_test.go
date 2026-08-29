@@ -322,16 +322,17 @@ func TestCheckResourcePermissionsCacheHitCopiesScopeNamespaces(t *testing.T) {
 		},
 	}
 	resourcePermsExpiry = time.Now().Add(time.Minute)
+	cachedPermClientGen = currentClientGeneration()
 	resourcePermsMu.Unlock()
 	t.Cleanup(InvalidateResourcePermissionsCache)
 
-	got := CheckResourcePermissions(context.Background())
+	got, _ := CheckResourcePermissions(context.Background())
 	if !reflect.DeepEqual(got.ScopeNamespaces[k8score.Pods], []string{nsA, nsB}) {
 		t.Fatalf("ScopeNamespaces = %v, want [%s %s]", got.ScopeNamespaces[k8score.Pods], nsA, nsB)
 	}
 	got.ScopeNamespaces[k8score.Pods][0] = "mutated"
 
-	got = CheckResourcePermissions(context.Background())
+	got, _ = CheckResourcePermissions(context.Background())
 	if !reflect.DeepEqual(got.ScopeNamespaces[k8score.Pods], []string{nsA, nsB}) {
 		t.Fatalf("cached ScopeNamespaces was mutated through caller copy: %v", got.ScopeNamespaces[k8score.Pods])
 	}
@@ -577,7 +578,8 @@ func TestCheckResourcePermissionsDiscardsSupersededProbe(t *testing.T) {
 
 	superseded := make(chan *PermissionCheckResult, 1)
 	go func() {
-		superseded <- CheckResourcePermissions(context.Background())
+		result, _ := CheckResourcePermissions(context.Background())
+		superseded <- result
 	}()
 	select {
 	case <-entered: // the probe is inside the client, holding the previous scope
@@ -591,7 +593,10 @@ func TestCheckResourcePermissionsDiscardsSupersededProbe(t *testing.T) {
 	SetFallbackNamespace(currentNs)
 	InvalidateResourcePermissionsCache()
 
-	current := CheckResourcePermissions(context.Background())
+	current, currentIsCurrent := CheckResourcePermissions(context.Background())
+	if !currentIsCurrent {
+		t.Fatal("probe against the current cluster reported itself superseded")
+	}
 	if current.Namespace != currentNs {
 		t.Fatalf("current probe resolved namespace %q, want %q", current.Namespace, currentNs)
 	}
@@ -622,5 +627,114 @@ func TestCheckResourcePermissionsDiscardsSupersededProbe(t *testing.T) {
 	}
 	if !cached.Perms.Pods {
 		t.Fatal("cached result lost the current cluster's Pods grant")
+	}
+}
+
+// TestCheckResourcePermissionsDiscardsProbeAcrossClientSwap covers the window a
+// context switch opens before it invalidates: SwitchContext publishes the new
+// cluster's clients first, so between those two points the cache generation
+// alone still looks current to a probe holding the previous cluster's client.
+func TestCheckResourcePermissionsDiscardsProbeAcrossClientSwap(t *testing.T) {
+	defer ResetTestState()
+
+	const previousNs, currentNs = "previous-cluster-ns", "current-cluster-ns"
+
+	typed, err := kubernetes.NewForConfig(&rest.Config{Host: "http://localhost:1"})
+	if err != nil {
+		t.Fatalf("creating typed client: %v", err)
+	}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var enteredOnce sync.Once
+	previousDyn := fakeDyn(t, func(gvr schema.GroupVersionResource, namespace string) bool {
+		enteredOnce.Do(func() { close(entered) })
+		<-release
+		return gvr.Group == "" && gvr.Resource == "pods" && namespace == previousNs
+	})
+	currentDyn := fakeDyn(t, func(gvr schema.GroupVersionResource, namespace string) bool {
+		return gvr.Group == "" && gvr.Resource == "pods" && namespace == currentNs
+	})
+
+	swapClients := func(dyn dynamic.Interface, generation uint64) {
+		clientMu.Lock()
+		k8sClient = typed
+		dynamicClient = dyn
+		activeClientGeneration = generation
+		clientMu.Unlock()
+	}
+
+	swapClients(previousDyn, 1)
+	SetFallbackNamespace(previousNs)
+	InvalidateResourcePermissionsCache()
+
+	superseded := make(chan *PermissionCheckResult, 1)
+	go func() {
+		result, _ := CheckResourcePermissions(context.Background())
+		superseded <- result
+	}()
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("probe never reached the dynamic client; the race window this test needs no longer exists")
+	}
+
+	// The clients move to the new cluster with NO invalidation — the ordering
+	// inside performContextSwitch, where SwitchContext runs before the
+	// invalidation block.
+	swapClients(currentDyn, 2)
+	SetFallbackNamespace(currentNs)
+
+	close(release)
+	select {
+	case <-superseded:
+	case <-time.After(10 * time.Second):
+		t.Fatal("probe did not return after release")
+	}
+
+	if cached := GetCachedPermissionResult(); cached != nil {
+		t.Fatalf("probe holding the previous cluster's client published %q across a client swap", cached.Namespace)
+	}
+}
+
+// TestCachedPermissionResultRejectedAfterClientSwap covers the read side of the
+// same window: a context switch publishes the new cluster's clients before it
+// invalidates, so for that stretch the cached result describes a cluster the
+// process has already left. Every consumer treats what it reads as the current
+// cluster's answer, so the cache must withhold it rather than serve it.
+func TestCachedPermissionResultRejectedAfterClientSwap(t *testing.T) {
+	defer ResetTestState()
+
+	const previousNs = "previous-cluster-ns"
+
+	clientMu.Lock()
+	activeClientGeneration = 1
+	clientMu.Unlock()
+
+	resourcePermsMu.Lock()
+	cachedPermResult = &PermissionCheckResult{
+		Perms:           &ResourcePermissions{Pods: true},
+		NamespaceScoped: true,
+		Namespace:       previousNs,
+		Scopes:          map[string]k8score.ResourceScope{k8score.Pods: {Enabled: true, Namespace: previousNs}},
+		ScopeNamespaces: map[string][]string{k8score.Pods: {previousNs}},
+		ScopeCandidates: []string{previousNs},
+	}
+	cachedPermClientGen = 1
+	resourcePermsExpiry = time.Now().Add(time.Minute)
+	resourcePermsMu.Unlock()
+
+	if got := GetCachedPermissionResult(); got == nil || got.Namespace != previousNs {
+		t.Fatalf("cached result not served under its own client generation: %+v", got)
+	}
+
+	// SwitchContext publishes the new cluster's clients; the invalidation that
+	// follows it has not run yet.
+	clientMu.Lock()
+	activeClientGeneration = 2
+	clientMu.Unlock()
+
+	if got := GetCachedPermissionResult(); got != nil {
+		t.Fatalf("cache served the previous cluster's result after a client swap: namespace=%q", got.Namespace)
 	}
 }
