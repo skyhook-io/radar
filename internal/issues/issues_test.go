@@ -547,6 +547,60 @@ func TestProblemOnsetRequiresExactEvidence(t *testing.T) {
 	}
 }
 
+func TestTimingSummaryExplainsIndependentAndPartialProvenance(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name  string
+		issue Issue
+		want  string
+	}{
+		{
+			name:  "owner condition does not date child reason",
+			issue: Issue{OnsetUnknown: true, IssueTiming: "started_at_resource_creation", IssueTimingBasis: "owner_condition"},
+			want:  "Exact onset of this specific issue is unknown. Its owner workload never became healthy after deployment.",
+		},
+		{
+			name:  "pod creation does not date child reason",
+			issue: Issue{OnsetUnknown: true, IssueTiming: "started_at_resource_creation", IssueTimingBasis: "pod_creation"},
+			want:  "Exact onset of this specific issue is unknown. The affected pod failed during startup of its workload revision.",
+		},
+		{
+			name:  "partial group",
+			issue: Issue{FirstSeen: now, OnsetCoverage: &issuesapi.OnsetCoverage{Known: 2, Unknown: 1}},
+			want:  "Some signals were active at least since 2026-08-29T12:00:00Z; exact onset is unknown for 1 other signal.",
+		},
+		{
+			name:  "all unknown group retains independent evidence",
+			issue: Issue{OnsetCoverage: &issuesapi.OnsetCoverage{Unknown: 3}, IssueTiming: "started_at_resource_creation", IssueTimingBasis: "owner_condition"},
+			want:  "Exact onset is unknown for all 3 contributing signals. Its owner workload never became healthy after deployment.",
+		},
+		{
+			name:  "exact onset needs no explanation",
+			issue: Issue{FirstSeen: now, IssueTiming: "started_at_resource_creation", IssueTimingBasis: "owner_condition"},
+			want:  "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := timingSummary(tt.issue); got != tt.want {
+				t.Fatalf("timingSummary() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFinalizeAddsTimingSummaryToPublicIssue(t *testing.T) {
+	out, _ := finalizeShapedIssues([]Issue{{
+		Name:             "missing-secret",
+		OnsetUnknown:     true,
+		IssueTiming:      "started_at_resource_creation",
+		IssueTimingBasis: "owner_condition",
+	}}, Filters{Limit: NoLimit}, false, true)
+	if len(out) != 1 || out[0].TimingSummary != "Exact onset of this specific issue is unknown. Its owner workload never became healthy after deployment." {
+		t.Fatalf("public timing summary = %+v", out)
+	}
+}
+
 func TestPublicIssueTimesNormalizeToUTC(t *testing.T) {
 	local := time.FixedZone("test-offset", 3*60*60)
 	out, _ := finalizeShapedIssues([]Issue{{

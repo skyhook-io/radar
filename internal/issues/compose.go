@@ -262,6 +262,7 @@ func filterShapedIssues(out []Issue, f Filters) ([]Issue, ComposeStats) {
 		if !out[idx].LastSeen.IsZero() {
 			out[idx].LastSeen = out[idx].LastSeen.UTC()
 		}
+		out[idx].TimingSummary = timingSummary(out[idx])
 	}
 	out = applyFilters(out, f) // severity + kind, against subject (grouped) or evidence (flat)
 	var stats ComposeStats

@@ -449,6 +449,11 @@ type Issue struct {
 	//   "phase"           — resource Phase field (e.g. PVC Pending)
 	//   "spec"            — structural spec invariant (no timestamp required)
 	IssueTimingBasis string `json:"issue_timing_basis,omitempty"`
+	// TimingSummary explains combinations whose raw provenance fields are easy
+	// to misread, such as an unknown cause-specific onset alongside independent
+	// workload-level deployment timing. It is deliberately plain-language so
+	// agents do not need the schema documentation to reconcile those facts.
+	TimingSummary string `json:"timing_summary,omitempty"`
 	// CorrelatedChanges lists recent non-status changes (spec/config and
 	// lifecycle) on this issue's subject (and, for workload subjects, its
 	// directly referenced ConfigMaps) within the correlation lookback window.

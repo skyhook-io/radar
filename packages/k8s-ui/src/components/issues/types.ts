@@ -243,6 +243,8 @@ export interface Issue {
   issue_timing?: 'started_at_resource_creation' | 'started_after_resource_was_healthy';
   /** The evidence that determined issue_timing (for auditability). */
   issue_timing_basis?: 'condition' | 'owner_condition' | 'pod_creation' | 'deletion' | 'phase' | 'spec';
+  /** Plain-language explanation when timing fields describe different scopes. */
+  timing_summary?: string;
 
   /** Recent non-status changes (spec/config and lifecycle) on this issue's
    *  subject (and, for workload subjects, its referenced ConfigMaps) —

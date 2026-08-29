@@ -239,7 +239,7 @@ export function IssueRow({
         <Tooltip content={issueOnsetUnknownTitle(issue)} delay={200} wrapperClassName="shrink-0">
           <span className="flex items-center gap-1 text-xs text-theme-text-tertiary">
             <Clock className="h-3 w-3" aria-hidden />
-            Onset unknown
+            Exact onset unknown
           </span>
         </Tooltip>
       ) : null}
@@ -466,8 +466,8 @@ function Diagnosis({ issue, source }: { issue: Issue; source?: IssueDiagnosisSou
   } else if (issue.first_seen) {
     meta.push(`active at least ${formatRelativeAgeTime(issue.first_seen)}`);
   }
-  if (issue.onset_unknown) {
-    meta.push('onset unknown');
+  if (issue.onset_unknown && !timing && !partialOnset) {
+    meta.push('exact onset unknown');
   }
   if (issue.first_seen) {
     if (issue.last_seen && timing?.kind !== 'creation') meta.push(`last seen ${formatRelativeAgeTime(issue.last_seen)}`);

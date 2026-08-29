@@ -155,7 +155,7 @@ describe('IssueRow', () => {
       onToggle: () => undefined,
     }))
 
-    expect(html).toContain('Onset unknown')
+    expect(html).toContain('Exact onset unknown')
     expect(html).not.toContain('0s')
   })
 
@@ -170,10 +170,10 @@ describe('IssueRow', () => {
       onToggle: () => undefined,
     }))
 
-    expect(html).toContain('Onset unknown')
-    expect(html).toContain('since deploy')
-    expect(html).toContain('present since deployment or first reconciliation')
-    expect(html).toContain('onset unknown')
+    expect(html).toContain('Exact onset unknown')
+    expect(html).toContain('workload never healthy')
+    expect(html).toContain('exact onset unknown; owner workload never became healthy after deployment')
+    expect(html).not.toContain('since deploy')
   })
 
   it('renders mixed groups as a lower-bound age and suppresses a group-wide timing claim', () => {
@@ -318,6 +318,29 @@ describe('issueTiming', () => {
     }))).toMatchObject({
       kind: 'creation',
       chip: 'since creation',
+    })
+  })
+
+  it('uses self-explanatory copy when exact onset and independent timing have different scopes', () => {
+    expect(issueTiming(mk({
+      kind: 'Pod',
+      onset_unknown: true,
+      issue_timing: 'started_at_resource_creation',
+      issue_timing_basis: 'pod_creation',
+    }))).toMatchObject({
+      chip: 'pod failed at startup',
+      meta: 'exact onset unknown; affected pod failed during workload startup',
+    })
+
+    expect(issueTiming(mk({
+      kind: 'Rollout',
+      group: 'argoproj.io',
+      onset_unknown: true,
+      issue_timing: 'started_at_resource_creation',
+      issue_timing_basis: 'spec',
+    }))).toMatchObject({
+      chip: 'invalid at first reconcile',
+      meta: 'exact onset unknown; initial spec was failing from first reconciliation',
     })
   })
 

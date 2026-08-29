@@ -1,6 +1,7 @@
 package issues
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -45,6 +46,59 @@ func issueTimingIndependentOfOnset(basis string) bool {
 	default:
 		return false
 	}
+}
+
+func timingSummary(i Issue) string {
+	if i.OnsetCoverage != nil && i.OnsetCoverage.Unknown > 0 {
+		if i.OnsetCoverage.Known > 0 && !i.FirstSeen.IsZero() {
+			return fmt.Sprintf("Some signals were active at least since %s; exact onset is unknown for %d other %s.",
+				i.FirstSeen.UTC().Format(time.RFC3339), i.OnsetCoverage.Unknown, pluralSignal(i.OnsetCoverage.Unknown))
+		}
+		summary := fmt.Sprintf("Exact onset is unknown for all %d contributing %s.",
+			i.OnsetCoverage.Unknown, pluralSignal(i.OnsetCoverage.Unknown))
+		if evidence := independentTimingSummary(i); evidence != "" {
+			return summary + " " + evidence
+		}
+		return summary
+	}
+
+	if i.OnsetUnknown {
+		if evidence := independentTimingSummary(i); evidence != "" {
+			return "Exact onset of this specific issue is unknown. " + evidence
+		}
+	}
+	return ""
+}
+
+func independentTimingSummary(i Issue) string {
+	switch i.IssueTimingBasis {
+	case "owner_condition":
+		if i.IssueTiming == "started_at_resource_creation" {
+			return "Its owner workload never became healthy after deployment."
+		}
+		if i.IssueTiming == "started_after_resource_was_healthy" {
+			return "Its owner workload was healthy before its current health regression."
+		}
+	case "pod_creation":
+		if i.IssueTiming == "started_at_resource_creation" {
+			return "The affected pod failed during startup of its workload revision."
+		}
+		if i.IssueTiming == "started_after_resource_was_healthy" {
+			return "The affected pod belongs to a later workload revision after an earlier healthy period."
+		}
+	case "spec":
+		if i.IssueTiming == "started_at_resource_creation" {
+			return "The initial specification establishes that the resource was failing from its first reconciliation."
+		}
+	}
+	return ""
+}
+
+func pluralSignal(n int) string {
+	if n == 1 {
+		return "signal"
+	}
+	return "signals"
 }
 
 func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {

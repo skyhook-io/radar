@@ -42,12 +42,15 @@ func TestIssueOnsetProvenanceWireShape(t *testing.T) {
 		OnsetUnknown:      false,
 		OnsetCoverage:     &OnsetCoverage{Known: 2, Unknown: 1},
 		ResourceCreatedAt: createdAt,
+		TimingSummary:     "Some timing is unknown.",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	wire := string(blob)
-	if !strings.Contains(wire, `"onset_coverage":{"known":2,"unknown":1}`) || !strings.Contains(wire, `"resource_created_at":"2026-08-09T01:02:03Z"`) {
+	if !strings.Contains(wire, `"onset_coverage":{"known":2,"unknown":1}`) ||
+		!strings.Contains(wire, `"resource_created_at":"2026-08-09T01:02:03Z"`) ||
+		!strings.Contains(wire, `"timing_summary":"Some timing is unknown."`) {
 		t.Fatalf("onset provenance wire shape = %s", wire)
 	}
 }

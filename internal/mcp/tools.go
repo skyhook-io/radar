@@ -378,12 +378,8 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"`related_issues[].count` is the root's affected subset, not the linked issue total. " +
 			"Confidence: `high` declared edge, `medium` lead to verify, `low` heuristic. " +
 			"`incident_parent` is one unambiguous best root; absence may mean competing roots. " +
-			"`first_seen` means 'active at least since': it may be Radar's first observation, " +
-			"not exact onset. `issue_timing` (`started_at_resource_creation` or " +
-			"`started_after_resource_was_healthy`) is timing evidence, not a root-cause verdict; " +
-			"absent means unknown. The `owner_condition`, `pod_creation`, and `spec` bases " +
-			"need not share `first_seen`. " +
-			"Never subtract `resource_created_at` from `first_seen` to infer healthy duration. " +
+			"When present, `timing_summary` gives the plain-language timing interpretation; " +
+			"use the raw timing fields only for filtering. Never treat resource age as issue age. " +
 			"When `recent_changes` is present, inspect it before concluding the returned " +
 			"issues explain the symptom. Follow `recent_changes_guidance` when present. " +
 			"`recent_changes_reason=" + meaningfulchanges.ChangesReasonNoCriticalIssues +

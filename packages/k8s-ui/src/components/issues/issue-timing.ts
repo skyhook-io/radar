@@ -66,6 +66,14 @@ export function issueTiming(issue: Issue): IssueTimingDisplay | null {
           tooltip: 'The owner workload had a healthy period before its current failing condition. This does not date or attribute this specific issue.',
         };
       }
+      if (issue.onset_unknown && issue.issue_timing_basis === 'pod_creation') {
+        return {
+          kind: 'regression',
+          chip: 'later rollout regressed',
+          meta: 'exact onset unknown; affected pod belongs to a later rollout after an earlier healthy period',
+          tooltip: 'The affected pod belongs to a later workload revision after an earlier healthy period. This does not date this specific issue.',
+        };
+      }
       return {
         kind: 'regression',
         chip: 'after healthy',
@@ -74,6 +82,30 @@ export function issueTiming(issue: Issue): IssueTimingDisplay | null {
       };
     }
     case 'started_at_resource_creation': {
+      if (issue.onset_unknown && issue.issue_timing_basis === 'owner_condition') {
+        return {
+          kind: 'creation',
+          chip: 'workload never healthy',
+          meta: 'exact onset unknown; owner workload never became healthy after deployment',
+          tooltip: 'The owner workload never became healthy after deployment. This does not date or attribute this specific issue.',
+        };
+      }
+      if (issue.onset_unknown && issue.issue_timing_basis === 'pod_creation') {
+        return {
+          kind: 'creation',
+          chip: 'pod failed at startup',
+          meta: 'exact onset unknown; affected pod failed during workload startup',
+          tooltip: 'The affected pod failed during startup of its workload revision. This does not date this specific issue.',
+        };
+      }
+      if (issue.onset_unknown && issue.issue_timing_basis === 'spec') {
+        return {
+          kind: 'creation',
+          chip: 'invalid at first reconcile',
+          meta: 'exact onset unknown; initial spec was failing from first reconciliation',
+          tooltip: 'The initial specification establishes that the resource was failing from its first reconciliation.',
+        };
+      }
       if (isDeploymentLikeCreation(issue)) {
         return {
           kind: 'creation',
