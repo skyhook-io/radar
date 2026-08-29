@@ -196,7 +196,18 @@ func handleTrendScoped(w http.ResponseWriter, r *http.Request, resolveCurrency f
 		return
 	}
 	if connection.Source == SourceKubecost {
-		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: pkgopencost.ReasonHistoryUnsupported, Currency: currency, Source: "kubecost", Range: r.URL.Query().Get("range")})
+		resp, err := pkgopencost.ComputeKubecostTrend(r.Context(), connection.Client, pkgopencost.KubecostTrendOptions{
+			Range:      r.URL.Query().Get("range"),
+			Namespaces: namespaces,
+			Currency:   currency,
+			ClusterID:  connection.ClusterID,
+		})
+		if err != nil {
+			log.Printf("[opencost] Kubecost trend failed: %s", k8s.SanitizeForLog(err.Error()))
+			writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: currency, Source: "kubecost", Range: r.URL.Query().Get("range")})
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 	client := prometheuspkg.GetClient()
@@ -327,6 +338,12 @@ func ConnectionFailureReason(err error) string {
 	}
 	if errors.Is(err, ErrKubecostContextMismatch) {
 		return pkgopencost.ReasonConfigMismatch
+	}
+	if errors.Is(err, pkgopencost.ErrKubecostClusterMismatch) {
+		return pkgopencost.ReasonConfigMismatch
+	}
+	if errors.Is(err, pkgopencost.ErrKubecostMalformedResponse) {
+		return pkgopencost.ReasonQueryError
 	}
 	if errors.Is(err, ErrCostSourceEnvConfig) {
 		return pkgopencost.ReasonDeploymentConfig

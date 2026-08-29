@@ -324,7 +324,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
         </div>
 
         {/* Cost trend chart */}
-        <CostTrendChart />
+        <CostTrendChart namespaceScoped={namespaceScopeCount > 0} />
 
         {/* Namespace cost table */}
         <div className="rounded-lg border border-theme-border bg-theme-surface/50">
@@ -927,7 +927,7 @@ function CostHelpDialog({ currency, source, window, onClose }: { currency: strin
             </h3>
             <p>
               {source === 'kubecost' ? (
-                <>Allocation rates use the latest completed Kubecost ETL window and show its data-through time. Historical charts are not available through this integration yet.</>
+                <>Allocation rates use the latest completed Kubecost ETL window and show its data-through time. The cluster trend shows the allocation history Kubecost retained for the selected range; workload and application history are not available through this integration.</>
               ) : (
                 <>Cost rates and breakdowns are <strong>snapshots based on the last 1 hour</strong> of data. They update automatically every minute. The trend chart shows historical hourly allocation rate over the selected time range.</>
               )}

@@ -247,6 +247,12 @@ func TestConnectionFailureReasonDoesNotGuessAuthenticationFromText(t *testing.T)
 	if got := ConnectionFailureReason(ErrKubecostContextMismatch); got != pkgopencost.ReasonConfigMismatch {
 		t.Fatalf("context mismatch reason = %q, want %q", got, pkgopencost.ReasonConfigMismatch)
 	}
+	if got := ConnectionFailureReason(fmt.Errorf("retained row: %w", pkgopencost.ErrKubecostClusterMismatch)); got != pkgopencost.ReasonConfigMismatch {
+		t.Fatalf("row cluster mismatch reason = %q, want %q", got, pkgopencost.ReasonConfigMismatch)
+	}
+	if got := ConnectionFailureReason(fmt.Errorf("retained row: %w", pkgopencost.ErrKubecostMalformedResponse)); got != pkgopencost.ReasonQueryError {
+		t.Fatalf("malformed response reason = %q, want %q", got, pkgopencost.ReasonQueryError)
+	}
 	if got := ConnectionFailureReason(fmt.Errorf("%w: invalid source", ErrCostSourceEnvConfig)); got != pkgopencost.ReasonDeploymentConfig {
 		t.Fatalf("environment config reason = %q, want %q", got, pkgopencost.ReasonDeploymentConfig)
 	}

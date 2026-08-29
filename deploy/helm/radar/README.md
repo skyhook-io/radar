@@ -168,8 +168,9 @@ helm upgrade --install radar skyhook/radar -n radar \
 
 The API key is optional; omit the Secret for an endpoint that intentionally
 allows unauthenticated allocation reads. These values are environment-managed
-and read-only in Settings. Radar reads current allocation and node costs from
-Kubecost; historical trend charts remain unavailable in this first integration.
+and read-only in Settings. Radar reads current allocation and node costs plus
+the retained cluster allocation trend from Kubecost. Workload and application
+trend charts remain unavailable for Kubecost.
 
 ## Configuration
 

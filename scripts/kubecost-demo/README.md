@@ -21,7 +21,7 @@ ephemeral storage because the whole cluster is disposable.
 | Raw REST shape | `query` | The active Aggregator exposes allocation and asset data through either the root or `/model` path, carries the configured cluster identity, namespaces, node assets, and any controller identity it resolved. The output calls out pods without controller identity. |
 | Local Radar | Run Radar locally after `up`, then `RADAR_BASE_URL=http://localhost:9347 ./scripts/kubecost-demo.sh radar-smoke` | Radar discovers the active Aggregator StatefulSet and named `tcp-api` Service, then owns a scoped port-forward because the ClusterIP is unreachable from the host. The same API contract assertions used in-cluster run against local Radar. |
 | In-cluster Radar | `install-radar` | The current Go tree is built into the cluster and connects directly through Kubecost Service DNS, without a port-forward. |
-| Radar contract | `radar-smoke` | Summary, workload, and node endpoints report `source=kubecost`, current data has freshness metadata, detected currency is EUR, and the trend endpoint reports `history_unsupported`. |
+| Radar contract | `radar-smoke` | Summary, workload, node, and cluster trend endpoints report `source=kubecost`, current data has freshness metadata, and detected currency is EUR. |
 | Cleanup | `down` | Deletes the kind cluster and all of its ephemeral storage. `install-radar` leaves the reusable `radar-kubecost-demo:dev` image in the host Docker image store. |
 
 ## Typical flow
@@ -48,7 +48,7 @@ Open `http://localhost:9347/cost`. Expected behavior:
 - `cost-demo` contains `checkout`, `orders`, and `telemetry`;
 - the node table contains the kind node;
 - current values carry a freshness timestamp;
-- trend surfaces explain that Kubecost history is unavailable.
+- the cluster trend uses the allocation history retained by Kubecost.
 
 To exercise the in-cluster path instead:
 
@@ -118,10 +118,11 @@ identity should deliberately differ from the kind cluster name.
 - **EUR is a label, not a Radar conversion.** Deterministic custom prices make
   non-zero values stable enough to inspect; Radar preserves Kubecost's currency
   meaning and never converts those numbers.
-- **History is deliberately absent from the Radar Kubecost path.** Receiving
-  sparse historical-looking buckets from a fresh cluster would not prove the
-  retention or completeness contract. `history_unsupported` is the expected
-  result.
+- **Cluster history reflects Kubecost retention.** The demo's ephemeral store
+  may only contain recent buckets, so the trend proves that Radar preserves and
+  displays the history Kubecost returned; it does not assert a retention period.
+  Workload and application trends remain current-only because historical owner
+  attribution is a separate contract.
 - **The two connection lanes are not interchangeable.** Local Radar must use
   its managed port-forward; in-cluster Radar must use Service DNS. A success in
   one does not prove the other. `install-radar` explicitly withholds

@@ -2,6 +2,7 @@ package opencost
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -12,6 +13,11 @@ import (
 const (
 	kubecostCurrentWindow        = "1h"
 	kubecostNamespaceConcurrency = 8
+)
+
+var (
+	ErrKubecostClusterMismatch   = errors.New("Kubecost cluster identity mismatch")
+	ErrKubecostMalformedResponse = errors.New("Kubecost returned malformed data")
 )
 
 type KubecostCurrentOptions struct {
@@ -457,10 +463,10 @@ func escapeKubecostFilterValue(value string) string {
 func requireKubecostCluster(properties map[string]interface{}, expected string) error {
 	actual := propertyString(properties, "cluster")
 	if actual == "" {
-		return fmt.Errorf("Kubecost row is missing cluster identity")
+		return fmt.Errorf("%w: row is missing cluster identity", ErrKubecostClusterMismatch)
 	}
 	if expected != "" && actual != expected {
-		return fmt.Errorf("Kubecost row belongs to cluster %q, expected %q", actual, expected)
+		return fmt.Errorf("%w: row belongs to cluster %q, expected %q", ErrKubecostClusterMismatch, actual, expected)
 	}
 	return nil
 }
@@ -585,7 +591,7 @@ func parseKubecostTimestamp(value string) (time.Time, error) {
 			return parsed, nil
 		}
 	}
-	return time.Time{}, fmt.Errorf("invalid Kubecost timestamp %q", value)
+	return time.Time{}, fmt.Errorf("%w: invalid timestamp %q", ErrKubecostMalformedResponse, value)
 }
 
 func kubecostUsageCost(cost float64, request, usage *float64) (float64, bool) {

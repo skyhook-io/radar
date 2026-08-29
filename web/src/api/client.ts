@@ -891,7 +891,8 @@ export type CostUnavailableReason =
   | "authentication_error"
   | "configuration_mismatch"
   | "deployment_configuration_error"
-  | "history_unsupported";
+  | "history_unsupported"
+  | "insufficient_history";
 
 export type CostDataSource = "prometheus" | "kubecost";
 
@@ -1059,6 +1060,8 @@ export interface OpenCostTrendResponse {
   source?: CostDataSource;
   currency?: string;
   range: string;
+  windowStart?: number;
+  windowEnd?: number;
   series?: OpenCostTrendSeries[];
 }
 

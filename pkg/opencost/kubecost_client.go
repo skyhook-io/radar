@@ -82,7 +82,7 @@ func (c *KubecostClient) GetAllocation(ctx context.Context, opts KubecostAllocat
 	}
 	var resp KubecostAllocationResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("kubecost.GetAllocation: parse response from %s: %w", c.t.Address(), err)
+		return nil, fmt.Errorf("kubecost.GetAllocation: %w from %s: %v", ErrKubecostMalformedResponse, c.t.Address(), err)
 	}
 	if resp.Code != 0 && resp.Code != 200 {
 		return &resp, fmt.Errorf("kubecost allocation API returned code %d: %s", resp.Code, resp.Message)
@@ -140,7 +140,7 @@ func (c *KubecostClient) GetAssets(ctx context.Context, opts KubecostAssetOption
 	}
 	var resp KubecostAssetsResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("kubecost.GetAssets: parse response from %s: %w", c.t.Address(), err)
+		return nil, fmt.Errorf("kubecost.GetAssets: %w from %s: %v", ErrKubecostMalformedResponse, c.t.Address(), err)
 	}
 	if resp.Code != 0 && resp.Code != 200 {
 		return &resp, fmt.Errorf("kubecost assets API returned code %d: %s", resp.Code, resp.Message)

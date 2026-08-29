@@ -1,7 +1,12 @@
 import { useState, useMemo, useRef, useCallback } from 'react'
 import { clsx } from 'clsx'
 import { Loader2, TrendingUp } from 'lucide-react'
-import { useOpenCostTrend, type CostTimeRange, type OpenCostTrendSeries } from '../../api/client'
+import {
+  useOpenCostTrend,
+  type CostTimeRange,
+  type CostUnavailableReason,
+  type OpenCostTrendSeries,
+} from '../../api/client'
 import { DEFAULT_COST_CURRENCY, formatCostAxis, formatCostPerHour } from './format'
 
 const SERIES_COLORS = [
@@ -22,7 +27,7 @@ const TIME_RANGES: { value: CostTimeRange; label: string }[] = [
   { value: '7d', label: '7d' },
 ]
 
-export function CostTrendChart() {
+export function CostTrendChart({ namespaceScoped = false }: { namespaceScoped?: boolean }) {
   const [timeRange, setTimeRange] = useState<CostTimeRange>('24h')
   const { data, isLoading } = useOpenCostTrend(timeRange)
 
@@ -37,28 +42,13 @@ export function CostTrendChart() {
     )
   }
 
-  if (data?.reason === 'history_unsupported') {
-    return (
-      <div className="rounded-lg border border-theme-border bg-theme-surface/50 px-4 py-3">
-        <div className="flex items-start gap-2">
-          <TrendingUp className="mt-0.5 h-4 w-4 text-theme-text-tertiary" />
-          <div>
-            <div className="text-xs font-medium text-theme-text-secondary">Cost rate trend</div>
-            <div className="mt-0.5 text-xs text-theme-text-tertiary">
-              Historical charts aren&apos;t available for Kubecost yet. Current allocation and node
-              costs remain available above and below.
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (!data?.available || !data.series?.length) {
+  const showKubecostUnavailable = data?.source === 'kubecost' && data.available === false
+  if ((!data?.available || !data.series?.length) && !showKubecostUnavailable) {
     return null
   }
 
   const currency = data.currency ?? DEFAULT_COST_CURRENCY
+  const retentionNote = data.available ? kubecostRetentionNote(data.series ?? [], data.windowStart, data.windowEnd) : null
 
   return (
     <div className="rounded-lg border border-theme-border bg-theme-surface/50">
@@ -68,15 +58,31 @@ export function CostTrendChart() {
           <div>
             <div className="text-xs font-medium text-theme-text-secondary">Cost rate trend</div>
             <div className="text-[10px] text-theme-text-tertiary">
-              Historical OpenCost allocation rate ({currency}/hr)
+              {data.source === 'kubecost'
+                ? `Retained Kubecost namespace cost (${currency}/hr)`
+                : `Historical OpenCost CPU and memory allocation (${currency}/hr)`}
             </div>
           </div>
         </div>
         <CostTimeRangeSelector value={timeRange} onChange={setTimeRange} />
       </div>
-      <div className="p-4">
-        <StackedAreaChart series={data.series} currency={currency} />
-        <ChartLegend series={data.series} />
+      <div className="p-4 min-h-[300px]">
+        {showKubecostUnavailable ? (
+          <div className="min-h-[268px] flex items-center justify-center px-6 text-center text-xs text-theme-text-tertiary">
+            {kubecostTrendUnavailableMessage(data.reason, namespaceScoped)}
+          </div>
+        ) : (
+          <>
+            <StackedAreaChart
+              series={data.series ?? []}
+              currency={currency}
+              windowStart={data.windowStart}
+              windowEnd={data.windowEnd}
+            />
+            <div className="h-4 mt-1 text-[10px] text-theme-text-tertiary">{retentionNote}</div>
+            <ChartLegend series={data.series ?? []} />
+          </>
+        )}
       </div>
     </div>
   )
@@ -85,9 +91,13 @@ export function CostTrendChart() {
 export function StackedAreaChart({
   series,
   currency,
+  windowStart,
+  windowEnd,
 }: {
   series: OpenCostTrendSeries[]
   currency: string
+  windowStart?: number
+  windowEnd?: number
 }) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [hoverX, setHoverX] = useState<number | null>(null)
@@ -115,8 +125,10 @@ export function StackedAreaChart({
     const timestamps = Array.from(tsSet).sort((a, b) => a - b)
     if (timestamps.length < 2) return null
 
-    const minTs = timestamps[0]
-    const maxTs = timestamps[timestamps.length - 1]
+    const dataMinTs = timestamps[0]
+    const dataMaxTs = timestamps[timestamps.length - 1]
+    const minTs = windowStart && windowStart < dataMinTs ? windowStart : dataMinTs
+    const maxTs = windowEnd && windowEnd > dataMaxTs ? windowEnd : dataMaxTs
 
     const seriesLookups = series.map((s) => {
       const map = new Map<number, number>()
@@ -157,7 +169,7 @@ export function StackedAreaChart({
     const xTickCount = 6
     const xTicks = Array.from({ length: xTickCount + 1 }, (_, i) => {
       const ts = minTs + ((maxTs - minTs) / xTickCount) * i
-      return { ts, x: toX(ts), label: formatTimestamp(ts) }
+      return { ts, x: toX(ts), label: formatTimestamp(ts, maxTs - minTs) }
     })
 
     // Build stacked area paths
@@ -202,7 +214,7 @@ export function StackedAreaChart({
       xTicks,
       paths,
     }
-  }, [series, currency, plotHeight, plotWidth])
+  }, [series, currency, plotHeight, plotWidth, windowStart, windowEnd])
 
   // Hover data — depends on hoverX + chartData, must be a separate hook (called unconditionally)
   const hoverData = useMemo(() => {
@@ -434,13 +446,57 @@ function formatCostTooltip(value: number, currency: string): string {
   return formatCostPerHour(value, currency)
 }
 
-function formatTimestamp(unix: number): string {
+function formatTimestamp(unix: number, spanSeconds: number): string {
   const d = new Date(unix * 1000)
-  const now = new Date()
-  const diffHours = (now.getTime() - d.getTime()) / (1000 * 60 * 60)
-  // Show date+time for ranges > 24h, just time otherwise
-  if (diffHours > 36) {
+  if (spanSeconds > 36 * 60 * 60) {
     return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
   }
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+export function kubecostRetentionNote(
+  series: OpenCostTrendSeries[],
+  windowStart?: number,
+  windowEnd?: number,
+): string | null {
+  if (!windowStart || !windowEnd) return null
+  const timestamps = Array.from(new Set(series.flatMap((item) => item.dataPoints.map((point) => point.timestamp)))).sort(
+    (a, b) => a - b,
+  )
+  if (timestamps.length < 2) return null
+
+  const intervals = timestamps.slice(1).map((timestamp, index) => timestamp - timestamps[index]).filter((value) => value > 0)
+  const typicalInterval = intervals.sort((a, b) => a - b)[Math.floor(intervals.length / 2)] ?? 0
+  const materialGap = Math.max(2 * 60 * 60, typicalInterval * 1.5)
+  if (timestamps[0] - windowStart <= materialGap) return null
+
+  const start = new Date(timestamps[0] * 1000).toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+  return `Kubecost history is available from ${start}.`
+}
+
+export function kubecostTrendUnavailableMessage(
+  reason?: CostUnavailableReason,
+  namespaceScoped = false,
+): string {
+  switch (reason) {
+    case 'no_metrics':
+      if (namespaceScoped) return 'No allocation history is visible in the current namespace scope.'
+      return 'Kubecost has no retained allocation history for this range.'
+    case 'insufficient_history':
+      if (namespaceScoped) return 'The current namespace scope does not have enough allocation history to draw this range.'
+      return 'Kubecost needs at least two retained samples to draw this range.'
+    case 'authentication_error':
+      return 'Kubecost rejected Radar’s API key. Check Settings → Cost.'
+    case 'source_unavailable':
+      return 'Radar could not reach Kubecost. Check Settings → Cost.'
+    case 'configuration_mismatch':
+      return 'Kubecost returned data for a different cluster. Check the cluster ID in Settings → Cost.'
+    default:
+      return 'Kubecost history could not be loaded.'
+  }
 }

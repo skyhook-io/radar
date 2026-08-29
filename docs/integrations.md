@@ -1178,9 +1178,10 @@ until the cluster-specific value is cleared or updated; an explicit central Aggr
 key may still be shared.
 
 OpenCost-compatible Prometheus data powers current cost and historical charts. Kubecost REST powers
-the current namespace summary, workload/application compute allocation, and node costs; historical
-charts are explicitly unavailable for Kubecost in this first integration. Radar never mixes current
-data from one source with history from another.
+the current namespace summary, workload/application compute allocation, node costs, and the cluster
+namespace trend from the allocation history retained by its Aggregator. Workload and application
+history remain unavailable for Kubecost. Radar never mixes current data from one source with history
+from another.
 
 Cost values contain no reliable per-response currency metadata. When the selected source is tied to
 the connected cluster, Radar looks for `currencyCode` in the pricing ConfigMap referenced by an
@@ -1202,7 +1203,7 @@ so changing its label never requires the source probe to succeed.
 **Cost Insights View (`/cost`):**
 - Header: cluster hourly/monthly cost, efficiency %, idle cost projection
 - Resource cost split bar: CPU / Memory / Storage percentage breakdown
-- Cost trend chart with 6h/24h/7d range selector and per-namespace hover tooltips when Prometheus history is selected
+- Cost trend chart with 6h/24h/7d range selector and per-namespace hover tooltips for OpenCost or retained Kubecost allocation history
 - Namespace breakdown table (sortable by cost, efficiency, CPU/memory split) — click any row to expand per-workload costs on demand
 - Node costs table: instance type, region, and hourly/monthly pricing per machine
 - Efficiency color coding: green (50%+), amber (25–50%), red (below 25%)

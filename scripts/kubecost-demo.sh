@@ -11,9 +11,9 @@
 #   query          Query the Aggregator allocation and asset APIs directly.
 #   install-radar  Build the current Go tree, install Radar in-cluster, and
 #                  exercise the Service-DNS connection lane.
-#   radar-smoke    Assert current summary/workload/node responses and the
-#                  current-only history contract against in-cluster Radar, or
-#                  local Radar when RADAR_BASE_URL is set.
+#   radar-smoke    Assert current summary/workload/node responses and retained
+#                  cluster history against in-cluster Radar, or local Radar
+#                  when RADAR_BASE_URL is set.
 #   help           Show this message.
 #
 # Prerequisites:
@@ -608,7 +608,7 @@ cmd_radar_smoke() {
         any(.workloads[]?; .name == "telemetry" and .kind == "DaemonSet")
       ' >/dev/null 2>&1 <<<"${workloads}" &&
       jq -e '.available == true and .source == "kubecost" and (.nodes | length > 0)' >/dev/null 2>&1 <<<"${nodes}" &&
-      jq -e '.available == false and .source == "kubecost" and .reason == "history_unsupported"' >/dev/null 2>&1 <<<"${trend}"; then
+      jq -e --arg currency "${DISPLAY_CURRENCY}" '.available == true and .source == "kubecost" and .currency == $currency and (.series | length > 0) and ([.series[].dataPoints[].timestamp] | unique | length >= 2)' >/dev/null 2>&1 <<<"${trend}"; then
       smoke_ready=true
       break
     fi
@@ -639,9 +639,9 @@ cmd_radar_smoke() {
       printf 'Last Radar node response:\n%s\n' "${nodes}" >&2
       fail "Radar node response did not include Kubecost assets"
     fi
-    if ! jq -e '.available == false and .source == "kubecost" and .reason == "history_unsupported"' >/dev/null 2>&1 <<<"${trend}"; then
+    if ! jq -e --arg currency "${DISPLAY_CURRENCY}" '.available == true and .source == "kubecost" and .currency == $currency and (.series | length > 0) and ([.series[].dataPoints[].timestamp] | unique | length >= 2)' >/dev/null 2>&1 <<<"${trend}"; then
       printf 'Last Radar trend response:\n%s\n' "${trend}" >&2
-      fail "Radar trend response did not report Kubecost history_unsupported"
+      fail "Radar trend response did not include Kubecost allocation history"
     fi
   fi
 
@@ -649,7 +649,7 @@ cmd_radar_smoke() {
   jq '{available, source, currency, dataThrough, namespaceCount: (.namespaces | length)}' <<<"${summary}"
   jq '{available, source, workloadCount: (.workloads | length)}' <<<"${workloads}"
   jq '{available, source, nodeCount: (.nodes | length)}' <<<"${nodes}"
-  jq '{available, source, reason}' <<<"${trend}"
+  jq '{available, source, currency, range, seriesCount: (.series | length), pointCount: ([.series[].dataPoints[].timestamp] | unique | length)}' <<<"${trend}"
   if [ "${premise_drift}" = true ]; then
     fail "Radar's API contract passed, but Kubecost 3.2.4 did not exercise the pod-owner fallback premise"
   fi
