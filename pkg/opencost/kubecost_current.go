@@ -135,9 +135,12 @@ func ComputeKubecostWorkloads(ctx context.Context, client *KubecostClient, names
 	return responses[namespace], nil
 }
 
-func ComputeKubecostWorkloadsForNamespaces(ctx context.Context, client *KubecostClient, ownersByNamespace map[string]PodOwnerLookup, opts KubecostCurrentOptions) (map[string]*WorkloadCostResponse, error) {
+func ComputeKubecostWorkloadsForNamespaces(ctx context.Context, client *KubecostClient, ownersByNamespace map[string]PodOwnerLookup, opts KubecostCurrentOptions) (map[string]*WorkloadCostResponse, map[string]error, error) {
 	if len(ownersByNamespace) == 0 {
-		return nil, fmt.Errorf("at least one namespace is required")
+		return nil, nil, fmt.Errorf("at least one namespace is required")
+	}
+	if client == nil {
+		return nil, nil, fmt.Errorf("kubecost client is not configured")
 	}
 	namespaces := make([]string, 0, len(ownersByNamespace))
 	for namespace := range ownersByNamespace {
@@ -145,14 +148,16 @@ func ComputeKubecostWorkloadsForNamespaces(ctx context.Context, client *Kubecost
 	}
 	sort.Strings(namespaces)
 	responses := make(map[string]*WorkloadCostResponse, len(namespaces))
+	failures := make(map[string]error)
 	for _, namespace := range namespaces {
 		response, err := computeKubecostWorkloads(ctx, client, map[string]PodOwnerLookup{namespace: ownersByNamespace[namespace]}, namespace, opts)
 		if err != nil {
-			return nil, err
+			failures[namespace] = err
+			continue
 		}
 		responses[namespace] = response[namespace]
 	}
-	return responses, nil
+	return responses, failures, nil
 }
 
 func computeKubecostWorkloads(ctx context.Context, client *KubecostClient, ownersByNamespace map[string]PodOwnerLookup, queryNamespace string, opts KubecostCurrentOptions) (map[string]*WorkloadCostResponse, error) {

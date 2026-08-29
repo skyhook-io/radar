@@ -45,7 +45,8 @@ func (s *Server) handleOpenCostApplication(w http.ResponseWriter, r *http.Reques
 				owners[namespace] = internalopencost.BuildPodOwnerLookup(namespace)
 			}
 			var queryErr error
-			namespaceCosts, queryErr = pkgopencost.ComputeKubecostWorkloadsForNamespaces(r.Context(), connection.Client, owners, pkgopencost.KubecostCurrentOptions{
+			var namespaceErrors map[string]error
+			namespaceCosts, namespaceErrors, queryErr = pkgopencost.ComputeKubecostWorkloadsForNamespaces(r.Context(), connection.Client, owners, pkgopencost.KubecostCurrentOptions{
 				Currency: currency, ClusterID: connection.ClusterID,
 			})
 			if queryErr != nil {
@@ -53,6 +54,11 @@ func (s *Server) handleOpenCostApplication(w http.ResponseWriter, r *http.Reques
 				namespaceCosts = make(map[string]*pkgopencost.WorkloadCostResponse, len(namespaces))
 				for _, namespace := range namespaces {
 					namespaceCosts[namespace] = &pkgopencost.WorkloadCostResponse{Namespace: namespace, Reason: internalopencost.ConnectionFailureReason(queryErr), Source: "kubecost"}
+				}
+			} else {
+				for namespace, namespaceErr := range namespaceErrors {
+					log.Printf("[opencost] Kubecost application cost failed for namespace %q: %s", sanitizeForLog(namespace), sanitizeForLog(namespaceErr.Error()))
+					namespaceCosts[namespace] = &pkgopencost.WorkloadCostResponse{Namespace: namespace, Reason: internalopencost.ConnectionFailureReason(namespaceErr), Source: "kubecost"}
 				}
 			}
 		}

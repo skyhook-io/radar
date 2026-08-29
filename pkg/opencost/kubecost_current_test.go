@@ -123,12 +123,15 @@ func TestComputeKubecostWorkloadsForNamespacesBoundsQueriesByNamespace(t *testin
 		`{"code":200,"data":[{"a":{"properties":{"cluster":"cluster-a","namespace":"team-a","pod":"api-a","controllerKind":"deployment","controller":"api"},"start":"2026-08-26T00:00:00Z","end":"2026-08-26T01:00:00Z","cpuCost":1,"ramCost":1}}]}`,
 		`{"code":200,"data":[{"b":{"properties":{"cluster":"cluster-a","namespace":"team-b","pod":"worker-b","controllerKind":"statefulset","controller":"worker"},"start":"2026-08-26T00:00:00Z","end":"2026-08-26T01:00:00Z","cpuCost":2,"ramCost":2}}]}`,
 	}}
-	responses, err := ComputeKubecostWorkloadsForNamespaces(context.Background(), NewKubecostClient(transport), map[string]PodOwnerLookup{
+	responses, failures, err := ComputeKubecostWorkloadsForNamespaces(context.Background(), NewKubecostClient(transport), map[string]PodOwnerLookup{
 		"team-a": nil,
 		"team-b": nil,
 	}, KubecostCurrentOptions{ClusterID: "cluster-a"})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(failures) != 0 {
+		t.Fatalf("failures = %#v, want none", failures)
 	}
 	if len(transport.requests) != 2 ||
 		transport.requests[0].params.Get("filter") != `cluster:"cluster-a"+namespace:"team-a"` ||
@@ -147,11 +150,36 @@ func TestComputeKubecostWorkloadsForNamespacesRejectsRowsOutsideRequestedNamespa
 	transport := &fakeKubecostTransport{responses: []string{
 		`{"code":200,"data":[{"private":{"properties":{"cluster":"cluster-a","namespace":"private","pod":"hidden","controllerKind":"deployment","controller":"hidden"},"start":"2026-08-26T00:00:00Z","end":"2026-08-26T01:00:00Z","cpuCost":10,"ramCost":10}}]}`,
 	}}
-	_, err := ComputeKubecostWorkloadsForNamespaces(context.Background(), NewKubecostClient(transport), map[string]PodOwnerLookup{
+	_, failures, err := ComputeKubecostWorkloadsForNamespaces(context.Background(), NewKubecostClient(transport), map[string]PodOwnerLookup{
 		"team-a": nil,
 	}, KubecostCurrentOptions{ClusterID: "cluster-a"})
-	if err == nil || !strings.Contains(err.Error(), `has namespace "private", expected "team-a"`) {
-		t.Fatalf("error = %v, want mismatched namespace rejection", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if namespaceErr := failures["team-a"]; namespaceErr == nil || !strings.Contains(namespaceErr.Error(), `has namespace "private", expected "team-a"`) {
+		t.Fatalf("failure = %v, want mismatched namespace rejection", namespaceErr)
+	}
+}
+
+func TestComputeKubecostWorkloadsForNamespacesPreservesPartialResults(t *testing.T) {
+	transport := &fakeKubecostTransport{
+		responses: []string{
+			`{"code":200,"data":[{"a":{"properties":{"cluster":"cluster-a","namespace":"team-a","pod":"api-a","controllerKind":"deployment","controller":"api"},"start":"2026-08-26T00:00:00Z","end":"2026-08-26T01:00:00Z","cpuCost":1,"ramCost":1}}]}`,
+		},
+		errors: []error{nil, errors.New("team-b unavailable"), errors.New("team-b unavailable")},
+	}
+	responses, failures, err := ComputeKubecostWorkloadsForNamespaces(context.Background(), NewKubecostClient(transport), map[string]PodOwnerLookup{
+		"team-a": nil,
+		"team-b": nil,
+	}, KubecostCurrentOptions{ClusterID: "cluster-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := responses["team-a"]; got == nil || !got.Available || len(got.Workloads) != 1 || got.Workloads[0].Name != "api" {
+		t.Fatalf("team-a response = %#v, want successful data", got)
+	}
+	if responses["team-b"] != nil || failures["team-b"] == nil {
+		t.Fatalf("team-b response = %#v, failure = %v", responses["team-b"], failures["team-b"])
 	}
 }
 
