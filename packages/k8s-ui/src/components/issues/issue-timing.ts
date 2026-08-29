@@ -55,16 +55,29 @@ function isDeploymentLikeCreation(issue: Issue): boolean {
   return isDeploymentLikeWorkloadKind(issue.kind, group);
 }
 
+function issueTimingIndependentOfOnset(issue: Issue): boolean {
+  return issue.issue_timing_basis === 'owner_condition'
+    || issue.issue_timing_basis === 'pod_creation'
+    || issue.issue_timing_basis === 'spec';
+}
+
+export function issueTimingForDisplay(issue: Issue): IssueTimingDisplay | null {
+  const partialOnset = Boolean(issue.first_seen && (issue.onset_coverage?.unknown ?? 0) > 0);
+  if (partialOnset && !issueTimingIndependentOfOnset(issue)) return null;
+  return issueTiming(issue);
+}
+
 export function issueTiming(issue: Issue): IssueTimingDisplay | null {
+  const onsetUnknown = issue.onset_unknown || (issue.onset_coverage?.unknown ?? 0) > 0;
   switch (issue.issue_timing) {
     case 'started_after_resource_was_healthy': {
       if (issue.issue_timing_basis === 'owner_condition') {
-        if (issue.onset_unknown) {
+        if (onsetUnknown) {
           return {
             kind: 'regression',
-            chip: 'workload regressed',
+            chip: 'workload regressed · onset unknown',
             meta: 'exact onset unknown; owner workload was healthy before its current health regression',
-            tooltip: 'The owner workload had a healthy period before its current failing condition. This does not date or attribute this specific issue.',
+            tooltip: 'The owner workload had a healthy period before its current failing condition, but the exact onset of this issue is unavailable.',
           };
         }
         return {
@@ -74,7 +87,7 @@ export function issueTiming(issue: Issue): IssueTimingDisplay | null {
           tooltip: 'The owner workload had a healthy period before its current failing condition. This does not date or attribute this specific issue.',
         };
       }
-      if (issue.onset_unknown && issue.issue_timing_basis === 'pod_creation') {
+      if (onsetUnknown && issue.issue_timing_basis === 'pod_creation') {
         return {
           kind: 'regression',
           chip: 'later rollout regressed',
@@ -90,7 +103,7 @@ export function issueTiming(issue: Issue): IssueTimingDisplay | null {
       };
     }
     case 'started_at_resource_creation': {
-      if (issue.onset_unknown && issue.issue_timing_basis === 'owner_condition') {
+      if (onsetUnknown && issue.issue_timing_basis === 'owner_condition') {
         return {
           kind: 'creation',
           chip: 'workload never healthy',
@@ -98,7 +111,7 @@ export function issueTiming(issue: Issue): IssueTimingDisplay | null {
           tooltip: 'The owner workload never became healthy after deployment. This does not date or attribute this specific issue.',
         };
       }
-      if (issue.onset_unknown && issue.issue_timing_basis === 'pod_creation') {
+      if (onsetUnknown && issue.issue_timing_basis === 'pod_creation') {
         return {
           kind: 'creation',
           chip: 'pod failed at startup',
@@ -106,7 +119,7 @@ export function issueTiming(issue: Issue): IssueTimingDisplay | null {
           tooltip: 'The affected pod failed during startup of its workload revision. This does not date this specific issue.',
         };
       }
-      if (issue.onset_unknown && issue.issue_timing_basis === 'spec') {
+      if (onsetUnknown && issue.issue_timing_basis === 'spec') {
         return {
           kind: 'creation',
           chip: 'invalid at first reconcile',

@@ -577,12 +577,12 @@ func TestTimingSummaryExplainsIndependentAndPartialProvenance(t *testing.T) {
 				IssueTiming:      "started_at_resource_creation",
 				IssueTimingBasis: "owner_condition",
 			},
-			want: "Some signals were active at least since 2026-08-29T12:00:00Z; exact onset is unknown for 1 other signal. Its owner workload never became healthy after deployment.",
+			want: "Some signals were active at least since 2026-08-29T12:00:00Z; exact onset is unknown for 1 other signal. Workload-level evidence shows the owner never became healthy after deployment.",
 		},
 		{
 			name:  "all unknown group retains independent evidence",
 			issue: Issue{OnsetCoverage: &issuesapi.OnsetCoverage{Unknown: 3}, IssueTiming: "started_at_resource_creation", IssueTimingBasis: "owner_condition"},
-			want:  "Exact onset is unknown for all 3 contributing signals. Its owner workload never became healthy after deployment.",
+			want:  "Exact onset is unknown for all 3 contributing signals. Workload-level evidence shows the owner never became healthy after deployment.",
 		},
 		{
 			name:  "exact onset needs no explanation",

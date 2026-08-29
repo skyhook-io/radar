@@ -4,7 +4,7 @@ import { CardBody, CardSection, ClusterName, EmptyState, KIND_CHIP_CLASS, Termin
 import { Tooltip } from '../ui/Tooltip';
 import { formatCompactAge, formatRelativeAgeTime } from '../../utils/format';
 import { diagnosticRoleLabel, diagnosticFactLabel, confidenceTitle, incidentParentLabel } from './diagnostic';
-import { issueFirstSeenTitle, issueResourceCreatedTitle, issueTiming } from './issue-timing';
+import { issueFirstSeenTitle, issueResourceCreatedTitle, issueTimingForDisplay } from './issue-timing';
 import {
   ISSUE_SEVERITY_BADGE_CLASS,
   ISSUE_SEVERITY_HEADER_BAND_CLASS,
@@ -214,7 +214,7 @@ export function IssueRow({
   const slotCtx = { issue, open };
   const partialUnknown = issue.onset_coverage?.unknown ?? 0;
   const partialOnset = Boolean(issue.first_seen && partialUnknown > 0);
-  const timing = partialOnset ? null : issueTiming(issue);
+  const timing = issueTimingForDisplay(issue);
 
   // Severity pill + age + timing chip. Rendered in two positions the container
   // query toggles: inline at the row's right edge on a wide container, and on a
@@ -432,7 +432,7 @@ function Diagnosis({ issue, source }: { issue: Issue; source?: IssueDiagnosisSou
   const shownText = issue.cause ?? visibleMessage;
   const partialUnknown = issue.onset_coverage?.unknown ?? 0;
   const partialOnset = Boolean(issue.first_seen && partialUnknown > 0);
-  const timing = partialOnset ? null : issueTiming(issue);
+  const timing = issueTimingForDisplay(issue);
   const rawError = [
     ...new Set(
       [issue.raw_message ?? (issue.cause ? issue.message : undefined), detail].filter(
@@ -632,7 +632,7 @@ function DiagnosticContext({
 // freshness, the two facts the compact "2h" hides.
 function ageTitle(issue: Issue): string {
   const parts: string[] = [];
-  const timing = issueTiming(issue);
+  const timing = issueTimingForDisplay(issue);
   const partialUnknown = issue.onset_coverage?.unknown ?? 0;
   if (timing && partialUnknown === 0) parts.push(timing.tooltip);
   const firstSeenTitle = issueFirstSeenTitle(issue);

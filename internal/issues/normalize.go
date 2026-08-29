@@ -75,6 +75,29 @@ func timingSummary(i Issue) string {
 }
 
 func independentTimingSummary(i Issue) string {
+	if i.OnsetCoverage != nil && i.OnsetCoverage.Known+i.OnsetCoverage.Unknown > 1 {
+		switch i.IssueTimingBasis {
+		case "owner_condition":
+			if i.IssueTiming == "started_at_resource_creation" {
+				return "Workload-level evidence shows the owner never became healthy after deployment."
+			}
+			if i.IssueTiming == "started_after_resource_was_healthy" {
+				return "Workload-level evidence shows the owner was healthy before its current health regression."
+			}
+		case "pod_creation":
+			if i.IssueTiming == "started_at_resource_creation" {
+				return "Pod-level evidence shows startup failure during the affected workload revision."
+			}
+			if i.IssueTiming == "started_after_resource_was_healthy" {
+				return "Pod-level evidence ties the failures to a later workload revision after an earlier healthy period."
+			}
+		case "spec":
+			if i.IssueTiming == "started_at_resource_creation" {
+				return "Specification evidence shows failure from first reconciliation."
+			}
+		}
+	}
+
 	switch i.IssueTimingBasis {
 	case "owner_condition":
 		if i.IssueTiming == "started_at_resource_creation" {

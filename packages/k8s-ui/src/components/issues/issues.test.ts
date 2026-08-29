@@ -187,6 +187,7 @@ describe('IssueRow', () => {
     }))
 
     expect(html).toContain('workload regressed')
+    expect(html).toContain('onset unknown')
     expect(html).toContain('exact onset unknown; owner workload was healthy before its current health regression')
     expect(html).not.toContain('workload health regressed')
   })
@@ -208,6 +209,25 @@ describe('IssueRow', () => {
     expect(html).toContain('≥')
     expect(html).toContain('timing unknown for 1 contributing signal')
     expect(html).not.toContain('after healthy')
+  })
+
+  it('keeps onset-independent workload evidence visible on mixed groups', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-30T12:00:00Z'))
+
+    const html = renderToString(createElement(IssueRow, {
+      issue: mk({
+        first_seen: '2026-06-30T10:00:00Z',
+        onset_coverage: { known: 1, unknown: 1 },
+        issue_timing: 'started_after_resource_was_healthy',
+        issue_timing_basis: 'owner_condition',
+      }),
+      open: false,
+      onToggle: () => undefined,
+    }))
+
+    expect(html).toContain('≥')
+    expect(html).toContain('workload regressed · onset unknown')
   })
 
   it('presents ordinary first-seen time as a conservative active lower bound', () => {

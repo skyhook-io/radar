@@ -23,7 +23,7 @@ import {
   categoryLabel,
   groupLabel,
   issueFirstSeenTitle,
-  issueTiming,
+  issueTimingForDisplay,
   subjectRef,
   type Issue,
 } from '@skyhook-io/k8s-ui'
@@ -390,7 +390,7 @@ function ProblemsPanel({
                   const partialUnknown = issue.onset_coverage?.unknown ?? 0
                   const partialOnset = Boolean(issue.first_seen && partialUnknown > 0)
                   const age = issue.first_seen ? `${partialOnset ? '≥' : ''}${formatCompactAge(issue.first_seen)}` : ''
-                  const timing = partialOnset ? null : issueTiming(issue)
+                  const timing = issueTimingForDisplay(issue)
 
                   return (
                     <button
