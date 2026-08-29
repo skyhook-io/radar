@@ -87,6 +87,12 @@ func setEnv(env []string, key, value string) []string {
 
 // handleLocalTerminal handles WebSocket connections for local terminal sessions
 func (s *Server) handleLocalTerminal(w http.ResponseWriter, r *http.Request) {
+	// Check the operator's opt-out first so it wins over runtime-mode detection,
+	// and before upgrading so the refusal remains a plain HTTP error.
+	if k8s.ForceDisableLocalTerminal {
+		s.writeError(w, http.StatusForbidden, "local terminal is disabled")
+		return
+	}
 	if k8s.IsInCluster() {
 		s.writeError(w, http.StatusBadRequest, "local terminal not available in-cluster mode")
 		return

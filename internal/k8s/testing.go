@@ -177,6 +177,26 @@ func SetTestContextName(name string) string {
 	return prev
 }
 
+// SetTestLocalMode makes IsInCluster report local mode and returns a restore func.
+func SetTestLocalMode() func() {
+	clientMu.Lock()
+	previousInitializationStarted := initializationStarted
+	previousKubeconfigMode := kubeconfigMode
+	previousForceInCluster := ForceInCluster
+	initializationStarted = true
+	kubeconfigMode = "single"
+	ForceInCluster = false
+	clientMu.Unlock()
+
+	return func() {
+		clientMu.Lock()
+		initializationStarted = previousInitializationStarted
+		kubeconfigMode = previousKubeconfigMode
+		ForceInCluster = previousForceInCluster
+		clientMu.Unlock()
+	}
+}
+
 // SetTestRegistryEntry is a test-only helper that registers one context in the
 // isolated-load registry, so callers can exercise resolution against a
 // multi-kubeconfig layout. Returns a restore func.
