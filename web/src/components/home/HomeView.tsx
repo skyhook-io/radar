@@ -23,7 +23,6 @@ import {
   categoryLabel,
   groupLabel,
   issueFirstSeenTitle,
-  issueOnsetUnknownTitle,
   issueTiming,
   subjectRef,
   type Issue,
@@ -409,16 +408,11 @@ function ProblemsPanel({
                         <div className="flex items-center gap-1.5">
                           <span className="text-[10px] text-theme-text-tertiary bg-theme-elevated px-1 py-0.5 rounded">{issue.kind}</span>
                           <span className="text-xs text-theme-text-primary truncate font-medium">{issue.name}</span>
-                          {(age || timing || issue.onset_unknown) && (
+                          {(age || timing) && (
                             <span className="ml-auto flex shrink-0 items-center gap-1">
                               {age && (
                                 <Tooltip content={issueFirstSeenTitle(issue)} delay={100}>
                                   <span className="text-[10px] text-theme-text-tertiary tabular-nums">{age}</span>
-                                </Tooltip>
-                              )}
-                              {issue.onset_unknown && (
-                                <Tooltip content={issueOnsetUnknownTitle(issue)} delay={100}>
-                                  <span className="text-[10px] text-theme-text-tertiary">Onset unknown</span>
                                 </Tooltip>
                               )}
                               {timing && (

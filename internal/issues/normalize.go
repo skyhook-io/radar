@@ -51,8 +51,12 @@ func issueTimingIndependentOfOnset(basis string) bool {
 func timingSummary(i Issue) string {
 	if i.OnsetCoverage != nil && i.OnsetCoverage.Unknown > 0 {
 		if i.OnsetCoverage.Known > 0 && !i.FirstSeen.IsZero() {
-			return fmt.Sprintf("Some signals were active at least since %s; exact onset is unknown for %d other %s.",
+			summary := fmt.Sprintf("Some signals were active at least since %s; exact onset is unknown for %d other %s.",
 				i.FirstSeen.UTC().Format(time.RFC3339), i.OnsetCoverage.Unknown, pluralSignal(i.OnsetCoverage.Unknown))
+			if evidence := independentTimingSummary(i); evidence != "" {
+				return summary + " " + evidence
+			}
+			return summary
 		}
 		summary := fmt.Sprintf("Exact onset is unknown for all %d contributing %s.",
 			i.OnsetCoverage.Unknown, pluralSignal(i.OnsetCoverage.Unknown))

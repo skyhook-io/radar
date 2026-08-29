@@ -125,9 +125,11 @@ func TestIssuesToolPreservesEvidenceBoundaries(t *testing.T) {
 	}
 	for _, want := range []string{
 		"timing_summary",
-		"plain-language",
-		"raw timing fields",
-		"filtering",
+		"scopes differ",
+		"first_seen",
+		"active at least since",
+		"timing evidence",
+		"root-cause verdict",
 		"resource age",
 		"issue age",
 	} {

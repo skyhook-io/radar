@@ -155,7 +155,7 @@ describe('IssueRow', () => {
       onToggle: () => undefined,
     }))
 
-    expect(html).not.toContain('onset unknown')
+    expect(html).not.toMatch(/onset unknown/i)
     expect(html).not.toContain('0s')
   })
 
@@ -173,6 +173,22 @@ describe('IssueRow', () => {
     expect(html).toContain('workload never healthy')
     expect(html).toContain('exact onset unknown; owner workload never became healthy after deployment')
     expect(html).not.toContain('since deploy')
+  })
+
+  it('qualifies a workload regression when the issue onset is unknown', () => {
+    const html = renderToString(createElement(IssueRow, {
+      issue: mk({
+        onset_unknown: true,
+        issue_timing: 'started_after_resource_was_healthy',
+        issue_timing_basis: 'owner_condition',
+      }),
+      open: true,
+      onToggle: () => undefined,
+    }))
+
+    expect(html).toContain('workload regressed')
+    expect(html).toContain('exact onset unknown; owner workload was healthy before its current health regression')
+    expect(html).not.toContain('workload health regressed')
   })
 
   it('renders mixed groups as a lower-bound age and suppresses a group-wide timing claim', () => {

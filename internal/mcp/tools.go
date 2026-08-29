@@ -378,8 +378,9 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"`related_issues[].count` is the root's affected subset, not the linked issue total. " +
 			"Confidence: `high` declared edge, `medium` lead to verify, `low` heuristic. " +
 			"`incident_parent` is one unambiguous best root; absence may mean competing roots. " +
-			"When present, `timing_summary` gives the plain-language timing interpretation; " +
-			"use the raw timing fields only for filtering. Never treat resource age as issue age. " +
+			"When present, `timing_summary` reconciles timing fields whose scopes differ; otherwise " +
+			"read `first_seen` as 'active at least since' and `issue_timing` as timing evidence, " +
+			"not a root-cause verdict. Never treat resource age as issue age. " +
 			"When `recent_changes` is present, inspect it before concluding the returned " +
 			"issues explain the symptom. Follow `recent_changes_guidance` when present. " +
 			"`recent_changes_reason=" + meaningfulchanges.ChangesReasonNoCriticalIssues +

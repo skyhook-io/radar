@@ -59,6 +59,14 @@ export function issueTiming(issue: Issue): IssueTimingDisplay | null {
   switch (issue.issue_timing) {
     case 'started_after_resource_was_healthy': {
       if (issue.issue_timing_basis === 'owner_condition') {
+        if (issue.onset_unknown) {
+          return {
+            kind: 'regression',
+            chip: 'workload regressed',
+            meta: 'exact onset unknown; owner workload was healthy before its current health regression',
+            tooltip: 'The owner workload had a healthy period before its current failing condition. This does not date or attribute this specific issue.',
+          };
+        }
         return {
           kind: 'regression',
           chip: 'health regressed',
