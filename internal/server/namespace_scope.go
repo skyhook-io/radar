@@ -44,6 +44,7 @@ type NamespaceScopeResponse struct {
 	KubeconfigNamespace  string             `json:"kubeconfigNamespace"`
 	Mode                 NamespaceScopeMode `json:"mode"`
 	AccessibleNamespaces []string           `json:"accessibleNamespaces"`
+	DeniedNamespaces     []string           `json:"deniedNamespaces"`
 	Authoritative        bool               `json:"authoritative"`
 	CanClearNamespace    bool               `json:"canClearNamespace"`
 	CacheScoped          bool               `json:"cacheScoped"`
@@ -409,6 +410,23 @@ func intersectPicksWithAllowed(picks, allowed []string) []string {
 	return out
 }
 
+func deniedNamespaces(namespaces []string, permissions *k8s.PermissionCheckResult, cacheScoped bool, cacheScopeNamespace string) []string {
+	denied := []string{}
+	if permissions == nil {
+		return denied
+	}
+	for _, namespace := range namespaces {
+		if cacheScoped && namespace != cacheScopeNamespace {
+			continue
+		}
+		visibility := k8s.BuildVisibilitySummary(permissions, namespace)
+		if visibility != nil && visibility.Core["pods"] == "unavailable" && visibility.Core["deployments"] == "unavailable" {
+			denied = append(denied, namespace)
+		}
+	}
+	return denied
+}
+
 func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -503,12 +521,14 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 	if namespaces == nil {
 		namespaces = []string{}
 	}
+	denied := deniedNamespaces(namespaces, k8s.GetCachedPermissionResult(), k8s.ForceNamespaceScope, cacheScopeNs)
 
 	s.writeJSON(w, NamespaceScopeResponse{
 		Actives:              actives,
 		KubeconfigNamespace:  kubeNs,
 		Mode:                 mode,
 		AccessibleNamespaces: namespaces,
+		DeniedNamespaces:     denied,
 		Authoritative:        authoritative,
 		CanClearNamespace:    canClear,
 		CacheScoped:          k8s.ForceNamespaceScope,

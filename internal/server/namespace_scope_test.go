@@ -12,6 +12,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/settings"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -56,6 +57,59 @@ func TestNsPreferenceKey_PerUserIsolation(t *testing.T) {
 	// The \x00 separator makes this safe — verify by counterexample.
 	if nsPreferenceKey("alice", "foo") == nsPreferenceKey("ali", "cefoo") {
 		t.Error("nsPreferenceKey separator is ambiguous")
+	}
+}
+
+func TestDeniedNamespacesUsesCoreWorkloadVisibility(t *testing.T) {
+	permissions := &k8s.PermissionCheckResult{
+		Scopes: map[string]k8score.ResourceScope{
+			k8score.Pods:        {Enabled: true, Namespace: "team-a"},
+			k8score.Deployments: {Enabled: true, Namespace: "team-b"},
+			k8score.Nodes:       {Enabled: true},
+		},
+	}
+
+	got := deniedNamespaces([]string{"team-a", "team-b", "team-c"}, permissions, false, "")
+	if !slices.Equal(got, []string{"team-c"}) {
+		t.Fatalf("deniedNamespaces = %v, want [team-c]", got)
+	}
+}
+
+func TestDeniedNamespacesHandlesMultiNamespaceAndUnknownPermissions(t *testing.T) {
+	permissions := &k8s.PermissionCheckResult{
+		Scopes: map[string]k8score.ResourceScope{
+			k8score.Pods: {Enabled: true, Namespace: "team-a"},
+		},
+		ScopeNamespaces: map[string][]string{
+			k8score.Pods: {"team-a", "team-b"},
+		},
+	}
+
+	if got := deniedNamespaces([]string{"team-a", "team-b"}, permissions, false, ""); len(got) != 0 {
+		t.Fatalf("multi-namespace grants marked denied: %v", got)
+	}
+	if got := deniedNamespaces([]string{"team-a"}, nil, false, ""); len(got) != 0 {
+		t.Fatalf("unknown permissions marked denied: %v", got)
+	}
+	clusterWide := &k8s.PermissionCheckResult{
+		Scopes: map[string]k8score.ResourceScope{
+			k8score.Deployments: {Enabled: true},
+		},
+	}
+	if got := deniedNamespaces([]string{"team-a", "team-b"}, clusterWide, false, ""); len(got) != 0 {
+		t.Fatalf("cluster-wide workload access marked denied: %v", got)
+	}
+}
+
+func TestDeniedNamespacesOnlyMarksCurrentCacheScope(t *testing.T) {
+	permissions := &k8s.PermissionCheckResult{Scopes: map[string]k8score.ResourceScope{}}
+
+	got := deniedNamespaces([]string{"team-a", "team-b"}, permissions, true, "team-a")
+	if !slices.Equal(got, []string{"team-a"}) {
+		t.Fatalf("deniedNamespaces = %v, want [team-a]", got)
+	}
+	if got := deniedNamespaces([]string{"team-a", "team-b"}, permissions, true, ""); len(got) != 0 {
+		t.Fatalf("namespaces marked denied without an active cache scope: %v", got)
 	}
 }
 

@@ -6069,6 +6069,8 @@ export interface NamespaceScope {
    */
   mode: "cluster-wide" | "namespace" | "restricted";
   accessibleNamespaces: string[];
+  /** Namespaces where Radar cannot list pods or deployments. */
+  deniedNamespaces: string[];
   /** false when accessibleNamespaces is a best-effort short list (no list perm). */
   authoritative: boolean;
   /** false when clearing would leave no usable namespace fallback. */

@@ -803,7 +803,7 @@ func TestHandleSetActiveNamespace_RejectsLegacyShape(t *testing.T) {
 }
 
 func TestHandleGetNamespaceScope_NoPick_EmitsEmptySliceNotNull(t *testing.T) {
-	// Pin the wire contract: actives and accessibleNamespaces must serialize
+	// Pin the wire contract: actives, accessibleNamespaces, and deniedNamespaces must serialize
 	// as [] (non-nil empty), not null. Without the nil-coercion in
 	// handleGetNamespaceScope the frontend crashed on `scope.actives.slice()`
 	// — caught by /visual-test. The defensive code is small and easy to
@@ -831,6 +831,12 @@ func TestHandleGetNamespaceScope_NoPick_EmitsEmptySliceNotNull(t *testing.T) {
 	}
 	if !strings.Contains(string(body), `"accessibleNamespaces":[`) {
 		t.Errorf("expected accessibleNamespaces:[…] in body, got: %s", body)
+	}
+	if strings.Contains(string(body), `"deniedNamespaces":null`) {
+		t.Errorf("deniedNamespaces marshalled as null: %s", body)
+	}
+	if !strings.Contains(string(body), `"deniedNamespaces":[`) {
+		t.Errorf("expected deniedNamespaces:[…] in body, got: %s", body)
 	}
 }
 
