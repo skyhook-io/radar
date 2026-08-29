@@ -1272,10 +1272,7 @@ func detectPVCMissingStorageClass(cache *ResourceCache, namespace string, now ti
 			// against the phase row (it names the cause) and must not lose
 			// the timing the phase row carried.
 			if pvc.Status.Phase == corev1.ClaimPending {
-				det.OnsetAt = pvc.CreationTimestamp.Time
-				det.Duration = FormatAge(now.Sub(pvc.CreationTimestamp.Time))
-				det.DurationSeconds = int64(now.Sub(pvc.CreationTimestamp.Time).Seconds())
-				det.OnsetUnknown = false
+				setDetectionOnset(&det, now, pvc.CreationTimestamp.Time)
 				det.IssueTiming = "started_at_resource_creation"
 				det.IssueTimingBasis = "phase"
 			}

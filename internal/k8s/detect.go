@@ -675,7 +675,10 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					break
 				}
 			}
-			ageDur := now.Sub(hpaCreatedAt)
+			var ageDur time.Duration
+			if !hpaCreatedAt.IsZero() && !hpaCreatedAt.After(now) {
+				ageDur = now.Sub(hpaCreatedAt)
+			}
 			// IssueTiming for cannot-scale only: use ScalingActive condition LTT.
 			// "maxed" carries no issue_timing — hitting the replica ceiling is a
 			// capacity concern that doesn't cleanly map to
@@ -746,7 +749,10 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					break
 				}
 			}
-			ageDur := now.Sub(createdAt)
+			var ageDur time.Duration
+			if !createdAt.IsZero() && !createdAt.After(now) {
+				ageDur = now.Sub(createdAt)
+			}
 			detection := Detection{
 				Kind:              "CronJob",
 				Namespace:         cp.Namespace,
@@ -954,7 +960,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 						cause = failure.cause
 						action = failure.action
 					}
-					problems = append(problems, Detection{
+					detection := Detection{
 						Kind:              "PersistentVolumeClaim",
 						Namespace:         pvc.Namespace,
 						Name:              pvc.Name,
@@ -963,9 +969,6 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 						Message:           message,
 						Age:               FormatAge(ageDur),
 						AgeSeconds:        int64(ageDur.Seconds()),
-						Duration:          FormatAge(ageDur),
-						DurationSeconds:   int64(ageDur.Seconds()),
-						OnsetAt:           pvc.CreationTimestamp.Time,
 						ResourceCreatedAt: pvc.CreationTimestamp.Time,
 						Cause:             cause,
 						Action:            action,
@@ -973,7 +976,9 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 						// present since creation (wrong StorageClass, missing or failing provisioner).
 						IssueTiming:      "started_at_resource_creation",
 						IssueTimingBasis: "phase",
-					})
+					}
+					setDetectionOnset(&detection, now, pvc.CreationTimestamp.Time)
+					problems = append(problems, detection)
 				}
 			}
 		}
@@ -1589,7 +1594,7 @@ func terminatingProblem(kind, group string, obj metav1.Object, now time.Time) (D
 	// hardcoded post-healthy label would overstate the evidence for
 	// create-then-delete churn.
 	timingR := IssueTimingFromConditionLTT(obj.GetDeletionTimestamp().Time, obj.GetCreationTimestamp().Time, "deletion")
-	return Detection{
+	detection := Detection{
 		Kind:              kind,
 		Group:             group,
 		Namespace:         obj.GetNamespace(),
@@ -1601,13 +1606,12 @@ func terminatingProblem(kind, group string, obj metav1.Object, now time.Time) (D
 		Fingerprint:       "lifecycle:terminating",
 		Age:               FormatAge(now.Sub(obj.GetCreationTimestamp().Time)),
 		AgeSeconds:        int64(now.Sub(obj.GetCreationTimestamp().Time).Seconds()),
-		Duration:          FormatAge(duration),
-		DurationSeconds:   int64(duration.Seconds()),
-		OnsetAt:           obj.GetDeletionTimestamp().Time,
 		ResourceCreatedAt: obj.GetCreationTimestamp().Time,
 		IssueTiming:       timingR.IssueTiming,
 		IssueTimingBasis:  timingR.Basis,
-	}, true
+	}
+	setDetectionOnset(&detection, now, obj.GetDeletionTimestamp().Time)
+	return detection, true
 }
 
 func hasNonGarbageCollectionFinalizer(finalizers []string) bool {
@@ -1754,13 +1758,6 @@ type pvcResizeDetection struct {
 	message            string
 	severity           string
 	lastTransitionTime metav1.Time
-}
-
-func (d pvcResizeDetection) duration(now time.Time, fallback time.Duration) time.Duration {
-	if !d.lastTransitionTime.IsZero() {
-		return now.Sub(d.lastTransitionTime.Time)
-	}
-	return fallback
 }
 
 func pvcResizeProblem(pvc *corev1.PersistentVolumeClaim) pvcResizeDetection {

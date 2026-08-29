@@ -158,26 +158,17 @@ func TestCompileIssueFilter_ExactOnsetCoverage(t *testing.T) {
 	}
 }
 
-func TestCompileIssueFilter_RejectsUnguardedFirstSeenAge(t *testing.T) {
+func TestCompileIssueFilter_OnsetExpressionsRemainCELCompatible(t *testing.T) {
 	for _, expr := range []string{
 		`first_seen < timestamp("2026-05-01T00:00:00Z").getSeconds()`,
-		`first_seen < timestamp("2026-05-01T00:00:00Z").getSeconds() || onset_coverage_unknown > 0`,
-		`onset_unknown || first_seen < timestamp("2026-05-01T00:00:00Z").getSeconds()`,
-	} {
-		_, err := CompileIssueFilter(expr)
-		if err == nil || !strings.Contains(err.Error(), "guard with first_seen != 0") {
-			t.Errorf("expected actionable unknown-anchor guard error for %q, got %v", expr, err)
-		}
-	}
-}
-
-func TestCompileIssueFilter_AcceptsExplicitUnknownOnsetGuard(t *testing.T) {
-	for _, expr := range []string{
+		`first_seen > timestamp("2026-05-01T00:00:00Z").getSeconds()`,
 		`first_seen != 0 && first_seen < timestamp("2026-05-01T00:00:00Z").getSeconds()`,
 		`!onset_unknown && first_seen < timestamp("2026-05-01T00:00:00Z").getSeconds()`,
 		`onset_coverage_unknown == 0 && first_seen < timestamp("2026-05-01T00:00:00Z").getSeconds()`,
 		`first_seen == 0 || (first_seen != 0 && first_seen < timestamp("2026-05-01T00:00:00Z").getSeconds())`,
 		`severity == "critical" || (first_seen != 0 && first_seen < timestamp("2026-05-01T00:00:00Z").getSeconds())`,
+		`first_seen != 0 ? first_seen < timestamp("2026-05-01T00:00:00Z").getSeconds() : false`,
+		`!(first_seen != 0 && first_seen < timestamp("2026-05-01T00:00:00Z").getSeconds())`,
 	} {
 		if _, err := CompileIssueFilter(expr); err != nil {
 			t.Errorf("CompileIssueFilter(%q): %v", expr, err)

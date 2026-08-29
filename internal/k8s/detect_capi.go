@@ -132,9 +132,9 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 				Kind: "Machine", Namespace: m.GetNamespace(), Name: m.GetName(), Group: capiGroup,
 				Severity: "high", Reason: displayReason, Message: msg,
 				Age: FormatAge(ageDur), AgeSeconds: int64(ageDur.Seconds()),
-				Duration: FormatAge(ageDur), DurationSeconds: int64(ageDur.Seconds()),
-				OnsetAt: m.GetCreationTimestamp().Time, ResourceCreatedAt: m.GetCreationTimestamp().Time,
+				ResourceCreatedAt: m.GetCreationTimestamp().Time,
 			}
+			setDetectionOnset(&detection, now, m.GetCreationTimestamp().Time)
 			problems = append(problems, detection)
 			continue
 		}

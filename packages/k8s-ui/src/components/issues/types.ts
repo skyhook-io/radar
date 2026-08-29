@@ -291,6 +291,8 @@ export function memberRef(issue: Issue, member: IssueResourceRef): IssueResource
  * it would reshuffle same-severity rows on each refetch. The remaining keys
  * (cluster → namespace → name → id) are a fully deterministic tiebreak so the
  * order never churns under auto-refresh.
+ * JavaScript timestamp comparison is millisecond-precision; sub-millisecond
+ * ties fall through to the stable keys below.
  */
 export function issueSortAnchor(issue: Issue): string {
   return issue.first_seen ?? issue.resource_created_at ?? '';

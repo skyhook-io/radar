@@ -393,7 +393,7 @@ func newConditionIssue(gvr schema.GroupVersionResource, kind, namespace, name st
 	firstSeen, lastSeen, onsetUnknown := conditionIssueTimes(now, transitionAt, transitionKnown)
 	// Only compute issue_timing when we have a parsed condition timestamp.
 	var timingR k8s.IssueTimingResult
-	if transitionKnown {
+	if !onsetUnknown {
 		timingR = k8s.IssueTimingFromConditionLTT(transitionAt, createdAt, "condition")
 	}
 	iss := Issue{
@@ -511,7 +511,7 @@ func isTransientCRDCondition(u *unstructured.Unstructured, reason string) bool {
 		phase, _, _ := unstructured.NestedString(u.Object, "status", "phase")
 		pauseConditions, _, _ := unstructured.NestedSlice(u.Object, "status", "pauseConditions")
 		if phase == "Paused" || len(pauseConditions) > 0 {
-			if _, _, _, failed := argoRolloutFailure(u); !failed {
+			if _, _, _, _, failed := argoRolloutFailure(u); !failed {
 				return true
 			}
 		}

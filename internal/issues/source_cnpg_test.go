@@ -573,6 +573,9 @@ func TestCNPGDeclarativeNotApplied(t *testing.T) {
 	if !strings.Contains(got[0].Message, "nobody-owns-this") {
 		t.Errorf("message drops the operator's reason: %q", got[0].Message)
 	}
+	if !got[0].OnsetUnknown || !got[0].FirstSeen.IsZero() {
+		t.Errorf("applied=false has no transition timestamp; onset = unknown:%v first:%v", got[0].OnsetUnknown, got[0].FirstSeen)
+	}
 
 	// Pending is not failure. Reporting it would raise an issue against every
 	// declarative object for the first seconds of its life.
@@ -649,6 +652,10 @@ func TestCNPGScheduledBackupMissed(t *testing.T) {
 				iss := findIssue(t, got, "CNPGScheduledBackupMissed")
 				if iss.Severity != SeverityWarning {
 					t.Errorf("severity = %v, want warning", iss.Severity)
+				}
+				due, err := time.Parse(time.RFC3339, tc.obj.Object["status"].(map[string]any)["nextScheduleTime"].(string))
+				if err != nil || iss.OnsetUnknown || !iss.FirstSeen.Equal(due) {
+					t.Errorf("onset = unknown:%v first:%v, want published due time %v (parse err %v)", iss.OnsetUnknown, iss.FirstSeen, due, err)
 				}
 				// It must file as a backup problem, or the backup filter answers a
 				// different question than it claims to. Classified through the

@@ -369,17 +369,6 @@ func sortRefs(refs []Ref) {
 	})
 }
 
-// lessIssue is the canonical issue sort: severity desc, direct-blocker source
-// priority, then a stable anchor (proven first_seen, otherwise resource creation)
-// descending — deliberately NOT last_seen, which bumps to compose-time on every
-// poll and would reshuffle same-severity rows on each refetch. Then namespace,
-// name, and the stable id as a total tiebreak.
-// This is byte-for-byte the order the shared UI comparator (k8s-ui
-// issues/types.ts:compareIssues) produces for a single cluster — the UI's only
-// extra key is `cluster`, which it sorts on for fleet (multi-cluster) views and
-// which is constant here. So /api/issues, MCP, and the single-cluster UI return
-// one identical queue. (id is the final tiebreak — two rows can share
-// subject+ns+name and differ only by cause.)
 func issueSortAnchor(i Issue) time.Time {
 	if !i.FirstSeen.IsZero() {
 		return i.FirstSeen
@@ -387,6 +376,17 @@ func issueSortAnchor(i Issue) time.Time {
 	return i.ResourceCreatedAt
 }
 
+// lessIssue is the canonical issue sort: severity desc, direct-blocker source
+// priority, then a stable anchor (proven first_seen, otherwise resource creation)
+// descending — deliberately NOT last_seen, which bumps to compose-time on every
+// poll and would reshuffle same-severity rows on each refetch. Then namespace,
+// name, and the stable id as a total tiebreak.
+// The shared UI comparator (k8s-ui issues/types.ts:compareIssues) uses the same
+// keys. Its only extra key is `cluster`, which is constant in single-cluster
+// views. JavaScript parses timestamps at millisecond precision, so timestamps
+// that differ only below a millisecond may fall through to the stable
+// tiebreakers in a different order. (id is the final tiebreak — two rows can
+// share subject+ns+name and differ only by cause.)
 func lessIssue(a, b Issue) bool {
 	if a.Severity != b.Severity {
 		return SeverityRank(a.Severity) > SeverityRank(b.Severity)

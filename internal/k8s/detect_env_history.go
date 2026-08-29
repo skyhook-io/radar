@@ -310,12 +310,20 @@ func detectStaleSecretEnv(cache *ResourceCache, namespace string, now time.Time)
 	}
 
 	subjectByPod := make(map[string]staleSecretEnvSubject, len(pods))
+	subjects := make(map[string]staleSecretEnvSubject)
 	podsBySubject := make(map[string][]*corev1.Pod)
 	for _, pod := range pods {
-		subject := staleSecretEnvSubjectForPod(cache, pod)
+		subject := staleSecretEnvSubjectIdentityForPod(cache, pod)
+		subjectKey := subject.key()
+		if resolved, ok := subjects[subjectKey]; ok {
+			subject = resolved
+		} else {
+			subject.created = staleSecretEnvSubjectCreatedAt(cache, pod, subject.group, subject.kind, subject.name)
+			subjects[subjectKey] = subject
+		}
 		podKey := pod.Namespace + "\x00" + pod.Name
 		subjectByPod[podKey] = subject
-		podsBySubject[subject.key()] = append(podsBySubject[subject.key()], pod)
+		podsBySubject[subjectKey] = append(podsBySubject[subjectKey], pod)
 	}
 
 	var notReadyOut []Detection
@@ -476,15 +484,19 @@ type staleSecretEnvSubject struct {
 }
 
 func staleSecretEnvSubjectForPod(cache *ResourceCache, pod *corev1.Pod) staleSecretEnvSubject {
+	subject := staleSecretEnvSubjectIdentityForPod(cache, pod)
+	subject.created = staleSecretEnvSubjectCreatedAt(cache, pod, subject.group, subject.kind, subject.name)
+	return subject
+}
+
+func staleSecretEnvSubjectIdentityForPod(cache *ResourceCache, pod *corev1.Pod) staleSecretEnvSubject {
 	group, kind, name := podOwnerKindName(cache, pod)
 	if kind == "" {
 		kind = "Pod"
 		name = pod.Name
 	}
-	created := staleSecretEnvSubjectCreatedAt(cache, pod, group, kind, name)
 	return staleSecretEnvSubject{
 		group: group, kind: kind, namespace: pod.Namespace, name: name,
-		created:     created,
 		restartable: staleSecretEnvRestartableOwner(group, kind),
 	}
 }

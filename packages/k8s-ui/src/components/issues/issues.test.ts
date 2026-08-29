@@ -4,7 +4,7 @@ import { renderToString } from 'react-dom/server'
 import { compareIssues, issueSortAnchor, subjectRef, memberRef, normalizeImagePullMessage, issueMessageParts, type Issue } from './types'
 import { categoryLabel, groupBadgeClass, groupLabel } from './severity'
 import { IssueRow } from './IssuesView'
-import { issueFirstSeenTitle, issueOnsetUnknownTitle, issueTiming, partialIssueOnsetTitle } from './issue-timing'
+import { issueFirstSeenTitle, issueOnsetUnknownTitle, issueResourceCreatedTitle, issueTiming, partialIssueOnsetTitle } from './issue-timing'
 
 const base: Issue = {
   id: 'id-0',
@@ -245,6 +245,17 @@ describe('onset provenance copy', () => {
     expect(title).toContain('does not reveal when it began')
     expect(title).toContain('Resource created')
     expect(title).not.toContain('Oldest affected')
+  })
+
+  it('labels a one-member workload rollup as affected-resource context', () => {
+    const title = issueResourceCreatedTitle(mk({
+      kind: 'Deployment',
+      count: 1,
+      members: [{ kind: 'Pod', namespace: 'prod', name: 'web-abc' }],
+      resource_created_at: '2026-06-30T10:00:00Z',
+    }))
+
+    expect(title).toContain('Affected resource created')
   })
 })
 

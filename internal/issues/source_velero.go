@@ -308,7 +308,7 @@ func veleroStalledRunIssues(gvr schema.GroupVersionResource, kind string, items 
 		// five hours ago on a run with a four-hour budget.
 		out = append(out, newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(),
 			SeverityWarning, ReasonVeleroRunStalled, msg,
-			age-budget, "", u.GetCreationTimestamp().Time))
+			started.Add(budget), true, "", u.GetCreationTimestamp().Time))
 	}
 	return out
 }

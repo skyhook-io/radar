@@ -37,8 +37,6 @@ import (
 	"time"
 
 	"github.com/google/cel-go/cel"
-	celast "github.com/google/cel-go/common/ast"
-	"github.com/google/cel-go/common/operators"
 	"github.com/google/cel-go/common/types"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
@@ -139,14 +137,10 @@ func CompileObjectFilter(expr string) (*Filter, error) {
 // row bindings (severity, source, kind, …, first_seen, resource_created_at,
 // last_seen).
 func CompileIssueFilter(expr string) (*Filter, error) {
-	return compileWithValidator(envIssue, expr, validateIssueOnsetFilter)
+	return compileWith(envIssue, expr)
 }
 
 func compileWith(env *cel.Env, expr string) (*Filter, error) {
-	return compileWithValidator(env, expr, nil)
-}
-
-func compileWithValidator(env *cel.Env, expr string, validate func(*cel.Ast) error) (*Filter, error) {
 	if expr == "" {
 		return nil, errors.New("empty filter expression")
 	}
@@ -156,11 +150,6 @@ func compileWithValidator(env *cel.Env, expr string, validate func(*cel.Ast) err
 	}
 	if ast.OutputType() != cel.BoolType {
 		return nil, fmt.Errorf("filter must return bool, got %s", ast.OutputType().String())
-	}
-	if validate != nil {
-		if err := validate(ast); err != nil {
-			return nil, err
-		}
 	}
 	prg, err := env.Program(
 		ast,
@@ -174,145 +163,6 @@ func compileWithValidator(env *cel.Env, expr string, validate func(*cel.Ast) err
 		return nil, fmt.Errorf("program: %w", err)
 	}
 	return &Filter{expr: expr, program: prg}, nil
-}
-
-func validateIssueOnsetFilter(checked *cel.Ast) error {
-	expr := checked.NativeRep().Expr()
-	if usesCELIdent(expr, "first_seen") && !firstSeenUseIsSafe(expr, false) {
-		return errors.New("first_seen is 0 when the issue's active-time anchor is unknown; every age-comparison branch must guard with first_seen != 0 or !onset_unknown (and onset_coverage_unknown == 0 when exact group coverage matters)")
-	}
-	return nil
-}
-
-func firstSeenUseIsSafe(expr celast.Expr, known bool) bool {
-	if !usesCELIdent(expr, "first_seen") || known || isFirstSeenZeroComparison(expr) {
-		return true
-	}
-	if expr.Kind() != celast.CallKind {
-		return false
-	}
-	call := expr.AsCall()
-	args := call.Args()
-	switch call.FunctionName() {
-	case operators.LogicalAnd:
-		guarded := known
-		for _, arg := range args {
-			guarded = guarded || guaranteesKnownFirstSeen(arg)
-		}
-		for _, arg := range args {
-			if !firstSeenUseIsSafe(arg, guarded) {
-				return false
-			}
-		}
-		return true
-	case operators.LogicalOr:
-		for _, arg := range args {
-			if !firstSeenUseIsSafe(arg, known) {
-				return false
-			}
-		}
-		return true
-	case operators.LogicalNot:
-		return len(args) == 1 && firstSeenUseIsSafe(args[0], known)
-	default:
-		return false
-	}
-}
-
-func guaranteesKnownFirstSeen(expr celast.Expr) bool {
-	if expr.Kind() != celast.CallKind {
-		return false
-	}
-	call := expr.AsCall()
-	args := call.Args()
-	switch call.FunctionName() {
-	case operators.LogicalAnd:
-		for _, arg := range args {
-			if guaranteesKnownFirstSeen(arg) {
-				return true
-			}
-		}
-		return false
-	case operators.LogicalOr:
-		if len(args) == 0 {
-			return false
-		}
-		for _, arg := range args {
-			if !guaranteesKnownFirstSeen(arg) {
-				return false
-			}
-		}
-		return true
-	case operators.LogicalNot:
-		return len(args) == 1 && (isCELIdent(args[0], "onset_unknown") || isFirstSeenEqualsZero(args[0]))
-	case operators.Equals:
-		return len(args) == 2 && ((isCELIdent(args[0], "onset_unknown") && isCELBool(args[1], false)) ||
-			(isCELIdent(args[1], "onset_unknown") && isCELBool(args[0], false)) ||
-			(isCELIdent(args[0], "onset_coverage_unknown") && isCELIntZero(args[1])) ||
-			(isCELIdent(args[1], "onset_coverage_unknown") && isCELIntZero(args[0])))
-	case operators.NotEquals:
-		return len(args) == 2 && ((isCELIdent(args[0], "first_seen") && isCELIntZero(args[1])) ||
-			(isCELIdent(args[1], "first_seen") && isCELIntZero(args[0])))
-	case operators.Less, operators.Greater:
-		return len(args) == 2 && ((isCELIdent(args[0], "first_seen") && isCELIntZero(args[1])) ||
-			(isCELIdent(args[1], "first_seen") && isCELIntZero(args[0])))
-	default:
-		return false
-	}
-}
-
-func usesCELIdent(expr celast.Expr, name string) bool {
-	found := false
-	celast.PreOrderVisit(expr, celast.NewExprVisitor(func(candidate celast.Expr) {
-		if isCELIdent(candidate, name) {
-			found = true
-		}
-	}))
-	return found
-}
-
-func isFirstSeenZeroComparison(expr celast.Expr) bool {
-	if expr.Kind() != celast.CallKind {
-		return false
-	}
-	call := expr.AsCall()
-	switch call.FunctionName() {
-	case operators.Equals, operators.NotEquals, operators.Less, operators.LessEquals, operators.Greater, operators.GreaterEquals:
-	default:
-		return false
-	}
-	args := call.Args()
-	return len(args) == 2 && ((isCELIdent(args[0], "first_seen") && isCELIntZero(args[1])) ||
-		(isCELIdent(args[1], "first_seen") && isCELIntZero(args[0])))
-}
-
-func isFirstSeenEqualsZero(expr celast.Expr) bool {
-	if expr.Kind() != celast.CallKind || expr.AsCall().FunctionName() != operators.Equals {
-		return false
-	}
-	args := expr.AsCall().Args()
-	return len(args) == 2 && ((isCELIdent(args[0], "first_seen") && isCELIntZero(args[1])) ||
-		(isCELIdent(args[1], "first_seen") && isCELIntZero(args[0])))
-}
-
-func isCELIdent(expr celast.Expr, name string) bool {
-	return expr.Kind() == celast.IdentKind && expr.AsIdent() == name
-}
-
-func isCELIntZero(expr celast.Expr) bool {
-	if expr.Kind() != celast.LiteralKind {
-		return false
-	}
-	value, ok := expr.AsLiteral().(types.Int)
-	return ok && value == 0
-}
-
-func isCELBool(expr celast.Expr, want bool) bool {
-	if expr.Kind() != celast.LiteralKind {
-		return false
-	}
-	value, ok := expr.AsLiteral().(types.Bool)
-	return ok && bool(value) == want
 }
 
 // ---------------------------------------------------------------------------

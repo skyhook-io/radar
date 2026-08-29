@@ -26,8 +26,12 @@ export function partialIssueOnsetTitle(issue: Issue): string | null {
 
 export function issueResourceCreatedTitle(issue: Issue): string | null {
   if (!issue.resource_created_at) return null;
-  const grouped = (issue.count ?? 0) > 1 || (issue.members?.length ?? 0) > 1;
-  const label = grouped ? 'Oldest affected resource created' : 'Resource created';
+  const affectedCount = Math.max(issue.count ?? 0, issue.members?.length ?? 0);
+  const label = affectedCount > 1
+    ? 'Oldest affected resource created'
+    : affectedCount === 1
+      ? 'Affected resource created'
+      : 'Resource created';
   return `${label} ${new Date(issue.resource_created_at).toLocaleString()}`;
 }
 

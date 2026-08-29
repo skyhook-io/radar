@@ -174,12 +174,10 @@ func detectCNPGScheduledBackupIssues(gvr schema.GroupVersionResource, kind strin
 	}
 
 	ns, name := u.GetNamespace(), u.GetName()
-	// The elapsed time rides on `since` rather than the message so it renders
-	// through the same "how long has this been broken" path as every other issue.
 	return []Issue{newConditionIssue(gvr, kind, ns, name, SeverityWarning,
 		"CNPGScheduledBackupMissed",
 		"No backup has run since this schedule was due",
-		overdue, "CNPGScheduledBackupMissed", u.GetCreationTimestamp().Time)}
+		due, true, "CNPGScheduledBackupMissed", u.GetCreationTimestamp().Time)}
 }
 
 // A declared object the operator could not apply.
@@ -208,7 +206,7 @@ func detectCNPGDeclarativeIssues(gvr schema.GroupVersionResource, kind string, u
 	}
 
 	return []Issue{newConditionIssue(gvr, kind, ns, name, SeverityWarning,
-		"CNPGDeclarativeNotApplied", cnpgMessage(base, "", msg), 0,
+		"CNPGDeclarativeNotApplied", cnpgMessage(base, "", msg), time.Time{}, false,
 		"CNPGDeclarativeNotApplied", u.GetCreationTimestamp().Time)}
 }
 
