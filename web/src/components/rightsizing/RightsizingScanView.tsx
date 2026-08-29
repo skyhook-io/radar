@@ -248,13 +248,26 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
             title={RIGHTSIZING_METRICS_REQUIRED_TITLE}
             body={RIGHTSIZING_METRICS_REQUIRED_BODY}
             action={
-              <button
-                type="button"
-                onClick={() => retryPrometheus()}
-                className="btn-brand px-3 py-1.5 text-xs font-medium"
-              >
-                Check again
-              </button>
+              <div className="flex flex-wrap items-center justify-center gap-3">
+                <button
+                  type="button"
+                  onClick={() =>
+                    window.dispatchEvent(
+                      new CustomEvent('radar:open-settings', { detail: { section: 'prometheus' } }),
+                    )
+                  }
+                  className="btn-brand px-4 py-2 text-sm font-medium"
+                >
+                  Configure metrics
+                </button>
+                <button
+                  type="button"
+                  onClick={() => retryPrometheus()}
+                  className="rounded-lg border border-theme-border px-4 py-2 text-sm font-medium text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
+                >
+                  Check again
+                </button>
+              </div>
             }
           />
         ) : surfaceState === 'first_run' ? (
@@ -863,8 +876,8 @@ function CenteredState({
   action?: React.ReactNode
 }) {
   return (
-    <div className="flex min-h-48 items-center justify-center rounded-xl border border-theme-border bg-theme-surface">
-      <div className="flex max-w-[35rem] flex-col items-center px-6 text-center">
+    <div className="flex min-h-56 items-center justify-center rounded-xl border border-theme-border bg-theme-surface px-6 py-8">
+      <div className="flex w-full max-w-xl flex-col items-center text-center">
         {loading ? (
           <Loader2 className="h-8 w-8 animate-spin text-theme-text-tertiary" />
         ) : (
