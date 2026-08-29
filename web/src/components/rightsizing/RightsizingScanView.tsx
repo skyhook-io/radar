@@ -864,7 +864,7 @@ function CenteredState({
 }) {
   return (
     <div className="flex min-h-48 items-center justify-center rounded-xl border border-theme-border bg-theme-surface">
-      <div className="flex max-w-lg flex-col items-center px-6 text-center">
+      <div className="flex max-w-[34rem] flex-col items-center px-6 text-center">
         {loading ? (
           <Loader2 className="h-8 w-8 animate-spin text-theme-text-tertiary" />
         ) : (
