@@ -1665,42 +1665,49 @@ function CostSection({
           onClick={applySource}
           disabled={apply.status === 'applying'}
           aria-busy={apply.status === 'applying'}
-          className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium btn-brand disabled:opacity-50"
+          className="flex min-w-40 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium btn-brand disabled:opacity-50"
         >
           {apply.status === 'applying' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plug className="h-3.5 w-3.5" />}
           {apply.status === 'applying' ? 'Applying…' : costSourceApplyLabel(source)}
         </button>
-        {apply.status === 'connected' && (
-          <div className="mt-1 text-xs">
-            <p role="status" aria-live="polite" className="flex items-center gap-1 text-green-600 dark:text-green-400/80">
-              <Check className="h-3 w-3" /> Applied · active source: {costSourceLabel(apply.source)}
-              <span className="sr-only">
-                {apply.service
-                  ? ` · Service ${apply.service.namespace}/${apply.service.name}, port ${apply.service.port}`
-                  : apply.address
-                    ? ` · ${apply.address}`
-                    : ''}
-              </span>
+        <div className="mt-1 min-h-7 text-xs">
+          {apply.status === 'applying' && (
+            <p key="applying" role="status" aria-live="polite" className="animate-status-enter text-theme-text-tertiary">
+              Testing connection and applying source…
             </p>
-            {apply.service ? (
-              <div className="mt-1 flex flex-wrap items-center gap-1.5 text-theme-text-tertiary">
-                <ResourceRefBadge resourceRef={apply.service} onClick={onNavigateToResource} />
-                <span>in {apply.service.namespace}</span>
-                <span>· port <span className="font-mono">{apply.service.port}</span></span>
-              </div>
-            ) : apply.address ? (
-              <p className="mt-1 break-all font-mono text-theme-text-tertiary">{apply.address}</p>
-            ) : null}
-          </div>
-        )}
-        {apply.status === 'failed' && (
-          <p role="alert" className="mt-1 text-xs text-red-600 dark:text-red-400/80">{apply.error}</p>
-        )}
-        {draftDirty && apply.status === 'idle' && (
-          <p role="status" aria-live="polite" className="mt-1 flex items-center gap-1 text-xs text-warning-text">
-            <AlertTriangle className="h-3 w-3" /> Unapplied source changes
-          </p>
-        )}
+          )}
+          {apply.status === 'connected' && (
+            <div key="connected" className="animate-status-enter flex flex-wrap items-center gap-x-1.5 gap-y-1">
+              <p role="status" aria-live="polite" className="flex items-center gap-1 text-green-600 dark:text-green-400/80">
+                <Check className="h-3 w-3 shrink-0" /> Applied · active source: {costSourceLabel(apply.source)}
+                <span className="sr-only">
+                  {apply.service
+                    ? ` · Service ${apply.service.namespace}/${apply.service.name}, port ${apply.service.port}`
+                    : apply.address
+                      ? ` · ${apply.address}`
+                      : ''}
+                </span>
+              </p>
+              {apply.service ? (
+                <>
+                  <ResourceRefBadge resourceRef={apply.service} onClick={onNavigateToResource} />
+                  <span className="text-theme-text-tertiary">in {apply.service.namespace}</span>
+                  <span className="text-theme-text-tertiary">· port <span className="font-mono">{apply.service.port}</span></span>
+                </>
+              ) : apply.address ? (
+                <span className="break-all font-mono text-theme-text-tertiary">{apply.address}</span>
+              ) : null}
+            </div>
+          )}
+          {apply.status === 'failed' && (
+            <p key="failed" role="alert" className="animate-status-enter text-red-600 dark:text-red-400/80">{apply.error}</p>
+          )}
+          {draftDirty && apply.status === 'idle' && (
+            <p key="dirty" role="status" aria-live="polite" className="animate-status-enter flex items-center gap-1 text-warning-text">
+              <AlertTriangle className="h-3 w-3 shrink-0" /> Unapplied source changes
+            </p>
+          )}
+        </div>
       </div>}
       </div>
 

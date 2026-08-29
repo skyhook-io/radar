@@ -269,8 +269,18 @@ body {
 .animate-transcript-enter {
   animation: transcript-enter 180ms ease-out both;
 }
+
+@keyframes status-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.animate-status-enter {
+  animation: status-enter 140ms ease-out both;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .animate-transcript-enter {
+  .animate-transcript-enter,
+  .animate-status-enter {
     animation: none;
   }
 }
