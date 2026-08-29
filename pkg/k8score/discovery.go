@@ -42,6 +42,7 @@ type ResourceDiscovery struct {
 	partial     bool
 	failedGroup map[string]bool
 	cacheTTL    time.Duration
+	refreshMu   sync.Mutex
 	mu          sync.RWMutex
 }
 
@@ -148,6 +149,15 @@ func NewResourceDiscovery(client discovery.DiscoveryInterface, opts ...Discovery
 
 // Refresh fetches all API resources from the cluster.
 func (d *ResourceDiscovery) Refresh() error {
+	if d == nil {
+		return fmt.Errorf("discovery not initialized")
+	}
+	d.refreshMu.Lock()
+	defer d.refreshMu.Unlock()
+	return d.refresh()
+}
+
+func (d *ResourceDiscovery) refresh() error {
 	if d == nil || d.client == nil {
 		return fmt.Errorf("discovery not initialized")
 	}
@@ -156,6 +166,19 @@ func (d *ResourceDiscovery) Refresh() error {
 	_, apiResourceLists, err := d.client.ServerGroupsAndResources()
 	if err != nil {
 		log.Printf("Warning: partial error discovering API resources: %v", err)
+	}
+	hasResourceData := false
+	for _, apiList := range apiResourceLists {
+		if apiList != nil && len(apiList.APIResources) > 0 {
+			hasResourceData = true
+			break
+		}
+	}
+	if err != nil && !hasResourceData {
+		d.mu.Lock()
+		d.lastRefresh = time.Now()
+		d.mu.Unlock()
+		return err
 	}
 	failedGroups := make(map[string]bool)
 	if groups, ok := discovery.GroupDiscoveryFailedErrorGroups(err); ok {
@@ -172,7 +195,6 @@ func (d *ResourceDiscovery) Refresh() error {
 	d.resources = nil
 	d.resourceMap = make(map[string]APIResource)
 	d.gvrMap = make(map[string]schema.GroupVersionResource)
-
 	for _, apiList := range apiResourceLists {
 		if apiList == nil {
 			continue
@@ -358,6 +380,32 @@ func (d *ResourceDiscovery) Stats() DiscoveryStats {
 	}
 }
 
+// RefreshIfStale refreshes discovery when its cache TTL has elapsed. Concurrent
+// callers share one refresh.
+func (d *ResourceDiscovery) RefreshIfStale() error {
+	if d == nil {
+		return fmt.Errorf("resource discovery not initialized")
+	}
+
+	d.mu.RLock()
+	needsRefresh := time.Since(d.lastRefresh) > d.cacheTTL
+	d.mu.RUnlock()
+	if !needsRefresh {
+		return nil
+	}
+
+	d.refreshMu.Lock()
+	defer d.refreshMu.Unlock()
+
+	d.mu.RLock()
+	needsRefresh = time.Since(d.lastRefresh) > d.cacheTTL
+	d.mu.RUnlock()
+	if !needsRefresh {
+		return nil
+	}
+	return d.refresh()
+}
+
 // GetAPIResources returns all discovered API resources, deduplicating by
 // name+group and keeping the most stable version.
 func (d *ResourceDiscovery) GetAPIResources() ([]APIResource, error) {
@@ -365,14 +413,8 @@ func (d *ResourceDiscovery) GetAPIResources() ([]APIResource, error) {
 		return nil, fmt.Errorf("resource discovery not initialized")
 	}
 
-	d.mu.RLock()
-	needsRefresh := time.Since(d.lastRefresh) > d.cacheTTL
-	d.mu.RUnlock()
-
-	if needsRefresh {
-		if err := d.Refresh(); err != nil {
-			log.Printf("Warning: failed to refresh API resources: %v", err)
-		}
+	if err := d.RefreshIfStale(); err != nil {
+		log.Printf("Warning: failed to refresh API resources: %v", err)
 	}
 
 	d.mu.RLock()

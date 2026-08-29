@@ -4,7 +4,7 @@ import { useScaleWorkload, fetchJSON } from '../../../api/client'
 import { useRBACSubject } from '../../../api/rbac'
 import { usePolicyResource } from '../../../api/policy'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
-import { kindToPlural } from '@skyhook-io/k8s-ui/utils/navigation'
+import { kindToPlural, kindToPluralWithGroup } from '@skyhook-io/k8s-ui/utils/navigation'
 import type { Relationships, ResourceRef, ResourceWithRelationships, WorkloadPodInfo } from '../../../types'
 import type { ScalerDiagnosis } from '@skyhook-io/k8s-ui/components/resources/renderers/WorkloadRenderer'
 
@@ -55,13 +55,19 @@ export function WorkloadRenderer({ kind, data, onNavigate, scaleBlockedBy, workl
   })
   const hpaQueries = useQueries({
     queries: hpaRefs.map(ref => ({
-      queryKey: ['resource', kindToPlural(ref.kind), ref.namespace, ref.name, ref.group],
+      queryKey: [
+        'resource',
+        kindToPluralWithGroup(ref.kind, ref.group ?? ''),
+        ref.namespace,
+        ref.name,
+        ref.group,
+      ],
       queryFn: () => {
         const ns = ref.namespace || '_'
         const params = new URLSearchParams()
         if (ref.group) params.set('group', ref.group)
         const query = params.toString()
-        return fetchJSON<ResourceWithRelationships<any>>(`/resources/${kindToPlural(ref.kind)}/${ns}/${ref.name}${query ? `?${query}` : ''}`)
+        return fetchJSON<ResourceWithRelationships<any>>(`/resources/${kindToPluralWithGroup(ref.kind, ref.group ?? '')}/${ns}/${ref.name}${query ? `?${query}` : ''}`)
       },
       enabled: Boolean(ref.kind && ref.name),
       staleTime: 10000,

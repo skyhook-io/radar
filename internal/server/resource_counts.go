@@ -35,6 +35,19 @@ const (
 	endpointSliceCountConcurrency  = 8
 )
 
+var featuredKubernetesAPIs = map[string]struct{}{
+	"scheduling.k8s.io/Workload":                {},
+	"scheduling.k8s.io/PodGroup":                {},
+	"scheduling.k8s.io/CompositePodGroup":       {},
+	"certificates.k8s.io/PodCertificateRequest": {},
+	"certificates.k8s.io/ClusterTrustBundle":    {},
+}
+
+func isFeaturedKubernetesAPI(group, kind string) bool {
+	_, ok := featuredKubernetesAPIs[group+"/"+kind]
+	return ok
+}
+
 func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -154,7 +167,7 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 		markCounted(kl.CountKey(), n)
 	}
 
-	// 2. Dynamic resources (CRDs) — report counts only for already-watched informers.
+	// 2. Discovery-backed resources.
 	discovery := k8s.GetResourceDiscovery()
 	dynamicCache := k8s.GetDynamicResourceCache()
 	if discovery != nil && dynamicCache != nil {
@@ -162,8 +175,7 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			log.Printf("[resource-counts] Failed to discover API resources for CRD counts: %v", err)
 		} else {
-			// Deduplicate CRDs by group+kind, keeping the most stable served version.
-			type crdInfo struct {
+			type discoveredInfo struct {
 				kind       string
 				group      string
 				resource   string
@@ -171,8 +183,70 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 				namespaced bool
 				gvr        schema.GroupVersionResource
 			}
+
+			browseResources := make(map[string]discoveredInfo)
+			var browseOrder []string
+			for _, res := range resources {
+				if !isFeaturedKubernetesAPI(res.Group, res.Kind) || !slices.Contains(res.Verbs, "list") {
+					continue
+				}
+				key := countKey(res.Group, res.Kind)
+				info := discoveredInfo{
+					kind:       res.Kind,
+					group:      res.Group,
+					resource:   res.Name,
+					version:    res.Version,
+					namespaced: res.Namespaced,
+					gvr:        schema.GroupVersionResource{Group: res.Group, Version: res.Version, Resource: res.Name},
+				}
+				if existing, ok := browseResources[key]; !ok {
+					browseOrder = append(browseOrder, key)
+					browseResources[key] = info
+				} else if k8score.IsMoreStableVersion(res.Version, existing.version) {
+					browseResources[key] = info
+				}
+			}
+
+			for _, key := range browseOrder {
+				resource := browseResources[key]
+				if resource.namespaced && len(namespaces) > endpointSliceCountNamespaceCap {
+					markUnavailable(key)
+					continue
+				}
+				authorized := true
+				if !resource.namespaced || len(namespaces) == 0 {
+					authorized = s.canRead(r, resource.group, resource.resource, "", "list")
+				} else {
+					for _, namespace := range namespaces {
+						if !s.canRead(r, resource.group, resource.resource, namespace, "list") {
+							authorized = false
+							break
+						}
+					}
+				}
+				if !authorized {
+					markForbidden(key, reasonRBACDenied)
+					continue
+				}
+
+				countNamespaces := namespaces
+				if !resource.namespaced {
+					countNamespaces = nil
+				}
+				total, err := dynamicCache.CountDirectProbe(r.Context(), resource.gvr, countNamespaces, endpointSliceCountNamespaceCap, endpointSliceCountConcurrency)
+				if err != nil {
+					markUnavailable(key)
+					if !errors.Is(err, k8score.ErrResourceCountUnavailable) {
+						log.Printf("[resource-counts] Failed to count %s: %v", key, err)
+					}
+					continue
+				}
+				markCounted(key, total)
+			}
+
+			// Deduplicate CRDs by group+kind, keeping the most stable served version.
 			crdSeen := make(map[string]bool)
-			crds := make(map[string]crdInfo)
+			crds := make(map[string]discoveredInfo)
 			var crdOrder []string
 			for _, res := range resources {
 				if !res.IsCRD {
@@ -185,7 +259,7 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				key := countKey(res.Group, res.Kind)
-				info := crdInfo{
+				info := discoveredInfo{
 					kind:       res.Kind,
 					group:      res.Group,
 					resource:   res.Name,

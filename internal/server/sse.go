@@ -615,19 +615,6 @@ func (b *SSEBroadcaster) watchResourceChanges() {
 			if change.Kind == "Event" || change.Operation == "delete" ||
 				(change.Kind == "Pod" && change.Operation != "update") ||
 				change.Diff != nil { // Also broadcast updates with meaningful diffs
-				eventData := map[string]any{
-					"kind":      change.Kind,
-					"namespace": change.Namespace,
-					"name":      change.Name,
-					"operation": change.Operation,
-				}
-				// Include diff info if available
-				if change.Diff != nil {
-					eventData["diff"] = map[string]any{
-						"fields":  change.Diff.Fields,
-						"summary": change.Diff.Summary,
-					}
-				}
 				// Resolve the GVR for per-kind authorization. The dynamic cache
 				// stamps the exact GVR on the change (disambiguates CRD kind
 				// collisions); the typed cache leaves it empty, so resolve from
@@ -642,6 +629,7 @@ func (b *SSEBroadcaster) watchResourceChanges() {
 						}
 					}
 				}
+				eventData := resourceChangeEventData(change, group)
 				b.broadcastResourceChange(SSEEvent{
 					Event: "k8s_event",
 					Data:  eventData,
@@ -670,6 +658,23 @@ func (b *SSEBroadcaster) watchResourceChanges() {
 			}
 		}
 	}
+}
+
+func resourceChangeEventData(change k8s.ResourceChange, group string) map[string]any {
+	eventData := map[string]any{
+		"kind":      change.Kind,
+		"group":     group,
+		"namespace": change.Namespace,
+		"name":      change.Name,
+		"operation": change.Operation,
+	}
+	if change.Diff != nil {
+		eventData["diff"] = map[string]any{
+			"fields":  change.Diff.Fields,
+			"summary": change.Diff.Summary,
+		}
+	}
+	return eventData
 }
 
 // broadcastTopologyUpdate sends the current topology to all clients. Reports

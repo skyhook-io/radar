@@ -354,6 +354,7 @@ export interface PodSummary {
 // K8s Event (from SSE stream)
 export interface K8sEvent {
   kind: string
+  group?: string
   namespace: string
   name: string
   operation: 'add' | 'update' | 'delete'
@@ -675,6 +676,7 @@ export type HPADiagnosisState =
   | 'metrics_unavailable'
   | 'metrics_incomplete'
   | 'unable_to_scale'
+  | 'scaled_to_zero'
   | 'disabled'
   | 'pinned'
   | 'stale'
@@ -733,6 +735,7 @@ export interface APIResource {
   name: string // Plural name (e.g., "deployments")
   namespaced: boolean
   isCrd: boolean
+  featured?: boolean
   verbs: string[]
 }
 

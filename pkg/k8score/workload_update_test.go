@@ -441,6 +441,9 @@ metadata:
 	if result.Action != "create" {
 		t.Fatalf("Action = %q, want create", result.Action)
 	}
+	if result.APIVersion != "apps/v1" {
+		t.Fatalf("APIVersion = %q, want apps/v1", result.APIVersion)
+	}
 }
 
 func TestApplyResource_PreviewUsesCreateForAbsentResource(t *testing.T) {

@@ -2,12 +2,31 @@ package k8score
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 )
+
+// MetricsAPIGroup is the Kubernetes resource metrics API group.
+const MetricsAPIGroup = "metrics.k8s.io"
+
+var (
+	// PodMetricsGVR is the v1beta1 compatibility default used by GetPodMetrics.
+	// Discovery-aware callers should use GetPodMetricsWithGVR.
+	PodMetricsGVR = schema.GroupVersionResource{Group: MetricsAPIGroup, Version: "v1beta1", Resource: "pods"}
+	// NodeMetricsGVR is the v1beta1 compatibility default used by GetNodeMetrics.
+	// Discovery-aware callers should use GetNodeMetricsWithGVR.
+	NodeMetricsGVR = schema.GroupVersionResource{Group: MetricsAPIGroup, Version: "v1beta1", Resource: "nodes"}
+	// ErrMetricsAPINotDiscovered indicates that API discovery did not return a
+	// usable metrics API version.
+	ErrMetricsAPINotDiscovered = errors.New("metrics API is not discovered")
+)
+
+// MetricsGVRResolver resolves the currently served GVR for a metrics resource.
+type MetricsGVRResolver func(resource string) (schema.GroupVersionResource, bool)
 
 // PodMetrics represents metrics for a single pod.
 type PodMetrics struct {
@@ -44,22 +63,14 @@ type ResourceUsage struct {
 	Memory string `json:"memory"`
 }
 
-var (
-	PodMetricsGVR = schema.GroupVersionResource{
-		Group:    "metrics.k8s.io",
-		Version:  "v1beta1",
-		Resource: "pods",
-	}
-	NodeMetricsGVR = schema.GroupVersionResource{
-		Group:    "metrics.k8s.io",
-		Version:  "v1beta1",
-		Resource: "nodes",
-	}
-)
-
 // GetPodMetrics fetches metrics for a specific pod from the metrics.k8s.io API.
 func GetPodMetrics(ctx context.Context, client dynamic.Interface, namespace, name string) (*PodMetrics, error) {
-	result, err := client.Resource(PodMetricsGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	return GetPodMetricsWithGVR(ctx, client, PodMetricsGVR, namespace, name)
+}
+
+// GetPodMetricsWithGVR fetches metrics using a discovered metrics API version.
+func GetPodMetricsWithGVR(ctx context.Context, client dynamic.Interface, gvr schema.GroupVersionResource, namespace, name string) (*PodMetrics, error) {
+	result, err := client.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get pod metrics: %w", err)
 	}
@@ -94,7 +105,12 @@ func GetPodMetrics(ctx context.Context, client dynamic.Interface, namespace, nam
 
 // GetNodeMetrics fetches metrics for a specific node from the metrics.k8s.io API.
 func GetNodeMetrics(ctx context.Context, client dynamic.Interface, name string) (*NodeMetrics, error) {
-	result, err := client.Resource(NodeMetricsGVR).Get(ctx, name, metav1.GetOptions{})
+	return GetNodeMetricsWithGVR(ctx, client, NodeMetricsGVR, name)
+}
+
+// GetNodeMetricsWithGVR fetches metrics using a discovered metrics API version.
+func GetNodeMetricsWithGVR(ctx context.Context, client dynamic.Interface, gvr schema.GroupVersionResource, name string) (*NodeMetrics, error) {
+	result, err := client.Resource(gvr).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get node metrics: %w", err)
 	}

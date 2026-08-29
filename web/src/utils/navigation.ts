@@ -1,5 +1,5 @@
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../api/config'
-import { apiVersionToGroup, kindToPlural } from '@skyhook-io/k8s-ui/utils/navigation'
+import { apiVersionToGroup, kindToPluralWithGroup } from '@skyhook-io/k8s-ui/utils/navigation'
 import type { SelectedResource, Topology } from '@skyhook-io/k8s-ui/types/core'
 import type { SearchHit } from '../api/client'
 
@@ -14,7 +14,7 @@ export function searchHitToSelectedResource(hit: SearchHit): SelectedResource {
 }
 
 // Re-export shared navigation utilities from @skyhook-io/k8s-ui.
-export { kindToPlural, pluralToKind, refToSelectedResource, apiVersionToGroup } from '@skyhook-io/k8s-ui/utils/navigation'
+export { kindToPlural, kindToPluralWithGroup, pluralToKind, refToSelectedResource, apiVersionToGroup } from '@skyhook-io/k8s-ui/utils/navigation'
 export type { NavigateToResource } from '@skyhook-io/k8s-ui/utils/navigation'
 
 const NETWORK_POLICY_TOPOLOGY_KINDS = new Set([
@@ -48,7 +48,7 @@ export function getNetworkPolicyResourceTarget(topology: Topology | null): { kin
 
     const group = networkPolicyGroup(node)
     const target = {
-      kind: kindToPlural(node.kind),
+      kind: kindToPluralWithGroup(node.kind, group ?? ''),
       ...(group ? { group } : {}),
     }
     targets.set(`${target.kind}\u0000${target.group ?? ''}`, target)
@@ -96,13 +96,13 @@ export function resourcePath(resource: SelectedResource): string {
   }
   if (resource.group) params.set('apiGroup', resource.group)
   const query = params.toString()
-  return `/resources/${kindToPlural(resource.kind)}${query ? `?${query}` : ''}`
+  return `/resources/${kindToPluralWithGroup(resource.kind, resource.group ?? '')}${query ? `?${query}` : ''}`
 }
 
 const FULLSCREEN_RESOURCE_KINDS = new Set(['pods', 'deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs', 'nodes'])
 
 export function relatedResourcePath(resource: SelectedResource): string {
-  const apiKind = kindToPlural(resource.kind).toLowerCase()
+  const apiKind = kindToPluralWithGroup(resource.kind, resource.group ?? '').toLowerCase()
   if (FULLSCREEN_RESOURCE_KINDS.has(apiKind)) {
     return buildWorkloadPath({ ...resource, kind: apiKind })
   }

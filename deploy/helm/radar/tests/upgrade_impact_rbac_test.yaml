@@ -17,8 +17,14 @@ tests:
           path: rules
           content:
             apiGroups: ["scheduling.k8s.io"]
-            resources: ["workloads", "podgroups"]
-            verbs: ["list"]
+            resources: ["priorityclasses", "workloads", "podgroups", "compositepodgroups"]
+            verbs: ["get", "list", "watch"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["certificates.k8s.io"]
+            resources: ["podcertificaterequests", "clustertrustbundles"]
+            verbs: ["get", "list", "watch"]
       - contains:
           path: rules
           content:

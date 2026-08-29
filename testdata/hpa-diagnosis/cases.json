@@ -207,7 +207,44 @@
       "status": {
         "observedGeneration": 1,
         "currentReplicas": 5,
-        "desiredReplicas": 5
+        "desiredReplicas": 5,
+        "conditions": [
+          {
+            "type": "ScalingLimited",
+            "status": "True",
+            "reason": "TooManyReplicas",
+            "message": "the desired replica count is more than the maximum replica count"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "intentionally scaled to zero",
+    "expectedState": "scaled_to_zero",
+    "expectedReasons": ["scaled_to_zero", "scaling_disabled"],
+    "expectedSummary": "HPA intentionally scaled the target to zero replicas",
+    "expectedTableState": "scaled_to_zero",
+    "hpa": {
+      "apiVersion": "autoscaling/v2",
+      "kind": "HorizontalPodAutoscaler",
+      "metadata": { "name": "worker", "namespace": "default", "generation": 2 },
+      "spec": {
+        "scaleTargetRef": { "apiVersion": "apps/v1", "kind": "Deployment", "name": "worker" },
+        "minReplicas": 0,
+        "maxReplicas": 10,
+        "metrics": [
+          { "type": "External", "external": { "metric": { "name": "queue_depth" }, "target": { "type": "Value", "value": "1" } } }
+        ]
+      },
+      "status": {
+        "observedGeneration": 2,
+        "currentReplicas": 0,
+        "desiredReplicas": 0,
+        "conditions": [
+          { "type": "ScaledToZero", "status": "True", "reason": "SucceededRescale", "message": "the HPA controller scaled the target to zero" },
+          { "type": "ScalingActive", "status": "False", "reason": "ScalingDisabled", "message": "scaling is disabled since the replica count of the target is zero" }
+        ]
       }
     }
   },

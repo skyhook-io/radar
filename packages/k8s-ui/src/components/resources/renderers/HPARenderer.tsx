@@ -34,6 +34,11 @@ function hpaBadgeSeverity(state: HPADiagnosisState): BadgeSeverity {
 }
 
 function hpaConditionTone(condition: any): ConditionTone | undefined {
+  if (condition?.type === 'ScaledToZero') {
+    if (condition.status === 'False') return 'ok'
+    if (condition.status === 'True') return 'unknown'
+    return 'unknown'
+  }
   if (condition?.type !== 'ScalingLimited') return undefined
   if (condition.status === 'False') return 'ok'
   if (condition.status !== 'True') return 'unknown'
@@ -109,7 +114,7 @@ export function HPARenderer({ data, onNavigate, hpaDiagnosis, extraSections }: H
           } />
           <Property label="Current" value={status.currentReplicas} />
           <Property label="Desired" value={status.desiredReplicas} />
-          <Property label="Min" value={spec.minReplicas || 1} />
+          <Property label="Min" value={spec.minReplicas ?? 1} />
           <Property label="Max" value={spec.maxReplicas} />
           {status.lastScaleTime && <Property label="Last Scale" value={formatAge(status.lastScaleTime)} />}
         </PropertyList>

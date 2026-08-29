@@ -86,4 +86,34 @@ describe('categorizeResources', () => {
     expect(networking?.resources.some(r => r.kind === 'WidgetRoute')).toBe(false)
     expect(networkingAPIs?.resources.map(r => r.kind)).toEqual(['WidgetRoute'])
   })
+
+  it('surfaces only the discovered Kubernetes 1.37 APIs in the generic category', () => {
+    const resources = [
+      { group: 'scheduling.k8s.io', version: 'v1beta1', kind: 'Workload', name: 'workloads', namespaced: true, isCrd: false, featured: true, verbs: ['get', 'list', 'watch'] },
+      { group: 'scheduling.k8s.io', version: 'v1beta1', kind: 'PodGroup', name: 'podgroups', namespaced: true, isCrd: false, featured: true, verbs: ['get', 'list', 'watch'] },
+      { group: 'scheduling.k8s.io', version: 'v1alpha3', kind: 'CompositePodGroup', name: 'compositepodgroups', namespaced: true, isCrd: false, featured: true, verbs: ['get', 'list', 'watch'] },
+      { group: 'certificates.k8s.io', version: 'v1', kind: 'PodCertificateRequest', name: 'podcertificaterequests', namespaced: true, isCrd: false, featured: true, verbs: ['get', 'list', 'watch'] },
+      { group: 'certificates.k8s.io', version: 'v1', kind: 'ClusterTrustBundle', name: 'clustertrustbundles', namespaced: false, isCrd: false, featured: true, verbs: ['get', 'list', 'watch'] },
+      { group: 'authentication.k8s.io', version: 'v1', kind: 'TokenReview', name: 'tokenreviews', namespaced: false, isCrd: false, verbs: ['list'] },
+    ]
+
+    const category = categorizeResources(resources).find(c => c.name === 'Other Kubernetes APIs')
+    expect(category?.resources.map((resource) => resource.kind)).toEqual([
+      'ClusterTrustBundle',
+      'CompositePodGroup',
+      'PodCertificateRequest',
+      'PodGroup',
+      'Workload',
+    ])
+    expect(category?.resources.some(resource => resource.kind === 'TokenReview')).toBe(false)
+  })
+
+  it('does not invent disabled 1.37 APIs or merge colliding CRDs', () => {
+    const categories = categorizeResources([
+      { group: 'kueue.x-k8s.io', version: 'v1beta1', kind: 'Workload', name: 'workloads', namespaced: true, isCrd: true, verbs: ['list'] },
+    ])
+
+    expect(categories.find(c => c.name === 'Other Kubernetes APIs')).toBeUndefined()
+    expect(categories.find(c => c.name === 'Kueue')?.resources.map(resource => resource.kind)).toEqual(['Workload'])
+  })
 })

@@ -47,11 +47,6 @@ rules:
       - csidrivers
       - csistoragecapacities
     verbs: ["list"]
-  - apiGroups: ["scheduling.k8s.io"]
-    resources:
-      - workloads
-      - podgroups
-    verbs: ["list"]
   - apiGroups: ["flowcontrol.apiserver.k8s.io"]
     resources:
       - flowschemas
@@ -101,12 +96,13 @@ rules:
       - networkpolicies
     verbs: ["get", "list", "watch"]
 
-  # Scheduling / runtime / coordination metadata (read-only). PriorityClass
-  # and RuntimeClass are cluster-scoped infra; Leases are namespaced but
-  # surface in the resource browser and feed GitOps controller readiness.
+  # Scheduling / runtime / coordination metadata (read-only).
   - apiGroups: ["scheduling.k8s.io"]
     resources:
       - priorityclasses
+      - workloads
+      - podgroups
+      - compositepodgroups
     verbs: ["get", "list", "watch"]
   - apiGroups: ["node.k8s.io"]
     resources:
@@ -115,6 +111,11 @@ rules:
   - apiGroups: ["coordination.k8s.io"]
     resources:
       - leases
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["certificates.k8s.io"]
+    resources:
+      - podcertificaterequests
+      - clustertrustbundles
     verbs: ["get", "list", "watch"]
 
   # Batch resources (read-only)

@@ -3962,6 +3962,7 @@ export interface ApplyResourceResult {
   name: string;
   namespace: string;
   kind: string;
+  apiVersion: string;
   created: boolean;
 }
 

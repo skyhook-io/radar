@@ -26,7 +26,7 @@ import {
 } from 'lucide-react'
 import type { TimelineEvent, Topology } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
-import { kindToPlural, apiVersionToGroup } from '../../utils/navigation'
+import { kindToPluralWithGroup, apiVersionToGroup } from '../../utils/navigation'
 import { PaneLoader } from '../ui/PaneLoader'
 import { TimelineToolbar } from './TimelineToolbar'
 import { sortTimelineLanes, TIMELINE_SORT_DEFAULT, type TimelineSort } from './timeline-lane-sort'
@@ -770,7 +770,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
       onNavigatePath(gitOpsPath)
       return
     }
-    onResourceClick?.({ kind: kindToPlural(kind), namespace, name, group })
+    onResourceClick?.({ kind: kindToPluralWithGroup(kind, group ?? ''), namespace, name, group })
   }, [onNavigatePath, onResourceClick])
   const containerRef = useRef<HTMLDivElement>(null)
   const [zoom, setZoom] = useState(1)
@@ -3097,7 +3097,15 @@ export function EventDetailPanel({ events, selectedId, onSelectId, onClose, onRe
   // divider separates "the dot you clicked" from "what happened around it".
   const neighborsFrom = events.length === 1 && railEvents.length > 1 ? 1 : -1
   const openResource = () =>
-    onResourceClick?.({ kind: kindToPlural(selected.kind), namespace: selected.namespace, name: selected.name, group: apiVersionToGroup(selected.apiVersion) })
+    onResourceClick?.({
+      kind: kindToPluralWithGroup(
+        selected.kind,
+        apiVersionToGroup(selected.apiVersion),
+      ),
+      namespace: selected.namespace,
+      name: selected.name,
+      group: apiVersionToGroup(selected.apiVersion),
+    })
 
   return (
     <div

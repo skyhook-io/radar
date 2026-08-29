@@ -15,7 +15,7 @@ import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { Tooltip } from '../ui/Tooltip'
 import { Markdown } from '../ui/Markdown'
 import type { SelectedHelmRelease, HelmHook, ChartDependency, HelmOperation, HelmOperationInsight, HelmOwnedResource, HookDiagnostic, HookLogEvidence, UpgradeInfo, ValuesPreviewResponse } from '../../types'
-import { apiVersionToGroup, kindToPlural, type NavigateToResource } from '../../utils/navigation'
+import { apiVersionToGroup, kindToPluralWithGroup, type NavigateToResource } from '../../utils/navigation'
 import { formatDate } from './helm-utils'
 import { getHelmStatusColor, getKindBadgeColor, getResourceStatusColor, SEVERITY_BADGE, SEVERITY_TEXT } from '../../utils/badge-colors'
 import { useCanHelmAct, useCloudRole } from '../../api/client'
@@ -1245,11 +1245,12 @@ function PrimaryOperationResourceSignal({
   const resourceTooltip = `Open ${resource.kind} ${resourceTarget}`
   const showInlineReady = Boolean(resource.ready && !resource.summary)
   const openResource = () => {
+    const group = apiVersionToGroup(resource.apiVersion)
     onNavigateToResource?.({
-      kind: kindToPlural(resource.kind),
+      kind: kindToPluralWithGroup(resource.kind, group),
       namespace: resource.namespace,
       name: resource.name,
-      group: apiVersionToGroup(resource.apiVersion),
+      group,
     })
   }
 

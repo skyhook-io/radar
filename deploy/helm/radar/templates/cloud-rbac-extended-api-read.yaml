@@ -1,0 +1,42 @@
+{{- $rbac := .Values.cloud.defaultRbac }}
+{{- $anyTier := or $rbac.viewer $rbac.member $rbac.owner }}
+{{- if and .Values.cloud.enabled $rbac.create .Values.rbac.create $anyTier -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "radar.fullname" . }}-extended-api-read
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["scheduling.k8s.io"]
+    resources: ["workloads", "podgroups", "compositepodgroups"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["certificates.k8s.io"]
+    resources: ["podcertificaterequests"]
+    verbs: ["get", "list", "watch"]
+{{- $fullname := include "radar.fullname" . }}
+{{- $labels := include "radar.labels" . }}
+{{- range $tier := list "viewer" "member" "owner" }}
+{{- if index $rbac $tier }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $fullname }}-cloud-{{ $tier }}-extended-api-read
+  labels:
+    {{- $labels | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $fullname }}-extended-api-read
+subjects:
+  - kind: Group
+    name: radar:{{ $tier }}
+    apiGroup: rbac.authorization.k8s.io
+  # Cloud accepts both current and pre-rename group vocabularies.
+  - kind: Group
+    name: cloud:{{ $tier }}
+    apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- end }}
+{{- end -}}

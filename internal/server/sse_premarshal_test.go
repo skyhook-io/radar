@@ -3,7 +3,22 @@ package server
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/skyhook-io/radar/internal/k8s"
 )
+
+func TestResourceChangeEventDataIncludesAPIGroup(t *testing.T) {
+	data := resourceChangeEventData(k8s.ResourceChange{
+		Kind:      "PodGroup",
+		Namespace: "default",
+		Name:      "batch",
+		Operation: "update",
+	}, "scheduling.k8s.io")
+
+	if got := data["group"]; got != "scheduling.k8s.io" {
+		t.Fatalf("group = %v, want scheduling.k8s.io", got)
+	}
+}
 
 // premarshalEventData must produce exactly the bytes the old per-client writer
 // produced via json.Marshal(event.Data) — the optimization moves the marshal

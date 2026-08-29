@@ -42,10 +42,15 @@ const BUILTIN_PLURAL_TO_KIND: Record<string, string> = {
   networkpolicies: 'NetworkPolicy',
 }
 
+const BUILTIN_GROUP_KIND_TO_PLURAL: Record<string, string> = {
+  'scheduling.k8s.io/podgroup': 'podgroups',
+}
+
 // Dynamic map built from API discovery — populated by initNavigationMap().
 // Once populated, this is the source of truth for all kind↔plural lookups.
 let discoveredPluralToKind: Record<string, string> | null = null
 let discoveredKindToPlural: Record<string, string> | null = null
+let discoveredGroupKindToPlural: Record<string, string> | null = null
 
 /**
  * Initialize navigation maps from discovered API resources.
@@ -55,6 +60,7 @@ let discoveredKindToPlural: Record<string, string> | null = null
 export function initNavigationMap(resources: APIResource[]) {
   const p2k: Record<string, string> = { ...BUILTIN_PLURAL_TO_KIND }
   const k2p: Record<string, string> = {}
+  const gk2p: Record<string, string> = {}
   for (const r of resources) {
     const plural = r.name.toLowerCase()
     // First-wins on plurals: BUILTIN_PLURAL_TO_KIND seeds canonical core mappings
@@ -62,15 +68,18 @@ export function initNavigationMap(resources: APIResource[]) {
     // "pods" with kind "PodMetrics") cannot hijack the core mapping.
     if (!(plural in p2k)) p2k[plural] = r.kind
     k2p[r.kind.toLowerCase()] = plural
+    gk2p[`${r.group}/${r.kind.toLowerCase()}`] = plural
   }
   discoveredPluralToKind = p2k
   discoveredKindToPlural = k2p
+  discoveredGroupKindToPlural = gk2p
 }
 
 /** Reset navigation maps to builtin-only state. For testing. */
 export function resetNavigationMap() {
   discoveredPluralToKind = null
   discoveredKindToPlural = null
+  discoveredGroupKindToPlural = null
 }
 
 function getPluralToKind(): Record<string, string> {
@@ -90,6 +99,8 @@ export function kindToPlural(kind: string): string {
   // Already a known plural — return as-is to prevent double-pluralization
   if (kindLower in pluralToKindMap) return kindLower
 
+  if (kindLower === 'podgroup') return 'pods'
+
   // Lookup from discovered API resources (singular kind → plural name)
   if (discoveredKindToPlural && kindLower in discoveredKindToPlural) {
     return discoveredKindToPlural[kindLower]
@@ -99,7 +110,6 @@ export function kindToPlural(kind: string): string {
   const aliases: Record<string, string> = {
     horizontalpodautoscaler: 'horizontalpodautoscalers',
     pvc: 'persistentvolumeclaims',
-    podgroup: 'pods',
     caliconetworkpolicy: 'networkpolicies',
     calicoglobalnetworkpolicy: 'globalnetworkpolicies',
     calicostagednetworkpolicy: 'stagednetworkpolicies',
@@ -120,6 +130,15 @@ export function kindToPlural(kind: string): string {
   // Fallback: English pluralization rules (shared with pluralize() in
   // utils/pluralize.ts so a rule change updates both call paths).
   return englishPlural(kindLower)
+}
+
+export function kindToPluralWithGroup(kind: string, group: string): string {
+  if (!group) return kindToPlural(kind)
+  const kindLower = kind.toLowerCase()
+  const pluralToKindMap = getPluralToKind()
+  if (kindLower in pluralToKindMap) return kindLower
+  const groupKind = `${group}/${kindLower}`
+  return discoveredGroupKindToPlural?.[groupKind] ?? BUILTIN_GROUP_KIND_TO_PLURAL[groupKind] ?? kindToPlural(kind)
 }
 
 /**
@@ -151,7 +170,7 @@ export function refToSelectedResource(
   ref: Pick<ResourceRef, 'kind' | 'name' | 'group'> & { namespace?: string },
 ): SelectedResource {
   return {
-    kind: kindToPlural(ref.kind),
+    kind: kindToPluralWithGroup(ref.kind, ref.group ?? ''),
     namespace: ref.namespace ?? '',
     name: ref.name,
     group: ref.group,

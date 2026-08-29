@@ -64,7 +64,7 @@ import { Tooltip } from './components/ui/Tooltip'
 import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNamespacePicker'
 import { SettingsDialog, type SettingsSectionId } from './components/settings/SettingsDialog'
 import type { APIResource, TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, TopologyMode, Topology, K8sEvent } from './types'
-import { kindToPlural, pluralToKind, openExternal, apiVersionToGroup, relatedResourcePath, searchHitToSelectedResource } from './utils/navigation'
+import { kindToPluralWithGroup, pluralToKind, openExternal, apiVersionToGroup, relatedResourcePath, searchHitToSelectedResource } from './utils/navigation'
 import { findSelectedTopologyNode } from './utils/topology-selection'
 import { type OmnibarHandle } from './components/ui/Omnibar'
 import { RadarOmnibar } from './components/ui/RadarOmnibar'
@@ -604,7 +604,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const peekOwnerKeyRef = useRef<string | null>(null)
   const currentResourceKindSlug = normalizedResourcesKindSlug.toLowerCase()
   const currentResourceGroup = searchParams.get('apiGroup') ?? ''
-  const selectedResourceKindSlug = selectedResource ? kindToPlural(selectedResource.kind).toLowerCase() : ''
+  const selectedResourceKindSlug = selectedResource ? kindToPluralWithGroup(selectedResource.kind, selectedResource.group ?? '').toLowerCase() : ''
   const selectedResourceGroup = selectedResource?.group ?? ''
   const selectedResourceRouteMismatch = mainView === 'resources' && !!selectedResource && (
     selectedResourceKindSlug !== currentResourceKindSlug ||
@@ -707,7 +707,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // URL (?resource=ns/name) — the same deep-link shape the resources view
   // round-trips — so refresh/share keeps the drawer open instead of dropping it.
   const navigateToResourceList = useCallback((resource: SelectedResource) => {
-    const pluralKind = kindToPlural(resource.kind)
+    const pluralKind = kindToPluralWithGroup(resource.kind, resource.group ?? '')
     setSelectedResource({ ...resource, kind: pluralKind })
     const newParams = new URLSearchParams(searchParams)
     newParams.delete('kind')
@@ -1027,7 +1027,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     // Skip K8s Event kind — informational, not resource mutations
     if (event.kind === 'Event') return
 
-    const kind = kindToPlural(event.kind)
+    const kind = kindToPluralWithGroup(event.kind, event.group ?? '')
     const structural = event.operation === 'add' || event.operation === 'delete'
     const applicationWorkload = ['deployments', 'statefulsets', 'daemonsets', 'rollouts'].includes(kind)
 
@@ -1254,9 +1254,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     // Skip Internet node - it's not a real resource
     if (node.kind === 'Internet') return
 
-    // For PodGroup, we can't open a single resource drawer
-    // TODO: Could show a list of pods in the group
-    if (node.kind === 'PodGroup') return
+    const nodeGroup = apiVersionToGroup(node.data.apiVersion as string | undefined)
+    // Radar's topology PodGroup is a virtual pod aggregate. A Kubernetes
+    // scheduling.k8s.io PodGroup carries apiVersion and is a real resource.
+    if (node.kind === 'PodGroup' && !nodeGroup) return
 
     const namespace = (node.data.namespace as string) || ''
     // GitOps CRs (Application/Kustomization/HelmRelease/etc.) have a dedicated
@@ -1270,10 +1271,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     }
 
     navigateToResource({
-      kind: kindToPlural(node.kind),
+      kind: kindToPluralWithGroup(node.kind, nodeGroup),
       namespace,
       name: node.name,
-      group: apiVersionToGroup(node.data.apiVersion as string | undefined),
+      group: nodeGroup,
     })
   }, [navigate, navigateToResource])
 
@@ -2382,7 +2383,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             // Drill into a related resource while expanded: stay in the over-list
             // overlay for the new resource (pushed, so Back walks resource→resource
             // still expanded). The backdrop list follows to the new kind.
-            const pluralKind = kindToPlural(resource.kind)
+            const pluralKind = kindToPluralWithGroup(resource.kind, resource.group ?? '')
             setSelectedResource({ ...resource, kind: pluralKind })
             const p = new URLSearchParams()
             const ns = searchParams.get('namespaces')

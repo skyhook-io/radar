@@ -36,7 +36,7 @@ import {
 import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom, Topology, TopologyNode, HPADiagnosis, WorkloadPodInfo } from '../../types'
 import type { GitOpsStatus } from '../../types/gitops'
 import type { NavigateToResource } from '../../utils/navigation'
-import { refToSelectedResource, pluralToKind, kindToPlural, apiVersionToGroup } from '../../utils/navigation'
+import { refToSelectedResource, pluralToKind, kindToPlural, kindToPluralWithGroup, apiVersionToGroup } from '../../utils/navigation'
 import { neighborhoodFor, seedNodeIds } from '../../utils/topology-neighborhood'
 import { TopologyGraph } from '../topology/TopologyGraph'
 import { gitOpsOwnerFromRelationships, type GitOpsOwnerRef } from '../../utils/gitops-owner'
@@ -555,11 +555,12 @@ export function WorkloadView({
   const handleTopologyNodeClick = useCallback(
     (node: TopologyNode) => {
       if (!onNavigateToResource || !node.kind || !node.name) return
+      const group = apiVersionToGroup(node.data?.apiVersion as string | undefined)
       onNavigateToResource({
-        kind: kindToPlural(node.kind),
+        kind: kindToPluralWithGroup(node.kind, group),
         namespace: (node.data?.namespace as string) || '',
         name: node.name,
-        group: apiVersionToGroup(node.data?.apiVersion as string | undefined),
+        group,
       })
     },
     [onNavigateToResource],
@@ -1796,7 +1797,7 @@ function WorkloadOverviewTab({
   leadContent?: ReactNode
   recentImageSave?: boolean
 }) {
-  const apiKind = kindToPlural(selectedResource.kind)
+  const apiKind = kindToPluralWithGroup(selectedResource.kind, selectedResource.group ?? '')
   const resourceKind = resource?.kind || displayKindName(apiKind, resource?.kind)
   const readiness = getReadinessSummary(resource, apiKind)
   const podSummary = getPodSummary(workloadPods, relationships, apiKind)

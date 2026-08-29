@@ -135,6 +135,29 @@ func TestAnalyzePrefersScalingOverStaleStatus(t *testing.T) {
 	}
 }
 
+func TestAnalyzeRequiresConsistentScaledToZeroState(t *testing.T) {
+	min := int32(1)
+	hpa := &autoscalingv2.HorizontalPodAutoscaler{
+		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+			MinReplicas: &min,
+			MaxReplicas: 10,
+		},
+		Status: autoscalingv2.HorizontalPodAutoscalerStatus{
+			CurrentReplicas: 0,
+			DesiredReplicas: 0,
+			Conditions: []autoscalingv2.HorizontalPodAutoscalerCondition{{
+				Type:   autoscalingv2.ScaledToZero,
+				Status: corev1.ConditionTrue,
+			}},
+		},
+	}
+
+	got := Analyze(hpa)
+	if got.State == StateScaledToZero || got.hasReason(ReasonScaledToZero) {
+		t.Fatalf("inconsistent ScaledToZero condition must not classify as intentional zero: %+v", got)
+	}
+}
+
 func loadFixtureCases(t *testing.T) []fixtureCase {
 	t.Helper()
 	path := filepath.Join("..", "..", "testdata", "hpa-diagnosis", "cases.json")

@@ -31,7 +31,7 @@ import { EmptyState } from "../ui/EmptyState";
 import { ResourceRefBadge } from "../ui/drawer-components";
 import { TopologyGraph } from "../topology/TopologyGraph";
 import { pluralize } from "../../utils/pluralize";
-import { kindToPlural, refToSelectedResource } from "../../utils/navigation";
+import { kindToPluralWithGroup, refToSelectedResource } from "../../utils/navigation";
 import {
   batchRunParentNodes,
   tagWorkloadOwnership,
@@ -551,11 +551,12 @@ export function ApplicationDetail({
         onSelectWorkloadRun(parentWorkload, node);
         return;
       }
+      const group = topologyGroup(node);
       onNavigateToResource?.({
-        kind: kindToPlural(node.kind),
+        kind: kindToPluralWithGroup(node.kind, group ?? ""),
         namespace: ns,
         name: node.name,
-        group: topologyGroup(node),
+        group,
       });
     },
     [

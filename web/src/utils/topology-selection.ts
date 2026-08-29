@@ -1,5 +1,5 @@
 import type { SelectedResource, Topology, TopologyNode } from '@skyhook-io/k8s-ui/types/core'
-import { apiVersionToGroup, kindToPlural } from '@skyhook-io/k8s-ui/utils/navigation'
+import { apiVersionToGroup, kindToPluralWithGroup } from '@skyhook-io/k8s-ui/utils/navigation'
 
 function topologyNodeGroup(node: TopologyNode): string | undefined {
   const apiVersionGroup = apiVersionToGroup(node.data.apiVersion as string | undefined)
@@ -18,10 +18,11 @@ export function findSelectedTopologyNode(
   selectedResource: SelectedResource,
 ): TopologyNode | undefined {
   const namespace = selectedResource.namespace || ''
+  const selectedKind = kindToPluralWithGroup(selectedResource.kind, selectedResource.group ?? '')
   const candidates = topology?.nodes.filter(node =>
     ((node.data.namespace as string) || '') === namespace &&
     node.name === selectedResource.name &&
-    (kindToPlural(node.kind) === selectedResource.kind || node.kind === selectedResource.kind),
+    (kindToPluralWithGroup(node.kind, topologyNodeGroup(node) ?? '') === selectedKind || node.kind === selectedResource.kind),
   ) ?? []
 
   if (candidates.length === 0) return undefined

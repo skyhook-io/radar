@@ -14,6 +14,7 @@ export interface ApplyResult {
   name: string
   namespace: string
   kind: string
+  apiVersion?: string
   created: boolean
 }
 

@@ -1167,6 +1167,11 @@ func TestMetricsAPIUnavailable(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "metrics API not discovered",
+			err:  k8score.ErrMetricsAPINotDiscovered,
+			want: true,
+		},
+		{
 			name: "metrics not found",
 			err:  errors.New(`failed to get pod metrics: pods.metrics.k8s.io "api" not found`),
 			want: true,
@@ -1219,6 +1224,14 @@ func TestMetricsAPIUnavailable(t *testing.T) {
 				t.Fatalf("MetricsAPIUnavailable() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestMetricsAPIServiceNamesForVersionIncludesDiscoveredVersionFirst(t *testing.T) {
+	got := metricsAPIServiceNamesForVersion("v2beta1")
+	want := []string{"v2beta1.metrics.k8s.io", "v1.metrics.k8s.io", "v1beta1.metrics.k8s.io"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("metrics APIService names = %v, want %v", got, want)
 	}
 }
 
@@ -1385,7 +1398,7 @@ func TestMetricsAPIServiceDiagnosis(t *testing.T) {
 					"conditions": []any{tt.condition},
 				},
 			}}
-			if got := metricsAPIServiceDiagnosis(apiService, true); got != tt.want {
+			if got := metricsAPIServiceDiagnosis("v1beta1.metrics.k8s.io", apiService, true); got != tt.want {
 				t.Fatalf("metricsAPIServiceDiagnosis() = %q, want %q", got, tt.want)
 			}
 		})
@@ -1406,7 +1419,7 @@ func TestMetricsAPIServiceDiagnosisCanHideConditionMessage(t *testing.T) {
 		},
 	}}
 	want := "The v1beta1.metrics.k8s.io APIService is not Available (FailedDiscoveryCheck). Check the metrics-server Service, endpoints, and API aggregation/TLS configuration."
-	if got := metricsAPIServiceDiagnosis(apiService, false); got != want {
+	if got := metricsAPIServiceDiagnosis("v1beta1.metrics.k8s.io", apiService, false); got != want {
 		t.Fatalf("metricsAPIServiceDiagnosis() = %q, want %q", got, want)
 	}
 }
@@ -1420,15 +1433,15 @@ func TestMetricsAPIServiceDiagnosisWithoutAvailableCondition(t *testing.T) {
 		},
 	}}
 	want := "The v1beta1.metrics.k8s.io APIService exists but has no Available condition. Check metrics-server and API aggregation status."
-	if got := metricsAPIServiceDiagnosis(apiService, true); got != want {
+	if got := metricsAPIServiceDiagnosis("v1beta1.metrics.k8s.io", apiService, true); got != want {
 		t.Fatalf("metricsAPIServiceDiagnosis() = %q, want %q", got, want)
 	}
 }
 
 func TestMetricsAPIServiceLookupDiagnosisWhenMissing(t *testing.T) {
-	err := apierrors.NewNotFound(schema.GroupResource{Group: metricsAPIServiceGroup, Resource: "apiservices"}, metricsAPIServiceName)
+	err := apierrors.NewNotFound(schema.GroupResource{Group: metricsAPIServiceGroup, Resource: "apiservices"}, "v1beta1.metrics.k8s.io")
 	want := "The v1beta1.metrics.k8s.io APIService is not registered. Install metrics-server or restore that APIService."
-	if got := metricsAPIServiceLookupDiagnosis(nil, err, true); got != want {
+	if got := metricsAPIServiceLookupDiagnosis("v1beta1.metrics.k8s.io", nil, err, true); got != want {
 		t.Fatalf("metricsAPIServiceLookupDiagnosis() = %q, want %q", got, want)
 	}
 }
@@ -1452,7 +1465,47 @@ func TestMetricsUnavailableDiagnosisWhenAPIServiceMissing(t *testing.T) {
 		t.Fatalf("InitTestDynamicResourceCache: %v", err)
 	}
 
-	want := "The v1beta1.metrics.k8s.io APIService is not registered. Install metrics-server or restore that APIService."
+	want := "The metrics.k8s.io APIService is not registered. Install metrics-server or restore that APIService."
+	if got := metricsUnavailableDiagnosis(context.Background(), true); got != want {
+		t.Fatalf("metricsUnavailableDiagnosis() = %q, want %q", got, want)
+	}
+}
+
+func TestMetricsUnavailableDiagnosisInspectsDiscoveredMetricsVersionFirst(t *testing.T) {
+	resetMetricsAPIServiceDiagnosisMemoForTest(t)
+	defer k8s.ResetTestDynamicState()
+
+	apiServiceGVR := schema.GroupVersionResource{Group: metricsAPIServiceGroup, Version: "v1", Resource: "apiservices"}
+	v1 := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apiregistration.k8s.io/v1",
+		"kind":       metricsAPIServiceKind,
+		"metadata":   map[string]any{"name": "v1.metrics.k8s.io"},
+		"status": map[string]any{"conditions": []any{map[string]any{
+			"type": "Available", "status": "False", "reason": "FailedDiscoveryCheck",
+		}}},
+	}}
+	v1beta1 := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apiregistration.k8s.io/v1",
+		"kind":       metricsAPIServiceKind,
+		"metadata":   map[string]any{"name": "v1beta1.metrics.k8s.io"},
+		"status": map[string]any{"conditions": []any{map[string]any{
+			"type": "Available", "status": "True",
+		}}},
+	}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{apiServiceGVR: "APIServiceList"},
+		v1,
+		v1beta1,
+	)
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{
+		{Group: metricsAPIServiceGroup, Version: "v1", Kind: metricsAPIServiceKind, Name: "apiservices", Namespaced: false},
+		{Group: "metrics.k8s.io", Version: "v1beta1", Kind: "NodeMetrics", Name: "nodes", Namespaced: false, Verbs: []string{"get", "list"}},
+	}); err != nil {
+		t.Fatalf("InitTestDynamicResourceCache: %v", err)
+	}
+
+	want := "The v1beta1.metrics.k8s.io APIService is Available, but metrics reads still fail. Check metrics-server logs and API aggregation errors."
 	if got := metricsUnavailableDiagnosis(context.Background(), true); got != want {
 		t.Fatalf("metricsUnavailableDiagnosis() = %q, want %q", got, want)
 	}
@@ -1487,8 +1540,8 @@ func TestMetricsUnavailableDiagnosisMemoizesAPIServiceLookup(t *testing.T) {
 			t.Fatalf("metricsUnavailableDiagnosis() returned empty diagnosis")
 		}
 	}
-	if gets != 1 {
-		t.Fatalf("APIService GET count = %d, want 1", gets)
+	if gets != 2 {
+		t.Fatalf("APIService GET count = %d, want 2", gets)
 	}
 }
 
@@ -1501,7 +1554,7 @@ func TestMetricsUnavailableDiagnosisDoesNotMemoizeTransientAPIServiceLookupError
 		"apiVersion": "apiregistration.k8s.io/v1",
 		"kind":       metricsAPIServiceKind,
 		"metadata": map[string]any{
-			"name": metricsAPIServiceName,
+			"name": "v1beta1.metrics.k8s.io",
 		},
 		"status": map[string]any{
 			"conditions": []any{
@@ -1542,19 +1595,20 @@ func TestMetricsUnavailableDiagnosisDoesNotMemoizeTransientAPIServiceLookupError
 	if got := metricsUnavailableDiagnosis(context.Background(), true); got == "" {
 		t.Fatalf("second metricsUnavailableDiagnosis() returned empty diagnosis after transient error")
 	}
-	if gets != 2 {
-		t.Fatalf("APIService GET count = %d, want 2", gets)
+	if gets != 3 {
+		t.Fatalf("APIService GET count = %d, want 3", gets)
 	}
 }
 
 func TestMetricsAPIServiceDiagnosisCacheDoesNotOverwriteDifferentContext(t *testing.T) {
 	cache := metricsAPIServiceDiagnosisCache{ttl: time.Minute}
+	key := metricsAPIServiceDiagnosisKey{includeConditionMessage: true, metricsVersion: "v1"}
 	startedA := make(chan struct{})
 	releaseA := make(chan struct{})
 	resultA := make(chan string, 1)
 
 	go func() {
-		resultA <- cache.get("ctx-a", true, func() (string, bool) {
+		resultA <- cache.get("ctx-a", key, func() (string, bool) {
 			close(startedA)
 			<-releaseA
 			return "ctx-a diagnosis", true
@@ -1562,7 +1616,7 @@ func TestMetricsAPIServiceDiagnosisCacheDoesNotOverwriteDifferentContext(t *test
 	}()
 
 	<-startedA
-	if got := cache.get("ctx-b", true, func() (string, bool) {
+	if got := cache.get("ctx-b", key, func() (string, bool) {
 		return "ctx-b diagnosis", true
 	}); got != "ctx-b diagnosis" {
 		t.Fatalf("ctx-b diagnosis = %q, want ctx-b diagnosis", got)
@@ -1573,7 +1627,7 @@ func TestMetricsAPIServiceDiagnosisCacheDoesNotOverwriteDifferentContext(t *test
 		t.Fatalf("ctx-a diagnosis = %q, want ctx-a diagnosis", got)
 	}
 
-	if got := cache.get("ctx-b", true, func() (string, bool) {
+	if got := cache.get("ctx-b", key, func() (string, bool) {
 		t.Fatal("ctx-b cache entry was overwritten by ctx-a")
 		return "", false
 	}); got != "ctx-b diagnosis" {
@@ -1590,7 +1644,7 @@ func TestMetricsUnavailableDiagnosisMemoizesByConditionDetailFlag(t *testing.T) 
 		"apiVersion": "apiregistration.k8s.io/v1",
 		"kind":       metricsAPIServiceKind,
 		"metadata": map[string]any{
-			"name": metricsAPIServiceName,
+			"name": "v1beta1.metrics.k8s.io",
 		},
 		"status": map[string]any{
 			"conditions": []any{
@@ -1634,8 +1688,8 @@ func TestMetricsUnavailableDiagnosisMemoizesByConditionDetailFlag(t *testing.T) 
 
 	_ = metricsUnavailableDiagnosis(context.Background(), true)
 	_ = metricsUnavailableDiagnosis(context.Background(), false)
-	if gets != 2 {
-		t.Fatalf("APIService GET count = %d, want 2 for two memo detail slots", gets)
+	if gets != 4 {
+		t.Fatalf("APIService GET count = %d, want 4 for two memo detail slots", gets)
 	}
 }
 

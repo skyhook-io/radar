@@ -46,7 +46,7 @@ import {
 } from "../../api/client";
 import { useConnection } from "../../context/ConnectionContext";
 import { useTimelineSource } from "../../context/TimelineSource";
-import { buildWorkloadPath, kindToPlural } from "../../utils/navigation";
+import { apiVersionToGroup, buildWorkloadPath, kindToPluralWithGroup } from "../../utils/navigation";
 import { WorkloadView } from "../workload/WorkloadView";
 import { ApplicationCostTab } from "../cost/ApplicationCostTab";
 import { isOpenCostWorkloadKind } from "../cost/kinds";
@@ -457,7 +457,7 @@ function AppDetailRoute({
       params.set("workload", workloadKey(workload));
       params.set(
         "run",
-        `${kindToPlural(run.kind)}/${runNamespace}/${run.name}`,
+        `${kindToPluralWithGroup(run.kind, apiVersionToGroup(run.data?.apiVersion as string | undefined))}/${runNamespace}/${run.name}`,
       );
       setSearchParams(params);
     },
@@ -465,14 +465,15 @@ function AppDetailRoute({
   );
   const openWorkloadResource = useCallback(
     (resource: SelectedResource) => {
-      if (kindToPlural(resource.kind).toLowerCase() !== "pods") {
+      const pluralKind = kindToPluralWithGroup(resource.kind, resource.group ?? "")
+      if (pluralKind.toLowerCase() !== "pods") {
         onOpenResource(resource);
         return;
       }
 
       const [pathname, rawSearch = ""] = buildWorkloadPath({
         ...resource,
-        kind: kindToPlural(resource.kind),
+        kind: pluralKind,
       }).split("?");
       const params = new URLSearchParams(rawSearch);
       const activeNamespaces = searchParams.get("namespaces");
@@ -682,7 +683,7 @@ function AppDetailRoute({
         renderWorkload={(workload: SelectedAppWorkload) => (
           <div className="h-full overflow-hidden">
             <WorkloadView
-              kind={kindToPlural(workload.kind)}
+              kind={kindToPluralWithGroup(workload.kind, workload.group ?? "")}
               group={workload.group}
               namespace={workload.namespace}
               name={workload.name}
@@ -837,7 +838,7 @@ function AppOverviewIssueRows({
 }) {
   const navigate = (ref: IssueResourceRef) => {
     onOpenResource({
-      kind: kindToPlural(ref.kind),
+      kind: kindToPluralWithGroup(ref.kind, ref.group ?? ""),
       namespace: ref.namespace ?? "",
       name: ref.name,
       group: ref.group ?? "",

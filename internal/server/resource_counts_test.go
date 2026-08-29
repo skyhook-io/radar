@@ -2,8 +2,10 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,6 +77,143 @@ func TestResourceCountsCountsWatchedCRDsAndMarksUnwatchedUnavailable(t *testing.
 	}
 	if got := body.Counts[endpointSliceCountKey]; got != 0 {
 		t.Fatalf("EndpointSlice count = %d, want 0", got)
+	}
+}
+
+func TestResourceCountsDirectlyCountsKubernetes137BrowseResources(t *testing.T) {
+	workloadBetaGVR := schema.GroupVersionResource{Group: "scheduling.k8s.io", Version: "v1beta1", Resource: "workloads"}
+	workloadAlphaGVR := schema.GroupVersionResource{Group: "scheduling.k8s.io", Version: "v1alpha3", Resource: "workloads"}
+	endpointSliceGVR := schema.GroupVersionResource{Group: "discovery.k8s.io", Version: "v1", Resource: "endpointslices"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{
+			workloadBetaGVR:  "WorkloadList",
+			workloadAlphaGVR: "WorkloadList",
+			endpointSliceGVR: "EndpointSliceList",
+		},
+	)
+	dyn.PrependReactor("list", "workloads", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if action.GetResource().Version != "v1beta1" {
+			t.Fatalf("count used scheduling version %q, want v1beta1", action.GetResource().Version)
+		}
+		return true, &unstructured.UnstructuredList{Items: []unstructured.Unstructured{
+			{Object: map[string]any{"metadata": map[string]any{"name": "one", "namespace": "default"}}},
+			{Object: map[string]any{"metadata": map[string]any{"name": "two", "namespace": "default"}}},
+		}}, nil
+	})
+	dyn.PrependReactor("list", "endpointslices", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &unstructured.UnstructuredList{}, nil
+	})
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{
+		{Group: "scheduling.k8s.io", Version: "v1alpha3", Kind: "Workload", Name: "workloads", Namespaced: true, IsCRD: false, Verbs: []string{"get", "list"}},
+		{Group: "scheduling.k8s.io", Version: "v1beta1", Kind: "Workload", Name: "workloads", Namespaced: true, IsCRD: false, Verbs: []string{"get", "list"}},
+	}); err != nil {
+		t.Fatalf("InitTestDynamicResourceCache: %v", err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+
+	rec := httptest.NewRecorder()
+	testServerSrv.handleResourceCounts(rec, httptest.NewRequest(http.MethodGet, "/api/resource-counts?namespace=default", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var body ResourceCountsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got := body.Counts["scheduling.k8s.io/Workload"]; got != 2 {
+		t.Fatalf("Workload count = %d, want 2", got)
+	}
+	if containsString(body.Unavailable, "scheduling.k8s.io/Workload") || containsString(body.Forbidden, "scheduling.k8s.io/Workload") {
+		t.Fatalf("counted Workload should not be restricted: unavailable=%v forbidden=%v", body.Unavailable, body.Forbidden)
+	}
+}
+
+func TestResourceCountsSkipsKubernetes137BrowseProbeAboveNamespaceCap(t *testing.T) {
+	workloadGVR := schema.GroupVersionResource{Group: "scheduling.k8s.io", Version: "v1beta1", Resource: "workloads"}
+	endpointSliceGVR := schema.GroupVersionResource{Group: "discovery.k8s.io", Version: "v1", Resource: "endpointslices"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{
+			workloadGVR:      "WorkloadList",
+			endpointSliceGVR: "EndpointSliceList",
+		},
+	)
+	workloadLists := 0
+	dyn.PrependReactor("list", "workloads", func(k8stesting.Action) (bool, runtime.Object, error) {
+		workloadLists++
+		return true, &unstructured.UnstructuredList{}, nil
+	})
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{
+		Group: "scheduling.k8s.io", Version: "v1beta1", Kind: "Workload", Name: "workloads", Namespaced: true, Verbs: []string{"list"},
+	}}); err != nil {
+		t.Fatalf("InitTestDynamicResourceCache: %v", err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+
+	namespaces := make([]string, endpointSliceCountNamespaceCap+1)
+	for i := range namespaces {
+		namespaces[i] = fmt.Sprintf("ns-%d", i)
+	}
+	rec := httptest.NewRecorder()
+	testServerSrv.handleResourceCounts(rec, httptest.NewRequest(http.MethodGet, "/api/resource-counts?namespaces="+strings.Join(namespaces, ","), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var body ResourceCountsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if workloadLists != 0 {
+		t.Fatalf("workload list probes = %d, want 0", workloadLists)
+	}
+	if !containsString(body.Unavailable, "scheduling.k8s.io/Workload") {
+		t.Fatalf("unavailable = %v, want scheduling.k8s.io/Workload", body.Unavailable)
+	}
+}
+
+func TestResourceCountsMarksDeniedClusterTrustBundleForbidden(t *testing.T) {
+	clusterTrustBundleGVR := schema.GroupVersionResource{Group: "certificates.k8s.io", Version: "v1beta1", Resource: "clustertrustbundles"}
+	endpointSliceGVR := schema.GroupVersionResource{Group: "discovery.k8s.io", Version: "v1", Resource: "endpointslices"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{
+			clusterTrustBundleGVR: "ClusterTrustBundleList",
+			endpointSliceGVR:      "EndpointSliceList",
+		},
+	)
+	dyn.PrependReactor("list", "endpointslices", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &unstructured.UnstructuredList{}, nil
+	})
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{
+		{Group: "certificates.k8s.io", Version: "v1beta1", Kind: "ClusterTrustBundle", Name: "clustertrustbundles", Namespaced: false, IsCRD: false, Verbs: []string{"get", "list", "watch"}},
+	}); err != nil {
+		t.Fatalf("InitTestDynamicResourceCache: %v", err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	user := &auth.User{Username: "alice"}
+	perms := &auth.UserPermissions{AllowedNamespaces: nil}
+	perms.SetCanI("list", "certificates.k8s.io", "clustertrustbundles", "", false)
+	s.permCache.Set(user.Username, perms)
+	req := requestWithUser(http.MethodGet, "/api/resource-counts", user)
+
+	rec := httptest.NewRecorder()
+	s.handleResourceCounts(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var body ResourceCountsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	key := "certificates.k8s.io/ClusterTrustBundle"
+	if _, ok := body.Counts[key]; ok {
+		t.Fatalf("denied ClusterTrustBundle leaked a count: %v", body.Counts[key])
+	}
+	if !containsString(body.Forbidden, key) || body.Reasons[key] != reasonRBACDenied {
+		t.Fatalf("denied ClusterTrustBundle restriction = forbidden:%v reasons:%v", body.Forbidden, body.Reasons)
 	}
 }
 

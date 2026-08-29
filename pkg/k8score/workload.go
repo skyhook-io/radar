@@ -81,14 +81,15 @@ type ApplyResourceOptions struct {
 
 // ApplyResourceResult contains the result of a create/apply operation.
 type ApplyResourceResult struct {
-	Name      string                     `json:"name"`
-	Namespace string                     `json:"namespace"`
-	Kind      string                     `json:"kind"`
-	Created   bool                       `json:"created"` // true if newly created, false if updated
-	Action    string                     `json:"action,omitempty"`
-	Object    *unstructured.Unstructured `json:"-"`
-	Previous  *unstructured.Unstructured `json:"-"`
-	Submitted *unstructured.Unstructured `json:"-"`
+	Name       string                     `json:"name"`
+	Namespace  string                     `json:"namespace"`
+	Kind       string                     `json:"kind"`
+	APIVersion string                     `json:"apiVersion"`
+	Created    bool                       `json:"created"` // true if newly created, false if updated
+	Action     string                     `json:"action,omitempty"`
+	Object     *unstructured.Unstructured `json:"-"`
+	Previous   *unstructured.Unstructured `json:"-"`
+	Submitted  *unstructured.Unstructured `json:"-"`
 
 	// Warnings are advisory notes derived from the actual state of the cluster
 	// (e.g., "this resource is reconciled by Helm" or "field X you omitted is
@@ -335,10 +336,11 @@ func (m *WorkloadManager) ApplyResource(ctx context.Context, opts ApplyResourceO
 	}
 
 	result := &ApplyResourceResult{
-		Name:      name,
-		Namespace: ns,
-		Kind:      kind,
-		Submitted: obj.DeepCopy(),
+		Name:       name,
+		Namespace:  ns,
+		Kind:       kind,
+		APIVersion: apiVersion,
+		Submitted:  obj.DeepCopy(),
 	}
 
 	var client dynamic.ResourceInterface

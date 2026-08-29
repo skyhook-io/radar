@@ -19,6 +19,7 @@ const (
 	StateMetricsUnavailable State = "metrics_unavailable"
 	StateMetricsIncomplete  State = "metrics_incomplete"
 	StateUnableToScale      State = "unable_to_scale"
+	StateScaledToZero       State = "scaled_to_zero"
 	StateDisabled           State = "disabled"
 	StatePinned             State = "pinned"
 	StateStale              State = "stale"
@@ -35,6 +36,7 @@ const (
 	ReasonLimitedMin           ReasonID = "limited_min"
 	ReasonMetricsUnavailable   ReasonID = "metrics_unavailable"
 	ReasonUnableToScale        ReasonID = "unable_to_scale"
+	ReasonScaledToZero         ReasonID = "scaled_to_zero"
 	ReasonScalingDisabled      ReasonID = "scaling_disabled"
 	ReasonPinned               ReasonID = "pinned"
 	ReasonStaleStatus          ReasonID = "stale_status"
@@ -114,6 +116,9 @@ func Analyze(hpa *autoscalingv2.HorizontalPodAutoscaler) *Diagnosis {
 	}
 
 	conditions := mapConditions(hpa.Status.Conditions)
+	if cond, ok := conditions[autoscalingv2.ScaledToZero]; ok && cond.Status == corev1.ConditionTrue && min == 0 && hpa.Status.DesiredReplicas == 0 {
+		d.addConditionReason(ReasonScaledToZero, cond, "HPA intentionally scaled the target to zero replicas")
+	}
 
 	if cond, ok := conditions[autoscalingv2.AbleToScale]; ok && cond.Status == corev1.ConditionFalse {
 		d.addConditionReason(ReasonUnableToScale, cond, "HPA controller cannot scale the target")
@@ -234,6 +239,8 @@ func chooseState(d *Diagnosis) State {
 		return StateMetricsUnavailable
 	case d.hasReason(ReasonLimitedMax):
 		return StateLimitedMax
+	case d.hasReason(ReasonScaledToZero):
+		return StateScaledToZero
 	case d.hasReason(ReasonScalingDisabled):
 		return StateDisabled
 	case d.hasReason(ReasonPinned):
@@ -277,6 +284,8 @@ func summarizeState(d *Diagnosis) string {
 			return fmt.Sprintf("HPA is at maxReplicas=%d", d.Bounds.Max)
 		}
 		return "HPA is capped at maxReplicas"
+	case StateScaledToZero:
+		return "HPA intentionally scaled the target to zero replicas"
 	case StateDisabled:
 		return "HPA scaling is disabled because the target has zero replicas"
 	case StatePinned:

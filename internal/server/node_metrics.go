@@ -33,8 +33,12 @@ func (s *Server) fetchNodeUsage(ctx context.Context) (cpuMillis, memBytes int64,
 	}
 	mctx, cancel := context.WithTimeout(ctx, metricsServerTimeout)
 	defer cancel()
+	metricsPath, ok := k8s.MetricsAPIPath("nodes")
+	if !ok {
+		return 0, 0, false
+	}
 	data, err := client.CoreV1().RESTClient().Get().
-		AbsPath("/apis/metrics.k8s.io/v1beta1/nodes").
+		AbsPath(metricsPath).
 		DoRaw(mctx)
 	if err != nil {
 		log.Printf("[dashboard] node metrics unavailable (showing requests/capacity only): %v", err)

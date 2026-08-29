@@ -2660,61 +2660,64 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 	// metrics.k8s.io/nodes access gets a 403 here and the field is left empty.
 	if includeNodes {
 		if client := k8s.ClientFromContext(ctx); client != nil {
-			data, err := client.CoreV1().RESTClient().Get().
-				AbsPath("/apis/metrics.k8s.io/v1beta1/nodes").
-				DoRaw(ctx)
-			if err == nil {
-				var nodeMetricsList struct {
-					Items []struct {
-						Usage struct {
-							CPU    string `json:"cpu"`
-							Memory string `json:"memory"`
-						} `json:"usage"`
-					} `json:"items"`
-				}
-				if err := json.Unmarshal(data, &nodeMetricsList); err != nil {
-					log.Printf("[mcp] Failed to parse node metrics: %v", err)
-				} else if len(nodeMetricsList.Items) > 0 {
-					if nodeLister := cache.Nodes(); nodeLister != nil {
-						allNodes, _ := nodeLister.List(labels.Everything())
-						var cpuCapMillis, memCapBytes int64
-						for _, n := range allNodes {
-							cpuCapMillis += n.Status.Capacity.Cpu().MilliValue()
-							memCapBytes += n.Status.Capacity.Memory().Value()
-						}
+			metricsPath, metricsAvailable := k8s.MetricsAPIPath("nodes")
+			if metricsAvailable {
+				data, err := client.CoreV1().RESTClient().Get().
+					AbsPath(metricsPath).
+					DoRaw(ctx)
+				if err == nil {
+					var nodeMetricsList struct {
+						Items []struct {
+							Usage struct {
+								CPU    string `json:"cpu"`
+								Memory string `json:"memory"`
+							} `json:"usage"`
+						} `json:"items"`
+					}
+					if err := json.Unmarshal(data, &nodeMetricsList); err != nil {
+						log.Printf("[mcp] Failed to parse node metrics: %v", err)
+					} else if len(nodeMetricsList.Items) > 0 {
+						if nodeLister := cache.Nodes(); nodeLister != nil {
+							allNodes, _ := nodeLister.List(labels.Everything())
+							var cpuCapMillis, memCapBytes int64
+							for _, n := range allNodes {
+								cpuCapMillis += n.Status.Capacity.Cpu().MilliValue()
+								memCapBytes += n.Status.Capacity.Memory().Value()
+							}
 
-						var cpuUsageMillis, memUsageBytes int64
-						for _, item := range nodeMetricsList.Items {
-							cpuUsageMillis += k8s.ParseCPUToMillis(item.Usage.CPU)
-							memUsageBytes += k8s.ParseMemoryToBytes(item.Usage.Memory)
-						}
+							var cpuUsageMillis, memUsageBytes int64
+							for _, item := range nodeMetricsList.Items {
+								cpuUsageMillis += k8s.ParseCPUToMillis(item.Usage.CPU)
+								memUsageBytes += k8s.ParseMemoryToBytes(item.Usage.Memory)
+							}
 
-						var cpuReqMillis, memReqBytes int64
-						if podLister := cache.Pods(); podLister != nil {
-							allPods, _ := podLister.List(labels.Everything())
-							for _, pod := range allPods {
-								if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
-									continue
-								}
-								for _, c := range pod.Spec.Containers {
-									if c.Resources.Requests != nil {
-										if cpu, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
-											cpuReqMillis += cpu.MilliValue()
-										}
-										if mem, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
-											memReqBytes += mem.Value()
+							var cpuReqMillis, memReqBytes int64
+							if podLister := cache.Pods(); podLister != nil {
+								allPods, _ := podLister.List(labels.Everything())
+								for _, pod := range allPods {
+									if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+										continue
+									}
+									for _, c := range pod.Spec.Containers {
+										if c.Resources.Requests != nil {
+											if cpu, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
+												cpuReqMillis += cpu.MilliValue()
+											}
+											if mem, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
+												memReqBytes += mem.Value()
+											}
 										}
 									}
 								}
 							}
-						}
 
-						if cpuCapMillis > 0 && memCapBytes > 0 {
-							d.Metrics = &mcpMetrics{
-								CPUUsagePercent:   int(cpuUsageMillis * 100 / cpuCapMillis),
-								CPURequestPercent: int(cpuReqMillis * 100 / cpuCapMillis),
-								MemUsagePercent:   int(memUsageBytes * 100 / memCapBytes),
-								MemRequestPercent: int(memReqBytes * 100 / memCapBytes),
+							if cpuCapMillis > 0 && memCapBytes > 0 {
+								d.Metrics = &mcpMetrics{
+									CPUUsagePercent:   int(cpuUsageMillis * 100 / cpuCapMillis),
+									CPURequestPercent: int(cpuReqMillis * 100 / cpuCapMillis),
+									MemUsagePercent:   int(memUsageBytes * 100 / memCapBytes),
+									MemRequestPercent: int(memReqBytes * 100 / memCapBytes),
+								}
 							}
 						}
 					}

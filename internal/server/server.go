@@ -1868,7 +1868,18 @@ func (s *Server) handleAPIResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writeJSON(w, resources)
+	type apiResourceResponse struct {
+		k8score.APIResource
+		Featured bool `json:"featured,omitempty"`
+	}
+	result := make([]apiResourceResponse, 0, len(resources))
+	for _, resource := range resources {
+		result = append(result, apiResourceResponse{
+			APIResource: resource,
+			Featured:    isFeaturedKubernetesAPI(resource.Group, resource.Kind),
+		})
+	}
+	s.writeJSON(w, result)
 }
 
 // preflightResourceList runs the per-user RBAC gates shared by the REST
@@ -2825,8 +2836,27 @@ func (s *Server) handleNodeMetrics(w http.ResponseWriter, r *http.Request) {
 const (
 	metricsAPIServiceKind  = "APIService"
 	metricsAPIServiceGroup = "apiregistration.k8s.io"
-	metricsAPIServiceName  = "v1beta1.metrics.k8s.io"
 )
+
+var metricsAPIServiceNames = []string{
+	"v1.metrics.k8s.io",
+	"v1beta1.metrics.k8s.io",
+}
+
+func metricsAPIServiceNamesForVersion(version string) []string {
+	if version == "" {
+		return metricsAPIServiceNames
+	}
+	selected := version + ".metrics.k8s.io"
+	names := make([]string, 0, len(metricsAPIServiceNames)+1)
+	names = append(names, selected)
+	for _, name := range metricsAPIServiceNames {
+		if name != selected {
+			names = append(names, name)
+		}
+	}
+	return names
+}
 
 var metricsAPIServiceDiagnosisMemo = metricsAPIServiceDiagnosisCache{
 	ttl: 5 * time.Second,
@@ -2835,7 +2865,12 @@ var metricsAPIServiceDiagnosisMemo = metricsAPIServiceDiagnosisCache{
 type metricsAPIServiceDiagnosisCache struct {
 	mu      sync.Mutex
 	ttl     time.Duration
-	entries map[bool]metricsAPIServiceDiagnosisEntry
+	entries map[metricsAPIServiceDiagnosisKey]metricsAPIServiceDiagnosisEntry
+}
+
+type metricsAPIServiceDiagnosisKey struct {
+	includeConditionMessage bool
+	metricsVersion          string
 }
 
 type metricsAPIServiceDiagnosisEntry struct {
@@ -2844,7 +2879,7 @@ type metricsAPIServiceDiagnosisEntry struct {
 	diagnosis   string
 }
 
-func (c *metricsAPIServiceDiagnosisCache) get(contextName string, includeConditionMessage bool, build func() (string, bool)) string {
+func (c *metricsAPIServiceDiagnosisCache) get(contextName string, key metricsAPIServiceDiagnosisKey, build func() (string, bool)) string {
 	if c == nil || c.ttl <= 0 {
 		diagnosis, _ := build()
 		return diagnosis
@@ -2852,9 +2887,9 @@ func (c *metricsAPIServiceDiagnosisCache) get(contextName string, includeConditi
 
 	c.mu.Lock()
 	if c.entries == nil {
-		c.entries = make(map[bool]metricsAPIServiceDiagnosisEntry, 2)
+		c.entries = make(map[metricsAPIServiceDiagnosisKey]metricsAPIServiceDiagnosisEntry, 4)
 	}
-	if entry, ok := c.entries[includeConditionMessage]; ok && entry.contextName == contextName && time.Now().Before(entry.expiresAt) {
+	if entry, ok := c.entries[key]; ok && entry.contextName == contextName && time.Now().Before(entry.expiresAt) {
 		c.mu.Unlock()
 		return entry.diagnosis
 	}
@@ -2867,13 +2902,13 @@ func (c *metricsAPIServiceDiagnosisCache) get(contextName string, includeConditi
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.entries == nil {
-		c.entries = make(map[bool]metricsAPIServiceDiagnosisEntry, 2)
+		c.entries = make(map[metricsAPIServiceDiagnosisKey]metricsAPIServiceDiagnosisEntry, 4)
 	}
 	now := time.Now()
-	if entry, ok := c.entries[includeConditionMessage]; ok && entry.contextName != contextName && now.Before(entry.expiresAt) {
+	if entry, ok := c.entries[key]; ok && entry.contextName != contextName && now.Before(entry.expiresAt) {
 		return diagnosis
 	}
-	c.entries[includeConditionMessage] = metricsAPIServiceDiagnosisEntry{
+	c.entries[key] = metricsAPIServiceDiagnosisEntry{
 		contextName: contextName,
 		diagnosis:   diagnosis,
 		expiresAt:   now.Add(c.ttl),
@@ -2898,9 +2933,25 @@ func metricsUnavailableDiagnosis(ctx context.Context, includeAPIServiceCondition
 	}
 
 	contextName := k8s.GetContextName()
-	return metricsAPIServiceDiagnosisMemo.get(contextName, includeAPIServiceConditionMessage, func() (string, bool) {
-		apiService, err := cache.GetDynamicWithGroup(ctx, metricsAPIServiceKind, "", metricsAPIServiceName, metricsAPIServiceGroup)
-		return metricsAPIServiceLookupDiagnosis(apiService, err, includeAPIServiceConditionMessage), isMetricsAPIServiceLookupCacheable(apiService, err)
+	metricsVersion := ""
+	if discovery := k8s.GetResourceDiscovery(); discovery != nil {
+		if gvr, ok := discovery.GetGVRWithGroup("nodes", k8score.MetricsAPIGroup); ok {
+			metricsVersion = gvr.Version
+		}
+	}
+	key := metricsAPIServiceDiagnosisKey{includeConditionMessage: includeAPIServiceConditionMessage, metricsVersion: metricsVersion}
+	return metricsAPIServiceDiagnosisMemo.get(contextName, key, func() (string, bool) {
+		for _, name := range metricsAPIServiceNamesForVersion(metricsVersion) {
+			apiService, err := cache.GetDynamicWithGroup(ctx, metricsAPIServiceKind, "", name, metricsAPIServiceGroup)
+			if err == nil {
+				return metricsAPIServiceLookupDiagnosis(name, apiService, nil, includeAPIServiceConditionMessage), isMetricsAPIServiceLookupCacheable(apiService, nil)
+			}
+			if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
+				continue
+			}
+			return metricsAPIServiceLookupDiagnosis(name, nil, err, includeAPIServiceConditionMessage), false
+		}
+		return "The metrics.k8s.io APIService is not registered. Install metrics-server or restore that APIService.", true
 	})
 }
 
@@ -2911,27 +2962,27 @@ func isMetricsAPIServiceLookupCacheable(apiService *unstructured.Unstructured, e
 	return apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound)
 }
 
-func metricsAPIServiceLookupDiagnosis(apiService *unstructured.Unstructured, err error, includeConditionMessage bool) string {
+func metricsAPIServiceLookupDiagnosis(apiServiceName string, apiService *unstructured.Unstructured, err error, includeConditionMessage bool) string {
 	if err != nil {
 		if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
-			return "The v1beta1.metrics.k8s.io APIService is not registered. Install metrics-server or restore that APIService."
+			return fmt.Sprintf("The %s APIService is not registered. Install metrics-server or restore that APIService.", apiServiceName)
 		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return ""
 		}
-		log.Printf("[metrics] Failed to inspect %s APIService for metrics unavailable diagnosis: %v", metricsAPIServiceName, err)
+		log.Printf("[metrics] Failed to inspect %s APIService for metrics unavailable diagnosis: %v", apiServiceName, err)
 		return ""
 	}
 	if apiService == nil {
 		return ""
 	}
-	return metricsAPIServiceDiagnosis(apiService, includeConditionMessage)
+	return metricsAPIServiceDiagnosis(apiServiceName, apiService, includeConditionMessage)
 }
 
-func metricsAPIServiceDiagnosis(apiService *unstructured.Unstructured, includeConditionMessage bool) string {
+func metricsAPIServiceDiagnosis(apiServiceName string, apiService *unstructured.Unstructured, includeConditionMessage bool) string {
 	condition, found := conditions.Find(apiService, "Available")
 	if !found {
-		return "The v1beta1.metrics.k8s.io APIService exists but has no Available condition. Check metrics-server and API aggregation status."
+		return fmt.Sprintf("The %s APIService exists but has no Available condition. Check metrics-server and API aggregation status.", apiServiceName)
 	}
 	reasonSuffix := ""
 	if condition.Reason != "" {
@@ -2944,15 +2995,15 @@ func metricsAPIServiceDiagnosis(apiService *unstructured.Unstructured, includeCo
 
 	switch condition.Status {
 	case "True":
-		return "The v1beta1.metrics.k8s.io APIService is Available, but metrics reads still fail. Check metrics-server logs and API aggregation errors."
+		return fmt.Sprintf("The %s APIService is Available, but metrics reads still fail. Check metrics-server logs and API aggregation errors.", apiServiceName)
 	case "False", "Unknown":
 		return metricsAPIServiceDiagnosisSentence(
-			"The v1beta1.metrics.k8s.io APIService is not Available"+reasonSuffix+messageSuffix,
+			"The "+apiServiceName+" APIService is not Available"+reasonSuffix+messageSuffix,
 			"Check the metrics-server Service, endpoints, and API aggregation/TLS configuration.",
 		)
 	default:
 		return metricsAPIServiceDiagnosisSentence(
-			"The v1beta1.metrics.k8s.io APIService has an unexpected Available status"+reasonSuffix+messageSuffix,
+			"The "+apiServiceName+" APIService has an unexpected Available status"+reasonSuffix+messageSuffix,
 			"Check metrics-server and API aggregation status.",
 		)
 	}

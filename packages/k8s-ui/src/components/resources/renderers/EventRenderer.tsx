@@ -4,7 +4,7 @@ import { Badge } from '../../ui/Badge'
 import { Section, PropertyList, Property } from '../../ui/drawer-components'
 import { formatAge } from '../resource-utils'
 import type { NavigateToResource } from '../../../utils/navigation'
-import { kindToPlural } from '../../../utils/navigation'
+import { apiVersionToGroup, kindToPluralWithGroup } from '../../../utils/navigation'
 
 interface EventRendererProps {
   data: any
@@ -75,11 +75,9 @@ export function EventRenderer({ data, onNavigate }: EventRendererProps) {
               {onNavigate ? (
                 <button
                   onClick={() => {
-                    // Parse API group from apiVersion (format: "group/version" or "v1" for core)
-                    const apiVersion = involvedObject.apiVersion || ''
-                    const group = apiVersion.includes('/') ? apiVersion.split('/')[0] : undefined
+                    const group = apiVersionToGroup(involvedObject.apiVersion) || undefined
                     onNavigate({
-                      kind: kindToPlural(involvedObject.kind),
+                      kind: kindToPluralWithGroup(involvedObject.kind, group ?? ''),
                       namespace: involvedObject.namespace || '',
                       name: involvedObject.name,
                       group,

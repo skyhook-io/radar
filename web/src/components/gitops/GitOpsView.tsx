@@ -23,7 +23,7 @@ import {
   isArgoSuspendedByRadar,
   gitOpsInsightChangeKey,
   initNavigationMap,
-  kindToPlural,
+  kindToPluralWithGroup,
   normalizeArgoApplication,
   normalizeFluxHelmRelease,
   normalizeFluxKustomization,
@@ -458,7 +458,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
 
   function openResourceFromTree(ref: GitOpsTreeRef | GitOpsInsightRef) {
     if (isGitOpsDetailRef(ref) && isValidKubernetesName(ref.name)) {
-      const detailKind = kindToPlural(ref.kind)
+      const detailKind = kindToPluralWithGroup(ref.kind, ref.group ?? '')
       // The tree's root node is this page's own subject — clicking it must not
       // open a nested copy of the same detail page (which stacks an identical
       // "GitOps / X / X" breadcrumb, and again, ad infinitum). A self-reference
@@ -483,7 +483,12 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
       navigate({ pathname: gitOpsDetailPath(detailKind, ref.namespace || '_', ref.name), search: params.toString() })
       return
     }
-    onOpenResource({ kind: kindToPlural(ref.kind), namespace: ref.namespace || '', name: ref.name, group: ref.group })
+    onOpenResource({
+      kind: kindToPluralWithGroup(ref.kind, ref.group ?? ''),
+      namespace: ref.namespace || '',
+      name: ref.name,
+      group: ref.group,
+    })
   }
 
   const isRunning = resourceQ.data?.status?.operationState?.phase === 'Running'

@@ -1,0 +1,58 @@
+suite: Cloud extended Kubernetes API read RBAC
+templates:
+  - cloud-rbac-extended-api-read.yaml
+tests:
+  - it: grants exact read-only access to namespaced Kubernetes 1.37 APIs
+    set:
+      cloud:
+        enabled: true
+        token: dummy
+        url: "wss://cloud.example"
+        clusterName: test-cluster
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["scheduling.k8s.io"]
+            resources: ["workloads", "podgroups", "compositepodgroups"]
+            verbs: ["get", "list", "watch"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["certificates.k8s.io"]
+            resources: ["podcertificaterequests"]
+            verbs: ["get", "list", "watch"]
+      - notContains:
+          path: rules[*].resources
+          content: secrets
+      - notContains:
+          path: rules[*].resources
+          content: certificatesigningrequests
+      - notContains:
+          path: rules[*].verbs
+          content: create
+      - notContains:
+          path: rules[*].verbs
+          content: update
+      - notContains:
+          path: rules[*].verbs
+          content: patch
+      - notContains:
+          path: rules[*].verbs
+          content: delete
+
+  - it: omits the role when default cloud RBAC is disabled
+    set:
+      cloud:
+        enabled: true
+        token: dummy
+        url: "wss://cloud.example"
+        clusterName: test-cluster
+        defaultRbac:
+          create: false
+    asserts:
+      - hasDocuments:
+          count: 0

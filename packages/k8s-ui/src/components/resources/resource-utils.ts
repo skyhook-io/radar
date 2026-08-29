@@ -1278,7 +1278,7 @@ export function getHPAStatus(hpa: any): StatusBadge {
 export function getHPAReplicas(hpa: any): { current: number; min: number; max: number } {
   return {
     current: hpa.status?.currentReplicas || 0,
-    min: hpa.spec?.minReplicas || 1,
+    min: hpa.spec?.minReplicas ?? 1,
     max: hpa.spec?.maxReplicas || 0,
   }
 }

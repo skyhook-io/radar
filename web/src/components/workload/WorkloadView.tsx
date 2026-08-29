@@ -31,6 +31,8 @@ import type { ServicePortRenderProps } from '@skyhook-io/k8s-ui/components/resou
 import type { SelectedResource, ResourceRef, Relationships, ResourceWithRelationships } from '../../types'
 import {
   kindToPlural,
+  kindToPluralWithGroup,
+  apiVersionToGroup,
   pluralToKind,
   relatedResourcePath,
   buildWorkloadPath,
@@ -137,7 +139,6 @@ import { cleanYamlForDuplicate } from '../../utils/skeleton-yaml'
 import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { useCompareLauncher } from '../compare/useCompareLauncher'
 import { useDiagnoseCustomization } from '../../context/DiagnoseCustomization'
-import { apiVersionToGroup } from '../../utils/navigation'
 
 type TabType = WorkloadTabType
 const BATCH_EXECUTION_KINDS = new Set([
@@ -495,7 +496,7 @@ export function WorkloadView({
   ...rest
 }: WorkloadViewProps) {
   const [searchParams, setSearchParams] = useSearchParams()
-  const apiKind = kindToPlural(kindProp)
+  const apiKind = kindToPluralWithGroup(kindProp, rest.group ?? '')
   const queryClient = useQueryClient()
   const [imageTargetOwnership, setImageTargetOwnership] =
     useState<ImageTargetOwnershipContext | null>(null)
@@ -624,7 +625,7 @@ export function WorkloadView({
     [relationships, relationshipGitopsOwner, apiKind, namespace, name, rest.group],
   )
   const inheritedGitOpsResponse = useResourceWithRelationships<any>(
-    inheritedGitOpsLookupRef ? kindToPlural(inheritedGitOpsLookupRef.kind) : '',
+    inheritedGitOpsLookupRef ? kindToPluralWithGroup(inheritedGitOpsLookupRef.kind, inheritedGitOpsLookupRef.group ?? '') : '',
     inheritedGitOpsLookupRef?.namespace ?? '',
     inheritedGitOpsLookupRef?.name ?? '',
     inheritedGitOpsLookupRef?.group,
@@ -964,7 +965,7 @@ export function WorkloadView({
       )
       const inheritedResponse = inheritedRef
         ? await fetchRelationships(
-            kindToPlural(inheritedRef.kind),
+            kindToPluralWithGroup(inheritedRef.kind, inheritedRef.group ?? ''),
             inheritedRef.namespace,
             inheritedRef.name,
             inheritedRef.group,
@@ -1083,7 +1084,7 @@ export function WorkloadView({
   const servingRefs = useMemo(() => collectServingRefs(relationships), [relationships])
   const servingQueries = useQueries({
     queries: servingRefs.map((ref) => {
-      const pluralKind = kindToPlural(ref.kind)
+      const pluralKind = kindToPluralWithGroup(ref.kind, ref.group ?? '')
       const ns = ref.namespace || '_'
       const params = new URLSearchParams()
       if (ref.group) params.set('group', ref.group)
@@ -1275,7 +1276,7 @@ export function WorkloadView({
               rest.onNavigateToResource
                 ? (ref) =>
                     rest.onNavigateToResource?.({
-                      kind: kindToPlural(ref.kind),
+                      kind: kindToPluralWithGroup(ref.kind, ref.group ?? ''),
                       namespace: ref.namespace ?? '',
                       name: ref.name,
                       group: ref.group ?? '',
@@ -1303,11 +1304,12 @@ export function WorkloadView({
         initialYaml={duplicateYaml}
         title="Duplicate Resource"
         onCreated={(result) => {
+          const group = apiVersionToGroup(result.apiVersion)
           rest.onNavigateToResource?.({
-            kind: kindToPlural(result.kind),
+            kind: kindToPluralWithGroup(result.kind, group),
             namespace: result.namespace,
             name: result.name,
-            group: '',
+            group,
           })
         }}
       />
@@ -1458,7 +1460,8 @@ function nativeHelmOwnerFromRelationships(
 
 function isCurrentResource(ref: ResourceRef, current: ResourceRef): boolean {
   return (
-    kindToPlural(ref.kind) === kindToPlural(current.kind) &&
+    kindToPluralWithGroup(ref.kind, ref.group ?? '') ===
+      kindToPluralWithGroup(current.kind, current.group ?? '') &&
     ref.namespace === current.namespace &&
     ref.name === current.name &&
     (ref.group ?? '') === (current.group ?? '')
@@ -2207,7 +2210,17 @@ function DiagnoseTabContent({
         runNonce={runNonce}
         testedAt={testedAt}
         clusterChangedSinceTest={clusterChanged}
-        onNavigateToResource={onNavigate ? (ref) => onNavigate({ kind: kindToPlural(ref.kind), namespace: ref.namespace ?? '', name: ref.name, group: ref.group ?? '' }) : undefined}
+        onNavigateToResource={
+          onNavigate
+            ? (ref) =>
+                onNavigate({
+                  kind: kindToPluralWithGroup(ref.kind, ref.group ?? ''),
+                  namespace: ref.namespace ?? '',
+                  name: ref.name,
+                  group: ref.group ?? '',
+                })
+            : undefined
+        }
       />
       <InClusterConsentDialog
         open={pendingRunPath !== null}
@@ -2469,7 +2482,7 @@ function RelatedResourceYaml({
   target: { kind: string; namespace: string; name: string; group?: string }
 }) {
   const { data, isLoading, error } = useResource<any>(
-    kindToPlural(target.kind),
+    kindToPluralWithGroup(target.kind, target.group ?? ''),
     target.namespace,
     target.name,
     target.group,
@@ -2485,7 +2498,7 @@ function RelatedResourceYaml({
   return (
     <EditableYamlView
       resource={{
-        kind: kindToPlural(target.kind),
+        kind: kindToPluralWithGroup(target.kind, target.group ?? ''),
         namespace: target.namespace,
         name: target.name,
         group: target.group,
