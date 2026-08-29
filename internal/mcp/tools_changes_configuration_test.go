@@ -27,7 +27,7 @@ func TestIssuesFilterSchemaDocumentsOnsetProvenanceBindings(t *testing.T) {
 			description = field.Tag.Get("jsonschema")
 		}
 	}
-	for _, text := range []string{"first_seen is the earliest evidence-backed active-time anchor", "may be Radar's first observation", "Age filters should guard known timing", "onset_coverage is emitted only when at least one contributing signal has unknown timing", "need not share first_seen's anchor", "resource_created_at is resource-age context", "never onset"} {
+	for _, text := range []string{"first_seen is the earliest evidence-backed active-time anchor", "may be Radar's first observation", "Require first_seen != 0 for any age filter", "also require onset_coverage_unknown == 0", "onset_unknown alone does not exclude partially dated groups", "onset_coverage is emitted only when at least one contributing signal has unknown timing", "need not share first_seen's anchor", "resource_created_at is resource-age context", "never onset"} {
 		if !strings.Contains(description, text) {
 			t.Fatalf("issues filter schema must explain %q; got %q", text, description)
 		}

@@ -5,7 +5,7 @@
 export { IssueRow, IssuesView } from './IssuesView';
 export type { IssueDiagnosisSource, IssueRowProps, IssueRowSlotContext, IssuesViewProps } from './IssuesView';
 export { ResourceIssuesSection } from './ResourceIssuesSection';
-export { issueFirstSeenTitle, issueOnsetUnknownTitle, issueResourceCreatedTitle, issueTiming, issueTimingForDisplay, partialIssueOnsetTitle } from './issue-timing';
+export { issueFirstSeenTitle, issueResourceCreatedTitle, issueTiming, issueTimingForDisplay } from './issue-timing';
 export type { IssueTimingDisplay, IssueTimingDisplayKind } from './issue-timing';
 export {
   ISSUE_SEVERITIES,

@@ -20,12 +20,6 @@ export function issueFirstSeenTitle(issue: Issue): string | null {
   return `${base}; timing unknown for ${unknown} of ${total} signals.`;
 }
 
-export function partialIssueOnsetTitle(issue: Issue): string | null {
-  const unknown = issue.onset_coverage?.unknown ?? 0;
-  if (unknown === 0) return null;
-  return issueFirstSeenTitle(issue);
-}
-
 export function issueResourceCreatedTitle(issue: Issue): string | null {
   if (!issue.resource_created_at) return null;
   const affectedCount = Math.max(issue.count ?? 0, issue.members?.length ?? 0);
@@ -35,17 +29,6 @@ export function issueResourceCreatedTitle(issue: Issue): string | null {
       ? 'Affected resource created'
       : 'Resource created';
   return `${label} ${new Date(issue.resource_created_at).toLocaleString()}`;
-}
-
-export function issueOnsetUnknownTitle(issue: Issue): string {
-  const coverage = issue.onset_coverage;
-  const signals = (coverage?.known ?? 0) + (coverage?.unknown ?? 0);
-  const grouped = signals > 1;
-  const base = grouped
-    ? `Radar can confirm this issue is active, but current Kubernetes state does not reveal when any of its ${signals} contributing signals began.`
-    : 'Radar can confirm this issue is active, but current Kubernetes state does not reveal when it began.';
-  const resourceContext = issueResourceCreatedTitle(issue);
-  return resourceContext ? `${base}\n${resourceContext}.` : base;
 }
 
 function isDeploymentLikeCreation(issue: Issue): boolean {

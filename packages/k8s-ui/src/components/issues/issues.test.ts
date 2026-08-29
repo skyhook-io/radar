@@ -4,7 +4,7 @@ import { renderToString } from 'react-dom/server'
 import { compareIssues, issueSortAnchor, subjectRef, memberRef, normalizeImagePullMessage, issueMessageParts, type Issue } from './types'
 import { categoryLabel, groupBadgeClass, groupLabel } from './severity'
 import { IssueRow } from './IssuesView'
-import { issueFirstSeenTitle, issueOnsetUnknownTitle, issueResourceCreatedTitle, issueTiming, partialIssueOnsetTitle } from './issue-timing'
+import { issueFirstSeenTitle, issueResourceCreatedTitle, issueTiming } from './issue-timing'
 
 const base: Issue = {
   id: 'id-0',
@@ -273,57 +273,11 @@ describe('IssueRow', () => {
 })
 
 describe('onset provenance copy', () => {
-  it('describes a partial group as a lower bound', () => {
-    const title = partialIssueOnsetTitle(mk({
-      first_seen: '2026-06-30T10:00:00Z',
-      onset_coverage: { known: 2, unknown: 1 },
-    }))
-
-    expect(title).toContain('Active at least since')
-    expect(title).toContain('timing unknown for 1 of 3 signals')
-  })
-
   it('describes a known first-seen value as an active lower bound', () => {
     const title = issueFirstSeenTitle(mk({ first_seen: '2026-06-30T10:00:00Z' }))
 
     expect(title).toContain('Active at least since')
     expect(title).not.toContain('started')
-  })
-
-  it('uses grouped language and oldest-resource context when every onset is unknown', () => {
-    const title = issueOnsetUnknownTitle(mk({
-      onset_unknown: true,
-      onset_coverage: { known: 0, unknown: 3 },
-      resource_created_at: '2026-06-30T10:00:00Z',
-      count: 3,
-    }))
-
-    expect(title).toContain('3 contributing signals')
-    expect(title).toContain('does not reveal when any')
-    expect(title).toContain('Oldest affected resource created')
-  })
-
-  it('does not describe one resource with multiple status signals as multiple resources', () => {
-    const title = issueOnsetUnknownTitle(mk({
-      onset_unknown: true,
-      onset_coverage: { known: 0, unknown: 3 },
-      resource_created_at: '2026-06-30T10:00:00Z',
-    }))
-
-    expect(title).toContain('3 contributing signals')
-    expect(title).toContain('Resource created')
-    expect(title).not.toContain('Oldest affected resource')
-  })
-
-  it('keeps singular resource context for an ungrouped issue', () => {
-    const title = issueOnsetUnknownTitle(mk({
-      onset_unknown: true,
-      resource_created_at: '2026-06-30T10:00:00Z',
-    }))
-
-    expect(title).toContain('does not reveal when it began')
-    expect(title).toContain('Resource created')
-    expect(title).not.toContain('Oldest affected')
   })
 
   it('labels a one-member workload rollup as affected-resource context', () => {
