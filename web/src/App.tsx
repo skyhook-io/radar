@@ -318,6 +318,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const [searchParams, setSearchParams] = useSearchParams()
   const capabilities = useCapabilitiesContext()
   const openLocalTerminal = useOpenLocalTerminal()
+  const { closeAll: closeDockTabs, closeClusterTabs: closeClusterDockTabs } = useDock()
   const navCustomization = useNavCustomization()
   // The AI panel is an absolute slot in the body frame (the column under the header):
   // it reserves a right gutter on the CONTENT only, so the navbar + nav rail stay
@@ -1115,7 +1116,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const { topology, connected: eventStreamConnected, connecting: eventStreamConnecting, reconnect: reconnectEventStream } = useEventSource(namespaces, sseMode as 'resources' | 'traffic', {
     onContextSwitchComplete: endSwitch,
     onContextSwitchProgress: updateProgress,
+    onClusterSessionsStopped: closeClusterDockTabs,
     onContextChanged: () => {
+      closeDockTabs()
+
       // Clear all React Query caches when cluster context changes
       // This ensures helm releases, resources, etc. are refetched from the new cluster
       // removeQueries clears cached data, invalidateQueries triggers refetch

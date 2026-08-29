@@ -70,6 +70,10 @@ radar --auth-mode=proxy \
 
 > **Security:** Your ingress must strip `X-Forwarded-User` and `X-Forwarded-Groups` headers from external requests to prevent spoofing. The auth proxy should be the **only** path to Radar. Radar logs a warning at startup as a reminder.
 
+> **WebSockets:** Preserve the browser-facing `Host` header when proxying Radar; this is the compatibility requirement across browsers and proxies. When both the browser and proxy forward Fetch Metadata, Radar can also recognize a same-origin connection through a host-rewriting proxy. Pod exec rejects cross-origin handshakes.
+
+> **Local terminal:** The host-level local terminal requires both a loopback-bound Radar listener and a loopback URL, and is unavailable when authentication is enabled. Unlike pod exec, it runs as the Radar process's operating-system user and cannot be safely impersonated per caller.
+
 **Logout behavior:**
 
 The user menu always shows a **Logout** button. Clicking it clears Radar's session cookie. On its own, that isn't enough to switch users: your proxy re-injects the identity header on the next request and signs the same user back in.

@@ -3,10 +3,15 @@ package server
 import (
 	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/cloud"
 )
 
 func TestNormalizeListenAddress(t *testing.T) {
@@ -160,6 +165,68 @@ func TestShouldWarnUnauthenticatedListener(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := shouldWarnUnauthenticatedListener(tt.listenAddress, tt.authEnabled); got != tt.want {
 				t.Fatalf("shouldWarnUnauthenticatedListener(%q, %v) = %v, want %v", tt.listenAddress, tt.authEnabled, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProtectUnauthenticatedLoopback(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	tests := []struct {
+		name          string
+		listenAddress string
+		host          string
+		authConfig    auth.Config
+		tunnel        bool
+		wantStatus    int
+	}{
+		{name: "loopback host", listenAddress: DefaultListenAddress, host: "localhost:9280", wantStatus: http.StatusNoContent},
+		{name: "localhost subdomain", listenAddress: DefaultListenAddress, host: "radar.localhost:9280", wantStatus: http.StatusNoContent},
+		{name: "localhost trailing dot", listenAddress: DefaultListenAddress, host: "localhost.:9280", wantStatus: http.StatusNoContent},
+		{name: "IPv6 loopback host", listenAddress: DefaultListenAddress, host: "[::1]:9280", wantStatus: http.StatusNoContent},
+		{name: "rebinding host", listenAddress: DefaultListenAddress, host: "attacker.example:9280", wantStatus: http.StatusForbidden},
+		{name: "localhost lookalike", listenAddress: DefaultListenAddress, host: "localhost.evil.example:9280", wantStatus: http.StatusForbidden},
+		{name: "shared listener", listenAddress: AllInterfacesAddress, host: "radar.example.com", wantStatus: http.StatusNoContent},
+		{name: "authenticated deployment", listenAddress: DefaultListenAddress, host: "radar.example.com", authConfig: auth.Config{Mode: "oidc"}, wantStatus: http.StatusNoContent},
+		{name: "authenticated tunnel", listenAddress: DefaultListenAddress, host: "hub.example.com", tunnel: true, wantStatus: http.StatusNoContent},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Server{listenAddress: tt.listenAddress, authConfig: tt.authConfig}
+			handler := s.protectUnauthenticatedLoopback(next)
+			if tt.tunnel {
+				handler = cloud.AuthenticatedTunnelHandler(handler)
+			}
+			req := httptest.NewRequest(http.MethodGet, "http://"+tt.host+"/api/health", nil)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d; body = %s", w.Code, tt.wantStatus, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestLoopbackHostProtectionIsMounted(t *testing.T) {
+	s := New(Config{ListenAddress: DefaultListenAddress})
+
+	tests := []struct {
+		name       string
+		host       string
+		wantStatus int
+	}{
+		{name: "rejects rebinding host", host: "attacker.example:9280", wantStatus: http.StatusForbidden},
+		{name: "accepts loopback host", host: "localhost:9280", wantStatus: http.StatusOK},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "http://"+tt.host+"/api/health", nil)
+			w := httptest.NewRecorder()
+			s.Handler().ServeHTTP(w, req)
+			if w.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d; body = %s", w.Code, tt.wantStatus, w.Body.String())
 			}
 		})
 	}

@@ -803,8 +803,10 @@ func TestSameOriginOKAcceptsTheServingAuthority(t *testing.T) {
 	}{
 		{"no origin (non-browser)", "10.0.0.5:9280", "", true},
 		{"same non-loopback authority", "10.0.0.5:9280", "http://10.0.0.5:9280", true},
+		{"hostname case is ignored", "Radar.Example.com:9280", "http://radar.example.com:9280", true},
 		{"same loopback authority", "127.0.0.1:9280", "http://127.0.0.1:9280", true},
 		{"vite dev proxy, loopback to loopback", "localhost:9280", "http://localhost:9273", true},
+		{"bracketed IPv6 loopback without request port", "[::1]", "http://[::1]:9273", true},
 		{"foreign origin", "10.0.0.5:9280", "https://evil.example", false},
 		{"lookalike hostname", "10.0.0.5:9280", "http://localhost.evil.com", false},
 		{"different port on the same non-loopback host", "10.0.0.5:9280", "http://10.0.0.5:9999", false},

@@ -423,6 +423,8 @@ kubectl get ingress -n radar -o yaml
 kubectl logs -n ingress-nginx -l app.kubernetes.io/name=ingress-nginx
 ```
 
+If the UI loads through an ingress but pod exec does not connect, ensure the ingress forwards WebSocket upgrades and preserves the browser-facing `Host` header. Preserving `Host` is the compatibility requirement across browsers and proxies; Fetch Metadata is an additional signal only when both sides forward it. Radar logs rejected handshakes with both `Origin` and `Host`.
+
 ### Basic auth prompt not appearing
 
 Verify the secret format:

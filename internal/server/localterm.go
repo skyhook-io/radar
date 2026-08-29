@@ -93,15 +93,29 @@ func (s *Server) handleLocalTerminal(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusForbidden, "local terminal is disabled")
 		return
 	}
+	if s.authConfig.Enabled() {
+		s.writeError(w, http.StatusForbidden, "local terminal is unavailable when authentication is enabled")
+		return
+	}
 	if k8s.IsInCluster() {
 		s.writeError(w, http.StatusBadRequest, "local terminal not available in-cluster mode")
 		return
 	}
+	if s.sharedListener() || !requestHostIsLoopback(r) {
+		s.writeError(w, http.StatusForbidden, "local terminal is only available over a loopback address")
+		return
+	}
+	sessionLease, ok := k8s.TryAcquireClientSnapshotLease()
+	if !ok {
+		s.writeError(w, http.StatusConflict, "cluster context is changing; retry")
+		return
+	}
+	defer sessionLease()
 
 	// Upgrade to WebSocket
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := s.upgradeWebSocket(w, r)
 	if err != nil {
-		log.Printf("[localterm] WebSocket upgrade error: %v", err)
+		log.Printf("[localterm] WebSocket upgrade error (origin=%q host=%q): %v", r.Header.Get("Origin"), r.Host, err)
 		return
 	}
 
@@ -175,6 +189,7 @@ func (s *Server) handleLocalTerminal(w http.ResponseWriter, r *http.Request) {
 		}
 		log.Printf("[localterm] Session %s ended", sessionID)
 	}()
+	sessionLease()
 
 	// WebSocket write mutex (PTY reader and exit sender both write)
 	var wsMu sync.Mutex

@@ -6,7 +6,11 @@ This document covers Radar's cluster connection behavior. For commands and flags
 
 Radar listens on `127.0.0.1:9280` by default, so an unauthenticated local
 instance is reachable only from the same network namespace. `localhost` is
-accepted as an equivalent spelling.
+accepted as an equivalent spelling. Requests to this loopback-only,
+unauthenticated listener must also use a loopback `Host`; Radar rejects other
+hostnames so DNS rebinding cannot turn an untrusted site into a local client.
+The reserved `*.localhost` family is accepted; arbitrary local DNS and
+`/etc/hosts` aliases are not.
 
 To reach Radar through a VM, WSL, dev container, jump host, or another machine,
 opt into a shared listener explicitly:
@@ -17,7 +21,12 @@ radar --listen-address=0.0.0.0
 
 An all-interface listener can be reached by non-browser clients; CORS is not an
 authentication boundary. Enable Radar authentication and restrict network
-access whenever using `0.0.0.0`.
+access whenever using `0.0.0.0`. The loopback `Host` protection above does not
+apply to a shared listener, and Origin checks alone do not stop DNS rebinding
+there. Treat an unauthenticated shared listener as accessible to any browser
+that can reach the network and do not expose it outside a fully trusted network.
+The host local terminal is unavailable on a shared listener even if a client
+sends a loopback `Host` value.
 
 The Docker image and Helm chart set `0.0.0.0` explicitly because their HTTP
 listener must be reachable through a published container port or Kubernetes

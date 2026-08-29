@@ -15,6 +15,7 @@ interface UseEventSourceOptions {
   onContextSwitchComplete?: () => void
   onContextSwitchProgress?: (message: string) => void
   onContextChanged?: (context: string) => void
+  onClusterSessionsStopped?: () => void
   onConnectionStateChange?: (status: ConnectionState) => void
   onDeferredReady?: () => void
   onK8sEvent?: (event: K8sEvent) => void
@@ -196,6 +197,10 @@ export function useEventSource(
       } catch (e) {
         console.error('Failed to parse context_switch_progress event:', e)
       }
+    })
+
+    es.addEventListener('cluster_sessions_stopped', () => {
+      optionsRef.current?.onClusterSessionsStopped?.()
     })
 
     // Handle context changed event - clear state while new data loads

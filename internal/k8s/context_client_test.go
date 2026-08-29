@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
@@ -78,6 +79,87 @@ func TestConfigSnapshotKeepsContextAndConfigTogether(t *testing.T) {
 	if current := GetConfig(); current.Host != "https://cluster-a.invalid" {
 		t.Fatalf("snapshot mutation changed shared config: %q", current.Host)
 	}
+}
+
+func TestClientConfigSnapshotNeverMixesGenerations(t *testing.T) {
+	clientA := &kubernetes.Clientset{}
+	clientB := &kubernetes.Clientset{}
+	configA := &rest.Config{Host: "https://cluster-a.invalid"}
+	configB := &rest.Config{Host: "https://cluster-b.invalid"}
+
+	clientMu.Lock()
+	previousClient := k8sClient
+	previousConfig := k8sConfig
+	previousGeneration := activeClientGeneration
+	k8sClient = clientA
+	k8sConfig = configA
+	activeClientGeneration = 41
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		k8sClient = previousClient
+		k8sConfig = previousConfig
+		activeClientGeneration = previousGeneration
+		clientMu.Unlock()
+	})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 5_000; i++ {
+			clientMu.Lock()
+			if i%2 == 0 {
+				k8sClient = clientB
+				k8sConfig = configB
+				activeClientGeneration = 42
+			} else {
+				k8sClient = clientA
+				k8sConfig = configA
+				activeClientGeneration = 41
+			}
+			clientMu.Unlock()
+		}
+	}()
+
+	var mismatch string
+	for i := 0; i < 10_000; i++ {
+		client, config, generation := GetClientConfigSnapshot()
+		switch client {
+		case clientA:
+			if config == nil || config.Host != configA.Host || generation != 41 {
+				mismatch = "client A was returned with another generation's config"
+			}
+		case clientB:
+			if config == nil || config.Host != configB.Host || generation != 42 {
+				mismatch = "client B was returned with another generation's config"
+			}
+		default:
+			mismatch = "snapshot returned an unexpected client"
+		}
+		if mismatch != "" {
+			break
+		}
+	}
+	<-done
+	if mismatch != "" {
+		t.Fatal(mismatch)
+	}
+}
+
+func TestTryAcquireClientSnapshotLeaseFailsDuringContextOperation(t *testing.T) {
+	contextOpMu.Lock()
+	if release, ok := TryAcquireClientSnapshotLease(); ok {
+		release()
+		contextOpMu.Unlock()
+		t.Fatal("client snapshot lease was acquired during a context operation")
+	}
+	contextOpMu.Unlock()
+
+	release, ok := TryAcquireClientSnapshotLease()
+	if !ok {
+		t.Fatal("client snapshot lease was rejected without a context operation")
+	}
+	release()
 }
 
 // TestClientFromContext_ImpersonationFailureReturnsNil verifies the

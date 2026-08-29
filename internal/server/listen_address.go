@@ -3,7 +3,12 @@ package server
 import (
 	"fmt"
 	"net"
+	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
+
+	"github.com/skyhook-io/radar/internal/cloud"
 )
 
 const (
@@ -36,4 +41,31 @@ func socketAddress(listenAddress string, port int) string {
 		bindHost = ""
 	}
 	return net.JoinHostPort(bindHost, strconv.Itoa(port))
+}
+
+func browserLoopbackHostname(hostname string) bool {
+	hostname = strings.TrimSuffix(strings.ToLower(hostname), ".")
+	return cloud.IsLoopbackHostname(hostname) || strings.HasSuffix(hostname, ".localhost")
+}
+
+func requestHostIsLoopback(r *http.Request) bool {
+	return browserLoopbackHostname((&url.URL{Host: r.Host}).Hostname())
+}
+
+// A loopback bind is the unauthenticated local deployment's access boundary.
+// Reject attacker-controlled Host values so DNS rebinding cannot cross it;
+// authenticated proxies, shared listeners, and the transport-authenticated
+// Cloud tunnel have separate boundaries and legitimately use public hosts.
+func (s *Server) protectUnauthenticatedLoopback(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.listenAddress != "" &&
+			cloud.IsLoopbackHostname(s.listenAddress) &&
+			!s.authConfig.Enabled() &&
+			!cloud.IsAuthenticatedTunnelRequest(r.Context()) &&
+			!requestHostIsLoopback(r) {
+			s.writeError(w, http.StatusForbidden, "loopback-only Radar requires a loopback request Host")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

@@ -183,9 +183,9 @@ The table below covers common startup flags. See the [full CLI reference](https:
 | `--timeline-db` | `~/.radar/timeline.db` | Path to SQLite database (when using sqlite storage) |
 | `--timeline-max-size` | `1Gi` | Maximum SQLite DB + WAL size before pruning oldest events (e.g. `800Mi`, `8Gi`; `0` disables) |
 | `--history-limit` | `10000` | Maximum events to retain in timeline |
-| `--disable-exec` | `false` | Disable terminal and debug shell |
+| `--disable-exec` | `false` | Disable pod terminal, debug shell, and pod file browsing. The host local terminal is controlled separately by `--disable-local-terminal`. |
 | `--disable-helm-write` | `false` | Disable Helm write operations |
-| `--disable-local-terminal` | `false` | Disable local terminal feature |
+| `--disable-local-terminal` | `false` | Disable the host local terminal |
 | `--debug-image` | `busybox:latest` | Image for ephemeral debug containers and node debug pods. If built-in restricted PodSecurity rejects the default pod debug container, Radar retries with a restricted-compatible Linux security context using the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. |
 | `--list-page-size` | `0` (off) | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) at this size. Helps very large clusters that fail to sync; only used when WatchList streaming is unavailable. Try `2000`. |
 | `--context-switch-timeout` | `30s` | Maximum time a kubeconfig context switch may take. Widen on high-latency control planes — see [Tuning for slow clusters](#tuning-for-slow-or-high-latency-clusters). Env: `RADAR_CONTEXT_SWITCH_TIMEOUT`. |

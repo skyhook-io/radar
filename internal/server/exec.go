@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -20,14 +21,71 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true // Allow all origins for local dev
-	},
+	CheckOrigin: checkWebSocketOrigin,
+}
+
+// The authenticated tunnel is server-to-server and carries a transport-bound
+// marker that browsers cannot forge, so its forwarded Origin is trusted.
+func checkWebSocketOrigin(r *http.Request) bool {
+	if cloud.IsAuthenticatedTunnelRequest(r.Context()) {
+		return true
+	}
+	// Browser-generated Fetch Metadata survives reverse proxies that rewrite
+	// Host; page scripts cannot forge it, while non-browser clients can omit
+	// Origin already.
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "same-origin":
+		return true
+	case "same-site":
+		return sameAuthorityOriginOK(r)
+	case "cross-site":
+		return false
+	}
+	return sameAuthorityOriginOK(r)
+}
+
+func sameAuthorityOriginOK(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	return err == nil && u.Host != "" && strings.EqualFold(u.Host, r.Host)
+}
+
+func (s *Server) websocketOriginAllowed(r *http.Request) bool {
+	if checkWebSocketOrigin(r) {
+		return true
+	}
+	if !s.devMode || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+		return false
+	}
+	u, err := url.Parse(r.Header.Get("Origin"))
+	return err == nil &&
+		u.Scheme == "http" &&
+		u.Port() == "9273" &&
+		browserLoopbackHostname(u.Hostname()) &&
+		requestHostIsLoopback(r)
+}
+
+func (s *Server) upgradeWebSocket(w http.ResponseWriter, r *http.Request) (*websocket.Conn, error) {
+	serverUpgrader := upgrader
+	serverUpgrader.CheckOrigin = s.websocketOriginAllowed
+	return serverUpgrader.Upgrade(w, r, nil)
+}
+
+func (s *Server) requireExecEnabled(w http.ResponseWriter) bool {
+	if k8s.ForceDisableExec {
+		s.writeError(w, http.StatusForbidden, "exec is disabled")
+		return false
+	}
+	return true
 }
 
 const podExecHeartbeatInterval = 30 * time.Second
@@ -185,6 +243,7 @@ type ExecSession struct {
 	Pod       string `json:"pod"`
 	Container string `json:"container"`
 	conn      *websocket.Conn
+	cancel    context.CancelFunc
 }
 
 // execSessionManager tracks active exec sessions
@@ -212,6 +271,7 @@ func StopAllExecSessions() {
 
 	for id, session := range execManager.sessions {
 		log.Printf("Closing exec session %s (%s/%s)", id, session.Namespace, session.Pod)
+		session.cancel()
 		session.conn.Close()
 		delete(execManager.sessions, id)
 	}
@@ -279,19 +339,49 @@ func (t *terminalSizeQueue) Next() *remotecommand.TerminalSize {
 
 // handlePodExec handles WebSocket connections for pod exec
 func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
+	if !s.requireExecEnabled(w) {
+		return
+	}
+
 	namespace := chi.URLParam(r, "namespace")
 	podName := chi.URLParam(r, "name")
 	container := r.URL.Query().Get("container")
 	overrideShell := r.URL.Query().Get("shell")
 
+	// Capture one coherent client/config pair before the upgrade. A context
+	// switch that overlaps the handshake is caught by the generation check
+	// below instead of silently retargeting this terminal.
+	client, config, clientGeneration, snapshotOK := s.getClientConfigSnapshotForRequest(r)
+	if !snapshotOK {
+		s.writeError(w, http.StatusConflict, "cluster context is changing; retry")
+		return
+	}
+	if client == nil || config == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "K8s client not initialized")
+		return
+	}
+
 	// Upgrade to WebSocket
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := s.upgradeWebSocket(w, r)
 	if err != nil {
-		log.Printf("WebSocket upgrade error: %v", err)
+		log.Printf("WebSocket upgrade error (origin=%q host=%q): %v", r.Header.Get("Origin"), r.Host, err)
+		return
+	}
+	defer conn.Close()
+
+	snapshotLease, snapshotOK := k8s.TryAcquireClientSnapshotLease()
+	if !snapshotOK {
+		sendWSError(conn, "cluster context is changing; retry")
+		return
+	}
+	defer snapshotLease()
+	if !k8s.IsClientGenerationCurrent(clientGeneration) {
+		sendWSError(conn, "cluster context changed while starting terminal; retry")
 		return
 	}
 
 	// Register the session
+	sessionCtx, cancelSession := context.WithCancel(r.Context())
 	execManager.mu.Lock()
 	execManager.nextID++
 	sessionID := fmt.Sprintf("exec-%d", execManager.nextID)
@@ -301,6 +391,7 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 		Pod:       podName,
 		Container: container,
 		conn:      conn,
+		cancel:    cancelSession,
 	}
 	execManager.sessions[sessionID] = session
 	execManager.mu.Unlock()
@@ -308,23 +399,17 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 
 	// Ensure cleanup on exit
 	defer func() {
+		cancelSession()
 		execManager.mu.Lock()
 		delete(execManager.sessions, sessionID)
 		execManager.mu.Unlock()
-		conn.Close()
 		log.Printf("Exec session %s ended (%s/%s)", sessionID, namespace, podName)
 	}()
+	snapshotLease()
 	heartbeatDone := make(chan struct{})
 	defer close(heartbeatDone)
 	go runPodExecHeartbeat(conn, podExecHeartbeatInterval, heartbeatDone)
 
-	// Get K8s client and config (impersonated when auth is enabled)
-	client := s.getClientForRequest(r)
-	config := s.getConfigForRequest(r)
-	if client == nil || config == nil {
-		sendWSError(conn, "K8s client not initialized")
-		return
-	}
 	auth.AuditLog(r, namespace, podName)
 
 	// Fetch the pod when we need it for OS detection (?shell= not explicit) or
@@ -335,12 +420,12 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 	// the apiserver apply its own containers[0] default.
 	var podOS string
 	if overrideShell == "" || container == "" {
-		pod, err := client.CoreV1().Pods(namespace).Get(r.Context(), podName, metav1.GetOptions{})
+		pod, err := client.CoreV1().Pods(namespace).Get(sessionCtx, podName, metav1.GetOptions{})
 		if err != nil {
 			log.Printf("[exec] pod fetch failed for %s/%s (OS detection + container defaulting skipped): %v", k8s.SanitizeForLog(namespace), k8s.SanitizeForLog(podName), err)
 		} else {
 			if overrideShell == "" {
-				podOS = detectPodOS(r.Context(), pod, nodeLabelsLookupFor(client))
+				podOS = detectPodOS(sessionCtx, pod, nodeLabelsLookupFor(client))
 			}
 			if container == "" {
 				container = defaultExecContainer(pod)
@@ -350,6 +435,9 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 				log.Printf("[exec] session %s defaulted to container %q for %s/%s", sessionID, container, k8s.SanitizeForLog(namespace), k8s.SanitizeForLog(podName))
 			}
 		}
+	}
+	if sessionCtx.Err() != nil {
+		return
 	}
 	command := defaultExecCommand(overrideShell, DefaultPodShellCommand, podOS)
 
@@ -378,7 +466,7 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 	// Run exec in goroutine
 	execDone := make(chan error, 1)
 	go func() {
-		err := exec.StreamWithContext(r.Context(), remotecommand.StreamOptions{
+		err := exec.StreamWithContext(sessionCtx, remotecommand.StreamOptions{
 			Stdin:             stdinReader,
 			Stdout:            wsOut,
 			Stderr:            wsOut,
@@ -602,6 +690,9 @@ type NodeDebugResponse struct {
 
 // handleNodeDebug creates a privileged debug pod on a node
 func (s *Server) handleNodeDebug(w http.ResponseWriter, r *http.Request) {
+	if !s.requireExecEnabled(w) {
+		return
+	}
 	if !s.requireConnected(w) {
 		return
 	}
@@ -698,6 +789,10 @@ type DebugContainerResponse struct {
 
 // handleCreateDebugContainer creates an ephemeral debug container in a pod
 func (s *Server) handleCreateDebugContainer(w http.ResponseWriter, r *http.Request) {
+	if !s.requireExecEnabled(w) {
+		return
+	}
+
 	namespace := chi.URLParam(r, "namespace")
 	podName := chi.URLParam(r, "name")
 

@@ -33,7 +33,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -950,8 +949,8 @@ func (s *Server) cloudConnectCapability() *k8s.CloudConnectCapability {
 	}
 }
 
-// sameOriginOK is CSRF protection for the connect endpoints: a page on another
-// origin must not be able to drive an install. It compares the Origin against
+// sameOriginOK protects browser-facing mutation and shell endpoints: a page on
+// another origin must not be able to drive them. It compares the Origin against
 // the authority the client actually used, rather than an allowlist of loopback
 // names — localOriginOK's shape would 403 the legitimate browser on a
 // non-loopback listener (the exact case the driver lane now supports) while
@@ -968,14 +967,10 @@ func sameOriginOK(r *http.Request) bool {
 	if err != nil || u.Host == "" {
 		return false
 	}
-	if u.Host == r.Host {
+	if strings.EqualFold(u.Host, r.Host) {
 		return true
 	}
-	requestHost := r.Host
-	if h, _, splitErr := net.SplitHostPort(requestHost); splitErr == nil {
-		requestHost = h
-	}
-	return cloud.IsLoopbackHostname(u.Hostname()) && cloud.IsLoopbackHostname(requestHost)
+	return browserLoopbackHostname(u.Hostname()) && requestHostIsLoopback(r)
 }
 
 // redactCloudToken removes a cluster token that an upstream error may have
