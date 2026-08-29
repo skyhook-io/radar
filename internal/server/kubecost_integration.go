@@ -134,6 +134,8 @@ func kubecostConnectionGuidance(err error) string {
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		return "Kubecost discovery timed out — the Aggregator did not answer in time; retry or enter its URL directly."
+	case errors.Is(err, internalopencost.ErrNoCostSource):
+		return "No compatible cost source was found — install OpenCost metrics or enter a Kubecost Aggregator URL."
 	case errors.Is(err, internalopencost.ErrKubecostAuthentication):
 		return "Kubecost rejected the API key — check the service-account key or use the deployment's intended API endpoint."
 	case errors.Is(err, internalopencost.ErrKubecostContextMismatch):

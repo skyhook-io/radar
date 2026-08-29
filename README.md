@@ -401,9 +401,11 @@ Track Kubernetes spending from OpenCost metrics in a PromQL-compatible backend o
 Auto mode keeps working Prometheus cost metrics, then discovers a local Kubecost Aggregator; a
 federated agent-only cluster can use its central Aggregator URL in Settings, config, or Helm. Radar
 reads the configured currency from a running OpenCost or Kubecost workload when available and
-otherwise uses USD. It labels values but does not convert them.
+otherwise uses USD. Source changes are tested and applied separately from the display-currency
+preference, which can be saved even when a source is unavailable. Radar labels values but does not
+convert them.
 
-- Cluster hourly and projected monthly cost, top namespaces by spend
+- Allocated workload cost with namespace scope called out separately from cluster-wide node capacity cost
 - Cost trend charts with 6h/24h/7d range selector when Prometheus history is available
 - Namespace and workload-level cost breakdowns with efficiency scoring
 - Node costs with instance type and region pricing

@@ -4,11 +4,12 @@ package opencost
 // so the frontend can show contextual guidance to the user.
 const (
 	DefaultCurrency          = "USD"
-	ReasonNoPrometheus       = "no_prometheus" // Prometheus/VictoriaMetrics not found in cluster
-	ReasonNoMetrics          = "no_metrics"    // Prometheus found but OpenCost metrics not present
-	ReasonQueryError         = "query_error"   // Prometheus found but cost queries failed
-	ReasonAccessDenied       = "access_denied" // user cannot access the requested resource
-	ReasonNotFound           = "not_found"     // requested resource no longer exists
+	ReasonNoPrometheus       = "no_prometheus"  // Prometheus/VictoriaMetrics not found in cluster
+	ReasonNoCostSource       = "no_cost_source" // neither OpenCost metrics nor Kubecost is available
+	ReasonNoMetrics          = "no_metrics"     // Prometheus found but OpenCost metrics not present
+	ReasonQueryError         = "query_error"    // Prometheus found but cost queries failed
+	ReasonAccessDenied       = "access_denied"  // user cannot access the requested resource
+	ReasonNotFound           = "not_found"      // requested resource no longer exists
 	ReasonSourceUnavailable  = "source_unavailable"
 	ReasonAuthentication     = "authentication_error"
 	ReasonConfigMismatch     = "configuration_mismatch"
@@ -56,6 +57,7 @@ type WorkloadCostResponse struct {
 	Available   bool           `json:"available"`
 	Reason      string         `json:"reason,omitempty"`
 	Source      string         `json:"source,omitempty"`
+	Window      string         `json:"window,omitempty"`
 	DataThrough string         `json:"dataThrough,omitempty"`
 	Currency    string         `json:"currency"`
 	Namespace   string         `json:"namespace"`
@@ -66,6 +68,7 @@ type WorkloadCostDetailResponse struct {
 	Available   bool          `json:"available"`
 	Reason      string        `json:"reason,omitempty"`
 	Source      string        `json:"source,omitempty"`
+	Window      string        `json:"window,omitempty"`
 	DataThrough string        `json:"dataThrough,omitempty"`
 	Currency    string        `json:"currency"`
 	Namespace   string        `json:"namespace"`
@@ -164,6 +167,7 @@ type ApplicationCostResponse struct {
 	Available   bool                      `json:"available"`
 	Reason      string                    `json:"reason,omitempty"`
 	Source      string                    `json:"source,omitempty"`
+	Window      string                    `json:"window,omitempty"`
 	DataThrough string                    `json:"dataThrough,omitempty"`
 	Currency    string                    `json:"currency"`
 	Partial     bool                      `json:"partial,omitempty"`

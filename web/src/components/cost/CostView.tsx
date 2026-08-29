@@ -40,10 +40,14 @@ import { kindToPlural, openExternal } from '../../utils/navigation'
 import { clusterCloudConsoleLink, nodeCloudConsoleLink } from './cloud-console'
 import { RightsizingScanView } from '../rightsizing/RightsizingScanView'
 import { CostViewTabs } from './CostViewTabs'
+import { useNavCustomization } from '../../context/NavCustomization'
 import {
+  costConfigurationAction,
   costFreshnessLabel,
   costIntegrationUnavailableMessage,
+  costRateLabels,
   costSourceLabel,
+  isCostDiscoveryPending,
 } from './source'
 
 interface CostViewProps {
@@ -53,6 +57,13 @@ interface CostViewProps {
 }
 
 const SYSTEM_COST_NAMESPACES = new Set(['kube-system', 'kube-public', 'kube-node-lease'])
+const CONFIGURABLE_COST_REASONS = new Set<CostUnavailableReason>([
+  'no_prometheus',
+  'no_cost_source',
+  'source_unavailable',
+  'authentication_error',
+  'configuration_mismatch',
+])
 
 export function CostView(props: CostViewProps) {
   const { pathname } = useLocation()
@@ -67,14 +78,17 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
   const { data: nodeData } = useOpenCostNodes()
   const { data: clusterInfo } = useClusterInfo()
   const { connection } = useConnection()
+  const navCustomization = useNavCustomization()
+  const settingsAvailable = !navCustomization.embedded
   const [showHelp, setShowHelp] = useState(false)
-  const [noPrometheusSince, setNoPrometheusSince] = useState<number | null>(null)
+  const [discoverySince, setDiscoverySince] = useState<number | null>(null)
+  const namespaceScopeCount = data?.namespaceScope?.length ?? 0
 
   useEffect(() => {
-    if (data?.available === false && data.reason === 'no_prometheus') {
-      setNoPrometheusSince((prev) => prev ?? Date.now())
+    if (data?.available === false && isCostDiscoveryPending(data.reason)) {
+      setDiscoverySince((prev) => prev ?? Date.now())
     } else {
-      setNoPrometheusSince(null)
+      setDiscoverySince(null)
     }
   }, [data?.available, data?.reason])
 
@@ -88,8 +102,8 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
 
   if (!data || !data.available) {
     const reason = data?.reason
-    const discoveryAgeMs = noPrometheusSince == null ? 0 : Date.now() - noPrometheusSince
-    if (reason === 'no_prometheus' && discoveryAgeMs < COST_DISCOVERY_GRACE_MS) {
+    const discoveryAgeMs = discoverySince == null ? 0 : Date.now() - discoverySince
+    if (isCostDiscoveryPending(reason) && discoveryAgeMs < COST_DISCOVERY_GRACE_MS) {
       return (
         <CostOverviewState>
           <div className="flex min-h-64 items-center justify-center">
@@ -106,7 +120,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
               </div>
               <button
                 onClick={() => {
-                  setNoPrometheusSince(Date.now())
+                  setDiscoverySince(Date.now())
                   refetch()
                 }}
                 disabled={isFetching}
@@ -119,7 +133,12 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
         </CostOverviewState>
       )
     }
-    const message = costUnavailableMessage(reason)
+    const message = costUnavailableMessage(reason, {
+      settingsAvailable,
+      namespaceScoped: namespaceScopeCount > 0,
+    })
+    const canConfigure = settingsAvailable && reason != null && CONFIGURABLE_COST_REASONS.has(reason)
+    const configureAction = costConfigurationAction(reason)
 
     return (
       <CostOverviewState>
@@ -127,24 +146,37 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
           <div className="flex flex-col items-center gap-3 text-theme-text-secondary">
             <Coins className="w-8 h-8 text-theme-text-tertiary/40" />
             <p className="text-sm">{message}</p>
-            <button
-              onClick={onBack}
-              className="text-xs text-skyhook-400 hover:text-skyhook-300 transition-colors"
-            >
-              Back to Dashboard
-            </button>
-            {(reason === 'no_prometheus' || reason === 'source_unavailable') && (
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              {canConfigure && (
+                <button
+                  type="button"
+                  onClick={() => window.dispatchEvent(
+                    new CustomEvent('radar:open-settings', { detail: { section: configureAction.section } }),
+                  )}
+                  className="btn-brand px-3 py-1.5 text-xs font-medium"
+                >
+                  {configureAction.label}
+                </button>
+              )}
+            {(reason === 'no_prometheus' || reason === 'no_cost_source' || reason === 'source_unavailable') && (
               <button
                 onClick={() => {
-                  setNoPrometheusSince(Date.now())
+                  setDiscoverySince(Date.now())
                   refetch()
                 }}
                 disabled={isFetching}
-                className="text-xs text-accent-text hover:text-theme-text-primary disabled:cursor-not-allowed disabled:text-theme-text-disabled transition-colors"
+                className="rounded-md border border-theme-border px-3 py-1.5 text-xs text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary disabled:cursor-not-allowed disabled:text-theme-text-disabled"
               >
                 {isFetching ? 'Checking…' : 'Check again'}
               </button>
             )}
+            </div>
+            <button
+              onClick={onBack}
+              className="text-xs text-accent-text hover:text-theme-text-primary transition-colors"
+            >
+              Back to Dashboard
+            </button>
           </div>
         </div>
       </CostOverviewState>
@@ -153,6 +185,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
 
   const hourlyCost = data.totalHourlyCost ?? 0
   const currency = data.currency ?? DEFAULT_COST_CURRENCY
+  const rateLabels = costRateLabels(data.source === 'kubecost' ? data.window : undefined)
   const namespaces = data.namespaces ?? []
   const totalCpu = namespaces.reduce((sum, ns) => sum + ns.cpuCost, 0)
   const totalMem = namespaces.reduce((sum, ns) => sum + ns.memoryCost, 0)
@@ -169,7 +202,6 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
   const nodes = nodeData?.available ? (nodeData.nodes ?? []) : []
   const nodeCurrency = nodeData?.currency ?? currency
   const clusterConsoleLink = clusterCloudConsoleLink(clusterInfo?.context)
-  const namespaceScopeCount = data.namespaceScope?.length ?? 0
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -213,6 +245,9 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
               connectionState={connection.state}
             />
             <div className="flex flex-col items-end">
+              <span className="text-[10px] font-medium uppercase tracking-wide text-theme-text-tertiary">
+                Allocated workload cost
+              </span>
               <div className="flex items-baseline gap-1">
                 <span className="text-2xl font-bold text-theme-text-primary tabular-nums">
                   {formatProjectedMonthlyCost(hourlyCost, currency)}
@@ -241,7 +276,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
 
         {namespaceScopeCount > 0 && (
           <div className="rounded-lg border border-theme-border bg-theme-surface/50 px-4 py-3 text-xs text-theme-text-secondary">
-            Resource totals, trend, and namespace breakdown are scoped to {namespaceScopeCount}{' '}
+            Allocated workload cost, trend, and namespace breakdown are scoped to {namespaceScopeCount}{' '}
             {namespaceScopeCount === 1 ? 'namespace' : 'namespaces'}.
             {nodes.length > 0 && ' Node costs below remain cluster-wide.'}
           </div>
@@ -251,7 +286,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
         <div className="rounded-lg border border-theme-border bg-theme-surface/50 p-4">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-medium text-theme-text-secondary">
-              {namespaceScopeCount > 0 ? 'Scoped Resource Cost' : 'Cluster Resource Cost'}
+              {namespaceScopeCount > 0 ? 'Scoped allocated workload cost' : 'Allocated workload cost'}
             </span>
             <div className="flex items-center gap-4 text-xs text-theme-text-tertiary">
               <span className="flex items-center gap-1.5">
@@ -300,7 +335,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
                   Namespace Breakdown
                 </span>
                 <span className="text-[10px] text-theme-text-quaternary ml-2">
-                  projected monthly from current rate
+                  projected monthly from {rateLabels.rate}
                 </span>
               </div>
               <span className="text-xs text-theme-text-tertiary">
@@ -314,7 +349,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
           <div className="grid grid-cols-[minmax(180px,1fr)_110px_90px_minmax(160px,1fr)_150px] gap-2 px-4 py-2 border-b border-theme-border text-[11px] font-medium text-theme-text-tertiary uppercase tracking-wider">
             <span>Namespace</span>
             <Tooltip
-              content="Projected from current hourly rate — not historical spend"
+              content={`Projected from ${rateLabels.rate} — not historical spend`}
               wrapperClassName="!block text-right"
             >
               <span className="cursor-help">Projected/mo*</span>
@@ -322,7 +357,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
             <span className="text-right">Hourly</span>
             <span>CPU / Memory</span>
             <Tooltip
-              content="Projected monthly CPU and memory allocation from the current hourly rate"
+              content={`Projected monthly CPU and memory allocation from the ${rateLabels.rate}`}
               wrapperClassName="!block text-right"
             >
               <span className="cursor-help">CPU / Memory/mo*</span>
@@ -367,13 +402,19 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
       </div>
 
       {/* Help dialog */}
-      {showHelp && <CostHelpDialog currency={currency} source={data.source} onClose={() => setShowHelp(false)} />}
+      {showHelp && <CostHelpDialog currency={currency} source={data.source} window={data.window} onClose={() => setShowHelp(false)} />}
     </div>
   )
 }
 
-export function costUnavailableMessage(reason?: CostUnavailableReason): string {
-  const integrationMessage = costIntegrationUnavailableMessage(reason)
+export function costUnavailableMessage(
+  reason?: CostUnavailableReason,
+  options: { settingsAvailable?: boolean; namespaceScoped?: boolean } = {},
+): string {
+  if (reason === 'no_metrics' && options.namespaceScoped) {
+    return 'No allocation data is visible in the current namespace scope'
+  }
+  const integrationMessage = costIntegrationUnavailableMessage(reason, options.settingsAvailable ?? true)
   if (integrationMessage) return integrationMessage
 
   switch (reason) {
@@ -646,6 +687,7 @@ function NodeCostTable({
   currency: string
   onOpenResource?: (resource: SelectedResource) => void
 }) {
+  const totalHourlyCost = nodes.reduce((total, node) => total + node.hourlyCost, 0)
   return (
     <div className="rounded-lg border border-theme-border bg-theme-surface/50">
       <div className="px-4 py-3 border-b border-theme-border">
@@ -653,16 +695,21 @@ function NodeCostTable({
           <div>
             <div className="flex items-center gap-2">
               <Server className="w-4 h-4 text-theme-text-tertiary" />
-              <span className="text-sm font-semibold text-theme-text-primary">Node Costs</span>
+              <span className="text-sm font-semibold text-theme-text-primary">Cluster-wide node capacity cost</span>
               <span className="text-[10px] text-theme-text-quaternary">current pricing</span>
             </div>
             <p className="text-[11px] text-theme-text-tertiary mt-0.5 ml-6">
               Per-machine cloud pricing — namespace costs above show how this capacity is allocated
             </p>
           </div>
-          <span className="text-xs text-theme-text-tertiary">
-            {nodes.length} {nodes.length === 1 ? 'node' : 'nodes'}
-          </span>
+          <div className="text-right">
+            <div className="text-sm font-semibold tabular-nums text-theme-text-primary">
+              {formatProjectedMonthlyCost(totalHourlyCost, currency)}<span className="ml-1 text-[10px] font-normal text-theme-text-tertiary">/mo</span>
+            </div>
+            <span className="text-xs text-theme-text-tertiary">
+              {nodes.length} {nodes.length === 1 ? 'node' : 'nodes'} · current capacity
+            </span>
+          </div>
         </div>
       </div>
 
@@ -798,7 +845,8 @@ function apiGroupForCostWorkload(kind: string): string | undefined {
 
 // --- Help dialog ---
 
-function CostHelpDialog({ currency, source, onClose }: { currency: string; source?: 'prometheus' | 'kubecost'; onClose: () => void }) {
+function CostHelpDialog({ currency, source, window, onClose }: { currency: string; source?: 'prometheus' | 'kubecost'; window?: string; onClose: () => void }) {
+  const rateLabels = costRateLabels(source === 'kubecost' ? window : undefined)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
@@ -834,7 +882,7 @@ function CostHelpDialog({ currency, source, onClose }: { currency: string; sourc
               Where do these costs come from?
             </h3>
             <p>
-              Radar reads either OpenCost-compatible metrics from Prometheus or current allocation
+              Radar reads either OpenCost-compatible metrics from Prometheus or allocation
               and asset data from a Kubecost 3 Aggregator. This view is currently using{' '}
               <strong>{costSourceLabel(source)}</strong>.
             </p>
@@ -866,7 +914,7 @@ function CostHelpDialog({ currency, source, onClose }: { currency: string; sourc
               useful for attribution, but it is not a direct measurement of request headroom.
             </p>
             <p className="mt-1.5">
-              Projected monthly and daily numbers multiply the current hourly allocation rate. They
+              Projected monthly and daily numbers multiply the {rateLabels.rate}. They
               are useful for budget impact, but they are not a historical invoice total. Historical
               spend on application and workload tabs uses the selected range.
             </p>
@@ -879,13 +927,13 @@ function CostHelpDialog({ currency, source, onClose }: { currency: string; sourc
             </h3>
             <p>
               {source === 'kubecost' ? (
-                <>Current rates use the latest completed Kubecost ETL window and show its data-through time. Historical charts are not available through this integration yet.</>
+                <>Allocation rates use the latest completed Kubecost ETL window and show its data-through time. Historical charts are not available through this integration yet.</>
               ) : (
                 <>Cost rates and breakdowns are <strong>snapshots based on the last 1 hour</strong> of data. They update automatically every minute. The trend chart shows historical hourly allocation rate over the selected time range.</>
               )}
             </p>
             <p className="mt-1.5">
-              Short-lived spikes or dips may not be reflected in the current rate. Projected daily
+              Short-lived spikes or dips may not be reflected in the {rateLabels.rate}. Projected daily
               and monthly values are estimates, not invoice totals.
             </p>
           </section>

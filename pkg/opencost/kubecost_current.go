@@ -5,10 +5,14 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
-const kubecostCurrentWindow = "1h"
+const (
+	kubecostCurrentWindow        = "1h"
+	kubecostNamespaceConcurrency = 8
+)
 
 type KubecostCurrentOptions struct {
 	Currency  string
@@ -68,11 +72,11 @@ func ComputeKubecostSummary(ctx context.Context, client *KubecostClient, opts Ku
 			return nil, err
 		}
 		namespace := propertyString(allocation.Properties, "namespace")
+		if namespace == "__unallocated__" || strings.Contains(key, "__unallocated__") {
+			continue
+		}
 		if namespace == "" {
 			return nil, fmt.Errorf("allocation %q is missing namespace identity", key)
-		}
-		if namespace == "__unallocated__" {
-			continue
 		}
 		hours, err := kubecostRowHours(allocation.Start, allocation.End, allocation.Minutes)
 		if err != nil {
@@ -145,14 +149,34 @@ func ComputeKubecostWorkloadsForNamespaces(ctx context.Context, client *Kubecost
 	sort.Strings(namespaces)
 	responses := make(map[string]*WorkloadCostResponse, len(namespaces))
 	failures := make(map[string]error)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, kubecostNamespaceConcurrency)
 	for _, namespace := range namespaces {
-		response, err := computeKubecostWorkloads(ctx, client, namespace, ownersByNamespace[namespace], opts)
-		if err != nil {
-			failures[namespace] = err
-			continue
-		}
-		responses[namespace] = response
+		namespace := namespace
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				mu.Lock()
+				failures[namespace] = ctx.Err()
+				mu.Unlock()
+				return
+			}
+			response, err := computeKubecostWorkloads(ctx, client, namespace, ownersByNamespace[namespace], opts)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				failures[namespace] = err
+				return
+			}
+			responses[namespace] = response
+		}()
 	}
+	wg.Wait()
 	return responses, failures, nil
 }
 
@@ -163,7 +187,7 @@ func computeKubecostWorkloads(ctx context.Context, client *KubecostClient, names
 	if opts.Currency == "" {
 		opts.Currency = DefaultCurrency
 	}
-	resp, _, err := kubecostAllocationWithFallback(ctx, client, KubecostAllocationOptions{
+	resp, window, err := kubecostAllocationWithFallback(ctx, client, KubecostAllocationOptions{
 		Aggregate:  "cluster,namespace,pod,controllerKind,controller",
 		Accumulate: "true",
 		Idle:       false,
@@ -173,7 +197,7 @@ func computeKubecostWorkloads(ctx context.Context, client *KubecostClient, names
 	if err != nil {
 		return nil, err
 	}
-	response := &WorkloadCostResponse{Namespace: namespace, Currency: opts.Currency, Source: "kubecost"}
+	response := &WorkloadCostResponse{Namespace: namespace, Currency: opts.Currency, Window: window, Source: "kubecost"}
 	if !hasKubecostAllocationData(resp) {
 		response.Reason = ReasonNoMetrics
 		return response, nil
@@ -223,7 +247,7 @@ func computeKubecostWorkloads(ctx context.Context, client *KubecostClient, names
 		row.row.CPUUsageAvailable = row.row.CPUUsageAvailable && cpuAvailable
 		row.row.MemoryUsageAvailable = row.row.MemoryUsageAvailable && ramAvailable
 		row.includeDuration(allocation.Start, allocation.End, hours)
-		if pod := propertyString(allocation.Properties, "pod"); pod != "" {
+		if pod := propertyString(allocation.Properties, "pod"); pod != "" && kubecostPodIsLive(pod, owners) {
 			row.pods[pod] = struct{}{}
 		}
 		response.DataThrough = LatestKubecostTimestamp(response.DataThrough, allocation.End)
@@ -259,6 +283,14 @@ func computeKubecostWorkloads(ctx context.Context, client *KubecostClient, names
 	}
 	sort.Slice(response.Workloads, func(i, j int) bool { return response.Workloads[i].HourlyCost > response.Workloads[j].HourlyCost })
 	return response, nil
+}
+
+func kubecostPodIsLive(pod string, owners PodOwnerLookup) bool {
+	if owners == nil {
+		return true
+	}
+	_, found := owners(pod)
+	return found
 }
 
 func ComputeKubecostNodes(ctx context.Context, client *KubecostClient, opts KubecostCurrentOptions) (*NodeCostResponse, error) {

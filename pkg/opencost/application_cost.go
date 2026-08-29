@@ -10,6 +10,15 @@ func BuildApplicationCostResponse(inputs []ApplicationWorkloadCostInput, unavail
 			Unsupported: append([]ApplicationWorkloadRef(nil), unsupported...),
 		},
 	}
+	for _, costs := range namespaceCosts {
+		if costs == nil || !costs.Available {
+			continue
+		}
+		out.DataThrough = LatestKubecostTimestamp(out.DataThrough, costs.DataThrough)
+		if costs.Window == "1d" || out.Window == "" {
+			out.Window = costs.Window
+		}
+	}
 
 	for _, status := range unavailable {
 		out.Workloads = append(out.Workloads, ApplicationWorkloadCost{

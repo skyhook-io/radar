@@ -288,6 +288,9 @@ func focusOpenCostWorkload(resp *pkgopencost.WorkloadCostResponse, kind, namespa
 		return out
 	}
 	out.Source = resp.Source
+	if resp.Available {
+		out.Window = resp.Window
+	}
 	out.DataThrough = resp.DataThrough
 	if resp.Available {
 		for i := range resp.Workloads {

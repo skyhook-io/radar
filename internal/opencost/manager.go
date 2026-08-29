@@ -30,6 +30,7 @@ const (
 	SourcePrometheus       Source = "prometheus"
 	SourceKubecost         Source = "kubecost"
 	autoRetryDelay                = time.Minute
+	noCostSourceRetryDelay        = 5 * time.Second
 	kubecostConnectTimeout        = 25 * time.Second
 	kubecostHTTPTimeout           = 12 * time.Second
 )
@@ -40,6 +41,9 @@ var (
 	ErrKubecostContextMismatch = errors.New("Kubecost configuration context mismatch")
 	ErrKubecostNoData          = errors.New("Kubecost returned no allocation data")
 	ErrKubecostUnavailable     = errors.New("Kubecost Aggregator unavailable")
+	ErrKubecostNotFound        = errors.New("Kubecost Aggregator not found")
+	ErrKubecostDiscovery       = errors.New("Kubecost auto-discovery unavailable")
+	ErrNoCostSource            = errors.New("no usable cost source found")
 	ErrCostSourceEnvConfig     = errors.New("cost source environment configuration is invalid")
 )
 
@@ -328,8 +332,11 @@ func (m *Manager) Selected(ctx context.Context) (Connection, error) {
 			return Connection{}, contextErr
 		}
 		if config.Source == SourceAuto && !errors.Is(err, ErrKubecostContextMismatch) && !hasExplicitKubecostConfig(config) {
-			log.Printf("[opencost] Auto mode could not use local Kubecost; retrying source discovery later: %s", k8s.SanitizeForLog(err.Error()))
-			return m.commitAutoFallback(generation)
+			if errors.Is(err, ErrKubecostNotFound) || errors.Is(err, ErrKubecostDiscovery) {
+				log.Printf("[opencost] Auto mode found no usable cost source: %s", k8s.SanitizeForLog(err.Error()))
+				return m.commitSelectionFailure(generation, fmt.Errorf("%w: %v", ErrNoCostSource, err))
+			}
+			return m.commitSelectionFailure(generation, err)
 		}
 		return m.commitSelectionFailure(generation, err)
 	}
@@ -404,7 +411,11 @@ func (m *Manager) commitSelectionFailure(generation uint64, selectionErr error) 
 	m.client = nil
 	m.address = ""
 	m.clusterID = ""
-	m.retryAt = time.Now().Add(autoRetryDelay)
+	retryDelay := autoRetryDelay
+	if errors.Is(selectionErr, ErrNoCostSource) {
+		retryDelay = noCostSourceRetryDelay
+	}
+	m.retryAt = time.Now().Add(retryDelay)
 	m.selectionErr = selectionErr
 	m.lease = nil
 	return Connection{}, selectionErr
@@ -478,7 +489,7 @@ func (m *Manager) connectKubecost(ctx context.Context, config ManagerConfig) (Co
 		directURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", service.Name, service.Namespace, servicePort)
 		if client, address, directErr := probeKubecostURL(ctx, directURL, config.APIKey, clusterID); directErr == nil {
 			return Connection{Source: SourceKubecost, Client: client, Address: address, ClusterID: clusterID}, nil
-		} else if errors.Is(directErr, ErrKubecostAuthentication) || errors.Is(directErr, ErrKubecostNoData) {
+		} else {
 			return Connection{}, directErr
 		}
 	}
@@ -548,6 +559,7 @@ func probeKubecostURL(ctx context.Context, rawURL, apiKey, clusterID string) (*p
 	}
 	origin := parsed.Scheme + "://" + parsed.Host
 	noData := false
+	authenticationFailed := false
 	var lastErr error
 	for _, basePath := range paths {
 		httpClient := &http.Client{
@@ -579,14 +591,15 @@ func probeKubecostURL(ctx context.Context, rawURL, apiKey, clusterID string) (*p
 		}
 		var httpErr *prom.HTTPError
 		if errors.As(err, &httpErr) && (httpErr.StatusCode == http.StatusUnauthorized || httpErr.StatusCode == http.StatusForbidden) {
+			authenticationFailed = true
 			lastErr = ErrKubecostAuthentication
 			continue
 		}
 		lastErr = err
 	}
 	if lastErr != nil {
-		if errors.Is(lastErr, ErrKubecostAuthentication) {
-			return nil, "", lastErr
+		if authenticationFailed {
+			return nil, "", ErrKubecostAuthentication
 		}
 		if !noData {
 			return nil, "", fmt.Errorf("%w or did not return its allocation API: %w", ErrKubecostUnavailable, lastErr)
@@ -631,7 +644,7 @@ func kubecostClusterFilter(clusterID string) string {
 func discoverKubecostAggregator() (*corev1.Service, int, int, error) {
 	cache := k8s.GetResourceCache()
 	if cache == nil || cache.Services() == nil || cache.StatefulSets() == nil {
-		return nil, 0, 0, fmt.Errorf("Kubecost auto-discovery requires access to Services and StatefulSets; configure the Aggregator URL manually")
+		return nil, 0, 0, fmt.Errorf("%w: requires access to Services and StatefulSets; configure the Aggregator URL manually", ErrKubecostDiscovery)
 	}
 	services, err := cache.Services().List(labels.Everything())
 	if err != nil {
@@ -660,7 +673,7 @@ func discoverKubecostAggregator() (*corev1.Service, int, int, error) {
 			}
 		}
 	}
-	return nil, 0, 0, fmt.Errorf("no active Kubecost 3 Aggregator Service found; configure the central Aggregator URL manually")
+	return nil, 0, 0, fmt.Errorf("%w: no active Kubecost 3 Aggregator Service found; configure the central Aggregator URL manually", ErrKubecostNotFound)
 }
 
 func aggregatorServicePort(service *corev1.Service) (corev1.ServicePort, bool) {

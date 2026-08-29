@@ -3,8 +3,12 @@ package opencost
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
+	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -14,22 +18,33 @@ type kubecostRequest struct {
 }
 
 type fakeKubecostTransport struct {
+	mu        sync.Mutex
 	responses []string
 	errors    []error
 	requests  []kubecostRequest
+	handler   func(url.Values) (string, error)
 }
 
 func (f *fakeKubecostTransport) Do(_ context.Context, _ string, path string, params url.Values) ([]byte, error) {
+	f.mu.Lock()
 	f.requests = append(f.requests, kubecostRequest{path: path, params: params})
+	if f.handler != nil {
+		handler := f.handler
+		f.mu.Unlock()
+		response, err := handler(params)
+		return []byte(response), err
+	}
 	if len(f.errors) > 0 {
 		err := f.errors[0]
 		f.errors = f.errors[1:]
 		if err != nil {
+			f.mu.Unlock()
 			return nil, err
 		}
 	}
 	response := f.responses[0]
 	f.responses = f.responses[1:]
+	f.mu.Unlock()
 	return []byte(response), nil
 }
 
@@ -40,7 +55,7 @@ func floatPointer(value float64) *float64 { return &value }
 func TestComputeKubecostSummaryFallsBackFromNullHourAndNormalizesActualDuration(t *testing.T) {
 	transport := &fakeKubecostTransport{responses: []string{
 		`{"code":200,"data":[null]}`,
-		`{"code":200,"data":[{"__idle__/__idle__":{"properties":{"cluster":"__idle__","namespace":"__idle__"},"start":"2026-08-25T00:00:00Z","end":"2026-08-26T00:00:00Z","cpuCost":12,"ramCost":12,"totalCost":24},"radar-kubecost-e2e/__unallocated__":{"properties":{"cluster":"radar-kubecost-e2e","namespace":"__unallocated__"},"totalCost":100},"radar-kubecost-e2e/demo":{"properties":{"cluster":"radar-kubecost-e2e","namespace":"demo"},"start":"2026-08-25T00:00:00Z","end":"2026-08-26T00:00:00Z","cpuCoreRequestAverage":2,"cpuCoreUsageAverage":1,"cpuCost":24,"ramByteRequestAverage":4,"ramByteUsageAverage":1,"ramCost":24,"pvCost":12,"networkCost":6,"totalCost":66}}]}`,
+		`{"code":200,"data":[{"__idle__/__idle__":{"properties":{"cluster":"__idle__","namespace":"__idle__"},"start":"2026-08-25T00:00:00Z","end":"2026-08-26T00:00:00Z","cpuCost":12,"ramCost":12,"totalCost":24},"radar-kubecost-e2e/__unallocated__":{"properties":{"cluster":"radar-kubecost-e2e"},"totalCost":100},"radar-kubecost-e2e/demo":{"properties":{"cluster":"radar-kubecost-e2e","namespace":"demo"},"start":"2026-08-25T00:00:00Z","end":"2026-08-26T00:00:00Z","cpuCoreRequestAverage":2,"cpuCoreUsageAverage":1,"cpuCost":24,"ramByteRequestAverage":4,"ramByteUsageAverage":1,"ramCost":24,"pvCost":12,"networkCost":6,"totalCost":66}}]}`,
 	}}
 	resp, err := ComputeKubecostSummary(context.Background(), NewKubecostClient(transport), KubecostCurrentOptions{
 		Currency:  "EUR",
@@ -118,10 +133,30 @@ func TestComputeKubecostWorkloadsReturnsUsageAvailability(t *testing.T) {
 	}
 }
 
-func TestComputeKubecostWorkloadsForNamespacesBoundsQueriesByNamespace(t *testing.T) {
+func TestComputeKubecostWorkloadsReportsDailyFallbackWindow(t *testing.T) {
 	transport := &fakeKubecostTransport{responses: []string{
-		`{"code":200,"data":[{"a":{"properties":{"cluster":"cluster-a","namespace":"team-a","pod":"api-a","controllerKind":"deployment","controller":"api"},"start":"2026-08-26T00:00:00Z","end":"2026-08-26T01:00:00Z","cpuCost":1,"ramCost":1}}]}`,
-		`{"code":200,"data":[{"b":{"properties":{"cluster":"cluster-a","namespace":"team-b","pod":"worker-b","controllerKind":"statefulset","controller":"worker"},"start":"2026-08-26T00:00:00Z","end":"2026-08-26T01:00:00Z","cpuCost":2,"ramCost":2}}]}`,
+		`{"code":200,"data":[null]}`,
+		`{"code":200,"data":[{"row":{"properties":{"cluster":"cluster-a","namespace":"demo","pod":"web","controllerKind":"deployment","controller":"web"},"start":"2026-08-25T00:00:00Z","end":"2026-08-26T00:00:00Z","cpuCost":24,"ramCost":24}}]}`,
+	}}
+	resp, err := ComputeKubecostWorkloads(context.Background(), NewKubecostClient(transport), "demo", KubecostCurrentOptions{ClusterID: "cluster-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Available || resp.Window != "1d" {
+		t.Fatalf("unexpected fallback response: %#v", resp)
+	}
+}
+
+func TestComputeKubecostWorkloadsForNamespacesBoundsQueriesByNamespace(t *testing.T) {
+	transport := &fakeKubecostTransport{handler: func(params url.Values) (string, error) {
+		switch params.Get("filter") {
+		case `cluster:"cluster-a"+namespace:"team-a"`:
+			return `{"code":200,"data":[{"a":{"properties":{"cluster":"cluster-a","namespace":"team-a","pod":"api-a","controllerKind":"deployment","controller":"api"},"start":"2026-08-26T00:00:00Z","end":"2026-08-26T01:00:00Z","cpuCost":1,"ramCost":1}}]}`, nil
+		case `cluster:"cluster-a"+namespace:"team-b"`:
+			return `{"code":200,"data":[{"b":{"properties":{"cluster":"cluster-a","namespace":"team-b","pod":"worker-b","controllerKind":"statefulset","controller":"worker"},"start":"2026-08-26T00:00:00Z","end":"2026-08-26T01:00:00Z","cpuCost":2,"ramCost":2}}]}`, nil
+		default:
+			return "", errors.New("unexpected namespace filter")
+		}
 	}}
 	responses, failures, err := ComputeKubecostWorkloadsForNamespaces(context.Background(), NewKubecostClient(transport), map[string]PodOwnerLookup{
 		"team-a": nil,
@@ -133,9 +168,13 @@ func TestComputeKubecostWorkloadsForNamespacesBoundsQueriesByNamespace(t *testin
 	if len(failures) != 0 {
 		t.Fatalf("failures = %#v, want none", failures)
 	}
-	if len(transport.requests) != 2 ||
-		transport.requests[0].params.Get("filter") != `cluster:"cluster-a"+namespace:"team-a"` ||
-		transport.requests[1].params.Get("filter") != `cluster:"cluster-a"+namespace:"team-b"` {
+	if len(transport.requests) != 2 {
+		t.Fatalf("requests = %#v, want one bounded allocation query per namespace", transport.requests)
+	}
+	filters := []string{transport.requests[0].params.Get("filter"), transport.requests[1].params.Get("filter")}
+	sort.Strings(filters)
+	if filters[0] != `cluster:"cluster-a"+namespace:"team-a"` ||
+		filters[1] != `cluster:"cluster-a"+namespace:"team-b"` {
 		t.Fatalf("requests = %#v, want one bounded allocation query per namespace", transport.requests)
 	}
 	if got := responses["team-a"]; !got.Available || len(got.Workloads) != 1 || got.Workloads[0].Name != "api" {
@@ -162,12 +201,12 @@ func TestComputeKubecostWorkloadsForNamespacesRejectsRowsOutsideRequestedNamespa
 }
 
 func TestComputeKubecostWorkloadsForNamespacesPreservesPartialResults(t *testing.T) {
-	transport := &fakeKubecostTransport{
-		responses: []string{
-			`{"code":200,"data":[{"a":{"properties":{"cluster":"cluster-a","namespace":"team-a","pod":"api-a","controllerKind":"deployment","controller":"api"},"start":"2026-08-26T00:00:00Z","end":"2026-08-26T01:00:00Z","cpuCost":1,"ramCost":1}}]}`,
-		},
-		errors: []error{nil, errors.New("team-b unavailable"), errors.New("team-b unavailable")},
-	}
+	transport := &fakeKubecostTransport{handler: func(params url.Values) (string, error) {
+		if strings.Contains(params.Get("filter"), `namespace:"team-a"`) {
+			return `{"code":200,"data":[{"a":{"properties":{"cluster":"cluster-a","namespace":"team-a","pod":"api-a","controllerKind":"deployment","controller":"api"},"start":"2026-08-26T00:00:00Z","end":"2026-08-26T01:00:00Z","cpuCost":1,"ramCost":1}}]}`, nil
+		}
+		return "", errors.New("team-b unavailable")
+	}}
 	responses, failures, err := ComputeKubecostWorkloadsForNamespaces(context.Background(), NewKubecostClient(transport), map[string]PodOwnerLookup{
 		"team-a": nil,
 		"team-b": nil,
@@ -180,6 +219,67 @@ func TestComputeKubecostWorkloadsForNamespacesPreservesPartialResults(t *testing
 	}
 	if responses["team-b"] != nil || failures["team-b"] == nil {
 		t.Fatalf("team-b response = %#v, failure = %v", responses["team-b"], failures["team-b"])
+	}
+}
+
+func TestComputeKubecostWorkloadsForNamespacesBoundsConcurrency(t *testing.T) {
+	started := make(chan struct{}, 12)
+	release := make(chan struct{}, 12)
+	var active atomic.Int32
+	var maximum atomic.Int32
+	transport := &fakeKubecostTransport{handler: func(params url.Values) (string, error) {
+		current := active.Add(1)
+		for {
+			previous := maximum.Load()
+			if current <= previous || maximum.CompareAndSwap(previous, current) {
+				break
+			}
+		}
+		started <- struct{}{}
+		<-release
+		active.Add(-1)
+		filter := params.Get("filter")
+		for i := 0; i < 12; i++ {
+			namespace := fmt.Sprintf("team-%02d", i)
+			if strings.Contains(filter, `namespace:"`+namespace+`"`) {
+				return fmt.Sprintf(`{"code":200,"data":[{"row":{"properties":{"cluster":"cluster-a","namespace":%q,"pod":"api","controllerKind":"deployment","controller":"api"},"start":"2026-08-26T00:00:00Z","end":"2026-08-26T01:00:00Z","cpuCost":1,"ramCost":1}}]}`, namespace), nil
+			}
+		}
+		return "", errors.New("unexpected namespace filter")
+	}}
+	owners := make(map[string]PodOwnerLookup, 12)
+	for i := 0; i < 12; i++ {
+		owners[fmt.Sprintf("team-%02d", i)] = nil
+	}
+	done := make(chan error, 1)
+	go func() {
+		responses, failures, err := ComputeKubecostWorkloadsForNamespaces(
+			context.Background(), NewKubecostClient(transport), owners, KubecostCurrentOptions{ClusterID: "cluster-a"})
+		if err == nil && (len(responses) != 12 || len(failures) != 0) {
+			err = fmt.Errorf("responses = %d, failures = %d", len(responses), len(failures))
+		}
+		done <- err
+	}()
+	for i := 0; i < kubecostNamespaceConcurrency; i++ {
+		<-started
+	}
+	select {
+	case <-started:
+		t.Fatal("started more than the configured namespace concurrency")
+	default:
+	}
+	for i := 0; i < kubecostNamespaceConcurrency; i++ {
+		release <- struct{}{}
+	}
+	for i := kubecostNamespaceConcurrency; i < len(owners); i++ {
+		<-started
+		release <- struct{}{}
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if got := maximum.Load(); got != kubecostNamespaceConcurrency {
+		t.Fatalf("maximum concurrency = %d, want %d", got, kubecostNamespaceConcurrency)
 	}
 }
 
@@ -200,12 +300,25 @@ func TestComputeKubecostWorkloadsNormalizesAfterPodChurnAggregation(t *testing.T
 	transport := &fakeKubecostTransport{responses: []string{
 		`{"code":200,"data":[{"old":{"properties":{"cluster":"cluster-a","namespace":"demo","pod":"web-old","controllerKind":"deployment","controller":"web"},"start":"2026-08-26T00:00:00Z","end":"2026-08-26T00:40:00Z","cpuCost":0.6666666667,"ramCost":0},"new":{"properties":{"cluster":"cluster-a","namespace":"demo","pod":"web-new","controllerKind":"deployment","controller":"web"},"start":"2026-08-26T00:40:00Z","end":"2026-08-26T01:00:00Z","cpuCost":0.3333333333,"ramCost":0}}]}`,
 	}}
-	resp, err := ComputeKubecostWorkloads(context.Background(), NewKubecostClient(transport), "demo", KubecostCurrentOptions{ClusterID: "cluster-a"})
+	owners := func(pod string) (WorkloadOwner, bool) {
+		return WorkloadOwner{Kind: "Deployment", Name: "web"}, pod == "web-new"
+	}
+	resp, err := ComputeKubecostWorkloads(context.Background(), NewKubecostClient(transport), "demo", KubecostCurrentOptions{ClusterID: "cluster-a", Owners: owners})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resp.Workloads) != 1 || resp.Workloads[0].HourlyCost != 1 || resp.Workloads[0].Replicas != 2 {
+	if len(resp.Workloads) != 1 || resp.Workloads[0].HourlyCost != 1 || resp.Workloads[0].Replicas != 1 {
 		t.Fatalf("unexpected churn-normalized workload: %#v", resp.Workloads)
+	}
+}
+
+func TestKubecostPodIsLiveDistinguishesUnavailableAndEmptyLookups(t *testing.T) {
+	if !kubecostPodIsLive("old-pod", nil) {
+		t.Fatal("nil owner lookup should preserve replica compatibility")
+	}
+	empty := func(string) (WorkloadOwner, bool) { return WorkloadOwner{}, false }
+	if kubecostPodIsLive("old-pod", empty) {
+		t.Fatal("conclusive empty owner lookup should not count a historical pod")
 	}
 }
 
@@ -219,6 +332,9 @@ func TestComputeKubecostWorkloadsIncludesStandaloneAndStaticPods(t *testing.T) {
 		}
 		if pod == "api-abc-123" {
 			return WorkloadOwner{Kind: "standalone"}, true
+		}
+		if pod == "api-def-456" {
+			return WorkloadOwner{Kind: "ReplicaSet", Name: "orphan-rs"}, true
 		}
 		return WorkloadOwner{}, false
 	}

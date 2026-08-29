@@ -23,8 +23,11 @@ import { costUnavailableReasonFromError } from './errors'
 import {
   costFreshnessLabel,
   costIntegrationUnavailableMessage,
+  costRateLabels,
   costSourceLabel,
+  isCostDiscoveryPending,
 } from './source'
+import { useNavCustomization } from '../../context/NavCustomization'
 
 type WorkloadCostState =
   | 'loading'
@@ -49,8 +52,9 @@ interface WorkloadCostTabProps {
 }
 
 export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps) {
+  const settingsAvailable = !useNavCustomization().embedded
   const [range, setRange] = useState<CostTimeRange>('24h')
-  const [noPrometheusSince, setNoPrometheusSince] = useState<number | null>(null)
+  const [discoverySince, setDiscoverySince] = useState<number | null>(null)
   const currentQuery = useOpenCostWorkload(kind, namespace, name)
   const trendQuery = useOpenCostWorkloadTrend(kind, namespace, name, range)
   const trendMatchesRange = trendQuery.data?.range === range
@@ -67,10 +71,10 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
   })
 
   useEffect(() => {
-    if (state === 'no_prometheus') {
-      setNoPrometheusSince((prev) => prev ?? Date.now())
+    if (isCostDiscoveryPending(state)) {
+      setDiscoverySince((prev) => prev ?? Date.now())
     } else {
-      setNoPrometheusSince(null)
+      setDiscoverySince(null)
     }
   }, [state])
 
@@ -89,6 +93,7 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
     state === 'query_error' ||
     state === 'access_denied' ||
     state === 'not_found' ||
+    state === 'no_cost_source' ||
     state === 'source_unavailable' ||
     state === 'authentication_error' ||
     state === 'configuration_mismatch' ||
@@ -96,20 +101,20 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
     state === 'history_unsupported' ||
     state === 'load_error'
   ) {
-    const discoveryAgeMs = noPrometheusSince == null ? 0 : Date.now() - noPrometheusSince
-    if (state === 'no_prometheus' && discoveryAgeMs < COST_DISCOVERY_GRACE_MS) {
+    const discoveryAgeMs = discoverySince == null ? 0 : Date.now() - discoverySince
+    if (isCostDiscoveryPending(state) && discoveryAgeMs < COST_DISCOVERY_GRACE_MS) {
       return (
         <WorkloadCostDiscovering
           isFetching={currentQuery.isFetching || trendQuery.isFetching}
           onRetry={() => {
-            setNoPrometheusSince(Date.now())
+            setDiscoverySince(Date.now())
             currentQuery.refetch()
             trendQuery.refetch()
           }}
         />
       )
     }
-    return <WorkloadCostUnavailable state={state} />
+    return <WorkloadCostUnavailable state={state} settingsAvailable={settingsAvailable} />
   }
 
   const current = currentQuery.data?.current
@@ -131,6 +136,8 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
   )
   const source = currentQuery.data?.source ?? trend?.source
   const historyUnsupported = trend?.reason === 'history_unsupported'
+  const currentWindow = currentQuery.data?.window
+  const rateLabels = costRateLabels(currentWindow)
 
   return (
     <div className="mx-auto w-full max-w-[1600px] space-y-4">
@@ -141,7 +148,7 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
             <div>
               <div className="flex items-center gap-1.5">
                 <div className="text-sm font-semibold text-theme-text-primary">
-                  {historyUnsupported ? 'Current compute cost' : 'Historical compute cost'}
+                  {historyUnsupported ? 'Compute allocation cost' : 'Historical compute cost'}
                 </div>
                 <MetricInfoTooltip content="Values are based on CPU and memory allocation, not raw utilization. The cost provider attributes the greater of requested or observed resources." />
               </div>
@@ -156,14 +163,14 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
         {historyUnsupported ? (
           <div className="grid gap-4 p-4 sm:grid-cols-2">
             <MetricBlock
-              label="Current hourly"
+              label={rateLabels.hourly}
               value={hasCurrent ? formatCostPerHour(hourly, currentCurrency) : '—'}
               subvalue="CPU and memory allocation"
             />
             <MetricBlock
               label="Projected monthly"
               value={hasCurrent ? formatProjectedMonthlyCost(hourly, currentCurrency) : '—'}
-              subvalue="Current hourly rate × 730 hours"
+              subvalue={`${rateLabels.rate} × 730 hours`}
             />
           </div>
         ) : (
@@ -181,7 +188,7 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
                 value={hasCurrent ? formatProjectedMonthlyCost(hourly, currentCurrency) : '—'}
                 subvalue={
                   hasCurrent
-                    ? `${formatCostPerHour(hourly, currentCurrency)} current rate`
+                    ? `${formatCostPerHour(hourly, currentCurrency)} · ${rateLabels.rate}`
                     : 'Current allocation unavailable'
                 }
               />
@@ -223,13 +230,13 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
       )}
 
       <div className="grid gap-4 md:grid-cols-2">
-        <MetricTile label="Replicas" value={hasCurrent ? String(current?.replicas ?? 0) : '—'} />
+        <MetricTile label="Live replicas" value={hasCurrent ? String(current?.replicas ?? 0) : '—'} />
         <MetricTile
           label="Projected daily"
           value={hasCurrent ? formatProjectedDailyRate(hourly, currentCurrency) : '—'}
           subvalue={
             hasCurrent
-              ? `${formatCostPerHour(hourly, currentCurrency)} current hourly rate`
+              ? `${formatCostPerHour(hourly, currentCurrency)} · ${rateLabels.rate}`
               : 'Current allocation unavailable'
           }
         />
@@ -245,17 +252,18 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
         memoryAllocationUse={current?.memoryAllocationUse ?? 0}
         cpuUsageAvailable={current?.cpuUsageAvailable ?? false}
         memoryUsageAvailable={current?.memoryUsageAvailable ?? false}
+        window={source === 'kubecost' ? currentWindow : undefined}
       />
 
       <div className="text-xs text-theme-text-tertiary">
-        {costSourceLabel(source)} &middot; {costFreshnessLabel(source, '1h', currentQuery.data?.dataThrough)}.{' '}
+        {costSourceLabel(source)} &middot; {costFreshnessLabel(source, source === 'kubecost' ? currentWindow : '1h', currentQuery.data?.dataThrough)}.{' '}
         {currentCurrency !== DEFAULT_COST_CURRENCY && (
           <>Labeled {currentCurrency}; no conversion. </>
         )}
         {historyUnsupported
           ? 'Historical workload charts are not available for Kubecost yet. '
           : 'Historical spend uses the selected range. '}
-        Projected monthly values multiply the current hourly allocation. Storage/PVC attribution
+        Projected monthly values multiply the {rateLabels.rate}. Storage/PVC attribution
         remains at namespace and cluster level.
       </div>
     </div>
@@ -291,6 +299,7 @@ export function getWorkloadCostState(
     costUnavailableReasonFromError(queryStatus.trendError)
   if (
     reason === 'no_prometheus' ||
+    reason === 'no_cost_source' ||
     reason === 'query_error' ||
     reason === 'access_denied' ||
     reason === 'not_found' ||
@@ -338,9 +347,15 @@ function WorkloadCostDiscovering({
   )
 }
 
-function WorkloadCostUnavailable({ state }: { state: CostUnavailableReason | 'load_error' }) {
+function WorkloadCostUnavailable({
+  state,
+  settingsAvailable,
+}: {
+  state: CostUnavailableReason | 'load_error'
+  settingsAvailable: boolean
+}) {
   const message =
-    costIntegrationUnavailableMessage(state) ??
+    costIntegrationUnavailableMessage(state, settingsAvailable) ??
     (state === 'no_prometheus'
       ? 'No compatible metrics backend was found. OpenCost workload cost requires OpenCost metrics in a PromQL-compatible backend.'
       : state === 'query_error'
@@ -353,7 +368,7 @@ function WorkloadCostUnavailable({ state }: { state: CostUnavailableReason | 'lo
             ? 'This workload no longer exists.'
             : state === 'load_error'
               ? 'Could not load workload cost data. Check access to this workload and try again.'
-              : 'OpenCost workload metrics were not found for this workload.')
+              : 'No workload cost data was returned for this workload by the active cost source.')
 
   return (
     <div className="flex h-full min-h-[320px] items-center justify-center">

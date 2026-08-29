@@ -33,6 +33,7 @@ import {
   type ResourceSignal,
   type RightsizingActionTone,
 } from './presentation'
+import { useNavCustomization } from '../../context/NavCustomization'
 
 export const RIGHTSIZING_SCAN_DESCRIPTION =
   'Find CPU and memory requests to increase, reduce, or review. Radar never changes them.'
@@ -41,6 +42,8 @@ export const RIGHTSIZING_SCAN_METHODOLOGY =
 export const RIGHTSIZING_METRICS_REQUIRED_TITLE = 'Metrics history is required'
 export const RIGHTSIZING_METRICS_REQUIRED_BODY =
   'Rightsizing needs 7 days of Kubernetes workload history from a PromQL-compatible metrics backend (Prometheus, VictoriaMetrics, Thanos, or Mimir).\nCost Overview remains available without it.'
+export const RIGHTSIZING_EMBEDDED_METRICS_REQUIRED_BODY =
+  `${RIGHTSIZING_METRICS_REQUIRED_BODY}\nConfigure metrics for this cluster in the host application or Radar deployment.`
 
 export type RightsizingScanSurfaceState =
   | 'discovering'
@@ -100,6 +103,7 @@ const ACTION_META: Record<
 
 export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
   useAutoPromConnect()
+  const settingsAvailable = !useNavCustomization().embedded
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
   const { data: clusterInfo } = useClusterInfo()
@@ -246,20 +250,24 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
         ) : surfaceState === 'prometheus_required' ? (
           <CenteredState
             title={RIGHTSIZING_METRICS_REQUIRED_TITLE}
-            body={RIGHTSIZING_METRICS_REQUIRED_BODY}
+            body={settingsAvailable
+              ? RIGHTSIZING_METRICS_REQUIRED_BODY
+              : RIGHTSIZING_EMBEDDED_METRICS_REQUIRED_BODY}
             action={
               <div className="flex flex-wrap items-center justify-center gap-3">
-                <button
-                  type="button"
-                  onClick={() =>
-                    window.dispatchEvent(
-                      new CustomEvent('radar:open-settings', { detail: { section: 'prometheus' } }),
-                    )
-                  }
-                  className="btn-brand px-4 py-2 text-sm font-medium"
-                >
-                  Configure metrics
-                </button>
+                {settingsAvailable && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      window.dispatchEvent(
+                        new CustomEvent('radar:open-settings', { detail: { section: 'prometheus' } }),
+                      )
+                    }
+                    className="btn-brand px-4 py-2 text-sm font-medium"
+                  >
+                    Configure metrics
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => retryPrometheus()}

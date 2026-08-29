@@ -15,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	fakeclientset "k8s.io/client-go/kubernetes/fake"
 )
 
 func TestResolveEnvironmentConfig(t *testing.T) {
@@ -164,6 +165,24 @@ func TestProbeKubecostTriesModelPathAfterRootAuthenticationFailure(t *testing.T)
 func TestProbeKubecostReturnsTypedAuthenticationFailureAfterAllPaths(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "denied", http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	_, err := ProbeKubecost(context.Background(), ManagerConfig{
+		Source: SourceKubecost, URL: server.URL, ClusterID: "prod-a",
+	})
+	if !errors.Is(err, ErrKubecostAuthentication) {
+		t.Fatalf("error = %v, want ErrKubecostAuthentication", err)
+	}
+}
+
+func TestProbeKubecostAuthenticationOutranksAlternatePathFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/allocation" {
+			http.Error(w, "denied", http.StatusUnauthorized)
+			return
+		}
+		http.NotFound(w, r)
 	}))
 	defer server.Close()
 
@@ -359,6 +378,78 @@ func TestAutoPrometheusErrorUsesTemporaryFallback(t *testing.T) {
 	}
 	if connection.Source != SourcePrometheus || m.retryAt.IsZero() {
 		t.Fatalf("connection=%#v retryAt=%v, want temporary Prometheus fallback", connection, m.retryAt)
+	}
+}
+
+func TestAutoSourceFailsWhenPrometheusAndKubecostAreAbsent(t *testing.T) {
+	if err := k8s.InitTestResourceCache(fakeclientset.NewSimpleClientset()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	promServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("query") == "up" {
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"job":"prometheus"},"value":[1700000000,"1"]}]}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+	}))
+	prometheuspkg.Initialize(nil, nil, "test")
+	prometheuspkg.SetManualURL(promServer.URL)
+	t.Cleanup(func() {
+		promServer.Close()
+		prometheuspkg.Reset()
+		prometheuspkg.Initialize(nil, nil, "")
+	})
+
+	m := &Manager{config: ManagerConfig{Source: SourceAuto}}
+	if _, err := m.Selected(context.Background()); !errors.Is(err, ErrNoCostSource) {
+		t.Fatalf("selection error = %v, want ErrNoCostSource", err)
+	}
+	if m.selected != "" || m.selectionErr == nil || m.retryAt.IsZero() {
+		t.Fatalf("selection state = selected %q, error %v, retry %v; want cached failure", m.selected, m.selectionErr, m.retryAt)
+	}
+	if delay := time.Until(m.retryAt); delay <= 0 || delay > noCostSourceRetryDelay {
+		t.Fatalf("no-source retry delay = %v, want at most %v", delay, noCostSourceRetryDelay)
+	}
+}
+
+func TestAutoSourceRetriesQuicklyBeforeKubecostDiscoveryIsReady(t *testing.T) {
+	k8s.ResetResourceCache()
+	t.Cleanup(k8s.ResetTestState)
+	promServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("query") == "up" {
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"job":"prometheus"},"value":[1700000000,"1"]}]}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+	}))
+	prometheuspkg.Initialize(nil, nil, "test")
+	prometheuspkg.SetManualURL(promServer.URL)
+	t.Cleanup(func() {
+		promServer.Close()
+		prometheuspkg.Reset()
+		prometheuspkg.Initialize(nil, nil, "")
+	})
+
+	m := &Manager{config: ManagerConfig{Source: SourceAuto}}
+	if _, err := m.Selected(context.Background()); !errors.Is(err, ErrNoCostSource) {
+		t.Fatalf("selection error = %v, want ErrNoCostSource", err)
+	}
+	if delay := time.Until(m.retryAt); delay <= 0 || delay > noCostSourceRetryDelay {
+		t.Fatalf("discovery retry delay = %v, want at most %v", delay, noCostSourceRetryDelay)
+	}
+}
+
+func TestExplicitPrometheusRemainsASelectablePreference(t *testing.T) {
+	m := &Manager{config: ManagerConfig{Source: SourcePrometheus}}
+	connection, err := m.Selected(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if connection.Source != SourcePrometheus {
+		t.Fatalf("source = %q, want prometheus", connection.Source)
 	}
 }
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   getRightsizingScanSurfaceState,
+  RIGHTSIZING_EMBEDDED_METRICS_REQUIRED_BODY,
   RIGHTSIZING_METRICS_REQUIRED_BODY,
   RIGHTSIZING_METRICS_REQUIRED_TITLE,
   RIGHTSIZING_SCAN_DESCRIPTION,
@@ -28,6 +29,11 @@ describe('rightsizing scan copy', () => {
     expect(RIGHTSIZING_METRICS_REQUIRED_BODY).toContain('\nCost Overview')
     expect(copy).not.toContain('OpenCost')
     expect(copy).not.toContain('Kubecost')
+  })
+
+  it('routes embedded configuration through the host instead of standalone Settings', () => {
+    expect(RIGHTSIZING_EMBEDDED_METRICS_REQUIRED_BODY).toContain('host application')
+    expect(RIGHTSIZING_EMBEDDED_METRICS_REQUIRED_BODY).not.toContain('Settings')
   })
 
   it('retains a prior snapshot after a failed rerun but treats a first-run failure as fatal', () => {

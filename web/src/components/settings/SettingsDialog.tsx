@@ -13,6 +13,7 @@ import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
 import { apiUrl, getAuthHeaders, getCredentialsMode, routePath } from '../../api/config'
 import {
   useCloudRole, useVersionCheck, useClusterInfo, usePrometheusStatus, useArgoStatus, useCapabilities,
+  useOpenCostSummary,
 } from '../../api/client'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
 import { Input, SelectMenu } from '@skyhook-io/k8s-ui'
@@ -22,6 +23,15 @@ import { MyPermissionsContent } from './MyPermissionsDialog'
 import { useDiagnose } from '../diagnose/DiagnoseContext'
 import { currencyOptionsForValue } from './currency-options'
 import { versionUpdateURL } from '../../utils/version'
+import {
+  costConfigurationAction,
+  costFreshnessLabel,
+  costIntegrationUnavailableMessage,
+  costSourceLabel,
+} from '../cost/source'
+import { costSourceApplyLabel, shouldOfferCostReview, shouldShowSettingsFooter } from './settings-state'
+import type { SettingsSectionId } from './settings-state'
+export type { SettingsSectionId } from './settings-state'
 
 // The loopback URL an MCP client is told to connect to. Shared by the overview
 // row and the MCP section: both must carry the base path, or the URL they
@@ -79,6 +89,7 @@ interface ConfigResponse {
 
 interface KubecostApplyResponse {
   source: 'prometheus' | 'kubecost'
+  address?: string
   apiKeySet: boolean
 }
 
@@ -95,9 +106,6 @@ interface SettingsDialogProps {
 //   • Live integrations (Prometheus, cost source, Argo CD) — their own Apply/Connect endpoints
 //     re-point the running server; effect immediately, NOT part of footer dirty.
 //   • AI diagnose — client-side prefs, self-saving, editable by everyone.
-export type SettingsSectionId =
-  | 'overview' | 'perms' | 'connection' | 'prometheus' | 'cost' | 'argocd' | 'ai' | 'advanced'
-
 // Persisted footer fields include startup settings plus the live currency override.
 // Integration fields (prometheusUrl, argoCdUrl, argoCdInsecureTls) apply through
 // their own controls and are excluded here. Every field is normalized so
@@ -403,7 +411,15 @@ export function SettingsDialog({
     { id: 'advanced', label: 'Advanced', icon: SlidersHorizontal, ownerOnly: true, dirty: advancedDirty },
   ]
 
-  const showFooter = canEditConfig && (confirmingClose || configDirty || costIntegrationDirty || !!saveMessage)
+  const offerCostReview = shouldOfferCostReview(costIntegrationDirty, section)
+  const showFooter = shouldShowSettingsFooter({
+    canEditConfig,
+    confirmingClose,
+    configDirty,
+    costIntegrationDirty,
+    section,
+    hasSaveMessage: Boolean(saveMessage),
+  })
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -504,7 +520,7 @@ export function SettingsDialog({
             )}
 
             {/* Overview — status at a glance; the landing section */}
-            <div className={clsx(section !== 'overview' && 'hidden')} role="tabpanel">
+            <div className={clsx(section !== 'overview' && 'hidden')} role="tabpanel" inert={section !== 'overview' || undefined}>
               <div className="mb-1">
                 <h3 className="text-base font-semibold text-theme-text-primary">Overview</h3>
                 <p className="mt-0.5 text-xs text-theme-text-tertiary">
@@ -517,7 +533,7 @@ export function SettingsDialog({
             </div>
 
             {/* My permissions — usable by everyone, rendered inline (no launcher) */}
-            <div className={clsx(section !== 'perms' && 'hidden')} role="tabpanel">
+            <div className={clsx(section !== 'perms' && 'hidden')} role="tabpanel" inert={section !== 'perms' || undefined}>
               <div className="mb-1">
                 <h3 className="text-base font-semibold text-theme-text-primary">My permissions</h3>
                 <p className="mt-0.5 text-xs text-theme-text-tertiary">
@@ -586,7 +602,7 @@ export function SettingsDialog({
               title="Cost"
               caption={configData?.kubecostEnvManaged
                 ? 'Source is managed by the deployment. Currency saves with the footer.'
-                : 'Test and apply source changes here. Currency saves with the footer.'}
+                : 'Source changes apply here; Radar tests Auto and Kubecost first. Currency saves with the footer.'}
               live
               locked={!canEditConfig}
             >
@@ -602,6 +618,7 @@ export function SettingsDialog({
                 resetVersion={costDraftReset}
                 managed={configData?.openCostCurrencyManaged ?? false}
                 effectiveCurrency={configData?.effective.opencostCurrency ?? ''}
+                deploymentMode={deploymentMode}
                 onChange={(value) => updateConfigField('opencostCurrency', value || undefined)}
                 onChangeSource={(value) => updateConfigField('costSource', value)}
                 onChangeUrl={(value) => updateConfigField('kubecostUrl', value || undefined)}
@@ -663,7 +680,7 @@ export function SettingsDialog({
             {/* AI diagnose — self-saving, usable by everyone. Same heading block
                 as every other tab; the body is the agent controls (when a CLI is
                 installed) or an enable explainer (when not). */}
-            <div className={clsx(section !== 'ai' && 'hidden')} role="tabpanel">
+            <div className={clsx(section !== 'ai' && 'hidden')} role="tabpanel" inert={section !== 'ai' || undefined}>
               <div className="mb-4">
                 <h3 className="text-base font-semibold text-theme-text-primary">AI diagnose</h3>
                 <p className="mt-0.5 text-xs text-theme-text-tertiary">
@@ -773,7 +790,7 @@ export function SettingsDialog({
                   >
                     Discard
                   </button>
-                  {costIntegrationDirty && (
+                  {offerCostReview && (
                     <button
                       onClick={reviewCostDraft}
                       className={clsx(
@@ -818,7 +835,7 @@ export function SettingsDialog({
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  {costIntegrationDirty && (
+                  {offerCostReview && (
                     <button
                       onClick={reviewCostDraft}
                       className={clsx(
@@ -838,7 +855,9 @@ export function SettingsDialog({
                       className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
                     >
                       {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                      Save
+                      {section === 'cost' && costDirty && !connectionDirty && !advancedDirty
+                        ? 'Save currency'
+                        : 'Save'}
                     </button>
                   )}
                 </div>
@@ -945,7 +964,7 @@ function SectionPane({
   children: ReactNode
 }) {
   return (
-    <div className={clsx(active !== id && 'hidden')} role="tabpanel">
+    <div className={clsx(active !== id && 'hidden')} role="tabpanel" inert={active !== id || undefined}>
       <div className="mb-4">
         <h3 className="text-base font-semibold text-theme-text-primary">{title}</h3>
         {!locked && caption && <SectionCaption live={live}>{caption}</SectionCaption>}
@@ -1008,6 +1027,7 @@ interface OverviewRow {
 function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s: SettingsSectionId) => void }) {
   const { data: cluster } = useClusterInfo()
   const { data: prom } = usePrometheusStatus()
+  const { data: cost } = useOpenCostSummary()
   const { data: argo } = useArgoStatus(active)
   const { data: capabilitiesData } = useCapabilities()
   const deploymentMode = capabilitiesData ? (capabilitiesData.deployment?.mode ?? 'local') : undefined
@@ -1021,6 +1041,16 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
     diag.agents.find((a) => a.name === diag.selectedAgent)?.label ?? diag.agents[0]?.label
   const mcpOn = capabilities.mcpEnabled
   const mcpUrl = mcpLoopbackUrl()
+  const costMissing = cost?.reason === 'no_prometheus' || cost?.reason === 'no_cost_source' || cost?.reason === 'no_metrics'
+  const costUnavailableDetail = cost?.reason === 'no_prometheus'
+    ? 'Connect OpenCost metrics in Metrics.'
+    : cost?.reason === 'no_metrics'
+      ? 'The active cost source returned no allocation data.'
+      : cost?.reason === 'access_denied'
+        ? 'Your current permissions do not allow cost data.'
+        : cost?.reason
+          ? costIntegrationUnavailableMessage(cost.reason) ?? 'The active cost source query failed.'
+          : undefined
 
   const rows: OverviewRow[] = [
     {
@@ -1034,6 +1064,18 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
       tone: prom?.connected ? 'ok' : prom?.available ? 'warn' : 'off',
       value: prom?.connected ? 'Connected' : prom?.available ? 'Not reachable' : 'Not configured',
       detail: prom?.connected ? prom.address : undefined,
+    },
+    {
+      id: costConfigurationAction(cost?.reason).section, icon: Coins, label: 'Cost',
+      tone: cost?.available ? 'ok' : cost ? (costMissing ? 'off' : 'warn') : 'unknown',
+      value: cost?.available
+        ? costSourceLabel(cost.source)
+        : cost
+          ? costMissing ? 'No cost data' : 'Unavailable'
+          : 'Checking…',
+      detail: cost?.available
+        ? costFreshnessLabel(cost.source, cost.window, cost.dataThrough)
+        : costUnavailableDetail,
     },
     {
       id: 'argocd', icon: GitBranch, label: 'Argo CD',
@@ -1303,6 +1345,7 @@ function CostSection({
   resetVersion,
   managed,
   effectiveCurrency,
+  deploymentMode,
   onChange,
   onChangeSource,
   onChangeUrl,
@@ -1321,6 +1364,7 @@ function CostSection({
   resetVersion: number
   managed: boolean
   effectiveCurrency: string
+  deploymentMode: 'local' | 'in-cluster' | 'cloud'
   onChange: (value: string) => void
   onChangeSource: (value: 'auto' | 'prometheus' | 'kubecost') => void
   onChangeUrl: (value: string) => void
@@ -1328,10 +1372,11 @@ function CostSection({
   onCredentialDirtyChange: (dirty: boolean) => void
   onApplied: (value: { source: 'auto' | 'prometheus' | 'kubecost'; url: string; clusterId: string; apiKeySet: boolean }) => void
 }) {
-  const [apply, setApply] = useState<ApplyState>({ status: 'idle' })
+  const [apply, setApply] = useState<CostApplyState>({ status: 'idle' })
   const [apiKey, setApiKey] = useState('')
   const [apiKeyTouched, setApiKeyTouched] = useState(false)
   const [apiKeyCleared, setApiKeyCleared] = useState(false)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
   const apiKeyWillBeUsed = !apiKeyCleared && ((apiKeyTouched && apiKey !== '') || apiKeySet)
   const apiKeyUsesPlainHTTP = apiKeyWillBeUsed && /^http:\/\//i.test(url.trim())
 
@@ -1345,6 +1390,10 @@ function CostSection({
   useEffect(() => {
     onCredentialDirtyChange(apiKeyTouched || apiKeyCleared)
   }, [apiKeyCleared, apiKeyTouched, onCredentialDirtyChange])
+
+  useEffect(() => {
+    if (url.trim() || clusterId.trim()) setAdvancedOpen(true)
+  }, [clusterId, url])
 
   const applySource = async () => {
     setApply({ status: 'applying' })
@@ -1384,7 +1433,8 @@ function CostSection({
         !('source' in data) ||
         (data.source !== 'prometheus' && data.source !== 'kubecost') ||
         !('apiKeySet' in data) ||
-        typeof data.apiKeySet !== 'boolean'
+        typeof data.apiKeySet !== 'boolean' ||
+        ('address' in data && data.address !== undefined && typeof data.address !== 'string')
       ) {
         throw new Error('Radar returned an invalid Kubecost configuration response')
       }
@@ -1393,7 +1443,7 @@ function CostSection({
       setApiKeyTouched(false)
       setApiKeyCleared(false)
       onApplied({ source, url: url.trim(), clusterId: clusterId.trim(), apiKeySet: applied.apiKeySet })
-      setApply({ status: 'connected', address: applied.source })
+      setApply({ status: 'connected', source: applied.source, address: applied.address })
     } catch (err) {
       setApply({ status: 'failed', error: String(err) })
     }
@@ -1402,7 +1452,7 @@ function CostSection({
   return (
     <div className="space-y-5">
       {sourceEnvManaged && (
-        <div className={clsx(
+        <div id="cost-source-managed" className={clsx(
           'rounded-md border p-3',
           sourceEnvError
             ? 'border-red-500/30 bg-red-500/[0.07]'
@@ -1423,70 +1473,105 @@ function CostSection({
         </div>
       )}
 
-      <div>
-        <label className="mb-1 block text-sm font-medium text-theme-text-primary">Cost data source</label>
-        <p className="mb-1 text-xs text-theme-text-tertiary">
+      <div className="space-y-4 rounded-lg border border-theme-border bg-theme-base/40 p-4">
+        <div>
+          <p className="text-sm font-semibold text-theme-text-primary">Cost source</p>
+          <p className="mt-0.5 text-xs text-theme-text-tertiary">
+            Source changes apply here. They are separate from the currency preference below.
+          </p>
+        </div>
+        <div>
+        <label htmlFor="cost-source" className="mb-1 block text-sm font-medium text-theme-text-primary">Data source</label>
+        <p id="cost-source-help" className="mb-1 text-xs text-theme-text-tertiary">
           Automatic uses existing OpenCost metrics first, then Kubecost. Leave it selected unless
           you need to force one source.
         </p>
-        <select
+        <SelectMenu
+          id="cost-source"
           value={source}
-          onChange={(event) => { onChangeSource(event.target.value as typeof source); setApply({ status: 'idle' }) }}
+          options={[
+            { value: 'auto', label: 'Automatic (recommended)' },
+            { value: 'prometheus', label: 'OpenCost metrics only' },
+            { value: 'kubecost', label: 'Kubecost only' },
+          ]}
+          onChange={(value) => { onChangeSource(value as typeof source); setApply({ status: 'idle' }) }}
           disabled={sourceEnvManaged}
-          className="w-full rounded-md border border-theme-border bg-theme-elevated px-3 py-1.5 text-sm text-theme-text-primary focus:border-skyhook-500 focus:outline-none disabled:opacity-60"
-          aria-label="Cost data source"
-        >
-          <option value="auto">Automatic (recommended)</option>
-          <option value="prometheus">OpenCost metrics only</option>
-          <option value="kubecost">Kubecost only</option>
-        </select>
+          className="w-full"
+          ariaLabel="Cost data source"
+          ariaDescribedBy={sourceEnvManaged ? 'cost-source-help cost-source-managed' : 'cost-source-help'}
+        />
       </div>
 
       {source !== 'prometheus' && (
-        <div className="space-y-3 rounded-lg border border-theme-border bg-theme-base/40 p-3">
+        <div className="space-y-3 border-t border-theme-border-subtle pt-4">
           <p className="text-xs font-medium text-theme-text-secondary">
             {source === 'auto' ? 'Kubecost fallback' : 'Kubecost connection'}
           </p>
+          <button
+            type="button"
+            onClick={() => setAdvancedOpen((open) => !open)}
+            className="flex w-full items-center gap-1.5 rounded-md py-1 text-left text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary"
+            aria-expanded={advancedOpen}
+          >
+            <ChevronRight className={clsx('h-3.5 w-3.5 transition-transform', advancedOpen && 'rotate-90')} />
+            Advanced connection settings
+          </button>
+          {advancedOpen && (
+            <div className="space-y-3 rounded-md border border-theme-border-subtle bg-theme-base/60 p-3">
+              <div>
+                <label htmlFor="cost-kubecost-url" className="mb-1 block text-sm font-medium text-theme-text-primary">Kubecost URL</label>
+                <p id="cost-kubecost-url-help" className="mb-1 text-xs text-theme-text-tertiary">
+                  Leave blank when Kubecost runs in this cluster. Enter the central Aggregator URL
+                  for an agent-only or federated setup.
+                </p>
+                <Input
+                  id="cost-kubecost-url"
+                  aria-describedby={sourceEnvManaged ? 'cost-kubecost-url-help cost-source-managed' : 'cost-kubecost-url-help'}
+                  value={url}
+                  onChange={(event) => { onChangeUrl(event.target.value); setApply({ status: 'idle' }) }}
+                  disabled={sourceEnvManaged}
+                  placeholder="Auto-discover, or https://kubecost.example.com"
+                  className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
+                />
+              </div>
+              <div>
+                <label htmlFor="cost-kubecost-cluster-id" className="mb-1 block text-sm font-medium text-theme-text-primary">Cluster ID</label>
+                <p id="cost-kubecost-cluster-id-help" className="mb-1 text-xs text-theme-text-tertiary">
+                  Usually detected automatically. Set it only if detection fails or the Kubecost
+                  server contains data for more than one cluster. Use the <code>CLUSTER_ID</code>{' '}
+                  value configured on the FinOps Agent or Aggregator.
+                </p>
+                <Input
+                  id="cost-kubecost-cluster-id"
+                  aria-describedby={sourceEnvManaged ? 'cost-kubecost-cluster-id-help cost-source-managed' : 'cost-kubecost-cluster-id-help'}
+                  value={clusterId}
+                  onChange={(event) => { onChangeClusterId(event.target.value); setApply({ status: 'idle' }) }}
+                  disabled={sourceEnvManaged}
+                  placeholder="Auto-detect CLUSTER_ID"
+                  className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
+                />
+              </div>
+            </div>
+          )}
           <div>
-            <label className="mb-1 block text-sm font-medium text-theme-text-primary">Kubecost URL (advanced)</label>
-            <p className="mb-1 text-xs text-theme-text-tertiary">
-              Leave blank when Kubecost runs in this cluster. Enter the central URL only for an
-              agent-only or federated Kubecost setup.
-            </p>
-            <Input
-              value={url}
-              onChange={(event) => { onChangeUrl(event.target.value); setApply({ status: 'idle' }) }}
-              disabled={sourceEnvManaged}
-              placeholder="auto-discover, or https://kubecost.example.com"
-              className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-sm font-medium text-theme-text-primary">Cluster ID</label>
-            <p className="mb-1 text-xs text-theme-text-tertiary">
-              Usually detected automatically. Set it only if detection fails or the Kubecost
-              server contains data for more than one cluster.
-            </p>
-            <Input
-              value={clusterId}
-              onChange={(event) => { onChangeClusterId(event.target.value); setApply({ status: 'idle' }) }}
-              disabled={sourceEnvManaged}
-              placeholder="auto-detect CLUSTER_ID"
-              className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-sm font-medium text-theme-text-primary">API key (optional)</label>
-            <p className="mb-1 text-xs text-theme-text-tertiary">
-              Only needed when Kubecost requires authentication. Radar stores it unencrypted in this
-              instance&apos;s owner-only config file and never shows it again. For shared deployments, use
-              a Kubernetes Secret through Helm.{apiKeySet && !apiKeyCleared ? ' A key is configured.' : ''}
+            <label htmlFor="cost-kubecost-api-key" className="mb-1 block text-sm font-medium text-theme-text-primary">API key (optional)</label>
+            <p id="cost-kubecost-api-key-help" className="mb-1 text-xs text-theme-text-tertiary">
+              Only needed when Kubecost requires authentication. {deploymentMode === 'local' ? (
+                <>Radar stores it unencrypted in this machine&apos;s owner-only settings file and never returns it through the API.</>
+              ) : (
+                <>For this in-cluster deployment, create a Kubernetes Secret and set the Helm value <code>cost.kubecost.existingSecret</code>. A key entered here is stored unencrypted in this pod&apos;s temporary owner-only settings file and can disappear when the pod restarts. Radar never returns it through the API.</>
+              )}
+              {apiKeySet && !apiKeyCleared ? ' A key is configured.' : ''}
             </p>
             <div className="flex items-center gap-2">
               <Input
+                id="cost-kubecost-api-key"
+                aria-describedby={sourceEnvManaged ? 'cost-kubecost-api-key-help cost-source-managed' : 'cost-kubecost-api-key-help'}
                 type="password"
                 value={apiKey}
                 onChange={(event) => { setApiKey(event.target.value); setApiKeyTouched(true); setApiKeyCleared(false); setApply({ status: 'idle' }) }}
+                autoComplete="off"
+                spellCheck={false}
                 disabled={sourceEnvManaged}
                 placeholder={apiKeySet && !apiKeyCleared ? 'Configured — enter to replace' : 'Optional API key'}
                 className="min-w-0 flex-1 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
@@ -1494,6 +1579,7 @@ function CostSection({
               {apiKeySet && !apiKeyCleared && !sourceEnvManaged && (
                 <button
                   type="button"
+                  aria-label="Clear saved Kubecost API key"
                   onClick={() => { setApiKey(''); setApiKeyTouched(false); setApiKeyCleared(true); setApply({ status: 'idle' }) }}
                   className="px-2 py-1.5 text-xs text-theme-text-tertiary hover:text-theme-text-primary"
                 >
@@ -1516,28 +1602,35 @@ function CostSection({
           type="button"
           onClick={applySource}
           disabled={apply.status === 'applying'}
+          aria-busy={apply.status === 'applying'}
           className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium btn-brand disabled:opacity-50"
         >
           {apply.status === 'applying' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plug className="h-3.5 w-3.5" />}
-          Test &amp; apply
+          {apply.status === 'applying' ? 'Applying…' : costSourceApplyLabel(source)}
         </button>
         {apply.status === 'connected' && (
-          <p className="mt-1 flex items-center gap-1 text-xs text-green-600 dark:text-green-400/80">
-            <Check className="h-3 w-3" /> Applied · active source: {apply.address}
+          <p role="status" aria-live="polite" className="mt-1 flex items-center gap-1 text-xs text-green-600 dark:text-green-400/80">
+            <Check className="h-3 w-3" /> Applied · active source: {costSourceLabel(apply.source)}
+            {apply.address ? ` · ${apply.address}` : ''}
           </p>
         )}
         {apply.status === 'failed' && (
-          <p className="mt-1 text-xs text-red-600 dark:text-red-400/80">{apply.error}</p>
+          <p role="alert" className="mt-1 text-xs text-red-600 dark:text-red-400/80">{apply.error}</p>
         )}
-        {draftDirty && apply.status !== 'applying' && (
-          <p className="mt-1 flex items-center gap-1 text-xs text-warning-text">
+        {draftDirty && apply.status === 'idle' && (
+          <p role="status" aria-live="polite" className="mt-1 flex items-center gap-1 text-xs text-warning-text">
             <AlertTriangle className="h-3 w-3" /> Unapplied source changes
           </p>
         )}
       </div>}
+      </div>
 
-      <div className="border-t border-theme-border-subtle pt-4">
-        <label className="mb-1 block text-sm font-medium text-theme-text-primary">
+      <div className="rounded-lg border border-theme-border bg-theme-base/40 p-4">
+        <p className="text-sm font-semibold text-theme-text-primary">Display currency</p>
+        <p className="mt-0.5 text-xs text-theme-text-tertiary">
+          This preference saves with the Settings footer and does not test the cost source.
+        </p>
+        <label htmlFor="cost-currency" className="mb-1 mt-3 block text-sm font-medium text-theme-text-primary">
           Currency override
         </label>
         <p className="mb-1 text-xs text-theme-text-tertiary">
@@ -1546,6 +1639,7 @@ function CostSection({
           detection. Radar changes only the label; it does not convert amounts.
         </p>
         <SelectMenu
+          id="cost-currency"
           value={currency}
           options={currencyOptionsForValue(currency)}
           onChange={onChange}
@@ -1665,6 +1759,12 @@ type ApplyState =
   | { status: 'connected'; address: string }
   | { status: 'unreachable'; error: string } // persisted, but the probe failed
   | { status: 'failed'; error: string }       // request itself failed — nothing saved
+
+type CostApplyState =
+  | { status: 'idle' }
+  | { status: 'applying' }
+  | { status: 'connected'; source: 'prometheus' | 'kubecost'; address?: string }
+  | { status: 'failed'; error: string }
 
 type HeaderRow = { key: string; value: string }
 

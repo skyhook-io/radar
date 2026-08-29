@@ -65,11 +65,6 @@ func (s *Server) handleOpenCostApplication(w http.ResponseWriter, r *http.Reques
 		resp := pkgopencost.BuildApplicationCostResponse(inputs, unavailable, unsupported, namespaceCosts)
 		resp.Currency = currency
 		resp.Source = "kubecost"
-		for _, costs := range namespaceCosts {
-			if costs != nil {
-				resp.DataThrough = pkgopencost.LatestKubecostTimestamp(resp.DataThrough, costs.DataThrough)
-			}
-		}
 		s.writeJSON(w, resp)
 		return
 	}

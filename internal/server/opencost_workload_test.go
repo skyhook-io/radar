@@ -131,8 +131,8 @@ func TestOpenCostApplicationUsesLatestKubecostDataThrough(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if resp.DataThrough != "2026-08-26T08:30:00Z" {
-		t.Fatalf("dataThrough = %q, want latest instant", resp.DataThrough)
+	if resp.DataThrough != "2026-08-26T08:30:00Z" || resp.Window != "1h" {
+		t.Fatalf("dataThrough = %q, window = %q; want latest instant and 1h", resp.DataThrough, resp.Window)
 	}
 }
 
@@ -140,6 +140,7 @@ func TestFocusOpenCostWorkloadScaledToZeroReturnsCurrentZero(t *testing.T) {
 	resp := focusOpenCostWorkload(&pkgopencost.WorkloadCostResponse{
 		Available: false,
 		Reason:    pkgopencost.ReasonNoMetrics,
+		Window:    "1d",
 		Namespace: "default",
 	}, "Deployment", "default", "checkout", 0)
 
@@ -154,6 +155,9 @@ func TestFocusOpenCostWorkloadScaledToZeroReturnsCurrentZero(t *testing.T) {
 	}
 	if resp.Current.HourlyCost != 0 || resp.Current.Replicas != 0 {
 		t.Fatalf("current row should be zero cost and zero replicas, got %+v", resp.Current)
+	}
+	if resp.Window != "" {
+		t.Fatalf("window = %q, want empty for inferred zero row", resp.Window)
 	}
 }
 

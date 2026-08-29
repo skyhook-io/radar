@@ -1158,7 +1158,11 @@ PolicyReport findings are policy posture, not live operational failure, so they 
 Radar supports two read-only cost paths. Auto mode keeps OpenCost-compatible metrics from the
 already-discovered Prometheus when representative cost data is usable; when those metrics are
 absent, it tries the current allocation and asset APIs of a Kubecost 3 Aggregator. Source selection
-can also be pinned to `prometheus` or `kubecost` in Settings → Cost, `config.json`, or Helm.
+can also be pinned to `prometheus` or `kubecost` in Settings → Cost, `config.json`, or Helm. When
+Auto positively finds neither source, Radar reports that state and retries discovery; it does not
+label an absent Prometheus source as active. Settings tests Auto and Kubecost before saving, while an
+explicit Prometheus selection remains a saveable preference for installations being configured in
+stages.
 
 For Kubecost, Radar auto-discovers only an active Aggregator StatefulSet and its matching Service
 with the official named `tcp-api` port 9004. In-cluster Radar connects through Service DNS; local
@@ -1186,7 +1190,8 @@ ambiguous. A manually configured Prometheus URL skips cluster inference because 
 cluster, while a selected Kubecost source still uses its connected-cluster workload evidence. If
 evidence is unavailable, Radar uses USD. Override the label in Settings → Cost or
 `opencostCurrency` (CLI: `--opencost-currency`; Helm: `cost.currency`). Radar labels values but does
-not convert them.
+not convert them. The Settings currency preference saves independently of the live source action,
+so changing its label never requires the source probe to succeed.
 
 ### What Radar Shows
 

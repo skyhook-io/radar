@@ -139,7 +139,7 @@ func BuildPodOwnerLookup(ns string) pkgopencost.PodOwnerLookup {
 		return nil
 	}
 	pods, err := rc.Pods().Pods(ns).List(labels.Everything())
-	if err != nil || len(pods) == 0 {
+	if err != nil {
 		return nil
 	}
 	owners := make(map[string]pkgopencost.WorkloadOwner, len(pods))
@@ -309,6 +309,9 @@ func resolvedCurrency(resolve func() string) string {
 }
 
 func ConnectionFailureReason(err error) string {
+	if errors.Is(err, ErrNoCostSource) {
+		return pkgopencost.ReasonNoCostSource
+	}
 	if errors.Is(err, prometheuspkg.ErrPrometheusNotFound) {
 		return pkgopencost.ReasonNoPrometheus
 	}

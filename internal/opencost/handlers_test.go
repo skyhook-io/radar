@@ -9,9 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/k8s"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	pkgopencost "github.com/skyhook-io/radar/pkg/opencost"
 	"github.com/skyhook-io/radar/pkg/prom"
+	fakeclientset "k8s.io/client-go/kubernetes/fake"
 )
 
 func TestUnavailableResponsesIncludeCurrency(t *testing.T) {
@@ -44,6 +46,21 @@ func TestUnavailableResponsesIncludeCurrency(t *testing.T) {
 				t.Errorf("currency = %q, want GBP", body.Currency)
 			}
 		})
+	}
+}
+
+func TestBuildPodOwnerLookupTreatsEmptyNamespaceAsConclusive(t *testing.T) {
+	if err := k8s.InitTestResourceCache(fakeclientset.NewSimpleClientset()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetResourceCache)
+
+	lookup := BuildPodOwnerLookup("empty")
+	if lookup == nil {
+		t.Fatal("empty pod list returned an inconclusive nil lookup")
+	}
+	if _, found := lookup("old-pod"); found {
+		t.Fatal("empty pod list reported a historical pod as live")
 	}
 }
 
@@ -164,7 +181,7 @@ func TestFilterCostSummaryReportsNoMetricsForVisibleNamespacesWithoutRows(t *tes
 		Namespaces: []pkgopencost.NamespaceCost{{Name: "private", HourlyCost: 11}},
 	}
 	filterCostSummary(resp, []string{"allowed"})
-	if resp.Available || resp.Reason != pkgopencost.ReasonNoMetrics || len(resp.Namespaces) != 0 {
+	if resp.Available || resp.Reason != pkgopencost.ReasonNoMetrics || len(resp.Namespaces) != 0 || len(resp.NamespaceScope) != 1 || resp.NamespaceScope[0] != "allowed" {
 		t.Fatalf("unexpected empty visible summary: %#v", resp)
 	}
 }
@@ -197,6 +214,13 @@ func TestConnectionFailureReasonRecognizesHTTPAuthentication(t *testing.T) {
 		if got := ConnectionFailureReason(&prom.HTTPError{StatusCode: status}); got != pkgopencost.ReasonAuthentication {
 			t.Fatalf("status %d reason = %q, want %q", status, got, pkgopencost.ReasonAuthentication)
 		}
+	}
+}
+
+func TestConnectionFailureReasonRecognizesNoCostSource(t *testing.T) {
+	err := fmt.Errorf("selection failed: %w", ErrNoCostSource)
+	if got := ConnectionFailureReason(err); got != pkgopencost.ReasonNoCostSource {
+		t.Fatalf("reason = %q, want %q", got, pkgopencost.ReasonNoCostSource)
 	}
 }
 

@@ -28,8 +28,11 @@ import { costUnavailableReasonFromError } from './errors'
 import {
   costFreshnessLabel,
   costIntegrationUnavailableMessage,
+  costRateLabels,
   costSourceLabel,
+  isCostDiscoveryPending,
 } from './source'
+import { useNavCustomization } from '../../context/NavCustomization'
 
 type ApplicationCostState =
   | 'loading'
@@ -58,8 +61,9 @@ export function ApplicationCostTab({
   workloads,
   onSelectWorkloadCost,
 }: ApplicationCostTabProps) {
+  const settingsAvailable = !useNavCustomization().embedded
   const [range, setRange] = useState<CostTimeRange>('24h')
-  const [noPrometheusSince, setNoPrometheusSince] = useState<number | null>(null)
+  const [discoverySince, setDiscoverySince] = useState<number | null>(null)
   const supportedWorkloads = useMemo(() => applicationCostWorkloads(workloads), [workloads])
   const unsupportedCount = workloads.length - supportedWorkloads.length
   const queriesEnabled = supportedWorkloads.length > 0
@@ -82,10 +86,10 @@ export function ApplicationCostTab({
   })
 
   useEffect(() => {
-    if (state === 'no_prometheus') {
-      setNoPrometheusSince((prev) => prev ?? Date.now())
+    if (isCostDiscoveryPending(state)) {
+      setDiscoverySince((prev) => prev ?? Date.now())
     } else {
-      setNoPrometheusSince(null)
+      setDiscoverySince(null)
     }
   }, [state])
 
@@ -101,6 +105,7 @@ export function ApplicationCostTab({
       <ApplicationCostUnavailable
         state="no_metrics"
         message="No steady-state workloads in this app are currently cost-attributed."
+        settingsAvailable={settingsAvailable}
       />
     )
   }
@@ -120,6 +125,7 @@ export function ApplicationCostTab({
     state === 'query_error' ||
     state === 'access_denied' ||
     state === 'not_found' ||
+    state === 'no_cost_source' ||
     state === 'source_unavailable' ||
     state === 'authentication_error' ||
     state === 'configuration_mismatch' ||
@@ -127,20 +133,20 @@ export function ApplicationCostTab({
     state === 'history_unsupported' ||
     state === 'load_error'
   ) {
-    const discoveryAgeMs = noPrometheusSince == null ? 0 : Date.now() - noPrometheusSince
-    if (state === 'no_prometheus' && discoveryAgeMs < COST_DISCOVERY_GRACE_MS) {
+    const discoveryAgeMs = discoverySince == null ? 0 : Date.now() - discoverySince
+    if (isCostDiscoveryPending(state) && discoveryAgeMs < COST_DISCOVERY_GRACE_MS) {
       return (
         <ApplicationCostDiscovering
           isFetching={currentQuery.isFetching || trendQuery.isFetching}
           onRetry={() => {
-            setNoPrometheusSince(Date.now())
+            setDiscoverySince(Date.now())
             currentQuery.refetch()
             trendQuery.refetch()
           }}
         />
       )
     }
-    return <ApplicationCostUnavailable state={state} />
+    return <ApplicationCostUnavailable state={state} settingsAvailable={settingsAvailable} />
   }
 
   const current = currentQuery.data
@@ -163,6 +169,8 @@ export function ApplicationCostTab({
   const trendCurrency = trend?.currency ?? current?.currency ?? DEFAULT_COST_CURRENCY
   const source = current?.source ?? trend?.source
   const historyUnsupported = trend?.reason === 'history_unsupported'
+  const currentWindow = current?.window
+  const rateLabels = costRateLabels(currentWindow)
 
   return (
     <div className="mx-auto w-full max-w-[1600px] space-y-4">
@@ -211,14 +219,14 @@ export function ApplicationCostTab({
         {historyUnsupported ? (
           <div className="grid gap-4 p-4 sm:grid-cols-2">
             <CostMetricBlock
-              label="Current hourly"
+              label={rateLabels.hourly}
               value={totals ? formatCostPerHour(hourly, currentCurrency) : '—'}
               subvalue={`${included} of ${total} workloads included`}
             />
             <CostMetricBlock
               label="Projected monthly"
               value={totals ? formatProjectedMonthlyCost(hourly, currentCurrency) : '—'}
-              subvalue="Current hourly rate × 730 hours"
+              subvalue={`${rateLabels.rate} × 730 hours`}
             />
           </div>
         ) : (
@@ -243,7 +251,7 @@ export function ApplicationCostTab({
                 value={totals ? formatProjectedMonthlyCost(hourly, currentCurrency) : '—'}
                 subvalue={
                   totals
-                    ? `${formatCostPerHour(hourly, currentCurrency)} current rate`
+                    ? `${formatCostPerHour(hourly, currentCurrency)} · ${rateLabels.rate}`
                     : 'Current allocation unavailable'
                 }
               />
@@ -284,7 +292,7 @@ export function ApplicationCostTab({
           value={totals ? formatProjectedDailyRate(hourly, currentCurrency) : '—'}
           subvalue={
             totals
-              ? `${formatCostPerHour(hourly, currentCurrency)} current hourly rate`
+              ? `${formatCostPerHour(hourly, currentCurrency)} · ${rateLabels.rate}`
               : 'Current allocation unavailable'
           }
         />
@@ -301,6 +309,7 @@ export function ApplicationCostTab({
         cpuUsageAvailable={totals?.cpuUsageAvailable ?? false}
         memoryUsageAvailable={totals?.memoryUsageAvailable ?? false}
         scopeNote="Included workloads only"
+        window={source === 'kubecost' ? currentWindow : undefined}
       />
 
       <section className="rounded-lg border border-theme-border bg-theme-surface/50">
@@ -310,7 +319,7 @@ export function ApplicationCostTab({
               Workload contributors
             </div>
             <div className="text-xs text-theme-text-tertiary">
-              Projected monthly from current allocation, sorted by spend
+              Projected monthly from the {rateLabels.rate}, sorted by spend
             </div>
           </div>
           <div className="text-xs text-theme-text-tertiary">{rows.length} tracked</div>
@@ -342,14 +351,14 @@ export function ApplicationCostTab({
       </section>
 
       <div className="text-xs text-theme-text-tertiary">
-        {costSourceLabel(source)} &middot; {costFreshnessLabel(source, '1h', current?.dataThrough)}.{' '}
+        {costSourceLabel(source)} &middot; {costFreshnessLabel(source, source === 'kubecost' ? currentWindow : '1h', current?.dataThrough)}.{' '}
         {currentCurrency !== DEFAULT_COST_CURRENCY && (
           <>Labeled {currentCurrency}; no conversion. </>
         )}
         {historyUnsupported
           ? 'Historical application charts are not available for Kubecost yet. '
           : 'Historical spend uses the selected range. '}
-        Projected monthly values multiply current hourly allocation. Batch/job cost is separate;
+        Projected monthly values multiply the {rateLabels.rate}. Batch/job cost is separate;
         storage/PVC and network costs remain at namespace and cluster level.
       </div>
     </div>
@@ -382,6 +391,7 @@ export function getApplicationCostState(
     costUnavailableReasonFromError(status.trendError)
   if (
     reason === 'no_prometheus' ||
+    reason === 'no_cost_source' ||
     reason === 'query_error' ||
     reason === 'access_denied' ||
     reason === 'not_found' ||
@@ -496,6 +506,7 @@ function applicationCostKey(ref: { kind: string; namespace: string; name: string
 
 function reasonLabel(reason?: CostUnavailableReason) {
   if (reason === 'no_prometheus') return 'Metrics backend not found'
+  if (reason === 'no_cost_source') return 'Cost source not found'
   if (reason === 'query_error') return 'Cost query failed'
   if (reason === 'access_denied') return 'No access to this workload'
   if (reason === 'not_found') return 'Workload not found'
@@ -539,13 +550,15 @@ function ApplicationCostDiscovering({
 function ApplicationCostUnavailable({
   state,
   message,
+  settingsAvailable,
 }: {
   state: CostUnavailableReason | 'load_error'
   message?: string
+  settingsAvailable: boolean
 }) {
   const text =
     message ??
-    costIntegrationUnavailableMessage(state) ??
+    costIntegrationUnavailableMessage(state, settingsAvailable) ??
     (state === 'no_prometheus'
       ? 'No compatible metrics backend was found. OpenCost application cost requires OpenCost metrics in a PromQL-compatible backend.'
       : state === 'query_error'
@@ -558,7 +571,7 @@ function ApplicationCostUnavailable({
             ? 'Cost data is unavailable because the referenced workloads no longer exist.'
             : state === 'load_error'
               ? 'Could not load application cost data. Check access to these workloads and try again.'
-              : 'OpenCost workload metrics were not found for this application.')
+              : 'No workload cost data was returned for this application by the active cost source.')
   return (
     <div className="flex h-full min-h-[320px] items-center justify-center">
       <div className="flex max-w-md flex-col items-center gap-3 text-center text-theme-text-secondary">
