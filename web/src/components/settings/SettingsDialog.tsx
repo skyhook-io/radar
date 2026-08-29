@@ -156,7 +156,9 @@ export function SettingsDialog({
   const [costCredentialDirty, setCostCredentialDirty] = useState(false)
   const [costDraftReset, setCostDraftReset] = useState(0)
   const [costCurrencySaving, setCostCurrencySaving] = useState(false)
+  const configSavingRef = useRef(false)
   const costCurrencySavingRef = useRef(false)
+  const pendingCloseActionRef = useRef<(() => void) | null>(null)
   const { data: argoSectionStatus, refetch: refetchArgoSectionStatus } = useArgoStatus(
     open && section === 'argocd'
   )
@@ -212,6 +214,7 @@ export function SettingsDialog({
     setSaveMessage(null)
     setLoadError(null)
     setConfirmingClose(false)
+    pendingCloseActionRef.current = null
     setCostCredentialDirty(false)
     setCostDraftReset((current) => current + 1)
     setAiSaved(false)
@@ -257,7 +260,8 @@ export function SettingsDialog({
   }, [])
 
   const saveConfig = useCallback(async (): Promise<boolean> => {
-    if (!configData || costCurrencySavingRef.current) return false
+    if (!configData || configSavingRef.current || costCurrencySavingRef.current) return false
+    configSavingRef.current = true
     setSaving(true)
     setSaveMessage(null)
     try {
@@ -297,12 +301,14 @@ export function SettingsDialog({
       setSaveMessage(`Error: ${err}`)
       return false
     } finally {
+      configSavingRef.current = false
       setSaving(false)
     }
   }, [editedConfig, configData])
 
   const saveCostCurrency = useCallback(async (value: string): Promise<void> => {
     if (!configData) throw new Error('Radar configuration is not available')
+    if (configSavingRef.current) throw new Error('Other settings are being saved')
     if (costCurrencySavingRef.current) throw new Error('A currency change is already being saved')
     costCurrencySavingRef.current = true
     setCostCurrencySaving(true)
@@ -363,10 +369,17 @@ export function SettingsDialog({
     setSaveMessage(null)
   }, [configData])
 
+  const finishClose = useCallback(() => {
+    const action = pendingCloseActionRef.current
+    pendingCloseActionRef.current = null
+    onClose()
+    action?.()
+  }, [onClose])
+
   const handleSaveAndClose = useCallback(async () => {
     const ok = await saveConfig()
-    if (ok) onClose()
-  }, [saveConfig, onClose])
+    if (ok) finishClose()
+  }, [saveConfig, finishClose])
 
   const reviewCostDraft = useCallback(() => {
     setConfirmingClose(false)
@@ -381,11 +394,17 @@ export function SettingsDialog({
   // Close guard: a pending startup edit prompts an inline confirm rather than
   // silently discarding. An unsaved AI draft is re-derivable, so it's fine to
   // drop it on close.
-  const requestCloseRef = useRef<() => void>(() => {})
-  requestCloseRef.current = () => {
+  const requestCloseRef = useRef<(afterClose?: () => void) => void>(() => {})
+  requestCloseRef.current = (afterClose) => {
+    pendingCloseActionRef.current = afterClose ?? null
     if (canEditConfig && (configDirty || costIntegrationDirty)) setConfirmingClose(true)
-    else onClose()
+    else finishClose()
   }
+
+  const navigateFromSettings = useCallback((resource: ResourceRef) => {
+    if (!onNavigateToResource) return
+    requestCloseRef.current(() => onNavigateToResource(resource))
+  }, [onNavigateToResource])
 
   useEffect(() => {
     if (!open) return
@@ -643,7 +662,8 @@ export function SettingsDialog({
                 managed={configData?.openCostCurrencyManaged ?? false}
                 effectiveCurrency={configData?.effective.opencostCurrency ?? ''}
                 deploymentMode={deploymentMode}
-                onNavigateToResource={onNavigateToResource}
+                settingsSaving={saving}
+                onNavigateToResource={navigateFromSettings}
                 onApplyCurrency={saveCostCurrency}
                 onChangeSource={(value) => updateConfigField('costSource', value)}
                 onChangeUrl={(value) => updateConfigField('kubecostUrl', value || undefined)}
@@ -802,14 +822,17 @@ export function SettingsDialog({
                 </span>
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => setConfirmingClose(false)}
+                    onClick={() => {
+                      pendingCloseActionRef.current = null
+                      setConfirmingClose(false)
+                    }}
                     disabled={saving}
                     className="px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50"
                   >
                     Keep editing
                   </button>
                   <button
-                    onClick={onClose}
+                    onClick={finishClose}
                     disabled={saving}
                     className="px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50"
                   >
@@ -1369,6 +1392,7 @@ function CostSection({
   managed,
   effectiveCurrency,
   deploymentMode,
+  settingsSaving,
   onNavigateToResource,
   onApplyCurrency,
   onChangeSource,
@@ -1389,6 +1413,7 @@ function CostSection({
   managed: boolean
   effectiveCurrency: string
   deploymentMode: 'local' | 'in-cluster' | 'cloud'
+  settingsSaving: boolean
   onNavigateToResource?: (resource: ResourceRef) => void
   onApplyCurrency: (value: string) => Promise<void>
   onChangeSource: (value: 'auto' | 'prometheus' | 'kubecost') => void
@@ -1727,6 +1752,7 @@ function CostSection({
           ariaLabel="Display currency"
           ariaDescribedBy="cost-currency-help"
           searchPlaceholder="Search currencies by name or code"
+          disabled={settingsSaving || currencySave.status === 'saving'}
           className="w-full"
         />
         {currencySave.status === 'saving' && (
