@@ -17,6 +17,7 @@ import {
 } from '../../api/client'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
 import { Input, SelectMenu } from '@skyhook-io/k8s-ui'
+import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
 import { Tooltip } from '../ui/Tooltip'
 import { AISettingsSection, type AIDraft } from '../diagnose/AISettings'
 import { MyPermissionsContent } from './MyPermissionsDialog'
@@ -100,13 +101,11 @@ interface SettingsDialogProps {
 }
 
 // The settings surface splits into three honest apply buckets:
-//   • Persisted config (kubeconfig, server, timeline, MCP, cost currency) —
-//     saved by the owner-gated footer. Currency applies live unless a startup
-//     flag owns it; the rest restart.
+//   • Persisted startup config (kubeconfig, server, timeline, MCP) — saved by
+//     the owner-gated footer and applied after restart.
 //   • Live integrations (Prometheus, cost source, Argo CD) — their own Apply/Connect endpoints
 //     re-point the running server; effect immediately, NOT part of footer dirty.
-//   • AI diagnose — client-side prefs, self-saving, editable by everyone.
-// Persisted footer fields include startup settings plus the live currency override.
+//   • Self-saving preferences (cost currency, AI diagnose) — applied immediately.
 // Integration fields (prometheusUrl, argoCdUrl, argoCdInsecureTls) apply through
 // their own controls and are excluded here. Every field is normalized so
 // unset≡default doesn't read as a change.
@@ -122,7 +121,6 @@ function normalizeStartup(c: Config) {
     timelineDbPath: c.timelineDbPath ?? '',
     historyLimit: c.historyLimit ?? null,
     mcp: c.mcp ?? true,
-    opencostCurrency: c.opencostCurrency?.trim().toUpperCase() ?? '',
     restoreLastDesktopContext: c.restoreLastDesktopContext ?? true,
   }
 }
@@ -154,6 +152,8 @@ export function SettingsDialog({
   const [confirmingClose, setConfirmingClose] = useState(false)
   const [costCredentialDirty, setCostCredentialDirty] = useState(false)
   const [costDraftReset, setCostDraftReset] = useState(0)
+  const [costCurrencySaving, setCostCurrencySaving] = useState(false)
+  const costCurrencySavingRef = useRef(false)
   const { data: argoSectionStatus, refetch: refetchArgoSectionStatus } = useArgoStatus(
     open && section === 'argocd'
   )
@@ -192,7 +192,6 @@ export function SettingsDialog({
     edN.timelineStorage !== svN.timelineStorage ||
     edN.timelineDbPath !== svN.timelineDbPath ||
     edN.historyLimit !== svN.historyLimit
-  const costDirty = edN.opencostCurrency !== svN.opencostCurrency
   const costSourceDirty =
     (editedConfig.costSource ?? 'auto') !== (configData?.file.costSource ?? 'auto') ||
     (editedConfig.kubecostUrl ?? '').trim() !== (configData?.file.kubecostUrl ?? '').trim() ||
@@ -201,7 +200,7 @@ export function SettingsDialog({
   // Merged-pane dirty for the flat nav (Connection = cluster+server, Advanced = mcp+timeline).
   const connectionDirty = clusterDirty || serverDirty
   const advancedDirty = mcpDirty || timelineDirty
-  const configDirty = configData != null && (connectionDirty || costDirty || advancedDirty)
+  const configDirty = configData != null && (connectionDirty || advancedDirty)
 
   // Load config on open + snapshot AI prefs + pick a default section that's
   // actually accessible to the current identity.
@@ -255,7 +254,7 @@ export function SettingsDialog({
   }, [])
 
   const saveConfig = useCallback(async (): Promise<boolean> => {
-    if (!configData) return false
+    if (!configData || costCurrencySavingRef.current) return false
     setSaving(true)
     setSaveMessage(null)
     try {
@@ -263,9 +262,10 @@ export function SettingsDialog({
       // LAST-COMMITTED values (from configData.file), never an un-applied draft:
       // sending a typed-but-not-applied argoCdUrl trips the server-side origin
       // guard that clears the stored Argo token, and a stale value would revert a
-      // live-applied integration. configData.file is kept in sync on Apply/Connect.
+      // live-applied integration. configData.file is kept in sync after every live save.
       const body: Config = {
         ...editedConfig,
+        opencostCurrency: configData.file.opencostCurrency,
         prometheusUrl: configData.file.prometheusUrl,
         costSource: configData.file.costSource,
         kubecostUrl: configData.file.kubecostUrl,
@@ -288,23 +288,7 @@ export function SettingsDialog({
       const committed = { ...body, opencostCurrency: saved.opencostCurrency }
       setEditedConfig((prev) => ({ ...prev, opencostCurrency: saved.opencostCurrency }))
       setConfigData((prev) => (prev ? { ...prev, file: committed } : prev))
-      if (costDirty && !configData.openCostCurrencyManaged) {
-        void queryClient.invalidateQueries({
-          predicate: (query) =>
-            typeof query.queryKey[0] === 'string' && query.queryKey[0].startsWith('opencost-'),
-        })
-      }
-      if (costDirty && configData.openCostCurrencyManaged) {
-        setSaveMessage(connectionDirty || advancedDirty
-          ? 'Saved. CLI/Helm currency remains active; restart without that override to apply it. Restart Radar for other changes.'
-          : 'Saved. CLI/Helm currency remains active; restart without that override to apply this setting.')
-      } else {
-        setSaveMessage(connectionDirty || advancedDirty
-          ? costDirty
-            ? 'Saved. Currency applied immediately; restart Radar for other changes.'
-            : 'Saved. Restart Radar to apply.'
-          : 'Saved. Applied immediately.')
-      }
+      setSaveMessage('Saved. Restart Radar to apply.')
       return true
     } catch (err) {
       setSaveMessage(`Error: ${err}`)
@@ -312,7 +296,46 @@ export function SettingsDialog({
     } finally {
       setSaving(false)
     }
-  }, [editedConfig, configData, costDirty, connectionDirty, advancedDirty, queryClient])
+  }, [editedConfig, configData])
+
+  const saveCostCurrency = useCallback(async (value: string): Promise<void> => {
+    if (!configData) throw new Error('Radar configuration is not available')
+    if (costCurrencySavingRef.current) throw new Error('A currency change is already being saved')
+    costCurrencySavingRef.current = true
+    setCostCurrencySaving(true)
+    try {
+      const body: Config = {
+        ...configData.file,
+        opencostCurrency: value || undefined,
+      }
+      const res = await fetch(apiUrl('/config'), {
+        method: 'PUT',
+        credentials: getCredentialsMode(),
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => null)
+        const message = data !== null && typeof data === 'object' && 'error' in data && typeof data.error === 'string'
+          ? data.error
+          : res.statusText
+        throw new Error(message)
+      }
+      const saved = await res.json() as Config
+      setEditedConfig((prev) => ({ ...prev, opencostCurrency: saved.opencostCurrency }))
+      setConfigData((prev) => prev ? {
+        ...prev,
+        file: { ...prev.file, opencostCurrency: saved.opencostCurrency },
+      } : prev)
+      void queryClient.invalidateQueries({
+        predicate: (query) =>
+          typeof query.queryKey[0] === 'string' && query.queryKey[0].startsWith('opencost-'),
+      })
+    } finally {
+      costCurrencySavingRef.current = false
+      setCostCurrencySaving(false)
+    }
+  }, [configData, queryClient])
 
   // AI prefs are client-side (localStorage) — commit the staged draft now.
   // setSelectedAgent clears model/effort (they're agent-specific), so set the
@@ -405,7 +428,7 @@ export function SettingsDialog({
     { id: 'perms', label: 'My permissions', icon: Shield, ownerOnly: false, dirty: false },
     { id: 'connection', label: 'Connection', icon: Boxes, ownerOnly: true, dirty: connectionDirty },
     { id: 'prometheus', label: 'Metrics', icon: Activity, ownerOnly: true, dirty: false },
-    { id: 'cost', label: 'Cost', icon: Coins, ownerOnly: true, dirty: costDirty || costIntegrationDirty },
+    { id: 'cost', label: 'Cost', icon: Coins, ownerOnly: true, dirty: costIntegrationDirty },
     { id: 'argocd', label: 'Argo CD', icon: GitBranch, ownerOnly: true, dirty: false },
     { id: 'ai', label: 'AI diagnose', icon: Sparkles, ownerOnly: false, dirty: aiDirty },
     { id: 'advanced', label: 'Advanced', icon: SlidersHorizontal, ownerOnly: true, dirty: advancedDirty },
@@ -600,9 +623,7 @@ export function SettingsDialog({
               id="cost"
               active={section}
               title="Cost"
-              caption={configData?.kubecostEnvManaged
-                ? 'Source is managed by the deployment. Currency saves with the footer.'
-                : 'Source changes apply here; Radar tests Auto and Kubecost first. Currency saves with the footer.'}
+              caption="Choose where Radar gets cost data and how amounts are labeled."
               live
               locked={!canEditConfig}
             >
@@ -619,7 +640,7 @@ export function SettingsDialog({
                 managed={configData?.openCostCurrencyManaged ?? false}
                 effectiveCurrency={configData?.effective.opencostCurrency ?? ''}
                 deploymentMode={deploymentMode}
-                onChange={(value) => updateConfigField('opencostCurrency', value || undefined)}
+                onApplyCurrency={saveCostCurrency}
                 onChangeSource={(value) => updateConfigField('costSource', value)}
                 onChangeUrl={(value) => updateConfigField('kubecostUrl', value || undefined)}
                 onChangeClusterId={(value) => updateConfigField('kubecostClusterId', value || undefined)}
@@ -806,7 +827,7 @@ export function SettingsDialog({
                   {configDirty && (
                     <button
                       onClick={costIntegrationDirty ? saveConfig : handleSaveAndClose}
-                      disabled={saving}
+                      disabled={saving || costCurrencySaving}
                       className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
                     >
                       {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
@@ -851,13 +872,11 @@ export function SettingsDialog({
                   {configDirty && (
                     <button
                       onClick={saveConfig}
-                      disabled={saving}
+                      disabled={saving || costCurrencySaving}
                       className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
                     >
                       {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                      {section === 'cost' && costDirty && !connectionDirty && !advancedDirty
-                        ? 'Save currency'
-                        : 'Save'}
+                      Save
                     </button>
                   )}
                 </div>
@@ -1140,10 +1159,10 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
               <Icon className="w-4 h-4 shrink-0 text-theme-text-tertiary" />
               <span className="text-sm text-theme-text-primary w-24 shrink-0 truncate">{row.label}</span>
               <OverviewStatus tone={row.tone} />
-              <div className="flex-1 min-w-0 flex items-baseline gap-1.5">
-                <span className="text-sm text-theme-text-secondary shrink-0">{row.value}</span>
+              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="truncate text-sm text-theme-text-secondary">{row.value}</span>
                 {row.detail && (
-                  <span className="text-xs text-theme-text-tertiary truncate">{row.detail}</span>
+                  <span className="break-words text-xs leading-4 text-theme-text-tertiary">{row.detail}</span>
                 )}
               </div>
               {row.copyable && (
@@ -1346,7 +1365,7 @@ function CostSection({
   managed,
   effectiveCurrency,
   deploymentMode,
-  onChange,
+  onApplyCurrency,
   onChangeSource,
   onChangeUrl,
   onChangeClusterId,
@@ -1365,7 +1384,7 @@ function CostSection({
   managed: boolean
   effectiveCurrency: string
   deploymentMode: 'local' | 'in-cluster' | 'cloud'
-  onChange: (value: string) => void
+  onApplyCurrency: (value: string) => Promise<void>
   onChangeSource: (value: 'auto' | 'prometheus' | 'kubecost') => void
   onChangeUrl: (value: string) => void
   onChangeClusterId: (value: string) => void
@@ -1377,6 +1396,8 @@ function CostSection({
   const [apiKeyTouched, setApiKeyTouched] = useState(false)
   const [apiKeyCleared, setApiKeyCleared] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [currencyDraft, setCurrencyDraft] = useState(currency)
+  const [currencySave, setCurrencySave] = useState<CurrencySaveState>({ status: 'idle' })
   const apiKeyWillBeUsed = !apiKeyCleared && ((apiKeyTouched && apiKey !== '') || apiKeySet)
   const apiKeyUsesPlainHTTP = apiKeyWillBeUsed && /^http:\/\//i.test(url.trim())
 
@@ -1385,7 +1406,12 @@ function CostSection({
     setApiKeyTouched(false)
     setApiKeyCleared(false)
     setApply({ status: 'idle' })
+    setCurrencySave({ status: 'idle' })
   }, [resetVersion])
+
+  useEffect(() => {
+    setCurrencyDraft(currency)
+  }, [currency])
 
   useEffect(() => {
     onCredentialDirtyChange(apiKeyTouched || apiKeyCleared)
@@ -1449,6 +1475,22 @@ function CostSection({
     }
   }
 
+  const saveCurrency = async (value: string) => {
+    if (currencySave.status === 'saving') return
+    setCurrencyDraft(value)
+    setCurrencySave({ status: 'saving' })
+    try {
+      await onApplyCurrency(value)
+      setCurrencySave({ status: 'saved' })
+    } catch (err) {
+      setCurrencyDraft(currency)
+      setCurrencySave({
+        status: 'failed',
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
   return (
     <div className="space-y-5">
       {sourceEnvManaged && (
@@ -1474,85 +1516,85 @@ function CostSection({
       )}
 
       <div className="space-y-4 rounded-lg border border-theme-border bg-theme-base/40 p-4">
+        <p className="text-sm font-semibold text-theme-text-primary">Cost source</p>
         <div>
-          <p className="text-sm font-semibold text-theme-text-primary">Cost source</p>
-          <p className="mt-0.5 text-xs text-theme-text-tertiary">
-            Source changes apply here. They are separate from the currency preference below.
+          <label htmlFor="cost-source" className="mb-1 block text-sm font-medium text-theme-text-primary">Data source</label>
+          <p id="cost-source-help" className="mb-1 text-xs text-theme-text-tertiary">
+            Automatic uses existing OpenCost metrics first, then Kubecost. Leave it selected unless
+            you need to force one source.
           </p>
+          <SelectMenu
+            id="cost-source"
+            value={source}
+            options={[
+              { value: 'auto', label: 'Automatic (recommended)' },
+              { value: 'prometheus', label: 'OpenCost metrics only' },
+              { value: 'kubecost', label: 'Kubecost only' },
+            ]}
+            onChange={(value) => { onChangeSource(value as typeof source); setApply({ status: 'idle' }) }}
+            disabled={sourceEnvManaged}
+            className="w-full"
+            ariaLabel="Cost data source"
+            ariaDescribedBy={sourceEnvManaged ? 'cost-source-help cost-source-managed' : 'cost-source-help'}
+          />
         </div>
-        <div>
-        <label htmlFor="cost-source" className="mb-1 block text-sm font-medium text-theme-text-primary">Data source</label>
-        <p id="cost-source-help" className="mb-1 text-xs text-theme-text-tertiary">
-          Automatic uses existing OpenCost metrics first, then Kubecost. Leave it selected unless
-          you need to force one source.
-        </p>
-        <SelectMenu
-          id="cost-source"
-          value={source}
-          options={[
-            { value: 'auto', label: 'Automatic (recommended)' },
-            { value: 'prometheus', label: 'OpenCost metrics only' },
-            { value: 'kubecost', label: 'Kubecost only' },
-          ]}
-          onChange={(value) => { onChangeSource(value as typeof source); setApply({ status: 'idle' }) }}
-          disabled={sourceEnvManaged}
-          className="w-full"
-          ariaLabel="Cost data source"
-          ariaDescribedBy={sourceEnvManaged ? 'cost-source-help cost-source-managed' : 'cost-source-help'}
-        />
-      </div>
 
       {source !== 'prometheus' && (
         <div className="space-y-3 border-t border-theme-border-subtle pt-4">
           <p className="text-xs font-medium text-theme-text-secondary">
             {source === 'auto' ? 'Kubecost fallback' : 'Kubecost connection'}
           </p>
-          <button
-            type="button"
-            onClick={() => setAdvancedOpen((open) => !open)}
-            className="flex w-full items-center gap-1.5 rounded-md py-1 text-left text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary"
-            aria-expanded={advancedOpen}
-          >
-            <ChevronRight className={clsx('h-3.5 w-3.5 transition-transform', advancedOpen && 'rotate-90')} />
-            Advanced connection settings
-          </button>
-          {advancedOpen && (
-            <div className="space-y-3 rounded-md border border-theme-border-subtle bg-theme-base/60 p-3">
-              <div>
-                <label htmlFor="cost-kubecost-url" className="mb-1 block text-sm font-medium text-theme-text-primary">Kubecost URL</label>
-                <p id="cost-kubecost-url-help" className="mb-1 text-xs text-theme-text-tertiary">
-                  Leave blank when Kubecost runs in this cluster. Enter the central Aggregator URL
-                  for an agent-only or federated setup.
-                </p>
-                <Input
-                  id="cost-kubecost-url"
-                  aria-describedby={sourceEnvManaged ? 'cost-kubecost-url-help cost-source-managed' : 'cost-kubecost-url-help'}
-                  value={url}
-                  onChange={(event) => { onChangeUrl(event.target.value); setApply({ status: 'idle' }) }}
-                  disabled={sourceEnvManaged}
-                  placeholder="Auto-discover, or https://kubecost.example.com"
-                  className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
-                />
+          <div>
+            <button
+              type="button"
+              onClick={() => setAdvancedOpen((open) => !open)}
+              className="flex w-full items-center gap-1.5 rounded-md py-1 text-left text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary"
+              aria-expanded={advancedOpen}
+              aria-controls="cost-advanced-connection"
+            >
+              <CollapseChevron open={advancedOpen} className="h-3.5 w-3.5" />
+              Advanced connection settings
+            </button>
+            <Collapse open={advancedOpen}>
+              <div id="cost-advanced-connection" className="pt-3">
+                <div className="space-y-3 rounded-md border border-theme-border-subtle bg-theme-base/60 p-3">
+                  <div>
+                    <label htmlFor="cost-kubecost-url" className="mb-1 block text-sm font-medium text-theme-text-primary">Kubecost URL</label>
+                    <p id="cost-kubecost-url-help" className="mb-1 text-xs text-theme-text-tertiary">
+                      Leave blank when Kubecost runs in this cluster. Enter the central Aggregator URL
+                      for an agent-only or federated setup.
+                    </p>
+                    <Input
+                      id="cost-kubecost-url"
+                      aria-describedby={sourceEnvManaged ? 'cost-kubecost-url-help cost-source-managed' : 'cost-kubecost-url-help'}
+                      value={url}
+                      onChange={(event) => { onChangeUrl(event.target.value); setApply({ status: 'idle' }) }}
+                      disabled={sourceEnvManaged}
+                      placeholder="Auto-discover, or https://kubecost.example.com"
+                      className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="cost-kubecost-cluster-id" className="mb-1 block text-sm font-medium text-theme-text-primary">Cluster ID</label>
+                    <p id="cost-kubecost-cluster-id-help" className="mb-1 text-xs text-theme-text-tertiary">
+                      Usually detected automatically. Set it only if detection fails or the Kubecost
+                      server contains data for more than one cluster. Use the <code>CLUSTER_ID</code>{' '}
+                      value configured on the FinOps Agent or Aggregator.
+                    </p>
+                    <Input
+                      id="cost-kubecost-cluster-id"
+                      aria-describedby={sourceEnvManaged ? 'cost-kubecost-cluster-id-help cost-source-managed' : 'cost-kubecost-cluster-id-help'}
+                      value={clusterId}
+                      onChange={(event) => { onChangeClusterId(event.target.value); setApply({ status: 'idle' }) }}
+                      disabled={sourceEnvManaged}
+                      placeholder="Auto-detect CLUSTER_ID"
+                      className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
+                    />
+                  </div>
+                </div>
               </div>
-              <div>
-                <label htmlFor="cost-kubecost-cluster-id" className="mb-1 block text-sm font-medium text-theme-text-primary">Cluster ID</label>
-                <p id="cost-kubecost-cluster-id-help" className="mb-1 text-xs text-theme-text-tertiary">
-                  Usually detected automatically. Set it only if detection fails or the Kubecost
-                  server contains data for more than one cluster. Use the <code>CLUSTER_ID</code>{' '}
-                  value configured on the FinOps Agent or Aggregator.
-                </p>
-                <Input
-                  id="cost-kubecost-cluster-id"
-                  aria-describedby={sourceEnvManaged ? 'cost-kubecost-cluster-id-help cost-source-managed' : 'cost-kubecost-cluster-id-help'}
-                  value={clusterId}
-                  onChange={(event) => { onChangeClusterId(event.target.value); setApply({ status: 'idle' }) }}
-                  disabled={sourceEnvManaged}
-                  placeholder="Auto-detect CLUSTER_ID"
-                  className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
-                />
-              </div>
-            </div>
-          )}
+            </Collapse>
+          </div>
           <div>
             <label htmlFor="cost-kubecost-api-key" className="mb-1 block text-sm font-medium text-theme-text-primary">API key (optional)</label>
             <p id="cost-kubecost-api-key-help" className="mb-1 text-xs text-theme-text-tertiary">
@@ -1626,34 +1668,44 @@ function CostSection({
       </div>
 
       <div className="rounded-lg border border-theme-border bg-theme-base/40 p-4">
-        <p className="text-sm font-semibold text-theme-text-primary">Display currency</p>
-        <p className="mt-0.5 text-xs text-theme-text-tertiary">
-          This preference saves with the Settings footer and does not test the cost source.
-        </p>
-        <label htmlFor="cost-currency" className="mb-1 mt-3 block text-sm font-medium text-theme-text-primary">
-          Currency override
+        <label htmlFor="cost-currency" className="block text-sm font-semibold text-theme-text-primary">
+          Display currency
         </label>
-        <p className="mb-1 text-xs text-theme-text-tertiary">
-          Auto reads currency from cluster-discovered OpenCost or the active Kubecost source, and
-          otherwise uses USD. A manually configured Prometheus URL disables OpenCost currency
-          detection. Radar changes only the label; it does not convert amounts.
+        <p id="cost-currency-help" className="mb-1 mt-0.5 text-xs text-theme-text-tertiary">
+          Auto uses the currency reported by the active cost source, or USD when unavailable.
+          Overrides relabel amounts; Radar does not convert them.
         </p>
         <SelectMenu
           id="cost-currency"
-          value={currency}
-          options={currencyOptionsForValue(currency)}
-          onChange={onChange}
-          ariaLabel="Currency override"
+          value={currencyDraft}
+          options={currencyOptionsForValue(currencyDraft)}
+          onChange={(value) => { void saveCurrency(value) }}
+          ariaLabel="Display currency"
+          ariaDescribedBy="cost-currency-help"
           searchPlaceholder="Search currencies by name or code"
           className="w-full"
         />
+        {currencySave.status === 'saving' && (
+          <p role="status" aria-live="polite" className="mt-1 flex items-center gap-1 text-xs text-theme-text-tertiary">
+            <Loader2 className="h-3 w-3 animate-spin" /> Saving…
+          </p>
+        )}
+        {currencySave.status === 'saved' && (
+          <p role="status" aria-live="polite" className="mt-1 flex items-center gap-1 text-xs text-green-600 dark:text-green-400/80">
+            <Check className="h-3 w-3" /> {managed ? 'Saved for when the CLI or Helm override is removed' : 'Saved'}
+          </p>
+        )}
+        {currencySave.status === 'failed' && (
+          <p role="alert" className="mt-1 text-xs text-red-600 dark:text-red-400/80">
+            Could not save: {currencySave.error}
+          </p>
+        )}
+        {managed && (
+          <p className="mt-2 text-xs text-amber-600 dark:text-amber-400/80">
+            CLI or Helm currently sets {effectiveCurrency || 'Auto'}; that override stays active until it is removed.
+          </p>
+        )}
       </div>
-      {managed && (
-        <p className="mt-1 text-xs text-amber-600 dark:text-amber-400/80">
-          Currently managed by CLI or Helm: {effectiveCurrency || 'Auto'}. Saved changes apply
-          after Radar starts without that override.
-        </p>
-      )}
     </div>
   )
 }
@@ -1764,6 +1816,12 @@ type CostApplyState =
   | { status: 'idle' }
   | { status: 'applying' }
   | { status: 'connected'; source: 'prometheus' | 'kubecost'; address?: string }
+  | { status: 'failed'; error: string }
+
+type CurrencySaveState =
+  | { status: 'idle' }
+  | { status: 'saving' }
+  | { status: 'saved' }
   | { status: 'failed'; error: string }
 
 type HeaderRow = { key: string; value: string }

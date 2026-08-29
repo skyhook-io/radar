@@ -133,7 +133,7 @@ func TestProbeKubecostUsesModelPathAndAPIKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if connection.Source != SourceKubecost || connection.Address != server.URL+"/model" || connection.ClusterID != "prod-a" {
+	if connection.Source != SourceKubecost || connection.Address != server.URL+"/model" || connection.DisplayAddress != server.URL+"/model" || connection.ClusterID != "prod-a" {
 		t.Fatalf("unexpected connection: %#v", connection)
 	}
 	if gotPath != "/model/allocation" || gotAPIKey != "secret" {
@@ -523,17 +523,36 @@ func TestSupersededSelectionReleasesOnlyItsOwnedConnection(t *testing.T) {
 func TestDeadConnectionLeaseInvalidatesCachedSelection(t *testing.T) {
 	alive := true
 	m := &Manager{
-		config:   ManagerConfig{Source: SourceKubecost},
-		selected: SourceKubecost,
-		address:  "http://localhost:12345/model",
-		lease:    &connectionLease{alive: func() bool { return alive }},
+		config:         ManagerConfig{Source: SourceKubecost},
+		selected:       SourceKubecost,
+		address:        "http://localhost:12345/model",
+		displayAddress: "kubecost-aggregator.kubecost:9004",
+		lease:          &connectionLease{alive: func() bool { return alive }},
 	}
-	if _, _, ok := m.cachedSelectionLocked(time.Now()); !ok {
+	connection, _, ok := m.cachedSelectionLocked(time.Now())
+	if !ok {
 		t.Fatal("live port-forward-backed selection was not cached")
+	}
+	if connection.DisplayAddress != "kubecost-aggregator.kubecost:9004" {
+		t.Fatalf("display address = %q, want stable Service address", connection.DisplayAddress)
 	}
 	alive = false
 	if _, _, ok := m.cachedSelectionLocked(time.Now()); ok {
 		t.Fatal("dead port-forward-backed selection remained cached")
+	}
+}
+
+func TestResetClearsDisplayAddress(t *testing.T) {
+	m := &Manager{
+		selected:       SourceKubecost,
+		address:        "http://localhost:12345/model",
+		displayAddress: "kubecost-aggregator.kubecost:9004",
+	}
+
+	m.Reset()
+
+	if m.address != "" || m.displayAddress != "" {
+		t.Fatalf("addresses after reset = transport %q, display %q", m.address, m.displayAddress)
 	}
 }
 
@@ -553,5 +572,17 @@ func TestKubecostAggregatorDiscoverySignals(t *testing.T) {
 	service.Spec.Ports[0].Port = 9008
 	if _, ok := aggregatorServicePort(service); ok {
 		t.Fatal("port 9008 must not be auto-selected")
+	}
+}
+
+func TestDiscoveredKubecostConnectionSeparatesTransportFromService(t *testing.T) {
+	service := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "kubecost-aggregator", Namespace: "kubecost"}}
+	connection := discoveredKubecostConnection(nil, "http://localhost:12345/model", "prod-a", service, 9004)
+
+	if connection.Address != "http://localhost:12345/model" {
+		t.Fatalf("transport address = %q, want loopback port-forward", connection.Address)
+	}
+	if connection.DisplayAddress != "kubecost-aggregator.kubecost:9004" {
+		t.Fatalf("display address = %q, want stable Service address", connection.DisplayAddress)
 	}
 }

@@ -164,6 +164,15 @@ func TestApplyKubecostConfigBindsExplicitClusterIDToContext(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
+	var response struct {
+		Address string `json:"address"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Address != server.URL+"/model" {
+		t.Fatalf("address = %q, want resolved Kubecost URL", response.Address)
+	}
 	if saved := config.Load(); saved.KubecostClusterIDContext != "cluster-a" || saved.KubecostAPIKeyContext != "" {
 		t.Fatalf("cluster ID context = %q, API key context = %q; want cluster-a and reusable explicit-URL key", saved.KubecostClusterIDContext, saved.KubecostAPIKeyContext)
 	}

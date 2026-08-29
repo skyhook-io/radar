@@ -57,11 +57,12 @@ type ManagerConfig struct {
 }
 
 type Connection struct {
-	Source    Source
-	Client    *pkgopencost.KubecostClient
-	Address   string
-	ClusterID string
-	lease     *connectionLease
+	Source         Source
+	Client         *pkgopencost.KubecostClient
+	Address        string
+	DisplayAddress string
+	ClusterID      string
+	lease          *connectionLease
 }
 
 type connectionLease struct {
@@ -78,19 +79,20 @@ const (
 )
 
 type Manager struct {
-	mu           sync.RWMutex
-	selectMu     sync.Mutex
-	config       ManagerConfig
-	selected     Source
-	client       *pkgopencost.KubecostClient
-	address      string
-	clusterID    string
-	retryAt      time.Time
-	selectionErr error
-	lease        *connectionLease
-	generation   uint64
-	envManaged   bool
-	envError     string
+	mu             sync.RWMutex
+	selectMu       sync.Mutex
+	config         ManagerConfig
+	selected       Source
+	client         *pkgopencost.KubecostClient
+	address        string
+	displayAddress string
+	clusterID      string
+	retryAt        time.Time
+	selectionErr   error
+	lease          *connectionLease
+	generation     uint64
+	envManaged     bool
+	envError       string
 }
 
 var defaultManager = &Manager{config: ManagerConfig{Source: SourceAuto}}
@@ -167,6 +169,7 @@ func (m *Manager) configure(config ManagerConfig, envManaged bool, envError stri
 	m.selected = ""
 	m.client = nil
 	m.address = ""
+	m.displayAddress = ""
 	m.clusterID = ""
 	m.retryAt = time.Time{}
 	m.selectionErr = nil
@@ -270,6 +273,7 @@ func (m *Manager) Reset() {
 	m.selected = ""
 	m.client = nil
 	m.address = ""
+	m.displayAddress = ""
 	m.clusterID = ""
 	m.retryAt = time.Time{}
 	m.selectionErr = nil
@@ -376,6 +380,7 @@ func (m *Manager) commitSelection(generation uint64, connection Connection) (Con
 	m.selected = connection.Source
 	m.client = connection.Client
 	m.address = connection.Address
+	m.displayAddress = connection.DisplayAddress
 	m.clusterID = connection.ClusterID
 	m.retryAt = time.Time{}
 	m.selectionErr = nil
@@ -394,6 +399,7 @@ func (m *Manager) commitAutoFallback(generation uint64) (Connection, error) {
 	m.selected = connection.Source
 	m.client = nil
 	m.address = ""
+	m.displayAddress = ""
 	m.clusterID = ""
 	m.retryAt = time.Now().Add(autoRetryDelay)
 	m.selectionErr = nil
@@ -410,6 +416,7 @@ func (m *Manager) commitSelectionFailure(generation uint64, selectionErr error) 
 	m.selected = ""
 	m.client = nil
 	m.address = ""
+	m.displayAddress = ""
 	m.clusterID = ""
 	retryDelay := autoRetryDelay
 	if errors.Is(selectionErr, ErrNoCostSource) {
@@ -431,7 +438,14 @@ func (m *Manager) cachedSelectionLocked(now time.Time) (Connection, error, bool)
 	if m.lease != nil && m.lease.alive != nil && !m.lease.alive() {
 		return Connection{}, nil, false
 	}
-	return Connection{Source: m.selected, Client: m.client, Address: m.address, ClusterID: m.clusterID, lease: m.lease}, nil, true
+	return Connection{
+		Source:         m.selected,
+		Client:         m.client,
+		Address:        m.address,
+		DisplayAddress: m.displayAddress,
+		ClusterID:      m.clusterID,
+		lease:          m.lease,
+	}, nil, true
 }
 
 func (m *Manager) autoRetryDueLocked(now time.Time) bool {
@@ -474,7 +488,10 @@ func (m *Manager) connectKubecost(ctx context.Context, config ManagerConfig) (Co
 		if err != nil {
 			return Connection{}, err
 		}
-		return Connection{Source: SourceKubecost, Client: client, Address: address, ClusterID: clusterID}, nil
+		return Connection{
+			Source: SourceKubecost, Client: client, Address: address,
+			DisplayAddress: address, ClusterID: clusterID,
+		}, nil
 	}
 
 	service, servicePort, targetPort, err := discoverKubecostAggregator()
@@ -488,7 +505,7 @@ func (m *Manager) connectKubecost(ctx context.Context, config ManagerConfig) (Co
 	if k8s.IsInCluster() {
 		directURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", service.Name, service.Namespace, servicePort)
 		if client, address, directErr := probeKubecostURL(ctx, directURL, config.APIKey, clusterID); directErr == nil {
-			return Connection{Source: SourceKubecost, Client: client, Address: address, ClusterID: clusterID}, nil
+			return discoveredKubecostConnection(client, address, clusterID, service, servicePort), nil
 		} else {
 			return Connection{}, directErr
 		}
@@ -502,16 +519,23 @@ func (m *Manager) connectKubecost(ctx context.Context, config ManagerConfig) (Co
 		portforward.Stop(portforward.OwnerCost)
 		return Connection{}, err
 	}
-	return Connection{
-		Source: SourceKubecost, Client: client, Address: address, ClusterID: clusterID,
-		lease: &connectionLease{
-			alive: func() bool {
-				info := portforward.GetConnectionInfo(portforward.OwnerCost)
-				return info.Connected && info.Address == forward.Address
-			},
-			release: func() { portforward.StopIfAddress(portforward.OwnerCost, forward.Address) },
+	connection := discoveredKubecostConnection(client, address, clusterID, service, servicePort)
+	connection.lease = &connectionLease{
+		alive: func() bool {
+			info := portforward.GetConnectionInfo(portforward.OwnerCost)
+			return info.Connected && info.Address == forward.Address
 		},
-	}, nil
+		release: func() { portforward.StopIfAddress(portforward.OwnerCost, forward.Address) },
+	}
+	return connection, nil
+}
+
+func discoveredKubecostConnection(client *pkgopencost.KubecostClient, address, clusterID string, service *corev1.Service, servicePort int) Connection {
+	return Connection{
+		Source: SourceKubecost, Client: client, Address: address,
+		DisplayAddress: fmt.Sprintf("%s.%s:%d", service.Name, service.Namespace, servicePort),
+		ClusterID:      clusterID,
+	}
 }
 
 func validateKubecostConfigContext(config ManagerConfig, currentContext string) error {

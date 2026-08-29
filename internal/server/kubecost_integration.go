@@ -117,7 +117,7 @@ func (s *Server) handleApplyKubecostConfig(w http.ResponseWriter, r *http.Reques
 		Source    string `json:"source"`
 		Address   string `json:"address,omitempty"`
 		APIKeySet bool   `json:"apiKeySet"`
-	}{Applied: true, Source: string(connection.Source), Address: connection.Address, APIKeySet: apiKey != ""})
+	}{Applied: true, Source: string(connection.Source), Address: connection.DisplayAddress, APIKeySet: apiKey != ""})
 }
 
 func sameServerOrigin(a, b string) bool {
