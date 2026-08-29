@@ -140,6 +140,7 @@ import {
   healthColors,
 } from './resource-utils'
 import { getGenericResourceStatus } from './generic-status'
+import { getIstioGatewayServerCount, getIstioGatewaySelectorString } from './resource-utils-istio'
 import {
   type PrinterColumnDef, type PrinterTable, PRINTER_COLUMN_PREFIX, formatPrinterCell, printerCellSortValue,
   printerCellTone, printerColumnKey, printerColumnWidth, printerTableKey, printerTableMatchesKind, readPrinterCell,
@@ -4411,15 +4412,27 @@ export function ResourcesView({
       case 'status':
         // Uncurated kinds sort on the text their badge shows: they have no
         // phase to sort on when the status came from a condition or a replica
-        // count, so phase ordered them all as equal.
+        // count, so phase ordered them all as equal. It also has to stay the
+        // derived text rather than the raw phase — the ladder deliberately does
+        // not short-circuit on a phase it doesn't recognise.
         //
-        // Curated kinds sort on phase. Their cell already shows something
-        // richer, but routing the sort through the per-kind readers would
-        // reorder the most-used lists — Pods, Deployments, Nodes — and cost a
-        // status derivation per comparison.
-        return hasCuratedColumns(selectedKind.name, selectedKind.group)
-          ? (status.phase || '')
-          : (getGenericResourceStatus(resource)?.text ?? '')
+        // Curated kinds sort on phase, which keeps the most-used lists — Pods,
+        // Deployments, Nodes — ordering as they always have without a status
+        // derivation per comparison. Where a curated kind publishes no phase at
+        // all, fall back rather than compare every row as equal: Kyverno Policy
+        // and Istio Gateway keep their state in conditions, so the column
+        // simply did not sort.
+        if (!hasCuratedColumns(selectedKind.name, selectedKind.group)) {
+          return getGenericResourceStatus(resource)?.text ?? ''
+        }
+        return status.phase || (getGenericResourceStatus(resource)?.text ?? '')
+      case 'servers':
+        // Numeric so 10 does not sort before 9.
+        if (kindLower === 'istiogateways') return getIstioGatewayServerCount(resource)
+        return ''
+      case 'selector':
+        if (kindLower === 'istiogateways') return getIstioGatewaySelectorString(resource)
+        return ''
       case 'containers':
         // Pod containers column — sort by readiness ratio
         if (status.containerStatuses) {
@@ -4617,9 +4630,13 @@ export function ResourcesView({
     // the built-in getSortValue for their key.
     if (sortColumn && sortDirection) {
       const extra = extraColumnsByKey.get(sortColumn)
+      // Normalized, matching the filter call sites: a group-qualified kind
+      // (istiogateways, cnpgclusters) otherwise arrives here as its bare plural
+      // and misses its own sort readers. Hoisted out of the comparator.
+      const sortKind = normalizeKindToPlural(selectedKind.name, selectedKind.group)
       result = [...result].sort((a: any, b: any) => {
-        const aVal = extra?.getSortValue ? extra.getSortValue(a) : getSortValue(a, sortColumn, selectedKind.name)
-        const bVal = extra?.getSortValue ? extra.getSortValue(b) : getSortValue(b, sortColumn, selectedKind.name)
+        const aVal = extra?.getSortValue ? extra.getSortValue(a) : getSortValue(a, sortColumn, sortKind)
+        const bVal = extra?.getSortValue ? extra.getSortValue(b) : getSortValue(b, sortColumn, sortKind)
         let comparison = 0
         if (typeof aVal === 'number' && typeof bVal === 'number') {
           comparison = aVal - bVal
