@@ -148,14 +148,14 @@ describe('IssueRow', () => {
     expect(html).toContain(groupBadgeClass('control_plane'))
   })
 
-  it('shows an explicit unknown-onset state instead of inventing an age', () => {
+  it('does not fill collapsed rows with low-information unknown-onset labels', () => {
     const html = renderToString(createElement(IssueRow, {
       issue: mk({ onset_unknown: true }),
       open: false,
       onToggle: () => undefined,
     }))
 
-    expect(html).toContain('Exact onset unknown')
+    expect(html).not.toContain('onset unknown')
     expect(html).not.toContain('0s')
   })
 
@@ -170,7 +170,6 @@ describe('IssueRow', () => {
       onToggle: () => undefined,
     }))
 
-    expect(html).toContain('Exact onset unknown')
     expect(html).toContain('workload never healthy')
     expect(html).toContain('exact onset unknown; owner workload never became healthy after deployment')
     expect(html).not.toContain('since deploy')

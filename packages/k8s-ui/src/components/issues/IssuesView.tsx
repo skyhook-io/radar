@@ -4,7 +4,7 @@ import { CardBody, CardSection, ClusterName, EmptyState, KIND_CHIP_CLASS, Termin
 import { Tooltip } from '../ui/Tooltip';
 import { formatCompactAge, formatRelativeAgeTime } from '../../utils/format';
 import { diagnosticRoleLabel, diagnosticFactLabel, confidenceTitle, incidentParentLabel } from './diagnostic';
-import { issueFirstSeenTitle, issueOnsetUnknownTitle, issueResourceCreatedTitle, issueTiming } from './issue-timing';
+import { issueFirstSeenTitle, issueResourceCreatedTitle, issueTiming } from './issue-timing';
 import {
   ISSUE_SEVERITY_BADGE_CLASS,
   ISSUE_SEVERITY_HEADER_BAND_CLASS,
@@ -234,13 +234,6 @@ export function IssueRow({
             <Clock className="h-3 w-3" aria-hidden />
             {partialOnset ? '≥' : ''}{formatCompactAge(issue.first_seen)}
           </time>
-        </Tooltip>
-      ) : issue.onset_unknown ? (
-        <Tooltip content={issueOnsetUnknownTitle(issue)} delay={200} wrapperClassName="shrink-0">
-          <span className="flex items-center gap-1 text-xs text-theme-text-tertiary">
-            <Clock className="h-3 w-3" aria-hidden />
-            Exact onset unknown
-          </span>
         </Tooltip>
       ) : null}
       {timing ? (
