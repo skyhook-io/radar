@@ -40,7 +40,7 @@ export const RIGHTSIZING_SCAN_METHODOLOGY =
   'Based on 7 days of history: CPU P95 and memory maximum, plus 15% headroom. Memory reductions require verifiable restart history.'
 export const RIGHTSIZING_METRICS_REQUIRED_TITLE = 'Metrics history is required'
 export const RIGHTSIZING_METRICS_REQUIRED_BODY =
-  'Rightsizing needs 7 days of Kubernetes workload history from a PromQL-compatible metrics backend. Cost Overview remains available without it.'
+  'Rightsizing needs 7 days of Kubernetes workload history from a PromQL-compatible metrics backend (Prometheus, VictoriaMetrics, Thanos, or Mimir).\nCost Overview remains available without it.'
 
 export type RightsizingScanSurfaceState =
   | 'discovering'
@@ -871,7 +871,7 @@ function CenteredState({
           <Gauge className="h-8 w-8 text-theme-text-tertiary" />
         )}
         <h2 className="mt-3 text-base font-semibold text-theme-text-primary">{title}</h2>
-        <p className="mt-1 text-sm text-theme-text-secondary">{body}</p>
+        <p className="mt-1 whitespace-pre-line text-sm text-theme-text-secondary">{body}</p>
         {action && <div className="mt-4">{action}</div>}
       </div>
     </div>

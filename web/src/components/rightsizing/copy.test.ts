@@ -24,6 +24,8 @@ describe('rightsizing scan copy', () => {
     expect(copy).toContain('Metrics history')
     expect(copy).toContain('PromQL-compatible metrics backend')
     expect(copy).toContain('7 days')
+    expect(copy).toContain('Prometheus, VictoriaMetrics, Thanos, or Mimir')
+    expect(RIGHTSIZING_METRICS_REQUIRED_BODY).toContain('\nCost Overview')
     expect(copy).not.toContain('OpenCost')
     expect(copy).not.toContain('Kubecost')
   })
