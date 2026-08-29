@@ -15,6 +15,21 @@ import (
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
 )
 
+type kubecostServiceRef struct {
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	Port      int    `json:"port"`
+}
+
+type kubecostApplyResponse struct {
+	Applied   bool                `json:"applied"`
+	Source    string              `json:"source"`
+	Address   string              `json:"address,omitempty"`
+	Service   *kubecostServiceRef `json:"service,omitempty"`
+	APIKeySet bool                `json:"apiKeySet"`
+}
+
 func (s *Server) handleApplyKubecostConfig(w http.ResponseWriter, r *http.Request) {
 	if !s.requireCloudRole(w, r, auth.RoleOwner, "modify Radar configuration") {
 		return
@@ -112,12 +127,22 @@ func (s *Server) handleApplyKubecostConfig(w http.ResponseWriter, r *http.Reques
 	if s.openCostCurrency != nil {
 		s.openCostCurrency.Invalidate()
 	}
-	s.writeJSON(w, struct {
-		Applied   bool   `json:"applied"`
-		Source    string `json:"source"`
-		Address   string `json:"address,omitempty"`
-		APIKeySet bool   `json:"apiKeySet"`
-	}{Applied: true, Source: string(connection.Source), Address: connection.DisplayAddress, APIKeySet: apiKey != ""})
+	var service *kubecostServiceRef
+	if connection.Service.Name != "" && connection.Service.Namespace != "" && connection.Service.Port > 0 {
+		service = &kubecostServiceRef{
+			Kind:      "Service",
+			Namespace: connection.Service.Namespace,
+			Name:      connection.Service.Name,
+			Port:      connection.Service.Port,
+		}
+	}
+	s.writeJSON(w, kubecostApplyResponse{
+		Applied:   true,
+		Source:    string(connection.Source),
+		Address:   connection.DisplayAddress,
+		Service:   service,
+		APIKeySet: apiKey != "",
+	})
 }
 
 func sameServerOrigin(a, b string) bool {

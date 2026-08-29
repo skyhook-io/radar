@@ -56,12 +56,19 @@ type ManagerConfig struct {
 	ClusterIDContext string
 }
 
+type ServiceReference struct {
+	Name      string
+	Namespace string
+	Port      int
+}
+
 type Connection struct {
 	Source         Source
 	Client         *pkgopencost.KubecostClient
 	Address        string
 	DisplayAddress string
 	ClusterID      string
+	Service        ServiceReference
 	lease          *connectionLease
 }
 
@@ -87,6 +94,7 @@ type Manager struct {
 	address        string
 	displayAddress string
 	clusterID      string
+	service        ServiceReference
 	retryAt        time.Time
 	selectionErr   error
 	lease          *connectionLease
@@ -171,6 +179,7 @@ func (m *Manager) configure(config ManagerConfig, envManaged bool, envError stri
 	m.address = ""
 	m.displayAddress = ""
 	m.clusterID = ""
+	m.service = ServiceReference{}
 	m.retryAt = time.Time{}
 	m.selectionErr = nil
 	m.lease = nil
@@ -275,6 +284,7 @@ func (m *Manager) Reset() {
 	m.address = ""
 	m.displayAddress = ""
 	m.clusterID = ""
+	m.service = ServiceReference{}
 	m.retryAt = time.Time{}
 	m.selectionErr = nil
 	m.lease = nil
@@ -382,6 +392,7 @@ func (m *Manager) commitSelection(generation uint64, connection Connection) (Con
 	m.address = connection.Address
 	m.displayAddress = connection.DisplayAddress
 	m.clusterID = connection.ClusterID
+	m.service = connection.Service
 	m.retryAt = time.Time{}
 	m.selectionErr = nil
 	m.lease = connection.lease
@@ -401,6 +412,7 @@ func (m *Manager) commitAutoFallback(generation uint64) (Connection, error) {
 	m.address = ""
 	m.displayAddress = ""
 	m.clusterID = ""
+	m.service = ServiceReference{}
 	m.retryAt = time.Now().Add(autoRetryDelay)
 	m.selectionErr = nil
 	m.lease = nil
@@ -418,6 +430,7 @@ func (m *Manager) commitSelectionFailure(generation uint64, selectionErr error) 
 	m.address = ""
 	m.displayAddress = ""
 	m.clusterID = ""
+	m.service = ServiceReference{}
 	retryDelay := autoRetryDelay
 	if errors.Is(selectionErr, ErrNoCostSource) {
 		retryDelay = noCostSourceRetryDelay
@@ -444,6 +457,7 @@ func (m *Manager) cachedSelectionLocked(now time.Time) (Connection, error, bool)
 		Address:        m.address,
 		DisplayAddress: m.displayAddress,
 		ClusterID:      m.clusterID,
+		Service:        m.service,
 		lease:          m.lease,
 	}, nil, true
 }
@@ -535,6 +549,11 @@ func discoveredKubecostConnection(client *pkgopencost.KubecostClient, address, c
 		Source: SourceKubecost, Client: client, Address: address,
 		DisplayAddress: fmt.Sprintf("%s.%s:%d", service.Name, service.Namespace, servicePort),
 		ClusterID:      clusterID,
+		Service: ServiceReference{
+			Name:      service.Name,
+			Namespace: service.Namespace,
+			Port:      servicePort,
+		},
 	}
 }
 

@@ -527,6 +527,7 @@ func TestDeadConnectionLeaseInvalidatesCachedSelection(t *testing.T) {
 		selected:       SourceKubecost,
 		address:        "http://localhost:12345/model",
 		displayAddress: "kubecost-aggregator.kubecost:9004",
+		service:        ServiceReference{Name: "kubecost-aggregator", Namespace: "kubecost", Port: 9004},
 		lease:          &connectionLease{alive: func() bool { return alive }},
 	}
 	connection, _, ok := m.cachedSelectionLocked(time.Now())
@@ -535,6 +536,9 @@ func TestDeadConnectionLeaseInvalidatesCachedSelection(t *testing.T) {
 	}
 	if connection.DisplayAddress != "kubecost-aggregator.kubecost:9004" {
 		t.Fatalf("display address = %q, want stable Service address", connection.DisplayAddress)
+	}
+	if connection.Service != (ServiceReference{Name: "kubecost-aggregator", Namespace: "kubecost", Port: 9004}) {
+		t.Fatalf("cached Service reference = %#v", connection.Service)
 	}
 	alive = false
 	if _, _, ok := m.cachedSelectionLocked(time.Now()); ok {
@@ -547,12 +551,16 @@ func TestResetClearsDisplayAddress(t *testing.T) {
 		selected:       SourceKubecost,
 		address:        "http://localhost:12345/model",
 		displayAddress: "kubecost-aggregator.kubecost:9004",
+		service:        ServiceReference{Name: "kubecost-aggregator", Namespace: "kubecost", Port: 9004},
 	}
 
 	m.Reset()
 
 	if m.address != "" || m.displayAddress != "" {
 		t.Fatalf("addresses after reset = transport %q, display %q", m.address, m.displayAddress)
+	}
+	if m.service != (ServiceReference{}) {
+		t.Fatalf("Service reference after reset = %#v", m.service)
 	}
 }
 
@@ -584,5 +592,8 @@ func TestDiscoveredKubecostConnectionSeparatesTransportFromService(t *testing.T)
 	}
 	if connection.DisplayAddress != "kubecost-aggregator.kubecost:9004" {
 		t.Fatalf("display address = %q, want stable Service address", connection.DisplayAddress)
+	}
+	if connection.Service != (ServiceReference{Name: "kubecost-aggregator", Namespace: "kubecost", Port: 9004}) {
+		t.Fatalf("Service reference = %#v", connection.Service)
 	}
 }
