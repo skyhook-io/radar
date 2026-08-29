@@ -198,6 +198,7 @@ Radar uses its ServiceAccount to access the Kubernetes API. The Helm chart creat
 - Pods, Services, ConfigMaps, Events, Namespaces, Nodes, ServiceAccounts, Endpoints
 - Deployments, DaemonSets, StatefulSets, ReplicaSets
 - Ingresses, NetworkPolicies, Jobs, CronJobs, HPAs, PVCs
+- Kubernetes 1.37 Workloads, PodGroups, CompositePodGroups, PodCertificateRequests, and ClusterTrustBundles when the API server advertises them; the scheduling APIs are feature-gated
 - Pod logs (enabled by default)
 
 ### Opt-in Permissions
