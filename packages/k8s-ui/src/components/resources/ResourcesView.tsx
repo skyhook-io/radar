@@ -4410,22 +4410,21 @@ export function ResourcesView({
       case 'age':
         return meta.creationTimestamp ? new Date(meta.creationTimestamp).getTime() : 0
       case 'status':
-        // Uncurated kinds sort on the text their badge shows: they have no
-        // phase to sort on when the status came from a condition or a replica
-        // count, so phase ordered them all as equal. It also has to stay the
-        // derived text rather than the raw phase — the ladder deliberately does
-        // not short-circuit on a phase it doesn't recognise.
+        // Phase first for a curated kind: it keeps the most-used lists — Pods,
+        // Deployments, Nodes — ordering as they always have.
         //
-        // Curated kinds sort on phase, which keeps the most-used lists — Pods,
-        // Deployments, Nodes — ordering as they always have without a status
-        // derivation per comparison. Where a curated kind publishes no phase at
-        // all, fall back rather than compare every row as equal: Kyverno Policy
-        // and Istio Gateway keep their state in conditions, so the column
-        // simply did not sort.
-        if (!hasCuratedColumns(selectedKind.name, selectedKind.group)) {
-          return getGenericResourceStatus(resource)?.text ?? ''
+        // Everything else routes through getCellFilterValue, the same reader
+        // the cell and the filter dropdown use, so all three agree on one
+        // string. Deriving it here instead ordered rows on a status the row
+        // never displayed: a Gateway shows `Programmed` while the generic
+        // ladder, which knows neither Programmed nor Accepted, called it
+        // `Accepted` — so a healthy Gateway and a pending one sorted equal.
+        // getCellFilterValue ends in that same generic derivation, so an
+        // uncurated kind still sorts on the text its badge shows.
+        if (hasCuratedColumns(selectedKind.name, selectedKind.group) && status.phase) {
+          return status.phase
         }
-        return status.phase || (getGenericResourceStatus(resource)?.text ?? '')
+        return getCellFilterValue(resource, 'status', kindLower)
       case 'servers':
         // Numeric so 10 does not sort before 9.
         if (kindLower === 'istiogateways') return getIstioGatewayServerCount(resource)
@@ -4634,17 +4633,20 @@ export function ResourcesView({
       // (istiogateways, cnpgclusters) otherwise arrives here as its bare plural
       // and misses its own sort readers. Hoisted out of the comparator.
       const sortKind = normalizeKindToPlural(selectedKind.name, selectedKind.group)
-      result = [...result].sort((a: any, b: any) => {
-        const aVal = extra?.getSortValue ? extra.getSortValue(a) : getSortValue(a, sortColumn, sortKind)
-        const bVal = extra?.getSortValue ? extra.getSortValue(b) : getSortValue(b, sortColumn, sortKind)
+      const keyOf = extra?.getSortValue ?? ((r: any) => getSortValue(r, sortColumn, sortKind))
+      // Derived once per row, not once per comparison: a sort visits O(n log n)
+      // pairs, and the status key now runs a per-kind status derivation.
+      const decorated = result.map((r: any) => ({ r, k: keyOf(r) }))
+      decorated.sort((a, b) => {
         let comparison = 0
-        if (typeof aVal === 'number' && typeof bVal === 'number') {
-          comparison = aVal - bVal
+        if (typeof a.k === 'number' && typeof b.k === 'number') {
+          comparison = a.k - b.k
         } else {
-          comparison = String(aVal).localeCompare(String(bVal))
+          comparison = String(a.k).localeCompare(String(b.k))
         }
         return sortDirection === 'desc' ? -comparison : comparison
       })
+      result = decorated.map(d => d.r)
     } else {
       // Default sort by kind
       const kindLower = normalizeKindToPlural(selectedKind.name, selectedKind.group)

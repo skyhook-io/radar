@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { getCellFilterValue } from './resource-utils'
+import { getCellFilterValue, getGatewayStatus } from './resource-utils'
+import { getGenericResourceStatus } from './generic-status'
 
 // The table renders Istio Gateway through IstioGatewayCell, which reads the
 // spec. The filter dropdown and the sort key have to read the same thing, or
@@ -59,3 +60,38 @@ describe('Kyverno Policy filter values', () => {
     expect(getCellFilterValue(policy, 'status', 'kyvernopolicies')).not.toBe('')
   })
 })
+
+describe('curated kinds that publish no phase', () => {
+  // Sorting used to derive its own status here rather than reuse the reader the
+  // cell uses. A Gateway has no status.phase, so the sort key came from the
+  // generic ladder — which knows neither Programmed nor Accepted and called
+  // every Gateway "Accepted". A healthy Gateway and a pending one therefore
+  // sorted equal, and neither matched the text on screen.
+  const gateway = (accepted: string, programmed: string) => ({
+    apiVersion: 'gateway.networking.k8s.io/v1',
+    kind: 'Gateway',
+    status: { conditions: [{ type: 'Accepted', status: accepted }, { type: 'Programmed', status: programmed }] },
+  })
+
+  it.each([
+    ['True', 'True', 'Programmed'],
+    ['True', 'False', 'Accepted'],
+    ['False', 'False', 'Not Accepted'],
+  ])('Accepted=%s Programmed=%s sorts and filters on the text the cell shows', (a, p, expected) => {
+    const gw = gateway(a, p)
+    expect(getGatewayStatus(gw).text).toBe(expected)
+    expect(getCellFilterValue(gw, 'status', 'gateways')).toBe(expected)
+  })
+
+  // The reason the shared reader is load-bearing rather than incidental.
+  it('distinguishes a programmed Gateway from a pending one', () => {
+    const ok = getCellFilterValue(gateway('True', 'True'), 'status', 'gateways')
+    const pending = getCellFilterValue(gateway('True', 'False'), 'status', 'gateways')
+    expect(ok).not.toBe(pending)
+    // Both collapse to one value under the generic ladder, which is what made
+    // the column stop sorting.
+    expect(getGenericResourceStatus(gateway('True', 'True'))?.text)
+      .toBe(getGenericResourceStatus(gateway('True', 'False'))?.text)
+  })
+})
+
