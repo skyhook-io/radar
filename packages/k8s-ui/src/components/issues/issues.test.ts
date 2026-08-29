@@ -159,6 +159,23 @@ describe('IssueRow', () => {
     expect(html).not.toContain('0s')
   })
 
+  it('shows independent timing alongside an unknown onset', () => {
+    const html = renderToString(createElement(IssueRow, {
+      issue: mk({
+        onset_unknown: true,
+        issue_timing: 'started_at_resource_creation',
+        issue_timing_basis: 'owner_condition',
+      }),
+      open: true,
+      onToggle: () => undefined,
+    }))
+
+    expect(html).toContain('Onset unknown')
+    expect(html).toContain('since deploy')
+    expect(html).toContain('present since deployment or first reconciliation')
+    expect(html).toContain('onset unknown')
+  })
+
   it('renders mixed groups as a lower-bound age and suppresses a group-wide timing claim', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-06-30T12:00:00Z'))

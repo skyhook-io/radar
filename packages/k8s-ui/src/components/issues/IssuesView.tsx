@@ -226,28 +226,26 @@ export function IssueRow({
         {ISSUE_SEVERITY_LABEL[severity]}
       </span>
       {issue.first_seen ? (
-        <>
-          <Tooltip content={ageTitle(issue)} delay={200} wrapperClassName="shrink-0">
-            <time
-              dateTime={issue.first_seen}
-              className="flex items-center gap-1 text-xs tabular-nums text-theme-text-tertiary"
-            >
-              <Clock className="h-3 w-3" aria-hidden />
-              {partialOnset ? '≥' : ''}{formatCompactAge(issue.first_seen)}
-            </time>
-          </Tooltip>
-          {timing ? (
-            <Tooltip content={timing.tooltip} delay={200}>
-              <span className="badge-sm text-[10px] text-theme-text-secondary">{timing.chip}</span>
-            </Tooltip>
-          ) : null}
-        </>
+        <Tooltip content={ageTitle(issue)} delay={200} wrapperClassName="shrink-0">
+          <time
+            dateTime={issue.first_seen}
+            className="flex items-center gap-1 text-xs tabular-nums text-theme-text-tertiary"
+          >
+            <Clock className="h-3 w-3" aria-hidden />
+            {partialOnset ? '≥' : ''}{formatCompactAge(issue.first_seen)}
+          </time>
+        </Tooltip>
       ) : issue.onset_unknown ? (
         <Tooltip content={issueOnsetUnknownTitle(issue)} delay={200} wrapperClassName="shrink-0">
           <span className="flex items-center gap-1 text-xs text-theme-text-tertiary">
             <Clock className="h-3 w-3" aria-hidden />
             Onset unknown
           </span>
+        </Tooltip>
+      ) : null}
+      {timing ? (
+        <Tooltip content={timing.tooltip} delay={200}>
+          <span className="badge-sm text-[10px] text-theme-text-secondary">{timing.chip}</span>
         </Tooltip>
       ) : null}
     </div>
@@ -467,7 +465,8 @@ function Diagnosis({ issue, source }: { issue: Issue; source?: IssueDiagnosisSou
     meta.push(`active at least ${formatRelativeAgeTime(issue.first_seen)}; timing unknown for ${partialUnknown} contributing ${partialUnknown === 1 ? 'signal' : 'signals'}`);
   } else if (issue.first_seen) {
     meta.push(`active at least ${formatRelativeAgeTime(issue.first_seen)}`);
-  } else if (issue.onset_unknown) {
+  }
+  if (issue.onset_unknown) {
     meta.push('onset unknown');
   }
   if (issue.first_seen) {

@@ -488,7 +488,7 @@ func TestFutureProblemOnsetIsUnknown(t *testing.T) {
 		Reason:           "Missing StorageClass",
 		OnsetAt:          now.Add(time.Minute),
 		IssueTiming:      "started_at_resource_creation",
-		IssueTimingBasis: "phase",
+		IssueTimingBasis: "spec",
 	}, now, SourceProblem)
 	if !issue.FirstSeen.IsZero() || !issue.OnsetUnknown {
 		t.Fatalf("future-onset normalization = %+v", issue)
@@ -508,6 +508,23 @@ func TestProblemOnsetRequiresExactEvidence(t *testing.T) {
 	}, now, SourceProblem)
 	if !withoutEvidence.FirstSeen.IsZero() || !withoutEvidence.OnsetUnknown || !withoutEvidence.ResourceCreatedAt.Equal(createdAt) || withoutEvidence.IssueTiming != "" || withoutEvidence.IssueTimingBasis != "" {
 		t.Fatalf("age-only detection fabricated onset: %+v", withoutEvidence)
+	}
+
+	for _, tc := range []struct {
+		basis string
+	}{
+		{basis: "owner_condition"},
+		{basis: "pod_creation"},
+		{basis: "spec"},
+	} {
+		issue := fromProblem(k8s.Detection{
+			Kind: "Deployment", Namespace: "prod", Name: "api", Severity: "critical",
+			Reason: "Unavailable", OnsetUnknown: true, ResourceCreatedAt: createdAt,
+			IssueTiming: "started_at_resource_creation", IssueTimingBasis: tc.basis,
+		}, now, SourceProblem)
+		if !issue.FirstSeen.IsZero() || !issue.OnsetUnknown || issue.IssueTiming != "started_at_resource_creation" || issue.IssueTimingBasis != tc.basis {
+			t.Errorf("independent %s timing evidence was lost: %+v", tc.basis, issue)
+		}
 	}
 
 	onsetAt := now.Add(-500 * time.Millisecond)

@@ -2410,6 +2410,12 @@ func TestDetectProblems_RolloutStuckIssueTimingGen1(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: "gen1-gray", Namespace: "prod", CreationTimestamp: metav1.NewTime(now.Add(-8 * time.Minute))},
 			Status:     appsv1.DeploymentStatus{ObservedGeneration: 1, Conditions: stuckCond(now.Add(-4 * time.Minute))},
 		},
+		// No usable condition timestamp: the first-generation spec still proves
+		// this is the initial rollout, while the exact onset remains unknown.
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "gen1-no-ltt", Namespace: "prod", CreationTimestamp: metav1.NewTime(now.Add(-8 * time.Minute))},
+			Status:     appsv1.DeploymentStatus{ObservedGeneration: 1, Conditions: stuckCond(time.Time{})},
+		},
 		// Never healthy: Available=False pinned at creation outranks the
 		// recent Progressing LTT (which re-triggers on every rollout retry and
 		// would otherwise read as a months-long healthy window).
@@ -2447,6 +2453,10 @@ func TestDetectProblems_RolloutStuckIssueTimingGen1(t *testing.T) {
 	if !ok || gray.IssueTiming != "started_at_resource_creation" || gray.IssueTimingBasis != "spec" {
 		t.Errorf("gen1-gray issue_timing = (%q, %q), want (started_at_resource_creation, spec); ok=%v", gray.IssueTiming, gray.IssueTimingBasis, ok)
 	}
+	noLTT, ok := lookupProblem(problems, "Deployment", "gen1-no-ltt", "Rollout stuck")
+	if !ok || noLTT.IssueTiming != "started_at_resource_creation" || noLTT.IssueTimingBasis != "spec" || !noLTT.OnsetUnknown {
+		t.Errorf("gen1-no-ltt timing = (%q, %q), onsetUnknown=%v; want (started_at_resource_creation, spec), true; ok=%v", noLTT.IssueTiming, noLTT.IssueTimingBasis, noLTT.OnsetUnknown, ok)
+	}
 	nh, ok := lookupProblem(problems, "Deployment", "never-healthy", "Rollout stuck")
 	if !ok || nh.IssueTiming != "started_at_resource_creation" || nh.IssueTimingBasis != "condition" {
 		t.Errorf("never-healthy issue_timing = (%q, %q), want (started_at_resource_creation, condition); ok=%v", nh.IssueTiming, nh.IssueTimingBasis, ok)
@@ -2454,7 +2464,7 @@ func TestDetectProblems_RolloutStuckIssueTimingGen1(t *testing.T) {
 		t.Errorf("never-healthy onset = %v, want resource creation %v", nh.OnsetAt, now.Add(-2*time.Hour))
 	}
 	for _, problem := range problems {
-		if problem.IssueTiming != "" && problem.OnsetAt.IsZero() {
+		if problem.IssueTiming != "" && problem.IssueTimingBasis != "spec" && problem.OnsetAt.IsZero() {
 			t.Errorf("timestamp-backed issue_timing lost exact onset: %+v", problem)
 		}
 	}
@@ -2599,7 +2609,10 @@ func TestDetectProblems_PodIssueTimingCreationProximity(t *testing.T) {
 		t.Errorf("stable-pod late failure = (%q, %q), want (started_after_resource_was_healthy, owner_condition); ok=%v", latebreak.IssueTiming, latebreak.IssueTimingBasis, ok)
 	}
 	for _, problem := range problems {
-		if problem.IssueTiming != "" && problem.OnsetAt.IsZero() {
+		if problem.Kind == "Pod" && problem.Reason == "CrashLoopBackOff" && (!problem.OnsetAt.IsZero() || !problem.OnsetUnknown) {
+			t.Errorf("pod symptom onset must remain unknown when only workload timing is available: %+v", problem)
+		}
+		if problem.Kind != "Pod" && problem.IssueTiming != "" && problem.IssueTimingBasis != "spec" && problem.OnsetAt.IsZero() {
 			t.Errorf("timestamp-backed issue_timing lost exact onset: %+v", problem)
 		}
 	}

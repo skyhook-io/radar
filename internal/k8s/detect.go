@@ -528,7 +528,6 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			const maxDeployAgeForProximityIssueTiming = 15 * time.Minute
 			const establishedRestartLoop = 3
 			var podIssueTiming IssueTimingResult
-			var podOnsetAt time.Time
 			if ownerKind == "Deployment" && ownerName != "" {
 				if depLister := cache.Deployments(); depLister != nil {
 					if dep, err := depLister.Deployments(pod.Namespace).Get(ownerName); err == nil {
@@ -559,11 +558,10 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 								break
 							}
 						}
-						neverHealthyAt, neverHealthy := deploymentNeverHealthySince(dep)
+						_, neverHealthy := deploymentNeverHealthySince(dep)
 						switch {
 						case neverHealthy:
 							podIssueTiming = IssueTimingResult{IssueTiming: "started_at_resource_creation", Basis: "owner_condition"}
-							podOnsetAt = neverHealthyAt
 						case depAge <= maxDeployAgeForProximityIssueTiming && (podCreatedWithDeploy || rsCreatedWithDeploy):
 							// Original pod uses its own creation as the failingSince
 							// proxy; a backoff replacement (recreated minutes later in
@@ -574,15 +572,12 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 								failingSince = dep.CreationTimestamp.Time
 							}
 							podIssueTiming = IssueTimingFromConditionLTT(failingSince, dep.CreationTimestamp.Time, "pod_creation")
-							podOnsetAt = failingSince
 						case rsIsNewRollout && availCond != nil && availCond.Status == corev1.ConditionTrue:
 							podIssueTiming = IssueTimingFromConditionLTT(ownRS.CreationTimestamp.Time, dep.CreationTimestamp.Time, "pod_creation")
-							podOnsetAt = ownRS.CreationTimestamp.Time
 						case restartCount >= establishedRestartLoop:
 							// flap-poisoned Available LTT — omit
 						case availCond != nil && availCond.Status == corev1.ConditionFalse && !availCond.LastTransitionTime.IsZero():
 							podIssueTiming = IssueTimingFromConditionLTT(availCond.LastTransitionTime.Time, dep.CreationTimestamp.Time, "owner_condition")
-							podOnsetAt = availCond.LastTransitionTime.Time
 						}
 					}
 				}
@@ -608,7 +603,9 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				Cause:                cause,
 				Action:               action,
 			}
-			setDetectionOnset(&detection, now, podOnsetAt)
+			// The evidence above classifies workload/rollout timing, not when this
+			// Pod's specific waiting or termination reason began.
+			setDetectionOnset(&detection, now, time.Time{})
 			problems = append(problems, detection)
 		}
 	}

@@ -430,9 +430,10 @@ type Issue struct {
 	//                                        condition appeared.
 	//
 	// This is timing evidence, not a root-cause verdict. A bad rollout or bad
-	// config change can legitimately fail at resource creation. Owner-condition
-	// evidence is workload-level, not timing or attribution for this specific
-	// reason, and need not share FirstSeen's anchor.
+	// config change can legitimately fail at resource creation. The
+	// owner_condition, pod_creation, and spec bases classify independent
+	// workload or structural evidence; they do not timestamp this specific
+	// reason and need not share FirstSeen's anchor.
 	IssueTiming string `json:"issue_timing,omitempty"`
 	// IssueTimingBasis documents the evidence used to derive IssueTiming so the
 	// classification is auditable, not magic.

@@ -38,6 +38,15 @@ func issuesSeverity(token string) Severity {
 	}
 }
 
+func issueTimingIndependentOfOnset(basis string) bool {
+	switch basis {
+	case "owner_condition", "pod_creation", "spec":
+		return true
+	default:
+		return false
+	}
+}
+
 func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 	sev := issuesSeverity(p.Severity)
 	var since time.Time
@@ -49,7 +58,11 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 	reason := p.Reason
 	cause, action := p.Cause, p.Action
 	issueTiming, issueTimingBasis := p.IssueTiming, p.IssueTimingBasis
-	if since.IsZero() {
+	if since.IsZero() && !issueTimingIndependentOfOnset(issueTimingBasis) {
+		issueTiming = ""
+		issueTimingBasis = ""
+	}
+	if !p.OnsetAt.IsZero() && p.OnsetAt.After(now) {
 		issueTiming = ""
 		issueTimingBasis = ""
 	}

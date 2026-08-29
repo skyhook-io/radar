@@ -216,7 +216,7 @@ func foldGroup(members []Issue) Issue {
 	}
 	g.IssueTiming = groupIssueTiming
 	g.IssueTimingBasis = groupBasis
-	if g.OnsetCoverage != nil && g.OnsetCoverage.Known > 0 && g.OnsetCoverage.Unknown > 0 {
+	if g.OnsetCoverage != nil && g.OnsetCoverage.Known > 0 && g.OnsetCoverage.Unknown > 0 && !issueTimingIndependentOfOnset(g.IssueTimingBasis) {
 		g.IssueTiming = ""
 		g.IssueTimingBasis = ""
 	}
