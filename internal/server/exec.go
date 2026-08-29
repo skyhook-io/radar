@@ -30,6 +30,8 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
+const podExecHeartbeatInterval = 30 * time.Second
+
 // defaultShellScript is the built-in fallback command used when no shell is
 // requested explicitly via ?shell= and no override is set via --pod-shell-default.
 // It exports TERM so colours and cursor movement work in container shells that
@@ -223,6 +225,24 @@ type TerminalMessage struct {
 	Cols uint16 `json:"cols,omitempty"`
 }
 
+func runPodExecHeartbeat(conn *websocket.Conn, interval time.Duration, done <-chan struct{}) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			// Active output already keeps intermediaries alive, so let the Ping
+			// wait behind it instead of timing out a healthy busy terminal.
+			if err := conn.WriteControl(websocket.PingMessage, nil, time.Time{}); err != nil {
+				return
+			}
+		}
+	}
+}
+
 // wsWriter wraps a websocket connection to satisfy io.Writer
 type wsWriter struct {
 	conn *websocket.Conn
@@ -294,6 +314,9 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 		conn.Close()
 		log.Printf("Exec session %s ended (%s/%s)", sessionID, namespace, podName)
 	}()
+	heartbeatDone := make(chan struct{})
+	defer close(heartbeatDone)
+	go runPodExecHeartbeat(conn, podExecHeartbeatInterval, heartbeatDone)
 
 	// Get K8s client and config (impersonated when auth is enabled)
 	client := s.getClientForRequest(r)

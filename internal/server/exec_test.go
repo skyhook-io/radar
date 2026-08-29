@@ -3,12 +3,79 @@ package server
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/gorilla/websocket"
 	corev1 "k8s.io/api/core/v1"
 )
+
+func TestRunPodExecHeartbeat(t *testing.T) {
+	stop := make(chan struct{})
+	returned := make(chan struct{})
+	serverErr := make(chan error, 1)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		runPodExecHeartbeat(conn, 10*time.Millisecond, stop)
+		close(returned)
+	}))
+	t.Cleanup(srv.Close)
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial WebSocket: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+
+	pingReceived := make(chan struct{}, 1)
+	conn.SetPingHandler(func(data string) error {
+		select {
+		case pingReceived <- struct{}{}:
+		default:
+		}
+		return conn.WriteControl(websocket.PongMessage, []byte(data), time.Now().Add(time.Second))
+	})
+	go func() {
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		select {
+		case <-stop:
+		default:
+			close(stop)
+		}
+	})
+
+	select {
+	case <-pingReceived:
+	case err := <-serverErr:
+		t.Fatalf("upgrade WebSocket: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for heartbeat Ping")
+	}
+
+	close(stop)
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat loop did not stop")
+	}
+}
 
 // TestDefaultExecCommand pins the argv precedence: ?shell= override wins
 // over everything; Windows pods route to cmd.exe ahead of the POSIX-only
