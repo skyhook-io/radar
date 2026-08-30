@@ -196,7 +196,7 @@ func TestResourceCountsMarksDeniedClusterTrustBundleForbidden(t *testing.T) {
 	user := &auth.User{Username: "alice"}
 	perms := &auth.UserPermissions{AllowedNamespaces: nil}
 	perms.SetCanI("list", "certificates.k8s.io", "clustertrustbundles", "", false)
-	s.permCache.Set(user.Username, perms)
+	s.permCache.Set(user.Username, user.Groups, perms)
 	req := requestWithUser(http.MethodGet, "/api/resource-counts", user)
 
 	rec := httptest.NewRecorder()
