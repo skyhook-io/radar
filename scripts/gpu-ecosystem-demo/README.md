@@ -71,6 +71,11 @@ This suite is breadth-first and renderer-focused. Installing every controller wo
 
 Add a live-controller mode only when a Radar feature depends on controller behavior rather than the resource contract or rendered state.
 
+Kueue admission behavior now has its own focused live lane:
+[`scripts/kueue-demo.sh`](../kueue-demo.sh). It installs only Kueue and verifies
+controller-earned admitted, quota-blocked, and held-queue states without adding
+controller races to this breadth suite.
+
 ## Real GPU acceptance lane
 
 Before release claims involving hardware, run one ephemeral GPU node in a real managed cluster and verify:
