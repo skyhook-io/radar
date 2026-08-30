@@ -19,9 +19,10 @@ export function claimDailyUpdateCheck(
   return day
 }
 
-export function claimBrowserUpdateCheck(): string | null {
+export function claimBrowserUpdateCheck(installScope?: string): string | null {
   try {
-    return claimDailyUpdateCheck(localStorage, getApiBase(), new Date())
+    const scope = installScope ? `${getApiBase()}:${installScope}` : getApiBase()
+    return claimDailyUpdateCheck(localStorage, scope, new Date())
   } catch {
     return null
   }

@@ -16,6 +16,7 @@ export interface VersionUpdateStatus {
 export const IN_CLUSTER_UPGRADE_URL = 'https://radarhq.io/docs/configuration/in-cluster'
 
 export function versionUpdateURL(deploymentMode: DeploymentMode, releaseURL?: string): string | undefined {
+  if (deploymentMode === 'cloud') return undefined
   return deploymentMode === 'in-cluster' ? IN_CLUSTER_UPGRADE_URL : releaseURL
 }
 

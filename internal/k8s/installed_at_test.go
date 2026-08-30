@@ -20,6 +20,7 @@ func TestInstalledAtReadsOwnDeployment(t *testing.T) {
 		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
 			Name: "radar", Namespace: "radar", CreationTimestamp: metav1.NewTime(created),
 		}},
+		// A same-named Deployment elsewhere must not be mistaken for ours.
 		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
 			Name: "radar", Namespace: "other", CreationTimestamp: metav1.NewTime(created.Add(72 * time.Hour)),
 		}},
@@ -82,6 +83,7 @@ func TestInstalledAtCachedDoesNotInitiateRead(t *testing.T) {
 }
 
 func TestInstalledAtZeroWhenUnknown(t *testing.T) {
+	// Every unknown must be 0 so callers never substitute a value that churns.
 	kc := fake.NewSimpleClientset()
 	ctx := context.Background()
 	for _, tc := range []struct {
@@ -93,6 +95,7 @@ func TestInstalledAtZeroWhenUnknown(t *testing.T) {
 		{"no downward-API name", kc, "radar", ""},
 		{"deployment absent", kc, "radar", "radar"},
 		{"nil client", nil, "radar", "radar"},
+		// A typed nil in an interface is non-nil and panics on first use without the guard.
 		{"typed-nil client", (*kubernetes.Clientset)(nil), "radar", "radar"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

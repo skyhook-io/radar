@@ -1514,35 +1514,36 @@ export interface VersionInfo {
   releaseUrl?: string;
   releaseNotes?: string;
   installMethod: InstallMethod;
+  installScope?: string;
   updateCommand?: string;
   error?: string;
 }
 
 interface BrowserUpdateCheckDependencies {
-  claimBrowserCheck: typeof claimBrowserUpdateCheck
-  sendBrowserCheck: (reportDay: string) => Promise<void>
+  claimBrowserCheck: (installScope?: string) => string | null
+  sendBrowserCheck: () => Promise<void>
 }
 
-export async function sendBrowserUpdateCheck(reportDay: string): Promise<void> {
+export async function sendBrowserUpdateCheck(): Promise<void> {
   await fetch(apiUrl('/version-check/browser'), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    headers: getAuthHeaders(),
     credentials: getCredentialsMode(),
     keepalive: true,
-    body: JSON.stringify({ reportDay }),
   })
 }
 
 export function reportBrowserUpdateCheck(
   deploymentMode: DeploymentMode | undefined,
+  installScope?: string,
   dependencies: BrowserUpdateCheckDependencies = {
     claimBrowserCheck: claimBrowserUpdateCheck,
     sendBrowserCheck: sendBrowserUpdateCheck,
   },
 ): void {
   if (deploymentMode !== 'in-cluster') return
-  const reportDay = dependencies.claimBrowserCheck()
-  if (reportDay) void dependencies.sendBrowserCheck(reportDay).catch(() => {})
+  const claimedDay = dependencies.claimBrowserCheck(installScope)
+  if (claimedDay) void dependencies.sendBrowserCheck().catch(() => {})
 }
 
 export function useVersionCheck() {
@@ -1559,8 +1560,8 @@ export function useVersionCheck() {
   });
 
   useEffect(() => {
-    if (query.isFetched) reportBrowserUpdateCheck(deploymentMode)
-  }, [deploymentMode, query.isFetched])
+    if (query.isFetched) reportBrowserUpdateCheck(deploymentMode, query.data?.installScope)
+  }, [deploymentMode, query.data?.installScope, query.isFetched])
 
   return query;
 }

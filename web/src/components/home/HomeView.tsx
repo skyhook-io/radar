@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from 'react'
-import { useCapabilities, useCloudConnectSelf, useDashboard, useDashboardCRDs, useDashboardHelm, useIssues, useVersionCheck, type IssuesResponse } from '../../api/client'
+import { useCloudConnectSelf, useDashboard, useDashboardCRDs, useDashboardHelm, useIssues, useVersionCheck, type IssuesResponse } from '../../api/client'
 import { useConnection } from '../../context/ConnectionContext'
 import type { ClusterLoadState } from '../../types/clusterLoadState'
 import type { ExtendedMainView, Topology, SelectedResource } from '../../types'
@@ -59,7 +59,8 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
   // (available, softened-denied, or karpenterless-with-managers/groups) and
   // returns null otherwise — the outer gate only excludes states with nothing
   // to fetch against.
-  const karpenterState = useCapabilitiesContext().karpenter?.state
+  const capabilities = useCapabilitiesContext()
+  const karpenterState = capabilities.karpenter?.state
   const capacityCardPossible =
     karpenterState === 'available' || karpenterState === 'denied' || karpenterState === 'not_detected'
   const { data, isLoading, error, dataUpdatedAt, refetch } = useDashboard(namespaces)
@@ -68,8 +69,7 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
   const issues = issuesData?.issues ?? []
   const issueCount = issuesData?.total_matched ?? issuesData?.total ?? issues.length
   const hasCriticalIssues = issues.some((issue) => issue.severity === 'critical')
-  const { data: capabilities } = useCapabilities()
-  const deploymentMode = capabilities ? (capabilities.deployment?.mode ?? 'local') : undefined
+  const deploymentMode = capabilities.deployment?.mode ?? 'local'
   const { data: versionInfo } = useVersionCheck()
   const showHomeUpgrade = deploymentMode === 'in-cluster'
     && !!versionInfo?.updateAvailable

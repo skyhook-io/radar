@@ -61,6 +61,7 @@ type UpdateInfo struct {
 	ReleaseURL     string        `json:"releaseUrl,omitempty"`
 	ReleaseNotes   string        `json:"releaseNotes,omitempty"`
 	InstallMethod  InstallMethod `json:"installMethod"`
+	InstallScope   string        `json:"installScope,omitempty"`
 	UpdateCommand  string        `json:"updateCommand,omitempty"`
 	Error          string        `json:"error,omitempty"`
 }
@@ -205,6 +206,9 @@ func fetchLatestRelease(ctx context.Context, options checkOptions) *UpdateInfo {
 	}
 	if installedAt := installTimestamp(ctx, mode); installedAt != 0 {
 		params.Set("t", strconv.FormatInt(installedAt, 10))
+		if mode == "in-cluster" {
+			result.InstallScope = strconv.FormatInt(installedAt, 10)
+		}
 	}
 	if options.source != "" {
 		params.Set("source", options.source)

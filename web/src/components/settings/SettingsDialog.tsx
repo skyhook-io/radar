@@ -970,7 +970,7 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
 
   return (
     <div className="space-y-4">
-      {version?.updateAvailable && deploymentMode !== undefined && (
+      {version?.updateAvailable && deploymentMode !== undefined && deploymentMode !== 'cloud' && (
         <a
           href={versionUpdateURL(deploymentMode, version.releaseUrl)}
           target="_blank"

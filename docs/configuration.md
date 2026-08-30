@@ -298,8 +298,8 @@ request, both to Skyhook, neither containing cluster data:
   installation timestamp when Radar can determine it. Radar caches the release
   result for one hour. A browser profile opening a standalone in-cluster Radar
   may cause one additional proxied check, at most once per UTC day, to estimate
-  active browser use. It carries the same installation fields plus the attempted
-  UTC day, but no stable browser identifier, username, browser fingerprint,
+  active browser use. Radar adds the UTC day and the same installation fields,
+  but no stable browser identifier, username, browser fingerprint,
   authentication state, or cluster resource data. Development builds are
   excluded from measurement; prerelease and custom builds are labeled.
 - **Cloud dialog copy** — only when you *open* the Cloud dialog, to fetch the

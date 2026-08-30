@@ -32,5 +32,6 @@ describe('Radar version helpers', () => {
     const releaseURL = 'https://github.com/skyhook-io/radar/releases/tag/v1.2.4'
     expect(versionUpdateURL('in-cluster', releaseURL)).toBe(IN_CLUSTER_UPGRADE_URL)
     expect(versionUpdateURL('local', releaseURL)).toBe(releaseURL)
+    expect(versionUpdateURL('cloud', releaseURL)).toBeUndefined()
   })
 })

@@ -2,10 +2,8 @@ package server
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -83,11 +81,10 @@ func TestVersionCheckBrowserAcceptsOneBestEffortAttempt(t *testing.T) {
 		k8s.ForceInCluster = false
 	})
 
-	body := fmt.Sprintf(`{"reportDay":%q}`, time.Now().UTC().Format("2006-01-02"))
 	response := httptest.NewRecorder()
 	(&Server{}).handleVersionCheckBrowser(
 		response,
-		httptest.NewRequest(http.MethodPost, "/api/version-check/browser", strings.NewReader(body)),
+		httptest.NewRequest(http.MethodPost, "/api/version-check/browser", nil),
 	)
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
@@ -95,34 +92,26 @@ func TestVersionCheckBrowserAcceptsOneBestEffortAttempt(t *testing.T) {
 }
 
 func TestVersionCheckBrowserRejectsOtherDeploymentModes(t *testing.T) {
-	t.Setenv("RADAR_CLOUD_MODE", "true")
-	response := httptest.NewRecorder()
-	(&Server{}).handleVersionCheckBrowser(
-		response,
-		httptest.NewRequest(http.MethodPost, "/api/version-check/browser", strings.NewReader(`{"reportDay":"2026-08-29"}`)),
-	)
-	if response.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
-	}
-}
-
-func TestVersionCheckBrowserValidatesReportDay(t *testing.T) {
-	k8s.ForceInCluster = true
-	t.Cleanup(func() { k8s.ForceInCluster = false })
-
-	for _, body := range []string{
-		`{"reportDay":"not-a-day"}`,
-		`{"reportDay":"2020-01-01"}`,
-		`{"reportDay":"2026-08-29","extra":true}`,
-		`{"reportDay":"2026-08-29"}{}`,
+	for _, tc := range []struct {
+		name  string
+		cloud string
+	}{
+		{name: "local"},
+		{name: "cloud", cloud: "true"},
 	} {
-		response := httptest.NewRecorder()
-		(&Server{}).handleVersionCheckBrowser(
-			response,
-			httptest.NewRequest(http.MethodPost, "/api/version-check/browser", strings.NewReader(body)),
-		)
-		if response.Code != http.StatusBadRequest {
-			t.Errorf("body %s: status = %d, response = %s", body, response.Code, response.Body.String())
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("RADAR_CLOUD_MODE", tc.cloud)
+			restoreLocalMode := k8s.SetTestLocalMode()
+			t.Cleanup(restoreLocalMode)
+
+			response := httptest.NewRecorder()
+			(&Server{}).handleVersionCheckBrowser(
+				response,
+				httptest.NewRequest(http.MethodPost, "/api/version-check/browser", nil),
+			)
+			if response.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+			}
+		})
 	}
 }
