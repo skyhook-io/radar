@@ -59,6 +59,19 @@ describe('RadarVersionLine', () => {
     expect(html).toContain('Open the release to upgrade')
   })
 
+  it('describes the docs fallback when a Helm navigation callback is unavailable', () => {
+    const html = renderToString(
+      <RadarVersionLine
+        version={version}
+        manager={{ ownership: 'helm', namespace: 'radar-system', release: 'radar' }}
+      />,
+    )
+    expect(html).toContain('https://radarhq.io/docs/configuration/in-cluster')
+    expect(html).toContain('Managed by Helm release radar-system/radar')
+    expect(html).toContain('Open the in-cluster upgrade instructions')
+    expect(html).not.toContain('Open the release to upgrade')
+  })
+
   it('only deep-links verified GitOps ownership', () => {
     const controllerRef = { group: 'kustomize.toolkit.fluxcd.io', kind: 'Kustomization', namespace: 'flux-system', name: 'radar' }
     const verified = renderToString(
@@ -81,5 +94,19 @@ describe('RadarVersionLine', () => {
     expect(suspected).toContain('appears to be managed by Flux')
     expect(suspected).toContain('Open the upgrade instructions')
     expect(suspected).not.toContain('Managed by Kustomization')
+  })
+
+  it('describes the docs fallback when a GitOps navigation callback is unavailable', () => {
+    const controllerRef = { group: 'kustomize.toolkit.fluxcd.io', kind: 'Kustomization', namespace: 'flux-system', name: 'radar' }
+    const html = renderToString(
+      <RadarVersionLine
+        version={version}
+        manager={{ ownership: 'gitops', controller: 'Flux', controllerRef, controllerVerified: true }}
+      />,
+    )
+    expect(html).toContain('https://radarhq.io/docs/configuration/in-cluster')
+    expect(html).toContain('Managed by Kustomization flux-system/radar')
+    expect(html).toContain('Open the in-cluster upgrade instructions and apply the change through GitOps')
+    expect(html).not.toContain('Open it to upgrade through GitOps')
   })
 })

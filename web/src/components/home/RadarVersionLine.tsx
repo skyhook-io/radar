@@ -50,15 +50,19 @@ export function RadarVersionLine({
   const actionClassName = 'group inline-flex items-center gap-1 text-amber-600 transition-colors hover:text-amber-500 dark:text-amber-400'
 
   if (manager?.ownership === 'helm' && manager.namespace && manager.release) {
-    detail = `Managed by Helm release ${manager.namespace}/${manager.release}. Open the release to upgrade.`
     if (onNavigateToHelmRelease) {
+      detail = `Managed by Helm release ${manager.namespace}/${manager.release}. Open the release to upgrade.`
       onClick = () => onNavigateToHelmRelease(manager.namespace!, manager.release!)
+    } else {
+      detail = `Managed by Helm release ${manager.namespace}/${manager.release}. Open the in-cluster upgrade instructions.`
     }
   } else if (manager?.controllerVerified && controller && gitOpsPath) {
     const objectName = `${controller.namespace ? `${controller.namespace}/` : ''}${controller.name}`
-    detail = `Managed by ${controller.kind} ${objectName}. Open it to upgrade through GitOps.`
     if (onNavigateToGitOps) {
+      detail = `Managed by ${controller.kind} ${objectName}. Open it to upgrade through GitOps.`
       onClick = () => onNavigateToGitOps(gitOpsPath)
+    } else {
+      detail = `Managed by ${controller.kind} ${objectName}. Open the in-cluster upgrade instructions and apply the change through GitOps.`
     }
   } else if (manager?.ownership === 'gitops') {
     detail = manager.controller
