@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -191,7 +193,7 @@ func TestPodFileCatCommand(t *testing.T) {
 	for _, want := range []string{
 		"wc -c < '/var/log/app.log'", // the size is announced so a short read is detectable
 		"cat '/var/log/app.log'",
-		podFileDrainGuard,
+		"read _", // the drain guard, without which a slow link loses the tail
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("script %q is missing %q", script, want)
@@ -215,6 +217,26 @@ func TestPodFileCatCommandRefusesNonRegularFilesBeforeReading(t *testing.T) {
 	}
 	if !strings.Contains(script, "exit 3") {
 		t.Errorf("the guard must exit with %d so the handler can name the reason: %q", podFileNotRegularExit, script)
+	}
+}
+
+// The size and the bytes come from two separate reads of the file. If it shrank
+// in between, the reader is waiting for bytes that will never arrive, so arming
+// the guard would park the command and hang the request instead of failing it.
+func TestPodFileCatCommandArmsTheGuardOnlyWhenTheFileStillHoldsWhatWasPromised(t *testing.T) {
+	script := podFileCatCommand("/var/log/app.log")[2]
+
+	recheck := strings.Index(script, "after=$(wc -c <")
+	guard := strings.Index(script, "read _")
+	if recheck < 0 {
+		t.Fatalf("script never re-measures the file before arming the guard: %q", script)
+	}
+	if guard < recheck {
+		t.Errorf("the guard is armed before the re-measure, so a shrinking file still parks it: %q", script)
+	}
+	gate := strings.Index(script, "-ge ")
+	if gate < recheck || gate > guard {
+		t.Errorf("the re-measure must gate the guard on still having the promised bytes: %q", script)
 	}
 }
 
@@ -446,6 +468,36 @@ func closeWithin(t *testing.T, stream *podFileStream, limit time.Duration) error
 	case <-time.After(limit):
 		t.Fatal("Close() did not return")
 		return nil
+	}
+}
+
+// Running a command in a pod and writing a file to the user's disk is exactly
+// what a page on another site must not be able to trigger.
+func TestPodFileSaveRejectsCrossOriginRequests(t *testing.T) {
+	s := &Server{saveFileStreamFunc: func(string, io.Reader) (string, error) {
+		t.Error("a cross-origin request reached the save callback")
+		return "", nil
+	}}
+
+	for origin, wantStatus := range map[string]int{
+		"https://evil.example.com":  http.StatusForbidden,
+		"http://localhost.evil.com": http.StatusForbidden,
+		"http://localhost:9280":     0, // allowed through to the handler's own checks
+		"":                          0, // same-origin or a non-browser caller
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/api/pods/ns/pod/files/save?container=c&path=/f", nil)
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		rec := httptest.NewRecorder()
+		s.handlePodFileSave(rec, req)
+
+		if wantStatus == http.StatusForbidden && rec.Code != http.StatusForbidden {
+			t.Errorf("Origin %q got %d, want %d", origin, rec.Code, http.StatusForbidden)
+		}
+		if wantStatus == 0 && rec.Code == http.StatusForbidden {
+			t.Errorf("Origin %q was rejected as cross-origin", origin)
+		}
 	}
 }
 

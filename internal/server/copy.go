@@ -194,6 +194,13 @@ func (s *Server) handlePodFileDownload(w http.ResponseWriter, r *http.Request) {
 // fails, so the desktop app asks the backend to do the whole thing.
 // POST /api/pods/{ns}/{name}/files/save?container=X&path=/some/file
 func (s *Server) handlePodFileSave(w http.ResponseWriter, r *http.Request) {
+	// Runs a command in a pod and writes a file to the user's disk, which is
+	// exactly what the local origin check exists to keep a page on another site
+	// from triggering.
+	if !localOriginOK(r) {
+		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
+		return
+	}
 	if s.saveFileStreamFunc == nil {
 		s.writeError(w, http.StatusNotFound, "not available")
 		return
@@ -377,7 +384,16 @@ func podFileCatCommand(filePath string) []string {
 	quoted := shellQuote(filePath)
 	script := "if [ -e " + quoted + " ] && [ ! -f " + quoted + " ]; then echo 'not a regular file' >&2; exit " +
 		strconv.Itoa(podFileNotRegularExit) + "; fi; " +
-		"size=$(wc -c < " + quoted + ") || exit $?; printf '%s\n' \"$size\"; cat " + quoted + podFileDrainGuard
+		"size=$(wc -c < " + quoted + ") || exit $?; " +
+		"printf '%s\n' \"$size\"; " +
+		"cat " + quoted + "; rc=$?; " +
+		// The size and the bytes come from two separate reads, so a file that
+		// shrank in between leaves the reader waiting for bytes that will never
+		// come while the guard holds the stream open. Re-measuring before arming
+		// it turns that deadlock into an ordinary short read.
+		"after=$(wc -c < " + quoted + " 2>/dev/null) || after=-1; " +
+		"[ $rc -eq 0 ] && [ \"${after:--1}\" -ge \"$size\" ] && read _; " +
+		"exit $rc"
 	return []string{"/bin/sh", "-c", script}
 }
 
