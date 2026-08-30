@@ -75,7 +75,7 @@ export function RadarVersionLine({
   const accessibleLabel = `${displayVersion(latestVersion)} available${ageDetail ? `. ${ageDetail}` : ''} — ${detail}`
   const action = managerLoading ? (
     <span className={actionClassName}>
-      <UpgradeLabel version={latestVersion} tier={updateStatus.tier} />
+      <UpgradeLabel version={latestVersion} />
       <span className="sr-only">{detail}</span>
     </span>
   ) : onClick ? (
@@ -85,7 +85,7 @@ export function RadarVersionLine({
       onClick={onClick}
       aria-label={accessibleLabel}
     >
-      <UpgradeLabel version={latestVersion} tier={updateStatus.tier} />
+      <UpgradeLabel version={latestVersion} />
     </button>
   ) : (
     <a
@@ -95,7 +95,7 @@ export function RadarVersionLine({
       className={actionClassName}
       aria-label={accessibleLabel}
     >
-      <UpgradeLabel version={latestVersion} tier={updateStatus.tier} />
+      <UpgradeLabel version={latestVersion} />
     </a>
   )
 
@@ -116,7 +116,7 @@ export function RadarVersionLine({
 }
 
 function upgradeActionClassName(tier: VersionUpdateTier): string {
-  if (tier === 'patch') return 'text-theme-text-tertiary hover:text-accent-text'
+  if (tier === 'patch') return 'text-accent-text hover:text-accent'
   if (tier === 'minor') return 'font-medium text-accent hover:text-accent-light'
   return 'font-medium text-warning-text hover:opacity-80'
 }
@@ -127,13 +127,10 @@ function updateAgeDetail(status: ReturnType<typeof getVersionUpdateStatus>): str
   return `This installation is ${status.minorVersionsBehind} minor releases behind.`
 }
 
-function UpgradeLabel({ version, tier }: { version: string; tier: VersionUpdateTier }) {
+function UpgradeLabel({ version }: { version: string }) {
   return (
     <>
-      <ArrowUpCircle
-        className={`h-3.5 w-3.5 shrink-0 ${tier === 'patch' ? 'text-accent-text' : ''}`}
-        aria-hidden
-      />
+      <ArrowUpCircle className="h-3.5 w-3.5 shrink-0" aria-hidden />
       <span><span className="font-mono">{displayVersion(version)}</span> available</span>
     </>
   )

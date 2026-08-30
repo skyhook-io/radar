@@ -28,7 +28,7 @@ describe('RadarVersionLine', () => {
     expect(html).toContain('v1.2.3')
     expect(html).toContain('v1.2.4')
     expect(html).toContain('available')
-    expect(html).toContain('text-theme-text-tertiary hover:text-accent-text')
+    expect(html).toContain('text-accent-text hover:text-accent')
   })
 
   it('makes minor upgrades more prominent', () => {
