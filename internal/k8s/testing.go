@@ -146,10 +146,13 @@ func InitTestDynamicResourceCache(dynClient dynamic.Interface, resources []APIRe
 		core.AddAPIResource(r)
 	}
 
+	// Installing the singleton directly is what marks discovery initialized —
+	// InitResourceDiscovery returns early when it is already set. The binding
+	// marks it valid for whatever client the test environment has (usually
+	// nil): the singleton is served only while that binding stays current.
 	discoveryMu.Lock()
 	resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: core}
-	discoveryOnce = new(sync.Once)
-	discoveryOnce.Do(func() {})
+	resourceDiscoveryClient = GetDiscoveryClient()
 	discoveryMu.Unlock()
 
 	return InitDynamicResourceCache(nil)

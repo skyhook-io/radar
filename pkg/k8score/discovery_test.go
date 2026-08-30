@@ -358,3 +358,31 @@ func TestGetGVRBareKindPrefersListWatchAcrossGroups(t *testing.T) {
 		})
 	}
 }
+
+// A nil *discovery.DiscoveryClient handed to this constructor makes a non-nil
+// interface value, so a plain `client == nil` guard passes and the first call
+// on the client segfaults. This crashed the whole internal/k8s test binary in
+// CI, where discovery starts before any client exists.
+func TestNewResourceDiscoveryRejectsATypedNilClient(t *testing.T) {
+	var client *discovery.DiscoveryClient // nil, but not a nil interface
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("constructing with a typed-nil client must return an error, not panic: %v", r)
+		}
+	}()
+
+	rd, err := NewResourceDiscovery(client)
+	if err == nil {
+		t.Fatal("expected an error for a nil discovery client")
+	}
+	if rd != nil {
+		t.Errorf("expected no discovery on error, got %#v", rd)
+	}
+}
+
+func TestNewResourceDiscoveryRejectsAPlainNilClient(t *testing.T) {
+	if _, err := NewResourceDiscovery(nil); err == nil {
+		t.Fatal("expected an error for a nil discovery client")
+	}
+}
