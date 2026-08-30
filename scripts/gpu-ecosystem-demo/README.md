@@ -71,6 +71,11 @@ This suite is breadth-first and renderer-focused. Installing every controller wo
 
 Add a live-controller mode only when a Radar feature depends on controller behavior rather than the resource contract or rendered state.
 
+JobSet ownership, role/index propagation, dependency gating, and terminal failure
+now have a focused live lane: [`scripts/jobset-demo.sh`](../jobset-demo.sh). It
+installs only JobSet and validates real reconciliation without adding controller
+races to this breadth suite.
+
 ## Real GPU acceptance lane
 
 Before release claims involving hardware, run one ephemeral GPU node in a real managed cluster and verify:

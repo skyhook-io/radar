@@ -2,6 +2,7 @@
 .PHONY: calico-demo calico-demo-down calico-demo-status
 .PHONY: cilium-demo cilium-demo-down cilium-demo-status
 .PHONY: gpu-ecosystem-demo gpu-ecosystem-demo-down gpu-ecosystem-demo-status
+.PHONY: jobset-demo jobset-demo-down jobset-demo-reset jobset-demo-status jobset-demo-verify
 .PHONY: release release-binaries-dry docker docker-test docker-multiarch docker-push
 .PHONY: desktop desktop-binary desktop-dev desktop-package-darwin desktop-package-windows desktop-package-linux
 
@@ -314,6 +315,24 @@ gpu-ecosystem-demo-down:
 gpu-ecosystem-demo-status:
 	./scripts/gpu-ecosystem-demo.sh status
 
+# Focused live JobSet controller lane. Complements the controller-free GPU
+# breadth fixtures with role/index lineage, dependency gating, and a terminal
+# failure. See scripts/jobset-demo/README.md for the proof boundary.
+jobset-demo:
+	./scripts/jobset-demo.sh up
+
+jobset-demo-down:
+	./scripts/jobset-demo.sh down
+
+jobset-demo-reset:
+	./scripts/jobset-demo.sh reset
+
+jobset-demo-status:
+	./scripts/jobset-demo.sh status
+
+jobset-demo-verify:
+	./scripts/jobset-demo.sh verify
+
 # Bootstrap a kind cluster running real Calico with its aggregated API server,
 # plus the policy shapes the Calico surfaces render (both API groups serving the
 # same objects, all three staged kinds including a staged deletion, a non-default
@@ -455,6 +474,7 @@ help:
 	@echo "  make beyla-demo       - Grafana Beyla eBPF traffic fixtures"
 	@echo "  make cilium-demo      - Cilium + Hubble Relay, all Radar connection lanes"
 	@echo "  make gpu-ecosystem-demo - 37 GPU, batch, and AI/ML resource fixtures"
+	@echo "  make jobset-demo      - Live JobSet role, dependency, and failure fixtures"
 	@echo "  make calico-demo      - Real Calico, both API groups, staged policies"
 	@echo ""
 	@echo "Desktop:"
