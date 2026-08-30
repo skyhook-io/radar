@@ -204,16 +204,17 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
               <a href="https://modelcontextprotocol.io" target="_blank" rel="noopener noreferrer" className="text-purple-400 hover:text-purple-300 underline underline-offset-2">
                 Model Context Protocol
               </a>{' '}
-              (MCP) server that lets AI agents query your cluster through Radar.
+              (MCP) server that lets AI agents inspect, diagnose, and operate your cluster through Radar.
               Unlike raw kubectl access, Radar gives your AI pre-processed, enriched data —
               topology graphs, health assessments, deduplicated events, filtered logs — so it
               can understand your cluster state quickly without burning through context on
               verbose YAML output.
             </p>
             <p className="text-sm text-theme-text-secondary leading-relaxed">
-              Read tools are strictly read-only. Write tools (restart, scale, sync, apply,
-              node drain) are annotated as destructive so your AI client can flag them and
-              prompt before running.
+              Most read tools do not change cluster state. Live route diagnosis can create up
+              to five self-deleting probe pods when explicitly requested. Write tools (restart,
+              scale, sync, apply, node drain) are annotated as destructive so your AI client
+              can flag them and prompt before running.
             </p>
           </div>
 
