@@ -59,9 +59,16 @@ export function costFreshnessLabel(
       ? '1-hour allocation average'
       : 'current allocation average'
   if (!dataThrough) return `latest Kubecost ${average}`
+  const timestamp = costDataThroughLabel(dataThrough)
+  if (!timestamp) return `latest Kubecost ${average}`
+  return `Kubecost ${average} · data through ${timestamp}`
+}
+
+export function costDataThroughLabel(dataThrough?: string): string {
+  if (!dataThrough) return ''
   const timestamp = new Date(dataThrough)
-  if (Number.isNaN(timestamp.getTime())) return `latest Kubecost ${average}`
-  return `Kubecost ${average} · data through ${timestamp.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`
+  if (Number.isNaN(timestamp.getTime())) return ''
+  return timestamp.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
 }
 
 export function costIntegrationUnavailableMessage(

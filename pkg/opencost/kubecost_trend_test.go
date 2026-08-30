@@ -17,6 +17,7 @@ func TestComputeKubecostTrendUsesRetainedBucketsAndFiltersNamespaces(t *testing.
 		Namespaces: []string{"allowed"},
 		Currency:   "EUR",
 		ClusterID:  "cluster-a",
+		now:        time.Date(2026, 8, 29, 4, 0, 0, 0, time.UTC),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -43,11 +44,95 @@ func TestComputeKubecostTrendUsesRetainedBucketsAndFiltersNamespaces(t *testing.
 		t.Fatalf("window = %d..%d, want seven days", response.WindowStart, response.WindowEnd)
 	}
 	request := transport.requests[0].params
-	if request.Get("window") != "7d" || request.Get("aggregate") != "cluster,namespace" || request.Get("accumulate") != "false" || request.Get("idle") != "false" || request.Get("shareIdle") != "false" {
+	if request.Get("window") != "8d" || request.Get("step") != "24h" || request.Get("aggregate") != "cluster,namespace" || request.Get("accumulate") != "false" || request.Get("idle") != "false" || request.Get("shareIdle") != "false" {
 		t.Fatalf("unexpected query: %v", request)
 	}
 	if request.Get("filter") != `cluster:"cluster-a"` {
 		t.Fatalf("filter = %q", request.Get("filter"))
+	}
+}
+
+func TestComputeKubecostTrendAnchorsRangeToLatestRetainedBucket(t *testing.T) {
+	transport := &fakeKubecostTransport{responses: []string{
+		`{"code":200,"data":[{"row":{"properties":{"cluster":"cluster-a","namespace":"demo"},"start":"2026-08-28T23:00:00Z","end":"2026-08-29T00:00:00Z","minutes":60,"totalCost":1}},{"row":{"properties":{"cluster":"cluster-a","namespace":"demo"},"start":"2026-08-29T03:00:00Z","end":"2026-08-29T04:00:00Z","minutes":60,"totalCost":2}},{"row":{"properties":{"cluster":"cluster-a","namespace":"demo"},"start":"2026-08-29T09:00:00Z","end":"2026-08-29T10:00:00Z","minutes":60,"totalCost":3}}]}`,
+	}}
+	response, err := ComputeKubecostTrend(context.Background(), NewKubecostClient(transport), KubecostTrendOptions{
+		Range: "6h", ClusterID: "cluster-a", now: time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantEnd := time.Date(2026, 8, 29, 10, 0, 0, 0, time.UTC).Unix()
+	if response.WindowEnd != wantEnd || response.WindowStart != wantEnd-int64((6*time.Hour).Seconds()) {
+		t.Fatalf("window = %d..%d, want six hours ending at %d", response.WindowStart, response.WindowEnd, wantEnd)
+	}
+	if len(response.Series) != 1 || len(response.Series[0].DataPoints) != 2 || response.Series[0].DataPoints[0].Timestamp != response.WindowStart {
+		t.Fatalf("trimmed series = %#v", response.Series)
+	}
+	if got := transport.requests[0].params.Get("window"); got != "12h" {
+		t.Fatalf("query window = %q, want extended 12h lookback", got)
+	}
+	if got := transport.requests[0].params.Get("step"); got != "1h" {
+		t.Fatalf("step = %q, want 1h", got)
+	}
+	if response.DataThrough != "2026-08-29T10:00:00Z" {
+		t.Fatalf("dataThrough = %q", response.DataThrough)
+	}
+}
+
+func TestKubecostTrendRangeConfigPinsLookbackAndStep(t *testing.T) {
+	tests := []struct {
+		rangeLabel string
+		wantWindow string
+		wantStep   string
+	}{
+		{rangeLabel: "6h", wantWindow: "12h", wantStep: "1h"},
+		{rangeLabel: "24h", wantWindow: "30h", wantStep: "1h"},
+		{rangeLabel: "7d", wantWindow: "8d", wantStep: "24h"},
+	}
+	for _, tt := range tests {
+		label, config := kubecostTrendConfig(tt.rangeLabel)
+		if label != tt.rangeLabel || config.queryWindow != tt.wantWindow || config.step != tt.wantStep {
+			t.Fatalf("config for %s = %q %#v", tt.rangeLabel, label, config)
+		}
+	}
+}
+
+func TestComputeKubecostTrendRequeriesExactWindowWhenSourceIsStale(t *testing.T) {
+	transport := &fakeKubecostTransport{responses: []string{
+		`{"code":200,"data":[{"row":{"properties":{"cluster":"cluster-a","namespace":"demo"},"start":"2026-08-30T01:00:00Z","end":"2026-08-30T02:00:00Z","minutes":60,"totalCost":2}}]}`,
+		`{"code":200,"data":[{"row":{"properties":{"cluster":"cluster-a","namespace":"demo"},"start":"2026-08-29T02:00:00Z","end":"2026-08-29T03:00:00Z","minutes":60,"totalCost":1}},{"row":{"properties":{"cluster":"cluster-a","namespace":"demo"},"start":"2026-08-30T01:00:00Z","end":"2026-08-30T02:00:00Z","minutes":60,"totalCost":2}}]}`,
+	}}
+	response, err := ComputeKubecostTrend(context.Background(), NewKubecostClient(transport), KubecostTrendOptions{
+		Range: "24h", ClusterID: "cluster-a", now: time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !response.Available || len(transport.requests) != 2 {
+		t.Fatalf("response = %#v, requests = %#v", response, transport.requests)
+	}
+	if got := transport.requests[1].params.Get("window"); got != "2026-08-29T02:00:00Z,2026-08-30T02:00:00Z" {
+		t.Fatalf("exact window = %q", got)
+	}
+	if got := transport.requests[1].params.Get("step"); got != "1h" {
+		t.Fatalf("step = %q", got)
+	}
+}
+
+func TestComputeKubecostTrendKeepsKnownPointsWhenExactRequeryIsEmpty(t *testing.T) {
+	transport := &fakeKubecostTransport{responses: []string{
+		`{"code":200,"data":[{"old":{"properties":{"cluster":"cluster-a","namespace":"demo"},"start":"2026-08-29T22:00:00Z","end":"2026-08-29T23:00:00Z","minutes":60,"totalCost":1}},{"latest":{"properties":{"cluster":"cluster-a","namespace":"demo"},"start":"2026-08-30T01:00:00Z","end":"2026-08-30T02:00:00Z","minutes":60,"totalCost":2}}]}`,
+		`{"code":200,"data":[]}`,
+	}}
+	response, err := ComputeKubecostTrend(context.Background(), NewKubecostClient(transport), KubecostTrendOptions{
+		Range: "24h", ClusterID: "cluster-a", now: time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !response.Available || len(response.Series) != 1 || len(response.Series[0].DataPoints) != 2 {
+		t.Fatalf("response = %#v", response)
 	}
 }
 
@@ -56,7 +141,7 @@ func TestComputeKubecostTrendRanksAtLatestGlobalBucketAndAggregatesOther(t *test
 		`{"code":200,"data":[{"a":{"properties":{"cluster":"cluster-a","namespace":"a"},"start":"2026-08-29T00:00:00Z","end":"2026-08-29T01:00:00Z","minutes":60,"totalCost":1},"b":{"properties":{"cluster":"cluster-a","namespace":"b"},"start":"2026-08-29T00:00:00Z","end":"2026-08-29T01:00:00Z","minutes":60,"totalCost":2},"c":{"properties":{"cluster":"cluster-a","namespace":"c"},"start":"2026-08-29T00:00:00Z","end":"2026-08-29T01:00:00Z","minutes":60,"totalCost":100}},{"a":{"properties":{"cluster":"cluster-a","namespace":"a"},"start":"2026-08-29T01:00:00Z","end":"2026-08-29T02:00:00Z","minutes":60,"totalCost":10},"b":{"properties":{"cluster":"cluster-a","namespace":"b"},"start":"2026-08-29T01:00:00Z","end":"2026-08-29T02:00:00Z","minutes":60,"totalCost":8}}]}`,
 	}}
 	response, err := ComputeKubecostTrend(context.Background(), NewKubecostClient(transport), KubecostTrendOptions{
-		Range: "24h", MaxSeries: 1, ClusterID: "cluster-a",
+		Range: "24h", MaxSeries: 1, ClusterID: "cluster-a", now: time.Date(2026, 8, 29, 4, 0, 0, 0, time.UTC),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -85,7 +170,9 @@ func TestComputeKubecostTrendReportsInsufficientHistoryForOneBucket(t *testing.T
 	transport := &fakeKubecostTransport{responses: []string{
 		`{"code":200,"data":[{"row":{"properties":{"cluster":"cluster-a","namespace":"demo"},"start":"2026-08-29T00:00:00Z","end":"2026-08-29T01:00:00Z","minutes":60,"totalCost":1}}]}`,
 	}}
-	response, err := ComputeKubecostTrend(context.Background(), NewKubecostClient(transport), KubecostTrendOptions{ClusterID: "cluster-a"})
+	response, err := ComputeKubecostTrend(context.Background(), NewKubecostClient(transport), KubecostTrendOptions{
+		ClusterID: "cluster-a", now: time.Date(2026, 8, 29, 3, 0, 0, 0, time.UTC),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,11 +181,28 @@ func TestComputeKubecostTrendReportsInsufficientHistoryForOneBucket(t *testing.T
 	}
 }
 
+func TestComputeKubecostTrendReportsInsufficientHistoryAfterTrimming(t *testing.T) {
+	transport := &fakeKubecostTransport{responses: []string{
+		`{"code":200,"data":[{"row":{"properties":{"cluster":"cluster-a","namespace":"demo"},"start":"2026-08-28T23:00:00Z","end":"2026-08-29T00:00:00Z","minutes":60,"totalCost":1}},{"row":{"properties":{"cluster":"cluster-a","namespace":"demo"},"start":"2026-08-29T09:00:00Z","end":"2026-08-29T10:00:00Z","minutes":60,"totalCost":2}}]}`,
+	}}
+	response, err := ComputeKubecostTrend(context.Background(), NewKubecostClient(transport), KubecostTrendOptions{
+		Range: "6h", ClusterID: "cluster-a", now: time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Available || response.Reason != ReasonInsufficientHistory || response.DataThrough != "2026-08-29T10:00:00Z" {
+		t.Fatalf("unexpected trimmed response: %#v", response)
+	}
+}
+
 func TestComputeKubecostTrendNormalizesPartialBucketsAndPreservesZeroValues(t *testing.T) {
 	transport := &fakeKubecostTransport{responses: []string{
 		`{"code":200,"data":[{"paid":{"properties":{"cluster":"cluster-a","namespace":"paid"},"start":"2026-08-29T00:00:00Z","end":"2026-08-29T01:00:00Z","minutes":60,"cpuCost":1,"ramCost":1},"free":{"properties":{"cluster":"cluster-a","namespace":"free"},"start":"2026-08-29T00:00:00Z","end":"2026-08-29T01:00:00Z","minutes":60}},{"paid":{"properties":{"cluster":"cluster-a","namespace":"paid"},"start":"2026-08-29T01:00:00Z","end":"2026-08-29T01:30:00Z","minutes":30,"cpuCost":0.5,"ramCost":0.5},"free":{"properties":{"cluster":"cluster-a","namespace":"free"},"start":"2026-08-29T01:00:00Z","end":"2026-08-29T01:30:00Z","minutes":30}}]}`,
 	}}
-	response, err := ComputeKubecostTrend(context.Background(), NewKubecostClient(transport), KubecostTrendOptions{ClusterID: "cluster-a"})
+	response, err := ComputeKubecostTrend(context.Background(), NewKubecostClient(transport), KubecostTrendOptions{
+		ClusterID: "cluster-a", now: time.Date(2026, 8, 29, 3, 0, 0, 0, time.UTC),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

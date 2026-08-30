@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { OpenCostTrendSeries } from '../../api/client'
-import { kubecostRetentionNote, kubecostTrendUnavailableMessage } from './CostTrendChart'
+import { kubecostRetentionNote, kubecostTrendIsStale, kubecostTrendUnavailableMessage } from './CostTrendChart'
 
 const hour = 60 * 60
 
@@ -31,6 +31,24 @@ describe('kubecostRetentionNote', () => {
   it('allows the normal first daily bucket without calling retention partial', () => {
     const start = 1_000
     expect(kubecostRetentionNote(series(start + 24 * hour, start + 48 * hour), start, start + 7 * 24 * hour)).toBeNull()
+  })
+})
+
+describe('kubecostTrendIsStale', () => {
+  it('allows normal hourly ingestion lag', () => {
+    const now = Date.parse('2026-08-30T12:00:00Z')
+    expect(kubecostTrendIsStale('2026-08-30T10:00:00Z', '6h', now)).toBe(false)
+  })
+
+  it('flags a source beyond the range lag budget', () => {
+    const now = Date.parse('2026-08-30T12:00:00Z')
+    expect(kubecostTrendIsStale('2026-08-30T02:00:00Z', '24h', now)).toBe(true)
+    expect(kubecostTrendIsStale('2026-08-28T02:00:00Z', '7d', now)).toBe(true)
+  })
+
+  it('stays quiet without a valid retained timestamp', () => {
+    expect(kubecostTrendIsStale(undefined, '6h')).toBe(false)
+    expect(kubecostTrendIsStale('invalid', '6h')).toBe(false)
   })
 })
 

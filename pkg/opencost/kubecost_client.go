@@ -18,6 +18,7 @@ func NewKubecostClient(t Transport) *KubecostClient {
 
 type KubecostAllocationOptions struct {
 	Window     string
+	Step       string
 	Aggregate  string
 	Accumulate string
 	Idle       bool
@@ -31,6 +32,9 @@ func (o KubecostAllocationOptions) toQuery() url.Values {
 		q.Set("window", "1h")
 	} else {
 		q.Set("window", o.Window)
+	}
+	if o.Step != "" {
+		q.Set("step", o.Step)
 	}
 	if o.Aggregate != "" {
 		q.Set("aggregate", o.Aggregate)

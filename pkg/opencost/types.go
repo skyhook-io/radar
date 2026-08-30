@@ -105,6 +105,7 @@ type CostTrendResponse struct {
 	Range       string            `json:"range"`
 	WindowStart int64             `json:"windowStart,omitempty"`
 	WindowEnd   int64             `json:"windowEnd,omitempty"`
+	DataThrough string            `json:"dataThrough,omitempty"`
 	Series      []CostTrendSeries `json:"series,omitempty"`
 }
 

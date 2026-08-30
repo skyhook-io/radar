@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { costFreshnessLabel, costIntegrationUnavailableMessage, costRateLabels, costSourceLabel, isCostDiscoveryPending } from './source'
+import { costDataThroughLabel, costFreshnessLabel, costIntegrationUnavailableMessage, costRateLabels, costSourceLabel, isCostDiscoveryPending } from './source'
 
 describe('cost source presentation', () => {
   it('distinguishes Prometheus windows from Kubecost ETL freshness', () => {
@@ -8,6 +8,8 @@ describe('cost source presentation', () => {
     expect(costFreshnessLabel('prometheus', '1h')).toBe('last 1h average')
     expect(costFreshnessLabel('kubecost', '1h', '2026-08-26T13:58:00Z')).toContain('1-hour allocation average')
     expect(costFreshnessLabel('kubecost', '1d', '2026-08-26T13:58:00Z')).toContain('1-day allocation average')
+    expect(costDataThroughLabel('2026-08-26T13:58:00Z')).toContain('2026')
+    expect(costDataThroughLabel('invalid')).toBe('')
   })
 
   it('labels fallback allocation windows without calling a daily average current', () => {

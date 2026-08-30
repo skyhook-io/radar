@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useCallback } from 'react'
 import { clsx } from 'clsx'
 import { Loader2, TrendingUp } from 'lucide-react'
+import { formatCompactAge } from '@skyhook-io/k8s-ui/utils/format'
 import {
   useOpenCostTrend,
   type CostTimeRange,
@@ -8,6 +9,7 @@ import {
   type OpenCostTrendSeries,
 } from '../../api/client'
 import { DEFAULT_COST_CURRENCY, formatCostAxis, formatCostPerHour } from './format'
+import { costDataThroughLabel } from './source'
 
 const SERIES_COLORS = [
   '#3b82f6', // blue-500
@@ -49,6 +51,9 @@ export function CostTrendChart({ namespaceScoped = false }: { namespaceScoped?: 
 
   const currency = data.currency ?? DEFAULT_COST_CURRENCY
   const retentionNote = data.available ? kubecostRetentionNote(data.series ?? [], data.windowStart, data.windowEnd) : null
+  const dataThrough = data.source === 'kubecost' ? costDataThroughLabel(data.dataThrough) : ''
+  const stale = data.source === 'kubecost' && kubecostTrendIsStale(data.dataThrough, timeRange)
+  const lag = stale ? formatCompactAge(data.dataThrough) : ''
 
   return (
     <div className="rounded-lg border border-theme-border bg-theme-surface/50">
@@ -57,9 +62,9 @@ export function CostTrendChart({ namespaceScoped = false }: { namespaceScoped?: 
           <TrendingUp className="w-4 h-4 text-theme-text-tertiary" />
           <div>
             <div className="text-xs font-medium text-theme-text-secondary">Cost rate trend</div>
-            <div className="text-[10px] text-theme-text-tertiary">
+            <div className={clsx('text-[10px]', stale ? 'text-warning-text' : 'text-theme-text-tertiary')}>
               {data.source === 'kubecost'
-                ? `Retained Kubecost namespace cost (${currency}/hr)`
+                ? `Retained Kubecost namespace cost (${currency}/hr)${dataThrough ? ` · data through ${dataThrough}` : ''}${lag ? ` · ${lag} behind` : ''}`
                 : `Historical OpenCost CPU and memory allocation (${currency}/hr)`}
             </div>
           </div>
@@ -477,6 +482,18 @@ export function kubecostRetentionNote(
     minute: '2-digit',
   })
   return `Kubecost history is available from ${start}.`
+}
+
+export function kubecostTrendIsStale(
+  dataThrough: string | undefined,
+  range: CostTimeRange,
+  now = Date.now(),
+): boolean {
+  if (!dataThrough) return false
+  const timestamp = Date.parse(dataThrough)
+  if (!Number.isFinite(timestamp)) return false
+  const lagBudget = range === '7d' ? 24 * 60 * 60 * 1000 : 6 * 60 * 60 * 1000
+  return now - timestamp > lagBudget
 }
 
 export function kubecostTrendUnavailableMessage(

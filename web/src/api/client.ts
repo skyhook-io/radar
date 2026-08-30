@@ -1062,6 +1062,7 @@ export interface OpenCostTrendResponse {
   range: string;
   windowStart?: number;
   windowEnd?: number;
+  dataThrough?: string;
   series?: OpenCostTrendSeries[];
 }
 
