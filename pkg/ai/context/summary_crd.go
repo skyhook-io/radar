@@ -498,11 +498,28 @@ func policyAncestorLabel(ancestor map[string]any) string {
 	if ns, _ := ref["namespace"].(string); ns != "" {
 		label = ns + "/" + name
 	}
+	prefix := ""
 	if kind, _ := ref["kind"].(string); kind != "" && kind != "Gateway" {
-		label = kind + " " + label
+		prefix = kind
+	}
+	if group, _ := ref["group"].(string); group != "" && group != "gateway.networking.k8s.io" {
+		if prefix != "" {
+			prefix += "." + group
+		} else {
+			prefix = group
+		}
+	}
+	if prefix != "" {
+		label = prefix + " " + label
 	}
 	if section, _ := ref["sectionName"].(string); section != "" {
 		label += ":" + section
+	}
+	switch port := ref["port"].(type) {
+	case int64:
+		label += fmt.Sprintf(":%d", port)
+	case float64:
+		label += fmt.Sprintf(":%d", int64(port))
 	}
 	return label
 }
@@ -518,11 +535,10 @@ type policyFailureDetail struct {
 // is capped rather than trusted to stay small.
 const maxPolicyFailureDetails = 4
 
-func renderPolicyFailureDetails(failures []policyFailureDetail) string {
-	labelCounts := map[string]int{}
-	for _, f := range failures {
-		labelCounts[f.label]++
-	}
+// Collisions are counted across every ancestor, not just the failed ones: a
+// failure and a success for the same Gateway under different controllers must
+// still say which controller failed.
+func renderPolicyFailureDetails(failures []policyFailureDetail, labelCounts map[string]int) string {
 	entries := make([]string, 0, len(failures))
 	for _, f := range failures {
 		label := f.label
@@ -571,12 +587,16 @@ func gatewayPolicyStatus(obj *unstructured.Unstructured) (string, bool) {
 	// Which Gateway failed with what. MCP has no tooltip channel, so on mixed
 	// reasons this rides in the text itself.
 	var failureDetails []policyFailureDetail
+	ancestorLabelCounts := map[string]int{}
 	verdict := ""
 
 	for _, a := range ancestors {
 		aMap, ok := a.(map[string]any)
 		if !ok {
 			continue
+		}
+		if label := policyAncestorLabel(aMap); label != "" {
+			ancestorLabelCounts[label]++
 		}
 		rawConds, _, _ := unstructured.NestedFieldNoCopy(aMap, "conditions")
 		conds, _ := rawConds.([]any)
@@ -657,7 +677,7 @@ func gatewayPolicyStatus(obj *unstructured.Unstructured) (string, bool) {
 	switch {
 	case failed > 0:
 		if len(failureReasons) > 1 {
-			return fmt.Sprintf("%d/%d failed (%s)", failed, total, renderPolicyFailureDetails(failureDetails)), true
+			return fmt.Sprintf("%d/%d failed (%s)", failed, total, renderPolicyFailureDetails(failureDetails, ancestorLabelCounts)), true
 		}
 		return failure + scope(failed), true
 	case degraded > 0:

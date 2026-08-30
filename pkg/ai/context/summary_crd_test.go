@@ -240,6 +240,14 @@ func TestGatewayPolicyStatus(t *testing.T) {
 		a["ancestorRef"].(map[string]any)["kind"] = kind
 		return a
 	}
+	withGroup := func(group string, a map[string]any) map[string]any {
+		a["ancestorRef"].(map[string]any)["group"] = group
+		return a
+	}
+	withPort := func(port int64, a map[string]any) map[string]any {
+		a["ancestorRef"].(map[string]any)["port"] = port
+		return a
+	}
 	policy := func(ancestors ...map[string]any) *unstructured.Unstructured {
 		out := make([]any, 0, len(ancestors))
 		for _, a := range ancestors {
@@ -326,6 +334,20 @@ func TestGatewayPolicyStatus(t *testing.T) {
 			withSection("tls", named("team-a", "gw", anc(cond("Accepted", "False", "NotAllowed")))),
 			withKind("Service", named("team-a", "svc", anc(cond("Accepted", "False", "ResourceNotFound")))),
 		), "2/2 failed (team-a/gw:tls: NotAllowed; Service team-a/svc: ResourceNotFound)", true},
+		// The collision that qualifies a controller may be with an ancestor that
+		// SUCCEEDED: two controllers on one Gateway, one failing, must still say
+		// which one failed.
+		{"a collision with a successful ancestor still names the controller", policy(
+			withController("ctrl-a.example", named("team-a", "gw", anc(cond("Accepted", "False", "NotAllowed")))),
+			withController("ctrl-b.example", named("team-a", "gw", anc(cond("Accepted", "True", "")))),
+			named("", "gw-b", anc(cond("Accepted", "False", "ResourceNotFound"))),
+		), "2/3 failed (team-a/gw (ctrl-a.example): NotAllowed; gw-b: ResourceNotFound)", true},
+		// group and port are part of the composite key too: entries differing
+		// only by them must not render identically.
+		{"group and port ride in the label", policy(
+			withGroup("multicluster.x-k8s.io", withKind("ServiceImport", named("team-a", "svc", anc(cond("Accepted", "False", "NotAllowed"))))),
+			withPort(443, named("team-a", "gw", anc(cond("Accepted", "False", "ResourceNotFound")))),
+		), "2/2 failed (ServiceImport.multicluster.x-k8s.io team-a/svc: NotAllowed; team-a/gw:443: ResourceNotFound)", true},
 		// Reasons may be 1024 chars and foreign CRDs need not honor the
 		// 16-ancestor cap, so the list is bounded rather than trusted.
 		{"the detail list is capped", policy(

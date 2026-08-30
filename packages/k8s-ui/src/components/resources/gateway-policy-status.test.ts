@@ -228,6 +228,30 @@ describe('condition vocabulary beyond Accepted', () => {
       .toBe('team-a/gw:tls: NotAllowed; Service team-a/svc: ResourceNotFound')
   })
 
+  // The collision that qualifies a controller may be with an ancestor that
+  // SUCCEEDED: two controllers on one Gateway, one failing, must still say
+  // which one failed.
+  it('names the controller when the collision is with a successful ancestor', () => {
+    const p = policy(
+      { ancestorRef: { namespace: 'team-a', name: 'gw' }, controllerName: 'ctrl-a.example', conditions: [cond('Accepted', 'False', 'NotAllowed')] },
+      { ancestorRef: { namespace: 'team-a', name: 'gw' }, controllerName: 'ctrl-b.example', conditions: [cond('Accepted', 'True')] },
+      { ancestorRef: { name: 'gw-b' }, conditions: [cond('Accepted', 'False', 'ResourceNotFound')] },
+    )
+    expect(getGatewayPolicyStatus(p)?.reason)
+      .toBe('team-a/gw (ctrl-a.example): NotAllowed; gw-b: ResourceNotFound')
+  })
+
+  // group and port are part of the composite key too: entries differing only
+  // by them must not render identically.
+  it('carries group and port in the label', () => {
+    const p = policy(
+      { ancestorRef: { group: 'multicluster.x-k8s.io', kind: 'ServiceImport', namespace: 'team-a', name: 'svc' }, conditions: [cond('Accepted', 'False', 'NotAllowed')] },
+      { ancestorRef: { namespace: 'team-a', name: 'gw', port: 443 }, conditions: [cond('Accepted', 'False', 'ResourceNotFound')] },
+    )
+    expect(getGatewayPolicyStatus(p)?.reason)
+      .toBe('ServiceImport.multicluster.x-k8s.io team-a/svc: NotAllowed; team-a/gw:443: ResourceNotFound')
+  })
+
   // Reasons may be 1024 chars and foreign CRDs need not honor the 16-ancestor
   // cap, so the list is bounded rather than trusted.
   it('caps the tooltip detail list', () => {
