@@ -103,7 +103,11 @@ func cacheKey(username string, groups []string) string {
 }
 
 // groupsFingerprint returns a deterministic fingerprint of a group set:
-// sorted, deduped, and joined. Empty/nil groups fingerprints to "".
+// sorted, deduped, and joined. Empty-string elements are dropped (an empty
+// group is not a real principal), so nil, [], [""], and ["", ""] all
+// fingerprint to "" — one identity. The proxy path already trims empties, but
+// the OIDC path (internal/auth/oidc.go) does not; dropping them here makes the
+// no-groups collision explicit rather than accidental.
 func groupsFingerprint(groups []string) string {
 	if len(groups) == 0 {
 		return ""
@@ -111,6 +115,9 @@ func groupsFingerprint(groups []string) string {
 	uniq := make([]string, 0, len(groups))
 	seen := make(map[string]struct{}, len(groups))
 	for _, g := range groups {
+		if g == "" {
+			continue // empty group is not a real principal
+		}
 		if _, ok := seen[g]; ok {
 			continue
 		}

@@ -185,6 +185,21 @@ func TestPermissionCache_GroupScopedKey(t *testing.T) {
 	if got := pc.Get("carol", nil); got == nil {
 		t.Fatal("no-groups entry must hit for the no-groups identity, got nil")
 	}
+
+	// Empty-string group elements are dropped: [""] canonicalizes to [] and
+	// ["a", ""] to ["a"]. An empty group is not a real principal, and the OIDC
+	// path doesn't trim empties like the proxy path does — pin the collision so
+	// it's explicit, not accidental.
+	if cacheKey("u", nil) != cacheKey("u", []string{""}) {
+		t.Error(`cacheKey("u", nil) must equal cacheKey("u", [""]) — empty group is dropped`)
+	}
+	if cacheKey("u", []string{"a"}) != cacheKey("u", []string{"a", ""}) {
+		t.Error(`cacheKey("u", ["a"]) must equal cacheKey("u", ["a", ""]) — empty group is dropped`)
+	}
+	// Dropping empties must not collapse distinct real group sets.
+	if cacheKey("u", []string{"a", ""}) == cacheKey("u", []string{"a", "b"}) {
+		t.Error(`cacheKey("u", ["a", ""]) must differ from cacheKey("u", ["a", "b"]) — "b" is a real principal`)
+	}
 }
 
 func TestPermissionCache_Expiry(t *testing.T) {
