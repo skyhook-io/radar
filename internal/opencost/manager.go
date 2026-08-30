@@ -32,7 +32,8 @@ const (
 	autoRetryDelay                  = time.Minute
 	noCostSourceRetryDelay          = 5 * time.Second
 	kubecostConnectTimeout          = 25 * time.Second
-	kubecostHTTPTimeout             = 30 * time.Second
+	kubecostProbeHTTPTimeout        = 12 * time.Second
+	kubecostQueryHTTPTimeout        = 30 * time.Second
 	kubecostMaxResponseBytes        = 64 << 20
 )
 
@@ -606,20 +607,7 @@ func probeKubecostURL(ctx context.Context, rawURL, apiKey, clusterID string) (*p
 	authenticationFailed := false
 	var lastErr error
 	for _, basePath := range paths {
-		httpClient := &http.Client{
-			Timeout: kubecostHTTPTimeout,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) > 0 && !sameOrigin(via[0].URL, req.URL) {
-					return fmt.Errorf("cross-origin redirect refused")
-				}
-				return nil
-			},
-		}
-		transport := prom.NewHTTPTransport(origin, basePath, httpClient)
-		transport.MaxResponseBytes = kubecostMaxResponseBytes
-		if apiKey != "" {
-			transport.Headers = map[string]string{"X-API-KEY": apiKey}
-		}
+		transport := newKubecostHTTPTransport(origin, basePath, apiKey, kubecostProbeHTTPTimeout)
 		client := pkgopencost.NewKubecostClient(transport)
 		resp, err := client.GetAllocation(ctx, pkgopencost.KubecostAllocationOptions{
 			Window:     "24h",
@@ -629,7 +617,8 @@ func probeKubecostURL(ctx context.Context, rawURL, apiKey, clusterID string) (*p
 		})
 		if err == nil {
 			if kubecostProbeHasClusterData(resp, clusterID) {
-				return client, transport.Address(), nil
+				transport = newKubecostHTTPTransport(origin, basePath, apiKey, kubecostQueryHTTPTimeout)
+				return pkgopencost.NewKubecostClient(transport), transport.Address(), nil
 			}
 			noData = true
 			continue
@@ -654,6 +643,24 @@ func probeKubecostURL(ctx context.Context, rawURL, apiKey, clusterID string) (*p
 		return nil, "", fmt.Errorf("%w for cluster %q", ErrKubecostNoData, clusterID)
 	}
 	return nil, "", fmt.Errorf("%w or did not return its allocation API", ErrKubecostUnavailable)
+}
+
+func newKubecostHTTPTransport(origin, basePath, apiKey string, timeout time.Duration) *prom.HTTPTransport {
+	httpClient := &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) > 0 && !sameOrigin(via[0].URL, req.URL) {
+				return fmt.Errorf("cross-origin redirect refused")
+			}
+			return nil
+		},
+	}
+	transport := prom.NewHTTPTransport(origin, basePath, httpClient)
+	transport.MaxResponseBytes = kubecostMaxResponseBytes
+	if apiKey != "" {
+		transport.Headers = map[string]string{"X-API-KEY": apiKey}
+	}
+	return transport
 }
 
 func kubecostProbeHasClusterData(resp *pkgopencost.KubecostAllocationResponse, clusterID string) bool {

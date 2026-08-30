@@ -162,6 +162,24 @@ func TestProbeKubecostTriesModelPathAfterRootAuthenticationFailure(t *testing.T)
 	}
 }
 
+func TestKubecostHTTPTransportSeparatesProbeAndQueryTimeouts(t *testing.T) {
+	probe := newKubecostHTTPTransport("https://cost.example.com", "/model", "secret", kubecostProbeHTTPTimeout)
+	query := newKubecostHTTPTransport("https://cost.example.com", "/model", "secret", kubecostQueryHTTPTimeout)
+
+	if probe.HTTPClient.Timeout != kubecostProbeHTTPTimeout {
+		t.Fatalf("probe timeout = %s, want %s", probe.HTTPClient.Timeout, kubecostProbeHTTPTimeout)
+	}
+	if query.HTTPClient.Timeout != kubecostQueryHTTPTimeout {
+		t.Fatalf("query timeout = %s, want %s", query.HTTPClient.Timeout, kubecostQueryHTTPTimeout)
+	}
+	if probe.MaxResponseBytes != kubecostMaxResponseBytes || query.MaxResponseBytes != kubecostMaxResponseBytes {
+		t.Fatalf("response limits = %d, %d, want %d", probe.MaxResponseBytes, query.MaxResponseBytes, kubecostMaxResponseBytes)
+	}
+	if probe.Headers["X-API-KEY"] != "secret" || query.Headers["X-API-KEY"] != "secret" {
+		t.Fatal("API key header missing from probe or query transport")
+	}
+}
+
 func TestProbeKubecostReturnsTypedAuthenticationFailureAfterAllPaths(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "denied", http.StatusUnauthorized)
