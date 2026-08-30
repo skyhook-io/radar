@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"path"
 	"sort"
 	"strconv"
@@ -439,6 +440,15 @@ const podFileCloseGrace = 30 * time.Second
 // bound only covers a connection that has stopped answering.
 const podFileAbortGrace = 5 * time.Second
 
+// executorFor builds the exec client, through the Server so a test can stand in
+// for the cluster. Production leaves newExecutor nil and gets the real one.
+func (s *Server) executorFor(config *rest.Config, u *url.URL) (remotecommand.Executor, error) {
+	if s.newExecutor != nil {
+		return s.newExecutor(config, u)
+	}
+	return rcpkg.NewExecutor(config, u)
+}
+
 // startPodFileExec runs cmd in the container and hands back a stream whose
 // payload the caller frames. The command must keep stdin open per
 // podFileDrainGuard.
@@ -458,7 +468,7 @@ func (s *Server) startPodFileExec(ctx context.Context, client kubernetes.Interfa
 			Stderr:    true,
 		}, scheme.ParameterCodec)
 
-	executor, err := rcpkg.NewExecutor(config, req.URL())
+	executor, err := s.executorFor(config, req.URL())
 	if err != nil {
 		return nil, err
 	}
@@ -717,7 +727,7 @@ func (s *Server) downloadWithCat(r *http.Request, namespace, podName, container,
 			Stderr:    true,
 		}, scheme.ParameterCodec)
 
-	exec, err := rcpkg.NewExecutor(config, req.URL())
+	exec, err := s.executorFor(config, req.URL())
 	if err != nil {
 		return nil, err
 	}

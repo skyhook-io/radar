@@ -38,6 +38,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/tools/remotecommand"
 
 	"github.com/skyhook-io/radar/internal/ai"
 	"github.com/skyhook-io/radar/internal/argocd"
@@ -90,8 +91,12 @@ type Server struct {
 	oidcHandler        *auth.OIDCHandler
 	saveFileFunc       func(defaultFilename string, data []byte) (string, error)
 	saveFileStreamFunc func(defaultFilename string, r io.Reader) (string, error)
-	cloudConnectCfg    CloudConnectConfig
-	cloudInstall       *cloudInstallManager
+	// newExecutor builds the exec client for pod file transfers. Nil in
+	// production, where the package default is used; tests substitute a fake so
+	// the transfer can be driven end to end without a cluster.
+	newExecutor     func(*rest.Config, *url.URL) (remotecommand.Executor, error)
+	cloudConnectCfg CloudConnectConfig
+	cloudInstall    *cloudInstallManager
 
 	// nsPreferences holds each user's active-namespace pick from the in-app
 	// switcher. Key shape: "<username>\x00<contextName>" when auth is enabled,

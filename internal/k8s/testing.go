@@ -11,6 +11,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	fakeclientset "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 )
 
 // InitLoadTestResourceCache creates a resource cache from a fake client using
@@ -263,6 +264,22 @@ func SetTestClient(c *kubernetes.Clientset) *kubernetes.Clientset {
 // Returns the previous index so a test can restore it.
 //
 // This is intended for integration tests only.
+// SetTestConfig publishes a rest.Config directly, so a handler that resolves a
+// per-request config can run without a real cluster connection. SetTestClient
+// publishes the clientset but not the config, and a handler that needs both
+// bails out early with "cluster client not available" if only one is set.
+//
+// Returns the previous config so a test can restore it.
+//
+// This is intended for integration tests only.
+func SetTestConfig(c *rest.Config) *rest.Config {
+	clientMu.Lock()
+	prev := k8sConfig
+	k8sConfig = c
+	clientMu.Unlock()
+	return prev
+}
+
 func SetTestPolicyReportIndex(idx *policyreports.Index) *policyreports.Index {
 	prev := policyReportIndex.Load()
 	policyReportIndex.Store(idx)
