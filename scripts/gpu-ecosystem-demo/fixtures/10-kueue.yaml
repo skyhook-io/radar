@@ -1,0 +1,140 @@
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: gpu-a10
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  nodeLabels:
+    nvidia.com/gpu.product: NVIDIA-A10G
+  nodeTaints:
+    - key: nvidia.com/gpu
+      value: "true"
+      effect: NoSchedule
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: gpu-team
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  cohortName: shared-accelerators
+  namespaceSelector: {}
+  resourceGroups:
+    - coveredResources: [cpu, memory, nvidia.com/gpu]
+      flavors:
+        - name: gpu-a10
+          resources:
+            - name: cpu
+              nominalQuota: "32"
+            - name: memory
+              nominalQuota: 128Gi
+            - name: nvidia.com/gpu
+              nominalQuota: "4"
+status:
+  admittedWorkloads: 3
+  pendingWorkloads: 2
+  conditions:
+    - type: Active
+      status: "True"
+      reason: Ready
+      message: Queue is active
+      observedGeneration: 1
+      lastTransitionTime: __START_TIME__
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: training
+  namespace: gpu-demo
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  clusterQueue: gpu-team
+status:
+  admittedWorkloads: 3
+  pendingWorkloads: 2
+  conditions:
+    - type: Active
+      status: "True"
+      reason: Ready
+      message: Queue is active
+      observedGeneration: 1
+      lastTransitionTime: __START_TIME__
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: Workload
+metadata:
+  name: distributed-training
+  namespace: gpu-demo
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  queueName: training
+  priority: 100000
+  priorityClassRef:
+    group: scheduling.k8s.io
+    kind: PriorityClass
+    name: high-priority
+  podSets:
+    - name: workers
+      count: 2
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: trainer
+              image: registry.k8s.io/pause:3.10
+              resources:
+                limits:
+                  nvidia.com/gpu: 1
+status:
+  admission:
+    clusterQueue: gpu-team
+  conditions:
+    - type: Admitted
+      status: "True"
+      reason: Admitted
+      message: Workload admitted to gpu-team
+      observedGeneration: 1
+      lastTransitionTime: __START_TIME__
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: AdmissionCheck
+metadata:
+  name: gpu-capacity
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  controllerName: autoscaling.x-k8s.io/provisioning-request
+status:
+  conditions:
+    - type: Active
+      status: "True"
+      reason: Active
+      message: Capacity admission check is active
+      observedGeneration: 1
+      lastTransitionTime: __START_TIME__
+---
+apiVersion: autoscaling.x-k8s.io/v1
+kind: ProvisioningRequest
+metadata:
+  name: reserve-two-gpus
+  namespace: gpu-demo
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  provisioningClassName: gpu.capacity.example
+  podSets:
+    - count: 2
+      podTemplateRef:
+        name: reserved-gpu-pods
+status:
+  conditions:
+    - type: Provisioned
+      status: "True"
+      reason: CapacityReady
+      message: GPU capacity is ready
+      observedGeneration: 1
+      lastTransitionTime: __START_TIME__
