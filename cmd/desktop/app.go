@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -61,6 +62,7 @@ func (a *DesktopApp) startup(ctx context.Context) {
 	a.ctx = ctx
 	startNativeMouseMonitor(ctx)
 	a.srv.SetSaveFileFunc(a.saveFile)
+	a.srv.SetSaveStreamFunc(a.saveStream)
 
 	// The OS titlebar must track the active kubeconfig context for the same
 	// reason the in-page selector does: a fleet UI showing the wrong cluster
@@ -70,10 +72,10 @@ func (a *DesktopApp) startup(ctx context.Context) {
 	})
 }
 
-// saveFile writes a file to the user's Downloads folder.
+// downloadPath resolves a collision-free path in the user's Downloads folder.
 // We write directly to ~/Downloads instead of showing a native save dialog
 // because Wails' SaveFileDialog is immediately dismissed by the webview on macOS.
-func (a *DesktopApp) saveFile(defaultFilename string, data []byte) (string, error) {
+func downloadPath(defaultFilename string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -98,9 +100,44 @@ func (a *DesktopApp) saveFile(defaultFilename string, data []byte) (string, erro
 		}
 		path = filepath.Join(dir, fmt.Sprintf("%s (%d)%s", name, i, ext))
 	}
+	return path, nil
+}
 
+// saveFile writes a file to the user's Downloads folder.
+func (a *DesktopApp) saveFile(defaultFilename string, data []byte) (string, error) {
+	path, err := downloadPath(defaultFilename)
+	if err != nil {
+		return "", err
+	}
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		return "", err
+	}
+	return path, nil
+}
+
+// saveStream writes src to the user's Downloads folder without buffering it in
+// memory, so downloads are bounded by disk rather than by webview or process
+// memory. A failed copy leaves no partial file behind.
+func (a *DesktopApp) saveStream(defaultFilename string, src io.Reader) (string, error) {
+	path, err := downloadPath(defaultFilename)
+	if err != nil {
+		return "", err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0600)
+	if err != nil {
+		return "", err
+	}
+	// Buffered writes commonly report failure at close (ENOSPC, EIO on a
+	// network mount), so the close error matters as much as the copy error —
+	// either one has to take the partial file with it.
+	_, copyErr := io.Copy(f, src)
+	closeErr := f.Close()
+	if copyErr == nil {
+		copyErr = closeErr
+	}
+	if copyErr != nil {
+		os.Remove(path)
+		return "", copyErr
 	}
 	return path, nil
 }

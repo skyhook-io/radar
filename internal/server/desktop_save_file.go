@@ -38,10 +38,8 @@ func (s *Server) handleDesktopSaveFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Sanitize filename: strip path components, reject empty
-	req.Filename = filepath.Base(req.Filename)
-	req.Filename = strings.ReplaceAll(req.Filename, "\x00", "")
-	if req.Filename == "" || req.Filename == "." || req.Filename == ".." {
+	req.Filename = sanitizeFilename(req.Filename)
+	if req.Filename == "" {
 		s.writeError(w, http.StatusBadRequest, "invalid filename")
 		return
 	}
@@ -81,4 +79,15 @@ func (s *Server) handleDesktopSaveFile(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(map[string]string{"path": path}); err != nil {
 		log.Printf("[desktop] Failed to write save-file response: %v", err)
 	}
+}
+
+// sanitizeFilename strips path components and NUL bytes from a client-supplied
+// filename so it can only ever name a file inside the save directory. Returns
+// "" when nothing usable remains.
+func sanitizeFilename(name string) string {
+	name = filepath.Base(strings.ReplaceAll(name, "\x00", ""))
+	if name == "" || name == "." || name == ".." || name == string(filepath.Separator) {
+		return ""
+	}
+	return name
 }

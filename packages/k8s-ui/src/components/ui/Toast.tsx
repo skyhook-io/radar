@@ -154,6 +154,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   )
 }
 
+const TOAST_Z_INDEX = 200
+
 function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }) {
   // Calculate position - either near button or default to bottom-right
   const style: React.CSSProperties = toast.position
@@ -161,13 +163,13 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
         position: 'fixed',
         left: Math.min(toast.position.x, window.innerWidth - 520),
         top: toast.position.y,
-        zIndex: 50,
+        zIndex: TOAST_Z_INDEX,
       }
     : {
         position: 'fixed',
         bottom: 16,
         right: 16,
-        zIndex: 50,
+        zIndex: TOAST_Z_INDEX,
       }
 
   const isError = toast.type === 'error'

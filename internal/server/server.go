@@ -89,6 +89,7 @@ type Server struct {
 	permCache          *auth.PermissionCache
 	oidcHandler        *auth.OIDCHandler
 	saveFileFunc       func(defaultFilename string, data []byte) (string, error)
+	saveStreamFunc     func(defaultFilename string, src io.Reader) (string, error)
 	cloudConnectCfg    CloudConnectConfig
 	cloudInstall       *cloudInstallManager
 
@@ -1132,6 +1133,14 @@ func (s *Server) SetUpdater(u *updater.Updater) {
 // Only used by the desktop app.
 func (s *Server) SetSaveFileFunc(fn func(defaultFilename string, data []byte) (string, error)) {
 	s.saveFileFunc = fn
+}
+
+// SetSaveStreamFunc attaches a native streaming-save callback, enabling the
+// server to write a download straight to disk instead of returning it to the
+// webview. Unlike SetSaveFileFunc it never holds the payload in memory, so it
+// carries downloads of any size. Only used by the desktop app.
+func (s *Server) SetSaveStreamFunc(fn func(defaultFilename string, src io.Reader) (string, error)) {
+	s.saveStreamFunc = fn
 }
 
 // Handler returns the full application handler for the authenticated Cloud

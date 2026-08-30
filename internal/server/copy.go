@@ -3,6 +3,8 @@ package server
 import (
 	"archive/tar"
 	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -174,69 +176,61 @@ func (s *Server) handlePodFileDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// First try: tar cf - to stream the file (handles binary files correctly)
+	// First try: tar cf - to stream the file (handles binary files correctly).
+	// The stream is extracted and written to the response as it arrives —
+	// buffering a whole file would put arbitrarily large files in memory, and
+	// exec transports drop long transfers anyway (see resumingTarStream).
 	dir := path.Dir(filePath)
 	base := path.Base(filePath)
 
-	cmd := []string{"tar", "cf", "-", "-C", dir, base}
+	runAttempt := func(ctx context.Context, offset uint64, stdout io.Writer) error {
+		var cmd []string
+		if offset == 0 {
+			cmd = []string{"tar", "cf", "-", "-C", dir, "--", base}
+		} else {
+			// tail -c+N is 1-based: resume at the first byte not yet delivered.
+			// The header block stays 512 bytes however large the size field
+			// says the file is, so a re-exec emits an identical byte stream
+			// from 512 onward for as long as the file's existing bytes are
+			// unchanged — an appended-to log still splices correctly. This is
+			// the trick kubectl cp --retries relies on. A file rotated or
+			// rewritten mid-transfer splices two different archives, which
+			// nothing downstream can detect.
+			cmd = []string{"/bin/sh", "-c", fmt.Sprintf("tar cf - -C %s -- %s | tail -c+%d", shellQuote(dir), shellQuote(base), offset+1)}
+		}
 
-	req := client.CoreV1().RESTClient().Post().
-		Resource("pods").
-		Name(podName).
-		Namespace(namespace).
-		SubResource("exec").
-		VersionedParams(&corev1.PodExecOptions{
-			Container: container,
-			Command:   cmd,
-			Stdout:    true,
-			Stderr:    true,
-		}, scheme.ParameterCodec)
+		req := client.CoreV1().RESTClient().Post().
+			Resource("pods").
+			Name(podName).
+			Namespace(namespace).
+			SubResource("exec").
+			VersionedParams(&corev1.PodExecOptions{
+				Container: container,
+				Command:   cmd,
+				Stdout:    true,
+				Stderr:    true,
+			}, scheme.ParameterCodec)
 
-	exec, err := rcpkg.NewExecutor(config, req.URL())
-	if err != nil {
-		log.Printf("[copy] Failed to create executor for download %s/%s: %v", namespace, podName, err)
-		s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to create executor: %v", err))
-		return
+		exec, err := rcpkg.NewExecutor(config, req.URL())
+		if err != nil {
+			return fmt.Errorf("failed to create executor: %w", err)
+		}
+
+		var stderr bytes.Buffer
+		if err := exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+			Stdout: stdout,
+			Stderr: &stderr,
+		}); err != nil {
+			return fmt.Errorf("%w %s", err, stderr.String())
+		}
+		return nil
 	}
 
-	var stdout, stderr bytes.Buffer
-	err = exec.StreamWithContext(r.Context(), remotecommand.StreamOptions{
-		Stdout: &stdout,
-		Stderr: &stderr,
-	})
-	if err != nil {
-		errMsg := err.Error() + " " + stderr.String()
-		if isCommandNotFound(errMsg) {
-			// tar not available — fallback to cat
-			catContent, catErr := s.downloadWithCat(r, namespace, podName, container, filePath)
-			if catErr != nil {
-				if isCommandNotFound(catErr.Error()) {
-					s.writeError(w, http.StatusInternalServerError, "Container lacks 'tar' and 'cat' commands. Cannot download files from distroless containers.")
-				} else {
-					log.Printf("[copy] cat fallback failed for %s/%s path=%s: %v", namespace, podName, filePath, catErr)
-					errorlog.Record("copy", "error", "file download failed for %s/%s: %v", namespace, podName, catErr)
-					s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to download file: %v", catErr))
-				}
-				return
-			}
-			w.Header().Set("Content-Type", "application/octet-stream")
-			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", fileName))
-			w.Header().Set("Content-Length", strconv.Itoa(len(catContent)))
-			w.Write(catContent)
-			return
-		}
-		if strings.Contains(errMsg, "No such file") || strings.Contains(errMsg, "not found") {
-			s.writeError(w, http.StatusNotFound, fmt.Sprintf("File not found: %s", filePath))
-			return
-		}
-		log.Printf("[copy] exec tar failed for %s/%s path=%s: %v, stderr: %s", namespace, podName, filePath, err, stderr.String())
-		errorlog.Record("copy", "error", "file download failed for %s/%s path=%s: %v", namespace, podName, filePath, err)
-		s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to download file: %v", err))
-		return
-	}
+	stream := newResumingTarStream(r.Context(), runAttempt, tarStreamMaxRetries)
+	defer stream.Close()
 
 	// Extract the file from the tar stream
-	tr := tar.NewReader(&stdout)
+	tr := tar.NewReader(stream)
 	for {
 		header, err := tr.Next()
 		if err == io.EOF {
@@ -244,26 +238,165 @@ func (s *Server) handlePodFileDownload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err != nil {
-			log.Printf("[copy] tar extract error for %s/%s: %v", namespace, podName, err)
-			s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to extract file: %v", err))
+			errMsg := err.Error()
+			if isCommandNotFound(errMsg) {
+				// tar not available — fallback to cat
+				catContent, catErr := s.downloadWithCat(r, namespace, podName, container, filePath)
+				if catErr != nil {
+					if isCommandNotFound(catErr.Error()) {
+						s.writeError(w, http.StatusInternalServerError, "Container lacks 'tar' and 'cat' commands. Cannot download files from distroless containers.")
+					} else {
+						log.Printf("[copy] cat fallback failed for %s/%s path=%s: %v", namespace, podName, filePath, catErr)
+						errorlog.Record("copy", "error", "file download failed for %s/%s: %v", namespace, podName, catErr)
+						s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to download file: %v", catErr))
+					}
+					return
+				}
+				w.Header().Set("Content-Type", "application/octet-stream")
+				w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", fileName))
+				w.Header().Set("Content-Length", strconv.Itoa(len(catContent)))
+				w.Write(catContent)
+				return
+			}
+			if strings.Contains(errMsg, "No such file") || strings.Contains(errMsg, "not found") {
+				s.writeError(w, http.StatusNotFound, fmt.Sprintf("File not found: %s", filePath))
+				return
+			}
+			log.Printf("[copy] exec tar failed for %s/%s path=%s: %v", namespace, podName, filePath, err)
+			errorlog.Record("copy", "error", "file download failed for %s/%s path=%s: %v", namespace, podName, filePath, err)
+			s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to download file: %v", err))
 			return
 		}
 
 		if header.Typeflag == tar.TypeReg {
-			content, err := io.ReadAll(tr)
-			if err != nil {
-				log.Printf("[copy] Failed to read file from tar %s/%s: %v", namespace, podName, err)
-				s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to read file: %v", err))
-				return
-			}
-
-			w.Header().Set("Content-Type", "application/octet-stream")
-			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", fileName))
-			w.Header().Set("Content-Length", strconv.Itoa(len(content)))
-			w.Write(content)
+			s.deliverPodFile(w, r, tr, fileName, header.Size, namespace, podName, filePath)
 			return
 		}
 	}
+}
+
+// deliverPodFile hands an extracted file to the caller: written straight to
+// disk in the desktop app, streamed to the HTTP response otherwise. src must
+// yield at least size bytes; reads stop there.
+//
+// The desktop app saves natively because blob URL downloads are swallowed by
+// its webview. Routing the bytes back through /desktop/save-file would make
+// the webview buffer and base64 the whole file, so the server writes it here
+// instead — constant memory, no size ceiling. saveStreamFunc is set only by
+// the desktop app, so `save=native` does nothing in server or browser mode.
+func (s *Server) deliverPodFile(w http.ResponseWriter, r *http.Request, src io.Reader, fileName string, size int64, namespace, podName, filePath string) {
+	if s.saveStreamFunc != nil && r.URL.Query().Get("save") == "native" {
+		// Writing to the user's disk is a side effect, and a GET reaches the
+		// loopback listener cross-origin with no preflight — an <img> tag is
+		// enough. The streaming path below is an ordinary read and stays open.
+		if !localOriginOK(r) {
+			s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
+			return
+		}
+		name := sanitizeFilename(fileName)
+		if name == "" {
+			s.writeError(w, http.StatusBadRequest, "invalid filename")
+			return
+		}
+		savedPath, err := s.saveStreamFunc(name, io.LimitReader(src, size))
+		if err != nil {
+			log.Printf("[copy] native save of %s from %s/%s failed: %v", filePath, namespace, podName, err)
+			errorlog.Record("copy", "error", "native save failed for %s/%s path=%s: %v", namespace, podName, filePath, err)
+			s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to save file: %v", err))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]string{"path": savedPath}); err != nil {
+			log.Printf("[copy] failed to write native save response: %v", err)
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", fileName))
+	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	if n, err := io.CopyN(w, src, size); err != nil {
+		// Headers are already sent; ending the body short of
+		// Content-Length makes the client fail the download visibly.
+		log.Printf("[copy] streaming %s from %s/%s aborted after %d of %d bytes: %v", filePath, namespace, podName, n, size, err)
+		errorlog.Record("copy", "error", "file download for %s/%s path=%s aborted after %d of %d bytes: %v", namespace, podName, filePath, n, size, err)
+	}
+}
+
+// tarStreamMaxRetries bounds how many times a dropped tar stream is resumed.
+const tarStreamMaxRetries = 10
+
+// execTarAttempt runs one tar exec attempt, writing the tar byte stream
+// starting at the given offset (bytes already delivered) to stdout, and
+// returns once the exec finishes.
+type execTarAttempt func(ctx context.Context, offset uint64, stdout io.Writer) error
+
+// resumingTarStream reads a pod's tar output across exec attempts,
+// transparently resuming after mid-stream drops. Exec transports routinely
+// kill long transfers (LBs, tunnels, apiserver proxies) — sometimes as a
+// normal close, which client-go surfaces as a successful exec with truncated
+// output. This is the failure kubectl cp works around with --retries, and the
+// resume mechanism here is modeled on its TarPipe.
+//
+// A premature clean EOF is indistinguishable from real completion at this
+// layer, so EOF also triggers a resume. Consumers must therefore stop reading
+// once they have what they need — the download handler stops after the file
+// entry and never reads the archive trailer.
+type resumingTarStream struct {
+	ctx        context.Context
+	run        execTarAttempt
+	maxRetries int
+	reader     *io.PipeReader
+	bytesRead  uint64
+	retries    int
+}
+
+func newResumingTarStream(ctx context.Context, run execTarAttempt, maxRetries int) *resumingTarStream {
+	t := &resumingTarStream{ctx: ctx, run: run, maxRetries: maxRetries}
+	t.startFrom(0)
+	return t
+}
+
+func (t *resumingTarStream) startFrom(offset uint64) {
+	pr, pw := io.Pipe()
+	t.reader = pr
+	go func() {
+		pw.CloseWithError(t.run(t.ctx, offset, pw))
+	}()
+}
+
+func (t *resumingTarStream) Read(p []byte) (int, error) {
+	for {
+		n, err := t.reader.Read(p)
+		if n > 0 {
+			t.bytesRead += uint64(n)
+			return n, nil
+		}
+		if err == nil {
+			continue
+		}
+		if t.ctx.Err() != nil {
+			return 0, err
+		}
+		// A first-attempt failure before any data propagates unchanged: the
+		// caller needs the raw error to classify it (cat fallback, 404), and
+		// nothing has been delivered, so a client retry is free.
+		if t.bytesRead == 0 && t.retries == 0 {
+			return 0, err
+		}
+		if t.retries >= t.maxRetries {
+			return 0, err
+		}
+		t.retries++
+		log.Printf("[copy] tar stream interrupted, resuming at %d bytes (retry %d/%d): %v", t.bytesRead, t.retries, t.maxRetries, err)
+		t.startFrom(t.bytesRead)
+	}
+}
+
+// Close unblocks the current attempt's writer; the exec attempt itself is
+// stopped by the request context.
+func (t *resumingTarStream) Close() error {
+	return t.reader.CloseWithError(context.Canceled)
 }
 
 // downloadWithCat is a fallback when tar is not available

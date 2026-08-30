@@ -5,7 +5,8 @@ import { PaneLoader, Input } from '@skyhook-io/k8s-ui'
 import { clsx } from 'clsx'
 import type { FileNode } from '../../types'
 import { formatBytes } from '../../utils/format'
-import { downloadBlob, filterTree } from './file-browser-utils'
+import { filterTree } from './file-browser-utils'
+import { useFileDownload } from '../../hooks/useFileDownload'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { Tooltip } from '../ui/Tooltip'
 
@@ -308,37 +309,19 @@ interface PodFileTreeNodeProps {
 }
 
 function PodFileTreeNode({ node, namespace, podName, container, onNavigate }: PodFileTreeNodeProps) {
-  const [downloading, setDownloading] = useState(false)
+  const { downloading, download } = useFileDownload()
   const isDir = node.type === 'dir'
   const isSymlink = node.type === 'symlink'
   const isDownloadable = !isDir // files and symlinks can be downloaded
 
-  const handleDownload = async (e: React.MouseEvent) => {
+  const handleDownload = (e: React.MouseEvent) => {
     e.stopPropagation()
     if (downloading) return
 
-    setDownloading(true)
-    try {
-      const params = new URLSearchParams()
-      params.set('container', container)
-      params.set('path', node.path)
-
-      const response = await fetch(apiUrl(`/pods/${namespace}/${podName}/files/download?${params.toString()}`), {
-        credentials: getCredentialsMode(),
-        headers: getAuthHeaders(),
-      })
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({ error: 'Download failed' }))
-        throw new Error(err.error || `HTTP ${response.status}`)
-      }
-
-      const blob = await response.blob()
-      await downloadBlob(blob, node.name)
-    } catch (err) {
-      console.error('Download failed:', err)
-    } finally {
-      setDownloading(false)
-    }
+    const params = new URLSearchParams()
+    params.set('container', container)
+    params.set('path', node.path)
+    void download(apiUrl(`/pods/${namespace}/${podName}/files/download?${params.toString()}`), node.name)
   }
 
   const handleClick = () => {

@@ -7,7 +7,8 @@ import { clsx } from 'clsx'
 import { useImageMetadata, ApiError } from '../../api/client'
 import type { FileNode, ImageFilesystem } from '../../types'
 import { formatBytes } from '../../utils/format'
-import { downloadBlob, filterTree } from './file-browser-utils'
+import { filterTree } from './file-browser-utils'
+import { useFileDownload } from '../../hooks/useFileDownload'
 import { Tooltip } from '../ui/Tooltip'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { Input } from '@skyhook-io/k8s-ui'
@@ -628,39 +629,22 @@ interface FileTreeNodeProps {
 
 function FileTreeNode({ node, depth, defaultExpanded = true, image, namespace, podName, pullSecrets }: FileTreeNodeProps) {
   const [expanded, setExpanded] = useState(defaultExpanded && depth < 2)
-  const [downloading, setDownloading] = useState(false)
+  const { downloading, download } = useFileDownload()
   const isDir = node.type === 'dir'
   const isSymlink = node.type === 'symlink'
   const isFile = node.type === 'file'
 
-  const handleDownload = async (e: React.MouseEvent) => {
+  const handleDownload = (e: React.MouseEvent) => {
     e.stopPropagation()
     if (downloading) return
 
-    setDownloading(true)
-    try {
-      const params = new URLSearchParams()
-      params.set('image', image)
-      params.set('path', node.path)
-      if (namespace) params.set('namespace', namespace)
-      if (podName) params.set('pod', podName)
-      if (pullSecrets.length > 0) params.set('pullSecrets', pullSecrets.join(','))
-
-      const response = await fetch(apiUrl(`/images/file?${params.toString()}`), {
-        credentials: getCredentialsMode(),
-        headers: getAuthHeaders(),
-      })
-      if (!response.ok) {
-        throw new Error('Failed to download file')
-      }
-
-      const blob = await response.blob()
-      await downloadBlob(blob, node.name)
-    } catch (err) {
-      console.error('Download failed:', err)
-    } finally {
-      setDownloading(false)
-    }
+    const params = new URLSearchParams()
+    params.set('image', image)
+    params.set('path', node.path)
+    if (namespace) params.set('namespace', namespace)
+    if (podName) params.set('pod', podName)
+    if (pullSecrets.length > 0) params.set('pullSecrets', pullSecrets.join(','))
+    void download(apiUrl(`/images/file?${params.toString()}`), node.name)
   }
 
   const handleClick = () => {
