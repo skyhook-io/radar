@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { reportBrowserUpdateCheck, sendBrowserUpdateCheck } from './client'
 
 function dependencies(reportDay: string | null = null) {
-  const claimBrowserCheck = vi.fn((_installScope?: string) => reportDay)
+  const claimBrowserCheck = vi.fn<(installScope?: string) => string | null>(() => reportDay)
   const sendBrowserCheck = vi.fn(async () => {})
   return {
     claimBrowserCheck,
@@ -51,7 +51,7 @@ describe('reportBrowserUpdateCheck', () => {
   })
 
   it('sends an identity-free attempt to the same-origin backend endpoint', async () => {
-    const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(null, { status: 204 }))
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(null, { status: 204 }))
     vi.stubGlobal('fetch', fetch)
 
     await sendBrowserUpdateCheck()
