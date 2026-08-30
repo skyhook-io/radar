@@ -352,6 +352,9 @@ func ConnectionFailureReason(err error) string {
 	if errors.As(err, &httpErr) && (httpErr.StatusCode == http.StatusUnauthorized || httpErr.StatusCode == http.StatusForbidden) {
 		return pkgopencost.ReasonAuthentication
 	}
+	if errors.Is(err, pkgopencost.ErrKubecostTrendQuery) {
+		return pkgopencost.ReasonQueryError
+	}
 	message := strings.ToLower(err.Error())
 	if errors.Is(err, ErrKubecostClusterID) || errors.Is(err, ErrKubecostUnavailable) || strings.Contains(message, "kubecost") {
 		return pkgopencost.ReasonSourceUnavailable

@@ -26,13 +26,14 @@ import (
 type Source string
 
 const (
-	SourceAuto             Source = "auto"
-	SourcePrometheus       Source = "prometheus"
-	SourceKubecost         Source = "kubecost"
-	autoRetryDelay                = time.Minute
-	noCostSourceRetryDelay        = 5 * time.Second
-	kubecostConnectTimeout        = 25 * time.Second
-	kubecostHTTPTimeout           = 12 * time.Second
+	SourceAuto               Source = "auto"
+	SourcePrometheus         Source = "prometheus"
+	SourceKubecost           Source = "kubecost"
+	autoRetryDelay                  = time.Minute
+	noCostSourceRetryDelay          = 5 * time.Second
+	kubecostConnectTimeout          = 25 * time.Second
+	kubecostHTTPTimeout             = 30 * time.Second
+	kubecostMaxResponseBytes        = 64 << 20
 )
 
 var (
@@ -615,12 +616,13 @@ func probeKubecostURL(ctx context.Context, rawURL, apiKey, clusterID string) (*p
 			},
 		}
 		transport := prom.NewHTTPTransport(origin, basePath, httpClient)
+		transport.MaxResponseBytes = kubecostMaxResponseBytes
 		if apiKey != "" {
 			transport.Headers = map[string]string{"X-API-KEY": apiKey}
 		}
 		client := pkgopencost.NewKubecostClient(transport)
 		resp, err := client.GetAllocation(ctx, pkgopencost.KubecostAllocationOptions{
-			Window:     "1d",
+			Window:     "24h",
 			Aggregate:  "cluster",
 			Accumulate: "true",
 			Filter:     kubecostClusterFilter(clusterID),

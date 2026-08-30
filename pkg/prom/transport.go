@@ -2,6 +2,7 @@ package prom
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,8 @@ import (
 	"time"
 	"unicode"
 )
+
+var ErrResponseTooLarge = errors.New("upstream response exceeds configured limit")
 
 // Transport is the pluggable HTTP transport used by Client to issue requests
 // to a Prometheus HTTP API. Implementations decide how the request physically
@@ -40,10 +43,11 @@ type Transport interface {
 // Accept header, so callers may override Accept by setting it here. Typical
 // uses are Authorization: Bearer ... and tenant headers like X-Scope-OrgID.
 type HTTPTransport struct {
-	BaseURL    string
-	BasePath   string
-	HTTPClient *http.Client
-	Headers    map[string]string
+	BaseURL          string
+	BasePath         string
+	HTTPClient       *http.Client
+	Headers          map[string]string
+	MaxResponseBytes int64
 }
 
 // NewHTTPTransport constructs an HTTPTransport with a default 10-second
@@ -88,13 +92,16 @@ func (t *HTTPTransport) Do(ctx context.Context, method, path string, params url.
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	const maxResponseBytes = 10 << 20
+	maxResponseBytes := t.MaxResponseBytes
+	if maxResponseBytes <= 0 {
+		maxResponseBytes = 10 << 20
+	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("prom.HTTPTransport: read body: %w", err)
 	}
-	if len(body) > maxResponseBytes {
-		return nil, fmt.Errorf("prom.HTTPTransport: response exceeds 10 MiB limit")
+	if int64(len(body)) > maxResponseBytes {
+		return nil, fmt.Errorf("prom.HTTPTransport: %w (%d bytes)", ErrResponseTooLarge, maxResponseBytes)
 	}
 
 	if resp.StatusCode != http.StatusOK {

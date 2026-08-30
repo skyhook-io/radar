@@ -11,8 +11,10 @@ import (
 )
 
 const (
-	kubecostCurrentWindow        = "1h"
-	kubecostNamespaceConcurrency = 8
+	kubecostCurrentWindow         = "1h"
+	kubecostFallbackQueryWindow   = "24h"
+	kubecostFallbackDisplayWindow = "1d"
+	kubecostNamespaceConcurrency  = 8
 )
 
 var (
@@ -359,7 +361,7 @@ func ComputeKubecostNodes(ctx context.Context, client *KubecostClient, opts Kube
 func kubecostAllocationWithFallback(ctx context.Context, client *KubecostClient, opts KubecostAllocationOptions) (*KubecostAllocationResponse, string, error) {
 	var lastErr error
 	sawEmpty := false
-	for _, window := range []string{kubecostCurrentWindow, "1d"} {
+	for _, window := range []string{kubecostCurrentWindow, kubecostFallbackQueryWindow} {
 		opts.Window = window
 		resp, err := client.GetAllocation(ctx, opts)
 		if err != nil {
@@ -370,23 +372,26 @@ func kubecostAllocationWithFallback(ctx context.Context, client *KubecostClient,
 			continue
 		}
 		if hasKubecostAllocationData(resp) {
-			return resp, window, nil
+			if window == kubecostFallbackQueryWindow {
+				return resp, kubecostFallbackDisplayWindow, nil
+			}
+			return resp, kubecostCurrentWindow, nil
 		}
 		sawEmpty = true
 	}
 	if sawEmpty {
-		return nil, "1d", nil
+		return nil, kubecostFallbackDisplayWindow, nil
 	}
 	if lastErr != nil {
-		return nil, "1d", lastErr
+		return nil, kubecostFallbackDisplayWindow, lastErr
 	}
-	return nil, "1d", nil
+	return nil, kubecostFallbackDisplayWindow, nil
 }
 
 func kubecostAssetsWithFallback(ctx context.Context, client *KubecostClient, opts KubecostAssetOptions) (*KubecostAssetsResponse, error) {
 	var lastErr error
 	sawEmpty := false
-	for _, window := range []string{kubecostCurrentWindow, "1d"} {
+	for _, window := range []string{kubecostCurrentWindow, kubecostFallbackQueryWindow} {
 		opts.Window = window
 		resp, err := client.GetAssets(ctx, opts)
 		if err != nil {

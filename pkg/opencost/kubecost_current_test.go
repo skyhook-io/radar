@@ -80,8 +80,8 @@ func TestComputeKubecostSummaryFallsBackFromNullHourAndNormalizesActualDuration(
 	if resp.TotalIdleCost != 2.25 {
 		t.Fatalf("totalIdleCost = %v, want 2.25", resp.TotalIdleCost)
 	}
-	if len(transport.requests) != 2 || transport.requests[0].params.Get("window") != "1h" || transport.requests[1].params.Get("window") != "1d" {
-		t.Fatalf("requests = %#v, want 1h then 1d", transport.requests)
+	if len(transport.requests) != 2 || transport.requests[0].params.Get("window") != "1h" || transport.requests[1].params.Get("window") != "24h" {
+		t.Fatalf("requests = %#v, want 1h then rolling 24h", transport.requests)
 	}
 	if got := transport.requests[1].params.Get("filter"); got != `cluster:"radar-kubecost-e2e"` {
 		t.Fatalf("filter = %q", got)
@@ -414,8 +414,8 @@ func TestComputeKubecostNodesFallsBackToDailyAssets(t *testing.T) {
 	if !resp.Available || len(resp.Nodes) != 1 || resp.Nodes[0].HourlyCost != 1 {
 		t.Fatalf("unexpected response: %#v", resp)
 	}
-	if len(transport.requests) != 2 || transport.requests[0].params.Get("window") != "1h" || transport.requests[1].params.Get("window") != "1d" {
-		t.Fatalf("requests = %#v, want 1h then 1d", transport.requests)
+	if len(transport.requests) != 2 || transport.requests[0].params.Get("window") != "1h" || transport.requests[1].params.Get("window") != "24h" {
+		t.Fatalf("requests = %#v, want 1h then rolling 24h", transport.requests)
 	}
 }
 

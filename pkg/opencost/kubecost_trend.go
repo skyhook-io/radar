@@ -2,11 +2,14 @@ package opencost
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 )
+
+var ErrKubecostTrendQuery = errors.New("Kubecost trend query failed")
 
 type KubecostTrendOptions struct {
 	Range      string
@@ -41,7 +44,7 @@ func ComputeKubecostTrend(ctx context.Context, client *KubecostClient, opts Kube
 		Filter:     kubecostFilter(opts.ClusterID, ""),
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrKubecostTrendQuery, err)
 	}
 
 	var allowed map[string]struct{}

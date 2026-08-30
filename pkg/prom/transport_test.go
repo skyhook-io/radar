@@ -16,12 +16,35 @@ func TestHTTPTransportRejectsOversizedResponse(t *testing.T) {
 	defer srv.Close()
 
 	_, err := NewHTTPTransport(srv.URL, "", nil).Do(context.Background(), http.MethodGet, "/api/v1/query", nil)
-	if err == nil || !strings.Contains(err.Error(), "exceeds 10 MiB") {
+	if err == nil || !errors.Is(err, ErrResponseTooLarge) {
 		t.Fatalf("error = %v, want explicit response-size error", err)
 	}
 	var httpErr *HTTPError
 	if errors.As(err, &httpErr) {
 		t.Fatalf("oversized 200 response must not be classified as an HTTP status error: %v", err)
+	}
+}
+
+func TestHTTPTransportHonorsCustomResponseLimit(t *testing.T) {
+	body := strings.Repeat("x", 2048)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+
+	transport := NewHTTPTransport(srv.URL, "", nil)
+	transport.MaxResponseBytes = 1024
+	if _, err := transport.Do(context.Background(), http.MethodGet, "/allocation", nil); !errors.Is(err, ErrResponseTooLarge) {
+		t.Fatalf("error = %v, want custom response-size error", err)
+	}
+
+	transport.MaxResponseBytes = 4096
+	got, err := transport.Do(context.Background(), http.MethodGet, "/allocation", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != body {
+		t.Fatalf("body length = %d, want %d", len(got), len(body))
 	}
 }
 

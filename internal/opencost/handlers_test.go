@@ -253,6 +253,9 @@ func TestConnectionFailureReasonDoesNotGuessAuthenticationFromText(t *testing.T)
 	if got := ConnectionFailureReason(fmt.Errorf("retained row: %w", pkgopencost.ErrKubecostMalformedResponse)); got != pkgopencost.ReasonQueryError {
 		t.Fatalf("malformed response reason = %q, want %q", got, pkgopencost.ReasonQueryError)
 	}
+	if got := ConnectionFailureReason(fmt.Errorf("allocation history: %w", pkgopencost.ErrKubecostTrendQuery)); got != pkgopencost.ReasonQueryError {
+		t.Fatalf("trend query reason = %q, want %q", got, pkgopencost.ReasonQueryError)
+	}
 	if got := ConnectionFailureReason(fmt.Errorf("%w: invalid source", ErrCostSourceEnvConfig)); got != pkgopencost.ReasonDeploymentConfig {
 		t.Fatalf("environment config reason = %q, want %q", got, pkgopencost.ReasonDeploymentConfig)
 	}

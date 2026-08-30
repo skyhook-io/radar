@@ -163,7 +163,7 @@ detect_kubecost_api_base() {
     assert_forward_alive
     for candidate in "" "/model"; do
       response="$(curl "${CURL_OPTS[@]}" --get "http://127.0.0.1:${KUBECOST_LOCAL_PORT}${candidate}/allocation" \
-        --data-urlencode 'window=1d' \
+        --data-urlencode 'window=24h' \
         --data-urlencode 'aggregate=cluster' \
         --data-urlencode 'accumulate=true' \
         --data-urlencode 'idle=false' \
@@ -179,7 +179,7 @@ detect_kubecost_api_base() {
 }
 
 fetch_allocations() {
-  local window="${1:-1d}" idle="${2:-true}" namespace="${3:-}"
+  local window="${1:-24h}" idle="${2:-true}" namespace="${3:-}"
   local filter="cluster:\"${CLUSTER_ID}\""
   if [ -n "${namespace}" ]; then
     filter="${filter}+namespace:\"${namespace}\""
@@ -195,7 +195,7 @@ fetch_allocations() {
 
 fetch_assets() {
   curl "${CURL_OPTS[@]}" --get "${KUBECOST_API_BASE}/assets" \
-    --data-urlencode 'window=1d' \
+    --data-urlencode 'window=24h' \
     --data-urlencode 'accumulate=true' \
     --data-urlencode "filter=cluster:\"${CLUSTER_ID}\"+assetType:\"node\""
 }
@@ -550,7 +550,7 @@ cmd_radar_smoke() {
     fail "failed to query Kubecost allocations for the ${raw_window} current-data window"
   fi
   if ! jq -e 'any(.data[]?[]?; . != null)' >/dev/null <<<"${raw_allocations}"; then
-    raw_window="1d"
+    raw_window="24h"
     if ! raw_allocations="$(fetch_allocations "${raw_window}" false "${DEMO_NS}")"; then
       fail "failed to query Kubecost allocations for the ${raw_window} current-data window"
     fi

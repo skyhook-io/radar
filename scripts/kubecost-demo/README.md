@@ -106,7 +106,7 @@ identity should deliberately differ from the kind cluster name.
   the Aggregator reports the `orders-0` allocation with
   `__unallocated__` controller fields even though the pod belongs to a
   StatefulSet. `query` exposes this as `podsWithoutController`; `radar-smoke`
-  verifies that raw premise using the same `1h`-then-`1d` current-data window
+  verifies that raw premise using the same `1h`-then-rolling-`24h` current-data window
   selection as Radar, then asserts Radar recovered the `orders` row through its
   Kubernetes pod-owner lookup alongside the Deployment and DaemonSet.
 - **The Aggregator is intentionally not made lightweight by changing its
