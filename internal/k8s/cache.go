@@ -23,9 +23,11 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	toolscache "k8s.io/client-go/tools/cache"
 
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -702,6 +704,14 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	if obj == nil {
 		obj = oldObj
 	}
+	if tombstone, ok := obj.(toolscache.DeletedFinalStateUnknown); ok {
+		obj = tombstone.Obj
+	}
+	apiVersion := extractAPIVersion(obj)
+	apiGroup := resourceid.GroupForBuiltinKind(kind)
+	if apiVersion != "" {
+		apiGroup = GroupFromAPIVersion(apiVersion)
+	}
 
 	resourceVersion := ""
 	if obj != nil {
@@ -711,18 +721,16 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	}
 
 	if op == "delete" {
-		stashDeletedForRecreate(kind, namespace, name, uid, obj)
+		stashDeletedForRecreate(apiGroup, kind, namespace, name, uid, obj)
 	}
 
 	// One extraction of owner/labels/createdAt, reused for both the event and
-	// the tombstone. ExtractTombstoneEntry unwraps DeletedFinalStateUnknown, so
-	// a delete whose payload is that wrapper still yields the final object.
+	// the tombstone.
 	entry, extracted := timeline.ExtractTombstoneEntry(obj)
 	owner := entry.Owner
 	labels := entry.Labels
 	createdAt := entry.CreatedAt
 	healthState := classifyTimelineHealth(kind, obj, time.Now())
-	apiVersion := extractAPIVersion(obj)
 
 	// Feed the tombstone on every add/update/delete. While the object is live
 	// this mirrors its enrichment; once it is gone (delete, or a late K8s event
@@ -779,10 +787,11 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	}
 
 	// Recreate-join: an add that replaces a just-deleted object of the same
-	// name but a different UID carries the diff against its predecessor, so
-	// the change feed can show what the recreate changed instead of a
-	// contentless delete+add pair. Guarded to young objects post-sync — the
-	// same conditions under which the add below is recorded at all.
+	// group, kind, namespace, and name but a different UID carries the diff
+	// against its predecessor, so the change feed can show what the recreate
+	// changed instead of a contentless delete+add pair. Guarded to young
+	// objects post-sync — the same conditions under which the add below is
+	// recorded at all.
 	//
 	// Status is stripped from BOTH sides before diffing: every recreate
 	// resets status, so cross-recreate status deltas (ready 1→0, condition
@@ -792,7 +801,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	recreated := false
 	if op == "add" && newObj != nil && initialSyncComplete {
 		if meta, ok := newObj.(metav1.Object); ok && time.Since(meta.GetCreationTimestamp().Time) <= 30*time.Second {
-			if stashed, ok := takeRecreateMatch(kind, namespace, name, uid); ok {
+			if stashed, ok := takeRecreateMatch(apiGroup, kind, namespace, name, uid); ok {
 				if localDiff := ComputeDiff(kind, stripStatusForRecreateDiff(stashed), stripStatusForRecreateDiff(newObj)); localDiff != nil && len(localDiff.Fields) > 0 {
 					diff = &timeline.DiffInfo{
 						Fields:  make([]timeline.FieldChange, len(localDiff.Fields)),
@@ -894,9 +903,8 @@ func isUnstructuredUpdate(oldObj, newObj any) bool {
 }
 
 // extractAPIVersion returns the resource's apiVersion (e.g. "cluster.x-k8s.io/v1beta1")
-// for unstructured/CRD objects. Typed informer objects strip kind/apiVersion, so they
-// fall through to "" — the navigation layer treats an empty group as "core/typed kind",
-// which is correct since core kinds don't collide.
+// for unstructured objects. Typed informer objects have empty TypeMeta after decoding;
+// identity call sites recover their group from resourceid.GroupForBuiltinKind.
 func extractAPIVersion(obj any) string {
 	if u, ok := obj.(*unstructured.Unstructured); ok {
 		return u.GetAPIVersion()
