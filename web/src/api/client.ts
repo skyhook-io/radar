@@ -1551,16 +1551,18 @@ export function useVersionCheck() {
     ? (capabilities.data.deployment?.mode ?? 'local')
     : undefined
 
-  useEffect(() => {
-    reportBrowserUpdateCheck(deploymentMode)
-  }, [deploymentMode])
-
-  return useQuery<VersionInfo>({
+  const query = useQuery<VersionInfo>({
     queryKey: ["version-check"],
     queryFn: () => fetchJSON('/version-check'),
     staleTime: 60 * 60 * 1000, // 1 hour
     retry: false, // Don't retry on failure
   });
+
+  useEffect(() => {
+    if (query.isFetched) reportBrowserUpdateCheck(deploymentMode)
+  }, [deploymentMode, query.isFetched])
+
+  return query;
 }
 
 // ============================================================================

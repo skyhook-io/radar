@@ -31,13 +31,16 @@ var (
 	// Controls install method detection and enables in-app update flow.
 	isDesktop bool
 
-	// cached update check result
-	mu           sync.Mutex
-	cachedResult *UpdateInfo
-	lastCheck    time.Time
-	cacheTTL     = 1 * time.Hour
-	errorTTL     = 5 * time.Minute
+	mu          sync.Mutex
+	updateCache = map[string]updateCacheEntry{}
+	cacheTTL    = 1 * time.Hour
+	errorTTL    = 5 * time.Minute
 )
+
+type updateCacheEntry struct {
+	result    *UpdateInfo
+	checkedAt time.Time
+}
 
 // InstallMethod represents how Radar was installed
 type InstallMethod string
@@ -112,16 +115,17 @@ func ReportBrowserUpdateCheck(ctx context.Context, reportDay string) error {
 	mode := "in-cluster"
 	method := detectInstallMethod()
 	params := url.Values{
-		"v":      {Current},
-		"os":     {runtime.GOOS},
-		"arch":   {runtime.GOARCH},
-		"method": {string(method)},
-		"mode":   {mode},
-		"source": {"browser-proxy"},
-		"report": {"1"},
-		"day":    {reportDay},
+		"v":       {Current},
+		"os":      {runtime.GOOS},
+		"arch":    {runtime.GOARCH},
+		"method":  {string(method)},
+		"mode":    {mode},
+		"channel": {string(buildChannel(Current))},
+		"source":  {"browser-proxy"},
+		"report":  {"1"},
+		"day":     {reportDay},
 	}
-	if installedAt := installTimestamp(context.WithoutCancel(ctx), mode); installedAt != 0 {
+	if installedAt := k8s.InstalledAtCached(); installedAt != 0 {
 		params.Set("t", strconv.FormatInt(installedAt, 10))
 	}
 
@@ -145,15 +149,16 @@ func ReportBrowserUpdateCheck(ctx context.Context, reportDay string) error {
 
 func checkForUpdateCached(options checkOptions) *UpdateInfo {
 	mu.Lock()
+	entry := updateCache[options.source]
 
 	// Use shorter TTL for cached errors so transient failures recover quickly
 	ttl := cacheTTL
-	if cachedResult != nil && cachedResult.Error != "" {
+	if entry.result != nil && entry.result.Error != "" {
 		ttl = errorTTL
 	}
 
-	if cachedResult != nil && time.Since(lastCheck) < ttl {
-		result := *cachedResult
+	if entry.result != nil && time.Since(entry.checkedAt) < ttl {
+		result := *entry.result
 		mu.Unlock()
 		return &result
 	}
@@ -166,8 +171,7 @@ func checkForUpdateCached(options checkOptions) *UpdateInfo {
 	result := fetchLatestRelease(fetchCtx, options)
 
 	mu.Lock()
-	cachedResult = result
-	lastCheck = time.Now()
+	updateCache[options.source] = updateCacheEntry{result: result, checkedAt: time.Now()}
 	mu.Unlock()
 
 	return result
@@ -192,11 +196,12 @@ func fetchLatestRelease(ctx context.Context, options checkOptions) *UpdateInfo {
 		mode = "in-cluster"
 	}
 	params := url.Values{
-		"v":      {Current},
-		"os":     {runtime.GOOS},
-		"arch":   {runtime.GOARCH},
-		"method": {string(method)},
-		"mode":   {mode},
+		"v":       {Current},
+		"os":      {runtime.GOOS},
+		"arch":    {runtime.GOARCH},
+		"method":  {string(method)},
+		"mode":    {mode},
+		"channel": {string(buildChannel(Current))},
 	}
 	if installedAt := installTimestamp(ctx, mode); installedAt != 0 {
 		params.Set("t", strconv.FormatInt(installedAt, 10))
@@ -284,7 +289,7 @@ func buildChannel(value string) buildChannelName {
 	normalized := strings.TrimPrefix(strings.ToLower(value), "v")
 	if normalized == "dev" || strings.HasPrefix(normalized, "dev-") ||
 		strings.HasSuffix(normalized, "-dirty") || isCommitVersion(normalized) ||
-		isGitDescribeVersion(normalized) {
+		isGitDescribeVersion(normalized) || isPackageReleaseVersion(normalized) {
 		return buildChannelDevelopment
 	}
 	if IsReleaseVersion(value) {
@@ -297,6 +302,15 @@ func buildChannel(value string) buildChannelName {
 		}
 	}
 	return buildChannelCustom
+}
+
+func isPackageReleaseVersion(value string) bool {
+	for _, prefix := range []string{"k8s-ui-v", "radar-app-v"} {
+		if strings.HasPrefix(value, prefix) && IsReleaseVersion(strings.TrimPrefix(value, prefix)) {
+			return true
+		}
+	}
+	return false
 }
 
 func isNamedPrerelease(label string) bool {

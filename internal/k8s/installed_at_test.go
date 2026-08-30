@@ -59,6 +59,28 @@ func TestInstalledAtBacksOffThenRetriesAfterTransientReadFailure(t *testing.T) {
 	}
 }
 
+func TestInstalledAtCachedDoesNotInitiateRead(t *testing.T) {
+	resetInstalledAtCache()
+	t.Cleanup(resetInstalledAtCache)
+
+	if got := InstalledAtCached(); got != 0 {
+		t.Fatalf("InstalledAtCached = %d, want 0", got)
+	}
+	installedAtMu.Lock()
+	tried := installedAtTried
+	installedAtMu.Unlock()
+	if !tried.IsZero() {
+		t.Fatalf("InstalledAtCached recorded an attempted read at %v", tried)
+	}
+
+	installedAtMu.Lock()
+	installedAtCached = 1700000000
+	installedAtMu.Unlock()
+	if got := InstalledAtCached(); got != 1700000000 {
+		t.Fatalf("InstalledAtCached = %d, want 1700000000", got)
+	}
+}
+
 func TestInstalledAtZeroWhenUnknown(t *testing.T) {
 	kc := fake.NewSimpleClientset()
 	ctx := context.Background()

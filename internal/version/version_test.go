@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
-	"time"
 )
 
 func TestIsNewerVersion(t *testing.T) {
@@ -179,6 +178,9 @@ func TestCheckForUpdateExcludesOnlyDevelopmentBuilds(t *testing.T) {
 		if query.Get("source") != "release-only" || query.Get("report") != "0" {
 			t.Errorf("CheckForUpdate with %q sent metered query %v", current, query)
 		}
+		if got := query.Get("channel"); got != string(buildChannel(current)) {
+			t.Errorf("CheckForUpdate with %q sent channel %q", current, got)
+		}
 	}
 
 	for _, current := range []string{"1.2.3", "1.2.3-rc.1", "1.8.6-pg.2"} {
@@ -188,6 +190,9 @@ func TestCheckForUpdateExcludesOnlyDevelopmentBuilds(t *testing.T) {
 		query := queries[len(queries)-1]
 		if query.Has("source") || query.Has("report") {
 			t.Errorf("measurable build %q sent unmetered query %v", current, query)
+		}
+		if got := query.Get("channel"); got != string(buildChannel(current)) {
+			t.Errorf("CheckForUpdate with %q sent channel %q", current, got)
 		}
 	}
 
@@ -212,7 +217,7 @@ func TestReportBrowserUpdateCheckIsBestEffortAndIdentityFree(t *testing.T) {
 	releasesURL = proxy.URL
 	SetCurrent("1.2.3-rc1")
 	resetUpdateCache()
-	cachedResult = &UpdateInfo{LatestVersion: "cached"}
+	updateCache[""] = updateCacheEntry{result: &UpdateInfo{LatestVersion: "cached"}}
 	t.Cleanup(func() {
 		releasesURL = previousURL
 		SetCurrent(previousVersion)
@@ -227,7 +232,7 @@ func TestReportBrowserUpdateCheckIsBestEffortAndIdentityFree(t *testing.T) {
 	}
 	query := queries[0]
 	for key, want := range map[string]string{
-		"v": "1.2.3-rc1", "mode": "in-cluster", "source": "browser-proxy", "report": "1", "day": "2026-08-29",
+		"v": "1.2.3-rc1", "mode": "in-cluster", "channel": "prerelease", "source": "browser-proxy", "report": "1", "day": "2026-08-29",
 	} {
 		if got := query.Get(key); got != want {
 			t.Errorf("query[%q] = %q, want %q", key, got, want)
@@ -238,8 +243,8 @@ func TestReportBrowserUpdateCheckIsBestEffortAndIdentityFree(t *testing.T) {
 			t.Errorf("identity field %q present in query %v", key, query)
 		}
 	}
-	if cachedResult == nil || cachedResult.LatestVersion != "cached" {
-		t.Fatalf("browser check changed release cache: %+v", cachedResult)
+	if cached := updateCache[""]; cached.result == nil || cached.result.LatestVersion != "cached" {
+		t.Fatalf("browser check changed release cache: %+v", cached)
 	}
 
 	SetCurrent("dev-a1b2c3d")
@@ -248,6 +253,38 @@ func TestReportBrowserUpdateCheckIsBestEffortAndIdentityFree(t *testing.T) {
 	}
 	if len(queries) != 1 {
 		t.Fatalf("development build made %d browser requests, want none", len(queries)-1)
+	}
+}
+
+func TestReleaseOnlyCheckDoesNotSatisfyMeteredCheck(t *testing.T) {
+	var queries []url.Values
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.Query())
+		_ = json.NewEncoder(w).Encode(githubRelease{TagName: "v1.3.0"})
+	}))
+	defer proxy.Close()
+
+	previousURL, previousVersion := releasesURL, Current
+	releasesURL = proxy.URL
+	SetCurrent("1.2.3")
+	resetUpdateCache()
+	t.Cleanup(func() {
+		releasesURL = previousURL
+		SetCurrent(previousVersion)
+		resetUpdateCache()
+	})
+
+	CheckForUpdateRelease(context.Background())
+	CheckForUpdate(context.Background())
+
+	if len(queries) != 2 {
+		t.Fatalf("requests = %d, want separate release-only and metered requests", len(queries))
+	}
+	if got := queries[0].Get("source"); got != "release-only" {
+		t.Fatalf("first source = %q, want release-only", got)
+	}
+	if queries[1].Has("source") || queries[1].Has("report") {
+		t.Fatalf("second request is not metered: %v", queries[1])
 	}
 }
 
@@ -267,6 +304,8 @@ func TestBuildChannel(t *testing.T) {
 		"dev":                         buildChannelDevelopment,
 		"dev-a1b2c3d":                 buildChannelDevelopment,
 		"1.2.3-dirty":                 buildChannelDevelopment,
+		"k8s-ui-v1.13.3":              buildChannelDevelopment,
+		"radar-app-v1.2.3":            buildChannelDevelopment,
 		"k8s-ui-v1.13.3-27-g1197bab6": buildChannelDevelopment,
 		"1197bab6043c723e557714620758ace2dad36354": buildChannelDevelopment,
 	}
@@ -280,6 +319,5 @@ func TestBuildChannel(t *testing.T) {
 func resetUpdateCache() {
 	mu.Lock()
 	defer mu.Unlock()
-	cachedResult = nil
-	lastCheck = time.Time{}
+	updateCache = map[string]updateCacheEntry{}
 }

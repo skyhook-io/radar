@@ -33,6 +33,14 @@ func InstalledAt(ctx context.Context) int64 {
 	return installedAtCachedFrom(ctx, client, os.Getenv("MY_POD_NAMESPACE"), os.Getenv("MY_DEPLOYMENT_NAME"))
 }
 
+// InstalledAtCached lets best-effort callers reuse a resolved value without
+// letting their failures affect the ordinary update-check path.
+func InstalledAtCached() int64 {
+	installedAtMu.Lock()
+	defer installedAtMu.Unlock()
+	return installedAtCached
+}
+
 var (
 	installedAtMu      sync.Mutex
 	installedAtCached  int64
