@@ -33,53 +33,72 @@ type FieldChange = k8score.FieldChange
 // kindDiffFunc is the per-kind diff dispatcher signature used by diffFunctions.
 type kindDiffFunc func(oldObj, newObj any) ([]FieldChange, []string)
 
+type kindDiffRegistration struct {
+	group string
+	diff  kindDiffFunc
+}
+
 // diffFunctions is the single source of truth for kinds with audited diff
 // coverage. ComputeDiff dispatches via this map, KindHasDiffer reads its
 // keys — no separate "kinds we know about" list to drift out of sync.
 //
-// Adding a kind here is a CONTRACT: the diff function MUST surface every
+// Adding a registration here is a CONTRACT: the diff function MUST surface every
 // status field a user would care about, because for kinds in this map,
 // recordToTimelineStore drops update events when the diff is empty.
-var diffFunctions = map[string]kindDiffFunc{
-	"Deployment":                     diffDeployment,
-	"Pod":                            diffPod,
-	"Service":                        diffService,
-	"ConfigMap":                      diffConfigMap,
-	"Secret":                         diffSecret,
-	"SealedSecret":                   diffSealedSecret,
-	"Ingress":                        diffIngress,
-	"ReplicaSet":                     diffReplicaSet,
-	"DaemonSet":                      diffDaemonSet,
-	"StatefulSet":                    diffStatefulSet,
-	"HorizontalPodAutoscaler":        diffHPA,
-	"Job":                            diffJob,
-	"Node":                           diffNode,
-	"PersistentVolumeClaim":          diffPVC,
-	"Application":                    diffApplication,
-	"Kustomization":                  diffKustomization,
-	"HelmRelease":                    diffFluxHelmRelease,
-	"GitRepository":                  func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "GitRepository") },
-	"OCIRepository":                  func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "OCIRepository") },
-	"HelmRepository":                 func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "HelmRepository") },
-	"Gateway":                        diffGateway,
-	"GatewayClass":                   diffGatewayClass,
-	"HTTPRoute":                      diffGatewayRoute,
-	"GRPCRoute":                      diffGatewayRoute,
-	"TCPRoute":                       diffGatewayRoute,
-	"TLSRoute":                       diffGatewayRoute,
-	"ReferenceGrant":                 diffReferenceGrant,
-	"ResourceQuota":                  diffResourceQuota,
-	"LimitRange":                     diffLimitRange,
-	"MutatingWebhookConfiguration":   diffAdmissionWebhookConfiguration,
-	"ValidatingWebhookConfiguration": diffAdmissionWebhookConfiguration,
-	"Rollout":                        diffRollout,
+// Versions within a group intentionally share a differ; a same-kind object
+// from any other group uses the generic unstructured differ instead.
+var diffFunctions = map[string]kindDiffRegistration{
+	"Deployment":                     {group: "apps", diff: diffDeployment},
+	"Pod":                            {group: "", diff: diffPod},
+	"Service":                        {group: "", diff: diffService},
+	"ConfigMap":                      {group: "", diff: diffConfigMap},
+	"Secret":                         {group: "", diff: diffSecret},
+	"SealedSecret":                   {group: "bitnami.com", diff: diffSealedSecret},
+	"Ingress":                        {group: "networking.k8s.io", diff: diffIngress},
+	"ReplicaSet":                     {group: "apps", diff: diffReplicaSet},
+	"DaemonSet":                      {group: "apps", diff: diffDaemonSet},
+	"StatefulSet":                    {group: "apps", diff: diffStatefulSet},
+	"HorizontalPodAutoscaler":        {group: "autoscaling", diff: diffHPA},
+	"Job":                            {group: "batch", diff: diffJob},
+	"Node":                           {group: "", diff: diffNode},
+	"PersistentVolumeClaim":          {group: "", diff: diffPVC},
+	"Application":                    {group: "argoproj.io", diff: diffApplication},
+	"Kustomization":                  {group: "kustomize.toolkit.fluxcd.io", diff: diffKustomization},
+	"HelmRelease":                    {group: "helm.toolkit.fluxcd.io", diff: diffFluxHelmRelease},
+	"GitRepository":                  {group: "source.toolkit.fluxcd.io", diff: func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "GitRepository") }},
+	"OCIRepository":                  {group: "source.toolkit.fluxcd.io", diff: func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "OCIRepository") }},
+	"HelmRepository":                 {group: "source.toolkit.fluxcd.io", diff: func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "HelmRepository") }},
+	"Gateway":                        {group: "gateway.networking.k8s.io", diff: diffGateway},
+	"GatewayClass":                   {group: "gateway.networking.k8s.io", diff: diffGatewayClass},
+	"HTTPRoute":                      {group: "gateway.networking.k8s.io", diff: diffGatewayRoute},
+	"GRPCRoute":                      {group: "gateway.networking.k8s.io", diff: diffGatewayRoute},
+	"TCPRoute":                       {group: "gateway.networking.k8s.io", diff: diffGatewayRoute},
+	"TLSRoute":                       {group: "gateway.networking.k8s.io", diff: diffGatewayRoute},
+	"ReferenceGrant":                 {group: "gateway.networking.k8s.io", diff: diffReferenceGrant},
+	"ResourceQuota":                  {group: "", diff: diffResourceQuota},
+	"LimitRange":                     {group: "", diff: diffLimitRange},
+	"MutatingWebhookConfiguration":   {group: "admissionregistration.k8s.io", diff: diffAdmissionWebhookConfiguration},
+	"ValidatingWebhookConfiguration": {group: "admissionregistration.k8s.io", diff: diffAdmissionWebhookConfiguration},
+	"Rollout":                        {group: "argoproj.io", diff: diffRollout},
 }
 
-// ComputeDiff computes the diff between old and new objects based on kind.
-// Returns nil if the kind has no audited diff function or if no meaningful
+// ComputeDiff computes the diff between old and new objects based on kind and
+// API group. Returns nil when the inputs cannot be diffed or no meaningful
 // changes were detected.
 func ComputeDiff(kind string, oldObj, newObj any) *DiffInfo {
-	fn, ok := diffFunctions[kind]
+	registration, ok := diffFunctions[kind]
+	oldAPIVersion := extractAPIVersion(oldObj)
+	newAPIVersion := extractAPIVersion(newObj)
+	if oldAPIVersion != "" && newAPIVersion != "" && GroupFromAPIVersion(oldAPIVersion) != GroupFromAPIVersion(newAPIVersion) {
+		return nil
+	}
+	apiVersion := newAPIVersion
+	if apiVersion == "" {
+		apiVersion = oldAPIVersion
+	}
+	if ok && apiVersion != "" && GroupFromAPIVersion(apiVersion) != registration.group {
+		ok = false
+	}
 	if !ok {
 		oldU, newU, ok := unstructuredPair(oldObj, newObj)
 		if !ok {
@@ -91,7 +110,11 @@ func ComputeDiff(kind string, oldObj, newObj any) *DiffInfo {
 		}
 		return buildDiff(changes, summaryParts)
 	}
-	changes, summaryParts := fn(oldObj, newObj)
+	if oldU, newU, unstructured := unstructuredPair(oldObj, newObj); unstructured {
+		oldObj = diffInputForUnstructured(kind, oldU)
+		newObj = diffInputForUnstructured(kind, newU)
+	}
+	changes, summaryParts := registration.diff(oldObj, newObj)
 	if len(changes) == 0 {
 		return nil
 	}
@@ -103,7 +126,7 @@ func ComputeDiffFromUnstructured(kind string, oldU, newU *unstructured.Unstructu
 	if oldU == nil || newU == nil {
 		return nil
 	}
-	return ComputeDiff(kind, diffInputForUnstructured(kind, oldU), diffInputForUnstructured(kind, newU))
+	return ComputeDiff(kind, oldU, newU)
 }
 
 func diffInputForUnstructured(kind string, u *unstructured.Unstructured) any {
