@@ -270,3 +270,29 @@ func BenchmarkBuildTopologyServiceJobPairingTwiceLargeCluster(b *testing.B) {
 		}
 	}
 }
+
+// The complexity guard without a clock: the pairing loop's iteration count is
+// exact and machine-independent where its wall-clock time is not (see
+// requireTimingTestsEnabled). With one live Job per namespace, an indexed
+// pairing considers exactly one candidate per Service; the per-Service rescan
+// this pins against multiplies that by the completed runs.
+func TestServiceJobPairingConsidersOnlyActiveJobs(t *testing.T) {
+	const (
+		services      = 300
+		namespaces    = 30
+		completedJobs = 5000
+	)
+	b := NewBuilder(pairingProvider(services, namespaces, completedJobs))
+	opts := DefaultBuildOptions()
+	opts.ForRelationshipCache = true
+	if _, err := b.Build(opts); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if b.serviceJobComparisons == 0 {
+		t.Fatal("the pairing loop never ran — the counter is not wired to the code under test")
+	}
+	if b.serviceJobComparisons > services {
+		t.Fatalf("pairing considered %d candidates for %d Services with one live Job per namespace — completed Jobs are being scanned",
+			b.serviceJobComparisons, services)
+	}
+}
