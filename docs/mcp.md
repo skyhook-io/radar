@@ -14,7 +14,7 @@ Radar's MCP server solves these:
 
 - **Token-optimized** — resources are minified, stripping noise (managed fields, internal annotations, redundant status) while preserving what matters
 - **Enriched data** — topology graphs, health assessments, deduplicated events, filtered logs (prioritizing errors/warnings)
-- **Safe operations** — most read tools do not change cluster state and are annotated with `readOnlyHint`. The exception is `diagnose(in_cluster=true)` on network entry resources, which creates up to five self-deleting probe pods. It carries neither `readOnlyHint` nor `destructiveHint`, so clients that prompt only on `destructiveHint` will not prompt for it. Write tools (restart, scale, rollback, sync, apply, cordon/drain) are RBAC-enforced and annotated `destructiveHint` so AI clients can prompt for confirmation
+- **Safe operations** — write tools are identified for client confirmation and enforced through Kubernetes RBAC. Diagnosis is read-only by default; optional in-cluster route probing uses short-lived, self-deleting probe pods
 - **Secret-safe** — Secret data is never exposed, environment values are redacted, log output is scrubbed for API keys and tokens
 - **RBAC-aware** — respects your cluster's RBAC permissions
 - **Vendor-neutral** — works with any MCP-compatible AI tool
