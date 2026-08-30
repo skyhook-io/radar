@@ -305,7 +305,7 @@ func buildChannel(value string) buildChannelName {
 }
 
 func isPackageReleaseVersion(value string) bool {
-	for _, prefix := range []string{"k8s-ui-v", "radar-app-v"} {
+	for _, prefix := range []string{"k8s-ui-v", "radar-app-v", "pkg/v"} {
 		if strings.HasPrefix(value, prefix) && IsReleaseVersion(strings.TrimPrefix(value, prefix)) {
 			return true
 		}

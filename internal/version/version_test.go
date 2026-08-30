@@ -306,6 +306,7 @@ func TestBuildChannel(t *testing.T) {
 		"1.2.3-dirty":                 buildChannelDevelopment,
 		"k8s-ui-v1.13.3":              buildChannelDevelopment,
 		"radar-app-v1.2.3":            buildChannelDevelopment,
+		"pkg/v1.12.1":                 buildChannelDevelopment,
 		"k8s-ui-v1.13.3-27-g1197bab6": buildChannelDevelopment,
 		"1197bab6043c723e557714620758ace2dad36354": buildChannelDevelopment,
 	}
