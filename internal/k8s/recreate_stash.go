@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -12,8 +13,9 @@ import (
 // apply, Argo Replace=true, immutable-field edits) reaches the timeline as a
 // contentless delete + add pair: the old object is gone by the time the add
 // arrives, so there is nothing to diff against. The stash keeps the last-seen
-// object of recently deleted resources so the next add under the same name —
-// with a different UID — can be diffed against what it replaced.
+// object of recently deleted resources so the next add under the same API
+// group, kind, namespace, and name — with a different UID — can be diffed
+// against what it replaced.
 //
 // In-memory only: entries expire after recreateJoinTTL, the store is capped,
 // and a cluster-context switch clears it. The timeline itself still records
@@ -68,13 +70,13 @@ var (
 	recreateStash   = map[string]recreateEntry{}
 )
 
-func recreateKey(kind, namespace, name string) string {
-	return kind + "/" + namespace + "/" + name
+func recreateKey(group, kind, namespace, name string) string {
+	return resourceid.ResourceKey(group, kind, namespace, name)
 }
 
 // stashDeletedForRecreate records a deleted object for a potential
 // recreate-join. No-op for kinds outside the allowlist.
-func stashDeletedForRecreate(kind, namespace, name, uid string, obj any) {
+func stashDeletedForRecreate(group, kind, namespace, name, uid string, obj any) {
 	if obj == nil || !recreateStashKinds[kind] {
 		return
 	}
@@ -83,23 +85,23 @@ func stashDeletedForRecreate(kind, namespace, name, uid string, obj any) {
 	if len(recreateStash) >= recreateStashCap {
 		evictRecreateStashLocked()
 	}
-	recreateStash[recreateKey(kind, namespace, name)] = recreateEntry{
+	recreateStash[recreateKey(group, kind, namespace, name)] = recreateEntry{
 		obj:       obj,
 		uid:       uid,
 		deletedAt: time.Now(),
 	}
 }
 
-// takeRecreateMatch returns the stashed predecessor of kind/ns/name when the
-// new UID differs and the delete is within the join TTL. The entry is
+// takeRecreateMatch returns the stashed predecessor of group/kind/ns/name when
+// the new UID differs and the delete is within the join TTL. The entry is
 // consumed (or discarded, if stale or same-UID) either way.
-func takeRecreateMatch(kind, namespace, name, newUID string) (any, bool) {
+func takeRecreateMatch(group, kind, namespace, name, newUID string) (any, bool) {
 	if !recreateStashKinds[kind] {
 		return nil, false
 	}
 	recreateStashMu.Lock()
 	defer recreateStashMu.Unlock()
-	key := recreateKey(kind, namespace, name)
+	key := recreateKey(group, kind, namespace, name)
 	entry, ok := recreateStash[key]
 	if !ok {
 		return nil, false
