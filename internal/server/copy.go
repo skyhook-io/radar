@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -423,8 +424,9 @@ type podFileStream struct {
 	cancel   context.CancelFunc
 	complete bool
 
-	closeOnce sync.Once
-	closeErr  error
+	closeOnce    sync.Once
+	closeErr     error
+	graceExpired atomic.Bool
 }
 
 // podFileCloseGrace bounds the wait for the remote command to finish after the
@@ -579,12 +581,22 @@ func classifyPodFileOpenError(filePath string, readErr, streamErr error, stderr 
 		return &podFileOpenError{err: streamErr, stderr: stderr,
 			message: fmt.Sprintf("Permission denied: the container user cannot read %s", filePath)}
 	}
-	// Shells and tars disagree on the wording — "No such file or directory",
-	// "can't open ...: no such file" — so match on the shared shape, folded.
-	if strings.Contains(lowered, "no such file") || strings.Contains(lowered, "not found") ||
-		(streamErr == nil && readErr == io.EOF) {
+	// Every shell and tar in play words this the same way underneath — "No such
+	// file or directory", "Cannot stat: No such file...", "cannot open ...: No
+	// such file" — so the shared phrase is enough. A bare "not found" is not:
+	// the apiserver says `pods "web-0" not found` for a pod that is gone, and
+	// blaming the file for that sends the reader looking in the wrong place.
+	if strings.Contains(lowered, "no such file") {
 		return &podFileOpenError{err: streamErr, stderr: stderr, notFound: true,
 			message: fmt.Sprintf("File not found: %s", filePath)}
+	}
+	if streamErr == nil && readErr == io.EOF {
+		// The command reported success and sent nothing. tar exits non-zero for a
+		// file it cannot archive, so this is the stream being dropped rather than
+		// the file being absent — the very failure this transfer exists to catch,
+		// and it must not be filed away as a missing file.
+		return &podFileOpenError{err: readErr, stderr: stderr,
+			message: fmt.Sprintf("The transfer produced no data for %s", filePath)}
 	}
 	if streamErr == nil {
 		streamErr = readErr
@@ -626,7 +638,10 @@ func (p *podFileStream) Close() error {
 	p.closeOnce.Do(func() {
 		if p.complete {
 			_ = p.stdin.Close()
-			grace := time.AfterFunc(podFileCloseGrace, p.cancel)
+			grace := time.AfterFunc(podFileCloseGrace, func() {
+				p.graceExpired.Store(true)
+				p.cancel()
+			})
 			defer grace.Stop()
 			_, _ = io.Copy(io.Discard, p.stdout)
 		} else {
@@ -645,8 +660,14 @@ func (p *podFileStream) Close() error {
 		if p.complete && errors.Is(p.closeErr, context.Canceled) {
 			// A client that has its last byte disconnects, which cancels the
 			// request context while the exec is still winding down. The file
-			// arrived; that is not something to report.
-			p.closeErr = nil
+			// arrived; that is not something to report — unless we were the ones
+			// who cancelled, in which case the connection stopped answering and
+			// silently returning success would hide it.
+			if p.graceExpired.Load() {
+				p.closeErr = fmt.Errorf("the command did not finish within %s of the file arriving", podFileCloseGrace)
+			} else {
+				p.closeErr = nil
+			}
 		}
 	})
 	return p.closeErr
@@ -937,12 +958,21 @@ func shellQuote(s string) string {
 // isShellMissing detects a container without /bin/sh. Runtimes word it
 // differently — "executable file not found" from one, `exec: "/bin/sh": stat
 // /bin/sh: no such file or directory` from another — so both forms count.
+//
+// Only the runtime's own framing counts. A shell that started fine prefixes its
+// diagnostics with the same path, so bash reporting a missing file as
+// `/bin/sh: line 1: /data/x: No such file or directory` would otherwise read as
+// "this container has no shell".
 func isShellMissing(errMsg string) bool {
 	lower := strings.ToLower(errMsg)
 	if strings.Contains(lower, "executable file not found") && (strings.Contains(lower, "sh") || strings.Contains(lower, "shell")) {
 		return true
 	}
-	return strings.Contains(lower, "/bin/sh") && strings.Contains(lower, "no such file or directory")
+	if !strings.Contains(lower, "no such file or directory") {
+		return false
+	}
+	return strings.Contains(lower, `exec: "/bin/sh"`) ||
+		(strings.Contains(lower, "oci runtime") && strings.Contains(lower, "/bin/sh"))
 }
 
 // isCommandNotFound detects errors indicating a command is not available in the container

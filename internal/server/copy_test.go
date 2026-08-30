@@ -66,10 +66,40 @@ func TestIsShellMissing(t *testing.T) {
 		`executable file not found in $PATH: "/bin/sh"`:            true,
 		"tar: /output/app.log: no such file or directory":          false,
 		"tar: /output: Permission denied":                          false,
+		// A shell that started fine reports a missing file under the same path
+		// it was invoked as. bash-as-/bin/sh is the common case, on the RHEL and
+		// UBI family among others, and reading this as "no shell here" drops the
+		// download to a fallback that cannot check what it received.
+		"/bin/sh: line 1: /output/nope.txt: No such file or directory": false,
+		"/bin/sh: 1: cannot open /output/nope.txt: No such file":       false,
 	} {
 		if got := isShellMissing(msg); got != want {
 			t.Errorf("isShellMissing(%q) = %v, want %v", msg, got, want)
 		}
+	}
+}
+
+// The apiserver says `pods "web-0" not found` for a pod that has gone away.
+// Answering "File not found: <path>" sends the reader hunting for a file that
+// was never the problem.
+func TestClassifyPodFileOpenErrorDoesNotBlameTheFileForAMissingPod(t *testing.T) {
+	err := classifyPodFileOpenError("/output/app.log", io.EOF,
+		errors.New(`pods "web-0" not found`), "")
+	if err.notFound {
+		t.Errorf("a missing pod was reported as a missing file: %+v", err)
+	}
+}
+
+// A command that reports success and sends nothing is the stream being dropped,
+// which is the failure this whole transfer exists to catch. Filing it as a
+// missing file would hide a recurrence behind a plausible answer.
+func TestClassifyPodFileOpenErrorDoesNotCallAnEmptyStreamAMissingFile(t *testing.T) {
+	err := classifyPodFileOpenError("/output/app.log", io.EOF, nil, "")
+	if err.notFound {
+		t.Errorf("an empty successful stream was reported as a missing file: %+v", err)
+	}
+	if !strings.Contains(err.message, "no data") {
+		t.Errorf("message = %q, want it to say the transfer produced nothing", err.message)
 	}
 }
 
