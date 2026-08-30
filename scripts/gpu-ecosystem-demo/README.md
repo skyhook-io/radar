@@ -76,6 +76,11 @@ Kueue admission behavior now has its own focused live lane:
 controller-earned admitted, quota-blocked, and held-queue states without adding
 controller races to this breadth suite.
 
+JobSet ownership, role/index propagation, dependency gating, and terminal failure
+now have a focused live lane: [`scripts/jobset-demo.sh`](../jobset-demo.sh). It
+installs only JobSet and validates real reconciliation without adding controller
+races to this breadth suite.
+
 ## Real GPU acceptance lane
 
 Before release claims involving hardware, run one ephemeral GPU node in a real managed cluster and verify:

@@ -146,6 +146,7 @@ After `make <name>-demo`, run `kubectl config use-context kind-radar-<name>-demo
 | Rollouts | `make rollouts-demo` | Argo Rollouts progression. `-roll` advances a rollout |
 | GPU ecosystem | `make gpu-ecosystem-demo` | All 37 curated GPU, batch, distributed-training, and inference resource identities. `install-radar` verifies default chart RBAC and group-aware discovery |
 | Kueue admission | `make kueue-demo` | Real Kueue reconciliation: admitted/running, quota-blocked with no Pod, and held-queue with no Pod |
+| JobSet | `make jobset-demo` | Real JobSet reconciliation: role/index Job-to-Pod lineage, dependency gating, and explicit terminal failure |
 
 `scripts/rbac-demo.sh` is the odd one out: it seeds RBAC scenarios into the *current* context (no cluster of its own).
 
