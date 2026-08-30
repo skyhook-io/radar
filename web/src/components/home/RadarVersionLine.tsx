@@ -45,7 +45,7 @@ export function RadarVersionLine({
     ? 'Checking how this installation is managed.'
     : 'The installation manager could not be confirmed. Open the in-cluster upgrade instructions.'
   let onClick: (() => void) | undefined
-  const actionClassName = 'inline-flex items-center gap-1 text-theme-text-tertiary transition-colors hover:text-theme-text-secondary'
+  const actionClassName = 'inline-flex items-center gap-1 text-theme-text-tertiary transition-colors hover:text-accent-text'
 
   if (manager?.ownership === 'helm' && manager.namespace && manager.release) {
     if (onNavigateToHelmRelease) {
@@ -114,7 +114,7 @@ export function RadarVersionLine({
 function UpgradeLabel({ version }: { version: string }) {
   return (
     <>
-      <ArrowUpCircle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+      <ArrowUpCircle className="h-3.5 w-3.5 shrink-0 text-accent-text" aria-hidden />
       <span><span className="font-mono">{displayVersion(version)}</span> available</span>
     </>
   )

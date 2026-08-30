@@ -49,6 +49,8 @@ describe('RadarVersionLine', () => {
     expect(html).not.toContain('#upgrading')
     expect(html).toContain('Open the in-cluster upgrade instructions')
     expect(html).not.toContain(version.releaseUrl)
+    expect(html).toContain('text-accent-text')
+    expect(html).toContain('hover:text-accent-text')
   })
 
   it('keeps the visible upgrade label in the accessible name', () => {
