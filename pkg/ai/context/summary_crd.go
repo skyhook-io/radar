@@ -509,6 +509,7 @@ func gatewayPolicyStatus(obj *unstructured.Unstructured) (string, bool) {
 	// Ancestors can fail for different reasons; reporting the first with a count
 	// would claim they all failed that way.
 	failureReasons := map[string]struct{}{}
+	verdict := ""
 
 	for _, a := range ancestors {
 		aMap, ok := a.(map[string]any)
@@ -548,8 +549,15 @@ func gatewayPolicyStatus(obj *unstructured.Unstructured) (string, bool) {
 				if warned == "" {
 					warned = reason
 				}
-			case condType == "Accepted" && condStatus == "True":
+			case isPolicyVerdictCondition(condType) && condStatus == "True":
+				// GKE reports a healthy policy as Attached=True with no
+				// Accepted condition, so checking only Accepted read it as
+				// pending. ResolvedRefs is excluded: refs resolving is a
+				// precondition, not a statement that the policy applies.
 				hasAccepted = true
+				if verdict == "" {
+					verdict = condType
+				}
 			}
 		}
 
@@ -587,6 +595,9 @@ func gatewayPolicyStatus(obj *unstructured.Unstructured) (string, bool) {
 	case degraded > 0:
 		return warning + scope(degraded), true
 	case accepted == total:
+		if verdict != "" {
+			return verdict, true
+		}
 		return "Accepted", true
 	default:
 		return "Pending" + scope(total-accepted), true
@@ -605,14 +616,25 @@ func isPolicyEffectCondition(t string) bool {
 	return false
 }
 
+// isPolicyVerdictCondition reports the subset of effect conditions that mean
+// the policy took effect when True. A condition can be conclusive when False
+// and say nothing when True, which is why this is not the same set.
+func isPolicyVerdictCondition(t string) bool {
+	switch t {
+	case "Accepted", "Attached", "Programmed":
+		return true
+	}
+	return false
+}
+
 // Reasons that mean not-settled-yet rather than failed.
 var policyTransientReasons = map[string]bool{
-	"Reconciling": true, "Pending": true, "Progressing": true, "Unknown": true,
+	"Reconciling": true, "Pending": true,
 }
 
 // A True condition can still be qualified: partial application is not success.
 var policyQualifiedReasons = map[string]bool{
-	"PartiallyProgrammed": true, "PartiallyValid": true, "Partial": true,
+	"PartiallyProgrammed": true,
 }
 
 // policyProblem prefers the controller's reason, which names the actual

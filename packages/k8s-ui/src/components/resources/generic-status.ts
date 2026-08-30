@@ -1,5 +1,5 @@
 import type { HealthLevel } from './resource-utils'
-import { getGatewayPolicyStatus, hasGatewayPolicyStatus } from './gateway-policy-status'
+import { getGatewayPolicyStatus } from './gateway-policy-status'
 
 /**
  * Derives a status for a resource with no dedicated renderer — a CRD Radar
@@ -100,10 +100,8 @@ export function getGenericResourceStatus(resource: any): GenericStatus | null {
   // publishes top-level conditions still gets read — GCPBackendPolicy declares
   // both, and suppressing its conditions would hide a Ready=False behind an
   // empty ancestor list.
-  if (hasGatewayPolicyStatus(resource)) {
-    const policy = getGatewayPolicyStatus(resource)
-    if (policy) return policy
-  }
+  const policy = getGatewayPolicyStatus(resource)
+  if (policy) return policy
 
   const phase = typeof status.phase === 'string' ? status.phase.trim() : ''
   if (phase) {

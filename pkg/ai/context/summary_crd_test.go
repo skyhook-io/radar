@@ -273,6 +273,11 @@ func TestGatewayPolicyStatus(t *testing.T) {
 		{"ResolvedRefs=False is a failure", policy(anc(cond("Accepted", "True", ""), cond("ResolvedRefs", "False", "InvalidCACertificateRef"))), "InvalidCACertificateRef", true},
 		// GEP-713 lists Reconciling as a legitimate in-flight state.
 		{"Reconciling is in-flight, not failed", policy(anc(cond("Accepted", "True", ""), cond("Programmed", "False", "Reconciling"))), "Reconciling", true},
+		// GKE's healthy shape carries no Accepted condition at all.
+		{"a verdict not spelled Accepted still counts", policy(anc(cond("Attached", "True", ""))), "Attached", true},
+		{"Programmed alone is a verdict", policy(anc(cond("Programmed", "True", ""))), "Programmed", true},
+		// Refs resolving is a precondition, not a verdict.
+		{"ResolvedRefs alone is not a verdict", policy(anc(cond("ResolvedRefs", "True", ""))), "Pending", true},
 		{"partially applied is not success", policy(anc(cond("Accepted", "True", ""), cond("Programmed", "True", "PartiallyProgrammed"))), "PartiallyProgrammed", true},
 		// Reporting the first reason with a count claims they all failed that way.
 		{"mixed failure reasons report a count", policy(

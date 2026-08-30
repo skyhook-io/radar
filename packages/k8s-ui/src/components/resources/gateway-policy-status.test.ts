@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getGatewayPolicyStatus, hasGatewayPolicyStatus } from './gateway-policy-status'
+import { getGatewayPolicyStatus } from './gateway-policy-status'
 import { getGenericResourceStatus } from './generic-status'
 
 const cond = (type: string, status: string, reason?: string, message?: string) => ({ type, status, reason, message })
@@ -116,9 +116,9 @@ describe('shapes that are not a verdict', () => {
     expect(() => getGatewayPolicyStatus({ status: { ancestors: [{ conditions: 'nope' }] } })).not.toThrow()
   })
 
-  it('is not a policy when ancestors is absent or not an array', () => {
-    expect(hasGatewayPolicyStatus({ status: { conditions: [] } })).toBe(false)
-    expect(hasGatewayPolicyStatus({ status: { ancestors: {} } })).toBe(false)
+  it('yields nothing when ancestors is absent or not an array', () => {
+    expect(getGatewayPolicyStatus({ status: { conditions: [] } })).toBeNull()
+    expect(getGatewayPolicyStatus({ status: { ancestors: {} } })).toBeNull()
     expect(getGatewayPolicyStatus({ status: {} })).toBeNull()
   })
 })
@@ -154,9 +154,24 @@ describe('condition vocabulary beyond Accepted', () => {
 
   // GEP-713 lists Reconciling as a legitimate state on the way to being
   // applied. Painting ordinary convergence red teaches operators to ignore red.
-  it.each(['Reconciling', 'Pending', 'Progressing'])('treats %s as in-flight, not failed', reason => {
+  it.each(['Reconciling', 'Pending'])('treats %s as in-flight, not failed', reason => {
     const p = policy(anc(cond('Accepted', 'True'), cond('Programmed', 'False', reason)))
     expect(getGatewayPolicyStatus(p)).toMatchObject({ text: reason, tone: 'degraded' })
+  })
+
+  // GKE's healthy shape carries no Accepted condition at all. Checking only
+  // Accepted read it as pending, which is a policy that works reported amber.
+  it('accepts a verdict that is not spelled Accepted', () => {
+    expect(getGatewayPolicyStatus(policy(anc(cond('Attached', 'True')))))
+      .toMatchObject({ text: 'Attached', tone: 'healthy' })
+    expect(getGatewayPolicyStatus(policy(anc(cond('Programmed', 'True')))))
+      .toMatchObject({ text: 'Programmed', tone: 'healthy' })
+  })
+
+  // Refs resolving is a precondition, not a statement that the policy applies.
+  it('does not treat ResolvedRefs alone as a verdict', () => {
+    expect(getGatewayPolicyStatus(policy(anc(cond('ResolvedRefs', 'True')))))
+      .toMatchObject({ tone: 'degraded' })
   })
 
   it('does not read a partially applied policy as success', () => {

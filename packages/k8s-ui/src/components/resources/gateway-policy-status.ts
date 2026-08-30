@@ -28,15 +28,25 @@ import type { GenericStatus } from './generic-status'
 const EFFECT_CONDITIONS = ['Accepted', 'Attached', 'Programmed', 'ResolvedRefs'] as const
 
 /**
+ * The subset that is a verdict in its own right, so True means the policy took
+ * effect. `ResolvedRefs` is deliberately absent: refs resolving is a
+ * precondition, not a statement that the policy applies. Kept separate from
+ * EFFECT_CONDITIONS because a condition can be conclusive when False and say
+ * nothing when True — GKE reports a healthy policy as `Attached=True` with no
+ * `Accepted` at all, so checking only `Accepted` read it as pending.
+ */
+const VERDICT_CONDITIONS = ['Accepted', 'Attached', 'Programmed'] as const
+
+/**
  * Reasons that mean "not settled yet" rather than "failed". GEP-713 lists
  * Reconciling as a legitimate state for a policy on its way to being applied,
  * and rendering ordinary convergence as a red failure would train operators to
  * ignore the colour.
  */
-const TRANSIENT_REASONS = new Set(['Reconciling', 'Pending', 'Progressing', 'Unknown'])
+const TRANSIENT_REASONS = new Set(['Reconciling', 'Pending'])
 
 /** A True condition can still be qualified: partial application is not success. */
-const QUALIFIED_SUCCESS_REASONS = new Set(['PartiallyProgrammed', 'PartiallyValid', 'Partial'])
+const QUALIFIED_SUCCESS_REASONS = new Set(['PartiallyProgrammed'])
 
 /** Conditions that mean trouble when True, mirroring the generic ladder's set. */
 const NEGATIVE_CONDITIONS = new Set(['Degraded', 'Warning'])
@@ -63,11 +73,6 @@ function problemText(cond: any, trueMeansTrouble = false): string {
   const type = typeof cond?.type === 'string' ? cond.type.trim() : ''
   if (!type) return 'Failed'
   return trueMeansTrouble ? type : `Not ${type}`
-}
-
-/** True when the object carries a Gateway API PolicyStatus. */
-export function hasGatewayPolicyStatus(resource: any): boolean {
-  return Array.isArray(resource?.status?.ancestors)
 }
 
 /**
@@ -99,6 +104,7 @@ export function getGatewayPolicyStatus(resource: any): GenericStatus | null {
   // Ancestors can fail for different reasons. Reporting the first one with a
   // count claims they all failed that way.
   const failureReasons = new Set<string>()
+  let acceptedAs: string | null = null
 
   for (const ancestor of ancestors) {
     const conditions = conditionsOf(ancestor)
@@ -139,7 +145,15 @@ export function getGatewayPolicyStatus(resource: any): GenericStatus | null {
       continue
     }
 
-    if (conditions.some((c: any) => c?.type === 'Accepted' && c?.status === 'True')) accepted++
+    const verdict = conditions.find(
+      (c: any) => VERDICT_CONDITIONS.includes(c?.type) && c?.status === 'True',
+    )
+    if (verdict) {
+      accepted++
+      // Named after the condition that granted it, so a GKE policy reads
+      // "Attached" where an Envoy one reads "Accepted".
+      acceptedAs ??= verdict.type
+    }
   }
 
   const total = ancestors.length
@@ -152,7 +166,7 @@ export function getGatewayPolicyStatus(resource: any): GenericStatus | null {
   if (degraded > 0 && warning) {
     return { text: `${warning.text}${scope(degraded)}`, tone: 'degraded', reason: warning.reason }
   }
-  if (accepted === total) return { text: 'Accepted', tone: 'healthy' }
+  if (accepted === total) return { text: acceptedAs ?? 'Accepted', tone: 'healthy' }
 
   // Some ancestor published neither an outcome nor a failure — the controller
   // has seen the policy but not finished with it.
