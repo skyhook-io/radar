@@ -72,8 +72,10 @@ function conditionsOf(ancestor: any): any[] {
  * construction would render "Not Warning" and inverts the meaning.
  *
  * Spelled with a space where the Go reader behind MCP writes "NotAccepted",
- * matching each side's existing convention. Only the reason-less case differs;
- * whenever a controller supplies a reason the two are identical.
+ * matching each side's existing convention. Whenever a controller supplies a
+ * reason the two sides are identical; they part ways only here and on mixed
+ * failures, where the per-ancestor detail goes to the tooltip while MCP,
+ * having no tooltip, carries it in the text.
  */
 function problemText(cond: any, trueMeansTrouble = false): string {
   const reason = typeof cond?.reason === 'string' ? cond.reason.trim() : ''

@@ -201,9 +201,10 @@ func TestSummary_FluxHelmRelease(t *testing.T) {
 
 // Mirrors gateway-policy-status.test.ts. The two implementations feed the UI
 // and the MCP answers respectively, so they have to agree about every case a
-// controller actually produces. The one deliberate difference is the
-// reason-less fallback spelling ("NotAccepted" here, "Not Accepted" there) —
-// see policyProblem.
+// controller actually produces. Two deliberate differences: the reason-less
+// fallback spelling ("NotAccepted" here, "Not Accepted" there — see
+// policyProblem), and where per-ancestor failure detail goes on mixed reasons
+// (the UI has a tooltip; MCP only has the text, so here it rides in-text).
 func TestGatewayPolicyStatus(t *testing.T) {
 	cond := func(t, s, reason string) map[string]any {
 		c := map[string]any{"type": t, "status": s}
