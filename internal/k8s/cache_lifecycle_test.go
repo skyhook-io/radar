@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
@@ -166,12 +167,20 @@ func TestConcurrentInvalidateDuringPermissionCheck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating dummy client: %v", err)
 	}
+	// The dynamic client is what CheckResourcePermissions probes through. Without
+	// it the call returns at the client-not-initialized guard and never takes
+	// resourcePermsMu at all, so there is no contention left to test.
+	probeDyn := fakeDyn(t, func(gvr schema.GroupVersionResource, namespace string) bool {
+		return gvr.Group == "" && gvr.Resource == "pods"
+	})
 	clientMu.Lock()
 	k8sClient = dummyClient
+	dynamicClient = probeDyn
 	clientMu.Unlock()
 	defer func() {
 		clientMu.Lock()
 		k8sClient = nil
+		dynamicClient = nil
 		clientMu.Unlock()
 	}()
 
