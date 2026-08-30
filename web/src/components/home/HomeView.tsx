@@ -30,7 +30,7 @@ import { formatCompactAge } from '@skyhook-io/k8s-ui/utils/format'
 import { ClusterHealthCard } from './ClusterHealthCard'
 import { AlertTriangle, CheckCircle, Loader2, Shield } from 'lucide-react'
 import { clsx } from 'clsx'
-import { isMinorOrMajorUpdate } from '../../utils/version'
+import { getVersionUpdateStatus } from '../../utils/version'
 import { RadarVersionLine } from './RadarVersionLine'
 
 interface HomeViewProps {
@@ -72,7 +72,7 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
   const { data: versionInfo } = useVersionCheck()
   const showHomeUpgrade = deploymentMode === 'in-cluster'
     && !!versionInfo?.updateAvailable
-    && isMinorOrMajorUpdate(versionInfo.currentVersion, versionInfo.latestVersion)
+    && getVersionUpdateStatus(versionInfo.currentVersion, versionInfo.latestVersion).tier !== 'none'
   const { data: installationManager, isLoading: installationManagerLoading } = useCloudConnectSelf(showHomeUpgrade, 15 * 60 * 1000)
 
   // SSE is cluster-wide on small/medium clusters; the picker only narrows the

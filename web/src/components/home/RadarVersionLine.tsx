@@ -1,7 +1,11 @@
 import { ArrowUpCircle } from 'lucide-react'
 import { gitOpsRouteForResource } from '@skyhook-io/k8s-ui'
 import type { CloudConnectSelf, VersionInfo } from '../../api/client'
-import { IN_CLUSTER_UPGRADE_URL, isMinorOrMajorUpdate } from '../../utils/version'
+import {
+  getVersionUpdateStatus,
+  IN_CLUSTER_UPGRADE_URL,
+  type VersionUpdateTier,
+} from '../../utils/version'
 import { Tooltip } from '../ui/Tooltip'
 
 interface RadarVersionLineProps {
@@ -24,9 +28,8 @@ export function RadarVersionLine({
   onNavigateToGitOps,
 }: RadarVersionLineProps) {
   const latestVersion = version.latestVersion
-  const showUpgrade = version.updateAvailable
-    && !!latestVersion
-    && isMinorOrMajorUpdate(version.currentVersion, latestVersion)
+  const updateStatus = getVersionUpdateStatus(version.currentVersion, latestVersion)
+  const showUpgrade = version.updateAvailable && !!latestVersion && updateStatus.tier !== 'none'
 
   if (!showUpgrade) {
     return <span>Radar <span className="font-mono">{displayVersion(version.currentVersion)}</span></span>
@@ -45,7 +48,7 @@ export function RadarVersionLine({
     ? 'Checking how this installation is managed.'
     : 'The installation manager could not be confirmed. Open the in-cluster upgrade instructions.'
   let onClick: (() => void) | undefined
-  const actionClassName = 'inline-flex items-center gap-1 text-accent-text transition-colors hover:text-accent'
+  const actionClassName = `inline-flex items-center gap-1 transition-colors ${upgradeActionClassName(updateStatus.tier)}`
 
   if (manager?.ownership === 'helm' && manager.namespace && manager.release) {
     if (onNavigateToHelmRelease) {
@@ -68,10 +71,11 @@ export function RadarVersionLine({
       : 'This installation appears to be managed through GitOps. Open the upgrade instructions and apply the change through its source of truth.'
   }
 
-  const accessibleLabel = `${displayVersion(latestVersion)} available — ${detail}`
+  const ageDetail = updateAgeDetail(updateStatus)
+  const accessibleLabel = `${displayVersion(latestVersion)} available${ageDetail ? `. ${ageDetail}` : ''} — ${detail}`
   const action = managerLoading ? (
-    <span className="inline-flex items-center gap-1 text-theme-text-tertiary">
-      <UpgradeLabel version={latestVersion} />
+    <span className={actionClassName}>
+      <UpgradeLabel version={latestVersion} tier={updateStatus.tier} />
       <span className="sr-only">{detail}</span>
     </span>
   ) : onClick ? (
@@ -81,7 +85,7 @@ export function RadarVersionLine({
       onClick={onClick}
       aria-label={accessibleLabel}
     >
-      <UpgradeLabel version={latestVersion} />
+      <UpgradeLabel version={latestVersion} tier={updateStatus.tier} />
     </button>
   ) : (
     <a
@@ -91,7 +95,7 @@ export function RadarVersionLine({
       className={actionClassName}
       aria-label={accessibleLabel}
     >
-      <UpgradeLabel version={latestVersion} />
+      <UpgradeLabel version={latestVersion} tier={updateStatus.tier} />
     </a>
   )
 
@@ -111,10 +115,25 @@ export function RadarVersionLine({
   )
 }
 
-function UpgradeLabel({ version }: { version: string }) {
+function upgradeActionClassName(tier: VersionUpdateTier): string {
+  if (tier === 'patch') return 'text-theme-text-tertiary hover:text-accent-text'
+  if (tier === 'minor') return 'font-medium text-accent hover:text-accent-light'
+  return 'font-medium text-warning-text hover:opacity-80'
+}
+
+function updateAgeDetail(status: ReturnType<typeof getVersionUpdateStatus>): string | undefined {
+  if (status.majorVersionBehind) return 'A major Radar upgrade is available.'
+  if (status.tier !== 'stale' || !status.minorVersionsBehind) return undefined
+  return `This installation is ${status.minorVersionsBehind} minor releases behind.`
+}
+
+function UpgradeLabel({ version, tier }: { version: string; tier: VersionUpdateTier }) {
   return (
     <>
-      <ArrowUpCircle className="h-3.5 w-3.5 shrink-0 text-accent-text" aria-hidden />
+      <ArrowUpCircle
+        className={`h-3.5 w-3.5 shrink-0 ${tier === 'patch' ? 'text-accent-text' : ''}`}
+        aria-hidden
+      />
       <span><span className="font-mono">{displayVersion(version)}</span> available</span>
     </>
   )

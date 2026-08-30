@@ -21,13 +21,36 @@ describe('RadarVersionLine', () => {
     expect(html).not.toContain('available')
   })
 
-  it('keeps patch upgrades in Settings', () => {
+  it('shows patch upgrades with the quiet treatment', () => {
     const html = renderToString(
       <RadarVersionLine version={{ ...version, latestVersion: '1.2.4' }} />,
     )
     expect(html).toContain('v1.2.3')
-    expect(html).not.toContain('v1.2.4')
-    expect(html).not.toContain('available')
+    expect(html).toContain('v1.2.4')
+    expect(html).toContain('available')
+    expect(html).toContain('text-theme-text-tertiary hover:text-accent-text')
+  })
+
+  it('makes minor upgrades more prominent', () => {
+    const html = renderToString(<RadarVersionLine version={version} />)
+    expect(html).toContain('font-medium text-accent hover:text-accent-light')
+    expect(html).not.toContain('minor releases behind')
+  })
+
+  it('uses warning emphasis and explains when an installation is three minor releases behind', () => {
+    const html = renderToString(
+      <RadarVersionLine version={{ ...version, currentVersion: '1.0.9', latestVersion: '1.3.0' }} />,
+    )
+    expect(html).toContain('font-medium text-warning-text hover:opacity-80')
+    expect(html).toContain('This installation is 3 minor releases behind')
+  })
+
+  it('uses warning emphasis for a major upgrade', () => {
+    const html = renderToString(
+      <RadarVersionLine version={{ ...version, currentVersion: '0.12.0', latestVersion: '1.3.0' }} />,
+    )
+    expect(html).toContain('font-medium text-warning-text hover:opacity-80')
+    expect(html).toContain('A major Radar upgrade is available')
   })
 
   it('does not claim manager discovery has failed while it is loading', () => {
@@ -49,7 +72,7 @@ describe('RadarVersionLine', () => {
     expect(html).not.toContain('#upgrading')
     expect(html).toContain('Open the in-cluster upgrade instructions')
     expect(html).not.toContain(version.releaseUrl)
-    expect(html).toContain('text-accent-text transition-colors hover:text-accent')
+    expect(html).toContain('font-medium text-accent hover:text-accent-light')
   })
 
   it('keeps the visible upgrade label in the accessible name', () => {
