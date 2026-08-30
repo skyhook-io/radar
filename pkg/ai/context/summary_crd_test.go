@@ -219,6 +219,14 @@ func TestGatewayPolicyStatus(t *testing.T) {
 		}
 		return map[string]any{"conditions": out}
 	}
+	named := func(ns, name string, a map[string]any) map[string]any {
+		ref := map[string]any{"name": name}
+		if ns != "" {
+			ref["namespace"] = ns
+		}
+		a["ancestorRef"] = ref
+		return a
+	}
 	policy := func(ancestors ...map[string]any) *unstructured.Unstructured {
 		out := make([]any, 0, len(ancestors))
 		for _, a := range ancestors {
@@ -280,11 +288,18 @@ func TestGatewayPolicyStatus(t *testing.T) {
 		{"ResolvedRefs alone is not a verdict", policy(anc(cond("ResolvedRefs", "True", ""))), "Pending", true},
 		{"partially applied is not success", policy(anc(cond("Accepted", "True", ""), cond("Programmed", "True", "PartiallyProgrammed"))), "PartiallyProgrammed", true},
 		// Reporting the first reason with a count claims they all failed that way.
-		{"mixed failure reasons report a count", policy(
+		{"mixed failure reasons report a count and each ancestor's reason", policy(
 			anc(cond("Accepted", "False", "NotAllowed")),
 			anc(cond("Accepted", "False", "ResourceNotFound")),
 			anc(cond("Accepted", "True", "")),
-		), "2/3 failed", true},
+		), "2/3 failed (NotAllowed; ResourceNotFound)", true},
+		// "2/3 failed" without naming the Gateways sends the reader digging
+		// through raw status for which ancestor failed how.
+		{"mixed failures name the Gateway that failed each way", policy(
+			named("team-a", "gw-a", anc(cond("Accepted", "False", "NotAllowed"))),
+			named("", "gw-b", anc(cond("Accepted", "False", "ResourceNotFound"))),
+			anc(cond("Accepted", "True", "")),
+		), "2/3 failed (team-a/gw-a: NotAllowed; gw-b: ResourceNotFound)", true},
 		{"matching failure reasons keep the reason", policy(
 			anc(cond("Accepted", "False", "NotAllowed")),
 			anc(cond("Accepted", "False", "NotAllowed")),

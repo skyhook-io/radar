@@ -51,6 +51,14 @@ const QUALIFIED_SUCCESS_REASONS = new Set(['PartiallyProgrammed'])
 /** Conditions that mean trouble when True, mirroring the generic ladder's set. */
 const NEGATIVE_CONDITIONS = new Set(['Degraded', 'Warning'])
 
+function ancestorName(ancestor: any): string {
+  const ref = ancestor?.ancestorRef
+  const name = typeof ref?.name === 'string' ? ref.name : ''
+  if (!name) return ''
+  const ns = typeof ref?.namespace === 'string' ? ref.namespace : ''
+  return ns ? `${ns}/${name}` : name
+}
+
 function conditionsOf(ancestor: any): any[] {
   return Array.isArray(ancestor?.conditions) ? ancestor.conditions : []
 }
@@ -104,6 +112,9 @@ export function getGatewayPolicyStatus(resource: any): GenericStatus | null {
   // Ancestors can fail for different reasons. Reporting the first one with a
   // count claims they all failed that way.
   const failureReasons = new Set<string>()
+  // Which Gateway failed with what, for the tooltip: "2/3 failed" without it
+  // sends the operator digging through raw status for the names.
+  const failureDetails: string[] = []
   let acceptedAs: string | null = null
 
   for (const ancestor of ancestors) {
@@ -123,6 +134,8 @@ export function getGatewayPolicyStatus(resource: any): GenericStatus | null {
       failed++
       failure ??= { text: problemText(broken), reason: broken?.message }
       failureReasons.add(problemText(broken))
+      const name = ancestorName(ancestor)
+      failureDetails.push(name ? `${name}: ${problemText(broken)}` : problemText(broken))
       continue
     }
 
@@ -160,8 +173,10 @@ export function getGatewayPolicyStatus(resource: any): GenericStatus | null {
   const scope = (n: number) => (total > 1 ? ` (${n}/${total})` : '')
 
   if (failed > 0 && failure) {
-    const text = failureReasons.size > 1 ? `${failed}/${total} failed` : `${failure.text}${scope(failed)}`
-    return { text, tone: 'unhealthy', reason: failure.reason }
+    if (failureReasons.size > 1) {
+      return { text: `${failed}/${total} failed`, tone: 'unhealthy', reason: failureDetails.join('; ') }
+    }
+    return { text: `${failure.text}${scope(failed)}`, tone: 'unhealthy', reason: failure.reason }
   }
   if (degraded > 0 && warning) {
     return { text: `${warning.text}${scope(degraded)}`, tone: 'degraded', reason: warning.reason }

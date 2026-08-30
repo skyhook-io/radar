@@ -190,6 +190,21 @@ describe('condition vocabulary beyond Accepted', () => {
     expect(getGatewayPolicyStatus(p)).toMatchObject({ text: '2/3 failed', tone: 'unhealthy' })
   })
 
+  // The badge says "2/3 failed"; the tooltip must say which Gateway failed
+  // how, or the operator digs through raw status for the names.
+  it('names each failed ancestor and its reason in the tooltip', () => {
+    const p = policy(
+      { ancestorRef: { kind: 'Gateway', namespace: 'team-a', name: 'gw-a' }, conditions: [cond('Accepted', 'False', 'NotAllowed')] },
+      { ancestorRef: { kind: 'Gateway', name: 'gw-b' }, conditions: [cond('Accepted', 'False', 'ResourceNotFound')] },
+      anc(cond('Accepted', 'True')),
+    )
+    expect(getGatewayPolicyStatus(p)).toMatchObject({
+      text: '2/3 failed',
+      tone: 'unhealthy',
+      reason: 'team-a/gw-a: NotAllowed; gw-b: ResourceNotFound',
+    })
+  })
+
   it('keeps the reason when every failure agrees', () => {
     const p = policy(anc(cond('Accepted', 'False', 'NotAllowed')), anc(cond('Accepted', 'False', 'NotAllowed')))
     expect(getGatewayPolicyStatus(p)).toMatchObject({ text: 'NotAllowed (2/2)', tone: 'unhealthy' })

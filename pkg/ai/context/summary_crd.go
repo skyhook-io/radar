@@ -483,6 +483,20 @@ func summarizeGenericCRD(obj *unstructured.Unstructured) *ResourceSummary {
 // Programmed=False — the controller took ownership and then could not apply it
 // — and reading acceptance first calls that healthy. Mirrors
 // getGatewayPolicyStatus in packages/k8s-ui.
+// policyAncestorName identifies the ancestor a failure belongs to, namespace-
+// qualified when the ref carries one.
+func policyAncestorName(ancestor map[string]any) string {
+	ref, _ := ancestor["ancestorRef"].(map[string]any)
+	name, _ := ref["name"].(string)
+	if name == "" {
+		return ""
+	}
+	if ns, _ := ref["namespace"].(string); ns != "" {
+		return ns + "/" + name
+	}
+	return name
+}
+
 func gatewayPolicyStatus(obj *unstructured.Unstructured) (string, bool) {
 	// NoCopy rather than NestedSlice: this is a read-only summary on a request
 	// path, and NestedSlice deep-copies every ancestor — and panics outright on
@@ -509,6 +523,10 @@ func gatewayPolicyStatus(obj *unstructured.Unstructured) (string, bool) {
 	// Ancestors can fail for different reasons; reporting the first with a count
 	// would claim they all failed that way.
 	failureReasons := map[string]struct{}{}
+	// Which Gateway failed with what. MCP has no tooltip channel, so on mixed
+	// reasons this rides in the text itself — bounded, since valid PolicyStatus
+	// carries at most 16 ancestors.
+	var failureDetails []string
 	verdict := ""
 
 	for _, a := range ancestors {
@@ -568,6 +586,11 @@ func gatewayPolicyStatus(obj *unstructured.Unstructured) (string, bool) {
 				failure = broke
 			}
 			failureReasons[broke] = struct{}{}
+			if name := policyAncestorName(aMap); name != "" {
+				failureDetails = append(failureDetails, name+": "+broke)
+			} else {
+				failureDetails = append(failureDetails, broke)
+			}
 		case warned != "":
 			degraded++
 			if warning == "" {
@@ -589,7 +612,7 @@ func gatewayPolicyStatus(obj *unstructured.Unstructured) (string, bool) {
 	switch {
 	case failed > 0:
 		if len(failureReasons) > 1 {
-			return fmt.Sprintf("%d/%d failed", failed, total), true
+			return fmt.Sprintf("%d/%d failed (%s)", failed, total, strings.Join(failureDetails, "; ")), true
 		}
 		return failure + scope(failed), true
 	case degraded > 0:
