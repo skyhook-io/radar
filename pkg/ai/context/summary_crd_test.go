@@ -228,6 +228,18 @@ func TestGatewayPolicyStatus(t *testing.T) {
 		a["ancestorRef"] = ref
 		return a
 	}
+	withController := func(controller string, a map[string]any) map[string]any {
+		a["controllerName"] = controller
+		return a
+	}
+	withSection := func(section string, a map[string]any) map[string]any {
+		a["ancestorRef"].(map[string]any)["sectionName"] = section
+		return a
+	}
+	withKind := func(kind string, a map[string]any) map[string]any {
+		a["ancestorRef"].(map[string]any)["kind"] = kind
+		return a
+	}
 	policy := func(ancestors ...map[string]any) *unstructured.Unstructured {
 		out := make([]any, 0, len(ancestors))
 		for _, a := range ancestors {
@@ -301,6 +313,29 @@ func TestGatewayPolicyStatus(t *testing.T) {
 			named("", "gw-b", anc(cond("Accepted", "False", "ResourceNotFound"))),
 			anc(cond("Accepted", "True", "")),
 		), "2/3 failed (team-a/gw-a: NotAllowed; gw-b: ResourceNotFound)", true},
+		// GEP-713 keys ancestor status on ancestorRef + controllerName: the same
+		// Gateway appears once per controller, and a bare ns/name label would
+		// attribute both verdicts to one indistinguishable thing.
+		{"colliding labels are told apart by controller", policy(
+			withController("ctrl-a.example", named("team-a", "gw", anc(cond("Accepted", "False", "NotAllowed")))),
+			withController("ctrl-b.example", named("team-a", "gw", anc(cond("Accepted", "False", "ResourceNotFound")))),
+		), "2/2 failed (team-a/gw (ctrl-a.example): NotAllowed; team-a/gw (ctrl-b.example): ResourceNotFound)", true},
+		// sectionName and a non-Gateway kind are part of the identity and short
+		// enough to always carry.
+		{"section and kind ride in the label", policy(
+			withSection("tls", named("team-a", "gw", anc(cond("Accepted", "False", "NotAllowed")))),
+			withKind("Service", named("team-a", "svc", anc(cond("Accepted", "False", "ResourceNotFound")))),
+		), "2/2 failed (team-a/gw:tls: NotAllowed; Service team-a/svc: ResourceNotFound)", true},
+		// Reasons may be 1024 chars and foreign CRDs need not honor the
+		// 16-ancestor cap, so the list is bounded rather than trusted.
+		{"the detail list is capped", policy(
+			named("", "gw-1", anc(cond("Accepted", "False", "R1"))),
+			named("", "gw-2", anc(cond("Accepted", "False", "R2"))),
+			named("", "gw-3", anc(cond("Accepted", "False", "R3"))),
+			named("", "gw-4", anc(cond("Accepted", "False", "R4"))),
+			named("", "gw-5", anc(cond("Accepted", "False", "R5"))),
+			named("", "gw-6", anc(cond("Accepted", "False", "R6"))),
+		), "6/6 failed (gw-1: R1; gw-2: R2; gw-3: R3; gw-4: R4; +2 more)", true},
 		{"matching failure reasons keep the reason", policy(
 			anc(cond("Accepted", "False", "NotAllowed")),
 			anc(cond("Accepted", "False", "NotAllowed")),

@@ -205,6 +205,41 @@ describe('condition vocabulary beyond Accepted', () => {
     })
   })
 
+  // GEP-713 keys ancestor status on ancestorRef + controllerName: the same
+  // Gateway appears once per controller, and a bare ns/name label would
+  // attribute both verdicts to one indistinguishable thing.
+  it('tells colliding labels apart by controller', () => {
+    const p = policy(
+      { ancestorRef: { namespace: 'team-a', name: 'gw' }, controllerName: 'ctrl-a.example', conditions: [cond('Accepted', 'False', 'NotAllowed')] },
+      { ancestorRef: { namespace: 'team-a', name: 'gw' }, controllerName: 'ctrl-b.example', conditions: [cond('Accepted', 'False', 'ResourceNotFound')] },
+    )
+    expect(getGatewayPolicyStatus(p)?.reason)
+      .toBe('team-a/gw (ctrl-a.example): NotAllowed; team-a/gw (ctrl-b.example): ResourceNotFound')
+  })
+
+  // sectionName and a non-Gateway kind are part of the identity and short
+  // enough to always carry.
+  it('carries section and kind in the label', () => {
+    const p = policy(
+      { ancestorRef: { namespace: 'team-a', name: 'gw', sectionName: 'tls' }, conditions: [cond('Accepted', 'False', 'NotAllowed')] },
+      { ancestorRef: { kind: 'Service', namespace: 'team-a', name: 'svc' }, conditions: [cond('Accepted', 'False', 'ResourceNotFound')] },
+    )
+    expect(getGatewayPolicyStatus(p)?.reason)
+      .toBe('team-a/gw:tls: NotAllowed; Service team-a/svc: ResourceNotFound')
+  })
+
+  // Reasons may be 1024 chars and foreign CRDs need not honor the 16-ancestor
+  // cap, so the list is bounded rather than trusted.
+  it('caps the tooltip detail list', () => {
+    const p = policy(
+      ...[1, 2, 3, 4, 5, 6].map(i => ({
+        ancestorRef: { name: `gw-${i}` },
+        conditions: [cond('Accepted', 'False', `R${i}`)],
+      })),
+    )
+    expect(getGatewayPolicyStatus(p)?.reason).toBe('gw-1: R1; gw-2: R2; gw-3: R3; gw-4: R4; +2 more')
+  })
+
   it('keeps the reason when every failure agrees', () => {
     const p = policy(anc(cond('Accepted', 'False', 'NotAllowed')), anc(cond('Accepted', 'False', 'NotAllowed')))
     expect(getGatewayPolicyStatus(p)).toMatchObject({ text: 'NotAllowed (2/2)', tone: 'unhealthy' })

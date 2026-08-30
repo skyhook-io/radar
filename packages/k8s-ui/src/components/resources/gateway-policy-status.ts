@@ -51,12 +51,43 @@ const QUALIFIED_SUCCESS_REASONS = new Set(['PartiallyProgrammed'])
 /** Conditions that mean trouble when True, mirroring the generic ladder's set. */
 const NEGATIVE_CONDITIONS = new Set(['Degraded', 'Warning'])
 
-function ancestorName(ancestor: any): string {
+/**
+ * GEP-713 keys an ancestor's status on the full ancestorRef plus the
+ * controllerName — the same Gateway can appear once per controller, section,
+ * or kind. The label carries the short parts outright; the controllerName is
+ * long, so it is appended only when two labels would otherwise collide.
+ */
+function ancestorLabel(ancestor: any): string {
   const ref = ancestor?.ancestorRef
   const name = typeof ref?.name === 'string' ? ref.name : ''
   if (!name) return ''
   const ns = typeof ref?.namespace === 'string' ? ref.namespace : ''
-  return ns ? `${ns}/${name}` : name
+  const kind = typeof ref?.kind === 'string' ? ref.kind : ''
+  const section = typeof ref?.sectionName === 'string' ? ref.sectionName : ''
+  let label = ns ? `${ns}/${name}` : name
+  if (kind && kind !== 'Gateway') label = `${kind} ${label}`
+  if (section) label += `:${section}`
+  return label
+}
+
+/**
+ * Reasons are usually short CamelCase tokens, but the API allows 1024 chars
+ * and this reader accepts any CRD with an ancestors array, so the list is
+ * capped rather than trusted to stay small.
+ */
+const MAX_FAILURE_DETAILS = 4
+
+function renderFailureDetails(failures: { label: string; controller: string; problem: string }[]): string {
+  const labelCounts = new Map<string, number>()
+  for (const f of failures) labelCounts.set(f.label, (labelCounts.get(f.label) ?? 0) + 1)
+  const entries = failures.map(f => {
+    let label = f.label
+    if (label && (labelCounts.get(label) ?? 0) > 1 && f.controller) label += ` (${f.controller})`
+    return label ? `${label}: ${f.problem}` : f.problem
+  })
+  const shown = entries.slice(0, MAX_FAILURE_DETAILS)
+  const hidden = entries.length - shown.length
+  return hidden > 0 ? `${shown.join('; ')}; +${hidden} more` : shown.join('; ')
 }
 
 function conditionsOf(ancestor: any): any[] {
@@ -116,7 +147,7 @@ export function getGatewayPolicyStatus(resource: any): GenericStatus | null {
   const failureReasons = new Set<string>()
   // Which Gateway failed with what, for the tooltip: "2/3 failed" without it
   // sends the operator digging through raw status for the names.
-  const failureDetails: string[] = []
+  const failureDetails: { label: string; controller: string; problem: string }[] = []
   let acceptedAs: string | null = null
 
   for (const ancestor of ancestors) {
@@ -136,8 +167,11 @@ export function getGatewayPolicyStatus(resource: any): GenericStatus | null {
       failed++
       failure ??= { text: problemText(broken), reason: broken?.message }
       failureReasons.add(problemText(broken))
-      const name = ancestorName(ancestor)
-      failureDetails.push(name ? `${name}: ${problemText(broken)}` : problemText(broken))
+      failureDetails.push({
+        label: ancestorLabel(ancestor),
+        controller: typeof ancestor?.controllerName === 'string' ? ancestor.controllerName : '',
+        problem: problemText(broken),
+      })
       continue
     }
 
@@ -176,7 +210,7 @@ export function getGatewayPolicyStatus(resource: any): GenericStatus | null {
 
   if (failed > 0 && failure) {
     if (failureReasons.size > 1) {
-      return { text: `${failed}/${total} failed`, tone: 'unhealthy', reason: failureDetails.join('; ') }
+      return { text: `${failed}/${total} failed`, tone: 'unhealthy', reason: renderFailureDetails(failureDetails) }
     }
     return { text: `${failure.text}${scope(failed)}`, tone: 'unhealthy', reason: failure.reason }
   }

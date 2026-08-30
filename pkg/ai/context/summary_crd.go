@@ -483,18 +483,63 @@ func summarizeGenericCRD(obj *unstructured.Unstructured) *ResourceSummary {
 // Programmed=False — the controller took ownership and then could not apply it
 // — and reading acceptance first calls that healthy. Mirrors
 // getGatewayPolicyStatus in packages/k8s-ui.
-// policyAncestorName identifies the ancestor a failure belongs to, namespace-
-// qualified when the ref carries one.
-func policyAncestorName(ancestor map[string]any) string {
+// policyAncestorLabel identifies the ancestor a failure belongs to. GEP-713
+// keys an ancestor's status on the full ancestorRef plus the controllerName —
+// the same Gateway can appear once per controller, section, or kind — so the
+// label carries the short parts outright; the long controllerName is appended
+// by the caller only when two labels would otherwise collide.
+func policyAncestorLabel(ancestor map[string]any) string {
 	ref, _ := ancestor["ancestorRef"].(map[string]any)
 	name, _ := ref["name"].(string)
 	if name == "" {
 		return ""
 	}
+	label := name
 	if ns, _ := ref["namespace"].(string); ns != "" {
-		return ns + "/" + name
+		label = ns + "/" + name
 	}
-	return name
+	if kind, _ := ref["kind"].(string); kind != "" && kind != "Gateway" {
+		label = kind + " " + label
+	}
+	if section, _ := ref["sectionName"].(string); section != "" {
+		label += ":" + section
+	}
+	return label
+}
+
+type policyFailureDetail struct {
+	label      string
+	controller string
+	problem    string
+}
+
+// Reasons are usually short CamelCase tokens, but the API allows 1024 chars
+// and this reader accepts any CRD with an ancestors array, so the in-text list
+// is capped rather than trusted to stay small.
+const maxPolicyFailureDetails = 4
+
+func renderPolicyFailureDetails(failures []policyFailureDetail) string {
+	labelCounts := map[string]int{}
+	for _, f := range failures {
+		labelCounts[f.label]++
+	}
+	entries := make([]string, 0, len(failures))
+	for _, f := range failures {
+		label := f.label
+		if label != "" && labelCounts[f.label] > 1 && f.controller != "" {
+			label += " (" + f.controller + ")"
+		}
+		if label != "" {
+			entries = append(entries, label+": "+f.problem)
+		} else {
+			entries = append(entries, f.problem)
+		}
+	}
+	if len(entries) > maxPolicyFailureDetails {
+		hidden := len(entries) - maxPolicyFailureDetails
+		return strings.Join(entries[:maxPolicyFailureDetails], "; ") + fmt.Sprintf("; +%d more", hidden)
+	}
+	return strings.Join(entries, "; ")
 }
 
 func gatewayPolicyStatus(obj *unstructured.Unstructured) (string, bool) {
@@ -524,9 +569,8 @@ func gatewayPolicyStatus(obj *unstructured.Unstructured) (string, bool) {
 	// would claim they all failed that way.
 	failureReasons := map[string]struct{}{}
 	// Which Gateway failed with what. MCP has no tooltip channel, so on mixed
-	// reasons this rides in the text itself — bounded, since valid PolicyStatus
-	// carries at most 16 ancestors.
-	var failureDetails []string
+	// reasons this rides in the text itself.
+	var failureDetails []policyFailureDetail
 	verdict := ""
 
 	for _, a := range ancestors {
@@ -586,11 +630,12 @@ func gatewayPolicyStatus(obj *unstructured.Unstructured) (string, bool) {
 				failure = broke
 			}
 			failureReasons[broke] = struct{}{}
-			if name := policyAncestorName(aMap); name != "" {
-				failureDetails = append(failureDetails, name+": "+broke)
-			} else {
-				failureDetails = append(failureDetails, broke)
-			}
+			controller, _ := aMap["controllerName"].(string)
+			failureDetails = append(failureDetails, policyFailureDetail{
+				label:      policyAncestorLabel(aMap),
+				controller: controller,
+				problem:    broke,
+			})
 		case warned != "":
 			degraded++
 			if warning == "" {
@@ -612,7 +657,7 @@ func gatewayPolicyStatus(obj *unstructured.Unstructured) (string, bool) {
 	switch {
 	case failed > 0:
 		if len(failureReasons) > 1 {
-			return fmt.Sprintf("%d/%d failed (%s)", failed, total, strings.Join(failureDetails, "; ")), true
+			return fmt.Sprintf("%d/%d failed (%s)", failed, total, renderPolicyFailureDetails(failureDetails)), true
 		}
 		return failure + scope(failed), true
 	case degraded > 0:
