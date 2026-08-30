@@ -21,6 +21,7 @@ import { AISettingsSection, type AIDraft } from '../diagnose/AISettings'
 import { MyPermissionsContent } from './MyPermissionsDialog'
 import { useDiagnose } from '../diagnose/DiagnoseContext'
 import { currencyOptionsForValue } from './currency-options'
+import { versionUpdateURL } from '../../utils/version'
 
 // The loopback URL an MCP client is told to connect to. Shared by the overview
 // row and the MCP section: both must carry the base path, or the URL they
@@ -115,9 +116,7 @@ export function SettingsDialog({
   const queryClient = useQueryClient()
   const dialogRef = useRef<HTMLDivElement>(null)
   const { shouldRender, isOpen } = useAnimatedUnmount(open, 200)
-  const { data: capabilitiesData } = useCapabilities()
-  const versionDeploymentMode = capabilitiesData ? (capabilitiesData.deployment?.mode ?? 'local') : undefined
-  const { data: versionInfo } = useVersionCheck(versionDeploymentMode)
+  const { data: versionInfo } = useVersionCheck()
   // Radar configuration (kubeconfig, port, integrations…) is host-level and
   // affects every user of this instance, so it's gated to owners. Personal
   // sections (My permissions, AI diagnose) stay usable by everyone. Non-Cloud
@@ -915,7 +914,7 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
   const { data: argo } = useArgoStatus(active)
   const { data: capabilitiesData } = useCapabilities()
   const deploymentMode = capabilitiesData ? (capabilitiesData.deployment?.mode ?? 'local') : undefined
-  const { data: version } = useVersionCheck(deploymentMode)
+  const { data: version } = useVersionCheck()
   const capabilities = useCapabilitiesContext()
   const diag = useDiagnose()
   const [copied, setCopied] = useState(false)
@@ -971,9 +970,9 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
 
   return (
     <div className="space-y-4">
-      {version?.updateAvailable && (
+      {version?.updateAvailable && deploymentMode !== undefined && (
         <a
-          href={version.releaseUrl}
+          href={versionUpdateURL(deploymentMode, version.releaseUrl)}
           target="_blank"
           rel="noreferrer"
           className="flex items-center gap-2 px-3 py-2 text-xs rounded-md border border-skyhook-500/30 bg-skyhook-500/10 hover:bg-skyhook-500/15 transition-colors"

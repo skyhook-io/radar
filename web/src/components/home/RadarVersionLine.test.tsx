@@ -37,6 +37,10 @@ describe('RadarVersionLine', () => {
     expect(html).toContain('lucide-circle-arrow-up')
     expect(html).toContain('Checking how this installation is managed')
     expect(html).not.toContain('could not be confirmed')
+    expect(html).not.toContain('<a')
+    expect(html).not.toContain('<button')
+    expect(html).toContain('class="sr-only"')
+    expect(html).not.toContain('aria-label=')
   })
 
   it('opens actionable upgrade instructions when the installation manager is unknown', () => {
@@ -45,6 +49,11 @@ describe('RadarVersionLine', () => {
     expect(html).not.toContain('#upgrading')
     expect(html).toContain('Open the in-cluster upgrade instructions')
     expect(html).not.toContain(version.releaseUrl)
+  })
+
+  it('keeps the visible upgrade label in the accessible name', () => {
+    const html = renderToString(<RadarVersionLine version={version} />)
+    expect(html).toContain('aria-label="v1.3.0 available —')
   })
 
   it('deep-links exact Helm ownership when the host supports it', () => {

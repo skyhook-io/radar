@@ -1,6 +1,14 @@
+import type { DeploymentMode } from '../types'
+
 export interface MajorMinorVersion {
   major: number
   minor: number
+}
+
+export const IN_CLUSTER_UPGRADE_URL = 'https://radarhq.io/docs/configuration/in-cluster'
+
+export function versionUpdateURL(deploymentMode: DeploymentMode, releaseURL?: string): string | undefined {
+  return deploymentMode === 'in-cluster' ? IN_CLUSTER_UPGRADE_URL : releaseURL
 }
 
 export function parseMajorMinor(version: string): MajorMinorVersion | null {

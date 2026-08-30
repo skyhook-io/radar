@@ -1553,7 +1553,12 @@ export async function fetchVersionInfo(
   }
 }
 
-export function useVersionCheck(deploymentMode?: DeploymentMode) {
+export function useVersionCheck() {
+  const capabilities = useCapabilities()
+  const deploymentMode = capabilities.data
+    ? (capabilities.data.deployment?.mode ?? 'local')
+    : undefined
+
   return useQuery<VersionInfo>({
     queryKey: ["version-check", deploymentMode],
     queryFn: () => fetchVersionInfo(deploymentMode),

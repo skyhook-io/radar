@@ -17,7 +17,7 @@ export function UpdateNotification() {
   const queryClient = useQueryClient()
   const { data: capabilities } = useCapabilities()
   const deploymentMode = capabilities ? (capabilities.deployment?.mode ?? 'local') : undefined
-  const { data: versionInfo } = useVersionCheck(deploymentMode)
+  const { data: versionInfo } = useVersionCheck()
   const [dismissed, setDismissed] = useState(false)
   const [copied, setCopied] = useState(false)
   const [copyFailed, setCopyFailed] = useState(false)
@@ -103,7 +103,7 @@ export function UpdateNotification() {
 
   // Shared in-cluster viewers get a persistent Home notice instead of a
   // floating action prompt they may not be able to act on.
-  if (!versionInfo?.updateAvailable || dismissed || deploymentMode === 'in-cluster') {
+  if (!versionInfo?.updateAvailable || dismissed || deploymentMode === undefined || deploymentMode === 'in-cluster' || deploymentMode === 'cloud') {
     return null
   }
 

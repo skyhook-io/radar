@@ -1,7 +1,7 @@
 import { ArrowUpCircle } from 'lucide-react'
 import { gitOpsRouteForResource } from '@skyhook-io/k8s-ui'
 import type { CloudConnectSelf, VersionInfo } from '../../api/client'
-import { isMinorOrMajorUpdate } from '../../utils/version'
+import { IN_CLUSTER_UPGRADE_URL, isMinorOrMajorUpdate } from '../../utils/version'
 import { Tooltip } from '../ui/Tooltip'
 
 interface RadarVersionLineProps {
@@ -11,8 +11,6 @@ interface RadarVersionLineProps {
   onNavigateToHelmRelease?: (namespace: string, release: string) => void
   onNavigateToGitOps?: (path: string) => void
 }
-
-const IN_CLUSTER_UPGRADE_URL = 'https://radarhq.io/docs/configuration/in-cluster'
 
 function displayVersion(version: string): string {
   return version === 'dev' || version.startsWith('v') ? version : `v${version}`
@@ -44,10 +42,10 @@ export function RadarVersionLine({
     : null
 
   let detail = managerLoading
-    ? 'Checking how this installation is managed. Open the in-cluster upgrade instructions.'
+    ? 'Checking how this installation is managed.'
     : 'The installation manager could not be confirmed. Open the in-cluster upgrade instructions.'
   let onClick: (() => void) | undefined
-  const actionClassName = 'group inline-flex items-center gap-1 text-amber-600 transition-colors hover:text-amber-500 dark:text-amber-400'
+  const actionClassName = 'inline-flex items-center gap-1 text-theme-text-tertiary transition-colors hover:text-theme-text-secondary'
 
   if (manager?.ownership === 'helm' && manager.namespace && manager.release) {
     if (onNavigateToHelmRelease) {
@@ -70,8 +68,13 @@ export function RadarVersionLine({
       : 'This installation appears to be managed through GitOps. Open the upgrade instructions and apply the change through its source of truth.'
   }
 
-  const accessibleLabel = `Radar ${displayVersion(latestVersion)} is available. ${detail}`
-  const action = onClick ? (
+  const accessibleLabel = `${displayVersion(latestVersion)} available — ${detail}`
+  const action = managerLoading ? (
+    <span className="inline-flex items-center gap-1 text-theme-text-tertiary">
+      <UpgradeLabel version={latestVersion} />
+      <span className="sr-only">{detail}</span>
+    </span>
+  ) : onClick ? (
     <button
       type="button"
       className={actionClassName}

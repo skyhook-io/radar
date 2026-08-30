@@ -23,7 +23,8 @@ import (
 // identity from the chart, no cluster access, or RBAC without deployments.
 // Callers must treat 0 as "unknown" rather than substituting something else.
 //
-// Memoized — the value cannot change while this process runs.
+// A successful read is memoized because the value cannot change while this
+// process runs. Failed reads are retried on the next call.
 func InstalledAt(ctx context.Context) int64 {
 	client := GetClient()
 	if client == nil {

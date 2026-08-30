@@ -92,7 +92,7 @@ type Server struct {
 	cloudConnectCfg    CloudConnectConfig
 	cloudInstall       *cloudInstallManager
 	browserReportMu    sync.Mutex
-	browserReports     map[string]map[string]*browserReportEntry
+	browserReports     map[string]map[string]struct{}
 	browserReportSlots chan struct{}
 
 	// nsPreferences holds each user's active-namespace pick from the in-app

@@ -74,45 +74,32 @@ func TestClaimBrowserReportDeduplicatesAndCapsEachDay(t *testing.T) {
 	day := time.Now().UTC().Format("2006-01-02")
 	id := "c66ce4e8-fb90-4e0e-a2af-2172bb868b9e"
 
-	first, _, capped := s.claimBrowserReport(day, id)
+	first, capped := s.claimBrowserReport(day, id)
 	if !first || capped {
 		t.Fatalf("first claim = (%v, %v), want accepted", first, capped)
 	}
-	first, done, capped := s.claimBrowserReport(day, id)
-	if first || capped || done == nil {
-		t.Fatalf("duplicate claim = (%v, %v, %v), want duplicate waiter", first, done, capped)
-	}
-	s.completeBrowserReport(day, id)
-	select {
-	case <-done:
-	default:
-		t.Fatal("duplicate waiter was not released")
-	}
-	if !s.browserReportCompleted(day, id) {
-		t.Fatal("completed report was not marked successful")
+	first, capped = s.claimBrowserReport(day, id)
+	if first || capped {
+		t.Fatalf("duplicate claim = (%v, %v), want duplicate", first, capped)
 	}
 
 	failedID := "04af1e12-bf89-47cf-9cc9-f401852af21e"
 	s.claimBrowserReport(day, failedID)
-	_, failedDone, _ := s.claimBrowserReport(day, failedID)
 	s.abandonBrowserReport(day, failedID)
-	select {
-	case <-failedDone:
-	default:
-		t.Fatal("failed report waiter was not released")
+	first, capped = s.claimBrowserReport(day, failedID)
+	if !first || capped {
+		t.Fatalf("abandoned claim = (%v, %v), want retry accepted", first, capped)
 	}
-	if s.browserReportCompleted(day, failedID) {
-		t.Fatal("failed report was marked successful")
-	}
+	s.abandonBrowserReport(day, failedID)
 
 	for i := 1; i < maxBrowserReportsPerDay; i++ {
 		reportID := fmt.Sprintf("00000000-0000-4000-8000-%012d", i)
-		first, _, capped = s.claimBrowserReport(day, reportID)
+		first, capped = s.claimBrowserReport(day, reportID)
 		if !first || capped {
 			t.Fatalf("claim %d was unexpectedly rejected", i)
 		}
 	}
-	first, _, capped = s.claimBrowserReport(day, "00000000-0000-4000-8000-999999999999")
+	first, capped = s.claimBrowserReport(day, "00000000-0000-4000-8000-999999999999")
 	if first || !capped {
 		t.Fatalf("over-cap claim = (%v, %v), want capped", first, capped)
 	}

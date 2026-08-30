@@ -18,22 +18,17 @@ type browserVersionCheckRequest struct {
 	ReportID  string `json:"reportId"`
 }
 
-type browserReportEntry struct {
-	done     chan struct{}
-	reported bool
-}
-
 const (
 	maxBrowserReportsPerDay     = 5000
 	maxConcurrentBrowserReports = 8
 )
 
-func (s *Server) claimBrowserReport(day, id string) (first bool, duplicateDone <-chan struct{}, capped bool) {
+func (s *Server) claimBrowserReport(day, id string) (first, capped bool) {
 	s.browserReportMu.Lock()
 	defer s.browserReportMu.Unlock()
 
 	if s.browserReports == nil {
-		s.browserReports = make(map[string]map[string]*browserReportEntry)
+		s.browserReports = make(map[string]map[string]struct{})
 	}
 	today := time.Now().UTC()
 	acceptedDays := map[string]struct{}{
@@ -49,38 +44,17 @@ func (s *Server) claimBrowserReport(day, id string) (first bool, duplicateDone <
 
 	reports := s.browserReports[day]
 	if reports == nil {
-		reports = make(map[string]*browserReportEntry)
+		reports = make(map[string]struct{})
 		s.browserReports[day] = reports
 	}
-	if entry := reports[id]; entry != nil {
-		return false, entry.done, false
+	if _, exists := reports[id]; exists {
+		return false, false
 	}
 	if len(reports) >= maxBrowserReportsPerDay {
-		return false, nil, true
+		return false, true
 	}
-	entry := &browserReportEntry{done: make(chan struct{})}
-	reports[id] = entry
-	return true, entry.done, false
-}
-
-func (s *Server) completeBrowserReport(day, id string) {
-	s.browserReportMu.Lock()
-	defer s.browserReportMu.Unlock()
-	if entry := s.browserReports[day][id]; entry != nil {
-		entry.reported = true
-		select {
-		case <-entry.done:
-		default:
-			close(entry.done)
-		}
-	}
-}
-
-func (s *Server) browserReportCompleted(day, id string) bool {
-	s.browserReportMu.Lock()
-	defer s.browserReportMu.Unlock()
-	entry := s.browserReports[day][id]
-	return entry != nil && entry.reported
+	reports[id] = struct{}{}
+	return true, false
 }
 
 func (s *Server) abandonBrowserReport(day, id string) {
@@ -90,10 +64,7 @@ func (s *Server) abandonBrowserReport(day, id string) {
 	if reports == nil {
 		return
 	}
-	if entry := reports[id]; entry != nil {
-		close(entry.done)
-		delete(reports, id)
-	}
+	delete(reports, id)
 	if len(reports) == 0 {
 		delete(s.browserReports, day)
 	}
@@ -150,31 +121,16 @@ func (s *Server) handleVersionCheckBrowser(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	first, duplicateDone, capped := s.claimBrowserReport(body.ReportDay, body.ReportID)
+	first, capped := s.claimBrowserReport(body.ReportDay, body.ReportID)
 	if capped {
 		s.writeError(w, http.StatusTooManyRequests, "daily browser update report limit reached")
 		return
 	}
 	if !first {
-		select {
-		case <-duplicateDone:
-		case <-r.Context().Done():
-			s.writeError(w, http.StatusGatewayTimeout, "browser update report timed out waiting for the in-flight report")
-			return
-		}
-		if !s.browserReportCompleted(body.ReportDay, body.ReportID) {
-			s.writeError(w, http.StatusBadGateway, "browser update report could not reach the release service")
-			return
-		}
 		info := version.CheckForUpdateRelease(r.Context())
 		s.writeJSON(w, info)
 		return
 	}
-	defer func() {
-		if !s.browserReportCompleted(body.ReportDay, body.ReportID) {
-			s.abandonBrowserReport(body.ReportDay, body.ReportID)
-		}
-	}()
 	slots, acquired := s.acquireBrowserReportSlot()
 	if !acquired {
 		s.abandonBrowserReport(body.ReportDay, body.ReportID)
@@ -189,6 +145,5 @@ func (s *Server) handleVersionCheckBrowser(w http.ResponseWriter, r *http.Reques
 		s.writeError(w, http.StatusBadGateway, "browser update report could not reach the release service")
 		return
 	}
-	s.completeBrowserReport(body.ReportDay, body.ReportID)
 	s.writeJSON(w, info)
 }

@@ -69,7 +69,7 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
   const hasCriticalIssues = issues.some((issue) => issue.severity === 'critical')
   const { data: capabilities } = useCapabilities()
   const deploymentMode = capabilities ? (capabilities.deployment?.mode ?? 'local') : undefined
-  const { data: versionInfo } = useVersionCheck(deploymentMode)
+  const { data: versionInfo } = useVersionCheck()
   const showHomeUpgrade = deploymentMode === 'in-cluster'
     && !!versionInfo?.updateAvailable
     && isMinorOrMajorUpdate(versionInfo.currentVersion, versionInfo.latestVersion)
