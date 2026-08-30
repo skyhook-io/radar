@@ -24,7 +24,7 @@ import (
 // Callers must treat 0 as "unknown" rather than substituting something else.
 //
 // A successful read is memoized because the value cannot change while this
-// process runs. Failed reads are retried on the next call.
+// process runs. Failed reads are retried after a short backoff.
 func InstalledAt(ctx context.Context) int64 {
 	client := GetClient()
 	if client == nil {
@@ -34,17 +34,49 @@ func InstalledAt(ctx context.Context) int64 {
 }
 
 var (
-	installedAtMu     sync.Mutex
-	installedAtCached int64
+	installedAtMu      sync.Mutex
+	installedAtCached  int64
+	installedAtTried   time.Time
+	installedAtLoading chan struct{}
 )
 
+const installedAtRetryAfter = 5 * time.Minute
+
 func installedAtCachedFrom(ctx context.Context, client kubernetes.Interface, namespace, name string) int64 {
-	installedAtMu.Lock()
-	defer installedAtMu.Unlock()
-	if installedAtCached == 0 {
-		installedAtCached = installedAtFrom(ctx, client, namespace, name)
+	for {
+		installedAtMu.Lock()
+		if installedAtCached != 0 {
+			result := installedAtCached
+			installedAtMu.Unlock()
+			return result
+		}
+		if !installedAtTried.IsZero() && time.Since(installedAtTried) < installedAtRetryAfter {
+			installedAtMu.Unlock()
+			return 0
+		}
+		if installedAtLoading != nil {
+			loading := installedAtLoading
+			installedAtMu.Unlock()
+			select {
+			case <-loading:
+				continue
+			case <-ctx.Done():
+				return 0
+			}
+		}
+		installedAtLoading = make(chan struct{})
+		loading := installedAtLoading
+		installedAtMu.Unlock()
+
+		result := installedAtFrom(ctx, client, namespace, name)
+		installedAtMu.Lock()
+		installedAtCached = result
+		installedAtTried = time.Now()
+		installedAtLoading = nil
+		close(loading)
+		installedAtMu.Unlock()
+		return result
 	}
-	return installedAtCached
 }
 
 func installedAtFrom(ctx context.Context, client kubernetes.Interface, namespace, name string) int64 {

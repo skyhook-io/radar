@@ -91,10 +91,6 @@ type Server struct {
 	saveFileFunc       func(defaultFilename string, data []byte) (string, error)
 	cloudConnectCfg    CloudConnectConfig
 	cloudInstall       *cloudInstallManager
-	browserReportMu    sync.Mutex
-	browserReports     map[string]map[string]struct{}
-	browserReportSlots chan struct{}
-
 	// nsPreferences holds each user's active-namespace pick from the in-app
 	// switcher. Key shape: "<username>\x00<contextName>" when auth is enabled,
 	// "\x00<contextName>" when auth is disabled. Cleared on context switch
@@ -114,6 +110,11 @@ type Server struct {
 	// rootHintOnce keeps the base-path misconfiguration hint to a single log
 	// line no matter how many requests reach the origin root.
 	rootHintOnce sync.Once
+
+	browserCheckMu    sync.Mutex
+	browserCheckDay   string
+	browserCheckCount int
+	browserCheckSlots chan struct{}
 
 	// nsPickMu serializes namespace-pick mutations: the POST handler's
 	// persist+set pair and the read-path stale-pick prune. Without it, a
@@ -510,7 +511,6 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/diagnostics", s.handleDiagnostics)
 			r.Get("/auth/me", s.handleAuthMe)
 			r.Get("/version-check", s.handleVersionCheck)
-			r.Get("/version-check/release", s.handleVersionCheckRelease)
 			r.Post("/version-check/browser", s.handleVersionCheckBrowser)
 			r.Get("/dashboard", s.handleDashboard)
 			r.Get("/vitals", s.handleVitals)
@@ -1212,18 +1212,25 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleVersionCheck(w http.ResponseWriter, r *http.Request) {
-	if deploymentMode() == k8s.DeploymentModeInCluster {
-		info := version.CheckForUpdateRelease(r.Context())
-		s.writeJSON(w, info)
-		return
-	}
-	info := version.CheckForUpdate(r.Context())
+	info := checkForUpdateForDeployment(
+		r.Context(),
+		deploymentMode(),
+		version.CheckForUpdate,
+		version.CheckForUpdateRelease,
+	)
 	s.writeJSON(w, info)
 }
 
-func (s *Server) handleVersionCheckRelease(w http.ResponseWriter, r *http.Request) {
-	info := version.CheckForUpdateRelease(r.Context())
-	s.writeJSON(w, info)
+func checkForUpdateForDeployment(
+	ctx context.Context,
+	mode k8s.DeploymentMode,
+	ordinary func(context.Context) *version.UpdateInfo,
+	releaseOnly func(context.Context) *version.UpdateInfo,
+) *version.UpdateInfo {
+	if mode == k8s.DeploymentModeCloud {
+		return releaseOnly(ctx)
+	}
+	return ordinary(ctx)
 }
 
 func (s *Server) handleClusterInfo(w http.ResponseWriter, r *http.Request) {

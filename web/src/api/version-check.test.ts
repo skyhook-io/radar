@@ -1,61 +1,66 @@
-import { describe, expect, it, vi } from 'vitest'
-import { fetchVersionInfo, type VersionInfo } from './client'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { reportBrowserUpdateCheck, sendBrowserUpdateCheck } from './client'
 
-const VERSION: VersionInfo = {
-  currentVersion: '1.2.3',
-  latestVersion: '1.3.0',
-  updateAvailable: true,
-  installMethod: 'direct',
-}
-
-function dependencies(options: { report?: { reportDay: string; reportId: string } | null; failBrowser?: boolean } = {}) {
-  const calls: Array<{ path: string; options?: RequestInit }> = []
-  const complete = vi.fn()
+function dependencies(reportDay: string | null = null) {
+  const claimBrowserCheck = vi.fn(() => reportDay)
+  const sendBrowserCheck = vi.fn(async () => {})
   return {
-    calls,
-    complete,
-    value: {
-      fetch: async (path: string, requestOptions?: RequestInit) => {
-        calls.push({ path, options: requestOptions })
-        if (options.failBrowser && path === '/version-check/browser') throw new Error('offline')
-        return VERSION
-      },
-      claim: async () => options.report ?? null,
-      complete,
-    },
+    claimBrowserCheck,
+    sendBrowserCheck,
+    value: { claimBrowserCheck, sendBrowserCheck },
   }
 }
 
-describe('fetchVersionInfo', () => {
-  it('keeps local checks on the legacy cached endpoint', async () => {
+describe('reportBrowserUpdateCheck', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('does not add a browser check for local mode', () => {
+    const deps = dependencies('2026-08-29')
+    reportBrowserUpdateCheck('local', deps.value)
+    expect(deps.claimBrowserCheck).not.toHaveBeenCalled()
+    expect(deps.sendBrowserCheck).not.toHaveBeenCalled()
+  })
+
+  it('adds one best-effort in-cluster browser check', () => {
+    const deps = dependencies('2026-08-29')
+    reportBrowserUpdateCheck('in-cluster', deps.value)
+    expect(deps.sendBrowserCheck).toHaveBeenCalledWith('2026-08-29')
+  })
+
+  it('does not repeat a browser check already claimed for the day', () => {
     const deps = dependencies()
-    await fetchVersionInfo('local', deps.value)
-    expect(deps.calls.map(call => call.path)).toEqual(['/version-check'])
+    reportBrowserUpdateCheck('in-cluster', deps.value)
+    expect(deps.sendBrowserCheck).not.toHaveBeenCalled()
   })
 
-  it('posts a claimed in-cluster report and completes it after success', async () => {
-    const report = { reportDay: '2026-08-29', reportId: 'c66ce4e8-fb90-4e0e-a2af-2172bb868b9e' }
-    const deps = dependencies({ report })
-    await fetchVersionInfo('in-cluster', deps.value)
-    expect(deps.calls.map(call => call.path)).toEqual(['/version-check/browser'])
-    expect(deps.calls[0].options?.body).toBe(JSON.stringify(report))
-    expect(deps.complete).toHaveBeenCalledWith(report)
+  it('swallows a browser-check failure', async () => {
+    const deps = dependencies('2026-08-29')
+    deps.sendBrowserCheck.mockRejectedValue(new Error('offline'))
+    reportBrowserUpdateCheck('in-cluster', deps.value)
+    await Promise.resolve()
   })
 
-  it('uses release-only checks when already reported or when reporting fails', async () => {
-    const withoutClaim = dependencies()
-    await fetchVersionInfo('in-cluster', withoutClaim.value)
-    expect(withoutClaim.calls.map(call => call.path)).toEqual(['/version-check/release'])
+  it('does not emit the standalone browser check in Cloud mode', () => {
+    const deps = dependencies('2026-08-29')
+    reportBrowserUpdateCheck('cloud', deps.value)
+    expect(deps.claimBrowserCheck).not.toHaveBeenCalled()
+    expect(deps.sendBrowserCheck).not.toHaveBeenCalled()
+  })
 
-    const withFailure = dependencies({
-      report: { reportDay: '2026-08-29', reportId: 'c66ce4e8-fb90-4e0e-a2af-2172bb868b9e' },
-      failBrowser: true,
-    })
-    await fetchVersionInfo('in-cluster', withFailure.value)
-    expect(withFailure.calls.map(call => call.path)).toEqual([
-      '/version-check/browser',
-      '/version-check/release',
-    ])
-    expect(withFailure.complete).not.toHaveBeenCalled()
+  it('sends the claimed day to the same-origin backend endpoint', async () => {
+    const fetch = vi.fn(async () => new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetch)
+
+    await sendBrowserUpdateCheck('2026-08-29')
+
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(fetch).toHaveBeenCalledWith('/api/version-check/browser', expect.objectContaining({
+      method: 'POST',
+      credentials: 'same-origin',
+      keepalive: true,
+      body: JSON.stringify({ reportDay: '2026-08-29' }),
+    }))
   })
 })

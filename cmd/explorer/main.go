@@ -74,10 +74,10 @@ func main() {
 	// published image tag, so its version-matched default ImagePullBackOffs on
 	// every in-cluster test. Fall back to the latest published release instead -
 	// only for dev-shaped versions; a released binary keeps its exact match.
-	// CheckForUpdate is cached and cheap relative to the probe run it precedes.
+	// The release-only lookup is cached and cheap relative to the probe run it precedes.
 	if !versionpkg.IsReleaseVersion(version) {
 		reachability.LatestReleaseImage = func() string {
-			if u := versionpkg.CheckForUpdate(context.Background()); u != nil && u.LatestVersion != "" {
+			if u := versionpkg.CheckForUpdateRelease(context.Background()); u != nil && u.LatestVersion != "" {
 				return "ghcr.io/skyhook-io/radar:" + u.LatestVersion
 			}
 			return ""

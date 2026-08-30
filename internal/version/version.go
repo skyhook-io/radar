@@ -70,12 +70,7 @@ type githubRelease struct {
 }
 
 type checkOptions struct {
-	source      string
-	report      bool
-	reportDay   string
-	reportID    string
-	authEnabled bool
-	mode        string
+	source string
 }
 
 // SetCurrent sets the current version (called from main)
@@ -97,6 +92,9 @@ func IsDesktop() bool {
 
 // CheckForUpdate checks GitHub for the latest release
 func CheckForUpdate(_ context.Context) *UpdateInfo {
+	if buildChannel(Current) == buildChannelDevelopment {
+		return checkForUpdateCached(checkOptions{source: "release-only"})
+	}
 	return checkForUpdateCached(checkOptions{})
 }
 
@@ -106,31 +104,43 @@ func CheckForUpdateRelease(_ context.Context) *UpdateInfo {
 	return checkForUpdateCached(checkOptions{source: "release-only"})
 }
 
-// CheckForUpdateBrowser performs one browser-scoped check while returning the
-// same release information as the ordinary update check. These checks bypass
-// the shared release cache so each accepted daily request reaches the release
-// service.
-func CheckForUpdateBrowser(_ context.Context, reportDay, reportID string, authEnabled bool) (*UpdateInfo, bool) {
-	if !IsReleaseVersion(Current) {
-		return CheckForUpdateRelease(context.Background()), true
+func ReportBrowserUpdateCheck(ctx context.Context, reportDay string) error {
+	if buildChannel(Current) == buildChannelDevelopment {
+		return nil
 	}
 
-	fetchCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	result, proxySucceeded := fetchLatestRelease(fetchCtx, checkOptions{
-		source:      "browser-proxy",
-		report:      true,
-		reportDay:   reportDay,
-		reportID:    reportID,
-		authEnabled: authEnabled,
-		mode:        "in-cluster",
-	})
+	mode := "in-cluster"
+	method := detectInstallMethod()
+	params := url.Values{
+		"v":      {Current},
+		"os":     {runtime.GOOS},
+		"arch":   {runtime.GOARCH},
+		"method": {string(method)},
+		"mode":   {mode},
+		"source": {"browser-proxy"},
+		"report": {"1"},
+		"day":    {reportDay},
+	}
+	if installedAt := installTimestamp(context.WithoutCancel(ctx), mode); installedAt != 0 {
+		params.Set("t", strconv.FormatInt(installedAt, 10))
+	}
 
-	mu.Lock()
-	cachedResult = result
-	lastCheck = time.Now()
-	mu.Unlock()
-	return result, proxySucceeded
+	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, fmt.Sprintf("%s?%s", releasesURL, params.Encode()), nil)
+	if err != nil {
+		return fmt.Errorf("create browser update check: %w", err)
+	}
+	req.Header.Set("User-Agent", fmt.Sprintf("radar/%s", Current))
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return fmt.Errorf("send browser update check: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("browser update check returned %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func checkForUpdateCached(options checkOptions) *UpdateInfo {
@@ -153,7 +163,7 @@ func checkForUpdateCached(options checkOptions) *UpdateInfo {
 	// Use a background context so request cancellation doesn't poison the cache.
 	fetchCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	result, _ := fetchLatestRelease(fetchCtx, options)
+	result := fetchLatestRelease(fetchCtx, options)
 
 	mu.Lock()
 	cachedResult = result
@@ -163,7 +173,7 @@ func checkForUpdateCached(options checkOptions) *UpdateInfo {
 	return result
 }
 
-func fetchLatestRelease(ctx context.Context, options checkOptions) (*UpdateInfo, bool) {
+func fetchLatestRelease(ctx context.Context, options checkOptions) *UpdateInfo {
 	method := detectInstallMethod()
 	result := &UpdateInfo{
 		CurrentVersion: Current,
@@ -172,17 +182,14 @@ func fetchLatestRelease(ctx context.Context, options checkOptions) (*UpdateInfo,
 	}
 
 	if Current == "dev" {
-		return result, false
+		return result
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	mode := options.mode
-	if mode == "" {
-		mode = "local"
-		if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
-			mode = "in-cluster"
-		}
+	mode := "local"
+	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
+		mode = "in-cluster"
 	}
 	params := url.Values{
 		"v":      {Current},
@@ -191,19 +198,12 @@ func fetchLatestRelease(ctx context.Context, options checkOptions) (*UpdateInfo,
 		"method": {string(method)},
 		"mode":   {mode},
 	}
-	if t := installTimestamp(ctx, mode); t != 0 {
-		params.Set("t", strconv.FormatInt(t, 10))
+	if installedAt := installTimestamp(ctx, mode); installedAt != 0 {
+		params.Set("t", strconv.FormatInt(installedAt, 10))
 	}
 	if options.source != "" {
 		params.Set("source", options.source)
-		if options.report {
-			params.Set("report", "1")
-			params.Set("day", options.reportDay)
-			params.Set("rid", options.reportID)
-			params.Set("auth", strconv.FormatBool(options.authEnabled))
-		} else {
-			params.Set("report", "0")
-		}
+		params.Set("report", "0")
 	}
 	proxyURL := fmt.Sprintf("%s?%s", releasesURL, params.Encode())
 
@@ -211,12 +211,11 @@ func fetchLatestRelease(ctx context.Context, options checkOptions) (*UpdateInfo,
 	if err != nil {
 		result.Error = fmt.Sprintf("failed to create request: %v", err)
 		log.Printf("[version] %s", result.Error)
-		return result, false
+		return result
 	}
 	req.Header.Set("User-Agent", fmt.Sprintf("radar/%s", Current))
 
 	resp, err := client.Do(req)
-	proxySucceeded := err == nil && resp.StatusCode == http.StatusOK
 	if err != nil || resp.StatusCode != http.StatusOK {
 		// Fallback to GitHub directly
 		if resp != nil {
@@ -227,14 +226,14 @@ func fetchLatestRelease(ctx context.Context, options checkOptions) (*UpdateInfo,
 		if err2 != nil {
 			result.Error = fmt.Sprintf("failed to create fallback request: %v", err2)
 			log.Printf("[version] %s", result.Error)
-			return result, proxySucceeded
+			return result
 		}
 		req2.Header.Set("User-Agent", fmt.Sprintf("radar/%s", Current))
 		resp, err = client.Do(req2)
 		if err != nil {
 			result.Error = fmt.Sprintf("failed to check for updates: %v", err)
 			log.Printf("[version] %s", result.Error)
-			return result, proxySucceeded
+			return result
 		}
 	}
 	defer resp.Body.Close()
@@ -242,14 +241,14 @@ func fetchLatestRelease(ctx context.Context, options checkOptions) (*UpdateInfo,
 	if resp.StatusCode != http.StatusOK {
 		result.Error = fmt.Sprintf("update check returned %d", resp.StatusCode)
 		log.Printf("[version] %s", result.Error)
-		return result, proxySucceeded
+		return result
 	}
 
 	var release githubRelease
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
 		result.Error = fmt.Sprintf("failed to parse response: %v", err)
 		log.Printf("[version] %s", result.Error)
-		return result, proxySucceeded
+		return result
 	}
 
 	result.LatestVersion = strings.TrimPrefix(release.TagName, "v")
@@ -263,14 +262,85 @@ func fetchLatestRelease(ctx context.Context, options checkOptions) (*UpdateInfo,
 	}
 	result.UpdateAvail = newer
 
-	return result, proxySucceeded
+	return result
 }
 
-// IsReleaseVersion accepts only stable x.y.z builds. Development, dirty, and
-// prerelease builds should only fetch release information.
+// IsReleaseVersion accepts only stable x.y.z builds.
 func IsReleaseVersion(value string) bool {
 	v, err := semver.StrictNewVersion(strings.TrimPrefix(value, "v"))
 	return err == nil && v.Prerelease() == "" && v.Metadata() == ""
+}
+
+type buildChannelName string
+
+const (
+	buildChannelStable      buildChannelName = "stable"
+	buildChannelPrerelease  buildChannelName = "prerelease"
+	buildChannelCustom      buildChannelName = "custom"
+	buildChannelDevelopment buildChannelName = "development"
+)
+
+func buildChannel(value string) buildChannelName {
+	normalized := strings.TrimPrefix(strings.ToLower(value), "v")
+	if normalized == "dev" || strings.HasPrefix(normalized, "dev-") ||
+		strings.HasSuffix(normalized, "-dirty") || isCommitVersion(normalized) ||
+		isGitDescribeVersion(normalized) {
+		return buildChannelDevelopment
+	}
+	if IsReleaseVersion(value) {
+		return buildChannelStable
+	}
+	if v, err := semver.StrictNewVersion(normalized); err == nil {
+		label := strings.ToLower(v.Prerelease())
+		if isNamedPrerelease(label) {
+			return buildChannelPrerelease
+		}
+	}
+	return buildChannelCustom
+}
+
+func isNamedPrerelease(label string) bool {
+	for _, prefix := range []string{"alpha", "beta", "rc"} {
+		if !strings.HasPrefix(label, prefix) {
+			continue
+		}
+		for _, char := range strings.TrimPrefix(label, prefix) {
+			if (char < '0' || char > '9') && char != '.' && char != '-' {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func isCommitVersion(value string) bool {
+	if len(value) < 7 || len(value) > 40 {
+		return false
+	}
+	for _, char := range value {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func isGitDescribeVersion(value string) bool {
+	shaSeparator := strings.LastIndex(value, "-g")
+	if shaSeparator < 0 || !isCommitVersion(value[shaSeparator+2:]) {
+		return false
+	}
+	countSeparator := strings.LastIndex(value[:shaSeparator], "-")
+	if countSeparator < 0 || countSeparator == shaSeparator-1 {
+		return false
+	}
+	for _, char := range value[countSeparator+1 : shaSeparator] {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // isNewerVersion compares semver versions using Masterminds/semver

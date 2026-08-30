@@ -3,11 +3,9 @@ package server
 import (
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
-	"strings"
 	"time"
-
-	"github.com/google/uuid"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/version"
@@ -15,72 +13,31 @@ import (
 
 type browserVersionCheckRequest struct {
 	ReportDay string `json:"reportDay"`
-	ReportID  string `json:"reportId"`
 }
 
 const (
-	maxBrowserReportsPerDay     = 5000
-	maxConcurrentBrowserReports = 8
+	maxConcurrentBrowserChecks = 8
+	maxBrowserChecksPerDay     = 5000
 )
 
-func (s *Server) claimBrowserReport(day, id string) (first, capped bool) {
-	s.browserReportMu.Lock()
-	defer s.browserReportMu.Unlock()
+func (s *Server) claimBrowserCheck(day string) (chan struct{}, bool) {
+	s.browserCheckMu.Lock()
+	defer s.browserCheckMu.Unlock()
 
-	if s.browserReports == nil {
-		s.browserReports = make(map[string]map[string]struct{})
+	if s.browserCheckDay != day {
+		s.browserCheckDay = day
+		s.browserCheckCount = 0
 	}
-	today := time.Now().UTC()
-	acceptedDays := map[string]struct{}{
-		today.AddDate(0, 0, -1).Format("2006-01-02"): {},
-		today.Format("2006-01-02"):                   {},
-		today.AddDate(0, 0, 1).Format("2006-01-02"):  {},
+	if s.browserCheckCount >= maxBrowserChecksPerDay {
+		return nil, false
 	}
-	for storedDay := range s.browserReports {
-		if _, accepted := acceptedDays[storedDay]; !accepted {
-			delete(s.browserReports, storedDay)
-		}
+	if s.browserCheckSlots == nil {
+		s.browserCheckSlots = make(chan struct{}, maxConcurrentBrowserChecks)
 	}
-
-	reports := s.browserReports[day]
-	if reports == nil {
-		reports = make(map[string]struct{})
-		s.browserReports[day] = reports
-	}
-	if _, exists := reports[id]; exists {
-		return false, false
-	}
-	if len(reports) >= maxBrowserReportsPerDay {
-		return false, true
-	}
-	reports[id] = struct{}{}
-	return true, false
-}
-
-func (s *Server) abandonBrowserReport(day, id string) {
-	s.browserReportMu.Lock()
-	defer s.browserReportMu.Unlock()
-	reports := s.browserReports[day]
-	if reports == nil {
-		return
-	}
-	delete(reports, id)
-	if len(reports) == 0 {
-		delete(s.browserReports, day)
-	}
-}
-
-func (s *Server) acquireBrowserReportSlot() (chan struct{}, bool) {
-	s.browserReportMu.Lock()
-	if s.browserReportSlots == nil {
-		s.browserReportSlots = make(chan struct{}, maxConcurrentBrowserReports)
-	}
-	slots := s.browserReportSlots
-	s.browserReportMu.Unlock()
-
 	select {
-	case slots <- struct{}{}:
-		return slots, true
+	case s.browserCheckSlots <- struct{}{}:
+		s.browserCheckCount++
+		return s.browserCheckSlots, true
 	default:
 		return nil, false
 	}
@@ -88,7 +45,7 @@ func (s *Server) acquireBrowserReportSlot() (chan struct{}, bool) {
 
 func (s *Server) handleVersionCheckBrowser(w http.ResponseWriter, r *http.Request) {
 	if deploymentMode() != k8s.DeploymentModeInCluster {
-		s.writeError(w, http.StatusNotFound, "browser update reporting is only available on in-cluster deployments")
+		s.writeError(w, http.StatusNotFound, "browser update checks are only available on in-cluster deployments")
 		return
 	}
 
@@ -105,11 +62,6 @@ func (s *Server) handleVersionCheckBrowser(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	reportID, err := uuid.Parse(body.ReportID)
-	if err != nil || reportID.String() != strings.ToLower(body.ReportID) || reportID.Version() != 4 || reportID.Variant() != uuid.RFC4122 {
-		s.writeError(w, http.StatusBadRequest, "reportId must be a canonical UUIDv4")
-		return
-	}
 	reportDay, err := time.Parse("2006-01-02", body.ReportDay)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "reportDay must use YYYY-MM-DD")
@@ -121,29 +73,15 @@ func (s *Server) handleVersionCheckBrowser(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	first, capped := s.claimBrowserReport(body.ReportDay, body.ReportID)
-	if capped {
-		s.writeError(w, http.StatusTooManyRequests, "daily browser update report limit reached")
-		return
-	}
-	if !first {
-		info := version.CheckForUpdateRelease(r.Context())
-		s.writeJSON(w, info)
-		return
-	}
-	slots, acquired := s.acquireBrowserReportSlot()
-	if !acquired {
-		s.abandonBrowserReport(body.ReportDay, body.ReportID)
-		s.writeError(w, http.StatusTooManyRequests, "too many concurrent browser update reports")
+	slots, claimed := s.claimBrowserCheck(today.Format("2006-01-02"))
+	if !claimed {
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	defer func() { <-slots }()
 
-	info, reported := version.CheckForUpdateBrowser(r.Context(), body.ReportDay, body.ReportID, s.authConfig.Enabled())
-	if !reported {
-		s.abandonBrowserReport(body.ReportDay, body.ReportID)
-		s.writeError(w, http.StatusBadGateway, "browser update report could not reach the release service")
-		return
+	if err := version.ReportBrowserUpdateCheck(r.Context(), body.ReportDay); err != nil {
+		log.Printf("[version] browser update check failed: %v", err)
 	}
-	s.writeJSON(w, info)
+	w.WriteHeader(http.StatusNoContent)
 }

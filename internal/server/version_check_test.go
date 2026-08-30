@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -8,111 +9,120 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/version"
 )
 
-func TestHandleVersionCheckBrowserValidatesAndAcceptsDailyReport(t *testing.T) {
+func TestVersionCheckSelectsMeteredAndReleaseOnlyPaths(t *testing.T) {
+	ordinary := &version.UpdateInfo{CurrentVersion: "ordinary"}
+	releaseOnly := &version.UpdateInfo{CurrentVersion: "release-only"}
+	var calls []string
+	ordinaryCheck := func(context.Context) *version.UpdateInfo {
+		calls = append(calls, "ordinary")
+		return ordinary
+	}
+	releaseOnlyCheck := func(context.Context) *version.UpdateInfo {
+		calls = append(calls, "release-only")
+		return releaseOnly
+	}
+
+	for _, mode := range []k8s.DeploymentMode{k8s.DeploymentModeLocal, k8s.DeploymentModeInCluster} {
+		calls = nil
+		if got := checkForUpdateForDeployment(context.Background(), mode, ordinaryCheck, releaseOnlyCheck); got != ordinary {
+			t.Errorf("mode %q selected release-only update check", mode)
+		}
+		if len(calls) != 1 || calls[0] != "ordinary" {
+			t.Errorf("mode %q calls = %v, want ordinary", mode, calls)
+		}
+	}
+
+	calls = nil
+	if got := checkForUpdateForDeployment(context.Background(), k8s.DeploymentModeCloud, ordinaryCheck, releaseOnlyCheck); got != releaseOnly {
+		t.Error("Cloud selected metered update check")
+	}
+	if len(calls) != 1 || calls[0] != "release-only" {
+		t.Errorf("Cloud calls = %v, want release-only", calls)
+	}
+}
+
+func TestBrowserCheckVolumeBounds(t *testing.T) {
+	server := &Server{}
+	day := time.Now().UTC().Format("2006-01-02")
+	var slots []chan struct{}
+	for range maxConcurrentBrowserChecks {
+		slot, claimed := server.claimBrowserCheck(day)
+		if !claimed {
+			t.Fatal("concurrent browser check rejected before reaching the limit")
+		}
+		slots = append(slots, slot)
+	}
+	if _, claimed := server.claimBrowserCheck(day); claimed {
+		t.Fatal("browser check exceeded concurrency limit")
+	}
+	for _, slot := range slots {
+		<-slot
+	}
+
+	server.browserCheckCount = maxBrowserChecksPerDay
+	if _, claimed := server.claimBrowserCheck(day); claimed {
+		t.Fatal("browser check exceeded daily limit")
+	}
+	if slot, claimed := server.claimBrowserCheck("next-day"); !claimed {
+		t.Fatal("browser check limit did not reset for a new day")
+	} else {
+		<-slot
+	}
+}
+
+func TestVersionCheckBrowserAcceptsOneBestEffortAttempt(t *testing.T) {
+	previousVersion := version.Current
+	version.SetCurrent("dev")
+	k8s.ForceInCluster = true
+	t.Cleanup(func() {
+		version.SetCurrent(previousVersion)
+		k8s.ForceInCluster = false
+	})
+
+	body := fmt.Sprintf(`{"reportDay":%q}`, time.Now().UTC().Format("2006-01-02"))
+	response := httptest.NewRecorder()
+	(&Server{}).handleVersionCheckBrowser(
+		response,
+		httptest.NewRequest(http.MethodPost, "/api/version-check/browser", strings.NewReader(body)),
+	)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
+func TestVersionCheckBrowserRejectsOtherDeploymentModes(t *testing.T) {
+	t.Setenv("RADAR_CLOUD_MODE", "true")
+	response := httptest.NewRecorder()
+	(&Server{}).handleVersionCheckBrowser(
+		response,
+		httptest.NewRequest(http.MethodPost, "/api/version-check/browser", strings.NewReader(`{"reportDay":"2026-08-29"}`)),
+	)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
+func TestVersionCheckBrowserValidatesReportDay(t *testing.T) {
 	k8s.ForceInCluster = true
 	t.Cleanup(func() { k8s.ForceInCluster = false })
-	s := &Server{authConfig: auth.Config{Mode: "proxy"}}
 
-	t.Run("valid", func(t *testing.T) {
-		body := `{"reportDay":"` + time.Now().UTC().Format("2006-01-02") + `","reportId":"c66ce4e8-fb90-4e0e-a2af-2172bb868b9e"}`
-		request := httptest.NewRequest(http.MethodPost, "/api/version-check/browser", strings.NewReader(body))
+	for _, body := range []string{
+		`{"reportDay":"not-a-day"}`,
+		`{"reportDay":"2020-01-01"}`,
+		`{"reportDay":"2026-08-29","extra":true}`,
+		`{"reportDay":"2026-08-29"}{}`,
+	} {
 		response := httptest.NewRecorder()
-		s.handleVersionCheckBrowser(response, request)
-		if response.Code != http.StatusOK {
-			t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
-		}
-	})
-
-	t.Run("invalid uuid", func(t *testing.T) {
-		body := `{"reportDay":"` + time.Now().UTC().Format("2006-01-02") + `","reportId":"not-a-uuid"}`
-		request := httptest.NewRequest(http.MethodPost, "/api/version-check/browser", strings.NewReader(body))
-		response := httptest.NewRecorder()
-		s.handleVersionCheckBrowser(response, request)
+		(&Server{}).handleVersionCheckBrowser(
+			response,
+			httptest.NewRequest(http.MethodPost, "/api/version-check/browser", strings.NewReader(body)),
+		)
 		if response.Code != http.StatusBadRequest {
-			t.Fatalf("status = %d, want 400", response.Code)
+			t.Errorf("body %s: status = %d, response = %s", body, response.Code, response.Body.String())
 		}
-	})
-
-	t.Run("non-v4 uuid", func(t *testing.T) {
-		body := `{"reportDay":"` + time.Now().UTC().Format("2006-01-02") + `","reportId":"00000000-0000-1000-8000-000000000000"}`
-		request := httptest.NewRequest(http.MethodPost, "/api/version-check/browser", strings.NewReader(body))
-		response := httptest.NewRecorder()
-		s.handleVersionCheckBrowser(response, request)
-		if response.Code != http.StatusBadRequest {
-			t.Fatalf("status = %d, want 400", response.Code)
-		}
-	})
-
-	t.Run("outside clock skew window", func(t *testing.T) {
-		body := `{"reportDay":"` + time.Now().UTC().AddDate(0, 0, 2).Format("2006-01-02") + `","reportId":"04af1e12-bf89-47cf-9cc9-f401852af21e"}`
-		request := httptest.NewRequest(http.MethodPost, "/api/version-check/browser", strings.NewReader(body))
-		response := httptest.NewRecorder()
-		s.handleVersionCheckBrowser(response, request)
-		if response.Code != http.StatusBadRequest {
-			t.Fatalf("status = %d, want 400", response.Code)
-		}
-	})
-
-	t.Run("cloud mode excluded", func(t *testing.T) {
-		t.Setenv("RADAR_CLOUD_MODE", "true")
-		body := `{"reportDay":"` + time.Now().UTC().Format("2006-01-02") + `","reportId":"89d7b3a3-d907-4e36-aef5-e2257036fc79"}`
-		request := httptest.NewRequest(http.MethodPost, "/api/version-check/browser", strings.NewReader(body))
-		response := httptest.NewRecorder()
-		s.handleVersionCheckBrowser(response, request)
-		if response.Code != http.StatusNotFound {
-			t.Fatalf("status = %d, want 404", response.Code)
-		}
-	})
-}
-
-func TestClaimBrowserReportDeduplicatesAndCapsEachDay(t *testing.T) {
-	s := &Server{}
-	day := time.Now().UTC().Format("2006-01-02")
-	id := "c66ce4e8-fb90-4e0e-a2af-2172bb868b9e"
-
-	first, capped := s.claimBrowserReport(day, id)
-	if !first || capped {
-		t.Fatalf("first claim = (%v, %v), want accepted", first, capped)
-	}
-	first, capped = s.claimBrowserReport(day, id)
-	if first || capped {
-		t.Fatalf("duplicate claim = (%v, %v), want duplicate", first, capped)
-	}
-
-	failedID := "04af1e12-bf89-47cf-9cc9-f401852af21e"
-	s.claimBrowserReport(day, failedID)
-	s.abandonBrowserReport(day, failedID)
-	first, capped = s.claimBrowserReport(day, failedID)
-	if !first || capped {
-		t.Fatalf("abandoned claim = (%v, %v), want retry accepted", first, capped)
-	}
-	s.abandonBrowserReport(day, failedID)
-
-	for i := 1; i < maxBrowserReportsPerDay; i++ {
-		reportID := fmt.Sprintf("00000000-0000-4000-8000-%012d", i)
-		first, capped = s.claimBrowserReport(day, reportID)
-		if !first || capped {
-			t.Fatalf("claim %d was unexpectedly rejected", i)
-		}
-	}
-	first, capped = s.claimBrowserReport(day, "00000000-0000-4000-8000-999999999999")
-	if first || !capped {
-		t.Fatalf("over-cap claim = (%v, %v), want capped", first, capped)
-	}
-}
-
-func TestBrowserReportConcurrencyIsBounded(t *testing.T) {
-	s := &Server{browserReportSlots: make(chan struct{}, maxConcurrentBrowserReports)}
-	for i := 0; i < maxConcurrentBrowserReports; i++ {
-		if _, acquired := s.acquireBrowserReportSlot(); !acquired {
-			t.Fatalf("slot %d was unexpectedly rejected", i)
-		}
-	}
-	if _, acquired := s.acquireBrowserReportSlot(); acquired {
-		t.Fatal("request above the concurrency limit was accepted")
 	}
 }

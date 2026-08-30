@@ -55,9 +55,9 @@ import type {
   PodEnvironmentRevealResponse,
 } from '../types'
 import type { GitOpsOperationResponse } from '../types/gitops'
-import { getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
+import { apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
 import { apiVersionToGroup, pluralToKind } from '../utils/navigation'
-import { claimBrowserUpdateReport, completeBrowserUpdateReport } from './update-report'
+import { claimBrowserUpdateCheck } from './update-report'
 import type { DeploymentMode } from '../types'
 
 // Auto-refresh cadences (ms) — named constants for each polled hook's
@@ -1518,39 +1518,31 @@ export interface VersionInfo {
   error?: string;
 }
 
-interface VersionCheckDependencies {
-  fetch: (path: string, options?: RequestInit) => Promise<VersionInfo>
-  claim: typeof claimBrowserUpdateReport
-  complete: typeof completeBrowserUpdateReport
+interface BrowserUpdateCheckDependencies {
+  claimBrowserCheck: typeof claimBrowserUpdateCheck
+  sendBrowserCheck: (reportDay: string) => Promise<void>
 }
 
-export async function fetchVersionInfo(
-  deploymentMode: DeploymentMode | undefined,
-  dependencies: VersionCheckDependencies = {
-    fetch: fetchJSON,
-    claim: claimBrowserUpdateReport,
-    complete: completeBrowserUpdateReport,
-  },
-) {
-  if (deploymentMode !== 'in-cluster') {
-    return dependencies.fetch('/version-check')
-  }
+export async function sendBrowserUpdateCheck(reportDay: string): Promise<void> {
+  await fetch(apiUrl('/version-check/browser'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    credentials: getCredentialsMode(),
+    keepalive: true,
+    body: JSON.stringify({ reportDay }),
+  })
+}
 
-  const report = await dependencies.claim()
-  if (!report) {
-    return dependencies.fetch('/version-check/release')
-  }
-  try {
-    const info = await dependencies.fetch('/version-check/browser', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(report),
-    })
-    dependencies.complete(report)
-    return info
-  } catch {
-    return dependencies.fetch('/version-check/release')
-  }
+export function reportBrowserUpdateCheck(
+  deploymentMode: DeploymentMode | undefined,
+  dependencies: BrowserUpdateCheckDependencies = {
+    claimBrowserCheck: claimBrowserUpdateCheck,
+    sendBrowserCheck: sendBrowserUpdateCheck,
+  },
+): void {
+  if (deploymentMode !== 'in-cluster') return
+  const reportDay = dependencies.claimBrowserCheck()
+  if (reportDay) void dependencies.sendBrowserCheck(reportDay).catch(() => {})
 }
 
 export function useVersionCheck() {
@@ -1559,10 +1551,13 @@ export function useVersionCheck() {
     ? (capabilities.data.deployment?.mode ?? 'local')
     : undefined
 
+  useEffect(() => {
+    reportBrowserUpdateCheck(deploymentMode)
+  }, [deploymentMode])
+
   return useQuery<VersionInfo>({
-    queryKey: ["version-check", deploymentMode],
-    queryFn: () => fetchVersionInfo(deploymentMode),
-    enabled: deploymentMode !== undefined && deploymentMode !== 'cloud',
+    queryKey: ["version-check"],
+    queryFn: () => fetchJSON('/version-check'),
     staleTime: 60 * 60 * 1000, // 1 hour
     retry: false, // Don't retry on failure
   });
