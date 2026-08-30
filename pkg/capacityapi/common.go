@@ -72,7 +72,6 @@ func NewUsageObservation(asOf time.Time) UsageObservation {
 	}
 }
 
-
 type Confidence string
 
 const (

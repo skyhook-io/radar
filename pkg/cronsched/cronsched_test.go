@@ -20,8 +20,8 @@ func TestMinInterval(t *testing.T) {
 		{"0 0 1 */4 *", true, 100 * day}, // quarterly (every 4th month) — gap ~4 months
 		{"0 0 1 1 *", true, 365 * day},   // yearly via numeric month (Jan 1)
 		{"0 0 1 1,7 *", true, 180 * day}, // semi-annual (Jan + Jul) — 6-month gap
-		{"0 0 ? * *", true, day},          // daily via Quartz '?' for day-of-month
-		{"0 0 * * ?", true, day},          // daily via Quartz '?' for day-of-week
+		{"0 0 ? * *", true, day},         // daily via Quartz '?' for day-of-month
+		{"0 0 * * ?", true, day},         // daily via Quartz '?' for day-of-week
 		{"@daily", true, day},            //
 		{"@weekly", true, 7 * day},       //
 		{"@yearly", true, 365 * day},     //
@@ -87,11 +87,11 @@ func TestStaleThreshold(t *testing.T) {
 		schedule string
 		want     time.Duration
 	}{
-		{"*/5 * * * *", day},               // intra-day → floored at 24h
-		{"0 * * * *", day},                 // hourly → floored at 24h
-		{"0 0 * * *", 36 * time.Hour},      // daily → 24h + 50% grace
+		{"*/5 * * * *", day},                // intra-day → floored at 24h
+		{"0 * * * *", day},                  // hourly → floored at 24h
+		{"0 0 * * *", 36 * time.Hour},       // daily → 24h + 50% grace
 		{"0 0 * * 1", 7*day + 84*time.Hour}, // weekly → 7d + 50% grace
-		{"unparseable", day},               // fallback → flat 24h
+		{"unparseable", day},                // fallback → flat 24h
 	}
 	for _, c := range cases {
 		if got := StaleThreshold(c.schedule); got != c.want {

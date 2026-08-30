@@ -19,9 +19,9 @@ func obj(labels, ann map[string]string) *unstructured.Unstructured {
 
 func TestManagedByFromMeta(t *testing.T) {
 	cases := []struct {
-		name   string
-		obj    *unstructured.Unstructured
-		want   string
+		name string
+		obj  *unstructured.Unstructured
+		want string
 	}{
 		{"argo label", obj(map[string]string{"argocd.argoproj.io/instance": "app"}, nil), "Argo CD"},
 		{"argo annotation", obj(nil, map[string]string{"argocd.argoproj.io/tracking-id": "app:apps/Deployment"}), "Argo CD"},

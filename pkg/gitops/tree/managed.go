@@ -12,7 +12,7 @@ import (
 // Modern Argo (default since Argo CD 2.x) stamps every managed resource with
 // the tracking-id annotation. The value format is:
 //
-//   <app-name>:<group>/<kind>:<namespace>/<name>
+//	<app-name>:<group>/<kind>:<namespace>/<name>
 //
 // Legacy Argo configurations (operator opt-in via the
 // `--application-instance-name` controller flag, or older deployments) use a

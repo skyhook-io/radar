@@ -187,4 +187,3 @@ func GetSecretCertificateInfo(provider ResourceProvider, namespace, name string)
 
 	return nil, fmt.Errorf("secret %s/%s not found", namespace, name)
 }
-

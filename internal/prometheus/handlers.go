@@ -137,15 +137,15 @@ func parseTimeRange(rangeStr string) (start, end time.Time, step time.Duration) 
 
 // ResourceMetricsResponse is the response shape for resource metrics.
 type ResourceMetricsResponse struct {
-	Kind      string         `json:"kind"`
-	Namespace string         `json:"namespace,omitempty"`
-	Name      string         `json:"name"`
+	Kind      string              `json:"kind"`
+	Namespace string              `json:"namespace,omitempty"`
+	Name      string              `json:"name"`
 	Category  prom.MetricCategory `json:"category"`
-	Unit      string         `json:"unit"`
-	Range     string         `json:"range"`
+	Unit      string              `json:"unit"`
+	Range     string              `json:"range"`
 	Result    *prom.QueryResult   `json:"result"`
-	Query     string         `json:"query,omitempty"` // PromQL query used (included when result is empty for diagnostics)
-	Hint      string         `json:"hint,omitempty"`  // Contextual hint when results are empty (e.g. cri-docker label issues)
+	Query     string              `json:"query,omitempty"` // PromQL query used (included when result is empty for diagnostics)
+	Hint      string              `json:"hint,omitempty"`  // Contextual hint when results are empty (e.g. cri-docker label issues)
 }
 
 // handleResourceMetrics returns Prometheus metrics for a specific resource.
@@ -306,10 +306,10 @@ func handleClusterScopedResourceMetrics(w http.ResponseWriter, r *http.Request) 
 
 // NamespaceMetricsResponse is the response shape for namespace-level metrics.
 type NamespaceMetricsResponse struct {
-	Namespace string         `json:"namespace"`
+	Namespace string              `json:"namespace"`
 	Category  prom.MetricCategory `json:"category"`
-	Unit      string         `json:"unit"`
-	Range     string         `json:"range"`
+	Unit      string              `json:"unit"`
+	Range     string              `json:"range"`
 	Result    *prom.QueryResult   `json:"result"`
 }
 
@@ -360,8 +360,8 @@ func handleNamespaceMetrics(w http.ResponseWriter, r *http.Request) {
 // ClusterMetricsResponse is the response shape for cluster-level metrics.
 type ClusterMetricsResponse struct {
 	Category prom.MetricCategory `json:"category"`
-	Unit     string         `json:"unit"`
-	Range    string         `json:"range"`
+	Unit     string              `json:"unit"`
+	Range    string              `json:"range"`
 	Result   *prom.QueryResult   `json:"result"`
 }
 
@@ -449,7 +449,7 @@ func handleRawQuery(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-// retryWithoutContainerFilter re-runs the query without the container!='' filter
+// retryWithoutContainerFilter re-runs the query without the container!=” filter
 // when the primary result is empty and the category uses that filter. This handles
 // cri-docker and other setups where cAdvisor metrics lack the container label.
 // Returns the updated result (original or fallback) and the query that produced it.

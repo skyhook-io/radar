@@ -87,8 +87,8 @@ func TestMapArgoHealth(t *testing.T) {
 		// real signal (degraded), not as the same bucket as Unknown.
 		"Missing": HealthDegraded,
 		"Unknown": HealthUnknown,
-		"":       HealthUnknown,
-		"Bogus":  HealthUnknown,
+		"":        HealthUnknown,
+		"Bogus":   HealthUnknown,
 	}
 	for in, want := range cases {
 		if got := mapArgoHealth(in); got != want {
