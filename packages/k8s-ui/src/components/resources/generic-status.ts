@@ -96,7 +96,14 @@ export function getGenericResourceStatus(resource: any): GenericStatus | null {
   // by its own reader, because the rungs below would answer it wrongly: they
   // take a positive condition before a negative one, and a policy that is
   // `Accepted=True, Programmed=False` has been taken up and then failed.
-  if (hasGatewayPolicyStatus(resource)) return getGatewayPolicyStatus(resource)
+  // Returns null when the ancestors say nothing, so a policy that also
+  // publishes top-level conditions still gets read — GCPBackendPolicy declares
+  // both, and suppressing its conditions would hide a Ready=False behind an
+  // empty ancestor list.
+  if (hasGatewayPolicyStatus(resource)) {
+    const policy = getGatewayPolicyStatus(resource)
+    if (policy) return policy
+  }
 
   const phase = typeof status.phase === 'string' ? status.phase.trim() : ''
   if (phase) {

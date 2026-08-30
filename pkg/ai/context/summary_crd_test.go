@@ -199,8 +199,11 @@ func TestSummary_FluxHelmRelease(t *testing.T) {
 	}
 }
 
-// Mirrors gateway-policy-status.test.ts. The two implementations feed the same
-// UI and the same MCP answers, so they have to agree on these cases.
+// Mirrors gateway-policy-status.test.ts. The two implementations feed the UI
+// and the MCP answers respectively, so they have to agree about every case a
+// controller actually produces. The one deliberate difference is the
+// reason-less fallback spelling ("NotAccepted" here, "Not Accepted" there) —
+// see policyProblem.
 func TestGatewayPolicyStatus(t *testing.T) {
 	cond := func(t, s, reason string) map[string]any {
 		c := map[string]any{"type": t, "status": s}
@@ -261,7 +264,26 @@ func TestGatewayPolicyStatus(t *testing.T) {
 		// Accepted=False reads as NotAccepted; Warning=True means there IS a
 		// warning, so the same construction would invert it.
 		{"reason-less warning keeps its own name", policy(anc(cond("Accepted", "True", ""), cond("Warning", "True", ""))), "Warning", true},
-		{"attaches to nothing", policy(), "NoAncestors", true},
+		// Not a verdict: a dual-shape policy falls back to its top-level
+		// conditions, and one with nothing else renders as absent.
+		{"attaches to nothing", policy(), "", false},
+		// GKE reports attachment with its own condition; BackendTLSPolicy
+		// requires ResolvedRefs as well as Accepted.
+		{"Attached=False is a failure", policy(anc(cond("Accepted", "True", ""), cond("Attached", "False", "InvalidTarget"))), "InvalidTarget", true},
+		{"ResolvedRefs=False is a failure", policy(anc(cond("Accepted", "True", ""), cond("ResolvedRefs", "False", "InvalidCACertificateRef"))), "InvalidCACertificateRef", true},
+		// GEP-713 lists Reconciling as a legitimate in-flight state.
+		{"Reconciling is in-flight, not failed", policy(anc(cond("Accepted", "True", ""), cond("Programmed", "False", "Reconciling"))), "Reconciling", true},
+		{"partially applied is not success", policy(anc(cond("Accepted", "True", ""), cond("Programmed", "True", "PartiallyProgrammed"))), "PartiallyProgrammed", true},
+		// Reporting the first reason with a count claims they all failed that way.
+		{"mixed failure reasons report a count", policy(
+			anc(cond("Accepted", "False", "NotAllowed")),
+			anc(cond("Accepted", "False", "ResourceNotFound")),
+			anc(cond("Accepted", "True", "")),
+		), "2/3 failed", true},
+		{"matching failure reasons keep the reason", policy(
+			anc(cond("Accepted", "False", "NotAllowed")),
+			anc(cond("Accepted", "False", "NotAllowed")),
+		), "NotAllowed (2/2)", true},
 		{"not a policy", &unstructured.Unstructured{Object: map[string]any{"status": map[string]any{"conditions": []any{}}}}, "", false},
 	}
 

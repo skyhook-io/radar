@@ -495,8 +495,10 @@ func gatewayPolicyStatus(obj *unstructured.Unstructured) (string, bool) {
 	if !ok {
 		return "", false
 	}
+	// Not a verdict: a policy that also publishes top-level conditions is left
+	// to those, and one that says nothing at all is left to render as absent.
 	if len(ancestors) == 0 {
-		return "NoAncestors", true
+		return "", false
 	}
 
 	failed, degraded, accepted := 0, 0, 0
@@ -504,6 +506,9 @@ func gatewayPolicyStatus(obj *unstructured.Unstructured) (string, bool) {
 	// failure on the second would otherwise report the warning's text with the
 	// failure's count, reading as though the warning was the failure.
 	failure, warning := "", ""
+	// Ancestors can fail for different reasons; reporting the first with a count
+	// would claim they all failed that way.
+	failureReasons := map[string]struct{}{}
 
 	for _, a := range ancestors {
 		aMap, ok := a.(map[string]any)
@@ -522,14 +527,26 @@ func gatewayPolicyStatus(obj *unstructured.Unstructured) (string, bool) {
 			}
 			condType, _ := cond["type"].(string)
 			condStatus, _ := cond["status"].(string)
+			reason, _ := cond["reason"].(string)
 			switch {
-			case (condType == "Accepted" || condType == "Programmed") && condStatus == "False":
-				if broke == "" {
+			case isPolicyEffectCondition(condType) && condStatus == "False":
+				// A controller still converging is not a failure: GEP-713 lists
+				// Reconciling as a legitimate state on the way to applied.
+				if policyTransientReasons[reason] {
+					if warned == "" {
+						warned = reason
+					}
+				} else if broke == "" {
 					broke = policyProblem(cond, condType, false)
 				}
 			case (condType == "Degraded" || condType == "Warning") && condStatus == "True":
 				if warned == "" {
 					warned = policyProblem(cond, condType, true)
+				}
+			case isPolicyEffectCondition(condType) && condStatus == "True" && policyQualifiedReasons[reason]:
+				// Partially applied is not applied.
+				if warned == "" {
+					warned = reason
 				}
 			case condType == "Accepted" && condStatus == "True":
 				hasAccepted = true
@@ -542,6 +559,7 @@ func gatewayPolicyStatus(obj *unstructured.Unstructured) (string, bool) {
 			if failure == "" {
 				failure = broke
 			}
+			failureReasons[broke] = struct{}{}
 		case warned != "":
 			degraded++
 			if warning == "" {
@@ -562,6 +580,9 @@ func gatewayPolicyStatus(obj *unstructured.Unstructured) (string, bool) {
 
 	switch {
 	case failed > 0:
+		if len(failureReasons) > 1 {
+			return fmt.Sprintf("%d/%d failed", failed, total), true
+		}
 		return failure + scope(failed), true
 	case degraded > 0:
 		return warning + scope(degraded), true
@@ -572,8 +593,36 @@ func gatewayPolicyStatus(obj *unstructured.Unstructured) (string, bool) {
 	}
 }
 
+// Conditions that describe whether the policy took effect. Accepted is
+// GEP-713's own verdict; Programmed and ResolvedRefs are how Gateway API and
+// its implementations report that a policy the controller took on could not be
+// applied, and Attached is GKE's equivalent.
+func isPolicyEffectCondition(t string) bool {
+	switch t {
+	case "Accepted", "Attached", "Programmed", "ResolvedRefs":
+		return true
+	}
+	return false
+}
+
+// Reasons that mean not-settled-yet rather than failed.
+var policyTransientReasons = map[string]bool{
+	"Reconciling": true, "Pending": true, "Progressing": true, "Unknown": true,
+}
+
+// A True condition can still be qualified: partial application is not success.
+var policyQualifiedReasons = map[string]bool{
+	"PartiallyProgrammed": true, "PartiallyValid": true, "Partial": true,
+}
+
 // policyProblem prefers the controller's reason, which names the actual
 // failure (ResourceNotFound, Conflicted, NotAllowed) where the type does not.
+//
+// The reason-less fallback reads "NotAccepted" here and "Not Accepted" in the
+// TypeScript reader. That is deliberate rather than drift: this file's other
+// summarizers already use the unspaced form for MCP output, while the UI spells
+// it for a human to read. Every case where a controller supplied a reason —
+// which is nearly all of them — is identical in both.
 //
 // The fallback follows the condition's polarity: Accepted=False reads as
 // NotAccepted, but Warning=True means there *is* a warning and the same

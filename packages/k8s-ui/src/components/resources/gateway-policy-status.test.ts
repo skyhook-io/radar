@@ -105,11 +105,10 @@ describe('aggregating across ancestors', () => {
 })
 
 describe('shapes that are not a verdict', () => {
-  // The controller published a PolicyStatus saying this policy applies to
-  // nothing. "Not attached" and "not reconciled yet" are indistinguishable
-  // here, so this reports the fact without claiming health either way.
-  it('says so when the policy attaches to nothing', () => {
-    expect(getGatewayPolicyStatus(policy())).toMatchObject({ text: 'No ancestors', tone: 'unknown' })
+  // Yields nothing rather than a verdict, so a policy that also publishes
+  // top-level conditions still gets read from those.
+  it('declines to judge a policy that attaches to nothing', () => {
+    expect(getGatewayPolicyStatus(policy())).toBeNull()
   })
 
   it('ignores malformed ancestors rather than throwing', () => {
@@ -140,3 +139,64 @@ describe('wiring into the generic ladder', () => {
     expect(getGenericResourceStatus({ status: { phase: 'Running' } })).toMatchObject({ text: 'Running', tone: 'healthy' })
   })
 })
+
+describe('condition vocabulary beyond Accepted', () => {
+  // GKE reports attachment with its own condition; Gateway API's
+  // BackendTLSPolicy requires ResolvedRefs as well as Accepted.
+  it.each([
+    ['Attached', 'InvalidTarget'],
+    ['ResolvedRefs', 'InvalidCACertificateRef'],
+    ['Programmed', 'ResourceNotFound'],
+  ])('treats %s=False as a failure', (type, reason) => {
+    const p = policy(anc(cond('Accepted', 'True'), cond(type, 'False', reason)))
+    expect(getGatewayPolicyStatus(p)).toMatchObject({ text: reason, tone: 'unhealthy' })
+  })
+
+  // GEP-713 lists Reconciling as a legitimate state on the way to being
+  // applied. Painting ordinary convergence red teaches operators to ignore red.
+  it.each(['Reconciling', 'Pending', 'Progressing'])('treats %s as in-flight, not failed', reason => {
+    const p = policy(anc(cond('Accepted', 'True'), cond('Programmed', 'False', reason)))
+    expect(getGatewayPolicyStatus(p)).toMatchObject({ text: reason, tone: 'degraded' })
+  })
+
+  it('does not read a partially applied policy as success', () => {
+    const p = policy(anc(cond('Accepted', 'True'), cond('Programmed', 'True', 'PartiallyProgrammed')))
+    expect(getGatewayPolicyStatus(p)).toMatchObject({ text: 'PartiallyProgrammed', tone: 'degraded' })
+  })
+
+  // Reporting the first reason with a count claims every ancestor failed that
+  // way. When they differ, say how many failed instead of guessing why.
+  it('does not attribute one ancestor\'s reason to another', () => {
+    const p = policy(
+      anc(cond('Accepted', 'False', 'NotAllowed')),
+      anc(cond('Accepted', 'False', 'ResourceNotFound')),
+      anc(cond('Accepted', 'True')),
+    )
+    expect(getGatewayPolicyStatus(p)).toMatchObject({ text: '2/3 failed', tone: 'unhealthy' })
+  })
+
+  it('keeps the reason when every failure agrees', () => {
+    const p = policy(anc(cond('Accepted', 'False', 'NotAllowed')), anc(cond('Accepted', 'False', 'NotAllowed')))
+    expect(getGatewayPolicyStatus(p)).toMatchObject({ text: 'NotAllowed (2/2)', tone: 'unhealthy' })
+  })
+})
+
+describe('policies that also publish top-level conditions', () => {
+  // GCPBackendPolicy declares both status.ancestors and status.conditions.
+  // Dispatching on the shape alone suppressed the conditions entirely.
+  it('falls back to top-level conditions when the ancestors say nothing', () => {
+    const dual = { status: { ancestors: [], conditions: [{ type: 'Ready', status: 'False', reason: 'Invalid' }] } }
+    expect(getGenericResourceStatus(dual)).toMatchObject({ text: 'Invalid', tone: 'unhealthy' })
+  })
+
+  it('still prefers a verdict the ancestors did give', () => {
+    const dual = {
+      status: {
+        ancestors: [{ conditions: [cond('Accepted', 'False', 'NotAllowed')] }],
+        conditions: [{ type: 'Ready', status: 'True' }],
+      },
+    }
+    expect(getGenericResourceStatus(dual)).toMatchObject({ text: 'NotAllowed', tone: 'unhealthy' })
+  })
+})
+

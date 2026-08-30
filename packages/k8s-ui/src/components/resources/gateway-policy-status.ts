@@ -19,8 +19,24 @@ import type { GenericStatus } from './generic-status'
  * positives-first, that object is healthy; it is not.
  */
 
-/** Conditions that describe whether the policy took effect. */
-const EFFECT_CONDITIONS = ['Accepted', 'Programmed'] as const
+/**
+ * Conditions that describe whether the policy took effect. `Accepted` is
+ * GEP-713's own verdict; `Programmed` and `ResolvedRefs` are how Gateway API
+ * and its implementations report that a policy the controller took on could
+ * not actually be applied, and `Attached` is GKE's equivalent.
+ */
+const EFFECT_CONDITIONS = ['Accepted', 'Attached', 'Programmed', 'ResolvedRefs'] as const
+
+/**
+ * Reasons that mean "not settled yet" rather than "failed". GEP-713 lists
+ * Reconciling as a legitimate state for a policy on its way to being applied,
+ * and rendering ordinary convergence as a red failure would train operators to
+ * ignore the colour.
+ */
+const TRANSIENT_REASONS = new Set(['Reconciling', 'Pending', 'Progressing', 'Unknown'])
+
+/** A True condition can still be qualified: partial application is not success. */
+const QUALIFIED_SUCCESS_REASONS = new Set(['PartiallyProgrammed', 'PartiallyValid', 'Partial'])
 
 /** Conditions that mean trouble when True, mirroring the generic ladder's set. */
 const NEGATIVE_CONDITIONS = new Set(['Degraded', 'Warning'])
@@ -36,6 +52,10 @@ function conditionsOf(ancestor: any): any[] {
  * The fallback has to follow the condition's polarity. `Accepted=False` reads
  * as "Not Accepted", but `Warning=True` means there *is* a warning, so the same
  * construction would render "Not Warning" and inverts the meaning.
+ *
+ * Spelled with a space where the Go reader behind MCP writes "NotAccepted",
+ * matching each side's existing convention. Only the reason-less case differs;
+ * whenever a controller supplies a reason the two are identical.
  */
 function problemText(cond: any, trueMeansTrouble = false): string {
   const reason = typeof cond?.reason === 'string' ? cond.reason.trim() : ''
@@ -61,10 +81,11 @@ export function getGatewayPolicyStatus(resource: any): GenericStatus | null {
   const ancestors = resource?.status?.ancestors
   if (!Array.isArray(ancestors)) return null
 
-  // Distinct from an unset status: the controller published a PolicyStatus and
-  // said this policy applies to nothing. Reported as text without a health
-  // claim, because "not attached" and "not reconciled yet" look identical here.
-  if (ancestors.length === 0) return { text: 'No ancestors', tone: 'unknown' }
+  // Null rather than a verdict, so the caller can fall back to any top-level
+  // conditions the object also carries. A policy that attaches to nothing and
+  // says nothing else is left to render as absent, because "not attached" and
+  // "not reconciled yet" are indistinguishable from here.
+  if (ancestors.length === 0) return null
 
   let failed = 0
   let degraded = 0
@@ -75,6 +96,9 @@ export function getGatewayPolicyStatus(resource: any): GenericStatus | null {
   // failure.
   let failure: { text: string; reason?: string } | null = null
   let warning: { text: string; reason?: string } | null = null
+  // Ancestors can fail for different reasons. Reporting the first one with a
+  // count claims they all failed that way.
+  const failureReasons = new Set<string>()
 
   for (const ancestor of ancestors) {
     const conditions = conditionsOf(ancestor)
@@ -83,8 +107,16 @@ export function getGatewayPolicyStatus(resource: any): GenericStatus | null {
       (c: any) => EFFECT_CONDITIONS.includes(c?.type) && c?.status === 'False',
     )
     if (broken) {
+      const reason = typeof broken?.reason === 'string' ? broken.reason.trim() : ''
+      // A controller still working towards the desired state is not a failure.
+      if (TRANSIENT_REASONS.has(reason)) {
+        degraded++
+        warning ??= { text: reason, reason: broken?.message }
+        continue
+      }
       failed++
       failure ??= { text: problemText(broken), reason: broken?.message }
+      failureReasons.add(problemText(broken))
       continue
     }
 
@@ -95,6 +127,18 @@ export function getGatewayPolicyStatus(resource: any): GenericStatus | null {
       continue
     }
 
+    // A qualified success is not success: PartiallyProgrammed means some of the
+    // policy landed and some did not.
+    const qualified = conditions.find(
+      (c: any) => EFFECT_CONDITIONS.includes(c?.type) && c?.status === 'True' &&
+        QUALIFIED_SUCCESS_REASONS.has(typeof c?.reason === 'string' ? c.reason.trim() : ''),
+    )
+    if (qualified) {
+      degraded++
+      warning ??= { text: qualified.reason.trim(), reason: qualified?.message }
+      continue
+    }
+
     if (conditions.some((c: any) => c?.type === 'Accepted' && c?.status === 'True')) accepted++
   }
 
@@ -102,7 +146,8 @@ export function getGatewayPolicyStatus(resource: any): GenericStatus | null {
   const scope = (n: number) => (total > 1 ? ` (${n}/${total})` : '')
 
   if (failed > 0 && failure) {
-    return { text: `${failure.text}${scope(failed)}`, tone: 'unhealthy', reason: failure.reason }
+    const text = failureReasons.size > 1 ? `${failed}/${total} failed` : `${failure.text}${scope(failed)}`
+    return { text, tone: 'unhealthy', reason: failure.reason }
   }
   if (degraded > 0 && warning) {
     return { text: `${warning.text}${scope(degraded)}`, tone: 'degraded', reason: warning.reason }
