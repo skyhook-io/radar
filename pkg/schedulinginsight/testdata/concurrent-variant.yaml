@@ -1,0 +1,29 @@
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: Workload
+metadata:
+  name: training-variant-a10
+  namespace: training
+  ownerReferences:
+    - apiVersion: kueue.x-k8s.io/v1beta2
+      kind: Workload
+      name: training-parent
+      uid: 22222222-2222-2222-2222-222222222222
+      controller: true
+spec:
+  queueName: gpu
+  podSets:
+    - name: workers
+      count: 2
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: trainer
+              image: registry.k8s.io/pause:3.10
+status:
+  conditions:
+    - type: QuotaReserved
+      status: "False"
+      reason: PendingEvaluation
+      message: Workload is pending evaluation
+      lastTransitionTime: "2026-08-30T10:00:00Z"

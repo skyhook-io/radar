@@ -30,30 +30,31 @@ import "time"
 // emerges that needs deterministic prose, add it as a separate
 // `explain_resource` tool rather than re-introducing it inline here.
 type ResourceContext struct {
-	Tier            ContextTier      `json:"tier"`
-	Owner           *ContextRef      `json:"owner,omitempty"`
-	ManagedBy       []ContextRef     `json:"managedBy,omitempty"`
-	Exposes         []ContextRef     `json:"exposes,omitempty"`
-	SelectedBy      []ContextRef     `json:"selectedBy,omitempty"`
-	ReferencedBy    *ReferencedBy    `json:"referencedBy,omitempty"`
-	Uses            *UsesBlock       `json:"uses,omitempty"`
-	RunsOn          *ContextRef      `json:"runsOn,omitempty"`
-	ScaledBy        []ContextRef     `json:"scaledBy,omitempty"`
-	StatusSummary   *StatusSummary   `json:"statusSummary,omitempty"`
-	PodSummary      *PodSummary      `json:"podSummary,omitempty"`
-	WorkloadSummary *WorkloadSummary `json:"workloadSummary,omitempty"`
-	ServiceSummary  *ServiceSummary  `json:"serviceSummary,omitempty"`
-	IngressSummary  *IngressSummary  `json:"ingressSummary,omitempty"`
-	NodeSummary     *NodeSummary     `json:"nodeSummary,omitempty"`
-	PVCSummary      *PVCSummary      `json:"pvcSummary,omitempty"`
-	JobSummary      *JobSummary      `json:"jobSummary,omitempty"`
-	CronJobSummary  *CronJobSummary  `json:"cronJobSummary,omitempty"`
-	HPASummary      *HPASummary      `json:"hpaSummary,omitempty"`
-	IssueSummary    *IssueSummary    `json:"issueSummary,omitempty"`
-	AuditSummary    *AuditSummary    `json:"auditSummary,omitempty"`
-	PolicySummary   *PolicySummary   `json:"policySummary,omitempty"`
-	AppReferences   *AppReferences   `json:"appReferences,omitempty"`
-	Omitted         []OmittedField   `json:"omitted,omitempty"`
+	Tier            ContextTier        `json:"tier"`
+	Owner           *ContextRef        `json:"owner,omitempty"`
+	ManagedBy       []ContextRef       `json:"managedBy,omitempty"`
+	Exposes         []ContextRef       `json:"exposes,omitempty"`
+	SelectedBy      []ContextRef       `json:"selectedBy,omitempty"`
+	ReferencedBy    *ReferencedBy      `json:"referencedBy,omitempty"`
+	Uses            *UsesBlock         `json:"uses,omitempty"`
+	RunsOn          *ContextRef        `json:"runsOn,omitempty"`
+	ScaledBy        []ContextRef       `json:"scaledBy,omitempty"`
+	StatusSummary   *StatusSummary     `json:"statusSummary,omitempty"`
+	Scheduling      *SchedulingSummary `json:"scheduling,omitempty"`
+	PodSummary      *PodSummary        `json:"podSummary,omitempty"`
+	WorkloadSummary *WorkloadSummary   `json:"workloadSummary,omitempty"`
+	ServiceSummary  *ServiceSummary    `json:"serviceSummary,omitempty"`
+	IngressSummary  *IngressSummary    `json:"ingressSummary,omitempty"`
+	NodeSummary     *NodeSummary       `json:"nodeSummary,omitempty"`
+	PVCSummary      *PVCSummary        `json:"pvcSummary,omitempty"`
+	JobSummary      *JobSummary        `json:"jobSummary,omitempty"`
+	CronJobSummary  *CronJobSummary    `json:"cronJobSummary,omitempty"`
+	HPASummary      *HPASummary        `json:"hpaSummary,omitempty"`
+	IssueSummary    *IssueSummary      `json:"issueSummary,omitempty"`
+	AuditSummary    *AuditSummary      `json:"auditSummary,omitempty"`
+	PolicySummary   *PolicySummary     `json:"policySummary,omitempty"`
+	AppReferences   *AppReferences     `json:"appReferences,omitempty"`
+	Omitted         []OmittedField     `json:"omitted,omitempty"`
 }
 
 // ContextTier signals how much enrichment is included. "basic" is the
@@ -199,6 +200,73 @@ type ConditionSummary struct {
 	Reason             string `json:"reason,omitempty"`
 	Message            string `json:"message,omitempty"`
 	LastTransitionTime string `json:"lastTransitionTime,omitempty"`
+}
+
+// SchedulingSummary is the compact, controller-neutral admission projection
+// shared by REST and MCP resource detail. Controller-native quota math and the
+// full condition history stay on the resource itself.
+type SchedulingSummary struct {
+	Controller               string                     `json:"controller"`
+	Stage                    SchedulingStage            `json:"stage"`
+	Queue                    *ContextRef                `json:"queue,omitempty"`
+	ClusterQueue             *ContextRef                `json:"clusterQueue,omitempty"`
+	Blocker                  *SchedulingBlocker         `json:"blocker,omitempty"`
+	AdmissionChecks          []SchedulingAdmissionCheck `json:"admissionChecks,omitempty"`
+	AdmissionChecksTruncated bool                       `json:"admissionChecksTruncated,omitempty"`
+	Flavors                  []ContextRef               `json:"flavors,omitempty"`
+	FlavorsTruncated         bool                       `json:"flavorsTruncated,omitempty"`
+	ParentWorkload           *ContextRef                `json:"parentWorkload,omitempty"`
+	Variant                  bool                       `json:"variant,omitempty"`
+	Requeue                  *SchedulingRequeue         `json:"requeue,omitempty"`
+}
+
+type SchedulingStage string
+
+const (
+	SchedulingSubmitted     SchedulingStage = "submitted"
+	SchedulingWaiting       SchedulingStage = "waiting"
+	SchedulingReserved      SchedulingStage = "reserved"
+	SchedulingExternalCheck SchedulingStage = "external_check"
+	SchedulingAdmitted      SchedulingStage = "admitted"
+	SchedulingRunning       SchedulingStage = "running"
+	SchedulingFinished      SchedulingStage = "finished"
+	SchedulingFailed        SchedulingStage = "failed"
+	SchedulingEvicted       SchedulingStage = "evicted"
+	SchedulingPreempted     SchedulingStage = "preempted"
+	SchedulingRequeued      SchedulingStage = "requeued"
+)
+
+type SchedulingBlocker struct {
+	Condition          string                    `json:"condition"`
+	Status             string                    `json:"status"`
+	Reason             string                    `json:"reason,omitempty"`
+	ReasonPrecision    SchedulingReasonPrecision `json:"reasonPrecision,omitempty"`
+	Message            string                    `json:"message,omitempty"`
+	LastTransitionTime string                    `json:"lastTransitionTime,omitempty"`
+}
+
+// SchedulingReasonPrecision distinguishes controller-native granular
+// unadmitted reasons from deprecated coarse reasons. It never asserts
+// controller feature-gate state.
+type SchedulingReasonPrecision string
+
+const (
+	SchedulingReasonGranular SchedulingReasonPrecision = "granular"
+	SchedulingReasonCoarse   SchedulingReasonPrecision = "coarse"
+)
+
+type SchedulingAdmissionCheck struct {
+	Check               ContextRef `json:"check"`
+	State               string     `json:"state"`
+	Message             string     `json:"message,omitempty"`
+	LastTransitionTime  string     `json:"lastTransitionTime,omitempty"`
+	RequeueAfterSeconds *int64     `json:"requeueAfterSeconds,omitempty"`
+	RetryCount          *int64     `json:"retryCount,omitempty"`
+}
+
+type SchedulingRequeue struct {
+	Count *int64 `json:"count,omitempty"`
+	At    string `json:"at,omitempty"`
 }
 
 type PodSummary struct {

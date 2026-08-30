@@ -61,6 +61,7 @@ type Options struct {
 	// Pre-computed summaries — pass-through into the response.
 	IssueSummary  *IssueSummary
 	AuditSummary  *AuditSummary
+	Scheduling    *SchedulingSummary
 	PolicyReports PolicyReportLookup // nil = Kyverno not installed / no findings
 	AppReferences *AppReferences
 	// Attached only after the evidence Job and Pod pass the access gate.
@@ -317,6 +318,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	}
 	rc.HPASummary = buildHPASummary(obj)
 	rc.StatusSummary = buildStatusSummary(obj)
+	rc.Scheduling = filterSchedulingSummary(ctx, opts.Scheduling, opts.AccessChecker, omitted)
 
 	// 4. Pre-computed summaries — pass-through.
 	rc.IssueSummary = opts.IssueSummary
@@ -1473,6 +1475,41 @@ func filterRefs(ctx context.Context, ac RefAccessChecker, refs []ContextRef, fie
 		return nil
 	}
 	return out
+}
+
+func filterSchedulingSummary(ctx context.Context, summary *SchedulingSummary, ac RefAccessChecker, omitted *omittedTracker) *SchedulingSummary {
+	if summary == nil {
+		return nil
+	}
+	out := *summary
+	if out.Queue != nil && !checkRef(ctx, ac, out.Queue) {
+		out.Queue = nil
+		omitted.add("scheduling.queue", OmittedRBACDenied)
+	}
+	if out.ClusterQueue != nil && !checkRef(ctx, ac, out.ClusterQueue) {
+		out.ClusterQueue = nil
+		omitted.add("scheduling.clusterQueue", OmittedRBACDenied)
+	}
+	if out.ParentWorkload != nil && !checkRef(ctx, ac, out.ParentWorkload) {
+		out.ParentWorkload = nil
+		omitted.add("scheduling.parentWorkload", OmittedRBACDenied)
+	}
+
+	out.Flavors = filterRefs(ctx, ac, out.Flavors, "scheduling.flavors", omitted)
+	checks := make([]SchedulingAdmissionCheck, 0, len(out.AdmissionChecks))
+	deniedCheck := false
+	for _, check := range out.AdmissionChecks {
+		if !checkRef(ctx, ac, &check.Check) {
+			deniedCheck = true
+			continue
+		}
+		checks = append(checks, check)
+	}
+	if deniedCheck {
+		omitted.add("scheduling.admissionChecks", OmittedRBACDenied)
+	}
+	out.AdmissionChecks = checks
+	return &out
 }
 
 func filterAppReferences(ctx context.Context, refs *AppReferences, ac RefAccessChecker, omitted *omittedTracker) *AppReferences {

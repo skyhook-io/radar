@@ -1,0 +1,29 @@
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: Workload
+metadata:
+  name: waiting-for-gpu-quota
+  namespace: training
+  ownerReferences:
+    - apiVersion: batch/v1
+      kind: Job
+      name: trainer
+      uid: 11111111-1111-1111-1111-111111111111
+      controller: true
+spec:
+  queueName: gpu
+  podSets:
+    - name: workers
+      count: 2
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: trainer
+              image: registry.k8s.io/pause:3.10
+status:
+  conditions:
+    - type: QuotaReserved
+      status: "False"
+      reason: WaitingForQuota
+      message: Waiting for quota in ClusterQueue gpu-team
+      lastTransitionTime: "2026-08-30T10:00:00Z"

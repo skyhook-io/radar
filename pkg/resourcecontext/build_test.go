@@ -1403,3 +1403,74 @@ func TestBuild_ContainerCompletionSplit_GatedByAccess(t *testing.T) {
 		}
 	})
 }
+
+func TestBuild_SchedulingSummaryGatesEveryRelatedReference(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "kueue.x-k8s.io/v1beta2",
+		"kind":       "Workload",
+		"metadata": map[string]any{
+			"name":      "trainer",
+			"namespace": "prod",
+		},
+	}}
+	summary := &SchedulingSummary{
+		Controller:   "kueue",
+		Stage:        SchedulingExternalCheck,
+		Queue:        &ContextRef{Kind: "LocalQueue", Group: "kueue.x-k8s.io", Namespace: "prod", Name: "gpu"},
+		ClusterQueue: &ContextRef{Kind: "ClusterQueue", Group: "kueue.x-k8s.io", Name: "gpu-team"},
+		ParentWorkload: &ContextRef{
+			Kind: "Workload", Group: "kueue.x-k8s.io", Namespace: "prod", Name: "parent",
+		},
+		Variant: true,
+		AdmissionChecks: []SchedulingAdmissionCheck{{
+			Check: ContextRef{Kind: "AdmissionCheck", Group: "kueue.x-k8s.io", Name: "capacity"},
+			State: "Rejected",
+		}},
+		Flavors: []ContextRef{{Kind: "ResourceFlavor", Group: "kueue.x-k8s.io", Name: "a10"}},
+	}
+
+	tests := []struct {
+		name      string
+		denied    denyChecker
+		field     string
+		assertNil func(*SchedulingSummary) bool
+	}{
+		{
+			name: "LocalQueue", denied: denyChecker{group: "kueue.x-k8s.io", kind: "LocalQueue", namespace: "prod"},
+			field: "scheduling.queue", assertNil: func(got *SchedulingSummary) bool { return got.Queue == nil },
+		},
+		{
+			name: "ClusterQueue", denied: denyChecker{group: "kueue.x-k8s.io", kind: "ClusterQueue"},
+			field: "scheduling.clusterQueue", assertNil: func(got *SchedulingSummary) bool { return got.ClusterQueue == nil },
+		},
+		{
+			name: "Parent Workload", denied: denyChecker{group: "kueue.x-k8s.io", kind: "Workload", namespace: "prod"},
+			field: "scheduling.parentWorkload", assertNil: func(got *SchedulingSummary) bool { return got.ParentWorkload == nil },
+		},
+		{
+			name: "AdmissionCheck", denied: denyChecker{group: "kueue.x-k8s.io", kind: "AdmissionCheck"},
+			field: "scheduling.admissionChecks", assertNil: func(got *SchedulingSummary) bool { return len(got.AdmissionChecks) == 0 },
+		},
+		{
+			name: "ResourceFlavor", denied: denyChecker{group: "kueue.x-k8s.io", kind: "ResourceFlavor"},
+			field: "scheduling.flavors", assertNil: func(got *SchedulingSummary) bool { return len(got.Flavors) == 0 },
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rc := Build(context.Background(), obj, Options{
+				Tier: TierBasic, AccessChecker: test.denied, Scheduling: summary,
+			})
+			if rc.Scheduling == nil || !test.assertNil(rc.Scheduling) {
+				t.Fatalf("denied reference remained visible: %+v", rc.Scheduling)
+			}
+			if !hasOmitted(rc.Omitted, test.field) {
+				t.Fatalf("missing omitted marker %q: %+v", test.field, rc.Omitted)
+			}
+		})
+	}
+
+	if summary.Queue == nil || len(summary.AdmissionChecks) != 1 || len(summary.Flavors) != 1 {
+		t.Fatalf("Build mutated caller-owned scheduling summary: %+v", summary)
+	}
+}

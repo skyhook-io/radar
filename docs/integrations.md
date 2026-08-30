@@ -1380,6 +1380,17 @@ This is resource reconnaissance, not GPU accounting or end-to-end workload diagn
 | AdmissionCheck | `kueue.x-k8s.io` | `Active` condition |
 | ProvisioningRequest | `autoscaling.x-k8s.io` (v1, v1beta1) | Provisioned / Failed / CapacityRevoked / BookingExpired conditions |
 
+For an exact `kueue.x-k8s.io/v1beta2` Workload, the REST AI resource endpoint
+and MCP `get_resource` also project a bounded admission summary into
+`resourceContext.scheduling`: current stage, the controller's primary
+condition/reason, LocalQueue and ClusterQueue, AdmissionChecks, assigned
+ResourceFlavors, requeue state, and documented concurrent-admission
+Parent/Variant ownership. Waiting is context rather than an Issue. Deprecated
+coarse Kueue reasons are labeled `reasonPrecision: coarse`; Radar does not
+infer the controller's feature-gate state or pending queue position. The block
+is a projection of that returned Workload's status snapshot, not a claim of
+queue-wide observation coverage.
+
 ### KubeRay
 
 | Resource | Group | Status source |
