@@ -362,14 +362,63 @@ func TestPodFileStreamCloseSurfacesACommandThatFailedLate(t *testing.T) {
 	}
 }
 
-// Abandoning the download must not wait for the rest of the file to come
-// across, and must not leave the exec running.
+// Abandoning the download must return at once rather than pulling the rest of
+// the file across first, and must not claim the file arrived.
 func TestPodFileStreamCloseWithoutReadingDoesNotHang(t *testing.T) {
 	payload := bytes.Repeat([]byte("x"), 1<<20)
 	stream := fakeExec(t, tarArchive(t, "app.log", payload, -1), nil)
 
-	if err := closeWithin(t, stream, 5*time.Second); err == nil {
-		t.Error("an abandoned transfer should not report success")
+	closeWithin(t, stream, 5*time.Second)
+	if stream.complete {
+		t.Error("an abandoned transfer must not be marked complete")
+	}
+	if stream.written >= int64(len(payload)) {
+		t.Errorf("Close drained %d bytes of an abandoned transfer, want it to stop early", stream.written)
+	}
+}
+
+// When no archive arrived, the command's own status is the only thing that can
+// tell a missing file from an unreadable one. Tearing the exec down before it
+// reports replaces that with "context canceled" and the reason is gone.
+func TestPodFileStreamClosePreservesWhyTheCommandFailed(t *testing.T) {
+	commandErr := errors.New("command terminated with exit code 2")
+	stream := failedExec(t, commandErr)
+
+	err := closeWithin(t, stream, 5*time.Second)
+	if errors.Is(err, context.Canceled) {
+		t.Fatal("cancellation raced away the command's status")
+	}
+	if !errors.Is(err, commandErr) {
+		t.Errorf("Close() = %v, want the command's own error", err)
+	}
+}
+
+// failedExec stands in for a command that wrote no archive and exited with a
+// status the handler needs in order to classify the failure.
+func failedExec(t *testing.T, commandErr error) *podFileStream {
+	t.Helper()
+	stdoutR, stdoutW := io.Pipe()
+	stdinR, stdinW := io.Pipe()
+	done := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go func() {
+		// A real exec only reports once its streams are released, so the status
+		// lands after the reader has given up on the archive.
+		<-ctx.Done()
+		_ = stdoutW.CloseWithError(commandErr)
+		done <- commandErr
+	}()
+	// Releasing on pipe close is what the fixed Close relies on; the context
+	// here only models "the exec goroutine is still holding the streams".
+	go func() {
+		_, _ = io.Copy(io.Discard, stdinR)
+		cancel()
+	}()
+
+	return &podFileStream{
+		size: -1, payload: stdoutR, stdout: stdoutR, stdin: stdinW,
+		stderr: &bytes.Buffer{}, done: done, cancel: cancel,
 	}
 }
 

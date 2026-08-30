@@ -416,6 +416,11 @@ type podFileStream struct {
 // connection loose costs nothing and keeps the handler from being pinned to it.
 const podFileCloseGrace = 30 * time.Second
 
+// podFileAbortGrace bounds the same wait when the file never arrived. A command
+// that failed has already exited, so its status is normally there at once; the
+// bound only covers a connection that has stopped answering.
+const podFileAbortGrace = 5 * time.Second
+
 // startPodFileExec runs cmd in the container and hands back a stream whose
 // payload the caller frames. The command must keep stdin open per
 // podFileDrainGuard.
@@ -568,6 +573,12 @@ func classifyPodFileOpenError(filePath string, readErr, streamErr error, stderr 
 	if streamErr == nil {
 		streamErr = readErr
 	}
+	if errors.Is(streamErr, context.Canceled) {
+		// Nothing came back to classify. Naming the cancellation would only
+		// hand the reader an internal detail they cannot act on.
+		return &podFileOpenError{err: streamErr, stderr: stderr,
+			message: fmt.Sprintf("The transfer stopped before %s could be read", filePath)}
+	}
 	return &podFileOpenError{
 		err:     streamErr,
 		stderr:  stderr,
@@ -603,9 +614,15 @@ func (p *podFileStream) Close() error {
 			defer grace.Stop()
 			_, _ = io.Copy(io.Discard, p.stdout)
 		} else {
-			p.cancel()
+			// Closing the pipes unblocks the exec goroutine so the command can
+			// still say why it failed. Cancelling ahead of it races that away
+			// and leaves only "context canceled", losing both the exit status
+			// and whatever the command wrote to stderr — which is the whole
+			// basis for telling a missing file from an unreadable one.
 			_ = p.stdin.CloseWithError(errPodFileAborted)
 			_ = p.stdout.CloseWithError(errPodFileAborted)
+			grace := time.AfterFunc(podFileAbortGrace, p.cancel)
+			defer grace.Stop()
 		}
 		p.closeErr = <-p.done
 		p.cancel()
