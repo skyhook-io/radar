@@ -205,7 +205,9 @@ func windowsSafeName(name string) string {
 	if safe == "" {
 		return "download"
 	}
-	if windowsReservedNames[strings.ToLower(strings.TrimSuffix(safe, filepath.Ext(safe)))] {
+	// Windows reserves the name before the FIRST dot, so com1.x.y is still the
+	// serial port. Trimming only the last extension would let it through.
+	if windowsReservedNames[strings.ToLower(strings.SplitN(safe, ".", 2)[0])] {
 		safe = "_" + safe
 	}
 	return safe

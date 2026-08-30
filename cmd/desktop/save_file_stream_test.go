@@ -15,7 +15,7 @@ import (
 
 func TestSaveFileStreamWritesToDownloads(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 
 	a := &DesktopApp{}
 	content := bytes.Repeat([]byte("radar"), 100000)
@@ -38,7 +38,7 @@ func TestSaveFileStreamWritesToDownloads(t *testing.T) {
 
 func TestSaveFileStreamNamesAroundCollisions(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 
 	a := &DesktopApp{}
 	first, err := a.saveFileStream("export.csv", strings.NewReader("one"))
@@ -61,7 +61,7 @@ func TestSaveFileStreamNamesAroundCollisions(t *testing.T) {
 // finished download — the whole point of the partial-file dance.
 func TestSaveFileStreamLeavesNothingBehindOnFailure(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 
 	a := &DesktopApp{}
 	failing := io.MultiReader(strings.NewReader("half a file"), errReader{errors.New("connection lost")})
@@ -82,7 +82,7 @@ func TestSaveFileStreamLeavesNothingBehindOnFailure(t *testing.T) {
 // with O_EXCL rather than tested with Stat first for exactly this case.
 func TestSaveFileStreamConcurrentSavesOfTheSameName(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 
 	const savers = 8
 	a := &DesktopApp{}
@@ -138,7 +138,7 @@ func TestSaveFileStreamConcurrentSavesOfTheSameName(t *testing.T) {
 // A file name is never allowed to steer the write out of the Downloads folder.
 func TestSaveFileStreamKeepsHostileNamesInsideDownloads(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 
 	a := &DesktopApp{}
 	path, err := a.saveFileStream("../../escaped.csv", strings.NewReader("x"))
@@ -160,9 +160,13 @@ func TestWindowsSafeName(t *testing.T) {
 		"CON":                                     "_CON",
 		"con.txt":                                 "_con.txt",
 		"lpt9.log":                                "_lpt9.log",
-		"ordinary.csv":                            "ordinary.csv",
-		":::":                                     "---",
-		"...":                                     "download",
+		// Windows reserves the name before the first dot, not the last.
+		"com1.x.y":     "_com1.x.y",
+		"CON.tar.gz":   "_CON.tar.gz",
+		"console.txt":  "console.txt",
+		"ordinary.csv": "ordinary.csv",
+		":::":          "---",
+		"...":          "download",
 	} {
 		if got := windowsSafeName(name); got != want {
 			t.Errorf("windowsSafeName(%q) = %q, want %q", name, got, want)
@@ -179,6 +183,15 @@ func TestSanitizeDownloadNameKeepsPosixNamesIntact(t *testing.T) {
 	if got := sanitizeDownloadName("data_2026-08-27T10:02:03Z.csv"); got != "data_2026-08-27T10:02:03Z.csv" {
 		t.Errorf("sanitizeDownloadName rewrote a name this host accepts: %q", got)
 	}
+}
+
+// setHome points os.UserHomeDir at dir on every platform: it reads HOME on unix
+// and USERPROFILE on Windows, and setting only one leaves the tests for the
+// Windows-specific naming running against the developer's real home directory.
+func setHome(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
 }
 
 type errReader struct{ err error }
