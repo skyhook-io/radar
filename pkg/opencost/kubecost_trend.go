@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -81,17 +82,17 @@ func ComputeKubecostTrend(ctx context.Context, client *KubecostClient, opts Kube
 			time.Unix(response.WindowStart, 0).UTC().Format(time.RFC3339),
 			time.Unix(response.WindowEnd, 0).UTC().Format(time.RFC3339),
 		)
-		resp, err = client.GetAllocation(ctx, allocationOptions(exactWindow))
-		if err != nil {
-			return nil, fmt.Errorf("%w: %w", ErrKubecostTrendQuery, err)
-		}
-		exactPoints, exactTimestamps, collectErr := collectKubecostTrendPoints(resp, opts.ClusterID, allowed)
-		if collectErr != nil {
-			return nil, collectErr
-		}
-		if len(exactPoints) > 0 {
-			pointsByNamespace = exactPoints
-			timestamps = exactTimestamps
+		exactResp, queryErr := client.GetAllocation(ctx, allocationOptions(exactWindow))
+		if queryErr != nil {
+			log.Printf("[opencost] Kubecost exact-window trend query failed; using retained points (window=%s): %v", exactWindow, queryErr)
+		} else {
+			exactPoints, exactTimestamps, collectErr := collectKubecostTrendPoints(exactResp, opts.ClusterID, allowed)
+			if collectErr != nil {
+				log.Printf("[opencost] Kubecost exact-window trend response was unusable; using retained points (window=%s): %v", exactWindow, collectErr)
+			} else if len(exactPoints) > 0 {
+				pointsByNamespace = exactPoints
+				timestamps = exactTimestamps
+			}
 		}
 		latestTimestamp = latestKubecostTrendTimestamp(timestamps)
 		response.WindowEnd = latestTimestamp

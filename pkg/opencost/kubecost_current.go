@@ -359,8 +359,6 @@ func ComputeKubecostNodes(ctx context.Context, client *KubecostClient, opts Kube
 }
 
 func kubecostAllocationWithFallback(ctx context.Context, client *KubecostClient, opts KubecostAllocationOptions) (*KubecostAllocationResponse, string, error) {
-	var lastErr error
-	sawEmpty := false
 	for _, window := range []string{kubecostCurrentWindow, kubecostFallbackQueryWindow} {
 		opts.Window = window
 		resp, err := client.GetAllocation(ctx, opts)
@@ -368,7 +366,9 @@ func kubecostAllocationWithFallback(ctx context.Context, client *KubecostClient,
 			if ctx.Err() != nil {
 				return nil, window, ctx.Err()
 			}
-			lastErr = err
+			if window == kubecostFallbackQueryWindow {
+				return nil, kubecostFallbackDisplayWindow, err
+			}
 			continue
 		}
 		if hasKubecostAllocationData(resp) {
@@ -377,20 +377,11 @@ func kubecostAllocationWithFallback(ctx context.Context, client *KubecostClient,
 			}
 			return resp, kubecostCurrentWindow, nil
 		}
-		sawEmpty = true
-	}
-	if sawEmpty {
-		return nil, kubecostFallbackDisplayWindow, nil
-	}
-	if lastErr != nil {
-		return nil, kubecostFallbackDisplayWindow, lastErr
 	}
 	return nil, kubecostFallbackDisplayWindow, nil
 }
 
 func kubecostAssetsWithFallback(ctx context.Context, client *KubecostClient, opts KubecostAssetOptions) (*KubecostAssetsResponse, error) {
-	var lastErr error
-	sawEmpty := false
 	for _, window := range []string{kubecostCurrentWindow, kubecostFallbackQueryWindow} {
 		opts.Window = window
 		resp, err := client.GetAssets(ctx, opts)
@@ -398,18 +389,16 @@ func kubecostAssetsWithFallback(ctx context.Context, client *KubecostClient, opt
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			lastErr = err
+			if window == kubecostFallbackQueryWindow {
+				return nil, err
+			}
 			continue
 		}
 		if hasKubecostAssetData(resp) {
 			return resp, nil
 		}
-		sawEmpty = true
 	}
-	if sawEmpty {
-		return nil, nil
-	}
-	return nil, lastErr
+	return nil, nil
 }
 
 func kubecostAllocationRows(resp *KubecostAllocationResponse) map[string]*KubecostAllocation {

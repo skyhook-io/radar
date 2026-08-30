@@ -463,6 +463,28 @@ func TestKubecostAssetsFallbackPrefersSuccessfulEmptyResponse(t *testing.T) {
 	}
 }
 
+func TestKubecostAllocationFallbackReportsDailyFailureAfterHourlyEmpty(t *testing.T) {
+	transport := &fakeKubecostTransport{
+		errors:    []error{nil, errors.New("daily ETL unavailable")},
+		responses: []string{`{"code":200,"data":[null]}`},
+	}
+	_, err := ComputeKubecostSummary(context.Background(), NewKubecostClient(transport), KubecostCurrentOptions{ClusterID: "cluster-a"})
+	if err == nil || !strings.Contains(err.Error(), "daily ETL unavailable") || len(transport.requests) != 2 {
+		t.Fatalf("error=%v requests=%#v, want daily fallback failure", err, transport.requests)
+	}
+}
+
+func TestKubecostAssetsFallbackReportsDailyFailureAfterHourlyEmpty(t *testing.T) {
+	transport := &fakeKubecostTransport{
+		errors:    []error{nil, errors.New("daily ETL unavailable")},
+		responses: []string{`{"code":200,"data":[null]}`},
+	}
+	_, err := ComputeKubecostNodes(context.Background(), NewKubecostClient(transport), KubecostCurrentOptions{ClusterID: "cluster-a"})
+	if err == nil || !strings.Contains(err.Error(), "daily ETL unavailable") || len(transport.requests) != 2 {
+		t.Fatalf("error=%v requests=%#v, want daily fallback failure", err, transport.requests)
+	}
+}
+
 func TestLatestKubecostTimestampComparesInstants(t *testing.T) {
 	current := "2026-08-26T10:00:00+0300"
 	candidate := "2026-08-26T08:30:00Z"

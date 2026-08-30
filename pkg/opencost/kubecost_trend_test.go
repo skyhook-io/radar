@@ -136,6 +136,42 @@ func TestComputeKubecostTrendKeepsKnownPointsWhenExactRequeryIsEmpty(t *testing.
 	}
 }
 
+func TestComputeKubecostTrendKeepsKnownPointsWhenExactRequeryFails(t *testing.T) {
+	initial := `{"code":200,"data":[{"old":{"properties":{"cluster":"cluster-a","namespace":"demo"},"start":"2026-08-29T22:00:00Z","end":"2026-08-29T23:00:00Z","minutes":60,"totalCost":1}},{"latest":{"properties":{"cluster":"cluster-a","namespace":"demo"},"start":"2026-08-30T01:00:00Z","end":"2026-08-30T02:00:00Z","minutes":60,"totalCost":2}}]}`
+	tests := []struct {
+		name      string
+		transport *fakeKubecostTransport
+	}{
+		{
+			name: "query error",
+			transport: &fakeKubecostTransport{
+				errors:    []error{nil, errors.New("exact query unavailable")},
+				responses: []string{initial},
+			},
+		},
+		{
+			name: "malformed response",
+			transport: &fakeKubecostTransport{responses: []string{
+				initial,
+				`{"code":200,"data":[{"row":{"properties":{"cluster":"cluster-a","namespace":"demo"},"start":"2026-08-29T22:00:00Z","end":"not-a-time","minutes":60,"totalCost":1}}]}`,
+			}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response, err := ComputeKubecostTrend(context.Background(), NewKubecostClient(tt.transport), KubecostTrendOptions{
+				Range: "24h", ClusterID: "cluster-a", now: time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !response.Available || len(response.Series) != 1 || len(response.Series[0].DataPoints) != 2 || len(tt.transport.requests) != 2 {
+				t.Fatalf("response = %#v, requests = %#v", response, tt.transport.requests)
+			}
+		})
+	}
+}
+
 func TestComputeKubecostTrendRanksAtLatestGlobalBucketAndAggregatesOther(t *testing.T) {
 	transport := &fakeKubecostTransport{responses: []string{
 		`{"code":200,"data":[{"a":{"properties":{"cluster":"cluster-a","namespace":"a"},"start":"2026-08-29T00:00:00Z","end":"2026-08-29T01:00:00Z","minutes":60,"totalCost":1},"b":{"properties":{"cluster":"cluster-a","namespace":"b"},"start":"2026-08-29T00:00:00Z","end":"2026-08-29T01:00:00Z","minutes":60,"totalCost":2},"c":{"properties":{"cluster":"cluster-a","namespace":"c"},"start":"2026-08-29T00:00:00Z","end":"2026-08-29T01:00:00Z","minutes":60,"totalCost":100}},{"a":{"properties":{"cluster":"cluster-a","namespace":"a"},"start":"2026-08-29T01:00:00Z","end":"2026-08-29T02:00:00Z","minutes":60,"totalCost":10},"b":{"properties":{"cluster":"cluster-a","namespace":"b"},"start":"2026-08-29T01:00:00Z","end":"2026-08-29T02:00:00Z","minutes":60,"totalCost":8}}]}`,
