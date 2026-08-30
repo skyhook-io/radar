@@ -335,9 +335,10 @@ func InitResourceCache(ctx context.Context) error {
 		// others are namespace-scoped to the same fallback namespace).
 		rbacStart := time.Now()
 		rbacCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		// A superseded result is still the right one to wire from: the client
-		// captured above belongs to the same cluster this probe describes, and
-		// the operation that superseded it tears this cache down anyway.
+		// A superseded result is still wired from rather than discarded: this
+		// runs under contextOpMu, so the operation that superseded the probe is
+		// already tearing this cache down, and the ctx.Err() check below drops
+		// out of the boot path that does not hold that lock.
 		permResult, _ := CheckResourcePermissions(rbacCtx)
 		cancel()
 		logTiming("    Resource access probes: %v", time.Since(rbacStart))

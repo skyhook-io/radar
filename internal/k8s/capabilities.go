@@ -960,8 +960,10 @@ func CheckResourcePermissions(ctx context.Context) (*PermissionCheckResult, bool
 		resourcePermsMu.RUnlock()
 		return result, true
 	}
-	// Captured before any probe input is read, so the generation check at
-	// publish time covers every input this result was computed from.
+	// Captured before any probe input is read. The publish check retires this
+	// result if the generation moved since, so every writer must change the
+	// inputs BEFORE bumping — a bump placed first would leave a probe that
+	// starts in between holding the old inputs under the new generation.
 	probeGen := resourcePermsGen
 	resourcePermsMu.RUnlock()
 
@@ -994,7 +996,9 @@ func CheckResourcePermissions(ctx context.Context) (*PermissionCheckResult, bool
 	// change that leaves the clients alone (a namespace rescope); the client
 	// generation catches a client swap regardless of when — or whether — the
 	// caller invalidates, which a context switch performs BEFORE it invalidates.
-	if resourcePermsGen != probeGen || currentClientGeneration() != probeClientGen {
+	staleScope := resourcePermsGen != probeGen
+	staleClient := currentClientGeneration() != probeClientGen
+	if staleScope || staleClient {
 		currentGen := resourcePermsGen
 		resourcePermsMu.Unlock()
 		// The cluster or the namespace scope changed while this probe was in
@@ -1002,7 +1006,14 @@ func CheckResourcePermissions(ctx context.Context) (*PermissionCheckResult, bool
 		// it to the caller — a caller torn down alongside the probe stays
 		// self-consistent with the client it already captured — but leave the
 		// cache to the probe that ran against the current one.
-		log.Printf("[perms] discarding probe result superseded by a cluster or scope change (probe generation %d, current %d)", probeGen, currentGen)
+		switch {
+		case staleScope && staleClient:
+			log.Printf("[perms] discarding probe result: both the cluster and the cache generation moved (cache %d→%d)", probeGen, currentGen)
+		case staleScope:
+			log.Printf("[perms] discarding probe result: the scope changed while it was in flight (cache generation %d→%d)", probeGen, currentGen)
+		default:
+			log.Printf("[perms] discarding probe result: it was probed against a cluster the process has left")
+		}
 		return result, false
 	}
 	cachedPermResult = result

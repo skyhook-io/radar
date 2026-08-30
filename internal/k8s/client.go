@@ -777,9 +777,9 @@ func GetDynamicClientSnapshot() (dynamic.Interface, string) {
 // dynamicClientGeneration returns the dynamic client together with the
 // generation of the client set it belongs to. The generation is published
 // under the same lock as the clients themselves, so a caller that captures
-// both can tell whether the clients were swapped underneath it — including a
-// swap that carries the same context name, such as an in-cluster credential
-// refresh.
+// both can tell whether the clients were swapped underneath it. Only
+// SwitchContext moves it after startup, which makes it inert in-cluster,
+// where context switching is refused.
 func dynamicClientGeneration() (dynamic.Interface, uint64) {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
