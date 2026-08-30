@@ -1525,12 +1525,13 @@ interface BrowserUpdateCheckDependencies {
 }
 
 export async function sendBrowserUpdateCheck(): Promise<void> {
-  await fetch(apiUrl('/version-check/browser'), {
+  const response = await fetch(apiUrl('/version-check/browser'), {
     method: 'POST',
     headers: getAuthHeaders(),
     credentials: getCredentialsMode(),
     keepalive: true,
   })
+  if (!response.ok) throw new Error(`Browser update check failed: ${response.status}`)
 }
 
 export function reportBrowserUpdateCheck(
@@ -1901,7 +1902,7 @@ export interface CloudConnectSelf {
 
 export function useCloudConnectSelf(enabled: boolean, staleTime = 60000, retry: boolean | number = 1) {
   return useQuery<CloudConnectSelf>({
-    queryKey: ['cloud-connect-self'],
+    queryKey: ['cloud-connect-self', retry],
     queryFn: () => fetchJSON('/cloud/connect/self'),
     enabled,
     staleTime,

@@ -91,6 +91,27 @@ func TestVersionCheckBrowserAcceptsOneBestEffortAttempt(t *testing.T) {
 	}
 }
 
+func TestVersionCheckBrowserReportsRelayCapacity(t *testing.T) {
+	previousVersion := version.Current
+	version.SetCurrent("dev")
+	k8s.ForceInCluster = true
+	t.Cleanup(func() {
+		version.SetCurrent(previousVersion)
+		k8s.ForceInCluster = false
+	})
+
+	server := &Server{browserCheckCount: maxBrowserChecksPerDay}
+	server.browserCheckDay = time.Now().UTC().Format("2006-01-02")
+	response := httptest.NewRecorder()
+	server.handleVersionCheckBrowser(
+		response,
+		httptest.NewRequest(http.MethodPost, "/api/version-check/browser", nil),
+	)
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
 func TestVersionCheckBrowserRejectsOtherDeploymentModes(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

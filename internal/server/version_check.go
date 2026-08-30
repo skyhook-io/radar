@@ -47,7 +47,8 @@ func (s *Server) handleVersionCheckBrowser(w http.ResponseWriter, r *http.Reques
 	today := time.Now().UTC().Format("2006-01-02")
 	slots, claimed := s.claimBrowserCheck(today)
 	if !claimed {
-		w.WriteHeader(http.StatusNoContent)
+		log.Printf("[version] browser update check dropped by relay volume limit")
+		s.writeError(w, http.StatusTooManyRequests, "browser update check capacity reached")
 		return
 	}
 	defer func() { <-slots }()

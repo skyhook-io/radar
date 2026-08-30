@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -285,6 +287,47 @@ func TestReleaseOnlyCheckDoesNotSatisfyMeteredCheck(t *testing.T) {
 	}
 	if queries[1].Has("source") || queries[1].Has("report") {
 		t.Fatalf("second request is not metered: %v", queries[1])
+	}
+}
+
+func TestCheckForUpdateSingleFlightsConcurrentCacheMisses(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var requests atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) == 1 {
+			close(started)
+		}
+		<-release
+		_ = json.NewEncoder(w).Encode(githubRelease{TagName: "v1.3.0"})
+	}))
+	defer proxy.Close()
+
+	previousURL, previousVersion := releasesURL, Current
+	releasesURL = proxy.URL
+	SetCurrent("1.2.3")
+	resetUpdateCache()
+	t.Cleanup(func() {
+		releasesURL = previousURL
+		SetCurrent(previousVersion)
+		resetUpdateCache()
+	})
+
+	const callers = 12
+	var wg sync.WaitGroup
+	wg.Add(callers)
+	for range callers {
+		go func() {
+			defer wg.Done()
+			CheckForUpdate(context.Background())
+		}()
+	}
+	<-started
+	close(release)
+	wg.Wait()
+
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("release requests = %d, want 1", got)
 	}
 }
 

@@ -64,4 +64,12 @@ describe('reportBrowserUpdateCheck', () => {
     }))
     expect(fetch.mock.calls[0][1]).not.toHaveProperty('body')
   })
+
+  it('surfaces backend rejection without retrying', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(null, { status: 429 }))
+    vi.stubGlobal('fetch', fetch)
+
+    await expect(sendBrowserUpdateCheck()).rejects.toThrow('Browser update check failed: 429')
+    expect(fetch).toHaveBeenCalledOnce()
+  })
 })

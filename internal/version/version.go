@@ -40,6 +40,7 @@ var (
 type updateCacheEntry struct {
 	result    *UpdateInfo
 	checkedAt time.Time
+	loading   chan struct{}
 }
 
 // InstallMethod represents how Radar was installed
@@ -149,33 +150,45 @@ func ReportBrowserUpdateCheck(ctx context.Context, reportDay string) error {
 }
 
 func checkForUpdateCached(options checkOptions) *UpdateInfo {
-	mu.Lock()
-	entry := updateCache[options.source]
+	for {
+		mu.Lock()
+		entry := updateCache[options.source]
 
-	// Use shorter TTL for cached errors so transient failures recover quickly
-	ttl := cacheTTL
-	if entry.result != nil && entry.result.Error != "" {
-		ttl = errorTTL
-	}
+		// Use shorter TTL for cached errors so transient failures recover quickly
+		ttl := cacheTTL
+		if entry.result != nil && entry.result.Error != "" {
+			ttl = errorTTL
+		}
 
-	if entry.result != nil && time.Since(entry.checkedAt) < ttl {
-		result := *entry.result
+		if entry.result != nil && time.Since(entry.checkedAt) < ttl {
+			result := *entry.result
+			mu.Unlock()
+			return &result
+		}
+		if entry.loading != nil {
+			loading := entry.loading
+			mu.Unlock()
+			<-loading
+			continue
+		}
+
+		loading := make(chan struct{})
+		entry.loading = loading
+		updateCache[options.source] = entry
 		mu.Unlock()
-		return &result
+
+		// Use a background context so request cancellation doesn't poison the cache.
+		fetchCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		result := fetchLatestRelease(fetchCtx, options)
+		cancel()
+
+		mu.Lock()
+		updateCache[options.source] = updateCacheEntry{result: result, checkedAt: time.Now()}
+		close(loading)
+		mu.Unlock()
+
+		return result
 	}
-	mu.Unlock()
-
-	// Fetch outside the lock to avoid blocking concurrent callers during HTTP request.
-	// Use a background context so request cancellation doesn't poison the cache.
-	fetchCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	result := fetchLatestRelease(fetchCtx, options)
-
-	mu.Lock()
-	updateCache[options.source] = updateCacheEntry{result: result, checkedAt: time.Now()}
-	mu.Unlock()
-
-	return result
 }
 
 func fetchLatestRelease(ctx context.Context, options checkOptions) *UpdateInfo {

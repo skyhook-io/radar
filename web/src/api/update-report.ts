@@ -15,9 +15,14 @@ export function claimDailyUpdateCheck(
   const storageKey = `${STORAGE_KEY_PREFIX}:${apiBase}`
   const day = utcDay(now)
   const storedValue = storage.getItem(storageKey)
-  const stored = storedValue
-    ? JSON.parse(storedValue) as { day?: string; installScope?: string }
-    : undefined
+  let stored: { day?: string; installScope?: string } | undefined
+  try {
+    stored = storedValue
+      ? JSON.parse(storedValue) as { day?: string; installScope?: string }
+      : undefined
+  } catch {
+    stored = undefined
+  }
   const sameInstallation = !stored?.installScope
     || !installScope
     || stored.installScope === installScope
