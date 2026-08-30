@@ -197,10 +197,20 @@ export interface Issue {
    *  message. The Issues view uses it to link these — and only these — to the
    *  Capacity / Demand view, so a generic scheduling failure never links. */
   capacity_relevant?: boolean;
+  /** Earliest evidence-backed time the issue was active. This may be when Radar
+   *  first observed the state rather than exact onset: read as "active at least
+   *  since", never as proof of a healthy-duration boundary. */
   first_seen?: string;
   /** Radar can confirm the issue is active, but current cluster evidence does
    *  not establish when the failing state began. */
   onset_unknown?: boolean;
+  onset_coverage?: {
+    known: number;
+    unknown: number;
+  };
+  /** Kubernetes object creation time. Context and a stable sort fallback only;
+   *  it is not evidence that the issue began then. */
+  resource_created_at?: string;
   last_seen?: string;
   /** Affected-resource fan-out, EXCLUDING the subject (the row header).
    *  0/omitted for a single-resource issue; e.g. 50 for one Deployment's
@@ -226,11 +236,15 @@ export interface Issue {
    * "started_at_resource_creation"        — failing state began during resource
    *                                        creation or first reconciliation.
    * "started_after_resource_was_healthy"  — a meaningful healthy window preceded
-   *                                        the failing state.
+   *                                        the failing state. Owner-condition
+   *                                        evidence is workload-level, not timing
+   *                                        or attribution for this specific reason.
    */
   issue_timing?: 'started_at_resource_creation' | 'started_after_resource_was_healthy';
   /** The evidence that determined issue_timing (for auditability). */
   issue_timing_basis?: 'condition' | 'owner_condition' | 'pod_creation' | 'deletion' | 'phase' | 'spec';
+  /** Plain-language explanation when timing fields describe different scopes. */
+  timing_summary?: string;
 
   /** Recent non-status changes (spec/config and lifecycle) on this issue's
    *  subject (and, for workload subjects, its referenced ConfigMaps) —
@@ -273,20 +287,32 @@ export function memberRef(issue: Issue, member: IssueResourceRef): IssueResource
 /**
  * compareIssues is the queue's stable sort order (extracted from IssuesView so
  * it can be unit-tested). Severity first (critical before warning), then
- * direct-blocker source priority, then ONSET — first_seen DESC, deliberately
+ * direct-blocker source priority, then the evidence-backed active-time anchor —
+ * first_seen DESC, deliberately
  * NOT last_seen: last_seen bumps to compose-time on every poll, so sorting by
  * it would reshuffle same-severity rows on each refetch. The remaining keys
  * (cluster → namespace → name → id) are a fully deterministic tiebreak so the
  * order never churns under auto-refresh.
+ * JavaScript timestamp comparison is millisecond-precision; sub-millisecond
+ * ties fall through to the stable keys below.
  */
+export function issueSortAnchor(issue: Issue): string {
+  return issue.first_seen ?? issue.resource_created_at ?? '';
+}
+
+export function compareIssueSortAnchors(a: Issue, b: Issue): number {
+  const ta = Date.parse(issueSortAnchor(a)) || 0;
+  const tb = Date.parse(issueSortAnchor(b)) || 0;
+  return tb - ta;
+}
+
 export function compareIssues(a: Issue, b: Issue): number {
   const r = ISSUE_SEVERITY_RANK[b.severity] - ISSUE_SEVERITY_RANK[a.severity];
   if (r !== 0) return r;
   const sr = (ISSUE_SOURCE_RANK[b.source] ?? 0) - (ISSUE_SOURCE_RANK[a.source] ?? 0);
   if (sr !== 0) return sr;
-  const fa = a.first_seen ?? '';
-  const fb = b.first_seen ?? '';
-  if (fa !== fb) return fb.localeCompare(fa);
+  const onset = compareIssueSortAnchors(a, b);
+  if (onset !== 0) return onset;
   const c = (a.cluster_name ?? '').localeCompare(b.cluster_name ?? '');
   if (c !== 0) return c;
   const ns = (a.namespace ?? '').localeCompare(b.namespace ?? '');

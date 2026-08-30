@@ -123,19 +123,28 @@ func TestIssuesToolPreservesEvidenceBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal issues input schema: %v", err)
 	}
-	for label, text := range map[string]string{
-		"description":  issuesTool.Description,
-		"input schema": string(schema),
+	for _, want := range []string{
+		"timing_summary",
+		"scopes differ",
+		"first_seen",
+		"active at least since",
+		"timing evidence",
+		"root-cause verdict",
+		"resource age",
+		"issue age",
 	} {
-		for _, want := range []string{
-			"started_at_resource_creation",
-			"started_after_resource_was_healthy",
-			"timing evidence",
-			"root-cause verdict",
-		} {
-			if !strings.Contains(text, want) {
-				t.Errorf("issues %s lost issue_timing contract %q", label, want)
-			}
+		if !strings.Contains(issuesTool.Description, want) {
+			t.Errorf("issues description lost self-explanatory timing contract %q", want)
+		}
+	}
+	for _, want := range []string{
+		"started_at_resource_creation",
+		"started_after_resource_was_healthy",
+		"timing evidence",
+		"root-cause verdict",
+	} {
+		if !strings.Contains(string(schema), want) {
+			t.Errorf("issues input schema lost issue_timing filter contract %q", want)
 		}
 	}
 }

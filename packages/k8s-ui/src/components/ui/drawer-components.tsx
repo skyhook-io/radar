@@ -733,6 +733,18 @@ export function formatKindName(kind: string): string {
     resourceclaims: 'ResourceClaim', resourceclaimtemplates: 'ResourceClaimTemplate',
     deviceclasses: 'DeviceClass', resourceslices: 'ResourceSlice',
     clusterpolicies: 'ClusterPolicy', nvidiadrivers: 'NVIDIADriver',
+    clusterqueues: 'ClusterQueue', localqueues: 'LocalQueue', resourceflavors: 'ResourceFlavor',
+    admissionchecks: 'AdmissionCheck', provisioningrequests: 'ProvisioningRequest',
+    rayclusters: 'RayCluster', rayjobs: 'RayJob', rayservices: 'RayService', raycronjobs: 'RayCronJob',
+    leaderworkersets: 'LeaderWorkerSet', jobsets: 'JobSet',
+    inferenceservices: 'InferenceService', servingruntimes: 'ServingRuntime',
+    clusterservingruntimes: 'ClusterServingRuntime', inferencegraphs: 'InferenceGraph',
+    trainedmodels: 'TrainedModel', llminferenceservices: 'LLMInferenceService',
+    inferencepools: 'InferencePool', inferenceobjectives: 'InferenceObjective',
+    jobflows: 'JobFlow', jobtemplates: 'JobTemplate', ragengines: 'RAGEngine',
+    nimservices: 'NIMService', nimcaches: 'NIMCache', nimpipelines: 'NIMPipeline',
+    deviceconfigs: 'DeviceConfig',
+    pytorchjobs: 'PyTorchJob', tfjobs: 'TFJob', mpijobs: 'MPIJob', trainjobs: 'TrainJob',
   }
   if (names[k]) return names[k]
 

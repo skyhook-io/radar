@@ -4,7 +4,7 @@ import { CardBody, CardSection, ClusterName, EmptyState, KIND_CHIP_CLASS, Termin
 import { Tooltip } from '../ui/Tooltip';
 import { formatCompactAge, formatRelativeAgeTime } from '../../utils/format';
 import { diagnosticRoleLabel, diagnosticFactLabel, confidenceTitle, incidentParentLabel } from './diagnostic';
-import { issueTiming } from './issue-timing';
+import { issueFirstSeenTitle, issueResourceCreatedTitle, issueTimingForDisplay } from './issue-timing';
 import {
   ISSUE_SEVERITY_BADGE_CLASS,
   ISSUE_SEVERITY_HEADER_BAND_CLASS,
@@ -212,7 +212,9 @@ export function IssueRow({
   const severity = normalizeIssueSeverity(issue.severity);
   const SeverityIcon = ISSUE_SEVERITY_ICON[severity];
   const slotCtx = { issue, open };
-  const timing = issueTiming(issue);
+  const partialUnknown = issue.onset_coverage?.unknown ?? 0;
+  const partialOnset = Boolean(issue.first_seen && partialUnknown > 0);
+  const timing = issueTimingForDisplay(issue);
 
   // Severity pill + age + timing chip. Rendered in two positions the container
   // query toggles: inline at the row's right edge on a wide container, and on a
@@ -224,28 +226,19 @@ export function IssueRow({
         {ISSUE_SEVERITY_LABEL[severity]}
       </span>
       {issue.first_seen ? (
-        <>
-          <Tooltip content={ageTitle(issue)} delay={200} wrapperClassName="shrink-0">
-            <time
-              dateTime={issue.first_seen}
-              className="flex items-center gap-1 text-xs tabular-nums text-theme-text-tertiary"
-            >
-              <Clock className="h-3 w-3" aria-hidden />
-              {formatCompactAge(issue.first_seen)}
-            </time>
-          </Tooltip>
-          {timing ? (
-            <Tooltip content={timing.tooltip} delay={200}>
-              <span className="badge-sm text-[10px] text-theme-text-secondary">{timing.chip}</span>
-            </Tooltip>
-          ) : null}
-        </>
-      ) : issue.onset_unknown ? (
-        <Tooltip content="Radar can confirm this issue is active, but current Kubernetes state does not reveal when it began." delay={200} wrapperClassName="shrink-0">
-          <span className="flex items-center gap-1 text-xs text-theme-text-tertiary">
+        <Tooltip content={ageTitle(issue)} delay={200} wrapperClassName="shrink-0">
+          <time
+            dateTime={issue.first_seen}
+            className="flex items-center gap-1 text-xs tabular-nums text-theme-text-tertiary"
+          >
             <Clock className="h-3 w-3" aria-hidden />
-            Onset unknown
-          </span>
+            {partialOnset ? '≥' : ''}{formatCompactAge(issue.first_seen)}
+          </time>
+        </Tooltip>
+      ) : null}
+      {timing ? (
+        <Tooltip content={timing.tooltip} delay={200}>
+          <span className="badge-sm text-[10px] text-theme-text-secondary">{timing.chip}</span>
         </Tooltip>
       ) : null}
     </div>
@@ -437,7 +430,9 @@ function Diagnosis({ issue, source }: { issue: Issue; source?: IssueDiagnosisSou
   // present, else headline+detail) rather than a string that may never appear.
   const visibleMessage = [headline, detail].filter(Boolean).join(' ');
   const shownText = issue.cause ?? visibleMessage;
-  const timing = issueTiming(issue);
+  const partialUnknown = issue.onset_coverage?.unknown ?? 0;
+  const partialOnset = Boolean(issue.first_seen && partialUnknown > 0);
+  const timing = issueTimingForDisplay(issue);
   const rawError = [
     ...new Set(
       [issue.raw_message ?? (issue.cause ? issue.message : undefined), detail].filter(
@@ -455,14 +450,24 @@ function Diagnosis({ issue, source }: { issue: Issue; source?: IssueDiagnosisSou
   if (issue.operation_retry_count) meta.push(`retried ${issue.operation_retry_count}×`);
   if (crash) meta.push(crash);
   if (timing) {
+    if (partialOnset && issue.first_seen) {
+      meta.push(`some signals active at least ${formatRelativeAgeTime(issue.first_seen)}`);
+    }
     meta.push(timing.meta);
+    if (!partialOnset && timing.kind === 'regression' && issue.first_seen) {
+      meta.push(`active at least ${formatRelativeAgeTime(issue.first_seen)}`);
+    }
+  } else if (partialOnset && issue.first_seen) {
+    const total = (issue.onset_coverage?.known ?? 0) + partialUnknown;
+    meta.push(`some signals active at least ${formatRelativeAgeTime(issue.first_seen)}; timing unknown for ${partialUnknown} of ${total} signals`);
   } else if (issue.first_seen) {
-    meta.push(`started ${formatRelativeAgeTime(issue.first_seen)}`);
-  } else if (issue.onset_unknown) {
-    meta.push('onset unknown');
+    meta.push(`active at least ${formatRelativeAgeTime(issue.first_seen)}`);
+  }
+  if (issue.onset_unknown && !timing && !partialOnset) {
+    meta.push('exact onset unknown');
   }
   if (issue.first_seen) {
-    if (issue.last_seen && timing?.kind !== 'creation') meta.push(`last seen ${formatRelativeAgeTime(issue.last_seen)}`);
+    if (issue.last_seen && (timing?.kind !== 'creation' || partialOnset)) meta.push(`last seen ${formatRelativeAgeTime(issue.last_seen)}`);
   }
   if (issue.change_context) meta.push(changeContextText(issue.change_context));
 
@@ -631,9 +636,13 @@ function DiagnosticContext({
 // freshness, the two facts the compact "2h" hides.
 function ageTitle(issue: Issue): string {
   const parts: string[] = [];
-  const timing = issueTiming(issue);
-  if (timing) parts.push(timing.tooltip);
-  if (issue.first_seen) parts.push(`First seen ${new Date(issue.first_seen).toLocaleString()}`);
+  const timing = issueTimingForDisplay(issue);
+  const partialUnknown = issue.onset_coverage?.unknown ?? 0;
+  if (timing && partialUnknown === 0) parts.push(timing.tooltip);
+  const firstSeenTitle = issueFirstSeenTitle(issue);
+  if (firstSeenTitle) parts.push(firstSeenTitle);
+  const resourceContext = issueResourceCreatedTitle(issue);
+  if (resourceContext) parts.push(resourceContext);
   if (issue.last_seen) parts.push(`Last seen ${formatRelativeAgeTime(issue.last_seen)}`);
   return parts.join('\n');
 }

@@ -63,8 +63,8 @@ func TestSecretReadableNamespaces(t *testing.T) {
 
 	t.Run("cluster-wide namespaces, cluster-scope secrets denied -> none", func(t *testing.T) {
 		env := newAuthTestServer(t)
-		env.srv.permCache.Set("broad", &auth.UserPermissions{AllowedNamespaces: nil})
-		env.srv.permCache.Get("broad").SetCanI("list", "", "secrets", "", false)
+		env.srv.permCache.Set("broad", nil, &auth.UserPermissions{AllowedNamespaces: nil})
+		env.srv.permCache.Get("broad", nil).SetCanI("list", "", "secrets", "", false)
 
 		got := env.srv.secretReadableNamespaces(clusterWideReq("broad"), nil)
 		if len(got) != 0 || got == nil {
@@ -74,8 +74,8 @@ func TestSecretReadableNamespaces(t *testing.T) {
 
 	t.Run("cluster-wide namespaces, cluster-scope secrets allowed -> all (nil)", func(t *testing.T) {
 		env := newAuthTestServer(t)
-		env.srv.permCache.Set("admin", &auth.UserPermissions{AllowedNamespaces: nil})
-		env.srv.permCache.Get("admin").SetCanI("list", "", "secrets", "", true)
+		env.srv.permCache.Set("admin", nil, &auth.UserPermissions{AllowedNamespaces: nil})
+		env.srv.permCache.Get("admin", nil).SetCanI("list", "", "secrets", "", true)
 
 		if got := env.srv.secretReadableNamespaces(clusterWideReq("admin"), nil); got != nil {
 			t.Errorf("allowed cluster-scope secrets must yield nil (all), got %#v", got)
@@ -84,8 +84,8 @@ func TestSecretReadableNamespaces(t *testing.T) {
 
 	t.Run("namespace-restricted -> per-namespace subset", func(t *testing.T) {
 		env := newAuthTestServer(t)
-		env.srv.permCache.Set("alice", &auth.UserPermissions{AllowedNamespaces: []string{"default", "kube-system"}})
-		perms := env.srv.permCache.Get("alice")
+		env.srv.permCache.Set("alice", nil, &auth.UserPermissions{AllowedNamespaces: []string{"default", "kube-system"}})
+		perms := env.srv.permCache.Get("alice", nil)
 		perms.SetCanI("list", "", "secrets", "default", true)
 		perms.SetCanI("list", "", "secrets", "kube-system", false)
 
@@ -109,7 +109,7 @@ func TestProxyAuth_NamespaceGatedReadPaths(t *testing.T) {
 			env := newAuthTestServer(t)
 			// carol can see "other", never "default" — getUserNamespaces
 			// intersects requested(default) with allowed(other) -> empty.
-			env.srv.permCache.Set("carol", &auth.UserPermissions{AllowedNamespaces: []string{"other"}})
+			env.srv.permCache.Set("carol", nil, &auth.UserPermissions{AllowedNamespaces: []string{"other"}})
 
 			resp := env.authGet(t, p, "carol", "")
 			defer resp.Body.Close()

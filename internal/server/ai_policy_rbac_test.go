@@ -37,7 +37,7 @@ func TestAIResourceContext_WithholdsTheFamilyTheCallerCannotRead(t *testing.T) {
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"app"}}
 	allow(perms, "wgpolicyk8s.io", "policyreports", "app", true)
 	allow(perms, "openreports.io", "reports", "app", false)
-	env.srv.permCache.Set("half", perms)
+	env.srv.permCache.Set("half", nil, perms)
 
 	got := aiPolicyAdapter(t, env, "half", "app").FindingsFor("", "Pod", "app", "web")
 	if len(got) != 1 {
@@ -55,7 +55,7 @@ func TestAIResourceContext_SaysDeniedRatherThanClean(t *testing.T) {
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"app"}}
 	allow(perms, "wgpolicyk8s.io", "policyreports", "app", false)
 	allow(perms, "openreports.io", "reports", "app", false)
-	env.srv.permCache.Set("none", perms)
+	env.srv.permCache.Set("none", nil, perms)
 
 	a := aiPolicyAdapter(t, env, "none", "app")
 	if got := a.FindingsFor("", "Pod", "app", "web"); len(got) != 0 {
@@ -80,7 +80,7 @@ func TestAIResourceContext_AuthorizesClusterScopedSubjectsAgainstTheClusterKind(
 	allow(perms, "wgpolicyk8s.io", "policyreports", "", true)
 	allow(perms, "wgpolicyk8s.io", "clusterpolicyreports", "", false)
 	allow(perms, "openreports.io", "clusterreports", "", false)
-	env.srv.permCache.Set("cluster", perms)
+	env.srv.permCache.Set("cluster", nil, perms)
 
 	a := aiPolicyAdapter(t, env, "cluster", "")
 	if got := a.FindingsFor("", "Namespace", "", "shop"); len(got) != 0 {
@@ -97,7 +97,7 @@ func TestAIResourceContext_KeepsEverythingForAFullyAuthorizedCaller(t *testing.T
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"app"}}
 	allow(perms, "wgpolicyk8s.io", "policyreports", "app", true)
 	allow(perms, "openreports.io", "reports", "app", true)
-	env.srv.permCache.Set("full", perms)
+	env.srv.permCache.Set("full", nil, perms)
 
 	a := aiPolicyAdapter(t, env, "full", "app")
 	if got := a.FindingsFor("", "Pod", "app", "web"); len(got) != 2 {
@@ -119,7 +119,7 @@ func TestAIResourceContext_SaysSoWhenThisResourcesFindingsWereWithheld(t *testin
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"app"}}
 	allow(perms, "wgpolicyk8s.io", "policyreports", "app", true)
 	allow(perms, "openreports.io", "reports", "app", false)
-	env.srv.permCache.Set("half", perms)
+	env.srv.permCache.Set("half", nil, perms)
 
 	a := aiPolicyAdapter(t, env, "half", "app")
 	if got := a.FindingsFor("", "Pod", "app", "web"); len(got) != 0 {
@@ -142,7 +142,7 @@ func TestAIResourceContext_ReportsNoWithholdingForAGenuinelyCleanResource(t *tes
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"app"}}
 	allow(perms, "wgpolicyk8s.io", "policyreports", "app", true)
 	allow(perms, "openreports.io", "reports", "app", false)
-	env.srv.permCache.Set("half", perms)
+	env.srv.permCache.Set("half", nil, perms)
 
 	if aiPolicyAdapter(t, env, "half", "app").WithheldFor("", "Pod", "app", "web") {
 		t.Error("nothing about this resource was withheld; a note here is a false alarm on every clean resource")

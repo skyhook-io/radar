@@ -44,6 +44,15 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
+      - name: Check gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt -w needed on:"
+            echo "$unformatted"
+            exit 1
+          fi
+
       - name: Run tests
         run: go test ./...
 

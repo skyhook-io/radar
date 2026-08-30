@@ -404,6 +404,70 @@ rules:
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
+  {{- if .Values.rbac.crdGroups.nimOperator }}
+  - apiGroups: ["apps.nvidia.com"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.amdGpu }}
+  - apiGroups: ["amd.com"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.kueue }}
+  # autoscaling.x-k8s.io carries ProvisioningRequests — created by Kueue's
+  # provisioning AdmissionCheck, so the two ship under one toggle.
+  - apiGroups: ["kueue.x-k8s.io", "autoscaling.x-k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.kserve }}
+  - apiGroups: ["serving.kserve.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.kuberay }}
+  - apiGroups: ["ray.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.lws }}
+  - apiGroups: ["leaderworkerset.x-k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.jobset }}
+  - apiGroups: ["jobset.x-k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.inferenceGateway }}
+  # InferencePool graduated to inference.networking.k8s.io; llm-d now owns
+  # InferenceObjective while deployed alpha versions retain the old group.
+  - apiGroups: ["inference.networking.k8s.io", "inference.networking.x-k8s.io", "llm-d.ai"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.volcano }}
+  - apiGroups: ["batch.volcano.sh", "scheduling.volcano.sh", "flow.volcano.sh", "bus.volcano.sh"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.kaiScheduler }}
+  - apiGroups: ["scheduling.run.ai", "kai.scheduler"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.kaito }}
+  - apiGroups: ["kaito.sh"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.kubeflow }}
+  - apiGroups: ["kubeflow.org", "trainer.kubeflow.org"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.nginx }}
   - apiGroups: ["nginx.org"]
     resources: ["*"]

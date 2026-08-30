@@ -65,6 +65,11 @@ export function findAPIResourceForRoute(
     ?? resources?.find(matchesRoute)
 }
 
+export function isCoreBatchJob(kind: string, group?: string): boolean {
+  const normalizedKind = kind.toLowerCase()
+  return (normalizedKind === 'job' || normalizedKind === 'jobs') && (!group || group === 'batch')
+}
+
 // Resources that should be hidden from the sidebar
 const HIDDEN_KINDS = ['PodMetrics', 'NodeMetrics']
 
@@ -216,7 +221,11 @@ export function formatGroupName(group: string): string {
     'jobset.x-k8s.io': 'JobSet',
     'inference.networking.k8s.io': 'Inference Gateway',
     'inference.networking.x-k8s.io': 'Inference Gateway',
+    'llm-d.ai': 'llm-d',
     'nvidia.com': 'NVIDIA GPU Operator',
+    'apps.nvidia.com': 'NVIDIA NIM',
+    'amd.com': 'AMD GPU Operator',
+    'trainer.kubeflow.org': 'Kubeflow',
     'scheduling.run.ai': 'KAI Scheduler',
     'kai.scheduler': 'KAI Scheduler',
     'kaito.sh': 'KAITO',

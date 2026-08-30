@@ -655,12 +655,25 @@ describe('shared plurals — the status path collides too', () => {
   // The renderer and the status badge are two separate switches over the same
   // plural, and fixing one leaves the other reading a foreign CRD's conditions
   // as if they were Knative's.
+  // Phase-only on purpose. Knative reports a bare "Unknown" for a resource with
+  // no conditions, while the generic path reports the phase — so this fixture
+  // tells the two apart. A Ready=False condition would not: both paths surface
+  // the same text for it, and pinning which of phase/conditions wins is a
+  // separate concern that generic-status.test.ts owns.
   it('does not give a foreign subscriptions CRD a Knative status', () => {
     const s = getResourceStatus('subscriptions', {
       apiVersion: 'operators.coreos.com/v1alpha1',
-      status: { conditions: [{ type: 'Ready', status: 'False' }], phase: 'AtLatestKnown' },
+      status: { phase: 'AtLatestKnown' },
     })
     expect(s?.text).toBe('AtLatestKnown')
+  })
+
+  it('still routes a Knative subscription to the Knative status', () => {
+    const s = getResourceStatus('subscriptions', {
+      apiVersion: 'messaging.knative.dev/v1',
+      status: { phase: 'AtLatestKnown' },
+    })
+    expect(s?.text).toBe('Unknown')
   })
 
   it('still gives Knative its own status', () => {
@@ -711,5 +724,124 @@ describe('Velero BackupRepository status', () => {
   it('leaves a foreign backuprepositories kind alone', () => {
     const foreign = { ...repo('NotReady'), apiVersion: 'example.com/v1' }
     expect(getResourceStatus('backuprepositories', foreign)?.text).not.toBe('Not ready')
+  })
+})
+
+describe('GPU ecosystem kind collisions', () => {
+  it('routes Volcano Jobs away from the core JobRenderer to GenericRenderer', () => {
+    const html = renderKind('jobs', {
+      apiVersion: 'batch.volcano.sh/v1alpha1',
+      kind: 'Job',
+      metadata: { name: 'train', namespace: 'ml' },
+      spec: { queue: 'gpu-queue', minAvailable: 4 },
+      status: { state: { phase: 'Running' } },
+    }, 'ml')
+    expect(html).toContain('Min Available')
+    expect(html).toContain('gpu-queue')
+    expect(html).not.toContain('Completions')
+  })
+
+  it('routes status for queues by group (Volcano vs KAI)', () => {
+    const volcano = getResourceStatus('queues', {
+      apiVersion: 'scheduling.volcano.sh/v1beta1',
+      status: { state: 'Open' },
+    })
+    const kai = getResourceStatus('queues', {
+      apiVersion: 'scheduling.run.ai/v2',
+      spec: { priority: 100 },
+    })
+    expect(volcano?.text).toBe('Open')
+    expect(kai?.text).not.toBe('Open')
+  })
+
+  it('routes status for podgroups by group (Volcano vs KAI)', () => {
+    const volcano = getResourceStatus('podgroups', {
+      apiVersion: 'scheduling.volcano.sh/v1beta1',
+      status: { phase: 'Running' },
+    })
+    expect(volcano?.text).toBe('Running')
+  })
+
+  it('routes Kueue Workload status only for the kueue group', () => {
+    const admitted = getResourceStatus('workloads', {
+      apiVersion: 'kueue.x-k8s.io/v1beta2',
+      status: { conditions: [{ type: 'Admitted', status: 'True' }] },
+    })
+    expect(admitted?.text).toBe('Admitted')
+    const foreign = getResourceStatus('workloads', {
+      apiVersion: 'scheduling.k8s.io/v1alpha2',
+      status: { conditions: [{ type: 'Admitted', status: 'True' }] },
+    })
+    expect(foreign?.text).toBe('Admitted')
+    expect(foreign?.color).not.toBe(admitted?.color)
+  })
+
+  it('does not assign Volcano or core Job semantics to foreign collisions', () => {
+    const foreign = {
+      apiVersion: 'example.io/v1',
+      kind: 'Job',
+      metadata: { name: 'foreign', namespace: 'default' },
+      spec: { collisionProbe: COLLISION_PROBE },
+      status: { state: { phase: 'Running' } },
+    }
+    expect(getResourceStatus('jobs', foreign)).toBeNull()
+    const html = renderKind('jobs', foreign, 'default')
+    expect(html).toContain(COLLISION_PROBE)
+    expect(html).not.toContain('Completions')
+  })
+
+  it('keeps typed core Jobs on the core path when TypeMeta is absent', () => {
+    const core = {
+      kind: 'Job',
+      metadata: { name: 'core', namespace: 'default' },
+      spec: { completions: 1, parallelism: 1 },
+      status: { succeeded: 1, conditions: [{ type: 'Complete', status: 'True' }] },
+    }
+    expect(getResourceStatus('jobs', core)?.text).toBe('Complete')
+    const html = renderKind('jobs', core, 'default')
+    expect(html).toContain('Completions')
+  })
+
+  it('leaves foreign Queues and PodGroups on generic status handling', () => {
+    expect(getResourceStatus('queues', { apiVersion: 'example.io/v1', status: {} })).toBeNull()
+    expect(getResourceStatus('podgroups', { apiVersion: 'example.io/v1', status: {} })).toBeNull()
+  })
+
+  it('accepts the current llm-d InferenceObjective group', () => {
+    expect(getResourceStatus('inferenceobjectives', {
+      apiVersion: 'llm-d.ai/v1alpha2',
+      status: { conditions: [{ type: 'Ready', status: 'True' }] },
+    })?.text).toBe('Accepted')
+  })
+
+  it('routes KAITO Workspace status only for the kaito group', () => {
+    const ws = getResourceStatus('workspaces', {
+      apiVersion: 'kaito.sh/v1beta1',
+      status: { conditions: [{ type: 'ResourceReady', status: 'False' }] },
+    })
+    expect(ws).not.toBeNull()
+  })
+})
+
+describe('GPU ecosystem status edge cases', () => {
+  it('JobSet with minimal status is Pending, not Running', () => {
+    const fresh = getResourceStatus('jobsets', {
+      apiVersion: 'jobset.x-k8s.io/v1alpha2',
+      status: { replicatedJobsStatus: [{ name: 'w', active: 0, ready: 0 }] },
+    })
+    const live = getResourceStatus('jobsets', {
+      apiVersion: 'jobset.x-k8s.io/v1alpha2',
+      status: { replicatedJobsStatus: [{ name: 'w', active: 1, ready: 1 }] },
+    })
+    expect(fresh?.text).toBe('Pending')
+    expect(live?.text).toBe('Running')
+  })
+
+  it('InferencePool with only an empty-parentRef default entry reads Not referenced', () => {
+    const pool = getResourceStatus('inferencepools', {
+      apiVersion: 'inference.networking.x-k8s.io/v1alpha2',
+      status: { parent: [{ parentRef: {}, conditions: [{ type: 'Accepted', status: 'Unknown' }] }] },
+    })
+    expect(pool?.text).toBe('Not referenced')
   })
 })

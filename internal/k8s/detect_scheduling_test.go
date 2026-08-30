@@ -335,8 +335,12 @@ func TestClassifyAdmissionFailure(t *testing.T) {
 		{`Error creating: pods "x" is forbidden: violates PodSecurity "restricted:latest"`, "PodSecurityViolation", true},
 		{`Error creating: admission webhook "vpod.example.com" denied the request: nope`, "WebhookDenied", true},
 		{`Error creating: Internal error occurred: failed calling webhook "validate.example.com": failed to call webhook: Post "https://policy-webhook.hooks.svc:443/validate?timeout=10s": no endpoints available for service "policy-webhook"`, "WebhookUnavailable", true},
+		{`Error creating: Internal error occurred: failed calling webhook "missing.example.com": failed to call webhook: Post "https://missing-webhook.hooks.svc:443/validate?timeout=2s": service "missing-webhook" not found`, "WebhookUnavailable", true},
+		{`Error creating: Internal error occurred: failed calling webhook "missing.example.com": failed to call webhook: Post "https://missing-webhook.hooks.svc:443/validate?timeout=2s": services "missing-webhook" not found`, "WebhookUnavailable", true},
 		{`Error creating: failed calling webhook "validate.example.com": no endpoints available for service "policy-webhook"`, "", false},
 		{`Error creating: failed calling webhook "validate.example.com": Post "https://other.hooks.svc:443/validate": no endpoints available for service "policy-webhook"`, "", false},
+		{`Error creating: failed calling webhook "validate.example.com": Post "https://other.hooks.svc:443/validate": service "policy-webhook" not found`, "", false},
+		{`Error creating: failed calling webhook "validate.example.com": Post "https://policy-webhook.external.example/validate": service "policy-webhook" not found`, "", false},
 		{`Error creating: failed calling webhook "validate.example.com": Post "https://policy-webhook.hooks.svc:443/validate": dial tcp: connection refused`, "", false},
 		{`Error creating: pods "x" is forbidden: maximum cpu usage per Container is 1, but limit is 2`, "LimitRangeViolation", true},
 		{`Error creating: pods "web-abc" is forbidden: User "system:serviceaccount:prod:web" cannot create resource "pods" in API group "" in the namespace "prod"`, "RBACForbidden", true},
@@ -348,6 +352,56 @@ func TestClassifyAdmissionFailure(t *testing.T) {
 		if ok != c.ok || reason != c.reason {
 			t.Errorf("classifyAdmissionFailure(%.50q) = %q,%v want %q,%v", c.msg, reason, ok, c.reason, c.ok)
 		}
+	}
+}
+
+func TestParseAdmissionWebhookBackendFailure(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  string
+		want AdmissionWebhookBackendFailure
+		ok   bool
+	}{
+		{
+			name: "no ready endpoints",
+			msg:  `failed calling webhook "validate.example.com": Post "https://policy-webhook.hooks.svc:443/validate": no endpoints available for service "policy-webhook"`,
+			want: AdmissionWebhookBackendFailure{WebhookName: "validate.example.com", ServiceNamespace: "hooks", ServiceName: "policy-webhook", Kind: AdmissionWebhookNoReadyEndpoints},
+			ok:   true,
+		},
+		{
+			name: "missing service",
+			msg:  `failed calling webhook "validate.example.com": Post "https://policy-webhook.hooks.svc:443/validate": service "policy-webhook" not found`,
+			want: AdmissionWebhookBackendFailure{WebhookName: "validate.example.com", ServiceNamespace: "hooks", ServiceName: "policy-webhook", Kind: AdmissionWebhookServiceNotFound},
+			ok:   true,
+		},
+		{
+			name: "missing service plural",
+			msg:  `failed calling webhook "validate.example.com": Post "https://policy-webhook.hooks.svc:443/validate": services "policy-webhook" not found`,
+			want: AdmissionWebhookBackendFailure{WebhookName: "validate.example.com", ServiceNamespace: "hooks", ServiceName: "policy-webhook", Kind: AdmissionWebhookServiceNotFound},
+			ok:   true,
+		},
+		{
+			name: "no endpoints takes precedence",
+			msg:  `failed calling webhook "validate.example.com": Post "https://policy-webhook.hooks.svc:443/validate": no endpoints available for service "policy-webhook"; service "policy-webhook" not found`,
+			want: AdmissionWebhookBackendFailure{WebhookName: "validate.example.com", ServiceNamespace: "hooks", ServiceName: "policy-webhook", Kind: AdmissionWebhookNoReadyEndpoints},
+			ok:   true,
+		},
+		{
+			name: "service name disagreement",
+			msg:  `failed calling webhook "validate.example.com": Post "https://other.hooks.svc:443/validate": service "policy-webhook" not found`,
+		},
+		{
+			name: "missing webhook identity",
+			msg:  `Post "https://policy-webhook.hooks.svc:443/validate": service "policy-webhook" not found`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := ParseAdmissionWebhookBackendFailure(tc.msg)
+			if ok != tc.ok || got != tc.want {
+				t.Fatalf("ParseAdmissionWebhookBackendFailure() = %+v,%v; want %+v,%v", got, ok, tc.want, tc.ok)
+			}
+		})
 	}
 }
 

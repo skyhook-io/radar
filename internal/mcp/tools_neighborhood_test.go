@@ -54,7 +54,7 @@ func makeConfigMapNode(ns, name string) *topology.Node {
 func TestCanReadNeighborhoodNodeMCP_SecretRequiresPerKindRBAC(t *testing.T) {
 	ctx := withTestUserPerms(t, "alice", nil, []string{"default"})
 	// alice has namespace access to default but explicit deny on secrets-get.
-	perms := getPermCache().Get("alice")
+	perms := getPermCache().Get("alice", nil)
 	perms.SetCanI("get", "", "secrets", "default", false)
 
 	secret := makeSecretNode("default", "nginx-tls")
@@ -67,7 +67,7 @@ func TestCanReadNeighborhoodNodeMCP_SecretRequiresPerKindRBAC(t *testing.T) {
 // must be allowed. Locks down the positive path so the gate isn't blanket-deny.
 func TestCanReadNeighborhoodNodeMCP_SecretAllowedWithPerKindRBAC(t *testing.T) {
 	ctx := withTestUserPerms(t, "bob", nil, []string{"default"})
-	perms := getPermCache().Get("bob")
+	perms := getPermCache().Get("bob", nil)
 	perms.SetCanI("get", "", "secrets", "default", true)
 
 	secret := makeSecretNode("default", "nginx-tls")
@@ -135,7 +135,7 @@ func makeKnativeServiceNode(ns, name string) *topology.Node {
 // and surface to users without provider-specific RBAC.
 func TestCanReadNeighborhoodNodeMCP_NodeClassDeniedWithoutSAR(t *testing.T) {
 	ctx := withTestUserPerms(t, "alice", nil, nil)
-	perms := getPermCache().Get("alice")
+	perms := getPermCache().Get("alice", nil)
 	// Deny all NodeClass variants. The helper iterates the table; without
 	// discovery only ec2 enters the SAR loop (group != "" check is harmless
 	// — the discovery filter is skip-when-missing).
@@ -154,7 +154,7 @@ func TestCanReadNeighborhoodNodeMCP_NodeClassDeniedWithoutSAR(t *testing.T) {
 // providers to fail.
 func TestCanReadNeighborhoodNodeMCP_NodeClassAllowedWithProviderSAR(t *testing.T) {
 	ctx := withTestUserPerms(t, "bob", nil, nil)
-	perms := getPermCache().Get("bob")
+	perms := getPermCache().Get("bob", nil)
 	// Bob has EC2 access only — should still pass for NodeClass.
 	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", true)
 	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
@@ -171,7 +171,7 @@ func TestCanReadNeighborhoodNodeMCP_NodeClassAllowedWithProviderSAR(t *testing.T
 // EC2 RBAC must not see AKS NodeClass nodes. Mirrors the REST test.
 func TestCanReadNeighborhoodNodeMCP_NodeClassPerVariantDeniesWrongProvider(t *testing.T) {
 	ctx := withTestUserPerms(t, "bob", nil, nil)
-	perms := getPermCache().Get("bob")
+	perms := getPermCache().Get("bob", nil)
 	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", true)
 	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
 	perms.SetCanI("get", "karpenter.k8s.gcp", "gcenodeclasses", "", false)
@@ -207,7 +207,7 @@ func TestCanReadNeighborhoodNodeMCP_NodeClassPerVariantDeniesWrongProvider(t *te
 
 func TestApplyClusterScopedTopologyRBACMCPFiltersExactNodeClassProvider(t *testing.T) {
 	ctx := withTestUserPerms(t, "topology-reader", nil, nil)
-	perms := getPermCache().Get("topology-reader")
+	perms := getPermCache().Get("topology-reader", nil)
 	perms.SetCanI("list", "eks.amazonaws.com", "nodeclasses", "", true)
 	perms.SetCanI("list", "infra.example.io", "customnodeclasses", "", false)
 
@@ -228,7 +228,7 @@ func TestApplyClusterScopedTopologyRBACMCPFiltersExactNodeClassProvider(t *testi
 
 func TestApplyClusterScopedTopologyRBACMCPFiltersCalicoByExactGroup(t *testing.T) {
 	ctx := withTestUserPerms(t, "topology-reader", nil, nil)
-	perms := getPermCache().Get("topology-reader")
+	perms := getPermCache().Get("topology-reader", nil)
 	perms.SetCanI("list", "projectcalico.org", "globalnetworkpolicies", "", true)
 	perms.SetCanI("list", "crd.projectcalico.org", "globalnetworkpolicies", "", false)
 
@@ -282,7 +282,7 @@ func pseudoKindTuplesForTestMCP(kind, group string) (tuples []topology.SARTuple,
 // provider API is open-ended and cannot be represented by a static table.
 func TestAllowPseudoKindTuplesMCP_NodeClass_DefersToExactNode(t *testing.T) {
 	ctx := withTestUserPerms(t, "alice", nil, nil)
-	perms := getPermCache().Get("alice")
+	perms := getPermCache().Get("alice", nil)
 	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", false)
 	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
 	perms.SetCanI("get", "karpenter.k8s.gcp", "gcenodeclasses", "", false)
@@ -298,7 +298,7 @@ func TestAllowPseudoKindTuplesMCP_NodeClass_DefersToExactNode(t *testing.T) {
 
 func TestAllowPseudoKindTuplesMCP_NodeClass_AllowedWithProviderSAR(t *testing.T) {
 	ctx := withTestUserPerms(t, "bob", nil, nil)
-	perms := getPermCache().Get("bob")
+	perms := getPermCache().Get("bob", nil)
 	// EC2 only — single-provider grant must be enough for the kind-level gate.
 	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", true)
 	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
@@ -317,7 +317,7 @@ func TestHandleGetNeighborhoodMCP_NodeClassRootNotNamespaceRequired(t *testing.T
 
 	// Unauthorized
 	ctxDeny := withTestUserPerms(t, "alice", nil, nil)
-	denyPerms := getPermCache().Get("alice")
+	denyPerms := getPermCache().Get("alice", nil)
 	denyPerms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", false)
 	denyPerms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
 	denyPerms.SetCanI("get", "karpenter.k8s.gcp", "gcenodeclasses", "", false)
@@ -337,7 +337,7 @@ func TestHandleGetNeighborhoodMCP_NodeClassRootNotNamespaceRequired(t *testing.T
 
 	// Authorized
 	ctxAllow := withTestUserPerms(t, "bob", nil, nil)
-	allowPerms := getPermCache().Get("bob")
+	allowPerms := getPermCache().Get("bob", nil)
 	allowPerms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", true)
 	allowPerms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
 	allowPerms.SetCanI("get", "karpenter.k8s.gcp", "gcenodeclasses", "", false)
@@ -361,7 +361,7 @@ func TestHandleGetNeighborhoodMCP_NodePoolRootNotNamespaceRequired(t *testing.T)
 	setupSecretRefCacheMCP(t)
 
 	ctxDeny := withTestUserPerms(t, "alice", nil, nil)
-	denyPerms := getPermCache().Get("alice")
+	denyPerms := getPermCache().Get("alice", nil)
 	denyPerms.SetCanI("get", "karpenter.sh", "nodepools", "", false)
 	_, _, err := handleGetNeighborhood(ctxDeny, nil, getNeighborhoodInput{
 		Kind: "nodepool",
@@ -378,7 +378,7 @@ func TestHandleGetNeighborhoodMCP_NodePoolRootNotNamespaceRequired(t *testing.T)
 	}
 
 	ctxAllow := withTestUserPerms(t, "bob", nil, nil)
-	allowPerms := getPermCache().Get("bob")
+	allowPerms := getPermCache().Get("bob", nil)
 	allowPerms.SetCanI("get", "karpenter.sh", "nodepools", "", true)
 	_, _, err2 := handleGetNeighborhood(ctxAllow, nil, getNeighborhoodInput{
 		Kind: "nodepool",
@@ -456,7 +456,7 @@ func TestNeighborhoodMCP_SecretRootIncluded(t *testing.T) {
 	// `get secrets`. Both Allow checks must pass; root resolves; result
 	// includes the Secret node.
 	ctx := withTestUserPerms(t, "bob", nil, []string{"default"})
-	bobPerms := getPermCache().Get("bob")
+	bobPerms := getPermCache().Get("bob", nil)
 	bobPerms.SetCanI("get", "", "secrets", "default", true)
 
 	call, _, err := handleGetNeighborhood(ctx, nil, getNeighborhoodInput{
@@ -494,7 +494,7 @@ func TestNeighborhoodMCP_SecretRootIncluded(t *testing.T) {
 	// Existence-hiding preserved: same 404-shape result the
 	// IncludeSecrets=false path produced, but driven by RBAC.
 	ctxDenied := withTestUserPerms(t, "alice", nil, []string{"default"})
-	alicePerms := getPermCache().Get("alice")
+	alicePerms := getPermCache().Get("alice", nil)
 	alicePerms.SetCanI("get", "", "secrets", "default", false)
 
 	_, _, err2 := handleGetNeighborhood(ctxDenied, nil, getNeighborhoodInput{

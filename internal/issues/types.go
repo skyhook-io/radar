@@ -74,7 +74,7 @@ type Ref = issuesapi.Ref
 // Count to the affected-resource fan-out EXCLUDING the subject (the subject is
 // the row header, surfaced separately) — so a single-resource issue has
 // Count = 0 (omitted on the wire), and a 50-pod crashloop under one Deployment
-// has Count = 50. For problem / missing_ref / scheduling, LastSeen is the
-// compose time and FirstSeen backs off by the observed problem duration; for
-// condition rows, both timestamps are the condition's lastTransitionTime.
+// has Count = 50. FirstSeen is present only when a detector carries an exact
+// event, condition, tracker, deletion, or creation-invariant timestamp;
+// ResourceCreatedAt remains separate context for unknown-onset rows.
 type Issue = issuesapi.Issue

@@ -84,7 +84,7 @@ func TestVeleroStoredBackups_DeniesRatherThanReportingAnEmptyLocation(t *testing
 	env := newAuthTestServer(t)
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"velero"}}
 	allow(perms, veleroGroup, "backups", "velero", false)
-	env.srv.permCache.Set("nobody", perms)
+	env.srv.permCache.Set("nobody", nil, perms)
 
 	resp := env.authGet(t, "/api/velero/backupstoragelocations/velero/default/backups", "nobody", "")
 	defer resp.Body.Close()
@@ -245,7 +245,7 @@ func TestVeleroStoredBackupsCountsWhatCanActuallyBeRestored(t *testing.T) {
 	env := newAuthTestServer(t)
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"velero"}}
 	allow(perms, veleroGroup, "backups", "velero", true)
-	env.srv.permCache.Set("reader", perms)
+	env.srv.permCache.Set("reader", nil, perms)
 
 	resp := env.authGet(t, "/api/velero/backupstoragelocations/velero/primary/backups", "reader", "")
 	defer resp.Body.Close()
@@ -293,7 +293,7 @@ func TestVeleroStoredBackupsSeparatesNoVeleroFromAFailedRead(t *testing.T) {
 	env := newAuthTestServer(t)
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"velero"}}
 	allow(perms, veleroGroup, "backups", "velero", true)
-	env.srv.permCache.Set("reader", perms)
+	env.srv.permCache.Set("reader", nil, perms)
 
 	resp := env.authGet(t, "/api/velero/backupstoragelocations/velero/primary/backups", "reader", "")
 	defer resp.Body.Close()

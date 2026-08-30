@@ -262,16 +262,18 @@ func karpenterRegistrationUnhealthyIssue(gvr schema.GroupVersionResource, pool *
 
 func newKarpenterConditionIssue(gvr schema.GroupVersionResource, kind string, obj *unstructured.Unstructured, condition *metav1.Condition, reason, cause, action string) Issue {
 	message := cause
-	var since time.Duration
+	var transitionAt time.Time
+	var transitionKnown bool
 	if condition != nil {
 		if condition.Message != "" {
 			message = condition.Message
 		}
 		if !condition.LastTransitionTime.IsZero() {
-			since = time.Since(condition.LastTransitionTime.Time)
+			transitionAt = condition.LastTransitionTime.Time
+			transitionKnown = true
 		}
 	}
-	issue := newConditionIssue(gvr, kind, obj.GetNamespace(), obj.GetName(), SeverityWarning, reason, message, since, reason, obj.GetCreationTimestamp().Time)
+	issue := newConditionIssue(gvr, kind, obj.GetNamespace(), obj.GetName(), SeverityWarning, reason, message, transitionAt, transitionKnown, reason, obj.GetCreationTimestamp().Time)
 	issue.Cause = cause
 	issue.Action = action
 	classifyIssue(&issue)
@@ -371,7 +373,8 @@ func karpenterMissingNodeClassIssue(pool *unstructured.Unstructured, ref karpent
 		SeverityWarning,
 		reason,
 		message,
-		0,
+		time.Time{},
+		false,
 		reason+"\x00"+resourceKey(ref.Group, ref.Kind, "", ref.Name),
 		pool.GetCreationTimestamp().Time,
 	)

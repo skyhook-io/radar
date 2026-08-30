@@ -34,7 +34,7 @@ import { ResourceBar } from '../ui/ResourceBar'
 import type { SelectedResource, APIResource } from '../../types'
 import { isForbiddenError } from '../../types/fetch-error'
 import type { NavigateToResource } from '../../utils/navigation'
-import { categorizeResources, CORE_RESOURCES, findAPIResourceForRoute } from '../../utils/api-resources'
+import { categorizeResources, CORE_RESOURCES, findAPIResourceForRoute, isCoreBatchJob } from '../../utils/api-resources'
 import { copyText } from '../../utils/clipboard'
 import {
   getPodStatus,
@@ -137,7 +137,14 @@ import {
   parseColumnFilterExcludes,
   podMatchesProblemCategory,
   SEVERITY_DOT_COLOR,
+  healthColors,
 } from './resource-utils'
+import { getGenericResourceStatus } from './generic-status'
+import { getIstioGatewayServerCount, getIstioGatewaySelectorString } from './resource-utils-istio'
+import {
+  type PrinterColumnDef, type PrinterTable, PRINTER_COLUMN_PREFIX, formatPrinterCell, printerCellSortValue,
+  printerCellTone, printerColumnKey, printerColumnWidth, printerTableKey, printerTableMatchesKind, readPrinterCell,
+} from './printer-columns'
 import { SEVERITY_BADGE, EVENT_TYPE_COLORS } from '../../utils/badge-colors'
 import { pluralize } from '../../utils/pluralize'
 import { getPodGpuCount, getNodeGpuCount } from '../../utils/extended-resources'
@@ -157,6 +164,18 @@ import { NodePoolCell, NodeClaimCell, EC2NodeClassCell } from './renderers/karpe
 import { ScaledObjectCell, ScaledJobCell, TriggerAuthenticationCell, ClusterTriggerAuthenticationCell } from './renderers/keda-cells'
 import { ResourceClaimCell, ResourceClaimTemplateCell, DeviceClassCell, ResourceSliceCell } from './renderers/dra-cells'
 import { NvidiaClusterPolicyCell, NvidiaDriverCell } from './renderers/nvidia-cells'
+import { ClusterQueueCell, LocalQueueCell, KueueWorkloadCell, ResourceFlavorCell, AdmissionCheckCell, ProvisioningRequestCell } from './renderers/kueue-cells'
+import { RayClusterCell, RayJobCell, RayServiceCell, RayCronJobCell } from './renderers/ray-cells'
+import { LeaderWorkerSetCell, JobSetCell } from './renderers/jobset-lws-cells'
+import { getJobSetReadyJobs, getJobSetRestarts } from './resource-utils-jobset-lws'
+import { InferenceServiceCell, ServingRuntimeCell, InferenceGraphCell, TrainedModelCell, LLMInferenceServiceCell } from './renderers/kserve-cells'
+import { InferencePoolCell, InferenceObjectiveCell } from './renderers/inference-gateway-cells'
+import { VolcanoJobCell, VolcanoQueueCell, VolcanoPodGroupCell, JobFlowCell, JobTemplateCell } from './renderers/volcano-cells'
+import { KaiQueueCell, KaiPodGroupCell } from './renderers/kai-cells'
+import { KaitoWorkspaceCell, RAGEngineCell } from './renderers/kaito-cells'
+import { NIMServiceCell, NIMCacheCell, NIMPipelineCell } from './renderers/nim-cells'
+import { AMDDeviceConfigCell } from './renderers/amd-gpu-cells'
+import { PyTorchJobCell, TFJobCell, MPIJobCell, TrainJobCell } from './renderers/kubeflow-training-cells'
 import { ServiceMonitorCell, PrometheusRuleCell, PodMonitorCell } from './renderers/prometheus-cells'
 import { PolicyReportCell, ClusterPolicyReportCell, KyvernoPolicyCell, ClusterPolicyCell,
   KyvernoUpdateRequestCell,
@@ -617,6 +636,14 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'rules', label: 'Rules', width: 'w-16', hideOnMobile: true },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
+  istiogateways: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-48' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'servers', label: 'Servers', width: 'w-24' },
+    { key: 'selector', label: 'Selector', width: 'w-56' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
   gatewayclasses: [
     { key: 'name', label: 'Name' },
     { key: 'controller', label: 'Controller', width: 'w-64', tooltip: 'Gateway controller implementation (spec.controllerName)' },
@@ -700,6 +727,314 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'driverType', label: 'Type', width: 'w-28' },
     { key: 'version', label: 'Version', width: 'w-32' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  clusterqueues: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'cohort', label: 'Cohort', width: 'w-32' },
+    { key: 'pendingWorkloads', label: 'Pending', width: 'w-24', tooltip: 'Pending workloads' },
+    { key: 'admittedWorkloads', label: 'Admitted', width: 'w-24', tooltip: 'Admitted workloads' },
+    { key: 'flavors', label: 'Flavors', width: 'w-40' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  localqueues: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'clusterQueue', label: 'Cluster Queue', width: 'w-40' },
+    { key: 'pendingWorkloads', label: 'Pending', width: 'w-24' },
+    { key: 'admittedWorkloads', label: 'Admitted', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  workloads: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'queueName', label: 'Queue', width: 'w-36' },
+    { key: 'admittedBy', label: 'Admitted By', width: 'w-36', tooltip: 'Admitting ClusterQueue' },
+    { key: 'priority', label: 'Priority', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  resourceflavors: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'nodeLabels', label: 'Node Labels', width: 'w-28', tooltip: 'Node label selector count' },
+    { key: 'taints', label: 'Taints', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  admissionchecks: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'controllerName', label: 'Controller', width: 'w-64' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  provisioningrequests: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'provisioningClassName', label: 'Class', width: 'w-56' },
+    { key: 'podSets', label: 'Pod Sets', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  rayclusters: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'rayVersion', label: 'Ray Version', width: 'w-28' },
+    { key: 'workers', label: 'Workers', width: 'w-24', tooltip: 'Available/desired worker replicas' },
+    { key: 'headService', label: 'Head Service', width: 'w-48' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  rayjobs: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'jobStatus', label: 'Job Status', width: 'w-28' },
+    { key: 'deploymentStatus', label: 'Deployment', width: 'w-32' },
+    { key: 'cluster', label: 'Cluster', width: 'w-48' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  rayservices: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'serviceStatus', label: 'Service Status', width: 'w-28' },
+    { key: 'clusters', label: 'Clusters', width: 'w-56', tooltip: 'Active and pending RayCluster names' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  raycronjobs: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'schedule', label: 'Schedule', width: 'w-32' },
+    { key: 'suspend', label: 'Suspend', width: 'w-20' },
+    { key: 'lastSchedule', label: 'Last Schedule', width: 'w-28' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  leaderworkersets: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'replicas', label: 'Groups', width: 'w-20', tooltip: 'Desired leader-worker groups' },
+    { key: 'size', label: 'Size', width: 'w-20', tooltip: 'Pods per group' },
+    { key: 'ready', label: 'Ready', width: 'w-20', tooltip: 'Ready groups / desired groups' },
+    { key: 'updated', label: 'Updated', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  jobsets: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'replicatedJobs', label: 'Repl. Jobs', width: 'w-24', tooltip: 'Number of replicated job templates' },
+    { key: 'ready', label: 'Ready', width: 'w-20' },
+    { key: 'succeeded', label: 'Succeeded', width: 'w-24' },
+    { key: 'failed', label: 'Failed', width: 'w-20' },
+    { key: 'restarts', label: 'Restarts', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  inferenceservices: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-36', tooltip: 'Ready condition + model load state' },
+    { key: 'url', label: 'URL', width: 'w-64' },
+    { key: 'modelFormat', label: 'Format', width: 'w-28' },
+    { key: 'runtime', label: 'Runtime', width: 'w-40' },
+    { key: 'deploymentMode', label: 'Mode', width: 'w-28', tooltip: 'Serverless, RawDeployment, or ModelMesh' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  servingruntimes: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'modelFormats', label: 'Model Formats', width: 'w-44', tooltip: 'Supported model formats' },
+    { key: 'image', label: 'Image', width: 'w-64' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  clusterservingruntimes: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'modelFormats', label: 'Model Formats', width: 'w-44', tooltip: 'Supported model formats' },
+    { key: 'image', label: 'Image', width: 'w-64' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  inferencegraphs: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'nodes', label: 'Nodes', width: 'w-20', tooltip: 'Router nodes in the graph' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  trainedmodels: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'framework', label: 'Framework', width: 'w-28' },
+    { key: 'storageUri', label: 'Storage URI', width: 'w-56' },
+    { key: 'inferenceService', label: 'Inference Service', width: 'w-40', tooltip: 'Parent InferenceService' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  llminferenceservices: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'model', label: 'Model', width: 'w-56', tooltip: 'Model name or URI' },
+    { key: 'replicas', label: 'Replicas', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  inferencepools: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-36', tooltip: 'Gateway acceptance and EPP resolution' },
+    { key: 'selector', label: 'Selector', width: 'w-48' },
+    { key: 'targetPorts', label: 'Target Ports', width: 'w-28' },
+    { key: 'extensionRef', label: 'Endpoint Picker', width: 'w-40', tooltip: 'EPP extension service' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  inferenceobjectives: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'poolRef', label: 'Pool', width: 'w-40', tooltip: 'Target InferencePool' },
+    { key: 'priority', label: 'Priority', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  volcanojobs: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'queue', label: 'Queue', width: 'w-32' },
+    { key: 'minAvailable', label: 'Min Available', width: 'w-28' },
+    { key: 'pods', label: 'Pods', width: 'w-44', tooltip: 'Running / succeeded / failed pod counts' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  volcanoqueues: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'weight', label: 'Weight', width: 'w-20' },
+    { key: 'capability', label: 'Capability', width: 'w-48' },
+    { key: 'allocated', label: 'Allocated', width: 'w-48' },
+    { key: 'podGroups', label: 'PodGroups', width: 'w-44', tooltip: 'PodGroup counts by state' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  volcanopodgroups: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-32' },
+    { key: 'queue', label: 'Queue', width: 'w-32' },
+    { key: 'minMember', label: 'Min Member', width: 'w-28' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  jobflows: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'flows', label: 'Flows', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  jobtemplates: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'tasks', label: 'Tasks', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  kaiqueues: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'parentQueue', label: 'Parent', width: 'w-32' },
+    { key: 'priority', label: 'Priority', width: 'w-20' },
+    { key: 'quota', label: 'Quota', width: 'w-52', tooltip: 'GPU fractions, CPU millicpus, memory MB; -1 = unlimited' },
+    { key: 'allocated', label: 'Allocated', width: 'w-48' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  kaipodgroups: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-32' },
+    { key: 'queue', label: 'Queue', width: 'w-32' },
+    { key: 'minMember', label: 'Min Member', width: 'w-28' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  kaitoworkspaces: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'instanceType', label: 'Instance Type', width: 'w-40', tooltip: 'GPU node SKU provisioned for the workspace' },
+    { key: 'preset', label: 'Model', width: 'w-44', tooltip: 'Preset model (inference or tuning)' },
+    { key: 'nodes', label: 'Nodes', width: 'w-20', tooltip: 'Worker nodes ready / target' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  ragengines: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'embedding', label: 'Embedding Model', width: 'w-56', tooltip: 'Local model ID/image or remote endpoint' },
+    { key: 'instanceType', label: 'Instance Type', width: 'w-40' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  nimservices: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'model', label: 'Model / Image', width: 'w-64', tooltip: 'Served model name (falls back to NIM image)' },
+    { key: 'replicas', label: 'Replicas', width: 'w-28', tooltip: 'Available / desired (HPA range when autoscaling)' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  nimcaches: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'source', label: 'Model Source', width: 'w-64', tooltip: 'NGC model puller image, or DataStore/HF model name' },
+    { key: 'storage', label: 'Storage', width: 'w-24', tooltip: 'Requested PVC size' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  nimpipelines: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'services', label: 'Services', width: 'w-28', tooltip: 'NIM services in pipeline' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  deviceconfigs: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'driver', label: 'Driver', width: 'w-40', tooltip: 'Out-of-tree driver install enabled (version)' },
+    { key: 'devicePluginImage', label: 'Device Plugin', width: 'w-64' },
+    { key: 'nodes', label: 'Nodes', width: 'w-20', tooltip: 'Device plugin DaemonSet available / desired' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  pytorchjobs: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'replicas', label: 'Progress', width: 'w-48', tooltip: 'Active + succeeded / desired per replica type; failures shown separately' },
+    { key: 'elapsed', label: 'Elapsed', width: 'w-24', tooltip: 'Start to completion (or now)' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  tfjobs: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'replicas', label: 'Progress', width: 'w-56', tooltip: 'Active + succeeded / desired per replica type; failures shown separately' },
+    { key: 'elapsed', label: 'Elapsed', width: 'w-24', tooltip: 'Start to completion (or now)' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  mpijobs: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'replicas', label: 'Progress', width: 'w-48', tooltip: 'Active + succeeded / desired per replica type; failures shown separately' },
+    { key: 'elapsed', label: 'Elapsed', width: 'w-24', tooltip: 'Start to completion (or now)' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  trainjobs: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'runtime', label: 'Runtime', width: 'w-44', tooltip: 'Training runtime reference' },
+    { key: 'suspended', label: 'Suspended', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   scaledjobs: [
@@ -2105,6 +2440,21 @@ const GROUP_QUALIFIED_COLUMN_KEYS: Record<string, Record<string, string>> = {
   // completely different shape (cluster + method, no storage location/expiry).
   backups: { 'postgresql.cnpg.io': 'cnpgbackups' },
   clusterpolicies: { 'nvidia.com': 'nvidiaclusterpolicies' },
+  // Kyverno's namespaced Policy. `policies` is a plural several projects use,
+  // so it is only Kyverno's when the group says so; the curated set and its
+  // cells already existed but nothing routed to them.
+  policies: { 'kyverno.io': 'kyvernopolicies' },
+  // Istio Gateway is not a Gateway API Gateway: it has servers and a workload
+  // selector, and none of Class/Listeners/Routes/Addresses.
+  gateways: { 'networking.istio.io': 'istiogateways' },
+  job: { batch: 'jobs', 'batch.volcano.sh': 'volcanojobs' },
+  jobs: { batch: 'jobs', 'batch.volcano.sh': 'volcanojobs' },
+  queue: { 'scheduling.volcano.sh': 'volcanoqueues', 'scheduling.run.ai': 'kaiqueues' },
+  queues: { 'scheduling.volcano.sh': 'volcanoqueues', 'scheduling.run.ai': 'kaiqueues' },
+  podgroup: { 'scheduling.volcano.sh': 'volcanopodgroups', 'scheduling.run.ai': 'kaipodgroups' },
+  podgroups: { 'scheduling.volcano.sh': 'volcanopodgroups', 'scheduling.run.ai': 'kaipodgroups' },
+  workspace: { 'kaito.sh': 'kaitoworkspaces' },
+  workspaces: { 'kaito.sh': 'kaitoworkspaces' },
   services: { 'serving.knative.dev': 'knativeservices' },
   configurations: { 'serving.knative.dev': 'knativeconfigurations' },
   revisions: { 'serving.knative.dev': 'knativerevisions' },
@@ -2173,6 +2523,7 @@ const GROUP_QUALIFIED_COLUMN_KEYS: Record<string, Record<string, string>> = {
 
 const GROUP_QUALIFIED_ONLY_COLUMN_KEYS = new Set([
   'networkpolicy', 'networkpolicies',
+  'job', 'jobs',
   // Other projects serve their own IPPool CRD, so only a Calico group earns the
   // Calico columns.
   'ippool', 'ippools',
@@ -2181,6 +2532,7 @@ const GROUP_QUALIFIED_ONLY_COLUMN_KEYS = new Set([
   'stagedglobalnetworkpolicy', 'stagedglobalnetworkpolicies',
   'stagedkubernetesnetworkpolicy', 'stagedkubernetesnetworkpolicies',
 ])
+
 const CALICO_ONLY_COLUMN_KEYS = new Set([
   'globalnetworkpolicy', 'globalnetworkpolicies',
   'stagednetworkpolicy', 'stagednetworkpolicies',
@@ -2191,7 +2543,7 @@ const CALICO_ONLY_COLUMN_KEYS = new Set([
 // Normalize a kind name to its plural API form used in KNOWN_COLUMNS keys.
 // Handles CRD singular names from URLs: 'ScaledObject' → 'scaledobjects', 'NodePool' → 'nodepools'
 // When group is provided, resolves collisions (e.g., 'services' + 'serving.knative.dev' → 'knativeservices')
-function normalizeKindToPlural(kind: string, group?: string): string {
+export function normalizeKindToPlural(kind: string, group?: string): string {
   const lower = kind.toLowerCase()
   // Check group-qualified mapping first for collision resolution
   if (group && GROUP_QUALIFIED_COLUMN_KEYS[lower]?.[group]) {
@@ -2236,18 +2588,394 @@ function isLikelyCrossplaneMRGroup(kind: string, group: string): boolean {
   return false
 }
 
+/**
+ * API groups the Kubernetes API server reserves. A CRD cannot be created in
+ * one, so a curated set keyed on a core kind can never be claimed by a foreign
+ * resource and needs no ownership entry. Note the deliberate omissions:
+ * gateway.networking.k8s.io, snapshot.storage.k8s.io and cluster.x-k8s.io end
+ * in k8s.io but ARE CRD groups, so this is an explicit list, not a suffix test.
+ */
+const CORE_API_GROUPS = new Set([
+  '', 'apps', 'batch', 'autoscaling', 'policy', 'networking.k8s.io',
+  'rbac.authorization.k8s.io', 'storage.k8s.io', 'apiextensions.k8s.io',
+  'coordination.k8s.io', 'discovery.k8s.io', 'scheduling.k8s.io',
+  'admissionregistration.k8s.io', 'certificates.k8s.io', 'node.k8s.io',
+  'flowcontrol.apiserver.k8s.io', 'authentication.k8s.io', 'authorization.k8s.io',
+  'apiregistration.k8s.io', 'events.k8s.io', 'resource.k8s.io',
+  'internal.apiserver.k8s.io', 'storagemigration.k8s.io',
+])
+
+// ProviderConfig groups are unbounded — one per provider — so they are matched
+// by suffix. Managed resources take the isLikelyCrossplaneMRGroup branch above.
+function isCuratedUnboundedGroup(key: string, group: string): boolean {
+  if (key !== 'providerconfigs') return false
+  return group.endsWith('.crossplane.io') || group.endsWith('.upbound.io')
+}
+
+/**
+ * Which API group(s) each curated column set was written for.
+ *
+ * A CRD is not the kind Radar curated just because it reuses its plural:
+ * chaos-mesh ships workflows.chaos-mesh.org, Istio ships gateways, and Flux
+ * ships providers. Rendering Argo's or Gateway API's columns for those reads
+ * every field off a schema the object does not have. Anything not claimed here
+ * falls through to the generic set (and, for a CRD, to its own printer
+ * columns), which is the honest answer for a kind Radar has never seen.
+ *
+ * Core kinds need no entry: the API server reserves their groups, so a CRD
+ * cannot occupy one. See CORE_API_GROUPS.
+ */
+const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
+  challenges: ['acme.cert-manager.io'],
+  orders: ['acme.cert-manager.io'],
+  compositeresourcedefinitions: ['apiextensions.crossplane.io'],
+  compositions: ['apiextensions.crossplane.io'],
+  clustercompliancereports: ['aquasecurity.github.io'],
+  clusterinfraassessmentreports: ['aquasecurity.github.io'],
+  clusterrbacassessmentreports: ['aquasecurity.github.io'],
+  clustersbomreports: ['aquasecurity.github.io'],
+  configauditreports: ['aquasecurity.github.io'],
+  exposedsecretreports: ['aquasecurity.github.io'],
+  infraassessmentreports: ['aquasecurity.github.io'],
+  rbacassessmentreports: ['aquasecurity.github.io'],
+  sbomreports: ['aquasecurity.github.io'],
+  vulnerabilityreports: ['aquasecurity.github.io'],
+  analysisruns: ['argoproj.io'],
+  applications: ['argoproj.io'],
+  applicationsets: ['argoproj.io'],
+  appprojects: ['argoproj.io'],
+  clusterworkflowtemplates: ['argoproj.io'],
+  cronworkflows: ['argoproj.io'],
+  rollouts: ['argoproj.io'],
+  workflows: ['argoproj.io'],
+  workflowtemplates: ['argoproj.io'],
+  barmanobjectstores: ['barmancloud.cnpg.io'],
+  sealedsecrets: ['bitnami.com'],
+  certificaterequests: ['cert-manager.io'],
+  certificates: ['cert-manager.io'],
+  clusterissuers: ['cert-manager.io'],
+  issuers: ['cert-manager.io'],
+  capiclusters: ['cluster.x-k8s.io'],
+  clusterclasses: ['cluster.x-k8s.io'],
+  machinedeployments: ['cluster.x-k8s.io'],
+  machinehealthchecks: ['cluster.x-k8s.io'],
+  machinepools: ['cluster.x-k8s.io'],
+  machines: ['cluster.x-k8s.io'],
+  machinesets: ['cluster.x-k8s.io'],
+  kubeadmcontrolplanes: ['controlplane.cluster.x-k8s.io'],
+  brokers: ['eventing.knative.dev'],
+  eventtypes: ['eventing.knative.dev'],
+  triggers: ['eventing.knative.dev'],
+  clusterexternalsecrets: ['external-secrets.io'],
+  clustersecretstores: ['external-secrets.io'],
+  externalsecrets: ['external-secrets.io'],
+  secretstores: ['external-secrets.io'],
+  parallels: ['flows.knative.dev'],
+  sequences: ['flows.knative.dev'],
+  gatewayclasses: ['gateway.networking.k8s.io'],
+  gateways: ['gateway.networking.k8s.io'],
+  istiogateways: ['networking.istio.io'],
+  grpcroutes: ['gateway.networking.k8s.io'],
+  httproutes: ['gateway.networking.k8s.io'],
+  tcproutes: ['gateway.networking.k8s.io'],
+  tlsroutes: ['gateway.networking.k8s.io'],
+  helmreleases: ['helm.toolkit.fluxcd.io'],
+  awsmachines: ['infrastructure.cluster.x-k8s.io'],
+  awsmachinetemplates: ['infrastructure.cluster.x-k8s.io'],
+  awsmanagedclusters: ['infrastructure.cluster.x-k8s.io'],
+  awsmanagedcontrolplanes: ['controlplane.cluster.x-k8s.io'],
+  awsmanagedmachinepools: ['infrastructure.cluster.x-k8s.io'],
+  azuremachines: ['infrastructure.cluster.x-k8s.io'],
+  azuremachinetemplates: ['infrastructure.cluster.x-k8s.io'],
+  azuremanagedclusters: ['infrastructure.cluster.x-k8s.io'],
+  azuremanagedcontrolplanes: ['infrastructure.cluster.x-k8s.io'],
+  azuremanagedmachinepools: ['infrastructure.cluster.x-k8s.io'],
+  gcpmachines: ['infrastructure.cluster.x-k8s.io'],
+  gcpmachinetemplates: ['infrastructure.cluster.x-k8s.io'],
+  gcpmanagedclusters: ['infrastructure.cluster.x-k8s.io'],
+  gcpmanagedcontrolplanes: ['infrastructure.cluster.x-k8s.io'],
+  gcpmanagedmachinepools: ['infrastructure.cluster.x-k8s.io'],
+  ec2nodeclasses: ['karpenter.k8s.aws'],
+  nodeclaims: ['karpenter.sh'],
+  nodepools: ['karpenter.sh'],
+  clustertriggerauthentications: ['keda.sh'],
+  scaledjobs: ['keda.sh'],
+  scaledobjects: ['keda.sh'],
+  triggerauthentications: ['keda.sh'],
+  kustomizations: ['kustomize.toolkit.fluxcd.io'],
+  cleanuppolicies: ['kyverno.io'],
+  clustercleanuppolicies: ['kyverno.io'],
+  clusterpolicies: ['kyverno.io'],
+  kyvernopolicies: ['kyverno.io'],
+  updaterequests: ['kyverno.io'],
+  policyexceptions: ['kyverno.io', 'policies.kyverno.io'],
+  channels: ['messaging.knative.dev'],
+  inmemorychannels: ['messaging.knative.dev'],
+  knativesubscriptions: ['messaging.knative.dev'],
+  podmonitors: ['monitoring.coreos.com'],
+  prometheusrules: ['monitoring.coreos.com'],
+  servicemonitors: ['monitoring.coreos.com'],
+  knativecertificates: ['networking.internal.knative.dev'],
+  knativeingresses: ['networking.internal.knative.dev'],
+  serverlessservices: ['networking.internal.knative.dev'],
+  destinationrules: ['networking.istio.io'],
+  serviceentries: ['networking.istio.io'],
+  virtualservices: ['networking.istio.io'],
+  alerts: ['notification.toolkit.fluxcd.io'],
+  nvidiaclusterpolicies: ['nvidia.com'],
+  nvidiadrivers: ['nvidia.com'],
+  providers: ['pkg.crossplane.io'],
+  deletingpolicies: ['policies.kyverno.io'],
+  generatingpolicies: ['policies.kyverno.io'],
+  imagevalidatingpolicies: ['policies.kyverno.io'],
+  mutatingpolicies: ['policies.kyverno.io'],
+  namespaceddeletingpolicies: ['policies.kyverno.io'],
+  namespacedgeneratingpolicies: ['policies.kyverno.io'],
+  namespacedimagevalidatingpolicies: ['policies.kyverno.io'],
+  namespacedmutatingpolicies: ['policies.kyverno.io'],
+  namespacedvalidatingpolicies: ['policies.kyverno.io'],
+  validatingpolicies: ['policies.kyverno.io'],
+  cnpgbackups: ['postgresql.cnpg.io'],
+  cnpgclusterimagecatalogs: ['postgresql.cnpg.io'],
+  cnpgclusters: ['postgresql.cnpg.io'],
+  cnpgdatabases: ['postgresql.cnpg.io'],
+  cnpgimagecatalogs: ['postgresql.cnpg.io'],
+  cnpgpublications: ['postgresql.cnpg.io'],
+  cnpgsubscriptions: ['postgresql.cnpg.io'],
+  poolers: ['postgresql.cnpg.io'],
+  scheduledbackups: ['postgresql.cnpg.io'],
+  calicoglobalnetworkpolicies: ['projectcalico.org', 'crd.projectcalico.org'],
+  calicohostendpoints: ['projectcalico.org', 'crd.projectcalico.org'],
+  calicoippools: ['projectcalico.org', 'crd.projectcalico.org'],
+  caliconetworkpolicies: ['projectcalico.org', 'crd.projectcalico.org'],
+  calicostagedglobalnetworkpolicies: ['projectcalico.org', 'crd.projectcalico.org'],
+  calicostagedkubernetesnetworkpolicies: ['projectcalico.org', 'crd.projectcalico.org'],
+  calicostagednetworkpolicies: ['projectcalico.org', 'crd.projectcalico.org'],
+  calicotiers: ['projectcalico.org', 'crd.projectcalico.org'],
+  httpproxies: ['projectcontour.io'],
+  clusterephemeralreports: ['reports.kyverno.io'],
+  ephemeralreports: ['reports.kyverno.io'],
+  authorizationpolicies: ['security.istio.io'],
+  peerauthentications: ['security.istio.io'],
+  domainmappings: ['serving.knative.dev'],
+  knativeconfigurations: ['serving.knative.dev'],
+  knativerevisions: ['serving.knative.dev'],
+  knativeroutes: ['serving.knative.dev'],
+  knativeservices: ['serving.knative.dev'],
+  gitrepositories: ['source.toolkit.fluxcd.io'],
+  helmrepositories: ['source.toolkit.fluxcd.io'],
+  ocirepositories: ['source.toolkit.fluxcd.io'],
+  apiserversources: ['sources.knative.dev'],
+  containersources: ['sources.knative.dev'],
+  pingsources: ['sources.knative.dev'],
+  sinkbindings: ['sources.knative.dev'],
+  ingressroutes: ['traefik.io', 'traefik.containo.us'],
+  ingressroutetcps: ['traefik.io', 'traefik.containo.us'],
+  ingressrouteudps: ['traefik.io', 'traefik.containo.us'],
+  middlewares: ['traefik.io', 'traefik.containo.us'],
+  middlewaretcps: ['traefik.io', 'traefik.containo.us'],
+  serverstransports: ['traefik.io', 'traefik.containo.us'],
+  serverstransporttcps: ['traefik.io', 'traefik.containo.us'],
+  tlsoptions: ['traefik.io', 'traefik.containo.us'],
+  tlsstores: ['traefik.io', 'traefik.containo.us'],
+  traefikservices: ['traefik.io', 'traefik.containo.us'],
+  backuprepositories: ['velero.io'],
+  backups: ['velero.io'],
+  backupstoragelocations: ['velero.io'],
+  velerorestores: ['velero.io'],
+  veleroschedules: ['velero.io'],
+  volumesnapshotlocations: ['velero.io'],
+  clusterpolicyreports: ['wgpolicyk8s.io'],
+  policyreports: ['wgpolicyk8s.io'],
+  deviceconfigs: ['amd.com'],
+  nimcaches: ['apps.nvidia.com'],
+  nimpipelines: ['apps.nvidia.com'],
+  nimservices: ['apps.nvidia.com'],
+  provisioningrequests: ['autoscaling.x-k8s.io'],
+  volcanojobs: ['batch.volcano.sh'],
+  jobflows: ['flow.volcano.sh'],
+  jobtemplates: ['flow.volcano.sh'],
+  inferencepools: ['inference.networking.k8s.io', 'inference.networking.x-k8s.io'],
+  inferenceobjectives: ['inference.networking.x-k8s.io', 'llm-d.ai'],
+  jobsets: ['jobset.x-k8s.io'],
+  kaitoworkspaces: ['kaito.sh'],
+  ragengines: ['kaito.sh'],
+  admissionchecks: ['kueue.x-k8s.io'],
+  clusterqueues: ['kueue.x-k8s.io'],
+  localqueues: ['kueue.x-k8s.io'],
+  resourceflavors: ['kueue.x-k8s.io'],
+  workloads: ['kueue.x-k8s.io'],
+  mpijobs: ['kubeflow.org'],
+  pytorchjobs: ['kubeflow.org'],
+  tfjobs: ['kubeflow.org'],
+  leaderworkersets: ['leaderworkerset.x-k8s.io'],
+  rayclusters: ['ray.io'],
+  raycronjobs: ['ray.io'],
+  rayjobs: ['ray.io'],
+  rayservices: ['ray.io'],
+  kaipodgroups: ['scheduling.run.ai'],
+  kaiqueues: ['scheduling.run.ai'],
+  volcanopodgroups: ['scheduling.volcano.sh'],
+  volcanoqueues: ['scheduling.volcano.sh'],
+  clusterservingruntimes: ['serving.kserve.io'],
+  inferencegraphs: ['serving.kserve.io'],
+  inferenceservices: ['serving.kserve.io'],
+  llminferenceservices: ['serving.kserve.io'],
+  servingruntimes: ['serving.kserve.io'],
+  trainedmodels: ['serving.kserve.io'],
+  trainjobs: ['trainer.kubeflow.org'],
+}
+
 function getColumnsForKind(kind: string, group?: string): Column[] {
-  const key = normalizeKindToPlural(kind, group)
-  if (KNOWN_COLUMNS[key]) return KNOWN_COLUMNS[key]
+  // Ahead of the curated lookup: a provider ships one CRD per service, so a
+  // managed resource routinely collides with a curated plural (acm's
+  // Certificate, s3's Service). Resolving the collision the other way would
+  // return DEFAULT_COLUMNS and never reach this branch at all.
   if (group && isLikelyCrossplaneMRGroup(kind, group)) {
     return KNOWN_COLUMNS.crossplanemanagedresources
   }
+  const key = normalizeKindToPlural(kind, group)
+  const curated = KNOWN_COLUMNS[key]
+  if (curated) {
+    const owners = CURATED_COLUMN_GROUPS[key]
+    if (group && owners) return owners.includes(group) ? curated : DEFAULT_COLUMNS
+    // A core kind cannot be shadowed by a CRD, so it keeps its columns without
+    // an ownership entry. Anything else has to be claimed for this exact group.
+    if (!group || CORE_API_GROUPS.has(group)) return curated
+    if (isCuratedUnboundedGroup(key, group)) return curated
+    return DEFAULT_COLUMNS
+  }
   return DEFAULT_COLUMNS
+}
+
+/**
+ * Whether Radar hand-curates this kind's columns. The single definition of
+ * "curated": the printer-column XOR, the storage-key qualifier, and the host's
+ * decision whether to request table mode at all must all agree, or the server
+ * does work the client throws away — or worse, they disagree about which set a
+ * kind is on.
+ */
+export function hasCuratedColumns(kind: string, group?: string): boolean {
+  return getColumnsForKind(kind, group) !== DEFAULT_COLUMNS
+}
+
+export function getCellFilterKind(kind: string, group?: string): string {
+  const normalized = normalizeKindToPlural(kind, group)
+  if (!group || hasCuratedColumns(kind, group) || normalized.startsWith('__generic_')) return normalized
+  return `__generic_${normalized}`
 }
 
 // Get the default visible columns for a kind
 function getDefaultVisibleColumns(columns: Column[]): Set<string> {
   return new Set(columns.filter(c => c.defaultVisible !== false).map(c => c.key))
+}
+
+// Materializes one vendor-declared printer column into a self-contained
+// ExtraColumn, so it rides the same render/sort/filter rails as a user's custom
+// column. Values were evaluated server-side and arrive keyed by uid.
+function buildPrinterColumn(def: PrinterColumnDef, index: number, table: PrinterTable): ExtraColumn {
+  const read = (resource: any) => readPrinterCell(table, resource?.metadata?.uid, index)
+  return {
+    key: printerColumnKey(def),
+    label: def.name,
+    width: printerColumnWidth(def),
+    // Columns in kubectl's `-o wide` tier are declared but not shown by
+    // default; the column picker still offers them.
+    defaultVisible: (def.priority ?? 0) === 0,
+    tooltip: def.description || undefined,
+    render: (resource: any) => {
+      const value = read(resource)
+      // `date` cells arrive already humanized ("5m") — the API server's table
+      // converter does that, so re-formatting here would parse "5m" as a date.
+      const text = formatPrinterCell(value)
+      if (!text) return <span className="text-sm text-theme-text-tertiary">-</span>
+      // A column the vendor named Ready/Healthy/Established carries the only
+      // scannable signal these kinds have — they have no curated Status column.
+      // Rendering it as grey text would leave a screen of uniform "True".
+      const tone = printerCellTone(def, value)
+      if (tone) {
+        return (
+          // The value, not the column's description — the header tooltip
+          // carries that. A cell tooltip exists to reveal a truncated value.
+          <Tooltip content={text}>
+            <span className={clsx('badge', healthColors[tone])}>{text}</span>
+          </Tooltip>
+        )
+      }
+      return (
+        <Tooltip content={text}>
+          <span className="text-sm text-theme-text-secondary truncate block">{text}</span>
+        </Tooltip>
+      )
+    },
+    getSortValue: (resource: any) => printerCellSortValue(read(resource), def),
+    getFilterValue: (resource: any) => formatPrinterCell(read(resource)),
+  }
+}
+
+// Printer columns fill in only where Radar has no curated set for the kind —
+// the two are exclusive, never merged. A curated set is hand-tuned and often
+// encodes why a vendor-obvious field is the wrong one to show, so it wins.
+function buildPrinterColumns(
+  kind: string,
+  group: string | undefined,
+  table: PrinterTable | null | undefined,
+): ExtraColumn[] {
+  if (!table?.columns?.length) return []
+  if (!printerTableMatchesKind(table, kind, group)) return []
+  if (hasCuratedColumns(kind, group)) return []
+  return table.columns.map((def, i) => buildPrinterColumn(def, i, table))
+}
+
+// The kind's effective column set. Printer columns replace the generic
+// Name/Namespace/Status/Age set rather than joining it: the vendor's columns
+// are the answer to the same question the generic Status column was guessing
+// at, and showing both would ask the reader which one to believe. Name,
+// Namespace and Age stay because Radar renders those itself (the server drops
+// the CRD's own duplicates of them before sending).
+function columnsForKindWithPrinter(
+  kind: string,
+  group: string | undefined,
+  printerColumns: ExtraColumn[],
+): Column[] {
+  const curated = getColumnsForKind(kind, group)
+  if (!printerColumns.length || hasCuratedColumns(kind, group)) return curated
+  return [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-48' },
+    ...printerColumns,
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ]
+}
+
+/**
+ * The visible-column set for a kind the user has saved settings for.
+ *
+ * Saved choices win, with two seeded exceptions for columns the blob predates —
+ * a user cannot have decided to hide something they were never shown:
+ *   - host extras, which are injected by the embedding app;
+ *   - printer columns, but only when the blob names none at all. Once it names
+ *     one, the user has seen the set and an absent key is a deliberate hide.
+ */
+export function mergeSavedVisibleColumns(
+  savedVisible: string[],
+  extraKeys: string[],
+  printerColumns: ExtraColumn[],
+): Set<string> {
+  const merged = new Set(savedVisible)
+  for (const k of extraKeys) merged.add(k)
+  if (!savedVisible.some(k => k.startsWith(PRINTER_COLUMN_PREFIX))) {
+    for (const c of printerColumns) {
+      if (c.defaultVisible !== false) merged.add(c.key)
+    }
+  }
+  return merged
+}
+
+/** Storage/reset identity for a selection. Two CRDs can share a plural across
+ * API groups, and their columns are unrelated. */
+export function selectedKindIdentityOf(kind: { name: string; group?: string }): string {
+  return `${kind.name} ${kind.group ?? ''}`
 }
 
 // Host-injected leading columns minus any whose key collides with a built-in.
@@ -2276,6 +3004,22 @@ function filterHostExtras(
 // localStorage helpers for column settings
 const COLUMN_SETTINGS_PREFIX = 'radar-columns-'
 
+// Storage identity for a kind's column settings. normalizeKindToPlural falls
+// through to the bare plural for anything outside the curated collision
+// catalog, so two uncurated CRDs sharing a plural in different API groups —
+// Crossplane ships two `Usage` kinds — would share one blob and leak column
+// visibility, widths and custom columns between them. Harmless while both got
+// identical generic columns; not harmless once each has its own printer
+// columns. Only the fallthrough kinds are qualified, so curated and core kinds
+// keep the key their saved preferences are already under.
+export function columnSettingsKey(kind: string, group?: string): string {
+  const normalized = normalizeKindToPlural(kind, group)
+  if (group && !hasCuratedColumns(kind, group)) {
+    return `${normalized}.${group}`
+  }
+  return normalized
+}
+
 interface ColumnSettings {
   visible: string[]
   widths: Record<string, number>
@@ -2284,7 +3028,7 @@ interface ColumnSettings {
 
 function loadColumnSettings(kind: string, group?: string): ColumnSettings | null {
   try {
-    const key = COLUMN_SETTINGS_PREFIX + normalizeKindToPlural(kind, group)
+    const key = COLUMN_SETTINGS_PREFIX + columnSettingsKey(kind, group)
     const raw = localStorage.getItem(key)
     if (raw) return JSON.parse(raw)
   } catch { /* ignore */ }
@@ -2293,14 +3037,14 @@ function loadColumnSettings(kind: string, group?: string): ColumnSettings | null
 
 function saveColumnSettings(kind: string, group: string | undefined, settings: ColumnSettings) {
   try {
-    const key = COLUMN_SETTINGS_PREFIX + normalizeKindToPlural(kind, group)
+    const key = COLUMN_SETTINGS_PREFIX + columnSettingsKey(kind, group)
     localStorage.setItem(key, JSON.stringify(settings))
   } catch { /* ignore */ }
 }
 
 function clearColumnSettings(kind: string, group?: string) {
   try {
-    const key = COLUMN_SETTINGS_PREFIX + normalizeKindToPlural(kind, group)
+    const key = COLUMN_SETTINGS_PREFIX + columnSettingsKey(kind, group)
     localStorage.removeItem(key)
   } catch { /* ignore */ }
 }
@@ -2408,6 +3152,11 @@ interface ResourcesViewProps {
    *  doesn't need to extend KNOWN_COLUMNS or per-kind cell renderers.
    *  When undefined, behavior is byte-identical to single-cluster mode. */
   extraLeadingColumns?: ExtraColumn[]
+  /** Vendor-declared columns from the kind's CRD (additionalPrinterColumns),
+   *  evaluated server-side. Used ONLY for kinds Radar has no curated column
+   *  set for — the two are exclusive. Hosts that don't fetch them get the
+   *  generic columns and nothing changes. */
+  printerTable?: PrinterTable | null
   /** Escape hatch for full-page-nav row selection: receive the FULL
    *  resource object on row click / Enter / `d` / search-Enter, instead
    *  of the stripped {kind, namespace, name, group} shape onResourceClick
@@ -2637,6 +3386,7 @@ export function ResourcesView({
   onCreateResource,
   defaultKind = DEFAULT_KIND_INFO,
   extraLeadingColumns,
+  printerTable,
   onRowSelect,
   rowHrefFor,
   onCompareSubmit,
@@ -2834,22 +3584,32 @@ export function ResourcesView({
   // collision: a colliding extra is filtered out (with a dev-mode warn)
   // so we don't render two columns sharing one key — that would yield
   // duplicate React keys and corrupt visibleColumns / columnWidths state.
+  const builtPrinterColumns = useMemo(
+    () => buildPrinterColumns(selectedKind.name, selectedKind.group, printerTable),
+    [selectedKind.name, selectedKind.group, printerTable],
+  )
+  const printerColumnsKey = useMemo(
+    () => printerTableKey(builtPrinterColumns.length ? printerTable : null),
+    [printerTable, builtPrinterColumns],
+  )
+
   const allColumns = useMemo(() => {
-    const kindColumns = getColumnsForKind(selectedKind.name, selectedKind.group)
+    const kindColumns = columnsForKindWithPrinter(selectedKind.name, selectedKind.group, builtPrinterColumns)
     if (!extraLeadingColumns?.length && !builtCustomColumns.length) return kindColumns
     const builtinKeys = new Set(kindColumns.map(c => c.key))
     const filteredExtras = filterHostExtras(extraLeadingColumns, builtinKeys, selectedKind.name)
     return [...filteredExtras, ...kindColumns, ...builtCustomColumns]
-  }, [selectedKind.name, selectedKind.group, extraLeadingColumns, builtCustomColumns])
+  }, [selectedKind.name, selectedKind.group, extraLeadingColumns, builtCustomColumns, builtPrinterColumns])
 
   // Map of extra column keys for fast O(1) lookup on each render path
   // (cell render, sort, column-filter unique-values).
   const extraColumnsByKey = useMemo(() => {
     const m = new Map<string, ExtraColumn>()
     extraLeadingColumns?.forEach(c => m.set(c.key, c))
+    builtPrinterColumns.forEach(c => m.set(c.key, c))
     builtCustomColumns.forEach(c => m.set(c.key, c))
     return m
-  }, [extraLeadingColumns, builtCustomColumns])
+  }, [extraLeadingColumns, builtCustomColumns, builtPrinterColumns])
 
   // Guards the save effect from persisting on the initial load of each kind
   // (set false by the load effect, flipped true on its first skipped save).
@@ -2879,7 +3639,7 @@ export function ResourcesView({
     // (non-array, blank path, bad source) must not crash the later .map or add dead columns.
     const savedCustom = sanitizeCustomColumnDefs(saved?.custom)
     setCustomColumns(savedCustom)
-    const kindColumns = getColumnsForKind(selectedKind.name, selectedKind.group)
+    const kindColumns = columnsForKindWithPrinter(selectedKind.name, selectedKind.group, builtPrinterColumns)
     const builtinKeys = new Set(kindColumns.map(c => c.key))
     const extras = filterHostExtras(extraLeadingColumns, builtinKeys, selectedKind.name)
     const effective = [...extras, ...kindColumns, ...savedCustom.map(buildCustomColumn)]
@@ -2906,16 +3666,18 @@ export function ResourcesView({
         setVisibleColumns(getDefaultVisibleColumns(effective))
         setColumnWidths({})
       } else {
-        const merged = new Set(saved.visible)
-        for (const k of extraKeys) merged.add(k)
-        setVisibleColumns(merged)
+        setVisibleColumns(mergeSavedVisibleColumns(saved.visible, extraKeys, builtPrinterColumns))
         setColumnWidths(saved.widths || {})
       }
     } else {
       setVisibleColumns(getDefaultVisibleColumns(effective))
       setColumnWidths({})
     }
-  }, [selectedKind.name, selectedKind.group, extraLeadingColumns])
+    // printerColumnsKey, not builtPrinterColumns: the built array is a new
+    // identity on every refetch, and re-running this effect would reset the
+    // user's in-session column choices each time the list polls. The key only
+    // changes when the kind changes or an operator upgrade changes the CRD.
+  }, [selectedKind.name, selectedKind.group, extraLeadingColumns, printerColumnsKey])
 
   // Save column settings when they change (skip the initial load of each kind)
   useEffect(() => {
@@ -3310,11 +4072,14 @@ export function ResourcesView({
           if (containers.length > 0) {
             openLogs?.({ namespace: ns, podName: name, containers })
           }
-        } else if (['deployments', 'statefulsets', 'daemonsets', 'replicasets', 'jobs', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(kindLower)) {
+        } else if (['deployments', 'statefulsets', 'daemonsets', 'replicasets', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(kindLower) || isCoreBatchJob(kindLower, selectedKind.group)) {
           openWorkloadLogs?.({ namespace: ns, workloadKind: selectedKind.kind, workloadName: name })
         }
       },
-      enabled: highlightedIndex >= 0 && !compareMode && ['pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets', 'jobs', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(selectedKind.name.toLowerCase()),
+      enabled: highlightedIndex >= 0 && !compareMode && (
+        ['pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(selectedKind.name.toLowerCase()) ||
+        isCoreBatchJob(selectedKind.name, selectedKind.group)
+      ),
     },
     {
       id: 'resources-sort-name',
@@ -3969,12 +4734,17 @@ export function ResourcesView({
 
   // Reset sort and filters when kind changes (but not when syncing from URL navigation)
   // Track previous kind to skip on mount (where the effect fires but kind hasn't actually changed)
-  const prevKindRef = useRef(selectedKind.name)
+  // Keyed on group as well as plural: two CRDs can share a plural across API
+  // groups, and their printer columns are unrelated. Resetting on the plural
+  // alone would carry a `printer:*` sort or filter onto a table with no such
+  // column, where every row fails the filter and the list looks empty.
+  const selectedKindIdentity = selectedKindIdentityOf(selectedKind)
+  const prevKindRef = useRef(selectedKindIdentity)
   useEffect(() => {
-    if (prevKindRef.current === selectedKind.name) {
+    if (prevKindRef.current === selectedKindIdentity) {
       return
     }
-    prevKindRef.current = selectedKind.name
+    prevKindRef.current = selectedKindIdentity
     setSortColumn(null)
     setSortDirection(null)
     setOpenColumnFilter(null)
@@ -3983,7 +4753,7 @@ export function ResourcesView({
       setColumnFilterExcludes({})
     }
     setProblemFilters([])
-  }, [selectedKind.name])
+  }, [selectedKindIdentity])
 
   // Toggle sort for a column
   const handleSort = useCallback((column: string) => {
@@ -4017,7 +4787,28 @@ export function ResourcesView({
       case 'age':
         return meta.creationTimestamp ? new Date(meta.creationTimestamp).getTime() : 0
       case 'status':
-        return status.phase || ''
+        // Phase first for a curated kind: it keeps the most-used lists — Pods,
+        // Deployments, Nodes — ordering as they always have.
+        //
+        // Everything else routes through getCellFilterValue, the same reader
+        // the cell and the filter dropdown use, so all three agree on one
+        // string. Deriving it here instead ordered rows on a status the row
+        // never displayed: a Gateway shows `Programmed` while the generic
+        // ladder, which knows neither Programmed nor Accepted, called it
+        // `Accepted` — so a healthy Gateway and a pending one sorted equal.
+        // getCellFilterValue ends in that same generic derivation, so an
+        // uncurated kind still sorts on the text its badge shows.
+        if (hasCuratedColumns(selectedKind.name, selectedKind.group) && status.phase) {
+          return status.phase
+        }
+        return getCellFilterValue(resource, 'status', kindLower)
+      case 'servers':
+        // Numeric so 10 does not sort before 9.
+        if (kindLower === 'istiogateways') return getIstioGatewayServerCount(resource)
+        return ''
+      case 'selector':
+        if (kindLower === 'istiogateways') return getIstioGatewaySelectorString(resource)
+        return ''
       case 'containers':
         // Pod containers column — sort by readiness ratio
         if (status.containerStatuses) {
@@ -4027,6 +4818,7 @@ export function ResourcesView({
         }
         return 0
       case 'ready':
+        if (kindLower === 'jobsets') return getJobSetReadyJobs(resource)
         // For DaemonSets, use numberReady/desiredNumberScheduled
         if (kindLower === 'daemonsets') {
           const desired = status.desiredNumberScheduled ?? 0
@@ -4047,6 +4839,7 @@ export function ResourcesView({
         // DaemonSet: updatedNumberScheduled, others: updatedReplicas
         return status.updatedNumberScheduled ?? status.updatedReplicas ?? 0
       case 'restarts':
+        if (kindLower === 'jobsets') return getJobSetRestarts(resource)
         return getPodRestarts(resource)
       case 'lastSeen': {
         const lastTs = resource.lastTimestamp || meta.creationTimestamp
@@ -4096,7 +4889,7 @@ export function ResourcesView({
       default:
         return ''
     }
-  }, [metricsLookup])
+  }, [metricsLookup, selectedKind.name, selectedKind.group])
 
   // Helper to check if a pod matches problem filters
   const podMatchesProblemFilter = useCallback((pod: any, filters: string[]): boolean => {
@@ -4149,11 +4942,11 @@ export function ResourcesView({
     // when the parent supplied a custom getFilterValue.
     const activeColFilters = Object.entries(columnFilters).filter(([, vals]) => vals.length > 0)
     if (activeColFilters.length > 0) {
-      const kindLower = normalizeKindToPlural(selectedKind.name, selectedKind.group)
+      const cellFilterKind = getCellFilterKind(selectedKind.name, selectedKind.group)
       result = result.filter((r: any) =>
         activeColFilters.every(([col, vals]) => {
           const extra = extraColumnsByKey.get(col)
-          const cellVal = extra?.getFilterValue ? extra.getFilterValue(r) : getCellFilterValue(r, col, kindLower)
+          const cellVal = extra?.getFilterValue ? extra.getFilterValue(r) : getCellFilterValue(r, col, cellFilterKind)
           const match = vals.includes(cellVal)
           return columnFilterExcludes[col] ? !match : match
         })
@@ -4215,17 +5008,26 @@ export function ResourcesView({
     // the built-in getSortValue for their key.
     if (sortColumn && sortDirection) {
       const extra = extraColumnsByKey.get(sortColumn)
-      result = [...result].sort((a: any, b: any) => {
-        const aVal = extra?.getSortValue ? extra.getSortValue(a) : getSortValue(a, sortColumn, selectedKind.name)
-        const bVal = extra?.getSortValue ? extra.getSortValue(b) : getSortValue(b, sortColumn, selectedKind.name)
+      // Normalized, matching the filter call sites: a group-qualified kind
+      // (istiogateways, cnpgclusters) otherwise arrives here as its bare plural
+      // and misses its own sort readers. Hoisted out of the comparator.
+      // The ownership-aware wrapper also keeps a foreign CRD that reuses a
+      // curated plural on the generic reader used by its cells and filters.
+      const sortKind = getCellFilterKind(selectedKind.name, selectedKind.group)
+      const keyOf = extra?.getSortValue ?? ((r: any) => getSortValue(r, sortColumn, sortKind))
+      // Derived once per row, not once per comparison: a sort visits O(n log n)
+      // pairs, and the status key now runs a per-kind status derivation.
+      const decorated = result.map((r: any) => ({ r, k: keyOf(r) }))
+      decorated.sort((a, b) => {
         let comparison = 0
-        if (typeof aVal === 'number' && typeof bVal === 'number') {
-          comparison = aVal - bVal
+        if (typeof a.k === 'number' && typeof b.k === 'number') {
+          comparison = a.k - b.k
         } else {
-          comparison = String(aVal).localeCompare(String(bVal))
+          comparison = String(a.k).localeCompare(String(b.k))
         }
         return sortDirection === 'desc' ? -comparison : comparison
       })
+      result = decorated.map(d => d.r)
     } else {
       // Default sort by kind
       const kindLower = normalizeKindToPlural(selectedKind.name, selectedKind.group)
@@ -4497,6 +5299,7 @@ export function ResourcesView({
     if (!resources || resources.length === 0) return null
 
     const kindLower = normalizeKindToPlural(selectedKind.name, selectedKind.group)
+    const cellFilterKind = getCellFilterKind(selectedKind.name, selectedKind.group)
     // Iterate over allColumns (built-ins + injected extras) so an
     // ExtraColumn with getFilterValue gets a column-filter dropdown like
     // any built-in does. The previous formulation iterated KNOWN_COLUMNS
@@ -4523,7 +5326,7 @@ export function ResourcesView({
       // Count distinct values for this column
       const valueCounts: Record<string, number> = {}
       for (const r of resources) {
-        const val = extra?.getFilterValue ? extra.getFilterValue(r) : getCellFilterValue(r, col.key, kindLower)
+        const val = extra?.getFilterValue ? extra.getFilterValue(r) : getCellFilterValue(r, col.key, cellFilterKind)
         if (val) {
           valueCounts[val] = (valueCounts[val] || 0) + 1
         }
@@ -5948,6 +6751,9 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
 
   // Kind-specific columns (normalize CRD singular names like 'ScaledObject' → 'scaledobjects')
   const kindLower = normalizeKindToPlural(kind, group)
+  if (group && !hasCuratedColumns(kind, group)) {
+    return <GenericCell resource={resource} column={column} />
+  }
 
   // Kyverno cells are group-gated ahead of the switch so a non-matching CR
   // falls through to the switch's default (GenericCell) instead of being
@@ -6029,8 +6835,12 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       return <OrderCell resource={resource} column={column} />
     case 'challenges':
       return <ChallengeCell resource={resource} column={column} />
+    case 'istiogateways':
+      return <IstioGatewayCell resource={resource} column={column} />
     case 'gateways':
-      // Disambiguate Gateway API vs Istio Gateway by apiVersion
+      // Disambiguate Gateway API vs Istio Gateway by apiVersion. Retained
+      // alongside the case above because not every call site normalizes the
+      // kind through GROUP_QUALIFIED_COLUMN_KEYS before dispatching.
       if (resource.apiVersion?.includes('networking.istio.io')) {
         return <IstioGatewayCell resource={resource} column={column} />
       }
@@ -6136,6 +6946,90 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       return <NvidiaClusterPolicyCell resource={resource} column={column} />
     case 'nvidiadrivers':
       return <NvidiaDriverCell resource={resource} column={column} />
+    // Kueue + Cluster Autoscaler
+    case 'clusterqueues':
+      return <ClusterQueueCell resource={resource} column={column} />
+    case 'localqueues':
+      return <LocalQueueCell resource={resource} column={column} />
+    case 'workloads':
+      return <KueueWorkloadCell resource={resource} column={column} />
+    case 'resourceflavors':
+      return <ResourceFlavorCell resource={resource} column={column} />
+    case 'admissionchecks':
+      return <AdmissionCheckCell resource={resource} column={column} />
+    case 'provisioningrequests':
+      return <ProvisioningRequestCell resource={resource} column={column} />
+    // KubeRay
+    case 'rayclusters':
+      return <RayClusterCell resource={resource} column={column} />
+    case 'rayjobs':
+      return <RayJobCell resource={resource} column={column} />
+    case 'rayservices':
+      return <RayServiceCell resource={resource} column={column} />
+    case 'raycronjobs':
+      return <RayCronJobCell resource={resource} column={column} />
+    // LeaderWorkerSet + JobSet
+    case 'leaderworkersets':
+      return <LeaderWorkerSetCell resource={resource} column={column} />
+    case 'jobsets':
+      return <JobSetCell resource={resource} column={column} />
+    // KServe
+    case 'inferenceservices':
+      return <InferenceServiceCell resource={resource} column={column} />
+    case 'servingruntimes':
+    case 'clusterservingruntimes':
+      return <ServingRuntimeCell resource={resource} column={column} />
+    case 'inferencegraphs':
+      return <InferenceGraphCell resource={resource} column={column} />
+    case 'trainedmodels':
+      return <TrainedModelCell resource={resource} column={column} />
+    case 'llminferenceservices':
+      return <LLMInferenceServiceCell resource={resource} column={column} />
+    // Gateway API Inference Extension
+    case 'inferencepools':
+      return <InferencePoolCell resource={resource} column={column} />
+    case 'inferenceobjectives':
+      return <InferenceObjectiveCell resource={resource} column={column} />
+    // Volcano (group-qualified keys disambiguate from batch Jobs and KAI)
+    case 'volcanojobs':
+      return <VolcanoJobCell resource={resource} column={column} />
+    case 'volcanoqueues':
+      return <VolcanoQueueCell resource={resource} column={column} />
+    case 'volcanopodgroups':
+      return <VolcanoPodGroupCell resource={resource} column={column} />
+    case 'jobflows':
+      return <JobFlowCell resource={resource} column={column} />
+    case 'jobtemplates':
+      return <JobTemplateCell resource={resource} column={column} />
+    // KAI Scheduler
+    case 'kaiqueues':
+      return <KaiQueueCell resource={resource} column={column} />
+    case 'kaipodgroups':
+      return <KaiPodGroupCell resource={resource} column={column} />
+    // KAITO
+    case 'kaitoworkspaces':
+      return <KaitoWorkspaceCell resource={resource} column={column} />
+    case 'ragengines':
+      return <RAGEngineCell resource={resource} column={column} />
+    // NVIDIA NIM Operator
+    case 'nimservices':
+      return <NIMServiceCell resource={resource} column={column} />
+    case 'nimcaches':
+      return <NIMCacheCell resource={resource} column={column} />
+    case 'nimpipelines':
+      return <NIMPipelineCell resource={resource} column={column} />
+    // AMD GPU Operator
+    case 'deviceconfigs':
+      return <AMDDeviceConfigCell resource={resource} column={column} />
+    // Kubeflow training
+    case 'pytorchjobs':
+      return <PyTorchJobCell resource={resource} column={column} />
+    case 'tfjobs':
+      return <TFJobCell resource={resource} column={column} />
+    case 'mpijobs':
+      return <MPIJobCell resource={resource} column={column} />
+    case 'trainjobs':
+      return <TrainJobCell resource={resource} column={column} />
     // ArgoCD GitOps resources
     case 'applications':
       return <ArgoApplicationCell resource={resource} column={column} />
@@ -6436,53 +7330,13 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
 function GenericCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'status': {
-      // Try to extract status from common patterns
-      const status = resource.status
-      if (!status) return <span className="text-sm text-theme-text-tertiary">-</span>
-
-      // Check for phase (common in many CRDs)
-      if (status.phase) {
-        const phase = status.phase as string
-        const isHealthy = ['Running', 'Active', 'Succeeded', 'Ready', 'Healthy', 'Available'].includes(phase)
-        const isWarning = ['Pending', 'Progressing', 'Unknown'].includes(phase)
-        return (
-          <span className={clsx(
-            'badge',
-            isHealthy ? 'status-healthy' :
-            isWarning ? 'status-degraded' :
-            'status-unhealthy'
-          )}>
-            {phase}
-          </span>
-        )
-      }
-
-      // Check for conditions (common pattern)
-      if (status.conditions && Array.isArray(status.conditions)) {
-        const readyCondition = status.conditions.find((c: any) => c.type === 'Ready' || c.type === 'Available')
-        if (readyCondition) {
-          const isReady = readyCondition.status === 'True'
-          return (
-            <span className={clsx(
-              'badge',
-              isReady ? 'status-healthy' : 'status-degraded'
-            )}>
-              {isReady ? 'Ready' : 'Not Ready'}
-            </span>
-          )
-        }
-      }
-
-      // Check for state field
-      if (status.state) {
-        return (
-          <span className="text-sm text-theme-text-secondary truncate">
-            {String(status.state)}
-          </span>
-        )
-      }
-
-      return <span className="text-sm text-theme-text-tertiary">-</span>
+      const derived = getGenericResourceStatus(resource)
+      if (!derived) return <span className="text-sm text-theme-text-tertiary">-</span>
+      return (
+        <Tooltip content={derived.reason ?? derived.text}>
+          <span className={clsx('badge', healthColors[derived.tone])}>{derived.text}</span>
+        </Tooltip>
+      )
     }
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>

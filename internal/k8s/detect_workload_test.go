@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/skyhook-io/radar/pkg/cronsched"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
@@ -405,6 +406,7 @@ func TestDetectCronJobProblems(t *testing.T) {
 		cronjobs    []*batchv1.CronJob
 		wantCount   int
 		wantProblem string
+		wantOnset   time.Time
 	}{
 		{
 			name: "stale Replace cronjob",
@@ -421,6 +423,7 @@ func TestDetectCronJobProblems(t *testing.T) {
 			},
 			wantCount:   1,
 			wantProblem: "stale",
+			wantOnset:   oldTime.Add(cronsched.StaleThreshold("0 2 * * *")),
 		},
 		{
 			name: "suspended old cronjob is ok",
@@ -455,6 +458,7 @@ func TestDetectCronJobProblems(t *testing.T) {
 			},
 			wantCount:   1,
 			wantProblem: "never-scheduled",
+			wantOnset:   now.Add(-48 * time.Hour).Add(cronsched.StaleThreshold("0 * * * *")),
 		},
 		{
 			name: "active Allow cronjob relies on its retained Jobs",
@@ -492,6 +496,9 @@ func TestDetectCronJobProblems(t *testing.T) {
 			if tt.wantCount > 0 && len(problems) > 0 {
 				if problems[0].Problem != tt.wantProblem {
 					t.Errorf("problem = %q, want %q", problems[0].Problem, tt.wantProblem)
+				}
+				if !problems[0].OnsetAt.Equal(tt.wantOnset) {
+					t.Errorf("onset = %v, want threshold crossing %v", problems[0].OnsetAt, tt.wantOnset)
 				}
 			}
 		})
@@ -566,6 +573,9 @@ func TestCronJobScheduleDetectionUsesObservedHistory(t *testing.T) {
 		}
 		if got[0].Duration != 3*time.Hour {
 			t.Fatalf("duration = %s, want observed 3h failure window", got[0].Duration)
+		}
+		if !got[0].OnsetAt.Equal(now.Add(-3 * time.Hour)) {
+			t.Fatalf("onset = %v, want exact first failed schedule %v", got[0].OnsetAt, now.Add(-3*time.Hour))
 		}
 		if !strings.Contains(got[0].Reason, "3 consecutive schedules") {
 			t.Fatalf("reason = %q", got[0].Reason)

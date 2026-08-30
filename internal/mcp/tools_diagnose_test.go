@@ -156,7 +156,7 @@ func TestHandleDiagnose_GitOpsKindDispatch(t *testing.T) {
 	ctx := withClusterAdmin(t, "admin")
 	// The GitOps read is gated on a per-kind get SAR; grant it so the test
 	// exercises the dispatch fork (not the RBAC gate, covered separately).
-	getPermCache().Get("admin").SetCanI("get", "argoproj.io", "applications", "alpha", true)
+	getPermCache().Get("admin", nil).SetCanI("get", "argoproj.io", "applications", "alpha", true)
 
 	_, _, err := handleDiagnose(ctx, nil, diagnoseInput{Kind: "application", Namespace: "alpha", Name: "whatever"})
 	if err == nil {
@@ -183,7 +183,7 @@ func TestHandleGitOpsDiagnose_PerKindRBAC(t *testing.T) {
 
 	// Granting the per-kind get lets the read through (then fails for not-found,
 	// not forbidden) — proving the gate is the only thing blocking it.
-	getPermCache().Get("limited").SetCanI("get", "argoproj.io", "applications", "argocd", true)
+	getPermCache().Get("limited", nil).SetCanI("get", "argoproj.io", "applications", "argocd", true)
 	if _, _, err := handleDiagnose(ctx, nil, diagnoseInput{Kind: "application", Namespace: "argocd", Name: "guestbook"}); err == nil || strings.Contains(err.Error(), "forbidden") {
 		t.Errorf("with get granted, expected a non-forbidden (not-found) error, got %v", err)
 	}
@@ -196,7 +196,7 @@ func TestHandleGitOpsDiagnose_NamespaceGate(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	// User scoped to team-a; cluster RBAC grants get on applications in argocd.
 	ctx := withRestrictedUser(t, "scoped", []string{"team-a"})
-	getPermCache().Get("scoped").SetCanI("get", "argoproj.io", "applications", "argocd", true)
+	getPermCache().Get("scoped", nil).SetCanI("get", "argoproj.io", "applications", "argocd", true)
 
 	_, _, err := handleDiagnose(ctx, nil, diagnoseInput{Kind: "application", Namespace: "argocd", Name: "guestbook"})
 	if err == nil || !strings.Contains(err.Error(), "forbidden") {

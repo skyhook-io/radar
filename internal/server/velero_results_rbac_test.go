@@ -26,7 +26,7 @@ func TestVeleroRunMessages_RequiresAccessToTheRunItself(t *testing.T) {
 
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"velero"}}
 	perms.SetCanI("get", "velero.io", "backups", "velero", false)
-	env.srv.permCache.Set("mallory", perms)
+	env.srv.permCache.Set("mallory", nil, perms)
 
 	resp := env.authPost(t, "/api/velero/backups/velero/nightly/messages", "mallory", "", "")
 	defer resp.Body.Close()
@@ -47,7 +47,7 @@ func TestVeleroRunMessages_GatesRestoresSeparately(t *testing.T) {
 	// Allowed on backups, denied on restores: the two must not share a verdict.
 	perms.SetCanI("get", "velero.io", "backups", "velero", true)
 	perms.SetCanI("get", "velero.io", "restores", "velero", false)
-	env.srv.permCache.Set("bob", perms)
+	env.srv.permCache.Set("bob", nil, perms)
 
 	resp := env.authPost(t, "/api/velero/restores/velero/recovery/messages", "bob", "", "")
 	defer resp.Body.Close()
@@ -66,7 +66,7 @@ func TestVeleroRunMessages_LetsAnAuthorizedCallerThrough(t *testing.T) {
 
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"velero"}}
 	perms.SetCanI("get", "velero.io", "backups", "velero", true)
-	env.srv.permCache.Set("alice", perms)
+	env.srv.permCache.Set("alice", nil, perms)
 
 	resp := env.authPost(t, "/api/velero/backups/velero/nightly/messages", "alice", "", "")
 	defer resp.Body.Close()
@@ -84,7 +84,7 @@ func TestVeleroRunMessages_RejectsKindsWithNoResults(t *testing.T) {
 
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"velero"}}
 	perms.SetCanI("get", "velero.io", "schedules", "velero", true)
-	env.srv.permCache.Set("alice", perms)
+	env.srv.permCache.Set("alice", nil, perms)
 
 	resp := env.authPost(t, "/api/velero/schedules/velero/nightly/messages", "alice", "", "")
 	defer resp.Body.Close()

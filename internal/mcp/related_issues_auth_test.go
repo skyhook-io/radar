@@ -20,7 +20,7 @@ func TestMCPRelatedIssuesAuthorizeNodeClassSubject(t *testing.T) {
 	perms := &pkgauth.UserPermissions{AllowedNamespaces: nil}
 	perms.SetCanI("get", karpenter.Group, "nodepools", "", true)
 	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", false)
-	getPermCache().Set("alice", perms)
+	getPermCache().Set("alice", nil, perms)
 	t.Cleanup(func() { getPermCache().Invalidate() })
 	access := issueRelatedResourceAccess(ctx)
 
@@ -52,7 +52,7 @@ func TestMCPRelatedIssuesAuthorizeMissingNodeClassEvidence(t *testing.T) {
 	perms := &pkgauth.UserPermissions{AllowedNamespaces: nil}
 	perms.SetCanI("get", karpenter.Group, "nodepools", "", true)
 	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", false)
-	getPermCache().Set("alice", perms)
+	getPermCache().Set("alice", nil, perms)
 	t.Cleanup(func() { getPermCache().Invalidate() })
 	access := issueRelatedResourceAccess(ctx)
 	pool := issues.Ref{Group: karpenter.Group, Kind: karpenter.NodePoolKind, Name: "compute"}

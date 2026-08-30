@@ -3,6 +3,7 @@ package k8score
 import (
 	"fmt"
 	"log"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -124,8 +125,26 @@ func IsMoreStableVersion(newVersion, oldVersion string) bool {
 
 // NewResourceDiscovery creates a ResourceDiscovery backed by the given client.
 // It performs an initial refresh; returns an error only if the client is nil.
-func NewResourceDiscovery(client discovery.DiscoveryInterface, opts ...DiscoveryOption) (*ResourceDiscovery, error) {
+// isNilDiscoveryClient reports a client that cannot be called, including the
+// case a plain `client == nil` misses: a nil *discovery.DiscoveryClient stored
+// in this interface makes a non-nil interface value, so the guard passes and
+// the first method call dereferences nil. Callers reach that by handing over
+// the result of an accessor that returns a concrete pointer before the client
+// is built.
+func isNilDiscoveryClient(client discovery.DiscoveryInterface) bool {
 	if client == nil {
+		return true
+	}
+	v := reflect.ValueOf(client)
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Interface, reflect.Map, reflect.Slice, reflect.Func:
+		return v.IsNil()
+	}
+	return false
+}
+
+func NewResourceDiscovery(client discovery.DiscoveryInterface, opts ...DiscoveryOption) (*ResourceDiscovery, error) {
+	if isNilDiscoveryClient(client) {
 		return nil, fmt.Errorf("discovery client must not be nil")
 	}
 

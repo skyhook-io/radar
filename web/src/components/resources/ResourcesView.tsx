@@ -16,8 +16,10 @@ import {
   ResourcesView as BaseResourcesView,
   CORE_RESOURCES,
   intersectWorkloadWrites,
+  hasCuratedColumns,
+  sanitizePrinterTable,
 } from '@skyhook-io/k8s-ui'
-import type { Capabilities, ResourceQueryResult, WorkloadWritePermissions } from '@skyhook-io/k8s-ui'
+import type { Capabilities, PrinterTable, ResourceQueryResult, WorkloadWritePermissions } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { apiVersionToGroup, kindToPluralWithGroup, type NavigateToResource } from '../../utils/navigation'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
@@ -229,12 +231,19 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   // Fetch full data only for the selected kind
   const selectedKindQuery = useQuery({
     queryKey: ['resources', selectedKind?.name, isSelectedCrd ? selectedKind?.group : '', namespaces],
-    queryFn: async () => {
-      if (!selectedKind) return []
+    queryFn: async (): Promise<{ items: any[]; printerTable: PrinterTable | null }> => {
+      if (!selectedKind) return { items: [], printerTable: null }
       const params = new URLSearchParams()
       if (namespaces.length > 0) params.set('namespaces', namespacesParam)
       if (isSelectedCrd && selectedKind.group) params.set('group', selectedKind.group)
       if (selectedKindSummaryServed) params.set('include', 'summary')
+      // Only CRDs can declare printer columns, and a curated kind discards the
+      // result — so table mode is requested from exactly the kinds that can use
+      // it. Resolving a table costs the server a CRD read per request; doing
+      // that for a kind whose columns are hand-curated is pure waste.
+      const wantsTable = isSelectedCrd && !!selectedKind.group &&
+        !hasCuratedColumns(selectedKind.name, selectedKind.group)
+      if (wantsTable) params.set('table', '1')
       const startedAt = performance.now()
       debugNamespaceLog('resources:selected-kind-fetch-start', {
         kind: selectedKind.name,
@@ -258,7 +267,19 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
         const errorData = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
         throw new ApiError(errorData.error || `Failed to fetch ${selectedKind.name}`, res.status, errorData)
       }
-      return res.json()
+      const body = await res.json()
+      // Both branches are current shapes, not a guess at a legacy one: a Radar
+      // backend that predates `table` ignores the parameter and answers with
+      // the bare array. @skyhook-io/radar-app is versioned independently of the
+      // backend it points at, so a consumer can pair a new frontend with an
+      // older Radar — and reading that array as a missing envelope would render
+      // every CRD list empty. Items and columns still come from one response,
+      // so a row can never render against another fetch's cells.
+      if (!wantsTable || Array.isArray(body)) return { items: body as any[], printerTable: null }
+      return {
+        items: Array.isArray(body?.items) ? body.items as any[] : [],
+        printerTable: sanitizePrinterTable(body),
+      }
     },
     enabled: !!selectedKind && !selectedKindQueryBlocked,
     staleTime: 30000,
@@ -275,13 +296,13 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     return {
       resourceName: selectedKind.name,
       group: selectedKind.group,
-      data: selectedKindQueryBlocked ? [] : selectedKindQuery.data as any[] | undefined,
+      data: selectedKindQueryBlocked ? [] : selectedKindQuery.data?.items,
       isLoading: waitingForGuardCount || selectedKindQuery.isLoading,
       error: selectedKindQueryBlocked ? undefined : selectedKindQuery.error,
       refetch: selectedKindQuery.refetch,
       dataUpdatedAt: selectedKindQuery.dataUpdatedAt,
     }
-  }, [selectedKind, selectedKindQueryBlocked, waitingForGuardCount, selectedKindQuery.data, selectedKindQuery.isLoading, selectedKindQuery.error, selectedKindQuery.refetch, selectedKindQuery.dataUpdatedAt])
+  }, [selectedKind, selectedKindQueryBlocked, waitingForGuardCount, selectedKindQuery.data?.items, selectedKindQuery.isLoading, selectedKindQuery.error, selectedKindQuery.refetch, selectedKindQuery.dataUpdatedAt])
 
   // Metrics
   const { data: topPodMetrics } = useTopPodMetrics({ enabled: topPodMetricsEnabled, namespaces })
@@ -352,6 +373,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       resourceReasons={countsData?.reasons}
       resourceUnavailable={countsData?.unavailable}
       selectedKindQuery={selectedKindQueryResult}
+      printerTable={selectedKindQueryBlocked ? null : selectedKindQuery.data?.printerTable ?? null}
       connectionState={connection.state}
       largeListGuard={largeListGuard}
       onSelectedKindChange={setSelectedKind}

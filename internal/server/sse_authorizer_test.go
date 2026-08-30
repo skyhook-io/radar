@@ -168,7 +168,7 @@ func TestSweepExpiredAuthMemo(t *testing.T) {
 	base := time.Now()
 	memo := map[string]authMemoEntry{
 		"expired-a": {allowed: true, expires: base.Add(-time.Second)},
-		"expired-b": {allowed: false, expires: base},                // expires == now → expired
+		"expired-b": {allowed: false, expires: base}, // expires == now → expired
 		"live":      {allowed: true, expires: base.Add(time.Minute)},
 	}
 	removed := sweepExpiredAuthMemo(memo, base)

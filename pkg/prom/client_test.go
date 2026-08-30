@@ -353,7 +353,6 @@ func TestClient_Query_MissingOrNullResultIsEmptyNotError(t *testing.T) {
 	}
 }
 
-
 func TestClient_Query_RejectsStringResult(t *testing.T) {
 	tr := fakeProm(t, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"string","result":[1700000000,"hello world"]}}`))

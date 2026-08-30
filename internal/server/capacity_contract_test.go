@@ -76,7 +76,7 @@ func TestCapacityNotDetectedPrecedesRBACDenial(t *testing.T) {
 	permissions.SetCanI("get", "", "configmaps", "kube-system", false)
 	permissions.SetCanI("list", "", "pods", "default", false)
 	permissions.SetCanI("list", "", "pods", "broken", false)
-	env.srv.permCache.Set("alice", permissions)
+	env.srv.permCache.Set("alice", nil, permissions)
 
 	var body capacityapi.OverviewResponse
 	assertOK(t, env.authGet(t, "/api/capacity", "alice", ""), &body)
@@ -94,7 +94,7 @@ func TestCapacityNodeVisibilityGateDeniesEveryRoute(t *testing.T) {
 	permissions := &auth.UserPermissions{AllowedNamespaces: nil}
 	permissions.SetCanI("list", karpenter.Group, "nodepools", "", true)
 	permissions.SetCanI("list", "", "nodes", "", false)
-	env.srv.permCache.Set("alice", permissions)
+	env.srv.permCache.Set("alice", nil, permissions)
 
 	for _, path := range []string{"/api/capacity", "/api/capacity/pools", "/api/capacity/demand", "/api/capacity/activity"} {
 		resp := env.authGet(t, path, "alice", "")
@@ -128,7 +128,7 @@ func TestCapacityOverviewNodePoolsDeniedRendersClusterShape(t *testing.T) {
 	permissions.SetCanI("list", "", "pods", "default", false)
 	permissions.SetCanI("list", "", "pods", "broken", false)
 	permissions.SetCanI("get", "", "configmaps", "kube-system", false)
-	env.srv.permCache.Set("alice", permissions)
+	env.srv.permCache.Set("alice", nil, permissions)
 
 	resp := env.authGet(t, "/api/capacity", "alice", "")
 	defer resp.Body.Close()
@@ -181,7 +181,7 @@ func TestCapacityAuthorizedStateEnvelopes(t *testing.T) {
 		permissions.SetCanI("get", "", "configmaps", "kube-system", false)
 		permissions.SetCanI("list", "", "pods", "default", false)
 		permissions.SetCanI("list", "", "pods", "broken", false)
-		env.srv.permCache.Set("alice", permissions)
+		env.srv.permCache.Set("alice", nil, permissions)
 
 		var body capacityapi.OverviewResponse
 		assertOK(t, env.authGet(t, "/api/capacity", "alice", ""), &body)
@@ -199,7 +199,7 @@ func TestCapacityAuthorizedStateEnvelopes(t *testing.T) {
 		permissions := &auth.UserPermissions{AllowedNamespaces: nil}
 		permissions.SetCanI("list", karpenter.Group, "nodepools", "", true)
 		permissions.SetCanI("list", "", "nodes", "", true)
-		env.srv.permCache.Set("alice", permissions)
+		env.srv.permCache.Set("alice", nil, permissions)
 
 		var body capacityapi.OverviewResponse
 		assertOK(t, env.authGet(t, "/api/capacity", "alice", ""), &body)
@@ -383,7 +383,7 @@ func TestCapacityDemandSummaryOmittedWithoutPodObservations(t *testing.T) {
 	permissions.SetCanI("list", "", "nodes", "", true)
 	permissions.SetCanI("list", "", "pods", "", false)
 	permissions.SetCanI("list", "metrics.k8s.io", "nodes", "", false)
-	env.srv.permCache.Set("alice", permissions)
+	env.srv.permCache.Set("alice", nil, permissions)
 
 	resp := env.authGet(t, "/api/capacity/demand", "alice", "")
 	defer resp.Body.Close()
@@ -440,7 +440,7 @@ func TestCapacityDemandPoolFilterDoesNotRevealNodePoolExistenceUnderDenial(t *te
 	// Node-visible but NodePool-denied: the demand route must fail closed on the
 	// NodePool denial (not the node gate), identically for every pool name.
 	permissions.SetCanI("list", "", "nodes", "", true)
-	env.srv.permCache.Set("alice", permissions)
+	env.srv.permCache.Set("alice", nil, permissions)
 
 	var errorMessage string
 	for _, pool := range []string{"general", "missing"} {
@@ -480,7 +480,7 @@ func TestCapacityOptionalSourceDenialOmitsCounts(t *testing.T) {
 	permissions.SetCanI("list", "apps", "replicasets", "default", false)
 	permissions.SetCanI("list", "batch", "jobs", "default", false)
 	permissions.SetCanI("get", "", "configmaps", "kube-system", false)
-	env.srv.permCache.Set("alice", permissions)
+	env.srv.permCache.Set("alice", nil, permissions)
 
 	resp := env.authGet(t, "/api/capacity", "alice", "")
 	defer resp.Body.Close()
@@ -982,7 +982,7 @@ func TestCapacityActivityRBACMetadataUsesOnlyAuthorizedRelevantEvents(t *testing
 	permissions.SetCanI("list", "", "nodes", "", true)
 	permissions.SetCanI("list", "", "events", "", false)
 	permissions.SetCanI("list", "", "events", "private", false)
-	env.srv.permCache.Set("alice", permissions)
+	env.srv.permCache.Set("alice", nil, permissions)
 
 	var body capacityapi.ActivityResponse
 	assertOK(t, env.authGet(t, "/api/capacity/activity", "alice", ""), &body)
@@ -1418,7 +1418,7 @@ func TestCapacityOverviewOmitsPodDerivedCountsUnderPodDenial(t *testing.T) {
 	permissions.SetCanI("list", "", "pods", "", false)
 	permissions.SetCanI("list", "metrics.k8s.io", "nodes", "", false)
 	permissions.SetCanI("get", "", "configmaps", "kube-system", false)
-	env.srv.permCache.Set("alice", permissions)
+	env.srv.permCache.Set("alice", nil, permissions)
 
 	resp := env.authGet(t, "/api/capacity", "alice", "")
 	defer resp.Body.Close()

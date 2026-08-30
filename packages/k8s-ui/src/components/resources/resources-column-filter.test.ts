@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isColumnFilterableByDistinctCount, SKIP_FILTER_COLUMNS } from './ResourcesView'
+import { getCellFilterKind, hasCuratedColumns, isColumnFilterableByDistinctCount, normalizeKindToPlural, SKIP_FILTER_COLUMNS } from './ResourcesView'
 
 describe('isColumnFilterableByDistinctCount', () => {
   // Caps were tuned after a customer-visible regression where the namespace
@@ -70,5 +70,31 @@ describe('isColumnFilterableByDistinctCount', () => {
       expect(SKIP_FILTER_COLUMNS.has('reason')).toBe(false)
       expect(isColumnFilterableByDistinctCount('reason', 8)).toBe(true)
     })
+  })
+})
+
+describe('GPU ecosystem column routing', () => {
+  it('uses specialized columns only for the owning API group', () => {
+    expect(hasCuratedColumns('workloads', 'kueue.x-k8s.io')).toBe(true)
+    expect(hasCuratedColumns('workloads', 'scheduling.k8s.io')).toBe(false)
+    expect(hasCuratedColumns('Workload', 'scheduling.k8s.io')).toBe(false)
+    expect(hasCuratedColumns('deviceconfigs', 'amd.com')).toBe(true)
+    expect(hasCuratedColumns('deviceconfigs', 'example.io')).toBe(false)
+    expect(getCellFilterKind('workloads', 'kueue.x-k8s.io')).toBe('workloads')
+    expect(getCellFilterKind('workloads', 'scheduling.k8s.io')).toBe('__generic_workloads')
+    expect(getCellFilterKind('deviceconfigs', 'example.io')).toBe('__generic_deviceconfigs')
+  })
+
+  it('keeps core, Volcano, and foreign Jobs on separate column paths', () => {
+    expect(normalizeKindToPlural('jobs', 'batch')).toBe('jobs')
+    expect(normalizeKindToPlural('jobs', 'batch.volcano.sh')).toBe('volcanojobs')
+    expect(normalizeKindToPlural('jobs', 'example.io')).toBe('__generic_jobs')
+    expect(normalizeKindToPlural('Job', 'example.io')).toBe('__generic_job')
+  })
+
+  it('recognizes both the current and deployed InferenceObjective groups', () => {
+    expect(hasCuratedColumns('inferenceobjectives', 'llm-d.ai')).toBe(true)
+    expect(hasCuratedColumns('inferenceobjectives', 'inference.networking.x-k8s.io')).toBe(true)
+    expect(hasCuratedColumns('inferenceobjectives', 'example.io')).toBe(false)
   })
 })

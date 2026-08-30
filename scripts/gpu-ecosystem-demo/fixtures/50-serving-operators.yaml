@@ -1,0 +1,165 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ngc-api
+  namespace: gpu-demo
+type: kubernetes.io/dockerconfigjson
+stringData:
+  .dockerconfigjson: '{"auths":{}}'
+---
+apiVersion: kaito.sh/v1beta1
+kind: Workspace
+metadata:
+  name: phi-3-mini
+  namespace: gpu-demo
+resource:
+  count: 1
+  instanceType: Standard_NC24ads_A100_v4
+  labelSelector:
+    matchLabels:
+      accelerator: nvidia-a100
+inference:
+  preset:
+    name: phi-3-mini-4k-instruct
+status:
+  state: Running
+  targetNodeCount: 1
+  workerNodes:
+    - gpu-worker-1
+  conditions:
+    - type: ResourceReady
+      status: "True"
+      reason: NodesReady
+      message: GPU worker is ready
+      lastTransitionTime: __START_TIME__
+---
+apiVersion: kaito.sh/v1beta1
+kind: RAGEngine
+metadata:
+  name: product-docs
+  namespace: gpu-demo
+spec:
+  embedding:
+    local:
+      modelID: sentence-transformers/all-MiniLM-L6-v2
+  compute:
+    instanceType: Standard_NC24ads_A100_v4
+    labelSelector:
+      matchLabels:
+        accelerator: nvidia-a100
+status:
+  workerNodes:
+    - gpu-worker-1
+  conditions:
+    - type: ResourceReady
+      status: "True"
+      reason: NodesReady
+      message: GPU worker is ready
+      lastTransitionTime: __START_TIME__
+    - type: ServiceReady
+      status: "True"
+      reason: DeploymentAvailable
+      message: RAG service is available
+      lastTransitionTime: __COMPLETE_TIME__
+---
+apiVersion: apps.nvidia.com/v1alpha1
+kind: NIMService
+metadata:
+  name: llama-3-8b
+  namespace: gpu-demo
+spec:
+  authSecret: ngc-api
+  image:
+    repository: nvcr.io/nim/meta/llama3-8b-instruct
+    tag: "1.0.0"
+  replicas: 2
+  resources:
+    limits:
+      nvidia.com/gpu: "1"
+status:
+  state: Ready
+  availableReplicas: 2
+  model:
+    name: meta/llama3-8b-instruct
+    clusterEndpoint: http://llama-3-8b.gpu-demo.svc:8000
+    externalEndpoint: https://llama-3-8b.example.test
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: ServiceAvailable
+      message: All inference replicas are available
+      lastTransitionTime: __COMPLETE_TIME__
+---
+apiVersion: apps.nvidia.com/v1alpha1
+kind: NIMCache
+metadata:
+  name: llama-3-8b-cache
+  namespace: gpu-demo
+spec:
+  source:
+    ngc:
+      authSecret: ngc-api
+      modelPuller: nvcr.io/nim/model-puller:1.0.0
+      model:
+        profiles:
+          - llama3-8b-instruct
+  storage:
+    pvc:
+      create: true
+      size: 40Gi
+status:
+  state: Ready
+  pvc: llama-3-8b-cache
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: CachePopulated
+      message: Model artifacts are cached
+      lastTransitionTime: __COMPLETE_TIME__
+---
+apiVersion: apps.nvidia.com/v1alpha1
+kind: NIMPipeline
+metadata:
+  name: multimodal-rag
+  namespace: gpu-demo
+spec:
+  services:
+    - name: embedding
+      enabled: true
+    - name: retrieval
+      enabled: true
+      dependencies:
+        - name: embedding
+          port: 8000
+status:
+  state: Ready
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: PipelineAvailable
+      message: All pipeline services are available
+      lastTransitionTime: __COMPLETE_TIME__
+---
+apiVersion: amd.com/v1alpha1
+kind: DeviceConfig
+metadata:
+  name: amd-gpu-workers
+  namespace: gpu-demo
+spec:
+  selector:
+    feature.node.kubernetes.io/amd-gpu: "true"
+  driver:
+    enable: true
+    version: 6.4.2
+  devicePlugin:
+    enableDevicePlugin: true
+    enableNodeLabeller: true
+    devicePluginImage: rocm/k8s-device-plugin:latest
+status:
+  observedGeneration: 1
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: ComponentsAvailable
+      message: Driver and device plugin are available
+      lastTransitionTime: __COMPLETE_TIME__

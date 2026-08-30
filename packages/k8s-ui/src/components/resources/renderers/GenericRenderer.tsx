@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { Info, CheckCircle, XCircle, AlertCircle, ChevronRight, ChevronDown, FileCode, AlertTriangle, Layers } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property } from '../../ui/drawer-components'
+import { getGenericResourceStatus } from '../generic-status'
+import type { HealthLevel } from '../resource-utils'
 
 interface GenericRendererProps {
   data: any
@@ -13,7 +15,7 @@ export function GenericRenderer({ data }: GenericRendererProps) {
   const conditions = status.conditions
 
   // Determine health status from conditions or status fields
-  const healthStatus = getHealthStatus(status, conditions)
+  const healthStatus = getHealthStatus(data)
 
   // Extract important fields from spec and status
   const statusFields = getImportantFields(status, 'status')
@@ -138,89 +140,22 @@ interface HealthStatusResult {
   message?: string
 }
 
-function getHealthStatus(status: any, conditions?: any[]): HealthStatusResult | null {
-  if (!status) return null
+// This renderer's banner has four tones, while the shared derivation speaks the
+// full HealthLevel vocabulary. `alert` folds into unhealthy and `neutral` into
+// unknown — the banner has no distinct treatment for either.
+const BANNER_TYPE: Record<HealthLevel, HealthType> = {
+  healthy: 'healthy',
+  degraded: 'degraded',
+  alert: 'unhealthy',
+  unhealthy: 'unhealthy',
+  neutral: 'unknown',
+  unknown: 'unknown',
+}
 
-  // Check phase first (common pattern)
-  if (status.phase) {
-    const phase = String(status.phase)
-    const healthyPhases = ['Running', 'Active', 'Succeeded', 'Ready', 'Healthy', 'Available', 'Bound', 'Complete']
-    const degradedPhases = ['Pending', 'Progressing', 'Unknown', 'Terminating', 'Waiting']
-    const unhealthyPhases = ['Failed', 'Error', 'CrashLoopBackOff', 'ImagePullBackOff', 'ErrImagePull']
-
-    if (healthyPhases.includes(phase)) {
-      return { type: 'healthy', label: phase }
-    }
-    if (degradedPhases.includes(phase)) {
-      return { type: 'degraded', label: phase, message: status.message || status.reason }
-    }
-    if (unhealthyPhases.includes(phase)) {
-      return { type: 'unhealthy', label: phase, message: status.message || status.reason }
-    }
-  }
-
-  // Check conditions
-  if (conditions && Array.isArray(conditions) && conditions.length > 0) {
-    // Look for Ready or Available condition
-    const readyCondition = conditions.find((c: any) =>
-      c.type === 'Ready' || c.type === 'Available' || c.type === 'Healthy'
-    )
-    if (readyCondition) {
-      if (readyCondition.status === 'True') {
-        return { type: 'healthy', label: 'Ready' }
-      }
-      if (readyCondition.status === 'False') {
-        return {
-          type: 'unhealthy',
-          label: 'Not Ready',
-          message: readyCondition.message || readyCondition.reason
-        }
-      }
-    }
-
-    // Check for any False conditions that indicate problems
-    const problemConditions = conditions.filter((c: any) =>
-      c.status === 'False' && ['Ready', 'Available', 'Healthy', 'Initialized'].includes(c.type)
-    )
-    if (problemConditions.length > 0) {
-      const problem = problemConditions[0]
-      return {
-        type: 'unhealthy',
-        label: `${problem.type}: False`,
-        message: problem.message || problem.reason
-      }
-    }
-
-    // Check for warning conditions
-    const warningConditions = conditions.filter((c: any) =>
-      c.status === 'True' && ['Degraded', 'Warning', 'ScalingLimited'].includes(c.type)
-    )
-    if (warningConditions.length > 0) {
-      const warning = warningConditions[0]
-      return {
-        type: 'degraded',
-        label: warning.type,
-        message: warning.message || warning.reason
-      }
-    }
-  }
-
-  // Check replica-based status
-  if (status.replicas !== undefined) {
-    const desired = status.replicas
-    const ready = status.readyReplicas || status.availableReplicas || 0
-    if (desired > 0 && ready >= desired) {
-      return { type: 'healthy', label: `${ready}/${desired} Ready` }
-    }
-    if (desired > 0 && ready > 0) {
-      return { type: 'degraded', label: `${ready}/${desired} Ready` }
-    }
-    if (desired > 0 && ready === 0) {
-      return { type: 'unhealthy', label: `0/${desired} Ready` }
-    }
-  }
-
-  return null
+function getHealthStatus(resource: any): HealthStatusResult | null {
+  const derived = getGenericResourceStatus(resource)
+  if (!derived) return null
+  return { type: BANNER_TYPE[derived.tone], label: derived.text, message: derived.reason }
 }
 
 // ============================================================================

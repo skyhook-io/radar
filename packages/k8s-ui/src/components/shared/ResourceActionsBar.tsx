@@ -30,6 +30,7 @@ import { getDefaultContainerName } from '../resources/resource-utils'
 import { SetImageDialog, type ManagedImageSource } from './SetImageDialog'
 import type { WorkloadImageInventory, WorkloadImageUpdate } from '../../types/core'
 import { isArgoRolloutResource } from '../../utils/workload-rollout'
+import { isCoreBatchJob } from '../../utils/api-resources'
 
 // ============================================================================
 // ACTIONS BAR - Interactive buttons that change based on resource kind
@@ -166,13 +167,14 @@ export function ResourceActionsBar({
   onDrainNode, isDrainingNode,
 }: ResourceActionsBarProps) {
   const kind = resource.kind.toLowerCase()
+  const coreBatchJob = isCoreBatchJob(kind, resource.group)
   const supportsWorkloadActions = ['deployments', 'statefulsets', 'daemonsets'].includes(kind) ||
     (kind === 'rollouts' && isArgoRolloutResource(data))
   const canOpenWorkloadLogs = Boolean(
     canViewLogs &&
     !hideLogs &&
     openWorkloadLogs &&
-    ['deployments', 'statefulsets', 'daemonsets', 'jobs', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(kind)
+    (['deployments', 'statefulsets', 'daemonsets', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(kind) || coreBatchJob)
   )
 
   // Delete confirmation state
@@ -516,7 +518,7 @@ export function ResourceActionsBar({
       )}
 
       {/* Job logs */}
-      {kind === 'jobs' && onCopyCommand && (!canViewLogs || !openWorkloadLogs) && (
+      {coreBatchJob && onCopyCommand && (!canViewLogs || !openWorkloadLogs) && (
         <button
           onClick={(e) => onCopyCommand(
             `kubectl logs job/${resource.name} -n ${resource.namespace} -f`,

@@ -176,6 +176,7 @@ type CronJobProblem struct {
 	Problem   string // "stale", "never-scheduled", or "repeated-without-success"
 	Reason    string
 	Duration  time.Duration
+	OnsetAt   time.Time
 }
 
 // DetectCronJobProblems finds non-suspended CronJobs whose schedule or success
@@ -196,17 +197,19 @@ func DetectCronJobProblems(cronjobs []*batchv1.CronJob, jobs []*batchv1.Job, tra
 					Namespace: cj.Namespace,
 					Problem:   "stale",
 					Reason:    fmt.Sprintf("last run %dh ago", int(sinceLast.Hours())),
+					OnsetAt:   cj.Status.LastScheduleTime.Add(threshold),
 				})
 				continue
 			}
 			if !jobProblemOwners[cj.UID] {
-				if reason, duration, ok := repeatedCronJobSchedulesWithoutSuccess(cj, tracker, now); ok {
+				if reason, onsetAt, ok := repeatedCronJobSchedulesWithoutSuccess(cj, tracker, now); ok {
 					problems = append(problems, CronJobProblem{
 						Name:      cj.Name,
 						Namespace: cj.Namespace,
 						Problem:   "repeated-without-success",
 						Reason:    reason,
-						Duration:  duration,
+						Duration:  now.Sub(onsetAt),
+						OnsetAt:   onsetAt,
 					})
 				}
 			}
@@ -216,6 +219,7 @@ func DetectCronJobProblems(cronjobs []*batchv1.CronJob, jobs []*batchv1.Job, tra
 				Namespace: cj.Namespace,
 				Problem:   "never-scheduled",
 				Reason:    "created but never ran",
+				OnsetAt:   cj.CreationTimestamp.Add(threshold),
 			})
 		}
 	}
@@ -251,24 +255,24 @@ func stuckActiveJob(job *batchv1.Job, now time.Time) bool {
 		now.Sub(job.CreationTimestamp.Time) > time.Hour
 }
 
-func repeatedCronJobSchedulesWithoutSuccess(cj *batchv1.CronJob, tracker *cronJobScheduleObservationTracker, now time.Time) (string, time.Duration, bool) {
+func repeatedCronJobSchedulesWithoutSuccess(cj *batchv1.CronJob, tracker *cronJobScheduleObservationTracker, now time.Time) (string, time.Time, bool) {
 	// Replace can delete an unfinished Job before the Job detectors accumulate
 	// evidence. Allow retains Jobs for those detectors, while Forbid stops
 	// advancing lastScheduleTime and is covered as stale.
 	if cj.Spec.ConcurrencyPolicy != batchv1.ReplaceConcurrent || len(cj.Status.Active) == 0 {
-		return "", 0, false
+		return "", time.Time{}, false
 	}
 
 	if cj.Status.LastScheduleTime == nil || cj.Status.LastScheduleTime.Time.After(now) {
-		return "", 0, false
+		return "", time.Time{}, false
 	}
 	schedules, sequenceSince := tracker.withoutRecordedSuccess(cj.UID)
 	if schedules < cronJobScheduleObservationThreshold || sequenceSince.IsZero() || sequenceSince.After(now) {
-		return "", 0, false
+		return "", time.Time{}, false
 	}
 	if success := cj.Status.LastSuccessfulTime; success != nil && !success.IsZero() && !success.Time.Before(sequenceSince) {
-		return "", 0, false
+		return "", time.Time{}, false
 	}
 	return fmt.Sprintf("%d consecutive schedules observed without a recorded success; last scheduled %s ago",
-		schedules, FormatAge(now.Sub(cj.Status.LastScheduleTime.Time))), now.Sub(sequenceSince), true
+		schedules, FormatAge(now.Sub(cj.Status.LastScheduleTime.Time))), sequenceSince, true
 }

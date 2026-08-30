@@ -173,11 +173,8 @@ func (p *CacheProvider) AdmissionWebhookRefsForService(namespace, name string) [
 	if p == nil || namespace == "" || name == "" {
 		return nil
 	}
-	p.webhookRefsOnce.Do(func() {
-		p.webhookRefs = k8s.AdmissionWebhookServiceReferencesWatched(p.dynamic, p.discovery)
-	})
 	var refs []AdmissionWebhookRef
-	for _, ref := range p.webhookRefs {
+	for _, ref := range p.admissionWebhookRefs() {
 		if ref.ServiceNamespace != namespace || ref.ServiceName != name {
 			continue
 		}
@@ -187,11 +184,40 @@ func (p *CacheProvider) AdmissionWebhookRefsForService(namespace, name string) [
 				Kind:  ref.ConfigurationKind,
 				Name:  ref.ConfigurationName,
 			},
-			WebhookName:   ref.WebhookName,
-			FailurePolicy: ref.FailurePolicy,
+			WebhookName:      ref.WebhookName,
+			ServiceNamespace: ref.ServiceNamespace,
+			ServiceName:      ref.ServiceName,
+			FailurePolicy:    ref.FailurePolicy,
 		})
 	}
 	return refs
+}
+
+func (p *CacheProvider) AdmissionWebhookRefsForConfiguration(group, kind, name string) []AdmissionWebhookRef {
+	if p == nil || group == "" || kind == "" || name == "" {
+		return nil
+	}
+	var refs []AdmissionWebhookRef
+	for _, ref := range p.admissionWebhookRefs() {
+		if ref.ConfigurationGroup != group || ref.ConfigurationKind != kind || ref.ConfigurationName != name {
+			continue
+		}
+		refs = append(refs, AdmissionWebhookRef{
+			Configuration:    Ref{Group: ref.ConfigurationGroup, Kind: ref.ConfigurationKind, Name: ref.ConfigurationName},
+			WebhookName:      ref.WebhookName,
+			ServiceNamespace: ref.ServiceNamespace,
+			ServiceName:      ref.ServiceName,
+			FailurePolicy:    ref.FailurePolicy,
+		})
+	}
+	return refs
+}
+
+func (p *CacheProvider) admissionWebhookRefs() []k8s.AdmissionWebhookServiceReference {
+	p.webhookRefsOnce.Do(func() {
+		p.webhookRefs = k8s.AdmissionWebhookServiceReferencesWatched(p.dynamic, p.discovery)
+	})
+	return p.webhookRefs
 }
 
 func (p *CacheProvider) WorkloadBacksService(group, kind, namespace, name, serviceNamespace, serviceName string) bool {

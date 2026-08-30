@@ -92,7 +92,33 @@ func (f *fakeProvider) ChangeContextForIssue(i Issue) *issuesapi.ChangeContext {
 }
 
 func (f *fakeProvider) AdmissionWebhookRefsForService(namespace, name string) []AdmissionWebhookRef {
-	return f.webhookRefs[namespace+"/"+name]
+	refs := f.webhookRefs[namespace+"/"+name]
+	out := make([]AdmissionWebhookRef, 0, len(refs))
+	for _, ref := range refs {
+		ref.ServiceNamespace = namespace
+		ref.ServiceName = name
+		out = append(out, ref)
+	}
+	return out
+}
+
+func (f *fakeProvider) AdmissionWebhookRefsForConfiguration(group, kind, name string) []AdmissionWebhookRef {
+	var out []AdmissionWebhookRef
+	for serviceKey, refs := range f.webhookRefs {
+		parts := strings.SplitN(serviceKey, "/", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		for _, ref := range refs {
+			if ref.Configuration.Group != group || ref.Configuration.Kind != kind || ref.Configuration.Name != name {
+				continue
+			}
+			ref.ServiceNamespace = parts[0]
+			ref.ServiceName = parts[1]
+			out = append(out, ref)
+		}
+	}
+	return out
 }
 
 func (f *fakeProvider) WorkloadBacksService(group, kind, namespace, name, serviceNamespace, serviceName string) bool {
@@ -177,6 +203,229 @@ func TestComposeAdmissionWebhookBackendCorrelation(t *testing.T) {
 	}
 }
 
+func TestComposeMissingAdmissionWebhookServiceCorrelation(t *testing.T) {
+	message := `failed calling webhook "missing.example.com": Post "https://missing-webhook.hooks.svc:443/validate": service "missing-webhook" not found`
+	p := &fakeProvider{
+		missingRefs: []k8s.Detection{
+			{
+				Kind: "ValidatingWebhookConfiguration", Group: "admissionregistration.k8s.io", Name: "policy", Severity: "critical",
+				Reason: k8s.MissingWebhookBackendReason, Fingerprint: k8s.WebhookBackendFingerprint("hooks", "missing-webhook"), OnsetUnknown: true,
+			},
+			{
+				Kind: "ValidatingWebhookConfiguration", Group: "admissionregistration.k8s.io", Name: "policy", Severity: "critical",
+				Reason: k8s.MissingWebhookBackendReason, Fingerprint: k8s.WebhookBackendFingerprint("hooks", "other-missing-webhook"), OnsetUnknown: true,
+			},
+		},
+		scheduling: []k8s.Detection{{
+			Kind: "ReplicaSet", Group: "apps", Namespace: "apps", Name: "catalog-7d9f", Severity: "critical",
+			Reason: "WebhookUnavailable", Message: message,
+			OwnerGroup: "apps", OwnerKind: "Deployment", OwnerName: "catalog",
+		}},
+		webhookRefs: map[string][]AdmissionWebhookRef{
+			"hooks/missing-webhook": {{
+				Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "policy"},
+				WebhookName:   "missing.example.com", FailurePolicy: "Fail",
+			}},
+			"hooks/other-missing-webhook": {{
+				Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "policy"},
+				WebhookName:   "other.example.com", FailurePolicy: "Fail",
+			}},
+		},
+	}
+	out := Compose(p, Filters{Limit: NoLimit, Grouped: true, CanReadClusterScoped: func(string, string) bool { return true }})
+	if len(out) != 3 {
+		t.Fatalf("missing-Service correlation = %+v, want two configuration roots and blocked Deployment", out)
+	}
+	var root, unrelatedRoot, deployment Issue
+	for _, issue := range out {
+		switch issue.Kind {
+		case "ValidatingWebhookConfiguration":
+			if issue.Fingerprint == k8s.WebhookBackendFingerprint("hooks", "missing-webhook") {
+				root = issue
+			} else {
+				unrelatedRoot = issue
+			}
+		case "Deployment":
+			deployment = issue
+		case "Service":
+			t.Fatalf("missing backend must not create a synthetic Service issue: %+v", issue)
+		}
+	}
+	if root.ID == "" || root.DiagnosticContext == nil {
+		t.Fatalf("missing webhook root lacks diagnostic context: %+v", root)
+	}
+	if unrelatedRoot.ID == "" {
+		t.Fatalf("second missing backend root was collapsed: %+v", out)
+	}
+	if deployment.IncidentParent == nil || deployment.IncidentParent.ID != root.ID || deployment.IncidentParent.FactType != factAdmissionWebhook {
+		t.Fatalf("blocked Deployment incident parent = %+v, want configuration %q", deployment.IncidentParent, root.ID)
+	}
+	var webhookFact issuesapi.DiagnosticFact
+	for _, fact := range root.DiagnosticContext.Facts {
+		if fact.Type == factAdmissionWebhook {
+			webhookFact = fact
+		}
+	}
+	if len(webhookFact.RelatedIssues) != 1 || len(webhookFact.Refs) != 0 ||
+		!strings.Contains(webhookFact.Message, `Service "missing-webhook" in namespace "hooks"`) {
+		t.Fatalf("missing webhook root fact = %+v, want exact backend identity, one symptom, and no dead-link ref", webhookFact)
+	}
+	if unrelatedRoot.DiagnosticContext == nil {
+		t.Fatalf("unrelated missing backend lost its explicit-reference context: %+v", unrelatedRoot)
+	}
+	for _, fact := range unrelatedRoot.DiagnosticContext.Facts {
+		if fact.Type == factAdmissionWebhook {
+			t.Fatalf("missing backend without an observed blocked workload should not repeat its cause as an admission fact: %+v", fact)
+		}
+	}
+}
+
+func TestAdmissionWebhookFailureKindMustMatchRootShape(t *testing.T) {
+	refs := []AdmissionWebhookRef{{
+		WebhookName: "validate.example.com", ServiceNamespace: "hooks", ServiceName: "policy-webhook", FailurePolicy: "Fail",
+	}}
+	noEndpoints := k8s.AdmissionWebhookBackendFailure{
+		WebhookName: "validate.example.com", ServiceNamespace: "hooks", ServiceName: "policy-webhook", Kind: k8s.AdmissionWebhookNoReadyEndpoints,
+	}
+	serviceMissing := noEndpoints
+	serviceMissing.Kind = k8s.AdmissionWebhookServiceNotFound
+	if !admissionWebhookFailureMatchesRefs(noEndpoints, refs, false) || admissionWebhookFailureMatchesRefs(noEndpoints, refs, true) {
+		t.Fatal("no-endpoints failure must match only an existing-Service root")
+	}
+	if !admissionWebhookFailureMatchesRefs(serviceMissing, refs, true) || admissionWebhookFailureMatchesRefs(serviceMissing, refs, false) {
+		t.Fatal("service-not-found failure must match only a missing-Service configuration root")
+	}
+	refs[0].FailurePolicy = "Ignore"
+	if admissionWebhookFailureMatchesRefs(noEndpoints, refs, false) || admissionWebhookFailureMatchesRefs(serviceMissing, refs, true) {
+		t.Fatal("fail-open webhook reference must never create an incident edge")
+	}
+}
+
+func TestMissingAdmissionWebhookServiceFailOpenHasNoIncidentEdge(t *testing.T) {
+	message := `failed calling webhook "audit.example.com": Post "https://audit-webhook.hooks.svc:443/mutate": service "audit-webhook" not found`
+	p := &fakeProvider{
+		missingRefs: []k8s.Detection{{
+			Kind: "MutatingWebhookConfiguration", Group: "admissionregistration.k8s.io", Name: "audit", Severity: "warning",
+			Reason: k8s.MissingWebhookBackendReason, Fingerprint: k8s.WebhookBackendFingerprint("hooks", "audit-webhook"), OnsetUnknown: true,
+		}},
+		scheduling: []k8s.Detection{{
+			Kind: "Deployment", Group: "apps", Namespace: "apps", Name: "catalog", Severity: "critical",
+			Reason: "WebhookUnavailable", Message: message,
+		}},
+		webhookRefs: map[string][]AdmissionWebhookRef{
+			"hooks/audit-webhook": {{
+				Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "MutatingWebhookConfiguration", Name: "audit"},
+				WebhookName:   "audit.example.com", FailurePolicy: "Ignore",
+			}},
+		},
+	}
+	out := Compose(p, Filters{Limit: NoLimit, Grouped: true, CanReadClusterScoped: func(string, string) bool { return true }})
+	foundRoot := false
+	for _, issue := range out {
+		if issue.Kind == "Deployment" && issue.IncidentParent != nil {
+			t.Fatalf("fail-open webhook symptom received incident parent: %+v", issue.IncidentParent)
+		}
+		if issue.Kind != "MutatingWebhookConfiguration" {
+			continue
+		}
+		foundRoot = true
+		foundExplicitReference := false
+		for _, candidate := range issue.DiagnosticContext.Facts {
+			if candidate.Type == factAdmissionWebhook {
+				t.Fatalf("fail-open missing-Service root should not repeat its cause as an admission fact: %+v", candidate)
+			}
+			foundExplicitReference = foundExplicitReference || candidate.Type == factExplicitReference
+		}
+		if !foundExplicitReference {
+			t.Fatalf("fail-open missing-Service root lost its explicit-reference context: %+v", issue.DiagnosticContext)
+		}
+	}
+	if !foundRoot {
+		t.Fatalf("fail-open missing-Service root not found: %+v", out)
+	}
+}
+
+func TestMissingAdmissionWebhookServiceRootAmbiguity(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		secondWebhookName string
+		wantParent        bool
+		wantRelatedRoots  int
+	}{
+		{name: "same webhook has two roots", secondWebhookName: "validate.example.com", wantRelatedRoots: 2},
+		{name: "webhook identity selects one root", secondWebhookName: "other.example.com", wantParent: true, wantRelatedRoots: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fingerprint := k8s.WebhookBackendFingerprint("hooks", "missing-webhook")
+			p := &fakeProvider{
+				missingRefs: []k8s.Detection{
+					{Kind: "ValidatingWebhookConfiguration", Group: "admissionregistration.k8s.io", Name: "policy-a", Severity: "critical", Reason: k8s.MissingWebhookBackendReason, Fingerprint: fingerprint},
+					{Kind: "ValidatingWebhookConfiguration", Group: "admissionregistration.k8s.io", Name: "policy-b", Severity: "critical", Reason: k8s.MissingWebhookBackendReason, Fingerprint: fingerprint},
+				},
+				scheduling: []k8s.Detection{{
+					Kind: "Deployment", Group: "apps", Namespace: "apps", Name: "catalog", Severity: "critical", Reason: "WebhookUnavailable",
+					Message: `failed calling webhook "validate.example.com": Post "https://missing-webhook.hooks.svc:443/validate": service "missing-webhook" not found`,
+				}},
+				webhookRefs: map[string][]AdmissionWebhookRef{
+					"hooks/missing-webhook": {
+						{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "policy-a"}, WebhookName: "validate.example.com", FailurePolicy: "Fail"},
+						{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "policy-b"}, WebhookName: tc.secondWebhookName, FailurePolicy: "Fail"},
+					},
+				},
+			}
+			out := Compose(p, Filters{Limit: NoLimit, Grouped: true, CanReadClusterScoped: func(string, string) bool { return true }})
+			relatedRoots := 0
+			for _, issue := range out {
+				if issue.Kind == "Deployment" {
+					if (issue.IncidentParent != nil) != tc.wantParent {
+						t.Fatalf("Deployment incident parent = %+v, want present=%v", issue.IncidentParent, tc.wantParent)
+					}
+					if issue.IncidentParent != nil && issue.IncidentParent.Ref.Name != "policy-a" {
+						t.Fatalf("selected incident root = %+v, want policy-a", issue.IncidentParent)
+					}
+				}
+				if issue.Kind == "ValidatingWebhookConfiguration" && issue.DiagnosticContext != nil {
+					for _, fact := range issue.DiagnosticContext.Facts {
+						if fact.Type == factAdmissionWebhook && len(fact.RelatedIssues) == 1 {
+							relatedRoots++
+						}
+					}
+				}
+			}
+			if relatedRoots != tc.wantRelatedRoots {
+				t.Fatalf("roots listing the symptom = %d, want %d: %+v", relatedRoots, tc.wantRelatedRoots, out)
+			}
+		})
+	}
+}
+
+func TestAdmissionWebhookCorrelationRequiresExactWebhookReference(t *testing.T) {
+	message := `failed calling webhook "unrelated.example.com": Post "https://policy-webhook.hooks.svc:443/validate": no endpoints available for service "policy-webhook"`
+	p := &fakeProvider{
+		problems:   []k8s.Detection{{Kind: "Service", Namespace: "hooks", Name: "policy-webhook", Severity: "warning", Reason: k8s.SelectorMatchesNoPodsReason}},
+		scheduling: []k8s.Detection{{Kind: "Deployment", Group: "apps", Namespace: "apps", Name: "catalog", Severity: "critical", Reason: "WebhookUnavailable", Message: message}},
+		webhookRefs: map[string][]AdmissionWebhookRef{
+			"hooks/policy-webhook": {{
+				Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "policy"},
+				WebhookName:   "validate.example.com", FailurePolicy: "Fail",
+			}},
+		},
+	}
+	out := Compose(p, Filters{Limit: NoLimit, Grouped: true, CanReadClusterScoped: func(string, string) bool { return true }})
+	for _, issue := range out {
+		if issue.Kind == "Deployment" && issue.IncidentParent != nil {
+			t.Fatalf("unreferenced webhook name received incident parent: %+v", issue.IncidentParent)
+		}
+		if issue.Kind == "Service" && issue.DiagnosticContext != nil {
+			for _, fact := range issue.DiagnosticContext.Facts {
+				if fact.Type == factAdmissionWebhook && len(fact.RelatedIssues) != 0 {
+					t.Fatalf("unreferenced webhook name was correlated: %+v", fact)
+				}
+			}
+		}
+	}
+}
+
 func TestAdmissionWebhookSelfDeadlockSuppressesCircularIncidentEdge(t *testing.T) {
 	p := &fakeProvider{
 		problems: []k8s.Detection{{Kind: "Service", Namespace: "hooks", Name: "policy-webhook", Severity: "warning", Reason: k8s.SelectorMatchesNoPodsReason}},
@@ -185,7 +434,7 @@ func TestAdmissionWebhookSelfDeadlockSuppressesCircularIncidentEdge(t *testing.T
 			Message: `failed calling webhook "validate.example.com": Post "https://policy-webhook.hooks.svc:443/validate": no endpoints available for service "policy-webhook"`,
 		}},
 		webhookRefs: map[string][]AdmissionWebhookRef{
-			"hooks/policy-webhook": {{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "policy"}, FailurePolicy: "Fail"}},
+			"hooks/policy-webhook": {{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "policy"}, WebhookName: "validate.example.com", FailurePolicy: "Fail"}},
 		},
 		workloadBacks: map[string]bool{"apps/Deployment/hooks/policy->hooks/policy-webhook": true},
 	}
@@ -223,7 +472,7 @@ func TestAdmissionWebhookCorrelationSurvivesReplicaSetWorkloadGrouping(t *testin
 		webhookRefs: map[string][]AdmissionWebhookRef{
 			"hooks/policy-webhook": {{
 				Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "policy"},
-				FailurePolicy: "Fail",
+				WebhookName:   "validate.example.com", FailurePolicy: "Fail",
 			}},
 		},
 	}
@@ -267,7 +516,7 @@ func TestAdmissionWebhookCorrelationRequiresWholeGroupedIssueCoverage(t *testing
 		webhookRefs: map[string][]AdmissionWebhookRef{
 			"hooks/policy-webhook": {{
 				Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "policy"},
-				FailurePolicy: "Fail",
+				WebhookName:   "validate.example.com", FailurePolicy: "Fail",
 			}},
 		},
 	}
@@ -307,7 +556,7 @@ func TestAdmissionWebhookCorrelationCountsGroupedSubjectRow(t *testing.T) {
 		webhookRefs: map[string][]AdmissionWebhookRef{
 			"hooks/policy-webhook": {{
 				Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "policy"},
-				FailurePolicy: "Fail",
+				WebhookName:   "validate.example.com", FailurePolicy: "Fail",
 			}},
 		},
 	}
@@ -393,8 +642,8 @@ func TestAdmissionWebhookPartialRBACKeepsObjectiveFailureMode(t *testing.T) {
 		}},
 		webhookRefs: map[string][]AdmissionWebhookRef{
 			"hooks/policy-webhook": {
-				{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "MutatingWebhookConfiguration", Name: "visible-open"}, FailurePolicy: "Ignore"},
-				{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "hidden-closed"}, FailurePolicy: "Fail"},
+				{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "MutatingWebhookConfiguration", Name: "visible-open"}, WebhookName: "other.example.com", FailurePolicy: "Ignore"},
+				{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "hidden-closed"}, WebhookName: "validate.example.com", FailurePolicy: "Fail"},
 			},
 		},
 	}
@@ -445,8 +694,8 @@ func TestAdmissionWebhookTwoServiceRootsLeaveIncidentParentAmbiguous(t *testing.
 			{Kind: "Deployment", Group: "apps", Namespace: "apps", Name: "catalog", Severity: "critical", Reason: "WebhookUnavailable", Message: message("webhook-b")},
 		},
 		webhookRefs: map[string][]AdmissionWebhookRef{
-			"hooks/webhook-a": {{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "a"}, FailurePolicy: "Fail"}},
-			"hooks/webhook-b": {{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "b"}, FailurePolicy: "Fail"}},
+			"hooks/webhook-a": {{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "a"}, WebhookName: "validate.example.com", FailurePolicy: "Fail"}},
+			"hooks/webhook-b": {{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "b"}, WebhookName: "validate.example.com", FailurePolicy: "Fail"}},
 		},
 	}
 	out := Compose(p, Filters{Limit: NoLimit, Grouped: true, CanReadClusterScoped: func(string, string) bool { return true }})
@@ -475,6 +724,157 @@ func TestUnknownOnsetUsesZeroCELSentinel(t *testing.T) {
 	activation := issueToActivation(issue)
 	if activation["first_seen"] != int64(0) {
 		t.Fatalf("first_seen CEL sentinel = %#v, want int64(0)", activation["first_seen"])
+	}
+}
+
+func TestFutureProblemOnsetIsUnknown(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	issue := fromProblem(k8s.Detection{
+		Kind:             "PersistentVolumeClaim",
+		Namespace:        "prod",
+		Name:             "data",
+		Severity:         "critical",
+		Reason:           "Missing StorageClass",
+		OnsetAt:          now.Add(time.Minute),
+		IssueTiming:      "started_at_resource_creation",
+		IssueTimingBasis: "spec",
+	}, now, SourceProblem)
+	if !issue.FirstSeen.IsZero() || !issue.OnsetUnknown {
+		t.Fatalf("future-onset normalization = %+v", issue)
+	}
+	if issue.IssueTiming != "" || issue.IssueTimingBasis != "" {
+		t.Fatalf("future-onset timing metadata = %q/%q, want empty", issue.IssueTiming, issue.IssueTimingBasis)
+	}
+}
+
+func TestProblemOnsetRequiresExactEvidence(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	createdAt := time.Unix(1_000, 0)
+	withoutEvidence := fromProblem(k8s.Detection{
+		Kind: "Deployment", Namespace: "prod", Name: "api", Severity: "critical",
+		Reason: "Unavailable", AgeSeconds: 9_000, DurationSeconds: 9_000, ResourceCreatedAt: createdAt,
+		IssueTiming: "started_at_resource_creation", IssueTimingBasis: "condition",
+	}, now, SourceProblem)
+	if !withoutEvidence.FirstSeen.IsZero() || !withoutEvidence.OnsetUnknown || !withoutEvidence.ResourceCreatedAt.Equal(createdAt) || withoutEvidence.IssueTiming != "" || withoutEvidence.IssueTimingBasis != "" {
+		t.Fatalf("age-only detection fabricated onset: %+v", withoutEvidence)
+	}
+
+	for _, tc := range []struct {
+		basis string
+	}{
+		{basis: "owner_condition"},
+		{basis: "pod_creation"},
+		{basis: "spec"},
+	} {
+		issue := fromProblem(k8s.Detection{
+			Kind: "Deployment", Namespace: "prod", Name: "api", Severity: "critical",
+			Reason: "Unavailable", OnsetUnknown: true, ResourceCreatedAt: createdAt,
+			IssueTiming: "started_at_resource_creation", IssueTimingBasis: tc.basis,
+		}, now, SourceProblem)
+		if !issue.FirstSeen.IsZero() || !issue.OnsetUnknown || issue.IssueTiming != "started_at_resource_creation" || issue.IssueTimingBasis != tc.basis {
+			t.Errorf("independent %s timing evidence was lost: %+v", tc.basis, issue)
+		}
+	}
+
+	onsetAt := now.Add(-500 * time.Millisecond)
+	withEvidence := fromProblem(k8s.Detection{
+		Kind: "Deployment", Namespace: "prod", Name: "api", Severity: "critical",
+		Reason: "Unavailable", OnsetAt: onsetAt, ResourceCreatedAt: createdAt,
+	}, now, SourceProblem)
+	if withEvidence.OnsetUnknown || !withEvidence.FirstSeen.Equal(onsetAt) {
+		t.Fatalf("exact sub-second onset was lost: %+v", withEvidence)
+	}
+	activation := issueToActivation(withoutEvidence)
+	if activation["resource_created_at"] != createdAt.Unix() {
+		t.Fatalf("resource_created_at CEL binding = %#v, want %d", activation["resource_created_at"], createdAt.Unix())
+	}
+	mixed := withEvidence
+	mixed.OnsetCoverage = &issuesapi.OnsetCoverage{Known: 2, Unknown: 48}
+	mixedActivation := issueToActivation(mixed)
+	if mixedActivation["onset_unknown"] != false || mixedActivation["onset_coverage_unknown"] != int64(48) {
+		t.Fatalf("onset coverage CEL bindings = %#v", mixedActivation)
+	}
+}
+
+func TestTimingSummaryExplainsIndependentAndPartialProvenance(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name  string
+		issue Issue
+		want  string
+	}{
+		{
+			name:  "owner condition does not date child reason",
+			issue: Issue{OnsetUnknown: true, IssueTiming: "started_at_resource_creation", IssueTimingBasis: "owner_condition"},
+			want:  "Exact onset of this specific issue is unknown. Its owner workload never became healthy after deployment.",
+		},
+		{
+			name:  "pod creation does not date child reason",
+			issue: Issue{OnsetUnknown: true, IssueTiming: "started_at_resource_creation", IssueTimingBasis: "pod_creation"},
+			want:  "Exact onset of this specific issue is unknown. The affected pod failed during startup of its workload revision.",
+		},
+		{
+			name:  "partial group",
+			issue: Issue{FirstSeen: now, OnsetCoverage: &issuesapi.OnsetCoverage{Known: 2, Unknown: 1}},
+			want:  "Some signals were active at least since 2026-08-29T12:00:00Z; exact onset is unknown for 1 other signal.",
+		},
+		{
+			name: "partial group retains independent evidence",
+			issue: Issue{
+				FirstSeen:        now,
+				OnsetCoverage:    &issuesapi.OnsetCoverage{Known: 2, Unknown: 1},
+				IssueTiming:      "started_at_resource_creation",
+				IssueTimingBasis: "owner_condition",
+			},
+			want: "Some signals were active at least since 2026-08-29T12:00:00Z; exact onset is unknown for 1 other signal. Workload-level evidence shows the owner never became healthy after deployment.",
+		},
+		{
+			name:  "all unknown group retains independent evidence",
+			issue: Issue{OnsetCoverage: &issuesapi.OnsetCoverage{Unknown: 3}, IssueTiming: "started_at_resource_creation", IssueTimingBasis: "owner_condition"},
+			want:  "Exact onset is unknown for all 3 contributing signals. Workload-level evidence shows the owner never became healthy after deployment.",
+		},
+		{
+			name:  "grouped pod evidence does not claim one revision",
+			issue: Issue{OnsetCoverage: &issuesapi.OnsetCoverage{Unknown: 3}, IssueTiming: "started_at_resource_creation", IssueTimingBasis: "pod_creation"},
+			want:  "Exact onset is unknown for all 3 contributing signals. Pod-level evidence shows failures in pods created during workload startup.",
+		},
+		{
+			name:  "exact onset needs no explanation",
+			issue: Issue{FirstSeen: now, IssueTiming: "started_at_resource_creation", IssueTimingBasis: "owner_condition"},
+			want:  "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := timingSummary(tt.issue); got != tt.want {
+				t.Fatalf("timingSummary() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFinalizeAddsTimingSummaryToPublicIssue(t *testing.T) {
+	out, _ := finalizeShapedIssues([]Issue{{
+		Name:             "missing-secret",
+		OnsetUnknown:     true,
+		IssueTiming:      "started_at_resource_creation",
+		IssueTimingBasis: "owner_condition",
+	}}, Filters{Limit: NoLimit}, false, true)
+	if len(out) != 1 || out[0].TimingSummary != "Exact onset of this specific issue is unknown. Its owner workload never became healthy after deployment." {
+		t.Fatalf("public timing summary = %+v", out)
+	}
+}
+
+func TestPublicIssueTimesNormalizeToUTC(t *testing.T) {
+	local := time.FixedZone("test-offset", 3*60*60)
+	out, _ := finalizeShapedIssues([]Issue{{
+		Name:              "offset",
+		FirstSeen:         time.Date(2026, 8, 10, 1, 30, 0, 0, local),
+		ResourceCreatedAt: time.Date(2026, 8, 10, 1, 0, 0, 0, local),
+		LastSeen:          time.Date(2026, 8, 10, 2, 0, 0, 0, local),
+	}}, Filters{Limit: NoLimit}, false, true)
+	if len(out) != 1 || out[0].FirstSeen.Location() != time.UTC || out[0].ResourceCreatedAt.Location() != time.UTC || out[0].LastSeen.Location() != time.UTC {
+		t.Fatalf("public issue times were not normalized to UTC: %+v", out)
 	}
 }
 
@@ -935,7 +1335,7 @@ func TestCompose_SuppressedParentDonatesIssueTimingToChildren(t *testing.T) {
 	t.Run("after-healthy donates to non-cycling child", func(t *testing.T) {
 		p := &fakeProvider{
 			problems: []k8s.Detection{
-				{Kind: "Deployment", Namespace: "ns", Name: "web", Group: "apps", Severity: "critical", Reason: "1/3 available", IssueTiming: "started_after_resource_was_healthy", IssueTimingBasis: "condition"},
+				{Kind: "Deployment", Namespace: "ns", Name: "web", Group: "apps", Severity: "critical", Reason: "1/3 available", OnsetAt: time.Now().Add(-time.Hour), IssueTiming: "started_after_resource_was_healthy", IssueTimingBasis: "condition"},
 				{Kind: "Pod", Namespace: "ns", Name: "web-abc", Severity: "critical", Reason: "ImagePullBackOff", OwnerKind: "Deployment", OwnerName: "web"},
 			},
 		}
@@ -954,7 +1354,7 @@ func TestCompose_SuppressedParentDonatesIssueTimingToChildren(t *testing.T) {
 	t.Run("after-healthy blocked for crashloop child", func(t *testing.T) {
 		p := &fakeProvider{
 			problems: []k8s.Detection{
-				{Kind: "Deployment", Namespace: "ns", Name: "web", Group: "apps", Severity: "critical", Reason: "1/3 available", IssueTiming: "started_after_resource_was_healthy", IssueTimingBasis: "condition"},
+				{Kind: "Deployment", Namespace: "ns", Name: "web", Group: "apps", Severity: "critical", Reason: "1/3 available", OnsetAt: time.Now().Add(-time.Hour), IssueTiming: "started_after_resource_was_healthy", IssueTimingBasis: "condition"},
 				{Kind: "Pod", Namespace: "ns", Name: "web-abc", Severity: "critical", Reason: "CrashLoopBackOff", OwnerKind: "Deployment", OwnerName: "web"},
 			},
 		}
@@ -971,7 +1371,7 @@ func TestCompose_SuppressedParentDonatesIssueTimingToChildren(t *testing.T) {
 		// restart-cycling children.
 		p := &fakeProvider{
 			problems: []k8s.Detection{
-				{Kind: "Deployment", Namespace: "ns", Name: "web", Group: "apps", Severity: "critical", Reason: "1/3 available", IssueTiming: "started_at_resource_creation", IssueTimingBasis: "condition"},
+				{Kind: "Deployment", Namespace: "ns", Name: "web", Group: "apps", Severity: "critical", Reason: "1/3 available", OnsetAt: time.Now().Add(-time.Hour), IssueTiming: "started_at_resource_creation", IssueTimingBasis: "condition"},
 				{Kind: "Pod", Namespace: "ns", Name: "web-abc", Severity: "critical", Reason: "CrashLoopBackOff", OwnerKind: "Deployment", OwnerName: "web"},
 			},
 		}
@@ -995,11 +1395,11 @@ func TestCompose_PVCPendingDedupesOverMissingStorageClass(t *testing.T) {
 			{
 				Kind: "PersistentVolumeClaim", Namespace: "ns", Name: "stuck-pvc", Severity: "high", Reason: "Pending",
 				Cause: "Storage provisioner failed to create a volume.", Action: "Check the CSI controller logs.",
-				IssueTiming: "started_at_resource_creation", IssueTimingBasis: "phase",
+				OnsetAt: time.Now().Add(-time.Hour), IssueTiming: "started_at_resource_creation", IssueTimingBasis: "phase",
 			},
 		},
 		missingRefs: []k8s.Detection{
-			{Kind: "PersistentVolumeClaim", Namespace: "ns", Name: "stuck-pvc", Severity: "critical", Reason: "Missing StorageClass", Fingerprint: "Missing StorageClass|abc", IssueTiming: "started_at_resource_creation", IssueTimingBasis: "phase"},
+			{Kind: "PersistentVolumeClaim", Namespace: "ns", Name: "stuck-pvc", Severity: "critical", Reason: "Missing StorageClass", Fingerprint: "Missing StorageClass|abc", OnsetAt: time.Now().Add(-time.Hour), IssueTiming: "started_at_resource_creation", IssueTimingBasis: "phase"},
 		},
 	}
 	out := Compose(p, Filters{})

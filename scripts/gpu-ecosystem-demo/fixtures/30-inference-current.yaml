@@ -1,0 +1,61 @@
+apiVersion: inference.networking.k8s.io/v1
+kind: InferencePool
+metadata:
+  name: shared-llm-pool
+  namespace: gpu-demo
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  selector:
+    matchLabels:
+      app: vllm
+      model-family: qwen
+  targetPorts:
+    - number: 8000
+    - number: 8001
+  endpointPickerRef:
+    name: endpoint-picker
+    port:
+      number: 9002
+status:
+  parents:
+    - parentRef:
+        group: gateway.networking.k8s.io
+        kind: Gateway
+        namespace: gpu-demo
+        name: inference-gateway
+      controllerName: example.net/inference-controller
+      conditions:
+        - type: Accepted
+          status: "True"
+          reason: Accepted
+          message: Pool accepted by the gateway
+          observedGeneration: 1
+          lastTransitionTime: __START_TIME__
+        - type: ResolvedRefs
+          status: "True"
+          reason: ResolvedRefs
+          message: Endpoint picker reference resolved
+          observedGeneration: 1
+          lastTransitionTime: __START_TIME__
+---
+apiVersion: llm-d.ai/v1alpha2
+kind: InferenceObjective
+metadata:
+  name: premium-traffic
+  namespace: gpu-demo
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  priority: 100
+  poolRef:
+    group: inference.networking.k8s.io
+    name: shared-llm-pool
+status:
+  conditions:
+    - type: Accepted
+      status: "True"
+      reason: Accepted
+      message: Objective accepted by the endpoint picker
+      observedGeneration: 1
+      lastTransitionTime: __START_TIME__

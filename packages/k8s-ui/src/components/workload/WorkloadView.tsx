@@ -73,6 +73,7 @@ import {
 import { ServicePortCards, type ServicePortRenderProps } from '../resources/renderers/ServiceRenderer'
 import { rolloutMayAdvanceAutomatically, type WorkloadRolloutActivity } from '../../utils/workload-rollout'
 import { WorkloadRolloutNotice } from './WorkloadRolloutNotice'
+import { isCoreBatchJob } from '../../utils/api-resources'
 
 export type WorkloadTabType = 'overview' | 'topology' | 'timeline' | 'logs' | 'metrics' | 'reachability' | 'cost' | 'yaml'
 type TabType = WorkloadTabType
@@ -738,7 +739,10 @@ export function WorkloadView({
 
   const showMetricsTab = isMetricsAvailable ? isMetricsAvailable(kind, resource) : false
   const showCostTab = isCostAvailable ? isCostAvailable(kind, resource) : false
-  const logsTabVisible = Boolean(renderLogsTab) && (allPods.length > 0 || LOGS_TAB_WITHOUT_PODS_KINDS.has(kindToPlural(kind).toLowerCase()))
+  const normalizedKind = kindToPlural(kind).toLowerCase()
+  const logsWithoutPods = LOGS_TAB_WITHOUT_PODS_KINDS.has(normalizedKind) &&
+    (normalizedKind !== 'jobs' || isCoreBatchJob(kind, group))
+  const logsTabVisible = Boolean(renderLogsTab) && (allPods.length > 0 || logsWithoutPods)
   const metricsTabVisible = Boolean(showMetricsTab && renderMetricsTab)
   const costTabVisible = Boolean(showCostTab && renderCostTab)
   const podEvidenceLoading = resourceLoading || workloadPodsLoading || eventsLoading
@@ -1625,7 +1629,7 @@ function InfoTab({
     return <FetchResult loading={isLoading} error={error} className="h-full" />
   }
 
-  if (!isRuntimeWorkloadOverviewKind(selectedResource.kind)) {
+  if (!isRuntimeWorkloadOverviewKind(selectedResource.kind, selectedResource.group)) {
     return (
       <div className="h-full overflow-auto">
         {leadContent && (
@@ -1729,8 +1733,10 @@ const RUNTIME_WORKLOAD_OVERVIEW_KINDS = new Set(['deployments', 'statefulsets', 
 const ROLLOUT_STATUS_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets', 'rollouts'])
 type RuntimeOverviewShape = 'replicated' | 'job' | 'cronjob'
 
-function isRuntimeWorkloadOverviewKind(kind: string) {
-  return RUNTIME_WORKLOAD_OVERVIEW_KINDS.has(kindToPlural(kind).toLowerCase())
+function isRuntimeWorkloadOverviewKind(kind: string, group?: string) {
+  const normalizedKind = kindToPlural(kind).toLowerCase()
+  return RUNTIME_WORKLOAD_OVERVIEW_KINDS.has(normalizedKind) &&
+    (normalizedKind !== 'jobs' || isCoreBatchJob(kind, group))
 }
 
 function isRolloutStatusKind(kind: string) {

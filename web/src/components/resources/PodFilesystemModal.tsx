@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
+import { createElement, useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { X, File, Link2, ChevronRight, AlertTriangle, Loader2, Search, Download, FolderOpen } from 'lucide-react'
 import { PaneLoader, Input } from '@skyhook-io/k8s-ui'
@@ -7,6 +7,9 @@ import type { FileNode } from '../../types'
 import { formatBytes } from '../../utils/format'
 import { downloadBlob, filterTree } from './file-browser-utils'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
+import { isDesktopApp } from '../../utils/desktop-download'
+import { openFile, openFolder } from '../../utils/desktop-open-folder'
+import { useToast } from '../ui/Toast'
 import { Tooltip } from '../ui/Tooltip'
 
 interface PodFilesystem {
@@ -33,6 +36,36 @@ async function fetchPodFiles(
     throw new Error(error.error || `HTTP ${response.status}`)
   }
   return response.json()
+}
+
+/**
+ * Desktop only: has the backend write the pod file straight to disk. The browser
+ * route would hand the whole file to the webview only to have it hand every byte
+ * back to be saved, which is what puts a large file out of reach there.
+ * Returns the path it was saved to.
+ */
+async function savePodFileToDisk(
+  namespace: string,
+  podName: string,
+  container: string,
+  filePath: string,
+): Promise<string> {
+  const params = new URLSearchParams()
+  params.set('container', container)
+  params.set('path', filePath)
+
+  const response = await fetch(apiUrl(`/pods/${namespace}/${podName}/files/save?${params.toString()}`), {
+    method: 'POST',
+    credentials: getCredentialsMode(),
+    headers: getAuthHeaders(),
+  })
+  if (response.status === 204) throw new Error('cancelled')
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Save failed' }))
+    throw new Error(error.error || `HTTP ${response.status}`)
+  }
+  const body = await response.json()
+  return body.path
 }
 
 interface PodFilesystemModalProps {
@@ -309,6 +342,7 @@ interface PodFileTreeNodeProps {
 
 function PodFileTreeNode({ node, namespace, podName, container, onNavigate }: PodFileTreeNodeProps) {
   const [downloading, setDownloading] = useState(false)
+  const { showSuccess, showError } = useToast()
   const isDir = node.type === 'dir'
   const isSymlink = node.type === 'symlink'
   const isDownloadable = !isDir // files and symlinks can be downloaded
@@ -319,6 +353,21 @@ function PodFileTreeNode({ node, namespace, podName, container, onNavigate }: Po
 
     setDownloading(true)
     try {
+      if (await isDesktopApp()) {
+        const savedPath = await savePodFileToDisk(namespace, podName, container, node.path)
+        showSuccess(
+          'File saved',
+          savedPath,
+          {
+            label: 'Show in Finder',
+            icon: createElement(FolderOpen, { className: 'w-3.5 h-3.5' }),
+            onClick: () => openFolder(savedPath),
+          },
+          () => openFile(savedPath),
+        )
+        return
+      }
+
       const params = new URLSearchParams()
       params.set('container', container)
       params.set('path', node.path)
@@ -335,7 +384,10 @@ function PodFileTreeNode({ node, namespace, podName, container, onNavigate }: Po
       const blob = await response.blob()
       await downloadBlob(blob, node.name)
     } catch (err) {
-      console.error('Download failed:', err)
+      const message = err instanceof Error ? err.message : String(err)
+      if (message !== 'cancelled') {
+        showError(`Could not download ${node.name}`, message)
+      }
     } finally {
       setDownloading(false)
     }

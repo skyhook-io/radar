@@ -38,6 +38,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/tools/remotecommand"
 
 	"github.com/skyhook-io/radar/internal/ai"
 	"github.com/skyhook-io/radar/internal/argocd"
@@ -89,8 +90,13 @@ type Server struct {
 	permCache          *auth.PermissionCache
 	oidcHandler        *auth.OIDCHandler
 	saveFileFunc       func(defaultFilename string, data []byte) (string, error)
-	cloudConnectCfg    CloudConnectConfig
-	cloudInstall       *cloudInstallManager
+	saveFileStreamFunc func(defaultFilename string, r io.Reader) (string, error)
+	// newExecutor builds the exec client for pod file transfers. Nil in
+	// production, where the package default is used; tests substitute a fake so
+	// the transfer can be driven end to end without a cluster.
+	newExecutor     func(*rest.Config, *url.URL) (remotecommand.Executor, error)
+	cloudConnectCfg CloudConnectConfig
+	cloudInstall    *cloudInstallManager
 	// nsPreferences holds each user's active-namespace pick from the in-app
 	// switcher. Key shape: "<username>\x00<contextName>" when auth is enabled,
 	// "\x00<contextName>" when auth is disabled. Cleared on context switch
@@ -478,6 +484,10 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 		r.Get("/pods/{namespace}/{name}/exec", s.handlePodExec)
 		r.Get("/local-terminal", s.handleLocalTerminal)
 		r.Get("/pods/{namespace}/{name}/files/download", s.handlePodFileDownload)
+		// Desktop-only: streams a pod file to disk server-side. Sits outside the
+		// 60s timeout group for the same reason the download does — a large file
+		// over a slow cluster link legitimately takes longer than that.
+		r.Post("/pods/{namespace}/{name}/files/save", s.handlePodFileSave)
 		r.Get("/workloads/{kind}/{namespace}/{name}/logs/stream", s.handleWorkloadLogsStream)
 		// AI investigation event stream via SSE — long-lived; lives outside the
 		// 60s timeout group. The run keeps going server-side after disconnect.
@@ -1139,6 +1149,16 @@ func (s *Server) SetSaveFileFunc(fn func(defaultFilename string, data []byte) (s
 	s.saveFileFunc = fn
 }
 
+// SetSaveFileStreamFunc attaches a native save callback that consumes the file
+// as a stream, enabling the /api/pods/{ns}/{name}/files/save endpoint. It exists
+// so a large file can go from the cluster to disk without a copy of it passing
+// through the webview. The callback should write the stream to the chosen path
+// and return that path, leaving nothing behind if the write fails.
+// Only used by the desktop app.
+func (s *Server) SetSaveFileStreamFunc(fn func(defaultFilename string, r io.Reader) (string, error)) {
+	s.saveFileStreamFunc = fn
+}
+
 // Handler returns the full application handler for the authenticated Cloud
 // tunnel and httptest. In Cloud mode, Start exposes only the health-only wrapper
 // on the ordinary TCP listener.
@@ -1540,7 +1560,7 @@ func (s *Server) canReadDecision(r *http.Request, group, resource, namespace, ve
 	if user == nil || s.permCache == nil {
 		return true, true
 	}
-	if s.permCache.Get(user.Username) == nil {
+	if s.permCache.Get(user.Username, user.Groups) == nil {
 		// Trigger namespace discovery so SAR cache has a parent UserPermissions
 		// entry. parseNamespacesForUser is the canonical path that populates
 		// this; if it hasn't run yet, canReadUser falls through to a fresh SAR.
@@ -1569,7 +1589,7 @@ func (s *Server) canReadUserDecision(ctx context.Context, user *auth.User, group
 	if user == nil || s.permCache == nil {
 		return true, true
 	}
-	perms := s.permCache.Get(user.Username)
+	perms := s.permCache.Get(user.Username, user.Groups)
 	if perms != nil {
 		if v, ok := perms.CanI(verb, group, resource, namespace); ok {
 			return v, true
@@ -1996,6 +2016,13 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// table=1 switches to the printer-column envelope. See resourceTableResponse
+	// for why that envelope is written even when there are no columns to report.
+	tableMode, err := parseTableMode(r.URL.Query().Get("table"))
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	// parseNamespacesForUser primes the per-user perm cache (triggers
 	// DiscoverNamespaces if needed). canRead below relies on it.
@@ -2006,7 +2033,11 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 	// returns the explicit status.
 	finalNamespaces, _, _, ok := s.preflightResourceList(r, kind, group, namespaces)
 	if !ok {
-		s.writeJSON(w, []any{})
+		// Denied, not empty. writeResourceList resolves columns for an empty
+		// list, and that lookup runs as Radar's own identity — so routing a
+		// denial through it would answer a caller who cannot list the kind with
+		// its column metadata. Emit the envelope without a table.
+		s.writeEmptyResourceTable(w, tableMode, kind, group)
 		return
 	}
 	namespaces = finalNamespaces
@@ -2105,7 +2136,7 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		if includeSummary {
 			result = applySummaryStrip(result)
 		}
-		s.writeJSON(w, result)
+		s.writeResourceList(w, r, cache, tableMode, kind, group, result)
 		return
 	}
 
@@ -2410,7 +2441,7 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		result = summarizeTypedList(kind, result)
 		result = applySummaryStrip(result)
 	}
-	s.writeJSON(w, result)
+	s.writeResourceList(w, r, cache, tableMode, kind, group, result)
 }
 
 // normalizeKind converts K8s kind names to lowercase for case-insensitive matching
@@ -3647,7 +3678,7 @@ func (s *Server) filterEventsByRBAC(r *http.Request, events []timeline.TimelineE
 
 	// Prime the parent UserPermissions entry once so the parallel canReadUser
 	// calls below share its SAR memo instead of racing to populate it.
-	if s.permCache.Get(user.Username) == nil {
+	if s.permCache.Get(user.Username, user.Groups) == nil {
 		_ = s.getUserNamespaces(r, []string{})
 	}
 
@@ -4662,13 +4693,20 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 
 // Helper methods
 
+// normalizeNilSlice turns a nil slice into an empty one. Nil slices serialize
+// as "null", which breaks callers that expect an array. Shared with the
+// printer-column envelope, where the slice is nested a level down and so never
+// reaches writeJSON's own top-level check.
+func normalizeNilSlice(data any) any {
+	if data == nil || (reflect.TypeOf(data) != nil && reflect.TypeOf(data).Kind() == reflect.Slice && reflect.ValueOf(data).IsNil()) {
+		return []any{}
+	}
+	return data
+}
+
 func (s *Server) writeJSON(w http.ResponseWriter, data any) {
 	w.Header().Set("Content-Type", "application/json")
-	// Nil slices serialize as "null" in JSON — normalize to empty array "[]"
-	// to avoid frontend errors when the response is expected to be an array.
-	if data == nil || (reflect.TypeOf(data) != nil && reflect.TypeOf(data).Kind() == reflect.Slice && reflect.ValueOf(data).IsNil()) {
-		data = []any{}
-	}
+	data = normalizeNilSlice(data)
 	if err := json.NewEncoder(w).Encode(data); err != nil {
 		// Can't change HTTP status at this point, but log for debugging
 		log.Printf("Failed to encode JSON response: %v", err)
@@ -4873,7 +4911,7 @@ func (s *Server) getUserNamespaces(r *http.Request, requested []string) []string
 		return requested
 	}
 
-	perms := s.permCache.Get(user.Username)
+	perms := s.permCache.Get(user.Username, user.Groups)
 	if perms != nil {
 		log.Printf("[auth] Using cached permissions for %s: allowed=%v", user.Username, perms.AllowedNamespaces == nil)
 	}
@@ -4916,7 +4954,7 @@ func (s *Server) getUserNamespaces(r *http.Request, requested []string) []string
 
 		log.Printf("[auth] DiscoverNamespaces result for %s: allowed=%v (nil=all, []=none)", user.Username, allowed)
 		perms = &auth.UserPermissions{AllowedNamespaces: allowed}
-		s.permCache.Set(user.Username, perms)
+		s.permCache.Set(user.Username, user.Groups, perms)
 	}
 
 	return auth.FilterNamespacesForUser(requested, user, perms)
@@ -4970,7 +5008,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	// available) so the closure's canReadUser calls hit the memo. When auth is
 	// off, UserFromContext is nil and canReadUser short-circuits to allow.
 	user := auth.UserFromContext(r.Context())
-	if user != nil && s.permCache != nil && s.permCache.Get(user.Username) == nil {
+	if user != nil && s.permCache != nil && s.permCache.Get(user.Username, user.Groups) == nil {
 		_ = s.getUserNamespaces(r, []string{})
 	}
 	s.broadcaster.HandleSSE(w, r, deny, s.newSSEChangeAuthorizer(r.Context(), user))

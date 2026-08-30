@@ -22,6 +22,7 @@ import {
   eventsForApplication,
   memberRef,
   subjectRef,
+  compareIssueSortAnchors,
   type AppRow,
   type AppWorkload,
   type AppIdentityInstance,
@@ -889,9 +890,8 @@ function compareAppOverviewIssues(a: Issue, b: Issue): number {
   const severity =
     ISSUE_SEVERITY_RANK[b.severity] - ISSUE_SEVERITY_RANK[a.severity];
   if (severity !== 0) return severity;
-  const fa = a.first_seen ?? "";
-  const fb = b.first_seen ?? "";
-  if (fa !== fb) return fb.localeCompare(fa);
+  const onset = compareIssueSortAnchors(a, b);
+  if (onset !== 0) return onset;
   const ns = (a.namespace ?? "").localeCompare(b.namespace ?? "");
   if (ns !== 0) return ns;
   const name = a.name.localeCompare(b.name);

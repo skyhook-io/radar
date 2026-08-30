@@ -148,9 +148,11 @@ rbac:
     clusterApi: true        # *.cluster.x-k8s.io (CAPI core + infrastructure / controlplane / bootstrap / addons)
     contour: true           # projectcontour.io
     crossplane: true        # crossplane.io, pkg.crossplane.io, apiextensions.crossplane.io, helm.crossplane.io, kubernetes.crossplane.io. For Upbound provider CRDs (s3.aws.upbound.io, compute.gcp.upbound.io, etc.) list them in additionalCrdGroups — K8s RBAC has no apiGroup wildcards.
+    amdGpu: true            # amd.com (AMD GPU Operator: DeviceConfig)
     descheduler: true       # descheduler.alpha.kubernetes.io
     dra: true               # resource.k8s.io (Dynamic Resource Allocation — ResourceClaims, DeviceClasses, ResourceSlices)
     envoyGateway: true      # gateway.envoyproxy.io
+    inferenceGateway: true  # inference.networking.k8s.io, inference.networking.x-k8s.io, llm-d.ai (Inference Gateway + llm-d routing APIs)
     externalDns: true       # externaldns.k8s.io
     externalSecrets: true   # external-secrets.io
     flux: true              # *.toolkit.fluxcd.io
@@ -158,16 +160,25 @@ rbac:
     gcpMonitoring: true     # monitoring.googleapis.com
     grafana: true           # monitoring.grafana.com, tempo/loki/grafana.integreatly.org
     istio: true             # networking.istio.io, security.istio.io
+    jobset: true            # jobset.x-k8s.io
+    kaiScheduler: true      # scheduling.run.ai, kai.scheduler (KAI Scheduler queues and pod groups)
+    kaito: true             # kaito.sh (Workspaces, RAGEngines)
     karpenter: true         # karpenter.sh, karpenter.k8s.aws, karpenter.azure.com, karpenter.k8s.gcp, eks.amazonaws.com (EKS Auto Mode NodeClasses)
     keda: true              # keda.sh
     knative: true           # serving.knative.dev, eventing.knative.dev, sources/messaging/flows/networking.internal.knative.dev
+    kserve: true            # serving.kserve.io (InferenceServices, ServingRuntimes, LLMInferenceServices)
+    kubeflow: true          # kubeflow.org, trainer.kubeflow.org (PyTorchJob/TFJob/MPIJob, TrainJob)
+    kuberay: true           # ray.io (RayClusters, RayJobs, RayServices)
     kubeshark: true         # kubeshark.io
     kubevirt: true          # kubevirt.io (VirtualMachines/VMIs) + cdi/clone/export/instancetype/migrations/pool/snapshot.kubevirt.io
+    kueue: true             # kueue.x-k8s.io + autoscaling.x-k8s.io (queues, workloads, ProvisioningRequests)
     kured: true             # kured.io
     kyverno: true           # kyverno.io, policies.kyverno.io (modern CEL policy family), wgpolicyk8s.io, reports.kyverno.io, openreports.io
+    lws: true               # leaderworkerset.x-k8s.io
     mariadb: true           # mariadb.mmontes.io
     networkPolicyApi: true  # policy.networking.k8s.io (Admin/Baseline/ClusterNetworkPolicy — SIG-network)
     nginx: true             # nginx.org
+    nimOperator: true       # apps.nvidia.com (NVIDIA NIM: NIMServices, NIMCaches, NIMPipelines)
     nvidia: true            # nvidia.com (GPU Operator: ClusterPolicy, NVIDIADriver)
     openshift: true         # observability.openshift.io
     opentelemetry: true     # opentelemetry.io
@@ -181,6 +192,7 @@ rbac:
     trivy: true             # aquasecurity.github.io
     velero: true            # velero.io
     verticalPodAutoscaler: true  # autoscaling.k8s.io (VPA — granted by default; no-op on clusters where VPA isn't installed)
+    volcano: true           # batch.volcano.sh, scheduling.volcano.sh, flow.volcano.sh, bus.volcano.sh
 
   # Additional CRD API groups for custom/unlisted CRDs
   # Example: ["mycompany.io", "custom.example.com"]

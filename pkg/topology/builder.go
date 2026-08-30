@@ -26,6 +26,10 @@ import (
 type Builder struct {
 	provider ResourceProvider
 	dynamic  DynamicProvider
+	// Iterations of the Service/Job pairing loop, counted so a test can pin
+	// the loop's complexity class without timing anything: completed Jobs can
+	// never back a Service, so the count must not grow with them.
+	serviceJobComparisons int
 }
 
 // NewBuilder creates a new topology builder
@@ -3092,6 +3096,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 		// Check Jobs
 		for _, job := range activeJobsByNS[svc.Namespace] {
+			b.serviceJobComparisons++
 			if matchesSelector(job.Spec.Template.ObjectMeta.Labels, svc.Spec.Selector) {
 				jobID := jobIDs[job.Namespace+"/"+job.Name]
 				if jobID != "" {

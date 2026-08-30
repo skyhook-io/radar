@@ -15,7 +15,7 @@ import (
 // internal/server). Change both tables together.
 func TestMCPUpgradeAuthorizerDecisionMatrix(t *testing.T) {
 	ctx := withClusterAdmin(t, "upgrade-matrix")
-	perms := getPermCache().Get("upgrade-matrix")
+	perms := getPermCache().Get("upgrade-matrix", nil)
 	perms.SetCanI("list", "", "nodes", "", true)
 	perms.SetCanI("list", "", "persistentvolumes", "", false)
 	perms.SetCanI("list", "storage.k8s.io", "csidrivers", "", true)
@@ -66,7 +66,7 @@ func TestMCPUpgradeAuthorizerNamespacesMirrorsHTTPScope(t *testing.T) {
 	}
 
 	restricted := pkgauth.ContextWithUser(context.Background(), &pkgauth.User{Username: "upgrade-scope-user"})
-	getPermCache().Set("upgrade-scope-user", &pkgauth.UserPermissions{AllowedNamespaces: []string{"tenant-b"}})
+	getPermCache().Set("upgrade-scope-user", nil, &pkgauth.UserPermissions{AllowedNamespaces: []string{"tenant-b"}})
 	if got := (mcpUpgradeAuthorizer{ctx: restricted}).Namespaces(); len(got) != 1 || got[0] != "tenant-b" {
 		t.Fatalf("restricted scope = %v, want [tenant-b]", got)
 	}

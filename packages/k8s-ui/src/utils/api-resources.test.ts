@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { categorizeResources, findAPIResourceForRoute, formatGroupName, shortenGroupName } from './api-resources'
+import { categorizeResources, findAPIResourceForRoute, formatGroupName, isCoreBatchJob, shortenGroupName } from './api-resources'
 
 describe('findAPIResourceForRoute', () => {
   const resources = [
@@ -45,6 +45,7 @@ describe('formatGroupName', () => {
     expect(formatGroupName('sql.cnrm.cloud.google.com')).toBe('Config Connector')
     expect(formatGroupName('crd.k8s.amazonaws.com')).toBe('AWS VPC CNI')
     expect(formatGroupName('acid.zalan.do')).toBe('Zalando Postgres')
+    expect(formatGroupName('llm-d.ai')).toBe('llm-d')
   })
 
   it('formats unmapped API groups without exposing raw domain strings', () => {
@@ -115,5 +116,13 @@ describe('categorizeResources', () => {
 
     expect(categories.find(c => c.name === 'Other Kubernetes APIs')).toBeUndefined()
     expect(categories.find(c => c.name === 'Kueue')?.resources.map(resource => resource.kind)).toEqual(['Workload'])
+  })
+})
+
+describe('isCoreBatchJob', () => {
+  it('distinguishes Kubernetes Jobs from same-kind custom resources', () => {
+    expect(isCoreBatchJob('Job', 'batch')).toBe(true)
+    expect(isCoreBatchJob('jobs')).toBe(true)
+    expect(isCoreBatchJob('Job', 'batch.volcano.sh')).toBe(false)
   })
 })

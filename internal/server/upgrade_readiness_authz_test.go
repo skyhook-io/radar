@@ -16,7 +16,7 @@ func TestHTTPUpgradeAuthorizerDecisionMatrix(t *testing.T) {
 	perms.SetCanI("list", "scheduling.k8s.io", "workloads", "team-a", true)
 	perms.SetCanI("list", "", "secrets", "team-a", true)
 	perms.SetCanI("list", "", "secrets", "team-b", false)
-	s.permCache.Set("upgrade-matrix", perms)
+	s.permCache.Set("upgrade-matrix", nil, perms)
 
 	r := requestWithUser("GET", "/api/upgrade-readiness", &auth.User{Username: "upgrade-matrix"})
 	authz := httpUpgradeAuthorizer{s: s, r: r}

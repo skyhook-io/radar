@@ -6,12 +6,21 @@ package issues
 // `last_seen > timestamp("2025-01-01T00:00:00Z").getSeconds()` —
 // CEL's int domain is the lowest-friction lingua franca.
 func issueToActivation(i Issue) map[string]any {
-	var lastSeen, firstSeen int64
+	var lastSeen, firstSeen, resourceCreatedAt int64
+	var onsetCoverageUnknown int64
 	if !i.LastSeen.IsZero() {
 		lastSeen = i.LastSeen.Unix()
 	}
 	if !i.FirstSeen.IsZero() {
 		firstSeen = i.FirstSeen.Unix()
+	}
+	if !i.ResourceCreatedAt.IsZero() {
+		resourceCreatedAt = i.ResourceCreatedAt.Unix()
+	}
+	if i.OnsetCoverage != nil {
+		onsetCoverageUnknown = int64(i.OnsetCoverage.Unknown)
+	} else if i.OnsetUnknown {
+		onsetCoverageUnknown = 1
 	}
 	return map[string]any{
 		"severity":       string(i.Severity),
@@ -32,11 +41,14 @@ func issueToActivation(i Issue) map[string]any {
 		"remediation_kind":   i.RemediationKind,
 		"remediation_target": i.RemediationTarget,
 		"count":              int64(i.Count),
-		// first_seen is the observed issue age anchor (the axis the queue sorts on);
+		// first_seen is the evidence-backed active-time anchor (the queue's sort axis);
 		// last_seen churns to compose-time every poll, so `last_seen > X` ("older
 		// than…") is near-useless. Both are int unix seconds; first_seen=0 means
-		// onset is unknown, so filters comparing age must guard first_seen != 0.
+		// the anchor is unknown, so age filters must guard first_seen != 0.
 		"first_seen":             firstSeen,
+		"onset_unknown":          i.OnsetUnknown,
+		"onset_coverage_unknown": onsetCoverageUnknown,
+		"resource_created_at":    resourceCreatedAt,
 		"last_seen":              lastSeen,
 		"grouping_scope":         string(i.GroupingScope),
 		"restart_count":          int64(i.RestartCount),

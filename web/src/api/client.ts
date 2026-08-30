@@ -1835,6 +1835,11 @@ export const cloudInstallActive = (state: CloudInstallState | undefined): boolea
 export interface CloudConnectInfo {
   assurances?: string[]
   notice?: string
+  // Free-tier terms as a prose fragment completing "Radar Cloud is ___."
+  // (e.g. "free for 3 clusters"). Separate from assurances: chip copy and
+  // sentence copy have different grammar, and reusing one as the other breaks
+  // whenever either is reworded.
+  freeTier?: string
 }
 
 // Deliberately a bare cross-origin GET: no credentials, no identifiers, no
@@ -6119,6 +6124,8 @@ export interface NamespaceScope {
    */
   mode: "cluster-wide" | "namespace" | "restricted";
   accessibleNamespaces: string[];
+  /** Namespaces where Radar cannot list pods or deployments. */
+  deniedNamespaces: string[];
   /** false when accessibleNamespaces is a best-effort short list (no list perm). */
   authoritative: boolean;
   /** false when clearing would leave no usable namespace fallback. */

@@ -42,12 +42,12 @@ type InspectRequest struct {
 
 // ImageMetadata contains lightweight metadata about an image (without downloading layers)
 type ImageMetadata struct {
-	Image        string      `json:"image"`
-	Digest       string      `json:"digest"`
-	Platform     string      `json:"platform"`
-	TotalSize    int64       `json:"totalSize"`    // Total compressed size of all layers
-	LayerCount   int         `json:"layerCount"`
-	Cached       bool        `json:"cached"`       // Whether filesystem is already cached
-	Filesystem   *ImageFilesystem `json:"filesystem,omitempty"` // Included if cached
-	AuthMethod   string      `json:"authMethod"`   // "anonymous", "credentials", etc.
+	Image      string           `json:"image"`
+	Digest     string           `json:"digest"`
+	Platform   string           `json:"platform"`
+	TotalSize  int64            `json:"totalSize"` // Total compressed size of all layers
+	LayerCount int              `json:"layerCount"`
+	Cached     bool             `json:"cached"`               // Whether filesystem is already cached
+	Filesystem *ImageFilesystem `json:"filesystem,omitempty"` // Included if cached
+	AuthMethod string           `json:"authMethod"`           // "anonymous", "credentials", etc.
 }

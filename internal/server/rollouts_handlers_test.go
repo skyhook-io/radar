@@ -250,7 +250,7 @@ func TestCanReadWorkloadRefSourceFollowsTheDeniedRead(t *testing.T) {
 			srv := &Server{permCache: auth.NewPermissionCache()}
 			perms := &auth.UserPermissions{AllowedNamespaces: []string{"prod"}}
 			perms.SetCanI("get", "apps", "deployments", "prod", tc.allowed)
-			srv.permCache.Set("alice", perms)
+			srv.permCache.Set("alice", nil, perms)
 
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			req = req.WithContext(auth.ContextWithUser(req.Context(), &auth.User{Username: "alice"}))

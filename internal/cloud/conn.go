@@ -57,9 +57,9 @@ func (c *wsConn) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-func (c *wsConn) Close() error          { return c.ws.Close() }
-func (c *wsConn) LocalAddr() net.Addr   { return c.ws.LocalAddr() }
-func (c *wsConn) RemoteAddr() net.Addr  { return c.ws.RemoteAddr() }
+func (c *wsConn) Close() error                       { return c.ws.Close() }
+func (c *wsConn) LocalAddr() net.Addr                { return c.ws.LocalAddr() }
+func (c *wsConn) RemoteAddr() net.Addr               { return c.ws.RemoteAddr() }
 func (c *wsConn) SetReadDeadline(t time.Time) error  { return c.ws.SetReadDeadline(t) }
 func (c *wsConn) SetWriteDeadline(t time.Time) error { return c.ws.SetWriteDeadline(t) }
 func (c *wsConn) SetDeadline(t time.Time) error {

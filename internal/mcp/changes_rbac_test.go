@@ -36,7 +36,7 @@ func TestFilterRecentChangesRBAC(t *testing.T) {
 	// User can list deployments in shop, but NOT secrets there and NOT webhooks
 	// cluster-wide (unseeded → SAR against a nil client → fail closed).
 	ctx := withClusterAdmin(t, "scoped")
-	perms := getPermCache().Get("scoped")
+	perms := getPermCache().Get("scoped", nil)
 	perms.SetCanI("list", "apps", "deployments", "shop", true)
 
 	got := filterRecentChangesRBAC(ctx, clone())
@@ -65,7 +65,7 @@ func TestApplyCorrelationVisibilityFilters_RBACHiddenIsNotNoChanges(t *testing.T
 	}
 
 	ctx := withClusterAdmin(t, "corr-scoped")
-	getPermCache().Get("corr-scoped").SetCanI("list", "apps", "deployments", "shop", true)
+	getPermCache().Get("corr-scoped", nil).SetCanI("list", "apps", "deployments", "shop", true)
 
 	// The only relevant change is an unreadable ConfigMap → empty AND hidden.
 	visible, hidden := applyCorrelationVisibilityFilters(ctx, []issuesapi.RecentChange{

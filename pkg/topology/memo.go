@@ -29,7 +29,7 @@ type Memoizer struct {
 type memoEntry struct {
 	topo      *Topology
 	builtAt   time.Time
-	indexOnce sync.Once          // guards lazy build of index
+	indexOnce sync.Once           // guards lazy build of index
 	index     *RelationshipsIndex // populated by Memoizer.GetIndex on first call
 }
 

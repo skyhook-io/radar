@@ -62,3 +62,8 @@ func GPUPolicy() string {
 // Collect returns the current environment, or nil on platforms where none of
 // this applies.
 func Collect() *Snapshot { return collect() }
+
+// WebviewLibrary returns the webview library mapped into this process, or ""
+// where that cannot be determined. Exposed separately from Collect so startup
+// logging can name the build before anything else has run.
+func WebviewLibrary() string { return webviewLibrary() }

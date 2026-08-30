@@ -47,7 +47,7 @@ func TestVitals_NodeRBACDeniedSurfacesRestricted(t *testing.T) {
 	const username = "vitals-node-denied"
 	perms := &pkgauth.UserPermissions{}
 	perms.SetCanI("list", "", "nodes", "", false)
-	testServerSrv.permCache.Set(username, perms)
+	testServerSrv.permCache.Set(username, nil, perms)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/vitals", nil)
 	req = req.WithContext(pkgauth.ContextWithUser(req.Context(), &pkgauth.User{Username: username}))
@@ -91,7 +91,7 @@ func TestVitals_DeploymentsOnlyUserGetsNoPodData(t *testing.T) {
 	perms.SetCanI("list", "", "pods", "", false)
 	perms.SetCanI("list", "apps", "deployments", "", true)
 	perms.SetCanI("list", "", "nodes", "", true)
-	testServerSrv.permCache.Set(username, perms)
+	testServerSrv.permCache.Set(username, nil, perms)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/vitals", nil)
 	req = req.WithContext(pkgauth.ContextWithUser(req.Context(), &pkgauth.User{Username: username}))
@@ -132,7 +132,7 @@ func TestVitals_MixedNamespacePodAccessMarksPartial(t *testing.T) {
 	perms.SetCanI("list", "apps", "deployments", "kube-system", true)
 	perms.SetCanI("list", "", "nodes", "", true)
 	perms.AllowedNamespaces = []string{"default", "kube-system"}
-	testServerSrv.permCache.Set(username, perms)
+	testServerSrv.permCache.Set(username, nil, perms)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/vitals", nil)
 	req = req.WithContext(pkgauth.ContextWithUser(req.Context(), &pkgauth.User{Username: username}))

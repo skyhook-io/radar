@@ -22,7 +22,8 @@ import {
   StatusDot,
   categoryLabel,
   groupLabel,
-  issueTiming,
+  issueFirstSeenTitle,
+  issueTimingForDisplay,
   subjectRef,
   type Issue,
 } from '@skyhook-io/k8s-ui'
@@ -406,8 +407,10 @@ function ProblemsPanel({
               <div className="divide-y divide-theme-border">
                 {issues.map((issue) => {
                   const ref = subjectRef(issue)
-                  const age = issue.first_seen ? formatCompactAge(issue.first_seen) : ''
-                  const timing = issueTiming(issue)
+                  const partialUnknown = issue.onset_coverage?.unknown ?? 0
+                  const partialOnset = Boolean(issue.first_seen && partialUnknown > 0)
+                  const age = issue.first_seen ? `${partialOnset ? '≥' : ''}${formatCompactAge(issue.first_seen)}` : ''
+                  const timing = issueTimingForDisplay(issue)
 
                   return (
                     <button
@@ -425,12 +428,11 @@ function ProblemsPanel({
                         <div className="flex items-center gap-1.5">
                           <span className="text-[10px] text-theme-text-tertiary bg-theme-elevated px-1 py-0.5 rounded">{issue.kind}</span>
                           <span className="text-xs text-theme-text-primary truncate font-medium">{issue.name}</span>
-                          {(age || timing || issue.onset_unknown) && (
+                          {(age || timing) && (
                             <span className="ml-auto flex shrink-0 items-center gap-1">
-                              {age && <span className="text-[10px] text-theme-text-tertiary tabular-nums">{age}</span>}
-                              {issue.onset_unknown && (
-                                <Tooltip content="Radar can confirm this issue is active, but current Kubernetes state does not reveal when it began." delay={100}>
-                                  <span className="text-[10px] text-theme-text-tertiary">Onset unknown</span>
+                              {age && (
+                                <Tooltip content={issueFirstSeenTitle(issue)} delay={100}>
+                                  <span className="text-[10px] text-theme-text-tertiary tabular-nums">{age}</span>
                                 </Tooltip>
                               )}
                               {timing && (

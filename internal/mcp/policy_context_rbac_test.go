@@ -42,7 +42,7 @@ func withIndex(t *testing.T, reports ...*unstructured.Unstructured) {
 func mcpFindings(t *testing.T, user, namespace, pod string, seed func(p *pkgauth.UserPermissions)) ([]resourcecontext.KyvernoFinding, resourcecontext.OmittedReason, bool) {
 	t.Helper()
 	ctx := withClusterAdmin(t, user)
-	seed(getPermCache().Get(user))
+	seed(getPermCache().Get(user, nil))
 	families := k8s.ReadablePolicyReportFamilies(namespace, func(group, resource, ns string) bool {
 		return canReadInNamespace(ctx, group, resource, ns, "list")
 	})

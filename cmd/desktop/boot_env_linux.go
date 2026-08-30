@@ -18,6 +18,11 @@ import (
 // are also served in the diagnostics snapshot — see internal/desktopenv.
 func logBootEnv() {
 	log.Printf("[desktop] session: %s", joinEnv(desktopenv.SessionKeys, true))
+	// The webview build decides which rendering bugs apply, and the package
+	// manager's answer is not necessarily the library that got loaded.
+	if lib := desktopenv.WebviewLibrary(); lib != "" {
+		log.Printf("[desktop] webview: %s", lib)
+	}
 	if s := joinEnv(desktopenv.OverrideKeys, false); s != "" {
 		log.Printf("[desktop] render overrides: %s", s)
 	}

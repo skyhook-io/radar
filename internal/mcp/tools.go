@@ -370,22 +370,17 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 
 	addTool(server, &mcp.Tool{
 		Name: "issues",
-		Description: "Use for 'what's broken right now?': live operational state, not static " +
-			"posture. Returns a ranked, grouped stream " +
-			"of current failures across workloads, Jobs/CronJobs, HPAs, PVCs, and Nodes; " +
-			"dangling references; pod startup blockers; active native Helm failures; " +
-			"and False controller conditions, " +
-			"normalized to critical or warning. Use the CEL `filter` for source or taxonomy " +
-			"slices; there is no separate source parameter. " +
-			"`diagnostic_context.role` identifies candidate roots, rollups, affected symptoms, " +
-			"or context; `related_issues[].count` is this root's affected subset, not the linked " +
-			"issue total. Confidence `high` is a " +
-			"declared structural edge, `medium` is an inferred or co-located lead to verify, " +
-			"and `low` is heuristic. A symptom's `incident_parent` points back to one " +
-			"unambiguous best root; absence can mean competing roots, not no relationship. " +
-			"`issue_timing` distinguishes `started_at_resource_creation` from " +
-			"`started_after_resource_was_healthy`; it is timing evidence, not a root-cause " +
-			"verdict, and absence means unknown. " +
+		Description: "Use for 'what's broken right now?': live state, not posture. Returns " +
+			"grouped critical/warning failures across workloads, Jobs/CronJobs, HPAs, " +
+			"PVCs, Nodes, references, pod startup, native Helm, and False controller conditions. " +
+			"Use CEL `filter` for source/taxonomy slices; no source parameter. " +
+			"`diagnostic_context.role` marks roots, rollups, symptoms, or context; " +
+			"`related_issues[].count` is the root's affected subset, not the linked issue total. " +
+			"Confidence: `high` declared edge, `medium` lead to verify, `low` heuristic. " +
+			"`incident_parent` is one unambiguous best root; absence may mean competing roots. " +
+			"When present, `timing_summary` reconciles timing fields whose scopes differ; otherwise " +
+			"read `first_seen` as 'active at least since' and `issue_timing` as timing evidence, " +
+			"not a root-cause verdict. Never treat resource age as issue age. " +
 			"When `recent_changes` is present, inspect it before concluding the returned " +
 			"issues explain the symptom. Follow `recent_changes_guidance` when present. " +
 			"`recent_changes_reason=" + meaningfulchanges.ChangesReasonNoCriticalIssues +
@@ -408,12 +403,11 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 			"neither `correlated_changes` nor `no_recent_changes` is present, correlation is " +
 			"unknown. `correlated_changes` covers tracked edits on the issue subject and, for " +
 			"workloads, directly referenced ConfigMaps. " +
-			"For raw events use get_events; for posture findings use get_cluster_audit. " +
-			"After finding a suspect, use diagnose for workloads or GitOps reconcilers. For " +
-			"HelmRelease rows, `group=" + issues.NativeHelmGroup + "` routes to get_helm_release and " +
-			"`group=helm.toolkit.fluxcd.io` routes to diagnose. Use get_resource for other kinds, and " +
-			"get_neighborhood for cross-resource failures. Scope to a namespace for app " +
-			"triage; omit it when the root may be cluster-scoped or elsewhere.",
+			"Use get_events for raw events, get_cluster_audit for posture, diagnose for workloads " +
+			"or GitOps, get_resource for other kinds, and get_neighborhood across resources. " +
+			"`group=" + issues.NativeHelmGroup + "` routes to get_helm_release; " +
+			"`group=helm.toolkit.fluxcd.io` routes to diagnose. Scope app triage to a namespace; omit it " +
+			"when the root may be cluster-scoped or elsewhere.",
 		Annotations: readOnly,
 	}, logToolCall("issues", handleIssuesTool))
 
@@ -690,7 +684,7 @@ type issuesInput struct {
 	Severity  string `json:"severity,omitempty" jsonschema:"comma-separated: critical,warning"`
 	Kind      string `json:"kind,omitempty" jsonschema:"comma-separated kind filter (e.g. Deployment,Pod)"`
 	Limit     int    `json:"limit,omitempty" jsonschema:"max issues returned (default 200, max 1000)"`
-	Filter    string `json:"filter,omitempty" jsonschema:"optional CEL boolean expression run against each composed Issue. Bindings: severity (critical|warning), category (e.g. crashloop, image_pull_failed, missing_config_ref, gitops_sync_failed), category_group (startup|runtime|scheduling|configuration|networking|storage|scaling|security|control_plane; runtime here is an issue taxonomy group, not issue_timing), source (problem=built-in Radar detector, missing_ref=dangling by-name reference, scheduling=pod startup blocker, condition=False controller/CRD condition), kind, group, ns (the namespace — use 'ns', not 'namespace' which is a CEL reserved word), name, reason, message, cause, action, remediation_kind, remediation_target, count (int, the affected-resource fan-out), grouping_scope (workload|service|node|…), restart_count (int), last_terminated_reason, operation_retry_count (int, a GitOps controller's sync-operation retries — distinct from restart_count), stuck (bool, issue not expected to self-recover), issue_timing (string timing evidence: 'started_at_resource_creation' = evidence places the failing state during resource creation or first reconciliation; 'started_after_resource_was_healthy' = evidence shows a meaningful healthy window before the failing condition appeared; absent = Radar has no clean signal, do NOT infer timing from age alone; this is timing evidence, not a root-cause verdict), issue_timing_basis (string: evidence used — 'condition' | 'owner_condition' | 'pod_creation' | 'deletion' | 'phase' | 'spec'), first_seen + last_seen (unix seconds — prefer first_seen for onset/age; first_seen=0 means onset is unknown, so age comparisons must guard first_seen != 0; last_seen churns to compose-time). For cross-cluster scoping use clusters= (not a CEL predicate). Examples: 'severity == \"critical\" && count > 5', 'category_group == \"startup\"', 'restart_count > 10', 'remediation_kind == \"create-namespace\"', 'stuck && operation_retry_count >= 5', 'issue_timing == \"started_after_resource_was_healthy\"', 'first_seen != 0 && first_seen < timestamp(\"2026-05-01T00:00:00Z\").getSeconds()'"`
+	Filter    string `json:"filter,omitempty" jsonschema:"optional CEL boolean expression run against each composed Issue. Bindings: severity (critical|warning), category (e.g. crashloop, image_pull_failed, missing_config_ref, gitops_sync_failed), category_group (startup|runtime|scheduling|configuration|networking|storage|scaling|security|control_plane; runtime here is an issue taxonomy group, not issue_timing), source (problem=built-in Radar detector, missing_ref=dangling by-name reference, scheduling=pod startup blocker, condition=False controller/CRD condition), kind, group, ns (the namespace — use 'ns', not 'namespace' which is a CEL reserved word), name, reason, message, cause, action, remediation_kind, remediation_target, count (int, affected-resource fan-out), grouping_scope (workload|service|node|…), restart_count (int), last_terminated_reason, operation_retry_count (int, GitOps operation retries — distinct from restart_count), stuck (bool), issue_timing (independent timing evidence, not a root-cause verdict: 'started_at_resource_creation' or 'started_after_resource_was_healthy'; absent = unknown), issue_timing_basis ('condition' | 'owner_condition' | 'pod_creation' | 'deletion' | 'phase' | 'spec'), first_seen, onset_unknown, onset_coverage_unknown, resource_created_at, last_seen. Times are unix seconds. first_seen is the earliest evidence-backed active-time anchor and may be Radar's first observation: read it as 'active at least since', not exact onset. It is 0 when unknown. Require first_seen != 0 for any age filter. When the whole row must have exact timing, also require onset_coverage_unknown == 0; onset_unknown alone does not exclude partially dated groups. onset_coverage is emitted only when at least one contributing signal has unknown timing. The owner_condition, pod_creation, and spec bases need not share first_seen's anchor; never subtract resource_created_at from first_seen to infer a healthy duration. resource_created_at is resource-age context, never onset. last_seen updates each compose. For cross-cluster scoping use clusters= (not CEL). Examples: 'issue_timing == \"started_after_resource_was_healthy\"', 'first_seen != 0 && onset_coverage_unknown == 0 && first_seen < timestamp(\"2026-05-01T00:00:00Z\").getSeconds()'"`
 }
 
 // Tool handlers

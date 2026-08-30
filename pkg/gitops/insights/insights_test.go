@@ -1412,10 +1412,10 @@ func TestEnrichChangeHealthFromTree_BackfillsEmptyHealth(t *testing.T) {
 		{Ref: gitopstree.ResourceRef{Kind: "ConfigMap", Namespace: "staging", Name: "vars"}, Health: ""},
 	}}
 	changes := []Change{
-		{Ref: Ref{Group: "apps", Kind: "Deployment", Namespace: "staging", Name: "radar-hub"}, Health: ""},        // backfilled → Degraded
-		{Ref: Ref{Kind: "Service", Namespace: "staging", Name: "radar-hub"}, Health: "Progressing"},              // already set → unchanged
-		{Ref: Ref{Kind: "ConfigMap", Namespace: "staging", Name: "vars"}, Health: ""},                            // tree node empty → stays empty
-		{Ref: Ref{Kind: "SealedSecret", Namespace: "staging", Name: "x"}, Health: ""},                            // not in tree → stays empty
+		{Ref: Ref{Group: "apps", Kind: "Deployment", Namespace: "staging", Name: "radar-hub"}, Health: ""}, // backfilled → Degraded
+		{Ref: Ref{Kind: "Service", Namespace: "staging", Name: "radar-hub"}, Health: "Progressing"},        // already set → unchanged
+		{Ref: Ref{Kind: "ConfigMap", Namespace: "staging", Name: "vars"}, Health: ""},                      // tree node empty → stays empty
+		{Ref: Ref{Kind: "SealedSecret", Namespace: "staging", Name: "x"}, Health: ""},                      // not in tree → stays empty
 	}
 	enrichChangeHealthFromTree(changes, tree)
 	if changes[0].Health != "Degraded" {

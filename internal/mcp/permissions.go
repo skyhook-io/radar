@@ -103,7 +103,7 @@ func resolveUserPerms(ctx context.Context) (*pkgauth.User, *pkgauth.UserPermissi
 		return nil, nil
 	}
 	cache := getPermCache()
-	if perms := cache.Get(user.Username); perms != nil {
+	if perms := cache.Get(user.Username, user.Groups); perms != nil {
 		return user, perms
 	}
 
@@ -122,7 +122,7 @@ func resolveUserPerms(ctx context.Context) (*pkgauth.User, *pkgauth.UserPermissi
 	}
 
 	perms := &pkgauth.UserPermissions{AllowedNamespaces: allowed}
-	cache.Set(user.Username, perms)
+	cache.Set(user.Username, user.Groups, perms)
 	return user, perms
 }
 

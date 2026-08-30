@@ -20,6 +20,7 @@ import { Tooltip } from '../ui/Tooltip'
 import type { SelectedResource } from '../../types'
 import { resourceToYaml } from '../../utils/yaml'
 import { triggerDownload } from '../../utils/download'
+import { isCoreBatchJob } from '../../utils/api-resources'
 
 // ============================================================================
 // SUCCESS ANIMATION
@@ -45,6 +46,7 @@ export function SaveSuccessAnimation() {
 // Get edit warning for resource types with limited editability
 function getEditWarning(
   kind: string,
+  group?: string,
 ): { message: string; tip: string; learnMoreUrl?: string } | null {
   const k = kind.toLowerCase()
   if (k === 'pods' || k === 'pod') {
@@ -55,7 +57,7 @@ function getEditWarning(
         'https://kubernetes.io/docs/concepts/workloads/pods/#pod-update-and-replacement',
     }
   }
-  if (k === 'jobs' || k === 'job') {
+  if (isCoreBatchJob(k, group)) {
     return {
       message: 'Jobs cannot be modified after creation.',
       tip: 'Delete and recreate the Job to make changes.',
@@ -351,7 +353,7 @@ export function EditableYamlView({
   }, [])
 
   const yamlContent = yamlStringify(data, { lineWidth: 0, indent: 2 })
-  const editWarning = getEditWarning(resource.kind)
+  const editWarning = getEditWarning(resource.kind, resource.group)
   const formattedError = saveError ? formatSaveError(saveError) : null
   const isPending = (isSaving ?? false) || (isPreviewing ?? false)
 

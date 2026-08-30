@@ -121,7 +121,7 @@ func BuildQuery(kind, namespace, name string, category MetricCategory) string {
 }
 
 // BuildQueryNoContainerFilter builds the same query as BuildQuery but without
-// the container!='' filter. This is used as a fallback for clusters where cAdvisor
+// the container!=” filter. This is used as a fallback for clusters where cAdvisor
 // metrics lack the container label (e.g. cri-docker setups).
 func BuildQueryNoContainerFilter(kind, namespace, name string, category MetricCategory) string {
 	return buildQueryInner(kind, namespace, name, category, false)
@@ -145,7 +145,7 @@ func BuildNamespaceQuery(namespace string, category MetricCategory) string {
 	return buildNamespaceQueryInner(namespace, category, true)
 }
 
-// BuildNamespaceQueryNoContainerFilter is the fallback variant without container!='' filter.
+// BuildNamespaceQueryNoContainerFilter is the fallback variant without container!=” filter.
 func BuildNamespaceQueryNoContainerFilter(namespace string, category MetricCategory) string {
 	return buildNamespaceQueryInner(namespace, category, false)
 }
@@ -175,7 +175,7 @@ func BuildClusterQuery(category MetricCategory) string {
 	return buildClusterQueryInner(category, true)
 }
 
-// BuildClusterQueryNoContainerFilter is the fallback variant without container!='' filter.
+// BuildClusterQueryNoContainerFilter is the fallback variant without container!=” filter.
 func BuildClusterQueryNoContainerFilter(category MetricCategory) string {
 	return buildClusterQueryInner(category, false)
 }
@@ -200,7 +200,7 @@ func buildClusterQueryInner(category MetricCategory, filterContainer bool) strin
 }
 
 // CategoryUsesContainerFilter returns true if the category's queries include
-// the container!='' filter that may need a fallback on cri-docker clusters.
+// the container!=” filter that may need a fallback on cri-docker clusters.
 func CategoryUsesContainerFilter(category MetricCategory) bool {
 	return category == CategoryCPU || category == CategoryMemory
 }

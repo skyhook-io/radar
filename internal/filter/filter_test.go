@@ -136,6 +136,46 @@ func TestCompileIssueFilter_SeverityCount(t *testing.T) {
 	}
 }
 
+func TestCompileIssueFilter_ResourceCreationFallback(t *testing.T) {
+	f, err := CompileIssueFilter(`first_seen == 0 && resource_created_at < 1800000000`)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	ok, err := f.Match(map[string]any{"first_seen": int64(0), "resource_created_at": int64(1700000000)})
+	if err != nil || !ok {
+		t.Fatalf("expected match, ok=%v err=%v", ok, err)
+	}
+}
+
+func TestCompileIssueFilter_ExactOnsetCoverage(t *testing.T) {
+	f, err := CompileIssueFilter(`first_seen != 0 && !onset_unknown && onset_coverage_unknown == 0`)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	ok, err := f.Match(map[string]any{"first_seen": int64(1700000000), "onset_unknown": false, "onset_coverage_unknown": int64(0)})
+	if err != nil || !ok {
+		t.Fatalf("expected exact-onset match, ok=%v err=%v", ok, err)
+	}
+}
+
+func TestCompileIssueFilter_OnsetExpressionsRemainCELCompatible(t *testing.T) {
+	for _, expr := range []string{
+		`first_seen < timestamp("2026-05-01T00:00:00Z").getSeconds()`,
+		`first_seen > timestamp("2026-05-01T00:00:00Z").getSeconds()`,
+		`first_seen != 0 && first_seen < timestamp("2026-05-01T00:00:00Z").getSeconds()`,
+		`!onset_unknown && first_seen < timestamp("2026-05-01T00:00:00Z").getSeconds()`,
+		`onset_coverage_unknown == 0 && first_seen < timestamp("2026-05-01T00:00:00Z").getSeconds()`,
+		`first_seen == 0 || (first_seen != 0 && first_seen < timestamp("2026-05-01T00:00:00Z").getSeconds())`,
+		`severity == "critical" || (first_seen != 0 && first_seen < timestamp("2026-05-01T00:00:00Z").getSeconds())`,
+		`first_seen != 0 ? first_seen < timestamp("2026-05-01T00:00:00Z").getSeconds() : false`,
+		`!(first_seen != 0 && first_seen < timestamp("2026-05-01T00:00:00Z").getSeconds())`,
+	} {
+		if _, err := CompileIssueFilter(expr); err != nil {
+			t.Errorf("CompileIssueFilter(%q): %v", expr, err)
+		}
+	}
+}
+
 // TestCompileIssueFilter_StuckAndRetryCount pins that the GitOps operation
 // signals are CEL-filterable for agents (e.g. find stuck, high-retry failures).
 // stuck is a bool — exercises the BindingBool env type.

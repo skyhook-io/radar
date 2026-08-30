@@ -334,13 +334,13 @@ func DetectSchedulingProblems(cache *ResourceCache, namespace string) []Detectio
 				continue
 			}
 			ageDur := now.Sub(pod.CreationTimestamp.Time)
-			dur := ageDur
-			if !cond.LastTransitionTime.IsZero() {
-				dur = now.Sub(cond.LastTransitionTime.Time)
+			dur := now.Sub(cond.LastTransitionTime.Time)
+			if cond.LastTransitionTime.IsZero() {
+				dur = ageDur
 			}
 			ownerGroup, ownerKind, ownerName := podOwnerKindName(cache, pod)
 			schedMessage, schedAction := diagnoseUnschedulable(pod, cond.Message, nodes)
-			problems = append(problems, Detection{
+			detection := Detection{
 				Kind:                       "Pod",
 				Namespace:                  pod.Namespace,
 				Name:                       pod.Name,
@@ -350,14 +350,15 @@ func DetectSchedulingProblems(cache *ResourceCache, namespace string) []Detectio
 				Message:                    schedMessage,
 				Age:                        FormatAge(ageDur),
 				AgeSeconds:                 int64(ageDur.Seconds()),
-				Duration:                   FormatAge(dur),
-				DurationSeconds:            int64(dur.Seconds()),
+				ResourceCreatedAt:          pod.CreationTimestamp.Time,
 				OwnerGroup:                 ownerGroup,
 				OwnerKind:                  ownerKind,
 				OwnerName:                  ownerName,
 				CapacityRelevant:           podRequiresKarpenterNodePool(pod),
 				CapacityRelevantCorrelated: podEvaluatedAgainstKarpenterPools(pod, karpenterPools()),
-			})
+			}
+			setDetectionOnset(&detection, now, cond.LastTransitionTime.Time)
+			problems = append(problems, detection)
 		}
 	}
 	return problems
@@ -884,27 +885,31 @@ func detectAdmissionFailures(cache *ResourceCache, namespace string) []Detection
 	for _, key := range order {
 		c := latest[key]
 		obj := c.ev.InvolvedObject
-		ageDur := now.Sub(eventFirstTime(c.ev))
+		createdAt := admissionTargetCreatedAt(cache, obj)
 		// FailedCreate fires on the controller that couldn't create the pod —
 		// usually the ReplicaSet. Stamp its owning Deployment so the admission row
 		// rolls up to the same subject as the workload_degraded/rollout_stalled
 		// rollup it explains; otherwise the rollup-over-cause fold misses the match.
 		ownerGroup, ownerKind, ownerName := workloadControllerOwner(cache, obj.Kind, obj.Namespace, obj.Name)
-		problems = append(problems, Detection{
-			Kind:            obj.Kind,
-			Namespace:       obj.Namespace,
-			Name:            obj.Name,
-			Severity:        "critical",
-			Reason:          c.reason,
-			Message:         "pod creation blocked: " + strings.TrimSpace(c.ev.Message),
-			Age:             FormatAge(ageDur),
-			AgeSeconds:      int64(ageDur.Seconds()),
-			Duration:        FormatAge(ageDur),
-			DurationSeconds: int64(ageDur.Seconds()),
-			OwnerGroup:      ownerGroup,
-			OwnerKind:       ownerKind,
-			OwnerName:       ownerName,
-		})
+		detection := Detection{
+			Kind:              obj.Kind,
+			Namespace:         obj.Namespace,
+			Name:              obj.Name,
+			Severity:          "critical",
+			Reason:            c.reason,
+			Message:           "pod creation blocked: " + strings.TrimSpace(c.ev.Message),
+			ResourceCreatedAt: createdAt,
+			OwnerGroup:        ownerGroup,
+			OwnerKind:         ownerKind,
+			OwnerName:         ownerName,
+		}
+		if !createdAt.IsZero() && !createdAt.After(now) {
+			age := now.Sub(createdAt)
+			detection.Age = FormatAge(age)
+			detection.AgeSeconds = int64(age.Seconds())
+		}
+		setDetectionOnset(&detection, now, eventFirstTime(c.ev))
+		problems = append(problems, detection)
 	}
 	seen := make(map[string]bool, len(problems))
 	for _, p := range problems {
@@ -929,6 +934,45 @@ func eventFirstTime(e *corev1.Event) time.Time {
 		return e.FirstTimestamp.Time
 	}
 	return e.EventTime.Time
+}
+
+func admissionTargetCreatedAt(cache *ResourceCache, obj corev1.ObjectReference) time.Time {
+	if cache == nil {
+		return time.Time{}
+	}
+	switch obj.Kind {
+	case "ReplicaSet":
+		if l := cache.ReplicaSets(); l != nil {
+			if target, err := l.ReplicaSets(obj.Namespace).Get(obj.Name); err == nil {
+				return target.CreationTimestamp.Time
+			}
+		}
+	case "Deployment":
+		if l := cache.Deployments(); l != nil {
+			if target, err := l.Deployments(obj.Namespace).Get(obj.Name); err == nil {
+				return target.CreationTimestamp.Time
+			}
+		}
+	case "StatefulSet":
+		if l := cache.StatefulSets(); l != nil {
+			if target, err := l.StatefulSets(obj.Namespace).Get(obj.Name); err == nil {
+				return target.CreationTimestamp.Time
+			}
+		}
+	case "DaemonSet":
+		if l := cache.DaemonSets(); l != nil {
+			if target, err := l.DaemonSets(obj.Namespace).Get(obj.Name); err == nil {
+				return target.CreationTimestamp.Time
+			}
+		}
+	case "Job":
+		if l := cache.Jobs(); l != nil {
+			if target, err := l.Jobs(obj.Namespace).Get(obj.Name); err == nil {
+				return target.CreationTimestamp.Time
+			}
+		}
+	}
+	return time.Time{}
 }
 
 // admissionTargetStillBlocked reports whether the controller named by a
@@ -1032,7 +1076,7 @@ func detectAdmissionConditionProblems(cache *ResourceCache, namespace string, se
 				if c.Type != appsv1.ReplicaSetReplicaFailure || c.Status != corev1.ConditionTrue {
 					continue
 				}
-				if p, ok := admissionConditionProblem("ReplicaSet", rs.Namespace, rs.Name, c.Message, c.LastTransitionTime.Time, now); ok {
+				if p, ok := admissionConditionProblem("ReplicaSet", rs.Namespace, rs.Name, c.Message, rs.CreationTimestamp.Time, c.LastTransitionTime.Time, now); ok {
 					// Roll the ReplicaSet's admission failure up to its Deployment,
 					// the same subject as the rollout_stalled rollup it explains.
 					p.OwnerGroup, p.OwnerKind, p.OwnerName = controllerTopOwner(rs.OwnerReferences)
@@ -1062,7 +1106,7 @@ func detectAdmissionConditionProblems(cache *ResourceCache, namespace string, se
 				if c.Type != appsv1.DeploymentReplicaFailure || c.Status != corev1.ConditionTrue {
 					continue
 				}
-				if p, ok := admissionConditionProblem("Deployment", d.Namespace, d.Name, c.Message, c.LastTransitionTime.Time, now); ok {
+				if p, ok := admissionConditionProblem("Deployment", d.Namespace, d.Name, c.Message, d.CreationTimestamp.Time, c.LastTransitionTime.Time, now); ok {
 					key := admissionProblemKey(p.Kind, p.Namespace, p.Name)
 					if !seen[key] {
 						out = append(out, p)
@@ -1081,27 +1125,25 @@ func deploymentNeedsPodCreation(d *appsv1.Deployment) bool {
 	return desired > 0 && (d.Status.Replicas < desired || d.Status.UpdatedReplicas < desired)
 }
 
-func admissionConditionProblem(kind, namespace, name, message string, firstSeen, now time.Time) (Detection, bool) {
+func admissionConditionProblem(kind, namespace, name, message string, createdAt, firstSeen, now time.Time) (Detection, bool) {
 	reason, ok := classifyAdmissionFailure(message)
 	if !ok {
 		return Detection{}, false
 	}
-	if firstSeen.IsZero() {
-		firstSeen = now
+	ageDur := now.Sub(createdAt)
+	detection := Detection{
+		Kind:              kind,
+		Namespace:         namespace,
+		Name:              name,
+		Severity:          "critical",
+		Reason:            reason,
+		Message:           "pod creation blocked: " + strings.TrimSpace(message),
+		Age:               FormatAge(ageDur),
+		AgeSeconds:        int64(ageDur.Seconds()),
+		ResourceCreatedAt: createdAt,
 	}
-	ageDur := now.Sub(firstSeen)
-	return Detection{
-		Kind:            kind,
-		Namespace:       namespace,
-		Name:            name,
-		Severity:        "critical",
-		Reason:          reason,
-		Message:         "pod creation blocked: " + strings.TrimSpace(message),
-		Age:             FormatAge(ageDur),
-		AgeSeconds:      int64(ageDur.Seconds()),
-		Duration:        FormatAge(ageDur),
-		DurationSeconds: int64(ageDur.Seconds()),
-	}, true
+	setDetectionOnset(&detection, now, firstSeen)
+	return detection, true
 }
 
 func admissionProblemKey(kind, namespace, name string) string {
@@ -1154,7 +1196,7 @@ func replicaSetDeploymentOwnerName(rs *appsv1.ReplicaSet) (string, bool) {
 // (e.g. transient "object is being deleted") so we don't over-report.
 func classifyAdmissionFailure(msg string) (string, bool) {
 	lower := strings.ToLower(msg)
-	if _, ok := ParseAdmissionWebhookNoEndpoints(msg); ok {
+	if _, ok := ParseAdmissionWebhookBackendFailure(msg); ok {
 		return "WebhookUnavailable", true
 	}
 	switch {
@@ -1176,35 +1218,65 @@ func classifyAdmissionFailure(msg string) (string, bool) {
 	}
 }
 
-type AdmissionWebhookNoEndpoints struct {
+type AdmissionWebhookBackendFailureKind string
+
+const (
+	AdmissionWebhookNoReadyEndpoints AdmissionWebhookBackendFailureKind = "no_ready_endpoints"
+	AdmissionWebhookServiceNotFound  AdmissionWebhookBackendFailureKind = "service_not_found"
+)
+
+type AdmissionWebhookBackendFailure struct {
+	WebhookName      string
 	ServiceNamespace string
 	ServiceName      string
+	Kind             AdmissionWebhookBackendFailureKind
 }
 
 var (
 	admissionWebhookURLPattern      = regexp.MustCompile(`https?://[^\s"]+`)
+	admissionWebhookNamePattern     = regexp.MustCompile(`(?i)failed calling webhook "([^"]+)"`)
 	admissionNoEndpointsNamePattern = regexp.MustCompile(`(?i)no endpoints available for service "([a-z0-9]([-a-z0-9]*[a-z0-9])?)"`)
+	admissionServiceNotFoundPattern = regexp.MustCompile(`(?i)services? "([a-z0-9]([-a-z0-9]*[a-z0-9])?)" not found`)
 )
 
-func ParseAdmissionWebhookNoEndpoints(message string) (AdmissionWebhookNoEndpoints, bool) {
+func ParseAdmissionWebhookBackendFailure(message string) (AdmissionWebhookBackendFailure, bool) {
 	lower := strings.ToLower(message)
-	if !strings.Contains(lower, "failed calling webhook") || !strings.Contains(lower, "no endpoints available for service") {
-		return AdmissionWebhookNoEndpoints{}, false
+	if !strings.Contains(lower, "failed calling webhook") {
+		return AdmissionWebhookBackendFailure{}, false
 	}
+	webhookMatch := admissionWebhookNamePattern.FindStringSubmatch(message)
+	if len(webhookMatch) < 2 || webhookMatch[1] == "" {
+		return AdmissionWebhookBackendFailure{}, false
+	}
+	var kind AdmissionWebhookBackendFailureKind
 	nameMatch := admissionNoEndpointsNamePattern.FindStringSubmatch(message)
+	if len(nameMatch) >= 2 {
+		kind = AdmissionWebhookNoReadyEndpoints
+	} else {
+		nameMatch = admissionServiceNotFoundPattern.FindStringSubmatch(message)
+		if len(nameMatch) < 2 {
+			return AdmissionWebhookBackendFailure{}, false
+		}
+		kind = AdmissionWebhookServiceNotFound
+	}
 	urlText := admissionWebhookURLPattern.FindString(message)
 	if len(nameMatch) < 2 || urlText == "" {
-		return AdmissionWebhookNoEndpoints{}, false
+		return AdmissionWebhookBackendFailure{}, false
 	}
 	parsed, err := url.Parse(urlText)
 	if err != nil {
-		return AdmissionWebhookNoEndpoints{}, false
+		return AdmissionWebhookBackendFailure{}, false
 	}
 	hostParts := strings.Split(strings.ToLower(parsed.Hostname()), ".")
 	if len(hostParts) < 3 || hostParts[0] == "" || hostParts[1] == "" || hostParts[2] != "svc" || hostParts[0] != strings.ToLower(nameMatch[1]) {
-		return AdmissionWebhookNoEndpoints{}, false
+		return AdmissionWebhookBackendFailure{}, false
 	}
-	return AdmissionWebhookNoEndpoints{ServiceNamespace: hostParts[1], ServiceName: hostParts[0]}, true
+	return AdmissionWebhookBackendFailure{
+		WebhookName:      webhookMatch[1],
+		ServiceNamespace: hostParts[1],
+		ServiceName:      hostParts[0],
+		Kind:             kind,
+	}, true
 }
 
 // ---- Post-bind detection ------------------------------------------------
@@ -1317,21 +1389,22 @@ func detectPostBindProblems(cache *ResourceCache, namespace string, nodeStallCou
 		ageDur := now.Sub(pod.CreationTimestamp.Time)
 		severity := postBindProblemSeverity(c.reason, ageDur)
 		ownerGroup, ownerKind, ownerName := podOwnerKindName(cache, pod)
-		problems = append(problems, Detection{
-			Kind:            "Pod",
-			Namespace:       pod.Namespace,
-			Name:            pod.Name,
-			Severity:        severity,
-			Reason:          c.reason,
-			Message:         postBindEventMessage(pod, c.reason, c.ev.Message, nodeStallCounts),
-			Age:             FormatAge(ageDur),
-			AgeSeconds:      int64(ageDur.Seconds()),
-			Duration:        FormatAge(ageDur),
-			DurationSeconds: int64(ageDur.Seconds()),
-			OwnerGroup:      ownerGroup,
-			OwnerKind:       ownerKind,
-			OwnerName:       ownerName,
-		})
+		detection := Detection{
+			Kind:              "Pod",
+			Namespace:         pod.Namespace,
+			Name:              pod.Name,
+			Severity:          severity,
+			Reason:            c.reason,
+			Message:           postBindEventMessage(pod, c.reason, c.ev.Message, nodeStallCounts),
+			Age:               FormatAge(ageDur),
+			AgeSeconds:        int64(ageDur.Seconds()),
+			ResourceCreatedAt: pod.CreationTimestamp.Time,
+			OwnerGroup:        ownerGroup,
+			OwnerKind:         ownerKind,
+			OwnerName:         ownerName,
+		}
+		setDetectionOnset(&detection, now, eventFirstTime(c.ev))
+		problems = append(problems, detection)
 	}
 
 	var fallbackKeys []string
@@ -1352,21 +1425,22 @@ func detectPostBindProblems(cache *ResourceCache, namespace string, nodeStallCou
 		pod := stuck[key]
 		ageDur := now.Sub(pod.CreationTimestamp.Time)
 		ownerGroup, ownerKind, ownerName := podOwnerKindName(cache, pod)
-		problems = append(problems, Detection{
-			Kind:            "Pod",
-			Namespace:       pod.Namespace,
-			Name:            pod.Name,
-			Severity:        postBindProblemSeverity("PostBindStartupStall", ageDur),
-			Reason:          "PostBindStartupStall",
-			Message:         postBindFallbackMessage(pod, ageDur, nodeStallCounts),
-			Age:             FormatAge(ageDur),
-			AgeSeconds:      int64(ageDur.Seconds()),
-			Duration:        FormatAge(ageDur),
-			DurationSeconds: int64(ageDur.Seconds()),
-			OwnerGroup:      ownerGroup,
-			OwnerKind:       ownerKind,
-			OwnerName:       ownerName,
-		})
+		detection := Detection{
+			Kind:              "Pod",
+			Namespace:         pod.Namespace,
+			Name:              pod.Name,
+			Severity:          postBindProblemSeverity("PostBindStartupStall", ageDur),
+			Reason:            "PostBindStartupStall",
+			Message:           postBindFallbackMessage(pod, ageDur, nodeStallCounts),
+			Age:               FormatAge(ageDur),
+			AgeSeconds:        int64(ageDur.Seconds()),
+			ResourceCreatedAt: pod.CreationTimestamp.Time,
+			OwnerGroup:        ownerGroup,
+			OwnerKind:         ownerKind,
+			OwnerName:         ownerName,
+		}
+		setDetectionOnset(&detection, now, pod.CreationTimestamp.Time)
+		problems = append(problems, detection)
 	}
 	return problems
 }

@@ -1323,6 +1323,78 @@ Radar statically evaluates Calico selectors against workload pod templates and t
 
 ---
 
+## GPU & Batch Ecosystem (basic support)
+
+Basic resource support for the GPU scheduling, batch, and inference-serving ecosystem: **status badges, smart table columns, status filters, and sidebar grouping** for every kind below. Detail views use the standard spec/status renderer; topology participation and typed detail views land with the deeper per-tool integrations.
+
+This is resource reconnaissance, not GPU accounting or end-to-end workload diagnosis. It does not inventory physical devices, distinguish virtual or fractional GPUs such as HAMi, report utilization, or explain the complete workload-to-queue-to-Pod scheduling path.
+
+### Kueue + Cluster Autoscaler
+
+| Resource | Group | Status source |
+|----------|-------|---------------|
+| ClusterQueue | `kueue.x-k8s.io` (v1beta2, v1beta1) | `Active` condition |
+| LocalQueue | `kueue.x-k8s.io` | `Active` condition |
+| Workload | `kueue.x-k8s.io` | Admitted / Evicted / Preempted / Finished conditions |
+| ResourceFlavor | `kueue.x-k8s.io` | — |
+| AdmissionCheck | `kueue.x-k8s.io` | `Active` condition |
+| ProvisioningRequest | `autoscaling.x-k8s.io` (v1, v1beta1) | Provisioned / Failed / CapacityRevoked / BookingExpired conditions |
+
+### KubeRay
+
+| Resource | Group | Status source |
+|----------|-------|---------------|
+| RayCluster | `ray.io/v1` | state + provisioning conditions |
+| RayJob | `ray.io/v1` | jobStatus + jobDeploymentStatus |
+| RayService | `ray.io/v1` | serviceStatus + upgrade/rollback conditions |
+| RayCronJob | `ray.io/v1` | suspend |
+
+### KServe
+
+| Resource | Group | Status source |
+|----------|-------|---------------|
+| InferenceService | `serving.kserve.io/v1beta1` | Ready condition + modelStatus.transitionStatus |
+| ServingRuntime / ClusterServingRuntime | `serving.kserve.io/v1alpha1` | spec.disabled |
+| InferenceGraph | `serving.kserve.io/v1alpha1` | Ready condition |
+| TrainedModel | `serving.kserve.io/v1alpha1` | Ready condition |
+| LLMInferenceService | `serving.kserve.io` (v1alpha2, v1alpha1) | Ready / aggregate conditions |
+
+### Gateway API Inference Extension
+
+| Resource | Group | Status source |
+|----------|-------|---------------|
+| InferencePool | `inference.networking.k8s.io/v1` and `inference.networking.x-k8s.io/v1alpha2` | per-parent Accepted + ResolvedRefs |
+| InferenceObjective | `llm-d.ai/v1alpha2` and `inference.networking.x-k8s.io/v1alpha2` | Accepted / Ready condition |
+
+### Batch: LeaderWorkerSet, JobSet, Volcano, Kubeflow Training
+
+| Resource | Group | Status source |
+|----------|-------|---------------|
+| LeaderWorkerSet | `leaderworkerset.x-k8s.io/v1` | Available / Progressing conditions |
+| JobSet | `jobset.x-k8s.io/v1alpha2` | Completed / Failed / Suspended conditions |
+| Job (Volcano) | `batch.volcano.sh/v1alpha1` | state.phase — disambiguated from batch/v1 Jobs by group |
+| Queue (Volcano) | `scheduling.volcano.sh/v1beta1` | state (Open/Closed) |
+| PodGroup (Volcano) | `scheduling.volcano.sh/v1beta1` | phase + Unschedulable condition |
+| JobFlow / JobTemplate | `flow.volcano.sh/v1alpha1` | state.phase / — |
+| Queue (KAI) | `scheduling.run.ai/v2` | Orphan / OverQuota conditions + allocation |
+| PodGroup (KAI) | `scheduling.run.ai/v2alpha2` | phase + scheduling conditions |
+| PyTorchJob / TFJob | `kubeflow.org/v1` | JobCondition pattern |
+| MPIJob | `kubeflow.org` (v1, v2beta1) | JobCondition pattern |
+| TrainJob | `trainer.kubeflow.org/v1alpha1` | Complete / Failed / Suspended conditions + active child jobs |
+
+Volcano Job, the Volcano/KAI Queues and PodGroups, and KAITO Workspaces share kind names with other resources — Radar disambiguates by API group in tables, filters, and status badges.
+
+### Model serving operators: KAITO, NVIDIA NIM, AMD
+
+| Resource | Group | Status source |
+|----------|-------|---------------|
+| Workspace (KAITO) | `kaito.sh` (v1beta1) | ResourceReady / InferenceReady / WorkspaceSucceeded conditions |
+| RAGEngine (KAITO) | `kaito.sh` (v1beta1, v1alpha1) | ResourceReady / ServiceReady conditions |
+| NIMService / NIMCache / NIMPipeline | `apps.nvidia.com/v1alpha1` | status.state |
+| DeviceConfig (AMD GPU Operator) | `amd.com/v1alpha1` | Ready condition + component DaemonSet rollout counts |
+
+---
+
 ## Any Other CRD
 
 Radar automatically discovers and displays **every** CRD installed in your cluster — no configuration or plugins required. Resources appear in the sidebar, can be filtered and searched, and show full YAML with syntax highlighting in the detail drawer. The integrations above add richer presentation, but every CRD is browsable out of the box.

@@ -374,11 +374,11 @@ type EntryProblem struct {
 	Summary string `json:"summary"`
 	// Detail is the underlying cause (a controller condition, usually), shown on
 	// hover. Empty when it would just repeat Summary.
-	Detail string `json:"detail,omitempty"`
-	Severity string      `json:"severity"`
-	Code     string      `json:"code,omitempty"`
-	Action   string      `json:"action,omitempty"`
-	Command  string      `json:"command,omitempty"`
+	Detail   string `json:"detail,omitempty"`
+	Severity string `json:"severity"`
+	Code     string `json:"code,omitempty"`
+	Action   string `json:"action,omitempty"`
+	Command  string `json:"command,omitempty"`
 }
 
 // UnknownClass enumerates the two distinct flavors of an unknown verdict.

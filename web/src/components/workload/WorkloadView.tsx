@@ -24,6 +24,7 @@ import {
   isDiagnoseKind,
   isRolloutKind,
   canSetWorkloadImages,
+  isCoreBatchJob,
   type ManagedImageSource,
   type WorkloadImageTarget,
 } from '@skyhook-io/k8s-ui'
@@ -538,7 +539,8 @@ export function WorkloadView({
   )
 
   const batchKind = pluralToKind(apiKind)
-  const batchExecution = BATCH_EXECUTION_KINDS.has(batchKind)
+  const batchExecution = BATCH_EXECUTION_KINDS.has(batchKind) &&
+    (batchKind !== 'Job' || isCoreBatchJob(apiKind, rest.group))
   const batchRunsQuery = useWorkloadRuns(apiKind, namespace, name, expanded && batchExecution, {
     refetchActive: true,
     clusterScoped: batchKind === 'ClusterWorkflowTemplate',
@@ -1175,12 +1177,15 @@ export function WorkloadView({
         renderLogsTab={(props) => (
           <LogsTabContent
             {...props}
+            group={effectiveGroup}
             selectedRunKey={selectedRunKey}
             onSelectRun={handleSelectedRunChange}
           />
         )}
         renderExpandedOverview={({ kind: k, apiKind, namespace: ns, name: n, resource: res }) =>
-          BATCH_EXECUTION_KINDS.has(k) && res ? (
+          BATCH_EXECUTION_KINDS.has(k) &&
+          (k !== 'Job' || isCoreBatchJob(apiKind, effectiveGroup)) &&
+          res ? (
             <BatchExecutionFullscreen
               kind={k}
               apiKind={apiKind}
@@ -1545,6 +1550,7 @@ const SCHEDULED_LOG_KINDS = new Set([
 function LogsTabContent({
   kind,
   apiKind,
+  group,
   namespace,
   name,
   resource,
@@ -1558,6 +1564,7 @@ function LogsTabContent({
 }: {
   kind: string
   apiKind: string
+  group?: string
   namespace: string
   name: string
   resource: any
@@ -1584,7 +1591,7 @@ function LogsTabContent({
   }
 
   // Workload kinds with stable pod selectors use the aggregated workload logs viewer
-  if (WORKLOAD_LOG_KINDS.has(kind)) {
+  if (WORKLOAD_LOG_KINDS.has(kind) && (kind !== 'Job' || isCoreBatchJob(apiKind, group))) {
     return (
       <div className="h-full">
         <WorkloadLogsViewer
