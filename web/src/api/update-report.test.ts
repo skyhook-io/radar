@@ -31,7 +31,21 @@ describe('daily browser update checks', () => {
   it('tracks installations behind the same API base independently', () => {
     const storage = memoryStorage()
     const now = new Date('2026-08-29T10:00:00Z')
-    expect(claimDailyUpdateCheck(storage, '/api:1700000000', now)).toBe('2026-08-29')
-    expect(claimDailyUpdateCheck(storage, '/api:1800000000', now)).toBe('2026-08-29')
+    expect(claimDailyUpdateCheck(storage, '/api', now, '1700000000')).toBe('2026-08-29')
+    expect(claimDailyUpdateCheck(storage, '/api', now, '1800000000')).toBe('2026-08-29')
+  })
+
+  it('does not duplicate a check when installation scope becomes available', () => {
+    const storage = memoryStorage()
+    const now = new Date('2026-08-29T10:00:00Z')
+    expect(claimDailyUpdateCheck(storage, '/api', now)).toBe('2026-08-29')
+    expect(claimDailyUpdateCheck(storage, '/api', now, '1700000000')).toBeNull()
+  })
+
+  it('does not duplicate a scoped check when installation scope is temporarily unavailable', () => {
+    const storage = memoryStorage()
+    const now = new Date('2026-08-29T10:00:00Z')
+    expect(claimDailyUpdateCheck(storage, '/api', now, '1700000000')).toBe('2026-08-29')
+    expect(claimDailyUpdateCheck(storage, '/api', now)).toBeNull()
   })
 })

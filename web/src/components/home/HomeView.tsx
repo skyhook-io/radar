@@ -74,7 +74,7 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
   const showHomeUpgrade = deploymentMode === 'in-cluster'
     && !!versionInfo?.updateAvailable
     && getVersionUpdateStatus(versionInfo.currentVersion, versionInfo.latestVersion).tier !== 'none'
-  const { data: installationManager, isLoading: installationManagerLoading } = useCloudConnectSelf(showHomeUpgrade, 15 * 60 * 1000)
+  const { data: installationManager, isLoading: installationManagerLoading } = useCloudConnectSelf(showHomeUpgrade, 15 * 60 * 1000, false)
 
   // SSE is cluster-wide on small/medium clusters; the picker only narrows the
   // dashboard summary, so re-apply the filter here or the legend disagrees.

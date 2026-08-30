@@ -25,8 +25,36 @@ func TestInstalledAtReadsOwnDeployment(t *testing.T) {
 			Name: "radar", Namespace: "other", CreationTimestamp: metav1.NewTime(created.Add(72 * time.Hour)),
 		}},
 	)
-	if got := installedAtFrom(context.Background(), kc, "radar", "radar"); got != created.Unix() {
+	got, err := installedAtFrom(context.Background(), kc, "radar", "radar")
+	if err != nil {
+		t.Fatalf("installedAt error: %v", err)
+	}
+	if got != created.Unix() {
 		t.Fatalf("installedAt = %d, want %d", got, created.Unix())
+	}
+}
+
+func TestInstalledAtDoesNotRetryPermanentReadFailure(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	reads := 0
+	kc.PrependReactor("get", "deployments", func(ktesting.Action) (bool, runtime.Object, error) {
+		reads++
+		return false, nil, nil
+	})
+	resetInstalledAtCache()
+	t.Cleanup(resetInstalledAtCache)
+
+	if got := installedAtCachedFrom(context.Background(), kc, "radar", "radar"); got != 0 {
+		t.Fatalf("first installedAt = %d, want 0", got)
+	}
+	installedAtMu.Lock()
+	installedAtTried = time.Now().Add(-installedAtRetryAfter)
+	installedAtMu.Unlock()
+	if got := installedAtCachedFrom(context.Background(), kc, "radar", "radar"); got != 0 {
+		t.Fatalf("terminal installedAt = %d, want 0", got)
+	}
+	if reads != 1 {
+		t.Fatalf("deployment reads = %d, want 1", reads)
 	}
 }
 
@@ -99,7 +127,8 @@ func TestInstalledAtZeroWhenUnknown(t *testing.T) {
 		{"typed-nil client", (*kubernetes.Clientset)(nil), "radar", "radar"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := installedAtFrom(ctx, tc.client, tc.ns, tc.deploy); got != 0 {
+			got, _ := installedAtFrom(ctx, tc.client, tc.ns, tc.deploy)
+			if got != 0 {
 				t.Fatalf("installedAt = %d, want 0", got)
 			}
 		})
@@ -111,5 +140,6 @@ func resetInstalledAtCache() {
 	defer installedAtMu.Unlock()
 	installedAtCached = 0
 	installedAtTried = time.Time{}
+	installedAtTerminal = false
 	installedAtLoading = nil
 }

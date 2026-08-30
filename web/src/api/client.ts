@@ -1548,20 +1548,21 @@ export function reportBrowserUpdateCheck(
 
 export function useVersionCheck() {
   const capabilities = useCapabilities()
+  const apiBase = getApiBase()
   const deploymentMode = capabilities.data
     ? (capabilities.data.deployment?.mode ?? 'local')
     : undefined
 
   const query = useQuery<VersionInfo>({
-    queryKey: ["version-check"],
+    queryKey: ["version-check", apiBase],
     queryFn: () => fetchJSON('/version-check'),
     staleTime: 60 * 60 * 1000, // 1 hour
     retry: false, // Don't retry on failure
   });
 
   useEffect(() => {
-    if (query.isFetched) reportBrowserUpdateCheck(deploymentMode, query.data?.installScope)
-  }, [deploymentMode, query.data?.installScope, query.isFetched])
+    if (query.isSuccess) reportBrowserUpdateCheck(deploymentMode, query.data?.installScope)
+  }, [deploymentMode, query.data?.installScope, query.isSuccess])
 
   return query;
 }
@@ -1898,12 +1899,13 @@ export interface CloudConnectSelf {
   wizardUrl?: string
 }
 
-export function useCloudConnectSelf(enabled: boolean, staleTime = 60000) {
+export function useCloudConnectSelf(enabled: boolean, staleTime = 60000, retry: boolean | number = 1) {
   return useQuery<CloudConnectSelf>({
     queryKey: ['cloud-connect-self'],
     queryFn: () => fetchJSON('/cloud/connect/self'),
     enabled,
     staleTime,
+    retry,
   })
 }
 

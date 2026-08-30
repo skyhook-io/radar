@@ -8,21 +8,28 @@ export function utcDay(now: Date): string {
 
 export function claimDailyUpdateCheck(
   storage: Pick<Storage, 'getItem' | 'setItem'>,
-  scope: string,
+  apiBase: string,
   now: Date,
+  installScope?: string,
 ): string | null {
-  const storageKey = `${STORAGE_KEY_PREFIX}:${scope}`
+  const storageKey = `${STORAGE_KEY_PREFIX}:${apiBase}`
   const day = utcDay(now)
-  if (storage.getItem(storageKey) === day) return null
+  const storedValue = storage.getItem(storageKey)
+  const stored = storedValue
+    ? JSON.parse(storedValue) as { day?: string; installScope?: string }
+    : undefined
+  const sameInstallation = !stored?.installScope
+    || !installScope
+    || stored.installScope === installScope
+  if (stored?.day === day && sameInstallation) return null
 
-  storage.setItem(storageKey, day)
+  storage.setItem(storageKey, JSON.stringify({ day, installScope }))
   return day
 }
 
 export function claimBrowserUpdateCheck(installScope?: string): string | null {
   try {
-    const scope = installScope ? `${getApiBase()}:${installScope}` : getApiBase()
-    return claimDailyUpdateCheck(localStorage, scope, new Date())
+    return claimDailyUpdateCheck(localStorage, getApiBase(), new Date(), installScope)
   } catch {
     return null
   }

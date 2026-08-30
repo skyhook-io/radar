@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
@@ -24,7 +25,8 @@ import (
 // Callers must treat 0 as "unknown" rather than substituting something else.
 //
 // A successful read is memoized because the value cannot change while this
-// process runs. Failed reads are retried after a short backoff.
+// process runs. Transient read failures are retried after a short backoff;
+// missing or unreadable Deployments remain unknown for the process lifetime.
 func InstalledAt(ctx context.Context) int64 {
 	client := GetClient()
 	if client == nil {
@@ -42,10 +44,11 @@ func InstalledAtCached() int64 {
 }
 
 var (
-	installedAtMu      sync.Mutex
-	installedAtCached  int64
-	installedAtTried   time.Time
-	installedAtLoading chan struct{}
+	installedAtMu       sync.Mutex
+	installedAtCached   int64
+	installedAtTried    time.Time
+	installedAtTerminal bool
+	installedAtLoading  chan struct{}
 )
 
 const installedAtRetryAfter = 5 * time.Minute
@@ -57,6 +60,10 @@ func installedAtCachedFrom(ctx context.Context, client kubernetes.Interface, nam
 			result := installedAtCached
 			installedAtMu.Unlock()
 			return result
+		}
+		if installedAtTerminal {
+			installedAtMu.Unlock()
+			return 0
 		}
 		if !installedAtTried.IsZero() && time.Since(installedAtTried) < installedAtRetryAfter {
 			installedAtMu.Unlock()
@@ -74,12 +81,17 @@ func installedAtCachedFrom(ctx context.Context, client kubernetes.Interface, nam
 		}
 		installedAtLoading = make(chan struct{})
 		loading := installedAtLoading
+		shouldLog := installedAtTried.IsZero()
 		installedAtMu.Unlock()
 
-		result := installedAtFrom(ctx, client, namespace, name)
+		result, err := installedAtFrom(ctx, client, namespace, name)
+		if err != nil && shouldLog {
+			log.Printf("[k8s] install time unavailable (%s/%s unreadable): %v", namespace, name, err)
+		}
 		installedAtMu.Lock()
 		installedAtCached = result
 		installedAtTried = time.Now()
+		installedAtTerminal = apierrors.IsForbidden(err) || apierrors.IsNotFound(err)
 		installedAtLoading = nil
 		close(loading)
 		installedAtMu.Unlock()
@@ -87,18 +99,17 @@ func installedAtCachedFrom(ctx context.Context, client kubernetes.Interface, nam
 	}
 }
 
-func installedAtFrom(ctx context.Context, client kubernetes.Interface, namespace, name string) int64 {
+func installedAtFrom(ctx context.Context, client kubernetes.Interface, namespace, name string) (int64, error) {
 	if namespace == "" || name == "" || isNilClient(client) {
-		return 0
+		return 0, nil
 	}
 	lookupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	deploy, err := client.AppsV1().Deployments(namespace).Get(lookupCtx, name, metav1.GetOptions{})
 	if err != nil {
-		log.Printf("[k8s] install time unavailable (%s/%s unreadable): %v", namespace, name, err)
-		return 0
+		return 0, err
 	}
-	return deploy.CreationTimestamp.Unix()
+	return deploy.CreationTimestamp.Unix(), nil
 }
 
 // isNilClient catches a nil *Clientset that has been placed in an interface:
