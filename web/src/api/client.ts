@@ -1546,7 +1546,7 @@ export function useVersionCheck() {
 
   useEffect(() => {
     if (query.isSuccess) void reportBrowserUpdateCheck(deploymentMode).catch(() => {})
-  }, [deploymentMode, query.isSuccess])
+  }, [apiBase, deploymentMode, query.isSuccess])
 
   return query;
 }

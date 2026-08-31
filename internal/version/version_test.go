@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -128,9 +130,18 @@ func TestTruncateNotes(t *testing.T) {
 	}
 }
 
-func TestInstallTimestampDoesNotUseLocalDirectoryInCluster(t *testing.T) {
-	if got := installTimestamp(context.Background(), "in-cluster"); got != 0 {
-		t.Fatalf("in-cluster timestamp = %d, want no local-directory fallback", got)
+func TestInstallTimestampFallsBackInCluster(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	if err := os.MkdirAll(filepath.Join(dir, ".radar"), 0o755); err != nil {
+		t.Fatalf("seed ~/.radar: %v", err)
+	}
+
+	ctx := context.Background()
+	local := installTimestamp(ctx, "local")
+	if got := installTimestamp(ctx, "in-cluster"); got != local {
+		t.Fatalf("in-cluster timestamp %d did not fall back to the local timestamp %d", got, local)
 	}
 }
 

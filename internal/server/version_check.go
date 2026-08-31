@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"log"
 	"net/http"
 
@@ -14,7 +15,7 @@ func (s *Server) handleVersionCheckBrowser(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if err := version.ReportBrowserUpdateCheck(r.Context()); err != nil {
+	if err := version.ReportBrowserUpdateCheck(context.WithoutCancel(r.Context())); err != nil {
 		log.Printf("[version] browser update check failed: %v", err)
 	}
 	w.WriteHeader(http.StatusNoContent)

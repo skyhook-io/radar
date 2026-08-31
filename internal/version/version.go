@@ -387,11 +387,14 @@ func truncateNotes(s string, maxLen int) string {
 }
 
 // installTimestamp reports when this install was set up. In-cluster that is the
-// Deployment's creation time; ~/.radar is commonly an emptyDir whose birthtime
-// resets with the pod and must not be mistaken for an installation identity.
+// Deployment's creation time; ~/.radar is an emptyDir whose birthtime resets
+// with the pod. The birthtime is the weaker answer but still a better one than
+// none when the Deployment can't be read.
 func installTimestamp(ctx context.Context, mode string) int64 {
 	if mode == "in-cluster" {
-		return k8s.InstalledAt(ctx)
+		if installed := k8s.InstalledAt(ctx); installed != 0 {
+			return installed
+		}
 	}
 	return radarDirBirthtime()
 }
