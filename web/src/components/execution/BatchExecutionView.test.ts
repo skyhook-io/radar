@@ -204,8 +204,8 @@ describe('JobSet member presentation', () => {
     expect(jobSetMemberIdentity(member)).toBe('workers #2 · trainers #1 · 1 running pod')
     expect(pluralizeMemberJobs(200, 240, true)).toBe('200 of 240 Jobs')
     expect(emptyRunsCopy('JobSet', {})).toEqual({
-      headline: 'No child Jobs yet',
-      body: 'The JobSet controller has not created any readable Jobs yet. A role may still be waiting for its dependencies.',
+      headline: 'No child Jobs currently retained',
+      body: 'No readable Jobs owned by this JobSet are currently available. They may be waiting on dependencies or may already have been cleaned up.',
     })
   })
 
