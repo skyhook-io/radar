@@ -486,6 +486,14 @@ export function getBSLLastSynced(resource: any): string {
   return formatAge(lastSynced)
 }
 
+// Why the location is unavailable, in the validation controller's own words.
+// A BackupStorageLocation carries no conditions, so status.message is the only
+// place the reason exists — without it the phase is the whole story a reader
+// gets.
+export function getBSLMessage(resource: any): string {
+  return resource.status?.message || ''
+}
+
 // ============================================================================
 // VOLUME SNAPSHOT LOCATION UTILITIES
 // ============================================================================

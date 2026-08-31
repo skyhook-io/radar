@@ -177,6 +177,53 @@ describe('what a storage location holds', () => {
 })
 
 /**
+ * Velero writes why a location is unavailable into `status.message`, and the
+ * BSL object carries no conditions, so that field is the only place the reason
+ * exists. A page opened from an unavailable-location problem has to show it -
+ * the same way the sibling BackupRepository renderer leads with its own reason.
+ */
+describe('an unavailable location Velero gave a reason for', () => {
+  const bslMsg = (phase: string, message?: string) => ({
+    metadata: { name: 'dr-replica', namespace: 'velero' },
+    spec: { provider: 'aws', objectStorage: { bucket: 'dr' } },
+    status: { phase, ...(message !== undefined ? { message } : {}) },
+  })
+
+  it('leads with the reason Velero gave', () => {
+    const html = renderToString(
+      <VeleroBSLRenderer
+        data={bslMsg('Unavailable', 'BackupStorageLocation is invalid: rpc error: code = Unknown desc = NoSuchBucket')}
+      />,
+    )
+    expect(html).toContain('NoSuchBucket')
+  })
+
+  // Velero can set Unavailable with no message. Saying nothing would leave a red
+  // badge and no consequence, so the page states what unavailable costs.
+  it('names the consequence when Velero gave no reason', () => {
+    const html = renderToString(<VeleroBSLRenderer data={bslMsg('Unavailable')} />)
+    expect(html).toContain('cannot be written')
+  })
+
+  it('says nothing alarming when the location is available', () => {
+    const html = renderToString(
+      <VeleroBSLRenderer data={bslMsg('Available', 'stale message left on the object')} />,
+    )
+    expect(html).not.toContain('Storage Location Unavailable')
+    expect(html).not.toContain('stale message left on the object')
+    expect(html).not.toContain('cannot be written')
+  })
+
+  // A location Velero has not validated yet has no phase. It is not unavailable,
+  // so it gets no alarm even if a message lingers from a prior state.
+  it('raises no alarm on a location Velero has not reported on', () => {
+    const html = renderToString(<VeleroBSLRenderer data={bslMsg('', 'old message')} />)
+    expect(html).not.toContain('Storage Location Unavailable')
+    expect(html).not.toContain('old message')
+  })
+})
+
+/**
  * The list counts what is stored; the restorable point is derived from what
  * completed. On a healthy location those are the only two numbers on the page,
  * and when they disagree something has to say why — "Backups (2)" above a
