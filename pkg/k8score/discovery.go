@@ -78,6 +78,20 @@ var coreAPIGroups = map[string]bool{
 	"scheduling.k8s.io":            true,
 }
 
+var dynamicallyWatchedBuiltInAPIGroups = map[string]bool{
+	"apiregistration.k8s.io": true,
+	"authentication.k8s.io":  true,
+	"authorization.k8s.io":   true,
+	"resource.k8s.io":        true,
+}
+
+// IsBuiltInAPIGroup reports whether group is shipped by Kubernetes rather than
+// introduced by a CRD. Some built-in groups remain outside coreAPIGroups so the
+// dynamic cache can observe them.
+func IsBuiltInAPIGroup(group string) bool {
+	return coreAPIGroups[group] || dynamicallyWatchedBuiltInAPIGroups[group]
+}
+
 // versionStability returns a score for API version stability.
 // Higher is more stable: stable (3) > beta (2) > alpha (1).
 func versionStability(version string) int {
@@ -566,6 +580,23 @@ func (d *ResourceDiscovery) IsKnownResource(kindOrName string) bool {
 func (d *ResourceDiscovery) IsCRD(kindOrName string) bool {
 	res, ok := d.GetResource(kindOrName)
 	return ok && res.IsCRD
+}
+
+// IsCRDGVR reports whether the exact discovered resource is a CRD.
+func (d *ResourceDiscovery) IsCRDGVR(gvr schema.GroupVersionResource) bool {
+	if d == nil {
+		return false
+	}
+
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	for _, res := range d.resources {
+		if res.Group == gvr.Group && res.Version == gvr.Version && res.Name == gvr.Resource {
+			return res.IsCRD
+		}
+	}
+	return false
 }
 
 // SupportsWatch checks if a resource supports list and watch verbs.

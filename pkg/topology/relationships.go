@@ -7,6 +7,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // RelationshipsIndex is a precomputed map from node ID to the edges touching
@@ -17,7 +19,9 @@ import (
 // Build once via IndexByResource(topo). Pass to GetRelationshipsWithIndex on
 // each call. Lookups are read-only and goroutine-safe; mutation is not.
 type RelationshipsIndex struct {
-	byNodeID map[string]*nodeEdgeSlots
+	byNodeID           map[string]*nodeEdgeSlots
+	nodesByID          map[string]*Node
+	nodesByResourceKey map[string]*Node
 }
 
 type nodeEdgeSlots struct {
@@ -29,9 +33,24 @@ type nodeEdgeSlots struct {
 // nil topology — returns an empty index whose lookups all miss.
 func IndexByResource(topo *Topology) *RelationshipsIndex {
 	if topo == nil {
-		return &RelationshipsIndex{byNodeID: map[string]*nodeEdgeSlots{}}
+		return &RelationshipsIndex{
+			byNodeID:           map[string]*nodeEdgeSlots{},
+			nodesByID:          map[string]*Node{},
+			nodesByResourceKey: map[string]*Node{},
+		}
 	}
-	idx := &RelationshipsIndex{byNodeID: make(map[string]*nodeEdgeSlots, len(topo.Nodes))}
+	idx := &RelationshipsIndex{
+		byNodeID:           make(map[string]*nodeEdgeSlots, len(topo.Nodes)),
+		nodesByID:          make(map[string]*Node, len(topo.Nodes)),
+		nodesByResourceKey: make(map[string]*Node, len(topo.Nodes)),
+	}
+	for i := range topo.Nodes {
+		node := &topo.Nodes[i]
+		idx.nodesByID[node.ID] = node
+		for _, key := range nodeResourceKeys(node) {
+			idx.nodesByResourceKey[key] = node
+		}
+	}
 	for _, e := range topo.Edges {
 		if e.Source != "" {
 			slot := idx.byNodeID[e.Source]
@@ -184,14 +203,10 @@ func GetCascadeDeletePreview(root ResourceRef, topo *Topology, dp DynamicProvide
 			}
 			visited[targetID] = true
 
-			ref := parseNodeID(targetID, dp)
+			ref := resourceRefForNode(nodeByID[targetID], dp)
 			if ref == nil {
 				continue
 			}
-			if node := nodeByID[targetID]; node != nil {
-				ref.Group = nodeAPIGroupFromData(node)
-			}
-			enrichRef(ref, dp)
 			dependents = append(dependents, *ref)
 			queue = append(queue, targetID)
 		}
@@ -296,34 +311,30 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 
 	// Build the node ID for this resource (matches format used in builder.go)
 	resolvedKind := kind
-	if objectKind, objectGroup := objectGVK(obj); objectGroup != "" {
+	objectKind, objectGroup := objectGVK(obj)
+	if objectGroup != "" {
 		if objectKind != "" {
 			resolvedKind = objectKind
 		}
 		resolvedKind = KindForGVK(resolvedKind, objectGroup)
 	}
 	nodeID := buildNodeID(resolvedKind, namespace, name, dp)
-	nodeByID := make(map[string]*Node, len(topo.Nodes))
-	for i := range topo.Nodes {
-		nodeByID[topo.Nodes[i].ID] = &topo.Nodes[i]
+	lookupIndex := idx
+	if lookupIndex == nil {
+		lookupIndex = IndexByResource(topo)
 	}
-	if _, exists := nodeByID[nodeID]; !exists {
-		_, objectGroup := objectGVK(obj)
+	nodeByID := lookupIndex.nodesByID
+	directNode, directExists := nodeByID[nodeID]
+	if !directExists || objectGroup != "" && !nodeMatchesAPIGroup(directNode, objectGroup) {
 		if matched, _ := findNodeByRef(topo.Nodes, ResourceRef{Kind: resolvedKind, Namespace: namespace, Name: name, Group: objectGroup}); matched != nil {
 			nodeID = matched.ID
+		} else if objectGroup != "" {
+			nodeID = ""
 		}
 	}
-	incomingEdges, outgoingEdges := edgesForNode(topo, idx, nodeID)
+	incomingEdges, outgoingEdges := edgesForNode(topo, lookupIndex, nodeID)
 	refForNodeID := func(id string) *ResourceRef {
-		ref := parseNodeID(id, dp)
-		if ref == nil {
-			return nil
-		}
-		if node := nodeByID[id]; node != nil {
-			ref.Group = nodeAPIGroupFromData(node)
-		}
-		enrichRef(ref, dp)
-		return ref
+		return resourceRefForNode(nodeByID[id], dp)
 	}
 
 	rel := &Relationships{}
@@ -431,8 +442,8 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			switch ref.Kind {
 			case "PodDisruptionBudget":
 				rel.PDBs = append(rel.PDBs, *ref)
-			case "NetworkPolicy", "CiliumNetworkPolicy", "ClusterNetworkPolicy", "CiliumClusterwideNetworkPolicy",
-				"CalicoNetworkPolicy", "CalicoGlobalNetworkPolicy", "CalicoStagedNetworkPolicy", "CalicoStagedGlobalNetworkPolicy", "CalicoStagedKubernetesNetworkPolicy":
+			case "NetworkPolicy", "GlobalNetworkPolicy", "StagedNetworkPolicy", "StagedGlobalNetworkPolicy", "StagedKubernetesNetworkPolicy",
+				"CiliumNetworkPolicy", "ClusterNetworkPolicy", "CiliumClusterwideNetworkPolicy":
 				rel.NetworkPolicies = append(rel.NetworkPolicies, *ref)
 			}
 		case EdgeConfigures:
@@ -448,7 +459,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 		}
 	}
 
-	addServiceEntrypoints(rel, topo, idx, dp)
+	addServiceEntrypoints(rel, topo, lookupIndex)
 
 	// Convenience shortcuts: bridge the Deployment↔ReplicaSet↔Pod gap
 	// so users see Pods directly under Deployments and vice versa.
@@ -458,7 +469,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 		for _, child := range rel.Children {
 			if strings.EqualFold(child.Kind, "ReplicaSet") {
 				childID := buildNodeID(child.Kind, child.Namespace, child.Name, dp)
-				_, childOutgoing := edgesForNode(topo, idx, childID)
+				_, childOutgoing := edgesForNode(topo, lookupIndex, childID)
 				for _, edge := range childOutgoing {
 					if edge.Type != EdgeManages {
 						continue
@@ -476,7 +487,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	if kindLower == "pods" || kindLower == "pod" {
 		if rel.Owner != nil && strings.EqualFold(rel.Owner.Kind, "ReplicaSet") {
 			ownerID := buildNodeID(rel.Owner.Kind, rel.Owner.Namespace, rel.Owner.Name, dp)
-			ownerIncoming, _ := edgesForNode(topo, idx, ownerID)
+			ownerIncoming, _ := edgesForNode(topo, lookupIndex, ownerID)
 			for _, edge := range ownerIncoming {
 				if edge.Type != EdgeManages {
 					continue
@@ -646,7 +657,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	if m, ok := queriedObj.(metav1.Object); ok {
 		managedByMeta = m
 	}
-	if mb := SynthesizeManagedBy(managedByMeta, resolvedKind, namespace, name, topo, dp, idx); len(mb) > 0 {
+	if mb := synthesizeManagedByFromNode(managedByMeta, nodeID, topo, dp, idx); len(mb) > 0 {
 		rel.ManagedBy = mb
 	}
 
@@ -664,18 +675,21 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	return rel
 }
 
-func addServiceEntrypoints(rel *Relationships, topo *Topology, idx *RelationshipsIndex, dp DynamicProvider) {
+func addServiceEntrypoints(rel *Relationships, topo *Topology, idx *RelationshipsIndex) {
 	for _, service := range rel.Services {
-		if !strings.EqualFold(service.Kind, "Service") {
+		if service.Group != "" {
 			continue
 		}
-		serviceID := buildNodeID(service.Kind, service.Namespace, service.Name, dp)
-		incoming, _ := edgesForNode(topo, idx, serviceID)
+		serviceNode := idx.nodesByResourceKey[resourceid.ResourceKey(service.Group, service.Kind, service.Namespace, service.Name)]
+		if serviceNode == nil || !strings.EqualFold(KubernetesKindForNode(serviceNode), "Service") {
+			continue
+		}
+		incoming, _ := edgesForNode(topo, idx, serviceNode.ID)
 		for _, edge := range incoming {
 			if edge.Type != EdgeRoutesTo && edge.Type != EdgeExposes {
 				continue
 			}
-			ref := resourceRefForNodeID(edge.Source, topo, dp)
+			ref := resourceRefForNode(idx.nodesByID[edge.Source], nil)
 			if ref == nil {
 				continue
 			}
@@ -695,19 +709,29 @@ func addServiceEntrypoints(rel *Relationships, topo *Topology, idx *Relationship
 }
 
 func resourceRefForNodeID(nodeID string, topo *Topology, dp DynamicProvider) *ResourceRef {
-	ref := parseNodeID(nodeID, dp)
-	if ref == nil {
-		return nil
-	}
 	if topo != nil {
 		for i := range topo.Nodes {
 			if topo.Nodes[i].ID == nodeID {
-				ref.Group = nodeAPIGroupFromData(&topo.Nodes[i])
-				break
+				return resourceRefForNode(&topo.Nodes[i], dp)
 			}
 		}
 	}
-	enrichRef(ref, dp)
+	return nil
+}
+
+func resourceRefForNode(node *Node, dp DynamicProvider) *ResourceRef {
+	if node == nil {
+		return nil
+	}
+	ref := parseNodeID(node.ID, dp)
+	if ref == nil {
+		return nil
+	}
+	ref.Kind = KubernetesKindForNode(node)
+	ref.Group = nodeAPIGroupFromData(node)
+	if ref.Group == "" {
+		ref.Group = resourceid.GroupForBuiltinKind(ref.Kind)
+	}
 	return ref
 }
 

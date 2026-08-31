@@ -257,3 +257,7 @@ func (a *topologyDynamicProvider) GetKindForGVR(gvr schema.GroupVersionResource)
 func (a *topologyDynamicProvider) IsCRD(kind string) bool {
 	return a.discovery.IsCRD(kind)
 }
+
+func (a *topologyDynamicProvider) IsCRDGVR(gvr schema.GroupVersionResource) bool {
+	return a.discovery.IsCRDGVR(gvr)
+}
