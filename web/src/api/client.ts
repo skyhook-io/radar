@@ -6285,6 +6285,8 @@ export function useImageFilesystem(
 // Response from workload pods endpoint
 export interface WorkloadPodsResponse {
   pods: WorkloadPodInfo[];
+  total: number;
+  truncated: boolean;
 }
 
 // Response from workload logs endpoint (non-streaming)
@@ -6319,6 +6321,16 @@ export interface WorkloadRun {
   parallelism?: number;
   progress?: string;
   template?: string;
+  replicatedJob?: string;
+  replicatedJobReplicas?: string;
+  jobIndex?: string;
+  globalReplicas?: string;
+  globalIndex?: string;
+  groupName?: string;
+  groupReplicas?: string;
+  groupIndex?: string;
+  restartAttempt?: string;
+  jobRestartAttempt?: string;
   launcher?: {
     kind: string;
     namespace?: string;
@@ -6334,15 +6346,26 @@ export interface WorkloadRun {
 
 export interface WorkloadRunsResponse {
   runs: WorkloadRun[];
+  total?: number;
+  truncated?: boolean;
 }
 
 // Fetch pods for a workload
-export function useWorkloadPods(kind: string, namespace: string, name: string) {
+export function useWorkloadPods(
+  kind: string,
+  namespace: string,
+  name: string,
+  options?: { limit?: number; refetchInterval?: number | false },
+) {
+  const limit = options?.limit;
+  const queryString = limit ? `?limit=${limit}` : "";
   return useQuery<WorkloadPodsResponse>({
-    queryKey: ["workload-pods", kind, namespace, name],
-    queryFn: () => fetchJSON(`/workloads/${kind}/${namespace}/${name}/pods`),
+    queryKey: ["workload-pods", kind, namespace, name, limit ?? 0],
+    queryFn: () =>
+      fetchJSON(`/workloads/${kind}/${namespace}/${name}/pods${queryString}`),
     enabled: Boolean(kind && namespace && name),
     staleTime: 10000, // 10 seconds - pods can change
+    refetchInterval: options?.refetchInterval ?? false,
   });
 }
 

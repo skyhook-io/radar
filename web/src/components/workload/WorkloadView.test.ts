@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { gitOpsOwnerFromRelationships } from '@skyhook-io/k8s-ui'
 import type { Relationships } from '../../types'
-import { findInheritedGitOpsLookupRef } from './WorkloadView'
+import { findInheritedGitOpsLookupRef, supportsBatchExecution } from './WorkloadView'
 
 describe('findInheritedGitOpsLookupRef', () => {
   it('follows a referenced ReplicaSet to its parent workload for inherited ownership', () => {
@@ -56,5 +56,20 @@ describe('findInheritedGitOpsLookupRef', () => {
         },
       ),
     ).toBeNull()
+  })
+})
+
+describe('supportsBatchExecution', () => {
+  it('enables only the supported JobSet API identity', () => {
+    expect(supportsBatchExecution('JobSet', 'jobsets', 'jobset.x-k8s.io', 'jobset.x-k8s.io/v1alpha2')).toBe(true)
+    expect(supportsBatchExecution('JobSet', 'jobsets', 'jobset.x-k8s.io')).toBe(false)
+    expect(supportsBatchExecution('JobSet', 'jobsets', 'example.io', 'example.io/v1alpha2')).toBe(false)
+    expect(supportsBatchExecution('JobSet', 'jobsets', 'jobset.x-k8s.io', 'jobset.x-k8s.io/v1beta1')).toBe(false)
+  })
+
+  it('preserves the core Job collision guard and existing scheduled kinds', () => {
+    expect(supportsBatchExecution('Job', 'jobs', 'batch')).toBe(true)
+    expect(supportsBatchExecution('Job', 'jobs', 'example.io')).toBe(false)
+    expect(supportsBatchExecution('CronJob', 'cronjobs', 'batch')).toBe(true)
   })
 })
