@@ -166,13 +166,15 @@ func BuildNeighborhoodWithIndex(t *Topology, root ResourceRef, opts Neighborhood
 	if ok && root.Group != "" && !nodeMatchesAPIGroup(rootNode, root.Group) {
 		ok = false
 	}
-	if !ok {
-		// Fallback: try matching by (kind, namespace, name [+ group]) tuple.
+	if !ok || root.Group == "" && !nodeIsCanonicalBuiltin(rootNode) {
+		// Match by (kind, namespace, name [+ group]) tuple. A group-less known
+		// built-in keeps the established default-to-core behavior; custom kinds
+		// must be unambiguous when their group is omitted.
 		// Mostly for CRDs whose topology node ID uses a different prefix than
 		// the lowercase kind (e.g. "knativeservice/"). When root.Group is set,
 		// findNodeByRef also disambiguates kind-collisions across API groups
 		// (CAPI cluster.x-k8s.io/Cluster vs Fleet cluster.fleet.io/Cluster).
-		matched, ambiguous := findNodeByRef(t.Nodes, root)
+		matched, ambiguous := findNodeByRef(t.Nodes, root, dp)
 		if ambiguous {
 			sub.AmbiguousRoot = true
 			return sub
@@ -182,6 +184,20 @@ func BuildNeighborhoodWithIndex(t *Topology, root ResourceRef, opts Neighborhood
 		}
 		rootNode = matched
 		rootID = rootNode.ID
+	}
+	resolvedKind := KubernetesKindForNode(rootNode)
+	resolvedGroup := root.Group
+	if resolvedGroup == "" {
+		resolvedGroup = nodeAPIGroupFromData(rootNode)
+		if builtinGroup, builtin := resourceid.BuiltinGroup(resolvedKind); resolvedGroup == "" && builtin {
+			resolvedGroup = builtinGroup
+		}
+	}
+	sub.Root = ResourceRef{
+		Kind:      resolvedKind,
+		Namespace: nodeNamespaceFromData(rootNode),
+		Name:      rootNode.Name,
+		Group:     resolvedGroup,
 	}
 
 	// Apply the Allow gate to the root itself. Callers' upfront RBAC checks
@@ -433,19 +449,18 @@ func edgeTypesForAuto(rootKind NodeKind) map[EdgeType]bool {
 // for kind=Service&group=serving.knative.dev finds the KnativeService topology
 // node. Without this, the comparison Node.Kind="KnativeService" vs
 // ref.Kind="Service" never matches and the root lookup silently fails.
-func findNodeByRef(nodes []Node, ref ResourceRef) (*Node, bool) {
-	// Resolve the caller-facing (kind, group) tuple to the kind the topology
-	// builder uses on Node.Kind. Falls back to ref.Kind unchanged when there's
-	// no pseudo-kind mapping for this (kind, group).
-	wantKind := pseudoKindFor(ref.Kind, ref.Group)
+func findNodeByRef(nodes []Node, ref ResourceRef, dp DynamicProvider) (*Node, bool) {
+	// Resolve plural API resource names through discovery before comparing the
+	// caller-facing Kubernetes kind and Radar's topology pseudo-kind.
+	resourceKind := normalizeKindWithGroup(ref.Kind, ref.Group, dp)
+	wantKind := pseudoKindFor(resourceKind, ref.Group)
 	var match *Node
 	matchGroup := ""
 	for i := range nodes {
 		n := &nodes[i]
-		// Compare against the resolved pseudo-kind first; if that misses fall
-		// back to the original ref.Kind so callers that don't supply a group,
-		// or kinds that aren't pseudo-mapped, still work when unambiguous.
-		if !strings.EqualFold(string(n.Kind), wantKind) && !strings.EqualFold(string(n.Kind), ref.Kind) {
+		// The real Kubernetes kind catches group-less pseudo-kind lookups; the
+		// topology kind catches an explicitly grouped pseudo-kind.
+		if !strings.EqualFold(string(n.Kind), wantKind) && !strings.EqualFold(KubernetesKindForNode(n), resourceKind) {
 			continue
 		}
 		if n.Name != ref.Name {
@@ -468,6 +483,12 @@ func findNodeByRef(nodes []Node, ref ResourceRef) (*Node, bool) {
 		matchGroup = group
 	}
 	return match, false
+}
+
+func nodeIsCanonicalBuiltin(node *Node) bool {
+	group, ok := resourceid.BuiltinGroup(KubernetesKindForNode(node))
+	advertisedGroup := nodeAPIGroupFromData(node)
+	return ok && (advertisedGroup == "" || advertisedGroup == group)
 }
 
 // pseudoKindFor maps an (API kind, API group) to the synthesized topology

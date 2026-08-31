@@ -130,6 +130,36 @@ func TestGetCascadeDeletePreview_ResolutionState(t *testing.T) {
 	}
 }
 
+func TestGetCascadeDeletePreview_UnqualifiedUniqueGenericRoot(t *testing.T) {
+	topo := &Topology{
+		Nodes: []Node{
+			{ID: "widget/demo/root/example.io", Kind: "Widget", Name: "root", Data: map[string]any{"namespace": "demo", "apiVersion": "example.io/v1"}},
+			{ID: "gadget/demo/child/example.io", Kind: "Gadget", Name: "child", Data: map[string]any{"namespace": "demo", "apiVersion": "example.io/v1"}},
+		},
+		Edges: []Edge{{Source: "widget/demo/root/example.io", Target: "gadget/demo/child/example.io", Type: EdgeManages}},
+	}
+
+	preview := GetCascadeDeletePreview(ResourceRef{Kind: "Widget", Namespace: "demo", Name: "root"}, topo, nil)
+	if !preview.RootResolved || preview.Root.Group != "example.io" {
+		t.Fatalf("generic preview root = %+v, want exact resolved identity", preview)
+	}
+	if len(preview.Dependents) != 1 || preview.Dependents[0].Name != "child" || preview.Dependents[0].Group != "example.io" {
+		t.Fatalf("generic preview dependents = %+v, want exact child", preview.Dependents)
+	}
+}
+
+func TestGetCascadeDeletePreview_UnqualifiedBuiltinDefaultsToTypedRoot(t *testing.T) {
+	topo := &Topology{Nodes: []Node{
+		{ID: "job/ml/train", Kind: KindJob, Name: "train", Data: map[string]any{"namespace": "ml"}},
+		{ID: "job/ml/train/batch.volcano.sh", Kind: KindJob, Name: "train", Data: map[string]any{"namespace": "ml", "apiVersion": "batch.volcano.sh/v1alpha1"}},
+	}}
+
+	preview := GetCascadeDeletePreview(ResourceRef{Kind: "Job", Namespace: "ml", Name: "train"}, topo, nil)
+	if !preview.RootResolved || preview.Root.Group != "batch" || preview.Root.Kind != "Job" {
+		t.Fatalf("cascade root = %+v, want exact typed Job identity", preview)
+	}
+}
+
 func TestGetCascadeDeletePreview_RouteCollisionUsesGroup(t *testing.T) {
 	knativeGVR := schema.GroupVersionResource{Group: "serving.knative.dev", Version: "v1", Resource: "routes"}
 	openshiftGVR := schema.GroupVersionResource{Group: "route.openshift.io", Version: "v1", Resource: "routes"}

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 
 import type { TimelineEvent, Topology } from '../types/core'
 
-import { buildResourceHierarchy, eventsForApplication, extractPinnedLanes, removePinnedLanes, isPinnedLaneRef, laneTrackEvents, laneHasEventInWindow, isChildVisibleInWindow, subtreeEvents, getAllEventsFromHierarchy, collidingLaneKeys, laneCollisionKey, matchLaneByMemberNamePrefix, type ResourceLane } from './resource-hierarchy'
+import { buildResourceHierarchy, eventsForApplication, extractPinnedLanes, removePinnedLanes, resolvePinnedLaneIds, isPinnedLaneRef, pinnedLaneRefMatches, laneTrackEvents, laneHasEventInWindow, isChildVisibleInWindow, subtreeEvents, getAllEventsFromHierarchy, collidingLaneKeys, laneCollisionKey, matchLaneByMemberNamePrefix, type ResourceLane } from './resource-hierarchy'
 import { buildAppMembershipIndex, type AppMembershipIndex, type AppMembership } from './applications'
 
 function svcEvent(namespace: string, name: string): TimelineEvent {
@@ -742,6 +742,86 @@ describe('extractPinnedLanes', () => {
     expect(pinned[0].isAppGroup).toBeFalsy()
   })
 
+  it('migrates an unambiguous pre-api-group CRD pin to its canonical live lane', () => {
+    const lanes = buildResourceHierarchy({
+      events: [changeEvent('Job', 'ml', 'train', { apiVersion: 'batch.volcano.sh/v1alpha1' })],
+      grouping: 'flat',
+    })
+    const refs = [{ id: 'Job/ml/train', kind: 'Job', namespace: 'ml', name: 'train' }]
+
+    expect(extractPinnedLanes(lanes, refs)[0].id).toBe('Job.batch.volcano.sh/ml/train')
+    const resolved = resolvePinnedLaneIds(lanes, refs)
+    expect([...resolved]).toEqual(['Job.batch.volcano.sh/ml/train'])
+    expect(removePinnedLanes(lanes, resolved)).toEqual([])
+  })
+
+  it('does not guess which live lane an old group-less pin meant after a collision', () => {
+    const lanes = buildResourceHierarchy({
+      events: [
+        changeEvent('Job', 'ml', 'train', { id: 'core', apiVersion: 'batch/v1' }),
+        changeEvent('Job', 'ml', 'train', { id: 'volcano', apiVersion: 'batch.volcano.sh/v1alpha1' }),
+      ],
+      grouping: 'flat',
+    })
+    const refs = [{ id: 'Job/ml/train', kind: 'Job', namespace: 'ml', name: 'train' }]
+
+    expect(resolvePinnedLaneIds(lanes, refs).size).toBe(0)
+    expect(removePinnedLanes(lanes, resolvePinnedLaneIds(lanes, refs))).toHaveLength(2)
+    expect(extractPinnedLanes(lanes, refs)).toEqual([])
+  })
+
+  it('uses the stored group to distinguish new core and CRD pins with the same name', () => {
+    const lanes = buildResourceHierarchy({
+      events: [
+        changeEvent('Job', 'ml', 'train', { id: 'core', apiVersion: 'batch/v1' }),
+        changeEvent('Job', 'ml', 'train', { id: 'volcano', apiVersion: 'batch.volcano.sh/v1alpha1' }),
+      ],
+      grouping: 'flat',
+    })
+    const coreRef = { id: 'Job/ml/train', kind: 'Job', group: 'batch', namespace: 'ml', name: 'train' }
+    const volcanoRef = { id: 'Job.batch.volcano.sh/ml/train', kind: 'Job', group: 'batch.volcano.sh', namespace: 'ml', name: 'train' }
+
+    expect(extractPinnedLanes(lanes, [coreRef])[0].events[0].id).toBe('core')
+    expect(extractPinnedLanes(lanes, [volcanoRef])[0].events[0].id).toBe('volcano')
+  })
+
+  it('keeps an absent group-qualified pin distinct from a same-named live group', () => {
+    const lanes = buildResourceHierarchy({
+      events: [changeEvent('Cluster', 'prod', 'main', { apiVersion: 'cluster.x-k8s.io/v1beta2' })],
+      grouping: 'flat',
+    })
+    const cnpgRef = {
+      id: 'Cluster.postgresql.cnpg.io/prod/main',
+      kind: 'Cluster',
+      group: 'postgresql.cnpg.io',
+      namespace: 'prod',
+      name: 'main',
+    }
+
+    expect([...resolvePinnedLaneIds(lanes, [cnpgRef])]).toEqual([cnpgRef.id])
+    expect(extractPinnedLanes(lanes, [cnpgRef])[0].id).toBe(cnpgRef.id)
+  })
+
+  it('keeps a built-in pin resolved when the lane stops carrying apiVersion', () => {
+    const lane = {
+      id: 'Deployment/team-a/web', kind: 'Deployment', group: '', namespace: 'team-a', name: 'web',
+      events: [], isWorkload: true,
+    } as ResourceLane
+    const ref = { id: 'Deployment/team-a/web', kind: 'Deployment', group: 'apps', namespace: 'team-a', name: 'web' }
+
+    expect(extractPinnedLanes([lane], [ref])[0].id).toBe(lane.id)
+    expect([...resolvePinnedLaneIds([lane], [ref])]).toEqual([lane.id])
+  })
+
+  it('matches a migrated legacy pin for unpin without conflating explicit groups', () => {
+    const legacy = { id: 'Cluster/prod/main', kind: 'Cluster', namespace: 'prod', name: 'main' }
+    const cnpg = { id: 'Cluster.postgresql.cnpg.io/prod/main', kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'prod', name: 'main' }
+    const capi = { id: 'Cluster.cluster.x-k8s.io/prod/main', kind: 'Cluster', group: 'cluster.x-k8s.io', namespace: 'prod', name: 'main' }
+
+    expect(pinnedLaneRefMatches(legacy, cnpg)).toBe(true)
+    expect(pinnedLaneRefMatches(cnpg, capi)).toBe(false)
+  })
+
   // Dedup: a pinned app group subsumes a separately-pinned member of that group,
   // regardless of pin order — the app-group wins so the member renders once
   // (inside the group's roll-up), never a second standalone row that would
@@ -796,7 +876,7 @@ describe('isPinnedLaneRef (localStorage validation)', () => {
     expect(isPinnedLaneRef({ id: 'Deployment/team-a/web', kind: 'Deployment', namespace: 'team-a', name: 'web' })).toBe(true)
   })
   it('accepts an explicit resource ref', () => {
-    expect(isPinnedLaneRef({ type: 'resource', id: 'Deployment/team-a/web', kind: 'Deployment', namespace: 'team-a', name: 'web' })).toBe(true)
+    expect(isPinnedLaneRef({ type: 'resource', id: 'Deployment/team-a/web', kind: 'Deployment', group: 'apps', namespace: 'team-a', name: 'web' })).toBe(true)
   })
   it('accepts an app-group ref', () => {
     expect(isPinnedLaneRef({ type: 'appGroup', id: 'app:team-a/app/billing', appKey: 'team-a/app/billing', appName: 'billing' })).toBe(true)
@@ -806,6 +886,9 @@ describe('isPinnedLaneRef (localStorage validation)', () => {
   })
   it('rejects a resource ref missing required fields', () => {
     expect(isPinnedLaneRef({ id: 'Deployment/team-a/web', kind: 'Deployment' })).toBe(false)
+  })
+  it('rejects a resource ref with a non-string group', () => {
+    expect(isPinnedLaneRef({ id: 'Deployment/team-a/web', kind: 'Deployment', group: 1, namespace: 'team-a', name: 'web' })).toBe(false)
   })
   it('rejects non-objects and null', () => {
     expect(isPinnedLaneRef(null)).toBe(false)
@@ -1039,6 +1122,30 @@ describe('group-qualified lane identity', () => {
     expect(lanes[0].appKey).toBeUndefined()
   })
 
+  it('keeps exact core and custom lanes in their own app memberships after a collision', () => {
+    const appIndex = buildAppMembershipIndex([
+      {
+        key: 'core', name: 'core', health: 'healthy',
+        workloads: [{ kind: 'Job', group: 'batch', namespace: 'ml', name: 'train', health: 'healthy', ready: 1, desired: 1, restarts: 0 }],
+      },
+      {
+        key: 'volcano', name: 'volcano', health: 'healthy',
+        workloads: [{ kind: 'Job', group: 'batch.volcano.sh', namespace: 'ml', name: 'train', health: 'healthy', ready: 1, desired: 1, restarts: 0 }],
+      },
+    ])
+    const lanes = buildResourceHierarchy({
+      events: [
+        changeEvent('Job', 'ml', 'train', { id: 'core', apiVersion: 'batch/v1' }),
+        changeEvent('Job', 'ml', 'train', { id: 'volcano', apiVersion: 'batch.volcano.sh/v1alpha1' }),
+      ],
+      grouping: 'app',
+      appIndex,
+    })
+
+    expect(lanes.find(lane => lane.id === 'Job/ml/train')?.structuralMember).toBe(true)
+    expect(lanes.find(lane => lane.id === 'Job.batch.volcano.sh/ml/train')?.structuralMember).toBe(true)
+  })
+
   it('keeps a persisted group-less event bare when topology reveals a collision', () => {
     const topology = {
       nodes: [
@@ -1117,6 +1224,46 @@ describe('group-qualified lane identity', () => {
       .toEqual(['Job.batch.volcano.sh/ml/train'])
   })
 
+  it('uses an exact manages edge when a persisted owner ref is group-less', () => {
+    const topology = {
+      nodes: [
+        { id: 'job/ml/train', kind: 'Job', name: 'train', status: 'healthy', data: { namespace: 'ml' } },
+        { id: 'job/ml/train/batch.volcano.sh', kind: 'Job', name: 'train', status: 'healthy', data: { namespace: 'ml', apiVersion: 'batch.volcano.sh/v1alpha1' } },
+        { id: 'pod/ml/train-worker', kind: 'Pod', name: 'train-worker', status: 'healthy', data: { namespace: 'ml' } },
+      ],
+      edges: [
+        { id: 'owns', source: 'job/ml/train/batch.volcano.sh', target: 'pod/ml/train-worker', type: 'manages' },
+      ],
+    } as unknown as Topology
+    const lanes = buildResourceHierarchy({
+      events: [
+        changeEvent('Job', 'ml', 'train', { id: 'core', apiVersion: 'batch/v1' }),
+        changeEvent('Job', 'ml', 'train', { id: 'volcano', apiVersion: 'batch.volcano.sh/v1alpha1' }),
+        changeEvent('Pod', 'ml', 'train-worker', { owner: { kind: 'Job', name: 'train' } }),
+      ],
+      topology,
+      grouping: 'owner',
+    })
+
+    expect(lanes.find(lane => lane.id === 'Job/ml/train')?.children ?? []).toEqual([])
+    expect(lanes.find(lane => lane.id === 'Job.batch.volcano.sh/ml/train')?.children?.map(child => child.id))
+      .toEqual(['Pod/ml/train-worker'])
+  })
+
+  it('leaves a historical group-less owner unresolved when live identities collide', () => {
+    const lanes = buildResourceHierarchy({
+      events: [
+        changeEvent('Job', 'ml', 'train', { id: 'core', apiVersion: 'batch/v1' }),
+        changeEvent('Job', 'ml', 'train', { id: 'volcano', apiVersion: 'batch.volcano.sh/v1alpha1' }),
+        changeEvent('Pod', 'ml', 'train-worker', { owner: { kind: 'Job', name: 'train' } }),
+      ],
+      grouping: 'owner',
+    })
+
+    expect(lanes.find(lane => lane.id === 'Pod/ml/train-worker')).toBeDefined()
+    expect(lanes.filter(lane => lane.name === 'train').every(lane => (lane.children ?? []).length === 0)).toBe(true)
+  })
+
   it('owner parenting reconciles a CRD owner across the qualified/bare boundary', () => {
     // A Pod owned by a CNPG Cluster: the owner ref carries no group, but it must
     // nest under the Cluster's group-qualified lane, not fork a bare duplicate.
@@ -1132,17 +1279,14 @@ describe('group-qualified lane identity', () => {
     expect((lanes[0].children ?? []).map((c) => c.id)).toEqual(['Pod/prod/main-1'])
   })
 
-  it('ignores an old-format (group-less) CRD pin gracefully — no crash, empty ghost row', () => {
+  it('migrates an old-format CRD pin when the live identity is unambiguous', () => {
     const lanes = buildResourceHierarchy({ events: [cnpgCluster()], grouping: 'flat' })
-    // Stale pin written before group-qualified ids existed: bare id, no match.
     const stale = { type: 'resource' as const, id: 'Cluster/prod/main', kind: 'Cluster', namespace: 'prod', name: 'main' }
-    expect(isPinnedLaneRef(stale)).toBe(true) // still a well-formed record
+    expect(isPinnedLaneRef(stale)).toBe(true)
     const pinned = extractPinnedLanes(lanes, [stale])
     expect(pinned).toHaveLength(1)
-    expect(pinned[0].id).toBe('Cluster/prod/main')
-    expect(pinned[0].events).toHaveLength(0) // synthesized empty — did not hijack the live lane
-    // The live qualified lane is untouched by the stale pin.
-    expect(lanes[0].id).toBe('Cluster.postgresql.cnpg.io/prod/main')
+    expect(pinned[0].id).toBe('Cluster.postgresql.cnpg.io/prod/main')
+    expect(pinned[0].events).toHaveLength(1)
   })
 })
 

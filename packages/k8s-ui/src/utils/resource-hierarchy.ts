@@ -13,8 +13,10 @@
 
 import type { TimelineEvent, Topology } from '../types/core'
 import { isWorkloadKind } from '../types/core'
+import { canonicalResourceGroup } from './api-resources'
 import { apiVersionToGroup, laneId, laneResourceKey, groupQualifiesLaneId, parseLaneId } from './navigation'
 import type { AppMembership, AppMembershipIndex } from './applications'
+import { topologyNodeResourceKind } from './topology-neighborhood'
 
 /** Timeline grouping mode (replaces the legacy groupByApp boolean).
  *  - app   = owner/topology parenting + the app-membership cascade (default)
@@ -36,6 +38,9 @@ export interface ResourceLane {
    * (e.g. CAPI Cluster vs CNPG Cluster) when the lane is clicked.
    */
   group?: string
+  /** True when group identity came from apiVersion/topology or an unambiguous
+   *  live identity, including the explicit core group (`''`). */
+  identityResolved?: boolean
   namespace: string
   name: string
   events: TimelineEvent[]
@@ -297,7 +302,7 @@ function contractParentId(
  *  retention-grade fix) exist. */
 function cascadeRootMembership(lane: ResourceLane, appIndex: AppMembershipIndex): RootGroupAssignment | null {
   const unqualified = laneResourceKey(lane.kind, lane.namespace, lane.name)
-  const direct = lane.group
+  const direct = lane.identityResolved
     ? appIndex.byResource.get(lane.id)
     : appIndex.byUnqualifiedResource?.get(unqualified)
       ?? (!appIndex.byUnqualifiedResource ? appIndex.byResource.get(lane.id) : undefined)
@@ -422,8 +427,7 @@ export function isProblematicEvent(event: TimelineEvent): boolean {
 function topologyNodeLaneId(node: Topology['nodes'][number]): string {
   const namespace = typeof node.data?.namespace === 'string' ? node.data.namespace : ''
   const apiVersion = typeof node.data?.apiVersion === 'string' ? node.data.apiVersion : ''
-  const resourceKind = typeof node.data?.resourceKind === 'string' ? node.data.resourceKind : node.kind
-  return laneId(resourceKind, apiVersionToGroup(apiVersion), namespace, node.name)
+  return laneId(topologyNodeResourceKind(node), apiVersionToGroup(apiVersion), namespace, node.name)
 }
 
 /**
@@ -558,6 +562,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
       id,
       kind: p.kind,
       group,
+      identityResolved: groupByKey.has(rk) && !ambiguousResourceKeys.has(rk),
       namespace: p.namespace,
       name: p.name,
       events: seedEvent ? [seedEvent] : [],
@@ -575,6 +580,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
       id,
       kind: parsed.kind,
       group: parsed.group,
+      identityResolved: true,
       namespace: parsed.namespace,
       name: parsed.name,
       events: [],
@@ -623,6 +629,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
         id,
         kind: event.kind,
         group,
+        identityResolved: hasAPIVersion || (groupByKey.has(rk) && !ambiguousResourceKeys.has(rk)),
         namespace: event.namespace,
         name: event.name,
         events: [event],
@@ -633,6 +640,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
       registerLaneKey(rk, id)
     } else {
       if (!existing.group && group) existing.group = group
+      if (hasAPIVersion || (groupByKey.has(rk) && !ambiguousResourceKeys.has(rk))) existing.identityResolved = true
       existing.events.push(event)
     }
   }
@@ -659,7 +667,9 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
   for (const [id, lane] of laneMap) {
     const eventWithOwner = lane.events.find(e => e.owner)
     if (eventWithOwner?.owner) {
-      const ownerId = ensureRefLane(laneResourceKey(eventWithOwner.owner.kind, lane.namespace, eventWithOwner.owner.name))
+      const ownerKey = laneResourceKey(eventWithOwner.owner.kind, lane.namespace, eventWithOwner.owner.name)
+      if (ambiguousResourceKeys.has(ownerKey)) continue
+      const ownerId = ensureRefLane(ownerKey)
       laneParent.set(id, ownerId)
     }
   }
@@ -670,9 +680,6 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
       const sourceId = topologyLaneIdByNodeId.get(edge.source)
       const targetId = topologyLaneIdByNodeId.get(edge.target)
       if (!sourceId || !targetId) continue
-
-      // manages: Deployment→RS→Pod (already covered by owner refs, skip)
-      if (edge.type === 'manages') continue
 
       // At least one side must have events
       const sourceExists = laneMap.has(sourceId)
@@ -702,6 +709,15 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
         if (sameAppMembers(childId, parentId)) return
         if (laneParent.has(childId)) return
         laneParent.set(childId, ensureTopologyLane(parentId))
+      }
+
+      // Exact topology ownership supersedes the persisted group-less owner ref.
+      // This matters when two controller API groups share kind/namespace/name.
+      if (edge.type === 'manages') {
+        if (targetExists && !sameAppMembers(targetId, sourceId)) {
+          laneParent.set(targetId, ensureTopologyLane(sourceId))
+        }
+        continue
       }
 
       // exposes: Service→Deployment (Service is parent of Deployment)
@@ -895,8 +911,9 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
 
   // If rootResource is specified, filter to only include lanes related to that resource
   if (rootResource) {
-    const rootLaneId = rootResource.group
-      ? laneId(rootResource.kind, rootResource.group, rootResource.namespace, rootResource.name)
+    const rootGroup = canonicalResourceGroup(rootResource.kind, rootResource.group)
+    const rootLaneId = rootGroup !== undefined
+      ? laneId(rootResource.kind, rootGroup, rootResource.namespace, rootResource.name)
       : resolveId(laneResourceKey(rootResource.kind, rootResource.namespace, rootResource.name))
     const rootLane = topLevelLanes.find(l => l.id === rootLaneId)
 
@@ -941,6 +958,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
       id: rootLaneId,
       kind: rootResource.kind,
       group: parseLaneId(rootLaneId)?.group || '',
+      identityResolved: rootGroup !== undefined,
       namespace: rootResource.namespace,
       name: rootResource.name,
       events: [],
@@ -1110,9 +1128,12 @@ export function getAllEventsFromHierarchy(lanes: ResourceLane[]): TimelineEvent[
  */
 export interface PinnedResourceRef {
   type?: 'resource'
-  /** "Kind/namespace/name" — the same id form buildResourceHierarchy emits. */
+  /** Canonical lane id emitted by buildResourceHierarchy. */
   id: string
   kind: string
+  /** Present on newly written pins so a built-in lane remains distinguishable
+   *  from a same-kind CRD. Older localStorage records legitimately omit it. */
+  group?: string
   namespace: string
   name: string
 }
@@ -1143,7 +1164,75 @@ export function isPinnedLaneRef(value: unknown): value is PinnedLaneRef {
   if (v.type === 'appGroup') {
     return typeof v.appKey === 'string' && typeof v.appName === 'string'
   }
-  return typeof v.kind === 'string' && typeof v.namespace === 'string' && typeof v.name === 'string'
+  return typeof v.kind === 'string'
+    && (v.group === undefined || typeof v.group === 'string')
+    && typeof v.namespace === 'string'
+    && typeof v.name === 'string'
+}
+
+interface LaneIdentityIndex {
+  byId: Map<string, ResourceLane>
+  byUnqualified: Map<string, ResourceLane[]>
+}
+
+function indexLanesByIdentity(allLanes: ResourceLane[]): LaneIdentityIndex {
+  const byId = new Map<string, ResourceLane>()
+  const byUnqualified = new Map<string, ResourceLane[]>()
+  const indexLane = (lane: ResourceLane): void => {
+    if (!byId.has(lane.id)) byId.set(lane.id, lane)
+    const parsed = parseLaneId(lane.id)
+    if (parsed && !lane.isAppGroup) {
+      const key = laneResourceKey(parsed.kind, parsed.namespace, parsed.name)
+      const candidates = byUnqualified.get(key) ?? []
+      if (!candidates.some((candidate) => candidate.id === lane.id)) candidates.push(lane)
+      byUnqualified.set(key, candidates)
+    }
+    for (const child of lane.children ?? []) indexLane(child)
+  }
+  for (const lane of allLanes) indexLane(lane)
+  return { byId, byUnqualified }
+}
+
+function resolvePinnedResourceLane(ref: PinnedResourceRef, index: LaneIdentityIndex): ResourceLane | undefined {
+  const key = laneResourceKey(ref.kind, ref.namespace, ref.name)
+  const candidates = index.byUnqualified.get(key) ?? []
+  if (ref.group !== undefined) {
+    const canonical = laneId(ref.kind, ref.group, ref.namespace, ref.name)
+    const exact = index.byId.get(canonical)
+    const refGroup = canonicalResourceGroup(ref.kind, ref.group)
+    if (exact && canonicalResourceGroup(exact.kind, exact.group) === refGroup) return exact
+    const matching = candidates.filter((candidate) => canonicalResourceGroup(candidate.kind, candidate.group) === refGroup)
+    return matching.length === 1 ? matching[0] : undefined
+  }
+  return candidates.length === 1 ? candidates[0] : undefined
+}
+
+/** Resolve persisted resource pins onto current canonical lane IDs. Older pins
+ *  omitted API group, so they migrate only when kind/namespace/name identifies
+ *  exactly one live lane; collisions intentionally stay unresolved. */
+export function resolvePinnedLaneIds(allLanes: ResourceLane[], pinnedRefs: PinnedLaneRef[]): Set<string> {
+  const index = indexLanesByIdentity(allLanes)
+  const resolved = new Set<string>()
+  for (const ref of pinnedRefs) {
+    if (ref.type === 'appGroup') {
+      resolved.add(ref.id)
+      continue
+    }
+    const candidates = index.byUnqualified.get(laneResourceKey(ref.kind, ref.namespace, ref.name)) ?? []
+    const lane = resolvePinnedResourceLane(ref, index)
+    if (lane) resolved.add(lane.id)
+    else if (ref.group !== undefined || candidates.length === 0) resolved.add(ref.id)
+  }
+  return resolved
+}
+
+export function pinnedLaneRefMatches(stored: PinnedLaneRef, incoming: PinnedLaneRef): boolean {
+  if (stored.type === 'appGroup' || incoming.type === 'appGroup') {
+    return stored.type === 'appGroup' && incoming.type === 'appGroup' && stored.appKey === incoming.appKey
+  }
+  if (stored.kind !== incoming.kind || stored.namespace !== incoming.namespace || stored.name !== incoming.name) return false
+  if (stored.group === undefined) return true
+  return canonicalResourceGroup(stored.kind, stored.group) === canonicalResourceGroup(incoming.kind, incoming.group)
 }
 
 /** Ensure a lane carries a merged allEventsSorted (own + descendants). Roots and
@@ -1159,9 +1248,8 @@ function synthesizeEmptyPinnedLane(ref: PinnedResourceRef): ResourceLane {
   return {
     id: ref.id,
     kind: ref.kind,
-    // Recover the group from the id so an absent CRD pin still carries it (the
-    // pin record itself stores none). Bare/built-in ids yield ''.
-    group: parseLaneId(ref.id)?.group || '',
+    group: ref.group ?? parseLaneId(ref.id)?.group ?? '',
+    identityResolved: ref.group !== undefined,
     namespace: ref.namespace,
     name: ref.name,
     events: [],
@@ -1245,12 +1333,11 @@ export function removePinnedLanes(
  */
 export function extractPinnedLanes(allLanes: ResourceLane[], pinnedRefs: PinnedLaneRef[]): ResourceLane[] {
   if (pinnedRefs.length === 0) return []
-  const byId = new Map<string, ResourceLane>()
+  const identityIndex = indexLanesByIdentity(allLanes)
   // App-group headers re-resolve by appKey (live members), independent of the
   // deterministic "app:<appKey>" id, so a group survives grouping-mode churn.
   const groupByAppKey = new Map<string, ResourceLane>()
   const indexLane = (lane: ResourceLane): void => {
-    if (!byId.has(lane.id)) byId.set(lane.id, lane)
     if (lane.isAppGroup && lane.appKey && !groupByAppKey.has(lane.appKey)) {
       groupByAppKey.set(lane.appKey, lane)
     }
@@ -1285,9 +1372,15 @@ export function extractPinnedLanes(allLanes: ResourceLane[], pinnedRefs: PinnedL
       out.push(found ? withAllEventsSorted(found) : synthesizeQuietAppGroupLane(ref))
       continue
     }
-    if (coveredByPinnedGroup.has(ref.id)) continue // folded into a pinned app group
-    const found = byId.get(ref.id)
-    out.push(found ? withAllEventsSorted(found) : synthesizeEmptyPinnedLane(ref))
+    const found = resolvePinnedResourceLane(ref, identityIndex)
+    if (found && coveredByPinnedGroup.has(found.id)) continue // folded into a pinned app group
+    if (found) {
+      out.push(withAllEventsSorted(found))
+      continue
+    }
+    const candidates = identityIndex.byUnqualified.get(laneResourceKey(ref.kind, ref.namespace, ref.name)) ?? []
+    if (ref.group === undefined && candidates.length > 1) continue
+    out.push(synthesizeEmptyPinnedLane(ref))
   }
   return out
 }

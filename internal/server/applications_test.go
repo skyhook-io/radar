@@ -159,19 +159,39 @@ func clusterWorkflowRun(ns, name, template, phase, startedAt string) *unstructur
 
 func TestEventsForWorkload_MatchesKindAndName(t *testing.T) {
 	byObject := map[string][]*corev1.Event{
-		"Service/api": {
+		resourceid.ResourceKey("", "Service", "", "api"): {
 			{InvolvedObject: corev1.ObjectReference{Kind: "Service", Name: "api"}, Reason: "NoEndpoints", Type: "Warning", Message: "service has no endpoints"},
 		},
-		"Deployment/api": {
+		resourceid.ResourceKey("apps", "Deployment", "", "api"): {
 			{InvolvedObject: corev1.ObjectReference{Kind: "Deployment", Name: "api"}, Reason: "ProgressDeadlineExceeded", Type: "Warning", Message: "deployment stalled"},
 		},
 	}
-	got := eventsForWorkload(byObject, "Deployment", "api", nil)
+	got := eventsForWorkload(byObject, "apps", "Deployment", "api", nil)
 	if len(got) != 1 {
 		t.Fatalf("eventsForWorkload returned %d events: %+v", len(got), got)
 	}
 	if got[0].Object != "Deployment/api" || got[0].Reason != "ProgressDeadlineExceeded" {
 		t.Fatalf("eventsForWorkload picked wrong event: %+v", got[0])
+	}
+}
+
+func TestEventsForWorkloadPreservesAPIGroup(t *testing.T) {
+	byObject := map[string][]*corev1.Event{
+		resourceid.ResourceKey("batch", "Job", "", "train"): {
+			{InvolvedObject: corev1.ObjectReference{APIVersion: "batch/v1", Kind: "Job", Name: "train"}, Reason: "BackoffLimitExceeded", Type: "Warning"},
+		},
+		resourceid.ResourceKey("batch.volcano.sh", "Job", "", "train"): {
+			{InvolvedObject: corev1.ObjectReference{APIVersion: "batch.volcano.sh/v1alpha1", Kind: "Job", Name: "train"}, Reason: "VolcanoFailed", Type: "Warning"},
+		},
+	}
+
+	core := eventsForWorkload(byObject, "batch", "Job", "train", nil)
+	volcano := eventsForWorkload(byObject, "batch.volcano.sh", "Job", "train", nil)
+	if len(core) != 1 || core[0].Reason != "BackoffLimitExceeded" {
+		t.Fatalf("core Job events = %+v", core)
+	}
+	if len(volcano) != 1 || volcano[0].Reason != "VolcanoFailed" {
+		t.Fatalf("Volcano Job events = %+v", volcano)
 	}
 }
 
@@ -612,18 +632,37 @@ func TestManagedSourceRefs_CrossNamespaceArgoApplication(t *testing.T) {
 			"destination": map[string]any{"namespace": "team-a"},
 		},
 		"status": map[string]any{"resources": []any{
-			map[string]any{"kind": "Deployment", "name": "api"},
-			map[string]any{"kind": "Deployment", "namespace": "team-a", "name": "worker"},
+			map[string]any{"group": "apps", "kind": "Deployment", "name": "api"},
+			map[string]any{"group": "apps", "kind": "Deployment", "namespace": "team-a", "name": "worker"},
 		}},
 	}}
 	sources := map[string][]appSourceRef{}
 	addArgoManagedSourceRefs(sources, []*unstructured.Unstructured{app})
 	ref := commonManagedSourceRef([]appWorkload{
-		{Kind: "Deployment", Namespace: "team-a", Name: "api"},
-		{Kind: "Deployment", Namespace: "team-a", Name: "worker"},
+		{Group: "apps", Kind: "Deployment", Namespace: "team-a", Name: "api"},
+		{Group: "apps", Kind: "Deployment", Namespace: "team-a", Name: "worker"},
 	}, sources)
 	if ref == nil || ref.Tool != "argocd" || ref.Namespace != "argocd" || ref.Name != "billing" {
 		t.Fatalf("cross-namespace Argo source ref = %+v, want argocd/Application/billing", ref)
+	}
+}
+
+func TestManagedSourceRefs_ArgoStatusKeepsWorkloadGroup(t *testing.T) {
+	app := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"namespace": "argocd", "name": "training"},
+		"status": map[string]any{"resources": []any{
+			map[string]any{"group": "batch.volcano.sh", "kind": "Job", "namespace": "ml", "name": "train"},
+		}},
+	}}
+	sources := map[string][]appSourceRef{}
+	addArgoManagedSourceRefs(sources, []*unstructured.Unstructured{app})
+
+	if ref := commonManagedSourceRef([]appWorkload{{Group: "batch", Kind: "Job", Namespace: "ml", Name: "train"}}, sources); ref != nil {
+		t.Fatalf("core Job inherited the Volcano Job source: %+v", ref)
+	}
+	ref := commonManagedSourceRef([]appWorkload{{Group: "batch.volcano.sh", Kind: "Job", Namespace: "ml", Name: "train"}}, sources)
+	if ref == nil || ref.Name != "training" {
+		t.Fatalf("Volcano Job source ref = %+v, want argocd/training", ref)
 	}
 }
 
