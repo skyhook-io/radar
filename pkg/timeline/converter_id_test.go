@@ -67,6 +67,39 @@ func TestHistoricalEventID_ClusterQualified(t *testing.T) {
 	}
 }
 
+func TestHistoricalEventID_BuiltinKindCollisionUsesAPIGroup(t *testing.T) {
+	ts := time.Unix(1700000000, 0)
+	core := NewHistoricalEvent("cluster-a", "Job", "batch/v1", "team-a", "train", ts, "created", "", HealthUnknown, nil, nil)
+	volcano := NewHistoricalEvent("cluster-a", "Job", "batch.volcano.sh/v1alpha1", "team-a", "train", ts, "created", "", HealthUnknown, nil, nil)
+	if core.ID == volcano.ID {
+		t.Fatalf("historical ids collide across core and Volcano Jobs: %q", core.ID)
+	}
+}
+
+func TestHistoricalEventID_BuiltinCompatibilityAndCustomVersionTolerance(t *testing.T) {
+	ts := time.Unix(1700000000, 0)
+	legacyCore := NewHistoricalEvent("cluster-a", "Job", "", "team-a", "train", ts, "created", "", HealthUnknown, nil, nil)
+	if legacyCore.ID != "hist-4c4cfecb256e14b8" {
+		t.Fatalf("legacy built-in historical id changed: %q", legacyCore.ID)
+	}
+	canonicalCore := NewHistoricalEvent("cluster-a", "Job", "batch/v1", "team-a", "train", ts, "created", "", HealthUnknown, nil, nil)
+	if legacyCore.ID != canonicalCore.ID {
+		t.Fatalf("canonical built-in apiVersion changed the legacy historical id: %q vs %q", legacyCore.ID, canonicalCore.ID)
+	}
+
+	v1alpha1 := NewHistoricalEvent("cluster-a", "Job", "batch.volcano.sh/v1alpha1", "team-a", "train", ts, "created", "", HealthUnknown, nil, nil)
+	v1beta1 := NewHistoricalEvent("cluster-a", "Job", "batch.volcano.sh/v1beta1", "team-a", "train", ts, "created", "", HealthUnknown, nil, nil)
+	if v1alpha1.ID != v1beta1.ID {
+		t.Fatalf("served versions in one API group must share a historical id: %q vs %q", v1alpha1.ID, v1beta1.ID)
+	}
+
+	legacyGeneric := NewHistoricalEvent("cluster-a", "NetworkPolicy", "", "team-a", "guard", ts, "created", "", HealthUnknown, nil, nil)
+	calico := NewHistoricalEvent("cluster-a", "NetworkPolicy", "projectcalico.org/v3", "team-a", "guard", ts, "created", "", HealthUnknown, nil, nil)
+	if legacyGeneric.ID != calico.ID {
+		t.Fatalf("existing generic CRD history changed id during upgrade: %q vs %q", legacyGeneric.ID, calico.ID)
+	}
+}
+
 // The GitOps identity labels must survive the grouping filter — the server's
 // argo:/helm: app matchKeys join deleted members' events by exactly these.
 func TestExtractLabels_KeepsGitOpsIdentityLabels(t *testing.T) {
