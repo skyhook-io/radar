@@ -130,7 +130,8 @@ func ScopeForKind(kind string) Scope {
 //
 // Returns the immediate controller-parent of the given ref, or (zero, false)
 // when there is no further controller. Object-backed implementations preserve
-// the exact owner-reference name; only explicitly heuristic implementations may
+// the exact owner-reference name and resolve the owner's namespace from
+// authoritative resource scope; only explicitly heuristic implementations may
 // derive a name when the owner object is unavailable.
 type OwnerResolver interface {
 	// ParentOf returns the next CONTROLLER up the chain, or (zero, false) at root.
