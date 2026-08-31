@@ -42,6 +42,7 @@ type ResourceContext struct {
 	ScaledBy        []ScalerRef        `json:"scaledBy,omitempty"`
 	StatusSummary   *StatusSummary     `json:"statusSummary,omitempty"`
 	Scheduling      *SchedulingSummary `json:"scheduling,omitempty"`
+	Execution       *ExecutionSummary  `json:"execution,omitempty"`
 	PodSummary      *PodSummary        `json:"podSummary,omitempty"`
 	WorkloadSummary *WorkloadSummary   `json:"workloadSummary,omitempty"`
 	ServiceSummary  *ServiceSummary    `json:"serviceSummary,omitempty"`
@@ -409,6 +410,66 @@ type KueueRequeueState struct {
 type KueueConcurrentAdmission struct {
 	ParentName string      `json:"parentName"`
 	ParentRef  *ContextRef `json:"parentRef,omitempty"`
+}
+
+// ExecutionSummary is a compact, controller-neutral projection of one
+// execution controller's declared and observed state. Controller-native role,
+// policy, and child-resource detail stays on the returned Kubernetes object.
+type ExecutionSummary struct {
+	Controller string                  `json:"controller"`
+	Stage      ExecutionStage          `json:"stage"`
+	State      *ExecutionState         `json:"state,omitempty"`
+	Counts     *ExecutionCounts        `json:"counts,omitempty"`
+	Restarts   *ExecutionRestartCounts `json:"restarts,omitempty"`
+}
+
+type ExecutionStage string
+
+const (
+	ExecutionSubmitted  ExecutionStage = "submitted"
+	ExecutionPending    ExecutionStage = "pending"
+	ExecutionStarting   ExecutionStage = "starting"
+	ExecutionRunning    ExecutionStage = "running"
+	ExecutionRestarting ExecutionStage = "restarting"
+	ExecutionSuspended  ExecutionStage = "suspended"
+	ExecutionCompleted  ExecutionStage = "completed"
+	ExecutionFailed     ExecutionStage = "failed"
+)
+
+// ExecutionState preserves the controller condition selected as the evidence
+// for Stage. Messages and transition times are diagnostic-tier fields.
+type ExecutionState struct {
+	Condition          string `json:"condition"`
+	Status             string `json:"status"`
+	Reason             string `json:"reason,omitempty"`
+	Message            string `json:"message,omitempty"`
+	LastTransitionTime string `json:"lastTransitionTime,omitempty"`
+}
+
+// ExecutionCounts keeps desired and observed facts separate. Observed fields
+// are pointers so an unreported status is distinguishable from an observed
+// zero; role counts expose whether a controller snapshot is partial.
+type ExecutionCounts struct {
+	DeclaredRoles int64  `json:"declaredRoles"`
+	DeclaredJobs  int64  `json:"declaredJobs"`
+	ObservedRoles *int64 `json:"observedRoles,omitempty"`
+	ReadyJobs     *int64 `json:"readyJobs,omitempty"`
+	ActiveJobs    *int64 `json:"activeJobs,omitempty"`
+	SucceededJobs *int64 `json:"succeededJobs,omitempty"`
+	FailedJobs    *int64 `json:"failedJobs,omitempty"`
+	SuspendedJobs *int64 `json:"suspendedJobs,omitempty"`
+}
+
+// ExecutionRestartCounts keeps independent global and per-member counters
+// separate. IndividualRoles fields disclose how many observed roles
+// contributed counters, so a partial aggregate cannot read as a complete total.
+type ExecutionRestartCounts struct {
+	Global                    *int64 `json:"global,omitempty"`
+	GlobalCountTowardsMax     *int64 `json:"globalCountTowardsMax,omitempty"`
+	Individual                *int64 `json:"individual,omitempty"`
+	IndividualRoles           *int64 `json:"individualRoles,omitempty"`
+	IndividualCountTowardsMax *int64 `json:"individualCountTowardsMax,omitempty"`
+	IndividualCountedRoles    *int64 `json:"individualCountedRoles,omitempty"`
 }
 
 type PodSummary struct {

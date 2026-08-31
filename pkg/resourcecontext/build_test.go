@@ -1870,3 +1870,23 @@ func TestBuild_Deployment_ScaledByKEDAManagedHPA_NamesTheScaledObject(t *testing
 		t.Errorf("the HPA's own diagnosis still belongs on the ref: %+v", rc.ScaledBy[0])
 	}
 }
+
+func TestBuild_PassesThroughExecutionSummary(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "jobset.x-k8s.io/v1alpha2",
+		"kind":       "JobSet",
+		"metadata": map[string]any{
+			"name":      "train",
+			"namespace": "ml",
+		},
+	}}
+	execution := &ExecutionSummary{
+		Controller: "jobset",
+		Stage:      ExecutionPending,
+		Counts:     &ExecutionCounts{DeclaredRoles: 2, DeclaredJobs: 5},
+	}
+	rc := Build(context.Background(), obj, Options{Tier: TierBasic, Execution: execution})
+	if rc.Execution != execution {
+		t.Fatalf("execution = %+v, want pass-through %+v", rc.Execution, execution)
+	}
+}
