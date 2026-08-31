@@ -1517,7 +1517,7 @@ export interface VersionInfo {
   error?: string;
 }
 
-const BROWSER_UPDATE_CHECK_STORAGE_KEY_PREFIX = 'radar-browser-update-check'
+const UPDATE_CHECK_STORAGE_KEY_PREFIX = 'radar-update-check'
 
 export function utcDay(now: Date): string {
   return now.toISOString().slice(0, 10)
@@ -1528,7 +1528,7 @@ export function markDailyUpdateCheckAttempt(
   apiBase: string,
   now: Date,
 ): boolean {
-  const storageKey = `${BROWSER_UPDATE_CHECK_STORAGE_KEY_PREFIX}:${apiBase}`
+  const storageKey = `${UPDATE_CHECK_STORAGE_KEY_PREFIX}:${apiBase}`
   const day = utcDay(now)
   try {
     if (storage.getItem(storageKey) === day) return false
@@ -1540,7 +1540,7 @@ export function markDailyUpdateCheckAttempt(
   }
 }
 
-function markBrowserUpdateCheckAttempt(): boolean {
+function markUpdateCheckAttempt(): boolean {
   try {
     return markDailyUpdateCheckAttempt(localStorage, getApiBase(), new Date())
   } catch {
@@ -1548,10 +1548,10 @@ function markBrowserUpdateCheckAttempt(): boolean {
   }
 }
 
-export async function reportBrowserUpdateCheck(
+export async function triggerDailyUpdateCheck(
   deploymentMode: DeploymentMode | undefined,
 ): Promise<void> {
-  if (deploymentMode !== 'in-cluster' || !markBrowserUpdateCheckAttempt()) return
+  if (deploymentMode !== 'in-cluster' || !markUpdateCheckAttempt()) return
   await fetch(apiUrl('/version-check/browser'), {
     method: 'POST',
     headers: getAuthHeaders(),
@@ -1575,7 +1575,7 @@ export function useVersionCheck() {
   });
 
   useEffect(() => {
-    if (query.isSuccess) void reportBrowserUpdateCheck(deploymentMode).catch(() => {})
+    if (query.isSuccess) void triggerDailyUpdateCheck(deploymentMode).catch(() => {})
   }, [apiBase, deploymentMode, query.isSuccess])
 
   return query;

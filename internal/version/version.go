@@ -108,7 +108,7 @@ func CheckForUpdateRelease(_ context.Context) *UpdateInfo {
 	return checkForUpdateCached(checkOptions{source: "release-only"})
 }
 
-func ReportBrowserUpdateCheck(ctx context.Context) error {
+func RelayUpdateCheck(ctx context.Context) error {
 	if buildChannel(Current) == buildChannelDevelopment {
 		return nil
 	}
@@ -123,7 +123,7 @@ func ReportBrowserUpdateCheck(ctx context.Context) error {
 		"channel": {string(buildChannel(Current))},
 		"source":  {"browser-proxy"},
 	}
-	if installedAt := k8s.InstalledAt(ctx); installedAt != 0 {
+	if installedAt := installTimestamp(ctx, "in-cluster"); installedAt != 0 {
 		params.Set("t", strconv.FormatInt(installedAt, 10))
 	}
 
@@ -131,16 +131,16 @@ func ReportBrowserUpdateCheck(ctx context.Context) error {
 	defer cancel()
 	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, fmt.Sprintf("%s?%s", releasesURL, params.Encode()), nil)
 	if err != nil {
-		return fmt.Errorf("create browser update check: %w", err)
+		return fmt.Errorf("create relayed update check: %w", err)
 	}
 	req.Header.Set("User-Agent", fmt.Sprintf("radar/%s", Current))
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
-		return fmt.Errorf("send browser update check: %w", err)
+		return fmt.Errorf("send relayed update check: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("browser update check returned %d", resp.StatusCode)
+		return fmt.Errorf("relayed update check returned %d", resp.StatusCode)
 	}
 	return nil
 }

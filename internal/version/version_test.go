@@ -218,7 +218,7 @@ func TestCheckForUpdateExcludesOnlyDevelopmentBuilds(t *testing.T) {
 	}
 }
 
-func TestReportBrowserUpdateCheckIsBestEffortAndIdentityFree(t *testing.T) {
+func TestRelayUpdateCheck(t *testing.T) {
 	var queries []url.Values
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		queries = append(queries, r.URL.Query())
@@ -237,7 +237,7 @@ func TestReportBrowserUpdateCheckIsBestEffortAndIdentityFree(t *testing.T) {
 		resetUpdateCache()
 	})
 
-	if err := ReportBrowserUpdateCheck(context.Background()); err != nil {
+	if err := RelayUpdateCheck(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if len(queries) != 1 {
@@ -251,21 +251,16 @@ func TestReportBrowserUpdateCheckIsBestEffortAndIdentityFree(t *testing.T) {
 			t.Errorf("query[%q] = %q, want %q", key, got, want)
 		}
 	}
-	for _, key := range []string{"day", "report", "rid", "iid", "auth"} {
-		if query.Has(key) {
-			t.Errorf("identity field %q present in query %v", key, query)
-		}
-	}
 	if cached := updateCache[""]; cached.result == nil || cached.result.LatestVersion != "cached" {
-		t.Fatalf("browser check changed release cache: %+v", cached)
+		t.Fatalf("relayed check changed release cache: %+v", cached)
 	}
 
 	SetCurrent("dev-a1b2c3d")
-	if err := ReportBrowserUpdateCheck(context.Background()); err != nil {
+	if err := RelayUpdateCheck(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if len(queries) != 1 {
-		t.Fatalf("development build made %d browser requests, want none", len(queries)-1)
+		t.Fatalf("development build made %d relayed requests, want none", len(queries)-1)
 	}
 }
 

@@ -9,7 +9,7 @@ import (
 	"github.com/skyhook-io/radar/internal/version"
 )
 
-func TestVersionCheckBrowserAcceptsOneBestEffortAttempt(t *testing.T) {
+func TestVersionCheckBrowserAcceptsInClusterRequest(t *testing.T) {
 	previousVersion := version.Current
 	version.SetCurrent("dev")
 	k8s.ForceInCluster = true

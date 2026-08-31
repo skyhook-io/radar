@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { markDailyUpdateCheckAttempt, reportBrowserUpdateCheck, utcDay } from './client'
+import { markDailyUpdateCheckAttempt, triggerDailyUpdateCheck, utcDay } from './client'
 
 function memoryStorage() {
   const values = new Map<string, string>()
@@ -9,7 +9,7 @@ function memoryStorage() {
   }
 }
 
-describe('daily browser update checks', () => {
+describe('daily update checks', () => {
   it('uses UTC days', () => {
     expect(utcDay(new Date('2026-08-29T23:59:59-07:00'))).toBe('2026-08-30')
   })
@@ -31,7 +31,7 @@ describe('daily browser update checks', () => {
   })
 })
 
-describe('reportBrowserUpdateCheck', () => {
+describe('triggerDailyUpdateCheck', () => {
   beforeEach(() => {
     const values = new Map<string, string>()
     vi.stubGlobal('localStorage', {
@@ -47,7 +47,7 @@ describe('reportBrowserUpdateCheck', () => {
   it.each(['local', 'cloud', undefined] as const)('does not report in %s mode', async (mode) => {
     const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(null, { status: 204 }))
     vi.stubGlobal('fetch', fetch)
-    await reportBrowserUpdateCheck(mode)
+    await triggerDailyUpdateCheck(mode)
     expect(fetch).not.toHaveBeenCalled()
   })
 
@@ -55,8 +55,8 @@ describe('reportBrowserUpdateCheck', () => {
     const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(null, { status: 204 }))
     vi.stubGlobal('fetch', fetch)
 
-    await reportBrowserUpdateCheck('in-cluster')
-    await reportBrowserUpdateCheck('in-cluster')
+    await triggerDailyUpdateCheck('in-cluster')
+    await triggerDailyUpdateCheck('in-cluster')
 
     expect(fetch).toHaveBeenCalledOnce()
     expect(fetch).toHaveBeenCalledWith('/api/version-check/browser', expect.objectContaining({
@@ -71,8 +71,8 @@ describe('reportBrowserUpdateCheck', () => {
     const fetch = vi.fn<typeof globalThis.fetch>(async () => { throw new Error('offline') })
     vi.stubGlobal('fetch', fetch)
 
-    await expect(reportBrowserUpdateCheck('in-cluster')).rejects.toThrow('offline')
-    await reportBrowserUpdateCheck('in-cluster')
+    await expect(triggerDailyUpdateCheck('in-cluster')).rejects.toThrow('offline')
+    await triggerDailyUpdateCheck('in-cluster')
     expect(fetch).toHaveBeenCalledOnce()
   })
 })
