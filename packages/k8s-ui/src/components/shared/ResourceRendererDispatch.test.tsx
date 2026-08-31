@@ -824,17 +824,64 @@ describe('GPU ecosystem kind collisions', () => {
 })
 
 describe('GPU ecosystem status edge cases', () => {
+  it('dispatches the current JobSet API to typed detail', () => {
+    const html = renderKind('jobsets', {
+      apiVersion: 'jobset.x-k8s.io/v1alpha2',
+      kind: 'JobSet',
+      metadata: { name: 'training', namespace: 'ml' },
+      spec: { replicatedJobs: [{ name: 'workers', replicas: 2, template: { spec: {} } }] },
+      status: { replicatedJobsStatus: [{ name: 'workers', active: 1, ready: 1, succeeded: 0, failed: 0, suspended: 0 }] },
+    }, 'ml')
+
+    expect(html).toContain('JobSet status')
+    expect(html).toContain('Replicated jobs (1)')
+    expect(html).not.toContain('Specification')
+  })
+
+  it.each(['jobset.x-k8s.io/v1alpha1', 'batch.example.io/v1'])(
+    'keeps unsupported or foreign JobSet collisions generic for %s',
+    (apiVersion) => {
+      const data = {
+        apiVersion,
+        kind: 'JobSet',
+        metadata: { name: 'foreign', namespace: 'ml' },
+        spec: { collisionProbe: COLLISION_PROBE },
+      }
+      const html = renderKind('jobsets', data, 'ml')
+
+      expect(html).toContain(COLLISION_PROBE)
+      expect(html).not.toContain('JobSet status')
+      expect(getResourceStatus('jobsets', data)).toBeNull()
+    },
+  )
+
   it('JobSet with minimal status is Pending, not Running', () => {
     const fresh = getResourceStatus('jobsets', {
       apiVersion: 'jobset.x-k8s.io/v1alpha2',
+      kind: 'JobSet',
       status: { replicatedJobsStatus: [{ name: 'w', active: 0, ready: 0 }] },
     })
     const live = getResourceStatus('jobsets', {
       apiVersion: 'jobset.x-k8s.io/v1alpha2',
+      kind: 'JobSet',
       status: { replicatedJobsStatus: [{ name: 'w', active: 1, ready: 1 }] },
     })
     expect(fresh?.text).toBe('Pending')
     expect(live?.text).toBe('Running')
+  })
+
+  it('keeps a wrong-kind object generic even at the supported JobSet API version', () => {
+    const data = {
+      apiVersion: 'jobset.x-k8s.io/v1alpha2',
+      kind: 'OtherSet',
+      metadata: { name: 'collision', namespace: 'ml' },
+      spec: { collisionProbe: COLLISION_PROBE },
+    }
+    const html = renderKind('jobsets', data, 'ml')
+
+    expect(html).toContain(COLLISION_PROBE)
+    expect(html).not.toContain('JobSet status')
+    expect(getResourceStatus('jobsets', data)).toBeNull()
   })
 
   it('InferencePool with only an empty-parentRef default entry reads Not referenced', () => {

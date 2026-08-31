@@ -198,6 +198,16 @@ describe('GPU ecosystem API contracts', () => {
     }).text).toBe('Starting')
   })
 
+  it('reports JobSet restart recovery and terminal-state fallbacks', () => {
+    expect(
+      getJobSetStatus({
+        status: { conditions: [{ type: 'RestartingJobSet', status: 'True' }], replicatedJobsStatus: [] },
+      }).text,
+    ).toBe('Restarting')
+    expect(getJobSetStatus({ status: { terminalState: 'Completed' } }).text).toBe('Completed')
+    expect(getJobSetStatus({ status: { terminalState: 'Failed' } }).text).toBe('Failed')
+  })
+
   it('surfaces an unavailable LeaderWorkerSet before progress', () => {
     expect(getLeaderWorkerSetStatus({
       status: { conditions: [{ type: 'Available', status: 'False', reason: 'PodsNotReady' }] },

@@ -21,6 +21,7 @@ import {
   getJobSetStatus,
   getJobSetSucceededJobs,
 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-jobset-lws'
+import { JobSetRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/JobSetRenderer'
 import { useResource, useWorkloadPods, useWorkloadRuns, type WorkloadRun } from '../../api/client'
 import type { WorkloadPodInfo } from '../../types'
 import { getScaledJobStatus } from '../resources/resource-utils-keda'
@@ -50,7 +51,7 @@ function configurationTitle(kind: string): string {
   if (kind === 'ScaledJob') return 'Trigger & job definition'
   if (isTemplateKind(kind)) return 'Current definition'
   if (kind === 'Job') return 'Job definition'
-  if (kind === 'JobSet') return 'JobSet definition'
+  if (kind === 'JobSet') return 'JobSet details'
   return 'Workflow definition'
 }
 
@@ -192,25 +193,24 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
     () => selectedResource && selectedRun?.kind === 'workflows' ? buildWorkflowExecutionModel(selectedResource) : null,
     [selectedResource, selectedRun?.kind],
   )
+  const runsErrorMessage = runsQuery.error instanceof Error
+    ? runsQuery.error.message
+    : memberCollection
+      ? 'Radar could not load this JobSet’s child Jobs.'
+      : 'Radar could not load retained runs.'
 
-  if (runsQuery.isLoading) {
+  if (runsQuery.isLoading && !memberCollection) {
     return <FetchResult loading className="h-full" />
   }
 
-  if (runsQuery.error) {
+  if (runsQuery.error && !memberCollection) {
     return (
       <div className="p-4">
         <EmptyState
           tone="neutral"
           variant="card"
-          headline={memberCollection ? 'Member Jobs unavailable' : 'Run history unavailable'}
-          body={
-            runsQuery.error instanceof Error
-              ? runsQuery.error.message
-              : memberCollection
-                ? 'Radar could not load this JobSet’s child Jobs.'
-                : 'Radar could not load retained runs.'
-          }
+          headline="Run history unavailable"
+          body={runsErrorMessage}
         />
       </div>
     )
@@ -227,9 +227,13 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
                   {memberCollection ? 'Member Jobs' : isTemplateKind(kind) ? 'Workflows using this definition' : 'Run history'}
                 </div>
                 <div className="mt-1 text-sm font-semibold text-theme-text-primary">
-                  {memberCollection
-                    ? pluralizeMemberJobs(runs.length, runsQuery.data?.total, runsQuery.data?.truncated)
-                    : pluralizeRuns(runs.length)}
+                  {memberCollection && runsQuery.isLoading
+                    ? 'Loading Jobs…'
+                    : memberCollection && runsQuery.error
+                      ? 'Unavailable'
+                      : memberCollection
+                        ? pluralizeMemberJobs(runs.length, runsQuery.data?.total, runsQuery.data?.truncated)
+                        : pluralizeRuns(runs.length)}
                 </div>
               </div>
             </div>
@@ -255,7 +259,13 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto p-2">
-            {runs.length === 0 ? (
+            {memberCollection && runsQuery.isLoading ? (
+              <FetchResult loading className="h-full" />
+            ) : memberCollection && runsQuery.error ? (
+              <div className="p-2">
+                <EmptyState tone="neutral" variant="card" headline="Member Jobs unavailable" body={runsErrorMessage} />
+              </div>
+            ) : runs.length === 0 ? (
               <div className="p-2">
                 <EmptyState
                   tone="neutral"
@@ -307,7 +317,11 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
           )}
           <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(320px,0.9fr)]">
             <section className="min-w-0 space-y-4">
-              {selectedRun ? (
+              {memberCollection && runsQuery.isLoading ? (
+                <FetchResult loading className="min-h-40 rounded-lg border border-theme-border bg-theme-surface" />
+              ) : memberCollection && runsQuery.error ? (
+                <EmptyState tone="neutral" variant="card" headline="Member Jobs unavailable" body={runsErrorMessage} />
+              ) : selectedRun ? (
                 <section className="rounded-lg border border-theme-border bg-theme-surface">
                   <div className="flex items-start justify-between gap-3 border-b border-theme-border px-4 py-3">
                     <div className="min-w-0">
@@ -366,6 +380,10 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
                 />
               )}
 
+              {memberCollection && selectedRun && (
+                <RunActivityPanel run={selectedRun} resource={selectedResource} workflowExecution={workflowExecution} />
+              )}
+
               {selectedRun?.kind === 'workflows' && (
                 <RunExecutionPanel run={selectedRun} workflowExecution={workflowExecution} loading={selectedResourceQuery.isLoading} onNavigateToResource={onNavigateToResource} />
               )}
@@ -377,16 +395,20 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
                   <h3 className="text-sm font-semibold text-theme-text-primary">{configurationTitle(kind)}</h3>
                 </div>
                 <div className="space-y-3 p-4">
-                  <SourceFacts
-                    source={source}
-                    namespace={selectedRun?.namespace || namespace}
-                    definitionLoading={Boolean(referencedDefinitionTarget) && referencedDefinitionQuery.isLoading}
-                    definitionError={referencedDefinitionTarget ? referencedDefinitionQuery.error : undefined}
-                  />
+                  {kind === 'JobSet' ? (
+                    <JobSetRenderer data={resource} />
+                  ) : (
+                    <SourceFacts
+                      source={source}
+                      namespace={selectedRun?.namespace || namespace}
+                      definitionLoading={Boolean(referencedDefinitionTarget) && referencedDefinitionQuery.isLoading}
+                      definitionError={referencedDefinitionTarget ? referencedDefinitionQuery.error : undefined}
+                    />
+                  )}
                 </div>
               </section>
 
-              {selectedRun && (
+              {selectedRun && !memberCollection && (
                 <RunActivityPanel run={selectedRun} resource={selectedResource} workflowExecution={workflowExecution} />
               )}
             </section>
