@@ -21,6 +21,7 @@ import {
   getJobSetStatus,
   getJobSetSucceededJobs,
 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-jobset-lws'
+import { JobSetRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/JobSetRenderer'
 import { useResource, useWorkloadPods, useWorkloadRuns, type WorkloadRun } from '../../api/client'
 import type { WorkloadPodInfo } from '../../types'
 import { getScaledJobStatus } from '../resources/resource-utils-keda'
@@ -50,7 +51,7 @@ function configurationTitle(kind: string): string {
   if (kind === 'ScaledJob') return 'Trigger & job definition'
   if (isTemplateKind(kind)) return 'Current definition'
   if (kind === 'Job') return 'Job definition'
-  if (kind === 'JobSet') return 'JobSet definition'
+  if (kind === 'JobSet') return 'JobSet details'
   return 'Workflow definition'
 }
 
@@ -377,12 +378,16 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
                   <h3 className="text-sm font-semibold text-theme-text-primary">{configurationTitle(kind)}</h3>
                 </div>
                 <div className="space-y-3 p-4">
-                  <SourceFacts
-                    source={source}
-                    namespace={selectedRun?.namespace || namespace}
-                    definitionLoading={Boolean(referencedDefinitionTarget) && referencedDefinitionQuery.isLoading}
-                    definitionError={referencedDefinitionTarget ? referencedDefinitionQuery.error : undefined}
-                  />
+                  {kind === 'JobSet' ? (
+                    <JobSetRenderer data={resource} />
+                  ) : (
+                    <SourceFacts
+                      source={source}
+                      namespace={selectedRun?.namespace || namespace}
+                      definitionLoading={Boolean(referencedDefinitionTarget) && referencedDefinitionQuery.isLoading}
+                      definitionError={referencedDefinitionTarget ? referencedDefinitionQuery.error : undefined}
+                    />
+                  )}
                 </div>
               </section>
 
