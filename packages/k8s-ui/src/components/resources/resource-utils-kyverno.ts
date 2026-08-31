@@ -115,6 +115,16 @@ export function getKyvernoPolicyStatus(resource: any): StatusBadge {
   return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
 }
 
+/**
+ * Kyverno's ValidationFailureAction enum accepts the deprecated lowercase
+ * `enforce` alongside `Enforce`, and the admission controller blocks on the
+ * lowercase spelling exactly as on the capitalized one. Match case-insensitively
+ * so a legacy policy carrying the lowercase value is not read as non-blocking.
+ */
+export function isKyvernoEnforceAction(action: unknown): boolean {
+  return String(action ?? '').toLowerCase() === 'enforce'
+}
+
 /** The rule blocks whose failure an admission request can be rejected for. */
 function rejectingActions(rule: any): string[] {
   if (!rule) return []
@@ -148,14 +158,14 @@ function rejectingActions(rule: any): string[] {
 export function getKyvernoPolicyAction(resource: any): string {
   const specAction = resource.spec?.validationFailureAction
   const rules = resource.spec?.rules || []
-  if (rules.length === 0) return specAction || 'Audit'
+  if (rules.length === 0) return isKyvernoEnforceAction(specAction) ? 'Enforce' : 'Audit'
   const rejecting = rules.filter((rule: any) => rule?.validate || rule?.verifyImages)
   // Rules, but none that can reject: the spec-level action governs nothing here.
   if (rejecting.length === 0) return 'Audit'
   for (const rule of rejecting) {
     const overrides = rejectingActions(rule)
     const effective = overrides.length > 0 ? overrides : [specAction]
-    if (effective.includes('Enforce')) return 'Enforce'
+    if (effective.some(isKyvernoEnforceAction)) return 'Enforce'
   }
   return 'Audit'
 }

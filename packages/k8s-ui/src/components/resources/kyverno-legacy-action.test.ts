@@ -95,4 +95,48 @@ describe('getKyvernoPolicyAction', () => {
     expect(getKyvernoPolicyAction(cpol({ rules: [{ name: 'r', validate: {} }] }))).toBe('Audit')
     expect(getKyvernoPolicyAction(cpol({}))).toBe('Audit')
   })
+
+  // Kyverno's ValidationFailureAction enum accepts the deprecated lowercase
+  // `enforce`/`audit` alongside the capitalized spelling, and the admission
+  // controller blocks on lowercase `enforce` exactly as on `Enforce`. A legacy
+  // policy carrying the lowercase value must not read as non-blocking.
+  it('treats a lowercase spec-level enforce as Enforce (no rules)', () => {
+    expect(getKyvernoPolicyAction(cpol({ validationFailureAction: 'enforce' }))).toBe('Enforce')
+  })
+
+  it('treats a lowercase spec-level enforce inherited by a validating rule as Enforce', () => {
+    expect(
+      getKyvernoPolicyAction(
+        cpol({
+          validationFailureAction: 'enforce',
+          rules: [{ name: 'v', validate: { pattern: {} } }],
+        }),
+      ),
+    ).toBe('Enforce')
+  })
+
+  it('canonicalizes a lowercase spec-level audit to Audit', () => {
+    expect(getKyvernoPolicyAction(cpol({ validationFailureAction: 'audit' }))).toBe('Audit')
+    expect(
+      getKyvernoPolicyAction(
+        cpol({
+          validationFailureAction: 'audit',
+          rules: [{ name: 'v', validate: { pattern: {} } }],
+        }),
+      ),
+    ).toBe('Audit')
+  })
+
+  // A per-rule failureAction is capitalized-only per its CRD enum, but matching
+  // case-insensitively there too keeps a single rule for reading the field.
+  it('treats a lowercase per-rule failureAction override as Enforce', () => {
+    expect(
+      getKyvernoPolicyAction(
+        cpol({
+          validationFailureAction: 'Audit',
+          rules: [{ name: 'r', validate: { failureAction: 'enforce' } }],
+        }),
+      ),
+    ).toBe('Enforce')
+  })
 })

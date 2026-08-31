@@ -13,7 +13,7 @@ import {
   getKyvernoEffectiveFailurePolicy,
   type KyvernoPolicyFamily,
 } from '../resource-utils-kyverno-modern'
-import { getKyvernoPolicyAction } from '../resource-utils-kyverno'
+import { getKyvernoPolicyAction, isKyvernoEnforceAction } from '../resource-utils-kyverno'
 import type {
   PolicyCoverageResponse,
   PolicyCoverageRule,
@@ -160,7 +160,7 @@ function legacyActionsAgree(resource: any): boolean {
           : []),
       ].filter(Boolean)
       const effective = declared.length > 0 ? declared : [spec]
-      return effective.includes('Enforce')
+      return effective.some(isKyvernoEnforceAction)
     })
   return answers.every((a: boolean) => a === answers[0])
 }
