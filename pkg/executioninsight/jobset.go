@@ -32,10 +32,20 @@ type executionCondition struct {
 // ForResource returns an execution summary only for an exact supported GVK.
 func ForResource(obj runtime.Object, tier resourcecontext.ContextTier) *resourcecontext.ExecutionSummary {
 	u, ok := obj.(*unstructured.Unstructured)
-	if !ok || u.GroupVersionKind() != jobSetV1Alpha2 {
+	if !ok {
 		return nil
 	}
+	switch u.GroupVersionKind() {
+	case jobSetV1Alpha2:
+		return forJobSet(u, tier)
+	case rayServiceV1:
+		return forRayService(u, tier)
+	default:
+		return nil
+	}
+}
 
+func forJobSet(u *unstructured.Unstructured, tier resourcecontext.ContextTier) *resourcecontext.ExecutionSummary {
 	counts, observed := jobSetCounts(u)
 	conditions := jobSetConditions(u)
 	_, hasStatus, _ := unstructured.NestedMap(u.Object, "status")
@@ -155,7 +165,11 @@ func sumInt64Slice(values []any) int64 {
 }
 
 func jobSetConditions(u *unstructured.Unstructured) map[string]executionCondition {
-	raw, ok, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	return executionConditionsAt(u.Object, "status", "conditions")
+}
+
+func executionConditionsAt(object map[string]any, fields ...string) map[string]executionCondition {
+	raw, ok, _ := unstructured.NestedSlice(object, fields...)
 	if !ok {
 		return nil
 	}
