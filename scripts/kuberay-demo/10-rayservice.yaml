@@ -1,0 +1,49 @@
+apiVersion: ray.io/v1
+kind: RayService
+metadata:
+  name: revision-demo
+  namespace: kuberay-demo
+spec:
+  upgradeStrategy:
+    type: NewCluster
+  serveConfigV2: |
+    applications:
+      - name: radar-demo
+        import_path: radar_serve:app
+        route_prefix: /
+  rayClusterConfig:
+    rayVersion: "2.55.0"
+    headGroupSpec:
+      rayStartParams:
+        dashboard-host: "0.0.0.0"
+      template:
+        spec:
+          containers:
+            - name: ray-head
+              image: rayproject/ray:2.55.0@sha256:71bbcb7cf031c290d9f23a8fd54d8602c8f0f2004b73d616f97dddc1975e9bd4
+              env:
+                - name: PYTHONPATH
+                  value: /home/ray/radar-demo
+              ports:
+                - name: gcs-server
+                  containerPort: 6379
+                - name: dashboard
+                  containerPort: 8265
+                - name: client
+                  containerPort: 10001
+                - name: serve
+                  containerPort: 8000
+              resources:
+                requests:
+                  cpu: "1"
+                  memory: 2Gi
+                limits:
+                  cpu: "2"
+                  memory: 3Gi
+              volumeMounts:
+                - name: radar-ray-serve
+                  mountPath: /home/ray/radar-demo
+          volumes:
+            - name: radar-ray-serve
+              configMap:
+                name: radar-ray-serve

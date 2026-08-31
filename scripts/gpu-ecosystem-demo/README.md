@@ -71,6 +71,10 @@ This suite is breadth-first and renderer-focused. Installing every controller wo
 
 Add a live-controller mode only when a Radar feature depends on controller behavior rather than the resource contract or rendered state.
 
+For real KubeRay ownership and active/pending RayService reconciliation, use the
+focused [`kuberay-demo`](../kuberay-demo/README.md) lane. It complements this
+37-kind breadth fixture rather than adding a heavy Ray runtime here.
+
 ## Real GPU acceptance lane
 
 Before release claims involving hardware, run one ephemeral GPU node in a real managed cluster and verify:
