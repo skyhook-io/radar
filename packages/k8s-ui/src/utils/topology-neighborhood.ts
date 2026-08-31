@@ -160,12 +160,26 @@ export function workloadKey(ref: NeighborhoodSeed): string {
   return laneId(ref.kind, ref.group, ref.namespace, ref.name)
 }
 
-function matchSeedNode(node: TopologyNode, seeds: NeighborhoodSeed[]): boolean {
-  return seeds.some((s) => {
-    const resourceKind = topologyNodeResourceKind(node)
-    if (s.kind !== resourceKind || s.name !== node.name || s.namespace !== nodeNamespace(node)) return false
-    return canonicalResourceGroup(s.kind, s.group) === canonicalResourceGroup(resourceKind, nodeGroup(node))
-  })
+function resolveSeedNodes(nodes: TopologyNode[], seeds: NeighborhoodSeed[]): Map<string, NeighborhoodSeed> {
+  const resolved = new Map<string, NeighborhoodSeed>()
+  for (const seed of seeds) {
+    const candidates = nodes.filter((node) =>
+      topologyNodeResourceKind(node) === seed.kind
+      && node.name === seed.name
+      && nodeNamespace(node) === seed.namespace,
+    )
+    const seedGroup = canonicalResourceGroup(seed.kind, seed.group)
+    if (seedGroup !== undefined) {
+      for (const candidate of candidates) {
+        if (canonicalResourceGroup(seed.kind, nodeGroup(candidate)) === seedGroup && !resolved.has(candidate.id)) {
+          resolved.set(candidate.id, seed)
+        }
+      }
+    } else if (candidates.length === 1) {
+      if (!resolved.has(candidates[0].id)) resolved.set(candidates[0].id, seed)
+    }
+  }
+  return resolved
 }
 
 /** Filter a topology to the neighborhood of `seeds`. Returns the subgraph; an
@@ -174,10 +188,7 @@ export function neighborhoodFor(topology: Topology, seeds: NeighborhoodSeed[]): 
   const nodeById = new Map<string, TopologyNode>()
   for (const n of topology.nodes) nodeById.set(n.id, n)
 
-  const seedIds = new Set<string>()
-  for (const n of topology.nodes) {
-    if (matchSeedNode(n, seeds)) seedIds.add(n.id)
-  }
+  const seedIds = new Set(resolveSeedNodes(topology.nodes, seeds).keys())
   if (seedIds.size === 0) {
     return {
       ...topology,
@@ -349,15 +360,10 @@ export function tagWorkloadOwnership(topology: Topology, seeds: NeighborhoodSeed
   // The seed nodes present in the subgraph, by their workload key.
   const seedKeyById = new Map<string, string>()
   const subNodeById = new Map(sub.nodes.map((node) => [node.id, node]))
+  const resolvedSeeds = resolveSeedNodes(sub.nodes, seeds)
   for (const n of sub.nodes) {
-    if (matchSeedNode(n, seeds)) {
-      seedKeyById.set(n.id, workloadKey({
-        kind: topologyNodeResourceKind(n),
-        group: nodeGroup(n),
-        namespace: nodeNamespace(n),
-        name: n.name,
-      }))
-    }
+    const seed = resolvedSeeds.get(n.id)
+    if (seed) seedKeyById.set(n.id, workloadKey(seed))
   }
 
   // manages-DOWN children, template-to-run provenance, and undirected neighbors.
@@ -454,5 +460,6 @@ export function tagWorkloadOwnership(topology: Topology, seeds: NeighborhoodSeed
 /** The set of node IDs that are the seeds themselves — handy for the caller to
  *  pass `focusNodeId` (pan/zoom to the workload) into <TopologyGraph/>. */
 export function seedNodeIds(topology: Topology, seeds: NeighborhoodSeed[]): string[] {
-  return topology.nodes.filter((n) => matchSeedNode(n, seeds)).map((n) => n.id)
+  const resolved = resolveSeedNodes(topology.nodes, seeds)
+  return topology.nodes.filter((node) => resolved.has(node.id)).map((node) => node.id)
 }

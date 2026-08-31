@@ -81,10 +81,18 @@ function gitOpsDetailUrl(kindPlural: string, namespace: string, name: string): s
 
 // gitOpsRouteForKind accepts an exact group when the caller has one. Callers
 // such as older Audit findings can omit it and retain the kind-only fallback.
-export function gitOpsRouteForKind(kind: string, namespace: string, name: string, group?: string): string | null {
+// Persisted timeline lanes may carry an empty placeholder group while explicitly
+// reporting that identity was not resolved; those retain the same fallback.
+export function gitOpsRouteForKind(
+  kind: string,
+  namespace: string,
+  name: string,
+  group?: string,
+  identityResolved = group !== undefined,
+): string | null {
   if (!kind || !name) return null
-  if (group !== undefined) {
-    const plural = portalPluralFor(kind.toLowerCase(), group)
+  if (identityResolved) {
+    const plural = portalPluralFor(kind.toLowerCase(), group ?? '')
     return plural ? gitOpsDetailUrl(plural, namespace, name) : null
   }
   switch (kind) {

@@ -764,8 +764,8 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
   // deep-link to GitOps detail rather than the resource drawer — the lane is
   // already telling the user "this controller had changes/events"; the GitOps
   // tab is the right place to investigate further.
-  const handleLaneOpen = useCallback((kind: string, namespace: string, name: string, group?: string) => {
-    const gitOpsPath = gitOpsRouteForKind(kind, namespace, name, group)
+  const handleLaneOpen = useCallback((kind: string, namespace: string, name: string, group?: string, identityResolved?: boolean) => {
+    const gitOpsPath = gitOpsRouteForKind(kind, namespace, name, group, identityResolved)
     if (gitOpsPath && onNavigatePath) {
       onNavigatePath(gitOpsPath)
       return
@@ -1666,7 +1666,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                     <div className="flex items-center gap-1.5 min-w-0">
                       <Tooltip content={lane.name} wrapperClassName="min-w-0 flex-1">
                         <span
-                          onClick={() => handleLaneOpen(lane.kind, lane.namespace, lane.name, lane.group)}
+                          onClick={() => handleLaneOpen(lane.kind, lane.namespace, lane.name, lane.group, lane.identityResolved)}
                           className={clsx('min-w-0 w-full text-sm text-theme-text-primary hover:text-accent-text hover:underline cursor-pointer', compact ? 'font-medium' : 'font-semibold font-mono')}
                         >
                           <MiddleEllipsis text={lane.name} className="block" />
@@ -1720,7 +1720,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
             hasChildren={hasVisibleChildren}
             expanded={isExpanded}
             onToggle={hasVisibleChildren ? () => toggleLane(lane.id) : undefined}
-            onClick={() => handleLaneOpen(lane.kind, lane.namespace, lane.name, lane.group)}
+            onClick={() => handleLaneOpen(lane.kind, lane.namespace, lane.name, lane.group, lane.identityResolved)}
             pinButton={renderPinButton(lane)}
             title={
               lane.nestedByContract ? `${lane.name} · linked by naming`
