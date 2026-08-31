@@ -308,9 +308,11 @@ func TestCheckResourcePermissionsCacheHitCopiesScopeNamespaces(t *testing.T) {
 	const nsA, nsB = "team-a", "team-b"
 	resourcePermsMu.Lock()
 	cachedPermResult = &PermissionCheckResult{
-		Perms:           &ResourcePermissions{Pods: true},
-		NamespaceScoped: true,
-		Namespace:       nsA,
+		Perms:                    &ResourcePermissions{Pods: true},
+		NamespaceScoped:          true,
+		Namespace:                nsA,
+		ScopeCandidates:          []string{nsA, nsB},
+		ScopeCandidatesTruncated: true,
 		Scopes: map[string]k8score.ResourceScope{
 			k8score.Pods: {Enabled: true, Namespace: nsA},
 		},
@@ -322,15 +324,28 @@ func TestCheckResourcePermissionsCacheHitCopiesScopeNamespaces(t *testing.T) {
 	resourcePermsMu.Unlock()
 	t.Cleanup(InvalidateResourcePermissionsCache)
 
+	direct := GetCachedPermissionResult()
+	if direct == nil || !direct.ScopeCandidatesTruncated || !reflect.DeepEqual(direct.ScopeCandidates, []string{nsA, nsB}) {
+		t.Fatalf("GetCachedPermissionResult lost candidate metadata: %+v", direct)
+	}
+	direct.ScopeCandidates[0] = "mutated-direct"
+
 	got := CheckResourcePermissions(context.Background())
 	if !reflect.DeepEqual(got.ScopeNamespaces[k8score.Pods], []string{nsA, nsB}) {
 		t.Fatalf("ScopeNamespaces = %v, want [%s %s]", got.ScopeNamespaces[k8score.Pods], nsA, nsB)
 	}
+	if !got.ScopeCandidatesTruncated {
+		t.Fatal("ScopeCandidatesTruncated was lost on cache hit")
+	}
 	got.ScopeNamespaces[k8score.Pods][0] = "mutated"
+	got.ScopeCandidates[0] = "mutated"
 
 	got = CheckResourcePermissions(context.Background())
 	if !reflect.DeepEqual(got.ScopeNamespaces[k8score.Pods], []string{nsA, nsB}) {
 		t.Fatalf("cached ScopeNamespaces was mutated through caller copy: %v", got.ScopeNamespaces[k8score.Pods])
+	}
+	if !reflect.DeepEqual(got.ScopeCandidates, []string{nsA, nsB}) || !got.ScopeCandidatesTruncated {
+		t.Fatalf("cached ScopeCandidates metadata was mutated through caller copy: %v truncated=%v", got.ScopeCandidates, got.ScopeCandidatesTruncated)
 	}
 }
 

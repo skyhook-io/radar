@@ -1,4 +1,4 @@
-import type { CapacityIntegrationState } from './capacity'
+import type { CapacityIntegrationState, CapacitySourceCoverage } from './capacity'
 
 // Topology types matching the Go backend
 
@@ -130,6 +130,7 @@ export interface Capabilities {
   // same newer-frontend/older-backend reason as `deployment` below — consumers
   // must treat absence as "unknown" and fall back to discovery signals.
   karpenter?: IntegrationCapability
+  resourceDiscovery?: CapacitySourceCoverage
   // How / where this Radar binary is running. Optional on the wire so a
   // newer frontend (e.g. radar-hub-web bundling a fresher @skyhook-io/radar-app)
   // doesn't crash against an older backend that hasn't shipped the field yet —
@@ -728,6 +729,28 @@ export interface ResourceWithRelationships<T = unknown> {
 }
 
 // API Resource (from discovery endpoint)
+export type DynamicObservationState =
+  | 'unwatched'
+  | 'deferred'
+  | 'syncing'
+  | 'watched'
+  | 'denied'
+  | 'unsupported'
+
+export type DynamicObservationOrigin = 'warmup' | 'small_eager' | 'on_demand'
+export type DynamicObservationScope = 'cluster' | 'explicit_namespaces'
+
+export interface DynamicResourceObservation {
+  state: DynamicObservationState
+  origin?: DynamicObservationOrigin
+  observationStart?: string
+  scope?: DynamicObservationScope
+  namespaces?: string[]
+  namespacePartial?: boolean
+  truncated?: boolean
+  reasonCode?: string
+}
+
 export interface APIResource {
   group: string
   version: string
@@ -737,6 +760,7 @@ export interface APIResource {
   isCrd: boolean
   featured?: boolean
   verbs: string[]
+  observation?: DynamicResourceObservation
 }
 
 // Helm release types
