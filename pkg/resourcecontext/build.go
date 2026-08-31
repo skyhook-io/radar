@@ -61,6 +61,7 @@ type Options struct {
 	// Pre-computed summaries — pass-through into the response.
 	IssueSummary  *IssueSummary
 	AuditSummary  *AuditSummary
+	Execution     *ExecutionSummary
 	PolicyReports PolicyReportLookup // nil = Kyverno not installed / no findings
 	AppReferences *AppReferences
 	// Attached only after the evidence Job and Pod pass the access gate.
@@ -317,6 +318,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	}
 	rc.HPASummary = buildHPASummary(obj)
 	rc.StatusSummary = buildStatusSummary(obj)
+	rc.Execution = opts.Execution
 
 	// 4. Pre-computed summaries — pass-through.
 	rc.IssueSummary = opts.IssueSummary
