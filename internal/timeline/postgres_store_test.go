@@ -226,7 +226,7 @@ func TestNewPostgresStoreHydratesNULSeenResourceKey(t *testing.T) {
 		t.Fatalf("first NewPostgresStore: %v", err)
 	}
 
-	key := SeenResourceKey("cluster-a", "Deployment", "default", "api")
+	key := SeenResourceKey("cluster-a", "", "Deployment", "default", "api")
 	if !strings.ContainsRune(key, '\x00') {
 		t.Fatalf("SeenResourceKey %q does not contain NUL", key)
 	}
@@ -915,7 +915,7 @@ func TestPostgresStore_SeenResourcesPersist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first NewPostgresStore: %v", err)
 	}
-	store1.MarkResourceSeen("ctx1", "Deployment", "default", "web")
+	store1.MarkResourceSeen("ctx1", "", "Deployment", "default", "web")
 	if err := store1.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
@@ -926,12 +926,12 @@ func TestPostgresStore_SeenResourcesPersist(t *testing.T) {
 	}
 	defer store2.Close()
 
-	if !store2.IsResourceSeen("ctx1", "Deployment", "default", "web") {
+	if !store2.IsResourceSeen("ctx1", "", "Deployment", "default", "web") {
 		t.Fatal("seen resource was not persisted")
 	}
 
-	store2.ClearResourceSeen("ctx1", "Deployment", "default", "web")
-	if store2.IsResourceSeen("ctx1", "Deployment", "default", "web") {
+	store2.ClearResourceSeen("ctx1", "", "Deployment", "default", "web")
+	if store2.IsResourceSeen("ctx1", "", "Deployment", "default", "web") {
 		t.Fatal("seen resource was not cleared")
 	}
 
@@ -940,7 +940,7 @@ func TestPostgresStore_SeenResourcesPersist(t *testing.T) {
 		t.Fatalf("third NewPostgresStore: %v", err)
 	}
 	defer store3.Close()
-	if store3.IsResourceSeen("ctx1", "Deployment", "default", "web") {
+	if store3.IsResourceSeen("ctx1", "", "Deployment", "default", "web") {
 		t.Fatal("cleared seen resource reappeared after restart")
 	}
 }
@@ -1205,11 +1205,11 @@ func TestPostgresStore_SeenWritesPersistAsynchronously(t *testing.T) {
 
 	const n = 1200 // more than one batch
 	for i := 0; i < n; i++ {
-		store.MarkResourceSeen("cluster-a", "Deployment", "default", fmt.Sprintf("app-%d", i))
+		store.MarkResourceSeen("cluster-a", "", "Deployment", "default", fmt.Sprintf("app-%d", i))
 	}
 	// A mark immediately followed by a clear must not resurrect the row.
-	store.MarkResourceSeen("cluster-a", "Deployment", "default", "transient")
-	store.ClearResourceSeen("cluster-a", "Deployment", "default", "transient")
+	store.MarkResourceSeen("cluster-a", "", "Deployment", "default", "transient")
+	store.ClearResourceSeen("cluster-a", "", "Deployment", "default", "transient")
 
 	// Close drains the queue; nothing here should depend on the flush interval.
 	if err := store.Close(); err != nil {
@@ -1227,14 +1227,14 @@ func TestPostgresStore_SeenWritesPersistAsynchronously(t *testing.T) {
 	})
 
 	for _, i := range []int{0, n / 2, n - 1} {
-		if !reopened.IsResourceSeen("cluster-a", "Deployment", "default", fmt.Sprintf("app-%d", i)) {
+		if !reopened.IsResourceSeen("cluster-a", "", "Deployment", "default", fmt.Sprintf("app-%d", i)) {
 			t.Errorf("app-%d not persisted across restart", i)
 		}
 	}
-	if reopened.IsResourceSeen("cluster-a", "Deployment", "default", "transient") {
+	if reopened.IsResourceSeen("cluster-a", "", "Deployment", "default", "transient") {
 		t.Error("cleared resource came back after restart: the clear was applied before its mark")
 	}
-	if reopened.IsResourceSeen("cluster-b", "Deployment", "default", "app-0") {
+	if reopened.IsResourceSeen("cluster-b", "", "Deployment", "default", "app-0") {
 		t.Error("seen state leaked across cluster contexts")
 	}
 }
@@ -1255,12 +1255,12 @@ func TestPostgresStore_ClearSurvivesQueuePressure(t *testing.T) {
 	// Saturate the queue well past its depth, with the key under test marked
 	// part-way through so a queued mark for it is in flight behind the clear.
 	for i := 0; i < seenWriteQueueDepth*3; i++ {
-		store.MarkResourceSeen("cluster-a", "Deployment", "default", fmt.Sprintf("noise-%d", i))
+		store.MarkResourceSeen("cluster-a", "", "Deployment", "default", fmt.Sprintf("noise-%d", i))
 		if i == seenWriteQueueDepth {
-			store.MarkResourceSeen("cluster-a", "Deployment", "default", "recreated")
+			store.MarkResourceSeen("cluster-a", "", "Deployment", "default", "recreated")
 		}
 	}
-	store.ClearResourceSeen("cluster-a", "Deployment", "default", "recreated")
+	store.ClearResourceSeen("cluster-a", "", "Deployment", "default", "recreated")
 
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -1275,7 +1275,7 @@ func TestPostgresStore_ClearSurvivesQueuePressure(t *testing.T) {
 			t.Errorf("Close reopened: %v", err)
 		}
 	})
-	if reopened.IsResourceSeen("cluster-a", "Deployment", "default", "recreated") {
+	if reopened.IsResourceSeen("cluster-a", "", "Deployment", "default", "recreated") {
 		t.Fatal("clear was lost under queue pressure: the resource is still marked seen after restart")
 	}
 }

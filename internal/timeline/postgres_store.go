@@ -502,8 +502,8 @@ func (s *PostgresStore) GetChangesForOwner(ctx context.Context, ownerKind, owner
 }
 
 // MarkResourceSeen records that a resource has been seen.
-func (s *PostgresStore) MarkResourceSeen(clusterContext, kind, namespace, name string) {
-	key := SeenResourceKey(clusterContext, kind, namespace, name)
+func (s *PostgresStore) MarkResourceSeen(clusterContext, group, kind, namespace, name string) {
+	key := SeenResourceKey(clusterContext, group, kind, namespace, name)
 
 	s.seenMu.Lock()
 	s.seenResources[key] = true
@@ -513,16 +513,16 @@ func (s *PostgresStore) MarkResourceSeen(clusterContext, kind, namespace, name s
 }
 
 // IsResourceSeen checks if a resource has been seen before in the given cluster
-// context.
-func (s *PostgresStore) IsResourceSeen(clusterContext, kind, namespace, name string) bool {
+// context and API group.
+func (s *PostgresStore) IsResourceSeen(clusterContext, group, kind, namespace, name string) bool {
 	s.seenMu.RLock()
 	defer s.seenMu.RUnlock()
-	return s.seenResources[SeenResourceKey(clusterContext, kind, namespace, name)]
+	return s.seenResources[SeenResourceKey(clusterContext, group, kind, namespace, name)]
 }
 
 // ClearResourceSeen removes a resource from the seen set.
-func (s *PostgresStore) ClearResourceSeen(clusterContext, kind, namespace, name string) {
-	key := SeenResourceKey(clusterContext, kind, namespace, name)
+func (s *PostgresStore) ClearResourceSeen(clusterContext, group, kind, namespace, name string) {
+	key := SeenResourceKey(clusterContext, group, kind, namespace, name)
 
 	s.seenMu.Lock()
 	delete(s.seenResources, key)
@@ -1069,12 +1069,27 @@ func (s *PostgresStore) hydrateSeenResources(ctx context.Context) error {
 	}
 	defer rows.Close()
 
+	var loaded, obsolete int
 	for rows.Next() {
 		var key []byte
 		if err := rows.Scan(&key); err != nil {
 			return err
 		}
+		// Pre-group-identity rows lack the API-group qualifier and would
+		// wrongly suppress a same-named resource in another group if loaded;
+		// they're ignored here the same way SQLiteStore ignores them.
+		if !isGroupAwareSeenResourceKey(string(key)) {
+			obsolete++
+			continue
+		}
 		s.seenResources[string(key)] = true
+		loaded++
+	}
+	if obsolete > 0 {
+		log.Printf("[timeline] ignored %d obsolete seen_resources rows", obsolete)
+	}
+	if loaded > 0 {
+		log.Printf("[timeline] loaded %d seen resources from PostgreSQL", loaded)
 	}
 	return rows.Err()
 }

@@ -27,7 +27,6 @@ import (
 
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/k8score"
-	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -688,18 +687,6 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 		return
 	}
 
-	if op == "add" {
-		if store.IsResourceSeen(clusterContext, kind, namespace, name) {
-			timeline.RecordDrop(kind, namespace, name, timeline.DropReasonAlreadySeen, op, clusterContext)
-			if DebugEvents {
-				log.Printf("[DEBUG] Already seen, skipping: %s/%s/%s", kind, namespace, name)
-			}
-			return
-		}
-	} else if op == "delete" {
-		store.ClearResourceSeen(clusterContext, kind, namespace, name)
-	}
-
 	obj := newObj
 	if obj == nil {
 		obj = oldObj
@@ -708,9 +695,24 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 		obj = tombstone.Obj
 	}
 	apiVersion := extractAPIVersion(obj)
-	apiGroup := resourceid.GroupForBuiltinKind(kind)
+	apiGroup := ""
+	if gvr, ok := BuiltinGVRAnyGroup(kind); ok {
+		apiGroup = gvr.Group
+	}
 	if apiVersion != "" {
 		apiGroup = GroupFromAPIVersion(apiVersion)
+	}
+
+	if op == "add" {
+		if store.IsResourceSeen(clusterContext, apiGroup, kind, namespace, name) {
+			timeline.RecordDrop(kind, namespace, name, timeline.DropReasonAlreadySeen, op, clusterContext)
+			if DebugEvents {
+				log.Printf("[DEBUG] Already seen, skipping: %s/%s/%s", kind, namespace, name)
+			}
+			return
+		}
+	} else if op == "delete" {
+		store.ClearResourceSeen(clusterContext, apiGroup, kind, namespace, name)
 	}
 
 	resourceVersion := ""
@@ -875,7 +877,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 					return
 				}
 			}
-			store.MarkResourceSeen(clusterContext, kind, namespace, name)
+			store.MarkResourceSeen(clusterContext, apiGroup, kind, namespace, name)
 			return
 		}
 	}
@@ -892,7 +894,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	timeline.IncrementRecorded(kind)
 
 	if op == "add" {
-		store.MarkResourceSeen(clusterContext, kind, namespace, name)
+		store.MarkResourceSeen(clusterContext, apiGroup, kind, namespace, name)
 	}
 }
 
@@ -904,7 +906,7 @@ func isUnstructuredUpdate(oldObj, newObj any) bool {
 
 // extractAPIVersion returns the resource's apiVersion (e.g. "cluster.x-k8s.io/v1beta1")
 // for unstructured objects. Typed informer objects have empty TypeMeta after decoding;
-// identity call sites recover their group from resourceid.GroupForBuiltinKind.
+// identity call sites recover their group from the canonical built-in GVR table.
 func extractAPIVersion(obj any) string {
 	if u, ok := obj.(*unstructured.Unstructured); ok {
 		return u.GetAPIVersion()

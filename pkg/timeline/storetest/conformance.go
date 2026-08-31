@@ -678,19 +678,43 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 	// two clusters is two distinct sightings.
 	t.Run("seen resources are tracked per cluster and can be cleared", func(t *testing.T) {
 		store := newStore(t)
-		if store.IsResourceSeen("cluster-a", "Deployment", "default", "api") {
+		if store.IsResourceSeen("cluster-a", "", "Deployment", "default", "api") {
 			t.Fatal("resource reported seen before it was marked")
 		}
-		store.MarkResourceSeen("cluster-a", "Deployment", "default", "api")
-		if !store.IsResourceSeen("cluster-a", "Deployment", "default", "api") {
+		store.MarkResourceSeen("cluster-a", "", "Deployment", "default", "api")
+		if !store.IsResourceSeen("cluster-a", "", "Deployment", "default", "api") {
 			t.Fatal("resource not reported seen after MarkResourceSeen")
 		}
-		if store.IsResourceSeen("cluster-b", "Deployment", "default", "api") {
+		if store.IsResourceSeen("cluster-b", "", "Deployment", "default", "api") {
 			t.Fatal("seen state leaked across cluster contexts")
 		}
-		store.ClearResourceSeen("cluster-a", "Deployment", "default", "api")
-		if store.IsResourceSeen("cluster-a", "Deployment", "default", "api") {
+		store.ClearResourceSeen("cluster-a", "", "Deployment", "default", "api")
+		if store.IsResourceSeen("cluster-a", "", "Deployment", "default", "api") {
 			t.Fatal("resource still reported seen after ClearResourceSeen")
+		}
+	})
+
+	// Same Kind/namespace/name can legitimately name two different resources
+	// in different API groups (a core Service vs. a Knative Service, say) —
+	// their seen state and clears must stay independent.
+	t.Run("seen resources are isolated by API group and cleared independently", func(t *testing.T) {
+		store := newStore(t)
+		store.MarkResourceSeen("cluster-a", "", "Service", "shop", "api")
+		store.MarkResourceSeen("cluster-a", "serving.knative.dev", "Service", "shop", "api")
+
+		if !store.IsResourceSeen("cluster-a", "", "Service", "shop", "api") {
+			t.Fatal("core Service should be seen")
+		}
+		if !store.IsResourceSeen("cluster-a", "serving.knative.dev", "Service", "shop", "api") {
+			t.Fatal("Knative Service should be seen independently of the core Service")
+		}
+
+		store.ClearResourceSeen("cluster-a", "", "Service", "shop", "api")
+		if store.IsResourceSeen("cluster-a", "", "Service", "shop", "api") {
+			t.Fatal("core Service should be cleared")
+		}
+		if !store.IsResourceSeen("cluster-a", "serving.knative.dev", "Service", "shop", "api") {
+			t.Fatal("clearing the core Service must not clear the Knative Service in another group")
 		}
 	})
 }
