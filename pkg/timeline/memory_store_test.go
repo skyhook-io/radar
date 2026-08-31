@@ -223,23 +223,23 @@ func TestMemoryStore_ResourceSeen(t *testing.T) {
 	store := NewMemoryStore(100)
 
 	// Initially not seen
-	if store.IsResourceSeen("cluster-a", "Pod", "default", "test-pod") {
+	if store.IsResourceSeen("cluster-a", "", "Pod", "default", "test-pod") {
 		t.Error("Resource should not be seen initially")
 	}
 
 	// Mark as seen
-	store.MarkResourceSeen("cluster-a", "Pod", "default", "test-pod")
+	store.MarkResourceSeen("cluster-a", "", "Pod", "default", "test-pod")
 
 	// Now should be seen
-	if !store.IsResourceSeen("cluster-a", "Pod", "default", "test-pod") {
+	if !store.IsResourceSeen("cluster-a", "", "Pod", "default", "test-pod") {
 		t.Error("Resource should be seen after marking")
 	}
 
 	// Clear seen
-	store.ClearResourceSeen("cluster-a", "Pod", "default", "test-pod")
+	store.ClearResourceSeen("cluster-a", "", "Pod", "default", "test-pod")
 
 	// Should not be seen again
-	if store.IsResourceSeen("cluster-a", "Pod", "default", "test-pod") {
+	if store.IsResourceSeen("cluster-a", "", "Pod", "default", "test-pod") {
 		t.Error("Resource should not be seen after clearing")
 	}
 }
@@ -250,13 +250,43 @@ func TestMemoryStore_ResourceSeen(t *testing.T) {
 func TestMemoryStore_ResourceSeen_ClusterScoped(t *testing.T) {
 	store := NewMemoryStore(100)
 
-	store.MarkResourceSeen("cluster-a", "Deployment", "team-a", "web")
+	store.MarkResourceSeen("cluster-a", "apps", "Deployment", "team-a", "web")
 
-	if !store.IsResourceSeen("cluster-a", "Deployment", "team-a", "web") {
+	if !store.IsResourceSeen("cluster-a", "apps", "Deployment", "team-a", "web") {
 		t.Error("cluster-a/web should be seen after marking")
 	}
-	if store.IsResourceSeen("cluster-b", "Deployment", "team-a", "web") {
+	if store.IsResourceSeen("cluster-b", "apps", "Deployment", "team-a", "web") {
 		t.Error("cluster-b/web must NOT be suppressed by cluster-a's seen entry")
+	}
+}
+
+func TestMemoryStore_ResourceSeen_APIGroupScoped(t *testing.T) {
+	store := NewMemoryStore(100)
+
+	store.MarkResourceSeen("cluster-a", "", "Service", "shop", "api")
+	store.MarkResourceSeen("cluster-a", "serving.knative.dev", "Service", "shop", "api")
+
+	if !store.IsResourceSeen("cluster-a", "", "Service", "shop", "api") {
+		t.Fatal("core Service should be seen")
+	}
+	if !store.IsResourceSeen("cluster-a", "serving.knative.dev", "Service", "shop", "api") {
+		t.Fatal("Knative Service should be seen independently")
+	}
+
+	store.ClearResourceSeen("cluster-a", "", "Service", "shop", "api")
+	if store.IsResourceSeen("cluster-a", "", "Service", "shop", "api") {
+		t.Fatal("core Service should be cleared")
+	}
+	if !store.IsResourceSeen("cluster-a", "serving.knative.dev", "Service", "shop", "api") {
+		t.Fatal("clearing core Service must not clear Knative Service")
+	}
+}
+
+func TestSeenResourceKey_CanonicalGroupIdentity(t *testing.T) {
+	got := SeenResourceKey("cluster-a", "serving.knative.dev", "Service", "shop", "api")
+	want := "cluster-a\x00serving.knative.dev|Service|shop|api"
+	if got != want {
+		t.Fatalf("SeenResourceKey() = %q, want %q", got, want)
 	}
 }
 

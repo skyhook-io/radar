@@ -735,11 +735,10 @@ func (s *SQLiteStore) GetChangesForOwner(ctx context.Context, ownerKind, ownerNa
 }
 
 // MarkResourceSeen records that a resource has been seen. The key is
-// cluster-qualified: this store outlives kubeconfig context switches, so a bare
-// kind/namespace/name would let a same-named resource in another cluster read
-// as already-seen and drop its add.
-func (s *SQLiteStore) MarkResourceSeen(clusterContext, kind, namespace, name string) {
-	key := SeenResourceKey(clusterContext, kind, namespace, name)
+// cluster- and API-group-qualified: this store outlives kubeconfig context
+// switches and distinct groups can define the same kind/namespace/name.
+func (s *SQLiteStore) MarkResourceSeen(clusterContext, group, kind, namespace, name string) {
+	key := SeenResourceKey(clusterContext, group, kind, namespace, name)
 
 	s.seenMu.Lock()
 	s.seenResources[key] = true
@@ -750,16 +749,16 @@ func (s *SQLiteStore) MarkResourceSeen(clusterContext, kind, namespace, name str
 }
 
 // IsResourceSeen checks if a resource has been seen before in the given cluster
-// context.
-func (s *SQLiteStore) IsResourceSeen(clusterContext, kind, namespace, name string) bool {
+// context and API group.
+func (s *SQLiteStore) IsResourceSeen(clusterContext, group, kind, namespace, name string) bool {
 	s.seenMu.RLock()
 	defer s.seenMu.RUnlock()
-	return s.seenResources[SeenResourceKey(clusterContext, kind, namespace, name)]
+	return s.seenResources[SeenResourceKey(clusterContext, group, kind, namespace, name)]
 }
 
 // ClearResourceSeen removes a resource from the seen set
-func (s *SQLiteStore) ClearResourceSeen(clusterContext, kind, namespace, name string) {
-	key := SeenResourceKey(clusterContext, kind, namespace, name)
+func (s *SQLiteStore) ClearResourceSeen(clusterContext, group, kind, namespace, name string) {
+	key := SeenResourceKey(clusterContext, group, kind, namespace, name)
 
 	s.seenMu.Lock()
 	delete(s.seenResources, key)
@@ -964,11 +963,15 @@ func (s *SQLiteStore) hydrateSeenResources() {
 	}
 	defer rows.Close()
 
-	var loaded, skipped int
+	var loaded, skipped, obsolete int
 	for rows.Next() {
 		var key string
 		if err := rows.Scan(&key); err != nil {
 			skipped++
+			continue
+		}
+		if !isGroupAwareSeenResourceKey(key) {
+			obsolete++
 			continue
 		}
 		s.seenResources[key] = true
@@ -980,9 +983,17 @@ func (s *SQLiteStore) hydrateSeenResources() {
 	if skipped > 0 {
 		log.Printf("[timeline] skipped %d unreadable seen_resources rows in %s (loaded %d)", skipped, s.path, loaded)
 	}
+	if obsolete > 0 {
+		log.Printf("[timeline] ignored %d obsolete seen_resources rows in %s", obsolete, s.path)
+	}
 	if loaded > 0 {
 		log.Printf("[timeline] loaded %d seen resources from %s", loaded, s.path)
 	}
+}
+
+func isGroupAwareSeenResourceKey(key string) bool {
+	_, resourceKey, ok := strings.Cut(key, "\x00")
+	return ok && strings.Count(resourceKey, "|") == 3
 }
 
 // runCleanup deletes events older than retention and truncates the WAL so the
