@@ -71,6 +71,7 @@ func (d *calicoTestDynamic) GetKindForGVR(gvr schema.GroupVersionResource) strin
 	return ""
 }
 func (d *calicoTestDynamic) IsCRD(string) bool { return true }
+func (d *calicoTestDynamic) IsCRDGVR(schema.GroupVersionResource) bool { return true }
 
 func calicoTestObject(group, version, kind, namespace, name string, spec map[string]any) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
@@ -221,7 +222,7 @@ func TestStagedKubernetesCalicoPolicyIsExcludedFromGenericCRDs(t *testing.T) {
 	}
 	dynamic := calicoTestDynamicFor("projectcalico.org")
 	gvr := dynamic.gvrs["projectcalico.org\x00StagedKubernetesNetworkPolicy"]
-	dynamic.resources[gvr][0].SetOwnerReferences([]metav1.OwnerReference{{Kind: "Deployment", Name: "frontend"}})
+	dynamic.resources[gvr][0].SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "frontend"}})
 	dynamic.watched = []schema.GroupVersionResource{gvr}
 
 	topo, err := NewBuilder(provider).WithDynamic(dynamic).Build(BuildOptions{IncludeGenericCRDs: true})
@@ -708,7 +709,7 @@ func TestForeignNetworkPolicyCRDStillRendersAsGenericNode(t *testing.T) {
 	policy := calicoTestObject("crd.antrea.io", "v1alpha1", "NetworkPolicy", "demo", "antrea-policy", map[string]any{
 		"priority": int64(5),
 	})
-	policy.SetOwnerReferences([]metav1.OwnerReference{{Kind: "Deployment", Name: "frontend"}})
+	policy.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "frontend"}})
 
 	dynamic := &antreaTestDynamic{
 		calicoTestDynamic: calicoTestDynamicFor(calicoProjectGroup),

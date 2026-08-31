@@ -48,6 +48,9 @@ func (p *sealedSecretDynamicProvider) GetKindForGVR(gvr schema.GroupVersionResou
 	return ""
 }
 func (p *sealedSecretDynamicProvider) IsCRD(kind string) bool { return kind == "SealedSecret" }
+func (p *sealedSecretDynamicProvider) IsCRDGVR(gvr schema.GroupVersionResource) bool {
+	return gvr == p.gvr
+}
 
 // deployWithRefs builds a Deployment that references a ConfigMap, Secret, and
 // PVC by name via pod-spec volumes (the shapes extractWorkloadReferences reads).

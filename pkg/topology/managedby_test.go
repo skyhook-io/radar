@@ -49,6 +49,7 @@ func (s *stubDP) GetKindForGVR(gvr schema.GroupVersionResource) string {
 	return s.kindByGVR[gvr]
 }
 func (s *stubDP) IsCRD(_ string) bool { return true }
+func (s *stubDP) IsCRDGVR(schema.GroupVersionResource) bool { return true }
 
 func meta(labels, annos map[string]string) metav1.Object {
 	return &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: annos}}
