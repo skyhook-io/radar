@@ -1517,7 +1517,7 @@ export interface VersionInfo {
   error?: string;
 }
 
-const UPDATE_CHECK_STORAGE_KEY_PREFIX = 'radar-update-check'
+const UPDATE_CHECK_STORAGE_KEY_PREFIX = 'radar-update-check';
 
 export function utcDay(now: Date): string {
   return now.toISOString().slice(0, 10)
