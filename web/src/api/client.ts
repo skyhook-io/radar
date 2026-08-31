@@ -57,7 +57,6 @@ import type {
 import type { GitOpsOperationResponse } from '../types/gitops'
 import { apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
 import { apiVersionToGroup, pluralToKind } from '../utils/navigation'
-import { markBrowserUpdateCheckAttempt } from './update-report'
 import type { DeploymentMode } from '../types'
 
 // Auto-refresh cadences (ms) — named constants for each polled hook's
@@ -1516,6 +1515,37 @@ export interface VersionInfo {
   installMethod: InstallMethod;
   updateCommand?: string;
   error?: string;
+}
+
+const BROWSER_UPDATE_CHECK_STORAGE_KEY_PREFIX = 'radar-browser-update-check'
+
+export function utcDay(now: Date): string {
+  return now.toISOString().slice(0, 10)
+}
+
+export function markDailyUpdateCheckAttempt(
+  storage: Pick<Storage, 'getItem' | 'setItem'>,
+  apiBase: string,
+  now: Date,
+): boolean {
+  const storageKey = `${BROWSER_UPDATE_CHECK_STORAGE_KEY_PREFIX}:${apiBase}`
+  const day = utcDay(now)
+  try {
+    if (storage.getItem(storageKey) === day) return false
+
+    storage.setItem(storageKey, day)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function markBrowserUpdateCheckAttempt(): boolean {
+  try {
+    return markDailyUpdateCheckAttempt(localStorage, getApiBase(), new Date())
+  } catch {
+    return false
+  }
 }
 
 export async function reportBrowserUpdateCheck(
