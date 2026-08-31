@@ -2,6 +2,7 @@
 .PHONY: calico-demo calico-demo-down calico-demo-status
 .PHONY: cilium-demo cilium-demo-down cilium-demo-status
 .PHONY: gpu-ecosystem-demo gpu-ecosystem-demo-down gpu-ecosystem-demo-status
+.PHONY: kuberay-demo kuberay-demo-down kuberay-demo-reset kuberay-demo-status kuberay-demo-verify
 .PHONY: release release-binaries-dry docker docker-test docker-multiarch docker-push
 .PHONY: desktop desktop-binary desktop-dev desktop-package-darwin desktop-package-windows desktop-package-linux
 
@@ -314,6 +315,23 @@ gpu-ecosystem-demo-down:
 gpu-ecosystem-demo-status:
 	./scripts/gpu-ecosystem-demo.sh status
 
+# Real KubeRay reconciliation for one head-only RayService: a healthy active
+# Serve revision plus an intentionally non-runnable pending NewCluster revision.
+kuberay-demo:
+	./scripts/kuberay-demo.sh up
+
+kuberay-demo-down:
+	./scripts/kuberay-demo.sh down
+
+kuberay-demo-reset:
+	./scripts/kuberay-demo.sh reset
+
+kuberay-demo-status:
+	./scripts/kuberay-demo.sh status
+
+kuberay-demo-verify:
+	./scripts/kuberay-demo.sh verify
+
 # Bootstrap a kind cluster running real Calico with its aggregated API server,
 # plus the policy shapes the Calico surfaces render (both API groups serving the
 # same objects, all three staged kinds including a staged deletion, a non-default
@@ -455,6 +473,7 @@ help:
 	@echo "  make beyla-demo       - Grafana Beyla eBPF traffic fixtures"
 	@echo "  make cilium-demo      - Cilium + Hubble Relay, all Radar connection lanes"
 	@echo "  make gpu-ecosystem-demo - 37 GPU, batch, and AI/ML resource fixtures"
+	@echo "  make kuberay-demo     - Real RayService active/pending revision lifecycle"
 	@echo "  make calico-demo      - Real Calico, both API groups, staged policies"
 	@echo ""
 	@echo "Desktop:"
