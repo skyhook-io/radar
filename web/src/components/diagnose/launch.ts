@@ -16,6 +16,7 @@ function sq(s: string): string {
 export function launchAgentLabel(run: RunSummary): string {
   if (run.agent === "codex") return "Codex";
   if (run.agent === "cursor-agent") return "Cursor";
+  if (run.agent === "copilot") return "GitHub Copilot";
   return "Claude Code";
 }
 
@@ -52,6 +53,26 @@ export function buildLaunchCommand(
   if (run.agent === "codex") {
     // Codex threads are stored globally by id (cwd-independent); -c re-attaches MCP.
     return `codex resume ${sq(run.sessionId)} -c ${sq(`mcp_servers.radar.url="${mcpUrl}"`)}`;
+  }
+  if (run.agent === "copilot") {
+    // Copilot's session store lives under COPILOT_HOME, not the cwd, so --resume
+    // works from any directory. --resume takes an OPTIONAL value and so must use
+    // the "=" form; passed as a separate argument the id would be read as a
+    // prompt. --additional-mcp-config MERGES radar alongside the user's own
+    // servers. --no-remote-export has to be repeated here: this resumes the SAME
+    // session the headless turns filled with cluster data, and the consent card
+    // promises it is never published to GitHub's web and mobile surfaces.
+    const cfg = JSON.stringify({
+      mcpServers: { radar: { type: "http", url: mcpUrl } },
+    });
+    // A safeguarded run's session lives in Radar's own Copilot home, so the
+    // hand-off has to point at it — mirrors CopilotHomeDir in
+    // internal/ai/agent_copilot.go. Left to the shell to expand $HOME.
+    const home =
+      run.profile === "safeguarded"
+        ? `COPILOT_HOME="$HOME/.radar/copilot-home" `
+        : "";
+    return `${home}copilot --resume=${sq(run.sessionId)} --additional-mcp-config ${sq(cfg)} --no-remote --no-remote-export`;
   }
   // Claude Code: --resume is cwd-scoped, and Radar runs its headless sessions from
   // the home dir (see claudeAgent). The Radar terminal starts there too, but a user

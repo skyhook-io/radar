@@ -39,10 +39,10 @@ function capWord(s: string): string {
   return s ? s[0].toUpperCase() + s.slice(1) : s;
 }
 
-// buildConfigLine renders the active AI config as the header subtitle. Codex shows
-// its execution profile + effective reasoning effort (Default → medium); a model
-// override is shown for either agent. Reflects a run's recorded settings, or the
-// current defaults on Home.
+// buildConfigLine renders the active AI config as the header subtitle. The agents
+// with a reasoning-effort knob (Codex, Copilot) show their execution profile +
+// effective effort; a model override is shown for any agent. Reflects a run's
+// recorded settings, or the current defaults on Home.
 function buildConfigLine(cfg: {
   agent?: string;
   profile?: ExecutionProfile;
@@ -57,6 +57,11 @@ function buildConfigLine(cfg: {
   }
   if (cfg.agent === "codex") {
     parts.push(`${capWord(cfg.effort || "medium")} effort`);
+  }
+  // Copilot gets no Radar-chosen default (the flag is rejected on "auto" models),
+  // so an unset effort is Copilot's own setting, not medium.
+  if (cfg.agent === "copilot") {
+    parts.push(`${cfg.effort ? capWord(cfg.effort) : "Default"} effort`);
   }
   if (cfg.model) parts.push(capWord(cfg.model));
   return "via " + parts.join(" · ");

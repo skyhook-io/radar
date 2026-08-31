@@ -91,7 +91,7 @@ func bootEphemeral(kubeconfig string) (base string, shutdown func(), err error) 
 			}
 			if code == http.StatusNotImplemented {
 				close(stopSpin)
-				return "", nil, fmt.Errorf("no supported agent CLI found — install Claude Code, Codex, or Cursor")
+				return "", nil, fmt.Errorf("no supported agent CLI found — install Claude Code, Codex, Cursor, or GitHub Copilot")
 			}
 		}
 		if time.Now().After(deadline) {

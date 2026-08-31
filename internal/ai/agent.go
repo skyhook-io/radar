@@ -13,7 +13,7 @@ import (
 // that CLI's event stream into radar's normalized StreamEvents + final Diagnosis.
 // The generic run loop (process group, stdout pipe, lifecycle) lives in Diagnoser.
 type Agent interface {
-	// Name is the stable backend identifier ("claude", "codex").
+	// Name is the stable backend identifier ("claude", "codex", "copilot").
 	Name() string
 	// Path is the resolved executable this backend actually drives.
 	Path() string
@@ -46,7 +46,7 @@ type turnSpec struct {
 	apply        bool   // user-confirmed remediation turn (write tools allowed)
 	profile      ExecutionProfile
 	model        string // optional model override; empty = the CLI's default
-	effort       string // optional reasoning effort (Codex only); empty = default
+	effort       string // optional reasoning effort (Codex + Copilot); empty = default
 	maxTurns     int
 	// workdir is a stable per-RUN scratch directory (same across the run's turns).
 	// Cursor needs it: its --resume is workspace-scoped, so follow-ups must run in
@@ -55,7 +55,8 @@ type turnSpec struct {
 }
 
 // resolveAgent picks a backend from the CLI binary name (e.g. RADAR_AI_CLI_BIN or
-// the detected CLI): "cursor-agent" → Cursor, "codex" → Codex, else → Claude.
+// the detected CLI): "cursor-agent" → Cursor, "codex" → Codex, "copilot" → GitHub
+// Copilot, else → Claude.
 func resolveAgent(bin string) Agent {
 	base := strings.ToLower(filepath.Base(bin))
 	switch {
@@ -63,6 +64,8 @@ func resolveAgent(bin string) Agent {
 		return &cursorAgent{bin: bin}
 	case strings.Contains(base, "codex"):
 		return &codexAgent{bin: bin}
+	case strings.Contains(base, "copilot"):
+		return &copilotAgent{bin: bin}
 	default:
 		return &claudeAgent{bin: bin}
 	}

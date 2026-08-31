@@ -76,7 +76,7 @@ func newFlagSet() (*flag.FlagSet, *options) {
 	o := &options{}
 	fs.StringVar(&o.namespace, "n", "", "Namespace of the resource")
 	fs.StringVar(&o.namespace, "namespace", "", "Namespace of the resource")
-	fs.StringVar(&o.agent, "agent", "", "Agent backend to use (claude|codex|cursor-agent; default = server's pick)")
+	fs.StringVar(&o.agent, "agent", "", "Agent backend to use (claude|codex|cursor-agent|copilot; default = server's pick)")
 	fs.StringVar(&o.profile, "profile", "", "Execution profile (safeguarded = Radar safeguards; full-local = your agent setup; default = safest available)")
 	fs.StringVar(&o.server, "server", "", "Radar server URL (default: discover the running instance via ~/.radar/mcp-port)")
 	fs.BoolVar(&o.jsonOut, "json", false, "Print the final verdict as JSON on stdout (progress goes to stderr)")
@@ -94,7 +94,7 @@ func Run(args []string, openBrowser func(url string)) int {
 		fmt.Fprint(os.Stderr, `Usage: radar diagnose <kind>/<name> [-n namespace] [flags]
 
 Runs an AI investigation of a Kubernetes resource using your own local agent
-CLI (Claude Code, Codex, or Cursor) against the running Radar instance — no
+CLI (Claude Code, Codex, Cursor, or GitHub Copilot) against the running Radar instance — no
 API key, no cloud. The investigation is a durable Radar job: watch it here,
 in the Radar UI, or continue it in your own agent afterwards.
 
@@ -207,7 +207,7 @@ Flags:
 		return 1
 	}
 	if !agents.Enabled {
-		fmt.Fprintln(os.Stderr, "AI diagnosis is disabled on this Radar instance — install Claude Code, Codex, or Cursor and restart radar.")
+		fmt.Fprintln(os.Stderr, "AI diagnosis is disabled on this Radar instance — install Claude Code, Codex, Cursor, or GitHub Copilot and restart radar.")
 		return 1
 	}
 

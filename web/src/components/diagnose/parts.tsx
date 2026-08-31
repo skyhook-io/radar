@@ -98,7 +98,7 @@ const CLAUDE_MODEL_OPTIONS: Option[] = [
 ];
 // Codex has no stable alias set and no way to enumerate models, and slugs change
 // across versions — so we take a free-text override rather than a list that rots.
-const EFFORT_OPTIONS: Option[] = [
+export const EFFORT_OPTIONS: Option[] = [
   {
     value: "",
     label: "Default",
@@ -107,6 +107,20 @@ const EFFORT_OPTIONS: Option[] = [
   { value: "low", label: "Low", description: "Fastest, least reasoning" },
   { value: "medium", label: "Medium", description: "Balanced depth" },
   { value: "high", label: "High", description: "Most thorough, slowest" },
+];
+// Copilot accepts a wider range than Codex; the extra tiers are its own vocabulary
+// and are rejected by Codex, so the menus stay separate (mirrors ai.ReasoningEfforts).
+// The default differs too: Radar passes no --effort at all for Copilot, because the
+// flag is rejected outright when the account's model resolves to "auto".
+export const COPILOT_EFFORT_OPTIONS: Option[] = [
+  {
+    value: "",
+    label: "Default",
+    description: "Recommended — your Copilot setting",
+  },
+  ...EFFORT_OPTIONS.slice(1),
+  { value: "xhigh", label: "Extra high", description: "Deeper than High" },
+  { value: "max", label: "Max", description: "Maximum reasoning, slowest" },
 ];
 
 function TextField({
@@ -256,6 +270,7 @@ export function AgentControls({
   const isCodex = selectedAgent === "codex";
   const isClaude = selectedAgent === "claude";
   const isCursor = selectedAgent === "cursor-agent";
+  const isCopilot = selectedAgent === "copilot";
   const selectedAgentInfo = agents.find((a) => a.name === selectedAgent);
   const selectedAgentLabel =
     selectedAgentInfo?.label || selectedAgent || "agent";
@@ -299,7 +314,9 @@ export function AgentControls({
                     ? "Claude’s built-in tools are disabled, and MCP access is limited to Radar’s read-only investigation tools. Your Claude settings, hooks, and CLAUDE.md instructions still apply and are outside Radar’s control."
                     : isCodex
                       ? "Radar excludes your Codex configuration and other MCP servers. Codex’s sandboxed shell can still read files on this machine; it cannot write or reach the network."
-                      : "Radar uses this agent’s safeguarded execution profile. Review the agent’s documented restrictions before continuing."}
+                      : isCopilot
+                        ? "Copilot can call only Radar’s read-only investigation tools — its shell, file edits and web access are removed entirely. The run uses a Radar-owned Copilot configuration, so your own MCP servers, hooks, and AGENTS.md instructions are all excluded."
+                        : "Radar uses this agent’s safeguarded execution profile. Review the agent’s documented restrictions before continuing."}
                 </p>
               ) : (
                 <div className="mt-1.5 flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-[11px] leading-snug text-theme-text-secondary">
@@ -311,7 +328,9 @@ export function AgentControls({
                     and may be able to change your cluster.{" "}
                     {isClaude
                       ? "Claude uses the permissions from your setup; Radar does not override them."
-                      : "Radar still enables the agent CLI’s own sandbox, but that sandbox does not constrain external MCP servers."}{" "}
+                      : isCopilot
+                        ? "Copilot runs with all tools allowed, using your own configuration and MCP servers."
+                        : "Radar still enables the agent CLI’s own sandbox, but that sandbox does not constrain external MCP servers."}{" "}
                     Choose this only when you need that setup.
                   </span>
                 </div>
@@ -353,22 +372,26 @@ export function AgentControls({
           onChange={onSetModel}
           hint="Aliases always resolve to the latest of that tier."
         />
-      ) : isCodex || isCursor ? (
+      ) : isCodex || isCursor || isCopilot ? (
         <TextField
           label="Model"
           value={model}
           placeholder={
             isCursor
               ? "Default (e.g. auto, gpt-5.2, composer-2.5)"
-              : "Default (e.g. gpt-5-codex, o3)"
+              : isCopilot
+                ? "Default (e.g. auto, gpt-5.4)"
+                : "Default (e.g. gpt-5-codex, o3)"
           }
           onChange={onSetModel}
           hint={
             isCursor
               ? "Leave empty for your Cursor default, or enter a model slug Cursor supports."
-              : shownProfile === "full-local"
-                ? "Your Codex setup uses its configured model; set a slug here to override it."
-                : "Leave empty for Codex's default, or enter a model your Codex version supports."
+              : isCopilot
+                ? "Leave empty for Copilot's default, or enter a model your Copilot plan offers."
+                : shownProfile === "full-local"
+                  ? "Your Codex setup uses its configured model; set a slug here to override it."
+                  : "Leave empty for Codex's default, or enter a model your Codex version supports."
           }
         />
       ) : (
@@ -380,11 +403,11 @@ export function AgentControls({
           hint="Leave empty for the agent's default, or enter a model identifier it supports."
         />
       )}
-      {isCodex && (
+      {(isCodex || isCopilot) && (
         <SelectMenu
           label="Reasoning effort"
           value={effort}
-          options={EFFORT_OPTIONS}
+          options={isCopilot ? COPILOT_EFFORT_OPTIONS : EFFORT_OPTIONS}
           onChange={onSetEffort}
         />
       )}
@@ -818,6 +841,14 @@ export function ConsentCard({
                   servers. Codex&apos;s sandboxed shell can still read files on
                   this machine; it cannot write or reach the network.
                 </>
+              ) : agent === "copilot" ? (
+                <>
+                  Radar safeguards leave Copilot with only Radar&apos;s read-only
+                  investigation tools — no shell, no file edits, no web access.
+                  The run uses a Radar-owned Copilot configuration, so the GitHub
+                  MCP server, your own MCP servers, your hooks, and your
+                  AGENTS.md instructions are all excluded.
+                </>
               ) : (
                 <>
                   Radar uses this agent&apos;s safeguarded execution profile.
@@ -825,6 +856,15 @@ export function ConsentCard({
                   continuing.
                 </>
               ),
+              ...(agent === "copilot"
+                ? [
+                    <>
+                      The session is never exported to GitHub&apos;s web or
+                      mobile surfaces; it exists only here and in your local
+                      Copilot session store.
+                    </>,
+                  ]
+                : []),
             ]
           : [
               <>
@@ -836,6 +876,12 @@ export function ConsentCard({
                 <>
                   Claude uses the permissions from your setup; Radar does not
                   override them.
+                </>
+              ) : agent === "copilot" ? (
+                <>
+                  Copilot runs with all tools allowed, using your own
+                  configuration and MCP servers. The session is still never
+                  exported to GitHub&apos;s web or mobile surfaces.
                 </>
               ) : (
                 <>

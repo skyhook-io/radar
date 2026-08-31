@@ -134,6 +134,11 @@ type Diagnosis struct {
 	// cliErrText preserves failures reported in a stream-json result instead of stderr.
 	cliErrText string
 	cliErrored bool
+	// mcpErrText is set when the CLI reported that Radar's MCP server did not
+	// attach. Kept separate from cliErrText because it must fail the turn even when
+	// a well-formed verdict was produced: an agent with no cluster tools still
+	// answers, and that answer is worthless.
+	mcpErrText string
 }
 
 // StreamEvent is one normalized event emitted during an investigation.
@@ -240,7 +245,7 @@ const defaultMaxTurns = 15
 
 // agentCLICandidates are CLIs whose event stream we can parse + drive. Order is
 // the default-selection preference when several are installed.
-var agentCLICandidates = []string{"claude", "codex", "cursor-agent"}
+var agentCLICandidates = []string{"claude", "codex", "cursor-agent", "copilot"}
 
 // Detector / Diagnoser ------------------------------------------------------
 
@@ -447,6 +452,16 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 			return Diagnosis{}, ctx.Err()
 		}
 	}
+	// An investigation that never reached Radar's MCP server read nothing from the
+	// cluster. Checked BEFORE structured(): the agent still produces a confident
+	// verdict in that state, so a well-formed answer is exactly what makes this
+	// failure dangerous rather than what excuses it.
+	if diag.mcpErrText != "" {
+		return Diagnosis{}, fmt.Errorf(
+			"ai: %s could not reach Radar's MCP server, so it had no cluster access: %s",
+			AgentLabel(agent.Name()), diag.mcpErrText,
+		)
+	}
 	// A structured verdict wins over trailing process noise. Without one, either a
 	// nonzero exit or an explicit stream error must remain a failed investigation.
 	if !diag.structured() && (waitErr != nil || diag.cliErrored) {
@@ -616,12 +631,11 @@ func writeMCPConfig(mcpURL string) (string, func(), error) {
 }
 
 var (
-	envAllowExact = map[string]bool{
-		"PATH": true, "HOME": true, "USER": true, "LOGNAME": true,
-		"LANG": true, "LC_ALL": true, "LC_CTYPE": true, "TZ": true,
-		"TMPDIR": true, "SHELL": true, "SSL_CERT_FILE": true, "SSL_CERT_DIR": true,
+	envAllowExact = []string{
+		"USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE", "TZ",
+		"SHELL", "SSL_CERT_FILE", "SSL_CERT_DIR",
 		// AWS creds are passed through so BYO-Bedrock works; the user opted in.
-		"AWS_PROFILE": true, "AWS_REGION": true, "AWS_DEFAULT_REGION": true,
+		"AWS_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION",
 	}
 	envAllowPrefix = []string{"ANTHROPIC_", "CLAUDE_", "AWS_", "GOOGLE_", "CLOUD_ML_", "VERTEX_"}
 )
@@ -630,24 +644,7 @@ var (
 // data, so it shouldn't inherit unrelated host env. Provider-auth vars pass
 // through so subscription / API-key / Bedrock / Vertex all work.
 func scrubbedEnv() []string {
-	var out []string
-	for _, kv := range os.Environ() {
-		k, _, ok := strings.Cut(kv, "=")
-		if !ok {
-			continue
-		}
-		if envAllowExact[k] {
-			out = append(out, kv)
-			continue
-		}
-		for _, p := range envAllowPrefix {
-			if strings.HasPrefix(k, p) {
-				out = append(out, kv)
-				break
-			}
-		}
-	}
-	return out
+	return minimalEnv(envAllowExact, envAllowPrefix)
 }
 
 type cappedBuffer struct {

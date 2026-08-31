@@ -157,6 +157,7 @@ const AGENT_LABELS: Record<string, string> = {
   codex: "Codex",
   gemini: "Gemini CLI",
   "cursor-agent": "Cursor Agent",
+  copilot: "GitHub Copilot CLI",
 };
 
 export function agentLabelFor(name: string, fallbackLabel?: string): string {
