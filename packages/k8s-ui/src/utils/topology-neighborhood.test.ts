@@ -179,6 +179,28 @@ describe('neighborhoodFor', () => {
     expect(out.nodes.map((n) => n.id)).toEqual(['argo'])
   })
 
+  it('resolves an omitted custom-resource group when exactly one node matches', () => {
+    const topo: Topology = {
+      nodes: [crdNode('ray', 'RayJob', 'ml', 'train', 'ray.io/v1')],
+      edges: [],
+    }
+    const out = neighborhoodFor(topo, [{ kind: 'RayJob', namespace: 'ml', name: 'train' }])
+    expect(out.nodes.map((node) => node.id)).toEqual(['ray'])
+  })
+
+  it('fails closed when an omitted custom-resource group has multiple candidates', () => {
+    const topo: Topology = {
+      nodes: [
+        crdNode('ray', 'RayJob', 'ml', 'train', 'ray.io/v1'),
+        crdNode('other', 'RayJob', 'ml', 'train', 'example.com/v1'),
+      ],
+      edges: [],
+    }
+    const out = neighborhoodFor(topo, [{ kind: 'RayJob', namespace: 'ml', name: 'train' }])
+    expect(out.nodes).toHaveLength(0)
+    expect(out.warnings?.some((warning) => warning.includes('No topology nodes matched'))).toBe(true)
+  })
+
   it('matches typed built-ins whose topology node omits apiVersion', () => {
     const topo: Topology = {
       nodes: [node('dep', 'Deployment', 'app', 'web')],
@@ -215,6 +237,11 @@ describe('neighborhoodFor', () => {
       { kind: 'Service', namespace: 'app', name: 'web' },
     ])
     expect(inferred.nodes.map((n) => n.id)).toEqual(['core'])
+
+    const customOnly = neighborhoodFor({ nodes: [knative], edges: [] }, [
+      { kind: 'Service', namespace: 'app', name: 'web' },
+    ])
+    expect(customOnly.nodes).toHaveLength(0)
   })
 
   it('qualifies workload keys only for CRD groups', () => {
