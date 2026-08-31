@@ -330,13 +330,28 @@ func (s *Server) authorizeWorkloadPodRead(w http.ResponseWriter, r *http.Request
 	return true
 }
 
+func (s *Server) authorizeWorkloadLogRead(w http.ResponseWriter, r *http.Request, kind, namespace string) bool {
+	if !s.authorizeWorkloadPodRead(w, r, kind, namespace) {
+		return false
+	}
+	return s.authorizePodLogRead(w, r, namespace)
+}
+
+func (s *Server) authorizePodLogRead(w http.ResponseWriter, r *http.Request, namespace string) bool {
+	if !s.canReadSubresource(r, "", "pods", "log", namespace, "get") {
+		s.writeError(w, http.StatusForbidden, "no access to pod logs in namespace "+namespace)
+		return false
+	}
+	return true
+}
+
 // handleWorkloadLogs fetches and merges logs from all pods (non-streaming)
 func (s *Server) handleWorkloadLogs(w http.ResponseWriter, r *http.Request) {
 	kind := strings.ToLower(chi.URLParam(r, "kind"))
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
-	if !s.authorizeWorkloadPodRead(w, r, kind, namespace) {
+	if !s.authorizeWorkloadLogRead(w, r, kind, namespace) {
 		return
 	}
 
@@ -385,7 +400,7 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
-	if !s.authorizeWorkloadPodRead(w, r, kind, namespace) {
+	if !s.authorizeWorkloadLogRead(w, r, kind, namespace) {
 		return
 	}
 

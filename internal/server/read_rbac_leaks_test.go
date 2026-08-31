@@ -120,7 +120,7 @@ func TestProxyAuth_NamespaceGatedReadPaths(t *testing.T) {
 	}
 }
 
-func TestProxyAuth_WorkloadPodBackedReadsRequireParentAndPodAccess(t *testing.T) {
+func TestProxyAuth_PodBackedReadsRequireExactAccess(t *testing.T) {
 	tests := []struct {
 		name          string
 		path          string
@@ -133,8 +133,12 @@ func TestProxyAuth_WorkloadPodBackedReadsRequireParentAndPodAccess(t *testing.T)
 		{name: "pods both allowed", path: "/api/workloads/deployments/default/nginx/pods?limit=1", parentAllowed: true, podsAllowed: true, wantStatus: http.StatusOK},
 		{name: "logs parent denied", path: "/api/workloads/deployments/default/nginx/logs", podsAllowed: true, wantStatus: http.StatusForbidden},
 		{name: "logs pods denied", path: "/api/workloads/deployments/default/nginx/logs", parentAllowed: true, wantStatus: http.StatusForbidden},
+		{name: "logs subresource denied", path: "/api/workloads/deployments/default/nginx/logs", parentAllowed: true, podsAllowed: true, wantStatus: http.StatusForbidden},
 		{name: "stream parent denied", path: "/api/workloads/deployments/default/nginx/logs/stream", podsAllowed: true, wantStatus: http.StatusForbidden},
 		{name: "stream pods denied", path: "/api/workloads/deployments/default/nginx/logs/stream", parentAllowed: true, wantStatus: http.StatusForbidden},
+		{name: "stream subresource denied", path: "/api/workloads/deployments/default/nginx/logs/stream", parentAllowed: true, podsAllowed: true, wantStatus: http.StatusForbidden},
+		{name: "pod logs subresource denied", path: "/api/pods/default/nginx/logs", parentAllowed: true, podsAllowed: true, wantStatus: http.StatusForbidden},
+		{name: "pod stream subresource denied", path: "/api/pods/default/nginx/logs/stream", parentAllowed: true, podsAllowed: true, wantStatus: http.StatusForbidden},
 	}
 
 	for _, tt := range tests {
