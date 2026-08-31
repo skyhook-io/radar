@@ -182,6 +182,26 @@ func TestDynamicResourceObservationRetainsDeniedAndDeferredOutcomes(t *testing.T
 		t.Fatalf("truncated denied observation = %+v", truncatedDenied)
 	}
 
+	incompleteCandidatesClient := fakeDynamicForListAccess(t, map[schema.GroupVersionResource]string{deniedGVR: "DeniedWidgetList"}, func(schema.GroupVersionResource, string) bool {
+		return false
+	})
+	incompleteCandidatesCache, err := NewDynamicResourceCache(DynamicCacheConfig{
+		DynamicClient:               incompleteCandidatesClient,
+		Discovery:                   deniedDiscovery,
+		NamespaceFallbacksTruncated: true,
+	})
+	if err != nil {
+		t.Fatalf("NewDynamicResourceCache incomplete candidates: %v", err)
+	}
+	t.Cleanup(incompleteCandidatesCache.Stop)
+	if err := incompleteCandidatesCache.EnsureWatching(deniedGVR); err == nil {
+		t.Fatal("EnsureWatching incomplete-candidate denied GVR succeeded")
+	}
+	incompleteDenied := incompleteCandidatesCache.Observation(deniedGVR)
+	if incompleteDenied.State != DynamicObservationDenied || !incompleteDenied.Truncated || incompleteDenied.ReasonCode != "access_denied_partial_probe" {
+		t.Fatalf("incomplete-candidate denied observation = %+v", incompleteDenied)
+	}
+
 	clusterScopedGVR := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "clustersummaries"}
 	clusterScopedDiscovery := &ResourceDiscovery{
 		resourceMap: make(map[string]APIResource),
@@ -285,6 +305,37 @@ func TestDynamicResourceObservationRetainsDeniedAndDeferredOutcomes(t *testing.T
 				}
 			}
 		})
+	}
+}
+
+func TestDynamicResourceObservationPreferredNamespaceDenialDoesNotOverwriteGVRState(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
+	discovery := &ResourceDiscovery{
+		resourceMap: make(map[string]APIResource),
+		gvrMap:      make(map[string]schema.GroupVersionResource),
+		lastRefresh: time.Now(),
+		cacheTTL:    time.Hour,
+	}
+	discovery.AddAPIResource(APIResource{
+		Group: gvr.Group, Version: gvr.Version, Kind: "Widget", Name: gvr.Resource,
+		Namespaced: true, IsCRD: true, Verbs: []string{"get", "list", "watch"},
+	})
+	dyn := fakeDynamicForListAccess(t, map[schema.GroupVersionResource]string{gvr: "WidgetList"}, func(schema.GroupVersionResource, string) bool {
+		return false
+	})
+	cache, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: dyn, Discovery: discovery})
+	if err != nil {
+		t.Fatalf("NewDynamicResourceCache: %v", err)
+	}
+	t.Cleanup(cache.Stop)
+	cache.retainObservation(gvr, DynamicObservationDeferred, "prior_global_state", false)
+
+	if err := cache.ensureWatching(gvr, "team-a"); err == nil {
+		t.Fatal("ensureWatching denied preferred namespace succeeded")
+	}
+	got := cache.Observation(gvr)
+	if got.State != DynamicObservationDeferred || got.ReasonCode != "prior_global_state" {
+		t.Fatalf("preferred-namespace denial overwrote GVR observation: %+v", got)
 	}
 }
 

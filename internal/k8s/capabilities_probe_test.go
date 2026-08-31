@@ -213,6 +213,27 @@ func TestMergeScopeCandidates_NonAuthoritativeIgnoresAccessible(t *testing.T) {
 	}
 }
 
+func TestScopeCandidateSetIncomplete(t *testing.T) {
+	tests := []struct {
+		name          string
+		authoritative bool
+		dropped       int
+		want          bool
+	}{
+		{name: "authoritative complete", authoritative: true, want: false},
+		{name: "authoritative capped", authoritative: true, dropped: 1, want: true},
+		{name: "non-authoritative empty", authoritative: false, want: true},
+		{name: "non-authoritative capped", authoritative: false, dropped: 1, want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := scopeCandidateSetIncomplete(test.authoritative, test.dropped); got != test.want {
+				t.Fatalf("scopeCandidateSetIncomplete(%t, %d) = %t, want %t", test.authoritative, test.dropped, got, test.want)
+			}
+		})
+	}
+}
+
 // Operator-named namespaces (--namespaces) can exceed the cap on the
 // non-authoritative path too; the count must be reported so the truncation
 // warning fires for exactly the users who typed the list out.
