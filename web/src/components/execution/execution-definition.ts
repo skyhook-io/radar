@@ -55,6 +55,10 @@ export function executionDefinitionFingerprint(summary: ExecutionDefinitionSumma
   return JSON.stringify(summary)
 }
 
+export function executionDefinitionDiffers(current: ExecutionDefinitionSummary | null, captured: ExecutionDefinitionSummary | null): boolean {
+  return current != null && captured != null && executionDefinitionFingerprint(current) !== executionDefinitionFingerprint(captured)
+}
+
 function kubernetesJobSummary(jobSpec: any): ExecutionDefinitionSummary {
   const podSpec = jobSpec.template?.spec ?? {}
   const containers = Array.isArray(podSpec.containers) ? podSpec.containers : []

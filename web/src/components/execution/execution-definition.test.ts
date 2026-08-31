@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { executionDefinitionFingerprint, executionDefinitionSummary } from './execution-definition'
+import { executionDefinitionDiffers, executionDefinitionFingerprint, executionDefinitionSummary } from './execution-definition'
 
 describe('executionDefinitionSummary', () => {
   it('explains a Kubernetes Job pod template and effective defaults', () => {
@@ -118,6 +118,20 @@ describe('executionDefinitionSummary', () => {
     })
 
     expect(executionDefinitionFingerprint(stored)).toBe(executionDefinitionFingerprint(current))
+  })
+
+  it('only reports drift when both definitions are comparable', () => {
+    const captured = executionDefinitionSummary('Job', {
+      spec: { template: { spec: { containers: [{ name: 'worker', image: 'example/worker:v1' }] } } },
+    })
+    const changed = executionDefinitionSummary('Job', {
+      spec: { template: { spec: { containers: [{ name: 'worker', image: 'example/worker:v2' }] } } },
+    })
+
+    expect(executionDefinitionDiffers(null, captured)).toBe(false)
+    expect(executionDefinitionDiffers(captured, null)).toBe(false)
+    expect(executionDefinitionDiffers(captured, captured)).toBe(false)
+    expect(executionDefinitionDiffers(captured, changed)).toBe(true)
   })
 
   it('reads a ScaledJob embedded Job target', () => {

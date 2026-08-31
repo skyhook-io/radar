@@ -87,20 +87,36 @@ type WorkloadRun struct {
 	Trigger     string `json:"trigger,omitempty"`
 	Message     string `json:"message,omitempty"`
 
-	Succeeded   int32                   `json:"succeeded,omitempty"`
-	Failed      int32                   `json:"failed,omitempty"`
-	Running     int32                   `json:"running,omitempty"`
-	Desired     int32                   `json:"desired,omitempty"`
-	Parallelism int32                   `json:"parallelism,omitempty"`
-	Progress    string                  `json:"progress,omitempty"`
-	Template    string                  `json:"template,omitempty"`
-	Launcher    *WorkloadRunResourceRef `json:"launcher,omitempty"`
+	Succeeded             int32                   `json:"succeeded,omitempty"`
+	Failed                int32                   `json:"failed,omitempty"`
+	Running               int32                   `json:"running,omitempty"`
+	Desired               int32                   `json:"desired,omitempty"`
+	Parallelism           int32                   `json:"parallelism,omitempty"`
+	Progress              string                  `json:"progress,omitempty"`
+	Template              string                  `json:"template,omitempty"`
+	Launcher              *WorkloadRunResourceRef `json:"launcher,omitempty"`
+	ReplicatedJob         string                  `json:"replicatedJob,omitempty"`
+	ReplicatedJobReplicas string                  `json:"replicatedJobReplicas,omitempty"`
+	JobIndex              string                  `json:"jobIndex,omitempty"`
+	GlobalReplicas        string                  `json:"globalReplicas,omitempty"`
+	GlobalIndex           string                  `json:"globalIndex,omitempty"`
+	GroupName             string                  `json:"groupName,omitempty"`
+	GroupReplicas         string                  `json:"groupReplicas,omitempty"`
+	GroupIndex            string                  `json:"groupIndex,omitempty"`
+	RestartAttempt        string                  `json:"restartAttempt,omitempty"`
+	JobRestartAttempt     string                  `json:"jobRestartAttempt,omitempty"`
 
 	PodTotal     int `json:"podTotal,omitempty"`
 	PodSucceeded int `json:"podSucceeded,omitempty"`
 	PodFailed    int `json:"podFailed,omitempty"`
 	PodRunning   int `json:"podRunning,omitempty"`
 	PodPending   int `json:"podPending,omitempty"`
+}
+
+type WorkloadRunsResponse struct {
+	Runs      []WorkloadRun `json:"runs"`
+	Total     int           `json:"total"`
+	Truncated bool          `json:"truncated"`
 }
 
 type WorkloadRunResourceRef struct {
@@ -110,22 +126,24 @@ type WorkloadRunResourceRef struct {
 	Group     string `json:"group,omitempty"`
 }
 
-// validWorkloadKinds defines which resource types support workload logs.
-// Accepts both singular and plural forms so the frontend can send K8s canonical
-// Kind names ("Deployment") without additional pluralization.
-var validWorkloadKinds = map[string]bool{
-	"deployment":   true,
-	"deployments":  true,
-	"statefulset":  true,
-	"statefulsets": true,
-	"daemonset":    true,
-	"daemonsets":   true,
-	"job":          true,
-	"jobs":         true,
-	"workflow":     true,
-	"workflows":    true,
-	"rollout":      true,
-	"rollouts":     true,
+type workloadReadTarget struct {
+	group    string
+	resource string
+}
+
+var workloadReadTargets = map[string]workloadReadTarget{
+	"deployment":   {group: "apps", resource: "deployments"},
+	"deployments":  {group: "apps", resource: "deployments"},
+	"statefulset":  {group: "apps", resource: "statefulsets"},
+	"statefulsets": {group: "apps", resource: "statefulsets"},
+	"daemonset":    {group: "apps", resource: "daemonsets"},
+	"daemonsets":   {group: "apps", resource: "daemonsets"},
+	"job":          {group: "batch", resource: "jobs"},
+	"jobs":         {group: "batch", resource: "jobs"},
+	"workflow":     {group: "argoproj.io", resource: "workflows"},
+	"workflows":    {group: "argoproj.io", resource: "workflows"},
+	"rollout":      {group: "argoproj.io", resource: "rollouts"},
+	"rollouts":     {group: "argoproj.io", resource: "rollouts"},
 }
 
 // handleWorkloadPods returns the list of pods for a workload
@@ -133,9 +151,17 @@ func (s *Server) handleWorkloadPods(w http.ResponseWriter, r *http.Request) {
 	kind := strings.ToLower(chi.URLParam(r, "kind"))
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
+	limit := 0
+	if _, requested := r.URL.Query()["limit"]; requested {
+		var err error
+		limit, err = parseCapacityLimit(r.URL.Query(), maxWorkloadPodResponseLimit, maxWorkloadPodResponseLimit)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 
-	if noNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) {
-		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
+	if !s.authorizeWorkloadPodRead(w, r, kind, namespace) {
 		return
 	}
 
@@ -147,12 +173,19 @@ func (s *Server) handleWorkloadPods(w http.ResponseWriter, r *http.Request) {
 
 	dynamicClient, contextName := s.getDynamicClientSnapshotForRequest(r)
 	target := s.workloadRevisionTargetForRequest(r, k8s.GetResourceCache(), dynamicClient, contextName, kind, namespace, name)
+	podInfos := buildPodInfosForRevision(pods, target)
+	total := len(podInfos)
+	truncated := false
+	if limit > 0 {
+		podInfos, truncated = limitWorkloadPodInfos(podInfos, limit)
+	}
 	s.writeJSON(w, map[string]any{
-		"pods": buildPodInfosForRevision(pods, target),
+		"pods":      podInfos,
+		"total":     total,
+		"truncated": truncated,
 	})
 }
 
-// handleWorkloadRuns returns retained child runs for scheduled workload kinds.
 func (s *Server) handleWorkloadRuns(w http.ResponseWriter, r *http.Request) {
 	kind := strings.ToLower(chi.URLParam(r, "kind"))
 	namespace := chi.URLParam(r, "namespace")
@@ -230,17 +263,35 @@ func (s *Server) handleWorkloadRuns(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusForbidden, "no access to jobs in namespace "+namespace)
 			return
 		}
+	case "jobset", "jobsets":
+		if !s.canRead(r, "jobset.x-k8s.io", "jobsets", namespace, "get") {
+			s.writeError(w, http.StatusForbidden, "no access to jobsets in namespace "+namespace)
+			return
+		}
+		if !s.canRead(r, "batch", "jobs", namespace, "list") {
+			s.writeError(w, http.StatusForbidden, "no access to jobs in namespace "+namespace)
+			return
+		}
 	}
 
-	runs, err := s.getWorkloadRuns(r.Context(), kind, namespace, name, runNamespaces)
+	if kind == "jobset" || kind == "jobsets" {
+		result, err := s.getJobSetMemberRuns(r.Context(), namespace, name)
+		if err != nil {
+			s.writeWorkloadError(w, err)
+			return
+		}
+		s.writeJSON(w, result)
+		return
+	}
+
+	includeJobSetLauncher := (kind == "job" || kind == "jobs") && s.canRead(r, "jobset.x-k8s.io", "jobsets", namespace, "get")
+	runs, err := s.getWorkloadRuns(r.Context(), kind, namespace, name, runNamespaces, includeJobSetLauncher)
 	if err != nil {
 		s.writeWorkloadError(w, err)
 		return
 	}
 
-	s.writeJSON(w, map[string]any{
-		"runs": runs,
-	})
+	s.writeJSON(w, map[string]any{"runs": runs})
 }
 
 func (s *Server) readableRunNamespaces(r *http.Request, group, resource string, namespaces []string) ([]string, bool) {
@@ -258,15 +309,49 @@ func (s *Server) readableRunNamespaces(r *http.Request, group, resource string, 
 	return allowed, len(allowed) > 0
 }
 
+func (s *Server) authorizeWorkloadPodRead(w http.ResponseWriter, r *http.Request, kind, namespace string) bool {
+	target, ok := workloadReadTargets[kind]
+	if !ok {
+		s.writeError(w, http.StatusBadRequest, "only deployments, statefulsets, daemonsets, rollouts, jobs, and workflows are supported")
+		return false
+	}
+	if noNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) {
+		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
+		return false
+	}
+	if !s.canRead(r, target.group, target.resource, namespace, "get") {
+		s.writeError(w, http.StatusForbidden, "no access to "+target.resource+" in namespace "+namespace)
+		return false
+	}
+	if !s.canRead(r, "", "pods", namespace, "list") {
+		s.writeError(w, http.StatusForbidden, "no access to pods in namespace "+namespace)
+		return false
+	}
+	return true
+}
+
+func (s *Server) authorizeWorkloadLogRead(w http.ResponseWriter, r *http.Request, kind, namespace string) bool {
+	if !s.authorizeWorkloadPodRead(w, r, kind, namespace) {
+		return false
+	}
+	return s.authorizePodLogRead(w, r, namespace)
+}
+
+func (s *Server) authorizePodLogRead(w http.ResponseWriter, r *http.Request, namespace string) bool {
+	if !s.canReadSubresource(r, "", "pods", "log", namespace, "get") {
+		s.writeError(w, http.StatusForbidden, "no access to pod logs in namespace "+namespace)
+		return false
+	}
+	return true
+}
+
 // handleWorkloadLogs fetches and merges logs from all pods (non-streaming)
 func (s *Server) handleWorkloadLogs(w http.ResponseWriter, r *http.Request) {
 	kind := strings.ToLower(chi.URLParam(r, "kind"))
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
-	// Check namespace access for authenticated users
-	if allowed := s.getUserNamespaces(r, []string{namespace}); noNamespaceAccess(allowed) {
-		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
+	if !s.authorizeWorkloadLogRead(w, r, kind, namespace) {
 		return
 	}
 
@@ -315,20 +400,13 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
-	// Check namespace access for authenticated users
-	if allowed := s.getUserNamespaces(r, []string{namespace}); noNamespaceAccess(allowed) {
-		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
+	if !s.authorizeWorkloadLogRead(w, r, kind, namespace) {
 		return
 	}
 
 	container := r.URL.Query().Get("container")
 	tailLines := parseTailLines(r.URL.Query().Get("tailLines"), 50)
 	sinceSeconds := parseSinceSeconds(r.URL.Query().Get("sinceSeconds"))
-
-	if !validWorkloadKinds[kind] {
-		s.writeError(w, http.StatusBadRequest, "only deployments, statefulsets, daemonsets, jobs, and workflows are supported")
-		return
-	}
 
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -606,6 +684,26 @@ func buildPodInfosForRevision(pods []*corev1.Pod, target workloadRevisionTarget)
 	return infos
 }
 
+const maxWorkloadPodResponseLimit = 200
+
+func limitWorkloadPodInfos(infos []WorkloadPodInfo, limit int) ([]WorkloadPodInfo, bool) {
+	sort.SliceStable(infos, func(i, j int) bool {
+		leftRank := health.Rank(health.Level(infos[i].HealthLevel))
+		rightRank := health.Rank(health.Level(infos[j].HealthLevel))
+		if leftRank != rightRank {
+			return leftRank > rightRank
+		}
+		if infos[i].RestartCount != infos[j].RestartCount {
+			return infos[i].RestartCount > infos[j].RestartCount
+		}
+		return infos[i].Name < infos[j].Name
+	})
+	if limit >= len(infos) {
+		return infos, false
+	}
+	return infos[:limit], true
+}
+
 // buildPodInfo converts a single pod to WorkloadPodInfo
 func buildPodInfo(pod *corev1.Pod, now time.Time) WorkloadPodInfo {
 	containers := make([]string, 0, len(pod.Spec.Containers)+len(pod.Spec.InitContainers))
@@ -685,7 +783,7 @@ func (e *workloadError) Error() string { return e.message }
 
 // getWorkloadPods validates the kind, retrieves cache, and returns pods for a workload
 func (s *Server) getWorkloadPods(kind, namespace, name string) ([]*corev1.Pod, *workloadError) {
-	if !validWorkloadKinds[kind] {
+	if _, ok := workloadReadTargets[kind]; !ok {
 		return nil, &workloadError{http.StatusBadRequest, "only deployments, statefulsets, daemonsets, rollouts, jobs, and workflows are supported"}
 	}
 
@@ -825,7 +923,7 @@ func workloadSelectorGetError(err error) *workloadError {
 	return &workloadError{http.StatusInternalServerError, err.Error()}
 }
 
-func (s *Server) getWorkloadRuns(ctx context.Context, kind, namespace, name string, runNamespaces []string) ([]WorkloadRun, *workloadError) {
+func (s *Server) getWorkloadRuns(ctx context.Context, kind, namespace, name string, runNamespaces []string, includeJobSetLauncher bool) ([]WorkloadRun, *workloadError) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return nil, &workloadError{http.StatusServiceUnavailable, "resource cache not available"}
@@ -841,7 +939,13 @@ func (s *Server) getWorkloadRuns(ctx context.Context, kind, namespace, name stri
 		if err != nil {
 			return nil, workloadParentGetError("job", namespace, name, err)
 		}
-		runs = append(runs, jobRunInfo(job))
+		run := jobRunInfo(job)
+		if includeJobSetLauncher {
+			if launcher := resolveJobSetLauncher(ctx, cache, job); launcher != nil {
+				run.Launcher = launcher
+			}
+		}
+		runs = append(runs, run)
 	case "workflow", "workflows":
 		workflow, err := cache.GetDynamicWithGroup(ctx, "Workflow", namespace, name, "argoproj.io")
 		if err != nil {
@@ -928,6 +1032,160 @@ func (s *Server) getWorkloadRuns(ctx context.Context, kind, namespace, name stri
 
 	sortRuns(runs)
 	return runs, nil
+}
+
+func (s *Server) getJobSetMemberRuns(ctx context.Context, namespace, name string) (WorkloadRunsResponse, *workloadError) {
+	cache := k8s.GetResourceCache()
+	if cache == nil {
+		return WorkloadRunsResponse{}, &workloadError{http.StatusServiceUnavailable, "resource cache not available"}
+	}
+	jobSet, err := cache.GetDynamicWithGroup(ctx, "JobSet", namespace, name, "jobset.x-k8s.io")
+	if err != nil {
+		return WorkloadRunsResponse{}, workloadParentGetError("jobset", namespace, name, err)
+	}
+	if !isSupportedJobSet(jobSet) {
+		return WorkloadRunsResponse{}, &workloadError{http.StatusBadRequest, "only jobset.x-k8s.io/v1alpha2 JobSets have child Jobs"}
+	}
+	if cache.Jobs() == nil {
+		return WorkloadRunsResponse{}, &workloadError{http.StatusForbidden, "insufficient permissions to list jobs"}
+	}
+	jobs, err := listJobRuns(cache, []string{namespace})
+	if err != nil {
+		return WorkloadRunsResponse{}, &workloadError{http.StatusInternalServerError, err.Error()}
+	}
+	return jobSetMemberRuns(jobSet, jobs), nil
+}
+
+const maxJobSetMemberRuns = 200
+
+const (
+	jobSetAPIVersion                  = "jobset.x-k8s.io/v1alpha2"
+	replicatedJobNameLabel            = "jobset.sigs.k8s.io/replicatedjob-name"
+	replicatedJobReplicasLabel        = "jobset.sigs.k8s.io/replicatedjob-replicas"
+	jobSetJobIndexLabel               = "jobset.sigs.k8s.io/job-index"
+	jobSetGlobalReplicasLabel         = "jobset.sigs.k8s.io/global-replicas"
+	jobSetJobGlobalIndexLabel         = "jobset.sigs.k8s.io/job-global-index"
+	jobSetGroupNameLabel              = "jobset.sigs.k8s.io/group-name"
+	jobSetGroupReplicasLabel          = "jobset.sigs.k8s.io/group-replicas"
+	jobSetJobGroupIndexLabel          = "jobset.sigs.k8s.io/job-group-index"
+	jobSetRestartAttemptAnnotation    = "jobset.sigs.k8s.io/restart-attempt"
+	jobSetJobRestartAttemptAnnotation = "jobset.sigs.k8s.io/job-restart-attempt"
+)
+
+func isSupportedJobSet(jobSet *unstructured.Unstructured) bool {
+	return jobSet != nil && jobSet.GetAPIVersion() == jobSetAPIVersion && jobSet.GetKind() == "JobSet"
+}
+
+func jobSetMemberRuns(jobSet *unstructured.Unstructured, jobs []*batchv1.Job) WorkloadRunsResponse {
+	runs := make([]WorkloadRun, 0)
+	for _, job := range jobs {
+		if !jobSetControlsJob(jobSet, job) {
+			continue
+		}
+		runs = append(runs, jobSetMemberRunInfo(jobSet, job))
+	}
+	sortJobSetMembers(runs)
+	result := WorkloadRunsResponse{Runs: runs, Total: len(runs)}
+	if len(result.Runs) > maxJobSetMemberRuns {
+		result.Runs = result.Runs[:maxJobSetMemberRuns]
+		result.Truncated = true
+	}
+	return result
+}
+
+func jobSetControlsJob(jobSet *unstructured.Unstructured, job *batchv1.Job) bool {
+	if !isSupportedJobSet(jobSet) || job == nil || job.Namespace != jobSet.GetNamespace() {
+		return false
+	}
+	owner := metav1.GetControllerOf(job)
+	if owner == nil || owner.APIVersion != jobSetAPIVersion || owner.Kind != "JobSet" || owner.Name != jobSet.GetName() {
+		return false
+	}
+	return jobSet.GetUID() != "" && owner.UID == jobSet.GetUID()
+}
+
+func jobSetMemberRunInfo(jobSet *unstructured.Unstructured, job *batchv1.Job) WorkloadRun {
+	run := jobRunInfo(job)
+	labels := job.GetLabels()
+	annotations := job.GetAnnotations()
+	run.Launcher = jobSetLauncher(jobSet, job)
+	run.ReplicatedJob = labels[replicatedJobNameLabel]
+	run.ReplicatedJobReplicas = labels[replicatedJobReplicasLabel]
+	run.JobIndex = labels[jobSetJobIndexLabel]
+	run.GlobalReplicas = labels[jobSetGlobalReplicasLabel]
+	run.GlobalIndex = labels[jobSetJobGlobalIndexLabel]
+	run.GroupName = labels[jobSetGroupNameLabel]
+	run.GroupReplicas = labels[jobSetGroupReplicasLabel]
+	run.GroupIndex = labels[jobSetJobGroupIndexLabel]
+	run.RestartAttempt = annotations[jobSetRestartAttemptAnnotation]
+	run.JobRestartAttempt = annotations[jobSetJobRestartAttemptAnnotation]
+	if job.DeletionTimestamp != nil {
+		run.Phase = "Terminating"
+		run.Active = false
+	}
+	return run
+}
+
+func resolveJobSetLauncher(ctx context.Context, cache *k8s.ResourceCache, job *batchv1.Job) *WorkloadRunResourceRef {
+	owner := metav1.GetControllerOf(job)
+	if owner == nil || owner.APIVersion != jobSetAPIVersion || owner.Kind != "JobSet" || owner.Name == "" || owner.UID == "" {
+		return nil
+	}
+	jobSet, err := cache.GetDynamicWithGroup(ctx, "JobSet", job.Namespace, owner.Name, "jobset.x-k8s.io")
+	if err != nil {
+		return nil
+	}
+	return jobSetLauncher(jobSet, job)
+}
+
+func jobSetLauncher(jobSet *unstructured.Unstructured, job *batchv1.Job) *WorkloadRunResourceRef {
+	if !isSupportedJobSet(jobSet) || !jobSetControlsJob(jobSet, job) {
+		return nil
+	}
+	return &WorkloadRunResourceRef{Kind: "JobSet", Namespace: job.Namespace, Name: jobSet.GetName(), Group: "jobset.x-k8s.io"}
+}
+
+func sortJobSetMembers(runs []WorkloadRun) {
+	sort.SliceStable(runs, func(i, j int) bool {
+		if (runs[i].Phase == "Terminating") != (runs[j].Phase == "Terminating") {
+			return runs[i].Phase != "Terminating"
+		}
+		if rankDiff := jobSetMemberPhaseRank(runs[i].Phase) - jobSetMemberPhaseRank(runs[j].Phase); rankDiff != 0 {
+			return rankDiff < 0
+		}
+		if runs[i].GroupName != runs[j].GroupName {
+			return runs[i].GroupName < runs[j].GroupName
+		}
+		if runs[i].ReplicatedJob != runs[j].ReplicatedJob {
+			return runs[i].ReplicatedJob < runs[j].ReplicatedJob
+		}
+		left, leftErr := strconv.Atoi(runs[i].JobIndex)
+		right, rightErr := strconv.Atoi(runs[j].JobIndex)
+		if leftErr == nil && rightErr == nil && left != right {
+			return left < right
+		}
+		if runs[i].JobIndex != runs[j].JobIndex {
+			return runs[i].JobIndex < runs[j].JobIndex
+		}
+		return runs[i].Name < runs[j].Name
+	})
+}
+
+func jobSetMemberPhaseRank(phase string) int {
+	switch phase {
+	case "Failed", "Error":
+		return 0
+	case "Running", "Pending":
+		return 1
+	case "Suspended":
+		return 2
+	case "Succeeded", "Complete":
+		return 3
+	case "Terminating":
+		return 4
+	default:
+		return 5
+	}
 }
 
 func listJobRuns(cache *k8s.ResourceCache, namespaces []string) ([]*batchv1.Job, error) {

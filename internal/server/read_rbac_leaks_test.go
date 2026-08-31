@@ -119,3 +119,41 @@ func TestProxyAuth_NamespaceGatedReadPaths(t *testing.T) {
 		})
 	}
 }
+
+func TestProxyAuth_PodBackedReadsRequireExactAccess(t *testing.T) {
+	tests := []struct {
+		name          string
+		path          string
+		parentAllowed bool
+		podsAllowed   bool
+		wantStatus    int
+	}{
+		{name: "pods parent denied", path: "/api/workloads/deployments/default/nginx/pods?limit=1", podsAllowed: true, wantStatus: http.StatusForbidden},
+		{name: "pods list denied", path: "/api/workloads/deployments/default/nginx/pods?limit=1", parentAllowed: true, wantStatus: http.StatusForbidden},
+		{name: "pods both allowed", path: "/api/workloads/deployments/default/nginx/pods?limit=1", parentAllowed: true, podsAllowed: true, wantStatus: http.StatusOK},
+		{name: "logs parent denied", path: "/api/workloads/deployments/default/nginx/logs", podsAllowed: true, wantStatus: http.StatusForbidden},
+		{name: "logs pods denied", path: "/api/workloads/deployments/default/nginx/logs", parentAllowed: true, wantStatus: http.StatusForbidden},
+		{name: "logs subresource denied", path: "/api/workloads/deployments/default/nginx/logs", parentAllowed: true, podsAllowed: true, wantStatus: http.StatusForbidden},
+		{name: "stream parent denied", path: "/api/workloads/deployments/default/nginx/logs/stream", podsAllowed: true, wantStatus: http.StatusForbidden},
+		{name: "stream pods denied", path: "/api/workloads/deployments/default/nginx/logs/stream", parentAllowed: true, wantStatus: http.StatusForbidden},
+		{name: "stream subresource denied", path: "/api/workloads/deployments/default/nginx/logs/stream", parentAllowed: true, podsAllowed: true, wantStatus: http.StatusForbidden},
+		{name: "pod logs subresource denied", path: "/api/pods/default/nginx/logs", parentAllowed: true, podsAllowed: true, wantStatus: http.StatusForbidden},
+		{name: "pod stream subresource denied", path: "/api/pods/default/nginx/logs/stream", parentAllowed: true, podsAllowed: true, wantStatus: http.StatusForbidden},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := newAuthTestServer(t)
+			env.srv.permCache.Set("alice", nil, &auth.UserPermissions{AllowedNamespaces: []string{"default"}})
+			permissions := env.srv.permCache.Get("alice", nil)
+			permissions.SetCanI("get", "apps", "deployments", "default", tt.parentAllowed)
+			permissions.SetCanI("list", "", "pods", "default", tt.podsAllowed)
+
+			resp := env.authGet(t, tt.path, "alice", "")
+			defer resp.Body.Close()
+			if resp.StatusCode != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", resp.StatusCode, tt.wantStatus)
+			}
+		})
+	}
+}

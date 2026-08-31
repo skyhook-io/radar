@@ -126,6 +126,76 @@ describe('GPU ecosystem API contracts', () => {
   it('distinguishes pending JobSets from active work', () => {
     expect(getJobSetStatus({ status: { replicatedJobsStatus: [{ active: 0, ready: 0 }] } }).text).toBe('Pending')
     expect(getJobSetStatus({ status: { replicatedJobsStatus: [{ active: 1, ready: 0 }] } }).text).toBe('Running')
+    expect(getJobSetStatus({}).text).toBe('Unknown')
+  })
+
+  it('uses the same JobSet state precedence as execution context', () => {
+    const liveCounts = { replicatedJobsStatus: [{ active: 1, ready: 1 }] }
+
+    expect(getJobSetStatus({
+      spec: { suspend: true },
+      status: {
+        ...liveCounts,
+        terminalState: 'Failed',
+        conditions: [{ type: 'Completed', status: 'True' }],
+      },
+    }).text).toBe('Failed')
+    expect(getJobSetStatus({
+      status: {
+        ...liveCounts,
+        terminalState: 'Completed',
+        conditions: [{ type: 'Failed', status: 'True', reason: 'ReachedMaxRestarts' }],
+      },
+    }).text).toBe('Completed')
+    expect(getJobSetStatus({
+      status: {
+        ...liveCounts,
+        conditions: [
+          { type: 'Failed', status: 'True', reason: 'ReachedMaxRestarts' },
+          { type: 'Completed', status: 'True' },
+        ],
+      },
+    }).text).toBe('ReachedMaxRestarts')
+    expect(getJobSetStatus({
+      status: {
+        ...liveCounts,
+        conditions: [
+          { type: 'Completed', status: 'True' },
+          { type: 'Suspended', status: 'True' },
+        ],
+      },
+    }).text).toBe('Completed')
+    expect(getJobSetStatus({
+      status: {
+        ...liveCounts,
+        conditions: [
+          { type: 'Suspended', status: 'True' },
+          { type: 'RestartingJobSet', status: 'True' },
+        ],
+      },
+    }).text).toBe('Suspended')
+    expect(getJobSetStatus({
+      spec: { suspend: true },
+      status: {
+        ...liveCounts,
+        conditions: [{ type: 'RestartingJobSet', status: 'True' }],
+      },
+    }).text).toBe('Suspended')
+    expect(getJobSetStatus({
+      status: {
+        ...liveCounts,
+        conditions: [
+          { type: 'RestartingJobSet', status: 'True' },
+          { type: 'StartupPolicyInProgress', status: 'True' },
+        ],
+      },
+    }).text).toBe('Restarting')
+    expect(getJobSetStatus({
+      status: {
+        ...liveCounts,
+        conditions: [{ type: 'StartupPolicyInProgress', status: 'True' }],
+      },
+    }).text).toBe('Starting')
   })
 
   it('surfaces an unavailable LeaderWorkerSet before progress', () => {

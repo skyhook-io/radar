@@ -17,9 +17,10 @@ const EMPTY_RUNS: WorkloadRun[] = []
 
 export function ScheduledWorkloadLogsViewer({ kind, namespace, name, selectedRunKey, onSelectRun }: ScheduledWorkloadLogsViewerProps) {
   const clusterScoped = kind === 'ClusterWorkflowTemplate' || kind === 'clusterworkflowtemplates'
+  const memberCollection = kind === 'JobSet' || kind === 'jobsets'
   const runsQuery = useWorkloadRuns(kind, namespace, name, true, { clusterScoped, refetchActive: true })
   const runs = runsQuery.data?.runs ?? EMPTY_RUNS
-  const defaultRun = useMemo(() => pickDefaultRun(runs), [runs])
+  const defaultRun = useMemo(() => memberCollection ? runs[0] : pickDefaultRun(runs), [memberCollection, runs])
   const [localRunKey, setLocalRunKey] = useState('')
   const effectiveRunKey = selectedRunKey ?? localRunKey
   const selectRun = onSelectRun ?? setLocalRunKey
@@ -42,7 +43,7 @@ export function ScheduledWorkloadLogsViewer({ kind, namespace, name, selectedRun
       <div className="flex h-full items-center justify-center text-theme-text-tertiary">
         <div className="flex items-center gap-2">
           <Loader2 className="h-4 w-4 animate-spin" />
-          <span>Loading runs...</span>
+          <span>{memberCollection ? 'Loading member Jobs...' : 'Loading runs...'}</span>
         </div>
       </div>
     )
@@ -52,7 +53,7 @@ export function ScheduledWorkloadLogsViewer({ kind, namespace, name, selectedRun
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 text-theme-text-tertiary">
         <Terminal className="h-8 w-8" />
-        <span>{runsQuery.error instanceof Error ? runsQuery.error.message : 'Failed to load runs'}</span>
+        <span>{runsQuery.error instanceof Error ? runsQuery.error.message : memberCollection ? 'Failed to load member Jobs' : 'Failed to load runs'}</span>
       </div>
     )
   }
@@ -61,7 +62,7 @@ export function ScheduledWorkloadLogsViewer({ kind, namespace, name, selectedRun
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 text-theme-text-tertiary">
         <Terminal className="h-8 w-8" />
-        <span>No retained runs found</span>
+        <span>{memberCollection ? 'No child Jobs found' : 'No retained runs found'}</span>
       </div>
     )
   }
@@ -70,7 +71,7 @@ export function ScheduledWorkloadLogsViewer({ kind, namespace, name, selectedRun
     <div className="flex h-full min-h-0 flex-col">
       <div className="shrink-0 border-b border-theme-border bg-theme-surface px-3 py-2">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-medium text-theme-text-secondary">Run</span>
+          <span className="text-xs font-medium text-theme-text-secondary">{memberCollection ? 'Job' : 'Run'}</span>
           <select
             value={workloadRunKey(selectedRun)}
             onChange={(event) => selectRun(event.target.value)}
@@ -78,7 +79,7 @@ export function ScheduledWorkloadLogsViewer({ kind, namespace, name, selectedRun
           >
             {runs.map(run => (
               <option key={workloadRunKey(run)} value={workloadRunKey(run)}>
-                {formatRunOption(run, clusterScoped)}
+                {formatRunOption(run, clusterScoped, memberCollection)}
               </option>
             ))}
           </select>
@@ -88,6 +89,9 @@ export function ScheduledWorkloadLogsViewer({ kind, namespace, name, selectedRun
           <span className="text-xs text-theme-text-tertiary">
             {formatRunTime(selectedRun)}
           </span>
+          {memberCollection && runsQuery.data?.truncated && (
+            <span className="text-xs text-theme-text-tertiary">Showing {runs.length} of {runsQuery.data.total} Jobs</span>
+          )}
         </div>
       </div>
       <div className="min-h-0 flex-1">
@@ -125,8 +129,11 @@ function formatRunTime(run: WorkloadRun): string {
   return new Date(raw).toLocaleString()
 }
 
-function formatRunOption(run: WorkloadRun, showNamespace: boolean): string {
+function formatRunOption(run: WorkloadRun, showNamespace: boolean, memberCollection: boolean): string {
   const bits = [showNamespace ? `${run.namespace}/${run.name}` : run.name, run.phase]
+  if (memberCollection && run.replicatedJob) {
+    bits.push(`${run.replicatedJob}${run.jobIndex ? ` #${run.jobIndex}` : ''}`)
+  }
   if (run.progress) bits.push(run.progress)
   else if (run.desired) bits.push(`${run.succeeded ?? 0}/${run.desired}`)
   const work = run.podTotal ? `${run.podSucceeded ?? 0}/${run.podTotal} pods` : ''

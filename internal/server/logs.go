@@ -38,6 +38,9 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
 		return
 	}
+	if !s.authorizePodLogRead(w, r, namespace) {
+		return
+	}
 
 	tailLines := parseTailLines(tailLinesStr, 500)
 	sinceSeconds := parseSinceSeconds(sinceSecondsStr)
@@ -114,6 +117,9 @@ func (s *Server) handlePodLogsStream(w http.ResponseWriter, r *http.Request) {
 	// Check namespace access for authenticated users
 	if allowed := s.getUserNamespaces(r, []string{namespace}); noNamespaceAccess(allowed) {
 		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
+		return
+	}
+	if !s.authorizePodLogRead(w, r, namespace) {
 		return
 	}
 

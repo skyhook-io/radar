@@ -1,9 +1,11 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +24,7 @@ import (
 	clienttesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
@@ -44,6 +47,16 @@ func TestSortRunsPrefersActiveThenNewest(t *testing.T) {
 	}
 }
 
+func TestAuthorizePodLogReadAllowsLocalKubeconfigAccess(t *testing.T) {
+	s := &Server{}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest("GET", "/api/pods/default/example/logs", nil)
+
+	if !s.authorizePodLogRead(recorder, request, "default") {
+		t.Fatalf("local kubeconfig request was denied: status %d, body %q", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestBuildPodInfosForRevisionAttributesOnlyKnownIdentities(t *testing.T) {
 	pods := []*corev1.Pod{
 		{ObjectMeta: metav1.ObjectMeta{Name: "new", Labels: map[string]string{"pod-template-hash": "rev-2"}}},
@@ -60,6 +73,27 @@ func TestBuildPodInfosForRevisionAttributesOnlyKnownIdentities(t *testing.T) {
 	}
 	if infos[2].UpdatedRevision != nil {
 		t.Fatalf("unknown revision was guessed: %#v", infos[2])
+	}
+}
+
+func TestLimitWorkloadPodInfosBoundsProblemFirst(t *testing.T) {
+	infos := []WorkloadPodInfo{
+		{Name: "healthy", HealthLevel: string(health.LevelHealthy)},
+		{Name: "degraded-low-restarts", HealthLevel: string(health.LevelDegraded), RestartCount: 1},
+		{Name: "unhealthy", HealthLevel: string(health.LevelUnhealthy)},
+		{Name: "degraded-high-restarts", HealthLevel: string(health.LevelDegraded), RestartCount: 4},
+	}
+
+	limited, truncated := limitWorkloadPodInfos(infos, 3)
+
+	if !truncated {
+		t.Fatal("expected response to be truncated")
+	}
+	want := []string{"unhealthy", "degraded-high-restarts", "degraded-low-restarts"}
+	for i, name := range want {
+		if limited[i].Name != name {
+			t.Fatalf("limited[%d] = %q, want %q; full result %#v", i, limited[i].Name, name, limited)
+		}
 	}
 }
 
@@ -281,6 +315,250 @@ func TestJobRunInfoSuspendedAndLauncher(t *testing.T) {
 	if run.Trigger != "event" || run.Launcher == nil || run.Launcher.Kind != "ScaledJob" || run.Launcher.Name != "queue-worker" || run.Launcher.Group != "keda.sh" {
 		t.Fatalf("unexpected launcher: %#v", run)
 	}
+}
+
+func TestDirectJobRunPreservesNonJobSetLauncher(t *testing.T) {
+	controller := true
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+		Name:      "nightly-abc",
+		Namespace: "ci",
+		OwnerReferences: []metav1.OwnerReference{{
+			APIVersion: "batch/v1",
+			Kind:       "CronJob",
+			Name:       "nightly",
+			Controller: &controller,
+		}},
+	}}
+	useTestResourceCache(t, fake.NewSimpleClientset(job))
+
+	runs, err := (&Server{}).getWorkloadRuns(context.Background(), "jobs", "ci", "nightly-abc", nil, true)
+	if err != nil {
+		t.Fatalf("get direct Job run: %v", err)
+	}
+	if len(runs) != 1 || runs[0].Launcher == nil || runs[0].Launcher.Kind != "CronJob" || runs[0].Launcher.Name != "nightly" {
+		t.Fatalf("non-JobSet launcher was lost: %#v", runs)
+	}
+}
+
+func TestJobSetMemberRunsRequireExactControllerIdentity(t *testing.T) {
+	jobSet := testJobSet("training", "distributed", types.UID("jobset-current"))
+	controller := true
+	member := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "distributed-workers-2",
+			Namespace: "training",
+			Annotations: map[string]string{
+				jobSetRestartAttemptAnnotation:    "1",
+				jobSetJobRestartAttemptAnnotation: "2",
+			},
+			Labels: map[string]string{
+				replicatedJobNameLabel:     "workers",
+				replicatedJobReplicasLabel: "4",
+				jobSetJobIndexLabel:        "2",
+				jobSetGlobalReplicasLabel:  "5",
+				jobSetJobGlobalIndexLabel:  "3",
+				jobSetGroupNameLabel:       "trainers",
+				jobSetGroupReplicasLabel:   "4",
+				jobSetJobGroupIndexLabel:   "2",
+			},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: jobSetAPIVersion,
+				Kind:       "JobSet",
+				Name:       "distributed",
+				UID:        types.UID("jobset-current"),
+				Controller: &controller,
+			}},
+		},
+	}
+	wrongGroup := member.DeepCopy()
+	wrongGroup.Name = "wrong-group"
+	wrongGroup.OwnerReferences[0].APIVersion = "example.io/v1alpha2"
+	staleUID := member.DeepCopy()
+	staleUID.Name = "stale-uid"
+	staleUID.OwnerReferences[0].UID = types.UID("jobset-deleted")
+	nonController := member.DeepCopy()
+	nonController.Name = "not-controller"
+	nonController.OwnerReferences[0].Controller = nil
+	labelOnly := member.DeepCopy()
+	labelOnly.Name = "label-only"
+	labelOnly.OwnerReferences = nil
+	missingLabels := member.DeepCopy()
+	missingLabels.Name = "distributed-chief-0"
+	missingLabels.Labels = nil
+
+	result := jobSetMemberRuns(jobSet, []*batchv1.Job{wrongGroup, staleUID, nonController, labelOnly, member, missingLabels})
+
+	if result.Total != 2 || result.Truncated || len(result.Runs) != 2 {
+		t.Fatalf("unexpected member bounds: %#v", result)
+	}
+	var got *WorkloadRun
+	for i := range result.Runs {
+		if result.Runs[i].Name == member.Name {
+			got = &result.Runs[i]
+			break
+		}
+	}
+	if got == nil {
+		t.Fatalf("owned member missing from %#v", result.Runs)
+	}
+	if got.ReplicatedJob != "workers" || got.ReplicatedJobReplicas != "4" || got.JobIndex != "2" || got.GlobalReplicas != "5" || got.GlobalIndex != "3" {
+		t.Fatalf("unexpected role/index metadata: %#v", got)
+	}
+	if got.GroupName != "trainers" || got.GroupReplicas != "4" || got.GroupIndex != "2" {
+		t.Fatalf("unexpected group metadata: %#v", got)
+	}
+	if got.RestartAttempt != "1" || got.JobRestartAttempt != "2" {
+		t.Fatalf("unexpected restart metadata: %#v", got)
+	}
+	if got.Launcher == nil || got.Launcher.Kind != "JobSet" || got.Launcher.Group != "jobset.x-k8s.io" || got.Launcher.Name != "distributed" {
+		t.Fatalf("unexpected JobSet backlink: %#v", got.Launcher)
+	}
+	missingUID := jobSet.DeepCopy()
+	missingUID.SetUID("")
+	if got := jobSetMemberRuns(missingUID, []*batchv1.Job{member}); got.Total != 0 {
+		t.Fatalf("JobSet without authoritative UID matched %d members", got.Total)
+	}
+}
+
+func TestJobSetLauncherRequiresValidatedLiveParent(t *testing.T) {
+	jobSet := testJobSet("training", "distributed", types.UID("jobset-current"))
+	controller := true
+	member := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+		Name:      "distributed-workers-0",
+		Namespace: "training",
+		OwnerReferences: []metav1.OwnerReference{{
+			APIVersion: jobSetAPIVersion,
+			Kind:       "JobSet",
+			Name:       "distributed",
+			UID:        types.UID("jobset-current"),
+			Controller: &controller,
+		}},
+	}}
+
+	launcher := jobSetLauncher(jobSet, member)
+	if launcher == nil || launcher.Kind != "JobSet" || launcher.Name != "distributed" || launcher.Group != "jobset.x-k8s.io" {
+		t.Fatalf("unexpected validated launcher: %#v", launcher)
+	}
+
+	stale := member.DeepCopy()
+	stale.OwnerReferences[0].UID = types.UID("jobset-old")
+	if launcher := jobSetLauncher(jobSet, stale); launcher != nil {
+		t.Fatalf("stale parent UID produced launcher: %#v", launcher)
+	}
+}
+
+func TestJobRunInfoDoesNotGuessJobSetBacklinkWithoutValidatedRoot(t *testing.T) {
+	controller := true
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+		Name:      "orphaned-member",
+		Namespace: "training",
+		OwnerReferences: []metav1.OwnerReference{{
+			APIVersion: jobSetAPIVersion,
+			Kind:       "JobSet",
+			Name:       "recreated",
+			UID:        "deleted-root",
+			Controller: &controller,
+		}},
+	}}
+
+	if launcher := jobRunInfo(job).Launcher; launcher != nil {
+		t.Fatalf("unvalidated JobSet backlink = %#v, want nil", launcher)
+	}
+}
+
+func TestJobSetMemberRunsAreBoundedAndProblemFirst(t *testing.T) {
+	jobSet := testJobSet("training", "wide", types.UID("wide-uid"))
+	controller := true
+	jobs := make([]*batchv1.Job, 0, maxJobSetMemberRuns+1)
+	for i := 0; i <= maxJobSetMemberRuns; i++ {
+		job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("wide-worker-%03d", i),
+			Namespace: "training",
+			Labels: map[string]string{
+				replicatedJobNameLabel: "workers",
+				jobSetJobIndexLabel:    strconv.Itoa(i),
+			},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: jobSetAPIVersion,
+				Kind:       "JobSet",
+				Name:       "wide",
+				UID:        types.UID("wide-uid"),
+				Controller: &controller,
+			}},
+		}}
+		if i == maxJobSetMemberRuns {
+			job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue}}
+		}
+		jobs = append(jobs, job)
+	}
+
+	result := jobSetMemberRuns(jobSet, jobs)
+
+	if result.Total != maxJobSetMemberRuns+1 || !result.Truncated || len(result.Runs) != maxJobSetMemberRuns {
+		t.Fatalf("unexpected member bounds: total=%d returned=%d truncated=%v", result.Total, len(result.Runs), result.Truncated)
+	}
+	if result.Runs[0].Name != "wide-worker-200" || result.Runs[0].Phase != "Failed" {
+		t.Fatalf("first member = %#v, want failed member", result.Runs[0])
+	}
+}
+
+func TestJobSetMemberRunsPutTerminatingAttemptsAfterReplacements(t *testing.T) {
+	jobSet := testJobSet("training", "restarting", types.UID("restarting-uid"))
+	controller := true
+	owner := metav1.OwnerReference{
+		APIVersion: jobSetAPIVersion,
+		Kind:       "JobSet",
+		Name:       "restarting",
+		UID:        types.UID("restarting-uid"),
+		Controller: &controller,
+	}
+	deletionTime := metav1.Now()
+	old := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+		Name:              "workers-old",
+		Namespace:         "training",
+		DeletionTimestamp: &deletionTime,
+		Labels:            map[string]string{replicatedJobNameLabel: "workers", jobSetJobIndexLabel: "0"},
+		OwnerReferences:   []metav1.OwnerReference{owner},
+	}}
+	replacement := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+		Name:            "workers-new",
+		Namespace:       "training",
+		Labels:          map[string]string{replicatedJobNameLabel: "workers", jobSetJobIndexLabel: "0"},
+		Annotations:     map[string]string{jobSetRestartAttemptAnnotation: "1"},
+		OwnerReferences: []metav1.OwnerReference{owner},
+	}}
+
+	result := jobSetMemberRuns(jobSet, []*batchv1.Job{old, replacement})
+
+	if result.Runs[0].Name != "workers-new" || result.Runs[1].Phase != "Terminating" || result.Runs[1].Active {
+		t.Fatalf("unexpected restart ordering: %#v", result.Runs)
+	}
+}
+
+func TestSupportedJobSetRequiresV1Alpha2GVK(t *testing.T) {
+	if !isSupportedJobSet(testJobSet("training", "supported", "uid")) {
+		t.Fatal("expected v1alpha2 JobSet to be supported")
+	}
+	future := testJobSet("training", "future", "uid")
+	future.SetAPIVersion("jobset.x-k8s.io/v1beta1")
+	if isSupportedJobSet(future) {
+		t.Fatal("future JobSet version was treated as supported")
+	}
+	foreign := testJobSet("training", "foreign", "uid")
+	foreign.SetAPIVersion("example.io/v1alpha2")
+	if isSupportedJobSet(foreign) {
+		t.Fatal("foreign same-kind resource was treated as supported")
+	}
+}
+
+func testJobSet(namespace, name string, uid types.UID) *unstructured.Unstructured {
+	jobSet := &unstructured.Unstructured{}
+	jobSet.SetAPIVersion(jobSetAPIVersion)
+	jobSet.SetKind("JobSet")
+	jobSet.SetNamespace(namespace)
+	jobSet.SetName(name)
+	jobSet.SetUID(uid)
+	return jobSet
 }
 
 func TestWorkflowRunInfoIncludesCronWorkflowLauncher(t *testing.T) {
