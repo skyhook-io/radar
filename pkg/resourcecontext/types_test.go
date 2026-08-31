@@ -283,6 +283,45 @@ func TestExecutionSummaryOmitsUnavailableCounts(t *testing.T) {
 	if strings.Contains(string(b), `"counts"`) {
 		t.Fatalf("unavailable counts serialized as observed zero: %s", b)
 	}
+	if strings.Contains(string(b), `"runtimes"`) {
+		t.Fatalf("unavailable runtimes serialized: %s", b)
+	}
+}
+
+func TestExecutionSummaryRuntimesRoundTripPreservesReportedZero(t *testing.T) {
+	orig := ExecutionSummary{
+		Controller: "rayservice",
+		Stage:      ExecutionUpdating,
+		Runtimes: &ExecutionRuntimes{
+			Active: &ExecutionRuntime{
+				ClusterName:           "serve-old",
+				TargetCapacityPercent: int64Ptr(100),
+				TrafficRoutedPercent:  int64Ptr(100),
+			},
+			Pending: &ExecutionRuntime{
+				ClusterName:           "serve-new",
+				TargetCapacityPercent: int64Ptr(0),
+				TrafficRoutedPercent:  int64Ptr(0),
+			},
+		},
+	}
+
+	wire, err := json.Marshal(orig)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, want := range []string{`"stage":"updating"`, `"targetCapacityPercent":0`, `"trafficRoutedPercent":0`} {
+		if !strings.Contains(string(wire), want) {
+			t.Fatalf("wire shape missing %s: %s", want, wire)
+		}
+	}
+	var got ExecutionSummary
+	if err := json.Unmarshal(wire, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(orig, got) {
+		t.Fatalf("round-trip mismatch:\nwant %#v\ngot  %#v", orig, got)
+	}
 }
 
 func int64Ptr(value int64) *int64 {

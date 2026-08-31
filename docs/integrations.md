@@ -1346,8 +1346,21 @@ This is resource reconnaissance, not GPU accounting or end-to-end workload diagn
 |----------|-------|---------------|
 | RayCluster | `ray.io/v1` | state + provisioning conditions |
 | RayJob | `ray.io/v1` | jobStatus + jobDeploymentStatus |
-| RayService | `ray.io/v1` | serviceStatus + upgrade/rollback conditions |
+| RayService | `ray.io/v1` | lifecycle conditions + active/pending RayCluster runtime status |
 | RayCronJob | `ray.io/v1` | suspend |
+
+For an exact `ray.io/v1` RayService, the REST AI resource endpoint and MCP
+`get_resource` project a compact `resourceContext.execution` summary from
+KubeRay's authoritative conditions. Service lifecycle stays separate from the
+controller-reported active and pending RayCluster runtime slots. Each named
+slot can carry its selected native RayCluster condition and, when KubeRay
+reports them, target-capacity and traffic percentages; an observed zero remains
+zero rather than becoming unavailable. The summary does not use deprecated
+`serviceStatus` or RayCluster `state` fallbacks, invent child names, flatten
+RayService ownership, or emit Job/member counts that RayService does not own.
+Full Serve application/deployment status and `numServeEndpoints` remain on the
+returned resource; the endpoint count spans both runtime slots during an
+incremental upgrade and is not attributed to either one.
 
 ### KServe
 

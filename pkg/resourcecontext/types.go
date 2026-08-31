@@ -211,6 +211,7 @@ type ExecutionSummary struct {
 	State      *ExecutionState         `json:"state,omitempty"`
 	Counts     *ExecutionCounts        `json:"counts,omitempty"`
 	Restarts   *ExecutionRestartCounts `json:"restarts,omitempty"`
+	Runtimes   *ExecutionRuntimes      `json:"runtimes,omitempty"`
 }
 
 type ExecutionStage string
@@ -220,6 +221,7 @@ const (
 	ExecutionPending    ExecutionStage = "pending"
 	ExecutionStarting   ExecutionStage = "starting"
 	ExecutionRunning    ExecutionStage = "running"
+	ExecutionUpdating   ExecutionStage = "updating"
 	ExecutionRestarting ExecutionStage = "restarting"
 	ExecutionSuspended  ExecutionStage = "suspended"
 	ExecutionCompleted  ExecutionStage = "completed"
@@ -234,6 +236,22 @@ type ExecutionState struct {
 	Reason             string `json:"reason,omitempty"`
 	Message            string `json:"message,omitempty"`
 	LastTransitionTime string `json:"lastTransitionTime,omitempty"`
+}
+
+// ExecutionRuntimes keeps independently reported active and pending runtime
+// slots separate from the root controller state.
+type ExecutionRuntimes struct {
+	Active  *ExecutionRuntime `json:"active,omitempty"`
+	Pending *ExecutionRuntime `json:"pending,omitempty"`
+}
+
+// ExecutionRuntime is a bounded projection of one controller-reported runtime.
+// The canonical resource retains complete runtime and revision status.
+type ExecutionRuntime struct {
+	ClusterName           string          `json:"clusterName"`
+	RuntimeState          *ExecutionState `json:"runtimeState,omitempty"`
+	TargetCapacityPercent *int64          `json:"targetCapacityPercent,omitempty"`
+	TrafficRoutedPercent  *int64          `json:"trafficRoutedPercent,omitempty"`
 }
 
 // ExecutionCounts keeps desired and observed facts separate. Observed fields
