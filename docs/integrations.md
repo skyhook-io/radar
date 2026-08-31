@@ -794,7 +794,7 @@ They roll up under three categories, split by what you'd go and look at: `backup
 - Phase, backup method, duration, start/stop timestamps
 - Cluster reference with clickable link
 - Destination path and server name
-- Recovery target
+- Backup target
 - Failure detection (AlertBanner with error message)
 
 **ScheduledBackup Detail View:**
