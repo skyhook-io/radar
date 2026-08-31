@@ -57,7 +57,7 @@ import type {
 import type { GitOpsOperationResponse } from '../types/gitops'
 import { apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
 import { apiVersionToGroup, pluralToKind } from '../utils/navigation'
-import { claimBrowserUpdateCheck } from './update-report'
+import { markBrowserUpdateCheckAttempt } from './update-report'
 import type { DeploymentMode } from '../types'
 
 // Auto-refresh cadences (ms) — named constants for each polled hook's
@@ -1520,7 +1520,7 @@ export interface VersionInfo {
 }
 
 interface BrowserUpdateCheckDependencies {
-  claimBrowserCheck: (installScope?: string) => string | null
+  markBrowserUpdateCheckAttempt: (installScope?: string) => string | null
   sendBrowserCheck: () => Promise<void>
 }
 
@@ -1538,13 +1538,13 @@ export function reportBrowserUpdateCheck(
   deploymentMode: DeploymentMode | undefined,
   installScope?: string,
   dependencies: BrowserUpdateCheckDependencies = {
-    claimBrowserCheck: claimBrowserUpdateCheck,
+    markBrowserUpdateCheckAttempt,
     sendBrowserCheck: sendBrowserUpdateCheck,
   },
 ): void {
   if (deploymentMode !== 'in-cluster') return
-  const claimedDay = dependencies.claimBrowserCheck(installScope)
-  if (claimedDay) void dependencies.sendBrowserCheck().catch(() => {})
+  const attemptedDay = dependencies.markBrowserUpdateCheckAttempt(installScope)
+  if (attemptedDay) void dependencies.sendBrowserCheck().catch(() => {})
 }
 
 export function useVersionCheck() {

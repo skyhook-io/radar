@@ -2,12 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { reportBrowserUpdateCheck, sendBrowserUpdateCheck } from './client'
 
 function dependencies(reportDay: string | null = null) {
-  const claimBrowserCheck = vi.fn<(installScope?: string) => string | null>(() => reportDay)
+  const markBrowserUpdateCheckAttempt = vi.fn<(installScope?: string) => string | null>(() => reportDay)
   const sendBrowserCheck = vi.fn(async () => {})
   return {
-    claimBrowserCheck,
+    markBrowserUpdateCheckAttempt,
     sendBrowserCheck,
-    value: { claimBrowserCheck, sendBrowserCheck },
+    value: { markBrowserUpdateCheckAttempt, sendBrowserCheck },
   }
 }
 
@@ -19,14 +19,14 @@ describe('reportBrowserUpdateCheck', () => {
   it('does not add a browser check for local mode', () => {
     const deps = dependencies('2026-08-29')
     reportBrowserUpdateCheck('local', undefined, deps.value)
-    expect(deps.claimBrowserCheck).not.toHaveBeenCalled()
+    expect(deps.markBrowserUpdateCheckAttempt).not.toHaveBeenCalled()
     expect(deps.sendBrowserCheck).not.toHaveBeenCalled()
   })
 
   it('adds one best-effort in-cluster browser check', () => {
     const deps = dependencies('2026-08-29')
     reportBrowserUpdateCheck('in-cluster', '1700000000', deps.value)
-    expect(deps.claimBrowserCheck).toHaveBeenCalledWith('1700000000')
+    expect(deps.markBrowserUpdateCheckAttempt).toHaveBeenCalledWith('1700000000')
     expect(deps.sendBrowserCheck).toHaveBeenCalledOnce()
   })
 
@@ -46,7 +46,7 @@ describe('reportBrowserUpdateCheck', () => {
   it('does not emit the standalone browser check in Cloud mode', () => {
     const deps = dependencies('2026-08-29')
     reportBrowserUpdateCheck('cloud', undefined, deps.value)
-    expect(deps.claimBrowserCheck).not.toHaveBeenCalled()
+    expect(deps.markBrowserUpdateCheckAttempt).not.toHaveBeenCalled()
     expect(deps.sendBrowserCheck).not.toHaveBeenCalled()
   })
 

@@ -6,7 +6,7 @@ export function utcDay(now: Date): string {
   return now.toISOString().slice(0, 10)
 }
 
-export function claimDailyUpdateCheck(
+export function markDailyUpdateCheckAttempt(
   storage: Pick<Storage, 'getItem' | 'setItem'>,
   apiBase: string,
   now: Date,
@@ -32,9 +32,9 @@ export function claimDailyUpdateCheck(
   return day
 }
 
-export function claimBrowserUpdateCheck(installScope?: string): string | null {
+export function markBrowserUpdateCheckAttempt(installScope?: string): string | null {
   try {
-    return claimDailyUpdateCheck(localStorage, getApiBase(), new Date(), installScope)
+    return markDailyUpdateCheckAttempt(localStorage, getApiBase(), new Date(), installScope)
   } catch {
     return null
   }
