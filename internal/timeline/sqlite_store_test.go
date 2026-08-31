@@ -418,24 +418,43 @@ func TestSQLiteStore_ResourceSeen(t *testing.T) {
 	defer cleanup()
 
 	// Initially not seen
-	if store.IsResourceSeen("ctx", "Pod", "default", "test-pod") {
+	if store.IsResourceSeen("ctx", "", "Pod", "default", "test-pod") {
 		t.Error("Resource should not be seen initially")
 	}
 
 	// Mark as seen
-	store.MarkResourceSeen("ctx", "Pod", "default", "test-pod")
+	store.MarkResourceSeen("ctx", "", "Pod", "default", "test-pod")
 
 	// Now should be seen
-	if !store.IsResourceSeen("ctx", "Pod", "default", "test-pod") {
+	if !store.IsResourceSeen("ctx", "", "Pod", "default", "test-pod") {
 		t.Error("Resource should be seen after marking")
 	}
 
 	// Clear seen
-	store.ClearResourceSeen("ctx", "Pod", "default", "test-pod")
+	store.ClearResourceSeen("ctx", "", "Pod", "default", "test-pod")
 
 	// Should not be seen again
-	if store.IsResourceSeen("ctx", "Pod", "default", "test-pod") {
+	if store.IsResourceSeen("ctx", "", "Pod", "default", "test-pod") {
 		t.Error("Resource should not be seen after clearing")
+	}
+}
+
+func TestSQLiteStore_ResourceSeen_APIGroupScoped(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+
+	store.MarkResourceSeen("ctx", "", "Service", "shop", "api")
+	store.MarkResourceSeen("ctx", "serving.knative.dev", "Service", "shop", "api")
+
+	store.ClearResourceSeen("ctx", "", "Service", "shop", "api")
+	if store.IsResourceSeen("ctx", "", "Service", "shop", "api") {
+		t.Fatal("core Service should be cleared")
+	}
+	if !store.IsResourceSeen("ctx", "serving.knative.dev", "Service", "shop", "api") {
+		t.Fatal("clearing core Service must not clear Knative Service")
+	}
+	if store.IsResourceSeen("other-ctx", "serving.knative.dev", "Service", "shop", "api") {
+		t.Fatal("same Knative Service in another cluster must remain unseen")
 	}
 }
 
@@ -630,8 +649,9 @@ func TestSQLiteStore_SeenResources_PersistAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	store1.MarkResourceSeen("ctx", "Pod", "default", "p1")
-	store1.MarkResourceSeen("ctx", "Deployment", "kube-system", "d1")
+	store1.MarkResourceSeen("ctx", "", "Service", "shop", "api")
+	store1.MarkResourceSeen("ctx", "serving.knative.dev", "Service", "shop", "api")
+	store1.MarkResourceSeen("ctx", "apps", "Deployment", "kube-system", "d1")
 	store1.Close()
 
 	store2, err := NewSQLiteStore(dbPath)
@@ -640,14 +660,62 @@ func TestSQLiteStore_SeenResources_PersistAcrossRestart(t *testing.T) {
 	}
 	defer store2.Close()
 
-	if !store2.IsResourceSeen("ctx", "Pod", "default", "p1") {
-		t.Error("expected Pod default/p1 to be seen after restart")
+	if !store2.IsResourceSeen("ctx", "", "Service", "shop", "api") {
+		t.Error("expected core Service shop/api to be seen after restart")
 	}
-	if !store2.IsResourceSeen("ctx", "Deployment", "kube-system", "d1") {
+	if !store2.IsResourceSeen("ctx", "serving.knative.dev", "Service", "shop", "api") {
+		t.Error("expected Knative Service shop/api to be seen after restart")
+	}
+	if !store2.IsResourceSeen("ctx", "apps", "Deployment", "kube-system", "d1") {
 		t.Error("expected Deployment kube-system/d1 to be seen after restart")
 	}
-	if store2.IsResourceSeen("ctx", "Pod", "default", "never-marked") {
+	if store2.IsResourceSeen("ctx", "", "Pod", "default", "never-marked") {
 		t.Error("did not expect unmarked resource to be seen")
+	}
+}
+
+func TestSQLiteStore_OldKindOnlySeenKeysDoNotSuppressResources(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "old-seen-keys.db")
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+
+	oldKeys := []string{
+		"Service/shop/api",
+		"ctx\x00Service/shop/api",
+	}
+	for _, key := range oldKeys {
+		if _, err := store.db.Exec("INSERT INTO seen_resources (resource_key) VALUES (?)", key); err != nil {
+			store.Close()
+			t.Fatalf("insert old key %q: %v", key, err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopened, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+
+	if reopened.IsResourceSeen("ctx", "", "Service", "shop", "api") {
+		t.Fatal("old kind-only key must not suppress a core Service")
+	}
+	if reopened.IsResourceSeen("ctx", "serving.knative.dev", "Service", "shop", "api") {
+		t.Fatal("old kind-only key must not suppress a Knative Service")
+	}
+	if got := reopened.Stats().SeenResources; got != 0 {
+		t.Fatalf("obsolete keys counted as seen resources: got %d, want 0", got)
+	}
+
+	reopened.MarkResourceSeen("ctx", "", "Service", "shop", "api")
+	reopened.MarkResourceSeen("ctx", "serving.knative.dev", "Service", "shop", "api")
+	if !reopened.IsResourceSeen("ctx", "", "Service", "shop", "api") ||
+		!reopened.IsResourceSeen("ctx", "serving.knative.dev", "Service", "shop", "api") {
+		t.Fatal("current group-aware keys should suppress subsequent extraction")
 	}
 }
 
