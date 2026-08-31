@@ -3,6 +3,12 @@
 import type { StatusBadge } from './resource-utils'
 import { healthColors } from './resource-utils'
 
+export const JOBSET_API_VERSION = 'jobset.x-k8s.io/v1alpha2'
+
+export function isJobSetV1Alpha2(resource: any): boolean {
+  return resource?.apiVersion === JOBSET_API_VERSION
+}
+
 // ============================================================================
 // LEADERWORKERSET UTILITIES
 // ============================================================================

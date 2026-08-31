@@ -1325,7 +1325,7 @@ Radar statically evaluates Calico selectors against workload pod templates and t
 
 ## GPU & Batch Ecosystem (basic support)
 
-Basic resource support for the GPU scheduling, batch, and inference-serving ecosystem: **status badges, smart table columns, status filters, and sidebar grouping** for every kind below. Detail views use the standard spec/status renderer; topology participation and typed detail views land with the deeper per-tool integrations.
+Basic resource support for the GPU scheduling, batch, and inference-serving ecosystem: **status badges, smart table columns, status filters, and sidebar grouping** for every kind below. JobSet `v1alpha2` also has typed run detail for replicated jobs, dependencies, completion/restart policies, and coordinator/network configuration. The remaining kinds use the standard spec/status renderer until their deeper per-tool integrations land.
 
 This is resource reconnaissance, not GPU accounting or end-to-end workload diagnosis. It does not inventory physical devices, distinguish virtual or fractional GPUs such as HAMi, report utilization, or explain the complete workload-to-queue-to-Pod scheduling path.
 
