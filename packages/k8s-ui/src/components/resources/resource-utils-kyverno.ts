@@ -214,6 +214,45 @@ export function getKyvernoPolicyBackground(resource: any): boolean {
   return resource.spec?.background !== false
 }
 
+/**
+ * `spec.admission`, defaulting to true — the same reading as Kyverno's own
+ * AdmissionProcessingEnabled(). When false the policy is never registered with
+ * the admission webhook, so it rejects nothing at admission whatever its
+ * failureAction says; it can only be seen by background scans.
+ */
+export function getKyvernoPolicyAdmission(resource: any): boolean {
+  return resource.spec?.admission !== false
+}
+
+export interface KyvernoEnforcement {
+  /** Badge label. */
+  label: string
+  /** True only when a violating request is actually rejected at admission. */
+  blocks: boolean
+  /** Declared to reject, but admission is off — it enforces nothing at admission. */
+  discrepancy: boolean
+}
+
+/**
+ * What a legacy policy does at admission, not just what its failureAction field
+ * reads. An Enforce policy with admission disabled blocks nothing — presenting
+ * it as a blocking "Enforce" would tell an operator the cluster is guarded when
+ * it is not. Labels match the modern CEL family's vocabulary for the same
+ * posture: "Background only" when background scans still report violations,
+ * "Inactive" when background is disabled too and the policy does nothing.
+ */
+export function getKyvernoEnforcement(resource: any): KyvernoEnforcement {
+  const action = getKyvernoPolicyAction(resource)
+  if (action !== 'Enforce' || getKyvernoPolicyAdmission(resource)) {
+    return { label: action, blocks: action === 'Enforce', discrepancy: false }
+  }
+  return {
+    label: getKyvernoPolicyBackground(resource) ? 'Background only' : 'Inactive',
+    blocks: false,
+    discrepancy: true,
+  }
+}
+
 export function getKyvernoPolicyRuleCountByType(resource: any): {
   validate: number
   mutate: number

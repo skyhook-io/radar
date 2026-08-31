@@ -6,7 +6,7 @@ import {
   getPolicyReportStatus,
   getPolicyReportSummary,
   getKyvernoPolicyStatus,
-  getKyvernoPolicyAction,
+  getKyvernoEnforcement,
   getKyvernoPolicyRuleCount,
 } from '../resource-utils-kyverno'
 import {
@@ -79,13 +79,17 @@ export function KyvernoPolicyCell({ resource, column }: { resource: any; column:
       )
     }
     case 'action': {
-      const action = getKyvernoPolicyAction(resource)
+      const { label, blocks, discrepancy } = getKyvernoEnforcement(resource)
       return (
         <span className={clsx(
           'badge',
-          action === 'Enforce' ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400',
+          blocks
+            ? 'bg-red-500/20 text-red-400'
+            : discrepancy
+              ? 'bg-orange-500/20 text-orange-400'
+              : 'bg-yellow-500/20 text-yellow-400',
         )}>
-          {action}
+          {label}
         </span>
       )
     }

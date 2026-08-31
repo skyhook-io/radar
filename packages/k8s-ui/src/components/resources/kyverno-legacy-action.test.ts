@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { getKyvernoPolicyAction } from './resource-utils-kyverno'
+import {
+  getKyvernoPolicyAction,
+  getKyvernoPolicyAdmission,
+  getKyvernoEnforcement,
+} from './resource-utils-kyverno'
 
 function cpol(spec: any) {
   return { apiVersion: 'kyverno.io/v1', kind: 'ClusterPolicy', metadata: { name: 'p' }, spec }
@@ -138,5 +142,56 @@ describe('getKyvernoPolicyAction', () => {
         }),
       ),
     ).toBe('Enforce')
+  })
+})
+
+/**
+ * `spec.admission: false` leaves a legacy policy out of the admission webhook,
+ * so it rejects nothing whatever its failureAction. Confirmed against Kyverno's
+ * own AdmissionProcessingEnabled(): nil defaults to true.
+ */
+describe('getKyvernoPolicyAdmission', () => {
+  it('defaults to true when the field is absent', () => {
+    expect(getKyvernoPolicyAdmission(cpol({}))).toBe(true)
+    expect(getKyvernoPolicyAdmission(cpol({ admission: true }))).toBe(true)
+  })
+
+  it('is false only when explicitly disabled', () => {
+    expect(getKyvernoPolicyAdmission(cpol({ admission: false }))).toBe(false)
+  })
+})
+
+describe('getKyvernoEnforcement', () => {
+  const enforcing = { validationFailureAction: 'Enforce', rules: [{ name: 'r', validate: { pattern: {} } }] }
+
+  it('blocks when admission is enabled (default) and the policy enforces', () => {
+    expect(getKyvernoEnforcement(cpol(enforcing))).toEqual({
+      label: 'Enforce',
+      blocks: true,
+      discrepancy: false,
+    })
+  })
+
+  it('does not block an Enforce policy whose admission is disabled', () => {
+    const e = getKyvernoEnforcement(cpol({ ...enforcing, admission: false }))
+    expect(e.blocks).toBe(false)
+    expect(e.discrepancy).toBe(true)
+    // Same label the modern CEL family uses for this posture.
+    expect(e.label).toBe('Background only')
+  })
+
+  it('reports a policy inactive when both admission and background are off', () => {
+    const e = getKyvernoEnforcement(cpol({ ...enforcing, admission: false, background: false }))
+    expect(e.blocks).toBe(false)
+    expect(e.label).toBe('Inactive')
+  })
+
+  it('leaves an Audit policy unchanged when admission is disabled', () => {
+    const e = getKyvernoEnforcement(cpol({
+      validationFailureAction: 'Audit',
+      admission: false,
+      rules: [{ name: 'r', validate: { pattern: {} } }],
+    }))
+    expect(e).toEqual({ label: 'Audit', blocks: false, discrepancy: false })
   })
 })

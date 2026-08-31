@@ -11,9 +11,17 @@ import {
   getKyvernoEnforcementPosture,
   getKyvernoResourceRules,
   getKyvernoEffectiveFailurePolicy,
+  getKyvernoValidationActions,
+  getKyvernoEvaluationMode,
+  isKyvernoAdmissionEnabled,
   type KyvernoPolicyFamily,
 } from '../resource-utils-kyverno-modern'
-import { getKyvernoPolicyAction, isKyvernoEnforceAction } from '../resource-utils-kyverno'
+import {
+  getKyvernoEnforcement,
+  getKyvernoPolicyAction,
+  getKyvernoPolicyAdmission,
+  isKyvernoEnforceAction,
+} from '../resource-utils-kyverno'
 import type {
   PolicyCoverageResponse,
   PolicyCoverageRule,
@@ -229,15 +237,38 @@ function policyFamilyFor(
 
 /**
  * The families answer from different fields: legacy carries
- * `spec.validationFailureAction` (or a per-rule `validate.failureAction`), while
- * `getKyvernoEnforcementPosture` reads `spec.validationActions`, absent on
- * legacy — which makes an Enforce policy read as audit-only.
+ * `spec.validationFailureAction` (or a per-rule `validate.failureAction`) gated
+ * by `spec.admission`, while `getKyvernoEnforcementPosture` reads
+ * `spec.validationActions` and `spec.evaluation.admission.enabled`, both absent
+ * on legacy — which makes an Enforce policy read as audit-only.
  */
 function blocksAdmission(resource: any, family: KyvernoPolicyFamily | undefined): boolean {
   if (isLegacyKyvernoPolicy(resource)) {
-    return getKyvernoPolicyAction(resource) === 'Enforce'
+    return getKyvernoEnforcement(resource).blocks
   }
   return getKyvernoEnforcementPosture(resource, family).blocks
+}
+
+/**
+ * A policy declares a rejecting action yet does not block, because admission
+ * evaluation is switched off. The distinction changes the remediation the
+ * consequence sentence offers — re-enable admission, not switch the action —
+ * so it must not be conflated with an audit policy that simply never blocks.
+ *
+ * Only the validating families carry `validationActions`, and
+ * `getKyvernoValidationActions` applies Kyverno's absent-means-Deny default,
+ * so asking a mutating or generating policy would read Deny off a field that
+ * kind never has. The same guard `getKyvernoEnforcementPosture` uses.
+ */
+function declaresBlockingButAdmissionOff(
+  resource: any,
+  family: KyvernoPolicyFamily | undefined,
+): boolean {
+  if (isLegacyKyvernoPolicy(resource)) {
+    return getKyvernoPolicyAction(resource) === 'Enforce' && !getKyvernoPolicyAdmission(resource)
+  }
+  if (family !== 'validating' && family !== 'imageValidating') return false
+  return getKyvernoValidationActions(resource).includes('Deny') && !isKyvernoAdmissionEnabled(resource)
 }
 
 /**
@@ -250,6 +281,11 @@ function blocksAdmission(resource: any, family: KyvernoPolicyFamily | undefined)
  */
 function canStateConsequence(resource: any, family: KyvernoPolicyFamily | undefined): boolean {
   if (!isLegacyKyvernoPolicy(resource)) {
+    // A JSON-mode policy is evaluated against payloads outside the cluster and
+    // never joins admission, so every phrasing of the sentence is false: it
+    // rejects nothing today, and neither switching the action nor enabling
+    // admission would change that. The posture badge already says "JSON mode".
+    if (getKyvernoEvaluationMode(resource) === 'JSON') return false
     return family === 'validating' || family === 'imageValidating' || family === undefined
   }
   const rules: any[] = resource?.spec?.rules ?? []
@@ -273,6 +309,7 @@ function enforcementConsequence(
   failing: number,
   blocks: boolean,
   matchesUpdate: boolean,
+  admissionOff = false,
 ): string {
   // Deliberately kind-neutral. A policy can match ConfigMaps, Secrets or
   // ClusterRoles as readily as Pods, and none of those "run" — the fact being
@@ -288,11 +325,24 @@ function enforcementConsequence(
       : `${exists} and ${one ? 'stays' : 'stay'} as ${itIs} — this policy only checks creation, so ${itIs} rejected only if recreated.`
   }
 
+  const target = one ? 'this resource' : `any of these ${failing}`
+
+  // The policy already declares a rejecting action; it does not block only
+  // because admission evaluation is disabled. Telling the operator to change
+  // the action would point at the wrong knob — the fix is to re-enable
+  // admission.
+  if (admissionOff) {
+    return matchesUpdate
+      ? `Nothing is rejected today because admission is disabled for this policy. Enabling admission would reject the next update to ${target}.`
+      : `Nothing is rejected today because admission is disabled for this policy. Enabling admission would leave ${
+          one ? 'this resource as it is' : `these ${failing} as they are`
+        } — only newly created resources would be rejected.`
+  }
+
   // "Set to enforce" is the legacy family's vocabulary; the modern API spells
   // the same thing `validationActions: [Deny]`, and the posture badge above
   // already says "Deny". Describing the behaviour rather than the field keeps
   // one sentence correct for both.
-  const target = one ? 'this resource' : `any of these ${failing}`
   return matchesUpdate
     ? `Nothing is rejected today. Switching this policy to block would reject the next update to ${target}.`
     : `Nothing is rejected today. Switching this policy to block would leave ${
@@ -469,8 +519,14 @@ function Consequence({
   const failing = data.subjectsFailing ?? data.counts.fail
 
   if (failing > 0 && canStateConsequence(resource, family)) {
+    const blocks = blocksAdmission(resource, family)
     lines.push(
-      enforcementConsequence(failing, blocksAdmission(resource, family), matchesUpdates(resource)),
+      enforcementConsequence(
+        failing,
+        blocks,
+        matchesUpdates(resource),
+        !blocks && declaresBlockingButAdmissionOff(resource, family),
+      ),
     )
   }
 

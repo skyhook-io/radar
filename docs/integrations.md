@@ -993,8 +993,8 @@ Deferred to a future "full Crossplane" pass:
 ### What Radar Shows
 
 **Policy / ClusterPolicy Detail View:**
-- Failure action badge (Enforce in red, Audit in yellow)
-- Configuration: background scanning, webhook timeout, failure policy, schema validation
+- Enforcement badge: what the policy does at admission, not just what `validationFailureAction` reads. Enforce in red, Audit in yellow, and **Background only** (or **Inactive**, when background scanning is off too) in orange for a policy that declares Enforce but is kept out of the admission webhook by `spec.admission: false`
+- Configuration: admission and background scanning, webhook timeout, failure policy, schema validation
 - Rule type summary (validate/mutate/generate/verifyImages counts)
 - Individual rules with type badges and match/exclude indicators
 - Auto-generated rules list
@@ -1006,7 +1006,7 @@ Deferred to a future "full Crossplane" pass:
 - Expandable details: message, category, source, affected resources
 - Problem detection (AlertBanner for failures or errors)
 
-**Resource Browser:** Smart columns show status (colored by worst outcome), failure action, rule counts, and pass/fail/warn/error/skip breakdowns.
+**Resource Browser:** Smart columns show status (colored by worst outcome), enforcement at admission, rule counts, and pass/fail/warn/error/skip breakdowns.
 
 ### The per-policy resource view
 

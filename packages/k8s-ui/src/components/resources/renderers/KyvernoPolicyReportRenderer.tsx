@@ -8,7 +8,8 @@ import {
   getPolicyReportResults,
   getPolicyReportScope,
   getPolicyReportSource,
-  getKyvernoPolicyAction,
+  getKyvernoEnforcement,
+  getKyvernoPolicyAdmission,
   getKyvernoPolicyRuleCount,
   getKyvernoPolicyBackground,
   getKyvernoPolicyRules,
@@ -246,14 +247,13 @@ export function KyvernoPolicyRenderer({ data, coverage, queued }: KyvernoPolicyR
   const spec = data.spec || {}
   const status = data.status || {}
   const conditions = status.conditions || []
-  const action = getKyvernoPolicyAction(data)
+  const enforcement = getKyvernoEnforcement(data)
+  const admission = getKyvernoPolicyAdmission(data)
   const ruleCount = getKyvernoPolicyRuleCount(data)
   const background = getKyvernoPolicyBackground(data)
   const rules = getKyvernoPolicyRules(data)
   const ruleCountByType = getKyvernoPolicyRuleCountByType(data)
   const autogenRules = getKyvernoPolicyAutogenRules(data)
-
-  const isEnforce = action === 'Enforce'
 
   return (
     <>
@@ -269,15 +269,20 @@ export function KyvernoPolicyRenderer({ data, coverage, queued }: KyvernoPolicyR
               writing to the cluster. status.rulecount is Kyverno's own count,
               so this is checkable rather than guessed. */}
           {(ruleCountByType.validate > 0 || ruleCountByType.verifyImages > 0) && (
-          <Property label="Failure Action" value={
+          <Property label="Enforcement" value={
             <span className={clsx(
               'badge',
-              isEnforce ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400',
+              enforcement.blocks
+                ? 'bg-red-500/20 text-red-400'
+                : enforcement.discrepancy
+                  ? 'bg-orange-500/20 text-orange-400'
+                  : 'bg-yellow-500/20 text-yellow-400',
             )}>
-              {action}
+              {enforcement.label}
             </span>
           } />
           )}
+          <Property label="Admission" value={admission ? 'Enabled' : 'Disabled'} />
           <Property label="Background" value={background ? 'Enabled' : 'Disabled'} />
           {spec.webhookTimeoutSeconds && (
             <Property label="Webhook Timeout" value={`${spec.webhookTimeoutSeconds}s`} />
