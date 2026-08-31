@@ -105,12 +105,12 @@ describe('RadarVersionLine', () => {
     expect(html).not.toContain('Open the release to upgrade')
   })
 
-  it('only deep-links verified GitOps ownership', () => {
+  it('deep-links verified GitOps ownership', () => {
     const controllerRef = { group: 'kustomize.toolkit.fluxcd.io', kind: 'Kustomization', namespace: 'flux-system', name: 'radar' }
     const verified = renderToString(
       <RadarVersionLine
         version={version}
-        manager={{ ownership: 'gitops', controller: 'Flux', controllerRef, controllerVerified: true }}
+        manager={{ ownership: 'gitops', controller: 'Kustomization flux-system/radar', controllerRef }}
         onNavigateToGitOps={() => {}}
       />,
     )
@@ -120,11 +120,11 @@ describe('RadarVersionLine', () => {
     const suspected = renderToString(
       <RadarVersionLine
         version={version}
-        manager={{ ownership: 'gitops', controller: 'Flux', controllerRef }}
+        manager={{ ownership: 'gitops', controller: 'Kustomization flux-system/radar' }}
         onNavigateToGitOps={() => {}}
       />,
     )
-    expect(suspected).toContain('appears to be managed by Flux')
+    expect(suspected).toContain('appears to be managed through GitOps (Kustomization flux-system/radar)')
     expect(suspected).toContain('Open the upgrade instructions')
     expect(suspected).not.toContain('Managed by Kustomization')
   })
@@ -134,7 +134,7 @@ describe('RadarVersionLine', () => {
     const html = renderToString(
       <RadarVersionLine
         version={version}
-        manager={{ ownership: 'gitops', controller: 'Flux', controllerRef, controllerVerified: true }}
+        manager={{ ownership: 'gitops', controller: 'Kustomization flux-system/radar', controllerRef }}
       />,
     )
     expect(html).toContain('https://radarhq.io/docs/configuration/in-cluster')

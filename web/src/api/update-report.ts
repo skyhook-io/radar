@@ -10,32 +10,23 @@ export function markDailyUpdateCheckAttempt(
   storage: Pick<Storage, 'getItem' | 'setItem'>,
   apiBase: string,
   now: Date,
-  installScope?: string,
-): string | null {
+): boolean {
   const storageKey = `${STORAGE_KEY_PREFIX}:${apiBase}`
   const day = utcDay(now)
-  const storedValue = storage.getItem(storageKey)
-  let stored: { day?: string; installScope?: string } | undefined
   try {
-    stored = storedValue
-      ? JSON.parse(storedValue) as { day?: string; installScope?: string }
-      : undefined
-  } catch {
-    stored = undefined
-  }
-  const sameInstallation = !stored?.installScope
-    || !installScope
-    || stored.installScope === installScope
-  if (stored?.day === day && sameInstallation) return null
+    if (storage.getItem(storageKey) === day) return false
 
-  storage.setItem(storageKey, JSON.stringify({ day, installScope }))
-  return day
+    storage.setItem(storageKey, day)
+    return true
+  } catch {
+    return false
+  }
 }
 
-export function markBrowserUpdateCheckAttempt(installScope?: string): string | null {
+export function markBrowserUpdateCheckAttempt(): boolean {
   try {
-    return markDailyUpdateCheckAttempt(localStorage, getApiBase(), new Date(), installScope)
+    return markDailyUpdateCheckAttempt(localStorage, getApiBase(), new Date())
   } catch {
-    return null
+    return false
   }
 }

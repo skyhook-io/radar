@@ -17,47 +17,32 @@ describe('daily browser update checks', () => {
 
   it('attempts once per API base and UTC day', () => {
     const storage = memoryStorage()
-    expect(markDailyUpdateCheckAttempt(storage, '/api', new Date('2026-08-29T10:00:00Z'))).toBe('2026-08-29')
-    expect(markDailyUpdateCheckAttempt(storage, '/api', new Date('2026-08-29T20:00:00Z'))).toBeNull()
-    expect(markDailyUpdateCheckAttempt(storage, '/api', new Date('2026-08-30T10:00:00Z'))).toBe('2026-08-30')
+    expect(markDailyUpdateCheckAttempt(storage, '/api', new Date('2026-08-29T10:00:00Z'))).toBe(true)
+    expect(markDailyUpdateCheckAttempt(storage, '/api', new Date('2026-08-29T20:00:00Z'))).toBe(false)
+    expect(markDailyUpdateCheckAttempt(storage, '/api', new Date('2026-08-30T10:00:00Z'))).toBe(true)
   })
 
   it('tracks different API bases independently', () => {
     const storage = memoryStorage()
     const now = new Date('2026-08-29T10:00:00Z')
-    expect(markDailyUpdateCheckAttempt(storage, '/api', now)).toBe('2026-08-29')
-    expect(markDailyUpdateCheckAttempt(storage, '/c/cluster-a/api', now)).toBe('2026-08-29')
+    expect(markDailyUpdateCheckAttempt(storage, '/api', now)).toBe(true)
+    expect(markDailyUpdateCheckAttempt(storage, '/c/cluster-a/api', now)).toBe(true)
   })
 
-  it('tracks installations behind the same API base independently', () => {
+  it('replaces an old stored value', () => {
     const storage = memoryStorage()
     const now = new Date('2026-08-29T10:00:00Z')
-    expect(markDailyUpdateCheckAttempt(storage, '/api', now, '1700000000')).toBe('2026-08-29')
-    expect(markDailyUpdateCheckAttempt(storage, '/api', now, '1800000000')).toBe('2026-08-29')
+    storage.values.set('radar-browser-update-check:/api', '{"day":"2026-08-28"}')
+
+    expect(markDailyUpdateCheckAttempt(storage, '/api', now)).toBe(true)
+    expect(storage.values.get('radar-browser-update-check:/api')).toBe('2026-08-29')
   })
 
-  it('does not duplicate a check when installation scope becomes available', () => {
-    const storage = memoryStorage()
-    const now = new Date('2026-08-29T10:00:00Z')
-    expect(markDailyUpdateCheckAttempt(storage, '/api', now)).toBe('2026-08-29')
-    expect(markDailyUpdateCheckAttempt(storage, '/api', now, '1700000000')).toBeNull()
-  })
-
-  it('does not duplicate a scoped check when installation scope is temporarily unavailable', () => {
-    const storage = memoryStorage()
-    const now = new Date('2026-08-29T10:00:00Z')
-    expect(markDailyUpdateCheckAttempt(storage, '/api', now, '1700000000')).toBe('2026-08-29')
-    expect(markDailyUpdateCheckAttempt(storage, '/api', now)).toBeNull()
-  })
-
-  it('replaces a malformed stored claim', () => {
-    const storage = memoryStorage()
-    const now = new Date('2026-08-29T10:00:00Z')
-    storage.values.set('radar-browser-update-check:/api', 'not-json')
-
-    expect(markDailyUpdateCheckAttempt(storage, '/api', now, '1700000000')).toBe('2026-08-29')
-    expect(storage.values.get('radar-browser-update-check:/api')).toBe(
-      JSON.stringify({ day: '2026-08-29', installScope: '1700000000' }),
-    )
+  it('does not claim an attempt when storage is unavailable', () => {
+    const storage = {
+      getItem: () => null,
+      setItem: () => { throw new Error('blocked') },
+    }
+    expect(markDailyUpdateCheckAttempt(storage, '/api', new Date('2026-08-29T10:00:00Z'))).toBe(false)
   })
 })

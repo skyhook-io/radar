@@ -1514,37 +1514,20 @@ export interface VersionInfo {
   releaseUrl?: string;
   releaseNotes?: string;
   installMethod: InstallMethod;
-  installScope?: string;
   updateCommand?: string;
   error?: string;
 }
 
-interface BrowserUpdateCheckDependencies {
-  markBrowserUpdateCheckAttempt: (installScope?: string) => string | null
-  sendBrowserCheck: () => Promise<void>
-}
-
-export async function sendBrowserUpdateCheck(): Promise<void> {
-  const response = await fetch(apiUrl('/version-check/browser'), {
+export async function reportBrowserUpdateCheck(
+  deploymentMode: DeploymentMode | undefined,
+): Promise<void> {
+  if (deploymentMode !== 'in-cluster' || !markBrowserUpdateCheckAttempt()) return
+  await fetch(apiUrl('/version-check/browser'), {
     method: 'POST',
     headers: getAuthHeaders(),
     credentials: getCredentialsMode(),
     keepalive: true,
   })
-  if (!response.ok) throw new Error(`Browser update check failed: ${response.status}`)
-}
-
-export function reportBrowserUpdateCheck(
-  deploymentMode: DeploymentMode | undefined,
-  installScope?: string,
-  dependencies: BrowserUpdateCheckDependencies = {
-    markBrowserUpdateCheckAttempt,
-    sendBrowserCheck: sendBrowserUpdateCheck,
-  },
-): void {
-  if (deploymentMode !== 'in-cluster') return
-  const attemptedDay = dependencies.markBrowserUpdateCheckAttempt(installScope)
-  if (attemptedDay) void dependencies.sendBrowserCheck().catch(() => {})
 }
 
 export function useVersionCheck() {
@@ -1562,8 +1545,8 @@ export function useVersionCheck() {
   });
 
   useEffect(() => {
-    if (query.isSuccess) reportBrowserUpdateCheck(deploymentMode, query.data?.installScope)
-  }, [deploymentMode, query.data?.installScope, query.isSuccess])
+    if (query.isSuccess) void reportBrowserUpdateCheck(deploymentMode).catch(() => {})
+  }, [deploymentMode, query.isSuccess])
 
   return query;
 }
@@ -1896,17 +1879,15 @@ export interface CloudConnectSelf {
     namespace?: string
     name: string
   }
-  controllerVerified?: boolean
   wizardUrl?: string
 }
 
-export function useCloudConnectSelf(enabled: boolean, staleTime = 60000, retry: boolean | number = 1) {
+export function useCloudConnectSelf(enabled: boolean) {
   return useQuery<CloudConnectSelf>({
-    queryKey: ['cloud-connect-self', retry],
+    queryKey: ['cloud-connect-self'],
     queryFn: () => fetchJSON('/cloud/connect/self'),
     enabled,
-    staleTime,
-    retry,
+    staleTime: 60000,
   })
 }
 

@@ -4,38 +4,30 @@ import (
 	"context"
 	"log"
 	"net/http"
-	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/version"
 )
 
-const (
-	maxConcurrentBrowserChecks = 8
-	maxBrowserChecksPerDay     = 5000
-)
+const maxConcurrentBrowserChecks = 8
 
-func (s *Server) claimBrowserCheck(day string) (chan struct{}, bool) {
+func (s *Server) acquireBrowserCheckSlot() bool {
 	s.browserCheckMu.Lock()
 	defer s.browserCheckMu.Unlock()
 
-	if s.browserCheckDay != day {
-		s.browserCheckDay = day
-		s.browserCheckCount = 0
-	}
-	if s.browserCheckCount >= maxBrowserChecksPerDay {
-		return nil, false
-	}
 	if s.browserCheckSlots == nil {
 		s.browserCheckSlots = make(chan struct{}, maxConcurrentBrowserChecks)
 	}
 	select {
 	case s.browserCheckSlots <- struct{}{}:
-		s.browserCheckCount++
-		return s.browserCheckSlots, true
+		return true
 	default:
-		return nil, false
+		return false
 	}
+}
+
+func (s *Server) releaseBrowserCheckSlot() {
+	<-s.browserCheckSlots
 }
 
 func (s *Server) handleVersionCheckBrowser(w http.ResponseWriter, r *http.Request) {
@@ -44,16 +36,14 @@ func (s *Server) handleVersionCheckBrowser(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	today := time.Now().UTC().Format("2006-01-02")
-	slots, claimed := s.claimBrowserCheck(today)
-	if !claimed {
-		log.Printf("[version] browser update check dropped by relay volume limit")
+	if !s.acquireBrowserCheckSlot() {
+		log.Printf("[version] browser update check dropped by relay concurrency limit")
 		s.writeError(w, http.StatusTooManyRequests, "browser update check capacity reached")
 		return
 	}
-	defer func() { <-slots }()
+	defer s.releaseBrowserCheckSlot()
 
-	if err := version.ReportBrowserUpdateCheck(context.WithoutCancel(r.Context()), today); err != nil {
+	if err := version.ReportBrowserUpdateCheck(context.WithoutCancel(r.Context())); err != nil {
 		log.Printf("[version] browser update check failed: %v", err)
 	}
 	w.WriteHeader(http.StatusNoContent)

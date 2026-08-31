@@ -296,12 +296,7 @@ request, both to Skyhook, neither containing cluster data:
 - **Update check** — to `releases.skyhook.io`, with the Radar version, OS/arch,
   install method, whether it is running locally or in-cluster, and the
   installation timestamp when Radar can determine it. Radar caches the release
-  result for one hour. A browser profile opening a standalone in-cluster Radar
-  may cause one additional proxied check, at most once per UTC day, to estimate
-  active browser use. Radar adds the UTC day and the same installation fields,
-  but no stable browser identifier, username, browser fingerprint,
-  authentication state, or cluster resource data. Development builds are
-  excluded from measurement; prerelease and custom builds are labeled.
+  result for one hour. Development builds are excluded.
 - **Cloud dialog copy** — only when you *open* the Cloud dialog, to fetch the
   current terms shown in it. No identifiers are sent. `RADAR_CLOUD_FUNNEL=off`
   stops this request from ever happening.

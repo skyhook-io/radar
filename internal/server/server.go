@@ -118,8 +118,6 @@ type Server struct {
 	rootHintOnce sync.Once
 
 	browserCheckMu    sync.Mutex
-	browserCheckDay   string
-	browserCheckCount int
 	browserCheckSlots chan struct{}
 
 	// nsPickMu serializes namespace-pick mutations: the POST handler's
@@ -1232,25 +1230,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleVersionCheck(w http.ResponseWriter, r *http.Request) {
-	info := checkForUpdateForDeployment(
-		r.Context(),
-		deploymentMode(),
-		version.CheckForUpdate,
-		version.CheckForUpdateRelease,
-	)
-	s.writeJSON(w, info)
-}
-
-func checkForUpdateForDeployment(
-	ctx context.Context,
-	mode k8s.DeploymentMode,
-	ordinary func(context.Context) *version.UpdateInfo,
-	releaseOnly func(context.Context) *version.UpdateInfo,
-) *version.UpdateInfo {
-	if mode == k8s.DeploymentModeCloud {
-		return releaseOnly(ctx)
+	info := version.CheckForUpdate(r.Context())
+	if deploymentMode() == k8s.DeploymentModeCloud {
+		info = version.CheckForUpdateRelease(r.Context())
 	}
-	return ordinary(ctx)
+	s.writeJSON(w, info)
 }
 
 func (s *Server) handleClusterInfo(w http.ResponseWriter, r *http.Request) {

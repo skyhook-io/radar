@@ -57,7 +57,7 @@ export function RadarVersionLine({
     } else {
       detail = `Managed by Helm release ${manager.namespace}/${manager.release}. Open the in-cluster upgrade instructions.`
     }
-  } else if (manager?.controllerVerified && controller && gitOpsPath) {
+  } else if (controller && gitOpsPath) {
     const objectName = `${controller.namespace ? `${controller.namespace}/` : ''}${controller.name}`
     if (onNavigateToGitOps) {
       detail = `Managed by ${controller.kind} ${objectName}. Open it to upgrade through GitOps.`
@@ -67,7 +67,7 @@ export function RadarVersionLine({
     }
   } else if (manager?.ownership === 'gitops') {
     detail = manager.controller
-      ? `This installation appears to be managed by ${manager.controller}. Open the upgrade instructions and apply the change through its source of truth.`
+      ? `This installation appears to be managed through GitOps (${manager.controller}). Open the upgrade instructions and apply the change through its source of truth.`
       : 'This installation appears to be managed through GitOps. Open the upgrade instructions and apply the change through its source of truth.'
   }
 

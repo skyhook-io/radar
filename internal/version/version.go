@@ -62,7 +62,6 @@ type UpdateInfo struct {
 	ReleaseURL     string        `json:"releaseUrl,omitempty"`
 	ReleaseNotes   string        `json:"releaseNotes,omitempty"`
 	InstallMethod  InstallMethod `json:"installMethod"`
-	InstallScope   string        `json:"installScope,omitempty"`
 	UpdateCommand  string        `json:"updateCommand,omitempty"`
 	Error          string        `json:"error,omitempty"`
 }
@@ -109,25 +108,22 @@ func CheckForUpdateRelease(_ context.Context) *UpdateInfo {
 	return checkForUpdateCached(checkOptions{source: "release-only"})
 }
 
-func ReportBrowserUpdateCheck(ctx context.Context, reportDay string) error {
+func ReportBrowserUpdateCheck(ctx context.Context) error {
 	if buildChannel(Current) == buildChannelDevelopment {
 		return nil
 	}
 
-	mode := "in-cluster"
 	method := detectInstallMethod()
 	params := url.Values{
 		"v":       {Current},
 		"os":      {runtime.GOOS},
 		"arch":    {runtime.GOARCH},
 		"method":  {string(method)},
-		"mode":    {mode},
+		"mode":    {"in-cluster"},
 		"channel": {string(buildChannel(Current))},
 		"source":  {"browser-proxy"},
-		"report":  {"1"},
-		"day":     {reportDay},
 	}
-	if installedAt := k8s.InstalledAtCached(); installedAt != 0 {
+	if installedAt := k8s.InstalledAt(ctx); installedAt != 0 {
 		params.Set("t", strconv.FormatInt(installedAt, 10))
 	}
 
@@ -219,13 +215,9 @@ func fetchLatestRelease(ctx context.Context, options checkOptions) *UpdateInfo {
 	}
 	if installedAt := installTimestamp(ctx, mode); installedAt != 0 {
 		params.Set("t", strconv.FormatInt(installedAt, 10))
-		if mode == "in-cluster" {
-			result.InstallScope = strconv.FormatInt(installedAt, 10)
-		}
 	}
 	if options.source != "" {
 		params.Set("source", options.source)
-		params.Set("report", "0")
 	}
 	proxyURL := fmt.Sprintf("%s?%s", releasesURL, params.Encode())
 

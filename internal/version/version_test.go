@@ -177,7 +177,7 @@ func TestCheckForUpdateExcludesOnlyDevelopmentBuilds(t *testing.T) {
 		resetUpdateCache()
 		CheckForUpdate(context.Background())
 		query := queries[len(queries)-1]
-		if query.Get("source") != "release-only" || query.Get("report") != "0" {
+		if query.Get("source") != "release-only" {
 			t.Errorf("CheckForUpdate with %q sent metered query %v", current, query)
 		}
 		if got := query.Get("channel"); got != string(buildChannel(current)) {
@@ -190,7 +190,7 @@ func TestCheckForUpdateExcludesOnlyDevelopmentBuilds(t *testing.T) {
 		resetUpdateCache()
 		CheckForUpdate(context.Background())
 		query := queries[len(queries)-1]
-		if query.Has("source") || query.Has("report") {
+		if query.Has("source") {
 			t.Errorf("measurable build %q sent unmetered query %v", current, query)
 		}
 		if got := query.Get("channel"); got != string(buildChannel(current)) {
@@ -226,7 +226,7 @@ func TestReportBrowserUpdateCheckIsBestEffortAndIdentityFree(t *testing.T) {
 		resetUpdateCache()
 	})
 
-	if err := ReportBrowserUpdateCheck(context.Background(), "2026-08-29"); err != nil {
+	if err := ReportBrowserUpdateCheck(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if len(queries) != 1 {
@@ -234,13 +234,13 @@ func TestReportBrowserUpdateCheckIsBestEffortAndIdentityFree(t *testing.T) {
 	}
 	query := queries[0]
 	for key, want := range map[string]string{
-		"v": "1.2.3-rc1", "mode": "in-cluster", "channel": "prerelease", "source": "browser-proxy", "report": "1", "day": "2026-08-29",
+		"v": "1.2.3-rc1", "mode": "in-cluster", "channel": "prerelease", "source": "browser-proxy",
 	} {
 		if got := query.Get(key); got != want {
 			t.Errorf("query[%q] = %q, want %q", key, got, want)
 		}
 	}
-	for _, key := range []string{"rid", "iid", "auth"} {
+	for _, key := range []string{"day", "report", "rid", "iid", "auth"} {
 		if query.Has(key) {
 			t.Errorf("identity field %q present in query %v", key, query)
 		}
@@ -250,7 +250,7 @@ func TestReportBrowserUpdateCheckIsBestEffortAndIdentityFree(t *testing.T) {
 	}
 
 	SetCurrent("dev-a1b2c3d")
-	if err := ReportBrowserUpdateCheck(context.Background(), "2026-08-29"); err != nil {
+	if err := ReportBrowserUpdateCheck(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if len(queries) != 1 {
@@ -285,7 +285,7 @@ func TestReleaseOnlyCheckDoesNotSatisfyMeteredCheck(t *testing.T) {
 	if got := queries[0].Get("source"); got != "release-only" {
 		t.Fatalf("first source = %q, want release-only", got)
 	}
-	if queries[1].Has("source") || queries[1].Has("report") {
+	if queries[1].Has("source") {
 		t.Fatalf("second request is not metered: %v", queries[1])
 	}
 }
