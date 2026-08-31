@@ -306,6 +306,30 @@ export function getRestoreExcludedResources(resource: any): string[] {
   return resource.spec?.excludedResources || []
 }
 
+export function getRestoreNamespaceMapping(resource: any): Record<string, string> {
+  return resource.spec?.namespaceMapping || {}
+}
+
+export function getRestoreLabelSelector(resource: any): any {
+  return resource.spec?.labelSelector
+}
+
+export function getRestoreOrLabelSelectors(resource: any): any[] {
+  return resource.spec?.orLabelSelectors || []
+}
+
+/**
+ * A label selector only narrows a restore when it carries at least one term. An
+ * empty selector matches everything, so it must not be presented as scope: doing
+ * so would tell an operator a restore is filtered when it is not.
+ */
+export function hasLabelSelectorTerms(selector: any): boolean {
+  if (!selector || typeof selector !== 'object') return false
+  const hasLabels = selector.matchLabels && Object.keys(selector.matchLabels).length > 0
+  const hasExpressions = Array.isArray(selector.matchExpressions) && selector.matchExpressions.length > 0
+  return Boolean(hasLabels || hasExpressions)
+}
+
 export function getRestoreDuration(resource: any): string {
   const start = resource.status?.startTimestamp
   const end = resource.status?.completionTimestamp
