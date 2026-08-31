@@ -1462,7 +1462,7 @@ Radar statically evaluates Calico selectors against workload pod templates and t
 
 ## GPU & Batch Ecosystem (basic support)
 
-Basic resource support for the GPU scheduling, batch, and inference-serving ecosystem: **status badges, smart table columns, status filters, and sidebar grouping** for every kind below. JobSet `v1alpha2` also has typed run detail for replicated jobs, dependencies, completion/restart policies, and coordinator/network configuration. The remaining kinds use the standard spec/status renderer until their deeper per-tool integrations land.
+Basic resource support for the GPU scheduling, batch, and inference-serving ecosystem: **status badges, smart table columns, status filters, and sidebar grouping** for every kind below. JobSet `v1alpha2` also has typed definition and lifecycle detail plus contextual execution drilldown through controller-owned member Jobs, their Pods, logs, and activity. The remaining kinds use the standard spec/status renderer until their deeper per-tool integrations land.
 
 This is resource reconnaissance, not GPU accounting or end-to-end workload diagnosis. It does not inventory physical devices, distinguish virtual or fractional GPUs such as HAMi, report utilization, or explain the complete workload-to-queue-to-Pod scheduling path.
 
@@ -1590,6 +1590,9 @@ JobSet detail also provides controller-owned member Jobs with role, index, group
 and restart-attempt metadata. Select a Job to inspect its Pods and logs, or follow
 its backlink to the owning JobSet. Member and Pod lists show their limits explicitly;
 missing children do not imply success, and unreadable data is reported as unavailable.
+The Overview also composes typed root lifecycle, per-role observations, dependencies,
+completion/restart policies, and controller conditions alongside member investigation.
+
 
 Volcano Job, the Volcano/KAI Queues and PodGroups, and KAITO Workspaces share kind names with other resources — Radar disambiguates by API group in tables, filters, and status badges.
 

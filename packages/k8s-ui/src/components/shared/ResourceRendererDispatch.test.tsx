@@ -953,7 +953,7 @@ describe('GPU ecosystem status edge cases', () => {
       status: { replicatedJobsStatus: [{ name: 'workers', active: 1, ready: 1, succeeded: 0, failed: 0, suspended: 0 }] },
     }, 'ml')
 
-    expect(html).toContain('Run status')
+    expect(html).toContain('JobSet status')
     expect(html).toContain('Replicated jobs (1)')
     expect(html).not.toContain('Specification')
   })
@@ -970,7 +970,7 @@ describe('GPU ecosystem status edge cases', () => {
       const html = renderKind('jobsets', data, 'ml')
 
       expect(html).toContain(COLLISION_PROBE)
-      expect(html).not.toContain('Run status')
+      expect(html).not.toContain('JobSet status')
       expect(getResourceStatus('jobsets', data)).toBeNull()
     },
   )
@@ -978,14 +978,30 @@ describe('GPU ecosystem status edge cases', () => {
   it('JobSet distinguishes observed inactivity from active child Jobs', () => {
     const fresh = getResourceStatus('jobsets', {
       apiVersion: 'jobset.x-k8s.io/v1alpha2',
+      kind: 'JobSet',
       status: { replicatedJobsStatus: [{ name: 'w', active: 0, ready: 0 }] },
     })
     const live = getResourceStatus('jobsets', {
       apiVersion: 'jobset.x-k8s.io/v1alpha2',
+      kind: 'JobSet',
       status: { replicatedJobsStatus: [{ name: 'w', active: 1, ready: 1 }] },
     })
     expect(fresh?.text).toBe('Pending')
     expect(live?.text).toBe('Active')
+  })
+
+  it('keeps a wrong-kind object generic even at the supported JobSet API version', () => {
+    const data = {
+      apiVersion: 'jobset.x-k8s.io/v1alpha2',
+      kind: 'OtherSet',
+      metadata: { name: 'collision', namespace: 'ml' },
+      spec: { collisionProbe: COLLISION_PROBE },
+    }
+    const html = renderKind('jobsets', data, 'ml')
+
+    expect(html).toContain(COLLISION_PROBE)
+    expect(html).not.toContain('JobSet status')
+    expect(getResourceStatus('jobsets', data)).toBeNull()
   })
 
   it('InferencePool with only an empty-parentRef default entry reads Not referenced', () => {
