@@ -163,7 +163,7 @@ func handleGetNeighborhood(ctx context.Context, req *mcp.CallToolRequest, input 
 	// the response's root.kind would diverge from subgraph.nodes[0].kind
 	// within the same payload. Matches the REST handler's identical fix.
 	rootResp := root
-	rootResp.Kind = string(sub.Nodes[0].Kind)
+	rootResp.Kind = topology.KubernetesKindForNode(&sub.Nodes[0])
 
 	result := neighborhoodResult{
 		Root: rootResp,

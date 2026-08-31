@@ -72,6 +72,7 @@ func (p *karpenterDynamicProvider) GetKindForGVR(gvr schema.GroupVersionResource
 func (p *karpenterDynamicProvider) IsCRD(string) bool {
 	return true
 }
+func (p *karpenterDynamicProvider) IsCRDGVR(schema.GroupVersionResource) bool { return true }
 
 func TestBuildKarpenterTopologyUsesReferencedNodeClassTypes(t *testing.T) {
 	nodePoolGVR := schema.GroupVersionResource{Group: karpenter.Group, Version: "v1", Resource: "nodepools"}

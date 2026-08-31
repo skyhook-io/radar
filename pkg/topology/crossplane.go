@@ -247,7 +247,7 @@ func (b *Builder) addCrossplaneNodes(nodes []Node, edges []Edge, opts BuildOptio
 
 	for _, gvr := range dynamicCache.GetWatchedResources() {
 		kind := dynamicCache.GetKindForGVR(gvr)
-		if kind == "" || !dynamicCache.IsCRD(kind) {
+		if kind == "" || !isCRDGVR(dynamicCache, gvr, kind) {
 			continue
 		}
 		resources, err := dynamicCache.ListNamespaces(gvr, opts.Namespaces)
@@ -268,9 +268,10 @@ func (b *Builder) addCrossplaneNodes(nodes []Node, edges []Edge, opts BuildOptio
 				continue
 			}
 			name := r.GetName()
-			nodeID := fmt.Sprintf("%s/%s/%s", strings.ToLower(kind), ns, name)
+			group := groupFromAPIVersion(r.GetAPIVersion())
+			nodeID := fmt.Sprintf("%s/%s/%s/%s", strings.ToLower(kind), ns, name, group)
 			objects = append(objects, xpObject{obj: r, nodeID: nodeID})
-			index[crossplaneIndexKey(groupFromAPIVersion(r.GetAPIVersion()), kind, ns, name)] = nodeID
+			index[crossplaneIndexKey(group, kind, ns, name)] = nodeID
 
 			if existingIDs[nodeID] {
 				continue

@@ -2,6 +2,8 @@ package topology
 
 import (
 	"strings"
+
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // Profile controls how broadly a neighborhood expands. The public surface is
@@ -580,6 +582,9 @@ func nodeMatchesAPIGroup(n *Node, group string) bool {
 		return true
 	}
 	if nodeAPIGroupFromData(n) == group {
+		return true
+	}
+	if nodeAPIGroupFromData(n) == "" && resourceid.GroupForBuiltinKind(KubernetesKindForNode(n)) == group {
 		return true
 	}
 	if !IsCalicoPolicyKind(n.Kind) {

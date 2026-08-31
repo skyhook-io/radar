@@ -182,7 +182,7 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 	// within-response matching and diverging from MCP's shape despite
 	// the header comment claiming both surfaces "parse identically".
 	rootResp := root
-	rootResp.Kind = string(sub.Nodes[0].Kind)
+	rootResp.Kind = topology.KubernetesKindForNode(&sub.Nodes[0])
 
 	resp := neighborhoodResponse{
 		Root: rootResp,

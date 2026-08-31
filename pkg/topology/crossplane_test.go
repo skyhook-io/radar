@@ -60,9 +60,9 @@ func TestBuildCrossplaneV1ClaimChainEdges(t *testing.T) {
 		t.Fatalf("Build() error: %v", err)
 	}
 
-	claimID := "databaseclaim/demo-app/example-database"
-	xrID := "xdatabase//example-database-xr"
-	composed := []string{"object//example-database-configmap", "object//example-database-service", "object//example-database-connection"}
+	claimID := "databaseclaim/demo-app/example-database/demo.example.io"
+	xrID := "xdatabase//example-database-xr/demo.example.io"
+	composed := []string{"object//example-database-configmap/kubernetes.crossplane.io", "object//example-database-service/kubernetes.crossplane.io", "object//example-database-connection/kubernetes.crossplane.io"}
 
 	for _, id := range append([]string{claimID, xrID}, composed...) {
 		if findNode(topo, id) == nil {
@@ -129,8 +129,8 @@ func TestBuildCrossplaneV2NamespacedXREdges(t *testing.T) {
 		t.Fatalf("Build() error: %v", err)
 	}
 
-	xrID := "appstack/v2-app/web-stack"
-	composed := []string{"object/v2-app/web-stack-configmap", "object/v2-app/web-stack-service"}
+	xrID := "appstack/v2-app/web-stack/demo.example.io"
+	composed := []string{"object/v2-app/web-stack-configmap/kubernetes.m.crossplane.io", "object/v2-app/web-stack-service/kubernetes.m.crossplane.io"}
 	if findNode(topo, xrID) == nil {
 		t.Fatalf("missing namespaced XR node %q; nodes=%+v", xrID, topo.Nodes)
 	}
@@ -194,20 +194,20 @@ func TestCrossplaneClusterScopedNodesAreRBACStrippable(t *testing.T) {
 
 	// deny everything: cluster-scoped XR + MR gone, namespaced Claim stays
 	topo.StripClusterScopedDynamicExcept(map[SARTuple]bool{})
-	if findNode(topo, "databaseclaim/demo-app/db") == nil {
+	if findNode(topo, "databaseclaim/demo-app/db/demo.example.io") == nil {
 		t.Fatal("namespaced Claim node was wrongly stripped")
 	}
-	if findNode(topo, "xdatabase//db-xr") != nil || findNode(topo, "object//db-cm") != nil {
+	if findNode(topo, "xdatabase//db-xr/demo.example.io") != nil || findNode(topo, "object//db-cm/kubernetes.crossplane.io") != nil {
 		t.Fatalf("unauthorized cluster-scoped node leaked through strip; nodes=%+v", topo.Nodes)
 	}
 
 	// allow only the XR's GVR: XR stays, MR still stripped
 	topo2, _ := NewBuilder(&mockProvider{}).WithDynamic(newProvider()).Build(DefaultBuildOptions())
 	topo2.StripClusterScopedDynamicExcept(map[SARTuple]bool{xrTuple: true})
-	if findNode(topo2, "xdatabase//db-xr") == nil {
+	if findNode(topo2, "xdatabase//db-xr/demo.example.io") == nil {
 		t.Fatal("authorized XR node was wrongly stripped")
 	}
-	if findNode(topo2, "object//db-cm") != nil {
+	if findNode(topo2, "object//db-cm/kubernetes.crossplane.io") != nil {
 		t.Fatal("unauthorized MR node leaked (only XR was allowed)")
 	}
 }
@@ -253,10 +253,10 @@ func TestBuildCrossplaneClusterScopedSurvivesNamespaceFilter(t *testing.T) {
 		t.Fatalf("Build() error: %v", err)
 	}
 
-	if !hasKarpenterTopologyEdge(topo, "databaseclaim/demo-app/db", "xdatabase//db-xr", EdgeManages) {
+	if !hasKarpenterTopologyEdge(topo, "databaseclaim/demo-app/db/demo.example.io", "xdatabase//db-xr/demo.example.io", EdgeManages) {
 		t.Fatalf("cluster-scoped XR dropped under namespace filter; edges=%+v", topo.Edges)
 	}
-	if !hasKarpenterTopologyEdge(topo, "xdatabase//db-xr", "object//db-cm", EdgeManages) {
+	if !hasKarpenterTopologyEdge(topo, "xdatabase//db-xr/demo.example.io", "object//db-cm/kubernetes.crossplane.io", EdgeManages) {
 		t.Fatalf("cluster-scoped composed MR dropped under namespace filter; edges=%+v", topo.Edges)
 	}
 }
@@ -303,17 +303,53 @@ func TestBuildCrossplaneSameNameDifferentNamespaceNoCollision(t *testing.T) {
 	}
 
 	// each XR wires to the MR in its OWN namespace, not the other's
-	if !hasKarpenterTopologyEdge(topo, "appstack/team-a/stack", "object/team-a/shared-config", EdgeManages) {
+	if !hasKarpenterTopologyEdge(topo, "appstack/team-a/stack/demo.example.io", "object/team-a/shared-config/kubernetes.m.crossplane.io", EdgeManages) {
 		t.Fatalf("team-a XR did not wire to its own composed MR; edges=%+v", topo.Edges)
 	}
-	if !hasKarpenterTopologyEdge(topo, "appstack/team-b/stack", "object/team-b/shared-config", EdgeManages) {
+	if !hasKarpenterTopologyEdge(topo, "appstack/team-b/stack/demo.example.io", "object/team-b/shared-config/kubernetes.m.crossplane.io", EdgeManages) {
 		t.Fatalf("team-b XR did not wire to its own composed MR; edges=%+v", topo.Edges)
 	}
 	// and NOT to the other namespace's MR
-	if hasKarpenterTopologyEdge(topo, "appstack/team-a/stack", "object/team-b/shared-config", EdgeManages) {
+	if hasKarpenterTopologyEdge(topo, "appstack/team-a/stack/demo.example.io", "object/team-b/shared-config/kubernetes.m.crossplane.io", EdgeManages) {
 		t.Fatalf("cross-namespace collision: team-a XR wired to team-b MR")
 	}
-	if hasKarpenterTopologyEdge(topo, "appstack/team-b/stack", "object/team-a/shared-config", EdgeManages) {
+	if hasKarpenterTopologyEdge(topo, "appstack/team-b/stack/demo.example.io", "object/team-a/shared-config/kubernetes.m.crossplane.io", EdgeManages) {
 		t.Fatalf("cross-namespace collision: team-b XR wired to team-a MR")
+	}
+}
+
+func TestBuildCrossplaneSameIdentityAcrossProviderGroups(t *testing.T) {
+	awsGVR := schema.GroupVersionResource{Group: "s3.aws.upbound.io", Version: "v1beta1", Resource: "buckets"}
+	gcpGVR := schema.GroupVersionResource{Group: "storage.gcp.upbound.io", Version: "v1beta1", Resource: "buckets"}
+	bucket := func(apiVersion, uid string) *unstructured.Unstructured {
+		o := karpenterTopologyObject(apiVersion, "Bucket", "artifacts", uid, map[string]any{
+			"spec": map[string]any{"providerConfigRef": map[string]any{"name": "default"}},
+		})
+		o.SetNamespace("platform")
+		return o
+	}
+	dynamic := &karpenterDynamicProvider{
+		exact: map[string]schema.GroupVersionResource{},
+		resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{
+			awsGVR: {bucket("s3.aws.upbound.io/v1beta1", "aws")},
+			gcpGVR: {bucket("storage.gcp.upbound.io/v1beta1", "gcp")},
+		},
+		kinds:              map[schema.GroupVersionResource]string{awsGVR: "Bucket", gcpGVR: "Bucket"},
+		watched:            []schema.GroupVersionResource{awsGVR, gcpGVR},
+		listCalls:          make(map[schema.GroupVersionResource]int),
+		listNamespaceCalls: make(map[schema.GroupVersionResource]int),
+	}
+
+	topo, err := NewBuilder(&mockProvider{}).WithDynamic(dynamic).Build(DefaultBuildOptions())
+	if err != nil {
+		t.Fatalf("Build() error: %v", err)
+	}
+	for _, id := range []string{
+		"bucket/platform/artifacts/s3.aws.upbound.io",
+		"bucket/platform/artifacts/storage.gcp.upbound.io",
+	} {
+		if findNode(topo, id) == nil {
+			t.Fatalf("missing exact Crossplane node %q; nodes=%+v", id, topo.Nodes)
+		}
 	}
 }
