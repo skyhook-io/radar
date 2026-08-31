@@ -80,6 +80,9 @@ JobSet ownership, role/index propagation, dependency gating, and terminal failur
 now have a focused live lane: [`scripts/jobset-demo.sh`](../jobset-demo.sh). It
 installs only JobSet and validates real reconciliation without adding controller
 races to this breadth suite.
+For real KubeRay ownership and active/pending RayService reconciliation, use the
+focused [`kuberay-demo`](../kuberay-demo/README.md) lane. It complements this
+37-kind breadth fixture rather than adding a heavy Ray runtime here.
 
 ## Real GPU acceptance lane
 

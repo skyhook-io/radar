@@ -5,6 +5,7 @@
 .PHONY: gpu-ecosystem-demo gpu-ecosystem-demo-down gpu-ecosystem-demo-status
 .PHONY: kubecost-demo kubecost-demo-down kubecost-demo-status
 .PHONY: jobset-demo jobset-demo-down jobset-demo-reset jobset-demo-status jobset-demo-verify
+.PHONY: kuberay-demo kuberay-demo-down kuberay-demo-reset kuberay-demo-status kuberay-demo-verify
 .PHONY: release release-binaries-dry docker docker-test docker-multiarch docker-push
 .PHONY: desktop desktop-binary desktop-dev desktop-package-darwin desktop-package-windows desktop-package-linux
 
@@ -369,6 +370,22 @@ jobset-demo-status:
 
 jobset-demo-verify:
 	./scripts/jobset-demo.sh verify
+# Real KubeRay reconciliation for one head-only RayService: a healthy active
+# Serve revision plus an intentionally non-runnable pending NewCluster revision.
+kuberay-demo:
+	./scripts/kuberay-demo.sh up
+
+kuberay-demo-down:
+	./scripts/kuberay-demo.sh down
+
+kuberay-demo-reset:
+	./scripts/kuberay-demo.sh reset
+
+kuberay-demo-status:
+	./scripts/kuberay-demo.sh status
+
+kuberay-demo-verify:
+	./scripts/kuberay-demo.sh verify
 
 # Bootstrap a kind cluster running real Calico with its aggregated API server,
 # plus the policy shapes the Calico surfaces render (both API groups serving the
@@ -514,6 +531,7 @@ help:
 	@echo "  make kubecost-demo    - Kubecost 3 current-cost API and Radar connection lanes"
 	@echo "  make kueue-demo      - Live Kueue admission and pre-Pod blocker fixtures"
 	@echo "  make jobset-demo      - Live JobSet role, dependency, and failure fixtures"
+	@echo "  make kuberay-demo     - Real RayService active/pending revision lifecycle"
 	@echo "  make calico-demo      - Real Calico, both API groups, staged policies"
 	@echo ""
 	@echo "Desktop:"
