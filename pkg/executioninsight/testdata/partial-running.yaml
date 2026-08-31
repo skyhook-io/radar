@@ -1,0 +1,55 @@
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: distributed-train
+  namespace: ml
+spec:
+  replicatedJobs:
+    - name: coordinator
+      groupName: control
+      replicas: 1
+      template:
+        spec:
+          template:
+            spec:
+              restartPolicy: Never
+              containers:
+                - name: coordinator
+                  image: registry.k8s.io/pause:3.10
+    - name: workers
+      groupName: compute
+      replicas: 4
+      template:
+        spec:
+          template:
+            spec:
+              restartPolicy: Never
+              containers:
+                - name: worker
+                  image: registry.k8s.io/pause:3.10
+    - name: evaluator
+      groupName: evaluation
+      replicas: 2
+      template:
+        spec:
+          template:
+            spec:
+              restartPolicy: Never
+              containers:
+                - name: evaluator
+                  image: registry.k8s.io/pause:3.10
+status:
+  restarts: 2
+  replicatedJobsStatus:
+    - name: coordinator
+      ready: 1
+      active: 1
+      succeeded: 0
+      failed: 0
+      suspended: 0
+    - name: workers
+      ready: 2
+      active: 3
+      succeeded: 0
+      failed: 1
+      suspended: 0

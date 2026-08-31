@@ -132,6 +132,7 @@ func TestResourceContextFieldOrdering(t *testing.T) {
 		Uses:          &UsesBlock{},
 		RunsOn:        &ContextRef{Kind: "Node", Name: "node-1"},
 		ScaledBy:      []ContextRef{{Kind: "HorizontalPodAutoscaler", Name: "api-hpa"}},
+		Execution:     &ExecutionSummary{Controller: "jobset", Stage: ExecutionRunning},
 		IssueSummary:  &IssueSummary{Count: 1},
 		AuditSummary:  &AuditSummary{Count: 2},
 		PolicySummary: &PolicySummary{},
@@ -150,6 +151,7 @@ func TestResourceContextFieldOrdering(t *testing.T) {
 		`"uses"`,
 		`"runsOn"`,
 		`"scaledBy"`,
+		`"execution"`,
 		`"issueSummary"`,
 		`"auditSummary"`,
 		`"policySummary"`,
@@ -203,6 +205,35 @@ func TestResourceContextRoundTrip(t *testing.T) {
 			Group: "autoscaling",
 			Name:  "api-hpa",
 		}},
+		Execution: &ExecutionSummary{
+			Controller: "jobset",
+			Stage:      ExecutionRestarting,
+			State: &ExecutionState{
+				Condition:          "RestartingJobSet",
+				Status:             "True",
+				Reason:             "FailurePolicy_retry-workers",
+				Message:            "restarting after worker failure",
+				LastTransitionTime: "2026-08-31T10:15:00Z",
+			},
+			Counts: &ExecutionCounts{
+				DeclaredRoles: 2,
+				DeclaredJobs:  5,
+				ObservedRoles: int64Ptr(2),
+				ReadyJobs:     int64Ptr(1),
+				ActiveJobs:    int64Ptr(3),
+				SucceededJobs: int64Ptr(0),
+				FailedJobs:    int64Ptr(1),
+				SuspendedJobs: int64Ptr(0),
+			},
+			Restarts: &ExecutionRestartCounts{
+				Global:                    int64Ptr(1),
+				GlobalCountTowardsMax:     int64Ptr(1),
+				Individual:                int64Ptr(2),
+				IndividualRoles:           int64Ptr(2),
+				IndividualCountTowardsMax: int64Ptr(1),
+				IndividualCountedRoles:    int64Ptr(2),
+			},
+		},
 		IssueSummary: &IssueSummary{
 			Count:           3,
 			HighestSeverity: "critical",
@@ -242,6 +273,20 @@ func TestResourceContextRoundTrip(t *testing.T) {
 	if !reflect.DeepEqual(orig, got) {
 		t.Fatalf("round-trip mismatch:\nwant %#v\ngot  %#v", orig, got)
 	}
+}
+
+func TestExecutionSummaryOmitsUnavailableCounts(t *testing.T) {
+	b, err := json.Marshal(ExecutionSummary{Controller: "rayservice", Stage: ExecutionRunning})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(b), `"counts"`) {
+		t.Fatalf("unavailable counts serialized as observed zero: %s", b)
+	}
+}
+
+func int64Ptr(value int64) *int64 {
+	return &value
 }
 
 // TestResourceSummaryContextRoundTrip covers ResourceSummaryContext + ManagedByRef

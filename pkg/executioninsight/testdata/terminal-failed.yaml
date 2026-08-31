@@ -1,0 +1,36 @@
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: failed-train
+  namespace: ml
+spec:
+  replicatedJobs:
+    - name: workers
+      replicas: 2
+      template:
+        spec:
+          template:
+            spec:
+              restartPolicy: Never
+              containers:
+                - name: worker
+                  image: registry.k8s.io/pause:3.10
+status:
+  terminalState: Failed
+  restarts: 0
+  restartsCountTowardsMax: 0
+  replicatedJobsStatus:
+    - name: workers
+      ready: 0
+      active: 0
+      succeeded: 0
+      failed: 2
+      suspended: 0
+      jobRestarts: [1, 2]
+      jobRestartsCountTowardsMax: [1, 1]
+  conditions:
+    - type: Failed
+      status: "True"
+      reason: ReachedMaxRestarts
+      message: The JobSet reached its configured restart limit after worker failures.
+      lastTransitionTime: "2026-08-31T10:15:00Z"

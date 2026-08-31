@@ -1382,6 +1382,17 @@ This is resource reconnaissance, not GPU accounting or end-to-end workload diagn
 | MPIJob | `kubeflow.org` (v1, v2beta1) | JobCondition pattern |
 | TrainJob | `trainer.kubeflow.org/v1alpha1` | Complete / Failed / Suspended conditions + active child jobs |
 
+For an exact `jobset.x-k8s.io/v1alpha2` JobSet, the REST AI resource endpoint
+and MCP `get_resource` also project `resourceContext.execution`: a normalized
+stage, its authoritative controller condition/reason when condition-derived,
+declared role/Job totals, controller-reported per-state Job aggregates, and
+observed-role coverage. Restart counters retain JobSet's global/per-Job and
+counts-toward-limit distinctions; per-Job aggregates state how many role
+statuses contributed so partial status cannot read as a complete total.
+Controller-native roles, policies, templates, and conditions remain on the
+returned resource. Radar does not infer child Job names or skip the Job→Pod
+ownership layer from naming conventions.
+
 Volcano Job, the Volcano/KAI Queues and PodGroups, and KAITO Workspaces share kind names with other resources — Radar disambiguates by API group in tables, filters, and status badges.
 
 ### Model serving operators: KAITO, NVIDIA NIM, AMD
