@@ -108,6 +108,32 @@ func TestSQLiteStore_AppendBatch(t *testing.T) {
 	}
 }
 
+func TestSQLiteStore_HistoricalBuiltinKindCollisionsPersistSeparately(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	ts := time.Unix(1700000000, 0)
+	events := []TimelineEvent{
+		NewHistoricalEvent("cluster-a", "Job", "batch/v1", "team-a", "train", ts, "created", "", HealthUnknown, nil, nil),
+		NewHistoricalEvent("cluster-a", "Job", "batch.volcano.sh/v1alpha1", "team-a", "train", ts, "created", "", HealthUnknown, nil, nil),
+	}
+	for i := range events {
+		events[i].ClusterContext = "cluster-a"
+	}
+	if err := store.AppendBatch(ctx, events); err != nil {
+		t.Fatalf("AppendBatch failed: %v", err)
+	}
+
+	got, err := store.Query(ctx, QueryOptions{ClusterContext: "cluster-a", Limit: 10, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("historical collision events = %d, want 2: %+v", len(got), got)
+	}
+}
+
 func TestSQLiteStore_Query_Names(t *testing.T) {
 	store, cleanup := createTestSQLiteStore(t)
 	defer cleanup()
