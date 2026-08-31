@@ -70,7 +70,7 @@ func (d *calicoTestDynamic) GetKindForGVR(gvr schema.GroupVersionResource) strin
 	}
 	return ""
 }
-func (d *calicoTestDynamic) IsCRD(string) bool { return true }
+func (d *calicoTestDynamic) IsCRD(string) bool                         { return true }
 func (d *calicoTestDynamic) IsCRDGVR(schema.GroupVersionResource) bool { return true }
 
 func calicoTestObject(group, version, kind, namespace, name string, spec map[string]any) *unstructured.Unstructured {
