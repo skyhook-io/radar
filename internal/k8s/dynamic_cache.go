@@ -171,6 +171,12 @@ type supportedCRDResource struct {
 	Namespaced bool
 }
 
+// supportedCRDFallbacks is the server-side catalog of dynamic integrations
+// Radar intentionally observes. Discovery supplies the served GVR; this
+// catalog supplies the supported identity and version fallback order used by
+// partial-discovery recovery, startup warmup, capability probes, and chart-RBAC
+// drift checks. Only installed catalog entries are warmed, so watch identities
+// stay bounded even when discovery exposes an unbounded CRD set.
 var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "argoproj.io", Versions: []string{"v1alpha1"}, Resource: "applications", Kind: "Application", Namespaced: true},
 	{Group: "argoproj.io", Versions: []string{"v1alpha1"}, Resource: "applicationsets", Kind: "ApplicationSet", Namespaced: true},
@@ -389,6 +395,48 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "policies.kyverno.io", Versions: []string{"v1", "v1beta1"}, Resource: "namespacedgeneratingpolicies", Kind: "NamespacedGeneratingPolicy", Namespaced: true},
 	{Group: "policies.kyverno.io", Versions: []string{"v1", "v1beta1"}, Resource: "namespaceddeletingpolicies", Kind: "NamespacedDeletingPolicy", Namespaced: true},
 	{Group: "policies.kyverno.io", Versions: []string{"v1", "v1beta1", "v1alpha1"}, Resource: "policyexceptions", Kind: "PolicyException", Namespaced: true},
+	// GPU, batch, distributed-training, and inference integrations. These are
+	// observed regardless of object count so cross-resource consumers do not
+	// depend on a user first opening the resource kind.
+	{Group: "kueue.x-k8s.io", Versions: []string{"v1beta2", "v1beta1"}, Resource: "clusterqueues", Kind: "ClusterQueue", Namespaced: false},
+	{Group: "kueue.x-k8s.io", Versions: []string{"v1beta2", "v1beta1"}, Resource: "localqueues", Kind: "LocalQueue", Namespaced: true},
+	{Group: "kueue.x-k8s.io", Versions: []string{"v1beta2", "v1beta1"}, Resource: "workloads", Kind: "Workload", Namespaced: true},
+	{Group: "kueue.x-k8s.io", Versions: []string{"v1beta2", "v1beta1"}, Resource: "resourceflavors", Kind: "ResourceFlavor", Namespaced: false},
+	{Group: "kueue.x-k8s.io", Versions: []string{"v1beta2", "v1beta1"}, Resource: "admissionchecks", Kind: "AdmissionCheck", Namespaced: false},
+	{Group: "autoscaling.x-k8s.io", Versions: []string{"v1", "v1beta1"}, Resource: "provisioningrequests", Kind: "ProvisioningRequest", Namespaced: true},
+	{Group: "ray.io", Versions: []string{"v1"}, Resource: "rayclusters", Kind: "RayCluster", Namespaced: true},
+	{Group: "ray.io", Versions: []string{"v1"}, Resource: "rayjobs", Kind: "RayJob", Namespaced: true},
+	{Group: "ray.io", Versions: []string{"v1"}, Resource: "rayservices", Kind: "RayService", Namespaced: true},
+	{Group: "ray.io", Versions: []string{"v1"}, Resource: "raycronjobs", Kind: "RayCronJob", Namespaced: true},
+	{Group: "serving.kserve.io", Versions: []string{"v1beta1"}, Resource: "inferenceservices", Kind: "InferenceService", Namespaced: true},
+	{Group: "serving.kserve.io", Versions: []string{"v1alpha1"}, Resource: "servingruntimes", Kind: "ServingRuntime", Namespaced: true},
+	{Group: "serving.kserve.io", Versions: []string{"v1alpha1"}, Resource: "clusterservingruntimes", Kind: "ClusterServingRuntime", Namespaced: false},
+	{Group: "serving.kserve.io", Versions: []string{"v1alpha1"}, Resource: "inferencegraphs", Kind: "InferenceGraph", Namespaced: true},
+	{Group: "serving.kserve.io", Versions: []string{"v1alpha1"}, Resource: "trainedmodels", Kind: "TrainedModel", Namespaced: true},
+	{Group: "serving.kserve.io", Versions: []string{"v1alpha2", "v1alpha1"}, Resource: "llminferenceservices", Kind: "LLMInferenceService", Namespaced: true},
+	{Group: "inference.networking.k8s.io", Versions: []string{"v1"}, Resource: "inferencepools", Kind: "InferencePool", Namespaced: true},
+	{Group: "inference.networking.x-k8s.io", Versions: []string{"v1alpha2"}, Resource: "inferencepools", Kind: "InferencePool", Namespaced: true},
+	{Group: "llm-d.ai", Versions: []string{"v1alpha2"}, Resource: "inferenceobjectives", Kind: "InferenceObjective", Namespaced: true},
+	{Group: "inference.networking.x-k8s.io", Versions: []string{"v1alpha2"}, Resource: "inferenceobjectives", Kind: "InferenceObjective", Namespaced: true},
+	{Group: "leaderworkerset.x-k8s.io", Versions: []string{"v1"}, Resource: "leaderworkersets", Kind: "LeaderWorkerSet", Namespaced: true},
+	{Group: "jobset.x-k8s.io", Versions: []string{"v1alpha2"}, Resource: "jobsets", Kind: "JobSet", Namespaced: true},
+	{Group: "batch.volcano.sh", Versions: []string{"v1alpha1"}, Resource: "jobs", Kind: "Job", Namespaced: true},
+	{Group: "scheduling.volcano.sh", Versions: []string{"v1beta1"}, Resource: "queues", Kind: "Queue", Namespaced: false},
+	{Group: "scheduling.volcano.sh", Versions: []string{"v1beta1"}, Resource: "podgroups", Kind: "PodGroup", Namespaced: true},
+	{Group: "flow.volcano.sh", Versions: []string{"v1alpha1"}, Resource: "jobflows", Kind: "JobFlow", Namespaced: true},
+	{Group: "flow.volcano.sh", Versions: []string{"v1alpha1"}, Resource: "jobtemplates", Kind: "JobTemplate", Namespaced: true},
+	{Group: "scheduling.run.ai", Versions: []string{"v2"}, Resource: "queues", Kind: "Queue", Namespaced: false},
+	{Group: "scheduling.run.ai", Versions: []string{"v2alpha2"}, Resource: "podgroups", Kind: "PodGroup", Namespaced: true},
+	{Group: "kubeflow.org", Versions: []string{"v1"}, Resource: "pytorchjobs", Kind: "PyTorchJob", Namespaced: true},
+	{Group: "kubeflow.org", Versions: []string{"v1"}, Resource: "tfjobs", Kind: "TFJob", Namespaced: true},
+	{Group: "kubeflow.org", Versions: []string{"v1", "v2beta1"}, Resource: "mpijobs", Kind: "MPIJob", Namespaced: true},
+	{Group: "trainer.kubeflow.org", Versions: []string{"v1alpha1"}, Resource: "trainjobs", Kind: "TrainJob", Namespaced: true},
+	{Group: "kaito.sh", Versions: []string{"v1beta1"}, Resource: "workspaces", Kind: "Workspace", Namespaced: true},
+	{Group: "kaito.sh", Versions: []string{"v1beta1", "v1alpha1"}, Resource: "ragengines", Kind: "RAGEngine", Namespaced: true},
+	{Group: "apps.nvidia.com", Versions: []string{"v1alpha1"}, Resource: "nimservices", Kind: "NIMService", Namespaced: true},
+	{Group: "apps.nvidia.com", Versions: []string{"v1alpha1"}, Resource: "nimcaches", Kind: "NIMCache", Namespaced: true},
+	{Group: "apps.nvidia.com", Versions: []string{"v1alpha1"}, Resource: "nimpipelines", Kind: "NIMPipeline", Namespaced: true},
+	{Group: "amd.com", Versions: []string{"v1alpha1"}, Resource: "deviceconfigs", Kind: "DeviceConfig", Namespaced: true},
 	// DRA (built-in resource.k8s.io, GA in K8s 1.34). Normal discovery flags
 	// these IsCRD (group not in coreAPIGroups) and watches them; the fallback
 	// entries cover partial-discovery clusters. v1beta2 serves 1.32-1.33.
@@ -566,7 +614,8 @@ func isExpectedFallbackProbeDenial(err error) bool {
 	return apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) || apierrors.IsNotFound(err)
 }
 
-// WarmupCommonCRDs starts watching common CRDs (Rollouts, Workflows, etc.) at startup.
+// WarmupCommonCRDs starts watching discovered resources in the supported
+// dynamic-integration catalog at startup.
 func WarmupCommonCRDs() {
 	cache := GetDynamicResourceCache()
 	if cache == nil {
@@ -581,7 +630,7 @@ func WarmupCommonCRDs() {
 	var gvrs []schema.GroupVersionResource
 	seen := make(map[schema.GroupVersionResource]bool)
 	for _, candidate := range supportedCRDFallbacks {
-		if gvr, ok := discovery.GetGVRWithGroup(candidate.Kind, candidate.Group); ok && !seen[gvr] {
+		if gvr, ok := discovery.GetGVRWithGroup(candidate.Kind, candidate.Group); ok && discovery.SupportsWatchGVR(gvr) && !seen[gvr] {
 			seen[gvr] = true
 			gvrs = append(gvrs, gvr)
 			log.Printf("Warming up CRD: %s (%s)", candidate.Kind, candidate.Group)
