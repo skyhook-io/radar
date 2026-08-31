@@ -1,16 +1,16 @@
 import type { SelectedResource, Topology, TopologyNode } from '@skyhook-io/k8s-ui/types/core'
+import { builtinGroupForKind, canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
 import { apiVersionToGroup, kindToPluralWithGroup } from '@skyhook-io/k8s-ui/utils/navigation'
+import { topologyNodeResourceKind } from '@skyhook-io/k8s-ui/utils/topology-neighborhood'
 
 function topologyNodeGroup(node: TopologyNode): string | undefined {
-  const apiVersionGroup = apiVersionToGroup(node.data.apiVersion as string | undefined)
-  if (apiVersionGroup) return apiVersionGroup
+  const apiVersion = node.data.apiVersion
+  if (typeof apiVersion === 'string' && apiVersion) return apiVersionToGroup(apiVersion)
 
   const sourceGroup = node.data.sourceGroup
-  if (typeof sourceGroup === 'string' && sourceGroup) return sourceGroup
+  if (typeof sourceGroup === 'string') return sourceGroup
 
-  // Native NetworkPolicy nodes predate apiVersion in the topology payload.
-  if (node.kind === 'NetworkPolicy') return 'networking.k8s.io'
-  return undefined
+  return builtinGroupForKind(topologyNodeResourceKind(node))
 }
 
 export function findSelectedTopologyNode(
@@ -22,13 +22,13 @@ export function findSelectedTopologyNode(
   const candidates = topology?.nodes.filter(node =>
     ((node.data.namespace as string) || '') === namespace &&
     node.name === selectedResource.name &&
-    (kindToPluralWithGroup(node.kind, topologyNodeGroup(node) ?? '') === selectedKind || node.kind === selectedResource.kind),
+    (kindToPluralWithGroup(topologyNodeResourceKind(node), topologyNodeGroup(node) ?? '') === selectedKind || topologyNodeResourceKind(node) === selectedResource.kind),
   ) ?? []
 
   if (candidates.length === 0) return undefined
 
-  const selectedGroup = selectedResource.group || undefined
-  if (!selectedGroup) return candidates[0]
+  const selectedGroup = canonicalResourceGroup(selectedResource.kind, selectedResource.group)
+  if (selectedGroup === undefined) return candidates.length === 1 ? candidates[0] : undefined
 
   const groupMatch = candidates.find(node => topologyNodeGroup(node) === selectedGroup)
   if (groupMatch) return groupMatch

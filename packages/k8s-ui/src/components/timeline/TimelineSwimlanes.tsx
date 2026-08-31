@@ -45,7 +45,7 @@ import { getHealthBadgeColor, getEventTypeColor } from '../../utils/badge-colors
 import { MiddleEllipsis } from '../ui/MiddleEllipsis'
 import { Tooltip } from '../ui/Tooltip'
 import { ResourceRefBadge } from '../ui/drawer-components'
-import { buildResourceHierarchy, extractPinnedLanes, removePinnedLanes, isProblematicEvent, laneTrackEvents, isChildVisibleInWindow, collidingLaneKeys, laneCollisionKey, type ResourceLane as BaseResourceLane, type TimelineGrouping, type PinnedLaneRef } from '../../utils/resource-hierarchy'
+import { buildResourceHierarchy, extractPinnedLanes, removePinnedLanes, resolvePinnedLaneIds, isProblematicEvent, laneTrackEvents, isChildVisibleInWindow, collidingLaneKeys, laneCollisionKey, type ResourceLane as BaseResourceLane, type TimelineGrouping, type PinnedLaneRef } from '../../utils/resource-hierarchy'
 import { groupQualifiesLaneId } from '../../utils/navigation'
 import type { AppMembershipIndex } from '../../utils/applications'
 import { Layers } from 'lucide-react'
@@ -765,7 +765,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
   // already telling the user "this controller had changes/events"; the GitOps
   // tab is the right place to investigate further.
   const handleLaneOpen = useCallback((kind: string, namespace: string, name: string, group?: string) => {
-    const gitOpsPath = gitOpsRouteForKind(kind, namespace, name)
+    const gitOpsPath = gitOpsRouteForKind(kind, namespace, name, group)
     if (gitOpsPath && onNavigatePath) {
       onNavigatePath(gitOpsPath)
       return
@@ -1187,7 +1187,10 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
 
   // Pin MOVES a row: pinned lanes (and pinned children inside groups) leave
   // the regular list entirely — the pinned section is their only home.
-  const pinnedIdSetForFilter = useMemo(() => new Set((pinnedLanes ?? []).map((p) => p.id)), [pinnedLanes])
+  const pinnedIdSetForFilter = useMemo(
+    () => resolvePinnedLaneIds(lanes, pinnedLanes ?? []),
+    [lanes, pinnedLanes],
+  )
   const pinnedAppKeys = useMemo(
     () => new Set((pinnedLanes ?? []).flatMap((p) => (p.type === 'appGroup' ? [p.appKey] : []))),
     [pinnedLanes],
@@ -1232,7 +1235,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
     return n
   }, [pinnedLaneRows, visibleWindow])
 
-  const pinnedIdSet = useMemo(() => new Set((pinnedLanes ?? []).map((p) => p.id)), [pinnedLanes])
+  const pinnedIdSet = pinnedIdSetForFilter
   // A pin button for a lane, or null when the host wired no pin handler. A pinned
   // lane's button is filled and always visible (in the pinned section or its
   // original spot); an unpinned one reveals on row hover.
@@ -1241,7 +1244,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
     const pinned = pinnedIdSet.has(lane.id)
     const ref: PinnedLaneRef = lane.isAppGroup && lane.appKey
       ? { type: 'appGroup', id: lane.id, appKey: lane.appKey, appName: lane.title ?? lane.name }
-      : { id: lane.id, kind: lane.kind, namespace: lane.namespace, name: lane.name }
+      : { id: lane.id, kind: lane.kind, group: lane.group, namespace: lane.namespace, name: lane.name }
     return (
       <PinButton
         pinned={pinned}

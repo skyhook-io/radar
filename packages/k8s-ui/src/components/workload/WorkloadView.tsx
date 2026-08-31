@@ -37,7 +37,7 @@ import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, Resol
 import type { GitOpsStatus } from '../../types/gitops'
 import type { NavigateToResource } from '../../utils/navigation'
 import { refToSelectedResource, pluralToKind, kindToPlural, kindToPluralWithGroup, apiVersionToGroup } from '../../utils/navigation'
-import { neighborhoodFor, seedNodeIds } from '../../utils/topology-neighborhood'
+import { neighborhoodFor, seedNodeIds, topologyNodeResourceKind } from '../../utils/topology-neighborhood'
 import { TopologyGraph } from '../topology/TopologyGraph'
 import { gitOpsOwnerFromRelationships, type GitOpsOwnerRef } from '../../utils/gitops-owner'
 import { gitOpsRouteForResource } from '../../utils/gitops-route'
@@ -538,7 +538,7 @@ export function WorkloadView({
       .filter((n) => n.kind !== 'Internet' && n.kind !== 'PodGroup')
       .map((n) => ({
         id: n.id,
-        kind: (typeof n.data?.resourceKind === 'string' ? n.data.resourceKind : n.kind) as string,
+        kind: topologyNodeResourceKind(n),
         namespace: (n.data?.namespace as string) || namespace,
         name: n.name,
         group: apiVersionToGroup(n.data?.apiVersion as string | undefined),
@@ -556,7 +556,7 @@ export function WorkloadView({
   const yamlObject = yamlObjectId ? yamlObjects.find((o) => o.id === yamlObjectId) : undefined
   const handleTopologyNodeClick = useCallback(
     (node: TopologyNode) => {
-      const resourceKind = typeof node.data?.resourceKind === 'string' ? node.data.resourceKind : node.kind
+      const resourceKind = topologyNodeResourceKind(node)
       if (!onNavigateToResource || !resourceKind || !node.name) return
       const group = apiVersionToGroup(node.data?.apiVersion as string | undefined)
       onNavigateToResource({

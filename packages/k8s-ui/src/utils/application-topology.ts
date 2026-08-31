@@ -1,6 +1,7 @@
 import type { GitOpsResourceTree, HealthStatus, HelmOwnedResource, Topology, TopologyNode } from '../types'
 import { apiVersionToGroup, groupQualifiesLaneId } from './navigation'
 import { pluralize } from './pluralize'
+import { topologyNodeResourceKind } from './topology-neighborhood'
 
 export type DeploymentMembership = 'runtime-only' | 'source-only'
 
@@ -157,7 +158,7 @@ export function layerDeploymentInventory(
   const runtimeNodes = topology.nodes.map((node) => {
     if (node.kind === 'PodGroup' || node.kind === 'Internet') return node
     const namespace = (node.data?.namespace as string) || ''
-    const match = inventoryByExact.get(identityKey(node.kind, topologyGroup(node), namespace, node.name))
+    const match = inventoryByExact.get(identityKey(topologyNodeResourceKind(node), topologyGroup(node), namespace, node.name))
     if (match) {
       matchedInventoryIds.add(match.id)
       managedRuntimeCount += 1

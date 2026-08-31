@@ -77,6 +77,7 @@ type argoClaim struct {
 // workloadRef identifies one managed workload for the hub to match against a
 // destination cluster's rows.
 type workloadRef struct {
+	Group     string `json:"group,omitempty"`
 	Kind      string `json:"kind"`
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
@@ -919,7 +920,7 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 			},
 			overlay:      overlay,
 			source:       sourceRefForInput(overlay, rootKind, rootGroup, rootKey),
-			events:       eventsForWorkload(eventsByObj[ns], kind, name, pods),
+			events:       eventsForWorkload(eventsByObj[ns], group, kind, name, pods),
 			rels:         rels,
 			rootKey:      rootKey,
 			rootKind:     rootKind,
@@ -2459,7 +2460,11 @@ func indexWarningEventsByObject(cache *k8s.ResourceCache, namespaces []string) m
 				m = map[string][]*corev1.Event{}
 				out[e.Namespace] = m
 			}
-			key := e.InvolvedObject.Kind + "/" + e.InvolvedObject.Name
+			group := topology.APIVersionGroup(e.InvolvedObject.APIVersion)
+			if builtinGroup, builtin := resourceid.BuiltinGroup(e.InvolvedObject.Kind); group == "" && builtin {
+				group = builtinGroup
+			}
+			key := resourceid.ResourceKey(group, e.InvolvedObject.Kind, "", e.InvolvedObject.Name)
 			m[key] = append(m[key], e)
 		}
 	}
@@ -2523,14 +2528,14 @@ func podsRestarts(pods []*corev1.Pod) (int, string) {
 // index (the workload object + its pods), deduped by (object, reason) with
 // summed counts — the "why is it broken" feed (FailedScheduling, ImagePullBackOff,
 // FailedMount, …) that restarts alone miss.
-func eventsForWorkload(byObject map[string][]*corev1.Event, workloadKind, workloadName string, pods []*corev1.Pod) []appEvent {
+func eventsForWorkload(byObject map[string][]*corev1.Event, workloadGroup, workloadKind, workloadName string, pods []*corev1.Pod) []appEvent {
 	if byObject == nil {
 		return nil
 	}
 	names := make([]string, 0, len(pods)+1)
-	names = append(names, workloadKind+"/"+workloadName)
+	names = append(names, resourceid.ResourceKey(workloadGroup, workloadKind, "", workloadName))
 	for _, p := range pods {
-		names = append(names, "Pod/"+p.Name)
+		names = append(names, resourceid.ResourceKey("", "Pod", "", p.Name))
 	}
 	byKey := map[string]*appEvent{}
 	order := []string{}

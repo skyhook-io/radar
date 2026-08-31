@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/karpenter"
@@ -55,6 +56,22 @@ func preferredTraefikGVR(provider DynamicProvider, kind string) (schema.GroupVer
 		return gvr, true
 	}
 	return provider.GetGVRWithGroup(kind, "traefik.containo.us")
+}
+
+func targetRefMatchesTopologyKind(kind, apiVersion string) bool {
+	if apiVersion == "" {
+		return true
+	}
+	var group string
+	switch kind {
+	case "Deployment", "StatefulSet", "DaemonSet", "ReplicaSet":
+		group = "apps"
+	case "Rollout":
+		group = "argoproj.io"
+	default:
+		return false
+	}
+	return APIVersionGroup(apiVersion) == group
 }
 
 // Build constructs a topology based on the given options
@@ -1065,12 +1082,13 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			})
 
 			// ScaledObject → target workload edge (via spec.scaleTargetRef)
+			targetAPIVersion, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "apiVersion")
 			targetKind, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "kind")
 			targetName, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "name")
 			if targetKind == "" {
 				targetKind = "Deployment" // KEDA defaults to Deployment when kind is omitted
 			}
-			if targetName != "" {
+			if targetName != "" && targetRefMatchesTopologyKind(targetKind, targetAPIVersion) {
 				targetKey := ns + "/" + targetName
 				var targetID string
 				switch targetKind {
@@ -3658,20 +3676,23 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		})
 
 		// Connect to target
+		targetAPIVersion := hpa.Spec.ScaleTargetRef.APIVersion
 		targetKind := hpa.Spec.ScaleTargetRef.Kind
 		targetName := hpa.Spec.ScaleTargetRef.Name
 		targetKey := hpa.Namespace + "/" + targetName
 
 		var targetID string
-		switch targetKind {
-		case "Deployment":
-			targetID = deploymentIDs[targetKey]
-		case "Rollout":
-			targetID = rolloutIDs[targetKey]
-		case "StatefulSet":
-			targetID = statefulSetIDs[targetKey]
-		case "ReplicaSet":
-			targetID = replicaSetIDs[targetKey]
+		if targetRefMatchesTopologyKind(targetKind, targetAPIVersion) {
+			switch targetKind {
+			case "Deployment":
+				targetID = deploymentIDs[targetKey]
+			case "Rollout":
+				targetID = rolloutIDs[targetKey]
+			case "StatefulSet":
+				targetID = statefulSetIDs[targetKey]
+			case "ReplicaSet":
+				targetID = replicaSetIDs[targetKey]
+			}
 		}
 
 		if targetID != "" {
@@ -4019,9 +4040,10 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			})
 
 			// Connect to target workload via spec.targetRef
+			targetAPIVersion, _, _ := unstructured.NestedString(vpa.Object, "spec", "targetRef", "apiVersion")
 			targetKind, _, _ := unstructured.NestedString(vpa.Object, "spec", "targetRef", "kind")
 			targetName, _, _ := unstructured.NestedString(vpa.Object, "spec", "targetRef", "name")
-			if targetKind != "" && targetName != "" {
+			if targetKind != "" && targetName != "" && targetRefMatchesTopologyKind(targetKind, targetAPIVersion) {
 				targetKey := ns + "/" + targetName
 				var targetID string
 				switch targetKind {
@@ -4048,140 +4070,12 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-	// 12. Second pass: Create ArgoCD Application edges to managed resources
-	// This is done after all resource IDs are populated
-	for _, app := range applicationResources {
-		ns := app.GetNamespace()
-		name := app.GetName()
-		appID := applicationIDs[ns+"/"+name]
-		destNamespace := applicationDestNamespaces[appID]
-
-		status, _, _ := unstructured.NestedMap(app.Object, "status")
-		if status == nil {
-			continue
-		}
-
-		resources, _, _ := unstructured.NestedSlice(status, "resources")
-		for _, res := range resources {
-			resMap, ok := res.(map[string]any)
-			if !ok {
-				continue
-			}
-			resKind, _ := resMap["kind"].(string)
-			resName, _ := resMap["name"].(string)
-			resNS, _ := resMap["namespace"].(string)
-			if resNS == "" {
-				resNS = destNamespace
-			}
-
-			// Build target ID based on kind
-			var targetID string
-			resKey := resNS + "/" + resName
-			switch resKind {
-			case "Deployment":
-				targetID = deploymentIDs[resKey]
-			case "StatefulSet":
-				targetID = statefulSetIDs[resKey]
-			case "DaemonSet":
-				targetID = fmt.Sprintf("daemonset/%s/%s", resNS, resName)
-			case "Service":
-				targetID = serviceIDs[resKey]
-			case "Rollout":
-				targetID = rolloutIDs[resKey]
-			case "Job":
-				targetID = jobIDs[resKey]
-			case "CronJob":
-				targetID = cronJobIDs[resKey]
-			case "Gateway":
-				targetID = gatewayIDs[resKey]
-			case "HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute":
-				targetID = routeIDs[resKind+"/"+resNS+"/"+resName]
-			}
-
-			// Only create edge if target exists in current cluster view
-			if targetID != "" {
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", appID, targetID),
-					Source: appID,
-					Target: targetID,
-					Type:   EdgeManages,
-				})
-			}
-		}
-	}
-
-	// 13. Second pass: Create FluxCD Kustomization edges to managed resources
-	// Kustomization inventory contains refs like "Deployment/ns/name" or "_namespace_name_Kind"
+	// 13. Create Flux source edges. Managed-resource edges are resolved after
+	// generic CRD nodes have been added so their exact API identity is available.
 	for _, ks := range kustomizationResources {
 		ns := ks.GetNamespace()
 		name := ks.GetName()
 		ksID := kustomizationIDs[ns+"/"+name]
-
-		status, _, _ := unstructured.NestedMap(ks.Object, "status")
-		if status == nil {
-			continue
-		}
-
-		inventory, _, _ := unstructured.NestedSlice(status, "inventory", "entries")
-		for _, entry := range inventory {
-			entryMap, ok := entry.(map[string]any)
-			if !ok {
-				continue
-			}
-			// FluxCD inventory entry has "id" field with format "namespace_name_group_kind" or "id" field
-			entryID, _ := entryMap["id"].(string)
-			if entryID == "" {
-				continue
-			}
-
-			// Parse the inventory ID (format: namespace_name_group_kind)
-			// Example: "default_my-deployment_apps_Deployment"
-			parts := strings.Split(entryID, "_")
-			if len(parts) < 3 {
-				continue
-			}
-
-			resNS := parts[0]
-			resName := parts[1]
-			// Last part is kind, second to last is group (might be empty)
-			resKind := parts[len(parts)-1]
-
-			// Build target ID based on kind
-			var targetID string
-			resKey := resNS + "/" + resName
-			switch resKind {
-			case "Deployment":
-				targetID = deploymentIDs[resKey]
-			case "StatefulSet":
-				targetID = statefulSetIDs[resKey]
-			case "DaemonSet":
-				targetID = fmt.Sprintf("daemonset/%s/%s", resNS, resName)
-			case "Service":
-				targetID = serviceIDs[resKey]
-			case "Rollout":
-				targetID = rolloutIDs[resKey]
-			case "Job":
-				targetID = jobIDs[resKey]
-			case "CronJob":
-				targetID = cronJobIDs[resKey]
-			case "Ingress":
-				targetID = fmt.Sprintf("ingress/%s/%s", resNS, resName)
-			case "Gateway":
-				targetID = gatewayIDs[resKey]
-			case "HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute":
-				targetID = routeIDs[resKind+"/"+resNS+"/"+resName]
-			}
-
-			// Only create edge if target exists in current cluster view
-			if targetID != "" {
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", ksID, targetID),
-					Source: ksID,
-					Target: targetID,
-					Type:   EdgeManages,
-				})
-			}
-		}
 
 		// Also create edge from GitRepository to Kustomization if source ref exists
 		spec, _, _ := unstructured.NestedMap(ks.Object, "spec")
@@ -5575,6 +5469,15 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	if opts.IncludeGenericCRDs {
 		nodes, edges = b.addGenericCRDNodes(nodes, edges, opts)
 	}
+	edges = addGitOpsManagedResourceEdges(
+		nodes,
+		edges,
+		applicationResources,
+		applicationIDs,
+		applicationDestNamespaces,
+		kustomizationResources,
+		kustomizationIDs,
+	)
 
 	// 17. Annotate workload nodes with NetworkPolicy coverage (optional)
 	if opts.ShowPolicyEffect {
@@ -5592,6 +5495,96 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	}
 
 	return topo, nil
+}
+
+func addGitOpsManagedResourceEdges(
+	nodes []Node,
+	edges []Edge,
+	applications []*unstructured.Unstructured,
+	applicationIDs map[string]string,
+	applicationDestNamespaces map[string]string,
+	kustomizations []*unstructured.Unstructured,
+	kustomizationIDs map[string]string,
+) []Edge {
+	resourceIDs := make(map[string]string, len(nodes))
+	for i := range nodes {
+		for _, key := range nodeResourceKeys(&nodes[i]) {
+			resourceIDs[key] = nodes[i].ID
+		}
+	}
+	seenEdges := make(map[string]bool, len(edges))
+	for _, edge := range edges {
+		seenEdges[edge.ID] = true
+	}
+	appendManaged := func(sourceID, group, kind, namespace, name string) {
+		if sourceID == "" || kind == "" || name == "" {
+			return
+		}
+		if builtinGroup, builtin := resourceid.BuiltinGroup(kind); group == "" && builtin {
+			group = builtinGroup
+		}
+		targetID := resourceIDs[resourceid.ResourceKey(group, kind, namespace, name)]
+		if targetID == "" {
+			return
+		}
+		edgeID := fmt.Sprintf("%s-to-%s", sourceID, targetID)
+		if seenEdges[edgeID] {
+			return
+		}
+		seenEdges[edgeID] = true
+		edges = append(edges, Edge{ID: edgeID, Source: sourceID, Target: targetID, Type: EdgeManages})
+	}
+
+	argoKinds := map[string]bool{
+		"Deployment": true, "StatefulSet": true, "DaemonSet": true,
+		"Service": true, "Rollout": true, "Job": true, "CronJob": true,
+		"Gateway": true, "HTTPRoute": true, "GRPCRoute": true,
+		"TCPRoute": true, "TLSRoute": true,
+	}
+	for _, app := range applications {
+		appID := applicationIDs[app.GetNamespace()+"/"+app.GetName()]
+		destNamespace := applicationDestNamespaces[appID]
+		resources, _, _ := unstructured.NestedSlice(app.Object, "status", "resources")
+		for _, resource := range resources {
+			m, ok := resource.(map[string]any)
+			if !ok {
+				continue
+			}
+			kind := gitops.StringValue(m["kind"])
+			if !argoKinds[kind] {
+				continue
+			}
+			namespace := gitops.StringValue(m["namespace"])
+			if namespace == "" {
+				namespace = destNamespace
+			}
+			appendManaged(appID, gitops.StringValue(m["group"]), kind, namespace, gitops.StringValue(m["name"]))
+		}
+	}
+
+	fluxKinds := map[string]bool{
+		"Deployment": true, "StatefulSet": true, "DaemonSet": true,
+		"Service": true, "Rollout": true, "Job": true, "CronJob": true,
+		"Ingress": true, "Gateway": true, "HTTPRoute": true,
+		"GRPCRoute": true, "TCPRoute": true, "TLSRoute": true,
+	}
+	for _, kustomization := range kustomizations {
+		ksID := kustomizationIDs[kustomization.GetNamespace()+"/"+kustomization.GetName()]
+		entries, _, _ := unstructured.NestedSlice(kustomization.Object, "status", "inventory", "entries")
+		for _, entry := range entries {
+			m, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			group, kind, namespace, name, ok := gitops.ParseFluxInventoryID(gitops.StringValue(m["id"]))
+			if !ok || !fluxKinds[kind] {
+				continue
+			}
+			appendManaged(ksID, group, kind, namespace, name)
+		}
+	}
+
+	return edges
 }
 
 // buildTrafficTopology creates a network-focused view

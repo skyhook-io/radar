@@ -6,7 +6,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/packages"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	listerscorev1 "k8s.io/client-go/listers/core/v1"
@@ -1057,7 +1059,11 @@ func argoManagedWorkloads(item *unstructured.Unstructured) []workloadRef {
 		if nm == "" {
 			continue
 		}
-		out = append(out, workloadRef{Kind: kind, Namespace: ns, Name: nm})
+		group, _ := m["group"].(string)
+		if builtinGroup, builtin := resourceid.BuiltinGroup(kind); group == "" && builtin {
+			group = builtinGroup
+		}
+		out = append(out, workloadRef{Group: group, Kind: kind, Namespace: ns, Name: nm})
 	}
 	return out
 }
@@ -1172,11 +1178,15 @@ func addArgoManagedSourceRefs(out map[string][]appSourceRef, items []*unstructur
 				continue
 			}
 			name, _ := resMap["name"].(string)
+			group, _ := resMap["group"].(string)
+			if builtinGroup, builtin := resourceid.BuiltinGroup(kind); group == "" && builtin {
+				group = builtinGroup
+			}
 			ns, _ := resMap["namespace"].(string)
 			if ns == "" {
 				ns = destNamespace
 			}
-			addManagedSourceRef(out, kind, ns, name, ref)
+			addManagedSourceRef(out, group, kind, ns, name, ref)
 		}
 	}
 }
@@ -1198,37 +1208,26 @@ func addFluxKustomizationManagedSourceRefs(ctx context.Context, cache resourceLi
 				continue
 			}
 			id, _ := entryMap["id"].(string)
-			kind, namespace, name, ok := parseFluxInventoryWorkloadID(id)
+			group, kind, namespace, name, ok := gitops.ParseFluxInventoryID(id)
 			if !ok {
 				continue
+			}
+			if builtinGroup, builtin := resourceid.BuiltinGroup(kind); group == "" && builtin {
+				group = builtinGroup
 			}
 			if !argoWorkloadKinds[kind] {
 				continue
 			}
-			addManagedSourceRef(out, kind, namespace, name, ref)
+			addManagedSourceRef(out, group, kind, namespace, name, ref)
 		}
 	}
 }
 
-func parseFluxInventoryWorkloadID(id string) (kind, namespace, name string, ok bool) {
-	parts := strings.Split(id, "_")
-	if len(parts) < 4 {
-		return "", "", "", false
-	}
-	kind = parts[len(parts)-1]
-	namespace = parts[0]
-	name = strings.Join(parts[1:len(parts)-2], "_")
-	if kind == "" || namespace == "" || name == "" {
-		return "", "", "", false
-	}
-	return kind, namespace, name, true
-}
-
-func addManagedSourceRef(out map[string][]appSourceRef, kind, namespace, name string, ref appSourceRef) {
+func addManagedSourceRef(out map[string][]appSourceRef, group, kind, namespace, name string, ref appSourceRef) {
 	if kind == "" || namespace == "" || name == "" {
 		return
 	}
-	key := managedWorkloadKey(kind, namespace, name)
+	key := managedWorkloadKey(group, kind, namespace, name)
 	for _, existing := range out[key] {
 		if sameSourceRef(&existing, &ref) {
 			return
@@ -1243,7 +1242,7 @@ func commonManagedSourceRef(workloads []appWorkload, sources map[string][]appSou
 	}
 	var common []appSourceRef
 	for i, w := range workloads {
-		refs := sources[managedWorkloadKey(w.Kind, w.Namespace, w.Name)]
+		refs := sources[managedWorkloadKey(w.Group, w.Kind, w.Namespace, w.Name)]
 		if len(refs) == 0 {
 			return nil
 		}
@@ -1272,8 +1271,8 @@ func commonManagedSourceRef(workloads []appWorkload, sources map[string][]appSou
 	return &cp
 }
 
-func managedWorkloadKey(kind, namespace, name string) string {
-	return kind + "/" + namespace + "/" + name
+func managedWorkloadKey(group, kind, namespace, name string) string {
+	return resourceid.ResourceKey(group, kind, namespace, name)
 }
 
 // appSetFanout is one child's declared identity within a single-app fan-out set.

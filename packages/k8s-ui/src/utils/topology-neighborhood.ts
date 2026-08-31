@@ -1,5 +1,6 @@
 import type { Topology, TopologyNode, TopologyEdge, EdgeType, NodeKind } from '../types/core'
-import { groupQualifiesLaneId, laneId } from './navigation'
+import { canonicalResourceGroup } from './api-resources'
+import { laneId } from './navigation'
 
 // Seeded neighborhood query — the shared primitive behind the WorkloadView
 // Topology tab (seed = one workload) and the Application topology (seed = the
@@ -55,12 +56,13 @@ function nodeNamespace(node: TopologyNode): string {
   return typeof ns === 'string' ? ns : ''
 }
 
-function nodeGroup(node: TopologyNode): string {
+function nodeGroup(node: TopologyNode): string | undefined {
   const apiVersion = node.data?.apiVersion
-  return typeof apiVersion === 'string' && apiVersion.includes('/') ? apiVersion.split('/')[0] : ''
+  if (typeof apiVersion !== 'string' || apiVersion === '') return undefined
+  return apiVersion.includes('/') ? apiVersion.split('/')[0] : ''
 }
 
-function nodeResourceKind(node: TopologyNode): string {
+export function topologyNodeResourceKind(node: TopologyNode): string {
   const resourceKind = node.data?.resourceKind
   return typeof resourceKind === 'string' && resourceKind ? resourceKind : node.kind
 }
@@ -160,11 +162,9 @@ export function workloadKey(ref: NeighborhoodSeed): string {
 
 function matchSeedNode(node: TopologyNode, seeds: NeighborhoodSeed[]): boolean {
   return seeds.some((s) => {
-    if (s.kind !== nodeResourceKind(node) || s.name !== node.name || s.namespace !== nodeNamespace(node)) return false
-    if (!s.group) return true
-    const group = nodeGroup(node)
-    if (group) return s.group === group
-    return !groupQualifiesLaneId(s.group)
+    const resourceKind = topologyNodeResourceKind(node)
+    if (s.kind !== resourceKind || s.name !== node.name || s.namespace !== nodeNamespace(node)) return false
+    return canonicalResourceGroup(s.kind, s.group) === canonicalResourceGroup(resourceKind, nodeGroup(node))
   })
 }
 
@@ -352,7 +352,7 @@ export function tagWorkloadOwnership(topology: Topology, seeds: NeighborhoodSeed
   for (const n of sub.nodes) {
     if (matchSeedNode(n, seeds)) {
       seedKeyById.set(n.id, workloadKey({
-        kind: nodeResourceKind(n),
+        kind: topologyNodeResourceKind(n),
         group: nodeGroup(n),
         namespace: nodeNamespace(n),
         name: n.name,

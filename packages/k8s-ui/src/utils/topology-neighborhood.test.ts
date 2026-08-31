@@ -200,6 +200,23 @@ describe('neighborhoodFor', () => {
     expect(out.nodes.map((n) => n.id)).toEqual(['knative'])
   })
 
+  it('does not blend a core Service seed with a same-named Knative Service', () => {
+    const core = node('core', 'Service', 'app', 'web')
+    const knative = crdNode('knative', 'KnativeService', 'app', 'web', 'serving.knative.dev/v1')
+    knative.data = { ...knative.data, resourceKind: 'Service' }
+    const topology: Topology = { nodes: [knative, core], edges: [] }
+
+    const explicit = neighborhoodFor(topology, [
+      { kind: 'Service', group: '', namespace: 'app', name: 'web' },
+    ])
+    expect(explicit.nodes.map((n) => n.id)).toEqual(['core'])
+
+    const inferred = neighborhoodFor(topology, [
+      { kind: 'Service', namespace: 'app', name: 'web' },
+    ])
+    expect(inferred.nodes.map((n) => n.id)).toEqual(['core'])
+  })
+
   it('qualifies workload keys only for CRD groups', () => {
     expect(workloadKey({ kind: 'Job', group: 'batch', namespace: 'ml', name: 'train' })).toBe('Job/ml/train')
     expect(workloadKey({ kind: 'Job', group: 'batch.volcano.sh', namespace: 'ml', name: 'train' }))
