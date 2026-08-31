@@ -26,7 +26,7 @@ import type { WorkloadPodInfo } from '../../types'
 import { getScaledJobStatus } from '../resources/resource-utils-keda'
 import { Tooltip } from '../ui/Tooltip'
 import { ImageFilesystemModal } from '../resources/ImageFilesystemModal'
-import { executionDefinitionFingerprint, executionDefinitionSummary, type ExecutionDefinitionSummary, type ExecutionUnitSummary } from './execution-definition'
+import { executionDefinitionDiffers, executionDefinitionSummary, type ExecutionDefinitionSummary, type ExecutionUnitSummary } from './execution-definition'
 import { batchRunHasContainerOutcome, batchRunNextStep, isFailedRunPhase, type BatchRunNextStep } from './batch-run-actions'
 
 const EMPTY_RUNS: WorkloadRun[] = []
@@ -978,7 +978,7 @@ function RunContext({ run, resource, definitionResource, workflowExecution, curr
   const currentDefinition = executionDefinitionSummary(currentWorkload.kind, definitionResource)
   const parentDefinesRun = !isDirectRunKind(currentWorkload.kind, run.kind)
   const showRunConfiguration = parentDefinesRun && Boolean(runDefinition)
-  const definitionDiffers = showRunConfiguration && executionDefinitionFingerprint(runDefinition) !== executionDefinitionFingerprint(currentDefinition)
+  const definitionDiffers = showRunConfiguration && executionDefinitionDiffers(currentDefinition, runDefinition)
   if (!launcher && !definition && uses.length === 0 && arguments_.length === 0 && outputs.length === 0 && !showRunConfiguration) return null
   return (
     <div className="border-t border-theme-border p-4">
