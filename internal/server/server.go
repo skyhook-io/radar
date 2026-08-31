@@ -117,9 +117,6 @@ type Server struct {
 	// line no matter how many requests reach the origin root.
 	rootHintOnce sync.Once
 
-	browserCheckMu    sync.Mutex
-	browserCheckSlots chan struct{}
-
 	// nsPickMu serializes namespace-pick mutations: the POST handler's
 	// persist+set pair and the read-path stale-pick prune. Without it, a
 	// prune computed from a stale snapshot can land after a user's fresh
@@ -1230,11 +1227,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleVersionCheck(w http.ResponseWriter, r *http.Request) {
-	info := version.CheckForUpdate(r.Context())
 	if deploymentMode() == k8s.DeploymentModeCloud {
-		info = version.CheckForUpdateRelease(r.Context())
+		s.writeJSON(w, version.CheckForUpdateRelease(r.Context()))
+		return
 	}
-	s.writeJSON(w, info)
+	s.writeJSON(w, version.CheckForUpdate(r.Context()))
 }
 
 func (s *Server) handleClusterInfo(w http.ResponseWriter, r *http.Request) {

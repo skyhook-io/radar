@@ -9,25 +9,6 @@ import (
 	"github.com/skyhook-io/radar/internal/version"
 )
 
-func TestBrowserCheckConcurrencyBound(t *testing.T) {
-	server := &Server{}
-	for range maxConcurrentBrowserChecks {
-		if !server.acquireBrowserCheckSlot() {
-			t.Fatal("concurrent browser check rejected before reaching the limit")
-		}
-	}
-	if server.acquireBrowserCheckSlot() {
-		t.Fatal("browser check exceeded concurrency limit")
-	}
-	server.releaseBrowserCheckSlot()
-	if !server.acquireBrowserCheckSlot() {
-		t.Fatal("browser check slot was not reusable after release")
-	}
-	for range maxConcurrentBrowserChecks {
-		server.releaseBrowserCheckSlot()
-	}
-}
-
 func TestVersionCheckBrowserAcceptsOneBestEffortAttempt(t *testing.T) {
 	previousVersion := version.Current
 	version.SetCurrent("dev")
