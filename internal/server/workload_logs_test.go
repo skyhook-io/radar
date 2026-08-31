@@ -47,6 +47,16 @@ func TestSortRunsPrefersActiveThenNewest(t *testing.T) {
 	}
 }
 
+func TestAuthorizePodLogReadAllowsLocalKubeconfigAccess(t *testing.T) {
+	s := &Server{}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest("GET", "/api/pods/default/example/logs", nil)
+
+	if !s.authorizePodLogRead(recorder, request, "default") {
+		t.Fatalf("local kubeconfig request was denied: status %d, body %q", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestBuildPodInfosForRevisionAttributesOnlyKnownIdentities(t *testing.T) {
 	pods := []*corev1.Pod{
 		{ObjectMeta: metav1.ObjectMeta{Name: "new", Labels: map[string]string{"pod-template-hash": "rev-2"}}},
