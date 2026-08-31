@@ -116,7 +116,7 @@ The UI asks before the first in-cluster run for a cluster and names the requests
 
 The active Kubernetes identity authorizes Job creation, but network and mesh policy see the probe pod, not that identity. The Job runs in the diagnosed resource's namespace; its pod uses that namespace's default ServiceAccount identity but mounts no ServiceAccount token. Each run creates at most five Jobs; their containers run non-root with a read-only filesystem, all capabilities dropped, a 25-second deadline, no retries, and a 60-second TTL backstop.
 
-The default Helm chart grants neither proxy-subresource access nor Job creation, so those probe paths stay unavailable unless the relevant identity receives the permissions above. Radar running in-cluster can still dial directly from its own pod. The full `/mcp` endpoint also exposes RBAC-bounded write tools; `/mcp-readonly` excludes `apply_resource`, `patch_resource`, and the `manage_*` tools while retaining `diagnose`. Its `in_cluster` option is the same explicit, capped Job path described above.
+The default Helm chart grants neither proxy-subresource access nor Job creation, so those probe paths stay unavailable unless the relevant identity receives the permissions above. Radar running in-cluster can still dial directly from its own pod. The full `/mcp` endpoint also exposes RBAC-bounded write tools; `/mcp-readonly` excludes `apply_resource`, `patch_resource`, and the `manage_*` tools while retaining `diagnose`. On `/mcp-readonly`, the `in_cluster` argument is not exposed and schema validation rejects it.
 
 ### Agent boundary
 

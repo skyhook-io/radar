@@ -147,6 +147,12 @@ func TestGitopsDiagnoseTarget(t *testing.T) {
 	}
 }
 
+func testDiagnoseInput(kind, namespace, name string) diagnoseInput {
+	return diagnoseInput{diagnoseCommonInput: diagnoseCommonInput{
+		Kind: kind, Namespace: namespace, Name: name,
+	}}
+}
+
 // TestHandleDiagnose_GitOpsKindDispatch confirms a GitOps kind routes to the
 // no-pods GitOps path (not the workload "invalid kind" error). With no Argo CRD
 // in the fake cache the fetch fails, but the error must come from the GitOps
@@ -158,7 +164,7 @@ func TestHandleDiagnose_GitOpsKindDispatch(t *testing.T) {
 	// exercises the dispatch fork (not the RBAC gate, covered separately).
 	getPermCache().Get("admin", nil).SetCanI("get", "argoproj.io", "applications", "alpha", true)
 
-	_, _, err := handleDiagnose(ctx, nil, diagnoseInput{Kind: "application", Namespace: "alpha", Name: "whatever"})
+	_, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("application", "alpha", "whatever"))
 	if err == nil {
 		t.Fatalf("expected an error (no Application in fake cache), got nil")
 	}
@@ -176,7 +182,7 @@ func TestHandleGitOpsDiagnose_PerKindRBAC(t *testing.T) {
 	// Namespace access to argocd, but no get on applications.argoproj.io.
 	ctx := withRestrictedUser(t, "limited", []string{"argocd"})
 
-	_, _, err := handleDiagnose(ctx, nil, diagnoseInput{Kind: "application", Namespace: "argocd", Name: "guestbook"})
+	_, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("application", "argocd", "guestbook"))
 	if err == nil || !strings.Contains(err.Error(), "forbidden") {
 		t.Fatalf("expected forbidden without get on applications.argoproj.io, got %v", err)
 	}
@@ -184,7 +190,7 @@ func TestHandleGitOpsDiagnose_PerKindRBAC(t *testing.T) {
 	// Granting the per-kind get lets the read through (then fails for not-found,
 	// not forbidden) — proving the gate is the only thing blocking it.
 	getPermCache().Get("limited", nil).SetCanI("get", "argoproj.io", "applications", "argocd", true)
-	if _, _, err := handleDiagnose(ctx, nil, diagnoseInput{Kind: "application", Namespace: "argocd", Name: "guestbook"}); err == nil || strings.Contains(err.Error(), "forbidden") {
+	if _, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("application", "argocd", "guestbook")); err == nil || strings.Contains(err.Error(), "forbidden") {
 		t.Errorf("with get granted, expected a non-forbidden (not-found) error, got %v", err)
 	}
 }
@@ -198,7 +204,7 @@ func TestHandleGitOpsDiagnose_NamespaceGate(t *testing.T) {
 	ctx := withRestrictedUser(t, "scoped", []string{"team-a"})
 	getPermCache().Get("scoped", nil).SetCanI("get", "argoproj.io", "applications", "argocd", true)
 
-	_, _, err := handleDiagnose(ctx, nil, diagnoseInput{Kind: "application", Namespace: "argocd", Name: "guestbook"})
+	_, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("application", "argocd", "guestbook"))
 	if err == nil || !strings.Contains(err.Error(), "forbidden") {
 		t.Fatalf("namespace outside the allow-list must be forbidden, got %v", err)
 	}
@@ -210,7 +216,7 @@ func TestHandleDiagnose_InvalidKind(t *testing.T) {
 
 	// configmap is not a workload, not a GitOps reconciler, and not a
 	// network entry kind - diagnose should reject it.
-	_, _, err := handleDiagnose(ctx, nil, diagnoseInput{Kind: "configmap", Namespace: "alpha", Name: "alpha-cm"})
+	_, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("configmap", "alpha", "alpha-cm"))
 	if err == nil {
 		t.Fatalf("expected error for unsupported kind, got nil")
 	}
@@ -223,10 +229,10 @@ func TestHandleDiagnose_MissingFields(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	ctx := withClusterAdmin(t, "admin")
 
-	if _, _, err := handleDiagnose(ctx, nil, diagnoseInput{Kind: "pod", Namespace: "", Name: "alpha-pod"}); err == nil {
+	if _, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("pod", "", "alpha-pod")); err == nil {
 		t.Errorf("expected error for empty namespace, got nil")
 	}
-	if _, _, err := handleDiagnose(ctx, nil, diagnoseInput{Kind: "pod", Namespace: "alpha", Name: ""}); err == nil {
+	if _, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("pod", "alpha", "")); err == nil {
 		t.Errorf("expected error for empty name, got nil")
 	}
 }
@@ -236,7 +242,7 @@ func TestHandleDiagnose_ForbiddenNamespace(t *testing.T) {
 	// User restricted to alpha; diagnose request targets beta.
 	ctx := withRestrictedUser(t, "alice", []string{"alpha"})
 
-	_, _, err := handleDiagnose(ctx, nil, diagnoseInput{Kind: "pod", Namespace: "beta", Name: "beta-pod"})
+	_, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("pod", "beta", "beta-pod"))
 	if err == nil {
 		t.Fatalf("expected forbidden error, got nil")
 	}
@@ -249,11 +255,7 @@ func TestHandleDiagnose_PodHappyPath(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	ctx := withClusterAdmin(t, "admin")
 
-	result, _, err := handleDiagnose(ctx, nil, diagnoseInput{
-		Kind:      "pod",
-		Namespace: "alpha",
-		Name:      "alpha-pod",
-	})
+	result, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("pod", "alpha", "alpha-pod"))
 	if err != nil {
 		t.Fatalf("handleDiagnose: %v", err)
 	}
@@ -297,11 +299,7 @@ func TestHandleDiagnose_AttachesPodDNSSignalButRBACGatesCoreDNSFinding(t *testin
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
 	ctx := withClusterAdmin(t, "admin")
 
-	result, _, err := handleDiagnose(ctx, nil, diagnoseInput{
-		Kind:      "pod",
-		Namespace: "alpha",
-		Name:      "frontend",
-	})
+	result, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("pod", "alpha", "frontend"))
 	if err != nil {
 		t.Fatalf("handleDiagnose: %v", err)
 	}
@@ -318,11 +316,7 @@ func TestHandleDiagnose_PodNotFound(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	ctx := withClusterAdmin(t, "admin")
 
-	_, _, err := handleDiagnose(ctx, nil, diagnoseInput{
-		Kind:      "pod",
-		Namespace: "alpha",
-		Name:      "ghost-pod",
-	})
+	_, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("pod", "alpha", "ghost-pod"))
 	if err == nil {
 		t.Fatalf("expected error for non-existent pod, got nil")
 	}
@@ -344,11 +338,7 @@ func TestHandleDiagnose_DeploymentResolvesPods(t *testing.T) {
 	setupFakeCacheForDiagnoseTests(t)
 	ctx := withClusterAdmin(t, "admin")
 
-	result, _, err := handleDiagnose(ctx, nil, diagnoseInput{
-		Kind:      "deployment",
-		Namespace: "alpha",
-		Name:      "cart",
-	})
+	result, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("deployment", "alpha", "cart"))
 	if err != nil {
 		t.Fatalf("handleDiagnose: %v", err)
 	}
@@ -376,11 +366,7 @@ func TestHandleDiagnose_DeploymentNotFound(t *testing.T) {
 	setupFakeCacheForDiagnoseTests(t)
 	ctx := withClusterAdmin(t, "admin")
 
-	_, _, err := handleDiagnose(ctx, nil, diagnoseInput{
-		Kind:      "deployment",
-		Namespace: "alpha",
-		Name:      "ghost",
-	})
+	_, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("deployment", "alpha", "ghost"))
 	if err == nil {
 		t.Fatalf("expected error for non-existent deployment, got nil")
 	}

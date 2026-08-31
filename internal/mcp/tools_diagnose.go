@@ -29,12 +29,12 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
 
-// diagnoseInput is the one-shot debug bundle request. Workloads resolve to a
-// pod set for log fan-out; GitOps reconcilers take a no-pods status path.
-type diagnoseInput struct {
+// diagnoseCommonInput is the non-mutating diagnose contract shared by both MCP
+// endpoints. Workloads resolve to a pod set for log fan-out; GitOps reconcilers
+// take a no-pods status path.
+type diagnoseCommonInput struct {
 	Kind      string `json:"kind" jsonschema:"kind to diagnose: a workload (pod, deployment, statefulset, daemonset) for logs+events+startup blockers, a GitOps reconciler (application, kustomization, Flux HelmRelease) for sync/health summary + parsed failure cause, or a network entry kind (service, ingress, httproute, grpcroute, gateway) for a path-shaped trace of which hop drops traffic"`
 	Probe     bool   `json:"probe,omitempty" jsonschema:"active reachability test for network entry kinds: when true, augment the static trace with DNS/TCP/TLS/HTTP probes as applicable. Explicitly non-HTTP Service ports stop at TCP; Radar does not send them an unrelated HTTP request. Uses direct TCP when radar is in-cluster, K8s API server proxy from a laptop - the same call works either way. Probes can escalate the static verdict when failures are unanimous on a hop, but never soften broken or unknown. Probe failures attributable to the vantage (e.g. NetworkPolicy blocking radar's path) can produce false-positive escalations; the per-hop chip carries the granular signal. Costs 0-3s wall time. No effect for non-network kinds."`
-	InCluster bool   `json:"in_cluster,omitempty" jsonschema:"run the reachability probe from INSIDE the cluster (real dataplane), not from where radar runs. HTTP(S) routes test their declared request; explicitly non-HTTP Service ports use TCP only. Radar creates UP TO 5 short-lived, self-destructing probe pods (one per intended route, run sequentially) under YOUR RBAC (restricted, non-root, no service-account token); each runs the probe and is deleted within ~60s. USE THIS when a prior diagnose (with probe=true) returned a route with confidence:indirect or verdict:unknown - i.e. 'reached via API server, real-traffic path NOT confirmed' - and you need to confirm the live path; or to test from where NetworkPolicy / service-mesh mTLS actually applies, which the apiserver-proxy vantage cannot. EFFECT: this CREATES pods (the only mutating diagnose option); it needs create-jobs + list-pods + get-pods/log RBAC in the namespace. On success the tested route's confidence becomes 'real' and the verdict/headline reflect the live result. For a front-doored route the in-cluster dial bypasses the entry: rows carry segment:'backend' and the headline notes the entry path was not exercised - not proof of the whole route; if a probe pod can't start (unschedulable, image pull, an admission webhook injecting init containers) you get a plain-English reason; if you can't create pods you get a copyable kubectl command to run by hand. Runtime scales with the number of routes (each probe pod can take a few seconds, up to ~5x). probe=true is forced on when this is set; only meaningful for network entry kinds."`
 	Namespace string `json:"namespace" jsonschema:"resource namespace"`
 	Name      string `json:"name" jsonschema:"resource name"`
 	Container string `json:"container,omitempty" jsonschema:"specific container; defaults to all containers across the workload's pods"`
@@ -42,24 +42,21 @@ type diagnoseInput struct {
 	Since     string `json:"since,omitempty" jsonschema:"only fetch logs newer than this duration (e.g. 30s, 10m, 1h); empty = full available history"`
 }
 
-// diagnoseReadOnlyInput is the strict /mcp-readonly contract. Keep these fields
-// aligned with diagnoseInput's non-mutating fields; in_cluster is deliberately
-// absent so schema validation rejects live probe requests before the handler.
+// diagnoseInput is the full /mcp contract. InCluster is the only mutating
+// option and therefore does not exist in diagnoseReadOnlyInput.
+type diagnoseInput struct {
+	diagnoseCommonInput
+	InCluster bool `json:"in_cluster,omitempty" jsonschema:"run the reachability probe from INSIDE the cluster (real dataplane), not from where radar runs. HTTP(S) routes test their declared request; explicitly non-HTTP Service ports use TCP only. Radar creates UP TO 5 short-lived, self-destructing probe pods (one per intended route, run sequentially) under YOUR RBAC (restricted, non-root, no service-account token); each runs the probe and is deleted within ~60s. USE THIS when a prior diagnose (with probe=true) returned a route with confidence:indirect or verdict:unknown - i.e. 'reached via API server, real-traffic path NOT confirmed' - and you need to confirm the live path; or to test from where NetworkPolicy / service-mesh mTLS actually applies, which the apiserver-proxy vantage cannot. EFFECT: this CREATES pods (the only mutating diagnose option); it needs create-jobs + list-pods + get-pods/log RBAC in the namespace. On success the tested route's confidence becomes 'real' and the verdict/headline reflect the live result. For a front-doored route the in-cluster dial bypasses the entry: rows carry segment:'backend' and the headline notes the entry path was not exercised - not proof of the whole route; if a probe pod can't start (unschedulable, image pull, an admission webhook injecting init containers) you get a plain-English reason; if you can't create pods you get a copyable kubectl command to run by hand. Runtime scales with the number of routes (each probe pod can take a few seconds, up to ~5x). probe=true is forced on when this is set; only meaningful for network entry kinds."`
+}
+
+// diagnoseReadOnlyInput is the strict /mcp-readonly contract. Schema validation
+// rejects in_cluster because the field is absent.
 type diagnoseReadOnlyInput struct {
-	Kind      string `json:"kind" jsonschema:"kind to diagnose: a workload (pod, deployment, statefulset, daemonset) for logs+events+startup blockers, a GitOps reconciler (application, kustomization, Flux HelmRelease) for sync/health summary + parsed failure cause, or a network entry kind (service, ingress, httproute, grpcroute, gateway) for a path-shaped trace of which hop drops traffic"`
-	Probe     bool   `json:"probe,omitempty" jsonschema:"active reachability test for network entry kinds from Radar's current vantage point. Explicitly non-HTTP Service ports stop at TCP; Radar does not send them an unrelated HTTP request. No effect for non-network kinds."`
-	Namespace string `json:"namespace" jsonschema:"resource namespace"`
-	Name      string `json:"name" jsonschema:"resource name"`
-	Container string `json:"container,omitempty" jsonschema:"specific container; defaults to all containers across the workload's pods"`
-	TailLines int    `json:"tail_lines,omitempty" jsonschema:"lines per pod/container per stream (current AND previous), default 100"`
-	Since     string `json:"since,omitempty" jsonschema:"only fetch logs newer than this duration (e.g. 30s, 10m, 1h); empty = full available history"`
+	diagnoseCommonInput
 }
 
 func handleDiagnoseReadOnly(ctx context.Context, req *mcp.CallToolRequest, input diagnoseReadOnlyInput) (*mcp.CallToolResult, any, error) {
-	return handleDiagnose(ctx, req, diagnoseInput{
-		Kind: input.Kind, Probe: input.Probe, Namespace: input.Namespace, Name: input.Name,
-		Container: input.Container, TailLines: input.TailLines, Since: input.Since,
-	})
+	return handleDiagnose(ctx, req, diagnoseInput{diagnoseCommonInput: input.diagnoseCommonInput})
 }
 
 // diagnoseResponse is the bundled output. logsCurrent + logsPrevious are

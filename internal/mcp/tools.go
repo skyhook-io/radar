@@ -236,7 +236,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 	} else {
 		addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 			Name:        "diagnose",
-			Description: diagnoseDescription + " This strict read-only endpoint does not run live in-cluster route probes.",
+			Description: diagnoseDescription + " This strict read-only endpoint does not run live in-cluster route probes. Report confidence:indirect or verdict:unknown as unconfirmed and surface notTested[].command for the operator to run.",
 			Annotations: readOnly,
 		}, logToolCall("diagnose", handleDiagnoseReadOnly))
 	}
