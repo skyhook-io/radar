@@ -57,7 +57,6 @@ function currentJobSet(): any {
       },
     },
     status: {
-      executionAttempts: 2,
       restarts: 1,
       restartsCountTowardsMax: 1,
       replicatedJobsStatus: [
@@ -162,6 +161,17 @@ describe('JobSetRenderer', () => {
     expect(html).toContain('Global restart limit reached')
   })
 
+  it('does not raise a stale failure condition after terminal completion', () => {
+    const data = currentJobSet()
+    data.status.terminalState = 'Completed'
+    data.status.conditions = [{ type: 'Failed', status: 'True', message: 'Stale failure' }]
+    const html = render(data)
+
+    expect(html).toContain('Completed')
+    expect(html).not.toContain('Issue Detected')
+    expect(html).toContain('Stale failure')
+  })
+
   it('renders safely when the controller has not populated optional fields', () => {
     const html = render({
       apiVersion: 'jobset.x-k8s.io/v1alpha2',
@@ -170,7 +180,7 @@ describe('JobSetRenderer', () => {
       spec: {},
     })
 
-    expect(html).toContain('Run status')
+    expect(html).toContain('JobSet status')
     expect(html).toContain('Unknown')
     expect(html).not.toContain('Replicated jobs (')
     expect(html).not.toContain('Coordination and network')

@@ -36,11 +36,6 @@ export function getJobSetConditionTone(condition: any): ConditionTone | undefine
   }
 }
 
-function executionAttemptLabel(attempt: unknown): string | undefined {
-  if (typeof attempt !== 'number') return undefined
-  return attempt === 0 ? 'Initial' : `Restart/resume #${attempt}`
-}
-
 function jobIndexRange(replicas: unknown): string | undefined {
   if (typeof replicas !== 'number') return undefined
   if (replicas <= 0) return 'None'
@@ -62,7 +57,7 @@ export function JobSetRenderer({ data }: JobSetRendererProps) {
   const displayedStatus = getJobSetStatus(data)
   const failedCondition = conditions.find((condition) => condition?.type === 'Failed' && condition?.status === 'True')
   const problems: Problem[] =
-    failedCondition || status.terminalState === 'Failed'
+    displayedStatus.level === 'unhealthy'
       ? [
           {
             color: 'red',
@@ -83,11 +78,10 @@ export function JobSetRenderer({ data }: JobSetRendererProps) {
     <>
       <ProblemAlerts problems={problems} />
 
-      <Section title="Run status" icon={Activity}>
+      <Section title="JobSet status" icon={Activity}>
         <PropertyList>
           <Property label="State" value={<span className={`badge ${displayedStatus.color}`}>{displayedStatus.text}</span>} />
           <Property label="Terminal state" value={status.terminalState} />
-          <Property label="Execution attempt" value={executionAttemptLabel(status.executionAttempts)} />
           <Property label="Global restarts" value={status.restarts} />
           <Property
             label="Restart budget used"

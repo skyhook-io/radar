@@ -29,6 +29,7 @@ import {
   type WorkloadImageTarget,
 } from '@skyhook-io/k8s-ui'
 import type { ServicePortRenderProps } from '@skyhook-io/k8s-ui/components/resources/renderers/ServiceRenderer'
+import { isJobSetV1Alpha2 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-jobset-lws'
 import type { SelectedResource, ResourceRef, Relationships, ResourceWithRelationships } from '../../types'
 import {
   kindToPlural,
@@ -157,7 +158,7 @@ export function supportsBatchExecution(kind: string, apiKind: string, group?: st
   if (!BATCH_EXECUTION_KINDS.has(kind)) return false
   if (kind === 'Job') return isCoreBatchJob(apiKind, group)
   if (kind === 'JobSet') {
-    return group === 'jobset.x-k8s.io' && apiVersion === 'jobset.x-k8s.io/v1alpha2'
+    return group === 'jobset.x-k8s.io' && isJobSetV1Alpha2({ kind, apiVersion })
   }
   return true
 }
