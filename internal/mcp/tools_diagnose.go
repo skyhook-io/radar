@@ -42,6 +42,26 @@ type diagnoseInput struct {
 	Since     string `json:"since,omitempty" jsonschema:"only fetch logs newer than this duration (e.g. 30s, 10m, 1h); empty = full available history"`
 }
 
+// diagnoseReadOnlyInput is the strict /mcp-readonly contract. Keep these fields
+// aligned with diagnoseInput's non-mutating fields; in_cluster is deliberately
+// absent so schema validation rejects live probe requests before the handler.
+type diagnoseReadOnlyInput struct {
+	Kind      string `json:"kind" jsonschema:"kind to diagnose: a workload (pod, deployment, statefulset, daemonset) for logs+events+startup blockers, a GitOps reconciler (application, kustomization, Flux HelmRelease) for sync/health summary + parsed failure cause, or a network entry kind (service, ingress, httproute, grpcroute, gateway) for a path-shaped trace of which hop drops traffic"`
+	Probe     bool   `json:"probe,omitempty" jsonschema:"active reachability test for network entry kinds from Radar's current vantage point. Explicitly non-HTTP Service ports stop at TCP; Radar does not send them an unrelated HTTP request. No effect for non-network kinds."`
+	Namespace string `json:"namespace" jsonschema:"resource namespace"`
+	Name      string `json:"name" jsonschema:"resource name"`
+	Container string `json:"container,omitempty" jsonschema:"specific container; defaults to all containers across the workload's pods"`
+	TailLines int    `json:"tail_lines,omitempty" jsonschema:"lines per pod/container per stream (current AND previous), default 100"`
+	Since     string `json:"since,omitempty" jsonschema:"only fetch logs newer than this duration (e.g. 30s, 10m, 1h); empty = full available history"`
+}
+
+func handleDiagnoseReadOnly(ctx context.Context, req *mcp.CallToolRequest, input diagnoseReadOnlyInput) (*mcp.CallToolResult, any, error) {
+	return handleDiagnose(ctx, req, diagnoseInput{
+		Kind: input.Kind, Probe: input.Probe, Namespace: input.Namespace, Name: input.Name,
+		Container: input.Container, TailLines: input.TailLines, Since: input.Since,
+	})
+}
+
 // diagnoseResponse is the bundled output. logsCurrent + logsPrevious are
 // fanned out across the resolved pod set; events is recent dedup'd Warning
 // events filtered to either the workload controller OR any of its pods.

@@ -13,6 +13,7 @@ import (
 )
 
 func newServer(includeWrites bool) *mcpsdk.Server {
+	paramRegistry := newToolParamRegistry()
 	server := mcpsdk.NewServer(
 		&mcpsdk.Implementation{
 			Name:    "radar",
@@ -25,9 +26,9 @@ func newServer(includeWrites bool) *mcpsdk.Server {
 	// report the accepted argument names when validation still fails. Every tool
 	// schema is additionalProperties:false, so without this one wrong argument
 	// name is an unrecoverable dead end for an agent. See toolparams.go.
-	server.AddReceivingMiddleware(paramRepairMiddleware)
+	server.AddReceivingMiddleware(paramRepairMiddlewareFor(paramRegistry))
 
-	registerTools(server, includeWrites)
+	registerTools(server, includeWrites, paramRegistry)
 	registerResources(server)
 
 	return server

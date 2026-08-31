@@ -24,7 +24,7 @@ func registerToolsOnce(t *testing.T) {
 		return
 	}
 	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "radar", Version: "test"}, nil)
-	registerTools(server, true)
+	registerTools(server, true, defaultToolParams)
 }
 
 func TestSubjectPermissionsAliasRepairsTheBenchmarkFailure(t *testing.T) {
@@ -525,18 +525,19 @@ func TestRegistryMatchesPublishedSchema(t *testing.T) {
 	// and a tool that skipped addTool() in either is invisible until an agent
 	// gets a name wrong against that server.
 	for _, includeWrites := range []bool{true, false} {
-		for _, tool := range listRegisteredToolsWith(t, includeWrites) {
-			checkToolAgainstRegistry(t, tool)
+		tools, registry := listRegisteredToolsWithRegistry(t, includeWrites)
+		for _, tool := range tools {
+			checkToolAgainstRegistry(t, registry, tool)
 		}
 	}
 }
 
-func checkToolAgainstRegistry(t *testing.T, tool *mcpsdk.Tool) {
+func checkToolAgainstRegistry(t *testing.T, registry *toolParamRegistry, tool *mcpsdk.Tool) {
 	t.Helper()
 	if tool.InputSchema == nil {
 		return
 	}
-	accepted, required := lookupToolParams(tool.Name)
+	accepted, required := registry.lookup(tool.Name)
 
 	// InputSchema is `any` on the wire; round-trip it to read the shape the SDK
 	// actually publishes.

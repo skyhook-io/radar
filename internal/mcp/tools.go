@@ -44,7 +44,7 @@ import (
 // steers. Put conditional advice in response guidance so it arrives when
 // relevant; otherwise describe only fields whose names are insufficient for
 // correct interpretation, not every response field.
-func registerTools(server *mcp.Server, includeWrites bool) {
+func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolParamRegistry) {
 	boolPtr := func(b bool) *bool { return &b }
 	// All radar tools operate against the connected cluster (closed world),
 	// not the open internet — set OpenWorldHint=false so MCP clients that
@@ -73,7 +73,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		OpenWorldHint:   boolPtr(false),
 	}
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_dashboard",
 		Description: "Use for inventory-style cluster or namespace health triage, like " +
 			"`kubectl get all` plus detected problems and warning events in one call. " +
@@ -91,7 +91,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: readOnly,
 	}, logToolCall("get_dashboard", handleGetDashboard))
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "top_resources",
 		Description: "Use when investigating high CPU, memory pressure, OOMKills, " +
 			"slow services, noisy pods, or uneven node load. Returns live metrics " +
@@ -104,7 +104,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: readOnly,
 	}, logToolCall("top_resources", handleTopResources))
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "list_resources",
 		Description: "Use for a jq-like namespace sweep when you know the resource kind " +
 			"(pods/po, deployments/deploy, services/svc, configmaps/cm, CRDs). Returns compact Kubernetes-shaped " +
@@ -115,7 +115,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: readOnly,
 	}, logToolCall("list_resources", handleListResources))
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_resource",
 		Description: "Use AFTER narrowing to one resource. Returns the resource's " +
 			"Kubernetes-shaped spec/status/metadata plus resourceContext when available " +
@@ -136,7 +136,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: readOnly,
 	}, logToolCall("get_resource", handleGetResource))
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_topology",
 		Description: "Use to map a multi-service incident or dependency graph, preferably " +
 			"scoped to a namespace. " +
@@ -152,7 +152,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: readOnly,
 	}, logToolCall("get_topology", handleGetTopology))
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_neighborhood",
 		Description: "Use when investigating cross-resource failures around a known " +
 			"resource: service routing, targetPort/selector/endpoints problems, dependency " +
@@ -169,7 +169,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: readOnly,
 	}, logToolCall("get_neighborhood", handleGetNeighborhood))
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_events",
 		Description: "Use for recent Kubernetes events after an overview points " +
 			"at a namespace or resource, or when the symptom is scheduling, pulling images, " +
@@ -182,7 +182,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: readOnly,
 	}, logToolCall("get_events", handleGetEvents))
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_pod_logs",
 		Description: "Use only after narrowing to a specific Pod/container. Returns " +
 			"diagnostically relevant log lines (errors, panics, stack traces, warnings) " +
@@ -196,51 +196,59 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: readOnly,
 	}, logToolCall("get_pod_logs", handleGetPodLogs))
 
-	addTool(server, &mcp.Tool{
-		Name: "diagnose",
-		Description: "Use for CrashLoopBackOff, OOMKilled, image-pull, readiness, scheduling, " +
-			"or GitOps sync/health symptoms after narrowing to one broken workload or reconciler, " +
-			"or for 'traffic is not reaching this service / route / ingress'. " +
-			"For workload symptoms, it replaces a get_resource → get_events(type=Warning) → " +
-			"current/previous-log chain in one round-trip. For a Pod, " +
-			"Deployment, StatefulSet, or DaemonSet, it " +
-			"bundles resource context, current and previous logs across pods, Warning events, " +
-			"startup blockers, related issues, and recent workload/ConfigMap changes. " +
-			"Warning events are a capped sample; use get_events for the exhaustive set. " +
-			"`crashCause` is evidence, not a root-cause verdict: `logLineSelection` ranks " +
-			"`" + crashLineFatalPattern + "`, `" + crashLineHeaderOnly + "`, `" +
-			crashLineLastMatchedLine + "`, then `" + crashLineLogTail + "` " +
-			"by confidence. Read the full logs for low-confidence selections; " +
-			"`traceback_header_only` means the informative traceback line was not captured. " +
-			"Audit findings are static posture, not active-outage evidence: " +
-			"`auditSummary.highestSeverity` uses critical|high|medium|low (built-ins " +
-			"high|medium), separate from live `issueSummary` critical|warning. " +
-			"`application_configuration_change: true` is a factual edit classification " +
-			"and narrow ranking hint, not a causal or universal relevance verdict. " +
-			"For Application, Kustomization, or Flux HelmRelease, returns reconciler status " +
-			"and parsed issues without pod-log fan-out. " +
-			"For network entry kinds (Service/Ingress/HTTPRoute/GRPCRoute/Gateway), returns a " +
-			"per-route reachability diagnosis whose fields carry their own explanations - trust " +
-			"`routes[].outcome` + `confidence` and the `headline`/`diagnosis` text over the coarse " +
-			"`verdict` rollup, and treat `indirect` confidence as reached only via the API-server " +
-			"proxy, never the live-traffic path. " +
-			"Prefer a targeted resource/log/event " +
-			"tool when you need only one facet; use get_resource for other kinds. " +
-			"Read-only EXCEPT the optional in_cluster=true arg (network kinds), which creates up to 5 " +
-			"transient, self-destructing probe pods to test the real dataplane.",
-		// NOT readOnly: in_cluster=true creates pods. A client gating on
-		// readOnlyHint must be told that.
-		Annotations: diagnoseAnno,
-	}, logToolCall("diagnose", handleDiagnose))
+	diagnoseDescription := "Use for CrashLoopBackOff, OOMKilled, image-pull, readiness, scheduling, " +
+		"or GitOps sync/health symptoms after narrowing to one broken workload or reconciler, " +
+		"or for 'traffic is not reaching this service / route / ingress'. " +
+		"For workload symptoms, it replaces a get_resource → get_events(type=Warning) → " +
+		"current/previous-log chain in one round-trip. For a Pod, " +
+		"Deployment, StatefulSet, or DaemonSet, it " +
+		"bundles resource context, current and previous logs across pods, Warning events, " +
+		"startup blockers, related issues, and recent workload/ConfigMap changes. " +
+		"Warning events are a capped sample; use get_events for the exhaustive set. " +
+		"`crashCause` is evidence, not a root-cause verdict: `logLineSelection` ranks " +
+		"`" + crashLineFatalPattern + "`, `" + crashLineHeaderOnly + "`, `" +
+		crashLineLastMatchedLine + "`, then `" + crashLineLogTail + "` " +
+		"by confidence. Read the full logs for low-confidence selections; " +
+		"`traceback_header_only` means the informative traceback line was not captured. " +
+		"Audit findings are static posture, not active-outage evidence: " +
+		"`auditSummary.highestSeverity` uses critical|high|medium|low (built-ins " +
+		"high|medium), separate from live `issueSummary` critical|warning. " +
+		"`application_configuration_change: true` is a factual edit classification " +
+		"and narrow ranking hint, not a causal or universal relevance verdict. " +
+		"For Application, Kustomization, or Flux HelmRelease, returns reconciler status " +
+		"and parsed issues without pod-log fan-out. " +
+		"For network entry kinds (Service/Ingress/HTTPRoute/GRPCRoute/Gateway), returns a " +
+		"per-route reachability diagnosis whose fields carry their own explanations - trust " +
+		"`routes[].outcome` + `confidence` and the `headline`/`diagnosis` text over the coarse " +
+		"`verdict` rollup, and treat `indirect` confidence as reached only via the API-server " +
+		"proxy, never the live-traffic path. " +
+		"Prefer a targeted resource/log/event " +
+		"tool when you need only one facet; use get_resource for other kinds."
+	if includeWrites {
+		addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+			Name: "diagnose",
+			Description: diagnoseDescription + " Read-only EXCEPT the optional in_cluster=true arg " +
+				"(network kinds), which creates up to 5 transient, self-destructing probe pods to test the real dataplane.",
+			// NOT readOnly: in_cluster=true creates pods. A client gating on
+			// readOnlyHint must be told that.
+			Annotations: diagnoseAnno,
+		}, logToolCall("diagnose", handleDiagnose))
+	} else {
+		addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+			Name:        "diagnose",
+			Description: diagnoseDescription + " This strict read-only endpoint does not run live in-cluster route probes.",
+			Annotations: readOnly,
+		}, logToolCall("diagnose", handleDiagnoseReadOnly))
+	}
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "list_namespaces",
 		Description: "List all Kubernetes namespaces with their status. " +
 			"Use to discover available namespaces before filtering other queries.",
 		Annotations: readOnly,
 	}, logToolCall("list_namespaces", handleListNamespaces))
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_changes",
 		Description: "Use when the symptom is 'this worked earlier' or 'something broke " +
 			"after a deploy/config change.' Returns recent meaningful changes ranked with " +
@@ -265,7 +273,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 
 	// --- Audit tool (read-only) ---
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_cluster_audit",
 		Description: "Use when the agent's decision is 'is this cluster well-configured / " +
 			"compliant?' — STATIC CONFIG POSTURE, not live operational state. Returns " +
@@ -292,7 +300,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 
 	// --- Upgrade impact tool (read-only) ---
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_cluster_upgrade_readiness",
 		Description: "Analyze the impact of upgrading the cluster to a target Kubernetes minor " +
 			"version (default: the next minor above the current version). Runs the evidenced " +
@@ -319,7 +327,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 
 	// --- Helm tools (read-only) ---
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "list_helm_releases",
 		Description: "List all Helm releases in the cluster with their status, resource health, " +
 			"storage namespace, Flux ownership when detected, lastOperation when Helm history " +
@@ -331,7 +339,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: readOnly,
 	}, logToolCall("list_helm_releases", handleListHelmReleases))
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_helm_release",
 		Description: "Use after identifying a specific native Helm release to inspect owned " +
 			"resources, health, current or recovered operation failures, and hook diagnostics. " +
@@ -352,7 +360,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 	// channels voted "this is installed" — H, L, C, A, F — and the
 	// MCP response includes sourceLegend so those terse stable codes
 	// are interpretable without external docs.
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "list_packages",
 		Description: "Use for a unified inventory of installed packages, versions, and health " +
 			"across Helm, workload labels, CRDs, Argo, and Flux. `sources` and the returned " +
@@ -368,7 +376,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 
 	// --- Issues (read-only) ---
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "issues",
 		Description: "Use for 'what's broken right now?': live state, not posture. Returns " +
 			"grouped critical/warning failures across workloads, Jobs/CronJobs, HPAs, " +
@@ -413,7 +421,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 
 	// --- Search (read-only) ---
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "search",
 		Description: "Find resources by content/term match when you do not know which object " +
 			"contains a string, config key, env ref, image, label/annotation value, " +
@@ -433,7 +441,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 
 	// --- RBAC reverse-lookup (read-only) ---
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_subject_permissions",
 		Description: "Use without verb/resource to inspect effective RBAC, granting bindings, " +
 			"flat rules, and, for ServiceAccounts, Pods running under it (`usedByPods`). " +
@@ -458,7 +466,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 
 	// --- Prometheus tools (read-only) ---
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "query_prometheus",
 		Description: "Use when the question needs metric VALUES or history: CPU/memory over time, " +
 			"request rates, error ratios, saturation, restarts trend, 'was there a spike?'. Executes " +
@@ -473,7 +481,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: readOnly,
 	}, logToolCall("query_prometheus", handleQueryPrometheus))
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "discover_metrics",
 		Description: "Use BEFORE query_prometheus when unsure of exact metric or label names. " +
 			"Lists metric names matching a selector (match={__name__=~\"node_cpu.*\"}) with their " +
@@ -484,7 +492,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: readOnly,
 	}, logToolCall("discover_metrics", handleDiscoverMetrics))
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_prometheus_rules",
 		Description: "List Prometheus alerting and recording rules with their PromQL definitions, " +
 			"state (firing/pending/inactive), labels, annotations, and active alert instances. " +
@@ -495,7 +503,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: readOnly,
 	}, logToolCall("get_prometheus_rules", handleGetPrometheusRules))
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_workload_logs",
 		Description: "Get aggregated logs from all pods of a workload (Deployment, StatefulSet, " +
 			"DaemonSet, Job, or Argo Workflow). Logs are collected from all matching pods concurrently, then " +
@@ -516,7 +524,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		return
 	}
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "manage_workload",
 		Description: "Perform operations on a Kubernetes workload (Deployment, StatefulSet, DaemonSet, or Argo Rollout). " +
 			"Supported actions: 'restart' triggers a rolling restart, 'scale' changes the replica count " +
@@ -529,7 +537,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: writeTool,
 	}, logToolCall("manage_workload", handleManageWorkload))
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "manage_rollout",
 		Description: "Drive an Argo Rollout's progressive delivery (the verbs with no Deployment equivalent). " +
 			"'abort' reverts traffic to the last stable version at once without touching spec, and stays " +
@@ -544,7 +552,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: writeTool,
 	}, logToolCall("manage_rollout", handleManageRollout))
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "manage_cronjob",
 		Description: "Perform operations on a Kubernetes CronJob. Supported actions: " +
 			"'trigger' creates a manual Job run from the CronJob's template, " +
@@ -553,7 +561,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: writeTool,
 	}, logToolCall("manage_cronjob", handleManageCronJob))
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "manage_gitops",
 		Description: "Perform operations on GitOps resources (ArgoCD or FluxCD). " +
 			"For ArgoCD: actions are 'sync' (trigger deployment), 'refresh', 'terminate', 'rollback', " +
@@ -563,7 +571,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: writeTool,
 	}, logToolCall("manage_gitops", handleManageGitOps))
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "apply_resource",
 		Description: "Create or update a Kubernetes resource from a YAML manifest. " +
 			"In 'apply' mode (default), performs a server-side apply with FieldManager=radar " +
@@ -581,7 +589,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: writeTool,
 	}, logToolCall("apply_resource", handleApplyResource))
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "patch_resource",
 		Description: "Patch one existing Kubernetes resource with JSON Patch, JSON Merge Patch, or strategic merge patch. " +
 			"Use this for precise field/list mutations such as removing a bad dnsConfig, hostPort, " +
@@ -597,7 +605,7 @@ func registerTools(server *mcp.Server, includeWrites bool) {
 		Annotations: writeTool,
 	}, logToolCall("patch_resource", handlePatchResource))
 
-	addTool(server, &mcp.Tool{
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "manage_node",
 		Description: "Perform operations on a Kubernetes node. " +
 			"Supported actions: 'cordon' marks the node as unschedulable (no new pods will be scheduled), " +
