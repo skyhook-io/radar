@@ -260,6 +260,15 @@ describe('matchWorkloadAcrossInstances', () => {
     expect(matchWorkloadAcrossInstances('Deployment/dev/billing', [dep('finops')])).toBeNull()
     expect(matchWorkloadAcrossInstances('garbage', [dep('billing')])).toBeNull()
   })
+
+  it('keeps same-kind CRD workloads separate by API group', () => {
+    const targets = [
+      { kind: 'Job', group: 'batch', namespace: 'prod', name: 'train' },
+      { kind: 'Job', group: 'batch.volcano.sh', namespace: 'prod', name: 'train' },
+    ]
+    expect(matchWorkloadAcrossInstances('Job.batch.volcano.sh/dev/train', targets)).toEqual(targets[1])
+    expect(matchWorkloadAcrossInstances('Job/dev/train', targets)).toEqual(targets[0])
+  })
 })
 
 // foldAppGroups pins the collapse experiment's safety rails — each fails
@@ -460,6 +469,23 @@ describe('buildAppMembershipIndex', () => {
     expect(idx.byResource.get('Ingress/team-a/billing-ing')?.appName).toBe('billing')
   })
 
+  it('keeps built-in workload keys stable and separates a same-name CRD workload by group', () => {
+    const idx = buildAppMembershipIndex([
+      row({
+        key: 'core', name: 'core-job',
+        workloads: [{ kind: 'Job', group: 'batch', namespace: 'ml', name: 'train', health: 'healthy', ready: 1, desired: 1, restarts: 0 }],
+      }),
+      row({
+        key: 'volcano', name: 'volcano-job',
+        workloads: [{ kind: 'Job', group: 'batch.volcano.sh', namespace: 'ml', name: 'train', health: 'healthy', ready: 1, desired: 1, restarts: 0 }],
+      }),
+    ])
+
+    expect(idx.byResource.get('Job/ml/train')?.appName).toBe('core-job')
+    expect(idx.byResource.get('Job.batch.volcano.sh/ml/train')?.appName).toBe('volcano-job')
+    expect(idx.byResource.size).toBe(2)
+  })
+
   it('indexes routes under their concrete kind, not a generic "Route"', () => {
     // The server ships "Kind/name" for polymorphic routes; the index must key on
     // the concrete kind so it matches the route lane id (HTTPRoute/…/name).
@@ -489,6 +515,50 @@ describe('buildAppMembershipIndex', () => {
     expect(idx.byResource.get('Service/team-a/billing-api')?.appName).toBe('billing')
     expect(idx.byResource.get('ConfigMap/shared/billing-config')?.appName).toBe('billing')
     expect(idx.byResource.get('PersistentVolumeClaim/team-a/billing-data')?.appName).toBe('billing')
+  })
+
+  it('does not let summary relationship names overwrite exact same-kind refs', () => {
+    const idx = buildAppMembershipIndex([
+      row({
+        key: 'foreign', name: 'foreign', namespace: 'team-a',
+        relationships: {
+          services: ['api'],
+          serviceRefs: [{ kind: 'Service', group: 'platform.example.io', namespace: 'team-a', name: 'api' }],
+        },
+      }),
+      row({
+        key: 'core', name: 'core', namespace: 'team-a',
+        relationships: {
+          services: ['api'],
+          serviceRefs: [{ kind: 'Service', namespace: 'team-a', name: 'api' }],
+        },
+      }),
+    ])
+
+    expect(idx.byResource.get('Service.platform.example.io/team-a/api')?.appName).toBe('foreign')
+    expect(idx.byResource.get('Service/team-a/api')?.appName).toBe('core')
+  })
+
+  it('only builds group-less aliases for unambiguous persisted-event identity', () => {
+    const exact = buildAppMembershipIndex([
+      row({
+        key: 'ray', name: 'ray',
+        workloads: [{ kind: 'RayJob', group: 'ray.io', namespace: 'ml', name: 'train', health: 'healthy', ready: 1, desired: 1, restarts: 0 }],
+      }),
+    ])
+    expect(exact.byUnqualifiedResource?.get('RayJob/ml/train')?.appName).toBe('ray')
+
+    const collision = buildAppMembershipIndex([
+      row({
+        key: 'core', name: 'core',
+        workloads: [{ kind: 'Job', group: 'batch', namespace: 'ml', name: 'train', health: 'healthy', ready: 1, desired: 1, restarts: 0 }],
+      }),
+      row({
+        key: 'volcano', name: 'volcano',
+        workloads: [{ kind: 'Job', group: 'batch.volcano.sh', namespace: 'ml', name: 'train', health: 'healthy', ready: 1, desired: 1, restarts: 0 }],
+      }),
+    ])
+    expect(collision.byUnqualifiedResource?.has('Job/ml/train')).toBe(false)
   })
 
   it('indexes the exact deployment source object', () => {

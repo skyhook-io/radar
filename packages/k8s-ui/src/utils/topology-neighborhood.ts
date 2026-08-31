@@ -1,4 +1,5 @@
 import type { Topology, TopologyNode, TopologyEdge, EdgeType, NodeKind } from '../types/core'
+import { groupQualifiesLaneId, laneId } from './navigation'
 
 // Seeded neighborhood query — the shared primitive behind the WorkloadView
 // Topology tab (seed = one workload) and the Application topology (seed = the
@@ -57,6 +58,11 @@ function nodeNamespace(node: TopologyNode): string {
 function nodeGroup(node: TopologyNode): string {
   const apiVersion = node.data?.apiVersion
   return typeof apiVersion === 'string' && apiVersion.includes('/') ? apiVersion.split('/')[0] : ''
+}
+
+function nodeResourceKind(node: TopologyNode): string {
+  const resourceKind = node.data?.resourceKind
+  return typeof resourceKind === 'string' && resourceKind ? resourceKind : node.kind
 }
 
 function isWorkflowTemplateKind(kind: NodeKind | string): boolean {
@@ -142,19 +148,23 @@ function batchFanoutLimit(edge: TopologyEdge, nodeById: Map<string, TopologyNode
   return isBatchRunFanoutEdge(edge, nodeById) ? BATCH_RUN_FANOUT_LIMIT : null
 }
 
-/** The identity string for a workload/seed — `kind/namespace/name`. This format
- *  is a cross-module contract: rail rows, the `?workload=` URL param, hover
+/** The identity string for a workload/seed. Built-ins use `kind/namespace/name`;
+ *  CRDs add their group to keep same-named resources distinct. This format is a
+ *  cross-module contract: rail rows, the `?workload=` URL param, hover
  *  focus, and the ownership stamp all compare these strings. Always construct
  *  through here; never inline the template. (Unambiguous: K8s kinds and
  *  DNS-1123 names cannot contain `/`.) */
 export function workloadKey(ref: NeighborhoodSeed): string {
-  return `${ref.kind}/${ref.namespace}/${ref.name}`
+  return laneId(ref.kind, ref.group, ref.namespace, ref.name)
 }
 
 function matchSeedNode(node: TopologyNode, seeds: NeighborhoodSeed[]): boolean {
   return seeds.some((s) => {
-    if (s.kind !== node.kind || s.name !== node.name || s.namespace !== nodeNamespace(node)) return false
-    return !s.group || s.group === nodeGroup(node)
+    if (s.kind !== nodeResourceKind(node) || s.name !== node.name || s.namespace !== nodeNamespace(node)) return false
+    if (!s.group) return true
+    const group = nodeGroup(node)
+    if (group) return s.group === group
+    return !groupQualifiesLaneId(s.group)
   })
 }
 
@@ -341,7 +351,12 @@ export function tagWorkloadOwnership(topology: Topology, seeds: NeighborhoodSeed
   const subNodeById = new Map(sub.nodes.map((node) => [node.id, node]))
   for (const n of sub.nodes) {
     if (matchSeedNode(n, seeds)) {
-      seedKeyById.set(n.id, workloadKey({ kind: n.kind, namespace: nodeNamespace(n), name: n.name }))
+      seedKeyById.set(n.id, workloadKey({
+        kind: nodeResourceKind(n),
+        group: nodeGroup(n),
+        namespace: nodeNamespace(n),
+        name: n.name,
+      }))
     }
   }
 

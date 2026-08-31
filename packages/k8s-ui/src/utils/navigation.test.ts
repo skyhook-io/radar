@@ -303,6 +303,7 @@ describe('lane identity helpers', () => {
     expect(groupQualifiesLaneId('apps')).toBe(false)       // built-in
     expect(groupQualifiesLaneId('batch')).toBe(false)
     expect(groupQualifiesLaneId('networking.k8s.io')).toBe(false)
+    expect(groupQualifiesLaneId('resource.k8s.io')).toBe(false)
     expect(groupQualifiesLaneId('postgresql.cnpg.io')).toBe(true)
     expect(groupQualifiesLaneId('cluster.x-k8s.io')).toBe(true)
   })
@@ -310,6 +311,7 @@ describe('lane identity helpers', () => {
   test('laneId: bare for core/built-in, qualified for CRD groups', () => {
     expect(laneId('Pod', '', 'team-a', 'x')).toBe('Pod/team-a/x')
     expect(laneId('Deployment', 'apps', 'ns', 'web')).toBe('Deployment/ns/web')
+    expect(laneId('ResourceClaim', 'resource.k8s.io', 'ml', 'gpu')).toBe('ResourceClaim/ml/gpu')
     expect(laneId('Cluster', 'postgresql.cnpg.io', 'prod', 'main-db')).toBe('Cluster.postgresql.cnpg.io/prod/main-db')
   })
 

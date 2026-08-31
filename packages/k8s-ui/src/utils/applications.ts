@@ -1,4 +1,5 @@
 import type { ResourceRef } from '../types/core'
+import { groupQualifiesLaneId, laneId, laneResourceKey, parseLaneId } from './navigation'
 import { rolloutActivityLevel, type WorkloadRolloutActivity } from './workload-rollout'
 
 // Shared model for the Applications surface — host-agnostic. The OSS single-
@@ -640,8 +641,12 @@ export interface AppMembership {
 }
 
 export interface AppMembershipIndex {
-  /** 'Kind/namespace/name' → app. Built from row.workloads + satellite arrays. */
+  /** Canonical lane id → app. Built-in groups stay `Kind/namespace/name`;
+   *  CRD groups use `Kind.group/namespace/name`. */
   byResource: Map<string, AppMembership>;
+  /** Group-less aliases that resolve to exactly one canonical resource. This is
+   *  used only when persisted timeline events predate apiVersion capture. */
+  byUnqualifiedResource?: Map<string, AppMembership>;
   /** 'kind:namespace:value' (instance/part-of/name/app/helm/argo) → app. Built
    *  from row.matchKeys EXCLUDING name-stem (v1 matches exact kinds only). Keys
    *  are namespace-scoped so a shared label value across namespaces can't
@@ -657,7 +662,7 @@ function setFirst<V>(map: Map<string, V>, key: string, value: V): void {
 }
 
 /** Build the resource + evidence membership index from the applications rows.
- *  Pure; no fetching. `byResource` keys workloads by their own kind/ns/name and
+ *  Pure; no fetching. `byResource` keys workloads by their canonical lane id and
  *  satellites (Services/Ingresses/Routes) by the app's single namespace — a
  *  multi-namespace app can't place its satellites unambiguously, so those are
  *  skipped (workloads still index fine). `byEvidence` drops name-stem keys: the
@@ -674,21 +679,27 @@ export function buildAppMembershipIndex(rows: AppRow[]): AppMembershipIndex {
     };
     for (const w of row.workloads || []) {
       if (w.kind && w.name)
-        setFirst(byResource, `${w.kind}/${w.namespace}/${w.name}`, membership);
+        setFirst(byResource, laneId(w.kind, w.group, w.namespace, w.name), membership);
     }
     const ns = namespaceOf(row);
     if (ns && row.relationships) {
-      for (const s of row.relationships.services || [])
-        setFirst(byResource, `Service/${ns}/${s}`, membership);
-      for (const i of row.relationships.ingresses || [])
-        setFirst(byResource, `Ingress/${ns}/${i}`, membership);
+      if (!row.relationships.serviceRefs?.length) {
+        for (const s of row.relationships.services || [])
+          setFirst(byResource, `Service/${ns}/${s}`, membership);
+      }
+      if (!row.relationships.ingressRefs?.length) {
+        for (const i of row.relationships.ingresses || [])
+          setFirst(byResource, `Ingress/${ns}/${i}`, membership);
+      }
       // Routes ship as "Kind/name" (HTTPRoute/GRPCRoute/…); index under the
       // concrete kind so the key matches the route lane's id, not a generic "Route".
-      for (const r of row.relationships.routes || []) {
-        const slash = r.indexOf("/");
-        const routeKind = slash > 0 ? r.slice(0, slash) : "Route";
-        const routeName = slash > 0 ? r.slice(slash + 1) : r;
-        setFirst(byResource, `${routeKind}/${ns}/${routeName}`, membership);
+      if (!row.relationships.routeRefs?.length) {
+        for (const r of row.relationships.routes || []) {
+          const slash = r.indexOf("/");
+          const routeKind = slash > 0 ? r.slice(0, slash) : "Route";
+          const routeName = slash > 0 ? r.slice(slash + 1) : r;
+          setFirst(byResource, `${routeKind}/${ns}/${routeName}`, membership);
+        }
       }
     }
     if (row.relationships) {
@@ -705,14 +716,14 @@ export function buildAppMembershipIndex(rows: AppRow[]): AppMembershipIndex {
       for (const refs of explicitRefs) {
         for (const ref of refs ?? []) {
           if (ref.kind && ref.name)
-            setFirst(byResource, `${ref.kind}/${ref.namespace}/${ref.name}`, membership);
+            setFirst(byResource, laneId(ref.kind, ref.group, ref.namespace, ref.name), membership);
         }
       }
     }
     if (row.sourceRef?.kind && row.sourceRef.name) {
       setFirst(
         byResource,
-        `${row.sourceRef.kind}/${row.sourceRef.namespace}/${row.sourceRef.name}`,
+        laneId(row.sourceRef.kind, row.sourceRef.group, row.sourceRef.namespace, row.sourceRef.name),
         membership,
       );
     }
@@ -721,7 +732,23 @@ export function buildAppMembershipIndex(rows: AppRow[]): AppMembershipIndex {
       setFirst(byEvidence, mk, membership);
     }
   }
-  return { byResource, byEvidence };
+  const byUnqualifiedResource = new Map<string, AppMembership>();
+  const canonicalByUnqualified = new Map<string, string>();
+  const ambiguous = new Set<string>();
+  for (const [canonical, membership] of byResource) {
+    const parsed = parseLaneId(canonical);
+    if (!parsed) continue;
+    const unqualified = laneResourceKey(parsed.kind, parsed.namespace, parsed.name);
+    const previous = canonicalByUnqualified.get(unqualified);
+    if (previous && previous !== canonical) {
+      ambiguous.add(unqualified);
+      byUnqualifiedResource.delete(unqualified);
+      continue;
+    }
+    canonicalByUnqualified.set(unqualified, canonical);
+    if (!ambiguous.has(unqualified)) byUnqualifiedResource.set(unqualified, membership);
+  }
+  return { byResource, byUnqualifiedResource, byEvidence };
 }
 
 // -----------------------------------------------------------------------------
@@ -775,21 +802,24 @@ export function stripEnvAffix(
 export function matchWorkloadAcrossInstances(
   workloadKey: string,
   targetWorkloads:
-    Pick<AppWorkload, "kind" | "namespace" | "name">[] | undefined,
+    Pick<AppWorkload, "kind" | "group" | "namespace" | "name">[] | undefined,
   extraTokens?: ReadonlySet<string>,
-): Pick<AppWorkload, "kind" | "namespace" | "name"> | null {
-  const [kind, namespace, name] = workloadKey.split("/");
-  if (!kind || !name) return null;
+): Pick<AppWorkload, "kind" | "group" | "namespace" | "name"> | null {
+  const parsed = parseLaneId(workloadKey);
+  if (!parsed) return null;
+  const { kind, group, namespace, name } = parsed;
+  const sameKindGroup = (w: Pick<AppWorkload, "kind" | "group">) =>
+    w.kind === kind && (groupQualifiesLaneId(w.group) ? w.group : "") === group;
   const ws = targetWorkloads ?? [];
   return (
     ws.find(
-      (w) => w.kind === kind && w.namespace === namespace && w.name === name,
+      (w) => sameKindGroup(w) && w.namespace === namespace && w.name === name,
     ) ??
-    uniqueMatch(ws, (w) => w.kind === kind && w.name === name) ??
+    uniqueMatch(ws, (w) => sameKindGroup(w) && w.name === name) ??
     uniqueMatch(
       ws,
       (w) =>
-        w.kind === kind &&
+        sameKindGroup(w) &&
         stripEnvAffix(w.name, extraTokens) === stripEnvAffix(name, extraTokens),
     ) ??
     null
