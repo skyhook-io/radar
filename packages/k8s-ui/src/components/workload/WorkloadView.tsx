@@ -440,8 +440,9 @@ export function WorkloadView({
   onOpenHelmRelease,
   onNavigateGitOpsPath,
 }: WorkloadViewProps) {
-  // Normalize kind: URL has plural lowercase, internal logic uses singular PascalCase
-  const kind = pluralToKind(kindProp)
+  // The live object preserves exact CRD capitalization (RayJob, TFJob); the URL
+  // plural remains the API resource name used by fetches and mutations.
+  const kind = resource?.kind || pluralToKind(kindProp)
   const apiKind = kindProp
 
   // Tab state — controlled or uncontrolled
@@ -497,14 +498,14 @@ export function WorkloadView({
     return buildResourceHierarchy({
       events: allEvents,
       topology,
-      rootResource: { kind, namespace, name },
+      rootResource: { kind, group, namespace, name },
       groupByApp: true,
     })
-  }, [allEvents, topology, kind, namespace, name])
+  }, [allEvents, topology, kind, group, namespace, name])
 
   // Topology tab — the seeded neighborhood around this one workload (its
   // ownership core + attached Services/config/policies), not the whole namespace.
-  const neighborhoodSeed = useMemo(() => [{ kind, namespace, name }], [kind, namespace, name])
+  const neighborhoodSeed = useMemo(() => [{ kind, group, namespace, name }], [kind, group, namespace, name])
   const neighborhood = useMemo(
     () => (topology ? neighborhoodFor(topology, neighborhoodSeed) : null),
     [topology, neighborhoodSeed],
@@ -537,7 +538,7 @@ export function WorkloadView({
       .filter((n) => n.kind !== 'Internet' && n.kind !== 'PodGroup')
       .map((n) => ({
         id: n.id,
-        kind: n.kind as string,
+        kind: (typeof n.data?.resourceKind === 'string' ? n.data.resourceKind : n.kind) as string,
         namespace: (n.data?.namespace as string) || namespace,
         name: n.name,
         group: apiVersionToGroup(n.data?.apiVersion as string | undefined),
@@ -555,10 +556,11 @@ export function WorkloadView({
   const yamlObject = yamlObjectId ? yamlObjects.find((o) => o.id === yamlObjectId) : undefined
   const handleTopologyNodeClick = useCallback(
     (node: TopologyNode) => {
-      if (!onNavigateToResource || !node.kind || !node.name) return
+      const resourceKind = typeof node.data?.resourceKind === 'string' ? node.data.resourceKind : node.kind
+      if (!onNavigateToResource || !resourceKind || !node.name) return
       const group = apiVersionToGroup(node.data?.apiVersion as string | undefined)
       onNavigateToResource({
-        kind: kindToPluralWithGroup(node.kind, group),
+        kind: kindToPluralWithGroup(resourceKind, group),
         namespace: (node.data?.namespace as string) || '',
         name: node.name,
         group,
