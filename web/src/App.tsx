@@ -58,7 +58,7 @@ import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
 import { useDocumentTitle } from './hooks/useDocumentTitle'
 import type { ClusterLoadState } from './types/clusterLoadState'
 import { useClusterLoadState } from './hooks/useClusterLoadState'
-import { Network, List, Clock, Package, Sun, Moon, Activity, Home, Star, Search, Bug, SquareTerminal, ShieldCheck, GitBranch, Gauge, HelpCircle, Loader2, RefreshCw } from 'lucide-react'
+import { Network, Sun, Moon, Star, Search, Bug, SquareTerminal, HelpCircle, Loader2, RefreshCw } from 'lucide-react'
 import { useTheme } from './context/ThemeContext'
 import { Tooltip } from './components/ui/Tooltip'
 import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNamespacePicker'
@@ -334,8 +334,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     [navCustomization],
   )
   // Resolve every host-takeover URL ONCE (memoized on navCustomization) so the
-  // setMainView intercept, redirect effect, nav-pill filtering, inline-view
-  // gating, and the cert click handler all consume the SAME value — host
+  // setMainView intercept, redirect effect, inline-view gating, and the cert
+  // click handler all consume the SAME value — host
   // callbacks aren't guaranteed idempotent (scope / flags / signed URLs can
   // shift between calls). undefined = not taken over → Radar renders the view
   // itself. `clusterChecksHref` is the deprecated pre-1.7 hook, folded into the
@@ -350,13 +350,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     [navCustomization],
   )
   const { pinned: navRailPinned, togglePinned: toggleNavRailPinned } = useNavRailPinned()
-  // Standalone Radar gets the left nav rail; embedded hosts (Radar Hub) own
-  // the left chrome via their own fleet rail and keep Radar's top-bar pills.
+  // Standalone Radar gets the left nav rail. Embedded hosts own view navigation
+  // in their surrounding chrome; Radar never renders a second primary nav.
   const showNavRail = !navCustomization.embedded
-  // Chromeless embed: the host (Radar Hub) owns ALL chrome and drives view
-  // navigation + scope from its own UI, so Radar renders just the active view's
-  // content — no top bar, no view-switcher. Used for per-cluster views surfaced
-  // as native cloud destinations behind a cluster picker.
+  // Chromeless embed: the host (Radar Hub) also owns scope and actions, so Radar
+  // renders just the active view's content with no top bar. Used for per-cluster
+  // views surfaced as native cloud destinations behind a cluster picker.
   const chromeless = navCustomization.embedded === true && navCustomization.chrome === 'none'
   // Force the slim rail on narrow windows: a pinned 176px rail needs viewport
   // ≥976 to keep content above its ~800px floor (collapsed needs only ≥856).
@@ -486,15 +485,14 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   }, [navigate, searchParams, takeover, goHost])
 
   // Cloud (embedded) takes over the "fleet-shaped" per-cluster views with its
-  // own fleet pages scoped to this cluster — owned by the host's left rail — so
-  // Radar drops the matching pills (see the nav below). In-app nav hands off in
+  // own fleet pages scoped to this cluster. In-app navigation hands off in
   // setMainView (above); direct /<view> URL entry funnels through the redirect
   // effect below. Both consume the memoized `takeover` resolved above. Standalone
   // OSS (no fleetTakeoverHref) is unaffected and renders the in-app view.
   //
   // Has the host claimed this view? View-shaped targets only ('certs' has no
-  // Radar view — only its Home card consults `takeover`). Used to drop the nav
-  // pill and gate the inline view render in favor of the "Opening…" splash.
+  // Radar view — only its Home card consults `takeover`). Used to gate the
+  // inline view render in favor of the "Opening…" splash.
   const isViewTakenOver = (view: ExtendedMainView): boolean =>
     (view === 'issues' || view === 'gitops' || view === 'checks') && !!takeover[view]
   // The host's URL for the CURRENT view, if taken over. Drives the redirect
@@ -1683,11 +1681,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             is a FIXED-WIDTH column so the omnibar after it is force-pinned: the
             scope pill + status dot can change width (cluster/namespace value)
             without ever shifting the search box. The pill's own name/value caps
-            keep it inside this width; the embedded/pill layout keeps auto width
-            (its center bar is absolutely positioned). */}
+            keep it inside this width; the embedded layout keeps auto width. */}
         <div className={`flex items-center gap-4 shrink-0 ${showNavRail ? 'w-[492px]' : ''}`}>
-          {/* Standalone rail owns the brand; only the embedded/pill layout
-              shows it in the header (host may override via brandSlot). */}
+          {/* Standalone rail owns the brand; only an embedded header shows it
+              here (the host may override it via brandSlot). */}
           {navCustomization.brandSlot ?? (showNavRail ? null : <Logo />)}
 
           <div className={`flex items-center gap-2 min-w-0 ${showNavRail ? 'flex-1' : ''}`}>
@@ -1766,65 +1763,6 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             <PortForwardIndicator />
           </div>
         </div>
-
-        {/* Center: View tabs — embedded/pill layout only. Standalone Radar
-            navigates via the left rail (showNavRail), so the pill bar is
-            suppressed there to avoid a duplicate primary nav. */}
-        {!showNavRail && (
-        <div className="@min-[920px]:absolute @min-[920px]:left-1/2 @min-[920px]:-translate-x-1/2 flex items-center gap-0.5 bg-theme-elevated/50 rounded-full p-1 ml-2 @min-[920px]:ml-0">
-          {([
-            { view: 'home' as const, icon: Home, label: 'Home' },
-            { view: 'topology' as const, icon: Network, label: 'Topology' },
-            { view: 'resources' as const, icon: List, label: 'Resources' },
-            { view: 'capacity' as const, icon: Gauge, label: 'Capacity' },
-            { view: 'timeline' as const, icon: Clock, label: 'Timeline' },
-            { view: 'helm' as const, icon: Package, label: 'Helm' },
-            { view: 'gitops' as const, icon: GitBranch, label: 'GitOps' },
-            // Applications is intentionally hidden from the pill bar for now —
-            // the bar is full, and the view's primary home is Cloud's fleet
-            // rail. The view still exists and is reachable via /applications
-            // and the view-switching shortcuts. Same treatment as Cost below.
-            { view: 'traffic' as const, icon: Activity, label: 'Live Traffic' },
-            // Cost is intentionally hidden from the pill bar for now — the view still
-            // exists and is reachable via /cost, the Home dashboard card, and the
-            // command palette (⌘K). Remove this comment to restore it.
-            { view: 'checks' as const, icon: ShieldCheck, label: 'Checks' },
-          ] as const)
-            // In Cloud, fleet-shaped views (Checks, Issues, GitOps) are owned by
-            // the host's left rail; the per-cluster view is just that fleet page
-            // filtered to this cluster, so duplicating it as a peer pill here
-            // would be a second copy that teleports out of the cluster shell.
-            // Drop any pill the host took over — cluster-scoped access stays
-            // available via the Home cards (redirected by the takeover effect
-            // above), ⌘K, and bookmarks. Standalone OSS keeps every pill.
-            .filter(({ view }) => !isViewTakenOver(view))
-            .map(({ view, icon: Icon, label }) => (
-            <Tooltip key={view} content={label} delay={100} position="bottom">
-              <button
-                onClick={() => setMainView(view)}
-                className={`flex items-center gap-1 px-2 py-1 text-[13px] rounded-full transition-colors ${
-                  mainView === view || (mainView === 'helmCompare' && view === 'helm')
-                    ? 'bg-skyhook-600 dark:bg-skyhook-500 text-white shadow-glow-brand-sm'
-                    : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-hover'
-                }`}
-              >
-                <Icon className="w-4 h-4" />
-                {/* Labels appear only when the absolute-centered nav has
-                    enough horizontal room past the left section. Right-side
-                    chrome that adds further pressure (Connected text, star
-                    count) is intentionally pushed to the next tier (xl) so
-                    label rendering and right-side expansion stay decoupled.
-                    Per-button Tooltip discloses labels on hover when the
-                    icon-only viewport is in effect. The 1440 anchor is an
-                    off-system breakpoint chosen by measurement at the time
-                    of this PR — recompute if the cluster switcher cap or
-                    other left-section chrome changes appreciably. */}
-                <span className="hidden @min-[1264px]:inline">{label}</span>
-              </button>
-            </Tooltip>
-          ))}
-        </div>
-        )}
 
         {/* Center: omnibar — standalone search + command surface (the ⌘K entry).
             Its container is one of three EQUAL flex-1 columns (see the left/right

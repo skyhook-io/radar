@@ -42,7 +42,9 @@ See `RadarAppProps` + `NavCustomization` in the type declarations for the full s
 
 When `navSlots.embedded` is true, Radar sizes itself to the host container (`height: 100%`) instead of owning the browser viewport. Mount it inside a container with a definite height so the host chrome owns the page scrollbar.
 
-Chromeless hosts (`navSlots.chrome = 'none'`) can pass `onClusterLoadStateChange` and render `state.message` in their own topbar while Radar finishes loading deferred cluster resources.
+Embedded hosts own primary view navigation. With the default `navSlots.chrome = 'full'`, Radar retains its top bar for the brand, context, and action slots, but does not render a view switcher or sidebar. Use Radar's routes (such as `/topology` and `/resources`) to drive the active view from the host navigation.
+
+Chromeless hosts (`navSlots.chrome = 'none'`) own the top bar as well. They can pass `onClusterLoadStateChange` and render `state.message` in their own chrome while Radar finishes loading deferred cluster resources.
 
 ## Tailwind
 

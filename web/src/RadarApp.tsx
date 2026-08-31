@@ -84,9 +84,10 @@ export interface RadarAppProps {
    */
   queryClient?: QueryClient;
   /**
-   * Slot-based customization of Radar's top nav. Use to inject host-app
+   * Slot-based customization of Radar's top bar. Use to inject host-app
    * brand, replace the kubeconfig context picker with a product-level
-   * cluster switcher, and append items to the right action bar.
+   * cluster switcher, and append items to the right action bar. Embedded hosts
+   * own primary view navigation outside Radar.
    * See ./context/NavCustomization for the slot shape.
    */
   navSlots?: NavCustomization;
