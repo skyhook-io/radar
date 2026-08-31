@@ -142,6 +142,20 @@ func (d *DynamicResourceCache) retainObservation(gvr schema.GroupVersionResource
 	d.observations[gvr] = retainedObservation{state: state, reasonCode: reasonCode, truncated: truncated}
 }
 
+func (d *DynamicResourceCache) retainDeniedObservation(gvr schema.GroupVersionResource, preferredNS string, complete bool) {
+	// A preferred-namespace denial proves only that request scope; it cannot
+	// replace the observation retained for the GVR as a whole.
+	if preferredNS != "" {
+		return
+	}
+	truncated := d.namespaceProbeTruncated(gvr, preferredNS, complete)
+	reasonCode := "access_denied"
+	if truncated {
+		reasonCode = "access_denied_partial_probe"
+	}
+	d.retainObservation(gvr, DynamicObservationDenied, reasonCode, truncated)
+}
+
 // Observation returns the current observation contract for one exact GVR.
 // It only reads cache bookkeeping; it never probes the API server, creates an
 // informer, or waits for sync.
@@ -298,12 +312,7 @@ func (d *DynamicResourceCache) ensureWatching(gvr schema.GroupVersionResource, p
 		scopes, complete, err := d.probeScopes(gvr, preferredNS)
 		if err != nil {
 			if isAuthProbeError(err) {
-				truncated := d.namespaceProbeTruncated(gvr, preferredNS, complete)
-				reasonCode := "access_denied"
-				if truncated {
-					reasonCode = "access_denied_partial_probe"
-				}
-				d.retainObservation(gvr, DynamicObservationDenied, reasonCode, truncated)
+				d.retainDeniedObservation(gvr, preferredNS, complete)
 			}
 			return nil, fmt.Errorf("no access to %s.%s/%s: %w", gvr.Resource, gvr.Group, gvr.Version, err)
 		}
@@ -721,10 +730,18 @@ func (d *DynamicResourceCache) probeCountList(ctx context.Context, gvr schema.Gr
 	if isAuthProbeError(err) && d.gvrIsNamespaced(gvr) {
 		// Size heuristic only — the first granted fallback namespace is a
 		// good-enough sample for the eager-warm decision.
+		var fallbackErr error
 		for _, ns := range d.fallbackNamespaces() {
-			if nsList, nsErr := d.config.DynamicClient.Resource(gvr).Namespace(ns).List(ctx, metav1.ListOptions{Limit: 1}); nsErr == nil {
+			nsList, nsErr := d.config.DynamicClient.Resource(gvr).Namespace(ns).List(ctx, metav1.ListOptions{Limit: 1})
+			if nsErr == nil {
 				return nsList, nil
 			}
+			if !isAuthProbeError(nsErr) && fallbackErr == nil {
+				fallbackErr = nsErr
+			}
+		}
+		if fallbackErr != nil {
+			return nil, fallbackErr
 		}
 	}
 	return list, err
@@ -1628,12 +1645,7 @@ func (d *DynamicResourceCache) warmupParallelWithOrigin(gvrs []schema.GroupVersi
 		r := <-results
 		if r.err != nil {
 			if isAuthProbeError(r.err) {
-				truncated := d.namespaceProbeTruncated(r.gvr, "", r.complete)
-				reasonCode := "access_denied"
-				if truncated {
-					reasonCode = "access_denied_partial_probe"
-				}
-				d.retainObservation(r.gvr, DynamicObservationDenied, reasonCode, truncated)
+				d.retainDeniedObservation(r.gvr, "", r.complete)
 			} else {
 				d.retainObservation(r.gvr, DynamicObservationDeferred, "scope_probe_failed", false)
 			}
@@ -1849,12 +1861,7 @@ func (d *DynamicResourceCache) DiscoverAllCRDs() {
 			r := <-results
 			if r.count == -1 {
 				noAccessCount++
-				truncated := d.namespaceProbeTruncated(r.gvr, "", true)
-				reasonCode := "access_denied"
-				if truncated {
-					reasonCode = "access_denied_partial_probe"
-				}
-				d.retainObservation(r.gvr, DynamicObservationDenied, reasonCode, truncated)
+				d.retainDeniedObservation(r.gvr, "", true)
 				continue
 			}
 			if r.count == -2 {

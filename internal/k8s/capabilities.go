@@ -74,7 +74,7 @@ type PermissionCheckResult struct {
 	Scopes                   map[string]k8score.ResourceScope
 	ScopeNamespaces          map[string][]string // Per-kind namespace-scoped informer fanout; nil/empty means use Scopes[key].Namespace
 	ScopeCandidates          []string            // The candidate namespaces the probe walked — the dynamic CRD cache probes these per-GVR as its namespace fallbacks
-	ScopeCandidatesTruncated bool                // Additional candidates were omitted by MaxScopeCandidates
+	ScopeCandidatesTruncated bool                // Candidate set is incomplete: namespace enumeration was non-authoritative or MaxScopeCandidates omitted entries
 }
 
 // Capabilities represents the features available based on RBAC permissions
@@ -956,7 +956,7 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 	}
 
 	forceNamespace := ForceNamespaceScope
-	scopeNamespaces, scopeCandidatesTruncated := buildScopeCandidates(ctx)
+	scopeNamespaces, scopeCandidatesIncomplete := buildScopeCandidates(ctx)
 	if forceNamespace {
 		if target := GetNamespaceScopeTarget(); target != "" {
 			scopeNamespaces = mergeForcedScopeCandidate(target, scopeNamespaces)
@@ -966,7 +966,7 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 	}
 
 	result, hadErrors := probeResourceAccess(ctx, GetDynamicClient(), scopeNamespaces, forceNamespace)
-	result.ScopeCandidatesTruncated = scopeCandidatesTruncated
+	result.ScopeCandidatesTruncated = scopeCandidatesIncomplete
 
 	resourcePermsMu.Lock()
 	cachedPermResult = result
@@ -988,9 +988,10 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 // buildScopeCandidates returns the namespace candidates for the fallback
 // probe when cluster-wide list is denied. Kubeconfig context (or
 // --namespace) first; then namespaces from GetAccessibleNamespaces, in the
-// cluster-list order (alphabetical). Empty when no fallback is configured
-// and the user can't enumerate namespaces — caller treats that as "no
-// fallback".
+// cluster-list order (alphabetical). The bool reports an incomplete candidate
+// set: either namespace enumeration was non-authoritative or the safety cap
+// omitted candidates. Empty and incomplete is materially different from an
+// authoritative empty set — dynamic-resource denial must remain partial.
 func buildScopeCandidates(ctx context.Context) ([]string, bool) {
 	// GetEffectiveNamespace would return only one (kubeconfig context wins
 	// over --namespace). Reach into both globals so when an operator sets
@@ -1016,7 +1017,11 @@ func buildScopeCandidates(ctx context.Context) ([]string, bool) {
 		// kinds" has a breadcrumb instead of silence.
 		log.Printf("RBAC: namespace discovery non-authoritative (cluster-wide list namespaces denied); fallback candidates limited to %v", out)
 	}
-	return out, dropped > 0
+	return out, scopeCandidateSetIncomplete(authoritative, dropped)
+}
+
+func scopeCandidateSetIncomplete(authoritative bool, dropped int) bool {
+	return !authoritative || dropped > 0
 }
 
 func mergeForcedScopeCandidate(target string, candidates []string) []string {

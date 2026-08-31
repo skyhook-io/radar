@@ -360,9 +360,10 @@ type DynamicCacheConfig struct {
 	// precedence over NamespaceFallback.
 	NamespaceFallback  string
 	NamespaceFallbacks []string
-	// NamespaceFallbacksTruncated means additional candidate namespaces were
-	// omitted by the configured safety bound. It matters only when a GVR cannot
-	// be watched cluster-wide and falls back to per-namespace informers.
+	// NamespaceFallbacksTruncated means the candidate set is incomplete because
+	// namespace enumeration was non-authoritative or the configured safety bound
+	// omitted candidates. It matters only when a GVR cannot be watched
+	// cluster-wide and falls back to per-namespace informers.
 	NamespaceFallbacksTruncated bool
 
 	// DebugEvents enables verbose debug logging.
