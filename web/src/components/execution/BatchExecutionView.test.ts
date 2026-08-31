@@ -1,6 +1,20 @@
 import { describe, expect, it } from 'vitest'
 import type { WorkflowExecutionActivity } from '@skyhook-io/k8s-ui/utils/workflow-execution'
-import { activityPreviewItems, effectiveDefinitionResource, isDirectRunKind, retentionHistoryCopy, runMessageNeedsDisclosure, workflowDefinitionParameters, workflowDefinitionTarget, workflowRunArguments } from './BatchExecutionView'
+import {
+  activityPreviewItems,
+  effectiveDefinitionResource,
+  emptyRunsCopy,
+  isDirectRunKind,
+  jobSetDependencyLabels,
+  jobSetMemberIdentity,
+  pluralizeMemberJobs,
+  resourceTargetForRun,
+  retentionHistoryCopy,
+  runMessageNeedsDisclosure,
+  workflowDefinitionParameters,
+  workflowDefinitionTarget,
+  workflowRunArguments,
+} from './BatchExecutionView'
 
 function activity(id: string, tone: WorkflowExecutionActivity['tone'] = 'success'): WorkflowExecutionActivity {
   return { id, at: '2026-01-01T00:00:00Z', label: id, tone }
@@ -166,5 +180,56 @@ describe('direct run identity', () => {
     expect(isDirectRunKind('Workflow', 'workflows')).toBe(true)
     expect(isDirectRunKind('CronJob', 'jobs')).toBe(false)
     expect(isDirectRunKind('WorkflowTemplate', 'workflows')).toBe(false)
+  })
+})
+
+describe('JobSet member presentation', () => {
+  it('uses role and native indexes without calling Jobs retained runs', () => {
+    const member = {
+      kind: 'jobs',
+      namespace: 'training',
+      name: 'distributed-workers-2',
+      phase: 'Running',
+      active: true,
+      replicatedJob: 'workers',
+      jobIndex: '2',
+      groupName: 'trainers',
+      groupIndex: '1',
+      running: 1,
+      podTotal: 1,
+      podRunning: 1,
+    }
+
+    expect(jobSetMemberIdentity(member)).toBe('workers #2 · trainers #1 · 1 running pod')
+    expect(pluralizeMemberJobs(200, 240, true)).toBe('200 of 240 Jobs')
+    expect(emptyRunsCopy('JobSet', {})).toEqual({
+      headline: 'No child Jobs yet',
+      body: 'The JobSet controller has not created any readable Jobs yet. A role may still be waiting for its dependencies.',
+    })
+  })
+
+  it('keeps the selected Job as the core Kubernetes intermediate', () => {
+    expect(resourceTargetForRun({
+      kind: 'jobs',
+      namespace: 'training',
+      name: 'distributed-workers-2',
+      phase: 'Running',
+      active: true,
+    })).toEqual({
+      kind: 'jobs',
+      namespace: 'training',
+      name: 'distributed-workers-2',
+      group: undefined,
+    })
+  })
+
+  it('preserves the controller dependency status', () => {
+    expect(jobSetDependencyLabels([
+      { name: 'workers', dependsOn: [{ name: 'coordinator', status: 'Ready' }] },
+      { name: 'report', dependsOn: [{ name: 'workers', status: 'Complete' }] },
+    ])).toEqual([
+      'workers after coordinator is Ready',
+      'report after workers is Complete',
+    ])
   })
 })

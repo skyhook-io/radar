@@ -152,7 +152,17 @@ const BATCH_EXECUTION_KINDS = new Set([
   'WorkflowTemplate',
   'ClusterWorkflowTemplate',
   'ScaledJob',
+  'JobSet',
 ])
+
+export function supportsBatchExecution(kind: string, apiKind: string, group?: string, apiVersion?: string): boolean {
+  if (!BATCH_EXECUTION_KINDS.has(kind)) return false
+  if (kind === 'Job') return isCoreBatchJob(apiKind, group)
+  if (kind === 'JobSet') {
+    return group === 'jobset.x-k8s.io' && apiVersion === 'jobset.x-k8s.io/v1alpha2'
+  }
+  return true
+}
 
 // Stable reference — web renderer wrappers inject platform hooks internally
 const rendererOverrides: RendererOverrides = {
@@ -548,18 +558,6 @@ export function WorkloadView({
     [searchParams, setSearchParams],
   )
 
-  const batchKind = pluralToKind(apiKind)
-  const batchExecution = BATCH_EXECUTION_KINDS.has(batchKind) &&
-    (batchKind !== 'Job' || isCoreBatchJob(apiKind, rest.group))
-  const batchRunsQuery = useWorkloadRuns(apiKind, namespace, name, expanded && batchExecution, {
-    refetchActive: true,
-    clusterScoped: batchKind === 'ClusterWorkflowTemplate',
-  })
-  const relatedTimelineEvents = useMemo(
-    () => workloadRunTimelineEvents(batchRunsQuery.data?.runs ?? []),
-    [batchRunsQuery.data?.runs],
-  )
-
   // Fetch resource with relationships
   const {
     data: resourceResponse,
@@ -579,6 +577,16 @@ export function WorkloadView({
   // of itself. Fall back to the group derived from the fetched resource, then
   // to undefined (which the gate treats as "group unknown → allow").
   const effectiveGroup = rest.group || resourceGroup || undefined
+  const batchKind = pluralToKind(apiKind)
+  const batchExecution = supportsBatchExecution(batchKind, apiKind, effectiveGroup, resource?.apiVersion)
+  const batchRunsQuery = useWorkloadRuns(apiKind, namespace, name, expanded && batchExecution, {
+    refetchActive: true,
+    clusterScoped: batchKind === 'ClusterWorkflowTemplate',
+  })
+  const relatedTimelineEvents = useMemo(
+    () => batchKind === 'JobSet' ? [] : workloadRunTimelineEvents(batchRunsQuery.data?.runs ?? []),
+    [batchKind, batchRunsQuery.data?.runs],
+  )
   // Reachability for a workload IS the reachability of the Services in front of
   // it - a Deployment has no address of its own. Empty for a workload nothing
   // selects, which correctly leaves the tab hidden: there is no path to trace.
@@ -1199,8 +1207,7 @@ export function WorkloadView({
           />
         )}
         renderExpandedOverview={({ kind: k, apiKind, namespace: ns, name: n, resource: res }) =>
-          BATCH_EXECUTION_KINDS.has(k) &&
-          (k !== 'Job' || isCoreBatchJob(apiKind, effectiveGroup)) &&
+          supportsBatchExecution(k, apiKind, effectiveGroup, res?.apiVersion) &&
           res ? (
             <BatchExecutionFullscreen
               kind={k}
@@ -1561,6 +1568,7 @@ const SCHEDULED_LOG_KINDS = new Set([
   'WorkflowTemplate',
   'ClusterWorkflowTemplate',
   'ScaledJob',
+  'JobSet',
 ])
 
 function LogsTabContent({
@@ -1592,7 +1600,7 @@ function LogsTabContent({
   selectedRunKey: string
   onSelectRun: (runKey: string) => void
 }) {
-  if (SCHEDULED_LOG_KINDS.has(kind)) {
+  if (SCHEDULED_LOG_KINDS.has(kind) && supportsBatchExecution(kind, apiKind, group, resource?.apiVersion)) {
     return (
       <div className="h-full">
         <ScheduledWorkloadLogsViewer

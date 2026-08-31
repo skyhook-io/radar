@@ -742,8 +742,7 @@ export function WorkloadView({
   const showMetricsTab = isMetricsAvailable ? isMetricsAvailable(kind, resource) : false
   const showCostTab = isCostAvailable ? isCostAvailable(kind, resource) : false
   const normalizedKind = kindToPlural(kind).toLowerCase()
-  const logsWithoutPods = LOGS_TAB_WITHOUT_PODS_KINDS.has(normalizedKind) &&
-    (normalizedKind !== 'jobs' || isCoreBatchJob(kind, group))
+  const logsWithoutPods = supportsLogsWithoutPods(normalizedKind, kind, group, resource?.apiVersion)
   const logsTabVisible = Boolean(renderLogsTab) && (allPods.length > 0 || logsWithoutPods)
   const metricsTabVisible = Boolean(showMetricsTab && renderMetricsTab)
   const costTabVisible = Boolean(showCostTab && renderCostTab)
@@ -1737,10 +1736,25 @@ const LOGS_TAB_WITHOUT_PODS_KINDS = new Set([
   'workflowtemplates',
   'clusterworkflowtemplates',
   'scaledjobs',
+  'jobsets',
 ])
 const RUNTIME_WORKLOAD_OVERVIEW_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs'])
 const ROLLOUT_STATUS_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets', 'rollouts'])
 type RuntimeOverviewShape = 'replicated' | 'job' | 'cronjob'
+
+export function supportsLogsWithoutPods(
+  normalizedKind: string,
+  kind: string,
+  group?: string,
+  apiVersion?: string,
+): boolean {
+  if (!LOGS_TAB_WITHOUT_PODS_KINDS.has(normalizedKind)) return false
+  if (normalizedKind === 'jobs') return isCoreBatchJob(kind, group)
+  if (normalizedKind === 'jobsets') {
+    return group === 'jobset.x-k8s.io' && apiVersion === 'jobset.x-k8s.io/v1alpha2'
+  }
+  return true
+}
 
 function isRuntimeWorkloadOverviewKind(kind: string, group?: string) {
   const normalizedKind = kindToPlural(kind).toLowerCase()
@@ -3011,7 +3025,7 @@ function podSeverityRank(pod: WorkloadPodInfo): number {
   }
 }
 
-function workloadPodDetail(pod: WorkloadPodInfo): string {
+export function workloadPodDetail(pod: WorkloadPodInfo): string {
   const parts: string[] = []
   if (pod.phase) parts.push(pod.reason ? `${pod.phase} / ${pod.reason}` : pod.phase)
   else if (pod.reason) parts.push(pod.reason)
@@ -3024,7 +3038,7 @@ function workloadPodDetail(pod: WorkloadPodInfo): string {
   return parts.join(' · ')
 }
 
-function podStatusLabel(healthLevel: WorkloadPodInfo['healthLevel'] | undefined, ready: boolean | null): string {
+export function podStatusLabel(healthLevel: WorkloadPodInfo['healthLevel'] | undefined, ready: boolean | null): string {
   if (healthLevel === 'unhealthy') return 'Unhealthy'
   if (healthLevel === 'degraded') return 'Degraded'
   if (healthLevel === 'neutral') return ready ? 'Ready' : 'Neutral'
@@ -3032,7 +3046,7 @@ function podStatusLabel(healthLevel: WorkloadPodInfo['healthLevel'] | undefined,
   return ready === null ? 'Unknown' : ready ? 'Ready' : 'Not ready'
 }
 
-function podStatusClass(healthLevel: WorkloadPodInfo['healthLevel'] | undefined, ready: boolean | null): string {
+export function podStatusClass(healthLevel: WorkloadPodInfo['healthLevel'] | undefined, ready: boolean | null): string {
   if (healthLevel === 'unhealthy') return 'status-unhealthy'
   if (healthLevel === 'degraded') return 'status-degraded'
   if (healthLevel === 'neutral') return 'status-neutral'
@@ -3040,7 +3054,7 @@ function podStatusClass(healthLevel: WorkloadPodInfo['healthLevel'] | undefined,
   return ready ? 'status-healthy' : 'status-degraded'
 }
 
-function podDotClass(healthLevel: WorkloadPodInfo['healthLevel'] | undefined, ready: boolean | null): string {
+export function podDotClass(healthLevel: WorkloadPodInfo['healthLevel'] | undefined, ready: boolean | null): string {
   if (healthLevel === 'unhealthy') return 'bg-red-500'
   if (healthLevel === 'degraded') return 'bg-amber-500'
   if (healthLevel === 'neutral') return 'bg-skyhook-500'

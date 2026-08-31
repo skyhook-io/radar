@@ -61,11 +61,20 @@ export function getJobSetStatus(resource: any): StatusBadge {
   const conditions = resource.status?.conditions || []
 
   const failedCond = conditions.find((c: any) => c.type === 'Failed')
+  const completedCond = conditions.find((c: any) => c.type === 'Completed')
+
+  if (resource.status?.terminalState === 'Failed') {
+    return { text: failedCond?.status === 'True' ? failedCond.reason || 'Failed' : 'Failed', color: healthColors.unhealthy, level: 'unhealthy' }
+  }
+
+  if (resource.status?.terminalState === 'Completed') {
+    return { text: 'Completed', color: healthColors.neutral, level: 'neutral' }
+  }
+
   if (failedCond?.status === 'True') {
     return { text: failedCond.reason || 'Failed', color: healthColors.unhealthy, level: 'unhealthy' }
   }
 
-  const completedCond = conditions.find((c: any) => c.type === 'Completed')
   if (completedCond?.status === 'True') {
     return { text: 'Completed', color: healthColors.neutral, level: 'neutral' }
   }
@@ -75,8 +84,18 @@ export function getJobSetStatus(resource: any): StatusBadge {
     return { text: 'Suspended', color: healthColors.neutral, level: 'neutral' }
   }
 
-  // Running only when child jobs are actually live — a fresh JobSet carries a
-  // minimal status (no conditions, zeroed counts) before reconciliation.
+  const restartingCond = conditions.find((c: any) => c.type === 'RestartingJobSet')
+  if (restartingCond?.status === 'True') {
+    return { text: 'Restarting', color: healthColors.degraded, level: 'degraded' }
+  }
+
+  const startupCond = conditions.find((c: any) => c.type === 'StartupPolicyInProgress')
+  if (startupCond?.status === 'True') {
+    return { text: 'Starting', color: healthColors.degraded, level: 'degraded' }
+  }
+
+  // A fresh JobSet has zeroed counts before reconciliation; only observed live
+  // child Jobs make it Running.
   const live = sumReplicatedJobsField(resource, 'active') + sumReplicatedJobsField(resource, 'ready')
   if (live > 0) {
     return { text: 'Running', color: healthColors.healthy, level: 'healthy' }
