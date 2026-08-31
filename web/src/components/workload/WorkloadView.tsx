@@ -1161,7 +1161,7 @@ export function WorkloadView({
         // Timeline
         allEvents={allEvents}
         relatedTimelineEvents={relatedTimelineEvents}
-        eventsLoading={eventsLoading || (batchExecution && batchRunsQuery.isLoading)}
+        eventsLoading={eventsLoading || (batchExecution && batchKind !== 'JobSet' && batchRunsQuery.isLoading)}
         topology={topology}
         resourceFocusedK8sEvents={resourceFocusedK8sEvents}
         resourceFocusedUpdates={resourceFocusedUpdates}

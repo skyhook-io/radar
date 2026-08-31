@@ -177,6 +177,7 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
   }), [runs, runFilter, runSearch])
   const source = sourceFacts(kind, definitionResource, runs)
   const phaseCounts = countPhases(runs)
+  const phaseCountQualifier = memberCollection && runsQuery.data?.truncated ? ' in shown Jobs' : ''
   const retentionCopy = memberCollection ? null : retentionHistoryCopy(kind, resource, phaseCounts)
   const fetchTarget = selectedRun && scheduled ? resourceTargetForRun(selectedRun) : null
   const selectedResourceQuery = useResource<any>(
@@ -233,9 +234,9 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
               </div>
             </div>
             <div className="mt-2 flex flex-wrap gap-1 text-[10px] text-theme-text-tertiary">
-              {phaseCounts.running > 0 && <span className="rounded bg-theme-hover px-1.5 py-0.5">{phaseCounts.running} running</span>}
-              {phaseCounts.failed > 0 && <span className="rounded bg-theme-hover px-1.5 py-0.5">{phaseCounts.failed} failed</span>}
-              {phaseCounts.succeeded > 0 && <span className="rounded bg-theme-hover px-1.5 py-0.5">{phaseCounts.succeeded} succeeded</span>}
+              {phaseCounts.running > 0 && <span className="rounded bg-theme-hover px-1.5 py-0.5">{phaseCounts.running} running{phaseCountQualifier}</span>}
+              {phaseCounts.failed > 0 && <span className="rounded bg-theme-hover px-1.5 py-0.5">{phaseCounts.failed} failed{phaseCountQualifier}</span>}
+              {phaseCounts.succeeded > 0 && <span className="rounded bg-theme-hover px-1.5 py-0.5">{phaseCounts.succeeded} succeeded{phaseCountQualifier}</span>}
             </div>
             <p className="mt-2 text-[10px] leading-4 text-theme-text-tertiary">
               {memberCollection ? 'Controller-owned Jobs currently visible in Kubernetes.' : 'Retained Kubernetes objects, not all-time history.'}
@@ -1111,8 +1112,8 @@ function JobSetMemberPods({
         <EmptyState
           tone="neutral"
           variant="card"
-          headline="No Pods yet"
-          body="The Job controller has not created any readable Pods for this Job."
+          headline="No Pods currently retained"
+          body="No readable Pods owned by this Job are currently available. They may not exist yet or may already have been cleaned up."
         />
       ) : (
         <div className="divide-y divide-theme-border rounded-md border border-theme-border">
@@ -1569,8 +1570,8 @@ function runKindPluralForSchedule(kind: string): string {
 export function emptyRunsCopy(kind: string, resource: any): { headline: string; body: string } {
   if (kind === 'JobSet') {
     return {
-      headline: 'No child Jobs yet',
-      body: 'The JobSet controller has not created any readable Jobs yet. A role may still be waiting for its dependencies.',
+      headline: 'No child Jobs currently retained',
+      body: 'No readable Jobs owned by this JobSet are currently available. They may be waiting on dependencies or may already have been cleaned up.',
     }
   }
   if (isTemplateKind(kind)) {
