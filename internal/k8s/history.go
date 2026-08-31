@@ -87,8 +87,8 @@ var diffFunctions = map[string]kindDiffRegistration{
 // changes were detected.
 func ComputeDiff(kind string, oldObj, newObj any) *DiffInfo {
 	registration, ok := diffFunctions[kind]
-	oldAPIVersion := extractAPIVersion(oldObj)
-	newAPIVersion := extractAPIVersion(newObj)
+	oldAPIVersion := extractAPIVersion(kind, oldObj)
+	newAPIVersion := extractAPIVersion(kind, newObj)
 	if oldAPIVersion != "" && newAPIVersion != "" && GroupFromAPIVersion(oldAPIVersion) != GroupFromAPIVersion(newAPIVersion) {
 		return nil
 	}

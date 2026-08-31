@@ -146,37 +146,29 @@ func GetCascadeDeletePreview(root ResourceRef, topo *Topology, dp DynamicProvide
 			// Two CRDs can share a lowercase plural, so the deterministic
 			// kind/ns/name ID may resolve to the wrong API group. Resolve
 			// against each node's recorded API group instead.
-			if matched, _ := findNodeByRef(topo.Nodes, root); matched != nil {
+			if matched, _ := findNodeByRef(topo.Nodes, root, dp); matched != nil {
 				rootNode = matched
 				rootID = matched.ID
 				ok = true
 			}
 		}
-	} else {
-		if !ok {
+	} else if !ok || !nodeIsCanonicalBuiltin(rootNode) {
+		matched, ambiguous := findNodeByRef(topo.Nodes, root, dp)
+		if ambiguous || matched == nil {
 			return preview
 		}
-		rootKind := string(rootNode.Kind)
-		if externalKind, found := collisionKindToK8sKind[rootNode.Kind]; found {
-			rootKind = externalKind
-		}
-		matches := 0
-		for i := range topo.Nodes {
-			node := &topo.Nodes[i]
-			nodeKind := string(node.Kind)
-			if externalKind, found := collisionKindToK8sKind[node.Kind]; found {
-				nodeKind = externalKind
-			}
-			if strings.EqualFold(nodeKind, rootKind) && node.Name == root.Name && nodeNamespaceFromData(node) == root.Namespace {
-				matches++
-			}
-		}
-		if matches > 1 {
-			return preview
-		}
+		rootNode = matched
+		rootID = matched.ID
+		ok = true
 	}
 	if !ok {
 		return preview
+	}
+	if resolved := resourceRefForNode(rootNode, dp); resolved != nil {
+		if root.Group != "" {
+			resolved.Group = root.Group
+		}
+		preview.Root = *resolved
 	}
 	preview.RootResolved = true
 
@@ -325,8 +317,21 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	}
 	nodeByID := lookupIndex.nodesByID
 	directNode, directExists := nodeByID[nodeID]
+	resourceKind := objectKind
+	if resourceKind == "" {
+		resourceKind = normalizeKindWithGroup(kind, objectGroup, dp)
+	}
+	resourceGroup := objectGroup
+	if builtinGroup, builtin := resourceid.BuiltinGroup(resourceKind); resourceGroup == "" && builtin {
+		resourceGroup = builtinGroup
+	}
+	if exactNode := lookupIndex.nodesByResourceKey[resourceid.ResourceKey(resourceGroup, resourceKind, namespace, name)]; exactNode != nil {
+		nodeID = exactNode.ID
+		directNode = exactNode
+		directExists = true
+	}
 	if !directExists || objectGroup != "" && !nodeMatchesAPIGroup(directNode, objectGroup) {
-		if matched, _ := findNodeByRef(topo.Nodes, ResourceRef{Kind: resolvedKind, Namespace: namespace, Name: name, Group: objectGroup}); matched != nil {
+		if matched, _ := findNodeByRef(topo.Nodes, ResourceRef{Kind: resolvedKind, Namespace: namespace, Name: name, Group: objectGroup}, dp); matched != nil {
 			nodeID = matched.ID
 		} else if objectGroup != "" {
 			nodeID = ""
