@@ -1,0 +1,59 @@
+apiVersion: ray.io/v1
+kind: RayService
+metadata:
+  name: image-service
+  namespace: ml
+spec:
+  rayClusterConfig:
+    rayVersion: "2.49.0"
+status:
+  numServeEndpoints: 4
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: NonZeroServeEndpoints
+      message: Four Serve endpoints are ready across both runtime slots.
+      lastTransitionTime: "2026-08-31T11:00:00Z"
+    - type: UpgradeInProgress
+      status: "True"
+      reason: BothActivePendingClustersExist
+      message: Active and pending Ray clusters both exist.
+      lastTransitionTime: "2026-08-31T11:05:00Z"
+    - type: RollbackInProgress
+      status: "True"
+      reason: DesiredClusterSpecChanged
+      message: Traffic is returning to the active Ray cluster.
+      lastTransitionTime: "2026-08-31T11:10:00Z"
+  activeServiceStatus:
+    rayClusterName: image-service-raycluster-old
+    targetCapacity: 100
+    trafficRoutedPercent: 65
+    rayClusterStatus:
+      state: failed
+      conditions:
+        - type: HeadPodReady
+          status: "True"
+          reason: HeadPodReady
+          message: The active head Pod is ready.
+          lastTransitionTime: "2026-08-31T10:55:00Z"
+        - type: ReplicaFailure
+          status: "True"
+          reason: FailedCreateWorkerPod
+          message: One active worker Pod could not be created.
+          lastTransitionTime: "2026-08-31T11:09:00Z"
+  pendingServiceStatus:
+    rayClusterName: image-service-raycluster-new
+    targetCapacity: 0
+    trafficRoutedPercent: 0
+    rayClusterStatus:
+      conditions:
+        - type: RayClusterProvisioned
+          status: "True"
+          reason: AllPodRunningAndReadyFirstTime
+          message: The pending Ray cluster was provisioned.
+          lastTransitionTime: "2026-08-31T11:04:00Z"
+        - type: HeadPodReady
+          status: "False"
+          reason: PodNotReady
+          message: The pending head Pod is not ready.
+          lastTransitionTime: "2026-08-31T11:08:00Z"
