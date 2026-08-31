@@ -554,12 +554,21 @@ export function getCNPGClusterMonitoring(resource: any): {
   }
 }
 
+// CNPG carries replica-cluster state in `spec.replica`. Presence is not the
+// signal: promoting a replica to primary mutates the stanza's fields but leaves
+// it in place. This mirrors the operator's own Cluster.IsReplica() — `enabled`
+// decides when set; otherwise the cluster is a replica only while it is not the
+// designated primary of the distributed topology ((self || name) != primary).
 export function getCNPGClusterIsReplica(resource: any): boolean {
-  return !!resource.spec?.replicaCluster
+  const replica = resource.spec?.replica
+  if (!replica) return false
+  if (replica.enabled != null) return replica.enabled === true
+  const self = replica.self || resource.metadata?.name
+  return self !== replica.primary
 }
 
 export function getCNPGClusterReplicaSource(resource: any): string {
-  const replica = resource.spec?.replicaCluster
+  const replica = resource.spec?.replica
   if (!replica) return '-'
   return replica.source || replica.primary || '-'
 }

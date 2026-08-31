@@ -27,6 +27,8 @@ import {
   getCNPGClusterDisplayState,
   getCNPGClusterInstances,
   getCNPGPoolerInstances,
+  getCNPGClusterIsReplica,
+  getCNPGClusterReplicaSource,
 } from './resource-utils-cnpg'
 import { getCellFilterValue } from './resource-utils'
 
@@ -714,5 +716,75 @@ describe('CNPG scheduled backup lateness', () => {
   it('says nothing when the operator published no next-run time', () => {
     expect(getCNPGScheduledBackupNextSchedule(sb(false))).toBe('-')
     expect(getCNPGScheduledBackupStatus(sb(false, undefined, at(-24 * 60 * MIN))).level).toBe('healthy')
+  })
+})
+
+describe('getCNPGClusterIsReplica — the live replica-cluster role, per CNPG semantics', () => {
+  // CNPG carries replica-cluster state in `spec.replica` (enabled/primary/self/source),
+  // and its own Cluster.IsReplica() reads: enabled wins when set; otherwise the
+  // cluster is a replica only while (self || name) != primary. Promotion mutates
+  // those fields but leaves the stanza in place, so presence alone cannot be the
+  // signal.
+
+  it('standalone replica cluster (replica mode enabled) reads as a replica', () => {
+    const resource = {
+      metadata: { name: 'pg-eu' },
+      spec: { replica: { source: 'pg-us', enabled: true } },
+    }
+    expect(getCNPGClusterIsReplica(resource)).toBe(true)
+  })
+
+  it('a promoted standalone cluster (replica.enabled turned off) is no longer a replica', () => {
+    const resource = {
+      metadata: { name: 'pg-eu' },
+      spec: { replica: { source: 'pg-us', enabled: false } },
+    }
+    expect(getCNPGClusterIsReplica(resource)).toBe(false)
+  })
+
+  it('distributed topology: a designated replica (primary names another cluster) reads as a replica', () => {
+    const resource = {
+      metadata: { name: 'pg-eu' },
+      spec: { replica: { source: 'pg-us', primary: 'pg-us', self: 'pg-eu' } },
+    }
+    expect(getCNPGClusterIsReplica(resource)).toBe(true)
+  })
+
+  it('distributed topology: after promotion (primary now names this cluster) it is the primary, stanza still present', () => {
+    const resource = {
+      metadata: { name: 'pg-eu' },
+      spec: { replica: { source: 'pg-us', primary: 'pg-eu', self: 'pg-eu' } },
+    }
+    expect(getCNPGClusterIsReplica(resource)).toBe(false)
+  })
+
+  it('distributed topology without self falls back to the resource name', () => {
+    const promoted = {
+      metadata: { name: 'pg-eu' },
+      spec: { replica: { source: 'pg-us', primary: 'pg-eu' } },
+    }
+    expect(getCNPGClusterIsReplica(promoted)).toBe(false)
+
+    const stillReplica = {
+      metadata: { name: 'pg-eu' },
+      spec: { replica: { source: 'pg-us', primary: 'pg-us' } },
+    }
+    expect(getCNPGClusterIsReplica(stillReplica)).toBe(true)
+  })
+
+  it('a bootstrapping standalone replica with only a source (no enabled, no primary) is a replica', () => {
+    // The stanza's source is required; before the operator writes enabled, the
+    // cluster is still a replica — (self || name) never equals an unset primary.
+    const resource = { metadata: { name: 'pg-eu' }, spec: { replica: { source: 'pg-us' } } }
+    expect(getCNPGClusterIsReplica(resource)).toBe(true)
+  })
+
+  it('an ordinary standalone cluster with no replica stanza is not a replica', () => {
+    expect(getCNPGClusterIsReplica({ metadata: { name: 'pg' }, spec: { instances: 3 } })).toBe(false)
+  })
+
+  it('getCNPGClusterReplicaSource reads the source from the replica stanza', () => {
+    const resource = { metadata: { name: 'pg-eu' }, spec: { replica: { source: 'pg-us', enabled: true } } }
+    expect(getCNPGClusterReplicaSource(resource)).toBe('pg-us')
   })
 })

@@ -116,3 +116,45 @@ describe('recovery points must be readable as ages, not raw machine timestamps',
     expect(html).toContain('2026-01-30 09:40:37 UTC')
   })
 })
+
+describe('CNPGClusterRenderer — the replica-cluster role tracks live state, not stanza presence', () => {
+  const withReplica = (replica: any, name = 'pg-eu') => ({
+    apiVersion: 'postgresql.cnpg.io/v1',
+    kind: 'Cluster',
+    metadata: { name, namespace: 'db' },
+    spec: { instances: 3, replica },
+    status: { phase: 'Cluster in healthy state', readyInstances: 3 },
+  })
+
+  it('shows the Replica Cluster section for a genuine replica (replica mode enabled)', () => {
+    const out = renderToString(<CNPGClusterRenderer data={withReplica({ source: 'pg-us', enabled: true })} />)
+    expect(out).toContain('Replica Cluster')
+    expect(out).toContain('Role')
+    expect(out).toContain('pg-us')
+  })
+
+  it('shows Replica for a distributed-topology cluster whose primary is elsewhere', () => {
+    const out = renderToString(
+      <CNPGClusterRenderer data={withReplica({ source: 'pg-us', primary: 'pg-us', self: 'pg-eu' })} />,
+    )
+    expect(out).toContain('Replica Cluster')
+  })
+
+  it('drops the Replica label once a distributed replica is promoted, though the stanza remains', () => {
+    // Promotion sets replica.primary to this cluster; the stanza is not removed.
+    const out = renderToString(
+      <CNPGClusterRenderer data={withReplica({ source: 'pg-us', primary: 'pg-eu', self: 'pg-eu' })} />,
+    )
+    expect(out).not.toContain('Replica Cluster')
+  })
+
+  it('drops the Replica label once a standalone replica is promoted (replica.enabled off)', () => {
+    const out = renderToString(<CNPGClusterRenderer data={withReplica({ source: 'pg-us', enabled: false })} />)
+    expect(out).not.toContain('Replica Cluster')
+  })
+
+  it('a normal standalone cluster shows no Replica Cluster section', () => {
+    const out = renderToString(<CNPGClusterRenderer data={cluster('Cluster in healthy state', 3)} />)
+    expect(out).not.toContain('Replica Cluster')
+  })
+})
