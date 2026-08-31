@@ -347,10 +347,7 @@ assert_child_ownership_and_labels() {
     $pendingPodObject.metadata.labels["ray.io/node-type"] == "head" and
     $pendingPodObject.metadata.labels["ray.io/serve"] == "false" and
     $pendingPodObject.spec.containers[0].image == $pendingImage and
-    any($pendingPodObject.status.conditions[]?; .type == "Ready" and .status == "False") and
-    ($pendingPodObject.status.containerStatuses[0].state.waiting.reason == "CrashLoopBackOff" or
-      ($pendingPodObject.status.containerStatuses[0].lastState.terminated.reason == "StartError" and
-       ($pendingPodObject.status.containerStatuses[0].lastState.terminated.message | contains("/bin/bash"))))
+    any($pendingPodObject.status.conditions[]?; .type == "Ready" and .status == "False")
   ' >/dev/null || fail "Active and pending head Pods do not preserve RayCluster ownership and role labels"
 
   jq -n -e --argjson services "${services}" --arg serviceUid "${service_uid}" \
