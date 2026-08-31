@@ -88,4 +88,10 @@ describe('gitOpsRouteForKind', () => {
     expect(gitOpsRouteForKind('Application', 'default', 'demo'))
       .toBe('/gitops/detail/applications/default/demo')
   })
+
+  it('retains the fallback for an unresolved historical lane with an empty placeholder group', () => {
+    expect(gitOpsRouteForKind('HelmRelease', 'flux-system', 'demo', '', false))
+      .toBe('/gitops/detail/helmreleases/flux-system/demo')
+    expect(gitOpsRouteForKind('HelmRelease', 'flux-system', 'demo', '', true)).toBeNull()
+  })
 })
