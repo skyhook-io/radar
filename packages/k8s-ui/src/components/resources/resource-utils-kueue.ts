@@ -3,6 +3,8 @@
 import type { StatusBadge } from './resource-utils'
 import { healthColors } from './resource-utils'
 
+const failedFinishedReasons = new Set(['Failed', 'FailedToStart', 'OutOfSync', 'OwnerNotFound'])
+
 // ============================================================================
 // SHARED HELPERS
 // ============================================================================
@@ -84,8 +86,8 @@ export function getLocalQueueAdmittedWorkloads(resource: any): string {
 export function getKueueWorkloadStatus(resource: any): StatusBadge {
   const finished = findCondition(resource, 'Finished')
   if (finished?.status === 'True') {
-    if (finished.reason === 'Failed') {
-      return { text: 'Failed', color: healthColors.unhealthy, level: 'unhealthy' }
+    if (failedFinishedReasons.has(finished.reason)) {
+      return { text: finished.reason, color: healthColors.unhealthy, level: 'unhealthy' }
     }
     return { text: 'Finished', color: healthColors.neutral, level: 'neutral' }
   }

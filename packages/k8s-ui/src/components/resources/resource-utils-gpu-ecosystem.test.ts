@@ -37,6 +37,23 @@ describe('GPU ecosystem API contracts', () => {
     expect(getKueueWorkloadStatus(workload).text).toBe('Evicted')
   })
 
+  it('distinguishes Kueue terminal failures from successful or replaced workloads', () => {
+    for (const reason of ['Failed', 'FailedToStart', 'OutOfSync', 'OwnerNotFound']) {
+      expect(getKueueWorkloadStatus({
+        status: { conditions: [{ type: 'Finished', status: 'True', reason }] },
+      })).toMatchObject({ text: reason, level: 'unhealthy' })
+    }
+
+    for (const reason of ['Succeeded', 'WorkloadSliceReplaced']) {
+      expect(getKueueWorkloadStatus({
+        status: { conditions: [
+          { type: 'Finished', status: 'True', reason },
+          { type: 'Evicted', status: 'True', reason: 'FlavorMigration' },
+        ] },
+      })).toMatchObject({ text: 'Finished', level: 'neutral' })
+    }
+  })
+
   it('lets KubeRay conditions outrank deprecated state fields', () => {
     expect(getRayClusterStatus({
       status: {

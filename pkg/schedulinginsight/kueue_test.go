@@ -173,6 +173,15 @@ func TestWorkloadStagePrecedenceTracksCurrentState(t *testing.T) {
 			wantStage: resourcecontext.SchedulingFinished,
 		},
 		{
+			name: "failed start is terminal failure despite active admission",
+			conditions: map[string]workloadCondition{
+				"Finished":  condition("Finished", "True", "FailedToStart"),
+				"Admitted":  condition("Admitted", "True", "Admitted"),
+				"PodsReady": condition("PodsReady", "True", "Started"),
+			},
+			wantStage: resourcecontext.SchedulingFailed,
+		},
+		{
 			name: "out of sync finish is terminal failure not blocked",
 			conditions: map[string]workloadCondition{
 				"Finished": condition("Finished", "True", "OutOfSync"),

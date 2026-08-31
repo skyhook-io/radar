@@ -114,7 +114,7 @@ func workloadStage(conditions map[string]workloadCondition, hasIncompleteCheck, 
 	if condition, ok := trueCondition(conditions, "Finished"); ok {
 		stage := resourcecontext.SchedulingFinished
 		switch condition.Reason {
-		case "Failed", "OutOfSync", "OwnerNotFound":
+		case "Failed", "FailedToStart", "OutOfSync", "OwnerNotFound":
 			stage = resourcecontext.SchedulingFailed
 		}
 		return stage, nil
