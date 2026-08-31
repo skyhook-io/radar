@@ -7,6 +7,7 @@ import {
   isDirectRunKind,
   jobSetDependencyLabels,
   jobSetMemberIdentity,
+  jobSetStatusFacts,
   pluralizeMemberJobs,
   resourceTargetForRun,
   retentionHistoryCopy,
@@ -230,6 +231,20 @@ describe('JobSet member presentation', () => {
     ])).toEqual([
       'workers after coordinator is Ready',
       'report after workers is Complete',
+    ])
+  })
+
+  it('does not turn absent or partial controller status into complete zeroes', () => {
+    expect(jobSetStatusFacts({}, 2)).toEqual([
+      ['Ready / succeeded / failed', 'Not reported'],
+    ])
+    expect(jobSetStatusFacts({
+      status: {
+        replicatedJobsStatus: [{ name: 'coordinator', ready: 1, succeeded: 0, failed: 0 }],
+      },
+    }, 2)).toEqual([
+      ['Ready / succeeded / failed', '1 / 0 / 0'],
+      ['Controller status coverage', '1 of 2 roles reported'],
     ])
   })
 })

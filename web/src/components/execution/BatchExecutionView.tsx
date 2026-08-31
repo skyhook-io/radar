@@ -582,10 +582,7 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
             : '-',
         ],
         ['Declared Jobs', String(declaredJobs)],
-        [
-          'Ready / succeeded / failed',
-          `${getJobSetReadyJobs(resource)} / ${getJobSetSucceededJobs(resource)} / ${getJobSetFailedJobs(resource)}`,
-        ],
+        ...jobSetStatusFacts(resource, replicatedJobs.length),
         ['Dependencies', dependencies.length ? dependencies.join(', ') : 'None'],
       ],
       definition: null,
@@ -1236,6 +1233,21 @@ export function jobSetDependencyLabels(replicatedJobs: any[]): string[] {
         })
       : [],
   )
+}
+
+export function jobSetStatusFacts(resource: any, declaredRoleCount: number): Array<[string, string]> {
+  const statuses = resource?.status?.replicatedJobsStatus
+  if (!Array.isArray(statuses) || statuses.length === 0) {
+    return [['Ready / succeeded / failed', 'Not reported']]
+  }
+  const facts: Array<[string, string]> = [[
+    'Ready / succeeded / failed',
+    `${getJobSetReadyJobs(resource)} / ${getJobSetSucceededJobs(resource)} / ${getJobSetFailedJobs(resource)}`,
+  ]]
+  if (statuses.length < declaredRoleCount) {
+    facts.push(['Controller status coverage', `${statuses.length} of ${declaredRoleCount} roles reported`])
+  }
+  return facts
 }
 
 function FactTile({ label, value, tone, mono }: { label: string; value: string | number; tone?: string; mono?: boolean }) {
