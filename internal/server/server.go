@@ -97,7 +97,6 @@ type Server struct {
 	newExecutor     func(*rest.Config, *url.URL) (remotecommand.Executor, error)
 	cloudConnectCfg CloudConnectConfig
 	cloudInstall    *cloudInstallManager
-
 	// nsPreferences holds each user's active-namespace pick from the in-app
 	// switcher. Key shape: "<username>\x00<contextName>" when auth is enabled,
 	// "\x00<contextName>" when auth is disabled. Cleared on context switch
@@ -517,6 +516,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/diagnostics", s.handleDiagnostics)
 			r.Get("/auth/me", s.handleAuthMe)
 			r.Get("/version-check", s.handleVersionCheck)
+			r.Post("/version-check/browser", s.handleVersionCheckBrowser)
 			r.Get("/dashboard", s.handleDashboard)
 			r.Get("/vitals", s.handleVitals)
 			r.Get("/dashboard/crds", s.handleDashboardCRDs)
@@ -1227,8 +1227,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleVersionCheck(w http.ResponseWriter, r *http.Request) {
-	info := version.CheckForUpdate(r.Context())
-	s.writeJSON(w, info)
+	if deploymentMode() == k8s.DeploymentModeCloud {
+		s.writeJSON(w, version.CheckForUpdateRelease(r.Context()))
+		return
+	}
+	s.writeJSON(w, version.CheckForUpdate(r.Context()))
 }
 
 func (s *Server) handleClusterInfo(w http.ResponseWriter, r *http.Request) {

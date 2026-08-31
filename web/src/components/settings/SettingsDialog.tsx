@@ -12,7 +12,7 @@ import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
 import { apiUrl, getAuthHeaders, getCredentialsMode, routePath } from '../../api/config'
 import {
-  useCloudRole, useVersionCheck, useClusterInfo, usePrometheusStatus, useArgoStatus,
+  useCloudRole, useVersionCheck, useClusterInfo, usePrometheusStatus, useArgoStatus, useCapabilities,
 } from '../../api/client'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
 import { Input, SelectMenu } from '@skyhook-io/k8s-ui'
@@ -21,6 +21,7 @@ import { AISettingsSection, type AIDraft } from '../diagnose/AISettings'
 import { MyPermissionsContent } from './MyPermissionsDialog'
 import { useDiagnose } from '../diagnose/DiagnoseContext'
 import { currencyOptionsForValue } from './currency-options'
+import { versionUpdateURL } from '../../utils/version'
 
 // The loopback URL an MCP client is told to connect to. Shared by the overview
 // row and the MCP section: both must carry the base path, or the URL they
@@ -911,6 +912,8 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
   const { data: cluster } = useClusterInfo()
   const { data: prom } = usePrometheusStatus()
   const { data: argo } = useArgoStatus(active)
+  const { data: capabilitiesData } = useCapabilities()
+  const deploymentMode = capabilitiesData ? (capabilitiesData.deployment?.mode ?? 'local') : undefined
   const { data: version } = useVersionCheck()
   const capabilities = useCapabilitiesContext()
   const diag = useDiagnose()
@@ -967,9 +970,9 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
 
   return (
     <div className="space-y-4">
-      {version?.updateAvailable && (
+      {version?.updateAvailable && deploymentMode !== undefined && deploymentMode !== 'cloud' && (
         <a
-          href={version.releaseUrl}
+          href={versionUpdateURL(deploymentMode, version.releaseUrl)}
           target="_blank"
           rel="noreferrer"
           className="flex items-center gap-2 px-3 py-2 text-xs rounded-md border border-skyhook-500/30 bg-skyhook-500/10 hover:bg-skyhook-500/15 transition-colors"

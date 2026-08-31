@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from 'react'
-import { useDashboard, useDashboardCRDs, useDashboardHelm, useIssues, type IssuesResponse } from '../../api/client'
+import { useCloudConnectSelf, useDashboard, useDashboardCRDs, useDashboardHelm, useIssues, useVersionCheck, type IssuesResponse } from '../../api/client'
 import { useConnection } from '../../context/ConnectionContext'
 import type { ClusterLoadState } from '../../types/clusterLoadState'
 import type { ExtendedMainView, Topology, SelectedResource } from '../../types'
@@ -31,6 +31,8 @@ import { formatCompactAge } from '@skyhook-io/k8s-ui/utils/format'
 import { ClusterHealthCard } from './ClusterHealthCard'
 import { AlertTriangle, CheckCircle, Loader2, Shield } from 'lucide-react'
 import { clsx } from 'clsx'
+import { getVersionUpdateStatus } from '../../utils/version'
+import { RadarVersionLine } from './RadarVersionLine'
 
 interface HomeViewProps {
   namespaces: string[]
@@ -48,14 +50,17 @@ interface HomeViewProps {
   onNavigateToCerts?: () => void
   // Omitted when an embedded host owns /checks, leaving the version as plain text.
   onNavigateToUpgradeImpact?: () => void
+  onNavigateToHelmRelease?: (namespace: string, release: string) => void
+  onNavigateToManagerPath?: (path: string) => void
 }
 
-export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNavigateToView, onNavigateToResourceKind, onNavigateToResource, onNavigateToCerts, onNavigateToUpgradeImpact }: HomeViewProps) {
+export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNavigateToView, onNavigateToResourceKind, onNavigateToResource, onNavigateToCerts, onNavigateToUpgradeImpact, onNavigateToHelmRelease, onNavigateToManagerPath }: HomeViewProps) {
   // The card itself decides whether the cluster has a capacity story
   // (available, softened-denied, or karpenterless-with-managers/groups) and
   // returns null otherwise — the outer gate only excludes states with nothing
   // to fetch against.
-  const karpenterState = useCapabilitiesContext().karpenter?.state
+  const capabilities = useCapabilitiesContext()
+  const karpenterState = capabilities.karpenter?.state
   const capacityCardPossible =
     karpenterState === 'available' || karpenterState === 'denied' || karpenterState === 'not_detected'
   const { data, isLoading, error, dataUpdatedAt, refetch } = useDashboard(namespaces)
@@ -64,6 +69,12 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
   const issues = issuesData?.issues ?? []
   const issueCount = issuesData?.total_matched ?? issuesData?.total ?? issues.length
   const hasCriticalIssues = issues.some((issue) => issue.severity === 'critical')
+  const deploymentMode = capabilities.deployment?.mode ?? 'local'
+  const { data: versionInfo } = useVersionCheck()
+  const showHomeUpgrade = deploymentMode === 'in-cluster'
+    && !!versionInfo?.updateAvailable
+    && getVersionUpdateStatus(versionInfo.currentVersion, versionInfo.latestVersion).tier !== 'none'
+  const { data: installationManager, isLoading: installationManagerLoading } = useCloudConnectSelf(showHomeUpgrade)
 
   // SSE is cluster-wide on small/medium clusters; the picker only narrows the
   // dashboard summary, so re-apply the filter here or the legend disagrees.
@@ -127,6 +138,15 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
         )}
         {/* Row 1: Cluster Health Card (combined health + resource counts) */}
         <ClusterHealthCard
+          radarVersion={deploymentMode === 'in-cluster' && versionInfo ? (
+            <RadarVersionLine
+              version={versionInfo}
+              manager={installationManager}
+              managerLoading={installationManagerLoading}
+              onNavigateToHelmRelease={onNavigateToHelmRelease}
+              onNavigateToGitOps={onNavigateToManagerPath}
+            />
+          ) : undefined}
           freshness={
             <FreshnessControl
               mode="auto"

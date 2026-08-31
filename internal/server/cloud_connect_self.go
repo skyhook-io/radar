@@ -34,7 +34,8 @@ type cloudConnectSelf struct {
 	DeploymentName string `json:"deploymentName,omitempty"`
 	Chart          string `json:"chart,omitempty"`
 	// Controller names the GitOps object that owns this install, when one does.
-	Controller string `json:"controller,omitempty"`
+	Controller    string       `json:"controller,omitempty"`
+	ControllerRef *subject.Ref `json:"controllerRef,omitempty"`
 	// WizardURL deep-links the Hub's connect wizard with this install's real
 	// target, so it renders the existing-install artifact for the right release
 	// instead of guessing. Empty when the handoff must go through the CLI —
@@ -139,9 +140,13 @@ func (s *Server) inspectSelfInstall(ctx context.Context, r *http.Request, namesp
 		// A release name is required even when verified: the wizard's GitOps
 		// artifact is a Helm values patch, so an installation with no Helm
 		// release identity has nothing for it to patch.
-		if target.Ownership.Classification == cloudinstall.OwnershipGitOpsVerified && target.ReleaseName != "" && owner != nil {
-			if method := wizardMethodFor(owner.Ref); method != "" {
-				self.WizardURL = s.wizardInstallURL(target.Namespace, target.ReleaseName, method)
+		if target.Ownership.Classification == cloudinstall.OwnershipGitOpsVerified && owner != nil {
+			controllerRef := owner.Ref
+			self.ControllerRef = &controllerRef
+			if target.ReleaseName != "" {
+				if method := wizardMethodFor(owner.Ref); method != "" {
+					self.WizardURL = s.wizardInstallURL(target.Namespace, target.ReleaseName, method)
+				}
 			}
 		}
 	case cloudinstall.OwnershipAmbiguous:

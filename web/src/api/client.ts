@@ -55,8 +55,9 @@ import type {
   PodEnvironmentRevealResponse,
 } from '../types'
 import type { GitOpsOperationResponse } from '../types/gitops'
-import { getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
+import { apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
 import { apiVersionToGroup, pluralToKind } from '../utils/navigation'
+import type { DeploymentMode } from '../types'
 
 // Auto-refresh cadences (ms) — named constants for each polled hook's
 // refetchInterval below, so the poll rate reads clearly at each call site.
@@ -1516,13 +1517,68 @@ export interface VersionInfo {
   error?: string;
 }
 
+const UPDATE_CHECK_STORAGE_KEY_PREFIX = 'radar-update-check'
+
+export function utcDay(now: Date): string {
+  return now.toISOString().slice(0, 10)
+}
+
+export function markDailyUpdateCheckAttempt(
+  storage: Pick<Storage, 'getItem' | 'setItem'>,
+  apiBase: string,
+  now: Date,
+): boolean {
+  const storageKey = `${UPDATE_CHECK_STORAGE_KEY_PREFIX}:${apiBase}`
+  const day = utcDay(now)
+  try {
+    if (storage.getItem(storageKey) === day) return false
+
+    storage.setItem(storageKey, day)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function markUpdateCheckAttempt(): boolean {
+  try {
+    return markDailyUpdateCheckAttempt(localStorage, getApiBase(), new Date())
+  } catch {
+    return false
+  }
+}
+
+export async function triggerDailyUpdateCheck(
+  deploymentMode: DeploymentMode | undefined,
+): Promise<void> {
+  if (deploymentMode !== 'in-cluster' || !markUpdateCheckAttempt()) return
+  await fetch(apiUrl('/version-check/browser'), {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    credentials: getCredentialsMode(),
+    keepalive: true,
+  })
+}
+
 export function useVersionCheck() {
-  return useQuery<VersionInfo>({
-    queryKey: ["version-check"],
-    queryFn: () => fetchJSON("/version-check"),
+  const capabilities = useCapabilities()
+  const apiBase = getApiBase()
+  const deploymentMode = capabilities.data
+    ? (capabilities.data.deployment?.mode ?? 'local')
+    : undefined
+
+  const query = useQuery<VersionInfo>({
+    queryKey: ["version-check", apiBase],
+    queryFn: () => fetchJSON('/version-check'),
     staleTime: 60 * 60 * 1000, // 1 hour
     retry: false, // Don't retry on failure
   });
+
+  useEffect(() => {
+    if (query.isSuccess) void triggerDailyUpdateCheck(deploymentMode).catch(() => {})
+  }, [apiBase, deploymentMode, query.isSuccess])
+
+  return query;
 }
 
 // ============================================================================
@@ -1847,6 +1903,12 @@ export interface CloudConnectSelf {
   deploymentName?: string
   chart?: string
   controller?: string
+  controllerRef?: {
+    group?: string
+    kind: string
+    namespace?: string
+    name: string
+  }
   wizardUrl?: string
 }
 
