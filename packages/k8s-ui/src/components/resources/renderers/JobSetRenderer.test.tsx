@@ -144,6 +144,26 @@ describe('JobSetRenderer', () => {
     expect(html).not.toContain('Ready</span> <span')
   })
 
+  it('uses the API default of one Job when replicas is omitted and preserves explicit zero', () => {
+    const defaulted = currentJobSet()
+    defaulted.spec.replicatedJobs = [{ name: 'defaulted', template: { spec: {} } }]
+    defaulted.status.replicatedJobsStatus = [{ name: 'defaulted', ready: 1 }]
+    const defaultedHtml = render(defaulted)
+
+    expect(defaultedHtml).toMatch(/Jobs<\/span><span[^>]*>1<\/span>/)
+    expect(defaultedHtml).toMatch(/Job indexes<\/span><span[^>]*>0<\/span>/)
+    expect(defaultedHtml).toContain('>1/1</span>')
+
+    const disabled = currentJobSet()
+    disabled.spec.replicatedJobs = [{ name: 'disabled', replicas: 0, template: { spec: {} } }]
+    disabled.status.replicatedJobsStatus = [{ name: 'disabled', ready: 0 }]
+    const disabledHtml = render(disabled)
+
+    expect(disabledHtml).toMatch(/Jobs<\/span><span[^>]*>0<\/span>/)
+    expect(disabledHtml).toMatch(/Job indexes<\/span><span[^>]*>None<\/span>/)
+    expect(disabledHtml).toContain('>0/0</span>')
+  })
+
   it("raises only the JobSet controller's own terminal failure", () => {
     const data = currentJobSet()
     data.status.terminalState = 'Failed'

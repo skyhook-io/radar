@@ -104,9 +104,10 @@ export function JobSetRenderer({ data }: JobSetRendererProps) {
               const roleStatus = statusByName.get(replicatedJob?.name)
               const template = replicatedJob?.template?.spec || {}
               const dependencies: any[] = Array.isArray(replicatedJob?.dependsOn) ? replicatedJob.dependsOn : []
+              const replicas = replicatedJob?.replicas ?? 1
               const ready =
-                typeof roleStatus?.ready === 'number' && typeof replicatedJob?.replicas === 'number'
-                  ? `${roleStatus.ready}/${replicatedJob.replicas}`
+                typeof roleStatus?.ready === 'number' && typeof replicas === 'number'
+                  ? `${roleStatus.ready}/${replicas}`
                   : roleStatus?.ready
               const counts = [
                 { label: 'Ready', value: ready },
@@ -129,8 +130,8 @@ export function JobSetRenderer({ data }: JobSetRendererProps) {
                   </div>
 
                   <PropertyList>
-                    <Property label="Jobs" value={replicatedJob?.replicas} />
-                    <Property label="Job indexes" value={jobIndexRange(replicatedJob?.replicas)} />
+                    <Property label="Jobs" value={replicas} />
+                    <Property label="Job indexes" value={jobIndexRange(replicas)} />
                     <Property label="Parallelism / Job" value={template.parallelism} />
                     <Property label="Completions / Job" value={template.completions} />
                     <Property label="Completion mode" value={template.completionMode} />
