@@ -267,16 +267,14 @@ func New(cfg Config) *Server {
 	// before PerformContextSwitch returns. Mirrors the MCP package's pattern
 	// for mcpPermCache.
 	k8s.OnContextSwitch(func(_ string) {
-		StopAllLocalTermSessions()
 		s.finalizePostContextSwitch()
 		// Alongside the subsystem resets in PerformContextSwitch (prometheus,
 		// traffic, helm): the Argo CD connection references the previous
 		// cluster's endpoint/port-forward.
 		argocd.Reset()
 	})
-	// Stale AI investigations must stop BEFORE the client repoints. Runtime
-	// auth-loss demotion also fires this callback without changing context, so
-	// context-bound host shells are stopped only by the success callback above.
+	// Cancel + stale AI investigations BEFORE the client repoints at the new
+	// cluster, so an in-flight agent (especially an apply) can't write to it.
 	k8s.OnBeforeContextSwitch(func(_ string) {
 		if s.aiRuns != nil {
 			s.aiRuns.OnContextSwitch()
@@ -293,13 +291,7 @@ func New(cfg Config) *Server {
 	// terminate active sessions at their point of no return, rather than the
 	// handlers stopping them up front — a switch/rescope that fails before
 	// teardown must leave port-forwards / exec terminals intact.
-	k8s.SetSessionStopper(func() {
-		StopAllSessions()
-		s.broadcaster.Broadcast(SSEEvent{
-			Event: "cluster_sessions_stopped",
-			Data:  map[string]any{},
-		})
-	})
+	k8s.SetSessionStopper(StopAllSessions)
 
 	// Initialize auth components when auth is enabled
 	if s.authConfig.Enabled() {
@@ -1263,6 +1255,8 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	responseCaps := *caps
+	caps = &responseCaps
 
 	caps.MCPEnabled = s.mcpHandler != nil
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
@@ -1273,9 +1267,8 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		WorkloadImages: true,
 	}
 	caps.AuthEnabled = s.authConfig.Enabled()
-	if caps.AuthEnabled || s.sharedListener() || !requestHostIsLoopback(r) {
-		caps.LocalTerminal = false
-	}
+	status, _ := s.localTerminalUnavailable(r)
+	caps.LocalTerminal = status == 0
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		caps.Username = user.Username
 	}
@@ -1306,9 +1299,6 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	// honor. Mirrors LocalTerminal's runtime-mode gate.
 	if k8s.IsInCluster() {
 		caps.PortForward = false
-	}
-	if k8s.ForceDisableExec {
-		caps.Exec = false
 	}
 
 	// Resource permissions come straight from the cached probe result, which
@@ -4375,7 +4365,7 @@ func (s *Server) handleGetSessions(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// StopAllSessions terminates all active port forwards and exec sessions.
+// StopAllSessions terminates all active port forwards and exec sessions
 func StopAllSessions() {
 	log.Println("Stopping all active sessions...")
 	StopAllPortForwards()
@@ -4837,6 +4827,14 @@ func (s *Server) getDynamicClientSnapshotForRequest(r *http.Request) (dynamic.In
 	return k8s.GetDynamicClientSnapshot()
 }
 
+// getConfigForRequest returns an impersonated REST config when auth is enabled,
+// or the shared config when auth is disabled. Returns nil if impersonation fails
+// (never falls back to the ServiceAccount config). Callers must handle nil.
+func (s *Server) getConfigForRequest(r *http.Request) *rest.Config {
+	config, _ := s.getConfigSnapshotForRequest(r)
+	return config
+}
+
 func (s *Server) getConfigSnapshotForRequest(r *http.Request) (*rest.Config, string) {
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		cfg, contextName, err := k8s.ImpersonatedConfigSnapshot(user.Username, user.Groups)
@@ -4847,28 +4845,6 @@ func (s *Server) getConfigSnapshotForRequest(r *http.Request) (*rest.Config, str
 		return cfg, contextName
 	}
 	return k8s.GetConfigSnapshot()
-}
-
-func (s *Server) getClientConfigSnapshotForRequest(r *http.Request) (kubernetes.Interface, *rest.Config, uint64, bool) {
-	release, ok := k8s.TryAcquireClientSnapshotLease()
-	if !ok {
-		return nil, nil, 0, false
-	}
-	defer release()
-
-	if user := auth.UserFromContext(r.Context()); user != nil {
-		client, config, generation, err := k8s.ImpersonatedClientConfigSnapshot(user.Username, user.Groups)
-		if err != nil {
-			log.Printf("[auth] Impersonation failed for %s: %v", k8s.SanitizeForLog(user.Username), err)
-			return nil, nil, generation, true
-		}
-		return client, config, generation, true
-	}
-	client, config, generation := k8s.GetClientConfigSnapshot()
-	if client == nil {
-		return nil, config, generation, true
-	}
-	return client, config, generation, true
 }
 
 // getClientForRequest returns an impersonated typed client when auth is enabled,

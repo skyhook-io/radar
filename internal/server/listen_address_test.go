@@ -205,6 +205,9 @@ func TestProtectUnauthenticatedLoopback(t *testing.T) {
 			if w.Code != tt.wantStatus {
 				t.Fatalf("status = %d, want %d; body = %s", w.Code, tt.wantStatus, w.Body.String())
 			}
+			if tt.wantStatus == http.StatusForbidden && !strings.Contains(w.Body.String(), "enable authentication for a reverse proxy") {
+				t.Fatalf("body = %q, want reverse-proxy remediation", w.Body.String())
+			}
 		})
 	}
 }

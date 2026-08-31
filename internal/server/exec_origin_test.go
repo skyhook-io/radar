@@ -11,124 +11,106 @@ import (
 	"github.com/skyhook-io/radar/internal/cloud"
 )
 
-func TestCheckWebSocketOriginTrustsAuthenticatedTunnel(t *testing.T) {
-	var got bool
-	handler := cloud.AuthenticatedTunnelHandler(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		got = checkWebSocketOrigin(r)
-	}))
-	req := httptest.NewRequest(http.MethodGet, "http://radar.internal/api/pods/ns/pod/exec", nil)
-	req.Header.Set("Origin", "https://hub.example.com")
-	req.Header.Set("Sec-Fetch-Site", "cross-site")
-	handler.ServeHTTP(httptest.NewRecorder(), req)
-
-	if !got {
-		t.Error("checkWebSocketOrigin refused an authenticated-tunnel request; Hub-proxied exec would break")
+func TestWebSocketOriginPolicy(t *testing.T) {
+	tests := []struct {
+		name           string
+		server         Server
+		host           string
+		origin         string
+		fetchSite      string
+		tls            bool
+		forwardedProto string
+		want           bool
+	}{
+		{name: "non-browser client", host: "localhost:9280", want: true},
+		{name: "same authority", host: "radar.example.com", origin: "https://radar.example.com", want: true},
+		{name: "HTTPS default port on Host", host: "radar.example.com:443", origin: "https://radar.example.com", want: true},
+		{name: "HTTPS default port on Origin", host: "radar.example.com", origin: "https://radar.example.com:443", want: true},
+		{name: "HTTP default port on Host", host: "radar.example.com:80", origin: "http://radar.example.com", want: true},
+		{name: "TLS rejects plaintext origin", host: "radar.example.com", origin: "http://radar.example.com", tls: true, want: false},
+		{name: "TLS accepts HTTPS origin", host: "radar.example.com", origin: "https://radar.example.com", tls: true, want: true},
+		{name: "TLS proxy rejects plaintext origin", host: "radar.example.com", origin: "http://radar.example.com", forwardedProto: "https", want: false},
+		{name: "non-default request port", host: "radar.example.com:8443", origin: "https://radar.example.com", want: false},
+		{name: "foreign origin", host: "radar.example.com", origin: "https://evil.example", want: false},
+		{name: "same-site foreign origin", host: "radar.example.com", origin: "https://app.example.com", fetchSite: "same-site", want: false},
+		{name: "host-rewriting proxy", host: "radar.internal", origin: "https://radar.example.com", fetchSite: "same-origin", want: true},
+		{name: "cross-site metadata", host: "radar.example.com", origin: "https://radar.example.com", fetchSite: "cross-site", want: false},
+		{name: "Vite development proxy", server: Server{devMode: true}, host: "localhost:9280", origin: "http://localhost:9273", fetchSite: "same-site", want: true},
+		{name: "Vite port outside dev mode", host: "localhost:9280", origin: "http://localhost:9273", fetchSite: "same-site", want: false},
+		{name: "unrelated development port", server: Server{devMode: true}, host: "localhost:9280", origin: "http://localhost:9274", fetchSite: "same-site", want: false},
 	}
-}
 
-func TestCheckWebSocketOriginUsesFetchMetadataThroughHostRewritingProxy(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "http://radar.internal/api/pods/ns/pod/exec", nil)
-	req.Header.Set("Origin", "https://radar.example.com")
-	req.Header.Set("Sec-Fetch-Site", "same-origin")
-
-	if !checkWebSocketOrigin(req) {
-		t.Error("same-origin browser request was rejected after the proxy rewrote Host")
-	}
-}
-
-func TestCheckWebSocketOriginRejectsCrossSiteFetch(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "http://radar.example.com/api/pods/ns/pod/exec", nil)
-	req.Header.Set("Origin", "http://radar.example.com")
-	req.Header.Set("Sec-Fetch-Site", "cross-site")
-
-	if checkWebSocketOrigin(req) {
-		t.Error("cross-site browser request was accepted despite Fetch Metadata")
-	}
-}
-
-func TestWebSocketOriginAllowsOnlyTheViteDevCrossPort(t *testing.T) {
-	for _, hostname := range []string{"localhost", "radar.localhost"} {
-		t.Run(hostname, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "http://"+hostname+":9280/api/pods/ns/pod/exec", nil)
-			req.Header.Set("Origin", "http://"+hostname+":9273")
-			req.Header.Set("Sec-Fetch-Site", "same-site")
-
-			if checkWebSocketOrigin(req) {
-				t.Error("production origin policy accepted a loopback cross-port request")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme := "http"
+			if tt.tls {
+				scheme = "https"
 			}
-			if !(&Server{devMode: true}).websocketOriginAllowed(req) {
-				t.Error("Vite development origin was rejected in dev mode")
+			req := httptest.NewRequest(http.MethodGet, scheme+"://"+tt.host+"/api/pods/ns/pod/exec", nil)
+			if tt.origin != "" {
+				req.Header.Set("Origin", tt.origin)
 			}
-			if (&Server{}).websocketOriginAllowed(req) {
-				t.Error("Vite development origin was accepted outside dev mode")
+			if tt.fetchSite != "" {
+				req.Header.Set("Sec-Fetch-Site", tt.fetchSite)
 			}
-
-			req.Header.Set("Origin", "http://"+hostname+":9274")
-			if (&Server{devMode: true}).websocketOriginAllowed(req) {
-				t.Error("unrelated loopback origin was accepted in dev mode")
+			if tt.forwardedProto != "" {
+				req.Header.Set("X-Forwarded-Proto", tt.forwardedProto)
+			}
+			if got := tt.server.websocketOriginAllowed(req); got != tt.want {
+				t.Fatalf("websocketOriginAllowed() = %v, want %v", got, tt.want)
 			}
 		})
 	}
 }
 
-func TestWebSocketOriginRejectsCrossSiteMetadataForVitePort(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "http://localhost:9280/api/pods/ns/pod/exec", nil)
-	req.Header.Set("Origin", "http://localhost:9273")
-	req.Header.Set("Sec-Fetch-Site", "cross-site")
-
-	if (&Server{devMode: true}).websocketOriginAllowed(req) {
-		t.Error("cross-site request was accepted through the Vite development exception")
+func TestUpgradeWebSocketUsesServerOriginPolicy(t *testing.T) {
+	tests := []struct {
+		name      string
+		server    Server
+		origin    func(string) string
+		fetchSite string
+		tunnel    bool
+		wantOK    bool
+	}{
+		{name: "same origin", origin: func(serverURL string) string { return serverURL }, wantOK: true},
+		{name: "foreign origin", origin: func(string) string { return "https://evil.example" }, wantOK: false},
+		{name: "authenticated Hub transport", origin: func(string) string { return "https://hub.example.com" }, fetchSite: "cross-site", tunnel: true, wantOK: true},
+		{name: "Vite development proxy", server: Server{devMode: true}, origin: func(string) string { return "http://localhost:9273" }, fetchSite: "same-site", wantOK: true},
 	}
-}
 
-func TestCheckWebSocketOriginRejectsNonLoopbackSameSiteRequest(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "http://radar.example.com/api/pods/ns/pod/exec", nil)
-	req.Header.Set("Origin", "https://app.example.com")
-	req.Header.Set("Sec-Fetch-Site", "same-site")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := tt.server.upgradeWebSocket(w, r)
+				if err == nil {
+					conn.Close()
+				}
+			}))
+			if tt.tunnel {
+				handler = cloud.AuthenticatedTunnelHandler(handler)
+			}
+			srv := httptest.NewServer(handler)
+			defer srv.Close()
 
-	if checkWebSocketOrigin(req) {
-		t.Error("cross-origin same-site browser request was accepted")
+			headers := http.Header{"Origin": {tt.origin(srv.URL)}}
+			if tt.fetchSite != "" {
+				headers.Set("Sec-Fetch-Site", tt.fetchSite)
+			}
+			conn, resp, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), headers)
+			if tt.wantOK {
+				if err != nil {
+					t.Fatalf("WebSocket upgrade failed: %v", err)
+				}
+				conn.Close()
+				return
+			}
+			if err == nil {
+				conn.Close()
+				t.Fatal("WebSocket upgrade succeeded, want rejection")
+			}
+			if resp == nil || resp.StatusCode != http.StatusForbidden {
+				t.Fatalf("rejection response = %v, want HTTP 403", resp)
+			}
+		})
 	}
-}
-
-func TestCheckWebSocketOriginAcceptsSameAuthorityWithSameSiteMetadata(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "https://radar.example.com/api/pods/ns/pod/exec", nil)
-	req.Header.Set("Origin", "https://radar.example.com")
-	req.Header.Set("Sec-Fetch-Site", "same-site")
-
-	if !checkWebSocketOrigin(req) {
-		t.Error("same-authority browser request was rejected because Fetch Metadata reported same-site")
-	}
-}
-
-func TestUpgraderRejectsCrossOriginHandshake(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			return
-		}
-		conn.Close()
-	}))
-	t.Cleanup(srv.Close)
-
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	sameHost := strings.TrimPrefix(srv.URL, "http://")
-
-	t.Run("cross origin rejected", func(t *testing.T) {
-		_, resp, err := websocket.DefaultDialer.Dial(wsURL, http.Header{"Origin": {"http://evil.example"}})
-		if err == nil {
-			t.Fatal("cross-origin handshake succeeded, want rejection")
-		}
-		if resp == nil || resp.StatusCode != http.StatusForbidden {
-			t.Fatalf("cross-origin handshake status = %v, want 403", resp)
-		}
-	})
-
-	t.Run("same origin accepted", func(t *testing.T) {
-		conn, _, err := websocket.DefaultDialer.Dial(wsURL, http.Header{"Origin": {"http://" + sameHost}})
-		if err != nil {
-			t.Fatalf("same-origin handshake failed: %v", err)
-		}
-		conn.Close()
-	})
 }

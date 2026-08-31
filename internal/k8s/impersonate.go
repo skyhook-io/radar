@@ -52,16 +52,6 @@ func ImpersonatedClientSafetySnapshot(username string, groups []string) (kuberne
 	return client, binding, err
 }
 
-func ImpersonatedClientConfigSnapshot(username string, groups []string) (kubernetes.Interface, *rest.Config, uint64, error) {
-	_, base, generation := GetClientConfigSnapshot()
-	if base == nil {
-		return nil, nil, generation, fmt.Errorf("K8s config not initialized")
-	}
-	cfg := pkgauth.ImpersonatedConfig(base, username, groups)
-	client, err := kubernetes.NewForConfig(cfg)
-	return client, cfg, generation, err
-}
-
 // ImpersonatedDynamicClient creates a dynamic client that acts as the given user.
 // Used for write operations (update, delete, patch) when auth is enabled.
 func ImpersonatedDynamicClient(username string, groups []string) (dynamic.Interface, error) {

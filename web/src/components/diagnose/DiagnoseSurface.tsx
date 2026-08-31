@@ -33,6 +33,7 @@ import { ConsentCard } from "./parts";
 import { buildLaunchCommand, launchAgentLabel, openInTerminal } from "./launch";
 import { type RunSummary, type ExecutionProfile } from "../../api/diagnose";
 import { routePath } from "../../api/config";
+import { useCapabilitiesContext } from "../../contexts/CapabilitiesContext";
 
 function capWord(s: string): string {
   return s ? s[0].toUpperCase() + s.slice(1) : s;
@@ -68,6 +69,7 @@ function buildConfigLine(cfg: {
 function InvestigationMenu({ run }: { run: RunSummary }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const { localTerminal } = useCapabilitiesContext();
   const label = launchAgentLabel(run);
   const command = buildLaunchCommand(run, `${window.location.origin}${routePath('/mcp')}`);
   // No resumable session yet (or stale run) → nothing to hand off.
@@ -122,16 +124,18 @@ function InvestigationMenu({ run }: { run: RunSummary }) {
                 )}
               </span>
             </button>
-            <button
-              onClick={() => {
-                openInTerminal(command, "Diagnose");
-                setOpen(false);
-              }}
-              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-theme-text-primary hover:bg-theme-hover"
-            >
-              <TerminalSquare className="h-4 w-4 shrink-0 text-theme-text-tertiary" />
-              Run in a Radar terminal
-            </button>
+            {localTerminal && (
+              <button
+                onClick={() => {
+                  openInTerminal(command, "Diagnose");
+                  setOpen(false);
+                }}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-theme-text-primary hover:bg-theme-hover"
+              >
+                <TerminalSquare className="h-4 w-4 shrink-0 text-theme-text-tertiary" />
+                Run in a Radar terminal
+              </button>
+            )}
           </div>
         </>
       )}

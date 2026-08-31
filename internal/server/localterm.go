@@ -13,6 +13,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
@@ -85,32 +86,31 @@ func setEnv(env []string, key, value string) []string {
 	return append(env, prefix+value)
 }
 
-// handleLocalTerminal handles WebSocket connections for local terminal sessions
-func (s *Server) handleLocalTerminal(w http.ResponseWriter, r *http.Request) {
-	// Check the operator's opt-out first so it wins over runtime-mode detection,
-	// and before upgrading so the refusal remains a plain HTTP error.
+func (s *Server) localTerminalUnavailable(r *http.Request) (int, string) {
 	if k8s.ForceDisableLocalTerminal {
-		s.writeError(w, http.StatusForbidden, "local terminal is disabled")
-		return
+		return http.StatusForbidden, "local terminal is disabled"
 	}
 	if s.authConfig.Enabled() {
-		s.writeError(w, http.StatusForbidden, "local terminal is unavailable when authentication is enabled")
-		return
+		return http.StatusForbidden, "local terminal is unavailable when authentication is enabled"
+	}
+	if cloud.IsAuthenticatedTunnelRequest(r.Context()) {
+		return http.StatusForbidden, "local terminal is unavailable over the Radar Hub tunnel"
 	}
 	if k8s.IsInCluster() {
-		s.writeError(w, http.StatusBadRequest, "local terminal not available in-cluster mode")
-		return
+		return http.StatusBadRequest, "local terminal not available in-cluster mode"
 	}
 	if s.sharedListener() || !requestHostIsLoopback(r) {
-		s.writeError(w, http.StatusForbidden, "local terminal is only available over a loopback address")
+		return http.StatusForbidden, "local terminal is only available over a loopback address"
+	}
+	return 0, ""
+}
+
+// handleLocalTerminal handles WebSocket connections for local terminal sessions
+func (s *Server) handleLocalTerminal(w http.ResponseWriter, r *http.Request) {
+	if status, message := s.localTerminalUnavailable(r); status != 0 {
+		s.writeError(w, status, message)
 		return
 	}
-	sessionLease, ok := k8s.TryAcquireClientSnapshotLease()
-	if !ok {
-		s.writeError(w, http.StatusConflict, "cluster context is changing; retry")
-		return
-	}
-	defer sessionLease()
 
 	// Upgrade to WebSocket
 	conn, err := s.upgradeWebSocket(w, r)
@@ -189,7 +189,6 @@ func (s *Server) handleLocalTerminal(w http.ResponseWriter, r *http.Request) {
 		}
 		log.Printf("[localterm] Session %s ended", sessionID)
 	}()
-	sessionLease()
 
 	// WebSocket write mutex (PTY reader and exit sender both write)
 	var wsMu sync.Mutex

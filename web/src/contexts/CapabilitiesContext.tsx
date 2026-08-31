@@ -46,7 +46,10 @@ const restrictedCapabilities: Capabilities = {
   deployment: { mode: 'local' },
 }
 
-const CapabilitiesContext = createContext<Capabilities>(defaultCapabilities)
+const CapabilitiesContext = createContext<Capabilities>({
+  ...defaultCapabilities,
+  localTerminal: false,
+})
 
 export function CapabilitiesProvider({ children }: { children: ReactNode }) {
   const { data: capabilities, error } = useCapabilities()

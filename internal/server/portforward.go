@@ -78,7 +78,6 @@ func StopAllPortForwards() {
 		if session.cancel != nil {
 			session.cancel()
 		}
-		close(session.stopCh)
 		session.Status = "stopped"
 		delete(pfManager.sessions, id)
 	}
@@ -138,11 +137,8 @@ func (s *Server) handleStartPortForward(w http.ResponseWriter, r *http.Request) 
 	// Audit before the client check so attempted-but-denied requests still
 	// leave a trail for security review.
 	auth.AuditLog(r, req.Namespace, req.PodName)
-	client, config, clientGeneration, snapshotOK := s.getClientConfigSnapshotForRequest(r)
-	if !snapshotOK {
-		s.writeError(w, http.StatusConflict, "cluster context is changing; retry")
-		return
-	}
+	client := s.getClientForRequest(r)
+	config := s.getConfigForRequest(r)
 	if client == nil || config == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "K8s client not initialized")
 		return
@@ -195,17 +191,6 @@ func (s *Server) handleStartPortForward(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	snapshotLease, snapshotOK := k8s.TryAcquireClientSnapshotLease()
-	if !snapshotOK {
-		s.writeError(w, http.StatusConflict, "cluster context is changing; retry")
-		return
-	}
-	defer snapshotLease()
-	if !k8s.IsClientGenerationCurrent(clientGeneration) {
-		s.writeError(w, http.StatusConflict, "cluster context changed while starting port forward; retry")
-		return
-	}
-
 	// Create session
 	pfManager.mu.Lock()
 	pfManager.nextID++
@@ -233,7 +218,6 @@ func (s *Server) handleStartPortForward(w http.ResponseWriter, r *http.Request) 
 	}
 	pfManager.sessions[sessionID] = session
 	pfManager.mu.Unlock()
-	snapshotLease()
 
 	// Start port forward in goroutine
 	go func() {
@@ -260,12 +244,7 @@ func (s *Server) handleStartPortForward(w http.ResponseWriter, r *http.Request) 
 	time.Sleep(100 * time.Millisecond)
 
 	pfManager.mu.Lock()
-	session, ok := pfManager.sessions[sessionID]
-	if !ok {
-		pfManager.mu.Unlock()
-		s.writeError(w, http.StatusConflict, "cluster context changed while starting port forward; retry")
-		return
-	}
+	session = pfManager.sessions[sessionID]
 	if session.Status == "error" {
 		errMsg := session.Error
 		pfManager.mu.Unlock()
@@ -273,10 +252,9 @@ func (s *Server) handleStartPortForward(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	session.Status = "running"
-	response := *session
 	pfManager.mu.Unlock()
 
-	s.writeJSON(w, response)
+	s.writeJSON(w, session)
 }
 
 // handleStopPortForward stops an active port forward session

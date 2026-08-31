@@ -949,8 +949,8 @@ func (s *Server) cloudConnectCapability() *k8s.CloudConnectCapability {
 	}
 }
 
-// sameOriginOK protects browser-facing mutation and shell endpoints: a page on
-// another origin must not be able to drive them. It compares the Origin against
+// sameOriginOK is CSRF protection for the connect endpoints: a page on another
+// origin must not be able to drive an install. It compares the Origin against
 // the authority the client actually used, rather than an allowlist of loopback
 // names — localOriginOK's shape would 403 the legitimate browser on a
 // non-loopback listener (the exact case the driver lane now supports) while

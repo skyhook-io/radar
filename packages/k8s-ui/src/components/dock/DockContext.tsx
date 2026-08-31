@@ -42,7 +42,6 @@ export interface DockContextValue {
   setMaximized: (maximized: boolean) => void
   setResizing: (resizing: boolean) => void
   closeAll: () => void
-  closeClusterTabs?: () => void
 }
 
 const DockContext = createContext<DockContextValue | null>(null)
@@ -133,18 +132,6 @@ export function DockProvider({ children }: { children: ReactNode }) {
     setIsExpanded(false)
   }, [])
 
-  const closeClusterTabs = useCallback(() => {
-    setTabs(prev => {
-      const remaining = prev.filter(tab => tab.type === 'local-terminal')
-      setActiveTabId(current => {
-        if (current && remaining.some(tab => tab.id === current)) return current
-        return remaining.at(-1)?.id ?? null
-      })
-      if (remaining.length === 0) setIsExpanded(false)
-      return remaining
-    })
-  }, [])
-
   return (
     <DockContext.Provider value={{
       tabs,
@@ -164,7 +151,6 @@ export function DockProvider({ children }: { children: ReactNode }) {
       setMaximized: setIsMaximized,
       setResizing: setIsResizing,
       closeAll,
-      closeClusterTabs,
     }}>
       {children}
     </DockContext.Provider>

@@ -29,7 +29,6 @@ import (
 
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/images"
-	"github.com/skyhook-io/radar/internal/k8s"
 	rcpkg "github.com/skyhook-io/radar/pkg/remotecommand"
 )
 
@@ -39,21 +38,9 @@ type PodFilesystem struct {
 	TotalFiles int              `json:"totalFiles"`
 }
 
-func clientGenerationUsable(generation uint64) bool {
-	release, ok := k8s.TryAcquireClientSnapshotLease()
-	if !ok {
-		return false
-	}
-	defer release()
-	return k8s.IsClientGenerationCurrent(generation)
-}
-
 // handlePodFileList lists files at a given path inside a pod container.
 // GET /api/pods/{ns}/{name}/files?container=X&path=/
 func (s *Server) handlePodFileList(w http.ResponseWriter, r *http.Request) {
-	if !s.requireExecEnabled(w) {
-		return
-	}
 	if !s.requireConnected(w) {
 		return
 	}
@@ -71,17 +58,10 @@ func (s *Server) handlePodFileList(w http.ResponseWriter, r *http.Request) {
 	// container, but filepath is OS-specific and converts to backslashes on Windows.
 	dirPath = path.Clean(dirPath)
 
-	client, config, clientGeneration, snapshotOK := s.getClientConfigSnapshotForRequest(r)
-	if !snapshotOK {
-		s.writeError(w, http.StatusConflict, "cluster context is changing; retry")
-		return
-	}
+	client := s.getClientForRequest(r)
+	config := s.getConfigForRequest(r)
 	if client == nil || config == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
-		return
-	}
-	if !clientGenerationUsable(clientGeneration) {
-		s.writeError(w, http.StatusConflict, "cluster context changed while reading pod files; retry")
 		return
 	}
 
@@ -118,37 +98,34 @@ func (s *Server) handlePodFileList(w http.ResponseWriter, r *http.Request) {
 		Stdout: &stdout,
 		Stderr: &stderr,
 	})
-	if !clientGenerationUsable(clientGeneration) {
-		s.writeError(w, http.StatusConflict, "cluster context changed while reading pod files; retry")
-		return
-	}
-	var nodes []*images.FileNode
-	var totalFiles int
 	if err != nil {
 		// find failed — could be missing command, unsupported flags (e.g. -printf on BusyBox), etc.
 		// Always fall back to ls which is more universally available.
 		findErrMsg := fmt.Sprintf("%v: %s", err, stderr.String())
 		log.Printf("[copy] find failed for %s/%s (falling back to ls): %s", namespace, podName, findErrMsg)
-		var lsErr error
-		nodes, totalFiles, lsErr = s.listFilesWithLS(r, client, config, namespace, podName, container, dirPath)
+		nodes, totalFiles, lsErr := s.listFilesWithLS(r, namespace, podName, container, dirPath)
 		if lsErr != nil {
 			errMsg := classifyExecError(findErrMsg, lsErr.Error())
 			errorlog.Record("copy", "error", "file list failed for %s/%s: %s", namespace, podName, errMsg)
 			s.writeError(w, http.StatusInternalServerError, errMsg)
 			return
 		}
-	} else {
-		nodes, totalFiles = parseFindOutput(stdout.String(), dirPath)
-	}
-	if !clientGenerationUsable(clientGeneration) {
-		s.writeError(w, http.StatusConflict, "cluster context changed while reading pod files; retry")
+		s.writeJSON(w, PodFilesystem{Root: buildRootNode(dirPath, nodes), TotalFiles: totalFiles})
 		return
 	}
+
+	nodes, totalFiles := parseFindOutput(stdout.String(), dirPath)
 	s.writeJSON(w, PodFilesystem{Root: buildRootNode(dirPath, nodes), TotalFiles: totalFiles})
 }
 
 // listFilesWithLS is a fallback when find is not available
-func (s *Server) listFilesWithLS(r *http.Request, client kubernetes.Interface, config *rest.Config, namespace, podName, container, dirPath string) ([]*images.FileNode, int, error) {
+func (s *Server) listFilesWithLS(r *http.Request, namespace, podName, container, dirPath string) ([]*images.FileNode, int, error) {
+	client := s.getClientForRequest(r)
+	config := s.getConfigForRequest(r)
+	if client == nil || config == nil {
+		return nil, 0, fmt.Errorf("cluster client not available")
+	}
+
 	cmd := []string{"/bin/sh", "-c", fmt.Sprintf("ls -la %s", shellQuote(dirPath))}
 
 	req := client.CoreV1().RESTClient().Post().
@@ -184,9 +161,6 @@ func (s *Server) listFilesWithLS(r *http.Request, client kubernetes.Interface, c
 // handlePodFileDownload downloads a single file from a pod container.
 // GET /api/pods/{ns}/{name}/files/download?container=X&path=/some/file
 func (s *Server) handlePodFileDownload(w http.ResponseWriter, r *http.Request) {
-	if !s.requireExecEnabled(w) {
-		return
-	}
 	src := s.openPodFileForRequest(w, r)
 	if src == nil {
 		return
@@ -222,9 +196,6 @@ func (s *Server) handlePodFileDownload(w http.ResponseWriter, r *http.Request) {
 // fails, so the desktop app asks the backend to do the whole thing.
 // POST /api/pods/{ns}/{name}/files/save?container=X&path=/some/file
 func (s *Server) handlePodFileSave(w http.ResponseWriter, r *http.Request) {
-	if !s.requireExecEnabled(w) {
-		return
-	}
 	// Runs a command in a pod and writes a file to the user's disk, which is
 	// exactly what the local origin check exists to keep a page on another site
 	// from triggering.
@@ -268,28 +239,22 @@ func (s *Server) handlePodFileSave(w http.ResponseWriter, r *http.Request) {
 
 // podFileSource is one pod file ready to be read, however it was obtained.
 type podFileSource struct {
-	namespace        string
-	podName          string
-	filePath         string
-	name             string
-	size             int64
-	clientGeneration uint64
+	namespace string
+	podName   string
+	filePath  string
+	name      string
+	size      int64
 
 	stream *podFileStream // nil when the cat fallback produced the bytes
 	body   *bytes.Reader
 }
 
 func (p *podFileSource) Read(b []byte) (int, error) {
-	if !clientGenerationUsable(p.clientGeneration) {
-		return 0, errPodFileContextChanged
-	}
 	if p.stream != nil {
 		return p.stream.Read(b)
 	}
 	return p.body.Read(b)
 }
-
-var errPodFileContextChanged = errors.New("cluster context changed while reading pod files")
 
 func (p *podFileSource) Close() error {
 	if p.stream != nil {
@@ -320,26 +285,18 @@ func (s *Server) openPodFileForRequest(w http.ResponseWriter, r *http.Request) *
 		return nil
 	}
 
-	client, config, clientGeneration, snapshotOK := s.getClientConfigSnapshotForRequest(r)
-	if !snapshotOK {
-		s.writeError(w, http.StatusConflict, "cluster context is changing; retry")
-		return nil
-	}
+	client := s.getClientForRequest(r)
+	config := s.getConfigForRequest(r)
 	if client == nil || config == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
 		return nil
 	}
-	if !clientGenerationUsable(clientGeneration) {
-		s.writeError(w, http.StatusConflict, "cluster context changed while reading pod files; retry")
-		return nil
-	}
 
 	src := &podFileSource{
-		namespace:        namespace,
-		podName:          podName,
-		filePath:         filePath,
-		name:             path.Base(filePath),
-		clientGeneration: clientGeneration,
+		namespace: namespace,
+		podName:   podName,
+		filePath:  filePath,
+		name:      path.Base(filePath),
 	}
 
 	stream, openErr := s.openPodFileWithTar(r.Context(), client, config, namespace, podName, container, filePath)
@@ -348,11 +305,6 @@ func (s *Server) openPodFileForRequest(w http.ResponseWriter, r *http.Request) *
 		stream, openErr = s.openPodFileWithCat(r.Context(), client, config, namespace, podName, container, filePath)
 	}
 	if openErr == nil {
-		if !clientGenerationUsable(clientGeneration) {
-			_ = stream.Close()
-			s.writeError(w, http.StatusConflict, "cluster context changed while reading pod files; retry")
-			return nil
-		}
 		src.stream = stream
 		src.size = stream.size
 		return src
@@ -362,7 +314,7 @@ func (s *Server) openPodFileForRequest(w http.ResponseWriter, r *http.Request) *
 	case openErr.commandMissing:
 		// Nothing here can frame the file — read it as raw bytes and hope it is
 		// small, which is all a container this bare is likely to hold.
-		content, catErr := s.downloadWithCat(r, client, config, namespace, podName, container, filePath)
+		content, catErr := s.downloadWithCat(r, namespace, podName, container, filePath)
 		if catErr != nil {
 			if isCommandNotFound(catErr.Error()) {
 				s.writeError(w, http.StatusInternalServerError, "Container lacks 'tar' and 'cat' commands. Cannot download files from distroless containers.")
@@ -371,10 +323,6 @@ func (s *Server) openPodFileForRequest(w http.ResponseWriter, r *http.Request) *
 			log.Printf("[copy] cat fallback failed for %s/%s path=%s: %v", namespace, podName, filePath, catErr)
 			errorlog.Record("copy", "error", "reading %s/%s path=%s failed: %v", namespace, podName, filePath, catErr)
 			s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to read file: %v", catErr))
-			return nil
-		}
-		if !clientGenerationUsable(clientGeneration) {
-			s.writeError(w, http.StatusConflict, "cluster context changed while reading pod files; retry")
 			return nil
 		}
 		src.body = bytes.NewReader(content)
@@ -758,7 +706,13 @@ func isCommandMissing(streamErr error, stderr string) bool {
 // open until the last byte arrives nor tell a truncated read from a complete
 // one — treat it as best-effort for the small files these containers hold,
 // not as an equal path for large ones.
-func (s *Server) downloadWithCat(r *http.Request, client kubernetes.Interface, config *rest.Config, namespace, podName, container, filePath string) ([]byte, error) {
+func (s *Server) downloadWithCat(r *http.Request, namespace, podName, container, filePath string) ([]byte, error) {
+	client := s.getClientForRequest(r)
+	config := s.getConfigForRequest(r)
+	if client == nil || config == nil {
+		return nil, fmt.Errorf("cluster client not available")
+	}
+
 	cmd := []string{"cat", filePath}
 
 	req := client.CoreV1().RESTClient().Post().

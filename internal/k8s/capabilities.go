@@ -211,7 +211,7 @@ var (
 
 	// ForceDisableHelmWrite overrides the helmWrite capability to false (for dev testing)
 	ForceDisableHelmWrite bool
-	// ForceDisableExec turns off exec-backed operations (--disable-exec)
+	// ForceDisableExec overrides the exec capability to false (for dev testing)
 	ForceDisableExec bool
 	// ForceDisableLocalTerminal turns the local terminal off (--disable-local-terminal)
 	ForceDisableLocalTerminal bool
@@ -222,20 +222,15 @@ type nsCapEntry struct {
 	expiry time.Time
 }
 
-func copyCapabilities(caps *Capabilities) *Capabilities {
-	result := *caps
-	return &result
-}
-
 // CheckCapabilities checks RBAC permissions using SelfSubjectAccessReview.
 // Results are cached for 60 seconds normally, or 5 seconds when API errors
 // caused fail-closed results (to allow rapid retry without long UI disruption).
 func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 	capabilitiesMu.RLock()
 	if cachedCapabilities != nil && time.Now().Before(capabilitiesExpiry) {
-		caps := copyCapabilities(cachedCapabilities)
+		caps := *cachedCapabilities
 		capabilitiesMu.RUnlock()
-		return caps, nil
+		return &caps, nil
 	}
 	capabilitiesMu.RUnlock()
 
@@ -353,7 +348,7 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 	capabilitiesExpiry = time.Now().Add(ttl)
 	capabilitiesMu.Unlock()
 
-	return copyCapabilities(caps), nil
+	return caps, nil
 }
 
 // canI checks if the current user/service account can perform an action.
@@ -374,7 +369,8 @@ func GetCachedCapabilities() *Capabilities {
 	if cachedCapabilities == nil {
 		return nil
 	}
-	return copyCapabilities(cachedCapabilities)
+	caps := *cachedCapabilities
+	return &caps
 }
 
 // InvalidateCapabilitiesCache forces the next CheckCapabilities call to refresh
@@ -504,11 +500,8 @@ func CheckCapabilitiesForUser(ctx context.Context, username string, groups []str
 	if entry, ok := userCapabilitiesCache.Load(username); ok {
 		e := entry.(*userCapEntry)
 		if time.Now().Before(e.expiresAt) {
-			caps := copyCapabilities(e.caps)
-			if ForceDisableExec {
-				caps.Exec = false
-			}
-			return caps, nil
+			caps := *e.caps
+			return &caps, nil
 		}
 	}
 
@@ -573,9 +566,6 @@ func CheckCapabilitiesForUser(ctx context.Context, username string, groups []str
 	if ForceDisableHelmWrite {
 		caps.HelmWrite = false
 	}
-	if ForceDisableExec {
-		caps.Exec = false
-	}
 
 	// Cache result
 	userCapabilitiesCache.Store(username, &userCapEntry{
@@ -583,7 +573,7 @@ func CheckCapabilitiesForUser(ctx context.Context, username string, groups []str
 		expiresAt: time.Now().Add(userCapabilitiesTTL),
 	})
 
-	return copyCapabilities(caps), nil
+	return caps, nil
 }
 
 // CheckNamespaceCapabilitiesForUser runs namespace-scoped SubjectAccessReview

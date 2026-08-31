@@ -738,21 +738,6 @@ func GetClientSafetySnapshot() (*kubernetes.Clientset, string) {
 	return k8sClient, contextBinding
 }
 
-func GetClientConfigSnapshot() (*kubernetes.Clientset, *rest.Config, uint64) {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	if k8sConfig == nil {
-		return k8sClient, nil, activeClientGeneration
-	}
-	return k8sClient, rest.CopyConfig(k8sConfig), activeClientGeneration
-}
-
-func IsClientGenerationCurrent(generation uint64) bool {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	return activeClientGeneration == generation
-}
-
 // GetConfig returns the K8s rest config
 func GetConfig() *rest.Config {
 	clientMu.RLock()

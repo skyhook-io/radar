@@ -60,7 +60,7 @@ func main() {
 	debugEvents := flag.Bool("debug-events", false, "Enable verbose event debugging")
 	fakeInCluster := flag.Bool("fake-in-cluster", false, "Simulate in-cluster mode for testing")
 	disableHelmWrite := flag.Bool("disable-helm-write", false, "Simulate restricted Helm permissions")
-	disableExec := flag.Bool("disable-exec", false, "Disable pod terminal, debug shell, and pod file browsing")
+	disableExec := flag.Bool("disable-exec", false, "Simulate restricted exec permissions")
 	podShellDefault := flag.String("pod-shell-default", "", "Override the default pod exec shell command (runs as 'sh -c <value>'; empty = built-in bash -il → ash → sh cascade)")
 	timelineStorage := flag.String("timeline-storage", fileCfg.TimelineStorageOr("memory"), "Timeline storage backend: memory or sqlite")
 	timelineDBPath := flag.String("timeline-db", fileCfg.TimelineDBPath, "Path to timeline database file (default: ~/.radar/timeline.db)")

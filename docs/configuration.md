@@ -11,6 +11,8 @@ unauthenticated listener must also use a loopback `Host`; Radar rejects other
 hostnames so DNS rebinding cannot turn an untrusted site into a local client.
 The reserved `*.localhost` family is accepted; arbitrary local DNS and
 `/etc/hosts` aliases are not.
+To put a non-loopback hostname or reverse proxy in front of Radar, enable Radar
+authentication; do not switch to `0.0.0.0` merely to bypass this check.
 
 To reach Radar through a VM, WSL, dev container, jump host, or another machine,
 opt into a shared listener explicitly:

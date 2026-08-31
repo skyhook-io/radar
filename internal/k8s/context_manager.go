@@ -88,7 +88,7 @@ var (
 	// InitAllSubsystems concurrently on the shared cache singletons. This mutex
 	// does — a second request waits for the first to finish rather than
 	// interleaving teardown/init.
-	contextOpMu sync.RWMutex
+	contextOpMu sync.Mutex
 	// Incremented BEFORE contextOpMu is acquired — that ordering is the
 	// mechanism: it makes a queued-but-blocked operation visible to runtime
 	// auth-loss candidate intake, which a try-lock could never see.
@@ -169,24 +169,6 @@ func SetSessionStopper(fn func()) {
 	contextSwitchMu.Lock()
 	defer contextSwitchMu.Unlock()
 	sessionStopFunc = fn
-}
-
-// TryAcquireClientSnapshotLease lets request handlers reject work during a
-// context change instead of silently retargeting it when the change finishes;
-// holding the lease through session registration also closes the stop/register
-// race at the context-change boundary.
-func TryAcquireClientSnapshotLease() (func(), bool) {
-	if !contextOpMu.TryRLock() {
-		return nil, false
-	}
-	return clientSnapshotLeaseRelease(), true
-}
-
-func clientSnapshotLeaseRelease() func() {
-	var once sync.Once
-	return func() {
-		once.Do(contextOpMu.RUnlock)
-	}
 }
 
 func stopActiveSessions() {

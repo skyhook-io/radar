@@ -20,7 +20,7 @@ func TestRunPodExecHeartbeat(t *testing.T) {
 	serverErr := make(chan error, 1)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
 		if err != nil {
 			serverErr <- err
 			return

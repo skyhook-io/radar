@@ -63,7 +63,7 @@ func (s *Server) protectUnauthenticatedLoopback(next http.Handler) http.Handler 
 			!s.authConfig.Enabled() &&
 			!cloud.IsAuthenticatedTunnelRequest(r.Context()) &&
 			!requestHostIsLoopback(r) {
-			s.writeError(w, http.StatusForbidden, "loopback-only Radar requires a loopback request Host")
+			s.writeError(w, http.StatusForbidden, "loopback-only Radar requires a loopback request Host; enable authentication for a reverse proxy, or explicitly use --listen-address=0.0.0.0 only on a trusted network")
 			return
 		}
 		next.ServeHTTP(w, r)
