@@ -383,6 +383,8 @@ func InvalidateCapabilitiesCache() {
 	nsCapMu.Lock()
 	nsCapCache = nil
 	nsCapMu.Unlock()
+
+	InvalidateUserCapabilitiesCache()
 }
 
 // CheckNamespaceCapabilities performs namespace-scoped RBAC checks for
