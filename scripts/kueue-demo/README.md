@@ -13,7 +13,7 @@ mega-cluster.
 ## Quick start
 
 ```bash
-# Prerequisites: Docker, kind, kubectl, jq
+# Prerequisites: Docker, kind, kubectl, jq, curl
 make kueue-demo              # ~2-4 minutes on the first run
 make kueue-demo-status
 
@@ -61,7 +61,11 @@ partially edited scenario.
 - the health endpoint;
 - exactly three group-pure `kueue.x-k8s.io/v1beta2` Workloads;
 - admitted, quota-blocked, and held-queue conditions as returned by Radar;
-- both group-pure ClusterQueues.
+- both group-pure ClusterQueues;
+- the exact scheduling source, domain, full-GVK subject, generation-aware
+  condition, decision, queue roles, and Kueue phase for every scenario;
+- identical basic-tier `resourceContext.scheduling` projections from the REST
+  AI resource endpoint and MCP `get_resource`.
 
 For visual testing, use the dedicated context before starting the normal visual
 workflow:
@@ -77,7 +81,9 @@ Restore your previous context afterward if you use this form.
 
 Passing this lane proves that Kueue `v0.19.2` on kind Kubernetes `v1.36.1`
 can reconcile a healthy admission and two real pre-Pod blockers, and
-that Radar can read those resulting objects through group-aware APIs.
+that Radar can read those resulting objects through group-aware APIs while the
+REST AI resource endpoint and MCP `get_resource` expose the same basic-tier
+normalized scheduling evidence.
 
 It does **not** prove:
 

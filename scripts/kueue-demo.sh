@@ -123,7 +123,7 @@ workload_for_job() {
   uid="$(kc -n "${DEMO_NS}" get job "${job}" -o jsonpath='{.metadata.uid}' 2>/dev/null || true)"
   [ -n "${uid}" ] || return 1
   kc -n "${DEMO_NS}" get workloads.kueue.x-k8s.io -o json 2>/dev/null | jq -r --arg uid "${uid}" \
-    '.items[] | select(any(.metadata.ownerReferences[]?; .uid == $uid and .kind == "Job" and .controller == true)) | .metadata.name' | head -n 1
+    'first(.items[] | select(any(.metadata.ownerReferences[]?; .uid == $uid and .kind == "Job" and .controller == true)) | .metadata.name) // empty'
 }
 
 workload_exists_for_job() {
@@ -151,11 +151,13 @@ job_suspended_is() {
 }
 
 running_pod_exists() {
-  kc -n "${DEMO_NS}" get pods -l "job-name=$1" -o json 2>/dev/null | jq -e 'any(.items[]; .status.phase == "Running")' >/dev/null 2>&1
+  kc -n "${DEMO_NS}" get pods -l "batch.kubernetes.io/job-name=$1" -o json 2>/dev/null | jq -e 'any(.items[]; .status.phase == "Running")' >/dev/null 2>&1
 }
 
 pod_count() {
-  kc -n "${DEMO_NS}" get pods -l "job-name=$1" -o json 2>/dev/null | jq -r '.items | length'
+  local response
+  response="$(kc -n "${DEMO_NS}" get pods -l "batch.kubernetes.io/job-name=$1" -o json)" || return 1
+  jq -er '.items | length' <<<"${response}"
 }
 
 workload_reason() {
@@ -164,17 +166,32 @@ workload_reason() {
     '[.status.conditions[]? | select(.type == "QuotaReserved")][0] | "\(.reason // "unknown"): \(.message // "no message")"'
 }
 
+kueue_webhook_ready() {
+  kc apply --dry-run=server -f - >/dev/null 2>&1 <<'EOF'
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: radar-kueue-demo-webhook-probe
+spec:
+  nodeLabels:
+    kubernetes.io/os: linux
+EOF
+}
+
 install_kueue() {
   step "Installing Kueue ${KUEUE_VERSION}"
   kc apply --server-side -f "${KUEUE_MANIFEST}" >/dev/null
   kc wait --for=condition=Established crd/workloads.kueue.x-k8s.io --timeout=180s >/dev/null
   kc -n kueue-system rollout status deployment/kueue-controller-manager --timeout=300s >/dev/null
 
+  # Deployment availability can precede the admission webhook's TLS listener.
+  wait_until "Kueue admission webhook to accept connections" kueue_webhook_ready
+
   local image
   image="$(kc -n kueue-system get deployment kueue-controller-manager -o jsonpath='{.spec.template.spec.containers[0].image}')"
   [ "${image}" = "registry.k8s.io/kueue/kueue:${KUEUE_VERSION}" ] || \
     fail "Kueue controller image is '${image}', expected registry.k8s.io/kueue/kueue:${KUEUE_VERSION}"
-  ok "Kueue controller is Ready with the pinned image"
+  ok "Kueue controller and admission webhook are Ready with the pinned image"
 }
 
 apply_fixtures() {
@@ -222,21 +239,22 @@ verify_admitted() {
 }
 
 verify_quota_blocked() {
-  local job="quota-blocked" workload
+  local job="quota-blocked" workload pods
   wait_until "Kueue Workload for ${job}" workload_exists_for_job "${job}"
   workload="$(workload_for_job "${job}")"
   assert_workload_owner "${job}" "${workload}"
   wait_until "${job} to remain without quota" workload_condition_is "${job}" QuotaReserved False Pending
   wait_until "${job} quota explanation" workload_message_contains "${job}" QuotaReserved 'insufficient quota.*maximum capacity'
   wait_until "${job} to remain suspended" job_suspended_is "${job}" true
-  [ "$(pod_count "${job}")" = "0" ] || fail "${job} unexpectedly created Pods"
+  pods="$(pod_count "${job}")" || fail "Failed to list Pods for ${job}"
+  [ "${pods}" = "0" ] || fail "${job} unexpectedly created Pods"
   kc -n "${DEMO_NS}" get workloads.kueue.x-k8s.io "${workload}" -o json | jq -e '.status.admission == null' >/dev/null || \
     fail "${job} unexpectedly has an admission assignment"
   ok "${job}: controller reason is $(workload_reason "${workload}"); no Pod exists"
 }
 
 verify_held() {
-  local job="queue-held" workload
+  local job="queue-held" workload pods
   wait_until "admission-held ClusterQueue to become inactive" condition_is _ clusterqueues.kueue.x-k8s.io admission-held Active False Stopped
   wait_until "held LocalQueue to become inactive" condition_is "${DEMO_NS}" localqueues.kueue.x-k8s.io held Active False ClusterQueueIsInactive
   wait_until "Kueue Workload for ${job}" workload_exists_for_job "${job}"
@@ -245,7 +263,8 @@ verify_held() {
   wait_until "${job} to remain without quota" workload_condition_is "${job}" QuotaReserved False Inadmissible
   wait_until "${job} held-queue explanation" workload_message_contains "${job}" QuotaReserved 'ClusterQueue admission-held is inactive'
   wait_until "${job} to remain suspended" job_suspended_is "${job}" true
-  [ "$(pod_count "${job}")" = "0" ] || fail "${job} unexpectedly created Pods"
+  pods="$(pod_count "${job}")" || fail "Failed to list Pods for ${job}"
+  [ "${pods}" = "0" ] || fail "${job} unexpectedly created Pods"
   [ "$(kc get clusterqueue admission-held -o jsonpath='{.spec.stopPolicy}')" = "Hold" ] || fail "admission-held no longer has stopPolicy=Hold"
   ok "${job}: held ClusterQueue is inactive, controller reason is $(workload_reason "${workload}"); no Pod exists"
 }
@@ -265,6 +284,110 @@ cmd_verify() {
   ok "Kueue admitted, quota-blocked, and held-queue scenarios verified"
 }
 
+mcp_get_workload() {
+  local workload="$1" request response event
+  request="$(jq -cn \
+    --arg namespace "${DEMO_NS}" \
+    --arg workload "${workload}" \
+    '{jsonrpc:"2.0",id:1,method:"tools/call",params:{name:"get_resource",arguments:{kind:"workloads",group:"kueue.x-k8s.io",namespace:$namespace,name:$workload}}}')"
+  response="$(curl -fsS --connect-timeout 5 --max-time 15 \
+    -X POST \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -d "${request}" \
+    "${RADAR_URL}/mcp")" || return 1
+  event="$(sed -n 's/^data: //p' <<<"${response}" | tail -n 1)"
+  [ -n "${event}" ] || return 1
+  jq -er '.result.content[0].text | fromjson' <<<"${event}"
+}
+
+radar_health_ready() {
+  curl -fsS --connect-timeout 2 --max-time 5 "${RADAR_URL}/api/health" 2>/dev/null | \
+    jq -e '.status == "healthy"' >/dev/null 2>&1
+}
+
+radar_crd_discovery_ready() {
+  curl -fsS --connect-timeout 2 --max-time 5 "${RADAR_URL}/api/cluster-info" 2>/dev/null | \
+    jq -e '.crdDiscoveryStatus == "ready"' >/dev/null 2>&1
+}
+
+radar_workloads_ready() {
+  curl -fsS --connect-timeout 2 --max-time 5 "${RADAR_URL}/api/resources/workloads?group=kueue.x-k8s.io" 2>/dev/null | \
+    jq -e 'type == "array" and length == 3 and all(.[]; .apiVersion == "kueue.x-k8s.io/v1beta2")' >/dev/null 2>&1
+}
+
+radar_clusterqueues_ready() {
+  curl -fsS --connect-timeout 2 --max-time 5 "${RADAR_URL}/api/resources/clusterqueues?group=kueue.x-k8s.io" 2>/dev/null | \
+    jq -e 'type == "array" and length == 2 and all(.[]; .apiVersion == "kueue.x-k8s.io/v1beta2")' >/dev/null 2>&1
+}
+
+assert_radar_scheduling() {
+  local job="$1" decision="$2" phase="$3" condition_type="$4" condition_status="$5" condition_reason="$6"
+  local submission_queue="$7" entitlement_queue="${8:-}" workload rest_response mcp_response rest_scheduling mcp_scheduling
+  if ! workload="$(workload_for_job "${job}")"; then
+    fail "Unable to resolve the Kueue Workload for Job '${job}'"
+  fi
+  [ -n "${workload}" ] || fail "No Kueue Workload found for Job '${job}'"
+
+  rest_response="$(curl -fsS --connect-timeout 5 --max-time 15 \
+    "${RADAR_URL}/api/ai/resources/workloads/${DEMO_NS}/${workload}?group=kueue.x-k8s.io")" || \
+    fail "Radar AI resource request failed for ${job}'s Workload '${workload}'"
+
+  jq -e \
+    --arg namespace "${DEMO_NS}" \
+    --arg workload "${workload}" \
+    --arg decision "${decision}" \
+    --arg phase "${phase}" \
+    --arg conditionType "${condition_type}" \
+    --arg conditionStatus "${condition_status}" \
+    --arg conditionReason "${condition_reason}" \
+    --arg submissionQueue "${submission_queue}" \
+    --arg entitlementQueue "${entitlement_queue}" '
+      .resource.apiVersion == "kueue.x-k8s.io/v1beta2" and
+      .resource.kind == "Workload" and
+      .resource.metadata.namespace == $namespace and
+      .resource.metadata.name == $workload and
+      (.resourceContext.scheduling.observations | length) == 1 and
+      (.resourceContext.scheduling.observations[0] as $observation |
+        $observation.source == "kueue" and
+        $observation.domain == "admission" and
+        $observation.subject == {
+          kind: "Workload",
+          group: "kueue.x-k8s.io",
+          namespace: $namespace,
+          name: $workload
+        } and
+        $observation.subjectGeneration > 0 and
+        $observation.decision == $decision and
+        $observation.primaryCondition.type == $conditionType and
+        $observation.primaryCondition.status == $conditionStatus and
+        $observation.primaryCondition.reason == $conditionReason and
+        $observation.primaryCondition.observedGeneration == $observation.subjectGeneration and
+        $observation.kueue.phase == $phase and
+        ($observation.queues | length) == (if $entitlementQueue == "" then 1 else 2 end) and
+        $observation.queues[0].name == $submissionQueue and
+        $observation.queues[0].roles == ["submission"] and
+        (if $entitlementQueue == "" then
+          true
+        else
+          $observation.queues[1].name == $entitlementQueue and
+          $observation.queues[1].roles == ["entitlement"]
+        end)
+      )' <<<"${rest_response}" >/dev/null || \
+    fail "Radar scheduling projection did not match ${job}'s controller-owned state"
+
+  if ! mcp_response="$(mcp_get_workload "${workload}")"; then
+    fail "MCP get_resource failed for ${job}'s Workload '${workload}'"
+  fi
+  rest_scheduling="$(jq -ceS '.resourceContext.scheduling' <<<"${rest_response}")" || \
+    fail "REST scheduling projection is not valid JSON for ${job}"
+  mcp_scheduling="$(jq -ceS '.resourceContext.scheduling' <<<"${mcp_response}")" || \
+    fail "MCP scheduling projection is not valid JSON for ${job}"
+  [ "${rest_scheduling}" = "${mcp_scheduling}" ] || \
+    fail "REST and MCP scheduling projections differ for ${job}"
+  ok "${job}: REST and MCP agree on ${decision}/${phase} from ${condition_type}=${condition_reason}"
+}
+
 cmd_verify_radar() {
   require_cmd kind "https://kind.sigs.k8s.io/"
   require_cmd kubectl "https://kubernetes.io/docs/tasks/tools/"
@@ -275,10 +398,17 @@ cmd_verify_radar() {
   step "Verifying Radar API at ${RADAR_URL}"
 
   local response
-  response="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/health")"
-  jq -e '.status == "healthy"' <<<"${response}" >/dev/null || fail "Radar health response is not healthy"
+  wait_until "Radar health endpoint" radar_health_ready
 
-  response="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/workloads?group=kueue.x-k8s.io")"
+  response="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/cluster-info")" || \
+    fail "Radar cluster-info request failed"
+  jq -e --arg context "${KUBECTL_CTX}" '.context == $context and .cluster == $context' <<<"${response}" >/dev/null || \
+    fail "Radar is not connected to the expected context and cluster '${KUBECTL_CTX}'"
+  wait_until "Radar CRD discovery" radar_crd_discovery_ready
+
+  wait_until "Radar to cache the three Kueue Workloads" radar_workloads_ready
+  response="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/workloads?group=kueue.x-k8s.io")" || \
+    fail "Radar Workload list request failed"
   jq -e 'type == "array" and length == 3 and all(.[]; .apiVersion == "kueue.x-k8s.io/v1beta2")' <<<"${response}" >/dev/null || \
     fail "Radar did not return the three group-pure Kueue Workloads"
   jq -e 'any(.[]; any(.metadata.ownerReferences[]?; .kind == "Job" and .name == "admitted-running") and any(.status.conditions[]?; .type == "Admitted" and .status == "True"))' <<<"${response}" >/dev/null || \
@@ -288,10 +418,16 @@ cmd_verify_radar() {
   jq -e 'any(.[]; any(.metadata.ownerReferences[]?; .kind == "Job" and .name == "queue-held") and any(.status.conditions[]?; .type == "QuotaReserved" and .status == "False" and .reason == "Inadmissible" and ((.message // "") | contains("ClusterQueue admission-held is inactive"))))' <<<"${response}" >/dev/null || \
     fail "Radar did not expose queue-held's inactive-queue Workload"
 
-  response="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/clusterqueues?group=kueue.x-k8s.io")"
+  wait_until "Radar to cache the two Kueue ClusterQueues" radar_clusterqueues_ready
+  response="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/clusterqueues?group=kueue.x-k8s.io")" || \
+    fail "Radar ClusterQueue list request failed"
   jq -e 'type == "array" and length == 2 and all(.[]; .apiVersion == "kueue.x-k8s.io/v1beta2")' <<<"${response}" >/dev/null || \
     fail "Radar did not return the two group-pure ClusterQueues"
-  ok "Radar returned the real Kueue admission states through group-aware resource APIs"
+
+  assert_radar_scheduling admitted-running satisfied admitted Admitted True Admitted ready admission-ready
+  assert_radar_scheduling quota-blocked unsatisfied pending QuotaReserved False Pending ready
+  assert_radar_scheduling queue-held unsatisfied pending QuotaReserved False Inadmissible held
+  ok "Radar returned real Kueue admission states with matching REST and MCP scheduling context"
 }
 
 cmd_up() {
