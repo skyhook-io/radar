@@ -534,9 +534,9 @@ function RestrictedCostNotice() {
         <div>
           <p className="text-sm font-medium text-theme-text-primary">Cost data is not available</p>
           <p className="mt-1 text-xs text-theme-text-tertiary">
-            Cost is shown for the namespaces you have access to, and no namespace is currently
-            visible to you. If that is unexpected, this can also mean Radar temporarily could not
-            reach the cluster to check your access — retry, then ask your cluster administrator.
+            Cost is shown for the namespaces you have access to, and none is currently visible. If
+            that is unexpected, retry — Radar may have been unable to reach the cluster to check
+            your access.
           </p>
         </div>
       </div>
