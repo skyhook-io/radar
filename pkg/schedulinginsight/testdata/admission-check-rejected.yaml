@@ -19,9 +19,14 @@ status:
     clusterQueue: gpu-team
     podSetAssignments:
       - name: workers
+        count: 2
         flavors:
           cpu: on-demand
           nvidia.com/gpu: a10
+        resourceUsage:
+          cpu: "4"
+          memory: 16Gi
+          nvidia.com/gpu: "2"
   conditions:
     - type: QuotaReserved
       status: "True"

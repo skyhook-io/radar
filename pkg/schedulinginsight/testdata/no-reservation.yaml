@@ -1,15 +1,8 @@
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: Workload
 metadata:
-  name: waiting-for-gpu-quota
+  name: no-reservation
   namespace: training
-  generation: 5
-  ownerReferences:
-    - apiVersion: batch/v1
-      kind: Job
-      name: trainer
-      uid: 11111111-1111-1111-1111-111111111111
-      controller: true
 spec:
   queueName: gpu
   podSets:
@@ -23,9 +16,13 @@ spec:
               image: registry.k8s.io/pause:3.10
 status:
   conditions:
+    - type: Admitted
+      status: "False"
+      reason: NoReservation
+      message: The workload has no reservation
+      lastTransitionTime: "2026-08-30T10:00:00Z"
     - type: QuotaReserved
       status: "False"
-      reason: WaitingForQuota
-      message: Waiting for quota in ClusterQueue gpu-team
-      observedGeneration: 3
-      lastTransitionTime: "2026-08-30T10:00:00Z"
+      reason: NoMatchingFlavor
+      message: No ResourceFlavor matches nvidia.com/gpu
+      lastTransitionTime: "2026-08-30T10:01:00Z"

@@ -3,7 +3,7 @@
 import type { StatusBadge } from './resource-utils'
 import { healthColors } from './resource-utils'
 
-const failedFinishedReasons = new Set(['Failed', 'FailedToStart', 'OutOfSync', 'OwnerNotFound'])
+const failedFinishedReasons = new Set(['Failed', 'OutOfSync', 'OwnerNotFound'])
 
 // ============================================================================
 // SHARED HELPERS

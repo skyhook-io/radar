@@ -1320,6 +1320,9 @@ func buildStatusSummary(obj runtime.Object) *StatusSummary {
 				Message:            truncateRunes(stringField(cond, "message"), 300),
 				LastTransitionTime: stringField(cond, "lastTransitionTime"),
 			}
+			if observedGeneration, ok, _ := unstructured.NestedInt64(cond, "observedGeneration"); ok {
+				summary.ObservedGeneration = observedGeneration
+			}
 			if summary.Type == "" && summary.Status == "" {
 				continue
 			}
@@ -1478,37 +1481,133 @@ func filterRefs(ctx context.Context, ac RefAccessChecker, refs []ContextRef, fie
 }
 
 func filterSchedulingSummary(ctx context.Context, summary *SchedulingSummary, ac RefAccessChecker, omitted *omittedTracker) *SchedulingSummary {
-	if summary == nil {
+	if summary == nil || len(summary.Observations) == 0 {
 		return nil
 	}
-	out := *summary
-	if out.Queue != nil && !checkRef(ctx, ac, out.Queue) {
-		out.Queue = nil
-		omitted.add("scheduling.queue", OmittedRBACDenied)
-	}
-	if out.ClusterQueue != nil && !checkRef(ctx, ac, out.ClusterQueue) {
-		out.ClusterQueue = nil
-		omitted.add("scheduling.clusterQueue", OmittedRBACDenied)
-	}
-	if out.ParentWorkload != nil && !checkRef(ctx, ac, out.ParentWorkload) {
-		out.ParentWorkload = nil
-		omitted.add("scheduling.parentWorkload", OmittedRBACDenied)
-	}
-
-	out.Flavors = filterRefs(ctx, ac, out.Flavors, "scheduling.flavors", omitted)
-	checks := make([]SchedulingAdmissionCheck, 0, len(out.AdmissionChecks))
-	deniedCheck := false
-	for _, check := range out.AdmissionChecks {
-		if !checkRef(ctx, ac, &check.Check) {
-			deniedCheck = true
+	out := &SchedulingSummary{Observations: make([]SchedulingObservation, 0, len(summary.Observations))}
+	for i := range summary.Observations {
+		observation := summary.Observations[i]
+		if !checkRef(ctx, ac, &observation.Subject) {
+			omitted.add("scheduling.observations.subject", OmittedRBACDenied)
 			continue
 		}
-		checks = append(checks, check)
+		filtered := observation
+		if observation.PrimaryCondition != nil {
+			condition := *observation.PrimaryCondition
+			filtered.PrimaryCondition = &condition
+		}
+		filtered.Disruptions = append([]ConditionSummary(nil), observation.Disruptions...)
+
+		filtered.Queues = nil
+		for _, queue := range observation.Queues {
+			filteredQueue := queue
+			filteredQueue.Roles = append([]SchedulingQueueRole(nil), queue.Roles...)
+			filteredQueue.Ref = nil
+			if queue.Ref != nil {
+				ref := *queue.Ref
+				if checkRef(ctx, ac, &ref) {
+					filteredQueue.Ref = &ref
+				} else {
+					omitted.add("scheduling.observations.queues.ref", OmittedRBACDenied)
+				}
+			}
+			filtered.Queues = append(filtered.Queues, filteredQueue)
+		}
+
+		filtered.Gates = nil
+		for _, gate := range observation.Gates {
+			filteredGate := gate
+			filteredGate.Ref = nil
+			if gate.Ref != nil {
+				ref := *gate.Ref
+				if checkRef(ctx, ac, &ref) {
+					filteredGate.Ref = &ref
+				} else {
+					omitted.add("scheduling.observations.gates.ref", OmittedRBACDenied)
+				}
+			}
+			if gate.RequeueAfterSeconds != nil {
+				requeueAfter := *gate.RequeueAfterSeconds
+				filteredGate.RequeueAfterSeconds = &requeueAfter
+			}
+			if gate.RetryCount != nil {
+				retryCount := *gate.RetryCount
+				filteredGate.RetryCount = &retryCount
+			}
+			filtered.Gates = append(filtered.Gates, filteredGate)
+		}
+
+		filtered.Kueue = filterKueueScheduling(ctx, observation.Kueue, ac, omitted)
+		out.Observations = append(out.Observations, filtered)
 	}
-	if deniedCheck {
-		omitted.add("scheduling.admissionChecks", OmittedRBACDenied)
+	if len(out.Observations) == 0 {
+		return nil
 	}
-	out.AdmissionChecks = checks
+	return out
+}
+
+func filterKueueScheduling(ctx context.Context, scheduling *KueueScheduling, ac RefAccessChecker, omitted *omittedTracker) *KueueScheduling {
+	if scheduling == nil {
+		return nil
+	}
+	out := *scheduling
+	if scheduling.Active != nil {
+		active := *scheduling.Active
+		out.Active = &active
+	}
+	if scheduling.PodsReady != nil {
+		condition := *scheduling.PodsReady
+		out.PodsReady = &condition
+	}
+	if scheduling.WaitingForReplacementPods != nil {
+		condition := *scheduling.WaitingForReplacementPods
+		out.WaitingForReplacementPods = &condition
+	}
+	if scheduling.RequeueState != nil {
+		requeue := *scheduling.RequeueState
+		if scheduling.RequeueState.Count != nil {
+			count := *scheduling.RequeueState.Count
+			requeue.Count = &count
+		}
+		out.RequeueState = &requeue
+	}
+	if scheduling.ConcurrentAdmission != nil {
+		concurrent := *scheduling.ConcurrentAdmission
+		concurrent.ParentRef = nil
+		if scheduling.ConcurrentAdmission.ParentRef != nil {
+			parent := *scheduling.ConcurrentAdmission.ParentRef
+			if checkRef(ctx, ac, &parent) {
+				concurrent.ParentRef = &parent
+			} else {
+				omitted.add("scheduling.observations.kueue.concurrentAdmission.parentRef", OmittedRBACDenied)
+			}
+		}
+		out.ConcurrentAdmission = &concurrent
+	}
+
+	out.PodSetAssignments = nil
+	for _, assignment := range scheduling.PodSetAssignments {
+		filteredAssignment := assignment
+		if assignment.Count != nil {
+			count := *assignment.Count
+			filteredAssignment.Count = &count
+		}
+		filteredAssignment.Resources = nil
+		for _, resource := range assignment.Resources {
+			filteredResource := resource
+			filteredResource.FlavorRef = nil
+			if resource.FlavorRef != nil {
+				flavor := *resource.FlavorRef
+				if checkRef(ctx, ac, &flavor) {
+					filteredResource.FlavorRef = &flavor
+				} else {
+					omitted.add("scheduling.observations.kueue.podSetAssignments.resources.flavorRef", OmittedRBACDenied)
+				}
+			}
+			filteredAssignment.Resources = append(filteredAssignment.Resources, filteredResource)
+		}
+		out.PodSetAssignments = append(out.PodSetAssignments, filteredAssignment)
+	}
 	return &out
 }
 

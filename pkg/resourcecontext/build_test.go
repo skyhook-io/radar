@@ -1095,6 +1095,7 @@ func TestBuild_Unstructured_StatusSummary(t *testing.T) {
 					"status":             "False",
 					"reason":             "DependencyMissing",
 					"message":            "waiting for dependency",
+					"observedGeneration": int64(7),
 					"lastTransitionTime": "2026-05-21T10:00:00Z",
 				},
 			},
@@ -1112,7 +1113,7 @@ func TestBuild_Unstructured_StatusSummary(t *testing.T) {
 		t.Fatalf("Conditions len: got %d want %d", got, want)
 	}
 	cond := rc.StatusSummary.Conditions[0]
-	if cond.Type != "Ready" || cond.Status != "False" || cond.Reason != "DependencyMissing" {
+	if cond.Type != "Ready" || cond.Status != "False" || cond.Reason != "DependencyMissing" || cond.ObservedGeneration != 7 {
 		t.Errorf("Condition: got %+v", cond)
 	}
 }
@@ -1413,47 +1414,90 @@ func TestBuild_SchedulingSummaryGatesEveryRelatedReference(t *testing.T) {
 			"namespace": "prod",
 		},
 	}}
-	summary := &SchedulingSummary{
-		Controller:   "kueue",
-		Stage:        SchedulingExternalCheck,
-		Queue:        &ContextRef{Kind: "LocalQueue", Group: "kueue.x-k8s.io", Namespace: "prod", Name: "gpu"},
-		ClusterQueue: &ContextRef{Kind: "ClusterQueue", Group: "kueue.x-k8s.io", Name: "gpu-team"},
-		ParentWorkload: &ContextRef{
-			Kind: "Workload", Group: "kueue.x-k8s.io", Namespace: "prod", Name: "parent",
+	active := true
+	count := int64(2)
+	summary := &SchedulingSummary{Observations: []SchedulingObservation{{
+		Source:   SchedulingSourceKueue,
+		Domain:   SchedulingDomainAdmission,
+		Subject:  ContextRef{Kind: "Workload", Group: "kueue.x-k8s.io", Namespace: "prod", Name: "trainer"},
+		Decision: SchedulingDecisionUnsatisfied,
+		PrimaryCondition: &ConditionSummary{
+			Type: "Admitted", Status: "False", Reason: "UnsatisfiedAdmissionChecks",
 		},
-		Variant: true,
-		AdmissionChecks: []SchedulingAdmissionCheck{{
-			Check: ContextRef{Kind: "AdmissionCheck", Group: "kueue.x-k8s.io", Name: "capacity"},
-			State: "Rejected",
+		Queues: []SchedulingQueue{
+			{Name: "gpu", Roles: []SchedulingQueueRole{SchedulingQueueSubmission}, Ref: &ContextRef{Kind: "LocalQueue", Group: "kueue.x-k8s.io", Namespace: "prod", Name: "gpu"}},
+			{Name: "gpu-team", Roles: []SchedulingQueueRole{SchedulingQueueEntitlement}, Ref: &ContextRef{Kind: "ClusterQueue", Group: "kueue.x-k8s.io", Name: "gpu-team"}},
+		},
+		Gates: []SchedulingGate{{
+			Kind:        SchedulingGateAdmissionCheck,
+			Name:        "capacity",
+			Ref:         &ContextRef{Kind: "AdmissionCheck", Group: "kueue.x-k8s.io", Name: "capacity"},
+			NativeState: "Rejected", Decision: SchedulingDecisionUnsatisfied,
 		}},
-		Flavors: []ContextRef{{Kind: "ResourceFlavor", Group: "kueue.x-k8s.io", Name: "a10"}},
-	}
+		Disruptions: []ConditionSummary{{Type: "Evicted", Status: "True", Reason: "Preempted"}},
+		Kueue: &KueueScheduling{
+			Phase: KueuePhaseQuotaReserved, Active: &active,
+			PodSetAssignments: []KueuePodSetAssignment{{
+				Name: "workers", Count: &count,
+				Resources: []KueueResourceAssignment{{
+					Name:      "nvidia.com/gpu",
+					Flavor:    "a10",
+					FlavorRef: &ContextRef{Kind: "ResourceFlavor", Group: "kueue.x-k8s.io", Name: "a10"},
+					Usage:     "2",
+				}},
+			}},
+			ConcurrentAdmission: &KueueConcurrentAdmission{ParentName: "parent", ParentRef: &ContextRef{
+				Kind: "Workload", Group: "kueue.x-k8s.io", Namespace: "control", Name: "parent",
+			}},
+		},
+	}}}
 
 	tests := []struct {
-		name      string
-		denied    denyChecker
-		field     string
-		assertNil func(*SchedulingSummary) bool
+		name           string
+		denied         denyChecker
+		field          string
+		assertFiltered func(SchedulingObservation) bool
 	}{
 		{
 			name: "LocalQueue", denied: denyChecker{group: "kueue.x-k8s.io", kind: "LocalQueue", namespace: "prod"},
-			field: "scheduling.queue", assertNil: func(got *SchedulingSummary) bool { return got.Queue == nil },
+			field: "scheduling.observations.queues.ref", assertFiltered: func(got SchedulingObservation) bool {
+				return len(got.Queues) == 2 && got.Queues[0].Name == "gpu" && got.Queues[0].Ref == nil &&
+					len(got.Queues[0].Roles) == 1 && got.Queues[0].Roles[0] == SchedulingQueueSubmission &&
+					got.Queues[1].Ref != nil
+			},
 		},
 		{
 			name: "ClusterQueue", denied: denyChecker{group: "kueue.x-k8s.io", kind: "ClusterQueue"},
-			field: "scheduling.clusterQueue", assertNil: func(got *SchedulingSummary) bool { return got.ClusterQueue == nil },
+			field: "scheduling.observations.queues.ref", assertFiltered: func(got SchedulingObservation) bool {
+				return len(got.Queues) == 2 && got.Queues[0].Ref != nil && got.Queues[1].Name == "gpu-team" &&
+					got.Queues[1].Ref == nil && len(got.Queues[1].Roles) == 1 &&
+					got.Queues[1].Roles[0] == SchedulingQueueEntitlement
+			},
 		},
 		{
-			name: "Parent Workload", denied: denyChecker{group: "kueue.x-k8s.io", kind: "Workload", namespace: "prod"},
-			field: "scheduling.parentWorkload", assertNil: func(got *SchedulingSummary) bool { return got.ParentWorkload == nil },
+			name: "Parent Workload", denied: denyChecker{group: "kueue.x-k8s.io", kind: "Workload", namespace: "control"},
+			field: "scheduling.observations.kueue.concurrentAdmission.parentRef", assertFiltered: func(got SchedulingObservation) bool {
+				return got.Kueue != nil && got.Kueue.ConcurrentAdmission != nil &&
+					got.Kueue.ConcurrentAdmission.ParentName == "parent" && got.Kueue.ConcurrentAdmission.ParentRef == nil
+			},
 		},
 		{
 			name: "AdmissionCheck", denied: denyChecker{group: "kueue.x-k8s.io", kind: "AdmissionCheck"},
-			field: "scheduling.admissionChecks", assertNil: func(got *SchedulingSummary) bool { return len(got.AdmissionChecks) == 0 },
+			field: "scheduling.observations.gates.ref", assertFiltered: func(got SchedulingObservation) bool {
+				return len(got.Gates) == 1 && got.Gates[0].Name == "capacity" && got.Gates[0].Ref == nil &&
+					got.Gates[0].NativeState == "Rejected"
+			},
 		},
 		{
 			name: "ResourceFlavor", denied: denyChecker{group: "kueue.x-k8s.io", kind: "ResourceFlavor"},
-			field: "scheduling.flavors", assertNil: func(got *SchedulingSummary) bool { return len(got.Flavors) == 0 },
+			field: "scheduling.observations.kueue.podSetAssignments.resources.flavorRef", assertFiltered: func(got SchedulingObservation) bool {
+				if got.Kueue == nil || len(got.Kueue.PodSetAssignments) != 1 || len(got.Kueue.PodSetAssignments[0].Resources) != 1 {
+					return false
+				}
+				resource := got.Kueue.PodSetAssignments[0].Resources[0]
+				return resource.Flavor == "a10" && resource.FlavorRef == nil &&
+					resource.Name == "nvidia.com/gpu" && resource.Usage == "2"
+			},
 		},
 	}
 	for _, test := range tests {
@@ -1461,8 +1505,17 @@ func TestBuild_SchedulingSummaryGatesEveryRelatedReference(t *testing.T) {
 			rc := Build(context.Background(), obj, Options{
 				Tier: TierBasic, AccessChecker: test.denied, Scheduling: summary,
 			})
-			if rc.Scheduling == nil || !test.assertNil(rc.Scheduling) {
+			if rc.Scheduling == nil || len(rc.Scheduling.Observations) != 1 {
+				t.Fatalf("missing scheduling observation: %+v", rc.Scheduling)
+			}
+			got := rc.Scheduling.Observations[0]
+			if !test.assertFiltered(got) {
 				t.Fatalf("denied reference remained visible: %+v", rc.Scheduling)
+			}
+			if got.Source != SchedulingSourceKueue || got.Domain != SchedulingDomainAdmission ||
+				got.Subject != summary.Observations[0].Subject || got.Decision != SchedulingDecisionUnsatisfied ||
+				got.Kueue == nil || got.Kueue.Phase != KueuePhaseQuotaReserved {
+				t.Fatalf("RBAC filtering changed scheduling facts: %+v", got)
 			}
 			if !hasOmitted(rc.Omitted, test.field) {
 				t.Fatalf("missing omitted marker %q: %+v", test.field, rc.Omitted)
@@ -1470,7 +1523,140 @@ func TestBuild_SchedulingSummaryGatesEveryRelatedReference(t *testing.T) {
 		})
 	}
 
-	if summary.Queue == nil || len(summary.AdmissionChecks) != 1 || len(summary.Flavors) != 1 {
+	input := summary.Observations[0]
+	if len(input.Queues) != 2 || input.Queues[0].Ref == nil || len(input.Gates) != 1 || input.Gates[0].Ref == nil ||
+		input.Kueue.ConcurrentAdmission == nil || input.Kueue.ConcurrentAdmission.ParentRef == nil ||
+		input.Kueue.PodSetAssignments[0].Resources[0].FlavorRef == nil {
 		t.Fatalf("Build mutated caller-owned scheduling summary: %+v", summary)
+	}
+}
+
+func TestBuild_SchedulingSummaryDropsUnreadableObservationSubject(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Pod",
+		"metadata":   map[string]any{"name": "trainer-pod", "namespace": "prod"},
+	}}
+	summary := &SchedulingSummary{Observations: []SchedulingObservation{{
+		Source:   SchedulingSourceKueue,
+		Domain:   SchedulingDomainAdmission,
+		Subject:  ContextRef{Kind: "Workload", Group: "kueue.x-k8s.io", Namespace: "prod", Name: "trainer"},
+		Decision: SchedulingDecisionUnsatisfied,
+		Queues: []SchedulingQueue{{
+			Name:  "gpu",
+			Roles: []SchedulingQueueRole{SchedulingQueueSubmission},
+		}},
+	}}}
+
+	rc := Build(context.Background(), obj, Options{
+		Tier:          TierBasic,
+		AccessChecker: denyChecker{group: "kueue.x-k8s.io", kind: "Workload", namespace: "prod"},
+		Scheduling:    summary,
+	})
+	if rc.Scheduling != nil {
+		t.Fatalf("want scheduling omitted when its only subject is unreadable, got %+v", rc.Scheduling)
+	}
+	if !hasOmitted(rc.Omitted, "scheduling.observations.subject") {
+		t.Fatalf("missing subject omission marker: %+v", rc.Omitted)
+	}
+	if len(summary.Observations) != 1 || summary.Observations[0].Subject.Name != "trainer" {
+		t.Fatalf("Build mutated caller-owned scheduling summary: %+v", summary)
+	}
+}
+
+func TestBuild_EmptySchedulingSummaryIsOmitted(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Pod",
+		"metadata":   map[string]any{"name": "trainer-pod", "namespace": "prod"},
+	}}
+	rc := Build(context.Background(), obj, Options{Tier: TierBasic, Scheduling: &SchedulingSummary{}})
+	if rc.Scheduling != nil {
+		t.Fatalf("want empty scheduling summary omitted, got %+v", rc.Scheduling)
+	}
+}
+
+func TestBuild_SchedulingSummaryDeepCopiesNestedData(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "kueue.x-k8s.io/v1beta2",
+		"kind":       "Workload",
+		"metadata":   map[string]any{"name": "trainer", "namespace": "prod"},
+	}}
+	active := true
+	count := int64(2)
+	retryCount := int64(3)
+	requeueAfter := int64(30)
+	requeueCount := int64(4)
+	summary := &SchedulingSummary{Observations: []SchedulingObservation{{
+		Source: SchedulingSourceKueue, Domain: SchedulingDomainAdmission,
+		Subject:          ContextRef{Kind: "Workload", Group: "kueue.x-k8s.io", Namespace: "prod", Name: "trainer"},
+		Decision:         SchedulingDecisionUnsatisfied,
+		PrimaryCondition: &ConditionSummary{Type: "Admitted", Status: "False", Reason: "Waiting", ObservedGeneration: 7},
+		Queues: []SchedulingQueue{{
+			Name:  "gpu",
+			Roles: []SchedulingQueueRole{SchedulingQueueSubmission},
+			Ref:   &ContextRef{Kind: "LocalQueue", Group: "kueue.x-k8s.io", Namespace: "prod", Name: "gpu"},
+		}},
+		Gates: []SchedulingGate{{
+			Kind:        SchedulingGateAdmissionCheck,
+			Name:        "capacity",
+			Ref:         &ContextRef{Kind: "AdmissionCheck", Group: "kueue.x-k8s.io", Name: "capacity"},
+			NativeState: "Retry", Decision: SchedulingDecisionUnsatisfied,
+			RetryCount: &retryCount, RequeueAfterSeconds: &requeueAfter,
+		}},
+		Disruptions: []ConditionSummary{{Type: "Evicted", Status: "True", Reason: "Preempted"}},
+		Kueue: &KueueScheduling{
+			Phase: KueuePhaseQuotaReserved, Active: &active,
+			PodsReady: &ConditionSummary{Type: "PodsReady", Status: "False", Reason: "Waiting"},
+			WaitingForReplacementPods: &ConditionSummary{
+				Type: "WaitingForReplacementPods", Status: "True", Reason: "PodsFailed",
+			},
+			PodSetAssignments: []KueuePodSetAssignment{{
+				Name: "workers", Count: &count,
+				Resources: []KueueResourceAssignment{{
+					Name: "nvidia.com/gpu", Usage: "2", Flavor: "a10",
+					FlavorRef: &ContextRef{Kind: "ResourceFlavor", Group: "kueue.x-k8s.io", Name: "a10"},
+				}},
+			}},
+			RequeueState: &KueueRequeueState{Count: &requeueCount, RequeueAt: "2026-08-30T10:04:00Z"},
+			ConcurrentAdmission: &KueueConcurrentAdmission{ParentName: "parent", ParentRef: &ContextRef{
+				Kind: "Workload", Group: "kueue.x-k8s.io", Namespace: "prod", Name: "parent",
+			}},
+		},
+	}}}
+
+	got := Build(context.Background(), obj, Options{Tier: TierBasic, Scheduling: summary}).Scheduling
+	if got == nil || len(got.Observations) != 1 {
+		t.Fatalf("missing scheduling copy: %+v", got)
+	}
+	observation := &got.Observations[0]
+	observation.Subject.Name = "changed"
+	observation.PrimaryCondition.Reason = "changed"
+	observation.Queues[0].Ref.Name = "changed"
+	observation.Queues[0].Roles[0] = SchedulingQueueEntitlement
+	observation.Gates[0].Ref.Name = "changed"
+	*observation.Gates[0].RetryCount = 99
+	*observation.Gates[0].RequeueAfterSeconds = 99
+	observation.Disruptions[0].Reason = "changed"
+	*observation.Kueue.Active = false
+	observation.Kueue.PodsReady.Reason = "changed"
+	observation.Kueue.WaitingForReplacementPods.Reason = "changed"
+	*observation.Kueue.PodSetAssignments[0].Count = 99
+	observation.Kueue.PodSetAssignments[0].Resources[0].Name = "changed"
+	observation.Kueue.PodSetAssignments[0].Resources[0].FlavorRef.Name = "changed"
+	*observation.Kueue.RequeueState.Count = 99
+	observation.Kueue.ConcurrentAdmission.ParentRef.Name = "changed"
+
+	want := summary.Observations[0]
+	if want.Subject.Name != "trainer" || want.PrimaryCondition.Reason != "Waiting" || want.PrimaryCondition.ObservedGeneration != 7 ||
+		want.Queues[0].Ref.Name != "gpu" || want.Queues[0].Roles[0] != SchedulingQueueSubmission || want.Gates[0].Ref.Name != "capacity" ||
+		*want.Gates[0].RetryCount != 3 || *want.Gates[0].RequeueAfterSeconds != 30 ||
+		want.Disruptions[0].Reason != "Preempted" || !*want.Kueue.Active ||
+		want.Kueue.PodsReady.Reason != "Waiting" || want.Kueue.WaitingForReplacementPods.Reason != "PodsFailed" ||
+		*want.Kueue.PodSetAssignments[0].Count != 2 ||
+		want.Kueue.PodSetAssignments[0].Resources[0].Name != "nvidia.com/gpu" ||
+		want.Kueue.PodSetAssignments[0].Resources[0].FlavorRef.Name != "a10" ||
+		*want.Kueue.RequeueState.Count != 4 || want.Kueue.ConcurrentAdmission.ParentRef.Name != "parent" {
+		t.Fatalf("filtered copy aliases caller-owned scheduling data: %+v", summary)
 	}
 }

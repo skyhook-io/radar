@@ -1382,14 +1382,29 @@ This is resource reconnaissance, not GPU accounting or end-to-end workload diagn
 
 For an exact `kueue.x-k8s.io/v1beta2` Workload, the REST AI resource endpoint
 and MCP `get_resource` also project a bounded admission summary into
-`resourceContext.scheduling`: current stage, the controller's primary
-condition/reason, LocalQueue and ClusterQueue, AdmissionChecks, assigned
-ResourceFlavors, requeue state, and documented concurrent-admission
-Parent/Variant ownership. Waiting is context rather than an Issue. Deprecated
-coarse Kueue reasons are labeled `reasonPrecision: coarse`; Radar does not
-infer the controller's feature-gate state or pending queue position. The block
-is a projection of that returned Workload's status snapshot, not a claim of
-queue-wide observation coverage.
+`resourceContext.scheduling.observations`. The first adapter emits one Kueue
+`admission` observation: a controller-neutral `satisfied`, `unsatisfied`,
+`held`, or `unknown` decision; the most useful native condition; LocalQueue and
+ClusterQueue facts with submission/entitlement roles; AdmissionCheck and
+preemption-gate evidence; and affirmative disruption conditions from the
+current snapshot. Resource names remain useful facts when RBAC withholds an
+optional navigation reference.
+
+Typed Kueue detail retains the controller's `pending` / `quota_reserved` /
+`admitted` / `finished` phase, PodsReady and replacement-Pod evidence,
+per-PodSet resource-to-ResourceFlavor assignments and usage, requeue state,
+and an exact concurrent-admission Parent reference for a Variant. Each
+observation carries the Workload's `subjectGeneration`, and projected
+conditions retain `observedGeneration`, so consumers can detect stale
+controller evidence. The compact projection keeps the first eight PodSets in
+name order and up to seven resource assignments per PodSet, prioritizing
+extended resources before core resources; explicit truncation flags point
+consumers back to the returned raw Workload for the complete status. Normal
+unsatisfied admission is scheduling context rather than an operational Issue.
+Radar does not infer feature-gate state, queue position, fairness math, Pod
+placement, or physical capacity. This is a bounded projection of the returned
+Workload's current status, not condition history, queue-wide observation
+coverage, or support for other Kueue API versions.
 
 ### KubeRay
 

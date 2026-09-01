@@ -1,0 +1,52 @@
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: Workload
+metadata:
+  name: blocked-on-preemption
+  namespace: training
+  generation: 7
+spec:
+  queueName: gpu
+  preemptionGates:
+    - name: priority-budget
+    - name: concurrent-admission
+    - name: capacity-preemption
+  podSets:
+    - name: workers
+      count: 2
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: trainer
+              image: registry.k8s.io/pause:3.10
+status:
+  conditions:
+    - type: QuotaReserved
+      status: "False"
+      reason: AdmissionGated
+      message: Workload requires preemption but preemption is gated
+      observedGeneration: 7
+      lastTransitionTime: "2026-08-30T10:00:00Z"
+    - type: Admitted
+      status: "False"
+      reason: NoReservation
+      message: The workload has no reservation
+      observedGeneration: 7
+      lastTransitionTime: "2026-08-30T10:00:00Z"
+    - type: BlockedOnPreemptionGates
+      status: "True"
+      reason: PreemptionGated
+      message: Workload could free quota by preemption but a gate is closed
+      observedGeneration: 7
+      lastTransitionTime: "2026-08-30T10:01:00Z"
+  admissionChecks:
+    - name: policy
+      state: Ready
+      lastTransitionTime: "2026-08-30T09:59:00Z"
+  preemptionGates:
+    - name: concurrent-admission
+      position: Open
+      lastTransitionTime: "2026-08-30T09:58:00Z"
+    - name: capacity-preemption
+      position: Closed
+      lastTransitionTime: "2026-08-30T09:59:00Z"

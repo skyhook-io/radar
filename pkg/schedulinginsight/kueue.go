@@ -1,5 +1,6 @@
-// Package schedulinginsight projects controller-owned admission facts into a
-// compact, controller-neutral summary. It does not reproduce scheduler math.
+// Package schedulinginsight projects controller-owned scheduling facts into a
+// shared observation envelope while retaining provider-native evidence. It
+// does not reproduce scheduler math.
 package schedulinginsight
 
 import (
@@ -21,9 +22,12 @@ var kueueWorkloadV1Beta2 = schema.GroupVersionKind{
 }
 
 const (
-	maxAdmissionChecks = 8
-	maxResourceFlavors = 8
-	maxMessageBytes    = 256
+	maxAdmissionChecks = 8 // Kueue v0.19.2 validates status.admissionChecks at this maximum.
+
+	maxProjectedPodSetAssignments  = 8 // Keep context bounded; the raw Workload retains Kueue's full 18-entry API maximum.
+	maxProjectedResourcesPerPodSet = 7 // Bound the cross-product; the raw Workload retains every assigned resource.
+	maxPrimaryMessageBytes         = 256
+	maxAdmissionMessageBytes       = 120
 )
 
 type workloadCondition struct {
@@ -31,6 +35,7 @@ type workloadCondition struct {
 	Status             string
 	Reason             string
 	Message            string
+	ObservedGeneration int64
 	LastTransitionTime string
 }
 
@@ -42,42 +47,46 @@ func ForResource(obj runtime.Object, tier resourcecontext.ContextTier) *resource
 	}
 
 	conditions := workloadConditions(u)
-	checks, checksTruncated, hasIncompleteCheck := admissionChecks(u, tier)
-	flavors, flavorsTruncated := resourceFlavors(u)
+	admissionGates, hasIncompleteAdmissionCheck := admissionChecks(u, tier)
+	gates := append(admissionGates, preemptionGates(u)...)
+	sortSchedulingGates(gates)
 	active, hasActive, _ := unstructured.NestedBool(u.Object, "spec", "active")
-	stage, blocker := workloadStage(conditions, hasIncompleteCheck, hasActive && !active, tier)
+	inactive := hasActive && !active
 
-	summary := &resourcecontext.SchedulingSummary{
-		Controller:               "kueue",
-		Stage:                    stage,
-		Blocker:                  blocker,
-		AdmissionChecks:          checks,
-		AdmissionChecksTruncated: checksTruncated,
-		Flavors:                  flavors,
-		FlavorsTruncated:         flavorsTruncated,
+	kueue := &resourcecontext.KueueScheduling{
+		Phase:                     workloadPhase(conditions),
+		Outcome:                   workloadOutcome(conditions),
+		PodsReady:                 conditionSummaryIfPresent(conditions, "PodsReady", maxPrimaryMessageBytes),
+		WaitingForReplacementPods: conditionSummaryIfPresent(conditions, "WaitingForReplacementPods", maxPrimaryMessageBytes),
+		RequeueState:              requeueState(u),
+		ConcurrentAdmission:       concurrentAdmission(u),
 	}
+	if hasActive {
+		kueue.Active = &active
+	}
+	kueue.PodSetAssignments, kueue.PodSetAssignmentsTruncated = podSetAssignments(u)
 
-	if queueName, _, _ := unstructured.NestedString(u.Object, "spec", "queueName"); queueName != "" {
-		summary.Queue = &resourcecontext.ContextRef{
-			Kind:      "LocalQueue",
+	observation := resourcecontext.SchedulingObservation{
+		Source:            resourcecontext.SchedulingSourceKueue,
+		Domain:            resourcecontext.SchedulingDomainAdmission,
+		SubjectGeneration: u.GetGeneration(),
+		Subject: resourcecontext.ContextRef{
+			Kind:      kueueWorkloadV1Beta2.Kind,
 			Group:     kueueWorkloadV1Beta2.Group,
 			Namespace: u.GetNamespace(),
-			Name:      queueName,
-		}
+			Name:      u.GetName(),
+		},
+		Decision:         workloadDecision(conditions, inactive, hasIncompleteAdmissionCheck),
+		PrimaryCondition: primaryCondition(conditions, inactive),
+		Queues:           queueRefs(u),
+		Gates:            gates,
+		Disruptions:      disruptionConditions(conditions),
+		Kueue:            kueue,
 	}
-	if clusterQueue, _, _ := unstructured.NestedString(u.Object, "status", "admission", "clusterQueue"); clusterQueue != "" {
-		summary.ClusterQueue = &resourcecontext.ContextRef{
-			Kind:  "ClusterQueue",
-			Group: kueueWorkloadV1Beta2.Group,
-			Name:  clusterQueue,
-		}
+
+	return &resourcecontext.SchedulingSummary{
+		Observations: []resourcecontext.SchedulingObservation{observation},
 	}
-	if parent := parentWorkload(u); parent != nil {
-		summary.ParentWorkload = parent
-		summary.Variant = true
-	}
-	summary.Requeue = requeueState(u)
-	return summary
 }
 
 func workloadConditions(u *unstructured.Unstructured) map[string]workloadCondition {
@@ -98,85 +107,81 @@ func workloadConditions(u *unstructured.Unstructured) map[string]workloadConditi
 		status, _ := condition["status"].(string)
 		reason, _ := condition["reason"].(string)
 		message, _ := condition["message"].(string)
+		observedGeneration, _ := condition["observedGeneration"].(int64)
 		transition, _ := condition["lastTransitionTime"].(string)
 		result[conditionType] = workloadCondition{
 			Type:               conditionType,
 			Status:             status,
 			Reason:             reason,
 			Message:            message,
+			ObservedGeneration: observedGeneration,
 			LastTransitionTime: transition,
 		}
 	}
 	return result
 }
 
-func workloadStage(conditions map[string]workloadCondition, hasIncompleteCheck, inactive bool, tier resourcecontext.ContextTier) (resourcecontext.SchedulingStage, *resourcecontext.SchedulingBlocker) {
-	if condition, ok := trueCondition(conditions, "Finished"); ok {
-		stage := resourcecontext.SchedulingFinished
-		switch condition.Reason {
-		case "Failed", "FailedToStart", "OutOfSync", "OwnerNotFound":
-			stage = resourcecontext.SchedulingFailed
-		}
-		return stage, nil
+func workloadPhase(conditions map[string]workloadCondition) resourcecontext.KueuePhase {
+	if _, ok := trueCondition(conditions, "Finished"); ok {
+		return resourcecontext.KueuePhaseFinished
 	}
+	if _, ok := trueCondition(conditions, "Admitted"); ok {
+		return resourcecontext.KueuePhaseAdmitted
+	}
+	if _, ok := trueCondition(conditions, "QuotaReserved"); ok {
+		return resourcecontext.KueuePhaseQuotaReserved
+	}
+	return resourcecontext.KueuePhasePending
+}
 
+func workloadOutcome(conditions map[string]workloadCondition) resourcecontext.KueueOutcome {
+	finished, ok := trueCondition(conditions, "Finished")
+	if !ok {
+		return ""
+	}
+	switch finished.Reason {
+	case "Succeeded":
+		return resourcecontext.KueueOutcomeSucceeded
+	case "Failed", "OutOfSync", "OwnerNotFound":
+		return resourcecontext.KueueOutcomeFailed
+	default:
+		return ""
+	}
+}
+
+func workloadDecision(conditions map[string]workloadCondition, inactive, hasIncompleteAdmissionCheck bool) resourcecontext.SchedulingDecision {
+	if _, finished := trueCondition(conditions, "Finished"); finished {
+		if _, admitted := trueCondition(conditions, "Admitted"); admitted {
+			return resourcecontext.SchedulingDecisionSatisfied
+		}
+		if hasFalseCondition(conditions, "Admitted") || hasFalseCondition(conditions, "QuotaReserved") || hasIncompleteAdmissionCheck {
+			return resourcecontext.SchedulingDecisionUnsatisfied
+		}
+		return resourcecontext.SchedulingDecisionUnknown
+	}
+	if inactive || isOnHold(conditions) {
+		return resourcecontext.SchedulingDecisionHeld
+	}
+	if _, blocked := trueCondition(conditions, "BlockedOnPreemptionGates"); blocked {
+		return resourcecontext.SchedulingDecisionUnsatisfied
+	}
 	if _, admitted := trueCondition(conditions, "Admitted"); admitted {
-		if _, ok := trueCondition(conditions, "PodsReady"); ok {
-			return resourcecontext.SchedulingRunning, nil
-		} else if replacement, ok := trueCondition(conditions, "WaitingForReplacementPods"); ok {
-			return resourcecontext.SchedulingAdmitted, blockerFromCondition(replacement, tier)
-		} else if podsReady, ok := conditions["PodsReady"]; ok && podsReady.Status != "True" {
-			return resourcecontext.SchedulingAdmitted, blockerFromCondition(podsReady, tier)
-		}
-		return resourcecontext.SchedulingAdmitted, nil
+		return resourcecontext.SchedulingDecisionSatisfied
 	}
+	if hasFalseCondition(conditions, "Admitted") || hasFalseCondition(conditions, "QuotaReserved") || hasIncompleteAdmissionCheck {
+		return resourcecontext.SchedulingDecisionUnsatisfied
+	}
+	return resourcecontext.SchedulingDecisionUnknown
+}
 
-	if _, reserved := trueCondition(conditions, "QuotaReserved"); reserved {
-		if admitted, ok := conditions["Admitted"]; ok && admitted.Status != "True" {
-			if admitted.Reason == "UnsatisfiedAdmissionChecks" || admitted.Reason == "PendingDelayedTopologyRequests" {
-				return resourcecontext.SchedulingExternalCheck, blockerFromCondition(admitted, tier)
-			}
-			return resourcecontext.SchedulingReserved, blockerFromCondition(admitted, tier)
-		}
-		if hasIncompleteCheck {
-			return resourcecontext.SchedulingExternalCheck, nil
-		}
-		return resourcecontext.SchedulingReserved, nil
-	}
+func isOnHold(conditions map[string]workloadCondition) bool {
+	condition, ok := conditions["QuotaReserved"]
+	return ok && condition.Status == "False" && condition.Reason == "OnHold"
+}
 
-	if _, requeued := trueCondition(conditions, "Requeued"); requeued {
-		return resourcecontext.SchedulingRequeued, nil
-	}
-	if preempted, ok := trueCondition(conditions, "Preempted"); ok {
-		return resourcecontext.SchedulingPreempted, blockerFromCondition(preempted, tier)
-	}
-	if evicted, ok := trueCondition(conditions, "Evicted"); ok {
-		stage := resourcecontext.SchedulingEvicted
-		if evicted.Reason == "Preempted" {
-			stage = resourcecontext.SchedulingPreempted
-		}
-		return stage, blockerFromCondition(evicted, tier)
-	}
-
-	for _, conditionType := range []string{
-		"WaitingForReplacementPods",
-		"BlockedOnPreemptionGates",
-		"DeactivationTarget",
-	} {
-		if condition, ok := trueCondition(conditions, conditionType); ok {
-			return resourcecontext.SchedulingWaiting, blockerFromCondition(condition, tier)
-		}
-	}
-	if quota, ok := conditions["QuotaReserved"]; ok && quota.Status != "True" {
-		return resourcecontext.SchedulingWaiting, blockerFromCondition(quota, tier)
-	}
-	if admitted, ok := conditions["Admitted"]; ok && admitted.Status != "True" {
-		return resourcecontext.SchedulingWaiting, blockerFromCondition(admitted, tier)
-	}
-	if inactive {
-		return resourcecontext.SchedulingWaiting, nil
-	}
-	return resourcecontext.SchedulingSubmitted, nil
+func hasFalseCondition(conditions map[string]workloadCondition, conditionType string) bool {
+	condition, ok := conditions[conditionType]
+	return ok && condition.Status == "False"
 }
 
 func trueCondition(conditions map[string]workloadCondition, conditionType string) (workloadCondition, bool) {
@@ -184,49 +189,90 @@ func trueCondition(conditions map[string]workloadCondition, conditionType string
 	return condition, ok && condition.Status == "True"
 }
 
-func blockerFromCondition(condition workloadCondition, tier resourcecontext.ContextTier) *resourcecontext.SchedulingBlocker {
-	blocker := &resourcecontext.SchedulingBlocker{
-		Condition:       condition.Type,
-		Status:          condition.Status,
-		Reason:          condition.Reason,
-		ReasonPrecision: reasonPrecision(condition),
+func primaryCondition(conditions map[string]workloadCondition, inactive bool) *resourcecontext.ConditionSummary {
+	if _, ok := trueCondition(conditions, "Finished"); ok {
+		return conditionSummaryIfPresent(conditions, "Finished", maxPrimaryMessageBytes)
 	}
-	if tier == resourcecontext.TierDiagnostic {
-		blocker.Message = truncateMessage(condition.Message)
-		blocker.LastTransitionTime = condition.LastTransitionTime
-	}
-	return blocker
-}
-
-func reasonPrecision(condition workloadCondition) resourcecontext.SchedulingReasonPrecision {
-	if condition.Status == "True" {
-		return ""
-	}
-	switch condition.Type {
-	case "QuotaReserved":
-		switch condition.Reason {
-		case "NoMatchingFlavor", "WaitingForQuota", "ExceedsMaxQuota", "TopologyPlacementFailed",
-			"WaitingForPreemptedWorkloads", "Misconfigured", "Suspended", "PendingEvaluation",
-			"WaitingForPodsReady", "AdmissionGated":
-			return resourcecontext.SchedulingReasonGranular
-		case "Pending", "Waiting":
-			return resourcecontext.SchedulingReasonCoarse
-		}
-	case "Admitted":
-		switch condition.Reason {
-		case "NoReservation", "UnsatisfiedAdmissionChecks", "PendingDelayedTopologyRequests":
-			return resourcecontext.SchedulingReasonGranular
+	if inactive {
+		if _, ok := trueCondition(conditions, "DeactivationTarget"); ok {
+			return conditionSummaryIfPresent(conditions, "DeactivationTarget", maxPrimaryMessageBytes)
 		}
 	}
-	return ""
+	if _, ok := trueCondition(conditions, "BlockedOnPreemptionGates"); ok {
+		return conditionSummaryIfPresent(conditions, "BlockedOnPreemptionGates", maxPrimaryMessageBytes)
+	}
+	if admitted, ok := conditions["Admitted"]; ok {
+		if admitted.Status == "False" && admitted.Reason == "NoReservation" {
+			if _, hasQuota := conditions["QuotaReserved"]; hasQuota {
+				return conditionSummaryIfPresent(conditions, "QuotaReserved", maxPrimaryMessageBytes)
+			}
+		}
+		return conditionSummaryIfPresent(conditions, "Admitted", maxPrimaryMessageBytes)
+	}
+	return conditionSummaryIfPresent(conditions, "QuotaReserved", maxPrimaryMessageBytes)
 }
 
-func admissionChecks(u *unstructured.Unstructured, tier resourcecontext.ContextTier) ([]resourcecontext.SchedulingAdmissionCheck, bool, bool) {
+func conditionSummaryIfPresent(conditions map[string]workloadCondition, conditionType string, maxMessageBytes int) *resourcecontext.ConditionSummary {
+	condition, ok := conditions[conditionType]
+	if !ok {
+		return nil
+	}
+	return &resourcecontext.ConditionSummary{
+		Type:               condition.Type,
+		Status:             condition.Status,
+		Reason:             condition.Reason,
+		Message:            truncateMessage(condition.Message, maxMessageBytes),
+		ObservedGeneration: condition.ObservedGeneration,
+		LastTransitionTime: condition.LastTransitionTime,
+	}
+}
+
+func disruptionConditions(conditions map[string]workloadCondition) []resourcecontext.ConditionSummary {
+	result := make([]resourcecontext.ConditionSummary, 0, 3)
+	for _, conditionType := range []string{"Evicted", "Preempted", "DeactivationTarget"} {
+		if _, ok := trueCondition(conditions, conditionType); !ok {
+			continue
+		}
+		summary := conditionSummaryIfPresent(conditions, conditionType, maxPrimaryMessageBytes)
+		result = append(result, *summary)
+	}
+	return result
+}
+
+func queueRefs(u *unstructured.Unstructured) []resourcecontext.SchedulingQueue {
+	result := make([]resourcecontext.SchedulingQueue, 0, 2)
+	if queueName, _, _ := unstructured.NestedString(u.Object, "spec", "queueName"); queueName != "" {
+		result = append(result, resourcecontext.SchedulingQueue{
+			Name:  queueName,
+			Roles: []resourcecontext.SchedulingQueueRole{resourcecontext.SchedulingQueueSubmission},
+			Ref: &resourcecontext.ContextRef{
+				Kind:      "LocalQueue",
+				Group:     kueueWorkloadV1Beta2.Group,
+				Namespace: u.GetNamespace(),
+				Name:      queueName,
+			},
+		})
+	}
+	if clusterQueue, _, _ := unstructured.NestedString(u.Object, "status", "admission", "clusterQueue"); clusterQueue != "" {
+		result = append(result, resourcecontext.SchedulingQueue{
+			Name:  clusterQueue,
+			Roles: []resourcecontext.SchedulingQueueRole{resourcecontext.SchedulingQueueEntitlement},
+			Ref: &resourcecontext.ContextRef{
+				Kind:  "ClusterQueue",
+				Group: kueueWorkloadV1Beta2.Group,
+				Name:  clusterQueue,
+			},
+		})
+	}
+	return result
+}
+
+func admissionChecks(u *unstructured.Unstructured, tier resourcecontext.ContextTier) ([]resourcecontext.SchedulingGate, bool) {
 	raw, ok, _ := unstructured.NestedSlice(u.Object, "status", "admissionChecks")
 	if !ok {
-		return nil, false, false
+		return nil, false
 	}
-	checks := make([]resourcecontext.SchedulingAdmissionCheck, 0, len(raw))
+	gates := make([]resourcecontext.SchedulingGate, 0, len(raw))
 	hasIncomplete := false
 	for _, item := range raw {
 		state, ok := item.(map[string]any)
@@ -237,80 +283,254 @@ func admissionChecks(u *unstructured.Unstructured, tier resourcecontext.ContextT
 		if name == "" {
 			continue
 		}
-		checkState, _ := state["state"].(string)
-		switch checkState {
-		case "Pending", "Retry", "Rejected":
+		nativeState, _ := state["state"].(string)
+		decision := admissionCheckDecision(nativeState)
+		if decision == resourcecontext.SchedulingDecisionUnsatisfied {
 			hasIncomplete = true
 		}
-		check := resourcecontext.SchedulingAdmissionCheck{
-			Check: resourcecontext.ContextRef{
+		gate := resourcecontext.SchedulingGate{
+			Kind: resourcecontext.SchedulingGateAdmissionCheck,
+			Name: name,
+			Ref: &resourcecontext.ContextRef{
 				Kind:  "AdmissionCheck",
 				Group: kueueWorkloadV1Beta2.Group,
 				Name:  name,
 			},
-			State: checkState,
+			NativeState: nativeState,
+			Decision:    decision,
 		}
-		if tier == resourcecontext.TierDiagnostic {
+		gate.LastTransitionTime, _ = state["lastTransitionTime"].(string)
+		gate.RequeueAfterSeconds = int64Pointer(state["requeueAfterSeconds"])
+		gate.RetryCount = int64Pointer(state["retryCount"])
+		if decision == resourcecontext.SchedulingDecisionUnsatisfied || tier == resourcecontext.TierDiagnostic {
 			message, _ := state["message"].(string)
-			check.Message = truncateMessage(message)
-			check.LastTransitionTime, _ = state["lastTransitionTime"].(string)
-			check.RequeueAfterSeconds = int64Pointer(state["requeueAfterSeconds"])
-			check.RetryCount = int64Pointer(state["retryCount"])
+			messageLimit := maxAdmissionMessageBytes
+			if tier == resourcecontext.TierDiagnostic {
+				messageLimit = maxPrimaryMessageBytes
+			}
+			gate.Message = truncateMessage(message, messageLimit)
 		}
-		checks = append(checks, check)
+		gates = append(gates, gate)
 	}
-	sort.SliceStable(checks, func(i, j int) bool {
-		return checks[i].Check.Name < checks[j].Check.Name
-	})
-	truncated := len(checks) > maxAdmissionChecks
-	if truncated {
-		checks = checks[:maxAdmissionChecks]
-	}
-	return checks, truncated, hasIncomplete
+	return gates, hasIncomplete
 }
 
-func resourceFlavors(u *unstructured.Unstructured) ([]resourcecontext.ContextRef, bool) {
-	assignments, ok, _ := unstructured.NestedSlice(u.Object, "status", "admission", "podSetAssignments")
+func preemptionGates(u *unstructured.Unstructured) []resourcecontext.SchedulingGate {
+	gatesByName := make(map[string]resourcecontext.SchedulingGate)
+	spec, _, _ := unstructured.NestedSlice(u.Object, "spec", "preemptionGates")
+	for _, item := range spec {
+		gate, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := gate["name"].(string)
+		if name == "" {
+			continue
+		}
+		gatesByName[name] = resourcecontext.SchedulingGate{
+			Kind:        resourcecontext.SchedulingGatePreemption,
+			Name:        name,
+			NativeState: "Closed",
+			Decision:    resourcecontext.SchedulingDecisionUnsatisfied,
+		}
+	}
+	status, _, _ := unstructured.NestedSlice(u.Object, "status", "preemptionGates")
+	for _, item := range status {
+		state, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := state["name"].(string)
+		if name == "" {
+			continue
+		}
+		gate, exists := gatesByName[name]
+		if !exists {
+			continue
+		}
+		position, _ := state["position"].(string)
+		transition, _ := state["lastTransitionTime"].(string)
+		gate.NativeState = position
+		gate.Decision = preemptionGateDecision(position)
+		gate.LastTransitionTime = transition
+		gatesByName[name] = gate
+	}
+	gates := make([]resourcecontext.SchedulingGate, 0, len(gatesByName))
+	for _, gate := range gatesByName {
+		gates = append(gates, gate)
+	}
+	return gates
+}
+
+func preemptionGateDecision(position string) resourcecontext.SchedulingDecision {
+	switch position {
+	case "Open":
+		return resourcecontext.SchedulingDecisionSatisfied
+	case "Closed":
+		return resourcecontext.SchedulingDecisionUnsatisfied
+	default:
+		return resourcecontext.SchedulingDecisionUnknown
+	}
+}
+
+func sortSchedulingGates(gates []resourcecontext.SchedulingGate) {
+	sort.SliceStable(gates, func(i, j int) bool {
+		leftDecision := schedulingDecisionRank(gates[i].Decision)
+		rightDecision := schedulingDecisionRank(gates[j].Decision)
+		if leftDecision != rightDecision {
+			return leftDecision < rightDecision
+		}
+		leftKind := schedulingGateKindRank(gates[i].Kind)
+		rightKind := schedulingGateKindRank(gates[j].Kind)
+		if leftKind != rightKind {
+			return leftKind < rightKind
+		}
+		leftState := schedulingGateNativeStateRank(gates[i])
+		rightState := schedulingGateNativeStateRank(gates[j])
+		if leftState != rightState {
+			return leftState < rightState
+		}
+		return gates[i].Name < gates[j].Name
+	})
+}
+
+func schedulingDecisionRank(decision resourcecontext.SchedulingDecision) int {
+	switch decision {
+	case resourcecontext.SchedulingDecisionUnsatisfied:
+		return 0
+	case resourcecontext.SchedulingDecisionHeld:
+		return 1
+	case resourcecontext.SchedulingDecisionSatisfied:
+		return 2
+	default:
+		return 3
+	}
+}
+
+func schedulingGateKindRank(kind resourcecontext.SchedulingGateKind) int {
+	switch kind {
+	case resourcecontext.SchedulingGateAdmissionCheck:
+		return 0
+	case resourcecontext.SchedulingGatePreemption:
+		return 1
+	default:
+		return 2
+	}
+}
+
+func schedulingGateNativeStateRank(gate resourcecontext.SchedulingGate) int {
+	if gate.Kind == resourcecontext.SchedulingGateAdmissionCheck {
+		return admissionCheckRank(gate.NativeState)
+	}
+	return 0
+}
+
+func admissionCheckDecision(state string) resourcecontext.SchedulingDecision {
+	switch state {
+	case "Ready":
+		return resourcecontext.SchedulingDecisionSatisfied
+	case "Pending", "Retry", "Rejected":
+		return resourcecontext.SchedulingDecisionUnsatisfied
+	default:
+		return resourcecontext.SchedulingDecisionUnknown
+	}
+}
+
+func admissionCheckRank(state string) int {
+	switch state {
+	case "Rejected":
+		return 0
+	case "Retry":
+		return 1
+	case "Pending":
+		return 2
+	case "Ready":
+		return 3
+	default:
+		return 4
+	}
+}
+
+func podSetAssignments(u *unstructured.Unstructured) ([]resourcecontext.KueuePodSetAssignment, bool) {
+	raw, ok, _ := unstructured.NestedSlice(u.Object, "status", "admission", "podSetAssignments")
 	if !ok {
 		return nil, false
 	}
-	names := make(map[string]struct{})
-	for _, item := range assignments {
-		assignment, ok := item.(map[string]any)
+	assignments := make([]resourcecontext.KueuePodSetAssignment, 0, len(raw))
+	for _, item := range raw {
+		state, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
-		flavors, ok := assignment["flavors"].(map[string]any)
-		if !ok {
+		name, _ := state["name"].(string)
+		if name == "" {
 			continue
 		}
-		for _, rawName := range flavors {
-			if name, ok := rawName.(string); ok && name != "" {
-				names[name] = struct{}{}
-			}
-		}
+		resources, resourcesTruncated := resourceAssignments(state)
+		assignments = append(assignments, resourcecontext.KueuePodSetAssignment{
+			Name:               name,
+			Count:              int64Pointer(state["count"]),
+			Resources:          resources,
+			ResourcesTruncated: resourcesTruncated,
+		})
+	}
+	sort.SliceStable(assignments, func(i, j int) bool {
+		return assignments[i].Name < assignments[j].Name
+	})
+	truncated := len(assignments) > maxProjectedPodSetAssignments
+	if truncated {
+		assignments = assignments[:maxProjectedPodSetAssignments]
+	}
+	return assignments, truncated
+}
+
+func resourceAssignments(state map[string]any) ([]resourcecontext.KueueResourceAssignment, bool) {
+	flavors, _ := state["flavors"].(map[string]any)
+	usage, _ := state["resourceUsage"].(map[string]any)
+	names := make(map[string]struct{}, len(flavors)+len(usage))
+	for name := range flavors {
+		names[name] = struct{}{}
+	}
+	for name := range usage {
+		names[name] = struct{}{}
 	}
 	ordered := make([]string, 0, len(names))
 	for name := range names {
 		ordered = append(ordered, name)
 	}
-	sort.Strings(ordered)
-	truncated := len(ordered) > maxResourceFlavors
+	sort.SliceStable(ordered, func(i, j int) bool {
+		iExtended := strings.Contains(ordered[i], "/")
+		jExtended := strings.Contains(ordered[j], "/")
+		if iExtended != jExtended {
+			return iExtended
+		}
+		return ordered[i] < ordered[j]
+	})
+	truncated := len(ordered) > maxProjectedResourcesPerPodSet
 	if truncated {
-		ordered = ordered[:maxResourceFlavors]
+		ordered = ordered[:maxProjectedResourcesPerPodSet]
 	}
-	refs := make([]resourcecontext.ContextRef, 0, len(ordered))
+
+	result := make([]resourcecontext.KueueResourceAssignment, 0, len(ordered))
 	for _, name := range ordered {
-		refs = append(refs, resourcecontext.ContextRef{
-			Kind:  "ResourceFlavor",
-			Group: kueueWorkloadV1Beta2.Group,
-			Name:  name,
-		})
+		assignment := resourcecontext.KueueResourceAssignment{Name: name}
+		if flavorName, ok := flavors[name].(string); ok && flavorName != "" {
+			assignment.Flavor = flavorName
+			assignment.FlavorRef = &resourcecontext.ContextRef{
+				Kind:  "ResourceFlavor",
+				Group: kueueWorkloadV1Beta2.Group,
+				Name:  flavorName,
+			}
+		}
+		if value, ok := usage[name].(string); ok {
+			assignment.Usage = value
+		}
+		result = append(result, assignment)
 	}
-	return refs, truncated
+	return result, truncated
 }
 
-func parentWorkload(u *unstructured.Unstructured) *resourcecontext.ContextRef {
+func concurrentAdmission(u *unstructured.Unstructured) *resourcecontext.KueueConcurrentAdmission {
 	for _, owner := range u.GetOwnerReferences() {
 		if owner.Controller == nil || !*owner.Controller {
 			continue
@@ -318,23 +538,26 @@ func parentWorkload(u *unstructured.Unstructured) *resourcecontext.ContextRef {
 		if owner.APIVersion != kueueWorkloadV1Beta2.GroupVersion().String() || owner.Kind != kueueWorkloadV1Beta2.Kind {
 			return nil
 		}
-		return &resourcecontext.ContextRef{
-			Kind:      owner.Kind,
-			Group:     kueueWorkloadV1Beta2.Group,
-			Namespace: u.GetNamespace(),
-			Name:      owner.Name,
+		return &resourcecontext.KueueConcurrentAdmission{
+			ParentName: owner.Name,
+			ParentRef: &resourcecontext.ContextRef{
+				Kind:      owner.Kind,
+				Group:     kueueWorkloadV1Beta2.Group,
+				Namespace: u.GetNamespace(),
+				Name:      owner.Name,
+			},
 		}
 	}
 	return nil
 }
 
-func requeueState(u *unstructured.Unstructured) *resourcecontext.SchedulingRequeue {
+func requeueState(u *unstructured.Unstructured) *resourcecontext.KueueRequeueState {
 	count, hasCount, _ := unstructured.NestedInt64(u.Object, "status", "requeueState", "count")
-	at, hasAt, _ := unstructured.NestedString(u.Object, "status", "requeueState", "requeueAt")
-	if !hasCount && !hasAt {
+	requeueAt, hasRequeueAt, _ := unstructured.NestedString(u.Object, "status", "requeueState", "requeueAt")
+	if !hasCount && !hasRequeueAt {
 		return nil
 	}
-	result := &resourcecontext.SchedulingRequeue{At: at}
+	result := &resourcecontext.KueueRequeueState{RequeueAt: requeueAt}
 	if hasCount {
 		result.Count = &count
 	}
@@ -348,13 +571,13 @@ func int64Pointer(value any) *int64 {
 	return nil
 }
 
-func truncateMessage(message string) string {
+func truncateMessage(message string, maxBytes int) string {
 	message = strings.TrimSpace(message)
-	if len(message) <= maxMessageBytes {
+	if len(message) <= maxBytes {
 		return message
 	}
 	const suffix = "…"
-	cut := maxMessageBytes - len(suffix)
+	cut := maxBytes - len(suffix)
 	for cut > 0 && !utf8.RuneStart(message[cut]) {
 		cut--
 	}

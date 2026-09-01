@@ -125,14 +125,17 @@ func TestRolloutRiskSummaryRoundTrip(t *testing.T) {
 // against accidental field reshuffling.
 func TestResourceContextFieldOrdering(t *testing.T) {
 	ac := ResourceContext{
-		Tier:          TierBasic,
-		ManagedBy:     []ContextRef{{Kind: "Deployment", Name: "api"}},
-		Exposes:       []ContextRef{{Kind: "Service", Name: "api"}},
-		SelectedBy:    []ContextRef{{Kind: "NetworkPolicy", Name: "default-deny"}},
-		Uses:          &UsesBlock{},
-		RunsOn:        &ContextRef{Kind: "Node", Name: "node-1"},
-		ScaledBy:      []ContextRef{{Kind: "HorizontalPodAutoscaler", Name: "api-hpa"}},
-		Scheduling:    &SchedulingSummary{Controller: "kueue", Stage: SchedulingWaiting},
+		Tier:       TierBasic,
+		ManagedBy:  []ContextRef{{Kind: "Deployment", Name: "api"}},
+		Exposes:    []ContextRef{{Kind: "Service", Name: "api"}},
+		SelectedBy: []ContextRef{{Kind: "NetworkPolicy", Name: "default-deny"}},
+		Uses:       &UsesBlock{},
+		RunsOn:     &ContextRef{Kind: "Node", Name: "node-1"},
+		ScaledBy:   []ContextRef{{Kind: "HorizontalPodAutoscaler", Name: "api-hpa"}},
+		Scheduling: &SchedulingSummary{Observations: []SchedulingObservation{{
+			Source: SchedulingSourceKueue, Domain: SchedulingDomainAdmission,
+			Subject: ContextRef{Kind: "Workload", Name: "trainer"}, Decision: SchedulingDecisionUnsatisfied,
+		}}},
 		IssueSummary:  &IssueSummary{Count: 1},
 		AuditSummary:  &AuditSummary{Count: 2},
 		PolicySummary: &PolicySummary{},
@@ -174,6 +177,11 @@ func TestResourceContextFieldOrdering(t *testing.T) {
 // it back, and asserts deep equality. Covers every type defined in this
 // package.
 func TestResourceContextRoundTrip(t *testing.T) {
+	active := true
+	podSetCount := int64(2)
+	retryCount := int64(2)
+	requeueAfter := int64(60)
+	requeueCount := int64(2)
 	orig := ResourceContext{
 		Tier: TierDiagnostic,
 		ManagedBy: []ContextRef{{
@@ -205,25 +213,52 @@ func TestResourceContextRoundTrip(t *testing.T) {
 			Group: "autoscaling",
 			Name:  "api-hpa",
 		}},
-		Scheduling: &SchedulingSummary{
-			Controller:   "kueue",
-			Stage:        SchedulingExternalCheck,
-			Queue:        &ContextRef{Kind: "LocalQueue", Group: "kueue.x-k8s.io", Namespace: "prod", Name: "gpu"},
-			ClusterQueue: &ContextRef{Kind: "ClusterQueue", Group: "kueue.x-k8s.io", Name: "gpu-team"},
-			Blocker: &SchedulingBlocker{
-				Condition: "Admitted", Status: "False", Reason: "UnsatisfiedAdmissionChecks",
-				ReasonPrecision: SchedulingReasonGranular, Message: "capacity unavailable",
-				LastTransitionTime: "2026-08-30T10:02:00Z",
+		Scheduling: &SchedulingSummary{Observations: []SchedulingObservation{{
+			Source:            SchedulingSourceKueue,
+			Domain:            SchedulingDomainAdmission,
+			Subject:           ContextRef{Kind: "Workload", Group: "kueue.x-k8s.io", Namespace: "prod", Name: "trainer"},
+			SubjectGeneration: 9,
+			Decision:          SchedulingDecisionUnsatisfied,
+			PrimaryCondition: &ConditionSummary{
+				Type: "Admitted", Status: "False", Reason: "UnsatisfiedAdmissionChecks",
+				Message: "capacity unavailable", ObservedGeneration: 7, LastTransitionTime: "2026-08-30T10:02:00Z",
 			},
-			AdmissionChecks: []SchedulingAdmissionCheck{{
-				Check: ContextRef{Kind: "AdmissionCheck", Group: "kueue.x-k8s.io", Name: "capacity"},
-				State: "Rejected", Message: "capacity unavailable",
+			Queues: []SchedulingQueue{
+				{Name: "gpu", Roles: []SchedulingQueueRole{SchedulingQueueSubmission}, Ref: &ContextRef{Kind: "LocalQueue", Group: "kueue.x-k8s.io", Namespace: "prod", Name: "gpu"}},
+				{Name: "gpu-team", Roles: []SchedulingQueueRole{SchedulingQueueEntitlement}, Ref: &ContextRef{Kind: "ClusterQueue", Group: "kueue.x-k8s.io", Name: "gpu-team"}},
+			},
+			Gates: []SchedulingGate{{
+				Kind:        SchedulingGateAdmissionCheck,
+				Name:        "capacity",
+				Ref:         &ContextRef{Kind: "AdmissionCheck", Group: "kueue.x-k8s.io", Name: "capacity"},
+				NativeState: "Rejected", Decision: SchedulingDecisionUnsatisfied,
+				Message: "capacity unavailable", LastTransitionTime: "2026-08-30T10:03:00Z",
+				RequeueAfterSeconds: &requeueAfter, RetryCount: &retryCount,
 			}},
-			Flavors:        []ContextRef{{Kind: "ResourceFlavor", Group: "kueue.x-k8s.io", Name: "a10"}},
-			ParentWorkload: &ContextRef{Kind: "Workload", Group: "kueue.x-k8s.io", Namespace: "prod", Name: "parent"},
-			Variant:        true,
-			Requeue:        &SchedulingRequeue{At: "2026-08-30T10:04:00Z"},
-		},
+			Disruptions: []ConditionSummary{{
+				Type: "Evicted", Status: "True", Reason: "Preempted",
+			}},
+			Kueue: &KueueScheduling{
+				Phase: KueuePhaseQuotaReserved, Active: &active,
+				PodsReady: &ConditionSummary{Type: "PodsReady", Status: "False", Reason: "WaitForStart"},
+				WaitingForReplacementPods: &ConditionSummary{
+					Type: "WaitingForReplacementPods", Status: "True", Reason: "PodsFailed",
+				},
+				PodSetAssignments: []KueuePodSetAssignment{{
+					Name: "workers", Count: &podSetCount,
+					Resources: []KueueResourceAssignment{{
+						Name:      "nvidia.com/gpu",
+						Flavor:    "a10",
+						FlavorRef: &ContextRef{Kind: "ResourceFlavor", Group: "kueue.x-k8s.io", Name: "a10"},
+						Usage:     "2",
+					}},
+				}},
+				RequeueState: &KueueRequeueState{Count: &requeueCount, RequeueAt: "2026-08-30T10:04:00Z"},
+				ConcurrentAdmission: &KueueConcurrentAdmission{ParentName: "parent", ParentRef: &ContextRef{
+					Kind: "Workload", Group: "kueue.x-k8s.io", Namespace: "prod", Name: "parent",
+				}},
+			},
+		}}},
 		IssueSummary: &IssueSummary{
 			Count:           3,
 			HighestSeverity: "critical",
@@ -256,12 +291,64 @@ func TestResourceContextRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
+	wire := string(b)
+	for _, want := range []string{
+		`"observations"`, `"source":"kueue"`, `"domain":"admission"`, `"decision":"unsatisfied"`,
+		`"subjectGeneration":9`,
+		`"primaryCondition"`, `"queues"`, `"gates"`, `"nativeState":"Rejected"`, `"disruptions"`,
+		`"kueue"`, `"phase":"quota_reserved"`, `"waitingForReplacementPods"`, `"podSetAssignments"`, `"resources"`,
+		`"requeueState"`, `"requeueAt"`, `"concurrentAdmission"`, `"parentName":"parent"`, `"parentRef"`,
+	} {
+		if !strings.Contains(wire, want) {
+			t.Errorf("scheduling wire shape missing %s: %s", want, wire)
+		}
+	}
+	for _, obsolete := range []string{`"controller"`, `"stage"`, `"blocker"`, `"reasonPrecision"`} {
+		if strings.Contains(wire, obsolete) {
+			t.Errorf("scheduling wire shape retains obsolete field %s: %s", obsolete, wire)
+		}
+	}
 	var got ResourceContext
 	if err := json.Unmarshal(b, &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if !reflect.DeepEqual(orig, got) {
 		t.Fatalf("round-trip mismatch:\nwant %#v\ngot  %#v", orig, got)
+	}
+}
+
+func TestSchedulingProviderFactsMarshalWithoutNavigableRefs(t *testing.T) {
+	observation := SchedulingObservation{
+		Source:   SchedulingSourceKueue,
+		Domain:   SchedulingDomainAdmission,
+		Subject:  ContextRef{Kind: "Workload", Group: "kueue.x-k8s.io", Namespace: "prod", Name: "trainer"},
+		Decision: SchedulingDecisionUnsatisfied,
+		Queues: []SchedulingQueue{{
+			Name:  "gpu",
+			Roles: []SchedulingQueueRole{SchedulingQueueSubmission, SchedulingQueueEntitlement},
+		}},
+		Gates: []SchedulingGate{{
+			Kind:     SchedulingGatePreemption,
+			Name:     "hold-for-checkpoint",
+			Decision: SchedulingDecisionUnsatisfied,
+		}},
+	}
+
+	b, err := json.Marshal(observation)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	wire := string(b)
+	for _, want := range []string{
+		`"name":"gpu"`, `"roles":["submission","entitlement"]`,
+		`"kind":"preemption_gate"`, `"name":"hold-for-checkpoint"`,
+	} {
+		if !strings.Contains(wire, want) {
+			t.Errorf("provider fact missing %s: %s", want, wire)
+		}
+	}
+	if strings.Contains(wire, `"ref"`) {
+		t.Fatalf("unexpected navigable ref in provider-only facts: %s", wire)
 	}
 }
 

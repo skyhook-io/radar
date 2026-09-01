@@ -194,79 +194,207 @@ type StatusSummary struct {
 	Conditions []ConditionSummary `json:"conditions,omitempty"`
 }
 
+// ConditionSummary preserves one Kubernetes condition as bounded factual
+// evidence, including the generation for which a controller computed it.
 type ConditionSummary struct {
 	Type               string `json:"type"`
 	Status             string `json:"status"`
 	Reason             string `json:"reason,omitempty"`
 	Message            string `json:"message,omitempty"`
+	ObservedGeneration int64  `json:"observedGeneration,omitempty"`
 	LastTransitionTime string `json:"lastTransitionTime,omitempty"`
 }
 
-// SchedulingSummary is the compact, controller-neutral admission projection
-// shared by REST and MCP resource detail. Controller-native quota math and the
-// full condition history stay on the resource itself.
+// SchedulingSummary composes the independent scheduling decisions that can
+// apply to one resource. Each observation retains the source's native detail
+// instead of forcing admission, group placement, and Pod placement into one
+// lifecycle.
 type SchedulingSummary struct {
-	Controller               string                     `json:"controller"`
-	Stage                    SchedulingStage            `json:"stage"`
-	Queue                    *ContextRef                `json:"queue,omitempty"`
-	ClusterQueue             *ContextRef                `json:"clusterQueue,omitempty"`
-	Blocker                  *SchedulingBlocker         `json:"blocker,omitempty"`
-	AdmissionChecks          []SchedulingAdmissionCheck `json:"admissionChecks,omitempty"`
-	AdmissionChecksTruncated bool                       `json:"admissionChecksTruncated,omitempty"`
-	Flavors                  []ContextRef               `json:"flavors,omitempty"`
-	FlavorsTruncated         bool                       `json:"flavorsTruncated,omitempty"`
-	ParentWorkload           *ContextRef                `json:"parentWorkload,omitempty"`
-	Variant                  bool                       `json:"variant,omitempty"`
-	Requeue                  *SchedulingRequeue         `json:"requeue,omitempty"`
+	Observations []SchedulingObservation `json:"observations,omitempty"`
 }
 
-type SchedulingStage string
+// SchedulingObservation is one controller's decision for one scheduling
+// domain and subject. Decision describes the domain, not the subject's whole
+// lifecycle; provider-specific outcome and phase must be read together with
+// it. Disruptions contains only affirmative conditions in the current object
+// snapshot; historical transitions belong in Timeline. Adapters emit
+// observations in a stable source-defined order.
+type SchedulingObservation struct {
+	Source            SchedulingSource   `json:"source"`
+	Domain            SchedulingDomain   `json:"domain"`
+	Subject           ContextRef         `json:"subject"`
+	SubjectGeneration int64              `json:"subjectGeneration,omitempty"`
+	Decision          SchedulingDecision `json:"decision"`
+	PrimaryCondition  *ConditionSummary  `json:"primaryCondition,omitempty"`
+	Queues            []SchedulingQueue  `json:"queues,omitempty"`
+	Gates             []SchedulingGate   `json:"gates,omitempty"`
+	Disruptions       []ConditionSummary `json:"disruptions,omitempty"`
+	Kueue             *KueueScheduling   `json:"kueue,omitempty"`
+}
+
+// SchedulingSource identifies the controller or native API that produced an
+// observation.
+type SchedulingSource string
 
 const (
-	SchedulingSubmitted     SchedulingStage = "submitted"
-	SchedulingWaiting       SchedulingStage = "waiting"
-	SchedulingReserved      SchedulingStage = "reserved"
-	SchedulingExternalCheck SchedulingStage = "external_check"
-	SchedulingAdmitted      SchedulingStage = "admitted"
-	SchedulingRunning       SchedulingStage = "running"
-	SchedulingFinished      SchedulingStage = "finished"
-	SchedulingFailed        SchedulingStage = "failed"
-	SchedulingEvicted       SchedulingStage = "evicted"
-	SchedulingPreempted     SchedulingStage = "preempted"
-	SchedulingRequeued      SchedulingStage = "requeued"
+	// SchedulingSourceKueue identifies Kueue Workload admission evidence.
+	SchedulingSourceKueue SchedulingSource = "kueue"
 )
 
-type SchedulingBlocker struct {
-	Condition          string                    `json:"condition"`
-	Status             string                    `json:"status"`
-	Reason             string                    `json:"reason,omitempty"`
-	ReasonPrecision    SchedulingReasonPrecision `json:"reasonPrecision,omitempty"`
-	Message            string                    `json:"message,omitempty"`
-	LastTransitionTime string                    `json:"lastTransitionTime,omitempty"`
-}
-
-// SchedulingReasonPrecision distinguishes controller-native granular
-// unadmitted reasons from deprecated coarse reasons. It never asserts
-// controller feature-gate state.
-type SchedulingReasonPrecision string
+// SchedulingDomain identifies the independent scheduling question answered by
+// an observation.
+type SchedulingDomain string
 
 const (
-	SchedulingReasonGranular SchedulingReasonPrecision = "granular"
-	SchedulingReasonCoarse   SchedulingReasonPrecision = "coarse"
+	// SchedulingDomainAdmission answers whether a workload may consume quota
+	// and start.
+	SchedulingDomainAdmission SchedulingDomain = "admission"
+	// SchedulingDomainGroupPlacement answers whether a multi-Pod group has been
+	// placed as a unit.
+	SchedulingDomainGroupPlacement SchedulingDomain = "group_placement"
+	// SchedulingDomainPodPlacement answers whether an individual Pod can bind
+	// to a node.
+	SchedulingDomainPodPlacement SchedulingDomain = "pod_placement"
 )
 
-type SchedulingAdmissionCheck struct {
-	Check               ContextRef `json:"check"`
-	State               string     `json:"state"`
-	Message             string     `json:"message,omitempty"`
-	LastTransitionTime  string     `json:"lastTransitionTime,omitempty"`
-	RequeueAfterSeconds *int64     `json:"requeueAfterSeconds,omitempty"`
-	RetryCount          *int64     `json:"retryCount,omitempty"`
+// SchedulingDecision is the normalized answer for one scheduling domain.
+// Held means an explicit user or controller pause; Unsatisfied means the
+// controller evaluated the request but its requirements are not met.
+type SchedulingDecision string
+
+const (
+	// SchedulingDecisionSatisfied means the domain's requirements are met.
+	SchedulingDecisionSatisfied SchedulingDecision = "satisfied"
+	// SchedulingDecisionUnsatisfied means evaluated requirements are not met.
+	SchedulingDecisionUnsatisfied SchedulingDecision = "unsatisfied"
+	// SchedulingDecisionHeld means progress is explicitly paused.
+	SchedulingDecisionHeld SchedulingDecision = "held"
+	// SchedulingDecisionUnknown means the available evidence cannot answer.
+	SchedulingDecisionUnknown SchedulingDecision = "unknown"
+)
+
+// SchedulingQueue describes a provider-owned queue in the scheduling path.
+// Name remains available when RBAC prevents Radar from exposing a navigable
+// Ref. Adapters order queues from submission toward entitlement and Roles in
+// the constant order below; one queue may play both roles.
+type SchedulingQueue struct {
+	Name  string                `json:"name"`
+	Roles []SchedulingQueueRole `json:"roles"`
+	Ref   *ContextRef           `json:"ref,omitempty"`
 }
 
-type SchedulingRequeue struct {
-	Count *int64 `json:"count,omitempty"`
-	At    string `json:"at,omitempty"`
+// SchedulingQueueRole describes how a queue participates in admission.
+type SchedulingQueueRole string
+
+const (
+	// SchedulingQueueSubmission is the queue to which the subject was
+	// submitted.
+	SchedulingQueueSubmission SchedulingQueueRole = "submission"
+	// SchedulingQueueEntitlement is the queue or cohort that evaluates quota
+	// entitlement.
+	SchedulingQueueEntitlement SchedulingQueueRole = "entitlement"
+)
+
+// SchedulingGate is one named prerequisite for a scheduling decision. Name is
+// provider-owned evidence; Ref is optional navigation and independently RBAC-
+// gated. Decision describes this gate only. Adapters emit gates in a stable,
+// actionable-first order.
+type SchedulingGate struct {
+	Kind                SchedulingGateKind `json:"kind"`
+	Name                string             `json:"name"`
+	Ref                 *ContextRef        `json:"ref,omitempty"`
+	NativeState         string             `json:"nativeState,omitempty"`
+	Decision            SchedulingDecision `json:"decision"`
+	Message             string             `json:"message,omitempty"`
+	LastTransitionTime  string             `json:"lastTransitionTime,omitempty"`
+	RequeueAfterSeconds *int64             `json:"requeueAfterSeconds,omitempty"`
+	RetryCount          *int64             `json:"retryCount,omitempty"`
+}
+
+// SchedulingGateKind identifies the native gate family without forcing all
+// controllers to expose the same state vocabulary.
+type SchedulingGateKind string
+
+const (
+	// SchedulingGateAdmissionCheck is a controller-managed admission check.
+	SchedulingGateAdmissionCheck SchedulingGateKind = "admission_check"
+	// SchedulingGatePreemption governs whether a workload may trigger
+	// preemption; a closed gate does not by itself mean admission is blocked.
+	SchedulingGatePreemption SchedulingGateKind = "preemption_gate"
+	// SchedulingGatePodScheduling is a Pod spec scheduling gate.
+	SchedulingGatePodScheduling SchedulingGateKind = "pod_scheduling_gate"
+)
+
+// KueueScheduling preserves Kueue-specific evidence alongside the normalized
+// observation. Outcome describes terminal completion and must be interpreted
+// with Phase and the observation Decision.
+type KueueScheduling struct {
+	Phase                      KueuePhase                `json:"phase"`
+	Outcome                    KueueOutcome              `json:"outcome,omitempty"`
+	Active                     *bool                     `json:"active,omitempty"`
+	PodsReady                  *ConditionSummary         `json:"podsReady,omitempty"`
+	WaitingForReplacementPods  *ConditionSummary         `json:"waitingForReplacementPods,omitempty"`
+	PodSetAssignments          []KueuePodSetAssignment   `json:"podSetAssignments,omitempty"`
+	PodSetAssignmentsTruncated bool                      `json:"podSetAssignmentsTruncated,omitempty"`
+	RequeueState               *KueueRequeueState        `json:"requeueState,omitempty"`
+	ConcurrentAdmission        *KueueConcurrentAdmission `json:"concurrentAdmission,omitempty"`
+}
+
+// KueuePhase is Radar's compact projection of the Kueue admission lifecycle.
+type KueuePhase string
+
+const (
+	// KueuePhasePending means quota has not been reserved.
+	KueuePhasePending KueuePhase = "pending"
+	// KueuePhaseQuotaReserved means quota is reserved but admission is not
+	// complete.
+	KueuePhaseQuotaReserved KueuePhase = "quota_reserved"
+	// KueuePhaseAdmitted means Kueue admitted the workload.
+	KueuePhaseAdmitted KueuePhase = "admitted"
+	// KueuePhaseFinished means Kueue reports a terminal condition.
+	KueuePhaseFinished KueuePhase = "finished"
+)
+
+// KueueOutcome is the terminal result reported by Kueue.
+type KueueOutcome string
+
+const (
+	// KueueOutcomeSucceeded is a successful terminal result.
+	KueueOutcomeSucceeded KueueOutcome = "succeeded"
+	// KueueOutcomeFailed is a failed terminal result.
+	KueueOutcomeFailed KueueOutcome = "failed"
+)
+
+// KueuePodSetAssignment is the admitted count and resource assignment for one
+// Kueue PodSet. Adapters emit assignments in stable name order and report
+// truncation explicitly.
+type KueuePodSetAssignment struct {
+	Name               string                    `json:"name"`
+	Count              *int64                    `json:"count,omitempty"`
+	Resources          []KueueResourceAssignment `json:"resources,omitempty"`
+	ResourcesTruncated bool                      `json:"resourcesTruncated,omitempty"`
+}
+
+// KueueResourceAssignment is one resource quantity and optional flavor. Flavor
+// remains visible as native evidence when FlavorRef navigation is RBAC-denied.
+type KueueResourceAssignment struct {
+	Name      string      `json:"name"`
+	Flavor    string      `json:"flavor,omitempty"`
+	FlavorRef *ContextRef `json:"flavorRef,omitempty"`
+	Usage     string      `json:"usage,omitempty"`
+}
+
+// KueueRequeueState is Kueue's retry count and next eligible admission time.
+type KueueRequeueState struct {
+	Count     *int64 `json:"count,omitempty"`
+	RequeueAt string `json:"requeueAt,omitempty"`
+}
+
+// KueueConcurrentAdmission identifies the controller parent of a Kueue
+// Workload variant. ParentName remains visible when ParentRef is RBAC-denied.
+type KueueConcurrentAdmission struct {
+	ParentName string      `json:"parentName"`
+	ParentRef  *ContextRef `json:"parentRef,omitempty"`
 }
 
 type PodSummary struct {
