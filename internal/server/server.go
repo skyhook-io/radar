@@ -730,12 +730,11 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// restricted user off cluster-wide spend. Node costs are cluster-
 			// scoped and get their own SAR rather than inheriting namespace
 			// access.
-			opencost.SetScopeResolver(s.openCostScope)
 			r.Post("/opencost/application", s.handleOpenCostApplication)
 			r.Post("/opencost/application/trend", s.handleOpenCostApplicationTrend)
 			r.Get("/opencost/workload/{kind}/{namespace}/{name}", s.handleOpenCostWorkload)
 			r.Get("/opencost/workload/{kind}/{namespace}/{name}/trend", s.handleOpenCostWorkloadTrend)
-			opencost.RegisterRoutes(r, s.resolvedOpenCostCurrency)
+			opencost.RegisterRoutes(r, s.resolvedOpenCostCurrency, s.openCostScope)
 
 			// FluxCD routes
 			r.Post("/flux/{kind}/{namespace}/{name}/reconcile", s.handleFluxReconcile)

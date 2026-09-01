@@ -13,7 +13,7 @@ func TestUnavailableResponsesIncludeCurrency(t *testing.T) {
 	tests := []struct {
 		name    string
 		target  string
-		handler func(http.ResponseWriter, *http.Request, func() string)
+		handler func(http.ResponseWriter, *http.Request, func() string, ScopeResolver)
 	}{
 		{name: "summary", target: "/opencost/summary", handler: handleSummary},
 		{name: "workloads", target: "/opencost/workloads?namespace=default", handler: handleWorkloads},
@@ -24,7 +24,7 @@ func TestUnavailableResponsesIncludeCurrency(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, tt.target, nil)
 			w := httptest.NewRecorder()
-			tt.handler(w, req, func() string { return "GBP" })
+			tt.handler(w, req, func() string { return "GBP" }, fixedScope(unrestricted))
 
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
@@ -66,7 +66,7 @@ func TestConnectedResponsesIncludeCurrency(t *testing.T) {
 	tests := []struct {
 		name    string
 		target  string
-		handler func(http.ResponseWriter, *http.Request, func() string)
+		handler func(http.ResponseWriter, *http.Request, func() string, ScopeResolver)
 	}{
 		{name: "summary", target: "/opencost/summary", handler: handleSummary},
 		{name: "workloads", target: "/opencost/workloads?namespace=default", handler: handleWorkloads},
@@ -76,7 +76,7 @@ func TestConnectedResponsesIncludeCurrency(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			tt.handler(w, httptest.NewRequest(http.MethodGet, tt.target, nil), func() string { return "GBP" })
+			tt.handler(w, httptest.NewRequest(http.MethodGet, tt.target, nil), func() string { return "GBP" }, fixedScope(unrestricted))
 
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())

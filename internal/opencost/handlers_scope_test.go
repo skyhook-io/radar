@@ -67,20 +67,20 @@ func startFakeProm(t *testing.T) {
 		srv.Close()
 		prometheuspkg.Reset()
 		prometheuspkg.Initialize(nil, nil, "")
-		SetScopeResolver(nil)
 	})
 }
 
-func withScope(t *testing.T, scope Scope) {
-	t.Helper()
-	SetScopeResolver(func(*http.Request) Scope { return scope })
-	t.Cleanup(func() { SetScopeResolver(nil) })
+// unrestricted is the scope a no-auth or cluster-admin caller resolves to.
+var unrestricted = Scope{CanReadNodes: true}
+
+func fixedScope(scope Scope) ScopeResolver {
+	return func(*http.Request) Scope { return scope }
 }
 
-func getSummary(t *testing.T) *pkgopencost.CostSummary {
+func getSummary(t *testing.T, scope Scope) *pkgopencost.CostSummary {
 	t.Helper()
 	w := httptest.NewRecorder()
-	handleSummary(w, httptest.NewRequest(http.MethodGet, "/opencost/summary", nil), func() string { return "USD" })
+	handleSummary(w, httptest.NewRequest(http.MethodGet, "/opencost/summary", nil), func() string { return "USD" }, fixedScope(scope))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
 	}
@@ -101,9 +101,8 @@ func namespaceNames(rows []pkgopencost.NamespaceCost) []string {
 
 func TestSummaryUnrestrictedReturnsEveryNamespace(t *testing.T) {
 	startFakeProm(t)
-	SetScopeResolver(nil)
 
-	got := getSummary(t)
+	got := getSummary(t, unrestricted)
 	if !got.Available {
 		t.Fatalf("Available = false, reason = %q", got.Reason)
 	}
@@ -117,9 +116,8 @@ func TestSummaryUnrestrictedReturnsEveryNamespace(t *testing.T) {
 
 func TestSummaryIsFilteredToTheUsersNamespaces(t *testing.T) {
 	startFakeProm(t)
-	withScope(t, Scope{Namespaces: []string{"team-a"}, CanReadNodes: false})
 
-	got := getSummary(t)
+	got := getSummary(t, Scope{Namespaces: []string{"team-a"}})
 	if !got.Available {
 		t.Fatalf("Available = false, reason = %q", got.Reason)
 	}
@@ -136,13 +134,8 @@ func TestSummaryIsFilteredToTheUsersNamespaces(t *testing.T) {
 func TestSummaryTotalExcludesNamespacesTheUserCannotSee(t *testing.T) {
 	startFakeProm(t)
 
-	withScope(t, Scope{Namespaces: nil, CanReadNodes: true})
-	clusterTotal := getSummary(t).TotalHourlyCost
-
-	SetScopeResolver(func(*http.Request) Scope {
-		return Scope{Namespaces: []string{"team-a"}, CanReadNodes: false}
-	})
-	restricted := getSummary(t)
+	clusterTotal := getSummary(t, unrestricted).TotalHourlyCost
+	restricted := getSummary(t, Scope{Namespaces: []string{"team-a"}})
 
 	var rowSum float64
 	for _, row := range restricted.Namespaces {
@@ -158,9 +151,8 @@ func TestSummaryTotalExcludesNamespacesTheUserCannotSee(t *testing.T) {
 
 func TestSummaryDeniedWhenUserHasNoNamespaces(t *testing.T) {
 	startFakeProm(t)
-	withScope(t, Scope{Namespaces: []string{}})
 
-	got := getSummary(t)
+	got := getSummary(t, Scope{Namespaces: []string{}})
 	if got.Available {
 		t.Error("Available = true, want false")
 	}
@@ -175,10 +167,10 @@ func TestSummaryDeniedWhenUserHasNoNamespaces(t *testing.T) {
 	}
 }
 
-func getWorkloads(t *testing.T, namespace string) *pkgopencost.WorkloadCostResponse {
+func getWorkloads(t *testing.T, scope Scope, namespace string) *pkgopencost.WorkloadCostResponse {
 	t.Helper()
 	w := httptest.NewRecorder()
-	handleWorkloads(w, httptest.NewRequest(http.MethodGet, "/opencost/workloads?namespace="+namespace, nil), func() string { return "USD" })
+	handleWorkloads(w, httptest.NewRequest(http.MethodGet, "/opencost/workloads?namespace="+namespace, nil), func() string { return "USD" }, fixedScope(scope))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
 	}
@@ -191,9 +183,8 @@ func getWorkloads(t *testing.T, namespace string) *pkgopencost.WorkloadCostRespo
 
 func TestWorkloadsDeniedOutsideTheUsersNamespaces(t *testing.T) {
 	startFakeProm(t)
-	withScope(t, Scope{Namespaces: []string{"team-a"}})
 
-	got := getWorkloads(t, "team-b")
+	got := getWorkloads(t, Scope{Namespaces: []string{"team-a"}}, "team-b")
 	if got.Available {
 		t.Error("Available = true, want false for a namespace the user cannot see")
 	}
@@ -210,26 +201,24 @@ func TestWorkloadsDeniedOutsideTheUsersNamespaces(t *testing.T) {
 
 func TestWorkloadsServedInsideTheUsersNamespaces(t *testing.T) {
 	startFakeProm(t)
-	withScope(t, Scope{Namespaces: []string{"team-a"}})
 
-	if got := getWorkloads(t, "team-a"); got.Reason == pkgopencost.ReasonAccessDenied {
+	if got := getWorkloads(t, Scope{Namespaces: []string{"team-a"}}, "team-a"); got.Reason == pkgopencost.ReasonAccessDenied {
 		t.Error("an in-scope namespace must not be denied")
 	}
 }
 
 func TestWorkloadsUnrestrictedIsUnchanged(t *testing.T) {
 	startFakeProm(t)
-	SetScopeResolver(nil)
 
-	if got := getWorkloads(t, "team-b"); got.Reason == pkgopencost.ReasonAccessDenied {
+	if got := getWorkloads(t, unrestricted, "team-b"); got.Reason == pkgopencost.ReasonAccessDenied {
 		t.Error("unrestricted caller must not be denied")
 	}
 }
 
-func getTrend(t *testing.T) *pkgopencost.CostTrendResponse {
+func getTrend(t *testing.T, scope Scope) *pkgopencost.CostTrendResponse {
 	t.Helper()
 	w := httptest.NewRecorder()
-	handleTrend(w, httptest.NewRequest(http.MethodGet, "/opencost/trend?range=24h", nil), func() string { return "USD" })
+	handleTrend(w, httptest.NewRequest(http.MethodGet, "/opencost/trend?range=24h", nil), func() string { return "USD" }, fixedScope(scope))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
 	}
@@ -243,13 +232,11 @@ func getTrend(t *testing.T) *pkgopencost.CostTrendResponse {
 func TestTrendSeriesFilteredToTheUsersNamespaces(t *testing.T) {
 	startFakeProm(t)
 
-	SetScopeResolver(nil)
-	if all := getTrend(t); len(all.Series) < 2 {
+	if all := getTrend(t, unrestricted); len(all.Series) < 2 {
 		t.Fatalf("fixture produced %d series, need at least 2 to prove filtering", len(all.Series))
 	}
 
-	withScope(t, Scope{Namespaces: []string{"team-a"}})
-	got := getTrend(t)
+	got := getTrend(t, Scope{Namespaces: []string{"team-a"}})
 	if len(got.Series) != 1 || got.Series[0].Namespace != "team-a" {
 		t.Fatalf("series = %+v, want only team-a", got.Series)
 	}
@@ -260,9 +247,8 @@ func TestTrendSeriesFilteredToTheUsersNamespaces(t *testing.T) {
 
 func TestTrendDeniedWhenUserHasNoNamespaces(t *testing.T) {
 	startFakeProm(t)
-	withScope(t, Scope{Namespaces: []string{}})
 
-	got := getTrend(t)
+	got := getTrend(t, Scope{Namespaces: []string{}})
 	if got.Available {
 		t.Error("Available = true, want false")
 	}
@@ -274,10 +260,10 @@ func TestTrendDeniedWhenUserHasNoNamespaces(t *testing.T) {
 	}
 }
 
-func getNodes(t *testing.T) *pkgopencost.NodeCostResponse {
+func getNodes(t *testing.T, scope Scope) *pkgopencost.NodeCostResponse {
 	t.Helper()
 	w := httptest.NewRecorder()
-	handleNodes(w, httptest.NewRequest(http.MethodGet, "/opencost/nodes", nil), func() string { return "USD" })
+	handleNodes(w, httptest.NewRequest(http.MethodGet, "/opencost/nodes", nil), func() string { return "USD" }, fixedScope(scope))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
 	}
@@ -292,9 +278,8 @@ func getNodes(t *testing.T) *pkgopencost.NodeCostResponse {
 // so a user without `list nodes` gets nothing rather than a partial figure.
 func TestNodesDeniedWithoutNodeReadAccess(t *testing.T) {
 	startFakeProm(t)
-	withScope(t, Scope{Namespaces: []string{"team-a"}, CanReadNodes: false})
 
-	got := getNodes(t)
+	got := getNodes(t, Scope{Namespaces: []string{"team-a"}, CanReadNodes: false})
 	if got.Available {
 		t.Error("Available = true, want false")
 	}
@@ -308,9 +293,8 @@ func TestNodesDeniedWithoutNodeReadAccess(t *testing.T) {
 
 func TestNodesServedWithNodeReadAccess(t *testing.T) {
 	startFakeProm(t)
-	withScope(t, Scope{Namespaces: []string{"team-a"}, CanReadNodes: true})
 
-	got := getNodes(t)
+	got := getNodes(t, Scope{Namespaces: []string{"team-a"}, CanReadNodes: true})
 	if got.Reason == pkgopencost.ReasonAccessDenied {
 		t.Error("a caller with list-nodes must not be denied")
 	}
@@ -321,9 +305,8 @@ func TestNodesServedWithNodeReadAccess(t *testing.T) {
 
 func TestNodesUnrestrictedIsUnchanged(t *testing.T) {
 	startFakeProm(t)
-	SetScopeResolver(nil)
 
-	got := getNodes(t)
+	got := getNodes(t, unrestricted)
 	if !got.Available || len(got.Nodes) == 0 {
 		t.Errorf("unrestricted caller lost node costs: %+v", got)
 	}

@@ -16,17 +16,28 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 )
 
-// RegisterRoutes registers OpenCost routes on the given router.
-func RegisterRoutes(r chi.Router, resolveCurrency func() string) {
-	r.Get("/opencost/summary", func(w http.ResponseWriter, r *http.Request) { handleSummary(w, r, resolveCurrency) })
-	r.Get("/opencost/workloads", func(w http.ResponseWriter, r *http.Request) { handleWorkloads(w, r, resolveCurrency) })
-	r.Get("/opencost/trend", func(w http.ResponseWriter, r *http.Request) { handleTrend(w, r, resolveCurrency) })
-	r.Get("/opencost/nodes", func(w http.ResponseWriter, r *http.Request) { handleNodes(w, r, resolveCurrency) })
+// RegisterRoutes registers OpenCost routes on the given router. resolveScope
+// is required: these handlers serve cost data pulled under Radar's own
+// identity, so it is the only thing bounding a response to what the caller may
+// see.
+func RegisterRoutes(r chi.Router, resolveCurrency func() string, resolveScope ScopeResolver) {
+	r.Get("/opencost/summary", func(w http.ResponseWriter, r *http.Request) {
+		handleSummary(w, r, resolveCurrency, resolveScope)
+	})
+	r.Get("/opencost/workloads", func(w http.ResponseWriter, r *http.Request) {
+		handleWorkloads(w, r, resolveCurrency, resolveScope)
+	})
+	r.Get("/opencost/trend", func(w http.ResponseWriter, r *http.Request) {
+		handleTrend(w, r, resolveCurrency, resolveScope)
+	})
+	r.Get("/opencost/nodes", func(w http.ResponseWriter, r *http.Request) {
+		handleNodes(w, r, resolveCurrency, resolveScope)
+	})
 }
 
 // handleSummary returns namespace-level cost summary from OpenCost Prometheus metrics.
-func handleSummary(w http.ResponseWriter, r *http.Request, resolveCurrency func() string) {
-	scope := scopeFor(r)
+func handleSummary(w http.ResponseWriter, r *http.Request, resolveCurrency func() string, resolveScope ScopeResolver) {
+	scope := resolveScope(r)
 	if scope.Restricted() && len(scope.Namespaces) == 0 {
 		writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: pkgopencost.ReasonAccessDenied, Restricted: true, Currency: resolvedCurrency(resolveCurrency)})
 		return
@@ -59,14 +70,14 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 }
 
 // handleWorkloads returns workload-level cost breakdown for a namespace.
-func handleWorkloads(w http.ResponseWriter, r *http.Request, resolveCurrency func() string) {
+func handleWorkloads(w http.ResponseWriter, r *http.Request, resolveCurrency func() string, resolveScope ScopeResolver) {
 	ns := r.URL.Query().Get("namespace")
 	if ns == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "namespace parameter is required"})
 		return
 	}
 
-	scope := scopeFor(r)
+	scope := resolveScope(r)
 	if !scope.Allows(ns) {
 		writeJSON(w, http.StatusOK, pkgopencost.WorkloadCostResponse{
 			Namespace:  ns,
@@ -141,8 +152,8 @@ func stripReplicaSetSuffix(name string) string {
 }
 
 // handleTrend returns cost trend data over time as a stacked series per namespace.
-func handleTrend(w http.ResponseWriter, r *http.Request, resolveCurrency func() string) {
-	scope := scopeFor(r)
+func handleTrend(w http.ResponseWriter, r *http.Request, resolveCurrency func() string, resolveScope ScopeResolver) {
+	scope := resolveScope(r)
 	if scope.Restricted() && len(scope.Namespaces) == 0 {
 		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: pkgopencost.ReasonAccessDenied, Restricted: true, Range: r.URL.Query().Get("range"), Currency: resolvedCurrency(resolveCurrency)})
 		return
@@ -166,10 +177,10 @@ func handleTrend(w http.ResponseWriter, r *http.Request, resolveCurrency func() 
 }
 
 // handleNodes returns per-node cost breakdown.
-func handleNodes(w http.ResponseWriter, r *http.Request, resolveCurrency func() string) {
+func handleNodes(w http.ResponseWriter, r *http.Request, resolveCurrency func() string, resolveScope ScopeResolver) {
 	// Node spend is cluster-scoped — there is no namespace slice of it to
 	// hand a restricted caller, so it is all or nothing.
-	if !scopeFor(r).CanReadNodes {
+	if !resolveScope(r).CanReadNodes {
 		writeJSON(w, http.StatusOK, pkgopencost.NodeCostResponse{Available: false, Reason: pkgopencost.ReasonAccessDenied, Restricted: true, Currency: resolvedCurrency(resolveCurrency)})
 		return
 	}

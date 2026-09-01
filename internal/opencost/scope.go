@@ -3,17 +3,12 @@ package opencost
 import (
 	"net/http"
 	"slices"
-	"sync/atomic"
 )
 
 // Scope is what the calling user is allowed to see cost data for. The cost
 // endpoints read OpenCost metrics out of Prometheus under Radar's own
 // identity, so nothing in the query path is bounded by the caller's RBAC —
 // without this, a namespace-restricted user is served cluster-wide spend.
-//
-// Server.getUserNamespaces / Server.canRead are the concrete implementations;
-// passing them via SetScopeResolver avoids an import cycle (server imports
-// opencost, not the other way around).
 type Scope struct {
 	// Namespaces the caller may see. nil means unrestricted; an empty non-nil
 	// slice means no namespace access at all. Mirrors
@@ -36,27 +31,6 @@ func (s Scope) Allows(namespace string) bool {
 }
 
 // ScopeResolver derives the calling user's Scope from their request.
+// Server.openCostScope is the concrete implementation; RegisterRoutes takes it
+// as an argument because server imports opencost, not the other way around.
 type ScopeResolver func(r *http.Request) Scope
-
-var scopeResolver atomic.Pointer[ScopeResolver]
-
-// SetScopeResolver installs the request-scoped authorization lookup. Pass nil
-// to clear it (only appropriate for tests and the no-auth local path).
-func SetScopeResolver(fn ScopeResolver) {
-	if fn == nil {
-		scopeResolver.Store(nil)
-		return
-	}
-	scopeResolver.Store(&fn)
-}
-
-// scopeFor consults the installed resolver. With none installed the caller is
-// unrestricted, so the gate stays strictly additive and never locks out the
-// OSS no-auth path.
-func scopeFor(r *http.Request) Scope {
-	resolver := scopeResolver.Load()
-	if resolver == nil {
-		return Scope{CanReadNodes: true}
-	}
-	return (*resolver)(r)
-}
