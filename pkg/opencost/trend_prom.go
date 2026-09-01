@@ -18,6 +18,14 @@ type TrendPromOptions struct {
 	// MaxSeries is the top-N namespaces kept; the rest are aggregated into
 	// a single "other" series. Defaults to 8 when zero.
 	MaxSeries int
+
+	// AllowedNamespaces is the caller's authorization ceiling: nil means
+	// unrestricted, an empty non-nil slice means no access at all. Applied
+	// before the top-N ranking, so a restricted caller's own namespaces are
+	// ranked against each other rather than being collapsed into "other"
+	// (which is itself dropped, since it would aggregate namespaces they
+	// cannot see).
+	AllowedNamespaces []string
 }
 
 // ComputeCostTrendFromProm returns a stacked per-namespace cost trend from
@@ -29,8 +37,13 @@ type TrendPromOptions struct {
 //   - Underlying range query fails → Available=false, Reason=ReasonQueryError.
 //   - No series returned → Available=false, Reason=ReasonNoMetrics.
 func ComputeCostTrendFromProm(ctx context.Context, client *prom.Client, opts TrendPromOptions) *CostTrendResponse {
+	scope := namespaceScope(opts.AllowedNamespaces)
+	restricted := !scope.unrestricted()
+	if restricted && len(scope) == 0 {
+		return &CostTrendResponse{Available: false, Reason: ReasonAccessDenied, Restricted: true, Range: resolveTrendLabel(opts.Range)}
+	}
 	if client == nil {
-		return &CostTrendResponse{Available: false, Reason: ReasonNoPrometheus}
+		return &CostTrendResponse{Available: false, Reason: ReasonNoPrometheus, Restricted: restricted}
 	}
 
 	start, end, step, label := resolveTrendRange(opts.Range)
@@ -48,10 +61,10 @@ func ComputeCostTrendFromProm(ctx context.Context, client *prom.Client, opts Tre
 	result, err := client.QueryRange(ctx, query, start, end, step)
 	if err != nil {
 		log.Printf("[opencost] PromQL trend range query failed (range=%s): %v", label, err)
-		return &CostTrendResponse{Available: false, Reason: ReasonQueryError}
+		return &CostTrendResponse{Available: false, Reason: ReasonQueryError, Restricted: restricted}
 	}
 	if len(result.Series) == 0 {
-		return &CostTrendResponse{Available: false, Reason: ReasonNoMetrics}
+		return &CostTrendResponse{Available: false, Reason: ReasonNoMetrics, Restricted: restricted}
 	}
 
 	type nsRank struct {
@@ -62,7 +75,7 @@ func ComputeCostTrendFromProm(ctx context.Context, client *prom.Client, opts Tre
 	ranks := make([]nsRank, 0, len(result.Series))
 	for i, s := range result.Series {
 		ns := s.Labels["namespace"]
-		if ns == "" {
+		if ns == "" || !scope.allows(ns) {
 			continue
 		}
 		var last float64
@@ -91,7 +104,7 @@ func ComputeCostTrendFromProm(ctx context.Context, client *prom.Client, opts Tre
 	if len(ranks) > maxSeries {
 		otherMap := make(map[int64]float64)
 		for i, s := range result.Series {
-			if topSet[i] {
+			if topSet[i] || !scope.allows(s.Labels["namespace"]) {
 				continue
 			}
 			for _, dp := range s.DataPoints {
@@ -108,7 +121,14 @@ func ComputeCostTrendFromProm(ctx context.Context, client *prom.Client, opts Tre
 		}
 	}
 
-	return &CostTrendResponse{Available: true, Range: label, Series: series}
+	return &CostTrendResponse{Available: true, Restricted: restricted, Range: label, Series: series}
+}
+
+// resolveTrendLabel is resolveTrendRange's label alone, for the early returns
+// that must still echo the requested range without issuing a query.
+func resolveTrendLabel(rangeStr string) string {
+	_, _, _, label := resolveTrendRange(rangeStr)
+	return label
 }
 
 // resolveTrendRange returns the start/end/step/label for the named Range.

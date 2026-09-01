@@ -724,7 +724,13 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Post("/prometheus/rightsizing/scan", s.handleRightsizingScan)
 			prometheuspkg.RegisterRoutes(r)
 
-			// OpenCost routes
+			// OpenCost routes. Cost metrics are read out of Prometheus under
+			// Radar's own identity, so nothing in that query path is bounded by
+			// the caller's RBAC — the scope resolver is what keeps a namespace-
+			// restricted user off cluster-wide spend. Node costs are cluster-
+			// scoped and get their own SAR rather than inheriting namespace
+			// access.
+			opencost.SetScopeResolver(s.openCostScope)
 			r.Post("/opencost/application", s.handleOpenCostApplication)
 			r.Post("/opencost/application/trend", s.handleOpenCostApplicationTrend)
 			r.Get("/opencost/workload/{kind}/{namespace}/{name}", s.handleOpenCostWorkload)

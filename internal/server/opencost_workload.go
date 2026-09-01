@@ -281,3 +281,20 @@ func zeroWorkloadCost(kind, name string) *pkgopencost.WorkloadCost {
 		IdleCost:   0,
 	}
 }
+
+// openCostScope is the authorization ceiling for the cost endpoints in
+// internal/opencost. Those handlers read OpenCost metrics out of Prometheus
+// under Radar's own identity, so nothing in their query path is bounded by the
+// caller's RBAC — this is what keeps a namespace-restricted user off
+// cluster-wide spend.
+//
+// A nil Namespaces means unrestricted (auth disabled or cluster-admin); an
+// empty non-nil slice means no namespace access at all. Node costs are
+// cluster-scoped with no per-namespace slice, so they get their own SAR
+// instead of being inferred from namespace access.
+func (s *Server) openCostScope(r *http.Request) internalopencost.Scope {
+	return internalopencost.Scope{
+		Namespaces:   s.getUserNamespaces(r, nil),
+		CanReadNodes: s.canRead(r, "", "nodes", "", "list"),
+	}
+}

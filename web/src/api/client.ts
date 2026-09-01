@@ -890,6 +890,9 @@ export type CostUnavailableReason =
 export interface OpenCostSummary {
   available: boolean;
   reason?: CostUnavailableReason;
+  /** The caller sees only the namespaces they have access to — totals cover
+   *  those namespaces alone and are not cluster figures. */
+  restricted?: boolean;
   currency?: string;
   window?: string;
   totalHourlyCost?: number;
@@ -963,6 +966,7 @@ export interface OpenCostWorkloadCost {
 export interface OpenCostWorkloadResponse {
   available: boolean;
   reason?: CostUnavailableReason;
+  restricted?: boolean;
   currency?: string;
   namespace: string;
   workloads: OpenCostWorkloadCost[];
@@ -1036,6 +1040,7 @@ export interface OpenCostTrendSeries {
 export interface OpenCostTrendResponse {
   available: boolean;
   reason?: CostUnavailableReason;
+  restricted?: boolean;
   currency?: string;
   range: string;
   series?: OpenCostTrendSeries[];
@@ -1238,6 +1243,7 @@ export interface OpenCostNodeCost {
 export interface OpenCostNodeResponse {
   available: boolean;
   reason?: CostUnavailableReason;
+  restricted?: boolean;
   currency?: string;
   nodes?: OpenCostNodeCost[];
 }

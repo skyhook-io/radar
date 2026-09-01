@@ -71,6 +71,13 @@ type SummaryOptions struct {
 	// filter rows by their Properties["namespace"] to actually honor the
 	// drill-down scope.
 	NamespaceFilter string
+
+	// AllowedNamespaces is the caller's authorization ceiling: nil means
+	// unrestricted, an empty non-nil slice means no access at all. Distinct
+	// from NamespaceFilter, which is a drill-down the user chose — this one
+	// they cannot widen, so totals are recomputed over the surviving rows
+	// and the response is marked Restricted.
+	AllowedNamespaces []string
 }
 
 // ComputeCostSummary asks OpenCost's REST API for namespace-level allocation
@@ -325,8 +332,13 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 	if opts.Currency == "" {
 		opts.Currency = DefaultCurrency
 	}
+	scope := namespaceScope(opts.AllowedNamespaces)
+	restricted := !scope.unrestricted()
+	if restricted && len(scope) == 0 {
+		return &CostSummary{Available: false, Reason: ReasonAccessDenied, Restricted: true, Currency: opts.Currency}
+	}
 	if client == nil {
-		return &CostSummary{Available: false, Reason: ReasonNoPrometheus, Currency: opts.Currency}
+		return &CostSummary{Available: false, Reason: ReasonNoPrometheus, Restricted: restricted, Currency: opts.Currency}
 	}
 	if opts.Window == "" {
 		opts.Window = "1h"
@@ -340,7 +352,7 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 			`sum by (namespace) (label_replace(rate(opencost_container_cpu_cost_total[1h]), "namespace", "$1", "exported_namespace", "(.+)"))`)
 		if err != nil {
 			log.Printf("[opencost] CPU allocation fallback query also failed: %v", err)
-			return &CostSummary{Available: false, Reason: ReasonQueryError, Currency: opts.Currency}
+			return &CostSummary{Available: false, Reason: ReasonQueryError, Restricted: restricted, Currency: opts.Currency}
 		}
 	}
 
@@ -352,12 +364,12 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 			`sum by (namespace) (label_replace(rate(opencost_container_memory_cost_total[1h]), "namespace", "$1", "exported_namespace", "(.+)"))`)
 		if err != nil {
 			log.Printf("[opencost] memory allocation fallback query also failed: %v", err)
-			return &CostSummary{Available: false, Reason: ReasonQueryError, Currency: opts.Currency}
+			return &CostSummary{Available: false, Reason: ReasonQueryError, Restricted: restricted, Currency: opts.Currency}
 		}
 	}
 
 	if len(cpuResult.Series) == 0 && len(memResult.Series) == 0 {
-		return &CostSummary{Available: false, Reason: ReasonNoMetrics, Currency: opts.Currency}
+		return &CostSummary{Available: false, Reason: ReasonNoMetrics, Restricted: restricted, Currency: opts.Currency}
 	}
 
 	// Usage queries are best-effort: efficiency / idle are derived from them
@@ -385,8 +397,8 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 	storageMap := lastValuePerLabel(storageRes, storageErr, "namespace")
 
 	nsMap := make(map[string]*NamespaceCost)
-	mergeSeriesIntoNamespaceField(cpuResult, nsMap, func(nc *NamespaceCost, v float64) { nc.CPUCost = v })
-	mergeSeriesIntoNamespaceField(memResult, nsMap, func(nc *NamespaceCost, v float64) { nc.MemoryCost = v })
+	mergeSeriesIntoNamespaceField(cpuResult, nsMap, scope, func(nc *NamespaceCost, v float64) { nc.CPUCost = v })
+	mergeSeriesIntoNamespaceField(memResult, nsMap, scope, func(nc *NamespaceCost, v float64) { nc.MemoryCost = v })
 
 	var totalHourlyCost, totalStorageCost, totalUsageCost, totalAllocCost float64
 	namespaces := make([]NamespaceCost, 0, len(nsMap))
@@ -408,9 +420,14 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 		namespaces = append(namespaces, *nc)
 	}
 
-	if nodeResult, err := client.Query(ctx, `sum(`+nodeTotalHourlyCostExpr+`)`); err == nil && len(nodeResult.Series) > 0 && len(nodeResult.Series[0].DataPoints) > 0 {
-		if nodeCost := nodeResult.Series[0].DataPoints[0].Value; nodeCost > totalHourlyCost {
-			totalHourlyCost = nodeCost
+	// The cluster-wide node bill is only a valid floor for the cluster-wide
+	// total. Applying it to a restricted view would hand the caller the very
+	// figure the namespace scope exists to withhold.
+	if !restricted {
+		if nodeResult, err := client.Query(ctx, `sum(`+nodeTotalHourlyCostExpr+`)`); err == nil && len(nodeResult.Series) > 0 && len(nodeResult.Series[0].DataPoints) > 0 {
+			if nodeCost := nodeResult.Series[0].DataPoints[0].Value; nodeCost > totalHourlyCost {
+				totalHourlyCost = nodeCost
+			}
 		}
 	}
 
@@ -436,6 +453,7 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 
 	return &CostSummary{
 		Available:         true,
+		Restricted:        restricted,
 		Currency:          opts.Currency,
 		Window:            opts.Window,
 		TotalHourlyCost:   totalHourlyCost,
@@ -446,13 +464,13 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 	}
 }
 
-func mergeSeriesIntoNamespaceField(result *prom.QueryResult, nsMap map[string]*NamespaceCost, set func(*NamespaceCost, float64)) {
+func mergeSeriesIntoNamespaceField(result *prom.QueryResult, nsMap map[string]*NamespaceCost, scope namespaceScope, set func(*NamespaceCost, float64)) {
 	if result == nil {
 		return
 	}
 	for _, s := range result.Series {
 		ns := s.Labels["namespace"]
-		if ns == "" {
+		if ns == "" || !scope.allows(ns) {
 			continue
 		}
 		nc, ok := nsMap[ns]

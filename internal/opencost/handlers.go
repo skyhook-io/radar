@@ -26,6 +26,11 @@ func RegisterRoutes(r chi.Router, resolveCurrency func() string) {
 
 // handleSummary returns namespace-level cost summary from OpenCost Prometheus metrics.
 func handleSummary(w http.ResponseWriter, r *http.Request, resolveCurrency func() string) {
+	scope := scopeFor(r)
+	if scope.Restricted() && len(scope.Namespaces) == 0 {
+		writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: pkgopencost.ReasonAccessDenied, Restricted: true, Currency: resolvedCurrency(resolveCurrency)})
+		return
+	}
 	client := prometheuspkg.GetClient()
 	if client == nil {
 		writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: pkgopencost.ReasonNoPrometheus, Currency: resolvedCurrency(resolveCurrency)})
@@ -38,7 +43,10 @@ func handleSummary(w http.ResponseWriter, r *http.Request, resolveCurrency func(
 	}
 	currency := resolvedCurrency(resolveCurrency)
 	resp := pkgopencost.ComputeCostSummaryFromProm(
-		r.Context(), client.Prom(), pkgopencost.SummaryOptions{Currency: currency})
+		r.Context(), client.Prom(), pkgopencost.SummaryOptions{
+			Currency:          currency,
+			AllowedNamespaces: scope.Namespaces,
+		})
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -58,6 +66,18 @@ func handleWorkloads(w http.ResponseWriter, r *http.Request, resolveCurrency fun
 		return
 	}
 
+	scope := scopeFor(r)
+	if !scope.Allows(ns) {
+		writeJSON(w, http.StatusOK, pkgopencost.WorkloadCostResponse{
+			Namespace:  ns,
+			Reason:     pkgopencost.ReasonAccessDenied,
+			Restricted: true,
+			Workloads:  []pkgopencost.WorkloadCost{},
+			Currency:   resolvedCurrency(resolveCurrency),
+		})
+		return
+	}
+
 	client := prometheuspkg.GetClient()
 	if client == nil {
 		writeJSON(w, http.StatusOK, pkgopencost.WorkloadCostResponse{Namespace: ns, Reason: pkgopencost.ReasonNoPrometheus, Currency: resolvedCurrency(resolveCurrency)})
@@ -71,6 +91,7 @@ func handleWorkloads(w http.ResponseWriter, r *http.Request, resolveCurrency fun
 
 	resp := pkgopencost.ComputeWorkloadsFromProm(r.Context(), client.Prom(), ns, BuildPodOwnerLookup(ns))
 	resp.Currency = resolvedCurrency(resolveCurrency)
+	resp.Restricted = scope.Restricted()
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -121,6 +142,11 @@ func stripReplicaSetSuffix(name string) string {
 
 // handleTrend returns cost trend data over time as a stacked series per namespace.
 func handleTrend(w http.ResponseWriter, r *http.Request, resolveCurrency func() string) {
+	scope := scopeFor(r)
+	if scope.Restricted() && len(scope.Namespaces) == 0 {
+		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: pkgopencost.ReasonAccessDenied, Restricted: true, Range: r.URL.Query().Get("range"), Currency: resolvedCurrency(resolveCurrency)})
+		return
+	}
 	client := prometheuspkg.GetClient()
 	if client == nil {
 		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: pkgopencost.ReasonNoPrometheus, Currency: resolvedCurrency(resolveCurrency)})
@@ -131,13 +157,22 @@ func handleTrend(w http.ResponseWriter, r *http.Request, resolveCurrency func() 
 		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: ConnectionFailureReason(err), Currency: resolvedCurrency(resolveCurrency)})
 		return
 	}
-	resp := pkgopencost.ComputeCostTrendFromProm(r.Context(), client.Prom(), pkgopencost.TrendPromOptions{Range: r.URL.Query().Get("range")})
+	resp := pkgopencost.ComputeCostTrendFromProm(r.Context(), client.Prom(), pkgopencost.TrendPromOptions{
+		Range:             r.URL.Query().Get("range"),
+		AllowedNamespaces: scope.Namespaces,
+	})
 	resp.Currency = resolvedCurrency(resolveCurrency)
 	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleNodes returns per-node cost breakdown.
 func handleNodes(w http.ResponseWriter, r *http.Request, resolveCurrency func() string) {
+	// Node spend is cluster-scoped — there is no namespace slice of it to
+	// hand a restricted caller, so it is all or nothing.
+	if !scopeFor(r).CanReadNodes {
+		writeJSON(w, http.StatusOK, pkgopencost.NodeCostResponse{Available: false, Reason: pkgopencost.ReasonAccessDenied, Restricted: true, Currency: resolvedCurrency(resolveCurrency)})
+		return
+	}
 	client := prometheuspkg.GetClient()
 	if client == nil {
 		writeJSON(w, http.StatusOK, pkgopencost.NodeCostResponse{Available: false, Reason: pkgopencost.ReasonNoPrometheus, Currency: resolvedCurrency(resolveCurrency)})

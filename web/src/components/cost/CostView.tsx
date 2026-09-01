@@ -19,6 +19,7 @@ import {
   ExternalLink,
   HelpCircle,
   Loader2,
+  Lock,
   Server,
   X,
 } from 'lucide-react'
@@ -113,6 +114,13 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
         </CostOverviewState>
       )
     }
+    if (reason === 'access_denied') {
+      return (
+        <CostOverviewState>
+          <RestrictedCostNotice />
+        </CostOverviewState>
+      )
+    }
     const message =
       reason === 'no_prometheus'
         ? 'Prometheus not found — OpenCost requires Prometheus or VictoriaMetrics'
@@ -152,6 +160,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
     )
   }
 
+  const restricted = data.restricted === true
   const hourlyCost = data.totalHourlyCost ?? 0
   const currency = data.currency ?? DEFAULT_COST_CURRENCY
   const namespaces = data.namespaces ?? []
@@ -229,7 +238,9 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
                 </span>
               </div>
               <span className="text-[10px] text-theme-text-quaternary">
-                projected from last 1h average
+                {restricted
+                  ? 'your namespaces only · projected from last 1h average'
+                  : 'projected from last 1h average'}
               </span>
             </div>
           </div>
@@ -237,11 +248,18 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
 
         <CostViewTabs />
 
+        {restricted && (
+          <RestrictedCostBanner
+            namespaceCount={namespaces.length}
+            nodesHidden={nodeData?.reason === 'access_denied'}
+          />
+        )}
+
         {/* CPU vs Memory (vs Storage) split bar */}
         <div className="rounded-lg border border-theme-border bg-theme-surface/50 p-4">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-medium text-theme-text-secondary">
-              Cluster Resource Cost
+              {restricted ? 'Resource Cost' : 'Cluster Resource Cost'}
             </span>
             <div className="flex items-center gap-4 text-xs text-theme-text-tertiary">
               <span className="flex items-center gap-1.5">
@@ -348,6 +366,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
           <span>
             {currency} &middot; current rates based on last 1h average &middot;
             *monthly projections assume {COST_HOURS_PER_MONTH} hrs/mo
+            {restricted && <> &middot; limited to your namespaces</>}
             {currency !== DEFAULT_COST_CURRENCY && (
               <> &middot; no conversion</>
             )}
@@ -481,6 +500,44 @@ function SystemNamespaceCostNote({ namespace }: { namespace: string }) {
   )
 }
 
+function RestrictedCostBanner({
+  namespaceCount,
+  nodesHidden,
+}: {
+  namespaceCount: number
+  nodesHidden: boolean
+}) {
+  return (
+    <div className="flex items-start gap-2.5 rounded-lg border border-theme-border bg-theme-elevated/40 px-4 py-3">
+      <Lock className="mt-0.5 h-4 w-4 shrink-0 text-theme-text-tertiary" />
+      <div className="text-xs text-theme-text-secondary">
+        <span className="font-medium text-theme-text-primary">Restricted view.</span>{' '}
+        Costs cover only the {namespaceCount === 1 ? 'namespace' : `${namespaceCount} namespaces`}{' '}
+        you have access to. Every figure on this page — including the headline total — is a
+        partial figure, not the cluster total.
+        {nodesHidden && ' Node costs are hidden because they cannot be split per namespace.'}
+      </div>
+    </div>
+  )
+}
+
+function RestrictedCostNotice() {
+  return (
+    <div className="flex min-h-64 items-center justify-center">
+      <div className="flex max-w-md flex-col items-center gap-3 text-center text-theme-text-secondary">
+        <Lock className="h-8 w-8 text-theme-text-tertiary/40" />
+        <div>
+          <p className="text-sm font-medium text-theme-text-primary">Cost data is not available</p>
+          <p className="mt-1 text-xs text-theme-text-tertiary">
+            Cost is shown for the namespaces you have access to, and you do not currently have
+            access to any. Ask your cluster administrator for namespace access.
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function SystemNamespacesCostNote() {
   return (
     <div className="border-b border-theme-border/50 bg-theme-elevated/30 px-4 py-2 text-xs text-theme-text-tertiary">
@@ -516,7 +573,9 @@ function WorkloadRows({
   if (workloads.length === 0) {
     return (
       <div className="px-4 py-3 text-xs text-theme-text-tertiary bg-theme-elevated/30 pl-10">
-        No workload cost data available
+        {data?.reason === 'access_denied'
+          ? 'You do not have access to this namespace'
+          : 'No workload cost data available'}
       </div>
     )
   }

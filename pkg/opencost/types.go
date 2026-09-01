@@ -13,8 +13,12 @@ const (
 
 // CostSummary is the response for the /api/opencost/summary endpoint.
 type CostSummary struct {
-	Available         bool            `json:"available"`
-	Reason            string          `json:"reason,omitempty"` // Set when available=false: no_prometheus, no_metrics, query_error
+	Available bool   `json:"available"`
+	Reason    string `json:"reason,omitempty"` // Set when available=false: no_prometheus, no_metrics, query_error
+	// Restricted reports that the caller sees only the namespaces they have
+	// access to. Totals then cover those namespaces alone, so the UI must not
+	// present them as cluster figures.
+	Restricted        bool            `json:"restricted,omitempty"`
 	Currency          string          `json:"currency"`
 	Window            string          `json:"window,omitempty"`
 	TotalHourlyCost   float64         `json:"totalHourlyCost,omitempty"`
@@ -45,11 +49,12 @@ type NamespaceCost struct {
 
 // WorkloadCostResponse is the response for the /api/opencost/workloads endpoint.
 type WorkloadCostResponse struct {
-	Available bool           `json:"available"`
-	Reason    string         `json:"reason,omitempty"`
-	Currency  string         `json:"currency"`
-	Namespace string         `json:"namespace"`
-	Workloads []WorkloadCost `json:"workloads"`
+	Available  bool           `json:"available"`
+	Reason     string         `json:"reason,omitempty"`
+	Restricted bool           `json:"restricted,omitempty"`
+	Currency   string         `json:"currency"`
+	Namespace  string         `json:"namespace"`
+	Workloads  []WorkloadCost `json:"workloads"`
 }
 
 type WorkloadCostDetailResponse struct {
@@ -82,11 +87,12 @@ type WorkloadCost struct {
 
 // CostTrendResponse is the response for the /api/opencost/trend endpoint.
 type CostTrendResponse struct {
-	Available bool              `json:"available"`
-	Reason    string            `json:"reason,omitempty"`
-	Currency  string            `json:"currency"`
-	Range     string            `json:"range"`
-	Series    []CostTrendSeries `json:"series,omitempty"`
+	Available  bool              `json:"available"`
+	Reason     string            `json:"reason,omitempty"`
+	Restricted bool              `json:"restricted,omitempty"`
+	Currency   string            `json:"currency"`
+	Range      string            `json:"range"`
+	Series     []CostTrendSeries `json:"series,omitempty"`
 }
 
 type WorkloadCostTrendResponse struct {
@@ -188,10 +194,11 @@ type CostDataPoint struct {
 
 // NodeCostResponse is the response for the /api/opencost/nodes endpoint.
 type NodeCostResponse struct {
-	Available bool       `json:"available"`
-	Reason    string     `json:"reason,omitempty"`
-	Currency  string     `json:"currency"`
-	Nodes     []NodeCost `json:"nodes,omitempty"`
+	Available  bool       `json:"available"`
+	Reason     string     `json:"reason,omitempty"`
+	Restricted bool       `json:"restricted,omitempty"`
+	Currency   string     `json:"currency"`
+	Nodes      []NodeCost `json:"nodes,omitempty"`
 }
 
 // NodeCost holds per-node cost breakdown.

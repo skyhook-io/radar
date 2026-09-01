@@ -88,6 +88,7 @@ function CostCardContent({ data, onNavigate }: { data: OpenCostSummary; onNaviga
         <div className="px-4 py-1.5 border-t border-theme-border/50 flex items-center justify-between">
           <span className="text-[10px] text-theme-text-tertiary">
             {currency} &middot; projected monthly from {data.window ?? '1h'} window
+            {data.restricted && <> &middot; your namespaces only</>}
             {currency !== DEFAULT_COST_CURRENCY && (
               <> &middot; no conversion</>
             )}
