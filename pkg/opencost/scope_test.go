@@ -55,7 +55,7 @@ func namespaceRow(t *testing.T, s *CostSummary, name string) NamespaceCost {
 func TestComputeCostSummaryFromProm_UnrestrictedKeepsClusterView(t *testing.T) {
 	client := scriptedProm(t, summaryScopeCases())
 
-	got := ComputeCostSummaryFromProm(context.Background(), client, SummaryOptions{Currency: "USD"})
+	got := ComputeCostSummaryFromProm(context.Background(), client, SummaryOptions{Currency: "USD", CanReadNodes: true})
 	if !got.Available {
 		t.Fatalf("unavailable: %+v", got)
 	}
@@ -156,6 +156,32 @@ func TestComputeCostSummaryFromProm_AllowedNamespaceWithNoRowsStaysAvailable(t *
 	}
 	if got.TotalHourlyCost != 0 {
 		t.Errorf("TotalHourlyCost = %v, want 0", got.TotalHourlyCost)
+	}
+}
+
+// The node-total floor is node data. A caller denied the per-node breakdown
+// must not receive its sum through the summary's headline total instead.
+func TestComputeCostSummaryFromProm_NodeCeilingNeedsTheNodeGrant(t *testing.T) {
+	client := scriptedProm(t, summaryScopeCases())
+
+	withGrant := ComputeCostSummaryFromProm(context.Background(), client, SummaryOptions{Currency: "USD", CanReadNodes: true})
+	if withGrant.TotalHourlyCost != 20 {
+		t.Fatalf("TotalHourlyCost = %v, want the 20.0 node bill when the caller may read nodes", withGrant.TotalHourlyCost)
+	}
+
+	withoutGrant := ComputeCostSummaryFromProm(context.Background(), client, SummaryOptions{Currency: "USD"})
+	if !withoutGrant.Available {
+		t.Fatalf("unavailable: %+v", withoutGrant)
+	}
+	if len(withoutGrant.Namespaces) != 3 {
+		t.Errorf("got %d namespaces, want all 3 — only the node total is withheld", len(withoutGrant.Namespaces))
+	}
+	var rowSum float64
+	for _, row := range withoutGrant.Namespaces {
+		rowSum += row.HourlyCost
+	}
+	if withoutGrant.TotalHourlyCost != rowSum {
+		t.Errorf("TotalHourlyCost = %v, want %v (the visible rows, not the node bill)", withoutGrant.TotalHourlyCost, rowSum)
 	}
 }
 

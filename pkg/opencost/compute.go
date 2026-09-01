@@ -78,6 +78,12 @@ type SummaryOptions struct {
 	// they cannot widen, so totals are recomputed over the surviving rows
 	// and the response is marked Restricted.
 	AllowedNamespaces []string
+
+	// CanReadNodes gates the node-total floor applied to TotalHourlyCost. That
+	// floor is node data, so it answers to the same grant the per-node
+	// breakdown does — otherwise a caller denied the breakdown is handed its
+	// sum. Fails closed on the zero value.
+	CanReadNodes bool
 }
 
 // ComputeCostSummary asks OpenCost's REST API for namespace-level allocation
@@ -421,9 +427,10 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 	}
 
 	// The cluster-wide node bill is only a valid floor for the cluster-wide
-	// total. Applying it to a restricted view would hand the caller the very
-	// figure the namespace scope exists to withhold.
-	if !restricted {
+	// total, and it is node data besides. Applying it to a restricted view, or
+	// to a caller without the node grant, hands over the very figure those
+	// checks exist to withhold.
+	if !restricted && opts.CanReadNodes {
 		if nodeResult, err := client.Query(ctx, `sum(`+nodeTotalHourlyCostExpr+`)`); err == nil && len(nodeResult.Series) > 0 && len(nodeResult.Series[0].DataPoints) > 0 {
 			if nodeCost := nodeResult.Series[0].DataPoints[0].Value; nodeCost > totalHourlyCost {
 				totalHourlyCost = nodeCost

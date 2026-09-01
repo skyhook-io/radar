@@ -353,6 +353,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
           <NodeCostTable
             nodes={nodes}
             currency={nodeCurrency}
+            restricted={restricted}
             onOpenResource={onOpenResource}
           />
         )}
@@ -502,8 +503,8 @@ function RestrictedCostBanner() {
       <Lock className="mt-0.5 h-4 w-4 shrink-0 text-theme-text-tertiary" />
       <div className="text-xs text-theme-text-secondary">
         <span className="font-medium text-theme-text-primary">Restricted view.</span>{' '}
-        Costs cover only the namespaces you have access to. Every figure on this page — including
-        the headline total — is a partial figure, not the cluster total.
+        Costs cover only the namespaces you have access to. Namespace and workload figures —
+        including the headline total — are partial, not cluster totals.
       </div>
     </div>
   )
@@ -533,8 +534,9 @@ function RestrictedCostNotice() {
         <div>
           <p className="text-sm font-medium text-theme-text-primary">Cost data is not available</p>
           <p className="mt-1 text-xs text-theme-text-tertiary">
-            Cost is shown for the namespaces you have access to, and you do not currently have
-            access to any. Ask your cluster administrator for namespace access.
+            Cost is shown for the namespaces you have access to, and no namespace is currently
+            visible to you. If that is unexpected, this can also mean Radar temporarily could not
+            reach the cluster to check your access — retry, then ask your cluster administrator.
           </p>
         </div>
       </div>
@@ -675,10 +677,12 @@ function WorkloadCostRow({
 function NodeCostTable({
   nodes,
   currency,
+  restricted,
   onOpenResource,
 }: {
   nodes: OpenCostNodeCost[]
   currency: string
+  restricted: boolean
   onOpenResource?: (resource: SelectedResource) => void
 }) {
   return (
@@ -692,7 +696,10 @@ function NodeCostTable({
               <span className="text-[10px] text-theme-text-quaternary">current pricing</span>
             </div>
             <p className="text-[11px] text-theme-text-tertiary mt-0.5 ml-6">
-              Per-machine cloud pricing — namespace costs above show how this capacity is allocated
+              Per-machine cloud pricing for the whole cluster
+              {restricted
+                ? ' — the namespace costs above cover only your namespaces, so they account for part of this capacity'
+                : ' — namespace costs above show how this capacity is allocated'}
             </p>
           </div>
           <span className="text-xs text-theme-text-tertiary">{nodes.length} nodes</span>

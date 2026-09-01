@@ -101,7 +101,7 @@ func TestComputeCostSummary_HappyPath(t *testing.T) {
 		{contains: "node_total_hourly_cost", body: scalarBody(8.0)}, // exceeds sum of namespaces, so it wins
 	})
 
-	got := ComputeCostSummaryFromProm(context.Background(), client, SummaryOptions{Currency: "GBP"})
+	got := ComputeCostSummaryFromProm(context.Background(), client, SummaryOptions{Currency: "GBP", CanReadNodes: true})
 	if !got.Available {
 		t.Fatalf("summary unavailable: %+v", got)
 	}

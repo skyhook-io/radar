@@ -57,6 +57,7 @@ func handleSummary(w http.ResponseWriter, r *http.Request, resolveCurrency func(
 		r.Context(), client.Prom(), pkgopencost.SummaryOptions{
 			Currency:          currency,
 			AllowedNamespaces: scope.Namespaces,
+			CanReadNodes:      scope.CanReadNodes,
 		})
 	writeJSON(w, http.StatusOK, resp)
 }

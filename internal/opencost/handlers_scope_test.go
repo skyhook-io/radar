@@ -203,8 +203,8 @@ func TestWorkloadsServedInsideTheUsersNamespaces(t *testing.T) {
 	startFakeProm(t)
 
 	got := getWorkloads(t, Scope{Namespaces: []string{"team-a"}}, "team-a")
-	if got.Reason == pkgopencost.ReasonAccessDenied {
-		t.Error("an in-scope namespace must not be denied")
+	if !got.Available {
+		t.Errorf("Available = false (reason %q), want true — an in-scope namespace was not served", got.Reason)
 	}
 	if !got.Restricted {
 		t.Error("Restricted = false, want true — the caller is namespace-scoped")
@@ -215,8 +215,11 @@ func TestWorkloadsUnrestrictedIsUnchanged(t *testing.T) {
 	startFakeProm(t)
 
 	got := getWorkloads(t, unrestricted, "team-b")
-	if got.Reason == pkgopencost.ReasonAccessDenied {
-		t.Error("unrestricted caller must not be denied")
+	// Assert Available, not merely "not denied": with Prometheus absent the
+	// response is unavailable/no_prometheus, so a not-denied check alone would
+	// pass without the request ever reaching the compute layer.
+	if !got.Available {
+		t.Errorf("Available = false (reason %q), want true — the unrestricted caller was not served", got.Reason)
 	}
 	if got.Restricted {
 		t.Error("Restricted = true, want false for an unrestricted caller")
