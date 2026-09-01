@@ -54,16 +54,22 @@ set on the release:
 helm repo update skyhook
 helm upgrade radar skyhook/radar \
   --namespace radar \
-  --reuse-values \
+  --reset-then-reuse-values \
   --wait
 ```
 
 Replace `radar` with the release name and namespace used by your installation.
+`--reset-then-reuse-values` requires Helm 3.14 or newer. It starts from the
+target chart's defaults, then reapplies the release's existing values, so keys
+introduced by the new chart are not omitted. With an older Helm client, upgrade
+Helm or use the installation's maintained values file; plain `--reuse-values`
+is not equivalent and can omit new defaults.
+
 If the deployment is managed from a values file, use that same file with
-`-f values.yaml` instead of `--reuse-values` so Git remains the reproducible
-source of configuration. The command installs the latest published chart; add
-`--version X.Y.Z` to pin the exact version shown in Radar (without the leading
-`v`).
+`-f values.yaml` instead of `--reset-then-reuse-values` so Git remains the
+reproducible source of configuration. The command installs the latest published
+chart; add `--version X.Y.Z` to pin the exact version shown in Radar (without
+the leading `v`).
 
 ### Argo CD or Flux
 
