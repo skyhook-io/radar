@@ -22,6 +22,8 @@ var kueueWorkloadV1Beta2 = schema.GroupVersionKind{
 }
 
 const (
+	admissionGatedByAnnotation = "kueue.x-k8s.io/admission-gated-by"
+
 	maxAdmissionChecks = 8 // Kueue v0.19.2 validates status.admissionChecks at this maximum.
 
 	maxProjectedPodSetAssignments  = 8 // Keep context bounded; the raw Workload retains Kueue's full 18-entry API maximum.
@@ -52,6 +54,7 @@ func ForResource(obj runtime.Object, tier resourcecontext.ContextTier) *resource
 	sortSchedulingGates(gates)
 	active, hasActive, _ := unstructured.NestedBool(u.Object, "spec", "active")
 	inactive := hasActive && !active
+	admissionGatedByController := isAdmissionGatedByController(u, conditions)
 
 	kueue := &resourcecontext.KueueScheduling{
 		Phase:                     workloadPhase(conditions),
@@ -76,7 +79,7 @@ func ForResource(obj runtime.Object, tier resourcecontext.ContextTier) *resource
 			Namespace: u.GetNamespace(),
 			Name:      u.GetName(),
 		},
-		Decision:         workloadDecision(conditions, inactive, hasIncompleteAdmissionCheck),
+		Decision:         workloadDecision(conditions, inactive, hasIncompleteAdmissionCheck, admissionGatedByController),
 		PrimaryCondition: primaryCondition(conditions, inactive),
 		Queues:           queueRefs(u),
 		Gates:            gates,
@@ -149,7 +152,7 @@ func workloadOutcome(conditions map[string]workloadCondition) resourcecontext.Ku
 	}
 }
 
-func workloadDecision(conditions map[string]workloadCondition, inactive, hasIncompleteAdmissionCheck bool) resourcecontext.SchedulingDecision {
+func workloadDecision(conditions map[string]workloadCondition, inactive, hasIncompleteAdmissionCheck, admissionGatedByController bool) resourcecontext.SchedulingDecision {
 	if _, finished := trueCondition(conditions, "Finished"); finished {
 		if _, admitted := trueCondition(conditions, "Admitted"); admitted {
 			return resourcecontext.SchedulingDecisionSatisfied
@@ -165,6 +168,9 @@ func workloadDecision(conditions map[string]workloadCondition, inactive, hasInco
 	if _, blocked := trueCondition(conditions, "BlockedOnPreemptionGates"); blocked {
 		return resourcecontext.SchedulingDecisionUnsatisfied
 	}
+	if admissionGatedByController {
+		return resourcecontext.SchedulingDecisionHeld
+	}
 	if _, admitted := trueCondition(conditions, "Admitted"); admitted {
 		return resourcecontext.SchedulingDecisionSatisfied
 	}
@@ -172,6 +178,12 @@ func workloadDecision(conditions map[string]workloadCondition, inactive, hasInco
 		return resourcecontext.SchedulingDecisionUnsatisfied
 	}
 	return resourcecontext.SchedulingDecisionUnknown
+}
+
+func isAdmissionGatedByController(u *unstructured.Unstructured, conditions map[string]workloadCondition) bool {
+	quotaReserved, ok := conditions["QuotaReserved"]
+	return ok && quotaReserved.Status == "False" && quotaReserved.Reason == "AdmissionGated" &&
+		u.GetAnnotations()[admissionGatedByAnnotation] != ""
 }
 
 func isOnHold(conditions map[string]workloadCondition) bool {

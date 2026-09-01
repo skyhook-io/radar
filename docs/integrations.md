@@ -1390,6 +1390,13 @@ preemption-gate evidence; and affirmative disruption conditions from the
 current snapshot. Resource names remain useful facts when RBAC withholds an
 optional navigation reference.
 
+`held` requires evidence of an explicit pause: `spec.active=false`, an `OnHold`
+condition, or `AdmissionGated` together with the current non-empty
+`kueue.x-k8s.io/admission-gated-by` annotation. The overloaded
+preemption-gated `AdmissionGated` reason remains `unsatisfied`, as does
+`Suspended` by itself: Kueue uses that reason for an inactive ClusterQueue,
+which may reflect broken dependencies rather than an intentional stop policy.
+
 Typed Kueue detail retains the controller's `pending` / `quota_reserved` /
 `admitted` / `finished` phase, PodsReady and replacement-Pod evidence,
 per-PodSet resource-to-ResourceFlavor assignments and usage, requeue state,

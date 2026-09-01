@@ -44,9 +44,11 @@ describe('GPU ecosystem API contracts', () => {
       })).toMatchObject({ text: reason, level: 'unhealthy' })
     }
 
-    expect(getKueueWorkloadStatus({
-      status: { conditions: [{ type: 'Finished', status: 'True', reason: 'Succeeded' }] },
-    })).toMatchObject({ text: 'Finished', level: 'neutral' })
+    for (const reason of ['Succeeded', 'WorkloadSliceReplaced']) {
+      expect(getKueueWorkloadStatus({
+        status: { conditions: [{ type: 'Finished', status: 'True', reason }] },
+      })).toMatchObject({ text: 'Finished', level: 'neutral' })
+    }
   })
 
   it('lets KubeRay conditions outrank deprecated state fields', () => {

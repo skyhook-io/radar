@@ -156,6 +156,7 @@ func TestWorkloadOutcomeUsesExactV0192FinishedReasons(t *testing.T) {
 		{reason: "OutOfSync", want: resourcecontext.KueueOutcomeFailed},
 		{reason: "OwnerNotFound", want: resourcecontext.KueueOutcomeFailed},
 		{reason: "FailedToStart", want: resourcecontext.KueueOutcomeFailed},
+		{reason: "WorkloadSliceReplaced"},
 		{reason: "FutureTerminalReason"},
 	}
 	for _, test := range tests {
@@ -203,6 +204,75 @@ func TestForResourceOnHoldIsHeldWhileActive(t *testing.T) {
 	if observation.Decision != resourcecontext.SchedulingDecisionHeld || observation.PrimaryCondition == nil ||
 		observation.PrimaryCondition.Type != "QuotaReserved" || observation.PrimaryCondition.Reason != "OnHold" {
 		t.Fatalf("on-hold observation = %+v", observation)
+	}
+}
+
+func TestForResourceAdmissionGatedByControllerIsHeld(t *testing.T) {
+	u := loadFixture(t, "no-reservation.yaml")
+	u.SetAnnotations(map[string]string{admissionGatedByAnnotation: "example.com/budget-approver"})
+	conditions, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	for _, item := range conditions {
+		condition := item.(map[string]any)
+		if condition["type"] == "QuotaReserved" {
+			condition["reason"] = "AdmissionGated"
+			condition["message"] = "Admission is gated by: example.com/budget-approver"
+		}
+	}
+	setConditions(t, u, conditions)
+
+	observation := onlyObservation(t, ForResource(u, resourcecontext.TierBasic))
+	if observation.Decision != resourcecontext.SchedulingDecisionHeld || observation.PrimaryCondition == nil ||
+		observation.PrimaryCondition.Reason != "AdmissionGated" {
+		t.Fatalf("controller-gated observation = %+v", observation)
+	}
+
+	u.SetAnnotations(map[string]string{admissionGatedByAnnotation: " "})
+	if decision := onlyObservation(t, ForResource(u, resourcecontext.TierBasic)).Decision; decision != resourcecontext.SchedulingDecisionHeld {
+		t.Fatalf("literal nonempty annotation decision = %q, want held", decision)
+	}
+
+	u.SetAnnotations(nil)
+	if decision := onlyObservation(t, ForResource(u, resourcecontext.TierBasic)).Decision; decision != resourcecontext.SchedulingDecisionUnsatisfied {
+		t.Fatalf("condition without current annotation decision = %q, want unsatisfied", decision)
+	}
+}
+
+func TestForResourcePreemptionGateTakesPrecedenceOverAdmissionGatedByAnnotation(t *testing.T) {
+	u := loadFixture(t, "blocked-preemption.yaml")
+	u.SetAnnotations(map[string]string{admissionGatedByAnnotation: "example.com/budget-approver"})
+
+	observation := onlyObservation(t, ForResource(u, resourcecontext.TierBasic))
+	if observation.Decision != resourcecontext.SchedulingDecisionUnsatisfied || observation.PrimaryCondition == nil ||
+		observation.PrimaryCondition.Type != "BlockedOnPreemptionGates" {
+		t.Fatalf("preemption-gated observation = %+v", observation)
+	}
+}
+
+func TestForResourceAdmissionGateAnnotationAloneDoesNotInferFeatureState(t *testing.T) {
+	u := loadFixture(t, "no-reservation.yaml")
+	u.SetAnnotations(map[string]string{admissionGatedByAnnotation: "example.com/budget-approver"})
+
+	if decision := onlyObservation(t, ForResource(u, resourcecontext.TierBasic)).Decision; decision != resourcecontext.SchedulingDecisionUnsatisfied {
+		t.Fatalf("annotation-only decision = %q, want unsatisfied", decision)
+	}
+}
+
+func TestForResourceSuspendedReasonRemainsUnsatisfiedWithoutQueueEvidence(t *testing.T) {
+	u := loadFixture(t, "no-reservation.yaml")
+	conditions, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	for _, item := range conditions {
+		condition := item.(map[string]any)
+		if condition["type"] == "QuotaReserved" {
+			condition["reason"] = "Suspended"
+			condition["message"] = "ClusterQueue gpu-team is inactive"
+		}
+	}
+	setConditions(t, u, conditions)
+
+	observation := onlyObservation(t, ForResource(u, resourcecontext.TierBasic))
+	if observation.Decision != resourcecontext.SchedulingDecisionUnsatisfied || observation.PrimaryCondition == nil ||
+		observation.PrimaryCondition.Reason != "Suspended" {
+		t.Fatalf("inactive-queue observation = %+v", observation)
 	}
 }
 
