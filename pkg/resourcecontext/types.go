@@ -258,8 +258,9 @@ const (
 )
 
 // SchedulingDecision is the normalized answer for one scheduling domain.
-// Held means an explicit user or controller pause; Unsatisfied means the
-// controller evaluated the request but its requirements are not met.
+// Held means the subject's own state explicitly pauses progress. Unsatisfied
+// means the controller evaluated the request but its requirements are not met,
+// including when a referenced queue is inactive.
 type SchedulingDecision string
 
 const (
