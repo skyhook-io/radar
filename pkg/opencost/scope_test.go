@@ -238,6 +238,18 @@ func TestComputeCostTrendFromProm_NoAllowedNamespacesIsDenied(t *testing.T) {
 	}
 }
 
+// A denied answer still has to echo the same normalized label the query path
+// would have produced, so the response contract does not fork by outcome.
+func TestTrendRangeLabelNormalizesUnknownInput(t *testing.T) {
+	for _, tt := range []struct{ in, want string }{
+		{"6h", "6h"}, {"24h", "24h"}, {"7d", "7d"}, {"", "24h"}, {"weird", "24h"},
+	} {
+		if got := TrendRangeLabel(tt.in); got != tt.want {
+			t.Errorf("TrendRangeLabel(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
 func TestComputeCostTrendFromProm_UnrestrictedIsUnchanged(t *testing.T) {
 	client := trendProm(t, map[string][]float64{"team-a": {1, 2}, "team-b": {3, 4}})
 

@@ -155,7 +155,7 @@ func stripReplicaSetSuffix(name string) string {
 func handleTrend(w http.ResponseWriter, r *http.Request, resolveCurrency func() string, resolveScope ScopeResolver) {
 	scope := resolveScope(r)
 	if scope.Restricted() && len(scope.Namespaces) == 0 {
-		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: pkgopencost.ReasonAccessDenied, Restricted: true, Range: r.URL.Query().Get("range"), Currency: resolvedCurrency(resolveCurrency)})
+		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: pkgopencost.ReasonAccessDenied, Restricted: true, Range: pkgopencost.TrendRangeLabel(r.URL.Query().Get("range")), Currency: resolvedCurrency(resolveCurrency)})
 		return
 	}
 	client := prometheuspkg.GetClient()

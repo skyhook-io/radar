@@ -248,12 +248,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
 
         <CostViewTabs />
 
-        {restricted && (
-          <RestrictedCostBanner
-            namespaceCount={namespaces.length}
-            nodesHidden={nodeData?.reason === 'access_denied'}
-          />
-        )}
+        {restricted && <RestrictedCostBanner />}
 
         {/* CPU vs Memory (vs Storage) split bar */}
         <div className="rounded-lg border border-theme-border bg-theme-surface/50 p-4">
@@ -353,6 +348,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
         </div>
 
         {/* Node cost table */}
+        {nodeData?.reason === 'access_denied' && <NodeCostsDeniedNote />}
         {nodes.length > 0 && (
           <NodeCostTable
             nodes={nodes}
@@ -500,22 +496,30 @@ function SystemNamespaceCostNote({ namespace }: { namespace: string }) {
   )
 }
 
-function RestrictedCostBanner({
-  namespaceCount,
-  nodesHidden,
-}: {
-  namespaceCount: number
-  nodesHidden: boolean
-}) {
+function RestrictedCostBanner() {
   return (
     <div className="flex items-start gap-2.5 rounded-lg border border-theme-border bg-theme-elevated/40 px-4 py-3">
       <Lock className="mt-0.5 h-4 w-4 shrink-0 text-theme-text-tertiary" />
       <div className="text-xs text-theme-text-secondary">
         <span className="font-medium text-theme-text-primary">Restricted view.</span>{' '}
-        Costs cover only the {namespaceCount === 1 ? 'namespace' : `${namespaceCount} namespaces`}{' '}
-        you have access to. Every figure on this page — including the headline total — is a
-        partial figure, not the cluster total.
-        {nodesHidden && ' Node costs are hidden because they cannot be split per namespace.'}
+        Costs cover only the namespaces you have access to. Every figure on this page — including
+        the headline total — is a partial figure, not the cluster total.
+      </div>
+    </div>
+  )
+}
+
+// Node spend is gated on its own list-nodes grant, so it can be withheld from a
+// caller whose namespace view is otherwise complete. Say so where the table
+// would have been rather than letting it silently vanish.
+function NodeCostsDeniedNote() {
+  return (
+    <div className="flex items-start gap-2.5 rounded-lg border border-theme-border bg-theme-elevated/40 px-4 py-3">
+      <Lock className="mt-0.5 h-4 w-4 shrink-0 text-theme-text-tertiary" />
+      <div className="text-xs text-theme-text-secondary">
+        <span className="font-medium text-theme-text-primary">Node costs hidden.</span>{' '}
+        Per-node pricing is cluster-wide and cannot be split per namespace, so it needs permission
+        to list nodes.
       </div>
     </div>
   )

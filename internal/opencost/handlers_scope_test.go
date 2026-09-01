@@ -202,16 +202,24 @@ func TestWorkloadsDeniedOutsideTheUsersNamespaces(t *testing.T) {
 func TestWorkloadsServedInsideTheUsersNamespaces(t *testing.T) {
 	startFakeProm(t)
 
-	if got := getWorkloads(t, Scope{Namespaces: []string{"team-a"}}, "team-a"); got.Reason == pkgopencost.ReasonAccessDenied {
+	got := getWorkloads(t, Scope{Namespaces: []string{"team-a"}}, "team-a")
+	if got.Reason == pkgopencost.ReasonAccessDenied {
 		t.Error("an in-scope namespace must not be denied")
+	}
+	if !got.Restricted {
+		t.Error("Restricted = false, want true — the caller is namespace-scoped")
 	}
 }
 
 func TestWorkloadsUnrestrictedIsUnchanged(t *testing.T) {
 	startFakeProm(t)
 
-	if got := getWorkloads(t, unrestricted, "team-b"); got.Reason == pkgopencost.ReasonAccessDenied {
+	got := getWorkloads(t, unrestricted, "team-b")
+	if got.Reason == pkgopencost.ReasonAccessDenied {
 		t.Error("unrestricted caller must not be denied")
+	}
+	if got.Restricted {
+		t.Error("Restricted = true, want false for an unrestricted caller")
 	}
 }
 
@@ -257,6 +265,9 @@ func TestTrendDeniedWhenUserHasNoNamespaces(t *testing.T) {
 	}
 	if len(got.Series) != 0 {
 		t.Errorf("Series = %+v, want none", got.Series)
+	}
+	if got.Range != "24h" {
+		t.Errorf("Range = %q, want the normalized 24h the query path would echo", got.Range)
 	}
 }
 

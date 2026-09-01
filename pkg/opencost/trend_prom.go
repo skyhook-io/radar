@@ -40,7 +40,7 @@ func ComputeCostTrendFromProm(ctx context.Context, client *prom.Client, opts Tre
 	scope := namespaceScope(opts.AllowedNamespaces)
 	restricted := !scope.unrestricted()
 	if restricted && len(scope) == 0 {
-		return &CostTrendResponse{Available: false, Reason: ReasonAccessDenied, Restricted: true, Range: resolveTrendLabel(opts.Range)}
+		return &CostTrendResponse{Available: false, Reason: ReasonAccessDenied, Restricted: true, Range: TrendRangeLabel(opts.Range)}
 	}
 	if client == nil {
 		return &CostTrendResponse{Available: false, Reason: ReasonNoPrometheus, Restricted: restricted}
@@ -124,9 +124,10 @@ func ComputeCostTrendFromProm(ctx context.Context, client *prom.Client, opts Tre
 	return &CostTrendResponse{Available: true, Restricted: restricted, Range: label, Series: series}
 }
 
-// resolveTrendLabel is resolveTrendRange's label alone, for the early returns
-// that must still echo the requested range without issuing a query.
-func resolveTrendLabel(rangeStr string) string {
+// TrendRangeLabel is the normalized form of a requested trend range. Callers
+// that answer without issuing a query still have to echo the same label the
+// query path would have returned, or the response contract forks.
+func TrendRangeLabel(rangeStr string) string {
 	_, _, _, label := resolveTrendRange(rangeStr)
 	return label
 }
