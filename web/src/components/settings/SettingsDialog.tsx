@@ -1643,7 +1643,11 @@ function CostSection({
           <div>
             <label htmlFor="cost-kubecost-api-key" className="mb-1 block text-sm font-medium text-theme-text-primary">API key (optional)</label>
             <p id="cost-kubecost-api-key-help" className="mb-1 text-xs text-theme-text-tertiary">
-              Only needed when Kubecost requires authentication. {deploymentMode === 'local' ? (
+              Only needed when Kubecost requires authentication.{' '}
+              {url.trim() === '' && (
+                <>Auto-discovery can use the Aggregator&apos;s <code>tcp-api-rbac:9008</code> endpoint when SAML/OIDC protects port 9004; setting a key disables that fallback. </>
+              )}
+              {deploymentMode === 'local' ? (
                 <>Radar stores it unencrypted in this machine&apos;s owner-only config file (<code>~/.radar/config.json</code>) and never returns it through the API.</>
               ) : (
                 <>For this in-cluster deployment, create a Kubernetes Secret and set the Helm value <code>cost.kubecost.existingSecret</code>. A key entered here is stored unencrypted in this pod&apos;s temporary owner-only config file and can disappear when the pod restarts. Radar never returns it through the API.</>

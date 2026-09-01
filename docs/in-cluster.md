@@ -499,9 +499,9 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `timeline.retention` | SQLite retention (Go duration; `0` disables) | `168h` |
 | `timeline.maxSize` | SQLite max DB + WAL size before oldest events are pruned (`0` disables) | `800Mi` |
 | `cost.source` | Cost source: `auto`, `prometheus`, or `kubecost`; controls stay editable only when this and the Kubecost URL, cluster ID, and Secret are empty | `""` (Auto) |
-| `cost.kubecost.url` | Kubecost 3 Aggregator URL; required for federated agent-only clusters | `""` (discover local) |
+| `cost.kubecost.url` | Kubecost 3 Aggregator URL; blank discovers local port 9004 and may fall back to the named SAML/OIDC bypass port 9008 without a key; required for agent-only clusters | `""` (discover local) |
 | `cost.kubecost.clusterId` | Cluster ID filter for a central Aggregator | `""` (detect literal `CLUSTER_ID`) |
-| `cost.kubecost.existingSecret` | Secret containing an optional Kubecost API key | `""` |
+| `cost.kubecost.existingSecret` | Secret containing an optional Kubecost API key; setting it disables automatic port-9008 auth bypass | `""` |
 | `traffic.prometheusUrl` | Manual PromQL-compatible query URL (Prometheus, VictoriaMetrics, Thanos, Mimir) | `""` (auto-discover) |
 | `traffic.prometheusHeadersFromEnv` | Prometheus headers sourced from environment variables, for secret-backed auth headers | `{}` |
 | `persistence.enabled` | Enable PVC for SQLite storage | `false` |

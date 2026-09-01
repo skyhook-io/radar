@@ -127,3 +127,15 @@ func TestStopIfAddressDoesNotStopReplacement(t *testing.T) {
 		t.Fatal("current forward remains connected after address-scoped stop")
 	}
 }
+
+func TestForwardReuseIncludesTargetPort(t *testing.T) {
+	forward := &metricsForward{
+		active: true, namespace: "kubecost", serviceName: "kubecost-aggregator", targetPort: 9004, contextName: "ctxA",
+	}
+	if !forward.matches("kubecost", "kubecost-aggregator", 9004, "ctxA") {
+		t.Fatal("matching target was not reusable")
+	}
+	if forward.matches("kubecost", "kubecost-aggregator", 9008, "ctxA") {
+		t.Fatal("forward to 9004 was reused for a 9008 request")
+	}
+}

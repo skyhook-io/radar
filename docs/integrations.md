@@ -1164,12 +1164,16 @@ label an absent Prometheus source as active. Settings tests Auto and Kubecost be
 explicit Prometheus selection remains a saveable preference for installations being configured in
 stages.
 
-For Kubecost, Radar auto-discovers only an active Aggregator StatefulSet and its matching Service
-with the official named `tcp-api` port 9004. In-cluster Radar connects through Service DNS; local
-Radar uses a scoped port-forward. An explicit URL is required for federated agent-only clusters,
-which have a FinOps Agent but no local Aggregator, and for alternate endpoints such as a deployment's
-intentionally unauthenticated port 9008. Radar accepts either a root API URL or one ending in
-`/model`, can send an optional service-account key as `X-API-KEY`, and requires an exact cluster ID
+For Kubecost, Radar auto-discovers only an active Aggregator StatefulSet and its matching Service.
+It tries the official named `tcp-api` port 9004 first. When that port rejects unauthenticated access
+and no API key is configured, Radar falls back only to the same Service's exact `tcp-api-rbac` port
+9008, which Kubecost exposes for internal clients when SAML or OIDC is enabled. An explicitly
+configured key is never bypassed this way: a rejected key remains an authentication error.
+In-cluster Radar connects through Service DNS; local Radar uses a scoped port-forward to the selected
+port. An explicit URL is required for federated agent-only clusters, which have a FinOps Agent but no
+local Aggregator. A Service exposing only port 9008 is not auto-discovered; configure that endpoint
+explicitly. Radar accepts either a root API URL or one ending in `/model`, can send an optional
+service-account key as `X-API-KEY`, and requires an exact cluster ID
 to filter a central Aggregator. It detects one literal `CLUSTER_ID` from an active FinOps Agent or
 Aggregator; indirect, missing, or conflicting values require an override. Radar binds a cluster-ID
 override saved in Settings to the active kubeconfig context. It also binds a saved API key when the

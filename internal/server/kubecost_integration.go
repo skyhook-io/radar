@@ -29,6 +29,8 @@ type costSourceApplyResponse struct {
 	APIKeySet bool                `json:"apiKeySet"`
 }
 
+const costSourceApplyTimeout = 58 * time.Second
+
 func (s *Server) handleApplyCostSource(w http.ResponseWriter, r *http.Request) {
 	if !s.requireCloudRole(w, r, auth.RoleOwner, "modify Radar configuration") {
 		return
@@ -86,10 +88,12 @@ func (s *Server) handleApplyCostSource(w http.ResponseWriter, r *http.Request) {
 		ClusterIDContext: clusterIDContext,
 	}
 	previousManager := internalopencost.ConfigSnapshot()
+	ctx, cancel := context.WithTimeout(r.Context(), costSourceApplyTimeout)
+	defer cancel()
 	if source != internalopencost.SourcePrometheus && rawURL != "" {
-		if _, err := internalopencost.ProbeKubecost(r.Context(), candidate); err != nil {
+		if _, err := internalopencost.ProbeKubecost(ctx, candidate); err != nil {
 			log.Printf("[opencost] Kubecost configuration probe failed: %s", sanitizeForLog(err.Error()))
-			s.writeError(w, http.StatusBadRequest, kubecostConnectionGuidance(err))
+			s.writeError(w, http.StatusBadRequest, kubecostConnectionGuidance(err, apiKey != ""))
 			return
 		}
 	}
@@ -98,13 +102,11 @@ func (s *Server) handleApplyCostSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
 	connection, connectErr := internalopencost.Selected(ctx)
 	if connectErr != nil {
 		_ = internalopencost.Configure(previousManager)
 		log.Printf("[opencost] Kubecost configuration probe failed: %s", sanitizeForLog(connectErr.Error()))
-		s.writeError(w, http.StatusBadRequest, kubecostConnectionGuidance(connectErr))
+		s.writeError(w, http.StatusBadRequest, kubecostConnectionGuidance(connectErr, apiKey != ""))
 		return
 	}
 
@@ -150,7 +152,7 @@ func sameServerOrigin(a, b string) bool {
 	return leftOK && rightOK && left == right
 }
 
-func kubecostConnectionGuidance(err error) string {
+func kubecostConnectionGuidance(err error, apiKeySet bool) string {
 	message := strings.ToLower(err.Error())
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
@@ -158,6 +160,9 @@ func kubecostConnectionGuidance(err error) string {
 	case errors.Is(err, internalopencost.ErrNoCostSource):
 		return "No compatible cost source was found — install OpenCost metrics or enter a Kubecost Aggregator URL."
 	case errors.Is(err, internalopencost.ErrKubecostAuthentication):
+		if !apiKeySet {
+			return "Kubecost requires authentication — add a service-account API key or use the deployment's intended internal API endpoint."
+		}
 		return "Kubecost rejected the API key — check the service-account key or use the deployment's intended API endpoint."
 	case errors.Is(err, internalopencost.ErrKubecostContextMismatch):
 		return "The configured Kubecost cluster ID or local API key is not bound to the current kubeconfig context — clear or update it in Settings."

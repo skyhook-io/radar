@@ -5,11 +5,13 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/portforward"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -162,6 +164,27 @@ func TestProbeKubecostTriesModelPathAfterRootAuthenticationFailure(t *testing.T)
 	}
 }
 
+func TestDiscoveredKubecostProbeDoesNotTryFrontendModelPath(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Path == "/model/allocation" {
+			_, _ = w.Write([]byte(`{"code":200,"data":[{"prod-a":{"properties":{"cluster":"prod-a"}}}]}`))
+			return
+		}
+		http.Error(w, "authentication required", http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	_, _, err := probeDiscoveredKubecostURL(context.Background(), server.URL, "", "prod-a")
+	if !errors.Is(err, ErrKubecostAuthentication) {
+		t.Fatalf("error = %v, want ErrKubecostAuthentication", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want only the direct Aggregator API probe", requests)
+	}
+}
+
 func TestKubecostHTTPTransportSeparatesProbeAndQueryTimeouts(t *testing.T) {
 	probe := newKubecostHTTPTransport("https://cost.example.com", "/model", "secret", kubecostProbeHTTPTimeout)
 	query := newKubecostHTTPTransport("https://cost.example.com", "/model", "secret", kubecostQueryHTTPTimeout)
@@ -181,8 +204,35 @@ func TestKubecostHTTPTransportSeparatesProbeAndQueryTimeouts(t *testing.T) {
 }
 
 func TestKubecostConnectBudgetFitsEveryProbePath(t *testing.T) {
-	if kubecostConnectTimeout < 2*kubecostProbeHTTPTimeout {
-		t.Fatalf("connect budget %s cannot fit two probe attempts of %s", kubecostConnectTimeout, kubecostProbeHTTPTimeout)
+	if minimum := portforward.EstablishTimeout + kubecostProbeHTTPTimeout; kubecostEndpointTimeout < minimum {
+		t.Fatalf("endpoint budget %s cannot fit port-forward and probe budget %s", kubecostEndpointTimeout, minimum)
+	}
+	if minimum := 2 * kubecostEndpointTimeout; kubecostConnectTimeout < minimum {
+		t.Fatalf("connect budget %s cannot fit two endpoint attempts of %s", kubecostConnectTimeout, kubecostEndpointTimeout)
+	}
+	if maximum := prometheusCostDetectionTimeout + kubecostConnectTimeout; maximum >= time.Minute {
+		t.Fatalf("automatic selection budget %s leaves no room below the server timeout", maximum)
+	}
+}
+
+func TestPrometheusDetectionDeadlineAttemptsKubecost(t *testing.T) {
+	tests := []struct {
+		name         string
+		state        prometheusCostState
+		detectionErr error
+		want         bool
+	}{
+		{name: "Prometheus absent", state: prometheusCostAbsent, want: true},
+		{name: "detection deadline", state: prometheusCostUnknown, detectionErr: context.DeadlineExceeded, want: true},
+		{name: "upstream failure", state: prometheusCostUnknown, want: false},
+		{name: "Prometheus available at deadline", state: prometheusCostAvailable, detectionErr: context.DeadlineExceeded, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldAttemptKubecost(tt.state, tt.detectionErr); got != tt.want {
+				t.Fatalf("shouldAttemptKubecost() = %t, want %t", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -380,6 +430,73 @@ func TestAutoPrometheusFallbackExpires(t *testing.T) {
 	}
 	if !m.autoRetryDueLocked(m.retryAt) {
 		t.Fatal("fallback did not expire at retry deadline")
+	}
+}
+
+func TestProvisionalKubecostSelectionExpiresAndReleasesOnSourceChange(t *testing.T) {
+	releases := 0
+	m := &Manager{config: ManagerConfig{Source: SourceAuto}}
+	connection, err := m.commitProvisionalSelection(0, Connection{
+		Source: SourceKubecost,
+		lease:  &connectionLease{release: func() { releases++ }},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if connection.Source != SourceKubecost || m.retryAt.IsZero() {
+		t.Fatalf("connection=%#v retryAt=%v, want provisional Kubecost", connection, m.retryAt)
+	}
+	if m.autoRetryDueLocked(m.retryAt.Add(-time.Nanosecond)) {
+		t.Fatal("provisional Kubecost expired before retry deadline")
+	}
+	if !m.autoRetryDueLocked(m.retryAt) {
+		t.Fatal("provisional Kubecost did not expire at retry deadline")
+	}
+	if _, err := m.commitSelection(0, Connection{Source: SourcePrometheus}); err != nil {
+		t.Fatal(err)
+	}
+	if releases != 1 {
+		t.Fatalf("Kubecost lease releases = %d, want 1 after Prometheus wins", releases)
+	}
+}
+
+func TestInconclusivePrometheusRecheckKeepsProvisionalKubecost(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
+	}))
+	prometheuspkg.Initialize(nil, nil, "test")
+	prometheuspkg.SetManualURL(server.URL)
+	t.Cleanup(func() {
+		server.Close()
+		prometheuspkg.Reset()
+		prometheuspkg.Initialize(nil, nil, "")
+	})
+
+	releases := 0
+	m := &Manager{
+		config:         ManagerConfig{Source: SourceAuto},
+		selected:       SourceKubecost,
+		address:        "http://localhost:12345",
+		displayAddress: "kubecost-aggregator.kubecost:9008",
+		service:        ServiceReference{Name: "kubecost-aggregator", Namespace: "kubecost", Port: 9008},
+		retryAt:        time.Now().Add(-time.Second),
+		lease: &connectionLease{
+			alive:   func() bool { return true },
+			release: func() { releases++ },
+		},
+	}
+	connection, err := m.Selected(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if connection.Source != SourceKubecost || connection.Service.Port != 9008 {
+		t.Fatalf("connection = %#v, want existing provisional Kubecost port 9008", connection)
+	}
+	if releases != 0 {
+		t.Fatalf("Kubecost lease releases = %d, want 0 after inconclusive Prometheus recheck", releases)
+	}
+	if !m.retryAt.After(time.Now()) {
+		t.Fatalf("retryAt = %v, want renewed future deadline", m.retryAt)
 	}
 }
 
@@ -591,33 +708,136 @@ func TestResetClearsDisplayAddress(t *testing.T) {
 func TestKubecostAggregatorDiscoverySignals(t *testing.T) {
 	service := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app.kubernetes.io/name": "aggregator"}},
-		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "tcp-api", Port: 9004, TargetPort: intstr.FromString("api")}}},
+		Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{
+			{Name: "tcp-api", Port: 9004, TargetPort: intstr.FromString("api")},
+			{Name: "tcp-api-rbac", Port: 9008, TargetPort: intstr.FromInt32(9008)},
+		}},
 	}
 	statefulSet := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app.kubernetes.io/name": "aggregator"}},
-		Status:     appsv1.StatefulSetStatus{ReadyReplicas: 1},
+		Spec: appsv1.StatefulSetSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Ports: []corev1.ContainerPort{{Name: "api", ContainerPort: 19004}},
+		}}}}},
+		Status: appsv1.StatefulSetStatus{ReadyReplicas: 1},
 	}
-	port, ok := aggregatorServicePort(service)
-	if !ok || port.Port != 9004 || port.TargetPort.StrVal != "api" || !activeKubecostAggregator(statefulSet) {
+	endpoints := aggregatorServiceEndpoints(service, statefulSet.Spec.Template.Spec.Containers)
+	if len(endpoints) != 2 || !activeKubecostAggregator(statefulSet) {
 		t.Fatal("official Kubecost 3 Aggregator signals were not recognized")
 	}
-	service.Spec.Ports[0].Port = 9008
-	if _, ok := aggregatorServicePort(service); ok {
-		t.Fatal("port 9008 must not be auto-selected")
+	if endpoints[0] != (kubecostAggregatorEndpoint{servicePort: 9004, targetPort: 19004}) {
+		t.Fatalf("primary endpoint = %#v", endpoints[0])
+	}
+	if endpoints[1] != (kubecostAggregatorEndpoint{servicePort: 9008, targetPort: 9008, bypassesAuthentication: true}) {
+		t.Fatalf("auth-bypass endpoint = %#v", endpoints[1])
+	}
+
+	service.Spec.Ports = service.Spec.Ports[1:]
+	if endpoints := aggregatorServiceEndpoints(service, statefulSet.Spec.Template.Spec.Containers); len(endpoints) != 0 {
+		t.Fatalf("9008 without the primary Aggregator API was auto-selected: %#v", endpoints)
+	}
+}
+
+func TestKubecostAggregatorRejectsAuthPortNearMisses(t *testing.T) {
+	containers := []corev1.Container{{Ports: []corev1.ContainerPort{{Name: "api", ContainerPort: 9004}}}}
+	primary := corev1.ServicePort{Name: "tcp-api", Port: 9004, TargetPort: intstr.FromString("api")}
+	tests := []struct {
+		name  string
+		ports []corev1.ServicePort
+	}{
+		{name: "wrong auth port name", ports: []corev1.ServicePort{primary, {Name: "tcp-api", Port: 9008, TargetPort: intstr.FromInt32(9008)}}},
+		{name: "wrong auth port number", ports: []corev1.ServicePort{primary, {Name: "tcp-api-rbac", Port: 9009, TargetPort: intstr.FromInt32(9008)}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app.kubernetes.io/name": "aggregator"}},
+				Spec:       corev1.ServiceSpec{Ports: tt.ports},
+			}
+			endpoints := aggregatorServiceEndpoints(service, containers)
+			if len(endpoints) != 1 || endpoints[0].servicePort != 9004 {
+				t.Fatalf("near-miss auth port was accepted: %#v", endpoints)
+			}
+		})
+	}
+
+	service := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app.kubernetes.io/name": "aggregator"}},
+		Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{
+			{Name: "tcp-api-rbac", Port: 9008, TargetPort: intstr.FromInt32(9008)},
+			primary,
+		}},
+	}
+	endpoints := aggregatorServiceEndpoints(service, containers)
+	if len(endpoints) != 2 || endpoints[0].servicePort != 9004 || endpoints[1].servicePort != 9008 {
+		t.Fatalf("Service port ordering changed endpoint priority: %#v", endpoints)
+	}
+}
+
+func TestKubecostAggregatorAuthenticationBypassPolicy(t *testing.T) {
+	endpoints := []kubecostAggregatorEndpoint{
+		{servicePort: 9004, targetPort: 9004},
+		{servicePort: 9008, targetPort: 9008, bypassesAuthentication: true},
+	}
+	tests := []struct {
+		name       string
+		apiKey     string
+		primaryErr error
+		wantPorts  []int
+		wantPort   int
+		wantErr    error
+		wantAuth   bool
+		bypassErr  error
+	}{
+		{name: "primary succeeds", wantPorts: []int{9004}, wantPort: 9004},
+		{name: "authentication falls back without a key", primaryErr: ErrKubecostAuthentication, wantPorts: []int{9004, 9008}, wantPort: 9008},
+		{name: "bypass failure keeps fallback authoritative", primaryErr: ErrKubecostAuthentication, bypassErr: ErrKubecostUnavailable, wantPorts: []int{9004, 9008}, wantErr: ErrKubecostUnavailable},
+		{name: "bypass no-data remains authoritative", primaryErr: ErrKubecostAuthentication, bypassErr: ErrKubecostNoData, wantPorts: []int{9004, 9008}, wantErr: ErrKubecostNoData},
+		{name: "explicit key is never bypassed", apiKey: "secret", primaryErr: ErrKubecostAuthentication, wantPorts: []int{9004}, wantErr: ErrKubecostAuthentication, wantAuth: true},
+		{name: "non-authentication failure is not bypassed", primaryErr: ErrKubecostUnavailable, wantPorts: []int{9004}, wantErr: ErrKubecostUnavailable},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotPorts []int
+			connection, err := connectKubecostAggregatorEndpoints(tt.apiKey, endpoints, func(endpoint kubecostAggregatorEndpoint) (Connection, error) {
+				gotPorts = append(gotPorts, endpoint.servicePort)
+				if endpoint.servicePort == 9004 && tt.primaryErr != nil {
+					return Connection{}, tt.primaryErr
+				}
+				if endpoint.servicePort == 9008 && tt.bypassErr != nil {
+					return Connection{}, tt.bypassErr
+				}
+				return Connection{Service: ServiceReference{Port: endpoint.servicePort}}, nil
+			})
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("error = %v, want %v", err, tt.wantErr)
+			}
+			if errors.Is(err, ErrKubecostAuthentication) != tt.wantAuth {
+				t.Fatalf("authentication error presence = %t, want %t: %v", errors.Is(err, ErrKubecostAuthentication), tt.wantAuth, err)
+			}
+			if tt.bypassErr != nil && !strings.Contains(err.Error(), ErrKubecostAuthentication.Error()) {
+				t.Fatalf("fallback error lost the primary authentication diagnostic: %v", err)
+			}
+			if !slices.Equal(gotPorts, tt.wantPorts) {
+				t.Fatalf("attempted ports = %v, want %v", gotPorts, tt.wantPorts)
+			}
+			if err == nil && connection.Service.Port != tt.wantPort {
+				t.Fatalf("selected port = %d, want %d", connection.Service.Port, tt.wantPort)
+			}
+		})
 	}
 }
 
 func TestDiscoveredKubecostConnectionSeparatesTransportFromService(t *testing.T) {
 	service := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "kubecost-aggregator", Namespace: "kubecost"}}
-	connection := discoveredKubecostConnection(nil, "http://localhost:12345/model", "prod-a", service, 9004)
+	connection := discoveredKubecostConnection(nil, "http://localhost:12345", "prod-a", service, 9008)
 
-	if connection.Address != "http://localhost:12345/model" {
+	if connection.Address != "http://localhost:12345" {
 		t.Fatalf("transport address = %q, want loopback port-forward", connection.Address)
 	}
-	if connection.DisplayAddress != "kubecost-aggregator.kubecost:9004" {
+	if connection.DisplayAddress != "kubecost-aggregator.kubecost:9008" {
 		t.Fatalf("display address = %q, want stable Service address", connection.DisplayAddress)
 	}
-	if connection.Service != (ServiceReference{Name: "kubecost-aggregator", Namespace: "kubecost", Port: 9004}) {
+	if connection.Service != (ServiceReference{Name: "kubecost-aggregator", Namespace: "kubecost", Port: 9008}) {
 		t.Fatalf("Service reference = %#v", connection.Service)
 	}
 }

@@ -152,7 +152,10 @@ lands in the Helm release state. Rotation requires a pod restart. See
 ### Connecting to Kubecost 3
 
 Auto mode uses working OpenCost-compatible Prometheus metrics first, then a
-Kubecost 3 Aggregator in the connected cluster. A federated agent-only cluster
+Kubecost 3 Aggregator in the connected cluster. Radar tries the Aggregator's
+named `tcp-api` port 9004 first. Without an API key, an authentication rejection
+can fall back to the same Service's `tcp-api-rbac` port 9008 for SAML/OIDC-enabled
+Kubecost. Configuring a key disables that bypass. A federated agent-only cluster
 has no local Aggregator, so configure its central endpoint and cluster ID:
 
 ```bash
@@ -197,9 +200,9 @@ trend charts remain unavailable for Kubecost.
 | `persistence.enabled` | Enable PVC for SQLite | `false` |
 | `cost.source` | Cost source: `auto`, `prometheus`, or `kubecost`; controls stay editable only when this and the Kubecost URL, cluster ID, and Secret are empty | `""` |
 | `cost.currency` | Optional ISO 4217 override for OpenCost/Kubecost values; empty auto-detects, then uses USD | `""` |
-| `cost.kubecost.url` | Kubecost 3 Aggregator URL; blank discovers a local Aggregator, while federated agent-only clusters need their central URL | `""` |
+| `cost.kubecost.url` | Kubecost 3 Aggregator URL; blank discovers local `tcp-api:9004` and may fall back to `tcp-api-rbac:9008` without a key; agent-only clusters need their central URL | `""` |
 | `cost.kubecost.clusterId` | Cluster ID filter; blank detects literal `CLUSTER_ID` from the local FinOps Agent/Aggregator | `""` |
-| `cost.kubecost.existingSecret` | Secret holding an optional Kubecost service-account API key | `""` |
+| `cost.kubecost.existingSecret` | Secret holding an optional Kubecost service-account API key; setting it disables automatic port-9008 auth bypass | `""` |
 | `cost.kubecost.existingSecretKey` | Key within `cost.kubecost.existingSecret`; sent as `X-API-KEY` | `api-key` |
 | `traffic.prometheusUrl` | Manual Prometheus/VictoriaMetrics URL (skips auto-discovery) | `""` |
 | `traffic.prometheusHeaders` | HTTP headers sent with every Prometheus request (auth-protected backends) | `{}` |

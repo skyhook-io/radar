@@ -26,15 +26,17 @@ import (
 type Source string
 
 const (
-	SourceAuto               Source = "auto"
-	SourcePrometheus         Source = "prometheus"
-	SourceKubecost           Source = "kubecost"
-	autoRetryDelay                  = time.Minute
-	noCostSourceRetryDelay          = 5 * time.Second
-	kubecostConnectTimeout          = 25 * time.Second
-	kubecostProbeHTTPTimeout        = 12 * time.Second
-	kubecostQueryHTTPTimeout        = 30 * time.Second
-	kubecostMaxResponseBytes        = 64 << 20
+	SourceAuto                     Source = "auto"
+	SourcePrometheus               Source = "prometheus"
+	SourceKubecost                 Source = "kubecost"
+	autoRetryDelay                        = time.Minute
+	noCostSourceRetryDelay                = 5 * time.Second
+	prometheusCostDetectionTimeout        = 8 * time.Second
+	kubecostConnectTimeout                = 48 * time.Second
+	kubecostEndpointTimeout               = 23 * time.Second
+	kubecostProbeHTTPTimeout              = 12 * time.Second
+	kubecostQueryHTTPTimeout              = 30 * time.Second
+	kubecostMaxResponseBytes              = 64 << 20
 )
 
 var (
@@ -62,6 +64,17 @@ type ServiceReference struct {
 	Name      string
 	Namespace string
 	Port      int
+}
+
+type kubecostAggregatorEndpoint struct {
+	servicePort            int
+	targetPort             int
+	bypassesAuthentication bool
+}
+
+type kubecostAggregator struct {
+	service   *corev1.Service
+	endpoints []kubecostAggregatorEndpoint
 }
 
 type Connection struct {
@@ -329,17 +342,27 @@ func (m *Manager) Selected(ctx context.Context) (Connection, error) {
 	if config.Source == SourcePrometheus {
 		return m.commitSelection(generation, Connection{Source: SourcePrometheus})
 	}
+	provisionalKubecost := false
 	if config.Source == SourceAuto {
-		prometheusState := detectPrometheusCostState(ctx)
+		detectCtx, cancel := context.WithTimeout(ctx, prometheusCostDetectionTimeout)
+		prometheusState := detectPrometheusCostState(detectCtx)
+		detectionErr := detectCtx.Err()
+		cancel()
 		if err := ctx.Err(); err != nil {
 			return Connection{}, err
 		}
-		switch prometheusState {
-		case prometheusCostAvailable:
+		if prometheusState == prometheusCostAvailable {
 			return m.commitSelection(generation, Connection{Source: SourcePrometheus})
-		case prometheusCostUnknown:
+		}
+		if prometheusState == prometheusCostUnknown {
+			if connection, ok := m.renewProvisionalKubecostSelection(generation); ok {
+				return connection, nil
+			}
+		}
+		if !shouldAttemptKubecost(prometheusState, detectionErr) {
 			return m.commitAutoFallback(generation)
 		}
+		provisionalKubecost = prometheusState == prometheusCostUnknown
 	}
 
 	connection, err := m.connectKubecost(ctx, config)
@@ -356,7 +379,15 @@ func (m *Manager) Selected(ctx context.Context) (Connection, error) {
 		}
 		return m.commitSelectionFailure(generation, err)
 	}
+	if provisionalKubecost {
+		return m.commitProvisionalSelection(generation, connection)
+	}
 	return m.commitSelection(generation, connection)
+}
+
+func shouldAttemptKubecost(prometheusState prometheusCostState, detectionErr error) bool {
+	return prometheusState == prometheusCostAbsent ||
+		(prometheusState == prometheusCostUnknown && errors.Is(detectionErr, context.DeadlineExceeded))
 }
 
 func hasExplicitKubecostConfig(config ManagerConfig) bool {
@@ -381,6 +412,26 @@ func ProbeKubecost(ctx context.Context, config ManagerConfig) (Connection, error
 }
 
 func (m *Manager) commitSelection(generation uint64, connection Connection) (Connection, error) {
+	return m.commitSelectionWithRetry(generation, connection, time.Time{})
+}
+
+func (m *Manager) commitProvisionalSelection(generation uint64, connection Connection) (Connection, error) {
+	return m.commitSelectionWithRetry(generation, connection, time.Now().Add(autoRetryDelay))
+}
+
+func (m *Manager) renewProvisionalKubecostSelection(generation uint64) (Connection, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.generation != generation || m.selected != SourceKubecost || m.retryAt.IsZero() {
+		return Connection{}, false
+	}
+	now := time.Now()
+	m.retryAt = now.Add(autoRetryDelay)
+	connection, _, ok := m.cachedSelectionLocked(now)
+	return connection, ok
+}
+
+func (m *Manager) commitSelectionWithRetry(generation uint64, connection Connection, retryAt time.Time) (Connection, error) {
 	m.mu.Lock()
 	if m.generation != generation {
 		m.mu.Unlock()
@@ -389,26 +440,31 @@ func (m *Manager) commitSelection(generation uint64, connection Connection) (Con
 		}
 		return Connection{}, fmt.Errorf("cost source selection was superseded")
 	}
+	previousLease := m.lease
 	m.selected = connection.Source
 	m.client = connection.Client
 	m.address = connection.Address
 	m.displayAddress = connection.DisplayAddress
 	m.clusterID = connection.ClusterID
 	m.service = connection.Service
-	m.retryAt = time.Time{}
+	m.retryAt = retryAt
 	m.selectionErr = nil
 	m.lease = connection.lease
 	m.mu.Unlock()
+	if connection.Source != SourceKubecost && previousLease != nil && previousLease.release != nil {
+		previousLease.release()
+	}
 	return connection, nil
 }
 
 func (m *Manager) commitAutoFallback(generation uint64) (Connection, error) {
 	connection := Connection{Source: SourcePrometheus}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.generation != generation {
+		m.mu.Unlock()
 		return Connection{}, fmt.Errorf("cost source selection was superseded")
 	}
+	previousLease := m.lease
 	m.selected = connection.Source
 	m.client = nil
 	m.address = ""
@@ -418,15 +474,20 @@ func (m *Manager) commitAutoFallback(generation uint64) (Connection, error) {
 	m.retryAt = time.Now().Add(autoRetryDelay)
 	m.selectionErr = nil
 	m.lease = nil
+	m.mu.Unlock()
+	if previousLease != nil && previousLease.release != nil {
+		previousLease.release()
+	}
 	return connection, nil
 }
 
 func (m *Manager) commitSelectionFailure(generation uint64, selectionErr error) (Connection, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.generation != generation {
+		m.mu.Unlock()
 		return Connection{}, fmt.Errorf("cost source selection was superseded")
 	}
+	previousLease := m.lease
 	m.selected = ""
 	m.client = nil
 	m.address = ""
@@ -440,6 +501,10 @@ func (m *Manager) commitSelectionFailure(generation uint64, selectionErr error) 
 	m.retryAt = time.Now().Add(retryDelay)
 	m.selectionErr = selectionErr
 	m.lease = nil
+	m.mu.Unlock()
+	if previousLease != nil && previousLease.release != nil {
+		previousLease.release()
+	}
 	return Connection{}, selectionErr
 }
 
@@ -465,7 +530,7 @@ func (m *Manager) cachedSelectionLocked(now time.Time) (Connection, error, bool)
 }
 
 func (m *Manager) autoRetryDueLocked(now time.Time) bool {
-	return m.config.Source == SourceAuto && m.selected == SourcePrometheus && !m.retryAt.IsZero() && !now.Before(m.retryAt)
+	return m.config.Source == SourceAuto && m.selected != "" && !m.retryAt.IsZero() && !now.Before(m.retryAt)
 }
 
 func detectPrometheusCostState(ctx context.Context) prometheusCostState {
@@ -510,7 +575,7 @@ func (m *Manager) connectKubecost(ctx context.Context, config ManagerConfig) (Co
 		}, nil
 	}
 
-	service, servicePort, targetPort, err := discoverKubecostAggregator()
+	aggregator, err := discoverKubecostAggregator()
 	if err != nil {
 		return Connection{}, fmt.Errorf("%w: %w", ErrKubecostUnavailable, err)
 	}
@@ -518,24 +583,67 @@ func (m *Manager) connectKubecost(ctx context.Context, config ManagerConfig) (Co
 	if err != nil {
 		return Connection{}, err
 	}
-	if k8s.IsInCluster() {
-		directURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", service.Name, service.Namespace, servicePort)
-		if client, address, directErr := probeKubecostURL(ctx, directURL, config.APIKey, clusterID); directErr == nil {
-			return discoveredKubecostConnection(client, address, clusterID, service, servicePort), nil
-		} else {
-			return Connection{}, directErr
+	return connectDiscoveredKubecost(ctx, config, clusterID, aggregator)
+}
+
+func connectDiscoveredKubecost(ctx context.Context, config ManagerConfig, clusterID string, aggregator *kubecostAggregator) (Connection, error) {
+	usedAuthenticationBypass := false
+	connection, err := connectKubecostAggregatorEndpoints(config.APIKey, aggregator.endpoints, func(endpoint kubecostAggregatorEndpoint) (Connection, error) {
+		endpointCtx, cancel := context.WithTimeout(ctx, kubecostEndpointTimeout)
+		defer cancel()
+		connection, err := connectDiscoveredKubecostEndpoint(endpointCtx, config.APIKey, clusterID, aggregator.service, endpoint)
+		if err == nil {
+			usedAuthenticationBypass = endpoint.bypassesAuthentication
 		}
+		return connection, err
+	})
+	if err == nil && usedAuthenticationBypass {
+		log.Printf("[opencost] Kubecost port 9004 requires authentication; using %s/%s port 9008, which Kubecost exposes without SAML/OIDC for internal clients", aggregator.service.Namespace, aggregator.service.Name)
 	}
-	forward, err := portforward.Start(portforward.OwnerCost, ctx, service.Namespace, service.Name, targetPort, k8s.GetContextName())
+	return connection, err
+}
+
+func connectKubecostAggregatorEndpoints(apiKey string, endpoints []kubecostAggregatorEndpoint, connect func(kubecostAggregatorEndpoint) (Connection, error)) (Connection, error) {
+	var primaryErr error
+	for _, endpoint := range endpoints {
+		// A supplied credential is explicit auth intent; never turn its rejection into unauthenticated access.
+		if endpoint.bypassesAuthentication && (apiKey != "" || !errors.Is(primaryErr, ErrKubecostAuthentication)) {
+			continue
+		}
+		connection, err := connect(endpoint)
+		if err == nil {
+			return connection, nil
+		}
+		if endpoint.bypassesAuthentication {
+			return Connection{}, fmt.Errorf("primary endpoint failed: %v; port %d fallback failed: %w", primaryErr, endpoint.servicePort, err)
+		}
+		primaryErr = err
+	}
+	if primaryErr == nil {
+		return Connection{}, fmt.Errorf("%w: no supported API port", ErrKubecostNotFound)
+	}
+	return Connection{}, primaryErr
+}
+
+func connectDiscoveredKubecostEndpoint(ctx context.Context, apiKey, clusterID string, service *corev1.Service, endpoint kubecostAggregatorEndpoint) (Connection, error) {
+	if k8s.IsInCluster() {
+		directURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", service.Name, service.Namespace, endpoint.servicePort)
+		client, address, err := probeDiscoveredKubecostURL(ctx, directURL, apiKey, clusterID)
+		if err != nil {
+			return Connection{}, err
+		}
+		return discoveredKubecostConnection(client, address, clusterID, service, endpoint.servicePort), nil
+	}
+	forward, err := portforward.Start(portforward.OwnerCost, ctx, service.Namespace, service.Name, endpoint.targetPort, k8s.GetContextName())
 	if err != nil {
 		return Connection{}, fmt.Errorf("%w: port-forward failed: %w", ErrKubecostUnavailable, err)
 	}
-	client, address, err := probeKubecostURL(ctx, forward.Address, config.APIKey, clusterID)
+	client, address, err := probeDiscoveredKubecostURL(ctx, forward.Address, apiKey, clusterID)
 	if err != nil {
 		portforward.Stop(portforward.OwnerCost)
 		return Connection{}, err
 	}
-	connection := discoveredKubecostConnection(client, address, clusterID, service, servicePort)
+	connection := discoveredKubecostConnection(client, address, clusterID, service, endpoint.servicePort)
 	connection.lease = &connectionLease{
 		alive: func() bool {
 			info := portforward.GetConnectionInfo(portforward.OwnerCost)
@@ -594,12 +702,20 @@ func resolveKubecostClusterID(configured string) (string, error) {
 }
 
 func probeKubecostURL(ctx context.Context, rawURL, apiKey, clusterID string) (*pkgopencost.KubecostClient, string, error) {
+	return probeKubecostURLWithModelFallback(ctx, rawURL, apiKey, clusterID, true)
+}
+
+func probeDiscoveredKubecostURL(ctx context.Context, rawURL, apiKey, clusterID string) (*pkgopencost.KubecostClient, string, error) {
+	return probeKubecostURLWithModelFallback(ctx, rawURL, apiKey, clusterID, false)
+}
+
+func probeKubecostURLWithModelFallback(ctx context.Context, rawURL, apiKey, clusterID string, tryModel bool) (*pkgopencost.KubecostClient, string, error) {
 	if err := ValidateKubecostURL(rawURL); err != nil {
 		return nil, "", err
 	}
 	parsed, _ := url.Parse(rawURL)
 	paths := []string{strings.TrimRight(parsed.EscapedPath(), "/")}
-	if paths[0] == "" {
+	if paths[0] == "" && tryModel {
 		paths = append(paths, "/model")
 	}
 	origin := parsed.Scheme + "://" + parsed.Host
@@ -693,51 +809,65 @@ func kubecostClusterFilter(clusterID string) string {
 	return `cluster:"` + escaped + `"`
 }
 
-func discoverKubecostAggregator() (*corev1.Service, int, int, error) {
+func discoverKubecostAggregator() (*kubecostAggregator, error) {
 	cache := k8s.GetResourceCache()
 	if cache == nil || cache.Services() == nil || cache.StatefulSets() == nil {
-		return nil, 0, 0, fmt.Errorf("%w: requires access to Services and StatefulSets; configure the Aggregator URL manually", ErrKubecostDiscovery)
+		return nil, fmt.Errorf("%w: requires access to Services and StatefulSets; configure the Aggregator URL manually", ErrKubecostDiscovery)
 	}
 	services, err := cache.Services().List(labels.Everything())
 	if err != nil {
-		return nil, 0, 0, fmt.Errorf("list Services for Kubecost discovery: %w", err)
+		return nil, fmt.Errorf("list Services for Kubecost discovery: %w", err)
 	}
 	statefulSets, err := cache.StatefulSets().List(labels.Everything())
 	if err != nil {
-		return nil, 0, 0, fmt.Errorf("list StatefulSets for Kubecost discovery: %w", err)
+		return nil, fmt.Errorf("list StatefulSets for Kubecost discovery: %w", err)
 	}
 	for _, service := range services {
-		port, ok := aggregatorServicePort(service)
-		if !ok {
-			continue
-		}
 		for _, statefulSet := range statefulSets {
 			if statefulSet.Namespace != service.Namespace || !activeKubecostAggregator(statefulSet) {
 				continue
 			}
 			selector := labels.SelectorFromSet(service.Spec.Selector)
 			if len(service.Spec.Selector) > 0 && selector.Matches(labels.Set(statefulSet.Spec.Template.Labels)) {
-				targetPort, ok := k8score.ResolveServiceTargetPort(port, statefulSet.Spec.Template.Spec.Containers)
-				if !ok {
+				endpoints := aggregatorServiceEndpoints(service, statefulSet.Spec.Template.Spec.Containers)
+				if len(endpoints) == 0 {
 					continue
 				}
-				return service, int(port.Port), targetPort, nil
+				return &kubecostAggregator{service: service, endpoints: endpoints}, nil
 			}
 		}
 	}
-	return nil, 0, 0, fmt.Errorf("%w: no active Kubecost 3 Aggregator Service found; configure the central Aggregator URL manually", ErrKubecostNotFound)
+	return nil, fmt.Errorf("%w: no active Kubecost 3 Aggregator Service found; configure the central Aggregator URL manually", ErrKubecostNotFound)
 }
 
-func aggregatorServicePort(service *corev1.Service) (corev1.ServicePort, bool) {
+func aggregatorServiceEndpoints(service *corev1.Service, containers []corev1.Container) []kubecostAggregatorEndpoint {
 	if service == nil || (service.Labels["app.kubernetes.io/name"] != "aggregator" && service.Labels["app"] != "aggregator") {
-		return corev1.ServicePort{}, false
+		return nil
 	}
+	var primary *kubecostAggregatorEndpoint
+	var authBypass *kubecostAggregatorEndpoint
 	for _, port := range service.Spec.Ports {
-		if port.Name == "tcp-api" && port.Port == 9004 {
-			return port, true
+		targetPort, ok := k8score.ResolveServiceTargetPort(port, containers)
+		if !ok {
+			continue
+		}
+		endpoint := &kubecostAggregatorEndpoint{servicePort: int(port.Port), targetPort: targetPort}
+		switch {
+		case port.Name == "tcp-api" && port.Port == 9004:
+			primary = endpoint
+		case port.Name == "tcp-api-rbac" && port.Port == 9008:
+			endpoint.bypassesAuthentication = true
+			authBypass = endpoint
 		}
 	}
-	return corev1.ServicePort{}, false
+	if primary == nil {
+		return nil
+	}
+	endpoints := []kubecostAggregatorEndpoint{*primary}
+	if authBypass != nil {
+		endpoints = append(endpoints, *authBypass)
+	}
+	return endpoints
 }
 
 func activeKubecostAggregator(statefulSet *appsv1.StatefulSet) bool {

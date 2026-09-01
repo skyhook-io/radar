@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -183,20 +184,31 @@ func TestApplyCostSourceBindsExplicitClusterIDToContext(t *testing.T) {
 }
 
 func TestKubecostConnectionGuidanceUsesTypedErrors(t *testing.T) {
-	if got := kubecostConnectionGuidance(context.DeadlineExceeded); !strings.Contains(got, "timed out") {
+	if got := kubecostConnectionGuidance(context.DeadlineExceeded, false); !strings.Contains(got, "timed out") {
 		t.Fatalf("deadline guidance = %q", got)
 	}
 	upstream := &prom.HTTPError{StatusCode: http.StatusBadGateway, Body: []byte("authentication service unavailable")}
-	if got := kubecostConnectionGuidance(upstream); strings.Contains(got, "rejected the API key") {
+	if got := kubecostConnectionGuidance(upstream, false); strings.Contains(got, "rejected the API key") {
 		t.Fatalf("upstream text was misclassified as authentication: %q", got)
 	}
-	if got := kubecostConnectionGuidance(internalopencost.ErrKubecostAuthentication); !strings.Contains(got, "rejected the API key") {
+	if got := kubecostConnectionGuidance(internalopencost.ErrKubecostAuthentication, true); !strings.Contains(got, "rejected the API key") {
 		t.Fatalf("typed authentication guidance = %q", got)
 	}
-	if got := kubecostConnectionGuidance(internalopencost.ErrKubecostContextMismatch); !strings.Contains(got, "not bound to the current kubeconfig context") {
+	if got := kubecostConnectionGuidance(internalopencost.ErrKubecostAuthentication, false); !strings.Contains(got, "requires authentication") {
+		t.Fatalf("authentication guidance without a key = %q", got)
+	}
+	fallbackUnavailable := fmt.Errorf("primary endpoint failed: %v; fallback failed: %w", internalopencost.ErrKubecostAuthentication, internalopencost.ErrKubecostUnavailable)
+	if got := kubecostConnectionGuidance(fallbackUnavailable, false); !strings.Contains(got, "unreachable") || strings.Contains(got, "requires authentication") {
+		t.Fatalf("fallback availability guidance = %q", got)
+	}
+	fallbackNoData := fmt.Errorf("primary endpoint failed: %v; fallback failed: %w", internalopencost.ErrKubecostAuthentication, internalopencost.ErrKubecostNoData)
+	if got := kubecostConnectionGuidance(fallbackNoData, false); !strings.Contains(got, "no allocation data") {
+		t.Fatalf("fallback no-data guidance = %q", got)
+	}
+	if got := kubecostConnectionGuidance(internalopencost.ErrKubecostContextMismatch, false); !strings.Contains(got, "not bound to the current kubeconfig context") {
 		t.Fatalf("context mismatch guidance = %q", got)
 	}
-	if got := kubecostConnectionGuidance(internalopencost.ErrNoCostSource); !strings.Contains(got, "No compatible cost source") {
+	if got := kubecostConnectionGuidance(internalopencost.ErrNoCostSource, false); !strings.Contains(got, "No compatible cost source") {
 		t.Fatalf("no-source guidance = %q", got)
 	}
 }

@@ -322,7 +322,7 @@
             "url": {
               "type": "string",
               "pattern": "^$|^https?://[^?#]+$",
-              "description": "Kubecost 3 Aggregator base URL; empty auto-discovers a local Aggregator."
+              "description": "Kubecost 3 Aggregator base URL; empty auto-discovers tcp-api:9004 and, without an API key, can fall back to the same Service's tcp-api-rbac:9008 when 9004 requires SAML/OIDC."
             },
             "clusterId": {
               "type": "string",
@@ -330,7 +330,7 @@
             },
             "existingSecret": {
               "type": "string",
-              "description": "Name of a Secret holding an optional Kubecost service-account API key."
+              "description": "Name of a Secret holding an optional Kubecost service-account API key. A configured key is never bypassed through auto-discovered port 9008."
             },
             "existingSecretKey": {
               "type": "string",
