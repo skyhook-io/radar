@@ -88,7 +88,7 @@ interface ConfigResponse {
   argoCdCliSession?: { server: string; user: string; insecure?: boolean }
 }
 
-interface KubecostApplyResponse {
+interface CostSourceApplyResponse {
   source: 'prometheus' | 'kubecost'
   address?: string
   service?: ResourceRef & { kind: 'Service'; port: number }
@@ -1461,7 +1461,7 @@ function CostSection({
       sentKey = apiKey
     }
     try {
-      const res = await fetch(apiUrl('/integrations/kubecost'), {
+      const res = await fetch(apiUrl('/integrations/cost'), {
         method: 'PUT',
         credentials: getCredentialsMode(),
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
@@ -1507,9 +1507,9 @@ function CostSection({
             !Number.isInteger(data.service.port) ||
             data.service.port <= 0))
       ) {
-        throw new Error('Radar returned an invalid Kubecost configuration response')
+        throw new Error('Radar returned an invalid cost source response')
       }
-      const applied = data as KubecostApplyResponse
+      const applied = data as CostSourceApplyResponse
       setApiKey('')
       setApiKeyTouched(false)
       setApiKeyCleared(false)
@@ -1644,9 +1644,9 @@ function CostSection({
             <label htmlFor="cost-kubecost-api-key" className="mb-1 block text-sm font-medium text-theme-text-primary">API key (optional)</label>
             <p id="cost-kubecost-api-key-help" className="mb-1 text-xs text-theme-text-tertiary">
               Only needed when Kubecost requires authentication. {deploymentMode === 'local' ? (
-                <>Radar stores it unencrypted in this machine&apos;s owner-only settings file and never returns it through the API.</>
+                <>Radar stores it unencrypted in this machine&apos;s owner-only config file (<code>~/.radar/config.json</code>) and never returns it through the API.</>
               ) : (
-                <>For this in-cluster deployment, create a Kubernetes Secret and set the Helm value <code>cost.kubecost.existingSecret</code>. A key entered here is stored unencrypted in this pod&apos;s temporary owner-only settings file and can disappear when the pod restarts. Radar never returns it through the API.</>
+                <>For this in-cluster deployment, create a Kubernetes Secret and set the Helm value <code>cost.kubecost.existingSecret</code>. A key entered here is stored unencrypted in this pod&apos;s temporary owner-only config file and can disappear when the pod restarts. Radar never returns it through the API.</>
               )}
               {apiKeySet && !apiKeyCleared ? ' A key is configured.' : ''}
             </p>
@@ -1698,7 +1698,7 @@ function CostSection({
         <div className="mt-1 min-h-7 text-xs">
           {apply.status === 'applying' && (
             <p key="applying" role="status" aria-live="polite" className="animate-status-enter text-theme-text-tertiary">
-              Testing connection and applying source…
+              {source === 'prometheus' ? 'Applying source…' : 'Testing connection and applying source…'}
             </p>
           )}
           {apply.status === 'connected' && (
@@ -1885,7 +1885,7 @@ type ApplyState =
 type CostApplyState =
   | { status: 'idle' }
   | { status: 'applying' }
-  | { status: 'connected'; source: 'prometheus' | 'kubecost'; address?: string; service?: KubecostApplyResponse['service'] }
+  | { status: 'connected'; source: 'prometheus' | 'kubecost'; address?: string; service?: CostSourceApplyResponse['service'] }
   | { status: 'failed'; error: string }
 
 type CurrencySaveState =

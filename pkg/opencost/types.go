@@ -21,7 +21,7 @@ const (
 // CostSummary is the response for the /api/opencost/summary endpoint.
 type CostSummary struct {
 	Available         bool            `json:"available"`
-	Reason            string          `json:"reason,omitempty"` // Set when available=false: no_prometheus, no_metrics, query_error
+	Reason            string          `json:"reason,omitempty"` // Set when available=false; see the Reason* constants above.
 	Source            string          `json:"source,omitempty"`
 	DataThrough       string          `json:"dataThrough,omitempty"`
 	Currency          string          `json:"currency"`
@@ -49,8 +49,10 @@ type NamespaceCost struct {
 	NetworkCost     float64 `json:"networkCost,omitempty"`
 	CPUUsageCost    float64 `json:"cpuUsageCost,omitempty"`
 	MemoryUsageCost float64 `json:"memoryUsageCost,omitempty"`
-	Efficiency      float64 `json:"efficiency,omitempty"` // 0-100
-	IdleCost        float64 `json:"idleCost,omitempty"`
+	// UsageUnavailable prevents missing Kubecost usage from being treated as zero when scoped totals are recomputed.
+	UsageUnavailable bool    `json:"-"`
+	Efficiency       float64 `json:"efficiency,omitempty"` // 0-100
+	IdleCost         float64 `json:"idleCost,omitempty"`
 }
 
 // WorkloadCostResponse is the response for the /api/opencost/workloads endpoint.

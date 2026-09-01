@@ -297,19 +297,17 @@ func filterCostSummary(resp *pkgopencost.CostSummary, allowed []string) {
 		resp.TotalStorageCost += row.StorageCost
 		resp.TotalNetworkCost += row.NetworkCost
 		resp.TotalIdleCost += row.IdleCost
-		allocated += row.CPUCost + row.MemoryCost
-		usage += row.CPUUsageCost + row.MemoryUsageCost
+		if !row.UsageUnavailable {
+			allocated += row.CPUCost + row.MemoryCost
+			usage += row.CPUUsageCost + row.MemoryUsageCost
+		}
 	}
 	resp.Namespaces = filtered
 	if sourceAvailable && len(filtered) == 0 {
 		resp.Available = false
 		resp.Reason = pkgopencost.ReasonNoMetrics
 	}
-	if allocated > 0 {
-		resp.ClusterEfficiency = usage / allocated * 100
-	} else {
-		resp.ClusterEfficiency = 0
-	}
+	resp.ClusterEfficiency = pkgopencost.EfficiencyPercent(usage, allocated)
 	sort.Slice(resp.Namespaces, func(i, j int) bool { return resp.Namespaces[i].HourlyCost > resp.Namespaces[j].HourlyCost })
 }
 

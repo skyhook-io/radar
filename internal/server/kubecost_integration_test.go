@@ -28,11 +28,11 @@ func setupKubecostIntegrationTest(t *testing.T) *Server {
 	return &Server{}
 }
 
-func TestApplyKubecostConfigRejectsCredentialBearingURL(t *testing.T) {
+func TestApplyCostSourceRejectsCredentialBearingURL(t *testing.T) {
 	s := setupKubecostIntegrationTest(t)
-	req := httptest.NewRequest(http.MethodPut, "/api/integrations/kubecost", strings.NewReader(`{"source":"kubecost","url":"https://user:secret@cost.example.com"}`))
+	req := httptest.NewRequest(http.MethodPut, "/api/integrations/cost", strings.NewReader(`{"source":"kubecost","url":"https://user:secret@cost.example.com"}`))
 	rec := httptest.NewRecorder()
-	s.handleApplyKubecostConfig(rec, req)
+	s.handleApplyCostSource(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body = %s", rec.Code, rec.Body.String())
@@ -75,7 +75,7 @@ func TestApplyAutomaticSourceRejectsNoSourceAndRestoresPreviousConfig(t *testing
 	})
 
 	rec := httptest.NewRecorder()
-	s.handleApplyKubecostConfig(rec, httptest.NewRequest(http.MethodPut, "/api/integrations/kubecost", strings.NewReader(`{"source":"auto"}`)))
+	s.handleApplyCostSource(rec, httptest.NewRequest(http.MethodPut, "/api/integrations/cost", strings.NewReader(`{"source":"auto"}`)))
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "No compatible cost source") {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -98,7 +98,7 @@ func TestKubecostEnvironmentConfigIsReadOnlyAndRedacted(t *testing.T) {
 	}
 
 	put := httptest.NewRecorder()
-	s.handleApplyKubecostConfig(put, httptest.NewRequest(http.MethodPut, "/api/integrations/kubecost", strings.NewReader(`{"source":"auto"}`)))
+	s.handleApplyCostSource(put, httptest.NewRequest(http.MethodPut, "/api/integrations/cost", strings.NewReader(`{"source":"auto"}`)))
 	if put.Code != http.StatusConflict {
 		t.Fatalf("PUT status = %d, want 409; body = %s", put.Code, put.Body.String())
 	}
@@ -149,7 +149,7 @@ func TestGetConfigUsesLiveKubecostConfigWithoutMutatingEffectiveConfig(t *testin
 	}
 }
 
-func TestApplyKubecostConfigBindsExplicitClusterIDToContext(t *testing.T) {
+func TestApplyCostSourceBindsExplicitClusterIDToContext(t *testing.T) {
 	s := setupKubecostIntegrationTest(t)
 	previousContext := k8s.SetTestContextName("cluster-a")
 	t.Cleanup(func() { k8s.SetTestContextName(previousContext) })
@@ -158,9 +158,9 @@ func TestApplyKubecostConfigBindsExplicitClusterIDToContext(t *testing.T) {
 	}))
 	defer server.Close()
 
-	req := httptest.NewRequest(http.MethodPut, "/api/integrations/kubecost", strings.NewReader(`{"source":"kubecost","url":"`+server.URL+`/model","apiKey":"secret","clusterId":"prod-a"}`))
+	req := httptest.NewRequest(http.MethodPut, "/api/integrations/cost", strings.NewReader(`{"source":"kubecost","url":"`+server.URL+`/model","apiKey":"secret","clusterId":"prod-a"}`))
 	rec := httptest.NewRecorder()
-	s.handleApplyKubecostConfig(rec, req)
+	s.handleApplyCostSource(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}

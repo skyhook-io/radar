@@ -180,6 +180,12 @@ func TestKubecostHTTPTransportSeparatesProbeAndQueryTimeouts(t *testing.T) {
 	}
 }
 
+func TestKubecostConnectBudgetFitsEveryProbePath(t *testing.T) {
+	if kubecostConnectTimeout < 2*kubecostProbeHTTPTimeout {
+		t.Fatalf("connect budget %s cannot fit two probe attempts of %s", kubecostConnectTimeout, kubecostProbeHTTPTimeout)
+	}
+}
+
 func TestProbeKubecostReturnsTypedAuthenticationFailureAfterAllPaths(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "denied", http.StatusUnauthorized)

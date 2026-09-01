@@ -175,6 +175,46 @@ func TestFilterCostSummaryRecomputesVisibleTotals(t *testing.T) {
 	}
 }
 
+func TestFilterCostSummaryExcludesUnavailableUsageFromEfficiency(t *testing.T) {
+	resp := &pkgopencost.CostSummary{
+		Available:         true,
+		ClusterEfficiency: 50,
+		Namespaces: []pkgopencost.NamespaceCost{
+			{Name: "measured", CPUCost: 1, MemoryCost: 1, CPUUsageCost: 0.5, MemoryUsageCost: 0.5},
+			{Name: "unknown", CPUCost: 2, MemoryCost: 2, UsageUnavailable: true},
+		},
+	}
+	filterCostSummary(resp, []string{"measured", "unknown"})
+	if resp.ClusterEfficiency != 50 {
+		t.Fatalf("cluster efficiency = %v, want 50", resp.ClusterEfficiency)
+	}
+
+	filterCostSummary(resp, []string{"unknown"})
+	if resp.ClusterEfficiency != 0 {
+		t.Fatalf("unavailable-only efficiency = %v, want omitted zero value", resp.ClusterEfficiency)
+	}
+}
+
+func TestFilterCostSummaryCapsAndRoundsEfficiency(t *testing.T) {
+	resp := &pkgopencost.CostSummary{
+		Available: true,
+		Namespaces: []pkgopencost.NamespaceCost{
+			{Name: "allowed", CPUCost: 0.5, MemoryCost: 0.5, CPUUsageCost: 0.7, MemoryUsageCost: 0.7},
+		},
+	}
+	filterCostSummary(resp, []string{"allowed"})
+	if resp.ClusterEfficiency != 100 {
+		t.Fatalf("cluster efficiency = %v, want capped 100", resp.ClusterEfficiency)
+	}
+
+	resp.Namespaces[0].CPUUsageCost = 0.3333
+	resp.Namespaces[0].MemoryUsageCost = 0
+	filterCostSummary(resp, []string{"allowed"})
+	if resp.ClusterEfficiency != 33.3 {
+		t.Fatalf("cluster efficiency = %v, want rounded 33.3", resp.ClusterEfficiency)
+	}
+}
+
 func TestFilterCostSummaryReportsNoMetricsForVisibleNamespacesWithoutRows(t *testing.T) {
 	resp := &pkgopencost.CostSummary{
 		Available:  true,

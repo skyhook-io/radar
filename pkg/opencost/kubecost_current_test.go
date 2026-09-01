@@ -88,6 +88,26 @@ func TestComputeKubecostSummaryFallsBackFromNullHourAndNormalizesActualDuration(
 	}
 }
 
+func TestComputeKubecostSummaryMarksMissingUsageForScopedEfficiency(t *testing.T) {
+	transport := &fakeKubecostTransport{responses: []string{
+		`{"code":200,"data":[{"measured":{"properties":{"cluster":"cluster-a","namespace":"measured"},"start":"2026-08-26T00:00:00Z","end":"2026-08-26T01:00:00Z","cpuCoreRequestAverage":2,"cpuCoreUsageAverage":1,"cpuCost":1,"ramByteRequestAverage":2,"ramByteUsageAverage":1,"ramCost":1},"unknown":{"properties":{"cluster":"cluster-a","namespace":"unknown"},"start":"2026-08-26T00:00:00Z","end":"2026-08-26T01:00:00Z","cpuCost":2,"ramCost":2}}]}`,
+	}}
+	resp, err := ComputeKubecostSummary(context.Background(), NewKubecostClient(transport), KubecostCurrentOptions{ClusterID: "cluster-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.ClusterEfficiency != 50 {
+		t.Fatalf("cluster efficiency = %v, want 50", resp.ClusterEfficiency)
+	}
+	byName := make(map[string]NamespaceCost, len(resp.Namespaces))
+	for _, row := range resp.Namespaces {
+		byName[row.Name] = row
+	}
+	if byName["measured"].UsageUnavailable || !byName["unknown"].UsageUnavailable {
+		t.Fatalf("unexpected usage availability: %#v", byName)
+	}
+}
+
 func TestComputeKubecostWorkloadsRequiresExactIdentity(t *testing.T) {
 	tests := []struct {
 		name       string

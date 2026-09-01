@@ -308,7 +308,7 @@
         "source": {
           "type": "string",
           "enum": ["", "auto", "prometheus", "kubecost"],
-          "description": "Cost source selection. Empty uses Auto without making Settings deployment-managed."
+          "description": "Cost source selection. Empty uses Auto; source controls remain editable only when source, kubecost.url, kubecost.clusterId, and kubecost.existingSecret are all empty."
         },
         "currency": {
           "type": "string",
@@ -324,9 +324,19 @@
               "pattern": "^$|^https?://[^?#]+$",
               "description": "Kubecost 3 Aggregator base URL; empty auto-discovers a local Aggregator."
             },
-            "clusterId": { "type": "string" },
-            "existingSecret": { "type": "string" },
-            "existingSecretKey": { "type": "string", "minLength": 1 }
+            "clusterId": {
+              "type": "string",
+              "description": "Cluster ID used to filter central/federated Aggregator results; empty detects CLUSTER_ID from a local FinOps Agent or Aggregator."
+            },
+            "existingSecret": {
+              "type": "string",
+              "description": "Name of a Secret holding an optional Kubecost service-account API key."
+            },
+            "existingSecretKey": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Key within existingSecret holding the API key sent as X-API-KEY."
+            }
           }
         }
       }

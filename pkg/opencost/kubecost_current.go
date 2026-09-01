@@ -95,23 +95,24 @@ func ComputeKubecostSummary(ctx context.Context, client *KubecostClient, opts Ku
 		cpuUsage, cpuAvailable := kubecostUsageCost(cpu, allocation.CPUCoreRequestAverage, allocation.CPUCoreUsageAverage)
 		ramUsage, ramAvailable := kubecostUsageCost(ram, allocation.RAMByteRequestAverage, allocation.RAMByteUsageAverage)
 		row := NamespaceCost{
-			Name:            namespace,
-			Kind:            "namespace",
-			HourlyCost:      allocation.TotalCost / hours,
-			CPUCost:         cpu,
-			MemoryCost:      ram,
-			StorageCost:     allocation.PVCost / hours,
-			NetworkCost:     (allocation.NetworkCost + allocation.LoadBalancerCost) / hours,
-			CPUUsageCost:    cpuUsage,
-			MemoryUsageCost: ramUsage,
+			Name:             namespace,
+			Kind:             "namespace",
+			HourlyCost:       allocation.TotalCost / hours,
+			CPUCost:          cpu,
+			MemoryCost:       ram,
+			StorageCost:      allocation.PVCost / hours,
+			NetworkCost:      (allocation.NetworkCost + allocation.LoadBalancerCost) / hours,
+			CPUUsageCost:     cpuUsage,
+			MemoryUsageCost:  ramUsage,
+			UsageUnavailable: !(cpuAvailable && ramAvailable),
 		}
 		if row.HourlyCost == 0 {
 			row.HourlyCost = (allocation.CPUCost + allocation.RAMCost + allocation.PVCost + allocation.NetworkCost + allocation.LoadBalancerCost + allocation.SharedCost + allocation.ExternalCost) / hours
 		}
-		if cpuAvailable && ramAvailable {
+		if !row.UsageUnavailable {
 			usage := cpuUsage + ramUsage
 			allocated := cpu + ram
-			row.Efficiency = efficiencyPct(usage, allocated)
+			row.Efficiency = EfficiencyPercent(usage, allocated)
 			row.IdleCost = idleFromUsage(usage, allocated)
 			totalAlloc += allocated
 			totalUsage += usage
@@ -132,7 +133,7 @@ func ComputeKubecostSummary(ctx context.Context, client *KubecostClient, opts Ku
 	out.TotalStorageCost = roundTo(out.TotalStorageCost, 4)
 	out.TotalNetworkCost = roundTo(out.TotalNetworkCost, 4)
 	out.TotalIdleCost = roundTo(out.TotalIdleCost, 4)
-	out.ClusterEfficiency = efficiencyPct(totalUsage, totalAlloc)
+	out.ClusterEfficiency = EfficiencyPercent(totalUsage, totalAlloc)
 	return out, nil
 }
 
@@ -273,13 +274,13 @@ func computeKubecostWorkloads(ctx context.Context, client *KubecostClient, names
 		row.MemoryUsageCost = workload.memoryUsageCost / hours
 		row.Replicas = len(workload.pods)
 		if row.CPUUsageAvailable {
-			row.CPUAllocationUse = efficiencyPct(row.CPUUsageCost, row.CPUCost)
+			row.CPUAllocationUse = EfficiencyPercent(row.CPUUsageCost, row.CPUCost)
 		}
 		if row.MemoryUsageAvailable {
-			row.MemoryAllocationUse = efficiencyPct(row.MemoryUsageCost, row.MemoryCost)
+			row.MemoryAllocationUse = EfficiencyPercent(row.MemoryUsageCost, row.MemoryCost)
 		}
 		if row.CPUUsageAvailable && row.MemoryUsageAvailable {
-			row.Efficiency = efficiencyPct(row.CPUUsageCost+row.MemoryUsageCost, row.CPUCost+row.MemoryCost)
+			row.Efficiency = EfficiencyPercent(row.CPUUsageCost+row.MemoryUsageCost, row.CPUCost+row.MemoryCost)
 			row.IdleCost = idleFromUsage(row.CPUUsageCost+row.MemoryUsageCost, row.CPUCost+row.MemoryCost)
 		}
 		roundWorkloadCost(row)

@@ -473,8 +473,9 @@ mcp:
 
 # OpenCost/Kubecost display configuration
 cost:
-  # Cost data source: "auto", "prometheus", or "kubecost". Empty keeps Radar's
-  # default Auto mode without making the Cost source settings deployment-managed.
+  # Cost data source: "auto", "prometheus", or "kubecost". Empty uses Auto;
+  # source controls stay editable only when the Kubecost URL, cluster ID, and
+  # existing Secret are also empty.
   source: ""
   # Optional ISO 4217 override for OpenCost/Kubecost values. Empty detects the
   # running cost tool's configured currency when available, then uses USD.

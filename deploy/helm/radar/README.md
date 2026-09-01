@@ -195,7 +195,7 @@ trend charts remain unavailable for Kubecost.
 | `timeline.retention` | SQLite retention (Go duration; `0` disables) | `168h` |
 | `timeline.maxSize` | SQLite max DB + WAL size before oldest events are pruned (`0` disables) | `800Mi` |
 | `persistence.enabled` | Enable PVC for SQLite | `false` |
-| `cost.source` | Cost source: `auto`, `prometheus`, or `kubecost`; empty keeps Auto editable in Settings | `""` |
+| `cost.source` | Cost source: `auto`, `prometheus`, or `kubecost`; controls stay editable only when this and the Kubecost URL, cluster ID, and Secret are empty | `""` |
 | `cost.currency` | Optional ISO 4217 override for OpenCost/Kubecost values; empty auto-detects, then uses USD | `""` |
 | `cost.kubecost.url` | Kubecost 3 Aggregator URL; blank discovers a local Aggregator, while federated agent-only clusters need their central URL | `""` |
 | `cost.kubecost.clusterId` | Cluster ID filter; blank detects literal `CLUSTER_ID` from the local FinOps Agent/Aggregator | `""` |

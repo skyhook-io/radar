@@ -225,7 +225,7 @@ func ComputeCostSummary(ctx context.Context, client *RESTClient, opts SummaryOpt
 			usageCost := rowEff * allocCost
 			nc.CPUUsageCost = usageCost * safeRatio(nc.CPUCost, allocCost)
 			nc.MemoryUsageCost = usageCost - nc.CPUUsageCost
-			nc.Efficiency = efficiencyPct(usageCost, allocCost)
+			nc.Efficiency = EfficiencyPercent(usageCost, allocCost)
 			nc.IdleCost = idleFromUsage(usageCost, allocCost)
 			// Accumulate cost-weighted, matching ComputeCostSummaryFromProm.
 			// An unweighted mean would let a $0.01 row at 10% efficiency
@@ -247,7 +247,7 @@ func ComputeCostSummary(ctx context.Context, client *RESTClient, opts SummaryOpt
 		return namespaces[i].HourlyCost > namespaces[j].HourlyCost
 	})
 
-	clusterEfficiency := efficiencyPct(totalUsageCost, totalAllocCost)
+	clusterEfficiency := EfficiencyPercent(totalUsageCost, totalAllocCost)
 
 	// Normalize window-total to hourly. OpenCost's /allocation returns
 	// totalCost summed over the entire window; we want rate so the UI can
@@ -400,7 +400,7 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 		nc.MemoryUsageCost = memUsageMap[nc.Name]
 		allocCost := nc.CPUCost + nc.MemoryCost
 		usageCost := nc.CPUUsageCost + nc.MemoryUsageCost
-		nc.Efficiency = efficiencyPct(usageCost, allocCost)
+		nc.Efficiency = EfficiencyPercent(usageCost, allocCost)
 		nc.IdleCost = idleFromUsage(usageCost, allocCost)
 		totalAllocCost += allocCost
 		totalUsageCost += usageCost
@@ -418,7 +418,7 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 		return namespaces[i].HourlyCost > namespaces[j].HourlyCost
 	})
 
-	clusterEfficiency := efficiencyPct(totalUsageCost, totalAllocCost)
+	clusterEfficiency := EfficiencyPercent(totalUsageCost, totalAllocCost)
 	totalIdleCost := idleFromUsage(totalUsageCost, totalAllocCost)
 
 	totalHourlyCost = roundTo(totalHourlyCost, 4)
@@ -476,10 +476,9 @@ func roundTo(val float64, places int) float64 {
 	return math.Round(val*pow) / pow
 }
 
-// efficiencyPct returns 100 * usage / alloc rounded to 1 decimal,
-// clamped to [0, 100]. Returns 0 when usage or alloc is non-positive
-// (treated as "no data" — distinct from "100% idle").
-func efficiencyPct(usage, alloc float64) float64 {
+// EfficiencyPercent returns 100 * usage / alloc rounded to one decimal and
+// clamped to [0, 100]. Non-positive input returns zero as an unavailable value.
+func EfficiencyPercent(usage, alloc float64) float64 {
 	if usage <= 0 || alloc <= 0 {
 		return 0
 	}
@@ -491,7 +490,7 @@ func efficiencyPct(usage, alloc float64) float64 {
 }
 
 // idleFromUsage returns max(alloc - usage, 0) but only when both are
-// positive. Mirrors efficiencyPct's "no data ≠ 100% idle" semantics.
+// positive. Mirrors EfficiencyPercent's "no data ≠ 100% idle" semantics.
 func idleFromUsage(usage, alloc float64) float64 {
 	if usage <= 0 || alloc <= 0 {
 		return 0

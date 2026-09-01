@@ -22,15 +22,14 @@ type kubecostServiceRef struct {
 	Port      int    `json:"port"`
 }
 
-type kubecostApplyResponse struct {
-	Applied   bool                `json:"applied"`
+type costSourceApplyResponse struct {
 	Source    string              `json:"source"`
 	Address   string              `json:"address,omitempty"`
 	Service   *kubecostServiceRef `json:"service,omitempty"`
 	APIKeySet bool                `json:"apiKeySet"`
 }
 
-func (s *Server) handleApplyKubecostConfig(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleApplyCostSource(w http.ResponseWriter, r *http.Request) {
 	if !s.requireCloudRole(w, r, auth.RoleOwner, "modify Radar configuration") {
 		return
 	}
@@ -88,9 +87,7 @@ func (s *Server) handleApplyKubecostConfig(w http.ResponseWriter, r *http.Reques
 	}
 	previousManager := internalopencost.ConfigSnapshot()
 	if source != internalopencost.SourcePrometheus && rawURL != "" {
-		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-		defer cancel()
-		if _, err := internalopencost.ProbeKubecost(ctx, candidate); err != nil {
+		if _, err := internalopencost.ProbeKubecost(r.Context(), candidate); err != nil {
 			log.Printf("[opencost] Kubecost configuration probe failed: %s", sanitizeForLog(err.Error()))
 			s.writeError(w, http.StatusBadRequest, kubecostConnectionGuidance(err))
 			return
@@ -136,8 +133,7 @@ func (s *Server) handleApplyKubecostConfig(w http.ResponseWriter, r *http.Reques
 			Port:      connection.Service.Port,
 		}
 	}
-	s.writeJSON(w, kubecostApplyResponse{
-		Applied:   true,
+	s.writeJSON(w, costSourceApplyResponse{
 		Source:    string(connection.Source),
 		Address:   connection.DisplayAddress,
 		Service:   service,

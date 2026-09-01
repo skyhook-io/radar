@@ -168,10 +168,10 @@ func addApplicationCostTotal(total *ApplicationCostTotals, wl WorkloadCost) {
 
 func finalizeApplicationCostTotals(total *ApplicationCostTotals) {
 	if total.CPUUsageAvailable {
-		total.CPUAllocationUse = efficiencyPct(total.CPUUsageCost, total.CPUCost)
+		total.CPUAllocationUse = EfficiencyPercent(total.CPUUsageCost, total.CPUCost)
 	}
 	if total.MemoryUsageAvailable {
-		total.MemoryAllocationUse = efficiencyPct(total.MemoryUsageCost, total.MemoryCost)
+		total.MemoryAllocationUse = EfficiencyPercent(total.MemoryUsageCost, total.MemoryCost)
 	}
 	total.HourlyCost = roundTo(total.HourlyCost, 4)
 	total.CPUCost = roundTo(total.CPUCost, 4)

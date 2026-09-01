@@ -817,7 +817,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/config", s.handleGetConfig)
 			r.Put("/config", s.handlePutConfig)
 			r.Put("/integrations/prometheus", s.handleApplyPrometheusURL)
-			r.Put("/integrations/kubecost", s.handleApplyKubecostConfig)
+			r.Put("/integrations/cost", s.handleApplyCostSource)
 			r.Put("/integrations/argocd", s.handleApplyArgoCDConfig)
 			r.Get("/integrations/argocd/status", s.handleArgoCDStatus)
 
