@@ -155,7 +155,7 @@ func TestWorkloadOutcomeUsesExactV0192FinishedReasons(t *testing.T) {
 		{reason: "Failed", want: resourcecontext.KueueOutcomeFailed},
 		{reason: "OutOfSync", want: resourcecontext.KueueOutcomeFailed},
 		{reason: "OwnerNotFound", want: resourcecontext.KueueOutcomeFailed},
-		{reason: "FailedToStart"},
+		{reason: "FailedToStart", want: resourcecontext.KueueOutcomeFailed},
 		{reason: "FutureTerminalReason"},
 	}
 	for _, test := range tests {

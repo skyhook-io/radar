@@ -38,7 +38,7 @@ describe('GPU ecosystem API contracts', () => {
   })
 
   it('distinguishes Kueue terminal failures from successful workloads', () => {
-    for (const reason of ['Failed', 'OutOfSync', 'OwnerNotFound']) {
+    for (const reason of ['Failed', 'FailedToStart', 'OutOfSync', 'OwnerNotFound']) {
       expect(getKueueWorkloadStatus({
         status: { conditions: [{ type: 'Finished', status: 'True', reason }] },
       })).toMatchObject({ text: reason, level: 'unhealthy' })

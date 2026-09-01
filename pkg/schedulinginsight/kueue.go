@@ -142,7 +142,7 @@ func workloadOutcome(conditions map[string]workloadCondition) resourcecontext.Ku
 	switch finished.Reason {
 	case "Succeeded":
 		return resourcecontext.KueueOutcomeSucceeded
-	case "Failed", "OutOfSync", "OwnerNotFound":
+	case "Failed", "FailedToStart", "OutOfSync", "OwnerNotFound":
 		return resourcecontext.KueueOutcomeFailed
 	default:
 		return ""
