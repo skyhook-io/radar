@@ -703,6 +703,27 @@ describe('CAPI Machine kind collisions', () => {
       status: { phase: 'provisioned' },
     })?.text).toBe('Provisioned')
   })
+
+  it.each([
+    ['kubeadmcontrolplanes', 'KubeadmControlPlane', 'controlplane.cluster.x-k8s.io/v1beta1'],
+    ['awsmanagedcontrolplanes', 'AWSManagedControlPlane', 'controlplane.cluster.x-k8s.io/v1beta2'],
+    ['awsmanagedmachinepools', 'AWSManagedMachinePool', 'infrastructure.cluster.x-k8s.io/v1beta2'],
+    ['awsmachines', 'AWSMachine', 'infrastructure.cluster.x-k8s.io/v1beta2'],
+  ])('keeps the topology-owned warning for %s', (plural, kind, apiVersion) => {
+    const html = renderKind(plural, {
+      apiVersion,
+      kind,
+      metadata: {
+        name: 'topology-owned',
+        namespace: 'default',
+        labels: { 'topology.cluster.x-k8s.io/owned': '' },
+      },
+      spec: {},
+      status: {},
+    }, 'default')
+
+    expect(html).toContain('Topology-controlled')
+  })
 })
 
 describe('shared plurals — the status path collides too', () => {

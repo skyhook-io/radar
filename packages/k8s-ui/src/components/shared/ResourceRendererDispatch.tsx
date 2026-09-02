@@ -503,6 +503,20 @@ const KNOWN_KINDS = new Set([
   'functions', 'configurations',
 ])
 
+// Cluster topology owns resources across the core, bootstrap, control-plane,
+// and infrastructure contracts. Keep this explicit: a suffix/substring match
+// would also accept unrelated groups such as extension.cluster.x-k8s.io.
+const CAPI_TOPOLOGY_GROUPS = [
+  'cluster.x-k8s.io',
+  'bootstrap.cluster.x-k8s.io',
+  'controlplane.cluster.x-k8s.io',
+  'infrastructure.cluster.x-k8s.io',
+] as const
+
+function isCAPITopologyGroup(apiVersion?: string): boolean {
+  return CAPI_TOPOLOGY_GROUPS.some(group => isApiGroup(apiVersion, group))
+}
+
 // ============================================================================
 // RESOURCE CONTENT - Delegates to specific renderers
 // ============================================================================
@@ -866,7 +880,7 @@ export function ResourceRendererDispatch({
         {kind === 'scheduledbackups' && isApiGroup(data?.apiVersion, CNPG_GROUP) && <CNPGScheduledBackupRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'poolers' && isApiGroup(data?.apiVersion, CNPG_GROUP) && <CNPGPoolerRenderer data={data} onNavigate={onNavigate} />}
         {/* Cluster API (CAPI) */}
-        {'topology.cluster.x-k8s.io/owned' in (data?.metadata?.labels ?? {}) && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io') && (
+        {'topology.cluster.x-k8s.io/owned' in (data?.metadata?.labels ?? {}) && isCAPITopologyGroup(data?.apiVersion) && (
           <AlertBanner
             variant="warning"
             title="Topology-controlled — this resource is managed by ClusterClass. Manual changes will be reconciled back."
