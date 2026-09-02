@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { canStartNewInvestigation } from "./DiagnoseSurface";
+import {
+  canCopyRunLink,
+  canStartNewInvestigation,
+} from "./DiagnoseSurface";
 import type { RunSummary } from "../../api/diagnose";
 
 // The "new investigation" button dispatches an agent and spends the user's own
@@ -66,5 +69,24 @@ describe("canStartNewInvestigation", () => {
     expect(canStartNewInvestigation("investigation", run("stopped"), false)).toBe(
       true,
     );
+  });
+});
+
+describe("canCopyRunLink", () => {
+  it("does not expose collaboration UI for an OSS run", () => {
+    expect(canCopyRunLink(run("done"))).toBe(false);
+  });
+
+  it("exposes the copy action only for a canonical hosted URL", () => {
+    expect(
+      canCopyRunLink({
+        ...run("done"),
+        radarUrl: "/c/cluster-1?org=org-1&ai-run=r1",
+      }),
+    ).toBe(true);
+  });
+
+  it("treats an empty hosted URL as unavailable", () => {
+    expect(canCopyRunLink({ ...run("done"), radarUrl: "" })).toBe(false);
   });
 });

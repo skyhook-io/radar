@@ -154,21 +154,22 @@ function InvestigationMenu({ run }: { run: RunSummary }) {
   );
 }
 
-function stableRunURL(run: RunSummary): string {
-  if (run.radarUrl) return new URL(run.radarUrl, window.location.origin).href;
-  const url = new URL(window.location.href);
-  url.searchParams.set("ai-run", run.id);
-  return url.href;
+export function canCopyRunLink(
+  run: RunSummary | null | undefined,
+): run is RunSummary & { radarUrl: string } {
+  return typeof run?.radarUrl === "string" && run.radarUrl.length > 0;
 }
 
-function CopyRunLink({ run }: { run: RunSummary }) {
+function CopyRunLink({ radarUrl }: { radarUrl: string }) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">(
     "idle",
   );
   const copy = async () => {
     try {
       if (!navigator.clipboard) throw new Error("clipboard unavailable");
-      await navigator.clipboard.writeText(stableRunURL(run));
+      await navigator.clipboard.writeText(
+        new URL(radarUrl, window.location.origin).href,
+      );
       setCopyState("copied");
     } catch {
       setCopyState("error");
@@ -528,7 +529,9 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
           {activeRun && (
             <VisibilityControl run={activeRun} onChanged={d.updateRunSummary} />
           )}
-          {activeRun && <CopyRunLink run={activeRun} />}
+          {canCopyRunLink(activeRun) && (
+            <CopyRunLink radarUrl={activeRun.radarUrl} />
+          )}
           {activeRun && <InvestigationMenu run={activeRun} />}
           <Tooltip content={maximized ? "Restore" : "Expand"} position="bottom">
             <button
