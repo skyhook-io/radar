@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { Tooltip } from "../ui/Tooltip";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
+import { Badge } from "@skyhook-io/k8s-ui/components/ui/Badge";
 import {
   useDiagnose,
   useDiagnoseLayout,
@@ -212,7 +213,16 @@ function VisibilityControl({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
   const [confirmShare, setConfirmShare] = useState(false);
-  if (!run.canManageVisibility) return null;
+  if (!run.canManageVisibility) {
+    return run.visibility === "organization" ? (
+      <Tooltip content="Shared with your organization" position="bottom">
+        <Badge severity="neutral" size="sm" className="shrink-0">
+          <Users className="h-3 w-3" />
+          Organization
+        </Badge>
+      </Tooltip>
+    ) : null;
+  }
   const shared = run.visibility === "organization";
   const update = () => {
     if (busy) return;
@@ -282,8 +292,9 @@ function VisibilityControl({
 //                 the last focused run. Without this the button dispatches an
 //                 agent — real tokens — from a screen showing an unrelated list.
 //   run           nothing to take a resource from.
-//   running       a start is handed back the live run, so the click does nothing
-//                 and the button reads as broken.
+//   running       a human start is handed back the live run, so the click does
+//                 nothing. An automatic run is a different, immutable session,
+//                 so it deliberately keeps the fresh human escape hatch.
 //   stale         the body already offers "Re-run on current cluster" WITH the
 //                 warning that the context changed; a bare + carries none of it,
 //                 and the resource may not exist in the context it'd run against.
@@ -296,7 +307,7 @@ export function canStartNewInvestigation(
   return (
     view === "investigation" &&
     !!run &&
-    run.status !== "running" &&
+    (run.status !== "running" || run.trigger === "background") &&
     run.status !== "stale" &&
     !needsConsent
   );
@@ -348,23 +359,28 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
     d.setupState === "needs-install" || d.setupState === "needs-restart";
 
   const activeRun = d.runs.find((r) => r.id === d.activeRunId) ?? null;
+  // Docked Home is a list, not the previously focused run. Scope every header
+  // label/action to what is visibly on screen so Copy/Share cannot act on a run
+  // the user has navigated away from. Expanded mode remains master-detail and
+  // therefore keeps the selected run active beside its history list.
+  const headerRun = !maximized && d.view === "home" ? null : activeRun;
   // A focused run shows the agent it actually ran with; Home reflects the current pick.
-  const activeAgentLabel = activeRun?.agent
-    ? agentLabelFor(activeRun.agent)
+  const activeAgentLabel = headerRun?.agent
+    ? agentLabelFor(headerRun.agent)
     : d.agentLabel;
   // Header subtitle: the config a focused run actually used (it records agent /
   // profile / model / effort), or the current defaults on Home. Codex shows mode
   // + reasoning effort; model is shown only when overridden. Clicking opens Settings.
   const configLine = buildConfigLine(
-    activeRun ?? {
+    headerRun ?? {
       agent: d.selectedAgent,
       profile: d.hosted ? undefined : d.profile,
       model: d.model,
       effort: d.effort,
     },
   );
-  const detailTitle = activeRun
-    ? `${activeRun.kind} ${activeRun.namespace ? `${activeRun.namespace}/` : ""}${activeRun.name}`
+  const detailTitle = headerRun
+    ? `${headerRun.kind} ${headerRun.namespace ? `${headerRun.namespace}/` : ""}${headerRun.name}`
     : "AI investigations";
 
   // Absolute within the body frame: maximized fills it; docked is a right slot.
@@ -503,8 +519,8 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
-          {activeRun &&
-            canStartNewInvestigation(d.view, activeRun, d.needsConsent) && (
+          {headerRun &&
+            canStartNewInvestigation(d.view, headerRun, d.needsConsent) && (
               <Tooltip
                 content="New investigation on this resource"
                 position="bottom"
@@ -512,10 +528,10 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
                 <button
                   onClick={() =>
                     d.openInvestigation({
-                      kind: activeRun.kind,
-                      namespace: activeRun.namespace,
-                      name: activeRun.name,
-                      issueId: activeRun.issueId,
+                      kind: headerRun.kind,
+                      namespace: headerRun.namespace,
+                      name: headerRun.name,
+                      issueId: headerRun.issueId,
                       fresh: true,
                     })
                   }
@@ -526,13 +542,13 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
                 </button>
               </Tooltip>
             )}
-          {activeRun && (
-            <VisibilityControl run={activeRun} onChanged={d.updateRunSummary} />
+          {headerRun && (
+            <VisibilityControl run={headerRun} onChanged={d.updateRunSummary} />
           )}
-          {canCopyRunLink(activeRun) && (
-            <CopyRunLink radarUrl={activeRun.radarUrl} />
+          {canCopyRunLink(headerRun) && (
+            <CopyRunLink radarUrl={headerRun.radarUrl} />
           )}
-          {activeRun && <InvestigationMenu run={activeRun} />}
+          {headerRun && <InvestigationMenu run={headerRun} />}
           <Tooltip content={maximized ? "Restore" : "Expand"} position="bottom">
             <button
               onClick={() => setMaximized((v) => !v)}

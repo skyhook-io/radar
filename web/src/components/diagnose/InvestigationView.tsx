@@ -70,6 +70,13 @@ export function InvestigationView({
   // show a silent blank panel; instead we render a "no longer available" state.
   const [gone, setGone] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Continuation needs a resumable session, but stopping does not. A brand-new
+  // hosted turn can be running before the SDK has reported its session id, so
+  // keep Stop available for human investigations without advertising a
+  // follow-up composer that the server would reject. Automatic runs remain
+  // immutable even while their stream marks this view busy.
+  const canStop =
+    run.trigger !== "background" && (busy || run.status === "running");
   const [input, setInput] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -425,10 +432,13 @@ export function InvestigationView({
     autoRecheckRef.current = true; // verify the write automatically once it lands
     addTurn(run.id, { apply: true, fix: pendingFix }).catch((e) => {
       autoRecheckRef.current = false; // the apply never started — don't auto-recheck
-      setActionError(e instanceof DiagnoseError ? e.message : "Couldn't apply.");
+      setActionError(
+        e instanceof DiagnoseError ? e.message : "Couldn't apply.",
+      );
     });
   };
-  const checkStatus = () => addTurn(run.id, { question: RECHECK_QUESTION }).catch(() => {});
+  const checkStatus = () =>
+    addTurn(run.id, { question: RECHECK_QUESTION }).catch(() => {});
 
   // Apply tracks the latest turn that produced remediation (so follow-ups don't
   // strip it) and is blocked on a stale (context-switched) run.
@@ -463,135 +473,139 @@ export function InvestigationView({
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       <div className="flex min-h-0 flex-1">
-      <div
-        ref={scrollRef}
-        onScroll={onScroll}
-        className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-3 [scrollbar-gutter:stable]"
-      >
-        <div className={maximized ? "mx-auto max-w-3xl" : ""}>
-          <div className="space-y-4">
-            {stale && (
-              <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-theme-text-secondary">
-                <div className="flex items-start gap-2">
-                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
-                  <span>
-                    This investigation ran against{" "}
-                    <span className="font-medium text-theme-text-primary">
-                      {run.context || "a different cluster"}
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-3 [scrollbar-gutter:stable]"
+        >
+          <div className={maximized ? "mx-auto max-w-3xl" : ""}>
+            <div className="space-y-4">
+              {stale && (
+                <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-theme-text-secondary">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+                    <span>
+                      This investigation ran against{" "}
+                      <span className="font-medium text-theme-text-primary">
+                        {run.context || "a different cluster"}
+                      </span>
+                      . The cluster context has changed — it's read-only now.
                     </span>
-                    . The cluster context has changed — it's read-only now.
-                  </span>
+                  </div>
+                  <button
+                    onClick={retryDiagnosis}
+                    className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-amber-500/50 px-2.5 py-1 font-medium text-amber-600 hover:bg-amber-500/10 dark:text-amber-400"
+                  >
+                    <Send className="h-3 w-3" />
+                    Re-run on current cluster
+                  </button>
                 </div>
-                <button
-                  onClick={retryDiagnosis}
-                  className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-amber-500/50 px-2.5 py-1 font-medium text-amber-600 hover:bg-amber-500/10 dark:text-amber-400"
-                >
-                  <Send className="h-3 w-3" />
-                  Re-run on current cluster
-                </button>
-              </div>
-            )}
-            {gone && turns.length === 0 && (
-              <div className="rounded-lg border border-theme-border bg-theme-elevated p-3 text-sm text-theme-text-secondary">
-                <div className="flex items-start gap-2">
-                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
-                  <span>
-                    This investigation is no longer available — history keeps
-                    the most recent investigations, and this one has been
-                    cleared. Re-run Diagnose to analyze the current cluster.
-                  </span>
+              )}
+              {gone && turns.length === 0 && (
+                <div className="rounded-lg border border-theme-border bg-theme-elevated p-3 text-sm text-theme-text-secondary">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+                    <span>
+                      This investigation is no longer available — history keeps
+                      the most recent investigations, and this one has been
+                      cleared. Re-run Diagnose to analyze the current cluster.
+                    </span>
+                  </div>
+                  <button
+                    onClick={retryDiagnosis}
+                    className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-theme-border px-2.5 py-1 font-medium text-theme-text-primary hover:bg-theme-hover"
+                  >
+                    <Send className="h-3 w-3" />
+                    Re-run Diagnose
+                  </button>
                 </div>
-                <button
-                  onClick={retryDiagnosis}
-                  className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-theme-border px-2.5 py-1 font-medium text-theme-text-primary hover:bg-theme-hover"
-                >
-                  <Send className="h-3 w-3" />
-                  Re-run Diagnose
-                </button>
-              </div>
-            )}
-            <RunContextCard run={run} />
-            {turns.map((t, i) => {
-              const isLast = i === turns.length - 1;
-              // Hosted runners are read-only — the server refuses apply turns.
-              const canApply = i === lastRemediationIdx && !stale && !hosted;
-              const canCheck = isLast && t.status === "done" && !!t.apply;
-              return (
-                <TurnView
-                  key={i}
-                  turn={t}
-                  synthLabel={isLast ? synth : null}
-                  reveal={isLast ? (reveal ?? "full") : "full"}
-                  onApply={canApply ? requestApply : undefined}
-                  onAsk={isLast && !busy && canContinue ? askFollowup : undefined}
-                  onCheckStatus={canCheck ? checkStatus : undefined}
-                  onRetryDiagnosis={
-                    isLast &&
-                    t.status === "error" &&
-                    !t.question &&
-                    !t.apply &&
-                    !stale
-                      ? retryDiagnosis
-                      : undefined
-                  }
-                  hideVerdict={pinned && i === pinnedIdx}
-                />
-              );
-            })}
-            {actionError && (
-              <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-theme-text-primary">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
-                <span>{actionError}</span>
-              </div>
-            )}
-            {/* A start that failed belongs to the investigation that never began,
+              )}
+              <RunContextCard run={run} />
+              {turns.map((t, i) => {
+                const isLast = i === turns.length - 1;
+                // Hosted runners are read-only — the server refuses apply turns.
+                const canApply = i === lastRemediationIdx && !stale && !hosted;
+                const canCheck = isLast && t.status === "done" && !!t.apply;
+                return (
+                  <TurnView
+                    key={i}
+                    turn={t}
+                    synthLabel={isLast ? synth : null}
+                    reveal={isLast ? (reveal ?? "full") : "full"}
+                    onApply={canApply ? requestApply : undefined}
+                    onAsk={
+                      isLast && !busy && canContinue ? askFollowup : undefined
+                    }
+                    onCheckStatus={canCheck ? checkStatus : undefined}
+                    onRetryDiagnosis={
+                      isLast &&
+                      t.status === "error" &&
+                      !t.question &&
+                      !t.apply &&
+                      !stale
+                        ? retryDiagnosis
+                        : undefined
+                    }
+                    hideVerdict={pinned && i === pinnedIdx}
+                  />
+                );
+              })}
+              {actionError && (
+                <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-theme-text-primary">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+                  <span>{actionError}</span>
+                </div>
+              )}
+              {/* A start that failed belongs to the investigation that never began,
                 not to the one on screen. Unlabelled at the foot of a finished
                 transcript — verdict directly above — it reads as "this
                 investigation failed". It also outlives the click that caused it,
                 and this is the only place it surfaces while a run is focused, so
                 it needs a way out. */}
-            {startError && (
-              <div
-                role="alert"
-                className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-theme-text-primary"
-              >
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
-                <div className="min-w-0 flex-1">
-                  <div className="font-medium">
-                    Couldn&apos;t start a new investigation
-                  </div>
-                  <div className="text-theme-text-secondary">{startError}</div>
-                </div>
-                <button
-                  onClick={dismissError}
-                  className="shrink-0 rounded px-1.5 py-0.5 text-xs text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
+              {startError && (
+                <div
+                  role="alert"
+                  className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-theme-text-primary"
                 >
-                  Dismiss
-                </button>
-              </div>
-            )}
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium">
+                      Couldn&apos;t start a new investigation
+                    </div>
+                    <div className="text-theme-text-secondary">
+                      {startError}
+                    </div>
+                  </div>
+                  <button
+                    onClick={dismissError}
+                    className="shrink-0 rounded px-1.5 py-0.5 text-xs text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
-      </div>
-      {pinned && (
-        <aside
-          className={`w-[400px] shrink-0 overflow-y-auto border-l border-theme-border px-4 py-3 ${busy ? "opacity-70" : ""}`}
-        >
-          <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
-            {busy ? "Verdict · revising…" : "Verdict"}
-          </div>
-          <ResultCard
-            diagnosis={turns[pinnedIdx].diagnosis!}
-            onApply={
-              pinnedIdx === lastRemediationIdx && !stale && !hosted
-                ? requestApply
-                : undefined
-            }
-            onAsk={!busy && canContinue ? askFollowup : undefined}
-            reveal="full"
-          />
-        </aside>
-      )}
+        {pinned && (
+          <aside
+            className={`w-[400px] shrink-0 overflow-y-auto border-l border-theme-border px-4 py-3 ${busy ? "opacity-70" : ""}`}
+          >
+            <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
+              {busy ? "Verdict · revising…" : "Verdict"}
+            </div>
+            <ResultCard
+              diagnosis={turns[pinnedIdx].diagnosis!}
+              onApply={
+                pinnedIdx === lastRemediationIdx && !stale && !hosted
+                  ? requestApply
+                  : undefined
+              }
+              onAsk={!busy && canContinue ? askFollowup : undefined}
+              reveal="full"
+            />
+          </aside>
+        )}
       </div>
 
       {showJump && (
@@ -618,19 +632,19 @@ export function InvestigationView({
       <div
         className={`border-t border-theme-border px-3 py-2.5 ${maximized ? "[&>*]:mx-auto [&>*]:max-w-3xl" : ""}`}
       >
-        {!canContinue ? (
-          <div className="rounded-lg border border-theme-border bg-theme-base px-3 py-2 text-xs text-theme-text-secondary">
-            {run.trigger === "background"
-              ? "Automatic investigation · read-only. Start a new investigation on this resource to continue digging."
-              : "This investigation is read-only."}
-          </div>
-        ) : busy ? (
+        {canStop ? (
           <button
             onClick={stop}
             className="w-full rounded-lg border border-theme-border py-1.5 text-sm text-theme-text-secondary hover:bg-theme-hover"
           >
             Stop
           </button>
+        ) : !canContinue ? (
+          <div className="rounded-lg border border-theme-border bg-theme-base px-3 py-2 text-xs text-theme-text-secondary">
+            {run.trigger === "background"
+              ? "Automatic investigation · read-only. Start a new investigation on this resource to continue digging."
+              : "This investigation is read-only."}
+          </div>
         ) : (
           <div className="flex items-end gap-2">
             <textarea

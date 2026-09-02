@@ -262,16 +262,24 @@ export function DiagnoseProvider({
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const activeRunIdRef = useRef(activeRunId);
   activeRunIdRef.current = activeRunId;
+  // A missing/revoked durable link is terminal until the user explicitly
+  // navigates to it again. Keep polling the bounded history list (so a newly
+  // shared run can reappear), but do not hammer the exact 404 endpoint every
+  // four seconds while the unavailable state is already on screen.
+  const unavailableRunIDsRef = useRef(new Set<string>());
   // Tracks whether the panel focus belongs to browser history. Fleet opens the
   // same panel on /issues, where URL state is deliberately disabled; a generic
   // panel launch must never be closed by the deep-link synchronization effect.
   const urlRunIdRef = useRef(runIDFromLocation(browserURLState));
-  const writeFocusedRunID = useCallback((id: string | null, push: boolean) => {
-    // Set this before writeRunIDToLocation's synthetic popstate so our own
-    // listener can distinguish a programmatic close/home write from Back.
-    if (diagnoseURLStateEnabled(browserURLState)) urlRunIdRef.current = id;
-    writeRunIDToLocation(id, push, browserURLState);
-  }, [browserURLState]);
+  const writeFocusedRunID = useCallback(
+    (id: string | null, push: boolean) => {
+      // Set this before writeRunIDToLocation's synthetic popstate so our own
+      // listener can distinguish a programmatic close/home write from Back.
+      if (diagnoseURLStateEnabled(browserURLState)) urlRunIdRef.current = id;
+      writeRunIDToLocation(id, push, browserURLState);
+    },
+    [browserURLState],
+  );
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [runsLoaded, setRunsLoaded] = useState(false);
   const [runsLoadFailed, setRunsLoadFailed] = useState(false);
@@ -405,7 +413,12 @@ export function DiagnoseProvider({
       const focusedID = activeRunIdRef.current;
       let focusedRun: RunSummary | null = null;
       let retainFocusedSnapshot = false;
-      if (focusedID && !r.runs.some((run) => run.id === focusedID)) {
+      const listedFocusedRun = focusedID
+        ? r.runs.find((run) => run.id === focusedID)
+        : undefined;
+      if (focusedID && listedFocusedRun) {
+        unavailableRunIDsRef.current.delete(focusedID);
+      } else if (focusedID && !unavailableRunIDsRef.current.has(focusedID)) {
         try {
           // A stable deep link can target a retained run older than the bounded
           // history page. Refresh it directly too: its status and capabilities
@@ -415,9 +428,10 @@ export function DiagnoseProvider({
           // The bounded list is still authoritative for everything else. A
           // missing/revoked focused run falls out and renders unavailable;
           // transient direct-fetch failures keep the last useful snapshot.
-          retainFocusedSnapshot = !(
-            error instanceof DiagnoseError && error.status === 404
-          );
+          const unavailable =
+            error instanceof DiagnoseError && error.status === 404;
+          if (unavailable) unavailableRunIDsRef.current.add(focusedID);
+          retainFocusedSnapshot = !unavailable;
         }
       }
       setRuns((prev) => {
@@ -545,6 +559,7 @@ export function DiagnoseProvider({
   );
   const openRun = useCallback(
     (id: string) => {
+      unavailableRunIDsRef.current.delete(id);
       setStartError(null);
       setActiveRunId(id);
       setView("investigation");
@@ -554,7 +569,10 @@ export function DiagnoseProvider({
       // bounded history page. Resolve the exact id instead of waiting for list.
       getRun(id)
         .then(updateRunSummary)
-        .catch(() => {
+        .catch((error) => {
+          if (error instanceof DiagnoseError && error.status === 404) {
+            unavailableRunIDsRef.current.add(id);
+          }
           // The loaded-list state renders the durable unavailable message.
         });
     },
@@ -582,13 +600,17 @@ export function DiagnoseProvider({
         return;
       }
       urlRunIdRef.current = id;
+      unavailableRunIDsRef.current.delete(id);
       setStartError(null);
       setActiveRunId(id);
       setView("investigation");
       setOpen(true);
       getRun(id)
         .then(updateRunSummary)
-        .catch(() => {
+        .catch((error) => {
+          if (error instanceof DiagnoseError && error.status === 404) {
+            unavailableRunIDsRef.current.add(id);
+          }
           // The list load owns the final missing/degraded state and keeps retrying.
         });
     };
@@ -602,17 +624,20 @@ export function DiagnoseProvider({
   // message about a resource you just navigated away from has nothing to attach
   // to and no way to be dismissed.
   const openHome = useCallback(() => {
+    unavailableRunIDsRef.current.clear();
     setView("home");
     setStartError(null);
     setOpen(true);
     writeFocusedRunID(null, false);
   }, [writeFocusedRunID]);
   const goHome = useCallback(() => {
+    unavailableRunIDsRef.current.clear();
     setView("home");
     setStartError(null);
     writeFocusedRunID(null, false);
   }, [writeFocusedRunID]);
   const close = useCallback(() => {
+    unavailableRunIDsRef.current.clear();
     setOpen(false);
     writeFocusedRunID(null, false);
   }, [writeFocusedRunID]);

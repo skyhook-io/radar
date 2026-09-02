@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  canCopyRunLink,
-  canStartNewInvestigation,
-} from "./DiagnoseSurface";
+import { canCopyRunLink, canStartNewInvestigation } from "./DiagnoseSurface";
 import type { RunSummary } from "../../api/diagnose";
 
 // The "new investigation" button dispatches an agent and spends the user's own
@@ -37,9 +34,19 @@ describe("canStartNewInvestigation", () => {
 
   it("stays hidden while a turn is in flight", () => {
     // A start would be handed back the live run, so the button does nothing.
-    expect(canStartNewInvestigation("investigation", run("running"), false)).toBe(
-      false,
-    );
+    expect(
+      canStartNewInvestigation("investigation", run("running"), false),
+    ).toBe(false);
+  });
+
+  it("offers a separate human investigation while an automatic run is in flight", () => {
+    expect(
+      canStartNewInvestigation(
+        "investigation",
+        { ...run("running"), trigger: "background" },
+        false,
+      ),
+    ).toBe(true);
   });
 
   it("stays hidden on a stale run", () => {
@@ -66,9 +73,9 @@ describe("canStartNewInvestigation", () => {
     expect(canStartNewInvestigation("investigation", run("error"), false)).toBe(
       true,
     );
-    expect(canStartNewInvestigation("investigation", run("stopped"), false)).toBe(
-      true,
-    );
+    expect(
+      canStartNewInvestigation("investigation", run("stopped"), false),
+    ).toBe(true);
   });
 });
 
