@@ -728,10 +728,11 @@ export function WorkloadView({
   // prominent "Diagnose" on a problem, a quiet icon when fine. Rendered via the host
   // slot (DiagnoseCustomization); standalone Radar injects it, Hub overrides it.
   const renderDiagnose = actionsBarProps?.renderDiagnose as
-    | ((ctx: { kind: string; namespace: string; name: string; health?: DiagnoseHealthHint }) => ReactNode)
+    | ((ctx: { kind: string; group?: string; namespace: string; name: string; health?: DiagnoseHealthHint }) => ReactNode)
     | undefined
   const diagnoseAction = renderDiagnose?.({
     kind: apiKind,
+    group,
     namespace,
     name,
     health: diagnoseHealthHint(apiKind, resource),

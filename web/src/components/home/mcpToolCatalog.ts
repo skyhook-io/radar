@@ -109,9 +109,10 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'diagnose',
-    desc: 'One-call root-cause bundle. Workloads get spec + resourceContext + current AND previous logs across pods + warning events + startup blockers; GitOps reconcilers, including Flux HelmRelease, get status summary + parsed related issues; network entry kinds (Service / Ingress / HTTPRoute / GRPCRoute / Gateway) get a path-shaped trace naming the first broken hop, with an optional one-shot reachability test.',
+    desc: 'Bounded, point-in-time evidence bundle for one narrowed target — not an agent run and not an authoritative root-cause verdict. For workloads, including Argo Rollout, Radar attempts selected, capped current and previous logs where available, alongside resource context, a capped warning-event sample, and startup blockers; GitOps reconcilers, including Flux HelmRelease, get status summary + parsed related issues; network entry kinds (Service / Ingress / HTTPRoute / GRPCRoute / Gateway) get a coverage-honest path trace that identifies a broken hop only when the evidence establishes one, with an optional one-shot reachability test.',
     params: [
-      { arg: 'kind', required: true, desc: 'pod, deployment, statefulset, daemonset, application, kustomization, Flux HelmRelease, service, ingress, httproute, grpcroute, or gateway' },
+      { arg: 'kind', required: true, desc: 'pod, deployment, statefulset, daemonset, Argo Rollout, application, kustomization, Flux HelmRelease, service, ingress, httproute, grpcroute, or gateway' },
+      { arg: 'group', desc: 'API group for CRDs or kind collisions (for example argoproj.io for Rollout); built-ins are inferred' },
       { arg: 'namespace', required: true, desc: 'resource namespace' },
       { arg: 'name', required: true, desc: 'resource name' },
       { arg: 'probe', desc: 'network kinds only: add active DNS/TCP/TLS/HTTP probes against the declared path (0-3s wall time)' },

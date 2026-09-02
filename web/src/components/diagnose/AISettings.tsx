@@ -1,5 +1,5 @@
 // The agent/model/effort controls + a clear-history action for the Settings
-// "AI diagnose" tab. Controlled by the dialog: it edits a STAGED draft committed
+// "AI investigations" tab. Controlled by the dialog: it edits a STAGED draft committed
 // on Save (like the rest of Settings), not on every keystroke. The heading,
 // description, and Save button live in the dialog so this tab matches the other
 // Settings tabs' layout — this renders only the controls (no card, no heading).

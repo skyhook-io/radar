@@ -140,12 +140,16 @@ type codexItem struct {
 	Type      string          `json:"type"` // mcp_tool_call | agent_message | reasoning | ...
 	Text      string          `json:"text"`
 	Tool      string          `json:"tool"`
+	Status    string          `json:"status"`
 	Arguments json.RawMessage `json:"arguments"`
 	Result    *struct {
 		Content []struct {
 			Text string `json:"text"`
 		} `json:"content"`
 	} `json:"result"`
+	Error *struct {
+		Message string `json:"message"`
+	} `json:"error"`
 }
 
 func (a *codexAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
@@ -182,9 +186,18 @@ func (a *codexAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnos
 			switch e.Item.Type {
 			case "mcp_tool_call":
 				res, trunc := capPayload(codexResultText(e.Item))
+				var isError *bool
+				switch e.Item.Status {
+				case "completed":
+					confirmed := false
+					isError = &confirmed
+				case "failed":
+					confirmed := true
+					isError = &confirmed
+				}
 				onEvent(StreamEvent{Type: "step", Step: &StepInfo{
 					ID: e.Item.ID, Tool: e.Item.Tool, Status: "done",
-					Result: res, Truncated: trunc,
+					Result: res, IsError: isError, Truncated: trunc,
 				}})
 			case "reasoning":
 				if e.Item.Text != "" {
@@ -217,12 +230,17 @@ func codexArgsText(raw json.RawMessage) string {
 // the unwrapped content[].text shape). Capping happens at the call site so the
 // truncated flag can be surfaced.
 func codexResultText(it *codexItem) string {
-	if it.Result == nil {
-		return ""
-	}
 	var b strings.Builder
-	for _, c := range it.Result.Content {
-		b.WriteString(c.Text)
+	if it.Result != nil {
+		for _, c := range it.Result.Content {
+			b.WriteString(c.Text)
+		}
+	}
+	if it.Error != nil && it.Error.Message != "" {
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(it.Error.Message)
 	}
 	return b.String()
 }

@@ -2,7 +2,14 @@
 // persistence, no app/routing knowledge) so they lift cleanly into k8s-ui later
 // and Cloud can reuse them. The stateful controller lives in DiagnoseContext;
 // the run logic in InvestigationView.
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   Loader2,
   CheckCircle2,
@@ -27,11 +34,16 @@ import {
   type Diagnosis,
   type DiagnoseStep,
   type AgentInfo,
+  type ApplyMutationOutcome,
   type ExecutionProfile,
   type RunSummary,
 } from "../../api/diagnose";
-import { StatusDot } from "@skyhook-io/k8s-ui";
+import { Collapse, CollapseChevron, StatusDot } from "@skyhook-io/k8s-ui";
 import { Markdown } from "../ui/Markdown";
+import {
+  investigationActivitySourceDomId,
+  investigationEvidenceSourceId,
+} from "./investigationEvidence";
 
 const CURSOR_FULL_LOCAL_WARNING =
   "Radar passes Cursor --force, which auto-approves its built-in tools and every MCP server it loads, including your global servers. Cursor’s sandbox does not reliably confine those tools to Radar’s temporary workspace.";
@@ -232,7 +244,7 @@ function SelectMenu({
   );
 }
 
-// AgentControls is the full AI-diagnosis config block (agent, execution profile, model,
+// AgentControls is the full AI investigation config block (agent, execution profile, model,
 // effort) — pure + prop-driven. It lives in Settings, not the investigation panel,
 // since these are set-once preferences rather than per-run knobs.
 export function AgentControls({
@@ -309,9 +321,9 @@ export function AgentControls({
                   <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" />
                   <span>
                     Uses your agent&apos;s normal configuration and other
-                    configured tools and MCP servers. Radar cannot constrain that
-                    external tooling; it may access local files or the network
-                    and may be able to change your cluster.{" "}
+                    configured tools and MCP servers. Radar cannot constrain
+                    that external tooling; it may access local files or the
+                    network and may be able to change your cluster.{" "}
                     {isCursor
                       ? CURSOR_FULL_LOCAL_WARNING
                       : isClaude
@@ -341,12 +353,13 @@ export function AgentControls({
                 Radar must use this agent&apos;s normal setup. Radar cannot
                 constrain its external tools or MCP servers; they may access
                 local files or the network and may be able to change your
-                cluster. {isCursor ? (
+                cluster.{" "}
+                {isCursor ? (
                   CURSOR_FULL_LOCAL_WARNING
                 ) : (
                   <>
-                    Radar still enables the agent CLI&apos;s own sandbox, but that
-                    sandbox does not constrain external MCP servers.
+                    Radar still enables the agent CLI&apos;s own sandbox, but
+                    that sandbox does not constrain external MCP servers.
                   </>
                 )}
               </span>
@@ -412,11 +425,21 @@ export type Turn = {
   // apply turns execute the recommended fix (write tools) — they report an
   // outcome, not a root cause, so the UI frames them differently.
   apply?: boolean;
+  // Set from the apply turn's terminal stream event. Green success is reserved
+  // for an explicit producer-confirmed mutation.
+  applyOutcome?: ApplyMutationOutcome;
+  // Verification turns are structurally a fresh health assessment, even though
+  // they carry a question. Keeping the bit explicit prevents the UI from
+  // misclassifying them as ordinary conversational follow-ups on replay.
+  verify?: boolean;
+  // Set from the replay/live boundary when the terminal event arrives. Historical
+  // conclusions render immediately; conclusions observed live enter smoothly.
+  animateResult?: boolean;
 };
 
 // TimelineItem is one ordered transcript entry: agent reasoning, or a tool call.
-type TimelineItem =
-  | { kind: "thinking"; text: string }
+export type TimelineItem =
+  | { kind: "thinking"; text: string; animate?: boolean }
   | {
       kind: "tool";
       id: string;
@@ -426,24 +449,55 @@ type TimelineItem =
       summary?: string;
       result?: string;
       truncated?: boolean;
+      // Tri-state by design: false = producer confirmed success, true = producer
+      // confirmed failure, undefined = this replay cannot establish the outcome.
+      isError?: boolean;
+      // Arrival motion is event-local so a replayed running turn can keep receiving
+      // live tool calls without reanimating the history reconstructed before it.
+      animate?: boolean;
     };
 
 export function appendThinking(
   prev: TimelineItem[],
   text: string,
+  animate = true,
 ): TimelineItem[] {
-  const last = prev[prev.length - 1];
-  if (last && last.kind === "thinking") {
-    const next = [...prev];
-    next[next.length - 1] = { ...last, text: (last.text + text).slice(-4000) };
-    return next;
+  const normalized = text.replace(/\*\*\r?\n(?=\*\*)/g, "**\n\n");
+  // Agent CLIs commonly emit each short bold planning update as a complete
+  // stream event. Preserve those as discrete chronological beats instead of
+  // producing invalid/run-on Markdown such as `**one****two**`. Ordinary token
+  // chunks still concatenate into their current beat exactly as emitted.
+  const blocks = normalized.split(/\n{2,}(?=\s*\*\*)/);
+  const next = [...prev];
+  for (const block of blocks) {
+    if (!block) continue;
+    const last = next[next.length - 1];
+    const beginsBeat = /^\s*\*\*/.test(block);
+    const priorBeatComplete =
+      last?.kind === "thinking" && /\*\*\s*$/.test(last.text);
+    if (last?.kind === "thinking" && last.text.trim() === block.trim())
+      continue;
+    if (last?.kind === "thinking" && !(beginsBeat && priorBeatComplete)) {
+      next[next.length - 1] = {
+        ...last,
+        text: (last.text + block).slice(-4000),
+        animate: last.animate === true || animate,
+      };
+      continue;
+    }
+    next.push({
+      kind: "thinking",
+      text: block.trimStart(),
+      animate,
+    });
   }
-  return [...prev, { kind: "thinking", text }];
+  return next;
 }
 
 export function upsertTool(
   prev: TimelineItem[],
   step: DiagnoseStep,
+  animate = true,
 ): TimelineItem[] {
   const i = prev.findIndex((it) => it.kind === "tool" && it.id === step.id);
   if (i >= 0) {
@@ -456,102 +510,141 @@ export function upsertTool(
       kind: "tool",
       tool: step.tool || cur.tool,
       summary: step.summary || cur.summary,
+      animate: cur.animate === true || animate,
     };
     return next;
   }
-  return [...prev, { kind: "tool", ...step }];
+  return [...prev, { kind: "tool", ...step, animate }];
 }
 
 export function TurnView({
   turn,
-  synthLabel,
-  reveal = "full",
   onApply,
   onAsk,
   onCheckStatus,
   onRetryDiagnosis,
-  hideVerdict = false,
+  hideConclusion = false,
+  turnIndex,
+  evidenceStepIds,
+  onViewEvidence,
 }: {
   turn: Turn;
-  synthLabel?: string | null;
-  reveal?: "rca" | "full";
   onApply?: (fix: string) => void;
   onAsk?: (question: string) => void;
   onCheckStatus?: () => void;
   onRetryDiagnosis?: () => void;
-  // In the maximized workspace the pinned turn's verdict renders in the side rail,
+  // In the maximized workspace the pinned turn's conclusion renders in the side rail,
   // so the transcript suppresses its own copy (reasoning + tool calls still show).
-  hideVerdict?: boolean;
+  hideConclusion?: boolean;
+  turnIndex?: number;
+  evidenceStepIds?: ReadonlySet<string>;
+  onViewEvidence?: (sourceId: string) => void;
 }) {
   // A follow-up (a turn the user asked a question on) is a conversational reply,
   // not a fresh diagnosis — render it as a plain answer, never the root-cause
   // anchor or a remediation card.
-  const followup = !!turn.question && !turn.apply;
+  const followup = !!turn.question && !turn.apply && !turn.verify;
   // Whether the done turn has anything for ResultCard to render — mirrors its
   // branch order exactly (apply → followup → structured/healthy), since a followup
   // ONLY ever renders FollowupAnswer (report/rootCause), never the remediation list.
   // When false, TurnView shows the narration or an explicit empty note, not a blank.
   const dx = turn.diagnosis;
-  const hasVerdict = dx
-    ? turn.apply
-      ? true // ApplyOutcomeCard always renders an outcome
+  const hasResult = dx
+    ? followup
+      ? !!(dx.report?.trim() || dx.rootCause?.trim()) // FollowupAnswer
       : dx.healthy && !dx.rootCause
-        ? true // AllClearCard (checked before followup in ResultCard)
+        ? true // AllClearCard
         : dx.inconclusive && !dx.rootCause
           ? true // InconclusiveCard
-          : followup
-            ? !!(dx.report?.trim() || dx.rootCause?.trim()) // FollowupAnswer
-            : !!dx.rootCause ||
-              (dx.remediation?.length ?? 0) > 0 ||
-              !!dx.report?.trim()
+          : !!dx.rootCause ||
+            (dx.remediation?.length ?? 0) > 0 ||
+            !!dx.report?.trim()
     : false;
   return (
     <div className="space-y-2">
-      {turn.question && (
-        <div className="flex justify-end">
-          <div className="max-w-[85%] rounded-lg rounded-br-sm bg-accent/10 px-3 py-1.5 text-sm text-theme-text-primary [overflow-wrap:anywhere]">
-            {turn.question}
+      {turn.question &&
+        (turn.verify ? (
+          <div className="flex items-center gap-2 rounded-md border border-theme-border/60 bg-theme-base/40 px-2.5 py-2 text-xs text-theme-text-secondary">
+            <RefreshCw className="h-3.5 w-3.5 shrink-0 text-accent" />
+            <span className="font-medium text-theme-text-primary">
+              Automatic verification
+            </span>
+            <span className="text-theme-text-tertiary">
+              Re-checking after apply
+            </span>
           </div>
-        </div>
-      )}
+        ) : (
+          <div className="flex justify-end">
+            <div className="max-w-[85%] rounded-lg rounded-br-sm bg-accent/10 px-3 py-1.5 text-sm text-theme-text-primary [overflow-wrap:anywhere]">
+              {turn.question}
+            </div>
+          </div>
+        ))}
       <Timeline
         items={turn.timeline}
         running={turn.status === "running"}
         applyMode={turn.apply}
         followup={followup}
-        synthLabel={synthLabel}
+        turnIndex={turnIndex}
+        evidenceStepIds={evidenceStepIds}
+        onViewEvidence={onViewEvidence}
       />
       {turn.status === "done" &&
-        (hideVerdict && hasVerdict ? null : hasVerdict ? (
+        (turn.apply ? (
+          <ApplyOutcomeCard
+            diagnosis={turn.diagnosis}
+            applyOutcome={turn.applyOutcome}
+            onCheckStatus={onCheckStatus}
+            animate={turn.animateResult !== false}
+          />
+        ) : hideConclusion && hasResult ? null : hasResult ? (
           <ResultCard
             diagnosis={turn.diagnosis!}
             onApply={onApply}
             onAsk={onAsk}
-            apply={turn.apply}
             followup={followup}
-            reveal={reveal}
             onCheckStatus={onCheckStatus}
+            animate={turn.animateResult !== false}
           />
         ) : (
-          <EmptyResult />
+          <EmptyResult animate={turn.animateResult !== false} />
         ))}
-      {turn.status === "error" && turn.error && (
+      {turn.status === "error" && turn.apply ? (
+        <ApplyOutcomeCard
+          diagnosis={turn.diagnosis}
+          error={turn.error}
+          applyOutcome={turn.applyOutcome}
+          onCheckStatus={onCheckStatus}
+          animate={turn.animateResult !== false}
+        />
+      ) : turn.status === "error" && turn.error ? (
         <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-theme-text-primary">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
           <div className="flex min-w-0 flex-col gap-2">
-            <span className="whitespace-pre-wrap break-words">{turn.error}</span>
+            <span className="whitespace-pre-wrap break-words">
+              {turn.error}
+            </span>
             {onRetryDiagnosis && (
               <button
                 type="button"
                 onClick={onRetryDiagnosis}
                 className="btn-brand self-start px-3 py-1 text-xs"
               >
-                Retry diagnosis
+                Retry investigation
+              </button>
+            )}
+            {onCheckStatus && (
+              <button
+                type="button"
+                onClick={onCheckStatus}
+                className="btn-brand self-start px-3 py-1 text-xs"
+              >
+                Check current status
               </button>
             )}
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -559,7 +652,7 @@ export function TurnView({
 // RunContextCard opens every investigation with what RADAR already knows — the
 // health frame the server captured at run start. It renders instantly (no agent
 // round-trip), so the agent's boot time reads as "context, then deepening"
-// instead of dead air — and it anchors the verdict against Radar's own signal.
+// instead of dead air — and it anchors the conclusion against Radar's own signal.
 function healthLineTone(severity?: string): "unhealthy" | "degraded" | "alert" {
   if (severity === "critical") return "unhealthy";
   if (severity === "warning") return "degraded";
@@ -697,7 +790,9 @@ function ConsentCardShell({
           {title}
         </div>
       </div>
-      <div className="text-sm leading-relaxed text-theme-text-secondary">{body}</div>
+      <div className="text-sm leading-relaxed text-theme-text-secondary">
+        {body}
+      </div>
       {bullets && bullets.length > 0 && (
         <ul className="mt-2 space-y-1 text-xs text-theme-text-tertiary">
           {bullets.map((b, i) => (
@@ -816,16 +911,16 @@ export function ConsentCard({
           ? [
               agent === "claude" ? (
                 <>
-                  Radar safeguards disable Claude&apos;s built-in tools and limit
-                  MCP access to Radar&apos;s read-only investigation tools. Your
-                  Claude settings, hooks, and CLAUDE.md instructions still apply
-                  and are outside Radar&apos;s control.
+                  Radar safeguards disable Claude&apos;s built-in tools and
+                  limit MCP access to Radar&apos;s read-only investigation
+                  tools. Your Claude settings, hooks, and CLAUDE.md instructions
+                  still apply and are outside Radar&apos;s control.
                 </>
               ) : agent === "codex" ? (
                 <>
-                  Radar safeguards exclude your Codex configuration and other MCP
-                  servers. Codex&apos;s sandboxed shell can still read files on
-                  this machine; it cannot write or reach the network.
+                  Radar safeguards exclude your Codex configuration and other
+                  MCP servers. Codex&apos;s sandboxed shell can still read files
+                  on this machine; it cannot write or reach the network.
                 </>
               ) : (
                 <>
@@ -837,9 +932,9 @@ export function ConsentCard({
             ]
           : [
               <>
-                Radar cannot constrain the agent&apos;s other configured tools or
-                MCP servers. They may access local files or the network and may
-                be able to change your cluster.
+                Radar cannot constrain the agent&apos;s other configured tools
+                or MCP servers. They may access local files or the network and
+                may be able to change your cluster.
               </>,
               agent === "cursor-agent" ? (
                 CURSOR_FULL_LOCAL_WARNING
@@ -956,7 +1051,7 @@ export function ApplyDialog({
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-theme-text-tertiary" />
             <span>
               The agent had <span className="font-medium">low confidence</span>{" "}
-              in this diagnosis — consider asking a follow-up to verify before
+              in this conclusion — consider asking a follow-up to verify before
               applying.
             </span>
           </div>
@@ -996,13 +1091,17 @@ export function Timeline({
   running,
   applyMode,
   followup,
-  synthLabel,
+  turnIndex,
+  evidenceStepIds,
+  onViewEvidence,
 }: {
   items: TimelineItem[];
   running: boolean;
   applyMode?: boolean;
   followup?: boolean;
-  synthLabel?: string | null;
+  turnIndex?: number;
+  evidenceStepIds?: ReadonlySet<string>;
+  onViewEvidence?: (sourceId: string) => void;
 }) {
   const heading = applyMode
     ? "Applying fix"
@@ -1014,8 +1113,7 @@ export function Timeline({
   const activeTool = [...items]
     .reverse()
     .find((it) => it.kind === "tool" && it.status !== "done") as
-    | Extract<TimelineItem, { kind: "tool" }>
-    | undefined;
+    Extract<TimelineItem, { kind: "tool" }> | undefined;
   const runningLabel = applyMode
     ? "Applying the fix…"
     : activeTool
@@ -1038,20 +1136,26 @@ export function Timeline({
           // tool rows. Rendered as markdown so Codex's summary headers read cleanly.
           <AIMarkdown
             key={i}
-            className="animate-transcript-enter py-0.5 text-xs leading-relaxed text-theme-text-tertiary [overflow-wrap:anywhere] [&_li]:text-theme-text-tertiary [&_p]:my-0.5 [&_strong]:font-medium [&_strong]:text-theme-text-secondary"
+            className={`${it.animate === false ? "" : "animate-transcript-enter"} py-0.5 text-xs leading-relaxed text-theme-text-tertiary [overflow-wrap:anywhere] [&_li]:text-theme-text-tertiary [&_p]:my-0.5 [&_strong]:font-medium [&_strong]:text-theme-text-secondary`}
           >
             {it.text}
           </AIMarkdown>
         ) : (
-          <ToolRow key={it.id} step={it} />
+          <ToolRow
+            key={it.id}
+            step={it}
+            sourceId={
+              turnIndex === undefined
+                ? undefined
+                : investigationEvidenceSourceId(turnIndex, it.id)
+            }
+            hasEvidence={evidenceStepIds?.has(it.id) ?? false}
+            onViewEvidence={onViewEvidence}
+            animate={it.animate !== false}
+          />
         ),
       )}
-      {running &&
-        (synthLabel ? (
-          <SynthBeat label={synthLabel} />
-        ) : (
-          <RunningStatus label={runningLabel} />
-        ))}
+      {running && <RunningStatus label={runningLabel} />}
     </div>
   );
 }
@@ -1099,17 +1203,6 @@ function RunningStatus({ label }: { label: string }) {
   );
 }
 
-// A staged "thinking" beat — a calm breathing dot + shimmering label. Used both in
-// the timeline (pre-verdict) and between the root-cause and remediation cards.
-function SynthBeat({ label }: { label: string }) {
-  return (
-    <div className="flex items-center gap-2 pt-1 text-xs animate-transcript-enter">
-      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent animate-synth-pulse" />
-      <span className="ai-shimmer font-medium">{label}…</span>
-    </div>
-  );
-}
-
 // Maps a running tool to a human verb so the status line reads as activity, not
 // machinery. Falls back to the prettified tool name for anything unmapped.
 function toolActivity(tool: string): string {
@@ -1126,69 +1219,134 @@ function toolActivity(tool: string): string {
   return `${prettyTool(tool)}…`;
 }
 
-function ToolRow({ step }: { step: Extract<TimelineItem, { kind: "tool" }> }) {
+function ToolRow({
+  step,
+  sourceId,
+  hasEvidence,
+  onViewEvidence,
+  animate,
+}: {
+  step: Extract<TimelineItem, { kind: "tool" }>;
+  sourceId?: string;
+  hasEvidence?: boolean;
+  onViewEvidence?: (sourceId: string) => void;
+  animate: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const [showFull, setShowFull] = useState(false);
+  const detailId = `investigation-tool-detail-${useId().replaceAll(":", "")}`;
   const hasDetail = !!(step.summary || step.result);
   // Offer the rich dialog when the result is structured or non-trivial in size.
   const richResult =
     !!step.result && (isJsonPayload(step.result) || step.result.length > 200);
-  return (
-    <div className="animate-transcript-enter rounded-md border border-theme-border/60 bg-theme-base/40">
-      <button
-        onClick={() => hasDetail && setOpen((v) => !v)}
-        className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm ${
-          hasDetail ? "hover:bg-theme-hover" : "cursor-default"
-        }`}
-      >
-        {step.status === "done" ? (
-          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
-        ) : (
-          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-accent" />
-        )}
-        <span className="font-mono text-xs text-theme-text-secondary">
-          {prettyTool(step.tool)}
+  const done = step.status === "done";
+  const outcomeLabel = !done
+    ? "Running"
+    : step.isError === true
+      ? "Tool failed"
+      : step.isError === false
+        ? "Tool completed"
+        : "Tool finished; outcome not recorded";
+  const rowContent = (
+    <>
+      {!done ? (
+        <Loader2
+          aria-label={outcomeLabel}
+          className="h-3.5 w-3.5 shrink-0 animate-spin text-accent"
+        />
+      ) : step.isError === true ? (
+        <AlertTriangle
+          aria-label={outcomeLabel}
+          className="h-3.5 w-3.5 shrink-0 text-red-400"
+        />
+      ) : step.isError === false ? (
+        <CheckCircle2
+          aria-label={outcomeLabel}
+          className="h-3.5 w-3.5 shrink-0 text-emerald-400"
+        />
+      ) : (
+        <HelpCircle
+          aria-label={outcomeLabel}
+          className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary"
+        />
+      )}
+      <span className="shrink-0 font-mono text-xs text-theme-text-secondary">
+        {prettyTool(step.tool)}
+      </span>
+      {step.summary && (
+        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-theme-text-tertiary">
+          {compactArgs(step.summary)}
         </span>
-        {step.summary && (
-          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-theme-text-tertiary">
-            {compactArgs(step.summary)}
-          </span>
-        )}
-        {step.ms != null && (
-          <span className="ml-auto shrink-0 text-[11px] text-theme-text-tertiary">
-            {step.ms}ms
-          </span>
-        )}
-        {hasDetail && (
-          <ChevronRight
-            className={`h-3.5 w-3.5 shrink-0 text-theme-text-tertiary transition-transform ${open ? "rotate-90" : ""}`}
-          />
-        )}
-      </button>
-      {hasDetail && (
-        <Collapse open={open}>
-          <div className="space-y-2 border-t border-theme-border/60 px-2 py-2">
-            {step.summary && <PayloadBlock label="Input" text={step.summary} />}
-            {step.result && (
-              <PayloadBlock
-                label="Result"
-                text={step.result}
-                truncated={step.truncated}
-                action={
-                  richResult ? (
-                    <button
-                      onClick={() => setShowFull(true)}
-                      className="flex items-center gap-1 text-[11px] text-accent hover:underline"
-                    >
-                      <Maximize2 className="h-3 w-3" />
-                      View payload
-                    </button>
-                  ) : undefined
-                }
-              />
-            )}
+      )}
+      {step.ms != null && (
+        <span className="ml-auto shrink-0 text-[11px] text-theme-text-tertiary">
+          {step.ms}ms
+        </span>
+      )}
+      {hasDetail && <CollapseChevron open={open} className="h-3.5 w-3.5" />}
+    </>
+  );
+  return (
+    <div
+      id={sourceId ? investigationActivitySourceDomId(sourceId) : undefined}
+      tabIndex={sourceId ? -1 : undefined}
+      className={`${animate ? "animate-transcript-enter" : ""} scroll-mt-3 rounded-md border border-theme-border/60 bg-theme-base/40 outline-none focus:ring-2 focus:ring-accent/50`}
+    >
+      <div className="flex min-w-0 items-stretch">
+        {hasDetail ? (
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            aria-controls={detailId}
+            className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-theme-hover"
+          >
+            {rowContent}
+          </button>
+        ) : (
+          <div className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-sm">
+            {rowContent}
           </div>
-        </Collapse>
+        )}
+        {hasEvidence && sourceId && onViewEvidence ? (
+          <button
+            type="button"
+            onClick={() => onViewEvidence(sourceId)}
+            aria-label={`View findings from ${prettyTool(step.tool)}`}
+            className="shrink-0 border-l border-theme-border/60 px-2 text-[11px] font-medium text-accent hover:bg-theme-hover"
+          >
+            Findings
+          </button>
+        ) : null}
+      </div>
+      {hasDetail && (
+        <div id={detailId}>
+          <Collapse open={open}>
+            <div className="space-y-2 border-t border-theme-border/60 px-2 py-2">
+              {step.summary && (
+                <PayloadBlock label="Input" text={step.summary} />
+              )}
+              {step.result && (
+                <PayloadBlock
+                  label="Result"
+                  text={step.result}
+                  truncated={step.truncated}
+                  action={
+                    richResult ? (
+                      <button
+                        onClick={() => setShowFull(true)}
+                        className="flex items-center gap-1 text-[11px] text-accent hover:underline"
+                      >
+                        <Maximize2 className="h-3 w-3" />
+                        View payload
+                      </button>
+                    ) : undefined
+                  }
+                />
+              )}
+            </div>
+          </Collapse>
+        </div>
       )}
       {step.result && (
         <ToolResultDialog
@@ -1362,18 +1520,6 @@ function safeYaml(value: unknown): string {
   }
 }
 
-// Collapse — the Radar-standard expand/collapse motion (grid-template-rows
-// 0fr↔1fr) used across issue rows. Children stay mounted so close animates too.
-function Collapse({ open, children }: { open: boolean; children: ReactNode }) {
-  return (
-    <div
-      className={`issue-details-motion ${open ? "issue-details-motion-open" : ""}`}
-    >
-      <div className="overflow-hidden">{children}</div>
-    </div>
-  );
-}
-
 function compactArgs(raw: string): string {
   try {
     const o = JSON.parse(raw);
@@ -1390,46 +1536,87 @@ export function ResultCard({
   onApply,
   onAsk,
   apply,
+  applyOutcome,
   followup,
-  reveal = "full",
+  section = "full",
   onCheckStatus,
+  animate = true,
+  showDisclaimer = true,
+  coverageLimited = false,
+  evidenceConflict = false,
+  compactActions = false,
 }: {
   diagnosis: Diagnosis;
   onApply?: (fix: string) => void;
   onAsk?: (question: string) => void;
   apply?: boolean;
+  applyOutcome?: ApplyMutationOutcome;
   followup?: boolean;
-  reveal?: "rca" | "full";
+  section?: "full" | "conclusion" | "actions";
   onCheckStatus?: () => void;
+  animate?: boolean;
+  /** The Findings workspace already labels the enclosing assessment as AI. */
+  showDisclaimer?: boolean;
+  /** Qualifies a healthy assessment when structured evidence is absent or partial. */
+  coverageLimited?: boolean;
+  /** Marks a healthy agent assessment that conflicts with same-turn Key evidence. */
+  evidenceConflict?: boolean;
+  /** Show only the recommended (or first) action until the user asks for more. */
+  compactActions?: boolean;
 }) {
-  // Apply turns report what changed — an outcome, not a diagnosis. Frame as a
-  // success confirmation (emerald) rather than the amber root-cause anchor.
+  // Apply turns report mutation truth, not a diagnosis. The outcome-specific
+  // card decides whether that truth is confirmed, failed, or still unknown.
   if (apply)
     return (
-      <ApplyOutcomeCard diagnosis={diagnosis} onCheckStatus={onCheckStatus} />
+      <ApplyOutcomeCard
+        diagnosis={diagnosis}
+        applyOutcome={applyOutcome}
+        onCheckStatus={onCheckStatus}
+        animate={animate}
+      />
     );
+  // A question remains conversational even if the model happens to set a health
+  // flag in its structured envelope. Never promote an ordinary answer into an
+  // authoritative investigation conclusion.
+  if (followup)
+    return <FollowupAnswer diagnosis={diagnosis} animate={animate} />;
   if (diagnosis.healthy && !diagnosis.rootCause)
-    return <AllClearCard diagnosis={diagnosis} />;
+    return section === "actions" ? null : (
+      <AllClearCard
+        diagnosis={diagnosis}
+        animate={animate}
+        showDisclaimer={showDisclaimer}
+        coverageLimited={coverageLimited}
+        evidenceConflict={evidenceConflict}
+      />
+    );
   // Couldn't-determine is its own honest state — never a confident all-clear, never
   // the alarming root-cause anchor.
   if (diagnosis.inconclusive && !diagnosis.rootCause)
-    return <InconclusiveCard diagnosis={diagnosis} />;
-  // Follow-ups are conversational replies, not fresh diagnoses — plain answer.
-  if (followup) return <FollowupAnswer diagnosis={diagnosis} />;
-
+    return section === "actions" ? null : (
+      <InconclusiveCard
+        diagnosis={diagnosis}
+        animate={animate}
+        showDisclaimer={showDisclaimer}
+      />
+    );
   // A turn with no structured root cause and no remediation (e.g. "looks healthy",
   // or a clarifying question) is not a diagnosis — render it neutrally rather than
   // forcing the alarming root-cause anchor onto a non-problem.
   const structured =
     !!diagnosis.rootCause || (diagnosis.remediation?.length ?? 0) > 0;
-  if (!structured) return <FollowupAnswer diagnosis={diagnosis} />;
+  if (!structured)
+    return <FollowupAnswer diagnosis={diagnosis} animate={animate} />;
 
   return (
     <DiagnosisResult
       diagnosis={diagnosis}
       onApply={onApply}
       onAsk={onAsk}
-      reveal={reveal}
+      section={section}
+      animate={animate}
+      showDisclaimer={showDisclaimer}
+      compactActions={compactActions}
     />
   );
 }
@@ -1443,14 +1630,21 @@ function DiagnosisResult({
   diagnosis,
   onApply,
   onAsk,
-  reveal = "full",
+  section = "full",
+  animate,
+  showDisclaimer,
+  compactActions,
 }: {
   diagnosis: Diagnosis;
   onApply?: (fix: string) => void;
   onAsk?: (question: string) => void;
-  reveal?: "rca" | "full";
+  section?: "full" | "conclusion" | "actions";
+  animate: boolean;
+  showDisclaimer: boolean;
+  compactActions: boolean;
 }) {
   const [showAnalysis, setShowAnalysis] = useState(false);
+  const [showAllSteps, setShowAllSteps] = useState(false);
   // Only a real structured root cause anchors the amber card; the full prose lives
   // in "Full analysis" (never relabel the report as a root cause).
   const rootCause = diagnosis.rootCause;
@@ -1463,19 +1657,27 @@ function DiagnosisResult({
   // When it returns 0 / none ("needs human judgement"), we honor that and don't
   // offer one-click apply — the steps stay copy-only with a note.
   const canApply = !!onApply && recValid;
+  const showConclusion = section !== "actions";
+  const showActions = section !== "conclusion";
+  const remediationEntries = remediation.map((text, index) => ({
+    text,
+    index,
+  }));
+  const primaryActionIndex = recValid ? recIdx! - 1 : 0;
+  const visibleRemediation =
+    compactActions && !showAllSteps
+      ? remediationEntries.filter(({ index }) => index === primaryActionIndex)
+      : remediationEntries;
+  const hiddenStepCount = remediation.length - visibleRemediation.length;
   return (
-    <div className="mt-3 space-y-2 animate-result-in">
+    <div className={`mt-3 space-y-2 ${animate ? "animate-result-in" : ""}`}>
       {/* Root cause — the anchor: distinct tone + heavier type so it pops. */}
-      {rootCause && (
-        <div
-          className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 animate-verdict-reveal"
-          style={{ "--glow": "rgb(245 158 11)" } as React.CSSProperties}
-        >
+      {showConclusion && rootCause && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
           <div className="mb-1 flex items-center justify-between gap-2">
-            <div className="relative flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-amber-500">
+            <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-amber-500">
               <AlertTriangle className="h-3.5 w-3.5" />
               Root cause
-              <span className="absolute -bottom-0.5 left-0 right-0 h-px bg-amber-500/60 animate-underline-sweep" />
             </div>
             <div className="flex items-center gap-2">
               {diagnosis.confidence != null ? (
@@ -1489,7 +1691,7 @@ function DiagnosisResult({
           <AIMarkdown className="text-sm font-medium text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_p]:my-0 [&_p]:text-theme-text-primary">
             {rootCause}
           </AIMarkdown>
-          {onAsk && reveal === "full" && (
+          {onAsk && (
             <button
               onClick={() => onAsk(EXPLAIN_SIMPLY_PROMPT)}
               className="mt-2 inline-flex items-center gap-1 rounded-md border border-theme-border px-2 py-1 text-[11px] font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
@@ -1501,35 +1703,25 @@ function DiagnosisResult({
         </div>
       )}
 
-      {/* Between the root cause and the remediation, a beat lands where the steps
-          will appear — the verdict unfolds rather than dumping all at once. */}
-      {reveal === "rca" && hasRemediation && (
-        <SynthBeat label="Weighing remediation options" />
-      )}
-
       {/* Remediation — copyable steps; the recommended one is highlighted as the
           default, and any step can be applied (Apply binds to that step's text). */}
-      {reveal === "full" && hasRemediation && (
-        <div
-          className="rounded-lg border border-theme-border bg-theme-elevated p-3 animate-verdict-reveal"
-          style={{ "--glow": "var(--accent)" } as React.CSSProperties}
-        >
+      {showActions && hasRemediation && (
+        <div className="rounded-lg border border-theme-border bg-theme-elevated p-3">
           <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-theme-text-tertiary">
             <Wrench className="h-3.5 w-3.5 text-accent" />
             Remediation
           </div>
           <ol className="space-y-2">
-            {remediation.map((r, i) => {
+            {visibleRemediation.map(({ text: r, index: i }) => {
               const isRec = recValid && i === recIdx! - 1;
               return (
                 <li
                   key={i}
-                  className={`animate-transcript-enter ${
+                  className={
                     isRec
                       ? "rounded-lg border border-accent/40 bg-accent/5 p-2.5"
                       : ""
-                  }`}
-                  style={{ animationDelay: `${260 + i * 70}ms` }}
+                  }
                 >
                   <div className="flex items-start gap-2">
                     <span
@@ -1584,6 +1776,22 @@ function DiagnosisResult({
               );
             })}
           </ol>
+          {compactActions && remediation.length > 1 ? (
+            <button
+              type="button"
+              onClick={() => setShowAllSteps((value) => !value)}
+              className="mt-2 inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+            >
+              <ChevronRight
+                className={`h-3.5 w-3.5 transition-transform ${showAllSteps ? "rotate-90" : ""}`}
+              />
+              {showAllSteps
+                ? recValid
+                  ? "Show only recommended step"
+                  : "Show only first step"
+                : `Show ${hiddenStepCount} more ${hiddenStepCount === 1 ? "step" : "steps"}`}
+            </button>
+          ) : null}
           {!recValid && (
             <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-snug text-theme-text-tertiary">
               <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" />
@@ -1596,7 +1804,7 @@ function DiagnosisResult({
       )}
 
       {/* Full analysis — the agent's detailed evidence, on demand. */}
-      {reveal === "full" && diagnosis.report && (
+      {showConclusion && diagnosis.report && (
         <div className="rounded-lg border border-theme-border bg-theme-elevated">
           <button
             onClick={() => setShowAnalysis((v) => !v)}
@@ -1617,7 +1825,7 @@ function DiagnosisResult({
         </div>
       )}
 
-      {reveal === "full" && (
+      {showConclusion && showDisclaimer && (
         <div className="flex items-start gap-1 px-0.5 text-[11px] text-theme-text-tertiary">
           <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" />
           <span>AI-generated — review before applying</span>
@@ -1627,30 +1835,98 @@ function DiagnosisResult({
   );
 }
 
-function AllClearCard({ diagnosis }: { diagnosis: Diagnosis }) {
-  const text =
+function AllClearCard({
+  diagnosis,
+  animate,
+  showDisclaimer,
+  coverageLimited,
+  evidenceConflict,
+}: {
+  diagnosis: Diagnosis;
+  animate: boolean;
+  showDisclaimer: boolean;
+  coverageLimited: boolean;
+  evidenceConflict: boolean;
+}) {
+  const [showAnalysis, setShowAnalysis] = useState(false);
+  const report =
     diagnosis.report || "No active problem found for this resource.";
+  const detailed = report.length > 320 || report.split("\n").length > 2;
+  const summary = detailed
+    ? "The agent found no active problem in the checks it completed."
+    : report;
   return (
-    <div className="mt-3 space-y-2 animate-result-in">
+    <div className={`mt-3 space-y-2 ${animate ? "animate-result-in" : ""}`}>
       <div
-        className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 animate-verdict-reveal"
-        style={{ "--glow": "rgb(16 185 129)" } as React.CSSProperties}
+        className={`rounded-lg border p-3 ${
+          evidenceConflict
+            ? "border-amber-500/40 bg-amber-500/5"
+            : "border-emerald-500/30 bg-emerald-500/5"
+        }`}
       >
         <div className="mb-1 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-emerald-500">
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            No problems found
+          <div
+            className={`flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide ${
+              evidenceConflict ? "text-amber-500" : "text-emerald-500"
+            }`}
+          >
+            {evidenceConflict ? (
+              <AlertTriangle className="h-3.5 w-3.5" />
+            ) : (
+              <CheckCircle2 className="h-3.5 w-3.5" />
+            )}
+            {evidenceConflict
+              ? "Assessment conflicts with captured evidence"
+              : coverageLimited
+                ? "No active problems found in completed checks"
+                : "No active problems found"}
           </div>
-          <CopyButton text={text} />
+          <CopyButton text={report} />
         </div>
         <AIMarkdown className="text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_li]:text-theme-text-primary [&_p]:my-1 [&_p]:text-theme-text-primary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
-          {text}
+          {summary}
         </AIMarkdown>
+        {evidenceConflict ? (
+          <p className="mt-2 text-xs text-theme-text-secondary">
+            Radar also captured evidence of an active problem. Review that
+            evidence before treating the agent&apos;s conclusion as an all-clear.
+          </p>
+        ) : coverageLimited ? (
+          <p className="mt-2 text-xs text-theme-text-secondary">
+            Structured evidence is incomplete or unavailable. Review
+            Radar&apos;s observations below before treating this as an
+            all-clear.
+          </p>
+        ) : null}
       </div>
-      <div className="flex items-start gap-1 px-0.5 text-[11px] text-theme-text-tertiary">
-        <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" />
-        <span>AI-generated — verify if symptoms persist</span>
-      </div>
+      {detailed ? (
+        <div className="rounded-lg border border-theme-border bg-theme-elevated">
+          <button
+            type="button"
+            aria-expanded={showAnalysis}
+            onClick={() => setShowAnalysis((value) => !value)}
+            className="flex w-full items-center gap-1.5 px-3 py-2 text-xs font-medium uppercase tracking-wide text-theme-text-tertiary hover:text-theme-text-primary"
+          >
+            <ChevronRight
+              className={`h-3.5 w-3.5 transition-transform ${showAnalysis ? "rotate-90" : ""}`}
+            />
+            Full analysis
+          </button>
+          <Collapse open={showAnalysis}>
+            <div className="border-t border-theme-border/60 px-3 py-2">
+              <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_p]:my-1.5 [&_p]:text-theme-text-secondary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
+                {report}
+              </AIMarkdown>
+            </div>
+          </Collapse>
+        </div>
+      ) : null}
+      {showDisclaimer ? (
+        <div className="flex items-start gap-1 px-0.5 text-[11px] text-theme-text-tertiary">
+          <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" />
+          <span>AI-generated — verify if symptoms persist</span>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1658,16 +1934,21 @@ function AllClearCard({ diagnosis }: { diagnosis: Diagnosis }) {
 // The agent investigated but couldn't determine an answer. A distinct, honest
 // state — neutral (not the alarming amber root cause, not the reassuring emerald
 // all-clear) — so "I couldn't tell" never reads as "you're fine."
-function InconclusiveCard({ diagnosis }: { diagnosis: Diagnosis }) {
+function InconclusiveCard({
+  diagnosis,
+  animate,
+  showDisclaimer,
+}: {
+  diagnosis: Diagnosis;
+  animate: boolean;
+  showDisclaimer: boolean;
+}) {
   const text =
     diagnosis.report ||
     "The investigation couldn't reach a clear conclusion — some checks were blocked or the evidence was ambiguous.";
   return (
-    <div className="mt-3 space-y-2 animate-result-in">
-      <div
-        className="rounded-lg border border-theme-border bg-theme-elevated p-3 animate-verdict-reveal"
-        style={{ "--glow": "rgb(100 116 139)" } as React.CSSProperties}
-      >
+    <div className={`mt-3 space-y-2 ${animate ? "animate-result-in" : ""}`}>
+      <div className="rounded-lg border border-theme-border bg-theme-elevated p-3">
         <div className="mb-1 flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-theme-text-secondary">
             <HelpCircle className="h-3.5 w-3.5" />
@@ -1679,23 +1960,34 @@ function InconclusiveCard({ diagnosis }: { diagnosis: Diagnosis }) {
           {text}
         </AIMarkdown>
       </div>
-      <div className="flex items-start gap-1 px-0.5 text-[11px] text-theme-text-tertiary">
-        <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" />
-        <span>
-          Try a follow-up with more detail, or re-run after granting access.
-        </span>
-      </div>
+      {showDisclaimer ? (
+        <div className="flex items-start gap-1 px-0.5 text-[11px] text-theme-text-tertiary">
+          <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" />
+          <span>
+            Try a follow-up with more detail, or investigate again after
+            granting access.
+          </span>
+        </div>
+      ) : null}
     </div>
   );
 }
 
 // A follow-up reply: the agent answering a question, not re-diagnosing. Plain
 // neutral block — no root-cause anchor, no remediation/apply.
-function FollowupAnswer({ diagnosis }: { diagnosis: Diagnosis }) {
+function FollowupAnswer({
+  diagnosis,
+  animate,
+}: {
+  diagnosis: Diagnosis;
+  animate: boolean;
+}) {
   const text = diagnosis.report || diagnosis.rootCause;
   if (!text) return null;
   return (
-    <div className="mt-1 rounded-lg border border-theme-border bg-theme-elevated p-3">
+    <div
+      className={`mt-1 rounded-lg border border-theme-border bg-theme-elevated p-3 ${animate ? "animate-result-in" : ""}`}
+    >
       <div className="mb-1.5 flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-theme-text-tertiary">
           <Sparkles className="h-3.5 w-3.5 text-accent" />
@@ -1710,61 +2002,116 @@ function FollowupAnswer({ diagnosis }: { diagnosis: Diagnosis }) {
   );
 }
 
-// A done turn that produced no renderable verdict at all (empty diagnosis, no
+// A done turn that produced no renderable result at all (empty diagnosis, no
 // narration). Without this the turn would render blank — which reads as "the tool
 // broke." Make the dead-end explicit and point at the recovery (a follow-up).
-function EmptyResult() {
+function EmptyResult({ animate }: { animate: boolean }) {
   return (
-    <div className="mt-1 flex items-start gap-2 rounded-lg border border-theme-border bg-theme-elevated p-3 text-sm text-theme-text-secondary">
+    <div
+      className={`mt-1 flex items-start gap-2 rounded-lg border border-theme-border bg-theme-elevated p-3 text-sm text-theme-text-secondary ${animate ? "animate-result-in" : ""}`}
+    >
       <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-theme-text-tertiary" />
       <span>
-        The investigation finished without a clear result. Try a follow-up
-        question, or re-run Diagnose.
+        The investigation finished without a clear conclusion. Try a follow-up
+        question, or investigate again.
       </span>
     </div>
   );
 }
 
-// The result of an apply turn: a success confirmation of what changed, not a
-// diagnosis. Emerald + checkmark so it reads as an outcome.
+// The result of an apply turn. Mutation truth comes from Radar write-tool
+// results, not the agent's prose or process exit. Missing outcome metadata is
+// therefore fail-closed as unknown; only explicit confirmation renders green.
 function ApplyOutcomeCard({
   diagnosis,
+  error,
+  applyOutcome,
   onCheckStatus,
+  animate,
 }: {
-  diagnosis: Diagnosis;
+  diagnosis: Diagnosis | null;
+  error?: string | null;
+  applyOutcome?: ApplyMutationOutcome;
   onCheckStatus?: () => void;
+  animate: boolean;
 }) {
-  const outcome = diagnosis.report || diagnosis.rootCause;
+  const outcome = diagnosis?.report || diagnosis?.rootCause;
+  const status = applyOutcome ?? "unknown";
+  const confirmed = status === "confirmed";
+  const failed = status === "failed";
+  const heading = confirmed
+    ? "Applied"
+    : failed
+      ? "Not applied"
+      : "Outcome unknown";
+  const detail = error || outcome;
+  const fallbackDetail = confirmed
+    ? "A Radar write tool confirmed the change. Radar required a current-state check to confirm its effect."
+    : failed
+      ? "No Radar write tool reported a successful mutation. Review the failed or missing write call before retrying."
+      : "Radar could not establish whether the mutation completed. The live state needed verification before retrying.";
+  const containerClass = confirmed
+    ? "border-emerald-500/30 bg-emerald-500/5"
+    : failed
+      ? "border-red-500/30 bg-red-500/5"
+      : "border-amber-500/40 bg-amber-500/10";
+  const accentClass = confirmed
+    ? "text-emerald-500"
+    : failed
+      ? "text-red-400"
+      : "text-amber-400";
+  const buttonClass = confirmed
+    ? "border-emerald-500/40 text-emerald-500 hover:bg-emerald-500/10"
+    : "border-amber-500/40 text-amber-400 hover:bg-amber-500/10";
+  const provenance = confirmed
+    ? error
+      ? "Mutation confirmed by Radar — agent report incomplete"
+      : "Mutation confirmed by a Radar write-tool result"
+    : failed
+      ? "No successful Radar write-tool result was recorded"
+      : "Radar cannot confirm whether the mutation completed";
   return (
-    <div className="mt-3 space-y-2">
-      <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+    <div className={`mt-3 space-y-2 ${animate ? "animate-result-in" : ""}`}>
+      <div className={`rounded-lg border p-3 ${containerClass}`}>
         <div className="mb-1 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-emerald-500">
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            Applied
+          <div
+            className={`flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide ${accentClass}`}
+          >
+            {confirmed ? (
+              <CheckCircle2 className="h-3.5 w-3.5" />
+            ) : (
+              <AlertTriangle className="h-3.5 w-3.5" />
+            )}
+            {heading}
           </div>
-          {outcome && <CopyButton text={outcome} />}
+          {detail && <CopyButton text={detail} />}
         </div>
-        {outcome && (
-          <AIMarkdown className="text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_li]:text-theme-text-primary [&_p]:my-1 [&_p]:text-theme-text-primary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
-            {outcome}
-          </AIMarkdown>
+        <AIMarkdown className="text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_li]:text-theme-text-primary [&_p]:my-1 [&_p]:text-theme-text-primary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
+          {detail || fallbackDetail}
+        </AIMarkdown>
+        {!confirmed && !failed && (
+          <div className="mt-2 flex items-start gap-1.5 text-xs font-medium text-amber-300">
+            <RefreshCw className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>
+              At this point, Radar could not safely allow another apply without
+              a current-state check.
+            </span>
+          </div>
         )}
-        {onCheckStatus && (
+        {onCheckStatus && !failed && (
           <button
+            type="button"
             onClick={onCheckStatus}
-            className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-emerald-500/40 py-2 text-sm font-medium text-emerald-500 hover:bg-emerald-500/10"
+            className={`mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border py-2 text-sm font-medium ${buttonClass}`}
           >
             <RefreshCw className="h-4 w-4" />
-            Check status
+            Check current status
           </button>
         )}
       </div>
       <div className="flex items-center gap-1 px-0.5 text-[11px] text-theme-text-tertiary">
         <ShieldCheck className="h-3 w-3 shrink-0" />
-        <span className="truncate">
-          Applied by AI — verify the change took effect
-        </span>
+        <span className="truncate">{provenance}</span>
       </div>
     </div>
   );
@@ -1814,7 +2161,7 @@ function ConfidenceMeter({ value }: { value: number }) {
   return (
     <span className="flex items-center gap-1.5">
       <span className="text-[11px] text-theme-text-tertiary">
-        {band} confidence
+        Agent confidence: {band}
       </span>
       <span className="flex items-center gap-0.5" aria-hidden>
         {[0, 1, 2].map((i) => (
@@ -1834,7 +2181,7 @@ function ConfidenceMeter({ value }: { value: number }) {
 function ConfidenceUnstated() {
   return (
     <span className="text-[11px] text-theme-text-tertiary">
-      Confidence not stated
+      Agent confidence: not stated
     </span>
   );
 }

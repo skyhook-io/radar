@@ -3,6 +3,7 @@ package meaningfulchanges
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -354,6 +355,237 @@ func TestRecentForResourceReportsSaturation(t *testing.T) {
 	}
 	if !saturated {
 		t.Fatal("a candidate fetch at its cap must report saturation")
+	}
+}
+
+func TestRecentForResourceGroupCollisionChurnDoesNotCrowdOrSaturate(t *testing.T) {
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 1000}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	store := timeline.GetStore()
+	now := time.Now()
+
+	if err := store.Append(context.Background(), timeline.TimelineEvent{
+		ID: "matching-update", Timestamp: now.Add(-10 * time.Minute),
+		Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+		APIVersion: "apps/v1", Kind: "Deployment", Namespace: "shop", Name: "web",
+		EventType: timeline.EventTypeUpdate,
+		Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{
+			Path: "spec.replicas", OldValue: int32(1), NewValue: int32(2),
+		}}},
+	}); err != nil {
+		t.Fatalf("append matching update: %v", err)
+	}
+	if err := store.Append(context.Background(), timeline.TimelineEvent{
+		ID: "unknown-delete", Timestamp: now.Add(-9 * time.Minute),
+		Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+		Kind: "Deployment", Namespace: "shop", Name: "web", EventType: timeline.EventTypeDelete,
+	}); err != nil {
+		t.Fatalf("append unknown-version delete: %v", err)
+	}
+
+	// This is enough newer same-kind/name churn to saturate both bounded
+	// candidate queries if group filtering happens after their limits.
+	for i := 0; i < maxCandidateLimit+20; i++ {
+		eventType := timeline.EventTypeUpdate
+		if i%2 == 0 {
+			eventType = timeline.EventTypeDelete
+		}
+		if err := store.Append(context.Background(), timeline.TimelineEvent{
+			ID: fmt.Sprintf("collision-%d", i), Timestamp: now.Add(-time.Duration(i) * time.Second),
+			Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+			APIVersion: "other.example/v1", Kind: "Deployment", Namespace: "shop", Name: "web",
+			EventType: eventType,
+			Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{
+				Path: "spec.replicas", OldValue: int32(i), NewValue: int32(i + 1),
+			}}},
+		}); err != nil {
+			t.Fatalf("append collision %d: %v", i, err)
+		}
+	}
+
+	changes, saturated, err := RecentForResource(
+		context.Background(), "Deployment", "shop", "web", time.Hour, ResourceLimit, DefaultFieldLimit,
+	)
+	if err != nil {
+		t.Fatalf("RecentForResource: %v", err)
+	}
+	if saturated {
+		t.Fatal("mismatched API-group churn must not saturate a named source query")
+	}
+	if len(changes) != 2 {
+		t.Fatalf("changes = %+v, want matching update and unknown-version delete", changes)
+	}
+	seenTypes := map[string]bool{}
+	for _, change := range changes {
+		seenTypes[change.ChangeType] = true
+	}
+	if !seenTypes["update"] || !seenTypes["delete"] {
+		t.Fatalf("matching and unknown-version rows were not both retained: %+v", changes)
+	}
+}
+
+func TestCommonTrackedAPIGroupsRequiresOneCompatibleKnownGroup(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		kinds []string
+		want  []string
+	}{
+		{name: "single named source", kinds: []string{"deployments"}, want: []string{"apps"}},
+		{name: "compatible kinds", kinds: []string{"Deployment", "StatefulSet"}, want: []string{"apps"}},
+		{name: "compatible core kinds", kinds: []string{"Service", "ConfigMap"}, want: []string{""}},
+		{name: "heterogeneous groups", kinds: []string{"Deployment", "Service"}},
+		{name: "untracked kind", kinds: []string{"Pod"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := commonTrackedAPIGroups(tt.kinds)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("commonTrackedAPIGroups(%v) = %v, want %v", tt.kinds, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRecentForWorkloadAndConfigMapsReportsMergedOutputCap(t *testing.T) {
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 20}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	store := timeline.GetStore()
+	now := time.Now()
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop"},
+		Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+			Volumes: []corev1.Volume{{
+				Name: "config",
+				VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "web-config"},
+				}},
+			}},
+		}}},
+	}
+
+	for i := 0; i < 4; i++ {
+		kind, name, apiVersion, path := "Deployment", "web", "apps/v1", "spec.template.spec.containers[web].image"
+		if i >= 2 {
+			kind, name, apiVersion, path = "ConfigMap", "web-config", "v1", "data[FEATURE_FLAG]"
+		}
+		if err := store.Append(context.Background(), timeline.TimelineEvent{
+			ID:             fmt.Sprintf("merged-cap-%d", i),
+			Timestamp:      now.Add(-time.Duration(i+1) * time.Minute),
+			Source:         timeline.SourceInformer,
+			ClusterContext: k8s.ActiveClusterContext(),
+			APIVersion:     apiVersion,
+			Kind:           kind,
+			Namespace:      "shop",
+			Name:           name,
+			EventType:      timeline.EventTypeUpdate,
+			Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{
+				Path: path, OldValue: fmt.Sprintf("old-%d", i), NewValue: fmt.Sprintf("new-%d", i),
+			}}},
+		}); err != nil {
+			t.Fatalf("append change %d: %v", i, err)
+		}
+	}
+
+	result, err := RecentForWorkloadAndConfigMapsDetailed(
+		context.Background(), deployment, "Deployment", "shop", "web", time.Hour, 3, DefaultFieldLimit,
+	)
+	if err != nil {
+		t.Fatalf("RecentForWorkloadAndConfigMapsDetailed: %v", err)
+	}
+	if len(result.Changes) != 3 {
+		t.Fatalf("changes = %d, want merged output capped from 4 to 3: %+v", len(result.Changes), result.Changes)
+	}
+	if !result.OutputCapped {
+		t.Fatal("merged 4-to-3 output cap must be reported")
+	}
+	if result.FetchSaturated {
+		t.Fatal("four fully fetched changes must not be mislabeled as candidate-fetch saturation")
+	}
+	legacyChanges, fetchSaturated, err := RecentForWorkloadAndConfigMaps(
+		context.Background(), deployment, "Deployment", "shop", "web", time.Hour, 3, DefaultFieldLimit,
+	)
+	if err != nil {
+		t.Fatalf("RecentForWorkloadAndConfigMaps: %v", err)
+	}
+	if len(legacyChanges) != 3 || fetchSaturated {
+		t.Fatalf("historical wrapper changed semantics: changes=%d fetchSaturated=%v", len(legacyChanges), fetchSaturated)
+	}
+
+	seenSources := map[string]bool{}
+	visible, coverageLimited, err := RecentForWorkloadAndConfigMapsAuthorizedDetailed(
+		context.Background(), deployment, "deployments", "shop", "web", time.Hour, 3, DefaultFieldLimit,
+		func(kind, name string) bool {
+			seenSources[kind+"/"+name] = true
+			return kind != "ConfigMap"
+		},
+	)
+	if err != nil {
+		t.Fatalf("RecentForWorkloadAndConfigMapsAuthorizedDetailed: %v", err)
+	}
+	if !coverageLimited {
+		t.Fatal("skipping a referenced ConfigMap must limit coverage")
+	}
+	if !seenSources["Deployment/web"] || !seenSources["ConfigMap/web-config"] {
+		t.Fatalf("source predicate did not receive every canonical source: %+v", seenSources)
+	}
+	if len(visible.Changes) != 2 {
+		t.Fatalf("visible changes = %d, want only the two Deployment rows: %+v", len(visible.Changes), visible.Changes)
+	}
+	for _, change := range visible.Changes {
+		if change.Kind != "Deployment" {
+			t.Fatalf("unauthorized source leaked into result: %+v", visible.Changes)
+		}
+	}
+}
+
+func TestRecentForWorkloadAndConfigMapsIncludesArgoRolloutSource(t *testing.T) {
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 20}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	store := timeline.GetStore()
+	if err := store.Append(context.Background(), timeline.TimelineEvent{
+		ID:             "rollout-change",
+		Timestamp:      time.Now().Add(-time.Minute),
+		Source:         timeline.SourceInformer,
+		ClusterContext: k8s.ActiveClusterContext(),
+		APIVersion:     "argoproj.io/v1alpha1",
+		Kind:           "Rollout",
+		Namespace:      "shop",
+		Name:           "api",
+		EventType:      timeline.EventTypeUpdate,
+		Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{
+			Path: "spec.template.spec.containers[api].image", OldValue: "api:v1", NewValue: "api:v2",
+		}}},
+	}); err != nil {
+		t.Fatalf("append Rollout change: %v", err)
+	}
+
+	seenSources := map[string]bool{}
+	result, coverageLimited, err := RecentForWorkloadAndConfigMapsAuthorizedDetailed(
+		context.Background(), nil, "rollouts", "shop", "api", time.Hour, ResourceLimit, DefaultFieldLimit,
+		func(kind, name string) bool {
+			seenSources[kind+"/"+name] = true
+			return true
+		},
+	)
+	if err != nil {
+		t.Fatalf("RecentForWorkloadAndConfigMapsAuthorizedDetailed: %v", err)
+	}
+	if coverageLimited {
+		t.Fatal("authorized Rollout source must not report limited coverage")
+	}
+	if !seenSources["Rollout/api"] {
+		t.Fatalf("Rollout source was not queried: %+v", seenSources)
+	}
+	if len(result.Changes) != 1 || result.Changes[0].Kind != "Rollout" {
+		t.Fatalf("Rollout change missing from result: %+v", result.Changes)
 	}
 }
 

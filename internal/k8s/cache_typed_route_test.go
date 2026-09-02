@@ -298,8 +298,8 @@ func TestTypedBuiltinTableParityWithFetchSwitches(t *testing.T) {
 		if _, err := FetchResourceList(cache, form, nil); errors.Is(err, ErrUnknownKind) {
 			t.Errorf("FetchResourceList(%q → %s) returned ErrUnknownKind; typed table and switch are out of sync", form, gvr.Resource)
 		}
-		if _, ok := builtinKindForResource(gvr.Resource); !ok {
-			t.Errorf("builtinKindForResource(%q) missing; converted objects would lack a kind", gvr.Resource)
+		if _, ok := BuiltinKindForResource(gvr.Resource); !ok {
+			t.Errorf("BuiltinKindForResource(%q) missing; converted objects would lack a kind", gvr.Resource)
 		}
 	}
 }

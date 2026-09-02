@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -62,10 +63,10 @@ func TestDiagnosisFromText_ParsesHealthyAllClear(t *testing.T) {
 	}
 }
 
-// Verdict precedence must never produce a self-contradictory object: a concrete
+// Conclusion precedence must never produce a self-contradictory object: a concrete
 // finding clears both flags; inconclusive clears healthy ("absence of evidence is
 // not health"); at most one of {finding, inconclusive, healthy} survives.
-func TestDiagnosisFromText_VerdictPrecedence(t *testing.T) {
+func TestDiagnosisFromText_ConclusionPrecedence(t *testing.T) {
 	block := func(j string) string { return "prose\n\n```json\n" + j + "\n```" }
 
 	// healthy + a real root cause → the finding wins; healthy cleared.
@@ -108,6 +109,27 @@ func TestApplyPrompt_BindsConfirmedFix(t *testing.T) {
 	}
 	if p := applyPrompt(Request{Kind: "Deployment", Name: "x"}); strings.Contains(p, "EXACTLY this fix") {
 		t.Errorf("empty fix should use the fallback prompt; got %q", p)
+	}
+}
+
+func TestApplyPrompt_BindsImmutableAPIGroup(t *testing.T) {
+	grouped := applyPrompt(Request{Kind: "Rollout", Group: "argoproj.io", Namespace: "prod", Name: "checkout"})
+	for _, want := range []string{
+		`immutable target API group is "argoproj.io"`,
+		`Pass group="argoproj.io" to patch_resource`,
+		`manifest apiVersion must belong to "argoproj.io"`,
+		"Never mutate a same-named resource from another API group",
+	} {
+		if !strings.Contains(grouped, want) {
+			t.Errorf("group-qualified apply prompt missing %q:\n%s", want, grouped)
+		}
+	}
+
+	core := applyPrompt(Request{Kind: "Pod", Namespace: "prod", Name: "checkout"})
+	for _, want := range []string{"Kubernetes core API group", "omit group", "apiVersion must be v1"} {
+		if !strings.Contains(core, want) {
+			t.Errorf("core-group apply prompt missing %q:\n%s", want, core)
+		}
 	}
 }
 
@@ -182,6 +204,14 @@ func TestTaskPrompt_HealthAwareOpening(t *testing.T) {
 	if strings.Contains(coexisting, "Verify quickly") {
 		t.Errorf("coexisting issue/audit prompt used audit-only healthy framing:\n%s", coexisting)
 	}
+
+	if !strings.Contains(broken, "Start with Radar's `diagnose` tool for this workload") {
+		t.Errorf("workload prompt should prefer semantic diagnose first:\n%s", broken)
+	}
+	nonWorkload := taskPrompt(Request{Kind: "ConfigMap", Namespace: "prod", Name: "api"})
+	if strings.Contains(nonWorkload, "`diagnose` tool") {
+		t.Errorf("unsupported resource prompt must not direct the agent to semantic diagnose:\n%s", nonWorkload)
+	}
 }
 
 func TestDiagnosisFromText_FreeTextIsReportNotRootCause(t *testing.T) {
@@ -207,6 +237,7 @@ func TestParseStream_FormatPin(t *testing.T) {
 	}, "\n")
 
 	var running, done bool
+	var doneIsError *bool
 	var thinking, doneResult string
 	diag := parseStream(strings.NewReader(stream), func(ev StreamEvent) {
 		switch ev.Type {
@@ -222,6 +253,7 @@ func TestParseStream_FormatPin(t *testing.T) {
 			if ev.Step != nil && ev.Step.Status == "done" {
 				done = true
 				doneResult = ev.Step.Result
+				doneIsError = ev.Step.IsError
 			}
 		}
 	})
@@ -234,6 +266,9 @@ func TestParseStream_FormatPin(t *testing.T) {
 	if doneResult == "" {
 		t.Errorf("expected tool result preview on done step")
 	}
+	if doneIsError == nil || *doneIsError {
+		t.Errorf("Claude's omitted tool_result.is_error must be a confirmed success, got %v", doneIsError)
+	}
 	if diag.RootCause != "bad tag" {
 		t.Errorf("root cause not parsed: %q", diag.RootCause)
 	}
@@ -242,12 +277,63 @@ func TestParseStream_FormatPin(t *testing.T) {
 	}
 }
 
+func TestStepInfoIsErrorJSON(t *testing.T) {
+	confirmedFalse, confirmedTrue := false, true
+	cases := []struct {
+		name      string
+		isError   *bool
+		wantField string
+	}{
+		{name: "confirmed success", isError: &confirmedFalse, wantField: `"isError":false`},
+		{name: "confirmed failure", isError: &confirmedTrue, wantField: `"isError":true`},
+		{name: "unknown", isError: nil, wantField: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b, err := json.Marshal(StepInfo{ID: "t1", Status: "done", IsError: tc.isError})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := string(b)
+			if tc.wantField == "" {
+				if strings.Contains(got, `"isError"`) {
+					t.Fatalf("unknown result must omit isError: %s", got)
+				}
+				return
+			}
+			if !strings.Contains(got, tc.wantField) {
+				t.Fatalf("JSON = %s, want %s", got, tc.wantField)
+			}
+		})
+	}
+}
+
+func TestClaudeToolResultErrorState(t *testing.T) {
+	stream := strings.Join([]string{
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"ok","content":"ok"}]}}`,
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"bad","content":"denied","is_error":true}]}}`,
+	}, "\n")
+
+	got := map[string]*bool{}
+	parseStream(strings.NewReader(stream), func(ev StreamEvent) {
+		if ev.Step != nil {
+			got[ev.Step.ID] = ev.Step.IsError
+		}
+	})
+	if got["ok"] == nil || *got["ok"] {
+		t.Errorf("omitted is_error = %v, want confirmed false", got["ok"])
+	}
+	if got["bad"] == nil || !*got["bad"] {
+		t.Errorf("is_error:true = %v, want confirmed true", got["bad"])
+	}
+}
+
 // TestReadTools_ExcludeWrites is the fail-closed guard: the read allowlist must
 // never contain a Radar write tool.
 func TestReadTools_ExcludeWrites(t *testing.T) {
 	writes := map[string]bool{
 		"apply_resource": true, "patch_resource": true, "manage_workload": true,
-		"manage_cronjob": true, "manage_node": true, "manage_gitops": true,
+		"manage_rollout": true, "manage_cronjob": true, "manage_node": true, "manage_gitops": true,
 	}
 	for _, rt := range radarReadTools {
 		if writes[rt] {
@@ -326,6 +412,56 @@ func TestCapPayload(t *testing.T) {
 	}
 }
 
+func TestCapPayloadPreservesProducerBoundedDiagnoseEnvelope(t *testing.T) {
+	payloadBytes, err := json.Marshal(map[string]any{
+		"resource": map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata":   map[string]any{"namespace": "shop", "name": "api-config"},
+			"data":       map[string]string{"application.yaml": strings.Repeat("c", 16<<10)},
+		},
+		"resourceContext": map[string]any{
+			"tier": "basic",
+			"statusSummary": map[string]any{
+				"conditions": []map[string]string{{"type": "Available", "status": "False", "message": strings.Repeat("m", 4<<10)}},
+			},
+		},
+		"logsCurrent": []map[string]any{{
+			"pod":       "api-abc",
+			"container": "api",
+			"logs": map[string]any{
+				"lines":        []string{strings.Repeat("l", (32<<10)-1)},
+				"totalLines":   1,
+				"matchedLines": 1,
+				"fallback":     false,
+			},
+		}},
+		"events": []map[string]any{{
+			"reason":  "BackOff",
+			"message": strings.Repeat("e", 4<<10),
+			"type":    "Warning",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal diagnose envelope: %v", err)
+	}
+	payload := string(payloadBytes)
+	if len([]rune(payload)) <= 32<<10 {
+		t.Fatalf("fixture must exceed the former transcript cap, got %d runes", len([]rune(payload)))
+	}
+	if len([]rune(payload)) > maxToolPayload {
+		t.Fatalf("producer-bounded fixture exceeds transcript cap: %d > %d runes", len([]rune(payload)), maxToolPayload)
+	}
+
+	got, truncated := capPayload(payload)
+	if truncated {
+		t.Fatal("bounded diagnose evidence envelope was unexpectedly truncated")
+	}
+	if got != payload {
+		t.Fatal("bounded diagnose evidence envelope changed")
+	}
+}
+
 // TestParseStream_InterleavesNarration pins the Claude treatment: interim text
 // (followed by more activity) becomes an interleaved narration ("thinking") event;
 // the FINAL text (the report, equal to the result) is NOT emitted as narration —
@@ -366,7 +502,7 @@ func TestParseStream_InterleavesNarration(t *testing.T) {
 }
 
 // TestDiagnoseStream_NonzeroExit pins the failure-honesty contract: a nonzero
-// agent exit is forgiven only when a STRUCTURED verdict parsed (the trailing
+// agent exit is forgiven only when a STRUCTURED conclusion parsed (the trailing
 // JSON block) — free-text alone means the process died mid-stream and must
 // surface as an error, never as a calm "done".
 func TestDiagnoseStream_ProcessAndStreamErrors(t *testing.T) {
@@ -420,9 +556,9 @@ func TestDiagnoseStream_ProcessAndStreamErrors(t *testing.T) {
 	structured := "{\"type\":\"result\",\"result\":\"```json\\n{\\\"root_cause\\\":\\\"bad tag\\\",\\\"remediation\\\":[\\\"fix it\\\"]}\\n```\",\"num_turns\":1}"
 	diag, err := run(t, mkCLI(t, structured, "3"))
 	if err != nil {
-		t.Fatalf("nonzero exit with a complete structured verdict should be forgiven, got %v", err)
+		t.Fatalf("nonzero exit with a complete structured conclusion should be forgiven, got %v", err)
 	}
 	if diag.RootCause != "bad tag" {
-		t.Errorf("structured verdict not preserved: %q", diag.RootCause)
+		t.Errorf("structured conclusion not preserved: %q", diag.RootCause)
 	}
 }

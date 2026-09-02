@@ -178,7 +178,7 @@ func TestAttachResourceExtras_EventsTotalGroups(t *testing.T) {
 	var result map[string]any
 	for time.Now().Before(deadline) {
 		result = map[string]any{}
-		attachResourceExtras(context.Background(), cache, result, map[string]bool{"events": true}, "deployment", "shop", "web")
+		attachResourceExtras(context.Background(), cache, result, map[string]bool{"events": true}, "deployment", "apps", "shop", "web")
 		if evs, ok := result["events"].([]aicontext.DeduplicatedEvent); ok && len(evs) == 10 {
 			break
 		}
@@ -195,8 +195,115 @@ func TestAttachResourceExtras_EventsTotalGroups(t *testing.T) {
 
 	// Under the cap: no truncation field.
 	few := map[string]any{}
-	attachResourceExtras(context.Background(), cache, few, map[string]bool{"events": true}, "deployment", "shop", "missing")
+	attachResourceExtras(context.Background(), cache, few, map[string]bool{"events": true}, "deployment", "apps", "shop", "missing")
 	if _, present := few["eventsTotalGroups"]; present {
 		t.Errorf("eventsTotalGroups present with no truncation: %+v", few)
+	}
+}
+
+func TestFetchEventsForResource_ReportsPreCapGroupTotal(t *testing.T) {
+	defer k8s.ResetTestState()
+	now := time.Now()
+	objects := make([]runtime.Object, 0, 12)
+	for i := 0; i < 12; i++ {
+		objects = append(objects, &corev1.Event{
+			ObjectMeta:     metav1.ObjectMeta{Name: fmt.Sprintf("diagnose-ev-%02d", i), Namespace: "shop"},
+			Reason:         fmt.Sprintf("DiagnoseReason%02d", i),
+			Message:        fmt.Sprintf("distinct diagnosis event %02d", i),
+			Type:           corev1.EventTypeWarning,
+			Count:          1,
+			LastTimestamp:  metav1.Time{Time: now.Add(-time.Duration(i) * time.Second)},
+			InvolvedObject: corev1.ObjectReference{Kind: "Deployment", Namespace: "shop", Name: "web"},
+		})
+	}
+	if err := k8s.InitTestResourceCache(fake.NewSimpleClientset(objects...)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var (
+		groups []aicontext.DeduplicatedEvent
+		total  int
+		err    error
+	)
+	for time.Now().Before(deadline) {
+		groups, total, err = fetchEventsForResource(k8s.GetResourceCache(), "deployments", "apps", "shop", "web", nil, 10)
+		if err != nil || total == 12 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("fetchEventsForResource: %v", err)
+	}
+	if len(groups) != 10 || total != 12 {
+		t.Fatalf("groups=%d total=%d, want capped response of 10 from 12 deduplicated groups", len(groups), total)
+	}
+
+	groups, total, err = fetchEventsForResource(k8s.GetResourceCache(), "deployments", "apps", "shop", "missing", nil, 10)
+	if err != nil || len(groups) != 0 || total != 0 {
+		t.Fatalf("missing resource groups=%d total=%d err=%v, want empty successful result", len(groups), total, err)
+	}
+}
+
+func TestFetchEventsForResource_RolloutWarningSurvivesKindAndGroupFiltering(t *testing.T) {
+	defer k8s.ResetTestState()
+	now := metav1.Now()
+	objects := []runtime.Object{
+		&corev1.Event{
+			ObjectMeta: metav1.ObjectMeta{Name: "argo-warning", Namespace: "shop"},
+			InvolvedObject: corev1.ObjectReference{
+				APIVersion: "argoproj.io/v1alpha1", Kind: "Rollout", Namespace: "shop", Name: "checkout",
+			},
+			Reason: "RolloutPaused", Type: corev1.EventTypeWarning,
+			Message: "rollout requires analysis", LastTimestamp: now,
+		},
+		&corev1.Event{
+			ObjectMeta: metav1.ObjectMeta{Name: "other-group-warning", Namespace: "shop"},
+			InvolvedObject: corev1.ObjectReference{
+				APIVersion: "delivery.example.io/v1", Kind: "Rollout", Namespace: "shop", Name: "checkout",
+			},
+			Reason: "WrongGroup", Type: corev1.EventTypeWarning,
+			Message: "same kind and name in another API group", LastTimestamp: now,
+		},
+	}
+	if err := k8s.InitTestResourceCache(fake.NewSimpleClientset(objects...)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var (
+		groups []aicontext.DeduplicatedEvent
+		total  int
+		err    error
+	)
+	for time.Now().Before(deadline) {
+		groups, total, err = fetchEventsForResource(k8s.GetResourceCache(), "rollouts", "argoproj.io", "shop", "checkout", nil, 10)
+		if err != nil || total == 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("fetchEventsForResource: %v", err)
+	}
+	if len(groups) != 1 || total != 1 || groups[0].Reason != "RolloutPaused" {
+		t.Fatalf("Rollout events = %+v total=%d, want only the argoproj.io warning", groups, total)
+	}
+}
+
+func TestFilterEventsByInvolvedObject_RequiresExactAPIGroup(t *testing.T) {
+	events := []*corev1.Event{
+		{Type: corev1.EventTypeWarning, Reason: "Core", InvolvedObject: corev1.ObjectReference{APIVersion: "v1", Kind: "Service", Name: "api"}},
+		{Type: corev1.EventTypeWarning, Reason: "Knative", InvolvedObject: corev1.ObjectReference{APIVersion: "serving.knative.dev/v1", Kind: "Service", Name: "api"}},
+	}
+
+	core := filterEventsByInvolvedObject(events, "Service", "", "api", nil)
+	if len(core) != 1 || core[0].Reason != "Core" {
+		t.Fatalf("core Service events = %+v, want only core/v1", core)
+	}
+	knative := filterEventsByInvolvedObject(events, "Service", "serving.knative.dev", "api", nil)
+	if len(knative) != 1 || knative[0].Reason != "Knative" {
+		t.Fatalf("Knative Service events = %+v, want only serving.knative.dev", knative)
 	}
 }

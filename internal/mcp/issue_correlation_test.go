@@ -416,10 +416,10 @@ func TestAttachIssueChangeCorrelation_CoreIssueIgnoresCRDEvents(t *testing.T) {
 	}
 }
 
-// Crowding: when mismatched-group events fill the bounded candidate window,
-// the answer is UNKNOWN (saturated), never a false no_recent_changes — an
-// older core change may sit beyond the events the query consumed.
-func TestAttachIssueChangeCorrelation_CRDCrowdingIsUnknownNotNoChanges(t *testing.T) {
+// Mismatched-group churn is filtered by the store before the bounded candidate
+// window is applied. It therefore cannot saturate a tracked core resource's
+// query or turn an observed empty core window into an ambiguous result.
+func TestAttachIssueChangeCorrelation_CRDCrowdingDoesNotSaturateCoreQuery(t *testing.T) {
 	store := initCorrelationStore(t)
 	now := time.Now()
 	for i := 0; i < 100; i++ { // name-filtered candidate limit
@@ -441,8 +441,8 @@ func TestAttachIssueChangeCorrelation_CRDCrowdingIsUnknownNotNoChanges(t *testin
 	if len(core.CorrelatedChanges) != 0 {
 		t.Fatalf("core issue absorbed CRD events: %+v", core.CorrelatedChanges)
 	}
-	if core.NoRecentChanges != nil {
-		t.Fatalf("crowded window must read as unknown (saturated), not no_recent_changes: %+v", core.NoRecentChanges)
+	if core.NoRecentChanges == nil {
+		t.Fatalf("CRD churn must not make the empty core window ambiguous: %+v", core)
 	}
 }
 

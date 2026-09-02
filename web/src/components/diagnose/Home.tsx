@@ -4,6 +4,7 @@
 import { Loader2, Sparkles } from "lucide-react";
 import { StatusDot, type StatusTone } from "@skyhook-io/k8s-ui";
 import { type RunSummary } from "../../api/diagnose";
+import { formatInvestigationTarget } from "./target";
 
 // Compact "3m ago" / "2h ago" / date label.
 function relativeTime(ts: number, now: number): string {
@@ -83,21 +84,23 @@ export function RecentList({
   if (runs.length === 0) {
     return (
       <div>
-      {degradedNote}
-      <div className="flex flex-col items-center px-4 py-12 text-center">
-        <Sparkles className="mb-3 h-7 w-7 text-accent" />
-        <div className="text-sm font-medium text-theme-text-primary">
-          No investigations yet
+        {degradedNote}
+        <div className="flex flex-col items-center px-4 py-12 text-center">
+          <Sparkles className="mb-3 h-7 w-7 text-accent" />
+          <div className="text-sm font-medium text-theme-text-primary">
+            No investigations yet
+          </div>
+          <p className="mt-1 max-w-xs text-sm text-theme-text-tertiary">
+            Open a resource and use its{" "}
+            <Sparkles className="inline h-3.5 w-3.5 align-text-bottom text-accent" />{" "}
+            action to investigate it with {agentLabel} —{" "}
+            <span className="font-medium text-theme-text-secondary">
+              Investigate
+            </span>{" "}
+            a problem, or just ask about it. Investigations run in the
+            background and are kept in your history here.
+          </p>
         </div>
-        <p className="mt-1 max-w-xs text-sm text-theme-text-tertiary">
-          Open a resource and use its{" "}
-          <Sparkles className="inline h-3.5 w-3.5 align-text-bottom text-accent" />{" "}
-          action to investigate it with {agentLabel} —{" "}
-          <span className="font-medium text-theme-text-secondary">Diagnose</span>{" "}
-          a problem, or just ask about it. Investigations run in the background
-          and are kept in your history here.
-        </p>
-      </div>
       </div>
     );
   }
@@ -121,8 +124,7 @@ export function RecentList({
           <div className="flex items-center gap-2">
             {statusDot(r.status)}
             <span className="min-w-0 flex-1 truncate text-sm text-theme-text-primary">
-              {r.kind} {r.namespace ? `${r.namespace}/` : ""}
-              {r.name}
+              {formatInvestigationTarget(r)}
             </span>
             <span className="shrink-0 text-[11px] text-theme-text-tertiary">
               {r.status === "running" ? (

@@ -52,7 +52,7 @@ function AgentRow({ agent }: { agent: AgentInstall }) {
   );
 }
 
-// Shown in the AI surface's Home when diagnosis is eligible in this deployment
+// Shown in the AI surface's Home when investigations are eligible in this deployment
 // but not runnable yet — either no agent CLI is installed ("needs-install") or a
 // supported one appeared after Radar booted ("needs-restart"). Radar decides the
 // engine once at startup, so a fresh install needs a restart to take effect.
@@ -69,8 +69,8 @@ export function AgentSetupNotice({
       </div>
       <h3 className="text-base font-semibold text-theme-text-primary">
         {needsRestart
-          ? "Restart Radar to enable AI diagnosis"
-          : "Set up AI diagnosis"}
+          ? "Restart Radar to enable AI investigations"
+          : "Set up AI investigations"}
       </h3>
       <p className="mt-1 text-sm text-theme-text-secondary">
         {needsRestart ? (
@@ -109,8 +109,8 @@ export function AgentSetupNotice({
       </button>
 
       <p className="mt-4 text-xs text-theme-text-tertiary">
-        The agent reads this cluster through Radar and finds the root cause. It
-        never leaves your machine.
+        The agent reads this cluster through Radar and investigates the issue.
+        It never leaves your machine.
       </p>
     </div>
   );

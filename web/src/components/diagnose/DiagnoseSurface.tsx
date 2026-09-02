@@ -3,7 +3,7 @@
 //  - expanded: a master-detail workspace that fills ONLY the content area (does
 //    not cover the left nav rail or top bar) — recent list on the left, the
 //    selected investigation/report on the right.
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Sparkles,
   X,
@@ -34,6 +34,7 @@ import { buildLaunchCommand, launchAgentLabel, openInTerminal } from "./launch";
 import { type RunSummary, type ExecutionProfile } from "../../api/diagnose";
 import { routePath } from "../../api/config";
 import { useCapabilitiesContext } from "../../contexts/CapabilitiesContext";
+import { formatInvestigationTarget } from "./target";
 
 function capWord(s: string): string {
   return s ? s[0].toUpperCase() + s.slice(1) : s;
@@ -69,12 +70,35 @@ function buildConfigLine(cfg: {
 function InvestigationMenu({ run }: { run: RunSummary }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
   const { localTerminal } = useCapabilitiesContext();
   const label = launchAgentLabel(run);
-  const command = buildLaunchCommand(run, `${window.location.origin}${routePath('/mcp')}`);
+  const command = buildLaunchCommand(
+    run,
+    `${window.location.origin}${routePath("/mcp")}`,
+  );
+
+  // The diagnose root is a CSS container, so a position:fixed click-away layer
+  // inside it is panel-bound rather than viewport-bound. Dismiss from the
+  // document instead; the anchored menu itself can stay next to its trigger.
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
   // No resumable session yet (or stale run) → nothing to hand off.
   if (!command) return null;
-
   const toggle = () => {
     setCopied(false);
     setOpen((v) => !v);
@@ -89,7 +113,7 @@ function InvestigationMenu({ run }: { run: RunSummary }) {
   };
 
   return (
-    <div className="relative flex items-center">
+    <div ref={menuRef} className="relative flex items-center">
       <Tooltip content="More" position="bottom">
         <button
           onClick={toggle}
@@ -102,42 +126,39 @@ function InvestigationMenu({ run }: { run: RunSummary }) {
         </button>
       </Tooltip>
       {open && (
-        <>
-          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full z-20 mt-1 w-64 rounded-lg border border-theme-border bg-theme-surface py-1 shadow-theme-lg">
-            <button
-              onClick={copy}
-              className="flex w-full items-start gap-2 px-3 py-1.5 text-left text-sm text-theme-text-primary hover:bg-theme-hover"
-            >
-              {copied ? (
-                <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
-              ) : (
-                <Copy className="mt-0.5 h-4 w-4 shrink-0 text-theme-text-tertiary" />
-              )}
-              <span>
-                {copied ? "Copied ✓" : `Copy command to continue in ${label}`}
-                {!copied && (
-                  <span className="block text-[11px] text-theme-text-tertiary">
-                    Paste it wherever you run {label} — resumes this exact
-                    session.
-                  </span>
-                )}
-              </span>
-            </button>
-            {localTerminal && (
-              <button
-                onClick={() => {
-                  openInTerminal(command, "Diagnose");
-                  setOpen(false);
-                }}
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-theme-text-primary hover:bg-theme-hover"
-              >
-                <TerminalSquare className="h-4 w-4 shrink-0 text-theme-text-tertiary" />
-                Run in a Radar terminal
-              </button>
+        <div className="absolute right-0 top-full z-20 mt-1 w-64 rounded-lg border border-theme-border bg-theme-surface py-1 shadow-theme-lg">
+          <button
+            onClick={copy}
+            className="flex w-full items-start gap-2 px-3 py-1.5 text-left text-sm text-theme-text-primary hover:bg-theme-hover"
+          >
+            {copied ? (
+              <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
+            ) : (
+              <Copy className="mt-0.5 h-4 w-4 shrink-0 text-theme-text-tertiary" />
             )}
-          </div>
-        </>
+            <span>
+              {copied ? "Copied ✓" : `Copy command to continue in ${label}`}
+              {!copied && (
+                <span className="block text-[11px] text-theme-text-tertiary">
+                  Paste it wherever you run {label} — resumes this exact
+                  session.
+                </span>
+              )}
+            </span>
+          </button>
+          {localTerminal && (
+            <button
+              onClick={() => {
+                openInTerminal(command, "Radar Investigation");
+                setOpen(false);
+              }}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-theme-text-primary hover:bg-theme-hover"
+            >
+              <TerminalSquare className="h-4 w-4 shrink-0 text-theme-text-tertiary" />
+              Run in a Radar terminal
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
@@ -156,7 +177,7 @@ function InvestigationMenu({ run }: { run: RunSummary }) {
 //   run           nothing to take a resource from.
 //   running       a start is handed back the live run, so the click does nothing
 //                 and the button reads as broken.
-//   stale         the body already offers "Re-run on current cluster" WITH the
+//   stale         the body already offers "Investigate current cluster" WITH the
 //                 warning that the context changed; a bare + carries none of it,
 //                 and the resource may not exist in the context it'd run against.
 //   needsConsent  the consent card owns the surface until it's answered.
@@ -171,6 +192,90 @@ export function canStartNewInvestigation(
     run.status !== "running" &&
     run.status !== "stale" &&
     !needsConsent
+  );
+}
+
+// In a maximized workspace the recent-investigations master pane owns the
+// route back at wide sizes. Below that pane's container breakpoint it is
+// hidden, so the header breadcrumb takes over at the exact inverse breakpoint.
+// Keep these literals together: Tailwind must be able to see the complete
+// container-query classes at build time.
+export const MAXIMIZED_HISTORY_VISIBILITY_CLASS =
+  "hidden @min-[1500px]/diagnose-surface:block";
+export const MAXIMIZED_COMPACT_HISTORY_VISIBILITY_CLASS =
+  "@min-[1500px]/diagnose-surface:hidden";
+export const MAXIMIZED_HOME_DETAIL_VISIBILITY_CLASS =
+  "hidden @min-[1500px]/diagnose-surface:flex";
+export const MAXIMIZED_HOME_RUN_HEADER_VISIBILITY_CLASS =
+  "hidden @min-[1500px]/diagnose-surface:block";
+
+export function investigationBreadcrumbVisibilityClass(
+  maximized: boolean,
+): string {
+  return maximized ? MAXIMIZED_COMPACT_HISTORY_VISIBILITY_CLASS : "";
+}
+
+export function investigationHeaderPresentation(input: {
+  view: DiagnoseView;
+  maximized: boolean;
+  hasVisibleRunDetail: boolean;
+}): {
+  genericIdentityClass: string | null;
+  detailIdentityClass: string | null;
+  runActionsClass: string | null;
+} {
+  if (input.view !== "home") {
+    return {
+      genericIdentityClass: null,
+      detailIdentityClass: "",
+      runActionsClass: input.hasVisibleRunDetail ? "" : null,
+    };
+  }
+  const hasWideRetainedDetail = input.maximized && input.hasVisibleRunDetail;
+  return {
+    genericIdentityClass: hasWideRetainedDetail
+      ? MAXIMIZED_COMPACT_HISTORY_VISIBILITY_CLASS
+      : "",
+    detailIdentityClass: hasWideRetainedDetail
+      ? MAXIMIZED_HOME_RUN_HEADER_VISIBILITY_CLASS
+      : null,
+    runActionsClass: hasWideRetainedDetail
+      ? MAXIMIZED_HOME_DETAIL_VISIBILITY_CLASS
+      : null,
+  };
+}
+
+function DiagnoseHeaderIdentity({
+  className,
+  title,
+  configLine,
+  onOpenSettings,
+}: {
+  className: string;
+  title: string;
+  configLine: string;
+  onOpenSettings: (() => void) | null;
+}) {
+  return (
+    <div className={`min-w-0 ${className}`}>
+      <div className="truncate text-sm font-medium text-theme-text-primary">
+        {title}
+      </div>
+      <div className="flex items-center gap-1 text-xs text-theme-text-tertiary">
+        <span className="truncate">{configLine}</span>
+        {onOpenSettings && (
+          <Tooltip content="AI settings" position="bottom">
+            <button
+              onClick={onOpenSettings}
+              className="shrink-0 rounded p-0.5 text-theme-text-tertiary hover:text-theme-text-primary"
+              aria-label="AI settings"
+            >
+              <Settings2 className="h-3 w-3" />
+            </button>
+          </Tooltip>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -220,24 +325,31 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
     d.setupState === "needs-install" || d.setupState === "needs-restart";
 
   const activeRun = d.runs.find((r) => r.id === d.activeRunId) ?? null;
+  // Consent replaces the detail pane even if goHome retained an older run id.
+  // Header identity and actions must describe what is actually visible.
+  const visibleRunDetail = d.needsConsent ? null : activeRun;
   // A focused run shows the agent it actually ran with; Home reflects the current pick.
   const activeAgentLabel = activeRun?.agent
     ? agentLabelFor(activeRun.agent)
     : d.agentLabel;
-  // Header subtitle: the config a focused run actually used (it records agent /
-  // profile / model / effort), or the current defaults on Home. Codex shows mode
-  // + reasoning effort; model is shown only when overridden. Clicking opens Settings.
-  const configLine = buildConfigLine(
-    activeRun ?? {
-      agent: d.selectedAgent,
-      profile: d.hosted ? undefined : d.profile,
-      model: d.model,
-      effort: d.effort,
-    },
+  const defaultHeaderConfig = {
+    agent: d.selectedAgent,
+    profile: d.hosted ? undefined : d.profile,
+    model: d.model,
+    effort: d.effort,
+  };
+  const genericConfigLine = buildConfigLine(defaultHeaderConfig);
+  const focusedConfigLine = buildConfigLine(
+    visibleRunDetail ?? defaultHeaderConfig,
   );
-  const detailTitle = activeRun
-    ? `${activeRun.kind} ${activeRun.namespace ? `${activeRun.namespace}/` : ""}${activeRun.name}`
+  const focusedTitle = visibleRunDetail
+    ? formatInvestigationTarget(visibleRunDetail)
     : "AI investigations";
+  const headerPresentation = investigationHeaderPresentation({
+    view: d.view,
+    maximized,
+    hasVisibleRunDetail: !!visibleRunDetail,
+  });
 
   // Absolute within the body frame: maximized fills it; docked is a right slot.
   // topInset clears the header (the frame spans the full column incl. the header).
@@ -310,20 +422,37 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
     </div>
   ) : (
     <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-theme-text-tertiary">
-      Select an investigation, or open a resource and click Diagnose.
+      Select an investigation, or open a resource and click Investigate.
     </div>
   );
+  const compactHistory = (
+    <>
+      {setupPending && <AgentSetupNotice setupState={d.setupState} />}
+      {(!setupPending || d.runs.length > 0) && (
+        <RecentList
+          agentLabel={d.agentLabel}
+          runs={d.runs}
+          onSelect={d.openRun}
+          historyDegraded={d.historyDegraded}
+        />
+      )}
+    </>
+  );
 
-  const showBreadcrumb = !maximized && d.view !== "home";
-  // The maximized workspace always shows the recent-investigations list (there's
-  // room for it in full-wide) — it's the master pane of the master-detail layout.
+  // Docked detail always has a breadcrumb. Maximized detail uses it only while
+  // the master list is hidden (<1500px), then swaps back to the master list.
+  const showBreadcrumb = d.view !== "home";
+  const breadcrumbVisibilityClass =
+    investigationBreadcrumbVisibilityClass(maximized);
+  // Maximized mode mounts the recent-investigations master pane; its container
+  // breakpoint hides it when there is not enough room for master + detail.
   const showHistory = maximized;
 
   return (
     <div
       role="dialog"
       aria-label="AI investigations"
-      className="absolute z-40 flex flex-col border-l border-theme-border bg-theme-surface shadow-drawer"
+      className="@container/diagnose-surface absolute z-40 flex flex-col border-l border-theme-border bg-theme-surface shadow-drawer"
       style={{
         ...positionStyle,
         animation: "slide-in-from-right 0.22s cubic-bezier(0.32,0.72,0,1)",
@@ -345,57 +474,67 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
           {!showBreadcrumb && (
             <Sparkles className="h-4 w-4 shrink-0 text-accent" />
           )}
-          <div className="min-w-0">
+          {showBreadcrumb && maximized && (
+            <Sparkles className="hidden h-4 w-4 shrink-0 text-accent @min-[1500px]/diagnose-surface:block" />
+          )}
+          <div className="min-w-0 flex-1">
             {showBreadcrumb && (
               <button
                 onClick={d.goHome}
-                className="-ml-1 mb-0.5 flex items-center gap-0.5 rounded px-1 text-[11px] text-theme-text-tertiary hover:text-theme-text-primary"
+                className={`-ml-1 mb-0.5 flex items-center gap-0.5 rounded px-1 text-[11px] text-theme-text-tertiary hover:text-theme-text-primary ${breadcrumbVisibilityClass}`}
               >
                 <ChevronLeft className="h-3 w-3" />
                 Investigations
               </button>
             )}
-            <div className="truncate text-sm font-medium text-theme-text-primary">
-              {detailTitle}
-            </div>
-            <div className="flex items-center gap-1 text-xs text-theme-text-tertiary">
-              <span className="truncate">{configLine}</span>
-              {openSettings && (
-                <Tooltip content="AI settings" position="bottom">
-                  <button
-                    onClick={openSettings}
-                    className="shrink-0 rounded p-0.5 text-theme-text-tertiary hover:text-theme-text-primary"
-                    aria-label="AI settings"
-                  >
-                    <Settings2 className="h-3 w-3" />
-                  </button>
-                </Tooltip>
-              )}
-            </div>
+            {headerPresentation.genericIdentityClass !== null && (
+              <DiagnoseHeaderIdentity
+                className={headerPresentation.genericIdentityClass}
+                title="AI investigations"
+                configLine={genericConfigLine}
+                onOpenSettings={openSettings}
+              />
+            )}
+            {headerPresentation.detailIdentityClass !== null && (
+              <DiagnoseHeaderIdentity
+                className={headerPresentation.detailIdentityClass}
+                title={focusedTitle}
+                configLine={focusedConfigLine}
+                onOpenSettings={openSettings}
+              />
+            )}
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
           {activeRun &&
             canStartNewInvestigation(d.view, activeRun, d.needsConsent) && (
-            <Tooltip content="New investigation on this resource" position="bottom">
-              <button
-                onClick={() =>
-                  d.openInvestigation({
-                    kind: activeRun.kind,
-                    namespace: activeRun.namespace,
-                    name: activeRun.name,
-                    issueId: activeRun.issueId,
-                    fresh: true,
-                  })
-                }
-                className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
-                aria-label="New investigation on this resource"
+              <Tooltip
+                content="New investigation on this resource"
+                position="bottom"
               >
-                <Plus className="h-4 w-4" />
-              </button>
-            </Tooltip>
+                <button
+                  onClick={() =>
+                    d.openInvestigation({
+                      kind: activeRun.kind,
+                      group: activeRun.group,
+                      namespace: activeRun.namespace,
+                      name: activeRun.name,
+                      issueId: activeRun.issueId,
+                      fresh: true,
+                    })
+                  }
+                  className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
+                  aria-label="New investigation on this resource"
+                >
+                  <Plus className="h-4 w-4" />
+                </button>
+              </Tooltip>
+            )}
+          {visibleRunDetail && headerPresentation.runActionsClass !== null && (
+            <div className={headerPresentation.runActionsClass}>
+              <InvestigationMenu run={visibleRunDetail} />
+            </div>
           )}
-          {activeRun && <InvestigationMenu run={activeRun} />}
           <Tooltip content={maximized ? "Restore" : "Expand"} position="bottom">
             <button
               onClick={() => setMaximized((v) => !v)}
@@ -430,7 +569,7 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
         {showHistory && (!setupPending || d.runs.length > 0) && (
           <aside
             key="recent"
-            className="w-72 shrink-0 overflow-y-auto border-r border-theme-border px-3 py-3"
+            className={`${MAXIMIZED_HISTORY_VISIBILITY_CLASS} w-72 shrink-0 overflow-y-auto border-r border-theme-border px-3 py-3`}
           >
             <RecentList
               agentLabel={d.agentLabel}
@@ -441,21 +580,23 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
             />
           </aside>
         )}
-        {!maximized && d.view === "home" ? (
-          <div
-            key="main"
-            className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-3"
-          >
-            {setupPending && <AgentSetupNotice setupState={d.setupState} />}
-            {(!setupPending || d.runs.length > 0) && (
-              <RecentList
-                agentLabel={d.agentLabel}
-                runs={d.runs}
-                onSelect={d.openRun}
-                historyDegraded={d.historyDegraded}
-              />
+        {d.view === "home" ? (
+          <>
+            <div
+              key="history"
+              className={`flex-1 overflow-y-auto overflow-x-hidden px-4 py-3 ${maximized ? MAXIMIZED_COMPACT_HISTORY_VISIBILITY_CLASS : ""}`}
+            >
+              {compactHistory}
+            </div>
+            {maximized && (
+              <div
+                key="main"
+                className={`${MAXIMIZED_HOME_DETAIL_VISIBILITY_CLASS} min-h-0 min-w-0 flex-1 flex-col`}
+              >
+                {detail}
+              </div>
             )}
-          </div>
+          </>
         ) : (
           <div key="main" className="flex min-h-0 min-w-0 flex-1 flex-col">
             {detail}

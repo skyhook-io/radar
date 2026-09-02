@@ -1,15 +1,95 @@
 package server
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/ai"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/k8s"
 )
+
+func TestCanonicalDiagnoseTargetWithoutCache(t *testing.T) {
+	k8s.ResetResourceCache()
+	t.Cleanup(func() {
+		if err := k8s.InitTestResourceCache(testFakeClient); err != nil {
+			t.Fatalf("restore package fixture cache: %v", err)
+		}
+	})
+
+	tests := []struct {
+		name      string
+		kind      string
+		group     string
+		wantKind  string
+		wantGroup string
+	}{
+		{name: "plural built-in from resource view", kind: "deployments", wantKind: "Deployment", wantGroup: "apps"},
+		{name: "singular built-in from issue", kind: "Deployment", wantKind: "Deployment", wantGroup: "apps"},
+		{name: "built-in alias", kind: "svc", wantKind: "Service", wantGroup: ""},
+		{name: "mixed-case explicit built-in group", kind: "deployment", group: "Apps", wantKind: "Deployment", wantGroup: "apps"},
+		{name: "explicit colliding CRD group", kind: "Service", group: "Serving.Knative.Dev", wantKind: "Service", wantGroup: "serving.knative.dev"},
+		{name: "explicit custom workload", kind: "Rollout", group: "Argoproj.IO", wantKind: "Rollout", wantGroup: "argoproj.io"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			kind, group := canonicalDiagnoseTarget(t.Context(), tt.kind, tt.group, "prod", "checkout")
+			if kind != tt.wantKind || group != tt.wantGroup {
+				t.Fatalf("canonicalDiagnoseTarget(%q, %q) = (%q, %q), want (%q, %q)",
+					tt.kind, tt.group, kind, group, tt.wantKind, tt.wantGroup)
+			}
+		})
+	}
+}
+
+func TestHandleDiagnoseTurnRejectsApplyAndVerify(t *testing.T) {
+	m := ai.NewRunManager(nil, func() int { return 9280 }, "", func() string { return "fake-test" }, nil)
+	t.Cleanup(m.Shutdown)
+	s := &Server{aiRuns: m}
+	body := bytes.NewBufferString(`{"apply":true,"verify":true,"fix":"scale to 2"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/diagnose/runs/run-1/turns", body)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", "run-1")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	recorder := httptest.NewRecorder()
+
+	s.handleDiagnoseTurn(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "apply and verify cannot be requested together") {
+		t.Fatalf("response did not explain invalid modes: %s", recorder.Body.String())
+	}
+}
+
+func TestHandleDiagnoseTurnRejectsBlankVerification(t *testing.T) {
+	m := ai.NewRunManager(nil, func() int { return 9280 }, "", func() string { return "fake-test" }, nil)
+	t.Cleanup(m.Shutdown)
+	s := &Server{aiRuns: m}
+	body := bytes.NewBufferString(`{"question":"  ","verify":true}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/diagnose/runs/run-1/turns", body)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", "run-1")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	recorder := httptest.NewRecorder()
+
+	s.handleDiagnoseTurn(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "verification requires a question") {
+		t.Fatalf("response did not explain blank verification: %s", recorder.Body.String())
+	}
+}
 
 // TestListAgents_Eligible pins the eligibility signal that drives the UI's
 // "install an agent to enable this" nudge: true only when the deployment mode

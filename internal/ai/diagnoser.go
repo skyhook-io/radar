@@ -38,6 +38,7 @@ var ErrNoCLI = errors.New("no agent CLI available")
 // Request is one investigation target (or a follow-up turn).
 type Request struct {
 	Kind      string
+	Group     string
 	Namespace string
 	Name      string
 	// MCPPort is the port Radar's own MCP server listens on (localhost).
@@ -51,6 +52,10 @@ type Request struct {
 	// Question is the user's prompt for this turn. Empty on the first turn (we
 	// auto-generate the investigate prompt); set for follow-ups.
 	Question string
+	// Verify marks a follow-up that was explicitly started to re-check the
+	// resource after a change. It is replay metadata for the investigation UI;
+	// the question remains the prompt sent to the agent.
+	Verify bool
 	// Apply, when true, runs a REMEDIATION turn: the agent is allowed the Radar
 	// write tools and instructed to apply the fix it recommended. Gated entirely
 	// by the caller (an explicit user confirmation) — the read-only investigation
@@ -140,15 +145,32 @@ type Diagnosis struct {
 // "turn" marks the start of a new turn (carries Question/Apply) so a connecting
 // or reconnecting client can reconstruct turn boundaries from the event log.
 type StreamEvent struct {
-	Type     string     `json:"type"` // "turn"|"phase"|"step"|"thinking"|"done"|"error"|"closed"
-	Phase    string     `json:"phase,omitempty"`
-	Step     *StepInfo  `json:"step,omitempty"`
-	Token    string     `json:"token,omitempty"`
-	Diag     *Diagnosis `json:"diagnosis,omitempty"`
-	Error    string     `json:"error,omitempty"`
-	Question string     `json:"question,omitempty"` // on "turn"
-	Apply    bool       `json:"apply,omitempty"`    // on "turn"
+	Type         string               `json:"type"` // "turn"|"phase"|"step"|"thinking"|"done"|"error"|"closed"
+	Phase        string               `json:"phase,omitempty"`
+	Step         *StepInfo            `json:"step,omitempty"`
+	Token        string               `json:"token,omitempty"`
+	Diag         *Diagnosis           `json:"diagnosis,omitempty"`
+	Error        string               `json:"error,omitempty"`
+	Question     string               `json:"question,omitempty"`     // on "turn"
+	Apply        bool                 `json:"apply,omitempty"`        // on "turn"
+	Verify       bool                 `json:"verify,omitempty"`       // on "turn"
+	ApplyOutcome ApplyMutationOutcome `json:"applyOutcome,omitempty"` // on an apply turn's terminal event
+	// VerificationScheduled closes the UI handoff between an apply terminal
+	// event and its adjacent server-owned verification turn. It is durable so a
+	// reconnect never has to infer scheduling from outcome text.
+	VerificationScheduled bool `json:"verificationScheduled,omitempty"`
 }
+
+// ApplyMutationOutcome is Radar's evidence-backed view of a user-confirmed
+// mutation attempt. It comes from terminal Radar write-tool results, never from
+// the agent process exit code or its prose.
+type ApplyMutationOutcome string
+
+const (
+	ApplyMutationConfirmed ApplyMutationOutcome = "confirmed"
+	ApplyMutationFailed    ApplyMutationOutcome = "failed"
+	ApplyMutationUnknown   ApplyMutationOutcome = "unknown"
+)
 
 // StepInfo describes one tool invocation (running → done).
 type StepInfo struct {
@@ -158,6 +180,9 @@ type StepInfo struct {
 	Ms      *int64 `json:"ms,omitempty"`
 	Summary string `json:"summary,omitempty"` // input args (on running)
 	Result  string `json:"result,omitempty"`  // result text (on done), capped
+	// IsError records the agent host's authoritative tool-result state. nil means
+	// the host did not report a terminal state; false is a confirmed success.
+	IsError *bool `json:"isError,omitempty"`
 	// Truncated marks that Result was capped — so the UI tells the user the
 	// payload (and anything they copy) is partial, not the complete tool output.
 	Truncated bool `json:"truncated,omitempty"`
@@ -180,7 +205,7 @@ var radarReadTools = []string{
 // read-only investigation path.
 var radarWriteTools = []string{
 	"apply_resource", "patch_resource", "manage_workload",
-	"manage_cronjob", "manage_node", "manage_gitops",
+	"manage_rollout", "manage_cronjob", "manage_node", "manage_gitops",
 }
 
 const applyGuidance = "Use the Radar write tools to make the minimal patch; do not do anything beyond " +
@@ -198,13 +223,25 @@ func applyPrompt(req Request) string {
 	if ns == "" {
 		ns = "(cluster-scoped)"
 	}
-	target := fmt.Sprintf("%s %s/%s", req.Kind, ns, req.Name)
+	kind := req.Kind
+	if req.Group != "" {
+		kind = req.Kind + "." + req.Group
+	}
+	target := fmt.Sprintf("%s %s/%s", kind, ns, req.Name)
+	identityGuidance := " The immutable target API group is the Kubernetes core API group. " +
+		"When calling patch_resource, omit group (or pass an empty group); if using apply_resource, the manifest apiVersion must be v1. " +
+		"Never mutate a same-named resource from another API group."
+	if req.Group != "" {
+		identityGuidance = fmt.Sprintf(" The immutable target API group is %q. Pass group=%q to patch_resource and all target reads; "+
+			"if using apply_resource, the manifest apiVersion must belong to %q. Never mutate a same-named resource from another API group.",
+			req.Group, req.Group, req.Group)
+	}
 	if fix := strings.TrimSpace(req.Fix); fix != "" {
 		return "Apply EXACTLY this fix that the user just confirmed for " + target + " — and ONLY this " +
-			"change, do not substitute a different one:\n\n" + fix + "\n\n" + applyGuidance
+			"change, do not substitute a different one:\n\n" + fix + "\n\n" + identityGuidance + " " + applyGuidance
 	}
 	return "Apply the single most targeted, deterministic remediation for " + target + " — and ONLY " +
-		"that change. " + applyGuidance
+		"that change." + identityGuidance + " " + applyGuidance
 }
 
 const systemPrompt = "You are a senior Kubernetes SRE assessing a Kubernetes resource that may or may not be unhealthy for a " +
@@ -468,8 +505,21 @@ func taskPrompt(req Request) string {
 	if ns == "" {
 		ns = "(cluster-scoped)"
 	}
-	target := fmt.Sprintf("%s %s/%s", req.Kind, ns, req.Name)
-	return taskOpening(target, req.Health) + " " + diagnosisJSONInstruction
+	kind := req.Kind
+	if req.Group != "" {
+		kind = req.Kind + "." + req.Group
+	}
+	target := fmt.Sprintf("%s %s/%s", kind, ns, req.Name)
+	toolGuidance := ""
+	switch strings.ToLower(strings.TrimSpace(req.Kind)) {
+	case "pod", "pods", "deployment", "deployments", "statefulset", "statefulsets",
+		"daemonset", "daemonsets", "rollout", "rollouts":
+		toolGuidance = " Start with Radar's `diagnose` tool for this workload, then use targeted Radar tools only where you need to deepen or verify its evidence."
+	}
+	if req.Group != "" {
+		toolGuidance += fmt.Sprintf(" Pass `group=%s` to every Radar tool that accepts an API group so same-kind resources cannot be confused.", req.Group)
+	}
+	return taskOpening(target, req.Health) + toolGuidance + " " + diagnosisJSONInstruction
 }
 
 const diagnosisJSONInstruction = "Finish your reply with a fenced ```json block: " +
@@ -735,6 +785,7 @@ type cliEvent struct {
 			Input     json.RawMessage `json:"input"`
 			ToolUseID string          `json:"tool_use_id"`
 			Content   json.RawMessage `json:"content"`
+			IsError   bool            `json:"is_error"`
 		} `json:"content"`
 	} `json:"message"`
 	Result       string   `json:"result"`
@@ -822,8 +873,10 @@ func parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
 					ms = &v
 				}
 				res, trunc := capPayload(claudeResultText(b.Content))
+				isError := b.IsError
 				onEvent(StreamEvent{Type: "step", Step: &StepInfo{
-					ID: b.ToolUseID, Status: "done", Ms: ms, Result: res, Truncated: trunc,
+					ID: b.ToolUseID, Status: "done", Ms: ms, Result: res,
+					IsError: &isError, Truncated: trunc,
 				}})
 			}
 		case "result":
@@ -853,10 +906,12 @@ func parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
 	return d
 }
 
-// maxToolPayload caps a tool's input/result text held in the (in-memory) event
-// log. 32 KiB comfortably holds any single resource; worst case across retained
-// runs is a few MB locally. Larger payloads are truncated + flagged.
-const maxToolPayload = 32 << 10
+// maxToolPayload caps a tool's input/result text held in the event log. The MCP
+// diagnose producer can legitimately return a 32 KiB aggregate log bundle plus
+// a guarded resource, context, events, and change metadata in one JSON envelope.
+// Keep enough headroom for that bounded response while still preventing an
+// unbounded tool result from entering retained history.
+const maxToolPayload = 96 << 10
 
 // capPayload truncates s to maxToolPayload runes, reporting whether it cut.
 func capPayload(s string) (string, bool) {

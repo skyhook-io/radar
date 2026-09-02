@@ -161,7 +161,7 @@ func IssueChangesFetchLimit(reason string) int {
 var (
 	configKinds = []string{"ConfigMap"}
 	specKinds   = []string{
-		"Deployment", "StatefulSet", "DaemonSet", "Service", "Ingress",
+		"Deployment", "StatefulSet", "DaemonSet", "Rollout", "Service", "Ingress",
 		"HorizontalPodAutoscaler", "Application", "Kustomization", "HelmRelease",
 		"GitRepository", "OCIRepository", "HelmRepository",
 		"ResourceQuota", "LimitRange",
@@ -258,7 +258,7 @@ func recent(ctx context.Context, q Query) ([]issuesapi.RecentChange, bool, bool,
 // changes the query never saw. Callers asserting "no recent changes" must
 // treat saturation as unknown, never as evidence of absence.
 func RecentForResource(ctx context.Context, kind, namespace, name string, since time.Duration, limit, fieldLimit int) ([]issuesapi.RecentChange, bool, error) {
-	changes, _, saturated, err := recent(ctx, Query{
+	changes, _, fetchSaturated, err := recent(ctx, Query{
 		Namespaces: []string{namespace},
 		Kinds:      []string{canonicalKind(kind)},
 		Name:       name,
@@ -266,30 +266,79 @@ func RecentForResource(ctx context.Context, kind, namespace, name string, since 
 		Limit:      limit,
 		FieldLimit: fieldLimit,
 	})
-	return changes, saturated, err
+	return changes, fetchSaturated, err
 }
 
 func RecentForWorkloadAndConfigMaps(ctx context.Context, obj any, kind, namespace, name string, since time.Duration, limit, fieldLimit int) ([]issuesapi.RecentChange, bool, error) {
-	var all []issuesapi.RecentChange
-	saturated := false
-	if isWorkloadKind(kind) {
-		changes, sat, err := RecentForResource(ctx, kind, namespace, name, since, limit, fieldLimit)
-		if err != nil {
-			return nil, false, err
+	result, err := RecentForWorkloadAndConfigMapsDetailed(ctx, obj, kind, namespace, name, since, limit, fieldLimit)
+	return result.Changes, result.FetchSaturated, err
+}
+
+// RecentForWorkloadAndConfigMapsDetailed preserves the distinct output-cap
+// and candidate-fetch saturation signals needed by consumers that display
+// source coverage. The historical wrapper above intentionally exposes only
+// fetch saturation because issue-correlation uses that bool for negative-claim
+// gating.
+func RecentForWorkloadAndConfigMapsDetailed(ctx context.Context, obj any, kind, namespace, name string, since time.Duration, limit, fieldLimit int) (RecentResult, error) {
+	result, _, err := RecentForWorkloadAndConfigMapsAuthorizedDetailed(
+		ctx, obj, kind, namespace, name, since, limit, fieldLimit, nil,
+	)
+	return result, err
+}
+
+// RecentForWorkloadAndConfigMapsAuthorizedDetailed is the authorization-aware
+// form used by cached-data surfaces. includeSource is evaluated for every
+// resource whose timeline would be queried, before the query runs. A false
+// result skips that source and makes coverageLimited true even when the source
+// has no matching rows; callers can therefore avoid both leaking hidden-row
+// counts and presenting a filtered empty result as complete coverage.
+//
+// A nil includeSource preserves the historical unfiltered behavior.
+func RecentForWorkloadAndConfigMapsAuthorizedDetailed(
+	ctx context.Context,
+	obj any,
+	kind, namespace, name string,
+	since time.Duration,
+	limit, fieldLimit int,
+	includeSource func(kind, name string) bool,
+) (result RecentResult, coverageLimited bool, err error) {
+	fetch := func(resourceKind, resourceName string) error {
+		canonicalResourceKind := canonicalKind(resourceKind)
+		if includeSource != nil && !includeSource(canonicalResourceKind, resourceName) {
+			coverageLimited = true
+			return nil
 		}
-		saturated = saturated || sat
-		all = append(all, changes...)
+		resourceResult, err := Recent(ctx, Query{
+			Namespaces: []string{namespace},
+			Kinds:      []string{canonicalResourceKind},
+			Name:       resourceName,
+			Since:      since,
+			Limit:      limit,
+			FieldLimit: fieldLimit,
+		})
+		if err != nil {
+			return err
+		}
+		result.Changes = append(result.Changes, resourceResult.Changes...)
+		result.OutputCapped = result.OutputCapped || resourceResult.OutputCapped
+		result.FetchSaturated = result.FetchSaturated || resourceResult.FetchSaturated
+		return nil
+	}
+
+	if isWorkloadKind(kind) {
+		if err := fetch(kind, name); err != nil {
+			return RecentResult{}, coverageLimited, err
+		}
 	}
 	for _, cm := range DirectConfigMapNames(obj) {
-		changes, sat, err := RecentForResource(ctx, "ConfigMap", namespace, cm, since, limit, fieldLimit)
-		if err != nil {
-			return nil, false, err
+		if err := fetch("ConfigMap", cm); err != nil {
+			return RecentResult{}, coverageLimited, err
 		}
-		saturated = saturated || sat
-		all = append(all, changes...)
 	}
-	RankAndCap(&all, limit)
-	return all, saturated, nil
+	preCapCount := len(result.Changes)
+	RankAndCap(&result.Changes, limit)
+	result.OutputCapped = result.OutputCapped || len(result.Changes) < preCapCount
+	return result, coverageLimited, nil
 }
 
 func ShouldAttachIssueChanges(issues []issuesapi.Issue) bool {
@@ -426,16 +475,16 @@ const lifecycleCandidateLimit = 50
 
 // queryLifecycleCandidates fetches add/delete events for the given kinds in a
 // query of their own, immune to crowding by update events.
-// queryLifecycleCandidates returns group-filtered events plus the RAW
-// pre-filter count — saturation must key on how many events the bounded
-// query consumed, not how many survived filtering, or mismatched-group
-// events crowding the window would turn "unknown" into a false "no
-// changes".
+// queryLifecycleCandidates returns group-filtered events plus the bounded
+// query's count. When all kinds share one known group, the store applies that
+// group before its limit; heterogeneous queries retain the row-level guard.
 func queryLifecycleCandidates(ctx context.Context, store timeline.EventStore, q Query, kinds []string) ([]timeline.TimelineEvent, int, error) {
+	queryKinds := compactKinds(kinds)
 	opts := timeline.QueryOptions{
 		Namespaces:       q.Namespaces,
-		Kinds:            compactKinds(kinds),
+		Kinds:            queryKinds,
 		Names:            compactNames(q.Name),
+		APIGroups:        commonTrackedAPIGroups(queryKinds),
 		Since:            time.Now().Add(-q.Since),
 		Sources:          []timeline.EventSource{timeline.SourceInformer},
 		EventTypes:       []timeline.EventType{timeline.EventTypeAdd, timeline.EventTypeDelete},
@@ -448,13 +497,15 @@ func queryLifecycleCandidates(ctx context.Context, store timeline.EventStore, q 
 	return filterTrackedGroupEvents(events), len(events), err
 }
 
-// queryCandidates returns group-filtered events plus the RAW pre-filter
-// count (see queryLifecycleCandidates for why saturation needs it).
+// queryCandidates returns group-filtered events plus the bounded query's
+// count (see queryLifecycleCandidates for group-filter placement).
 func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, kinds []string, limit int) ([]timeline.TimelineEvent, int, error) {
+	queryKinds := compactKinds(kinds)
 	opts := timeline.QueryOptions{
 		Namespaces: q.Namespaces,
-		Kinds:      compactKinds(kinds),
+		Kinds:      queryKinds,
 		Names:      compactNames(q.Name),
+		APIGroups:  commonTrackedAPIGroups(queryKinds),
 		Since:      time.Now().Add(-q.Since),
 		Sources:    []timeline.EventSource{timeline.SourceInformer},
 		// Changes are root-cause evidence for the CURRENT cluster — the
@@ -467,6 +518,31 @@ func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, ki
 	}
 	events, err := store.Query(ctx, opts)
 	return filterTrackedGroupEvents(events), len(events), err
+}
+
+// commonTrackedAPIGroups returns a store-level filter only when every queried
+// kind is tracked in the same API group. A flat group allow-list is unsafe for
+// heterogeneous kinds because it cannot express the kind/group pairing (for
+// example, core Service alongside apps Deployment).
+func commonTrackedAPIGroups(kinds []string) []string {
+	if len(kinds) == 0 {
+		return nil
+	}
+	var common string
+	for i, kind := range kinds {
+		group, ok := trackedKindGroups[canonicalKind(kind)]
+		if !ok {
+			return nil
+		}
+		if i == 0 {
+			common = group
+			continue
+		}
+		if group != common {
+			return nil
+		}
+	}
+	return []string{common}
 }
 
 // filterTrackedGroupEvents drops candidate events recorded from a different
@@ -700,6 +776,7 @@ func TrackedKind(kind string) bool {
 var trackedKindGroups = map[string]string{
 	"ConfigMap": "", "Service": "", "ResourceQuota": "", "LimitRange": "",
 	"Deployment": "apps", "StatefulSet": "apps", "DaemonSet": "apps",
+	"Rollout":                        "argoproj.io",
 	"Ingress":                        "networking.k8s.io",
 	"HorizontalPodAutoscaler":        "autoscaling",
 	"Application":                    "argoproj.io",
@@ -1137,7 +1214,7 @@ func isSpecKind(kind string) bool {
 
 func isWorkloadKind(kind string) bool {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
-	case "deployment", "deployments", "statefulset", "statefulsets", "daemonset", "daemonsets", "pod", "pods":
+	case "deployment", "deployments", "statefulset", "statefulsets", "daemonset", "daemonsets", "rollout", "rollouts", "pod", "pods":
 		return true
 	default:
 		return false
@@ -1163,6 +1240,8 @@ func canonicalKind(kind string) string {
 		return "StatefulSet"
 	case "daemonset", "daemonsets":
 		return "DaemonSet"
+	case "rollout", "rollouts":
+		return "Rollout"
 	case "svc", "service", "services":
 		return "Service"
 	case "ingress", "ingresses":

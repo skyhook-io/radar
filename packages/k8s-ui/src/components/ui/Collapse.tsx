@@ -37,7 +37,10 @@ export function Collapse({
   const render = !mountLazily || hasOpened
   return (
     <div
-      className={clsx('grid transition-[grid-template-rows] duration-200 ease-out', className)}
+      className={clsx(
+        'grid transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none',
+        className,
+      )}
       style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
     >
       <div className="overflow-hidden" inert={!open || undefined}>{render ? children : null}</div>
@@ -53,7 +56,11 @@ export function CollapseChevron({ open, className }: { open: boolean; className?
   return (
     <ChevronRight
       aria-hidden="true"
-      className={clsx('shrink-0 text-theme-text-tertiary transition-transform duration-200', open && 'rotate-90', className)}
+      className={clsx(
+        'shrink-0 text-theme-text-tertiary transition-transform duration-200 motion-reduce:transition-none',
+        open && 'rotate-90',
+        className,
+      )}
     />
   )
 }

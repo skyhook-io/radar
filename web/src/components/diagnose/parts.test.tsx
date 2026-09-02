@@ -1,9 +1,58 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { AgentControls, ConsentCard } from "./parts";
-import type { AgentInfo, ExecutionProfile } from "../../api/diagnose";
+import {
+  AgentControls,
+  ConsentCard,
+  ResultCard,
+  TurnView,
+  appendThinking,
+  type Turn,
+} from "./parts";
+import type {
+  AgentInfo,
+  Diagnosis,
+  ExecutionProfile,
+} from "../../api/diagnose";
 
 const noop = vi.fn();
+
+describe("appendThinking", () => {
+  it("separates adjacent bold reasoning headings without changing ordinary chunks", () => {
+    const first = appendThinking([], "**Inspecting workload**", false);
+    const headings = appendThinking(first, "**Reading crash logs**", false);
+    const chunks = appendThinking(headings, " and events", false);
+
+    expect(headings).toEqual([
+      {
+        kind: "thinking",
+        text: "**Inspecting workload**",
+        animate: false,
+      },
+      {
+        kind: "thinking",
+        text: "**Reading crash logs**",
+        animate: false,
+      },
+    ]);
+    expect(chunks[1]).toMatchObject({
+      text: "**Reading crash logs** and events",
+    });
+
+    expect(
+      appendThinking([], "**Checking logs**\n**Checking events**", false),
+    ).toMatchObject([
+      { kind: "thinking", text: "**Checking logs**" },
+      { kind: "thinking", text: "**Checking events**" },
+    ]);
+  });
+
+  it("deduplicates an exact repeated reasoning beat", () => {
+    const first = appendThinking([], "**Inspecting workload**", false);
+    expect(appendThinking(first, "**Inspecting workload**", false)).toEqual(
+      first,
+    );
+  });
+});
 
 function renderAgent(
   agent: string,
@@ -57,7 +106,9 @@ describe("AgentControls execution profile explanation", () => {
       "safeguarded",
     );
     expect(html).toContain("built-in tools are disabled");
-    expect(html).toContain("settings, hooks, and CLAUDE.md instructions still apply");
+    expect(html).toContain(
+      "settings, hooks, and CLAUDE.md instructions still apply",
+    );
     expect(html).toContain("Your claude setup");
     expect(html).not.toContain("other agent configuration is excluded");
   });
@@ -169,4 +220,357 @@ describe("ConsentCard error", () => {
     const html = renderToStaticMarkup(<ConsentCard {...base} />);
     expect(html).not.toContain('role="alert"');
   });
+});
+
+describe("ResultCard conclusion states", () => {
+  const diagnosis = (patch: Partial<Diagnosis>): Diagnosis => ({
+    rootCause: "",
+    report: "",
+    remediation: [],
+    ...patch,
+  });
+
+  const conclusionCases: Array<[Diagnosis, string]> = [
+    [diagnosis({ rootCause: "The image does not exist." }), "Root cause"],
+    [
+      diagnosis({ healthy: true, report: "The workload is ready." }),
+      "No active problems found",
+    ],
+    [diagnosis({ inconclusive: true }), "Couldn&#x27;t determine"],
+  ];
+
+  it.each(conclusionCases)(
+    "preserves the outcome-specific heading %#",
+    (value, heading) => {
+      const html = renderToStaticMarkup(<ResultCard diagnosis={value} />);
+      expect(html).toContain(heading);
+      expect(html).not.toContain("Verdict");
+    },
+  );
+
+  it("qualifies a healthy assessment when structured evidence coverage is absent", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={diagnosis({
+          healthy: true,
+          report: "The workload appears ready.",
+        })}
+        coverageLimited
+      />,
+    );
+
+    expect(html).toContain("No active problems found in completed checks");
+    expect(html).toContain("Structured evidence is incomplete or unavailable");
+    expect(html).not.toContain(">No active problems found</div>");
+  });
+
+  it("does not overstate the rank of evidence that conflicts with an all-clear", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={diagnosis({
+          healthy: true,
+          report: "The workload appears ready.",
+        })}
+        evidenceConflict
+      />,
+    );
+
+    expect(html).toContain("Assessment conflicts with captured evidence");
+    expect(html).toContain("Radar also captured evidence of an active problem");
+    expect(html).not.toContain("Key evidence");
+    expect(html).toContain("border-amber-500/40");
+    expect(html).not.toContain("border-emerald-500/30");
+  });
+
+  it("keeps a follow-up framed as an answer rather than a new conclusion", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={diagnosis({ report: "The restart count is unchanged." })}
+        followup
+      />,
+    );
+    expect(html).toContain("Answer");
+    expect(html).not.toContain("Root cause");
+    expect(html).not.toContain("Conclusion");
+  });
+
+  it.each([
+    diagnosis({ healthy: true, report: "It is healthy right now." }),
+    diagnosis({
+      inconclusive: true,
+      report: "I cannot tell from the available checks.",
+    }),
+  ])("keeps health-flagged ordinary follow-ups conversational", (value) => {
+    const html = renderToStaticMarkup(
+      <ResultCard diagnosis={value} followup />,
+    );
+
+    expect(html).toContain("Answer");
+    expect(html).not.toContain("No active problems found");
+    expect(html).not.toContain("Couldn&#x27;t determine");
+  });
+
+  it("can place the conclusion before evidence and actions after it", () => {
+    const value = diagnosis({
+      rootCause: "The image does not exist.",
+      remediation: ["Push the image, then restart the rollout."],
+      recommendedIndex: 1,
+    });
+    const conclusion = renderToStaticMarkup(
+      <ResultCard diagnosis={value} section="conclusion" />,
+    );
+    const actions = renderToStaticMarkup(
+      <ResultCard diagnosis={value} section="actions" />,
+    );
+
+    expect(conclusion).toContain("Root cause");
+    expect(conclusion).not.toContain("Remediation");
+    expect(actions).toContain("Remediation");
+    expect(actions).not.toContain("Root cause");
+  });
+
+  it("does not stagger remediation rows after the result card arrives", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={diagnosis({
+          rootCause: "The image does not exist.",
+          remediation: ["Push the image.", "Restart the rollout."],
+          recommendedIndex: 1,
+        })}
+      />,
+    );
+
+    expect(html).not.toContain("animation-delay");
+  });
+
+  it("keeps only the recommended action in the first Findings scan", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={diagnosis({
+          rootCause: "The image does not exist.",
+          remediation: [
+            "Inspect the registry.",
+            "Push the missing image.",
+            "Restart the rollout.",
+          ],
+          recommendedIndex: 2,
+        })}
+        section="actions"
+        compactActions
+      />,
+    );
+
+    expect(html).toContain("Push the missing image.");
+    expect(html).not.toContain("Inspect the registry.");
+    expect(html).not.toContain("Restart the rollout.");
+    expect(html).toContain("Show 2 more steps");
+  });
+});
+
+describe("TurnView tool outcome truth", () => {
+  function turn(isError: boolean | undefined): Turn {
+    return {
+      timeline: [
+        {
+          kind: "tool",
+          id: "tool-1",
+          tool: "diagnose",
+          status: "done",
+          isError,
+        },
+      ],
+      diagnosis: null,
+      error: null,
+      status: "running",
+    };
+  }
+
+  it("uses success color only for producer-confirmed success", () => {
+    const success = renderToStaticMarkup(<TurnView turn={turn(false)} />);
+    const unknown = renderToStaticMarkup(<TurnView turn={turn(undefined)} />);
+
+    expect(success).toContain("text-emerald-400");
+    expect(unknown).toContain("text-theme-text-tertiary");
+    expect(unknown).not.toContain("text-emerald-400");
+    expect(unknown).toContain("lucide-circle-question-mark");
+    expect(unknown).not.toContain("lucide-circle-check-big");
+  });
+
+  it("renders a producer-confirmed failure as an error", () => {
+    const html = renderToStaticMarkup(<TurnView turn={turn(true)} />);
+    expect(html).toContain("Tool failed");
+    expect(html).toContain("text-red-400");
+  });
+
+  it("does not expose an inert button when a tool has no detail", () => {
+    const html = renderToStaticMarkup(<TurnView turn={turn(false)} />);
+    expect(html).not.toContain("<button");
+  });
+
+  it("visibly marks a tool row reached from Findings programmatically", () => {
+    const html = renderToStaticMarkup(
+      <TurnView
+        turn={turn(false)}
+        turnIndex={0}
+        evidenceStepIds={new Set(["tool-1"])}
+        onViewEvidence={noop}
+      />,
+    );
+
+    expect(html).toContain("focus:ring-2");
+    expect(html).not.toContain("focus-visible:ring-2");
+  });
+
+  it("connects a detail disclosure to the region it controls", () => {
+    const detailed = turn(false);
+    const item = detailed.timeline[0];
+    if (item.kind === "tool") item.summary = '{"ready":true}';
+    const html = renderToStaticMarkup(<TurnView turn={detailed} />);
+    const controlled = html.match(/aria-controls="([^"]+)"/)?.[1];
+
+    expect(controlled).toBeTruthy();
+    expect(html).toContain(`id="${controlled}"`);
+  });
+
+  it("renders replayed activity and its conclusion without arrival motion", () => {
+    const replayed = turn(false);
+    replayed.status = "done";
+    replayed.timeline[0].animate = false;
+    replayed.diagnosis = {
+      healthy: true,
+      rootCause: "",
+      report: "The workload is ready.",
+      remediation: [],
+    };
+    replayed.animateResult = false;
+
+    const html = renderToStaticMarkup(<TurnView turn={replayed} />);
+    expect(html).not.toContain("animate-transcript-enter");
+    expect(html).not.toContain("animate-result-in");
+  });
+
+  it("frames automatic verification as system activity, not user chat", () => {
+    const verification = turn(false);
+    verification.question = "internal verification prompt";
+    verification.verify = true;
+
+    const html = renderToStaticMarkup(<TurnView turn={verification} />);
+    expect(html).toContain("Automatic verification");
+    expect(html).toContain("Re-checking after apply");
+    expect(html).not.toContain("internal verification prompt");
+  });
+
+  it("renders an unknown apply prominently and offers current-state verification", () => {
+    const apply = turn(false);
+    apply.apply = true;
+    apply.status = "error";
+    apply.applyOutcome = "unknown";
+    apply.error =
+      "The apply stopped before Radar could confirm whether the change completed.";
+
+    const html = renderToStaticMarkup(
+      <TurnView turn={apply} onCheckStatus={noop} />,
+    );
+    expect(html).toContain("Outcome unknown");
+    expect(html).toContain("border-amber-500/40");
+    expect(html).toContain(
+      "At this point, Radar could not safely allow another apply without",
+    );
+    expect(html).toContain("Check current status");
+    expect(html).toContain("could confirm whether the change completed");
+    expect(html).not.toContain(">Applied</div>");
+  });
+
+  it("reserves green Applied for a producer-confirmed mutation", () => {
+    const apply = turn(undefined);
+    apply.apply = true;
+    apply.status = "done";
+    apply.applyOutcome = "confirmed";
+    apply.diagnosis = {
+      rootCause: "",
+      report: "Deployment updated.",
+      remediation: [],
+    };
+
+    const html = renderToStaticMarkup(<TurnView turn={apply} />);
+    expect(html).toContain("Applied");
+    expect(html).toContain("border-emerald-500/30");
+    expect(html).toContain("Mutation confirmed by a Radar write-tool result");
+    expect(html).not.toContain("Outcome unknown");
+    expect(html).not.toContain("Not applied");
+  });
+
+  it("renders an authoritative apply failure as Not applied and never green", () => {
+    const apply = turn(undefined);
+    apply.apply = true;
+    apply.status = "error";
+    apply.applyOutcome = "failed";
+    apply.error = "The write tool rejected the change.";
+
+    const html = renderToStaticMarkup(
+      <TurnView turn={apply} onCheckStatus={noop} />,
+    );
+    expect(html).toContain("Not applied");
+    expect(html).toContain("border-red-500/30");
+    expect(html).toContain("The write tool rejected the change.");
+    expect(html).not.toContain("border-emerald-500/30");
+    expect(html).not.toContain("Check current status");
+  });
+
+  it("keeps confirmed mutation truth when the agent report is incomplete", () => {
+    const apply = turn(undefined);
+    apply.apply = true;
+    apply.status = "error";
+    apply.applyOutcome = "confirmed";
+    apply.error =
+      "A Radar write tool confirmed the mutation, but the agent ended before completing its report.";
+
+    const html = renderToStaticMarkup(<TurnView turn={apply} />);
+    expect(html).toContain("Applied");
+    expect(html).toContain("border-emerald-500/30");
+    expect(html).toContain("agent report incomplete");
+    expect(html).toContain("confirmed the mutation");
+    expect(html).not.toContain("Not applied");
+  });
+
+  it("fails closed when an apply terminal event has no outcome metadata", () => {
+    const apply = turn(undefined);
+    apply.apply = true;
+    apply.status = "done";
+    apply.diagnosis = {
+      rootCause: "",
+      report: "The agent says the deployment was updated.",
+      remediation: [],
+    };
+
+    const html = renderToStaticMarkup(<TurnView turn={apply} />);
+    expect(html).toContain("Outcome unknown");
+    expect(html).toContain("border-amber-500/40");
+    expect(html).not.toContain("border-emerald-500/30");
+  });
+
+  it.each([
+    { healthy: true, report: "It is healthy right now." },
+    {
+      inconclusive: true,
+      report: "I cannot tell from the available checks.",
+    },
+  ])(
+    "does not promote a health-flagged question into a conclusion",
+    (patch) => {
+      const followup = turn(false);
+      followup.question = "Is it healthy now?";
+      followup.status = "done";
+      followup.diagnosis = {
+        rootCause: "",
+        remediation: [],
+        ...patch,
+      };
+
+      const html = renderToStaticMarkup(<TurnView turn={followup} />);
+      expect(html).toContain("Answer");
+      expect(html).not.toContain("No active problems found");
+      expect(html).not.toContain("Couldn&#x27;t determine");
+    },
+  );
 });

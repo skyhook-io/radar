@@ -22,6 +22,7 @@ func TestCodexParseStream_FormatPin(t *testing.T) {
 	}, "\n")
 
 	var running, done bool
+	var doneIsError *bool
 	var thinking, doneResult, runningSummary string
 	agent := &codexAgent{bin: "codex"}
 	diag := agent.parseStream(strings.NewReader(stream), func(ev StreamEvent) {
@@ -42,6 +43,7 @@ func TestCodexParseStream_FormatPin(t *testing.T) {
 			case "done":
 				done = true
 				doneResult = ev.Step.Result
+				doneIsError = ev.Step.IsError
 			}
 		}
 	})
@@ -58,11 +60,46 @@ func TestCodexParseStream_FormatPin(t *testing.T) {
 	if !strings.Contains(doneResult, "crashloop detail") {
 		t.Errorf("expected tool result preview on done step, got %q", doneResult)
 	}
+	if doneIsError == nil || *doneIsError {
+		t.Errorf("completed Codex tool result should be confirmed success, got %v", doneIsError)
+	}
 	if diag.RootCause != "bad tag" {
 		t.Errorf("root cause not parsed from agent_message: %q", diag.RootCause)
 	}
 	if diag.SessionID != "019eef06-e99b-70f1-a25f-aba70f3ea57e" {
 		t.Errorf("session id (thread_id) not captured: %q", diag.SessionID)
+	}
+}
+
+func TestCodexToolResultErrorState(t *testing.T) {
+	stream := strings.Join([]string{
+		`{"type":"item.completed","item":{"id":"ok","type":"mcp_tool_call","tool":"get_resource","status":"completed","result":{"content":[{"type":"text","text":"ready"}]}}}`,
+		`{"type":"item.completed","item":{"id":"bad","type":"mcp_tool_call","tool":"get_resource","status":"failed","error":{"message":"permission denied"}}}`,
+		`{"type":"item.completed","item":{"id":"unknown","type":"mcp_tool_call","tool":"get_resource","status":"in_progress"}}`,
+	}, "\n")
+
+	type observed struct {
+		isError *bool
+		result  string
+	}
+	got := map[string]observed{}
+	agent := &codexAgent{bin: "codex"}
+	agent.parseStream(strings.NewReader(stream), func(ev StreamEvent) {
+		if ev.Step != nil {
+			got[ev.Step.ID] = observed{isError: ev.Step.IsError, result: ev.Step.Result}
+		}
+	})
+	if got["ok"].isError == nil || *got["ok"].isError {
+		t.Errorf("completed status = %v, want confirmed false", got["ok"].isError)
+	}
+	if got["bad"].isError == nil || !*got["bad"].isError {
+		t.Errorf("failed status = %v, want confirmed true", got["bad"].isError)
+	}
+	if got["bad"].result != "permission denied" {
+		t.Errorf("failed result = %q, want the producer's error message", got["bad"].result)
+	}
+	if got["unknown"].isError != nil {
+		t.Errorf("non-terminal status = %v, want unknown", got["unknown"].isError)
 	}
 }
 

@@ -155,7 +155,7 @@ type Server struct {
 	yamlSchemaCacheBytes  int
 	yamlSchemaFetchGroup  singleflight.Group
 
-	// aiDiagnoser drives a local agent CLI for "Diagnose with AI" (nil when no
+	// aiDiagnoser drives a local agent CLI for AI investigations (nil when no
 	// CLI is on PATH — the endpoints then 501). Resolved once at startup.
 	aiDiagnoser *ai.Diagnoser
 	// aiRuns owns investigations as durable server-side jobs (survive panel close
@@ -225,14 +225,14 @@ func New(cfg Config) *Server {
 	s.cloudInstall = newCloudInstallManager(cfg.CloudConnect)
 	s.cloudInstall.sharedListener = s.sharedListener
 
-	// Resolve a local agent CLI for AI diagnosis (keyless, on the user's own
+	// Resolve a local agent CLI for AI investigations (keyless, on the user's own
 	// subscription). nil when none is found — the feature stays disabled.
 	//
 	// Gated to no-auth (local/standalone) Radar: the engine drives the CLI
 	// against this server's OWN localhost /mcp with no credentials, which only
 	// works when /mcp is unauthenticated. Under proxy/OIDC auth (team / cloud
 	// deployments) the MCP requires identity headers the local CLI can't supply,
-	// and AI diagnosis is the embedding host's job (e.g. Radar Hub) anyway.
+	// and AI investigations are the embedding host's job (e.g. Radar Hub) anyway.
 	// Also requires /mcp to be mounted — the agent reaches the cluster only
 	// through it, so with --no-mcp the feature can't work.
 	if !s.authConfig.Enabled() && s.mcpHandler != nil {
