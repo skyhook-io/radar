@@ -103,7 +103,7 @@ func MarkDisconnectedIfClusterUnreachable(message string) bool {
 		// StateConnected), leaving informers hammering the dead credential
 		// for the whole outage.
 		clientMu.RLock()
-		generation := activeClientGeneration
+		generation := activeClientGeneration.Load()
 		clientMu.RUnlock()
 		reportRuntimeAuthFailure(generation, errors.New(message))
 		return false
