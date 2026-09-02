@@ -80,7 +80,7 @@
     "tailwindcss": "^4.3.3",
     "typescript": "^6.0.2",
     "typescript-eslint": "^8.67.0",
-    "vite": "^8.2.1"
+    "vite": "^8.2.2"
   },
   "sideEffects": [
     "*.css"
