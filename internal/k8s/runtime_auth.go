@@ -46,8 +46,10 @@ const (
 
 var (
 	clientGenerationCounter atomic.Uint64
-	// Guarded by clientMu (written in doInit/SwitchContext, read via
-	// runtimeAuthStateIsCurrent) — not an atomic like its neighbors.
+	// Written in doInit/SwitchContext under clientMu, alongside the client set
+	// it identifies, so a reader holding clientMu sees the two as a pair. Atomic
+	// so the standalone read needs no lock: the permissions cache compares it
+	// while holding its own, and clientMu is held across kubeconfig file I/O.
 	activeClientGeneration  atomic.Uint64
 	discoveryRequestTimeout = 32 * time.Second
 

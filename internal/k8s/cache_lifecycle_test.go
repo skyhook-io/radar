@@ -170,7 +170,19 @@ func TestConcurrentInvalidateDuringPermissionCheck(t *testing.T) {
 	// The dynamic client is what CheckResourcePermissions probes through. Without
 	// it the call returns at the client-not-initialized guard and never takes
 	// resourcePermsMu at all, so there is no contention left to test.
+	//
+	// It must also BLOCK. A fake that answers instantly lets the probe finish
+	// before the invalidation starts, so the two never overlap and the lock
+	// pattern under test is never exercised — which is how this test passed for
+	// years against the very bug it names.
+	probeEntered := make(chan struct{})
+	probeRelease := make(chan struct{})
+	var probeEnteredOnce sync.Once
+	releaseProbe := sync.OnceFunc(func() { close(probeRelease) })
+	t.Cleanup(releaseProbe)
 	probeDyn := fakeDyn(t, func(gvr schema.GroupVersionResource, namespace string) bool {
+		probeEnteredOnce.Do(func() { close(probeEntered) })
+		<-probeRelease
 		return gvr.Group == "" && gvr.Resource == "pods"
 	})
 	clientMu.Lock()
@@ -199,9 +211,16 @@ func TestConcurrentInvalidateDuringPermissionCheck(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		// Small delay so the permission check has time to start
-		time.Sleep(10 * time.Millisecond)
+		// Wait for the probe to be genuinely in flight rather than guessing with
+		// a sleep, then invalidate while it is still inside the client.
+		select {
+		case <-probeEntered:
+		case <-time.After(5 * time.Second):
+			releaseProbe()
+			return
+		}
 		InvalidateResourcePermissionsCache()
+		releaseProbe()
 	}()
 
 	done := make(chan struct{})

@@ -415,3 +415,26 @@ func allTestResourceTypes() map[string]bool {
 		"limitranges":              true,
 	}
 }
+
+// SetTestPermissionResult publishes a permission probe result as if a probe had
+// just produced it, stamped with the current client generation so readers treat
+// it as describing the connected cluster. Returns a restore func.
+//
+// The cache is otherwise only writable by a real probe, so without this seam a
+// test in another package cannot reach any of the code that reads it — the
+// handlers fall through to their "no probe data yet" path and assert nothing
+// while appearing to cover the endpoint.
+func SetTestPermissionResult(result *PermissionCheckResult) func() {
+	resourcePermsMu.Lock()
+	prevResult, prevGen, prevExpiry := cachedPermResult, cachedPermClientGen, resourcePermsExpiry
+	cachedPermResult = result
+	cachedPermClientGen = currentClientGeneration()
+	resourcePermsExpiry = time.Now().Add(time.Minute)
+	resourcePermsMu.Unlock()
+
+	return func() {
+		resourcePermsMu.Lock()
+		cachedPermResult, cachedPermClientGen, resourcePermsExpiry = prevResult, prevGen, prevExpiry
+		resourcePermsMu.Unlock()
+	}
+}
