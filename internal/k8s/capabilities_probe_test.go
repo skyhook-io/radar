@@ -572,7 +572,7 @@ func TestCheckResourcePermissionsDiscardsSupersededProbe(t *testing.T) {
 		clientMu.Lock()
 		k8sClient = typed
 		dynamicClient = dyn
-		activeClientGeneration = 9
+		activeClientGeneration.Store(9)
 		clientMu.Unlock()
 	}
 
@@ -679,7 +679,7 @@ func TestCheckResourcePermissionsDiscardsProbeAcrossClientSwap(t *testing.T) {
 		clientMu.Lock()
 		k8sClient = typed
 		dynamicClient = dyn
-		activeClientGeneration = generation
+		activeClientGeneration.Store(generation)
 		clientMu.Unlock()
 	}
 
@@ -733,7 +733,7 @@ func TestCachedPermissionResultRejectedAfterClientSwap(t *testing.T) {
 	const previousNs = "previous-cluster-ns"
 
 	clientMu.Lock()
-	activeClientGeneration = 1
+	activeClientGeneration.Store(1)
 	clientMu.Unlock()
 
 	resourcePermsMu.Lock()
@@ -756,7 +756,7 @@ func TestCachedPermissionResultRejectedAfterClientSwap(t *testing.T) {
 	// SwitchContext publishes the new cluster's clients; the invalidation that
 	// follows it has not run yet.
 	clientMu.Lock()
-	activeClientGeneration = 2
+	activeClientGeneration.Store(2)
 	clientMu.Unlock()
 
 	if got := GetCachedPermissionResult(); got != nil {
@@ -783,7 +783,7 @@ func TestCacheHitRejectedAfterClientSwap(t *testing.T) {
 	clientMu.Lock()
 	k8sClient = typed
 	dynamicClient = currentDyn
-	activeClientGeneration = 4
+	activeClientGeneration.Store(4)
 	clientMu.Unlock()
 	SetFallbackNamespace(currentNs)
 
@@ -841,7 +841,7 @@ func TestNamespaceRescopeRetiresInFlightProbe(t *testing.T) {
 	clientMu.Lock()
 	k8sClient = typed
 	dynamicClient = dyn
-	activeClientGeneration = 5
+	activeClientGeneration.Store(5)
 	clientMu.Unlock()
 	ForceNamespaceScope = true
 	SetNamespaceScopeOverride(previousNs)

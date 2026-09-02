@@ -338,7 +338,7 @@ func doInit(opts InitOptions) error {
 	k8sClient = clients.clientset
 	discoveryClient = clients.discovery
 	dynamicClient = clients.dynamic
-	activeClientGeneration = clients.generation
+	activeClientGeneration.Store(clients.generation)
 
 	return nil
 }
@@ -783,13 +783,15 @@ func GetDynamicClientSnapshot() (dynamic.Interface, string) {
 func dynamicClientGeneration() (dynamic.Interface, uint64) {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
-	return dynamicClient, activeClientGeneration
+	return dynamicClient, activeClientGeneration.Load()
 }
 
+// currentClientGeneration reads the generation without clientMu on purpose. The
+// permissions cache compares it while holding its own lock, and clientMu is held
+// across kubeconfig filesystem work on a UI-polled path — nesting the two would
+// stall every permissions read behind that I/O.
 func currentClientGeneration() uint64 {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	return activeClientGeneration
+	return activeClientGeneration.Load()
 }
 
 // GetKubeconfigPath returns the path to the kubeconfig file used
@@ -1298,24 +1300,17 @@ func SetNamespaceScopeOverride(ns string) {
 	clientMu.Lock()
 	namespaceScopeOverride = ns
 	clientMu.Unlock()
-	retirePermissionProbesForScopeChange()
+	// After the write, and outside clientMu: the permissions cache retires a
+	// probe by comparing the generation it captured before reading its inputs,
+	// so retiring first would leave a probe holding the old scope under the new
+	// generation.
+	InvalidateResourcePermissionsCache()
 }
 
 func ClearNamespaceScopeOverride() {
 	clientMu.Lock()
 	namespaceScopeOverride = ""
 	clientMu.Unlock()
-	retirePermissionProbesForScopeChange()
-}
-
-// retirePermissionProbesForScopeChange discards permission probes computed
-// against the scope that was just replaced. It runs after the write, and after
-// clientMu is released, and both matter: the permissions cache retires a probe
-// by comparing the generation it captured before reading its inputs, so a
-// retirement that landed before the write would leave a probe holding the old
-// scope under the new generation — and the cache takes its own lock, which must
-// never nest inside clientMu.
-func retirePermissionProbesForScopeChange() {
 	InvalidateResourcePermissionsCache()
 }
 
@@ -1785,7 +1780,7 @@ func SwitchContext(name string) error {
 	k8sClient = clients.clientset
 	discoveryClient = clients.discovery
 	dynamicClient = clients.dynamic
-	activeClientGeneration = clients.generation
+	activeClientGeneration.Store(clients.generation)
 	contextName = name
 	contextBinding = newContextBinding
 	activeSourceFile = loadingRules.ExplicitPath

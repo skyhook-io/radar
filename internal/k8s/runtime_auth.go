@@ -48,7 +48,7 @@ var (
 	clientGenerationCounter atomic.Uint64
 	// Guarded by clientMu (written in doInit/SwitchContext, read via
 	// runtimeAuthStateIsCurrent) — not an atomic like its neighbors.
-	activeClientGeneration  uint64
+	activeClientGeneration  atomic.Uint64
 	discoveryRequestTimeout = 32 * time.Second
 
 	runtimeAuthChecksMu sync.Mutex
@@ -327,7 +327,7 @@ func runtimeAuthStateIsCurrent(generation uint64) bool {
 	// In-cluster SA tokens are refreshed from disk by client-go, so
 	// credential loss there is transient by construction — demotion is a
 	// kubeconfig-mode concern only.
-	isCurrent := !isInCluster && activeClientGeneration == generation
+	isCurrent := !isInCluster && activeClientGeneration.Load() == generation
 	clientMu.RUnlock()
 	return isCurrent && GetConnectionStatus().State == StateConnected
 }

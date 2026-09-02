@@ -961,9 +961,12 @@ func CheckResourcePermissions(ctx context.Context) (*PermissionCheckResult, bool
 		return result, true
 	}
 	// Captured before any probe input is read. The publish check retires this
-	// result if the generation moved since, so every writer must change the
-	// inputs BEFORE bumping — a bump placed first would leave a probe that
-	// starts in between holding the old inputs under the new generation.
+	// result if the generation moved since, so a writer that changes an input
+	// must do so BEFORE bumping — bumping first leaves a probe that starts in
+	// between holding the old input under the new generation. The namespace
+	// scope setters follow that order. The --namespace and --namespace-scope
+	// inputs do not bump at all; they are written once at startup, before any
+	// probe exists, and moving them later would need the same treatment.
 	probeGen := resourcePermsGen
 	resourcePermsMu.RUnlock()
 
