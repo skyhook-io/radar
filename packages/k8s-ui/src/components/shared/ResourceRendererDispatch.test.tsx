@@ -651,6 +651,60 @@ describe('colliding plurals — near-match API groups', () => {
   })
 })
 
+describe('CAPI Machine kind collisions', () => {
+  const foreignApiVersion = 'extension.cluster.x-k8s.io/v1'
+
+  it.each([
+    ['machines', 'Machine', 'Role'],
+    ['machinesets', 'MachineSet', 'Delete Policy'],
+  ])('routes a foreign %s CRD through the generic renderer only', (plural, kind, capiMarker) => {
+    const html = renderKind(plural, {
+      apiVersion: foreignApiVersion,
+      kind,
+      metadata: {
+        name: 'foreign',
+        namespace: 'default',
+        labels: { 'topology.cluster.x-k8s.io/owned': '' },
+      },
+      spec: { collisionProbe: COLLISION_PROBE },
+      status: { phase: 'provisioned' },
+    }, 'default')
+
+    expect(html).toContain(COLLISION_PROBE)
+    expect(html).not.toContain(capiMarker)
+    expect(html).not.toContain('Topology-controlled')
+    expect(getResourceStatus(plural, {
+      apiVersion: foreignApiVersion,
+      status: { phase: 'provisioned' },
+    })?.text).toBe('provisioned')
+  })
+
+  it.each([
+    ['machines', 'Machine', 'Role'],
+    ['machinesets', 'MachineSet', 'Delete Policy'],
+  ])('keeps exact-group CAPI %s resources on the dedicated path', (plural, kind, capiMarker) => {
+    const html = renderKind(plural, {
+      apiVersion: 'cluster.x-k8s.io/v1beta1',
+      kind,
+      metadata: {
+        name: 'capi',
+        namespace: 'default',
+        labels: { 'topology.cluster.x-k8s.io/owned': '' },
+      },
+      spec: { collisionProbe: COLLISION_PROBE },
+      status: { phase: 'provisioned' },
+    }, 'default')
+
+    expect(html).toContain(capiMarker)
+    expect(html).toContain('Topology-controlled')
+    expect(html).not.toContain(COLLISION_PROBE)
+    expect(getResourceStatus(plural, {
+      apiVersion: 'cluster.x-k8s.io/v1beta1',
+      status: { phase: 'provisioned' },
+    })?.text).toBe('Provisioned')
+  })
+})
+
 describe('shared plurals — the status path collides too', () => {
   // The renderer and the status badge are two separate switches over the same
   // plural, and fixing one leaves the other reading a foreign CRD's conditions

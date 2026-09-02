@@ -658,11 +658,13 @@ export function ResourceRendererDispatch({
   // them, and `subscriptions` is Knative's as well. Adding a kind to KNOWN_KINDS
   // with a positively-gated render line and forgetting this list is what makes a
   // foreign CRD render a BLANK drawer rather than the generic one.
+  // CAPI's `machines` and `machinesets` need the same protection because another
+  // API group can publish either plural without inheriting CAPI presentation.
   const isGroupGatedKind =
     kind === 'clusters' || kind === 'backups' || kind === 'scheduledbackups' || kind === 'poolers'
     || kind === 'objectstores' || kind === 'databases' || kind === 'publications'
     || kind === 'subscriptions' || kind === 'imagecatalogs' || kind === 'clusterimagecatalogs'
-    || kind === 'policies' || kind === 'rollouts'
+    || kind === 'policies' || kind === 'rollouts' || kind === 'machines' || kind === 'machinesets'
   const isCNPGApiVersion = isApiGroup(data?.apiVersion, CNPG_GROUP)
   const groupGatedMatched =
     (kind === 'clusters' && (isCNPGApiVersion || isApiGroup(data?.apiVersion, 'cluster.x-k8s.io')))
@@ -675,6 +677,8 @@ export function ResourceRendererDispatch({
       && (isCNPGApiVersion || isApiGroup(data?.apiVersion, 'messaging.knative.dev')))
     || (kind === 'policies' && isApiGroup(data?.apiVersion, 'kyverno.io'))
     || (kind === 'rollouts' && isArgoRolloutResource(data))
+    || ((kind === 'machines' || kind === 'machinesets')
+      && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io'))
   const groupGatedFallthrough = isGroupGatedKind && !groupGatedMatched
 
   const calicoApiVersionMatched = isCalicoApiVersion(data?.apiVersion)
@@ -862,15 +866,15 @@ export function ResourceRendererDispatch({
         {kind === 'scheduledbackups' && isApiGroup(data?.apiVersion, CNPG_GROUP) && <CNPGScheduledBackupRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'poolers' && isApiGroup(data?.apiVersion, CNPG_GROUP) && <CNPGPoolerRenderer data={data} onNavigate={onNavigate} />}
         {/* Cluster API (CAPI) */}
-        {'topology.cluster.x-k8s.io/owned' in (data?.metadata?.labels ?? {}) && data?.apiVersion?.includes('cluster.x-k8s.io') && (
+        {'topology.cluster.x-k8s.io/owned' in (data?.metadata?.labels ?? {}) && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io') && (
           <AlertBanner
             variant="warning"
             title="Topology-controlled — this resource is managed by ClusterClass. Manual changes will be reconciled back."
           />
         )}
-        {kind === 'machines' && data?.apiVersion?.includes('cluster.x-k8s.io') && <CAPIMachineRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'machines' && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io') && <CAPIMachineRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'machinedeployments' && <CAPIMachineDeploymentRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'machinesets' && data?.apiVersion?.includes('cluster.x-k8s.io') && <CAPIMachineSetRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'machinesets' && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io') && <CAPIMachineSetRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'machinepools' && <CAPIMachinePoolRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'kubeadmcontrolplanes' && <CAPIKubeadmControlPlaneRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'clusterclasses' && <CAPIClusterClassRenderer data={data} />}
@@ -1187,9 +1191,9 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
     // Third-party `clusters` CRDs (KubeBlocks, Redis/Valkey) fall through to the
     // generic handling below instead of getting a fabricated PostgreSQL status.
   }
-  if (k === 'machines' && data.apiVersion?.includes('cluster.x-k8s.io')) return getMachineStatus(data)
+  if (k === 'machines' && isApiGroup(data.apiVersion, 'cluster.x-k8s.io')) return getMachineStatus(data)
   if (k === 'machinedeployments') return getMachineDeploymentStatus(data)
-  if (k === 'machinesets') return getMachineSetStatus(data)
+  if (k === 'machinesets' && isApiGroup(data.apiVersion, 'cluster.x-k8s.io')) return getMachineSetStatus(data)
   if (k === 'machinepools') return getMachinePoolStatus(data)
   if (k === 'kubeadmcontrolplanes') return getKCPStatus(data)
   if (k === 'clusterclasses') return getClusterClassStatus(data)
