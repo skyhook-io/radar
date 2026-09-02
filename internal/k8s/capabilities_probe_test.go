@@ -555,6 +555,8 @@ func TestCheckResourcePermissionsDiscardsSupersededProbe(t *testing.T) {
 
 	entered := make(chan struct{})
 	release := make(chan struct{})
+	releaseOnce := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseOnce)
 	var enteredOnce sync.Once
 	previousDyn := fakeDyn(t, func(gvr schema.GroupVersionResource, namespace string) bool {
 		enteredOnce.Do(func() { close(entered) })
@@ -618,7 +620,7 @@ func TestCheckResourcePermissionsDiscardsSupersededProbe(t *testing.T) {
 		t.Fatalf("current probe did not publish: %+v", cached)
 	}
 
-	close(release)
+	releaseOnce()
 	var stale *PermissionCheckResult
 	var staleIsCurrent bool
 	select {
@@ -665,6 +667,8 @@ func TestCheckResourcePermissionsDiscardsProbeAcrossClientSwap(t *testing.T) {
 
 	entered := make(chan struct{})
 	release := make(chan struct{})
+	releaseOnce := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseOnce)
 	var enteredOnce sync.Once
 	previousDyn := fakeDyn(t, func(gvr schema.GroupVersionResource, namespace string) bool {
 		enteredOnce.Do(func() { close(entered) })
@@ -704,7 +708,7 @@ func TestCheckResourcePermissionsDiscardsProbeAcrossClientSwap(t *testing.T) {
 	swapClients(currentDyn, 2)
 	SetFallbackNamespace(currentNs)
 
-	close(release)
+	releaseOnce()
 	select {
 	case <-superseded:
 	case <-time.After(10 * time.Second):
@@ -831,6 +835,8 @@ func TestNamespaceRescopeRetiresInFlightProbe(t *testing.T) {
 
 	entered := make(chan struct{})
 	release := make(chan struct{})
+	releaseOnce := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseOnce)
 	var enteredOnce sync.Once
 	dyn := fakeDyn(t, func(gvr schema.GroupVersionResource, namespace string) bool {
 		enteredOnce.Do(func() { close(entered) })
@@ -861,7 +867,7 @@ func TestNamespaceRescopeRetiresInFlightProbe(t *testing.T) {
 
 	SetNamespaceScopeOverride(currentNs)
 
-	close(release)
+	releaseOnce()
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
