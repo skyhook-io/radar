@@ -189,8 +189,8 @@ function writeStored(key: string, value: string) {
   }
 }
 
-function runIDFromLocation(): string | null {
-  if (!diagnoseURLStateEnabled()) return null;
+function runIDFromLocation(browserURLState: boolean): string | null {
+  if (!diagnoseURLStateEnabled(browserURLState)) return null;
   try {
     return new URLSearchParams(window.location.search).get("ai-run");
   } catch {
@@ -198,8 +198,12 @@ function runIDFromLocation(): string | null {
   }
 }
 
-function writeRunIDToLocation(id: string | null, push: boolean) {
-  if (!diagnoseURLStateEnabled()) return;
+function writeRunIDToLocation(
+  id: string | null,
+  push: boolean,
+  browserURLState: boolean,
+) {
+  if (!diagnoseURLStateEnabled(browserURLState)) return;
   try {
     const url = new URL(window.location.href);
     if (id) url.searchParams.set("ai-run", id);
@@ -224,12 +228,19 @@ function writeRunIDToLocation(id: string | null, push: boolean) {
 // hub route such as /issues. Writing ?ai-run there would create a non-reloadable
 // pseudo-link. The embedded /c/:id Radar tree and local Radar own their route and
 // therefore keep the query as navigation state; Fleet copies run.radarUrl instead.
-function diagnoseURLStateEnabled(): boolean {
+function diagnoseURLStateEnabled(browserURLState: boolean): boolean {
+  if (!browserURLState) return false;
   const clusterScopedAPI = /\/c\/[^/]+\/api\/?$/.test(getApiBase());
   return !clusterScopedAPI || /^\/c\/[^/]+/.test(window.location.pathname);
 }
 
-export function DiagnoseProvider({ children }: { children: ReactNode }) {
+export function DiagnoseProvider({
+  children,
+  browserURLState = true,
+}: {
+  children: ReactNode;
+  browserURLState?: boolean;
+}) {
   const [available, setAvailable] = useState(false);
   const [eligible, setEligible] = useState(false);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
@@ -254,13 +265,13 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   // Tracks whether the panel focus belongs to browser history. Fleet opens the
   // same panel on /issues, where URL state is deliberately disabled; a generic
   // panel launch must never be closed by the deep-link synchronization effect.
-  const urlRunIdRef = useRef(runIDFromLocation());
+  const urlRunIdRef = useRef(runIDFromLocation(browserURLState));
   const writeFocusedRunID = useCallback((id: string | null, push: boolean) => {
     // Set this before writeRunIDToLocation's synthetic popstate so our own
     // listener can distinguish a programmatic close/home write from Back.
-    if (diagnoseURLStateEnabled()) urlRunIdRef.current = id;
-    writeRunIDToLocation(id, push);
-  }, []);
+    if (diagnoseURLStateEnabled(browserURLState)) urlRunIdRef.current = id;
+    writeRunIDToLocation(id, push, browserURLState);
+  }, [browserURLState]);
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [runsLoaded, setRunsLoaded] = useState(false);
   const [runsLoadFailed, setRunsLoadFailed] = useState(false);
@@ -540,9 +551,9 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   // exact run, and the query remains in place so the address bar is copyable.
   // Fetch by id rather than assuming the bounded recent list contains it.
   useEffect(() => {
-    if (!available || !diagnoseURLStateEnabled()) return;
+    if (!available || !diagnoseURLStateEnabled(browserURLState)) return;
     const focusFromLocation = (fromPopState: boolean) => {
-      const id = runIDFromLocation();
+      const id = runIDFromLocation(browserURLState);
       if (!id) {
         // A missing id on first mount is ordinary. On popstate it means "back
         // out of this investigation" only when the focused run was itself
@@ -571,7 +582,7 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     const onPopState = () => focusFromLocation(true);
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
-  }, [available, updateRunSummary]);
+  }, [available, browserURLState, updateRunSummary]);
   // Leaving the detail pane drops the failure that belonged to it. startError
   // renders as the entire pane (maximized home still shows `detail`), where a
   // message about a resource you just navigated away from has nothing to attach

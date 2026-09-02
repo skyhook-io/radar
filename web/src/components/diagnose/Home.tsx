@@ -3,6 +3,7 @@
 // docked Home view and the master pane of the maximized workspace.
 import { Loader2, Sparkles } from "lucide-react";
 import { StatusDot, type StatusTone } from "@skyhook-io/k8s-ui";
+import { Badge } from "@skyhook-io/k8s-ui/components/ui/Badge";
 import { type RunSummary } from "../../api/diagnose";
 
 // Compact "3m ago" / "2h ago" / date label.
@@ -140,13 +141,13 @@ export function RecentList({
                   {r.name}
                 </span>
                 {(r.trigger || r.visibility) && (
-                  <span className="shrink-0 rounded bg-theme-elevated px-1.5 py-0.5 text-[10px] font-medium text-theme-text-tertiary">
+                  <Badge severity="neutral" size="sm" className="shrink-0">
                     {r.trigger === "background"
                       ? "Automatic"
                       : r.visibility === "organization"
                         ? "Shared"
                         : "Private"}
-                  </span>
+                  </Badge>
                 )}
                 <span className="shrink-0 text-[11px] text-theme-text-tertiary">
                   {r.status === "running" ? (

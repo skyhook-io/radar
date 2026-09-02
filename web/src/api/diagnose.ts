@@ -1,7 +1,7 @@
 // Client for the local AI-diagnose engine (OSS BYO-agent). The agent CLI runs
 // on the user's own machine/subscription against Radar's MCP; this just starts
 // the investigation and consumes its SSE event stream.
-import { getApiBase, getCredentialsMode } from "./config";
+import { getApiBase, getAuthHeaders, getCredentialsMode } from "./config";
 
 export interface AgentInfo {
   name: string;
@@ -120,6 +120,7 @@ export async function fetchAgents(
 ): Promise<AgentsResponse> {
   const res = await fetch(`${getApiBase()}/agents`, {
     credentials: getCredentialsMode(),
+    headers: getAuthHeaders(),
     signal,
   });
   if (!res.ok) throw new Error(`agents: ${res.status}`);
@@ -174,7 +175,7 @@ export async function createRun(
   const res = await fetch(RUNS(), {
     method: "POST",
     credentials: getCredentialsMode(),
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
     body: JSON.stringify({ ...target, ...opts }),
   });
   if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
@@ -193,6 +194,7 @@ export interface RunsResponse {
 export async function listRuns(signal?: AbortSignal): Promise<RunsResponse> {
   const res = await fetch(RUNS(), {
     credentials: getCredentialsMode(),
+    headers: getAuthHeaders(),
     signal,
   });
   if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
@@ -208,6 +210,7 @@ export async function getRun(
 ): Promise<RunSummary> {
   const res = await fetch(`${RUNS()}/${encodeURIComponent(id)}`, {
     credentials: getCredentialsMode(),
+    headers: getAuthHeaders(),
     signal,
   });
   if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
@@ -221,7 +224,7 @@ export async function updateRunVisibility(
   const res = await fetch(`${RUNS()}/${encodeURIComponent(id)}`, {
     method: "PATCH",
     credentials: getCredentialsMode(),
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
     body: JSON.stringify({ visibility }),
   });
   if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
@@ -233,7 +236,7 @@ export async function recordConsent(surface: string): Promise<void> {
   const res = await fetch(`${getApiBase()}/diagnose/consent`, {
     method: "POST",
     credentials: getCredentialsMode(),
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
     body: JSON.stringify({ surface }),
   });
   if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
@@ -245,6 +248,7 @@ export async function clearHistory(): Promise<void> {
   const res = await fetch(`${getApiBase()}/diagnose/history/clear`, {
     method: "POST",
     credentials: getCredentialsMode(),
+    headers: getAuthHeaders(),
   });
   if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
 }
@@ -257,7 +261,7 @@ export async function addTurn(
   const res = await fetch(`${RUNS()}/${id}/turns`, {
     method: "POST",
     credentials: getCredentialsMode(),
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
@@ -268,6 +272,7 @@ export async function stopRun(id: string): Promise<void> {
   await fetch(`${RUNS()}/${id}/stop`, {
     method: "POST",
     credentials: getCredentialsMode(),
+    headers: getAuthHeaders(),
   }).catch(() => {});
 }
 

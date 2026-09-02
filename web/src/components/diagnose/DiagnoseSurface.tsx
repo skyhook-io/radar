@@ -162,15 +162,28 @@ function stableRunURL(run: RunSummary): string {
 }
 
 function CopyRunLink({ run }: { run: RunSummary }) {
-  const [copied, setCopied] = useState(false);
-  const copy = () => {
-    void navigator.clipboard?.writeText(stableRunURL(run));
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1100);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">(
+    "idle",
+  );
+  const copy = async () => {
+    try {
+      if (!navigator.clipboard) throw new Error("clipboard unavailable");
+      await navigator.clipboard.writeText(stableRunURL(run));
+      setCopyState("copied");
+    } catch {
+      setCopyState("error");
+    }
+    setTimeout(() => setCopyState("idle"), 1500);
   };
   return (
     <Tooltip
-      content={copied ? "Link copied" : "Copy investigation link"}
+      content={
+        copyState === "copied"
+          ? "Link copied"
+          : copyState === "error"
+            ? "Couldn’t copy link"
+            : "Copy investigation link"
+      }
       position="bottom"
     >
       <button
@@ -178,7 +191,7 @@ function CopyRunLink({ run }: { run: RunSummary }) {
         className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
         aria-label="Copy investigation link"
       >
-        {copied ? (
+        {copyState === "copied" ? (
           <Check className="h-4 w-4 text-emerald-500" />
         ) : (
           <Link className="h-4 w-4" />
