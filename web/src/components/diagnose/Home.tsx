@@ -83,80 +83,104 @@ export function RecentList({
   if (runs.length === 0) {
     return (
       <div>
-      {degradedNote}
-      <div className="flex flex-col items-center px-4 py-12 text-center">
-        <Sparkles className="mb-3 h-7 w-7 text-accent" />
-        <div className="text-sm font-medium text-theme-text-primary">
-          No investigations yet
+        {degradedNote}
+        <div className="flex flex-col items-center px-4 py-12 text-center">
+          <Sparkles className="mb-3 h-7 w-7 text-accent" />
+          <div className="text-sm font-medium text-theme-text-primary">
+            No investigations yet
+          </div>
+          <p className="mt-1 max-w-xs text-sm text-theme-text-tertiary">
+            Open a resource and use its{" "}
+            <Sparkles className="inline h-3.5 w-3.5 align-text-bottom text-accent" />{" "}
+            action to investigate it with {agentLabel} —{" "}
+            <span className="font-medium text-theme-text-secondary">
+              Diagnose
+            </span>{" "}
+            a problem, or just ask about it. Investigations run in the
+            background and are kept in your history here.
+          </p>
         </div>
-        <p className="mt-1 max-w-xs text-sm text-theme-text-tertiary">
-          Open a resource and use its{" "}
-          <Sparkles className="inline h-3.5 w-3.5 align-text-bottom text-accent" />{" "}
-          action to investigate it with {agentLabel} —{" "}
-          <span className="font-medium text-theme-text-secondary">Diagnose</span>{" "}
-          a problem, or just ask about it. Investigations run in the background
-          and are kept in your history here.
-        </p>
-      </div>
       </div>
     );
   }
 
+  const organizationRuns = runs.filter(
+    (r) => r.trigger === "background" || r.ownedByMe === false,
+  );
+  const yourRuns = runs.filter((r) => !organizationRuns.includes(r));
+  const groups = organizationRuns.length
+    ? [
+        { label: "Your investigations", runs: yourRuns },
+        { label: "Organization", runs: organizationRuns },
+      ].filter((group) => group.runs.length > 0)
+    : [{ label: "Investigations", runs }];
+
   return (
     <div className="space-y-2">
       {degradedNote}
-      <div className="text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
-        Investigations
-      </div>
-      {runs.map((r) => (
-        <button
-          key={r.id}
-          onClick={() => onSelect(r.id)}
-          className={`flex w-full flex-col gap-0.5 rounded-md border px-2.5 py-2 text-left ${
-            r.id === selectedId
-              ? "border-accent/50 bg-accent/10"
-              : "border-theme-border/60 bg-theme-base/40 hover:bg-theme-hover"
-          }`}
-        >
-          <div className="flex items-center gap-2">
-            {statusDot(r.status)}
-            <span className="min-w-0 flex-1 truncate text-sm text-theme-text-primary">
-              {r.kind} {r.namespace ? `${r.namespace}/` : ""}
-              {r.name}
-            </span>
-            <span className="shrink-0 text-[11px] text-theme-text-tertiary">
-              {r.status === "running" ? (
-                "running…"
-              ) : (
-                <>
-                  {(() => {
-                    const w = statusWord(r.status);
-                    return w ? (
-                      <span className={`font-medium ${w.cls}`}>
-                        {w.text} ·{" "}
-                      </span>
-                    ) : null;
-                  })()}
-                  {relativeTime(new Date(r.updatedAt).getTime(), now)}
-                </>
-              )}
-            </span>
+      {groups.map((group) => (
+        <div key={group.label} className="space-y-2">
+          <div className="pt-1 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
+            {group.label}
           </div>
-          {(r.status === "stale" && r.context) || r.preview ? (
-            <div className="truncate pl-3.5 text-xs text-theme-text-tertiary">
-              {/* A foreign-cluster run names its cluster — in mixed multi-
-                  context history, identical-looking rows otherwise give no way
-                  to tell WHICH cluster an investigation was about. */}
-              {r.status === "stale" && r.context ? (
-                <span className="text-amber-600/80 dark:text-amber-500/80">
-                  {r.context}
+          {group.runs.map((r) => (
+            <button
+              key={r.id}
+              onClick={() => onSelect(r.id)}
+              className={`flex w-full flex-col gap-0.5 rounded-md border px-2.5 py-2 text-left ${
+                r.id === selectedId
+                  ? "border-accent/50 bg-accent/10"
+                  : "border-theme-border/60 bg-theme-base/40 hover:bg-theme-hover"
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                {statusDot(r.status)}
+                <span className="min-w-0 flex-1 truncate text-sm text-theme-text-primary">
+                  {r.kind} {r.namespace ? `${r.namespace}/` : ""}
+                  {r.name}
                 </span>
+                <span className="shrink-0 rounded bg-theme-elevated px-1.5 py-0.5 text-[10px] font-medium text-theme-text-tertiary">
+                  {r.trigger === "background"
+                    ? "Automatic"
+                    : r.visibility === "organization"
+                      ? "Shared"
+                      : "Private"}
+                </span>
+                <span className="shrink-0 text-[11px] text-theme-text-tertiary">
+                  {r.status === "running" ? (
+                    "running…"
+                  ) : (
+                    <>
+                      {(() => {
+                        const w = statusWord(r.status);
+                        return w ? (
+                          <span className={`font-medium ${w.cls}`}>
+                            {w.text} ·{" "}
+                          </span>
+                        ) : null;
+                      })()}
+                      {relativeTime(new Date(r.updatedAt).getTime(), now)}
+                    </>
+                  )}
+                </span>
+              </div>
+              {(r.status === "stale" && r.context) || r.preview ? (
+                <div className="truncate pl-3.5 text-xs text-theme-text-tertiary">
+                  {/* A foreign-cluster run names its cluster — in mixed multi-
+                      context history, identical-looking rows otherwise give no way
+                      to tell WHICH cluster an investigation was about. */}
+                  {r.status === "stale" && r.context ? (
+                    <span className="text-amber-600/80 dark:text-amber-500/80">
+                      {r.context}
+                    </span>
+                  ) : null}
+                  {r.status === "stale" && r.context && r.preview ? " · " : ""}
+                  {r.preview}
+                </div>
               ) : null}
-              {r.status === "stale" && r.context && r.preview ? " · " : ""}
-              {r.preview}
-            </div>
-          ) : null}
-        </button>
+            </button>
+          ))}
+        </div>
       ))}
     </div>
   );

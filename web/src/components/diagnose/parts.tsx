@@ -405,6 +405,7 @@ export function AgentControls({
 // or a follow-up, each with its own transcript + result.
 export type Turn = {
   question?: string;
+  actor?: string;
   timeline: TimelineItem[];
   diagnosis: Diagnosis | null;
   error: string | null;
@@ -509,8 +510,15 @@ export function TurnView({
     <div className="space-y-2">
       {turn.question && (
         <div className="flex justify-end">
-          <div className="max-w-[85%] rounded-lg rounded-br-sm bg-accent/10 px-3 py-1.5 text-sm text-theme-text-primary [overflow-wrap:anywhere]">
-            {turn.question}
+          <div className="max-w-[85%]">
+            {turn.actor && (
+              <div className="mb-0.5 text-right text-[10px] text-theme-text-tertiary">
+                {turn.actor}
+              </div>
+            )}
+            <div className="rounded-lg rounded-br-sm bg-accent/10 px-3 py-1.5 text-sm text-theme-text-primary [overflow-wrap:anywhere]">
+              {turn.question}
+            </div>
           </div>
         </div>
       )}

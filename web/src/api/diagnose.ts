@@ -81,6 +81,7 @@ export interface DiagnoseStreamEvent {
   error?: string;
   question?: string; // on "turn"
   apply?: boolean; // on "turn"
+  actor?: string; // human author on shared hosted transcripts
 }
 
 // A run is a durable, server-owned investigation. Its lifetime is independent of
@@ -106,6 +107,12 @@ export interface RunSummary {
   preview?: string;
   createdAt: string;
   updatedAt: string;
+  visibility?: "private" | "organization";
+  ownedByMe?: boolean;
+  canManageVisibility?: boolean;
+  canContinue?: boolean;
+  trigger?: "interactive" | "background";
+  radarUrl?: string;
 }
 
 export async function fetchAgents(
@@ -191,6 +198,34 @@ export async function listRuns(signal?: AbortSignal): Promise<RunsResponse> {
   if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
   const d = await res.json();
   return { runs: d.runs ?? [], historyDegraded: !!d.historyDegraded };
+}
+
+// getRun resolves a stable run id directly. Deep links use this rather than
+// relying on a bounded history page to happen to contain the target.
+export async function getRun(
+  id: string,
+  signal?: AbortSignal,
+): Promise<RunSummary> {
+  const res = await fetch(`${RUNS()}/${encodeURIComponent(id)}`, {
+    credentials: getCredentialsMode(),
+    signal,
+  });
+  if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
+  return res.json();
+}
+
+export async function updateRunVisibility(
+  id: string,
+  visibility: "private" | "organization",
+): Promise<RunSummary> {
+  const res = await fetch(`${RUNS()}/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    credentials: getCredentialsMode(),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ visibility }),
+  });
+  if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
+  return res.json();
 }
 
 // recordConsent acknowledges the current disclosure for an execution profile, server-side.

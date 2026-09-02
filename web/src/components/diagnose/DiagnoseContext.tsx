@@ -17,11 +17,13 @@ import {
 } from "react";
 import {
   fetchAgents,
+  getRun,
   listRuns,
   createRun,
   recordConsent,
   DiagnoseError,
 } from "../../api/diagnose";
+import { getApiBase } from "../../api/config";
 import {
   type RunSummary,
   type AgentInfo,
@@ -86,6 +88,7 @@ interface DiagnoseCtx {
   approveConsent: () => void;
   cancelConsent: () => void;
   refreshRuns: () => void;
+  updateRunSummary: (run: RunSummary) => void;
   dismissError: () => void;
 }
 
@@ -186,6 +189,40 @@ function writeStored(key: string, value: string) {
   }
 }
 
+function runIDFromLocation(): string | null {
+  if (!diagnoseURLStateEnabled()) return null;
+  try {
+    return new URLSearchParams(window.location.search).get("ai-run");
+  } catch {
+    return null;
+  }
+}
+
+function writeRunIDToLocation(id: string | null, push: boolean) {
+  if (!diagnoseURLStateEnabled()) return;
+  try {
+    const url = new URL(window.location.href);
+    if (id) url.searchParams.set("ai-run", id);
+    else url.searchParams.delete("ai-run");
+    window.history[push ? "pushState" : "replaceState"](
+      window.history.state,
+      "",
+      `${url.pathname}${url.search}${url.hash}`,
+    );
+  } catch {
+    /* URL APIs unavailable — panel state still works for this session */
+  }
+}
+
+// Fleet pages host the panel against a cluster-scoped API while remaining on a
+// hub route such as /issues. Writing ?ai-run there would create a non-reloadable
+// pseudo-link. The embedded /c/:id Radar tree and local Radar own their route and
+// therefore keep the query as navigation state; Fleet copies run.radarUrl instead.
+function diagnoseURLStateEnabled(): boolean {
+  const clusterScopedAPI = /\/c\/[^/]+\/api\/?$/.test(getApiBase());
+  return !clusterScopedAPI || /^\/c\/[^/]+/.test(window.location.pathname);
+}
+
 export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const [available, setAvailable] = useState(false);
   const [eligible, setEligible] = useState(false);
@@ -206,6 +243,16 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<DiagnoseView>("home");
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const activeRunIdRef = useRef(activeRunId);
+  activeRunIdRef.current = activeRunId;
+  // Tracks whether the panel focus belongs to browser history. Fleet opens the
+  // same panel on /issues, where URL state is deliberately disabled; a generic
+  // panel launch must never be closed by the deep-link synchronization effect.
+  const urlRunIdRef = useRef(runIDFromLocation());
+  const writeFocusedRunID = useCallback((id: string | null, push: boolean) => {
+    writeRunIDToLocation(id, push);
+    if (diagnoseURLStateEnabled()) urlRunIdRef.current = id;
+  }, []);
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [runsLoaded, setRunsLoaded] = useState(false);
   const [runsLoadFailed, setRunsLoadFailed] = useState(false);
@@ -336,7 +383,16 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     if (!available) return;
     listRuns()
       .then((r) => {
-        setRuns(r.runs);
+        const focusedID = activeRunIdRef.current;
+        setRuns((prev) => {
+          if (!focusedID || r.runs.some((run) => run.id === focusedID)) {
+            return r.runs;
+          }
+          // A stable deep link can target a retained run older than the bounded
+          // history page. Keep that directly fetched summary while it is open.
+          const focusedRun = prev.find((run) => run.id === focusedID);
+          return focusedRun ? [focusedRun, ...r.runs] : r.runs;
+        });
         setRunsLoaded(true);
         setRunsLoadFailed(false);
         setHistoryDegraded(!!r.historyDegraded);
@@ -348,6 +404,13 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
         setRunsLoadFailed(true);
       });
   }, [available]);
+  const updateRunSummary = useCallback((run: RunSummary) => {
+    setRuns((prev) =>
+      prev.some((item) => item.id === run.id)
+        ? prev.map((item) => (item.id === run.id ? run : item))
+        : [run, ...prev],
+    );
+  }, []);
 
   // A content-stable signature of the resources with a live (running) investigation,
   // so the per-resource Diagnose buttons can show a "running" indicator even with the
@@ -397,6 +460,7 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
         if (seq !== startSeqRef.current) return;
         setActiveRunId(run.id);
         setView("investigation");
+        writeFocusedRunID(run.id, true);
       })
       .catch((e) => {
         if (seq !== startSeqRef.current) return;
@@ -431,38 +495,60 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     },
     [consentSurface, hosted],
   );
-  const openRun = useCallback((id: string) => {
-    setStartError(null);
-    setActiveRunId(id);
-    setView("investigation");
-    setOpen(true);
-  }, []);
+  const openRun = useCallback(
+    (id: string) => {
+      setStartError(null);
+      setActiveRunId(id);
+      setView("investigation");
+      setOpen(true);
+      writeFocusedRunID(id, true);
+      // A Fleet issue can point at a retained automatic run older than the
+      // bounded history page. Resolve the exact id instead of waiting for list.
+      getRun(id)
+        .then(updateRunSummary)
+        .catch(() => {
+          // The loaded-list state renders the durable unavailable message.
+        });
+    },
+    [updateRunSummary, writeFocusedRunID],
+  );
 
-  // Deep link: ?ai-run=<id> opens the panel focused on that investigation —
-  // the URL `radar diagnose --open` prints/opens. Consumed once (then stripped)
-  // so back/forward and copied URLs don't keep re-opening the panel.
+  // The run id is durable navigation state: direct loads and popstate focus the
+  // exact run, and the query remains in place so the address bar is copyable.
+  // Fetch by id rather than assuming the bounded recent list contains it.
   useEffect(() => {
-    if (!available) return;
-    let id: string | null = null;
-    try {
-      const params = new URLSearchParams(window.location.search);
-      id = params.get("ai-run");
-      if (id) {
-        params.delete("ai-run");
-        const qs = params.toString();
-        window.history.replaceState(
-          null,
-          "",
-          window.location.pathname +
-            (qs ? `?${qs}` : "") +
-            window.location.hash,
-        );
+    if (!available || !diagnoseURLStateEnabled()) return;
+    const focusFromLocation = (fromPopState: boolean) => {
+      const id = runIDFromLocation();
+      if (!id) {
+        // A missing id on first mount is ordinary. On popstate it means "back
+        // out of this investigation" only when the focused run was itself
+        // installed by URL history; unrelated synthetic popstate events must
+        // not tear down a panel opened by an in-app action.
+        if (fromPopState && urlRunIdRef.current) {
+          setActiveRunId(null);
+          setView("home");
+          setOpen(false);
+        }
+        urlRunIdRef.current = null;
+        return;
       }
-    } catch {
-      /* URL APIs unavailable — skip the deep link */
-    }
-    if (id) openRun(id);
-  }, [available, openRun]);
+      urlRunIdRef.current = id;
+      setStartError(null);
+      setActiveRunId(id);
+      setView("investigation");
+      setOpen(true);
+      getRun(id)
+        .then(updateRunSummary)
+        .catch(() => {
+          // The list load owns the final missing/degraded state and keeps retrying.
+        });
+    };
+    focusFromLocation(false);
+    const onPopState = () => focusFromLocation(true);
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [available, updateRunSummary]);
   // Leaving the detail pane drops the failure that belonged to it. startError
   // renders as the entire pane (maximized home still shows `detail`), where a
   // message about a resource you just navigated away from has nothing to attach
@@ -471,12 +557,17 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     setView("home");
     setStartError(null);
     setOpen(true);
-  }, []);
+    writeFocusedRunID(null, false);
+  }, [writeFocusedRunID]);
   const goHome = useCallback(() => {
     setView("home");
     setStartError(null);
-  }, []);
-  const close = useCallback(() => setOpen(false), []);
+    writeFocusedRunID(null, false);
+  }, [writeFocusedRunID]);
+  const close = useCallback(() => {
+    setOpen(false);
+    writeFocusedRunID(null, false);
+  }, [writeFocusedRunID]);
   const consentBusyRef = useRef(false);
   const approveConsent = useCallback(() => {
     if (consentBusyRef.current) return;
@@ -557,6 +648,7 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     approveConsent,
     cancelConsent,
     refreshRuns,
+    updateRunSummary,
     dismissError,
   };
 

@@ -468,11 +468,18 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
     const path = view === 'home' ? '/' : `/${view}`
 
-    // Start fresh — keep only cross-view params (namespaces), discard all view-specific ones
+    // Start fresh — keep only cross-view params, discard view-specific ones.
+    // Read the live location because Diagnose owns `ai-run` through the History
+    // API; React Router's searchParams snapshot does not update for that write.
     const newParams = new URLSearchParams()
-    const globalNamespaces = searchParams.get('namespaces')
+    const currentParams = new URLSearchParams(window.location.search)
+    const globalNamespaces = currentParams.get('namespaces')
     if (globalNamespaces) {
       newParams.set('namespaces', globalNamespaces)
+    }
+    const diagnoseRun = currentParams.get('ai-run')
+    if (diagnoseRun) {
+      newParams.set('ai-run', diagnoseRun)
     }
 
     // Add any new params
@@ -483,7 +490,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     }
 
     navigate({ pathname: path, search: newParams.toString() })
-  }, [navigate, searchParams, takeover, goHost])
+  }, [navigate, takeover, goHost])
 
   // Cloud (embedded) takes over the "fleet-shaped" per-cluster views with its
   // own fleet pages scoped to this cluster — owned by the host's left rail — so
@@ -1135,9 +1142,13 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       setSelectedResource(null)
       setSelectedHelmRelease(null)
 
-      // Reset URL to current view with no resource-specific params.
-      // Old cluster's selected pod/resource/kind don't exist on the new cluster.
-      navigate({ pathname: location.pathname, search: '' }, { replace: true })
+      // Reset resource-specific params while retaining the durable investigation
+      // focus. Diagnose resolves runs by id and owns whether the focused run is
+      // still readable after the context switch.
+      const nextParams = new URLSearchParams()
+      const diagnoseRun = new URLSearchParams(window.location.search).get('ai-run')
+      if (diagnoseRun) nextParams.set('ai-run', diagnoseRun)
+      navigate({ pathname: location.pathname, search: nextParams.toString() }, { replace: true })
 
       // Auto-unpause so the new cluster's topology loads immediately
       setTopologyPaused(false)

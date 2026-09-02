@@ -16,8 +16,12 @@ import {
   Copy,
   Check,
   Plus,
+  Link,
+  Lock,
+  Users,
 } from "lucide-react";
 import { Tooltip } from "../ui/Tooltip";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
 import {
   useDiagnose,
   useDiagnoseLayout,
@@ -31,7 +35,11 @@ import { RecentList } from "./Home";
 import { AgentSetupNotice } from "./AgentSetupNotice";
 import { ConsentCard } from "./parts";
 import { buildLaunchCommand, launchAgentLabel, openInTerminal } from "./launch";
-import { type RunSummary, type ExecutionProfile } from "../../api/diagnose";
+import {
+  updateRunVisibility,
+  type RunSummary,
+  type ExecutionProfile,
+} from "../../api/diagnose";
 import { routePath } from "../../api/config";
 import { useCapabilitiesContext } from "../../contexts/CapabilitiesContext";
 
@@ -71,7 +79,10 @@ function InvestigationMenu({ run }: { run: RunSummary }) {
   const [copied, setCopied] = useState(false);
   const { localTerminal } = useCapabilitiesContext();
   const label = launchAgentLabel(run);
-  const command = buildLaunchCommand(run, `${window.location.origin}${routePath('/mcp')}`);
+  const command = buildLaunchCommand(
+    run,
+    `${window.location.origin}${routePath("/mcp")}`,
+  );
   // No resumable session yet (or stale run) → nothing to hand off.
   if (!command) return null;
 
@@ -140,6 +151,109 @@ function InvestigationMenu({ run }: { run: RunSummary }) {
         </>
       )}
     </div>
+  );
+}
+
+function stableRunURL(run: RunSummary): string {
+  if (run.radarUrl) return new URL(run.radarUrl, window.location.origin).href;
+  const url = new URL(window.location.href);
+  url.searchParams.set("ai-run", run.id);
+  return url.href;
+}
+
+function CopyRunLink({ run }: { run: RunSummary }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    void navigator.clipboard?.writeText(stableRunURL(run));
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1100);
+  };
+  return (
+    <Tooltip
+      content={copied ? "Link copied" : "Copy investigation link"}
+      position="bottom"
+    >
+      <button
+        onClick={copy}
+        className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
+        aria-label="Copy investigation link"
+      >
+        {copied ? (
+          <Check className="h-4 w-4 text-emerald-500" />
+        ) : (
+          <Link className="h-4 w-4" />
+        )}
+      </button>
+    </Tooltip>
+  );
+}
+
+function VisibilityControl({
+  run,
+  onChanged,
+}: {
+  run: RunSummary;
+  onChanged: (run: RunSummary) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(false);
+  const [confirmShare, setConfirmShare] = useState(false);
+  if (!run.canManageVisibility) return null;
+  const shared = run.visibility === "organization";
+  const update = () => {
+    if (busy) return;
+    setBusy(true);
+    setError(false);
+    updateRunVisibility(run.id, shared ? "private" : "organization")
+      .then((updated) => {
+        onChanged(updated);
+        setConfirmShare(false);
+      })
+      .catch(() => setError(true))
+      .finally(() => setBusy(false));
+  };
+  const label = shared ? "Organization" : "Private";
+  return (
+    <>
+      <Tooltip
+        content={
+          error
+            ? "Couldn't change sharing"
+            : shared
+              ? "Shared with your organization — make private"
+              : "Private — share with your organization"
+        }
+        position="bottom"
+      >
+        <button
+          onClick={() => (shared ? update() : setConfirmShare(true))}
+          disabled={busy}
+          className="flex items-center gap-1 rounded-md border border-theme-border/70 px-1.5 py-1 text-[11px] font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary disabled:opacity-50"
+          aria-label={
+            shared
+              ? "Shared with your organization — make private"
+              : "Private — share with your organization"
+          }
+        >
+          {shared ? (
+            <Users className="h-3.5 w-3.5" />
+          ) : (
+            <Lock className="h-3.5 w-3.5" />
+          )}
+          {label}
+        </button>
+      </Tooltip>
+      <ConfirmDialog
+        open={confirmShare}
+        onClose={() => !busy && setConfirmShare(false)}
+        onConfirm={update}
+        title="Share this investigation?"
+        message="Everyone in your organization who can access this cluster can read this entire investigation—including your questions and the logs and manifests Radar read—and can continue or stop it."
+        confirmLabel="Share with organization"
+        variant="warning"
+        isLoading={busy}
+      />
+    </>
   );
 }
 
@@ -377,24 +491,31 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
         <div className="flex shrink-0 items-center gap-0.5">
           {activeRun &&
             canStartNewInvestigation(d.view, activeRun, d.needsConsent) && (
-            <Tooltip content="New investigation on this resource" position="bottom">
-              <button
-                onClick={() =>
-                  d.openInvestigation({
-                    kind: activeRun.kind,
-                    namespace: activeRun.namespace,
-                    name: activeRun.name,
-                    issueId: activeRun.issueId,
-                    fresh: true,
-                  })
-                }
-                className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
-                aria-label="New investigation on this resource"
+              <Tooltip
+                content="New investigation on this resource"
+                position="bottom"
               >
-                <Plus className="h-4 w-4" />
-              </button>
-            </Tooltip>
+                <button
+                  onClick={() =>
+                    d.openInvestigation({
+                      kind: activeRun.kind,
+                      namespace: activeRun.namespace,
+                      name: activeRun.name,
+                      issueId: activeRun.issueId,
+                      fresh: true,
+                    })
+                  }
+                  className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
+                  aria-label="New investigation on this resource"
+                >
+                  <Plus className="h-4 w-4" />
+                </button>
+              </Tooltip>
+            )}
+          {activeRun && (
+            <VisibilityControl run={activeRun} onChanged={d.updateRunSummary} />
           )}
+          {activeRun && <CopyRunLink run={activeRun} />}
           {activeRun && <InvestigationMenu run={activeRun} />}
           <Tooltip content={maximized ? "Restore" : "Expand"} position="bottom">
             <button

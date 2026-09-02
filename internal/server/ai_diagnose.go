@@ -345,6 +345,21 @@ func (s *Server) handleDiagnoseList(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleDiagnoseGet resolves one retained run by its stable id. Local Radar has
+// no sharing boundary—all callers are the same local user—but the direct route
+// keeps deep links independent of the bounded history list.
+func (s *Server) handleDiagnoseGet(w http.ResponseWriter, r *http.Request) {
+	if !s.aiReady(w) {
+		return
+	}
+	run := s.aiRuns.Get(chi.URLParam(r, "id"))
+	if run == nil {
+		s.writeError(w, http.StatusNotFound, "investigation not found")
+		return
+	}
+	s.writeJSON(w, run.Summary())
+}
+
 // handleDiagnoseHistoryClear wipes the persisted investigation history (and
 // drops finished runs from memory). Live runs survive. POST, same-origin only.
 func (s *Server) handleDiagnoseHistoryClear(w http.ResponseWriter, r *http.Request) {

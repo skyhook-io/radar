@@ -44,6 +44,7 @@ export function InvestigationView({
   maximized: boolean;
 }) {
   const { kind, namespace, name } = run;
+  const canContinue = run.canContinue !== false && run.status !== "stale";
   // Apply is off for hosted agents (read-only server-side). Keyed on the selected
   // agent, which matches run.agent unless a deployment mixes hosted + local agents.
   const { refreshRuns, openInvestigation, startError, dismissError, hosted } =
@@ -216,6 +217,7 @@ export function InvestigationView({
               ...prev,
               {
                 question: ev.question,
+                actor: ev.actor,
                 timeline: [],
                 diagnosis: null,
                 error: null,
@@ -521,7 +523,7 @@ export function InvestigationView({
                   synthLabel={isLast ? synth : null}
                   reveal={isLast ? (reveal ?? "full") : "full"}
                   onApply={canApply ? requestApply : undefined}
-                  onAsk={isLast && !busy && !stale ? askFollowup : undefined}
+                  onAsk={isLast && !busy && canContinue ? askFollowup : undefined}
                   onCheckStatus={canCheck ? checkStatus : undefined}
                   onRetryDiagnosis={
                     isLast &&
@@ -585,7 +587,7 @@ export function InvestigationView({
                 ? requestApply
                 : undefined
             }
-            onAsk={!busy && !stale ? askFollowup : undefined}
+            onAsk={!busy && canContinue ? askFollowup : undefined}
             reveal="full"
           />
         </aside>
@@ -616,7 +618,12 @@ export function InvestigationView({
       <div
         className={`border-t border-theme-border px-3 py-2.5 ${maximized ? "[&>*]:mx-auto [&>*]:max-w-3xl" : ""}`}
       >
-        {busy ? (
+        {!canContinue && run.trigger === "background" ? (
+          <div className="rounded-lg border border-theme-border bg-theme-base px-3 py-2 text-xs text-theme-text-secondary">
+            Automatic investigation · read-only. Start a new investigation on
+            this resource to continue digging.
+          </div>
+        ) : busy ? (
           <button
             onClick={stop}
             className="w-full rounded-lg border border-theme-border py-1.5 text-sm text-theme-text-secondary hover:bg-theme-hover"
@@ -635,7 +642,7 @@ export function InvestigationView({
                 }
               }}
               rows={1}
-              disabled={stale}
+              disabled={!canContinue}
               placeholder={
                 stale
                   ? "Cluster changed — re-run Diagnose"

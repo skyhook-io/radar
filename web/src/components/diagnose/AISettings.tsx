@@ -49,7 +49,7 @@ function ClearHistoryRow({
     <div className="mt-3 flex items-center justify-between gap-2 border-t border-theme-border/60 pt-3">
       <p className="text-[11px] leading-snug text-theme-text-tertiary">
         {hosted ? (
-          `Investigation transcripts are stored by ${agentLabel} so history survives restarts.`
+          `${agentLabel} stores private, organization-shared, and automatic investigation transcripts so history survives restarts.`
         ) : (
           <>
             Investigation transcripts are kept on this machine (
@@ -65,6 +65,12 @@ function ClearHistoryRow({
         {state === "error" && (
           <span className="ml-1 font-medium text-red-400">
             Couldn&apos;t clear history.
+          </span>
+        )}
+        {hosted && confirming && state === "idle" && (
+          <span className="ml-1 font-medium text-red-400">
+            This also removes terminal automatic and organization-shared
+            investigations for this cluster.
           </span>
         )}
       </p>
@@ -133,9 +139,8 @@ export function AISettingsSection({
           selectedAgent={draft.agent}
           // Model + effort are agent-specific; reset them when the agent changes.
           onSelectAgent={(a) => {
-            const nextProfile = agents.find(
-              (agent) => agent.name === a,
-            )?.profiles?.[0];
+            const nextProfile = agents.find((agent) => agent.name === a)
+              ?.profiles?.[0];
             onChange({
               agent: a,
               profile: nextProfile ?? draft.profile,

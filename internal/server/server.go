@@ -510,6 +510,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// AI investigations as durable server-side jobs (start/list/turn/stop).
 			r.Post("/diagnose/runs", s.handleDiagnoseStart)
 			r.Get("/diagnose/runs", s.handleDiagnoseList)
+			r.Get("/diagnose/runs/{id}", s.handleDiagnoseGet)
 			r.Post("/diagnose/runs/{id}/turns", s.handleDiagnoseTurn)
 			r.Post("/diagnose/runs/{id}/stop", s.handleDiagnoseStop)
 			r.Post("/diagnose/history/clear", s.handleDiagnoseHistoryClear)
