@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { canCopyRunLink, canStartNewInvestigation } from "./DiagnoseSurface";
+import {
+  canContinueInvestigation,
+  canStopInvestigation,
+} from "./InvestigationView";
 import type { RunSummary } from "../../api/diagnose";
 
 // The "new investigation" button dispatches an agent and spends the user's own
@@ -36,6 +40,12 @@ describe("canStartNewInvestigation", () => {
     // A start would be handed back the live run, so the button does nothing.
     expect(
       canStartNewInvestigation("investigation", run("running"), false),
+    ).toBe(false);
+  });
+
+  it("stays hidden while a stopped turn is draining", () => {
+    expect(
+      canStartNewInvestigation("investigation", run("stopping"), false),
     ).toBe(false);
   });
 
@@ -76,6 +86,70 @@ describe("canStartNewInvestigation", () => {
     expect(
       canStartNewInvestigation("investigation", run("stopped"), false),
     ).toBe(true);
+  });
+});
+
+describe("canStopInvestigation", () => {
+  it("lets the terminal transcript outrank a lagging running summary", () => {
+    expect(canStopInvestigation(run("running"), false, false, "done")).toBe(
+      false,
+    );
+    expect(canStopInvestigation(run("running"), false, false, "error")).toBe(
+      false,
+    );
+  });
+
+  it("keeps Stop available for an active human turn", () => {
+    expect(canStopInvestigation(run("running"), true, false, "running")).toBe(
+      true,
+    );
+  });
+
+  it("does not offer another Stop while the server drains the turn", () => {
+    expect(canStopInvestigation(run("stopping"), true, false, "running")).toBe(
+      false,
+    );
+  });
+
+  it("never lets a missing or automatic run expose Stop", () => {
+    expect(canStopInvestigation(run("running"), true, true, "running")).toBe(
+      false,
+    );
+    expect(
+      canStopInvestigation(
+        { ...run("running"), trigger: "background" },
+        true,
+        false,
+        "running",
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("canContinueInvestigation", () => {
+  it("lets a terminal transcript outrank only a lagging running human summary", () => {
+    expect(
+      canContinueInvestigation(
+        { ...run("running"), canContinue: false },
+        "done",
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps genuinely read-only and sessionless investigations read-only", () => {
+    expect(
+      canContinueInvestigation(
+        {
+          ...run("running"),
+          trigger: "background",
+          canContinue: false,
+        },
+        "done",
+      ),
+    ).toBe(false);
+    expect(
+      canContinueInvestigation({ ...run("done"), canContinue: false }, "done"),
+    ).toBe(false);
   });
 });
 

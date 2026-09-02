@@ -272,7 +272,7 @@ function VisibilityControl({
         onClose={() => !busy && setConfirmShare(false)}
         onConfirm={update}
         title="Share this investigation?"
-        message="Everyone in your organization who can access this cluster can read this entire investigation—including your questions and the logs and manifests Radar read—and can continue or stop it."
+        message="Everyone in your organization can read this entire investigation—including your questions and the logs and manifests Radar read—and can continue or stop it."
         confirmLabel="Share with organization"
         variant="warning"
         isLoading={busy}
@@ -292,7 +292,7 @@ function VisibilityControl({
 //                 the last focused run. Without this the button dispatches an
 //                 agent — real tokens — from a screen showing an unrelated list.
 //   run           nothing to take a resource from.
-//   running       a human start is handed back the live run, so the click does
+//   running/stopping a human start is handed back the live run, so the click does
 //                 nothing. An automatic run is a different, immutable session,
 //                 so it deliberately keeps the fresh human escape hatch.
 //   stale         the body already offers "Re-run on current cluster" WITH the
@@ -307,7 +307,8 @@ export function canStartNewInvestigation(
   return (
     view === "investigation" &&
     !!run &&
-    (run.status !== "running" || run.trigger === "background") &&
+    ((run.status !== "running" && run.status !== "stopping") ||
+      run.trigger === "background") &&
     run.status !== "stale" &&
     !needsConsent
   );

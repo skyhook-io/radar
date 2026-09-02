@@ -32,7 +32,7 @@ function runTone(status: RunSummary["status"]): StatusTone {
 }
 
 function statusDot(status: RunSummary["status"]) {
-  if (status === "running")
+  if (status === "running" || status === "stopping")
     return <Loader2 className="h-3 w-3 shrink-0 animate-spin text-accent" />;
   return <StatusDot tone={runTone(status)} className="shrink-0" />;
 }
@@ -48,6 +48,8 @@ function statusWord(
       return { text: "Failed", cls: "text-red-400" };
     case "stopped":
       return { text: "Stopped", cls: "text-theme-text-tertiary" };
+    case "stopping":
+      return { text: "Stopping", cls: "text-theme-text-tertiary" };
     case "stale":
       // Plain words, not the internal status name: "stale" means the run was
       // about a cluster that's no longer connected.
@@ -150,8 +152,8 @@ export function RecentList({
                   </Badge>
                 )}
                 <span className="shrink-0 text-[11px] text-theme-text-tertiary">
-                  {r.status === "running" ? (
-                    "running…"
+                  {r.status === "running" || r.status === "stopping" ? (
+                    r.status === "stopping" ? "stopping…" : "running…"
                   ) : (
                     <>
                       {(() => {

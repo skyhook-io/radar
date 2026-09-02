@@ -69,8 +69,8 @@ function ClearHistoryRow({
         )}
         {hosted && confirming && state === "idle" && (
           <span className="ml-1 font-medium text-red-400">
-            This also removes terminal automatic and organization-shared
-            investigations for this cluster.
+            This permanently deletes every member&apos;s investigations for this
+            cluster — private, organization-shared, and automatic.
           </span>
         )}
       </p>

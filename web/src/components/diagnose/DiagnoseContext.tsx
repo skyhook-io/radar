@@ -474,11 +474,11 @@ export function DiagnoseProvider({
     );
   }, []);
 
-  // A content-stable signature of the resources with a live (running) investigation,
+  // A content-stable signature of the resources with a live investigation,
   // so the per-resource Diagnose buttons can show a "running" indicator even with the
   // panel closed — and only re-render when the set actually changes, not every poll.
   const runningSig = runs
-    .filter((r) => r.status === "running")
+    .filter((r) => r.status === "running" || r.status === "stopping")
     .map((r) => runTargetKey(r.kind, r.namespace, r.name))
     .sort()
     .join("|");

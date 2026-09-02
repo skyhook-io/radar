@@ -34,6 +34,43 @@ import {
 const RECHECK_QUESTION =
   "Did the fix resolve the issue? Re-check the resource's current status and health now, and say whether it's healthy.";
 
+export function canStopInvestigation(
+  run: RunSummary,
+  busy: boolean,
+  gone: boolean,
+  latestTurnStatus?: Turn["status"],
+): boolean {
+  // The transcript is fresher than the polled run summary. Once it has a
+  // terminal frame, a lagging/failed summary refresh must not resurrect Stop.
+  const transcriptTerminal =
+    latestTurnStatus === "done" || latestTurnStatus === "error";
+  return (
+    run.trigger !== "background" &&
+    run.status !== "stale" &&
+    run.status !== "stopping" &&
+    !gone &&
+    !transcriptTerminal &&
+    (busy || run.status === "running")
+  );
+}
+
+export function canContinueInvestigation(
+  run: RunSummary,
+  latestTurnStatus?: Turn["status"],
+): boolean {
+  const transcriptTerminal =
+    latestTurnStatus === "done" || latestTurnStatus === "error";
+  const summaryIsLaggingTerminalTranscript =
+    run.status === "running" &&
+    run.trigger !== "background" &&
+    transcriptTerminal;
+  return (
+    run.status !== "stale" &&
+    run.status !== "stopping" &&
+    (run.canContinue !== false || summaryIsLaggingTerminalTranscript)
+  );
+}
+
 export function InvestigationView({
   run,
   agentLabel,
@@ -44,7 +81,6 @@ export function InvestigationView({
   maximized: boolean;
 }) {
   const { kind, namespace, name } = run;
-  const canContinue = run.canContinue !== false && run.status !== "stale";
   // Apply is off for hosted agents (read-only server-side). Keyed on the selected
   // agent, which matches run.agent unless a deployment mixes hosted + local agents.
   const { refreshRuns, openInvestigation, startError, dismissError, hosted } =
@@ -70,13 +106,6 @@ export function InvestigationView({
   // show a silent blank panel; instead we render a "no longer available" state.
   const [gone, setGone] = useState(false);
   const [busy, setBusy] = useState(false);
-  // Continuation needs a resumable session, but stopping does not. A brand-new
-  // hosted turn can be running before the SDK has reported its session id, so
-  // keep Stop available for human investigations without advertising a
-  // follow-up composer that the server would reject. Automatic runs remain
-  // immutable even while their stream marks this view busy.
-  const canStop =
-    run.trigger !== "background" && (busy || run.status === "running");
   const [input, setInput] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -103,6 +132,14 @@ export function InvestigationView({
   // unfolds in beats: "rca" = root cause only (+ a "weighing remediation" beat),
   // "full" = everything. null/"full" for replayed turns (no choreography on rebuild).
   const [reveal, setReveal] = useState<"rca" | "full" | null>(null);
+  const latestTurnStatus = turns[turns.length - 1]?.status;
+  const canContinue = canContinueInvestigation(run, latestTurnStatus);
+  // Continuation needs a resumable session, but stopping does not. A brand-new
+  // hosted turn can be running before the SDK has reported its session id, so
+  // keep Stop available for human investigations without advertising a
+  // follow-up composer that the server would reject. Automatic runs remain
+  // immutable even while their stream marks this view busy.
+  const canStop = canStopInvestigation(run, busy, gone, latestTurnStatus);
   const synthTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const clearSynth = () => {
     synthTimers.current.forEach(clearTimeout);
@@ -639,6 +676,10 @@ export function InvestigationView({
           >
             Stop
           </button>
+        ) : run.status === "stopping" ? (
+          <div className="rounded-lg border border-theme-border bg-theme-base px-3 py-2 text-xs text-theme-text-secondary">
+            Stopping investigation…
+          </div>
         ) : !canContinue ? (
           <div className="rounded-lg border border-theme-border bg-theme-base px-3 py-2 text-xs text-theme-text-secondary">
             {run.trigger === "background"
@@ -657,7 +698,7 @@ export function InvestigationView({
                 }
               }}
               rows={1}
-              disabled={!canContinue}
+              disabled={!canContinue || busy}
               placeholder={
                 stale
                   ? "Cluster changed — re-run Diagnose"
@@ -667,7 +708,7 @@ export function InvestigationView({
             />
             <button
               onClick={submitFollowup}
-              disabled={!input.trim() || !canContinue}
+              disabled={!input.trim() || !canContinue || busy}
               className="shrink-0 rounded-lg btn-brand p-2 disabled:opacity-40"
               aria-label="Send follow-up"
             >

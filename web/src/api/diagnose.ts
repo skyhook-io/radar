@@ -102,7 +102,7 @@ export interface RunSummary {
   effort?: string;
   managedBy?: string; // GitOps/Helm owner of the target ("Argo CD"/"Flux"/"Helm"), for the Apply warning
   health?: ResourceHealthSignal;
-  status: "running" | "done" | "error" | "stopped" | "stale";
+  status: "running" | "stopping" | "done" | "error" | "stopped" | "stale";
   sessionId?: string;
   preview?: string;
   createdAt: string;
