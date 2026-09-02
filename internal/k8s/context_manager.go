@@ -715,27 +715,13 @@ func PerformNamespaceRescope(namespace string) error {
 	return nil
 }
 
-// setNamespaceScopeAndRetireProbes changes the forced namespace scope and then
-// retires the permission probes computed against the previous one.
-//
-// The order is the contract. The permissions cache retires a probe by comparing
-// the generation it captured before reading its inputs against the generation at
-// publish time, so a bump only retires probes that started before it. Bumping
-// first would leave a probe that starts in between holding the OLD scope under
-// the NEW generation, free to publish it as current for a full TTL. A rescope
-// keeps the same clients, so no other guard covers those probes.
-func setNamespaceScopeAndRetireProbes(namespace string) {
-	SetNamespaceScopeOverride(namespace)
-	InvalidateResourcePermissionsCache()
-}
-
 func reinitializeNamespaceScope(namespace, resetMessage string) error {
 	reportProgress(resetMessage)
 	t := time.Now()
 	ResetAllSubsystems()
 	logTiming("   [ops] ResetAllSubsystems: %v", time.Since(t))
 
-	setNamespaceScopeAndRetireProbes(namespace)
+	SetNamespaceScopeOverride(namespace)
 	InvalidateCapabilitiesCache()
 	InvalidateServerVersionCache()
 

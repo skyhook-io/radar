@@ -1296,14 +1296,27 @@ func fallbackNamespaceCandidatesLocked() []string {
 // explicit --namespace startup flag.
 func SetNamespaceScopeOverride(ns string) {
 	clientMu.Lock()
-	defer clientMu.Unlock()
 	namespaceScopeOverride = ns
+	clientMu.Unlock()
+	retirePermissionProbesForScopeChange()
 }
 
 func ClearNamespaceScopeOverride() {
 	clientMu.Lock()
-	defer clientMu.Unlock()
 	namespaceScopeOverride = ""
+	clientMu.Unlock()
+	retirePermissionProbesForScopeChange()
+}
+
+// retirePermissionProbesForScopeChange discards permission probes computed
+// against the scope that was just replaced. It runs after the write, and after
+// clientMu is released, and both matter: the permissions cache retires a probe
+// by comparing the generation it captured before reading its inputs, so a
+// retirement that landed before the write would leave a probe holding the old
+// scope under the new generation — and the cache takes its own lock, which must
+// never nest inside clientMu.
+func retirePermissionProbesForScopeChange() {
+	InvalidateResourcePermissionsCache()
 }
 
 func SetNamespaceScopePreferenceResolver(resolver func(contextName string) (string, bool)) {

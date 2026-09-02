@@ -813,15 +813,12 @@ func TestCacheHitRejectedAfterClientSwap(t *testing.T) {
 	}
 }
 
-// TestNamespaceRescopeRetiresInFlightProbe covers a rescope retiring a probe
-// that is already in flight against the previous scope. A rescope keeps the
-// same clients, so the cache generation is the only guard that applies.
+// TestNamespaceRescopeRetiresInFlightProbe covers a scope change retiring a
+// probe that is already in flight against the previous scope. A rescope keeps
+// the same clients, so the cache generation is the only guard that applies.
 //
-// It does NOT pin the statement ordering inside
-// setNamespaceScopeAndRetireProbes: catching an inverted order needs a probe
-// that starts BETWEEN the two statements, which no test can schedule without a
-// seam in production code. That ordering rests on the contract documented
-// there.
+// It drives SetNamespaceScopeOverride, which is where the retirement lives, so
+// no caller can change the scope without it.
 func TestNamespaceRescopeRetiresInFlightProbe(t *testing.T) {
 	defer ResetTestState()
 
@@ -862,7 +859,7 @@ func TestNamespaceRescopeRetiresInFlightProbe(t *testing.T) {
 		t.Fatal("probe never reached the dynamic client")
 	}
 
-	setNamespaceScopeAndRetireProbes(currentNs)
+	SetNamespaceScopeOverride(currentNs)
 
 	close(release)
 	select {
