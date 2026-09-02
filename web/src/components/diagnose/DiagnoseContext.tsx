@@ -421,12 +421,26 @@ export function DiagnoseProvider({
         }
       }
       setRuns((prev) => {
-        if (focusedRun) return [focusedRun, ...r.runs];
+        let nextRuns = r.runs;
+        if (focusedRun) nextRuns = [focusedRun, ...nextRuns];
         if (focusedID && retainFocusedSnapshot) {
           const previous = prev.find((run) => run.id === focusedID);
-          if (previous) return [previous, ...r.runs];
+          if (previous) nextRuns = [previous, ...nextRuns];
         }
-        return r.runs;
+
+        // openRun/start can focus and insert a run while the direct fetch above
+        // is in flight. Preserve that newer focus instead of replacing it with
+        // the snapshot for the run that was active when this refresh started.
+        const currentFocusedID = activeRunIdRef.current;
+        if (
+          currentFocusedID &&
+          currentFocusedID !== focusedID &&
+          !nextRuns.some((run) => run.id === currentFocusedID)
+        ) {
+          const current = prev.find((run) => run.id === currentFocusedID);
+          if (current) nextRuns = [current, ...nextRuns];
+        }
+        return nextRuns;
       });
       setRunsLoaded(true);
       setRunsLoadFailed(false);
