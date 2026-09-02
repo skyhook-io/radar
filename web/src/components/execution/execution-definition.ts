@@ -19,6 +19,7 @@ export interface ExecutionDefinitionSummary {
   serviceAccount: string
   retry: string
   deadline?: string
+  ttlAfterFinished?: string
   parallelism?: string
 }
 
@@ -79,6 +80,7 @@ function kubernetesJobSummary(jobSpec: any): ExecutionDefinitionSummary {
     serviceAccount: podSpec.serviceAccountName || 'default',
     retry: `Backoff limit ${jobSpec.backoffLimit ?? 6} · restart ${podSpec.restartPolicy || 'Never'}`,
     ...(jobSpec.activeDeadlineSeconds != null ? { deadline: `${jobSpec.activeDeadlineSeconds}s` } : {}),
+    ...(jobSpec.ttlSecondsAfterFinished != null ? { ttlAfterFinished: `${jobSpec.ttlSecondsAfterFinished}s` } : {}),
     parallelism: `${parallelism} parallel · ${completions} ${completions === 1 ? 'completion' : 'completions'} · ${completionMode}`,
   }
 }

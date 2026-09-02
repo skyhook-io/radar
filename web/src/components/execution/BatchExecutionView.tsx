@@ -475,9 +475,7 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
       progress: latest?.progress,
       duration: latest ? formatRunDuration(latest) : '',
       work: latest ? workCount(latest) : '',
-      facts: [
-        ['TTL after finish', spec.ttlSecondsAfterFinished != null ? `${spec.ttlSecondsAfterFinished}s` : 'None'],
-      ],
+      facts: [],
       definition,
     }
   }
@@ -544,6 +542,7 @@ function ExecutionDefinitionDetails({ summary, namespace, compact = false }: { s
             <DefinitionFact label="Service account" value={summary.serviceAccount} mono />
             {summary.configMaps.length > 0 && <DefinitionFact label="ConfigMaps" value={summary.configMaps.join(', ')} mono />}
             {summary.secrets.length > 0 && <DefinitionFact label="Secrets" value={summary.secrets.join(', ')} mono />}
+            {summary.ttlAfterFinished && <DefinitionFact label="TTL after finish" value={summary.ttlAfterFinished} />}
           </>
         )}
       </div>
