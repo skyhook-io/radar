@@ -139,13 +139,15 @@ export function RecentList({
                   {r.kind} {r.namespace ? `${r.namespace}/` : ""}
                   {r.name}
                 </span>
-                <span className="shrink-0 rounded bg-theme-elevated px-1.5 py-0.5 text-[10px] font-medium text-theme-text-tertiary">
-                  {r.trigger === "background"
-                    ? "Automatic"
-                    : r.visibility === "organization"
-                      ? "Shared"
-                      : "Private"}
-                </span>
+                {(r.trigger || r.visibility) && (
+                  <span className="shrink-0 rounded bg-theme-elevated px-1.5 py-0.5 text-[10px] font-medium text-theme-text-tertiary">
+                    {r.trigger === "background"
+                      ? "Automatic"
+                      : r.visibility === "organization"
+                        ? "Shared"
+                        : "Private"}
+                  </span>
+                )}
                 <span className="shrink-0 text-[11px] text-theme-text-tertiary">
                   {r.status === "running" ? (
                     "running…"

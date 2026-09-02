@@ -209,6 +209,12 @@ function writeRunIDToLocation(id: string | null, push: boolean) {
       "",
       `${url.pathname}${url.search}${url.hash}`,
     );
+    // History API writes do not notify BrowserRouter. Replaying the new state as
+    // popstate keeps every later navigate/setSearchParams call on the same live
+    // query string instead of letting a stale router snapshot erase ai-run.
+    window.dispatchEvent(
+      new PopStateEvent("popstate", { state: window.history.state }),
+    );
   } catch {
     /* URL APIs unavailable — panel state still works for this session */
   }
@@ -250,8 +256,10 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   // panel launch must never be closed by the deep-link synchronization effect.
   const urlRunIdRef = useRef(runIDFromLocation());
   const writeFocusedRunID = useCallback((id: string | null, push: boolean) => {
-    writeRunIDToLocation(id, push);
+    // Set this before writeRunIDToLocation's synthetic popstate so our own
+    // listener can distinguish a programmatic close/home write from Back.
     if (diagnoseURLStateEnabled()) urlRunIdRef.current = id;
+    writeRunIDToLocation(id, push);
   }, []);
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [runsLoaded, setRunsLoaded] = useState(false);
@@ -379,30 +387,45 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  const refreshRuns = useCallback(() => {
+  const refreshRuns = useCallback(async () => {
     if (!available) return;
-    listRuns()
-      .then((r) => {
-        const focusedID = activeRunIdRef.current;
-        setRuns((prev) => {
-          if (!focusedID || r.runs.some((run) => run.id === focusedID)) {
-            return r.runs;
-          }
+    try {
+      const r = await listRuns();
+      const focusedID = activeRunIdRef.current;
+      let focusedRun: RunSummary | null = null;
+      let retainFocusedSnapshot = false;
+      if (focusedID && !r.runs.some((run) => run.id === focusedID)) {
+        try {
           // A stable deep link can target a retained run older than the bounded
-          // history page. Keep that directly fetched summary while it is open.
-          const focusedRun = prev.find((run) => run.id === focusedID);
-          return focusedRun ? [focusedRun, ...r.runs] : r.runs;
-        });
-        setRunsLoaded(true);
-        setRunsLoadFailed(false);
-        setHistoryDegraded(!!r.historyDegraded);
-      })
-      .catch(() => {
-        // Leave runsLoaded false (a missing-run verdict needs a real list) but
-        // record the failure so the panel can say "retrying" instead of
-        // pretending nothing happened. The 4s poll keeps retrying while open.
-        setRunsLoadFailed(true);
+          // history page. Refresh it directly too: its status and capabilities
+          // must not freeze at the first snapshot while the panel stays open.
+          focusedRun = await getRun(focusedID);
+        } catch (error) {
+          // The bounded list is still authoritative for everything else. A
+          // missing/revoked focused run falls out and renders unavailable;
+          // transient direct-fetch failures keep the last useful snapshot.
+          retainFocusedSnapshot = !(
+            error instanceof DiagnoseError && error.status === 404
+          );
+        }
+      }
+      setRuns((prev) => {
+        if (focusedRun) return [focusedRun, ...r.runs];
+        if (focusedID && retainFocusedSnapshot) {
+          const previous = prev.find((run) => run.id === focusedID);
+          if (previous) return [previous, ...r.runs];
+        }
+        return r.runs;
       });
+      setRunsLoaded(true);
+      setRunsLoadFailed(false);
+      setHistoryDegraded(!!r.historyDegraded);
+    } catch {
+      // Leave runsLoaded false (a missing-run verdict needs a real list) but
+      // record the failure so the panel can say "retrying" instead of
+      // pretending nothing happened. The 4s poll keeps retrying while open.
+      setRunsLoadFailed(true);
+    }
   }, [available]);
   const updateRunSummary = useCallback((run: RunSummary) => {
     setRuns((prev) =>

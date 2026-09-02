@@ -390,7 +390,7 @@ export function InvestigationView({
 
   const submitFollowup = () => {
     const q = input.trim();
-    if (!q || busy || stale) return;
+    if (!q || busy || !canContinue) return;
     setInput("");
     setActionError(null);
     pinnedRef.current = true; // a user-initiated turn always follows to the bottom
@@ -403,7 +403,7 @@ export function InvestigationView({
   // Ask a canned follow-up (e.g. "explain simply") — a one-tap path that turns the
   // prompt's plain-language instruction into something the user controls.
   const askFollowup = (q: string) => {
-    if (busy || stale) return;
+    if (busy || !canContinue) return;
     setActionError(null);
     pinnedRef.current = true;
     addTurn(run.id, { question: q }).catch((e) =>
@@ -618,10 +618,11 @@ export function InvestigationView({
       <div
         className={`border-t border-theme-border px-3 py-2.5 ${maximized ? "[&>*]:mx-auto [&>*]:max-w-3xl" : ""}`}
       >
-        {!canContinue && run.trigger === "background" ? (
+        {!canContinue ? (
           <div className="rounded-lg border border-theme-border bg-theme-base px-3 py-2 text-xs text-theme-text-secondary">
-            Automatic investigation · read-only. Start a new investigation on
-            this resource to continue digging.
+            {run.trigger === "background"
+              ? "Automatic investigation · read-only. Start a new investigation on this resource to continue digging."
+              : "This investigation is read-only."}
           </div>
         ) : busy ? (
           <button
@@ -652,7 +653,7 @@ export function InvestigationView({
             />
             <button
               onClick={submitFollowup}
-              disabled={!input.trim() || stale}
+              disabled={!input.trim() || !canContinue}
               className="shrink-0 rounded-lg btn-brand p-2 disabled:opacity-40"
               aria-label="Send follow-up"
             >
