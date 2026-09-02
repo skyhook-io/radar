@@ -129,8 +129,8 @@ func TestSummaryIsFilteredToTheUsersNamespaces(t *testing.T) {
 	}
 }
 
-// The regression the discussion actually reports: a namespace-scoped user was
-// shown the cluster total. The total must not exceed what their own rows sum to.
+// A restricted total must never exceed the sum of the rows the caller can see.
+// Any excess is cluster spend they are not entitled to.
 func TestSummaryTotalExcludesNamespacesTheUserCannotSee(t *testing.T) {
 	startFakeProm(t)
 

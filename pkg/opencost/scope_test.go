@@ -93,8 +93,8 @@ func TestComputeCostSummaryFromProm_RestrictedDropsOtherNamespaces(t *testing.T)
 	}
 }
 
-// The reported leak: a namespace-scoped user was shown the cluster total. The
-// node-total ceiling is a cluster figure and must not survive the restriction.
+// The node-total ceiling is a cluster figure, so it must not survive a
+// restriction — a restricted total covers only the caller's own rows.
 func TestComputeCostSummaryFromProm_RestrictedTotalsCoverOnlyVisibleRows(t *testing.T) {
 	client := scriptedProm(t, summaryScopeCases())
 
