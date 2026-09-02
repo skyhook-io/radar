@@ -633,7 +633,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'hostnames', label: 'Hostnames', width: 'w-48' },
     { key: 'parents', label: 'Gateways', width: 'w-36' },
     { key: 'backends', label: 'Backends', width: 'w-48', tooltip: 'Backend services receiving traffic' },
-    { key: 'rules', label: 'Rules', width: 'w-16', hideOnMobile: true },
+    { key: 'rules', label: 'Rules', width: 'w-20', hideOnMobile: true },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   istiogateways: [
@@ -1117,14 +1117,14 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'action', label: 'Action', width: 'w-36', tooltip: 'Enforcement at admission — Enforce blocks, Audit reports; Background only or Inactive when admission is disabled' },
-    { key: 'rules', label: 'Rules', width: 'w-16' },
+    { key: 'rules', label: 'Rules', width: 'w-20' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   clusterpolicies: [
     { key: 'name', label: 'Name' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'action', label: 'Action', width: 'w-36', tooltip: 'Enforcement at admission — Enforce blocks, Audit reports; Background only or Inactive when admission is disabled' },
-    { key: 'rules', label: 'Rules', width: 'w-16' },
+    { key: 'rules', label: 'Rules', width: 'w-20' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   // Kyverno modern CEL family (policies.kyverno.io). "Enforcement" is the
@@ -1247,7 +1247,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'hostnames', label: 'Hostnames', width: 'w-48' },
     { key: 'parents', label: 'Gateways', width: 'w-36' },
     { key: 'backends', label: 'Backends', width: 'w-48', tooltip: 'Backend services receiving traffic' },
-    { key: 'rules', label: 'Rules', width: 'w-16', hideOnMobile: true },
+    { key: 'rules', label: 'Rules', width: 'w-20', hideOnMobile: true },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   tcproutes: [
@@ -1256,7 +1256,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'parents', label: 'Gateways', width: 'w-36' },
     { key: 'backends', label: 'Backends', width: 'w-48', tooltip: 'Backend services receiving traffic' },
-    { key: 'rules', label: 'Rules', width: 'w-16', hideOnMobile: true },
+    { key: 'rules', label: 'Rules', width: 'w-20', hideOnMobile: true },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   tlsroutes: [
@@ -1266,7 +1266,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'hostnames', label: 'Hostnames', width: 'w-48', tooltip: 'SNI hostnames for TLS routing' },
     { key: 'parents', label: 'Gateways', width: 'w-36' },
     { key: 'backends', label: 'Backends', width: 'w-48', tooltip: 'Backend services receiving traffic' },
-    { key: 'rules', label: 'Rules', width: 'w-16', hideOnMobile: true },
+    { key: 'rules', label: 'Rules', width: 'w-20', hideOnMobile: true },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   sealedsecrets: [
