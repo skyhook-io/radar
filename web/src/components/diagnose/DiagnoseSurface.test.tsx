@@ -151,6 +151,16 @@ describe("canContinueInvestigation", () => {
       canContinueInvestigation({ ...run("done"), canContinue: false }, "done"),
     ).toBe(false);
   });
+
+  it("does not offer a follow-up after the retained run disappears", () => {
+    expect(
+      canContinueInvestigation(
+        { ...run("running"), canContinue: false },
+        "error",
+        true,
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("canCopyRunLink", () => {

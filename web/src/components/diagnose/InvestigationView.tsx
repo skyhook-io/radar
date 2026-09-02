@@ -57,6 +57,7 @@ export function canStopInvestigation(
 export function canContinueInvestigation(
   run: RunSummary,
   latestTurnStatus?: Turn["status"],
+  gone = false,
 ): boolean {
   const transcriptTerminal =
     latestTurnStatus === "done" || latestTurnStatus === "error";
@@ -65,6 +66,7 @@ export function canContinueInvestigation(
     run.trigger !== "background" &&
     transcriptTerminal;
   return (
+    !gone &&
     run.status !== "stale" &&
     run.status !== "stopping" &&
     (run.canContinue !== false || summaryIsLaggingTerminalTranscript)
@@ -133,7 +135,7 @@ export function InvestigationView({
   // "full" = everything. null/"full" for replayed turns (no choreography on rebuild).
   const [reveal, setReveal] = useState<"rca" | "full" | null>(null);
   const latestTurnStatus = turns[turns.length - 1]?.status;
-  const canContinue = canContinueInvestigation(run, latestTurnStatus);
+  const canContinue = canContinueInvestigation(run, latestTurnStatus, gone);
   // Continuation needs a resumable session, but stopping does not. A brand-new
   // hosted turn can be running before the SDK has reported its session id, so
   // keep Stop available for human investigations without advertising a
