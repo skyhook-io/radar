@@ -95,9 +95,17 @@ type SummaryOptions struct {
 //     Available=false, Reason=ReasonNoMetrics.
 //   - Otherwise Available=true with namespace rows + totals filled in.
 //   - Numbers rounded to 4dp for JSON cleanliness.
+//   - AllowedNamespaces restricts which rows are read at all, so every total
+//     is computed over what the caller may see; an empty non-nil set is
+//     Available=false, Reason=ReasonAccessDenied.
 func ComputeCostSummary(ctx context.Context, client *RESTClient, opts SummaryOptions) *CostSummary {
 	if opts.Currency == "" {
 		opts.Currency = DefaultCurrency
+	}
+	scope := namespaceScope(opts.AllowedNamespaces)
+	restricted := !scope.unrestricted()
+	if restricted && len(scope) == 0 {
+		return &CostSummary{Available: false, Reason: ReasonAccessDenied, Restricted: true, Currency: opts.Currency}
 	}
 	if opts.Window == "" {
 		opts.Window = "1h"
@@ -115,10 +123,10 @@ func ComputeCostSummary(ctx context.Context, client *RESTClient, opts SummaryOpt
 	})
 	if err != nil {
 		log.Printf("[opencost] /allocation summary failed: %v", err)
-		return &CostSummary{Available: false, Reason: ReasonQueryError}
+		return &CostSummary{Available: false, Reason: ReasonQueryError, Restricted: restricted, Currency: opts.Currency}
 	}
 	if resp == nil || len(resp.Data) == 0 {
-		return &CostSummary{Available: false, Reason: ReasonNoMetrics}
+		return &CostSummary{Available: false, Reason: ReasonNoMetrics, Restricted: restricted, Currency: opts.Currency}
 	}
 
 	// /allocation returns an array of time windows. For a single bucket we
@@ -137,6 +145,20 @@ func ComputeCostSummary(ctx context.Context, client *RESTClient, opts SummaryOpt
 			if opts.NamespaceFilter != "" {
 				ns, _ := a.Properties["namespace"].(string)
 				if ns != opts.NamespaceFilter {
+					continue
+				}
+			}
+			if restricted {
+				// When aggregating by namespace the row name is the
+				// namespace; other aggregates carry it in Properties. The
+				// synthetic __idle__ row has neither, so it drops out of a
+				// restricted view — unassigned node capacity cannot be
+				// attributed to any one namespace.
+				ns := name
+				if aggregate != "namespace" {
+					ns, _ = a.Properties["namespace"].(string)
+				}
+				if !scope.allows(ns) {
 					continue
 				}
 			}
@@ -171,7 +193,7 @@ func ComputeCostSummary(ctx context.Context, client *RESTClient, opts SummaryOpt
 	}
 
 	if len(combined) == 0 {
-		return &CostSummary{Available: false, Reason: ReasonNoMetrics}
+		return &CostSummary{Available: false, Reason: ReasonNoMetrics, Restricted: restricted, Currency: opts.Currency}
 	}
 
 	namespaces := make([]NamespaceCost, 0, len(combined))
@@ -305,6 +327,7 @@ func ComputeCostSummary(ctx context.Context, client *RESTClient, opts SummaryOpt
 
 	return &CostSummary{
 		Available:         true,
+		Restricted:        restricted,
 		Currency:          opts.Currency,
 		Window:            opts.Window,
 		TotalHourlyCost:   totalHourlyCost,

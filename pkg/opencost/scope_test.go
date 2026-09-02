@@ -2,6 +2,7 @@ package opencost
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
 	"testing"
 
@@ -282,6 +283,76 @@ func TestComputeCostTrendFromProm_UnrestrictedIsUnchanged(t *testing.T) {
 	got := ComputeCostTrendFromProm(context.Background(), client, TrendPromOptions{})
 	if len(got.Series) != 2 {
 		t.Errorf("series = %+v, want both", got.Series)
+	}
+	if got.Restricted {
+		t.Error("Restricted = true, want false")
+	}
+}
+
+// The REST path is not reached by Radar's own handlers today, but it shares
+// SummaryOptions with the PromQL path — a caller wiring it up must not get an
+// unscoped answer from a scoped request.
+
+func TestComputeCostSummary_REST_RestrictedTotalsCoverOnlyVisibleRows(t *testing.T) {
+	body := buildAllocationResponse(t, map[string]float64{
+		"team-a":      3.00,
+		"team-b":      5.00,
+		"kube-system": 9.00,
+	})
+	client := fakeOpenCost(t, body)
+
+	got := ComputeCostSummary(context.Background(), client, SummaryOptions{
+		AllowedNamespaces: []string{"team-a"},
+	})
+	if !got.Available || !got.Restricted {
+		t.Fatalf("Available=%v Restricted=%v, want true/true", got.Available, got.Restricted)
+	}
+	if len(got.Namespaces) != 1 || got.Namespaces[0].Name != "team-a" {
+		t.Fatalf("Namespaces = %+v, want team-a only", got.Namespaces)
+	}
+	if got.TotalHourlyCost != 3.00 {
+		t.Errorf("TotalHourlyCost = %v, want 3 (team-a alone, not the cluster)", got.TotalHourlyCost)
+	}
+}
+
+func TestComputeCostSummary_REST_IdleIsDroppedWhenRestricted(t *testing.T) {
+	// __idle__ is unassigned node capacity. It belongs to no namespace, so a
+	// restricted caller must not be handed it as part of "their" waste.
+	window := map[string]*Allocation{
+		"team-a":   {Name: "team-a", CPUCost: 1.0, RAMCost: 0.5, TotalCost: 1.5, TotalEfficiency: 1},
+		"__idle__": {Name: "__idle__", CPUCost: 8.0, RAMCost: 2.0, TotalCost: 10.0},
+	}
+	body, _ := json.Marshal(AllocationResponse{Code: 200, Data: []map[string]*Allocation{window}})
+	client := fakeOpenCost(t, string(body))
+
+	got := ComputeCostSummary(context.Background(), client, SummaryOptions{
+		AllowedNamespaces: []string{"team-a"},
+	})
+	if got.TotalIdleCost != 0 {
+		t.Errorf("TotalIdleCost = %v, want 0 (cluster idle is not attributable to team-a)", got.TotalIdleCost)
+	}
+}
+
+func TestComputeCostSummary_REST_NoAllowedNamespacesIsDenied(t *testing.T) {
+	client := fakeOpenCost(t, buildAllocationResponse(t, map[string]float64{"team-a": 3.00}))
+
+	got := ComputeCostSummary(context.Background(), client, SummaryOptions{
+		AllowedNamespaces: []string{},
+	})
+	if got.Available || got.Reason != ReasonAccessDenied || !got.Restricted {
+		t.Fatalf("got %+v, want denied", got)
+	}
+	if len(got.Namespaces) != 0 {
+		t.Errorf("Namespaces = %+v, want none", got.Namespaces)
+	}
+}
+
+func TestComputeCostSummary_REST_UnrestrictedIsUnchanged(t *testing.T) {
+	client := fakeOpenCost(t, buildAllocationResponse(t, map[string]float64{"team-a": 3.00, "team-b": 5.00}))
+
+	got := ComputeCostSummary(context.Background(), client, SummaryOptions{})
+	if len(got.Namespaces) != 2 {
+		t.Errorf("Namespaces = %+v, want both", got.Namespaces)
 	}
 	if got.Restricted {
 		t.Error("Restricted = true, want false")
