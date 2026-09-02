@@ -1,4 +1,5 @@
 {
+  "name": "radar",
   "private": true,
   "workspaces": [
     "web",
