@@ -98,6 +98,7 @@ interface DiagnoseCtx {
 // churns the business context) doesn't re-render the whole shell.
 interface DiagnoseLayoutCtx {
   open: boolean;
+  close: () => void;
   contentGutter: number; // px right-gutter for the content area when docked (0 = overlay/closed)
   maximized: boolean;
   setMaximized: Dispatch<SetStateAction<boolean>>;
@@ -732,6 +733,7 @@ export function DiagnoseProvider({
   const layout = useMemo<DiagnoseLayoutCtx>(
     () => ({
       open,
+      close,
       contentGutter,
       maximized,
       setMaximized,
@@ -744,6 +746,7 @@ export function DiagnoseProvider({
     }),
     [
       open,
+      close,
       contentGutter,
       maximized,
       width,

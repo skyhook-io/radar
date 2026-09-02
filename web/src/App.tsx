@@ -37,6 +37,7 @@ import { CloudFunnelButton } from './components/CloudFunnelButton'
 import { useNavCustomization } from './context/NavCustomization'
 import type { FleetTakeoverTarget } from './context/NavCustomization'
 import { PrimaryNavRail } from './components/nav/PrimaryNavRail'
+import { navigateFromPrimaryRail } from './components/nav/navigation'
 import { useNavRailPinned } from './hooks/useNavRailPinned'
 import { useMediaQuery } from './hooks/useMediaQuery'
 import { ContextSwitchProvider, useContextSwitch } from './context/ContextSwitchContext'
@@ -322,7 +323,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // The AI panel is an absolute slot in the body frame (the column under the header):
   // it reserves a right gutter on the CONTENT only, so the navbar + nav rail stay
   // static. contentGutter is the docked panel width (0 when closed/overlay/maximized).
-  const { open: diagnoseOpen, contentGutter } = useDiagnoseLayout()
+  const {
+    open: diagnoseOpen,
+    close: closeDiagnose,
+    contentGutter,
+    maximized: diagnoseMaximized,
+  } = useDiagnoseLayout()
   // Hand off to a host-owned URL. The host's `onHostNavigate` (Radar Cloud's
   // cross-tree swap) navigates same-document so the chrome morphs instead of
   // cold-booting; without it we fall back to a hard `window.location` nav.
@@ -491,6 +497,17 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
     navigate({ pathname: path, search: newParams.toString() })
   }, [navigate, takeover, goHost])
+
+  // The standalone rail expresses intent to leave the full-width investigation
+  // workspace. Close it before routing so the destination is immediately visible;
+  // docked investigations stay open across views as a persistent side panel.
+  const handlePrimaryNavigate = useCallback((view: ExtendedMainView) => {
+    navigateFromPrimaryRail(
+      diagnoseOpen && diagnoseMaximized,
+      closeDiagnose,
+      () => setMainView(view),
+    )
+  }, [diagnoseOpen, diagnoseMaximized, closeDiagnose, setMainView])
 
   // Cloud (embedded) takes over the "fleet-shaped" per-cluster views with its
   // own fleet pages scoped to this cluster — owned by the host's left rail — so
@@ -1669,7 +1686,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {showNavRail && (
         <PrimaryNavRail
           activeView={navActiveView}
-          onNavigate={setMainView}
+          onNavigate={handlePrimaryNavigate}
           pinned={navRailEffectivePinned}
           onTogglePinned={toggleNavRailPinned}
           showPinToggle={!railForcedSlim}
