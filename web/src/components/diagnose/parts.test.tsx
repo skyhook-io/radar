@@ -52,6 +52,25 @@ describe("appendThinking", () => {
       first,
     );
   });
+
+  it("preserves repeated ordinary lines identically in live chunks and replay", () => {
+    const line = "The retry produced the same timeout.\n";
+    const replay = appendThinking([], line + line, false);
+    const live = appendThinking(appendThinking([], line, true), line, true);
+
+    expect(
+      live.map((item) => (item.kind === "thinking" ? item.text : undefined)),
+    ).toEqual(
+      replay.map((item) => (item.kind === "thinking" ? item.text : undefined)),
+    );
+    expect(live).toMatchObject([
+      {
+        kind: "thinking",
+        text: line + line,
+        animate: true,
+      },
+    ]);
+  });
 });
 
 function renderAgent(
@@ -231,7 +250,7 @@ describe("ResultCard conclusion states", () => {
   });
 
   const conclusionCases: Array<[Diagnosis, string]> = [
-    [diagnosis({ rootCause: "The image does not exist." }), "Root cause"],
+    [diagnosis({ rootCause: "The image does not exist." }), "Likely cause"],
     [
       diagnosis({ healthy: true, report: "The workload is ready." }),
       "No active problems found",
@@ -259,9 +278,29 @@ describe("ResultCard conclusion states", () => {
       />,
     );
 
-    expect(html).toContain("No active problems found in completed checks");
+    expect(html).toContain("No problem identified in completed checks");
     expect(html).toContain("Structured evidence is incomplete or unavailable");
+    expect(html).toContain("border-amber-500/30");
+    expect(html).toContain("text-amber-500");
+    expect(html).not.toContain("border-emerald-500/30");
+    expect(html).not.toContain("text-emerald-500");
     expect(html).not.toContain(">No active problems found</div>");
+  });
+
+  it("reserves the verified healthy treatment for an adequately covered all-clear", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={diagnosis({
+          healthy: true,
+          report: "The workload is ready.",
+        })}
+      />,
+    );
+
+    expect(html).toContain("No active problems found");
+    expect(html).toContain("border-emerald-500/30");
+    expect(html).toContain("text-emerald-500");
+    expect(html).not.toContain("No problem identified in completed checks");
   });
 
   it("does not overstate the rank of evidence that conflicts with an all-clear", () => {
@@ -290,7 +329,7 @@ describe("ResultCard conclusion states", () => {
       />,
     );
     expect(html).toContain("Answer");
-    expect(html).not.toContain("Root cause");
+    expect(html).not.toContain("Likely cause");
     expect(html).not.toContain("Conclusion");
   });
 
@@ -323,10 +362,10 @@ describe("ResultCard conclusion states", () => {
       <ResultCard diagnosis={value} section="actions" />,
     );
 
-    expect(conclusion).toContain("Root cause");
+    expect(conclusion).toContain("Likely cause");
     expect(conclusion).not.toContain("Remediation");
     expect(actions).toContain("Remediation");
-    expect(actions).not.toContain("Root cause");
+    expect(actions).not.toContain("Likely cause");
   });
 
   it("does not stagger remediation rows after the result card arrives", () => {

@@ -1,5 +1,6 @@
 import {
   defaultConditionTone,
+  stripAnsi,
   type Issue,
   type IssueRecentChange,
   type Topology,
@@ -19,6 +20,8 @@ import {
   type DiagnosisResourceRef,
   type DiagnosisStartupBlocker,
 } from "./diagnoseEvidenceTypes";
+import type { RootCauseEvidence } from "../../api/diagnose";
+import { investigationResourceEvidenceSummary } from "./investigationResourceEvidenceModel";
 
 /**
  * The projection deliberately consumes only the small, structural portion of
@@ -55,6 +58,7 @@ export type InvestigationEvidenceTimelineItem =
       status: string;
       summary?: string;
       result?: string;
+      evidenceRef?: string;
       truncated?: boolean;
       isError?: boolean;
     };
@@ -97,6 +101,8 @@ export interface InvestigationEvidenceSource {
   phase: InvestigationEvidencePhase;
   /** True only when the agent transport explicitly marked the tool result successful. */
   confirmedSuccess: boolean;
+  /** Server-issued, turn-scoped identity for this exact retained result. */
+  evidenceRef?: string;
   /**
    * The highest-priority evidence group produced by this call. Evidence panes
    * use it for one unique Activity → Evidence anchor even when a bundle fans
@@ -298,6 +304,8 @@ export type InvestigationEvidenceData =
 export interface InvestigationEvidenceObservation {
   source: InvestigationEvidenceSource;
   revision: number;
+  /** This exact observation predates a later successful verification of its proof scope. */
+  historical: boolean;
   /** Whether this semantic item differs from its immediately previous check. */
   changedFromPrevious: boolean;
   /**
@@ -349,7 +357,25 @@ export interface InvestigationEvidenceProjection {
   groups: InvestigationEvidenceGroup[];
   limitations: InvestigationEvidenceLimitation[];
   sources: InvestigationEvidenceSource[];
+  /** Every retained tool item carrying a server-issued ref, eligible or not. */
+  evidenceRefSources: InvestigationEvidenceSource[];
+  /** Complete confirmed-success sources eligible for server-authored links. */
+  citableSources: InvestigationEvidenceSource[];
   coverage: InvestigationEvidenceCoverage;
+}
+
+export interface InvestigationRootCauseEvidenceLink {
+  source: InvestigationEvidenceSource;
+  /** Exact-source snapshot of the source's primary typed observation. */
+  group?: InvestigationEvidenceGroup;
+  /** Original projection group removed from the ordinary hierarchy on promotion. */
+  originalGroupId?: string;
+  additionalGroupCount: number;
+}
+
+export interface InvestigationRootCauseEvidenceResolution {
+  status: "linked" | "missing" | "invalid";
+  links: InvestigationRootCauseEvidenceLink[];
 }
 
 function domToken(value: string): string {
@@ -377,6 +403,178 @@ export function investigationActivitySourceDomId(sourceId: string): string {
 
 export function investigationEvidenceSourceDomId(sourceId: string): string {
   return `investigation-evidence-${sourceId}`;
+}
+
+const investigationEvidenceRefRe = /^ev_[a-z2-7]{26,128}_[a-z2-7]{26,128}$/;
+
+export function resolveInvestigationRootCauseEvidence(
+  projection: InvestigationEvidenceProjection,
+  evidence: RootCauseEvidence | undefined,
+  assessmentTurnIndex: number,
+): InvestigationRootCauseEvidenceResolution {
+  if (!evidence || evidence.status === "missing") {
+    return { status: "missing", links: [] };
+  }
+  if (evidence.status !== "linked") {
+    return { status: "invalid", links: [] };
+  }
+  const refs = evidence.refs;
+  if (
+    !refs ||
+    refs.length < 1 ||
+    refs.length > 3 ||
+    new Set(refs).size !== refs.length ||
+    refs.some((ref) => !investigationEvidenceRefRe.test(ref)) ||
+    refs.some((ref) => ref.split("_")[1] !== refs[0].split("_")[1])
+  ) {
+    return { status: "invalid", links: [] };
+  }
+
+  const byRef = new Map<string, InvestigationEvidenceSource[]>();
+  for (const source of projection.evidenceRefSources) {
+    if (source.turnIndex !== assessmentTurnIndex) continue;
+    if (!source.evidenceRef) continue;
+    const matches = byRef.get(source.evidenceRef) ?? [];
+    matches.push(source);
+    byRef.set(source.evidenceRef, matches);
+  }
+  const citableSourceIds = new Set(
+    projection.citableSources
+      .filter((source) => source.turnIndex === assessmentTurnIndex)
+      .map((source) => source.id),
+  );
+  const links: InvestigationRootCauseEvidenceLink[] = [];
+  for (const ref of refs) {
+    const matches = byRef.get(ref);
+    // Match the server's fail-closed binding: every current-turn occurrence
+    // counts before success/completeness eligibility is considered.
+    if (matches?.length !== 1 || !citableSourceIds.has(matches[0].id)) {
+      return { status: "invalid", links: [] };
+    }
+    const source = matches[0];
+    const originalGroup = source.primaryGroupId
+      ? projection.groups.find((group) => group.id === source.primaryGroupId)
+      : undefined;
+    const group = originalGroup
+      ? citedGroupForSource(originalGroup, source)
+      : undefined;
+    const observedGroupCount = projection.groups.filter((candidate) =>
+      candidate.observations.some(
+        (observation) => observation.source.id === source.id,
+      ),
+    ).length;
+    links.push({
+      source,
+      group,
+      originalGroupId: group ? originalGroup?.id : undefined,
+      additionalGroupCount: Math.max(0, observedGroupCount - (group ? 1 : 0)),
+    });
+  }
+  return { status: "linked", links };
+}
+
+export function investigationEvidenceGroupWithoutSources(
+  group: InvestigationEvidenceGroup,
+  excludedSourceIds: ReadonlySet<string>,
+): InvestigationEvidenceGroup | undefined {
+  const observations = group.observations
+    .filter((observation) => !excludedSourceIds.has(observation.source.id))
+    .map((observation, index, remaining) => ({
+      ...observation,
+      revision: index + 1,
+      changedFromPrevious:
+        index > 0 &&
+        evidenceSemanticSnapshot(remaining[index - 1]) !==
+          evidenceSemanticSnapshot(observation),
+    }));
+  if (observations.length === 0) return undefined;
+  const relevanceRank: Record<InvestigationEvidenceRelevance, number> = {
+    target: 0,
+    "producer-related": 1,
+    broader: 2,
+  };
+  const latest = observations.reduce((authoritative, observation) =>
+    relevanceRank[observation.relevance] <=
+    relevanceRank[authoritative.relevance]
+      ? observation
+      : authoritative,
+  );
+  const latestRelevantObservation = [...observations]
+    .reverse()
+    .find((observation) => observation.relevance !== "broader");
+  return {
+    ...group,
+    historical: latestRelevantObservation?.historical ?? false,
+    firstOrder: Math.min(
+      ...observations.map((observation) => observation.source.order),
+    ),
+    observations,
+    latest,
+    chronologicalLatest: observations.at(-1)!,
+  };
+}
+
+export function investigationEvidenceStepIdsByTurn(
+  projection: InvestigationEvidenceProjection,
+  rootCauseEvidence?: InvestigationRootCauseEvidenceResolution,
+): Map<number, Set<string>> {
+  const byTurn = new Map<number, Set<string>>();
+  const linkedSourceIds = new Set<string>();
+  for (const group of projection.groups) {
+    for (const observation of group.observations) {
+      linkedSourceIds.add(observation.source.id);
+    }
+  }
+  for (const limitation of projection.limitations) {
+    for (const source of limitation.sources) linkedSourceIds.add(source.id);
+  }
+  for (const link of rootCauseEvidence?.links ?? []) {
+    linkedSourceIds.add(link.source.id);
+  }
+  const navigableSources = new Map(
+    [...projection.sources, ...projection.citableSources].map((source) => [
+      source.id,
+      source,
+    ]),
+  );
+  for (const source of navigableSources.values()) {
+    if (!linkedSourceIds.has(source.id)) continue;
+    const stepIds = byTurn.get(source.turnIndex) ?? new Set<string>();
+    stepIds.add(source.stepId);
+    byTurn.set(source.turnIndex, stepIds);
+  }
+  return byTurn;
+}
+
+function citedGroupForSource(
+  original: InvestigationEvidenceGroup,
+  source: InvestigationEvidenceSource,
+): InvestigationEvidenceGroup | undefined {
+  const sourceObservations = original.observations.filter(
+    (observation) => observation.source.id === source.id,
+  );
+  if (sourceObservations.length === 0) return undefined;
+  const id = `assessment-${source.id}-${original.id}`;
+  const citedSource = { ...source, primaryGroupId: id };
+  const observations = sourceObservations.map((observation) => ({
+    ...observation,
+    source: citedSource,
+  }));
+  const latestSourceRevision =
+    original.latest.source.id === source.id
+      ? original.latest.revision
+      : observations.at(-1)!.revision;
+  const latest =
+    observations.find(
+      (observation) => observation.revision === latestSourceRevision,
+    ) ?? observations.at(-1)!;
+  return {
+    ...original,
+    id,
+    observations,
+    latest,
+    chronologicalLatest: observations.at(-1)!,
+  };
 }
 
 function stableHash(value: string): string {
@@ -419,6 +617,33 @@ function kubernetesResource(
 ): InvestigationKubernetesResource | undefined {
   const resource = record(value);
   const metadata = record(resource?.metadata);
+  // Core Secrets intentionally use Radar's current safe detail contract rather
+  // than a Kubernetes object: identity + type + key names, with no values. Make
+  // that producer shape canonical for the projection instead of rejecting the
+  // exact evidence the agent saw.
+  if (
+    resource?.kind === "Secret" &&
+    !metadata &&
+    nonEmptyString(resource.name) &&
+    (resource.namespace === undefined ||
+      typeof resource.namespace === "string") &&
+    (resource.type === undefined || typeof resource.type === "string") &&
+    Array.isArray(resource.keys) &&
+    resource.keys.every((key) => typeof key === "string")
+  ) {
+    return {
+      ...resource,
+      apiVersion: "v1",
+      metadata: {
+        name: resource.name,
+        namespace: resource.namespace as string | undefined,
+        ...(record(resource.labels) ? { labels: resource.labels } : {}),
+        ...(record(resource.annotations)
+          ? { annotations: resource.annotations }
+          : {}),
+      },
+    } as InvestigationKubernetesResource;
+  }
   if (
     !resource ||
     !nonEmptyString(resource.apiVersion) ||
@@ -574,7 +799,12 @@ function filteredLogs(value: unknown): DiagnosisFilteredLogs | undefined {
   ) {
     return undefined;
   }
-  return candidate as unknown as DiagnosisFilteredLogs;
+  return {
+    ...(candidate as unknown as DiagnosisFilteredLogs),
+    lines: Array.isArray(candidate.lines)
+      ? candidate.lines.map((line) => stripAnsi(line))
+      : candidate.lines,
+  } as DiagnosisFilteredLogs;
 }
 
 function resourceRef(value: unknown): DiagnosisResourceRef | undefined {
@@ -860,7 +1090,12 @@ function sourceArgsRelevance(
   if (!kind || !nonEmptyString(args?.name)) return "broader";
   return relevanceForResource(builder, {
     kind,
-    group: nonEmptyString(args?.group) ? args.group : "",
+    // get_events/get_changes/issues cannot express an API group today. An
+    // omitted group is therefore unspecified, not proof that the caller meant
+    // the core API group. Use the known investigation target for that missing
+    // dimension; if a producer does provide a group, exact matching still
+    // applies (including an explicitly empty core group).
+    group: typeof args?.group === "string" ? args.group : builder.target.group,
     namespace: nonEmptyString(args?.namespace) ? args.namespace : undefined,
     name: args.name,
   });
@@ -940,7 +1175,7 @@ class ProjectionBuilder {
     source: InvestigationEvidenceSource,
     observation: Omit<
       InvestigationEvidenceObservation,
-      "source" | "revision" | "changedFromPrevious" | "relevance"
+      "source" | "revision" | "historical" | "changedFromPrevious" | "relevance"
     > & { relevance: InvestigationEvidenceRelevance },
   ): void {
     // Logs and synthesized startup/crash evidence do not carry a stable object
@@ -967,6 +1202,7 @@ class ProjectionBuilder {
       ...observation,
       source,
       revision: group ? group.observations.length + 1 : 1,
+      historical: false,
       changedFromPrevious,
     };
     if (!group) {
@@ -1136,13 +1372,17 @@ function resourceObservationSummary(
   if (gitOps?.sync) return `Sync ${gitOps.sync}`;
   if (gitOps?.suspended) return "Reconciliation suspended";
   const replicas = context?.workloadSummary?.replicas;
-  if (replicas) {
-    const desired = replicas.desired ?? 0;
+  if (replicas?.desired !== undefined) {
+    const desired = replicas.desired;
     const ready = replicas.ready ?? 0;
     return `${ready}/${desired} replicas ready`;
   }
   if (context?.statusSummary?.phase) return context.statusSummary.phase;
-  return warnings[0] || resource.metadata.namespace;
+  return (
+    investigationResourceEvidenceSummary(resource) ||
+    warnings[0] ||
+    resource.metadata.namespace
+  );
 }
 
 function addResourceObservation(
@@ -1282,7 +1522,10 @@ function crashCause(value: unknown): DiagnosisCrashCause | undefined {
   ) {
     return undefined;
   }
-  return candidate as unknown as DiagnosisCrashCause;
+  return {
+    ...(candidate as unknown as DiagnosisCrashCause),
+    logLine: stripAnsi(candidate.logLine as string),
+  };
 }
 
 function addEvents(
@@ -1405,7 +1648,9 @@ function addLogs(
   warnings: string[] = [],
   relevance: InvestigationEvidenceRelevance = "broader",
 ): void {
-  const lines = value.logs?.lines ?? [];
+  const lines = (value.logs?.lines ?? []).map((line) => stripAnsi(line));
+  const normalizedWarnings = warnings.map((warning) => stripAnsi(warning));
+  const normalizedError = value.error ? stripAnsi(value.error) : undefined;
   if (lines.length === 0) {
     builder.limit(
       source,
@@ -1420,7 +1665,7 @@ function addLogs(
   // adverse. Query strings and routine request logs can contain words such as
   // "warning" or "critical" and still be successful traffic. Promote only an
   // explicit failure/error signature; keep benign excerpts available in Context.
-  const diagnosticSignal = [...lines, ...warnings].some((line) =>
+  const diagnosticSignal = [...lines, ...normalizedWarnings].some((line) =>
     /(?:\b(?:error|exception|failed|failure|fatal|panic|crash|denied|refused|timeout|timed out|unhealthy|oomkill|back-?off)\b|\s5\d\d(?:\s|$))/i.test(
       line,
     ),
@@ -1436,7 +1681,7 @@ function addLogs(
       relevance,
     ),
     relevance,
-    tone: selectedEvidence || value.error ? "warning" : "neutral",
+    tone: selectedEvidence || normalizedError ? "warning" : "neutral",
     title: `${previous ? "Previous" : "Current"} logs · ${value.pod} / ${value.container}`,
     summary:
       lines.length > 0
@@ -1447,16 +1692,16 @@ function addLogs(
       pod: value.pod,
       container: value.container,
       previous,
-      logs: value.logs,
-      warnings,
-      error: value.error,
+      logs: value.logs ? { ...value.logs, lines } : undefined,
+      warnings: normalizedWarnings,
+      error: normalizedError,
     },
   });
-  if (value.error) {
+  if (normalizedError) {
     builder.limit(
       source,
       `${value.pod} / ${value.container}`,
-      value.error,
+      normalizedError,
       "error",
     );
   }
@@ -2322,11 +2567,13 @@ function adaptGetResource(
   source: InvestigationEvidenceSource,
   payload: unknown,
 ): void {
-  // Current producer modes are discriminated by the resource's own
-  // apiVersion/kind, never by guessing an undocumented legacy wrapper:
+  // Current producer modes are discriminated by the resource's own identity,
+  // never by guessing an undocumented legacy wrapper:
   //   1. bare Kubernetes resource
   //   2. {resource, resourceContext, warnings}
   //   3. the same wrapper with requested extras.
+  // Core Secrets use the producer's deliberately value-free detail shape,
+  // normalized by kubernetesResource above.
   const bare = kubernetesResource(payload);
   const wrapper = record(payload);
   const resource = bare ?? kubernetesResource(wrapper?.resource);
@@ -2778,14 +3025,14 @@ export function projectInvestigationEvidence(
   target: InvestigationEvidenceTarget,
 ): InvestigationEvidenceProjection {
   const builder = new ProjectionBuilder(target);
+  const evidenceRefSources: InvestigationEvidenceSource[] = [];
+  const citableSources: InvestigationEvidenceSource[] = [];
   let order = 0;
   for (const [turnIndex, turn] of turns.entries()) {
     for (const [timelineIndex, item] of turn.timeline.entries()) {
       const itemOrder = order;
       order += 1;
-      if (item.kind !== "tool" || item.status !== "done") continue;
-      const adapt = ADAPTERS[item.tool];
-      if (!adapt) continue;
+      if (item.kind !== "tool") continue;
       const source: InvestigationEvidenceSource = {
         id: investigationEvidenceSourceId(turnIndex, item.id),
         turnIndex,
@@ -2801,8 +3048,22 @@ export function projectInvestigationEvidence(
             : turn.question
               ? "followup"
               : "initial",
-        confirmedSuccess: item.isError === false,
+        confirmedSuccess: item.status === "done" && item.isError === false,
+        evidenceRef: item.evidenceRef,
       };
+      if (item.evidenceRef) evidenceRefSources.push(source);
+      if (item.status !== "done") continue;
+      if (
+        item.evidenceRef &&
+        investigationEvidenceRefRe.test(item.evidenceRef) &&
+        item.isError === false &&
+        !item.truncated &&
+        nonEmptyString(item.result)
+      ) {
+        citableSources.push(source);
+      }
+      const adapt = ADAPTERS[item.tool];
+      if (!adapt) continue;
       builder.addSource(source);
       if (item.isError === true) {
         builder.limit(
@@ -2993,31 +3254,32 @@ export function projectInvestigationEvidence(
   });
 
   for (const group of builder.groups) {
-    let latestRelevantObservation: InvestigationEvidenceObservation | undefined;
-    for (let index = group.observations.length - 1; index >= 0; index -= 1) {
-      if (group.observations[index].relevance !== "broader") {
-        latestRelevantObservation = group.observations[index];
-        break;
-      }
+    for (const observation of group.observations) {
+      const key =
+        observation.relevance !== "broader"
+          ? retirementKey(group, observation)
+          : undefined;
+      observation.historical = Boolean(
+        key &&
+        verificationCoverage.some(
+          (verification) =>
+            verification.turnIndex > observation.source.turnIndex &&
+            verification.keys.has(key),
+        ),
+      );
     }
-    const key = latestRelevantObservation
-      ? retirementKey(group, latestRelevantObservation)
-      : undefined;
-    group.historical = Boolean(
-      latestRelevantObservation &&
-      key &&
-      verificationCoverage.some(
-        (verification) =>
-          verification.turnIndex > latestRelevantObservation.source.turnIndex &&
-          verification.keys.has(key),
-      ),
-    );
+    const latestRelevantObservation = [...group.observations]
+      .reverse()
+      .find((observation) => observation.relevance !== "broader");
+    group.historical = latestRelevantObservation?.historical ?? false;
   }
 
   return {
     groups: builder.groups,
     limitations: builder.limitations,
     sources: builder.sources,
+    evidenceRefSources,
+    citableSources,
     coverage: {
       attempted: builder.sources.length,
       projected: builder.projectedSources.size,

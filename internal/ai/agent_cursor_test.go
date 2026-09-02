@@ -82,20 +82,21 @@ func TestCursorForceGrantEndToEnd(t *testing.T) {
 // items drive running/done steps (bare toolName, result nested at
 // result.success.content[].text.text), and the result event carries the final report.
 func TestCursorParseStream_FormatPin(t *testing.T) {
+	ref := testEvidenceRef('a', 'b')
 	stream := strings.Join([]string{
 		`{"type":"system","subtype":"init","session_id":"sess-abc","model":"GPT-5.5"}`,
 		`{"type":"user","message":{"content":[{"type":"text","text":"investigate"}]}}`,
 		`{"type":"thinking","subtype":"delta","text":"checking "}`,
 		`{"type":"thinking","subtype":"delta","text":"pods"}`,
 		`{"type":"tool_call","subtype":"started","tool_call":{"toolCallId":"call_1","mcpToolCall":{"args":{"toolName":"get_resource","args":{"namespace":"dev"}}}}}`,
-		`{"type":"tool_call","subtype":"completed","tool_call":{"toolCallId":"call_1","mcpToolCall":{"args":{"toolName":"get_resource","args":{"namespace":"dev"}},"result":{"success":{"isError":false,"content":[{"text":{"text":"crashloop detail"}}]}}}}}`,
+		`{"type":"tool_call","subtype":"completed","tool_call":{"toolCallId":"call_1","mcpToolCall":{"args":{"toolName":"get_resource","args":{"namespace":"dev"}},"result":{"success":{"isError":false,"content":[{"text":{"text":"[[radar:evidence-ref=` + ref + `]]\n"}},{"text":{"text":"crashloop detail"}}]}}}}}`,
 		`{"type":"assistant","message":{"content":[{"type":"text","text":"bad tag."}]}}`,
 		"{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"bad tag.\\n\\n```json\\n{\\\"root_cause\\\":\\\"bad tag\\\"}\\n```\"}",
 	}, "\n")
 
 	var running, done bool
 	var doneIsError *bool
-	var thinking, doneResult, runningSummary string
+	var thinking, doneResult, doneEvidenceRef, runningSummary string
 	agent := &cursorAgent{bin: "cursor-agent"}
 	diag := agent.parseStream(strings.NewReader(stream), func(ev StreamEvent) {
 		switch ev.Type {
@@ -115,6 +116,7 @@ func TestCursorParseStream_FormatPin(t *testing.T) {
 			case "done":
 				done = true
 				doneResult = ev.Step.Result
+				doneEvidenceRef = ev.Step.EvidenceRef
 				doneIsError = ev.Step.IsError
 			}
 		}
@@ -131,6 +133,9 @@ func TestCursorParseStream_FormatPin(t *testing.T) {
 	}
 	if !strings.Contains(doneResult, "crashloop detail") {
 		t.Errorf("expected nested tool result on done step, got %q", doneResult)
+	}
+	if doneEvidenceRef != ref || strings.Contains(doneResult, "radar:evidence-ref") {
+		t.Errorf("marker extraction result=%q ref=%q", doneResult, doneEvidenceRef)
 	}
 	if doneIsError == nil || *doneIsError {
 		t.Errorf("Cursor success envelope should be confirmed success, got %v", doneIsError)

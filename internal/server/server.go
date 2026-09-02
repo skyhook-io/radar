@@ -47,6 +47,7 @@ import (
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/images"
+	"github.com/skyhook-io/radar/internal/investigationrefs"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/opencost"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
@@ -67,30 +68,31 @@ import (
 
 // Server is the Explorer HTTP server
 type Server struct {
-	router             *chi.Mux
-	broadcaster        *SSEBroadcaster
-	vitalsMetrics      vitalsMetricsMemo
-	port               int
-	listenAddress      string
-	basePath           string
-	startupLog         bool
-	remoteAccessHint   bool
-	devMode            bool
-	staticFS           fs.FS
-	startTime          time.Time
-	listener           net.Listener
-	updater            *updater.Updater
-	mcpHandler         http.Handler
-	mcpReadOnlyHandler http.Handler
-	diagConfig         *DiagConfig
-	effectiveConfig    *config.Config // running config for GET /api/config
-	openCostCurrency   *opencost.CurrencyResolver
-	currencyManaged    bool
-	authConfig         auth.Config
-	permCache          *auth.PermissionCache
-	oidcHandler        *auth.OIDCHandler
-	saveFileFunc       func(defaultFilename string, data []byte) (string, error)
-	saveFileStreamFunc func(defaultFilename string, r io.Reader) (string, error)
+	router                  *chi.Mux
+	broadcaster             *SSEBroadcaster
+	vitalsMetrics           vitalsMetricsMemo
+	port                    int
+	listenAddress           string
+	basePath                string
+	startupLog              bool
+	remoteAccessHint        bool
+	devMode                 bool
+	staticFS                fs.FS
+	startTime               time.Time
+	listener                net.Listener
+	updater                 *updater.Updater
+	mcpHandler              http.Handler
+	mcpReadOnlyHandler      http.Handler
+	mcpInvestigationHandler http.Handler
+	diagConfig              *DiagConfig
+	effectiveConfig         *config.Config // running config for GET /api/config
+	openCostCurrency        *opencost.CurrencyResolver
+	currencyManaged         bool
+	authConfig              auth.Config
+	permCache               *auth.PermissionCache
+	oidcHandler             *auth.OIDCHandler
+	saveFileFunc            func(defaultFilename string, data []byte) (string, error)
+	saveFileStreamFunc      func(defaultFilename string, r io.Reader) (string, error)
 	// newExecutor builds the exec client for pod file transfers. Nil in
 	// production, where the package default is used; tests substitute a fake so
 	// the transfer can be driven end to end without a cluster.
@@ -165,23 +167,25 @@ type Server struct {
 
 // Config holds server configuration
 type Config struct {
-	Port               int
-	ListenAddress      string         // 127.0.0.1/localhost for local-only; 0.0.0.0 for shared access
-	BasePath           string         // Optional URL path prefix for self-hosted subpath deployments
-	StartupLog         bool           // Emit the operator-facing startup block after a successful bind
-	RemoteAccessHint   bool           // Explain the explicit shared-listener opt-in (native CLI only)
-	DevMode            bool           // Serve frontend from filesystem instead of embedded
-	StaticFS           embed.FS       // Embedded frontend files
-	StaticRoot         string         // Path within StaticFS
-	MCPHandler         http.Handler   // MCP server handler (nil = MCP disabled)
-	MCPReadOnlyHandler http.Handler   // read-only MCP handler (read tools only)
-	DiagConfig         *DiagConfig    // Sanitized config for diagnostics endpoint
-	EffectiveConfig    *config.Config // Running startup config for GET /api/config
-	OpenCostCurrency   string         // ISO 4217 code labeling values returned by OpenCost endpoints
-	OpenCostManaged    bool           // true when an explicit CLI/Helm flag owns the running value
-	AuthConfig         auth.Config    // Authentication configuration
-	AIHistoryDB        string         // AI run-history SQLite path ("" = memory-only runs)
-	CloudConnect       CloudConnectConfig
+	Port                    int
+	ListenAddress           string                      // 127.0.0.1/localhost for local-only; 0.0.0.0 for shared access
+	BasePath                string                      // Optional URL path prefix for self-hosted subpath deployments
+	StartupLog              bool                        // Emit the operator-facing startup block after a successful bind
+	RemoteAccessHint        bool                        // Explain the explicit shared-listener opt-in (native CLI only)
+	DevMode                 bool                        // Serve frontend from filesystem instead of embedded
+	StaticFS                embed.FS                    // Embedded frontend files
+	StaticRoot              string                      // Path within StaticFS
+	MCPHandler              http.Handler                // MCP server handler (nil = MCP disabled)
+	MCPReadOnlyHandler      http.Handler                // public read-only MCP handler (read tools only)
+	MCPInvestigationHandler http.Handler                // internal read-only MCP handler with evidence correlation
+	InvestigationRefs       *investigationrefs.Registry // shared private evidence issuance ledger
+	DiagConfig              *DiagConfig                 // Sanitized config for diagnostics endpoint
+	EffectiveConfig         *config.Config              // Running startup config for GET /api/config
+	OpenCostCurrency        string                      // ISO 4217 code labeling values returned by OpenCost endpoints
+	OpenCostManaged         bool                        // true when an explicit CLI/Helm flag owns the running value
+	AuthConfig              auth.Config                 // Authentication configuration
+	AIHistoryDB             string                      // AI run-history SQLite path ("" = memory-only runs)
+	CloudConnect            CloudConnectConfig
 }
 
 // New creates a new server instance
@@ -198,29 +202,30 @@ func New(cfg Config) *Server {
 		cfg.CloudConnect.HubAppURL = "https://app.radarhq.io"
 	}
 	s := &Server{
-		router:                chi.NewRouter(),
-		broadcaster:           NewSSEBroadcaster(),
-		port:                  cfg.Port,
-		listenAddress:         cfg.ListenAddress,
-		basePath:              basePath,
-		startupLog:            cfg.StartupLog,
-		remoteAccessHint:      cfg.RemoteAccessHint,
-		devMode:               cfg.DevMode,
-		startTime:             time.Now(),
-		mcpHandler:            cfg.MCPHandler,
-		mcpReadOnlyHandler:    cfg.MCPReadOnlyHandler,
-		diagConfig:            cfg.DiagConfig,
-		effectiveConfig:       cfg.EffectiveConfig,
-		openCostCurrency:      opencost.NewCurrencyResolver(cfg.OpenCostCurrency),
-		currencyManaged:       cfg.OpenCostManaged,
-		authConfig:            cfg.AuthConfig,
-		cloudConnectCfg:       cfg.CloudConnect,
-		topoMemo:              topology.NewMemoizer(5 * time.Second),
-		rbacMemo:              rbac.NewMemoizer(5 * time.Second),
-		capacityIssueMemo:     newCapacityIssueMemo(5 * time.Second),
-		yamlSchemaCache:       make(map[string][]byte),
-		yamlSchemaPathCache:   make(map[string]yamlSchemaPathCacheEntry),
-		yamlSchemaBundleCache: make(map[string]yamlSchemaBundleCacheEntry),
+		router:                  chi.NewRouter(),
+		broadcaster:             NewSSEBroadcaster(),
+		port:                    cfg.Port,
+		listenAddress:           cfg.ListenAddress,
+		basePath:                basePath,
+		startupLog:              cfg.StartupLog,
+		remoteAccessHint:        cfg.RemoteAccessHint,
+		devMode:                 cfg.DevMode,
+		startTime:               time.Now(),
+		mcpHandler:              cfg.MCPHandler,
+		mcpReadOnlyHandler:      cfg.MCPReadOnlyHandler,
+		mcpInvestigationHandler: cfg.MCPInvestigationHandler,
+		diagConfig:              cfg.DiagConfig,
+		effectiveConfig:         cfg.EffectiveConfig,
+		openCostCurrency:        opencost.NewCurrencyResolver(cfg.OpenCostCurrency),
+		currencyManaged:         cfg.OpenCostManaged,
+		authConfig:              cfg.AuthConfig,
+		cloudConnectCfg:         cfg.CloudConnect,
+		topoMemo:                topology.NewMemoizer(5 * time.Second),
+		rbacMemo:                rbac.NewMemoizer(5 * time.Second),
+		capacityIssueMemo:       newCapacityIssueMemo(5 * time.Second),
+		yamlSchemaCache:         make(map[string][]byte),
+		yamlSchemaPathCache:     make(map[string]yamlSchemaPathCacheEntry),
+		yamlSchemaBundleCache:   make(map[string]yamlSchemaBundleCacheEntry),
 	}
 	s.cloudInstall = newCloudInstallManager(cfg.CloudConnect)
 	s.cloudInstall.sharedListener = s.sharedListener
@@ -229,14 +234,16 @@ func New(cfg Config) *Server {
 	// subscription). nil when none is found — the feature stays disabled.
 	//
 	// Gated to no-auth (local/standalone) Radar: the engine drives the CLI
-	// against this server's OWN localhost /mcp with no credentials, which only
-	// works when /mcp is unauthenticated. Under proxy/OIDC auth (team / cloud
-	// deployments) the MCP requires identity headers the local CLI can't supply,
-	// and AI investigations are the embedding host's job (e.g. Radar Hub) anyway.
+	// against this server's own private localhost investigation MCP mount with no
+	// credentials, which only works when MCP is unauthenticated. Under proxy/OIDC
+	// auth (team / cloud deployments) the MCP requires identity headers the local
+	// CLI can't supply, and AI investigations are the embedding host's job (e.g.
+	// Radar Hub) anyway.
 	// Also requires /mcp to be mounted — the agent reaches the cluster only
 	// through it, so with --no-mcp the feature can't work.
-	if !s.authConfig.Enabled() && s.mcpHandler != nil {
-		if d, err := ai.NewDetected(context.Background()); err == nil {
+	if !s.authConfig.Enabled() && s.mcpHandler != nil &&
+		s.mcpInvestigationHandler != nil && cfg.InvestigationRefs != nil {
+		if d, err := ai.NewDetected(context.Background(), cfg.InvestigationRefs); err == nil {
 			s.aiDiagnoser = d
 			// History store opens only when the engine actually enables, so a
 			// disabled feature never creates the DB. Open failure degrades to
@@ -856,6 +863,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	r.Handle("/.well-known/*", http.NotFoundHandler())
 	r.Handle("/mcp/.well-known/*", http.NotFoundHandler())
 	r.Handle("/mcp-readonly/.well-known/*", http.NotFoundHandler())
+	r.Handle("/mcp-investigation/.well-known/*", http.NotFoundHandler())
 
 	// MCP server (Model Context Protocol for AI tools)
 	if s.mcpHandler != nil {
@@ -863,6 +871,9 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	}
 	if s.mcpReadOnlyHandler != nil {
 		r.Mount("/mcp-readonly", s.mcpReadOnlyHandler)
+	}
+	if s.mcpInvestigationHandler != nil {
+		r.Mount("/mcp-investigation", s.mcpInvestigationHandler)
 	}
 
 	// OAuth discovery probes from MCP HTTP clients. Without this, the frontend

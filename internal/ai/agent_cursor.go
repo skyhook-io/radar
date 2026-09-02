@@ -342,10 +342,14 @@ func cursorToolCallEvent(e cursorEvent, onEvent func(StreamEvent)) {
 			Summary: cursorArgsText(m.Args.Args),
 		}})
 	case "completed":
-		res, trunc := capPayload(cursorMCPResultText(m))
+		resultText, evidenceRef := splitInvestigationEvidenceMarker(
+			cursorMCPResultText(m),
+		)
+		res, trunc := capPayload(resultText)
 		onEvent(StreamEvent{Type: "step", Step: &StepInfo{
 			ID: tc.ToolCallID, Tool: m.Args.ToolName, Status: "done",
-			Result: res, IsError: cursorMCPResultErrorState(m.Result), Truncated: trunc,
+			Result: res, EvidenceRef: evidenceRef,
+			IsError: cursorMCPResultErrorState(m.Result), Truncated: trunc,
 		}})
 	}
 }

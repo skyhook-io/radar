@@ -27,18 +27,24 @@ import {
   formatRelativeAgeTime,
   mapHealthToTone,
   pluralize,
+  stripAnsi,
 } from "@skyhook-io/k8s-ui";
 
 import {
+  investigationEvidenceGroupWithoutSources,
   investigationEvidenceSourceDomId,
   type InvestigationEvidenceData,
   type InvestigationEvidenceGroup,
   type InvestigationEvidenceLimitation,
   type InvestigationEvidenceObservation,
   type InvestigationEvidenceProjection,
+  type InvestigationRootCauseEvidenceResolution,
   type InvestigationEvidenceSource,
   type InvestigationEvidenceTier,
 } from "./investigationEvidence";
+import { InvestigationResourceEvidence } from "./InvestigationResourceEvidence";
+import { investigationResourceEvidenceHasDetails } from "./investigationResourceEvidenceModel";
+import { prettyTool } from "./parts";
 
 // Shared Collapse uses a 200 ms grid-row transition. Keep a small paint margin
 // before moving focus so the destination is stationary. Reduced-motion users get
@@ -46,6 +52,7 @@ import {
 export const INVESTIGATION_DISCLOSURE_SETTLE_MS = 220;
 export const VISIBLE_ADDITIONAL_KEY_EVIDENCE = 2;
 export const VISIBLE_SUPPORTING_EVIDENCE = 4;
+export const VISIBLE_LOG_EVIDENCE_LINES = 12;
 
 function prefersReducedMotion(): boolean {
   return (
@@ -110,6 +117,7 @@ export function investigationEvidenceRevealCollection(
 
 export function InvestigationEvidencePane({
   projection,
+  rootCauseEvidence,
   collecting,
   animateGroupIds,
   onViewSource,
@@ -118,6 +126,8 @@ export function InvestigationEvidencePane({
   onRevealReady,
 }: {
   projection: InvestigationEvidenceProjection;
+  /** Server-validated links for the current root cause; absent without one. */
+  rootCauseEvidence?: InvestigationRootCauseEvidenceResolution;
   collecting: boolean;
   animateGroupIds: ReadonlySet<string>;
   onViewSource: (sourceId: string) => void;
@@ -143,14 +153,46 @@ export function InvestigationEvidencePane({
     ["context", []],
     ["checked", []],
   ]);
-  const historical: InvestigationEvidenceGroup[] = [];
-  for (const group of projection.groups) {
-    if (group.historical) historical.push(group);
-    else tiers.get(group.latest.tier)!.push(group);
-  }
-  const hasCurrentEvidence = projection.groups.some(
-    (group) => !group.historical,
+  const promotedSourceIds = new Set(
+    rootCauseEvidence?.links.map((link) => link.source.id) ?? [],
   );
+  const promotedSourcesByGroup = new Map<string, Set<string>>();
+  for (const link of rootCauseEvidence?.links ?? []) {
+    if (!link.originalGroupId) continue;
+    const sourceIds =
+      promotedSourcesByGroup.get(link.originalGroupId) ?? new Set();
+    sourceIds.add(link.source.id);
+    promotedSourcesByGroup.set(link.originalGroupId, sourceIds);
+  }
+  const historical: InvestigationEvidenceGroup[] = [];
+  const ordinaryGroups: InvestigationEvidenceGroup[] = [];
+  const relocatedSourceIds = new Set<string>();
+  for (const group of projection.groups) {
+    const excludedSources = promotedSourcesByGroup.get(group.id);
+    const ordinaryGroup = excludedSources
+      ? investigationEvidenceGroupWithoutSources(group, excludedSources)
+      : group;
+    if (!ordinaryGroup) {
+      // A terminal assessment can promote an already-rendered card without a
+      // new evidence revision. Retain that card's DOM id at its new location so
+      // InvestigationView's existing layout anchor can keep the reader's scroll
+      // position stable. Shared groups are split rather than relocated and keep
+      // separate ids to avoid duplicate DOM anchors.
+      // A bundled check can theoretically cite multiple revisions that shared
+      // one card. Only one destination may inherit the old id.
+      const owner = rootCauseEvidence?.links.find(
+        (link) => link.originalGroupId === group.id,
+      );
+      if (owner) relocatedSourceIds.add(owner.source.id);
+      continue;
+    }
+    ordinaryGroups.push(ordinaryGroup);
+    if (ordinaryGroup.historical) historical.push(ordinaryGroup);
+    else tiers.get(ordinaryGroup.latest.tier)!.push(ordinaryGroup);
+  }
+  const hasCurrentEvidence =
+    (rootCauseEvidence?.links.length ?? 0) > 0 ||
+    projection.groups.some((group) => !group.historical);
   const keyGroups = tiers.get("key")!;
   const primaryKeyGroups = keyGroups.slice(0, 1);
   const additionalKeyGroups = keyGroups.slice(
@@ -169,7 +211,12 @@ export function InvestigationEvidencePane({
     VISIBLE_SUPPORTING_EVIDENCE,
   );
   const revealCollection = revealRequest
-    ? investigationEvidenceRevealCollection(projection, revealRequest.sourceId)
+    ? promotedSourceIds.has(revealRequest.sourceId)
+      ? undefined
+      : investigationEvidenceRevealCollection(
+          { ...projection, groups: ordinaryGroups },
+          revealRequest.sourceId,
+        )
     : undefined;
 
   // A source link is a navigation request, not a disclosure preference. Open
@@ -254,7 +301,9 @@ export function InvestigationEvidencePane({
               id="investigation-radar-evidence"
               className="text-sm font-semibold text-theme-text-primary"
             >
-              Radar evidence
+              {rootCauseEvidence?.status === "linked"
+                ? "Evidence cited by assessment"
+                : "Radar evidence"}
             </h2>
             {collecting ? (
               <span className="inline-flex items-center gap-1.5 text-[11px] text-accent-text">
@@ -264,12 +313,36 @@ export function InvestigationEvidencePane({
             ) : null}
           </div>
           <p className="mt-0.5 text-xs leading-relaxed text-theme-text-tertiary">
-            Structured observations from completed Radar tool calls in this run.
+            {rootCauseEvidence?.status === "linked"
+              ? "Exact successful Radar checks selected by the agent to support its assessment."
+              : "Structured observations from completed Radar tool calls in this run."}
           </p>
         </div>
       </div>
 
       <div className="space-y-4">
+        {rootCauseEvidence ? (
+          <RootCauseEvidenceLinks
+            resolution={rootCauseEvidence}
+            relocatedSourceIds={relocatedSourceIds}
+            animateGroupIds={animateGroupIds}
+            onViewSource={onViewSource}
+          />
+        ) : null}
+
+        {rootCauseEvidence?.status === "linked" &&
+        (ordinaryGroups.length > 0 || projection.limitations.length > 0) ? (
+          <div className="border-t border-theme-border/60 pt-3">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-theme-text-secondary">
+              Other Radar observations
+            </h3>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-theme-text-tertiary">
+              Additional captured signals; these were not cited as the basis for
+              the assessment above.
+            </p>
+          </div>
+        ) : null}
+
         <EvidenceTier
           headingId="investigation-observed-failure-heading"
           tier="key"
@@ -304,6 +377,7 @@ export function InvestigationEvidencePane({
           <CoverageStrip
             limitations={projection.limitations}
             coverage={projection.coverage}
+            excludedSourceIds={promotedSourceIds}
             onViewSource={onViewSource}
             open={coverageOpen}
             onOpenChange={setCoverageOpen}
@@ -366,6 +440,102 @@ export function InvestigationEvidencePane({
         />
       </div>
     </section>
+  );
+}
+
+function RootCauseEvidenceLinks({
+  resolution,
+  relocatedSourceIds,
+  animateGroupIds,
+  onViewSource,
+}: {
+  resolution: InvestigationRootCauseEvidenceResolution;
+  relocatedSourceIds: ReadonlySet<string>;
+  animateGroupIds: ReadonlySet<string>;
+  onViewSource: (sourceId: string) => void;
+}) {
+  if (resolution.status !== "linked") {
+    return (
+      <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2.5">
+        <AlertTriangle
+          className="mt-0.5 h-4 w-4 shrink-0 text-amber-500"
+          aria-hidden
+        />
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-theme-text-primary">
+            {resolution.status === "invalid"
+              ? "Cited checks could not be validated"
+              : "Assessment is not linked to specific checks"}
+          </p>
+          <p className="mt-0.5 text-[11px] leading-relaxed text-theme-text-tertiary">
+            {resolution.status === "invalid"
+              ? "Radar did not promote those references as evidence. Review the Activity record before acting."
+              : "Review the Activity record and Radar observations below before acting on the agent’s conclusion."}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2.5">
+      {resolution.links.map((link, index) => (
+        <div key={link.source.id} className="space-y-1.5">
+          <div className="flex min-w-0 items-center justify-between gap-2 px-0.5">
+            <Badge severity="neutral" size="sm">
+              Agent-selected check {index + 1}
+            </Badge>
+            {link.additionalGroupCount > 0 ? (
+              <span className="truncate text-[10px] text-theme-text-tertiary">
+                +{pluralize(link.additionalGroupCount, "other observation")}{" "}
+                from this check below
+              </span>
+            ) : null}
+          </div>
+          {link.group ? (
+            <EvidenceCard
+              group={link.group}
+              domId={
+                link.originalGroupId && relocatedSourceIds.has(link.source.id)
+                  ? link.originalGroupId
+                  : undefined
+              }
+              initiallyOpen={index === 0}
+              animateArrival={
+                Boolean(link.originalGroupId) &&
+                animateGroupIds.has(link.originalGroupId!)
+              }
+              onViewSource={onViewSource}
+            />
+          ) : (
+            <div
+              id={investigationEvidenceSourceDomId(link.source.id)}
+              data-evidence-card
+              tabIndex={-1}
+              className="flex min-w-0 items-center gap-2 rounded-lg border border-emerald-500/25 bg-theme-surface px-3 py-2.5 outline-none focus:ring-2 focus:ring-accent/50"
+            >
+              <CheckCircle2
+                className="h-4 w-4 shrink-0 text-emerald-500"
+                aria-hidden
+              />
+              <span className="min-w-0 flex-1">
+                <span className="block text-xs font-medium text-theme-text-primary">
+                  {prettyTool(link.source.tool)}
+                </span>
+                <span className="block truncate text-[11px] text-theme-text-tertiary">
+                  Successful Radar check
+                </span>
+              </span>
+              <SourceButton
+                label={link.source.tool}
+                ariaLabel={`View cited ${link.source.tool} result in Activity`}
+                onClick={() => onViewSource(link.source.id)}
+              />
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -468,12 +638,15 @@ function CollapsedEvidenceCollection({
 function CoverageStrip({
   limitations,
   coverage,
+  excludedSourceIds,
   onViewSource,
   open,
   onOpenChange,
 }: {
   limitations: InvestigationEvidenceLimitation[];
   coverage: InvestigationEvidenceProjection["coverage"];
+  /** Sources promoted above already own the page's sole navigation anchor. */
+  excludedSourceIds: ReadonlySet<string>;
   onViewSource: (sourceId: string) => void;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -543,6 +716,7 @@ function CoverageStrip({
                   .filter(
                     (source) =>
                       !source.primaryGroupId &&
+                      !excludedSourceIds.has(source.id) &&
                       anchorLimitationBySource.get(source.id) === index,
                   )
                   .map((source) => (
@@ -659,11 +833,14 @@ function EvidenceTier({
 
 function EvidenceCard({
   group,
+  domId = group.id,
   initiallyOpen,
   animateArrival,
   onViewSource,
 }: {
   group: InvestigationEvidenceGroup;
+  /** Stable layout/scroll identity when an existing card changes section. */
+  domId?: string;
   initiallyOpen: boolean;
   animateArrival: boolean;
   onViewSource: (sourceId: string) => void;
@@ -674,7 +851,7 @@ function EvidenceCard({
     group.chronologicalLatest.revision > observation.revision
       ? group.chronologicalLatest
       : undefined;
-  const bodyId = `${group.id}-body`;
+  const bodyId = `${domId}-body`;
   const canExpand = evidenceHasDetails(observation.data);
   const wide =
     observation.data.type === "logs" || observation.data.type === "events";
@@ -694,8 +871,7 @@ function EvidenceCard({
             </Badge>
           ) : null}
           {observation.relevance === "producer-related" &&
-          (observation.tier === "key" ||
-            observation.tier === "supporting") ? (
+          (observation.tier === "key" || observation.tier === "supporting") ? (
             <Badge severity="neutral" size="sm">
               Related resource
             </Badge>
@@ -741,7 +917,7 @@ function EvidenceCard({
   );
   return (
     <article
-      id={group.id}
+      id={domId}
       data-evidence-card
       tabIndex={-1}
       className={clsx(
@@ -945,13 +1121,16 @@ function evidenceHasDetails(data: InvestigationEvidenceData): boolean {
   switch (data.type) {
     case "receipt":
       return false;
-    case "resource":
+    case "resource": {
+      const replicas = data.resourceContext?.workloadSummary?.replicas;
       return Boolean(
-        data.resourceContext?.workloadSummary?.replicas ||
+        investigationResourceEvidenceHasDetails(data.resource) ||
+        replicas?.desired !== undefined ||
         data.resourceContext?.statusSummary?.conditions?.length ||
         data.gitOpsDiagnosis ||
         data.warnings.length,
       );
+    }
     case "logs":
       return (data.logs?.lines?.length ?? 0) > 0 || Boolean(data.error);
     case "changes":
@@ -1070,6 +1249,7 @@ function ResourceBody({ data }: { data: EvidenceDataOf<"resource"> }) {
     desired !== undefined && ready !== undefined && ready < desired;
   return (
     <div className="space-y-3">
+      <InvestigationResourceEvidence resource={data.resource} />
       {data.gitOpsDiagnosis ? (
         <GitOpsStatusBody status={data.gitOpsDiagnosis} />
       ) : null}
@@ -1252,6 +1432,10 @@ function conditionStatusTone(condition: {
 
 function LogsBody({ data }: { data: EvidenceDataOf<"logs"> }) {
   const lines = data.logs?.lines ?? [];
+  const visibleLines = lines
+    .slice(-VISIBLE_LOG_EVIDENCE_LINES)
+    .map((line) => stripAnsi(line));
+  const omittedLines = lines.length - visibleLines.length;
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-1.5">
@@ -1272,9 +1456,15 @@ function LogsBody({ data }: { data: EvidenceDataOf<"logs"> }) {
           </span>
         ) : null}
       </div>
-      {lines.length > 0 ? (
-        <TerminalBlock label="Selected log excerpt">
-          {lines.join("\n")}
+      {visibleLines.length > 0 ? (
+        <TerminalBlock
+          label={
+            omittedLines > 0
+              ? `Selected log excerpt · last ${visibleLines.length} of ${lines.length} lines`
+              : "Selected log excerpt"
+          }
+        >
+          {visibleLines.join("\n")}
         </TerminalBlock>
       ) : (
         <p className="text-xs italic text-theme-text-tertiary">

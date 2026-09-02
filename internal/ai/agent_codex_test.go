@@ -11,19 +11,20 @@ import (
 // resumable session id, mcp_tool_call items drive running/done steps (bare tool
 // name, no prefix to strip), and the final agent_message is the report body.
 func TestCodexParseStream_FormatPin(t *testing.T) {
+	ref := testEvidenceRef('a', 'b')
 	stream := strings.Join([]string{
 		`{"type":"thread.started","thread_id":"019eef06-e99b-70f1-a25f-aba70f3ea57e"}`,
 		`{"type":"turn.started"}`,
 		`{"type":"item.completed","item":{"id":"r0","type":"reasoning","text":"checking pods"}}`,
 		`{"type":"item.started","item":{"id":"item_0","type":"mcp_tool_call","server":"radar","tool":"diagnose","arguments":{"name":"x"},"status":"in_progress"}}`,
-		`{"type":"item.completed","item":{"id":"item_0","type":"mcp_tool_call","server":"radar","tool":"diagnose","arguments":{"name":"x"},"result":{"content":[{"type":"text","text":"crashloop detail"}]},"status":"completed"}}`,
+		`{"type":"item.completed","item":{"id":"item_0","type":"mcp_tool_call","server":"radar","tool":"diagnose","arguments":{"name":"x"},"result":{"content":[{"type":"text","text":"[[radar:evidence-ref=` + ref + `]]\n"},{"type":"text","text":"crashloop detail"}]},"status":"completed"}}`,
 		"{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"bad tag.\\n\\n```json\\n{\\\"root_cause\\\":\\\"bad tag\\\"}\\n```\"}}",
 		`{"type":"turn.completed","usage":{"input_tokens":41789,"output_tokens":23}}`,
 	}, "\n")
 
 	var running, done bool
 	var doneIsError *bool
-	var thinking, doneResult, runningSummary string
+	var thinking, doneResult, doneEvidenceRef, runningSummary string
 	agent := &codexAgent{bin: "codex"}
 	diag := agent.parseStream(strings.NewReader(stream), func(ev StreamEvent) {
 		switch ev.Type {
@@ -43,6 +44,7 @@ func TestCodexParseStream_FormatPin(t *testing.T) {
 			case "done":
 				done = true
 				doneResult = ev.Step.Result
+				doneEvidenceRef = ev.Step.EvidenceRef
 				doneIsError = ev.Step.IsError
 			}
 		}
@@ -59,6 +61,9 @@ func TestCodexParseStream_FormatPin(t *testing.T) {
 	}
 	if !strings.Contains(doneResult, "crashloop detail") {
 		t.Errorf("expected tool result preview on done step, got %q", doneResult)
+	}
+	if doneEvidenceRef != ref || strings.Contains(doneResult, "radar:evidence-ref") {
+		t.Errorf("marker extraction result=%q ref=%q", doneResult, doneEvidenceRef)
 	}
 	if doneIsError == nil || *doneIsError {
 		t.Errorf("completed Codex tool result should be confirmed success, got %v", doneIsError)

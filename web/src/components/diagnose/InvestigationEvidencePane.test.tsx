@@ -5,6 +5,7 @@ import {
   INVESTIGATION_DISCLOSURE_SETTLE_MS,
   InvestigationEvidencePane,
   VISIBLE_ADDITIONAL_KEY_EVIDENCE,
+  VISIBLE_LOG_EVIDENCE_LINES,
   VISIBLE_SUPPORTING_EVIDENCE,
   investigationDisclosureSettleDelay,
   investigationEvidenceRevealCollection,
@@ -12,7 +13,9 @@ import {
 import {
   investigationEvidenceSourceDomId,
   projectInvestigationEvidence,
+  resolveInvestigationRootCauseEvidence,
   type InvestigationEvidenceProjection,
+  type InvestigationRootCauseEvidenceResolution,
   type InvestigationEvidenceTimelineItem,
 } from "./investigationEvidence";
 
@@ -54,16 +57,22 @@ function render(
   projection: InvestigationEvidenceProjection,
   collecting = false,
   afterMaterialEvidence?: string,
+  rootCauseEvidence?: InvestigationRootCauseEvidenceResolution,
 ): string {
   return renderToStaticMarkup(
     <InvestigationEvidencePane
       projection={projection}
+      rootCauseEvidence={rootCauseEvidence}
       collecting={collecting}
       animateGroupIds={new Set()}
       onViewSource={onViewSource}
       afterMaterialEvidence={afterMaterialEvidence}
     />,
   );
+}
+
+function evidenceRef(scope: string, nonce: string): string {
+  return `ev_${scope.repeat(26)}_${nonce.repeat(26)}`;
 }
 
 const criticalIssue = {
@@ -82,6 +91,233 @@ const criticalIssue = {
 };
 
 describe("InvestigationEvidencePane hierarchy and provenance", () => {
+  it("promotes exact agent-selected checks ahead of other Radar observations without duplicate anchors", () => {
+    const ref = evidenceRef("a", "b");
+    const projection = project(
+      tool(
+        "diagnose-cited",
+        "diagnose",
+        {
+          resource: {
+            apiVersion: "apps/v1",
+            kind: "Deployment",
+            metadata: { namespace: "shop", name: "api" },
+          },
+          resourceContext: { tier: "basic" },
+          relatedIssues: [criticalIssue],
+        },
+        { evidenceRef: ref },
+      ),
+      tool("events-other", "get_events", {
+        events: [
+          {
+            type: "Warning",
+            reason: "BackOff",
+            message: "Back-off restarting failed container",
+          },
+        ],
+      }),
+    );
+    const resolution = resolveInvestigationRootCauseEvidence(
+      projection,
+      { status: "linked", refs: [ref] },
+      0,
+    );
+    const originalGroupId = resolution.links[0].originalGroupId!;
+    const citedSnapshotId = resolution.links[0].group!.id;
+    const before = render(projection);
+    const html = render(projection, false, undefined, resolution);
+    const anchor = `id="${investigationEvidenceSourceDomId(
+      resolution.links[0].source.id,
+    )}"`;
+
+    expect(html).toContain("Evidence cited by assessment");
+    expect(html).toContain("Agent-selected check 1");
+    expect(html).toContain("Other Radar observations");
+    expect(html.indexOf("Evidence cited by assessment")).toBeLessThan(
+      html.indexOf("Other Radar observations"),
+    );
+    expect(html.match(new RegExp(anchor, "g"))).toHaveLength(1);
+    // The terminal assessment moves an existing card without adding an
+    // evidence revision. Keep its old DOM id so the workspace's layout anchor
+    // can compensate the relocation instead of jumping the reader's scroll.
+    expect(before).toContain(`id="${originalGroupId}"`);
+    expect(html.match(new RegExp(`id="${originalGroupId}"`, "g"))).toHaveLength(
+      1,
+    );
+    expect(html).not.toContain(`id="${citedSnapshotId}"`);
+    expect(html).not.toContain("animate-transcript-enter");
+  });
+
+  it("keeps uncited revisions visible when a cited check shares their semantic card", () => {
+    const ref = evidenceRef("a", "b");
+    const citedMessage = "The first check saw one crashing replica.";
+    const uncitedMessage = "A later uncited check saw every replica crashing.";
+    const projection = project(
+      tool(
+        "issues-cited",
+        "issues",
+        {
+          issues: [{ ...criticalIssue, message: citedMessage }],
+          total: 1,
+          total_matched: 1,
+        },
+        { evidenceRef: ref },
+      ),
+      tool("issues-uncited", "issues", {
+        issues: [{ ...criticalIssue, message: uncitedMessage }],
+        total: 1,
+        total_matched: 1,
+      }),
+    );
+    const resolution = resolveInvestigationRootCauseEvidence(
+      projection,
+      { status: "linked", refs: [ref] },
+      0,
+    );
+    const html = render(projection, false, undefined, resolution);
+    const citedSource = projection.sources.find(
+      (source) => source.stepId === "issues-cited",
+    )!;
+    const uncitedSource = projection.sources.find(
+      (source) => source.stepId === "issues-uncited",
+    )!;
+
+    expect(projection.groups).toHaveLength(1);
+    expect(html).toContain(citedMessage);
+    expect(html).toContain(uncitedMessage);
+    expect(html.indexOf(citedMessage)).toBeLessThan(
+      html.indexOf("Other Radar observations"),
+    );
+    expect(html.indexOf(uncitedMessage)).toBeGreaterThan(
+      html.indexOf("Other Radar observations"),
+    );
+    expect(html).toContain(`id="${resolution.links[0].group!.id}"`);
+    expect(
+      html.match(new RegExp(`id="${projection.groups[0].id}"`, "g")),
+    ).toHaveLength(1);
+    for (const source of [citedSource, uncitedSource]) {
+      expect(
+        html.match(
+          new RegExp(
+            `id="${investigationEvidenceSourceDomId(source.id)}"`,
+            "g",
+          ),
+        ),
+      ).toHaveLength(1);
+    }
+  });
+
+  it("links an agent-selected unadapted successful check directly to Activity", () => {
+    const ref = evidenceRef("a", "b");
+    const projection = project(
+      tool(
+        "metrics-cited",
+        "query_prometheus",
+        { result: [1] },
+        { evidenceRef: ref },
+      ),
+    );
+    const resolution = resolveInvestigationRootCauseEvidence(
+      projection,
+      { status: "linked", refs: [ref] },
+      0,
+    );
+    const html = render(projection, false, undefined, resolution);
+
+    expect(html).toContain("Query Prometheus");
+    expect(html).toContain("Successful Radar check");
+    expect(html).toContain("query_prometheus");
+    expect(html).toContain("View source");
+    expect(html).not.toContain("No structured evidence was collected");
+  });
+
+  it("gives a promoted fallback check one source anchor while retaining its coverage limit", () => {
+    const ref = evidenceRef("a", "b");
+    const projection = project(
+      tool(
+        "resource-invalid-cited",
+        "get_resource",
+        { unexpected: true },
+        { evidenceRef: ref },
+      ),
+    );
+    const resolution = resolveInvestigationRootCauseEvidence(
+      projection,
+      { status: "linked", refs: [ref] },
+      0,
+    );
+    const source = resolution.links[0].source;
+    const html = render(projection, false, undefined, resolution);
+    const anchor = `id="${investigationEvidenceSourceDomId(source.id)}"`;
+
+    expect(resolution.links[0].group).toBeUndefined();
+    expect(html).toContain("Get Resource");
+    expect(html).toContain("Successful Radar check");
+    expect(html).toContain("Evidence coverage has 1 limit");
+    expect(html).toContain(
+      "did not match its current structured evidence contract",
+    );
+    expect(html.match(new RegExp(anchor, "g"))).toHaveLength(1);
+  });
+
+  it("keeps inline log evidence compact and strips terminal color codes", () => {
+    const lines = Array.from(
+      { length: VISIBLE_LOG_EVIDENCE_LINES + 3 },
+      (_, index) =>
+        `\u001b[31mentry-${String(index + 1).padStart(2, "0")}\u001b[0m`,
+    );
+    const projection = project(
+      tool(
+        "logs-compact",
+        "get_pod_logs",
+        {
+          lines,
+          totalLines: lines.length,
+          matchedLines: lines.length,
+          fallback: false,
+        },
+        {
+          summary: JSON.stringify({
+            namespace: "shop",
+            name: "api-pod",
+            container: "api",
+          }),
+        },
+      ),
+    );
+    const html = render(projection);
+
+    expect(html).toContain(
+      `Selected log excerpt · last ${VISIBLE_LOG_EVIDENCE_LINES} of ${lines.length} lines`,
+    );
+    expect(html).not.toContain("entry-01");
+    expect(html).not.toContain("\u001b[31m");
+    expect(html).toContain(`entry-${lines.length}`);
+  });
+
+  it("shows compact honest boundaries for missing or invalid assessment links", () => {
+    const projection = project(
+      tool("resource-1", "get_resource", {
+        apiVersion: "apps/v1",
+        kind: "Deployment",
+        metadata: { namespace: "shop", name: "api" },
+      }),
+    );
+    const missing = render(projection, false, undefined, {
+      status: "missing",
+      links: [],
+    });
+    const invalid = render(projection, false, undefined, {
+      status: "invalid",
+      links: [],
+    });
+
+    expect(missing).toContain("Assessment is not linked to specific checks");
+    expect(invalid).toContain("Cited checks could not be validated");
+    expect(invalid).toContain("did not promote those references as evidence");
+  });
+
   it("waits for disclosure motion only when reduced motion is not requested", () => {
     expect(investigationDisclosureSettleDelay(false)).toBe(
       INVESTIGATION_DISCLOSURE_SETTLE_MS,
@@ -469,6 +705,67 @@ describe("InvestigationEvidencePane honest result states", () => {
     expect(html).not.toContain(`${resource!.id}-body`);
   });
 
+  it("keeps empty specialized resources static unless another real detail exists", () => {
+    const projection = project(
+      tool("config-empty", "get_resource", {
+        apiVersion: "v1",
+        kind: "ConfigMap",
+        metadata: { namespace: "shop", name: "empty-config" },
+        data: {},
+      }),
+      tool("secret-empty", "get_resource", {
+        kind: "Secret",
+        name: "empty-secret",
+        namespace: "shop",
+        type: "Opaque",
+        keys: [],
+      }),
+      tool("config-empty-context", "get_resource", {
+        resource: {
+          apiVersion: "v1",
+          kind: "ConfigMap",
+          metadata: { namespace: "shop", name: "empty-context" },
+          data: {},
+        },
+        resourceContext: {
+          tier: "basic",
+          workloadSummary: { replicas: {} },
+        },
+      }),
+    );
+    const resources = projection.groups.filter(
+      (group) => group.kind === "resource",
+    );
+    const html = render(projection);
+
+    expect(html).toContain("No data keys in this result");
+    expect(html).toContain("0 keys · Opaque · values hidden");
+    expect(html).not.toContain("0/0 replicas ready");
+    for (const resource of resources) {
+      expect(html).not.toContain(`${resource.id}-body`);
+    }
+
+    const withWarning = project(
+      tool("config-warning", "get_resource", {
+        resource: {
+          apiVersion: "v1",
+          kind: "ConfigMap",
+          metadata: { namespace: "shop", name: "empty-config" },
+          data: {},
+        },
+        warnings: ["The captured ConfigMap result is incomplete."],
+      }),
+    );
+    const warningResource = withWarning.groups.find(
+      (group) => group.kind === "resource",
+    )!;
+    const warningHtml = render(withWarning);
+    expect(warningHtml).toContain(`${warningResource.id}-body`);
+    expect(warningHtml).toContain(
+      "The captured ConfigMap result is incomplete.",
+    );
+  });
+
   it("renders a confirmed empty check as a compact, non-expandable receipt", () => {
     const projection = project(
       tool("diagnose-empty", "diagnose", {
@@ -542,6 +839,8 @@ describe("InvestigationEvidencePane honest result states", () => {
       groups: [],
       limitations: [],
       sources: [],
+      evidenceRefSources: [],
+      citableSources: [],
       coverage: { attempted: 0, projected: 0, limited: 0, checked: 0 },
     };
     const collecting = render(empty, true);

@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  DIAGNOSE_SURFACE_FRAME_CLASS,
   MAXIMIZED_COMPACT_HISTORY_VISIBILITY_CLASS,
   MAXIMIZED_HOME_DETAIL_VISIBILITY_CLASS,
   MAXIMIZED_HOME_RUN_HEADER_VISIBILITY_CLASS,
   MAXIMIZED_HISTORY_VISIBILITY_CLASS,
+  MAXIMIZED_RUN_META_VISIBILITY_CLASS,
   canStartNewInvestigation,
   investigationBreadcrumbVisibilityClass,
   investigationHeaderPresentation,
@@ -79,6 +81,13 @@ describe("canStartNewInvestigation", () => {
 });
 
 describe("investigation history navigation", () => {
+  it("keeps document overflow out of the bounded Diagnose frame", () => {
+    expect(DIAGNOSE_SURFACE_FRAME_CLASS).toContain("absolute");
+    expect(DIAGNOSE_SURFACE_FRAME_CLASS).toContain("min-h-0");
+    expect(DIAGNOSE_SURFACE_FRAME_CLASS).toContain("overflow-hidden");
+    expect(DIAGNOSE_SURFACE_FRAME_CLASS).not.toContain("overflow-y-auto");
+  });
+
   it("swaps the maximized breadcrumb for the master list at one container breakpoint", () => {
     expect(investigationBreadcrumbVisibilityClass(false)).toBe("");
     expect(investigationBreadcrumbVisibilityClass(true)).toBe(
@@ -95,6 +104,9 @@ describe("investigation history navigation", () => {
     );
     expect(MAXIMIZED_HOME_RUN_HEADER_VISIBILITY_CLASS).toBe(
       "hidden @min-[1500px]/diagnose-surface:block",
+    );
+    expect(MAXIMIZED_RUN_META_VISIBILITY_CLASS).toBe(
+      "hidden @min-[1500px]/diagnose-surface:flex",
     );
   });
 

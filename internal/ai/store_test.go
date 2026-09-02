@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -52,6 +53,52 @@ func TestStoreRoundtrip(t *testing.T) {
 	}
 	if events[1].Event.Token != "hmm" {
 		t.Errorf("event payload lost: %+v", events[1])
+	}
+}
+
+func TestStoreEvidenceProvenanceSurvivesReopen(t *testing.T) {
+	st, dbPath := testStore(t)
+	firstRef := testEvidenceRef('a', 'b')
+	secondRef := testEvidenceRef('c', 'd')
+	success := false
+	want := []RunEvent{
+		{Seq: 1, Event: StreamEvent{Type: "turn"}},
+		{Seq: 2, Event: StreamEvent{Type: "step", Step: &StepInfo{
+			ID: "logs", Tool: "get_pod_logs", Status: "done",
+			Result: `{"logs":["authentication failed"]}`, EvidenceRef: firstRef, IsError: &success,
+		}}},
+		{Seq: 3, Event: StreamEvent{Type: "step", Step: &StepInfo{
+			ID: "secret", Tool: "get_resource", Status: "done",
+			Result: `{"kind":"Secret"}`, EvidenceRef: secondRef, IsError: &success,
+		}}},
+		{Seq: 4, Event: StreamEvent{Type: "done", Diag: &Diagnosis{
+			RootCause: "The workload uses a stale database credential.",
+			Report:    "The pod logs and Secret state agree.",
+			RootCauseEvidence: &RootCauseEvidence{
+				Status: EvidenceLinked,
+				Refs:   []string{firstRef, secondRef},
+			},
+		}}},
+	}
+	summary := RunSummary{
+		ID: "run-evidence", Kind: "Deployment", Group: "apps", Namespace: "shop", Name: "api",
+		Context: "ctx-a", Agent: "codex", Profile: ExecutionProfileSafeguarded, Status: "done",
+		CreatedAt: nowUTC(), UpdatedAt: nowUTC(),
+	}
+	st.AppendEvents(summary.ID, want, &summary)
+	st.Close() // prove the fields survive disk, not merely the live DB handle
+
+	reloaded, err := OpenRunStore(dbPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	t.Cleanup(reloaded.Close)
+	got, err := reloaded.LoadEvents(summary.ID)
+	if err != nil {
+		t.Fatalf("LoadEvents after reopen: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("evidence provenance changed across SQLite reopen:\n got: %#v\nwant: %#v", got, want)
 	}
 }
 

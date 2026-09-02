@@ -46,8 +46,10 @@ import {
 } from "./parts";
 import {
   investigationActivitySourceDomId,
+  investigationEvidenceStepIdsByTurn,
   investigationEvidenceSourceDomId,
   projectInvestigationEvidence,
+  resolveInvestigationRootCauseEvidence,
   type InvestigationEvidenceProjection,
   type InvestigationEvidenceTurn,
 } from "./investigationEvidence";
@@ -1087,6 +1089,10 @@ export function InvestigationView({
   const currentAssessmentIdx = assessmentIndexes.at(-1) ?? -1;
   const initialAssessmentIdx = assessmentIndexes[0] ?? -1;
   const hasMultipleAssessments = assessmentIndexes.length > 1;
+  const currentAssessment =
+    currentAssessmentIdx >= 0 ? turns[currentAssessmentIdx] : undefined;
+  const initialAssessment =
+    initialAssessmentIdx >= 0 ? turns[initialAssessmentIdx] : undefined;
 
   const laterVerificationRecorded = investigationApplyAttemptVerified({
     localApplyAttemptAssessmentIdx,
@@ -1134,25 +1140,23 @@ export function InvestigationView({
       run.group,
     ],
   );
+  const rootCauseEvidenceResolution = useMemo(
+    () =>
+      currentAssessment?.diagnosis?.rootCause
+        ? resolveInvestigationRootCauseEvidence(
+            projection,
+            currentAssessment.diagnosis.rootCauseEvidence,
+            currentAssessmentIdx,
+          )
+        : undefined,
+    [currentAssessment, currentAssessmentIdx, projection],
+  );
   const evidenceStepIdsByTurn = useMemo(() => {
-    const byTurn = new Map<number, Set<string>>();
-    const linkedSourceIds = new Set<string>();
-    for (const group of projection.groups) {
-      for (const observation of group.observations) {
-        linkedSourceIds.add(observation.source.id);
-      }
-    }
-    for (const limitation of projection.limitations) {
-      for (const source of limitation.sources) linkedSourceIds.add(source.id);
-    }
-    for (const source of projection.sources) {
-      if (!linkedSourceIds.has(source.id)) continue;
-      const set = byTurn.get(source.turnIndex) ?? new Set<string>();
-      set.add(source.stepId);
-      byTurn.set(source.turnIndex, set);
-    }
-    return byTurn;
-  }, [projection.groups, projection.limitations, projection.sources]);
+    return investigationEvidenceStepIdsByTurn(
+      projection,
+      rootCauseEvidenceResolution,
+    );
+  }, [projection, rootCauseEvidenceResolution]);
 
   const animateEvidenceGroupIds = useMemo(() => {
     if (suppressEvidenceMotionRef.current) return new Set<string>();
@@ -1368,10 +1372,6 @@ export function InvestigationView({
       : verificationError;
   const displayedStatusCheckError =
     displayedVerificationError || applyOutcomeUncertain;
-  const currentAssessment =
-    currentAssessmentIdx >= 0 ? turns[currentAssessmentIdx] : undefined;
-  const initialAssessment =
-    initialAssessmentIdx >= 0 ? turns[initialAssessmentIdx] : undefined;
   const currentKeyFindingCount = projection.groups.filter(
     (group) => !group.historical && group.latest.tier === "key",
   ).length;
@@ -1541,9 +1541,6 @@ export function InvestigationView({
         >
           <Activity className="h-3.5 w-3.5" />
           Activity
-          {busy || requestPending || verificationPending ? (
-            <Loader2 className="h-3 w-3 animate-spin text-accent" />
-          ) : null}
         </button>
         <button
           type="button"
@@ -1579,6 +1576,7 @@ export function InvestigationView({
         <section
           id={activityPaneId}
           aria-label="Activity: agent reasoning and tool calls"
+          aria-busy={busy || requestPending || rebuildingReplay}
           className={`${
             narrowPane === "activity" ? "flex" : "hidden"
           } relative min-h-0 min-w-0 flex-col ${splitPaneClass} ${splitActivityBorderClass}`}
@@ -1593,24 +1591,11 @@ export function InvestigationView({
               </h2>
             </div>
             <span className="inline-flex items-center gap-1.5 text-[11px] text-theme-text-tertiary">
-              {busy || requestPending ? (
-                <>
-                  <Loader2 className="h-3 w-3 animate-spin text-accent" />
-                  Agent working
-                </>
-              ) : historyUnavailablePresentation ? (
-                historyUnavailablePresentation.loading ? (
-                  "Retrying history"
-                ) : (
-                  "History unavailable"
-                )
-              ) : rebuildingReplay ? (
-                "Loading history"
-              ) : toolCallCount > 0 ? (
-                `${toolCallCount} ${toolCallCount === 1 ? "tool call" : "tool calls"}`
-              ) : (
-                `${turns.length} ${turns.length === 1 ? "turn" : "turns"}`
-              )}
+              {toolCallCount > 0
+                ? `${toolCallCount} ${toolCallCount === 1 ? "tool call" : "tool calls"}`
+                : turns.length > 0
+                  ? `${turns.length} ${turns.length === 1 ? "turn" : "turns"}`
+                  : null}
             </span>
           </div>
           <div
@@ -1778,6 +1763,9 @@ export function InvestigationView({
         <section
           id={findingsPaneId}
           aria-label="Findings: current assessment and structured Radar evidence"
+          aria-busy={
+            busy || requestPending || verificationPending || rebuildingReplay
+          }
           className={`${
             narrowPane === "evidence" ? "flex" : "hidden"
           } min-h-0 min-w-0 flex-col ${splitPaneClass}`}
@@ -1806,21 +1794,6 @@ export function InvestigationView({
                   <ArrowUp className="h-3 w-3" />
                   New evidence
                 </button>
-              ) : null}
-              {historyUnavailablePresentation &&
-              !historyUnavailablePresentation.loading ? (
-                <Badge severity="error" size="sm">
-                  Unavailable
-                </Badge>
-              ) : rebuildingReplay ? (
-                <Badge severity="neutral" size="sm">
-                  {historyUnavailablePresentation ? "Retrying" : "Loading"}
-                </Badge>
-              ) : busy || requestPending || verificationPending ? (
-                <span className="inline-flex items-center gap-1.5 text-[11px] text-accent-text">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  Updating
-                </span>
               ) : null}
             </div>
           </div>
@@ -1963,6 +1936,7 @@ export function InvestigationView({
 
                   <InvestigationEvidencePane
                     projection={projection}
+                    rootCauseEvidence={rootCauseEvidenceResolution}
                     collecting={busy || requestPending}
                     animateGroupIds={animateEvidenceGroupIds}
                     onViewSource={viewActivitySource}

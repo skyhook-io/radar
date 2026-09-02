@@ -27,7 +27,7 @@ import {
 } from "./DiagnoseContext";
 import { useDiagnoseCustomization } from "../../context/DiagnoseCustomization";
 import { InvestigationView } from "./InvestigationView";
-import { RecentList } from "./Home";
+import { RecentList, absoluteTime, statusWord } from "./Home";
 import { AgentSetupNotice } from "./AgentSetupNotice";
 import { ConsentCard } from "./parts";
 import { buildLaunchCommand, launchAgentLabel, openInTerminal } from "./launch";
@@ -208,6 +208,15 @@ export const MAXIMIZED_HOME_DETAIL_VISIBILITY_CLASS =
   "hidden @min-[1500px]/diagnose-surface:flex";
 export const MAXIMIZED_HOME_RUN_HEADER_VISIBILITY_CLASS =
   "hidden @min-[1500px]/diagnose-surface:block";
+export const MAXIMIZED_RUN_META_VISIBILITY_CLASS =
+  "hidden @min-[1500px]/diagnose-surface:flex";
+// The panel is a bounded absolute frame whose descendants own scrolling. If
+// overflow remains visible here, a tall Activity/Findings tree contributes its
+// full scroll height to the document even though the frame itself is viewport-
+// sized, producing a large blank page tail below Radar. This applies equally to
+// docked and maximized modes; their intended scroll roots are inside the frame.
+export const DIAGNOSE_SURFACE_FRAME_CLASS =
+  "@container/diagnose-surface absolute z-40 flex min-h-0 flex-col overflow-hidden border-l border-theme-border bg-theme-surface shadow-drawer";
 
 export function investigationBreadcrumbVisibilityClass(
   maximized: boolean,
@@ -249,17 +258,37 @@ function DiagnoseHeaderIdentity({
   className,
   title,
   configLine,
+  runMeta,
   onOpenSettings,
 }: {
   className: string;
   title: string;
   configLine: string;
+  runMeta?: {
+    label: string;
+    labelClass: string;
+    dateTime: string;
+    time: string;
+  };
   onOpenSettings: (() => void) | null;
 }) {
   return (
     <div className={`min-w-0 ${className}`}>
-      <div className="truncate text-sm font-medium text-theme-text-primary">
-        {title}
+      <div className="flex min-w-0 items-center gap-2">
+        <div className="min-w-0 flex-1 truncate text-sm font-medium text-theme-text-primary">
+          {title}
+        </div>
+        {runMeta ? (
+          <div
+            className={`${MAXIMIZED_RUN_META_VISIBILITY_CLASS} shrink-0 items-center gap-1 text-[11px] tabular-nums text-theme-text-tertiary`}
+          >
+            <span className={`font-medium ${runMeta.labelClass}`}>
+              {runMeta.label}
+            </span>
+            <span aria-hidden>·</span>
+            <time dateTime={runMeta.dateTime}>{runMeta.time}</time>
+          </div>
+        ) : null}
       </div>
       <div className="flex items-center gap-1 text-xs text-theme-text-tertiary">
         <span className="truncate">{configLine}</span>
@@ -350,6 +379,17 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
     maximized,
     hasVisibleRunDetail: !!visibleRunDetail,
   });
+  const focusedRunMeta = visibleRunDetail
+    ? {
+        label: statusWord(visibleRunDetail.status).text,
+        labelClass: statusWord(visibleRunDetail.status).cls,
+        dateTime: visibleRunDetail.updatedAt,
+        time: absoluteTime(
+          new Date(visibleRunDetail.updatedAt).getTime(),
+          Date.now(),
+        ),
+      }
+    : undefined;
 
   // Absolute within the body frame: maximized fills it; docked is a right slot.
   // topInset clears the header (the frame spans the full column incl. the header).
@@ -452,7 +492,7 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
     <div
       role="dialog"
       aria-label="AI investigations"
-      className="@container/diagnose-surface absolute z-40 flex flex-col border-l border-theme-border bg-theme-surface shadow-drawer"
+      className={DIAGNOSE_SURFACE_FRAME_CLASS}
       style={{
         ...positionStyle,
         animation: "slide-in-from-right 0.22s cubic-bezier(0.32,0.72,0,1)",
@@ -500,6 +540,7 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
                 className={headerPresentation.detailIdentityClass}
                 title={focusedTitle}
                 configLine={focusedConfigLine}
+                runMeta={focusedRunMeta}
                 onOpenSettings={openSettings}
               />
             )}

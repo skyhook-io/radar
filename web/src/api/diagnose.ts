@@ -37,14 +37,21 @@ export interface DiagnoseStep {
   ms?: number;
   summary?: string; // input args (on running)
   result?: string; // result text (on done), capped
+  evidenceRef?: string; // server-issued reference used to bind a root cause to this exact result
   isError?: boolean; // authoritative agent-host result; absent means unknown
   truncated?: boolean; // result was capped — payload shown/copied is partial
+}
+
+export interface RootCauseEvidence {
+  status: "linked" | "missing" | "invalid";
+  refs?: string[];
 }
 
 export interface Diagnosis {
   healthy?: boolean;
   inconclusive?: boolean; // investigated but couldn't determine — distinct from healthy
   rootCause: string;
+  rootCauseEvidence?: RootCauseEvidence;
   report: string;
   remediation: string[];
   recommendedIndex?: number; // 1-based index into remediation of the step Apply performs

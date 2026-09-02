@@ -185,7 +185,10 @@ func (a *codexAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnos
 			}
 			switch e.Item.Type {
 			case "mcp_tool_call":
-				res, trunc := capPayload(codexResultText(e.Item))
+				resultText, evidenceRef := splitInvestigationEvidenceMarker(
+					codexResultText(e.Item),
+				)
+				res, trunc := capPayload(resultText)
 				var isError *bool
 				switch e.Item.Status {
 				case "completed":
@@ -197,7 +200,8 @@ func (a *codexAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnos
 				}
 				onEvent(StreamEvent{Type: "step", Step: &StepInfo{
 					ID: e.Item.ID, Tool: e.Item.Tool, Status: "done",
-					Result: res, IsError: isError, Truncated: trunc,
+					Result: res, EvidenceRef: evidenceRef,
+					IsError: isError, Truncated: trunc,
 				}})
 			case "reasoning":
 				if e.Item.Text != "" {

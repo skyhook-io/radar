@@ -448,6 +448,7 @@ export type TimelineItem =
       ms?: number;
       summary?: string;
       result?: string;
+      evidenceRef?: string;
       truncated?: boolean;
       // Tri-state by design: false = producer confirmed success, true = producer
       // confirmed failure, undefined = this replay cannot establish the outcome.
@@ -475,7 +476,15 @@ export function appendThinking(
     const beginsBeat = /^\s*\*\*/.test(block);
     const priorBeatComplete =
       last?.kind === "thinking" && /\*\*\s*$/.test(last.text);
-    if (last?.kind === "thinking" && last.text.trim() === block.trim())
+    // Some agents repeat a bold phase heading at stream boundaries. Suppress
+    // only that presentation artifact; identical ordinary lines can be real
+    // evidence/reasoning and must survive both replay and live chunking.
+    if (
+      last?.kind === "thinking" &&
+      beginsBeat &&
+      priorBeatComplete &&
+      last.text.trim() === block.trim()
+    )
       continue;
     if (last?.kind === "thinking" && !(beginsBeat && priorBeatComplete)) {
       next[next.length - 1] = {
@@ -1624,7 +1633,7 @@ export function ResultCard({
 const EXPLAIN_SIMPLY_PROMPT =
   "Explain this in plain language for someone who isn't a Kubernetes expert — what's broken, why it matters, and what each remediation step actually does. Gloss any k8s terms.";
 
-// The diagnosis result: root cause + remediation (any step applyable) + the
+// The diagnosis result: likely cause + remediation (any step applyable) + the
 // agent's full analysis on demand.
 function DiagnosisResult({
   diagnosis,
@@ -1645,8 +1654,8 @@ function DiagnosisResult({
 }) {
   const [showAnalysis, setShowAnalysis] = useState(false);
   const [showAllSteps, setShowAllSteps] = useState(false);
-  // Only a real structured root cause anchors the amber card; the full prose lives
-  // in "Full analysis" (never relabel the report as a root cause).
+  // Only a real structured cause anchors the amber card; the full prose lives in
+  // "Full analysis" (never relabel the report as a causal assessment).
   const rootCause = diagnosis.rootCause;
   const remediation = diagnosis.remediation || [];
   const hasRemediation = remediation.length > 0;
@@ -1671,13 +1680,13 @@ function DiagnosisResult({
   const hiddenStepCount = remediation.length - visibleRemediation.length;
   return (
     <div className={`mt-3 space-y-2 ${animate ? "animate-result-in" : ""}`}>
-      {/* Root cause — the anchor: distinct tone + heavier type so it pops. */}
+      {/* Likely cause — agent-authored, visually prominent without claiming proof. */}
       {showConclusion && rootCause && (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
           <div className="mb-1 flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-amber-500">
               <AlertTriangle className="h-3.5 w-3.5" />
-              Root cause
+              Likely cause
             </div>
             <div className="flex items-center gap-2">
               {diagnosis.confidence != null ? (
@@ -1861,16 +1870,20 @@ function AllClearCard({
         className={`rounded-lg border p-3 ${
           evidenceConflict
             ? "border-amber-500/40 bg-amber-500/5"
-            : "border-emerald-500/30 bg-emerald-500/5"
+            : coverageLimited
+              ? "border-amber-500/30 bg-amber-500/5"
+              : "border-emerald-500/30 bg-emerald-500/5"
         }`}
       >
         <div className="mb-1 flex items-center justify-between gap-2">
           <div
             className={`flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide ${
-              evidenceConflict ? "text-amber-500" : "text-emerald-500"
+              evidenceConflict || coverageLimited
+                ? "text-amber-500"
+                : "text-emerald-500"
             }`}
           >
-            {evidenceConflict ? (
+            {evidenceConflict || coverageLimited ? (
               <AlertTriangle className="h-3.5 w-3.5" />
             ) : (
               <CheckCircle2 className="h-3.5 w-3.5" />
@@ -1878,7 +1891,7 @@ function AllClearCard({
             {evidenceConflict
               ? "Assessment conflicts with captured evidence"
               : coverageLimited
-                ? "No active problems found in completed checks"
+                ? "No problem identified in completed checks"
                 : "No active problems found"}
           </div>
           <CopyButton text={report} />
@@ -1889,7 +1902,8 @@ function AllClearCard({
         {evidenceConflict ? (
           <p className="mt-2 text-xs text-theme-text-secondary">
             Radar also captured evidence of an active problem. Review that
-            evidence before treating the agent&apos;s conclusion as an all-clear.
+            evidence before treating the agent&apos;s conclusion as an
+            all-clear.
           </p>
         ) : coverageLimited ? (
           <p className="mt-2 text-xs text-theme-text-secondary">
@@ -2138,7 +2152,7 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-function prettyTool(tool: string): string {
+export function prettyTool(tool: string): string {
   return tool.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 

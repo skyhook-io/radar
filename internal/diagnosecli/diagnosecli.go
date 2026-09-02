@@ -351,7 +351,9 @@ func consentLabel(effective string) string {
 }
 
 func standaloneEffectiveAgent(ctx context.Context, requested string) string {
-	diagnoser, err := ai.NewDetected(ctx)
+	// This path only detects/labels installed agents; it never starts an
+	// investigation turn, so it does not need Radar's private evidence registry.
+	diagnoser, err := ai.NewDetected(ctx, nil)
 	if err != nil {
 		return ""
 	}

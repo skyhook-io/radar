@@ -365,6 +365,10 @@ func newRunID() string {
 	return "run-" + hex.EncodeToString(b[:])
 }
 
+func newEvidenceScope() string {
+	return strings.ToLower(rand.Text())
+}
+
 // runWorkDir is the per-run scratch dir under the manager's private root — stable
 // across a run's turns so a workspace-scoped resume (Cursor) reattaches to the
 // prior turn's session. "" when no root exists (backends then self-manage).
@@ -568,6 +572,7 @@ type runTurn struct {
 	apply            bool
 	fix              string
 	verify           bool
+	evidenceScope    string
 	canonicalSession string
 	ctx              context.Context
 	cancel           context.CancelFunc
@@ -779,6 +784,16 @@ func isRadarWriteTool(tool string) bool {
 	return false
 }
 
+func isRadarReadTool(tool string) bool {
+	tool = normalizeRadarToolName(tool)
+	for _, candidate := range radarReadTools {
+		if tool == candidate {
+			return true
+		}
+	}
+	return false
+}
+
 func normalizeRadarToolName(tool string) string {
 	tool = strings.TrimPrefix(tool, "mcp__radar__")
 	return strings.TrimPrefix(tool, "radar.")
@@ -809,6 +824,7 @@ func (m *RunManager) launchTurn(r *Run, question string, apply bool, fix, sessio
 
 	go m.executeTurns(r, runTurn{
 		question: question, apply: apply, fix: fix, verify: verify,
+		evidenceScope:    newEvidenceScope(),
 		canonicalSession: session,
 		ctx:              ctx, cancel: cancel, timeout: timeout,
 	})
@@ -839,7 +855,8 @@ func (m *RunManager) executeTurns(r *Run, turn runTurn) {
 		var mutation applyMutationTracker
 		diag, err := diagnose(turn.ctx, Request{
 			Kind: r.Kind, Group: r.Group, Namespace: r.Namespace, Name: r.Name,
-			MCPPort: m.mcpPort(), MCPBasePath: m.mcpBasePath, SessionID: turn.canonicalSession,
+			MCPPort: m.mcpPort(), MCPBasePath: m.mcpBasePath,
+			EvidenceScope: turn.evidenceScope, SessionID: turn.canonicalSession,
 			Question: turn.question, Apply: turn.apply, Fix: turn.fix, Verify: turn.verify,
 			Agent: r.Agent, Profile: r.Profile, Model: r.Model, Effort: r.Effort,
 			Health: r.Health, WorkDir: r.WorkDir,
@@ -878,6 +895,7 @@ func (m *RunManager) executeTurns(r *Run, turn runTurn) {
 				turn = runTurn{
 					question:         verifyQuestion,
 					verify:           true,
+					evidenceScope:    newEvidenceScope(),
 					canonicalSession: turn.canonicalSession,
 					ctx:              verifyCtx,
 					cancel:           verifyCancel,
@@ -1045,6 +1063,9 @@ func (r *Run) finishTurnWithBarrier(diag Diagnosis, turnErr error, apply bool, t
 	if diag.SessionID != "" && !apply {
 		r.sessionID = diag.SessionID
 	}
+	if !apply {
+		r.bindRootCauseEvidenceLocked(&diag)
+	}
 	if diag.RootCause != "" {
 		r.preview = diag.RootCause
 	} else if diag.Healthy {
@@ -1056,6 +1077,111 @@ func (r *Run) finishTurnWithBarrier(diag Diagnosis, turnErr error, apply bool, t
 	}
 	r.appendLocked(StreamEvent{Type: "done", Diag: &diag})
 	r.inFlight = false
+}
+
+// bindRootCauseEvidenceLocked promotes the model's private reference request
+// only when every ref maps to exactly one complete, confirmed-success result in
+// the current turn AND to the exact clean producer payload Radar's private MCP
+// transport recorded while that turn's scope was active. The model-visible ref
+// is correlation data, not authority. The method scans canonical retained events
+// while r.mu is held, so a callback rejected after Stop/context-switch can never
+// become proof. Radar's read-tool allowlist is retained as defense in depth.
+func (r *Run) bindRootCauseEvidenceLocked(diag *Diagnosis) {
+	// These fields exist only long enough to authorize this binding. Clear them
+	// on every branch so the terminal in-memory event does not retain duplicate
+	// producer payloads or untrusted model requests after public provenance exists.
+	defer func() {
+		diag.evidenceRequest = evidenceReferenceRequest{}
+		diag.evidenceScope = ""
+		diag.issuedEvidence = nil
+	}()
+	if diag.RootCause == "" {
+		diag.RootCauseEvidence = nil
+		return
+	}
+	request := diag.evidenceRequest
+	if request.invalid {
+		diag.RootCauseEvidence = &RootCauseEvidence{Status: EvidenceInvalid}
+		return
+	}
+	if !request.present || len(request.refs) == 0 {
+		diag.RootCauseEvidence = &RootCauseEvidence{Status: EvidenceMissing}
+		return
+	}
+	if !evidenceScopeRe.MatchString(diag.evidenceScope) {
+		diag.RootCauseEvidence = &RootCauseEvidence{Status: EvidenceInvalid}
+		return
+	}
+
+	turnStart := len(r.events)
+	for i := len(r.events) - 1; i >= 0; i-- {
+		if r.events[i].Event.Type == "turn" {
+			turnStart = i + 1
+			break
+		}
+	}
+	// Claude omits the tool name from terminal result rows, so establish one
+	// unambiguous tool identity per host call ID across the current turn before
+	// evaluating marker-bearing results. Codex/Cursor repeat the name on done;
+	// accepting that exact terminal identity also keeps a dropped running event
+	// from needlessly invalidating otherwise complete evidence.
+	type toolIdentity struct {
+		name      string
+		known     bool
+		conflicts bool
+	}
+	toolsByStepID := make(map[string]toolIdentity)
+	for _, retained := range r.events[turnStart:] {
+		step := retained.Event.Step
+		if retained.Event.Type != "step" || step == nil || step.ID == "" || step.Tool == "" {
+			continue
+		}
+		tool := normalizeRadarToolName(step.Tool)
+		identity := toolsByStepID[step.ID]
+		if !identity.known {
+			identity.name = tool
+			identity.known = true
+		} else if identity.name != tool {
+			identity.conflicts = true
+		}
+		toolsByStepID[step.ID] = identity
+	}
+
+	type match struct {
+		count int
+		valid bool
+	}
+	matches := make(map[string]match, len(request.refs))
+	for _, retained := range r.events[turnStart:] {
+		step := retained.Event.Step
+		if retained.Event.Type != "step" || step == nil || step.EvidenceRef == "" {
+			continue
+		}
+		candidate := matches[step.EvidenceRef]
+		candidate.count++
+		tool := toolsByStepID[step.ID]
+		issuedPayload, issued := diag.issuedEvidence[step.EvidenceRef]
+		candidate.valid = candidate.count == 1 &&
+			issued && step.Result == issuedPayload &&
+			step.ID != "" && tool.known && !tool.conflicts && isRadarReadTool(tool.name) &&
+			step.Status == "done" &&
+			step.IsError != nil && !*step.IsError &&
+			!step.Truncated && strings.TrimSpace(step.Result) != ""
+		matches[step.EvidenceRef] = candidate
+	}
+
+	scopePrefix := "ev_" + diag.evidenceScope + "_"
+	for _, ref := range request.refs {
+		candidate := matches[ref]
+		if !strings.HasPrefix(ref, scopePrefix) || candidate.count != 1 || !candidate.valid {
+			diag.RootCauseEvidence = &RootCauseEvidence{Status: EvidenceInvalid}
+			return
+		}
+	}
+	diag.RootCauseEvidence = &RootCauseEvidence{
+		Status: EvidenceLinked,
+		Refs:   append([]string(nil), request.refs...),
+	}
 }
 
 // Stop cancels a run's in-flight agent (killing its process group) and marks it stopped.

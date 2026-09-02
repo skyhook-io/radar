@@ -5,10 +5,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/skyhook-io/radar/internal/investigationrefs"
 	"github.com/skyhook-io/radar/internal/version"
 )
 
@@ -42,10 +44,94 @@ func RunStdio(ctx context.Context) error {
 // NewHandler creates the full MCP HTTP handler (read + write tools) to mount on chi.
 func NewHandler() http.Handler { return handlerForServer(newServer(true)) }
 
-// NewReadOnlyHandler creates an MCP handler exposing only read tools. Radar points
-// read-only AI investigations here so a mutating tool can't even be discovered —
-// server-side enforcement that doesn't depend on the agent CLI restricting itself.
+// NewReadOnlyHandler creates the public MCP handler exposing only read tools.
 func NewReadOnlyHandler() http.Handler { return handlerForServer(newServer(false)) }
+
+// NewInvestigationHandler creates the private read-only MCP transport used by
+// Radar's built-in investigation runner. It deliberately has a separate mount
+// from the public /mcp-readonly surface: the evidence marker is an internal
+// correlation protocol between Radar and its agent adapters, not part of the
+// normal tool result contract.
+func NewInvestigationHandler(refs *investigationrefs.Registry) http.Handler {
+	return investigationHandlerForServer(newServer(false), refs)
+}
+
+func investigationHandlerForServer(server *mcpsdk.Server, refs *investigationrefs.Registry) http.Handler {
+	server.AddReceivingMiddleware(investigationEvidenceReferenceMiddleware(refs))
+	handler := handlerForServer(server)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		scope := r.URL.Query().Get("scope")
+		if !investigationEvidenceScopeRe.MatchString(scope) {
+			http.Error(w, "invalid investigation evidence scope", http.StatusBadRequest)
+			return
+		}
+		if !refs.Active(scope) {
+			http.Error(w, "inactive investigation evidence scope", http.StatusForbidden)
+			return
+		}
+		ctx := context.WithValue(r.Context(), investigationEvidenceScopeKey{}, scope)
+		handler.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+const (
+	investigationEvidenceMarkerPrefix = "[[radar:evidence-ref="
+	investigationEvidenceMarkerSuffix = "]]\n"
+)
+
+var investigationEvidenceScopeRe = regexp.MustCompile(`^[a-z2-7]{26,128}$`)
+
+type investigationEvidenceScopeKey struct{}
+
+func investigationEvidenceReferenceMiddleware(refs *investigationrefs.Registry) mcpsdk.Middleware {
+	return func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
+		return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
+			result, err := next(ctx, method, req)
+			if err != nil || method != "tools/call" {
+				return result, err
+			}
+			toolResult, ok := result.(*mcpsdk.CallToolResult)
+			if !ok || toolResult.IsError {
+				return result, err
+			}
+			scope, _ := ctx.Value(investigationEvidenceScopeKey{}).(string)
+			if !investigationEvidenceScopeRe.MatchString(scope) {
+				return result, err
+			}
+			payload := investigationEvidenceProducerText(toolResult)
+			if strings.TrimSpace(payload) == "" {
+				return result, err
+			}
+			ref, issued := refs.Issue(scope, payload)
+			if !issued {
+				return result, err
+			}
+			annotateInvestigationEvidenceReference(toolResult, ref)
+			return result, err
+		}
+	}
+}
+
+func investigationEvidenceProducerText(result *mcpsdk.CallToolResult) string {
+	var payload strings.Builder
+	for _, content := range result.Content {
+		if text, ok := content.(*mcpsdk.TextContent); ok {
+			payload.WriteString(text.Text)
+		}
+	}
+	return payload.String()
+}
+
+// annotateInvestigationEvidenceReference prepends a uniform, machine-readable
+// content block without changing the producer payload. All supported agent CLIs
+// expose ordered text content to the model; their stream adapters remove this
+// marker and retain the reference separately before persisting the tool result.
+func annotateInvestigationEvidenceReference(result *mcpsdk.CallToolResult, ref string) {
+	marker := &mcpsdk.TextContent{
+		Text: investigationEvidenceMarkerPrefix + ref + investigationEvidenceMarkerSuffix,
+	}
+	result.Content = append([]mcpsdk.Content{marker}, result.Content...)
+}
 
 func handlerForServer(server *mcpsdk.Server) http.Handler {
 	streamOpts := &mcpsdk.StreamableHTTPOptions{Stateless: true}
