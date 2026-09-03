@@ -338,7 +338,7 @@ func doInit(opts InitOptions) error {
 	k8sClient = clients.clientset
 	discoveryClient = clients.discovery
 	dynamicClient = clients.dynamic
-	activeClientGeneration.Store(clients.generation)
+	activeClientGeneration = clients.generation
 
 	return nil
 }
@@ -772,26 +772,6 @@ func GetDynamicClientSnapshot() (dynamic.Interface, string) {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
 	return dynamicClient, activeClusterContextLocked()
-}
-
-// dynamicClientGeneration returns the dynamic client together with the
-// generation of the client set it belongs to. The generation is published
-// under the same lock as the clients themselves, so a caller that captures
-// both can tell whether the clients were swapped underneath it. Only
-// SwitchContext moves it after startup, which makes it inert in-cluster,
-// where context switching is refused.
-func dynamicClientGeneration() (dynamic.Interface, uint64) {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	return dynamicClient, activeClientGeneration.Load()
-}
-
-// currentClientGeneration reads the generation without clientMu on purpose. The
-// permissions cache compares it while holding its own lock, and clientMu is held
-// across kubeconfig filesystem work on a UI-polled path — nesting the two would
-// stall every permissions read behind that I/O.
-func currentClientGeneration() uint64 {
-	return activeClientGeneration.Load()
 }
 
 // GetKubeconfigPath returns the path to the kubeconfig file used
@@ -1780,7 +1760,7 @@ func SwitchContext(name string) error {
 	k8sClient = clients.clientset
 	discoveryClient = clients.discovery
 	dynamicClient = clients.dynamic
-	activeClientGeneration.Store(clients.generation)
+	activeClientGeneration = clients.generation
 	contextName = name
 	contextBinding = newContextBinding
 	activeSourceFile = loadingRules.ExplicitPath

@@ -349,7 +349,7 @@ func ResetTestState() {
 	k8sClient = nil
 	discoveryClient = nil
 	dynamicClient = nil
-	activeClientGeneration.Store(0)
+	activeClientGeneration = 0
 	kubeconfigMode = ""
 	contextBinding = ""
 	activeSourceFile = ""
@@ -417,8 +417,7 @@ func allTestResourceTypes() map[string]bool {
 }
 
 // SetTestPermissionResult publishes a permission probe result as if a probe had
-// just produced it, stamped with the current client generation so readers treat
-// it as describing the connected cluster. Returns a restore func.
+// just produced it. Returns a restore func.
 //
 // The cache is otherwise only writable by a real probe, so without this seam a
 // test in another package cannot reach any of the code that reads it — the
@@ -426,15 +425,14 @@ func allTestResourceTypes() map[string]bool {
 // while appearing to cover the endpoint.
 func SetTestPermissionResult(result *PermissionCheckResult) func() {
 	resourcePermsMu.Lock()
-	prevResult, prevGen, prevExpiry := cachedPermResult, cachedPermClientGen, resourcePermsExpiry
+	prevResult, prevExpiry := cachedPermResult, resourcePermsExpiry
 	cachedPermResult = result
-	cachedPermClientGen = currentClientGeneration()
 	resourcePermsExpiry = time.Now().Add(time.Minute)
 	resourcePermsMu.Unlock()
 
 	return func() {
 		resourcePermsMu.Lock()
-		cachedPermResult, cachedPermClientGen, resourcePermsExpiry = prevResult, prevGen, prevExpiry
+		cachedPermResult, resourcePermsExpiry = prevResult, prevExpiry
 		resourcePermsMu.Unlock()
 	}
 }

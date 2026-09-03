@@ -715,13 +715,7 @@ var (
 	// it reads the client and publishes only if it is unchanged — the probe
 	// runs outside the lock, so without this a slow probe against the previous
 	// cluster would overwrite the current one's result with a fresh TTL.
-	resourcePermsGen uint64
-	// cachedPermClientGen is the client generation the cached result was probed
-	// under. A context switch publishes the new cluster's clients BEFORE it
-	// invalidates, so between those two points the cached result describes a
-	// cluster the process has already left; readers compare against this rather
-	// than trusting that invalidation has already run.
-	cachedPermClientGen   uint64
+	resourcePermsGen      uint64
 	resourcePermsTTL      = 60 * time.Second
 	resourcePermsErrorTTL = 5 * time.Second // Short TTL when API errors caused fail-closed results
 )
@@ -937,8 +931,7 @@ func resolveProbeGVRs(p resourceProbe) []schema.GroupVersionResource {
 // reality on clusters using webhook authorizers (e.g. GKE IAM).
 func CheckResourcePermissions(ctx context.Context) (*PermissionCheckResult, bool) {
 	resourcePermsMu.RLock()
-	if cachedPermResult != nil && time.Now().Before(resourcePermsExpiry) &&
-		cachedPermClientGen == currentClientGeneration() {
+	if cachedPermResult != nil && time.Now().Before(resourcePermsExpiry) {
 		// Deep-copy so callers can't mutate the cached result.
 		permsCopy := *cachedPermResult.Perms
 		scopesCopy := make(map[string]k8score.ResourceScope, len(cachedPermResult.Scopes))
@@ -975,7 +968,7 @@ func CheckResourcePermissions(ctx context.Context) (*PermissionCheckResult, bool
 	// network calls would block InvalidateResourcePermissionsCache() during
 	// context switch.
 
-	dyn, probeClientGen := dynamicClientGeneration()
+	dyn := GetDynamicClient()
 	if GetClient() == nil || dyn == nil {
 		log.Printf("Warning: K8s client not initialized, returning no resource permissions")
 		// Current: nothing superseded this, there is simply nothing to probe.
@@ -999,9 +992,7 @@ func CheckResourcePermissions(ctx context.Context) (*PermissionCheckResult, bool
 	// change that leaves the clients alone (a namespace rescope); the client
 	// generation catches a client swap regardless of when — or whether — the
 	// caller invalidates, which a context switch performs BEFORE it invalidates.
-	staleScope := resourcePermsGen != probeGen
-	staleClient := currentClientGeneration() != probeClientGen
-	if staleScope || staleClient {
+	if resourcePermsGen != probeGen {
 		currentGen := resourcePermsGen
 		resourcePermsMu.Unlock()
 		// The cluster or the namespace scope changed while this probe was in
@@ -1009,18 +1000,10 @@ func CheckResourcePermissions(ctx context.Context) (*PermissionCheckResult, bool
 		// it to the caller — a caller torn down alongside the probe stays
 		// self-consistent with the client it already captured — but leave the
 		// cache to the probe that ran against the current one.
-		switch {
-		case staleScope && staleClient:
-			log.Printf("[perms] discarding probe result: both the cluster and the cache generation moved (cache %d→%d)", probeGen, currentGen)
-		case staleScope:
-			log.Printf("[perms] discarding probe result: the scope changed while it was in flight (cache generation %d→%d)", probeGen, currentGen)
-		default:
-			log.Printf("[perms] discarding probe result: it was probed against a cluster the process has left")
-		}
+		log.Printf("[perms] discarding probe result: the cluster or scope changed while it was in flight (generation %d→%d)", probeGen, currentGen)
 		return result, false
 	}
 	cachedPermResult = result
-	cachedPermClientGen = probeClientGen
 	ttl := resourcePermsTTL
 	if hadErrors {
 		ttl = resourcePermsErrorTTL
@@ -1390,20 +1373,14 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNamesp
 	}, hadErrors.Load()
 }
 
-// GetCachedPermissionResult returns the cached permission check result, if it
-// is available AND was probed under the clients currently in use. Returns a deep copy so callers can mutate Perms or Scopes
+// GetCachedPermissionResult returns the cached permission check result, if
+// available. Returns a deep copy so callers can mutate Perms or Scopes
 // without corrupting the cache (mirrors the cache-hit path in
 // CheckResourcePermissions).
 func GetCachedPermissionResult() *PermissionCheckResult {
 	resourcePermsMu.RLock()
 	defer resourcePermsMu.RUnlock()
 	if cachedPermResult == nil {
-		return nil
-	}
-	// Probed under a client the process has since replaced: a context switch
-	// swaps the clients before it invalidates, and every caller here treats a
-	// returned result as describing the cluster now connected.
-	if cachedPermClientGen != currentClientGeneration() {
 		return nil
 	}
 	permsCopy := *cachedPermResult.Perms
@@ -1436,7 +1413,6 @@ func InvalidateResourcePermissionsCache() {
 // every probe already in flight. Callers must hold resourcePermsMu for writing.
 func invalidateResourcePermissionsCacheLocked() {
 	cachedPermResult = nil
-	cachedPermClientGen = 0
 	resourcePermsExpiry = time.Time{}
 	resourcePermsGen++
 }

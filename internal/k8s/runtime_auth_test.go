@@ -617,7 +617,7 @@ func TestRuntimeAuthFailureDoesNotTearDownRecoveredClient(t *testing.T) {
 	contextOpMu.Lock()
 	CancelOngoingOperations()
 	clientMu.Lock()
-	activeClientGeneration.Store(generation + 1)
+	activeClientGeneration = generation + 1
 	clientMu.Unlock()
 	contextOpMu.Unlock()
 	close(releaseProbe)
@@ -662,7 +662,7 @@ func TestRuntimeAuthRecoveryRearmsThroughSwitchContext(t *testing.T) {
 	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "recovered"})
 
 	clientMu.RLock()
-	recoveredGeneration := activeClientGeneration.Load()
+	recoveredGeneration := activeClientGeneration
 	clientMu.RUnlock()
 	if recoveredGeneration == oldGeneration {
 		t.Fatal("SwitchContext() did not publish a new client generation")
@@ -1111,7 +1111,7 @@ func TestRuntimeAuthCooldownIsScopedToGeneration(t *testing.T) {
 	// cooldown must not suppress the new one's first candidate.
 	newGeneration := clientGenerationCounter.Add(1)
 	clientMu.Lock()
-	activeClientGeneration.Store(newGeneration)
+	activeClientGeneration = newGeneration
 	clientMu.Unlock()
 
 	reportRuntimeAuthFailure(newGeneration, errors.New("unauthorized"))
@@ -1156,7 +1156,7 @@ func TestRuntimeAuthObserverCoversAllSharedClients(t *testing.T) {
 				t.Fatalf("newSharedKubernetesClients() error = %v", err)
 			}
 			clientMu.Lock()
-			activeClientGeneration.Store(clients.generation)
+			activeClientGeneration = clients.generation
 			clientMu.Unlock()
 
 			tt.request(t, clients)
@@ -1431,7 +1431,7 @@ func prepareRuntimeAuthTest(t *testing.T) uint64 {
 	// (isInClusterLocked), where runtimeAuthStateIsCurrent is always false and
 	// every assertion below would pass vacuously.
 	kubeconfigPath = "/tmp/radar-runtime-auth-test"
-	activeClientGeneration.Store(generation)
+	activeClientGeneration = generation
 	clientMu.Unlock()
 	t.Cleanup(func() {
 		clientMu.Lock()
@@ -1531,7 +1531,7 @@ func TestRuntimeAuthExecCredentialExpiry(t *testing.T) {
 	k8sClient = clients.clientset
 	discoveryClient = clients.discovery
 	dynamicClient = clients.dynamic
-	activeClientGeneration.Store(clients.generation)
+	activeClientGeneration = clients.generation
 	clientMu.Unlock()
 	t.Cleanup(func() {
 		clientMu.Lock()
@@ -1581,7 +1581,7 @@ func TestRuntimeAuthExecCredentialExpiry(t *testing.T) {
 	k8sClient = recoveredClients.clientset
 	discoveryClient = recoveredClients.discovery
 	dynamicClient = recoveredClients.dynamic
-	activeClientGeneration.Store(recoveredClients.generation)
+	activeClientGeneration = recoveredClients.generation
 	clientMu.Unlock()
 	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "exec-test"})
 

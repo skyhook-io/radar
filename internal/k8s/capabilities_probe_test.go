@@ -322,7 +322,6 @@ func TestCheckResourcePermissionsCacheHitCopiesScopeNamespaces(t *testing.T) {
 		},
 	}
 	resourcePermsExpiry = time.Now().Add(time.Minute)
-	cachedPermClientGen = currentClientGeneration()
 	resourcePermsMu.Unlock()
 	t.Cleanup(InvalidateResourcePermissionsCache)
 
@@ -567,14 +566,10 @@ func TestCheckResourcePermissionsDiscardsSupersededProbe(t *testing.T) {
 		return gvr.Group == "" && gvr.Resource == "pods" && namespace == currentNs
 	})
 
-	// A non-zero generation throughout: 0 is also what invalidation writes as
-	// the "nothing cached" stamp, so a test running at 0 cannot tell a correct
-	// stamp from a missing one.
 	setProbeClients := func(dyn dynamic.Interface) {
 		clientMu.Lock()
 		k8sClient = typed
 		dynamicClient = dyn
-		activeClientGeneration.Store(9)
 		clientMu.Unlock()
 	}
 
@@ -606,12 +601,6 @@ func TestCheckResourcePermissionsDiscardsSupersededProbe(t *testing.T) {
 	current, currentIsCurrent := CheckResourcePermissions(context.Background())
 	if !currentIsCurrent {
 		t.Fatal("probe against the current cluster reported itself superseded")
-	}
-	resourcePermsMu.RLock()
-	stamp := cachedPermClientGen
-	resourcePermsMu.RUnlock()
-	if stamp != 9 {
-		t.Fatalf("published result stamped with client generation %d, want 9", stamp)
 	}
 	if current.Namespace != currentNs {
 		t.Fatalf("current probe resolved namespace %q, want %q", current.Namespace, currentNs)
@@ -651,172 +640,6 @@ func TestCheckResourcePermissionsDiscardsSupersededProbe(t *testing.T) {
 	}
 }
 
-// TestCheckResourcePermissionsDiscardsProbeAcrossClientSwap covers the window a
-// context switch opens before it invalidates: SwitchContext publishes the new
-// cluster's clients first, so between those two points the cache generation
-// alone still looks current to a probe holding the previous cluster's client.
-func TestCheckResourcePermissionsDiscardsProbeAcrossClientSwap(t *testing.T) {
-	defer ResetTestState()
-
-	const previousNs, currentNs = "previous-cluster-ns", "current-cluster-ns"
-
-	typed, err := kubernetes.NewForConfig(&rest.Config{Host: "http://localhost:1"})
-	if err != nil {
-		t.Fatalf("creating typed client: %v", err)
-	}
-
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	releaseOnce := sync.OnceFunc(func() { close(release) })
-	t.Cleanup(releaseOnce)
-	var enteredOnce sync.Once
-	previousDyn := fakeDyn(t, func(gvr schema.GroupVersionResource, namespace string) bool {
-		enteredOnce.Do(func() { close(entered) })
-		<-release
-		return gvr.Group == "" && gvr.Resource == "pods" && namespace == previousNs
-	})
-	currentDyn := fakeDyn(t, func(gvr schema.GroupVersionResource, namespace string) bool {
-		return gvr.Group == "" && gvr.Resource == "pods" && namespace == currentNs
-	})
-
-	swapClients := func(dyn dynamic.Interface, generation uint64) {
-		clientMu.Lock()
-		k8sClient = typed
-		dynamicClient = dyn
-		activeClientGeneration.Store(generation)
-		clientMu.Unlock()
-	}
-
-	swapClients(previousDyn, 1)
-	SetFallbackNamespace(previousNs)
-	InvalidateResourcePermissionsCache()
-
-	superseded := make(chan *PermissionCheckResult, 1)
-	go func() {
-		result, _ := CheckResourcePermissions(context.Background())
-		superseded <- result
-	}()
-	select {
-	case <-entered:
-	case <-time.After(10 * time.Second):
-		t.Fatal("probe never reached the dynamic client; the race window this test needs no longer exists")
-	}
-
-	// The clients move to the new cluster with NO invalidation — the ordering
-	// inside performContextSwitch, where SwitchContext runs before the
-	// invalidation block.
-	swapClients(currentDyn, 2)
-	SetFallbackNamespace(currentNs)
-
-	releaseOnce()
-	select {
-	case <-superseded:
-	case <-time.After(10 * time.Second):
-		t.Fatal("probe did not return after release")
-	}
-
-	// Deliberately NOT via GetCachedPermissionResult: its own client-generation
-	// guard would mask a missing guard on the publish side, which is what this
-	// test exists to pin.
-	resourcePermsMu.RLock()
-	published := cachedPermResult
-	resourcePermsMu.RUnlock()
-	if published != nil {
-		t.Fatalf("probe holding the previous cluster's client published %q into the cache across a client swap", published.Namespace)
-	}
-}
-
-// TestCachedPermissionResultRejectedAfterClientSwap covers the read side of the
-// same window: a context switch publishes the new cluster's clients before it
-// invalidates, so for that stretch the cached result describes a cluster the
-// process has already left. Every consumer treats what it reads as the current
-// cluster's answer, so the cache must withhold it rather than serve it.
-func TestCachedPermissionResultRejectedAfterClientSwap(t *testing.T) {
-	defer ResetTestState()
-
-	const previousNs = "previous-cluster-ns"
-
-	clientMu.Lock()
-	activeClientGeneration.Store(1)
-	clientMu.Unlock()
-
-	resourcePermsMu.Lock()
-	cachedPermResult = &PermissionCheckResult{
-		Perms:           &ResourcePermissions{Pods: true},
-		NamespaceScoped: true,
-		Namespace:       previousNs,
-		Scopes:          map[string]k8score.ResourceScope{k8score.Pods: {Enabled: true, Namespace: previousNs}},
-		ScopeNamespaces: map[string][]string{k8score.Pods: {previousNs}},
-		ScopeCandidates: []string{previousNs},
-	}
-	cachedPermClientGen = 1
-	resourcePermsExpiry = time.Now().Add(time.Minute)
-	resourcePermsMu.Unlock()
-
-	if got := GetCachedPermissionResult(); got == nil || got.Namespace != previousNs {
-		t.Fatalf("cached result not served under its own client generation: %+v", got)
-	}
-
-	// SwitchContext publishes the new cluster's clients; the invalidation that
-	// follows it has not run yet.
-	clientMu.Lock()
-	activeClientGeneration.Store(2)
-	clientMu.Unlock()
-
-	if got := GetCachedPermissionResult(); got != nil {
-		t.Fatalf("cache served the previous cluster's result after a client swap: namespace=%q", got.Namespace)
-	}
-}
-
-// TestCacheHitRejectedAfterClientSwap covers the cache-hit fast path: a cached
-// result whose client has since been replaced must not be handed back as
-// current, or a caller gets another cluster's answer with isCurrent true.
-func TestCacheHitRejectedAfterClientSwap(t *testing.T) {
-	defer ResetTestState()
-
-	const previousNs, currentNs = "previous-cluster-ns", "current-cluster-ns"
-
-	typed, err := kubernetes.NewForConfig(&rest.Config{Host: "http://localhost:1"})
-	if err != nil {
-		t.Fatalf("creating typed client: %v", err)
-	}
-	currentDyn := fakeDyn(t, func(gvr schema.GroupVersionResource, namespace string) bool {
-		return gvr.Group == "" && gvr.Resource == "pods" && namespace == currentNs
-	})
-
-	clientMu.Lock()
-	k8sClient = typed
-	dynamicClient = currentDyn
-	activeClientGeneration.Store(4)
-	clientMu.Unlock()
-	SetFallbackNamespace(currentNs)
-
-	// A live, unexpired result left behind by the previous cluster's client.
-	resourcePermsMu.Lock()
-	cachedPermResult = &PermissionCheckResult{
-		Perms:           &ResourcePermissions{Pods: true},
-		NamespaceScoped: true,
-		Namespace:       previousNs,
-		Scopes:          map[string]k8score.ResourceScope{k8score.Pods: {Enabled: true, Namespace: previousNs}},
-		ScopeNamespaces: map[string][]string{k8score.Pods: {previousNs}},
-		ScopeCandidates: []string{previousNs},
-	}
-	cachedPermClientGen = 3
-	resourcePermsExpiry = time.Now().Add(time.Minute)
-	resourcePermsMu.Unlock()
-
-	got, isCurrent := CheckResourcePermissions(context.Background())
-	if got.Namespace == previousNs {
-		t.Fatalf("cache hit served the previous cluster's result (namespace %q, isCurrent=%v)", got.Namespace, isCurrent)
-	}
-	if got.Namespace != currentNs {
-		t.Fatalf("re-probe resolved namespace %q, want %q", got.Namespace, currentNs)
-	}
-	if !isCurrent {
-		t.Fatal("re-probe against the current client reported itself superseded")
-	}
-}
-
 // TestNamespaceRescopeRetiresInFlightProbe covers a scope change retiring a
 // probe that is already in flight against the previous scope. A rescope keeps
 // the same clients, so the cache generation is the only guard that applies.
@@ -847,7 +670,7 @@ func TestNamespaceRescopeRetiresInFlightProbe(t *testing.T) {
 	clientMu.Lock()
 	k8sClient = typed
 	dynamicClient = dyn
-	activeClientGeneration.Store(5)
+	activeClientGeneration = 5
 	clientMu.Unlock()
 	ForceNamespaceScope = true
 	SetNamespaceScopeOverride(previousNs)
@@ -880,5 +703,65 @@ func TestNamespaceRescopeRetiresInFlightProbe(t *testing.T) {
 	if published != nil {
 		t.Fatalf("a probe that read scope %q published %q after the rescope to %q",
 			previousNs, published.Namespace, currentNs)
+	}
+}
+
+// TestContextSwitchEmptiesPermissionCacheBeforeSwappingClients pins the half of
+// the invariant that lives at the call site: performContextSwitch retires the
+// permission cache BEFORE it swaps the clients, so nothing can serve the
+// previous cluster's answer while the swap is in progress.
+//
+// The switch is expected to fail — the target cluster does not resolve. What is
+// asserted is the state it leaves behind.
+//
+// It pins the property, not the line: the switch path retires the cache more
+// than once, so removing any single call still passes. Only removing all of
+// them fails this test.
+func TestContextSwitchEmptiesPermissionCacheBeforeSwappingClients(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+
+	dir := t.TempDir()
+	current := writeKubeconfig(t, dir, "current.yaml", "current", []kubeEntry{
+		{ctxName: "current", userName: "u1", clusterName: "c1"},
+	})
+	target := writeKubeconfig(t, dir, "target.yaml", "target", []kubeEntry{
+		{ctxName: "target", userName: "u2", clusterName: "c2"},
+	})
+	registry, configs, mtimes := loadFixture(t, []string{current, target})
+
+	clientMu.Lock()
+	previousRegistry, previousConfigs := contextRegistry, perFileConfigs
+	previousMtimes, previousPaths := perFileMtimes, kubeconfigPaths
+	previousMode, previousStarted := kubeconfigMode, initializationStarted
+	contextRegistry, perFileConfigs, perFileMtimes = registry, configs, mtimes
+	kubeconfigPaths = []string{current, target}
+	kubeconfigMode = "multi-dir"
+	initializationStarted = true
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextRegistry, perFileConfigs, perFileMtimes = previousRegistry, previousConfigs, previousMtimes
+		kubeconfigPaths, kubeconfigMode, initializationStarted = previousPaths, previousMode, previousStarted
+		clientMu.Unlock()
+	})
+
+	restore := SetTestPermissionResult(&PermissionCheckResult{
+		Perms:           &ResourcePermissions{Pods: true},
+		NamespaceScoped: true,
+		Namespace:       "previous-cluster-ns",
+		Scopes:          map[string]k8score.ResourceScope{k8score.Pods: {Enabled: true, Namespace: "previous-cluster-ns"}},
+		ScopeCandidates: []string{"previous-cluster-ns"},
+	})
+	t.Cleanup(restore)
+
+	if GetCachedPermissionResult() == nil {
+		t.Fatal("seeding the permission cache did not take")
+	}
+
+	_ = PerformContextSwitch("target")
+
+	if cached := GetCachedPermissionResult(); cached != nil {
+		t.Fatalf("the previous cluster's permissions survived a context switch: namespace=%q", cached.Namespace)
 	}
 }
