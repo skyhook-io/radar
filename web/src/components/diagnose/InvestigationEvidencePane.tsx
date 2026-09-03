@@ -1670,13 +1670,18 @@ function EventsBody({ data }: { data: EvidenceDataOf<"events"> }) {
                   {event.reason}
                   {event.count > 1 ? ` ×${event.count}` : ""}
                 </span>
-                <time
-                  dateTime={event.lastTimestamp}
-                  title={event.lastTimestamp}
-                  className="text-[11px] text-theme-text-tertiary"
+                <Tooltip
+                  content={new Date(event.lastTimestamp).toLocaleString()}
+                  delay={150}
+                  position="left"
                 >
-                  {formatRelativeAgeTime(event.lastTimestamp)}
-                </time>
+                  <time
+                    dateTime={event.lastTimestamp}
+                    className="text-[11px] text-theme-text-tertiary"
+                  >
+                    {formatRelativeAgeTime(event.lastTimestamp)}
+                  </time>
+                </Tooltip>
               </div>
               <p className="mt-0.5 text-xs leading-relaxed text-theme-text-secondary">
                 {event.message}
@@ -1720,13 +1725,19 @@ function ChangesBody({ data }: { data: EvidenceDataOf<"changes"> }) {
             <Badge tone="note" size="sm">
               {change.changeType.replaceAll("_", " ")}
             </Badge>
-            <time
-              dateTime={change.timestamp}
-              title={change.timestamp}
-              className="ml-auto text-[11px] text-theme-text-tertiary"
+            <Tooltip
+              content={new Date(change.timestamp).toLocaleString()}
+              delay={150}
+              position="left"
+              wrapperClassName="ml-auto"
             >
-              {formatRelativeAgeTime(change.timestamp)}
-            </time>
+              <time
+                dateTime={change.timestamp}
+                className="text-[11px] text-theme-text-tertiary"
+              >
+                {formatRelativeAgeTime(change.timestamp)}
+              </time>
+            </Tooltip>
           </div>
           {change.summary ? (
             <p className="mt-1.5 text-xs text-theme-text-secondary">
