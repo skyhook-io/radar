@@ -597,6 +597,7 @@ export function DiagnoseSurface({
                       namespace: activeRun.namespace,
                       name: activeRun.name,
                       issueId: activeRun.issueId,
+                      issue: activeRun.issue,
                       fresh: true,
                     })
                   }

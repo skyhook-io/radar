@@ -507,9 +507,10 @@ export function InvestigationView({
         namespace,
         name,
         issueId: run.issueId,
+        issue: run.issue,
         fresh: true,
       }),
-    [openInvestigation, kind, namespace, name, run.group, run.issueId],
+    [openInvestigation, kind, namespace, name, run.group, run.issueId, run.issue],
   );
   const queryClient = useQueryClient();
   const [turns, setTurns] = useState<Turn[]>([]);
