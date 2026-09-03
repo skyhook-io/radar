@@ -197,9 +197,9 @@ func (s *Server) handlePodFileDownload(w http.ResponseWriter, r *http.Request) {
 // POST /api/pods/{ns}/{name}/files/save?container=X&path=/some/file
 func (s *Server) handlePodFileSave(w http.ResponseWriter, r *http.Request) {
 	// Runs a command in a pod and writes a file to the user's disk, which is
-	// exactly what the local origin check exists to keep a page on another site
+	// exactly what the same-origin check exists to keep a page on another site
 	// from triggering.
-	if !localOriginOK(r) {
+	if !sameOriginOK(r) {
 		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
 		return
 	}

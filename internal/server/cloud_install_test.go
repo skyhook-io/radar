@@ -812,6 +812,7 @@ func TestSameOriginOKAcceptsTheServingAuthority(t *testing.T) {
 		{"different port on the same non-loopback host", "10.0.0.5:9280", "http://10.0.0.5:9999", false},
 		{"loopback origin against a non-loopback host", "10.0.0.5:9280", "http://127.0.0.1:9280", false},
 		{"unparseable origin", "10.0.0.5:9280", "://nope", false},
+		{"opaque (null) origin", "10.0.0.5:9280", "null", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

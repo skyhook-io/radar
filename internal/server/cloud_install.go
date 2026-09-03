@@ -949,11 +949,11 @@ func (s *Server) cloudConnectCapability() *k8s.CloudConnectCapability {
 	}
 }
 
-// sameOriginOK is CSRF protection for the connect endpoints: a page on another
-// origin must not be able to drive an install. It compares the Origin against
-// the authority the client actually used, rather than an allowlist of loopback
-// names — localOriginOK's shape would 403 the legitimate browser on a
-// non-loopback listener (the exact case the driver lane now supports) while
+// sameOriginOK is CSRF protection for the connect and AI-diagnose endpoints: a
+// page on another origin must not be able to drive an install or spawn an agent.
+// It compares the Origin against the authority the client actually used, rather
+// than an allowlist of loopback names — a loopback-only allowlist would 403 the
+// legitimate browser on a non-loopback listener (a supported deployment) while
 // still admitting a scripted caller that simply omits the header.
 //
 // Loopback-to-loopback is additionally allowed for the Vite dev proxy, which
