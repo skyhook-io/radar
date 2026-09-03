@@ -183,9 +183,10 @@ export function isCNPGClusterFencedAll(resource: any): boolean {
  *
  * The load-bearing distinction the badge and the Go detector both turn on:
  * CNPG omits `status.readyInstances` when it is 0 (omitempty int), so "no
- * status yet" and "0 ready" are byte-identical on the wire. Gating an outage on
- * the field's PRESENCE therefore made a fully-down cluster unreachable — it
- * looked exactly like one that had not reported.
+ * status yet" and "0 ready" are byte-identical on the wire. The field's
+ * presence therefore cannot distinguish an outage from an unreported cluster;
+ * any other status the operator has written (phase, primary, a condition) is
+ * what marks the count as a real 0 rather than "not reported".
  *
  * `status.currentPrimary` is the version-robust "was up" signal: CNPG sets it
  * the first time a primary is elected and never clears it (present on 1.27 and

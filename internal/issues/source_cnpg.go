@@ -309,11 +309,11 @@ func detectCNPGClusterIssues(gvr schema.GroupVersionResource, kind string, u *un
 	desired, okD, _ := unstructured.NestedInt64(u.Object, "spec", "instances")
 	ready, okR, _ := unstructured.NestedInt64(u.Object, "status", "readyInstances")
 	currentPrimary, _, _ := unstructured.NestedString(u.Object, "status", "currentPrimary")
-	// CNPG omits readyInstances when it is 0, so absence on a cluster that has
-	// reported ANYTHING (phase, primary or a condition) is a real 0, not "not
-	// reported yet". Resolving it here is what makes a fully-down cluster
-	// reachable at all — the old okR gate left it byte-identical to a statusless
-	// one. Absent EVERYTHING stays the truly-statusless case, still no signal.
+	// CNPG omits readyInstances when it is 0 (omitempty), so absence on a cluster
+	// that has reported ANYTHING (phase, primary or a condition) is a real 0, not
+	// "not reported yet"; resolving it to 0 here is what lets a fully-down cluster
+	// be detected. Absent EVERYTHING stays the truly-statusless case, still no
+	// signal.
 	reported := phase != "" || currentPrimary != "" || cnpgHasConditions(u)
 	readyResolved := ready
 	if !okR && reported {

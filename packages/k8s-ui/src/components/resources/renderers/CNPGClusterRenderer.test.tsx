@@ -43,7 +43,7 @@ describe('CNPGClusterRenderer — the drawer must not contradict the badge', () 
     // No phase excuses a database that was serving and now has nothing ready.
     // readyInstances is OMITTED — the shape CNPG actually emits for zero ready —
     // and currentPrimary is the "was up" signal that tells this apart from a
-    // first bootstrap. This is the exact case the old presence gate missed.
+    // first bootstrap.
     const wasUpDown = {
       apiVersion: 'postgresql.cnpg.io/v1',
       kind: 'Cluster',

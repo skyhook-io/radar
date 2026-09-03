@@ -538,8 +538,8 @@ func TestCNPGZeroReadyDistinguishesBootstrapFromRegression(t *testing.T) {
 		t.Error("a partial fence must not suppress the outage of a was-up cluster")
 	}
 
-	// Regression: was up (currentPrimary), now nothing ready. This is the case the
-	// old readyInstances-presence gate made unreachable.
+	// Regression: was up (currentPrimary), now nothing ready — readyInstances
+	// omitted, the shape CNPG emits at zero. Must raise the outage.
 	regression := cnpgCluster(map[string]any{"instances": int64(3)},
 		map[string]any{"phase": "Waiting for the instances to become active", "currentPrimary": "pg-1"})
 	if !degraded(regression) {
