@@ -122,12 +122,9 @@ export function RecentList({
           <p className="mt-1 max-w-xs text-sm text-theme-text-tertiary">
             Open a resource and use its{" "}
             <Sparkles className="inline h-3.5 w-3.5 align-text-bottom text-accent" />{" "}
-            action to investigate it with {agentLabel} —{" "}
-            <span className="font-medium text-theme-text-secondary">
-              Investigate
-            </span>{" "}
-            a problem, or just ask about it. Investigations run in the
-            background and are kept in your history here.
+            action to investigate it with {agentLabel}. Once a run starts you
+            can ask follow-up questions. Investigations run in the background
+            and are kept in your history here.
           </p>
         </div>
       </div>
@@ -175,6 +172,20 @@ export function RecentList({
               <time dateTime={r.updatedAt} className="tabular-nums">
                 {absoluteTime(updatedAt, now)}
               </time>
+              {r.issue ? (
+                <>
+                  <span aria-hidden>·</span>
+                  <span
+                    className={`truncate font-medium ${
+                      r.issue.severity === "critical"
+                        ? "text-red-500/90"
+                        : "text-amber-600/90 dark:text-amber-500/90"
+                    }`}
+                  >
+                    {r.issue.reason}
+                  </span>
+                </>
+              ) : null}
             </div>
             {(r.status === "stale" && r.context) || r.preview ? (
               <div className="line-clamp-2 pl-3.5 text-xs leading-snug text-theme-text-tertiary">

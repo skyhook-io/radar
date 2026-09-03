@@ -74,6 +74,7 @@ type Run struct {
 	Group     string           // immutable — Kubernetes API group (empty = core)
 	Namespace string           // immutable
 	Name      string           // immutable
+	Issue     *RunIssue        // immutable — issue the run was initiated from ("" = plain investigate)
 	Context   string           // immutable — kube-context the run is about (baseline)
 	Agent     string           // immutable — backend CLI driving this run ("claude"/"codex")
 	WorkDir   string           // immutable — per-run scratch dir (under RunManager.workRoot); "" if none
@@ -115,12 +116,21 @@ type RunEvent struct {
 }
 
 // RunSummary is an immutable snapshot of a run (no event log) for JSON responses.
+// RunIssue is the issue the user initiated this investigation from — display
+// identity only. It never shapes the prompt: two runs on the same target read
+// the same evidence regardless of which symptom row launched them.
+type RunIssue struct {
+	Reason   string `json:"reason"`
+	Severity string `json:"severity,omitempty"`
+}
+
 type RunSummary struct {
 	ID        string                `json:"id"`
 	Kind      string                `json:"kind"`
 	Group     string                `json:"group"`
 	Namespace string                `json:"namespace"`
 	Name      string                `json:"name"`
+	Issue     *RunIssue             `json:"issue,omitempty"`
 	Context   string                `json:"context"`
 	Agent     string                `json:"agent,omitempty"`
 	Profile   ExecutionProfile      `json:"profile"`
@@ -282,7 +292,7 @@ func (m *RunManager) loadPersisted() {
 		}
 		r := &Run{
 			ID: s.ID, Kind: s.Kind, Group: s.Group, Namespace: s.Namespace, Name: s.Name,
-			Context: s.Context, Agent: s.Agent, Profile: s.Profile,
+			Issue: s.Issue, Context: s.Context, Agent: s.Agent, Profile: s.Profile,
 			Model: s.Model, Effort: s.Effort, ManagedBy: s.ManagedBy,
 			Health: s.Health, CreatedAt: s.CreatedAt, OwnerPID: s.OwnerPID,
 			store:  m.store,
@@ -491,7 +501,7 @@ func (m *RunManager) ctx() string {
 // Start creates and launches an investigation, or focuses an existing live run for
 // the same target+context instead of duplicating it. Returns ErrAtCapacity when
 // the concurrent-running cap is reached.
-func (m *RunManager) Start(kind, group, namespace, name, agent string, profile ExecutionProfile, model, effort, managedBy string, health *ResourceHealthSignal) (RunSummary, error) {
+func (m *RunManager) Start(kind, group, namespace, name, agent string, profile ExecutionProfile, model, effort, managedBy string, health *ResourceHealthSignal, issue *RunIssue) (RunSummary, error) {
 	cur := m.ctx()
 	m.mu.Lock()
 	// Focus an existing live run for this exact target+mode rather than duplicate it.
@@ -510,7 +520,7 @@ func (m *RunManager) Start(kind, group, namespace, name, agent string, profile E
 	id := newRunID()
 	r := &Run{
 		ID: id, Kind: kind, Group: group, Namespace: namespace,
-		Name: name, Context: cur, Agent: agent, WorkDir: m.runWorkDir(id), Profile: profile,
+		Name: name, Issue: issue, Context: cur, Agent: agent, WorkDir: m.runWorkDir(id), Profile: profile,
 		Model: model, Effort: effort, ManagedBy: managedBy, Health: health, CreatedAt: nowUTC(),
 		OwnerPID: os.Getpid(),
 		store:    m.store,
@@ -1447,7 +1457,7 @@ func (r *Run) Summary() RunSummary {
 func (r *Run) summaryLocked() RunSummary {
 	return RunSummary{
 		ID: r.ID, Kind: r.Kind, Group: r.Group, Namespace: r.Namespace, Name: r.Name,
-		Context: r.Context, Agent: r.Agent, Profile: r.Profile,
+		Issue: r.Issue, Context: r.Context, Agent: r.Agent, Profile: r.Profile,
 		Model: r.Model, Effort: r.Effort, ManagedBy: r.ManagedBy,
 		Health: r.Health,
 		Status: r.status, SessionID: r.sessionID, OwnerPID: r.OwnerPID,

@@ -1142,14 +1142,12 @@ export function Timeline({
       )}
       {items.map((it, i) =>
         it.kind === "thinking" ? (
-          // The model's reasoning between tool calls — muted + subordinate to the
-          // tool rows. Rendered as markdown so Codex's summary headers read cleanly.
-          <AIMarkdown
+          <ThinkingBlock
             key={i}
-            className={`${it.animate === false ? "" : "animate-transcript-enter"} py-0.5 text-xs leading-relaxed text-theme-text-tertiary [overflow-wrap:anywhere] [&_li]:text-theme-text-tertiary [&_p]:my-0.5 [&_strong]:font-medium [&_strong]:text-theme-text-secondary`}
-          >
-            {it.text}
-          </AIMarkdown>
+            text={it.text}
+            animate={it.animate !== false}
+            live={running && i === items.length - 1}
+          />
         ) : (
           <ToolRow
             key={it.id}
@@ -1166,6 +1164,57 @@ export function Timeline({
         ),
       )}
       {running && <RunningStatus label={runningLabel} />}
+    </div>
+  );
+}
+
+// The model's reasoning between tool calls — muted + subordinate to the tool
+// rows, and clamped once its beat is over: the chronology stays scannable and
+// the full prose is one click away. The beat still streaming stays unclamped so
+// live progress reads as progress. Rendered as markdown so Codex's summary
+// headers read cleanly.
+function ThinkingBlock({
+  text,
+  animate,
+  live,
+}: {
+  text: string;
+  animate: boolean;
+  live: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const clamped = !live && !expanded;
+  // The toggle only appears when the clamp actually hides something, so short
+  // beats render exactly as before. Reflow (pane resize, fonts) re-measures.
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el || !clamped) return;
+    const check = () => setOverflowing(el.scrollHeight > el.clientHeight + 1);
+    check();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(check);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [clamped, text]);
+  return (
+    <div className={animate ? "animate-transcript-enter" : ""}>
+      <div ref={contentRef} className={clamped ? "line-clamp-2" : ""}>
+        <AIMarkdown className="py-0.5 text-xs leading-relaxed text-theme-text-tertiary [overflow-wrap:anywhere] [&_li]:text-theme-text-tertiary [&_p]:my-0.5 [&_strong]:font-medium [&_strong]:text-theme-text-secondary">
+          {text}
+        </AIMarkdown>
+      </div>
+      {!live && (overflowing || expanded) ? (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+          className="text-[11px] font-medium text-theme-text-tertiary hover:text-accent-text"
+        >
+          {expanded ? "Show less" : "Show reasoning"}
+        </button>
+      ) : null}
     </div>
   );
 }

@@ -312,6 +312,12 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 		Profile               string `json:"profile"`
 		Model                 string `json:"model"`
 		Effort                string `json:"effort"`
+		// Display identity of the issue the user clicked Investigate on; never
+		// shapes the prompt or evidence, so it is sanitized, not authorized.
+		Issue *struct {
+			Reason   string `json:"reason"`
+			Severity string `json:"severity"`
+		} `json:"issue"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
@@ -368,7 +374,21 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 	// than relying on the agent to self-report it. Best effort: "" (unknown) on miss.
 	managedBy := s.detectManagedBy(r.Context(), kind, group, namespace, name)
 	health := s.detectDiagnoseHealth(r, kind, group, namespace, name)
-	run, err := s.aiRuns.Start(kind, group, namespace, name, agent, profile, model, effort, managedBy, health)
+	var issue *ai.RunIssue
+	if body.Issue != nil {
+		reason := strings.TrimSpace(body.Issue.Reason)
+		if len(reason) > 120 {
+			reason = reason[:120]
+		}
+		if reason != "" {
+			severity := strings.ToLower(strings.TrimSpace(body.Issue.Severity))
+			if severity != "critical" && severity != "warning" {
+				severity = ""
+			}
+			issue = &ai.RunIssue{Reason: reason, Severity: severity}
+		}
+	}
+	run, err := s.aiRuns.Start(kind, group, namespace, name, agent, profile, model, effort, managedBy, health, issue)
 	if err != nil {
 		if errors.Is(err, ai.ErrAtCapacity) {
 			s.writeError(w, http.StatusConflict, "too many investigations running — stop or finish one first")

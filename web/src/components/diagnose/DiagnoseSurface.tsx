@@ -3,7 +3,7 @@
 //  - expanded: a master-detail workspace that fills ONLY the content area (does
 //    not cover the left nav rail or top bar) — recent list on the left, the
 //    selected investigation/report on the right.
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Sparkles,
   X,
@@ -17,6 +17,7 @@ import {
   Check,
   Plus,
 } from "lucide-react";
+import { Badge } from "@skyhook-io/k8s-ui";
 import { Tooltip } from "../ui/Tooltip";
 import {
   useDiagnose,
@@ -35,6 +36,7 @@ import { type RunSummary, type ExecutionProfile } from "../../api/diagnose";
 import { routePath } from "../../api/config";
 import { useCapabilitiesContext } from "../../contexts/CapabilitiesContext";
 import { formatInvestigationTarget } from "./target";
+import type { DiagnosisResourceRef } from "./diagnoseEvidenceTypes";
 
 function capWord(s: string): string {
   return s ? s[0].toUpperCase() + s.slice(1) : s;
@@ -257,12 +259,15 @@ export function investigationHeaderPresentation(input: {
 function DiagnoseHeaderIdentity({
   className,
   title,
+  issue,
   configLine,
   runMeta,
   onOpenSettings,
 }: {
   className: string;
   title: string;
+  /** The issue the run was initiated from — the "why" beside the target. */
+  issue?: { reason: string; severity?: string };
   configLine: string;
   runMeta?: {
     label: string;
@@ -275,8 +280,18 @@ function DiagnoseHeaderIdentity({
   return (
     <div className={`min-w-0 ${className}`}>
       <div className="flex min-w-0 items-center gap-2">
-        <div className="min-w-0 flex-1 truncate text-sm font-medium text-theme-text-primary">
-          {title}
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 truncate">
+          <span className="min-w-0 truncate text-sm font-medium text-theme-text-primary">
+            {title}
+          </span>
+          {issue ? (
+            <Badge
+              severity={issue.severity === "critical" ? "error" : "warning"}
+              size="sm"
+            >
+              {issue.reason}
+            </Badge>
+          ) : null}
         </div>
         {runMeta ? (
           <div
@@ -308,7 +323,16 @@ function DiagnoseHeaderIdentity({
   );
 }
 
-export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
+export function DiagnoseSurface({
+  topInset = 0,
+  onOpenResource,
+}: {
+  topInset?: number;
+  /** Opens a resource referenced by evidence in the host's own views. Optional
+   *  because this surface stays router-free: the embedding host decides where
+   *  resource identities resolve; without it, evidence renders no links. */
+  onOpenResource?: (ref: DiagnosisResourceRef) => void;
+}) {
   const d = useDiagnose();
   // Injected settings action: undefined = Radar's own Settings dialog;
   // null = hide the gear + links.
@@ -325,6 +349,16 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
     panelBounds: { min: minW, max: maxW },
     panelWidthKey: widthKey,
   } = useDiagnoseLayout();
+  // Evidence flows into the host's views. Docked, the destination is already
+  // visible beside the panel; maximized would cover it, so restore first.
+  const openResource = useCallback(
+    (ref: DiagnosisResourceRef) => {
+      if (!onOpenResource) return;
+      onOpenResource(ref);
+      setMaximized(false);
+    },
+    [onOpenResource, setMaximized],
+  );
 
   const startResize = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -420,6 +454,7 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
       run={activeRun}
       agentLabel={activeAgentLabel}
       maximized={maximized}
+      onOpenResource={onOpenResource ? openResource : undefined}
     />
   ) : d.activeRunId && !d.runsLoaded ? (
     // Deep-linked to a run before the list has ever loaded: show the load
@@ -539,6 +574,7 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
               <DiagnoseHeaderIdentity
                 className={headerPresentation.detailIdentityClass}
                 title={focusedTitle}
+                issue={visibleRunDetail?.issue}
                 configLine={focusedConfigLine}
                 runMeta={focusedRunMeta}
                 onOpenSettings={openSettings}
@@ -561,6 +597,7 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
                       namespace: activeRun.namespace,
                       name: activeRun.name,
                       issueId: activeRun.issueId,
+                      issue: activeRun.issue,
                       fresh: true,
                     })
                   }

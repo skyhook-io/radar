@@ -6,6 +6,7 @@ import {
   investigationEvidenceStepIdsByTurn,
   investigationEvidenceSourceDomId,
   investigationEvidenceSourceId,
+  investigationEvidenceSubjectRef,
   projectInvestigationEvidence,
   resolveInvestigationRootCauseEvidence,
   type InvestigationEvidenceGroup,
@@ -2116,7 +2117,7 @@ describe("strict evidence adapters", () => {
     expect(result.groups).toHaveLength(0);
     expect(result.limitations).toHaveLength(1);
     expect(result.limitations[0].message).toContain(
-      "current structured evidence contract",
+      "organize this check's result into an evidence card",
     );
   });
 
@@ -2608,5 +2609,83 @@ describe("honest zero and partial-result states", () => {
         kind: "unknown",
       }),
     ]);
+  });
+});
+
+describe("investigationEvidenceSubjectRef", () => {
+  it("resolves refs the producer states unambiguously", () => {
+    expect(
+      investigationEvidenceSubjectRef({
+        type: "resource",
+        resource: {
+          apiVersion: "apps/v1",
+          kind: "Deployment",
+          metadata: { namespace: "shop", name: "api" },
+        },
+        warnings: [],
+      }),
+    ).toEqual({
+      kind: "Deployment",
+      group: "apps",
+      namespace: "shop",
+      name: "api",
+    });
+    expect(
+      investigationEvidenceSubjectRef({
+        type: "logs",
+        pod: "api-123",
+        container: "api",
+        namespace: "shop",
+        previous: false,
+        warnings: [],
+      }),
+    ).toEqual({ kind: "Pod", namespace: "shop", name: "api-123" });
+    expect(
+      investigationEvidenceSubjectRef({
+        type: "relationships",
+        root: { kind: "Service", namespace: "shop", name: "api" },
+        nodes: [],
+        edges: [],
+        truncated: false,
+      }),
+    ).toEqual({ kind: "Service", namespace: "shop", name: "api" });
+  });
+
+  it("declines ambiguous or namespace-less subjects", () => {
+    // Pod-shaped evidence without a producer-stated namespace has no safe
+    // destination; the investigation target's namespace is never borrowed.
+    expect(
+      investigationEvidenceSubjectRef({
+        type: "logs",
+        pod: "api-123",
+        container: "api",
+        previous: false,
+        warnings: [],
+      }),
+    ).toBeUndefined();
+    // A crash spanning several pods names no single resource.
+    expect(
+      investigationEvidenceSubjectRef({
+        type: "crash",
+        crash: {
+          pods: ["api-1", "api-2"],
+          container: "api",
+          state: "waiting",
+          exitCode: 1,
+          logLine: "FATAL",
+          logSource: "current",
+          logLineSelection: "fatal_pattern",
+        },
+        namespace: "shop",
+      }),
+    ).toBeUndefined();
+    expect(
+      investigationEvidenceSubjectRef({
+        type: "receipt",
+        checked: "issues",
+        scope: "shop",
+        message: "No issues found",
+      }),
+    ).toBeUndefined();
   });
 });
