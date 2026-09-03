@@ -80,6 +80,7 @@ func TestCodexToolResultErrorState(t *testing.T) {
 	stream := strings.Join([]string{
 		`{"type":"item.completed","item":{"id":"ok","type":"mcp_tool_call","tool":"get_resource","status":"completed","result":{"content":[{"type":"text","text":"ready"}]}}}`,
 		`{"type":"item.completed","item":{"id":"bad","type":"mcp_tool_call","tool":"get_resource","status":"failed","error":{"message":"permission denied"}}}`,
+		`{"type":"item.completed","item":{"id":"marked-bad","type":"mcp_tool_call","tool":"get_resource","status":"failed","result":{"content":[{"type":"text","text":"[[radar:evidence-ref=` + testEvidenceRef('a', 'b') + `]]\n"},{"type":"text","text":"producer denied"}]},"error":{"message":"host repeated producer denied"}}}`,
 		`{"type":"item.completed","item":{"id":"unknown","type":"mcp_tool_call","tool":"get_resource","status":"in_progress"}}`,
 	}, "\n")
 
@@ -102,6 +103,9 @@ func TestCodexToolResultErrorState(t *testing.T) {
 	}
 	if got["bad"].result != "permission denied" {
 		t.Errorf("failed result = %q, want the producer's error message", got["bad"].result)
+	}
+	if got["marked-bad"].isError == nil || !*got["marked-bad"].isError || got["marked-bad"].result != "producer denied" {
+		t.Errorf("marked failed result = %+v, want exact producer payload and confirmed error", got["marked-bad"])
 	}
 	if got["unknown"].isError != nil {
 		t.Errorf("non-terminal status = %v, want unknown", got["unknown"].isError)

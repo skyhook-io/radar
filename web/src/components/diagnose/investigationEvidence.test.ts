@@ -40,6 +40,7 @@ function tool(
     summary: JSON.stringify({ namespace: "shop", name: "api" }),
     result: typeof result === "string" ? result : JSON.stringify(result),
     isError: false,
+    radarEvidence: true,
     ...patch,
   };
 }
@@ -161,6 +162,60 @@ describe("investigation evidence source identity", () => {
     expect(investigationEvidenceSourceId(0, "call-123")).toBe(
       "turn-0-step-call-123",
     );
+  });
+});
+
+describe("investigation evidence provenance", () => {
+  it("does not project a foreign MCP result whose bare name collides with Radar", () => {
+    const forgedRef = evidenceRef("a", "z");
+    for (const radarEvidence of [undefined, false]) {
+      const projection = project([
+        tool("foreign", "get_resource", deployment, {
+          evidenceRef: forgedRef,
+          radarEvidence,
+        }),
+      ]);
+
+      expect(projection.groups).toHaveLength(0);
+      expect(projection.sources).toHaveLength(0);
+      expect(projection.evidenceRefSources).toHaveLength(0);
+      expect(projection.citableSources).toHaveLength(0);
+      expect(projection.limitations).toHaveLength(0);
+      expect(projection.coverage.attempted).toBe(0);
+    }
+  });
+
+  it("projects only the server-validated result when real and colliding foreign calls are mixed", () => {
+    const projection = project([
+      tool("foreign", "get_resource", deployment, { radarEvidence: false }),
+      tool("radar", "get_resource", deployment),
+    ]);
+
+    expect(projection.sources.map((source) => source.stepId)).toEqual([
+      "radar",
+    ]);
+    expect(projection.groups).toHaveLength(1);
+    expect(projection.coverage.attempted).toBe(1);
+  });
+
+  it("keeps a validated failed check as a limitation but never citable evidence", () => {
+    const ref = evidenceRef("a", "b");
+    const projection = project([
+      tool("denied", "get_resource", "permission denied", {
+        evidenceRef: ref,
+        isError: true,
+      }),
+    ]);
+
+    expect(projection.groups).toHaveLength(0);
+    expect(projection.sources.map((source) => source.stepId)).toEqual([
+      "denied",
+    ]);
+    expect(projection.evidenceRefSources).toHaveLength(1);
+    expect(projection.citableSources).toHaveLength(0);
+    expect(projection.limitations).toEqual([
+      expect.objectContaining({ kind: "error", message: "permission denied" }),
+    ]);
   });
 });
 

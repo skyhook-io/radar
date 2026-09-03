@@ -59,6 +59,7 @@ export type InvestigationEvidenceTimelineItem =
       summary?: string;
       result?: string;
       evidenceRef?: string;
+      radarEvidence?: boolean;
       truncated?: boolean;
       isError?: boolean;
     };
@@ -3033,6 +3034,10 @@ export function projectInvestigationEvidence(
       const itemOrder = order;
       order += 1;
       if (item.kind !== "tool") continue;
+      // Full-local agents may load user MCP servers whose bare tool names collide
+      // with Radar's. Only results matched by the server to the active private
+      // transport ledger may enter the surface labelled "Radar evidence".
+      if (item.radarEvidence !== true) continue;
       const source: InvestigationEvidenceSource = {
         id: investigationEvidenceSourceId(turnIndex, item.id),
         turnIndex,

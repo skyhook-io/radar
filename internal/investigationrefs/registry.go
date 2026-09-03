@@ -97,6 +97,24 @@ func (r *Registry) Issue(scope, payload string) (string, bool) {
 	}
 }
 
+// Matches reports whether ref was issued for this exact payload while scope is
+// still active. Agent-stream adapters can expose marker-shaped text from any MCP
+// server in full-local mode; only the private Radar transport can create this
+// live ledger entry, so callers must validate before persisting provenance.
+func (r *Registry) Matches(scope, ref, payload string) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	state, active := r.scopes[scope]
+	if !active {
+		return false
+	}
+	issuedPayload, issued := state.records[ref]
+	return issued && issuedPayload == payload
+}
+
 func (s *Scope) Close() Records {
 	if s == nil {
 		return nil

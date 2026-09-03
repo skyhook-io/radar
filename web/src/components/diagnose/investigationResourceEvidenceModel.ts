@@ -112,6 +112,9 @@ function isSensitiveInvestigationConfigValue(value: string): boolean {
     /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/.test(value) ||
     /\bAKIA[0-9A-Z]{16}\b/.test(value) ||
     /\bgh[oprsu]_[A-Za-z0-9]{20,}\b/.test(value) ||
+    /\bgithub_pat_[A-Za-z0-9_]{22,}\b/.test(value) ||
+    /password[=:]\s*\S{8,}/i.test(value) ||
+    /\$(?:apr1|2[aby]|5|6)\$[./A-Za-z0-9$]{8,}/.test(value) ||
     /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/.test(
       value,
     )

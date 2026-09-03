@@ -45,6 +45,7 @@ import {
 import { InvestigationResourceEvidence } from "./InvestigationResourceEvidence";
 import { investigationResourceEvidenceHasDetails } from "./investigationResourceEvidenceModel";
 import { prettyTool } from "./parts";
+import { Tooltip } from "../ui/Tooltip";
 
 // Shared Collapse uses a 200 ms grid-row transition. Keep a small paint margin
 // before moving focus so the destination is stationary. Reduced-motion users get
@@ -53,6 +54,32 @@ export const INVESTIGATION_DISCLOSURE_SETTLE_MS = 220;
 export const VISIBLE_ADDITIONAL_KEY_EVIDENCE = 2;
 export const VISIBLE_SUPPORTING_EVIDENCE = 4;
 export const VISIBLE_LOG_EVIDENCE_LINES = 12;
+
+function evidenceTypePrefersFullRow(
+  type: InvestigationEvidenceData["type"],
+): boolean {
+  return type === "logs" || type === "events";
+}
+
+// Supporting evidence becomes a two-column grid when the pane is wide enough.
+// Keep compact cards paired only with an adjacent compact card. Otherwise a
+// full-row card between them strands a conspicuous empty half-row (and makes the
+// visual order look accidental), as does an odd card at the end of a run.
+export function investigationEvidenceFullRowFlags(
+  types: readonly InvestigationEvidenceData["type"][],
+): boolean[] {
+  const fullRow = types.map(evidenceTypePrefersFullRow);
+  let compactRunStart = 0;
+
+  for (let index = 0; index <= types.length; index += 1) {
+    if (index < types.length && !fullRow[index]) continue;
+    const compactRunLength = index - compactRunStart;
+    if (compactRunLength % 2 === 1) fullRow[index - 1] = true;
+    compactRunStart = index + 1;
+  }
+
+  return fullRow;
+}
 
 function prefersReducedMotion(): boolean {
   return (
@@ -66,6 +93,104 @@ export function investigationDisclosureSettleDelay(
   reducedMotion: boolean,
 ): number {
   return reducedMotion ? 0 : INVESTIGATION_DISCLOSURE_SETTLE_MS;
+}
+
+export function investigationDisclosureScrollTop({
+  scrollTop,
+  viewportTop,
+  viewportBottom,
+  disclosureTop,
+  disclosureBottom,
+  inset = 8,
+}: {
+  scrollTop: number;
+  viewportTop: number;
+  viewportBottom: number;
+  disclosureTop: number;
+  disclosureBottom: number;
+  inset?: number;
+}): number | undefined {
+  const visibleTop = viewportTop + inset;
+  const visibleBottom = viewportBottom - inset;
+  if (disclosureTop >= visibleTop && disclosureBottom <= visibleBottom) {
+    return undefined;
+  }
+  if (disclosureTop < visibleTop) {
+    return Math.max(0, scrollTop + disclosureTop - visibleTop);
+  }
+  const viewportHeight = visibleBottom - visibleTop;
+  const disclosureHeight = disclosureBottom - disclosureTop;
+  if (disclosureHeight <= viewportHeight) {
+    return Math.max(0, scrollTop + disclosureBottom - visibleBottom);
+  }
+  return Math.max(0, scrollTop + disclosureTop - visibleTop);
+}
+
+function useDisclosureReveal<T extends HTMLElement>() {
+  const elementRef = useRef<T>(null);
+  const timerRef = useRef<number | undefined>(undefined);
+  useLayoutEffect(
+    () => () => {
+      if (timerRef.current !== undefined) {
+        window.clearTimeout(timerRef.current);
+      }
+    },
+    [],
+  );
+
+  const revealAfterToggle = (opening: boolean) => {
+    if (timerRef.current !== undefined) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = undefined;
+    }
+    if (!opening) return;
+    const settleDelay = investigationDisclosureSettleDelay(
+      prefersReducedMotion(),
+    );
+    const initialScroller = elementRef.current?.closest<HTMLElement>(
+      "[data-investigation-findings-scroll]",
+    );
+    const initialScrollTop = initialScroller?.scrollTop;
+    // Even reduced-motion disclosures need one task boundary so React can
+    // commit the open layout before it is measured.
+    timerRef.current = window.setTimeout(() => {
+      timerRef.current = undefined;
+      const element = elementRef.current;
+      if (!element) return;
+      const scroller = element.closest<HTMLElement>(
+        "[data-investigation-findings-scroll]",
+      );
+      // This component lives in a bounded Diagnose surface. Never fall back to
+      // scrolling the document (or an overflow-hidden ancestor), which can move
+      // the entire workspace and expose blank space below it.
+      if (!scroller) return;
+      // Expansion is delayed until Collapse has settled. If the reader scrolls
+      // during that interval, their newer intent wins over the automatic reveal.
+      if (
+        scroller === initialScroller &&
+        initialScrollTop !== undefined &&
+        Math.abs(scroller.scrollTop - initialScrollTop) > 2
+      ) {
+        return;
+      }
+      const viewport = scroller.getBoundingClientRect();
+      const disclosure = element.getBoundingClientRect();
+      const top = investigationDisclosureScrollTop({
+        scrollTop: scroller.scrollTop,
+        viewportTop: viewport.top,
+        viewportBottom: viewport.bottom,
+        disclosureTop: disclosure.top,
+        disclosureBottom: disclosure.bottom,
+      });
+      if (top === undefined) return;
+      scroller.scrollTo({
+        top,
+        behavior: settleDelay === 0 ? "auto" : "smooth",
+      });
+    }, settleDelay);
+  };
+
+  return { elementRef, revealAfterToggle };
 }
 
 export function investigationEvidenceRevealCollection(
@@ -194,9 +319,8 @@ export function InvestigationEvidencePane({
     (rootCauseEvidence?.links.length ?? 0) > 0 ||
     projection.groups.some((group) => !group.historical);
   const keyGroups = tiers.get("key")!;
-  const primaryKeyGroups = keyGroups.slice(0, 1);
-  const additionalKeyGroups = keyGroups.slice(
-    1,
+  const visibleKeyGroups = keyGroups.slice(
+    0,
     1 + VISIBLE_ADDITIONAL_KEY_EVIDENCE,
   );
   const overflowKeyGroups = keyGroups.slice(
@@ -314,8 +438,8 @@ export function InvestigationEvidencePane({
           </div>
           <p className="mt-0.5 text-xs leading-relaxed text-theme-text-tertiary">
             {rootCauseEvidence?.status === "linked"
-              ? "Exact successful Radar checks selected by the agent to support its assessment."
-              : "Structured observations from completed Radar tool calls in this run."}
+              ? "Checks the agent cited, validated against this run."
+              : "Evidence captured from completed Radar checks."}
           </p>
         </div>
       </div>
@@ -344,28 +468,17 @@ export function InvestigationEvidencePane({
         ) : null}
 
         <EvidenceTier
-          headingId="investigation-observed-failure-heading"
+          headingId="investigation-key-evidence-heading"
           tier="key"
-          title="Observed failure"
-          description="The first failure signal Radar captured during this run."
-          groups={primaryKeyGroups}
-          animateGroupIds={animateGroupIds}
-          onViewSource={onViewSource}
-        />
-        <EvidenceTier
-          headingId="investigation-other-key-evidence-heading"
-          tier="key"
-          title="Other key evidence"
-          description="Additional failure signals captured during this run."
-          groups={additionalKeyGroups}
-          expandFirst={false}
+          title="Key evidence"
+          groups={visibleKeyGroups}
           animateGroupIds={animateGroupIds}
           onViewSource={onViewSource}
         />
         <CollapsedEvidenceCollection
           id="investigation-more-key-evidence"
           title="More key evidence"
-          description="Additional failure signals, collapsed to keep the assessment scannable."
+          description="Additional failure signals"
           groups={overflowKeyGroups}
           animateGroupIds={animateGroupIds}
           onViewSource={onViewSource}
@@ -405,7 +518,7 @@ export function InvestigationEvidencePane({
         <CollapsedEvidenceCollection
           id="investigation-more-supporting-evidence"
           title="More supporting evidence"
-          description="Additional corroborating signals, available without extending the main story."
+          description="Additional corroborating signals"
           groups={overflowSupportingGroups}
           animateGroupIds={animateGroupIds}
           onViewSource={onViewSource}
@@ -421,7 +534,7 @@ export function InvestigationEvidencePane({
         <CollapsedEvidenceCollection
           id="investigation-earlier-evidence"
           title="Earlier evidence"
-          description="Observed before a later verification. Kept for comparison; this does not mean it was resolved."
+          description="Retained for comparison; earlier does not mean resolved."
           groups={historical}
           animateGroupIds={animateGroupIds}
           onViewSource={onViewSource}
@@ -431,7 +544,7 @@ export function InvestigationEvidencePane({
         <CollapsedEvidenceCollection
           id="investigation-context-evidence"
           title="Context"
-          description="Orientation, broader-scope signals, and direct relationships kept secondary to the finding."
+          description="Broader-scope signals and direct relationships"
           groups={tiers.get("context")!}
           animateGroupIds={animateGroupIds}
           onViewSource={onViewSource}
@@ -482,9 +595,9 @@ function RootCauseEvidenceLinks({
       {resolution.links.map((link, index) => (
         <div key={link.source.id} className="space-y-1.5">
           <div className="flex min-w-0 items-center justify-between gap-2 px-0.5">
-            <Badge severity="neutral" size="sm">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
               Agent-selected check {index + 1}
-            </Badge>
+            </span>
             {link.additionalGroupCount > 0 ? (
               <span className="truncate text-[10px] text-theme-text-tertiary">
                 +{pluralize(link.additionalGroupCount, "other observation")}{" "}
@@ -521,9 +634,6 @@ function RootCauseEvidenceLinks({
               <span className="min-w-0 flex-1">
                 <span className="block text-xs font-medium text-theme-text-primary">
                   {prettyTool(link.source.tool)}
-                </span>
-                <span className="block truncate text-[11px] text-theme-text-tertiary">
-                  Successful Radar check
                 </span>
               </span>
               <SourceButton
@@ -593,39 +703,52 @@ function CollapsedEvidenceCollection({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  const { elementRef, revealAfterToggle } = useDisclosureReveal<HTMLElement>();
   if (groups.length === 0) return null;
+  const fullRowFlags = investigationEvidenceFullRowFlags(
+    groups.map((group) => group.latest.data.type),
+  );
   return (
-    <section className="overflow-hidden rounded-lg border border-theme-border bg-theme-base/25">
+    <section
+      ref={elementRef}
+      className="overflow-hidden rounded-lg border border-theme-border/80 bg-theme-base/20"
+    >
       <button
         type="button"
         aria-expanded={open}
         aria-controls={id}
-        onClick={() => onOpenChange(!open)}
+        onClick={() => {
+          const opening = !open;
+          onOpenChange(opening);
+          revealAfterToggle(opening);
+        }}
         className="flex w-full min-w-0 items-center gap-2 px-3 py-2.5 text-left hover:bg-theme-hover/60"
       >
-        <CollapseChevron open={open} className="h-4 w-4" />
         <span className="min-w-0 flex-1">
-          <span className="block text-xs font-semibold uppercase tracking-wide text-theme-text-secondary">
+          <span className="block text-xs font-semibold text-theme-text-secondary">
             {title}
           </span>
           <span className="block truncate text-[11px] text-theme-text-tertiary">
             {description}
           </span>
         </span>
-        <Badge severity="neutral" size="sm">
+        <span className="shrink-0 font-mono text-[11px] text-theme-text-tertiary">
           {groups.length}
-        </Badge>
+        </span>
+        <CollapseChevron open={open} className="h-4 w-4" />
       </button>
       <div id={id}>
         <Collapse open={open}>
           <div className="grid gap-2 border-t border-theme-border/60 p-2.5 @min-[760px]/evidence:grid-cols-2">
-            {groups.map((group) => (
+            {groups.map((group, index) => (
               <EvidenceCard
                 key={group.id}
                 group={group}
                 initiallyOpen={false}
                 animateArrival={animateGroupIds.has(group.id)}
                 onViewSource={onViewSource}
+                spanFullRow={fullRowFlags[index]}
+                prominence="secondary"
               />
             ))}
           </div>
@@ -652,6 +775,8 @@ function CoverageStrip({
   onOpenChange: (open: boolean) => void;
 }) {
   const hasError = limitations.some((item) => item.kind === "error");
+  const { elementRef, revealAfterToggle } =
+    useDisclosureReveal<HTMLDivElement>();
   const regionId = "investigation-evidence-coverage";
   const anchorLimitationBySource = new Map<string, number>();
   limitations.forEach((limitation, index) => {
@@ -663,21 +788,22 @@ function CoverageStrip({
   });
   return (
     <div
-      className={clsx(
-        "overflow-hidden rounded-lg border",
-        hasError
-          ? "border-red-500/35 bg-red-500/5"
-          : "border-amber-500/35 bg-amber-500/5",
-      )}
+      ref={elementRef}
+      className="overflow-hidden rounded-lg border border-theme-border/80 bg-theme-base/20"
     >
       <span className="sr-only" role="status" aria-live="polite">
-        Evidence coverage has {pluralize(limitations.length, "limit")}.
+        Evidence coverage limited: {pluralize(coverage.limited, "check")} did
+        not produce complete evidence.
       </span>
       <button
         type="button"
         aria-expanded={open}
         aria-controls={regionId}
-        onClick={() => onOpenChange(!open)}
+        onClick={() => {
+          const opening = !open;
+          onOpenChange(opening);
+          revealAfterToggle(opening);
+        }}
         className="flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left hover:bg-theme-hover/50"
       >
         {hasError ? (
@@ -690,16 +816,13 @@ function CoverageStrip({
         )}
         <span className="min-w-0 flex-1">
           <span className="block text-xs font-semibold text-theme-text-primary">
-            Evidence coverage has {pluralize(limitations.length, "limit")}
+            Evidence coverage limited
           </span>
           <span className="block truncate text-[11px] text-theme-text-tertiary">
             {pluralize(coverage.limited, "check")} incomplete · raw results
             remain in Activity
           </span>
         </span>
-        <Badge severity={hasError ? "error" : "warning"} size="sm">
-          {limitations.length}
-        </Badge>
         <CollapseChevron open={open} className="h-4 w-4" />
       </button>
       <div id={regionId}>
@@ -783,13 +906,19 @@ function EvidenceTier({
   headingId: string;
   tier: Exclude<InvestigationEvidenceTier, "checked">;
   title: string;
-  description: string;
+  description?: string;
   groups: InvestigationEvidenceGroup[];
   expandFirst?: boolean;
   animateGroupIds: ReadonlySet<string>;
   onViewSource: (sourceId: string) => void;
 }) {
   if (groups.length === 0) return null;
+  const fullRowFlags =
+    tier === "supporting"
+      ? investigationEvidenceFullRowFlags(
+          groups.map((group) => group.latest.data.type),
+        )
+      : [];
   return (
     <section aria-labelledby={headingId}>
       <div className="mb-2 flex items-start justify-between gap-3">
@@ -800,9 +929,11 @@ function EvidenceTier({
           >
             {title}
           </h3>
-          <p className="mt-0.5 text-[11px] leading-relaxed text-theme-text-tertiary">
-            {description}
-          </p>
+          {description ? (
+            <p className="mt-0.5 text-[11px] leading-relaxed text-theme-text-tertiary">
+              {description}
+            </p>
+          ) : null}
         </div>
         <span className="font-mono text-[11px] text-theme-text-tertiary">
           {groups.length}
@@ -818,17 +949,30 @@ function EvidenceTier({
           <EvidenceCard
             key={group.id}
             group={group}
-            initiallyOpen={
-              (tier === "key" && expandFirst && index === 0) ||
-              (tier === "supporting" && index === 0)
-            }
+            initiallyOpen={tier === "key" && expandFirst && index === 0}
             animateArrival={animateGroupIds.has(group.id)}
             onViewSource={onViewSource}
+            spanFullRow={fullRowFlags[index]}
+            prominence={tier === "key" ? "primary" : "supporting"}
           />
         ))}
       </div>
     </section>
   );
+}
+
+function investigationEvidenceHasMeaningfulHistory(
+  observations: InvestigationEvidenceObservation[],
+): boolean {
+  if (observations.length < 2) return false;
+  const firstRelevance = observations[0].relevance;
+  return observations
+    .slice(1)
+    .some(
+      (observation) =>
+        observation.changedFromPrevious ||
+        observation.relevance !== firstRelevance,
+    );
 }
 
 function EvidenceCard({
@@ -837,6 +981,8 @@ function EvidenceCard({
   initiallyOpen,
   animateArrival,
   onViewSource,
+  spanFullRow = false,
+  prominence = "primary",
 }: {
   group: InvestigationEvidenceGroup;
   /** Stable layout/scroll identity when an existing card changes section. */
@@ -844,48 +990,51 @@ function EvidenceCard({
   initiallyOpen: boolean;
   animateArrival: boolean;
   onViewSource: (sourceId: string) => void;
+  /** Fill both columns when this card has no compact row partner. */
+  spanFullRow?: boolean;
+  prominence?: "primary" | "supporting" | "secondary";
 }) {
   const [open, setOpen] = useState(initiallyOpen);
+  const { elementRef, revealAfterToggle } = useDisclosureReveal<HTMLElement>();
   const observation = group.latest;
   const newerLowerProvenanceObservation =
     group.chronologicalLatest.revision > observation.revision
       ? group.chronologicalLatest
       : undefined;
+  const meaningfulHistory = investigationEvidenceHasMeaningfulHistory(
+    group.observations,
+  );
+  const distinctCheckCount = new Set(
+    group.observations.map((item) => item.source.id),
+  ).size;
+  const confirmedByRepeatedChecks =
+    distinctCheckCount > 1 && !meaningfulHistory;
   const bodyId = `${domId}-body`;
-  const canExpand = evidenceHasDetails(observation.data);
-  const wide =
-    observation.data.type === "logs" || observation.data.type === "events";
+  const canExpand = evidenceHasDetails(observation.data) || meaningfulHistory;
+  const wide = spanFullRow || evidenceTypePrefersFullRow(observation.data.type);
   const primarySources = uniquePrimarySources(group);
+  const metadata = [
+    observation.relevance === "producer-related" ? "related resource" : null,
+    confirmedByRepeatedChecks
+      ? `confirmed by ${pluralize(distinctCheckCount, "check")}`
+      : meaningfulHistory
+        ? pluralize(group.observations.length, "observation")
+        : null,
+    newerLowerProvenanceObservation ? "later broader check retained" : null,
+  ].filter((item): item is string => Boolean(item));
   const headerContent = (
     <>
-      <EvidenceIcon observation={observation} />
+      <EvidenceIcon observation={observation} prominence={prominence} />
       <span className="min-w-0 flex-1">
         <span className="flex flex-wrap items-center gap-1.5">
-          <span className="text-sm font-semibold leading-snug text-theme-text-primary">
+          <span
+            className={clsx(
+              "font-semibold leading-snug text-theme-text-primary",
+              prominence === "primary" ? "text-sm" : "text-[13px]",
+            )}
+          >
             {observation.title}
           </span>
-          <EvidenceToneBadge observation={observation} />
-          {observation.relevance === "broader" ? (
-            <Badge severity="neutral" size="sm">
-              Broader context
-            </Badge>
-          ) : null}
-          {observation.relevance === "producer-related" &&
-          (observation.tier === "key" || observation.tier === "supporting") ? (
-            <Badge severity="neutral" size="sm">
-              Related resource
-            </Badge>
-          ) : null}
-          {group.observations.length > 1 ? (
-            <Badge severity="neutral" size="sm">
-              {group.observations.length} checks
-            </Badge>
-          ) : null}
-          {newerLowerProvenanceObservation ? (
-            <Badge severity="neutral" size="sm">
-              Later broader check
-            </Badge>
-          ) : null}
           {observation.changedFromPrevious ? (
             <Badge tone="note" size="sm">
               changed
@@ -895,18 +1044,17 @@ function EvidenceCard({
         {observation.summary ? (
           <span
             className={clsx(
-              "mt-0.5 block text-xs leading-relaxed text-theme-text-secondary",
+              "mt-0.5 block leading-relaxed text-theme-text-secondary",
+              prominence === "primary" ? "text-xs" : "text-[11px]",
               !open && "line-clamp-2",
             )}
           >
             {observation.summary}
           </span>
         ) : null}
-        {newerLowerProvenanceObservation?.changedFromPrevious ? (
-          <span className="mt-1 block line-clamp-2 text-[11px] leading-relaxed text-theme-text-tertiary">
-            Later broader observation:{" "}
-            {newerLowerProvenanceObservation.summary ||
-              newerLowerProvenanceObservation.title}
+        {metadata.length > 0 ? (
+          <span className="mt-1 block text-[10px] leading-snug text-theme-text-tertiary">
+            {metadata.join(" · ")}
           </span>
         ) : null}
       </span>
@@ -917,12 +1065,14 @@ function EvidenceCard({
   );
   return (
     <article
+      ref={elementRef}
       id={domId}
       data-evidence-card
       tabIndex={-1}
       className={clsx(
-        "scroll-mt-14 overflow-hidden rounded-lg border bg-theme-surface outline-none focus:ring-2 focus:ring-accent/50",
-        toneBorder(observation.tone, observation.tier),
+        "scroll-mt-14 overflow-hidden rounded-lg border outline-none focus:ring-2 focus:ring-accent/50",
+        prominence === "secondary" ? "bg-theme-base/20" : "bg-theme-surface",
+        toneBorder(observation.tone, observation.tier, prominence),
         wide && "@min-[760px]/evidence:col-span-2",
         animateArrival && "animate-transcript-enter",
       )}
@@ -941,17 +1091,33 @@ function EvidenceCard({
             type="button"
             aria-expanded={open}
             aria-controls={bodyId}
-            onClick={() => setOpen((value) => !value)}
-            className="flex min-w-0 flex-1 items-start gap-2.5 px-3 py-2.5 text-left hover:bg-theme-hover/60"
+            onClick={() => {
+              const opening = !open;
+              setOpen(opening);
+              revealAfterToggle(opening);
+            }}
+            className={clsx(
+              "flex min-w-0 flex-1 items-start text-left hover:bg-theme-hover/60",
+              prominence === "primary"
+                ? "gap-2.5 px-3 py-2.5"
+                : "gap-2 px-2.5 py-2",
+            )}
           >
             {headerContent}
           </button>
         ) : (
-          <div className="flex min-w-0 flex-1 items-start gap-2.5 px-3 py-2.5 text-left">
+          <div
+            className={clsx(
+              "flex min-w-0 flex-1 items-start text-left",
+              prominence === "primary"
+                ? "gap-2.5 px-3 py-2.5"
+                : "gap-2 px-2.5 py-2",
+            )}
+          >
             {headerContent}
           </div>
         )}
-        <div className="flex shrink-0 items-center border-l border-theme-border/60 px-2">
+        <div className="flex shrink-0 items-center pr-1.5">
           <SourceButton
             label={observation.source.tool}
             ariaLabel={`View Activity source for ${observation.title}`}
@@ -962,14 +1128,20 @@ function EvidenceCard({
       {canExpand ? (
         <div id={bodyId}>
           <Collapse open={open}>
-            <div className="space-y-3 border-t border-theme-border/60 px-3 py-3">
+            <div
+              className={clsx(
+                "space-y-3 border-t border-theme-border/60",
+                prominence === "primary" ? "px-3 py-3" : "px-2.5 py-2.5",
+              )}
+            >
               <EvidenceBody
                 data={observation.data}
                 cardSummary={observation.summary}
               />
-              {group.observations.length > 1 ? (
+              {meaningfulHistory ? (
                 <RevisionHistory
                   observations={group.observations}
+                  current={observation}
                   onViewSource={onViewSource}
                 />
               ) : null}
@@ -995,17 +1167,12 @@ function CheckedReceipts({
   return (
     <section aria-labelledby="investigation-checked-heading">
       <div className="mb-2 flex items-center justify-between gap-2">
-        <div>
-          <h3
-            id="investigation-checked-heading"
-            className="text-xs font-semibold uppercase tracking-wide text-theme-text-secondary"
-          >
-            Checked
-          </h3>
-          <p className="mt-0.5 text-[11px] text-theme-text-tertiary">
-            Confirmed successful checks with a meaningful empty result.
-          </p>
-        </div>
+        <h3
+          id="investigation-checked-heading"
+          className="text-xs font-semibold uppercase tracking-wide text-theme-text-secondary"
+        >
+          Checks with no finding
+        </h3>
         <span className="font-mono text-[11px] text-theme-text-tertiary">
           {groups.length}
         </span>
@@ -1046,9 +1213,9 @@ function CheckedReceipts({
                 </span>
               </span>
               {group.observations.length > 1 ? (
-                <Badge severity="neutral" size="sm">
+                <span className="shrink-0 text-[10px] text-theme-text-tertiary">
                   {group.observations.length}×
-                </Badge>
+                </span>
               ) : null}
               <SourceButton
                 label={item.source.tool}
@@ -1164,7 +1331,7 @@ function IssueBody({
         >
           {issue.severity}
         </Badge>
-        <Badge kind={issue.kind} size="sm">
+        <Badge tone="structural" size="sm">
           {issue.kind}
         </Badge>
         <Badge tone="structural" size="sm">
@@ -1196,7 +1363,7 @@ function StartupBody({ data }: { data: EvidenceDataOf<"startup"> }) {
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-1.5">
-        <Badge kind={blocker.kind} size="sm">
+        <Badge tone="structural" size="sm">
           {blocker.kind}
         </Badge>
         <Badge tone="structural" size="sm">
@@ -1543,7 +1710,7 @@ function ChangesBody({ data }: { data: EvidenceDataOf<"changes"> }) {
           className="rounded-md border border-theme-border/70 bg-theme-base/30 p-2.5"
         >
           <div className="flex flex-wrap items-center gap-1.5">
-            <Badge kind={change.kind} size="sm">
+            <Badge tone="structural" size="sm">
               {change.kind}
             </Badge>
             <span className="font-mono text-[11px] text-theme-text-secondary">
@@ -1603,7 +1770,7 @@ function DNSBody({ data }: { data: EvidenceDataOf<"dns"> }) {
           className="rounded-md border border-theme-border bg-theme-base/40 p-2"
         >
           <div className="flex flex-wrap gap-1.5">
-            <Badge kind={finding.kind} size="sm">
+            <Badge tone="structural" size="sm">
               {finding.kind}
             </Badge>
             <Badge severity={severityBadge(finding.severity)} size="sm">
@@ -1736,7 +1903,7 @@ function RelationshipsBody({
   return (
     <div className="space-y-2.5">
       <div className="flex flex-wrap items-center gap-1.5">
-        <Badge kind={data.root.kind} size="sm">
+        <Badge tone="structural" size="sm">
           {data.root.kind}
         </Badge>
         <span className="font-mono text-xs text-theme-text-secondary">
@@ -1754,7 +1921,7 @@ function RelationshipsBody({
               key={node.id}
               className="inline-flex items-center gap-1 rounded-md border border-theme-border bg-theme-base px-2 py-1 text-[11px]"
             >
-              <Badge kind={node.kind} size="sm">
+              <Badge tone="structural" size="sm">
                 {node.kind}
               </Badge>
               <span className="font-mono text-theme-text-secondary">
@@ -1854,7 +2021,7 @@ function InventoryBody({ data }: { data: EvidenceDataOf<"inventory"> }) {
             tone={mapHealthToTone(resource.summaryContext?.health ?? "")}
             className="shrink-0"
           />
-          <Badge kind={resource.kind} size="sm">
+          <Badge tone="structural" size="sm">
             {resource.kind}
           </Badge>
           <span className="min-w-0 flex-1">
@@ -1886,19 +2053,27 @@ function InventoryBody({ data }: { data: EvidenceDataOf<"inventory"> }) {
 
 function RevisionHistory({
   observations,
+  current,
   onViewSource,
 }: {
   observations: InvestigationEvidenceObservation[];
+  current: InvestigationEvidenceObservation;
   onViewSource: (sourceId: string) => void;
 }) {
+  const otherObservations = observations.filter(
+    (observation) =>
+      observation.source.id !== current.source.id ||
+      observation.revision !== current.revision,
+  );
+  if (otherObservations.length === 0) return null;
   return (
     <div className="border-t border-theme-border/60 pt-2">
       <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
         <FileClock className="h-3.5 w-3.5" aria-hidden />
-        Observation history
+        Other observations
       </div>
       <ol className="space-y-1.5">
-        {observations.map((observation) => (
+        {otherObservations.map((observation) => (
           <li
             key={`${observation.source.id}-${observation.revision}`}
             className="flex min-w-0 items-start gap-2 text-[11px]"
@@ -1954,37 +2129,27 @@ function EvidenceCaveat({ data }: { data: InvestigationEvidenceData }) {
 
 function EvidenceIcon({
   observation,
+  prominence,
 }: {
   observation: InvestigationEvidenceObservation;
+  prominence: "primary" | "supporting" | "secondary";
 }) {
   const Icon = evidenceIcon(observation.data.type);
   return (
     <span
       className={clsx(
-        "flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-theme-elevated",
-        toneText(observation.tone),
+        "flex shrink-0 items-center justify-center rounded-md bg-theme-elevated",
+        prominence === "primary" ? "h-7 w-7" : "h-6 w-6",
+        observation.tier === "key"
+          ? "text-theme-text-secondary"
+          : toneText(observation.tone),
       )}
     >
-      <Icon className="h-4 w-4" aria-hidden />
+      <Icon
+        className={prominence === "primary" ? "h-4 w-4" : "h-3.5 w-3.5"}
+        aria-hidden
+      />
     </span>
-  );
-}
-
-function EvidenceToneBadge({
-  observation,
-}: {
-  observation: InvestigationEvidenceObservation;
-}) {
-  if (observation.tier === "key") {
-    // The section heading and strong left rule already establish priority.
-    // Repeating "key" on every card adds noise without new information.
-    return null;
-  }
-  if (observation.tone === "neutral") return null;
-  return (
-    <Badge severity={severityBadge(observation.tone)} size="sm">
-      {observation.tone}
-    </Badge>
   );
 }
 
@@ -1997,21 +2162,23 @@ function SourceButton({
   ariaLabel?: string;
   onClick: () => void;
 }) {
+  const tooltip = `View ${prettyTool(label)} result in Activity`;
   return (
-    <button
-      type="button"
-      aria-label={ariaLabel}
-      title={`Source: ${label}`}
-      onClick={onClick}
-      className="max-w-28 shrink-0 rounded px-1.5 py-1 text-right hover:bg-accent/10"
+    <Tooltip
+      content={tooltip}
+      delay={100}
+      position="left"
+      wrapperClassName="flex shrink-0"
     >
-      <span className="block text-[10px] font-medium leading-tight text-accent-text">
-        View source
-      </span>
-      <span className="block truncate font-mono text-[9px] leading-tight text-theme-text-tertiary">
-        {label}
-      </span>
-    </button>
+      <button
+        type="button"
+        aria-label={ariaLabel ?? tooltip}
+        onClick={onClick}
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-theme-text-tertiary hover:bg-theme-hover hover:text-accent-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+      >
+        <Activity className="h-3.5 w-3.5" aria-hidden />
+      </button>
+    </Tooltip>
   );
 }
 
@@ -2081,8 +2248,9 @@ function toneText(tone: InvestigationEvidenceObservation["tone"]): string {
 function toneBorder(
   tone: InvestigationEvidenceObservation["tone"],
   tier: InvestigationEvidenceTier,
+  prominence: "primary" | "supporting" | "secondary",
 ): string {
-  if (tier !== "key") return "border-theme-border";
+  if (tier !== "key" || prominence !== "primary") return "border-theme-border";
   if (tone === "error")
     return "border-l-[3px] border-l-red-500 border-theme-border";
   if (tone === "alert")

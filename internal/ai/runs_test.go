@@ -783,6 +783,15 @@ func TestApplyMutationTrackerTreatsMixedOrUnresolvedWritesAsUnknown(t *testing.T
 	if got := noWrite.outcome(ExecutionProfileFullLocal); got != ApplyMutationUnknown {
 		t.Fatalf("full-local no-write outcome = %q, want unknown", got)
 	}
+
+	var collidingFullLocalTool applyMutationTracker
+	collidingFullLocalTool.observe(StreamEvent{Type: "step", Step: &StepInfo{
+		ID: "foreign-write", Tool: "patch_resource", Status: "done",
+		IsError: boolPointer(false), Result: `{"status":"ok"}`,
+	}})
+	if got := collidingFullLocalTool.outcome(ExecutionProfileFullLocal); got != ApplyMutationUnknown {
+		t.Fatalf("full-local colliding tool outcome = %q, want unknown", got)
+	}
 }
 
 func TestWriteProducerEvidenceClassification(t *testing.T) {

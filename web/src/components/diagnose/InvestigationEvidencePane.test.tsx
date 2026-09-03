@@ -8,6 +8,8 @@ import {
   VISIBLE_LOG_EVIDENCE_LINES,
   VISIBLE_SUPPORTING_EVIDENCE,
   investigationDisclosureSettleDelay,
+  investigationDisclosureScrollTop,
+  investigationEvidenceFullRowFlags,
   investigationEvidenceRevealCollection,
 } from "./InvestigationEvidencePane";
 import {
@@ -43,6 +45,7 @@ function tool(
     summary: JSON.stringify({ namespace: "shop", name: "api" }),
     result: JSON.stringify(result),
     isError: false,
+    radarEvidence: true,
     ...patch,
   };
 }
@@ -91,6 +94,24 @@ const criticalIssue = {
 };
 
 describe("InvestigationEvidencePane hierarchy and provenance", () => {
+  it("fills supporting-evidence rows instead of leaving orphan half-width cards", () => {
+    expect(
+      investigationEvidenceFullRowFlags(["resource", "events", "changes"]),
+    ).toEqual([true, true, true]);
+    expect(
+      investigationEvidenceFullRowFlags([
+        "resource",
+        "changes",
+        "logs",
+        "resource",
+        "inventory",
+      ]),
+    ).toEqual([false, false, true, false, false]);
+    expect(
+      investigationEvidenceFullRowFlags(["resource", "changes", "resource"]),
+    ).toEqual([false, false, true]);
+  });
+
   it("promotes exact agent-selected checks ahead of other Radar observations without duplicate anchors", () => {
     const ref = evidenceRef("a", "b");
     const projection = project(
@@ -226,9 +247,10 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     const html = render(projection, false, undefined, resolution);
 
     expect(html).toContain("Query Prometheus");
-    expect(html).toContain("Successful Radar check");
-    expect(html).toContain("query_prometheus");
-    expect(html).toContain("View source");
+    expect(html).toContain(
+      'aria-label="View cited query_prometheus result in Activity"',
+    );
+    expect(html).not.toContain("View source");
     expect(html).not.toContain("No structured evidence was collected");
   });
 
@@ -253,8 +275,10 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
 
     expect(resolution.links[0].group).toBeUndefined();
     expect(html).toContain("Get Resource");
-    expect(html).toContain("Successful Radar check");
-    expect(html).toContain("Evidence coverage has 1 limit");
+    expect(html).toContain(
+      'aria-label="View cited get_resource result in Activity"',
+    );
+    expect(html).toContain("Evidence coverage limited");
     expect(html).toContain(
       "did not match its current structured evidence contract",
     );
@@ -339,6 +363,45 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     ).toBeGreaterThanOrEqual(2);
   });
 
+  it("reveals a newly expanded disclosure without skipping the start of tall content", () => {
+    expect(
+      investigationDisclosureScrollTop({
+        scrollTop: 500,
+        viewportTop: 100,
+        viewportBottom: 1000,
+        disclosureTop: 780,
+        disclosureBottom: 1180,
+      }),
+    ).toBe(688);
+    expect(
+      investigationDisclosureScrollTop({
+        scrollTop: 500,
+        viewportTop: 100,
+        viewportBottom: 1000,
+        disclosureTop: 780,
+        disclosureBottom: 1900,
+      }),
+    ).toBe(1172);
+    expect(
+      investigationDisclosureScrollTop({
+        scrollTop: 500,
+        viewportTop: 100,
+        viewportBottom: 1000,
+        disclosureTop: 240,
+        disclosureBottom: 900,
+      }),
+    ).toBeUndefined();
+    expect(
+      investigationDisclosureScrollTop({
+        scrollTop: 500,
+        viewportTop: 100,
+        viewportBottom: 1000,
+        disclosureTop: 90,
+        disclosureBottom: 500,
+      }),
+    ).toBe(482);
+  });
+
   it("renders the first producer-classified failure without claiming it was ranked", () => {
     const projection = project(
       tool("issues-1", "issues", {
@@ -350,15 +413,13 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     const html = render(projection);
     const source = projection.sources[0];
 
-    expect(html).toContain("Observed failure");
-    expect(html).toContain(
-      "The first failure signal Radar captured during this run.",
-    );
+    expect(html).toContain("Key evidence");
     expect(html).not.toContain("strongest");
     expect(html).not.toContain("main proof");
     expect(html).toContain("CrashLoopBackOff");
-    expect(html).toContain("View source");
-    expect(html).toContain("issues");
+    expect(html).toContain(
+      'aria-label="View Activity source for CrashLoopBackOff"',
+    );
     expect(html).toContain(
       `id="${investigationEvidenceSourceDomId(source.id)}"`,
     );
@@ -389,9 +450,9 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     );
     const html = render(projection);
 
-    expect(html).not.toContain("Observed failure");
+    expect(html).not.toContain("Key evidence");
     expect(html).toContain("Context");
-    expect(html).toContain("Broader context");
+    expect(html).toContain("Broader-scope signals and direct relationships");
   });
 
   it("labels each revision's proof scope without replacing the lead source", () => {
@@ -423,10 +484,10 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
 
     expect(group.latest.source.stepId).toBe("diagnose-target");
     expect(group.chronologicalLatest.source.stepId).toBe("issues-broad");
-    expect(html).toContain("Observation history");
-    expect(html).toContain("Related");
+    expect(html).toContain("Other observations");
+    expect(html).toContain("related resource");
     expect(html).toContain("Broader");
-    expect(html).toContain("Later broader check");
+    expect(html).toContain("later broader check retained");
   });
 
   it("caps key and supporting evidence while preserving source navigation", () => {
@@ -459,7 +520,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     expect(keyHtml).toContain('style="grid-template-rows:0fr"');
 
     const supportingTools = Array.from(
-      { length: VISIBLE_SUPPORTING_EVIDENCE + 1 },
+      { length: VISIBLE_SUPPORTING_EVIDENCE + 3 },
       (_, index) =>
         tool(`supporting-${index}`, "issues", {
           issues: [
@@ -476,6 +537,9 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     );
     const supportingProjection = project(...supportingTools);
     const hiddenSupportingSource = supportingProjection.sources.at(-1)!;
+    const finalOverflowGroup = supportingProjection.groups.find(
+      (group) => group.id === hiddenSupportingSource.primaryGroupId,
+    )!;
     const supportingHtml = render(supportingProjection);
 
     expect(
@@ -485,6 +549,12 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
       ),
     ).toBe("more-supporting");
     expect(supportingHtml).toContain("More supporting evidence");
+    expect(supportingHtml).not.toContain('aria-expanded="true"');
+    expect(
+      supportingHtml.match(
+        new RegExp(`<article[^>]*id="${finalOverflowGroup.id}"[^>]*>`),
+      )?.[0],
+    ).toContain("@min-[760px]/evidence:col-span-2");
   });
 
   it("routes source navigation through collapsed collections", () => {
@@ -610,29 +680,20 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     expect(
       projection.groups.filter((group) => group.latest.tier === "key").length,
     ).toBeGreaterThan(1);
-    expect(
-      html.split('id="investigation-observed-failure-heading"'),
-    ).toHaveLength(2);
-    expect(
-      html.split('id="investigation-other-key-evidence-heading"'),
-    ).toHaveLength(2);
+    expect(html.split('id="investigation-key-evidence-heading"')).toHaveLength(
+      2,
+    );
     expect(html).not.toContain('id="investigation-evidence-tier-key"');
     expect(html).toContain(
-      'aria-labelledby="investigation-observed-failure-heading"',
+      'aria-labelledby="investigation-key-evidence-heading"',
     );
-    expect(html).toContain(
-      'aria-labelledby="investigation-other-key-evidence-heading"',
-    );
-    expect(html).toContain("Related resource");
+    expect(html).toContain("related resource");
 
     const ordered = render(projection, false, "NEXT_STEP_MARKER");
-    expect(ordered.indexOf("Observed failure")).toBeLessThan(
-      ordered.indexOf("Other key evidence"),
+    expect(ordered.indexOf("Key evidence")).toBeLessThan(
+      ordered.indexOf("Evidence coverage limited"),
     );
-    expect(ordered.indexOf("Other key evidence")).toBeLessThan(
-      ordered.indexOf("Evidence coverage has"),
-    );
-    expect(ordered.indexOf("Evidence coverage has")).toBeLessThan(
+    expect(ordered.indexOf("Evidence coverage limited")).toBeLessThan(
       ordered.indexOf("NEXT_STEP_MARKER"),
     );
   });
@@ -654,7 +715,28 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
       group.observations[0].source.id,
     );
 
-    expect(render(projection).split(`id="${sourceDomId}"`)).toHaveLength(2);
+    const html = render(projection);
+    expect(html.split(`id="${sourceDomId}"`)).toHaveLength(2);
+    expect(html).not.toContain("confirmed by");
+    expect(html).not.toContain("2 observations");
+    expect(html).not.toContain("Other observations");
+  });
+
+  it("counts distinct tool calls when repeated evidence confirms a card", () => {
+    const projection = project(
+      tool("issues-first", "issues", {
+        issues: [criticalIssue],
+        total: 1,
+        total_matched: 1,
+      }),
+      tool("issues-second", "issues", {
+        issues: [criticalIssue],
+        total: 1,
+        total_matched: 1,
+      }),
+    );
+
+    expect(render(projection)).toContain("confirmed by 2 checks");
   });
 
   it("deduplicates source anchors in compact Checked receipts", () => {
@@ -766,6 +848,32 @@ describe("InvestigationEvidencePane honest result states", () => {
     );
   });
 
+  it("keeps revision history expandable when the latest resource is empty", () => {
+    const projection = project(
+      tool("config-before", "get_resource", {
+        apiVersion: "v1",
+        kind: "ConfigMap",
+        metadata: { namespace: "shop", name: "changing-config" },
+        data: { API_ENDPOINT: "https://api.example.test" },
+      }),
+      tool("config-after", "get_resource", {
+        apiVersion: "v1",
+        kind: "ConfigMap",
+        metadata: { namespace: "shop", name: "changing-config" },
+        data: {},
+      }),
+    );
+    const resource = projection.groups.find(
+      (group) => group.kind === "resource",
+    )!;
+    const html = render(projection);
+
+    expect(resource.observations).toHaveLength(2);
+    expect(html).toContain(`${resource.id}-body`);
+    expect(html).toContain("Other observations");
+    expect(html).toContain("2 observations");
+  });
+
   it("renders a confirmed empty check as a compact, non-expandable receipt", () => {
     const projection = project(
       tool("diagnose-empty", "diagnose", {
@@ -786,9 +894,7 @@ describe("InvestigationEvidencePane honest result states", () => {
     const html = render(projection);
     expect(html).toContain('id="investigation-checked-heading"');
     expect(html).toContain("No matching warning events");
-    expect(html).toContain(
-      "Confirmed successful checks with a meaningful empty result.",
-    );
+    expect(html).toContain("Checks with no finding");
     expect(html).not.toContain(`${receipt!.id}-body`);
   });
 
@@ -802,7 +908,7 @@ describe("InvestigationEvidencePane honest result states", () => {
     expect(projection.groups).toHaveLength(0);
     expect(html).not.toContain('id="investigation-checked-heading"');
     expect(html).not.toContain("No matching warning events");
-    expect(html).toContain("Evidence coverage has 1 limit");
+    expect(html).toContain("Evidence coverage limited");
   });
 
   it("summarizes incomplete coverage without hiding that raw results remain", () => {
@@ -817,15 +923,14 @@ describe("InvestigationEvidencePane honest result states", () => {
     const html = render(projection);
     const source = projection.sources[0];
 
-    expect(html).toContain("Evidence coverage has 1 limit");
+    expect(html).toContain("Evidence coverage limited");
     expect(html).toContain(
       "1 check incomplete · raw results remain in Activity",
     );
     expect(html).toContain(
       "The transcript retained only part of this tool result, so Radar did not parse it into evidence.",
     );
-    expect(html).toContain("View source");
-    expect(html).toContain("issues");
+    expect(html).toContain('aria-label="View Activity source for issues"');
     expect(source.primaryGroupId).toBeUndefined();
     expect(html).toContain(
       `id="${investigationEvidenceSourceDomId(source.id)}"`,
@@ -905,7 +1010,7 @@ describe("InvestigationEvidencePane honest result states", () => {
     ).toBe(true);
     expect(html).toContain("Earlier evidence");
     expect(html).toContain(
-      "Kept for comparison; this does not mean it was resolved.",
+      "Retained for comparison; earlier does not mean resolved.",
     );
     expect(html).toContain("CrashLoopBackOff");
   });

@@ -91,7 +91,7 @@ func investigationEvidenceReferenceMiddleware(refs *investigationrefs.Registry) 
 				return result, err
 			}
 			toolResult, ok := result.(*mcpsdk.CallToolResult)
-			if !ok || toolResult.IsError {
+			if !ok {
 				return result, err
 			}
 			scope, _ := ctx.Value(investigationEvidenceScopeKey{}).(string)
@@ -126,6 +126,8 @@ func investigationEvidenceProducerText(result *mcpsdk.CallToolResult) string {
 // content block without changing the producer payload. All supported agent CLIs
 // expose ordered text content to the model; their stream adapters remove this
 // marker and retain the reference separately before persisting the tool result.
+// Tool-level error results are marked too: they are not citable as causal proof,
+// but their exact Radar provenance lets Findings report an honest failed check.
 func annotateInvestigationEvidenceReference(result *mcpsdk.CallToolResult, ref string) {
 	marker := &mcpsdk.TextContent{
 		Text: investigationEvidenceMarkerPrefix + ref + investigationEvidenceMarkerSuffix,

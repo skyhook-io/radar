@@ -240,10 +240,11 @@ func codexResultText(it *codexItem) string {
 			b.WriteString(c.Text)
 		}
 	}
-	if it.Error != nil && it.Error.Message != "" {
-		if b.Len() > 0 {
-			b.WriteByte('\n')
-		}
+	// When the MCP server returned content, that text is the exact producer
+	// payload. Codex can also repeat a host-level error message beside it; appending
+	// that message would corrupt the private evidence-ledger match. Use the host
+	// error only when there is no producer content to preserve.
+	if b.Len() == 0 && it.Error != nil && it.Error.Message != "" {
 		b.WriteString(it.Error.Message)
 	}
 	return b.String()

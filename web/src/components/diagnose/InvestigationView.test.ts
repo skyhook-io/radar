@@ -21,9 +21,40 @@ import {
   investigationHistoryUnavailablePresentation,
   investigationInteractionsBlocked,
   investigationIsReadOnly,
+  investigationPaneCenteredScrollTop,
 } from "./InvestigationView";
 
 describe("investigation terminal presentation", () => {
+  it("centers source navigation inside its pane and clamps at both ends", () => {
+    expect(
+      investigationPaneCenteredScrollTop({
+        scrollTop: 400,
+        viewportHeight: 600,
+        contentHeight: 2_000,
+        targetTop: 500,
+        targetHeight: 100,
+      }),
+    ).toBe(650);
+    expect(
+      investigationPaneCenteredScrollTop({
+        scrollTop: 0,
+        viewportHeight: 600,
+        contentHeight: 2_000,
+        targetTop: 20,
+        targetHeight: 40,
+      }),
+    ).toBe(0);
+    expect(
+      investigationPaneCenteredScrollTop({
+        scrollTop: 1_300,
+        viewportHeight: 600,
+        contentHeight: 2_000,
+        targetTop: 580,
+        targetHeight: 80,
+      }),
+    ).toBe(1_400);
+  });
+
   it("opens successful and stale runs on Evidence", () => {
     expect(initialInvestigationPane("done")).toBe("evidence");
     expect(initialInvestigationPane("stale")).toBe("evidence");

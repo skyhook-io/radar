@@ -76,6 +76,36 @@ func TestInvestigationEvidenceReferenceMiddlewareScopesSuccessfulToolResults(t *
 	}
 }
 
+func TestInvestigationEvidenceReferenceMiddlewareMarksToolErrorsForProvenance(t *testing.T) {
+	scope := strings.Repeat("b", 26)
+	refs := investigationrefs.NewRegistry()
+	lease, err := refs.Begin(scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.WithValue(context.Background(), investigationEvidenceScopeKey{}, scope)
+	toolError := &mcpsdk.CallToolResult{
+		Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: "permission denied"}},
+		IsError: true,
+	}
+	wrapped := investigationEvidenceReferenceMiddleware(refs)(
+		func(context.Context, string, mcpsdk.Request) (mcpsdk.Result, error) {
+			return toolError, nil
+		},
+	)
+	if _, err := wrapped(ctx, "tools/call", nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(toolError.Content) != 2 {
+		t.Fatalf("content blocks = %d, want marker + error payload", len(toolError.Content))
+	}
+	marker := toolError.Content[0].(*mcpsdk.TextContent).Text
+	ref := strings.TrimSuffix(strings.TrimPrefix(marker, investigationEvidenceMarkerPrefix), investigationEvidenceMarkerSuffix)
+	if payload := lease.Close()[ref]; payload != "permission denied" {
+		t.Fatalf("issued error payload = %q, want exact producer text", payload)
+	}
+}
+
 func TestInvestigationEvidenceReferenceMiddlewareFailsClosed(t *testing.T) {
 	scope := strings.Repeat("a", 26)
 	validCtx := context.WithValue(context.Background(), investigationEvidenceScopeKey{}, scope)
@@ -84,14 +114,12 @@ func TestInvestigationEvidenceReferenceMiddlewareFailsClosed(t *testing.T) {
 		name        string
 		ctx         context.Context
 		method      string
-		isError     bool
 		err         error
 		activeScope bool
 	}{
 		{name: "missing scope", ctx: context.Background(), method: "tools/call", activeScope: true},
 		{name: "inactive scope", ctx: validCtx, method: "tools/call"},
 		{name: "other method", ctx: validCtx, method: "resources/read", activeScope: true},
-		{name: "tool error", ctx: validCtx, method: "tools/call", isError: true, activeScope: true},
 		{name: "protocol error", ctx: validCtx, method: "tools/call", err: sentinelErr, activeScope: true},
 	}
 	for _, test := range tests {
@@ -107,7 +135,6 @@ func TestInvestigationEvidenceReferenceMiddlewareFailsClosed(t *testing.T) {
 			}
 			result := &mcpsdk.CallToolResult{
 				Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: "payload"}},
-				IsError: test.isError,
 			}
 			wrapped := investigationEvidenceReferenceMiddleware(refs)(
 				func(context.Context, string, mcpsdk.Request) (mcpsdk.Result, error) {

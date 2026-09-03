@@ -599,9 +599,11 @@ func TestMinify_SecretNeverLeaksAtAnyLevel(t *testing.T) {
 		Type: corev1.SecretTypeOpaque,
 		Data: map[string][]byte{
 			"password": []byte("s3cr3t-value"),
+			"shared":   []byte("data-wins"),
 		},
 		StringData: map[string]string{
 			"api-key": "another-secret",
+			"shared":  "duplicate-key",
 		},
 	}
 
@@ -614,6 +616,9 @@ func TestMinify_SecretNeverLeaksAtAnyLevel(t *testing.T) {
 		output := string(data)
 		if contains(output, "s3cr3t-value") || contains(output, "another-secret") {
 			t.Errorf("Level %d: secret data leaked: %s", level, output)
+		}
+		if !contains(output, `"keys":["api-key","password","shared"]`) {
+			t.Errorf("Level %d: secret keys are not a stable sorted union: %s", level, output)
 		}
 	}
 }

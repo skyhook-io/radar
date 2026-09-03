@@ -38,6 +38,7 @@ export interface DiagnoseStep {
   summary?: string; // input args (on running)
   result?: string; // result text (on done), capped
   evidenceRef?: string; // server-issued reference used to bind a root cause to this exact result
+  radarEvidence?: boolean; // server validated this exact result against Radar's private per-turn ledger
   isError?: boolean; // authoritative agent-host result; absent means unknown
   truncated?: boolean; // result was capped — payload shown/copied is partial
 }

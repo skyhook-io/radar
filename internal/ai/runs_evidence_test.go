@@ -9,12 +9,13 @@ import (
 
 func evidenceStep(ref string, patch func(*StepInfo)) RunEvent {
 	step := &StepInfo{
-		ID:          "call-1",
-		Tool:        "get_resource",
-		Status:      "done",
-		Result:      `{"kind":"Pod"}`,
-		EvidenceRef: ref,
-		IsError:     boolPointer(false),
+		ID:            "call-1",
+		Tool:          "get_resource",
+		Status:        "done",
+		Result:        `{"kind":"Pod"}`,
+		EvidenceRef:   ref,
+		RadarEvidence: true,
+		IsError:       boolPointer(false),
 	}
 	if patch != nil {
 		patch(step)
@@ -147,6 +148,7 @@ func TestBindRootCauseEvidenceRejectsUnverifiableRefsAsASet(t *testing.T) {
 		{name: "unknown outcome", events: []RunEvent{{Event: StreamEvent{Type: "turn"}}, evidenceStep(validRef, func(step *StepInfo) { step.IsError = nil })}, refs: []string{validRef}},
 		{name: "empty result", events: []RunEvent{{Event: StreamEvent{Type: "turn"}}, evidenceStep(validRef, func(step *StepInfo) { step.Result = " " })}, refs: []string{validRef}},
 		{name: "truncated", events: []RunEvent{{Event: StreamEvent{Type: "turn"}}, evidenceStep(validRef, func(step *StepInfo) { step.Truncated = true })}, refs: []string{validRef}},
+		{name: "unvalidated marker", events: []RunEvent{{Event: StreamEvent{Type: "turn"}}, evidenceStep(validRef, func(step *StepInfo) { step.RadarEvidence = false })}, refs: []string{validRef}},
 		{name: "non-Radar tool", events: []RunEvent{{Event: StreamEvent{Type: "turn"}}, evidenceStep(validRef, func(step *StepInfo) { step.Tool = "mcp__grafana__query_prometheus" })}, refs: []string{validRef}},
 		{name: "missing tool identity", events: []RunEvent{{Event: StreamEvent{Type: "turn"}}, evidenceStep(validRef, func(step *StepInfo) { step.Tool = "" })}, refs: []string{validRef}},
 		{

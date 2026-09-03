@@ -272,7 +272,8 @@ func TestHandleDiagnoseRunStreamReplaysPersistedEvidenceProvenance(t *testing.T)
 	writer.AppendEvents(summary.ID, []ai.RunEvent{
 		{Seq: 1, Event: ai.StreamEvent{Type: "step", Step: &ai.StepInfo{
 			ID: "logs", Tool: "get_pod_logs", Status: "done",
-			Result: `{"logs":["authentication failed"]}`, EvidenceRef: ref, IsError: &success,
+			Result: `{"logs":["authentication failed"]}`, EvidenceRef: ref,
+			RadarEvidence: true, IsError: &success,
 		}}},
 		{Seq: 2, Event: ai.StreamEvent{Type: "done", Diag: &ai.Diagnosis{
 			RootCause: "The workload uses a stale database credential.",
@@ -308,6 +309,7 @@ func TestHandleDiagnoseRunStreamReplaysPersistedEvidenceProvenance(t *testing.T)
 	body := recorder.Body.String()
 	for _, want := range []string{
 		`"evidenceRef":"` + ref + `"`,
+		`"radarEvidence":true`,
 		`"rootCauseEvidence":{"status":"linked","refs":["` + ref + `"]}`,
 	} {
 		if !strings.Contains(body, want) {
@@ -332,8 +334,8 @@ func TestHandleDiagnoseRunStreamReplaysPersistedEvidenceProvenance(t *testing.T)
 			replayedDiagnosis = event.Diag
 		}
 	}
-	if replayedStep == nil || replayedStep.EvidenceRef != ref {
-		t.Fatalf("replayed step lost evidenceRef: %+v; body=%q", replayedStep, body)
+	if replayedStep == nil || replayedStep.EvidenceRef != ref || !replayedStep.RadarEvidence {
+		t.Fatalf("replayed step lost evidence provenance: %+v; body=%q", replayedStep, body)
 	}
 	wantEvidence := &ai.RootCauseEvidence{Status: ai.EvidenceLinked, Refs: []string{ref}}
 	if replayedDiagnosis == nil || !reflect.DeepEqual(replayedDiagnosis.RootCauseEvidence, wantEvidence) {

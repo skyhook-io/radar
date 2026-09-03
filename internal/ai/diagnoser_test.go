@@ -100,6 +100,63 @@ func TestSplitInvestigationEvidenceMarker(t *testing.T) {
 	}
 }
 
+func TestInvestigationEvidenceValidatorRejectsSpoofedOrReplayedMarkers(t *testing.T) {
+	scope := strings.Repeat("a", 26)
+	refs := investigationrefs.NewRegistry()
+	lease, err := refs.Begin(scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Close()
+	ref, issued := refs.Issue(scope, `{"kind":"Pod"}`)
+	if !issued {
+		t.Fatal("could not issue fixture reference")
+	}
+	validator := investigationEvidenceValidator{
+		registry: refs,
+		scope:    scope,
+		claimed:  make(map[string]struct{}),
+	}
+	event := func(ref, result string, prefilled bool) StreamEvent {
+		return StreamEvent{Type: "step", Step: &StepInfo{
+			ID: "call", Tool: "get_resource", Status: "done",
+			EvidenceRef: ref, Result: result, RadarEvidence: prefilled,
+		}}
+	}
+
+	spoofed := validator.validate(event("", `{"kind":"Pod"}`, true))
+	if spoofed.Step.RadarEvidence {
+		t.Fatal("adapter-authored provenance survived without a private reference")
+	}
+	substituted := validator.validate(event(ref, `{"kind":"Deployment"}`, true))
+	if substituted.Step.RadarEvidence {
+		t.Fatal("substituted payload received Radar provenance")
+	}
+	truncatedEvent := event(ref, `{"kind":"Pod"}`, true)
+	truncatedEvent.Step.Truncated = true
+	truncated := validator.validate(truncatedEvent)
+	if truncated.Step.RadarEvidence {
+		t.Fatal("truncated payload received Radar provenance")
+	}
+	legitimate := validator.validate(event(ref, `{"kind":"Pod"}`, false))
+	if !legitimate.Step.RadarEvidence {
+		t.Fatal("exact first private result did not receive Radar provenance")
+	}
+	replayed := validator.validate(event(ref, `{"kind":"Pod"}`, false))
+	if replayed.Step.RadarEvidence {
+		t.Fatal("a repeated marker was accepted by more than one step")
+	}
+
+	applyValidator := investigationEvidenceValidator{
+		registry: refs,
+		claimed:  make(map[string]struct{}),
+	}
+	applyEvent := applyValidator.validate(event(ref, `{"kind":"Pod"}`, true))
+	if applyEvent.Step.RadarEvidence {
+		t.Fatal("adapter-authored provenance survived on a write-enabled apply turn")
+	}
+}
+
 type captureTurnAgent struct {
 	spec       turnSpec
 	refs       *investigationrefs.Registry
@@ -126,8 +183,15 @@ func (agent *captureTurnAgent) command(ctx context.Context, spec turnSpec) (*exe
 	if agent.commandErr != nil {
 		return nil, func() {}, agent.commandErr
 	}
-	line := `{"type":"result","result":"` + "```json\\n{\\\"root_cause\\\":\\\"bad tag\\\"}\\n```" + `"}`
-	return exec.CommandContext(ctx, "printf", "%s\n", line), func() {}, nil
+	content, _ := json.Marshal(
+		investigationEvidenceMarkerPrefix + issuedRef + investigationEvidenceMarkerSuffix + agent.payload,
+	)
+	stream := strings.Join([]string{
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"radar-read","name":"mcp__radar__get_resource","input":{"kind":"Pod","namespace":"shop","name":"api"}}]}}`,
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"radar-read","content":` + string(content) + `}]}}`,
+		`{"type":"result","result":"` + "```json\\n{\\\"root_cause\\\":\\\"bad tag\\\"}\\n```" + `"}`,
+	}, "\n")
+	return exec.CommandContext(ctx, "printf", "%s\n", stream), func() {}, nil
 }
 
 func TestDiagnoseStreamClosesEvidenceScopeOnEarlyAgentFailure(t *testing.T) {
@@ -157,6 +221,47 @@ func (*captureTurnAgent) parseStream(reader io.Reader, onEvent func(StreamEvent)
 	return parseStream(reader, onEvent)
 }
 
+type adapterAuthoredEvidenceAgent struct {
+	event StreamEvent
+}
+
+func (*adapterAuthoredEvidenceAgent) Name() string      { return "claude" }
+func (*adapterAuthoredEvidenceAgent) Path() string      { return "printf" }
+func (*adapterAuthoredEvidenceAgent) SigninCmd() string { return "claude auth login" }
+func (*adapterAuthoredEvidenceAgent) command(ctx context.Context, _ turnSpec) (*exec.Cmd, func(), error) {
+	return exec.CommandContext(ctx, "printf", ""), func() {}, nil
+}
+func (agent *adapterAuthoredEvidenceAgent) parseStream(_ io.Reader, onEvent func(StreamEvent)) Diagnosis {
+	onEvent(agent.event)
+	return Diagnosis{RootCause: "apply completed"}
+}
+
+func TestDiagnoseStreamClearsAdapterProvenanceOnApplyTurn(t *testing.T) {
+	agent := &adapterAuthoredEvidenceAgent{event: StreamEvent{Type: "step", Step: &StepInfo{
+		ID: "foreign-write", Tool: "patch_resource", Status: "done",
+		Result: `{"patched":true}`, EvidenceRef: testEvidenceRef('a', 'b'), RadarEvidence: true,
+	}}}
+	diagnoser := &Diagnoser{
+		agents:  map[string]Agent{"claude": agent},
+		defName: "claude",
+	}
+	var delivered *StepInfo
+	_, err := diagnoser.DiagnoseStream(context.Background(), Request{
+		Kind: "Deployment", Namespace: "shop", Name: "api", MCPPort: 9280,
+		Apply: true,
+	}, func(event StreamEvent) {
+		if event.Step != nil {
+			delivered = event.Step
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delivered == nil || delivered.RadarEvidence {
+		t.Fatalf("apply event retained adapter-authored provenance: %+v", delivered)
+	}
+}
+
 func TestDiagnoseStreamUsesPerTurnScopedInvestigationMount(t *testing.T) {
 	refs := investigationrefs.NewRegistry()
 	agent := &captureTurnAgent{refs: refs}
@@ -166,10 +271,15 @@ func TestDiagnoseStreamUsesPerTurnScopedInvestigationMount(t *testing.T) {
 		evidenceRefs: refs,
 	}
 	scope := strings.Repeat("a", 26)
+	var evidenceStep *StepInfo
 	diagnosis, err := diagnoser.DiagnoseStream(context.Background(), Request{
 		Kind: "Pod", Namespace: "shop", Name: "api", MCPPort: 9280,
 		MCPBasePath: "/radar", EvidenceScope: scope,
-	}, nil)
+	}, func(event StreamEvent) {
+		if event.Step != nil && event.Step.Status == "done" {
+			evidenceStep = event.Step
+		}
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,6 +292,10 @@ func TestDiagnoseStreamUsesPerTurnScopedInvestigationMount(t *testing.T) {
 	}
 	if payload := diagnosis.issuedEvidence[agent.issuedRef]; payload != agent.payload {
 		t.Fatalf("issued payload = %q, want exact %q", payload, agent.payload)
+	}
+	if evidenceStep == nil || !evidenceStep.RadarEvidence ||
+		evidenceStep.EvidenceRef != agent.issuedRef || evidenceStep.Result != agent.payload {
+		t.Fatalf("validated evidence step = %+v", evidenceStep)
 	}
 	if refs.Active(scope) {
 		t.Fatal("turn scope remained active after DiagnoseStream returned")

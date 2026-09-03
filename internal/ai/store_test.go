@@ -65,11 +65,13 @@ func TestStoreEvidenceProvenanceSurvivesReopen(t *testing.T) {
 		{Seq: 1, Event: StreamEvent{Type: "turn"}},
 		{Seq: 2, Event: StreamEvent{Type: "step", Step: &StepInfo{
 			ID: "logs", Tool: "get_pod_logs", Status: "done",
-			Result: `{"logs":["authentication failed"]}`, EvidenceRef: firstRef, IsError: &success,
+			Result: `{"logs":["authentication failed"]}`, EvidenceRef: firstRef,
+			RadarEvidence: true, IsError: &success,
 		}}},
 		{Seq: 3, Event: StreamEvent{Type: "step", Step: &StepInfo{
 			ID: "secret", Tool: "get_resource", Status: "done",
-			Result: `{"kind":"Secret"}`, EvidenceRef: secondRef, IsError: &success,
+			Result: `{"kind":"Secret"}`, EvidenceRef: secondRef,
+			RadarEvidence: true, IsError: &success,
 		}}},
 		{Seq: 4, Event: StreamEvent{Type: "done", Diag: &Diagnosis{
 			RootCause: "The workload uses a stale database credential.",

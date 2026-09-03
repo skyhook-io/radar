@@ -418,6 +418,25 @@ export function InvestigationStartErrorAlert({
   );
 }
 
+export function investigationPaneCenteredScrollTop({
+  scrollTop,
+  viewportHeight,
+  contentHeight,
+  targetTop,
+  targetHeight,
+}: {
+  scrollTop: number;
+  viewportHeight: number;
+  contentHeight: number;
+  /** Target top relative to the scroll viewport, before this adjustment. */
+  targetTop: number;
+  targetHeight: number;
+}): number {
+  const centered =
+    scrollTop + targetTop - Math.max(0, (viewportHeight - targetHeight) / 2);
+  return Math.max(0, Math.min(centered, contentHeight - viewportHeight));
+}
+
 function captureEvidenceCardLayout(container: HTMLElement) {
   const containerTop = container.getBoundingClientRect().top;
   return new Map(
@@ -905,13 +924,14 @@ export function InvestigationView({
   }, [run.id]);
 
   // Follow the bottom IFF still pinned, on anything that changes rendered height:
-  // new transcript content (turns). useLayoutEffect runs
+  // new transcript content (turns), or Activity becoming visible after live work
+  // arrived behind the Findings tab. useLayoutEffect runs
   // before paint, so the jump is invisible and it overrides browser scroll-anchoring
   // (which would otherwise nudge us off the bottom when the remediation card lands).
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
-  }, [turns]);
+  }, [turns, narrowPane]);
 
   // User scroll updates the pin state: scrolling up past the threshold detaches;
   // scrolling back within it re-attaches. Programmatic scroll-to-bottom lands at
@@ -1322,10 +1342,23 @@ export function InvestigationView({
                 "[data-evidence-card], [data-evidence-source-container]",
               ) as HTMLElement | null) ?? marker)
             : marker;
-          target?.scrollIntoView({
-            behavior: prefersReducedMotion() ? "auto" : "smooth",
-            block: "center",
-          });
+          const container = evidence
+            ? evidenceScrollRef.current
+            : scrollRef.current;
+          if (target && container) {
+            const containerRect = container.getBoundingClientRect();
+            const targetRect = target.getBoundingClientRect();
+            container.scrollTo({
+              top: investigationPaneCenteredScrollTop({
+                scrollTop: container.scrollTop,
+                viewportHeight: container.clientHeight,
+                contentHeight: container.scrollHeight,
+                targetTop: targetRect.top - containerRect.top,
+                targetHeight: targetRect.height,
+              }),
+              behavior: prefersReducedMotion() ? "auto" : "smooth",
+            });
+          }
           target?.focus({ preventScroll: true });
         });
       });
@@ -1600,6 +1633,7 @@ export function InvestigationView({
           </div>
           <div
             ref={scrollRef}
+            data-investigation-activity-scroll
             onScroll={onScroll}
             className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 [scrollbar-gutter:stable]"
           >
@@ -1799,6 +1833,7 @@ export function InvestigationView({
           </div>
           <div
             ref={evidenceScrollRef}
+            data-investigation-findings-scroll
             onScroll={(event) => {
               if (event.currentTarget.scrollTop <= 40)
                 setEvidenceUpdateAvailable(false);
@@ -1850,6 +1885,7 @@ export function InvestigationView({
                 <>
                   <section
                     aria-labelledby={`${workspaceId}-assessment-heading`}
+                    className="rounded-lg border border-theme-border/70 bg-theme-elevated/40 p-3"
                   >
                     <div className="flex flex-wrap items-center gap-1.5">
                       <h2
@@ -1881,13 +1917,13 @@ export function InvestigationView({
                         </Badge>
                       ) : null}
                     </div>
-                    <p className="mt-0.5 text-xs text-theme-text-tertiary">
-                      {assessmentNeedsCurrentStateVerification
-                        ? verificationRunning || verificationPending
+                    {assessmentNeedsCurrentStateVerification ? (
+                      <p className="mt-0.5 text-xs text-theme-text-tertiary">
+                        {verificationRunning || verificationPending
                           ? "This interpretation predates the apply. Radar is checking the current state now."
-                          : "This interpretation predates the latest apply; the current state has not been verified."
-                        : "The agent's interpretation; validate it against Radar's observations below."}
-                    </p>
+                          : "This interpretation predates the latest apply; the current state has not been verified."}
+                      </p>
+                    ) : null}
                     {currentAssessment?.diagnosis ? (
                       <ResultCard
                         diagnosis={currentAssessment.diagnosis}
@@ -1899,10 +1935,23 @@ export function InvestigationView({
                         evidenceConflict={currentAssessmentEvidenceConflict}
                       />
                     ) : (
-                      <div className="mt-2 rounded-lg border border-dashed border-theme-border px-3 py-3 text-xs text-theme-text-tertiary">
-                        {busy || requestPending
-                          ? "The agent is still forming its conclusion. Evidence can arrive before it does."
-                          : "No structured agent conclusion was recorded."}
+                      <div className="mt-2 flex items-center gap-2 rounded-md bg-theme-surface/60 px-2.5 py-2 text-xs text-theme-text-tertiary">
+                        {busy || requestPending ? (
+                          <span
+                            className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-accent"
+                            aria-hidden
+                          />
+                        ) : (
+                          <Activity
+                            className="h-3.5 w-3.5 shrink-0"
+                            aria-hidden
+                          />
+                        )}
+                        <span>
+                          {busy || requestPending
+                            ? "Forming an assessment as evidence arrives…"
+                            : "No structured agent assessment was recorded."}
+                        </span>
                       </div>
                     )}
                     {currentAssessment?.verify &&

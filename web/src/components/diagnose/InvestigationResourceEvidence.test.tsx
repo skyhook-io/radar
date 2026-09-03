@@ -211,6 +211,9 @@ describe("investigation resource summaries", () => {
     for (const value of [
       "Bearer abcdefghijklmnopqrstuvwxyz012345",
       "sk-proj-abcdefghijklmnopqrstuvwxyz012345",
+      "github_pat_11AA22BB33CC44DD55EE66FF77GG",
+      "dsn options password=correct-horse-battery-staple",
+      "$2y$10$abcdefghijklmnopqrstuv",
     ]) {
       const html = render({
         apiVersion: "v1",

@@ -221,6 +221,10 @@ type StepInfo struct {
 	// extracted by the agent adapter before Result is persisted. It lets the UI
 	// verify assessment citations without exposing protocol markers as evidence.
 	EvidenceRef string `json:"evidenceRef,omitempty"`
+	// RadarEvidence is server-authored only after EvidenceRef and Result match the
+	// active private transport ledger exactly. Full-local agents can load foreign
+	// MCP servers with colliding tool names, so a bare name is never provenance.
+	RadarEvidence bool `json:"radarEvidence,omitempty"`
 	// IsError records the agent host's authoritative tool-result state. nil means
 	// the host did not report a terminal state; false is a confirmed success.
 	IsError *bool `json:"isError,omitempty"`
@@ -540,7 +544,15 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 	}
 
 	onEvent(StreamEvent{Type: "phase", Phase: "investigating"})
-	diag := agent.parseStream(stdout, onEvent)
+	validator := investigationEvidenceValidator{
+		registry: d.evidenceRefs,
+		scope:    evidenceScope,
+		claimed:  make(map[string]struct{}),
+	}
+	streamEvent := func(event StreamEvent) {
+		onEvent(validator.validate(event))
+	}
+	diag := agent.parseStream(stdout, streamEvent)
 	diag.evidenceScope = evidenceScope
 
 	waitErr := cmd.Wait()
@@ -992,6 +1004,37 @@ const (
 	investigationEvidenceMarkerPrefix = "[[radar:evidence-ref="
 	investigationEvidenceMarkerSuffix = "]]\n"
 )
+
+type investigationEvidenceValidator struct {
+	registry *investigationrefs.Registry
+	scope    string
+	claimed  map[string]struct{}
+}
+
+// validate promotes an adapter-extracted marker to server-authored provenance
+// only when it maps to the exact private-transport payload in the currently
+// active turn. The first matching event owns a ref; a later foreign MCP call
+// cannot replay a marker and payload it observed earlier in the conversation.
+func (v *investigationEvidenceValidator) validate(event StreamEvent) StreamEvent {
+	step := event.Step
+	if event.Type != "step" || step == nil {
+		return event
+	}
+	// Never accept a provenance bit from an agent adapter or test fixture.
+	step.RadarEvidence = false
+	if v.scope == "" || step.Status != "done" || step.EvidenceRef == "" || step.Truncated {
+		return event
+	}
+	if _, claimed := v.claimed[step.EvidenceRef]; claimed {
+		return event
+	}
+	if !v.registry.Matches(v.scope, step.EvidenceRef, step.Result) {
+		return event
+	}
+	step.RadarEvidence = true
+	v.claimed[step.EvidenceRef] = struct{}{}
+	return event
+}
 
 // splitInvestigationEvidenceMarker removes the private MCP correlation marker
 // before a producer result is capped or persisted. The generated reference gets

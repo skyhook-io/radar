@@ -449,6 +449,7 @@ export type TimelineItem =
       summary?: string;
       result?: string;
       evidenceRef?: string;
+      radarEvidence?: boolean;
       truncated?: boolean;
       // Tri-state by design: false = producer confirmed success, true = producer
       // confirmed failure, undefined = this replay cannot establish the outcome.

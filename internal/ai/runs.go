@@ -741,6 +741,14 @@ func inputDryRun(summary string) bool {
 }
 
 func (t *applyMutationTracker) outcome(profile ExecutionProfile) ApplyMutationOutcome {
+	if profile == ExecutionProfileFullLocal {
+		// Full-local agents may use user-configured MCP servers whose bare tool
+		// names collide with Radar's write tools. Until the write transport carries
+		// the same exact-payload provenance as read-only investigations, no observed
+		// full-local call can authoritatively confirm the mutation. Verification is
+		// still scheduled because an unobserved write may have landed.
+		return ApplyMutationUnknown
+	}
 	confirmed := 0
 	unknown := t.anonymousStarted
 	for _, step := range t.steps {
@@ -759,13 +767,6 @@ func (t *applyMutationTracker) outcome(profile ExecutionProfile) ApplyMutationOu
 	}
 	if confirmed > 0 {
 		return ApplyMutationConfirmed
-	}
-	if profile == ExecutionProfileFullLocal {
-		// Full-local agents can use built-in or user-configured mutation surfaces
-		// that Radar cannot authoritatively observe (Cursor does not even surface
-		// built-in tool calls). Absence/failure of Radar write calls therefore does
-		// not prove that the cluster was untouched.
-		return ApplyMutationUnknown
 	}
 	// No write call, or only producer-confirmed non-mutating calls (dry run / no
 	// change): no mutation could have landed through the safeguarded profile's
@@ -1163,6 +1164,7 @@ func (r *Run) bindRootCauseEvidenceLocked(diag *Diagnosis) {
 		issuedPayload, issued := diag.issuedEvidence[step.EvidenceRef]
 		candidate.valid = candidate.count == 1 &&
 			issued && step.Result == issuedPayload &&
+			step.RadarEvidence &&
 			step.ID != "" && tool.known && !tool.conflicts && isRadarReadTool(tool.name) &&
 			step.Status == "done" &&
 			step.IsError != nil && !*step.IsError &&

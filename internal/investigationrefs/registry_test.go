@@ -32,6 +32,13 @@ func TestRegistryIssuesOnlyInsideActiveScopeAndClosesWithExactPayloads(t *testin
 	if !ok || second == first {
 		t.Fatalf("second issue = (%q, %t), first = %q", second, ok, first)
 	}
+	if !registry.Matches(scope, first, " exact payload \n") {
+		t.Fatal("exact active record did not match")
+	}
+	if registry.Matches(scope, first, "substituted payload") ||
+		registry.Matches(scope, "ev_forged", " exact payload \n") {
+		t.Fatal("registry matched a substituted payload or unissued reference")
+	}
 	records := lease.Close()
 	if got := records[first]; got != " exact payload \n" {
 		t.Fatalf("first payload = %q", got)
@@ -41,6 +48,9 @@ func TestRegistryIssuesOnlyInsideActiveScopeAndClosesWithExactPayloads(t *testin
 	}
 	if registry.Active(scope) {
 		t.Fatal("closed scope remained active")
+	}
+	if registry.Matches(scope, first, " exact payload \n") {
+		t.Fatal("closed scope still authorized a record")
 	}
 	if _, ok := registry.Issue(scope, "after close"); ok {
 		t.Fatal("closed scope issued a reference")
