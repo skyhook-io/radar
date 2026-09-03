@@ -27,6 +27,7 @@ interface GoldenCase {
   name: string
   spec: Record<string, unknown>
   status: Record<string, unknown>
+  metadata?: Record<string, unknown>
   badge: { text: string; level: string }
   issues: string[]
   worst: string
@@ -40,7 +41,7 @@ describe('CNPG golden matrix — badge side', () => {
   })
 
   it.each(cases.map((c) => [c.name, c] as const))('%s', (_name, tc) => {
-    const badge = getCNPGClusterStatus({ spec: tc.spec, status: tc.status })
+    const badge = getCNPGClusterStatus({ metadata: tc.metadata, spec: tc.spec, status: tc.status })
     expect({ text: badge.text, level: badge.level }).toEqual(tc.badge)
   })
 
@@ -50,7 +51,7 @@ describe('CNPG golden matrix — badge side', () => {
   it.each(cases.map((c) => [c.name, c] as const))(
     'badge and issues do not contradict — %s',
     (_name, tc) => {
-      const badge = getCNPGClusterStatus({ spec: tc.spec, status: tc.status })
+      const badge = getCNPGClusterStatus({ metadata: tc.metadata, spec: tc.spec, status: tc.status })
       if (badge.level === 'healthy') {
         expect(tc.issues, 'a healthy badge must not sit next to an issue').toEqual([])
       }
@@ -69,16 +70,23 @@ describe('CNPG golden matrix — badge side', () => {
   // This is the gap that let the bug through: the matrix already pinned
   // "readyInstances absent — unknown, not zero; must not fabricate an outage"
   // for the badge, and the cell rendered 0/N on that very case.
+  //
+  // The cell reads '-' exactly when the ready count is genuinely unknown: no
+  // explicit readyInstances AND no currentPrimary. Once a primary has been
+  // elected, an omitted readyInstances is a real 0 and the cell says so — which
+  // is what keeps "0/3" agreeing with the "Not Ready" badge on a was-up outage,
+  // while a still-bootstrapping cluster (no primary) keeps its dash.
   it.each(cases.map((c) => [c.name, c] as const))(
     'instances cell does not claim an outage the badge denies — %s',
     (_name, tc) => {
       const cell = getCNPGClusterInstances({ spec: tc.spec, status: tc.status })
       const ready = cell.split('/')[0]
-      const readyReported = typeof tc.status.readyInstances === 'number'
+      const readyResolvable =
+        typeof tc.status.readyInstances === 'number' || !!tc.status.currentPrimary
       expect(
         ready === '-',
-        `readyInstances ${readyReported ? 'is reported' : 'is absent'} but the cell reads ${cell}`,
-      ).toBe(!readyReported)
+        `ready is ${readyResolvable ? 'resolvable' : 'unknown'} but the cell reads ${cell}`,
+      ).toBe(!readyResolvable)
     },
   )
 })

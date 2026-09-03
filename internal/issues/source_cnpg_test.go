@@ -190,7 +190,7 @@ func TestCNPGDegradedInstancesUnderHealthyPhase(t *testing.T) {
 
 	down := cnpgCluster(
 		map[string]any{"instances": int64(3)},
-		map[string]any{"phase": "Cluster in healthy state", "readyInstances": int64(0)},
+		map[string]any{"phase": "Cluster in healthy state", "currentPrimary": "pg-1", "readyInstances": int64(0)},
 	)
 	if got := findIssue(t, detectCNPGIssues(cnpgClusterGVR, "Cluster", down), "CNPGClusterDegraded"); got.Severity != SeverityCritical {
 		t.Errorf("all instances down: severity = %q, want critical", got.Severity)
@@ -299,7 +299,7 @@ func TestCNPGBackupConditionDoesNotSuppressOutage(t *testing.T) {
 		u := cnpgCluster(
 			map[string]any{"instances": int64(3)},
 			map[string]any{
-				"phase": "Cluster in healthy state", "readyInstances": int64(0),
+				"phase": "Cluster in healthy state", "currentPrimary": "pg-1", "readyInstances": int64(0),
 				"conditions": []any{cond},
 			},
 		)
@@ -443,11 +443,12 @@ func TestCNPGTransientPhasesSuppressGenericConditionWalk(t *testing.T) {
 	}
 }
 
-// No phase excuses a database with nothing serving. Suppressing the shortfall
-// for attention/transient phases is right for a PARTIAL shortfall, but a
-// cluster with zero ready instances is an outage — and once the generic
-// condition walk is also suppressed for those phases, silence here means no
-// signal anywhere.
+// No phase excuses a WAS-UP database with nothing serving. currentPrimary is
+// present (the cluster elected a primary before), and readyInstances is OMITTED
+// — the shape CNPG actually emits for zero ready. Suppressing the shortfall for
+// attention/transient phases is right for a PARTIAL shortfall, but a was-up
+// cluster with nothing serving is an outage, and once the generic condition walk
+// is also suppressed for those phases, silence here means no signal anywhere.
 func TestCNPGZeroReadyIsNeverExcusedByPhase(t *testing.T) {
 	cases := []struct {
 		phase    string
@@ -466,7 +467,9 @@ func TestCNPGZeroReadyIsNeverExcusedByPhase(t *testing.T) {
 			if tc.strategy != "" {
 				spec["primaryUpdateStrategy"] = tc.strategy
 			}
-			u := cnpgCluster(spec, map[string]any{"phase": tc.phase, "readyInstances": int64(0)})
+			// currentPrimary set, readyInstances omitted, no Ready=False condition:
+			// a was-up cluster reporting nothing ready, escalated immediately.
+			u := cnpgCluster(spec, map[string]any{"phase": tc.phase, "currentPrimary": "pg-1"})
 			iss := findIssue(t, detectCNPGIssues(cnpgClusterGVR, "Cluster", u), "CNPGClusterDegraded")
 			if iss.Severity != SeverityCritical {
 				t.Errorf("severity = %q, want critical for a fully-down cluster", iss.Severity)
@@ -479,13 +482,109 @@ func TestCNPGZeroReadyIsNeverExcusedByPhase(t *testing.T) {
 	for _, phase := range []string{"Waiting for user action", "Switchover in progress"} {
 		u := cnpgCluster(
 			map[string]any{"instances": int64(3), "primaryUpdateStrategy": "supervised"},
-			map[string]any{"phase": phase, "readyInstances": int64(2)},
+			map[string]any{"phase": phase, "currentPrimary": "pg-1", "readyInstances": int64(2)},
 		)
 		for _, i := range detectCNPGIssues(cnpgClusterGVR, "Cluster", u) {
 			if i.Reason == "CNPGClusterDegraded" {
 				t.Errorf("phase %q: partial shortfall should stay suppressed", phase)
 			}
 		}
+	}
+}
+
+// The all-down verdict distinguishes the three states that a bare zero-ready
+// count collapses together: a first bootstrap (never elected a primary), a
+// deliberate not-serving state (hibernation / all-fenced), and a genuine
+// regression. Only the last raises an issue.
+func TestCNPGZeroReadyDistinguishesBootstrapFromRegression(t *testing.T) {
+	degraded := func(u *unstructured.Unstructured) bool {
+		for _, i := range detectCNPGIssues(cnpgClusterGVR, "Cluster", u) {
+			if i.Reason == "CNPGClusterDegraded" {
+				return true
+			}
+		}
+		return false
+	}
+
+	// First bootstrap: reported (phase) but no primary ever elected, readyInstances
+	// omitted. Nothing was serving to lose, so no alarm.
+	bootstrap := cnpgCluster(map[string]any{"instances": int64(3)},
+		map[string]any{"phase": "Setting up primary"})
+	if degraded(bootstrap) {
+		t.Error("a first bootstrap with no elected primary must not raise CNPGClusterDegraded")
+	}
+
+	// Hibernation is a deliberate scale-to-zero, signalled by annotation.
+	hibernated := cnpgCluster(map[string]any{"instances": int64(3)},
+		map[string]any{"currentPrimary": "pg-1"})
+	hibernated.SetAnnotations(map[string]string{"cnpg.io/hibernation": "on"})
+	if degraded(hibernated) {
+		t.Error("a hibernated cluster must not raise CNPGClusterDegraded")
+	}
+
+	// All instances fenced: PostgreSQL stopped on purpose, pods still up.
+	fenced := cnpgCluster(map[string]any{"instances": int64(3)},
+		map[string]any{"currentPrimary": "pg-1"})
+	fenced.SetAnnotations(map[string]string{"cnpg.io/fencedInstances": `["*"]`})
+	if degraded(fenced) {
+		t.Error("an all-fenced cluster must not raise CNPGClusterDegraded")
+	}
+
+	// A partially-fenced cluster is NOT carved out — "*" is the only all-down token.
+	partialFence := cnpgCluster(map[string]any{"instances": int64(3)},
+		map[string]any{"phase": "Waiting for the instances to become active", "currentPrimary": "pg-1"})
+	partialFence.SetAnnotations(map[string]string{"cnpg.io/fencedInstances": `["pg-1-2"]`})
+	if !degraded(partialFence) {
+		t.Error("a partial fence must not suppress the outage of a was-up cluster")
+	}
+
+	// Regression: was up (currentPrimary), now nothing ready. This is the case the
+	// old readyInstances-presence gate made unreachable.
+	regression := cnpgCluster(map[string]any{"instances": int64(3)},
+		map[string]any{"phase": "Waiting for the instances to become active", "currentPrimary": "pg-1"})
+	if !degraded(regression) {
+		t.Error("a was-up cluster with nothing ready must raise CNPGClusterDegraded")
+	}
+}
+
+// The regression escalation is debounced on the Ready=False transition so a
+// single instance restarting during a routine rollout does not read as a total
+// outage. Past the grace, or with no Ready condition at all, it escalates.
+func TestCNPGDownGraceDebouncesRoutineRestart(t *testing.T) {
+	degraded := func(readyLTT string) bool {
+		status := map[string]any{
+			"phase":          "Waiting for the instances to become active",
+			"currentPrimary": "pg-1",
+		}
+		if readyLTT != "" {
+			status["conditions"] = []any{map[string]any{
+				"type": "Ready", "status": "False", "reason": "ClusterIsNotReady",
+				"lastTransitionTime": readyLTT,
+			}}
+		}
+		u := cnpgCluster(map[string]any{"instances": int64(3)}, status)
+		for _, i := range detectCNPGIssues(cnpgClusterGVR, "Cluster", u) {
+			if i.Reason == "CNPGClusterDegraded" {
+				return true
+			}
+		}
+		return false
+	}
+
+	recent := time.Now().Add(-time.Minute).Format(time.RFC3339)
+	if degraded(recent) {
+		t.Error("a Ready=False younger than the grace must be debounced, not escalated")
+	}
+
+	old := time.Now().Add(-10 * time.Minute).Format(time.RFC3339)
+	if !degraded(old) {
+		t.Error("a Ready=False older than the grace must escalate")
+	}
+
+	// No Ready condition on a was-up cluster: nothing is debouncing, so escalate
+	// immediately rather than inventing a start time from creationTimestamp.
+	if !degraded("") {
+		t.Error("a was-up cluster with no Ready condition must escalate immediately")
 	}
 }
 

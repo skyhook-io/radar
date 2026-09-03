@@ -145,6 +145,94 @@ export function classifyCNPGClusterPhase(phase: string): CNPGPhaseBucket {
   return 'unknown'
 }
 
+// Debounce window for calling a was-up cluster "down". A single instance
+// restarting flips Ready=False for a minute or two while the pod comes back;
+// escalating instantly would fire on routine rollouts. Kept in step with
+// cnpgDownGrace in internal/issues/source_cnpg.go — the two must not drift.
+export const CNPG_DOWN_GRACE_MS = 5 * 60 * 1000
+
+/**
+ * Hibernation is a deliberate scale-to-zero: the operator removes the pods and
+ * the cluster reports nothing ready by design. Signalled by an annotation, not
+ * by any status field, so it has to be read before a zero-ready count is called
+ * an outage.
+ */
+export function isCNPGClusterHibernated(resource: any): boolean {
+  return resource?.metadata?.annotations?.['cnpg.io/hibernation'] === 'on'
+}
+
+/**
+ * Fencing stops PostgreSQL on the named instances while leaving the pods up. The
+ * annotation is a JSON array of instance names; `"*"` means every instance is
+ * fenced, so nothing serves — intentionally, not as a fault. A malformed value
+ * is treated as "not fenced" rather than throwing.
+ */
+export function isCNPGClusterFencedAll(resource: any): boolean {
+  const raw = resource?.metadata?.annotations?.['cnpg.io/fencedInstances']
+  if (typeof raw !== 'string' || raw === '') return false
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) && parsed.includes('*')
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Whether a zero-ready cluster is actually unavailable, and why.
+ *
+ * The load-bearing distinction the badge and the Go detector both turn on:
+ * CNPG omits `status.readyInstances` when it is 0 (omitempty int), so "no
+ * status yet" and "0 ready" are byte-identical on the wire. Gating an outage on
+ * the field's PRESENCE therefore made a fully-down cluster unreachable — it
+ * looked exactly like one that had not reported.
+ *
+ * `status.currentPrimary` is the version-robust "was up" signal: CNPG sets it
+ * the first time a primary is elected and never clears it (present on 1.27 and
+ * 1.28). So a zero-ready cluster that HAS a currentPrimary was serving before —
+ * a regression — while one that never had a primary is still bootstrapping.
+ *
+ *   - null       — not down: still bootstrapping, or a real ready count exists
+ *   - 'hibernated' / 'fenced' — deliberately not serving, no alarm
+ *   - 'down'     — was up, now zero ready past the grace window
+ *
+ * Mirrored by getCNPGClusterAvailability's Go counterpart in
+ * internal/issues/source_cnpg.go (the allDown verdict) — same signals, same
+ * grace, or a badge and its issue disagree.
+ */
+export function getCNPGClusterAvailability(
+  resource: any,
+): 'hibernated' | 'fenced' | 'down' | null {
+  const status = resource.status || {}
+  const desired = resource.spec?.instances ?? 0
+  const ready = typeof status.readyInstances === 'number' ? status.readyInstances : 0
+  // Any status the operator has written proves it has reconciled at least once,
+  // which is what lets an absent readyInstances be read as a real 0 rather than
+  // "not reported". Absent EVERYTHING is the truly-statusless case, still unknown.
+  const reported = !!(status.phase || status.currentPrimary || status.conditions?.length)
+  if (desired <= 0 || ready > 0 || !reported) return null
+  // Deliberate not-serving states outrank the down verdict — checked before the
+  // was-up gate so a hibernated cluster reads neutral even if it kept a primary.
+  if (isCNPGClusterHibernated(resource)) return 'hibernated'
+  if (isCNPGClusterFencedAll(resource)) return 'fenced'
+  // Never elected a primary → first bootstrap, not a regression.
+  if (!status.currentPrimary) return null
+  const conditions = status.conditions || []
+  const readyCond = conditions.find((c: any) => c.type === 'Ready')
+  // A was-up cluster whose Ready only just went False is likely a single
+  // instance bouncing; wait out the grace. No Ready=False at all (or no
+  // timestamp) means nothing is debouncing, so escalate immediately rather than
+  // inventing a start time.
+  if (
+    readyCond?.status === 'False' &&
+    readyCond.lastTransitionTime &&
+    Date.now() - Date.parse(readyCond.lastTransitionTime) < CNPG_DOWN_GRACE_MS
+  ) {
+    return null
+  }
+  return 'down'
+}
+
 export function getCNPGClusterStatus(resource: any): StatusBadge {
   const status = resource.status || {}
   const phase = status.phase || ''
@@ -165,10 +253,19 @@ export function getCNPGClusterStatus(resource: any): StatusBadge {
   if (bucket === 'terminal') {
     return { text: getCNPGClusterDisplayState(phase), color: healthColors.unhealthy, level: 'unhealthy' }
   }
-  // Zero ready instances is a hard down that no phase excuses — including a
-  // failover, where the phase alone would otherwise downgrade a total outage to
-  // orange.
-  if (countsKnown && readyInstances === 0) {
+  // Availability outranks every phase branch except terminal. A zero-ready
+  // cluster CNPG reports by omitting readyInstances would otherwise be invisible
+  // here (countsKnown is false without the field) and fall through to the
+  // transient phase, painting amber on a total outage. Hibernation and all-fenced
+  // are deliberate not-serving states, so they read neutral rather than red.
+  const avail = getCNPGClusterAvailability(resource)
+  if (avail === 'hibernated') {
+    return { text: 'Hibernated', color: healthColors.neutral, level: 'neutral' }
+  }
+  if (avail === 'fenced') {
+    return { text: 'Fenced', color: healthColors.neutral, level: 'neutral' }
+  }
+  if (avail === 'down') {
     return { text: 'Not Ready', color: healthColors.unhealthy, level: 'unhealthy' }
   }
   if (bucket === 'failing') {
@@ -241,7 +338,20 @@ export function getCNPGClusterStatus(resource: any): StatusBadge {
 const countOrDash = (n: unknown): string => (typeof n === 'number' ? String(n) : '-')
 
 export function getCNPGClusterInstances(resource: any): string {
-  return `${countOrDash(resource.status?.readyInstances)}/${countOrDash(resource.spec?.instances)}`
+  const status = resource.status || {}
+  // Absent readyInstances resolves to 0 only for a was-up cluster (one that
+  // elected a primary): there the omitted field genuinely means zero ready, and
+  // "0/3" agrees with the "Not Ready" badge. Before a primary exists the count
+  // is truly unknown, so it stays a dash — the guard against fabricating an
+  // outage the badge denies. currentPrimary is the same was-up signal the badge
+  // gates its down verdict on, so the cell can never read 0 beside a green badge.
+  const ready =
+    typeof status.readyInstances === 'number'
+      ? status.readyInstances
+      : status.currentPrimary
+        ? 0
+        : undefined
+  return `${countOrDash(ready)}/${countOrDash(resource.spec?.instances)}`
 }
 
 export function getCNPGClusterPrimary(resource: any): string {

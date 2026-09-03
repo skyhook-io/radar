@@ -13,10 +13,11 @@ import (
 const cnpgGoldenMatrixPath = "../../testdata/cnpg/badge-issue-matrix.json"
 
 type cnpgGoldenCase struct {
-	Name   string         `json:"name"`
-	Spec   map[string]any `json:"spec"`
-	Status map[string]any `json:"status"`
-	Badge  struct {
+	Name     string         `json:"name"`
+	Spec     map[string]any `json:"spec"`
+	Status   map[string]any `json:"status"`
+	Metadata map[string]any `json:"metadata"`
+	Badge    struct {
 		Text  string `json:"text"`
 		Level string `json:"level"`
 	} `json:"badge"`
@@ -58,10 +59,17 @@ func TestCNPGGoldenMatrix(t *testing.T) {
 			// JSON numbers decode as float64; the detector reads int64.
 			spec := normalizeJSONInts(tc.Spec)
 			status := normalizeJSONInts(tc.Status)
+			// Fixed identity plus any annotations the case carries (hibernation,
+			// fencing) — those live on metadata, not status, and the detector reads
+			// them through GetAnnotations.
+			metadata := map[string]any{"name": "pg", "namespace": "pg"}
+			if annos, ok := tc.Metadata["annotations"].(map[string]any); ok {
+				metadata["annotations"] = annos
+			}
 			u := &unstructured.Unstructured{Object: map[string]any{
 				"apiVersion": "postgresql.cnpg.io/v1",
 				"kind":       "Cluster",
-				"metadata":   map[string]any{"name": "pg", "namespace": "pg"},
+				"metadata":   metadata,
 				"spec":       spec,
 				"status":     status,
 			}}

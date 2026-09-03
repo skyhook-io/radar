@@ -39,9 +39,33 @@ describe('CNPGClusterRenderer — the drawer must not contradict the badge', () 
     expect(html(settled)).toContain('Degraded Cluster')
   })
 
-  it('still raises Cluster Down at zero ready, whatever the phase', () => {
-    // No phase excuses a database with nothing serving.
-    expect(html(cluster('Upgrading cluster', 0))).toContain('Cluster Down')
+  it('still raises Cluster Down for a was-up cluster at zero ready, whatever the phase', () => {
+    // No phase excuses a database that was serving and now has nothing ready.
+    // readyInstances is OMITTED — the shape CNPG actually emits for zero ready —
+    // and currentPrimary is the "was up" signal that tells this apart from a
+    // first bootstrap. This is the exact case the old presence gate missed.
+    const wasUpDown = {
+      apiVersion: 'postgresql.cnpg.io/v1',
+      kind: 'Cluster',
+      metadata: { name: 'pg', namespace: 'db' },
+      spec: { instances: 3 },
+      status: { phase: 'Upgrading cluster', currentPrimary: 'pg-1' },
+    }
+    expect(html(wasUpDown)).toContain('Cluster Down')
+  })
+
+  it('does not raise Cluster Down for a bootstrapping cluster with no primary yet', () => {
+    // Reported (phase) but no primary elected and readyInstances omitted — the
+    // shape a fresh cluster emits. A red banner here is the false alarm the
+    // availability verdict exists to prevent.
+    const bootstrapping = {
+      apiVersion: 'postgresql.cnpg.io/v1',
+      kind: 'Cluster',
+      metadata: { name: 'pg', namespace: 'db' },
+      spec: { instances: 3 },
+      status: { phase: 'Setting up primary' },
+    }
+    expect(html(bootstrapping)).not.toContain('Cluster Down')
   })
 
   it('renders a failed last backup at the same tier as the badge and detector', () => {
