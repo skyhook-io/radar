@@ -664,7 +664,7 @@ type getChangesInput struct {
 	Namespace string `json:"namespace,omitempty" jsonschema:"filter to a specific namespace"`
 	Kind      string `json:"kind,omitempty" jsonschema:"filter to a resource kind (e.g. Deployment, Pod)"`
 	Name      string `json:"name,omitempty" jsonschema:"filter to a specific resource name"`
-	Since     string `json:"since,omitempty" jsonschema:"duration to look back, e.g. 1h, 30m, 24h (default 1h)"`
+	Since     string `json:"since,omitempty" jsonschema:"duration to look back, e.g. 1h, 24h, 7d, 14d (default 1h)"`
 	Limit     int    `json:"limit,omitempty" jsonschema:"max changes to return (default 20, max 50)"`
 }
 
@@ -1384,12 +1384,9 @@ func isPodKind(kind string) bool {
 func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getChangesInput) (*mcp.CallToolResult, any, error) {
 	since := 1 * time.Hour
 	if input.Since != "" {
-		parsed, err := time.ParseDuration(input.Since)
+		parsed, err := parsePromDuration(input.Since)
 		if err != nil {
-			return nil, nil, fmt.Errorf("invalid duration %q: %w", input.Since, err)
-		}
-		if parsed <= 0 {
-			return nil, nil, fmt.Errorf("duration must be positive, got %q", input.Since)
+			return nil, nil, err
 		}
 		since = parsed
 	}

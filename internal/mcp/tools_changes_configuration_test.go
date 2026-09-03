@@ -67,6 +67,40 @@ func TestGetChangesEmitsApplicationConfigurationClassificationWithoutIssueAwareP
 	}
 }
 
+func TestGetChangesAcceptsDayDuration(t *testing.T) {
+	store := initCorrelationStore(t)
+	if err := store.Append(context.Background(), timeline.TimelineEvent{
+		ID:             "two-weeks-of-history",
+		Timestamp:      time.Now().Add(-13 * 24 * time.Hour),
+		Source:         timeline.SourceInformer,
+		ClusterContext: k8s.ActiveClusterContext(),
+		Kind:           "Deployment",
+		Namespace:      "dev",
+		Name:           "api",
+		EventType:      timeline.EventTypeUpdate,
+		Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{
+			Path: "spec.template.spec.containers[api].image",
+		}}},
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	result, _, err := handleGetChanges(context.Background(), nil, getChangesInput{
+		Namespace: "dev",
+		Since:     "14d",
+	})
+	if err != nil {
+		t.Fatalf("handleGetChanges with 14d: %v", err)
+	}
+	var response getChangesResponseMCP
+	if err := json.Unmarshal([]byte(extractText(t, result)), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(response.Changes) != 1 || response.Changes[0].Name != "api" {
+		t.Fatalf("14d changes = %+v, want the 13-day-old Deployment", response.Changes)
+	}
+}
+
 func TestGetChangesDistinguishesOutputCappingFromFetchSaturation(t *testing.T) {
 	appendChanges := func(t *testing.T, count int) {
 		t.Helper()
