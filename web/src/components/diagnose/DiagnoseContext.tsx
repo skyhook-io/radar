@@ -38,6 +38,8 @@ export interface Target {
   /** The issue this investigation is for, when it came from an issue. Hosts
    *  that group sessions by issue key on it; the rest carry it and ignore it. */
   issueId?: string;
+  /** Display identity of that issue, shown on the run header and history. */
+  issue?: { reason: string; severity?: string };
   /** Start a new session instead of continuing one the backend would otherwise
    *  return for this target. Rides here rather than as a separate argument so
    *  the consent-deferred path replays one object — a parallel "was it fresh?"

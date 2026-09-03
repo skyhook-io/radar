@@ -248,6 +248,7 @@ export function IssuesPane({
                   group={issue.group}
                   namespace={issue.namespace ?? ""}
                   name={issue.name}
+                  issue={{ reason: issue.reason, severity: issue.severity }}
                 />
               </div>
             );

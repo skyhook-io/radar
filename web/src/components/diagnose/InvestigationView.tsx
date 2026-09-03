@@ -54,6 +54,7 @@ import {
   type InvestigationEvidenceTurn,
 } from "./investigationEvidence";
 import { InvestigationEvidencePane } from "./InvestigationEvidencePane";
+import type { DiagnosisResourceRef } from "./diagnoseEvidenceTypes";
 import { formatInvestigationTarget } from "./target";
 
 const RECHECK_QUESTION =
@@ -71,6 +72,29 @@ export function initialInvestigationPane(
   status: RunSummary["status"],
 ): "activity" | "evidence" {
   return status === "done" || status === "stale" ? "evidence" : "activity";
+}
+
+// The standing Activity → Findings pointer. With the panes as tabs, a reader
+// following the transcript has no persistent signal that Radar is compiling
+// the run into Findings — the per-call chips only cover single results.
+// Returns the strip's label, or null when there is nothing compiled to see.
+export function investigationFindingsNudge(input: {
+  running: boolean;
+  hasAssessment: boolean;
+  evidenceCount: number;
+}): string | null {
+  const items = `${input.evidenceCount} evidence ${
+    input.evidenceCount === 1 ? "item" : "items"
+  }`;
+  if (input.running) {
+    return input.evidenceCount > 0 ? `${items} collected so far` : null;
+  }
+  if (input.hasAssessment) {
+    return input.evidenceCount > 0
+      ? `Assessment and ${items} ready`
+      : "Assessment ready";
+  }
+  return input.evidenceCount > 0 ? `${items} captured` : null;
 }
 
 export function investigationIsReadOnly(
@@ -459,10 +483,13 @@ export function InvestigationView({
   run,
   agentLabel,
   maximized,
+  onOpenResource,
 }: {
   run: RunSummary;
   agentLabel: string;
   maximized: boolean;
+  /** Opens a resource referenced by evidence in Radar's own views. */
+  onOpenResource?: (ref: DiagnosisResourceRef) => void;
 }) {
   const { kind, namespace, name } = run;
   // Apply is off for hosted agents (read-only server-side). Keyed on the selected
@@ -1393,11 +1420,6 @@ export function InvestigationView({
   const verificationRunning = turns.some(
     (turn) => turn.verify && turn.status === "running",
   );
-  const toolCallCount = turns.reduce(
-    (count, turn) =>
-      count + turn.timeline.filter((item) => item.kind === "tool").length,
-    0,
-  );
   const latestVerification = [...turns].reverse().find((turn) => turn.verify);
   const displayedVerificationError =
     latestVerification?.status === "error"
@@ -1421,25 +1443,25 @@ export function InvestigationView({
       lastApplyOutcome,
       localApplyAttemptAssessmentIdx,
     });
-  const showSplitWorkspace = maximized;
-  const splitGridClass = showSplitWorkspace
-    ? "@min-[1000px]/investigation:grid-cols-[minmax(360px,520px)_minmax(0,1fr)]"
-    : "";
-  const splitTabClass = showSplitWorkspace
-    ? "@min-[1000px]/investigation:hidden"
-    : "";
-  const splitPaneClass = showSplitWorkspace
-    ? "@min-[1000px]/investigation:flex"
-    : "";
-  const splitActivityBorderClass = showSplitWorkspace
-    ? "@min-[1000px]/investigation:border-r @min-[1000px]/investigation:border-theme-border"
-    : "";
-
   const selectPane = (pane: "activity" | "evidence") => {
     paneSelectionTouchedRef.current = true;
     setNarrowPane(pane);
-    if (pane === "evidence") setUnreadEvidence(false);
+    if (pane === "evidence") {
+      setUnreadEvidence(false);
+      // A plain switch into Findings reads from the top — the assessment is
+      // the start of the story. Evidence links from Activity bypass this path
+      // (viewEvidenceSource) and keep their focus-the-card behavior.
+      requestAnimationFrame(() => {
+        evidenceScrollRef.current?.scrollTo({ top: 0 });
+      });
+    }
   };
+  const findingsNudge = investigationFindingsNudge({
+    running: busy || requestPending,
+    hasAssessment: Boolean(currentAssessment?.diagnosis),
+    evidenceCount: projection.groups.filter((group) => !group.historical)
+      .length,
+  });
   const onTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     let pane: "activity" | "evidence" | undefined;
     if (event.key === "ArrowLeft" || event.key === "Home") pane = "activity";
@@ -1556,7 +1578,7 @@ export function InvestigationView({
       <div
         role="group"
         aria-label="Investigation workspace"
-        className={`grid grid-cols-2 border-b border-theme-border bg-theme-base/40 p-1 ${splitTabClass}`}
+        className="grid grid-cols-2 border-b border-theme-border bg-theme-base/40 p-1"
       >
         <button
           type="button"
@@ -1605,32 +1627,38 @@ export function InvestigationView({
         </button>
       </div>
 
-      <div className={`grid min-h-0 flex-1 ${splitGridClass}`}>
+      <div className="grid min-h-0 flex-1">
         <section
           id={activityPaneId}
           aria-label="Activity: agent reasoning and tool calls"
           aria-busy={busy || requestPending || rebuildingReplay}
           className={`${
             narrowPane === "activity" ? "flex" : "hidden"
-          } relative min-h-0 min-w-0 flex-col ${splitPaneClass} ${splitActivityBorderClass}`}
+          } relative min-h-0 min-w-0 flex-col`}
         >
-          <div
-            className={`hidden items-center justify-between border-b border-theme-border/60 px-3 py-2 ${splitPaneClass}`}
-          >
-            <div className="flex items-center gap-2">
-              <Activity className="h-4 w-4 text-theme-text-tertiary" />
-              <h2 className="text-sm font-semibold text-theme-text-primary">
-                Activity
-              </h2>
-            </div>
-            <span className="inline-flex items-center gap-1.5 text-[11px] text-theme-text-tertiary">
-              {toolCallCount > 0
-                ? `${toolCallCount} ${toolCallCount === 1 ? "tool call" : "tool calls"}`
-                : turns.length > 0
-                  ? `${turns.length} ${turns.length === 1 ? "turn" : "turns"}`
-                  : null}
-            </span>
-          </div>
+          {findingsNudge ? (
+            <button
+              type="button"
+              onClick={() => selectPane("evidence")}
+              className="flex shrink-0 items-center gap-2 border-b border-theme-border/60 bg-theme-base/40 px-3 py-1.5 text-left text-xs text-theme-text-secondary hover:bg-theme-hover"
+            >
+              {busy || requestPending ? (
+                <span
+                  className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-accent"
+                  aria-hidden
+                />
+              ) : (
+                <Files
+                  className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary"
+                  aria-hidden
+                />
+              )}
+              <span className="min-w-0 flex-1 truncate">{findingsNudge}</span>
+              <span className="shrink-0 font-medium text-accent-text">
+                View Findings
+              </span>
+            </button>
+          ) : null}
           <div
             ref={scrollRef}
             data-investigation-activity-scroll
@@ -1724,7 +1752,7 @@ export function InvestigationView({
                             verifiedHealthy
                               ? "border-emerald-500/30 bg-emerald-500/5 hover:bg-emerald-500/10"
                               : "border-accent/30 bg-accent/5 hover:bg-accent/10"
-                          } ${splitTabClass}`}
+                          }`}
                         >
                           <span
                             className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${
@@ -1802,35 +1830,8 @@ export function InvestigationView({
           }
           className={`${
             narrowPane === "evidence" ? "flex" : "hidden"
-          } min-h-0 min-w-0 flex-col ${splitPaneClass}`}
+          } min-h-0 min-w-0 flex-col`}
         >
-          <div
-            className={`hidden items-center justify-between gap-3 border-b border-theme-border/60 px-3 py-2 ${splitPaneClass}`}
-          >
-            <div className="flex min-w-0 items-center gap-2">
-              <Files className="h-4 w-4 shrink-0 text-theme-text-tertiary" />
-              <div className="min-w-0">
-                <h2 className="truncate text-sm font-semibold text-theme-text-primary">
-                  Findings
-                </h2>
-                <p className="truncate text-[11px] text-theme-text-tertiary">
-                  Current assessment, evidence, and next steps
-                </p>
-              </div>
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              {evidenceUpdateAvailable ? (
-                <button
-                  type="button"
-                  onClick={scrollFindingsToNewest}
-                  className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-accent/5 px-2 py-1 text-[11px] font-medium text-accent-text hover:bg-accent/10"
-                >
-                  <ArrowUp className="h-3 w-3" />
-                  New evidence
-                </button>
-              ) : null}
-            </div>
-          </div>
           <div
             ref={evidenceScrollRef}
             data-investigation-findings-scroll
@@ -1841,9 +1842,7 @@ export function InvestigationView({
             className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 [overflow-anchor:none] [scrollbar-gutter:stable]"
           >
             {evidenceUpdateAvailable ? (
-              <div
-                className={`sticky top-1 z-20 mb-2 flex justify-end ${splitTabClass}`}
-              >
+              <div className="sticky top-1 z-20 mb-2 flex justify-end">
                 <button
                   type="button"
                   onClick={scrollFindingsToNewest}
@@ -1983,51 +1982,56 @@ export function InvestigationView({
                     ) : null}
                   </section>
 
+                  {currentAssessment?.diagnosis &&
+                  (currentAssessment.diagnosis.remediation?.length ?? 0) >
+                    0 ? (
+                    // Directly after the assessment: the reader's order is
+                    // what happened → why → what to do about it. Evidence is
+                    // the supporting layer below, not the road to the action.
+                    <section aria-labelledby={`${workspaceId}-next-steps`}>
+                      <h2
+                        id={`${workspaceId}-next-steps`}
+                        className="text-sm font-semibold text-theme-text-primary"
+                      >
+                        Next steps
+                      </h2>
+                      <p className="mt-0.5 text-xs text-theme-text-tertiary">
+                        Actions proposed by the agent from the assessment
+                        above.
+                      </p>
+                      <ResultCard
+                        diagnosis={currentAssessment.diagnosis}
+                        section="actions"
+                        compactActions
+                        onApply={
+                          canOfferInvestigationApply({
+                            currentAssessmentIdx,
+                            lastRemediationIdx,
+                            lastApplyAttemptIdx,
+                            localApplyAttemptAssessmentIdx,
+                            interactionsBlocked,
+                            hosted,
+                          })
+                            ? requestApply
+                            : undefined
+                        }
+                        animate={currentAssessment.animateResult !== false}
+                        showDisclaimer={false}
+                      />
+                    </section>
+                  ) : null}
+
                   <InvestigationEvidencePane
                     projection={projection}
                     rootCauseEvidence={rootCauseEvidenceResolution}
                     collecting={busy || requestPending}
                     animateGroupIds={animateEvidenceGroupIds}
                     onViewSource={viewActivitySource}
+                    // A stale run was captured on a different cluster; the same
+                    // identity here would resolve to an unrelated resource.
+                    onOpenResource={stale ? undefined : onOpenResource}
                     revealRequest={evidenceRevealRequest}
                     onRevealReady={revealEvidenceSource}
-                    afterMaterialEvidence={
-                      currentAssessment?.diagnosis &&
-                      (currentAssessment.diagnosis.remediation?.length ?? 0) >
-                        0 ? (
-                        <section aria-labelledby={`${workspaceId}-next-steps`}>
-                          <h2
-                            id={`${workspaceId}-next-steps`}
-                            className="text-sm font-semibold text-theme-text-primary"
-                          >
-                            Next steps
-                          </h2>
-                          <p className="mt-0.5 text-xs text-theme-text-tertiary">
-                            Actions proposed by the agent from the assessment
-                            above.
-                          </p>
-                          <ResultCard
-                            diagnosis={currentAssessment.diagnosis}
-                            section="actions"
-                            compactActions
-                            onApply={
-                              canOfferInvestigationApply({
-                                currentAssessmentIdx,
-                                lastRemediationIdx,
-                                lastApplyAttemptIdx,
-                                localApplyAttemptAssessmentIdx,
-                                interactionsBlocked,
-                                hosted,
-                              })
-                                ? requestApply
-                                : undefined
-                            }
-                            animate={currentAssessment.animateResult !== false}
-                            showDisclaimer={false}
-                          />
-                        </section>
-                      ) : undefined
-                    }
                   />
                 </>
               )}
@@ -2047,10 +2051,8 @@ export function InvestigationView({
         confidence={turns[lastRemediationIdx]?.diagnosis?.confidence}
       />
 
-      <div className={`grid shrink-0 ${splitGridClass}`}>
-        <div
-          className={`border-t border-theme-border px-3 py-2.5 ${splitActivityBorderClass}`}
-        >
+      <div className="grid shrink-0">
+        <div className="border-t border-theme-border px-3 py-2.5">
           {busy ? (
             <button
               type="button"
@@ -2109,10 +2111,6 @@ export function InvestigationView({
             </div>
           )}
         </div>
-        <div
-          aria-hidden="true"
-          className={`hidden border-t border-theme-border ${splitPaneClass}`}
-        />
       </div>
     </div>
   );

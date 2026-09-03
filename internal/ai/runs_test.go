@@ -2114,7 +2114,7 @@ func TestClearHistoryFencesStartAndAddTurn(t *testing.T) {
 	started := make(chan startResult, 1)
 	go func() {
 		close(startReady)
-		summary, err := manager.Start("Pod", "", "default", "new", "claude", ExecutionProfileSafeguarded, "", "", "", nil)
+		summary, err := manager.Start("Pod", "", "default", "new", "claude", ExecutionProfileSafeguarded, "", "", "", nil, nil)
 		started <- startResult{summary: summary, err: err}
 	}()
 	<-startReady

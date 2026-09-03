@@ -246,7 +246,12 @@ export type InvestigationEvidenceData =
       relevance: "target" | "producer-related" | "broader";
     }
   | { type: "startup"; blocker: DiagnosisStartupBlocker }
-  | { type: "crash"; crash: DiagnosisCrashCause }
+  | {
+      type: "crash";
+      crash: DiagnosisCrashCause;
+      /** Namespace of the producing check's subject; pods live there. */
+      namespace?: string;
+    }
   | {
       type: "resource";
       resource: InvestigationKubernetesResource;
@@ -258,6 +263,8 @@ export type InvestigationEvidenceData =
       type: "logs";
       pod: string;
       container: string;
+      /** Namespace the producing call actually read; absent when unstated. */
+      namespace?: string;
       previous: boolean;
       logs?: DiagnosisFilteredLogs;
       warnings: string[];
@@ -377,6 +384,57 @@ export interface InvestigationRootCauseEvidenceLink {
 export interface InvestigationRootCauseEvidenceResolution {
   status: "linked" | "missing" | "invalid";
   links: InvestigationRootCauseEvidenceLink[];
+}
+
+/**
+ * The Kubernetes resource an evidence item is about, when the producer payload
+ * states one unambiguously — the anchor for "open this in Radar" navigation.
+ * Pod-shaped evidence (logs, a single-pod crash) resolves only through the
+ * namespace its producing check actually read; without one there is no safe
+ * link, and the investigation target's namespace is never borrowed.
+ */
+export function investigationEvidenceSubjectRef(
+  data: InvestigationEvidenceData,
+): DiagnosisResourceRef | undefined {
+  const ref = ((): DiagnosisResourceRef | undefined => {
+    switch (data.type) {
+      case "issue":
+        return {
+          kind: data.issue.kind,
+          group: data.issue.group,
+          namespace: data.issue.namespace,
+          name: data.issue.name,
+        };
+      case "resource": {
+        const apiVersion = data.resource.apiVersion;
+        const group = apiVersion.includes("/") ? apiVersion.split("/")[0] : "";
+        return {
+          kind: data.resource.kind,
+          group: group || undefined,
+          namespace: data.resource.metadata.namespace,
+          name: data.resource.metadata.name,
+        };
+      }
+      case "logs":
+        if (!data.namespace) return undefined;
+        return { kind: "Pod", namespace: data.namespace, name: data.pod };
+      case "crash":
+        if (data.crash.pods.length !== 1 || !data.namespace) return undefined;
+        return {
+          kind: "Pod",
+          namespace: data.namespace,
+          name: data.crash.pods[0],
+        };
+      case "network":
+        return data.network.subject;
+      case "relationships":
+        return data.root;
+      default:
+        return undefined;
+    }
+  })();
+  if (!ref?.kind || !ref.name) return undefined;
+  return ref;
 }
 
 function domToken(value: string): string {
@@ -1648,6 +1706,7 @@ function addLogs(
   previous: boolean,
   warnings: string[] = [],
   relevance: InvestigationEvidenceRelevance = "broader",
+  namespace?: string,
 ): void {
   const lines = (value.logs?.lines ?? []).map((line) => stripAnsi(line));
   const normalizedWarnings = warnings.map((warning) => stripAnsi(warning));
@@ -1692,6 +1751,7 @@ function addLogs(
       type: "logs",
       pod: value.pod,
       container: value.container,
+      namespace,
       previous,
       logs: value.logs ? { ...value.logs, lines } : undefined,
       warnings: normalizedWarnings,
@@ -1862,7 +1922,7 @@ function invalidPayload(
   builder.limit(
     source,
     section,
-    "The tool returned a result that did not match its current structured evidence contract; it remains available in Activity.",
+    "Radar couldn't organize this check's result into an evidence card. The raw result is in Activity.",
     "unknown",
   );
 }
@@ -2074,7 +2134,11 @@ function adaptDiagnose(
           tone: "error",
           title: `${crash.container} ${crash.reason || crash.state}`,
           summary: crash.logLine,
-          data: { type: "crash", crash },
+          data: {
+            type: "crash",
+            crash,
+            namespace: resource.metadata.namespace,
+          },
         },
       );
     }
@@ -2174,6 +2238,7 @@ function adaptDiagnose(
             previous,
             [],
             bundledRowRelevance("Pod", entry.pod),
+            resource.metadata.namespace,
           );
         } else
           invalidPayload(
@@ -2772,6 +2837,7 @@ function adaptPodLogs(
     previousFromArgs(source),
     warnings,
     sourceArgsRelevance(builder, source, "Pod"),
+    nonEmptyString(args?.namespace) ? args.namespace : undefined,
   );
 }
 

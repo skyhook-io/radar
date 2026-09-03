@@ -115,11 +115,14 @@ export function IssueDiagnoseButton({
   group,
   namespace,
   name,
+  issue,
 }: {
   kind: string;
   group?: string;
   namespace: string;
   name: string;
+  /** Display identity of the issue row this button sits on. */
+  issue?: { reason: string; severity?: string };
 }) {
   const d = useDiagnose();
   if (d.setupState === "off") return null;
@@ -146,6 +149,7 @@ export function IssueDiagnoseButton({
               group: group ?? "",
               namespace,
               name,
+              issue,
             });
           else d.openHome();
         }}

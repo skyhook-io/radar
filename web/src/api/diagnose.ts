@@ -125,6 +125,9 @@ export interface RunSummary {
   /** The issue this session is for, on hosts that key sessions by issue. Always
    *  absent from Radar's own backend, which records no issue. */
   issueId?: string;
+  /** Display identity of the issue the run was initiated from, when it came
+   *  from an issue row. Never shapes the prompt or evidence. */
+  issue?: { reason: string; severity?: string };
   context: string;
   agent?: string; // backend CLI that drove this run ("claude"/"codex")
   profile?: ExecutionProfile;
@@ -189,6 +192,9 @@ export async function createRun(
     // otherwise hand back for this target. Inert for Radar's own backend, which
     // only ever continues an in-flight run — and that one is never bypassed.
     fresh?: boolean;
+    // Display identity of the initiating issue; echoed back on RunSummary so
+    // the header can say which symptom the user clicked Investigate on.
+    issue?: { reason: string; severity?: string };
   },
   opts?: {
     agent?: string;
@@ -207,6 +213,7 @@ export async function createRun(
       namespace: target.namespace,
       name: target.name,
       issueId: target.issueId,
+      issue: target.issue,
       fresh: target.fresh,
       agent: opts?.agent,
       profile: opts?.profile,

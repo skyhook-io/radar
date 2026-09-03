@@ -22,6 +22,7 @@ import {
   investigationInteractionsBlocked,
   investigationIsReadOnly,
   investigationPaneCenteredScrollTop,
+  investigationFindingsNudge,
 } from "./InvestigationView";
 
 describe("investigation terminal presentation", () => {
@@ -580,5 +581,53 @@ describe("investigation action gating", () => {
         localApplyRequestPending: true,
       }),
     ).toBe(true);
+  });
+});
+
+describe("investigationFindingsNudge", () => {
+  it("points a transcript reader at Findings only when something is compiled", () => {
+    expect(
+      investigationFindingsNudge({
+        running: true,
+        hasAssessment: false,
+        evidenceCount: 0,
+      }),
+    ).toBeNull();
+    expect(
+      investigationFindingsNudge({
+        running: true,
+        hasAssessment: false,
+        evidenceCount: 3,
+      }),
+    ).toBe("3 evidence items collected so far");
+    expect(
+      investigationFindingsNudge({
+        running: false,
+        hasAssessment: true,
+        evidenceCount: 1,
+      }),
+    ).toBe("Assessment and 1 evidence item ready");
+    expect(
+      investigationFindingsNudge({
+        running: false,
+        hasAssessment: true,
+        evidenceCount: 0,
+      }),
+    ).toBe("Assessment ready");
+    // An ended-early run keeps its preserved evidence reachable.
+    expect(
+      investigationFindingsNudge({
+        running: false,
+        hasAssessment: false,
+        evidenceCount: 2,
+      }),
+    ).toBe("2 evidence items captured");
+    expect(
+      investigationFindingsNudge({
+        running: false,
+        hasAssessment: false,
+        evidenceCount: 0,
+      }),
+    ).toBeNull();
   });
 });

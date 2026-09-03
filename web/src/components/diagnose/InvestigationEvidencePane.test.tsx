@@ -59,8 +59,8 @@ function project(
 function render(
   projection: InvestigationEvidenceProjection,
   collecting = false,
-  afterMaterialEvidence?: string,
   rootCauseEvidence?: InvestigationRootCauseEvidenceResolution,
+  onOpenResource?: (ref: unknown) => void,
 ): string {
   return renderToStaticMarkup(
     <InvestigationEvidencePane
@@ -69,7 +69,7 @@ function render(
       collecting={collecting}
       animateGroupIds={new Set()}
       onViewSource={onViewSource}
-      afterMaterialEvidence={afterMaterialEvidence}
+      onOpenResource={onOpenResource}
     />,
   );
 }
@@ -147,7 +147,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     const originalGroupId = resolution.links[0].originalGroupId!;
     const citedSnapshotId = resolution.links[0].group!.id;
     const before = render(projection);
-    const html = render(projection, false, undefined, resolution);
+    const html = render(projection, false, resolution);
     const anchor = `id="${investigationEvidenceSourceDomId(
       resolution.links[0].source.id,
     )}"`;
@@ -196,7 +196,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
       { status: "linked", refs: [ref] },
       0,
     );
-    const html = render(projection, false, undefined, resolution);
+    const html = render(projection, false, resolution);
     const citedSource = projection.sources.find(
       (source) => source.stepId === "issues-cited",
     )!;
@@ -244,7 +244,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
       { status: "linked", refs: [ref] },
       0,
     );
-    const html = render(projection, false, undefined, resolution);
+    const html = render(projection, false, resolution);
 
     expect(html).toContain("Query Prometheus");
     expect(html).toContain(
@@ -270,7 +270,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
       0,
     );
     const source = resolution.links[0].source;
-    const html = render(projection, false, undefined, resolution);
+    const html = render(projection, false, resolution);
     const anchor = `id="${investigationEvidenceSourceDomId(source.id)}"`;
 
     expect(resolution.links[0].group).toBeUndefined();
@@ -280,7 +280,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     );
     expect(html).toContain("Evidence coverage limited");
     expect(html).toContain(
-      "did not match its current structured evidence contract",
+      "result into an evidence card",
     );
     expect(html.match(new RegExp(anchor, "g"))).toHaveLength(1);
   });
@@ -328,11 +328,11 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
         metadata: { namespace: "shop", name: "api" },
       }),
     );
-    const missing = render(projection, false, undefined, {
+    const missing = render(projection, false, {
       status: "missing",
       links: [],
     });
-    const invalid = render(projection, false, undefined, {
+    const invalid = render(projection, false, {
       status: "invalid",
       links: [],
     });
@@ -340,6 +340,73 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     expect(missing).toContain("Assessment is not linked to specific checks");
     expect(invalid).toContain("Cited checks could not be validated");
     expect(invalid).toContain("did not promote those references as evidence");
+  });
+
+  it("demotes uncited key evidence to a closed disclosure once the assessment is linked", () => {
+    const ref = evidenceRef("a", "b");
+    const projection = project(
+      tool(
+        "issues-cited",
+        "issues",
+        { issues: [criticalIssue], total: 1, total_matched: 1 },
+        { evidenceRef: ref },
+      ),
+      tool("issues-other", "issues", {
+        issues: [
+          {
+            ...criticalIssue,
+            id: "issue-api-oom",
+            category: "oom",
+            reason: "OOMKilled",
+            message: "The API container ran out of memory.",
+          },
+        ],
+        total: 1,
+        total_matched: 1,
+      }),
+    );
+    const resolution = resolveInvestigationRootCauseEvidence(
+      projection,
+      { status: "linked", refs: [ref] },
+      0,
+    );
+
+    const before = render(projection);
+    expect(before).toContain('id="investigation-key-evidence-heading"');
+
+    const linked = render(projection, false, resolution);
+    expect(linked).not.toContain('id="investigation-key-evidence-heading"');
+    expect(linked).toContain('aria-controls="investigation-more-key-evidence"');
+    expect(linked).toContain(
+      "Failure signals Radar captured that the assessment did not cite",
+    );
+    // The reveal contract must open that disclosure for any demoted key group.
+    const uncited = projection.sources.find(
+      (source) => source.stepId === "issues-other",
+    )!;
+    expect(
+      investigationEvidenceRevealCollection(projection, uncited.id, true),
+    ).toBe("more-key");
+    expect(
+      investigationEvidenceRevealCollection(projection, uncited.id),
+    ).toBeUndefined();
+  });
+
+  it("offers open-in-Radar navigation only when the host wires it and the subject is unambiguous", () => {
+    const projection = project(
+      tool("issues-nav", "issues", {
+        issues: [criticalIssue],
+        total: 1,
+        total_matched: 1,
+      }),
+    );
+    const withoutHandler = render(projection);
+    expect(withoutHandler).not.toContain("Open Deployment shop/api in Radar");
+
+    const withHandler = render(projection, false, undefined, () => {});
+    expect(withHandler).toContain(
+      "Open Deployment shop/api in Radar",
+    );
   });
 
   it("waits for disclosure motion only when reduced motion is not requested", () => {
@@ -689,12 +756,8 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     );
     expect(html).toContain("related resource");
 
-    const ordered = render(projection, false, "NEXT_STEP_MARKER");
-    expect(ordered.indexOf("Key evidence")).toBeLessThan(
-      ordered.indexOf("Evidence coverage limited"),
-    );
-    expect(ordered.indexOf("Evidence coverage limited")).toBeLessThan(
-      ordered.indexOf("NEXT_STEP_MARKER"),
+    expect(html.indexOf("Key evidence")).toBeLessThan(
+      html.indexOf("Evidence coverage limited"),
     );
   });
 

@@ -1,4 +1,10 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { clsx } from "clsx";
 import {
   Activity,
@@ -15,6 +21,7 @@ import {
   ScrollText,
   SearchCheck,
   ShieldAlert,
+  SquareArrowOutUpRight,
 } from "lucide-react";
 import {
   Badge,
@@ -30,9 +37,11 @@ import {
   stripAnsi,
 } from "@skyhook-io/k8s-ui";
 
+import type { DiagnosisResourceRef } from "./diagnoseEvidenceTypes";
 import {
   investigationEvidenceGroupWithoutSources,
   investigationEvidenceSourceDomId,
+  investigationEvidenceSubjectRef,
   type InvestigationEvidenceData,
   type InvestigationEvidenceGroup,
   type InvestigationEvidenceLimitation,
@@ -54,6 +63,14 @@ export const INVESTIGATION_DISCLOSURE_SETTLE_MS = 220;
 export const VISIBLE_ADDITIONAL_KEY_EVIDENCE = 2;
 export const VISIBLE_SUPPORTING_EVIDENCE = 4;
 export const VISIBLE_LOG_EVIDENCE_LINES = 12;
+
+// Card-level "open this resource in Radar" navigation. A context (not prop
+// threading) because every collection wrapper between the pane and its cards
+// would otherwise carry the handler verbatim. Absent handler = no links
+// render, which is also the embedding-host default.
+const EvidenceNavigationContext = createContext<{
+  onOpenResource?: (ref: DiagnosisResourceRef) => void;
+}>({});
 
 function evidenceTypePrefersFullRow(
   type: InvestigationEvidenceData["type"],
@@ -196,6 +213,9 @@ function useDisclosureReveal<T extends HTMLElement>() {
 export function investigationEvidenceRevealCollection(
   projection: InvestigationEvidenceProjection,
   sourceId: string,
+  // With a cited assessment the whole key/supporting tiers render demoted
+  // behind their disclosures, so every member needs its collection opened.
+  citedLinked = false,
 ):
   | "more-key"
   | "more-supporting"
@@ -214,7 +234,8 @@ export function investigationEvidenceRevealCollection(
       const keyIndex = projection.groups
         .filter((group) => !group.historical && group.latest.tier === "key")
         .findIndex((group) => group.id === primaryGroup.id);
-      if (keyIndex > VISIBLE_ADDITIONAL_KEY_EVIDENCE) return "more-key";
+      if (citedLinked || keyIndex > VISIBLE_ADDITIONAL_KEY_EVIDENCE)
+        return "more-key";
     }
     if (primaryGroup?.latest.tier === "supporting") {
       const supportingIndex = projection.groups
@@ -222,7 +243,7 @@ export function investigationEvidenceRevealCollection(
           (group) => !group.historical && group.latest.tier === "supporting",
         )
         .findIndex((group) => group.id === primaryGroup.id);
-      if (supportingIndex >= VISIBLE_SUPPORTING_EVIDENCE)
+      if (citedLinked || supportingIndex >= VISIBLE_SUPPORTING_EVIDENCE)
         return "more-supporting";
     }
     // One bundled tool call can fan out into several semantic groups. Its sole
@@ -246,7 +267,7 @@ export function InvestigationEvidencePane({
   collecting,
   animateGroupIds,
   onViewSource,
-  afterMaterialEvidence,
+  onOpenResource,
   revealRequest,
   onRevealReady,
 }: {
@@ -256,8 +277,8 @@ export function InvestigationEvidencePane({
   collecting: boolean;
   animateGroupIds: ReadonlySet<string>;
   onViewSource: (sourceId: string) => void;
-  /** Keeps the workspace story ordered: assessment → key evidence/limits → action. */
-  afterMaterialEvidence?: ReactNode;
+  /** Opens an evidence card's subject resource in Radar; absent = no links. */
+  onOpenResource?: (ref: DiagnosisResourceRef) => void;
   /** Explicit Activity → Findings navigation, including repeat clicks. */
   revealRequest?: { sourceId: string; requestId: number };
   onRevealReady?: (sourceId: string) => void;
@@ -334,12 +355,26 @@ export function InvestigationEvidencePane({
   const overflowSupportingGroups = supportingGroups.slice(
     VISIBLE_SUPPORTING_EVIDENCE,
   );
+  const citedLinked = rootCauseEvidence?.status === "linked";
+  // Landing a cited assessment is the moment the pane snaps to focus mode:
+  // disclosures opened while evidence was still collecting must not carry over
+  // as opened demoted tiers. Runs before the reveal effect so an explicit
+  // navigation arriving in the same commit still wins.
+  const prevCitedLinkedRef = useRef(citedLinked);
+  useLayoutEffect(() => {
+    if (citedLinked && !prevCitedLinkedRef.current) {
+      setMoreKeyOpen(false);
+      setMoreSupportingOpen(false);
+    }
+    prevCitedLinkedRef.current = citedLinked;
+  }, [citedLinked]);
   const revealCollection = revealRequest
     ? promotedSourceIds.has(revealRequest.sourceId)
       ? undefined
       : investigationEvidenceRevealCollection(
           { ...projection, groups: ordinaryGroups },
           revealRequest.sourceId,
+          citedLinked,
         )
     : undefined;
 
@@ -414,6 +449,7 @@ export function InvestigationEvidencePane({
   ]);
 
   return (
+    <EvidenceNavigationContext.Provider value={{ onOpenResource }}>
     <section
       aria-labelledby="investigation-radar-evidence"
       className="@container/evidence space-y-3"
@@ -467,24 +503,42 @@ export function InvestigationEvidencePane({
           </div>
         ) : null}
 
-        <EvidenceTier
-          headingId="investigation-key-evidence-heading"
-          tier="key"
-          title="Key evidence"
-          groups={visibleKeyGroups}
-          animateGroupIds={animateGroupIds}
-          onViewSource={onViewSource}
-        />
-        <CollapsedEvidenceCollection
-          id="investigation-more-key-evidence"
-          title="More key evidence"
-          description="Additional failure signals"
-          groups={overflowKeyGroups}
-          animateGroupIds={animateGroupIds}
-          onViewSource={onViewSource}
-          open={moreKeyOpen}
-          onOpenChange={setMoreKeyOpen}
-        />
+        {citedLinked ? (
+          // A cited assessment already carries the decisive checks above, so
+          // the uncited tiers demote to closed disclosures: the first
+          // screenful stays what/why/action, and depth is one click away.
+          <CollapsedEvidenceCollection
+            id="investigation-more-key-evidence"
+            title="Key evidence"
+            description="Failure signals Radar captured that the assessment did not cite"
+            groups={keyGroups}
+            animateGroupIds={animateGroupIds}
+            onViewSource={onViewSource}
+            open={moreKeyOpen}
+            onOpenChange={setMoreKeyOpen}
+          />
+        ) : (
+          <>
+            <EvidenceTier
+              headingId="investigation-key-evidence-heading"
+              tier="key"
+              title="Key evidence"
+              groups={visibleKeyGroups}
+              animateGroupIds={animateGroupIds}
+              onViewSource={onViewSource}
+            />
+            <CollapsedEvidenceCollection
+              id="investigation-more-key-evidence"
+              title="More key evidence"
+              description="Additional failure signals"
+              groups={overflowKeyGroups}
+              animateGroupIds={animateGroupIds}
+              onViewSource={onViewSource}
+              open={moreKeyOpen}
+              onOpenChange={setMoreKeyOpen}
+            />
+          </>
+        )}
 
         {projection.limitations.length > 0 ? (
           <CoverageStrip
@@ -504,27 +558,40 @@ export function InvestigationEvidencePane({
           />
         ) : null}
 
-        {afterMaterialEvidence}
-
-        <EvidenceTier
-          headingId="investigation-supporting-evidence-heading"
-          tier="supporting"
-          title="Supporting evidence"
-          description="State and signals that support the assessment without proving the cause alone."
-          groups={visibleSupportingGroups}
-          animateGroupIds={animateGroupIds}
-          onViewSource={onViewSource}
-        />
-        <CollapsedEvidenceCollection
-          id="investigation-more-supporting-evidence"
-          title="More supporting evidence"
-          description="Additional corroborating signals"
-          groups={overflowSupportingGroups}
-          animateGroupIds={animateGroupIds}
-          onViewSource={onViewSource}
-          open={moreSupportingOpen}
-          onOpenChange={setMoreSupportingOpen}
-        />
+        {citedLinked ? (
+          <CollapsedEvidenceCollection
+            id="investigation-more-supporting-evidence"
+            title="Supporting evidence"
+            description="State and signals that support the assessment without proving the cause alone"
+            groups={supportingGroups}
+            animateGroupIds={animateGroupIds}
+            onViewSource={onViewSource}
+            open={moreSupportingOpen}
+            onOpenChange={setMoreSupportingOpen}
+          />
+        ) : (
+          <>
+            <EvidenceTier
+              headingId="investigation-supporting-evidence-heading"
+              tier="supporting"
+              title="Supporting evidence"
+              description="State and signals that support the assessment without proving the cause alone."
+              groups={visibleSupportingGroups}
+              animateGroupIds={animateGroupIds}
+              onViewSource={onViewSource}
+            />
+            <CollapsedEvidenceCollection
+              id="investigation-more-supporting-evidence"
+              title="More supporting evidence"
+              description="Additional corroborating signals"
+              groups={overflowSupportingGroups}
+              animateGroupIds={animateGroupIds}
+              onViewSource={onViewSource}
+              open={moreSupportingOpen}
+              onOpenChange={setMoreSupportingOpen}
+            />
+          </>
+        )}
 
         <CheckedReceipts
           groups={tiers.get("checked")!}
@@ -553,6 +620,7 @@ export function InvestigationEvidencePane({
         />
       </div>
     </section>
+    </EvidenceNavigationContext.Provider>
   );
 }
 
@@ -1118,6 +1186,10 @@ function EvidenceCard({
           </div>
         )}
         <div className="flex shrink-0 items-center pr-1.5">
+          <OpenResourceButton
+            data={observation.data}
+            title={observation.title}
+          />
           <SourceButton
             label={observation.source.tool}
             ariaLabel={`View Activity source for ${observation.title}`}
@@ -2161,6 +2233,40 @@ function EvidenceIcon({
         aria-hidden
       />
     </span>
+  );
+}
+
+// The card's outward hop: evidence flows back into Radar's own resource views
+// instead of dead-ending in the pane. Renders nothing when the evidence has no
+// unambiguous subject or the host wired no navigation.
+function OpenResourceButton({
+  data,
+  title,
+}: {
+  data: InvestigationEvidenceData;
+  title: string;
+}) {
+  const { onOpenResource } = useContext(EvidenceNavigationContext);
+  if (!onOpenResource) return null;
+  const ref = investigationEvidenceSubjectRef(data);
+  if (!ref) return null;
+  const label = `${ref.kind} ${ref.namespace ? `${ref.namespace}/` : ""}${ref.name}`;
+  return (
+    <Tooltip
+      content={`Open ${label} in Radar`}
+      delay={100}
+      position="left"
+      wrapperClassName="flex shrink-0"
+    >
+      <button
+        type="button"
+        aria-label={`Open ${label} in Radar (evidence: ${title})`}
+        onClick={() => onOpenResource(ref)}
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-theme-text-tertiary hover:bg-theme-hover hover:text-accent-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+      >
+        <SquareArrowOutUpRight className="h-3.5 w-3.5" aria-hidden />
+      </button>
+    </Tooltip>
   );
 }
 

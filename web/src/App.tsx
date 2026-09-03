@@ -322,7 +322,23 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // The AI panel is an absolute slot in the body frame (the column under the header):
   // it reserves a right gutter on the CONTENT only, so the navbar + nav rail stay
   // static. contentGutter is the docked panel width (0 when closed/overlay/maximized).
-  const { open: diagnoseOpen, contentGutter } = useDiagnoseLayout()
+  const { open: diagnoseOpen, contentGutter, maximized: diagnoseMaximized, setMaximized: setDiagnoseMaximized } = useDiagnoseLayout()
+  // Navigating anywhere (sidebar, search palette, breadcrumbs) means the user
+  // wants to see that page — a maximized investigation covering it would make
+  // the click a silent no-op, so it collapses back to the docked panel. Keyed
+  // on pathname, not location.key, so drawer/filter query-param churn under
+  // the panel never collapses it; skip the mount pass so a restored maximized
+  // deep link isn't undone by its own first render.
+  const diagnoseMaximizedRef = useRef(diagnoseMaximized)
+  diagnoseMaximizedRef.current = diagnoseMaximized
+  const diagnosePathRef = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    const prev = diagnosePathRef.current
+    diagnosePathRef.current = location.pathname
+    if (prev !== undefined && prev !== location.pathname && diagnoseMaximizedRef.current) {
+      setDiagnoseMaximized(false)
+    }
+  }, [location.pathname, setDiagnoseMaximized])
   // Hand off to a host-owned URL. The host's `onHostNavigate` (Radar Cloud's
   // cross-tree swap) navigates same-document so the chrome morphs instead of
   // cold-booting; without it we fall back to a hard `window.location` nav.
@@ -2436,7 +2452,28 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           below the header and right of the nav rail, sharing the frame with the
           drawers above. Docked = right slot (pushes content via contentGutter);
           maximized = fills the frame. */}
-      {diagnoseOpen && <DiagnoseSurface topInset={chromeless ? 0 : APP_HEADER_HEIGHT} />}
+      {diagnoseOpen && (
+        <DiagnoseSurface
+          topInset={chromeless ? 0 : APP_HEADER_HEIGHT}
+          onOpenResource={(ref) => {
+            const resource = {
+              kind: ref.kind,
+              group: ref.group,
+              namespace: ref.namespace ?? '',
+              name: ref.name,
+            }
+            // Workload kinds get their full detail page, which stays visible
+            // beside the docked panel; other kinds reuse the finding→resource
+            // routing shared with Issues (GitOps/Helm details, drawer deep link).
+            const path = relatedResourcePath(resource)
+            if (!path.startsWith('/resources/')) {
+              navigate(path)
+              return
+            }
+            navigateFromIssue(resource)
+          }}
+        />
+      )}
 
       {/* Port Forward floating panel (indicator lives in header) */}
       <PortForwardPanel />
