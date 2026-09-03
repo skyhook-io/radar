@@ -693,6 +693,14 @@ export function ResourceRendererDispatch({
     && !!data?.apiVersion
     && !data.apiVersion.startsWith('batch/')
 
+  // `machines` and `machinesets` are in KNOWN_KINDS, so a foreign CRD sharing
+  // the plural (e.g. `extension.cluster.x-k8s.io/v1`) needs an explicit
+  // fall-through — otherwise the strict group guard on the CAPI render line
+  // matches nothing and the drawer renders blank.
+  const capiCollisionFallthrough =
+    (kind === 'machines' || kind === 'machinesets')
+    && !isApiGroup(data?.apiVersion, 'cluster.x-k8s.io')
+
   const isKnownKind = KNOWN_KINDS.has(kind) || isCrossplaneMR || isCrossplaneClaim || isCrossplaneXR
 
   const PodComp = rendererOverrides?.PodRenderer ?? PodRenderer
@@ -862,15 +870,15 @@ export function ResourceRendererDispatch({
         {kind === 'scheduledbackups' && isApiGroup(data?.apiVersion, CNPG_GROUP) && <CNPGScheduledBackupRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'poolers' && isApiGroup(data?.apiVersion, CNPG_GROUP) && <CNPGPoolerRenderer data={data} onNavigate={onNavigate} />}
         {/* Cluster API (CAPI) */}
-        {'topology.cluster.x-k8s.io/owned' in (data?.metadata?.labels ?? {}) && data?.apiVersion?.includes('cluster.x-k8s.io') && (
+        {'topology.cluster.x-k8s.io/owned' in (data?.metadata?.labels ?? {}) && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io') && (
           <AlertBanner
             variant="warning"
             title="Topology-controlled — this resource is managed by ClusterClass. Manual changes will be reconciled back."
           />
         )}
-        {kind === 'machines' && data?.apiVersion?.includes('cluster.x-k8s.io') && <CAPIMachineRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'machines' && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io') && <CAPIMachineRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'machinedeployments' && <CAPIMachineDeploymentRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'machinesets' && data?.apiVersion?.includes('cluster.x-k8s.io') && <CAPIMachineSetRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'machinesets' && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io') && <CAPIMachineSetRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'machinepools' && <CAPIMachinePoolRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'kubeadmcontrolplanes' && <CAPIKubeadmControlPlaneRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'clusterclasses' && <CAPIClusterClassRenderer data={data} />}
@@ -956,7 +964,7 @@ export function ResourceRendererDispatch({
             for known-plural collisions where no apiVersion-gated renderer
             matched (e.g. a Knative Configuration sharing the `configurations`
             plural with Crossplane Configuration). */}
-        {(!isKnownKind || crossplaneCollisionFallthrough || kyvernoCollisionFallthrough || veleroCollisionFallthrough || groupGatedFallthrough || calicoCollisionFallthrough || nonCoreJobFallthrough) && <GenericRenderer data={data} />}
+        {(!isKnownKind || crossplaneCollisionFallthrough || kyvernoCollisionFallthrough || veleroCollisionFallthrough || groupGatedFallthrough || calicoCollisionFallthrough || nonCoreJobFallthrough || capiCollisionFallthrough) && <GenericRenderer data={data} />}
 
         {/* Common sections - can be disabled when parent handles them separately */}
         {showCommonSections && (
@@ -1187,7 +1195,7 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
     // Third-party `clusters` CRDs (KubeBlocks, Redis/Valkey) fall through to the
     // generic handling below instead of getting a fabricated PostgreSQL status.
   }
-  if (k === 'machines' && data.apiVersion?.includes('cluster.x-k8s.io')) return getMachineStatus(data)
+  if (k === 'machines' && isApiGroup(data.apiVersion, 'cluster.x-k8s.io')) return getMachineStatus(data)
   if (k === 'machinedeployments') return getMachineDeploymentStatus(data)
   if (k === 'machinesets') return getMachineSetStatus(data)
   if (k === 'machinepools') return getMachinePoolStatus(data)

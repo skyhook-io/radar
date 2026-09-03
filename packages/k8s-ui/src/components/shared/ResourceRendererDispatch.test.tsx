@@ -845,3 +845,97 @@ describe('GPU ecosystem status edge cases', () => {
     expect(pool?.text).toBe('Not referenced')
   })
 })
+
+// A foreign group ending in `cluster.x-k8s.io` (e.g. `extension.cluster.x-k8s.io`)
+// used to pass a substring guard and inherit CAPI rendering, status, or the
+// ClusterClass warning. The three switches are independent — the renderer, the
+// status calculation, and the topology-controlled banner — and each one has to
+// use exact-group matching on its own.
+describe('CAPI group-guard collisions — extension.cluster.x-k8s.io', () => {
+  const FOREIGN_GROUP = 'extension.cluster.x-k8s.io/v1'
+
+  it('falls a foreign clusters CRD through to the generic renderer', () => {
+    const html = renderCollidingKind('clusters', FOREIGN_GROUP)
+    expect(html).toContain(COLLISION_PROBE)
+    expect(html).not.toContain('Cluster Not Ready')
+    expect(html).not.toContain('Cluster Paused')
+  })
+
+  it('gives a foreign clusters CRD generic status, not CAPI status', () => {
+    // CAPI's getClusterStatus reads status.phase and status.conditions; the
+    // generic path echoes the phase verbatim without CAPI's tone mapping.
+    const s = getResourceStatus('clusters', {
+      apiVersion: FOREIGN_GROUP,
+      status: { phase: 'Provisioned' },
+    })
+    // The generic getter surfaces the raw phase text.
+    expect(s?.text).toBe('Provisioned')
+  })
+
+  it('renders a foreign machines CRD through the generic renderer', () => {
+    const html = renderKind('machines', {
+      apiVersion: FOREIGN_GROUP,
+      kind: 'Machine',
+      metadata: { name: 'm', namespace: 'default' },
+      spec: { collisionProbe: COLLISION_PROBE },
+      status: {},
+    }, 'default')
+    expect(html).toContain(COLLISION_PROBE)
+    expect(html).not.toContain('Machine Not Ready')
+    expect(html).not.toContain('Infrastructure')
+  })
+
+  it('gives a foreign machines CRD no CAPI status', () => {
+    const s = getResourceStatus('machines', {
+      apiVersion: FOREIGN_GROUP,
+      status: { phase: 'Running' },
+    })
+    // CAPI would map to a coloured badge; the generic path echoes the phase.
+    expect(s?.text).toBe('Running')
+  })
+
+  it('renders a foreign machinesets CRD through the generic renderer', () => {
+    const html = renderKind('machinesets', {
+      apiVersion: FOREIGN_GROUP,
+      kind: 'MachineSet',
+      metadata: { name: 'ms', namespace: 'default' },
+      spec: { collisionProbe: COLLISION_PROBE, replicas: 3 },
+      status: {},
+    }, 'default')
+    expect(html).toContain(COLLISION_PROBE)
+    expect(html).not.toContain('MachineSet Not Ready')
+    expect(html).not.toContain('Machine Template')
+  })
+
+  it('does not warn "Topology-controlled" for a foreign CRD carrying the CAPI ownership label', () => {
+    // The label key is a real CAPI label, but the resource is not from CAPI.
+    // A substring guard would still show the ClusterClass warning.
+    const html = renderKind('foreignkind', {
+      apiVersion: FOREIGN_GROUP,
+      kind: 'ForeignThing',
+      metadata: {
+        name: 'thing',
+        namespace: 'default',
+        labels: { 'topology.cluster.x-k8s.io/owned': '' },
+      },
+      spec: { collisionProbe: COLLISION_PROBE },
+    }, 'default')
+    expect(html).not.toContain('Topology-controlled')
+    expect(html).not.toContain('ClusterClass')
+  })
+
+  it('still shows "Topology-controlled" for a real CAPI resource', () => {
+    const html = renderKind('machines', {
+      apiVersion: 'cluster.x-k8s.io/v1beta1',
+      kind: 'Machine',
+      metadata: {
+        name: 'm',
+        namespace: 'default',
+        labels: { 'topology.cluster.x-k8s.io/owned': '' },
+      },
+      spec: {},
+      status: {},
+    }, 'default')
+    expect(html).toContain('Topology-controlled')
+  })
+})
