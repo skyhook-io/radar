@@ -46,8 +46,8 @@ func TestListAgents_Eligible(t *testing.T) {
 }
 
 // TestDiagnoseConsentOriginGate pins the CSRF guard on the process-spawning
-// diagnose POSTs at the handler layer (regression for RAD-450). The guard must
-// admit a genuinely same-origin browser POST even on a non-loopback listener
+// diagnose POSTs at the handler layer: the guard must admit a genuinely
+// same-origin browser POST even on a non-loopback listener
 // (Origin == the authority the browser actually connected to) and still reject
 // a foreign origin. We assert only whether the origin gate blocked the request
 // (403) — a request that clears the gate falls through to later checks whose

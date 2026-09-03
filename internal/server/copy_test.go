@@ -510,8 +510,8 @@ func TestPodFileSaveRejectsCrossOriginRequests(t *testing.T) {
 	}}
 
 	// host is the authority the browser connected to (r.Host). A same-origin
-	// POST must pass the CSRF gate even when that authority is not loopback
-	// (RAD-450); a foreign or loopback-lookalike origin must still be rejected.
+	// POST must pass the CSRF gate even when that authority is not loopback; a
+	// foreign or loopback-lookalike origin must still be rejected.
 	const host = "192.168.1.100:9280"
 	cases := []struct {
 		origin     string
