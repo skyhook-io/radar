@@ -6,6 +6,7 @@ import {
   investigationEvidenceStepIdsByTurn,
   investigationEvidenceSourceDomId,
   investigationEvidenceSourceId,
+  investigationEvidenceSubjectRef,
   projectInvestigationEvidence,
   resolveInvestigationRootCauseEvidence,
   type InvestigationEvidenceGroup,
@@ -162,6 +163,123 @@ describe("investigation evidence source identity", () => {
     expect(investigationEvidenceSourceId(0, "call-123")).toBe(
       "turn-0-step-call-123",
     );
+  });
+});
+
+describe("investigationEvidenceSubjectRef", () => {
+  it("uses resource identities stated by the captured evidence", () => {
+    expect(
+      investigationEvidenceSubjectRef({
+        type: "resource",
+        resource: {
+          apiVersion: "apps/v1",
+          kind: "Deployment",
+          metadata: { namespace: "shop", name: "api" },
+        },
+        warnings: [],
+      }),
+    ).toEqual({
+      kind: "Deployment",
+      group: "apps",
+      namespace: "shop",
+      name: "api",
+    });
+    expect(
+      investigationEvidenceSubjectRef({
+        type: "logs",
+        pod: "api-123",
+        container: "api",
+        namespace: "shop",
+        previous: false,
+        warnings: [],
+      }),
+    ).toEqual({ kind: "Pod", namespace: "shop", name: "api-123" });
+    expect(
+      investigationEvidenceSubjectRef({
+        type: "relationships",
+        root: { kind: "Service", namespace: "shop", name: "api" },
+        nodes: [],
+        edges: [],
+        truncated: false,
+      }),
+    ).toEqual({ kind: "Service", namespace: "shop", name: "api" });
+  });
+
+  it("does not invent a destination for ambiguous pod evidence", () => {
+    expect(
+      investigationEvidenceSubjectRef({
+        type: "logs",
+        pod: "api-123",
+        container: "api",
+        previous: false,
+        warnings: [],
+      }),
+    ).toBeUndefined();
+    expect(
+      investigationEvidenceSubjectRef({
+        type: "crash",
+        crash: {
+          pods: ["api-1", "api-2"],
+          container: "api",
+          state: "waiting",
+          exitCode: 1,
+          logLine: "FATAL",
+          logSource: "current",
+          logLineSelection: "fatal_pattern",
+        },
+        namespace: "shop",
+      }),
+    ).toBeUndefined();
+    expect(
+      investigationEvidenceSubjectRef({
+        type: "receipt",
+        checked: "issues",
+        scope: "shop",
+        message: "No issues found",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("carries the namespace from a pod-logs query into its evidence subject", () => {
+    const withNamespace = project([
+      tool(
+        "logs",
+        "get_pod_logs",
+        {
+          lines: ["FATAL database unavailable"],
+          totalLines: 1,
+          matchedLines: 1,
+          fallback: false,
+        },
+        {
+          summary: JSON.stringify({
+            namespace: "shop",
+            name: "api-123",
+            container: "api",
+          }),
+        },
+      ),
+    ]);
+    const withoutNamespace = project([
+      tool(
+        "logs",
+        "get_pod_logs",
+        {
+          lines: ["FATAL database unavailable"],
+          totalLines: 1,
+          matchedLines: 1,
+          fallback: false,
+        },
+        { summary: JSON.stringify({ name: "api-123", container: "api" }) },
+      ),
+    ]);
+
+    expect(
+      investigationEvidenceSubjectRef(withNamespace.groups[0].latest.data),
+    ).toEqual({ kind: "Pod", namespace: "shop", name: "api-123" });
+    expect(
+      investigationEvidenceSubjectRef(withoutNamespace.groups[0].latest.data),
+    ).toBeUndefined();
   });
 });
 
@@ -2116,7 +2234,7 @@ describe("strict evidence adapters", () => {
     expect(result.groups).toHaveLength(0);
     expect(result.limitations).toHaveLength(1);
     expect(result.limitations[0].message).toContain(
-      "current structured evidence contract",
+      "organize this check's result into an evidence card",
     );
   });
 

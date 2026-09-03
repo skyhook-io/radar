@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   DIAGNOSE_SURFACE_FRAME_CLASS,
   MAXIMIZED_COMPACT_HISTORY_VISIBILITY_CLASS,
@@ -9,6 +9,7 @@ import {
   canStartNewInvestigation,
   investigationBreadcrumbVisibilityClass,
   investigationHeaderPresentation,
+  openInvestigationEvidenceResource,
 } from "./DiagnoseSurface";
 import type { RunSummary } from "../../api/diagnose";
 
@@ -81,6 +82,24 @@ describe("canStartNewInvestigation", () => {
 });
 
 describe("investigation history navigation", () => {
+  it("restores the docked surface before opening an evidence resource", () => {
+    const events: string[] = [];
+    const onOpenResource = vi.fn(() => events.push("open"));
+    const setMaximized = vi.fn(() => events.push("dock"));
+    const ref = {
+      kind: "Deployment",
+      group: "apps",
+      namespace: "shop",
+      name: "api",
+    };
+
+    openInvestigationEvidenceResource(ref, onOpenResource, setMaximized);
+
+    expect(events).toEqual(["dock", "open"]);
+    expect(setMaximized).toHaveBeenCalledWith(false);
+    expect(onOpenResource).toHaveBeenCalledWith(ref);
+  });
+
   it("keeps document overflow out of the bounded Diagnose frame", () => {
     expect(DIAGNOSE_SURFACE_FRAME_CLASS).toContain("absolute");
     expect(DIAGNOSE_SURFACE_FRAME_CLASS).toContain("min-h-0");

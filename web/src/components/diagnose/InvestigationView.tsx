@@ -54,6 +54,7 @@ import {
   type InvestigationEvidenceTurn,
 } from "./investigationEvidence";
 import { InvestigationEvidencePane } from "./InvestigationEvidencePane";
+import type { DiagnosisResourceRef } from "./diagnoseEvidenceTypes";
 import { formatInvestigationTarget } from "./target";
 
 const RECHECK_QUESTION =
@@ -459,10 +460,13 @@ export function InvestigationView({
   run,
   agentLabel,
   maximized,
+  onOpenResource,
 }: {
   run: RunSummary;
   agentLabel: string;
   maximized: boolean;
+  /** Opens an unambiguous evidence subject in Radar's native resource views. */
+  onOpenResource?: (ref: DiagnosisResourceRef) => void;
 }) {
   const { kind, namespace, name } = run;
   // Apply is off for hosted agents (read-only server-side). Keyed on the selected
@@ -1408,6 +1412,9 @@ export function InvestigationView({
   const currentKeyFindingCount = projection.groups.filter(
     (group) => !group.historical && group.latest.tier === "key",
   ).length;
+  const currentEvidenceCount = projection.groups.filter(
+    (group) => !group.historical,
+  ).length;
   const currentAssessmentCoverageLimited = investigationEvidenceCoverageLimited(
     currentAssessmentProjection,
   );
@@ -1438,7 +1445,15 @@ export function InvestigationView({
   const selectPane = (pane: "activity" | "evidence") => {
     paneSelectionTouchedRef.current = true;
     setNarrowPane(pane);
-    if (pane === "evidence") setUnreadEvidence(false);
+    if (pane === "evidence") {
+      setUnreadEvidence(false);
+      setEvidenceUpdateAvailable(false);
+      // An ordinary switch starts at the beginning of the compiled story.
+      // Source links use viewEvidenceSource instead and retain exact-card focus.
+      requestAnimationFrame(() => {
+        evidenceScrollRef.current?.scrollTo({ top: 0 });
+      });
+    }
   };
   const onTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     let pane: "activity" | "evidence" | undefined;
@@ -1591,12 +1606,22 @@ export function InvestigationView({
         >
           <Files className="h-3.5 w-3.5" />
           Findings
+          {currentEvidenceCount > 0 ? (
+            <span
+              aria-label={`${currentEvidenceCount} evidence ${currentEvidenceCount === 1 ? "item" : "items"}`}
+              className={`inline-flex h-4 min-w-5 items-center justify-center rounded-full px-1 font-mono text-[10px] leading-none transition-colors ${
+                unreadEvidence && narrowPane !== "evidence"
+                  ? "bg-accent/15 text-accent-text"
+                  : "bg-theme-elevated text-theme-text-tertiary"
+              }`}
+            >
+              {currentEvidenceCount}
+            </span>
+          ) : unreadEvidence ? (
+            <span className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden />
+          ) : null}
           {unreadEvidence ? (
             <>
-              <span
-                className="absolute right-2 top-1.5 h-1.5 w-1.5 rounded-full bg-accent"
-                aria-hidden
-              />
               <span className="sr-only" role="status">
                 New evidence available
               </span>
@@ -1989,6 +2014,7 @@ export function InvestigationView({
                     collecting={busy || requestPending}
                     animateGroupIds={animateEvidenceGroupIds}
                     onViewSource={viewActivitySource}
+                    onOpenResource={stale ? undefined : onOpenResource}
                     revealRequest={evidenceRevealRequest}
                     onRevealReady={revealEvidenceSource}
                     afterMaterialEvidence={

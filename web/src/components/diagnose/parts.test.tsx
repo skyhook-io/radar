@@ -4,6 +4,7 @@ import {
   AgentControls,
   ConsentCard,
   ResultCard,
+  Timeline,
   TurnView,
   appendThinking,
   type Turn,
@@ -70,6 +71,50 @@ describe("appendThinking", () => {
         animate: true,
       },
     ]);
+  });
+});
+
+describe("Timeline reasoning density", () => {
+  const reasoning = {
+    kind: "thinking" as const,
+    text: "A long reasoning beat that may occupy several lines in the activity pane.",
+    animate: false,
+  };
+
+  it("clamps completed reasoning to two lines", () => {
+    const html = renderToStaticMarkup(
+      <Timeline items={[reasoning]} running={false} />,
+    );
+
+    expect(html).toContain("line-clamp-2");
+    expect(html).not.toContain("animate-transcript-enter");
+    expect(html).not.toContain("Show reasoning");
+  });
+
+  it("keeps the final live reasoning beat unclamped", () => {
+    const html = renderToStaticMarkup(<Timeline items={[reasoning]} running />);
+
+    expect(html).not.toContain("line-clamp-2");
+  });
+
+  it("clamps an earlier reasoning beat once a live tool follows it", () => {
+    const html = renderToStaticMarkup(
+      <Timeline
+        items={[
+          reasoning,
+          {
+            kind: "tool",
+            id: "tool-1",
+            tool: "get_resource",
+            status: "running",
+            animate: false,
+          },
+        ]}
+        running
+      />,
+    );
+
+    expect(html).toContain("line-clamp-2");
   });
 });
 

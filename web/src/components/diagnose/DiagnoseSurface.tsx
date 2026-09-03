@@ -3,7 +3,7 @@
 //  - expanded: a master-detail workspace that fills ONLY the content area (does
 //    not cover the left nav rail or top bar) — recent list on the left, the
 //    selected investigation/report on the right.
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Sparkles,
   X,
@@ -35,6 +35,7 @@ import { type RunSummary, type ExecutionProfile } from "../../api/diagnose";
 import { routePath } from "../../api/config";
 import { useCapabilitiesContext } from "../../contexts/CapabilitiesContext";
 import { formatInvestigationTarget } from "./target";
+import type { DiagnosisResourceRef } from "./diagnoseEvidenceTypes";
 
 function capWord(s: string): string {
   return s ? s[0].toUpperCase() + s.slice(1) : s;
@@ -308,7 +309,23 @@ function DiagnoseHeaderIdentity({
   );
 }
 
-export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
+export function openInvestigationEvidenceResource(
+  ref: DiagnosisResourceRef,
+  onOpenResource: (ref: DiagnosisResourceRef) => void,
+  setMaximized: (maximized: boolean) => void,
+) {
+  setMaximized(false);
+  onOpenResource(ref);
+}
+
+export function DiagnoseSurface({
+  topInset = 0,
+  onOpenResource,
+}: {
+  topInset?: number;
+  /** Resolves an evidence subject into the embedding Radar surface. */
+  onOpenResource?: (ref: DiagnosisResourceRef) => void;
+}) {
   const d = useDiagnose();
   // Injected settings action: undefined = Radar's own Settings dialog;
   // null = hide the gear + links.
@@ -325,6 +342,13 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
     panelBounds: { min: minW, max: maxW },
     panelWidthKey: widthKey,
   } = useDiagnoseLayout();
+  const openEvidenceResource = useCallback(
+    (ref: DiagnosisResourceRef) => {
+      if (!onOpenResource) return;
+      openInvestigationEvidenceResource(ref, onOpenResource, setMaximized);
+    },
+    [onOpenResource, setMaximized],
+  );
 
   const startResize = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -420,6 +444,7 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
       run={activeRun}
       agentLabel={activeAgentLabel}
       maximized={maximized}
+      onOpenResource={onOpenResource ? openEvidenceResource : undefined}
     />
   ) : d.activeRunId && !d.runsLoaded ? (
     // Deep-linked to a run before the list has ever loaded: show the load

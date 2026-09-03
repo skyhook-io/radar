@@ -20,6 +20,7 @@ import {
   type InvestigationRootCauseEvidenceResolution,
   type InvestigationEvidenceTimelineItem,
 } from "./investigationEvidence";
+import type { DiagnosisResourceRef } from "./diagnoseEvidenceTypes";
 
 const onViewSource = vi.fn();
 const target = {
@@ -61,6 +62,7 @@ function render(
   collecting = false,
   afterMaterialEvidence?: string,
   rootCauseEvidence?: InvestigationRootCauseEvidenceResolution,
+  onOpenResource?: (ref: DiagnosisResourceRef) => void,
 ): string {
   return renderToStaticMarkup(
     <InvestigationEvidencePane
@@ -69,6 +71,7 @@ function render(
       collecting={collecting}
       animateGroupIds={new Set()}
       onViewSource={onViewSource}
+      onOpenResource={onOpenResource}
       afterMaterialEvidence={afterMaterialEvidence}
     />,
   );
@@ -280,7 +283,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     );
     expect(html).toContain("Evidence coverage limited");
     expect(html).toContain(
-      "did not match its current structured evidence contract",
+      "couldn&#x27;t organize this check&#x27;s result into an evidence card",
     );
     expect(html.match(new RegExp(anchor, "g"))).toHaveLength(1);
   });
@@ -340,6 +343,23 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     expect(missing).toContain("Assessment is not linked to specific checks");
     expect(invalid).toContain("Cited checks could not be validated");
     expect(invalid).toContain("did not promote those references as evidence");
+  });
+
+  it("offers a quiet Radar link only for a host-wired, unambiguous subject", () => {
+    const projection = project(
+      tool("issues-nav", "issues", {
+        issues: [criticalIssue],
+        total: 1,
+        total_matched: 1,
+      }),
+    );
+
+    expect(render(projection)).not.toContain(
+      "Open Deployment shop/api in Radar",
+    );
+    expect(render(projection, false, undefined, undefined, () => {})).toContain(
+      "Open Deployment shop/api in Radar",
+    );
   });
 
   it("waits for disclosure motion only when reduced motion is not requested", () => {

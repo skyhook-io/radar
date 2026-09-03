@@ -1,4 +1,11 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { clsx } from "clsx";
 import {
   Activity,
@@ -15,6 +22,7 @@ import {
   ScrollText,
   SearchCheck,
   ShieldAlert,
+  SquareArrowOutUpRight,
 } from "lucide-react";
 import {
   Badge,
@@ -32,6 +40,7 @@ import {
 
 import {
   investigationEvidenceGroupWithoutSources,
+  investigationEvidenceSubjectRef,
   investigationEvidenceSourceDomId,
   type InvestigationEvidenceData,
   type InvestigationEvidenceGroup,
@@ -42,6 +51,7 @@ import {
   type InvestigationEvidenceSource,
   type InvestigationEvidenceTier,
 } from "./investigationEvidence";
+import type { DiagnosisResourceRef } from "./diagnoseEvidenceTypes";
 import { InvestigationResourceEvidence } from "./InvestigationResourceEvidence";
 import { investigationResourceEvidenceHasDetails } from "./investigationResourceEvidenceModel";
 import { prettyTool } from "./parts";
@@ -54,6 +64,10 @@ export const INVESTIGATION_DISCLOSURE_SETTLE_MS = 220;
 export const VISIBLE_ADDITIONAL_KEY_EVIDENCE = 2;
 export const VISIBLE_SUPPORTING_EVIDENCE = 4;
 export const VISIBLE_LOG_EVIDENCE_LINES = 12;
+
+const EvidenceNavigationContext = createContext<{
+  onOpenResource?: (ref: DiagnosisResourceRef) => void;
+}>({});
 
 function evidenceTypePrefersFullRow(
   type: InvestigationEvidenceData["type"],
@@ -246,6 +260,7 @@ export function InvestigationEvidencePane({
   collecting,
   animateGroupIds,
   onViewSource,
+  onOpenResource,
   afterMaterialEvidence,
   revealRequest,
   onRevealReady,
@@ -256,6 +271,8 @@ export function InvestigationEvidencePane({
   collecting: boolean;
   animateGroupIds: ReadonlySet<string>;
   onViewSource: (sourceId: string) => void;
+  /** Opens an evidence subject in Radar when the producer identified it exactly. */
+  onOpenResource?: (ref: DiagnosisResourceRef) => void;
   /** Keeps the workspace story ordered: assessment → key evidence/limits → action. */
   afterMaterialEvidence?: ReactNode;
   /** Explicit Activity → Findings navigation, including repeat clicks. */
@@ -413,7 +430,7 @@ export function InvestigationEvidencePane({
     moreSupportingOpen,
   ]);
 
-  return (
+  const content = (
     <section
       aria-labelledby="investigation-radar-evidence"
       className="@container/evidence space-y-3"
@@ -553,6 +570,12 @@ export function InvestigationEvidencePane({
         />
       </div>
     </section>
+  );
+
+  return (
+    <EvidenceNavigationContext.Provider value={{ onOpenResource }}>
+      {content}
+    </EvidenceNavigationContext.Provider>
   );
 }
 
@@ -994,6 +1017,7 @@ function EvidenceCard({
   spanFullRow?: boolean;
   prominence?: "primary" | "supporting" | "secondary";
 }) {
+  const { onOpenResource } = useContext(EvidenceNavigationContext);
   const [open, setOpen] = useState(initiallyOpen);
   const { elementRef, revealAfterToggle } = useDisclosureReveal<HTMLElement>();
   const observation = group.latest;
@@ -1118,6 +1142,10 @@ function EvidenceCard({
           </div>
         )}
         <div className="flex shrink-0 items-center pr-1.5">
+          <OpenResourceButton
+            data={observation.data}
+            onOpenResource={onOpenResource}
+          />
           <SourceButton
             label={observation.source.tool}
             ariaLabel={`View Activity source for ${observation.title}`}
@@ -1151,6 +1179,36 @@ function EvidenceCard({
         </div>
       ) : null}
     </article>
+  );
+}
+
+function OpenResourceButton({
+  data,
+  onOpenResource,
+}: {
+  data: InvestigationEvidenceData;
+  onOpenResource?: (ref: DiagnosisResourceRef) => void;
+}) {
+  const ref = investigationEvidenceSubjectRef(data);
+  if (!ref || !onOpenResource) return null;
+  const identity = `${ref.namespace ? `${ref.namespace}/` : ""}${ref.name}`;
+  const label = `Open ${ref.kind} ${identity} in Radar`;
+  return (
+    <Tooltip
+      content={label}
+      delay={100}
+      position="left"
+      wrapperClassName="flex shrink-0"
+    >
+      <button
+        type="button"
+        aria-label={label}
+        onClick={() => onOpenResource(ref)}
+        className="flex h-7 w-7 items-center justify-center rounded text-theme-text-tertiary transition-colors hover:bg-theme-hover hover:text-accent-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      >
+        <SquareArrowOutUpRight className="h-3.5 w-3.5" aria-hidden />
+      </button>
+    </Tooltip>
   );
 }
 
