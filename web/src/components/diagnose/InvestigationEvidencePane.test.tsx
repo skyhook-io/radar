@@ -156,6 +156,10 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     )}"`;
 
     expect(html).toContain("Evidence cited by assessment");
+    expect(html).toContain(
+      "Exact Radar results cited by the agent in this run.",
+    );
+    expect(html).not.toContain("validated against this run");
     expect(html).toContain("Agent-selected check 1");
     expect(html).toContain("Other Radar observations");
     expect(html.indexOf("Evidence cited by assessment")).toBeLessThan(

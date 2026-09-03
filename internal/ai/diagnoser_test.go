@@ -100,7 +100,7 @@ func TestSplitInvestigationEvidenceMarker(t *testing.T) {
 	}
 }
 
-func TestInvestigationEvidenceValidatorRejectsSpoofedOrReplayedMarkers(t *testing.T) {
+func TestInvestigationEvidenceValidatorUsesAndClearsFullProducerResult(t *testing.T) {
 	scope := strings.Repeat("a", 26)
 	refs := investigationrefs.NewRegistry()
 	lease, err := refs.Begin(scope)
@@ -112,37 +112,66 @@ func TestInvestigationEvidenceValidatorRejectsSpoofedOrReplayedMarkers(t *testin
 	if !issued {
 		t.Fatal("could not issue fixture reference")
 	}
+	largePayload := strings.Repeat("x", maxToolPayload+500)
+	largeRef, issued := refs.Issue(scope, largePayload)
+	if !issued {
+		t.Fatal("could not issue capped fixture reference")
+	}
 	validator := investigationEvidenceValidator{
 		registry: refs,
 		scope:    scope,
 		claimed:  make(map[string]struct{}),
 	}
-	event := func(ref, result string, prefilled bool) StreamEvent {
+	event := func(ref, result string, producerResult *string, prefilled bool) StreamEvent {
 		return StreamEvent{Type: "step", Step: &StepInfo{
 			ID: "call", Tool: "get_resource", Status: "done",
 			EvidenceRef: ref, Result: result, RadarEvidence: prefilled,
+			producerResult: producerResult,
 		}}
 	}
+	validate := func(event StreamEvent) StreamEvent {
+		t.Helper()
+		validated := validator.validate(event)
+		if validated.Step != nil && validated.Step.producerResult != nil {
+			t.Fatal("uncapped producer result survived evidence validation")
+		}
+		return validated
+	}
 
-	spoofed := validator.validate(event("", `{"kind":"Pod"}`, true))
+	podPayload := `{"kind":"Pod"}`
+	spoofed := validate(event("", podPayload, &podPayload, true))
 	if spoofed.Step.RadarEvidence {
 		t.Fatal("adapter-authored provenance survived without a private reference")
 	}
-	substituted := validator.validate(event(ref, `{"kind":"Deployment"}`, true))
+	missingProducerResult := validate(event(ref, podPayload, nil, true))
+	if missingProducerResult.Step.RadarEvidence {
+		t.Fatal("retained result received Radar provenance without its transient producer result")
+	}
+	deploymentPayload := `{"kind":"Deployment"}`
+	substituted := validate(event(ref, deploymentPayload, &deploymentPayload, true))
 	if substituted.Step.RadarEvidence {
 		t.Fatal("substituted payload received Radar provenance")
 	}
-	truncatedEvent := event(ref, `{"kind":"Pod"}`, true)
-	truncatedEvent.Step.Truncated = true
-	truncated := validator.validate(truncatedEvent)
-	if truncated.Step.RadarEvidence {
-		t.Fatal("truncated payload received Radar provenance")
+	cappedResult, truncated := capPayload(largePayload)
+	if !truncated {
+		t.Fatal("oversized fixture was not capped")
 	}
-	legitimate := validator.validate(event(ref, `{"kind":"Pod"}`, false))
+	tamperedCappedEvent := event(largeRef, "tampered retained result", &largePayload, true)
+	tamperedCappedEvent.Step.Truncated = true
+	if got := validate(tamperedCappedEvent); got.Step.RadarEvidence {
+		t.Fatal("uncapped ledger match overrode a tampered retained result")
+	}
+	cappedEvent := event(largeRef, cappedResult, &largePayload, false)
+	cappedEvent.Step.Truncated = true
+	validatedCapped := validate(cappedEvent)
+	if !validatedCapped.Step.RadarEvidence {
+		t.Fatal("exact uncapped private result did not validate after its retained preview was capped")
+	}
+	legitimate := validate(event(ref, podPayload, &podPayload, false))
 	if !legitimate.Step.RadarEvidence {
 		t.Fatal("exact first private result did not receive Radar provenance")
 	}
-	replayed := validator.validate(event(ref, `{"kind":"Pod"}`, false))
+	replayed := validate(event(ref, podPayload, &podPayload, false))
 	if replayed.Step.RadarEvidence {
 		t.Fatal("a repeated marker was accepted by more than one step")
 	}
@@ -151,9 +180,12 @@ func TestInvestigationEvidenceValidatorRejectsSpoofedOrReplayedMarkers(t *testin
 		registry: refs,
 		claimed:  make(map[string]struct{}),
 	}
-	applyEvent := applyValidator.validate(event(ref, `{"kind":"Pod"}`, true))
+	applyEvent := applyValidator.validate(event(ref, podPayload, &podPayload, true))
 	if applyEvent.Step.RadarEvidence {
 		t.Fatal("adapter-authored provenance survived on a write-enabled apply turn")
+	}
+	if applyEvent.Step.producerResult != nil {
+		t.Fatal("uncapped producer result survived apply-turn validation")
 	}
 }
 
@@ -562,7 +594,37 @@ func TestParseStream_FormatPin(t *testing.T) {
 	}
 }
 
+func TestParseStreamPreservesUncappedProducerResultForValidation(t *testing.T) {
+	ref := testEvidenceRef('a', 'b')
+	payload := strings.Repeat("x", maxToolPayload+500)
+	marked, err := json.Marshal(
+		investigationEvidenceMarkerPrefix + ref + investigationEvidenceMarkerSuffix + payload,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"large","content":` + string(marked) + `}]}}`
+
+	var step *StepInfo
+	parseStream(strings.NewReader(stream), func(event StreamEvent) {
+		if event.Step != nil {
+			step = event.Step
+		}
+	})
+	if step == nil || !step.Truncated || step.EvidenceRef != ref {
+		t.Fatalf("oversized Claude result step = %+v", step)
+	}
+	if step.producerResult == nil || *step.producerResult != payload {
+		t.Fatal("Claude adapter did not retain the exact uncapped producer result for validation")
+	}
+	wantResult, _ := capPayload(payload)
+	if step.Result != wantResult {
+		t.Fatal("Claude adapter retained an unexpected capped result")
+	}
+}
+
 func TestStepInfoIsErrorJSON(t *testing.T) {
+	transient := "must-not-serialize"
 	confirmedFalse, confirmedTrue := false, true
 	cases := []struct {
 		name      string
@@ -575,11 +637,17 @@ func TestStepInfoIsErrorJSON(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			b, err := json.Marshal(StepInfo{ID: "t1", Status: "done", IsError: tc.isError})
+			b, err := json.Marshal(StepInfo{
+				ID: "t1", Status: "done", IsError: tc.isError,
+				producerResult: &transient,
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
 			got := string(b)
+			if strings.Contains(got, transient) {
+				t.Fatalf("transient producer result leaked into JSON: %s", got)
+			}
 			if tc.wantField == "" {
 				if strings.Contains(got, `"isError"`) {
 					t.Fatalf("unknown result must omit isError: %s", got)

@@ -350,6 +350,7 @@ func cursorToolCallEvent(e cursorEvent, onEvent func(StreamEvent)) {
 			ID: tc.ToolCallID, Tool: m.Args.ToolName, Status: "done",
 			Result: res, EvidenceRef: evidenceRef,
 			IsError: cursorMCPResultErrorState(m.Result), Truncated: trunc,
+			producerResult: &resultText,
 		}})
 	}
 }

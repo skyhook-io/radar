@@ -221,9 +221,11 @@ type StepInfo struct {
 	// extracted by the agent adapter before Result is persisted. It lets the UI
 	// verify assessment citations without exposing protocol markers as evidence.
 	EvidenceRef string `json:"evidenceRef,omitempty"`
-	// RadarEvidence is server-authored only after EvidenceRef and Result match the
-	// active private transport ledger exactly. Full-local agents can load foreign
-	// MCP servers with colliding tool names, so a bare name is never provenance.
+	// RadarEvidence is server-authored only after EvidenceRef and the adapter's
+	// uncapped producer result match the active private transport ledger exactly,
+	// and Result is verified as its capped derivative. Full-local agents can load
+	// foreign MCP servers with colliding tool names, so a bare name is never
+	// provenance.
 	RadarEvidence bool `json:"radarEvidence,omitempty"`
 	// IsError records the agent host's authoritative tool-result state. nil means
 	// the host did not report a terminal state; false is a confirmed success.
@@ -231,6 +233,10 @@ type StepInfo struct {
 	// Truncated marks that Result was capped — so the UI tells the user the
 	// payload (and anything they copy) is partial, not the complete tool output.
 	Truncated bool `json:"truncated,omitempty"`
+	// producerResult carries the clean, uncapped adapter result only until the
+	// private evidence validator has compared it with the transport ledger. It is
+	// unexported so it cannot enter the event log or wire response.
+	producerResult *string
 }
 
 // radarReadTools is the explicit allowlist of Radar MCP read tools the agent may
@@ -964,6 +970,7 @@ func parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
 				onEvent(StreamEvent{Type: "step", Step: &StepInfo{
 					ID: b.ToolUseID, Status: "done", Ms: ms, Result: res,
 					EvidenceRef: evidenceRef, IsError: &isError, Truncated: trunc,
+					producerResult: &resultText,
 				}})
 			}
 		case "result":
@@ -1017,18 +1024,25 @@ type investigationEvidenceValidator struct {
 // cannot replay a marker and payload it observed earlier in the conversation.
 func (v *investigationEvidenceValidator) validate(event StreamEvent) StreamEvent {
 	step := event.Step
-	if event.Type != "step" || step == nil {
+	if step == nil {
 		return event
 	}
+	producerResult := step.producerResult
+	step.producerResult = nil
 	// Never accept a provenance bit from an agent adapter or test fixture.
 	step.RadarEvidence = false
-	if v.scope == "" || step.Status != "done" || step.EvidenceRef == "" || step.Truncated {
+	if event.Type != "step" || v.scope == "" || step.Status != "done" ||
+		step.EvidenceRef == "" || producerResult == nil {
+		return event
+	}
+	retainedResult, truncated := capPayload(*producerResult)
+	if retainedResult != step.Result || truncated != step.Truncated {
 		return event
 	}
 	if _, claimed := v.claimed[step.EvidenceRef]; claimed {
 		return event
 	}
-	if !v.registry.Matches(v.scope, step.EvidenceRef, step.Result) {
+	if !v.registry.Matches(v.scope, step.EvidenceRef, *producerResult) {
 		return event
 	}
 	step.RadarEvidence = true

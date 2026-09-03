@@ -148,6 +148,36 @@ func TestCursorParseStream_FormatPin(t *testing.T) {
 	}
 }
 
+func TestCursorParseStreamPreservesUncappedProducerResultForValidation(t *testing.T) {
+	ref := testEvidenceRef('a', 'b')
+	payload := strings.Repeat("x", maxToolPayload+500)
+	marked, err := json.Marshal(
+		investigationEvidenceMarkerPrefix + ref + investigationEvidenceMarkerSuffix + payload,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := `{"type":"tool_call","subtype":"completed","tool_call":{"toolCallId":"large","mcpToolCall":{"args":{"toolName":"get_resource"},"result":{"success":{"isError":false,"content":[{"text":{"text":` + string(marked) + `}}]}}}}}`
+
+	var step *StepInfo
+	agent := &cursorAgent{bin: "cursor-agent"}
+	agent.parseStream(strings.NewReader(stream), func(event StreamEvent) {
+		if event.Step != nil {
+			step = event.Step
+		}
+	})
+	if step == nil || !step.Truncated || step.EvidenceRef != ref {
+		t.Fatalf("oversized Cursor result step = %+v", step)
+	}
+	if step.producerResult == nil || *step.producerResult != payload {
+		t.Fatal("Cursor adapter did not retain the exact uncapped producer result for validation")
+	}
+	wantResult, _ := capPayload(payload)
+	if step.Result != wantResult {
+		t.Fatal("Cursor adapter retained an unexpected capped result")
+	}
+}
+
 func TestCursorToolResultErrorState(t *testing.T) {
 	tests := []struct {
 		name       string

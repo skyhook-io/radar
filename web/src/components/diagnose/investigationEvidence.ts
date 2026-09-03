@@ -1,4 +1,5 @@
 import {
+  CORE_RESOURCES,
   defaultConditionTone,
   stripAnsi,
   type Issue,
@@ -386,6 +387,51 @@ export interface InvestigationRootCauseEvidenceResolution {
   links: InvestigationRootCauseEvidenceLink[];
 }
 
+function exactDiagnosisResourceRef(ref: {
+  kind?: unknown;
+  group?: unknown;
+  namespace?: unknown;
+  name?: unknown;
+}): DiagnosisResourceRef | undefined {
+  const { kind, name } = ref;
+  if (
+    !nonEmptyString(kind) ||
+    kind.trim() !== kind ||
+    !nonEmptyString(name) ||
+    name.trim() !== name ||
+    (ref.group !== undefined &&
+      (typeof ref.group !== "string" || ref.group.trim() !== ref.group)) ||
+    (ref.namespace !== undefined &&
+      (typeof ref.namespace !== "string" ||
+        ref.namespace.trim() !== ref.namespace))
+  ) {
+    return undefined;
+  }
+  const group = ref.group || undefined;
+  const namespace = ref.namespace || undefined;
+  const knownKinds = CORE_RESOURCES.filter(
+    (resource) =>
+      resource.kind.toLowerCase() === kind.toLowerCase() &&
+      (group === undefined || resource.group === group),
+  );
+  const knownScopes = new Set(
+    knownKinds.map((resource) => resource.namespaced),
+  );
+  // This is deliberately only a negative guard. Unknown kinds/groups may be
+  // cluster-scoped CRDs, so suppress the link only when Radar's existing
+  // resource metadata identifies the kind's scope without ambiguity.
+  if (knownScopes.size === 1) {
+    if (knownScopes.has(true) && !namespace) return undefined;
+    if (knownScopes.has(false) && namespace) return undefined;
+  }
+  return {
+    kind,
+    name,
+    ...(group ? { group } : {}),
+    ...(namespace ? { namespace } : {}),
+  };
+}
+
 /**
  * The Kubernetes resource an evidence item is about, when the producer payload
  * states one unambiguously. Pod-shaped evidence resolves only through the
@@ -432,8 +478,7 @@ export function investigationEvidenceSubjectRef(
         return undefined;
     }
   })();
-  if (!ref?.kind || !ref.name) return undefined;
-  return ref;
+  return ref ? exactDiagnosisResourceRef(ref) : undefined;
 }
 
 function domToken(value: string): string {
@@ -2715,24 +2760,74 @@ function adaptGetResource(
       invalidPayload(builder, source, "Events");
     }
   }
-  if (Array.isArray(value.recentChanges)) {
-    const changes = value.recentChanges
+  const recentChangesRaw = value.recentChanges;
+  const recentChangesSaturatedRaw = value.recentChangesSaturated;
+  const recentChangesCoverageLimitedRaw = value.recentChangesCoverageLimited;
+  const hasRecentChangesResult =
+    recentChangesRaw !== undefined ||
+    recentChangesSaturatedRaw !== undefined ||
+    recentChangesCoverageLimitedRaw !== undefined;
+  const recentChangesMetadataValid =
+    typeof recentChangesSaturatedRaw === "boolean" &&
+    typeof recentChangesCoverageLimitedRaw === "boolean";
+  if (hasRecentChangesResult && !recentChangesMetadataValid) {
+    invalidPayload(builder, source, "Recent changes");
+  }
+  if (Array.isArray(recentChangesRaw)) {
+    const changes = recentChangesRaw
       .map(recentChange)
       .filter((item): item is IssueRecentChange => Boolean(item));
-    if (changes.length === value.recentChanges.length) {
+    if (changes.length === recentChangesRaw.length) {
       addChanges(
         builder,
         source,
         changes,
         `changes:get-resource:${scopeFromArgs(source)}`,
         undefined,
-        !nonEmptyString(value.recentChangesError),
+        recentChangesMetadataValid &&
+          recentChangesSaturatedRaw === false &&
+          recentChangesCoverageLimitedRaw === false &&
+          !nonEmptyString(value.recentChangesError),
         true,
         relevance,
       );
     } else {
       invalidPayload(builder, source, "Recent changes");
     }
+  } else if (
+    recentChangesRaw === undefined &&
+    recentChangesMetadataValid &&
+    !nonEmptyString(value.recentChangesError)
+  ) {
+    addChanges(
+      builder,
+      source,
+      [],
+      `changes:get-resource:${scopeFromArgs(source)}`,
+      undefined,
+      recentChangesSaturatedRaw === false &&
+        recentChangesCoverageLimitedRaw === false,
+      true,
+      relevance,
+    );
+  } else if (recentChangesRaw !== undefined) {
+    invalidPayload(builder, source, "Recent changes");
+  }
+  if (recentChangesSaturatedRaw === true) {
+    builder.limit(
+      source,
+      "Recent changes",
+      "The recent-change result limit was reached; additional changes may exist in the requested window.",
+      "truncated",
+    );
+  }
+  if (recentChangesCoverageLimitedRaw === true) {
+    builder.limit(
+      source,
+      "Recent changes",
+      "Radar does not have complete recent-change coverage for this resource, so this result cannot prove that no tracked changes exist.",
+      "unknown",
+    );
   }
 }
 

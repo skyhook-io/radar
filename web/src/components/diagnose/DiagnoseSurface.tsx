@@ -313,8 +313,20 @@ export function openInvestigationEvidenceResource(
   ref: DiagnosisResourceRef,
   onOpenResource: (ref: DiagnosisResourceRef) => void,
   setMaximized: (maximized: boolean) => void,
+  closeDiagnose: () => void,
+  dockedPanelWouldOverlay: boolean,
 ) {
-  setMaximized(false);
+  // A resource destination must be visible after the handoff. On a wide canvas,
+  // restoring the docked panel leaves Radar and the investigation side by side.
+  // At tighter widths that same panel overlays the host content, so close it
+  // before navigating instead of making the click appear to do nothing.
+  if (dockedPanelWouldOverlay) {
+    // Closing already exposes the destination; retain the user's maximized
+    // preference for the next time they open investigations.
+    closeDiagnose();
+  } else {
+    setMaximized(false);
+  }
   onOpenResource(ref);
 }
 
@@ -345,9 +357,15 @@ export function DiagnoseSurface({
   const openEvidenceResource = useCallback(
     (ref: DiagnosisResourceRef) => {
       if (!onOpenResource) return;
-      openInvestigationEvidenceResource(ref, onOpenResource, setMaximized);
+      openInvestigationEvidenceResource(
+        ref,
+        onOpenResource,
+        setMaximized,
+        d.close,
+        narrow,
+      );
     },
-    [onOpenResource, setMaximized],
+    [d.close, narrow, onOpenResource, setMaximized],
   );
 
   const startResize = (e: React.MouseEvent) => {

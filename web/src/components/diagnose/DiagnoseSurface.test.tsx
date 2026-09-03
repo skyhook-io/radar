@@ -86,6 +86,7 @@ describe("investigation history navigation", () => {
     const events: string[] = [];
     const onOpenResource = vi.fn(() => events.push("open"));
     const setMaximized = vi.fn(() => events.push("dock"));
+    const closeDiagnose = vi.fn(() => events.push("close"));
     const ref = {
       kind: "Deployment",
       group: "apps",
@@ -93,10 +94,42 @@ describe("investigation history navigation", () => {
       name: "api",
     };
 
-    openInvestigationEvidenceResource(ref, onOpenResource, setMaximized);
+    openInvestigationEvidenceResource(
+      ref,
+      onOpenResource,
+      setMaximized,
+      closeDiagnose,
+      false,
+    );
 
     expect(events).toEqual(["dock", "open"]);
     expect(setMaximized).toHaveBeenCalledWith(false);
+    expect(closeDiagnose).not.toHaveBeenCalled();
+    expect(onOpenResource).toHaveBeenCalledWith(ref);
+  });
+
+  it("closes an overlay before opening an evidence resource", () => {
+    const events: string[] = [];
+    const onOpenResource = vi.fn(() => events.push("open"));
+    const setMaximized = vi.fn(() => events.push("dock"));
+    const closeDiagnose = vi.fn(() => events.push("close"));
+    const ref = {
+      kind: "Pod",
+      namespace: "shop",
+      name: "api-7d9f",
+    };
+
+    openInvestigationEvidenceResource(
+      ref,
+      onOpenResource,
+      setMaximized,
+      closeDiagnose,
+      true,
+    );
+
+    expect(events).toEqual(["close", "open"]);
+    expect(setMaximized).not.toHaveBeenCalled();
+    expect(closeDiagnose).toHaveBeenCalledOnce();
     expect(onOpenResource).toHaveBeenCalledWith(ref);
   });
 

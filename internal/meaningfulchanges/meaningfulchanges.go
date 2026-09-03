@@ -258,7 +258,16 @@ func recent(ctx context.Context, q Query) ([]issuesapi.RecentChange, bool, bool,
 // changes the query never saw. Callers asserting "no recent changes" must
 // treat saturation as unknown, never as evidence of absence.
 func RecentForResource(ctx context.Context, kind, namespace, name string, since time.Duration, limit, fieldLimit int) ([]issuesapi.RecentChange, bool, error) {
-	changes, _, fetchSaturated, err := recent(ctx, Query{
+	result, err := RecentForResourceDetailed(ctx, kind, namespace, name, since, limit, fieldLimit)
+	return result.Changes, result.FetchSaturated, err
+}
+
+// RecentForResourceDetailed preserves both completeness signals for consumers
+// that display source coverage. The historical wrapper above intentionally
+// exposes only fetch saturation because issue-correlation uses that bool for
+// negative-claim gating.
+func RecentForResourceDetailed(ctx context.Context, kind, namespace, name string, since time.Duration, limit, fieldLimit int) (RecentResult, error) {
+	changes, outputCapped, fetchSaturated, err := recent(ctx, Query{
 		Namespaces: []string{namespace},
 		Kinds:      []string{canonicalKind(kind)},
 		Name:       name,
@@ -266,7 +275,11 @@ func RecentForResource(ctx context.Context, kind, namespace, name string, since 
 		Limit:      limit,
 		FieldLimit: fieldLimit,
 	})
-	return changes, fetchSaturated, err
+	return RecentResult{
+		Changes:        changes,
+		OutputCapped:   outputCapped,
+		FetchSaturated: fetchSaturated,
+	}, err
 }
 
 func RecentForWorkloadAndConfigMaps(ctx context.Context, obj any, kind, namespace, name string, since time.Duration, limit, fieldLimit int) ([]issuesapi.RecentChange, bool, error) {

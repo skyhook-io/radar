@@ -202,6 +202,7 @@ func (a *codexAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnos
 					ID: e.Item.ID, Tool: e.Item.Tool, Status: "done",
 					Result: res, EvidenceRef: evidenceRef,
 					IsError: isError, Truncated: trunc,
+					producerResult: &resultText,
 				}})
 			case "reasoning":
 				if e.Item.Text != "" {

@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/filter"
 	"github.com/skyhook-io/radar/internal/helm"
@@ -1103,13 +1104,38 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	defaultConfigMapChanges := meaningfulchanges.ConfigMapKind(kind)
 	includeChanges := includes["changes"] || defaultConfigMapChanges
 	var recentChanges []issuesapi.RecentChange
+	var recentChangesSaturated bool
+	var recentChangesCoverageLimited bool
 	var changesErr string
 	if includeChanges {
-		changes, _, err := meaningfulchanges.RecentForResource(ctx, kind, namespace, name, meaningfulchanges.DefaultSince, meaningfulchanges.ResourceLimit, meaningfulchanges.DefaultFieldLimit)
-		if err != nil {
-			changesErr = err.Error()
+		gvk := rawObj.GetObjectKind().GroupVersionKind()
+		changeKind := gvk.Kind
+		if changeKind == "" {
+			changeKind = kind
+		}
+		changeAPIVersion := gvk.GroupVersion().String()
+		if changeAPIVersion == "" && group != "" {
+			// ChangeReadAllowed only needs the group portion to resolve the GVR.
+			changeAPIVersion = group + "/_"
+		}
+		if !recentChangesSourceTracked(gvk) {
+			// The feed records a deliberately bounded set of kind/group pairs.
+			// Treat every other source as incomplete instead of attaching a
+			// same-kind resource's history or claiming that no changes occurred.
+			recentChangesCoverageLimited = true
+		} else if !k8s.ChangeReadAllowed(changeKind, changeAPIVersion, namespace, mcpChangeAuthorizer(ctx)) {
+			// Authorize the source before querying so neither the coverage bit nor
+			// saturation becomes a side channel for unreadable history.
+			recentChangesCoverageLimited = true
 		} else {
-			recentChanges = filterRecentChangesRBAC(ctx, changes)
+			changesResult, err := meaningfulchanges.RecentForResourceDetailed(ctx, kind, namespace, name, meaningfulchanges.DefaultSince, meaningfulchanges.ResourceLimit, meaningfulchanges.DefaultFieldLimit)
+			recentChangesSaturated = changesResult.OutputCapped || changesResult.FetchSaturated
+			if err != nil {
+				changesErr = err.Error()
+			} else {
+				recentChanges = filterRecentChangesRBAC(ctx, changesResult.Changes)
+				recentChangesCoverageLimited = len(recentChanges) < len(changesResult.Changes)
+			}
 		}
 	}
 
@@ -1130,9 +1156,11 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 		result["warnings"] = warnings
 	}
 	if includeChanges {
+		result["recentChangesSaturated"] = recentChangesSaturated
+		result["recentChangesCoverageLimited"] = recentChangesCoverageLimited
 		if changesErr != "" {
 			result["recentChangesError"] = changesErr
-		} else if includes["changes"] || len(recentChanges) > 0 {
+		} else if len(recentChanges) > 0 || (includes["changes"] && !recentChangesCoverageLimited) {
 			result["recentChanges"] = recentChanges
 		}
 	}
@@ -1149,6 +1177,17 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 		attachResourceExtras(ctx, cache, result, includes, canonicalKind, canonicalGroup, namespace, name)
 	}
 	return toJSONResult(result)
+}
+
+func recentChangesSourceTracked(gvk schema.GroupVersionKind) bool {
+	// A fetched resource should always carry TypeMeta. If it does not, degrade
+	// to unknown coverage rather than treating an absent group as a core-group
+	// identity (TrackedKindForGroup intentionally treats an empty input group as
+	// unknown for older issue callers).
+	if gvk.Kind == "" || gvk.Version == "" {
+		return false
+	}
+	return meaningfulchanges.TrackedKindForGroup(gvk.Kind, gvk.Group)
 }
 
 // buildMCPResourceContext assembles the resourceContext section for MCP
@@ -1271,21 +1310,6 @@ func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result 
 			} else {
 				log.Printf("[mcp] Failed to get pod metrics for %s/%s: %v", namespace, name, err)
 				result["metricsError"] = err.Error()
-			}
-		}
-	}
-
-	if includes["changes"] {
-		// The handler may have already attempted changes (data OR error key set).
-		// Gate on both — retrying after a recorded failure could attach a fresh
-		// payload next to the stale error, handing clients a contradictory result.
-		_, hasChanges := result["recentChanges"]
-		_, hasChangesErr := result["recentChangesError"]
-		if !hasChanges && !hasChangesErr {
-			if changes, _, err := meaningfulchanges.RecentForResource(ctx, kind, namespace, name, meaningfulchanges.DefaultSince, meaningfulchanges.ResourceLimit, meaningfulchanges.DefaultFieldLimit); err == nil {
-				result["recentChanges"] = filterRecentChangesRBAC(ctx, changes)
-			} else {
-				result["recentChangesError"] = err.Error()
 			}
 		}
 	}

@@ -435,6 +435,11 @@ export function InvestigationEvidencePane({
       aria-labelledby="investigation-radar-evidence"
       className="@container/evidence space-y-3"
     >
+      <span className="sr-only" role="status" aria-live="polite">
+        {projection.limitations.length > 0
+          ? `Coverage update: ${pluralize(projection.coverage.limited, "check")} did not produce complete evidence.`
+          : ""}
+      </span>
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -455,7 +460,7 @@ export function InvestigationEvidencePane({
           </div>
           <p className="mt-0.5 text-xs leading-relaxed text-theme-text-tertiary">
             {rootCauseEvidence?.status === "linked"
-              ? "Checks the agent cited, validated against this run."
+              ? "Exact Radar results cited by the agent in this run."
               : "Evidence captured from completed Radar checks."}
           </p>
         </div>
@@ -814,10 +819,6 @@ function CoverageStrip({
       ref={elementRef}
       className="overflow-hidden rounded-lg border border-theme-border/80 bg-theme-base/20"
     >
-      <span className="sr-only" role="status" aria-live="polite">
-        Evidence coverage limited: {pluralize(coverage.limited, "check")} did
-        not produce complete evidence.
-      </span>
       <button
         type="button"
         aria-expanded={open}

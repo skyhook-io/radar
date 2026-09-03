@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -73,6 +74,36 @@ func TestCodexParseStream_FormatPin(t *testing.T) {
 	}
 	if diag.SessionID != "019eef06-e99b-70f1-a25f-aba70f3ea57e" {
 		t.Errorf("session id (thread_id) not captured: %q", diag.SessionID)
+	}
+}
+
+func TestCodexParseStreamPreservesUncappedProducerResultForValidation(t *testing.T) {
+	ref := testEvidenceRef('a', 'b')
+	payload := strings.Repeat("x", maxToolPayload+500)
+	marked, err := json.Marshal(
+		investigationEvidenceMarkerPrefix + ref + investigationEvidenceMarkerSuffix + payload,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := `{"type":"item.completed","item":{"id":"large","type":"mcp_tool_call","tool":"get_resource","status":"completed","result":{"content":[{"type":"text","text":` + string(marked) + `}]}}}`
+
+	var step *StepInfo
+	agent := &codexAgent{bin: "codex"}
+	agent.parseStream(strings.NewReader(stream), func(event StreamEvent) {
+		if event.Step != nil {
+			step = event.Step
+		}
+	})
+	if step == nil || !step.Truncated || step.EvidenceRef != ref {
+		t.Fatalf("oversized Codex result step = %+v", step)
+	}
+	if step.producerResult == nil || *step.producerResult != payload {
+		t.Fatal("Codex adapter did not retain the exact uncapped producer result for validation")
+	}
+	wantResult, _ := capPayload(payload)
+	if step.Result != wantResult {
+		t.Fatal("Codex adapter retained an unexpected capped result")
 	}
 }
 

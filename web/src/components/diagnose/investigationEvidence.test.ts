@@ -203,6 +203,28 @@ describe("investigationEvidenceSubjectRef", () => {
         truncated: false,
       }),
     ).toEqual({ kind: "Service", namespace: "shop", name: "api" });
+    expect(
+      investigationEvidenceSubjectRef({
+        type: "resource",
+        resource: {
+          apiVersion: "v1",
+          kind: "Node",
+          metadata: { name: "worker-1" },
+        },
+        warnings: [],
+      }),
+    ).toEqual({ kind: "Node", name: "worker-1" });
+    expect(
+      investigationEvidenceSubjectRef({
+        type: "resource",
+        resource: {
+          apiVersion: "v1",
+          kind: "Node",
+          metadata: { namespace: "kube-system", name: "worker-1" },
+        },
+        warnings: [],
+      }),
+    ).toBeUndefined();
   });
 
   it("does not invent a destination for ambiguous pod evidence", () => {
@@ -212,6 +234,17 @@ describe("investigationEvidenceSubjectRef", () => {
         pod: "api-123",
         container: "api",
         previous: false,
+        warnings: [],
+      }),
+    ).toBeUndefined();
+    expect(
+      investigationEvidenceSubjectRef({
+        type: "resource",
+        resource: {
+          apiVersion: "apps/v1",
+          kind: "Deployment",
+          metadata: { name: "api" },
+        },
         warnings: [],
       }),
     ).toBeUndefined();
@@ -238,6 +271,99 @@ describe("investigationEvidenceSubjectRef", () => {
         message: "No issues found",
       }),
     ).toBeUndefined();
+  });
+
+  it("suppresses missing namespaces only for known namespaced resources", () => {
+    expect(
+      investigationEvidenceSubjectRef({
+        type: "resource",
+        resource: {
+          apiVersion: "v1",
+          kind: "Secret",
+          metadata: { name: "api-token" },
+        },
+        warnings: [],
+      }),
+    ).toBeUndefined();
+    expect(
+      investigationEvidenceSubjectRef({
+        type: "resource",
+        resource: {
+          apiVersion: "example.io/v1",
+          kind: "Widget",
+          metadata: { name: "global-widget" },
+        },
+        warnings: [],
+      }),
+    ).toEqual({
+      kind: "Widget",
+      group: "example.io",
+      name: "global-widget",
+    });
+    expect(
+      investigationEvidenceSubjectRef({
+        type: "resource",
+        resource: {
+          apiVersion: "example.io/v1",
+          kind: "Deployment",
+          metadata: { name: "global-deployment" },
+        },
+        warnings: [],
+      }),
+    ).toEqual({
+      kind: "Deployment",
+      group: "example.io",
+      name: "global-deployment",
+    });
+  });
+
+  it("rejects malformed optional identity fields instead of creating a link", () => {
+    const malformed = [
+      {
+        type: "issue",
+        issue: { ...criticalIssue, namespace: { value: "shop" } },
+      },
+      {
+        type: "resource",
+        resource: {
+          ...deployment,
+          metadata: { ...deployment.metadata, namespace: ["shop"] },
+        },
+        warnings: [],
+      },
+      {
+        type: "network",
+        network: {
+          subject: {
+            kind: "Service",
+            namespace: 42,
+            name: "api",
+          },
+          route: "Service shop/api",
+          outcome: "observed",
+        },
+      },
+      {
+        type: "relationships",
+        root: {
+          kind: "Deployment",
+          group: ["apps"],
+          namespace: "shop",
+          name: "api",
+        },
+        nodes: [],
+        edges: [],
+        truncated: false,
+      },
+    ];
+
+    for (const data of malformed) {
+      expect(
+        investigationEvidenceSubjectRef(
+          data as unknown as InvestigationEvidenceGroup["latest"]["data"],
+        ),
+      ).toBeUndefined();
+    }
   });
 
   it("carries the namespace from a pod-logs query into its evidence subject", () => {
@@ -334,6 +460,37 @@ describe("investigation evidence provenance", () => {
     expect(projection.limitations).toEqual([
       expect.objectContaining({ kind: "error", message: "permission denied" }),
     ]);
+  });
+
+  it("surfaces a validated truncated result as a limit without trusting its retained payload", () => {
+    const ref = evidenceRef("a", "b");
+    const validated = project([
+      tool("partial", "get_resource", '{"resource":', {
+        evidenceRef: ref,
+        truncated: true,
+      }),
+    ]);
+
+    expect(validated.sources.map((source) => source.stepId)).toEqual([
+      "partial",
+    ]);
+    expect(validated.groups).toHaveLength(0);
+    expect(validated.citableSources).toHaveLength(0);
+    expect(validated.limitations).toEqual([
+      expect.objectContaining({ kind: "truncated" }),
+    ]);
+
+    const unvalidated = project([
+      tool("foreign-partial", "get_resource", '{"resource":', {
+        evidenceRef: ref,
+        radarEvidence: false,
+        truncated: true,
+      }),
+    ]);
+    expect(unvalidated.sources).toHaveLength(0);
+    expect(unvalidated.groups).toHaveLength(0);
+    expect(unvalidated.citableSources).toHaveLength(0);
+    expect(unvalidated.limitations).toHaveLength(0);
   });
 });
 
@@ -854,6 +1011,8 @@ describe("strict evidence adapters", () => {
         resourceContext: { tier: "basic" },
         events: [warningEvent],
         recentChanges: [],
+        recentChangesSaturated: false,
+        recentChangesCoverageLimited: false,
       }),
       tool("secret-bare", "get_resource", {
         kind: "Secret",
@@ -907,6 +1066,118 @@ describe("strict evidence adapters", () => {
     ]);
     expect(groupsOf(result.groups, "events")).toHaveLength(1);
     expect(groupsOf(result.groups, "receipt")).toHaveLength(1);
+  });
+
+  it("keeps get_resource recent-change completeness explicit", () => {
+    const complete = project([
+      tool("complete", "get_resource", {
+        resource: deployment,
+        recentChanges: [],
+        recentChangesSaturated: false,
+        recentChangesCoverageLimited: false,
+      }),
+    ]);
+    expect(
+      groupsOf(complete.groups, "receipt").some(
+        (group) =>
+          group.latest.data.type === "receipt" &&
+          group.latest.data.checked === "changes",
+      ),
+    ).toBe(true);
+    expect(complete.limitations).toHaveLength(0);
+
+    const capped = project([
+      tool("capped", "get_resource", {
+        resource: deployment,
+        recentChanges: [
+          {
+            kind: "Deployment",
+            namespace: "shop",
+            name: "api",
+            changeType: "update",
+            timestamp: "2026-09-02T09:55:00Z",
+            summary: "image changed",
+          },
+        ],
+        recentChangesSaturated: true,
+        recentChangesCoverageLimited: false,
+      }),
+    ]);
+    expect(groupsOf(capped.groups, "changes")).toHaveLength(1);
+    expect(groupsOf(capped.groups, "receipt")).toHaveLength(0);
+    expect(capped.limitations).toEqual([
+      expect.objectContaining({
+        source: "Recent changes",
+        kind: "truncated",
+        message: expect.stringContaining("result limit was reached"),
+      }),
+    ]);
+
+    const filtered = project([
+      tool("filtered", "get_resource", {
+        resource: deployment,
+        recentChanges: [],
+        recentChangesSaturated: false,
+        recentChangesCoverageLimited: true,
+      }),
+    ]);
+    expect(groupsOf(filtered.groups, "receipt")).toHaveLength(0);
+    expect(filtered.limitations).toEqual([
+      expect.objectContaining({
+        source: "Recent changes",
+        kind: "unknown",
+        message: expect.stringContaining("complete recent-change coverage"),
+      }),
+    ]);
+
+    const cappedAfterFiltering = project([
+      tool("capped-filtered", "get_resource", {
+        resource: deployment,
+        recentChangesSaturated: true,
+        recentChangesCoverageLimited: true,
+      }),
+    ]);
+    expect(groupsOf(cappedAfterFiltering.groups, "receipt")).toHaveLength(0);
+    expect(cappedAfterFiltering.limitations).toEqual([
+      expect.objectContaining({
+        source: "Recent changes",
+        kind: "truncated",
+      }),
+      expect.objectContaining({
+        source: "Recent changes",
+        kind: "unknown",
+        message: expect.stringContaining("complete recent-change coverage"),
+      }),
+    ]);
+
+    for (const metadata of [
+      {},
+      {
+        recentChangesSaturated: "false",
+        recentChangesCoverageLimited: false,
+      },
+      {
+        recentChangesSaturated: false,
+        recentChangesCoverageLimited: "false",
+      },
+      { recentChangesSaturated: false },
+      { recentChangesCoverageLimited: false },
+    ]) {
+      const untrusted = project([
+        tool("untrusted", "get_resource", {
+          resource: deployment,
+          recentChanges: [],
+          ...metadata,
+        }),
+      ]);
+      expect(groupsOf(untrusted.groups, "receipt")).toHaveLength(0);
+      expect(untrusted.limitations).toEqual([
+        expect.objectContaining({
+          source: "Recent changes",
+          kind: "unknown",
+        }),
+      ]);
+    }
   });
 
   it("keeps namespace inventory adverse rows as broader context", () => {

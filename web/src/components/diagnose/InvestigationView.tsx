@@ -74,6 +74,34 @@ export function initialInvestigationPane(
   return status === "done" || status === "stale" ? "evidence" : "activity";
 }
 
+export function investigationEvidenceShouldMarkUnread({
+  hasNewLiveSource,
+  selectedPane,
+  evidencePaneVisible,
+}: {
+  hasNewLiveSource: boolean;
+  selectedPane: "activity" | "evidence";
+  evidencePaneVisible: boolean;
+}): boolean {
+  return (
+    hasNewLiveSource && selectedPane === "activity" && !evidencePaneVisible
+  );
+}
+
+export function investigationEvidenceAnnouncement({
+  unreadEvidence,
+  evidenceUpdateAvailable,
+}: {
+  unreadEvidence: boolean;
+  evidenceUpdateAvailable: boolean;
+}): string {
+  if (unreadEvidence) return "New evidence available";
+  if (evidenceUpdateAvailable) {
+    return "New evidence available at the top of Findings";
+  }
+  return "";
+}
+
 export function investigationIsReadOnly(
   status: RunSummary["status"],
   gone: boolean,
@@ -1223,7 +1251,15 @@ export function InvestigationView({
         true
       );
     });
-    if (hasNewLiveSource && narrowPane === "activity") {
+    if (
+      investigationEvidenceShouldMarkUnread({
+        hasNewLiveSource,
+        selectedPane: narrowPane,
+        evidencePaneVisible:
+          evidenceScrollRef.current !== null &&
+          evidenceScrollRef.current.offsetParent !== null,
+      })
+    ) {
       setUnreadEvidence(true);
     }
     if (hasNewLiveSource && (evidenceScrollRef.current?.scrollTop ?? 0) > 80) {
@@ -1318,11 +1354,18 @@ export function InvestigationView({
       frame = requestAnimationFrame(() => {
         frame = undefined;
         if (container.offsetParent !== null) {
+          // A responsive transition can reveal Findings without changing the
+          // selected narrow-pane tab (for example, maximizing into split view).
+          // Once the evidence is onscreen it is no longer unread.
+          setUnreadEvidence(false);
           evidenceCardLayoutRef.current = captureEvidenceCardLayout(container);
         }
       });
     };
     const observer = new ResizeObserver(refreshLayoutBaseline);
+    // Observe the pane itself so crossing the responsive visibility boundary is
+    // detected even when the projected evidence content has not changed size.
+    observer.observe(container);
     observer.observe(content);
     for (const card of container.querySelectorAll<HTMLElement>(
       "[data-evidence-card]",
@@ -1373,6 +1416,9 @@ export function InvestigationView({
     paneSelectionTouchedRef.current = true;
     setNarrowPane("evidence");
     setUnreadEvidence(false);
+    // This path reveals the exact changed source, so the broader scrolled-away
+    // cue has served its purpose even when the centered card remains below 80px.
+    setEvidenceUpdateAvailable(false);
     evidenceRevealRequestIdRef.current += 1;
     setEvidenceRevealRequest({
       sourceId,
@@ -1415,6 +1461,11 @@ export function InvestigationView({
   const currentEvidenceCount = projection.groups.filter(
     (group) => !group.historical,
   ).length;
+  const findingsTabAccessibleLabel = `Findings: current assessment and structured Radar evidence${
+    currentEvidenceCount > 0
+      ? `; ${currentEvidenceCount} evidence ${currentEvidenceCount === 1 ? "item" : "items"}`
+      : ""
+  }`;
   const currentAssessmentCoverageLimited = investigationEvidenceCoverageLimited(
     currentAssessmentProjection,
   );
@@ -1443,16 +1494,20 @@ export function InvestigationView({
     : "";
 
   const selectPane = (pane: "activity" | "evidence") => {
+    const switchingToEvidence =
+      pane === "evidence" && narrowPane !== "evidence";
     paneSelectionTouchedRef.current = true;
     setNarrowPane(pane);
     if (pane === "evidence") {
       setUnreadEvidence(false);
-      setEvidenceUpdateAvailable(false);
       // An ordinary switch starts at the beginning of the compiled story.
       // Source links use viewEvidenceSource instead and retain exact-card focus.
-      requestAnimationFrame(() => {
-        evidenceScrollRef.current?.scrollTo({ top: 0 });
-      });
+      if (switchingToEvidence) {
+        setEvidenceUpdateAvailable(false);
+        requestAnimationFrame(() => {
+          evidenceScrollRef.current?.scrollTo({ top: 0 });
+        });
+      }
     }
   };
   const onTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
@@ -1595,7 +1650,7 @@ export function InvestigationView({
           id={findingsTabId}
           aria-controls={findingsPaneId}
           aria-pressed={narrowPane === "evidence"}
-          aria-label="Findings: current assessment and structured Radar evidence"
+          aria-label={findingsTabAccessibleLabel}
           onKeyDown={onTabKeyDown}
           onClick={() => selectPane("evidence")}
           className={`relative flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium ${
@@ -1608,7 +1663,6 @@ export function InvestigationView({
           Findings
           {currentEvidenceCount > 0 ? (
             <span
-              aria-label={`${currentEvidenceCount} evidence ${currentEvidenceCount === 1 ? "item" : "items"}`}
               className={`inline-flex h-4 min-w-5 items-center justify-center rounded-full px-1 font-mono text-[10px] leading-none transition-colors ${
                 unreadEvidence && narrowPane !== "evidence"
                   ? "bg-accent/15 text-accent-text"
@@ -1620,14 +1674,13 @@ export function InvestigationView({
           ) : unreadEvidence ? (
             <span className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden />
           ) : null}
-          {unreadEvidence ? (
-            <>
-              <span className="sr-only" role="status">
-                New evidence available
-              </span>
-            </>
-          ) : null}
         </button>
+        <span className="sr-only" role="status" aria-live="polite">
+          {investigationEvidenceAnnouncement({
+            unreadEvidence,
+            evidenceUpdateAvailable,
+          })}
+        </span>
       </div>
 
       <div className={`grid min-h-0 flex-1 ${splitGridClass}`}>
@@ -1827,7 +1880,7 @@ export function InvestigationView({
           }
           className={`${
             narrowPane === "evidence" ? "flex" : "hidden"
-          } min-h-0 min-w-0 flex-col ${splitPaneClass}`}
+          } relative min-h-0 min-w-0 flex-col ${splitPaneClass}`}
         >
           <div
             className={`hidden items-center justify-between gap-3 border-b border-theme-border/60 px-3 py-2 ${splitPaneClass}`}
@@ -1856,6 +1909,18 @@ export function InvestigationView({
               ) : null}
             </div>
           </div>
+          {evidenceUpdateAvailable ? (
+            <div className={`absolute right-4 top-2 z-20 ${splitTabClass}`}>
+              <button
+                type="button"
+                onClick={scrollFindingsToNewest}
+                className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-theme-elevated px-2 py-1 text-[11px] font-medium text-accent-text shadow-theme-sm hover:bg-theme-hover"
+              >
+                <ArrowUp className="h-3 w-3" />
+                New evidence
+              </button>
+            </div>
+          ) : null}
           <div
             ref={evidenceScrollRef}
             data-investigation-findings-scroll
@@ -1865,20 +1930,6 @@ export function InvestigationView({
             }}
             className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 [overflow-anchor:none] [scrollbar-gutter:stable]"
           >
-            {evidenceUpdateAvailable ? (
-              <div
-                className={`sticky top-1 z-20 mb-2 flex justify-end ${splitTabClass}`}
-              >
-                <button
-                  type="button"
-                  onClick={scrollFindingsToNewest}
-                  className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-theme-elevated px-2 py-1 text-[11px] font-medium text-accent-text shadow-theme-sm hover:bg-theme-hover"
-                >
-                  <ArrowUp className="h-3 w-3" />
-                  New evidence
-                </button>
-              </div>
-            ) : null}
             <div
               ref={evidenceContentRef}
               className="mx-auto max-w-5xl space-y-4"
@@ -2100,7 +2151,6 @@ export function InvestigationView({
                 disabled={
                   !streamReady ||
                   readOnly ||
-                  busy ||
                   requestPending ||
                   verificationPending
                 }
@@ -2117,7 +2167,7 @@ export function InvestigationView({
                           : "Loading investigation history…"
                       : verificationPending
                         ? "Waiting to verify the applied change…"
-                        : busy || requestPending
+                        : requestPending
                           ? "Agent is working…"
                           : "Ask a follow-up or refine…"
                 }

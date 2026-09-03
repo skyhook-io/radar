@@ -1,12 +1,10 @@
-// The recent-investigations list — now backed by server-side runs (the source of
-// truth), so background/running investigations appear here live. Used both as the
-// docked Home view and the master pane of the maximized workspace.
+// Server-side runs keep background and running investigations visible in both
+// the docked Home view and the maximized workspace's master pane.
 import { Loader2, Sparkles } from "lucide-react";
 import { StatusDot, type StatusTone } from "@skyhook-io/k8s-ui";
 import { type RunSummary } from "../../api/diagnose";
 import { formatInvestigationTarget } from "./target";
 
-// Compact "3m ago" / "2h ago" age label.
 function relativeTime(ts: number, now: number): string {
   const s = Math.max(0, Math.round((now - ts) / 1000));
   if (s < 60) return "just now";

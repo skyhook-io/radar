@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
@@ -200,6 +202,161 @@ func TestHandleDiagnoseReportsRecentChangesLimitReached(t *testing.T) {
 				t.Fatalf("recentChangesError = %q, want no collection error", response.RecentChangesError)
 			}
 		})
+	}
+}
+
+func TestHandleGetResourceReportsRecentChangesCoverage(t *testing.T) {
+	tests := []struct {
+		name                string
+		eventCount          int
+		canList             bool
+		wantChanges         int
+		wantChangesPresent  bool
+		wantSaturated       bool
+		wantCoverageLimited bool
+	}{
+		{name: "complete", eventCount: 2, canList: true, wantChanges: 2, wantChangesPresent: true},
+		{name: "output capped", eventCount: 4, canList: true, wantChanges: 3, wantChangesPresent: true, wantSaturated: true},
+		{name: "fetch saturated", eventCount: 100, canList: true, wantChanges: 3, wantChangesPresent: true, wantSaturated: true},
+		{name: "unreadable source without history", wantCoverageLimited: true},
+		{name: "unreadable source with history", eventCount: 100, wantCoverageLimited: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setupFakeCacheForDiagnoseTests(t)
+			timelineStore := initCorrelationStore(t)
+			username := "get-resource-changes-" + strings.ReplaceAll(test.name, " ", "-")
+			ctx := withClusterAdmin(t, username)
+			getPermCache().Get(username, nil).SetCanI("list", "apps", "deployments", "alpha", test.canList)
+
+			for i := 0; i < test.eventCount; i++ {
+				if err := timelineStore.Append(context.Background(), timeline.TimelineEvent{
+					ID:             fmt.Sprintf("cart-get-resource-%03d", i),
+					Timestamp:      time.Now().Add(-time.Duration(i+1) * time.Second),
+					Source:         timeline.SourceInformer,
+					ClusterContext: k8s.ActiveClusterContext(),
+					APIVersion:     "apps/v1",
+					Kind:           "Deployment",
+					Namespace:      "alpha",
+					Name:           "cart",
+					EventType:      timeline.EventTypeUpdate,
+					Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{
+						Path:     "spec.template.spec.containers[cart].image",
+						OldValue: fmt.Sprintf("cart:%d", i),
+						NewValue: fmt.Sprintf("cart:%d", i+1),
+					}}},
+				}); err != nil {
+					t.Fatalf("append timeline event %d: %v", i, err)
+				}
+			}
+
+			result, _, err := handleGetResource(ctx, nil, getResourceInput{
+				Kind: "deployment", Namespace: "alpha", Name: "cart",
+				Include: "changes", Context: "none",
+			})
+			if err != nil {
+				t.Fatalf("handleGetResource: %v", err)
+			}
+			responseText := extractText(t, result)
+			var response struct {
+				RecentChanges                []json.RawMessage `json:"recentChanges"`
+				RecentChangesSaturated       *bool             `json:"recentChangesSaturated"`
+				RecentChangesCoverageLimited *bool             `json:"recentChangesCoverageLimited"`
+			}
+			if err := json.Unmarshal([]byte(responseText), &response); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(responseText), &fields); err != nil {
+				t.Fatalf("decode response fields: %v", err)
+			}
+			if response.RecentChangesSaturated == nil {
+				t.Fatal("recentChangesSaturated is absent")
+			}
+			if *response.RecentChangesSaturated != test.wantSaturated {
+				t.Fatalf("recentChangesSaturated = %v, want %v", *response.RecentChangesSaturated, test.wantSaturated)
+			}
+			if response.RecentChangesCoverageLimited == nil {
+				t.Fatal("recentChangesCoverageLimited is absent")
+			}
+			if *response.RecentChangesCoverageLimited != test.wantCoverageLimited {
+				t.Fatalf("recentChangesCoverageLimited = %v, want %v", *response.RecentChangesCoverageLimited, test.wantCoverageLimited)
+			}
+			if len(response.RecentChanges) != test.wantChanges {
+				t.Fatalf("recentChanges = %d, want %d", len(response.RecentChanges), test.wantChanges)
+			}
+			_, changesPresent := fields["recentChanges"]
+			if changesPresent != test.wantChangesPresent {
+				t.Fatalf("recentChanges present = %v, want %v", changesPresent, test.wantChangesPresent)
+			}
+		})
+	}
+}
+
+func TestRecentChangesSourceTrackedRequiresExactFeedIdentity(t *testing.T) {
+	tests := []struct {
+		name string
+		gvk  schema.GroupVersionKind
+		want bool
+	}{
+		{name: "tracked deployment", gvk: schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}, want: true},
+		{name: "tracked core service", gvk: schema.GroupVersionKind{Version: "v1", Kind: "Service"}, want: true},
+		{name: "same kind in another group", gvk: schema.GroupVersionKind{Group: "serving.knative.dev", Version: "v1", Kind: "Service"}},
+		{name: "untracked kind", gvk: schema.GroupVersionKind{Version: "v1", Kind: "Pod"}},
+		{name: "missing type metadata", gvk: schema.GroupVersionKind{Kind: "Deployment"}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := recentChangesSourceTracked(test.gvk); got != test.want {
+				t.Fatalf("recentChangesSourceTracked(%s) = %v, want %v", test.gvk, got, test.want)
+			}
+		})
+	}
+}
+
+func TestHandleGetResourceDoesNotCallUntrackedChangeFeedComplete(t *testing.T) {
+	setupFakeCacheForDiagnoseTests(t)
+	timelineStore := initCorrelationStore(t)
+	ctx := withClusterAdmin(t, "get-resource-untracked-changes")
+
+	if err := timelineStore.Append(context.Background(), timeline.TimelineEvent{
+		ID:             "untracked-pod-update",
+		Timestamp:      time.Now().Add(-time.Minute),
+		Source:         timeline.SourceInformer,
+		ClusterContext: k8s.ActiveClusterContext(),
+		APIVersion:     "v1",
+		Kind:           "Pod",
+		Namespace:      "alpha",
+		Name:           "cart-abc123",
+		EventType:      timeline.EventTypeUpdate,
+		Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{
+			Path: "status.phase", OldValue: "Pending", NewValue: "Running",
+		}}},
+	}); err != nil {
+		t.Fatalf("append pod history: %v", err)
+	}
+
+	result, _, err := handleGetResource(ctx, nil, getResourceInput{
+		Kind: "pod", Namespace: "alpha", Name: "cart-abc123",
+		Include: "changes", Context: "none",
+	})
+	if err != nil {
+		t.Fatalf("handleGetResource: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(extractText(t, result)), &fields); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if _, present := fields["recentChanges"]; present {
+		t.Fatal("untracked source must not expose rows or an authoritative empty array")
+	}
+	if got := string(fields["recentChangesSaturated"]); got != "false" {
+		t.Fatalf("recentChangesSaturated = %s, want false", got)
+	}
+	if got := string(fields["recentChangesCoverageLimited"]); got != "true" {
+		t.Fatalf("recentChangesCoverageLimited = %s, want true", got)
 	}
 }
 

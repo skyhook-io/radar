@@ -6,6 +6,8 @@ import {
   canOfferInvestigationApply,
   InvestigationStartErrorAlert,
   initialInvestigationPane,
+  investigationEvidenceAnnouncement,
+  investigationEvidenceShouldMarkUnread,
   investigationApplyCompletionEffects,
   investigationApplyAttemptVerified,
   investigationAssessmentNeedsCurrentStateVerification,
@@ -64,6 +66,51 @@ describe("investigation terminal presentation", () => {
     expect(initialInvestigationPane("running")).toBe("activity");
     expect(initialInvestigationPane("error")).toBe("activity");
     expect(initialInvestigationPane("stopped")).toBe("activity");
+  });
+
+  it("marks new evidence unread only when Findings is actually hidden", () => {
+    expect(
+      investigationEvidenceShouldMarkUnread({
+        hasNewLiveSource: true,
+        selectedPane: "activity",
+        evidencePaneVisible: false,
+      }),
+    ).toBe(true);
+    expect(
+      investigationEvidenceShouldMarkUnread({
+        hasNewLiveSource: true,
+        selectedPane: "activity",
+        evidencePaneVisible: true,
+      }),
+    ).toBe(false);
+    expect(
+      investigationEvidenceShouldMarkUnread({
+        hasNewLiveSource: true,
+        selectedPane: "evidence",
+        evidencePaneVisible: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("announces hidden and scrolled-away evidence without duplicating updates", () => {
+    expect(
+      investigationEvidenceAnnouncement({
+        unreadEvidence: true,
+        evidenceUpdateAvailable: true,
+      }),
+    ).toBe("New evidence available");
+    expect(
+      investigationEvidenceAnnouncement({
+        unreadEvidence: false,
+        evidenceUpdateAvailable: true,
+      }),
+    ).toBe("New evidence available at the top of Findings");
+    expect(
+      investigationEvidenceAnnouncement({
+        unreadEvidence: false,
+        evidenceUpdateAvailable: false,
+      }),
+    ).toBe("");
   });
 
   it("makes stale and unavailable runs read-only", () => {
