@@ -231,6 +231,11 @@ export function getCNPGClusterAvailability(
   ) {
     return null
   }
+  // A cluster woken from hibernation or lifted from a full fence transiently
+  // shows this same shape — was-up, zero ready, Ready=False from long before —
+  // until its first instance is Ready. CNPG drops the hibernation marker at that
+  // point, so from the Cluster status alone this is indistinguishable from a real
+  // outage, and it reads down for that short window.
   return 'down'
 }
 

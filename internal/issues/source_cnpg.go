@@ -324,6 +324,10 @@ func detectCNPGClusterIssues(gvr schema.GroupVersionResource, kind string, u *un
 	// so a zero-ready cluster that has one is a regression, not a first bootstrap.
 	// Hibernation and all-fenced are deliberate, and a single instance bouncing is
 	// debounced by the grace. Mirrors the badge's availability verdict exactly.
+	// A cluster woken from hibernation or lifted from a full fence briefly matches
+	// this too — CNPG has already dropped the hibernation marker by wake, so from
+	// the Cluster status alone it is indistinguishable from a real outage and fires
+	// for that short window until the first instance is ready.
 	allDown := okD && desired > 0 && readyResolved == 0 && reported &&
 		currentPrimary != "" && !cnpgHibernated(u) && !cnpgFencedAll(u) && cnpgDownGraceElapsed(u)
 
