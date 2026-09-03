@@ -245,7 +245,7 @@ function VisibilityControl({
             ? "Couldn't change sharing"
             : shared
               ? "Shared with your organization — make private"
-              : "Private — share with your organization"
+              : "Private — click to let organization members access this investigation"
         }
         position="bottom"
       >
@@ -256,7 +256,7 @@ function VisibilityControl({
           aria-label={
             shared
               ? "Shared with your organization — make private"
-              : "Private — share with your organization"
+              : "Private — click to let organization members access this investigation"
           }
         >
           {shared ? (
