@@ -1370,7 +1370,13 @@ function buildRowActionItems(
   const suspendedReason = 'Cannot sync while suspended. Resume first.'
   const items: RowActionItem[] = []
 
-  if (row.tool === 'argo') {
+  // Gate on the kind, not the tool. Every action below posts to
+  // /argo/applications/{namespace}/{name}, which resolves the name against the
+  // Application GVR - so offering them on any other argoproj.io kind either
+  // 404s or, when an Application happens to share the name, mutates that
+  // unrelated Application instead. The detail page gates the same actions the
+  // same way.
+  if (row.kindName === 'applications') {
     const operationInProgress = isArgoOperationInProgress(row.raw)
     items.push({
       key: 'sync',
@@ -1445,6 +1451,7 @@ function buildRowActionItems(
   }
 
   // Flux (Kustomization / HelmRelease)
+  if (row.tool !== 'flux') return items
   items.push({
     key: 'reconcile',
     label: 'Reconcile',

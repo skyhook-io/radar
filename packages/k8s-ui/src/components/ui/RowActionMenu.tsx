@@ -67,6 +67,10 @@ export function RowActionMenu({ items, ariaLabel = 'Row actions', compact = true
   const triggerSize = compact ? 'p-1' : 'p-1.5'
   const iconSize = compact ? 'h-4 w-4' : 'h-5 w-5'
 
+  // A trigger that opens an empty menu is a dead end - render nothing and let
+  // the cell collapse instead.
+  if (items.length === 0) return null
+
   return (
     <div ref={ref} className="relative inline-block">
       <button
