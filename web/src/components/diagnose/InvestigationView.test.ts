@@ -104,7 +104,7 @@ describe("investigation terminal presentation", () => {
         unreadEvidence: false,
         evidenceUpdateAvailable: true,
       }),
-    ).toBe("New evidence available at the top of Findings");
+    ).toBe("New evidence available in Findings.");
     expect(
       investigationEvidenceAnnouncement({
         unreadEvidence: false,
@@ -176,6 +176,7 @@ describe("investigation evidence projection stability", () => {
       investigationEvidenceCoverageLimited({
         limitations: [],
         coverage: { attempted: 0, projected: 0, limited: 0, checked: 0 },
+        sources: [],
         groups: [],
       }),
     ).toBe(true);
@@ -183,14 +184,63 @@ describe("investigation evidence projection stability", () => {
       investigationEvidenceCoverageLimited({
         limitations: [],
         coverage: { attempted: 1, projected: 1, limited: 0, checked: 0 },
-        groups: [{ latest: { relevance: "target" } }],
+        sources: [
+          {
+            id: "resource",
+            tool: "get_resource",
+            confirmedSuccess: true,
+          },
+        ],
+        groups: [
+          {
+            latest: {
+              relevance: "target",
+              source: { id: "resource" },
+            },
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      investigationEvidenceCoverageLimited({
+        limitations: [],
+        coverage: { attempted: 1, projected: 1, limited: 0, checked: 0 },
+        sources: [
+          {
+            id: "diagnose",
+            tool: "diagnose",
+            confirmedSuccess: true,
+          },
+        ],
+        groups: [
+          {
+            latest: {
+              relevance: "target",
+              source: { id: "diagnose" },
+            },
+          },
+        ],
       }),
     ).toBe(false);
     expect(
       investigationEvidenceCoverageLimited({
         limitations: [],
         coverage: { attempted: 1, projected: 1, limited: 0, checked: 0 },
-        groups: [{ latest: { relevance: "broader" } }],
+        sources: [
+          {
+            id: "diagnose",
+            tool: "diagnose",
+            confirmedSuccess: true,
+          },
+        ],
+        groups: [
+          {
+            latest: {
+              relevance: "broader",
+              source: { id: "diagnose" },
+            },
+          },
+        ],
       }),
     ).toBe(true);
   });
@@ -210,6 +260,16 @@ describe("investigation evidence projection stability", () => {
     expect(
       investigationEvidenceConflictsWithHealthy({
         groups: [group("issue", "supporting")],
+      }),
+    ).toBe(true);
+    expect(
+      investigationEvidenceConflictsWithHealthy({
+        groups: [group("logs", "supporting")],
+      }),
+    ).toBe(true);
+    expect(
+      investigationEvidenceConflictsWithHealthy({
+        groups: [group("events", "supporting")],
       }),
     ).toBe(true);
     expect(

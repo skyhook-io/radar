@@ -83,13 +83,12 @@ function ConfigMapEvidence({
         </table>
       ) : (
         <p className="px-2.5 py-2 text-xs text-theme-text-tertiary">
-          No data keys in this captured result.
+          No data keys were found.
         </p>
       )}
       {omitted > 0 ? (
         <p className="border-t border-theme-border px-2.5 py-1.5 text-[10px] text-theme-text-tertiary">
-          {omitted} more {omitted === 1 ? "key" : "keys"} in the full Activity
-          result
+          {omitted} more {omitted === 1 ? "key" : "keys"} available in Activity
         </p>
       ) : null}
     </div>
@@ -124,11 +123,11 @@ function SecretEvidence({
         </div>
       ) : (
         <p className="mt-1.5 text-xs text-theme-text-tertiary">
-          No Secret key names in this captured result.
+          No Secret key names were found.
         </p>
       )}
       <p className="mt-1.5 text-[10px] text-theme-text-tertiary">
-        Values are never shown in investigation evidence.
+        Secret values are never shown here.
       </p>
     </div>
   );
@@ -160,10 +159,6 @@ function SealedSecretEvidence({
       <dl className="flex flex-wrap gap-x-5 gap-y-1 border-b border-theme-border px-2.5 py-1.5 text-[11px]">
         <ResourceFact label="Scope" value={model.scope} />
         <ResourceFact
-          label="Observed generation"
-          value={model.observedGeneration}
-        />
-        <ResourceFact
           label="Created"
           value={
             model.created ? (
@@ -191,7 +186,7 @@ function SealedSecretEvidence({
           </div>
         ) : (
           <p className="mt-1 text-xs text-theme-text-tertiary">
-            No encrypted key names in this captured result.
+            No encrypted key names were found.
           </p>
         )}
       </div>
@@ -217,8 +212,7 @@ function SealedSecretEvidence({
         </div>
       ) : null}
       <p className="border-t border-theme-border px-2.5 py-1.5 text-[10px] text-theme-text-tertiary">
-        Encrypted values stay hidden; key presence and controller status are
-        shown as separate evidence.
+        Encrypted values stay hidden. Key names and controller status are shown.
       </p>
     </div>
   );

@@ -14,6 +14,7 @@ import type {
   Diagnosis,
   ExecutionProfile,
 } from "../../api/diagnose";
+import { investigationEvidenceSourceId } from "./investigationEvidence";
 
 const noop = vi.fn();
 
@@ -298,7 +299,7 @@ describe("ResultCard conclusion states", () => {
     [diagnosis({ rootCause: "The image does not exist." }), "Likely cause"],
     [
       diagnosis({ healthy: true, report: "The workload is ready." }),
-      "No active problems found",
+      "No problem found in checked evidence",
     ],
     [diagnosis({ inconclusive: true }), "Couldn&#x27;t determine"],
   ];
@@ -323,8 +324,8 @@ describe("ResultCard conclusion states", () => {
       />,
     );
 
-    expect(html).toContain("No problem identified in completed checks");
-    expect(html).toContain("Structured evidence is incomplete or unavailable");
+    expect(html).toContain("No problem identified in available evidence");
+    expect(html).toContain("Some evidence could not be summarized");
     expect(html).toContain("border-amber-500/30");
     expect(html).toContain("text-amber-500");
     expect(html).not.toContain("border-emerald-500/30");
@@ -342,10 +343,10 @@ describe("ResultCard conclusion states", () => {
       />,
     );
 
-    expect(html).toContain("No active problems found");
+    expect(html).toContain("No problem found in checked evidence");
     expect(html).toContain("border-emerald-500/30");
     expect(html).toContain("text-emerald-500");
-    expect(html).not.toContain("No problem identified in completed checks");
+    expect(html).not.toContain("No problem identified in available evidence");
   });
 
   it("does not overstate the rank of evidence that conflicts with an all-clear", () => {
@@ -392,6 +393,20 @@ describe("ResultCard conclusion states", () => {
     expect(html).toContain("Answer");
     expect(html).not.toContain("No active problems found");
     expect(html).not.toContain("Couldn&#x27;t determine");
+  });
+
+  it("keeps recovery guidance when Findings suppresses the AI disclaimer", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={diagnosis({
+          inconclusive: true,
+          report: "The available evidence is ambiguous.",
+        })}
+        showDisclaimer={false}
+      />,
+    );
+
+    expect(html).toContain("Try a follow-up with more context");
   });
 
   it("can place the conclusion before evidence and actions after it", () => {
@@ -448,6 +463,27 @@ describe("ResultCard conclusion states", () => {
     expect(html).not.toContain("Inspect the registry.");
     expect(html).not.toContain("Restart the rollout.");
     expect(html).toContain("Show 2 more steps");
+  });
+
+  it("offers apply only for the explicitly recommended remediation", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={diagnosis({
+          rootCause: "The image does not exist.",
+          remediation: [
+            "Inspect the registry.",
+            "Push the missing image.",
+            "Restart the rollout.",
+          ],
+          recommendedIndex: 2,
+        })}
+        section="actions"
+        onApply={() => undefined}
+      />,
+    );
+
+    expect(html.match(/Apply…/g)).toHaveLength(1);
+    expect(html).toContain("Push the missing image.");
   });
 });
 
@@ -516,6 +552,27 @@ describe("TurnView tool outcome truth", () => {
     expect(html).toContain(`id="${controlled}"`);
   });
 
+  it("opens and names the exact tool result requested from Findings", () => {
+    const detailed = turn(false);
+    const item = detailed.timeline[0];
+    if (item.kind === "tool") {
+      item.summary = '{"kind":"Deployment"}';
+    }
+    const sourceId = investigationEvidenceSourceId(0, "tool-1");
+    const html = renderToStaticMarkup(
+      <TurnView
+        turn={detailed}
+        turnIndex={0}
+        sourceRevealRequest={{ sourceId, requestId: 1 }}
+      />,
+    );
+
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain('role="group"');
+    expect(html).toContain('aria-label="Diagnose tool completed"');
+    expect(html).toContain("Input");
+  });
+
   it("renders replayed activity and its conclusion without arrival motion", () => {
     const replayed = turn(false);
     replayed.status = "done";
@@ -558,7 +615,7 @@ describe("TurnView tool outcome truth", () => {
     expect(html).toContain("Outcome unknown");
     expect(html).toContain("border-amber-500/40");
     expect(html).toContain(
-      "At this point, Radar could not safely allow another apply without",
+      "Check the current state before trying to apply this change again.",
     );
     expect(html).toContain("Check current status");
     expect(html).toContain("could confirm whether the change completed");
@@ -579,7 +636,7 @@ describe("TurnView tool outcome truth", () => {
     const html = renderToStaticMarkup(<TurnView turn={apply} />);
     expect(html).toContain("Applied");
     expect(html).toContain("border-emerald-500/30");
-    expect(html).toContain("Mutation confirmed by a Radar write-tool result");
+    expect(html).toContain("Radar confirmed the change was applied");
     expect(html).not.toContain("Outcome unknown");
     expect(html).not.toContain("Not applied");
   });
@@ -612,7 +669,7 @@ describe("TurnView tool outcome truth", () => {
     const html = renderToStaticMarkup(<TurnView turn={apply} />);
     expect(html).toContain("Applied");
     expect(html).toContain("border-emerald-500/30");
-    expect(html).toContain("agent report incomplete");
+    expect(html).toContain("the agent report is incomplete");
     expect(html).toContain("confirmed the mutation");
     expect(html).not.toContain("Not applied");
   });

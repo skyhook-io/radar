@@ -40,6 +40,7 @@ import {
 } from "../../api/diagnose";
 import { Collapse, CollapseChevron, StatusDot } from "@skyhook-io/k8s-ui";
 import { Markdown } from "../ui/Markdown";
+import { Tooltip } from "../ui/Tooltip";
 import {
   investigationActivitySourceDomId,
   investigationEvidenceSourceId,
@@ -537,6 +538,7 @@ export function TurnView({
   turnIndex,
   evidenceStepIds,
   onViewEvidence,
+  sourceRevealRequest,
 }: {
   turn: Turn;
   onApply?: (fix: string) => void;
@@ -549,6 +551,7 @@ export function TurnView({
   turnIndex?: number;
   evidenceStepIds?: ReadonlySet<string>;
   onViewEvidence?: (sourceId: string) => void;
+  sourceRevealRequest?: { sourceId: string; requestId: number };
 }) {
   // A follow-up (a turn the user asked a question on) is a conversational reply,
   // not a fresh diagnosis — render it as a plain answer, never the root-cause
@@ -598,6 +601,7 @@ export function TurnView({
         turnIndex={turnIndex}
         evidenceStepIds={evidenceStepIds}
         onViewEvidence={onViewEvidence}
+        sourceRevealRequest={sourceRevealRequest}
       />
       {turn.status === "done" &&
         (turn.apply ? (
@@ -1104,6 +1108,7 @@ export function Timeline({
   turnIndex,
   evidenceStepIds,
   onViewEvidence,
+  sourceRevealRequest,
 }: {
   items: TimelineItem[];
   running: boolean;
@@ -1112,6 +1117,7 @@ export function Timeline({
   turnIndex?: number;
   evidenceStepIds?: ReadonlySet<string>;
   onViewEvidence?: (sourceId: string) => void;
+  sourceRevealRequest?: { sourceId: string; requestId: number };
 }) {
   const heading = applyMode
     ? "Applying fix"
@@ -1140,29 +1146,37 @@ export function Timeline({
           {heading}
         </div>
       )}
-      {items.map((it, i) =>
-        it.kind === "thinking" ? (
-          <ThinkingBlock
-            key={i}
-            text={it.text}
-            animate={it.animate !== false}
-            live={running && i === items.length - 1}
-          />
-        ) : (
+      {items.map((it, i) => {
+        if (it.kind === "thinking") {
+          return (
+            <ThinkingBlock
+              key={i}
+              text={it.text}
+              animate={it.animate !== false}
+              live={running && i === items.length - 1}
+            />
+          );
+        }
+        const sourceId =
+          turnIndex === undefined
+            ? undefined
+            : investigationEvidenceSourceId(turnIndex, it.id);
+        return (
           <ToolRow
             key={it.id}
             step={it}
-            sourceId={
-              turnIndex === undefined
-                ? undefined
-                : investigationEvidenceSourceId(turnIndex, it.id)
-            }
+            sourceId={sourceId}
             hasEvidence={evidenceStepIds?.has(it.id) ?? false}
             onViewEvidence={onViewEvidence}
+            revealRequestId={
+              sourceRevealRequest && sourceId === sourceRevealRequest.sourceId
+                ? sourceRevealRequest.requestId
+                : undefined
+            }
             animate={it.animate !== false}
           />
-        ),
-      )}
+        );
+      })}
       {running && <RunningStatus label={runningLabel} />}
     </div>
   );
@@ -1293,18 +1307,23 @@ function ToolRow({
   sourceId,
   hasEvidence,
   onViewEvidence,
+  revealRequestId,
   animate,
 }: {
   step: Extract<TimelineItem, { kind: "tool" }>;
   sourceId?: string;
   hasEvidence?: boolean;
   onViewEvidence?: (sourceId: string) => void;
+  revealRequestId?: number;
   animate: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(revealRequestId !== undefined);
   const [showFull, setShowFull] = useState(false);
   const detailId = `investigation-tool-detail-${useId().replaceAll(":", "")}`;
   const hasDetail = !!(step.summary || step.result);
+  useEffect(() => {
+    if (revealRequestId !== undefined && hasDetail) setOpen(true);
+  }, [hasDetail, revealRequestId]);
   // Offer the rich dialog when the result is structured or non-trivial in size.
   const richResult =
     !!step.result && (isJsonPayload(step.result) || step.result.length > 200);
@@ -1359,6 +1378,12 @@ function ToolRow({
     <div
       id={sourceId ? investigationActivitySourceDomId(sourceId) : undefined}
       tabIndex={sourceId ? -1 : undefined}
+      role={sourceId ? "group" : undefined}
+      aria-label={
+        sourceId
+          ? `${prettyTool(step.tool)} ${outcomeLabel.toLowerCase()}`
+          : undefined
+      }
       className={`${animate ? "animate-transcript-enter" : ""} scroll-mt-3 rounded-md border border-theme-border/60 bg-theme-base/40 outline-none focus:ring-2 focus:ring-accent/50`}
     >
       <div className="flex min-w-0 items-stretch">
@@ -1381,10 +1406,10 @@ function ToolRow({
           <button
             type="button"
             onClick={() => onViewEvidence(sourceId)}
-            aria-label={`View findings from ${prettyTool(step.tool)}`}
+            aria-label={`View evidence from ${prettyTool(step.tool)}`}
             className="shrink-0 border-l border-theme-border/60 px-2 text-[11px] font-medium text-accent hover:bg-theme-hover"
           >
-            Findings
+            Evidence
           </button>
         ) : null}
       </div>
@@ -1469,7 +1494,10 @@ function PayloadBlock({
         </span>
         <div className="flex items-center gap-2">
           {action}
-          <CopyButton text={json ?? text} />
+          <CopyButton
+            text={json ?? text}
+            label={`Copy ${label.toLowerCase()}`}
+          />
         </div>
       </div>
       <pre
@@ -1564,7 +1592,7 @@ function ToolResultDialog({
               />
             </div>
           )}
-          <CopyButton text={display} />
+          <CopyButton text={display} label="Copy tool result" />
         </div>
       </div>
       {html ? (
@@ -1663,11 +1691,7 @@ export function ResultCard({
   // the alarming root-cause anchor.
   if (diagnosis.inconclusive && !diagnosis.rootCause)
     return section === "actions" ? null : (
-      <InconclusiveCard
-        diagnosis={diagnosis}
-        animate={animate}
-        showDisclaimer={showDisclaimer}
-      />
+      <InconclusiveCard diagnosis={diagnosis} animate={animate} />
     );
   // A turn with no structured root cause and no remediation (e.g. "looks healthy",
   // or a clarifying question) is not a diagnosis — render it neutrally rather than
@@ -1693,7 +1717,7 @@ export function ResultCard({
 const EXPLAIN_SIMPLY_PROMPT =
   "Explain this in plain language for someone who isn't a Kubernetes expert — what's broken, why it matters, and what each remediation step actually does. Gloss any k8s terms.";
 
-// The diagnosis result: likely cause + remediation (any step applyable) + the
+// The diagnosis result: likely cause + remediation + the
 // agent's full analysis on demand.
 function DiagnosisResult({
   diagnosis,
@@ -1714,6 +1738,7 @@ function DiagnosisResult({
 }) {
   const [showAnalysis, setShowAnalysis] = useState(false);
   const [showAllSteps, setShowAllSteps] = useState(false);
+  const analysisId = useId();
   // Only a real structured cause anchors the amber card; the full prose lives in
   // "Full analysis" (never relabel the report as a causal assessment).
   const rootCause = diagnosis.rootCause;
@@ -1754,7 +1779,7 @@ function DiagnosisResult({
               ) : (
                 <ConfidenceUnstated />
               )}
-              <CopyButton text={rootCause} />
+              <CopyButton text={rootCause} label="Copy likely cause" />
             </div>
           </div>
           <AIMarkdown className="text-sm font-medium text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_p]:my-0 [&_p]:text-theme-text-primary">
@@ -1772,8 +1797,8 @@ function DiagnosisResult({
         </div>
       )}
 
-      {/* Remediation — copyable steps; the recommended one is highlighted as the
-          default, and any step can be applied (Apply binds to that step's text). */}
+      {/* Remediation — every step is copyable. Only the explicitly recommended
+          step can be applied, and only when the caller enables apply. */}
       {showActions && hasRemediation && (
         <div className="rounded-lg border border-theme-border bg-theme-elevated p-3">
           <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-theme-text-tertiary">
@@ -1825,7 +1850,7 @@ function DiagnosisResult({
                         actions stay together. The ellipsis signals a confirm
                         dialog follows — it doesn't apply immediately. */}
                     <div className="flex shrink-0 items-center gap-0.5">
-                      {canApply && (
+                      {canApply && isRec && (
                         <button
                           onClick={() => onApply!(r)}
                           className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-accent transition-colors ${
@@ -1838,7 +1863,10 @@ function DiagnosisResult({
                           Apply…
                         </button>
                       )}
-                      <CopyButton text={r} />
+                      <CopyButton
+                        text={r}
+                        label={`Copy remediation step ${i + 1}`}
+                      />
                     </div>
                   </div>
                 </li>
@@ -1864,9 +1892,8 @@ function DiagnosisResult({
           {!recValid && (
             <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-snug text-theme-text-tertiary">
               <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" />
-              No safe one-click fix — the agent flagged this as needing your
-              judgement. Review the steps, or resume in your agent to apply them
-              interactively.
+              No one-click fix is available. Review these steps and apply them
+              manually, or ask the agent to continue.
             </p>
           )}
         </div>
@@ -1876,6 +1903,9 @@ function DiagnosisResult({
       {showConclusion && diagnosis.report && (
         <div className="rounded-lg border border-theme-border bg-theme-elevated">
           <button
+            type="button"
+            aria-expanded={showAnalysis}
+            aria-controls={analysisId}
             onClick={() => setShowAnalysis((v) => !v)}
             className="flex w-full items-center gap-1.5 px-3 py-2 text-xs font-medium uppercase tracking-wide text-theme-text-tertiary hover:text-theme-text-primary"
           >
@@ -1884,13 +1914,15 @@ function DiagnosisResult({
             />
             Full analysis
           </button>
-          <Collapse open={showAnalysis}>
-            <div className="border-t border-theme-border/60 px-3 py-2">
-              <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_h2:first-child]:mt-0 [&_h2]:mb-1.5 [&_h2]:mt-3 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-wide [&_h2]:text-theme-text-tertiary [&_h3]:text-sm [&_li]:text-theme-text-secondary [&_p]:my-1.5 [&_p]:text-theme-text-secondary">
-                {diagnosis.report}
-              </AIMarkdown>
-            </div>
-          </Collapse>
+          <div id={analysisId}>
+            <Collapse open={showAnalysis}>
+              <div className="border-t border-theme-border/60 px-3 py-2">
+                <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_h2:first-child]:mt-0 [&_h2]:mb-1.5 [&_h2]:mt-3 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-wide [&_h2]:text-theme-text-tertiary [&_h3]:text-sm [&_li]:text-theme-text-secondary [&_p]:my-1.5 [&_p]:text-theme-text-secondary">
+                  {diagnosis.report}
+                </AIMarkdown>
+              </div>
+            </Collapse>
+          </div>
         </div>
       )}
 
@@ -1918,11 +1950,13 @@ function AllClearCard({
   evidenceConflict: boolean;
 }) {
   const [showAnalysis, setShowAnalysis] = useState(false);
+  const analysisId = useId();
   const report =
-    diagnosis.report || "No active problem found for this resource.";
+    diagnosis.report ||
+    "The agent did not identify a problem in the evidence it checked.";
   const detailed = report.length > 320 || report.split("\n").length > 2;
   const summary = detailed
-    ? "The agent found no active problem in the checks it completed."
+    ? "The agent found no active problem in the evidence it reviewed."
     : report;
   return (
     <div className={`mt-3 space-y-2 ${animate ? "animate-result-in" : ""}`}>
@@ -1951,10 +1985,10 @@ function AllClearCard({
             {evidenceConflict
               ? "Assessment conflicts with captured evidence"
               : coverageLimited
-                ? "No problem identified in completed checks"
-                : "No active problems found"}
+                ? "No problem identified in available evidence"
+                : "No problem found in checked evidence"}
           </div>
-          <CopyButton text={report} />
+          <CopyButton text={report} label="Copy assessment" />
         </div>
         <AIMarkdown className="text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_li]:text-theme-text-primary [&_p]:my-1 [&_p]:text-theme-text-primary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
           {summary}
@@ -1967,8 +2001,8 @@ function AllClearCard({
           </p>
         ) : coverageLimited ? (
           <p className="mt-2 text-xs text-theme-text-secondary">
-            Structured evidence is incomplete or unavailable. Review
-            Radar&apos;s observations below before treating this as an
+            Some evidence could not be summarized or is unavailable. Review
+            Radar&apos;s observations and Activity before treating this as an
             all-clear.
           </p>
         ) : null}
@@ -1978,6 +2012,7 @@ function AllClearCard({
           <button
             type="button"
             aria-expanded={showAnalysis}
+            aria-controls={analysisId}
             onClick={() => setShowAnalysis((value) => !value)}
             className="flex w-full items-center gap-1.5 px-3 py-2 text-xs font-medium uppercase tracking-wide text-theme-text-tertiary hover:text-theme-text-primary"
           >
@@ -1986,13 +2021,15 @@ function AllClearCard({
             />
             Full analysis
           </button>
-          <Collapse open={showAnalysis}>
-            <div className="border-t border-theme-border/60 px-3 py-2">
-              <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_p]:my-1.5 [&_p]:text-theme-text-secondary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
-                {report}
-              </AIMarkdown>
-            </div>
-          </Collapse>
+          <div id={analysisId}>
+            <Collapse open={showAnalysis}>
+              <div className="border-t border-theme-border/60 px-3 py-2">
+                <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_p]:my-1.5 [&_p]:text-theme-text-secondary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
+                  {report}
+                </AIMarkdown>
+              </div>
+            </Collapse>
+          </div>
         </div>
       ) : null}
       {showDisclaimer ? (
@@ -2011,15 +2048,13 @@ function AllClearCard({
 function InconclusiveCard({
   diagnosis,
   animate,
-  showDisclaimer,
 }: {
   diagnosis: Diagnosis;
   animate: boolean;
-  showDisclaimer: boolean;
 }) {
   const text =
     diagnosis.report ||
-    "The investigation couldn't reach a clear conclusion — some checks were blocked or the evidence was ambiguous.";
+    "The investigation couldn't reach a clear conclusion — some information was unavailable or the evidence was ambiguous.";
   return (
     <div className={`mt-3 space-y-2 ${animate ? "animate-result-in" : ""}`}>
       <div className="rounded-lg border border-theme-border bg-theme-elevated p-3">
@@ -2028,21 +2063,19 @@ function InconclusiveCard({
             <HelpCircle className="h-3.5 w-3.5" />
             Couldn&apos;t determine
           </div>
-          <CopyButton text={text} />
+          <CopyButton text={text} label="Copy assessment" />
         </div>
         <AIMarkdown className="text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_li]:text-theme-text-primary [&_p]:my-1 [&_p]:text-theme-text-primary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
           {text}
         </AIMarkdown>
       </div>
-      {showDisclaimer ? (
-        <div className="flex items-start gap-1 px-0.5 text-[11px] text-theme-text-tertiary">
-          <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" />
-          <span>
-            Try a follow-up with more detail, or investigate again after
-            granting access.
-          </span>
-        </div>
-      ) : null}
+      <div className="flex items-start gap-1 px-0.5 text-[11px] text-theme-text-tertiary">
+        <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" />
+        <span>
+          Try a follow-up with more context, or investigate again after
+          addressing any errors shown in Activity.
+        </span>
+      </div>
     </div>
   );
 }
@@ -2067,7 +2100,7 @@ function FollowupAnswer({
           <Sparkles className="h-3.5 w-3.5 text-accent" />
           Answer
         </div>
-        <CopyButton text={text} />
+        <CopyButton text={text} label="Copy answer" />
       </div>
       <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_code]:font-normal [&_h2:first-child]:mt-0 [&_h2]:mb-1.5 [&_h2]:mt-3 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-wide [&_h2]:text-theme-text-tertiary [&_h3]:text-sm [&_li]:text-theme-text-secondary [&_p]:my-1.5 [&_p]:text-theme-text-secondary [&_p:first-child]:mt-0">
         {text}
@@ -2120,10 +2153,10 @@ function ApplyOutcomeCard({
       : "Outcome unknown";
   const detail = error || outcome;
   const fallbackDetail = confirmed
-    ? "A Radar write tool confirmed the change. Radar required a current-state check to confirm its effect."
+    ? "Radar confirmed that the change was applied. Check the current state to confirm its effect."
     : failed
-      ? "No Radar write tool reported a successful mutation. Review the failed or missing write call before retrying."
-      : "Radar could not establish whether the mutation completed. The live state needed verification before retrying.";
+      ? "Radar could not confirm that the change was applied. Review Activity before retrying."
+      : "Radar could not confirm whether the change was applied. Check the current state before retrying.";
   const containerClass = confirmed
     ? "border-emerald-500/30 bg-emerald-500/5"
     : failed
@@ -2139,11 +2172,11 @@ function ApplyOutcomeCard({
     : "border-amber-500/40 text-amber-400 hover:bg-amber-500/10";
   const provenance = confirmed
     ? error
-      ? "Mutation confirmed by Radar — agent report incomplete"
-      : "Mutation confirmed by a Radar write-tool result"
+      ? "Radar confirmed the change — the agent report is incomplete"
+      : "Radar confirmed the change was applied"
     : failed
-      ? "No successful Radar write-tool result was recorded"
-      : "Radar cannot confirm whether the mutation completed";
+      ? "Radar did not confirm that the change was applied"
+      : "Radar cannot confirm whether the change was applied";
   return (
     <div className={`mt-3 space-y-2 ${animate ? "animate-result-in" : ""}`}>
       <div className={`rounded-lg border p-3 ${containerClass}`}>
@@ -2158,7 +2191,7 @@ function ApplyOutcomeCard({
             )}
             {heading}
           </div>
-          {detail && <CopyButton text={detail} />}
+          {detail && <CopyButton text={detail} label="Copy apply result" />}
         </div>
         <AIMarkdown className="text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_li]:text-theme-text-primary [&_p]:my-1 [&_p]:text-theme-text-primary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
           {detail || fallbackDetail}
@@ -2167,8 +2200,7 @@ function ApplyOutcomeCard({
           <div className="mt-2 flex items-start gap-1.5 text-xs font-medium text-amber-300">
             <RefreshCw className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span>
-              At this point, Radar could not safely allow another apply without
-              a current-state check.
+              Check the current state before trying to apply this change again.
             </span>
           </div>
         )}
@@ -2191,24 +2223,31 @@ function ApplyOutcomeCard({
   );
 }
 
-function CopyButton({ text }: { text: string }) {
+function CopyButton({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false);
   return (
-    <button
-      onClick={() => {
-        navigator.clipboard?.writeText(text);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1200);
-      }}
-      className="shrink-0 rounded p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
-      aria-label="Copy"
+    <Tooltip
+      content={copied ? "Copied" : label}
+      delay={100}
+      wrapperClassName="shrink-0"
     >
-      {copied ? (
-        <Check className="h-3.5 w-3.5 text-emerald-400" />
-      ) : (
-        <Copy className="h-3.5 w-3.5" />
-      )}
-    </button>
+      <button
+        onClick={() => {
+          navigator.clipboard?.writeText(text);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1200);
+        }}
+        className="shrink-0 rounded p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
+        aria-label={copied ? `${label} — copied` : label}
+        aria-live="polite"
+      >
+        {copied ? (
+          <Check className="h-3.5 w-3.5 text-emerald-400" />
+        ) : (
+          <Copy className="h-3.5 w-3.5" />
+        )}
+      </button>
+    </Tooltip>
   );
 }
 

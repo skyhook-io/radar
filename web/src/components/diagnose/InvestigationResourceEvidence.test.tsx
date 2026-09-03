@@ -46,7 +46,7 @@ describe("InvestigationResourceEvidence", () => {
     expect(html).not.toContain("do-not-render-this-password");
     expect(html).not.toContain("hidden-pass");
     expect(html).not.toContain("another-hidden-pass");
-    expect(html).toContain("4 more keys in the full Activity result");
+    expect(html).toContain("4 more keys available in Activity");
     expect(html.indexOf("API_ENDPOINT")).toBeLessThan(
       html.indexOf("MONGO_USER"),
     );
@@ -71,7 +71,7 @@ describe("InvestigationResourceEvidence", () => {
     expect(html).toContain("username");
     expect(html).toContain("connection");
     expect(html).toContain("Opaque");
-    expect(html).toContain("Values are never shown");
+    expect(html).toContain("Secret values are never shown here.");
     expect(html).not.toContain("c3VwZXItc2VjcmV0");
     expect(html).not.toContain("b3BlbmRldg==");
     expect(html).not.toContain("mongodb://");
@@ -111,7 +111,7 @@ describe("InvestigationResourceEvidence", () => {
 
     expect(html).toContain("Synced");
     expect(html).toContain("Namespace-wide");
-    expect(html).toContain("Observed generation");
+    expect(html).not.toContain("Observed generation");
     expect(html).toContain("2026-09-01 10:15 UTC");
     expect(html).toContain("MONGO_PASSWORD");
     expect(html).toContain("API_TOKEN");

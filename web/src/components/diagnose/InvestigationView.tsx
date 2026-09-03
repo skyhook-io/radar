@@ -20,7 +20,6 @@ import {
   AlertTriangle,
   ArrowDown,
   ArrowRight,
-  ArrowUp,
   Activity,
   CheckCircle2,
   Files,
@@ -53,7 +52,10 @@ import {
   type InvestigationEvidenceProjection,
   type InvestigationEvidenceTurn,
 } from "./investigationEvidence";
-import { InvestigationEvidencePane } from "./InvestigationEvidencePane";
+import {
+  INVESTIGATION_DISCLOSURE_SETTLE_MS,
+  InvestigationEvidencePane,
+} from "./InvestigationEvidencePane";
 import type { DiagnosisResourceRef } from "./diagnoseEvidenceTypes";
 import { formatInvestigationTarget } from "./target";
 
@@ -97,7 +99,7 @@ export function investigationEvidenceAnnouncement({
 }): string {
   if (unreadEvidence) return "New evidence available";
   if (evidenceUpdateAvailable) {
-    return "New evidence available at the top of Findings";
+    return "New evidence available in Findings.";
   }
   return "";
 }
@@ -331,15 +333,33 @@ export function investigationEvidenceCoverageLimited(
     InvestigationEvidenceProjection,
     "limitations" | "coverage"
   > & {
+    sources: readonly {
+      id: string;
+      tool: string;
+      confirmedSuccess: boolean;
+    }[];
     groups: readonly {
-      latest: { relevance: "target" | "producer-related" | "broader" };
+      latest: {
+        relevance: "target" | "producer-related" | "broader";
+        source: { id: string };
+      };
     }[];
   },
 ): boolean {
+  const completeDiagnosisSourceIds = new Set(
+    projection.sources
+      .filter((source) => source.tool === "diagnose" && source.confirmedSuccess)
+      .map((source) => source.id),
+  );
+  const hasTargetDiagnosis = projection.groups.some(
+    (group) =>
+      group.latest.relevance !== "broader" &&
+      completeDiagnosisSourceIds.has(group.latest.source.id),
+  );
   return (
     projection.limitations.length > 0 ||
     projection.coverage.projected === 0 ||
-    !projection.groups.some((group) => group.latest.relevance !== "broader")
+    !hasTargetDiagnosis
   );
 }
 
@@ -348,6 +368,8 @@ const HEALTH_CONFLICT_EVIDENCE_KINDS = new Set([
   "startup",
   "crash",
   "resource",
+  "logs",
+  "events",
   "dns",
   "network",
 ]);
@@ -411,8 +433,7 @@ export function investigationHistoryUnavailablePresentation(
   return {
     title: "Saved history is unavailable",
     detail:
-      state.error ||
-      "Radar could not reconstruct this run from its retained history.",
+      state.error || "Radar could not restore this run from its saved history.",
     loading: false,
   };
 }
@@ -557,11 +578,18 @@ export function InvestigationView({
     sourceId: string;
     requestId: number;
   }>();
+  const [activityRevealRequest, setActivityRevealRequest] = useState<{
+    sourceId: string;
+    requestId: number;
+  }>();
   const scrollRef = useRef<HTMLDivElement>(null);
   const evidenceScrollRef = useRef<HTMLDivElement>(null);
   const evidenceContentRef = useRef<HTMLDivElement>(null);
   const evidenceCardLayoutRef = useRef(
     new Map<string, { top: number; height: number }>(),
+  );
+  const latestEvidenceUpdateSourceIdRef = useRef<string | undefined>(
+    undefined,
   );
   const evidenceProjectionTurnsRef = useRef<readonly Turn[]>([]);
   // Replay is accumulated off-screen and committed once at its boundary. This
@@ -586,6 +614,7 @@ export function InvestigationView({
   const localApplyRequestRef = useRef(false);
   const paneSelectionTouchedRef = useRef(false);
   const evidenceRevealRequestIdRef = useRef(0);
+  const activityRevealRequestIdRef = useRef(0);
   const workspaceId = useId();
   const activityTabId = `${workspaceId}-activity-tab`;
   const activityPaneId = `${workspaceId}-activity-pane`;
@@ -726,8 +755,11 @@ export function InvestigationView({
     setNarrowPane(initialInvestigationPane(run.status));
     setUnreadEvidence(false);
     setEvidenceUpdateAvailable(false);
+    latestEvidenceUpdateSourceIdRef.current = undefined;
     setEvidenceRevealRequest(undefined);
     evidenceRevealRequestIdRef.current = 0;
+    setActivityRevealRequest(undefined);
+    activityRevealRequestIdRef.current = 0;
     evidenceCardLayoutRef.current.clear();
     evidenceProjectionTurnsRef.current = [];
     const cancel = subscribeRun(run.id, {
@@ -848,7 +880,7 @@ export function InvestigationView({
           }
           case "history_unavailable":
             setHistoryUnavailable({
-              error: ev.error || "Radar could not read the retained history.",
+              error: ev.error || "Radar could not read the saved history.",
               retryable: ev.retryable === true,
             });
             setStreamReady(false);
@@ -1244,13 +1276,14 @@ export function InvestigationView({
   // count, so new live sources—not card count—drive the inactive-tab pulse.
   // Replayed sources are marked seen without pulsing the tab.
   useEffect(() => {
-    const hasNewLiveSource = projection.sources.some((source) => {
+    const newLiveSources = projection.sources.filter((source) => {
       if (seenEvidenceSourceIdsRef.current.has(source.id)) return false;
       return (
         turns[source.turnIndex]?.timeline[source.timelineIndex]?.animate ===
         true
       );
     });
+    const hasNewLiveSource = newLiveSources.length > 0;
     if (
       investigationEvidenceShouldMarkUnread({
         hasNewLiveSource,
@@ -1263,6 +1296,7 @@ export function InvestigationView({
       setUnreadEvidence(true);
     }
     if (hasNewLiveSource && (evidenceScrollRef.current?.scrollTop ?? 0) > 80) {
+      latestEvidenceUpdateSourceIdRef.current = newLiveSources.at(-1)?.id;
       setEvidenceUpdateAvailable(true);
     }
     for (const source of projection.sources) {
@@ -1277,9 +1311,17 @@ export function InvestigationView({
       animateEvidenceGroupIds.size > 0 &&
       (evidenceScrollRef.current?.scrollTop ?? 0) > 80
     ) {
+      const latestChangedSource = projection.groups
+        .filter((group) => animateEvidenceGroupIds.has(group.id))
+        .map((group) => group.chronologicalLatest.source)
+        .sort((left, right) => left.order - right.order)
+        .at(-1);
+      if (latestChangedSource) {
+        latestEvidenceUpdateSourceIdRef.current = latestChangedSource.id;
+      }
       setEvidenceUpdateAvailable(true);
     }
-  }, [animateEvidenceGroupIds]);
+  }, [animateEvidenceGroupIds, projection.groups]);
 
   // Evidence is inserted into semantic tiers rather than blindly appended. Keep
   // the first card a user is reading fixed in place when a live result lands above
@@ -1419,6 +1461,7 @@ export function InvestigationView({
     // This path reveals the exact changed source, so the broader scrolled-away
     // cue has served its purpose even when the centered card remains below 80px.
     setEvidenceUpdateAvailable(false);
+    latestEvidenceUpdateSourceIdRef.current = undefined;
     evidenceRevealRequestIdRef.current += 1;
     setEvidenceRevealRequest({
       sourceId,
@@ -1434,8 +1477,20 @@ export function InvestigationView({
   const viewActivitySource = useCallback(
     (sourceId: string) => {
       paneSelectionTouchedRef.current = true;
+      activityRevealRequestIdRef.current += 1;
+      setActivityRevealRequest({
+        sourceId,
+        requestId: activityRevealRequestIdRef.current,
+      });
       setNarrowPane("activity");
-      focusAfterPaneSwitch(investigationActivitySourceDomId(sourceId), false);
+      window.setTimeout(
+        () =>
+          focusAfterPaneSwitch(
+            investigationActivitySourceDomId(sourceId),
+            false,
+          ),
+        prefersReducedMotion() ? 0 : INVESTIGATION_DISCLOSURE_SETTLE_MS,
+      );
     },
     [focusAfterPaneSwitch],
   );
@@ -1458,20 +1513,19 @@ export function InvestigationView({
   const currentKeyFindingCount = projection.groups.filter(
     (group) => !group.historical && group.latest.tier === "key",
   ).length;
-  const currentEvidenceCount = projection.groups.filter(
-    (group) => !group.historical,
-  ).length;
-  const findingsTabAccessibleLabel = `Findings: current assessment and structured Radar evidence${
-    currentEvidenceCount > 0
-      ? `; ${currentEvidenceCount} evidence ${currentEvidenceCount === 1 ? "item" : "items"}`
-      : ""
-  }`;
+  const findingsTabAccessibleLabel =
+    "Findings: current assessment, Radar evidence, and next steps";
   const currentAssessmentCoverageLimited = investigationEvidenceCoverageLimited(
     currentAssessmentProjection,
   );
   const currentAssessmentEvidenceConflict =
     currentAssessment?.diagnosis?.healthy === true &&
     investigationEvidenceConflictsWithHealthy(projection);
+  const hasEvidenceCollectedAfterAssessment =
+    currentAssessmentIdx >= 0 &&
+    projection.sources.some(
+      (source) => source.turnIndex > currentAssessmentIdx,
+    );
   const assessmentNeedsCurrentStateVerification =
     investigationAssessmentNeedsCurrentStateVerification({
       currentAssessmentIdx,
@@ -1504,11 +1558,20 @@ export function InvestigationView({
       // Source links use viewEvidenceSource instead and retain exact-card focus.
       if (switchingToEvidence) {
         setEvidenceUpdateAvailable(false);
+        latestEvidenceUpdateSourceIdRef.current = undefined;
         requestAnimationFrame(() => {
           evidenceScrollRef.current?.scrollTo({ top: 0 });
         });
       }
     }
+  };
+  const viewActivity = () => {
+    paneSelectionTouchedRef.current = true;
+    setNarrowPane("activity");
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ top: 0 });
+      document.getElementById(activityPaneId)?.focus({ preventScroll: true });
+    });
   };
   const onTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     let pane: "activity" | "evidence" | undefined;
@@ -1521,7 +1584,12 @@ export function InvestigationView({
       .getElementById(pane === "activity" ? activityTabId : findingsTabId)
       ?.focus();
   };
-  const scrollFindingsToNewest = () => {
+  const revealLatestEvidenceUpdate = () => {
+    const sourceId = latestEvidenceUpdateSourceIdRef.current;
+    if (sourceId) {
+      viewEvidenceSource(sourceId);
+      return;
+    }
     evidenceScrollRef.current?.scrollTo({
       top: 0,
       behavior: prefersReducedMotion() ? "auto" : "smooth",
@@ -1557,7 +1625,7 @@ export function InvestigationView({
             This investigation is closed and read-only.{" "}
             {turns.length > 0
               ? "Evidence already loaded in this view is preserved, but Radar can no longer continue the run."
-              : "No retained evidence is available."}
+              : "No saved evidence is available."}
           </span>
           <button
             type="button"
@@ -1579,8 +1647,8 @@ export function InvestigationView({
               ? "This investigation was stopped before it reached a conclusion."
               : "This investigation ended before it reached a complete conclusion."}
             <span className="ml-1">
-              Evidence collected so far is preserved. See Activity for the
-              terminal event.
+              Evidence collected so far is preserved. See Activity for the final
+              error or stopped state.
             </span>
           </span>
           <button
@@ -1661,17 +1729,7 @@ export function InvestigationView({
         >
           <Files className="h-3.5 w-3.5" />
           Findings
-          {currentEvidenceCount > 0 ? (
-            <span
-              className={`inline-flex h-4 min-w-5 items-center justify-center rounded-full px-1 font-mono text-[10px] leading-none transition-colors ${
-                unreadEvidence && narrowPane !== "evidence"
-                  ? "bg-accent/15 text-accent-text"
-                  : "bg-theme-elevated text-theme-text-tertiary"
-              }`}
-            >
-              {currentEvidenceCount}
-            </span>
-          ) : unreadEvidence ? (
+          {unreadEvidence && narrowPane !== "evidence" ? (
             <span className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden />
           ) : null}
         </button>
@@ -1686,20 +1744,26 @@ export function InvestigationView({
       <div className={`grid min-h-0 flex-1 ${splitGridClass}`}>
         <section
           id={activityPaneId}
+          tabIndex={-1}
           aria-label="Activity: agent reasoning and tool calls"
           aria-busy={busy || requestPending || rebuildingReplay}
           className={`${
             narrowPane === "activity" ? "flex" : "hidden"
-          } relative min-h-0 min-w-0 flex-col ${splitPaneClass} ${splitActivityBorderClass}`}
+          } relative min-h-0 min-w-0 flex-col outline-none ${splitPaneClass} ${splitActivityBorderClass}`}
         >
           <div
             className={`hidden items-center justify-between border-b border-theme-border/60 px-3 py-2 ${splitPaneClass}`}
           >
-            <div className="flex items-center gap-2">
-              <Activity className="h-4 w-4 text-theme-text-tertiary" />
-              <h2 className="text-sm font-semibold text-theme-text-primary">
-                Activity
-              </h2>
+            <div className="flex min-w-0 items-center gap-2">
+              <Activity className="h-4 w-4 shrink-0 text-theme-text-tertiary" />
+              <div className="min-w-0">
+                <h2 className="truncate text-sm font-semibold text-theme-text-primary">
+                  Activity
+                </h2>
+                <p className="truncate text-[11px] text-theme-text-tertiary">
+                  Agent reasoning and tool calls
+                </p>
+              </div>
             </div>
             <span className="inline-flex items-center gap-1.5 text-[11px] text-theme-text-tertiary">
               {toolCallCount > 0
@@ -1741,13 +1805,13 @@ export function InvestigationView({
                     <p className="mt-1 text-xs text-theme-text-tertiary">
                       {!streamReady
                         ? historyUnavailablePresentation?.loading
-                          ? "Radar will continue when retained history is readable."
+                          ? "Radar will continue when saved history is available."
                           : historyUnavailablePresentation
-                            ? "Radar could not reconstruct this run from retained history."
-                            : "Reconstructing this run from its retained event history."
+                            ? "Radar could not restore this run from saved history."
+                            : "Restoring this run from saved history."
                         : busy
                           ? "Reasoning and tool activity will appear here."
-                          : "This run has no retained transcript events."}
+                          : "No saved activity is available for this run."}
                     </p>
                   </div>
                 ) : null}
@@ -1770,6 +1834,7 @@ export function InvestigationView({
                         turnIndex={index}
                         evidenceStepIds={evidenceStepIdsByTurn.get(index)}
                         onViewEvidence={viewEvidenceSource}
+                        sourceRevealRequest={activityRevealRequest}
                         onAsk={
                           isLast &&
                           !interactionsBlocked &&
@@ -1826,7 +1891,7 @@ export function InvestigationView({
                             <span className="block text-[11px] text-theme-text-tertiary">
                               {currentKeyFindingCount > 0
                                 ? `${currentKeyFindingCount} ${currentKeyFindingCount === 1 ? "key finding" : "key findings"} ready to review`
-                                : "Findings compiled from completed checks"}
+                                : "Findings compiled from Radar results"}
                             </span>
                           </span>
                           <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-accent-text">
@@ -1874,7 +1939,7 @@ export function InvestigationView({
         </section>
         <section
           id={findingsPaneId}
-          aria-label="Findings: current assessment and structured Radar evidence"
+          aria-label="Findings: current assessment, Radar evidence, and next steps"
           aria-busy={
             busy || requestPending || verificationPending || rebuildingReplay
           }
@@ -1900,11 +1965,11 @@ export function InvestigationView({
               {evidenceUpdateAvailable ? (
                 <button
                   type="button"
-                  onClick={scrollFindingsToNewest}
+                  onClick={revealLatestEvidenceUpdate}
                   className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-accent/5 px-2 py-1 text-[11px] font-medium text-accent-text hover:bg-accent/10"
                 >
-                  <ArrowUp className="h-3 w-3" />
-                  New evidence
+                  <Files className="h-3 w-3" />
+                  See new evidence
                 </button>
               ) : null}
             </div>
@@ -1913,11 +1978,11 @@ export function InvestigationView({
             <div className={`absolute right-4 top-2 z-20 ${splitTabClass}`}>
               <button
                 type="button"
-                onClick={scrollFindingsToNewest}
+                onClick={revealLatestEvidenceUpdate}
                 className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-theme-elevated px-2 py-1 text-[11px] font-medium text-accent-text shadow-theme-sm hover:bg-theme-hover"
               >
-                <ArrowUp className="h-3 w-3" />
-                New evidence
+                <Files className="h-3 w-3" />
+                See new evidence
               </button>
             </div>
           ) : null}
@@ -1925,8 +1990,10 @@ export function InvestigationView({
             ref={evidenceScrollRef}
             data-investigation-findings-scroll
             onScroll={(event) => {
-              if (event.currentTarget.scrollTop <= 40)
+              if (event.currentTarget.scrollTop <= 40) {
                 setEvidenceUpdateAvailable(false);
+                latestEvidenceUpdateSourceIdRef.current = undefined;
+              }
             }}
             className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 [overflow-anchor:none] [scrollbar-gutter:stable]"
           >
@@ -1951,10 +2018,10 @@ export function InvestigationView({
                   </p>
                   <p className="mt-1 text-xs text-theme-text-tertiary">
                     {historyUnavailablePresentation?.loading
-                      ? "Radar will continue when retained history is readable."
+                      ? "Radar will continue when saved history is available."
                       : historyUnavailablePresentation
-                        ? "Radar could not reconstruct observations from retained history."
-                        : "Reconstructing observations and the agent conclusion together."}
+                        ? "Radar could not restore evidence from saved history."
+                        : "Restoring the assessment and evidence from saved history."}
                   </p>
                 </div>
               ) : (
@@ -1969,15 +2036,18 @@ export function InvestigationView({
                         className="text-sm font-semibold text-theme-text-primary"
                       >
                         {assessmentNeedsCurrentStateVerification
-                          ? "Pre-change assessment"
-                          : !currentAssessment
-                            ? "Assessment"
-                            : currentAssessment.verify
-                              ? "Verification result"
-                              : currentAssessmentIdx === initialAssessmentIdx &&
-                                  hasMultipleAssessments
-                                ? "Initial assessment"
-                                : "Assessment"}
+                          ? "Assessment before apply"
+                          : hasEvidenceCollectedAfterAssessment
+                            ? "Earlier assessment"
+                            : !currentAssessment
+                              ? "Assessment"
+                              : currentAssessment.verify
+                                ? "Verification result"
+                                : currentAssessmentIdx ===
+                                      initialAssessmentIdx &&
+                                    hasMultipleAssessments
+                                  ? "Initial assessment"
+                                  : "Assessment"}
                       </h2>
                       <Badge severity="neutral" size="sm">
                         AI assessment
@@ -1985,6 +2055,12 @@ export function InvestigationView({
                       {assessmentNeedsCurrentStateVerification ? (
                         <Badge severity="warning" size="sm">
                           Current state unverified
+                        </Badge>
+                      ) : null}
+                      {hasEvidenceCollectedAfterAssessment &&
+                      !assessmentNeedsCurrentStateVerification ? (
+                        <Badge severity="info" size="sm">
+                          Newer evidence below
                         </Badge>
                       ) : null}
                       {verificationRunning || verificationPending ? (
@@ -1996,8 +2072,13 @@ export function InvestigationView({
                     {assessmentNeedsCurrentStateVerification ? (
                       <p className="mt-0.5 text-xs text-theme-text-tertiary">
                         {verificationRunning || verificationPending
-                          ? "This interpretation predates the apply. Radar is checking the current state now."
-                          : "This interpretation predates the latest apply; the current state has not been verified."}
+                          ? "This assessment predates the apply attempt. Radar is checking the current state now."
+                          : "This assessment predates the apply attempt; cluster state after it has not been verified."}
+                      </p>
+                    ) : hasEvidenceCollectedAfterAssessment ? (
+                      <p className="mt-0.5 text-xs text-theme-text-tertiary">
+                        Some evidence below was collected after this assessment.
+                        Validate the conclusion against it before acting.
                       </p>
                     ) : null}
                     {currentAssessment?.diagnosis ? (
@@ -2026,7 +2107,7 @@ export function InvestigationView({
                         <span>
                           {busy || requestPending
                             ? "Forming an assessment as evidence arrives…"
-                            : "No structured agent assessment was recorded."}
+                            : "The agent did not provide a final assessment."}
                         </span>
                       </div>
                     )}
@@ -2065,11 +2146,14 @@ export function InvestigationView({
                     collecting={busy || requestPending}
                     animateGroupIds={animateEvidenceGroupIds}
                     onViewSource={viewActivitySource}
+                    onViewActivity={viewActivity}
                     onOpenResource={stale ? undefined : onOpenResource}
                     revealRequest={evidenceRevealRequest}
                     onRevealReady={revealEvidenceSource}
                     afterMaterialEvidence={
                       currentAssessment?.diagnosis &&
+                      !assessmentNeedsCurrentStateVerification &&
+                      !hasEvidenceCollectedAfterAssessment &&
                       (currentAssessment.diagnosis.remediation?.length ?? 0) >
                         0 ? (
                         <section aria-labelledby={`${workspaceId}-next-steps`}>
@@ -2209,7 +2293,7 @@ function PriorConclusion({ diagnosis }: { diagnosis: Diagnosis }) {
         <CollapseChevron open={open} className="h-3.5 w-3.5" />
         <span className="font-medium">Initial assessment</span>
         <span className="text-theme-text-tertiary">
-          retained before verification
+          before the latest status check
         </span>
       </button>
       <div id={regionId}>

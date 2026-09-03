@@ -328,7 +328,6 @@ export function buildInvestigationResourceEvidenceModel(
         hasDetails: Boolean(
           encryptedKeys.length > 0 ||
           conditions.length > 0 ||
-          observedGeneration ||
           created ||
           scope !== "Strict",
         ),

@@ -186,6 +186,19 @@ describe("investigationEvidenceSubjectRef", () => {
     });
     expect(
       investigationEvidenceSubjectRef({
+        type: "startup",
+        blocker: {
+          kind: "Pod",
+          name: "api-123",
+          reason: "ImagePullBackOff",
+          severity: "critical",
+          message: "The image could not be pulled.",
+        },
+        subject: { kind: "Pod", namespace: "shop", name: "api-123" },
+      }),
+    ).toEqual({ kind: "Pod", namespace: "shop", name: "api-123" });
+    expect(
+      investigationEvidenceSubjectRef({
         type: "logs",
         pod: "api-123",
         container: "api",
@@ -458,7 +471,11 @@ describe("investigation evidence provenance", () => {
     expect(projection.evidenceRefSources).toHaveLength(1);
     expect(projection.citableSources).toHaveLength(0);
     expect(projection.limitations).toEqual([
-      expect.objectContaining({ kind: "error", message: "permission denied" }),
+      expect.objectContaining({
+        source: "Resource details",
+        kind: "error",
+        message: "permission denied",
+      }),
     ]);
   });
 
@@ -477,7 +494,10 @@ describe("investigation evidence provenance", () => {
     expect(validated.groups).toHaveLength(0);
     expect(validated.citableSources).toHaveLength(0);
     expect(validated.limitations).toEqual([
-      expect.objectContaining({ kind: "truncated" }),
+      expect.objectContaining({
+        source: "Resource details",
+        kind: "truncated",
+      }),
     ]);
 
     const unvalidated = project([
@@ -813,6 +833,10 @@ describe("semantic diagnose evidence projection", () => {
     expect(groupsOf(result.groups, "startup")[0].latest.relevance).toBe(
       "producer-related",
     );
+    expect(groupsOf(result.groups, "startup")[0].latest.data).toMatchObject({
+      type: "startup",
+      subject: { kind: "Pod", namespace: "shop", name: "api-abc" },
+    });
     expect(groupsOf(result.groups, "crash")[0].latest.relevance).toBe(
       "producer-related",
     );
@@ -837,9 +861,9 @@ describe("semantic diagnose evidence projection", () => {
       .map((item) => item.message)
       .join("\n");
     expect(limitationText).toContain("selected 2 of 5");
-    expect(limitationText).toContain("retained 2 of 8");
+    expect(limitationText).toContain("reviewed 2 of 8");
     expect(limitationText).toContain("Additional crash-cause");
-    expect(limitationText).toContain("returned 1 of 3 event groups");
+    expect(limitationText).toContain("received 1 of 3 event groups");
     expect(limitationText).toContain("rbac denied");
     expect(limitationText).toContain("Referenced-by relationships");
     expect(limitationText).toContain("recent-change result limit");
@@ -906,6 +930,31 @@ describe("semantic diagnose evidence projection", () => {
 });
 
 describe("strict evidence adapters", () => {
+  it("renders resource scopes as identities, not argument order", () => {
+    const result = project([
+      tool(
+        "events",
+        "get_events",
+        { events: [warningEvent] },
+        {
+          summary: JSON.stringify({
+            group: "apps",
+            kind: "Deployment",
+            namespace: "shop",
+            name: "api",
+          }),
+        },
+      ),
+    ]);
+    const events = groupsOf(result.groups, "events")[0].latest;
+
+    expect(events.summary).toBe("1 event group · Deployment shop/api");
+    expect(events.data).toMatchObject({
+      type: "events",
+      scope: "Deployment shop/api",
+    });
+  });
+
   it("recognizes GitOps diagnose without inventing workload collection receipts", () => {
     const result = projectInvestigationEvidence(
       [
@@ -1925,6 +1974,38 @@ describe("strict evidence adapters", () => {
     );
   });
 
+  it("keeps exact API identity for recent changes and rejects malformed identity", () => {
+    const exactChange = {
+      apiVersion: "apps/v1",
+      kind: "Deployment",
+      namespace: "shop",
+      name: "api",
+      changeType: "update",
+      timestamp: "2026-09-02T09:55:00Z",
+    };
+    const exact = project([
+      tool("exact-change", "get_changes", { changes: [exactChange] }),
+    ]);
+    const changes = groupsOf(exact.groups, "changes")[0].latest.data;
+
+    expect(changes.type).toBe("changes");
+    if (changes.type === "changes") {
+      expect(changes.changes[0].apiVersion).toBe("apps/v1");
+    }
+
+    const malformed = project([
+      tool("malformed-change", "get_changes", {
+        changes: [{ ...exactChange, apiVersion: "" }],
+      }),
+    ]);
+    expect(groupsOf(malformed.groups, "changes")).toHaveLength(0);
+    expect(malformed.limitations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ source: "Recent changes" }),
+      ]),
+    );
+  });
+
   it("only moves domains actually rechecked by verification into Earlier evidence", () => {
     const relatedPodIssue = {
       ...criticalIssue,
@@ -2504,8 +2585,9 @@ describe("strict evidence adapters", () => {
     ]);
     expect(result.groups).toHaveLength(0);
     expect(result.limitations).toHaveLength(1);
+    expect(result.limitations[0].source).toBe("Kubernetes events");
     expect(result.limitations[0].message).toContain(
-      "organize this check's result into an evidence card",
+      "couldn't summarize this investigation step",
     );
   });
 
@@ -2522,7 +2604,10 @@ describe("strict evidence adapters", () => {
     ]);
     expect(result.groups).toHaveLength(0);
     expect(result.limitations[0]).toMatchObject({ kind: "truncated" });
-    expect(result.limitations[0].message).toContain("did not parse");
+    expect(result.limitations[0].source).toBe("Issue scan");
+    expect(result.limitations[0].message).toContain(
+      "Only part of this investigation result was saved",
+    );
   });
 
   it("projects non-empty older results but never turns unknown outcomes into receipts", () => {
@@ -2671,7 +2756,7 @@ describe("honest zero and partial-result states", () => {
         recentChanges: [change],
         changeContext: {
           changed: true,
-          what: "pod template changed before the failure",
+          what: "pod_template",
           evidence: "ReplicaSet revision advanced within the issue window.",
         },
         events: [],
@@ -2680,6 +2765,14 @@ describe("honest zero and partial-result states", () => {
     expect(
       groupsOf(result.groups, "changes").map((group) => group.latest.tier),
     ).toEqual(["context", "supporting"]);
+    expect(groupsOf(result.groups, "changes")[1].latest).toMatchObject({
+      summary: "The workload's Pod template changed",
+      data: {
+        changeContext: {
+          what: "The workload's Pod template changed",
+        },
+      },
+    });
   });
 
   it("creates receipts only for confirmed complete zero-result reads", () => {
@@ -2930,7 +3023,7 @@ describe("honest zero and partial-result states", () => {
         expect.objectContaining({
           source: "Topology scale",
           kind: "truncated",
-          message: expect.stringContaining("namespace="),
+          message: expect.stringContaining("namespace-scoped topology search"),
         }),
       ]),
     );

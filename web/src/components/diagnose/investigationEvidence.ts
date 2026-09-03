@@ -1,6 +1,7 @@
 import {
   CORE_RESOURCES,
   defaultConditionTone,
+  displayKind,
   stripAnsi,
   type Issue,
   type IssueRecentChange,
@@ -246,7 +247,12 @@ export type InvestigationEvidenceData =
        */
       relevance: "target" | "producer-related" | "broader";
     }
-  | { type: "startup"; blocker: DiagnosisStartupBlocker }
+  | {
+      type: "startup";
+      blocker: DiagnosisStartupBlocker;
+      /** Exact blocker object when the diagnosis producer established it. */
+      subject?: DiagnosisResourceRef;
+    }
   | {
       type: "crash";
       crash: DiagnosisCrashCause;
@@ -315,7 +321,7 @@ export interface InvestigationEvidenceObservation {
   revision: number;
   /** This exact observation predates a later successful verification of its proof scope. */
   historical: boolean;
-  /** Whether this semantic item differs from its immediately previous check. */
+  /** Whether this semantic item differs from its immediately previous observation. */
   changedFromPrevious: boolean;
   /**
    * How this producer-backed observation relates to the resource being
@@ -450,6 +456,8 @@ export function investigationEvidenceSubjectRef(
           namespace: data.issue.namespace,
           name: data.issue.name,
         };
+      case "startup":
+        return data.subject;
       case "resource": {
         const apiVersion = data.resource.apiVersion;
         const group = apiVersion.includes("/") ? apiVersion.split("/")[0] : "";
@@ -853,6 +861,8 @@ function recentChange(value: unknown): IssueRecentChange | undefined {
   if (
     !candidate ||
     !nonEmptyString(candidate.kind) ||
+    (candidate.apiVersion !== undefined &&
+      !nonEmptyString(candidate.apiVersion)) ||
     !nonEmptyString(candidate.name) ||
     !nonEmptyString(candidate.changeType) ||
     !nonEmptyString(candidate.timestamp)
@@ -871,7 +881,21 @@ function diagnosisChangeContext(
     if (candidate[field] !== undefined && typeof candidate[field] !== "string")
       return undefined;
   }
-  return candidate as unknown as DiagnosisChangeContext;
+  return {
+    changed: candidate.changed,
+    ...(typeof candidate.what === "string"
+      ? {
+          what:
+            candidate.what === "pod_template"
+              ? "The workload's Pod template changed"
+              : candidate.what,
+        }
+      : {}),
+    ...(typeof candidate.when === "string" ? { when: candidate.when } : {}),
+    ...(typeof candidate.evidence === "string"
+      ? { evidence: candidate.evidence }
+      : {}),
+  };
 }
 
 function event(value: unknown): InvestigationEventEvidence | undefined {
@@ -1103,7 +1127,7 @@ function addTopologyLimitations(
     : "";
   if (partiality.requiresNamespaceFilter) {
     scaleDetails.push(
-      `The all-namespace topology was not built because the cluster is too large${estimate}; rerun get_topology with namespace= to collect a scoped graph.`,
+      `The all-namespace topology was not built because the cluster is too large${estimate}; run a namespace-scoped topology search to collect a smaller graph.`,
     );
   } else if (partiality.largeCluster) {
     scaleDetails.push(
@@ -1145,13 +1169,37 @@ function addTopologyLimitations(
 }
 
 function scopeFromArgs(source: InvestigationEvidenceSource): string {
-  if (!source.args) return source.tool;
+  if (!source.args) return "requested scope";
   const args = record(parseJSON(source.args));
-  if (!args) return source.tool;
-  const resource = [args.group, args.kind, args.namespace, args.name]
-    .filter(nonEmptyString)
-    .join("/");
-  return resource || source.tool;
+  if (!args) return "requested scope";
+  const kind = nonEmptyString(args.kind) ? displayKind(args.kind) : undefined;
+  const namespace = nonEmptyString(args.namespace) ? args.namespace : undefined;
+  const name = nonEmptyString(args.name) ? args.name : undefined;
+  if (kind && name) {
+    return kind + " " + (namespace ? namespace + "/" : "") + name;
+  }
+  if (kind && namespace) return kind + " resources in " + namespace;
+  if (kind) return kind + " resources";
+  if (namespace && name) return namespace + "/" + name;
+  if (namespace) return "namespace " + namespace;
+  if (name) return name;
+  return "requested scope";
+}
+
+const INVESTIGATION_RESULT_LABELS: Readonly<Record<string, string>> = {
+  diagnose: "Workload diagnosis",
+  issues: "Issue scan",
+  get_resource: "Resource details",
+  list_resources: "Resource inventory",
+  get_events: "Kubernetes events",
+  get_pod_logs: "Container logs",
+  get_changes: "Recent changes",
+  get_neighborhood: "Relationships",
+  get_topology: "Topology",
+};
+
+function investigationResultLabel(source: InvestigationEvidenceSource): string {
+  return INVESTIGATION_RESULT_LABELS[source.tool] ?? "Investigation result";
 }
 
 function resourceMatchesTarget(
@@ -1404,7 +1452,14 @@ function addNarrowHint(
   value: Record<string, unknown>,
 ): void {
   if (nonEmptyString(value.narrowHint)) {
-    builder.limit(source, source.tool, value.narrowHint, "truncated");
+    const label = investigationResultLabel(source);
+    builder.limit(
+      source,
+      label,
+      label +
+        " was narrowed to keep this investigation bounded. Additional matching evidence may exist.",
+      "truncated",
+    );
   }
 }
 
@@ -1468,8 +1523,11 @@ function resourceObservationSummary(
   context: InvestigationResourceContext | undefined,
   warnings: string[],
   gitOps?: InvestigationGitOpsDiagnosis,
+  detailedIssueShown = false,
 ): string | undefined {
-  if (context?.issueSummary?.topReason) return context.issueSummary.topReason;
+  if (!detailedIssueShown && context?.issueSummary?.topReason) {
+    return context.issueSummary.topReason;
+  }
   if (gitOps?.health) return `Health ${gitOps.health}`;
   if (gitOps?.ready) return `Ready ${gitOps.ready}`;
   if (gitOps?.sync) return `Sync ${gitOps.sync}`;
@@ -1481,6 +1539,7 @@ function resourceObservationSummary(
     return `${ready}/${desired} replicas ready`;
   }
   if (context?.statusSummary?.phase) return context.statusSummary.phase;
+  if (context?.issueSummary?.topReason) return context.issueSummary.topReason;
   return (
     investigationResourceEvidenceSummary(resource) ||
     warnings[0] ||
@@ -1554,6 +1613,7 @@ function addResourceObservation(
       context,
       warnings,
       gitOpsDiagnosis,
+      hasDetailedCriticalIssue,
     ),
     data: {
       type: "resource",
@@ -1647,7 +1707,7 @@ function addEvents(
       builder.limit(
         source,
         "Events",
-        "This tool's empty response does not distinguish a genuinely empty result from namespace access filtering, so Radar cannot confirm that no events exist.",
+        "Radar found no events, but it cannot tell whether none exist or access restrictions hid them.",
         "unknown",
       );
       return;
@@ -1701,7 +1761,7 @@ function addChanges(
       builder.limit(
         source,
         "Recent changes",
-        "This tool's empty response does not distinguish a genuinely empty result from namespace access filtering, so Radar cannot confirm that no tracked changes exist.",
+        "Radar found no recent changes, but it cannot tell whether none exist or access restrictions hid them.",
         "unknown",
       );
       return;
@@ -1760,7 +1820,7 @@ function addLogs(
       source,
       `${value.pod} / ${value.container}`,
       value.error ||
-        "No log lines were captured; an empty log read is absence of evidence, not evidence of health.",
+        "No log lines were available. This does not mean the container is healthy.",
       value.error ? "error" : "unknown",
     );
     return;
@@ -1790,7 +1850,7 @@ function addLogs(
     summary:
       lines.length > 0
         ? `${lines.length} selected line${lines.length === 1 ? "" : "s"}`
-        : "No log lines captured",
+        : "No log lines available",
     data: {
       type: "logs",
       pod: value.pod,
@@ -1961,12 +2021,12 @@ function diagnoseCrashCoverageComplete(
 function invalidPayload(
   builder: ProjectionBuilder,
   source: InvestigationEvidenceSource,
-  section = source.tool,
+  section = investigationResultLabel(source),
 ): void {
   builder.limit(
     source,
     section,
-    "Radar couldn't organize this check's result into an evidence card. The raw result is in Activity.",
+    "Radar couldn't summarize this investigation step. Review it in Activity.",
     "unknown",
   );
 }
@@ -2142,7 +2202,30 @@ function adaptDiagnose(
           tone: diagnosisSeverityTone(blocker.severity),
           title: blocker.reason,
           summary: blocker.message,
-          data: { type: "startup", blocker },
+          data: {
+            type: "startup",
+            blocker,
+            subject: (() => {
+              const namespace = resource.metadata.namespace;
+              if (!namespace) return undefined;
+              const rootGroup = apiGroupFromAPIVersion(resource.apiVersion);
+              const group =
+                blocker.kind === resource.kind
+                  ? rootGroup
+                  : blocker.kind === "Pod"
+                    ? ""
+                    : blocker.kind === "ReplicaSet"
+                      ? "apps"
+                      : undefined;
+              if (group === undefined) return undefined;
+              return {
+                kind: blocker.kind,
+                ...(group ? { group } : {}),
+                namespace,
+                name: blocker.name,
+              };
+            })(),
+          },
         },
       );
     }
@@ -2295,7 +2378,7 @@ function adaptDiagnose(
         builder.limit(
           source,
           "Current logs",
-          "No pod/container log streams were captured; log coverage is unknown.",
+          "No container logs were available, so Radar could not evaluate them.",
           "unknown",
         );
       }
@@ -2316,7 +2399,7 @@ function adaptDiagnose(
       builder.limit(
         source,
         "Current logs",
-        "No pod/container log streams were captured; log coverage is unknown.",
+        "No container logs were available, so Radar could not evaluate them.",
         "unknown",
       );
     }
@@ -2353,7 +2436,7 @@ function adaptDiagnose(
     builder.limit(
       source,
       "Log excerpt coverage",
-      `The captured response retained ${shown} of ${total} filtered log lines.`,
+      `Radar reviewed ${shown} of ${total} matching log lines.`,
       "truncated",
     );
   }
@@ -2405,7 +2488,7 @@ function adaptDiagnose(
     builder.limit(
       source,
       "Events",
-      `The evidence bundle returned ${eventsRaw.length} of ${value.eventsTotalGroups} event groups.`,
+      `Radar received ${eventsRaw.length} of ${value.eventsTotalGroups} event groups.`,
       "truncated",
     );
   }
@@ -2646,7 +2729,7 @@ function adaptIssues(
       builder.limit(
         source,
         "Issues",
-        "An empty unscoped issue query can reflect the caller's namespace visibility, so Radar cannot confirm that the cluster has no matching issues.",
+        "Radar found no matching issues, but the search covered only namespaces the current user can access.",
         "unknown",
       );
       return;
@@ -2752,7 +2835,7 @@ function adaptGetResource(
         builder.limit(
           source,
           "Events",
-          `The resource response returned ${events.length} of ${value.eventsTotalGroups} event groups.`,
+          `Radar received ${events.length} of ${value.eventsTotalGroups} event groups.`,
           "truncated",
         );
       }
@@ -2854,7 +2937,7 @@ function adaptListResources(
     builder.limit(
       source,
       "Resource inventory",
-      `No resources were returned for ${scope}; this may mean no objects matched or that the caller could not list the requested scope.`,
+      `Radar found no matching resources for ${scope}, but access restrictions may have hidden some results.`,
       "unknown",
     );
     return;
@@ -2942,14 +3025,14 @@ function adaptChanges(
 ): void {
   const value = record(payload);
   if (!value || !Array.isArray(value.changes)) {
-    invalidPayload(builder, source);
+    invalidPayload(builder, source, "Recent changes");
     return;
   }
   const changes = value.changes
     .map(recentChange)
     .filter((item): item is IssueRecentChange => Boolean(item));
   if (changes.length !== value.changes.length) {
-    invalidPayload(builder, source);
+    invalidPayload(builder, source, "Recent changes");
     return;
   }
   addNarrowHint(builder, source, value);
@@ -3013,7 +3096,7 @@ function adaptNeighborhood(
     builder.limit(
       source,
       "Relationships",
-      "The neighborhood reached its node budget and is incomplete.",
+      "The relationship view reached its resource limit and may be incomplete.",
       "truncated",
     );
   }
@@ -3233,8 +3316,8 @@ export function projectInvestigationEvidence(
       if (item.isError === true) {
         builder.limit(
           source,
-          item.tool,
-          item.result || "The tool call failed.",
+          investigationResultLabel(source),
+          item.result || "This investigation step failed.",
           "error",
         );
         continue;
@@ -3242,8 +3325,8 @@ export function projectInvestigationEvidence(
       if (item.truncated) {
         builder.limit(
           source,
-          item.tool,
-          "The transcript retained only part of this tool result, so Radar did not parse it into evidence.",
+          investigationResultLabel(source),
+          "Only part of this investigation result was saved, so Radar could not summarize it here.",
           "truncated",
         );
         continue;
@@ -3251,8 +3334,8 @@ export function projectInvestigationEvidence(
       if (!nonEmptyString(item.result)) {
         builder.limit(
           source,
-          item.tool,
-          "The completed tool call did not include a structured result.",
+          investigationResultLabel(source),
+          "This investigation step did not return details Radar could summarize.",
           "unknown",
         );
         continue;
@@ -3266,8 +3349,8 @@ export function projectInvestigationEvidence(
       if (item.isError !== false) {
         builder.limit(
           source,
-          item.tool,
-          "This recorded step predates an explicit tool-outcome marker; structured non-empty evidence can be shown, but an empty result cannot prove that nothing was found.",
+          investigationResultLabel(source),
+          "Radar cannot confirm whether this investigation step completed successfully. Available evidence is shown, but an empty result cannot confirm that nothing was found.",
           "unknown",
         );
       }
