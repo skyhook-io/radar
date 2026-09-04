@@ -545,15 +545,25 @@ func (s *PostgresStore) ClearResourceSeen(clusterContext, kind, namespace, name 
 // Drops are counted and reported once per flush rather than per event, which on
 // a large cluster would be its own flood.
 func (s *PostgresStore) enqueueSeenWrite(w seenResourceWrite) {
+	if w.done != nil {
+		// A clear must reach the queue. Dropping it would return from
+		// ClearResourceSeen with the row still present, and a mark already
+		// queued for the same key would then flush on top of it - so the
+		// resource stays marked as seen and its next appearance is suppressed,
+		// permanently and silently. Waiting is safe: the writer drains on a
+		// ticker regardless of database health, so a full queue is transient
+		// unless the store is closing.
+		select {
+		case s.seenWrites <- w:
+		case <-s.quit:
+			close(w.done)
+		}
+		return
+	}
 	select {
 	case s.seenWrites <- w:
 	default:
 		s.seenDropped.Add(1)
-		// Nobody will flush this one, so release any waiter immediately rather
-		// than letting it sit until its timeout.
-		if w.done != nil {
-			close(w.done)
-		}
 	}
 }
 

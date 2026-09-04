@@ -404,9 +404,9 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 	//
 	// Each store applies these with a different mechanism: the memory store
 	// filters in Go, the SQL stores translate to WHERE clauses in two different
-	// dialects. Nothing above this point exercises a single filter field, so a
-	// backend could ignore one entirely and still pass. That is exactly how a
-	// PostgreSQL backend shipped ignoring UntilSeq and SequenceOrder.
+	// dialects. Without these properties a backend can ignore a filter field
+	// entirely and still satisfy every arrival-order property above, so the
+	// omission surfaces as wrong rows rather than as a failing test.
 
 	// A resource of the same kind/namespace/name can exist in two clusters. The
 	// store must not let one cluster's history leak into the other's view - the
@@ -552,8 +552,8 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 		// Deliberately sub-microsecond, and not taken from the wall clock: on
 		// darwin time.Now() is already microsecond-resolution, so a fixture
 		// built from it cannot detect a backend that truncates to microseconds.
-		// These offsets make the property fail on every platform, not just the
-		// ones with a nanosecond clock.
+		// These fixed offsets make the property fail on every platform, not
+		// only the ones with a nanosecond clock.
 		born := base.Add(-30*time.Minute + 456789321*time.Nanosecond).Truncate(time.Nanosecond)
 		want := informer("payload", 0)
 		want.Timestamp = base.Add(819945123 * time.Nanosecond)
