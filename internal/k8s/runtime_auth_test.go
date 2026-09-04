@@ -1614,7 +1614,8 @@ func TestRuntimeRecoveryReconnectsAfterNetworkDisconnect(t *testing.T) {
 
 	var probes atomic.Int32
 	setRuntimeAuthProbe(func(context.Context) error {
-		// Unreachable for the first few passes, then the cluster comes back.
+		// Fails a few times first so the assertion below proves the loop keeps
+		// probing on its backoff, rather than passing on a single lucky probe.
 		if probes.Add(1) < 3 {
 			return errors.New("dial tcp 10.0.0.1:6443: connect: connection refused")
 		}

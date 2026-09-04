@@ -97,6 +97,13 @@ func runRuntimeAuthRecovery() {
 			// guard against direct status writes that bypass it.
 			runtimeAuthRecoveryOwed.Store(false)
 			runtimeNetworkRecoveryOwed.Store(false)
+			// A disconnect publishing between the read above and these stores
+			// set a debt that has just been erased, and its own start call only
+			// nudged because this worker was still active. Re-read so that
+			// episode keeps a worker instead of being stranded.
+			if GetConnectionStatus().State != StateConnected {
+				continue
+			}
 			return
 		}
 		if status.State == StateConnecting || activeContextOperations.Load() != 0 {
