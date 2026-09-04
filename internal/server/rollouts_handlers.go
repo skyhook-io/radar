@@ -169,6 +169,52 @@ func (s *Server) handleRolloutCapabilities(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+// handleRolloutAnalysisRuns returns the Rollout's full AnalysisRun history —
+// not just the 4 "currently active" slots status itself points at. Gated on
+// listing analysisruns directly (a different resource/verb from the
+// Rollout's own patch grant), matching the RBAC/Policy/Velero/CNPG
+// reverse-lookup pattern elsewhere in this file's sibling handlers.
+func (s *Server) handleRolloutAnalysisRuns(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
+
+	namespace := chi.URLParam(r, "namespace")
+	name := chi.URLParam(r, "name")
+
+	const group = "argoproj.io"
+	if !s.canRead(r, group, "analysisruns", namespace, "list") {
+		s.writeError(w, http.StatusForbidden, "not allowed to list AnalysisRuns in this namespace")
+		return
+	}
+
+	client := s.getDynamicClientForRequest(r)
+	if client == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
+		return
+	}
+
+	items, err := rollouts.ListAnalysisRuns(r.Context(), client, namespace, name)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			s.writeError(w, http.StatusNotFound, fmt.Sprintf("Rollout %s/%s not found", namespace, name))
+			return
+		}
+		if apierrors.IsForbidden(err) {
+			s.writeError(w, http.StatusForbidden, err.Error())
+			return
+		}
+		log.Printf("[rollouts] Failed to list AnalysisRuns for %s/%s: %v", sanitizeForLog(namespace), sanitizeForLog(name), err)
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if items == nil {
+		items = []rollouts.AnalysisRunSummary{}
+	}
+
+	s.writeJSON(w, map[string]any{"items": items})
+}
+
 // errCodeControllerNotCaughtUp lets a caller act on WHY a promotion was refused. The
 // status alone cannot: 503 is also what a lost cluster connection answers, and a caller
 // that reads only the code would tell the operator to retry something that will not

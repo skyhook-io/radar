@@ -533,6 +533,23 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'metrics', label: 'Metrics', width: 'w-40', hideOnMobile: true, tooltip: 'Per-metric verdicts' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
+  analysistemplates: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-48' },
+    { key: 'metricCount', label: 'Metrics', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  clusteranalysistemplates: [
+    { key: 'name', label: 'Name' },
+    { key: 'metricCount', label: 'Metrics', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  experiments: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-48' },
+    { key: 'status', label: 'Phase', width: 'w-28' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
   workflows: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
@@ -2641,6 +2658,9 @@ const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   sbomreports: ['aquasecurity.github.io'],
   vulnerabilityreports: ['aquasecurity.github.io'],
   analysisruns: ['argoproj.io'],
+  analysistemplates: ['argoproj.io'],
+  clusteranalysistemplates: ['argoproj.io'],
+  experiments: ['argoproj.io'],
   applications: ['argoproj.io'],
   applicationsets: ['argoproj.io'],
   appprojects: ['argoproj.io'],
@@ -6815,6 +6835,11 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       return <RolloutCell resource={resource} column={column} />
     case 'analysisruns':
       return <AnalysisRunCell resource={resource} column={column} />
+    case 'analysistemplates':
+    case 'clusteranalysistemplates':
+      return <AnalysisTemplateCell resource={resource} column={column} />
+    case 'experiments':
+      return <ExperimentCell resource={resource} column={column} />
     case 'workflows':
       return <WorkflowCell resource={resource} column={column} />
     case 'cronworkflows':
@@ -8480,6 +8505,23 @@ function RolloutCell({ resource, column }: { resource: any; column: string }) {
   }
 }
 
+// An Experiment reports status.phase from the same AnalysisPhase vocabulary
+// as AnalysisRun (Successful/Running/Pending/Inconclusive/Failed/Error), so
+// getAnalysisRunStatus's mapping applies directly — routing here instead of
+// GenericCell avoids the generic phase heuristic's HEALTHY_PHASES set, which
+// doesn't recognize 'Successful' and treats 'Running' as healthy (neither
+// true for this vocabulary).
+function ExperimentCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'status': {
+      const status = getAnalysisRunStatus(resource)
+      return <span className={clsx('badge', status.color)}>{status.text}</span>
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
 function AnalysisRunCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'status': {
@@ -8512,6 +8554,17 @@ function AnalysisRunCell({ resource, column }: { resource: any; column: string }
           </span>
         </Tooltip>
       )
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
+function AnalysisTemplateCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'metricCount': {
+      const count = (resource.spec?.metrics || []).length
+      return <span className="text-sm text-theme-text-secondary">{count}</span>
     }
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>

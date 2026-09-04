@@ -740,6 +740,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// Argo Rollouts progressive-delivery control plane. Rollback and
 			// revision history are served by the /workloads routes above.
 			r.Get("/rollouts/{namespace}/{name}/capabilities", s.handleRolloutCapabilities)
+			r.Get("/rollouts/{namespace}/{name}/analysisruns", s.handleRolloutAnalysisRuns)
 			r.Post("/rollouts/{namespace}/{name}/{action}", s.handleRolloutOperation)
 
 			// ArgoCD routes

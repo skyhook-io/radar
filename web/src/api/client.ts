@@ -4716,6 +4716,31 @@ export function useRolloutCapabilities(
   });
 }
 
+export interface AnalysisRunSummary {
+  name: string;
+  phase: string;
+  message?: string;
+  trigger?: string;
+  stepIndex?: number;
+  createdAt: string;
+  metricsTotal: number;
+  metricsPassing: number;
+  metricsNotPassing: number;
+}
+
+export function useRolloutAnalysisRuns(
+  namespace: string,
+  name: string,
+  enabled = true,
+) {
+  return useQuery<{ items: AnalysisRunSummary[] }>({
+    queryKey: ["rollout-analysisruns", namespace, name],
+    queryFn: () => fetchJSON(`/rollouts/${namespace}/${name}/analysisruns`),
+    enabled: Boolean(namespace && name && enabled),
+    staleTime: 10000,
+  });
+}
+
 // Fallbacks only. The server reports what it actually did — including when it found
 // nothing to do — so its message is preferred over anything asserted here.
 const ROLLOUT_ACTION_MESSAGES: Record<

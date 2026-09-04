@@ -28,7 +28,7 @@ const BASELINE = new Set<string>([
   'IstioServiceEntryRenderer.tsx', 'KarpenterNodeClaimRenderer.tsx', 'knative-cells.tsx',
   'KnativeEventingRenderer.tsx', 'KnativeRevisionRenderer.tsx', 'kyverno-cells.tsx',
   'KyvernoPolicyReportRenderer.tsx', 'NetworkPolicyRenderer.tsx', 'NodeRenderer.tsx',
-  'OrderRenderer.tsx', 'PodRenderer.tsx', 'RoleRenderer.tsx', 'RolloutRenderer.tsx',
+  'OrderRenderer.tsx', 'PodRenderer.tsx', 'RoleRenderer.tsx',
   'SealedSecretRenderer.tsx', 'SecretRenderer.tsx', 'SecretStoreRenderer.tsx',
   'VeleroBackupRenderer.tsx', 'VeleroRestoreRenderer.tsx', 'VeleroScheduleRenderer.tsx',
   'VPARenderer.tsx', 'VulnerabilityReportRenderer.tsx', 'WebhookConfigRenderer.tsx',

@@ -1,5 +1,12 @@
 import { RolloutRenderer as BaseRolloutRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/RolloutRenderer'
-import { useRolloutAction, useRolloutCapabilities, type RolloutAction } from '../../../api/client'
+import {
+  useRolloutAction,
+  useRolloutAnalysisRuns,
+  useRolloutCapabilities,
+  useWorkloadRevisions,
+  useWorkloadPods,
+  type RolloutAction,
+} from '../../../api/client'
 
 interface RolloutRendererProps {
   data: any
@@ -11,6 +18,9 @@ export function RolloutRenderer({ data, onNavigate }: RolloutRendererProps) {
   const name = data?.metadata?.name ?? ''
   const { data: capabilities } = useRolloutCapabilities(namespace, name)
   const action = useRolloutAction()
+  const { data: analysisRunsResponse } = useRolloutAnalysisRuns(namespace, name)
+  const { data: revisions } = useWorkloadRevisions('rollouts', namespace, name)
+  const { data: podsResponse } = useWorkloadPods('rollouts', namespace, name)
 
   return (
     <BaseRolloutRenderer
@@ -19,6 +29,9 @@ export function RolloutRenderer({ data, onNavigate }: RolloutRendererProps) {
       capabilities={capabilities}
       onAction={(next: RolloutAction) => action.mutate({ action: next, namespace, name })}
       pendingAction={action.isPending ? action.variables?.action ?? null : null}
+      analysisRunHistory={analysisRunsResponse?.items}
+      revisions={revisions}
+      pods={podsResponse?.pods}
     />
   )
 }

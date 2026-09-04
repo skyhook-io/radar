@@ -4,9 +4,11 @@ import {
   RolloutRenderer,
   rolloutActions,
   canaryStepLabel,
+  canaryStepTemplateRefs,
   rolloutAnalysisRuns,
   rolloutConditionTone,
   rolloutProblems,
+  blueGreenPhases,
   type RolloutAction,
   type RolloutCapabilities,
 } from './RolloutRenderer'
@@ -400,6 +402,81 @@ describe('canaryStepLabel', () => {
     )
     expect(html).toContain('Analysis: success-rate')
     expect(html).not.toContain('templateName')
+  })
+})
+
+describe('canaryStepTemplateRefs', () => {
+  it('reads a canary step analysis.templates[] entry', () => {
+    const refs = canaryStepTemplateRefs({ analysis: { templates: [{ templateName: 'success-rate' }] } })
+    expect(refs).toEqual([{ name: 'success-rate', clusterScoped: false }])
+  })
+
+  // Real Argo Rollouts schema uses ONE field name (templateName) for both
+  // namespaced and cluster-scoped refs, disambiguated by a separate
+  // clusterScope boolean — not a distinct clusterTemplateName field.
+  it('reads clusterScoped off the clusterScope flag, not a distinct field name', () => {
+    const refs = canaryStepTemplateRefs({ analysis: { templates: [{ templateName: 'shared-check', clusterScope: true }] } })
+    expect(refs).toEqual([{ name: 'shared-check', clusterScoped: true }])
+  })
+
+  // Experiment spec.analyses[] entries carry templateName/clusterScope flat
+  // on the entry itself, not nested under a templates[] array.
+  it('reads a flat Experiment spec.analyses[] entry', () => {
+    const refs = canaryStepTemplateRefs({ name: 'baseline-check', templateName: 'success-rate', clusterScope: false })
+    expect(refs).toEqual([{ name: 'success-rate', clusterScoped: false }])
+  })
+
+  it('reads a flat, cluster-scoped Experiment analysis entry', () => {
+    const refs = canaryStepTemplateRefs({ name: 'shared', templateName: 'shared-check', clusterScope: true })
+    expect(refs).toEqual([{ name: 'shared-check', clusterScoped: true }])
+  })
+
+  it('returns an empty list for a step with no analysis refs', () => {
+    expect(canaryStepTemplateRefs({ setWeight: 25 })).toEqual([])
+    expect(canaryStepTemplateRefs(null)).toEqual([])
+  })
+})
+
+describe('blueGreenPhases', () => {
+  // Argo Rollouts clears previewSelector once there's no active preview to
+  // track — a settled, fully-promoted blueGreen commonly has none, so
+  // activeSelector === previewSelector alone never fires here even though
+  // cutover genuinely completed.
+  it('treats activeSelector matching currentPodHash as promoted, even with an empty previewSelector', () => {
+    const data = {
+      spec: { strategy: { blueGreen: {} } },
+      status: {
+        currentPodHash: 'abc123',
+        blueGreen: { activeSelector: 'abc123', previewSelector: '' },
+      },
+    }
+    const phases = blueGreenPhases(data)
+    expect(phases.find((p) => p.label === 'Active cutover')?.state).toBe('completed')
+    expect(phases.every((p) => p.state !== 'current')).toBe(true)
+  })
+
+  it('still recognizes the narrower activeSelector === previewSelector window', () => {
+    const data = {
+      spec: { strategy: { blueGreen: {} } },
+      status: {
+        currentPodHash: 'def456',
+        blueGreen: { activeSelector: 'abc123', previewSelector: 'abc123' },
+      },
+    }
+    const phases = blueGreenPhases(data)
+    expect(phases.find((p) => p.label === 'Active cutover')?.state).toBe('completed')
+  })
+
+  it('is not promoted before either selector matches anything', () => {
+    const data = {
+      spec: { strategy: { blueGreen: {} } },
+      status: {
+        currentPodHash: 'abc123',
+        blueGreen: { activeSelector: 'old999', previewSelector: 'abc123' },
+      },
+    }
+    const phases = blueGreenPhases(data)
+    expect(phases.find((p) => p.label === 'Active cutover')?.state).not.toBe('completed')
   })
 })
 
