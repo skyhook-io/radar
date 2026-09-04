@@ -262,7 +262,19 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 		timeline.ResetStore()
 		timeline.ResetMetricsForContextSwitch()
 	}, func() error {
-		return timeline.ReinitStore(timelineStoreCfg)
+		if err := timeline.ReinitStore(timelineStoreCfg); err != nil {
+			// PostgreSQL deliberately does not degrade to memory: an operator who
+			// pointed Radar at an external database must not silently get an
+			// in-memory timeline that vanishes on restart. Every other backend
+			// keeps the historical behaviour — warn and continue degraded rather
+			// than fail the whole subsystem bring-up, which would also take down
+			// cluster browsing.
+			if timelineStoreCfg.Type == timeline.StoreTypePostgres {
+				return err
+			}
+			log.Printf("Warning: timeline init failed, continuing degraded: %v", err)
+		}
+		return nil
 	})
 
 	// Initialize Prometheus metrics client (must come before SetManualURL)

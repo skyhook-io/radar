@@ -7,7 +7,7 @@ import (
 )
 
 func TestInitAllSubsystemsPropagatesTimelineInitFailure(t *testing.T) {
-	timelineErr := errors.New("PostgreSQL timeline store is not implemented")
+	timelineErr := errors.New("timeline init failed")
 	RegisterTimelineFuncs(nil, func() error {
 		return timelineErr
 	})
