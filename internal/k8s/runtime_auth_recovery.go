@@ -98,10 +98,12 @@ func runRuntimeAuthRecovery() {
 			runtimeAuthRecoveryOwed.Store(false)
 			runtimeNetworkRecoveryOwed.Store(false)
 			// A disconnect publishing between the read above and these stores
-			// set a debt that has just been erased, and its own start call only
-			// nudged because this worker was still active. Re-read so that
-			// episode keeps a worker instead of being stranded.
-			if GetConnectionStatus().State != StateConnected {
+			// has just had its debt erased, and its own start call only nudged
+			// because this worker was still marked active. Re-arm from the
+			// current status so the episode keeps a worker; clearing and
+			// looping alone would fall straight back out at the debt check.
+			if current := GetConnectionStatus(); current.State != StateConnected {
+				armRecoveryDebt(current.ErrorType)
 				continue
 			}
 			return
@@ -231,4 +233,18 @@ func setRuntimeAuthReconnect(fn func(string, uint64) error) {
 // and in whether the browser is told to stand down.
 func runtimeRecoveryOwed() bool {
 	return runtimeAuthRecoveryOwed.Load() || runtimeNetworkRecoveryOwed.Load()
+}
+
+// armRecoveryDebt records which reconnect loop a disconnect owes, from its
+// classification. Auth-shaped failures take the published debt, which also
+// tells the browser to stand down so two retriers do not race the same exec
+// credential plugin. Everything else takes the unpublished one: a browser
+// retries those itself and faster, so this is only the floor for deployments
+// with no tab attached.
+func armRecoveryDebt(errorType string) {
+	if isAuthClassification(errorType) {
+		runtimeAuthRecoveryOwed.Store(true)
+		return
+	}
+	runtimeNetworkRecoveryOwed.Store(true)
 }

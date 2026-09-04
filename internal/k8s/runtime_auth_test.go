@@ -1670,3 +1670,35 @@ func TestNetworkRecoveryDebtIsNotPublishedToTheBrowser(t *testing.T) {
 		t.Fatal("an auth disconnect no longer reports authRecoveryOwed")
 	}
 }
+
+// armRecoveryDebt is the single definition of which loop a disconnect owes, used
+// both when a status is published and when the worker re-arms after racing a
+// clear. Auth-shaped failures must take the published debt, because that is what
+// tells the browser to stand down; everything else must take the unpublished one,
+// or a browser session would be dropped onto the server's much slower backoff.
+func TestArmRecoveryDebtRoutesByClassification(t *testing.T) {
+	for _, tc := range []struct {
+		errorType   string
+		wantAuth    bool
+		wantNetwork bool
+	}{
+		{"auth", true, false},
+		{"auth-rejected", true, false},
+		{"auth-plugin-stuck", true, false},
+		{"network", false, true},
+		{"timeout", false, true},
+		{"", false, true},
+	} {
+		t.Run(tc.errorType, func(t *testing.T) {
+			ResetTestState()
+			t.Cleanup(ResetTestState)
+			armRecoveryDebt(tc.errorType)
+			if got := runtimeAuthRecoveryOwed.Load(); got != tc.wantAuth {
+				t.Errorf("auth debt = %v, want %v", got, tc.wantAuth)
+			}
+			if got := runtimeNetworkRecoveryOwed.Load(); got != tc.wantNetwork {
+				t.Errorf("network debt = %v, want %v", got, tc.wantNetwork)
+			}
+		})
+	}
+}
