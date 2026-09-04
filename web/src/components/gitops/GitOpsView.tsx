@@ -569,12 +569,19 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   // The bulk of the JSX is now in <GitOpsDetailLayout>; this wrapper does
   // the OSS-specific things the layout can't (call OSS-side data hooks,
   // open OSS dialogs, talk to OSS Toast, hit OSS keyboard registry).
+  const isApplicationSet = kind === 'applicationsets'
   const detail: GitOpsDetailMetadata = {
     project: detailRow?.project,
     repository: detailRow?.repository ? formatGitOpsSourceUrl(detailRow.repository) : undefined,
     path: detailRow?.path || undefined,
     chart: detailRow?.chart || undefined,
-    destination: formatGitOpsDestination(detailRow?.destination, detailRow?.destinationNamespace),
+    // An empty destination means "in-cluster" for an Application - that is
+    // Argo's default when the field is unset. For an ApplicationSet it means
+    // the template's destination was a generator placeholder, which is not the
+    // same claim, so the server half is dropped rather than asserted.
+    destination: isApplicationSet && !detailRow?.destination
+      ? (detailRow?.destinationNamespace ? `Namespace: ${detailRow.destinationNamespace}` : '')
+      : formatGitOpsDestination(detailRow?.destination, detailRow?.destinationNamespace),
     autoSyncMode: insightsQ.data?.summary?.autoSyncMode,
   }
 

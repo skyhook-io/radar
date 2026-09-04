@@ -20,7 +20,7 @@ The hard part of GitOps tooling isn't sync — it's diagnosis. Radar surfaces dr
 
 Open the **GitOps** tab in the sidebar. Argo + Flux rows mix in the same table or tile view with resolved source URLs (`github.com/owner/repo`) for both ecosystems — not the CRD-internal source name.
 
-- **Filters**: Sync, Health, Project, Namespace, Labels, Automation (auto-sync / manual / suspended), Lifecycle (active / terminating)
+- **Filters**: Sync, Health, Project, Namespace, Labels, Automation (auto-sync / manual / suspended), Lifecycle (active / terminating), Kind (Applications / ApplicationSets — Argo only, shown once a cluster has ApplicationSets)
 - **Modes**: Applications / Sources / Projects / Alerts
 - **Default sort**: smart-tiered by urgency — Failed > Terminating > Degraded > Missing > OutOfSync > Suspended > Progressing > Synced
 
