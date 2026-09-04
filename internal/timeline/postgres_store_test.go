@@ -1042,3 +1042,104 @@ func idsOf(events []TimelineEvent) []string {
 	}
 	return ids
 }
+
+// TestPostgresSuiteEnabled fails when the suite is required but would skip.
+//
+// Every PostgreSQL test calls testPostgresDSN, which skips when
+// RADAR_TEST_POSTGRES_DSN is unset. A skipped test reports success, so a CI job
+// that loses the DSN — a renamed service, a dropped env block — would keep
+// reporting green with the whole backend untested. CI sets
+// RADAR_REQUIRE_POSTGRES_TESTS so that silence becomes a failure.
+func TestPostgresSuiteEnabled(t *testing.T) {
+	if os.Getenv("RADAR_REQUIRE_POSTGRES_TESTS") == "" {
+		t.Skip("RADAR_REQUIRE_POSTGRES_TESTS is not set")
+	}
+	if os.Getenv("RADAR_TEST_POSTGRES_DSN") == "" {
+		t.Fatal("RADAR_REQUIRE_POSTGRES_TESTS is set but RADAR_TEST_POSTGRES_DSN is empty: the PostgreSQL suite would skip silently")
+	}
+}
+
+// TestPostgresStore_ColumnRoundTrip pins the encodings that differ from the
+// SQLite store: diff and labels go to jsonb rather than TEXT, and both
+// timestamps go to bigint epoch nanoseconds rather than a fixed-width string.
+// Nothing else reads these columns back through the store surface, so a
+// silent encoding change would otherwise only surface as missing detail in the
+// UI.
+func TestPostgresStore_ColumnRoundTrip(t *testing.T) {
+	store, err := NewPostgresStore(testPostgresDSN(t))
+	if err != nil {
+		t.Fatalf("NewPostgresStore: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+
+	// Deliberately not round microseconds: timestamptz would truncate these and
+	// the assertions below would fail.
+	stamp := time.Unix(1788506383, 819945123).UTC()
+	born := time.Unix(1788500000, 456789321).UTC()
+	want := TimelineEvent{
+		ID: "roundtrip-1", Timestamp: stamp, Source: SourceInformer,
+		Kind: "Deployment", APIVersion: "apps/v1", Namespace: "default", Name: "web",
+		UID: "uid-1", EventType: EventTypeUpdate, Reason: "Scaled",
+		Message: "scaled up", HealthState: HealthHealthy, CreatedAt: &born,
+		CorrelationID: "corr-1", ClusterContext: "kind-test",
+		Owner:  &OwnerInfo{Kind: "ReplicaSet", Name: "web-rs"},
+		Labels: map[string]string{"app": "web", "tier": "front"},
+		Diff: &DiffInfo{
+			Summary: "replicas 1 -> 3",
+			Fields:  []FieldChange{{Path: "spec.replicas", OldValue: "1", NewValue: "3"}},
+		},
+	}
+	if err := store.Append(t.Context(), want); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	assert := func(where string, got *TimelineEvent) {
+		t.Helper()
+		if !got.Timestamp.Equal(stamp) {
+			t.Errorf("%s: timestamp = %v (%d ns), want %v (%d ns)",
+				where, got.Timestamp, got.Timestamp.UnixNano(), stamp, stamp.UnixNano())
+		}
+		if got.CreatedAt == nil || !got.CreatedAt.Equal(born) {
+			t.Errorf("%s: createdAt = %v, want %v", where, got.CreatedAt, born)
+		}
+		if got.Diff == nil {
+			t.Fatalf("%s: diff lost", where)
+		}
+		if got.Diff.Summary != want.Diff.Summary || len(got.Diff.Fields) != 1 {
+			t.Errorf("%s: diff = %+v, want %+v", where, got.Diff, want.Diff)
+		} else if f := got.Diff.Fields[0]; f.Path != "spec.replicas" || f.OldValue != "1" || f.NewValue != "3" {
+			t.Errorf("%s: diff field = %+v", where, f)
+		}
+		if got.Labels["app"] != "web" || got.Labels["tier"] != "front" || len(got.Labels) != 2 {
+			t.Errorf("%s: labels = %v, want %v", where, got.Labels, want.Labels)
+		}
+		if got.Owner == nil || got.Owner.Kind != "ReplicaSet" || got.Owner.Name != "web-rs" {
+			t.Errorf("%s: owner = %+v", where, got.Owner)
+		}
+		if got.APIVersion != "apps/v1" || got.UID != "uid-1" || got.CorrelationID != "corr-1" ||
+			got.ClusterContext != "kind-test" || got.HealthState != HealthHealthy {
+			t.Errorf("%s: scalar column lost: %+v", where, got)
+		}
+	}
+
+	got, err := store.GetEvent(t.Context(), "roundtrip-1")
+	if err != nil || got == nil {
+		t.Fatalf("GetEvent: %v %+v", err, got)
+	}
+	assert("GetEvent", got)
+
+	events, err := store.Query(t.Context(), QueryOptions{
+		Limit: 10, IncludeManaged: true, IncludeK8sEvents: true,
+	})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("Query returned %d events, want 1", len(events))
+	}
+	assert("Query", &events[0])
+}

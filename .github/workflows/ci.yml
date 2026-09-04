@@ -73,6 +73,10 @@ jobs:
       - name: Run PostgreSQL integration tests
         env:
           RADAR_TEST_POSTGRES_DSN: postgres://radar:radar@localhost:5432/radar?sslmode=disable
+          # Turns a missing DSN into a failure instead of a silent skip: without
+          # it, losing the service or the env block above would leave the whole
+          # PostgreSQL backend untested while this job still reported green.
+          RADAR_REQUIRE_POSTGRES_TESTS: "1"
         run: go test ./internal/timeline
 
       - name: Build
