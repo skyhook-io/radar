@@ -36,8 +36,7 @@ Feature requests are welcome! Please include:
 
 **Before you write any code, check the pull requests linked to the issue.** GitHub
 shows them in the issue timeline and sidebar. If someone already has an open PR,
-don't open a competing one — review theirs, or ask us for another issue. This is
-the single most common way contributor effort gets wasted here.
+don't open a competing one — review theirs, or ask us for another issue.
 
 If nothing is linked, comment on the issue and we'll assign it to you. Assignments
 lapse after about a week with no linked PR so the issue doesn't sit blocked; tell
