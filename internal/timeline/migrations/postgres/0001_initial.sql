@@ -2,7 +2,13 @@ CREATE SEQUENCE radar_timeline_event_seq;
 
 CREATE TABLE radar_timeline_events (
     id                  text PRIMARY KEY,
-    timestamp           timestamptz NOT NULL,
+    -- Epoch nanoseconds, not timestamptz. timestamptz resolves to microseconds,
+    -- which silently truncates the Go timestamps the timeline carries and would
+    -- make this store the only one that hands back a different instant than it
+    -- was given. The SQLite store makes the same trade the other way, storing a
+    -- fixed-width nanosecond string rather than a native type, for the same
+    -- reason. Ordering and range filters work identically on a bigint.
+    timestamp           bigint NOT NULL,
     source              text NOT NULL,
     kind                text NOT NULL,
     api_version         text,
@@ -21,7 +27,7 @@ CREATE TABLE radar_timeline_events (
     correlation_id      text,
     created_at          timestamptz NOT NULL DEFAULT now(),
     cluster_context     text NOT NULL DEFAULT '',
-    resource_created_at timestamptz,
+    resource_created_at bigint,
     seq                 bigint NOT NULL DEFAULT nextval('radar_timeline_event_seq')
 );
 

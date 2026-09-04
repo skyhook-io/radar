@@ -65,6 +65,11 @@ type PostgresStore struct {
 	lastCleanupAt time.Time
 	lastCleanupN  int64
 	lastCleanupEr string
+	// Sticky: once retention has deleted anything, a consumer paging forward
+	// from an old cursor can no longer assume an empty page means "end of
+	// history" — it may have fallen below the retained floor. Mirrors
+	// SQLiteStore.evictedRows.
+	evictedRows bool
 }
 
 // NewPostgresStore opens a PostgreSQL-backed timeline store and applies migrations.
@@ -261,12 +266,12 @@ func (s *PostgresStore) AppendBatch(ctx context.Context, events []TimelineEvent)
 
 		var resourceCreatedAt any
 		if event.CreatedAt != nil {
-			resourceCreatedAt = event.CreatedAt.UTC()
+			resourceCreatedAt = event.CreatedAt.UTC().UnixNano()
 		}
 
 		_, err = stmt.ExecContext(ctx,
 			event.ID,
-			event.Timestamp.UTC(),
+			event.Timestamp.UTC().UnixNano(),
 			string(event.Source),
 			event.Kind,
 			event.APIVersion,
@@ -434,7 +439,7 @@ func (s *PostgresStore) GetChangesForOwner(ctx context.Context, ownerKind, owner
 	}
 	if !since.IsZero() {
 		query += fmt.Sprintf(" AND timestamp >= $%d", argN)
-		args = append(args, since.UTC())
+		args = append(args, since.UTC().UnixNano())
 		argN++
 	}
 	query += fmt.Sprintf(" ORDER BY timestamp DESC LIMIT %d", limit)
@@ -513,14 +518,20 @@ func (s *PostgresStore) Stats() StoreStats {
 	row.Scan(&stats.TotalEvents)
 
 	row = s.db.QueryRowContext(ctx, "SELECT MIN(timestamp), MAX(timestamp) FROM radar_timeline_events")
-	var oldest, newest sql.NullTime
+	var oldest, newest sql.NullInt64
 	row.Scan(&oldest, &newest)
 	if oldest.Valid {
-		stats.OldestEvent = oldest.Time
+		stats.OldestEvent = time.Unix(0, oldest.Int64).UTC()
 	}
 	if newest.Valid {
-		stats.NewestEvent = newest.Time
+		stats.NewestEvent = time.Unix(0, newest.Int64).UTC()
 	}
+
+	row = s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(MIN(seq), 0), COALESCE(MAX(seq), 0)
+		FROM radar_timeline_events
+	`)
+	row.Scan(&stats.OldestSeq, &stats.NewestSeq)
 
 	stats.StorageBytes = s.storageBytes(ctx)
 
@@ -533,6 +544,7 @@ func (s *PostgresStore) Stats() StoreStats {
 	stats.LastCleanupAt = s.lastCleanupAt
 	stats.LastCleanupDeletedRows = s.lastCleanupN
 	stats.LastCleanupError = s.lastCleanupEr
+	stats.EventsEvicted = s.evictedRows
 	s.cleanupMu.RUnlock()
 
 	return stats
@@ -542,7 +554,7 @@ func (s *PostgresStore) Stats() StoreStats {
 func (s *PostgresStore) Cleanup(ctx context.Context, maxAge time.Duration) (int64, error) {
 	ctx, cancel := withPostgresOperationTimeout(ctx)
 	defer cancel()
-	cutoff := time.Now().Add(-maxAge).UTC()
+	cutoff := time.Now().Add(-maxAge).UTC().UnixNano()
 	var totalDeleted int64
 	const batchSize = 1000
 
@@ -577,15 +589,14 @@ func (s *PostgresStore) Cleanup(ctx context.Context, maxAge time.Duration) (int6
 	return totalDeleted, nil
 }
 
-// PruneToMaxSize is a no-op for PostgreSQL. Max storage size pruning is not
-// supported because PostgreSQL relation size, MVCC bloat, autovacuum, and
-// physical file reclamation make SQLite-style file-size targets misleading.
-func (s *PostgresStore) PruneToMaxSize(ctx context.Context, maxBytes int64) (int64, error) {
-	return 0, nil
-}
-
 // StartCleanupLoop spawns a goroutine that periodically deletes events older
 // than retention. The loop exits when Close is called.
+//
+// maxStorageBytes is accepted for interface symmetry and deliberately ignored:
+// PostgreSQL relation size reflects MVCC bloat and autovacuum timing rather
+// than live data, so a SQLite-style file-size target would prune real history
+// chasing space the database will reclaim on its own. Retention is the only
+// bound here.
 func (s *PostgresStore) StartCleanupLoop(retention, interval time.Duration, maxStorageBytes int64) {
 	if interval <= 0 || retention <= 0 {
 		return
@@ -618,6 +629,9 @@ func (s *PostgresStore) runCleanup(retention time.Duration) {
 	s.cleanupMu.Lock()
 	s.lastCleanupAt = now
 	s.lastCleanupN = n
+	if n > 0 {
+		s.evictedRows = true
+	}
 	if err != nil {
 		s.lastCleanupEr = err.Error()
 	} else {
@@ -702,10 +716,10 @@ func (s *PostgresStore) buildQuery(opts QueryOptions) (string, []any, error) {
 		addInFilter("name", vals)
 	}
 	if !opts.Since.IsZero() {
-		addFilter(" AND timestamp >= $%d", opts.Since.UTC())
+		addFilter(" AND timestamp >= $%d", opts.Since.UTC().UnixNano())
 	}
 	if !opts.Until.IsZero() {
-		addFilter(" AND timestamp <= $%d", opts.Until.UTC())
+		addFilter(" AND timestamp <= $%d", opts.Until.UTC().UnixNano())
 	}
 	if len(opts.Sources) > 0 {
 		vals := make([]any, len(opts.Sources))
@@ -732,9 +746,18 @@ func (s *PostgresStore) buildQuery(opts QueryOptions) (string, []any, error) {
 	if seqPaging {
 		addFilter(" AND seq > $%d", opts.SinceSeq)
 	}
+	if opts.UntilSeq > 0 {
+		addFilter(" AND seq < $%d", opts.UntilSeq)
+	}
 
-	if seqPaging {
+	// Ordering mirrors the SQLite store exactly (sqlite_store.go). Delta reads
+	// page by ascending arrival so a burst larger than the page resumes from the
+	// lowest unseen seq; bounded snapshots and backwards pages are
+	// newest-arrival-first; everything else is newest-event-time-first.
+	if seqPaging || opts.SequenceOrder == pkgtimeline.SequenceOrderAscending {
 		query.WriteString(" ORDER BY seq ASC")
+	} else if opts.UntilSeq > 0 || opts.SequenceOrder == pkgtimeline.SequenceOrderDescending {
+		query.WriteString(" ORDER BY seq DESC")
 	} else {
 		query.WriteString(" ORDER BY timestamp DESC")
 	}
@@ -765,11 +788,12 @@ func (s *PostgresStore) scanEvent(scanner eventScanner) (TimelineEvent, error) {
 	var apiVersion, uid, reason, message, correlationID, clusterContext sql.NullString
 	var ownerKind, ownerName sql.NullString
 	var diffJSON, labelsJSON []byte
-	var resourceCreatedAt sql.NullTime
+	var resourceCreatedAt sql.NullInt64
+	var timestampNanos int64
 
 	err := scanner.Scan(
 		&event.ID,
-		&event.Timestamp,
+		&timestampNanos,
 		&source,
 		&event.Kind,
 		&apiVersion,
@@ -814,8 +838,9 @@ func (s *PostgresStore) scanEvent(scanner eventScanner) (TimelineEvent, error) {
 	if correlationID.Valid {
 		event.CorrelationID = correlationID.String
 	}
+	event.Timestamp = time.Unix(0, timestampNanos).UTC()
 	if resourceCreatedAt.Valid {
-		t := resourceCreatedAt.Time
+		t := time.Unix(0, resourceCreatedAt.Int64).UTC()
 		event.CreatedAt = &t
 	}
 	if ownerKind.Valid && ownerKind.String != "" {
@@ -1080,5 +1105,20 @@ func postgresConnectionError(operation string, err error, dsn string) error {
 		message = strings.ReplaceAll(message, url.QueryEscape(config.Password), "[REDACTED]")
 		message = strings.ReplaceAll(message, url.PathEscape(config.Password), "[REDACTED]")
 	}
-	return fmt.Errorf("%s: %s", operation, message)
+	// Keep the chain intact so callers can still errors.Is/errors.As the
+	// driver's error, but never let its own Error() text reach a log or an API
+	// response: that string is where the DSN password appears. fmt.Errorf with
+	// %w would print the wrapped message verbatim and undo the redaction, so
+	// the wrapper below overrides Error() and exposes Unwrap() only.
+	return &postgresConnError{msg: fmt.Sprintf("%s: %s", operation, message), err: err}
 }
+
+// postgresConnError carries a redacted message while preserving the underlying
+// driver error for errors.Is/errors.As.
+type postgresConnError struct {
+	msg string
+	err error
+}
+
+func (e *postgresConnError) Error() string { return e.msg }
+func (e *postgresConnError) Unwrap() error { return e.err }

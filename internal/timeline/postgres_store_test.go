@@ -449,7 +449,7 @@ func TestPostgresStore_AppendK8sEventUpsert(t *testing.T) {
 	var count int32
 	var message string
 	var seq int64
-	var createdAt time.Time
+	var createdAtNanos int64
 	var ownerKind, ownerName string
 	var labels []byte
 	if err := store.db.QueryRowContext(
@@ -457,7 +457,7 @@ func TestPostgresStore_AppendK8sEventUpsert(t *testing.T) {
 		`SELECT count, message, seq, resource_created_at, owner_kind, owner_name, labels_json
 		 FROM radar_timeline_events WHERE id = $1`,
 		"evt-upsert-1",
-	).Scan(&count, &message, &seq, &createdAt, &ownerKind, &ownerName, &labels); err != nil {
+	).Scan(&count, &message, &seq, &createdAtNanos, &ownerKind, &ownerName, &labels); err != nil {
 		t.Fatalf("query row: %v", err)
 	}
 	if count != 5 {
@@ -469,7 +469,7 @@ func TestPostgresStore_AppendK8sEventUpsert(t *testing.T) {
 	if seq <= firstSeq {
 		t.Fatalf("seq did not advance: %d <= %d", seq, firstSeq)
 	}
-	if !createdAt.Equal(born) {
+	if createdAt := time.Unix(0, createdAtNanos).UTC(); !createdAt.Equal(born) {
 		t.Fatalf("created_at lost enrichment: %v want %v", createdAt, born)
 	}
 	if ownerKind != "ReplicaSet" || ownerName != "web-rs" {
