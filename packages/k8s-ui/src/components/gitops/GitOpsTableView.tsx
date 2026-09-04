@@ -10,7 +10,6 @@ import {
   CircleDot,
   GitBranch,
   HeartPulse,
-  Layers,
   LayoutGrid,
   List,
   Pause,
@@ -292,13 +291,6 @@ const GITOPS_FILTER_SCHEMA = defineFilterSchema({
   automation: { param: 'automation', type: 'set' },
   labels: { param: 'labels', type: 'set' },
   lifecycle: { param: 'lifecycle', type: 'single', default: 'all' },
-  // Values are Argo kind names ('Application' | 'ApplicationSet'). Empty set =
-  // no restriction (both shown, plus every Flux kind — this filter never
-  // touches those). Non-empty narrows to just the selected Argo kind(s); it's
-  // deliberately not a general "kind" facet across every GitOps kind — the
-  // Application-vs-ApplicationSet distinction is the whole ask, and widening
-  // this to a full multi-tool kind picker would add scope nobody asked for.
-  kind: { param: 'kind', type: 'set' },
 })
 
 export function GitOpsTableView({
@@ -342,9 +334,7 @@ export function GitOpsTableView({
   const labelFilters = filters.values.labels
   const automationFilters = filters.values.automation as Set<'auto' | 'manual' | 'suspended'>
   const lifecycleFilter = filters.values.lifecycle as 'all' | 'terminating' | 'active'
-  const kindFilters = filters.values.kind as Set<'Application' | 'ApplicationSet'>
   const toggleAutomation = useCallback((value: 'auto' | 'manual' | 'suspended') => filters.toggle('automation', value), [filters.toggle])
-  const toggleKind = useCallback((value: 'Application' | 'ApplicationSet') => filters.toggle('kind', value), [filters.toggle])
   const [namespaceFilters, setNamespaceFilters] = useState<Set<string>>(new Set())
   const [showLabelsDropdown, setShowLabelsDropdown] = useState(false)
   const [labelSearch, setLabelSearch] = useState('')
@@ -372,8 +362,7 @@ export function GitOpsTableView({
     namespaceFilters.size > 0 ||
     labelFilters.size > 0 ||
     automationFilters.size > 0 ||
-    lifecycleFilter !== 'all' ||
-    kindFilters.size > 0
+    lifecycleFilter !== 'all'
   const hasGlobalNamespaceFilter = !!onClearNamespaces && (globalNamespaces?.length ?? 0) > 0
   const hasAnyFilter = hasLocalFilters || hasGlobalNamespaceFilter
 
@@ -429,10 +418,6 @@ export function GitOpsTableView({
     manual: allRows.filter((row) => !row.autoSync).length,
     suspended: allRows.filter((row) => row.suspended).length,
   }), [allRows])
-  const kindCounts = useMemo(() => ({
-    Application: allRows.filter((row) => row.kind === 'Application').length,
-    ApplicationSet: allRows.filter((row) => row.kind === 'ApplicationSet').length,
-  }), [allRows])
   // The Destination column earns its width only when destinations actually vary
   // — in single-cluster OSS every row is the same in-cluster API server, so the
   // column is dead weight. Show it when any row is cross-cluster (Hub) or when
@@ -481,10 +466,6 @@ export function GitOpsTableView({
       )) return false
       if (lifecycleFilter === 'terminating' && !row.terminating) return false
       if (lifecycleFilter === 'active' && row.terminating) return false
-      // Only constrains Argo Application/ApplicationSet rows — Flux kinds
-      // (Kustomization, HelmRelease) are never affected by this filter, by
-      // design (see GITOPS_FILTER_SCHEMA comment on `kind`).
-      if (kindFilters.size > 0 && (row.kind === 'Application' || row.kind === 'ApplicationSet') && !kindFilters.has(row.kind)) return false
       if (destinationFilter && destinationFilter !== 'all') {
         const match = row._destination?.match
         if (destinationFilter === 'this-cluster' && match !== 'in_cluster') return false
@@ -499,7 +480,7 @@ export function GitOpsTableView({
     })
     const eff = sort ?? { key: 'urgency' as SortKey, dir: 'asc' as SortDir }
     return [...rows].sort((a, b) => compareRows(a, b, eff.key) * (eff.dir === 'asc' ? 1 : -1))
-  }, [allRows, automationFilters, healthFilters, kindFilters, labelFilters, lifecycleFilter, mode, namespaceFilters, projectFilters, search, sort, syncFilters, destinationFilter])
+  }, [allRows, automationFilters, healthFilters, labelFilters, lifecycleFilter, mode, namespaceFilters, projectFilters, search, sort, syncFilters, destinationFilter])
 
   const terminatingCount = useMemo(() => allRows.filter((row) => row.terminating).length, [allRows])
 
@@ -684,9 +665,6 @@ export function GitOpsTableView({
         automationFilters={automationFilters}
         automationCounts={automationCounts}
         onToggleAutomation={toggleAutomation}
-        kindFilters={kindFilters}
-        kindCounts={kindCounts}
-        onToggleKind={toggleKind}
         lifecycleFilter={lifecycleFilter}
         onLifecycleFilterChange={(v) => filters.setString('lifecycle', v)}
         terminatingCount={terminatingCount}
@@ -863,9 +841,6 @@ function GitOpsFilterSidebar({
   automationFilters,
   automationCounts,
   onToggleAutomation,
-  kindFilters,
-  kindCounts,
-  onToggleKind,
   lifecycleFilter,
   onLifecycleFilterChange,
   terminatingCount,
@@ -890,9 +865,6 @@ function GitOpsFilterSidebar({
   automationFilters: Set<'auto' | 'manual' | 'suspended'>
   automationCounts: { auto: number; manual: number; suspended: number }
   onToggleAutomation: (value: 'auto' | 'manual' | 'suspended') => void
-  kindFilters: Set<'Application' | 'ApplicationSet'>
-  kindCounts: { Application: number; ApplicationSet: number }
-  onToggleKind: (value: 'Application' | 'ApplicationSet') => void
   lifecycleFilter: 'all' | 'terminating' | 'active'
   onLifecycleFilterChange: (value: 'all' | 'terminating' | 'active') => void
   terminatingCount: number
@@ -967,13 +939,6 @@ function GitOpsFilterSidebar({
           <GitOpsFacetButton label="Suspended" count={healthCounts.get('Suspended') ?? 0} active={healthFilters.has('Suspended')} tone="warning" onClick={() => onToggleHealth('Suspended')} />
           <GitOpsFacetButton label="Unknown" count={healthCounts.get('Unknown') ?? 0} active={healthFilters.has('Unknown')} onClick={() => onToggleHealth('Unknown')} />
         </GitOpsFilterSection>
-
-        {kindCounts.ApplicationSet > 0 && (
-          <GitOpsFilterSection icon={Layers} title="Kind">
-            <GitOpsFacetButton label="Applications" count={kindCounts.Application} active={kindFilters.has('Application')} onClick={() => onToggleKind('Application')} />
-            <GitOpsFacetButton label="ApplicationSets" count={kindCounts.ApplicationSet} active={kindFilters.has('ApplicationSet')} onClick={() => onToggleKind('ApplicationSet')} />
-          </GitOpsFilterSection>
-        )}
 
         <GitOpsFilterSection icon={CircleDot} title="Automation (Sync policy)">
           <GitOpsFacetButton label="Auto-sync" count={automationCounts.auto} active={automationFilters.has('auto')} onClick={() => onToggleAutomation('auto')} />
@@ -1964,60 +1929,6 @@ export function normalizeArgoApplication(resource: any): GitOpsRow {
     createdAt: resource.metadata?.creationTimestamp ?? '',
     lastSync: argoLastSync ?? '',
     autoSync: Boolean(resource.spec?.syncPolicy?.automated),
-    terminating: isTerminating(resource),
-    terminationStartedAt: terminationStartedAt(resource),
-    raw: resource,
-    _cluster: resource._cluster,
-    _destination: resource._destination,
-  }
-}
-
-// An ApplicationSet is a generator, not a deployed app — it has no sync/health
-// of its own in the sense the fleet table shows for Applications. Its own
-// status.conditions use a different vocabulary (ErrorOccurred,
-// ParametersGenerated, ResourcesUpToDate — never Ready), so the generic
-// getGitOpsResourceStatus fallback below correctly bottoms out at
-// Unknown/Unknown rather than us inventing a fleet-health rollup from
-// generator-run conditions that don't mean what a Synced/Healthy chip implies.
-export function normalizeArgoApplicationSet(resource: any): GitOpsRow {
-  const status = getGitOpsResourceStatus('applicationsets', resource)
-  const templateSpec = resource.spec?.template?.spec ?? {}
-  const dest = templateSpec.destination?.server ?? templateSpec.destination?.name ?? ''
-  // Best-effort source summary from the first generator that carries one.
-  // ApplicationSets can combine multiple generators (list, cluster, git,
-  // matrix, …) with no single "the" source, so this is a hint for the Source
-  // column, not a claim of completeness — blank is the honest answer for
-  // generators (List, Cluster, SCM Provider, …) that don't reference a repo.
-  const gitGenerator = (resource.spec?.generators ?? []).find((g: any) => g?.git)?.git
-  return {
-    id: `argo/applicationsets/${resource.metadata?.namespace ?? ''}/${resource.metadata?.name ?? ''}`,
-    mode: 'applications',
-    tool: 'argo',
-    kindName: 'applicationsets',
-    kind: 'ApplicationSet',
-    group: 'argoproj.io',
-    name: resource.metadata?.name ?? '',
-    namespace: resource.metadata?.namespace ?? '',
-    // ApplicationSets aren't scoped to a project themselves — the project
-    // lives on each generated Application (via the template), which can
-    // itself vary per generated app. Leaving this blank (rather than
-    // guessing from the template) keeps the Project filter honest.
-    project: '',
-    labels: (resource.metadata?.labels ?? {}) as Record<string, string>,
-    sync: status?.sync ?? 'Unknown',
-    health: status?.health ?? 'Unknown',
-    reconciling: status?.reconciling,
-    reconcilingSince: status?.reconcilingSince,
-    suspended: false,
-    repository: gitGenerator?.repoURL ?? '',
-    targetRevision: gitGenerator?.revision ?? '',
-    path: gitGenerator?.directories?.[0]?.path ?? gitGenerator?.files?.[0]?.path ?? '',
-    chart: '',
-    destination: dest,
-    destinationNamespace: templateSpec.destination?.namespace ?? '',
-    createdAt: resource.metadata?.creationTimestamp ?? '',
-    lastSync: '',
-    autoSync: false,
     terminating: isTerminating(resource),
     terminationStartedAt: terminationStartedAt(resource),
     raw: resource,
