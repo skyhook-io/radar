@@ -528,11 +528,22 @@ func (s *PostgresStore) ClearResourceSeen(clusterContext, kind, namespace, name 
 	delete(s.seenResources, key)
 	s.seenMu.Unlock()
 
+	// One deadline spans both reaching the queue and the flush that follows, so
+	// a clear can never hold the informer's delete handler longer than the
+	// single database round trip it replaced.
+	ctx, cancel := context.WithTimeout(context.Background(), postgresOperationTimeout)
+	defer cancel()
+
 	done := make(chan struct{})
-	s.enqueueSeenWrite(seenResourceWrite{key: key, delete: true, done: done})
+	if !s.enqueueSeenClear(ctx, seenResourceWrite{key: key, delete: true, done: done}) {
+		log.Printf("[timeline] seen-resource clear did not reach the write queue in %s; "+
+			"the resource stays marked as seen in the database until it is deleted again",
+			postgresOperationTimeout)
+		return
+	}
 	select {
 	case <-done:
-	case <-time.After(postgresOperationTimeout):
+	case <-ctx.Done():
 		log.Printf("[timeline] timed out waiting for a seen-resource clear to persist")
 	}
 }
@@ -545,25 +556,28 @@ func (s *PostgresStore) ClearResourceSeen(clusterContext, kind, namespace, name 
 // Drops are counted and reported once per flush rather than per event, which on
 // a large cluster would be its own flood.
 func (s *PostgresStore) enqueueSeenWrite(w seenResourceWrite) {
-	if w.done != nil {
-		// A clear must reach the queue. Dropping it would return from
-		// ClearResourceSeen with the row still present, and a mark already
-		// queued for the same key would then flush on top of it - so the
-		// resource stays marked as seen and its next appearance is suppressed,
-		// permanently and silently. Waiting is safe: the writer drains on a
-		// ticker regardless of database health, so a full queue is transient
-		// unless the store is closing.
-		select {
-		case s.seenWrites <- w:
-		case <-s.quit:
-			close(w.done)
-		}
-		return
-	}
 	select {
 	case s.seenWrites <- w:
 	default:
 		s.seenDropped.Add(1)
+	}
+}
+
+// enqueueSeenClear waits for room rather than dropping, and reports whether the
+// mutation was queued. A dropped clear would return from ClearResourceSeen with
+// the row still present, and a mark already queued for the same key would then
+// flush on top of it - leaving the resource marked as seen so its next
+// appearance is suppressed. Waiting is bounded by ctx and by store shutdown;
+// the writer drains on a ticker regardless of database health, so a full queue
+// is transient.
+func (s *PostgresStore) enqueueSeenClear(ctx context.Context, w seenResourceWrite) bool {
+	select {
+	case s.seenWrites <- w:
+		return true
+	case <-ctx.Done():
+		return false
+	case <-s.quit:
+		return false
 	}
 }
 
