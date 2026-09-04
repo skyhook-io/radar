@@ -68,12 +68,19 @@ func SetConnectionStatus(status ConnectionStatus) {
 	switch status.State {
 	case StateConnected:
 		runtimeAuthRecoveryOwed.Store(false)
+		runtimeNetworkRecoveryOwed.Store(false)
 		resetInconclusiveStreak()
 	case StateDisconnected:
 		if isAuthClassification(status.ErrorType) {
 			runtimeAuthRecoveryOwed.Store(true)
+		} else {
+			// Non-auth disconnects: a browser retries these itself, but a
+			// deployment with no tab attached has nothing that would, so the
+			// server keeps its own backoff as the floor. This debt is not
+			// published to the browser, which keeps its faster retry.
+			runtimeNetworkRecoveryOwed.Store(true)
 		}
-		if runtimeAuthRecoveryOwed.Load() {
+		if runtimeRecoveryOwed() {
 			startRuntimeAuthRecovery()
 		}
 	}

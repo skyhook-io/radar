@@ -1603,3 +1603,69 @@ func TestRuntimeAuthExecCredentialExpiry(t *testing.T) {
 		t.Fatalf("second connection status = %+v, want disconnected auth", status)
 	}
 }
+
+// A non-auth disconnect must also leave a reconnect loop running. A browser
+// retries these itself, but a deployment with no tab attached (MCP-only,
+// API-only) has nothing that would, so the server is the floor.
+func TestRuntimeRecoveryReconnectsAfterNetworkDisconnect(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+	setRuntimeAuthRecoveryIntervalsForTest(2*time.Millisecond, 4*time.Millisecond)
+
+	var probes atomic.Int32
+	setRuntimeAuthProbe(func(context.Context) error {
+		// Unreachable for the first few passes, then the cluster comes back.
+		if probes.Add(1) < 3 {
+			return errors.New("dial tcp 10.0.0.1:6443: connect: connection refused")
+		}
+		return nil
+	})
+	var reconnects atomic.Int32
+	setRuntimeAuthReconnect(func(string, uint64) error {
+		reconnects.Add(1)
+		return nil
+	})
+
+	SetConnectionStatus(ConnectionStatus{
+		State:     StateDisconnected,
+		Context:   "recovery-context",
+		ErrorType: "network",
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for reconnects.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("server never retried a network-shaped disconnect; a headless deployment would stay wedged")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// The browser suppresses its own retry while the server owns recovery, so the
+// network debt must stay invisible to it: publishing it would replace the
+// browser's 10s-60s retry with the server's much slower backoff.
+func TestNetworkRecoveryDebtIsNotPublishedToTheBrowser(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+	setRuntimeAuthRecoveryIntervalsForTest(time.Hour, time.Hour)
+	setRuntimeAuthProbe(func(context.Context) error { return errors.New("unreachable") })
+	setRuntimeAuthReconnect(func(string, uint64) error { return nil })
+
+	SetConnectionStatus(ConnectionStatus{
+		State:     StateDisconnected,
+		Context:   "recovery-context",
+		ErrorType: "network",
+	})
+	if RuntimeAuthRecoveryOwed() {
+		t.Fatal("a network disconnect reported authRecoveryOwed; the browser would stand down and retry far more slowly")
+	}
+
+	SetConnectionStatus(ConnectionStatus{
+		State:     StateDisconnected,
+		Context:   "recovery-context",
+		ErrorType: "auth",
+	})
+	if !RuntimeAuthRecoveryOwed() {
+		t.Fatal("an auth disconnect no longer reports authRecoveryOwed")
+	}
+}
