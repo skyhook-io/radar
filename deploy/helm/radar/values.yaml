@@ -280,9 +280,13 @@ resources:
 #     long-lived deployment. Adds operational concerns: the PVC fills if
 #     retention is unbounded; restart on a multi-GB DB is slower.
 #   postgres — events persist in an externally managed PostgreSQL database.
-#     Pick this for durability across restarts and rolling updates, or when
-#     running more than one replica. The DSN must be provided via an
-#     existing Kubernetes Secret; Helm never touches the credential.
+#     Pick this when you want history to survive pod restarts and rolling
+#     updates without attaching a PVC, or when your platform already runs a
+#     managed database. The DSN must be provided via an existing Kubernetes
+#     Secret; Helm never touches the credential.
+#     This does NOT make Radar multi-replica: informer caches, SSE streams,
+#     and exec/port-forward sessions are still per-pod, so replicaCount must
+#     stay 1. Only the timeline is shared.
 #
 # Timeline volume depends on cluster size and controller churn. Keep `maxSize`
 # below the PVC `size` so Radar can prune before the volume fills; tune
