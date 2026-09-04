@@ -492,7 +492,9 @@ Cleanup runs hourly + once at startup. Confirm it's keeping up via `/api/diagnos
 - `sslmode` and other TLS settings are controlled through the DSN string.
 - The DSN is read from a Secret; never put it in Helm values or `config.json`.
 - Restart the Radar Deployment after rotating the Secret because Kubernetes does not refresh environment variables in running containers.
-- There is no built-in import path from SQLite to PostgreSQL. Migrating historical events is out of scope for the first contribution.
+- There is no built-in import path from SQLite to PostgreSQL. Migrating historical events is not supported.
+- Radar treats an unreachable PostgreSQL as fatal rather than falling back to an in-memory timeline, so a pod that cannot reach the database starts in disconnected mode and serves errors instead of cluster data. This is deliberate: silently degrading to memory would hand you a timeline that disappears on the next restart, without saying so. It also means the database is on Radar's startup path — treat its availability accordingly, and prefer one that lives close to the cluster.
+- Recovery after a database outage is not automatic. Once PostgreSQL is reachable again, either use the retry action in the UI or restart the pod. Verified TLS modes: `require` and `verify-full`.
 
 ## Configuration Reference
 
