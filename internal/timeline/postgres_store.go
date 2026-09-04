@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -36,6 +37,34 @@ const (
 
 var postgresPingTimeout = 10 * time.Second
 
+const (
+	// The informer add path calls MarkResourceSeen once per resource during the
+	// initial sync. On a large cluster that is tens of thousands of calls, and a
+	// synchronous round trip each would serialize the informer handler against
+	// the database's latency - negligible against a sidecar, tens of seconds
+	// against a managed database an availability zone away. The in-memory map is
+	// still updated synchronously, so IsResourceSeen is unaffected; only the
+	// durable copy is deferred.
+	seenWriteQueueDepth = 4096
+	seenWriteBatchSize  = 500
+	seenWriteInterval   = time.Second
+)
+
+// seenResourceWrite is one ordered mutation of the seen set. Marks and clears
+// share a queue so a clear can never be applied before the mark it supersedes.
+type seenResourceWrite struct {
+	key    string
+	delete bool
+	// done, when non-nil, is closed once this mutation has been flushed (or
+	// dropped). Clears carry it and wait: MarkResourceSeen is the hot path and
+	// can be deferred, but ClearResourceSeen must be durable before it returns,
+	// or a process that dies in between keeps a stale mark and never reports the
+	// resource as newly seen again. Waiting also pins the ordering - the queue
+	// is drained in order, so a queued mark can never be applied after the clear
+	// that supersedes it.
+	done chan struct{}
+}
+
 func withPostgresOperationTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
 	if _, ok := ctx.Deadline(); ok {
 		return ctx, func() {}
@@ -54,6 +83,9 @@ type PostgresStore struct {
 
 	filterCache map[string]*CompiledFilter
 	cacheMu     sync.RWMutex
+
+	seenWrites  chan seenResourceWrite
+	seenDropped atomic.Int64
 
 	quit      chan struct{}
 	wg        sync.WaitGroup
@@ -117,6 +149,7 @@ func NewPostgresStore(dsn string) (*PostgresStore, error) {
 		db:            db,
 		seenResources: make(map[string]bool),
 		filterCache:   make(map[string]*CompiledFilter),
+		seenWrites:    make(chan seenResourceWrite, seenWriteQueueDepth),
 		quit:          make(chan struct{}),
 	}
 	hydrateCtx, cancelHydrate := context.WithTimeout(
@@ -128,6 +161,12 @@ func NewPostgresStore(dsn string) (*PostgresStore, error) {
 	if err != nil {
 		return closeOnError("hydrate PostgreSQL timeline seen resources", err)
 	}
+
+	store.wg.Add(1)
+	go func() {
+		defer store.wg.Done()
+		store.runSeenWriter()
+	}()
 
 	return store, nil
 }
@@ -470,15 +509,7 @@ func (s *PostgresStore) MarkResourceSeen(clusterContext, kind, namespace, name s
 	s.seenResources[key] = true
 	s.seenMu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), postgresOperationTimeout)
-	defer cancel()
-	if _, err := s.db.ExecContext(
-		ctx,
-		"INSERT INTO radar_timeline_seen_resources (resource_key) VALUES ($1) ON CONFLICT(resource_key) DO NOTHING",
-		[]byte(key),
-	); err != nil {
-		log.Printf("[timeline] failed to persist seen resource: %v", err)
-	}
+	s.enqueueSeenWrite(seenResourceWrite{key: key})
 }
 
 // IsResourceSeen checks if a resource has been seen before in the given cluster
@@ -497,14 +528,121 @@ func (s *PostgresStore) ClearResourceSeen(clusterContext, kind, namespace, name 
 	delete(s.seenResources, key)
 	s.seenMu.Unlock()
 
+	done := make(chan struct{})
+	s.enqueueSeenWrite(seenResourceWrite{key: key, delete: true, done: done})
+	select {
+	case <-done:
+	case <-time.After(postgresOperationTimeout):
+		log.Printf("[timeline] timed out waiting for a seen-resource clear to persist")
+	}
+}
+
+// enqueueSeenWrite hands one mutation to the background writer without
+// blocking the caller. A full queue means the database cannot keep up with
+// informer churn; the mutation is dropped rather than stalling the informer
+// handler, because the in-memory set is already correct and the only cost is
+// that the resource is reported as newly seen once after the next restart.
+// Drops are counted and reported once per flush rather than per event, which on
+// a large cluster would be its own flood.
+func (s *PostgresStore) enqueueSeenWrite(w seenResourceWrite) {
+	select {
+	case s.seenWrites <- w:
+	default:
+		s.seenDropped.Add(1)
+		// Nobody will flush this one, so release any waiter immediately rather
+		// than letting it sit until its timeout.
+		if w.done != nil {
+			close(w.done)
+		}
+	}
+}
+
+// runSeenWriter drains the queue into batched statements. Consecutive
+// mutations of the same kind collapse into one statement; a mark followed by a
+// clear of the same key stays ordered, because the batch breaks whenever the
+// operation changes.
+func (s *PostgresStore) runSeenWriter() {
+	ticker := time.NewTicker(seenWriteInterval)
+	defer ticker.Stop()
+
+	pending := make([]seenResourceWrite, 0, seenWriteBatchSize)
+	reportedDrops := int64(0)
+	reportDrops := func() {
+		if dropped := s.seenDropped.Load(); dropped > reportedDrops {
+			log.Printf("[timeline] seen-resource write queue full: %d change(s) not persisted; "+
+				"they will be reported as newly seen once after the next restart", dropped-reportedDrops)
+			reportedDrops = dropped
+		}
+	}
+	for {
+		select {
+		case <-s.quit:
+			// Drain what is already queued so a clean shutdown does not throw
+			// away marks the informers just made.
+			for {
+				select {
+				case w := <-s.seenWrites:
+					pending = append(pending, w)
+					if len(pending) >= seenWriteBatchSize {
+						s.flushSeenWrites(pending)
+						pending = pending[:0]
+					}
+				default:
+					s.flushSeenWrites(pending)
+					reportDrops()
+					return
+				}
+			}
+		case w := <-s.seenWrites:
+			pending = append(pending, w)
+			if len(pending) >= seenWriteBatchSize || w.done != nil {
+				s.flushSeenWrites(pending)
+				pending = pending[:0]
+			}
+		case <-ticker.C:
+			if len(pending) > 0 {
+				s.flushSeenWrites(pending)
+				pending = pending[:0]
+			}
+			reportDrops()
+		}
+	}
+}
+
+func (s *PostgresStore) flushSeenWrites(pending []seenResourceWrite) {
+	if len(pending) == 0 {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), postgresOperationTimeout)
 	defer cancel()
-	if _, err := s.db.ExecContext(
-		ctx,
-		"DELETE FROM radar_timeline_seen_resources WHERE resource_key = $1",
-		[]byte(key),
-	); err != nil {
-		log.Printf("[timeline] failed to clear seen resource: %v", err)
+
+	for start := 0; start < len(pending); {
+		end := start + 1
+		for end < len(pending) && pending[end].delete == pending[start].delete {
+			end++
+		}
+		keys := make([][]byte, 0, end-start)
+		for _, w := range pending[start:end] {
+			keys = append(keys, []byte(w.key))
+		}
+		var err error
+		if pending[start].delete {
+			_, err = s.db.ExecContext(ctx,
+				"DELETE FROM radar_timeline_seen_resources WHERE resource_key = ANY($1)", keys)
+		} else {
+			_, err = s.db.ExecContext(ctx,
+				`INSERT INTO radar_timeline_seen_resources (resource_key)
+				 SELECT unnest($1::bytea[]) ON CONFLICT (resource_key) DO NOTHING`, keys)
+		}
+		if err != nil {
+			log.Printf("[timeline] failed to persist %d seen-resource changes: %v", end-start, err)
+		}
+		for _, w := range pending[start:end] {
+			if w.done != nil {
+				close(w.done)
+			}
+		}
+		start = end
 	}
 }
 
