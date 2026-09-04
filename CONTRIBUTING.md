@@ -32,6 +32,20 @@ Feature requests are welcome! Please include:
 - The problem it solves or use case it enables
 - Any alternative solutions you've considered
 
+### Claiming an Issue
+
+**Before you write any code, check the pull requests linked to the issue.** GitHub
+shows them in the issue timeline and sidebar. If someone already has an open PR,
+don't open a competing one — review theirs, or ask us for another issue. This is
+the single most common way contributor effort gets wasted here.
+
+If nothing is linked, comment on the issue and we'll assign it to you. Assignments
+lapse after about a week with no linked PR so the issue doesn't sit blocked; tell
+us if you're still on it and we'll leave it with you.
+
+For a small, obvious fix you don't need to claim anything first — just check the
+linked PRs and open one.
+
 ### Pull Requests
 
 1. Fork the repository
