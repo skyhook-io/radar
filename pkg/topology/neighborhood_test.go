@@ -566,6 +566,89 @@ func TestBuildNeighborhood_GroupEmptyRootAmbiguous(t *testing.T) {
 	}
 }
 
+func TestBuildNeighborhood_GroupEmptyRootDefaultsToCoreWhenCRDCollides(t *testing.T) {
+	core := Node{
+		ID:     "job/ml/train",
+		Kind:   KindJob,
+		Name:   "train",
+		Status: StatusHealthy,
+		Data: map[string]any{
+			"namespace": "ml",
+		},
+	}
+	volcano := Node{
+		ID:     "job/ml/train/batch.volcano.sh",
+		Kind:   KindJob,
+		Name:   "train",
+		Status: StatusHealthy,
+		Data: map[string]any{
+			"namespace":  "ml",
+			"apiVersion": "batch.volcano.sh/v1alpha1",
+		},
+	}
+	topo := &Topology{Nodes: []Node{core, volcano}}
+
+	sub := BuildNeighborhoodWithIndex(
+		topo,
+		ResourceRef{Kind: "Job", Namespace: "ml", Name: "train"},
+		NeighborhoodOptions{Profile: ProfileAll, Hops: 1},
+		nil,
+		nil,
+	)
+	if sub.AmbiguousRoot || len(sub.Nodes) != 1 || sub.Nodes[0].ID != core.ID {
+		t.Fatalf("group-less Job resolved to nodes=%v ambiguous=%v, want core %q", nodeIDs(sub), sub.AmbiguousRoot, core.ID)
+	}
+	if sub.Root.Kind != "Job" || sub.Root.Group != "batch" {
+		t.Fatalf("resolved root = %#v, want exact core Job identity", sub.Root)
+	}
+
+	for _, tc := range []struct {
+		group string
+		want  string
+	}{
+		{group: "batch", want: core.ID},
+		{group: "batch.volcano.sh", want: volcano.ID},
+	} {
+		sub = BuildNeighborhoodWithIndex(
+			topo,
+			ResourceRef{Kind: "Job", Namespace: "ml", Name: "train", Group: tc.group},
+			NeighborhoodOptions{Profile: ProfileAll, Hops: 1},
+			nil,
+			nil,
+		)
+		if sub.AmbiguousRoot || len(sub.Nodes) != 1 || sub.Nodes[0].ID != tc.want {
+			t.Fatalf("group %q resolved to nodes=%v ambiguous=%v, want %q", tc.group, nodeIDs(sub), sub.AmbiguousRoot, tc.want)
+		}
+	}
+}
+
+func TestBuildNeighborhood_GroupEmptyUniqueCustomBuiltinKindKeepsGroup(t *testing.T) {
+	volcano := Node{
+		ID:     "job/ml/train/batch.volcano.sh",
+		Kind:   KindJob,
+		Name:   "train",
+		Status: StatusHealthy,
+		Data: map[string]any{
+			"namespace":  "ml",
+			"apiVersion": "batch.volcano.sh/v1alpha1",
+		},
+	}
+
+	sub := BuildNeighborhoodWithIndex(
+		&Topology{Nodes: []Node{volcano}},
+		ResourceRef{Kind: "Job", Namespace: "ml", Name: "train"},
+		NeighborhoodOptions{Profile: ProfileAll, Hops: 1},
+		nil,
+		nil,
+	)
+	if sub.AmbiguousRoot || len(sub.Nodes) != 1 || sub.Nodes[0].ID != volcano.ID {
+		t.Fatalf("group-less unique custom Job resolved to nodes=%v ambiguous=%v", nodeIDs(sub), sub.AmbiguousRoot)
+	}
+	if sub.Root.Kind != "Job" || sub.Root.Group != "batch.volcano.sh" {
+		t.Fatalf("resolved root = %#v, want exact Volcano Job identity", sub.Root)
+	}
+}
+
 // TestBuildNeighborhood_AllowDeniesRoot verifies the root is gated by Allow,
 // not just the BFS frontier. A Secret root with namespace access but no
 // per-namespace `get secrets` SAR is the load-bearing case: callers' upfront

@@ -17,9 +17,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/karpenter"
 	"github.com/skyhook-io/radar/pkg/perfstats"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // Builder constructs topology graphs from K8s resources
@@ -43,6 +46,32 @@ func NewBuilder(provider ResourceProvider) *Builder {
 func (b *Builder) WithDynamic(dp DynamicProvider) *Builder {
 	b.dynamic = dp
 	return b
+}
+
+func preferredTraefikGVR(provider DynamicProvider, kind string) (schema.GroupVersionResource, bool) {
+	if provider == nil {
+		return schema.GroupVersionResource{}, false
+	}
+	if gvr, ok := provider.GetGVRWithGroup(kind, "traefik.io"); ok {
+		return gvr, true
+	}
+	return provider.GetGVRWithGroup(kind, "traefik.containo.us")
+}
+
+func targetRefMatchesTopologyKind(kind, apiVersion string) bool {
+	if apiVersion == "" {
+		return true
+	}
+	var group string
+	switch kind {
+	case "Deployment", "StatefulSet", "DaemonSet", "ReplicaSet":
+		group = "apps"
+	case "Rollout":
+		group = "argoproj.io"
+	default:
+		return false
+	}
+	return APIVersionGroup(apiVersion) == group
 }
 
 // Build constructs a topology based on the given options
@@ -383,7 +412,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	hasRollouts := false
 	rolloutsByNamespace := make(map[string][]*unstructured.Unstructured)
 	if resourceDiscovery != nil {
-		rolloutGVR, hasRollouts = resourceDiscovery.GetGVR("Rollout")
+		rolloutGVR, hasRollouts = resourceDiscovery.GetGVRWithGroup("Rollout", "argoproj.io")
 	}
 	if hasRollouts && dynamicCache != nil {
 		rollouts, err := dynamicCache.ListNamespaces(rolloutGVR, opts.Namespaces)
@@ -575,7 +604,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	var kustomizationGVR schema.GroupVersionResource
 	hasKustomizations := false
 	if resourceDiscovery != nil {
-		kustomizationGVR, hasKustomizations = resourceDiscovery.GetGVR("Kustomization")
+		kustomizationGVR, hasKustomizations = resourceDiscovery.GetGVRWithGroup("Kustomization", "kustomize.toolkit.fluxcd.io")
 	}
 	kustomizationIDs := make(map[string]string)             // ns/name -> kustomizationID
 	var kustomizationResources []*unstructured.Unstructured // Store for second pass
@@ -646,7 +675,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	var gitRepoGVR schema.GroupVersionResource
 	hasGitRepos := false
 	if resourceDiscovery != nil {
-		gitRepoGVR, hasGitRepos = resourceDiscovery.GetGVR("GitRepository")
+		gitRepoGVR, hasGitRepos = resourceDiscovery.GetGVRWithGroup("GitRepository", "source.toolkit.fluxcd.io")
 	}
 	gitRepoIDs := make(map[string]string) // ns/name -> gitRepoID
 	if hasGitRepos && dynamicCache != nil {
@@ -711,7 +740,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	var helmReleaseGVR schema.GroupVersionResource
 	hasHelmReleases := false
 	if resourceDiscovery != nil {
-		helmReleaseGVR, hasHelmReleases = resourceDiscovery.GetGVR("HelmRelease")
+		helmReleaseGVR, hasHelmReleases = resourceDiscovery.GetGVRWithGroup("HelmRelease", "helm.toolkit.fluxcd.io")
 	}
 	helmReleaseIDs := make(map[string]string) // ns/name -> helmReleaseID
 	if hasHelmReleases && dynamicCache != nil {
@@ -784,7 +813,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	var certificateGVR schema.GroupVersionResource
 	hasCertificates := false
 	if resourceDiscovery != nil {
-		certificateGVR, hasCertificates = resourceDiscovery.GetGVR("Certificate")
+		certificateGVR, hasCertificates = resourceDiscovery.GetGVRWithGroup("Certificate", "cert-manager.io")
 	}
 	var certificateResources []unstructured.Unstructured
 	if hasCertificates && dynamicCache != nil {
@@ -1024,7 +1053,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	var scaledObjectGVR schema.GroupVersionResource
 	hasScaledObjects := false
 	if resourceDiscovery != nil {
-		scaledObjectGVR, hasScaledObjects = resourceDiscovery.GetGVR("ScaledObject")
+		scaledObjectGVR, hasScaledObjects = resourceDiscovery.GetGVRWithGroup("ScaledObject", "keda.sh")
 	}
 	if hasScaledObjects && dynamicCache != nil {
 		scaledObjects, soErr := dynamicCache.ListNamespaces(scaledObjectGVR, opts.Namespaces)
@@ -1053,12 +1082,13 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			})
 
 			// ScaledObject → target workload edge (via spec.scaleTargetRef)
+			targetAPIVersion, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "apiVersion")
 			targetKind, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "kind")
 			targetName, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "name")
 			if targetKind == "" {
 				targetKind = "Deployment" // KEDA defaults to Deployment when kind is omitted
 			}
-			if targetName != "" {
+			if targetName != "" && targetRefMatchesTopologyKind(targetKind, targetAPIVersion) {
 				targetKey := ns + "/" + targetName
 				var targetID string
 				switch targetKind {
@@ -1084,7 +1114,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	var scaledJobGVR schema.GroupVersionResource
 	hasScaledJobs := false
 	if resourceDiscovery != nil {
-		scaledJobGVR, hasScaledJobs = resourceDiscovery.GetGVR("ScaledJob")
+		scaledJobGVR, hasScaledJobs = resourceDiscovery.GetGVRWithGroup("ScaledJob", "keda.sh")
 	}
 	if hasScaledJobs && dynamicCache != nil {
 		scaledJobs, sjErr := dynamicCache.ListNamespaces(scaledJobGVR, opts.Namespaces)
@@ -1158,7 +1188,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	var capiClusterClassGVR schema.GroupVersionResource
 	hasCAPIClusterClasses := false
 	if resourceDiscovery != nil {
-		capiClusterClassGVR, hasCAPIClusterClasses = resourceDiscovery.GetGVR("ClusterClass")
+		capiClusterClassGVR, hasCAPIClusterClasses = resourceDiscovery.GetGVRWithGroup("ClusterClass", "cluster.x-k8s.io")
 	}
 	if hasCAPIClusterClasses && dynamicCache != nil {
 		clusterClasses, ccErr := dynamicCache.ListNamespaces(capiClusterClassGVR, opts.Namespaces)
@@ -1224,7 +1254,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	var kcpGVR schema.GroupVersionResource
 	hasKCPs := false
 	if resourceDiscovery != nil {
-		kcpGVR, hasKCPs = resourceDiscovery.GetGVR("KubeadmControlPlane")
+		kcpGVR, hasKCPs = resourceDiscovery.GetGVRWithGroup("KubeadmControlPlane", "controlplane.cluster.x-k8s.io")
 	}
 	if hasKCPs && dynamicCache != nil {
 		kcps, kcpErr := dynamicCache.ListNamespaces(kcpGVR, opts.Namespaces)
@@ -1273,7 +1303,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	var mdGVR schema.GroupVersionResource
 	hasMDs := false
 	if resourceDiscovery != nil {
-		mdGVR, hasMDs = resourceDiscovery.GetGVR("MachineDeployment")
+		mdGVR, hasMDs = resourceDiscovery.GetGVRWithGroup("MachineDeployment", "cluster.x-k8s.io")
 	}
 	if hasMDs && dynamicCache != nil {
 		mds, mdErr := dynamicCache.ListNamespaces(mdGVR, opts.Namespaces)
@@ -1322,7 +1352,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	var mpGVR schema.GroupVersionResource
 	hasMPs := false
 	if resourceDiscovery != nil {
-		mpGVR, hasMPs = resourceDiscovery.GetGVR("MachinePool")
+		mpGVR, hasMPs = resourceDiscovery.GetGVRWithGroup("MachinePool", "cluster.x-k8s.io")
 	}
 	if hasMPs && dynamicCache != nil {
 		mps, mpErr := dynamicCache.ListNamespaces(mpGVR, opts.Namespaces)
@@ -1515,7 +1545,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	var mhcGVR schema.GroupVersionResource
 	hasMHCs := false
 	if resourceDiscovery != nil {
-		mhcGVR, hasMHCs = resourceDiscovery.GetGVR("MachineHealthCheck")
+		mhcGVR, hasMHCs = resourceDiscovery.GetGVRWithGroup("MachineHealthCheck", "cluster.x-k8s.io")
 	}
 	if hasMHCs && dynamicCache != nil {
 		mhcs, mhcErr := dynamicCache.ListNamespaces(mhcGVR, opts.Namespaces)
@@ -1564,7 +1594,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	var gatewayClassGVR schema.GroupVersionResource
 	hasGatewayClasses := false
 	if resourceDiscovery != nil {
-		gatewayClassGVR, hasGatewayClasses = resourceDiscovery.GetGVR("GatewayClass")
+		gatewayClassGVR, hasGatewayClasses = resourceDiscovery.GetGVRWithGroup("GatewayClass", "gateway.networking.k8s.io")
 	}
 	if hasGatewayClasses && dynamicCache != nil {
 		gatewayClasses, gcErr := dynamicCache.List(gatewayClassGVR, "")
@@ -1835,7 +1865,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	var knativeRevisionGVR schema.GroupVersionResource
 	hasKnativeRevisions := false
 	if resourceDiscovery != nil {
-		knativeRevisionGVR, hasKnativeRevisions = resourceDiscovery.GetGVR("Revision")
+		knativeRevisionGVR, hasKnativeRevisions = resourceDiscovery.GetGVRWithGroup("Revision", "serving.knative.dev")
 	}
 	knativeRevisionIDs := make(map[string]string)             // ns/name -> krevID
 	var knativeRevisionResources []*unstructured.Unstructured // Store for edge creation
@@ -2008,7 +2038,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		var srcGVR schema.GroupVersionResource
 		hasSrc := false
 		if resourceDiscovery != nil {
-			srcGVR, hasSrc = resourceDiscovery.GetGVR(srcDef.kind)
+			srcGVR, hasSrc = resourceDiscovery.GetGVRWithGroup(srcDef.kind, "sources.knative.dev")
 		}
 		if !hasSrc || dynamicCache == nil {
 			continue
@@ -2107,7 +2137,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		var gvr schema.GroupVersionResource
 		hasKind := false
 		if resourceDiscovery != nil {
-			gvr, hasKind = resourceDiscovery.GetGVR(def.kind)
+			gvr, hasKind = preferredTraefikGVR(resourceDiscovery, def.kind)
 		}
 		if !hasKind || dynamicCache == nil {
 			continue
@@ -2180,7 +2210,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		var gvr schema.GroupVersionResource
 		hasKind := false
 		if resourceDiscovery != nil {
-			gvr, hasKind = resourceDiscovery.GetGVR(def.kind)
+			gvr, hasKind = preferredTraefikGVR(resourceDiscovery, def.kind)
 		}
 		if !hasKind || dynamicCache == nil {
 			continue
@@ -2223,7 +2253,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	var traefikServiceGVR schema.GroupVersionResource
 	hasTraefikServices := false
 	if resourceDiscovery != nil {
-		traefikServiceGVR, hasTraefikServices = resourceDiscovery.GetGVR("TraefikService")
+		traefikServiceGVR, hasTraefikServices = preferredTraefikGVR(resourceDiscovery, "TraefikService")
 	}
 	traefikServiceIDs := make(map[string]string)             // ns/name -> tsID
 	var traefikServiceResources []*unstructured.Unstructured // Store for edge creation
@@ -2313,7 +2343,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		var gvr schema.GroupVersionResource
 		hasKind := false
 		if resourceDiscovery != nil {
-			gvr, hasKind = resourceDiscovery.GetGVR(def.kind)
+			gvr, hasKind = preferredTraefikGVR(resourceDiscovery, def.kind)
 		}
 		if !hasKind || dynamicCache == nil {
 			continue
@@ -2365,7 +2395,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		var httpProxyGVR schema.GroupVersionResource
 		hasHTTPProxy := false
 		if resourceDiscovery != nil {
-			httpProxyGVR, hasHTTPProxy = resourceDiscovery.GetGVR("HTTPProxy")
+			httpProxyGVR, hasHTTPProxy = resourceDiscovery.GetGVRWithGroup("HTTPProxy", "projectcontour.io")
 		}
 		if hasHTTPProxy && dynamicCache != nil {
 			resources, listErr := dynamicCache.ListNamespaces(httpProxyGVR, opts.Namespaces)
@@ -3272,7 +3302,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	var gatewayGVR schema.GroupVersionResource
 	hasGateways := false
 	if resourceDiscovery != nil {
-		gatewayGVR, hasGateways = resourceDiscovery.GetGVR("Gateway")
+		gatewayGVR, hasGateways = resourceDiscovery.GetGVRWithGroup("Gateway", "gateway.networking.k8s.io")
 	}
 	if hasGateways && dynamicCache != nil {
 		gateways, gwErr := dynamicCache.ListNamespaces(gatewayGVR, opts.Namespaces)
@@ -3355,7 +3385,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		var routeGVR schema.GroupVersionResource
 		hasRoutes := false
 		if resourceDiscovery != nil {
-			routeGVR, hasRoutes = resourceDiscovery.GetGVR(routeKind)
+			routeGVR, hasRoutes = resourceDiscovery.GetGVRWithGroup(routeKind, "gateway.networking.k8s.io")
 		}
 		if !hasRoutes || dynamicCache == nil {
 			continue
@@ -3646,20 +3676,23 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		})
 
 		// Connect to target
+		targetAPIVersion := hpa.Spec.ScaleTargetRef.APIVersion
 		targetKind := hpa.Spec.ScaleTargetRef.Kind
 		targetName := hpa.Spec.ScaleTargetRef.Name
 		targetKey := hpa.Namespace + "/" + targetName
 
 		var targetID string
-		switch targetKind {
-		case "Deployment":
-			targetID = deploymentIDs[targetKey]
-		case "Rollout":
-			targetID = rolloutIDs[targetKey]
-		case "StatefulSet":
-			targetID = statefulSetIDs[targetKey]
-		case "ReplicaSet":
-			targetID = replicaSetIDs[targetKey]
+		if targetRefMatchesTopologyKind(targetKind, targetAPIVersion) {
+			switch targetKind {
+			case "Deployment":
+				targetID = deploymentIDs[targetKey]
+			case "Rollout":
+				targetID = rolloutIDs[targetKey]
+			case "StatefulSet":
+				targetID = statefulSetIDs[targetKey]
+			case "ReplicaSet":
+				targetID = replicaSetIDs[targetKey]
+			}
 		}
 
 		if targetID != "" {
@@ -3837,7 +3870,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	var cnpGVR schema.GroupVersionResource
 	hasCNPs := false
 	if resourceDiscovery != nil {
-		cnpGVR, hasCNPs = resourceDiscovery.GetGVR("CiliumNetworkPolicy")
+		cnpGVR, hasCNPs = resourceDiscovery.GetGVRWithGroup("CiliumNetworkPolicy", "cilium.io")
 	}
 	if hasCNPs && dynamicCache != nil {
 		cnps, cnpErr := dynamicCache.ListNamespaces(cnpGVR, opts.Namespaces)
@@ -3907,7 +3940,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	var ccnpGVR schema.GroupVersionResource
 	hasCCNPs := false
 	if resourceDiscovery != nil {
-		ccnpGVR, hasCCNPs = resourceDiscovery.GetGVR("CiliumClusterwideNetworkPolicy")
+		ccnpGVR, hasCCNPs = resourceDiscovery.GetGVRWithGroup("CiliumClusterwideNetworkPolicy", "cilium.io")
 	}
 	if hasCCNPs && dynamicCache != nil {
 		ccnps, ccnpErr := dynamicCache.List(ccnpGVR, "")
@@ -3978,7 +4011,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	var vpaGVR schema.GroupVersionResource
 	hasVPAs := false
 	if resourceDiscovery != nil {
-		vpaGVR, hasVPAs = resourceDiscovery.GetGVR("VerticalPodAutoscaler")
+		vpaGVR, hasVPAs = resourceDiscovery.GetGVRWithGroup("VerticalPodAutoscaler", "autoscaling.k8s.io")
 	}
 	if hasVPAs && dynamicCache != nil {
 		vpas, vpaErr := dynamicCache.ListNamespaces(vpaGVR, opts.Namespaces)
@@ -4007,9 +4040,10 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			})
 
 			// Connect to target workload via spec.targetRef
+			targetAPIVersion, _, _ := unstructured.NestedString(vpa.Object, "spec", "targetRef", "apiVersion")
 			targetKind, _, _ := unstructured.NestedString(vpa.Object, "spec", "targetRef", "kind")
 			targetName, _, _ := unstructured.NestedString(vpa.Object, "spec", "targetRef", "name")
-			if targetKind != "" && targetName != "" {
+			if targetKind != "" && targetName != "" && targetRefMatchesTopologyKind(targetKind, targetAPIVersion) {
 				targetKey := ns + "/" + targetName
 				var targetID string
 				switch targetKind {
@@ -4036,140 +4070,12 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-	// 12. Second pass: Create ArgoCD Application edges to managed resources
-	// This is done after all resource IDs are populated
-	for _, app := range applicationResources {
-		ns := app.GetNamespace()
-		name := app.GetName()
-		appID := applicationIDs[ns+"/"+name]
-		destNamespace := applicationDestNamespaces[appID]
-
-		status, _, _ := unstructured.NestedMap(app.Object, "status")
-		if status == nil {
-			continue
-		}
-
-		resources, _, _ := unstructured.NestedSlice(status, "resources")
-		for _, res := range resources {
-			resMap, ok := res.(map[string]any)
-			if !ok {
-				continue
-			}
-			resKind, _ := resMap["kind"].(string)
-			resName, _ := resMap["name"].(string)
-			resNS, _ := resMap["namespace"].(string)
-			if resNS == "" {
-				resNS = destNamespace
-			}
-
-			// Build target ID based on kind
-			var targetID string
-			resKey := resNS + "/" + resName
-			switch resKind {
-			case "Deployment":
-				targetID = deploymentIDs[resKey]
-			case "StatefulSet":
-				targetID = statefulSetIDs[resKey]
-			case "DaemonSet":
-				targetID = fmt.Sprintf("daemonset/%s/%s", resNS, resName)
-			case "Service":
-				targetID = serviceIDs[resKey]
-			case "Rollout":
-				targetID = rolloutIDs[resKey]
-			case "Job":
-				targetID = jobIDs[resKey]
-			case "CronJob":
-				targetID = cronJobIDs[resKey]
-			case "Gateway":
-				targetID = gatewayIDs[resKey]
-			case "HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute":
-				targetID = routeIDs[resKind+"/"+resNS+"/"+resName]
-			}
-
-			// Only create edge if target exists in current cluster view
-			if targetID != "" {
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", appID, targetID),
-					Source: appID,
-					Target: targetID,
-					Type:   EdgeManages,
-				})
-			}
-		}
-	}
-
-	// 13. Second pass: Create FluxCD Kustomization edges to managed resources
-	// Kustomization inventory contains refs like "Deployment/ns/name" or "_namespace_name_Kind"
+	// 13. Create Flux source edges. Managed-resource edges are resolved after
+	// generic CRD nodes have been added so their exact API identity is available.
 	for _, ks := range kustomizationResources {
 		ns := ks.GetNamespace()
 		name := ks.GetName()
 		ksID := kustomizationIDs[ns+"/"+name]
-
-		status, _, _ := unstructured.NestedMap(ks.Object, "status")
-		if status == nil {
-			continue
-		}
-
-		inventory, _, _ := unstructured.NestedSlice(status, "inventory", "entries")
-		for _, entry := range inventory {
-			entryMap, ok := entry.(map[string]any)
-			if !ok {
-				continue
-			}
-			// FluxCD inventory entry has "id" field with format "namespace_name_group_kind" or "id" field
-			entryID, _ := entryMap["id"].(string)
-			if entryID == "" {
-				continue
-			}
-
-			// Parse the inventory ID (format: namespace_name_group_kind)
-			// Example: "default_my-deployment_apps_Deployment"
-			parts := strings.Split(entryID, "_")
-			if len(parts) < 3 {
-				continue
-			}
-
-			resNS := parts[0]
-			resName := parts[1]
-			// Last part is kind, second to last is group (might be empty)
-			resKind := parts[len(parts)-1]
-
-			// Build target ID based on kind
-			var targetID string
-			resKey := resNS + "/" + resName
-			switch resKind {
-			case "Deployment":
-				targetID = deploymentIDs[resKey]
-			case "StatefulSet":
-				targetID = statefulSetIDs[resKey]
-			case "DaemonSet":
-				targetID = fmt.Sprintf("daemonset/%s/%s", resNS, resName)
-			case "Service":
-				targetID = serviceIDs[resKey]
-			case "Rollout":
-				targetID = rolloutIDs[resKey]
-			case "Job":
-				targetID = jobIDs[resKey]
-			case "CronJob":
-				targetID = cronJobIDs[resKey]
-			case "Ingress":
-				targetID = fmt.Sprintf("ingress/%s/%s", resNS, resName)
-			case "Gateway":
-				targetID = gatewayIDs[resKey]
-			case "HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute":
-				targetID = routeIDs[resKind+"/"+resNS+"/"+resName]
-			}
-
-			// Only create edge if target exists in current cluster view
-			if targetID != "" {
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", ksID, targetID),
-					Source: ksID,
-					Target: targetID,
-					Type:   EdgeManages,
-				})
-			}
-		}
 
 		// Also create edge from GitRepository to Kustomization if source ref exists
 		spec, _, _ := unstructured.NestedMap(ks.Object, "spec")
@@ -5563,6 +5469,15 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	if opts.IncludeGenericCRDs {
 		nodes, edges = b.addGenericCRDNodes(nodes, edges, opts)
 	}
+	edges = addGitOpsManagedResourceEdges(
+		nodes,
+		edges,
+		applicationResources,
+		applicationIDs,
+		applicationDestNamespaces,
+		kustomizationResources,
+		kustomizationIDs,
+	)
 
 	// 17. Annotate workload nodes with NetworkPolicy coverage (optional)
 	if opts.ShowPolicyEffect {
@@ -5580,6 +5495,96 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	}
 
 	return topo, nil
+}
+
+func addGitOpsManagedResourceEdges(
+	nodes []Node,
+	edges []Edge,
+	applications []*unstructured.Unstructured,
+	applicationIDs map[string]string,
+	applicationDestNamespaces map[string]string,
+	kustomizations []*unstructured.Unstructured,
+	kustomizationIDs map[string]string,
+) []Edge {
+	resourceIDs := make(map[string]string, len(nodes))
+	for i := range nodes {
+		for _, key := range nodeResourceKeys(&nodes[i]) {
+			resourceIDs[key] = nodes[i].ID
+		}
+	}
+	seenEdges := make(map[string]bool, len(edges))
+	for _, edge := range edges {
+		seenEdges[edge.ID] = true
+	}
+	appendManaged := func(sourceID, group, kind, namespace, name string) {
+		if sourceID == "" || kind == "" || name == "" {
+			return
+		}
+		if builtinGroup, builtin := resourceid.BuiltinGroup(kind); group == "" && builtin {
+			group = builtinGroup
+		}
+		targetID := resourceIDs[resourceid.ResourceKey(group, kind, namespace, name)]
+		if targetID == "" {
+			return
+		}
+		edgeID := fmt.Sprintf("%s-to-%s", sourceID, targetID)
+		if seenEdges[edgeID] {
+			return
+		}
+		seenEdges[edgeID] = true
+		edges = append(edges, Edge{ID: edgeID, Source: sourceID, Target: targetID, Type: EdgeManages})
+	}
+
+	argoKinds := map[string]bool{
+		"Deployment": true, "StatefulSet": true, "DaemonSet": true,
+		"Service": true, "Rollout": true, "Job": true, "CronJob": true,
+		"Gateway": true, "HTTPRoute": true, "GRPCRoute": true,
+		"TCPRoute": true, "TLSRoute": true,
+	}
+	for _, app := range applications {
+		appID := applicationIDs[app.GetNamespace()+"/"+app.GetName()]
+		destNamespace := applicationDestNamespaces[appID]
+		resources, _, _ := unstructured.NestedSlice(app.Object, "status", "resources")
+		for _, resource := range resources {
+			m, ok := resource.(map[string]any)
+			if !ok {
+				continue
+			}
+			kind := gitops.StringValue(m["kind"])
+			if !argoKinds[kind] {
+				continue
+			}
+			namespace := gitops.StringValue(m["namespace"])
+			if namespace == "" {
+				namespace = destNamespace
+			}
+			appendManaged(appID, gitops.StringValue(m["group"]), kind, namespace, gitops.StringValue(m["name"]))
+		}
+	}
+
+	fluxKinds := map[string]bool{
+		"Deployment": true, "StatefulSet": true, "DaemonSet": true,
+		"Service": true, "Rollout": true, "Job": true, "CronJob": true,
+		"Ingress": true, "Gateway": true, "HTTPRoute": true,
+		"GRPCRoute": true, "TCPRoute": true, "TLSRoute": true,
+	}
+	for _, kustomization := range kustomizations {
+		ksID := kustomizationIDs[kustomization.GetNamespace()+"/"+kustomization.GetName()]
+		entries, _, _ := unstructured.NestedSlice(kustomization.Object, "status", "inventory", "entries")
+		for _, entry := range entries {
+			m, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			group, kind, namespace, name, ok := gitops.ParseFluxInventoryID(gitops.StringValue(m["id"]))
+			if !ok || !fluxKinds[kind] {
+				continue
+			}
+			appendManaged(ksID, group, kind, namespace, name)
+		}
+	}
+
+	return edges
 }
 
 // buildTrafficTopology creates a network-focused view
@@ -5626,7 +5631,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 	var trafficRoutes []*unstructured.Unstructured
 	var trafficRouteKinds []string
 	if trafficDynamicCache != nil && trafficResourceDiscovery != nil {
-		if gwGVR, ok := trafficResourceDiscovery.GetGVR("Gateway"); ok {
+		if gwGVR, ok := trafficResourceDiscovery.GetGVRWithGroup("Gateway", "gateway.networking.k8s.io"); ok {
 			gws, err := trafficDynamicCache.ListNamespaces(gwGVR, opts.Namespaces)
 			if err != nil {
 				log.Printf("WARNING [topology/traffic] Failed to list Gateways: %v", err)
@@ -5636,7 +5641,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 			}
 		}
 		for _, routeKind := range []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute"} {
-			if rGVR, ok := trafficResourceDiscovery.GetGVR(routeKind); ok {
+			if rGVR, ok := trafficResourceDiscovery.GetGVRWithGroup(routeKind, "gateway.networking.k8s.io"); ok {
 				rts, err := trafficDynamicCache.ListNamespaces(rGVR, opts.Namespaces)
 				if err != nil {
 					log.Printf("WARNING [topology/traffic] Failed to list %s: %v", routeKind, err)
@@ -5813,7 +5818,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 	var trafficMiddlewareTCPs []*unstructured.Unstructured
 	if trafficDynamicCache != nil && trafficResourceDiscovery != nil {
 		for _, routeKind := range []string{"IngressRoute", "IngressRouteTCP", "IngressRouteUDP"} {
-			if gvr, ok := trafficResourceDiscovery.GetGVR(routeKind); ok {
+			if gvr, ok := preferredTraefikGVR(trafficResourceDiscovery, routeKind); ok {
 				rts, err := trafficDynamicCache.ListNamespaces(gvr, opts.Namespaces)
 				if err != nil {
 					log.Printf("WARNING [topology/traffic] Failed to list Traefik %s: %v", routeKind, err)
@@ -5826,7 +5831,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 				}
 			}
 		}
-		if tsGVR, ok := trafficResourceDiscovery.GetGVR("TraefikService"); ok {
+		if tsGVR, ok := preferredTraefikGVR(trafficResourceDiscovery, "TraefikService"); ok {
 			tss, err := trafficDynamicCache.ListNamespaces(tsGVR, opts.Namespaces)
 			if err != nil {
 				log.Printf("WARNING [topology/traffic] Failed to list TraefikServices: %v", err)
@@ -5835,7 +5840,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 				trafficTraefikServices = tss
 			}
 		}
-		if mwGVR, ok := trafficResourceDiscovery.GetGVR("Middleware"); ok {
+		if mwGVR, ok := preferredTraefikGVR(trafficResourceDiscovery, "Middleware"); ok {
 			mws, err := trafficDynamicCache.ListNamespaces(mwGVR, opts.Namespaces)
 			if err != nil {
 				log.Printf("WARNING [topology/traffic] Failed to list Traefik Middlewares: %v", err)
@@ -5844,7 +5849,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 				trafficMiddlewares = mws
 			}
 		}
-		if mtGVR, ok := trafficResourceDiscovery.GetGVR("MiddlewareTCP"); ok {
+		if mtGVR, ok := preferredTraefikGVR(trafficResourceDiscovery, "MiddlewareTCP"); ok {
 			mts, err := trafficDynamicCache.ListNamespaces(mtGVR, opts.Namespaces)
 			if err != nil {
 				log.Printf("WARNING [topology/traffic] Failed to list Traefik MiddlewareTCPs: %v", err)
@@ -5948,7 +5953,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 	// Collect Contour HTTPProxy resources from dynamic cache
 	var trafficHTTPProxies []*unstructured.Unstructured
 	if trafficDynamicCache != nil && trafficResourceDiscovery != nil {
-		if gvr, ok := trafficResourceDiscovery.GetGVR("HTTPProxy"); ok {
+		if gvr, ok := trafficResourceDiscovery.GetGVRWithGroup("HTTPProxy", "projectcontour.io"); ok {
 			hps, err := trafficDynamicCache.ListNamespaces(gvr, opts.Namespaces)
 			if err != nil {
 				log.Printf("WARNING [topology/traffic] Failed to list Contour HTTPProxy: %v", err)
@@ -8230,54 +8235,87 @@ func extractCAPIReadyConditionStatus(obj unstructured.Unstructured) HealthStatus
 	return StatusUnknown
 }
 
-// Kinds with a dedicated node builder, or deliberately kept out of the graph.
-// addGenericCRDNodes copies this and adds discovered NodeClass kinds per build.
-var kindsHandledOutsideGenericCRDPass = map[string]bool{
-	// analysisrun: graphed by activeAnalysisRuns, current runs only
-	"analysisrun": true,
-	"rollout":     true, "application": true, "kustomization": true,
-	"helmrelease": true, "gitrepository": true, "certificate": true,
-	"gateway": true, "httproute": true, "grpcroute": true, "tcproute": true, "tlsroute": true,
-	"nodepool": true, "nodeclaim": true, // Karpenter
-	"ec2nodeclass": true, "aksnodeclass": true, "gcenodeclass": true, // Karpenter NodeClass
-	"scaledobject": true, "scaledjob": true, // KEDA
-	"workflowtemplate": true, "clusterworkflowtemplate": true, // Argo Workflows
-	"gatewayclass":   true,                                                // Gateway API
-	"virtualservice": true, "destinationrule": true, "serviceentry": true, // Istio networking
-	"peerauthentication": true, "authorizationpolicy": true, // Istio security
-	"knativeservice": true, "configuration": true, "revision": true, "route": true, // KNative Serving
-	"domainmapping": true, "serverlessservice": true, // KNative Serving (internal)
-	"broker": true, "trigger": true, "eventtype": true, // KNative Eventing
-	"channel": true, "inmemorychannel": true, "subscription": true, // KNative Messaging
-	"apiserversource": true, "containersource": true, "pingsource": true, "sinkbinding": true, // KNative Sources
-	"sequence": true, "parallel": true, // KNative Flows
-	"ingressroute": true, "ingressroutetcp": true, "ingressrouteudp": true, // Traefik routing
-	"middleware": true, "middlewaretcp": true, // Traefik middleware
-	"traefikservice":   true,                              // Traefik service
-	"serverstransport": true, "serverstransporttcp": true, // Traefik transport
-	"tlsoption": true, "tlsstore": true, // Traefik TLS
-	"httpproxy":    true,                                                // Contour
-	"clusterclass": true,                                                // Cluster API
-	"machine":      true, "machineset": true, "machinedeployment": true, // Cluster API
-	"machinepool": true, "kubeadmcontrolplane": true, "machinehealthcheck": true, // Cluster API
-	"machinedrainrule": true, // Cluster API
-	// Trivy Operator reports - high cardinality, excluded from topology
-	"vulnerabilityreport": true, "configauditreport": true,
-	"exposedsecretreport": true, "sbomreport": true,
-	"rbacassessmentreport": true, "clusterrbacassessmentreport": true,
-	"clustercompliancereport": true, "clustersbomreport": true,
-	"infraassessmentreport": true, "clusterinfraassessmentreport": true,
-	// Core types handled by typed informers
-	"deployment": true, "daemonset": true, "statefulset": true,
-	"replicaset": true, "pod": true, "service": true, "ingress": true,
-	"job": true, "cronjob": true, "configmap": true, "secret": true,
-	"serviceaccount": true, "sealedsecret": true,
-	"servicemonitor": true, "podmonitor": true,
-	"persistentvolumeclaim": true, "horizontalpodautoscaler": true,
-	// Argo Workflows handled explicitly above
-	"workflow": true, "cronworkflow": true,
-	// Also skip namespace (not typically owned)
-	"namespace": true,
+// Exact integrations with a dedicated builder or a deliberate topology
+// exclusion. The API group is part of the policy: an unrelated CRD that happens
+// to reuse Rollout, Gateway, Certificate, or another kind still reaches the
+// generic owner-reference pass.
+var genericCRDExclusions = map[string]map[string]bool{
+	"argoproj.io": {
+		"analysisrun": true, "rollout": true, "application": true,
+		"workflow": true, "cronworkflow": true,
+		"workflowtemplate": true, "clusterworkflowtemplate": true,
+	},
+	"kustomize.toolkit.fluxcd.io": {"kustomization": true},
+	"helm.toolkit.fluxcd.io":      {"helmrelease": true},
+	"source.toolkit.fluxcd.io":    {"gitrepository": true},
+	"cert-manager.io":             {"certificate": true},
+	"gateway.networking.k8s.io": {
+		"gateway": true, "gatewayclass": true, "httproute": true,
+		"grpcroute": true, "tcproute": true, "tlsroute": true,
+	},
+	"karpenter.sh": {"nodepool": true, "nodeclaim": true},
+	"keda.sh":      {"scaledobject": true, "scaledjob": true},
+	"networking.istio.io": {
+		"gateway": true, "virtualservice": true, "destinationrule": true, "serviceentry": true,
+	},
+	"security.istio.io": {"peerauthentication": true, "authorizationpolicy": true},
+	"serving.knative.dev": {
+		"service": true, "configuration": true, "revision": true, "route": true,
+		"domainmapping": true,
+	},
+	"networking.internal.knative.dev": {"serverlessservice": true},
+	"eventing.knative.dev":            {"broker": true, "trigger": true, "eventtype": true},
+	"messaging.knative.dev": {
+		"channel": true, "inmemorychannel": true, "subscription": true,
+	},
+	"sources.knative.dev": {
+		"apiserversource": true, "containersource": true, "pingsource": true, "sinkbinding": true,
+	},
+	"flows.knative.dev": {"sequence": true, "parallel": true},
+	"traefik.io": {
+		"ingressroute": true, "ingressroutetcp": true, "ingressrouteudp": true,
+		"middleware": true, "middlewaretcp": true, "traefikservice": true,
+		"serverstransport": true, "serverstransporttcp": true,
+		"tlsoption": true, "tlsstore": true,
+	},
+	"traefik.containo.us": {
+		"ingressroute": true, "ingressroutetcp": true, "ingressrouteudp": true,
+		"middleware": true, "middlewaretcp": true, "traefikservice": true,
+		"serverstransport": true, "serverstransporttcp": true,
+		"tlsoption": true, "tlsstore": true,
+	},
+	"projectcontour.io": {"httpproxy": true},
+	"cluster.x-k8s.io": {
+		"clusterclass": true, "machine": true, "machineset": true,
+		"machinedeployment": true, "machinepool": true, "machinehealthcheck": true,
+		"machinedrainrule": true,
+	},
+	"controlplane.cluster.x-k8s.io": {"kubeadmcontrolplane": true},
+	"monitoring.coreos.com":         {"servicemonitor": true, "podmonitor": true},
+	"bitnami.com":                   {"sealedsecret": true},
+	"policy.networking.k8s.io":      {"clusternetworkpolicy": true},
+	"aquasecurity.github.io": {
+		"vulnerabilityreport": true, "configauditreport": true,
+		"exposedsecretreport": true, "sbomreport": true,
+		"rbacassessmentreport": true, "clusterrbacassessmentreport": true,
+		"clustercompliancereport": true, "clustersbomreport": true,
+		"infraassessmentreport": true, "clusterinfraassessmentreport": true,
+	},
+}
+
+func genericCRDExcluded(gvr schema.GroupVersionResource, kind string) bool {
+	return genericCRDExclusions[gvr.Group][strings.ToLower(kind)]
+}
+
+type exactCRDProvider interface {
+	IsCRDGVR(gvr schema.GroupVersionResource) bool
+}
+
+func isCRDGVR(provider DynamicProvider, gvr schema.GroupVersionResource, kind string) bool {
+	if exact, ok := provider.(exactCRDProvider); ok {
+		return exact.IsCRDGVR(gvr)
+	}
+	return provider.IsCRD(kind)
 }
 
 // addGenericCRDNodes adds CRD nodes connected to the topology via owner references.
@@ -8292,60 +8330,85 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		return nodes, edges
 	}
 
-	// Build set of existing node IDs for fast lookup
+	// Build indexes for both graph IDs and exact Kubernetes resource identities.
 	existingIDs := make(map[string]bool, len(nodes))
-	for _, node := range nodes {
+	existingResourceIDs := make(map[string]string, len(nodes))
+	for i := range nodes {
+		node := &nodes[i]
 		existingIDs[node.ID] = true
+		for _, resourceKey := range nodeResourceKeys(node) {
+			existingResourceIDs[resourceKey] = node.ID
+		}
 	}
 
-	// Skip kinds handled explicitly by buildResourcesTopology or excluded from topology entirely
-	processedKinds := make(map[string]bool, len(kindsHandledOutsideGenericCRDPass))
-	for kind := range kindsHandledOutsideGenericCRDPass {
-		processedKinds[kind] = true
-	}
+	processedTypes := make(map[string]bool)
 	for _, node := range nodes {
 		if node.Kind != KindNodeClass {
 			continue
 		}
 		if resourceKind, ok := node.Data["resourceKind"].(string); ok && resourceKind != "" {
-			processedKinds[strings.ToLower(resourceKind)] = true
+			processedTypes[resourceid.ResourceKey(nodeAPIGroupFromData(&node), resourceKind, "", "")] = true
 		}
 	}
 
-	// Track per-kind counts to prevent any single CRD type from overwhelming the topology
+	// Track per-resource-type counts to prevent any single CRD type from overwhelming the topology.
 	crdCounts := make(map[string]int)
 	maxPerKind := 50
 
 	// Phase 1: Collect all candidate CRD resources
 	type candidate struct {
-		nodeID    string
-		node      Node
-		ownerRefs []string // ownerKind/ns/name IDs
-		ns        string
+		nodeID      string
+		node        Node
+		ownerRefs   []ResourceRef
+		resourceKey string
+		typeKey     string
 	}
 	var candidates []candidate
 
-	for _, gvr := range dynamicCache.GetWatchedResources() {
-		kind := resourceDiscovery.GetKindForGVR(gvr)
-		if kind == "" {
+	type watchedCRD struct {
+		gvr  schema.GroupVersionResource
+		kind string
+	}
+	watched := append([]schema.GroupVersionResource(nil), dynamicCache.GetWatchedResources()...)
+	sort.Slice(watched, func(i, j int) bool {
+		if watched[i].Group != watched[j].Group {
+			return watched[i].Group < watched[j].Group
+		}
+		if watched[i].Resource != watched[j].Resource {
+			return watched[i].Resource < watched[j].Resource
+		}
+		return watched[i].Version < watched[j].Version
+	})
+	selected := make(map[string]watchedCRD)
+	var selectedKeys []string
+	for _, gvr := range watched {
+		if k8score.IsBuiltInAPIGroup(gvr.Group) {
 			continue
 		}
-		kindLower := strings.ToLower(kind)
-
-		// Skip if already processed or not a CRD. Calico's policy kinds are
-		// skipped by group rather than by name, so another CNI's CRD of the same
-		// name still reaches this path. It renders as a generic node like any
-		// other CRD — which is what it got before Calico was handled here.
-		if processedKinds[kindLower] {
+		kind := resourceDiscovery.GetKindForGVR(gvr)
+		if kind == "" || !isCRDGVR(resourceDiscovery, gvr, kind) || genericCRDExcluded(gvr, kind) {
 			continue
 		}
 		if isCalicoPolicyGVR(gvr) {
 			continue
 		}
-		if !resourceDiscovery.IsCRD(kind) {
+		typeKey := resourceid.ResourceKey(gvr.Group, kind, "", "")
+		current, ok := selected[typeKey]
+		if !ok {
+			selectedKeys = append(selectedKeys, typeKey)
+			selected[typeKey] = watchedCRD{gvr: gvr, kind: kind}
+		} else if k8score.IsMoreStableVersion(gvr.Version, current.gvr.Version) {
+			selected[typeKey] = watchedCRD{gvr: gvr, kind: kind}
+		}
+	}
+
+	for _, typeKey := range selectedKeys {
+		selection := selected[typeKey]
+		gvr, kind := selection.gvr, selection.kind
+		if processedTypes[typeKey] {
 			continue
 		}
-		processedKinds[kindLower] = true
+		processedTypes[typeKey] = true
 
 		resources, err := dynamicCache.ListNamespaces(gvr, opts.Namespaces)
 		if err != nil {
@@ -8365,20 +8428,29 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 			}
 
 			name := resource.GetName()
-			nodeID := fmt.Sprintf("%s/%s/%s", kindLower, ns, name)
+			resourceKey := resourceid.ResourceKey(gvr.Group, kind, ns, name)
+			if _, exists := existingResourceIDs[resourceKey]; exists {
+				continue
+			}
+			nodeID := fmt.Sprintf("%s/%s/%s/%s", strings.ToLower(kind), ns, name, gvr.Group)
 
 			// Skip if already in topology
 			if existingIDs[nodeID] {
 				continue
 			}
 
-			// Collect owner IDs
-			var ownerNodeIDs []string
+			var ownerResources []ResourceRef
 			for _, ref := range ownerRefs {
-				ownerKindLower := strings.ToLower(ref.Kind)
-				ownerNodeIDs = append(ownerNodeIDs, fmt.Sprintf("%s/%s/%s", ownerKindLower, ns, ref.Name))
+				if ref.APIVersion == "" || ref.Kind == "" || ref.Name == "" {
+					continue
+				}
+				ownerResources = append(ownerResources, ResourceRef{
+					Group: APIVersionGroup(ref.APIVersion), Kind: ref.Kind, Namespace: ns, Name: ref.Name,
+				})
 			}
-
+			if len(ownerResources) == 0 {
+				continue
+			}
 			candidates = append(candidates, candidate{
 				nodeID: nodeID,
 				node: Node{
@@ -8392,8 +8464,9 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 						"apiVersion": resource.GetAPIVersion(),
 					},
 				},
-				ownerRefs: ownerNodeIDs,
-				ns:        ns,
+				ownerRefs:   ownerResources,
+				resourceKey: resourceKey,
+				typeKey:     typeKey,
 			})
 		}
 	}
@@ -8403,14 +8476,17 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		added := 0
 		remaining := candidates[:0] // reuse slice
 		for _, c := range candidates {
-			kindLower := strings.ToLower(string(c.node.Kind))
-			if crdCounts[kindLower] >= maxPerKind {
+			if crdCounts[c.typeKey] >= maxPerKind {
 				continue // drop — kind at capacity
 			}
 
 			var ownerEdges []Edge
-			for _, ownerID := range c.ownerRefs {
-				if existingIDs[ownerID] {
+			for _, owner := range c.ownerRefs {
+				ownerID, ok := existingResourceIDs[resourceid.ResourceKey(owner.Group, owner.Kind, owner.Namespace, owner.Name)]
+				if !ok && owner.Namespace != "" {
+					ownerID, ok = existingResourceIDs[resourceid.ResourceKey(owner.Group, owner.Kind, "", owner.Name)]
+				}
+				if ok {
 					ownerEdges = append(ownerEdges, Edge{
 						ID:     fmt.Sprintf("%s-to-%s", ownerID, c.nodeID),
 						Source: ownerID,
@@ -8424,7 +8500,8 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 				nodes = append(nodes, c.node)
 				edges = append(edges, ownerEdges...)
 				existingIDs[c.nodeID] = true
-				crdCounts[kindLower]++
+				existingResourceIDs[c.resourceKey] = c.nodeID
+				crdCounts[c.typeKey]++
 				added++
 			} else {
 				remaining = append(remaining, c)

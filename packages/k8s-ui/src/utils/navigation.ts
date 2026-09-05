@@ -212,7 +212,7 @@ const BUILTIN_API_GROUPS: ReadonlySet<string> = new Set([
   'rbac.authorization.k8s.io', 'admissionregistration.k8s.io',
   'authentication.k8s.io', 'authorization.k8s.io', 'certificates.k8s.io',
   'apiextensions.k8s.io', 'apiregistration.k8s.io', 'events.k8s.io',
-  'flowcontrol.apiserver.k8s.io',
+  'flowcontrol.apiserver.k8s.io', 'resource.k8s.io',
 ])
 
 /** Whether a resource's API group must appear in its lane id to prevent a

@@ -63,6 +63,16 @@ func SynthesizeManagedBy(obj metav1.Object, kind, namespace, name string, topo *
 	return nil
 }
 
+func synthesizeManagedByFromNode(obj metav1.Object, nodeID string, topo *Topology, dp DynamicProvider, idx *RelationshipsIndex) []ResourceRef {
+	if ref := detectManagedByFromMeta(obj); ref != nil {
+		return []ResourceRef{*ref}
+	}
+	if top := walkTopmostOwnerFromNodeID(nodeID, topo, dp, idx); top != nil {
+		return []ResourceRef{*top}
+	}
+	return nil
+}
+
 // detectManagedByFromMeta inspects labels/annotations on obj for GitOps / Helm
 // ownership signals and returns the implied manager ref. Returns nil if no
 // signal is present. Mirrors detectGitOpsOwner precedence in the web package.
@@ -162,6 +172,10 @@ func parseArgoTrackingID(value string) (namespace, name string, ok bool) {
 // map (O(E)) — fine for single-resource calls, but high-fanout callers
 // (list/search enrichment) MUST pass a shared index to avoid O(N × E).
 func walkTopmostOwner(kind, namespace, name string, topo *Topology, dp DynamicProvider, idx *RelationshipsIndex) *ResourceRef {
+	return walkTopmostOwnerFromNodeID(buildNodeID(kind, namespace, name, dp), topo, dp, idx)
+}
+
+func walkTopmostOwnerFromNodeID(startID string, topo *Topology, dp DynamicProvider, idx *RelationshipsIndex) *ResourceRef {
 	if topo == nil {
 		return nil
 	}
@@ -198,7 +212,7 @@ func walkTopmostOwner(kind, namespace, name string, topo *Topology, dp DynamicPr
 	// Seed visited with the starting node so a cycle that loops back to the
 	// queried resource (A→B→A) returns the first found owner (B) instead of
 	// walking one extra hop and producing a self-referential ManagedBy ref.
-	cur := buildNodeID(kind, namespace, name, dp)
+	cur := startID
 	visited := map[string]bool{cur: true}
 	var topRef *ResourceRef
 	for {

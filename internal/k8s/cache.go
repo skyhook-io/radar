@@ -26,6 +26,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -722,7 +723,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	labels := entry.Labels
 	createdAt := entry.CreatedAt
 	healthState := classifyTimelineHealth(kind, obj, time.Now())
-	apiVersion := extractAPIVersion(obj)
+	apiVersion := extractAPIVersion(kind, obj)
 
 	// Feed the tombstone on every add/update/delete. While the object is live
 	// this mirrors its enrichment; once it is gone (delete, or a late K8s event
@@ -893,13 +894,14 @@ func isUnstructuredUpdate(oldObj, newObj any) bool {
 	return oldOK && newOK
 }
 
-// extractAPIVersion returns the resource's apiVersion (e.g. "cluster.x-k8s.io/v1beta1")
-// for unstructured/CRD objects. Typed informer objects strip kind/apiVersion, so they
-// fall through to "" — the navigation layer treats an empty group as "core/typed kind",
-// which is correct since core kinds don't collide.
-func extractAPIVersion(obj any) string {
+// extractAPIVersion returns the exact dynamic apiVersion or restores the
+// canonical version stripped from typed informer objects.
+func extractAPIVersion(kind string, obj any) string {
 	if u, ok := obj.(*unstructured.Unstructured); ok {
 		return u.GetAPIVersion()
+	}
+	if apiVersion, ok := resourceid.BuiltinAPIVersion(kind); ok {
+		return apiVersion
 	}
 	return ""
 }

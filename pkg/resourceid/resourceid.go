@@ -18,26 +18,63 @@ func ResourceKey(group, kind, namespace, name string) string {
 	return fmt.Sprintf("%s|%s|%s|%s", group, kind, namespace, name)
 }
 
-// GroupForBuiltinKind maps a built-in Kubernetes Kind to its API group. Returns
-// "" for kinds it doesn't recognize (core-group built-ins and unrecognized
-// kinds both return ""). Keeps the Kind→Group mapping in one place rather than
-// at every emission site; the audit suite, the issues classifier, and any other
-// consumer share it so they can't drift.
-func GroupForBuiltinKind(kind string) string {
+// BuiltinGroup returns the canonical API group for a built-in Kubernetes Kind.
+// The boolean distinguishes core-group kinds from unrecognized custom kinds.
+func BuiltinGroup(kind string) (string, bool) {
 	switch kind {
 	case "Pod", "Service", "ConfigMap", "Secret", "Node", "Namespace",
-		"PersistentVolume", "PersistentVolumeClaim", "ServiceAccount":
-		return ""
+		"PersistentVolume", "PersistentVolumeClaim", "ServiceAccount", "Event",
+		"LimitRange", "ResourceQuota", "Endpoints":
+		return "", true
 	case "Deployment", "DaemonSet", "StatefulSet", "ReplicaSet":
-		return "apps"
+		return "apps", true
 	case "Job", "CronJob":
-		return "batch"
+		return "batch", true
 	case "HorizontalPodAutoscaler":
-		return "autoscaling"
-	case "Ingress", "NetworkPolicy":
-		return "networking.k8s.io"
+		return "autoscaling", true
+	case "Ingress", "IngressClass", "NetworkPolicy":
+		return "networking.k8s.io", true
 	case "PodDisruptionBudget":
-		return "policy"
+		return "policy", true
+	case "StorageClass", "VolumeAttachment":
+		return "storage.k8s.io", true
+	case "EndpointSlice":
+		return "discovery.k8s.io", true
+	case "Role", "ClusterRole", "RoleBinding", "ClusterRoleBinding":
+		return "rbac.authorization.k8s.io", true
+	case "PriorityClass":
+		return "scheduling.k8s.io", true
+	case "RuntimeClass":
+		return "node.k8s.io", true
+	case "Lease":
+		return "coordination.k8s.io", true
+	case "MutatingWebhookConfiguration", "ValidatingWebhookConfiguration":
+		return "admissionregistration.k8s.io", true
 	}
-	return ""
+	return "", false
+}
+
+// GroupForBuiltinKind maps a built-in Kubernetes Kind to its API group. Returns
+// "" for both core-group built-ins and unrecognized kinds; callers that must
+// distinguish those cases should use BuiltinGroup.
+func GroupForBuiltinKind(kind string) string {
+	group, _ := BuiltinGroup(kind)
+	return group
+}
+
+// BuiltinAPIVersion returns the stable API version used by Radar's typed
+// informer for a built-in Kind.
+func BuiltinAPIVersion(kind string) (string, bool) {
+	group, ok := BuiltinGroup(kind)
+	if !ok {
+		return "", false
+	}
+	version := "v1"
+	if kind == "HorizontalPodAutoscaler" {
+		version = "v2"
+	}
+	if group == "" {
+		return version, true
+	}
+	return group + "/" + version, true
 }

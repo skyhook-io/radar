@@ -1,15 +1,32 @@
 import { describe, expect, it } from 'vitest'
-import type { ActivityFilterKey, TimelineGrouping, TimelineSort } from '@skyhook-io/k8s-ui'
+import type { ActivityFilterKey, PinnedLaneRef, TimelineGrouping, TimelineSort } from '@skyhook-io/k8s-ui'
 import {
   parseTimeMode,
   resolveApplicationTimelineScope,
   writeTimelineParams,
   onlyHighFreqDiffer,
   timeModeEqual,
+  togglePinnedLaneRefs,
   type TimelineMode,
   type PersistedTimelineState,
   type TimelineViewMode,
 } from './TimelineView'
+
+describe('togglePinnedLaneRefs', () => {
+  it('unpins a migrated legacy CRD pin by its canonical live identity', () => {
+    const legacy: PinnedLaneRef = { id: 'Cluster/prod/main', kind: 'Cluster', namespace: 'prod', name: 'main' }
+    const live: PinnedLaneRef = { id: 'Cluster.postgresql.cnpg.io/prod/main', kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'prod', name: 'main' }
+
+    expect(togglePinnedLaneRefs([legacy], live)).toEqual([])
+  })
+
+  it('does not unpin a different explicit API group', () => {
+    const cnpg: PinnedLaneRef = { id: 'Cluster.postgresql.cnpg.io/prod/main', kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'prod', name: 'main' }
+    const capi: PinnedLaneRef = { id: 'Cluster.cluster.x-k8s.io/prod/main', kind: 'Cluster', group: 'cluster.x-k8s.io', namespace: 'prod', name: 'main' }
+
+    expect(togglePinnedLaneRefs([cnpg], capi)).toEqual([cnpg, capi])
+  })
+})
 
 // These mirror the module-private defaults writeTimelineParams omits at (and
 // parseTimeMode falls back to). Kept in sync deliberately: the round-trip tests

@@ -13,8 +13,10 @@
 
 import type { TimelineEvent, Topology } from '../types/core'
 import { isWorkloadKind } from '../types/core'
+import { canonicalResourceGroup } from './api-resources'
 import { apiVersionToGroup, laneId, laneResourceKey, groupQualifiesLaneId, parseLaneId } from './navigation'
 import type { AppMembership, AppMembershipIndex } from './applications'
+import { topologyNodeResourceKind } from './topology-neighborhood'
 
 /** Timeline grouping mode (replaces the legacy groupByApp boolean).
  *  - app   = owner/topology parenting + the app-membership cascade (default)
@@ -36,6 +38,9 @@ export interface ResourceLane {
    * (e.g. CAPI Cluster vs CNPG Cluster) when the lane is clicked.
    */
   group?: string
+  /** True when group identity came from apiVersion/topology or an unambiguous
+   *  live identity, including the explicit core group (`''`). */
+  identityResolved?: boolean
   namespace: string
   name: string
   events: TimelineEvent[]
@@ -84,7 +89,7 @@ export interface HierarchyOptions {
   events: TimelineEvent[]
   topology?: Topology
   /** If provided, returns only the hierarchy rooted at this resource */
-  rootResource?: { kind: string; namespace: string; name: string }
+  rootResource?: { kind: string; group?: string; namespace: string; name: string }
   /** Legacy toggle. Kept for back-compat (WorkloadView): true→'app', false→'owner'
    *  when `grouping` is omitted. Prefer `grouping`. */
   groupByApp?: boolean
@@ -184,7 +189,7 @@ function isGeneratedNameChildOf(laneName: string, memberName: string): boolean {
  *  owner:null + labels:null (connector cache miss) but whose name still encodes
  *  its Deployment. Scoped to the SAME namespace; only workload-ish member kinds
  *  count. Longest member-name wins (so "web-admin" beats "web" for a
- *  web-admin-xyz pod); ties resolve to the first key in index order. */
+ *  web-admin-xyz pod); an equal-length cross-app tie fails closed. */
 export function matchLaneByMemberNamePrefix(
   lane: { kind: string; namespace: string; name: string },
   index: AppMembershipIndex,
@@ -192,25 +197,21 @@ export function matchLaneByMemberNamePrefix(
   if (!GENERATED_NAME_LANE_KINDS.has(lane.kind)) return null
   let best: AppMembership | null = null
   let bestLen = -1
+  let ambiguous = false
   for (const [key, membership] of index.byResource) {
-    // key form: 'Kind/namespace/name'. Namespaces + names can't contain '/', so
-    // the first two slashes bound the kind and namespace segments.
-    const slash1 = key.indexOf('/')
-    if (slash1 < 0) continue
-    const slash2 = key.indexOf('/', slash1 + 1)
-    if (slash2 < 0) continue
-    const kind = key.slice(0, slash1)
-    if (!NAME_PREFIX_MEMBER_KINDS.has(kind)) continue
-    const ns = key.slice(slash1 + 1, slash2)
-    if (ns !== lane.namespace) continue
-    const memberName = key.slice(slash2 + 1)
-    if (!isGeneratedNameChildOf(lane.name, memberName)) continue
-    if (memberName.length > bestLen) {
+    const member = parseLaneId(key)
+    if (!member || !NAME_PREFIX_MEMBER_KINDS.has(member.kind)) continue
+    if (member.namespace !== lane.namespace) continue
+    if (!isGeneratedNameChildOf(lane.name, member.name)) continue
+    if (member.name.length > bestLen) {
       best = membership
-      bestLen = memberName.length
+      bestLen = member.name.length
+      ambiguous = false
+    } else if (member.name.length === bestLen && best && membership.appKey !== best.appKey) {
+      ambiguous = true
     }
   }
-  return best
+  return ambiguous ? null : best
 }
 
 // Parent-driven naming contracts. Confidence ladder: ownerRef (fact) >
@@ -300,9 +301,11 @@ function contractParentId(
  *  falls back to owner grouping until hub-side membership snapshots (the
  *  retention-grade fix) exist. */
 function cascadeRootMembership(lane: ResourceLane, appIndex: AppMembershipIndex): RootGroupAssignment | null {
-  // byResource is keyed group-less (AppRow workloads carry no group), so a
-  // CRD lane's group-qualified id must join via its group-less resource key.
-  const direct = appIndex.byResource.get(laneResourceKey(lane.kind, lane.namespace, lane.name))
+  const unqualified = laneResourceKey(lane.kind, lane.namespace, lane.name)
+  const direct = lane.identityResolved
+    ? appIndex.byResource.get(lane.id)
+    : appIndex.byUnqualifiedResource?.get(unqualified)
+      ?? (!appIndex.byUnqualifiedResource ? appIndex.byResource.get(lane.id) : undefined)
   if (direct) return { membership: direct, structural: true }
   for (const key of evidenceKeysForLane(lane)) {
     const m = appIndex.byEvidence.get(key)
@@ -421,63 +424,10 @@ export function isProblematicEvent(event: TimelineEvent): boolean {
   return false
 }
 
-/**
- * Convert topology node ID to lane ID format.
- * Node IDs are formatted as: kind/namespace/name (e.g., "pod/default/nginx-abc123")
- * Lane IDs are formatted as: Kind/namespace/name (e.g., "Pod/default/nginx-abc123")
- */
-function nodeIdToLaneId(nodeId: string): string | null {
-  const parts = nodeId.split('/')
-  if (parts.length < 3) return null
-  const kind = parts[0]
-  const namespace = parts[1]
-  const name = parts[2]
-  // Maps lowercase topology node IDs to PascalCase kind names used in timeline lane IDs.
-  const kindMap: Record<string, string> = {
-    pod: 'Pod', service: 'Service', deployment: 'Deployment',
-    replicaset: 'ReplicaSet', statefulset: 'StatefulSet', daemonset: 'DaemonSet',
-    ingress: 'Ingress', gateway: 'Gateway', httproute: 'HTTPRoute',
-    grpcroute: 'GRPCRoute', tcproute: 'TCPRoute', tlsroute: 'TLSRoute',
-    configmap: 'ConfigMap', secret: 'Secret',
-    persistentvolumeclaim: 'PersistentVolumeClaim',
-    persistentvolume: 'PersistentVolume', storageclass: 'StorageClass',
-    job: 'Job', cronjob: 'CronJob',
-    horizontalpodautoscaler: 'HorizontalPodAutoscaler',
-    verticalpodautoscaler: 'VerticalPodAutoscaler',
-    poddisruptionbudget: 'PodDisruptionBudget',
-    podgroup: 'PodGroup', rollout: 'Rollout', namespace: 'Namespace',
-    node: 'Node',
-    application: 'Application', applicationset: 'ApplicationSet', appproject: 'AppProject',
-    kustomization: 'Kustomization',
-    helmrelease: 'HelmRelease', helmrepository: 'HelmRepository',
-    helmchart: 'HelmChart', gitrepository: 'GitRepository',
-    ocirepository: 'OCIRepository', certificate: 'Certificate',
-    // Istio
-    virtualservice: 'VirtualService', destinationrule: 'DestinationRule',
-    istiogateway: 'IstioGateway', serviceentry: 'ServiceEntry',
-    peerauthentication: 'PeerAuthentication', authorizationpolicy: 'AuthorizationPolicy',
-    // KEDA
-    scaledobject: 'ScaledObject', scaledjob: 'ScaledJob',
-    // Karpenter
-    nodepool: 'NodePool', nodeclaim: 'NodeClaim',
-    // cert-manager
-    issuer: 'Issuer', clusterissuer: 'ClusterIssuer',
-    // Knative
-    knativeservice: 'KnativeService', knativeconfiguration: 'KnativeConfiguration',
-    knativerevision: 'KnativeRevision', knativeroute: 'KnativeRoute',
-    broker: 'Broker', trigger: 'Trigger', channel: 'Channel',
-    pingsource: 'PingSource', apiserversource: 'ApiServerSource',
-    containersource: 'ContainerSource', sinkbinding: 'SinkBinding',
-    // Traefik
-    ingressroute: 'IngressRoute', ingressroutetcp: 'IngressRouteTCP',
-    ingressrouteudp: 'IngressRouteUDP', middleware: 'Middleware',
-    middlewaretcp: 'MiddlewareTCP', traefikservice: 'TraefikService',
-    serverstransport: 'ServersTransport', serverstransporttcp: 'ServersTransportTCP',
-    tlsoption: 'TLSOption', tlsstore: 'TLSStore',
-    // Contour
-    httpproxy: 'HTTPProxy',
-  }
-  return `${kindMap[kind] || kind}/${namespace}/${name}`
+function topologyNodeLaneId(node: Topology['nodes'][number]): string {
+  const namespace = typeof node.data?.namespace === 'string' ? node.data.namespace : ''
+  const apiVersion = typeof node.data?.apiVersion === 'string' ? node.data.apiVersion : ''
+  return laneId(topologyNodeResourceKind(node), apiVersionToGroup(apiVersion), namespace, node.name)
 }
 
 /**
@@ -554,49 +504,53 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
   const grouping: TimelineGrouping = options.grouping ?? (options.groupByApp === false ? 'owner' : 'app')
   const laneMap = new Map<string, ResourceLane>()
 
-  // API group lookup by group-less resource key (Kind/ns/name) sourced from
-  // topology nodes — the fallback group for lanes/refs whose events don't carry
-  // apiVersion (owner refs and topology endpoints never do).
-  const topoGroupByKey = new Map<string, string>()
-  if (topology?.nodes) {
-    for (const node of topology.nodes) {
-      const key = nodeIdToLaneId(node.id)
-      if (!key) continue
-      const group = apiVersionToGroup(node.data?.apiVersion as string | undefined)
-      if (group) topoGroupByKey.set(key, group)
-    }
+  const topologyLaneIdByNodeId = new Map<string, string>()
+  const identityGroupsByResourceKey = new Map<string, Set<string>>()
+  for (const node of topology?.nodes ?? []) {
+    const id = topologyNodeLaneId(node)
+    topologyLaneIdByNodeId.set(node.id, id)
+    const parsed = parseLaneId(id)!
+    const rk = laneResourceKey(parsed.kind, parsed.namespace, parsed.name)
+    const groups = identityGroupsByResourceKey.get(rk) ?? new Set<string>()
+    groups.add(parsed.group)
+    identityGroupsByResourceKey.set(rk, groups)
   }
-  // First apiVersion-derived group seen per resource key — the fallback used to
-  // attribute a same-resource event that shipped WITHOUT apiVersion (a stored
-  // event) onto the group-qualified lane its apiVersion-carrying siblings built,
-  // instead of forking a bare duplicate. It does NOT collapse a genuine
-  // collision: colliding events differ in apiVersion, so each still qualifies to
-  // its own group; only truly group-less events fall back here.
-  const groupByKey = new Map<string, string>()
+
+  // Merge exact identities from topology and timeline. Built-in groups share
+  // the same bare lane identity; CRD groups remain distinct.
   for (const event of events) {
-    if (event.kind === 'Event' && event.owner) continue
-    const g = apiVersionToGroup(event.apiVersion)
-    if (g) {
-      const rk = laneResourceKey(event.kind, event.namespace, event.name)
-      if (!groupByKey.has(rk)) groupByKey.set(rk, g)
-    }
+    if ((event.kind === 'Event' && event.owner) || !event.apiVersion) continue
+    const rk = laneResourceKey(event.kind, event.namespace, event.name)
+    const groups = identityGroupsByResourceKey.get(rk) ?? new Set<string>()
+    const group = apiVersionToGroup(event.apiVersion)
+    groups.add(groupQualifiesLaneId(group) ? group : '')
+    identityGroupsByResourceKey.set(rk, groups)
+  }
+
+  // API group fallback for a stored event that shipped without apiVersion.
+  // A same-kind/name collision is ambiguous and therefore supplies no fallback.
+  const groupByKey = new Map<string, string>()
+  const ambiguousResourceKeys = new Set<string>()
+  for (const [rk, groups] of identityGroupsByResourceKey) {
+    if (groups.size === 1) groupByKey.set(rk, groups.values().next().value ?? '')
+    else ambiguousResourceKeys.add(rk)
   }
   // The group for a resource key when the reference itself carries none.
-  const fallbackGroup = (rk: string): string => groupByKey.get(rk) ?? topoGroupByKey.get(rk) ?? ''
+  const fallbackGroup = (rk: string): string => groupByKey.get(rk) ?? ''
 
   // Group-less resource key → canonical (possibly group-qualified) lane id. Lets
-  // group-less references (owner refs, K8s-event involvedObject, topology node
-  // ids — none carry a group) reconcile onto the real lane instead of forking a
-  // bare duplicate. First writer wins: when two CRDs collide on kind+ns+name the
-  // map holds one, and a group-agnostic owner/topology match resolving to it is
-  // the accepted residual (see the confidence-ladder note above).
+  // owner refs and K8s-event involvedObjects reconcile onto the real lane instead
+  // of forking a bare duplicate when identity is unambiguous. Ambiguous refs stay
+  // bare; topology endpoints use the exact node-id map above.
   const laneIdByKey = new Map<string, string>()
   const registerLaneKey = (rk: string, id: string): void => {
     if (!laneIdByKey.has(rk)) laneIdByKey.set(rk, id)
   }
   // Get-or-create the lane for a group-less reference, returning its canonical id.
   const ensureRefLane = (rk: string, seedEvent?: TimelineEvent): string => {
-    const existing = laneIdByKey.get(rk)
+    const existing = ambiguousResourceKeys.has(rk)
+      ? (laneMap.has(rk) ? rk : undefined)
+      : laneIdByKey.get(rk)
     if (existing) {
       if (seedEvent) laneMap.get(existing)!.events.push(seedEvent)
       return existing
@@ -608,6 +562,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
       id,
       kind: p.kind,
       group,
+      identityResolved: groupByKey.has(rk) && !ambiguousResourceKeys.has(rk),
       namespace: p.namespace,
       name: p.name,
       events: seedEvent ? [seedEvent] : [],
@@ -618,10 +573,30 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
     registerLaneKey(rk, id)
     return id
   }
+  const ensureTopologyLane = (id: string): string => {
+    if (laneMap.has(id)) return id
+    const parsed = parseLaneId(id)!
+    laneMap.set(id, {
+      id,
+      kind: parsed.kind,
+      group: parsed.group,
+      identityResolved: true,
+      namespace: parsed.namespace,
+      name: parsed.name,
+      events: [],
+      isWorkload: isWorkloadKind(parsed.kind),
+      children: [],
+      childEventCount: 0,
+    })
+    registerLaneKey(laneResourceKey(parsed.kind, parsed.namespace, parsed.name), id)
+    return id
+  }
   // The canonical id a group-less key resolves to, WITHOUT creating a lane —
   // agrees with ensureRefLane so guards keyed by canonical id line up.
   const resolveId = (rk: string): string => {
-    const existing = laneIdByKey.get(rk)
+    const existing = ambiguousResourceKeys.has(rk)
+      ? (laneMap.has(rk) ? rk : undefined)
+      : laneIdByKey.get(rk)
     if (existing) return existing
     const p = parseLaneId(rk)!
     return laneId(p.kind, fallbackGroup(rk), p.namespace, p.name)
@@ -639,19 +614,22 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
     }
 
     const rk = laneResourceKey(event.kind, event.namespace, event.name)
-    // Per-event group qualifies the id, so two same-kind CRDs from different
-    // vendors (CAPI vs CNPG `Cluster`) never merge. A group-less event reconciles
-    // onto whatever lane already exists for the resource (or a bare one).
-    const group = apiVersionToGroup(event.apiVersion) || fallbackGroup(rk)
-    const id = groupQualifiesLaneId(group)
+    // An explicit apiVersion always chooses its canonical lane, including a
+    // built-in group whose canonical id is bare. Only an event that omitted
+    // apiVersion reconciles through the group-less registry.
+    const hasAPIVersion = !!event.apiVersion
+    const group = hasAPIVersion ? apiVersionToGroup(event.apiVersion) : fallbackGroup(rk)
+    const id = hasAPIVersion || groupQualifiesLaneId(group)
       ? laneId(event.kind, group, event.namespace, event.name)
-      : (laneIdByKey.get(rk) ?? laneResourceKey(event.kind, event.namespace, event.name))
+      : (!ambiguousResourceKeys.has(rk) ? laneIdByKey.get(rk) : undefined)
+        ?? laneResourceKey(event.kind, event.namespace, event.name)
     const existing = laneMap.get(id)
     if (!existing) {
       laneMap.set(id, {
         id,
         kind: event.kind,
         group,
+        identityResolved: hasAPIVersion || (groupByKey.has(rk) && !ambiguousResourceKeys.has(rk)),
         namespace: event.namespace,
         name: event.name,
         events: [event],
@@ -662,6 +640,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
       registerLaneKey(rk, id)
     } else {
       if (!existing.group && group) existing.group = group
+      if (hasAPIVersion || (groupByKey.has(rk) && !ambiguousResourceKeys.has(rk))) existing.identityResolved = true
       existing.events.push(event)
     }
   }
@@ -688,27 +667,23 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
   for (const [id, lane] of laneMap) {
     const eventWithOwner = lane.events.find(e => e.owner)
     if (eventWithOwner?.owner) {
-      const ownerId = ensureRefLane(laneResourceKey(eventWithOwner.owner.kind, lane.namespace, eventWithOwner.owner.name))
+      const ownerKey = laneResourceKey(eventWithOwner.owner.kind, lane.namespace, eventWithOwner.owner.name)
+      if (ambiguousResourceKeys.has(ownerKey)) continue
+      const ownerId = ensureRefLane(ownerKey)
       laneParent.set(id, ownerId)
     }
   }
 
   // Source 2: Topology edges (for Service→Deployment, Ingress→Service, ConfigMap→Deployment).
-  // Node ids are group-less keys; endpoints resolve onto their canonical lanes via
-  // the registry (parenting a child under a possibly group-qualified parent), and a
-  // missing endpoint is materialized with its topology-known group.
   if (topology?.edges) {
     for (const edge of topology.edges) {
-      const sourceKey = nodeIdToLaneId(edge.source)
-      const targetKey = nodeIdToLaneId(edge.target)
-      if (!sourceKey || !targetKey) continue
-
-      // manages: Deployment→RS→Pod (already covered by owner refs, skip)
-      if (edge.type === 'manages') continue
+      const sourceId = topologyLaneIdByNodeId.get(edge.source)
+      const targetId = topologyLaneIdByNodeId.get(edge.target)
+      if (!sourceId || !targetId) continue
 
       // At least one side must have events
-      const sourceExists = laneIdByKey.has(sourceKey)
-      const targetExists = laneIdByKey.has(targetKey)
+      const sourceExists = laneMap.has(sourceId)
+      const targetExists = laneMap.has(targetId)
       if (!sourceExists && !targetExists) continue
 
       // App membership outranks topology attachment: two members of the SAME
@@ -718,64 +693,66 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
       // the whole stack with the attachment (a health-less Service) instead of
       // the app. Only the byResource tier applies — both endpoints here are
       // concrete resources the server either claims or doesn't.
-      const sameAppMembers = (aKey: string, bKey: string): boolean => {
+      const sameAppMembers = (aId: string, bId: string): boolean => {
         if (grouping !== 'app' || !appIndex) return false
-        const toResourceKey = (key: string): string | null => {
-          const parsed = parseLaneId(key)
-          return parsed ? laneResourceKey(parsed.kind, parsed.namespace, parsed.name) : null
-        }
-        const aRes = toResourceKey(aKey)
-        const a = aRes ? appIndex.byResource.get(aRes) : undefined
+        const a = appIndex.byResource.get(aId)
         if (!a) return false
-        const bRes = toResourceKey(bKey)
-        const b = bRes ? appIndex.byResource.get(bRes) : undefined
+        const b = appIndex.byResource.get(bId)
         return b != null && a.appKey === b.appKey
       }
 
       // Parent `child` under `parent`, materializing `parent`'s lane if absent.
       // `childHasEvents` mirrors the old guard (only parent an endpoint that
       // actually exists). Guards read canonical ids so laneParent lines up.
-      const link = (childKey: string, parentKey: string, childHasEvents: boolean): void => {
+      const link = (childId: string, parentId: string, childHasEvents: boolean): void => {
         if (!childHasEvents) return
-        if (sameAppMembers(childKey, parentKey)) return
-        const childId = resolveId(childKey)
+        if (sameAppMembers(childId, parentId)) return
         if (laneParent.has(childId)) return
-        laneParent.set(childId, ensureRefLane(parentKey))
+        laneParent.set(childId, ensureTopologyLane(parentId))
+      }
+
+      // Exact topology ownership supersedes the persisted group-less owner ref.
+      // This matters when two controller API groups share kind/namespace/name.
+      if (edge.type === 'manages') {
+        if (targetExists && !sameAppMembers(targetId, sourceId)) {
+          laneParent.set(targetId, ensureTopologyLane(sourceId))
+        }
+        continue
       }
 
       // exposes: Service→Deployment (Service is parent of Deployment)
       if (edge.type === 'exposes') {
-        link(targetKey, sourceKey, targetExists)
+        link(targetId, sourceId, targetExists)
       }
 
       // routes-to has two cases:
       // 1. Ingress→Service: Service should be parent (representative)
       // 2. Service→Pod/PodGroup: Service should be parent (normal hierarchy)
       if (edge.type === 'routes-to') {
-        const sourceKind = sourceKey.split('/')[0]
-        const targetKind = targetKey.split('/')[0]
+        const sourceKind = parseLaneId(sourceId)!.kind
+        const targetKind = parseLaneId(targetId)!.kind
 
         // Gateway→Route: Gateway is parent of Route
         if (sourceKind === 'Gateway' && (targetKind === 'HTTPRoute' || targetKind === 'GRPCRoute' || targetKind === 'TCPRoute' || targetKind === 'TLSRoute')) {
-          link(targetKey, sourceKey, targetExists)
+          link(targetId, sourceId, targetExists)
         }
         // Route→Service: reverse (Service is representative, like Ingress)
         else if ((sourceKind === 'HTTPRoute' || sourceKind === 'GRPCRoute' || sourceKind === 'TCPRoute' || sourceKind === 'TLSRoute') && targetKind === 'Service') {
-          link(sourceKey, targetKey, sourceExists)
+          link(sourceId, targetId, sourceExists)
         }
         // Ingress→Service: reverse relationship (Service is representative)
         else if (sourceKind === 'Ingress' && targetKind === 'Service') {
-          link(sourceKey, targetKey, sourceExists)
+          link(sourceId, targetId, sourceExists)
         }
         // Service→Pod/PodGroup: normal direction (Service is parent)
         else if (sourceKind === 'Service') {
-          link(targetKey, sourceKey, targetExists)
+          link(targetId, sourceId, targetExists)
         }
       }
 
       // configures/uses/protects: ConfigMap→Deployment, HPA→Deployment, PDB→Deployment (target is parent)
       if (edge.type === 'configures' || edge.type === 'uses' || edge.type === 'protects') {
-        link(sourceKey, targetKey, sourceExists)
+        link(sourceId, targetId, sourceExists)
       }
     }
   }
@@ -787,16 +764,13 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
   // membership cascade below replaces this. Kept so WorkloadView and index-less
   // callers keep today's behavior.
   if (grouping === 'app' && !appIndex && topology?.nodes) {
-    // Keyed by group-less resource key (the topology node id form), so a CRD
-    // lane's group-qualified id still matches via its key.
     const laneAppLabels = new Map<string, string>()
     for (const node of topology.nodes) {
-      const key = nodeIdToLaneId(node.id)
-      if (!key) continue
+      const id = topologyLaneIdByNodeId.get(node.id)!
       const labels = node.data?.labels as Record<string, string> | undefined
       const appLabel = labels?.['app.kubernetes.io/name'] || labels?.['app']
       if (appLabel) {
-        laneAppLabels.set(key, appLabel)
+        laneAppLabels.set(id, appLabel)
       }
     }
 
@@ -820,7 +794,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
     for (const [id, lane] of laneMap) {
       if (laneParent.has(id)) continue
       if (!appLabelEligibleKinds.has(lane.kind)) continue
-      const appLabel = laneAppLabels.get(laneResourceKey(lane.kind, lane.namespace, lane.name))
+      const appLabel = laneAppLabels.get(id)
       if (!appLabel) continue
       const groupKey = `${lane.namespace}/${appLabel}`
       if (!appGroups.has(groupKey)) {
@@ -937,10 +911,10 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
 
   // If rootResource is specified, filter to only include lanes related to that resource
   if (rootResource) {
-    // Resolve to the canonical (possibly group-qualified) id so a CRD root matches
-    // the lanes built from its events. rootResource carries no group; resolveId
-    // uses the registry (its own events) or the topology/event group fallback.
-    const rootLaneId = resolveId(laneResourceKey(rootResource.kind, rootResource.namespace, rootResource.name))
+    const rootGroup = canonicalResourceGroup(rootResource.kind, rootResource.group)
+    const rootLaneId = rootGroup !== undefined
+      ? laneId(rootResource.kind, rootGroup, rootResource.namespace, rootResource.name)
+      : resolveId(laneResourceKey(rootResource.kind, rootResource.namespace, rootResource.name))
     const rootLane = topLevelLanes.find(l => l.id === rootLaneId)
 
     if (rootLane) {
@@ -984,6 +958,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
       id: rootLaneId,
       kind: rootResource.kind,
       group: parseLaneId(rootLaneId)?.group || '',
+      identityResolved: rootGroup !== undefined,
       namespace: rootResource.namespace,
       name: rootResource.name,
       events: [],
@@ -1153,9 +1128,12 @@ export function getAllEventsFromHierarchy(lanes: ResourceLane[]): TimelineEvent[
  */
 export interface PinnedResourceRef {
   type?: 'resource'
-  /** "Kind/namespace/name" — the same id form buildResourceHierarchy emits. */
+  /** Canonical lane id emitted by buildResourceHierarchy. */
   id: string
   kind: string
+  /** Present on newly written pins so a built-in lane remains distinguishable
+   *  from a same-kind CRD. Older localStorage records legitimately omit it. */
+  group?: string
   namespace: string
   name: string
 }
@@ -1186,7 +1164,75 @@ export function isPinnedLaneRef(value: unknown): value is PinnedLaneRef {
   if (v.type === 'appGroup') {
     return typeof v.appKey === 'string' && typeof v.appName === 'string'
   }
-  return typeof v.kind === 'string' && typeof v.namespace === 'string' && typeof v.name === 'string'
+  return typeof v.kind === 'string'
+    && (v.group === undefined || typeof v.group === 'string')
+    && typeof v.namespace === 'string'
+    && typeof v.name === 'string'
+}
+
+interface LaneIdentityIndex {
+  byId: Map<string, ResourceLane>
+  byUnqualified: Map<string, ResourceLane[]>
+}
+
+function indexLanesByIdentity(allLanes: ResourceLane[]): LaneIdentityIndex {
+  const byId = new Map<string, ResourceLane>()
+  const byUnqualified = new Map<string, ResourceLane[]>()
+  const indexLane = (lane: ResourceLane): void => {
+    if (!byId.has(lane.id)) byId.set(lane.id, lane)
+    const parsed = parseLaneId(lane.id)
+    if (parsed && !lane.isAppGroup) {
+      const key = laneResourceKey(parsed.kind, parsed.namespace, parsed.name)
+      const candidates = byUnqualified.get(key) ?? []
+      if (!candidates.some((candidate) => candidate.id === lane.id)) candidates.push(lane)
+      byUnqualified.set(key, candidates)
+    }
+    for (const child of lane.children ?? []) indexLane(child)
+  }
+  for (const lane of allLanes) indexLane(lane)
+  return { byId, byUnqualified }
+}
+
+function resolvePinnedResourceLane(ref: PinnedResourceRef, index: LaneIdentityIndex): ResourceLane | undefined {
+  const key = laneResourceKey(ref.kind, ref.namespace, ref.name)
+  const candidates = index.byUnqualified.get(key) ?? []
+  if (ref.group !== undefined) {
+    const canonical = laneId(ref.kind, ref.group, ref.namespace, ref.name)
+    const exact = index.byId.get(canonical)
+    const refGroup = canonicalResourceGroup(ref.kind, ref.group)
+    if (exact && canonicalResourceGroup(exact.kind, exact.group) === refGroup) return exact
+    const matching = candidates.filter((candidate) => canonicalResourceGroup(candidate.kind, candidate.group) === refGroup)
+    return matching.length === 1 ? matching[0] : undefined
+  }
+  return candidates.length === 1 ? candidates[0] : undefined
+}
+
+/** Resolve persisted resource pins onto current canonical lane IDs. Older pins
+ *  omitted API group, so they migrate only when kind/namespace/name identifies
+ *  exactly one live lane; collisions intentionally stay unresolved. */
+export function resolvePinnedLaneIds(allLanes: ResourceLane[], pinnedRefs: PinnedLaneRef[]): Set<string> {
+  const index = indexLanesByIdentity(allLanes)
+  const resolved = new Set<string>()
+  for (const ref of pinnedRefs) {
+    if (ref.type === 'appGroup') {
+      resolved.add(ref.id)
+      continue
+    }
+    const candidates = index.byUnqualified.get(laneResourceKey(ref.kind, ref.namespace, ref.name)) ?? []
+    const lane = resolvePinnedResourceLane(ref, index)
+    if (lane) resolved.add(lane.id)
+    else if (ref.group !== undefined || candidates.length === 0) resolved.add(ref.id)
+  }
+  return resolved
+}
+
+export function pinnedLaneRefMatches(stored: PinnedLaneRef, incoming: PinnedLaneRef): boolean {
+  if (stored.type === 'appGroup' || incoming.type === 'appGroup') {
+    return stored.type === 'appGroup' && incoming.type === 'appGroup' && stored.appKey === incoming.appKey
+  }
+  if (stored.kind !== incoming.kind || stored.namespace !== incoming.namespace || stored.name !== incoming.name) return false
+  if (stored.group === undefined) return true
+  return canonicalResourceGroup(stored.kind, stored.group) === canonicalResourceGroup(incoming.kind, incoming.group)
 }
 
 /** Ensure a lane carries a merged allEventsSorted (own + descendants). Roots and
@@ -1202,9 +1248,8 @@ function synthesizeEmptyPinnedLane(ref: PinnedResourceRef): ResourceLane {
   return {
     id: ref.id,
     kind: ref.kind,
-    // Recover the group from the id so an absent CRD pin still carries it (the
-    // pin record itself stores none). Bare/built-in ids yield ''.
-    group: parseLaneId(ref.id)?.group || '',
+    group: ref.group ?? parseLaneId(ref.id)?.group ?? '',
+    identityResolved: ref.group !== undefined,
     namespace: ref.namespace,
     name: ref.name,
     events: [],
@@ -1288,12 +1333,11 @@ export function removePinnedLanes(
  */
 export function extractPinnedLanes(allLanes: ResourceLane[], pinnedRefs: PinnedLaneRef[]): ResourceLane[] {
   if (pinnedRefs.length === 0) return []
-  const byId = new Map<string, ResourceLane>()
+  const identityIndex = indexLanesByIdentity(allLanes)
   // App-group headers re-resolve by appKey (live members), independent of the
   // deterministic "app:<appKey>" id, so a group survives grouping-mode churn.
   const groupByAppKey = new Map<string, ResourceLane>()
   const indexLane = (lane: ResourceLane): void => {
-    if (!byId.has(lane.id)) byId.set(lane.id, lane)
     if (lane.isAppGroup && lane.appKey && !groupByAppKey.has(lane.appKey)) {
       groupByAppKey.set(lane.appKey, lane)
     }
@@ -1328,9 +1372,15 @@ export function extractPinnedLanes(allLanes: ResourceLane[], pinnedRefs: PinnedL
       out.push(found ? withAllEventsSorted(found) : synthesizeQuietAppGroupLane(ref))
       continue
     }
-    if (coveredByPinnedGroup.has(ref.id)) continue // folded into a pinned app group
-    const found = byId.get(ref.id)
-    out.push(found ? withAllEventsSorted(found) : synthesizeEmptyPinnedLane(ref))
+    const found = resolvePinnedResourceLane(ref, identityIndex)
+    if (found && coveredByPinnedGroup.has(found.id)) continue // folded into a pinned app group
+    if (found) {
+      out.push(withAllEventsSorted(found))
+      continue
+    }
+    const candidates = identityIndex.byUnqualified.get(laneResourceKey(ref.kind, ref.namespace, ref.name)) ?? []
+    if (ref.group === undefined && candidates.length > 1) continue
+    out.push(synthesizeEmptyPinnedLane(ref))
   }
   return out
 }
