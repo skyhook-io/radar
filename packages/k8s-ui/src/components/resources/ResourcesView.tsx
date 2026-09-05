@@ -227,6 +227,12 @@ export const SKIP_FILTER_COLUMNS = new Set([
   'lastUpdated', 'chart', 'events', 'repo',
   'generators', 'applications', 'destinations', 'sources', 'budget', 'healthy', 'allowed',
   'secrets', 'subjects', 'role', 'entrypoint', 'templates',
+  // Trivy and Kyverno report counts. These look filterable but cannot be:
+  // getCellFilterValue has no case for them and its fallback probes
+  // status[key]/spec[key], while the counts live under report.summary /
+  // status.summary. Listing them here stops the header reserving room for a
+  // button that can never render.
+  'critical', 'high', 'medium', 'low', 'pass', 'fail', 'warn', 'error', 'skip',
 ])
 
 // Namespace/node cardinality scales with cluster size, not kind enum size;
@@ -436,8 +442,16 @@ function headerLabelWidth(label: string): number {
  * own column, but three cases still truncate: a label past the floor cap, a
  * column the user dragged narrower, and the sort/filter controls sharing the
  * row — whose width depends on their state (an active filter renders padding,
- * an icon and a count). Predicting those widths was wrong twice, so this reads
- * the actual overflow instead of computing it.
+ * an icon and a count). Their rendered width isn't knowable from the column
+ * definition, so this reads the element's actual overflow rather than computing
+ * it.
+ *
+ * The Tooltip wrapper stays mounted whether or not the label truncates: swapping
+ * it in on overflow would remount the measured span, stranding the
+ * ResizeObserver on the detached node so the state could never flip back. It
+ * also needs min-w-0 — the wrapper is the flex item in the header row, and an
+ * inline-flex box won't shrink below its content unless told to, which would
+ * push the sort and filter controls out of the cell.
  */
 function HeaderLabel({ label, className }: { label: string; className?: string }) {
   const ref = useRef<HTMLSpanElement>(null)
@@ -452,8 +466,11 @@ function HeaderLabel({ label, className }: { label: string; className?: string }
     ro.observe(el)
     return () => { ro.disconnect() }
   }, [label])
-  const span = <span ref={ref} className={clsx('truncate', className)}>{label}</span>
-  return truncated ? <Tooltip content={label}>{span}</Tooltip> : span
+  return (
+    <Tooltip content={label} disabled={!truncated} preserveWrapperWhenDisabled wrapperClassName="min-w-0">
+      <span ref={ref} className={clsx('truncate', className)}>{label}</span>
+    </Tooltip>
+  )
 }
 
 /**
@@ -6327,7 +6344,7 @@ export function ResourcesView({
                       >
                         <div className="flex items-center gap-1 overflow-hidden">
                           {col.tooltip ? (
-                            <Tooltip content={col.tooltip}>
+                            <Tooltip content={col.tooltip} wrapperClassName="min-w-0">
                               <span className="border-b border-dotted border-theme-text-tertiary truncate">{col.label}</span>
                             </Tooltip>
                           ) : (
