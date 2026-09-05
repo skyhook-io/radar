@@ -33,7 +33,8 @@ export type MainView =
   | "capacity"
   | "checks"
   | "gitops"
-  | "applications";
+  | "applications"
+  | "cicd";
 
 export interface CommandItem {
   id: string;

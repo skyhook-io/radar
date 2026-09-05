@@ -26,6 +26,7 @@ import { CapacityView } from './components/capacity/CapacityView'
 import { AuditView } from './components/audit/AuditView'
 import { IssuesPane } from './components/issues/IssuesPane'
 import { GitOpsView } from './components/gitops/GitOpsView'
+import { CicdView } from './components/cicd/CicdView'
 import { ApplicationsView } from './components/applications/ApplicationsView'
 import { HelmReleaseDrawer } from './components/helm/HelmReleaseDrawer'
 import { PortForwardProvider, PortForwardIndicator, PortForwardPanel } from './components/portforward/PortForwardManager'
@@ -119,7 +120,7 @@ const FLEET_MODE_KINDS = new Set<NodeKind>([
 
 // Convert API resource name back to topology node ID prefix
 // Extended MainView type that includes traffic and cost
-type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications'
+type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications' | 'cicd'
 
 // Extract view from URL path
 function getViewFromPath(pathname: string): ExtendedMainView {
@@ -136,6 +137,7 @@ function getViewFromPath(pathname: string): ExtendedMainView {
   if (path === 'workload') return 'workload'
   if (path === 'checks' || path === 'audit') return 'checks'  // /audit = legacy → checks
   if (path === 'gitops') return 'gitops'
+  if (path === 'cicd') return 'cicd'
   if (path === 'applications') return 'applications'
   if (path === 'compare') return 'compare'
   if (path === 'issues') return 'issues'
@@ -254,6 +256,7 @@ function radarPageTitle(pathname: string, search = '', apiResources?: APIResourc
     if (pathSegments[1] === 'activity') return 'Capacity Activity'
   }
 
+  if (view === 'cicd') return 'CI/CD'
   if (view === 'home') return 'Overview'
   // Every other view's label is its id capitalized — getViewFromPath has already
   // normalized aliases (e.g. /audit → 'checks'), so no lookup table is needed.
@@ -602,6 +605,13 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // Owner-key (pathname + ?app) a non-URL-backed peek was opened on; see
   // navigateToResource and peekOwnerKey.
   const peekOwnerKeyRef = useRef<string | null>(null)
+  // True when the current peek skipped the small drawer and opened straight
+  // to fullscreen (e.g. a CICD table row) rather than being expanded from an
+  // already-open small drawer (Topology/Applications). "Go back" on a
+  // never-small peek should close it outright — there is no small state to
+  // collapse back to. Reset on every normal (small) open; the CICD-style
+  // opener flips it back to true right after.
+  const peekOpenedFullRef = useRef(false)
   const currentResourceKindSlug = normalizedResourcesKindSlug.toLowerCase()
   const currentResourceGroup = searchParams.get('apiGroup') ?? ''
   const selectedResourceKindSlug = selectedResource ? kindToPluralWithGroup(selectedResource.kind, selectedResource.group ?? '').toLowerCase() : ''
@@ -688,6 +698,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     // read (not the `location` closure) so the value is always current
     // regardless of this callback's memoization.
     peekOwnerKeyRef.current = peekOwnerKey(window.location.pathname, window.location.search)
+    peekOpenedFullRef.current = false
     const update = () => { setDrawerInitialTab(tab); setSelectedResource(res) }
     // Skip the cross-fade animation entirely on first open (no
     // `selectedResource`); otherwise route through
@@ -793,6 +804,34 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     }
   }, [searchParams, setSearchParams])
 
+  // Browser Back popping ?full=1 away is normally exactly right — it's the
+  // history entry a small-drawer expand pushed, so losing it "collapses" the
+  // peek back to the small drawer it came from (see handleCollapseFromExpanded's
+  // comment). A never-small peek (peekOpenedFullRef, e.g. a CI/CD table row —
+  // see its opener above) has no small-drawer state to collapse back to
+  // though, so the same Back would otherwise leave selectedResource set with
+  // no ?full=1, which renders as a compact drawer reappearing over the CI/CD
+  // table instead of actually closing. Close it outright in that case,
+  // mirroring what the collapse button already does via peekOpenedFullRef.
+  useEffect(() => {
+    if (navigationType !== NavigationType.Pop) return
+    if (peekOpenedFullRef.current && selectedResource && !drawerExpanded) {
+      setSelectedResource(null)
+    }
+  }, [navigationType, drawerExpanded, selectedResource])
+
+  // peekOpenedFullRef is otherwise cleared only at the top of navigateToResource
+  // (a fresh peek open) — every one of the many other setSelectedResource(null)
+  // call sites throughout this file (list-kind change, route mismatch, Escape,
+  // etc.) leaves it untouched. Left stale-true after one CI/CD fullscreen visit,
+  // it would misclassify a LATER, legitimately small-drawer-backed peek as
+  // never-small the next time either this effect or the collapse button (below)
+  // consults it — closing outright instead of collapsing. Reset it the instant
+  // there's no peek left to be stale about, regardless of which path closed it.
+  useEffect(() => {
+    if (!selectedResource) peekOpenedFullRef.current = false
+  }, [selectedResource])
+
   // Theme toggle for keyboard shortcut
   const { toggleTheme } = useTheme()
 
@@ -815,7 +854,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const VIEW_SHORTCUT_KEYS: Record<ExtendedMainView, string> = {
     home: 'g h', resources: 'g r', issues: 'g i', topology: 'g t',
     applications: 'g a', timeline: 'g l', traffic: 'g f', helm: 'g m',
-    gitops: 'g o', checks: 'g u', cost: 'g c', capacity: 'g p',
+    gitops: 'g o', checks: 'g u', cost: 'g c', capacity: 'g p', cicd: 'g d',
     // Non-rail views (reachable via deep links / actions, not the rail) get no
     // dedicated mnemonic — listed for exhaustiveness so the type stays total.
     workload: '', compare: '', helmCompare: '',
@@ -2295,6 +2334,33 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           />
         )}
 
+        {/* CI/CD view — Tekton PipelineRun fleet: stats, filters, and a row
+            click that opens straight into the expanded drawer (the DAG only
+            renders there, not the compact drawer — see PipelineDagView). */}
+        {mainView === 'cicd' && (
+          <CicdView
+            namespaces={namespaces}
+            onOpenPipelineRun={({ namespace, name }) => {
+              // Same navigateToResource-records-the-peek-owner mechanism GitOps
+              // uses above, so the header's "Go back"/collapse returns here
+              // instead of orphaning on /resources/pipelineruns.
+              navigateToResource({ kind: 'pipelineruns', namespace, name, group: 'tekton.dev' })
+              // Opened straight to fullscreen — there's no small-drawer state
+              // to collapse back to, so "Go back" should close outright.
+              peekOpenedFullRef.current = true
+              const params = new URLSearchParams(window.location.search)
+              params.set('full', '1')
+              setSearchParams(params)
+            }}
+            onOpenPipeline={({ namespace, name }) => {
+              // Small drawer, not straight-to-fullscreen: a Pipeline is a
+              // template (not progressing), so the compact view's summary is
+              // enough on open — the full DAG is still one expand away.
+              navigateToResource({ kind: 'pipelines', namespace, name, group: 'tekton.dev' })
+            }}
+          />
+        )}
+
         {/* Traffic view */}
         {mainView === 'traffic' && (
           <TrafficView namespaces={namespaces} />
@@ -2389,12 +2455,24 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           }}
           // On mobile there's no drawer to collapse back to, so the collapse/back
           // control closes the resource (returns to the list) instead.
-          onCollapse={isMobile ? closeDrawer : handleCollapseFromExpanded}
+          onCollapse={isMobile || peekOpenedFullRef.current ? closeDrawer : handleCollapseFromExpanded}
           onNavigateToResource={(resource) => {
+            const pluralKind = kindToPluralWithGroup(resource.kind, resource.group ?? '')
+            // A peek opened outside /resources (CICD, GitOps, Applications via
+            // navigateToResource) is not URL-backed — its backdrop is whatever
+            // page it was opened on, tracked only by peekOwnerKeyRef, not by
+            // pathname. Drilling further from it must stay state-only too:
+            // navigating to /resources/<kind> here would silently relocate the
+            // backdrop into the Resources page, so the peek's "Go back" would
+            // permanently land on the Resources list instead of back on the
+            // origin page, even many hops later.
+            if (!location.pathname.startsWith('/resources')) {
+              setSelectedResource({ ...resource, kind: pluralKind })
+              return
+            }
             // Drill into a related resource while expanded: stay in the over-list
             // overlay for the new resource (pushed, so Back walks resource→resource
             // still expanded). The backdrop list follows to the new kind.
-            const pluralKind = kindToPluralWithGroup(resource.kind, resource.group ?? '')
             setSelectedResource({ ...resource, kind: pluralKind })
             const p = new URLSearchParams()
             const ns = searchParams.get('namespaces')

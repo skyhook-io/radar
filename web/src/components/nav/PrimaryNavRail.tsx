@@ -8,6 +8,7 @@ import {
   AlertTriangle,
   Package,
   GitBranch,
+  Workflow,
   Boxes,
   Activity,
   Coins,
@@ -35,7 +36,8 @@ type NavRailView =
   | "applications"
   | "cost"
   | "capacity"
-  | "checks";
+  | "checks"
+  | "cicd";
 
 // Primary left nav rail for standalone (non-embedded) Radar.
 //
@@ -78,6 +80,7 @@ const NAV_ITEMS: NavItemDef[] = [
   { view: "traffic", icon: Activity, label: "Live Traffic" },
   { view: "helm", icon: Package, label: "Helm" },
   { view: "gitops", icon: GitBranch, label: "GitOps" },
+  { view: "cicd", icon: Workflow, label: "CI/CD" },
   { view: "checks", icon: ShieldCheck, label: "Checks" },
   { view: "capacity", icon: Gauge, label: "Capacity" },
   { view: "cost", icon: Coins, label: "Cost" },

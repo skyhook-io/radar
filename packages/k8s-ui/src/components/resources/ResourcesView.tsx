@@ -139,6 +139,7 @@ import {
   SEVERITY_DOT_COLOR,
   healthColors,
 } from './resource-utils'
+import { buildPipelineTaskGraph, getTektonPipelineRunStatus, getTektonTaskRunStatus, tektonRefName } from './resource-utils-tekton'
 import { getGenericResourceStatus } from './generic-status'
 import { getIstioGatewayServerCount, getIstioGatewaySelectorString } from './resource-utils-istio'
 import {
@@ -227,6 +228,7 @@ export const SKIP_FILTER_COLUMNS = new Set([
   'lastUpdated', 'chart', 'events', 'repo',
   'generators', 'applications', 'destinations', 'sources', 'budget', 'healthy', 'allowed',
   'secrets', 'subjects', 'role', 'entrypoint', 'templates',
+  'tasks', 'pipeline', 'task',
 ])
 
 // Namespace/node cardinality scales with cluster size, not kind enum size;
@@ -549,6 +551,28 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'lastRun', label: 'Last Run', width: 'w-28', hideOnMobile: true },
     { key: 'template', label: 'Template', width: 'w-40', hideOnMobile: true },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  pipelines: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-48' },
+    { key: 'tasks', label: 'Tasks', width: 'w-20', tooltip: 'Number of declared tasks' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  pipelineruns: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-48' },
+    { key: 'status', label: 'Status', width: 'w-32' },
+    { key: 'pipeline', label: 'Pipeline', width: 'w-40', hideOnMobile: true },
+    { key: 'duration', label: 'Duration', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  taskruns: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-48' },
+    { key: 'status', label: 'Status', width: 'w-32' },
+    { key: 'task', label: 'Task', width: 'w-40', hideOnMobile: true },
+    { key: 'duration', label: 'Duration', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   certificates: [
@@ -2769,6 +2793,9 @@ const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   containersources: ['sources.knative.dev'],
   pingsources: ['sources.knative.dev'],
   sinkbindings: ['sources.knative.dev'],
+  pipelines: ['tekton.dev'],
+  pipelineruns: ['tekton.dev'],
+  taskruns: ['tekton.dev'],
   ingressroutes: ['traefik.io', 'traefik.containo.us'],
   ingressroutetcps: ['traefik.io', 'traefik.containo.us'],
   ingressrouteudps: ['traefik.io', 'traefik.containo.us'],
@@ -6819,6 +6846,12 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       return <WorkflowCell resource={resource} column={column} />
     case 'cronworkflows':
       return <CronWorkflowCell resource={resource} column={column} />
+    case 'pipelines':
+      return <PipelineCell resource={resource} column={column} />
+    case 'pipelineruns':
+      return <PipelineRunCell resource={resource} column={column} />
+    case 'taskruns':
+      return <TaskRunCell resource={resource} column={column} />
     case 'certificates':
       return <CertificateCell resource={resource} column={column} />
     case 'persistentvolumes':
@@ -8576,6 +8609,58 @@ function CronWorkflowCell({ resource, column }: { resource: any; column: string 
   }
 }
 
+function PipelineCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'tasks':
+      // buildPipelineTaskGraph, not a bare spec.tasks.length, so finally
+      // tasks count toward the total — Tekton runs them and includes their
+      // outcome in the PipelineRun result same as any regular task.
+      return <span className="text-sm text-theme-text-secondary">{buildPipelineTaskGraph(resource.spec).length}</span>
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
+function tektonDuration(resource: any): number | null {
+  const start = resource.status?.startTime
+  if (!start) return null
+  const end = resource.status?.completionTime
+  return (end ? new Date(end).getTime() : Date.now()) - new Date(start).getTime()
+}
+
+function PipelineRunCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'status': {
+      const status = getTektonPipelineRunStatus(resource)
+      return <span className={clsx('badge', status.color)}>{status.text}</span>
+    }
+    case 'pipeline':
+      return <span className="text-sm text-theme-text-secondary">{tektonRefName(resource.spec?.pipelineRef)}</span>
+    case 'duration': {
+      const ms = tektonDuration(resource)
+      return <span className="text-sm text-theme-text-secondary">{ms !== null ? formatDuration(ms) : '-'}</span>
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
+function TaskRunCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'status': {
+      const status = getTektonTaskRunStatus(resource)
+      return <span className={clsx('badge', status.color)}>{status.text}</span>
+    }
+    case 'task':
+      return <span className="text-sm text-theme-text-secondary">{tektonRefName(resource.spec?.taskRef)}</span>
+    case 'duration': {
+      const ms = tektonDuration(resource)
+      return <span className="text-sm text-theme-text-secondary">{ms !== null ? formatDuration(ms) : '-'}</span>
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
 
 function PersistentVolumeCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {

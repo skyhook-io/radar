@@ -87,9 +87,11 @@ import { isOpenCostWorkloadKind } from '../cost/kinds'
 import { useResourceAudit, useResourceIssues, useResources, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
 import { AuditAlerts, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows } from '@skyhook-io/k8s-ui'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
+import { TaskRunLogsTab } from '../logs/TaskRunLogsTab'
 import { ScheduledWorkloadLogsViewer } from '../logs/ScheduledWorkloadLogsViewer'
 import { LogsViewer } from '../logs/LogsViewer'
 import { BatchExecutionFullscreen } from '../execution/BatchExecutionView'
+import { TektonPipelineFullscreen } from '../execution/TektonPipelineFullscreen'
 import { workloadRunTimelineEvents } from '../execution/batch-timeline'
 import {
   useCanUpdateSecrets,
@@ -122,6 +124,7 @@ import { NamespaceRenderer } from '../resources/renderers/NamespaceRenderer'
 import { HPARenderer } from '../resources/renderers/HPARenderer'
 import { PVCRenderer } from '../resources/renderers/PVCRenderer'
 import { RolloutRenderer } from '../resources/renderers/RolloutRenderer'
+import { TaskRunRenderer } from '../resources/renderers/TaskRunRenderer'
 import { KyvernoPolicyCoverage } from '../resources/renderers/KyvernoPolicyCoverage'
 import { KyvernoPolicyQueued } from '../resources/renderers/KyvernoPolicyQueued'
 import { CNPGObjectStoreRenderer } from '../resources/renderers/CNPGObjectStoreRenderer'
@@ -167,6 +170,7 @@ const rendererOverrides: RendererOverrides = {
   HPARenderer,
   PVCRenderer,
   RolloutRenderer,
+  TaskRunRenderer,
   KyvernoPolicyCoverage,
   KyvernoPolicyQueued,
   CNPGObjectStoreRenderer,
@@ -1199,6 +1203,14 @@ export function WorkloadView({
               onSwitchToTimeline={() => handleTabChange('timeline')}
               onNavigateToResource={rest.onNavigateToResource}
             />
+          ) : (k === 'Pipeline' || k === 'PipelineRun') && res ? (
+            <TektonPipelineFullscreen
+              kind={apiKind}
+              namespace={ns}
+              name={n}
+              resource={res}
+              onNavigateToResource={rest.onNavigateToResource}
+            />
           ) : null
         }
         renderRelatedYaml={(ref) => (
@@ -1602,6 +1614,14 @@ function LogsTabContent({
         />
       </div>
     )
+  }
+
+  // Tekton TaskRun — exactly one pod, one container per step, running
+  // sequentially. A pod-picker (MultiPodLogsTab) or single-container-at-a-
+  // time selector (PodLogsTab's LogsViewer) both misrepresent that shape;
+  // this combines every step's container logs into one sequential view.
+  if (kind === 'TaskRun') {
+    return <TaskRunLogsTab namespace={namespace} resource={resource} />
   }
 
   // Individual Pod — use LogsViewer with container list from resource data

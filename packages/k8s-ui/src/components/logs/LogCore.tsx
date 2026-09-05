@@ -37,6 +37,8 @@ interface LogCoreProps {
   onClear?: () => void
   toolbarExtra?: ToolbarExtraRenderer
   showPodName?: boolean
+  /** Like showPodName, but labels each line with its source container instead — for a single-pod, multi-container combined view (e.g. a Tekton TaskRun's steps). */
+  showContainerName?: boolean
   emptyMessage?: string
   emptyCommand?: string | null
   errorMessage?: string | null
@@ -127,6 +129,7 @@ export function LogCore({
   onClear,
   toolbarExtra,
   showPodName = false,
+  showContainerName = false,
   emptyMessage = 'No logs available',
   emptyCommand,
   errorMessage,
@@ -836,6 +839,7 @@ export function LogCore({
                 searchIsRegex={search.isRegex}
                 searchIsCaseSensitive={search.isCaseSensitive}
                 showPodName={showPodName}
+                showContainerName={showContainerName}
                 showTimestamp={showTimestamps}
                 tsFormat={tsFormat}
                 ansiEnabled={ansiEnabled}
@@ -891,6 +895,7 @@ interface LogLineProps {
   searchIsRegex: boolean
   searchIsCaseSensitive: boolean
   showPodName: boolean
+  showContainerName: boolean
   showTimestamp: boolean
   tsFormat: TimestampFormat
   ansiEnabled: boolean
@@ -912,6 +917,7 @@ function LogLine({
   searchIsRegex,
   searchIsCaseSensitive,
   showPodName,
+  showContainerName,
   showTimestamp,
   tsFormat,
   ansiEnabled,
@@ -992,6 +998,14 @@ function LogLine({
           [{entry.pod.split('-').slice(-2).join('-')}]
         </span>
       )}
+      {showContainerName && entry.container && (
+        <span
+          className={`${palette.textTertiary} select-none pr-2 whitespace-nowrap min-w-[140px] max-w-[260px] truncate`}
+          title={entry.container}
+        >
+          [{entry.container}]
+        </span>
+      )}
       <span className="flex-1 min-w-0">{contentElement}</span>
       <button
         onClick={handleCopy}
@@ -1010,6 +1024,7 @@ interface LogGroupItemProps {
   searchIsRegex: boolean
   searchIsCaseSensitive: boolean
   showPodName: boolean
+  showContainerName: boolean
   showTimestamp: boolean
   tsFormat: TimestampFormat
   ansiEnabled: boolean
