@@ -1044,7 +1044,9 @@ func extractTimelineHistoricalEvents(clusterContext, kind, apiVersion, namespace
 			}
 		}
 
-	default:
+	}
+
+	if len(events) == 0 {
 		if u, ok := obj.(*unstructured.Unstructured); ok {
 			ct := u.GetCreationTimestamp()
 			if !ct.IsZero() {
