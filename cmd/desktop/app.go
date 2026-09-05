@@ -231,4 +231,7 @@ func (a *DesktopApp) shutdown(ctx context.Context) {
 	stopNativeMouseMonitor()
 	log.Println("Desktop app shutting down...")
 	app.Shutdown(a.srv)
+	// Last, so a teardown that hangs or is killed still reads as an unclean
+	// exit — that is precisely the failure worth knowing about.
+	markSessionEnd()
 }

@@ -96,6 +96,7 @@ func Relaunch() error {
 		return fmt.Errorf("relaunch: %w", err)
 	}
 
+	runBeforeExit()
 	os.Exit(0)
 	return nil // unreachable
 }

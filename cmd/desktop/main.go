@@ -263,6 +263,12 @@ func main() {
 	// hidden window there is only recoverable by killing the process.
 	hideOnClose := goruntime.GOOS == "darwin"
 
+	// Record this run and report how the last one ended. Claimed here rather
+	// than at startup so the checks above, which exit on bad configuration,
+	// cannot strand a marker and have the next launch report a phantom crash.
+	markSessionStart()
+	updater.OnBeforeExit(markSessionEnd)
+
 	// Run Wails application
 	err = wails.Run(&options.App{
 		Title:            windowTitle,
