@@ -73,6 +73,15 @@ export function canContinueInvestigation(
   );
 }
 
+export function canInvestigateFurther(run: RunSummary, gone = false): boolean {
+  return (
+    !gone &&
+    run.trigger === "background" &&
+    run.status === "done" &&
+    !!run.issueId
+  );
+}
+
 export function InvestigationView({
   run,
   agentLabel,
@@ -685,9 +694,39 @@ export function InvestigationView({
           </div>
         ) : !canContinue ? (
           <div className="rounded-lg border border-theme-border bg-theme-base px-3 py-2 text-xs text-theme-text-secondary">
-            {run.trigger === "background"
-              ? "Automatic investigation · read-only. Start a new investigation on this resource to continue digging."
-              : "This investigation is read-only."}
+            {run.trigger === "background" ? (
+              <>
+                <p>Automatic investigation · read-only.</p>
+                {canInvestigateFurther(run, gone) ? (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <button
+                      className="btn-brand px-3 py-2 text-xs"
+                      onClick={() =>
+                        openInvestigation({
+                          kind,
+                          namespace,
+                          name,
+                          issueId: run.issueId,
+                        })
+                      }
+                    >
+                      Investigate further
+                    </button>
+                    <span>
+                      Re-checks current state, including recent automatic
+                      findings when available.
+                    </span>
+                  </div>
+                ) : (
+                  <p>
+                    Start a new investigation on this resource to continue
+                    digging.
+                  </p>
+                )}
+              </>
+            ) : (
+              "This investigation is read-only."
+            )}
           </div>
         ) : (
           <div className="flex items-end gap-2">

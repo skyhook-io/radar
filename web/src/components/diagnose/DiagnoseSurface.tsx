@@ -527,7 +527,7 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
           {headerRun &&
             canStartNewInvestigation(d.view, headerRun, d.needsConsent) && (
               <Tooltip
-                content="New investigation on this resource"
+                content="Start fresh — ignore earlier findings"
                 position="bottom"
               >
                 <button
@@ -541,7 +541,7 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
                     })
                   }
                   className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
-                  aria-label="New investigation on this resource"
+                  aria-label="Start fresh — ignore earlier findings"
                 >
                   <Plus className="h-4 w-4" />
                 </button>

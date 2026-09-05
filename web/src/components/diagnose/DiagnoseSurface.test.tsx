@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { canCopyRunLink, canStartNewInvestigation } from "./DiagnoseSurface";
 import {
   canContinueInvestigation,
+  canInvestigateFurther,
   canStopInvestigation,
 } from "./InvestigationView";
 import type { RunSummary } from "../../api/diagnose";
@@ -179,5 +180,45 @@ describe("canCopyRunLink", () => {
 
   it("treats an empty hosted URL as unavailable", () => {
     expect(canCopyRunLink({ ...run("done"), radarUrl: "" })).toBe(false);
+  });
+});
+
+describe("canInvestigateFurther", () => {
+  it("offers a context-preserving next step on a completed automatic investigation", () => {
+    expect(
+      canInvestigateFurther({
+        ...run("done"),
+        trigger: "background",
+        issueId: "issue-1",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not promise findings for missing, unfinished, stale or human investigations", () => {
+    expect(canInvestigateFurther(run("done"))).toBe(false);
+    expect(
+      canInvestigateFurther({ ...run("done"), trigger: "background" }),
+    ).toBe(false);
+    for (const status of [
+      "running",
+      "stopping",
+      "error",
+      "stopped",
+      "stale",
+    ] as const) {
+      expect(
+        canInvestigateFurther({
+          ...run(status),
+          trigger: "background",
+          issueId: "issue-1",
+        }),
+      ).toBe(false);
+    }
+    expect(
+      canInvestigateFurther(
+        { ...run("done"), trigger: "background", issueId: "issue-1" },
+        true,
+      ),
+    ).toBe(false);
   });
 });
