@@ -8,6 +8,9 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -37,8 +40,22 @@ func setupFakeCacheForDiagnoseTests(t *testing.T) {
 				Selector: &metav1.LabelSelector{MatchLabels: selector},
 				Template: corev1.PodTemplateSpec{
 					ObjectMeta: metav1.ObjectMeta{Labels: selector},
+					Spec: corev1.PodSpec{Containers: []corev1.Container{{
+						Name: "cart",
+						Env: []corev1.EnvVar{{
+							Name: "CART_MODE",
+							ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
+								LocalObjectReference: corev1.LocalObjectReference{Name: "cart-config"},
+								Key:                  "mode",
+							}},
+						}},
+					}}},
 				},
 			},
+		},
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "cart-config", Namespace: ns},
+			Data:       map[string]string{"mode": "production"},
 		},
 		&corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
@@ -109,6 +126,8 @@ func TestNormalizeDiagnoseKind(t *testing.T) {
 		{"StatefulSets", "statefulsets"},
 		{"daemonset", "daemonsets"},
 		{"DaemonSet", "daemonsets"},
+		{"rollout", "rollouts"},
+		{"Rollouts", "rollouts"},
 		{"replicaset", ""},      // not in scope for diagnose
 		{"job", ""},             // not in scope
 		{"service", ""},         // not in scope
@@ -362,6 +381,77 @@ func TestHandleDiagnose_DeploymentResolvesPods(t *testing.T) {
 	}
 }
 
+func TestHandleDiagnose_DeploymentGroupIsCanonicalAndExact(t *testing.T) {
+	setupFakeCacheForDiagnoseTests(t)
+	ctx := withClusterAdmin(t, "admin")
+
+	mixedCase := testDiagnoseInput("deployment", "alpha", "cart")
+	mixedCase.Group = "ApPs"
+	result, _, err := handleDiagnose(ctx, nil, mixedCase)
+	if err != nil {
+		t.Fatalf("mixed-case canonical apps group: %v", err)
+	}
+	if body := extractText(t, result); !strings.Contains(body, `"name":"cart"`) {
+		t.Fatalf("mixed-case apps group did not resolve the Deployment: %s", body)
+	}
+
+	// A same-named built-in exists in the typed cache. Supplying a different
+	// group must reject the request before any group-blind typed lookup can
+	// accidentally return that Deployment.
+	wrongGroup := testDiagnoseInput("deployment", "alpha", "cart")
+	wrongGroup.Group = "workloads.example.io"
+	if _, _, err := handleDiagnose(ctx, nil, wrongGroup); err == nil || !strings.Contains(err.Error(), `expected "apps"`) {
+		t.Fatalf("wrong Deployment group = %v, want an exact-group rejection", err)
+	}
+}
+
+func TestHandleDiagnose_RolloutGroupDefaultsAndCanonicalizes(t *testing.T) {
+	setupFakeCacheForDiagnoseTests(t)
+	rolloutGVR := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "rollouts"}
+	rollout := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1",
+		"kind":       "Rollout",
+		"metadata": map[string]any{
+			"name": "cart", "namespace": "alpha",
+		},
+		"spec": map[string]any{
+			"selector": map[string]any{"matchLabels": map[string]any{"app": "cart"}},
+		},
+	}}
+	setupMCPDynamicResource(t, rolloutGVR, "RolloutList", k8s.APIResource{
+		Group: "argoproj.io", Version: "v1alpha1", Kind: "Rollout",
+		Name: "rollouts", Namespaced: true, Verbs: []string{"get", "list", "watch"},
+	}, rollout)
+	ctx := withClusterAdmin(t, "admin")
+
+	for _, tc := range []struct {
+		name  string
+		group string
+	}{
+		{name: "omitted group defaults to argoproj.io"},
+		{name: "explicit mixed-case group canonicalizes", group: "ArGoPrOj.Io"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := testDiagnoseInput("rollout", "alpha", "cart")
+			input.Group = tc.group
+			result, _, err := handleDiagnose(ctx, nil, input)
+			if err != nil {
+				t.Fatalf("handleDiagnose: %v", err)
+			}
+			body := extractText(t, result)
+			if !strings.Contains(body, `"apiVersion":"argoproj.io/v1alpha1"`) || !strings.Contains(body, `"kind":"Rollout"`) {
+				t.Fatalf("diagnose resolved something other than the exact Rollout target: %s", body)
+			}
+		})
+	}
+
+	wrongGroup := testDiagnoseInput("rollout", "alpha", "cart")
+	wrongGroup.Group = "apps"
+	if _, _, err := handleDiagnose(ctx, nil, wrongGroup); err == nil || !strings.Contains(err.Error(), `expected "argoproj.io"`) {
+		t.Fatalf("wrong Rollout group = %v, want an exact-group rejection", err)
+	}
+}
+
 func TestHandleDiagnose_DeploymentNotFound(t *testing.T) {
 	setupFakeCacheForDiagnoseTests(t)
 	ctx := withClusterAdmin(t, "admin")
@@ -415,7 +505,7 @@ func TestStartupBlockersForWorkload_ScopesToWorkload(t *testing.T) {
 
 	// pods arg = cart's own pods (none created). The RS attaches via the
 	// ReplicaSet-of-Deployment match, not via pod-name.
-	out := startupBlockersForWorkload(k8s.GetResourceCache(), "deployments", "alpha", "cart", nil)
+	out := startupBlockersForWorkload(k8s.GetResourceCache(), "deployments", "apps", "alpha", "cart", nil)
 
 	var sawRS bool
 	for _, b := range out {
@@ -428,6 +518,81 @@ func TestStartupBlockersForWorkload_ScopesToWorkload(t *testing.T) {
 	}
 	if !sawRS {
 		t.Errorf("the diagnosed Deployment's blocked ReplicaSet should attach, got %+v", out)
+	}
+}
+
+func TestStartupBlockersForWorkload_AttributesReplicaSetToArgoRollout(t *testing.T) {
+	defer k8s.ResetTestState()
+	replicaSet := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "checkout-abc123", Namespace: "alpha"},
+		Spec:       appsv1.ReplicaSetSpec{Replicas: ptrInt32(2)},
+		Status:     appsv1.ReplicaSetStatus{Replicas: 0},
+	}
+	event := &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{Name: "rollout-replicaset-denial", Namespace: "alpha"},
+		InvolvedObject: corev1.ObjectReference{
+			APIVersion: "apps/v1", Kind: "ReplicaSet", Namespace: "alpha", Name: "checkout-abc123",
+		},
+		Reason: "FailedCreate", Type: corev1.EventTypeWarning,
+		Message:       `pods "checkout" is forbidden: exceeded quota: rollout-quota`,
+		LastTimestamp: metav1.Now(),
+	}
+	if err := k8s.InitTestResourceCache(fake.NewClientset(replicaSet, event)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+
+	argo := startupBlockersForWorkload(k8s.GetResourceCache(), "rollouts", "argoproj.io", "alpha", "checkout", nil)
+	if len(argo) != 1 || argo[0].Kind != "ReplicaSet" || argo[0].Name != "checkout-abc123" {
+		t.Fatalf("Argo Rollout blockers = %+v, want its blocked apps/v1 ReplicaSet", argo)
+	}
+
+	wrongGroup := startupBlockersForWorkload(k8s.GetResourceCache(), "rollouts", "delivery.example.io", "alpha", "checkout", nil)
+	if len(wrongGroup) != 0 {
+		t.Fatalf("non-Argo Rollout blockers = %+v, want no cross-group ReplicaSet attribution", wrongGroup)
+	}
+}
+
+func TestStartupBlockersForWorkload_RequiresExactAPIGroup(t *testing.T) {
+	defer k8s.ResetTestState()
+	replicas := int32(1)
+	deployment := &appsv1.Deployment{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"},
+		ObjectMeta: metav1.ObjectMeta{Name: "cart", Namespace: "alpha"},
+		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+	}
+	events := []runtime.Object{
+		&corev1.Event{
+			ObjectMeta: metav1.ObjectMeta{Name: "apps-denial", Namespace: "alpha"},
+			InvolvedObject: corev1.ObjectReference{
+				APIVersion: "apps/v1", Kind: "Deployment", Namespace: "alpha", Name: "cart",
+			},
+			Reason: "FailedCreate", Type: corev1.EventTypeWarning,
+			Message:       `pods "apps" is forbidden: exceeded quota: apps-quota`,
+			LastTimestamp: metav1.Now(),
+		},
+		&corev1.Event{
+			ObjectMeta: metav1.ObjectMeta{Name: "custom-denial", Namespace: "alpha"},
+			InvolvedObject: corev1.ObjectReference{
+				APIVersion: "workloads.example.io/v1", Kind: "Deployment", Namespace: "alpha", Name: "cart",
+			},
+			Reason: "FailedCreate", Type: corev1.EventTypeWarning,
+			Message:       `pods "custom" is forbidden: exceeded quota: custom-quota`,
+			LastTimestamp: metav1.Now(),
+		},
+	}
+	objects := []runtime.Object{deployment}
+	objects = append(objects, events...)
+	if err := k8s.InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+
+	apps := startupBlockersForWorkload(k8s.GetResourceCache(), "deployments", "apps", "alpha", "cart", nil)
+	if len(apps) != 1 || !strings.Contains(apps[0].Message, "apps-quota") {
+		t.Fatalf("apps Deployment blockers = %+v, want only apps-group evidence", apps)
+	}
+	custom := startupBlockersForWorkload(k8s.GetResourceCache(), "deployments", "workloads.example.io", "alpha", "cart", nil)
+	if len(custom) != 1 || !strings.Contains(custom[0].Message, "custom-quota") {
+		t.Fatalf("custom Deployment blockers = %+v, want only custom-group evidence", custom)
 	}
 }
 

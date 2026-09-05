@@ -593,19 +593,12 @@ func summarizeConfigMap(cm *corev1.ConfigMap) *ResourceSummary {
 }
 
 func summarizeSecret(secret *corev1.Secret) *ResourceSummary {
-	keys := make([]string, 0, len(secret.Data)+len(secret.StringData))
-	for k := range secret.Data {
-		keys = append(keys, k)
-	}
-	for k := range secret.StringData {
-		keys = append(keys, k)
-	}
 	return &ResourceSummary{
 		Kind:      "Secret",
 		Name:      secret.Name,
 		Namespace: secret.Namespace,
 		Type:      string(secret.Type),
-		Keys:      keys,
+		Keys:      secretKeyNames(secret),
 		Age:       age(secret.CreationTimestamp.Time),
 	}
 }

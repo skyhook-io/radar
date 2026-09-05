@@ -18,6 +18,7 @@ import (
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/helm"
+	"github.com/skyhook-io/radar/internal/investigationrefs"
 	"github.com/skyhook-io/radar/internal/k8s"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
@@ -447,8 +448,14 @@ func CreateServer(cfg AppConfig) *server.Server {
 	}
 
 	if cfg.MCPEnabled {
+		// The same in-memory registry must back both ends of Radar's private
+		// evidence protocol: DiagnoseStream owns active turn scopes, while the MCP
+		// handler records exactly what Radar returned inside those scopes.
+		evidenceRefs := investigationrefs.NewRegistry()
+		serverCfg.InvestigationRefs = evidenceRefs
 		serverCfg.MCPHandler = mcppkg.NewHandler()
 		serverCfg.MCPReadOnlyHandler = mcppkg.NewReadOnlyHandler()
+		serverCfg.MCPInvestigationHandler = mcppkg.NewInvestigationHandler(evidenceRefs)
 	}
 
 	return server.New(serverCfg)

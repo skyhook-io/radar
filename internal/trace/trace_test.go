@@ -391,6 +391,21 @@ func TestBuildTrace_CacheNotReadyReturnsUnknown(t *testing.T) {
 	if !strings.Contains(trace.Reason, "cache syncing") {
 		t.Errorf("reason=%q, want cache-syncing message", trace.Reason)
 	}
+	for _, tt := range []struct {
+		kind, group string
+	}{
+		{kind: "Ingress", group: "networking.k8s.io"},
+		{kind: "HTTPRoute", group: "gateway.networking.k8s.io"},
+		{kind: "Gateway", group: "gateway.networking.k8s.io"},
+	} {
+		got, err := BuildTraceWithOptions(context.Background(), deps, tt.kind, "prod", "entry", Options{})
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", tt.kind, err)
+		}
+		if got.Subject.Kind != tt.kind || got.Subject.Group != tt.group {
+			t.Errorf("%s cache-cold subject = %+v, want group %q", tt.kind, got.Subject, tt.group)
+		}
+	}
 }
 
 func TestBuildTrace_UnknownKindReturnsUnknown(t *testing.T) {

@@ -2436,7 +2436,25 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           below the header and right of the nav rail, sharing the frame with the
           drawers above. Docked = right slot (pushes content via contentGutter);
           maximized = fills the frame. */}
-      {diagnoseOpen && <DiagnoseSurface topInset={chromeless ? 0 : APP_HEADER_HEIGHT} />}
+      {diagnoseOpen && (
+        <DiagnoseSurface
+          topInset={chromeless ? 0 : APP_HEADER_HEIGHT}
+          onOpenResource={(ref) => {
+            const resource: SelectedResource = {
+              kind: ref.kind,
+              namespace: ref.namespace ?? '',
+              name: ref.name,
+              group: ref.group,
+            }
+            const path = relatedResourcePath(resource)
+            if (path.startsWith('/workload/')) {
+              navigate(path)
+              return
+            }
+            navigateFromIssue(resource)
+          }}
+        />
+      )}
 
       {/* Port Forward floating panel (indicator lives in header) */}
       <PortForwardPanel />

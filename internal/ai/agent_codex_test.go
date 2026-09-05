@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -11,18 +12,20 @@ import (
 // resumable session id, mcp_tool_call items drive running/done steps (bare tool
 // name, no prefix to strip), and the final agent_message is the report body.
 func TestCodexParseStream_FormatPin(t *testing.T) {
+	ref := testEvidenceRef('a', 'b')
 	stream := strings.Join([]string{
 		`{"type":"thread.started","thread_id":"019eef06-e99b-70f1-a25f-aba70f3ea57e"}`,
 		`{"type":"turn.started"}`,
 		`{"type":"item.completed","item":{"id":"r0","type":"reasoning","text":"checking pods"}}`,
 		`{"type":"item.started","item":{"id":"item_0","type":"mcp_tool_call","server":"radar","tool":"diagnose","arguments":{"name":"x"},"status":"in_progress"}}`,
-		`{"type":"item.completed","item":{"id":"item_0","type":"mcp_tool_call","server":"radar","tool":"diagnose","arguments":{"name":"x"},"result":{"content":[{"type":"text","text":"crashloop detail"}]},"status":"completed"}}`,
+		`{"type":"item.completed","item":{"id":"item_0","type":"mcp_tool_call","server":"radar","tool":"diagnose","arguments":{"name":"x"},"result":{"content":[{"type":"text","text":"[[radar:evidence-ref=` + ref + `]]\n"},{"type":"text","text":"crashloop detail"}]},"status":"completed"}}`,
 		"{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"bad tag.\\n\\n```json\\n{\\\"root_cause\\\":\\\"bad tag\\\"}\\n```\"}}",
 		`{"type":"turn.completed","usage":{"input_tokens":41789,"output_tokens":23}}`,
 	}, "\n")
 
 	var running, done bool
-	var thinking, doneResult, runningSummary string
+	var doneIsError *bool
+	var thinking, doneResult, doneEvidenceRef, runningSummary string
 	agent := &codexAgent{bin: "codex"}
 	diag := agent.parseStream(strings.NewReader(stream), func(ev StreamEvent) {
 		switch ev.Type {
@@ -42,6 +45,8 @@ func TestCodexParseStream_FormatPin(t *testing.T) {
 			case "done":
 				done = true
 				doneResult = ev.Step.Result
+				doneEvidenceRef = ev.Step.EvidenceRef
+				doneIsError = ev.Step.IsError
 			}
 		}
 	})
@@ -58,11 +63,83 @@ func TestCodexParseStream_FormatPin(t *testing.T) {
 	if !strings.Contains(doneResult, "crashloop detail") {
 		t.Errorf("expected tool result preview on done step, got %q", doneResult)
 	}
+	if doneEvidenceRef != ref || strings.Contains(doneResult, "radar:evidence-ref") {
+		t.Errorf("marker extraction result=%q ref=%q", doneResult, doneEvidenceRef)
+	}
+	if doneIsError == nil || *doneIsError {
+		t.Errorf("completed Codex tool result should be confirmed success, got %v", doneIsError)
+	}
 	if diag.RootCause != "bad tag" {
 		t.Errorf("root cause not parsed from agent_message: %q", diag.RootCause)
 	}
 	if diag.SessionID != "019eef06-e99b-70f1-a25f-aba70f3ea57e" {
 		t.Errorf("session id (thread_id) not captured: %q", diag.SessionID)
+	}
+}
+
+func TestCodexParseStreamPreservesUncappedProducerResultForValidation(t *testing.T) {
+	ref := testEvidenceRef('a', 'b')
+	payload := strings.Repeat("x", maxToolPayload+500)
+	marked, err := json.Marshal(
+		investigationEvidenceMarkerPrefix + ref + investigationEvidenceMarkerSuffix + payload,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := `{"type":"item.completed","item":{"id":"large","type":"mcp_tool_call","tool":"get_resource","status":"completed","result":{"content":[{"type":"text","text":` + string(marked) + `}]}}}`
+
+	var step *StepInfo
+	agent := &codexAgent{bin: "codex"}
+	agent.parseStream(strings.NewReader(stream), func(event StreamEvent) {
+		if event.Step != nil {
+			step = event.Step
+		}
+	})
+	if step == nil || !step.Truncated || step.EvidenceRef != ref {
+		t.Fatalf("oversized Codex result step = %+v", step)
+	}
+	if step.producerResult == nil || *step.producerResult != payload {
+		t.Fatal("Codex adapter did not retain the exact uncapped producer result for validation")
+	}
+	wantResult, _ := capPayload(payload)
+	if step.Result != wantResult {
+		t.Fatal("Codex adapter retained an unexpected capped result")
+	}
+}
+
+func TestCodexToolResultErrorState(t *testing.T) {
+	stream := strings.Join([]string{
+		`{"type":"item.completed","item":{"id":"ok","type":"mcp_tool_call","tool":"get_resource","status":"completed","result":{"content":[{"type":"text","text":"ready"}]}}}`,
+		`{"type":"item.completed","item":{"id":"bad","type":"mcp_tool_call","tool":"get_resource","status":"failed","error":{"message":"permission denied"}}}`,
+		`{"type":"item.completed","item":{"id":"marked-bad","type":"mcp_tool_call","tool":"get_resource","status":"failed","result":{"content":[{"type":"text","text":"[[radar:evidence-ref=` + testEvidenceRef('a', 'b') + `]]\n"},{"type":"text","text":"producer denied"}]},"error":{"message":"host repeated producer denied"}}}`,
+		`{"type":"item.completed","item":{"id":"unknown","type":"mcp_tool_call","tool":"get_resource","status":"in_progress"}}`,
+	}, "\n")
+
+	type observed struct {
+		isError *bool
+		result  string
+	}
+	got := map[string]observed{}
+	agent := &codexAgent{bin: "codex"}
+	agent.parseStream(strings.NewReader(stream), func(ev StreamEvent) {
+		if ev.Step != nil {
+			got[ev.Step.ID] = observed{isError: ev.Step.IsError, result: ev.Step.Result}
+		}
+	})
+	if got["ok"].isError == nil || *got["ok"].isError {
+		t.Errorf("completed status = %v, want confirmed false", got["ok"].isError)
+	}
+	if got["bad"].isError == nil || !*got["bad"].isError {
+		t.Errorf("failed status = %v, want confirmed true", got["bad"].isError)
+	}
+	if got["bad"].result != "permission denied" {
+		t.Errorf("failed result = %q, want the producer's error message", got["bad"].result)
+	}
+	if got["marked-bad"].isError == nil || !*got["marked-bad"].isError || got["marked-bad"].result != "producer denied" {
+		t.Errorf("marked failed result = %+v, want exact producer payload and confirmed error", got["marked-bad"])
+	}
+	if got["unknown"].isError != nil {
+		t.Errorf("non-terminal status = %v, want unknown", got["unknown"].isError)
 	}
 }
 

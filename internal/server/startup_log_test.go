@@ -34,7 +34,7 @@ func TestFormatStartupLogSummaryLoopback(t *testing.T) {
 		"Cluster:     kind-radar",
 		"Kubeconfig:  /tmp/kubeconfig · 24 contexts · 3 exec plugins",
 		"MCP:         enabled at /mcp",
-		"AI diagnose: enabled via claude",
+		"AI investigations: enabled via claude",
 		"Remote:      use --listen-address=0.0.0.0 with authentication and network controls",
 	} {
 		if !strings.Contains(got, want) {

@@ -107,7 +107,7 @@ interface SettingsDialogProps {
 //     the owner-gated footer and applied after restart.
 //   • Live integrations (Prometheus, cost source, Argo CD) — their own Apply/Connect endpoints
 //     re-point the running server; effect immediately, NOT part of footer dirty.
-//   • Self-saving preferences (cost currency, AI diagnose) — applied immediately.
+//   • Self-saving preferences (cost currency, AI investigations) — applied immediately.
 // Integration fields (prometheusUrl, argoCdUrl, argoCdInsecureTls) apply through
 // their own controls and are excluded here. Every field is normalized so
 // unset≡default doesn't read as a change.
@@ -139,7 +139,7 @@ export function SettingsDialog({
   const { data: versionInfo } = useVersionCheck()
   // Radar configuration (kubeconfig, port, integrations…) is host-level and
   // affects every user of this instance, so it's gated to owners. Personal
-  // sections (My permissions, AI diagnose) stay usable by everyone. Non-Cloud
+  // sections (My permissions, AI investigations) stay usable by everyone. Non-Cloud
   // callers (OSS, OIDC, kubectl plugin) have no role and pass — single-user
   // laptops are never locked out of their own config. Backend enforces this too.
   const { canAtLeast } = useCloudRole()
@@ -163,7 +163,7 @@ export function SettingsDialog({
     open && section === 'argocd'
   )
 
-  // AI Diagnosis prefs are client-side (localStorage) and now SELF-SAVING: the
+  // AI investigation prefs are client-side (localStorage) and now SELF-SAVING: the
   // section has its own Save that commits the draft to DiagnoseContext, so it's
   // independent of the owner-gated footer. The draft is snapshotted on open.
   const diag = useDiagnose()
@@ -443,7 +443,7 @@ export function SettingsDialog({
   // Flat, un-grouped nav ordered as a narrative — at-a-glance, then you, then how
   // Radar connects, then data integrations, then AI, then advanced. The
   // per-section captions carry the restart-vs-live semantics, so group labels
-  // would only add visual weight. AI diagnose is always shown (the section
+  // would only add visual weight. AI investigations is always shown (the section
   // explains how to enable it when no agent CLI is installed).
   const navItems: NavItemDef[] = [
     { id: 'overview', label: 'Overview', icon: LayoutDashboard, ownerOnly: false, dirty: false },
@@ -452,7 +452,7 @@ export function SettingsDialog({
     { id: 'prometheus', label: 'Metrics', icon: Activity, ownerOnly: true, dirty: false },
     { id: 'cost', label: 'Cost', icon: Coins, ownerOnly: true, dirty: costIntegrationDirty },
     { id: 'argocd', label: 'Argo CD', icon: GitBranch, ownerOnly: true, dirty: false },
-    { id: 'ai', label: 'AI diagnose', icon: Sparkles, ownerOnly: false, dirty: aiDirty },
+    { id: 'ai', label: 'AI investigations', icon: Sparkles, ownerOnly: false, dirty: aiDirty },
     { id: 'advanced', label: 'Advanced', icon: SlidersHorizontal, ownerOnly: true, dirty: advancedDirty },
   ]
 
@@ -722,16 +722,16 @@ export function SettingsDialog({
               />
             </SectionPane>
 
-            {/* AI diagnose — self-saving, usable by everyone. Same heading block
+            {/* AI investigations — self-saving, usable by everyone. Same heading block
                 as every other tab; the body is the agent controls (when a CLI is
                 installed) or an enable explainer (when not). */}
             <div className={clsx(section !== 'ai' && 'hidden')} role="tabpanel" inert={section !== 'ai' || undefined}>
               <div className="mb-4">
-                <h3 className="text-base font-semibold text-theme-text-primary">AI diagnose</h3>
+                <h3 className="text-base font-semibold text-theme-text-primary">AI investigations</h3>
                 <p className="mt-0.5 text-xs text-theme-text-tertiary">
                   {diag.hosted
-                    ? `Investigate incidents with ${diag.agentLabel} — reading logs, events, and topology to explain what's wrong.`
-                    : "Investigate incidents with an AI agent that runs on your own machine — reading logs, events, and topology to explain what's wrong. No Radar cloud, no API key."}
+                    ? `Investigate incidents with ${diag.agentLabel} — reading logs, events, and topology to understand what's happening.`
+                    : "Investigate incidents with an AI agent that runs on your own machine — reading logs, events, and topology to understand what's happening. No Radar cloud, no API key."}
                 </p>
               </div>
               {aiAvailable ? (
@@ -1140,7 +1140,7 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
       copyable: mcpOn,
     },
     {
-      id: 'ai', icon: Sparkles, label: 'AI diagnose',
+      id: 'ai', icon: Sparkles, label: 'AI investigations',
       tone: aiAvailable ? 'ok' : 'off',
       value: aiAvailable ? 'Ready' : 'No agent CLI',
       detail: aiAvailable ? agentLabel : undefined,
@@ -1220,7 +1220,7 @@ function OverviewStatus({ tone }: { tone: OverviewTone }) {
   return <span className={clsx('w-2 h-2 rounded-full shrink-0', cls)} />
 }
 
-// AIUnavailableNotice is the body of the AI diagnose tab when no supported agent
+// AIUnavailableNotice is the body of the AI investigations tab when no supported agent
 // CLI is installed — the heading/description are provided by the tab itself, so
 // this is just the enable explainer (keeping the feature discoverable to whoever
 // would set it up).

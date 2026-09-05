@@ -176,9 +176,13 @@ func TestTrimmedToolsPreserveLoadBearingSteers(t *testing.T) {
 		}
 	}
 	for _, boundary := range []string{
+		"bounded, point-in-time evidence bundle",
+		"does not run an agent",
+		"not an authoritative root-cause verdict",
+		"not that every source was read atomically",
 		"not a root-cause verdict",
 		"capped sample",
-		"exhaustive set",
+		"broader, dedicated event read",
 		"low-confidence",
 	} {
 		if !strings.Contains(descriptions["diagnose"], boundary) {
@@ -513,6 +517,21 @@ func TestDiagnoseContractMatchesServerMode(t *testing.T) {
 	strictProperties := properties(t, strict)
 	if _, ok := strictProperties["in_cluster"]; ok {
 		t.Fatal("read-only MCP diagnose must not expose in_cluster")
+	}
+	for mode, props := range map[string]map[string]json.RawMessage{
+		"full":      fullProperties,
+		"read-only": strictProperties,
+	} {
+		groupSchema, ok := props["group"]
+		if !ok {
+			t.Errorf("%s MCP diagnose schema does not expose the target API group", mode)
+			continue
+		}
+		for _, want := range []string{"target API group", "argoproj.io", "built-ins are inferred"} {
+			if !strings.Contains(string(groupSchema), want) {
+				t.Errorf("%s MCP diagnose group schema lost %q: %s", mode, want, groupSchema)
+			}
+		}
 	}
 	if len(fullProperties) != len(strictProperties)+1 {
 		t.Fatalf("read-only diagnose schema drifted from the full schema: full=%v strict=%v", fullProperties, strictProperties)

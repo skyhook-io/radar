@@ -291,7 +291,7 @@ function isConditionHealthy(cond: { type?: string; status?: string }): boolean {
 
 export type ConditionTone = 'ok' | 'warning' | 'fail' | 'unknown'
 
-function defaultConditionTone(cond: { type?: string; status?: string }): ConditionTone {
+export function defaultConditionTone(cond: { type?: string; status?: string }): ConditionTone {
   if (cond.status !== 'True' && cond.status !== 'False') return 'unknown'
   return isConditionHealthy(cond) ? 'ok' : 'fail'
 }

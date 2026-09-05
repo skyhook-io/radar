@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/filter"
 	"github.com/skyhook-io/radar/internal/helm"
@@ -197,43 +198,36 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 		Annotations: readOnly,
 	}, logToolCall("get_pod_logs", handleGetPodLogs))
 
-	diagnoseDescription := "Use for CrashLoopBackOff, OOMKilled, image-pull, readiness, scheduling, " +
-		"or GitOps sync/health symptoms after narrowing to one broken workload or reconciler, " +
-		"or for 'traffic is not reaching this service / route / ingress'. " +
-		"For workload symptoms, it replaces a get_resource → get_events(type=Warning) → " +
-		"current/previous-log chain in one round-trip. For a Pod, " +
-		"Deployment, StatefulSet, or DaemonSet, it " +
-		"bundles resource context, current and previous logs across pods, Warning events, " +
-		"startup blockers, related issues, and recent workload/ConfigMap changes. " +
-		"Warning events are a capped sample; use get_events for the exhaustive set. " +
-		"`crashCause` is evidence, not a root-cause verdict: `logLineSelection` ranks " +
+	diagnoseDescription := "Collect a bounded, point-in-time evidence bundle for one narrowed workload, " +
+		"GitOps reconciler, or network entry. It combines signals in one round-trip to support diagnosis; " +
+		"it does not run an agent and is not an authoritative root-cause verdict or an exhaustive account. " +
+		"After narrowing, use for CrashLoopBackOff, OOMKilled, image-pull, readiness, scheduling, GitOps sync/health, " +
+		"or traffic not reaching a service, route, or ingress. For Pod, Deployment, StatefulSet, DaemonSet, or Argo Rollout it " +
+		"bundles resource context, selected/capped current and previous logs, Warning events, startup blockers, " +
+		"related issues, and recent workload/ConfigMap changes. " +
+		"Warning events are a capped sample; use get_events for a broader, dedicated event read. " +
+		"`crashCause` is evidence, not a root-cause verdict. `logLineSelection` ranks " +
 		"`" + crashLineFatalPattern + "`, `" + crashLineHeaderOnly + "`, `" +
-		crashLineLastMatchedLine + "`, then `" + crashLineLogTail + "` " +
-		"by confidence. Read the full logs for low-confidence selections; " +
-		"`traceback_header_only` means the informative traceback line was not captured. " +
-		"Audit findings are static posture, not active-outage evidence: " +
-		"`auditSummary.highestSeverity` uses critical|high|medium|low (built-ins " +
-		"high|medium), separate from live `issueSummary` critical|warning. " +
-		"`application_configuration_change: true` is a factual edit classification " +
-		"and narrow ranking hint, not a causal or universal relevance verdict. " +
-		"For Application, Kustomization, or Flux HelmRelease, returns reconciler status " +
-		"and parsed issues without pod-log fan-out. " +
-		"For network entry kinds (Service/Ingress/HTTPRoute/GRPCRoute/Gateway), returns a " +
-		"per-route reachability diagnosis whose fields carry their own explanations - trust " +
-		"`routes[].outcome` + `confidence` and the `headline`/`diagnosis` text over the coarse " +
-		"`verdict` rollup, and treat `indirect` confidence as reached only via the API-server " +
-		"proxy, never the live-traffic path. " +
-		"Prefer a targeted resource/log/event " +
-		"tool when you need only one facet; use get_resource for other kinds."
+		crashLineLastMatchedLine + "`, then `" + crashLineLogTail + "`. Inspect source logs for low-confidence " +
+		"selections; `traceback_header_only` means the informative line was not captured. " +
+		"`auditSummary.highestSeverity` uses static-posture critical|high|medium|low (built-ins high|medium), " +
+		"unlike live `issueSummary` critical|warning. `application_configuration_change: true` classifies an edit; " +
+		"it is not a causal or universal relevance verdict. Application, Kustomization, and Flux HelmRelease return reconciler " +
+		"status and parsed issues without logs. Network entry kinds return per-route reachability evidence: trust " +
+		"`routes[].outcome` + `confidence` and `headline`/`diagnosis` over coarse `verdict`; `indirect` means only the " +
+		"API-server proxy reached it, not the live path. Point-in-time means the bundle is frozen from this call, " +
+		"not that every source was read atomically; preserve collection limits, errors, timestamps, and confidence. " +
+		"Prefer a targeted resource/log/event tool for one facet; use get_resource for other kinds."
 	if includeWrites {
-		addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+		tool := &mcp.Tool{
 			Name: "diagnose",
 			Description: diagnoseDescription + " Read-only EXCEPT the optional in_cluster=true arg " +
 				"(network kinds), which creates up to 5 transient, self-destructing probe pods to test the real dataplane.",
 			// NOT readOnly: in_cluster=true creates pods. A client gating on
 			// readOnlyHint must be told that.
 			Annotations: diagnoseAnno,
-		}, logToolCall("diagnose", handleDiagnose))
+		}
+		addToolWithRegistry(paramRegistry, server, tool, logToolCall("diagnose", handleDiagnose))
 	} else {
 		addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 			Name:        "diagnose",
@@ -1110,13 +1104,38 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	defaultConfigMapChanges := meaningfulchanges.ConfigMapKind(kind)
 	includeChanges := includes["changes"] || defaultConfigMapChanges
 	var recentChanges []issuesapi.RecentChange
+	var recentChangesSaturated bool
+	var recentChangesCoverageLimited bool
 	var changesErr string
 	if includeChanges {
-		changes, _, err := meaningfulchanges.RecentForResource(ctx, kind, namespace, name, meaningfulchanges.DefaultSince, meaningfulchanges.ResourceLimit, meaningfulchanges.DefaultFieldLimit)
-		if err != nil {
-			changesErr = err.Error()
+		gvk := rawObj.GetObjectKind().GroupVersionKind()
+		changeKind := gvk.Kind
+		if changeKind == "" {
+			changeKind = kind
+		}
+		changeAPIVersion := gvk.GroupVersion().String()
+		if changeAPIVersion == "" && group != "" {
+			// ChangeReadAllowed only needs the group portion to resolve the GVR.
+			changeAPIVersion = group + "/_"
+		}
+		if !recentChangesSourceTracked(gvk) {
+			// The feed records a deliberately bounded set of kind/group pairs.
+			// Treat every other source as incomplete instead of attaching a
+			// same-kind resource's history or claiming that no changes occurred.
+			recentChangesCoverageLimited = true
+		} else if !k8s.ChangeReadAllowed(changeKind, changeAPIVersion, namespace, mcpChangeAuthorizer(ctx)) {
+			// Authorize the source before querying so neither the coverage bit nor
+			// saturation becomes a side channel for unreadable history.
+			recentChangesCoverageLimited = true
 		} else {
-			recentChanges = filterRecentChangesRBAC(ctx, changes)
+			changesResult, err := meaningfulchanges.RecentForResourceDetailed(ctx, kind, namespace, name, meaningfulchanges.DefaultSince, meaningfulchanges.ResourceLimit, meaningfulchanges.DefaultFieldLimit)
+			recentChangesSaturated = changesResult.OutputCapped || changesResult.FetchSaturated
+			if err != nil {
+				changesErr = err.Error()
+			} else {
+				recentChanges = filterRecentChangesRBAC(ctx, changesResult.Changes)
+				recentChangesCoverageLimited = len(recentChanges) < len(changesResult.Changes)
+			}
 		}
 	}
 
@@ -1137,16 +1156,38 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 		result["warnings"] = warnings
 	}
 	if includeChanges {
+		result["recentChangesSaturated"] = recentChangesSaturated
+		result["recentChangesCoverageLimited"] = recentChangesCoverageLimited
 		if changesErr != "" {
 			result["recentChangesError"] = changesErr
-		} else if includes["changes"] || len(recentChanges) > 0 {
+		} else if len(recentChanges) > 0 || (includes["changes"] && !recentChangesCoverageLimited) {
 			result["recentChanges"] = recentChanges
 		}
 	}
 	if len(includes) > 0 {
-		attachResourceExtras(ctx, cache, result, includes, kind, namespace, name)
+		canonicalKind := kind
+		canonicalGroup := group
+		if rawObj != nil {
+			gvk := rawObj.GetObjectKind().GroupVersionKind()
+			if gvk.Kind != "" {
+				canonicalKind = gvk.Kind
+			}
+			canonicalGroup = gvk.Group
+		}
+		attachResourceExtras(ctx, cache, result, includes, canonicalKind, canonicalGroup, namespace, name)
 	}
 	return toJSONResult(result)
+}
+
+func recentChangesSourceTracked(gvk schema.GroupVersionKind) bool {
+	// A fetched resource should always carry TypeMeta. If it does not, degrade
+	// to unknown coverage rather than treating an absent group as a core-group
+	// identity (TrackedKindForGroup intentionally treats an empty input group as
+	// unknown for older issue callers).
+	if gvk.Kind == "" || gvk.Version == "" {
+		return false
+	}
+	return meaningfulchanges.TrackedKindForGroup(gvk.Kind, gvk.Group)
 }
 
 // buildMCPResourceContext assembles the resourceContext section for MCP
@@ -1228,7 +1269,7 @@ func buildMCPResourceContextWithStaleChecks(ctx context.Context, obj runtime.Obj
 // attachResourceExtras populates optional extras (events, metrics, logs) on
 // the result map based on the includes set. relationship synthesis moved to
 // resourceContext via Build and is no longer routed through this function.
-func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result map[string]any, includes map[string]bool, kind, namespace, name string) {
+func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result map[string]any, includes map[string]bool, kind, group, namespace, name string) {
 	if includes["events"] {
 		if eventLister := cache.Events(); eventLister != nil {
 			var events []*corev1.Event
@@ -1247,7 +1288,7 @@ func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result 
 				// resolving the pod set; that's the diagnose tool's job, not
 				// this include's. nil podNames intentionally restricts to
 				// InvolvedObject == this kind+name.
-				matched := filterEventsByInvolvedObject(events, normalizeDisplayKind(kind), name, nil)
+				matched := filterEventsByInvolvedObject(events, normalizeDisplayKind(kind), group, name, nil)
 				if len(matched) > 0 {
 					deduplicated, totalGroups := aicontext.DeduplicateEventsN(matched, 10)
 					result["events"] = deduplicated
@@ -1269,21 +1310,6 @@ func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result 
 			} else {
 				log.Printf("[mcp] Failed to get pod metrics for %s/%s: %v", namespace, name, err)
 				result["metricsError"] = err.Error()
-			}
-		}
-	}
-
-	if includes["changes"] {
-		// The handler may have already attempted changes (data OR error key set).
-		// Gate on both — retrying after a recorded failure could attach a fresh
-		// payload next to the stale error, handing clients a contradictory result.
-		_, hasChanges := result["recentChanges"]
-		_, hasChangesErr := result["recentChangesError"]
-		if !hasChanges && !hasChangesErr {
-			if changes, _, err := meaningfulchanges.RecentForResource(ctx, kind, namespace, name, meaningfulchanges.DefaultSince, meaningfulchanges.ResourceLimit, meaningfulchanges.DefaultFieldLimit); err == nil {
-				result["recentChanges"] = filterRecentChangesRBAC(ctx, changes)
-			} else {
-				result["recentChangesError"] = err.Error()
 			}
 		}
 	}
@@ -1346,6 +1372,7 @@ func normalizeDisplayKind(kind string) string {
 		"pod": "Pod", "pods": "Pod",
 		"service": "Service", "services": "Service",
 		"deployment": "Deployment", "deployments": "Deployment",
+		"rollout": "Rollout", "rollouts": "Rollout",
 		"daemonset": "DaemonSet", "daemonsets": "DaemonSet",
 		"statefulset": "StatefulSet", "statefulsets": "StatefulSet",
 		"replicaset": "ReplicaSet", "replicasets": "ReplicaSet",
@@ -1545,6 +1572,7 @@ func applyClusterScopedTopologyRBAC(ctx context.Context, topo *topology.Topology
 	if topo == nil {
 		return
 	}
+	nodesBefore, edgesBefore := len(topo.Nodes), len(topo.Edges)
 	if deny := deniedClusterScopedTopoKinds(ctx); len(deny) > 0 {
 		topo.StripNodeKinds(deny)
 	}
@@ -1572,13 +1600,26 @@ func applyClusterScopedTopologyRBAC(ctx context.Context, topo *topology.Topology
 		}
 	}
 	topo.StripClusterScopedDynamicExcept(allowedDynamic)
+	if len(topo.Nodes) < nodesBefore || len(topo.Edges) < edgesBefore {
+		// Keep the omission visible without revealing which forbidden
+		// cluster-scoped APIs or resources exist.
+		topo.Warnings = append(topo.Warnings,
+			"Some cluster-scoped topology detail was omitted because access could not be confirmed.")
+	}
 }
 
 // topologySummary is an LLM-friendly text representation of the topology.
 type topologySummary struct {
-	Namespaces []nsSummary   `json:"namespaces"`
-	Problems   []string      `json:"problems,omitempty"`
-	Stats      topologyStats `json:"stats"`
+	Namespaces              []nsSummary   `json:"namespaces"`
+	Problems                []string      `json:"problems,omitempty"`
+	Stats                   topologyStats `json:"stats"`
+	Warnings                []string      `json:"warnings,omitempty"`
+	LargeCluster            bool          `json:"largeCluster,omitempty"`
+	HiddenKinds             []string      `json:"hiddenKinds,omitempty"`
+	RequiresNamespaceFilter bool          `json:"requiresNamespaceFilter,omitempty"`
+	CRDDiscoveryStatus      string        `json:"crdDiscoveryStatus,omitempty"`
+	EstimatedNodes          int           `json:"estimatedNodes,omitempty"`
+	SummaryMode             bool          `json:"summaryMode,omitempty"`
 }
 
 type nsSummary struct {
@@ -1650,12 +1691,12 @@ func buildTopologySummary(topo *topology.Topology) topologySummary {
 	}
 
 	// Build sorted namespace list
-	var namespaces []nsSummary
 	sortedNs := make([]string, 0, len(nsChains))
 	for ns := range nsChains {
 		sortedNs = append(sortedNs, ns)
 	}
 	sort.Strings(sortedNs)
+	namespaces := make([]nsSummary, 0, len(sortedNs))
 	for _, ns := range sortedNs {
 		namespaces = append(namespaces, nsSummary{
 			Namespace: ns,
@@ -1664,9 +1705,16 @@ func buildTopologySummary(topo *topology.Topology) topologySummary {
 	}
 
 	return topologySummary{
-		Namespaces: namespaces,
-		Problems:   problems,
-		Stats:      topologyStats{Nodes: len(topo.Nodes), Edges: len(topo.Edges)},
+		Namespaces:              namespaces,
+		Problems:                problems,
+		Stats:                   topologyStats{Nodes: len(topo.Nodes), Edges: len(topo.Edges)},
+		Warnings:                topo.Warnings,
+		LargeCluster:            topo.LargeCluster,
+		HiddenKinds:             topo.HiddenKinds,
+		RequiresNamespaceFilter: topo.RequiresNamespaceFilter,
+		CRDDiscoveryStatus:      topo.CRDDiscoveryStatus,
+		EstimatedNodes:          topo.EstimatedNodes,
+		SummaryMode:             topo.SummaryMode,
 	}
 }
 

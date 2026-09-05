@@ -1,7 +1,10 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useIssues } from "../../api/client";
-import { useAPIResources, karpenterCapacityAvailable } from "../../api/apiResources";
+import {
+  useAPIResources,
+  karpenterCapacityAvailable,
+} from "../../api/apiResources";
 import { useCapabilitiesContext } from "../../contexts/CapabilitiesContext";
 import { useConnection } from "../../context/ConnectionContext";
 import type { SelectedResource } from "../../types";
@@ -242,6 +245,7 @@ export function IssuesPane({
                 )}
                 <IssueDiagnoseButton
                   kind={issue.kind}
+                  group={issue.group}
                   namespace={issue.namespace ?? ""}
                   name={issue.name}
                 />

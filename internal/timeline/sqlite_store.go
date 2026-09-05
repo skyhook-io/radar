@@ -481,6 +481,21 @@ func (s *SQLiteStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 		query.WriteString(")")
 	}
 
+	if len(opts.APIGroups) > 0 {
+		// Keep rows whose emitter did not record apiVersion: they are unknown,
+		// not evidence of a group mismatch. For known versions, extract the
+		// group in SQL so collisions cannot consume the bounded result window.
+		query.WriteString(" AND (COALESCE(api_version, '') = '' OR CASE WHEN instr(api_version, '/') > 0 THEN substr(api_version, 1, instr(api_version, '/') - 1) ELSE '' END IN (")
+		for i, group := range opts.APIGroups {
+			if i > 0 {
+				query.WriteString(",")
+			}
+			query.WriteString("?")
+			args = append(args, group)
+		}
+		query.WriteString("))")
+	}
+
 	if len(opts.Names) > 0 {
 		query.WriteString(" AND name IN (")
 		for i, name := range opts.Names {

@@ -1,5 +1,5 @@
 // The single controller for the AI assistant surface. One instance app-wide:
-// the per-resource "Diagnose" button and the global top-bar entry both dispatch
+// the per-resource "Investigate" button and the global top-bar entry both dispatch
 // here. Investigations are durable, server-side jobs (see internal/ai RunManager);
 // this provider lists them, tracks which one is focused, and owns the push-content
 // layout. The run lifetime is the server's, so closing/navigating never kills one.
@@ -27,9 +27,12 @@ import {
   type AgentInfo,
   type ExecutionProfile,
 } from "../../api/diagnose";
+import { runTargetKey } from "./target";
 
 export interface Target {
   kind: string;
+  /** Kubernetes API group; empty means core. */
+  group: string;
   namespace: string;
   name: string;
   /** The issue this investigation is for, when it came from an issue. Hosts
@@ -43,7 +46,7 @@ export interface Target {
 }
 export type DiagnoseView = "home" | "investigation";
 
-// Setup readiness of the local AI-diagnosis feature, derived from the agents API:
+// Setup readiness of local AI investigations, derived from the agents API:
 //  - "ready":         an agent is installed and the engine is running (available)
 //  - "needs-install": the feature is supported here but no agent CLI is installed
 //  - "needs-restart": a supported agent is now on PATH but Radar booted before it
@@ -106,16 +109,6 @@ interface DiagnoseLayoutCtx {
   runningKeys: ReadonlySet<string>; // resources with a live investigation (see runTargetKey)
 }
 
-// Stable key for "is THIS resource being investigated right now" — built the same way
-// from a run summary and from a button's target so the two always match.
-export function runTargetKey(
-  kind: string,
-  namespace: string,
-  name: string,
-): string {
-  return `${kind} ${namespace} ${name}`;
-}
-
 const Ctx = createContext<DiagnoseCtx | null>(null);
 const LayoutCtx = createContext<DiagnoseLayoutCtx | null>(null);
 
@@ -164,7 +157,7 @@ export function agentLabelFor(name: string, fallbackLabel?: string): string {
 }
 
 // openDiagnoseSettings opens the Settings dialog (App.tsx listens for this DOM
-// event) — the canonical home for AI-diagnosis config.
+// event) — the canonical home for AI investigation config.
 export function openDiagnoseSettings() {
   window.dispatchEvent(
     new CustomEvent("radar:open-settings", { detail: { section: "ai" } }),
@@ -342,7 +335,7 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
         setHistoryDegraded(!!r.historyDegraded);
       })
       .catch(() => {
-        // Leave runsLoaded false (a missing-run verdict needs a real list) but
+        // Leave runsLoaded false (a missing-run state needs a real list) but
         // record the failure so the panel can say "retrying" instead of
         // pretending nothing happened. The 4s poll keeps retrying while open.
         setRunsLoadFailed(true);
@@ -350,15 +343,17 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   }, [available]);
 
   // A content-stable signature of the resources with a live (running) investigation,
-  // so the per-resource Diagnose buttons can show a "running" indicator even with the
+  // so the per-resource Investigate buttons can show a "running" indicator even with the
   // panel closed — and only re-render when the set actually changes, not every poll.
   const runningSig = runs
     .filter((r) => r.status === "running")
-    .map((r) => runTargetKey(r.kind, r.namespace, r.name))
+    .map((r) => runTargetKey(r.kind, r.namespace, r.name, r.group))
     .sort()
-    .join("|");
+    // resourceKey itself is pipe-delimited; newlines cannot occur in a
+    // Kubernetes group, Kind, namespace, or name.
+    .join("\n");
   const runningKeys = useMemo(
-    () => new Set(runningSig ? runningSig.split("|") : []),
+    () => new Set(runningSig ? runningSig.split("\n") : []),
     [runningSig],
   );
   const hasRunning = runningSig.length > 0;
