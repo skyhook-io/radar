@@ -301,6 +301,10 @@ export function CodeViewer({
   const handleSearchKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
       e.preventDefault()
+      // A host that also listens for Escape to close something bigger around
+      // this viewer (a full-screen overlay, say) must not see this one — the
+      // user closing the search bar, not the whole surface it's embedded in.
+      e.stopPropagation()
       closeSearch()
     } else if (e.key === 'Enter') {
       e.preventDefault()
