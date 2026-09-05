@@ -248,17 +248,206 @@ func argoFailureMessage(r *unstructured.Unstructured) (string, bool) {
 
 func argoStepDetail(r *unstructured.Unstructured, updated, desired, available int32) string {
 	steps, stepsFound, _ := unstructured.NestedSlice(r.Object, "spec", "strategy", "canary", "steps")
-	if step, found, _ := unstructured.NestedInt64(r.Object, "status", "currentStepIndex"); found && stepsFound && len(steps) > 0 {
-		displayStep := step + 1
-		if displayStep < 1 {
-			displayStep = 1
-		}
-		if displayStep > int64(len(steps)) {
-			displayStep = int64(len(steps))
-		}
-		return fmt.Sprintf("Step %d · %d/%d updated · %d available", displayStep, updated, desired, available)
+	step, found, _ := unstructured.NestedInt64(r.Object, "status", "currentStepIndex")
+	if !found || !stepsFound || len(steps) == 0 {
+		return replicaDetail(updated, desired, available)
 	}
-	return replicaDetail(updated, desired, available)
+	displayStep := step + 1
+	if displayStep < 1 {
+		displayStep = 1
+	}
+	if displayStep > int64(len(steps)) {
+		displayStep = int64(len(steps))
+	}
+	label := ""
+	if currentStep, ok := steps[displayStep-1].(map[string]any); ok {
+		label = fmt.Sprintf(" (%s)", canaryStepLabel(currentStep))
+	}
+	weightSuffix := ""
+	if weight, wFound, _ := unstructured.NestedInt64(r.Object, "status", "canary", "weights", "canary", "weight"); wFound {
+		weightSuffix = fmt.Sprintf(" · %d%% canary traffic", weight)
+	}
+	return fmt.Sprintf("Step %d%s · %d/%d updated · %d available%s", displayStep, label, updated, desired, available, weightSuffix)
+}
+
+// canaryStepLabel mirrors packages/k8s-ui/src/components/resources/renderers/
+// RolloutRenderer.tsx's canaryStepLabel exactly (same output strings, same
+// step-type coverage) - the two are checked against the same golden fixture
+// (testdata/workload_rollout_vectors.json), so a change to one without the
+// other silently breaks cross-language parity rather than failing loudly.
+func canaryStepLabel(step map[string]any) string {
+	if len(step) == 0 {
+		return "Unknown step"
+	}
+
+	if weight, ok := step["setWeight"]; ok {
+		return fmt.Sprintf("Set weight: %s%%", stepNumberString(weight))
+	}
+
+	if pause, ok := step["pause"].(map[string]any); ok {
+		if duration, ok := pause["duration"]; ok && duration != nil && duration != "" {
+			return fmt.Sprintf("Pause: %v", duration)
+		}
+		return "Pause: until promoted"
+	}
+	if _, ok := step["pause"]; ok {
+		return "Pause: until promoted"
+	}
+
+	if analysis, ok := step["analysis"].(map[string]any); ok {
+		names := templateNames(analysis["templates"])
+		if len(names) > 0 {
+			return fmt.Sprintf("Analysis: %s", strings.Join(names, ", "))
+		}
+		return "Analysis"
+	}
+
+	if experiment, ok := step["experiment"].(map[string]any); ok {
+		names := experimentTemplateNames(experiment["templates"])
+		duration := ""
+		if d, ok := experiment["duration"]; ok && d != nil && d != "" {
+			duration = fmt.Sprintf(" for %v", d)
+		}
+		if len(names) > 0 {
+			return fmt.Sprintf("Experiment: %s%s", strings.Join(names, ", "), duration)
+		}
+		return fmt.Sprintf("Experiment%s", duration)
+	}
+
+	if scale, ok := step["setCanaryScale"].(map[string]any); ok {
+		if match, _ := scale["matchTrafficWeight"].(bool); match {
+			return "Set canary scale: match traffic weight"
+		}
+		if replicas, ok := scale["replicas"]; ok {
+			return fmt.Sprintf("Set canary scale: %s replicas", stepNumberString(replicas))
+		}
+		if weight, ok := scale["weight"]; ok {
+			return fmt.Sprintf("Set canary scale: %s%%", stepNumberString(weight))
+		}
+		return "Set canary scale"
+	}
+
+	if route, ok := step["setHeaderRoute"].(map[string]any); ok {
+		name, _ := route["name"].(string)
+		match, _ := route["match"].([]any)
+		if len(match) == 0 {
+			if name != "" {
+				return fmt.Sprintf("Remove header route: %s", name)
+			}
+			return "Remove header route"
+		}
+		var headers []string
+		for _, m := range match {
+			if mm, ok := m.(map[string]any); ok {
+				if headerName, ok := mm["headerName"].(string); ok && headerName != "" {
+					headers = append(headers, headerName)
+				}
+			}
+		}
+		label := "Header route"
+		if name != "" {
+			label += " " + name
+		}
+		if len(headers) > 0 {
+			label += ": " + strings.Join(headers, ", ")
+		}
+		return label
+	}
+
+	if route, ok := step["setMirrorRoute"].(map[string]any); ok {
+		name, _ := route["name"].(string)
+		match, _ := route["match"].([]any)
+		if len(match) == 0 {
+			if name != "" {
+				return fmt.Sprintf("Remove mirror route: %s", name)
+			}
+			return "Remove mirror route"
+		}
+		label := "Mirror route"
+		if name != "" {
+			label += " " + name
+		}
+		if pct, ok := route["percentage"]; ok {
+			label += fmt.Sprintf(" (%s%%)", stepNumberString(pct))
+		}
+		return label
+	}
+
+	if plugin, ok := step["plugin"].(map[string]any); ok {
+		name, _ := plugin["name"].(string)
+		if name == "" {
+			name = "unnamed"
+		}
+		return fmt.Sprintf("Plugin: %s", name)
+	}
+
+	for key := range step {
+		return fmt.Sprintf("Unrecognized step: %s", key)
+	}
+	return "Unknown step"
+}
+
+// templateNames extracts templateName/clusterTemplateName from an
+// analysis.templates list (AnalysisTemplate/ClusterAnalysisTemplate refs),
+// same as the TS version. NOT used for experiment.templates — those are pod
+// templates, a different shape entirely; see experimentTemplateNames.
+func templateNames(raw any) []string {
+	list, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	var names []string
+	for _, item := range list {
+		t, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if name, ok := t["templateName"].(string); ok && name != "" {
+			names = append(names, name)
+			continue
+		}
+		if name, ok := t["clusterTemplateName"].(string); ok && name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// experimentTemplateNames extracts `name` from an experiment.templates
+// list — Argo's RolloutExperimentTemplate entries (pod template variants
+// like "baseline"/"canary" an Experiment spins up replicas of) carry their
+// identifier under `name`, not `templateName`/`clusterTemplateName` (the
+// AnalysisTemplate ref shape templateNames handles). Mirrors the TS version.
+func experimentTemplateNames(raw any) []string {
+	list, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	var names []string
+	for _, item := range list {
+		t, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if name, ok := t["name"].(string); ok && name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// stepNumberString formats a JSON-decoded numeric value the way it appears
+// in the Rollout spec (e.g. int64(20) -> "20"), matching JS's implicit
+// number->string coercion used by the TS version's template literals.
+func stepNumberString(v any) string {
+	switch n := v.(type) {
+	case int64:
+		return strconv.FormatInt(n, 10)
+	case float64:
+		return strconv.FormatFloat(n, 'f', -1, 64)
+	default:
+		return fmt.Sprintf("%v", v)
+	}
 }
 
 func conditionFailed(conditions []appsv1.DeploymentCondition, conditionType appsv1.DeploymentConditionType, reason string) bool {

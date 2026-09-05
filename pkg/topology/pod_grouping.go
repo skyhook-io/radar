@@ -232,14 +232,25 @@ func CreatePodGroupNode(group *PodGroup, provider ResourceProvider) Node {
 			}
 		}
 
-		podDetails = append(podDetails, map[string]any{
+		detail := map[string]any{
 			"name":        pod.Name,
 			"namespace":   pod.Namespace,
 			"phase":       string(pod.Status.Phase),
 			"restarts":    restarts,
 			"containers":  len(pod.Spec.Containers),
 			"statusIssue": podIssue,
-		})
+		}
+		// ownerKey identifies which of the group's (possibly several — see
+		// the large-group path in builder.go) distinct owners this specific
+		// pod belongs to, so the caller can later resolve it to the exact
+		// edge-source node ID that owns this pod. Without it, expanding a
+		// mixed-owner group (e.g. canary + stable ReplicaSets) can't tell
+		// which pod goes with which owner.
+		if len(pod.OwnerReferences) > 0 {
+			ref := pod.OwnerReferences[0]
+			detail["ownerKey"] = pod.Namespace + "/" + ref.Kind + "/" + ref.Name
+		}
+		podDetails = append(podDetails, detail)
 	}
 
 	return Node{

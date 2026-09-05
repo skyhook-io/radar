@@ -732,9 +732,15 @@ export function WorkloadView({
     [helmOwner, helmSourceResource],
   )
 
-  // Fetch topology for hierarchy building (only when expanded)
+  // Fetch topology for hierarchy building (only when expanded). Polled like
+  // useTrace's "drawer feeling live" pattern — without this, a resource
+  // whose status/labels/edges change without its node/edge identity changing
+  // (a canary weight step, a Pod's traffic role flipping to stable, an
+  // AnalysisRun finishing) never refreshes until something else forces a
+  // remount; a genuinely stuck-looking Topology tab, not just a stale one.
   const { data: topology } = useTopology([namespace], 'resources', {
     enabled: expanded,
+    refetchInterval: expanded ? 5000 : false,
   })
 
   // Always fetched so Recent Events populates on drawer open; allEvents below is

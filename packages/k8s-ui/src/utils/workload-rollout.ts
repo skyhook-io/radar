@@ -1,4 +1,5 @@
 import type { WorkloadPodInfo } from '../types/core'
+import { canaryStepLabel } from '../components/resources/renderers/RolloutRenderer'
 
 export type WorkloadRolloutPhase =
   | 'idle'
@@ -225,10 +226,22 @@ export function getArgoRolloutStepNumber(resource: any): number | null {
   return Math.min(Math.max(currentIndex + 1, 1), steps.length)
 }
 
+// Mirrors pkg/health/workload_rollout.go's argoStepDetail exactly (same
+// output string, same step-type coverage via canaryStepLabel) - the two are
+// checked against the same golden fixture
+// (pkg/health/testdata/workload_rollout_vectors.json), so a change to one
+// without the other silently breaks cross-language parity rather than
+// failing loudly.
 function argoDetail(resource: any, updated: number, desired: number, available: number): string {
+  const steps = resource?.spec?.strategy?.canary?.steps || []
   const stepNumber = getArgoRolloutStepNumber(resource)
-  const step = stepNumber === null ? '' : `Step ${stepNumber} · `
-  return `${step}${updated}/${desired} updated · ${available} available`
+  const step = stepNumber === null ? '' : `Step ${stepNumber}`
+  const currentStep = stepNumber === null ? undefined : steps[stepNumber - 1]
+  const label = currentStep ? ` (${canaryStepLabel(currentStep)})` : ''
+  const weight = resource?.status?.canary?.weights?.canary?.weight
+  const weightSuffix = typeof weight === 'number' ? ` · ${weight}% canary traffic` : ''
+  const prefix = stepNumber === null ? '' : `${step}${label} · `
+  return `${prefix}${updated}/${desired} updated · ${available} available${weightSuffix}`
 }
 
 function replicaDetail(updated: number, desired: number, available: number): string {
