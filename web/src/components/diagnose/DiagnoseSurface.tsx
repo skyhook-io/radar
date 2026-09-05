@@ -161,7 +161,10 @@ export function canCopyRunLink(
   return typeof run?.radarUrl === "string" && run.radarUrl.length > 0;
 }
 
-function CopyRunLink({ radarUrl }: { radarUrl: string }) {
+function CopyRunLink({ radarUrl, visibility }: { radarUrl: string; visibility: RunSummary["visibility"] }) {
+  const label = visibility === "private"
+    ? "Copy private link (only you can open it)"
+    : "Copy investigation link";
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">(
     "idle",
   );
@@ -184,14 +187,14 @@ function CopyRunLink({ radarUrl }: { radarUrl: string }) {
           ? "Link copied"
           : copyState === "error"
             ? "Couldn’t copy link"
-            : "Copy investigation link"
+            : label
       }
       position="bottom"
     >
       <button
         onClick={copy}
         className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
-        aria-label="Copy investigation link"
+        aria-label={label}
       >
         {copyState === "copied" ? (
           <Check className="h-4 w-4 text-emerald-500" />
@@ -425,12 +428,13 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
     </div>
   ) : d.activeRunId && d.runsLoaded ? (
     // A focused id that isn't in the loaded list — a deep link (?ai-run=…) to a
-    // cleared/evicted/unknown run. Say so; the generic "select an
+    // private/revoked/cleared/unknown run. The generic "select an
     // investigation" placeholder would read as a broken link.
     <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
       <p className="text-sm text-theme-text-secondary">
-        This investigation is no longer available — history keeps the most
-        recent investigations, and this one has been cleared.
+        This investigation is unavailable. It may be private, your access may
+        have changed, or its history may have been cleared. Check your account
+        and organization, or ask the creator for access.
       </p>
       <button
         onClick={d.goHome}
@@ -547,7 +551,7 @@ export function DiagnoseSurface({ topInset = 0 }: { topInset?: number }) {
             <VisibilityControl run={headerRun} onChanged={d.updateRunSummary} />
           )}
           {canCopyRunLink(headerRun) && (
-            <CopyRunLink radarUrl={headerRun.radarUrl} />
+            <CopyRunLink radarUrl={headerRun.radarUrl} visibility={headerRun.visibility} />
           )}
           {headerRun && <InvestigationMenu run={headerRun} />}
           <Tooltip content={maximized ? "Restore" : "Expand"} position="bottom">

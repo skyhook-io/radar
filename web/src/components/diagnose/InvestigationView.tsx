@@ -545,9 +545,10 @@ export function InvestigationView({
                   <div className="flex items-start gap-2">
                     <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
                     <span>
-                      This investigation is no longer available — history keeps
-                      the most recent investigations, and this one has been
-                      cleared. Re-run Diagnose to analyze the current cluster.
+                      This investigation is unavailable. It may be private, your
+                      access may have changed, or its history may have been
+                      cleared. Check your account and organization, or ask the
+                      creator for access.
                     </span>
                   </div>
                   <button
