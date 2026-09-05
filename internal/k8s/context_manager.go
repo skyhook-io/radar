@@ -525,6 +525,11 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	// cluster we're about to connect to. After the preflight above — a failed
 	// preflight leaves the current connection (and its runs) intact.
 	notifyBeforeContextSwitch(newContext)
+	// Retire permission probes on BOTH sides of the switch. This side empties
+	// the cache before the clients are swapped, so nothing serves the previous
+	// cluster's answer during the swap; the invalidation after init retires any
+	// probe that started during it. Same shape as the upgrade scan memo.
+	InvalidateResourcePermissionsCache()
 
 	// Cancel any in-flight API calls from the previous context (RBAC checks,
 	// capability probes, etc.) so they don't serialize through the old exec
@@ -723,7 +728,6 @@ func reinitializeNamespaceScope(namespace, resetMessage string) error {
 
 	SetNamespaceScopeOverride(namespace)
 	InvalidateCapabilitiesCache()
-	InvalidateResourcePermissionsCache()
 	InvalidateServerVersionCache()
 
 	t = time.Now()

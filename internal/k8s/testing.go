@@ -371,7 +371,7 @@ func ResetTestState() {
 
 	// Reset resource permissions cache
 	resourcePermsMu.Lock()
-	cachedPermResult = nil
+	invalidateResourcePermissionsCacheLocked()
 	resourcePermsMu.Unlock()
 	ForceNamespaceScope = false
 	SetFallbackNamespace("")
@@ -413,5 +413,26 @@ func allTestResourceTypes() map[string]bool {
 		"ingressclasses":           true,
 		"networkpolicies":          true,
 		"limitranges":              true,
+	}
+}
+
+// SetTestPermissionResult publishes a permission probe result as if a probe had
+// just produced it. Returns a restore func.
+//
+// The cache is otherwise only writable by a real probe, so without this seam a
+// test in another package cannot reach any of the code that reads it — the
+// handlers fall through to their "no probe data yet" path and assert nothing
+// while appearing to cover the endpoint.
+func SetTestPermissionResult(result *PermissionCheckResult) func() {
+	resourcePermsMu.Lock()
+	prevResult, prevExpiry := cachedPermResult, resourcePermsExpiry
+	cachedPermResult = result
+	resourcePermsExpiry = time.Now().Add(time.Minute)
+	resourcePermsMu.Unlock()
+
+	return func() {
+		resourcePermsMu.Lock()
+		cachedPermResult, resourcePermsExpiry = prevResult, prevExpiry
+		resourcePermsMu.Unlock()
 	}
 }
