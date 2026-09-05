@@ -332,6 +332,7 @@ func ResetTestState() {
 	// no worker alive, drain instead — a stray token would give the next
 	// test's worker a spurious immediate tick.
 	runtimeAuthRecoveryOwed.Store(false)
+	runtimeNetworkRecoveryOwed.Store(false)
 	if runtimeAuthRecoveryActive.Load() {
 		select {
 		case runtimeAuthRecoveryNudge <- struct{}{}:
