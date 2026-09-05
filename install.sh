@@ -15,7 +15,22 @@ set -e
 
 REPO="skyhook-io/radar"
 BINARY_NAME="kubectl-radar"
-INSTALL_DIR="/usr/local/bin"
+INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+
+# Relative paths would resolve inside the temp dir this script extracts into
+# and then deletes, so reject them before doing any work.
+case "$INSTALL_DIR" in
+  /*) ;;
+  *)
+    echo "INSTALL_DIR must be an absolute path (got: ${INSTALL_DIR})" >&2
+    exit 1
+    ;;
+esac
+
+if [ -e "$INSTALL_DIR" ] && [ ! -d "$INSTALL_DIR" ]; then
+  echo "INSTALL_DIR is not a directory: ${INSTALL_DIR}" >&2
+  exit 1
+fi
 
 # Detect OS and architecture
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -82,14 +97,17 @@ else
 fi
 
 # Install
+mkdir -p "$INSTALL_DIR" 2>/dev/null || true
+
 if [ -w "$INSTALL_DIR" ]; then
-  mv "$BINARY_NAME" "$INSTALL_DIR/"
   SUDO=""
 else
   echo "Installing to ${INSTALL_DIR} (requires sudo)..."
-  sudo mv "$BINARY_NAME" "$INSTALL_DIR/"
   SUDO="sudo"
+  $SUDO mkdir -p "$INSTALL_DIR"
 fi
+
+$SUDO mv "$BINARY_NAME" "$INSTALL_DIR/"
 
 # Symlink so the binary can also be invoked as `radar`. Best-effort —
 # the primary install already succeeded, and `radar` is a common-enough
@@ -107,8 +125,14 @@ fi
 rm -rf "$TMP_DIR"
 
 echo ""
-echo "Radar v${VERSION} installed successfully!"
+echo "Radar v${VERSION} installed successfully to ${INSTALL_DIR}!"
 echo ""
+
+case ":${PATH}:" in
+  *":${INSTALL_DIR}:"*) ;;
+  *) echo "Note: ${INSTALL_DIR} is not in your PATH — add it to run the commands below." >&2; echo "" ;;
+esac
+
 echo "Usage:"
 echo "  radar                  # standalone"
 echo "  kubectl radar          # as kubectl plugin"
