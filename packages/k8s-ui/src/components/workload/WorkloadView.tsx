@@ -892,7 +892,7 @@ export function WorkloadView({
           {!resource ? (
             // Fill the drawer body so the loading logo centers in it, not in a
             // 128px box pinned to the top (matches the splash/PaneLoader centering).
-            <FetchResult loading={resourceLoading} error={resourceError} className="h-full" />
+            <FetchResult loading={resourceLoading} error={resourceError} className={FULL_PANE_FETCH_STATE} />
           ) : showYaml ? (
             <EditableYamlView
               resource={selectedResource}
@@ -1121,7 +1121,7 @@ export function WorkloadView({
             />
         )}
         {effectiveTab === 'topology' && (
-          <div className="relative h-full min-h-0 w-full">
+          <div className="relative h-full min-h-[60dvh] w-full">
             {topology ? (
               <TopologyGraph
                 topology={neighborhood}
@@ -1204,7 +1204,7 @@ export function WorkloadView({
               {yamlObject && !yamlObject.primary && renderRelatedYaml ? (
                 renderRelatedYaml(yamlObject)
               ) : !resource ? (
-                <FetchResult loading={resourceLoading} error={resourceError} className="h-full" />
+                <FetchResult loading={resourceLoading} error={resourceError} className={FULL_PANE_FETCH_STATE} />
               ) : (
                 <EditableYamlView
                   resource={selectedResource}
@@ -1633,7 +1633,7 @@ function InfoTab({
   recentImageSave?: boolean
 }) {
   if (!resource) {
-    return <FetchResult loading={isLoading} error={error} className="h-full" />
+    return <FetchResult loading={isLoading} error={error} className={FULL_PANE_FETCH_STATE} />
   }
 
   if (!isRuntimeWorkloadOverviewKind(selectedResource.kind, selectedResource.group)) {
@@ -1722,6 +1722,13 @@ function InfoTab({
     />
   )
 }
+
+// Full-pane fetch states (loader / error / not-found). `h-full` centers in the
+// pane when the ancestor height chain resolves to the viewport; the dvh floor
+// keeps the state vertically centered when an embedding host lets the page
+// scroll (auto-height ancestors collapse h-full to content height, pinning the
+// loader to the top — seen on mobile hosts).
+const FULL_PANE_FETCH_STATE = 'h-full min-h-[60dvh]'
 
 const POD_VISIBLE_LIMIT = 5
 const EVENT_VISIBLE_LIMIT = 5
