@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { createTwoFilesPatch, structuredPatch, type StructuredPatchHunk } from 'diff'
 import { clsx } from 'clsx'
@@ -316,44 +316,46 @@ function SplitDiffBody({ desired, live, context }: { desired: string; live: stri
   const patch = structuredPatch('desired', 'live', desired, live, '', '', { context })
   const rows = buildSplitRows(patch.hunks)
   return (
-    <div className="grid grid-cols-2 font-mono text-[11px]">
-      {rows.map((row, index) =>
-        isHunkGap(row) ? (
-          <div key={index} className="col-span-2 select-none border-y border-theme-border bg-theme-elevated px-3 py-0.5 text-center text-theme-text-tertiary">
-            ⋯
-          </div>
-        ) : (
-          <Fragment key={index}>
-            <SplitCell cell={row.left} side="left" />
-            <SplitCell cell={row.right} side="right" />
-          </Fragment>
-        ),
-      )}
+    // Each side is its OWN scroll container spanning every row, not one per
+    // row: a long line's horizontal scroll must move every row on that side
+    // together. Giving each row its own overflow-x-auto (the previous
+    // approach) let an ordinary trackpad scroll gesture — which almost
+    // always carries a little horizontal delta even when scrolling mostly
+    // vertically — scroll whichever single row the cursor happened to be
+    // over, leaving that one row's text offset from every other row instead
+    // of moving with them.
+    <div className="flex font-mono text-[11px]">
+      <div className="min-w-0 flex-1 overflow-x-auto border-r border-theme-border">
+        {rows.map((row, index) => (isHunkGap(row) ? <HunkGapRow key={index} /> : <SplitCell key={index} cell={row.left} />))}
+      </div>
+      <div className="min-w-0 flex-1 overflow-x-auto">
+        {rows.map((row, index) => (isHunkGap(row) ? <HunkGapRow key={index} /> : <SplitCell key={index} cell={row.right} />))}
+      </div>
     </div>
   )
 }
 
-function SplitCell({ cell, side }: { cell?: SplitCellData; side: 'left' | 'right' }) {
-  if (!cell) {
-    return <div className={clsx('whitespace-pre bg-theme-hover/30', side === 'left' && 'border-r border-theme-border')} />
-  }
+function HunkGapRow() {
+  return (
+    <div className="select-none border-y border-theme-border bg-theme-elevated px-3 py-0.5 text-center text-theme-text-tertiary">
+      ⋯
+    </div>
+  )
+}
+
+function SplitCell({ cell }: { cell?: SplitCellData }) {
   return (
     <div
       className={clsx(
-        // min-w-0 lets this flex item actually shrink to its grid track's
-        // width (Tailwind's grid-cols-2 tracks are already minmax(0, 1fr),
-        // but a flex child still defaults to its content's intrinsic width
-        // unless told otherwise) — without it, a long unwrapped line bleeds
-        // past its own column into the adjacent one instead of scrolling.
-        'flex min-w-0 overflow-x-auto whitespace-pre',
-        side === 'left' && 'border-r border-theme-border',
-        cell.type === 'removal' && 'bg-red-500/10 text-red-700 dark:text-red-400',
-        cell.type === 'addition' && 'bg-green-500/10 text-green-700 dark:text-green-400',
-        cell.type === 'context' && 'text-theme-text-secondary',
+        'flex whitespace-pre',
+        !cell && 'bg-theme-hover/30',
+        cell?.type === 'removal' && 'bg-red-500/10 text-red-700 dark:text-red-400',
+        cell?.type === 'addition' && 'bg-green-500/10 text-green-700 dark:text-green-400',
+        cell?.type === 'context' && 'text-theme-text-secondary',
       )}
     >
-      <span className="w-10 shrink-0 select-none px-2 text-right text-theme-text-tertiary">{cell.num}</span>
-      <span className="flex-1 pr-2">{cell.text || ' '}</span>
+      <span className="w-10 shrink-0 select-none px-2 text-right text-theme-text-tertiary">{cell?.num ?? ''}</span>
+      <span className="pr-2">{cell ? cell.text || ' ' : ' '}</span>
     </div>
   )
 }
