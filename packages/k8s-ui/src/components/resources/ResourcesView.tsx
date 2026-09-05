@@ -3139,12 +3139,26 @@ export function mergeSavedVisibleColumns(
   savedVisible: string[],
   extraKeys: string[],
   printerColumns: ExtraColumn[],
+  effective?: Column[],
+  known?: string[],
 ): Set<string> {
   const merged = new Set(savedVisible)
   for (const k of extraKeys) merged.add(k)
   if (!savedVisible.some(k => k.startsWith(PRINTER_COLUMN_PREFIX))) {
     for (const c of printerColumns) {
       if (c.defaultVisible !== false) merged.add(c.key)
+    }
+  }
+  // Curated columns added since the blob was written. Same principle as the two
+  // above, but it needs a record of what the user was actually offered: the blob
+  // stores only what is visible, so a curated key's absence is ambiguous between
+  // "hidden on purpose" and "did not exist yet". `known` is that record. Blobs
+  // written before it existed have none, and stay on the old behaviour rather
+  // than guessing — the next save adopts the current set as their baseline.
+  if (effective && known) {
+    const seen = new Set(known)
+    for (const c of effective) {
+      if (!seen.has(c.key) && c.defaultVisible !== false) merged.add(c.key)
     }
   }
   return merged
@@ -3202,6 +3216,10 @@ interface ColumnSettings {
   visible: string[]
   widths: Record<string, number>
   custom?: CustomColumnDef[]
+  /** Every column key the user was offered when this was written. Lets a later
+   *  load tell a column they hid from one that did not exist yet. Absent on
+   *  blobs written before this field. */
+  known?: string[]
 }
 
 function loadColumnSettings(kind: string, group?: string): ColumnSettings | null {
@@ -3779,6 +3797,12 @@ export function ResourcesView({
     return [...filteredExtras, ...kindColumns, ...builtCustomColumns]
   }, [selectedKind.name, selectedKind.group, extraLeadingColumns, builtCustomColumns, builtPrinterColumns])
 
+  // The offered key set, and a stable signature for it. allColumns is a new
+  // identity on every printer-column refetch; depending on the array itself
+  // would rewrite the settings blob on each poll.
+  const allColumnKeys = useMemo(() => allColumns.map(c => c.key), [allColumns])
+  const allColumnKeysSig = allColumnKeys.join('\u0000')
+
   // Map of extra column keys for fast O(1) lookup on each render path
   // (cell render, sort, column-filter unique-values).
   // Recompute header-derived widths once the web font swaps in (see watchHeaderFont).
@@ -3847,7 +3871,7 @@ export function ResourcesView({
         setVisibleColumns(getDefaultVisibleColumns(effective))
         setColumnWidths({})
       } else {
-        setVisibleColumns(mergeSavedVisibleColumns(saved.visible, extraKeys, builtPrinterColumns))
+        setVisibleColumns(mergeSavedVisibleColumns(saved.visible, extraKeys, builtPrinterColumns, effective, saved.known))
         setColumnWidths(saved.widths || {})
       }
     } else {
@@ -3871,11 +3895,13 @@ export function ResourcesView({
       visible: Array.from(visibleColumns),
       widths: columnWidths,
       custom: customColumns,
+      known: allColumnKeys,
     })
     // A persisted blob blocks GPU auto-show from here on — same rule in-session
     // as across sessions, so a later data refresh can't override user choices.
     hadSavedColumnSettings.current = true
-  }, [visibleColumns, columnWidths, customColumns, selectedKind.name, selectedKind.group])
+    // allColumnKeysSig, not allColumnKeys: see the memo above.
+  }, [visibleColumns, columnWidths, customColumns, selectedKind.name, selectedKind.group, allColumnKeysSig])
 
   // Close column picker on outside click or Escape
   useEffect(() => {
