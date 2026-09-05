@@ -55,9 +55,13 @@ changelog:
   sort: asc
   filters:
     exclude:
-      - '^docs:'
-      - '^test:'
-      - '^chore:'
+      # The optional (scope) group matters: '^docs:' is a literal prefix, so it
+      # matches "docs: x" but not "docs(mcp): x". Scoped commits have been
+      # leaking into public release notes because of it.
+      - '^docs(\(.+\))?:'
+      - '^test(\(.+\))?:'
+      - '^chore(\(.+\))?:'
+      - '^deps(\(.+\))?:'
       - Merge pull request
       - Merge branch
 
