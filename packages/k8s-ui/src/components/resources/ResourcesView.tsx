@@ -240,7 +240,7 @@ export function isColumnFilterableByDistinctCount(colKey: string, distinctCount:
 }
 
 // Column definitions per resource kind
-interface Column {
+export interface Column {
   key: string
   label: string
   width?: string
@@ -321,7 +321,168 @@ const COMPARE_COLUMN_STYLE: React.CSSProperties = {
   maxWidth: COMPARE_COLUMN_WIDTH,
 }
 
-function getColumnMinWidth(col: Column): number {
+// Built-in sortable keys. Hoisted so getColumnMinWidth can reserve room for the
+// sort icon without the header render and the width math drifting apart.
+const BUILTIN_SORTABLE_COLUMN_KEYS = new Set([
+  'name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version',
+  'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object',
+  'cpu', 'memory', 'containers',
+])
+
+// The header row is px-4 with a `truncate` label, under table-layout:fixed with
+// explicit <col> widths — so a column narrower than its own heading clips to
+// "ADDRESS T…" and stays clipped at every viewport size, because only the Name
+// column flexes. Deriving a floor from the label keeps a declared w-* from
+// being narrower than the word it has to show.
+const HEADER_PADDING_PX = 32 // px-4 on both sides
+const HEADER_SORT_AFFORDANCE_PX = 20 // gap-1 + the w-3.5 chevron / ArrowUpDown
+const HEADER_FILTER_AFFORDANCE_PX = 20 // gap-1 + the p-0.5 filter button
+// Deliberately an upper bound on the rendered header font (DM Sans 500, 12px,
+// uppercase, tracking-wide): measured per-character widths across the curated
+// labels ranged 7.2–8.1px, so 8.2 never under-reserves. Over-reserving costs
+// space the flexible Name column has to spare; under-reserving clips again.
+// Printer and host-extra columns take their label from vendor CRD text, which
+// can be long or non-Latin. Cap the floor so one such label can't size a column
+// off the screen; past this a truncated heading (with its tooltip) is better.
+const HEADER_FLOOR_MAX_PX = 320
+
+// Must match the rendered header: text-xs (12px) / font-medium (500) / uppercase
+// / tracking-wide, in the app font. measureText does not apply letter-spacing,
+// so it is added per gap.
+const HEADER_FONT = "500 12px 'DM Sans Variable', 'DM Sans', system-ui, sans-serif"
+const HEADER_LETTER_SPACING_PX = 0.3 // tracking-wide = 0.025em at 12px
+// Fallback only — used where there is no canvas (SSR, jsdom). Deliberately an
+// upper bound: measured per-character widths across the curated labels ranged
+// 7.2–8.1px, so this never under-reserves for Latin text.
+const HEADER_CHAR_PX_FALLBACK = 8.2
+const HEADER_SPACE_PX_FALLBACK = 4
+
+let headerMeasureCtx: CanvasRenderingContext2D | null | undefined
+const headerLabelWidthCache = new Map<string, number>()
+
+// DM Sans is loaded with font-display:swap, so the first tables can render — and
+// be measured — while the browser is still painting the fallback face. Those
+// measurements would otherwise be cached against the wrong glyph metrics for the
+// rest of the session: a wider real face clips a label whose tooltip never
+// activates, a narrower one leaves the table permanently too wide. Drop the
+// cache when the real font arrives and let subscribers recompute.
+let headerFontEpoch = 0
+const headerFontListeners = new Set<() => void>()
+let headerFontWatchStarted = false
+
+function watchHeaderFont(): void {
+  if (headerFontWatchStarted) return
+  headerFontWatchStarted = true
+  const fonts = typeof document === 'undefined' ? undefined : (document as Document & { fonts?: FontFaceSet }).fonts
+  if (!fonts?.ready) return
+  void fonts.ready.then(() => {
+    headerLabelWidthCache.clear()
+    headerMeasureCtx = undefined // re-created so ctx.font resolves against the loaded face
+    headerFontEpoch++
+    for (const notify of headerFontListeners) notify()
+  })
+}
+
+/**
+ * Re-renders once the web font has loaded, so column widths measured against the
+ * fallback face are recomputed against the real one.
+ */
+export function useHeaderFontEpoch(): number {
+  const [epoch, setEpoch] = useState(headerFontEpoch)
+  useEffect(() => {
+    const notify = () => setEpoch(headerFontEpoch)
+    headerFontListeners.add(notify)
+    notify() // the font may have loaded between render and effect
+    return () => { headerFontListeners.delete(notify) }
+  }, [])
+  return epoch
+}
+
+/**
+ * Width of a header label as the browser will actually draw it.
+ *
+ * Measured rather than estimated because the labels are not a closed set: an
+ * uncurated CRD's printer columns take their names from the vendor's own
+ * additionalPrinterColumns, so they can be any length, any script, and a
+ * per-character constant calibrated on curated ASCII silently stops holding.
+ */
+function headerLabelWidth(label: string): number {
+  watchHeaderFont()
+  const cached = headerLabelWidthCache.get(label)
+  if (cached !== undefined) return cached
+  const upper = label.toUpperCase() // the header renders uppercase
+  let width: number
+  if (headerMeasureCtx === undefined) {
+    headerMeasureCtx = typeof document === 'undefined'
+      ? null
+      : document.createElement('canvas').getContext('2d')
+    if (headerMeasureCtx) headerMeasureCtx.font = HEADER_FONT
+  }
+  if (headerMeasureCtx) {
+    width = headerMeasureCtx.measureText(upper).width
+      + HEADER_LETTER_SPACING_PX * Math.max(0, upper.length - 1)
+  } else {
+    width = 0
+    for (const ch of upper) width += ch === ' ' ? HEADER_SPACE_PX_FALLBACK : HEADER_CHAR_PX_FALLBACK
+  }
+  headerLabelWidthCache.set(label, width)
+  return width
+}
+
+/**
+ * Header label that carries its own full text in a tooltip when it truncates.
+ *
+ * The width floor in getColumnMinWidth keeps a heading from being clipped by its
+ * own column, but three cases still truncate: a label past the floor cap, a
+ * column the user dragged narrower, and the sort/filter controls sharing the
+ * row — whose width depends on their state (an active filter renders padding,
+ * an icon and a count). Predicting those widths was wrong twice, so this reads
+ * the actual overflow instead of computing it.
+ */
+function HeaderLabel({ label, className }: { label: string; className?: string }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const [truncated, setTruncated] = useState(false)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const check = () => setTruncated(el.scrollWidth > el.clientWidth + 0.5)
+    check()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(check)
+    ro.observe(el)
+    return () => { ro.disconnect() }
+  }, [label])
+  const span = <span ref={ref} className={clsx('truncate', className)}>{label}</span>
+  return truncated ? <Tooltip content={label}>{span}</Tooltip> : span
+}
+
+/**
+ * Whether a column's header renders a sort control, which takes width beside the
+ * label. Shared by the header render and the width math so the two can't
+ * disagree: printer and custom columns are sortable through their own
+ * getSortValue even though their keys aren't in the built-in list.
+ */
+export function isColumnSortable(col: Column, extras?: Map<string, ExtraColumn>): boolean {
+  return BUILTIN_SORTABLE_COLUMN_KEYS.has(col.key) || !!extras?.get(col.key)?.getSortValue
+}
+
+export function getColumnMinWidth(col: Column, extras?: Map<string, ExtraColumn>): number {
+  const declared = declaredColumnWidth(col)
+  // A column-filter button also sits in this row, but whether one renders
+  // depends on the distinct values in the data (isColumnFilterableByDistinctCount),
+  // which isn't knowable here — those columns stay ~20px tighter than ideal.
+  // Both controls are reserved statically. The filter button only renders once
+  // the data has a filterable spread of values (isColumnFilterableByDistinctCount),
+  // but sizing the column from that would make it change width as rows load or
+  // are filtered — the jumping-column problem fixed layout exists to avoid. So
+  // reserve for any column that could ever carry one, and keep the width stable.
+  const affordance = (isColumnSortable(col, extras) ? HEADER_SORT_AFFORDANCE_PX : 0)
+    + (SKIP_FILTER_COLUMNS.has(col.key) ? 0 : HEADER_FILTER_AFFORDANCE_PX)
+  const headerFloor = HEADER_PADDING_PX + headerLabelWidth(col.label) + affordance
+  return Math.max(declared, Math.min(Math.ceil(headerFloor), HEADER_FLOOR_MAX_PX))
+}
+
+function declaredColumnWidth(col: Column): number {
   if (col.minWidth) return col.minWidth
   if (!col.width) return 200 // Name column (no width class) gets wider minimum
   const match = col.width.match(/(?:min-)?w-(\d+)/)
@@ -3603,6 +3764,9 @@ export function ResourcesView({
 
   // Map of extra column keys for fast O(1) lookup on each render path
   // (cell render, sort, column-filter unique-values).
+  // Recompute header-derived widths once the web font swaps in (see watchHeaderFont).
+  const headerFontEpoch = useHeaderFontEpoch()
+
   const extraColumnsByKey = useMemo(() => {
     const m = new Map<string, ExtraColumn>()
     extraLeadingColumns?.forEach(c => m.set(c.key, c))
@@ -5248,12 +5412,12 @@ export function ResourcesView({
   // scroll horizontally when the viewport is too narrow.
   const tableMinWidth = useMemo(() => {
     const compareColumnWidth = compareMode ? COMPARE_COLUMN_WIDTH : 0
-    const baseMinWidth = columns.reduce((sum, col) => sum + (columnWidths[col.key] || getColumnMinWidth(col)), compareColumnWidth)
+    const baseMinWidth = columns.reduce((sum, col) => sum + (columnWidths[col.key] || getColumnMinWidth(col, extraColumnsByKey)), compareColumnWidth)
     const flexibleNameColumn = columns.find(col => col.key === 'name' && !columnWidths[col.key])
 
     if (!hasResizedColumns || !flexibleNameColumn) return baseMinWidth
-    return baseMinWidth + getColumnMinWidth(flexibleNameColumn)
-  }, [columns, columnWidths, compareMode, hasResizedColumns])
+    return baseMinWidth + getColumnMinWidth(flexibleNameColumn, extraColumnsByKey)
+  }, [columns, columnWidths, compareMode, hasResizedColumns, extraColumnsByKey, headerFontEpoch])
 
   // Stable virtuoso components — memoized to avoid remounting the table on every render
   const virtuosoComponents = useMemo(() => ({
@@ -5281,7 +5445,7 @@ export function ResourcesView({
                 style={{
                   width: columnWidths[col.key]
                     ? `${columnWidths[col.key]}px`
-                    : col.key === 'name' ? undefined : `${getColumnMinWidth(col)}px`,
+                    : col.key === 'name' ? undefined : `${getColumnMinWidth(col, extraColumnsByKey)}px`,
                 }}
               />
             ))}
@@ -5292,7 +5456,7 @@ export function ResourcesView({
       )
     }),
     TableRow: VirtuosoTableRow,
-  }), [columns, columnWidths, hasResizedColumns, compareMode, tableMinWidth, isCheckboxMode])
+  }), [columns, columnWidths, hasResizedColumns, compareMode, tableMinWidth, isCheckboxMode, extraColumnsByKey, headerFontEpoch])
 
   // Calculate filter options with counts based on current resources (before filtering)
   const filterOptions = useMemo(() => {
@@ -6143,8 +6307,7 @@ export function ResourcesView({
                   )}
                   {columns.map((col, colIdx) => {
                     // Built-in sortable keys, plus any extra/custom column that carries its own getSortValue.
-                    const isSortable = ['name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version', 'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object', 'cpu', 'memory', 'containers'].includes(col.key)
-                      || !!extraColumnsByKey.get(col.key)?.getSortValue
+                    const isSortable = isColumnSortable(col, extraColumnsByKey)
                     const isSorted = sortColumn === col.key
                     const isLastCol = colIdx === columns.length - 1
                     const filterCol = filterableColumnMap.get(col.key)
@@ -6168,7 +6331,7 @@ export function ResourcesView({
                               <span className="border-b border-dotted border-theme-text-tertiary truncate">{col.label}</span>
                             </Tooltip>
                           ) : (
-                            <span className="truncate">{col.label}</span>
+                            <HeaderLabel label={col.label} />
                           )}
                           {isSortable && (
                             <span className="text-theme-text-tertiary shrink-0">
