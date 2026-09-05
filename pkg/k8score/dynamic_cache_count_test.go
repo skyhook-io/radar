@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -189,6 +190,32 @@ func TestDynamicResourceCache_ProbeCountDefersWithoutRemainingCount(t *testing.T
 
 	if got := d.ProbeCount(gvr); got != -2 {
 		t.Fatalf("ProbeCount = %d, want -2", got)
+	}
+}
+
+func TestDynamicResourceCache_ProbeCountDefersWhenNamespaceFallbackFailsTransiently(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "WidgetList"},
+	)
+	dyn.PrependReactor("list", "widgets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if action.GetNamespace() == "team-a" {
+			return true, nil, apierrors.NewServiceUnavailable("apiserver hiccup")
+		}
+		return true, nil, apierrors.NewForbidden(gvr.GroupResource(), "", errors.New("denied"))
+	})
+
+	d, err := NewDynamicResourceCache(DynamicCacheConfig{
+		DynamicClient:      dyn,
+		NamespaceFallbacks: []string{"team-a"},
+	})
+	if err != nil {
+		t.Fatalf("NewDynamicResourceCache failed: %v", err)
+	}
+
+	if got := d.ProbeCount(gvr); got != -2 {
+		t.Fatalf("ProbeCount = %d, want -2 after non-authoritative fallback failure", got)
 	}
 }
 

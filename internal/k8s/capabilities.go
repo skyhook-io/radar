@@ -68,35 +68,37 @@ type ResourcePermissions struct {
 //     namespace-scoped on the same cluster, and a namespace-scoped kind may
 //     be readable in several explicitly named namespaces.
 type PermissionCheckResult struct {
-	Perms           *ResourcePermissions
-	NamespaceScoped bool   // True if at least one resource type ended up namespace-scoped
-	Namespace       string // The fallback namespace used for namespace-scoped probes
-	Scopes          map[string]k8score.ResourceScope
-	ScopeNamespaces map[string][]string // Per-kind namespace-scoped informer fanout; nil/empty means use Scopes[key].Namespace
-	ScopeCandidates []string            // The candidate namespaces the probe walked — the dynamic CRD cache probes these per-GVR as its namespace fallbacks
+	Perms                    *ResourcePermissions
+	NamespaceScoped          bool   // True if at least one resource type ended up namespace-scoped
+	Namespace                string // The fallback namespace used for namespace-scoped probes
+	Scopes                   map[string]k8score.ResourceScope
+	ScopeNamespaces          map[string][]string // Per-kind namespace-scoped informer fanout; nil/empty means use Scopes[key].Namespace
+	ScopeCandidates          []string            // The candidate namespaces the probe walked — the dynamic CRD cache probes these per-GVR as its namespace fallbacks
+	ScopeCandidatesTruncated bool                // Candidate set is incomplete: namespace enumeration was non-authoritative or MaxScopeCandidates omitted entries
 }
 
 // Capabilities represents the features available based on RBAC permissions
 type Capabilities struct {
-	Exec           bool                     `json:"exec"`                    // Can create pods/exec (terminal feature)
-	LocalTerminal  bool                     `json:"localTerminal"`           // Local terminal available (not in-cluster, not disabled)
-	Logs           bool                     `json:"logs"`                    // Can get pods/log (log viewer)
-	PortForward    bool                     `json:"portForward"`             // Can create pods/portforward
-	Secrets        bool                     `json:"secrets"`                 // Can list secrets
-	SecretsUpdate  bool                     `json:"secretsUpdate"`           // Can update secrets (inline editing)
-	HelmWrite      bool                     `json:"helmWrite"`               // Helm write ops (detected via secrets/create as sentinel RBAC check)
-	NodeWrite      bool                     `json:"nodeWrite"`               // Can patch nodes (cordon/uncordon/drain)
-	WorkloadWrites WorkloadWritePermissions `json:"workloadWrites"`          // Can patch workload kinds (restart/scale controls)
-	MCPEnabled     bool                     `json:"mcpEnabled"`              // MCP server is running
-	Deployment     DeploymentInfo           `json:"deployment"`              // How / where this Radar binary is running. Tells the UI which chrome to render or suppress (e.g. embedded mode hides the cluster headline + local-MCP card because the hub already renders both).
-	Features       FeatureCapabilities      `json:"features"`                // Versioned server features that newer embedded frontends must negotiate
-	AuthEnabled    bool                     `json:"authEnabled,omitempty"`   // Auth is enabled on the server
-	Username       string                   `json:"username,omitempty"`      // Authenticated username (when auth enabled)
-	Resources      *ResourcePermissions     `json:"resources,omitempty"`     // Per-resource-type permissions
-	Visibility     *VisibilitySummary       `json:"visibility,omitempty"`    // Present when resource visibility is limited enough to make diagnostics incomplete
-	Karpenter      IntegrationCapability    `json:"karpenter"`               // Per-request Karpenter discovery + NodePool read state; populated by the HTTP layer after user SAR.
-	PolicyReports  *PolicyReportStatus      `json:"policyReports,omitempty"` // Why the Kyverno PolicyReport index is (or is not) populated, so an empty policy view can say which.
-	CloudConnect   *CloudConnectCapability  `json:"cloudConnect,omitempty"`
+	Exec              bool                        `json:"exec"`                  // Can create pods/exec (terminal feature)
+	LocalTerminal     bool                        `json:"localTerminal"`         // Local terminal available (not in-cluster, not disabled)
+	Logs              bool                        `json:"logs"`                  // Can get pods/log (log viewer)
+	PortForward       bool                        `json:"portForward"`           // Can create pods/portforward
+	Secrets           bool                        `json:"secrets"`               // Can list secrets
+	SecretsUpdate     bool                        `json:"secretsUpdate"`         // Can update secrets (inline editing)
+	HelmWrite         bool                        `json:"helmWrite"`             // Helm write ops (detected via secrets/create as sentinel RBAC check)
+	NodeWrite         bool                        `json:"nodeWrite"`             // Can patch nodes (cordon/uncordon/drain)
+	WorkloadWrites    WorkloadWritePermissions    `json:"workloadWrites"`        // Can patch workload kinds (restart/scale controls)
+	MCPEnabled        bool                        `json:"mcpEnabled"`            // MCP server is running
+	Deployment        DeploymentInfo              `json:"deployment"`            // How / where this Radar binary is running. Tells the UI which chrome to render or suppress (e.g. embedded mode hides the cluster headline + local-MCP card because the hub already renders both).
+	Features          FeatureCapabilities         `json:"features"`              // Versioned server features that newer embedded frontends must negotiate
+	AuthEnabled       bool                        `json:"authEnabled,omitempty"` // Auth is enabled on the server
+	Username          string                      `json:"username,omitempty"`    // Authenticated username (when auth enabled)
+	Resources         *ResourcePermissions        `json:"resources,omitempty"`   // Per-resource-type permissions
+	Visibility        *VisibilitySummary          `json:"visibility,omitempty"`  // Present when resource visibility is limited enough to make diagnostics incomplete
+	Karpenter         IntegrationCapability       `json:"karpenter"`             // Per-request Karpenter discovery + NodePool read state; populated by the HTTP layer after user SAR.
+	ResourceDiscovery *capacityapi.SourceCoverage `json:"resourceDiscovery,omitempty"`
+	PolicyReports     *PolicyReportStatus         `json:"policyReports,omitempty"` // Why the Kyverno PolicyReport index is (or is not) populated, so an empty policy view can say which.
+	CloudConnect      *CloudConnectCapability     `json:"cloudConnect,omitempty"`
 }
 
 type IntegrationCapability struct {
@@ -932,12 +934,13 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 			scopeNamespacesCopy[k] = append([]string(nil), v...)
 		}
 		result := &PermissionCheckResult{
-			Perms:           &permsCopy,
-			NamespaceScoped: cachedPermResult.NamespaceScoped,
-			Namespace:       cachedPermResult.Namespace,
-			Scopes:          scopesCopy,
-			ScopeNamespaces: scopeNamespacesCopy,
-			ScopeCandidates: append([]string(nil), cachedPermResult.ScopeCandidates...),
+			Perms:                    &permsCopy,
+			NamespaceScoped:          cachedPermResult.NamespaceScoped,
+			Namespace:                cachedPermResult.Namespace,
+			Scopes:                   scopesCopy,
+			ScopeNamespaces:          scopeNamespacesCopy,
+			ScopeCandidates:          append([]string(nil), cachedPermResult.ScopeCandidates...),
+			ScopeCandidatesTruncated: cachedPermResult.ScopeCandidatesTruncated,
 		}
 		resourcePermsMu.RUnlock()
 		return result
@@ -955,7 +958,7 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 	}
 
 	forceNamespace := ForceNamespaceScope
-	scopeNamespaces := buildScopeCandidates(ctx)
+	scopeNamespaces, scopeCandidatesIncomplete := buildScopeCandidates(ctx)
 	if forceNamespace {
 		if target := GetNamespaceScopeTarget(); target != "" {
 			scopeNamespaces = mergeForcedScopeCandidate(target, scopeNamespaces)
@@ -965,6 +968,7 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 	}
 
 	result, hadErrors := probeResourceAccess(ctx, GetDynamicClient(), scopeNamespaces, forceNamespace)
+	result.ScopeCandidatesTruncated = scopeCandidatesIncomplete
 
 	resourcePermsMu.Lock()
 	cachedPermResult = result
@@ -986,10 +990,11 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 // buildScopeCandidates returns the namespace candidates for the fallback
 // probe when cluster-wide list is denied. Kubeconfig context (or
 // --namespace) first; then namespaces from GetAccessibleNamespaces, in the
-// cluster-list order (alphabetical). Empty when no fallback is configured
-// and the user can't enumerate namespaces — caller treats that as "no
-// fallback".
-func buildScopeCandidates(ctx context.Context) []string {
+// cluster-list order (alphabetical). The bool reports an incomplete candidate
+// set: either namespace enumeration was non-authoritative or the safety cap
+// omitted candidates. Empty and incomplete is materially different from an
+// authoritative empty set — dynamic-resource denial must remain partial.
+func buildScopeCandidates(ctx context.Context) ([]string, bool) {
 	// GetEffectiveNamespace would return only one (kubeconfig context wins
 	// over --namespace). Reach into both globals so when an operator sets
 	// `--namespace` distinct from the context, both surface as candidates.
@@ -1014,7 +1019,11 @@ func buildScopeCandidates(ctx context.Context) []string {
 		// kinds" has a breadcrumb instead of silence.
 		log.Printf("RBAC: namespace discovery non-authoritative (cluster-wide list namespaces denied); fallback candidates limited to %v", out)
 	}
-	return out
+	return out, scopeCandidateSetIncomplete(authoritative, dropped)
+}
+
+func scopeCandidateSetIncomplete(authoritative bool, dropped int) bool {
+	return !authoritative || dropped > 0
 }
 
 func mergeForcedScopeCandidate(target string, candidates []string) []string {
@@ -1357,12 +1366,13 @@ func GetCachedPermissionResult() *PermissionCheckResult {
 		scopeNamespacesCopy[k] = append([]string(nil), v...)
 	}
 	return &PermissionCheckResult{
-		Perms:           &permsCopy,
-		NamespaceScoped: cachedPermResult.NamespaceScoped,
-		Namespace:       cachedPermResult.Namespace,
-		Scopes:          scopesCopy,
-		ScopeNamespaces: scopeNamespacesCopy,
-		ScopeCandidates: append([]string(nil), cachedPermResult.ScopeCandidates...),
+		Perms:                    &permsCopy,
+		NamespaceScoped:          cachedPermResult.NamespaceScoped,
+		Namespace:                cachedPermResult.Namespace,
+		Scopes:                   scopesCopy,
+		ScopeNamespaces:          scopeNamespacesCopy,
+		ScopeCandidates:          append([]string(nil), cachedPermResult.ScopeCandidates...),
+		ScopeCandidatesTruncated: cachedPermResult.ScopeCandidatesTruncated,
 	}
 }
 

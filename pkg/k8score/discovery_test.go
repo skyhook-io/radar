@@ -78,7 +78,7 @@ func TestRefreshPreservesSnapshotOnEmptyDiscoveryError(t *testing.T) {
 
 	client.resources = nil
 	client.err = errors.New("temporary discovery failure")
-	beforeRefresh := d.Stats().LastRefresh
+	before := d.Stats()
 	if err := d.Refresh(); err == nil {
 		t.Fatal("Refresh unexpectedly succeeded")
 	}
@@ -86,8 +86,81 @@ func TestRefreshPreservesSnapshotOnEmptyDiscoveryError(t *testing.T) {
 	if !ok || gvr.Version != "v1" {
 		t.Fatalf("preserved metrics GVR = %v, ok=%v, want metrics.k8s.io/v1", gvr, ok)
 	}
-	if !d.Stats().LastRefresh.After(beforeRefresh) {
+	after := d.Stats()
+	if !after.LastAttempt.After(before.LastAttempt) {
 		t.Fatal("failed refresh did not advance the retry cooldown")
+	}
+	if !after.LastSuccessfulRefresh.Equal(before.LastSuccessfulRefresh) {
+		t.Fatalf("last successful refresh changed on failure: got %v, want %v", after.LastSuccessfulRefresh, before.LastSuccessfulRefresh)
+	}
+	if after.LastError != "temporary discovery failure" {
+		t.Fatalf("last error = %q, want temporary discovery failure", after.LastError)
+	}
+	if !after.Stale {
+		t.Fatal("preserved snapshot was not marked stale after total refresh failure")
+	}
+
+	client.resources = initial
+	client.err = nil
+	if err := d.Refresh(); err != nil {
+		t.Fatalf("recovery refresh: %v", err)
+	}
+	recovered := d.Stats()
+	if recovered.Stale || recovered.LastError != "" {
+		t.Fatalf("successful recovery retained stale/error state: %+v", recovered)
+	}
+	if !recovered.LastSuccessfulRefresh.After(before.LastSuccessfulRefresh) {
+		t.Fatal("successful recovery did not advance last successful refresh")
+	}
+}
+
+func TestRefreshMarksEmptySuccessfulSnapshotStaleOnLaterFailure(t *testing.T) {
+	client := &snapshotDiscovery{}
+	d, err := NewResourceDiscovery(client)
+	if err != nil {
+		t.Fatalf("NewResourceDiscovery: %v", err)
+	}
+	if d.Stats().LastSuccessfulRefresh.IsZero() {
+		t.Fatal("empty successful discovery did not record a successful refresh")
+	}
+
+	client.err = errors.New("temporary discovery failure")
+	if err := d.Refresh(); err == nil {
+		t.Fatal("Refresh unexpectedly succeeded")
+	}
+	if stats := d.Stats(); !stats.Stale || stats.LastError == "" {
+		t.Fatalf("failed refresh after empty success = %+v, want stale error", stats)
+	}
+}
+
+func TestRefreshWithResourceDataRecordsFreshPartialSnapshot(t *testing.T) {
+	client := &snapshotDiscovery{
+		resources: []*metav1.APIResourceList{{
+			GroupVersion: "example.io/v1",
+			APIResources: []metav1.APIResource{{Name: "widgets", Kind: "Widget"}},
+		}},
+		err: errors.New("one discovery group failed"),
+	}
+	d, err := NewResourceDiscovery(client)
+	if err != nil {
+		t.Fatalf("NewResourceDiscovery: %v", err)
+	}
+
+	stats := d.Stats()
+	if !stats.Partial || stats.Stale {
+		t.Fatalf("partial/stale = %v/%v, want true/false", stats.Partial, stats.Stale)
+	}
+	if stats.LastSuccessfulRefresh.IsZero() || stats.LastAttempt.IsZero() {
+		t.Fatalf("partial refresh did not record successful data-bearing attempt: %+v", stats)
+	}
+	if stats.LastError != "one discovery group failed" {
+		t.Fatalf("last error = %q", stats.LastError)
+	}
+	if d.HasPartialDiscovery() {
+		t.Fatal("generic data-bearing error broadened group-partial discovery semantics")
+	}
+	if _, ok := d.GetGVRWithGroup("Widget", "example.io"); !ok {
+		t.Fatal("fresh partial snapshot did not retain returned resource data")
 	}
 }
 

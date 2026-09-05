@@ -34,6 +34,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -1294,6 +1295,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.AuthEnabled = s.authConfig.Enabled()
 	status, _ := s.localTerminalUnavailable(r)
 	caps.LocalTerminal = status == 0
+	caps.ResourceDiscovery = resourceDiscoveryCoverage(k8s.GetResourceDiscovery())
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		caps.Username = user.Username
 	}
@@ -1905,6 +1907,20 @@ func (s *Server) handleNamespaces(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, result)
 }
 
+type apiResourceResponse struct {
+	k8score.APIResource
+	Featured    bool                                `json:"featured,omitempty"`
+	Observation *k8score.DynamicResourceObservation `json:"observation,omitempty"`
+}
+
+func filterDynamicObservationNamespaces(observation k8score.DynamicResourceObservation, allowed []string) k8score.DynamicResourceObservation {
+	if observation.Scope != k8score.DynamicObservationScopeExplicitNamespaces || len(observation.Namespaces) == 0 {
+		return observation
+	}
+	observation.Namespaces = intersectNamespaces(allowed, observation.Namespaces)
+	return observation
+}
+
 func (s *Server) handleAPIResources(w http.ResponseWriter, r *http.Request) {
 	discovery := k8s.GetResourceDiscovery()
 	if discovery == nil {
@@ -1918,16 +1934,31 @@ func (s *Server) handleAPIResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type apiResourceResponse struct {
-		k8score.APIResource
-		Featured bool `json:"featured,omitempty"`
-	}
 	result := make([]apiResourceResponse, 0, len(resources))
+	dynamicCache := k8s.GetDynamicResourceCache()
+	var visibleNamespaces []string
+	visibleNamespacesResolved := false
 	for _, resource := range resources {
-		result = append(result, apiResourceResponse{
+		response := apiResourceResponse{
 			APIResource: resource,
 			Featured:    isFeaturedKubernetesAPI(resource.Group, resource.Kind),
-		})
+		}
+		if resource.IsCRD && dynamicCache != nil {
+			observation := dynamicCache.Observation(schema.GroupVersionResource{
+				Group:    resource.Group,
+				Version:  resource.Version,
+				Resource: resource.Name,
+			})
+			if observation.Scope == k8score.DynamicObservationScopeExplicitNamespaces {
+				if !visibleNamespacesResolved {
+					visibleNamespaces = s.getUserNamespaces(r, nil)
+					visibleNamespacesResolved = true
+				}
+				observation = filterDynamicObservationNamespaces(observation, visibleNamespaces)
+			}
+			response.Observation = &observation
+		}
+		result = append(result, response)
 	}
 	s.writeJSON(w, result)
 }
