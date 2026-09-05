@@ -21,15 +21,22 @@ function columnSetBody(key: string): string {
   return SRC.slice(open + 1, i)
 }
 
-// w-16 (64px) clips the "Rules" header to "RUL…" once sort/filter affordances
-// render; w-20 (80px) fits it.
+// The header cell is px-4, so w-16 (64px) leaves 31px for the label while
+// uppercase "RULES" needs ~37px — it clips to "RUL…" unconditionally, with no
+// sort or filter button involved: 'rules' is in SKIP_FILTER_COLUMNS and is not
+// in the sortable-key list, so neither affordance ever renders on it. w-20
+// (80px) leaves 47px.
 describe('Rules column width', () => {
   const kinds = ['kyvernopolicies', 'clusterpolicies', 'httproutes', 'grpcroutes', 'tcproutes', 'tlsroutes']
 
   it.each(kinds)('%s Rules column is at least w-20', (kind) => {
     const rules = columnSetBody(kind).match(/\{ key: 'rules'.*\}/)
     expect(rules, `${kind} has no rules column`).not.toBeNull()
-    expect(rules![0]).not.toContain("width: 'w-16'")
-    expect(rules![0]).toContain("width: 'w-20'")
+    const width = rules![0].match(/width: 'w-(\d+)'/)
+    expect(width, `${kind} rules column has no fixed w-* width`).not.toBeNull()
+    // Compared numerically, not pinned to w-20, so the wider table-width pass
+    // tracked in #1583 can widen these without tripping a test that only
+    // claims a floor.
+    expect(Number(width![1])).toBeGreaterThanOrEqual(20)
   })
 })
