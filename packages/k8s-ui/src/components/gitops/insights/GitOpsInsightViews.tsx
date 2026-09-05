@@ -604,31 +604,36 @@ function GitOpsCompactIssueStack({ issues, onSelectIssue }: { issues: GitOpsIssu
         }}
         disabled={headlineAction === 'none'}
         className={clsx(
-          'group flex w-full items-center gap-2 px-4 py-2 text-left text-xs transition-colors',
+          'group flex w-full flex-col gap-0.5 px-4 py-2 text-left text-xs transition-colors',
           headlineAction !== 'none' ? 'hover:bg-theme-hover/50' : 'cursor-default',
         )}
         aria-expanded={canExpand ? expanded : undefined}
       >
-        {tone.icon}
-        <span className={clsx('shrink-0 font-semibold', tone.text)}>{headline.reason}</span>
-        <span className="min-w-0 flex-1 truncate text-theme-text-secondary">{headline.message}</span>
-        {/* Inline count when there are more issues behind the headline.
-            Lightweight text — pairs with the chevron as a single disclosure
-            unit instead of a separator-bordered count button. */}
-        {remaining > 0 && (
-          <span className="shrink-0 text-[11px] text-theme-text-tertiary">
-            +{remaining} more
-          </span>
+        <div className="flex w-full items-center gap-2">
+          {tone.icon}
+          <span className={clsx('shrink-0 font-semibold', tone.text)}>{headline.reason}</span>
+          <span className="min-w-0 flex-1 truncate text-theme-text-secondary">{headline.message}</span>
+          {/* Inline count when there are more issues behind the headline.
+              Lightweight text — pairs with the chevron as a single disclosure
+              unit instead of a separator-bordered count button. */}
+          {remaining > 0 && (
+            <span className="shrink-0 text-[11px] text-theme-text-tertiary">
+              +{remaining} more
+            </span>
+          )}
+          {/* Open-resource pill: only shown when the row's action IS to open
+              (single-issue case). When the row expands, the per-row Open
+              pills live inside the expanded section, scoped to each item. */}
+          {headlineAction === 'open' && headlineRef && (
+            <span className="shrink-0 text-[11px] font-medium text-theme-text-secondary opacity-70 transition-opacity group-hover:opacity-100">
+              Open {refText(headlineRef)} →
+            </span>
+          )}
+          {canExpand && <CollapseChevron open={expanded} className="h-3.5 w-3.5" />}
+        </div>
+        {headline.cause && (
+          <p className="truncate pl-[22px] text-[11px] text-theme-text-tertiary">{headline.cause}</p>
         )}
-        {/* Open-resource pill: only shown when the row's action IS to open
-            (single-issue case). When the row expands, the per-row Open
-            pills live inside the expanded section, scoped to each item. */}
-        {headlineAction === 'open' && headlineRef && (
-          <span className="shrink-0 text-[11px] font-medium text-theme-text-secondary opacity-70 transition-opacity group-hover:opacity-100">
-            Open {refText(headlineRef)} →
-          </span>
-        )}
-        {canExpand && <CollapseChevron open={expanded} className="h-3.5 w-3.5" />}
       </button>
       {canExpand && (
         <Collapse open={expanded}>

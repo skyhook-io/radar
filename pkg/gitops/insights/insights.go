@@ -640,6 +640,21 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 			// table owns "which", and the ManualDrift / StuckDriftLoop
 			// detectors own the actionable "why isn't this reconciling" cases.
 		}
+		// Argo's own aggregate app health can roll up to Degraded from a
+		// managed resource whose kind never gets a per-resource health.status
+		// written into status.resources[] at all (ClusterSecretStore,
+		// ClusterExternalSecret, and other CRDs outside Argo's built-in Lua
+		// health checks are common offenders) — every detector above finds
+		// nothing to point at even though Argo clearly saw a problem. Fall
+		// back to the managed resource with the loudest Warning events as the
+		// best available attribution instead of leaving the badge unexplained.
+		if len(out) == 0 {
+			if health, _, _ := unstructured.NestedString(root.Object, "status", "health", "status"); health == "Degraded" {
+				if iss := degradedResourceFromEvents(root, resolver); iss != nil {
+					out = append(out, *iss)
+				}
+			}
+		}
 	} else {
 		for _, c := range conditions(root) {
 			if c.status == "False" && (c.typ == "Ready" || c.typ == "Healthy" || c.typ == "Released" || c.typ == "TestSuccess") {
@@ -666,6 +681,68 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 	out = dedupeIssues(out)
 	sort.SliceStable(out, func(i, j int) bool { return severityRank(out[i].Severity) < severityRank(out[j].Severity) })
 	return out
+}
+
+// degradedResourceFromEvents scans each of the Application's declared managed
+// resources for the one with the loudest recent Warning event, as a
+// best-effort attribution when nothing else identified a cause. Not
+// authoritative — just the strongest signal Radar has. Returns nil (no
+// fabricated issue) when no managed resource has any Warning event, or when
+// resolver is nil (tests, and any caller that opts out of live enrichment).
+func degradedResourceFromEvents(root *unstructured.Unstructured, resolver Resolver) *Issue {
+	if resolver == nil {
+		return nil
+	}
+	raw, _, _ := unstructured.NestedSlice(root.Object, "status", "resources")
+	var (
+		best      Ref
+		bestEvent EventSummary
+		// -1, not 0: a real, single-occurrence Warning event commonly reports
+		// Count == 0 on modern clusters (events.k8s.io/v1 only sets a count at
+		// all once an event has repeated into a series) — starting the
+		// sentinel at 0 would make that genuine signal indistinguishable from
+		// "no Warning event found," and the function would silently return no
+		// issue for exactly the first-occurrence case it exists to catch.
+		bestCount int32 = -1
+	)
+	for _, item := range raw {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		ref := Ref{
+			Group:     gitops.StringValue(m["group"]),
+			Kind:      gitops.StringValue(m["kind"]),
+			Namespace: gitops.StringValue(m["namespace"]),
+			Name:      gitops.StringValue(m["name"]),
+		}
+		if ref.Kind == "" || ref.Name == "" {
+			continue
+		}
+		for _, ev := range resolver.RecentEvents(ref.Group, ref.Kind, ref.Namespace, ref.Name) {
+			if ev.Type != "Warning" {
+				continue
+			}
+			if ev.Count > bestCount {
+				bestCount = ev.Count
+				best = ref
+				bestEvent = ev
+			}
+		}
+	}
+	if bestCount < 0 {
+		return nil
+	}
+	return &Issue{
+		Severity:   SeverityCritical,
+		Scope:      ScopeResource,
+		Reason:     "Degraded",
+		Message:    fmt.Sprintf("%s %s: %s", best.Kind, best.Name, fallback(bestEvent.Message, bestEvent.Reason)),
+		RawMessage: bestEvent.Message,
+		Refs:       []Ref{best},
+		Action:     "Open the resource drawer for events, logs, and YAML.",
+		Cause:      fallback(bestEvent.Reason, ""),
+	}
 }
 
 // resourceProblemCause renders a single cause line from the workload problems
