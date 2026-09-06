@@ -53,17 +53,21 @@ shared renderers.
 - [ ] For tables/status, start in `packages/k8s-ui/src/components/resources/`:
   `ResourcesView.tsx`, `generic-status.ts` and `resource-utils-*.ts`. Add curated
   behavior only when it improves the generic view.
+- [ ] For rich table cells, reuse/add `renderers/{integration}-cells.tsx` in that
+  directory and wire the cells through `CellContent` in `ResourcesView.tsx`.
 - [ ] For a drawer, add/reuse a renderer in that directory's `renderers/`, export
-  it from `index.ts`, and wire known kinds, rendering and status in
+  it from `index.ts`, and wire `KNOWN_KINDS`, render lines and `getResourceStatus()` in
   `packages/k8s-ui/src/components/shared/ResourceRendererDispatch.tsx`.
   Reuse sections, properties, conditions, links and problem banners.
 - [ ] **Claim only your exact API group** in renderer dispatch, status, actions
   and table cells. Use an exact-group helper such as `isApiGroup` (currently in
   `resource-utils-cnpg.ts`), not substring `includes`. Unrelated CRDs sharing a
   plural must retain generic behavior and never receive core-only actions.
+  Guard the existing core renderer, status and actions too—not just the new
+  renderer—so both core and custom resources retain the correct behavior.
   See `ResourceRendererDispatch.test.tsx` for collision fixtures.
 - [ ] For custom columns, check `GROUP_QUALIFIED_COLUMN_KEYS`,
-  `CURATED_COLUMN_GROUPS`, `getColumnsForKind` and plural normalization in
+  `CURATED_COLUMN_GROUPS`, `getColumnsForKind` and `normalizeKindToPlural` in
   `ResourcesView.tsx`. `hasCuratedColumns` selects curated **or** printer columns,
   never both; don't inadvertently remove useful vendor fields. Reuse printer-column
   evaluation rather than writing another JSONPath parser.
@@ -101,8 +105,9 @@ shared renderers.
   (protection). These affect Related Resources grouping, not just appearance.
 - [ ] Reuse lists between node/edge construction and handle cache errors. Check
   the generic CRD pass and `kindsHandledOutsideGenericCRDPass` for duplicates and
-  collisions. Keep pseudo-kind `KindForGVK`, node IDs and relationship normalization
-  consistent; test navigation in both directions.
+  collisions. Keep pseudo-kind `KindForGVK`, node IDs and `buildNodeID` /
+  `normalizeKind` in `relationships.go` consistent; use unique node-ID prefixes
+  for colliding kinds and test navigation in both directions.
 - [ ] For cluster-scoped kinds, check `ClusterScopedKinds` in
   `pkg/topology/cluster_scoped_kinds.go` and verify REST/MCP authorization for the
   exact group/resource, including pseudo-kinds shared by multiple APIs.
@@ -134,6 +139,9 @@ shared renderers.
   where relevant. Record versions, screenshots and what was actually exercised;
   distinguish real status from synthetic fixtures. Don't induce destructive
   failures in a shared or production cluster for a test.
+- [ ] For the surfaces changed, confirm intended table columns/cells, drawer,
+  topology icons and edges. For collisions, verify both core and custom resources'
+  renderers, status and available actions; check existing resource types for regressions.
 - [ ] Update [integrations.md](integrations.md) with the surfaces actually supported
   and [README.md](../README.md) as appropriate. No need to change `CLAUDE.md` unless
   introducing an architectural pattern or invariant.
