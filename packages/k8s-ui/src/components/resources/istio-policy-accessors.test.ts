@@ -161,6 +161,21 @@ describe('getAuthorizationPolicyRuleNotice', () => {
     expect(notice).toMatchObject({ level: 'info', title: 'Matches all requests' })
   })
 
+  it('recognises a blanket DENY written with empty condition lists', () => {
+    // from: [] / to: [] / when: [] serialize as present but impose nothing, so
+    // the rule still matches every request the policy selects.
+    for (const rule of [{ from: [] }, { to: [] }, { when: [] }, { from: [], to: [], when: [] }]) {
+      expect(getAuthorizationPolicyRuleNotice({ spec: { action: 'DENY', rules: [rule] } }))
+        .toMatchObject({ title: 'Matches all requests' })
+    }
+  })
+
+  it('does not read an unrecognised rule field as unconditional', () => {
+    // A future condition type must not be mistaken for the absence of one.
+    expect(getAuthorizationPolicyRuleNotice({ spec: { action: 'DENY', rules: [{ someFutureMatcher: [{}] }] } }))
+      .toBeNull()
+  })
+
   it('stays quiet on a DENY whose rules have conditions', () => {
     expect(getAuthorizationPolicyRuleNotice({
       spec: { action: 'DENY', rules: [{ from: [{ source: { namespaces: ['dev'] } }] }] },

@@ -9,9 +9,9 @@ import {
 } from '../resource-utils-istio'
 
 const actionSeverity: Record<string, BadgeSeverity> = {
-  // Deliberately uniform: an action is a declaration, not a verdict. Colouring
-  // ALLOW green and DENY red made a deny-all policy the greenest row on the
-  // page, and a DENY doing its job look like a failure.
+  // Deliberately uniform: an action is a declaration, not a verdict. A green
+  // ALLOW would make a deny-all policy the healthiest row on the page, and a
+  // red DENY would make a control doing its job look like a failure.
   ALLOW: 'neutral',
   DENY: 'neutral',
   CUSTOM: 'neutral',

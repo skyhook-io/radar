@@ -2093,8 +2093,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-24', defaultVisible: false },
     { key: 'host', label: 'Host', width: 'w-48', tooltip: "The service this rule's traffic policy applies to" },
     { key: 'subsets', label: 'Subsets', width: 'w-20', tooltip: 'Named backend groups that routes can select, often for canary releases. Defining subsets does not send traffic to them.' },
-    { key: 'tls', label: 'Client TLS', width: 'w-28', tooltip: 'Declared client-side TLS mode for this host at the rule level. Subset and port policies can override it; this does not establish the effective mTLS posture.' },
-    { key: 'loadBalancer', label: 'LB Policy', width: 'w-28', tooltip: "No algorithm set on this rule — Istio applies its mesh default (LEAST_REQUEST since Istio 1.14, overridable per mesh). Subset and port policies can differ." },
+    { key: 'tlsMode', label: 'Client TLS', width: 'w-28', tooltip: 'Declared client-side TLS mode for this host at the rule level. Subset and port policies can override it; this does not establish the effective mTLS posture.' },
+    { key: 'loadBalancer', label: 'LB Policy', width: 'w-28', tooltip: "Load balancing algorithm declared by this rule. '-' means none is set, so Istio applies its mesh default (LEAST_REQUEST since 1.14, overridable per mesh). Subset and port policies can differ." },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   serviceentries: [

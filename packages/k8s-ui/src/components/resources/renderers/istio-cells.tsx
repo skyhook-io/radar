@@ -36,9 +36,9 @@ const modeSeverity: Record<string, BadgeSeverity> = {
 }
 
 export const AUTHORIZATION_POLICY_ACTION_SEVERITY: Record<string, BadgeSeverity> = {
-  // Deliberately uniform: an action is a declaration, not a verdict. Colouring
-  // ALLOW green and DENY red made a deny-all policy the greenest row on the
-  // page, and a DENY doing its job look like a failure.
+  // Deliberately uniform: an action is a declaration, not a verdict. A green
+  // ALLOW would make a deny-all policy the healthiest row on the page, and a
+  // red DENY would make a control doing its job look like a failure.
   ALLOW: 'neutral',
   DENY: 'neutral',
   CUSTOM: 'neutral',
@@ -94,7 +94,7 @@ export function DestinationRuleCell({ resource, column }: { resource: any; colum
       const lb = getDestinationRuleLoadBalancer(resource)
       return <span className="text-sm text-theme-text-secondary">{lb}</span>
     }
-    case 'tls': {
+    case 'tlsMode': {
       // Every mode reads neutral: this is the rule's declaration, not the
       // posture in force. What a DISABLE produces depends on the server's
       // PeerAuthentication — unencrypted traffic, or failed requests.

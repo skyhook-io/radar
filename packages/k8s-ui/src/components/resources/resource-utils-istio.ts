@@ -127,9 +127,8 @@ export function getVirtualServiceDestinations(resource: any): Array<{ host: stri
  * The only failure this object can show on its own.
  *
  * A rule without a host applies to nothing. Everything else it declares —
- * subsets, a traffic policy — describes configuration, and restating the count
- * of subsets already shown two columns over said nothing about whether the
- * host is reachable or the policy is in effect.
+ * subsets, a traffic policy — is configuration, and says nothing about whether
+ * the host is reachable or the policy is in effect.
  */
 export function getDestinationRuleStatus(resource: any): StatusBadge {
   if (!resource.spec?.host) {
@@ -340,7 +339,7 @@ export function getPeerAuthenticationPortLevelMtls(resource: any): Record<string
  * An action is not a state of wellness: a DENY doing its job is not unhealthy,
  * and an ALLOW is not proof anything is permitted. The request decision is made
  * across every policy selecting the workload, so no single object can establish
- * it, and toning one green or red asserts an answer it does not have.
+ * it, and a green or red tone would assert an answer this object does not have.
  *
  * The one shape worth marking is an ALLOW — the default action — carrying no
  * rules. Rules are alternatives, so zero of them match nothing, and Istio
@@ -388,9 +387,8 @@ export function getAuthorizationPolicySelector(resource: any): Record<string, st
  * What the policy declares it applies to.
  *
  * A policy can attach by targetRef instead of by labels — waypoints and
- * Gateways in ambient mode do — and reading only the selector reported those as
- * scoped to the namespace, which is a different and much wider claim. With
- * neither, scope is inherited: the namespace, or the whole mesh when the policy
+ * Gateways in ambient mode do — so the selector alone does not describe scope.
+ * With neither, scope is inherited: the namespace, or the whole mesh when the policy
  * sits in the mesh root namespace. Which of those applies depends on
  * MeshConfig.rootNamespace, which is not readable from this object, so the cell
  * names both rather than guessing from the conventional namespace name.
@@ -432,12 +430,18 @@ export function getAuthorizationPolicyRuleNotice(
   const action = resource?.spec?.action || 'ALLOW'
   const rules = resource?.spec?.rules
   if (Array.isArray(rules) && rules.length > 0) {
-    // A rule with no conditions matches every request. On a DENY that is not a
-    // baseline other policies carve exceptions out of: DENY is evaluated first,
-    // so no ALLOW can re-permit what it matches.
-    const matchesEverything = rules.some(
-      (r: any) => r && typeof r === 'object' && Object.keys(r).length === 0,
-    )
+    // A rule matches every request when it carries no conditions — which
+    // includes serialized empty lists, not just an empty object. On a DENY that
+    // is not a baseline other policies carve exceptions out of: DENY is
+    // evaluated first, so no ALLOW can re-permit what it matches. Unknown keys
+    // are treated as conditions, so a future field cannot be read as blanket.
+    const CONDITION_KEYS = ['from', 'to', 'when']
+    const matchesEverything = rules.some((r: any) => {
+      if (!r || typeof r !== 'object') return false
+      const keys = Object.keys(r)
+      if (keys.some(k => !CONDITION_KEYS.includes(k))) return false
+      return CONDITION_KEYS.every(k => !Array.isArray(r[k]) || r[k].length === 0)
+    })
     if (action === 'DENY' && matchesEverything) {
       return {
         level: 'info',
