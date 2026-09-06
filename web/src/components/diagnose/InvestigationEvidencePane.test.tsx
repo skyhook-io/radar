@@ -24,7 +24,7 @@ import {
 import type { DiagnosisResourceRef } from "./diagnoseEvidenceTypes";
 import type { Diagnosis } from "../../api/diagnose";
 import { ResultCard } from "./parts";
-import { investigationEvidenceCoverageLimited } from "./InvestigationView";
+import { investigationEvidenceCoverageLimited } from "./investigationState";
 
 const onViewSource = vi.fn();
 const target = {

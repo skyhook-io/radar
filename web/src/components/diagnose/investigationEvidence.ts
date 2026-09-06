@@ -10,6 +10,7 @@ import {
   type Topology,
 } from "@skyhook-io/k8s-ui";
 import { fnv1a32 } from "@skyhook-io/k8s-ui/utils/structure-hash";
+import { apiVersionToGroup } from "../../utils/navigation";
 
 import {
   diagnosisSeverityTone,
@@ -463,7 +464,7 @@ export function investigationEvidenceSubjectRef(
         return data.subject;
       case "resource": {
         const apiVersion = data.resource.apiVersion;
-        const group = apiVersion.includes("/") ? apiVersion.split("/")[0] : "";
+        const group = apiVersionToGroup(apiVersion);
         return {
           kind: data.resource.kind,
           group: group || undefined,
@@ -1248,10 +1249,6 @@ function sourceArgsRelevance(
     namespace: nonEmptyString(args?.namespace) ? args.namespace : undefined,
     name: args.name,
   });
-}
-
-function apiGroupFromAPIVersion(apiVersion: string): string {
-  return apiVersion.includes("/") ? apiVersion.split("/", 1)[0] : "";
 }
 
 function evidenceTierForRelevance(
@@ -2093,7 +2090,7 @@ function adaptDiagnose(
   }
   const bundleRelevance = relevanceForResource(builder, {
     kind: resource.kind,
-    group: apiGroupFromAPIVersion(resource.apiVersion),
+    group: apiVersionToGroup(resource.apiVersion),
     namespace: resource.metadata.namespace,
     name: resource.metadata.name,
   });
@@ -2108,7 +2105,7 @@ function adaptDiagnose(
       kind.toLowerCase() === resource.kind.toLowerCase() &&
       name === resource.metadata.name;
     const group = sameAsRoot
-      ? apiGroupFromAPIVersion(resource.apiVersion)
+      ? apiVersionToGroup(resource.apiVersion)
       : kind.toLowerCase() === "pod"
         ? ""
         : undefined;
@@ -2214,7 +2211,7 @@ function adaptDiagnose(
             subject: (() => {
               const namespace = resource.metadata.namespace;
               if (!namespace) return undefined;
-              const rootGroup = apiGroupFromAPIVersion(resource.apiVersion);
+              const rootGroup = apiVersionToGroup(resource.apiVersion);
               const group =
                 blocker.kind === resource.kind
                   ? rootGroup
@@ -2788,7 +2785,7 @@ function adaptGetResource(
   const warnings = stringArray(value?.warnings) ?? [];
   const relevance = relevanceForResource(builder, {
     kind: resource.kind,
-    group: apiGroupFromAPIVersion(resource.apiVersion),
+    group: apiVersionToGroup(resource.apiVersion),
     namespace: resource.metadata.namespace,
     name: resource.metadata.name,
   });

@@ -15,7 +15,7 @@ import {
   canContinueInvestigation,
   canInvestigateFurther,
   canStopInvestigation,
-} from "./InvestigationView";
+} from "./investigationState";
 import type { RunSummary } from "../../api/diagnose";
 
 // The "new investigation" button dispatches an agent and spends the user's own
