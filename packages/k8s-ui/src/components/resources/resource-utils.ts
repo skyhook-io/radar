@@ -1897,7 +1897,12 @@ function isReportForParentRef(ref: any, reported: any, routeNamespace: string): 
  * routes always carry both, so a missing one means nothing has confirmed the
  * refs yet.
  */
-export function getRouteStatus(route: any): StatusBadge {
+/**
+ * The reports that describe parents this route is actually attached to, plus
+ * the readers the verdict uses. Shared with getRouteStatusReason so the badge
+ * and its explanation can never disagree about which parents counted.
+ */
+function routeParentEvidence(route: any) {
   const refs = route.spec?.parentRefs || []
   const reports = route.status?.parents || []
   const routeNamespace = route.metadata?.namespace || ''
@@ -1930,8 +1935,6 @@ export function getRouteStatus(route: any): StatusBadge {
     ? [...perRef.flat(), ...reports.filter((p: any) => !claimed.has(p) && isDefaultGatewayReport(p))]
     : perRef.flat()
 
-  if (considered.length === 0) return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
-
   // A condition observed against a superseded generation describes a spec that
   // has since changed, so it cannot confirm the current one. A condition with no
   // observedGeneration at all is taken at face value.
@@ -1940,8 +1943,15 @@ export function getRouteStatus(route: any): StatusBadge {
   const conditionOf = (report: any, type: string) =>
     (report?.conditions || []).filter((c: any) => c?.type === type && isCurrent(c)).pop()
   const statusOf = (report: any, type: string) => conditionOf(report, type)?.status
-
   const everyRefReported = perRef.every((list: any[]) => list.length > 0)
+
+  return { considered, everyRefReported, conditionOf, statusOf }
+}
+
+export function getRouteStatus(route: any): StatusBadge {
+  const { considered, everyRefReported, statusOf } = routeParentEvidence(route)
+
+  if (considered.length === 0) return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
   const anyFailure = considered.some((r: any) =>
     statusOf(r, 'Accepted') === 'False' || statusOf(r, 'ResolvedRefs') === 'False')
 
@@ -1956,6 +1966,27 @@ export function getRouteStatus(route: any): StatusBadge {
     return { text: 'Accepted', color: healthColors.healthy, level: 'healthy' }
   }
   return { text: 'Pending', color: healthColors.degraded, level: 'degraded' }
+}
+
+/**
+ * Why the badge says what it says: which parent is unhappy, and the controller's
+ * own reason. Without it "Degraded" tells an operator something is wrong and
+ * nothing about what — and the whole point of reading ResolvedRefs is that the
+ * answer is usually "the backend you named does not exist".
+ */
+export function getRouteStatusReason(route: any): string {
+  const { considered, conditionOf } = routeParentEvidence(route)
+  const parts: string[] = []
+  for (const report of considered) {
+    const name = report?.parentRef?.name || 'parent'
+    for (const type of ['Accepted', 'ResolvedRefs']) {
+      const c = conditionOf(report, type)
+      if (c?.status !== 'False') continue
+      const detail = [c.reason, c.message].filter(Boolean).join(': ')
+      parts.push(detail ? `${name}: ${detail}` : `${name}: ${type} is false`)
+    }
+  }
+  return parts.join(' · ')
 }
 
 export function getRouteParents(route: any): string {
