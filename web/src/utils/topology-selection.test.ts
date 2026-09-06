@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SelectedResource, Topology, TopologyNode } from '@skyhook-io/k8s-ui/types/core'
-import { findSelectedTopologyNode } from './topology-selection'
+import { findSelectedTopologyNode, scopeTopologyNodesToNamespaces } from './topology-selection'
 
 function node(id: string, kind: string, name: string, apiVersion?: string): TopologyNode {
   return {
@@ -36,5 +36,27 @@ describe('findSelectedTopologyNode', () => {
     const topology: Topology = { nodes: [first, second], edges: [] }
 
     expect(findSelectedTopologyNode(topology, selected('two.example', 'widgets'))?.id).toBe('second')
+  })
+})
+
+describe('scopeTopologyNodesToNamespaces', () => {
+  it('keeps selected namespaces and cluster-scoped nodes', () => {
+    const selected = node('selected', 'Pod', 'selected')
+    const other = { ...node('other', 'Pod', 'other'), data: { namespace: 'other' } }
+    const clusterScoped = { ...node('cluster', 'Node', 'cluster'), data: {} }
+    const emptyNamespace = { ...node('empty', 'Namespace', 'default'), data: { namespace: '' } }
+
+    const scoped = scopeTopologyNodesToNamespaces(
+      [selected, other, clusterScoped, emptyNamespace],
+      ['default'],
+    )
+
+    expect(scoped.map(item => item.id)).toEqual(['selected', 'cluster', 'empty'])
+  })
+
+  it('keeps the full node set when no namespace is selected', () => {
+    const nodes = [node('default', 'Pod', 'default')]
+
+    expect(scopeTopologyNodesToNamespaces(nodes, [])).toBe(nodes)
   })
 })
