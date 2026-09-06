@@ -66,7 +66,7 @@ import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNam
 import { SettingsDialog, type SettingsSectionId } from './components/settings/SettingsDialog'
 import type { APIResource, TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, TopologyMode, Topology, K8sEvent } from './types'
 import { kindToPluralWithGroup, pluralToKind, openExternal, apiVersionToGroup, relatedResourcePath, searchHitToSelectedResource } from './utils/navigation'
-import { findSelectedTopologyNode } from './utils/topology-selection'
+import { findSelectedTopologyNode, scopeTopologyNodesToNamespaces } from './utils/topology-selection'
 import { type OmnibarHandle } from './components/ui/Omnibar'
 import { RadarOmnibar } from './components/ui/RadarOmnibar'
 import type { ContextSwitcherHandle } from './components/ContextSwitcher'
@@ -1575,6 +1575,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     if (!params.has('release')) setSelectedHelmRelease(null)
   }, [namespacesKey])
 
+  const namespaceScopedTopologyNodes = useMemo(
+    () => scopeTopologyNodesToNamespaces(displayedTopology?.nodes ?? [], namespaces),
+    [displayedTopology, namespaces],
+  )
+
   // Filter topology based on visible kinds (uses displayedTopology which respects pause)
   const filteredTopology = useMemo((): Topology | null => {
     if (!displayedTopology) return null
@@ -1582,12 +1587,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     // Fleet mode overrides visible kinds to show only CAPI resources + Node
     const effectiveKinds = topologyMode === 'fleet' ? FLEET_MODE_KINDS : visibleKinds
 
-    // Filter by namespace (client-side) and by visible kinds
-    const nsSet = namespaces.length > 0 ? new Set(namespaces) : null
-    const filteredNodes = displayedTopology.nodes.filter(node =>
-      effectiveKinds.has(node.kind) &&
-      (!nsSet || nsSet.has(node.data.namespace as string) || !(node.data.namespace as string))
-    )
+    // Filter by visible kinds after namespace scoping so the sidebar can use the
+    // same complete scoped node set without inheriting kind visibility.
+    const filteredNodes = namespaceScopedTopologyNodes.filter(node => effectiveKinds.has(node.kind))
     const filteredNodeIds = new Set(filteredNodes.map(n => n.id))
 
     // Keep edges where both source and target are visible
@@ -1609,7 +1611,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       nodes: filteredNodes,
       edges: filteredEdges,
     }
-  }, [displayedTopology, visibleKinds, namespaces, topologyMode])
+  }, [displayedTopology, namespaceScopedTopologyNodes, visibleKinds, topologyMode])
 
   // Cluster Audit findings, joined onto topology nodes by the audit key the
   // backend stamps on each node (data.auditKey). Only badge-worthy findings
@@ -2163,7 +2165,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
               <>
                 {/* Filter sidebar */}
                 <TopologyFilterSidebar
-                  nodes={topology?.nodes || []}
+                  nodes={namespaceScopedTopologyNodes}
                   visibleKinds={visibleKinds}
                   onToggleKind={handleToggleKind}
                   onShowAll={handleShowAllKinds}

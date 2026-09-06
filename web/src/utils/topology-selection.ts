@@ -38,3 +38,16 @@ export function findSelectedTopologyNode(
   // highlighting a resource from another API group.
   return candidates.some(node => topologyNodeGroup(node) !== undefined) ? undefined : candidates[0]
 }
+
+export function scopeTopologyNodesToNamespaces(
+  nodes: TopologyNode[],
+  namespaces: string[],
+): TopologyNode[] {
+  if (namespaces.length === 0) return nodes
+
+  const selectedNamespaces = new Set(namespaces)
+  return nodes.filter(node => {
+    const namespace = node.data.namespace
+    return typeof namespace !== 'string' || namespace === '' || selectedNamespaces.has(namespace)
+  })
+}
