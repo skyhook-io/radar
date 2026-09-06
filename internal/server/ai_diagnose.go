@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 
@@ -187,7 +186,7 @@ func mergeDetectedWithDrivable(detected, drivable []ai.AgentInfo) []ai.AgentInfo
 // disclosure for an execution profile. Doesn't require a connected cluster — consent can be
 // given while Radar is still connecting.
 func (s *Server) handleDiagnoseConsent(w http.ResponseWriter, r *http.Request) {
-	if !localOriginOK(r) {
+	if !sameOriginOK(r) {
 		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
 		return
 	}
@@ -234,30 +233,10 @@ func validReasoningEffort(e string) bool {
 	return false
 }
 
-// localOriginOK rejects cross-origin POSTs to these state-changing, process-
-// spawning endpoints. Same-origin (no Origin header) passes; otherwise the Origin
-// must parse to an exact loopback host — substring checks would let
-// "localhost.evil.com" through.
-func localOriginOK(r *http.Request) bool {
-	o := r.Header.Get("Origin")
-	if o == "" {
-		return true // same-origin / non-browser
-	}
-	u, err := url.Parse(o)
-	if err != nil {
-		return false
-	}
-	switch u.Hostname() {
-	case "localhost", "127.0.0.1", "::1":
-		return true
-	}
-	return false
-}
-
 // handleDiagnoseStart begins an investigation (or focuses a live one for the same
 // target) and returns its run id. POST {kind, namespace, name}.
 func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
-	if !localOriginOK(r) {
+	if !sameOriginOK(r) {
 		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
 		return
 	}
@@ -363,7 +342,7 @@ func (s *Server) handleDiagnoseGet(w http.ResponseWriter, r *http.Request) {
 // handleDiagnoseHistoryClear wipes the persisted investigation history (and
 // drops finished runs from memory). Live runs survive. POST, same-origin only.
 func (s *Server) handleDiagnoseHistoryClear(w http.ResponseWriter, r *http.Request) {
-	if !localOriginOK(r) {
+	if !sameOriginOK(r) {
 		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
 		return
 	}
@@ -384,7 +363,7 @@ func (s *Server) handleDiagnoseHistoryClear(w http.ResponseWriter, r *http.Reque
 // handleDiagnoseTurn adds a follow-up or apply turn to a run. POST {question?,
 // apply?, fix?}. Apply enables write tools and binds to the confirmed fix text.
 func (s *Server) handleDiagnoseTurn(w http.ResponseWriter, r *http.Request) {
-	if !localOriginOK(r) {
+	if !sameOriginOK(r) {
 		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
 		return
 	}
@@ -426,7 +405,7 @@ func (s *Server) handleDiagnoseTurn(w http.ResponseWriter, r *http.Request) {
 
 // handleDiagnoseStop cancels a run's in-flight agent.
 func (s *Server) handleDiagnoseStop(w http.ResponseWriter, r *http.Request) {
-	if !localOriginOK(r) {
+	if !sameOriginOK(r) {
 		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
 		return
 	}

@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -812,6 +813,7 @@ func TestSameOriginOKAcceptsTheServingAuthority(t *testing.T) {
 		{"different port on the same non-loopback host", "10.0.0.5:9280", "http://10.0.0.5:9999", false},
 		{"loopback origin against a non-loopback host", "10.0.0.5:9280", "http://127.0.0.1:9280", false},
 		{"unparseable origin", "10.0.0.5:9280", "://nope", false},
+		{"opaque (null) origin", "10.0.0.5:9280", "null", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -831,6 +833,42 @@ func TestSameOriginOKAcceptsTheServingAuthority(t *testing.T) {
 // may carry the cluster token. It must not reach the status API — the wire
 // structs having no token FIELD is not enough when the value rides inside a
 // message string.
+// TestSameOriginOKRejectsSchemeDowngrade covers the HTTP-origin-on-HTTPS-request
+// case: when the request arrives over TLS (directly or via X-Forwarded-Proto),
+// an http:// Origin whose authority matches must still be rejected, because it is
+// a different origin from the https:// site.
+func TestSameOriginOKRejectsSchemeDowngrade(t *testing.T) {
+	cases := []struct {
+		name           string
+		tls            bool
+		forwardedProto string
+		origin         string
+		want           bool
+	}{
+		{"https request, http origin (downgrade)", true, "", "http://10.0.0.5:9280", false},
+		{"https request, https origin", true, "", "https://10.0.0.5:9280", true},
+		{"forwarded https, http origin (downgrade)", false, "https", "http://10.0.0.5:9280", false},
+		{"forwarded https, https origin", false, "https", "https://10.0.0.5:9280", true},
+		{"plain http request, http origin", false, "", "http://10.0.0.5:9280", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/api/cloud/install/prepare", nil)
+			r.Host = "10.0.0.5:9280"
+			if tc.tls {
+				r.TLS = &tls.ConnectionState{}
+			}
+			if tc.forwardedProto != "" {
+				r.Header.Set("X-Forwarded-Proto", tc.forwardedProto)
+			}
+			r.Header.Set("Origin", tc.origin)
+			if got := sameOriginOK(r); got != tc.want {
+				t.Fatalf("sameOriginOK(tls=%v xfp=%q origin=%q) = %v, want %v", tc.tls, tc.forwardedProto, tc.origin, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCloudInstallProvisionErrorNeverLeaksTokenIntoStatus(t *testing.T) {
 	fx := newManagerFixture(cloudinstall.ProvisionFresh, cloudinstall.InstallModeFresh, nil)
 	// The apiserver folds stringData into base64 `data` before admission runs,

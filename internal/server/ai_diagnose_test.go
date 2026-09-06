@@ -45,31 +45,44 @@ func TestListAgents_Eligible(t *testing.T) {
 	}
 }
 
-// TestLocalOriginOK pins the cross-origin guard on the process-spawning POST
-// endpoints: same-origin and exact loopback pass; look-alike hosts don't.
-func TestLocalOriginOK(t *testing.T) {
+// TestDiagnoseConsentOriginGate pins the CSRF guard on the process-spawning
+// diagnose POSTs at the handler layer: the guard must admit a genuinely
+// same-origin browser POST even on a non-loopback listener
+// (Origin == the authority the browser actually connected to) and still reject
+// a foreign origin. We assert only whether the origin gate blocked the request
+// (403) — a request that clears the gate falls through to later checks whose
+// status is irrelevant here, so the test must not couple to it.
+func TestDiagnoseConsentOriginGate(t *testing.T) {
 	cases := []struct {
-		origin string
-		want   bool
+		name        string
+		host        string
+		origin      string
+		wantBlocked bool // true => origin gate must 403; false => gate must let it through
 	}{
-		{"", true}, // same-origin / non-browser
-		{"http://localhost:9301", true},
-		{"http://127.0.0.1:3000", true},
-		{"https://localhost", true},
-		{"http://[::1]:9301", true},
-		{"http://localhost.evil.com", false}, // substring trap
-		{"http://127.0.0.1.evil.com", false},
-		{"https://evil.com", false},
-		{"null", false},
+		{"same-origin non-loopback listener", "192.168.1.100:9280", "http://192.168.1.100:9280", false},
+		{"same-origin loopback", "127.0.0.1:9280", "http://127.0.0.1:9280", false},
+		{"non-browser client (no Origin)", "192.168.1.100:9280", "", false},
+		{"vite dev proxy loopback-to-loopback", "localhost:9280", "http://localhost:9273", false},
+		{"foreign origin", "192.168.1.100:9280", "https://evil.example", true},
+		{"loopback origin against non-loopback host", "192.168.1.100:9280", "http://127.0.0.1:9280", true},
+		{"lookalike hostname", "192.168.1.100:9280", "http://192.168.1.100.evil.com", true},
+		{"opaque (null) origin", "192.168.1.100:9280", "null", true},
 	}
+	s := &Server{}
 	for _, c := range cases {
-		r := &http.Request{Header: http.Header{}}
-		if c.origin != "" {
-			r.Header.Set("Origin", c.origin)
-		}
-		if got := localOriginOK(r); got != c.want {
-			t.Errorf("localOriginOK(%q) = %v, want %v", c.origin, got, c.want)
-		}
+		t.Run(c.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/api/diagnose/consent", nil)
+			r.Host = c.host
+			if c.origin != "" {
+				r.Header.Set("Origin", c.origin)
+			}
+			w := httptest.NewRecorder()
+			s.handleDiagnoseConsent(w, r)
+			blocked := w.Code == http.StatusForbidden
+			if blocked != c.wantBlocked {
+				t.Errorf("origin gate blocked = %v (status %d), want blocked = %v", blocked, w.Code, c.wantBlocked)
+			}
+		})
 	}
 }
 

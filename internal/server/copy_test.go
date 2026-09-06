@@ -509,24 +509,34 @@ func TestPodFileSaveRejectsCrossOriginRequests(t *testing.T) {
 		return "", nil
 	}}
 
-	for origin, wantStatus := range map[string]int{
-		"https://evil.example.com":  http.StatusForbidden,
-		"http://localhost.evil.com": http.StatusForbidden,
-		"http://localhost:9280":     0, // allowed through to the handler's own checks
-		"":                          0, // same-origin or a non-browser caller
-	} {
+	// host is the authority the browser connected to (r.Host). A same-origin
+	// POST must pass the CSRF gate even when that authority is not loopback; a
+	// foreign or loopback-lookalike origin must still be rejected.
+	const host = "192.168.1.100:9280"
+	cases := []struct {
+		origin     string
+		wantStatus int
+	}{
+		{"https://evil.example.com", http.StatusForbidden},
+		{"http://192.168.1.100.evil.com", http.StatusForbidden},
+		{"http://127.0.0.1:9280", http.StatusForbidden}, // loopback origin, non-loopback host
+		{"http://192.168.1.100:9280", 0},                // same-origin non-loopback listener
+		{"", 0},                                         // same-origin or a non-browser caller
+	}
+	for _, c := range cases {
 		req := httptest.NewRequest(http.MethodPost, "/api/pods/ns/pod/files/save?container=c&path=/f", nil)
-		if origin != "" {
-			req.Header.Set("Origin", origin)
+		req.Host = host
+		if c.origin != "" {
+			req.Header.Set("Origin", c.origin)
 		}
 		rec := httptest.NewRecorder()
 		s.handlePodFileSave(rec, req)
 
-		if wantStatus == http.StatusForbidden && rec.Code != http.StatusForbidden {
-			t.Errorf("Origin %q got %d, want %d", origin, rec.Code, http.StatusForbidden)
+		if c.wantStatus == http.StatusForbidden && rec.Code != http.StatusForbidden {
+			t.Errorf("Origin %q got %d, want %d", c.origin, rec.Code, http.StatusForbidden)
 		}
-		if wantStatus == 0 && rec.Code == http.StatusForbidden {
-			t.Errorf("Origin %q was rejected as cross-origin", origin)
+		if c.wantStatus == 0 && rec.Code == http.StatusForbidden {
+			t.Errorf("Origin %q was rejected as cross-origin", c.origin)
 		}
 	}
 }
