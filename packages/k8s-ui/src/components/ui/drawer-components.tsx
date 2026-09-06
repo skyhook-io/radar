@@ -101,7 +101,8 @@ export function Section({ title, icon: Icon, children, defaultExpanded = true, c
         className="grid transition-[grid-template-rows] duration-200 ease-out"
         style={{ gridTemplateRows: expanded ? '1fr' : '0fr' }}
       >
-        <div className="overflow-hidden">
+        {/* `relative` is load-bearing — see the note in ui/Collapse.tsx. */}
+        <div className="relative overflow-hidden">
           <div className={contentClassName ?? 'pl-6'}>{children}</div>
         </div>
       </div>
@@ -131,7 +132,8 @@ export function ExpandableSection({ title, children, defaultExpanded = true }: E
         className="grid transition-[grid-template-rows] duration-200 ease-out"
         style={{ gridTemplateRows: expanded ? '1fr' : '0fr' }}
       >
-        <div className="overflow-hidden">
+        {/* `relative` is load-bearing — see the note in ui/Collapse.tsx. */}
+        <div className="relative overflow-hidden">
           <div className="ml-5">{children}</div>
         </div>
       </div>

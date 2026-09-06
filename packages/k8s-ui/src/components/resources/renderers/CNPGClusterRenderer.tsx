@@ -23,6 +23,7 @@ import {
   getCNPGWALArchivingFailure,
   getCNPGLastBackupFailure,
   classifyCNPGClusterPhase,
+  getCNPGClusterAvailability,
   CNPG_BARMAN_OBJECTSTORE_GROUP,
 } from '../resource-utils-cnpg'
 import { formatAge } from '../resource-utils'
@@ -79,8 +80,11 @@ export function CNPGClusterRenderer({ data, onNavigate, declared}: CNPGClusterRe
   const lastBackupFailure = getCNPGLastBackupFailure(data)
   const phaseBucket = classifyCNPGClusterPhase(phase)
 
-  // Problem detection
-  const isDown = countsKnown && readyInstances === 0
+  // Problem detection. isDown reuses the badge's availability verdict so the
+  // three surfaces agree: a fully-down cluster CNPG reports by omitting
+  // readyInstances (countsKnown false) is unreachable through the raw counts,
+  // and hibernation / all-fenced are deliberate not-serving states, not outages.
+  const isDown = getCNPGClusterAvailability(data) === 'down'
   // A shortfall the PHASE already explains is not a separate problem. Mirrors
   // source_cnpg.go's phaseExplained gate and the badge's ordering, both of
   // which check the phase before the instance counts: mid-switchover or waiting

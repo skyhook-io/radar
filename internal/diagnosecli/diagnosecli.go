@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -252,11 +253,12 @@ Flags:
 		return 1
 	}
 	if o.jsonOut {
+		radarURL := base + "/?ai-run=" + url.QueryEscape(run.ID)
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		_ = enc.Encode(map[string]any{
 			"run": run.ID, "kind": run.Kind, "group": run.Group, "namespace": run.Namespace, "name": run.Name,
-			"agent": run.Agent, "diagnosis": diag,
+			"agent": run.Agent, "radar_url": radarURL, "diagnosis": diag,
 		})
 	}
 	return 0

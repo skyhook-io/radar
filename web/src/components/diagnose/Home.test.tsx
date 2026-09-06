@@ -40,6 +40,43 @@ function render(runs: RunSummary[], selectedId?: string): string {
 afterEach(() => vi.useRealTimers());
 
 describe("RecentList", () => {
+  it("keeps hosted ownership and visibility cues in the compact resource-first list", () => {
+    const html = visible(
+      render([
+        run({
+          id: "mine",
+          name: "my-service",
+          ownedByMe: true,
+          visibility: "private",
+        }),
+        run({
+          id: "shared",
+          name: "team-service",
+          ownedByMe: false,
+          visibility: "organization",
+        }),
+        run({
+          id: "auto",
+          name: "automatic-service",
+          trigger: "background",
+          status: "stopping",
+        }),
+      ]),
+    );
+    expect(html).toContain("Your investigations");
+    expect(html).toContain("Organization");
+    expect(html).toContain("Private");
+    expect(html).toContain("Shared");
+    expect(html).toContain("Automatic");
+    expect(html).toContain("Stopping");
+    expect(html.indexOf("my-service")).toBeLessThan(
+      html.indexOf("Organization"),
+    );
+    expect(html.indexOf("Organization")).toBeLessThan(
+      html.indexOf("team-service"),
+    );
+  });
+
   it("keeps the whole row clickable without a portal tooltip and labels individual identity fields", () => {
     const html = render([run()]);
     expect(html).not.toContain("inline-flex max-w-full");

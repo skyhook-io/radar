@@ -881,8 +881,15 @@ export function WorkloadView({
         {/* Success animation overlay */}
         {saveSuccess && <SaveSuccessAnimation />}
 
-        {/* Content — viewTransitionName scopes View Transitions API cross-fade to this element */}
-        <div className="flex-1 overflow-y-auto" style={{ viewTransitionName: 'drawer-content' }}>
+        {/* Content — viewTransitionName scopes View Transitions API cross-fade to this element.
+            `relative` is the backstop for absolutely-positioned descendants (Tailwind's
+            `sr-only` is position:absolute). The drawer frame keeps overflow visible at idle so
+            popovers aren't clipped, and the app's content column clips only horizontally, so one
+            that resolves its containing block above this scroller escapes into the DOCUMENT's
+            scrollable overflow — a second, page-level scrollbar. Anchoring here confines the
+            damage to this scroll body; ui/Collapse.tsx keeps them from escaping in the first
+            place. */}
+        <div className="relative flex-1 overflow-y-auto" style={{ viewTransitionName: 'drawer-content' }}>
           {!resource ? (
             // Fill the drawer body so the loading logo centers in it, not in a
             // 128px box pinned to the top (matches the splash/PaneLoader centering).

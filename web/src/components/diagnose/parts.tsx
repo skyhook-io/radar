@@ -427,6 +427,7 @@ export type Turn = {
   resultSequence?: number;
   explainAssessment?: number;
   question?: string;
+  actor?: string;
   timeline: TimelineItem[];
   diagnosis: Diagnosis | null;
   error: string | null;
@@ -615,8 +616,15 @@ export function TurnView({
           </div>
         ) : (
           <div className="flex justify-end">
-            <div className="max-w-[85%] rounded-lg rounded-br-sm bg-accent/10 px-3 py-1.5 text-sm text-theme-text-primary [overflow-wrap:anywhere]">
-              {turn.question}
+            <div className="max-w-[85%]">
+              {turn.actor && (
+                <div className="mb-0.5 text-right text-[10px] text-theme-text-tertiary">
+                  {turn.actor}
+                </div>
+              )}
+              <div className="rounded-lg rounded-br-sm bg-accent/10 px-3 py-1.5 text-sm text-theme-text-primary [overflow-wrap:anywhere]">
+                {turn.question}
+              </div>
             </div>
           </div>
         ))

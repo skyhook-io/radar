@@ -14,6 +14,13 @@
     "file pins observable behaviour instead, so a change to one language that the",
     "other doesn't mirror fails in both.",
     "",
+    "CNPG omits status.readyInstances when it is 0 (omitempty int), so a fully-down",
+    "cluster and one that has not reported are byte-identical on the wire. The",
+    "all-down cases below therefore OMIT readyInstances, the shape CNPG actually",
+    "emits — never `readyInstances: 0`, which the operator never sends. currentPrimary",
+    "is the 'was up' signal that tells a regression apart from a first bootstrap.",
+    "",
+    "`metadata` is optional and carries only annotations (hibernation / fencing).",
     "`issues` is an unordered set of Reason values. `worst` is the highest issue",
     "severity (critical > warning > none). Adding a case is cheap — do it every",
     "time a state turns out to be ambiguous."
@@ -22,7 +29,7 @@
     {
       "name": "healthy and fully ready",
       "spec": { "instances": 3 },
-      "status": { "phase": "Cluster in healthy state", "readyInstances": 3 },
+      "status": { "phase": "Cluster in healthy state", "currentPrimary": "pg-1", "readyInstances": 3 },
       "badge": { "text": "Healthy", "level": "healthy" },
       "issues": [],
       "worst": "none"
@@ -30,21 +37,27 @@
     {
       "name": "healthy phase but a partial shortfall — the phase settles before instances do",
       "spec": { "instances": 3 },
-      "status": { "phase": "Cluster in healthy state", "readyInstances": 1 },
+      "status": { "phase": "Cluster in healthy state", "currentPrimary": "pg-1", "readyInstances": 1 },
       "badge": { "text": "Degraded", "level": "degraded" },
       "issues": ["CNPGClusterDegraded"],
       "worst": "warning"
     },
     {
-      "name": "healthy phase with nothing serving",
+      "name": "was-up cluster fully down — readyInstances omitted, currentPrimary proves it was serving",
       "spec": { "instances": 3 },
-      "status": { "phase": "Cluster in healthy state", "readyInstances": 0 },
+      "status": {
+        "phase": "Waiting for the instances to become active",
+        "currentPrimary": "pg-1",
+        "conditions": [
+          { "type": "Ready", "status": "False", "reason": "ClusterIsNotReady", "lastTransitionTime": "2020-01-01T00:00:00Z" }
+        ]
+      },
       "badge": { "text": "Not Ready", "level": "unhealthy" },
       "issues": ["CNPGClusterDegraded"],
       "worst": "critical"
     },
     {
-      "name": "readyInstances absent — unknown, not zero; must not fabricate an outage",
+      "name": "readyInstances absent on a Ready=True cluster — unknown, not zero; must not fabricate an outage",
       "spec": { "instances": 3 },
       "status": {
         "phase": "Cluster in healthy state",
@@ -59,6 +72,7 @@
       "spec": { "instances": 3 },
       "status": {
         "phase": "Cluster in healthy state",
+        "currentPrimary": "pg-1",
         "readyInstances": 3,
         "conditions": [
           { "type": "ContinuousArchiving", "status": "False", "reason": "ContinuousArchivingFailing", "message": "cannot upload WAL" }
@@ -73,6 +87,7 @@
       "spec": { "instances": 3 },
       "status": {
         "phase": "Cluster in healthy state",
+        "currentPrimary": "pg-1",
         "readyInstances": 3,
         "conditions": [
           { "type": "LastBackupSucceeded", "status": "False", "reason": "LastBackupFailed", "message": "no credentials" }
@@ -87,6 +102,7 @@
       "spec": { "instances": 3 },
       "status": {
         "phase": "Cluster in healthy state",
+        "currentPrimary": "pg-1",
         "readyInstances": 3,
         "conditions": [
           { "type": "LastBackupSucceeded", "status": "False", "reason": "BackupStarted", "message": "New Backup starting up" }
@@ -99,7 +115,7 @@
     {
       "name": "unrecoverable while every pod is still Ready",
       "spec": { "instances": 3 },
-      "status": { "phase": "Cluster is unrecoverable and needs manual intervention", "readyInstances": 3 },
+      "status": { "phase": "Cluster is unrecoverable and needs manual intervention", "currentPrimary": "pg-1", "readyInstances": 3 },
       "badge": { "text": "Unrecoverable", "level": "unhealthy" },
       "issues": ["CNPGClusterUnrecoverable"],
       "worst": "critical"
@@ -109,6 +125,7 @@
       "spec": { "instances": 3 },
       "status": {
         "phase": "Cluster cannot proceed to reconciliation due to an unknown plugin being required",
+        "currentPrimary": "pg-1",
         "readyInstances": 3
       },
       "badge": {
@@ -121,7 +138,7 @@
     {
       "name": "post-1.28 PhaseDefinitionInvalid is carried ahead of the release that emits it",
       "spec": { "instances": 3 },
-      "status": { "phase": "Invalid cluster definition", "readyInstances": 3 },
+      "status": { "phase": "Invalid cluster definition", "currentPrimary": "pg-1", "readyInstances": 3 },
       "badge": { "text": "Invalid Spec", "level": "unhealthy" },
       "issues": ["CNPGClusterTerminal"],
       "worst": "critical"
@@ -129,7 +146,7 @@
     {
       "name": "failover with a surviving replica",
       "spec": { "instances": 3 },
-      "status": { "phase": "Failing over", "readyInstances": 2 },
+      "status": { "phase": "Failing over", "currentPrimary": "pg-1", "readyInstances": 2 },
       "badge": { "text": "Failing Over", "level": "alert" },
       "issues": ["CNPGClusterFailingOver"],
       "worst": "warning"
@@ -137,7 +154,7 @@
     {
       "name": "failover with nothing serving is a total outage, not an orange warning",
       "spec": { "instances": 3 },
-      "status": { "phase": "Failing over", "readyInstances": 0 },
+      "status": { "phase": "Failing over", "currentPrimary": "pg-1" },
       "badge": { "text": "Not Ready", "level": "unhealthy" },
       "issues": ["CNPGClusterFailingOver", "CNPGClusterDegraded"],
       "worst": "critical"
@@ -145,15 +162,15 @@
     {
       "name": "mid-operation shortfall is expected and stays quiet",
       "spec": { "instances": 3 },
-      "status": { "phase": "Creating a new replica", "readyInstances": 2 },
+      "status": { "phase": "Creating a new replica", "currentPrimary": "pg-1", "readyInstances": 2 },
       "badge": { "text": "Creating Replica", "level": "degraded" },
       "issues": [],
       "worst": "none"
     },
     {
-      "name": "no transient phase excuses a fully-down cluster",
+      "name": "no transient phase excuses a fully-down was-up cluster",
       "spec": { "instances": 3 },
-      "status": { "phase": "Switchover in progress", "readyInstances": 0 },
+      "status": { "phase": "Switchover in progress", "currentPrimary": "pg-1" },
       "badge": { "text": "Not Ready", "level": "unhealthy" },
       "issues": ["CNPGClusterDegraded"],
       "worst": "critical"
@@ -161,7 +178,7 @@
     {
       "name": "rollout delay is operator-driven, not a wait on a human",
       "spec": { "instances": 3 },
-      "status": { "phase": "Cluster upgrade delayed", "readyInstances": 2 },
+      "status": { "phase": "Cluster upgrade delayed", "currentPrimary": "pg-1", "readyInstances": 2 },
       "badge": { "text": "Upgrade Delayed", "level": "degraded" },
       "issues": [],
       "worst": "none"
@@ -169,7 +186,7 @@
     {
       "name": "supervised wait — a shortfall is the documented resting state",
       "spec": { "instances": 3, "primaryUpdateStrategy": "supervised" },
-      "status": { "phase": "Waiting for user action", "readyInstances": 2 },
+      "status": { "phase": "Waiting for user action", "currentPrimary": "pg-1", "readyInstances": 2 },
       "badge": { "text": "Needs Action", "level": "degraded" },
       "issues": [],
       "worst": "none"
@@ -177,7 +194,7 @@
     {
       "name": "unsupervised wait is worth reporting",
       "spec": { "instances": 3, "primaryUpdateStrategy": "unsupervised" },
-      "status": { "phase": "Waiting for user action", "readyInstances": 2 },
+      "status": { "phase": "Waiting for user action", "currentPrimary": "pg-1", "readyInstances": 2 },
       "badge": { "text": "Needs Action", "level": "degraded" },
       "issues": ["CNPGClusterWaitingForUser"],
       "worst": "warning"
@@ -185,7 +202,7 @@
     {
       "name": "supervised wait with nothing serving is still an outage",
       "spec": { "instances": 3, "primaryUpdateStrategy": "supervised" },
-      "status": { "phase": "Waiting for user action", "readyInstances": 0 },
+      "status": { "phase": "Waiting for user action", "currentPrimary": "pg-1" },
       "badge": { "text": "Not Ready", "level": "unhealthy" },
       "issues": ["CNPGClusterDegraded"],
       "worst": "critical"
@@ -193,7 +210,7 @@
     {
       "name": "unsupervised wait with nothing serving reports both true causes",
       "spec": { "instances": 3, "primaryUpdateStrategy": "unsupervised" },
-      "status": { "phase": "Waiting for user action", "readyInstances": 0 },
+      "status": { "phase": "Waiting for user action", "currentPrimary": "pg-1" },
       "badge": { "text": "Not Ready", "level": "unhealthy" },
       "issues": ["CNPGClusterWaitingForUser", "CNPGClusterDegraded"],
       "worst": "critical"
@@ -201,7 +218,7 @@
     {
       "name": "a phase from a newer minor is surfaced verbatim, never guessed at",
       "spec": { "instances": 3 },
-      "status": { "phase": "Reticulating splines", "readyInstances": 3 },
+      "status": { "phase": "Reticulating splines", "currentPrimary": "pg-1", "readyInstances": 3 },
       "badge": { "text": "Reticulating splines", "level": "unknown" },
       "issues": [],
       "worst": "none"
@@ -209,7 +226,7 @@
     {
       "name": "an unknown phase still gets its shortfall reported",
       "spec": { "instances": 3 },
-      "status": { "phase": "Reticulating splines", "readyInstances": 1 },
+      "status": { "phase": "Reticulating splines", "currentPrimary": "pg-1", "readyInstances": 1 },
       "badge": { "text": "Degraded", "level": "degraded" },
       "issues": ["CNPGClusterDegraded"],
       "worst": "warning"
@@ -219,6 +236,7 @@
       "spec": { "instances": 3 },
       "status": {
         "phase": "Cluster is unrecoverable and needs manual intervention",
+        "currentPrimary": "pg-1",
         "readyInstances": 3,
         "conditions": [
           { "type": "ContinuousArchiving", "status": "False", "reason": "ContinuousArchivingFailing" }
@@ -227,6 +245,45 @@
       "badge": { "text": "Unrecoverable", "level": "unhealthy" },
       "issues": ["CNPGWALArchivingFailing", "CNPGClusterUnrecoverable"],
       "worst": "critical"
+    },
+    {
+      "name": "first bootstrap — operator reported, no primary elected yet, no alarm",
+      "spec": { "instances": 3 },
+      "status": { "phase": "Setting up primary" },
+      "badge": { "text": "Setting Up Primary", "level": "degraded" },
+      "issues": [],
+      "worst": "none"
+    },
+    {
+      "name": "slow restore past the grace but still bootstrapping — no primary, no alarm",
+      "spec": { "instances": 3 },
+      "status": {
+        "phase": "Waiting for the instances to become active",
+        "conditions": [
+          { "type": "Ready", "status": "False", "reason": "ClusterIsNotReady", "lastTransitionTime": "2020-01-01T00:00:00Z" }
+        ]
+      },
+      "badge": { "text": "Starting Instances", "level": "degraded" },
+      "issues": [],
+      "worst": "none"
+    },
+    {
+      "name": "hibernated cluster is neutral, not an outage",
+      "spec": { "instances": 3 },
+      "metadata": { "annotations": { "cnpg.io/hibernation": "on" } },
+      "status": { "currentPrimary": "pg-1" },
+      "badge": { "text": "Hibernated", "level": "neutral" },
+      "issues": [],
+      "worst": "none"
+    },
+    {
+      "name": "all instances fenced is neutral, not an outage",
+      "spec": { "instances": 3 },
+      "metadata": { "annotations": { "cnpg.io/fencedInstances": "[\"*\"]" } },
+      "status": { "currentPrimary": "pg-1" },
+      "badge": { "text": "Fenced", "level": "neutral" },
+      "issues": [],
+      "worst": "none"
     }
   ]
 }

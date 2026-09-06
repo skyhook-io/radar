@@ -37,6 +37,7 @@ import { CloudFunnelButton } from './components/CloudFunnelButton'
 import { useNavCustomization } from './context/NavCustomization'
 import type { FleetTakeoverTarget } from './context/NavCustomization'
 import { PrimaryNavRail } from './components/nav/PrimaryNavRail'
+import { navigateFromPrimaryRail } from './components/nav/navigation'
 import { useNavRailPinned } from './hooks/useNavRailPinned'
 import { useMediaQuery } from './hooks/useMediaQuery'
 import { ContextSwitchProvider, useContextSwitch } from './context/ContextSwitchContext'
@@ -322,7 +323,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // The AI panel is an absolute slot in the body frame (the column under the header):
   // it reserves a right gutter on the CONTENT only, so the navbar + nav rail stay
   // static. contentGutter is the docked panel width (0 when closed/overlay/maximized).
-  const { open: diagnoseOpen, contentGutter } = useDiagnoseLayout()
+  const {
+    open: diagnoseOpen,
+    close: closeDiagnose,
+    contentGutter,
+    maximized: diagnoseMaximized,
+  } = useDiagnoseLayout()
   // Hand off to a host-owned URL. The host's `onHostNavigate` (Radar Cloud's
   // cross-tree swap) navigates same-document so the chrome morphs instead of
   // cold-booting; without it we fall back to a hard `window.location` nav.
@@ -468,11 +474,18 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
     const path = view === 'home' ? '/' : `/${view}`
 
-    // Start fresh — keep only cross-view params (namespaces), discard all view-specific ones
+    // Start fresh — keep only cross-view params, discard view-specific ones.
+    // Read the live location because Diagnose owns `ai-run` through the History
+    // API; React Router's searchParams snapshot does not update for that write.
     const newParams = new URLSearchParams()
-    const globalNamespaces = searchParams.get('namespaces')
+    const currentParams = new URLSearchParams(window.location.search)
+    const globalNamespaces = currentParams.get('namespaces')
     if (globalNamespaces) {
       newParams.set('namespaces', globalNamespaces)
+    }
+    const diagnoseRun = currentParams.get('ai-run')
+    if (diagnoseRun) {
+      newParams.set('ai-run', diagnoseRun)
     }
 
     // Add any new params
@@ -483,7 +496,18 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     }
 
     navigate({ pathname: path, search: newParams.toString() })
-  }, [navigate, searchParams, takeover, goHost])
+  }, [navigate, takeover, goHost])
+
+  // The standalone rail expresses intent to leave the full-width investigation
+  // workspace. Close it before routing so the destination is immediately visible;
+  // docked investigations stay open across views as a persistent side panel.
+  const handlePrimaryNavigate = useCallback((view: ExtendedMainView) => {
+    navigateFromPrimaryRail(
+      diagnoseOpen && diagnoseMaximized,
+      closeDiagnose,
+      () => setMainView(view),
+    )
+  }, [diagnoseOpen, diagnoseMaximized, closeDiagnose, setMainView])
 
   // Cloud (embedded) takes over the "fleet-shaped" per-cluster views with its
   // own fleet pages scoped to this cluster — owned by the host's left rail — so
@@ -1135,9 +1159,13 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       setSelectedResource(null)
       setSelectedHelmRelease(null)
 
-      // Reset URL to current view with no resource-specific params.
-      // Old cluster's selected pod/resource/kind don't exist on the new cluster.
-      navigate({ pathname: location.pathname, search: '' }, { replace: true })
+      // Reset resource-specific params while retaining the durable investigation
+      // focus. Diagnose resolves runs by id and owns whether the focused run is
+      // still readable after the context switch.
+      const nextParams = new URLSearchParams()
+      const diagnoseRun = new URLSearchParams(window.location.search).get('ai-run')
+      if (diagnoseRun) nextParams.set('ai-run', diagnoseRun)
+      navigate({ pathname: location.pathname, search: nextParams.toString() }, { replace: true })
 
       // Auto-unpause so the new cluster's topology loads immediately
       setTopologyPaused(false)
@@ -1658,7 +1686,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {showNavRail && (
         <PrimaryNavRail
           activeView={navActiveView}
-          onNavigate={setMainView}
+          onNavigate={handlePrimaryNavigate}
           pinned={navRailEffectivePinned}
           onTogglePinned={toggleNavRailPinned}
           showPinToggle={!railForcedSlim}

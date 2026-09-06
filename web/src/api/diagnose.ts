@@ -1,7 +1,7 @@
 // Client for local AI investigations (OSS BYO-agent). The agent CLI runs
 // on the user's own machine/subscription against Radar's MCP; this just starts
 // the investigation and consumes its SSE event stream.
-import { getApiBase, getCredentialsMode } from "./config";
+import { getApiBase, getAuthHeaders, getCredentialsMode } from "./config";
 
 export interface AgentInfo {
   name: string;
@@ -113,6 +113,7 @@ export interface DiagnoseStreamEvent {
   // the two SSE events without inferring lifecycle from copy.
   verificationScheduled?: boolean;
   retryable?: boolean; // on "history_unavailable": keep native EventSource reconnect alive
+  actor?: string; // human author on shared hosted transcripts
 }
 
 // A run is a durable, server-owned investigation. Its lifetime is independent of
@@ -135,11 +136,17 @@ export interface RunSummary {
   effort?: string;
   managedBy?: string; // GitOps/Helm owner of the target ("Argo CD"/"Flux"/"Helm"), for the Apply warning
   health?: ResourceHealthSignal;
-  status: "running" | "done" | "error" | "stopped" | "stale";
+  status: "running" | "stopping" | "done" | "error" | "stopped" | "stale";
   sessionId?: string;
   preview?: string;
   createdAt: string;
   updatedAt: string;
+  visibility?: "private" | "organization";
+  ownedByMe?: boolean;
+  canManageVisibility?: boolean;
+  canContinue?: boolean;
+  trigger?: "interactive" | "background";
+  radarUrl?: string;
 }
 
 export async function fetchAgents(
@@ -147,6 +154,7 @@ export async function fetchAgents(
 ): Promise<AgentsResponse> {
   const res = await fetch(`${getApiBase()}/agents`, {
     credentials: getCredentialsMode(),
+    headers: getAuthHeaders(),
     signal,
   });
   if (!res.ok) throw new Error(`agents: ${res.status}`);
@@ -203,19 +211,8 @@ export async function createRun(
   const res = await fetch(RUNS(), {
     method: "POST",
     credentials: getCredentialsMode(),
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      kind: target.kind,
-      group: target.group,
-      namespace: target.namespace,
-      name: target.name,
-      issueId: target.issueId,
-      fresh: target.fresh,
-      agent: opts?.agent,
-      profile: opts?.profile,
-      model: opts?.model,
-      effort: opts?.effort,
-    }),
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify({ ...target, ...opts }),
   });
   if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
   return res.json();
@@ -233,6 +230,7 @@ export interface RunsResponse {
 export async function listRuns(signal?: AbortSignal): Promise<RunsResponse> {
   const res = await fetch(RUNS(), {
     credentials: getCredentialsMode(),
+    headers: getAuthHeaders(),
     signal,
   });
   if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
@@ -240,12 +238,41 @@ export async function listRuns(signal?: AbortSignal): Promise<RunsResponse> {
   return { runs: d.runs ?? [], historyDegraded: !!d.historyDegraded };
 }
 
+// getRun resolves a stable run id directly. Deep links use this rather than
+// relying on a bounded history page to happen to contain the target.
+export async function getRun(
+  id: string,
+  signal?: AbortSignal,
+): Promise<RunSummary> {
+  const res = await fetch(`${RUNS()}/${encodeURIComponent(id)}`, {
+    credentials: getCredentialsMode(),
+    headers: getAuthHeaders(),
+    signal,
+  });
+  if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
+  return res.json();
+}
+
+export async function updateRunVisibility(
+  id: string,
+  visibility: "private" | "organization",
+): Promise<RunSummary> {
+  const res = await fetch(`${RUNS()}/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    credentials: getCredentialsMode(),
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify({ visibility }),
+  });
+  if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
+  return res.json();
+}
+
 // recordConsent acknowledges the current disclosure for an execution profile, server-side.
 export async function recordConsent(surface: string): Promise<void> {
   const res = await fetch(`${getApiBase()}/diagnose/consent`, {
     method: "POST",
     credentials: getCredentialsMode(),
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
     body: JSON.stringify({ surface }),
   });
   if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
@@ -257,6 +284,7 @@ export async function clearHistory(): Promise<void> {
   const res = await fetch(`${getApiBase()}/diagnose/history/clear`, {
     method: "POST",
     credentials: getCredentialsMode(),
+    headers: getAuthHeaders(),
   });
   if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
 }
@@ -275,7 +303,7 @@ export async function addTurn(
   const res = await fetch(`${RUNS()}/${id}/turns`, {
     method: "POST",
     credentials: getCredentialsMode(),
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
@@ -286,6 +314,7 @@ export async function stopRun(id: string): Promise<void> {
   await fetch(`${RUNS()}/${id}/stop`, {
     method: "POST",
     credentials: getCredentialsMode(),
+    headers: getAuthHeaders(),
   }).catch(() => {});
 }
 

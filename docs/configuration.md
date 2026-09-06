@@ -101,10 +101,10 @@ All fields are optional — omitted fields use built-in defaults.
 | `port` | Server port (default 9280) |
 | `noBrowser` | Don't auto-open browser |
 | `browser` | Browser for automatic launch (same as `--browser`; on macOS, app names like `Google Chrome` are supported) |
-| `timelineStorage` | `memory` or `sqlite` |
-| `timelineDbPath` | Path to SQLite database |
-| `timelineMaxSize` | Max SQLite DB + WAL size before pruning oldest events (`0` disables) |
-| `historyLimit` | Max timeline events to retain |
+| `timelineStorage` | `memory`, `sqlite`, or `postgres` |
+| `timelineDbPath` | Path to SQLite database (sqlite only) |
+| `timelineMaxSize` | Max SQLite DB + WAL size before pruning oldest events (`0` disables; sqlite only) |
+| `historyLimit` | Max timeline events to retain (memory only) |
 | `prometheusUrl` | Manual PromQL-compatible query URL — works with Prometheus, VictoriaMetrics, Thanos, Mimir, and similar backends. Skips auto-discovery; useful when the backend is not in the same cluster or uses a non-standard service name. |
 | `opencostCurrency` | Optional ISO 4217 override for values produced by OpenCost or Kubecost. Empty reads `currencyCode` from the pricing ConfigMap referenced by an active OpenCost/Kubecost workload, or literal `DISPLAY_CURRENCY` from an active Kubecost Deployment or StatefulSet, when the selected cost source is tied to the connected cluster; otherwise it falls back to `USD`. In Settings this preference saves through the dialog footer, independently of source testing, so it can be changed while a source is unavailable. Radar labels values but does not convert them. Equivalent CLI: `--opencost-currency`; an explicit CLI value remains authoritative while Radar runs and after restart. |
 | `costSource` | `auto` (default), `prometheus`, or `kubecost`. Auto keeps working OpenCost metrics from a PromQL-compatible backend, then tries a Kubecost 3 Aggregator; if neither is present, selection remains unavailable and retries instead of reporting an absent source as active. Settings validates Auto and Kubecost before saving. An explicit `prometheus` value is a persisted preference and can be saved before its metrics are installed. |
@@ -118,6 +118,8 @@ All fields are optional — omitted fields use built-in defaults.
 | `prometheusHeadersFromEnv` | Header values read from environment variables at startup — e.g. `{"Authorization": "PROMETHEUS_TOKEN"}`. Equivalent CLI: `--prometheus-header-from-env Key=ENV_VAR` (repeatable). Use this with Kubernetes Secret-backed env vars in Helm deployments. |
 | `mcp` | Enable/disable MCP server for AI tools (default: enabled) |
 | `debugImage` | Image for ephemeral debug containers and node debug pods (same as `--debug-image`). Empty = `busybox:latest`; point at a mirror for air-gapped / private-registry clusters. |
+
+The PostgreSQL DSN is **runtime-only** — set it through the `RADAR_TIMELINE_POSTGRES_DSN` environment variable. It is intentionally never written to `config.json` so credentials do not persist to disk in the settings file.
 
 For declarative deployments, `RADAR_COST_SOURCE`, `RADAR_KUBECOST_URL`,
 `RADAR_KUBECOST_CLUSTER_ID`, and `RADAR_KUBECOST_API_KEY` override these cost

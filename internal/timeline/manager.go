@@ -79,8 +79,9 @@ const (
 	GroupByNamespace = pkgtimeline.GroupByNamespace
 
 	// StoreType constants
-	StoreTypeMemory = pkgtimeline.StoreTypeMemory
-	StoreTypeSQLite = pkgtimeline.StoreTypeSQLite
+	StoreTypeMemory   = pkgtimeline.StoreTypeMemory
+	StoreTypeSQLite   = pkgtimeline.StoreTypeSQLite
+	StoreTypePostgres = pkgtimeline.StoreTypePostgres
 )
 
 // Re-export functions from pkg/timeline.
@@ -133,10 +134,12 @@ func NewDegradedMemoryStore(maxSize int, reason string) *pkgtimeline.MemoryStore
 // ---------------------------------------------------------------------------
 
 var (
-	globalStore     EventStore
-	globalStoreOnce sync.Once
-	globalStoreMu   sync.Mutex
-	globalConfig    StoreConfig
+	globalStoreInitMu sync.Mutex
+	globalStore       EventStore
+	globalStoreOnce   sync.Once
+	globalStoreMu     sync.Mutex
+	globalConfig      StoreConfig
+	globalStoreErr    error
 
 	// Event broadcast for SSE
 	subscribers   []chan TimelineEvent
@@ -145,14 +148,16 @@ var (
 
 // InitStore initializes the global event store
 func InitStore(cfg StoreConfig) error {
-	var initErr error
+	globalStoreInitMu.Lock()
+	defer globalStoreInitMu.Unlock()
+
 	globalStoreOnce.Do(func() {
 		globalConfig = cfg
 
 		switch cfg.Type {
 		case StoreTypeSQLite:
 			if cfg.Path == "" {
-				initErr = fmt.Errorf("SQLite store requires a path")
+				globalStoreErr = fmt.Errorf("SQLite store requires a path")
 				return
 			}
 			store, err := openSQLiteWithRecovery(cfg.Path)
@@ -189,10 +194,27 @@ func InitStore(cfg StoreConfig) error {
 			}
 			setGlobalStore(NewMemoryStore(maxSize))
 			log.Printf("Initialized in-memory event store (max %d events)", maxSize)
+		case StoreTypePostgres:
+			if cfg.DSN == "" {
+				globalStoreErr = fmt.Errorf("PostgreSQL timeline store requires a DSN")
+				return
+			}
+			store, err := NewPostgresStore(cfg.DSN)
+			if err != nil {
+				globalStoreErr = fmt.Errorf("PostgreSQL timeline store failed to initialize: %w", err)
+				return
+			}
+			setGlobalStore(store)
+			if cfg.RetentionAge > 0 {
+				store.StartCleanupLoop(cfg.RetentionAge, time.Hour, 0)
+				log.Printf("Initialized PostgreSQL timeline store (retention: %s)", cfg.RetentionAge)
+			} else {
+				log.Printf("Initialized PostgreSQL timeline store (retention: disabled — events table will grow unbounded)")
+			}
 		}
 		observationStartNanos.Store(time.Now().UnixNano())
 	})
-	return initErr
+	return globalStoreErr
 }
 
 // isCorruptedSQLiteError reports whether an open/schema failure signals actual
@@ -300,6 +322,9 @@ func setGlobalStore(s EventStore) {
 // ResetStore stops and clears the event store.
 // This must be called before reinitializing when switching contexts.
 func ResetStore() {
+	globalStoreInitMu.Lock()
+	defer globalStoreInitMu.Unlock()
+
 	globalStoreMu.Lock()
 	defer globalStoreMu.Unlock()
 
@@ -311,6 +336,7 @@ func ResetStore() {
 	}
 	observationStartNanos.Store(0)
 	globalStoreOnce = sync.Once{}
+	globalStoreErr = nil
 }
 
 // ReinitStore reinitializes the event store after a context switch.

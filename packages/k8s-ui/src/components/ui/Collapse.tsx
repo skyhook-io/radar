@@ -43,7 +43,15 @@ export function Collapse({
       )}
       style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
     >
-      <div className="overflow-hidden" inert={!open || undefined}>{render ? children : null}</div>
+      {/* `relative` is load-bearing. Collapsed content is still laid out at full
+          height and only clipped by `overflow-hidden` — but an absolutely-positioned
+          descendant (Tailwind's `sr-only` is position:absolute) resolves its
+          containing block ABOVE this wrapper, so the clip doesn't apply to it. It
+          then sits at its static position, hundreds of px below a collapsed section,
+          and extends the enclosing scroll container's scrollable overflow: the drawer
+          scrolls past its own content into blank space. Anchoring here puts those
+          boxes back inside the clip, so a collapsed section contributes nothing. */}
+      <div className="relative overflow-hidden" inert={!open || undefined}>{render ? children : null}</div>
     </div>
   )
 }

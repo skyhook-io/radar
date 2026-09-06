@@ -228,7 +228,7 @@ export function RadarApp({
                   value={renderDiagnoseAction ?? defaultDiagnoseAction}
                   consentCopy={diagnoseConsent}
                 >
-                  <DiagnoseProvider>
+                  <DiagnoseProvider browserURLState={router !== "memory"}>
                     <App
                       manageDocumentTitle={manageDocumentTitle}
                       documentTitleSuffix={documentTitleSuffix}

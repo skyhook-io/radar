@@ -236,3 +236,33 @@ describe("subscribeRun replay boundaries", () => {
     ]);
   });
 });
+
+describe("investigation start requests", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const target = {
+    kind: "Deployment",
+    group: "apps",
+    namespace: "prod",
+    name: "payments",
+    issueId: "issue-1",
+  };
+
+  it.each([
+    ["investigate further", target],
+    ["start fresh", { ...target, fresh: true }],
+  ])("preserves the %s intent on the wire", async (_name, request) => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ id: "new-run" })));
+    vi.stubGlobal("fetch", fetch);
+    await createRun(request, { agent: "hub" });
+    const init = fetch.mock.calls[0][1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({
+      ...request,
+      agent: "hub",
+    });
+    expect(JSON.parse(init.body as string).issueId).toBe("issue-1");
+  });
+});

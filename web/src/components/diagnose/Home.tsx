@@ -55,6 +55,12 @@ const historyStatuses = {
     Icon: Loader2,
     className: "text-accent-text",
   },
+  stopping: {
+    label: "Stopping",
+    short: "Stopping",
+    Icon: Loader2,
+    className: "text-theme-text-tertiary",
+  },
   done: {
     label: "Completed",
     short: "",
@@ -95,6 +101,8 @@ export function statusWord(status: RunSummary["status"]): {
       return { text: "Failed", cls: "text-red-400" };
     case "stopped":
       return { text: "Stopped", cls: "text-theme-text-tertiary" };
+    case "stopping":
+      return { text: "Stopping", cls: "text-theme-text-tertiary" };
     case "stale":
       return { text: "Read-only", cls: "text-theme-text-tertiary" };
   }
@@ -134,17 +142,30 @@ export function RecentList({
     groups.add(groupQualifiesLaneId(r.group) ? r.group : "");
     groupsByKind.set(kind, groups);
   }
-  const days = new Map<string, RunSummary[]>();
+  const organizationRuns = runs.filter(
+    (r) => r.trigger === "background" || r.ownedByMe === false,
+  );
+  const yourRuns = runs.filter((r) => !organizationRuns.includes(r));
+  const collections = organizationRuns.length
+    ? [
+        { label: "Your investigations", runs: yourRuns },
+        { label: "Organization", runs: organizationRuns },
+      ].filter((collection) => collection.runs.length > 0)
+    : [{ label: "", runs }];
   // Status bookkeeping (including cluster switches) updates updatedAt. It must
   // not change the apparent start time or reshuffle the navigation list.
-  for (const r of [...runs].sort(
-    (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt),
-  )) {
-    const day = historyDay(new Date(r.createdAt), now);
-    const entries = days.get(day) ?? [];
-    entries.push(r);
-    days.set(day, entries);
-  }
+  const groupedCollections = collections.map((collection) => {
+    const days = new Map<string, RunSummary[]>();
+    for (const r of [...collection.runs].sort(
+      (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt),
+    )) {
+      const day = historyDay(new Date(r.createdAt), now);
+      const entries = days.get(day) ?? [];
+      entries.push(r);
+      days.set(day, entries);
+    }
+    return { label: collection.label, days };
+  });
 
   // Persistence broke (disk error) — without this the user reasonably assumes
   // their history survives a restart, and it won't.
@@ -185,117 +206,143 @@ export function RecentList({
       <h2 className="px-2 text-sm font-medium text-theme-text-secondary">
         Investigations
       </h2>
-      {[...days].map(([day, entries]) => (
-        <section key={day} aria-label={day} className="space-y-1">
-          <h3 className="px-2 pb-1 text-xs font-medium text-theme-text-tertiary">
-            {day}
-          </h3>
-          {entries.map((r) => {
-            const { label, short, Icon, className } = historyStatuses[r.status];
-            const parsed = contexts.get(r.context)!;
-            const collision = contextsByName.get(parsed.clusterName)!.size > 1;
-            const peers = [...contextsByName.get(parsed.clusterName)!].filter(
-              (raw) => raw !== r.context,
-            );
-            const qualifier =
-              parsed.account &&
-              peers.every(
-                (raw) => contexts.get(raw)!.account !== parsed.account,
-              )
-                ? parsed.account
-                : parsed.account &&
-                    parsed.region &&
-                    peers.every((raw) => {
-                      const peer = contexts.get(raw)!;
-                      return (
-                        peer.account !== parsed.account ||
-                        peer.region !== parsed.region
-                      );
-                    })
-                  ? `${parsed.account} · ${parsed.region}`
-                  : r.context;
-            const readableKind = pluralToKind(r.kind);
-            const kind =
-              groupsByKind.get(readableKind)!.size > 1
-                ? `${readableKind} · ${r.group || "core"}`
-                : readableKind;
-            const initialIssue = r.health?.topReason?.trim();
-            const isCurrentCluster = currentContext === r.context;
-            const identity = `${formatInvestigationTarget(r)} · ${r.context}${isCurrentCluster ? " · Current cluster" : ""} · ${label} · Started ${new Date(r.createdAt).toLocaleString()}${initialIssue ? ` · Started with ${initialIssue}` : ""}`;
-            return (
-              <button
-                key={r.id}
-                onClick={() => onSelect(r.id)}
-                aria-label={identity}
-                aria-current={r.id === selectedId ? "true" : undefined}
-                className={`flex w-full min-w-0 flex-col gap-0.5 rounded-md border-l-2 px-2 py-2 text-left focus-visible:outline-2 focus-visible:outline-accent ${
-                  r.id === selectedId
-                    ? "border-accent bg-accent-muted"
-                    : "border-transparent hover:bg-theme-hover"
-                }`}
-              >
-                <span className="flex w-full items-start gap-2">
-                  <span
-                    title={r.name}
-                    className="min-w-0 flex-1 line-clamp-2 break-words text-sm font-medium leading-5 text-theme-text-primary"
+      {groupedCollections.map((collection) => (
+        <div key={collection.label} className="space-y-4">
+          {collection.label && (
+            <h3 className="px-2 text-xs font-semibold text-theme-text-secondary">
+              {collection.label}
+            </h3>
+          )}
+          {[...collection.days].map(([day, entries]) => (
+            <section key={day} aria-label={day} className="space-y-1">
+              <h3 className="px-2 pb-1 text-xs font-medium text-theme-text-tertiary">
+                {day}
+              </h3>
+              {entries.map((r) => {
+                const { label, short, Icon, className } =
+                  historyStatuses[r.status];
+                const parsed = contexts.get(r.context)!;
+                const collision =
+                  contextsByName.get(parsed.clusterName)!.size > 1;
+                const peers = [
+                  ...contextsByName.get(parsed.clusterName)!,
+                ].filter((raw) => raw !== r.context);
+                const qualifier =
+                  parsed.account &&
+                  peers.every(
+                    (raw) => contexts.get(raw)!.account !== parsed.account,
+                  )
+                    ? parsed.account
+                    : parsed.account &&
+                        parsed.region &&
+                        peers.every((raw) => {
+                          const peer = contexts.get(raw)!;
+                          return (
+                            peer.account !== parsed.account ||
+                            peer.region !== parsed.region
+                          );
+                        })
+                      ? `${parsed.account} · ${parsed.region}`
+                      : r.context;
+                const readableKind = pluralToKind(r.kind);
+                const kind =
+                  groupsByKind.get(readableKind)!.size > 1
+                    ? `${readableKind} · ${r.group || "core"}`
+                    : readableKind;
+                const initialIssue = r.health?.topReason?.trim();
+                const isCurrentCluster = currentContext === r.context;
+                const visibility =
+                  r.trigger === "background"
+                    ? "Automatic"
+                    : r.visibility === "organization"
+                      ? "Shared"
+                      : r.visibility === "private"
+                        ? "Private"
+                        : "";
+                const identity = `${formatInvestigationTarget(r)} · ${r.context}${isCurrentCluster ? " · Current cluster" : ""} · ${label}${visibility ? ` · ${visibility}` : ""} · Started ${new Date(r.createdAt).toLocaleString()}${initialIssue ? ` · Started with ${initialIssue}` : ""}`;
+                return (
+                  <button
+                    key={r.id}
+                    onClick={() => onSelect(r.id)}
+                    aria-label={identity}
+                    aria-current={r.id === selectedId ? "true" : undefined}
+                    className={`flex w-full min-w-0 flex-col gap-0.5 rounded-md border-l-2 px-2 py-2 text-left focus-visible:outline-2 focus-visible:outline-accent ${
+                      r.id === selectedId
+                        ? "border-accent bg-accent-muted"
+                        : "border-transparent hover:bg-theme-hover"
+                    }`}
                   >
-                    {r.name}
-                  </span>
-                  {(Icon || short) && (
-                    <span
-                      aria-hidden="true"
-                      className={`flex shrink-0 items-center gap-1 text-xs leading-5 ${className}`}
-                    >
-                      {Icon && (
-                        <Icon
-                          className={`mt-0.5 h-3.5 w-3.5 ${r.status === "running" ? "animate-spin motion-reduce:animate-none" : r.status === "error" ? "text-semantic-error" : ""}`}
-                        />
+                    <span className="flex w-full items-start gap-2">
+                      <span
+                        title={r.name}
+                        className="min-w-0 flex-1 line-clamp-2 break-words text-sm font-medium leading-5 text-theme-text-primary"
+                      >
+                        {r.name}
+                      </span>
+                      {(Icon || short) && (
+                        <span
+                          aria-hidden="true"
+                          className={`flex shrink-0 items-center gap-1 text-xs leading-5 ${className}`}
+                        >
+                          {Icon && (
+                            <Icon
+                              className={`mt-0.5 h-3.5 w-3.5 ${r.status === "running" || r.status === "stopping" ? "animate-spin motion-reduce:animate-none" : r.status === "error" ? "text-semantic-error" : ""}`}
+                            />
+                          )}
+                          {short}
+                        </span>
                       )}
-                      {short}
                     </span>
-                  )}
-                </span>
-                <span className="flex w-full items-baseline gap-2 text-xs leading-4 text-theme-text-secondary">
-                  <span className="min-w-0 flex-1 truncate">
-                    {r.namespace ? `${r.namespace} · ` : ""}
-                    {kind}
-                  </span>
-                  <time
-                    dateTime={r.createdAt}
-                    className="shrink-0 tabular-nums text-theme-text-tertiary"
-                  >
-                    {new Date(r.createdAt).toLocaleTimeString(undefined, {
-                      hour: "numeric",
-                      minute: "2-digit",
-                    })}
-                  </time>
-                </span>
-                <span
-                  title={`${r.context}${isCurrentCluster ? " · Current cluster" : ""}`}
-                  aria-label={
-                    isCurrentCluster
-                      ? `Current cluster: ${parsed.clusterName}`
-                      : `Cluster: ${parsed.clusterName}`
-                  }
-                  className={`flex w-full items-center gap-1 text-xs leading-4 ${isCurrentCluster ? "text-accent-text" : "text-theme-text-tertiary"}`}
-                >
-                  <Server className="h-3 w-3 shrink-0" aria-hidden />
-                  <span className="truncate">{parsed.clusterName}</span>
-                </span>
-                {collision && qualifier !== parsed.clusterName && (
-                  <span className="w-full break-words text-xs leading-4 text-theme-text-secondary">
-                    {qualifier}
-                  </span>
-                )}
-                {initialIssue && (
-                  <span className="line-clamp-1 w-full text-xs leading-4 text-theme-text-secondary">
-                    Started with {initialIssue}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </section>
+                    <span className="flex w-full items-baseline gap-2 text-xs leading-4 text-theme-text-secondary">
+                      <span className="min-w-0 flex-1 truncate">
+                        {r.namespace ? `${r.namespace} · ` : ""}
+                        {kind}
+                      </span>
+                      <time
+                        dateTime={r.createdAt}
+                        className="shrink-0 tabular-nums text-theme-text-tertiary"
+                      >
+                        {new Date(r.createdAt).toLocaleTimeString(undefined, {
+                          hour: "numeric",
+                          minute: "2-digit",
+                        })}
+                      </time>
+                    </span>
+                    <span
+                      title={`${r.context}${isCurrentCluster ? " · Current cluster" : ""}`}
+                      aria-label={
+                        isCurrentCluster
+                          ? `Current cluster: ${parsed.clusterName}`
+                          : `Cluster: ${parsed.clusterName}`
+                      }
+                      className={`flex w-full items-center gap-1 text-xs leading-4 ${isCurrentCluster ? "text-accent-text" : "text-theme-text-tertiary"}`}
+                    >
+                      <Server className="h-3 w-3 shrink-0" aria-hidden />
+                      <span className="min-w-0 flex-1 truncate">
+                        {parsed.clusterName}
+                      </span>
+                      {visibility && (
+                        <span className="shrink-0 text-theme-text-tertiary">
+                          {visibility}
+                        </span>
+                      )}
+                    </span>
+                    {collision && qualifier !== parsed.clusterName && (
+                      <span className="w-full break-words text-xs leading-4 text-theme-text-secondary">
+                        {qualifier}
+                      </span>
+                    )}
+                    {initialIssue && (
+                      <span className="line-clamp-1 w-full text-xs leading-4 text-theme-text-secondary">
+                        Started with {initialIssue}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </section>
+          ))}
+        </div>
       ))}
     </div>
   );

@@ -7,9 +7,15 @@ import {
   INVESTIGATION_HISTORY_MIN_WIDTH,
   MAXIMIZED_RUN_META_VISIBILITY_CLASS,
   canStartNewInvestigation,
+  canCopyRunLink,
   investigationHeaderPresentation,
   openInvestigationEvidenceResource,
 } from "./DiagnoseSurface";
+import {
+  canContinueInvestigation,
+  canInvestigateFurther,
+  canStopInvestigation,
+} from "./InvestigationView";
 import type { RunSummary } from "../../api/diagnose";
 
 // The "new investigation" button dispatches an agent and spends the user's own
@@ -56,6 +62,19 @@ describe("canStartNewInvestigation", () => {
     expect(canStartNewInvestigation("investigation", run("stale"), false)).toBe(
       false,
     );
+  });
+
+  it("blocks fresh starts while a human turn stops, but allows a separate human run from an automatic one", () => {
+    expect(
+      canStartNewInvestigation("investigation", run("stopping"), false),
+    ).toBe(false);
+    expect(
+      canStartNewInvestigation(
+        "investigation",
+        { ...run("running"), trigger: "background" },
+        false,
+      ),
+    ).toBe(true);
   });
 
   it("stays hidden while consent is pending", () => {
@@ -222,5 +241,138 @@ describe("investigation history navigation", () => {
       detailIdentityClass: "",
       runActionsClass: null,
     });
+  });
+});
+
+describe("canStopInvestigation", () => {
+  it("lets the terminal transcript outrank a lagging running summary", () => {
+    expect(canStopInvestigation(run("running"), false, false, "done")).toBe(
+      false,
+    );
+    expect(canStopInvestigation(run("running"), false, false, "error")).toBe(
+      false,
+    );
+  });
+
+  it("keeps Stop available for an active human turn", () => {
+    expect(canStopInvestigation(run("running"), true, false, "running")).toBe(
+      true,
+    );
+  });
+
+  it("does not offer another Stop while the server drains the turn", () => {
+    expect(canStopInvestigation(run("stopping"), true, false, "running")).toBe(
+      false,
+    );
+  });
+
+  it("never lets a missing or automatic run expose Stop", () => {
+    expect(canStopInvestigation(run("running"), true, true, "running")).toBe(
+      false,
+    );
+    expect(
+      canStopInvestigation(
+        { ...run("running"), trigger: "background" },
+        true,
+        false,
+        "running",
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("canContinueInvestigation", () => {
+  it("lets a terminal transcript outrank only a lagging running human summary", () => {
+    expect(
+      canContinueInvestigation(
+        { ...run("running"), canContinue: false },
+        "done",
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps genuinely read-only and sessionless investigations read-only", () => {
+    expect(
+      canContinueInvestigation(
+        {
+          ...run("running"),
+          trigger: "background",
+          canContinue: false,
+        },
+        "done",
+      ),
+    ).toBe(false);
+    expect(
+      canContinueInvestigation({ ...run("done"), canContinue: false }, "done"),
+    ).toBe(false);
+  });
+
+  it("does not offer a follow-up after the retained run disappears", () => {
+    expect(
+      canContinueInvestigation(
+        { ...run("running"), canContinue: false },
+        "error",
+        true,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("canCopyRunLink", () => {
+  it("does not expose collaboration UI for an OSS run", () => {
+    expect(canCopyRunLink(run("done"))).toBe(false);
+  });
+
+  it("exposes the copy action only for a canonical hosted URL", () => {
+    expect(
+      canCopyRunLink({
+        ...run("done"),
+        radarUrl: "/c/cluster-1?org=org-1&ai-run=r1",
+      }),
+    ).toBe(true);
+  });
+
+  it("treats an empty hosted URL as unavailable", () => {
+    expect(canCopyRunLink({ ...run("done"), radarUrl: "" })).toBe(false);
+  });
+});
+
+describe("canInvestigateFurther", () => {
+  it("offers a context-preserving next step on a completed automatic investigation", () => {
+    expect(
+      canInvestigateFurther({
+        ...run("done"),
+        trigger: "background",
+        issueId: "issue-1",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not promise findings for missing, unfinished, stale or human investigations", () => {
+    expect(canInvestigateFurther(run("done"))).toBe(false);
+    expect(
+      canInvestigateFurther({ ...run("done"), trigger: "background" }),
+    ).toBe(false);
+    for (const status of [
+      "running",
+      "stopping",
+      "error",
+      "stopped",
+      "stale",
+    ] as const) {
+      expect(
+        canInvestigateFurther({
+          ...run(status),
+          trigger: "background",
+          issueId: "issue-1",
+        }),
+      ).toBe(false);
+    }
+    expect(
+      canInvestigateFurther(
+        { ...run("done"), trigger: "background", issueId: "issue-1" },
+        true,
+      ),
+    ).toBe(false);
   });
 });

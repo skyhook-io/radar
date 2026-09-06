@@ -22,8 +22,13 @@ import {
   Check,
   Plus,
   PanelLeftOpen,
+  Link,
+  Lock,
+  Users,
 } from "lucide-react";
 import { Tooltip } from "../ui/Tooltip";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
+import { Badge } from "@skyhook-io/k8s-ui/components/ui/Badge";
 import { useAnimatedUnmount } from "../../hooks/useAnimatedUnmount";
 import { TRANSITION_BACKDROP, TRANSITION_DRAWER } from "../../utils/animation";
 import {
@@ -39,7 +44,11 @@ import { RecentList, absoluteTime, statusWord } from "./Home";
 import { AgentSetupNotice } from "./AgentSetupNotice";
 import { ConsentCard } from "./parts";
 import { buildLaunchCommand, launchAgentLabel, openInTerminal } from "./launch";
-import { type RunSummary, type ExecutionProfile } from "../../api/diagnose";
+import {
+  updateRunVisibility,
+  type RunSummary,
+  type ExecutionProfile,
+} from "../../api/diagnose";
 import { routePath } from "../../api/config";
 import { useCapabilitiesContext } from "../../contexts/CapabilitiesContext";
 import { useContexts } from "../../api/client";
@@ -174,6 +183,153 @@ function InvestigationMenu({ run }: { run: RunSummary }) {
   );
 }
 
+export function canCopyRunLink(
+  run: RunSummary | null | undefined,
+): run is RunSummary & { radarUrl: string } {
+  return typeof run?.radarUrl === "string" && run.radarUrl.length > 0;
+}
+
+function CopyRunLink({
+  radarUrl,
+  visibility,
+}: {
+  radarUrl: string;
+  visibility: RunSummary["visibility"];
+}) {
+  const label =
+    visibility === "private"
+      ? "Copy private link (only you can open it)"
+      : "Copy investigation link";
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">(
+    "idle",
+  );
+  const copy = async () => {
+    try {
+      if (!navigator.clipboard) throw new Error("clipboard unavailable");
+      await navigator.clipboard.writeText(
+        new URL(radarUrl, window.location.origin).href,
+      );
+      setCopyState("copied");
+    } catch {
+      setCopyState("error");
+    }
+    setTimeout(() => setCopyState("idle"), 1500);
+  };
+  return (
+    <Tooltip
+      content={
+        copyState === "copied"
+          ? "Link copied"
+          : copyState === "error"
+            ? "Couldn’t copy link"
+            : label
+      }
+      position="bottom"
+    >
+      <button
+        onClick={copy}
+        className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
+        aria-label={label}
+      >
+        {copyState === "copied" ? (
+          <Check className="h-4 w-4 text-emerald-500" />
+        ) : (
+          <Link className="h-4 w-4" />
+        )}
+      </button>
+    </Tooltip>
+  );
+}
+
+function VisibilityControl({
+  run,
+  onChanged,
+}: {
+  run: RunSummary;
+  onChanged: (run: RunSummary) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(false);
+  const [confirmShare, setConfirmShare] = useState(false);
+  if (!run.canManageVisibility) {
+    return run.visibility === "organization" ? (
+      <Tooltip content="Shared with your organization" position="bottom">
+        <Badge severity="neutral" size="sm" className="shrink-0">
+          <Users className="h-3 w-3" />
+          Organization
+        </Badge>
+      </Tooltip>
+    ) : run.visibility === "private" ? (
+      <Tooltip
+        content="Only you can view this investigation. Other organization members don’t have access."
+        position="bottom"
+      >
+        <Badge severity="neutral" size="sm" className="shrink-0">
+          <Lock className="h-3 w-3" />
+          Private
+        </Badge>
+      </Tooltip>
+    ) : null;
+  }
+  const shared = run.visibility === "organization";
+  const update = () => {
+    if (busy) return;
+    setBusy(true);
+    setError(false);
+    updateRunVisibility(run.id, shared ? "private" : "organization")
+      .then((updated) => {
+        onChanged(updated);
+        setConfirmShare(false);
+      })
+      .catch(() => setError(true))
+      .finally(() => setBusy(false));
+  };
+  const label = shared ? "Organization" : "Private";
+  return (
+    <>
+      <Tooltip
+        content={
+          error
+            ? "Couldn't change sharing"
+            : shared
+              ? "Shared with your organization — make private"
+              : "Private — click to let organization members access this investigation"
+        }
+        position="bottom"
+      >
+        <button
+          onClick={() => (shared ? update() : setConfirmShare(true))}
+          disabled={busy}
+          className="flex items-center gap-1 rounded-md border border-theme-border/70 px-1.5 py-1 text-[11px] font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary disabled:opacity-50"
+          aria-label={
+            shared
+              ? "Shared with your organization — make private"
+              : "Private — click to let organization members access this investigation"
+          }
+        >
+          {shared ? (
+            <Users className="h-3.5 w-3.5" />
+          ) : (
+            <Lock className="h-3.5 w-3.5" />
+          )}
+          {label}
+        </button>
+      </Tooltip>
+      <ConfirmDialog
+        open={confirmShare}
+        onClose={() => !busy && setConfirmShare(false)}
+        onConfirm={update}
+        title="Share this investigation?"
+        message="Everyone in your organization can read this entire investigation—including your questions and the logs and manifests Radar read—and can continue or stop it."
+        confirmLabel="Share with organization"
+        showWarning={false}
+        variant="warning"
+        isLoading={busy}
+      />
+    </>
+  );
+}
+
 // The panel is an ABSOLUTE slot inside the app's body frame (the column under the
 // header, right of the nav rail) — App renders it there and passes topInset (the
 // header height; 0 in chromeless embeds). It shares that frame with the resource/
@@ -185,8 +341,8 @@ function InvestigationMenu({ run }: { run: RunSummary }) {
 //                 the last focused run. Without this the button dispatches an
 //                 agent — real tokens — from a screen showing an unrelated list.
 //   run           nothing to take a resource from.
-//   running       a start is handed back the live run, so the click does nothing
-//                 and the button reads as broken.
+//   running/stopping human starts reuse the live run. Automatic investigations
+//                 are immutable, so they retain a separate fresh human start.
 //   stale         the original session is closed after a cluster switch;
 //                 the resource may not exist in the active context. Do not
 //                 silently start a different-cluster investigation from here.
@@ -199,7 +355,8 @@ export function canStartNewInvestigation(
   return (
     view === "investigation" &&
     !!run &&
-    run.status !== "running" &&
+    ((run.status !== "running" && run.status !== "stopping") ||
+      run.trigger === "background") &&
     run.status !== "stale" &&
     !needsConsent
   );
@@ -440,8 +597,8 @@ export function DiagnoseSurface({
   // Header identity and actions must describe what is actually visible.
   const visibleRunDetail = d.needsConsent ? null : activeRun;
   // A focused run shows the agent it actually ran with; Home reflects the current pick.
-  const activeAgentLabel = activeRun?.agent
-    ? agentLabelFor(activeRun.agent)
+  const activeAgentLabel = visibleRunDetail?.agent
+    ? agentLabelFor(visibleRunDetail.agent)
     : d.agentLabel;
   const defaultHeaderConfig = {
     agent: d.selectedAgent,
@@ -515,12 +672,13 @@ export function DiagnoseSurface({
     </div>
   ) : d.activeRunId && d.runsLoaded ? (
     // A focused id that isn't in the loaded list — a deep link (?ai-run=…) to a
-    // cleared/evicted/unknown run. Say so; the generic "select an
+    // private/revoked/cleared/unknown run. The generic "select an
     // investigation" placeholder would read as a broken link.
     <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
       <p className="text-sm text-theme-text-secondary">
-        This investigation is no longer available — history keeps the most
-        recent investigations, and this one has been cleared.
+        This investigation is unavailable. It may be private, your access may
+        have changed, or its history may have been cleared. Check your account
+        and organization, or ask the creator for access.
       </p>
       <button
         onClick={d.goHome}
@@ -660,7 +818,7 @@ export function DiagnoseSurface({
           {activeRun &&
             canStartNewInvestigation(d.view, activeRun, d.needsConsent) && (
               <Tooltip
-                content="New investigation on this resource"
+                content="Start fresh — ignore earlier findings"
                 position="bottom"
               >
                 <button
@@ -675,14 +833,27 @@ export function DiagnoseSurface({
                     })
                   }
                   className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
-                  aria-label="New investigation on this resource"
+                  aria-label="Start fresh — ignore earlier findings"
                 >
                   <Plus className="h-4 w-4" />
                 </button>
               </Tooltip>
             )}
           {visibleRunDetail && headerPresentation.runActionsClass !== null && (
-            <div className={headerPresentation.runActionsClass}>
+            <div
+              className={`items-center gap-1 ${headerPresentation.runActionsClass || "flex"}`}
+            >
+              <VisibilityControl
+                key={visibleRunDetail.id}
+                run={visibleRunDetail}
+                onChanged={d.updateRunSummary}
+              />
+              {canCopyRunLink(visibleRunDetail) && (
+                <CopyRunLink
+                  radarUrl={visibleRunDetail.radarUrl}
+                  visibility={visibleRunDetail.visibility}
+                />
+              )}
               <InvestigationMenu run={visibleRunDetail} />
             </div>
           )}

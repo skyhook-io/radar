@@ -227,6 +227,12 @@ export const SKIP_FILTER_COLUMNS = new Set([
   'lastUpdated', 'chart', 'events', 'repo',
   'generators', 'applications', 'destinations', 'sources', 'budget', 'healthy', 'allowed',
   'secrets', 'subjects', 'role', 'entrypoint', 'templates',
+  // Trivy and Kyverno report counts. These look filterable but cannot be:
+  // getCellFilterValue has no case for them and its fallback probes
+  // status[key]/spec[key], while the counts live under report.summary /
+  // status.summary. Listing them here stops the header reserving room for a
+  // button that can never render.
+  'critical', 'high', 'medium', 'low', 'pass', 'fail', 'warn', 'error', 'skip',
 ])
 
 // Namespace/node cardinality scales with cluster size, not kind enum size;
@@ -240,11 +246,10 @@ export function isColumnFilterableByDistinctCount(colKey: string, distinctCount:
 }
 
 // Column definitions per resource kind
-interface Column {
+export interface Column {
   key: string
   label: string
   width?: string
-  hideOnMobile?: boolean
   tooltip?: string // Explanation of what this column means
   defaultVisible?: boolean // false = hidden by default, shown via column picker
   defaultWidth?: number // default width in px (used for resizable columns)
@@ -321,7 +326,179 @@ const COMPARE_COLUMN_STYLE: React.CSSProperties = {
   maxWidth: COMPARE_COLUMN_WIDTH,
 }
 
-function getColumnMinWidth(col: Column): number {
+// Built-in sortable keys. Hoisted so getColumnMinWidth can reserve room for the
+// sort icon without the header render and the width math drifting apart.
+const BUILTIN_SORTABLE_COLUMN_KEYS = new Set([
+  'name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version',
+  'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object',
+  'cpu', 'memory', 'containers',
+])
+
+// The header row is px-4 with a `truncate` label, under table-layout:fixed with
+// explicit <col> widths — so a column narrower than its own heading clips to
+// "ADDRESS T…" and stays clipped at every viewport size, because only the Name
+// column flexes. Deriving a floor from the label keeps a declared w-* from
+// being narrower than the word it has to show.
+const HEADER_PADDING_PX = 32 // px-4 on both sides
+const HEADER_SORT_AFFORDANCE_PX = 20 // gap-1 + the w-3.5 chevron / ArrowUpDown
+const HEADER_FILTER_AFFORDANCE_PX = 20 // gap-1 + the p-0.5 filter button
+// Deliberately an upper bound on the rendered header font (DM Sans 500, 12px,
+// uppercase, tracking-wide): measured per-character widths across the curated
+// labels ranged 7.2–8.1px, so 8.2 never under-reserves. Over-reserving costs
+// space the flexible Name column has to spare; under-reserving clips again.
+// Printer and host-extra columns take their label from vendor CRD text, which
+// can be long or non-Latin. Cap the floor so one such label can't size a column
+// off the screen; past this a truncated heading (with its tooltip) is better.
+const HEADER_FLOOR_MAX_PX = 320
+
+// Must match the rendered header: text-xs (12px) / font-medium (500) / uppercase
+// / tracking-wide, in the app font. measureText does not apply letter-spacing,
+// so it is added per gap.
+const HEADER_FONT = "500 12px 'DM Sans Variable', 'DM Sans', system-ui, sans-serif"
+const HEADER_LETTER_SPACING_PX = 0.3 // tracking-wide = 0.025em at 12px
+// Fallback only — used where there is no canvas (SSR, jsdom). Deliberately an
+// upper bound: measured per-character widths across the curated labels ranged
+// 7.2–8.1px, so this never under-reserves for Latin text.
+const HEADER_CHAR_PX_FALLBACK = 8.2
+const HEADER_SPACE_PX_FALLBACK = 4
+
+let headerMeasureCtx: CanvasRenderingContext2D | null | undefined
+const headerLabelWidthCache = new Map<string, number>()
+
+// DM Sans is loaded with font-display:swap, so the first tables can render — and
+// be measured — while the browser is still painting the fallback face. Those
+// measurements would otherwise be cached against the wrong glyph metrics for the
+// rest of the session: a wider real face clips a label whose tooltip never
+// activates, a narrower one leaves the table permanently too wide. Drop the
+// cache when the real font arrives and let subscribers recompute.
+let headerFontEpoch = 0
+const headerFontListeners = new Set<() => void>()
+let headerFontWatchStarted = false
+
+function watchHeaderFont(): void {
+  if (headerFontWatchStarted) return
+  headerFontWatchStarted = true
+  const fonts = typeof document === 'undefined' ? undefined : (document as Document & { fonts?: FontFaceSet }).fonts
+  if (!fonts?.ready) return
+  void fonts.ready.then(() => {
+    headerLabelWidthCache.clear()
+    headerMeasureCtx = undefined // re-created so ctx.font resolves against the loaded face
+    headerFontEpoch++
+    for (const notify of headerFontListeners) notify()
+  })
+}
+
+/**
+ * Re-renders once the web font has loaded, so column widths measured against the
+ * fallback face are recomputed against the real one.
+ */
+export function useHeaderFontEpoch(): number {
+  const [epoch, setEpoch] = useState(headerFontEpoch)
+  useEffect(() => {
+    const notify = () => setEpoch(headerFontEpoch)
+    headerFontListeners.add(notify)
+    notify() // the font may have loaded between render and effect
+    return () => { headerFontListeners.delete(notify) }
+  }, [])
+  return epoch
+}
+
+/**
+ * Width of a header label as the browser will actually draw it.
+ *
+ * Measured rather than estimated because the labels are not a closed set: an
+ * uncurated CRD's printer columns take their names from the vendor's own
+ * additionalPrinterColumns, so they can be any length, any script, and a
+ * per-character constant calibrated on curated ASCII silently stops holding.
+ */
+function headerLabelWidth(label: string): number {
+  watchHeaderFont()
+  const cached = headerLabelWidthCache.get(label)
+  if (cached !== undefined) return cached
+  const upper = label.toUpperCase() // the header renders uppercase
+  let width: number
+  if (headerMeasureCtx === undefined) {
+    headerMeasureCtx = typeof document === 'undefined'
+      ? null
+      : document.createElement('canvas').getContext('2d')
+    if (headerMeasureCtx) headerMeasureCtx.font = HEADER_FONT
+  }
+  if (headerMeasureCtx) {
+    width = headerMeasureCtx.measureText(upper).width
+      + HEADER_LETTER_SPACING_PX * Math.max(0, upper.length - 1)
+  } else {
+    width = 0
+    for (const ch of upper) width += ch === ' ' ? HEADER_SPACE_PX_FALLBACK : HEADER_CHAR_PX_FALLBACK
+  }
+  headerLabelWidthCache.set(label, width)
+  return width
+}
+
+/**
+ * Header label that carries its own full text in a tooltip when it truncates.
+ *
+ * The width floor in getColumnMinWidth keeps a heading from being clipped by its
+ * own column, but three cases still truncate: a label past the floor cap, a
+ * column the user dragged narrower, and the sort/filter controls sharing the
+ * row — whose width depends on their state (an active filter renders padding,
+ * an icon and a count). Their rendered width isn't knowable from the column
+ * definition, so this reads the element's actual overflow rather than computing
+ * it.
+ *
+ * The Tooltip wrapper stays mounted whether or not the label truncates: swapping
+ * it in on overflow would remount the measured span, stranding the
+ * ResizeObserver on the detached node so the state could never flip back. It
+ * also needs min-w-0 — the wrapper is the flex item in the header row, and an
+ * inline-flex box won't shrink below its content unless told to, which would
+ * push the sort and filter controls out of the cell.
+ */
+function HeaderLabel({ label, className }: { label: string; className?: string }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const [truncated, setTruncated] = useState(false)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const check = () => setTruncated(el.scrollWidth > el.clientWidth + 0.5)
+    check()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(check)
+    ro.observe(el)
+    return () => { ro.disconnect() }
+  }, [label])
+  return (
+    <Tooltip content={label} disabled={!truncated} preserveWrapperWhenDisabled wrapperClassName="min-w-0">
+      <span ref={ref} className={clsx('truncate', className)}>{label}</span>
+    </Tooltip>
+  )
+}
+
+/**
+ * Whether a column's header renders a sort control, which takes width beside the
+ * label. Shared by the header render and the width math so the two can't
+ * disagree: printer and custom columns are sortable through their own
+ * getSortValue even though their keys aren't in the built-in list.
+ */
+export function isColumnSortable(col: Column, extras?: Map<string, ExtraColumn>): boolean {
+  return BUILTIN_SORTABLE_COLUMN_KEYS.has(col.key) || !!extras?.get(col.key)?.getSortValue
+}
+
+export function getColumnMinWidth(col: Column, extras?: Map<string, ExtraColumn>): number {
+  const declared = declaredColumnWidth(col)
+  // A column-filter button also sits in this row, but whether one renders
+  // depends on the distinct values in the data (isColumnFilterableByDistinctCount),
+  // which isn't knowable here — those columns stay ~20px tighter than ideal.
+  // Both controls are reserved statically. The filter button only renders once
+  // the data has a filterable spread of values (isColumnFilterableByDistinctCount),
+  // but sizing the column from that would make it change width as rows load or
+  // are filtered — the jumping-column problem fixed layout exists to avoid. So
+  // reserve for any column that could ever carry one, and keep the width stable.
+  const affordance = (isColumnSortable(col, extras) ? HEADER_SORT_AFFORDANCE_PX : 0)
+    + (SKIP_FILTER_COLUMNS.has(col.key) ? 0 : HEADER_FILTER_AFFORDANCE_PX)
+  const headerFloor = HEADER_PADDING_PX + headerLabelWidth(col.label) + affordance
+  return Math.max(declared, Math.min(Math.ceil(headerFloor), HEADER_FLOOR_MAX_PX))
+}
+
+function declaredColumnWidth(col: Column): number {
   if (col.minWidth) return col.minWidth
   if (!col.width) return 200 // Name column (no width class) gets wider minimum
   const match = col.width.match(/(?:min-)?w-(\d+)/)
@@ -372,7 +549,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'restarts', label: 'Restarts', width: 'w-28' },
     { key: 'gpu', label: 'GPU', width: 'w-20', tooltip: 'Effective GPU request (requests, falling back to limits) summed across containers', defaultVisible: false },
     { key: 'podIP', label: 'Pod IP', width: 'w-32', defaultVisible: false },
-    { key: 'node', label: 'Node', width: 'w-44', hideOnMobile: true },
+    { key: 'node', label: 'Node', width: 'w-44' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   deployments: [
@@ -380,9 +557,9 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'status', label: 'Status', width: 'w-40' },
     { key: 'ready', label: 'Ready', width: 'w-24', tooltip: 'Ready pods / Desired replicas' },
-    { key: 'upToDate', label: 'Up-to-date', width: 'w-32', hideOnMobile: true, tooltip: 'Number of pods running the current pod template' },
-    { key: 'available', label: 'Available', width: 'w-28', hideOnMobile: true, tooltip: 'Number of pods available (ready for minReadySeconds)' },
-    { key: 'images', label: 'Images', width: 'w-48', hideOnMobile: true },
+    { key: 'upToDate', label: 'Up-to-date', width: 'w-32', tooltip: 'Number of pods running the current pod template' },
+    { key: 'available', label: 'Available', width: 'w-28', tooltip: 'Number of pods available (ready for minReadySeconds)' },
+    { key: 'images', label: 'Images', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   daemonsets: [
@@ -391,9 +568,9 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-40' },
     { key: 'desired', label: 'Desired', width: 'w-20', tooltip: 'Number of nodes that should run the daemon pod (based on node selector)' },
     { key: 'ready', label: 'Ready', width: 'w-20', tooltip: 'Number of pods that are ready (passing readiness probes)' },
-    { key: 'upToDate', label: 'Up-to-date', width: 'w-32', hideOnMobile: true, tooltip: 'Number of pods running the current pod template spec' },
-    { key: 'available', label: 'Available', width: 'w-28', hideOnMobile: true, tooltip: 'Number of pods available (ready for minReadySeconds duration)' },
-    { key: 'images', label: 'Images', width: 'w-48', hideOnMobile: true },
+    { key: 'upToDate', label: 'Up-to-date', width: 'w-32', tooltip: 'Number of pods running the current pod template spec' },
+    { key: 'available', label: 'Available', width: 'w-28', tooltip: 'Number of pods available (ready for minReadySeconds duration)' },
+    { key: 'images', label: 'Images', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   statefulsets: [
@@ -401,8 +578,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'status', label: 'Status', width: 'w-40' },
     { key: 'ready', label: 'Ready', width: 'w-24', tooltip: 'Ready pods / Desired replicas' },
-    { key: 'upToDate', label: 'Up-to-date', width: 'w-32', hideOnMobile: true, tooltip: 'Number of pods running the current pod template' },
-    { key: 'images', label: 'Images', width: 'w-48', hideOnMobile: true },
+    { key: 'upToDate', label: 'Up-to-date', width: 'w-32', tooltip: 'Number of pods running the current pod template' },
+    { key: 'images', label: 'Images', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   replicasets: [
@@ -410,17 +587,17 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'ready', label: 'Ready', width: 'w-24' },
     { key: 'owner', label: 'Owner', width: 'w-48' },
-    { key: 'status', label: 'Status', width: 'w-24', hideOnMobile: true },
+    { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   services: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'type', label: 'Type', width: 'w-28' },
-    { key: 'selector', label: 'Selector', width: 'w-48', hideOnMobile: true },
+    { key: 'selector', label: 'Selector', width: 'w-48' },
     { key: 'endpoints', label: 'Endpoints', width: 'w-24' },
     { key: 'ports', label: 'Ports', width: 'w-40' },
-    { key: 'externalIP', label: 'External', width: 'w-40', hideOnMobile: true },
+    { key: 'externalIP', label: 'External', width: 'w-40' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   endpointslices: [
@@ -430,7 +607,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'addressType', label: 'Address Type', width: 'w-28' },
     { key: 'endpoints', label: 'Endpoints', width: 'w-32' },
     { key: 'addresses', label: 'Addresses', width: 'w-24' },
-    { key: 'ports', label: 'Ports', width: 'w-40', hideOnMobile: true },
+    { key: 'ports', label: 'Ports', width: 'w-40' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   ingresses: [
@@ -438,9 +615,9 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'class', label: 'Class', width: 'w-24 shrink-0' },
     { key: 'hosts', label: 'Hosts', width: 'min-w-48' },
-    { key: 'rules', label: 'Rules', width: 'min-w-56', hideOnMobile: true },
+    { key: 'rules', label: 'Rules', width: 'min-w-56' },
     { key: 'tls', label: 'TLS', width: 'w-14 shrink-0' },
-    { key: 'address', label: 'Address', width: 'min-w-32', hideOnMobile: true },
+    { key: 'address', label: 'Address', width: 'min-w-32' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   nodes: [
@@ -451,8 +628,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'memory', label: 'Memory', width: 'w-40', tooltip: 'Current memory usage / allocatable' },
     { key: 'pods', label: 'Pods', width: 'w-28', tooltip: 'Pods running / allocatable' },
     { key: 'gpu', label: 'GPUs', width: 'w-20', tooltip: 'Allocatable GPUs', defaultVisible: false },
-    { key: 'conditions', label: 'Conditions', width: 'w-40', hideOnMobile: true },
-    { key: 'taints', label: 'Taints', width: 'w-24', hideOnMobile: true },
+    { key: 'conditions', label: 'Conditions', width: 'w-40' },
+    { key: 'taints', label: 'Taints', width: 'w-24' },
     { key: 'version', label: 'Version', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -476,7 +653,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'completions', label: 'Completions', width: 'w-32' },
-    { key: 'duration', label: 'Duration', width: 'w-24', hideOnMobile: true },
+    { key: 'duration', label: 'Duration', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   cronjobs: [
@@ -484,7 +661,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'schedule', label: 'Schedule', width: 'w-40' },
     { key: 'status', label: 'Status', width: 'w-28' },
-    { key: 'lastRun', label: 'Last Run', width: 'w-28', hideOnMobile: true },
+    { key: 'lastRun', label: 'Last Run', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   hpas: [
@@ -492,7 +669,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'target', label: 'Target', width: 'w-48' },
     { key: 'replicas', label: 'Replicas', width: 'w-32' },
-    { key: 'metrics', label: 'Metrics', width: 'w-36', hideOnMobile: true },
+    { key: 'metrics', label: 'Metrics', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -501,7 +678,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'target', label: 'Target', width: 'w-48' },
     { key: 'replicas', label: 'Replicas', width: 'w-32' },
-    { key: 'metrics', label: 'Metrics', width: 'w-36', hideOnMobile: true },
+    { key: 'metrics', label: 'Metrics', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -510,9 +687,9 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'capacity', label: 'Capacity', width: 'w-24' },
-    { key: 'storageClass', label: 'Storage Class', width: 'w-40', hideOnMobile: true },
+    { key: 'storageClass', label: 'Storage Class', width: 'w-40' },
     { key: 'accessModes', label: 'Access', width: 'w-20', tooltip: 'Access modes: RWO=ReadWriteOnce, RWX=ReadWriteMany, ROX=ReadOnlyMany' },
-    { key: 'volume', label: 'Volume', width: 'w-48', hideOnMobile: true },
+    { key: 'volume', label: 'Volume', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   rollouts: [
@@ -521,8 +698,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-32' },
     { key: 'ready', label: 'Ready', width: 'w-24', tooltip: 'Available / Desired replicas' },
     { key: 'strategy', label: 'Strategy', width: 'w-24' },
-    { key: 'step', label: 'Step', width: 'w-20', hideOnMobile: true, tooltip: 'Current canary step / Total steps' },
-    { key: 'images', label: 'Images', width: 'w-48', hideOnMobile: true },
+    { key: 'step', label: 'Step', width: 'w-20', tooltip: 'Current canary step / Total steps' },
+    { key: 'images', label: 'Images', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   analysisruns: [
@@ -530,7 +707,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'status', label: 'Phase', width: 'w-28' },
     { key: 'trigger', label: 'Trigger', width: 'w-32', tooltip: 'Which part of the Rollout started this run' },
-    { key: 'metrics', label: 'Metrics', width: 'w-40', hideOnMobile: true, tooltip: 'Per-metric verdicts' },
+    { key: 'metrics', label: 'Metrics', width: 'w-40', tooltip: 'Per-metric verdicts' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   workflows: [
@@ -538,8 +715,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'status', label: 'Phase', width: 'w-28' },
     { key: 'duration', label: 'Duration', width: 'w-24' },
-    { key: 'progress', label: 'Progress', width: 'w-24', hideOnMobile: true, tooltip: 'Succeeded steps / Total steps' },
-    { key: 'template', label: 'Template', width: 'w-40', hideOnMobile: true },
+    { key: 'progress', label: 'Progress', width: 'w-24', tooltip: 'Succeeded steps / Total steps' },
+    { key: 'template', label: 'Template', width: 'w-40' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   cronworkflows: [
@@ -547,8 +724,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'schedule', label: 'Schedule', width: 'w-40' },
     { key: 'status', label: 'Status', width: 'w-28' },
-    { key: 'lastRun', label: 'Last Run', width: 'w-28', hideOnMobile: true },
-    { key: 'template', label: 'Template', width: 'w-40', hideOnMobile: true },
+    { key: 'lastRun', label: 'Last Run', width: 'w-28' },
+    { key: 'template', label: 'Template', width: 'w-40' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   certificates: [
@@ -556,7 +733,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'status', label: 'Ready', width: 'w-24' },
     { key: 'domains', label: 'Domains', width: 'w-56' },
-    { key: 'issuer', label: 'Issuer', width: 'w-36', hideOnMobile: true },
+    { key: 'issuer', label: 'Issuer', width: 'w-36' },
     { key: 'expires', label: 'Expires', width: 'w-24', tooltip: 'Days until certificate expires' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -566,8 +743,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'capacity', label: 'Capacity', width: 'w-24' },
     { key: 'accessModes', label: 'Access', width: 'w-20', tooltip: 'RWO=ReadWriteOnce, ROX=ReadOnlyMany, RWX=ReadWriteMany' },
     { key: 'reclaimPolicy', label: 'Reclaim', width: 'w-20' },
-    { key: 'storageClass', label: 'Storage Class', width: 'w-40', hideOnMobile: true },
-    { key: 'claim', label: 'Claim', width: 'w-48', hideOnMobile: true },
+    { key: 'storageClass', label: 'Storage Class', width: 'w-40' },
+    { key: 'claim', label: 'Claim', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   storageclasses: [
@@ -604,7 +781,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'state', label: 'State', width: 'w-24' },
     { key: 'domains', label: 'Domains', width: 'w-48' },
-    { key: 'issuer', label: 'Issuer', width: 'w-36', hideOnMobile: true },
+    { key: 'issuer', label: 'Issuer', width: 'w-36' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   challenges: [
@@ -613,7 +790,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'challengeType', label: 'Type', width: 'w-20' },
     { key: 'state', label: 'State', width: 'w-24' },
     { key: 'domain', label: 'Domain', width: 'w-48' },
-    { key: 'presented', label: 'Presented', width: 'w-24', hideOnMobile: true },
+    { key: 'presented', label: 'Presented', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   gateways: [
@@ -623,7 +800,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'class', label: 'Class', width: 'w-36' },
     { key: 'listeners', label: 'Listeners', width: 'w-40', tooltip: 'Protocol:Port for each listener' },
     { key: 'routes', label: 'Routes', width: 'w-20', tooltip: 'Total attached routes across all listeners' },
-    { key: 'addresses', label: 'Addresses', width: 'w-48', hideOnMobile: true },
+    { key: 'addresses', label: 'Addresses', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   httproutes: [
@@ -633,7 +810,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'hostnames', label: 'Hostnames', width: 'w-48' },
     { key: 'parents', label: 'Gateways', width: 'w-36' },
     { key: 'backends', label: 'Backends', width: 'w-48', tooltip: 'Backend services receiving traffic' },
-    { key: 'rules', label: 'Rules', width: 'w-16', hideOnMobile: true },
+    { key: 'rules', label: 'Rules', width: 'w-20' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   istiogateways: [
@@ -647,7 +824,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   gatewayclasses: [
     { key: 'name', label: 'Name' },
     { key: 'controller', label: 'Controller', width: 'w-64', tooltip: 'Gateway controller implementation (spec.controllerName)' },
-    { key: 'description', label: 'Description', width: 'w-64', hideOnMobile: true },
+    { key: 'description', label: 'Description', width: 'w-64' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -656,7 +833,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'nodeClass', label: 'Node Class', width: 'w-36' },
     { key: 'limits', label: 'Limits', width: 'w-36', tooltip: 'CPU and memory limits' },
-    { key: 'disruption', label: 'Disruption', width: 'w-40', hideOnMobile: true },
+    { key: 'disruption', label: 'Disruption', width: 'w-40' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   nodeclaims: [
@@ -665,9 +842,9 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'instanceType', label: 'Instance Type', width: 'w-32' },
     { key: 'capacityType', label: 'Capacity', width: 'w-24', tooltip: 'Spot or On-Demand' },
-    { key: 'zone', label: 'Zone', width: 'w-28', hideOnMobile: true },
+    { key: 'zone', label: 'Zone', width: 'w-28' },
     { key: 'nodePool', label: 'Node Pool', width: 'w-32' },
-    { key: 'nodeName', label: 'Node', width: 'w-40', hideOnMobile: true },
+    { key: 'nodeName', label: 'Node', width: 'w-40' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   ec2nodeclasses: [
@@ -1117,14 +1294,14 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'action', label: 'Action', width: 'w-36', tooltip: 'Enforcement at admission — Enforce blocks, Audit reports; Background only or Inactive when admission is disabled' },
-    { key: 'rules', label: 'Rules', width: 'w-16' },
+    { key: 'rules', label: 'Rules', width: 'w-20' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   clusterpolicies: [
     { key: 'name', label: 'Name' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'action', label: 'Action', width: 'w-36', tooltip: 'Enforcement at admission — Enforce blocks, Audit reports; Background only or Inactive when admission is disabled' },
-    { key: 'rules', label: 'Rules', width: 'w-16' },
+    { key: 'rules', label: 'Rules', width: 'w-20' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   // Kyverno modern CEL family (policies.kyverno.io). "Enforcement" is the
@@ -1247,7 +1424,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'hostnames', label: 'Hostnames', width: 'w-48' },
     { key: 'parents', label: 'Gateways', width: 'w-36' },
     { key: 'backends', label: 'Backends', width: 'w-48', tooltip: 'Backend services receiving traffic' },
-    { key: 'rules', label: 'Rules', width: 'w-16', hideOnMobile: true },
+    { key: 'rules', label: 'Rules', width: 'w-20' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   tcproutes: [
@@ -1256,7 +1433,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'parents', label: 'Gateways', width: 'w-36' },
     { key: 'backends', label: 'Backends', width: 'w-48', tooltip: 'Backend services receiving traffic' },
-    { key: 'rules', label: 'Rules', width: 'w-16', hideOnMobile: true },
+    { key: 'rules', label: 'Rules', width: 'w-20' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   tlsroutes: [
@@ -1266,7 +1443,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'hostnames', label: 'Hostnames', width: 'w-48', tooltip: 'SNI hostnames for TLS routing' },
     { key: 'parents', label: 'Gateways', width: 'w-36' },
     { key: 'backends', label: 'Backends', width: 'w-48', tooltip: 'Backend services receiving traffic' },
-    { key: 'rules', label: 'Rules', width: 'w-16', hideOnMobile: true },
+    { key: 'rules', label: 'Rules', width: 'w-20' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   sealedsecrets: [
@@ -1274,7 +1451,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'status', label: 'Synced', width: 'w-24' },
     { key: 'keys', label: 'Keys', width: 'w-20' },
-    { key: 'type', label: 'Type', width: 'w-36', hideOnMobile: true },
+    { key: 'type', label: 'Type', width: 'w-36' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   workflowtemplates: [
@@ -1438,7 +1615,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'value', label: 'Value', width: 'w-24' },
     { key: 'globalDefault', label: 'Global Default', width: 'w-36' },
     { key: 'preemptionPolicy', label: 'Preemption', width: 'w-32' },
-    { key: 'description', label: 'Description', width: 'w-64', hideOnMobile: true },
+    { key: 'description', label: 'Description', width: 'w-64' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   runtimeclasses: [
@@ -1450,14 +1627,14 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'webhooks', label: 'Webhooks', width: 'w-28' },
     { key: 'failurePolicy', label: 'Failure Policy', width: 'w-36' },
-    { key: 'target', label: 'Target', width: 'w-48', hideOnMobile: true },
+    { key: 'target', label: 'Target', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   validatingwebhookconfigurations: [
     { key: 'name', label: 'Name' },
     { key: 'webhooks', label: 'Webhooks', width: 'w-28' },
     { key: 'failurePolicy', label: 'Failure Policy', width: 'w-36' },
-    { key: 'target', label: 'Target', width: 'w-48', hideOnMobile: true },
+    { key: 'target', label: 'Target', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   events: [
@@ -1466,7 +1643,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'type', label: 'Type', width: 'w-24' },
     { key: 'reason', label: 'Reason', width: 'w-32' },
     { key: 'message', label: 'Message', width: 'w-64' },
-    { key: 'object', label: 'Object', width: 'w-48', hideOnMobile: true },
+    { key: 'object', label: 'Object', width: 'w-48' },
     { key: 'count', label: 'Count', width: 'w-20' },
     { key: 'lastSeen', label: 'Last Seen', width: 'w-28' },
   ],
@@ -1479,7 +1656,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'url', label: 'URL', width: 'w-64' },
     { key: 'ref', label: 'Ref', width: 'w-32', tooltip: 'Branch, tag, or semver' },
     { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'revision', label: 'Revision', width: 'w-24', hideOnMobile: true, tooltip: 'Last fetched commit SHA' },
+    { key: 'revision', label: 'Revision', width: 'w-24', tooltip: 'Last fetched commit SHA' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   ocirepositories: [
@@ -1488,7 +1665,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'url', label: 'URL', width: 'w-64' },
     { key: 'ref', label: 'Tag', width: 'w-24', tooltip: 'OCI tag or semver' },
     { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'revision', label: 'Digest', width: 'w-24', hideOnMobile: true },
+    { key: 'revision', label: 'Digest', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   helmrepositories: [
@@ -1503,9 +1680,9 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'source', label: 'Source', width: 'w-48', tooltip: 'Source GitRepository or OCIRepository' },
-    { key: 'path', label: 'Path', width: 'w-36', hideOnMobile: true },
+    { key: 'path', label: 'Path', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'revision', label: 'Revision', width: 'w-48', hideOnMobile: true, tooltip: 'Applied git revision' },
+    { key: 'revision', label: 'Revision', width: 'w-48', tooltip: 'Applied git revision' },
     { key: 'inventory', label: 'Resources', width: 'w-24', tooltip: 'Number of managed resources' },
     { key: 'lastUpdated', label: 'Last Updated', width: 'w-28', tooltip: 'Time since last successful reconciliation' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -1516,8 +1693,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'chart', label: 'Chart', width: 'w-40' },
     { key: 'version', label: 'Version', width: 'w-24' },
     { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'message', label: 'Message', width: 'w-64', hideOnMobile: true, tooltip: 'Last diagnostic message — distinguishes dependency-wait, install/upgrade failure, and test failure' },
-    { key: 'revision', label: 'Rev', width: 'w-16', hideOnMobile: true, tooltip: 'Helm release revision number' },
+    { key: 'message', label: 'Message', width: 'w-64', tooltip: 'Last diagnostic message — distinguishes dependency-wait, install/upgrade failure, and test failure' },
+    { key: 'revision', label: 'Rev', width: 'w-16', tooltip: 'Helm release revision number' },
     { key: 'lastUpdated', label: 'Last Updated', width: 'w-28', tooltip: 'Time since last successful reconciliation' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -1538,14 +1715,14 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'project', label: 'Project', width: 'w-28' },
     { key: 'sync', label: 'Sync', width: 'w-24' },
     { key: 'health', label: 'Health', width: 'w-24' },
-    { key: 'repo', label: 'Repository', width: 'w-48', hideOnMobile: true },
+    { key: 'repo', label: 'Repository', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   applicationsets: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'generators', label: 'Generators', width: 'w-32' },
-    { key: 'template', label: 'Template', width: 'w-40', hideOnMobile: true },
+    { key: 'template', label: 'Template', width: 'w-40' },
     { key: 'applications', label: 'Apps', width: 'w-20', tooltip: 'Number of generated applications' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -2116,7 +2293,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'entrypoints', label: 'Entry Points', width: 'w-32 shrink-0' },
     { key: 'hosts', label: 'Hosts', width: 'min-w-44' },
-    { key: 'routes', label: 'Routes', width: 'min-w-48', hideOnMobile: true },
+    { key: 'routes', label: 'Routes', width: 'min-w-48' },
     { key: 'tls', label: 'TLS', width: 'w-14 shrink-0' },
     { key: 'middlewares', label: 'MW', width: 'w-14 shrink-0', tooltip: 'Unique middleware count' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
@@ -2126,7 +2303,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'entrypoints', label: 'Entry Points', width: 'w-32 shrink-0' },
     { key: 'hosts', label: 'Hosts', width: 'min-w-44' },
-    { key: 'routes', label: 'Routes', width: 'min-w-48', hideOnMobile: true },
+    { key: 'routes', label: 'Routes', width: 'min-w-48' },
     { key: 'tls', label: 'TLS', width: 'w-14 shrink-0' },
     { key: 'middlewares', label: 'MW', width: 'w-14 shrink-0', tooltip: 'Unique middleware count' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
@@ -2390,15 +2567,15 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-32 shrink-0' },
     { key: 'kind', label: 'Kind', width: 'w-32 shrink-0' },
-    { key: 'external', label: 'External Name', width: 'min-w-48', hideOnMobile: true },
-    { key: 'provider', label: 'Provider Config', width: 'w-40 shrink-0', hideOnMobile: true },
+    { key: 'external', label: 'External Name', width: 'min-w-48' },
+    { key: 'provider', label: 'Provider Config', width: 'w-40 shrink-0' },
     { key: 'status', label: 'Status', width: 'w-32 shrink-0' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   providers: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'package', label: 'Package', width: 'min-w-48' },
-    { key: 'revision', label: 'Revision', width: 'w-36 shrink-0', hideOnMobile: true },
+    { key: 'revision', label: 'Revision', width: 'w-36 shrink-0' },
     { key: 'status', label: 'Status', width: 'w-32 shrink-0' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
@@ -2412,13 +2589,13 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'composite', label: 'Composite Kind', width: 'w-44 shrink-0' },
     { key: 'mode', label: 'Mode', width: 'w-24 shrink-0' },
-    { key: 'functions', label: 'Functions', width: 'w-28 shrink-0', hideOnMobile: true },
+    { key: 'functions', label: 'Functions', width: 'w-28 shrink-0' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   compositeresourcedefinitions: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'kind', label: 'Kind', width: 'w-40 shrink-0' },
-    { key: 'claim', label: 'Claim Kind', width: 'w-40 shrink-0', hideOnMobile: true },
+    { key: 'claim', label: 'Claim Kind', width: 'w-40 shrink-0' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
 }
@@ -2961,12 +3138,32 @@ export function mergeSavedVisibleColumns(
   savedVisible: string[],
   extraKeys: string[],
   printerColumns: ExtraColumn[],
+  effective?: Column[],
+  known?: string[],
 ): Set<string> {
   const merged = new Set(savedVisible)
   for (const k of extraKeys) merged.add(k)
   if (!savedVisible.some(k => k.startsWith(PRINTER_COLUMN_PREFIX))) {
     for (const c of printerColumns) {
       if (c.defaultVisible !== false) merged.add(c.key)
+    }
+  }
+  // Curated columns the blob predates. Same principle as the two above, but it
+  // needs a record of what the user was actually offered: the blob stores only
+  // what is visible, so a curated key's absence is ambiguous between "hidden on
+  // purpose" and "not offered yet". `known` is that record. Without one the two
+  // cases are indistinguishable, so nothing is inferred and visibility is left
+  // to the saved set alone.
+  //
+  // Printer columns are excluded even when `known` lists none of them. They are
+  // fetched, so `known` can be written during the window before the printer
+  // table arrives; treating their absence as "new" would re-show ones the user
+  // hid. Their own rule above already covers them.
+  if (effective && Array.isArray(known)) {
+    const seen = new Set(known)
+    for (const c of effective) {
+      if (c.key.startsWith(PRINTER_COLUMN_PREFIX)) continue
+      if (!seen.has(c.key) && c.defaultVisible !== false) merged.add(c.key)
     }
   }
   return merged
@@ -3024,6 +3221,10 @@ interface ColumnSettings {
   visible: string[]
   widths: Record<string, number>
   custom?: CustomColumnDef[]
+  /** Every column key the user was offered when this was written. Lets a later
+   *  load tell a column they hid from one that did not exist yet. Absent on
+   *  blobs written before this field. */
+  known?: string[]
 }
 
 function loadColumnSettings(kind: string, group?: string): ColumnSettings | null {
@@ -3601,8 +3802,17 @@ export function ResourcesView({
     return [...filteredExtras, ...kindColumns, ...builtCustomColumns]
   }, [selectedKind.name, selectedKind.group, extraLeadingColumns, builtCustomColumns, builtPrinterColumns])
 
+  // The offered key set, and a stable signature for it. allColumns is a new
+  // identity on every printer-column refetch; depending on the array itself
+  // would rewrite the settings blob on each poll.
+  const allColumnKeys = useMemo(() => allColumns.map(c => c.key), [allColumns])
+  const allColumnKeysSig = allColumnKeys.join('\u0000')
+
   // Map of extra column keys for fast O(1) lookup on each render path
   // (cell render, sort, column-filter unique-values).
+  // Recompute header-derived widths once the web font swaps in (see watchHeaderFont).
+  const headerFontEpoch = useHeaderFontEpoch()
+
   const extraColumnsByKey = useMemo(() => {
     const m = new Map<string, ExtraColumn>()
     extraLeadingColumns?.forEach(c => m.set(c.key, c))
@@ -3614,6 +3824,13 @@ export function ResourcesView({
   // Guards the save effect from persisting on the initial load of each kind
   // (set false by the load effect, flipped true on its first skipped save).
   const isColumnSettingsLoaded = useRef(false)
+  // Every column key this kind has ever offered, accumulated. A single save
+  // cannot stand in for it: the offered set shrinks as well as grows — an
+  // uncurated kind's generic Status disappears once its printer columns arrive
+  // — and a shrunk snapshot would forget that a column absent from `visible`
+  // was one the user hid rather than one never shown.
+  const knownColumnKeys = useRef<Set<string>>(new Set())
+  const knownColumnKeysKind = useRef('')
   // Whether the user has a persisted column blob for this kind — data-driven
   // column defaults (GPU auto-show) must never override explicit user choices.
   const hadSavedColumnSettings = useRef(false)
@@ -3639,6 +3856,15 @@ export function ResourcesView({
     // (non-array, blank path, bad source) must not crash the later .map or add dead columns.
     const savedCustom = sanitizeCustomColumnDefs(saved?.custom)
     setCustomColumns(savedCustom)
+    // Reset on a kind change only. This effect also re-runs when the printer
+    // columns arrive, and that is the moment the offered set shrinks — clearing
+    // here would drop the evidence for the column they replaced just before the
+    // next save persists the record without it.
+    const knownKeysIdentity = selectedKindIdentityOf(selectedKind)
+    if (knownColumnKeysKind.current !== knownKeysIdentity) {
+      knownColumnKeys.current = new Set()
+      knownColumnKeysKind.current = knownKeysIdentity
+    }
     const kindColumns = columnsForKindWithPrinter(selectedKind.name, selectedKind.group, builtPrinterColumns)
     const builtinKeys = new Set(kindColumns.map(c => c.key))
     const extras = filterHostExtras(extraLeadingColumns, builtinKeys, selectedKind.name)
@@ -3655,18 +3881,32 @@ export function ResourcesView({
       // discard the stale save and use the specialized columns instead. User-added
       // custom columns mean the blob isn't a stale pure-defaults save — keep it, or
       // the migration would clear them from storage (and un-hide hidden ones).
+      // Persisted JSON: only an array of keys is usable, anything else reads as
+      // no record at all.
+      const savedKnown = Array.isArray(saved.known)
+        ? saved.known.filter((k): k is string => typeof k === 'string')
+        : undefined
+      for (const k of savedKnown ?? []) knownColumnKeys.current.add(k)
+
       const defaultKeys = DEFAULT_COLUMNS.map(c => c.key)
+      // A blob carrying an offered-key record is not a pre-curation leftover:
+      // its visible set matching the generic defaults means the user hid their
+      // way down to them, and clearing it would undo exactly that.
       const isStaleDefaults = kindColumns !== DEFAULT_COLUMNS &&
+        !savedKnown &&
         !savedCustom.length &&
         saved.visible.length === defaultKeys.length &&
         saved.visible.every(v => defaultKeys.includes(v))
       if (isStaleDefaults) {
         clearColumnSettings(selectedKind.name, selectedKind.group)
+        knownColumnKeys.current = new Set()
         hadSavedColumnSettings.current = false
         setVisibleColumns(getDefaultVisibleColumns(effective))
         setColumnWidths({})
       } else {
-        setVisibleColumns(mergeSavedVisibleColumns(saved.visible, extraKeys, builtPrinterColumns))
+        setVisibleColumns(mergeSavedVisibleColumns(
+          saved.visible, extraKeys, builtPrinterColumns, effective, savedKnown,
+        ))
         setColumnWidths(saved.widths || {})
       }
     } else {
@@ -3682,6 +3922,7 @@ export function ResourcesView({
   // Save column settings when they change (skip the initial load of each kind)
   useEffect(() => {
     if (visibleColumns.size === 0) return // not loaded yet
+    for (const k of allColumnKeys) knownColumnKeys.current.add(k)
     if (!isColumnSettingsLoaded.current) {
       isColumnSettingsLoaded.current = true
       return
@@ -3690,11 +3931,13 @@ export function ResourcesView({
       visible: Array.from(visibleColumns),
       widths: columnWidths,
       custom: customColumns,
+      known: Array.from(knownColumnKeys.current),
     })
     // A persisted blob blocks GPU auto-show from here on — same rule in-session
     // as across sessions, so a later data refresh can't override user choices.
     hadSavedColumnSettings.current = true
-  }, [visibleColumns, columnWidths, customColumns, selectedKind.name, selectedKind.group])
+    // allColumnKeysSig, not allColumnKeys: see the memo above.
+  }, [visibleColumns, columnWidths, customColumns, selectedKind.name, selectedKind.group, allColumnKeysSig])
 
   // Close column picker on outside click or Escape
   useEffect(() => {
@@ -3797,6 +4040,7 @@ export function ResourcesView({
   // Reset column settings to defaults (also drops user-added custom columns)
   const resetColumnSettings = useCallback(() => {
     clearColumnSettings(selectedKind.name, selectedKind.group)
+    knownColumnKeys.current = new Set()
     setCustomColumns([])
     const customKeys = new Set(builtCustomColumns.map(c => c.key))
     setVisibleColumns(getDefaultVisibleColumns(allColumns.filter(c => !customKeys.has(c.key))))
@@ -5248,12 +5492,12 @@ export function ResourcesView({
   // scroll horizontally when the viewport is too narrow.
   const tableMinWidth = useMemo(() => {
     const compareColumnWidth = compareMode ? COMPARE_COLUMN_WIDTH : 0
-    const baseMinWidth = columns.reduce((sum, col) => sum + (columnWidths[col.key] || getColumnMinWidth(col)), compareColumnWidth)
+    const baseMinWidth = columns.reduce((sum, col) => sum + (columnWidths[col.key] || getColumnMinWidth(col, extraColumnsByKey)), compareColumnWidth)
     const flexibleNameColumn = columns.find(col => col.key === 'name' && !columnWidths[col.key])
 
     if (!hasResizedColumns || !flexibleNameColumn) return baseMinWidth
-    return baseMinWidth + getColumnMinWidth(flexibleNameColumn)
-  }, [columns, columnWidths, compareMode, hasResizedColumns])
+    return baseMinWidth + getColumnMinWidth(flexibleNameColumn, extraColumnsByKey)
+  }, [columns, columnWidths, compareMode, hasResizedColumns, extraColumnsByKey, headerFontEpoch])
 
   // Stable virtuoso components — memoized to avoid remounting the table on every render
   const virtuosoComponents = useMemo(() => ({
@@ -5281,7 +5525,7 @@ export function ResourcesView({
                 style={{
                   width: columnWidths[col.key]
                     ? `${columnWidths[col.key]}px`
-                    : col.key === 'name' ? undefined : `${getColumnMinWidth(col)}px`,
+                    : col.key === 'name' ? undefined : `${getColumnMinWidth(col, extraColumnsByKey)}px`,
                 }}
               />
             ))}
@@ -5292,7 +5536,7 @@ export function ResourcesView({
       )
     }),
     TableRow: VirtuosoTableRow,
-  }), [columns, columnWidths, hasResizedColumns, compareMode, tableMinWidth, isCheckboxMode])
+  }), [columns, columnWidths, hasResizedColumns, compareMode, tableMinWidth, isCheckboxMode, extraColumnsByKey, headerFontEpoch])
 
   // Calculate filter options with counts based on current resources (before filtering)
   const filterOptions = useMemo(() => {
@@ -6143,8 +6387,7 @@ export function ResourcesView({
                   )}
                   {columns.map((col, colIdx) => {
                     // Built-in sortable keys, plus any extra/custom column that carries its own getSortValue.
-                    const isSortable = ['name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version', 'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object', 'cpu', 'memory', 'containers'].includes(col.key)
-                      || !!extraColumnsByKey.get(col.key)?.getSortValue
+                    const isSortable = isColumnSortable(col, extraColumnsByKey)
                     const isSorted = sortColumn === col.key
                     const isLastCol = colIdx === columns.length - 1
                     const filterCol = filterableColumnMap.get(col.key)
@@ -6164,11 +6407,11 @@ export function ResourcesView({
                       >
                         <div className="flex items-center gap-1 overflow-hidden">
                           {col.tooltip ? (
-                            <Tooltip content={col.tooltip}>
+                            <Tooltip content={col.tooltip} wrapperClassName="min-w-0">
                               <span className="border-b border-dotted border-theme-text-tertiary truncate">{col.label}</span>
                             </Tooltip>
                           ) : (
-                            <span className="truncate">{col.label}</span>
+                            <HeaderLabel label={col.label} />
                           )}
                           {isSortable && (
                             <span className="text-theme-text-tertiary shrink-0">

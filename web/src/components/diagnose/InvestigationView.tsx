@@ -512,6 +512,54 @@ function captureEvidenceCardLayout(container: HTMLElement) {
   );
 }
 
+export function canStopInvestigation(
+  run: RunSummary,
+  busy: boolean,
+  gone: boolean,
+  latestTurnStatus?: Turn["status"],
+): boolean {
+  // The transcript is fresher than the polled run summary. Once it has a
+  // terminal frame, a lagging/failed summary refresh must not resurrect Stop.
+  const transcriptTerminal =
+    latestTurnStatus === "done" || latestTurnStatus === "error";
+  return (
+    run.trigger !== "background" &&
+    run.status !== "stale" &&
+    run.status !== "stopping" &&
+    !gone &&
+    !transcriptTerminal &&
+    (busy || run.status === "running")
+  );
+}
+
+export function canContinueInvestigation(
+  run: RunSummary,
+  latestTurnStatus?: Turn["status"],
+  gone = false,
+): boolean {
+  const transcriptTerminal =
+    latestTurnStatus === "done" || latestTurnStatus === "error";
+  const summaryIsLaggingTerminalTranscript =
+    run.status === "running" &&
+    run.trigger !== "background" &&
+    transcriptTerminal;
+  return (
+    !gone &&
+    run.status !== "stale" &&
+    run.status !== "stopping" &&
+    (run.canContinue !== false || summaryIsLaggingTerminalTranscript)
+  );
+}
+
+export function canInvestigateFurther(run: RunSummary, gone = false): boolean {
+  return (
+    !gone &&
+    run.trigger === "background" &&
+    run.status === "done" &&
+    !!run.issueId
+  );
+}
+
 export function InvestigationView({
   run,
   agentLabel,
@@ -813,6 +861,7 @@ export function InvestigationView({
               ...prev,
               {
                 question: ev.question,
+                actor: ev.actor,
                 explainAssessment: ev.explainAssessment,
                 timeline: [],
                 diagnosis: null,
@@ -1048,8 +1097,11 @@ export function InvestigationView({
   };
 
   const stale = run.status === "stale";
-  const readOnly = investigationIsReadOnly(run.status, gone);
   const lastTurn = turns.at(-1);
+  const unavailable = investigationIsReadOnly(run.status, gone);
+  const canContinue = canContinueInvestigation(run, lastTurn?.status, gone);
+  const canStop = canStopInvestigation(run, busy, gone, lastTurn?.status);
+  const readOnly = unavailable || !canContinue;
   const endedEarly = investigationEndedBeforeConclusion(run.status, lastTurn);
   const rebuildingReplay = !streamReady && turns.length === 0;
   const historyUnavailablePresentation = historyUnavailable
@@ -1112,14 +1164,17 @@ export function InvestigationView({
     const sequence = assessment.resultSequence;
     if (!sequence || !assessment.diagnosis?.rootCause) return undefined;
     const saved = investigationExplanation(turns, sequence);
-    if (readOnly && saved.status === "idle") return undefined;
+    // This intent is implemented by the local run manager; hosted continuation
+    // alone does not imply support for assessment-bound explanation turns.
+    if ((readOnly || hosted) && saved.status === "idle") return undefined;
     const state =
       explanationRequest?.sequence === sequence ? explanationRequest : saved;
     return {
       ...state,
-      onGenerate: !interactionsBlocked
-        ? () => askExplanation(sequence)
-        : undefined,
+      onGenerate:
+        !hosted && !interactionsBlocked
+          ? () => askExplanation(sequence)
+          : undefined,
       openRequest:
         explanationReveal?.sequence === sequence &&
         explanationReveal.currentAssessmentIndex === currentAssessmentIdx
@@ -1676,9 +1731,9 @@ export function InvestigationView({
     setEvidenceUpdateAvailable(false);
   };
 
-  const composer = !readOnly ? (
+  const composer = !unavailable ? (
     <div className="shrink-0 border-t border-theme-border px-3 py-2.5">
-      {busy ? (
+      {canStop ? (
         <button
           type="button"
           onClick={stop}
@@ -1686,6 +1741,47 @@ export function InvestigationView({
         >
           Stop agent
         </button>
+      ) : run.status === "stopping" ? (
+        <div className="px-3 py-2 text-xs text-theme-text-secondary">
+          Stopping investigation…
+        </div>
+      ) : !canContinue ? (
+        <div className="px-3 py-2 text-xs text-theme-text-secondary">
+          {run.trigger === "background" ? (
+            <>
+              <p>Automatic investigation · read-only.</p>
+              {canInvestigateFurther(run, gone) ? (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <button
+                    className="btn-brand px-3 py-2 text-xs"
+                    onClick={() =>
+                      openInvestigation({
+                        kind,
+                        group: run.group,
+                        namespace,
+                        name,
+                        issueId: run.issueId,
+                      })
+                    }
+                  >
+                    Investigate further
+                  </button>
+                  <span>
+                    Re-checks current state, including recent automatic findings
+                    when available.
+                  </span>
+                </div>
+              ) : (
+                <p>
+                  Start a new investigation on this resource to continue
+                  digging.
+                </p>
+              )}
+            </>
+          ) : (
+            "This investigation is read-only."
+          )}
+        </div>
       ) : (
         <div className="flex items-end gap-2">
           <textarea
@@ -1699,7 +1795,11 @@ export function InvestigationView({
             }}
             rows={1}
             disabled={
-              !streamReady || readOnly || requestPending || verificationPending
+              !streamReady ||
+              readOnly ||
+              busy ||
+              requestPending ||
+              verificationPending
             }
             placeholder={
               !streamReady
@@ -1755,7 +1855,7 @@ export function InvestigationView({
             This investigation is closed and read-only.{" "}
             {turns.length > 0
               ? "Evidence already loaded in this view is preserved, but Radar can no longer continue the run."
-              : "No saved evidence is available."}
+              : "It may be private, your access may have changed, or its history may have been cleared. Check your account and organization, or ask the creator for access."}
           </span>
           <button
             type="button"

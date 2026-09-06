@@ -582,6 +582,13 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
           // border lift telegraphs "this responds to clicks" without
           // looking like a primary action.
           node.role === 'group' && 'cursor-pointer hover:border-theme-text-tertiary/50 hover:bg-theme-hover',
+          // The root node is this page's own subject, so it deliberately
+          // skips the portal ring/tool-badge above (clicking it can't
+          // "dive into" anything — it's already the page you're on). It's
+          // still clickable — opens the standard resource drawer — so it
+          // gets its own quieter affordance: a hover ring, no ring at rest,
+          // so it doesn't visually compete with real portal children.
+          node.role === 'root' && !data.highlighted && 'cursor-pointer hover:ring-1 hover:ring-theme-text-tertiary/40',
         )}
         style={{ width: dim.width, minHeight: dim.height, borderLeftWidth: 4 }}
       >
