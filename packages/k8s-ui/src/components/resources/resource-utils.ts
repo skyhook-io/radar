@@ -31,7 +31,7 @@ import { getHPATableState, hpaStatusFromState } from './resource-utils-hpa'
 import { getCNPGClusterStatus as _getCNPGClusterStatus, getCNPGBackupStatus as _getCNPGBackupStatus, getCNPGScheduledBackupStatus as _getCNPGScheduledBackupStatus, getCNPGPoolerStatus as _getCNPGPoolerStatus, isApiGroup as _isApiGroup, CNPG_GROUP as _CNPG_GROUP } from './resource-utils-cnpg'
 import { getGenericResourceStatus } from './generic-status'
 import { getIstioGatewayStatus as _getIstioGatewayStatus, getIstioGatewayServerCount as _getIstioGatewayServerCount, getIstioGatewaySelectorString as _getIstioGatewaySelectorString } from './resource-utils-istio'
-import { getCalicoIPPoolAllowedUses, getCalicoIPPoolBlockSize, getCalicoIPPoolEncapsulation, getCalicoPolicyNamespaceSelector, getCalicoPolicyServiceAccountSelector, getCalicoPolicyTypes, isCalicoApiVersion, isCalicoPolicyResource } from './resource-utils-calico'
+import { formatKubernetesLabelSelector, getCalicoIPPoolAllowedUses, getCalicoIPPoolBlockSize, getCalicoIPPoolEncapsulation, getCalicoPolicyNamespaceSelector, getCalicoPolicyServiceAccountSelector, getCalicoPolicyTypes, isCalicoApiVersion, isCalicoPolicyResource } from './resource-utils-calico'
 
 // ============================================================================
 // STATUS & HEALTH UTILITIES
@@ -1861,19 +1861,143 @@ export function getGatewayClassDescription(gc: any): string {
 // GATEWAY API ROUTE UTILITIES (shared by HTTPRoute, GRPCRoute, TCPRoute, TLSRoute)
 // ============================================================================
 
+const GATEWAY_API_GROUP = 'gateway.networking.k8s.io'
+
+/**
+ * Whether a status report describes a parent the spec still asks for.
+ *
+ * A controller can leave a report behind after its parentRef is removed, and
+ * the defaults matter: an unset group/kind/namespace on either side means
+ * gateway.networking.k8s.io, Gateway, and the route's own namespace.
+ */
+function isReportForParentRef(ref: any, reported: any, routeNamespace: string): boolean {
+  const norm = (r: any) => ({
+    group: r?.group ?? GATEWAY_API_GROUP,
+    kind: r?.kind ?? 'Gateway',
+    namespace: r?.namespace ?? routeNamespace,
+    name: r?.name,
+    sectionName: r?.sectionName,
+    port: r?.port,
+  })
+  const a = norm(ref)
+  const b = norm(reported)
+  return a.group === b.group && a.kind === b.kind && a.namespace === b.namespace &&
+    a.name === b.name && a.sectionName === b.sectionName && a.port === b.port
+}
+
 // All Gateway API route types share the same status/parents/rules/hostnames structure
+/**
+ * A route's verdict, from BOTH conditions the API guarantees it carries.
+ *
+ * Accepted alone is not health: a backendRef naming a Service that does not
+ * exist is Accepted=True by design, because the gateway still has to answer the
+ * request — with a 5xx. Reading only Accepted therefore reported the "why is my
+ * route 503ing" case as healthy, beside a Backends column naming the Service
+ * that is missing. An ABSENT ResolvedRefs is not healthy either: GEP-1364 has
+ * routes always carry both, so a missing one means nothing has confirmed the
+ * refs yet.
+ */
+/**
+ * The reports that describe parents this route is actually attached to, plus
+ * the readers the verdict uses. Shared with getRouteStatusReason so the badge
+ * and its explanation can never disagree about which parents counted.
+ */
+function routeParentEvidence(route: any) {
+  const refs = route.spec?.parentRefs || []
+  const reports = route.status?.parents || []
+  const routeNamespace = route.metadata?.namespace || ''
+  const generation = route.metadata?.generation
+
+  // Status entries are identified by parentRef AND controllerName, so one
+  // parent can carry reports from two controllers while one replaces the other.
+  // All of them count: reading a single report would make the verdict depend on
+  // their order in the array.
+  const reportsFor = (ref: any) =>
+    reports.filter((p: any) => isReportForParentRef(ref, p?.parentRef, routeNamespace))
+  const perRef = refs.map(reportsFor)
+
+  // A route can also attach to default Gateways without naming them, in which
+  // case the attachment exists only in status. Those reports are real and their
+  // failures must count. Without that opt-in an unmatched report is a leftover
+  // from a parentRef the spec no longer names, and counting it would resurrect
+  // a verdict for a parent the route has left.
+  const useDefaultGateways = route.spec?.useDefaultGateways
+  const attachedByDefault = useDefaultGateways !== undefined && useDefaultGateways !== 'None'
+  const claimed = new Set(perRef.flat())
+  // Only a Gateway can be a default parent. An unmatched report for anything
+  // else — a mesh Service parent the spec has dropped — is obsolete by
+  // definition, and would otherwise keep voting forever if its controller is
+  // gone.
+  const isDefaultGatewayReport = (p: any) =>
+    (p?.parentRef?.group ?? GATEWAY_API_GROUP) === GATEWAY_API_GROUP &&
+    (p?.parentRef?.kind ?? 'Gateway') === 'Gateway'
+  const considered = attachedByDefault
+    ? [...perRef.flat(), ...reports.filter((p: any) => !claimed.has(p) && isDefaultGatewayReport(p))]
+    : perRef.flat()
+
+  // A condition observed against a superseded generation describes a spec that
+  // has since changed, so it cannot confirm the current one. A condition with no
+  // observedGeneration at all is taken at face value.
+  const isCurrent = (c: any) =>
+    c?.observedGeneration === undefined || generation === undefined || c.observedGeneration === generation
+  const conditionOf = (report: any, type: string) =>
+    (report?.conditions || []).filter((c: any) => c?.type === type && isCurrent(c)).pop()
+  const statusOf = (report: any, type: string) => conditionOf(report, type)?.status
+
+  // A report whose conditions all describe a superseded spec says nothing about
+  // the current one, either way — so it neither votes nor confirms the parent it
+  // belongs to. Requiring it to agree would let one leftover from a replaced
+  // controller hold a live healthy parent at Pending; counting it as
+  // confirmation would let the other parents speak for one nothing has
+  // confirmed.
+  const speaksToCurrentSpec = (r: any) =>
+    conditionOf(r, 'Accepted') !== undefined || conditionOf(r, 'ResolvedRefs') !== undefined
+  const current = considered.filter(speaksToCurrentSpec)
+  const everyRefConfirmed = perRef.every((list: any[]) => list.some(speaksToCurrentSpec))
+
+  return { considered, current, everyRefConfirmed, conditionOf, statusOf }
+}
+
 export function getRouteStatus(route: any): StatusBadge {
-  const parents = route.status?.parents || []
-  if (parents.length === 0) return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
-  const allAccepted = parents.every((p: any) =>
-    (p.conditions || []).some((c: any) => c.type === 'Accepted' && c.status === 'True')
-  )
-  const anyRejected = parents.some((p: any) =>
-    (p.conditions || []).some((c: any) => c.type === 'Accepted' && c.status === 'False')
-  )
-  if (allAccepted) return { text: 'Accepted', color: healthColors.healthy, level: 'healthy' }
-  if (anyRejected) return { text: 'Not Accepted', color: healthColors.unhealthy, level: 'unhealthy' }
+  const { considered, current, everyRefConfirmed, statusOf } = routeParentEvidence(route)
+
+  if (considered.length === 0) return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
+  if (current.length === 0) return { text: 'Pending', color: healthColors.degraded, level: 'degraded' }
+  const anyFailure = current.some((r: any) =>
+    statusOf(r, 'Accepted') === 'False' || statusOf(r, 'ResolvedRefs') === 'False')
+
+  if (everyRefConfirmed && current.every((r: any) => statusOf(r, 'Accepted') === 'False')) {
+    return { text: 'Not Accepted', color: healthColors.unhealthy, level: 'unhealthy' }
+  }
+  if (anyFailure) {
+    return { text: 'Degraded', color: healthColors.degraded, level: 'degraded' }
+  }
+  if (everyRefConfirmed && current.every((r: any) =>
+      statusOf(r, 'Accepted') === 'True' && statusOf(r, 'ResolvedRefs') === 'True')) {
+    return { text: 'Accepted', color: healthColors.healthy, level: 'healthy' }
+  }
   return { text: 'Pending', color: healthColors.degraded, level: 'degraded' }
+}
+
+/**
+ * Why the badge says what it says: which parent is unhappy, and the controller's
+ * own reason. Without it "Degraded" tells an operator something is wrong and
+ * nothing about what — and the whole point of reading ResolvedRefs is that the
+ * answer is usually "the backend you named does not exist".
+ */
+export function getRouteStatusReason(route: any): string {
+  const { current, conditionOf } = routeParentEvidence(route)
+  const parts: string[] = []
+  for (const report of current) {
+    const name = report?.parentRef?.name || 'parent'
+    for (const type of ['Accepted', 'ResolvedRefs']) {
+      const c = conditionOf(report, type)
+      if (c?.status !== 'False') continue
+      const detail = [c.reason, c.message].filter(Boolean).join(': ')
+      parts.push(detail ? `${name}: ${detail}` : `${name}: ${type} is false`)
+    }
+  }
+  return parts.join(' · ')
 }
 
 export function getRouteParents(route: any): string {
@@ -1954,10 +2078,24 @@ export function getNetworkPolicyRuleCount(np: any): { ingress: number; egress: n
   }
 }
 
+/**
+ * Who the policy applies to.
+ *
+ * podSelector is a LabelSelector, so it can target a subset through
+ * matchExpressions alone. Reading only matchLabels reported those policies as
+ * covering the whole namespace — a gap rendered as coverage, on the surface
+ * where that reads as "this namespace is protected, look elsewhere".
+ */
 export function getNetworkPolicySelector(np: any): string {
-  const labels = np.spec?.podSelector?.matchLabels
-  if (!labels || Object.keys(labels).length === 0) return 'All pods'
-  return Object.entries(labels).map(([k, v]) => `${k}=${v}`).join(', ')
+  const selector = np.spec?.podSelector
+  const hasLabels = Object.keys(selector?.matchLabels ?? {}).length > 0
+  // Count only what the formatter will actually render: it skips malformed
+  // entries, and an expression list of nothing but those would otherwise reach
+  // its empty-case string and describe the same state in different words.
+  const hasExpressions = (Array.isArray(selector?.matchExpressions) ? selector.matchExpressions : [])
+    .some((e: any) => e && typeof e === 'object')
+  if (!hasLabels && !hasExpressions) return 'All pods'
+  return formatKubernetesLabelSelector(selector)
 }
 
 // ============================================================================
