@@ -113,7 +113,40 @@ func InitTestResourceCache(client kubernetes.Interface) error {
 	cacheOnce = new(sync.Once)
 	cacheOnce.Do(func() {})
 
+	waitForInformerStatuses(resourceCache)
+
 	return nil
+}
+
+// waitForInformerStatuses blocks until every informer's InformerSyncStatus
+// reports synced.
+//
+// NewResourceCache returns as soon as the informers themselves report synced,
+// but InformerSyncStatus.Synced is a mirror of that, flipped by a goroutine per
+// informer. Nothing in the product waits on the mirror, so the gap is invisible
+// there — but IsKindReady reads it, and the missing-reference detectors gate on
+// IsKindReady and fail toward silence, so a test that queries on the next line
+// can see a fully-populated cache report nothing at all.
+//
+// The gap is normally sub-millisecond and closes on its own; it only widens
+// when the machine is loaded enough to delay scheduling those goroutines, which
+// is why this reproduced in CI and never locally.
+//
+// Best-effort: on timeout the caller proceeds and its own assertions report the
+// real problem, rather than this returning an error that every call site would
+// have to handle.
+func waitForInformerStatuses(rc *ResourceCache) {
+	if rc == nil {
+		return
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		st := rc.GetSyncStatus()
+		if len(st.PendingCritical) == 0 && len(st.PendingDeferred) == 0 {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 // InitTestDynamicResourceCache wires the dynamic resource cache and discovery
