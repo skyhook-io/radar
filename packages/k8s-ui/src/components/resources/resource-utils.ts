@@ -1943,32 +1943,36 @@ function routeParentEvidence(route: any) {
   const conditionOf = (report: any, type: string) =>
     (report?.conditions || []).filter((c: any) => c?.type === type && isCurrent(c)).pop()
   const statusOf = (report: any, type: string) => conditionOf(report, type)?.status
-  const everyRefReported = perRef.every((list: any[]) => list.length > 0)
 
-  return { considered, everyRefReported, conditionOf, statusOf }
+  // A report whose conditions all describe a superseded spec says nothing about
+  // the current one, either way — so it neither votes nor confirms the parent it
+  // belongs to. Requiring it to agree would let one leftover from a replaced
+  // controller hold a live healthy parent at Pending; counting it as
+  // confirmation would let the other parents speak for one nothing has
+  // confirmed.
+  const speaksToCurrentSpec = (r: any) =>
+    conditionOf(r, 'Accepted') !== undefined || conditionOf(r, 'ResolvedRefs') !== undefined
+  const current = considered.filter(speaksToCurrentSpec)
+  const everyRefConfirmed = perRef.every((list: any[]) => list.some(speaksToCurrentSpec))
+
+  return { considered, current, everyRefConfirmed, conditionOf, statusOf }
 }
 
 export function getRouteStatus(route: any): StatusBadge {
-  const { considered, everyRefReported, conditionOf, statusOf } = routeParentEvidence(route)
+  const { considered, current, everyRefConfirmed, statusOf } = routeParentEvidence(route)
 
   if (considered.length === 0) return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
-
-  // A report whose conditions all describe a superseded spec says nothing about
-  // the current one, either way. Requiring it to agree would let one leftover
-  // from a replaced controller hold a live healthy parent at Pending.
-  const current = considered.filter((r: any) =>
-    conditionOf(r, 'Accepted') !== undefined || conditionOf(r, 'ResolvedRefs') !== undefined)
   if (current.length === 0) return { text: 'Pending', color: healthColors.degraded, level: 'degraded' }
   const anyFailure = current.some((r: any) =>
     statusOf(r, 'Accepted') === 'False' || statusOf(r, 'ResolvedRefs') === 'False')
 
-  if (everyRefReported && current.every((r: any) => statusOf(r, 'Accepted') === 'False')) {
+  if (everyRefConfirmed && current.every((r: any) => statusOf(r, 'Accepted') === 'False')) {
     return { text: 'Not Accepted', color: healthColors.unhealthy, level: 'unhealthy' }
   }
   if (anyFailure) {
     return { text: 'Degraded', color: healthColors.degraded, level: 'degraded' }
   }
-  if (everyRefReported && current.every((r: any) =>
+  if (everyRefConfirmed && current.every((r: any) =>
       statusOf(r, 'Accepted') === 'True' && statusOf(r, 'ResolvedRefs') === 'True')) {
     return { text: 'Accepted', color: healthColors.healthy, level: 'healthy' }
   }
@@ -1982,9 +1986,9 @@ export function getRouteStatus(route: any): StatusBadge {
  * answer is usually "the backend you named does not exist".
  */
 export function getRouteStatusReason(route: any): string {
-  const { considered, conditionOf } = routeParentEvidence(route)
+  const { current, conditionOf } = routeParentEvidence(route)
   const parts: string[] = []
-  for (const report of considered) {
+  for (const report of current) {
     const name = report?.parentRef?.name || 'parent'
     for (const type of ['Accepted', 'ResolvedRefs']) {
       const c = conditionOf(report, type)
