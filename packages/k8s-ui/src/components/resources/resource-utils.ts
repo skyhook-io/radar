@@ -1908,10 +1908,10 @@ function routeParentEvidence(route: any) {
   const routeNamespace = route.metadata?.namespace || ''
   const generation = route.metadata?.generation
 
-  // Every report for a parent, not the first: status entries are identified by
-  // parentRef AND controllerName, so one parent can carry reports from two
-  // controllers mid-replacement. Taking one made the verdict depend on their
-  // order in the array.
+  // Status entries are identified by parentRef AND controllerName, so one
+  // parent can carry reports from two controllers while one replaces the other.
+  // All of them count: reading a single report would make the verdict depend on
+  // their order in the array.
   const reportsFor = (ref: any) =>
     reports.filter((p: any) => isReportForParentRef(ref, p?.parentRef, routeNamespace))
   const perRef = refs.map(reportsFor)
@@ -1949,19 +1949,26 @@ function routeParentEvidence(route: any) {
 }
 
 export function getRouteStatus(route: any): StatusBadge {
-  const { considered, everyRefReported, statusOf } = routeParentEvidence(route)
+  const { considered, everyRefReported, conditionOf, statusOf } = routeParentEvidence(route)
 
   if (considered.length === 0) return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
-  const anyFailure = considered.some((r: any) =>
+
+  // A report whose conditions all describe a superseded spec says nothing about
+  // the current one, either way. Requiring it to agree would let one leftover
+  // from a replaced controller hold a live healthy parent at Pending.
+  const current = considered.filter((r: any) =>
+    conditionOf(r, 'Accepted') !== undefined || conditionOf(r, 'ResolvedRefs') !== undefined)
+  if (current.length === 0) return { text: 'Pending', color: healthColors.degraded, level: 'degraded' }
+  const anyFailure = current.some((r: any) =>
     statusOf(r, 'Accepted') === 'False' || statusOf(r, 'ResolvedRefs') === 'False')
 
-  if (everyRefReported && considered.every((r: any) => statusOf(r, 'Accepted') === 'False')) {
+  if (everyRefReported && current.every((r: any) => statusOf(r, 'Accepted') === 'False')) {
     return { text: 'Not Accepted', color: healthColors.unhealthy, level: 'unhealthy' }
   }
   if (anyFailure) {
     return { text: 'Degraded', color: healthColors.degraded, level: 'degraded' }
   }
-  if (everyRefReported && considered.every((r: any) =>
+  if (everyRefReported && current.every((r: any) =>
       statusOf(r, 'Accepted') === 'True' && statusOf(r, 'ResolvedRefs') === 'True')) {
     return { text: 'Accepted', color: healthColors.healthy, level: 'healthy' }
   }
