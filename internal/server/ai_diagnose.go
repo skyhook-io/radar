@@ -482,6 +482,12 @@ func (s *Server) handleDiagnoseTurn(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusNotFound, "investigation not found")
 	case errors.Is(err, ai.ErrTurnInFlight):
 		s.writeError(w, http.StatusConflict, "a turn is already running")
+	case errors.Is(err, ai.ErrAtCapacity):
+		s.writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, ai.ErrHistoryUnavailable):
+		s.writeError(w, http.StatusServiceUnavailable, err.Error())
+	case errors.Is(err, ai.ErrHistoryCorrupt):
+		s.writeError(w, http.StatusInternalServerError, err.Error())
 	case errors.Is(err, ai.ErrNoSession):
 		s.writeError(w, http.StatusConflict, "investigation isn't ready for follow-ups yet")
 	case err != nil:

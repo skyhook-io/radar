@@ -40,6 +40,26 @@ func TestAssessmentForExplanation(t *testing.T) {
 	}
 }
 
+func TestExplanationCompletionDoesNotPromoteModelVerdict(t *testing.T) {
+	for _, diag := range []Diagnosis{
+		{RootCause: "Simplified cause", Remediation: []string{"An unrequested fix"}},
+		{Healthy: true},
+	} {
+		r := &Run{status: "running", inFlight: true, preview: "Original cause", subs: map[int]chan RunEvent{}}
+		r.append(StreamEvent{Type: "turn", ExplainAssessment: 2})
+		diag.Report = "A plain-language explanation."
+		diag.SessionID = "continued-session"
+		r.finishTurn(diag, nil, false, time.Minute)
+		got := r.events[len(r.events)-1].Event.Diag
+		if r.preview != "Original cause" || r.sessionID != "continued-session" {
+			t.Fatalf("explanation changed preview or lost session: %+v", r.Summary())
+		}
+		if got.Report != diag.Report || got.RootCause != "" || got.Healthy || len(got.Remediation) != 0 || got.RootCauseEvidence != nil {
+			t.Fatalf("explanation promoted a model verdict: %+v", got)
+		}
+	}
+}
+
 func TestExplanationReusesTurnAndPersistsOrigin(t *testing.T) {
 	store, _ := testStore(t)
 	m := persistedManager(t, store, "ctx")

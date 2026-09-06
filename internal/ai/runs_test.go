@@ -219,6 +219,9 @@ func TestBeginTurnCapAndRace(t *testing.T) {
 	if !idle.inFlight {
 		t.Error("beginTurn must mark the run in-flight")
 	}
+	if idle.OwnerPID != os.Getpid() {
+		t.Errorf("beginTurn must claim this process as owner, got %d", idle.OwnerPID)
+	}
 
 	// Below the cap, a second begin on an already-in-flight run is rejected as
 	// in-flight (no double agent on the same run).
@@ -1754,11 +1757,19 @@ func TestPersistenceInterruptedFollowup(t *testing.T) {
 	m1.order = append(m1.order, r.ID)
 	m1.mu.Unlock()
 
-	// A follow-up begins (status flips to running + persists)… then Radar dies.
+	// A follow-up begins and claims this process before persisting running.
 	if _, err := m1.beginTurn(r, true); err != nil {
 		t.Fatal(err)
 	}
 	r.append(StreamEvent{Type: "turn", Question: "and?"})
+	st.(*sqliteRunStore).barrier()
+	if live := persistedManager(t, st, "ctx-a").List(); len(live) != 0 {
+		t.Fatalf("second manager must not recover a live owner's follow-up: %+v", live)
+	}
+	// Simulate owner death; the test itself is still running in the same PID.
+	orphaned := r.Summary()
+	orphaned.OwnerPID = 0
+	st.SaveRun(orphaned)
 	st.(*sqliteRunStore).barrier()
 
 	m2 := persistedManager(t, st, "ctx-a")
