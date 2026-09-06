@@ -1,0 +1,65 @@
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: kind-worker
+  labels:
+    app.kubernetes.io/part-of: radar-kueue-demo
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: admission-ready
+  labels:
+    app.kubernetes.io/part-of: radar-kueue-demo
+spec:
+  namespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: kueue-demo
+  resourceGroups:
+    - coveredResources:
+        - cpu
+      flavors:
+        - name: kind-worker
+          resources:
+            - name: cpu
+              nominalQuota: "2"
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: admission-held
+  labels:
+    app.kubernetes.io/part-of: radar-kueue-demo
+spec:
+  namespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: kueue-demo
+  stopPolicy: Hold
+  resourceGroups:
+    - coveredResources:
+        - cpu
+      flavors:
+        - name: kind-worker
+          resources:
+            - name: cpu
+              nominalQuota: "2"
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: ready
+  namespace: kueue-demo
+  labels:
+    app.kubernetes.io/part-of: radar-kueue-demo
+spec:
+  clusterQueue: admission-ready
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: held
+  namespace: kueue-demo
+  labels:
+    app.kubernetes.io/part-of: radar-kueue-demo
+spec:
+  clusterQueue: admission-held

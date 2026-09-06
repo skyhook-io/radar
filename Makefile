@@ -1,5 +1,6 @@
 .PHONY: build install clean dev frontend backend test test-e2e test-chart lint help restart restart-fe kill watch-backend watch-frontend loadtest
 .PHONY: calico-demo calico-demo-down calico-demo-status
+.PHONY: kueue-demo kueue-demo-down kueue-demo-status kueue-demo-verify
 .PHONY: cilium-demo cilium-demo-down cilium-demo-status
 .PHONY: gpu-ecosystem-demo gpu-ecosystem-demo-down gpu-ecosystem-demo-status
 .PHONY: kubecost-demo kubecost-demo-down kubecost-demo-status
@@ -328,6 +329,21 @@ kubecost-demo-down:
 kubecost-demo-status:
 	./scripts/kubecost-demo.sh status
 
+# Focused live Kueue controller lane. Complements the controller-free GPU
+# breadth fixtures with admitted, quota-blocked, and held-queue reconciliation.
+# See scripts/kueue-demo/README.md for the proof boundary.
+kueue-demo:
+	./scripts/kueue-demo.sh up
+
+kueue-demo-down:
+	./scripts/kueue-demo.sh down
+
+kueue-demo-status:
+	./scripts/kueue-demo.sh status
+
+kueue-demo-verify:
+	./scripts/kueue-demo.sh verify
+
 # Bootstrap a kind cluster running real Calico with its aggregated API server,
 # plus the policy shapes the Calico surfaces render (both API groups serving the
 # same objects, all three staged kinds including a staged deletion, a non-default
@@ -470,6 +486,7 @@ help:
 	@echo "  make cilium-demo      - Cilium + Hubble Relay, all Radar connection lanes"
 	@echo "  make gpu-ecosystem-demo - 37 GPU, batch, and AI/ML resource fixtures"
 	@echo "  make kubecost-demo    - Kubecost 3 current-cost API and Radar connection lanes"
+	@echo "  make kueue-demo      - Live Kueue admission and pre-Pod blocker fixtures"
 	@echo "  make calico-demo      - Real Calico, both API groups, staged policies"
 	@echo ""
 	@echo "Desktop:"
