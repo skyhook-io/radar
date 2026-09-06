@@ -59,6 +59,29 @@ describe('mergeSavedVisibleColumns', () => {
     expect(mergeSavedVisibleColumns(['name', 'printer:Ready'], [], cols).has('printer:Phase')).toBe(false)
   })
 
+  it('does not re-show a hidden printer column when known predates the printer table', () => {
+    // Printer columns are fetched, so `known` can be written during the window
+    // before the table arrives — listing curated keys only. Treating their
+    // absence as "not offered yet" would un-hide one the user had hidden.
+    const cols = [printer('printer:Phase'), printer('printer:Ready')]
+    const effective = [col('name'), ...cols]
+    const got = mergeSavedVisibleColumns(
+      ['name', 'printer:Phase'], [], cols, effective,
+      ['name'], // written before the printer table loaded
+    )
+    expect(got.has('printer:Ready')).toBe(false)
+    expect(got.has('printer:Phase')).toBe(true)
+  })
+
+  it('treats a persisted known that is not an array as no record at all', () => {
+    // The blob is untyped JSON and can be corrupted or hand-edited; a throw
+    // here would abort the load effect and strand the table's column state.
+    const effective = [col('name'), col('status')]
+    const call = () => mergeSavedVisibleColumns(['name'], [], [], effective, {} as unknown as string[])
+    expect(call).not.toThrow()
+    expect(call().has('status')).toBe(false)
+  })
+
   it('seeds a new curated column alongside printer columns without disturbing them', () => {
     const cols = [printer('printer:Phase')]
     const effective = [col('name'), col('lastSuccess'), printer('printer:Phase')]

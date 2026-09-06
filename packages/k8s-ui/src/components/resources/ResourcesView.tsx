@@ -3149,15 +3149,21 @@ export function mergeSavedVisibleColumns(
       if (c.defaultVisible !== false) merged.add(c.key)
     }
   }
-  // Curated columns added since the blob was written. Same principle as the two
-  // above, but it needs a record of what the user was actually offered: the blob
-  // stores only what is visible, so a curated key's absence is ambiguous between
-  // "hidden on purpose" and "did not exist yet". `known` is that record. Blobs
-  // written before it existed have none, and stay on the old behaviour rather
-  // than guessing — the next save adopts the current set as their baseline.
-  if (effective && known) {
+  // Curated columns the blob predates. Same principle as the two above, but it
+  // needs a record of what the user was actually offered: the blob stores only
+  // what is visible, so a curated key's absence is ambiguous between "hidden on
+  // purpose" and "not offered yet". `known` is that record. Without one the two
+  // cases are indistinguishable, so nothing is inferred and visibility is left
+  // to the saved set alone.
+  //
+  // Printer columns are excluded even when `known` lists none of them. They are
+  // fetched, so `known` can be written during the window before the printer
+  // table arrives; treating their absence as "new" would re-show ones the user
+  // hid. Their own rule above already covers them.
+  if (effective && Array.isArray(known)) {
     const seen = new Set(known)
     for (const c of effective) {
+      if (c.key.startsWith(PRINTER_COLUMN_PREFIX)) continue
       if (!seen.has(c.key) && c.defaultVisible !== false) merged.add(c.key)
     }
   }
@@ -3871,7 +3877,12 @@ export function ResourcesView({
         setVisibleColumns(getDefaultVisibleColumns(effective))
         setColumnWidths({})
       } else {
-        setVisibleColumns(mergeSavedVisibleColumns(saved.visible, extraKeys, builtPrinterColumns, effective, saved.known))
+        setVisibleColumns(mergeSavedVisibleColumns(
+          saved.visible, extraKeys, builtPrinterColumns, effective,
+          // Persisted JSON: only an array of keys is usable, anything else is
+          // treated as no record at all.
+          Array.isArray(saved.known) ? saved.known.filter((k): k is string => typeof k === 'string') : undefined,
+        ))
         setColumnWidths(saved.widths || {})
       }
     } else {
