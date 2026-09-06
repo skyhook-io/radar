@@ -491,11 +491,11 @@ func TestRecentForWorkloadAndConfigMapsReportsMergedOutputCap(t *testing.T) {
 		}
 	}
 
-	result, err := RecentForWorkloadAndConfigMapsDetailed(
-		context.Background(), deployment, "Deployment", "shop", "web", time.Hour, 3, DefaultFieldLimit,
+	result, _, err := RecentForWorkloadAndConfigMapsAuthorizedDetailed(
+		context.Background(), deployment, "Deployment", "shop", "web", time.Hour, 3, DefaultFieldLimit, nil,
 	)
 	if err != nil {
-		t.Fatalf("RecentForWorkloadAndConfigMapsDetailed: %v", err)
+		t.Fatalf("RecentForWorkloadAndConfigMapsAuthorizedDetailed: %v", err)
 	}
 	if len(result.Changes) != 3 {
 		t.Fatalf("changes = %d, want merged output capped from 4 to 3: %+v", len(result.Changes), result.Changes)

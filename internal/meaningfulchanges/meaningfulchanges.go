@@ -283,20 +283,10 @@ func RecentForResourceDetailed(ctx context.Context, kind, namespace, name string
 }
 
 func RecentForWorkloadAndConfigMaps(ctx context.Context, obj any, kind, namespace, name string, since time.Duration, limit, fieldLimit int) ([]issuesapi.RecentChange, bool, error) {
-	result, err := RecentForWorkloadAndConfigMapsDetailed(ctx, obj, kind, namespace, name, since, limit, fieldLimit)
-	return result.Changes, result.FetchSaturated, err
-}
-
-// RecentForWorkloadAndConfigMapsDetailed preserves the distinct output-cap
-// and candidate-fetch saturation signals needed by consumers that display
-// source coverage. The historical wrapper above intentionally exposes only
-// fetch saturation because issue-correlation uses that bool for negative-claim
-// gating.
-func RecentForWorkloadAndConfigMapsDetailed(ctx context.Context, obj any, kind, namespace, name string, since time.Duration, limit, fieldLimit int) (RecentResult, error) {
 	result, _, err := RecentForWorkloadAndConfigMapsAuthorizedDetailed(
 		ctx, obj, kind, namespace, name, since, limit, fieldLimit, nil,
 	)
-	return result, err
+	return result.Changes, result.FetchSaturated, err
 }
 
 // RecentForWorkloadAndConfigMapsAuthorizedDetailed is the authorization-aware
