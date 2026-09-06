@@ -3831,6 +3831,7 @@ export function ResourcesView({
   // — and a shrunk snapshot would forget that a column absent from `visible`
   // was one the user hid rather than one never shown.
   const knownColumnKeys = useRef<Set<string>>(new Set())
+  const knownColumnKeysKind = useRef('')
   // Whether the user has a persisted column blob for this kind — data-driven
   // column defaults (GPU auto-show) must never override explicit user choices.
   const hadSavedColumnSettings = useRef(false)
@@ -3856,9 +3857,15 @@ export function ResourcesView({
     // (non-array, blank path, bad source) must not crash the later .map or add dead columns.
     const savedCustom = sanitizeCustomColumnDefs(saved?.custom)
     setCustomColumns(savedCustom)
-    // Per kind: keys accumulated for the previous one would suppress seeding
-    // here for any key the two happen to share.
-    knownColumnKeys.current = new Set()
+    // Reset on a kind change only. This effect also re-runs when the printer
+    // columns arrive, and that is the moment the offered set shrinks — clearing
+    // here would drop the evidence for the column they replaced just before the
+    // next save persists the record without it.
+    const knownKeysIdentity = selectedKindIdentityOf(selectedKind)
+    if (knownColumnKeysKind.current !== knownKeysIdentity) {
+      knownColumnKeys.current = new Set()
+      knownColumnKeysKind.current = knownKeysIdentity
+    }
     const kindColumns = columnsForKindWithPrinter(selectedKind.name, selectedKind.group, builtPrinterColumns)
     const builtinKeys = new Set(kindColumns.map(c => c.key))
     const extras = filterHostExtras(extraLeadingColumns, builtinKeys, selectedKind.name)
