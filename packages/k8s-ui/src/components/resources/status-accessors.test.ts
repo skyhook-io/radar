@@ -39,6 +39,12 @@ describe('getNetworkPolicySelector', () => {
     expect(getNetworkPolicySelector(np)).toBe('app=api, tier In (web)')
   })
 
+  it('does not switch vocabulary when every expression entry is malformed', () => {
+    // The shared formatter skips entries it cannot read and has its own
+    // empty-case wording; reaching it would describe one state in two ways.
+    expect(getNetworkPolicySelector({ spec: { podSelector: { matchExpressions: [null] } } })).toBe('All pods')
+  })
+
   it('still says All pods when the selector is genuinely empty', () => {
     expect(getNetworkPolicySelector({ spec: { podSelector: {} } })).toBe('All pods')
     expect(getNetworkPolicySelector({ spec: {} })).toBe('All pods')
@@ -125,6 +131,67 @@ describe('getRouteStatus', () => {
       }],
     })
     expect(getRouteStatus(r)).toMatchObject({ text: 'Pending', level: 'degraded' })
+  })
+
+  it('does not let a stale controller report outvote a live rejection, in either order', () => {
+    // Status entries are keyed by parentRef AND controllerName, so one parent
+    // can carry two controllers' reports mid-replacement. Reading only the
+    // first made the badge depend on their order in the array.
+    const old = { parentRef: { name: 'gw' }, controllerName: 'old/ctrl', conditions: [cond('Accepted', 'True'), cond('ResolvedRefs', 'True')] }
+    const live = { parentRef: { name: 'gw' }, controllerName: 'new/ctrl', conditions: [cond('Accepted', 'False'), cond('ResolvedRefs', 'False')] }
+    // Neither order may be green, and both must agree. Degraded rather than
+    // unhealthy is deliberate: nothing here establishes which controller is
+    // authoritative, so the verdict says "something is wrong" without claiming
+    // the route is rejected outright.
+    const forward = getRouteStatus(route({ parents: [old, live] }))
+    const reversed = getRouteStatus(route({ parents: [live, old] }))
+    expect(forward).toEqual(reversed)
+    expect(forward.level).not.toBe('healthy')
+    expect(forward).toMatchObject({ text: 'Degraded', level: 'degraded' })
+  })
+
+  it('counts a default-Gateway attachment the spec never names', () => {
+    // With useDefaultGateways the attachment exists only in status, so a
+    // failure there is the only evidence there is.
+    const r = {
+      metadata: { namespace: 'prod' },
+      spec: { useDefaultGateways: 'All' },
+      status: { parents: [{ parentRef: { name: 'default-gw' }, conditions: [cond('Accepted', 'True'), cond('ResolvedRefs', 'False')] }] },
+    }
+    expect(getRouteStatus(r)).toMatchObject({ text: 'Degraded', level: 'degraded' })
+  })
+
+  it('accepts a default-only route whose default parent is healthy', () => {
+    const r = {
+      metadata: { namespace: 'prod' },
+      spec: { useDefaultGateways: 'All' },
+      status: { parents: [{ parentRef: { name: 'default-gw' }, conditions: [cond('Accepted', 'True'), cond('ResolvedRefs', 'True')] }] },
+    }
+    expect(getRouteStatus(r)).toMatchObject({ text: 'Accepted', level: 'healthy' })
+  })
+
+  it('does not let a healthy explicit parent mask a failing default one', () => {
+    const r = {
+      metadata: { namespace: 'prod' },
+      spec: { parentRefs: [{ name: 'gw' }], useDefaultGateways: 'All' },
+      status: {
+        parents: [
+          { parentRef: { name: 'gw' }, conditions: [cond('Accepted', 'True'), cond('ResolvedRefs', 'True')] },
+          { parentRef: { name: 'default-gw' }, conditions: [cond('Accepted', 'False'), cond('ResolvedRefs', 'True')] },
+        ],
+      },
+    }
+    expect(getRouteStatus(r)).toMatchObject({ text: 'Degraded', level: 'degraded' })
+  })
+
+  it('takes a condition with no observedGeneration at face value', () => {
+    // Missing is not stale: a controller that never sets it must not strand the
+    // route as Pending forever.
+    const r = route({
+      generation: 7,
+      parents: [{ parentRef: { name: 'gw' }, conditions: [cond('Accepted', 'True'), cond('ResolvedRefs', 'True')] }],
+    })
+    expect(getRouteStatus(r)).toMatchObject({ text: 'Accepted', level: 'healthy' })
   })
 
   it('matches a parent whose namespace and kind are defaulted on one side only', () => {
