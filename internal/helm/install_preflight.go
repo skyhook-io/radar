@@ -198,6 +198,7 @@ func freshInstallCheck(actionConfig *action.Configuration, name, namespace strin
 func runInstallOrUpgrade(actionConfig *action.Configuration, req *InstallRequest, ch *chart.Chart, mode installMode) (*release.Release, error) {
 	if mode == installUpgrade {
 		upgrade := action.NewUpgrade(actionConfig)
+		upgrade.Labels = chartSourceLabels(req.resolvedSource)
 		upgrade.Install = true
 		upgrade.Namespace = req.Namespace
 		upgrade.Timeout = 120 * time.Second
@@ -209,6 +210,7 @@ func runInstallOrUpgrade(actionConfig *action.Configuration, req *InstallRequest
 		return upgrade.Run(req.ReleaseName, ch, req.Values)
 	}
 	install := action.NewInstall(actionConfig)
+	install.Labels = chartSourceLabels(req.resolvedSource)
 	install.ReleaseName = req.ReleaseName
 	install.Namespace = req.Namespace
 	install.CreateNamespace = req.CreateNamespace

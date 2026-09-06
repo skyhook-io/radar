@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -19,7 +20,9 @@ import (
 
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chart"
+	"helm.sh/helm/v3/pkg/chartutil"
 	"helm.sh/helm/v3/pkg/cli"
+	"helm.sh/helm/v3/pkg/engine"
 	kubefake "helm.sh/helm/v3/pkg/kube/fake"
 	"helm.sh/helm/v3/pkg/release"
 	helmstorage "helm.sh/helm/v3/pkg/storage"
@@ -652,6 +655,161 @@ func TestChartForUpgradeTargetReusesReleaseChartForSameVersion(t *testing.T) {
 	if got != rel.Chart {
 		t.Fatal("chartForUpgradeTarget returned a different chart, want current release chart")
 	}
+}
+
+// Regression for Values Preview/Apply on umbrella releases. Helm storage keeps
+// Chart.yaml's dependency declarations but JSON serialization drops the chart
+// dependency bodies. Both values paths select their chart through
+// chartForUpgradeTarget, so same-version selection must reconstruct the exact
+// installed version before rendering or applying.
+func TestValuesPreviewApplyReconstructSameVersionUmbrella(t *testing.T) {
+	complete := valuesIsolationUmbrellaChart()
+	stored := roundTripStoredChart(t, complete)
+	if len(stored.Metadata.Dependencies) != 1 || len(stored.Dependencies()) != 0 {
+		t.Fatalf("test precondition failed: stored chart declarations=%d bodies=%d, want 1 and 0", len(stored.Metadata.Dependencies), len(stored.Dependencies()))
+	}
+
+	rel := helmTestRelease("umbrella", "demo", 1, release.StatusDeployed, "deployed")
+	rel.Chart = stored
+	client := &Client{}
+	loadCalls := 0
+	selected, err := client.chartForUpgradeTargetWithLoader(nil, rel, "", "", func(string, string, string) {}, func(_ *action.Configuration, gotRel *release.Release, version, repository string, _ func(string, string, string)) (*chart.Chart, error) {
+		loadCalls++
+		if gotRel != rel || version != "1.0.4" || repository != "" {
+			t.Fatalf("loader got release=%p version=%q repository=%q", gotRel, version, repository)
+		}
+		return complete, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loadCalls != 1 || selected != complete {
+		t.Fatalf("loader calls=%d selected=%p, want one call and complete chart %p", loadCalls, selected, complete)
+	}
+
+	before := renderValuesIsolationChart(t, selected, map[string]any{"parentTag": "1.0.0", "child": map[string]any{"imageTag": "2.0.0"}})
+	after := renderValuesIsolationChart(t, selected, map[string]any{"parentTag": "1.0.1", "child": map[string]any{"imageTag": "2.0.0"}})
+	if len(before) != 2 || len(after) != 2 {
+		t.Fatalf("rendered inventory before=%v after=%v, want parent and child", mapKeys(before), mapKeys(after))
+	}
+	for name, body := range before {
+		afterBody, ok := after[name]
+		if !ok {
+			t.Fatalf("object inventory changed: %q missing after values edit", name)
+		}
+		if strings.Contains(name, "/charts/child/") {
+			if afterBody != body {
+				t.Fatalf("child workload changed for parent-only values override\nbefore:\n%s\nafter:\n%s", body, afterBody)
+			}
+		} else if afterBody == body || !strings.Contains(afterBody, "parent:1.0.1") {
+			t.Fatalf("parent workload did not receive intended image override\nbefore:\n%s\nafter:\n%s", body, afterBody)
+		}
+	}
+}
+
+func TestValuesPreviewApplyFailsClosedWhenDependencyBodiesUnavailable(t *testing.T) {
+	stored := roundTripStoredChart(t, valuesIsolationUmbrellaChart())
+	rel := helmTestRelease("umbrella", "demo", 1, release.StatusDeployed, "deployed")
+	rel.Chart = stored
+
+	t.Run("source cannot resolve exact installed version", func(t *testing.T) {
+		_, err := (&Client{}).chartForUpgradeTargetWithLoader(nil, rel, "1.0.4", "", func(string, string, string) {}, func(*action.Configuration, *release.Release, string, string, func(string, string, string)) (*chart.Chart, error) {
+			return nil, errors.New("chart not found in configured sources")
+		})
+		if err == nil || !strings.Contains(err.Error(), "could not reconstruct complete chart umbrella version 1.0.4") {
+			t.Fatalf("error = %v, want fail-closed reconstruction error", err)
+		}
+	})
+
+	t.Run("resolved package also lacks dependency body", func(t *testing.T) {
+		_, err := (&Client{}).chartForUpgradeTargetWithLoader(nil, rel, "1.0.4", "", func(string, string, string) {}, func(*action.Configuration, *release.Release, string, string, func(string, string, string)) (*chart.Chart, error) {
+			return stored, nil
+		})
+		if err == nil || !strings.Contains(err.Error(), "refusing to render incomplete chart") || !strings.Contains(err.Error(), "dependency body \"child\"") {
+			t.Fatalf("error = %v, want explicit missing-dependency refusal", err)
+		}
+	})
+}
+
+func valuesIsolationUmbrellaChart() *chart.Chart {
+	child := &chart.Chart{
+		Metadata: &chart.Metadata{Name: "child", Version: "2.0.0", Type: "application"},
+		Values:   map[string]any{"imageTag": "2.0.0"},
+		Templates: []*chart.File{{Name: "templates/deployment.yaml", Data: []byte(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: child
+spec:
+  selector:
+    matchLabels: {app: child}
+  template:
+    metadata:
+      labels: {app: child}
+    spec:
+      containers:
+      - name: child
+        image: child:{{ .Values.imageTag }}
+`)}},
+	}
+	parent := &chart.Chart{
+		Metadata: &chart.Metadata{
+			Name: "umbrella", Version: "1.0.4", Type: "application",
+			Dependencies: []*chart.Dependency{{Name: "child", Version: "2.0.0"}},
+		},
+		Values: map[string]any{"parentTag": "1.0.0", "child": map[string]any{"imageTag": "2.0.0"}},
+		Templates: []*chart.File{{Name: "templates/deployment.yaml", Data: []byte(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: parent
+spec:
+  selector:
+    matchLabels: {app: parent}
+  template:
+    metadata:
+      labels: {app: parent}
+    spec:
+      containers:
+      - name: parent
+        image: parent:{{ .Values.parentTag }}
+`)}},
+	}
+	parent.SetDependencies(child)
+	return parent
+}
+
+func roundTripStoredChart(t *testing.T, ch *chart.Chart) *chart.Chart {
+	t.Helper()
+	b, err := json.Marshal(ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored chart.Chart
+	if err := json.Unmarshal(b, &stored); err != nil {
+		t.Fatal(err)
+	}
+	return &stored
+}
+
+func renderValuesIsolationChart(t *testing.T, ch *chart.Chart, values map[string]any) map[string]string {
+	t.Helper()
+	renderValues, err := chartutil.ToRenderValues(ch, values, chartutil.ReleaseOptions{Name: "umbrella", Namespace: "demo", IsUpgrade: true}, chartutil.DefaultCapabilities)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := engine.Render(ch, renderValues)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rendered
+}
+
+func mapKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func TestDiffResourceRefs(t *testing.T) {
@@ -1563,11 +1721,11 @@ func TestResolveUpgradeChartPath_UsesOCIBeforeUnrelatedIndexError(t *testing.T) 
 		"0.19.6",
 		"",
 		nil,
-		func(chartName, targetVersion string) (string, bool) {
+		func(chartName, targetVersion string) (string, bool, bool) {
 			if chartName != "postgres" || targetVersion != "0.19.6" {
-				return "", false
+				return "", false, false
 			}
-			return "oci://registry-1.docker.io/cloudpirates/postgres", true
+			return "oci://registry-1.docker.io/cloudpirates/postgres", true, false
 		},
 	)
 	if err != nil {

@@ -44,6 +44,7 @@ import type {
   ChartSearchResult,
   ChartDetail,
   InstallChartRequest,
+  ChartSourceCandidate,
   ArtifactHubSearchResult,
   ArtifactHubChartDetail,
   GitOpsResourceTree,
@@ -5489,6 +5490,75 @@ export function useHelmRepositories() {
   return useQuery<HelmRepository[]>({
     queryKey: ["helm-repositories"],
     queryFn: () => fetchJSON("/helm/repositories"),
+  });
+}
+
+export const HELM_REPOSITORY_ADD_INVALIDATION_KEYS = [
+  ["helm-repositories"],
+  ["helm-source-candidates"],
+  ["helm-upgrade-info"],
+  ["helm-batch-upgrade-info"],
+] as const;
+
+export function useAddHelmRepository() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ name, url, namespace, releaseName }: { name: string; url: string; namespace?: string; releaseName?: string }) => {
+      const response = await apiFetch(`${getApiBase()}/helm/repositories`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, url, namespace, releaseName }),
+      });
+      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || `HTTP ${response.status}`);
+      return response.json() as Promise<{ name: string; associated: boolean; candidates?: ChartSourceCandidate[] }>;
+    },
+    onSuccess: async () => {
+      await Promise.all(HELM_REPOSITORY_ADD_INVALIDATION_KEYS.map((queryKey) => queryClient.invalidateQueries({ queryKey })));
+    },
+  });
+}
+
+export function useHelmSourceCandidates(namespace: string, name: string, enabled = true) {
+  return useQuery<ChartSourceCandidate[]>({
+    queryKey: ["helm-source-candidates", namespace, name],
+    queryFn: () => fetchJSON(`/helm/releases/${namespace}/${name}/source-candidates`),
+    enabled: enabled && Boolean(namespace && name),
+  });
+}
+
+// ArtifactHub recovery is deliberately a mutation: it is an explicit user
+// action that performs an external lookup and source verification, never a
+// background query caused by opening the dialog.
+export function useDiscoverArtifactHubSources(namespace: string, name: string) {
+  return useMutation({
+    mutationFn: async (signal?: AbortSignal) => {
+      const response = await apiFetch(`${getApiBase()}/helm/releases/${namespace}/${name}/source-discovery/artifacthub`, {
+        method: "POST",
+        signal,
+      });
+      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || `HTTP ${response.status}`);
+      return response.json() as Promise<ChartSourceCandidate[]>;
+    },
+  });
+}
+
+export function useSetHelmSource(namespace: string, name: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (source: ChartSourceCandidate) => {
+      const response = await apiFetch(`${getApiBase()}/helm/releases/${namespace}/${name}/source`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(source),
+      });
+      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || `HTTP ${response.status}`);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["helm-source-candidates", namespace, name] });
+      queryClient.invalidateQueries({ queryKey: ["helm-upgrade-info", namespace, name] });
+      queryClient.invalidateQueries({ queryKey: ["helm-batch-upgrade-info"] });
+    },
   });
 }
 

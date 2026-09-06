@@ -279,7 +279,19 @@ const (
 	UpgradeSourceIssueUntracked           UpgradeSourceIssue = "untracked"
 	UpgradeSourceIssueRepoIndexError      UpgradeSourceIssue = "repo_index_error"
 	UpgradeSourceIssueAmbiguousRepository UpgradeSourceIssue = "ambiguous_repository"
+	UpgradeSourceIssueAmbiguousSource     UpgradeSourceIssue = "ambiguous_source"
 )
+
+// ChartSourceCandidate is an exact source that publishes the installed chart
+// name and version. Reference is a Helm repository name for classic
+// repositories and a full oci:// chart reference for OCI. URL is the canonical,
+// credential-free classic repository URL; it is empty for OCI and for legacy
+// name-only release metadata.
+type ChartSourceCandidate struct {
+	Type      string `json:"type"`
+	Reference string `json:"reference"`
+	URL       string `json:"url,omitempty"`
+}
 
 // UpgradeInfo contains information about available upgrades
 type UpgradeInfo struct {
@@ -296,6 +308,9 @@ type UpgradeInfo struct {
 	ChartRef    string             `json:"chartRef,omitempty"`
 	Error       string             `json:"error,omitempty"`
 	SourceIssue UpgradeSourceIssue `json:"sourceIssue,omitempty"`
+	// SourceCandidates are safe, credential-free configured sources that match
+	// the exact installed chart/version. More than one requires explicit choice.
+	SourceCandidates []ChartSourceCandidate `json:"sourceCandidates,omitempty"`
 	// Untracked marks the specific error state where Radar genuinely can't tell
 	// where the chart comes from — i.e. registering a chart source could fix it.
 	// Kept for compatibility; SourceIssue is the richer reason code.
@@ -364,13 +379,35 @@ type Maintainer struct {
 
 // InstallRequest is the request body for installing a new chart
 type InstallRequest struct {
-	ReleaseName     string         `json:"releaseName"`
-	Namespace       string         `json:"namespace"`
-	ChartName       string         `json:"chartName"`
-	Version         string         `json:"version"`
-	Repository      string         `json:"repository"`
+	ReleaseName string `json:"releaseName"`
+	Namespace   string `json:"namespace"`
+	ChartName   string `json:"chartName"`
+	Version     string `json:"version"`
+	Repository  string `json:"repository"`
+	// RepositoryName is the discovery repository's stable name. ArtifactHub
+	// installs send this alongside Repository (the resolved HTTP/OCI URL) so
+	// Radar can durably register the real source rather than ArtifactHub itself.
+	RepositoryName  string         `json:"repositoryName,omitempty"`
 	Values          map[string]any `json:"values,omitempty"`
 	CreateNamespace bool           `json:"createNamespace,omitempty"`
+	resolvedSource  *ChartSourceCandidate
+}
+
+// SetChartSourceRequest explicitly associates an existing release with one of
+// the exact configured candidates returned by the source-candidates endpoint.
+type SetChartSourceRequest struct {
+	Type      string `json:"type"`
+	Reference string `json:"reference"`
+	URL       string `json:"url,omitempty"`
+}
+
+// AddRepositoryRequest adds a classic HTTP Helm repository without storing
+// credentials. Helm's repositories.yaml remains the durable source registry.
+type AddRepositoryRequest struct {
+	Name        string `json:"name"`
+	URL         string `json:"url"`
+	Namespace   string `json:"namespace,omitempty"`
+	ReleaseName string `json:"releaseName,omitempty"`
 }
 
 // ChartSearchResult contains search results for charts

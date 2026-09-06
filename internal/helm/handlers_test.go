@@ -10,8 +10,39 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/auth"
 )
+
+func TestSourceRecoveryRouteIsRegistered(t *testing.T) {
+	old := globalClient
+	globalClient = nil
+	defer func() { globalClient = old }()
+
+	router := chi.NewRouter()
+	NewHandlers(nil).RegisterRoutes(router)
+	req := httptest.NewRequest(http.MethodGet, "/helm/releases/default/example/source-candidates", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d (registered route with uninitialized client)", rec.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestArtifactHubRecoveryRouteIsRegisteredAndExplicit(t *testing.T) {
+	old := globalClient
+	globalClient = nil
+	defer func() { globalClient = old }()
+
+	router := chi.NewRouter()
+	NewHandlers(nil).RegisterRoutes(router)
+	req := httptest.NewRequest(http.MethodPost, "/helm/releases/default/example/source-discovery/artifacthub", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d (explicit discovery route must be Helm-write gated)", rec.Code, http.StatusForbidden)
+	}
+}
 
 // TestRequireCloudRole exercises the role gate without standing up a
 // Helm client — the gate runs first, so we never hit the client. This
