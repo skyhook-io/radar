@@ -91,6 +91,16 @@ body {
   flex-direction: column;
 }
 
+/* The shell is a fixed-viewport app: the document itself must never scroll or
+   rubber-band, or a wheel gesture that runs past the end of an inner scroller
+   (log pane, terminal) chains out and drags the whole page. Scoped through
+   :has() so it only ever matches Radar's own standalone document — a library
+   consumer's page keeps its own scrolling. */
+body:has(> #radar) {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 
 /* ============================================
    REACT FLOW CUSTOMIZATIONS

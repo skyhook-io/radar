@@ -110,7 +110,7 @@ export function BottomDock({ renderTabContent, renderTabHeaderExtra, leftOffset:
 
   return (
     <div
-      className="absolute bottom-0 right-0 bg-theme-base border-t border-theme-border flex flex-col z-40 overflow-hidden"
+      className="absolute bottom-0 right-0 bg-theme-base border-t border-theme-border flex flex-col z-40 overflow-hidden overscroll-contain"
       style={{
         height: effectiveHeight,
         left: leftOffset,

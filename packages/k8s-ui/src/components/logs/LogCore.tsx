@@ -850,7 +850,7 @@ export function LogCore({
                 palette={palette}
               />
             )}
-            className="h-full font-mono text-xs"
+            className="h-full font-mono text-xs overscroll-contain"
           />
           {/* Scroll-to-bottom button */}
           {!atBottom && (

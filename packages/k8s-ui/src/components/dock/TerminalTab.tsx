@@ -348,7 +348,7 @@ export function TerminalTab({
           )}
         </div>
       ) : (
-        <div key="terminal" ref={terminalRef} className="absolute top-8 left-0 right-0 bottom-0 bg-[#0f172a] [&_.xterm-viewport]:!bg-[#0f172a]" />
+        <div key="terminal" ref={terminalRef} className="absolute top-8 left-0 right-0 bottom-0 bg-[#0f172a] [&_.xterm-viewport]:!bg-[#0f172a] [&_.xterm-viewport]:overscroll-contain" />
       )}
       {pasteDialog}
     </div>
