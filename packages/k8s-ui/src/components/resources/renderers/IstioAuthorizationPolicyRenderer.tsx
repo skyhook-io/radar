@@ -8,10 +8,13 @@ import {
 } from '../resource-utils-istio'
 
 const actionSeverity: Record<string, BadgeSeverity> = {
-  ALLOW: 'success',
-  DENY: 'error',
-  CUSTOM: 'info',
-  AUDIT: 'warning',
+  // Deliberately uniform: an action is a declaration, not a verdict. Colouring
+  // ALLOW green and DENY red made a deny-all policy the greenest row on the
+  // page, and a DENY doing its job look like a failure.
+  ALLOW: 'neutral',
+  DENY: 'neutral',
+  CUSTOM: 'neutral',
+  AUDIT: 'neutral',
 }
 
 interface IstioAuthorizationPolicyRendererProps {
@@ -27,7 +30,7 @@ export function IstioAuthorizationPolicyRenderer({ data }: IstioAuthorizationPol
   // Special case: DENY with no rules = deny all
   const isDenyAll = action === 'DENY' && rules.length === 0
   // Special case: ALLOW with no rules = allow nothing (deny all)
-  const isAllowNothing = action === 'ALLOW' && rules.length === 0 && !data.spec?.rules
+  const isAllowNothing = action === 'ALLOW' && rules.length === 0
 
   return (
     <>

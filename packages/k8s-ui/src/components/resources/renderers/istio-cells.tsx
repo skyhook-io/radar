@@ -2,6 +2,7 @@
 
 import { clsx } from 'clsx'
 import { Badge, type BadgeSeverity } from '../../ui/Badge'
+import { Tooltip } from '../../ui/Tooltip'
 import {
   getVirtualServiceStatus,
   getVirtualServiceHosts,
@@ -11,6 +12,7 @@ import {
   getDestinationRuleHost,
   getDestinationRuleSubsetCount,
   getDestinationRuleLoadBalancer,
+  getDestinationRuleTlsMode,
   getIstioGatewayStatus,
   getIstioGatewayServerCount,
   getIstioGatewaySelectorString,
@@ -24,6 +26,7 @@ import {
   getAuthorizationPolicyStatus,
   getAuthorizationPolicyAction,
   getAuthorizationPolicyRuleCount,
+  getAuthorizationPolicySelectorString,
 } from '../resource-utils-istio'
 
 const modeSeverity: Record<string, BadgeSeverity> = {
@@ -32,11 +35,14 @@ const modeSeverity: Record<string, BadgeSeverity> = {
   DISABLE: 'error',
 }
 
-const actionSeverity: Record<string, BadgeSeverity> = {
-  ALLOW: 'success',
-  DENY: 'error',
-  CUSTOM: 'info',
-  AUDIT: 'warning',
+export const AUTHORIZATION_POLICY_ACTION_SEVERITY: Record<string, BadgeSeverity> = {
+  // Deliberately uniform: an action is a declaration, not a verdict. Colouring
+  // ALLOW green and DENY red made a deny-all policy the greenest row on the
+  // page, and a DENY doing its job look like a failure.
+  ALLOW: 'neutral',
+  DENY: 'neutral',
+  CUSTOM: 'neutral',
+  AUDIT: 'neutral',
 }
 
 export function VirtualServiceCell({ resource, column }: { resource: any; column: string }) {
@@ -87,6 +93,12 @@ export function DestinationRuleCell({ resource, column }: { resource: any; colum
     case 'loadBalancer': {
       const lb = getDestinationRuleLoadBalancer(resource)
       return <span className="text-sm text-theme-text-secondary">{lb}</span>
+    }
+    case 'tls': {
+      // Every mode reads neutral: this is the rule's declaration, not the
+      // posture in force, which subset and port policies can still change.
+      const mode = getDestinationRuleTlsMode(resource)
+      return <span className="text-sm text-theme-text-secondary">{mode}</span>
     }
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>
@@ -187,14 +199,29 @@ export function AuthorizationPolicyCell({ resource, column }: { resource: any; c
     case 'action': {
       const action = getAuthorizationPolicyAction(resource)
       return (
-        <Badge severity={actionSeverity[action] ?? 'neutral'}>
+        <Badge severity={AUTHORIZATION_POLICY_ACTION_SEVERITY[action] ?? 'neutral'}>
           {action}
         </Badge>
       )
     }
     case 'rules': {
       const count = getAuthorizationPolicyRuleCount(resource)
+      // Rules are alternatives, so an ALLOW with none of them matches nothing —
+      // Istio's deny-all idiom. This is the default-visible cell that carries
+      // the warning; the Status column is off by default.
+      const allowsNothing = count === 0 && (resource.spec?.action || 'ALLOW') === 'ALLOW'
+      // Amber on the count itself: it fits the column, reads at a glance against
+      // grey neighbours, and the column tooltip carries the explanation.
+      if (allowsNothing) return <Badge severity="warning">0</Badge>
       return <span className="text-sm text-theme-text-secondary">{count}</span>
+    }
+    case 'selector': {
+      const scope = getAuthorizationPolicySelectorString(resource)
+      return (
+        <Tooltip content={scope}>
+          <span className="text-sm text-theme-text-secondary truncate block">{scope}</span>
+        </Tooltip>
+      )
     }
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>
