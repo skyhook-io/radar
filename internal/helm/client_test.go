@@ -1721,11 +1721,11 @@ func TestResolveUpgradeChartPath_UsesOCIBeforeUnrelatedIndexError(t *testing.T) 
 		"0.19.6",
 		"",
 		nil,
-		func(chartName, targetVersion string) (string, bool) {
+		func(chartName, targetVersion string) (string, bool, bool) {
 			if chartName != "postgres" || targetVersion != "0.19.6" {
-				return "", false
+				return "", false, false
 			}
-			return "oci://registry-1.docker.io/cloudpirates/postgres", true
+			return "oci://registry-1.docker.io/cloudpirates/postgres", true, false
 		},
 	)
 	if err != nil {
