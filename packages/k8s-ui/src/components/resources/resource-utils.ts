@@ -30,7 +30,7 @@ import { getExternalSecretStatus as _getExternalSecretStatus, getClusterExternal
 import { getHPATableState, hpaStatusFromState } from './resource-utils-hpa'
 import { getCNPGClusterStatus as _getCNPGClusterStatus, getCNPGBackupStatus as _getCNPGBackupStatus, getCNPGScheduledBackupStatus as _getCNPGScheduledBackupStatus, getCNPGPoolerStatus as _getCNPGPoolerStatus, isApiGroup as _isApiGroup, CNPG_GROUP as _CNPG_GROUP } from './resource-utils-cnpg'
 import { getGenericResourceStatus } from './generic-status'
-import { getIstioGatewayStatus as _getIstioGatewayStatus, getIstioGatewayServerCount as _getIstioGatewayServerCount, getIstioGatewaySelectorString as _getIstioGatewaySelectorString } from './resource-utils-istio'
+import { getIstioGatewayStatus as _getIstioGatewayStatus, getIstioGatewayServerCount as _getIstioGatewayServerCount, getIstioGatewaySelectorString as _getIstioGatewaySelectorString, getAuthorizationPolicySelectorString as _getAuthorizationPolicySelectorString, getDestinationRuleTlsMode as _getDestinationRuleTlsMode } from './resource-utils-istio'
 import { getCalicoIPPoolAllowedUses, getCalicoIPPoolBlockSize, getCalicoIPPoolEncapsulation, getCalicoPolicyNamespaceSelector, getCalicoPolicyServiceAccountSelector, getCalicoPolicyTypes, isCalicoApiVersion, isCalicoPolicyResource } from './resource-utils-calico'
 
 // ============================================================================
@@ -2320,6 +2320,13 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       return ''
     case 'selector':
       if (kindLower === 'istiogateways') return _getIstioGatewaySelectorString(resource)
+      if (kindLower === 'authorizationpolicies') return _getAuthorizationPolicySelectorString(resource)
+      return ''
+    case 'tlsMode':
+      // Distinct from Traefik's boolean 'tls' key, which SKIP_FILTER_COLUMNS
+      // excludes — sharing it would have made this reader unreachable. The
+      // generic fallback cannot reach spec.trafficPolicy.tls.mode.
+      if (kindLower === 'destinationrules') return _getDestinationRuleTlsMode(resource)
       return ''
     case 'state':
       if (kindLower === 'orders') return getOrderState(resource).text

@@ -123,26 +123,18 @@ export function getVirtualServiceDestinations(resource: any): Array<{ host: stri
 // DESTINATIONRULE UTILITIES
 // ============================================================================
 
+/**
+ * The only failure this object can show on its own.
+ *
+ * A rule without a host applies to nothing. Everything else it declares —
+ * subsets, a traffic policy — is configuration, and says nothing about whether
+ * the host is reachable or the policy is in effect.
+ */
 export function getDestinationRuleStatus(resource: any): StatusBadge {
-  const spec = resource.spec || {}
-  const host = spec.host
-
-  if (!host) {
+  if (!resource.spec?.host) {
     return { text: 'No Host', color: healthColors.unhealthy, level: 'unhealthy' }
   }
-
-  const subsets = spec.subsets || []
-  const trafficPolicy = spec.trafficPolicy
-
-  if (subsets.length > 0) {
-    return { text: pluralize(subsets.length, 'Subset'), color: healthColors.healthy, level: 'healthy' }
-  }
-
-  if (trafficPolicy) {
-    return { text: 'Configured', color: healthColors.healthy, level: 'healthy' }
-  }
-
-  return { text: 'Active', color: healthColors.healthy, level: 'healthy' }
+  return { text: 'Not assessed', color: healthColors.unknown, level: 'unknown' }
 }
 
 export function getDestinationRuleHost(resource: any): string {
@@ -159,6 +151,22 @@ export function getDestinationRuleSubsets(resource: any): Array<{ name: string; 
     labels: s.labels || {},
     trafficPolicy: s.trafficPolicy,
   }))
+}
+
+/**
+ * The client-side TLS mode this rule declares for its host.
+ *
+ * What it means depends on a different object. DISABLE is defined as "do not
+ * setup a TLS connection to the upstream endpoint", so the client sends
+ * plaintext; a PeerAuthentication STRICT is "an mTLS tunnel (TLS with client
+ * cert must be presented)" and PERMISSIVE is "either plaintext or mTLS tunnel".
+ * The pairing therefore lands as unencrypted traffic or as rejected requests —
+ * deduced from those two definitions, since neither API documents the mismatch
+ * directly. Nothing in this row shows which, and subset and port policies can
+ * override the mode besides, so it reports the declaration and not the posture.
+ */
+export function getDestinationRuleTlsMode(resource: any): string {
+  return getDestinationRuleTrafficPolicy(resource)?.tls?.mode || '-'
 }
 
 export function getDestinationRuleTrafficPolicy(resource: any): {
@@ -327,21 +335,33 @@ export function getPeerAuthenticationPortLevelMtls(resource: any): Record<string
 // AUTHORIZATIONPOLICY UTILITIES
 // ============================================================================
 
+/**
+ * What one AuthorizationPolicy declares — never a health verdict.
+ *
+ * An action is not a state of wellness: a DENY doing its job is not unhealthy,
+ * and an ALLOW is not proof anything is permitted. The request decision is made
+ * across every policy selecting the workload, so no single object can establish
+ * it, and a green or red tone would assert an answer this object does not have.
+ *
+ * The one shape worth marking is an ALLOW — the default action — carrying no
+ * rules. Rules are alternatives, so zero of them match nothing, and Istio
+ * documents `spec: {}` as the deny-all idiom. Amber says look closer; it stops
+ * short of claiming the outage, because other policies may permit the traffic.
+ */
 export function getAuthorizationPolicyStatus(resource: any): StatusBadge {
   const action = resource.spec?.action || 'ALLOW'
   const rules = resource.spec?.rules || []
 
-  switch (action) {
-    case 'ALLOW':
-      return { text: `Allow (${pluralize(rules.length, 'rule')})`, color: healthColors.healthy, level: 'healthy' }
-    case 'DENY':
-      return { text: `Deny (${pluralize(rules.length, 'rule')})`, color: healthColors.unhealthy, level: 'unhealthy' }
-    case 'CUSTOM':
-      return { text: 'Custom', color: healthColors.degraded, level: 'degraded' }
-    case 'AUDIT':
-      return { text: 'Audit', color: healthColors.degraded, level: 'degraded' }
-    default:
-      return { text: action, color: healthColors.unknown, level: 'unknown' }
+  if (action === 'ALLOW' && rules.length === 0) {
+    return { text: 'No allow rules', color: healthColors.degraded, level: 'degraded' }
+  }
+  const known: Record<string, string> = { ALLOW: 'Allow', DENY: 'Deny', CUSTOM: 'Custom', AUDIT: 'Audit' }
+  const label = known[action]
+  if (!label) return { text: action, color: healthColors.unknown, level: 'unknown' }
+  return {
+    text: `${label} (${pluralize(rules.length, 'rule')})`,
+    color: healthColors.neutral,
+    level: 'neutral',
   }
 }
 
@@ -365,9 +385,87 @@ export function getAuthorizationPolicySelector(resource: any): Record<string, st
   return resource.spec?.selector?.matchLabels || {}
 }
 
+/**
+ * What the policy declares it applies to.
+ *
+ * A policy can attach by targetRef instead of by labels — waypoints and
+ * Gateways in ambient mode do — so the selector alone does not describe scope.
+ * With neither, scope is inherited: the namespace, or the whole mesh when the policy
+ * sits in the mesh root namespace. Which of those applies depends on
+ * MeshConfig.rootNamespace, which is not readable from this object, so the cell
+ * names both rather than guessing from the conventional namespace name.
+ */
 export function getAuthorizationPolicySelectorString(resource: any): string {
-  const labels = resource.spec?.selector?.matchLabels || {}
-  const entries = Object.entries(labels)
-  if (entries.length === 0) return 'Namespace-wide'
+  const spec = resource.spec || {}
+  const targets = [
+    ...(Array.isArray(spec.targetRefs) ? spec.targetRefs : []),
+    ...(spec.targetRef ? [spec.targetRef] : []),
+  ].filter(Boolean)
+  if (targets.length > 0) {
+    return targets
+      .map((t: any) => {
+        const name = [t?.kind, t?.name].filter(Boolean).join('/') || 'target'
+        return t?.namespace && t.namespace !== resource.metadata?.namespace
+          ? `${t.namespace}/${name}`
+          : name
+      })
+      .join(', ')
+  }
+  const entries = Object.entries(spec.selector?.matchLabels || {})
+  if (entries.length === 0) return 'Namespace / mesh scope'
   return entries.map(([k, v]) => `${k}=${v}`).join(', ')
+}
+
+/**
+ * What an AuthorizationPolicy's rule list means for the traffic it governs.
+ *
+ * Rules are alternatives and an unset list never matches, so BOTH actions with
+ * no rules are inert in the same way — a DENY with none denies nothing, an
+ * ALLOW with none permits nothing. Only the ALLOW case has a consequence worth
+ * raising, because a workload with any ALLOW policy admits only what one of
+ * them matches. Neither can be stated as an outcome for the workload: every
+ * policy selecting it takes part in the decision.
+ */
+export function getAuthorizationPolicyRuleNotice(
+  resource: any,
+): { level: 'warning' | 'info'; title: string; message: string } | null {
+  const action = resource?.spec?.action || 'ALLOW'
+  const rules = resource?.spec?.rules
+  if (Array.isArray(rules) && rules.length > 0) {
+    // A rule matches every request when it carries no conditions — which
+    // includes serialized empty lists, not just an empty object. On a DENY that
+    // is not a baseline other policies carve exceptions out of: DENY is
+    // evaluated first, so no ALLOW can re-permit what it matches. Unknown keys
+    // are treated as conditions, so a future field cannot be read as blanket.
+    const CONDITION_KEYS = ['from', 'to', 'when']
+    const matchesEverything = rules.some((r: any) => {
+      if (!r || typeof r !== 'object') return false
+      const keys = Object.keys(r)
+      if (keys.some(k => !CONDITION_KEYS.includes(k))) return false
+      return CONDITION_KEYS.every(k => !Array.isArray(r[k]) || r[k].length === 0)
+    })
+    if (action === 'DENY' && matchesEverything) {
+      return {
+        level: 'info',
+        title: 'Matches all requests',
+        message: 'A rule with no conditions matches every request, so this policy denies all traffic to the workloads it selects. DENY is evaluated before ALLOW, so no ALLOW policy can permit an exception.',
+      }
+    }
+    return null
+  }
+  if (action === 'ALLOW') {
+    return {
+      level: 'warning',
+      title: 'No allow rules',
+      message: 'Rules are alternatives, so an ALLOW policy with none of them matches nothing and contributes no permitted traffic. Other ALLOW policies selecting the same workload may still permit requests — a default-deny-plus-exceptions setup looks exactly like this.',
+    }
+  }
+  if (action === 'DENY') {
+    return {
+      level: 'info',
+      title: 'No deny rules',
+      message: 'This DENY policy has no rules, so it matches no requests and denies no traffic. Other policies may still deny requests.',
+    }
+  }
+  return null
 }

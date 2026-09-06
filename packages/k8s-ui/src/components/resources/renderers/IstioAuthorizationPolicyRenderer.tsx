@@ -1,18 +1,12 @@
 import { Shield } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, KeyValueBadgeList } from '../../ui/drawer-components'
-import { Badge, type BadgeSeverity } from '../../ui/Badge'
+import { Badge } from '../../ui/Badge'
 import {
   getAuthorizationPolicyAction,
   getAuthorizationPolicyRules,
+  getAuthorizationPolicyRuleNotice,
   getAuthorizationPolicySelector,
 } from '../resource-utils-istio'
-
-const actionSeverity: Record<string, BadgeSeverity> = {
-  ALLOW: 'success',
-  DENY: 'error',
-  CUSTOM: 'info',
-  AUDIT: 'warning',
-}
 
 interface IstioAuthorizationPolicyRendererProps {
   data: any
@@ -24,25 +18,18 @@ export function IstioAuthorizationPolicyRenderer({ data }: IstioAuthorizationPol
   const selector = getAuthorizationPolicySelector(data)
   const hasSelector = Object.keys(selector).length > 0
 
-  // Special case: DENY with no rules = deny all
-  const isDenyAll = action === 'DENY' && rules.length === 0
-  // Special case: ALLOW with no rules = allow nothing (deny all)
-  const isAllowNothing = action === 'ALLOW' && rules.length === 0 && !data.spec?.rules
+  const ruleNotice = getAuthorizationPolicyRuleNotice(data)
+  // The action badge is uniformly neutral: an action is a declaration, not a
+  // verdict. A green ALLOW would make a deny-all policy look healthiest, and a
+  // red DENY would make a control doing its job look failed.
 
   return (
     <>
-      {isDenyAll && (
+      {ruleNotice && (
         <AlertBanner
-          variant="error"
-          title="Deny All"
-          message="This policy denies all traffic to the target workload (DENY action with no rules)."
-        />
-      )}
-      {isAllowNothing && (
-        <AlertBanner
-          variant="warning"
-          title="Allow Nothing"
-          message="This policy has ALLOW action but no rules, which means no traffic is allowed."
+          variant={ruleNotice.level}
+          title={ruleNotice.title}
+          message={ruleNotice.message}
         />
       )}
 
@@ -50,7 +37,7 @@ export function IstioAuthorizationPolicyRenderer({ data }: IstioAuthorizationPol
       <Section title="Authorization Policy" icon={Shield} defaultExpanded>
         <PropertyList>
           <Property label="Action" value={
-            <Badge severity={actionSeverity[action] ?? 'neutral'}>
+            <Badge severity="neutral">
               {action}
             </Badge>
           } />
