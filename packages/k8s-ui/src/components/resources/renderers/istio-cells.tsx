@@ -35,16 +35,6 @@ const modeSeverity: Record<string, BadgeSeverity> = {
   DISABLE: 'error',
 }
 
-export const AUTHORIZATION_POLICY_ACTION_SEVERITY: Record<string, BadgeSeverity> = {
-  // Deliberately uniform: an action is a declaration, not a verdict. A green
-  // ALLOW would make a deny-all policy the healthiest row on the page, and a
-  // red DENY would make a control doing its job look like a failure.
-  ALLOW: 'neutral',
-  DENY: 'neutral',
-  CUSTOM: 'neutral',
-  AUDIT: 'neutral',
-}
-
 export function VirtualServiceCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'status': {
@@ -199,8 +189,11 @@ export function AuthorizationPolicyCell({ resource, column }: { resource: any; c
     }
     case 'action': {
       const action = getAuthorizationPolicyAction(resource)
+      // Uniformly neutral: an action is a declaration, not a verdict. A green
+      // ALLOW would make a deny-all policy look healthiest, and a red DENY
+      // would make a control doing its job look failed.
       return (
-        <Badge severity={AUTHORIZATION_POLICY_ACTION_SEVERITY[action] ?? 'neutral'}>
+        <Badge severity="neutral">
           {action}
         </Badge>
       )

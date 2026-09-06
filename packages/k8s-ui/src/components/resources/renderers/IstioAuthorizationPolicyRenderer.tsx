@@ -1,22 +1,12 @@
 import { Shield } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, KeyValueBadgeList } from '../../ui/drawer-components'
-import { Badge, type BadgeSeverity } from '../../ui/Badge'
+import { Badge } from '../../ui/Badge'
 import {
   getAuthorizationPolicyAction,
   getAuthorizationPolicyRules,
   getAuthorizationPolicyRuleNotice,
   getAuthorizationPolicySelector,
 } from '../resource-utils-istio'
-
-const actionSeverity: Record<string, BadgeSeverity> = {
-  // Deliberately uniform: an action is a declaration, not a verdict. A green
-  // ALLOW would make a deny-all policy the healthiest row on the page, and a
-  // red DENY would make a control doing its job look like a failure.
-  ALLOW: 'neutral',
-  DENY: 'neutral',
-  CUSTOM: 'neutral',
-  AUDIT: 'neutral',
-}
 
 interface IstioAuthorizationPolicyRendererProps {
   data: any
@@ -29,6 +19,9 @@ export function IstioAuthorizationPolicyRenderer({ data }: IstioAuthorizationPol
   const hasSelector = Object.keys(selector).length > 0
 
   const ruleNotice = getAuthorizationPolicyRuleNotice(data)
+  // The action badge is uniformly neutral: an action is a declaration, not a
+  // verdict. A green ALLOW would make a deny-all policy look healthiest, and a
+  // red DENY would make a control doing its job look failed.
 
   return (
     <>
@@ -44,7 +37,7 @@ export function IstioAuthorizationPolicyRenderer({ data }: IstioAuthorizationPol
       <Section title="Authorization Policy" icon={Shield} defaultExpanded>
         <PropertyList>
           <Property label="Action" value={
-            <Badge severity={actionSeverity[action] ?? 'neutral'}>
+            <Badge severity="neutral">
               {action}
             </Badge>
           } />

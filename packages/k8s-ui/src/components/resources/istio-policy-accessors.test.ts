@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { AUTHORIZATION_POLICY_ACTION_SEVERITY } from './renderers/istio-cells'
 import {
   getAuthorizationPolicySelectorString,
   getAuthorizationPolicyStatus,
@@ -126,19 +125,6 @@ describe('getDestinationRuleTlsMode', () => {
   it('reports nothing declared rather than inventing a default', () => {
     expect(getDestinationRuleTlsMode({ spec: { host: 'api' } })).toBe('-')
     expect(getDestinationRuleTlsMode({ spec: { host: 'api', trafficPolicy: {} } })).toBe('-')
-  })
-})
-
-describe('AuthorizationPolicy action badge', () => {
-  it('gives every action the same tone', () => {
-    // The action is a declaration, not a verdict. Colouring ALLOW green made a
-    // deny-all policy the greenest row on the page; colouring DENY red made a
-    // control doing its job look like a failure. This is also the badge that
-    // stays visible when the Status column is off by default.
-    const tones = new Set(Object.values(AUTHORIZATION_POLICY_ACTION_SEVERITY))
-    expect(tones).toEqual(new Set(['neutral']))
-    expect(Object.keys(AUTHORIZATION_POLICY_ACTION_SEVERITY).sort())
-      .toEqual(['ALLOW', 'AUDIT', 'CUSTOM', 'DENY'])
   })
 })
 
