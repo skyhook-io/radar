@@ -2,13 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { getNetworkPolicySelector, getRouteStatus, getRouteStatusReason } from './resource-utils'
 import { getIstioGatewayStatus } from './resource-utils-istio'
 
-// These three accessors reported healthy without checking the thing that makes
-// it healthy. Each test names the real cluster state that used to render green.
+// Each case names the cluster state behind the verdict, so a future change that
+// re-greens one of them fails here with the reason attached.
 
 describe('getNetworkPolicySelector', () => {
   it('reports a matchExpressions-only policy as targeting a subset, not everything', () => {
-    // Used to render "All pods": a policy covering a fraction of the namespace
-    // claiming to cover all of it, on a security surface.
+    // podSelector is a LabelSelector: a policy can target a fraction of the
+    // namespace through expressions alone, and must not claim to cover all of it.
     const np = {
       spec: { podSelector: { matchExpressions: [{ key: 'tier', operator: 'In', values: ['web', 'api'] }] } },
     }
@@ -67,7 +67,7 @@ describe('getRouteStatus', () => {
 
   it('is not healthy when a backendRef names a Service that does not exist', () => {
     // Accepted=True + ResolvedRefs=False is the documented shape for a missing
-    // backend — the gateway still routes, and answers 5xx. This used to be green.
+    // backend — the gateway still routes, and answers 5xx.
     const r = route({
       parents: [{ parentRef: { name: 'gw' }, conditions: [cond('Accepted', 'True'), cond('ResolvedRefs', 'False')] }],
     })
@@ -135,8 +135,7 @@ describe('getRouteStatus', () => {
 
   it('does not let a stale controller report outvote a live rejection, in either order', () => {
     // Status entries are keyed by parentRef AND controllerName, so one parent
-    // can carry two controllers' reports mid-replacement. Reading only the
-    // first made the badge depend on their order in the array.
+    // can carry two controllers' reports while one replaces the other.
     const old = { parentRef: { name: 'gw' }, controllerName: 'old/ctrl', conditions: [cond('Accepted', 'True'), cond('ResolvedRefs', 'True')] }
     const live = { parentRef: { name: 'gw' }, controllerName: 'new/ctrl', conditions: [cond('Accepted', 'False'), cond('ResolvedRefs', 'False')] }
     // Neither order may be green, and both must agree. Degraded rather than
@@ -225,6 +224,19 @@ describe('getRouteStatus', () => {
     expect(getRouteStatus(r)).toMatchObject({ text: 'Accepted', level: 'healthy' })
   })
 
+  it('lets a live healthy parent win over a superseded report for the same parent', () => {
+    // A report describing a spec that has since changed says nothing about the
+    // current one, so it must not hold a confirmed parent at Pending.
+    const r = route({
+      generation: 3,
+      parents: [
+        { parentRef: { name: 'gw' }, controllerName: 'old/ctrl', conditions: [cond('Accepted', 'True', 2), cond('ResolvedRefs', 'True', 2)] },
+        { parentRef: { name: 'gw' }, controllerName: 'new/ctrl', conditions: [cond('Accepted', 'True', 3), cond('ResolvedRefs', 'True', 3)] },
+      ],
+    })
+    expect(getRouteStatus(r)).toMatchObject({ text: 'Accepted', level: 'healthy' })
+  })
+
   it('matches a parent whose namespace and kind are defaulted on one side only', () => {
     const r = route({
       namespace: 'prod',
@@ -305,7 +317,7 @@ describe('getRouteStatusReason', () => {
 describe('getIstioGatewayStatus', () => {
   it('does not claim health it cannot observe from spec alone', () => {
     // A Gateway whose selector matches no running ingressgateway pod has
-    // servers like any other; green asserted liveness nothing had checked.
+    // servers like any other, so servers alone cannot assert liveness.
     const gw = { spec: { servers: [{ port: { number: 80 } }] } }
     expect(getIstioGatewayStatus(gw)).toMatchObject({ text: 'Defined', level: 'neutral' })
   })
