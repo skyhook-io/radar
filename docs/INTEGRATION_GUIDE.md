@@ -114,6 +114,10 @@ generic CRD pass and `kindsHandledOutsideGenericCRDPass` for duplicates and fore
 kind collisions. For pseudo-kinds, keep `KindForGVK`, node IDs and relationship
 normalization consistent; test navigation in both directions.
 
+For cluster-scoped topology kinds, check `ClusterScopedKinds` in
+`pkg/topology/cluster_scoped_kinds.go` and verify REST/MCP authorization for the
+exact API group/resource, including pseudo-kinds shared by multiple APIs.
+
 When adding a topology node kind, check the frontend wiring as applicable:
 
 - `packages/k8s-ui/src/types/core.ts` (`CoreNodeKind`, `displayKind`) and
@@ -128,8 +132,9 @@ When adding a topology node kind, check the frontend wiring as applicable:
 - Add fixtures for supported API shapes and meaningful states: healthy, failing,
   intentionally inactive, stale/missing status, collisions and unavailable related
   resources. Test only relevant combinations, not a speculative matrix.
-- Run `make tsc`, `make test` and `make build` for integration code changes. The
-  full build includes frontend embedding. Existing guards include
+- Run `make tsc`, `make test` and `make build` for integration code changes, plus
+  `npm test --prefix packages/k8s-ui` and `npm test --prefix web` for frontend tests.
+  The full build includes frontend embedding. Existing guards include
   `internal/k8s/{dynamic_cache_fallback,chart_rbac_coverage,capabilities_alignment}_test.go`
   and resource `curated-column-ownership.test.ts` / `ResourceRendererDispatch.test.tsx`.
 - Validate changed views against a real controller, including restricted access
