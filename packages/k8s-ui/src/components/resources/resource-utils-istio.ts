@@ -157,10 +157,12 @@ export function getDestinationRuleSubsets(resource: any): Array<{ name: string; 
 /**
  * The client-side TLS mode this rule declares for its host.
  *
- * DISABLE here turns off client mTLS for the host even where a PeerAuthentication
- * requires it on the server side, and both rows read as configured while it
- * happens. This reports only what the rule declares at the top level: subset and
- * port policies can override it, so it does not establish the effective posture.
+ * What it means depends on a different object. A DISABLE here sends plaintext:
+ * against a PERMISSIVE PeerAuthentication that succeeds and the traffic is
+ * simply unencrypted; against a STRICT one the server rejects it and the
+ * requests fail. Neither outcome is visible from this row, and subset and port
+ * policies can override the mode besides — so this reports the declaration and
+ * not the effective posture.
  */
 export function getDestinationRuleTlsMode(resource: any): string {
   return getDestinationRuleTrafficPolicy(resource)?.tls?.mode || '-'

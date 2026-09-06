@@ -111,7 +111,9 @@ describe('getDestinationRuleStatus', () => {
 })
 
 describe('getDestinationRuleTlsMode', () => {
-  it('surfaces the mode that can defeat a STRICT PeerAuthentication', () => {
+  it('surfaces a declared DISABLE, whose outcome depends on the server policy', () => {
+    // Against a PERMISSIVE PeerAuthentication this sends unencrypted traffic;
+    // against a STRICT one the requests fail. The row shows neither.
     expect(getDestinationRuleTlsMode({ spec: { host: 'api', trafficPolicy: { tls: { mode: 'DISABLE' } } } }))
       .toBe('DISABLE')
   })

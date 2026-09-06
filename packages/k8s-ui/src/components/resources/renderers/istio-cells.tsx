@@ -96,7 +96,8 @@ export function DestinationRuleCell({ resource, column }: { resource: any; colum
     }
     case 'tls': {
       // Every mode reads neutral: this is the rule's declaration, not the
-      // posture in force, which subset and port policies can still change.
+      // posture in force. What a DISABLE produces depends on the server's
+      // PeerAuthentication — unencrypted traffic, or failed requests.
       const mode = getDestinationRuleTlsMode(resource)
       return <span className="text-sm text-theme-text-secondary">{mode}</span>
     }
