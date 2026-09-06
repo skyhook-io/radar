@@ -648,6 +648,53 @@ func TestPostgresStore_AppendSerializationBlocksConcurrentWriter(t *testing.T) {
 	}
 }
 
+func TestPostgresStore_QueryAPIGroupsBeforeLimit(t *testing.T) {
+	store, err := NewPostgresStore(testPostgresDSN(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	versions := []string{"apps/v1", "", "v1", "other.example/v1", "other.example/v1"}
+	base := time.Now().Add(-time.Hour)
+	for i, version := range versions {
+		if err := store.Append(t.Context(), TimelineEvent{
+			ID: fmt.Sprintf("group-%d", i), Timestamp: base.Add(time.Duration(i) * time.Minute),
+			APIVersion: version, Kind: "Deployment", Namespace: "default", Name: "web",
+			EventType: EventTypeUpdate, Source: SourceInformer,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, test := range []struct {
+		name   string
+		groups []string
+		want   []string
+	}{
+		{"apps", []string{"apps"}, []string{"group-1", "group-0"}},
+		{"core", []string{""}, []string{"group-2", "group-1"}},
+		{"multiple", []string{"apps", ""}, []string{"group-2", "group-1"}},
+		{"unfiltered", nil, []string{"group-4", "group-3"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			events, err := store.Query(t.Context(), QueryOptions{
+				Kinds: []string{"Deployment"}, Names: []string{"web"}, APIGroups: test.groups,
+				Limit: 2, IncludeManaged: true,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(events) != len(test.want) {
+				t.Fatalf("got %d events, want %v", len(events), test.want)
+			}
+			for i, id := range test.want {
+				if events[i].ID != id {
+					t.Errorf("event %d = %s, want %s", i, events[i].ID, id)
+				}
+			}
+		})
+	}
+}
+
 func TestPostgresStore_QueryAllOptions(t *testing.T) {
 	store, err := NewPostgresStore(testPostgresDSN(t))
 	if err != nil {

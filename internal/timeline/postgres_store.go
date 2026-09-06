@@ -870,6 +870,11 @@ func (s *PostgresStore) buildQuery(opts QueryOptions) (string, []any, error) {
 		}
 		addInFilter("kind", vals)
 	}
+	if len(opts.APIGroups) > 0 {
+		// Unknown versions stay visible; known group collisions must be excluded
+		// before LIMIT so they cannot crowd out the requested resource's changes.
+		addFilter(" AND (COALESCE(api_version, '') = '' OR CASE WHEN strpos(api_version, '/') > 0 THEN split_part(api_version, '/', 1) ELSE '' END = ANY($%d::text[]))", opts.APIGroups)
+	}
 	if len(opts.Names) > 0 {
 		vals := make([]any, len(opts.Names))
 		for i, n := range opts.Names {

@@ -163,9 +163,7 @@ export function SettingsDialog({
     open && section === 'argocd'
   )
 
-  // AI investigation prefs are client-side (localStorage) and now SELF-SAVING: the
-  // section has its own Save that commits the draft to DiagnoseContext, so it's
-  // independent of the owner-gated footer. The draft is snapshotted on open.
+  // Local AI preferences save independently of the owner-gated server settings.
   const diag = useDiagnose()
   const aiAvailable = diag.available && diag.agents.length > 0
   const [aiDraft, setAiDraft] = useState<AIDraft>({

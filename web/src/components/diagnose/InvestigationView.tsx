@@ -1133,6 +1133,7 @@ export function InvestigationView({
 
   const askExplanation = (sequence: number) => {
     if (interactionsBlocked) return;
+    setActionError(null);
     const serial = ++explanationRequestSerial.current;
     const previousTurns = turnsRef.current.length;
     setExplanationRequest({ sequence, status: "running" });
@@ -2493,14 +2494,15 @@ function PriorConclusion({
   initial: boolean;
 }) {
   const reveal = useDisclosureReveal<HTMLDivElement>();
+  const { revealAfterToggle } = reveal;
   const [open, setOpen] = useState(false);
   const regionId = useId();
   useEffect(() => {
     if (explanation?.openRequest) {
       setOpen(true);
-      reveal.revealAfterToggle(true);
+      revealAfterToggle(true);
     }
-  }, [explanation?.openRequest]);
+  }, [explanation?.openRequest, revealAfterToggle]);
   return (
     <div className="mt-2 overflow-hidden rounded-lg border border-theme-border bg-theme-base/35">
       <button

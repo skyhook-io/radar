@@ -1597,10 +1597,12 @@ function PayloadBlock({
   const json = formatJson(text);
   const display = json ?? text;
   const range = locateSourceExcerpt(display, sourceExcerpt);
+  const rangeStart = range?.start;
+  const rangeEnd = range?.end;
   const preRef = useRef<HTMLPreElement>(null);
   const markRef = useRef<HTMLElement>(null);
   useEffect(() => {
-    if (!range || revealRequestId === undefined) return;
+    if (rangeStart === undefined || revealRequestId === undefined) return;
     const frame = requestAnimationFrame(() => {
       const pre = preRef.current,
         mark = markRef.current;
@@ -1611,7 +1613,7 @@ function PayloadBlock({
           pre.clientHeight / 3;
     });
     return () => cancelAnimationFrame(frame);
-  }, [revealRequestId, range?.start, range?.end]);
+  }, [revealRequestId, rangeStart, rangeEnd]);
   return (
     <div>
       <div className="mb-0.5 flex items-center justify-between gap-2">
@@ -1905,27 +1907,29 @@ function DiagnosisResult({
   );
   const showAnalysis = detail === "analysis";
   const analysisReveal = useDisclosureReveal<HTMLDivElement>();
+  const { elementRef: analysisElementRef, revealAfterToggle: revealAnalysis } =
+    analysisReveal;
   useEffect(() => {
     if (explanation?.openRequest) {
       setDetail("explanation");
-      analysisReveal.revealAfterToggle(true);
+      revealAnalysis(true);
     }
-  }, [explanation?.openRequest]);
+  }, [explanation?.openRequest, revealAnalysis]);
   useEffect(() => {
     if (
       detail === "explanation" &&
       (explanation?.status === "done" || explanation?.status === "error")
     ) {
-      const element = analysisReveal.elementRef.current;
+      const element = analysisElementRef.current;
       const scroller = element?.closest("[data-investigation-findings-scroll]");
       if (element && scroller) {
         const top = element.getBoundingClientRect().top;
         const viewport = scroller.getBoundingClientRect();
         if (top >= viewport.top && top < viewport.bottom)
-          analysisReveal.revealAfterToggle(true);
+          revealAnalysis(true);
       }
     }
-  }, [explanation?.status]);
+  }, [explanation?.status, detail, analysisElementRef, revealAnalysis]);
   const [showAllSteps, setShowAllSteps] = useState(false);
   const stepsId = useId();
   const stepsReveal = useDisclosureReveal<HTMLDivElement>();

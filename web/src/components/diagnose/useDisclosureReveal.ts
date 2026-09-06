@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from "react";
+import { useCallback, useLayoutEffect, useRef } from "react";
 
 // Shared Collapse uses a 200 ms grid-row transition. Keep a small paint margin
 // before moving focus so the destination is stationary. Reduced-motion users get
@@ -61,7 +61,7 @@ export function useDisclosureReveal<T extends HTMLElement>() {
     [],
   );
 
-  const revealAfterToggle = (opening: boolean) => {
+  const revealAfterToggle = useCallback((opening: boolean) => {
     if (timerRef.current !== undefined) {
       window.clearTimeout(timerRef.current);
       timerRef.current = undefined;
@@ -111,7 +111,7 @@ export function useDisclosureReveal<T extends HTMLElement>() {
         behavior: settleDelay === 0 ? "auto" : "smooth",
       });
     }, settleDelay);
-  };
+  }, []);
 
   return { elementRef, revealAfterToggle };
 }
