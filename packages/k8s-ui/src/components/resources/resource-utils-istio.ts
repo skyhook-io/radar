@@ -156,12 +156,14 @@ export function getDestinationRuleSubsets(resource: any): Array<{ name: string; 
 /**
  * The client-side TLS mode this rule declares for its host.
  *
- * What it means depends on a different object. A DISABLE here sends plaintext:
- * against a PERMISSIVE PeerAuthentication that succeeds and the traffic is
- * simply unencrypted; against a STRICT one the server rejects it and the
- * requests fail. Neither outcome is visible from this row, and subset and port
- * policies can override the mode besides — so this reports the declaration and
- * not the effective posture.
+ * What it means depends on a different object. DISABLE is defined as "do not
+ * setup a TLS connection to the upstream endpoint", so the client sends
+ * plaintext; a PeerAuthentication STRICT is "an mTLS tunnel (TLS with client
+ * cert must be presented)" and PERMISSIVE is "either plaintext or mTLS tunnel".
+ * The pairing therefore lands as unencrypted traffic or as rejected requests —
+ * deduced from those two definitions, since neither API documents the mismatch
+ * directly. Nothing in this row shows which, and subset and port policies can
+ * override the mode besides, so it reports the declaration and not the posture.
  */
 export function getDestinationRuleTlsMode(resource: any): string {
   return getDestinationRuleTrafficPolicy(resource)?.tls?.mode || '-'
