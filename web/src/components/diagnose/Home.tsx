@@ -1,18 +1,32 @@
 // Server-side runs keep background and running investigations visible in both
 // the docked Home view and the maximized workspace's master pane.
-import { Loader2, Sparkles } from "lucide-react";
-import { StatusDot, type StatusTone } from "@skyhook-io/k8s-ui";
+import {
+  Check,
+  CircleAlert,
+  Loader2,
+  LockKeyhole,
+  Sparkles,
+  Square,
+} from "lucide-react";
 import { type RunSummary } from "../../api/diagnose";
+import {
+  groupQualifiesLaneId,
+  pluralToKind,
+} from "@skyhook-io/k8s-ui/utils/navigation";
+import { parseContextName } from "../../utils/context-name";
+import { Tooltip } from "../ui/Tooltip";
 import { formatInvestigationTarget } from "./target";
 
-function relativeTime(ts: number, now: number): string {
-  const s = Math.max(0, Math.round((now - ts) / 1000));
-  if (s < 60) return "just now";
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  if (s < 30 * 86400) return `${Math.floor(s / 86400)}d ago`;
-  if (s < 365 * 86400) return `${Math.floor(s / (30 * 86400))}mo ago`;
-  return `${Math.floor(s / (365 * 86400))}y ago`;
+function historyDay(date: Date, now: Date): string {
+  if (date.toDateString() === now.toDateString()) return "Today";
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (date.toDateString() === yesterday.toDateString()) return "Yesterday";
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    ...(date.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
+  });
 }
 
 // Relative age makes the list easy to scan; a stable local timestamp makes two
@@ -42,26 +56,38 @@ export function absoluteTime(ts: number, now: number): string {
   );
 }
 
-// Map a run status to the design-system status tone (StatusDot). stopped is
-// user-initiated → neutral/unknown, NOT a failure (distinct from error).
-function runTone(status: RunSummary["status"]): StatusTone {
-  switch (status) {
-    case "error":
-      return "unhealthy";
-    case "stale":
-      return "degraded";
-    case "done":
-      return "healthy";
-    default: // stopped
-      return "unknown";
-  }
-}
-
-function statusDot(status: RunSummary["status"]) {
-  if (status === "running")
-    return <Loader2 className="h-3 w-3 shrink-0 animate-spin text-accent" />;
-  return <StatusDot tone={runTone(status)} className="shrink-0" />;
-}
+const historyStatuses = {
+  running: {
+    label: "Running",
+    short: "Running",
+    Icon: Loader2,
+    className: "text-accent-text",
+  },
+  done: {
+    label: "Completed",
+    short: "",
+    Icon: Check,
+    className: "text-theme-text-tertiary",
+  },
+  error: {
+    label: "Investigation failed",
+    short: "Failed",
+    Icon: CircleAlert,
+    className: "text-theme-text-secondary",
+  },
+  stopped: {
+    label: "Stopped",
+    short: "Stopped",
+    Icon: Square,
+    className: "text-theme-text-secondary",
+  },
+  stale: {
+    label: "Read-only investigation",
+    short: "",
+    Icon: LockKeyhole,
+    className: "text-theme-text-tertiary",
+  },
+} as const;
 
 // A short text status means no run outcome relies on decoding a 6px colored dot.
 export function statusWord(status: RunSummary["status"]): {
@@ -97,7 +123,36 @@ export function RecentList({
   selectedId?: string | null;
   historyDegraded?: boolean;
 }) {
-  const now = Date.now();
+  const now = new Date();
+  const contexts = new Map(
+    runs.map((r) => [r.context, parseContextName(r.context)]),
+  );
+  const contextsByName = new Map<string, Set<string>>();
+  const groupsByKind = new Map<string, Set<string>>();
+  for (const [raw, parsed] of contexts) {
+    const names = contextsByName.get(parsed.clusterName) ?? new Set<string>();
+    names.add(raw);
+    contextsByName.set(parsed.clusterName, names);
+  }
+  for (const r of runs) {
+    const kind = pluralToKind(r.kind);
+    const groups = groupsByKind.get(kind) ?? new Set<string>();
+    // Match Radar's resource-lane display convention: built-in API groups
+    // share a readable kind label; custom groups may need disambiguation.
+    groups.add(groupQualifiesLaneId(r.group) ? r.group : "");
+    groupsByKind.set(kind, groups);
+  }
+  const days = new Map<string, RunSummary[]>();
+  // Status bookkeeping (including cluster switches) updates updatedAt. It must
+  // not change the apparent start time or reshuffle the navigation list.
+  for (const r of [...runs].sort(
+    (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt),
+  )) {
+    const day = historyDay(new Date(r.createdAt), now);
+    const entries = days.get(day) ?? [];
+    entries.push(r);
+    days.set(day, entries);
+  }
 
   // Persistence broke (disk error) — without this the user reasonably assumes
   // their history survives a restart, and it won't.
@@ -133,64 +188,106 @@ export function RecentList({
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-4">
       {degradedNote}
-      <div className="text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
+      <h2 className="px-2 text-sm font-medium text-theme-text-secondary">
         Investigations
-      </div>
-      {runs.map((r) => {
-        const updatedAt = new Date(r.updatedAt).getTime();
-        const outcome = statusWord(r.status);
-
-        return (
-          <button
-            key={r.id}
-            onClick={() => onSelect(r.id)}
-            aria-current={r.id === selectedId ? "true" : undefined}
-            className={`flex w-full flex-col gap-1 rounded-md border px-2.5 py-2 text-left ${
-              r.id === selectedId
-                ? "border-accent/50 bg-accent/10"
-                : "border-theme-border/60 bg-theme-base/40 hover:bg-theme-hover"
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              {statusDot(r.status)}
-              <span className="min-w-0 flex-1 truncate text-sm font-medium text-theme-text-primary">
-                {formatInvestigationTarget(r)}
-              </span>
-              <time
-                dateTime={r.updatedAt}
-                className="shrink-0 text-[11px] tabular-nums text-theme-text-tertiary"
+      </h2>
+      {[...days].map(([day, entries]) => (
+        <section key={day} aria-label={day} className="space-y-1">
+          <h3 className="px-2 pb-1 text-xs font-medium text-theme-text-tertiary">
+            {day}
+          </h3>
+          {entries.map((r) => {
+            const { label, short, Icon, className } = historyStatuses[r.status];
+            const parsed = contexts.get(r.context)!;
+            const collision = contextsByName.get(parsed.clusterName)!.size > 1;
+            const peers = [...contextsByName.get(parsed.clusterName)!].filter(
+              (raw) => raw !== r.context,
+            );
+            const qualifier =
+              parsed.account &&
+              peers.every(
+                (raw) => contexts.get(raw)!.account !== parsed.account,
+              )
+                ? parsed.account
+                : parsed.account &&
+                    parsed.region &&
+                    peers.every((raw) => {
+                      const peer = contexts.get(raw)!;
+                      return (
+                        peer.account !== parsed.account ||
+                        peer.region !== parsed.region
+                      );
+                    })
+                  ? `${parsed.account} · ${parsed.region}`
+                  : r.context;
+            const readableKind = pluralToKind(r.kind);
+            const kind =
+              groupsByKind.get(readableKind)!.size > 1
+                ? `${readableKind} · ${r.group || "core"}`
+                : readableKind;
+            const identity = `${formatInvestigationTarget(r)} · ${r.context} · ${label} · Started ${new Date(r.createdAt).toLocaleString()}`;
+            return (
+              <Tooltip
+                key={r.id}
+                content={identity}
+                position="right"
+                wrapperClassName="!block w-full"
               >
-                {relativeTime(updatedAt, now)}
-              </time>
-            </div>
-            <div className="flex items-center gap-1.5 pl-3.5 text-[11px] leading-none text-theme-text-tertiary">
-              <span className={`font-medium ${outcome.cls}`}>
-                {outcome.text}
-              </span>
-              <span aria-hidden>·</span>
-              <time dateTime={r.updatedAt} className="tabular-nums">
-                {absoluteTime(updatedAt, now)}
-              </time>
-            </div>
-            {(r.status === "stale" && r.context) || r.preview ? (
-              <div className="line-clamp-2 pl-3.5 text-xs leading-snug text-theme-text-tertiary">
-                {/* A foreign-cluster run names its cluster — in mixed multi-
-                    context history, identical-looking rows otherwise give no
-                    way to tell WHICH cluster an investigation was about. */}
-                {r.status === "stale" && r.context ? (
-                  <span className="text-amber-600/80 dark:text-amber-500/80">
-                    {r.context}
+                <button
+                  onClick={() => onSelect(r.id)}
+                  aria-label={identity}
+                  aria-current={r.id === selectedId ? "true" : undefined}
+                  className={`flex w-full min-w-0 flex-col gap-0.5 rounded-md border-l-2 px-2 py-2 text-left focus-visible:outline-2 focus-visible:outline-accent ${
+                    r.id === selectedId
+                      ? "border-accent bg-accent-muted"
+                      : "border-transparent hover:bg-theme-hover"
+                  }`}
+                >
+                  <span className="flex w-full items-start gap-2">
+                    <span className="min-w-0 flex-1 line-clamp-2 break-words text-sm font-medium leading-5 text-theme-text-primary">
+                      {r.name}
+                    </span>
+                    <span
+                      aria-hidden="true"
+                      className={`flex shrink-0 items-center gap-1 text-xs leading-5 ${className}`}
+                    >
+                      <Icon
+                        className={`mt-0.5 h-3.5 w-3.5 ${r.status === "running" ? "animate-spin motion-reduce:animate-none" : r.status === "error" ? "text-semantic-error" : ""}`}
+                      />
+                      {short}
+                    </span>
                   </span>
-                ) : null}
-                {r.status === "stale" && r.context && r.preview ? " · " : ""}
-                {r.preview}
-              </div>
-            ) : null}
-          </button>
-        );
-      })}
+                  <span className="flex w-full items-baseline gap-2 text-xs leading-4 text-theme-text-secondary">
+                    <span className="min-w-0 flex-1 truncate">
+                      {r.namespace ? `${r.namespace} · ` : ""}
+                      {kind}
+                    </span>
+                    <time
+                      dateTime={r.createdAt}
+                      className="shrink-0 tabular-nums text-theme-text-tertiary"
+                    >
+                      {new Date(r.createdAt).toLocaleTimeString(undefined, {
+                        hour: "numeric",
+                        minute: "2-digit",
+                      })}
+                    </time>
+                  </span>
+                  <span className="w-full truncate text-xs leading-4 text-theme-text-tertiary">
+                    {parsed.clusterName}
+                  </span>
+                  {collision && qualifier !== parsed.clusterName && (
+                    <span className="w-full break-words text-xs leading-4 text-theme-text-secondary">
+                      {qualifier}
+                    </span>
+                  )}
+                </button>
+              </Tooltip>
+            );
+          })}
+        </section>
+      ))}
     </div>
   );
 }

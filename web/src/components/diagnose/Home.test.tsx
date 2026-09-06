@@ -4,7 +4,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RunSummary } from "../../api/diagnose";
 import { RecentList } from "./Home";
 
-const NOW = new Date("2026-09-02T14:30:00Z");
+const NOW = new Date(2026, 8, 2, 14, 30);
+const time = (day: number, hour: number) =>
+  new Date(2026, 8, day, hour).toISOString();
+const visible = (html: string) => html.replace(/<[^>]*>/g, "");
 
 function run(patch: Partial<RunSummary> = {}): RunSummary {
   return {
@@ -13,10 +16,10 @@ function run(patch: Partial<RunSummary> = {}): RunSummary {
     group: "apps",
     namespace: "shop",
     name: "checkout",
-    context: "nonprod",
+    context: "gke_project-one_us-east1-b_nonprod",
     status: "done",
-    createdAt: "2026-09-02T13:00:00Z",
-    updatedAt: "2026-09-02T14:00:00Z",
+    createdAt: time(2, 13),
+    updatedAt: time(2, 14),
     ...patch,
   };
 }
@@ -37,37 +40,35 @@ function render(runs: RunSummary[], selectedId?: string): string {
 afterEach(() => vi.useRealTimers());
 
 describe("RecentList", () => {
-  it("distinguishes repeated completed runs by age, exact time, and a readable finding preview", () => {
-    const recentTime = "2026-09-02T14:00:00Z";
-    const olderTime = "2026-09-01T14:00:00Z";
-    const recentPreview =
-      "The MONGO_PASSWORD secret is stale, so every newly started API pod fails authentication before it can become ready.";
-    const olderPreview =
-      "The workload references a deleted image tag, which leaves the replacement pod in ImagePullBackOff.";
+  it("uses one stable start time per run, sorted into local date groups without previews", () => {
+    const recentTime = time(2, 13);
+    const olderTime = time(1, 12);
     const html = render([
-      run({ id: "recent", updatedAt: recentTime, preview: recentPreview }),
-      run({ id: "older", updatedAt: olderTime, preview: olderPreview }),
+      run({ id: "older", name: "older", createdAt: olderTime }),
+      run({
+        id: "recent",
+        name: "recent",
+        createdAt: recentTime,
+        preview: "MONGO_PASSWORD **broken**",
+      }),
     ]);
-
-    expect(html.match(/Deployment\.apps shop\/checkout/g)).toHaveLength(2);
-    expect(html.match(/Completed/g)).toHaveLength(2);
-    expect(html).toContain("30m ago");
-    expect(html).toContain("1d ago");
-    expect(
-      html.match(new RegExp(`dateTime="${recentTime}"`, "g")),
-    ).toHaveLength(2);
-    expect(html.match(new RegExp(`dateTime="${olderTime}"`, "g"))).toHaveLength(
-      2,
+    expect(html.match(/<time /g)).toHaveLength(2);
+    expect(html).toContain(`dateTime="${recentTime}"`);
+    expect(html).toContain(`dateTime="${olderTime}"`);
+    expect(html).not.toContain(`dateTime="${time(2, 14)}"`);
+    expect(html).not.toContain("ago");
+    expect(html).not.toContain("MONGO_PASSWORD");
+    expect(html).toContain(">Today</h3>");
+    expect(html).toContain(">Yesterday</h3>");
+    expect(visible(html).indexOf("recent")).toBeLessThan(
+      visible(html).indexOf("older"),
     );
-    expect(html).toContain(recentPreview);
-    expect(html).toContain(olderPreview);
-    expect(html.match(/line-clamp-2/g)).toHaveLength(2);
-    expect(html).not.toContain('class="truncate pl-3.5 text-xs');
   });
 
   it("states every outcome in text and retains foreign-cluster identity", () => {
     const html = render([
       run({ id: "running", status: "running" }),
+      run({ id: "done", status: "done" }),
       run({ id: "failed", status: "error" }),
       run({ id: "stopped", status: "stopped" }),
       run({
@@ -80,7 +81,13 @@ describe("RecentList", () => {
     expect(html).toContain("Running");
     expect(html).toContain("Failed");
     expect(html).toContain("Stopped");
-    expect(html).toContain("Different cluster");
+    expect(html).not.toContain("Different cluster");
+    expect(html).toContain("Read-only investigation");
+    expect(html).toContain("Investigation failed");
+    expect(html).toContain("text-semantic-error");
+    expect(html).toContain("Completed");
+    expect(visible(html)).not.toContain("Completed");
+    expect(html).not.toContain("text-amber");
     expect(html).toContain("gke_prod-us-east1");
   });
 
@@ -88,6 +95,136 @@ describe("RecentList", () => {
     const html = render([run({ id: "selected" })], "selected");
 
     expect(html).toContain('aria-current="true"');
-    expect(html).toContain("border-accent/50");
+    expect(html).toContain("border-accent bg-accent-muted");
+  });
+
+  it("leads with resource name and keeps full identity accessible", () => {
+    const html = render([run()]);
+    const text = visible(html);
+    expect(text).toContain("shop · Deployment");
+    expect(text).toContain("nonprod");
+    expect(text).not.toContain("Deployment.apps");
+    expect(text).not.toContain("gke_");
+    expect(text.indexOf("checkout")).toBeLessThan(
+      text.indexOf("shop · Deployment"),
+    );
+    expect(html).toContain("Deployment.apps shop/checkout");
+  });
+
+  it("does not change displayed time when cluster-switch bookkeeping updates runs", () => {
+    const before = visible(render([run()]));
+    const after = visible(
+      render([run({ status: "stale", updatedAt: time(2, 16) })]),
+    );
+    expect(after).toBe(before);
+  });
+
+  it("disambiguates matching cluster names by project or region", () => {
+    const text = visible(
+      render([
+        run(),
+        run({ id: "two", context: "gke_project-two_us-east1-b_nonprod" }),
+      ]),
+    );
+    expect(text).toContain("project-one");
+    expect(text).toContain("project-two");
+    expect(text).not.toContain("gke_");
+    const regions = visible(
+      render([
+        run(),
+        run({ id: "two", context: "gke_project-one_us-west1-b_nonprod" }),
+      ]),
+    );
+    expect(regions).toContain("project-one · us-east1-b");
+    expect(regions).toContain("project-one · us-west1-b");
+  });
+
+  it("retains raw identity when parsed qualifiers still collide", () => {
+    const text = visible(
+      render([
+        run({ context: "clusterUser_rg_nonprod" }),
+        run({ id: "admin", context: "clusterAdmin_rg_nonprod" }),
+      ]),
+    );
+    expect(text).toContain("clusterUser_rg_nonprod");
+    expect(text).toContain("clusterAdmin_rg_nonprod");
+  });
+
+  it("qualifies ambiguous kinds and handles cluster-scoped resources", () => {
+    const text = visible(
+      render([
+        run({ kind: "Service", group: "" }),
+        run({ id: "knative", kind: "Service", group: "serving.knative.dev" }),
+        run({
+          id: "node",
+          kind: "Node",
+          group: "",
+          namespace: "",
+          name: "worker",
+        }),
+      ]),
+    );
+    expect(text).toContain("Service · core");
+    expect(text).toContain("Service · serving.knative.dev");
+    expect(text).toContain("worker");
+    expect(text).toContain("Node");
+    expect(text).not.toContain("shop · Node");
+  });
+
+  it("retains full long names and custom contexts", () => {
+    const name =
+      "a-very-long-workload-name-that-needs-two-lines-to-be-recognizable";
+    const html = render([run({ name, context: "my-custom-context" })]);
+    expect(html).toContain(name);
+    expect(html).toContain("line-clamp-2 break-words");
+    expect(visible(html)).toContain("my-custom-context");
+  });
+
+  it("uses Radar's readable kind labels and omits built-in group display noise", () => {
+    const text = visible(
+      render([run(), run({ id: "plural", kind: "deployments", group: "" })]),
+    );
+    expect(text.match(/shop · Deployment/g)).toHaveLength(2);
+    expect(text).not.toContain("Deployment · apps");
+    expect(text).not.toContain("Deployment · core");
+  });
+
+  it("does not duplicate an unparsed cluster name when it collides with a parsed name", () => {
+    const html = render([run(), run({ id: "alias", context: "nonprod" })]);
+    const aliasButton = html.match(
+      /<button[^>]*aria-label="[^"]* · nonprod ·[^>]*>[\s\S]*?<\/button>/,
+    )?.[0];
+    expect(aliasButton).toBeDefined();
+    expect(visible(aliasButton!).match(/nonprod/g)).toHaveLength(1);
+  });
+
+  it("distinguishes prior years and handles yesterday across month boundaries", () => {
+    expect(
+      visible(
+        render([run({ createdAt: new Date(2025, 8, 2, 9).toISOString() })]),
+      ),
+    ).toContain("2025");
+    vi.setSystemTime(new Date(2026, 8, 1, 0, 30));
+    const html = renderToStaticMarkup(
+      <RecentList
+        agentLabel="Codex"
+        runs={[run({ createdAt: new Date(2026, 7, 31, 23).toISOString() })]}
+        onSelect={() => {}}
+      />,
+    );
+    expect(html).toContain(">Yesterday</h3>");
+  });
+
+  it("retains empty-state guidance and persistence warnings", () => {
+    expect(visible(render([]))).toContain("No investigations yet");
+    const html = renderToStaticMarkup(
+      <RecentList
+        agentLabel="Codex"
+        runs={[]}
+        onSelect={() => {}}
+        historyDegraded
+      />,
+    );
+    expect(visible(html)).toContain("disk error");
   });
 });
