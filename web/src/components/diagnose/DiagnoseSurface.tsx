@@ -224,6 +224,13 @@ function VisibilityControl({
           Organization
         </Badge>
       </Tooltip>
+    ) : run.visibility === "private" ? (
+      <Tooltip content="Only you can view this investigation. Other organization members don’t have access." position="bottom">
+        <Badge severity="neutral" size="sm" className="shrink-0">
+          <Lock className="h-3 w-3" />
+          Private
+        </Badge>
+      </Tooltip>
     ) : null;
   }
   const shared = run.visibility === "organization";
@@ -277,6 +284,7 @@ function VisibilityControl({
         title="Share this investigation?"
         message="Everyone in your organization can read this entire investigation—including your questions and the logs and manifests Radar read—and can continue or stop it."
         confirmLabel="Share with organization"
+        showWarning={false}
         variant="warning"
         isLoading={busy}
       />
