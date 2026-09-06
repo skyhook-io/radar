@@ -1,247 +1,152 @@
 # CRD Integration Guide
 
-Step-by-step checklist for adding first-class support for a new CRD (Custom Resource Definition) to Radar. Follow this when adding integrations like Knative, Istio, Karpenter, etc.
-
-Study an existing integration that's similar to yours before starting. Good references:
-- **Simple (no collisions):** Karpenter, KEDA, Velero
-- **With topology:** FluxCD, ArgoCD
-- **With kind collisions:** Istio (Gateway), Knative (Service, Ingress, Certificate)
-
----
-
-## Pre-Implementation: Collision Check
-
-**Before writing any code**, check if your CRD kind names collide with core K8s kinds or other CRD integrations.
-
-Common collisions:
-| Kind | Core K8s | Other CRDs |
-|------|----------|------------|
-| Service | `v1` | Knative `serving.knative.dev` |
-| Ingress | `networking.k8s.io` | Knative `networking.internal.knative.dev` |
-| Gateway | `gateway.networking.k8s.io` | Istio `networking.istio.io` |
-| Certificate | cert-manager `cert-manager.io` | Knative `networking.internal.knative.dev` |
-| Configuration | — | Knative `serving.knative.dev` |
-| Route | — | Knative `serving.knative.dev`, OpenShift |
-| Broker | — | Knative `eventing.knative.dev` |
-| Channel | — | Knative `messaging.knative.dev` |
-| Backup | Velero `velero.io` | CloudNativePG `cnpg.io` |
-| Cluster | — | CAPI `cluster.x-k8s.io`, CloudNativePG `postgresql.cnpg.io` |
-| Machine | — | CAPI `cluster.x-k8s.io` |
-| MachineSet | — | CAPI `cluster.x-k8s.io` |
-
-If your kind collides, you need group-qualified handling throughout (marked with  below).
-
----
-
-## Checklist
-
-### 1. Backend: CRD Warmup
-
-**File:** `internal/k8s/dynamic_cache.go` — `WarmupCommonCRDs()`
-
-Add your CRD kinds to the warmup list so they're cached immediately on startup.
-
-- **No collision:** Add kind name to `commonCRDs` slice
-- ** Collision:** Add group-qualified warmup after the generic loop:
-  ```go
-  if gvr, ok := discovery.GetGVRWithGroup("Service", "serving.knative.dev"); ok {
-      gvrs = append(gvrs, gvr)
-      log.Printf("Warming up CRD: Service (serving.knative.dev)")
-  }
-  ```
-
-### 2. Backend: Topology Types
-
-**File:** `pkg/topology/types.go`
-
-Add `NodeKind` constants for each resource that will appear in topology:
-```go
-KindKnativeService NodeKind = "KnativeService"
-```
-
-- ** Collision:** Use a prefixed kind name (e.g., `KnativeService` not `Service`)
-
-### 3. Backend: Topology Builder
-
-**File:** `pkg/topology/builder.go` — `buildResourcesTopology()`
-
-Add a new section that:
-1. **Lists resources** from the dynamic cache (handle errors, don't discard with `_`)
-2. **Creates nodes** with health derived from `status.conditions`
-3. **Creates edges** between your resources and to/from core K8s resources
-4. **Adds kinds to `processedKinds`** to prevent duplicate generic CRD nodes
-
-Edge type semantics (choose carefully):
-| Edge Type | Meaning | Example |
-|-----------|---------|---------|
-| `EdgeManages` | Owner relationship | Deployment → ReplicaSet |
-| `EdgeExposes` | Network exposure (UI: "Services" group) | Service → Pod, Route → Revision |
-| `EdgeConfigures` | Configuration | ConfigMap → Deployment, DestinationRule → Service |
-| `EdgeUses` | Scaling relationship | HPA → Deployment |
-| `EdgeProtects` | Policy protection | PDB → Deployment |
-
-**Performance tip:** If you need the same resource list for both node creation and edge creation, store it in a slice during phase 1 and reuse in phase 2. Don't re-fetch.
-
-**File:** `pkg/topology/relationships.go`
-
-Add your kinds to `buildNodeID` and `normalizeKind` maps.
-- ** Collision:** Use a unique ID prefix (e.g., `knativeservice/`, `istiogateway/`)
-
-### 4. Frontend: Group Name Mapping
-
-**File:** `packages/k8s-ui/src/utils/api-resources.ts`
-
-Map API group to display group name:
-```typescript
-'serving.knative.dev': 'Knative',
-'eventing.knative.dev': 'Knative',
-```
-
-### 5. Frontend: Resource Utils
-
-**Create:** `packages/k8s-ui/src/components/resources/resource-utils-{integration}.ts`
-
-Status extraction functions. Most CRDs use the standard `status.conditions` pattern:
-```typescript
-export function getMyResourceStatus(data: any): { text: string; color: string } {
-  const conditions = data?.status?.conditions || []
-  const ready = conditions.find((c: any) => c.type === 'Ready')
-  // ...
-}
-```
-
-### 6. Frontend: Table Columns
-
-**File:** `packages/k8s-ui/src/components/resources/ResourcesView.tsx` — `KNOWN_COLUMNS`
-
-Add column definitions. The key is the **lowercase plural** of the kind.
-
-- ** Collision:** Add entry to `GROUP_QUALIFIED_COLUMN_KEYS`:
-  ```typescript
-  const GROUP_QUALIFIED_COLUMN_KEYS: Record<string, Record<string, string>> = {
-    services: { 'serving.knative.dev': 'knativeservices' },
-    ingresses: { 'networking.internal.knative.dev': 'knativeingresses' },
-  }
-  ```
-
-Also verify `normalizeKindToPlural()` handles your kind correctly (watch out for kinds ending in 's', 'sh', 'ch', 'x', 'z').
-
-### 7. Frontend: Cell Renderers
-
-**Create:** `packages/k8s-ui/src/components/resources/renderers/{integration}-cells.tsx`
-
-Cell components that render rich table cells (status badges, links, etc.).
-
-**File:** `packages/k8s-ui/src/components/resources/ResourcesView.tsx` — `CellContent` component
-
-Add cases for your kinds.
-- ** Collision:** Use `apiVersion` checks:
-  ```typescript
-  if (kind === 'services' && resource.apiVersion?.includes('serving.knative.dev')) {
-    return <KnativeServiceCell ... />
-  }
-  ```
-
-### 8. Frontend: Detail Renderers
-
-**Create:** `packages/k8s-ui/src/components/resources/renderers/{ResourceName}Renderer.tsx`
-
-Follow existing patterns: `AlertBanner` for problems, `Section` components, `PropertyList`, `ConditionsSection`.
-
-**File:** `packages/k8s-ui/src/components/resources/renderers/index.ts` — export new renderers
-
-**File:** `packages/k8s-ui/src/components/shared/ResourceRendererDispatch.tsx`
-
-Three wiring points (all must be updated):
-
-#### a. `KNOWN_KINDS` set
-Add your kinds so the dispatch shows the custom renderer instead of generic YAML.
-
-#### b. Render lines
-Add conditional render for each kind:
-```tsx
-{kind === 'nodepools' && <NodePoolRenderer data={data} />}
-```
-
-** COLLISION GUARD (critical):** If your kind collides with a core kind, you must ALSO guard the existing core renderer:
-```tsx
-// Guard core renderer — exclude when it's actually a Knative Service
-{kind === 'services' && !data?.apiVersion?.includes('serving.knative.dev') && <ServiceRenderer ... />}
-
-// Add Knative renderer with positive check
-{(kind === 'services' && data?.apiVersion?.includes('serving.knative.dev')) && <KnativeServiceRenderer ... />}
-```
-
-This applies to the renderer AND to any action buttons (e.g., Port Forward button should not show for KNative Services).
-
-#### c. `getResourceStatus()` function
-Add your status function. ** COLLISION GUARD:** Insert apiVersion check INSIDE the existing kind's block, BEFORE the core status function:
-```typescript
-if (k === 'services') {
-  if (data.apiVersion?.includes('serving.knative.dev')) {
-    return getKnativeServiceStatus(data)  // Must come first!
-  }
-  return getServiceStatus(data)  // Core fallback
-}
-```
-
-### 9. Frontend: Topology UI
-
-Update these files to support new topology node kinds:
-
-| File | What to Add |
-|------|-------------|
-| `packages/k8s-ui/src/types/core.ts` | Kind to `CoreNodeKind` type union + `displayKind` map |
-| `web/src/App.tsx` | Kind to `ALL_NODE_KINDS` array |
-| `packages/k8s-ui/src/utils/resource-icons.ts` | Icon mapping |
-| `packages/k8s-ui/src/utils/badge-colors.ts` | Badge CSS class |
-| `packages/k8s-ui/src/components/topology/TopologyFilterSidebar.tsx` | Filter sidebar entry |
-| `packages/k8s-ui/src/components/topology/K8sResourceNode.tsx` | Node dimensions |
-| `packages/k8s-ui/src/components/topology/layout.ts` | `kindPriority` entry |
-| `packages/k8s-ui/src/utils/resource-hierarchy.ts` | `appLabelEligibleKinds` (if groupable by app label) |
-| `packages/k8s-ui/src/components/topology/topology.css` | `.topology-icon-{kind}` CSS class with color |
-
-### 10. Documentation
-
-| File | What to Update |
-|------|----------------|
-| `docs/integrations.md` | Full integration section (follow existing pattern) |
-| `README.md` | Add to "Supported Resources" table |
-| `CLAUDE.md` | Update only when the integration adds a new architectural pattern or invariant |
-
-`radar-docs` splits `docs/integrations.md` at `##` headings. Maintainers must add matching `INTEGRATION_META` metadata and a `docs.json` navigation entry in the internal docs repo before syncing a new heading. For a rename, update the metadata key but keep its slug unchanged to preserve the published URL. An unmatched heading fails the sync, and the orphan sweep removes the old generated page.
-
----
-
-## Verification Checklist
-
-After implementation, verify:
-
-- [ ] `npm run tsc` — no TypeScript errors
-- [ ] `go test ./...` — no Go test failures
-- [ ] `make build` — full build succeeds
-- [ ] Resource table shows custom columns (not generic)
-- [ ] Detail drawer shows custom renderer (not generic YAML)
-- [ ] ** If collisions:** Core kind still renders correctly (e.g., core K8s Service still shows Ports/Selector, not KNative sections)
-- [ ] ** If collisions:** `getResourceStatus()` returns correct status for both core and CRD kinds
-- [ ] ** If collisions:** Action buttons (Port Forward, etc.) only show for appropriate kinds
-- [ ] Topology shows nodes with correct icons and edges
-- [ ] No regressions on existing resource types
-
----
-
-## Common Gotchas
-
-1. **Collision guards need THREE places:** renderer line, `getResourceStatus()`, AND action buttons. Missing any one causes bugs.
-
-2. **`normalizeKindToPlural`** doesn't handle all pluralization. Kinds ending in 's' (like "Ingress") need the `+'es'` path. Test with your kind names.
-
-3. **`processedKinds` exclusion** in builder.go prevents your resources from appearing twice (once as custom topology nodes, once as generic CRD nodes). If you add topology nodes, add the kind to `processedKinds`.
-
-4. **Dynamic cache errors** from `dynamicCache.List()` should be logged, not discarded with `_`. Silent failures are hard to debug.
-
-5. **Two-phase topology pattern:** Store resources in slices during node creation (phase 1), reuse during edge creation (phase 2). Don't call `dynamicCache.List()` twice for the same kind.
-
-6. **Edge type choice matters:** Edge types drive the "Related Resources" grouping in the detail drawer. `EdgeExposes` creates a "Services" group, `EdgeManages` creates "Children", `EdgeConfigures` creates "Configuration", etc. Choose semantically, not by code convenience.
-
-7. **CSS topology icon classes** must use the lowercase kind name: `.topology-icon-knativeservice`, not `.topology-icon-KnativeService`.
+Radar already discovers custom resources and provides generic details, status,
+MCP access and, for CRDs that declare them, Kubernetes printer columns. An
+integration adds useful interpretation and relationships—not just another kind
+in a list. This guide also applies to extension APIs such as OpenShift Routes;
+don't assume every discoverable resource has a CRD object.
+
+## Start with a useful slice
+
+State the operator question you want to answer and the resource kinds involved.
+Prefer existing tables, drawers, topology and Issues over a new dashboard. Not
+every integration needs custom behavior on every surface below.
+
+Search for existing support and helpers before adding code. KEDA is a useful
+resource-presentation example; Knative demonstrates kind collisions; CloudNativePG
+and Velero show controller-specific status and Issues. Borrow the relevant
+pattern, not an entire integration's scope.
+
+Ideally you already operate the tool and can test against a real controller. If
+you need a testing partner, say so before starting. Agree on the supported API
+versions and an independently useful first PR; presentation can ship before
+richer relationships, but status fixes must cover the surfaces they affect.
+
+## Identity and discovery
+
+- Identify resources by **API group + kind/plural**, using discovery for served
+  versions and namespace scope. Even an apparently unique kind may collide with
+  an integration Radar doesn't curate. Examples: `Route`, `Cluster`, `Backup`,
+  `Subscription` and `BGPPeer`.
+- For supported-resource startup watching and fallback discovery, update
+  `supportedCRDFallbacks` in [dynamic_cache.go](../internal/k8s/dynamic_cache.go).
+  Entries carry group, versions, plural, kind and scope; `WarmupCommonCRDs` consumes
+  this registry. Don't add a separate name-only warmup list. Fallback registration
+  probes access; an entry is not proof that the API is installed or readable.
+- Check the [Helm ClusterRole](../deploy/helm/radar/templates/clusterrole.yaml) and
+  [values](../deploy/helm/radar/values.yaml) for the new API group. Follow existing
+  per-group read-access toggles; don't rely on an opt-in wildcard or request write
+  permissions for a read-only integration. The chart coverage test checks groups,
+  not every resource/verb or rendered toggle combination.
+- Keep namespace filtering, per-user authorization and context-switch behavior
+  intact. Missing, not-yet-watched and forbidden are not interchangeable. If adding
+  a typed `ResourcePermissions` field, follow `capabilities_alignment_test.go` in
+  `internal/k8s/` and the frontend `OPTIONAL_RESOURCE_KINDS`; ordinary dynamic
+  resources do not each need a new permission field.
+
+## Choose the surfaces that add value
+
+Paths below are relative to the repository root. Shared presentation lives in
+`packages/k8s-ui`; host data fetching lives in `web`. Read [DESIGN.md](../DESIGN.md)
+for UI work and follow the existing wrapper pattern rather than fetching inside
+shared renderers.
+
+| Surface | Where to start | What to consider |
+| --- | --- | --- |
+| Resource grouping | `packages/k8s-ui/src/utils/api-resources.ts` | Human-readable API-group label; reuse existing mappings. |
+| Tables and status | `packages/k8s-ui/src/components/resources/ResourcesView.tsx`, `generic-status.ts`, `resource-utils-*.ts` | Add curated columns/status only when they improve the generic view. |
+| Detail drawer | `packages/k8s-ui/src/components/resources/renderers/`, its `index.ts`, and `components/shared/ResourceRendererDispatch.tsx` under `packages/k8s-ui/src/` | Register known kinds, renderer and status dispatch. Reuse sections, properties, conditions, links and problem banners. |
+| Topology / Related Resources | `pkg/topology/builder.go`, `relationships.go`, `pseudokinds.go`, `types.go` | Add evidence-backed relationships; see below before introducing node kinds. |
+| Issues | `internal/issues/source_conditions.go`, integration-specific `source_*.go`, `pkg/conditions/` | Inspect generic detection before adding a detector or suppressing it. |
+| MCP / AI context | `pkg/ai/context/summary_crd.go`, `detail.go`, `redact.go` | Check what existing resource tools return; enrich summaries rather than adding a tool per integration. |
+
+### Resource presentation
+
+**Claim only your exact API group.** Use an existing exact-group helper such as
+`isApiGroup` (currently in `resource-utils-cnpg.ts`), not substring `includes`.
+Check renderer dispatch, status, actions and table cells: an unrelated CRD with
+the same plural must retain its generic behavior, not receive your renderer or
+core-only actions. See `ResourceRendererDispatch.test.tsx` for collision fixtures.
+
+In `ResourcesView.tsx`, check `GROUP_QUALIFIED_COLUMN_KEYS`,
+`CURATED_COLUMN_GROUPS`, `getColumnsForKind` and plural normalization together.
+`hasCuratedColumns` controls the choice between curated and printer columns:
+**they are not merged**. Adding curated columns can remove useful vendor fields.
+Use existing printer-column evaluation; don't implement another JSONPath parser.
+
+### Status, Issues and MCP
+
+Derive meaning from the controller's documented API, not the spelling of a phase.
+Distinguish desired state from observations, unknown from false, and intentional
+pause/stop or reconciliation from failure. Consider observed generation and
+timestamps where the controller provides them; absence is not proof of health.
+
+UI status, Go Issues detection and MCP summaries have separate implementations;
+generic behavior is not identical across them. Test the same important states
+across the surfaces you change. Generic Issues primarily inspect false
+Ready-family conditions: nested conditions, negative-polarity conditions and
+phase-only APIs may need integration-specific handling. Check detector ownership
+and fallback suppression so a failure isn't duplicated—or an intentional state
+reintroduced by the generic pass. Don't suppress a whole API group when only
+some kinds are covered.
+
+Preserve reasons and useful references in summaries, not raw configuration dumps.
+Credentials can appear inside non-Secret resources (TLS keys, connector config,
+cloud-init). Verify redaction at the output paths you touch; don't assume a new
+curated summarizer or generic fallback is automatically safe. See [MCP docs](mcp.md).
+A new MCP tool is usually unnecessary; if justified, follow the catalog and test
+requirements in [the repository instructions](../CLAUDE.md).
+
+### Topology and relationships
+
+Use actual references, documented labels/selectors or controller-reported links.
+Do not infer ownership from matching names, turn historical references into live
+usage, or confuse configuration with observed traffic. Preserve group/namespace
+identity and handle unreadable or missing related objects honestly.
+
+Edge types affect Related Resources grouping: `EdgeManages` for ownership,
+`EdgeExposes` for exposure, `EdgeConfigures` for configuration, `EdgeUses` for
+scaling/usage relationships and `EdgeProtects` for protection. Follow a comparable
+existing relationship rather than choosing an edge for its visual appearance.
+
+Reuse lists between node and edge construction; handle cache errors. Check the
+generic CRD pass and `kindsHandledOutsideGenericCRDPass` for duplicates and foreign
+kind collisions. For pseudo-kinds, keep `KindForGVK`, node IDs and relationship
+normalization consistent; test navigation in both directions.
+
+When adding a topology node kind, check the frontend wiring as applicable:
+
+- `packages/k8s-ui/src/types/core.ts` (`CoreNodeKind`, `displayKind`) and
+  `web/src/App.tsx` (visibility defaults).
+- `packages/k8s-ui/src/utils/`: `resource-icons.ts`, `badge-colors.ts`,
+  `resource-hierarchy.ts` (application grouping only where meaningful).
+- `packages/k8s-ui/src/components/topology/`: `TopologyFilterSidebar.tsx`,
+  `K8sResourceNode.tsx`, `layout.ts`, `topology.css`.
+
+## Verify and hand off
+
+- Add fixtures for supported API shapes and meaningful states: healthy, failing,
+  intentionally inactive, stale/missing status, collisions and unavailable related
+  resources. Test only relevant combinations, not a speculative matrix.
+- Run `make tsc`, `make test` and `make build` for integration code changes. The
+  full build includes frontend embedding. Existing guards include
+  `internal/k8s/{dynamic_cache_fallback,chart_rbac_coverage,capabilities_alignment}_test.go`
+  and resource `curated-column-ownership.test.ts` / `ResourceRendererDispatch.test.tsx`.
+- Validate changed views against a real controller, including restricted access
+  where relevant. Record versions, screenshots and what was actually exercised;
+  distinguish real status from synthetic fixtures. Don't induce destructive
+  failures in a shared or production cluster for a test.
+- Update [integrations.md](integrations.md) with the surfaces actually supported
+  and [README.md](../README.md) as appropriate. No need to change `CLAUDE.md` unless
+  introducing an architectural pattern or invariant.
+
+Split larger contributions by useful outcome, not mechanically by backend versus
+frontend. Each PR should work, include its tests and state remaining scope. A
+drawer/status slice followed by relationship enrichment is often a good split;
+don't require every CRD in an ecosystem before the first slice can land.
+
+**Maintainer docs publishing:** `radar-docs` splits `integrations.md` at `##`
+headings. A new heading needs matching `INTEGRATION_META` and `docs.json` navigation
+in that internal repository before sync. On rename, retain the published slug;
+unmatched headings fail sync and the orphan sweep removes old generated pages.
+External contributors only need to flag the new/renamed section for maintainers.
