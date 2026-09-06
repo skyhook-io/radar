@@ -2370,7 +2370,6 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'clusterqueues') return _getClusterQueueStatus(resource).text
       if (kindLower === 'localqueues') return _getLocalQueueStatus(resource).text
       if (kindLower === 'workloads') return _getKueueWorkloadStatus(resource).text
-      if (kindLower === 'resourceflavors') return _getResourceFlavorStatus(resource).text
       if (kindLower === 'admissionchecks') return _getAdmissionCheckStatus(resource).text
       if (kindLower === 'provisioningrequests') return _getProvisioningRequestStatus(resource).text
       if (kindLower === 'rayclusters') return _getRayClusterStatus(resource).text
@@ -2390,7 +2389,6 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'volcanoqueues') return _getVolcanoQueueStatus(resource).text
       if (kindLower === 'volcanopodgroups') return _getVolcanoPodGroupStatus(resource).text
       if (kindLower === 'jobflows') return _getJobFlowStatus(resource).text
-      if (kindLower === 'jobtemplates') return _getJobTemplateStatus(resource).text
       if (kindLower === 'kaiqueues') return _getKaiQueueStatus(resource).text
       if (kindLower === 'kaipodgroups') return _getKaiPodGroupStatus(resource).text
       if (kindLower === 'kaitoworkspaces') return _getKaitoWorkspaceStatus(resource).text

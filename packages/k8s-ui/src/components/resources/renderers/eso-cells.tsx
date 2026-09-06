@@ -6,7 +6,6 @@ import {
   getExternalSecretStore,
   getExternalSecretRefreshInterval,
   getExternalSecretLastSync,
-  getExternalSecretProvider,
   getClusterExternalSecretStatus,
   getClusterExternalSecretNamespaceCount,
   getClusterExternalSecretFailedCount,
@@ -32,10 +31,6 @@ export function ExternalSecretCell({ resource, column }: { resource: any; column
           {store.name}
         </span>
       )
-    }
-    case 'provider': {
-      const provider = getExternalSecretProvider(resource)
-      return <span className="text-sm text-theme-text-secondary truncate block">{provider}</span>
     }
     case 'refreshInterval': {
       const interval = getExternalSecretRefreshInterval(resource)

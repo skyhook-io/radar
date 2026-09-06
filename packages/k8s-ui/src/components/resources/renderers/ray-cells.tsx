@@ -15,7 +15,6 @@ import {
   getRayServiceClusters,
   getRayCronJobStatus,
   getRayCronJobSchedule,
-  getRayCronJobSuspend,
   getRayCronJobLastSchedule,
 } from '../resource-utils-ray'
 
@@ -109,10 +108,6 @@ export function RayCronJobCell({ resource, column }: { resource: any; column: st
     case 'schedule': {
       const schedule = getRayCronJobSchedule(resource)
       return <span className="text-sm font-mono text-theme-text-secondary">{schedule}</span>
-    }
-    case 'suspend': {
-      const suspended = getRayCronJobSuspend(resource)
-      return <span className="text-sm text-theme-text-secondary">{suspended ? 'Yes' : 'No'}</span>
     }
     case 'lastSchedule': {
       const lastSchedule = getRayCronJobLastSchedule(resource)
