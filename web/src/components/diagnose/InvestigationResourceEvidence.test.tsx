@@ -117,6 +117,9 @@ describe("InvestigationResourceEvidence", () => {
     expect(html).toContain("API_TOKEN");
     expect(html).toContain("Synced=True");
     expect(html).toContain("SealedSecretSynced");
+    expect(html.indexOf("SealedSecret reconciled successfully")).toBeLessThan(
+      html.indexOf("Namespace-wide"),
+    );
     expect(html).not.toContain("AgA-ciphertext");
     expect(html).not.toContain("AgA-other");
     expect(html).toContain("Encrypted values stay hidden");

@@ -422,9 +422,9 @@ describe("ResultCard conclusion states", () => {
       <ResultCard diagnosis={value} section="actions" />,
     );
 
-    expect(conclusion).toContain("Likely cause");
+    expect(conclusion).toContain(value.rootCause);
     expect(conclusion).not.toContain("Remediation");
-    expect(actions).toContain("Remediation");
+    expect(actions).toContain(value.remediation![0]);
     expect(actions).not.toContain("Likely cause");
   });
 

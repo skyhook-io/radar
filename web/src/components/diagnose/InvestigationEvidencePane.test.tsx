@@ -160,9 +160,6 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     )}"`;
 
     expect(html).toContain("Evidence from cited results");
-    expect(html).toContain(
-      "Radar observations summarized from investigation results the agent cited.",
-    );
     expect(html).not.toContain("validated against this run");
     expect(html).not.toContain("Agent-selected check");
     expect(html).not.toContain("from this check below");

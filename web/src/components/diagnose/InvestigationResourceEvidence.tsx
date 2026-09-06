@@ -35,10 +35,10 @@ function ConfigMapEvidence({
   return (
     <div className="overflow-hidden rounded-md border border-theme-border bg-theme-base/40">
       <div className="flex items-center justify-between gap-3 border-b border-theme-border px-2.5 py-1.5">
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+        <span className="text-xs font-medium text-theme-text-tertiary">
           ConfigMap values
         </span>
-        <span className="text-[10px] tabular-nums text-theme-text-tertiary">
+        <span className="text-xs tabular-nums text-theme-text-tertiary">
           {entries.length} {entries.length === 1 ? "key" : "keys"}
         </span>
       </div>
@@ -57,11 +57,11 @@ function ConfigMapEvidence({
                 <tr key={`${entry.binary ? "binary" : "data"}-${entry.key}`}>
                   <th
                     scope="row"
-                    className="px-2.5 py-1.5 align-top font-mono text-[11px] font-medium text-theme-text-secondary"
+                    className="px-2.5 py-1.5 align-top font-mono text-xs font-medium text-theme-text-secondary"
                   >
                     <span className="block truncate">{entry.key}</span>
                   </th>
-                  <td className="px-2.5 py-1.5 align-top font-mono text-[11px] leading-relaxed text-theme-text-primary">
+                  <td className="px-2.5 py-1.5 align-top font-mono text-xs leading-relaxed text-theme-text-primary">
                     {entry.sensitive ? (
                       <span className="font-sans text-theme-text-tertiary">
                         Value hidden · potentially sensitive
@@ -87,7 +87,7 @@ function ConfigMapEvidence({
         </p>
       )}
       {omitted > 0 ? (
-        <p className="border-t border-theme-border px-2.5 py-1.5 text-[10px] text-theme-text-tertiary">
+        <p className="border-t border-theme-border px-2.5 py-1.5 text-xs text-theme-text-tertiary">
           {omitted} more {omitted === 1 ? "key" : "keys"} available in Activity
         </p>
       ) : null}
@@ -103,10 +103,10 @@ function SecretEvidence({
   return (
     <div className="rounded-md border border-theme-border bg-theme-base/40 px-2.5 py-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+        <span className="text-xs font-medium text-theme-text-tertiary">
           Secret keys
         </span>
-        <span className="text-[10px] text-theme-text-tertiary">
+        <span className="text-xs text-theme-text-tertiary">
           {model.secretType}
         </span>
       </div>
@@ -115,7 +115,7 @@ function SecretEvidence({
           {model.keys.map((key) => (
             <span
               key={key}
-              className="rounded border border-theme-border bg-theme-elevated/60 px-1.5 py-0.5 font-mono text-[10px] text-theme-text-secondary"
+              className="rounded border border-theme-border bg-theme-elevated/60 px-1.5 py-0.5 font-mono text-xs text-theme-text-secondary"
             >
               {key}
             </span>
@@ -126,7 +126,7 @@ function SecretEvidence({
           No Secret key names were found.
         </p>
       )}
-      <p className="mt-1.5 text-[10px] text-theme-text-tertiary">
+      <p className="mt-1.5 text-xs text-theme-text-tertiary">
         Secret values are never shown here.
       </p>
     </div>
@@ -141,7 +141,7 @@ function SealedSecretEvidence({
   return (
     <div className="overflow-hidden rounded-md border border-theme-border bg-theme-base/40">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-theme-border px-2.5 py-1.5">
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+        <span className="text-xs font-medium text-theme-text-tertiary">
           SealedSecret state
         </span>
         <span
@@ -156,7 +156,28 @@ function SealedSecretEvidence({
           {model.syncLabel}
         </span>
       </div>
-      <dl className="flex flex-wrap gap-x-5 gap-y-1 border-b border-theme-border px-2.5 py-1.5 text-[11px]">
+      {model.conditions.length > 0 ? (
+        <div className="px-2.5 py-2">
+          <div className="mb-1 text-xs font-medium text-theme-text-tertiary">
+            Conditions
+          </div>
+          <div className="space-y-1.5">
+            {model.conditions.map((condition) => (
+              <div
+                key={`${condition.type}-${condition.status}-${condition.reason ?? ""}`}
+                className="text-sm leading-relaxed text-theme-text-primary"
+              >
+                <span className="font-medium text-theme-text-primary">
+                  {condition.type}={condition.status}
+                </span>
+                {condition.reason ? ` · ${condition.reason}` : ""}
+                {condition.message ? ` — ${condition.message}` : ""}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      <dl className="flex flex-wrap gap-x-5 gap-y-1 border-b border-theme-border px-2.5 py-1.5 text-xs">
         <ResourceFact label="Scope" value={model.scope} />
         <ResourceFact
           label="Created"
@@ -170,7 +191,7 @@ function SealedSecretEvidence({
         />
       </dl>
       <div className="px-2.5 py-2">
-        <div className="text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+        <div className="text-xs font-medium text-theme-text-tertiary">
           Encrypted keys · {model.encryptedKeys.length}
         </div>
         {model.encryptedKeys.length > 0 ? (
@@ -178,7 +199,7 @@ function SealedSecretEvidence({
             {model.encryptedKeys.map((key) => (
               <span
                 key={key}
-                className="rounded border border-theme-border bg-theme-elevated/60 px-1.5 py-0.5 font-mono text-[10px] text-theme-text-secondary"
+                className="rounded border border-theme-border bg-theme-elevated/60 px-1.5 py-0.5 font-mono text-xs text-theme-text-secondary"
               >
                 {key}
               </span>
@@ -190,28 +211,7 @@ function SealedSecretEvidence({
           </p>
         )}
       </div>
-      {model.conditions.length > 0 ? (
-        <div className="border-t border-theme-border px-2.5 py-2">
-          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
-            Conditions
-          </div>
-          <div className="space-y-1.5">
-            {model.conditions.map((condition) => (
-              <div
-                key={`${condition.type}-${condition.status}-${condition.reason ?? ""}`}
-                className="text-[11px] leading-relaxed text-theme-text-secondary"
-              >
-                <span className="font-medium text-theme-text-primary">
-                  {condition.type}={condition.status}
-                </span>
-                {condition.reason ? ` · ${condition.reason}` : ""}
-                {condition.message ? ` — ${condition.message}` : ""}
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-      <p className="border-t border-theme-border px-2.5 py-1.5 text-[10px] text-theme-text-tertiary">
+      <p className="border-t border-theme-border px-2.5 py-1.5 text-xs text-theme-text-tertiary">
         Encrypted values stay hidden. Key names and controller status are shown.
       </p>
     </div>

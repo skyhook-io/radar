@@ -16,6 +16,8 @@ import {
   Copy,
   Check,
   Plus,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import { Tooltip } from "../ui/Tooltip";
 import {
@@ -339,6 +341,7 @@ export function DiagnoseSurface({
   onOpenResource?: (ref: DiagnosisResourceRef) => void;
 }) {
   const d = useDiagnose();
+  const [historyCollapsed, setHistoryCollapsed] = useState(false);
   // Injected settings action: undefined = Radar's own Settings dialog;
   // null = hide the gear + links.
   const { consentCopy, onOpenSettings: hostOpenSettings } =
@@ -522,14 +525,14 @@ export function DiagnoseSurface({
     </>
   );
 
-  // Docked detail always has a breadcrumb. Maximized detail uses it only while
-  // the master list is hidden (<1500px), then swaps back to the master list.
+  // Detail keeps a breadcrumb whenever history is hidden, either by its
+  // responsive breakpoint or the user's focus toggle.
   const showBreadcrumb = d.view !== "home";
-  const breadcrumbVisibilityClass =
-    investigationBreadcrumbVisibilityClass(maximized);
-  // Maximized mode mounts the recent-investigations master pane; its container
-  // breakpoint hides it when there is not enough room for master + detail.
-  const showHistory = maximized;
+  const breadcrumbVisibilityClass = investigationBreadcrumbVisibilityClass(
+    maximized && !historyCollapsed,
+  );
+  // Keep history mounted while maximized so toggling it preserves list scroll.
+  const showHistory = maximized && (!setupPending || d.runs.length > 0);
 
   return (
     <div
@@ -557,8 +560,37 @@ export function DiagnoseSurface({
           {!showBreadcrumb && (
             <Sparkles className="h-4 w-4 shrink-0 text-accent" />
           )}
-          {showBreadcrumb && maximized && (
+          {showBreadcrumb && maximized && !historyCollapsed && (
             <Sparkles className="hidden h-4 w-4 shrink-0 text-accent @min-[1500px]/diagnose-surface:block" />
+          )}
+          {showHistory && d.view !== "home" && (
+            <Tooltip
+              content={
+                historyCollapsed
+                  ? "Show investigation history"
+                  : "Hide investigation history"
+              }
+              position="bottom"
+            >
+              <button
+                type="button"
+                aria-label={
+                  historyCollapsed
+                    ? "Show investigation history"
+                    : "Hide investigation history"
+                }
+                aria-expanded={!historyCollapsed}
+                aria-controls="investigation-history"
+                onClick={() => setHistoryCollapsed((value) => !value)}
+                className={`${MAXIMIZED_HISTORY_VISIBILITY_CLASS} rounded-md p-1.5 text-theme-text-secondary hover:bg-theme-hover`}
+              >
+                {historyCollapsed ? (
+                  <PanelLeftOpen className="h-4 w-4" />
+                ) : (
+                  <PanelLeftClose className="h-4 w-4" />
+                )}
+              </button>
+            </Tooltip>
           )}
           <div className="min-w-0 flex-1">
             {showBreadcrumb && (
@@ -650,10 +682,11 @@ export function DiagnoseSurface({
           only appears when expanded; keys keep the detail node identity-stable
           as it comes and goes. */}
       <div className="flex min-h-0 flex-1">
-        {showHistory && (!setupPending || d.runs.length > 0) && (
+        {showHistory && (
           <aside
             key="recent"
-            className={`${MAXIMIZED_HISTORY_VISIBILITY_CLASS} w-72 shrink-0 overflow-y-auto border-r border-theme-border px-3 py-3`}
+            id="investigation-history"
+            className={`${historyCollapsed && d.view !== "home" ? "hidden" : MAXIMIZED_HISTORY_VISIBILITY_CLASS} w-72 shrink-0 overflow-y-auto border-r border-theme-border px-3 py-3`}
           >
             <RecentList
               agentLabel={d.agentLabel}

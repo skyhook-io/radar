@@ -588,9 +588,7 @@ export function InvestigationView({
   const evidenceCardLayoutRef = useRef(
     new Map<string, { top: number; height: number }>(),
   );
-  const latestEvidenceUpdateSourceIdRef = useRef<string | undefined>(
-    undefined,
-  );
+  const latestEvidenceUpdateSourceIdRef = useRef<string | undefined>(undefined);
   const evidenceProjectionTurnsRef = useRef<readonly Turn[]>([]);
   // Replay is accumulated off-screen and committed once at its boundary. This
   // avoids painting a saved transcript turn-by-turn on initial load or reconnect.
@@ -2028,12 +2026,12 @@ export function InvestigationView({
                 <>
                   <section
                     aria-labelledby={`${workspaceId}-assessment-heading`}
-                    className="rounded-lg border border-theme-border/70 bg-theme-elevated/40 p-3"
+                    className="border-b border-theme-border pb-5"
                   >
                     <div className="flex flex-wrap items-center gap-1.5">
                       <h2
                         id={`${workspaceId}-assessment-heading`}
-                        className="text-sm font-semibold text-theme-text-primary"
+                        className="text-base font-semibold text-theme-text-primary"
                       >
                         {assessmentNeedsCurrentStateVerification
                           ? "Assessment before apply"
@@ -2049,9 +2047,9 @@ export function InvestigationView({
                                   ? "Initial assessment"
                                   : "Assessment"}
                       </h2>
-                      <Badge severity="neutral" size="sm">
+                      <span className="text-xs text-theme-text-tertiary">
                         AI assessment
-                      </Badge>
+                      </span>
                       {assessmentNeedsCurrentStateVerification ? (
                         <Badge severity="warning" size="sm">
                           Current state unverified
@@ -2159,14 +2157,10 @@ export function InvestigationView({
                         <section aria-labelledby={`${workspaceId}-next-steps`}>
                           <h2
                             id={`${workspaceId}-next-steps`}
-                            className="text-sm font-semibold text-theme-text-primary"
+                            className="text-base font-semibold text-theme-text-primary"
                           >
                             Next steps
                           </h2>
-                          <p className="mt-0.5 text-xs text-theme-text-tertiary">
-                            Actions proposed by the agent from the assessment
-                            above.
-                          </p>
                           <ResultCard
                             diagnosis={currentAssessment.diagnosis}
                             section="actions"

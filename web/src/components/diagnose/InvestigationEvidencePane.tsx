@@ -455,24 +455,19 @@ export function InvestigationEvidencePane({
           <div className="flex items-center gap-2">
             <h2
               id="investigation-radar-evidence"
-              className="text-sm font-semibold text-theme-text-primary"
+              className="text-base font-semibold text-theme-text-primary"
             >
               {hasStructuredCitedEvidence
                 ? "Evidence from cited results"
                 : "Radar evidence"}
             </h2>
             {collecting ? (
-              <span className="inline-flex items-center gap-1.5 text-[11px] text-accent-text">
+              <span className="inline-flex items-center gap-1.5 text-xs text-accent-text">
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
                 collecting
               </span>
             ) : null}
           </div>
-          <p className="mt-0.5 text-xs leading-relaxed text-theme-text-tertiary">
-            {hasStructuredCitedEvidence
-              ? "Radar observations summarized from investigation results the agent cited."
-              : "Radar observations collected during this investigation."}
-          </p>
         </div>
       </div>
 
@@ -489,12 +484,9 @@ export function InvestigationEvidencePane({
 
         {hasStructuredCitedEvidence && ordinaryGroups.length > 0 ? (
           <div className="border-t border-theme-border/60 pt-3">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-theme-text-secondary">
+            <h3 className="text-sm font-medium text-theme-text-secondary">
               Additional Radar observations
             </h3>
-            <p className="mt-0.5 text-[11px] leading-relaxed text-theme-text-tertiary">
-              Additional signals Radar captured during this investigation.
-            </p>
           </div>
         ) : null}
 
@@ -502,7 +494,6 @@ export function InvestigationEvidencePane({
           headingId="investigation-key-evidence-heading"
           tier="key"
           title="Critical signals"
-          description="High-severity failures Radar observed."
           groups={visibleKeyGroups}
           animateGroupIds={animateGroupIds}
           onViewSource={onViewSource}
@@ -543,7 +534,6 @@ export function InvestigationEvidencePane({
           headingId="investigation-supporting-evidence-heading"
           tier="supporting"
           title="Related evidence"
-          description="Target-related state and signals to consider when validating the assessment."
           groups={visibleSupportingGroups}
           animateGroupIds={animateGroupIds}
           onViewSource={onViewSource}
@@ -623,7 +613,7 @@ function RootCauseEvidenceLinks({
               ? "Assessment references could not be matched"
               : "Assessment does not cite specific Radar evidence"}
           </p>
-          <p className="mt-0.5 text-[11px] leading-relaxed text-theme-text-tertiary">
+          <p className="mt-0.5 text-xs leading-relaxed text-theme-text-tertiary">
             {resolution.status === "invalid"
               ? "Radar could not match the assessment’s references to this investigation. Review Activity before acting."
               : "Review Activity and the Radar evidence below before acting on the agent’s conclusion."}
@@ -632,7 +622,7 @@ function RootCauseEvidenceLinks({
         <button
           type="button"
           onClick={onViewActivity}
-          className="shrink-0 rounded-md px-2 py-1 text-[11px] font-medium text-accent-text hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+          className="shrink-0 rounded-md px-2 py-1 text-xs font-medium text-accent-text hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
         >
           View Activity
         </button>
@@ -663,7 +653,7 @@ function RootCauseEvidenceLinks({
         />
       ))}
       {activityOnlyLinks.length > 0 ? (
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-0.5 py-1 text-[11px] text-theme-text-tertiary">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-0.5 py-1 text-xs text-theme-text-tertiary">
           <Activity className="h-3.5 w-3.5 shrink-0" aria-hidden />
           <span>
             {structuredLinks.length > 0
@@ -781,11 +771,11 @@ function CollapsedEvidenceCollection({
           <span className="block text-xs font-semibold text-theme-text-secondary">
             {title}
           </span>
-          <span className="block truncate text-[11px] text-theme-text-tertiary">
+          <span className="block truncate text-xs text-theme-text-tertiary">
             {description}
           </span>
         </span>
-        <span className="shrink-0 font-mono text-[11px] text-theme-text-tertiary">
+        <span className="shrink-0 font-mono text-xs text-theme-text-tertiary">
           {groups.length}
         </span>
         <CollapseChevron open={open} className="h-4 w-4" />
@@ -867,7 +857,7 @@ function CoverageStrip({
           <span className="block text-xs font-semibold text-theme-text-primary">
             Evidence coverage is incomplete
           </span>
-          <span className="block truncate text-[11px] text-theme-text-tertiary">
+          <span className="block truncate text-xs text-theme-text-tertiary">
             {pluralize(coverage.limited, "investigation result")}{" "}
             {coverage.limited === 1 ? "needs" : "need"} review
           </span>
@@ -947,7 +937,6 @@ function EvidenceTier({
   headingId,
   tier,
   title,
-  description,
   groups,
   expandFirst = true,
   animateGroupIds,
@@ -956,7 +945,6 @@ function EvidenceTier({
   headingId: string;
   tier: Exclude<InvestigationEvidenceTier, "checked">;
   title: string;
-  description?: string;
   groups: InvestigationEvidenceGroup[];
   expandFirst?: boolean;
   animateGroupIds: ReadonlySet<string>;
@@ -975,17 +963,12 @@ function EvidenceTier({
         <div className="min-w-0">
           <h3
             id={headingId}
-            className="text-xs font-semibold uppercase tracking-wide text-theme-text-secondary"
+            className="text-sm font-medium text-theme-text-secondary"
           >
             {title}
           </h3>
-          {description ? (
-            <p className="mt-0.5 text-[11px] leading-relaxed text-theme-text-tertiary">
-              {description}
-            </p>
-          ) : null}
         </div>
-        <span className="font-mono text-[11px] text-theme-text-tertiary">
+        <span className="font-mono text-xs text-theme-text-tertiary">
           {groups.length}
         </span>
       </div>
@@ -1095,12 +1078,7 @@ function EvidenceCard({
       <EvidenceIcon observation={observation} prominence={prominence} />
       <span className="min-w-0 flex-1">
         <span className="flex flex-wrap items-center gap-1.5">
-          <span
-            className={clsx(
-              "font-semibold leading-snug text-theme-text-primary",
-              prominence === "primary" ? "text-sm" : "text-[13px]",
-            )}
-          >
+          <span className="text-sm font-semibold leading-snug text-theme-text-primary">
             {observation.title}
           </span>
           {observation.changedFromPrevious ? (
@@ -1116,8 +1094,7 @@ function EvidenceCard({
         {observation.summary ? (
           <span
             className={clsx(
-              "mt-0.5 block leading-relaxed text-theme-text-secondary",
-              prominence === "primary" ? "text-xs" : "text-[11px]",
+              "mt-0.5 block text-xs leading-relaxed text-theme-text-secondary",
               !open && "line-clamp-2",
             )}
           >
@@ -1125,7 +1102,7 @@ function EvidenceCard({
           </span>
         ) : null}
         {metadata.length > 0 ? (
-          <span className="mt-1 block text-[10px] leading-snug text-theme-text-tertiary">
+          <span className="mt-1 block text-xs leading-snug text-theme-text-tertiary">
             {metadata.join(" · ")}
           </span>
         ) : null}
@@ -1143,8 +1120,10 @@ function EvidenceCard({
       tabIndex={-1}
       aria-label={`${observation.title} evidence`}
       className={clsx(
-        "@container/card scroll-mt-14 overflow-hidden rounded-lg border outline-none focus:ring-2 focus:ring-accent/50",
-        prominence === "secondary" ? "bg-theme-base/20" : "bg-theme-surface",
+        "@container/card scroll-mt-14 overflow-hidden outline-none focus:ring-2 focus:ring-accent/50",
+        prominence === "primary"
+          ? "rounded-lg border bg-theme-surface"
+          : "border-b border-theme-border/60",
         toneBorder(observation.tone, observation.tier, prominence),
         wide && "@min-[760px]/evidence:col-span-2",
         animateArrival && "animate-transcript-enter",
@@ -1190,19 +1169,8 @@ function EvidenceCard({
             {headerContent}
           </div>
         )}
-        <div className="hidden shrink-0 items-center gap-0.5 border-l border-theme-border/60 px-1 @min-[560px]/card:flex">
-          <SourceButton
-            label={observation.source.tool}
-            ariaLabel={`View Activity source for ${observation.title}`}
-            onClick={() => onViewSource(observation.source.id)}
-          />
-          <OpenResourceButton
-            resourceRef={resourceRef}
-            onOpenResource={onOpenResource}
-          />
-        </div>
       </div>
-      <div className="flex items-center justify-end gap-0.5 border-t border-theme-border/60 px-1 py-0.5 @min-[560px]/card:hidden">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 pb-2 pl-11">
         <SourceButton
           label={observation.source.tool}
           ariaLabel={`View Activity source for ${observation.title}`}
@@ -1267,7 +1235,7 @@ function OpenResourceButton({
         onClick={() => onOpenResource(resourceRef)}
         className={clsx(
           "flex h-7 shrink-0 items-center justify-center rounded text-theme-text-tertiary transition-colors hover:bg-theme-hover hover:text-accent-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
-          "gap-1 px-2 text-[11px] font-medium",
+          "gap-1 px-2 text-xs font-medium",
         )}
       >
         <span>Open current {displayKind(resourceRef.kind)}</span>
@@ -1292,11 +1260,11 @@ function CheckedReceipts({
       <div className="mb-2 flex items-center justify-between gap-2">
         <h3
           id="investigation-checked-heading"
-          className="text-xs font-semibold uppercase tracking-wide text-theme-text-secondary"
+          className="text-sm font-medium text-theme-text-secondary"
         >
           What Radar did not find
         </h3>
-        <span className="font-mono text-[11px] text-theme-text-tertiary">
+        <span className="font-mono text-xs text-theme-text-tertiary">
           {groups.length}
         </span>
       </div>
@@ -1324,14 +1292,14 @@ function CheckedReceipts({
                 />
               ))}
               <CheckCircle2
-                className="h-4 w-4 shrink-0 text-emerald-500"
+                className="h-4 w-4 shrink-0 text-theme-text-tertiary"
                 aria-hidden
               />
               <span className="min-w-0 flex-1">
                 <span className="block text-xs font-medium text-theme-text-primary">
                   {item.title}
                 </span>
-                <span className="block truncate text-[11px] text-theme-text-tertiary">
+                <span className="block truncate text-xs text-theme-text-tertiary">
                   {item.summary}
                 </span>
               </span>
@@ -1585,7 +1553,7 @@ function ResourceBody({ data }: { data: EvidenceDataOf<"resource"> }) {
               style={{ width: `${percentage}%` }}
             />
           </div>
-          <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px] @min-[560px]/evidence:grid-cols-4">
+          <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs @min-[560px]/evidence:grid-cols-4">
             <ResourceFact label="Available" value={replicas?.available} />
             <ResourceFact label="Updated" value={replicas?.updated} />
             <ResourceFact label="Unavailable" value={replicas?.unavailable} />
@@ -1598,7 +1566,7 @@ function ResourceBody({ data }: { data: EvidenceDataOf<"resource"> }) {
       ) : null}
       {conditions.length > 0 ? (
         <div>
-          <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+          <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-theme-text-tertiary">
             Conditions
           </div>
           <div className="max-h-52 space-y-1.5 overflow-y-auto pr-1">
@@ -1651,7 +1619,7 @@ function GitOpsStatusBody({
   return (
     <div className="rounded-md border border-theme-border bg-theme-base/40 p-2.5">
       <div className="mb-2 flex flex-wrap items-center gap-1.5">
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+        <span className="text-xs font-semibold uppercase tracking-wide text-theme-text-tertiary">
           GitOps controller status
         </span>
         <Badge tone="note" size="sm">
@@ -1759,7 +1727,7 @@ function LogsBody({ data }: { data: EvidenceDataOf<"logs"> }) {
           </Badge>
         ) : null}
         {data.logs ? (
-          <span className="text-[11px] text-theme-text-tertiary">
+          <span className="text-xs text-theme-text-tertiary">
             {data.logs.matchedLines} matching lines · {data.logs.totalLines}{" "}
             reviewed
           </span>
@@ -1795,7 +1763,7 @@ function LogsBody({ data }: { data: EvidenceDataOf<"logs"> }) {
 function EventsBody({ data }: { data: EvidenceDataOf<"events"> }) {
   return (
     <div>
-      <p className="mb-2 text-[11px] text-theme-text-tertiary">{data.scope}</p>
+      <p className="mb-2 text-xs text-theme-text-tertiary">{data.scope}</p>
       <ol className="max-h-[28rem] space-y-0 overflow-y-auto pr-1">
         {data.events.map((event, index) => (
           <li
@@ -1819,7 +1787,7 @@ function EventsBody({ data }: { data: EvidenceDataOf<"events"> }) {
                 >
                   <time
                     dateTime={event.lastTimestamp}
-                    className="text-[11px] text-theme-text-tertiary"
+                    className="text-xs text-theme-text-tertiary"
                   >
                     {formatRelativeAgeTime(event.lastTimestamp)}
                   </time>
@@ -1861,7 +1829,7 @@ function ChangesBody({ data }: { data: EvidenceDataOf<"changes"> }) {
             <Badge tone="structural" size="sm">
               {change.kind}
             </Badge>
-            <span className="font-mono text-[11px]">
+            <span className="font-mono text-xs">
               <ResourceLink
                 name={change.name}
                 kind={change.kind}
@@ -1890,7 +1858,7 @@ function ChangesBody({ data }: { data: EvidenceDataOf<"changes"> }) {
             >
               <time
                 dateTime={change.timestamp}
-                className="text-[11px] text-theme-text-tertiary"
+                className="text-xs text-theme-text-tertiary"
               >
                 {formatRelativeAgeTime(change.timestamp)}
               </time>
@@ -1942,7 +1910,7 @@ function DNSBody({ data }: { data: EvidenceDataOf<"dns"> }) {
             <Badge tone="structural" size="sm">
               {finding.kind}
             </Badge>
-            <span className="font-mono text-[11px]">
+            <span className="font-mono text-xs">
               <ResourceLink
                 name={finding.name}
                 kind={finding.kind}
@@ -1990,7 +1958,7 @@ function NetworkBody({ data }: { data: EvidenceDataOf<"network"> }) {
             <div className="font-mono text-sm font-semibold text-theme-text-primary">
               {value}
             </div>
-            <div className="text-[10px] uppercase tracking-wide text-theme-text-tertiary">
+            <div className="text-xs uppercase tracking-wide text-theme-text-tertiary">
               {label}
             </div>
           </div>
@@ -2029,7 +1997,7 @@ function NetworkBody({ data }: { data: EvidenceDataOf<"network"> }) {
                   {route.target ? ` → ${route.target}` : ""}
                 </span>
                 {route.evidence ? (
-                  <span className="mt-0.5 block text-[11px] leading-relaxed text-theme-text-secondary">
+                  <span className="mt-0.5 block text-xs leading-relaxed text-theme-text-secondary">
                     {route.evidence}
                   </span>
                 ) : null}
@@ -2093,7 +2061,7 @@ function RelationshipsBody({
           {data.root.namespace ? `${data.root.namespace}/` : ""}
           {data.root.name}
         </span>
-        <span className="text-[11px] text-theme-text-tertiary">
+        <span className="text-xs text-theme-text-tertiary">
           {data.nodes.length} resources · {data.edges.length} direct
           relationships
         </span>
@@ -2103,7 +2071,7 @@ function RelationshipsBody({
           {data.nodes.map((node) => (
             <span
               key={node.id}
-              className="inline-flex items-center gap-1 rounded-md border border-theme-border bg-theme-base px-2 py-1 text-[11px]"
+              className="inline-flex items-center gap-1 rounded-md border border-theme-border bg-theme-base px-2 py-1 text-xs"
             >
               <Badge tone="structural" size="sm">
                 {node.kind}
@@ -2122,7 +2090,7 @@ function RelationshipsBody({
               key={
                 edge.id ?? `${edge.source}-${edge.target}-${edge.type}-${index}`
               }
-              className="flex min-w-0 items-center gap-1.5 rounded bg-theme-base/50 px-2 py-1.5 font-mono text-[11px] text-theme-text-secondary"
+              className="flex min-w-0 items-center gap-1.5 rounded bg-theme-base/50 px-2 py-1.5 font-mono text-xs text-theme-text-secondary"
             >
               <span className="truncate">{edge.source}</span>
               <span className="shrink-0 text-theme-text-tertiary">→</span>
@@ -2157,10 +2125,10 @@ function TopologyBody({ data }: { data: EvidenceDataOf<"topology"> }) {
       <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
         {data.namespaces.map((namespace) => (
           <div key={namespace.namespace}>
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+            <div className="text-xs font-semibold uppercase tracking-wide text-theme-text-tertiary">
               {namespace.namespace || "cluster-scoped"}
             </div>
-            <ul className="mt-1 space-y-1 font-mono text-[11px] text-theme-text-secondary">
+            <ul className="mt-1 space-y-1 font-mono text-xs text-theme-text-secondary">
               {namespace.chains.map((chain) => (
                 <li key={chain}>{chain}</li>
               ))}
@@ -2183,7 +2151,7 @@ function TopologyStat({ label, value }: { label: string; value: number }) {
       <div className="font-mono text-lg font-semibold text-theme-text-primary">
         {value}
       </div>
-      <div className="text-[10px] uppercase tracking-wide text-theme-text-tertiary">
+      <div className="text-xs uppercase tracking-wide text-theme-text-tertiary">
         {label}
       </div>
     </div>
@@ -2214,13 +2182,13 @@ function InventoryBody({ data }: { data: EvidenceDataOf<"inventory"> }) {
               {resource.name}
             </span>
             {resource.issue ? (
-              <span className="block truncate text-[11px] text-warning-text">
+              <span className="block truncate text-xs text-warning-text">
                 {resource.issue}
               </span>
             ) : null}
           </span>
           {resource.ready || resource.status ? (
-            <span className="ml-auto shrink-0 font-mono text-[11px] text-theme-text-tertiary">
+            <span className="ml-auto shrink-0 font-mono text-xs text-theme-text-tertiary">
               {resource.ready || resource.status}
             </span>
           ) : null}
@@ -2252,7 +2220,7 @@ function RevisionHistory({
   if (otherObservations.length === 0) return null;
   return (
     <div className="border-t border-theme-border/60 pt-2">
-      <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+      <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-theme-text-tertiary">
         <FileClock className="h-3.5 w-3.5" aria-hidden />
         Observation history
       </div>
@@ -2260,7 +2228,7 @@ function RevisionHistory({
         {otherObservations.map((observation) => (
           <li
             key={`${observation.source.id}-${observation.revision}`}
-            className="flex min-w-0 items-start gap-2 text-[11px]"
+            className="flex min-w-0 items-start gap-2 text-xs"
           >
             <span className="mt-0.5 shrink-0 text-theme-text-tertiary">
               <span className="font-medium text-theme-text-secondary">
@@ -2303,7 +2271,7 @@ function EvidenceCaveat({ data }: { data: InvestigationEvidenceData }) {
   }
   if (!text) return null;
   return (
-    <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-theme-text-tertiary">
+    <p className="flex items-start gap-1.5 text-xs leading-relaxed text-theme-text-tertiary">
       <Info className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
       {text}
     </p>
@@ -2321,11 +2289,8 @@ function EvidenceIcon({
   return (
     <span
       className={clsx(
-        "flex shrink-0 items-center justify-center rounded-md bg-theme-elevated",
+        "flex shrink-0 items-center justify-center text-theme-text-tertiary",
         prominence === "primary" ? "h-7 w-7" : "h-6 w-6",
-        observation.tier === "key"
-          ? "text-theme-text-secondary"
-          : toneText(observation.tone),
       )}
     >
       <Icon
@@ -2361,7 +2326,7 @@ function SourceButton({
         onClick={onClick}
         className={clsx(
           "flex h-7 shrink-0 items-center justify-center rounded-md text-theme-text-tertiary hover:bg-theme-hover hover:text-accent-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50",
-          "gap-1 px-2 text-[11px] font-medium",
+          "gap-1 px-2 text-xs font-medium",
         )}
       >
         <Activity className="h-3.5 w-3.5" aria-hidden />
@@ -2426,20 +2391,13 @@ function phaseLabel(
   }
 }
 
-function toneText(tone: InvestigationEvidenceObservation["tone"]): string {
-  if (tone === "error") return "text-red-400";
-  if (tone === "alert") return "text-orange-400";
-  if (tone === "warning") return "text-amber-500";
-  if (tone === "info") return "text-accent-text";
-  return "text-theme-text-tertiary";
-}
-
 function toneBorder(
   tone: InvestigationEvidenceObservation["tone"],
   tier: InvestigationEvidenceTier,
   prominence: "primary" | "supporting" | "secondary",
 ): string {
-  if (tier !== "key" || prominence !== "primary") return "border-theme-border";
+  if (prominence !== "primary") return "";
+  if (tier !== "key") return "border-theme-border";
   if (tone === "error")
     return "border-l-[3px] border-l-red-500 border-theme-border";
   if (tone === "alert")

@@ -1767,28 +1767,38 @@ function DiagnosisResult({
     <div className={`mt-3 space-y-2 ${animate ? "animate-result-in" : ""}`}>
       {/* Likely cause — agent-authored, visually prominent without claiming proof. */}
       {showConclusion && rootCause && (
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
-          <div className="mb-1 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-amber-500">
-              <AlertTriangle className="h-3.5 w-3.5" />
-              Likely cause
-            </div>
+        <div
+          className={
+            section === "conclusion"
+              ? "grid max-w-[70ch] grid-cols-[minmax(0,1fr)_auto] items-start gap-2"
+              : "rounded-lg border border-theme-border bg-theme-surface p-3"
+          }
+        >
+          <div
+            className={
+              section === "conclusion"
+                ? "col-start-2 row-start-1"
+                : "mb-1 flex items-center justify-between gap-2"
+            }
+          >
+            {section !== "conclusion" && (
+              <div className="text-xs font-medium text-theme-text-secondary">
+                Likely cause
+              </div>
+            )}
             <div className="flex items-center gap-2">
-              {diagnosis.confidence != null ? (
-                <ConfidenceMeter value={diagnosis.confidence} />
-              ) : (
-                <ConfidenceUnstated />
-              )}
               <CopyButton text={rootCause} label="Copy likely cause" />
             </div>
           </div>
-          <AIMarkdown className="text-sm font-medium text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_p]:my-0 [&_p]:text-theme-text-primary">
+          <AIMarkdown
+            className={`${section === "conclusion" ? "col-start-1 row-start-1" : ""} max-w-prose text-sm leading-relaxed text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_p]:my-0 [&_p]:text-theme-text-primary`}
+          >
             {rootCause}
           </AIMarkdown>
           {onAsk && (
             <button
               onClick={() => onAsk(EXPLAIN_SIMPLY_PROMPT)}
-              className="mt-2 inline-flex items-center gap-1 rounded-md border border-theme-border px-2 py-1 text-[11px] font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+              className="mt-2 inline-flex justify-self-start items-center gap-1 rounded-md border border-theme-border px-2 py-1 text-xs font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
             >
               <HelpCircle className="h-3 w-3" />
               Explain simply
@@ -1800,11 +1810,13 @@ function DiagnosisResult({
       {/* Remediation — every step is copyable. Only the explicitly recommended
           step can be applied, and only when the caller enables apply. */}
       {showActions && hasRemediation && (
-        <div className="rounded-lg border border-theme-border bg-theme-elevated p-3">
-          <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-theme-text-tertiary">
-            <Wrench className="h-3.5 w-3.5 text-accent" />
-            Remediation
-          </div>
+        <div className="rounded-lg border border-theme-border bg-theme-surface p-3">
+          {section !== "actions" && (
+            <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-theme-text-secondary">
+              <Wrench className="h-3.5 w-3.5 text-accent" />
+              Remediation
+            </div>
+          )}
           <ol className="space-y-2">
             {visibleRemediation.map(({ text: r, index: i }) => {
               const isRec = recValid && i === recIdx! - 1;
@@ -1900,23 +1912,30 @@ function DiagnosisResult({
       )}
 
       {/* Full analysis — the agent's detailed evidence, on demand. */}
-      {showConclusion && diagnosis.report && (
-        <div className="rounded-lg border border-theme-border bg-theme-elevated">
+      {showConclusion && (diagnosis.report || diagnosis.confidence != null) && (
+        <div>
           <button
             type="button"
             aria-expanded={showAnalysis}
             aria-controls={analysisId}
             onClick={() => setShowAnalysis((v) => !v)}
-            className="flex w-full items-center gap-1.5 px-3 py-2 text-xs font-medium uppercase tracking-wide text-theme-text-tertiary hover:text-theme-text-primary"
+            className="flex items-center gap-1.5 rounded-md py-2 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary"
           >
             <ChevronRight
               className={`h-3.5 w-3.5 transition-transform ${showAnalysis ? "rotate-90" : ""}`}
             />
-            Full analysis
+            {diagnosis.report ? "Full analysis" : "Assessment details"}
           </button>
           <div id={analysisId}>
             <Collapse open={showAnalysis}>
               <div className="border-t border-theme-border/60 px-3 py-2">
+                <p className="mb-2 text-xs text-theme-text-tertiary">
+                  Agent confidence:{" "}
+                  {diagnosis.confidence != null
+                    ? confidenceLabel(diagnosis.confidence)
+                    : "not stated"}
+                  {diagnosis.confidence != null ? " · self-reported" : ""}
+                </p>
                 <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_h2:first-child]:mt-0 [&_h2]:mb-1.5 [&_h2]:mt-3 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-wide [&_h2]:text-theme-text-tertiary [&_h3]:text-sm [&_li]:text-theme-text-secondary [&_p]:my-1.5 [&_p]:text-theme-text-secondary">
                   {diagnosis.report}
                 </AIMarkdown>
@@ -2008,13 +2027,13 @@ function AllClearCard({
         ) : null}
       </div>
       {detailed ? (
-        <div className="rounded-lg border border-theme-border bg-theme-elevated">
+        <div>
           <button
             type="button"
             aria-expanded={showAnalysis}
             aria-controls={analysisId}
             onClick={() => setShowAnalysis((value) => !value)}
-            className="flex w-full items-center gap-1.5 px-3 py-2 text-xs font-medium uppercase tracking-wide text-theme-text-tertiary hover:text-theme-text-primary"
+            className="flex items-center gap-1.5 rounded-md py-2 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary"
           >
             <ChevronRight
               className={`h-3.5 w-3.5 transition-transform ${showAnalysis ? "rotate-90" : ""}`}
@@ -2261,42 +2280,6 @@ function confidenceLabel(c: number): string {
   if (c >= 0.8) return "High";
   if (c >= 0.5) return "Medium";
   return "Low";
-}
-
-// Confidence shown as a band + three discrete pips (Low=1, Med=2, High=3 filled).
-// Deliberately discrete, NOT a continuous bar: a filled fraction reads as a precise
-// percentage, which is exactly the false calibration `confidenceLabel` exists to
-// avoid (an LLM's two-sig-fig confidence isn't that precise). Accent-toned so it
-// reads as "trust in the analysis," not problem severity.
-function ConfidenceMeter({ value }: { value: number }) {
-  const band = confidenceLabel(value);
-  const filled = band === "High" ? 3 : band === "Medium" ? 2 : 1;
-  return (
-    <span className="flex items-center gap-1.5">
-      <span className="text-[11px] text-theme-text-tertiary">
-        Agent confidence: {band}
-      </span>
-      <span className="flex items-center gap-0.5" aria-hidden>
-        {[0, 1, 2].map((i) => (
-          <span
-            key={i}
-            className={`h-1 w-2.5 rounded-full ${i < filled ? "bg-accent" : "bg-theme-base"}`}
-          />
-        ))}
-      </span>
-    </span>
-  );
-}
-
-// Shown when the model returned no confidence at all — so "unknown confidence"
-// is visible rather than silently absent (which looks identical to high confidence
-// minus the badge) on a trust-bearing surface.
-function ConfidenceUnstated() {
-  return (
-    <span className="text-[11px] text-theme-text-tertiary">
-      Agent confidence: not stated
-    </span>
-  );
 }
 
 // LLMs occasionally open a ```fence mid-line ("run this: ```bash kubectl …") or
