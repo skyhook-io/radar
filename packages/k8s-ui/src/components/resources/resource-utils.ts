@@ -31,7 +31,7 @@ import { getHPATableState, hpaStatusFromState } from './resource-utils-hpa'
 import { getCNPGClusterStatus as _getCNPGClusterStatus, getCNPGBackupStatus as _getCNPGBackupStatus, getCNPGScheduledBackupStatus as _getCNPGScheduledBackupStatus, getCNPGPoolerStatus as _getCNPGPoolerStatus, isApiGroup as _isApiGroup, CNPG_GROUP as _CNPG_GROUP } from './resource-utils-cnpg'
 import { getGenericResourceStatus } from './generic-status'
 import { getIstioGatewayStatus as _getIstioGatewayStatus, getIstioGatewayServerCount as _getIstioGatewayServerCount, getIstioGatewaySelectorString as _getIstioGatewaySelectorString } from './resource-utils-istio'
-import { getCalicoIPPoolAllowedUses, getCalicoIPPoolBlockSize, getCalicoIPPoolEncapsulation, getCalicoPolicyNamespaceSelector, getCalicoPolicyServiceAccountSelector, getCalicoPolicyTypes, isCalicoApiVersion, isCalicoPolicyResource } from './resource-utils-calico'
+import { formatKubernetesLabelSelector, getCalicoIPPoolAllowedUses, getCalicoIPPoolBlockSize, getCalicoIPPoolEncapsulation, getCalicoPolicyNamespaceSelector, getCalicoPolicyServiceAccountSelector, getCalicoPolicyTypes, isCalicoApiVersion, isCalicoPolicyResource } from './resource-utils-calico'
 
 // ============================================================================
 // STATUS & HEALTH UTILITIES
@@ -1861,18 +1861,75 @@ export function getGatewayClassDescription(gc: any): string {
 // GATEWAY API ROUTE UTILITIES (shared by HTTPRoute, GRPCRoute, TCPRoute, TLSRoute)
 // ============================================================================
 
+const GATEWAY_API_GROUP = 'gateway.networking.k8s.io'
+
+/**
+ * Whether a status report describes a parent the spec still asks for.
+ *
+ * A controller can leave a report behind after its parentRef is removed, and
+ * the defaults matter: an unset group/kind/namespace on either side means
+ * gateway.networking.k8s.io, Gateway, and the route's own namespace.
+ */
+function isReportForParentRef(ref: any, reported: any, routeNamespace: string): boolean {
+  const norm = (r: any) => ({
+    group: r?.group ?? GATEWAY_API_GROUP,
+    kind: r?.kind ?? 'Gateway',
+    namespace: r?.namespace ?? routeNamespace,
+    name: r?.name,
+    sectionName: r?.sectionName,
+    port: r?.port,
+  })
+  const a = norm(ref)
+  const b = norm(reported)
+  return a.group === b.group && a.kind === b.kind && a.namespace === b.namespace &&
+    a.name === b.name && a.sectionName === b.sectionName && a.port === b.port
+}
+
 // All Gateway API route types share the same status/parents/rules/hostnames structure
+/**
+ * A route's verdict, from BOTH conditions the API guarantees it carries.
+ *
+ * Accepted alone is not health: a backendRef naming a Service that does not
+ * exist is Accepted=True by design, because the gateway still has to answer the
+ * request — with a 5xx. Reading only Accepted therefore reported the "why is my
+ * route 503ing" case as healthy, beside a Backends column naming the Service
+ * that is missing. An ABSENT ResolvedRefs is not healthy either: GEP-1364 has
+ * routes always carry both, so a missing one means nothing has confirmed the
+ * refs yet.
+ */
 export function getRouteStatus(route: any): StatusBadge {
-  const parents = route.status?.parents || []
-  if (parents.length === 0) return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
-  const allAccepted = parents.every((p: any) =>
-    (p.conditions || []).some((c: any) => c.type === 'Accepted' && c.status === 'True')
-  )
-  const anyRejected = parents.some((p: any) =>
-    (p.conditions || []).some((c: any) => c.type === 'Accepted' && c.status === 'False')
-  )
-  if (allAccepted) return { text: 'Accepted', color: healthColors.healthy, level: 'healthy' }
-  if (anyRejected) return { text: 'Not Accepted', color: healthColors.unhealthy, level: 'unhealthy' }
+  const refs = route.spec?.parentRefs || []
+  const reports = route.status?.parents || []
+  const routeNamespace = route.metadata?.namespace || ''
+  const generation = route.metadata?.generation
+
+  const matched = refs
+    .map((ref: any) => reports.find((p: any) => isReportForParentRef(ref, p?.parentRef, routeNamespace)))
+    .filter(Boolean)
+  if (matched.length === 0) return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
+
+  // A condition observed against an older generation describes a spec that has
+  // since changed, so it cannot confirm the current one.
+  const isCurrent = (c: any) =>
+    c?.observedGeneration === undefined || generation === undefined || c.observedGeneration === generation
+  const conditionOf = (report: any, type: string) =>
+    (report?.conditions || []).filter((c: any) => c?.type === type && isCurrent(c)).pop()
+
+  const accepted = matched.map((r: any) => conditionOf(r, 'Accepted'))
+  const resolved = matched.map((r: any) => conditionOf(r, 'ResolvedRefs'))
+  const everyParentReported = matched.length === refs.length
+
+  if (everyParentReported && accepted.every((c: any) => c?.status === 'False')) {
+    return { text: 'Not Accepted', color: healthColors.unhealthy, level: 'unhealthy' }
+  }
+  if (accepted.some((c: any) => c?.status === 'False') || resolved.some((c: any) => c?.status === 'False')) {
+    return { text: 'Degraded', color: healthColors.degraded, level: 'degraded' }
+  }
+  if (everyParentReported &&
+      accepted.every((c: any) => c?.status === 'True') &&
+      resolved.every((c: any) => c?.status === 'True')) {
+    return { text: 'Accepted', color: healthColors.healthy, level: 'healthy' }
+  }
   return { text: 'Pending', color: healthColors.degraded, level: 'degraded' }
 }
 
@@ -1954,10 +2011,20 @@ export function getNetworkPolicyRuleCount(np: any): { ingress: number; egress: n
   }
 }
 
+/**
+ * Who the policy applies to.
+ *
+ * podSelector is a LabelSelector, so it can target a subset through
+ * matchExpressions alone. Reading only matchLabels reported those policies as
+ * covering the whole namespace — a gap rendered as coverage, on the surface
+ * where that reads as "this namespace is protected, look elsewhere".
+ */
 export function getNetworkPolicySelector(np: any): string {
-  const labels = np.spec?.podSelector?.matchLabels
-  if (!labels || Object.keys(labels).length === 0) return 'All pods'
-  return Object.entries(labels).map(([k, v]) => `${k}=${v}`).join(', ')
+  const selector = np.spec?.podSelector
+  const hasLabels = Object.keys(selector?.matchLabels ?? {}).length > 0
+  const hasExpressions = Array.isArray(selector?.matchExpressions) && selector.matchExpressions.length > 0
+  if (!hasLabels && !hasExpressions) return 'All pods'
+  return formatKubernetesLabelSelector(selector)
 }
 
 // ============================================================================

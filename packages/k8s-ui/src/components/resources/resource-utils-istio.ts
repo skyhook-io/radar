@@ -182,6 +182,15 @@ export function getDestinationRuleLoadBalancer(resource: any): string {
 // ISTIO GATEWAY UTILITIES
 // ============================================================================
 
+/**
+ * What spec.servers alone can honestly claim.
+ *
+ * Not liveness: an Istio Gateway whose spec.selector matches no running
+ * ingressgateway pod is how these actually fail, and it has servers like any
+ * other. A green badge there says the opposite of the truth. TLS is likewise a
+ * property of a server, not a verdict, and it was occupying the one slot every
+ * other kind here uses for one.
+ */
 export function getIstioGatewayStatus(resource: any): StatusBadge {
   const servers = resource.spec?.servers || []
 
@@ -189,12 +198,7 @@ export function getIstioGatewayStatus(resource: any): StatusBadge {
     return { text: 'No Servers', color: healthColors.unhealthy, level: 'unhealthy' }
   }
 
-  const hasTLS = servers.some((s: any) => s.tls)
-  if (hasTLS) {
-    return { text: 'TLS', color: healthColors.healthy, level: 'healthy' }
-  }
-
-  return { text: 'Active', color: healthColors.healthy, level: 'healthy' }
+  return { text: 'Defined', color: healthColors.neutral, level: 'neutral' }
 }
 
 export function getIstioGatewayServers(resource: any): Array<{
