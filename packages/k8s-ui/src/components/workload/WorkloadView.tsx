@@ -1759,6 +1759,15 @@ const POD_VISIBLE_LIMIT = 5
 const EVENT_VISIBLE_LIMIT = 5
 const RELATIONSHIP_GROUP_LIMIT = 5
 const RELATIONSHIP_REF_LIMIT = 5
+// Kinds whose Logs tab must not depend on allPods finding a live pod via
+// relationships/timeline-event attribution — that path only surfaces a pod
+// when Radar's own Timeline still holds ITS creation event (a fixed-size
+// ring buffer, evicted on a busy cluster) or when the topology graph knows
+// how to walk to it, neither of which these kinds can rely on. Each has its
+// own logs view that already handles "no pod found" gracefully (TaskRun via
+// TaskRunLogsTab's "may have been garbage-collected" message, the rest via
+// MultiPodLogsTab's "No pods available" state) — the tab itself must stay
+// visible so that fallback is reachable instead of disappearing outright.
 const LOGS_TAB_WITHOUT_PODS_KINDS = new Set([
   'jobs',
   'cronjobs',
@@ -1767,6 +1776,8 @@ const LOGS_TAB_WITHOUT_PODS_KINDS = new Set([
   'workflowtemplates',
   'clusterworkflowtemplates',
   'scaledjobs',
+  'taskruns',
+  'pipelineruns',
 ])
 const RUNTIME_WORKLOAD_OVERVIEW_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs'])
 const ROLLOUT_STATUS_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets', 'rollouts'])
