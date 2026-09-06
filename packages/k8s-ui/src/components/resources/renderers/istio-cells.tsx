@@ -210,9 +210,16 @@ export function AuthorizationPolicyCell({ resource, column }: { resource: any; c
       // Istio's deny-all idiom. This is the default-visible cell that carries
       // the warning; the Status column is off by default.
       const allowsNothing = count === 0 && (resource.spec?.action || 'ALLOW') === 'ALLOW'
-      // Amber on the count itself: it fits the column, reads at a glance against
-      // grey neighbours, and the column tooltip carries the explanation.
-      if (allowsNothing) return <Badge severity="warning">0</Badge>
+      // Amber on the count itself: it fits the column and reads at a glance
+      // against grey neighbours. The explanation rides on the badge so it does
+      // not depend on finding the column header's tooltip.
+      if (allowsNothing) {
+        return (
+          <Tooltip content="Rules are alternatives, so this ALLOW policy matches nothing and permits no traffic on its own. Other ALLOW policies selecting the same workload may still permit requests.">
+            <Badge severity="warning">0</Badge>
+          </Tooltip>
+        )
+      }
       return <span className="text-sm text-theme-text-secondary">{count}</span>
     }
     case 'selector': {

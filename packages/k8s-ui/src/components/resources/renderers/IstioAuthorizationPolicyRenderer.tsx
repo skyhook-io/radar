@@ -44,8 +44,8 @@ export function IstioAuthorizationPolicyRenderer({ data }: IstioAuthorizationPol
       {isAllowNothing && (
         <AlertBanner
           variant="warning"
-          title="Allow Nothing"
-          message="This policy has ALLOW action but no rules, which means no traffic is allowed."
+          title="No allow rules"
+          message="Rules are alternatives, so an ALLOW policy with none of them matches nothing and contributes no permitted traffic. Other ALLOW policies selecting the same workload may still permit requests — a default-deny-plus-exceptions setup looks exactly like this."
         />
       )}
 

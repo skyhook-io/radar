@@ -61,7 +61,9 @@ describe('getAuthorizationPolicySelectorString', () => {
     expect(getAuthorizationPolicySelectorString(p)).toBe('Gateway/waypoint')
   })
 
-  it('qualifies a target in another namespace', () => {
+  it('qualifies a target naming another namespace', () => {
+    // Rendering only — supported attachments are same-namespace, so this
+    // records what the cell shows, not that the attachment would be enforced.
     const p = {
       metadata: { namespace: 'prod' },
       spec: { targetRef: { kind: 'Gateway', name: 'shared', namespace: 'infra' } },
