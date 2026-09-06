@@ -1493,6 +1493,43 @@ describe("strict evidence adapters", () => {
     }
   });
 
+  it("compares resource revisions without their tool-specific context", () => {
+    const result = project([
+      tool("diagnose", "diagnose", {
+        resource: deployment,
+        resourceContext: {
+          tier: "diagnostic",
+          workloadSummary: { replicas: { desired: 1, ready: 0 } },
+        },
+        gitOpsDiagnosis: { tool: "argocd", sync: "OutOfSync" },
+      }),
+      tool("read", "get_resource", {
+        resource: deployment,
+        context: { tier: "basic" },
+      }),
+      tool("changed", "get_resource", {
+        resource: { ...deployment, status: { readyReplicas: 1, replicas: 1 } },
+        context: { tier: "basic" },
+      }),
+    ]);
+    const group = groupsOf(result.groups, "resource")[0];
+    expect(group.observations.map((item) => item.changedFromPrevious)).toEqual([
+      false,
+      false,
+      true,
+    ]);
+    expect(group.observations.map((item) => item.source.stepId)).toEqual([
+      "diagnose",
+      "read",
+      "changed",
+    ]);
+    const remaining = investigationEvidenceGroupWithoutSources(
+      group,
+      new Set([group.observations[2].source.id]),
+    );
+    expect(remaining?.observations[1].changedFromPrevious).toBe(false);
+  });
+
   it("does not let a later broad query overwrite producer-established issue relevance", () => {
     const relatedPodIssue = {
       ...criticalIssue,

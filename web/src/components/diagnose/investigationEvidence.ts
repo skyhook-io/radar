@@ -9,6 +9,7 @@ import {
   type IssueRecentChange,
   type Topology,
 } from "@skyhook-io/k8s-ui";
+import { fnv1a32 } from "@skyhook-io/k8s-ui/utils/structure-hash";
 
 import {
   diagnosisSeverityTone,
@@ -693,12 +694,7 @@ function citedGroupForSource(
 function stableHash(value: string): string {
   // FNV-1a keeps long resource/log identities out of DOM IDs. The raw identity
   // remains the Map key, so a hash collision can never merge evidence.
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < value.length; i += 1) {
-    hash ^= value.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(36);
+  return fnv1a32(value).toString(36);
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -1427,6 +1423,14 @@ function evidenceSemanticSnapshot(
     "tone" | "title" | "summary" | "data"
   >,
 ): string {
+  if (observation.data.type === "resource") {
+    // Tool-specific context can change the summary/tone without changing the
+    // object. Keep that context in history, not in the resource-change signal.
+    return JSON.stringify({
+      type: "resource",
+      resource: observation.data.resource,
+    });
+  }
   const data =
     observation.data.type === "issue"
       ? {
