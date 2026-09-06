@@ -585,6 +585,7 @@ export function InvestigationView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const evidenceScrollRef = useRef<HTMLDivElement>(null);
   const evidenceContentRef = useRef<HTMLDivElement>(null);
+  const nextStepsRef = useRef<HTMLElement>(null);
   const evidenceCardLayoutRef = useRef(
     new Map<string, { top: number; height: number }>(),
   );
@@ -1531,6 +1532,12 @@ export function InvestigationView({
       lastApplyOutcome,
       localApplyAttemptAssessmentIdx,
     });
+  const hasNextSteps = Boolean(
+    currentAssessment?.diagnosis &&
+    !assessmentNeedsCurrentStateVerification &&
+    !hasEvidenceCollectedAfterAssessment &&
+    (currentAssessment.diagnosis.remediation?.length ?? 0) > 0,
+  );
   const showSplitWorkspace = maximized;
   const splitGridClass = showSplitWorkspace
     ? "@min-[1000px]/investigation:grid-cols-[minmax(360px,520px)_minmax(0,1fr)]"
@@ -1997,7 +2004,7 @@ export function InvestigationView({
           >
             <div
               ref={evidenceContentRef}
-              className="mx-auto max-w-5xl space-y-4"
+              className="mx-auto max-w-5xl space-y-6"
             >
               {rebuildingReplay ? (
                 <div className="flex min-h-28 flex-col items-center justify-center rounded-lg border border-dashed border-theme-border px-4 text-center">
@@ -2026,12 +2033,12 @@ export function InvestigationView({
                 <>
                   <section
                     aria-labelledby={`${workspaceId}-assessment-heading`}
-                    className="border-b border-theme-border pb-5"
+                    className="rounded-xl border border-theme-border bg-theme-elevated/50 p-4"
                   >
                     <div className="flex flex-wrap items-center gap-1.5">
                       <h2
                         id={`${workspaceId}-assessment-heading`}
-                        className="text-base font-semibold text-theme-text-primary"
+                        className="text-lg font-semibold text-theme-text-primary"
                       >
                         {assessmentNeedsCurrentStateVerification
                           ? "Assessment before apply"
@@ -2050,6 +2057,30 @@ export function InvestigationView({
                       <span className="text-xs text-theme-text-tertiary">
                         AI assessment
                       </span>
+                      {hasNextSteps ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const section = nextStepsRef.current;
+                            const scroller = evidenceScrollRef.current;
+                            if (!section || !scroller) return;
+                            section.focus({ preventScroll: true });
+                            scroller.scrollTo({
+                              top:
+                                scroller.scrollTop +
+                                section.getBoundingClientRect().top -
+                                scroller.getBoundingClientRect().top -
+                                12,
+                              behavior: prefersReducedMotion()
+                                ? "auto"
+                                : "smooth",
+                            });
+                          }}
+                          className="ml-auto rounded-md px-2 py-1 text-xs font-medium text-accent-text hover:bg-theme-hover"
+                        >
+                          Next steps ↓
+                        </button>
+                      ) : null}
                       {assessmentNeedsCurrentStateVerification ? (
                         <Badge severity="warning" size="sm">
                           Current state unverified
@@ -2148,16 +2179,17 @@ export function InvestigationView({
                     onOpenResource={stale ? undefined : onOpenResource}
                     revealRequest={evidenceRevealRequest}
                     onRevealReady={revealEvidenceSource}
-                    afterMaterialEvidence={
-                      currentAssessment?.diagnosis &&
-                      !assessmentNeedsCurrentStateVerification &&
-                      !hasEvidenceCollectedAfterAssessment &&
-                      (currentAssessment.diagnosis.remediation?.length ?? 0) >
-                        0 ? (
-                        <section aria-labelledby={`${workspaceId}-next-steps`}>
+                    afterEvidence={
+                      hasNextSteps && currentAssessment?.diagnosis ? (
+                        <section
+                          ref={nextStepsRef}
+                          tabIndex={-1}
+                          aria-labelledby={`${workspaceId}-next-steps`}
+                          className="rounded-xl border border-theme-border bg-theme-elevated/50 p-4 outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+                        >
                           <h2
                             id={`${workspaceId}-next-steps`}
-                            className="text-base font-semibold text-theme-text-primary"
+                            className="text-lg font-semibold text-theme-text-primary"
                           >
                             Next steps
                           </h2>

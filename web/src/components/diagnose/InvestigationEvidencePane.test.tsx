@@ -6,7 +6,7 @@ import {
   InvestigationEvidencePane,
   VISIBLE_ADDITIONAL_KEY_EVIDENCE,
   VISIBLE_LOG_EVIDENCE_LINES,
-  VISIBLE_SUPPORTING_EVIDENCE,
+  VISIBLE_SUPPORTING_SIGNALS,
   investigationDisclosureSettleDelay,
   investigationDisclosureScrollTop,
   investigationEvidenceFullRowFlags,
@@ -61,7 +61,7 @@ function project(
 function render(
   projection: InvestigationEvidenceProjection,
   collecting = false,
-  afterMaterialEvidence?: string,
+  afterEvidence?: string,
   rootCauseEvidence?: InvestigationRootCauseEvidenceResolution,
   onOpenResource?: (ref: DiagnosisResourceRef) => void,
 ): string {
@@ -74,7 +74,7 @@ function render(
       onViewSource={onViewSource}
       onViewActivity={() => {}}
       onOpenResource={onOpenResource}
-      afterMaterialEvidence={afterMaterialEvidence}
+      afterEvidence={afterEvidence}
     />,
   );
 }
@@ -99,6 +99,85 @@ const criticalIssue = {
 };
 
 describe("InvestigationEvidencePane hierarchy and provenance", () => {
+  it("preserves already-plural resource kinds in inventory titles", () => {
+    const projection = project(
+      tool("endpoints", "list_resources", [
+        { kind: "Endpoints", namespace: "shop", name: "api" },
+      ]),
+    );
+    const html = render(projection);
+    expect(html).toContain("Endpoints");
+    expect(html).not.toContain("Endpointses");
+    expect(html).not.toContain("signal needs review");
+  });
+
+  it("names inventory by its resources and scope, without expanding cited lists", () => {
+    const ref = evidenceRef("a", "b");
+    const projection = project(
+      tool(
+        "secrets",
+        "list_resources",
+        [{ kind: "Secret", namespace: "autopush", name: "app" }],
+        {
+          summary: JSON.stringify({
+            kind: "secrets",
+            namespace: "autopush",
+          }),
+          evidenceRef: ref,
+        },
+      ),
+    );
+    const resolution = resolveInvestigationRootCauseEvidence(
+      projection,
+      { status: "linked", refs: [ref] },
+      0,
+    );
+    const html = render(projection, false, undefined, resolution);
+    expect(html).toContain("Secrets in autopush");
+    expect(html).toContain("1 returned");
+    expect(html).not.toContain("Resource inventory");
+    expect(html).not.toContain("found in a broader search");
+    expect(html).not.toContain('aria-expanded="true"');
+    expect(
+      html.match(/aria-label="View Activity source for Secrets in autopush"/g),
+    ).toHaveLength(1);
+  });
+
+  it("preserves the actual query under collapsed cited sources and puts actions after evidence", () => {
+    const ref = evidenceRef("a", "b");
+    const projection = project(
+      tool(
+        "search",
+        "search",
+        { hits: [] },
+        {
+          summary: JSON.stringify({
+            query: "kind:Secret project-infra",
+            limit: 20,
+          }),
+          evidenceRef: ref,
+        },
+      ),
+    );
+    const resolution = resolveInvestigationRootCauseEvidence(
+      projection,
+      { status: "linked", refs: [ref] },
+      0,
+    );
+    const html = render(projection, false, "NEXT-STEPS-SENTINEL", resolution);
+    expect(html).toContain("kind:Secret project-infra");
+    expect(html).toContain("Cited sources in Activity");
+    expect(html).not.toContain(
+      "The assessment cites a result that could not be summarized",
+    );
+    expect(html).toContain(
+      'aria-expanded="false" aria-controls="investigation-cited-sources"',
+    );
+    expect(html.indexOf("NEXT-STEPS-SENTINEL")).toBeGreaterThan(
+      html.lastIndexOf("</section>"),
+    );
+  });
+
   it("fills supporting-evidence rows instead of leaving orphan half-width cards", () => {
     expect(
       investigationEvidenceFullRowFlags(["resource", "events", "changes"]),
@@ -159,12 +238,12 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
       resolution.links[0].source.id,
     )}"`;
 
-    expect(html).toContain("Evidence from cited results");
+    expect(html).toContain("Cited by the agent");
     expect(html).not.toContain("validated against this run");
     expect(html).not.toContain("Agent-selected check");
     expect(html).not.toContain("from this check below");
     expect(html).toContain("Additional Radar observations");
-    expect(html.indexOf("Evidence from cited results")).toBeLessThan(
+    expect(html.indexOf("Cited by the agent")).toBeLessThan(
       html.indexOf("Additional Radar observations"),
     );
     expect(html.match(new RegExp(anchor, "g"))).toHaveLength(1);
@@ -256,19 +335,18 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     );
     const html = render(projection, false, undefined, resolution);
 
-    expect(html).toContain(
-      "The assessment cites a result that could not be summarized here:",
-    );
-    expect(html).toContain("Query Prometheus in Activity");
+    expect(html).toContain("Cited sources in Activity");
+    expect(html).toContain("Query Prometheus");
+    expect(html).toContain('aria-controls="investigation-cited-sources"');
     expect(html).toContain(
       'aria-label="View cited Query Prometheus result in Activity"',
     );
     expect(html).not.toContain("Agent-selected check");
     expect(html).not.toContain("View source");
-    expect(html).toContain("Radar evidence");
+    expect(html).toContain(">Evidence</h2>");
     expect(html).not.toContain("Evidence from cited results");
     expect(html).not.toContain("Additional Radar observations");
-    expect(html).toContain("No evidence could be summarized here");
+    expect(html).not.toContain("No evidence could be summarized here");
   });
 
   it("does not frame unrelated structured evidence as other when the cited source is Activity-only", () => {
@@ -300,7 +378,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     const html = render(projection, false, undefined, resolution);
 
     expect(resolution.links[0].group).toBeUndefined();
-    expect(html).toContain("Radar evidence");
+    expect(html).toContain(">Evidence</h2>");
     expect(html).toContain("Kubernetes events");
     expect(html).not.toContain("Evidence from cited results");
     expect(html).not.toContain("Additional Radar observations");
@@ -650,7 +728,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     expect(keyHtml).toContain('style="grid-template-rows:0fr"');
 
     const supportingTools = Array.from(
-      { length: VISIBLE_SUPPORTING_EVIDENCE + 3 },
+      { length: VISIBLE_SUPPORTING_SIGNALS + 3 },
       (_, index) =>
         tool(`supporting-${index}`, "issues", {
           issues: [
@@ -678,8 +756,18 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
         hiddenSupportingSource.id,
       ),
     ).toBe("more-supporting");
-    expect(supportingHtml).toContain("More related evidence");
-    expect(supportingHtml).not.toContain('aria-expanded="true"');
+    expect(supportingHtml).toContain("Supporting evidence");
+    expect(supportingHtml).toContain("Signals to review");
+    expect(supportingHtml).toContain("3 signals need review");
+    expect(
+      investigationEvidenceRevealCollection(
+        supportingProjection,
+        supportingProjection.sources[0].id,
+      ),
+    ).toBeUndefined();
+    expect(supportingHtml).toContain(
+      'aria-expanded="false" aria-controls="investigation-more-supporting-evidence"',
+    );
     expect(
       supportingHtml.match(
         new RegExp(`<article[^>]*id="${finalOverflowGroup.id}"[^>]*>`),

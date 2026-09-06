@@ -65,12 +65,13 @@ import { Tooltip } from "../ui/Tooltip";
 // an immediate disclosure and focus hand-off because Collapse disables motion.
 export const INVESTIGATION_DISCLOSURE_SETTLE_MS = 220;
 export const VISIBLE_ADDITIONAL_KEY_EVIDENCE = 2;
-export const VISIBLE_SUPPORTING_EVIDENCE = 4;
+export const VISIBLE_SUPPORTING_SIGNALS = 3;
 export const VISIBLE_LOG_EVIDENCE_LINES = 12;
 
 const EvidenceNavigationContext = createContext<{
   onOpenResource?: (ref: DiagnosisResourceRef) => void;
   revealSourceId?: string;
+  revealRequestId?: number;
 }>({});
 
 function evidenceTypePrefersFullRow(
@@ -220,6 +221,7 @@ export function investigationEvidenceRevealCollection(
   | "earlier"
   | "context"
   | "coverage"
+  | "checked"
   | undefined {
   const source = projection.sources.find((item) => item.id === sourceId);
   if (source?.primaryGroupId) {
@@ -228,6 +230,7 @@ export function investigationEvidenceRevealCollection(
     );
     if (primaryGroup?.historical) return "earlier";
     if (primaryGroup?.latest.tier === "context") return "context";
+    if (primaryGroup?.latest.tier === "checked") return "checked";
     if (primaryGroup?.latest.tier === "key") {
       const keyIndex = projection.groups
         .filter((group) => !group.historical && group.latest.tier === "key")
@@ -235,13 +238,13 @@ export function investigationEvidenceRevealCollection(
       if (keyIndex > VISIBLE_ADDITIONAL_KEY_EVIDENCE) return "more-key";
     }
     if (primaryGroup?.latest.tier === "supporting") {
-      const supportingIndex = projection.groups
-        .filter(
-          (group) => !group.historical && group.latest.tier === "supporting",
+      if (
+        visibleSupportingSignals(projection.groups).some(
+          (group) => group.id === primaryGroup.id,
         )
-        .findIndex((group) => group.id === primaryGroup.id);
-      if (supportingIndex >= VISIBLE_SUPPORTING_EVIDENCE)
-        return "more-supporting";
+      )
+        return undefined;
+      return "more-supporting";
     }
     // One bundled tool call can fan out into several semantic groups. Its sole
     // DOM anchor lives on the ranked primary group, so secondary Context or
@@ -258,6 +261,19 @@ export function investigationEvidenceRevealCollection(
   return undefined;
 }
 
+function visibleSupportingSignals(
+  groups: InvestigationEvidenceGroup[],
+): InvestigationEvidenceGroup[] {
+  return groups
+    .filter(
+      (group) =>
+        !group.historical &&
+        group.latest.tier === "supporting" &&
+        ["error", "alert", "warning"].includes(group.latest.tone),
+    )
+    .slice(0, VISIBLE_SUPPORTING_SIGNALS);
+}
+
 export function InvestigationEvidencePane({
   projection,
   rootCauseEvidence,
@@ -266,7 +282,7 @@ export function InvestigationEvidencePane({
   onViewSource,
   onViewActivity,
   onOpenResource,
-  afterMaterialEvidence,
+  afterEvidence,
   revealRequest,
   onRevealReady,
 }: {
@@ -280,8 +296,8 @@ export function InvestigationEvidencePane({
   onViewActivity: () => void;
   /** Opens an evidence subject in Radar when the producer identified it exactly. */
   onOpenResource?: (ref: DiagnosisResourceRef) => void;
-  /** Keeps the workspace story ordered: assessment → key evidence/limits → action. */
-  afterMaterialEvidence?: ReactNode;
+  /** Actions follow the complete evidence section, including its disclosures. */
+  afterEvidence?: ReactNode;
   /** Explicit Activity → Findings navigation, including repeat clicks. */
   revealRequest?: { sourceId: string; requestId: number };
   onRevealReady?: (sourceId: string) => void;
@@ -291,6 +307,8 @@ export function InvestigationEvidencePane({
   const [moreSupportingOpen, setMoreSupportingOpen] = useState(false);
   const [earlierOpen, setEarlierOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
+  const [checkedOpen, setCheckedOpen] = useState(false);
+  const [citedSourcesOpen, setCitedSourcesOpen] = useState(false);
   const handledRevealRequestRef = useRef<number | undefined>(undefined);
   const openingForRevealRequestRef = useRef<number | undefined>(undefined);
   const tiers = new Map<
@@ -354,16 +372,17 @@ export function InvestigationEvidencePane({
     1 + VISIBLE_ADDITIONAL_KEY_EVIDENCE,
   );
   const supportingGroups = tiers.get("supporting")!;
-  const visibleSupportingGroups = supportingGroups.slice(
-    0,
-    VISIBLE_SUPPORTING_EVIDENCE,
-  );
-  const overflowSupportingGroups = supportingGroups.slice(
-    VISIBLE_SUPPORTING_EVIDENCE,
+  const visibleSupportingGroups = visibleSupportingSignals(supportingGroups);
+  const remainingSupportingGroups = supportingGroups.filter(
+    (group) => !visibleSupportingGroups.includes(group),
   );
   const revealCollection = revealRequest
     ? promotedSourceIds.has(revealRequest.sourceId)
-      ? undefined
+      ? rootCauseEvidence?.links.some(
+          (link) => link.source.id === revealRequest.sourceId && !link.group,
+        )
+        ? "cited-sources"
+        : undefined
       : investigationEvidenceRevealCollection(
           { ...projection, groups: ordinaryGroups },
           revealRequest.sourceId,
@@ -381,6 +400,16 @@ export function InvestigationEvidencePane({
       return;
     }
     const { sourceId, requestId } = revealRequest;
+    if (revealCollection === "checked" && !checkedOpen) {
+      openingForRevealRequestRef.current = requestId;
+      setCheckedOpen(true);
+      return;
+    }
+    if (revealCollection === "cited-sources" && !citedSourcesOpen) {
+      openingForRevealRequestRef.current = requestId;
+      setCitedSourcesOpen(true);
+      return;
+    }
     if (revealCollection === "earlier" && !earlierOpen) {
       openingForRevealRequestRef.current = requestId;
       setEarlierOpen(true);
@@ -438,12 +467,14 @@ export function InvestigationEvidencePane({
     coverageOpen,
     moreKeyOpen,
     moreSupportingOpen,
+    checkedOpen,
+    citedSourcesOpen,
   ]);
 
   const content = (
     <section
       aria-labelledby="investigation-radar-evidence"
-      className="@container/evidence space-y-3"
+      className="@container/evidence space-y-4 rounded-xl border border-theme-border bg-theme-elevated/50 p-4"
     >
       <span className="sr-only" role="status" aria-live="polite">
         {projection.limitations.length > 0
@@ -455,11 +486,9 @@ export function InvestigationEvidencePane({
           <div className="flex items-center gap-2">
             <h2
               id="investigation-radar-evidence"
-              className="text-base font-semibold text-theme-text-primary"
+              className="text-lg font-semibold text-theme-text-primary"
             >
-              {hasStructuredCitedEvidence
-                ? "Evidence from cited results"
-                : "Radar evidence"}
+              Evidence
             </h2>
             {collecting ? (
               <span className="inline-flex items-center gap-1.5 text-xs text-accent-text">
@@ -472,6 +501,11 @@ export function InvestigationEvidencePane({
       </div>
 
       <div className="space-y-4">
+        {hasStructuredCitedEvidence ? (
+          <h3 className="text-sm font-medium text-theme-text-secondary">
+            Cited by the agent
+          </h3>
+        ) : null}
         {rootCauseEvidence ? (
           <RootCauseEvidenceLinks
             resolution={rootCauseEvidence}
@@ -479,6 +513,8 @@ export function InvestigationEvidencePane({
             animateGroupIds={animateGroupIds}
             onViewSource={onViewSource}
             onViewActivity={onViewActivity}
+            sourcesOpen={citedSourcesOpen}
+            onSourcesOpenChange={setCitedSourcesOpen}
           />
         ) : null}
 
@@ -495,6 +531,7 @@ export function InvestigationEvidencePane({
           tier="key"
           title="Critical signals"
           groups={visibleKeyGroups}
+          expandFirst={!hasStructuredCitedEvidence}
           animateGroupIds={animateGroupIds}
           onViewSource={onViewSource}
         />
@@ -520,7 +557,7 @@ export function InvestigationEvidencePane({
           />
         ) : null}
 
-        {!hasCurrentEvidence ? (
+        {!hasCurrentEvidence && !rootCauseEvidence?.links.length ? (
           <EmptyCollection
             collecting={collecting}
             hasEarlierEvidence={historical.length > 0}
@@ -528,21 +565,21 @@ export function InvestigationEvidencePane({
           />
         ) : null}
 
-        {afterMaterialEvidence}
-
         <EvidenceTier
-          headingId="investigation-supporting-evidence-heading"
+          headingId="investigation-supporting-signals"
           tier="supporting"
-          title="Related evidence"
+          title="Signals to review"
           groups={visibleSupportingGroups}
+          expandFirst={false}
           animateGroupIds={animateGroupIds}
           onViewSource={onViewSource}
         />
         <CollapsedEvidenceCollection
           id="investigation-more-supporting-evidence"
-          title="More related evidence"
-          description="Additional target-related signals"
-          groups={overflowSupportingGroups}
+          title="Supporting evidence"
+          description="Additional observations about this workload"
+          groups={remainingSupportingGroups}
+          expandCards
           animateGroupIds={animateGroupIds}
           onViewSource={onViewSource}
           open={moreSupportingOpen}
@@ -553,6 +590,8 @@ export function InvestigationEvidencePane({
           groups={tiers.get("checked")!}
           animateGroupIds={animateGroupIds}
           onViewSource={onViewSource}
+          open={checkedOpen}
+          onOpenChange={setCheckedOpen}
         />
         <CollapsedEvidenceCollection
           id="investigation-earlier-evidence"
@@ -580,9 +619,14 @@ export function InvestigationEvidencePane({
 
   return (
     <EvidenceNavigationContext.Provider
-      value={{ onOpenResource, revealSourceId: revealRequest?.sourceId }}
+      value={{
+        onOpenResource,
+        revealSourceId: revealRequest?.sourceId,
+        revealRequestId: revealRequest?.requestId,
+      }}
     >
       {content}
+      {afterEvidence}
     </EvidenceNavigationContext.Provider>
   );
 }
@@ -593,13 +637,19 @@ function RootCauseEvidenceLinks({
   animateGroupIds,
   onViewSource,
   onViewActivity,
+  sourcesOpen,
+  onSourcesOpenChange,
 }: {
   resolution: InvestigationRootCauseEvidenceResolution;
   relocatedSourceIds: ReadonlySet<string>;
   animateGroupIds: ReadonlySet<string>;
   onViewSource: (sourceId: string) => void;
   onViewActivity: () => void;
+  sourcesOpen: boolean;
+  onSourcesOpenChange: (open: boolean) => void;
 }) {
+  const { elementRef, revealAfterToggle } =
+    useDisclosureReveal<HTMLDivElement>();
   if (resolution.status !== "linked") {
     return (
       <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2.5">
@@ -644,7 +694,9 @@ function RootCauseEvidenceLinks({
               ? link.originalGroupId
               : undefined
           }
-          initiallyOpen={index === 0}
+          initiallyOpen={
+            index === 0 && link.group!.latest.data.type !== "inventory"
+          }
           animateArrival={
             Boolean(link.originalGroupId) &&
             animateGroupIds.has(link.originalGroupId!)
@@ -653,34 +705,84 @@ function RootCauseEvidenceLinks({
         />
       ))}
       {activityOnlyLinks.length > 0 ? (
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-0.5 py-1 text-xs text-theme-text-tertiary">
-          <Activity className="h-3.5 w-3.5 shrink-0" aria-hidden />
-          <span>
-            {structuredLinks.length > 0
-              ? activityOnlyLinks.length === 1
-                ? "The assessment also cites a result that could not be summarized here:"
-                : `The assessment also cites ${activityOnlyLinks.length} results that could not be summarized here:`
-              : activityOnlyLinks.length === 1
-                ? "The assessment cites a result that could not be summarized here:"
-                : `The assessment cites ${activityOnlyLinks.length} results that could not be summarized here:`}
-          </span>
-          {activityOnlyLinks.map((link) => (
-            <button
-              key={link.source.id}
-              type="button"
-              id={investigationEvidenceSourceDomId(link.source.id)}
-              data-evidence-card
-              aria-label={`View cited ${prettyTool(link.source.tool)} result in Activity`}
-              onClick={() => onViewSource(link.source.id)}
-              className="rounded-sm font-medium text-accent-text outline-none underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-accent/50"
-            >
-              {prettyTool(link.source.tool)} in Activity
-            </button>
-          ))}
+        <div
+          ref={elementRef}
+          className="rounded-lg border border-theme-border bg-theme-surface"
+        >
+          <button
+            type="button"
+            aria-expanded={sourcesOpen}
+            aria-controls="investigation-cited-sources"
+            onClick={() => {
+              onSourcesOpenChange(!sourcesOpen);
+              revealAfterToggle(!sourcesOpen);
+            }}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-theme-text-secondary hover:bg-theme-hover/50"
+          >
+            <Activity className="h-3.5 w-3.5" aria-hidden />
+            <span className="flex-1 font-medium">
+              {structuredLinks.length > 0
+                ? "Other cited sources"
+                : "Cited sources in Activity"}{" "}
+              · {activityOnlyLinks.length}
+            </span>
+            <CollapseChevron open={sourcesOpen} className="h-4 w-4" />
+          </button>
+          <div id="investigation-cited-sources">
+            <Collapse open={sourcesOpen}>
+              <div className="space-y-2 border-t border-theme-border px-3 py-2">
+                <p className="text-xs text-theme-text-secondary">
+                  The agent used these results in its assessment. Open the
+                  original results in Activity to inspect them.
+                </p>
+                {activityOnlyLinks.map((link) => (
+                  <button
+                    key={link.source.id}
+                    type="button"
+                    id={investigationEvidenceSourceDomId(link.source.id)}
+                    data-evidence-card
+                    aria-label={`View cited ${prettyTool(link.source.tool)} result in Activity`}
+                    onClick={() => onViewSource(link.source.id)}
+                    className="flex w-full min-w-0 items-start gap-2 rounded-md p-1 text-left text-xs text-accent-text outline-none hover:bg-theme-hover focus-visible:ring-2 focus-visible:ring-accent/50"
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="block font-medium">
+                        {prettyTool(link.source.tool)}
+                      </span>
+                      <CitedSourceScope source={link.source} />
+                    </span>
+                    <span className="shrink-0">View in Activity</span>
+                  </button>
+                ))}
+              </div>
+            </Collapse>
+          </div>
         </div>
       ) : null}
     </div>
   );
+}
+
+function CitedSourceScope({ source }: { source: InvestigationEvidenceSource }) {
+  let input: unknown;
+  try {
+    input = JSON.parse(source.args ?? "");
+  } catch {
+    return null;
+  }
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+  const args = input as Record<string, unknown>;
+  const fields = ["query", "kind", "namespace", "name", "filter"].flatMap(
+    (key) =>
+      typeof args[key] === "string" && args[key].trim()
+        ? [`${key === "query" ? "" : `${key}: `}${args[key]}`]
+        : [],
+  );
+  return fields.length > 0 ? (
+    <span className="mt-0.5 block break-words text-theme-text-secondary [overflow-wrap:anywhere]">
+      {fields.join(" · ")}
+    </span>
+  ) : null;
 }
 
 function EmptyCollection({
@@ -736,6 +838,7 @@ function CollapsedEvidenceCollection({
   onViewSource,
   open,
   onOpenChange,
+  expandCards = false,
 }: {
   id: string;
   title: string;
@@ -745,12 +848,18 @@ function CollapsedEvidenceCollection({
   onViewSource: (sourceId: string) => void;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  expandCards?: boolean;
 }) {
   const { elementRef, revealAfterToggle } = useDisclosureReveal<HTMLElement>();
   if (groups.length === 0) return null;
   const fullRowFlags = investigationEvidenceFullRowFlags(
     groups.map((group) => group.latest.data.type),
   );
+  const attentionCount = groups.filter((group) =>
+    !group.historical &&
+    group.latest.tier !== "context" &&
+    ["error", "alert", "warning"].includes(group.latest.tone),
+  ).length;
   return (
     <section
       ref={elementRef}
@@ -772,7 +881,9 @@ function CollapsedEvidenceCollection({
             {title}
           </span>
           <span className="block truncate text-xs text-theme-text-tertiary">
-            {description}
+            {attentionCount > 0
+              ? `${attentionCount} ${attentionCount === 1 ? "signal needs" : "signals need"} review · ${description}`
+              : description}
           </span>
         </span>
         <span className="shrink-0 font-mono text-xs text-theme-text-tertiary">
@@ -787,7 +898,7 @@ function CollapsedEvidenceCollection({
               <EvidenceCard
                 key={group.id}
                 group={group}
-                initiallyOpen={false}
+                initiallyOpen={expandCards}
                 animateArrival={animateGroupIds.has(group.id)}
                 onViewSource={onViewSource}
                 spanFullRow={fullRowFlags[index]}
@@ -1041,7 +1152,7 @@ function EvidenceCard({
   spanFullRow?: boolean;
   prominence?: "primary" | "supporting" | "secondary";
 }) {
-  const { onOpenResource, revealSourceId } = useContext(
+  const { onOpenResource, revealSourceId, revealRequestId } = useContext(
     EvidenceNavigationContext,
   );
   const [open, setOpen] = useState(initiallyOpen);
@@ -1061,17 +1172,28 @@ function EvidenceCard({
     revealSourceId,
   );
   useLayoutEffect(() => {
-    if (revealHistory) setOpen(true);
-  }, [revealHistory, revealSourceId]);
+    const destination = revealSourceId
+      ? document.getElementById(
+          investigationEvidenceSourceDomId(revealSourceId),
+        )
+      : null;
+    if (
+      revealHistory ||
+      (destination && elementRef.current?.contains(destination))
+    )
+      setOpen(true);
+  }, [revealHistory, revealSourceId, revealRequestId, elementRef]);
   const wide = spanFullRow || evidenceTypePrefersFullRow(observation.data.type);
   const resourceRef = investigationEvidenceSubjectRef(observation.data);
   const primarySources = uniquePrimarySources(group);
   const metadata = [
-    observation.relevance === "producer-related"
-      ? "related to the investigated resource"
-      : observation.relevance === "broader"
-        ? "found in a broader search"
-        : null,
+    observation.data.type === "inventory"
+      ? null
+      : observation.relevance === "producer-related"
+        ? "related to the investigated resource"
+        : observation.relevance === "broader"
+          ? "Relationship to target not established"
+          : null,
   ].filter((item): item is string => Boolean(item));
   const headerContent = (
     <>
@@ -1169,18 +1291,29 @@ function EvidenceCard({
             {headerContent}
           </div>
         )}
+        {observation.data.type === "inventory" ? (
+          <div className="flex shrink-0 items-center pr-2">
+            <SourceButton
+              label={observation.source.tool}
+              ariaLabel={`View Activity source for ${observation.title}`}
+              onClick={() => onViewSource(observation.source.id)}
+            />
+          </div>
+        ) : null}
       </div>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 pb-2 pl-11">
-        <SourceButton
-          label={observation.source.tool}
-          ariaLabel={`View Activity source for ${observation.title}`}
-          onClick={() => onViewSource(observation.source.id)}
-        />
-        <OpenResourceButton
-          resourceRef={resourceRef}
-          onOpenResource={onOpenResource}
-        />
-      </div>
+      {observation.data.type !== "inventory" ? (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 pb-2 pl-11">
+          <SourceButton
+            label={observation.source.tool}
+            ariaLabel={`View Activity source for ${observation.title}`}
+            onClick={() => onViewSource(observation.source.id)}
+          />
+          <OpenResourceButton
+            resourceRef={resourceRef}
+            onOpenResource={onOpenResource}
+          />
+        </div>
+      ) : null}
       {canExpand ? (
         <div id={bodyId}>
           <Collapse open={open}>
@@ -1249,68 +1382,91 @@ function CheckedReceipts({
   groups,
   animateGroupIds,
   onViewSource,
+  open,
+  onOpenChange,
 }: {
   groups: InvestigationEvidenceGroup[];
   animateGroupIds: ReadonlySet<string>;
   onViewSource: (sourceId: string) => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
 }) {
+  const { elementRef, revealAfterToggle } = useDisclosureReveal<HTMLElement>();
   if (groups.length === 0) return null;
   return (
-    <section aria-labelledby="investigation-checked-heading">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <h3
+    <section
+      ref={elementRef}
+      aria-labelledby="investigation-checked-heading"
+      className="overflow-hidden rounded-lg border border-theme-border bg-theme-surface"
+    >
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls="investigation-checked-results"
+        onClick={() => {
+          onOpenChange(!open);
+          revealAfterToggle(!open);
+        }}
+        className="flex w-full items-center gap-2 px-3 py-2.5 text-left hover:bg-theme-hover/50"
+      >
+        <span
           id="investigation-checked-heading"
-          className="text-sm font-medium text-theme-text-secondary"
+          className="flex-1 text-xs font-semibold text-theme-text-secondary"
         >
           What Radar did not find
-        </h3>
+        </span>
         <span className="font-mono text-xs text-theme-text-tertiary">
           {groups.length}
         </span>
-      </div>
-      <div className="overflow-hidden rounded-lg border border-theme-border bg-theme-base/35">
-        {groups.map((group, index) => {
-          const item = group.latest;
-          const primarySources = uniquePrimarySources(group);
-          return (
-            <div
-              key={group.id}
-              id={group.id}
-              data-evidence-card
-              tabIndex={-1}
-              className={clsx(
-                "flex min-w-0 items-center gap-2 px-3 py-2 outline-none focus:ring-2 focus:ring-inset focus:ring-accent/50",
-                index > 0 && "border-t border-theme-border/60",
-                animateGroupIds.has(group.id) && "animate-transcript-enter",
-              )}
-            >
-              {primarySources.map((source) => (
-                <span
-                  key={source.id}
-                  id={investigationEvidenceSourceDomId(source.id)}
-                  aria-hidden
-                />
-              ))}
-              <CheckCircle2
-                className="h-4 w-4 shrink-0 text-theme-text-tertiary"
-                aria-hidden
-              />
-              <span className="min-w-0 flex-1">
-                <span className="block text-xs font-medium text-theme-text-primary">
-                  {item.title}
-                </span>
-                <span className="block truncate text-xs text-theme-text-tertiary">
-                  {item.summary}
-                </span>
-              </span>
-              <SourceButton
-                label={item.source.tool}
-                ariaLabel={`View Activity source for ${item.title}`}
-                onClick={() => onViewSource(item.source.id)}
-              />
-            </div>
-          );
-        })}
+        <CollapseChevron open={open} className="h-4 w-4" />
+      </button>
+      <div id="investigation-checked-results">
+        <Collapse open={open}>
+          <div className="border-t border-theme-border">
+            {groups.map((group, index) => {
+              const item = group.latest;
+              const primarySources = uniquePrimarySources(group);
+              return (
+                <div
+                  key={group.id}
+                  id={group.id}
+                  data-evidence-card
+                  tabIndex={-1}
+                  className={clsx(
+                    "flex min-w-0 items-center gap-2 px-3 py-2 outline-none focus:ring-2 focus:ring-inset focus:ring-accent/50",
+                    index > 0 && "border-t border-theme-border/60",
+                    animateGroupIds.has(group.id) && "animate-transcript-enter",
+                  )}
+                >
+                  {primarySources.map((source) => (
+                    <span
+                      key={source.id}
+                      id={investigationEvidenceSourceDomId(source.id)}
+                      aria-hidden
+                    />
+                  ))}
+                  <CheckCircle2
+                    className="h-4 w-4 shrink-0 text-theme-text-tertiary"
+                    aria-hidden
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-xs font-medium text-theme-text-primary">
+                      {item.title}
+                    </span>
+                    <span className="block truncate text-xs text-theme-text-tertiary">
+                      {item.summary}
+                    </span>
+                  </span>
+                  <SourceButton
+                    label={item.source.tool}
+                    ariaLabel={`View Activity source for ${item.title}`}
+                    onClick={() => onViewSource(item.source.id)}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </Collapse>
       </div>
     </section>
   );

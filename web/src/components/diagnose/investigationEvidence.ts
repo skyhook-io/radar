@@ -2,6 +2,8 @@ import {
   CORE_RESOURCES,
   defaultConditionTone,
   displayKind,
+  englishPlural,
+  kindToPlural,
   stripAnsi,
   type Issue,
   type IssueRecentChange,
@@ -2931,6 +2933,18 @@ function adaptListResources(
     return;
   }
   const scope = scopeFromArgs(source);
+  const args = record(parseJSON(source.args ?? ""));
+  const kinds = [...new Set(resources.map((resource) => resource.kind))];
+  const noun =
+    kinds.length === 1
+      ? kindToPlural(kinds[0]) === kinds[0].toLowerCase()
+        ? displayKind(kinds[0])
+        : englishPlural(displayKind(kinds[0]))
+      : "Resources";
+  const namespace = nonEmptyString(args?.namespace)
+    ? args.namespace
+    : undefined;
+  const title = namespace ? `${noun} in ${namespace}` : noun;
   if (resources.length === 0) {
     // list_resources intentionally returns [] for some RBAC-filtered reads;
     // even a successful transport outcome therefore cannot prove absence.
@@ -2954,8 +2968,8 @@ function adaptListResources(
     tier: "context",
     relevance: "broader",
     tone: hasAdverseResource ? "warning" : "neutral",
-    title: "Resource inventory",
-    summary: `${resources.length} resource${resources.length === 1 ? "" : "s"} · ${scope}`,
+    title,
+    summary: `${resources.length} returned${nonEmptyString(args?.group) ? ` · ${args.group}` : ""}`,
     data: { type: "inventory", resources, scope },
   });
 }

@@ -1810,7 +1810,13 @@ function DiagnosisResult({
       {/* Remediation — every step is copyable. Only the explicitly recommended
           step can be applied, and only when the caller enables apply. */}
       {showActions && hasRemediation && (
-        <div className="rounded-lg border border-theme-border bg-theme-surface p-3">
+        <div
+          className={
+            section === "actions"
+              ? "space-y-2"
+              : "rounded-lg border border-theme-border bg-theme-surface p-3"
+          }
+        >
           {section !== "actions" && (
             <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-theme-text-secondary">
               <Wrench className="h-3.5 w-3.5 text-accent" />
