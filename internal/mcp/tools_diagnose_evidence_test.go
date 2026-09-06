@@ -5,13 +5,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
@@ -117,8 +122,9 @@ func TestExpectedPreviousLogAbsencesForDiagnoseUsesStatusAndRetainedContent(t *t
 		{
 			Pod:                     "api-0",
 			Container:               "api",
-			Error:                   "arbitrary apiserver wording",
+			Error:                   `failed to get logs: previous terminated container "api" in pod "api-0" not found`,
 			expectedPreviousAbsence: true,
+			previousLogNotFound:     true,
 		},
 		{
 			Pod:                     "api-1",
@@ -138,6 +144,14 @@ func TestExpectedPreviousLogAbsencesForDiagnoseUsesStatusAndRetainedContent(t *t
 			Logs:                    aicontext.FilterLogs("unexpected prior output"),
 			expectedPreviousAbsence: true,
 		},
+		{
+			Pod: "denied", Container: "api", Error: "pods/log is forbidden",
+			expectedPreviousAbsence: true,
+		},
+		{
+			Pod: "interrupted", Container: "api", Error: "failed to read logs: unexpected EOF",
+			expectedPreviousAbsence: true,
+		},
 	}
 
 	want := []diagnosePodContainerRef{
@@ -146,6 +160,69 @@ func TestExpectedPreviousLogAbsencesForDiagnoseUsesStatusAndRetainedContent(t *t
 	}
 	if got := expectedPreviousLogAbsencesForDiagnose(entries); !reflect.DeepEqual(got, want) {
 		t.Fatalf("expectedPreviousLogAbsencesForDiagnose() = %+v, want %+v", got, want)
+	}
+}
+
+func TestFetchPreviousLogsDoesNotHideFailedReads(t *testing.T) {
+	const absent = `previous terminated container "api" in pod "api-0" not found`
+	for _, test := range []struct {
+		name        string
+		code        int
+		message     string
+		shortBody   bool
+		wantAbsence bool
+	}{
+		{name: "empty successful read", code: 200, wantAbsence: true},
+		{name: "specific previous instance absence", code: 400, message: absent, wantAbsence: true},
+		{name: "unrelated bad request", code: 400, message: "container is waiting to start"},
+		{name: "permission denied even with absence wording", code: 403, message: absent},
+		{name: "unauthenticated", code: 401, message: "Unauthorized"},
+		{name: "pod disappeared", code: 404, message: "pod not found"},
+		{name: "server unavailable", code: 500, message: "upstream connection failed"},
+		{name: "interrupted stream", code: 200, shortBody: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Query().Get("previous") != "true" {
+					t.Error("expected previous log request")
+				}
+				if test.code == 200 {
+					if test.shortBody {
+						w.Header().Set("Content-Length", "100")
+						_, _ = w.Write([]byte("partial"))
+					}
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(test.code)
+				_ = json.NewEncoder(w).Encode(metav1.Status{
+					TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Status"},
+					Status:   metav1.StatusFailure, Code: int32(test.code), Message: test.message,
+				})
+			}))
+			defer server.Close()
+			client, err := kubernetes.NewForConfig(&rest.Config{Host: server.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			previousClient := k8s.SetTestClient(client)
+			defer k8s.SetTestClient(previousClient)
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "api-0", Namespace: "shop"},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "api"}}},
+				Status:     corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: "api"}}},
+			}
+			entries := fetchPodLogs(context.Background(), []*corev1.Pod{pod}, "shop", "api", "", 100, nil, true)
+			if len(entries) != 1 {
+				t.Fatalf("entries = %+v", entries)
+			}
+			if got := len(expectedPreviousLogAbsencesForDiagnose(entries)) == 1; got != test.wantAbsence {
+				t.Fatalf("absence = %t, want %t; entry = %+v", got, test.wantAbsence, entries[0])
+			}
+			if !test.wantAbsence && entries[0].Error == "" {
+				t.Fatal("failed read lost its error")
+			}
+		})
 	}
 }
 

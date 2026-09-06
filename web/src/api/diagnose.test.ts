@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRun, subscribeRun, type DiagnoseStreamEvent } from "./diagnose";
 
-type SSEListener = (event: { data: string }) => void;
+type SSEListener = (event: { data: string; lastEventId: string }) => void;
 
 class FakeEventSource {
   static CLOSED = 2;
@@ -24,8 +24,8 @@ class FakeEventSource {
     this.listeners.set(type, listener);
   }
 
-  emit(type: string, event: DiagnoseStreamEvent) {
-    this.listeners.get(type)?.({ data: JSON.stringify(event) });
+  emit(type: string, event: DiagnoseStreamEvent, lastEventId = "") {
+    this.listeners.get(type)?.({ data: JSON.stringify(event), lastEventId });
   }
 
   close() {
@@ -71,6 +71,23 @@ describe("createRun", () => {
       });
     },
   );
+});
+
+it("passes durable SSE sequence IDs and explanation origin through replay", () => {
+  vi.stubGlobal("EventSource", FakeEventSource);
+  const onEvent = vi.fn();
+  const close = subscribeRun("sequence-test", { onEvent });
+  const source = FakeEventSource.instances.at(-1)!;
+  source.emit("done", { type: "done" }, "42");
+  source.emit("turn", { type: "turn", explainAssessment: 42 }, "43");
+  expect(onEvent).toHaveBeenNthCalledWith(1, { type: "done" }, 42);
+  expect(onEvent).toHaveBeenNthCalledWith(
+    2,
+    { type: "turn", explainAssessment: 42 },
+    43,
+  );
+  close();
+  vi.unstubAllGlobals();
 });
 
 describe("subscribeRun replay boundaries", () => {

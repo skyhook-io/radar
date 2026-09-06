@@ -40,6 +40,32 @@ function render(runs: RunSummary[], selectedId?: string): string {
 afterEach(() => vi.useRealTimers());
 
 describe("RecentList", () => {
+  it("keeps the whole row clickable without a portal tooltip and labels individual identity fields", () => {
+    const html = render([run()]);
+    expect(html).not.toContain("inline-flex max-w-full");
+    expect(html).toContain('title="checkout"');
+    expect(html).toContain('title="gke_project-one_us-east1-b_nonprod"');
+    expect(html).toContain('aria-label="Deployment.apps shop/checkout');
+  });
+  it("uses cluster identity instead of lifecycle locks and deterministic initial-issue text", () => {
+    const current = run({ health: { topReason: "CrashLoopBackOff" } });
+    const html = renderToStaticMarkup(
+      <RecentList
+        agentLabel="Codex"
+        runs={[
+          current,
+          run({ id: "stale", status: "stale", context: "kind-demo" }),
+        ]}
+        currentContext={current.context}
+        onSelect={() => {}}
+      />,
+    );
+    expect(html).toContain('aria-label="Current cluster: nonprod"');
+    expect(html).toContain('aria-label="Cluster: kind-demo"');
+    expect(html).toContain("Started with CrashLoopBackOff");
+    expect(html).not.toContain("lucide-lock");
+    expect(html).not.toContain("lucide-check");
+  });
   it("uses one stable start time per run, sorted into local date groups without previews", () => {
     const recentTime = time(2, 13);
     const olderTime = time(1, 12);

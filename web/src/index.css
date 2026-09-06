@@ -1,4 +1,5 @@
 @import "tailwindcss";
+
 /*
  * Tailwind v4 JIT scans only sources under this CSS file's package (web/).
  * k8s-ui is a workspace package whose TSX files also use Tailwind classes;
@@ -15,6 +16,25 @@
 @import "@fontsource-variable/dm-sans";
 @import "@fontsource/dm-mono";
 
+@container investigation (min-width: 1000px) {
+  .investigation-split-enabled .investigation-evidence-jump { display: none; }
+}
+
+@layer components {
+  .investigation-assessment {
+    background: var(--color-investigation-assessment);
+    border-color: var(--color-investigation-assessment-border);
+  }
+  .investigation-evidence {
+    background: var(--color-investigation-evidence);
+    border-color: var(--color-investigation-evidence-border);
+  }
+  .investigation-next-steps {
+    background: var(--color-investigation-next-steps);
+    border-color: var(--color-investigation-next-steps-border);
+  }
+}
+
 /*
  * Tailwind v4 theme tokens. Migrated from the legacy v3 tailwind.config.js
  * to CSS-first @theme so library consumers (e.g. radar-hub-web) don't need
@@ -22,6 +42,12 @@
  * when they consume this package from npm.
  */
 @theme {
+  --color-investigation-assessment: light-dark(#edf3fc, #182237);
+  --color-investigation-assessment-border: light-dark(#d3dff0, #2b3b56);
+  --color-investigation-evidence: light-dark(#f3f0fa, #211e30);
+  --color-investigation-evidence-border: light-dark(#e0d8ee, #39314b);
+  --color-investigation-next-steps: light-dark(#edf6f5, #172a2c);
+  --color-investigation-next-steps-border: light-dark(#cfe4e0, #2a4546);
   /* Fonts — DM Sans for UI, DM Mono for code/metric panes. */
   --font-sans: "DM Sans Variable", "DM Sans", system-ui, sans-serif;
   --font-mono: "DM Mono", ui-monospace, SFMono-Regular, Menlo, monospace;

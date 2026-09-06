@@ -2,6 +2,9 @@
 // run's event stream (replay + live) and reconstructs the transcript; it does not
 // own the run's lifetime — the server does. So closing the panel or navigating
 // away just unsubscribes; the run keeps going and re-subscribing replays it.
+import { useDisclosureReveal } from "./useDisclosureReveal";
+import { investigationExplanation } from "./investigationExplanation";
+import type { AssessmentExplanation } from "./parts";
 import {
   Fragment,
   useCallback,
@@ -58,6 +61,8 @@ import {
 } from "./InvestigationEvidencePane";
 import type { DiagnosisResourceRef } from "./diagnoseEvidenceTypes";
 import { formatInvestigationTarget } from "./target";
+import { parseContextName } from "../../utils/context-name";
+import type { InvestigationSourceExcerpt } from "./investigationSourceFocus";
 
 const RECHECK_QUESTION =
   "Did the fix resolve the issue? Re-check the resource's current status and health now, and say whether it's healthy.";
@@ -403,12 +408,14 @@ export function investigationEvidenceConflictsWithHealthy(projection: {
 
 export function investigationEndedBeforeConclusion(
   status: RunSummary["status"],
-  lastTurn: Pick<Turn, "status" | "apply"> | undefined,
+  lastTurn: Pick<Turn, "status" | "apply" | "explainAssessment"> | undefined,
 ): boolean {
   return (
     (status === "error" || status === "stopped") &&
     (lastTurn === undefined ||
-      (lastTurn.status === "error" && lastTurn.apply !== true))
+      (lastTurn.status === "error" &&
+        lastTurn.apply !== true &&
+        !lastTurn.explainAssessment))
   );
 }
 
@@ -545,6 +552,17 @@ export function InvestigationView({
   const [gone, setGone] = useState(false);
   const [busy, setBusy] = useState(false);
   const [requestPending, setRequestPending] = useState(false);
+  const explanationRequestSerial = useRef(0);
+  const [explanationRequest, setExplanationRequest] = useState<{
+    sequence: number;
+    status: "running" | "error";
+    error?: string;
+  } | null>(null);
+  const [explanationReveal, setExplanationReveal] = useState<{
+    sequence: number;
+    request: number;
+    currentAssessmentIndex: number;
+  } | null>(null);
   const [streamReady, setStreamReady] = useState(false);
   const [historyUnavailable, setHistoryUnavailable] =
     useState<InvestigationHistoryUnavailableState | null>(null);
@@ -581,6 +599,7 @@ export function InvestigationView({
   const [activityRevealRequest, setActivityRevealRequest] = useState<{
     sourceId: string;
     requestId: number;
+    excerpt?: InvestigationSourceExcerpt;
   }>();
   const scrollRef = useRef<HTMLDivElement>(null);
   const evidenceScrollRef = useRef<HTMLDivElement>(null);
@@ -734,6 +753,9 @@ export function InvestigationView({
     setBusy(false);
     setRequestPending(false);
     setStreamReady(false);
+    setExplanationRequest(null);
+    explanationRequestSerial.current++;
+    setExplanationReveal(null);
     setHistoryUnavailable(null);
     setActionError(null);
     setVerificationError(null);
@@ -762,12 +784,13 @@ export function InvestigationView({
     evidenceCardLayoutRef.current.clear();
     evidenceProjectionTurnsRef.current = [];
     const cancel = subscribeRun(run.id, {
-      onEvent: (ev: DiagnoseStreamEvent) => {
+      onEvent: (ev: DiagnoseStreamEvent, sequence?: number) => {
         const live = replayCompleteRef.current;
         switch (ev.type) {
           case "turn":
             flushReveal(live); // close out the prior turn's reasoning before the new one
             setRequestPending(false);
+            if (ev.explainAssessment) setExplanationRequest(null);
             if (ev.apply) {
               pendingApplyStartedLiveRef.current =
                 pendingApplyStartedLiveRef.current ||
@@ -790,6 +813,7 @@ export function InvestigationView({
               ...prev,
               {
                 question: ev.question,
+                explainAssessment: ev.explainAssessment,
                 timeline: [],
                 diagnosis: null,
                 error: null,
@@ -825,7 +849,10 @@ export function InvestigationView({
             const isApply = pendingApplyRef.current;
             const applyStartedLive = pendingApplyStartedLiveRef.current;
             streamInFlightRef.current = false;
-            updateLast((t) => investigationTurnWithTerminalEvent(t, ev, live));
+            updateLast((t) => ({
+              ...investigationTurnWithTerminalEvent(t, ev, live),
+              resultSequence: sequence,
+            }));
             if (live) setBusy(false);
             if (isApply) {
               pendingApplyRef.current = false;
@@ -891,7 +918,9 @@ export function InvestigationView({
             setTurns(replayTurnsRef.current);
             if (!paneSelectionTouchedRef.current) {
               const latest = replayTurnsRef.current.at(-1);
-              if (
+              if (latest?.explainAssessment) {
+                setNarrowPane("evidence");
+              } else if (
                 latest?.status === "done" &&
                 latest.question &&
                 !latest.verify &&
@@ -1050,19 +1079,63 @@ export function InvestigationView({
   };
   const stop = () => stopRun(run.id);
 
-  // Ask a canned follow-up (e.g. "explain simply") — a one-tap path that turns the
-  // prompt's plain-language instruction into something the user controls.
-  const askFollowup = (q: string) => {
+  const askExplanation = (sequence: number) => {
     if (interactionsBlocked) return;
-    setActionError(null);
-    setNarrowPane("activity");
-    suppressEvidenceMotionRef.current = false;
-    pinnedRef.current = true;
+    const serial = ++explanationRequestSerial.current;
+    const previousTurns = turnsRef.current.length;
+    setExplanationRequest({ sequence, status: "running" });
     setRequestPending(true);
-    addTurn(run.id, { question: q }).catch((e) => {
+    addTurn(run.id, { explainAssessment: sequence }).catch((e) => {
+      if (serial !== explanationRequestSerial.current) return;
+      // If the stream already accepted the turn, it owns progress and failure.
+      if (
+        turnsRef.current
+          .slice(previousTurns)
+          .some((turn) => turn.explainAssessment === sequence)
+      )
+        return;
       setRequestPending(false);
-      setActionError(e instanceof DiagnoseError ? e.message : "Couldn't send.");
+      setExplanationRequest({
+        sequence,
+        status: "error",
+        error:
+          e instanceof DiagnoseError
+            ? e.message
+            : "Couldn't request an explanation.",
+      });
     });
+  };
+
+  const explanationFor = (
+    assessment: Turn,
+  ): AssessmentExplanation | undefined => {
+    const sequence = assessment.resultSequence;
+    if (!sequence || !assessment.diagnosis?.rootCause) return undefined;
+    const saved = investigationExplanation(turns, sequence);
+    if (readOnly && saved.status === "idle") return undefined;
+    const state =
+      explanationRequest?.sequence === sequence ? explanationRequest : saved;
+    return {
+      ...state,
+      onGenerate: !interactionsBlocked
+        ? () => askExplanation(sequence)
+        : undefined,
+      openRequest:
+        explanationReveal?.sequence === sequence &&
+        explanationReveal.currentAssessmentIndex === currentAssessmentIdx
+          ? explanationReveal.request
+          : undefined,
+    };
+  };
+
+  const viewExplanation = (sequence: number) => {
+    paneSelectionTouchedRef.current = true;
+    setNarrowPane("evidence");
+    setExplanationReveal((previous) => ({
+      sequence,
+      request: (previous?.request ?? 0) + 1,
+      currentAssessmentIndex: currentAssessmentIdx,
+    }));
   };
 
   // Apply: a user-confirmed remediation turn. Any step is applyable; the chosen
@@ -1140,6 +1213,7 @@ export function InvestigationView({
     if (
       t.status === "done" &&
       !t.apply &&
+      !t.explainAssessment &&
       (!t.question || t.verify) &&
       (t.diagnosis?.remediation?.length ?? 0) > 0
     )
@@ -1164,6 +1238,7 @@ export function InvestigationView({
     if (
       t.status === "done" &&
       !t.apply &&
+      !t.explainAssessment &&
       (!t.question || t.verify) &&
       structured
     )
@@ -1174,8 +1249,6 @@ export function InvestigationView({
   const hasMultipleAssessments = assessmentIndexes.length > 1;
   const currentAssessment =
     currentAssessmentIdx >= 0 ? turns[currentAssessmentIdx] : undefined;
-  const initialAssessment =
-    initialAssessmentIdx >= 0 ? turns[initialAssessmentIdx] : undefined;
 
   const laterVerificationRecorded = investigationApplyAttemptVerified({
     localApplyAttemptAssessmentIdx,
@@ -1474,11 +1547,12 @@ export function InvestigationView({
     [focusAfterPaneSwitch],
   );
   const viewActivitySource = useCallback(
-    (sourceId: string) => {
+    (sourceId: string, excerpt?: InvestigationSourceExcerpt) => {
       paneSelectionTouchedRef.current = true;
       activityRevealRequestIdRef.current += 1;
       setActivityRevealRequest({
         sourceId,
+        excerpt,
         requestId: activityRevealRequestIdRef.current,
       });
       setNarrowPane("activity");
@@ -1602,25 +1676,76 @@ export function InvestigationView({
     setEvidenceUpdateAvailable(false);
   };
 
+  const composer = !readOnly ? (
+    <div className="shrink-0 border-t border-theme-border px-3 py-2.5">
+      {busy ? (
+        <button
+          type="button"
+          onClick={stop}
+          className="w-full rounded-lg border border-theme-border py-1.5 text-sm text-theme-text-secondary hover:bg-theme-hover"
+        >
+          Stop agent
+        </button>
+      ) : (
+        <div className="flex items-end gap-2">
+          <textarea
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                submitFollowup();
+              }
+            }}
+            rows={1}
+            disabled={
+              !streamReady || readOnly || requestPending || verificationPending
+            }
+            placeholder={
+              !streamReady
+                ? historyUnavailablePresentation?.loading
+                  ? "Retrying investigation history…"
+                  : historyUnavailablePresentation
+                    ? "Investigation history unavailable"
+                    : "Loading investigation history…"
+                : verificationPending
+                  ? "Waiting to verify the applied change…"
+                  : requestPending
+                    ? "Agent is working…"
+                    : "Ask a follow-up or refine…"
+            }
+            className="max-h-32 min-h-[38px] flex-1 resize-none rounded-lg border border-theme-border bg-theme-base px-3 py-2 text-sm text-theme-text-primary placeholder:text-theme-text-tertiary focus:border-accent focus:outline-none disabled:opacity-50"
+          />
+          <button
+            type="button"
+            onClick={submitFollowup}
+            disabled={!input.trim() || interactionsBlocked}
+            className="shrink-0 rounded-lg btn-brand p-2 disabled:opacity-40"
+            aria-label="Send follow-up"
+          >
+            <Send className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+    </div>
+  ) : null;
+
   return (
-    <div className="@container/investigation relative flex min-h-0 flex-1 flex-col bg-theme-surface">
+    <div
+      data-investigation-workspace
+      className={`@container/investigation relative flex min-h-0 flex-1 flex-col bg-theme-surface ${maximized ? "investigation-split-enabled" : ""}`}
+    >
       {stale ? (
         <div className="flex items-center gap-2 border-b border-amber-500/35 bg-amber-500/10 px-3 py-2 text-xs text-theme-text-secondary">
           <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
           <span className="min-w-0 flex-1">
-            Captured on{" "}
+            This investigation ran on{" "}
             <span className="font-medium text-theme-text-primary">
-              {run.context || "a different cluster"}
+              {parseContextName(run.context).clusterName}
             </span>
-            . The active cluster changed, so this investigation is read-only.
+            . It is read-only because its agent session was closed after a
+            cluster switch.
           </span>
-          <button
-            type="button"
-            onClick={retryDiagnosis}
-            className="shrink-0 rounded-md border border-amber-500/40 px-2 py-1 font-medium text-warning-text hover:bg-amber-500/10"
-          >
-            Investigate current cluster
-          </button>
         </div>
       ) : null}
       {!stale && gone ? (
@@ -1778,169 +1903,170 @@ export function InvestigationView({
                   : null}
             </span>
           </div>
-          <div
-            ref={scrollRef}
-            data-investigation-activity-scroll
-            onScroll={onScroll}
-            className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 [scrollbar-gutter:stable]"
-          >
-            <div>
-              <div className="space-y-4">
-                {turns.length === 0 && !gone ? (
-                  <div className="flex min-h-36 flex-col items-center justify-center rounded-lg border border-dashed border-theme-border px-4 text-center">
-                    {historyUnavailablePresentation &&
-                    !historyUnavailablePresentation.loading ? (
-                      <AlertTriangle className="h-5 w-5 text-red-400" />
-                    ) : !streamReady || busy ? (
-                      <Loader2 className="h-5 w-5 animate-spin text-accent" />
-                    ) : (
-                      <Activity className="h-5 w-5 text-theme-text-tertiary" />
-                    )}
-                    <p className="mt-2 text-sm font-medium text-theme-text-secondary">
-                      {!streamReady
-                        ? historyUnavailablePresentation?.loading
-                          ? "Retrying saved activity"
-                          : historyUnavailablePresentation
-                            ? "Saved activity unavailable"
-                            : "Loading saved activity"
-                        : busy
-                          ? "Starting the investigation"
-                          : "No activity recorded"}
-                    </p>
-                    <p className="mt-1 text-xs text-theme-text-tertiary">
-                      {!streamReady
-                        ? historyUnavailablePresentation?.loading
-                          ? "Radar will continue when saved history is available."
-                          : historyUnavailablePresentation
-                            ? "Radar could not restore this run from saved history."
-                            : "Restoring this run from saved history."
-                        : busy
-                          ? "Reasoning and tool activity will appear here."
-                          : "No saved activity is available for this run."}
-                    </p>
-                  </div>
-                ) : null}
-                {turns.map((turn, index) => {
-                  const isLast = index === turns.length - 1;
-                  const verifiedHealthy =
-                    turn.verify &&
-                    turn.diagnosis?.healthy === true &&
-                    !currentAssessmentCoverageLimited &&
-                    !currentAssessmentEvidenceConflict;
-                  const canCheck =
-                    isLast &&
-                    (turn.status === "done" || turn.status === "error") &&
-                    !!turn.apply &&
-                    !readOnly;
-                  return (
-                    <Fragment key={index}>
-                      <TurnView
-                        turn={turn}
-                        turnIndex={index}
-                        evidenceStepIds={evidenceStepIdsByTurn.get(index)}
-                        onViewEvidence={viewEvidenceSource}
-                        sourceRevealRequest={activityRevealRequest}
-                        onAsk={
-                          isLast &&
-                          !interactionsBlocked &&
-                          !!turn.question &&
-                          !turn.verify
-                            ? askFollowup
-                            : undefined
-                        }
-                        onCheckStatus={
-                          canCheck && !interactionsBlocked
-                            ? checkStatus
-                            : undefined
-                        }
-                        onRetryDiagnosis={
-                          isLast &&
-                          turn.status === "error" &&
-                          !turn.question &&
-                          !turn.apply &&
-                          !stale
-                            ? retryDiagnosis
-                            : undefined
-                        }
-                        hideConclusion={assessmentIndexes.includes(index)}
-                      />
-                      {index === currentAssessmentIdx ? (
-                        <button
-                          type="button"
-                          onClick={() => selectPane("evidence")}
-                          className={`group flex w-full items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left transition-colors ${
-                            verifiedHealthy
-                              ? "border-emerald-500/30 bg-emerald-500/5 hover:bg-emerald-500/10"
-                              : "border-accent/30 bg-accent/5 hover:bg-accent/10"
-                          } ${splitTabClass}`}
-                        >
-                          <span
-                            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${
-                              verifiedHealthy
-                                ? "bg-emerald-500/15 text-emerald-500"
-                                : "bg-accent/10 text-accent-text"
-                            }`}
-                          >
-                            {verifiedHealthy ? (
-                              <CheckCircle2 className="h-4 w-4" />
-                            ) : (
-                              <Files className="h-4 w-4" />
-                            )}
-                          </span>
-                          <span className="min-w-0 flex-1">
-                            <span className="block text-xs font-semibold text-theme-text-primary">
-                              {turn.verify
-                                ? "Verification complete"
-                                : "Assessment ready"}
-                            </span>
-                            <span className="block text-[11px] text-theme-text-tertiary">
-                              {currentKeyFindingCount > 0
-                                ? `${currentKeyFindingCount} ${currentKeyFindingCount === 1 ? "key finding" : "key findings"} ready to review`
-                                : "Findings compiled from Radar results"}
-                            </span>
-                          </span>
-                          <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-accent-text">
-                            View Findings
-                            <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
-                          </span>
-                        </button>
-                      ) : null}
-                    </Fragment>
-                  );
-                })}
-                {(actionError || displayedStatusCheckError) && (
-                  <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-theme-text-primary">
-                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
-                    <div className="min-w-0 flex-1">
-                      <span>{displayedStatusCheckError || actionError}</span>
-                      {displayedStatusCheckError ? (
-                        <button
-                          type="button"
-                          onClick={checkStatus}
-                          disabled={interactionsBlocked}
-                          className="mt-2 block rounded-md border border-red-500/30 px-2 py-1 text-xs font-medium text-theme-text-primary hover:bg-red-500/10 disabled:opacity-50"
-                        >
-                          {applyOutcomeUncertain && !displayedVerificationError
-                            ? "Check current status"
-                            : "Check current status again"}
-                        </button>
-                      ) : null}
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            <div
+              ref={scrollRef}
+              data-investigation-activity-scroll
+              onScroll={onScroll}
+              className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 [scrollbar-gutter:stable]"
+            >
+              <div>
+                <div className="space-y-4">
+                  {turns.length === 0 && !gone ? (
+                    <div className="flex min-h-36 flex-col items-center justify-center rounded-lg border border-dashed border-theme-border px-4 text-center">
+                      {historyUnavailablePresentation &&
+                      !historyUnavailablePresentation.loading ? (
+                        <AlertTriangle className="h-5 w-5 text-red-400" />
+                      ) : !streamReady || busy ? (
+                        <Loader2 className="h-5 w-5 animate-spin text-accent" />
+                      ) : (
+                        <Activity className="h-5 w-5 text-theme-text-tertiary" />
+                      )}
+                      <p className="mt-2 text-sm font-medium text-theme-text-secondary">
+                        {!streamReady
+                          ? historyUnavailablePresentation?.loading
+                            ? "Retrying saved activity"
+                            : historyUnavailablePresentation
+                              ? "Saved activity unavailable"
+                              : "Loading saved activity"
+                          : busy
+                            ? "Starting the investigation"
+                            : "No activity recorded"}
+                      </p>
+                      <p className="mt-1 text-xs text-theme-text-tertiary">
+                        {!streamReady
+                          ? historyUnavailablePresentation?.loading
+                            ? "Radar will continue when saved history is available."
+                            : historyUnavailablePresentation
+                              ? "Radar could not restore this run from saved history."
+                              : "Restoring this run from saved history."
+                          : busy
+                            ? "Reasoning and tool activity will appear here."
+                            : "No saved activity is available for this run."}
+                      </p>
                     </div>
-                  </div>
-                )}
+                  ) : null}
+                  {turns.map((turn, index) => {
+                    const isLast = index === turns.length - 1;
+                    const verifiedHealthy =
+                      turn.verify &&
+                      turn.diagnosis?.healthy === true &&
+                      !currentAssessmentCoverageLimited &&
+                      !currentAssessmentEvidenceConflict;
+                    const canCheck =
+                      isLast &&
+                      (turn.status === "done" || turn.status === "error") &&
+                      !!turn.apply &&
+                      !readOnly;
+                    return (
+                      <Fragment key={index}>
+                        <TurnView
+                          turn={turn}
+                          turnIndex={index}
+                          evidenceStepIds={evidenceStepIdsByTurn.get(index)}
+                          onViewEvidence={viewEvidenceSource}
+                          sourceRevealRequest={activityRevealRequest}
+                          onViewExplanation={
+                            turn.explainAssessment
+                              ? () => viewExplanation(turn.explainAssessment!)
+                              : undefined
+                          }
+                          onCheckStatus={
+                            canCheck && !interactionsBlocked
+                              ? checkStatus
+                              : undefined
+                          }
+                          onRetryDiagnosis={
+                            isLast &&
+                            turn.status === "error" &&
+                            !turn.question &&
+                            !turn.apply &&
+                            !stale
+                              ? retryDiagnosis
+                              : undefined
+                          }
+                          hideConclusion={assessmentIndexes.includes(index)}
+                        />
+                        {index === currentAssessmentIdx ? (
+                          <button
+                            type="button"
+                            onClick={() => selectPane("evidence")}
+                            className={`group flex w-full items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left transition-colors ${
+                              verifiedHealthy
+                                ? "border-emerald-500/30 bg-emerald-500/5 hover:bg-emerald-500/10"
+                                : "border-accent/30 bg-accent/5 hover:bg-accent/10"
+                            } ${splitTabClass}`}
+                          >
+                            <span
+                              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${
+                                verifiedHealthy
+                                  ? "bg-emerald-500/15 text-emerald-500"
+                                  : "bg-accent/10 text-accent-text"
+                              }`}
+                            >
+                              {verifiedHealthy ? (
+                                <CheckCircle2 className="h-4 w-4" />
+                              ) : (
+                                <Files className="h-4 w-4" />
+                              )}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block text-xs font-semibold text-theme-text-primary">
+                                {turn.verify
+                                  ? "Verification complete"
+                                  : "Assessment ready"}
+                              </span>
+                              <span className="block text-[11px] text-theme-text-tertiary">
+                                {currentKeyFindingCount > 0
+                                  ? `${currentKeyFindingCount} ${currentKeyFindingCount === 1 ? "key finding" : "key findings"} ready to review`
+                                  : "Findings compiled from Radar results"}
+                              </span>
+                            </span>
+                            <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-accent-text">
+                              View Findings
+                              <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
+                            </span>
+                          </button>
+                        ) : null}
+                      </Fragment>
+                    );
+                  })}
+                  {(actionError || displayedStatusCheckError) && (
+                    <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-theme-text-primary">
+                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+                      <div className="min-w-0 flex-1">
+                        <span>{displayedStatusCheckError || actionError}</span>
+                        {displayedStatusCheckError ? (
+                          <button
+                            type="button"
+                            onClick={checkStatus}
+                            disabled={interactionsBlocked}
+                            className="mt-2 block rounded-md border border-red-500/30 px-2 py-1 text-xs font-medium text-theme-text-primary hover:bg-red-500/10 disabled:opacity-50"
+                          >
+                            {applyOutcomeUncertain &&
+                            !displayedVerificationError
+                              ? "Check current status"
+                              : "Check current status again"}
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
+            {showJump ? (
+              <button
+                type="button"
+                onClick={jumpToBottom}
+                className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-theme-border bg-theme-elevated px-3 py-1.5 text-xs font-medium text-theme-text-secondary shadow-theme-md hover:bg-theme-hover hover:text-theme-text-primary"
+              >
+                <ArrowDown className="h-3.5 w-3.5" />
+                {busy ? "Jump to latest" : "Scroll to bottom"}
+              </button>
+            ) : null}
           </div>
-          {showJump ? (
-            <button
-              type="button"
-              onClick={jumpToBottom}
-              className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-theme-border bg-theme-elevated px-3 py-1.5 text-xs font-medium text-theme-text-secondary shadow-theme-md hover:bg-theme-hover hover:text-theme-text-primary"
-            >
-              <ArrowDown className="h-3.5 w-3.5" />
-              {busy ? "Jump to latest" : "Scroll to bottom"}
-            </button>
-          ) : null}
+          {composer}
         </section>
         <section
           id={findingsPaneId}
@@ -2002,10 +2128,7 @@ export function InvestigationView({
             }}
             className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 [overflow-anchor:none] [scrollbar-gutter:stable]"
           >
-            <div
-              ref={evidenceContentRef}
-              className="mx-auto max-w-5xl space-y-6"
-            >
+            <div ref={evidenceContentRef} className="min-w-0 space-y-6">
               {rebuildingReplay ? (
                 <div className="flex min-h-28 flex-col items-center justify-center rounded-lg border border-dashed border-theme-border px-4 text-center">
                   {historyUnavailablePresentation &&
@@ -2033,7 +2156,7 @@ export function InvestigationView({
                 <>
                   <section
                     aria-labelledby={`${workspaceId}-assessment-heading`}
-                    className="rounded-xl border border-theme-border bg-theme-elevated/50 p-4"
+                    className="investigation-assessment rounded-xl border p-4"
                   >
                     <div className="flex flex-wrap items-center gap-1.5">
                       <h2
@@ -2054,33 +2177,6 @@ export function InvestigationView({
                                   ? "Initial assessment"
                                   : "Assessment"}
                       </h2>
-                      <span className="text-xs text-theme-text-tertiary">
-                        AI assessment
-                      </span>
-                      {hasNextSteps ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const section = nextStepsRef.current;
-                            const scroller = evidenceScrollRef.current;
-                            if (!section || !scroller) return;
-                            section.focus({ preventScroll: true });
-                            scroller.scrollTo({
-                              top:
-                                scroller.scrollTop +
-                                section.getBoundingClientRect().top -
-                                scroller.getBoundingClientRect().top -
-                                12,
-                              behavior: prefersReducedMotion()
-                                ? "auto"
-                                : "smooth",
-                            });
-                          }}
-                          className="ml-auto rounded-md px-2 py-1 text-xs font-medium text-accent-text hover:bg-theme-hover"
-                        >
-                          Next steps ↓
-                        </button>
-                      ) : null}
                       {assessmentNeedsCurrentStateVerification ? (
                         <Badge severity="warning" size="sm">
                           Current state unverified
@@ -2112,8 +2208,38 @@ export function InvestigationView({
                     ) : null}
                     {currentAssessment?.diagnosis ? (
                       <ResultCard
+                        key={
+                          currentAssessment.resultSequence ??
+                          currentAssessmentIdx
+                        }
                         diagnosis={currentAssessment.diagnosis}
-                        onAsk={!interactionsBlocked ? askFollowup : undefined}
+                        assessmentAction={
+                          hasNextSteps ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const section = nextStepsRef.current;
+                                const scroller = evidenceScrollRef.current;
+                                if (!section || !scroller) return;
+                                section.focus({ preventScroll: true });
+                                scroller.scrollTo({
+                                  top:
+                                    scroller.scrollTop +
+                                    section.getBoundingClientRect().top -
+                                    scroller.getBoundingClientRect().top -
+                                    12,
+                                  behavior: prefersReducedMotion()
+                                    ? "auto"
+                                    : "smooth",
+                                });
+                              }}
+                              className="ml-auto rounded-md px-2 py-1 text-xs font-medium text-accent-text hover:bg-theme-hover"
+                            >
+                              Next steps ↓
+                            </button>
+                          ) : null
+                        }
+                        explanation={explanationFor(currentAssessment)}
                         section="conclusion"
                         animate={currentAssessment.animateResult !== false}
                         showDisclaimer={false}
@@ -2140,13 +2266,25 @@ export function InvestigationView({
                         </span>
                       </div>
                     )}
-                    {currentAssessment?.verify &&
-                    currentAssessmentIdx !== initialAssessmentIdx &&
-                    initialAssessment?.diagnosis ? (
-                      <PriorConclusion
-                        diagnosis={initialAssessment.diagnosis}
-                      />
-                    ) : null}
+                    {assessmentIndexes
+                      .filter(
+                        (index) =>
+                          index !== currentAssessmentIdx &&
+                          (index === initialAssessmentIdx ||
+                            turns.some(
+                              (turn) =>
+                                turn.explainAssessment ===
+                                turns[index].resultSequence,
+                            )),
+                      )
+                      .map((index) => (
+                        <PriorConclusion
+                          key={index}
+                          initial={index === initialAssessmentIdx}
+                          diagnosis={turns[index].diagnosis!}
+                          explanation={explanationFor(turns[index])}
+                        />
+                      ))}
                     {displayedStatusCheckError ? (
                       <div className="mt-2 flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-theme-text-secondary">
                         <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-red-400" />
@@ -2172,7 +2310,15 @@ export function InvestigationView({
                   <InvestigationEvidencePane
                     projection={projection}
                     rootCauseEvidence={rootCauseEvidenceResolution}
-                    collecting={busy || requestPending}
+                    collecting={
+                      explanationRequest?.status !== "running" &&
+                      (requestPending ||
+                        (busy &&
+                          (!lastTurn?.explainAssessment ||
+                            lastTurn.timeline.some(
+                              (item) => item.kind === "tool",
+                            ))))
+                    }
                     animateGroupIds={animateEvidenceGroupIds}
                     onViewSource={viewActivitySource}
                     onViewActivity={viewActivity}
@@ -2185,7 +2331,7 @@ export function InvestigationView({
                           ref={nextStepsRef}
                           tabIndex={-1}
                           aria-labelledby={`${workspaceId}-next-steps`}
-                          className="rounded-xl border border-theme-border bg-theme-elevated/50 p-4 outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+                          className="investigation-next-steps rounded-xl border p-4 outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
                         >
                           <h2
                             id={`${workspaceId}-next-steps`}
@@ -2233,100 +2379,54 @@ export function InvestigationView({
         managedBy={run.managedBy}
         confidence={turns[lastRemediationIdx]?.diagnosis?.confidence}
       />
-
-      <div className={`grid shrink-0 ${splitGridClass}`}>
-        <div
-          className={`border-t border-theme-border px-3 py-2.5 ${splitActivityBorderClass}`}
-        >
-          {busy ? (
-            <button
-              type="button"
-              onClick={stop}
-              className="w-full rounded-lg border border-theme-border py-1.5 text-sm text-theme-text-secondary hover:bg-theme-hover"
-            >
-              Stop agent
-            </button>
-          ) : (
-            <div className="flex items-end gap-2">
-              <textarea
-                value={input}
-                onChange={(event) => setInput(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) {
-                    event.preventDefault();
-                    submitFollowup();
-                  }
-                }}
-                rows={1}
-                disabled={
-                  !streamReady ||
-                  readOnly ||
-                  requestPending ||
-                  verificationPending
-                }
-                placeholder={
-                  readOnly
-                    ? stale
-                      ? "Cluster changed — investigate again"
-                      : "Investigation closed — start a new one"
-                    : !streamReady
-                      ? historyUnavailablePresentation?.loading
-                        ? "Retrying investigation history…"
-                        : historyUnavailablePresentation
-                          ? "Investigation history unavailable"
-                          : "Loading investigation history…"
-                      : verificationPending
-                        ? "Waiting to verify the applied change…"
-                        : requestPending
-                          ? "Agent is working…"
-                          : "Ask a follow-up or refine…"
-                }
-                className="max-h-32 min-h-[38px] flex-1 resize-none rounded-lg border border-theme-border bg-theme-base px-3 py-2 text-sm text-theme-text-primary placeholder:text-theme-text-tertiary focus:border-accent focus:outline-none disabled:opacity-50"
-              />
-              <button
-                type="button"
-                onClick={submitFollowup}
-                disabled={!input.trim() || interactionsBlocked}
-                className="shrink-0 rounded-lg btn-brand p-2 disabled:opacity-40"
-                aria-label="Send follow-up"
-              >
-                <Send className="h-4 w-4" />
-              </button>
-            </div>
-          )}
-        </div>
-        <div
-          aria-hidden="true"
-          className={`hidden border-t border-theme-border ${splitPaneClass}`}
-        />
-      </div>
     </div>
   );
 }
 
-function PriorConclusion({ diagnosis }: { diagnosis: Diagnosis }) {
+function PriorConclusion({
+  diagnosis,
+  explanation,
+  initial,
+}: {
+  diagnosis: Diagnosis;
+  explanation?: AssessmentExplanation;
+  initial: boolean;
+}) {
+  const reveal = useDisclosureReveal<HTMLDivElement>();
   const [open, setOpen] = useState(false);
   const regionId = useId();
+  useEffect(() => {
+    if (explanation?.openRequest) {
+      setOpen(true);
+      reveal.revealAfterToggle(true);
+    }
+  }, [explanation?.openRequest]);
   return (
     <div className="mt-2 overflow-hidden rounded-lg border border-theme-border bg-theme-base/35">
       <button
         type="button"
         aria-expanded={open}
         aria-controls={regionId}
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => {
+          setOpen(!open);
+          reveal.revealAfterToggle(!open);
+        }}
         className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-theme-text-secondary hover:bg-theme-hover"
       >
         <CollapseChevron open={open} className="h-3.5 w-3.5" />
-        <span className="font-medium">Initial assessment</span>
+        <span className="font-medium">
+          {initial ? "Initial assessment" : "Earlier assessment"}
+        </span>
         <span className="text-theme-text-tertiary">
           before the latest status check
         </span>
       </button>
-      <div id={regionId}>
+      <div id={regionId} ref={reveal.elementRef}>
         <Collapse open={open}>
           <div className="border-t border-theme-border/60 px-3 pb-3">
             <ResultCard
               diagnosis={diagnosis}
+              explanation={explanation}
               section="conclusion"
               showDisclaimer={false}
             />

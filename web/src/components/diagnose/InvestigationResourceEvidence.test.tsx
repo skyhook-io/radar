@@ -16,7 +16,7 @@ function render(resource: InvestigationKubernetesResource): string {
 }
 
 describe("InvestigationResourceEvidence", () => {
-  it("prioritizes useful ConfigMap values, caps the table, and hides sensitive-looking values", () => {
+  it("keeps every ConfigMap key inspectable in a bounded table and hides sensitive-looking values", () => {
     const html = render({
       apiVersion: "v1",
       kind: "ConfigMap",
@@ -46,7 +46,10 @@ describe("InvestigationResourceEvidence", () => {
     expect(html).not.toContain("do-not-render-this-password");
     expect(html).not.toContain("hidden-pass");
     expect(html).not.toContain("another-hidden-pass");
-    expect(html).toContain("4 more keys available in Activity");
+    expect(html).toContain("max-h-64 overflow-y-auto");
+    expect(html).toContain("Z_MISC");
+    expect(html.match(/<tr>/g)).toHaveLength(12);
+    expect(html).not.toContain("more keys available in Activity");
     expect(html.indexOf("API_ENDPOINT")).toBeLessThan(
       html.indexOf("MONGO_USER"),
     );
@@ -59,7 +62,7 @@ describe("InvestigationResourceEvidence", () => {
       kind: "Secret",
       metadata: { namespace: "dev", name: "database" },
       type: "Opaque",
-      keys: ["MONGO_PASSWORD", "username", "connection"],
+      keys: ["MONGO_PASSWORD", "username", "connection", "API_KEY"],
       data: {
         MONGO_PASSWORD: "c3VwZXItc2VjcmV0",
         username: "b3BlbmRldg==",
@@ -70,8 +73,8 @@ describe("InvestigationResourceEvidence", () => {
     expect(html).toContain("MONGO_PASSWORD");
     expect(html).toContain("username");
     expect(html).toContain("connection");
-    expect(html).toContain("Opaque");
-    expect(html).toContain("Secret values are never shown here.");
+    expect(html).not.toContain("Opaque");
+    expect(html).not.toContain("Secret values are never shown here.");
     expect(html).not.toContain("c3VwZXItc2VjcmV0");
     expect(html).not.toContain("b3BlbmRldg==");
     expect(html).not.toContain("mongodb://");
@@ -122,7 +125,7 @@ describe("InvestigationResourceEvidence", () => {
     );
     expect(html).not.toContain("AgA-ciphertext");
     expect(html).not.toContain("AgA-other");
-    expect(html).toContain("Encrypted values stay hidden");
+    expect(html).not.toContain("Encrypted values stay hidden");
   });
 
   it("returns no specialized UI or summary for generic resources", () => {
@@ -158,13 +161,30 @@ describe("InvestigationResourceEvidence", () => {
       expect(render(resource)).toBe("");
     }
     expect(investigationResourceEvidenceSummary(emptySecret)).toBe(
-      "0 keys · Opaque · values hidden",
+      "No key names in this result",
     );
   });
 });
 
 describe("investigation resource summaries", () => {
-  it("summarizes high-signal ConfigMap fields without exposing sensitive values", () => {
+  it.each([0, 1, 3, 4])(
+    "adds Secret details only beyond the inline preview (%i keys)",
+    (count) => {
+      const resource = {
+        apiVersion: "v1",
+        kind: "Secret",
+        metadata: { name: "keys", namespace: "dev" },
+        keys: Array.from({ length: count }, (_, index) => `KEY_${index}`),
+      };
+      expect(investigationResourceEvidenceHasDetails(resource)).toBe(count > 3);
+      const summary = investigationResourceEvidenceSummary(resource)!;
+      if (count > 0) expect(summary).toContain("KEY_0");
+      if (count === 4) expect(summary).toContain("1 more");
+      expect(summary).not.toContain("values hidden");
+    },
+  );
+
+  it("summarizes ConfigMap key names without exposing values", () => {
     const summary = investigationResourceEvidenceSummary({
       apiVersion: "v1",
       kind: "ConfigMap",
@@ -177,13 +197,11 @@ describe("investigation resource summaries", () => {
       },
     });
 
-    expect(summary).toBe(
-      "MONGO_ADDRESS=nonprod-boxer.example.mongodb.net · MONGO_USER=opendev-nonprod · 1 more value · 1 hidden",
-    );
+    expect(summary).toBe("Keys: MONGO_ADDRESS, MONGO_USER, API_TOKEN, ZZZ");
     expect(summary).not.toContain("must-stay-hidden");
   });
 
-  it("prefers visible evidence when higher-priority ConfigMap entries are hidden", () => {
+  it("includes key names even when their values must stay hidden", () => {
     const summary = investigationResourceEvidenceSummary({
       apiVersion: "v1",
       kind: "ConfigMap",
@@ -197,7 +215,7 @@ describe("investigation resource summaries", () => {
     });
 
     expect(summary).toBe(
-      "MONGO_ADDRESS=mongo.dev.svc · MONGO_USER=opendev · 2 hidden",
+      "Keys: DATABASE_URL, MONGO_ADDRESS, PRIVATE_ENDPOINT, MONGO_USER",
     );
     expect(summary).not.toContain("hidden@mongo");
     expect(summary).not.toContain("private.example.test");
@@ -233,7 +251,7 @@ describe("investigation resource summaries", () => {
           metadata: { namespace: "dev", name: "vars" },
           data: { AUTHORIZATION: value },
         }),
-      ).toBe("AUTHORIZATION=[hidden]");
+      ).toBe("Keys: AUTHORIZATION");
     }
   });
 });

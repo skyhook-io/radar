@@ -4,10 +4,9 @@ import {
   MAXIMIZED_COMPACT_HISTORY_VISIBILITY_CLASS,
   MAXIMIZED_HOME_DETAIL_VISIBILITY_CLASS,
   MAXIMIZED_HOME_RUN_HEADER_VISIBILITY_CLASS,
-  MAXIMIZED_HISTORY_VISIBILITY_CLASS,
+  INVESTIGATION_HISTORY_MIN_WIDTH,
   MAXIMIZED_RUN_META_VISIBILITY_CLASS,
   canStartNewInvestigation,
-  investigationBreadcrumbVisibilityClass,
   investigationHeaderPresentation,
   openInvestigationEvidenceResource,
 } from "./DiagnoseSurface";
@@ -52,9 +51,8 @@ describe("canStartNewInvestigation", () => {
   });
 
   it("stays hidden on a stale run", () => {
-    // The body offers "Investigate current cluster" WITH the context-changed
-    // warning. A bare + carries none of it, at a resource that may not exist in
-    // the context it would now run against.
+    // A closed session must not start a new investigation against a resource
+    // that may not exist in the active cluster.
     expect(canStartNewInvestigation("investigation", run("stale"), false)).toBe(
       false,
     );
@@ -140,25 +138,19 @@ describe("investigation history navigation", () => {
     expect(DIAGNOSE_SURFACE_FRAME_CLASS).not.toContain("overflow-y-auto");
   });
 
-  it("swaps the maximized breadcrumb for the master list at one container breakpoint", () => {
-    expect(investigationBreadcrumbVisibilityClass(false)).toBe("");
-    expect(investigationBreadcrumbVisibilityClass(true)).toBe(
-      "@min-[1500px]/diagnose-surface:hidden",
-    );
-    expect(MAXIMIZED_HISTORY_VISIBILITY_CLASS).toBe(
-      "hidden @min-[1500px]/diagnose-surface:block",
-    );
+  it("reserves the history rail for wider investigation surfaces", () => {
+    expect(INVESTIGATION_HISTORY_MIN_WIDTH).toBe(1750);
     expect(MAXIMIZED_COMPACT_HISTORY_VISIBILITY_CLASS).toBe(
-      "@min-[1500px]/diagnose-surface:hidden",
+      "@min-[1750px]/diagnose-surface:hidden",
     );
     expect(MAXIMIZED_HOME_DETAIL_VISIBILITY_CLASS).toBe(
-      "hidden @min-[1500px]/diagnose-surface:flex",
+      "hidden @min-[1750px]/diagnose-surface:flex",
     );
     expect(MAXIMIZED_HOME_RUN_HEADER_VISIBILITY_CLASS).toBe(
-      "hidden @min-[1500px]/diagnose-surface:block",
+      "hidden @min-[1750px]/diagnose-surface:block",
     );
     expect(MAXIMIZED_RUN_META_VISIBILITY_CLASS).toBe(
-      "hidden @min-[1500px]/diagnose-surface:flex",
+      "hidden @min-[1750px]/diagnose-surface:flex",
     );
   });
 

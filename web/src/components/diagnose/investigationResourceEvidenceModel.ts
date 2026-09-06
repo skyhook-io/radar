@@ -49,7 +49,6 @@ export type InvestigationResourceEvidenceModel =
   | {
       kind: "secret";
       keys: string[];
-      secretType: string;
       summary: string;
       hasDetails: boolean;
     }
@@ -243,41 +242,10 @@ function timestamp(
   };
 }
 
-function clippedSummaryValue(value: string): string {
-  const compact = value.replace(/\s+/g, " ").trim();
-  return compact.length > 56 ? `${compact.slice(0, 55)}…` : compact;
-}
-
-function configEntrySummary(entry: InvestigationConfigEntry): string {
-  if (entry.sensitive) return `${entry.key}=[hidden]`;
-  if (entry.binary) return `${entry.key}=[binary hidden]`;
-  return `${entry.key}=${clippedSummaryValue(entry.value ?? "")}`;
-}
-
-function configMapSummary(entries: InvestigationConfigEntry[]): string {
-  if (entries.length === 0) return "No data keys in this result";
-
-  // Put legible causal facts ahead of redaction placeholders. If every value is
-  // hidden, retain up to two key names so the summary still says what was read.
-  const visible = entries
-    .slice(0, INVESTIGATION_CONFIG_ROW_LIMIT)
-    .filter((entry) => !entry.binary && !entry.sensitive);
-  const shown = visible.length > 0 ? visible.slice(0, 2) : entries.slice(0, 2);
-  const shownEntries = new Set(shown);
-  const remaining = entries.filter((entry) => !shownEntries.has(entry));
-  const remainingVisible = remaining.filter(
-    (entry) => !entry.binary && !entry.sensitive,
-  ).length;
-  const remainingHidden = remaining.length - remainingVisible;
-  return [
-    ...shown.map(configEntrySummary),
-    ...(remainingVisible > 0
-      ? [
-          `${remainingVisible} more ${remainingVisible === 1 ? "value" : "values"}`,
-        ]
-      : []),
-    ...(remainingHidden > 0 ? [`${remainingHidden} hidden`] : []),
-  ].join(" · ");
+function resourceKeySummary(keys: string[], previewLimit = 3): string {
+  if (keys.length === 0) return "No key names in this result";
+  const remaining = keys.length - previewLimit;
+  return `Keys: ${keys.slice(0, previewLimit).join(", ")}${remaining > 0 ? ` · ${remaining} more` : ""}`;
 }
 
 export function buildInvestigationResourceEvidenceModel(
@@ -289,19 +257,20 @@ export function buildInvestigationResourceEvidenceModel(
       return {
         kind: "configmap",
         entries,
-        summary: configMapSummary(entries),
+        summary: resourceKeySummary(
+          entries.map((entry) => entry.key),
+          INVESTIGATION_CONFIG_ROW_LIMIT,
+        ),
         hasDetails: entries.length > 0,
       };
     }
     case "secret": {
       const keys = secretKeys(resource);
-      const secretType = stringValue(resource.type) ?? "Opaque";
       return {
         kind: "secret",
         keys,
-        secretType,
-        summary: `${keys.length} ${keys.length === 1 ? "key" : "keys"}${keys.length === 0 ? ` · ${secretType}` : ""} · values hidden`,
-        hasDetails: keys.length > 0,
+        summary: resourceKeySummary(keys),
+        hasDetails: keys.length > 3,
       };
     }
     case "sealedsecret": {

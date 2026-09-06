@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
 import {
-  INVESTIGATION_CONFIG_ROW_LIMIT,
   buildInvestigationResourceEvidenceModel,
   type InvestigationResourceEvidenceInput,
   type InvestigationResourceEvidenceModel,
@@ -29,8 +28,6 @@ function ConfigMapEvidence({
   model: Extract<InvestigationResourceEvidenceModel, { kind: "configmap" }>;
 }) {
   const entries = model.entries;
-  const visible = entries.slice(0, INVESTIGATION_CONFIG_ROW_LIMIT);
-  const omitted = entries.length - visible.length;
 
   return (
     <div className="overflow-hidden rounded-md border border-theme-border bg-theme-base/40">
@@ -42,55 +39,52 @@ function ConfigMapEvidence({
           {entries.length} {entries.length === 1 ? "key" : "keys"}
         </span>
       </div>
-      {visible.length > 0 ? (
-        <table className="w-full table-fixed text-left text-xs">
-          <caption className="sr-only">
-            Selected ConfigMap keys and values
-          </caption>
-          <colgroup>
-            <col className="w-[38%]" />
-            <col />
-          </colgroup>
-          <tbody className="divide-y divide-theme-border/70">
-            {visible.map((entry) => {
-              return (
-                <tr key={`${entry.binary ? "binary" : "data"}-${entry.key}`}>
-                  <th
-                    scope="row"
-                    className="px-2.5 py-1.5 align-top font-mono text-xs font-medium text-theme-text-secondary"
-                  >
-                    <span className="block truncate">{entry.key}</span>
-                  </th>
-                  <td className="px-2.5 py-1.5 align-top font-mono text-xs leading-relaxed text-theme-text-primary">
-                    {entry.sensitive ? (
-                      <span className="font-sans text-theme-text-tertiary">
-                        Value hidden · potentially sensitive
-                      </span>
-                    ) : entry.binary ? (
-                      <span className="font-sans text-theme-text-tertiary">
-                        Binary value not shown
-                      </span>
-                    ) : (
-                      <span className="block max-h-20 overflow-y-auto whitespace-pre-wrap break-all pr-1">
-                        {entry.value}
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+      {entries.length > 0 ? (
+        <div className="max-h-64 overflow-y-auto">
+          <table className="w-full table-fixed text-left text-xs">
+            <caption className="sr-only">
+              Selected ConfigMap keys and values
+            </caption>
+            <colgroup>
+              <col className="w-[38%]" />
+              <col />
+            </colgroup>
+            <tbody className="divide-y divide-theme-border/70">
+              {entries.map((entry) => {
+                return (
+                  <tr key={`${entry.binary ? "binary" : "data"}-${entry.key}`}>
+                    <th
+                      scope="row"
+                      className="px-2.5 py-1.5 align-top font-mono text-xs font-medium text-theme-text-secondary"
+                    >
+                      <span className="block truncate">{entry.key}</span>
+                    </th>
+                    <td className="px-2.5 py-1.5 align-top font-mono text-xs leading-relaxed text-theme-text-primary">
+                      {entry.sensitive ? (
+                        <span className="font-sans text-theme-text-tertiary">
+                          Value hidden · potentially sensitive
+                        </span>
+                      ) : entry.binary ? (
+                        <span className="font-sans text-theme-text-tertiary">
+                          Binary value not shown
+                        </span>
+                      ) : (
+                        <span className="block max-h-20 overflow-y-auto whitespace-pre-wrap break-all pr-1">
+                          {entry.value}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       ) : (
         <p className="px-2.5 py-2 text-xs text-theme-text-tertiary">
           No data keys were found.
         </p>
       )}
-      {omitted > 0 ? (
-        <p className="border-t border-theme-border px-2.5 py-1.5 text-xs text-theme-text-tertiary">
-          {omitted} more {omitted === 1 ? "key" : "keys"} available in Activity
-        </p>
-      ) : null}
     </div>
   );
 }
@@ -101,13 +95,10 @@ function SecretEvidence({
   model: Extract<InvestigationResourceEvidenceModel, { kind: "secret" }>;
 }) {
   return (
-    <div className="rounded-md border border-theme-border bg-theme-base/40 px-2.5 py-2">
+    <div>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-xs font-medium text-theme-text-tertiary">
           Secret keys
-        </span>
-        <span className="text-xs text-theme-text-tertiary">
-          {model.secretType}
         </span>
       </div>
       {model.keys.length > 0 ? (
@@ -126,9 +117,6 @@ function SecretEvidence({
           No Secret key names were found.
         </p>
       )}
-      <p className="mt-1.5 text-xs text-theme-text-tertiary">
-        Secret values are never shown here.
-      </p>
     </div>
   );
 }
@@ -211,9 +199,6 @@ function SealedSecretEvidence({
           </p>
         )}
       </div>
-      <p className="border-t border-theme-border px-2.5 py-1.5 text-xs text-theme-text-tertiary">
-        Encrypted values stay hidden. Key names and controller status are shown.
-      </p>
     </div>
   );
 }

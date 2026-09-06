@@ -2438,7 +2438,7 @@ function adaptDiagnose(
     builder.limit(
       source,
       "Log excerpt coverage",
-      `Radar reviewed ${shown} of ${total} matching log lines.`,
+      `The response includes ${shown} of ${total} selected log lines after the size limit; these are excerpts, not the container's full log history.`,
       "truncated",
     );
   }

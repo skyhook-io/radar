@@ -426,10 +426,11 @@ func (s *Server) handleDiagnoseTurn(w http.ResponseWriter, r *http.Request) {
 	}
 	id := chi.URLParam(r, "id")
 	var body struct {
-		Question string `json:"question"`
-		Apply    bool   `json:"apply"`
-		Fix      string `json:"fix"`
-		Verify   bool   `json:"verify"`
+		Question          string `json:"question"`
+		Apply             bool   `json:"apply"`
+		Fix               string `json:"fix"`
+		Verify            bool   `json:"verify"`
+		ExplainAssessment *int   `json:"explainAssessment"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
@@ -451,7 +452,16 @@ func (s *Server) handleDiagnoseTurn(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "apply requires the confirmed fix text")
 		return
 	}
-	err := s.aiRuns.AddTurn(id, strings.TrimSpace(body.Question), body.Apply, body.Fix, body.Verify)
+	var err error
+	if body.ExplainAssessment != nil {
+		if body.Apply || body.Verify || body.Question != "" || body.Fix != "" {
+			s.writeError(w, http.StatusBadRequest, "explanation cannot be combined with a question, apply, fix, or verification")
+			return
+		}
+		err = s.aiRuns.AddExplanation(id, *body.ExplainAssessment)
+	} else {
+		err = s.aiRuns.AddTurn(id, strings.TrimSpace(body.Question), body.Apply, body.Fix, body.Verify)
+	}
 	switch {
 	case errors.Is(err, ai.ErrRunNotFound):
 		s.writeError(w, http.StatusNotFound, "investigation not found")

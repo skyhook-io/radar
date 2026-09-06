@@ -123,6 +123,11 @@ type diagnoseResponse struct {
 // diagnoseLogCoverage is structured collection metadata shared by agent and UI
 // consumers. NarrowHint remains useful agent guidance; these fields let UIs
 // represent the same limits without parsing that prose.
+// SelectedPods counts fan-out targets, not successful reads. TotalLines counts
+// diagnostic-filter output before the aggregate cap (including fallback tails),
+// not the container's full history. ShownLines counts lines retained after it.
+// TotalPods/ShownPods count pods contributing at least one line before/after
+// that aggregate cap, not selected pods or all successful (possibly empty) reads.
 type diagnoseLogCoverage struct {
 	ResolvedPods       int  `json:"resolvedPods"`
 	SelectedPods       int  `json:"selectedPods"`
@@ -142,10 +147,11 @@ type diagnosePodContainerRef struct {
 func expectedPreviousLogAbsencesForDiagnose(entries []podLogEntry) []diagnosePodContainerRef {
 	var absences []diagnosePodContainerRef
 	for _, entry := range entries {
-		// Kubernetes status, not apiserver error wording, establishes that a
-		// previous instance should not exist. A non-empty stream contradicts
-		// that status snapshot and remains ordinary log evidence.
-		if !entry.expectedPreviousAbsence || entry.RawLines != 0 {
+		// Status must establish no prior instance, and the read must either
+		// succeed empty or return the specific kubelet previous-instance absence.
+		// Permission/transport/read failures remain collection limitations even
+		// when the cached status says zero restarts.
+		if !entry.expectedPreviousAbsence || entry.RawLines != 0 || (entry.Error != "" && !entry.previousLogNotFound) {
 			continue
 		}
 		absences = append(absences, diagnosePodContainerRef{

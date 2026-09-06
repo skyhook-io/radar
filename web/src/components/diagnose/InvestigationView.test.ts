@@ -168,6 +168,18 @@ describe("investigation terminal presentation", () => {
       }),
     ).toBe(true);
   });
+
+  it.each(["error", "stopped"] as const)(
+    "does not discard the assessment after an explanation is %s",
+    (status) => {
+      expect(
+        investigationEndedBeforeConclusion(status, {
+          status: "error",
+          explainAssessment: 2,
+        }),
+      ).toBe(false);
+    },
+  );
 });
 
 describe("investigation evidence projection stability", () => {

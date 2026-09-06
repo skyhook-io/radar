@@ -598,6 +598,9 @@ type podLogEntry struct {
 	// never from an apiserver error string. It stays private on each row; the
 	// semantic diagnose response promotes only matching pod/container references.
 	expectedPreviousAbsence bool
+	// previousLogNotFound distinguishes the specific kubelet absence response
+	// from denied, unavailable, or interrupted reads. Never serialized.
+	previousLogNotFound bool
 }
 
 // expectedPreviousLogAbsence reports when captured Kubernetes status proves
@@ -663,6 +666,8 @@ func fetchPodLogs(ctx context.Context, pods []*corev1.Pod, namespace, containerF
 				if err != nil {
 					log.Printf("[mcp] Failed to get logs for %s/%s: %v", podName, containerName, err)
 					entry.Error = fmt.Sprintf("failed to get logs: %v", err)
+					entry.previousLogNotFound = previous && apierrors.IsBadRequest(err) &&
+						strings.Contains(err.Error(), fmt.Sprintf("previous terminated container %q in pod %q not found", containerName, podName))
 					mu.Lock()
 					allLogs = append(allLogs, entry)
 					mu.Unlock()

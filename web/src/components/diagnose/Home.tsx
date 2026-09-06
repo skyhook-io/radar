@@ -1,20 +1,12 @@
 // Server-side runs keep background and running investigations visible in both
 // the docked Home view and the maximized workspace's master pane.
-import {
-  Check,
-  CircleAlert,
-  Loader2,
-  LockKeyhole,
-  Sparkles,
-  Square,
-} from "lucide-react";
+import { CircleAlert, Loader2, Server, Sparkles, Square } from "lucide-react";
 import { type RunSummary } from "../../api/diagnose";
 import {
   groupQualifiesLaneId,
   pluralToKind,
 } from "@skyhook-io/k8s-ui/utils/navigation";
 import { parseContextName } from "../../utils/context-name";
-import { Tooltip } from "../ui/Tooltip";
 import { formatInvestigationTarget } from "./target";
 
 function historyDay(date: Date, now: Date): string {
@@ -66,7 +58,7 @@ const historyStatuses = {
   done: {
     label: "Completed",
     short: "",
-    Icon: Check,
+    Icon: undefined,
     className: "text-theme-text-tertiary",
   },
   error: {
@@ -84,7 +76,7 @@ const historyStatuses = {
   stale: {
     label: "Read-only investigation",
     short: "",
-    Icon: LockKeyhole,
+    Icon: undefined,
     className: "text-theme-text-tertiary",
   },
 } as const;
@@ -104,9 +96,7 @@ export function statusWord(status: RunSummary["status"]): {
     case "stopped":
       return { text: "Stopped", cls: "text-theme-text-tertiary" };
     case "stale":
-      // Plain words, not the internal status name: "stale" means the run was
-      // about a cluster that's no longer connected.
-      return { text: "Different cluster", cls: "text-amber-500" };
+      return { text: "Read-only", cls: "text-theme-text-tertiary" };
   }
 }
 
@@ -116,12 +106,14 @@ export function RecentList({
   onSelect,
   selectedId,
   historyDegraded = false,
+  currentContext,
 }: {
   agentLabel: string;
   runs: RunSummary[];
   onSelect: (id: string) => void;
   selectedId?: string | null;
   historyDegraded?: boolean;
+  currentContext?: string;
 }) {
   const now = new Date();
   const contexts = new Map(
@@ -227,63 +219,80 @@ export function RecentList({
               groupsByKind.get(readableKind)!.size > 1
                 ? `${readableKind} · ${r.group || "core"}`
                 : readableKind;
-            const identity = `${formatInvestigationTarget(r)} · ${r.context} · ${label} · Started ${new Date(r.createdAt).toLocaleString()}`;
+            const initialIssue = r.health?.topReason?.trim();
+            const isCurrentCluster = currentContext === r.context;
+            const identity = `${formatInvestigationTarget(r)} · ${r.context}${isCurrentCluster ? " · Current cluster" : ""} · ${label} · Started ${new Date(r.createdAt).toLocaleString()}${initialIssue ? ` · Started with ${initialIssue}` : ""}`;
             return (
-              <Tooltip
+              <button
                 key={r.id}
-                content={identity}
-                position="right"
-                wrapperClassName="!block w-full"
+                onClick={() => onSelect(r.id)}
+                aria-label={identity}
+                aria-current={r.id === selectedId ? "true" : undefined}
+                className={`flex w-full min-w-0 flex-col gap-0.5 rounded-md border-l-2 px-2 py-2 text-left focus-visible:outline-2 focus-visible:outline-accent ${
+                  r.id === selectedId
+                    ? "border-accent bg-accent-muted"
+                    : "border-transparent hover:bg-theme-hover"
+                }`}
               >
-                <button
-                  onClick={() => onSelect(r.id)}
-                  aria-label={identity}
-                  aria-current={r.id === selectedId ? "true" : undefined}
-                  className={`flex w-full min-w-0 flex-col gap-0.5 rounded-md border-l-2 px-2 py-2 text-left focus-visible:outline-2 focus-visible:outline-accent ${
-                    r.id === selectedId
-                      ? "border-accent bg-accent-muted"
-                      : "border-transparent hover:bg-theme-hover"
-                  }`}
-                >
-                  <span className="flex w-full items-start gap-2">
-                    <span className="min-w-0 flex-1 line-clamp-2 break-words text-sm font-medium leading-5 text-theme-text-primary">
-                      {r.name}
-                    </span>
+                <span className="flex w-full items-start gap-2">
+                  <span
+                    title={r.name}
+                    className="min-w-0 flex-1 line-clamp-2 break-words text-sm font-medium leading-5 text-theme-text-primary"
+                  >
+                    {r.name}
+                  </span>
+                  {(Icon || short) && (
                     <span
                       aria-hidden="true"
                       className={`flex shrink-0 items-center gap-1 text-xs leading-5 ${className}`}
                     >
-                      <Icon
-                        className={`mt-0.5 h-3.5 w-3.5 ${r.status === "running" ? "animate-spin motion-reduce:animate-none" : r.status === "error" ? "text-semantic-error" : ""}`}
-                      />
+                      {Icon && (
+                        <Icon
+                          className={`mt-0.5 h-3.5 w-3.5 ${r.status === "running" ? "animate-spin motion-reduce:animate-none" : r.status === "error" ? "text-semantic-error" : ""}`}
+                        />
+                      )}
                       {short}
                     </span>
-                  </span>
-                  <span className="flex w-full items-baseline gap-2 text-xs leading-4 text-theme-text-secondary">
-                    <span className="min-w-0 flex-1 truncate">
-                      {r.namespace ? `${r.namespace} · ` : ""}
-                      {kind}
-                    </span>
-                    <time
-                      dateTime={r.createdAt}
-                      className="shrink-0 tabular-nums text-theme-text-tertiary"
-                    >
-                      {new Date(r.createdAt).toLocaleTimeString(undefined, {
-                        hour: "numeric",
-                        minute: "2-digit",
-                      })}
-                    </time>
-                  </span>
-                  <span className="w-full truncate text-xs leading-4 text-theme-text-tertiary">
-                    {parsed.clusterName}
-                  </span>
-                  {collision && qualifier !== parsed.clusterName && (
-                    <span className="w-full break-words text-xs leading-4 text-theme-text-secondary">
-                      {qualifier}
-                    </span>
                   )}
-                </button>
-              </Tooltip>
+                </span>
+                <span className="flex w-full items-baseline gap-2 text-xs leading-4 text-theme-text-secondary">
+                  <span className="min-w-0 flex-1 truncate">
+                    {r.namespace ? `${r.namespace} · ` : ""}
+                    {kind}
+                  </span>
+                  <time
+                    dateTime={r.createdAt}
+                    className="shrink-0 tabular-nums text-theme-text-tertiary"
+                  >
+                    {new Date(r.createdAt).toLocaleTimeString(undefined, {
+                      hour: "numeric",
+                      minute: "2-digit",
+                    })}
+                  </time>
+                </span>
+                <span
+                  title={`${r.context}${isCurrentCluster ? " · Current cluster" : ""}`}
+                  aria-label={
+                    isCurrentCluster
+                      ? `Current cluster: ${parsed.clusterName}`
+                      : `Cluster: ${parsed.clusterName}`
+                  }
+                  className={`flex w-full items-center gap-1 text-xs leading-4 ${isCurrentCluster ? "text-accent-text" : "text-theme-text-tertiary"}`}
+                >
+                  <Server className="h-3 w-3 shrink-0" aria-hidden />
+                  <span className="truncate">{parsed.clusterName}</span>
+                </span>
+                {collision && qualifier !== parsed.clusterName && (
+                  <span className="w-full break-words text-xs leading-4 text-theme-text-secondary">
+                    {qualifier}
+                  </span>
+                )}
+                {initialIssue && (
+                  <span className="line-clamp-1 w-full text-xs leading-4 text-theme-text-secondary">
+                    Started with {initialIssue}
+                  </span>
+                )}
+              </button>
             );
           })}
         </section>

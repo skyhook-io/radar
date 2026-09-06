@@ -16,6 +16,7 @@ import {
   CircleAlert,
   Clock3,
   FileClock,
+  FileSearch,
   Info,
   ListTree,
   Network,
@@ -40,6 +41,7 @@ import {
   stripAnsi,
 } from "@skyhook-io/k8s-ui";
 import { apiVersionToGroup } from "../../utils/navigation";
+import { parseLogLine } from "../../utils/log-format";
 
 import {
   investigationEvidenceGroupWithoutSources,
@@ -58,12 +60,20 @@ import type { DiagnosisResourceRef } from "./diagnoseEvidenceTypes";
 import { InvestigationResourceEvidence } from "./InvestigationResourceEvidence";
 import { investigationResourceEvidenceHasDetails } from "./investigationResourceEvidenceModel";
 import { prettyTool } from "./parts";
+import type { InvestigationSourceExcerpt } from "./investigationSourceFocus";
+import { evidenceSourceExcerpt } from "./investigationSourceFocus";
 import { Tooltip } from "../ui/Tooltip";
 
-// Shared Collapse uses a 200 ms grid-row transition. Keep a small paint margin
-// before moving focus so the destination is stationary. Reduced-motion users get
-// an immediate disclosure and focus hand-off because Collapse disables motion.
-export const INVESTIGATION_DISCLOSURE_SETTLE_MS = 220;
+import {
+  investigationDisclosureSettleDelay,
+  prefersReducedMotion,
+  useDisclosureReveal,
+} from "./useDisclosureReveal";
+export {
+  INVESTIGATION_DISCLOSURE_SETTLE_MS,
+  investigationDisclosureSettleDelay,
+  investigationDisclosureScrollTop,
+} from "./useDisclosureReveal";
 export const VISIBLE_ADDITIONAL_KEY_EVIDENCE = 2;
 export const VISIBLE_SUPPORTING_SIGNALS = 3;
 export const VISIBLE_LOG_EVIDENCE_LINES = 12;
@@ -98,118 +108,6 @@ export function investigationEvidenceFullRowFlags(
   }
 
   return fullRow;
-}
-
-function prefersReducedMotion(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    typeof window.matchMedia === "function" &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches
-  );
-}
-
-export function investigationDisclosureSettleDelay(
-  reducedMotion: boolean,
-): number {
-  return reducedMotion ? 0 : INVESTIGATION_DISCLOSURE_SETTLE_MS;
-}
-
-export function investigationDisclosureScrollTop({
-  scrollTop,
-  viewportTop,
-  viewportBottom,
-  disclosureTop,
-  disclosureBottom,
-  inset = 8,
-}: {
-  scrollTop: number;
-  viewportTop: number;
-  viewportBottom: number;
-  disclosureTop: number;
-  disclosureBottom: number;
-  inset?: number;
-}): number | undefined {
-  const visibleTop = viewportTop + inset;
-  const visibleBottom = viewportBottom - inset;
-  if (disclosureTop >= visibleTop && disclosureBottom <= visibleBottom) {
-    return undefined;
-  }
-  if (disclosureTop < visibleTop) {
-    return Math.max(0, scrollTop + disclosureTop - visibleTop);
-  }
-  const viewportHeight = visibleBottom - visibleTop;
-  const disclosureHeight = disclosureBottom - disclosureTop;
-  if (disclosureHeight <= viewportHeight) {
-    return Math.max(0, scrollTop + disclosureBottom - visibleBottom);
-  }
-  return Math.max(0, scrollTop + disclosureTop - visibleTop);
-}
-
-function useDisclosureReveal<T extends HTMLElement>() {
-  const elementRef = useRef<T>(null);
-  const timerRef = useRef<number | undefined>(undefined);
-  useLayoutEffect(
-    () => () => {
-      if (timerRef.current !== undefined) {
-        window.clearTimeout(timerRef.current);
-      }
-    },
-    [],
-  );
-
-  const revealAfterToggle = (opening: boolean) => {
-    if (timerRef.current !== undefined) {
-      window.clearTimeout(timerRef.current);
-      timerRef.current = undefined;
-    }
-    if (!opening) return;
-    const settleDelay = investigationDisclosureSettleDelay(
-      prefersReducedMotion(),
-    );
-    const initialScroller = elementRef.current?.closest<HTMLElement>(
-      "[data-investigation-findings-scroll]",
-    );
-    const initialScrollTop = initialScroller?.scrollTop;
-    // Even reduced-motion disclosures need one task boundary so React can
-    // commit the open layout before it is measured.
-    timerRef.current = window.setTimeout(() => {
-      timerRef.current = undefined;
-      const element = elementRef.current;
-      if (!element) return;
-      const scroller = element.closest<HTMLElement>(
-        "[data-investigation-findings-scroll]",
-      );
-      // This component lives in a bounded Diagnose surface. Never fall back to
-      // scrolling the document (or an overflow-hidden ancestor), which can move
-      // the entire workspace and expose blank space below it.
-      if (!scroller) return;
-      // Expansion is delayed until Collapse has settled. If the reader scrolls
-      // during that interval, their newer intent wins over the automatic reveal.
-      if (
-        scroller === initialScroller &&
-        initialScrollTop !== undefined &&
-        Math.abs(scroller.scrollTop - initialScrollTop) > 2
-      ) {
-        return;
-      }
-      const viewport = scroller.getBoundingClientRect();
-      const disclosure = element.getBoundingClientRect();
-      const top = investigationDisclosureScrollTop({
-        scrollTop: scroller.scrollTop,
-        viewportTop: viewport.top,
-        viewportBottom: viewport.bottom,
-        disclosureTop: disclosure.top,
-        disclosureBottom: disclosure.bottom,
-      });
-      if (top === undefined) return;
-      scroller.scrollTo({
-        top,
-        behavior: settleDelay === 0 ? "auto" : "smooth",
-      });
-    }, settleDelay);
-  };
-
-  return { elementRef, revealAfterToggle };
 }
 
 export function investigationEvidenceRevealCollection(
@@ -291,7 +189,10 @@ export function InvestigationEvidencePane({
   rootCauseEvidence?: InvestigationRootCauseEvidenceResolution;
   collecting: boolean;
   animateGroupIds: ReadonlySet<string>;
-  onViewSource: (sourceId: string) => void;
+  onViewSource: (
+    sourceId: string,
+    excerpt?: InvestigationSourceExcerpt,
+  ) => void;
   /** Opens the Activity record when no exact result can be identified. */
   onViewActivity: () => void;
   /** Opens an evidence subject in Radar when the producer identified it exactly. */
@@ -474,7 +375,7 @@ export function InvestigationEvidencePane({
   const content = (
     <section
       aria-labelledby="investigation-radar-evidence"
-      className="@container/evidence space-y-4 rounded-xl border border-theme-border bg-theme-elevated/50 p-4"
+      className="investigation-evidence @container/evidence space-y-4 rounded-xl border p-4"
     >
       <span className="sr-only" role="status" aria-live="polite">
         {projection.limitations.length > 0
@@ -643,7 +544,10 @@ function RootCauseEvidenceLinks({
   resolution: InvestigationRootCauseEvidenceResolution;
   relocatedSourceIds: ReadonlySet<string>;
   animateGroupIds: ReadonlySet<string>;
-  onViewSource: (sourceId: string) => void;
+  onViewSource: (
+    sourceId: string,
+    excerpt?: InvestigationSourceExcerpt,
+  ) => void;
   onViewActivity: () => void;
   sourcesOpen: boolean;
   onSourcesOpenChange: (open: boolean) => void;
@@ -694,9 +598,7 @@ function RootCauseEvidenceLinks({
               ? link.originalGroupId
               : undefined
           }
-          initiallyOpen={
-            index === 0 && link.group!.latest.data.type !== "inventory"
-          }
+          initiallyOpen={index === 0 && link.group!.latest.tier === "key"}
           animateArrival={
             Boolean(link.originalGroupId) &&
             animateGroupIds.has(link.originalGroupId!)
@@ -845,7 +747,10 @@ function CollapsedEvidenceCollection({
   description: string;
   groups: InvestigationEvidenceGroup[];
   animateGroupIds: ReadonlySet<string>;
-  onViewSource: (sourceId: string) => void;
+  onViewSource: (
+    sourceId: string,
+    excerpt?: InvestigationSourceExcerpt,
+  ) => void;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   expandCards?: boolean;
@@ -855,10 +760,11 @@ function CollapsedEvidenceCollection({
   const fullRowFlags = investigationEvidenceFullRowFlags(
     groups.map((group) => group.latest.data.type),
   );
-  const attentionCount = groups.filter((group) =>
-    !group.historical &&
-    group.latest.tier !== "context" &&
-    ["error", "alert", "warning"].includes(group.latest.tone),
+  const attentionCount = groups.filter(
+    (group) =>
+      !group.historical &&
+      group.latest.tier !== "context" &&
+      ["error", "alert", "warning"].includes(group.latest.tone),
   ).length;
   return (
     <section
@@ -924,7 +830,10 @@ function CoverageStrip({
   coverage: InvestigationEvidenceProjection["coverage"];
   /** Sources promoted above already own the page's sole navigation anchor. */
   excludedSourceIds: ReadonlySet<string>;
-  onViewSource: (sourceId: string) => void;
+  onViewSource: (
+    sourceId: string,
+    excerpt?: InvestigationSourceExcerpt,
+  ) => void;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -1025,8 +934,7 @@ function CoverageStrip({
                 </p>
                 {limitation.sources.at(-1) ? (
                   <SourceButton
-                    label={limitation.sources.at(-1)!.tool}
-                    ariaLabel={`View Activity source for ${limitation.source}`}
+                    ariaLabel={`View source for ${limitation.source}`}
                     buttonLabel={
                       limitation.sources.length > 1
                         ? "View latest in Activity"
@@ -1059,7 +967,10 @@ function EvidenceTier({
   groups: InvestigationEvidenceGroup[];
   expandFirst?: boolean;
   animateGroupIds: ReadonlySet<string>;
-  onViewSource: (sourceId: string) => void;
+  onViewSource: (
+    sourceId: string,
+    excerpt?: InvestigationSourceExcerpt,
+  ) => void;
 }) {
   if (groups.length === 0) return null;
   const fullRowFlags =
@@ -1147,7 +1058,10 @@ function EvidenceCard({
   domId?: string;
   initiallyOpen: boolean;
   animateArrival: boolean;
-  onViewSource: (sourceId: string) => void;
+  onViewSource: (
+    sourceId: string,
+    excerpt?: InvestigationSourceExcerpt,
+  ) => void;
   /** Fill both columns when this card has no compact row partner. */
   spanFullRow?: boolean;
   prominence?: "primary" | "supporting" | "secondary";
@@ -1158,6 +1072,10 @@ function EvidenceCard({
   const [open, setOpen] = useState(initiallyOpen);
   const { elementRef, revealAfterToggle } = useDisclosureReveal<HTMLElement>();
   const observation = group.latest;
+  const displaySummary =
+    observation.data.type === "crash" && observation.summary
+      ? parseLogLine(observation.summary).content
+      : observation.summary;
   const meaningfulHistory = investigationEvidenceHasMeaningfulHistory(
     group.observations,
   );
@@ -1186,15 +1104,10 @@ function EvidenceCard({
   const wide = spanFullRow || evidenceTypePrefersFullRow(observation.data.type);
   const resourceRef = investigationEvidenceSubjectRef(observation.data);
   const primarySources = uniquePrimarySources(group);
-  const metadata = [
-    observation.data.type === "inventory"
-      ? null
-      : observation.relevance === "producer-related"
-        ? "related to the investigated resource"
-        : observation.relevance === "broader"
-          ? "Relationship to target not established"
-          : null,
-  ].filter((item): item is string => Boolean(item));
+  const inlineSecretKeys =
+    observation.data.type === "resource" &&
+    observation.data.resource.kind.toLowerCase() === "secret" &&
+    !canExpand;
   const headerContent = (
     <>
       <EvidenceIcon observation={observation} prominence={prominence} />
@@ -1213,36 +1126,33 @@ function EvidenceCard({
             </Badge>
           ) : null}
         </span>
-        {observation.summary ? (
+        {displaySummary ? (
           <span
             className={clsx(
               "mt-0.5 block text-xs leading-relaxed text-theme-text-secondary",
-              !open && "line-clamp-2",
+              !open && !inlineSecretKeys && "line-clamp-2",
+              "[overflow-wrap:anywhere]",
             )}
           >
-            {observation.summary}
-          </span>
-        ) : null}
-        {metadata.length > 0 ? (
-          <span className="mt-1 block text-xs leading-snug text-theme-text-tertiary">
-            {metadata.join(" · ")}
+            {displaySummary}
           </span>
         ) : null}
       </span>
       {canExpand ? (
-        <CollapseChevron open={open} className="mt-0.5 h-4 w-4" />
+        <CollapseChevron open={open} className="h-4 w-4 self-center" />
       ) : null}
     </>
   );
   return (
     <article
+      data-evidence-source={observation.source.id}
       ref={elementRef}
       id={domId}
       data-evidence-card
       tabIndex={-1}
       aria-label={`${observation.title} evidence`}
       className={clsx(
-        "@container/card scroll-mt-14 overflow-hidden outline-none focus:ring-2 focus:ring-accent/50",
+        "@container/card scroll-mt-14 overflow-hidden outline-none focus:ring-2 focus:ring-accent/50 data-[source-related]:ring-2 data-[source-related]:ring-accent/35",
         prominence === "primary"
           ? "rounded-lg border bg-theme-surface"
           : "border-b border-theme-border/60",
@@ -1291,29 +1201,24 @@ function EvidenceCard({
             {headerContent}
           </div>
         )}
-        {observation.data.type === "inventory" ? (
-          <div className="flex shrink-0 items-center pr-2">
-            <SourceButton
-              label={observation.source.tool}
-              ariaLabel={`View Activity source for ${observation.title}`}
-              onClick={() => onViewSource(observation.source.id)}
-            />
-          </div>
-        ) : null}
-      </div>
-      {observation.data.type !== "inventory" ? (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 pb-2 pl-11">
+        <div className="flex shrink-0 items-center gap-0.5 px-2">
           <SourceButton
-            label={observation.source.tool}
-            ariaLabel={`View Activity source for ${observation.title}`}
-            onClick={() => onViewSource(observation.source.id)}
+            ariaLabel={`View source for ${observation.title}`}
+            compact
+            onClick={() =>
+              onViewSource(
+                observation.source.id,
+                evidenceSourceExcerpt(observation.data),
+              )
+            }
           />
           <OpenResourceButton
             resourceRef={resourceRef}
             onOpenResource={onOpenResource}
+            compact
           />
         </div>
-      ) : null}
+      </div>
       {canExpand ? (
         <div id={bodyId}>
           <Collapse open={open}>
@@ -1348,9 +1253,11 @@ function EvidenceCard({
 function OpenResourceButton({
   resourceRef,
   onOpenResource,
+  compact = false,
 }: {
   resourceRef?: DiagnosisResourceRef;
   onOpenResource?: (ref: DiagnosisResourceRef) => void;
+  compact?: boolean;
 }) {
   if (!resourceRef || !onOpenResource) return null;
   const identity = `${resourceRef.namespace ? `${resourceRef.namespace}/` : ""}${resourceRef.name}`;
@@ -1358,7 +1265,7 @@ function OpenResourceButton({
   return (
     <Tooltip
       content={label}
-      delay={100}
+      delay={350}
       position="left"
       wrapperClassName="flex shrink-0"
     >
@@ -1371,7 +1278,9 @@ function OpenResourceButton({
           "gap-1 px-2 text-xs font-medium",
         )}
       >
-        <span>Open current {displayKind(resourceRef.kind)}</span>
+        {compact ? null : (
+          <span>Open current {displayKind(resourceRef.kind)}</span>
+        )}
         <SquareArrowOutUpRight className="h-3.5 w-3.5" aria-hidden />
       </button>
     </Tooltip>
@@ -1387,7 +1296,10 @@ function CheckedReceipts({
 }: {
   groups: InvestigationEvidenceGroup[];
   animateGroupIds: ReadonlySet<string>;
-  onViewSource: (sourceId: string) => void;
+  onViewSource: (
+    sourceId: string,
+    excerpt?: InvestigationSourceExcerpt,
+  ) => void;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -1458,9 +1370,13 @@ function CheckedReceipts({
                     </span>
                   </span>
                   <SourceButton
-                    label={item.source.tool}
-                    ariaLabel={`View Activity source for ${item.title}`}
-                    onClick={() => onViewSource(item.source.id)}
+                    ariaLabel={`View source for ${item.title}`}
+                    onClick={() =>
+                      onViewSource(
+                        item.source.id,
+                        evidenceSourceExcerpt(item.data),
+                      )
+                    }
                   />
                 </div>
               );
@@ -1536,7 +1452,6 @@ function evidenceHasDetails(
       const cause = data.issue.cause?.trim();
       const message = data.issue.message?.trim();
       return Boolean(
-        data.issue.action ||
         (cause && cause !== summary) ||
         (message && message !== summary && message !== cause),
       );
@@ -1607,11 +1522,6 @@ function IssueBody({
       {showMessage ? (
         <p className="text-xs leading-relaxed text-theme-text-secondary">
           {issue.message}
-        </p>
-      ) : null}
-      {issue.action ? (
-        <p className="border-l-2 border-accent/50 pl-2 text-xs leading-relaxed text-theme-text-secondary">
-          Suggested check: {issue.action}
         </p>
       ) : null}
     </div>
@@ -1885,7 +1795,7 @@ function LogsBody({ data }: { data: EvidenceDataOf<"logs"> }) {
         {data.logs ? (
           <span className="text-xs text-theme-text-tertiary">
             {data.logs.matchedLines} matching lines · {data.logs.totalLines}{" "}
-            reviewed
+            processed from the requested log tail
           </span>
         ) : null}
       </div>
@@ -2366,7 +2276,10 @@ function RevisionHistory({
 }: {
   observations: InvestigationEvidenceObservation[];
   current: InvestigationEvidenceObservation;
-  onViewSource: (sourceId: string) => void;
+  onViewSource: (
+    sourceId: string,
+    excerpt?: InvestigationSourceExcerpt,
+  ) => void;
 }) {
   const otherObservations = observations.filter(
     (observation) =>
@@ -2402,9 +2315,13 @@ function RevisionHistory({
               {observation.summary || observation.title}
             </span>
             <SourceButton
-              label={observation.source.tool}
-              ariaLabel={`View Activity source for ${phaseLabel(observation.source.phase).toLowerCase()} observation of ${observation.title}`}
-              onClick={() => onViewSource(observation.source.id)}
+              ariaLabel={`View source for ${phaseLabel(observation.source.phase).toLowerCase()} observation of ${observation.title}`}
+              onClick={() =>
+                onViewSource(
+                  observation.source.id,
+                  evidenceSourceExcerpt(observation.data),
+                )
+              }
             />
           </li>
         ))}
@@ -2458,21 +2375,21 @@ function EvidenceIcon({
 }
 
 function SourceButton({
-  label,
   ariaLabel,
-  buttonLabel = "View in Activity",
+  buttonLabel = "View source",
+  compact = false,
   onClick,
 }: {
-  label: string;
   ariaLabel?: string;
   buttonLabel?: string;
+  compact?: boolean;
   onClick: () => void;
 }) {
-  const tooltip = `View ${prettyTool(label)} result in Activity`;
+  const tooltip = "Open the original tool result";
   return (
     <Tooltip
       content={tooltip}
-      delay={100}
+      delay={350}
       position="left"
       wrapperClassName="flex shrink-0"
     >
@@ -2485,8 +2402,12 @@ function SourceButton({
           "gap-1 px-2 text-xs font-medium",
         )}
       >
-        <Activity className="h-3.5 w-3.5" aria-hidden />
-        <span>{buttonLabel}</span>
+        <FileSearch className="h-3.5 w-3.5" aria-hidden />
+        <span
+          className={compact ? "hidden @min-[540px]/card:inline" : undefined}
+        >
+          {buttonLabel}
+        </span>
       </button>
     </Tooltip>
   );

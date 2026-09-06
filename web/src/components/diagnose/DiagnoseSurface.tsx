@@ -3,23 +3,29 @@
 //  - expanded: a master-detail workspace that fills ONLY the content area (does
 //    not cover the left nav rail or top bar) — recent list on the left, the
 //    selected investigation/report on the right.
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   Sparkles,
   X,
   Maximize2,
   Minimize2,
-  ChevronLeft,
   Settings2,
   MoreVertical,
   TerminalSquare,
   Copy,
   Check,
   Plus,
-  PanelLeftClose,
   PanelLeftOpen,
 } from "lucide-react";
 import { Tooltip } from "../ui/Tooltip";
+import { useAnimatedUnmount } from "../../hooks/useAnimatedUnmount";
+import { TRANSITION_BACKDROP, TRANSITION_DRAWER } from "../../utils/animation";
 import {
   useDiagnose,
   useDiagnoseLayout,
@@ -36,6 +42,7 @@ import { buildLaunchCommand, launchAgentLabel, openInTerminal } from "./launch";
 import { type RunSummary, type ExecutionProfile } from "../../api/diagnose";
 import { routePath } from "../../api/config";
 import { useCapabilitiesContext } from "../../contexts/CapabilitiesContext";
+import { useContexts } from "../../api/client";
 import { formatInvestigationTarget } from "./target";
 import type { DiagnosisResourceRef } from "./diagnoseEvidenceTypes";
 
@@ -180,9 +187,9 @@ function InvestigationMenu({ run }: { run: RunSummary }) {
 //   run           nothing to take a resource from.
 //   running       a start is handed back the live run, so the click does nothing
 //                 and the button reads as broken.
-//   stale         the body already offers "Investigate current cluster" WITH the
-//                 warning that the context changed; a bare + carries none of it,
-//                 and the resource may not exist in the context it'd run against.
+//   stale         the original session is closed after a cluster switch;
+//                 the resource may not exist in the active context. Do not
+//                 silently start a different-cluster investigation from here.
 //   needsConsent  the consent card owns the surface until it's answered.
 export function canStartNewInvestigation(
   view: DiagnoseView,
@@ -198,21 +205,18 @@ export function canStartNewInvestigation(
   );
 }
 
-// In a maximized workspace the recent-investigations master pane owns the
-// route back at wide sizes. Below that pane's container breakpoint it is
-// hidden, so the header breadcrumb takes over at the exact inverse breakpoint.
-// Keep these literals together: Tailwind must be able to see the complete
-// container-query classes at build time.
-export const MAXIMIZED_HISTORY_VISIBILITY_CLASS =
-  "hidden @min-[1500px]/diagnose-surface:block";
+// Home shows a list plus retained detail only when the surface has room.
+// Keep these Tailwind literals aligned with the measured rail threshold.
+// Detail uses one stable history toggle; below this width it opens an overlay.
+export const INVESTIGATION_HISTORY_MIN_WIDTH = 1750;
 export const MAXIMIZED_COMPACT_HISTORY_VISIBILITY_CLASS =
-  "@min-[1500px]/diagnose-surface:hidden";
+  "@min-[1750px]/diagnose-surface:hidden";
 export const MAXIMIZED_HOME_DETAIL_VISIBILITY_CLASS =
-  "hidden @min-[1500px]/diagnose-surface:flex";
+  "hidden @min-[1750px]/diagnose-surface:flex";
 export const MAXIMIZED_HOME_RUN_HEADER_VISIBILITY_CLASS =
-  "hidden @min-[1500px]/diagnose-surface:block";
+  "hidden @min-[1750px]/diagnose-surface:block";
 export const MAXIMIZED_RUN_META_VISIBILITY_CLASS =
-  "hidden @min-[1500px]/diagnose-surface:flex";
+  "hidden @min-[1750px]/diagnose-surface:flex";
 // The panel is a bounded absolute frame whose descendants own scrolling. If
 // overflow remains visible here, a tall Activity/Findings tree contributes its
 // full scroll height to the document even though the frame itself is viewport-
@@ -220,12 +224,6 @@ export const MAXIMIZED_RUN_META_VISIBILITY_CLASS =
 // docked and maximized modes; their intended scroll roots are inside the frame.
 export const DIAGNOSE_SURFACE_FRAME_CLASS =
   "@container/diagnose-surface absolute z-40 flex min-h-0 flex-col overflow-hidden border-l border-theme-border bg-theme-surface shadow-drawer";
-
-export function investigationBreadcrumbVisibilityClass(
-  maximized: boolean,
-): string {
-  return maximized ? MAXIMIZED_COMPACT_HISTORY_VISIBILITY_CLASS : "";
-}
 
 export function investigationHeaderPresentation(input: {
   view: DiagnoseView;
@@ -341,7 +339,24 @@ export function DiagnoseSurface({
   onOpenResource?: (ref: DiagnosisResourceRef) => void;
 }) {
   const d = useDiagnose();
+  const { data: contexts } = useContexts();
+  const currentContext = contexts?.find((context) => context.isCurrent)?.name;
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
+  const [historyOverlayOpen, setHistoryOverlayOpen] = useState(false);
+  const [surfaceWidth, setSurfaceWidth] = useState(0);
+  const surfaceRef = useRef<HTMLDivElement>(null);
+  const historyRef = useRef<HTMLElement>(null);
+  const historyButtonRef = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => {
+    const element = surfaceRef.current;
+    if (!element) return;
+    const observer = new ResizeObserver(() =>
+      setSurfaceWidth(element.clientWidth),
+    );
+    setSurfaceWidth(element.clientWidth);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
   // Injected settings action: undefined = Radar's own Settings dialog;
   // null = hide the gear + links.
   const { consentCopy, onOpenSettings: hostOpenSettings } =
@@ -357,6 +372,28 @@ export function DiagnoseSurface({
     panelBounds: { min: minW, max: maxW },
     panelWidthKey: widthKey,
   } = useDiagnoseLayout();
+  const wideHistory =
+    maximized && surfaceWidth >= INVESTIGATION_HISTORY_MIN_WIDTH;
+  const historyOverlay =
+    !wideHistory && historyOverlayOpen && d.view !== "home";
+  const { shouldRender: historyOverlayPresent, isOpen: historySlideOpen } =
+    useAnimatedUnmount(historyOverlay);
+  const dismissHistory = useCallback(() => {
+    setHistoryOverlayOpen(false);
+    historyButtonRef.current?.focus({ preventScroll: true });
+  }, []);
+  useEffect(() => {
+    setHistoryOverlayOpen(false);
+  }, [wideHistory, maximized, d.view]);
+  useEffect(() => {
+    if (historyOverlay) {
+      const target =
+        historyRef.current?.querySelector<HTMLElement>(
+          '[aria-current="true"]',
+        ) ?? historyRef.current?.querySelector<HTMLElement>("button");
+      (target ?? historyRef.current)?.focus({ preventScroll: true });
+    }
+  }, [historyOverlay]);
   const openEvidenceResource = useCallback(
     (ref: DiagnosisResourceRef) => {
       if (!onOpenResource) return;
@@ -516,6 +553,7 @@ export function DiagnoseSurface({
       {setupPending && <AgentSetupNotice setupState={d.setupState} />}
       {(!setupPending || d.runs.length > 0) && (
         <RecentList
+          currentContext={currentContext}
           agentLabel={d.agentLabel}
           runs={d.runs}
           onSelect={d.openRun}
@@ -525,19 +563,32 @@ export function DiagnoseSurface({
     </>
   );
 
-  // Detail keeps a breadcrumb whenever history is hidden, either by its
-  // responsive breakpoint or the user's focus toggle.
-  const showBreadcrumb = d.view !== "home";
-  const breadcrumbVisibilityClass = investigationBreadcrumbVisibilityClass(
-    maximized && !historyCollapsed,
-  );
-  // Keep history mounted while maximized so toggling it preserves list scroll.
-  const showHistory = maximized && (!setupPending || d.runs.length > 0);
+  const showHistory = !setupPending || d.runs.length > 0;
+  const historyVisible =
+    showHistory &&
+    (wideHistory ? !historyCollapsed || d.view === "home" : historyOverlay);
+
+  useLayoutEffect(() => {
+    if (
+      !historyVisible &&
+      historyRef.current?.contains(document.activeElement)
+    ) {
+      historyButtonRef.current?.focus({ preventScroll: true });
+    }
+  }, [historyVisible]);
 
   return (
     <div
+      ref={surfaceRef}
       role="dialog"
       aria-label="AI investigations"
+      onKeyDownCapture={(event) => {
+        if (historyOverlay && event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          dismissHistory();
+        }
+      }}
       className={DIAGNOSE_SURFACE_FRAME_CLASS}
       style={{
         ...positionStyle,
@@ -556,52 +607,36 @@ export function DiagnoseSurface({
 
       {/* Header */}
       <div className="flex items-center justify-between border-b border-theme-border px-4 py-2.5">
-        <div className="flex min-w-0 items-center gap-2">
-          {!showBreadcrumb && (
-            <Sparkles className="h-4 w-4 shrink-0 text-accent" />
-          )}
-          {showBreadcrumb && maximized && !historyCollapsed && (
-            <Sparkles className="hidden h-4 w-4 shrink-0 text-accent @min-[1500px]/diagnose-surface:block" />
-          )}
-          {showHistory && d.view !== "home" && (
-            <Tooltip
-              content={
-                historyCollapsed
-                  ? "Show investigation history"
-                  : "Hide investigation history"
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          {d.view !== "home" && showHistory ? (
+            <button
+              ref={historyButtonRef}
+              type="button"
+              aria-label="Investigations"
+              title={
+                historyVisible
+                  ? "Hide investigation history"
+                  : "Show investigation history"
               }
-              position="bottom"
+              aria-expanded={historyVisible}
+              aria-controls="investigation-history"
+              onClick={() =>
+                wideHistory
+                  ? setHistoryCollapsed((value) => !value)
+                  : historyOverlay
+                    ? dismissHistory()
+                    : setHistoryOverlayOpen(true)
+              }
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-theme-text-secondary hover:bg-theme-hover focus-visible:ring-2 focus-visible:ring-accent"
             >
-              <button
-                type="button"
-                aria-label={
-                  historyCollapsed
-                    ? "Show investigation history"
-                    : "Hide investigation history"
-                }
-                aria-expanded={!historyCollapsed}
-                aria-controls="investigation-history"
-                onClick={() => setHistoryCollapsed((value) => !value)}
-                className={`${MAXIMIZED_HISTORY_VISIBILITY_CLASS} rounded-md p-1.5 text-theme-text-secondary hover:bg-theme-hover`}
-              >
-                {historyCollapsed ? (
-                  <PanelLeftOpen className="h-4 w-4" />
-                ) : (
-                  <PanelLeftClose className="h-4 w-4" />
-                )}
-              </button>
-            </Tooltip>
+              <PanelLeftOpen className="h-4 w-4" />
+            </button>
+          ) : (
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center">
+              <Sparkles className="h-4 w-4 text-accent" />
+            </span>
           )}
           <div className="min-w-0 flex-1">
-            {showBreadcrumb && (
-              <button
-                onClick={d.goHome}
-                className={`-ml-1 mb-0.5 flex items-center gap-0.5 rounded px-1 text-[11px] text-theme-text-tertiary hover:text-theme-text-primary ${breadcrumbVisibilityClass}`}
-              >
-                <ChevronLeft className="h-3 w-3" />
-                Investigations
-              </button>
-            )}
             {headerPresentation.genericIdentityClass !== null && (
               <DiagnoseHeaderIdentity
                 className={headerPresentation.genericIdentityClass}
@@ -681,18 +716,34 @@ export function DiagnoseSurface({
           (which would discard its transcript and re-run the agent). The aside
           only appears when expanded; keys keep the detail node identity-stable
           as it comes and goes. */}
-      <div className="flex min-h-0 flex-1">
+      <div className="relative flex min-h-0 flex-1">
+        {!wideHistory && historyOverlayPresent && (
+          <div
+            aria-hidden="true"
+            onClick={dismissHistory}
+            className={`absolute inset-0 z-10 bg-black/20 ${TRANSITION_BACKDROP} motion-reduce:transition-none ${historySlideOpen ? "opacity-100" : "opacity-0"} ${historyOverlay ? "" : "pointer-events-none"}`}
+          />
+        )}
         {showHistory && (
           <aside
             key="recent"
+            ref={historyRef}
+            tabIndex={-1}
+            aria-label="Investigation history"
+            aria-hidden={!historyVisible}
+            inert={!historyVisible}
             id="investigation-history"
-            className={`${historyCollapsed && d.view !== "home" ? "hidden" : MAXIMIZED_HISTORY_VISIBILITY_CLASS} w-72 shrink-0 overflow-y-auto border-r border-theme-border px-3 py-3`}
+            className={`${historyVisible || (!wideHistory && historyOverlayPresent) ? "block" : "hidden"} ${wideHistory ? "" : `absolute inset-y-0 left-0 z-20 max-w-[calc(100%-2rem)] shadow-drawer ${TRANSITION_DRAWER} motion-reduce:transition-none ${historySlideOpen ? "translate-x-0 opacity-100" : "-translate-x-full opacity-0"}`} w-72 shrink-0 overflow-y-auto border-r border-theme-border bg-theme-surface px-3 py-3 outline-none`}
           >
             <RecentList
+              currentContext={currentContext}
               agentLabel={d.agentLabel}
               runs={d.runs}
               selectedId={d.activeRunId}
-              onSelect={d.openRun}
+              onSelect={(id) => {
+                d.openRun(id);
+                if (historyOverlay) dismissHistory();
+              }}
               historyDegraded={d.historyDegraded}
             />
           </aside>
@@ -715,7 +766,11 @@ export function DiagnoseSurface({
             )}
           </>
         ) : (
-          <div key="main" className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div
+            key="main"
+            inert={historyOverlay}
+            className="flex min-h-0 min-w-0 flex-1 flex-col"
+          >
             {detail}
           </div>
         )}

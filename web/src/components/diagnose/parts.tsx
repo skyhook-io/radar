@@ -17,7 +17,6 @@ import {
   Copy,
   Check,
   ShieldCheck,
-  ChevronRight,
   ChevronDown,
   Wrench,
   Sparkles,
@@ -41,10 +40,17 @@ import {
 import { Collapse, CollapseChevron, StatusDot } from "@skyhook-io/k8s-ui";
 import { Markdown } from "../ui/Markdown";
 import { Tooltip } from "../ui/Tooltip";
+import type { InvestigationSourceExcerpt } from "./investigationSourceFocus";
+import {
+  highlightRelatedEvidence,
+  locateSourceExcerpt,
+} from "./investigationSourceFocus";
 import {
   investigationActivitySourceDomId,
   investigationEvidenceSourceId,
 } from "./investigationEvidence";
+
+import { useDisclosureReveal } from "./useDisclosureReveal";
 
 const CURSOR_FULL_LOCAL_WARNING =
   "Radar passes Cursor --force, which auto-approves its built-in tools and every MCP server it loads, including your global servers. Cursor’s sandbox does not reliably confine those tools to Radar’s temporary workspace.";
@@ -418,6 +424,8 @@ export function AgentControls({
 // Turn is one round of the conversation: the initial investigation (no question)
 // or a follow-up, each with its own transcript + result.
 export type Turn = {
+  resultSequence?: number;
+  explainAssessment?: number;
   question?: string;
   timeline: TimelineItem[];
   diagnosis: Diagnosis | null;
@@ -531,7 +539,7 @@ export function upsertTool(
 export function TurnView({
   turn,
   onApply,
-  onAsk,
+  onViewExplanation,
   onCheckStatus,
   onRetryDiagnosis,
   hideConclusion = false,
@@ -542,7 +550,7 @@ export function TurnView({
 }: {
   turn: Turn;
   onApply?: (fix: string) => void;
-  onAsk?: (question: string) => void;
+  onViewExplanation?: () => void;
   onCheckStatus?: () => void;
   onRetryDiagnosis?: () => void;
   // In the maximized workspace the pinned turn's conclusion renders in the side rail,
@@ -551,7 +559,11 @@ export function TurnView({
   turnIndex?: number;
   evidenceStepIds?: ReadonlySet<string>;
   onViewEvidence?: (sourceId: string) => void;
-  sourceRevealRequest?: { sourceId: string; requestId: number };
+  sourceRevealRequest?: {
+    sourceId: string;
+    requestId: number;
+    excerpt?: InvestigationSourceExcerpt;
+  };
 }) {
   // A follow-up (a turn the user asked a question on) is a conversational reply,
   // not a fresh diagnosis — render it as a plain answer, never the root-cause
@@ -575,7 +587,22 @@ export function TurnView({
     : false;
   return (
     <div className="space-y-2">
-      {turn.question &&
+      {turn.explainAssessment ? (
+        <button
+          type="button"
+          onClick={onViewExplanation}
+          className="flex items-center gap-1.5 rounded-md py-2 text-xs text-accent-text hover:underline"
+        >
+          <HelpCircle className="h-3.5 w-3.5" />
+          {turn.status === "running"
+            ? "Explaining assessment…"
+            : turn.status === "error"
+              ? "Explanation failed"
+              : "Plain-language explanation"}
+          <span className="text-theme-text-tertiary">· View in Findings</span>
+        </button>
+      ) : (
+        turn.question &&
         (turn.verify ? (
           <div className="flex items-center gap-2 rounded-md border border-theme-border/60 bg-theme-base/40 px-2.5 py-2 text-xs text-theme-text-secondary">
             <RefreshCw className="h-3.5 w-3.5 shrink-0 text-accent" />
@@ -592,7 +619,8 @@ export function TurnView({
               {turn.question}
             </div>
           </div>
-        ))}
+        ))
+      )}
       <Timeline
         items={turn.timeline}
         running={turn.status === "running"}
@@ -603,7 +631,8 @@ export function TurnView({
         onViewEvidence={onViewEvidence}
         sourceRevealRequest={sourceRevealRequest}
       />
-      {turn.status === "done" &&
+      {!turn.explainAssessment &&
+        turn.status === "done" &&
         (turn.apply ? (
           <ApplyOutcomeCard
             diagnosis={turn.diagnosis}
@@ -615,7 +644,6 @@ export function TurnView({
           <ResultCard
             diagnosis={turn.diagnosis!}
             onApply={onApply}
-            onAsk={onAsk}
             followup={followup}
             onCheckStatus={onCheckStatus}
             animate={turn.animateResult !== false}
@@ -623,7 +651,7 @@ export function TurnView({
         ) : (
           <EmptyResult animate={turn.animateResult !== false} />
         ))}
-      {turn.status === "error" && turn.apply ? (
+      {turn.explainAssessment ? null : turn.status === "error" && turn.apply ? (
         <ApplyOutcomeCard
           diagnosis={turn.diagnosis}
           error={turn.error}
@@ -1117,7 +1145,11 @@ export function Timeline({
   turnIndex?: number;
   evidenceStepIds?: ReadonlySet<string>;
   onViewEvidence?: (sourceId: string) => void;
-  sourceRevealRequest?: { sourceId: string; requestId: number };
+  sourceRevealRequest?: {
+    sourceId: string;
+    requestId: number;
+    excerpt?: InvestigationSourceExcerpt;
+  };
 }) {
   const heading = applyMode
     ? "Applying fix"
@@ -1173,6 +1205,11 @@ export function Timeline({
                 ? sourceRevealRequest.requestId
                 : undefined
             }
+            sourceExcerpt={
+              sourceRevealRequest && sourceRevealRequest.sourceId === sourceId
+                ? sourceRevealRequest.excerpt
+                : undefined
+            }
             animate={it.animate !== false}
           />
         );
@@ -1196,44 +1233,55 @@ function ThinkingBlock({
   live: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [overflowing, setOverflowing] = useState(false);
+  const [contentHeight, setContentHeight] = useState<number>();
   const contentRef = useRef<HTMLDivElement>(null);
   const contentId = useId();
+  const reveal = useDisclosureReveal<HTMLDivElement>();
+  // Two lines of 12px/19.5px prose plus 8px paragraph/container spacing. Unlike a disclosure
+  // this starts with a visible preview, so animate measured height using the
+  // same 200ms ease-out/reduced-motion treatment as Collapse.
+  const previewHeight = 47;
   const clamped = !live && !expanded;
-
-  // Measure the clamped box itself: short beats keep the compact styling but
-  // never expose an inert toggle. Pane and font reflow are re-measured.
   useEffect(() => {
     const content = contentRef.current;
-    if (!content || !clamped) return;
-
-    const checkOverflow = () =>
-      setOverflowing(content.scrollHeight > content.clientHeight + 1);
-    checkOverflow();
-
+    if (!content) return;
+    const measure = () => setContentHeight(content.scrollHeight);
+    measure();
     if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(checkOverflow);
+    const observer = new ResizeObserver(measure);
     observer.observe(content);
     return () => observer.disconnect();
-  }, [clamped, text]);
+  }, [text]);
 
   return (
-    <div className={animate ? "animate-transcript-enter" : ""}>
+    <div
+      ref={reveal.elementRef}
+      className={animate ? "animate-transcript-enter" : ""}
+    >
       <div
         id={contentId}
-        ref={contentRef}
-        className={clamped ? "line-clamp-2" : ""}
+        className="overflow-hidden transition-[height] duration-200 ease-out motion-reduce:transition-none"
+        style={{
+          height: clamped
+            ? Math.min(contentHeight ?? previewHeight, previewHeight)
+            : contentHeight,
+        }}
       >
-        <AIMarkdown className="py-0.5 text-xs leading-relaxed text-theme-text-tertiary [overflow-wrap:anywhere] [&_li]:text-theme-text-tertiary [&_p]:my-0.5 [&_strong]:font-medium [&_strong]:text-theme-text-secondary">
-          {text}
-        </AIMarkdown>
+        <div ref={contentRef}>
+          <AIMarkdown className="py-0.5 text-xs leading-relaxed text-theme-text-tertiary [overflow-wrap:anywhere] [&_li]:text-theme-text-tertiary [&_p]:my-0.5 [&_strong]:font-medium [&_strong]:text-theme-text-secondary">
+            {text}
+          </AIMarkdown>
+        </div>
       </div>
-      {!live && (overflowing || expanded) ? (
+      {!live && ((contentHeight ?? 0) > previewHeight || expanded) ? (
         <button
           type="button"
           aria-controls={contentId}
           aria-expanded={expanded}
-          onClick={() => setExpanded((value) => !value)}
+          onClick={() => {
+            setExpanded(!expanded);
+            reveal.revealAfterToggle(!expanded);
+          }}
           className="text-[11px] font-medium text-theme-text-tertiary hover:text-accent-text"
         >
           {expanded ? "Show less" : "Show reasoning"}
@@ -1308,6 +1356,7 @@ function ToolRow({
   hasEvidence,
   onViewEvidence,
   revealRequestId,
+  sourceExcerpt,
   animate,
 }: {
   step: Extract<TimelineItem, { kind: "tool" }>;
@@ -1315,10 +1364,18 @@ function ToolRow({
   hasEvidence?: boolean;
   onViewEvidence?: (sourceId: string) => void;
   revealRequestId?: number;
+  sourceExcerpt?: InvestigationSourceExcerpt;
   animate: boolean;
 }) {
   const [open, setOpen] = useState(revealRequestId !== undefined);
   const [showFull, setShowFull] = useState(false);
+  const [argumentsOpen, setArgumentsOpen] = useState(false);
+  const toolReveal = useDisclosureReveal<HTMLDivElement>();
+  const argumentsReveal = useDisclosureReveal<HTMLDivElement>();
+  const argumentsId = useId();
+  const argumentsPreview = step.summary ? compactArgs(step.summary) : "";
+  const inlineArguments =
+    argumentsPreview.length <= 240 && !argumentsPreview.includes("\n");
   const detailId = `investigation-tool-detail-${useId().replaceAll(":", "")}`;
   const hasDetail = !!(step.summary || step.result);
   useEffect(() => {
@@ -1361,9 +1418,9 @@ function ToolRow({
       <span className="shrink-0 font-mono text-xs text-theme-text-secondary">
         {prettyTool(step.tool)}
       </span>
-      {step.summary && (
+      {step.summary && !open && (
         <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-theme-text-tertiary">
-          {compactArgs(step.summary)}
+          {argumentsPreview}
         </span>
       )}
       {step.ms != null && (
@@ -1376,6 +1433,11 @@ function ToolRow({
   );
   return (
     <div
+      onMouseEnter={(event) =>
+        highlightRelatedEvidence(event.currentTarget, sourceId)
+      }
+      onMouseLeave={(event) => highlightRelatedEvidence(event.currentTarget)}
+      ref={toolReveal.elementRef}
       id={sourceId ? investigationActivitySourceDomId(sourceId) : undefined}
       tabIndex={sourceId ? -1 : undefined}
       role={sourceId ? "group" : undefined}
@@ -1390,7 +1452,10 @@ function ToolRow({
         {hasDetail ? (
           <button
             type="button"
-            onClick={() => setOpen((v) => !v)}
+            onClick={() => {
+              setOpen(!open);
+              toolReveal.revealAfterToggle(!open);
+            }}
             aria-expanded={open}
             aria-controls={detailId}
             className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-theme-hover"
@@ -1407,9 +1472,9 @@ function ToolRow({
             type="button"
             onClick={() => onViewEvidence(sourceId)}
             aria-label={`View evidence from ${prettyTool(step.tool)}`}
-            className="shrink-0 border-l border-theme-border/60 px-2 text-[11px] font-medium text-accent hover:bg-theme-hover"
+            className="investigation-evidence-jump shrink-0 px-2 text-[11px] font-medium text-accent-text hover:bg-theme-hover"
           >
-            Evidence
+            Show evidence
           </button>
         ) : null}
       </div>
@@ -1417,13 +1482,45 @@ function ToolRow({
         <div id={detailId}>
           <Collapse open={open}>
             <div className="space-y-2 border-t border-theme-border/60 px-2 py-2">
-              {step.summary && (
-                <PayloadBlock label="Input" text={step.summary} />
-              )}
+              {step.summary &&
+                (inlineArguments ? (
+                  <div
+                    className="break-words font-mono text-[11px] leading-relaxed text-theme-text-secondary [overflow-wrap:anywhere]"
+                    aria-label="Tool arguments"
+                  >
+                    {argumentsPreview}
+                  </div>
+                ) : (
+                  <div ref={argumentsReveal.elementRef}>
+                    <button
+                      type="button"
+                      aria-expanded={argumentsOpen}
+                      aria-controls={argumentsId}
+                      onClick={() => {
+                        setArgumentsOpen(!argumentsOpen);
+                        argumentsReveal.revealAfterToggle(!argumentsOpen);
+                      }}
+                      className="flex items-center gap-1 py-1 text-xs text-theme-text-tertiary hover:text-theme-text-primary"
+                    >
+                      <CollapseChevron
+                        open={argumentsOpen}
+                        className="h-3.5 w-3.5"
+                      />
+                      {argumentsOpen ? "Hide arguments" : "Show arguments"}
+                    </button>
+                    <div id={argumentsId}>
+                      <Collapse open={argumentsOpen} mountLazily>
+                        <PayloadBlock label="Arguments" text={step.summary} />
+                      </Collapse>
+                    </div>
+                  </div>
+                ))}
               {step.result && (
                 <PayloadBlock
-                  label="Result"
+                  label="Original result"
                   text={step.result}
+                  sourceExcerpt={sourceExcerpt}
+                  revealRequestId={revealRequestId}
                   truncated={step.truncated}
                   action={
                     richResult ? (
@@ -1479,13 +1576,34 @@ function PayloadBlock({
   text,
   truncated,
   action,
+  sourceExcerpt,
+  revealRequestId,
 }: {
   label: string;
   text: string;
   truncated?: boolean;
   action?: ReactNode;
+  sourceExcerpt?: InvestigationSourceExcerpt;
+  revealRequestId?: number;
 }) {
   const json = formatJson(text);
+  const display = json ?? text;
+  const range = locateSourceExcerpt(display, sourceExcerpt);
+  const preRef = useRef<HTMLPreElement>(null);
+  const markRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!range || revealRequestId === undefined) return;
+    const frame = requestAnimationFrame(() => {
+      const pre = preRef.current,
+        mark = markRef.current;
+      if (pre && mark)
+        pre.scrollTop +=
+          mark.getBoundingClientRect().top -
+          pre.getBoundingClientRect().top -
+          pre.clientHeight / 3;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [revealRequestId, range?.start, range?.end]);
   return (
     <div>
       <div className="mb-0.5 flex items-center justify-between gap-2">
@@ -1501,9 +1619,23 @@ function PayloadBlock({
         </div>
       </div>
       <pre
-        className={`max-h-64 overflow-auto rounded bg-theme-elevated p-1.5 font-mono text-[11px] text-theme-text-secondary ${json ? "" : "whitespace-pre-wrap [overflow-wrap:anywhere]"}`}
+        ref={preRef}
+        className={`max-h-64 overflow-auto rounded bg-theme-elevated p-1.5 font-mono text-[11px] text-theme-text-secondary ${json && !range ? "" : "whitespace-pre-wrap [overflow-wrap:anywhere]"}`}
       >
-        {json ?? text}
+        {range ? (
+          <>
+            {display.slice(0, range.start)}
+            <mark
+              ref={markRef}
+              className="bg-accent-muted text-theme-text-primary ring-1 ring-accent/40"
+            >
+              {display.slice(range.start, range.end)}
+            </mark>
+            {display.slice(range.end)}
+          </>
+        ) : (
+          display
+        )}
       </pre>
       {truncated && (
         <div className="mt-0.5 text-[10px] text-amber-500">
@@ -1631,7 +1763,7 @@ function compactArgs(raw: string): string {
 export function ResultCard({
   diagnosis,
   onApply,
-  onAsk,
+  explanation,
   apply,
   applyOutcome,
   followup,
@@ -1642,17 +1774,20 @@ export function ResultCard({
   coverageLimited = false,
   evidenceConflict = false,
   compactActions = false,
+  assessmentAction,
 }: {
   diagnosis: Diagnosis;
   onApply?: (fix: string) => void;
-  onAsk?: (question: string) => void;
+  explanation?: AssessmentExplanation;
   apply?: boolean;
   applyOutcome?: ApplyMutationOutcome;
   followup?: boolean;
   section?: "full" | "conclusion" | "actions";
   onCheckStatus?: () => void;
   animate?: boolean;
-  /** The Findings workspace already labels the enclosing assessment as AI. */
+  /** Additional navigation placed in the assessment action row. */
+  assessmentAction?: ReactNode;
+  /** Hide the repeated disclaimer when the enclosing surface provides context. */
   showDisclaimer?: boolean;
   /** Qualifies a healthy assessment when structured evidence is absent or partial. */
   coverageLimited?: boolean;
@@ -1685,13 +1820,19 @@ export function ResultCard({
         showDisclaimer={showDisclaimer}
         coverageLimited={coverageLimited}
         evidenceConflict={evidenceConflict}
+        assessmentAction={assessmentAction}
       />
     );
   // Couldn't-determine is its own honest state — never a confident all-clear, never
   // the alarming root-cause anchor.
   if (diagnosis.inconclusive && !diagnosis.rootCause)
     return section === "actions" ? null : (
-      <InconclusiveCard diagnosis={diagnosis} animate={animate} />
+      <>
+        <InconclusiveCard diagnosis={diagnosis} animate={animate} />
+        {assessmentAction && (
+          <div className="mt-2 flex justify-end">{assessmentAction}</div>
+        )}
+      </>
     );
   // A turn with no structured root cause and no remediation (e.g. "looks healthy",
   // or a clarifying question) is not a diagnosis — render it neutrally rather than
@@ -1699,45 +1840,87 @@ export function ResultCard({
   const structured =
     !!diagnosis.rootCause || (diagnosis.remediation?.length ?? 0) > 0;
   if (!structured)
-    return <FollowupAnswer diagnosis={diagnosis} animate={animate} />;
+    return (
+      <>
+        <FollowupAnswer diagnosis={diagnosis} animate={animate} />
+        {assessmentAction && (
+          <div className="mt-2 flex justify-end">{assessmentAction}</div>
+        )}
+      </>
+    );
 
   return (
     <DiagnosisResult
       diagnosis={diagnosis}
       onApply={onApply}
-      onAsk={onAsk}
+      explanation={explanation}
       section={section}
       animate={animate}
       showDisclaimer={showDisclaimer}
       compactActions={compactActions}
+      assessmentAction={assessmentAction}
     />
   );
 }
 
-const EXPLAIN_SIMPLY_PROMPT =
-  "Explain this in plain language for someone who isn't a Kubernetes expert — what's broken, why it matters, and what each remediation step actually does. Gloss any k8s terms.";
+export type AssessmentExplanation = {
+  status: "idle" | "running" | "done" | "error";
+  text?: string;
+  error?: string;
+  onGenerate?: () => void;
+  openRequest?: number;
+};
 
 // The diagnosis result: likely cause + remediation + the
 // agent's full analysis on demand.
 function DiagnosisResult({
   diagnosis,
   onApply,
-  onAsk,
+  explanation,
   section = "full",
   animate,
   showDisclaimer,
   compactActions,
+  assessmentAction,
 }: {
   diagnosis: Diagnosis;
   onApply?: (fix: string) => void;
-  onAsk?: (question: string) => void;
+  explanation?: AssessmentExplanation;
   section?: "full" | "conclusion" | "actions";
   animate: boolean;
   showDisclaimer: boolean;
   compactActions: boolean;
+  assessmentAction?: ReactNode;
 }) {
-  const [showAnalysis, setShowAnalysis] = useState(false);
+  const [detail, setDetail] = useState<"analysis" | "explanation" | null>(
+    explanation?.status === "running" ? "explanation" : null,
+  );
+  const showAnalysis = detail === "analysis";
+  const analysisReveal = useDisclosureReveal<HTMLDivElement>();
+  useEffect(() => {
+    if (explanation?.openRequest) {
+      setDetail("explanation");
+      analysisReveal.revealAfterToggle(true);
+    }
+  }, [explanation?.openRequest]);
+  useEffect(() => {
+    if (
+      detail === "explanation" &&
+      (explanation?.status === "done" || explanation?.status === "error")
+    ) {
+      const element = analysisReveal.elementRef.current;
+      const scroller = element?.closest("[data-investigation-findings-scroll]");
+      if (element && scroller) {
+        const top = element.getBoundingClientRect().top;
+        const viewport = scroller.getBoundingClientRect();
+        if (top >= viewport.top && top < viewport.bottom)
+          analysisReveal.revealAfterToggle(true);
+      }
+    }
+  }, [explanation?.status]);
   const [showAllSteps, setShowAllSteps] = useState(false);
+  const stepsId = useId();
+  const stepsReveal = useDisclosureReveal<HTMLDivElement>();
   const analysisId = useId();
   // Only a real structured cause anchors the amber card; the full prose lives in
   // "Full analysis" (never relabel the report as a causal assessment).
@@ -1758,11 +1941,74 @@ function DiagnosisResult({
     index,
   }));
   const primaryActionIndex = recValid ? recIdx! - 1 : 0;
-  const visibleRemediation =
-    compactActions && !showAllSteps
-      ? remediationEntries.filter(({ index }) => index === primaryActionIndex)
-      : remediationEntries;
-  const hiddenStepCount = remediation.length - visibleRemediation.length;
+  const hiddenStepCount = remediationEntries.length - 1;
+  const renderRemediationStep = ({
+    text: r,
+    index: i,
+  }: {
+    text: string;
+    index: number;
+  }) => {
+    const isRec = recValid && i === recIdx! - 1;
+    return (
+      <div
+        key={i}
+        className={
+          isRec ? "rounded-lg border border-accent/40 bg-accent/5 p-2.5" : ""
+        }
+      >
+        <div className="flex items-start gap-2">
+          <span
+            className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] ${
+              isRec
+                ? "bg-accent/20 text-accent"
+                : "bg-theme-base text-theme-text-tertiary"
+            }`}
+          >
+            {i + 1}
+          </span>
+          <div className="min-w-0 flex-1">
+            {isRec && (
+              <div className="mb-1">
+                <div className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-accent">
+                  <Sparkles className="h-3 w-3" />
+                  Recommended
+                </div>
+                {diagnosis.recommendedReason && (
+                  <div className="mt-0.5 max-w-[100ch] text-[11px] leading-snug text-theme-text-tertiary">
+                    {diagnosis.recommendedReason}
+                  </div>
+                )}
+              </div>
+            )}
+            <AIMarkdown className="max-w-[100ch] text-sm [overflow-wrap:anywhere] [&_p]:my-0 [&_pre]:my-1.5">
+              {r}
+            </AIMarkdown>
+          </div>
+          {/* Action cluster: compact Apply (recommended = subtly
+                        filled, others = ghost) sits next to Copy so each row's
+                        actions stay together. The ellipsis signals a confirm
+                        dialog follows — it doesn't apply immediately. */}
+          <div className="flex shrink-0 items-center gap-0.5">
+            {canApply && isRec && (
+              <button
+                onClick={() => onApply!(r)}
+                className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-accent transition-colors ${
+                  isRec
+                    ? "border border-accent/40 bg-accent/10 hover:bg-accent/20"
+                    : "hover:bg-accent/10"
+                }`}
+              >
+                <Wrench className="h-3 w-3" />
+                Apply…
+              </button>
+            )}
+            <CopyButton text={r} label={`Copy remediation step ${i + 1}`} />
+          </div>
+        </div>
+      </div>
+    );
+  };
   return (
     <div className={`mt-3 space-y-2 ${animate ? "animate-result-in" : ""}`}>
       {/* Likely cause — agent-authored, visually prominent without claiming proof. */}
@@ -1770,7 +2016,7 @@ function DiagnosisResult({
         <div
           className={
             section === "conclusion"
-              ? "grid max-w-[70ch] grid-cols-[minmax(0,1fr)_auto] items-start gap-2"
+              ? "grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2"
               : "rounded-lg border border-theme-border bg-theme-surface p-3"
           }
         >
@@ -1791,19 +2037,10 @@ function DiagnosisResult({
             </div>
           </div>
           <AIMarkdown
-            className={`${section === "conclusion" ? "col-start-1 row-start-1" : ""} max-w-prose text-sm leading-relaxed text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_p]:my-0 [&_p]:text-theme-text-primary`}
+            className={`${section === "conclusion" ? "col-start-1 row-start-1 max-w-[100ch]" : "max-w-prose"} text-sm leading-relaxed text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_p]:my-0 [&_p]:text-theme-text-primary`}
           >
             {rootCause}
           </AIMarkdown>
-          {onAsk && (
-            <button
-              onClick={() => onAsk(EXPLAIN_SIMPLY_PROMPT)}
-              className="mt-2 inline-flex justify-self-start items-center gap-1 rounded-md border border-theme-border px-2 py-1 text-xs font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
-            >
-              <HelpCircle className="h-3 w-3" />
-              Explain simply
-            </button>
-          )}
         </div>
       )}
 
@@ -1811,6 +2048,7 @@ function DiagnosisResult({
           step can be applied, and only when the caller enables apply. */}
       {showActions && hasRemediation && (
         <div
+          ref={stepsReveal.elementRef}
           className={
             section === "actions"
               ? "space-y-2"
@@ -1823,83 +2061,36 @@ function DiagnosisResult({
               Remediation
             </div>
           )}
-          <ol className="space-y-2">
-            {visibleRemediation.map(({ text: r, index: i }) => {
-              const isRec = recValid && i === recIdx! - 1;
-              return (
-                <li
-                  key={i}
-                  className={
-                    isRec
-                      ? "rounded-lg border border-accent/40 bg-accent/5 p-2.5"
-                      : ""
-                  }
-                >
-                  <div className="flex items-start gap-2">
-                    <span
-                      className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] ${
-                        isRec
-                          ? "bg-accent/20 text-accent"
-                          : "bg-theme-base text-theme-text-tertiary"
-                      }`}
-                    >
-                      {i + 1}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      {isRec && (
-                        <div className="mb-1">
-                          <div className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-accent">
-                            <Sparkles className="h-3 w-3" />
-                            Recommended
-                          </div>
-                          {diagnosis.recommendedReason && (
-                            <div className="mt-0.5 text-[11px] leading-snug text-theme-text-tertiary">
-                              {diagnosis.recommendedReason}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_p]:my-0 [&_pre]:my-1.5">
-                        {r}
-                      </AIMarkdown>
-                    </div>
-                    {/* Action cluster: compact Apply (recommended = subtly
-                        filled, others = ghost) sits next to Copy so each row's
-                        actions stay together. The ellipsis signals a confirm
-                        dialog follows — it doesn't apply immediately. */}
-                    <div className="flex shrink-0 items-center gap-0.5">
-                      {canApply && isRec && (
-                        <button
-                          onClick={() => onApply!(r)}
-                          className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-accent transition-colors ${
-                            isRec
-                              ? "border border-accent/40 bg-accent/10 hover:bg-accent/20"
-                              : "hover:bg-accent/10"
-                          }`}
-                        >
-                          <Wrench className="h-3 w-3" />
-                          Apply…
-                        </button>
-                      )}
-                      <CopyButton
-                        text={r}
-                        label={`Copy remediation step ${i + 1}`}
-                      />
-                    </div>
-                  </div>
+          <div id={stepsId}>
+            <ol>
+              {remediationEntries.map((entry) => (
+                <li key={entry.index} value={entry.index + 1}>
+                  <Collapse
+                    open={
+                      !compactActions ||
+                      showAllSteps ||
+                      entry.index === primaryActionIndex
+                    }
+                    mountLazily
+                  >
+                    <div className="pt-2">{renderRemediationStep(entry)}</div>
+                  </Collapse>
                 </li>
-              );
-            })}
-          </ol>
+              ))}
+            </ol>
+          </div>
           {compactActions && remediation.length > 1 ? (
             <button
               type="button"
-              onClick={() => setShowAllSteps((value) => !value)}
+              aria-expanded={showAllSteps}
+              aria-controls={stepsId}
+              onClick={() => {
+                setShowAllSteps(!showAllSteps);
+                stepsReveal.revealAfterToggle(!showAllSteps);
+              }}
               className="mt-2 inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
             >
-              <ChevronRight
-                className={`h-3.5 w-3.5 transition-transform ${showAllSteps ? "rotate-90" : ""}`}
-              />
+              <CollapseChevron open={showAllSteps} className="h-3.5 w-3.5" />
               {showAllSteps
                 ? recValid
                   ? "Show only recommended step"
@@ -1918,38 +2109,134 @@ function DiagnosisResult({
       )}
 
       {/* Full analysis — the agent's detailed evidence, on demand. */}
-      {showConclusion && (diagnosis.report || diagnosis.confidence != null) && (
-        <div>
-          <button
-            type="button"
-            aria-expanded={showAnalysis}
-            aria-controls={analysisId}
-            onClick={() => setShowAnalysis((v) => !v)}
-            className="flex items-center gap-1.5 rounded-md py-2 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary"
-          >
-            <ChevronRight
-              className={`h-3.5 w-3.5 transition-transform ${showAnalysis ? "rotate-90" : ""}`}
-            />
-            {diagnosis.report ? "Full analysis" : "Assessment details"}
-          </button>
-          <div id={analysisId}>
-            <Collapse open={showAnalysis}>
-              <div className="border-t border-theme-border/60 px-3 py-2">
-                <p className="mb-2 text-xs text-theme-text-tertiary">
-                  Agent confidence:{" "}
-                  {diagnosis.confidence != null
-                    ? confidenceLabel(diagnosis.confidence)
-                    : "not stated"}
-                  {diagnosis.confidence != null ? " · self-reported" : ""}
-                </p>
-                <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_h2:first-child]:mt-0 [&_h2]:mb-1.5 [&_h2]:mt-3 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-wide [&_h2]:text-theme-text-tertiary [&_h3]:text-sm [&_li]:text-theme-text-secondary [&_p]:my-1.5 [&_p]:text-theme-text-secondary">
-                  {diagnosis.report}
-                </AIMarkdown>
-              </div>
-            </Collapse>
+      {showConclusion &&
+        (diagnosis.report ||
+          diagnosis.confidence != null ||
+          explanation ||
+          assessmentAction) && (
+          <div>
+            <div
+              className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-2"
+              data-assessment-actions
+            >
+              {(diagnosis.report || diagnosis.confidence != null) && (
+                <button
+                  type="button"
+                  aria-expanded={showAnalysis}
+                  aria-controls={analysisId}
+                  onClick={() => {
+                    setDetail(showAnalysis ? null : "analysis");
+                    analysisReveal.revealAfterToggle(!showAnalysis);
+                  }}
+                  className="flex items-center gap-1.5 rounded-md py-2 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary"
+                >
+                  <CollapseChevron
+                    open={showAnalysis}
+                    className="h-3.5 w-3.5"
+                  />
+                  {diagnosis.report ? "Full analysis" : "Assessment details"}
+                </button>
+              )}
+              {explanation && (
+                <Tooltip
+                  content={
+                    explanation.status === "idle"
+                      ? explanation.onGenerate
+                        ? "Ask the agent to explain this assessment and its proposed next steps in plain language."
+                        : "Wait for the current agent request to finish before requesting an explanation."
+                      : explanation.status === "running"
+                        ? "The agent is preparing an explanation. You can close this and return while it runs."
+                        : explanation.status === "error"
+                          ? "View the explanation error and retry when the agent is available."
+                          : "Show the saved plain-language explanation. No new request is needed."
+                  }
+                >
+                  <button
+                    type="button"
+                    aria-expanded={detail === "explanation"}
+                    aria-controls={analysisId}
+                    disabled={
+                      explanation.status === "idle" && !explanation.onGenerate
+                    }
+                    onClick={() => {
+                      const open = detail !== "explanation";
+                      setDetail(open ? "explanation" : null);
+                      analysisReveal.revealAfterToggle(open);
+                      if (open && explanation.status === "idle")
+                        explanation.onGenerate?.();
+                    }}
+                    className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-xs font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary disabled:opacity-50"
+                  >
+                    <HelpCircle className="h-3 w-3" />
+                    Explain simply
+                  </button>
+                </Tooltip>
+              )}
+              {assessmentAction && (
+                <div className="ml-auto">{assessmentAction}</div>
+              )}
+            </div>
+            <div id={analysisId} ref={analysisReveal.elementRef}>
+              <Collapse open={detail !== null}>
+                <div className="border-t border-theme-border/60 px-3 py-2">
+                  {detail === "explanation" ? (
+                    explanation?.status === "running" ? (
+                      <div
+                        role="status"
+                        className="flex items-center gap-2 py-2 text-sm text-theme-text-secondary"
+                      >
+                        <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+                        Explaining this assessment…
+                      </div>
+                    ) : explanation?.status === "done" ? (
+                      <div className="flex items-start gap-2">
+                        <AIMarkdown className="min-w-0 flex-1 text-sm text-theme-text-secondary [overflow-wrap:anywhere]">
+                          {explanation.text || ""}
+                        </AIMarkdown>
+                        <CopyButton
+                          text={explanation.text || ""}
+                          label="Copy explanation"
+                        />
+                      </div>
+                    ) : explanation?.status === "error" ? (
+                      <div
+                        role="alert"
+                        className="flex flex-wrap items-center gap-2 py-2 text-sm text-theme-text-secondary"
+                      >
+                        <span>
+                          {explanation.error ||
+                            "The agent did not return an explanation."}
+                        </span>
+                        {explanation.onGenerate && (
+                          <button
+                            type="button"
+                            onClick={explanation.onGenerate}
+                            className="rounded-md px-2 py-1 text-xs font-medium text-accent-text hover:bg-theme-hover"
+                          >
+                            Try again
+                          </button>
+                        )}
+                      </div>
+                    ) : null
+                  ) : (
+                    <>
+                      <p className="mb-2 text-xs text-theme-text-tertiary">
+                        Agent confidence:{" "}
+                        {diagnosis.confidence != null
+                          ? confidenceLabel(diagnosis.confidence)
+                          : "not stated"}
+                        {diagnosis.confidence != null ? " · self-reported" : ""}
+                      </p>
+                      <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_h2:first-child]:mt-0 [&_h2]:mb-1.5 [&_h2]:mt-3 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-wide [&_h2]:text-theme-text-tertiary [&_h3]:text-sm [&_li]:text-theme-text-secondary [&_p]:my-1.5 [&_p]:text-theme-text-secondary">
+                        {diagnosis.report}
+                      </AIMarkdown>
+                    </>
+                  )}
+                </div>
+              </Collapse>
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
       {showConclusion && showDisclaimer && (
         <div className="flex items-start gap-1 px-0.5 text-[11px] text-theme-text-tertiary">
@@ -1967,14 +2254,17 @@ function AllClearCard({
   showDisclaimer,
   coverageLimited,
   evidenceConflict,
+  assessmentAction,
 }: {
   diagnosis: Diagnosis;
   animate: boolean;
   showDisclaimer: boolean;
   coverageLimited: boolean;
   evidenceConflict: boolean;
+  assessmentAction?: ReactNode;
 }) {
   const [showAnalysis, setShowAnalysis] = useState(false);
+  const analysisReveal = useDisclosureReveal<HTMLDivElement>();
   const analysisId = useId();
   const report =
     diagnosis.report ||
@@ -2032,21 +2322,32 @@ function AllClearCard({
           </p>
         ) : null}
       </div>
-      {detailed ? (
+      {detailed || assessmentAction ? (
         <div>
-          <button
-            type="button"
-            aria-expanded={showAnalysis}
-            aria-controls={analysisId}
-            onClick={() => setShowAnalysis((value) => !value)}
-            className="flex items-center gap-1.5 rounded-md py-2 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary"
+          <div
+            className="flex flex-wrap items-center gap-3 pt-2"
+            data-assessment-actions
           >
-            <ChevronRight
-              className={`h-3.5 w-3.5 transition-transform ${showAnalysis ? "rotate-90" : ""}`}
-            />
-            Full analysis
-          </button>
-          <div id={analysisId}>
+            {detailed && (
+              <button
+                type="button"
+                aria-expanded={showAnalysis}
+                aria-controls={analysisId}
+                onClick={() => {
+                  setShowAnalysis(!showAnalysis);
+                  analysisReveal.revealAfterToggle(!showAnalysis);
+                }}
+                className="flex items-center gap-1.5 rounded-md py-2 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary"
+              >
+                <CollapseChevron open={showAnalysis} className="h-3.5 w-3.5" />
+                Full analysis
+              </button>
+            )}
+            {assessmentAction && (
+              <div className="ml-auto">{assessmentAction}</div>
+            )}
+          </div>
+          <div id={analysisId} ref={analysisReveal.elementRef}>
             <Collapse open={showAnalysis}>
               <div className="border-t border-theme-border/60 px-3 py-2">
                 <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_p]:my-1.5 [&_p]:text-theme-text-secondary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">

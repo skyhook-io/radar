@@ -861,7 +861,8 @@ describe("semantic diagnose evidence projection", () => {
       .map((item) => item.message)
       .join("\n");
     expect(limitationText).toContain("selected 2 of 5");
-    expect(limitationText).toContain("reviewed 2 of 8");
+    expect(limitationText).toContain("includes 2 of 8 selected log lines");
+    expect(limitationText).toContain("not the container's full log history");
     expect(limitationText).toContain("Additional crash-cause");
     expect(limitationText).toContain("received 1 of 3 event groups");
     expect(limitationText).toContain("rbac denied");

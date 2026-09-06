@@ -526,7 +526,7 @@ func (m *RunManager) Start(kind, group, namespace, name, agent string, profile E
 		m.store.SaveRun(r.Summary())
 	}
 
-	m.launchTurn(r, "", false, "", "", false)
+	m.launchTurn(r, runTurn{})
 	return r.Summary(), nil
 }
 
@@ -534,6 +534,17 @@ func (m *RunManager) Start(kind, group, namespace, name, agent string, profile E
 // confirmed fix). beginTurn atomically enforces the cap + preconditions and
 // marks the run in-flight.
 func (m *RunManager) AddTurn(id, question string, apply bool, fix string, verify bool) error {
+	return m.addTurn(id, question, apply, fix, verify, 0)
+}
+
+func (m *RunManager) AddExplanation(id string, assessmentSeq int) error {
+	if assessmentSeq <= 0 {
+		return ErrInvalidExplanation
+	}
+	return m.addTurn(id, "Explain simply", false, "", false, assessmentSeq)
+}
+
+func (m *RunManager) addTurn(id, question string, apply bool, fix string, verify bool, explanationSeq int) error {
 	if apply && verify {
 		return ErrInvalidTurn
 	}
@@ -554,11 +565,20 @@ func (m *RunManager) AddTurn(id, question string, apply bool, fix string, verify
 	if err := r.ensureHydrated(); err != nil {
 		return err
 	}
+	var explanation *Diagnosis
+	if explanationSeq != 0 {
+		var err error
+		explanation, err = r.assessmentForExplanation(explanationSeq)
+		if err != nil {
+			return err
+		}
+	}
 	session, err := m.beginTurn(r, true)
 	if err != nil {
 		return err
 	}
-	m.launchTurn(r, question, apply, fix, session, verify)
+	m.launchTurn(r, runTurn{question: question, apply: apply, fix: fix, verify: verify,
+		canonicalSession: session, explanation: explanation, explainAssessment: explanationSeq})
 	return nil
 }
 
@@ -568,15 +588,17 @@ func (m *RunManager) AddTurn(id, question string, apply bool, fix string, verify
 // which is the read-only session captured before apply; it never adopts the
 // fresh write-enabled session.
 type runTurn struct {
-	question         string
-	apply            bool
-	fix              string
-	verify           bool
-	evidenceScope    string
-	canonicalSession string
-	ctx              context.Context
-	cancel           context.CancelFunc
-	timeout          time.Duration
+	explanation       *Diagnosis
+	explainAssessment int
+	question          string
+	apply             bool
+	fix               string
+	verify            bool
+	evidenceScope     string
+	canonicalSession  string
+	ctx               context.Context
+	cancel            context.CancelFunc
+	timeout           time.Duration
 }
 
 // applyMutationTracker derives mutation truth from Radar write-tool results.
@@ -804,7 +826,7 @@ func normalizeRadarToolName(tool string) string {
 // The caller has already marked the run in-flight (atomically with the cap check).
 // Subscribers stay attached across turns — only stale / evict closes them (a
 // stopped run can still take follow-up turns, so Stop leaves streams open).
-func (m *RunManager) launchTurn(r *Run, question string, apply bool, fix, session string, verify bool) {
+func (m *RunManager) launchTurn(r *Run, turn runTurn) {
 	// Wall-clock ceiling per turn: a wedged CLI would otherwise hold one of the
 	// maxConcurrent slots forever (maxTurns caps model turns, not real time).
 	timeout := turnTimeout()
@@ -820,15 +842,12 @@ func (m *RunManager) launchTurn(r *Run, question string, apply bool, fix, sessio
 		return
 	}
 	r.cancel = cancel
-	r.appendLocked(StreamEvent{Type: "turn", Question: question, Apply: apply, Verify: verify})
+	r.appendLocked(StreamEvent{Type: "turn", Question: turn.question, Apply: turn.apply, Verify: turn.verify, ExplainAssessment: turn.explainAssessment})
 	r.mu.Unlock()
 
-	go m.executeTurns(r, runTurn{
-		question: question, apply: apply, fix: fix, verify: verify,
-		evidenceScope:    newEvidenceScope(),
-		canonicalSession: session,
-		ctx:              ctx, cancel: cancel, timeout: timeout,
-	})
+	turn.evidenceScope = newEvidenceScope()
+	turn.ctx, turn.cancel, turn.timeout = ctx, cancel, timeout
+	go m.executeTurns(r, turn)
 }
 
 // executeTurns runs one ordinary turn, or the two-step apply→verify compound
@@ -859,7 +878,8 @@ func (m *RunManager) executeTurns(r *Run, turn runTurn) {
 			MCPPort: m.mcpPort(), MCPBasePath: m.mcpBasePath,
 			EvidenceScope: turn.evidenceScope, SessionID: turn.canonicalSession,
 			Question: turn.question, Apply: turn.apply, Fix: turn.fix, Verify: turn.verify,
-			Agent: r.Agent, Profile: r.Profile, Model: r.Model, Effort: r.Effort,
+			Explanation: turn.explanation,
+			Agent:       r.Agent, Profile: r.Profile, Model: r.Model, Effort: r.Effort,
 			Health: r.Health, WorkDir: r.WorkDir,
 		}, func(ev StreamEvent) {
 			if turn.apply {

@@ -195,9 +195,21 @@ docker run -p 127.0.0.1:9280:9280 \
 
 The Docker image's primary use is [in-cluster deployment](in-cluster.md) with a ServiceAccount, where none of these apply.
 
+## Diagnose evidence limits
+
+For workload `diagnose` responses, `logCoverage.selectedPods` counts pods selected for log requests, not pods whose logs were successfully read. Per-container errors and `logsError` describe failed collection. `logCoverage.totalLines` counts diagnostic-filter output before the aggregate response cap (including fallback tail lines); `shownLines` counts the lines retained after that cap. Neither describes a container's complete log history. `totalPods` and `shownPods` count pods contributing at least one line before and after that cap—not all selected pods or successful empty reads. `eventsTotalGroups`, recent-change coverage/error fields, and log sampling/truncation must remain qualifications even when an agent reports no problem.
+
+`expectedPreviousLogAbsences` requires container status consistent with no previous instance and either an empty successful read or the specific previous-instance-not-found response. Permission failures, missing pods, unavailable servers, and interrupted reads remain collection errors.
+
+One call combines cached Kubernetes resource state, historical events/changes, and live log requests. Its completion time records when the call finished, not a shared observation time or freshness guarantee for those sources. Event/change timestamps retain their source-specific meaning.
+
+These public MCP fields are available to consumers running the updated Radar server. The OSS local AI investigation additionally uses its own evidence ledger, citations, and Findings integration. Hosted/Cloud consumers need corresponding backend provenance and investigation integration; upgrading a frontend package alone does not establish parity.
+
 ## Available Tools
 
 ### Read Tools
+
+For interpreting workload bundles, see [Diagnose evidence limits](#diagnose-evidence-limits), including collection failures, sampling, source timestamps, and the public MCP versus local investigation boundary.
 
 | Tool | Description | Parameters |
 |------|-------------|------------|

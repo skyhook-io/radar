@@ -22,6 +22,9 @@ import {
   type InvestigationEvidenceTimelineItem,
 } from "./investigationEvidence";
 import type { DiagnosisResourceRef } from "./diagnoseEvidenceTypes";
+import type { Diagnosis } from "../../api/diagnose";
+import { ResultCard } from "./parts";
+import { investigationEvidenceCoverageLimited } from "./InvestigationView";
 
 const onViewSource = vi.fn();
 const target = {
@@ -99,6 +102,65 @@ const criticalIssue = {
 };
 
 describe("InvestigationEvidencePane hierarchy and provenance", () => {
+  it("keeps detector guidance in the evidence data, not the Findings card or its disclosure", () => {
+    const action = "Restore configuration or mark the reference optional.";
+    const withGuidance = project(
+      tool("issues-1", "issues", {
+        issues: [{ ...criticalIssue, action }],
+        total: 1,
+        total_matched: 1,
+      }),
+    );
+    const withoutGuidance = project(
+      tool("issues-1", "issues", {
+        issues: [criticalIssue],
+        total: 1,
+        total_matched: 1,
+      }),
+    );
+    expect(render(withGuidance)).toEqual(render(withoutGuidance));
+    expect(render(withGuidance)).not.toContain("Suggested check");
+    const issue = withGuidance.groups.find((group) => group.kind === "issue")!;
+    expect(issue.chronologicalLatest.data).toMatchObject({
+      type: "issue",
+      issue: { action },
+    });
+  });
+
+  it("shows a small Secret key set directly, without redundant expansion or metadata", () => {
+    const ref = evidenceRef("a", "b");
+    const projection = project(
+      tool(
+        "secret-keys",
+        "get_resource",
+        {
+          kind: "Secret",
+          namespace: "dev",
+          name: "skyhook-agent",
+          type: "Opaque",
+          keys: ["QUALIFIRE_API_KEY"],
+        },
+        { evidenceRef: ref },
+      ),
+    );
+    const resolution = resolveInvestigationRootCauseEvidence(
+      projection,
+      { status: "linked", refs: [ref] },
+      0,
+    );
+    const html = render(projection, false, undefined, resolution);
+    expect(html).toContain("Keys: QUALIFIRE_API_KEY");
+    expect(html.match(/QUALIFIRE_API_KEY/g)).toHaveLength(1);
+    expect(html).not.toContain("Opaque");
+    expect(html).not.toContain("values hidden");
+    expect(html).not.toContain("Secret values are never shown");
+    expect(html).not.toContain("aria-expanded=");
+    expect(html).toContain(
+      'aria-label="View source for Secret dev/skyhook-agent"',
+    );
+    expect(html).not.toContain("Relationship to target not established");
+  });
+
   it("preserves already-plural resource kinds in inventory titles", () => {
     const projection = project(
       tool("endpoints", "list_resources", [
@@ -139,7 +201,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     expect(html).not.toContain("found in a broader search");
     expect(html).not.toContain('aria-expanded="true"');
     expect(
-      html.match(/aria-label="View Activity source for Secrets in autopush"/g),
+      html.match(/aria-label="View source for Secrets in autopush"/g),
     ).toHaveLength(1);
   });
 
@@ -616,9 +678,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     expect(html).not.toContain("strongest");
     expect(html).not.toContain("main proof");
     expect(html).toContain("CrashLoopBackOff");
-    expect(html).toContain(
-      'aria-label="View Activity source for CrashLoopBackOff"',
-    );
+    expect(html).toContain('aria-label="View source for CrashLoopBackOff"');
     expect(html).toContain(
       `id="${investigationEvidenceSourceDomId(source.id)}"`,
     );
@@ -693,7 +753,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
       investigationEvidenceShouldRevealHistory(group, group.latest.source.id),
     ).toBe(false);
     expect(html).toContain("Observation history");
-    expect(html).toContain("related to the investigated resource");
+    expect(group.latest.relevance).toBe("producer-related");
     expect(html).toContain("Broader context");
     expect(html).not.toContain("later broader observation retained");
   });
@@ -905,7 +965,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     expect(html).toContain(
       'aria-labelledby="investigation-key-evidence-heading"',
     );
-    expect(html).toContain("related to the investigated resource");
+    expect(html).not.toContain("related to the investigated resource");
 
     const ordered = render(projection, false, "NEXT_STEP_MARKER");
     expect(ordered.indexOf("Critical signals")).toBeLessThan(
@@ -1038,8 +1098,8 @@ describe("InvestigationEvidencePane honest result states", () => {
     );
     const html = render(projection);
 
-    expect(html).toContain("No data keys in this result");
-    expect(html).toContain("0 keys · Opaque · values hidden");
+    expect(html).toContain("No key names in this result");
+    expect(html).not.toContain("values hidden");
     expect(html).not.toContain("0/0 replicas ready");
     for (const resource of resources) {
       expect(html).not.toContain(`${resource.id}-body`);
@@ -1225,7 +1285,7 @@ describe("InvestigationEvidencePane honest result states", () => {
     expect(html).toContain(
       "Only part of this investigation result was saved, so Radar could not summarize it here.",
     );
-    expect(html).toContain('aria-label="View Activity source for Issue scan"');
+    expect(html).toContain('aria-label="View source for Issue scan"');
     expect(source.primaryGroupId).toBeUndefined();
     expect(html).toContain(
       `id="${investigationEvidenceSourceDomId(source.id)}"`,
@@ -1233,6 +1293,59 @@ describe("InvestigationEvidencePane honest result states", () => {
     expect(html).toContain("data-evidence-source-container");
     expect(html).toContain('aria-label="Evidence limitation for Issue scan:');
     expect(html).toContain("focus:ring-2");
+  });
+
+  it.each([
+    ["denied logs", { logsError: "pods/log is forbidden" }],
+    [
+      "sampled pods",
+      {
+        logCoverage: {
+          selectedPods: 2,
+          resolvedPods: 5,
+          selectionTruncated: true,
+        },
+      },
+    ],
+    ["unavailable changes", { recentChangesError: "timeline unavailable" }],
+    [
+      "denied previous logs",
+      {
+        logsPrevious: [
+          { pod: "api-0", container: "api", error: "pods/log is forbidden" },
+        ],
+      },
+    ],
+  ])("retains %s when the agent reports healthy", (_label, limits) => {
+    const projection = project(
+      tool("diagnose", "diagnose", {
+        resource: {
+          kind: "Deployment",
+          metadata: { name: "api", namespace: "shop" },
+        },
+        pods: 0,
+        events: [],
+        recentChanges: [],
+        ...limits,
+      }),
+    );
+    const assessment = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={
+          {
+            healthy: true,
+            rootCause: "",
+            report: "The workload appears ready.",
+            remediation: [],
+          } as Diagnosis
+        }
+        coverageLimited={investigationEvidenceCoverageLimited(projection)}
+      />,
+    );
+    expect(assessment).toContain("No problem identified in available evidence");
+    expect(assessment).not.toContain("border-emerald-500/30");
+    expect(render(projection)).toContain("Evidence coverage is incomplete");
+    expect(projection.limitations.length).toBeGreaterThan(0);
   });
 
   it("distinguishes a live empty collection from a finished inconclusive one", () => {

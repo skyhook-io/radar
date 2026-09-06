@@ -15,8 +15,67 @@ import type {
   ExecutionProfile,
 } from "../../api/diagnose";
 import { investigationEvidenceSourceId } from "./investigationEvidence";
+import { ThemeProvider } from "../../context/ThemeContext";
 
 const noop = vi.fn();
+
+describe("explanation placement", () => {
+  it("shows local progress in the assessment's shared disclosure", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={
+          {
+            rootCause: "Missing Secret",
+            report: "Technical analysis",
+            remediation: [],
+          } as Diagnosis
+        }
+        section="conclusion"
+        explanation={{ status: "running" }}
+      />,
+    );
+    expect(html).toContain("Explaining this assessment");
+    expect(html).toContain('role="status"');
+    expect(html).toContain("Full analysis");
+    expect(html).not.toContain("Agent confidence:");
+  });
+
+  it("keeps a saved explanation accessible without permission to start another turn", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={
+          {
+            rootCause: "Missing Secret",
+            remediation: [],
+          } as unknown as Diagnosis
+        }
+        section="conclusion"
+        explanation={{ status: "done", text: "Saved explanation" }}
+      />,
+    );
+    expect(html).toContain("Explain simply");
+    expect(html).not.toContain('disabled=""');
+  });
+
+  it("shows a compact Activity receipt instead of repeating the answer", () => {
+    const html = renderToStaticMarkup(
+      <TurnView
+        turn={{
+          question: "Explain simply",
+          explainAssessment: 2,
+          status: "done",
+          timeline: [],
+          error: null,
+          diagnosis: { report: "The long answer is in Findings" } as Diagnosis,
+        }}
+        onViewExplanation={noop}
+      />,
+    );
+    expect(html).toContain("Plain-language explanation");
+    expect(html).toContain("View in Findings");
+    expect(html).not.toContain("The long answer is in Findings");
+  });
+});
 
 describe("appendThinking", () => {
   it("separates adjacent bold reasoning headings without changing ordinary chunks", () => {
@@ -87,7 +146,10 @@ describe("Timeline reasoning density", () => {
       <Timeline items={[reasoning]} running={false} />,
     );
 
-    expect(html).toContain("line-clamp-2");
+    expect(html).toContain("height:47px");
+    expect(html).toContain(
+      "transition-[height] duration-200 ease-out motion-reduce:transition-none",
+    );
     expect(html).not.toContain("animate-transcript-enter");
     expect(html).not.toContain("Show reasoning");
   });
@@ -95,7 +157,7 @@ describe("Timeline reasoning density", () => {
   it("keeps the final live reasoning beat unclamped", () => {
     const html = renderToStaticMarkup(<Timeline items={[reasoning]} running />);
 
-    expect(html).not.toContain("line-clamp-2");
+    expect(html).not.toContain("height:47px");
   });
 
   it("clamps an earlier reasoning beat once a live tool follows it", () => {
@@ -115,7 +177,7 @@ describe("Timeline reasoning density", () => {
       />,
     );
 
-    expect(html).toContain("line-clamp-2");
+    expect(html).toContain("height:47px");
   });
 });
 
@@ -463,6 +525,29 @@ describe("ResultCard conclusion states", () => {
     expect(html).not.toContain("Inspect the registry.");
     expect(html).not.toContain("Restart the rollout.");
     expect(html).toContain("Show 2 more steps");
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain("grid-template-rows:0fr");
+    expect(html).toContain("motion-reduce:transition-none");
+  });
+
+  it("groups assessment controls in one footer without duplicating actions", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={diagnosis({
+          rootCause: "The image is missing.",
+          report: "Registry details.",
+        })}
+        section="conclusion"
+        explanation={{ status: "idle", onGenerate: noop }}
+        assessmentAction={<button>Next steps</button>}
+      />,
+    );
+    const footer = html.slice(html.indexOf("data-assessment-actions"));
+    expect(footer).toContain("Full analysis");
+    expect(footer).toContain("Explain simply");
+    expect(footer).toContain("Next steps");
+    expect(html.match(/Explain simply/g)).toHaveLength(1);
+    expect(html.match(/Next steps/g)).toHaveLength(1);
   });
 
   it("offers apply only for the explicitly recommended remediation", () => {
@@ -570,7 +655,38 @@ describe("TurnView tool outcome truth", () => {
     expect(html).toContain('aria-expanded="true"');
     expect(html).toContain('role="group"');
     expect(html).toContain('aria-label="Diagnose tool completed"');
-    expect(html).toContain("Input");
+    expect(html).toContain('aria-label="Tool arguments"');
+    expect(html.match(/kind=Deployment/g)).toHaveLength(1);
+    expect(html).not.toContain("<details");
+  });
+
+  it("offers large arguments once above the result without a duplicate header preview", () => {
+    const detailed = turn(false);
+    const item = detailed.timeline[0];
+    if (item.kind === "tool") {
+      item.summary = JSON.stringify({ query: "long-query-".repeat(40) });
+      item.result = '{"ok":true}';
+    }
+    const html = renderToStaticMarkup(
+      <ThemeProvider>
+        <TurnView
+          turn={detailed}
+          turnIndex={0}
+          sourceRevealRequest={{
+            sourceId: investigationEvidenceSourceId(0, "tool-1"),
+            requestId: 1,
+          }}
+        />
+      </ThemeProvider>,
+    );
+    expect(html).toContain("Show arguments");
+    expect(html.indexOf("Show arguments")).toBeLessThan(
+      html.indexOf("Original result"),
+    );
+    expect(html).not.toContain("query=long-query");
+    expect(html).not.toContain("<details");
+    expect(html).toContain("transition-[grid-template-rows]");
+    expect(html).toContain('aria-expanded="false"');
   });
 
   it("renders replayed activity and its conclusion without arrival motion", () => {

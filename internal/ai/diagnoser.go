@@ -58,7 +58,8 @@ type Request struct {
 	SessionID string
 	// Question is the user's prompt for this turn. Empty on the first turn (we
 	// auto-generate the investigate prompt); set for follow-ups.
-	Question string
+	Question    string
+	Explanation *Diagnosis
 	// Verify marks a follow-up that was explicitly started to re-check the
 	// resource after a change. It is replay metadata for the investigation UI;
 	// the question remains the prompt sent to the agent.
@@ -182,16 +183,17 @@ type Diagnosis struct {
 // "turn" marks the start of a new turn (carries Question/Apply) so a connecting
 // or reconnecting client can reconstruct turn boundaries from the event log.
 type StreamEvent struct {
-	Type         string               `json:"type"` // "turn"|"phase"|"step"|"thinking"|"done"|"error"|"closed"
-	Phase        string               `json:"phase,omitempty"`
-	Step         *StepInfo            `json:"step,omitempty"`
-	Token        string               `json:"token,omitempty"`
-	Diag         *Diagnosis           `json:"diagnosis,omitempty"`
-	Error        string               `json:"error,omitempty"`
-	Question     string               `json:"question,omitempty"`     // on "turn"
-	Apply        bool                 `json:"apply,omitempty"`        // on "turn"
-	Verify       bool                 `json:"verify,omitempty"`       // on "turn"
-	ApplyOutcome ApplyMutationOutcome `json:"applyOutcome,omitempty"` // on an apply turn's terminal event
+	Type              string               `json:"type"` // "turn"|"phase"|"step"|"thinking"|"done"|"error"|"closed"
+	Phase             string               `json:"phase,omitempty"`
+	Step              *StepInfo            `json:"step,omitempty"`
+	Token             string               `json:"token,omitempty"`
+	Diag              *Diagnosis           `json:"diagnosis,omitempty"`
+	Error             string               `json:"error,omitempty"`
+	Question          string               `json:"question,omitempty"`          // on "turn"
+	Apply             bool                 `json:"apply,omitempty"`             // on "turn"
+	Verify            bool                 `json:"verify,omitempty"`            // on "turn"
+	ExplainAssessment int                  `json:"explainAssessment,omitempty"` // sequence of the assessment's done event
+	ApplyOutcome      ApplyMutationOutcome `json:"applyOutcome,omitempty"`      // on an apply turn's terminal event
 	// VerificationScheduled closes the UI handoff between an apply terminal
 	// event and its adjacent server-owned verification turn. It is durable so a
 	// reconnect never has to infer scheduling from outcome text.
@@ -512,6 +514,8 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 	prompt := taskPrompt(req)
 	if req.Apply {
 		prompt = applyPrompt(req) // explicit, user-confirmed remediation turn
+	} else if req.Explanation != nil {
+		prompt = explanationPrompt(*req.Explanation)
 	} else if strings.TrimSpace(req.Question) != "" {
 		// Restate the structured/citation contract on every read-only turn. Some
 		// agent hosts compress resumed context, and verification must never silently

@@ -49,6 +49,30 @@ func TestCanonicalDiagnoseTargetWithoutCache(t *testing.T) {
 	}
 }
 
+func TestDiagnoseExplanationRejectsMixedIntent(t *testing.T) {
+	for _, body := range []string{
+		`{"explainAssessment":2,"question":"something else"}`,
+		`{"explainAssessment":2,"apply":true,"fix":"delete something"}`,
+		`{"explainAssessment":2,"verify":true,"question":"recheck"}`,
+		`{"explainAssessment":2,"fix":"another operation"}`,
+		`{"explainAssessment":0}`,
+		`{"explainAssessment":-1}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			s := &Server{aiDiagnoser: &ai.Diagnoser{}, aiRuns: &ai.RunManager{}}
+			req := httptest.NewRequest(http.MethodPost, "/api/diagnose/runs/run-1/turns", strings.NewReader(body))
+			rctx := chi.NewRouteContext()
+			rctx.URLParams.Add("id", "run-1")
+			req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+			response := httptest.NewRecorder()
+			s.handleDiagnoseTurn(response, req)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestHandleDiagnoseTurnRejectsApplyAndVerify(t *testing.T) {
 	m := ai.NewRunManager(nil, func() int { return 9280 }, "", func() string { return "fake-test" }, nil)
 	t.Cleanup(m.Shutdown)

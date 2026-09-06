@@ -104,6 +104,7 @@ export interface DiagnoseStreamEvent {
   question?: string; // on "turn"
   apply?: boolean; // on "turn"
   verify?: boolean; // on "turn": explicit post-change re-check
+  explainAssessment?: number; // on "turn": originating assessment done-event sequence
   // Evidence-backed mutation truth on an apply turn's terminal event. Only
   // "confirmed" means a Radar write tool authoritatively reported success.
   applyOutcome?: ApplyMutationOutcome;
@@ -263,7 +264,13 @@ export async function clearHistory(): Promise<void> {
 // addTurn appends a follow-up (question) or an apply turn (apply + confirmed fix).
 export async function addTurn(
   id: string,
-  body: { question?: string; apply?: boolean; fix?: string; verify?: boolean },
+  body: {
+    question?: string;
+    apply?: boolean;
+    fix?: string;
+    verify?: boolean;
+    explainAssessment?: number;
+  },
 ): Promise<void> {
   const res = await fetch(`${RUNS()}/${id}/turns`, {
     method: "POST",
@@ -283,7 +290,7 @@ export async function stopRun(id: string): Promise<void> {
 }
 
 export interface SubscribeHandlers {
-  onEvent: (ev: DiagnoseStreamEvent) => void;
+  onEvent: (ev: DiagnoseStreamEvent, sequence?: number) => void;
   // EventSource fires open before each initial/reconnect replay. Together with
   // replay_complete this brackets history so consumers can rebuild silently.
   onReplayStart?: () => void;
@@ -327,7 +334,11 @@ export function subscribeRun(
       handlers.onClosed?.("run_closed");
       return;
     }
-    handlers.onEvent(ev);
+    const sequence = Number(e.lastEventId);
+    handlers.onEvent(
+      ev,
+      Number.isSafeInteger(sequence) && sequence > 0 ? sequence : undefined,
+    );
     // Hydration failures stay inside the SSE protocol. Retryable failures end
     // this response and let native EventSource reconnect without advancing its
     // cursor; a permanent failure must stop that reconnect loop after the UI
