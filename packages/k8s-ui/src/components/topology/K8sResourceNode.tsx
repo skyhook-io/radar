@@ -168,6 +168,34 @@ function getIssueTooltip(issue: string | undefined): React.ReactNode {
   );
 }
 
+// Full port list for the Service subtitle's hover affordance — the subtitle
+// itself only ever shows the first port + a count, so this is the only place
+// a multi-port Service's other ports are visible without opening the detail
+// page. Formatting (hide targetPort when it matches port) mirrors
+// ServicePortCards in ServiceRenderer.tsx so a Service's ports read the same
+// whether glanced at in the graph or opened in the full resource view.
+function servicePortsTooltip(ports: ServicePortEntry[]): React.ReactNode | null {
+  if (ports.length < 2) return null;
+  return (
+    <div className="max-w-xs space-y-0.5">
+      {ports.map((p, i) => {
+        const target =
+          p.targetPort != null && p.targetPort !== String(p.port)
+            ? ` → ${p.targetPort}`
+            : "";
+        const proto = p.appProtocol || p.protocol;
+        return (
+          <div key={i} className="text-[11px]">
+            {p.name && <span className="text-theme-text-tertiary">{p.name} </span>}
+            <span className="font-medium">{p.port}{target}</span>
+            {proto && <span className="text-theme-text-tertiary"> ({proto})</span>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // Default dimensions for unknown CRD kinds
 export const DEFAULT_NODE_DIMENSIONS = { width: 260, height: 84 };
 
@@ -322,6 +350,16 @@ const SUMMARY_POD_KINDS = new Set<NodeKind>([
   "Service",
 ]);
 
+// Shape of one entry in a Service node's nodeData.ports (pkg/topology/builder.go's
+// serviceTopologyPorts). name/appProtocol are omitted server-side when unset.
+export interface ServicePortEntry {
+  name?: string;
+  port: number;
+  targetPort?: string;
+  protocol?: string;
+  appProtocol?: string;
+}
+
 export function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>): string {
   if (nodeData.deploymentMembership === 'source-only') {
     return `Declared by ${nodeData.deploymentSourceLabel ?? 'deployment source'}`
@@ -369,8 +407,10 @@ export function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>):
       return (nodeData.phase as string) || "Unknown";
     case "Service": {
       const svcType = (nodeData.type as string) || "ClusterIP";
-      const port = nodeData.port;
-      return port ? `${svcType} :${port}` : svcType;
+      const ports = (nodeData.ports as ServicePortEntry[] | undefined) || [];
+      if (ports.length === 0) return svcType;
+      const more = ports.length > 1 ? ` +${ports.length - 1} more` : "";
+      return `${svcType} :${ports[0].port}${more}`;
     }
     case "CalicoNetworkPolicy":
     case "CalicoGlobalNetworkPolicy":
@@ -513,6 +553,9 @@ export const K8sResourceNode = memo(function K8sResourceNode({
   const { ownerColorIndex } = ownershipOf(nodeData)
   const hue = ownerColorIndex !== null ? workloadHue(ownerColorIndex) : undefined
   const subtitle = getSubtitle(kind, nodeData)
+  const portsTooltip = kind === 'Service'
+    ? servicePortsTooltip((nodeData.ports as ServicePortEntry[] | undefined) || [])
+    : null
   const isInternet = kind === 'Internet'
   const isPodGroup = kind === 'PodGroup'
   const isSmallNode = kind === 'ConfigMap' || kind === 'Secret' || kind === 'ServiceAccount' || kind === 'SealedSecret' || kind === 'ServiceMonitor' || kind === 'PodMonitor' || kind === 'HorizontalPodAutoscaler'
@@ -730,9 +773,17 @@ export const K8sResourceNode = memo(function K8sResourceNode({
 
           {/* Subtitle */}
           {subtitle && (
-            <div className="text-xs text-theme-text-secondary truncate mt-0.5">
-              {subtitle}
-            </div>
+            portsTooltip ? (
+              <Tooltip content={portsTooltip} position="bottom" wrapperClassName="max-w-full mt-0.5">
+                <div className="text-xs text-theme-text-secondary truncate cursor-help">
+                  {subtitle}
+                </div>
+              </Tooltip>
+            ) : (
+              <div className="text-xs text-theme-text-secondary truncate mt-0.5">
+                {subtitle}
+              </div>
+            )
           )}
         </div>
       </div>

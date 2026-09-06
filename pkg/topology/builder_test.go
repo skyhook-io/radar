@@ -16,6 +16,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	k8score "github.com/skyhook-io/radar/pkg/k8score"
 )
@@ -463,6 +464,202 @@ func TestBuildResourcesTopology_ServiceOnlyExposesActiveJobs(t *testing.T) {
 	}
 	if targets["cronjob/prod/scheduled"] {
 		t.Fatalf("CronJob template must not appear as a current Service backend; targets=%v", targets)
+	}
+}
+
+func TestBuildResourcesTopology_ServiceExposesAllPorts(t *testing.T) {
+	provider := &mockProvider{
+		services: []*corev1.Service{{
+			ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "prod"},
+			Spec: corev1.ServiceSpec{
+				Type: corev1.ServiceTypeClusterIP,
+				Ports: []corev1.ServicePort{
+					{
+						Name:       "http",
+						Port:       80,
+						TargetPort: intstr.FromInt32(8080),
+						Protocol:   corev1.ProtocolTCP,
+					},
+					{
+						Name:       "https",
+						Port:       443,
+						TargetPort: intstr.FromString("https"),
+						Protocol:   corev1.ProtocolTCP,
+					},
+				},
+			},
+		}},
+	}
+
+	topo, err := NewBuilder(provider).Build(DefaultBuildOptions())
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	var serviceNode *Node
+	for i := range topo.Nodes {
+		if topo.Nodes[i].Kind == KindService {
+			serviceNode = &topo.Nodes[i]
+			break
+		}
+	}
+	if serviceNode == nil {
+		t.Fatal("expected Service node")
+	}
+
+	ports, ok := serviceNode.Data["ports"]
+	if !ok {
+		t.Fatal("expected Service node to expose ports")
+	}
+
+	got, ok := ports.([]map[string]any)
+	if !ok {
+		t.Fatalf("ports has type %T, want []map[string]any", ports)
+	}
+
+	want := []map[string]any{
+		{
+			"name":       "http",
+			"port":       int32(80),
+			"targetPort": "8080",
+			"protocol":   "TCP",
+		},
+		{
+			"name":       "https",
+			"port":       int32(443),
+			"targetPort": "https",
+			"protocol":   "TCP",
+		},
+	}
+
+	if !slices.EqualFunc(got, want, func(a, b map[string]any) bool {
+		return fmt.Sprint(a) == fmt.Sprint(b)
+	}) {
+		t.Fatalf("ports = %#v, want %#v", got, want)
+	}
+}
+
+func TestBuildTrafficTopology_ServiceExposesAllPorts(t *testing.T) {
+	provider := &mockProvider{
+		services: []*corev1.Service{{
+			ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "prod"},
+			Spec: corev1.ServiceSpec{
+				Type:     corev1.ServiceTypeClusterIP,
+				Selector: map[string]string{"app": "web"},
+				Ports: []corev1.ServicePort{
+					{
+						Name:       "http",
+						Port:       80,
+						TargetPort: intstr.FromInt32(8080),
+						Protocol:   corev1.ProtocolTCP,
+					},
+					{
+						Name:       "https",
+						Port:       443,
+						TargetPort: intstr.FromString("https"),
+						Protocol:   corev1.ProtocolTCP,
+					},
+				},
+			},
+		}},
+		pods: []*corev1.Pod{{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "web-0",
+				Namespace: "prod",
+				Labels:    map[string]string{"app": "web"},
+			},
+		}},
+	}
+
+	opts := DefaultBuildOptions()
+	opts.ViewMode = ViewModeTraffic
+	topo, err := NewBuilder(provider).Build(opts)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	serviceNode := findNode(topo, "service/prod/web")
+	if serviceNode == nil {
+		t.Fatal("expected Service node")
+	}
+
+	ports, ok := serviceNode.Data["ports"]
+	if !ok {
+		t.Fatal("expected Service node to expose ports")
+	}
+
+	got, ok := ports.([]map[string]any)
+	if !ok {
+		t.Fatalf("ports has type %T, want []map[string]any", ports)
+	}
+
+	want := []map[string]any{
+		{
+			"name":       "http",
+			"port":       int32(80),
+			"targetPort": "8080",
+			"protocol":   "TCP",
+		},
+		{
+			"name":       "https",
+			"port":       int32(443),
+			"targetPort": "https",
+			"protocol":   "TCP",
+		},
+	}
+
+	if !slices.EqualFunc(got, want, func(a, b map[string]any) bool {
+		return fmt.Sprint(a) == fmt.Sprint(b)
+	}) {
+		t.Fatalf("ports = %#v, want %#v", got, want)
+	}
+}
+
+func TestServiceTopologyPorts(t *testing.T) {
+	httpProto := "kubernetes.io/h2c"
+
+	got := serviceTopologyPorts([]corev1.ServicePort{
+		{
+			Name:        "http",
+			Port:        80,
+			TargetPort:  intstr.FromInt32(8080),
+			Protocol:    corev1.ProtocolTCP,
+			AppProtocol: &httpProto,
+		},
+		{
+			// Unnamed: valid and common when a Service declares only one port.
+			Port:       9090,
+			TargetPort: intstr.FromInt32(9090),
+			Protocol:   corev1.ProtocolTCP,
+		},
+	})
+
+	want := []map[string]any{
+		{
+			"name":        "http",
+			"port":        int32(80),
+			"targetPort":  "8080",
+			"protocol":    "TCP",
+			"appProtocol": "kubernetes.io/h2c",
+		},
+		{
+			"port":       int32(9090),
+			"targetPort": "9090",
+			"protocol":   "TCP",
+		},
+	}
+
+	if !slices.EqualFunc(got, want, func(a, b map[string]any) bool {
+		return fmt.Sprint(a) == fmt.Sprint(b)
+	}) {
+		t.Fatalf("serviceTopologyPorts = %#v, want %#v", got, want)
+	}
+
+	if _, ok := got[1]["name"]; ok {
+		t.Fatalf("expected no name key for an unnamed port, got %#v", got[1])
+	}
+	if _, ok := got[1]["appProtocol"]; ok {
+		t.Fatalf("expected no appProtocol key when unset, got %#v", got[1])
 	}
 }
 

@@ -139,8 +139,12 @@ func infoFromTopology(n topology.Node) []InfoItem {
 		}
 	case "Service":
 		if typ, ok := n.Data["type"].(string); ok && typ != "" {
-			if port, ok := n.Data["port"]; ok {
-				return []InfoItem{{Name: "Service", Value: fmt.Sprintf("%s :%v", typ, port)}}
+			if ports, ok := n.Data["ports"].([]map[string]any); ok && len(ports) > 0 {
+				value := fmt.Sprintf("%s :%v", typ, ports[0]["port"])
+				if len(ports) > 1 {
+					value = fmt.Sprintf("%s +%d more", value, len(ports)-1)
+				}
+				return []InfoItem{{Name: "Service", Value: value}}
 			}
 			return []InfoItem{{Name: "Service", Value: typ}}
 		}

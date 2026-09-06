@@ -3009,11 +3009,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		svcID := fmt.Sprintf("service/%s/%s", svc.Namespace, svc.Name)
 		serviceIDs[svc.Namespace+"/"+svc.Name] = svcID
 
-		var port int32
-		if len(svc.Spec.Ports) > 0 {
-			port = svc.Spec.Ports[0].Port
-		}
-
 		nodes = append(nodes, Node{
 			ID:     svcID,
 			Kind:   KindService,
@@ -3023,7 +3018,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				"namespace": svc.Namespace,
 				"type":      string(svc.Spec.Type),
 				"clusterIP": svc.Spec.ClusterIP,
-				"port":      port,
+				"ports":     serviceTopologyPorts(svc.Spec.Ports),
 				"labels":    svc.Labels,
 			},
 		})
@@ -7018,11 +7013,6 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		svcID := fmt.Sprintf("service/%s/%s", svc.Namespace, svc.Name)
 		serviceIDs[svcKey] = svcID
 
-		var port int32
-		if len(svc.Spec.Ports) > 0 {
-			port = svc.Spec.Ports[0].Port
-		}
-
 		nodes = append(nodes, Node{
 			ID:     svcID,
 			Kind:   KindService,
@@ -7032,7 +7022,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 				"namespace": svc.Namespace,
 				"type":      string(svc.Spec.Type),
 				"clusterIP": svc.Spec.ClusterIP,
-				"port":      port,
+				"ports":     serviceTopologyPorts(svc.Spec.Ports),
 				"labels":    svc.Labels,
 			},
 		})
@@ -7578,6 +7568,31 @@ func getFluxReadyStatus(status map[string]any) (string, HealthStatus) {
 		}
 	}
 	return "Unknown", StatusUnknown
+}
+
+// serviceTopologyPorts serializes every declared Service port for the topology
+// node's Data map — spec.ports[0] alone misrepresents multi-port Services
+// (e.g. a Service exposing both :80 and :443 looked like it only had :80).
+func serviceTopologyPorts(svcPorts []corev1.ServicePort) []map[string]any {
+	ports := make([]map[string]any, 0, len(svcPorts))
+	for _, p := range svcPorts {
+		port := map[string]any{
+			"port":       p.Port,
+			"targetPort": p.TargetPort.String(),
+			"protocol":   string(p.Protocol),
+		}
+		// Name is truly optional (valid to omit with a single port); Port,
+		// TargetPort and Protocol are always populated by apiserver defaulting
+		// by the time an informer sees them, so those stay unconditional.
+		if p.Name != "" {
+			port["name"] = p.Name
+		}
+		if p.AppProtocol != nil {
+			port["appProtocol"] = *p.AppProtocol
+		}
+		ports = append(ports, port)
+	}
+	return ports
 }
 
 func matchesSelector(labels, selector map[string]string) bool {
