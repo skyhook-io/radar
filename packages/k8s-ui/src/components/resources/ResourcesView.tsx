@@ -110,6 +110,7 @@ import {
   getGatewayClassController,
   getGatewayClassDescription,
   getRouteStatus,
+  getRouteStatusReason,
   getRouteParents,
   getRouteHostnames,
   getRouteBackends,
@@ -8963,11 +8964,11 @@ function RouteCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'status': {
       const status = getRouteStatus(resource)
-      return (
-        <span className={clsx('badge', status.color)}>
-          {status.text}
-        </span>
-      )
+      const reason = getRouteStatusReason(resource)
+      const badge = <span className={clsx('badge', status.color)}>{status.text}</span>
+      // "Degraded" on its own says something is wrong and not what. The
+      // controller's own reason is usually "the backend you named is missing".
+      return reason ? <Tooltip content={reason}>{badge}</Tooltip> : badge
     }
     case 'hostnames': {
       const hostnames = getRouteHostnames(resource)
