@@ -1109,21 +1109,12 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	var changesErr string
 	if includeChanges {
 		gvk := rawObj.GetObjectKind().GroupVersionKind()
-		changeKind := gvk.Kind
-		if changeKind == "" {
-			changeKind = kind
-		}
-		changeAPIVersion := gvk.GroupVersion().String()
-		if changeAPIVersion == "" && group != "" {
-			// ChangeReadAllowed only needs the group portion to resolve the GVR.
-			changeAPIVersion = group + "/_"
-		}
 		if !recentChangesSourceTracked(gvk) {
 			// The feed records a deliberately bounded set of kind/group pairs.
 			// Treat every other source as incomplete instead of attaching a
 			// same-kind resource's history or claiming that no changes occurred.
 			recentChangesCoverageLimited = true
-		} else if !k8s.ChangeReadAllowed(changeKind, changeAPIVersion, namespace, mcpChangeAuthorizer(ctx)) {
+		} else if !k8s.ChangeReadAllowed(gvk.Kind, gvk.GroupVersion().String(), namespace, mcpChangeAuthorizer(ctx)) {
 			// Authorize the source before querying so neither the coverage bit nor
 			// saturation becomes a side channel for unreadable history.
 			recentChangesCoverageLimited = true
