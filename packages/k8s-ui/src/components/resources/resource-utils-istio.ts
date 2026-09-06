@@ -413,3 +413,36 @@ export function getAuthorizationPolicySelectorString(resource: any): string {
   if (entries.length === 0) return 'Namespace / mesh scope'
   return entries.map(([k, v]) => `${k}=${v}`).join(', ')
 }
+
+/**
+ * What an AuthorizationPolicy's rule list means for the traffic it governs.
+ *
+ * Rules are alternatives and an unset list never matches, so BOTH actions with
+ * no rules are inert in the same way — a DENY with none denies nothing, an
+ * ALLOW with none permits nothing. Only the ALLOW case has a consequence worth
+ * raising, because a workload with any ALLOW policy admits only what one of
+ * them matches. Neither can be stated as an outcome for the workload: every
+ * policy selecting it takes part in the decision.
+ */
+export function getAuthorizationPolicyRuleNotice(
+  resource: any,
+): { level: 'warning' | 'info'; title: string; message: string } | null {
+  const action = resource?.spec?.action || 'ALLOW'
+  const rules = resource?.spec?.rules
+  if (Array.isArray(rules) && rules.length > 0) return null
+  if (action === 'ALLOW') {
+    return {
+      level: 'warning',
+      title: 'No allow rules',
+      message: 'Rules are alternatives, so an ALLOW policy with none of them matches nothing and contributes no permitted traffic. Other ALLOW policies selecting the same workload may still permit requests — a default-deny-plus-exceptions setup looks exactly like this.',
+    }
+  }
+  if (action === 'DENY') {
+    return {
+      level: 'info',
+      title: 'No deny rules',
+      message: 'This DENY policy has no rules, so it matches no requests and denies no traffic. Other policies may still deny requests.',
+    }
+  }
+  return null
+}

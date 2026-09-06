@@ -4,6 +4,7 @@ import { Badge, type BadgeSeverity } from '../../ui/Badge'
 import {
   getAuthorizationPolicyAction,
   getAuthorizationPolicyRules,
+  getAuthorizationPolicyRuleNotice,
   getAuthorizationPolicySelector,
 } from '../resource-utils-istio'
 
@@ -27,25 +28,15 @@ export function IstioAuthorizationPolicyRenderer({ data }: IstioAuthorizationPol
   const selector = getAuthorizationPolicySelector(data)
   const hasSelector = Object.keys(selector).length > 0
 
-  // Special case: DENY with no rules = deny all
-  const isDenyAll = action === 'DENY' && rules.length === 0
-  // Special case: ALLOW with no rules = allow nothing (deny all)
-  const isAllowNothing = action === 'ALLOW' && rules.length === 0
+  const ruleNotice = getAuthorizationPolicyRuleNotice(data)
 
   return (
     <>
-      {isDenyAll && (
+      {ruleNotice && (
         <AlertBanner
-          variant="error"
-          title="Deny All"
-          message="This policy denies all traffic to the target workload (DENY action with no rules)."
-        />
-      )}
-      {isAllowNothing && (
-        <AlertBanner
-          variant="warning"
-          title="No allow rules"
-          message="Rules are alternatives, so an ALLOW policy with none of them matches nothing and contributes no permitted traffic. Other ALLOW policies selecting the same workload may still permit requests — a default-deny-plus-exceptions setup looks exactly like this."
+          variant={ruleNotice.level}
+          title={ruleNotice.title}
+          message={ruleNotice.message}
         />
       )}
 

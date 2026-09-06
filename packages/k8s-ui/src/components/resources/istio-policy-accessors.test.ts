@@ -4,6 +4,7 @@ import {
   getAuthorizationPolicySelectorString,
   getAuthorizationPolicyStatus,
   getDestinationRuleStatus,
+  getAuthorizationPolicyRuleNotice,
   getDestinationRuleTlsMode,
 } from './resource-utils-istio'
 
@@ -136,5 +137,42 @@ describe('AuthorizationPolicy action badge', () => {
     expect(tones).toEqual(new Set(['neutral']))
     expect(Object.keys(AUTHORIZATION_POLICY_ACTION_SEVERITY).sort())
       .toEqual(['ALLOW', 'AUDIT', 'CUSTOM', 'DENY'])
+  })
+})
+
+describe('getAuthorizationPolicyRuleNotice', () => {
+  it('does not claim an empty DENY blocks anything', () => {
+    // "If not set, the match will never occur" — a DENY with no rules matches
+    // nothing and denies nothing. Calling it Deny All is the dangerous
+    // direction: it tells an operator an ineffective policy protects them.
+    for (const spec of [{ action: 'DENY' }, { action: 'DENY', rules: [] }]) {
+      const notice = getAuthorizationPolicyRuleNotice({ spec })
+      expect(notice).toMatchObject({ level: 'info', title: 'No deny rules' })
+      expect(notice!.message).not.toMatch(/denies all/i)
+    }
+  })
+
+  it('says nothing about a DENY that does match', () => {
+    // rules: [{}] is an unconditional match — a real deny-all, and not this
+    // helper's business to editorialise about.
+    expect(getAuthorizationPolicyRuleNotice({ spec: { action: 'DENY', rules: [{}] } })).toBeNull()
+  })
+
+  it('warns on a rule-less ALLOW without asserting an outage', () => {
+    for (const spec of [{}, { action: 'ALLOW', rules: [] }]) {
+      const notice = getAuthorizationPolicyRuleNotice({ spec })
+      expect(notice).toMatchObject({ level: 'warning', title: 'No allow rules' })
+      expect(notice!.message).toMatch(/may still permit/i)
+      expect(notice!.message).not.toMatch(/no traffic is allowed/i)
+    }
+  })
+
+  it('stays quiet when the policy has rules', () => {
+    expect(getAuthorizationPolicyRuleNotice({ spec: { action: 'ALLOW', rules: [{}] } })).toBeNull()
+  })
+
+  it('does not editorialise about AUDIT or CUSTOM', () => {
+    expect(getAuthorizationPolicyRuleNotice({ spec: { action: 'AUDIT' } })).toBeNull()
+    expect(getAuthorizationPolicyRuleNotice({ spec: { action: 'CUSTOM' } })).toBeNull()
   })
 })
