@@ -152,10 +152,22 @@ describe('getAuthorizationPolicyRuleNotice', () => {
     }
   })
 
-  it('says nothing about a DENY that does match', () => {
-    // rules: [{}] is an unconditional match — a real deny-all, and not this
-    // helper's business to editorialise about.
-    expect(getAuthorizationPolicyRuleNotice({ spec: { action: 'DENY', rules: [{}] } })).toBeNull()
+  it('explains an unconditional DENY, which no ALLOW can carve an exception from', () => {
+    // rules: [{}] matches every request. DENY is evaluated before ALLOW, so
+    // this is not a baseline with exceptions — it blocks everything it selects.
+    const notice = getAuthorizationPolicyRuleNotice({ spec: { action: 'DENY', rules: [{}] } })
+    expect(notice).toMatchObject({ level: 'info', title: 'Matches all requests' })
+  })
+
+  it('stays quiet on a DENY whose rules have conditions', () => {
+    expect(getAuthorizationPolicyRuleNotice({
+      spec: { action: 'DENY', rules: [{ from: [{ source: { namespaces: ['dev'] } }] }] },
+    })).toBeNull()
+  })
+
+  it('does not flag an unconditional ALLOW the same way', () => {
+    // An ALLOW matching everything is permissive, not a blanket block.
+    expect(getAuthorizationPolicyRuleNotice({ spec: { action: 'ALLOW', rules: [{}] } })).toBeNull()
   })
 
   it('warns on a rule-less ALLOW without asserting an outage', () => {

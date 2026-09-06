@@ -429,7 +429,22 @@ export function getAuthorizationPolicyRuleNotice(
 ): { level: 'warning' | 'info'; title: string; message: string } | null {
   const action = resource?.spec?.action || 'ALLOW'
   const rules = resource?.spec?.rules
-  if (Array.isArray(rules) && rules.length > 0) return null
+  if (Array.isArray(rules) && rules.length > 0) {
+    // A rule with no conditions matches every request. On a DENY that is not a
+    // baseline other policies carve exceptions out of: DENY is evaluated first,
+    // so no ALLOW can re-permit what it matches.
+    const matchesEverything = rules.some(
+      (r: any) => r && typeof r === 'object' && Object.keys(r).length === 0,
+    )
+    if (action === 'DENY' && matchesEverything) {
+      return {
+        level: 'info',
+        title: 'Matches all requests',
+        message: 'A rule with no conditions matches every request, so this policy denies all traffic to the workloads it selects. DENY is evaluated before ALLOW, so no ALLOW policy can permit an exception.',
+      }
+    }
+    return null
+  }
   if (action === 'ALLOW') {
     return {
       level: 'warning',
