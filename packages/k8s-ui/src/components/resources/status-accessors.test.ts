@@ -237,6 +237,34 @@ describe('getRouteStatus', () => {
     expect(getRouteStatus(r)).toMatchObject({ text: 'Accepted', level: 'healthy' })
   })
 
+  it('does not let confirmed parents speak for one that only has a stale report', () => {
+    // gw-a's sole report describes a superseded spec, so nothing has confirmed
+    // it. A healthy gw-b must not carry the verdict to Accepted on its own.
+    const r = route({
+      generation: 4,
+      refs: [{ name: 'gw-a' }, { name: 'gw-b' }],
+      parents: [
+        { parentRef: { name: 'gw-a' }, conditions: [cond('Accepted', 'True', 2), cond('ResolvedRefs', 'True', 2)] },
+        { parentRef: { name: 'gw-b' }, conditions: [cond('Accepted', 'True', 4), cond('ResolvedRefs', 'True', 4)] },
+      ],
+    })
+    expect(getRouteStatus(r)).toMatchObject({ text: 'Pending', level: 'degraded' })
+  })
+
+  it('does not claim full rejection while a parent is unconfirmed', () => {
+    const r = route({
+      generation: 4,
+      refs: [{ name: 'gw-a' }, { name: 'gw-b' }],
+      parents: [
+        { parentRef: { name: 'gw-a' }, conditions: [cond('Accepted', 'False', 2)] },
+        { parentRef: { name: 'gw-b' }, conditions: [cond('Accepted', 'False', 4)] },
+      ],
+    })
+    // gw-a is unconfirmed against the current spec, so "every parent rejects"
+    // is not established — the live rejection still shows, as Degraded.
+    expect(getRouteStatus(r)).toMatchObject({ text: 'Degraded', level: 'degraded' })
+  })
+
   it('matches a parent whose namespace and kind are defaulted on one side only', () => {
     const r = route({
       namespace: 'prod',
