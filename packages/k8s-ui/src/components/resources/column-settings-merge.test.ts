@@ -82,6 +82,18 @@ describe('mergeSavedVisibleColumns', () => {
     expect(call().has('status')).toBe(false)
   })
 
+  it('keeps a column hidden after the offered set shrinks and grows again', () => {
+    // Uncurated kinds offer a generic Status until their printer columns arrive,
+    // and stop offering it afterwards. If the record were replaced on each save
+    // rather than accumulated, that second save would forget Status was ever
+    // offered — and a later load without printer data would read the user's
+    // hide as "never shown" and undo it.
+    const known = ['name', 'namespace', 'status', 'age', 'printer:Phase']
+    const effective = [col('name'), col('namespace'), col('status'), col('age')]
+    const got = mergeSavedVisibleColumns(['name', 'namespace', 'age'], [], [], effective, known)
+    expect(got.has('status')).toBe(false)
+  })
+
   it('seeds a new curated column alongside printer columns without disturbing them', () => {
     const cols = [printer('printer:Phase')]
     const effective = [col('name'), col('lastSuccess'), printer('printer:Phase')]

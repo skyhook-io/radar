@@ -3825,6 +3825,12 @@ export function ResourcesView({
   // Guards the save effect from persisting on the initial load of each kind
   // (set false by the load effect, flipped true on its first skipped save).
   const isColumnSettingsLoaded = useRef(false)
+  // Every column key this kind has ever offered, accumulated. A single save
+  // cannot stand in for it: the offered set shrinks as well as grows — an
+  // uncurated kind's generic Status disappears once its printer columns arrive
+  // — and a shrunk snapshot would forget that a column absent from `visible`
+  // was one the user hid rather than one never shown.
+  const knownColumnKeys = useRef<Set<string>>(new Set())
   // Whether the user has a persisted column blob for this kind — data-driven
   // column defaults (GPU auto-show) must never override explicit user choices.
   const hadSavedColumnSettings = useRef(false)
@@ -3850,6 +3856,9 @@ export function ResourcesView({
     // (non-array, blank path, bad source) must not crash the later .map or add dead columns.
     const savedCustom = sanitizeCustomColumnDefs(saved?.custom)
     setCustomColumns(savedCustom)
+    // Per kind: keys accumulated for the previous one would suppress seeding
+    // here for any key the two happen to share.
+    knownColumnKeys.current = new Set()
     const kindColumns = columnsForKindWithPrinter(selectedKind.name, selectedKind.group, builtPrinterColumns)
     const builtinKeys = new Set(kindColumns.map(c => c.key))
     const extras = filterHostExtras(extraLeadingColumns, builtinKeys, selectedKind.name)
@@ -3866,22 +3875,31 @@ export function ResourcesView({
       // discard the stale save and use the specialized columns instead. User-added
       // custom columns mean the blob isn't a stale pure-defaults save — keep it, or
       // the migration would clear them from storage (and un-hide hidden ones).
+      // Persisted JSON: only an array of keys is usable, anything else reads as
+      // no record at all.
+      const savedKnown = Array.isArray(saved.known)
+        ? saved.known.filter((k): k is string => typeof k === 'string')
+        : undefined
+      for (const k of savedKnown ?? []) knownColumnKeys.current.add(k)
+
       const defaultKeys = DEFAULT_COLUMNS.map(c => c.key)
+      // A blob carrying an offered-key record is not a pre-curation leftover:
+      // its visible set matching the generic defaults means the user hid their
+      // way down to them, and clearing it would undo exactly that.
       const isStaleDefaults = kindColumns !== DEFAULT_COLUMNS &&
+        !savedKnown &&
         !savedCustom.length &&
         saved.visible.length === defaultKeys.length &&
         saved.visible.every(v => defaultKeys.includes(v))
       if (isStaleDefaults) {
         clearColumnSettings(selectedKind.name, selectedKind.group)
+        knownColumnKeys.current = new Set()
         hadSavedColumnSettings.current = false
         setVisibleColumns(getDefaultVisibleColumns(effective))
         setColumnWidths({})
       } else {
         setVisibleColumns(mergeSavedVisibleColumns(
-          saved.visible, extraKeys, builtPrinterColumns, effective,
-          // Persisted JSON: only an array of keys is usable, anything else is
-          // treated as no record at all.
-          Array.isArray(saved.known) ? saved.known.filter((k): k is string => typeof k === 'string') : undefined,
+          saved.visible, extraKeys, builtPrinterColumns, effective, savedKnown,
         ))
         setColumnWidths(saved.widths || {})
       }
@@ -3898,6 +3916,7 @@ export function ResourcesView({
   // Save column settings when they change (skip the initial load of each kind)
   useEffect(() => {
     if (visibleColumns.size === 0) return // not loaded yet
+    for (const k of allColumnKeys) knownColumnKeys.current.add(k)
     if (!isColumnSettingsLoaded.current) {
       isColumnSettingsLoaded.current = true
       return
@@ -3906,7 +3925,7 @@ export function ResourcesView({
       visible: Array.from(visibleColumns),
       widths: columnWidths,
       custom: customColumns,
-      known: allColumnKeys,
+      known: Array.from(knownColumnKeys.current),
     })
     // A persisted blob blocks GPU auto-show from here on — same rule in-session
     // as across sessions, so a later data refresh can't override user choices.
@@ -4015,6 +4034,7 @@ export function ResourcesView({
   // Reset column settings to defaults (also drops user-added custom columns)
   const resetColumnSettings = useCallback(() => {
     clearColumnSettings(selectedKind.name, selectedKind.group)
+    knownColumnKeys.current = new Set()
     setCustomColumns([])
     const customKeys = new Set(builtCustomColumns.map(c => c.key))
     setVisibleColumns(getDefaultVisibleColumns(allColumns.filter(c => !customKeys.has(c.key))))
