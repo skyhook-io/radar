@@ -1903,31 +1903,49 @@ export function getRouteStatus(route: any): StatusBadge {
   const routeNamespace = route.metadata?.namespace || ''
   const generation = route.metadata?.generation
 
-  const matched = refs
-    .map((ref: any) => reports.find((p: any) => isReportForParentRef(ref, p?.parentRef, routeNamespace)))
-    .filter(Boolean)
-  if (matched.length === 0) return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
+  // Every report for a parent, not the first: status entries are identified by
+  // parentRef AND controllerName, so one parent can carry reports from two
+  // controllers mid-replacement. Taking one made the verdict depend on their
+  // order in the array.
+  const reportsFor = (ref: any) =>
+    reports.filter((p: any) => isReportForParentRef(ref, p?.parentRef, routeNamespace))
+  const perRef = refs.map(reportsFor)
 
-  // A condition observed against an older generation describes a spec that has
-  // since changed, so it cannot confirm the current one.
+  // A route can also attach to default Gateways without naming them, in which
+  // case the attachment exists only in status. Those reports are real and their
+  // failures must count. Without that opt-in an unmatched report is a leftover
+  // from a parentRef the spec no longer names, and counting it would resurrect
+  // a verdict for a parent the route has left.
+  const useDefaultGateways = route.spec?.useDefaultGateways
+  const attachedByDefault = useDefaultGateways !== undefined && useDefaultGateways !== 'None'
+  const claimed = new Set(perRef.flat())
+  const considered = attachedByDefault
+    ? [...perRef.flat(), ...reports.filter((p: any) => !claimed.has(p))]
+    : perRef.flat()
+
+  if (considered.length === 0) return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
+
+  // A condition observed against a superseded generation describes a spec that
+  // has since changed, so it cannot confirm the current one. A condition with no
+  // observedGeneration at all is taken at face value.
   const isCurrent = (c: any) =>
     c?.observedGeneration === undefined || generation === undefined || c.observedGeneration === generation
   const conditionOf = (report: any, type: string) =>
     (report?.conditions || []).filter((c: any) => c?.type === type && isCurrent(c)).pop()
+  const statusOf = (report: any, type: string) => conditionOf(report, type)?.status
 
-  const accepted = matched.map((r: any) => conditionOf(r, 'Accepted'))
-  const resolved = matched.map((r: any) => conditionOf(r, 'ResolvedRefs'))
-  const everyParentReported = matched.length === refs.length
+  const everyRefReported = perRef.every((list: any[]) => list.length > 0)
+  const anyFailure = considered.some((r: any) =>
+    statusOf(r, 'Accepted') === 'False' || statusOf(r, 'ResolvedRefs') === 'False')
 
-  if (everyParentReported && accepted.every((c: any) => c?.status === 'False')) {
+  if (everyRefReported && considered.every((r: any) => statusOf(r, 'Accepted') === 'False')) {
     return { text: 'Not Accepted', color: healthColors.unhealthy, level: 'unhealthy' }
   }
-  if (accepted.some((c: any) => c?.status === 'False') || resolved.some((c: any) => c?.status === 'False')) {
+  if (anyFailure) {
     return { text: 'Degraded', color: healthColors.degraded, level: 'degraded' }
   }
-  if (everyParentReported &&
-      accepted.every((c: any) => c?.status === 'True') &&
-      resolved.every((c: any) => c?.status === 'True')) {
+  if (everyRefReported && considered.every((r: any) =>
+      statusOf(r, 'Accepted') === 'True' && statusOf(r, 'ResolvedRefs') === 'True')) {
     return { text: 'Accepted', color: healthColors.healthy, level: 'healthy' }
   }
   return { text: 'Pending', color: healthColors.degraded, level: 'degraded' }
@@ -2022,7 +2040,11 @@ export function getNetworkPolicyRuleCount(np: any): { ingress: number; egress: n
 export function getNetworkPolicySelector(np: any): string {
   const selector = np.spec?.podSelector
   const hasLabels = Object.keys(selector?.matchLabels ?? {}).length > 0
-  const hasExpressions = Array.isArray(selector?.matchExpressions) && selector.matchExpressions.length > 0
+  // Count only what the formatter will actually render: it skips malformed
+  // entries, and an expression list of nothing but those would otherwise reach
+  // its empty-case string and describe the same state in different words.
+  const hasExpressions = (Array.isArray(selector?.matchExpressions) ? selector.matchExpressions : [])
+    .some((e: any) => e && typeof e === 'object')
   if (!hasLabels && !hasExpressions) return 'All pods'
   return formatKubernetesLabelSelector(selector)
 }
