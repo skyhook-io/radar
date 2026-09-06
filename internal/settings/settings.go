@@ -75,8 +75,14 @@ type LastContext struct {
 // overwriting each other's changes.
 var mu sync.Mutex
 
-// Path returns the settings file path (~/.radar/settings.json).
+const pathEnv = "RADAR_SETTINGS_PATH"
+
+// Path returns the settings file path. Isolated child processes can override
+// the default ~/.radar/settings.json location through RADAR_SETTINGS_PATH.
 func Path() string {
+	if path := os.Getenv(pathEnv); path != "" {
+		return path
+	}
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		log.Printf("[settings] Cannot determine home directory: %v (settings will not be persisted)", err)

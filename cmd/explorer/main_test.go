@@ -1,9 +1,50 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
+
+func TestValidateContextRefFlags(t *testing.T) {
+	tests := []struct {
+		name       string
+		context    string
+		source     string
+		inFileName string
+		wantErr    bool
+	}{
+		{name: "none", wantErr: false},
+		{name: "complete", context: "prod", source: "/tmp/config", inFileName: "prod", wantErr: false},
+		{name: "context only", context: "prod", wantErr: true},
+		{name: "source only", source: "/tmp/config", wantErr: true},
+		{name: "missing in-file name", context: "prod", source: "/tmp/config", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateContextRefFlags(tt.context, tt.source, tt.inFileName)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("validateContextRefFlags() error = %v, wantErr %t", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestWriteContextTabReadyFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ready")
+	if err := writeContextTabReadyFile(path, 43127); err != nil {
+		t.Fatalf("writeContextTabReadyFile() error = %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read readiness file: %v", err)
+	}
+	if got := string(data); got != "43127\n" {
+		t.Fatalf("readiness file = %q, want %q", got, "43127\\n")
+	}
+}
 
 func TestHeaderFlagSet(t *testing.T) {
 	cases := []struct {

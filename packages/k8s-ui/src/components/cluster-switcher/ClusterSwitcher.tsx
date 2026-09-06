@@ -7,7 +7,7 @@ import {
   forwardRef,
   useImperativeHandle,
 } from 'react'
-import { ChevronDown, Check, FolderOpen, Loader2, Search, Server, X } from 'lucide-react'
+import { ChevronDown, Check, ExternalLink, FolderOpen, Loader2, Search, Server, X } from 'lucide-react'
 import { ClusterName } from '../ui/ClusterName'
 import { Input } from '../ui/Input'
 import { MiddleEllipsis } from '../ui/MiddleEllipsis'
@@ -54,6 +54,8 @@ export interface ClusterSwitcherProps {
   currentSourceLabel?: string
   items: ClusterSwitcherItem[]
   onSelect?: (item: ClusterSwitcherItem) => void
+  /** Optional secondary action rendered on each selectable row. */
+  onOpenInNewTab?: (item: ClusterSwitcherItem) => void
   searchable?: boolean
   showGroupHeaders?: boolean
   showCurrentBullet?: boolean
@@ -89,6 +91,7 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
   currentSourceLabel,
   items,
   onSelect,
+  onOpenInNewTab,
   searchable = true,
   showGroupHeaders = true,
   showCurrentBullet = true,
@@ -331,91 +334,108 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
                     const idx = indexById.get(item.id) ?? -1
                     const isCurrent = item.id === currentId
                     return (
-                      <button
-                        type="button"
+                      <div
                         key={item.id}
                         data-highlighted={idx === highlightedIndex}
-                        onClick={() => select(item)}
                         onMouseEnter={() => setHighlightedIndex(idx)}
-                        disabled={isCurrent || item.disabled}
-                        title={item.title}
                         className={`
-                          w-full flex items-center gap-2 px-3 py-2 text-left transition-colors
+                          group relative flex w-full items-stretch transition-colors
                           ${isCurrent
                             ? 'selection'
                             : idx === highlightedIndex
                               ? 'bg-theme-hover cursor-pointer'
                               : 'hover:bg-theme-hover cursor-pointer'}
-                          disabled:opacity-50
                         `}
                       >
-                        <div className="shrink-0 w-4 h-4 flex items-center justify-center">
-                          {isCurrent ? (
-                            <Check className="w-3.5 h-3.5 selection-text" />
-                          ) : showCurrentBullet ? (
-                            <div className="w-1.5 h-1.5 rounded-full bg-theme-text-tertiary/30" />
-                          ) : null}
-                        </div>
-                        {item.status && (
-                          <span className="shrink-0">
-                            <StatusDot tone={item.status} />
-                          </span>
-                        )}
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            {/* No tooltip on row names — each row already
-                                renders the raw context inline below the
-                                name (item.secondary), so the hover tooltip
-                                would just repeat what's already visible. */}
-                            <ClusterName
-                              name={item.name}
-                              noTooltip
-                              className={`text-sm font-medium flex-1 ${
-                                isCurrent
-                                  ? 'selection-text'
-                                  : item.disabled
-                                    ? 'text-theme-text-tertiary'
-                                    : 'text-theme-text-primary'
-                              }`}
-                            />
-                            {item.nameQualifier && (
-                              <span
-                                className="shrink-0 max-w-[120px] truncate text-xs font-normal text-theme-text-tertiary"
-                                title={item.nameQualifier}
+                        <button
+                          type="button"
+                          onClick={() => select(item)}
+                          disabled={isCurrent || item.disabled}
+                          title={item.title}
+                          className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left disabled:opacity-50"
+                        >
+                          <div className="shrink-0 w-4 h-4 flex items-center justify-center">
+                            {isCurrent ? (
+                              <Check className="w-3.5 h-3.5 selection-text" />
+                            ) : showCurrentBullet ? (
+                              <div className="w-1.5 h-1.5 rounded-full bg-theme-text-tertiary/30" />
+                            ) : null}
+                          </div>
+                          {item.status && (
+                            <span className="shrink-0">
+                              <StatusDot tone={item.status} />
+                            </span>
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              {/* No tooltip on row names — each row already
+                                  renders the raw context inline below the
+                                  name (item.secondary), so the hover tooltip
+                                  would just repeat what's already visible. */}
+                              <ClusterName
+                                name={item.name}
+                                noTooltip
+                                className={`text-sm font-medium flex-1 ${
+                                  isCurrent
+                                    ? 'selection-text'
+                                    : item.disabled
+                                      ? 'text-theme-text-tertiary'
+                                      : 'text-theme-text-primary'
+                                }`}
+                              />
+                              {item.nameQualifier && (
+                                <span
+                                  className="shrink-0 max-w-[120px] truncate text-xs font-normal text-theme-text-tertiary"
+                                  title={item.nameQualifier}
+                                >
+                                  {item.nameQualifier}
+                                </span>
+                              )}
+                              {item.badge && (
+                                <span className="shrink-0 text-[10px] text-theme-text-tertiary bg-theme-elevated px-1 rounded">
+                                  {item.badge}
+                                </span>
+                              )}
+                            </div>
+                            {item.sourceLabel && (
+                              // Source chip lives on its own line under the
+                              // name so long folder paths get the full row
+                              // width to render via MiddleEllipsis. Inline
+                              // would steal width from the name and force
+                              // both to truncate.
+                              <div
+                                className="flex items-center gap-0.5 text-[10px] text-theme-text-tertiary opacity-80 mt-0.5"
+                                title={`From kubeconfig: ${item.sourceLabel}`}
                               >
-                                {item.nameQualifier}
-                              </span>
+                                <FolderOpen className="w-2.5 h-2.5 shrink-0" />
+                                <MiddleEllipsis text={item.sourceLabel} className="font-mono" />
+                              </div>
                             )}
-                            {item.badge && (
-                              <span className="shrink-0 text-[10px] text-theme-text-tertiary bg-theme-elevated px-1 rounded">
-                                {item.badge}
-                              </span>
+                            {item.secondary && (
+                              <div
+                                className="text-[10px] text-theme-text-tertiary opacity-70 truncate mt-0.5"
+                                title={item.secondary}
+                              >
+                                {item.secondary}
+                              </div>
                             )}
                           </div>
-                          {item.sourceLabel && (
-                            // Source chip lives on its own line under the
-                            // name so long folder paths get the full row
-                            // width to render via MiddleEllipsis. Inline
-                            // would steal width from the name and force
-                            // both to truncate.
-                            <div
-                              className="flex items-center gap-0.5 text-[10px] text-theme-text-tertiary opacity-80 mt-0.5"
-                              title={`From kubeconfig: ${item.sourceLabel}`}
-                            >
-                              <FolderOpen className="w-2.5 h-2.5 shrink-0" />
-                              <MiddleEllipsis text={item.sourceLabel} className="font-mono" />
-                            </div>
-                          )}
-                          {item.secondary && (
-                            <div
-                              className="text-[10px] text-theme-text-tertiary opacity-70 truncate mt-0.5"
-                              title={item.secondary}
-                            >
-                              {item.secondary}
-                            </div>
-                          )}
-                        </div>
-                      </button>
+                        </button>
+                        {onOpenInNewTab && !isCurrent && !item.disabled && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsOpen(false)
+                              onOpenInNewTab(item)
+                            }}
+                            className="mr-2 my-2 flex h-7 w-7 shrink-0 items-center justify-center rounded text-theme-text-tertiary opacity-70 transition-colors hover:bg-theme-elevated hover:text-theme-text-primary hover:opacity-100 focus-visible:opacity-100"
+                            title={`Open ${item.name} in a new tab`}
+                            aria-label={`Open ${item.name} in a new tab`}
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
                     )
                   })}
                 </div>

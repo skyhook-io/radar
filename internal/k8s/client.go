@@ -2151,19 +2151,36 @@ func findQualifiedNameForPath(registry map[string]contextEntry, file, inFileName
 
 // GetContextSource resolves a switcher-visible context name to its isolated
 // kubeconfig file and original in-file context name. Registry-backed loading
-// can resolve any visible name; direct single-file loading can resolve only the
-// active name because no registry is maintained in that mode.
+// can resolve any visible name; direct single-file loading resolves every
+// context from its one source file.
 func GetContextSource(name string) (sourceFile, inFileName string, ok bool) {
 	clientMu.RLock()
-	defer clientMu.RUnlock()
 	if name == contextName && activeSourceFile != "" && activeSourceName != "" {
+		clientMu.RUnlock()
 		return activeSourceFile, activeSourceName, true
 	}
 	if entry, found := contextRegistry[name]; found {
+		clientMu.RUnlock()
 		return entry.SourceFile, entry.InFileName, true
 	}
-	if contextRegistry == nil && kubeconfigPath != "" && name == contextName {
-		return kubeconfigPath, name, true
+	path := kubeconfigPath
+	activeName := contextName
+	registryBacked := contextRegistry != nil
+	clientMu.RUnlock()
+	if !registryBacked && path != "" {
+		// Read outside clientMu so a slow filesystem cannot block client state
+		// transitions. This is only a local kubeconfig metadata lookup.
+		cfg, err := clientcmd.LoadFromFile(path)
+		if err == nil {
+			if _, exists := cfg.Contexts[name]; exists {
+				return path, name, true
+			}
+		}
+		// The active context remains usable when the source cannot be reread
+		// because startup already validated this binding.
+		if name == activeName {
+			return path, name, true
+		}
 	}
 	return "", "", false
 }

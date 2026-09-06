@@ -500,6 +500,7 @@ export interface ClusterInfo {
   podCount: number
   namespaceCount: number
   inCluster: boolean
+  contextTabsEnabled: boolean
   crdDiscoveryStatus?: 'idle' | 'discovering' | 'ready'
 }
 

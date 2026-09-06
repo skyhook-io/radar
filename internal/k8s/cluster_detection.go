@@ -53,6 +53,7 @@ type ClusterInfo struct {
 	NamespaceCount     int    `json:"namespaceCount"`
 	InCluster          bool   `json:"inCluster"`                    // true when running inside a K8s cluster
 	CRDDiscoveryStatus string `json:"crdDiscoveryStatus,omitempty"` // idle, discovering, ready
+	ContextTabsEnabled bool   `json:"contextTabsEnabled"`
 }
 
 // GetClusterInfo returns detected cluster information

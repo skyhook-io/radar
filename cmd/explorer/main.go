@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -98,6 +99,11 @@ func main() {
 	// Parse flags (defaults come from config file, falling back to hardcoded values)
 	kubeconfig := flag.String("kubeconfig", fileCfg.Kubeconfig, "Path to primary kubeconfig file (default: ~/.kube/config)")
 	kubeconfigDir := flag.String("kubeconfig-dir", fileCfg.KubeconfigDirsFlag(), "Comma-separated directories containing additional kubeconfig files")
+	contextName := flag.String("context", "", "Initial kubeconfig context (used for isolated browser tabs)")
+	contextSource := flag.String("context-source", "", "Source kubeconfig file for --context (used for isolated browser tabs)")
+	contextInFile := flag.String("context-in-file", "", "Original context name inside --context-source (used for isolated browser tabs)")
+	contextTabs := flag.Bool("context-tabs", true, "Allow opening kubeconfig contexts in isolated browser tabs")
+	contextTabReadyFile := flag.String("context-tab-ready-file", "", "Write the bound port here when an isolated context tab is ready")
 	namespace := flag.String("namespace", fileCfg.Namespace, "Initial namespace filter (empty = all namespaces)")
 	namespaces := flag.String("namespaces", fileCfg.NamespacesFlag(), "Initial namespace filters as a comma-separated list (e.g. ns1,ns2,ns3). Use this when you can list resources in specific namespaces but cannot list namespaces cluster-wide.")
 	port := flag.Int("port", fileCfg.PortOr(9280), "Server port")
@@ -259,6 +265,9 @@ func main() {
 	if normalizedBasePath != "" && (*cloudURL != "" || cloud.Mode()) {
 		log.Fatalf("--base-path is not supported in Radar Cloud mode (--cloud-url / RADAR_CLOUD_MODE): Radar Cloud owns the URL path")
 	}
+	if err := validateContextRefFlags(*contextName, *contextSource, *contextInFile); err != nil {
+		log.Fatalf("%v", err)
+	}
 	timelineMaxSizeBytes, err := config.ParseByteSize(*timelineMaxSize)
 	if err != nil {
 		log.Fatalf("Invalid --timeline-max-size %q: %v", *timelineMaxSize, err)
@@ -333,6 +342,8 @@ func main() {
 	cfg := app.AppConfig{
 		Kubeconfig:               resolvedKubeconfig,
 		KubeconfigDirs:           resolvedKubeconfigDirs,
+		ContextTabs:              *contextTabs,
+		PreferredContext:         k8s.ContextRef{Name: *contextName, SourceFile: *contextSource, InFileName: *contextInFile},
 		Namespace:                resolvedNamespace,
 		Namespaces:               resolvedNamespaces,
 		Port:                     *port,
@@ -422,7 +433,7 @@ func main() {
 		log.Printf("MCP catalog-only mode enabled: skipping Kubernetes initialization")
 		cfg.NoBrowser = true
 		srv := app.CreateServer(cfg)
-		_, rootCancel := startServer(srv, startupStart)
+		_, rootCancel := startServer(srv, startupStart, "")
 		defer rootCancel()
 		select {}
 	}
@@ -473,7 +484,7 @@ func main() {
 	srv := app.CreateServer(cfg)
 	k8s.LogTiming(" Server created: %v", time.Since(t))
 
-	rootCtx, rootCancel := startServer(srv, startupStart)
+	rootCtx, rootCancel := startServer(srv, startupStart, *contextTabReadyFile)
 	defer rootCancel()
 
 	// Open browser — server is confirmed ready to accept connections
@@ -548,7 +559,7 @@ func main() {
 	select {}
 }
 
-func startServer(srv *server.Server, startupStart time.Time) (context.Context, context.CancelFunc) {
+func startServer(srv *server.Server, startupStart time.Time, contextTabReadyFile string) (context.Context, context.CancelFunc) {
 	// Root context cancelled on SIGINT/SIGTERM. Long-running background
 	// workers (cloud tunnel, etc.) observe this to shut down cleanly before
 	// the process exits.
@@ -581,8 +592,38 @@ func startServer(srv *server.Server, startupStart time.Time) (context.Context, c
 
 	// Write port file so MCP clients can discover the running server
 	app.WriteMCPPortFile(srv.ActualPort(), srv.BasePath())
+	if contextTabReadyFile != "" {
+		if err := writeContextTabReadyFile(contextTabReadyFile, srv.ActualPort()); err != nil {
+			log.Fatalf("Failed to write context-tab readiness file: %v", err)
+		}
+	}
 
 	return rootCtx, rootCancel
+}
+
+func writeContextTabReadyFile(path string, port int) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(strconv.Itoa(port)+"\n"), 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+func validateContextRefFlags(name, source, inFileName string) error {
+	provided := 0
+	for _, value := range []string{name, source, inFileName} {
+		if value != "" {
+			provided++
+		}
+	}
+	if provided != 0 && provided != 3 {
+		return errors.New("--context, --context-source, and --context-in-file must be provided together")
+	}
+	return nil
 }
 
 func parseCSV(s string) []string {
