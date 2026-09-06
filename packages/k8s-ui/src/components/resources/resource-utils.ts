@@ -1919,8 +1919,15 @@ export function getRouteStatus(route: any): StatusBadge {
   const useDefaultGateways = route.spec?.useDefaultGateways
   const attachedByDefault = useDefaultGateways !== undefined && useDefaultGateways !== 'None'
   const claimed = new Set(perRef.flat())
+  // Only a Gateway can be a default parent. An unmatched report for anything
+  // else — a mesh Service parent the spec has dropped — is obsolete by
+  // definition, and would otherwise keep voting forever if its controller is
+  // gone.
+  const isDefaultGatewayReport = (p: any) =>
+    (p?.parentRef?.group ?? GATEWAY_API_GROUP) === GATEWAY_API_GROUP &&
+    (p?.parentRef?.kind ?? 'Gateway') === 'Gateway'
   const considered = attachedByDefault
-    ? [...perRef.flat(), ...reports.filter((p: any) => !claimed.has(p))]
+    ? [...perRef.flat(), ...reports.filter((p: any) => !claimed.has(p) && isDefaultGatewayReport(p))]
     : perRef.flat()
 
   if (considered.length === 0) return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
