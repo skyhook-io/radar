@@ -184,6 +184,37 @@ describe('getRouteStatus', () => {
     expect(getRouteStatus(r)).toMatchObject({ text: 'Degraded', level: 'degraded' })
   })
 
+  it('ignores a dropped mesh Service parent when weighing default Gateways', () => {
+    // Services cannot be default Gateways, so an unmatched Service report is
+    // obsolete by definition — and would otherwise outvote the live one
+    // indefinitely once its controller is gone.
+    const r = {
+      metadata: { namespace: 'prod', generation: 3 },
+      spec: { useDefaultGateways: 'All' },
+      status: {
+        parents: [
+          { parentRef: { group: '', kind: 'Service', name: 'legacy-mesh' }, conditions: [cond('Accepted', 'True', 2)] },
+          { parentRef: { name: 'default-gw' }, conditions: [cond('Accepted', 'True', 3), cond('ResolvedRefs', 'True', 3)] },
+        ],
+      },
+    }
+    expect(getRouteStatus(r)).toMatchObject({ text: 'Accepted', level: 'healthy' })
+  })
+
+  it('still reports a rejecting default Gateway as rejected despite a dropped Service parent', () => {
+    const r = {
+      metadata: { namespace: 'prod', generation: 3 },
+      spec: { useDefaultGateways: 'All' },
+      status: {
+        parents: [
+          { parentRef: { group: '', kind: 'Service', name: 'legacy-mesh' }, conditions: [cond('Accepted', 'True', 2)] },
+          { parentRef: { name: 'default-gw' }, conditions: [cond('Accepted', 'False', 3)] },
+        ],
+      },
+    }
+    expect(getRouteStatus(r)).toMatchObject({ text: 'Not Accepted', level: 'unhealthy' })
+  })
+
   it('takes a condition with no observedGeneration at face value', () => {
     // Missing is not stale: a controller that never sets it must not strand the
     // route as Pending forever.
