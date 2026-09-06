@@ -767,28 +767,33 @@ export function DiagnoseSurface({
       <div className="flex items-center justify-between border-b border-theme-border px-4 py-2.5">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           {d.view !== "home" && showHistory ? (
-            <button
-              ref={historyButtonRef}
-              type="button"
-              aria-label="Investigations"
-              title={
+            <Tooltip
+              content={
                 historyVisible
                   ? "Hide investigation history"
                   : "Show investigation history"
               }
-              aria-expanded={historyVisible}
-              aria-controls="investigation-history"
-              onClick={() =>
-                wideHistory
-                  ? setHistoryCollapsed((value) => !value)
-                  : historyOverlay
-                    ? dismissHistory()
-                    : setHistoryOverlayOpen(true)
-              }
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-theme-text-secondary hover:bg-theme-hover focus-visible:ring-2 focus-visible:ring-accent"
+              position="bottom"
+              className="pointer-events-none"
             >
-              <PanelLeftOpen className="h-4 w-4" />
-            </button>
+              <button
+                ref={historyButtonRef}
+                type="button"
+                aria-label="Investigations"
+                aria-expanded={historyVisible}
+                aria-controls="investigation-history"
+                onClick={() =>
+                  wideHistory
+                    ? setHistoryCollapsed((value) => !value)
+                    : historyOverlay
+                      ? dismissHistory()
+                      : setHistoryOverlayOpen(true)
+                }
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-theme-text-secondary hover:bg-theme-hover focus-visible:ring-2 focus-visible:ring-accent"
+              >
+                <PanelLeftOpen className="h-4 w-4" />
+              </button>
+            </Tooltip>
           ) : (
             <span className="flex h-8 w-8 shrink-0 items-center justify-center">
               <Sparkles className="h-4 w-4 text-accent" />

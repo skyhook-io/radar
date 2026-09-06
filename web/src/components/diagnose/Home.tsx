@@ -8,6 +8,7 @@ import {
 } from "@skyhook-io/k8s-ui/utils/navigation";
 import { parseContextName } from "../../utils/context-name";
 import { formatInvestigationTarget } from "./target";
+import { Tooltip } from "../ui/Tooltip";
 
 function historyDay(date: Date, now: Date): string {
   if (date.toDateString() === now.toDateString()) return "Today";
@@ -273,12 +274,17 @@ export function RecentList({
                     }`}
                   >
                     <span className="flex w-full items-start gap-2">
-                      <span
-                        title={r.name}
-                        className="min-w-0 flex-1 line-clamp-2 break-words text-sm font-medium leading-5 text-theme-text-primary"
+                      <Tooltip
+                        content={r.name}
+                        position="right"
+                        delay={600}
+                        className="pointer-events-none"
+                        wrapperClassName="min-w-0 flex-1"
                       >
-                        {r.name}
-                      </span>
+                        <span className="min-w-0 flex-1 line-clamp-2 break-words text-sm font-medium leading-5 text-theme-text-primary">
+                          {r.name}
+                        </span>
+                      </Tooltip>
                       {(Icon || short) && (
                         <span
                           aria-hidden="true"
@@ -308,25 +314,32 @@ export function RecentList({
                         })}
                       </time>
                     </span>
-                    <span
-                      title={`${r.context}${isCurrentCluster ? " · Current cluster" : ""}`}
-                      aria-label={
-                        isCurrentCluster
-                          ? `Current cluster: ${parsed.clusterName}`
-                          : `Cluster: ${parsed.clusterName}`
-                      }
-                      className={`flex w-full items-center gap-1 text-xs leading-4 ${isCurrentCluster ? "text-accent-text" : "text-theme-text-tertiary"}`}
+                    <Tooltip
+                      content={`${r.context}${isCurrentCluster ? " · Current cluster" : ""}`}
+                      position="right"
+                      delay={600}
+                      className="pointer-events-none"
+                      wrapperClassName="w-full min-w-0"
                     >
-                      <Server className="h-3 w-3 shrink-0" aria-hidden />
-                      <span className="min-w-0 flex-1 truncate">
-                        {parsed.clusterName}
-                      </span>
-                      {visibility && (
-                        <span className="shrink-0 text-theme-text-tertiary">
-                          {visibility}
+                      <span
+                        aria-label={
+                          isCurrentCluster
+                            ? `Current cluster: ${parsed.clusterName}`
+                            : `Cluster: ${parsed.clusterName}`
+                        }
+                        className={`flex w-full items-center gap-1 text-xs leading-4 ${isCurrentCluster ? "text-accent-text" : "text-theme-text-tertiary"}`}
+                      >
+                        <Server className="h-3 w-3 shrink-0" aria-hidden />
+                        <span className="min-w-0 flex-1 truncate">
+                          {parsed.clusterName}
                         </span>
-                      )}
-                    </span>
+                        {visibility && (
+                          <span className="shrink-0 text-theme-text-tertiary">
+                            {visibility}
+                          </span>
+                        )}
+                      </span>
+                    </Tooltip>
                     {collision && qualifier !== parsed.clusterName && (
                       <span className="w-full break-words text-xs leading-4 text-theme-text-secondary">
                         {qualifier}

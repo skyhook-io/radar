@@ -77,12 +77,12 @@ describe("RecentList", () => {
     );
   });
 
-  it("keeps the whole row clickable without a portal tooltip and labels individual identity fields", () => {
+  it("keeps the whole row as one button and labels individual identity fields without native tooltips", () => {
     const html = render([run()]);
-    expect(html).not.toContain("inline-flex max-w-full");
-    expect(html).toContain('title="checkout"');
-    expect(html).toContain('title="gke_project-one_us-east1-b_nonprod"');
+    expect(html.match(/<button\b/g)).toHaveLength(1);
+    expect(html).not.toContain('title="');
     expect(html).toContain('aria-label="Deployment.apps shop/checkout');
+    expect(html).toContain('aria-label="Cluster: nonprod"');
   });
   it("uses cluster identity instead of lifecycle locks and deterministic initial-issue text", () => {
     const current = run({ health: { topReason: "CrashLoopBackOff" } });
