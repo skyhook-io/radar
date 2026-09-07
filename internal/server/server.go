@@ -707,28 +707,10 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			imageHandlers := images.NewHandlers()
 			imageHandlers.RegisterRoutes(r)
 
-			// Prometheus metrics routes. The auth gate is required for endpoints
-			// that read K8s spec data via the shared informer cache (rightsizing,
-			// PVC usage) — the cache is populated under Radar's SA, so without
-			// it any authenticated user could fetch any namespace's spec.
-			//
-			// Two checks here, both load-bearing:
-			//   1. canRead (SAR) — does the user have RBAC for this verb on this
-			//      resource? Catches missing-RBAC.
-			//   2. getUserNamespaces — is the namespace in the user's discovered
-			//      allow-list? Matches handleGetResource semantics on the main
-			//      resource API. Without this, a user with cluster-wide SAR for
-			//      "get" could read derived data via these endpoints in namespaces
-			//      they're otherwise filtered out of (multi-tenant separation).
-			prometheuspkg.SetAuthGate(func(req *http.Request, group, resource, namespace, verb string) bool {
-				if !s.canRead(req, group, resource, namespace, verb) {
-					return false
-				}
-				if namespace != "" && noNamespaceAccess(s.getUserNamespaces(req, []string{namespace})) {
-					return false
-				}
-				return true
-			})
+			// Prometheus metrics routes. Every metrics read runs with Radar's
+			// own Prometheus access, so each route authorizes the caller
+			// through this gate before querying — see prometheusAuthGate.
+			prometheuspkg.SetAuthGate(s.prometheusAuthGate)
 			r.Post("/prometheus/rightsizing/scan", s.handleRightsizingScan)
 			prometheuspkg.RegisterRoutes(r)
 
@@ -1554,6 +1536,28 @@ func noNamespaceAccess(namespaces []string) bool {
 	return namespaces != nil && len(namespaces) == 0
 }
 
+// prometheusAuthGate is the per-request read check behind every metrics
+// route. Two checks, both load-bearing:
+//
+//  1. canRead (SAR): does the user have RBAC for this verb on this resource?
+//     With namespace="" that is the all-namespaces check the cluster-wide
+//     surfaces (raw PromQL, cluster aggregate) gate on.
+//  2. getUserNamespaces: is the namespace in the user's discovered allow-list?
+//     Matches handleGetResource semantics on the main resource API. Without
+//     it a user with a cluster-wide SAR for "get" could read derived data in
+//     namespaces they are otherwise filtered out of.
+//
+// Passes through when auth is disabled (no user on the request).
+func (s *Server) prometheusAuthGate(req *http.Request, group, resource, namespace, verb string) bool {
+	if !s.canRead(req, group, resource, namespace, verb) {
+		return false
+	}
+	if namespace != "" && noNamespaceAccess(s.getUserNamespaces(req, []string{namespace})) {
+		return false
+	}
+	return true
+}
+
 // canRead authorizes a single (verb, group, resource, namespace) tuple for
 // the calling user via SubjectAccessReview. Used to gate cluster-scoped
 // reads — namespace-list discovery is too narrow a signal to authorize
@@ -1569,7 +1573,10 @@ func noNamespaceAccess(namespaces []string) bool {
 // surrounding namespace-discovery cache entry (2-min TTL by default), so
 // RBAC changes propagate within the TTL window.
 //
-// Pass namespace="" for a cluster-scoped check.
+// Pass namespace="" for a cluster-scoped check. For a namespaced resource
+// an empty namespace makes the SubjectAccessReview an all-namespaces check
+// ("may the user list pods cluster-wide?"), which is how cluster-wide
+// surfaces are gated.
 func (s *Server) canRead(r *http.Request, group, resource, namespace, verb string) bool {
 	allowed, _ := s.canReadDecision(r, group, resource, namespace, verb)
 	return allowed

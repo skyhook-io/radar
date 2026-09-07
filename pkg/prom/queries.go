@@ -311,3 +311,14 @@ func buildNodeQuery(nodeName string, category MetricCategory) string {
 		return ""
 	}
 }
+
+// BuildHPAReplicasQueries returns the kube-state-metrics series behind an
+// HPA's replica history: the replica count it currently observes and the
+// count it has decided on.
+func BuildHPAReplicasQueries(namespace, name string) (current, desired string) {
+	ns := SanitizeLabelValue(namespace)
+	n := SanitizeLabelValue(name)
+	current = fmt.Sprintf(`kube_horizontalpodautoscaler_status_current_replicas{namespace="%s",horizontalpodautoscaler="%s"}`, ns, n)
+	desired = fmt.Sprintf(`kube_horizontalpodautoscaler_status_desired_replicas{namespace="%s",horizontalpodautoscaler="%s"}`, ns, n)
+	return current, desired
+}
