@@ -9,6 +9,7 @@ import {
   projectInvestigationEvidence,
   resolveInvestigationRootCauseEvidence,
   type InvestigationEvidenceGroup,
+  type InvestigationEvidenceTarget,
   type InvestigationEvidenceTimelineItem,
   type InvestigationEvidenceTurn,
 } from "./investigationEvidence";
@@ -943,7 +944,9 @@ describe("strict evidence adapters", () => {
     ]);
     const events = groupsOf(result.groups, "events")[0].latest;
 
-    expect(events.summary).toBe("1 event group · Deployment shop/api");
+    expect(events.summary).toBe(
+      "BackOff: Back-off restarting failed container · Deployment shop/api",
+    );
     expect(events.data).toMatchObject({
       type: "events",
       scope: "Deployment shop/api",
@@ -3104,6 +3107,1231 @@ describe("honest zero and partial-result states", () => {
         source: "Topology coverage metadata",
         kind: "unknown",
       }),
+    ]);
+  });
+});
+
+// Shape taken from a saved cloud-provisioner investigation (run-1f386db525),
+// where the agent read workload logs four times and Findings showed none.
+const workloadLogsPayload = {
+  workload: "deployments/shop/api",
+  pods: 2,
+  logs: [
+    {
+      pod: "api-68c7b766dc-fmphn",
+      container: "api",
+      logs: {
+        lines: [
+          "2026-09-07T08:00:20.234687659Z [31m[Nest] 1  - [39m09/07/2026, 8:00:20 AM [31m  ERROR[39m [38;5;3m[MongooseModule] [39m[31mUnable to connect to the database. Retrying (9)...[39m",
+          "2026-09-07T08:00:20.234756499Z MongoServerError: Authentication failed.",
+        ],
+        totalLines: 50,
+        matchedLines: 4,
+        fallback: false,
+      },
+    },
+    {
+      pod: "api-68c7b766dc-fmphn",
+      container: "istio-proxy",
+      logs: {
+        lines: ["2026-09-07T08:00:19Z info Envoy proxy is ready"],
+        totalLines: 12,
+        matchedLines: 0,
+        fallback: true,
+      },
+    },
+    {
+      pod: "api-68c7b766dc-q2zxr",
+      container: "api",
+      logs: {
+        lines: [
+          "2026-09-07T08:00:21Z MongoServerError: Authentication failed.",
+        ],
+        totalLines: 50,
+        matchedLines: 1,
+        fallback: false,
+      },
+    },
+  ],
+  narrowHint:
+    "at least one pod's log stream tailed to 50 lines (cap reached) — narrow with since= (e.g. 10m), grep= regex, container=, or raise tail_lines",
+  warnings: [
+    "1 of 2 pod(s) have container restarts on record; the error(s) that killed prior containers are in the previous instance's logs — call again with `previous: true` to see them.",
+  ],
+};
+
+const workloadLogsArgs = JSON.stringify({
+  namespace: "shop",
+  name: "api",
+  kind: "deployment",
+  tail_lines: 50,
+});
+
+describe("workload logs adapter", () => {
+  it("keeps one multi-container result as one source with several observations", () => {
+    const ref = evidenceRef("a", "b");
+    const projection = project([
+      tool("wl-logs", "get_workload_logs", workloadLogsPayload, {
+        summary: workloadLogsArgs,
+        evidenceRef: ref,
+      }),
+    ]);
+    const logs = groupsOf(projection.groups, "logs");
+    expect(logs.map((group) => group.identity)).toEqual([
+      "logs:current:api-68c7b766dc-fmphn:api",
+      "logs:current:api-68c7b766dc-fmphn:istio-proxy",
+      "logs:current:api-68c7b766dc-q2zxr:api",
+    ]);
+    expect(projection.sources).toHaveLength(1);
+    expect(projection.coverage).toMatchObject({
+      attempted: 1,
+      projected: 1,
+      limited: 1,
+    });
+    expect(new Set(logs.map((group) => group.latest.source.id)).size).toBe(1);
+    // Diagnose relates a target workload to its pods the same way.
+    expect(logs.map((group) => group.latest.relevance)).toEqual([
+      "producer-related",
+      "producer-related",
+      "producer-related",
+    ]);
+    expect(logs[0].latest.tier).toBe("supporting");
+    expect(logs[0].latest.tone).toBe("warning");
+    expect(logs[0].latest.data).toMatchObject({
+      type: "logs",
+      namespace: "shop",
+      previous: false,
+      warnings: workloadLogsPayload.warnings,
+    });
+    expect(
+      (logs[0].latest.data as { logs?: { lines: string[] } }).logs?.lines[0],
+    ).not.toContain("[");
+    expect(logs[1].latest.tier).toBe("context");
+    expect(investigationEvidenceSubjectRef(logs[2].latest.data)).toEqual({
+      kind: "Pod",
+      namespace: "shop",
+      name: "api-68c7b766dc-q2zxr",
+    });
+
+    const resolution = resolveInvestigationRootCauseEvidence(
+      projection,
+      { status: "linked", refs: [ref] },
+      0,
+    );
+    expect(resolution.status).toBe("linked");
+    expect(resolution.links[0].source.stepId).toBe("wl-logs");
+    expect(resolution.links[0].originalGroupId).toBe(logs[0].id);
+    expect(projection.sources[0].primaryGroupId).toBe(logs[0].id);
+    expect(
+      projection.limitations.map((limitation) => limitation.source),
+    ).toEqual(["Workload logs"]);
+    expect(projection.limitations[0].kind).toBe("truncated");
+  });
+
+  it("scopes a sibling workload's logs as broader and a Pod target's own row as target", () => {
+    const sibling = project([
+      tool(
+        "wl-sibling",
+        "get_workload_logs",
+        { ...workloadLogsPayload, workload: "deployments/shop/api-worker" },
+        {
+          summary: JSON.stringify({
+            namespace: "shop",
+            name: "api-worker",
+            kind: "deployment",
+          }),
+        },
+      ),
+    ]);
+    expect(
+      groupsOf(sibling.groups, "logs").map((group) => group.latest.relevance),
+    ).toEqual(["broader", "broader", "broader"]);
+    expect(
+      groupsOf(sibling.groups, "logs").map((group) => group.latest.tier),
+    ).toEqual(["context", "context", "context"]);
+
+    const podTarget = projectInvestigationEvidence(
+      [
+        {
+          timeline: [
+            tool("wl-pod", "get_workload_logs", workloadLogsPayload, {
+              summary: workloadLogsArgs,
+            }),
+          ],
+        },
+      ],
+      {
+        kind: "Pod",
+        group: "",
+        namespace: "shop",
+        name: "api-68c7b766dc-q2zxr",
+      },
+    );
+    expect(
+      groupsOf(podTarget.groups, "logs").map((group) => group.latest.relevance),
+    ).toEqual(["broader", "broader", "target"]);
+  });
+
+  it("reports a failed read as a limitation and no pods as a scoped receipt", () => {
+    const failed = project([
+      tool(
+        "wl-error",
+        "get_workload_logs",
+        {
+          workload: "deployments/shop/api",
+          pods: 2,
+          logsError: "no kube client in request context",
+        },
+        { summary: workloadLogsArgs },
+      ),
+    ]);
+    expect(failed.groups).toHaveLength(0);
+    expect(failed.limitations).toEqual([
+      expect.objectContaining({
+        source: "Workload logs",
+        message: "no kube client in request context",
+        kind: "error",
+      }),
+    ]);
+
+    const empty = project([
+      tool(
+        "wl-empty",
+        "get_workload_logs",
+        {
+          workload: "jobs/shop/api",
+          pods: 0,
+          logs: "No pods found for this Job yet. Check scheduling, admission, or controller events.",
+          emptyReason: "no-pods",
+          emptyMessage:
+            "No pods found for this Job yet. Check scheduling, admission, or controller events.",
+          command: "kubectl logs job/api -n shop",
+        },
+        {
+          summary: JSON.stringify({
+            namespace: "shop",
+            name: "api",
+            kind: "job",
+          }),
+        },
+      ),
+    ]);
+    const receipt = groupsOf(empty.groups, "receipt")[0].latest;
+    expect(receipt.tier).toBe("context");
+    expect(receipt.relevance).toBe("broader");
+    expect(receipt.data).toMatchObject({
+      type: "receipt",
+      checked: "logs",
+      scope: "Job shop/api",
+      message:
+        "No pods found for this Job yet. Check scheduling, admission, or controller events.",
+    });
+    expect(empty.limitations).toHaveLength(0);
+
+    const unconfirmed = project([
+      tool(
+        "wl-unconfirmed",
+        "get_workload_logs",
+        { workload: "deployments/shop/api", pods: 0, logs: "no pods" },
+        { summary: workloadLogsArgs, isError: undefined },
+      ),
+    ]);
+    expect(groupsOf(unconfirmed.groups, "receipt")).toHaveLength(0);
+  });
+
+  it("rejects malformed payloads and per-stream errors honestly", () => {
+    const malformed = project([
+      tool(
+        "wl-bad",
+        "get_workload_logs",
+        { workload: "pods/shop/api", pods: 1, logs: [] },
+        { summary: workloadLogsArgs },
+      ),
+      tool(
+        "wl-stream-error",
+        "get_workload_logs",
+        {
+          workload: "deployments/shop/api",
+          pods: 1,
+          logs: [
+            {
+              pod: "api-68c7b766dc-fmphn",
+              container: "api",
+              error: "failed to get logs: container is waiting to start",
+            },
+          ],
+        },
+        { summary: workloadLogsArgs },
+      ),
+      tool(
+        "wl-null",
+        "get_workload_logs",
+        { workload: "deployments/shop/api", pods: 3, logs: null },
+        { summary: workloadLogsArgs },
+      ),
+    ]);
+    expect(malformed.groups).toHaveLength(0);
+    expect(
+      malformed.limitations.map((limitation) => [
+        limitation.source,
+        limitation.kind,
+      ]),
+    ).toEqual([
+      ["Workload logs", "unknown"],
+      ["api-68c7b766dc-fmphn / api", "error"],
+      ["Workload logs", "unknown"],
+    ]);
+    expect(malformed.limitations[0].message).toContain(
+      "couldn't summarize this investigation step",
+    );
+    expect(malformed.limitations[2].message).toContain("3 resolved pods");
+  });
+});
+
+const firingInstance = {
+  state: "firing",
+  activeAt: "2026-09-07T07:58:00Z",
+  value: "1e+00",
+  labels: {
+    alertname: "KubePodCrashLooping",
+    namespace: "shop",
+    pod: "api-68c7b766dc-fmphn",
+    container: "api",
+    severity: "warning",
+  },
+};
+
+function alertingRule(
+  patch: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    group: "kubernetes-apps",
+    type: "alerting",
+    name: "KubePodCrashLooping",
+    query:
+      'max_over_time(kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"}[5m]) >= 1',
+    state: "firing",
+    health: "ok",
+    labels: { severity: "warning" },
+    annotations: {
+      summary: "Pod is crash looping.",
+      description:
+        "Pod {{ $labels.namespace }}/{{ $labels.pod }} ({{ $labels.container }}) is in waiting state (reason: CrashLoopBackOff).",
+    },
+    alerts: [firingInstance],
+    ...patch,
+  };
+}
+
+const rulesArgs = JSON.stringify({ state: "firing" });
+
+describe("prometheus rules adapter", () => {
+  it("relates a rule to the target through its instances, never the rule alone", () => {
+    const projection = project([
+      tool(
+        "rules",
+        "get_prometheus_rules",
+        {
+          count: 4,
+          rules: [
+            alertingRule(),
+            alertingRule({
+              name: "KubeDeploymentReplicasMismatch",
+              labels: { severity: "warning", namespace: "shop" },
+              alerts: [
+                {
+                  state: "firing",
+                  labels: {
+                    namespace: "shop",
+                    deployment: "api-worker",
+                  },
+                },
+              ],
+            }),
+            alertingRule({
+              name: "TargetDown",
+              group: "general",
+              labels: { severity: "critical" },
+              alerts: [
+                {
+                  state: "firing",
+                  labels: { namespace: "monitoring", job: "node-exporter" },
+                },
+              ],
+            }),
+            alertingRule({
+              name: "SiblingCrash",
+              alerts: [
+                {
+                  state: "firing",
+                  labels: {
+                    namespace: "shop",
+                    pod: "api-worker-5d8f7c9b6-x2k9p",
+                  },
+                },
+              ],
+            }),
+          ],
+        },
+        { summary: rulesArgs },
+      ),
+    ]);
+    const alerts = groupsOf(projection.groups, "alerts");
+    expect(alerts.map((group) => group.latest.relevance)).toEqual([
+      "target",
+      "broader",
+      "broader",
+      "broader",
+    ]);
+    expect(alerts.map((group) => group.latest.tier)).toEqual([
+      "supporting",
+      "context",
+      "context",
+      "context",
+    ]);
+    expect(alerts[0].latest.tone).toBe("alert");
+    expect(alerts[2].latest.tone).toBe("error");
+    expect(alerts[0].latest.title).toBe("KubePodCrashLooping firing");
+    expect(alerts[0].latest.summary).toBe(
+      "1 active instance, 1 naming Deployment shop/api · kubernetes-apps",
+    );
+    expect(alerts[0].latest.data).toMatchObject({
+      type: "alerts",
+      rule: { group: "kubernetes-apps", state: "firing", health: "ok" },
+      instances: [{ namesTarget: true, value: "1e+00" }],
+      annotations: { summary: "Pod is crash looping." },
+    });
+    expect(alerts[3].latest.data).toMatchObject({
+      instances: [{ namesTarget: false }],
+    });
+    expect(groupsOf(projection.groups, "receipt")).toHaveLength(0);
+    expect(projection.limitations).toHaveLength(0);
+  });
+
+  it("uses rule-level labels only as producer-related context", () => {
+    const projection = project([
+      tool(
+        "rules",
+        "get_prometheus_rules",
+        {
+          count: 1,
+          rules: [
+            alertingRule({
+              name: "ApiDown",
+              labels: {
+                severity: "warning",
+                namespace: "shop",
+                deployment: "api",
+              },
+              alerts: [
+                {
+                  state: "firing",
+                  labels: { namespace: "shop", instance: "10.0.0.4:8080" },
+                },
+              ],
+            }),
+          ],
+        },
+        { summary: rulesArgs },
+      ),
+    ]);
+    const alert = groupsOf(projection.groups, "alerts")[0].latest;
+    expect(alert.relevance).toBe("producer-related");
+    expect(alert.tier).toBe("supporting");
+    expect(alert.summary).toBe("1 active instance · kubernetes-apps");
+    expect(groupsOf(projection.groups, "receipt")).toHaveLength(0);
+  });
+
+  it("matches workload labels per kind and pod names by controller shape", () => {
+    const run = (target: InvestigationEvidenceTarget, labels: object) =>
+      groupsOf(
+        projectInvestigationEvidence(
+          [
+            {
+              timeline: [
+                tool(
+                  "rules",
+                  "get_prometheus_rules",
+                  {
+                    count: 1,
+                    rules: [
+                      alertingRule({ alerts: [{ state: "firing", labels }] }),
+                    ],
+                  },
+                  { summary: rulesArgs },
+                ),
+              ],
+            },
+          ],
+          target,
+        ).groups,
+        "alerts",
+      )[0].latest.relevance;
+    const statefulSet = { ...target, kind: "StatefulSet", name: "db" };
+    expect(run(target, { namespace: "shop", deployment: "api" })).toBe(
+      "target",
+    );
+    expect(run(target, { namespace: "other", deployment: "api" })).toBe(
+      "broader",
+    );
+    expect(run(target, { namespace: "shop", statefulset: "api" })).toBe(
+      "broader",
+    );
+    expect(
+      run(target, {
+        namespace: "shop",
+        workload: "api",
+        workload_type: "deployment",
+      }),
+    ).toBe("target");
+    expect(
+      run(target, {
+        namespace: "shop",
+        workload: "api",
+        workload_type: "statefulset",
+      }),
+    ).toBe("broader");
+    expect(run(target, { namespace: "shop", pod: "api-0" })).toBe("broader");
+    expect(run(statefulSet, { namespace: "shop", pod: "db-0" })).toBe("target");
+    expect(run(statefulSet, { namespace: "shop", pod: "db-0-abcde" })).toBe(
+      "broader",
+    );
+    expect(run(target, { pod: "api-68c7b766dc-fmphn" })).toBe("broader");
+  });
+
+  it("issues a scoped receipt only for a complete, evaluated, active-state query", () => {
+    const unrelated = alertingRule({
+      name: "TargetDown",
+      alerts: [{ state: "firing", labels: { namespace: "monitoring" } }],
+    });
+    const receipt = (
+      payload: Record<string, unknown>,
+      args: Record<string, unknown>,
+    ) =>
+      groupsOf(
+        project([
+          tool("rules", "get_prometheus_rules", payload, {
+            summary: JSON.stringify(args),
+          }),
+        ]).groups,
+        "receipt",
+      );
+
+    const firing = receipt(
+      { count: 1, rules: [unrelated] },
+      { state: "firing", name: "Target" },
+    );
+    expect(firing).toHaveLength(1);
+    expect(firing[0].latest).toMatchObject({
+      tier: "checked",
+      relevance: "target",
+      title: "No firing alert rules name this Deployment",
+      summary: "Deployment shop/api",
+      data: {
+        type: "receipt",
+        checked: "alerts",
+        scope: "Deployment shop/api",
+        message:
+          "1 alerting rule returned (filter: state=firing, name~Target); none names Deployment shop/api.",
+      },
+    });
+
+    expect(
+      receipt(
+        {
+          count: 0,
+          rules: [],
+          note: "no rules matched — drop filters to see what exists, or the backend may have no rules configured",
+        },
+        { state: "pending" },
+      )[0].latest.data,
+    ).toMatchObject({
+      message:
+        "0 alerting rules returned (filter: state=pending); none names Deployment shop/api.",
+    });
+
+    expect(receipt({ count: 1, rules: [unrelated] }, {})).toHaveLength(0);
+    expect(
+      receipt({ count: 1, rules: [unrelated] }, { state: "inactive" }),
+    ).toHaveLength(0);
+    expect(
+      receipt(
+        { count: 1, rules: [alertingRule({ type: "recording", name: "x" })] },
+        { type: "record", state: "firing" },
+      ),
+    ).toHaveLength(0);
+    expect(
+      receipt(
+        {
+          count: 1,
+          rules: [unrelated],
+          truncated: true,
+          note: "narrow with name, group, state, or type filters",
+        },
+        { state: "firing" },
+      ),
+    ).toHaveLength(0);
+    expect(
+      receipt(
+        { count: 1, rules: [{ ...unrelated, health: "err" }] },
+        { state: "firing" },
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("keeps recording rules off the card list and flags truncation and evaluation health", () => {
+    const projection = project([
+      tool(
+        "rules",
+        "get_prometheus_rules",
+        {
+          count: 3,
+          rules: [
+            alertingRule({
+              type: "recording",
+              name: "namespace:container_cpu_usage_seconds_total:sum_rate",
+              alerts: undefined,
+              state: undefined,
+            }),
+            alertingRule({ health: "err", alerts: [] }),
+            alertingRule({
+              name: "KubeContainerWaiting",
+              state: "inactive",
+              health: "unknown",
+              alerts: [],
+            }),
+          ],
+          truncated: true,
+          note: "narrow with name, group, state, or type filters",
+        },
+        { summary: rulesArgs },
+      ),
+    ]);
+    const alerts = groupsOf(projection.groups, "alerts");
+    expect(alerts.map((group) => group.latest.title)).toEqual([
+      "KubePodCrashLooping firing",
+      "KubeContainerWaiting inactive",
+    ]);
+    expect(alerts[1].latest).toMatchObject({
+      tier: "context",
+      tone: "neutral",
+      relevance: "broader",
+      summary: "No active instances · kubernetes-apps",
+    });
+    expect(
+      projection.limitations.map((limitation) => [
+        limitation.source,
+        limitation.kind,
+      ]),
+    ).toEqual([
+      ["Alert rules", "truncated"],
+      ["Alert rule KubePodCrashLooping", "error"],
+      ["Alert rule KubeContainerWaiting", "unknown"],
+    ]);
+    expect(projection.limitations[0].message).toContain(
+      "narrow with name, group, state, or type filters",
+    );
+    expect(groupsOf(projection.groups, "receipt")).toHaveLength(0);
+  });
+
+  it("does not let sampled values churn revision history, and rejects malformed rules", () => {
+    const later = {
+      ...firingInstance,
+      value: "2e+00",
+      activeAt: "2026-09-07T08:10:00Z",
+    };
+    const projection = project(
+      [
+        tool(
+          "rules-1",
+          "get_prometheus_rules",
+          { count: 1, rules: [alertingRule()] },
+          { summary: rulesArgs },
+        ),
+      ],
+      [
+        tool(
+          "rules-2",
+          "get_prometheus_rules",
+          { count: 1, rules: [alertingRule({ alerts: [later] })] },
+          { summary: rulesArgs },
+        ),
+      ],
+    );
+    const group = groupsOf(projection.groups, "alerts")[0];
+    expect(group.observations).toHaveLength(2);
+    expect(group.observations[1].changedFromPrevious).toBe(false);
+
+    const malformed = project([
+      tool(
+        "rules-bad",
+        "get_prometheus_rules",
+        { count: 1, rules: [{ name: "NoGroup", type: "alerting" }] },
+        { summary: rulesArgs },
+      ),
+      tool(
+        "rules-bad-instance",
+        "get_prometheus_rules",
+        { count: 1, rules: [alertingRule({ alerts: [{ labels: {} }] })] },
+        { summary: rulesArgs },
+      ),
+    ]);
+    expect(malformed.groups).toHaveLength(0);
+    expect(malformed.limitations).toHaveLength(1);
+    expect(malformed.limitations[0].sources).toHaveLength(2);
+    expect(malformed.limitations[0].source).toBe("Alert rules");
+  });
+});
+
+const helmRelease = {
+  name: "shop",
+  namespace: "shop",
+  chart: "shop",
+  chartVersion: "1.4.2",
+  appVersion: "2.0.0",
+  status: "deployed",
+  revision: 7,
+  updated: "2026-09-07T07:00:00Z",
+  description: "Upgrade complete",
+  resources: [
+    {
+      kind: "Deployment",
+      apiVersion: "apps/v1",
+      name: "api",
+      namespace: "shop",
+      status: "Running",
+      ready: "0/1",
+    },
+    {
+      kind: "Service",
+      apiVersion: "v1",
+      name: "api",
+      namespace: "shop",
+      status: "Active",
+    },
+  ],
+};
+
+describe("helm release adapter", () => {
+  it("relates a release through the resources it manages", () => {
+    const projection = project([
+      tool("helm", "get_helm_release", helmRelease, {
+        summary: JSON.stringify({ namespace: "shop", name: "shop" }),
+      }),
+      tool(
+        "helm-other",
+        "get_helm_release",
+        {
+          ...helmRelease,
+          name: "ingress",
+          resources: [
+            {
+              kind: "Deployment",
+              apiVersion: "apps/v1",
+              name: "api",
+              namespace: "ingress",
+            },
+          ],
+        },
+        { summary: JSON.stringify({ namespace: "shop", name: "ingress" }) },
+      ),
+    ]);
+    const releases = groupsOf(projection.groups, "helm");
+    expect(releases.map((group) => group.latest.relevance)).toEqual([
+      "producer-related",
+      "broader",
+    ]);
+    expect(releases[0].latest).toMatchObject({
+      tier: "context",
+      tone: "info",
+      title: "Helm release shop/shop",
+      summary: "shop 1.4.2 · deployed · revision 7",
+    });
+    expect(investigationEvidenceSubjectRef(releases[0].latest.data)).toEqual({
+      kind: "HelmRelease",
+      group: "helm.sh",
+      namespace: "shop",
+      name: "shop",
+    });
+  });
+
+  it("treats a non-deployed status, a health issue, or a failed operation as adverse", () => {
+    const projection = project([
+      tool(
+        "helm-failed",
+        "get_helm_release",
+        { ...helmRelease, status: "failed", description: "Upgrade failed" },
+        { summary: JSON.stringify({ namespace: "shop", name: "shop" }) },
+      ),
+      tool(
+        "helm-issue",
+        "get_helm_release",
+        {
+          ...helmRelease,
+          name: "shop-cache",
+          resourceHealth: "unhealthy",
+          healthIssue: "Deployment shop/cache has 0/1 ready replicas",
+          healthSummary: "1 of 2 resources unhealthy",
+        },
+        { summary: JSON.stringify({ namespace: "shop", name: "shop-cache" }) },
+      ),
+      tool(
+        "helm-stuck",
+        "get_helm_release",
+        {
+          ...helmRelease,
+          name: "shop-jobs",
+          status: "pending-upgrade",
+          lastOperation: {
+            kind: "pending",
+            status: "stuck_pending",
+            source: "helm_status",
+            confidence: "high",
+            message: "Revision 8 has been pending-upgrade for 42m",
+            revision: 8,
+          },
+          valuesError:
+            'Radar Cloud role "viewer" cannot view Helm release values (requires member or higher)',
+        },
+        { summary: JSON.stringify({ namespace: "shop", name: "shop-jobs" }) },
+      ),
+    ]);
+    const releases = groupsOf(projection.groups, "helm");
+    expect(
+      releases.map((group) => [group.latest.tier, group.latest.tone]),
+    ).toEqual([
+      ["supporting", "error"],
+      ["supporting", "warning"],
+      ["supporting", "warning"],
+    ]);
+    expect(releases[1].latest.summary).toBe(
+      "deployed · Deployment shop/cache has 0/1 ready replicas",
+    );
+    expect(releases[2].latest.data).toMatchObject({
+      type: "helm",
+      release: {
+        lastOperation: { kind: "pending", status: "stuck_pending" },
+      },
+    });
+    expect(projection.limitations).toEqual([
+      expect.objectContaining({ source: "Helm values", kind: "error" }),
+    ]);
+  });
+
+  it("rejects malformed release payloads", () => {
+    const projection = project([
+      tool(
+        "helm-bad",
+        "get_helm_release",
+        { ...helmRelease, revision: "7" },
+        { summary: JSON.stringify({ namespace: "shop", name: "shop" }) },
+      ),
+      tool(
+        "helm-bad-resource",
+        "get_helm_release",
+        { ...helmRelease, resources: [{ kind: "Deployment" }] },
+        { summary: JSON.stringify({ namespace: "shop", name: "shop" }) },
+      ),
+      tool(
+        "helm-bad-operation",
+        "get_helm_release",
+        { ...helmRelease, lastOperation: { kind: "rollback" } },
+        { summary: JSON.stringify({ namespace: "shop", name: "shop" }) },
+      ),
+    ]);
+    expect(projection.groups).toHaveLength(0);
+    expect(
+      projection.limitations.map((limitation) => limitation.source),
+    ).toEqual(["Helm release", "Helm resources", "Helm operation"]);
+  });
+});
+
+const deploymentWithServiceAccount = {
+  ...deployment,
+  spec: { template: { spec: { serviceAccountName: "api-sa" } } },
+};
+
+const permissionsArgs = JSON.stringify({
+  kind: "ServiceAccount",
+  namespace: "shop",
+  name: "api-sa",
+  verb: "get",
+  resource: "secrets",
+});
+
+describe("subject permissions adapter", () => {
+  it("binds an access check to the target's ServiceAccount seen in the same turn", () => {
+    const check = {
+      subject: { kind: "ServiceAccount", namespace: "shop", name: "api-sa" },
+      accessCheck: {
+        verb: "get",
+        resource: "secrets",
+        namespace: "shop",
+        allowed: false,
+        reason: "",
+      },
+    };
+    const projection = project([
+      tool("diagnose", "diagnose", {
+        resource: deploymentWithServiceAccount,
+        resourceContext: { tier: "basic" },
+      }),
+      tool("perm", "get_subject_permissions", check, {
+        summary: permissionsArgs,
+      }),
+      tool(
+        "perm-other",
+        "get_subject_permissions",
+        {
+          subject: { kind: "ServiceAccount", namespace: "shop", name: "other" },
+          accessCheck: {
+            verb: "list",
+            group: "apps",
+            resource: "deployments",
+            subresource: "scale",
+            namespace: "",
+            allowed: true,
+            reason: 'RBAC: allowed by ClusterRoleBinding "admin"',
+          },
+        },
+        {
+          summary: JSON.stringify({
+            kind: "ServiceAccount",
+            namespace: "shop",
+            name: "other",
+          }),
+        },
+      ),
+    ]);
+    const permissions = groupsOf(projection.groups, "permissions");
+    expect(permissions.map((group) => group.latest.relevance)).toEqual([
+      "target",
+      "producer-related",
+    ]);
+    expect(permissions[0].latest).toMatchObject({
+      tier: "supporting",
+      tone: "warning",
+      title: "Service Account shop/api-sa cannot get secrets",
+      summary: "No RBAC rule allows it · namespace shop",
+    });
+    expect(permissions[0].latest.data).toMatchObject({
+      type: "permissions",
+      accessCheck: { allowed: false, denied: false },
+    });
+    expect(permissions[1].latest).toMatchObject({
+      tier: "context",
+      tone: "info",
+      title: "Service Account shop/other can list deployments/scale.apps",
+      summary: 'RBAC: allowed by ClusterRoleBinding "admin" · cluster-wide',
+    });
+    expect(investigationEvidenceSubjectRef(permissions[0].latest.data)).toEqual(
+      { kind: "ServiceAccount", namespace: "shop", name: "api-sa" },
+    );
+  });
+
+  it("uses the producer's serviceAccount reference and the default account when the template omits one", () => {
+    const withContext = project([
+      tool("diagnose", "diagnose", {
+        resource: deployment,
+        resourceContext: {
+          tier: "diagnostic",
+          uses: {
+            serviceAccount: {
+              kind: "ServiceAccount",
+              namespace: "shop",
+              name: "ctx-sa",
+            },
+          },
+        },
+      }),
+      tool(
+        "perm",
+        "get_subject_permissions",
+        {
+          subject: {
+            kind: "ServiceAccount",
+            namespace: "shop",
+            name: "ctx-sa",
+          },
+          bindings: [],
+          flatRules: [],
+        },
+        { summary: permissionsArgs },
+      ),
+    ]);
+    expect(
+      groupsOf(withContext.groups, "permissions")[0].latest.relevance,
+    ).toBe("target");
+
+    const withDefault = project([
+      tool("resource", "get_resource", {
+        ...deployment,
+        spec: { template: { spec: {} } },
+      }),
+      tool(
+        "perm",
+        "get_subject_permissions",
+        {
+          subject: {
+            kind: "ServiceAccount",
+            namespace: "shop",
+            name: "default",
+          },
+          bindings: [],
+          flatRules: [],
+        },
+        { summary: permissionsArgs },
+      ),
+    ]);
+    expect(
+      groupsOf(withDefault.groups, "permissions")[0].latest.relevance,
+    ).toBe("target");
+
+    const priorTurn = project(
+      [
+        tool("diagnose", "diagnose", {
+          resource: deploymentWithServiceAccount,
+          resourceContext: { tier: "basic" },
+        }),
+      ],
+      [
+        tool(
+          "perm",
+          "get_subject_permissions",
+          {
+            subject: {
+              kind: "ServiceAccount",
+              namespace: "shop",
+              name: "api-sa",
+            },
+            bindings: [],
+            flatRules: [],
+          },
+          { summary: permissionsArgs },
+        ),
+      ],
+    );
+    expect(groupsOf(priorTurn.groups, "permissions")[0].latest.relevance).toBe(
+      "producer-related",
+    );
+  });
+
+  it("renders the subject response as counts and keeps every coverage caveat", () => {
+    const projection = project([
+      tool(
+        "perm",
+        "get_subject_permissions",
+        {
+          subject: {
+            kind: "ServiceAccount",
+            namespace: "shop",
+            name: "api-sa",
+          },
+          bindings: [
+            {
+              bindingKind: "RoleBinding",
+              bindingNamespace: "shop",
+              bindingName: "api-reader",
+              roleKind: "Role",
+              roleNamespace: "shop",
+              roleName: "reader",
+              rulesCount: 3,
+            },
+            {
+              bindingKind: "ClusterRoleBinding",
+              bindingName: "system:basic-user",
+              roleKind: "ClusterRole",
+              roleName: "system:basic-user",
+              rulesCount: 1,
+              inheritedFromGroup: "system:authenticated",
+            },
+          ],
+          flatRules: [
+            { verbs: ["get"], resources: ["pods"] },
+            { verbs: ["list"], resources: ["pods"] },
+          ],
+          truncated: true,
+          usedByPods: ["shop/api-68c7b766dc-fmphn"],
+          podsTotal: 3,
+          narrowHint:
+            "rule list truncated — the subject has more rules than shown; do not treat this list as the subject's complete permissions",
+        },
+        { summary: permissionsArgs },
+      ),
+      tool(
+        "perm-missing",
+        "get_subject_permissions",
+        {
+          subject: { kind: "ServiceAccount", namespace: "shop", name: "ghost" },
+          bindings: [],
+          flatRules: [],
+          subjectWarning:
+            'no ServiceAccount "ghost" exists in namespace "shop" — this empty result reflects a subject that was never found, not an account without permissions. Check the name and namespace.',
+        },
+        { summary: permissionsArgs },
+      ),
+    ]);
+    const permissions = groupsOf(projection.groups, "permissions");
+    expect(permissions[0].latest).toMatchObject({
+      tier: "context",
+      tone: "info",
+      relevance: "producer-related",
+      title: "Permissions of Service Account shop/api-sa",
+      summary: "2 bindings · 2+ effective rules",
+    });
+    expect(permissions[0].latest.data).toMatchObject({
+      type: "permissions",
+      flatRulesCount: 2,
+      truncated: true,
+      usedByPods: ["shop/api-68c7b766dc-fmphn"],
+      podsTotal: 3,
+    });
+    expect(permissions[1].latest.summary).toBe(
+      "0 bindings · 0 effective rules",
+    );
+    expect(
+      projection.limitations.map((limitation) => [
+        limitation.source,
+        limitation.kind,
+      ]),
+    ).toEqual([
+      ["Permissions", "truncated"],
+      ["Permissions", "truncated"],
+      ["Permissions", "unknown"],
+    ]);
+    expect(projection.limitations[0].message).toContain("rule list truncated");
+    expect(projection.limitations[1].message).toBe(
+      "Only 1 of 3 pods running as this subject were listed.",
+    );
+  });
+
+  it("rejects malformed permission payloads", () => {
+    const projection = project([
+      tool(
+        "perm-bad",
+        "get_subject_permissions",
+        { subject: { kind: "ServiceAccount" }, bindings: [], flatRules: [] },
+        { summary: permissionsArgs },
+      ),
+      tool(
+        "perm-bad-check",
+        "get_subject_permissions",
+        {
+          subject: { kind: "ServiceAccount", namespace: "shop", name: "x" },
+          accessCheck: { verb: "get", resource: "secrets", namespace: "shop" },
+        },
+        { summary: permissionsArgs },
+      ),
+      tool(
+        "perm-bad-binding",
+        "get_subject_permissions",
+        {
+          subject: { kind: "ServiceAccount", namespace: "shop", name: "x" },
+          bindings: [{ bindingKind: "RoleBinding" }],
+          flatRules: [],
+        },
+        { summary: permissionsArgs },
+      ),
+    ]);
+    expect(projection.groups).toHaveLength(0);
+    expect(
+      projection.limitations.map((limitation) => limitation.source),
+    ).toEqual(["Permissions", "Access check"]);
+    expect(projection.limitations[0].sources).toHaveLength(2);
+  });
+});
+
+describe("card leads and deep-link subjects", () => {
+  it("leads an events card with the newest warning's reason and message", () => {
+    const projection = project([
+      tool(
+        "events",
+        "get_events",
+        {
+          events: [
+            {
+              reason: "Scheduled",
+              message: "Successfully assigned shop/api-abc to node-1",
+              type: "Normal",
+              count: 1,
+              lastTimestamp: "2026-09-02T11:00:00Z",
+            },
+            warningEvent,
+            {
+              reason: "Unhealthy",
+              message: "Readiness probe failed: connection refused",
+              type: "Warning",
+              count: 12,
+              lastTimestamp: "2026-09-02T10:30:00Z",
+            },
+          ],
+        },
+        {
+          summary: JSON.stringify({
+            kind: "Deployment",
+            namespace: "shop",
+            name: "api",
+          }),
+        },
+      ),
+    ]);
+    expect(groupsOf(projection.groups, "events")[0].latest.summary).toBe(
+      "Unhealthy: Readiness probe failed: connection refused · 3 event groups · Deployment shop/api",
+    );
+  });
+
+  it("carries the producer's change subject so a card can open its Timeline", () => {
+    const change = {
+      kind: "Deployment",
+      apiVersion: "apps/v1",
+      namespace: "shop",
+      name: "api",
+      changeType: "update",
+      timestamp: "2026-09-02T09:00:00Z",
+    };
+    const projection = project([
+      tool(
+        "changes",
+        "get_changes",
+        { changes: [change] },
+        {
+          summary: JSON.stringify({
+            kind: "Deployment",
+            namespace: "shop",
+            name: "api",
+          }),
+        },
+      ),
+      tool(
+        "changes-ns",
+        "get_changes",
+        { changes: [change] },
+        { summary: JSON.stringify({ namespace: "shop" }) },
+      ),
+      tool("diagnose", "diagnose", {
+        resource: deployment,
+        resourceContext: { tier: "basic" },
+        recentChanges: [change],
+      }),
+      tool("resource", "get_resource", {
+        resource: {
+          ...deployment,
+          metadata: { namespace: "shop", name: "web" },
+        },
+        resourceContext: { tier: "basic" },
+        recentChanges: [change],
+        recentChangesSaturated: false,
+        recentChangesCoverageLimited: false,
+      }),
+    ]);
+    const changes = groupsOf(projection.groups, "changes").map(
+      (group) => (group.latest.data as { subject?: unknown }).subject,
+    );
+    expect(changes).toEqual([
+      { kind: "Deployment", namespace: "shop", name: "api" },
+      undefined,
+      { kind: "Deployment", namespace: "shop", name: "api" },
+      { kind: "Deployment", namespace: "shop", name: "web" },
     ]);
   });
 });

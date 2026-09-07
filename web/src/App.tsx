@@ -2481,6 +2481,13 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             }
             navigateFromIssue(resource)
           }}
+          onOpenTimeline={({ namespace, name }) => {
+            // `namespaces` is the app-wide scope the URL sync effect applies;
+            // the Timeline's own `scopeNamespaces` only acts alongside `app`.
+            const params = new URLSearchParams({ q: name })
+            if (namespace) params.set('namespaces', namespace)
+            navigate({ pathname: '/timeline', search: params.toString() })
+          }}
         />
       )}
 

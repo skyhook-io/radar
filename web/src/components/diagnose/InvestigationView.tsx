@@ -91,6 +91,7 @@ import {
 import {
   InvestigationEvidencePane,
   partitionInvestigationEvidence,
+  type InvestigationTimelineScope,
 } from "./InvestigationEvidencePane";
 import type { DiagnosisResourceRef } from "./diagnoseEvidenceTypes";
 import { formatInvestigationTarget } from "./target";
@@ -153,12 +154,15 @@ export function InvestigationView({
   agentLabel,
   maximized,
   onOpenResource,
+  onOpenTimeline,
 }: {
   run: RunSummary;
   agentLabel: string;
   maximized: boolean;
   /** Opens an unambiguous evidence subject in Radar's native resource views. */
   onOpenResource?: (ref: DiagnosisResourceRef) => void;
+  /** Opens Radar's Timeline filtered to the resource a changes card is about. */
+  onOpenTimeline?: (scope: InvestigationTimelineScope) => void;
 }) {
   const { kind, namespace, name } = run;
   // Apply is off for hosted agents (read-only server-side). Keyed on the selected
@@ -2074,6 +2078,7 @@ export function InvestigationView({
                     onViewSource={viewActivitySource}
                     onViewActivity={viewActivity}
                     onOpenResource={stale ? undefined : onOpenResource}
+                    onOpenTimeline={stale ? undefined : onOpenTimeline}
                     revealRequest={evidenceRevealRequest}
                     onRevealReady={revealEvidenceSource}
                     afterEvidence={
