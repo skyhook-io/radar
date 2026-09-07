@@ -16,11 +16,9 @@ import {
   getIstioGatewayStatus,
   getIstioGatewayServerCount,
   getIstioGatewaySelectorString,
-  getServiceEntryStatus,
   getServiceEntryHosts,
   getServiceEntryLocation,
   getServiceEntryPortsString,
-  getPeerAuthenticationStatus,
   getPeerAuthenticationMode,
   getPeerAuthenticationSelectorString,
   getAuthorizationPolicyStatus,
@@ -121,14 +119,6 @@ export function IstioGatewayCell({ resource, column }: { resource: any; column: 
 
 export function ServiceEntryCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
-    case 'status': {
-      const status = getServiceEntryStatus(resource)
-      return (
-        <span className={clsx('badge', status.color)}>
-          {status.text}
-        </span>
-      )
-    }
     case 'hosts': {
       const hosts = getServiceEntryHosts(resource)
       return <span className="text-sm text-theme-text-secondary truncate block">{hosts}</span>
@@ -152,14 +142,6 @@ export function ServiceEntryCell({ resource, column }: { resource: any; column: 
 
 export function PeerAuthenticationCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
-    case 'status': {
-      const status = getPeerAuthenticationStatus(resource)
-      return (
-        <span className={clsx('badge', status.color)}>
-          {status.text}
-        </span>
-      )
-    }
     case 'mode': {
       const mode = getPeerAuthenticationMode(resource)
       return (

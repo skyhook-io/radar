@@ -28,13 +28,17 @@ export function getVirtualServiceStatus(resource: any): StatusBadge {
   const tlsRoutes = spec.tls || []
   const hosts = spec.hosts || []
 
-  if (hosts.length === 0) {
-    return { text: 'No Hosts', color: healthColors.unhealthy, level: 'unhealthy' }
-  }
-
+  // Routes are what a VirtualService exists to provide, delegate or not.
   const totalRoutes = httpRoutes.length + tcpRoutes.length + tlsRoutes.length
   if (totalRoutes === 0) {
     return { text: 'No Routes', color: healthColors.unhealthy, level: 'unhealthy' }
+  }
+
+  // A delegate VirtualService is required to declare no hosts, and this object
+  // cannot tell us whether a parent delegates to it, so an empty list is not
+  // evidence of a fault.
+  if (hosts.length === 0) {
+    return { text: 'No Hosts', color: healthColors.unknown, level: 'unknown' }
   }
 
   // Check for fault injection on any route
@@ -49,7 +53,7 @@ export function getVirtualServiceStatus(resource: any): StatusBadge {
     return { text: 'Mirroring', color: healthColors.degraded, level: 'degraded' }
   }
 
-  return { text: 'Active', color: healthColors.healthy, level: 'healthy' }
+  return { text: 'Defined', color: healthColors.neutral, level: 'neutral' }
 }
 
 export function getVirtualServiceHosts(resource: any): string {
@@ -248,12 +252,14 @@ export function getServiceEntryStatus(resource: any): StatusBadge {
     return { text: 'No Hosts', color: healthColors.unhealthy, level: 'unhealthy' }
   }
 
+  // Location is a mesh-membership classification, not reachability: nothing here
+  // establishes the hosts resolve or answer.
   const location = spec.location || 'MESH_EXTERNAL'
   if (location === 'MESH_EXTERNAL') {
-    return { text: 'External', color: healthColors.healthy, level: 'healthy' }
+    return { text: 'External', color: healthColors.neutral, level: 'neutral' }
   }
 
-  return { text: 'Internal', color: healthColors.healthy, level: 'healthy' }
+  return { text: 'Internal', color: healthColors.neutral, level: 'neutral' }
 }
 
 export function getServiceEntryHosts(resource: any): string {

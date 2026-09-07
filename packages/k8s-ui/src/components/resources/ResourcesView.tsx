@@ -1239,7 +1239,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   servicemonitors: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'status', label: 'Status', width: 'w-36' },
     { key: 'endpoints', label: 'Endpoints', width: 'w-20', tooltip: 'Number of scrape endpoints' },
     { key: 'jobLabel', label: 'Job Label', width: 'w-32' },
     { key: 'selector', label: 'Selector', width: 'w-48' },
@@ -1248,7 +1248,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   prometheusrules: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'status', label: 'Status', width: 'w-36' },
     { key: 'groups', label: 'Groups', width: 'w-20' },
     { key: 'rules', label: 'Rules', width: 'w-20', tooltip: 'Total alert + recording rules' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -1256,7 +1256,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   podmonitors: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'status', label: 'Status', width: 'w-36' },
     { key: 'endpoints', label: 'Endpoints', width: 'w-20', tooltip: 'Number of pod metrics endpoints' },
     { key: 'selector', label: 'Selector', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -2095,7 +2095,6 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   serviceentries: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'hosts', label: 'Hosts', width: 'w-48' },
     { key: 'location', label: 'Location', width: 'w-28' },
     { key: 'ports', label: 'Ports', width: 'w-32' },
@@ -2104,7 +2103,6 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   peerauthentications: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'mode', label: 'mTLS Mode', width: 'w-28' },
     { key: 'selector', label: 'Selector', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },

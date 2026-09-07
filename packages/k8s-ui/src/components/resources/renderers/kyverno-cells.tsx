@@ -73,7 +73,7 @@ export function KyvernoPolicyCell({ resource, column }: { resource: any; column:
     case 'status': {
       const status = getKyvernoPolicyStatus(resource)
       return (
-        <span className={clsx('badge', status.color)}>
+        <span className={clsx('badge truncate max-w-full', status.color)} title={status.text}>
           {status.text}
         </span>
       )
