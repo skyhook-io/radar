@@ -1,12 +1,14 @@
 import { useEffect, useMemo } from 'react'
-import { LineChart } from 'lucide-react'
-import { usePromQLRange, usePrometheusStatus, useAutoPromConnect, type PrometheusSeries } from '../../api/client'
+import { LineChart, Lock } from 'lucide-react'
+import { usePrometheusHPAMetrics, usePrometheusStatus, useAutoPromConnect, isForbiddenError, type PrometheusSeries } from '../../api/client'
 
 /**
  * HPACharts — replicas-over-time chart for an HPA.
  *
- * Sources from KSM `kube_horizontalpodautoscaler_status_{current,desired}_replicas`.
- * Hidden silently when Prom isn't connected or KSM isn't reporting the series.
+ * Sources from KSM `kube_horizontalpodautoscaler_status_{current,desired}_replicas`
+ * through the curated HPA metrics endpoint, which is gated on reading the HPA
+ * itself. Hidden silently when Prom isn't connected or KSM isn't reporting the
+ * series; a denial is shown, because an empty chart would read as "no history".
  *
  * Only the replicas series is plotted — KSM doesn't expose the observed metric
  * the HPA target compares against, so an "observed vs target" chart would need
@@ -25,35 +27,46 @@ export function HPACharts({ data }: { data: any }) {
   const min = spec.minReplicas ?? 1
   const max = spec.maxReplicas
 
-  const currentQuery = useMemo(
-    () => `kube_horizontalpodautoscaler_status_current_replicas{namespace="${escapeLabel(namespace)}",horizontalpodautoscaler="${escapeLabel(name)}"}`,
-    [namespace, name],
-  )
-  const desiredQuery = useMemo(
-    () => `kube_horizontalpodautoscaler_status_desired_replicas{namespace="${escapeLabel(namespace)}",horizontalpodautoscaler="${escapeLabel(name)}"}`,
-    [namespace, name],
-  )
-
   const enabled = isConnected && Boolean(namespace && name)
-  const { data: currentRes, error: currentErr } = usePromQLRange(currentQuery, '1h', enabled)
-  const { data: desiredRes, error: desiredErr } = usePromQLRange(desiredQuery, '1h', enabled)
+  const { data: metrics, error } = usePrometheusHPAMetrics(namespace, name, '1h', enabled)
 
   const replicasPoints = useMemo(() => combineSeries({
-    current: currentRes?.series,
-    desired: desiredRes?.series,
-  }), [currentRes, desiredRes])
+    current: metrics?.current?.series,
+    desired: metrics?.desired?.series,
+  }), [metrics])
 
   // Surface Prom-side failures in the console so an operator debugging a
   // missing HPA chart has a breadcrumb; the chart still hides silently when
   // KSM isn't reporting (the common no-data case). Effect-gated so we log
   // once per error change, not on every re-render.
   useEffect(() => {
-    if (currentErr || desiredErr) {
-      console.warn('[HPACharts] PromQL query failed', { currentErr, desiredErr })
+    if (error && !isForbiddenError(error)) {
+      console.warn('[HPACharts] HPA metrics query failed', { error })
     }
-  }, [currentErr, desiredErr])
+  }, [error])
 
   if (!isConnected) return null
+
+  if (isForbiddenError(error)) {
+    return (
+      <section className="mt-4 rounded-lg border border-theme-border bg-theme-surface/30 p-3">
+        <div className="flex items-center gap-2 mb-2 text-sm font-medium text-theme-text-secondary">
+          <LineChart className="w-4 h-4 text-theme-text-tertiary" />
+          Activity (last 1h)
+        </div>
+        <div className="flex items-start gap-2 text-xs text-theme-text-secondary">
+          <Lock className="w-3.5 h-3.5 mt-0.5 shrink-0 text-theme-text-tertiary" />
+          <div>
+            <div className="font-medium text-theme-text-primary">You don't have access to metrics for this resource</div>
+            <div className="mt-0.5 text-theme-text-tertiary">
+              Replica history is available to users who can read this HorizontalPodAutoscaler.
+            </div>
+          </div>
+        </div>
+      </section>
+    )
+  }
+
   if (!replicasPoints) return null
 
   return (
@@ -109,10 +122,6 @@ function combineSeries(args: { current?: PrometheusSeries[]; desired?: Prometheu
     current: current ?? [],
     desired: desired ?? [],
   }
-}
-
-function escapeLabel(s: string): string {
-  return s.replace(/[\\"]/g, '\\$&')
 }
 
 // ============================================================================
