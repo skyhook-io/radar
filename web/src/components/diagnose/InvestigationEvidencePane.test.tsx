@@ -2268,6 +2268,26 @@ describe("Track A evidence bodies and deep links", () => {
 
   it("renders a firing alert rule with its target instance first and the rule text", () => {
     const projection = project(
+      tool("diagnose", "diagnose", {
+        resource: {
+          apiVersion: "apps/v1",
+          kind: "Deployment",
+          metadata: { namespace: "shop", name: "api" },
+        },
+        resourceContext: { tier: "basic" },
+        logsCurrent: [
+          {
+            pod: "api-68c7b766dc-fmphn",
+            container: "api",
+            logs: {
+              lines: ["ready"],
+              totalLines: 1,
+              matchedLines: 0,
+              fallback: true,
+            },
+          },
+        ],
+      }),
       tool(
         "rules",
         "get_prometheus_rules",
@@ -2313,9 +2333,11 @@ describe("Track A evidence bodies and deep links", () => {
       ),
     );
     const partition = partitionInvestigationEvidence(projection.groups);
-    expect(partition.main.map((group) => group.latest.title)).toEqual([
-      "KubePodCrashLooping firing",
-    ]);
+    expect(
+      partition.main
+        .map((group) => group.latest.title)
+        .filter((title) => title.startsWith("KubePodCrashLooping")),
+    ).toEqual(["KubePodCrashLooping firing"]);
     const html = render(projection);
     expect(html).toContain("2 active instances, 1 naming Deployment shop/api");
     expect(html).toContain("names this resource");
@@ -2392,6 +2414,15 @@ describe("Track A evidence bodies and deep links", () => {
 
   it("renders an access check verdict and a subject's bindings", () => {
     const projection = project(
+      tool("diagnose", "diagnose", {
+        resource: {
+          apiVersion: "apps/v1",
+          kind: "Deployment",
+          metadata: { namespace: "shop", name: "api" },
+          spec: { template: { spec: { serviceAccountName: "api-sa" } } },
+        },
+        resourceContext: { tier: "basic" },
+      }),
       tool(
         "check",
         "get_subject_permissions",
@@ -2461,12 +2492,16 @@ describe("Track A evidence bodies and deep links", () => {
       ),
     );
     const partition = partitionInvestigationEvidence(projection.groups);
-    expect(partition.main.map((group) => group.latest.title)).toEqual([
-      "Service Account shop/api-sa cannot get secrets",
-    ]);
-    expect(partition.workload.map((group) => group.latest.title)).toEqual([
-      "Permissions of Service Account shop/api-sa",
-    ]);
+    expect(
+      partition.main
+        .map((group) => group.latest.title)
+        .filter((title) => title.includes("api-sa")),
+    ).toEqual(["Service Account shop/api-sa cannot get secrets"]);
+    expect(
+      partition.workload
+        .map((group) => group.latest.title)
+        .filter((title) => title.includes("api-sa")),
+    ).toEqual(["Permissions of Service Account shop/api-sa"]);
     const html = render(projection, false, undefined, undefined, () => {});
     expect(html).toContain("not allowed");
     expect(html).toContain("db-credentials");

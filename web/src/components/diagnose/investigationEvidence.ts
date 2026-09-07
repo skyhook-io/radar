@@ -287,6 +287,8 @@ export interface InvestigationHelmOwnedResource {
 export interface InvestigationHelmRelease {
   name: string;
   namespace: string;
+  /** Set only when Helm stores the release metadata elsewhere. */
+  storageNamespace?: string;
   chart: string;
   chartVersion: string;
   appVersion?: string;
@@ -601,6 +603,14 @@ export function investigationEvidenceSubjectRef(
       case "relationships":
         return data.root;
       case "helm":
+        // A resource ref cannot carry the storage namespace, and opening the
+        // release by name alone would read the wrong storage.
+        if (
+          data.release.storageNamespace !== undefined &&
+          data.release.storageNamespace !== data.release.namespace
+        ) {
+          return undefined;
+        }
         return {
           kind: "HelmRelease",
           group: "helm.sh",
@@ -1431,13 +1441,24 @@ class ProjectionBuilder {
     // target was already established by a scoped producer. Keep the broad read
     // in revision history, but never let weaker provenance replace the card's
     // authoritative observation. Equal provenance still advances normally.
+    // An alert rule's relevance is derived from its live instances, so a later
+    // read of the same rule is a state transition, not weaker provenance.
     if (
+      kind === "alerts" ||
       relevanceRank[next.relevance] <= relevanceRank[group.latest.relevance]
     ) {
       group.latest = next;
     }
     this.projectedSources.add(source.id);
     if (next.tier === "checked") this.checkedSources.add(source.id);
+  }
+
+  /** Relevance of the current card for an unpartitioned identity, if observed. */
+  latestRelevance(
+    kind: InvestigationEvidenceKind,
+    identity: string,
+  ): InvestigationEvidenceRelevance | undefined {
+    return this.groupByIdentity.get(`${kind} ${identity}`)?.latest.relevance;
   }
 
   limit(
@@ -3442,6 +3463,17 @@ function adaptWorkloadLogs(
     return;
   }
   if (value.pods === 0) {
+    // The producer replaces the stream list with a message when it resolved
+    // no pods; any other shape is not this response.
+    if (
+      typeof value.logs !== "string" ||
+      (value.emptyMessage !== undefined &&
+        typeof value.emptyMessage !== "string") ||
+      value.narrowHint !== undefined
+    ) {
+      invalidPayload(builder, source);
+      return;
+    }
     if (!source.confirmedSuccess) return;
     const message = nonEmptyString(value.emptyMessage)
       ? value.emptyMessage
@@ -3522,22 +3554,38 @@ function stringRecord(value: unknown): Record<string, string> | undefined {
     : undefined;
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/**
+ * Pods a producer has already tied to the investigated workload in this
+ * projection: the streams diagnose or a workload-logs read resolved for it,
+ * its crash candidates, and its Pod startup blockers. A pod name matched
+ * against this set is producer-established membership, never inference from
+ * a name prefix, which a sibling such as `api-worker` would also satisfy.
+ */
+function producerEstablishedTargetPods(
+  builder: ProjectionBuilder,
+): Set<string> {
+  const pods = new Set<string>();
+  const namespace = builder.target.namespace;
+  if (!namespace) return pods;
+  for (const group of builder.groups) {
+    for (const observation of group.observations) {
+      if (observation.relevance === "broader") continue;
+      const data = observation.data;
+      if (data.type === "logs" && data.namespace === namespace) {
+        pods.add(data.pod);
+      } else if (data.type === "crash" && data.namespace === namespace) {
+        for (const pod of data.crash.pods) pods.add(pod);
+      } else if (
+        data.type === "startup" &&
+        data.subject?.kind === "Pod" &&
+        data.subject.namespace === namespace
+      ) {
+        pods.add(data.subject.name);
+      }
+    }
+  }
+  return pods;
 }
-
-// Controller-generated pod name shapes, per owner kind. Anchored on the
-// suffix a controller appends, so Deployment `api`'s shape never accepts a pod
-// of Deployment `api-worker`.
-const POD_NAME_SHAPES: Readonly<Record<string, (name: string) => RegExp>> = {
-  deployment: (name) => new RegExp(`^${name}-[a-z0-9]+-[a-z0-9]{5}$`),
-  rollout: (name) => new RegExp(`^${name}-[a-z0-9]+-[a-z0-9]{5}$`),
-  replicaset: (name) => new RegExp(`^${name}-[a-z0-9]{5}$`),
-  statefulset: (name) => new RegExp(`^${name}-\\d+$`),
-  daemonset: (name) => new RegExp(`^${name}-[a-z0-9]{5}$`),
-  job: (name) => new RegExp(`^${name}-[a-z0-9]{5}$`),
-  cronjob: (name) => new RegExp(`^${name}-\\d+-[a-z0-9]{5}$`),
-};
 
 // kube-state-metrics label names for the owning workload.
 const WORKLOAD_LABEL_BY_KIND: Readonly<Record<string, string>> = {
@@ -3551,12 +3599,13 @@ const WORKLOAD_LABEL_BY_KIND: Readonly<Record<string, string>> = {
 
 /**
  * Whether a Prometheus label set names the investigated resource: the target
- * namespace plus a label identifying it directly, or a `pod` label whose
- * controller-generated shape belongs to it.
+ * namespace plus a label identifying it directly, or a `pod` label naming a
+ * pod a producer already tied to it.
  */
 function labelsNameTarget(
   target: InvestigationEvidenceTarget,
   labels: Record<string, string>,
+  targetPods: ReadonlySet<string>,
 ): boolean {
   if (!target.namespace || labels.namespace !== target.namespace) return false;
   const kind = target.kind.toLowerCase();
@@ -3570,9 +3619,16 @@ function labelsNameTarget(
   ) {
     return true;
   }
-  const shape = POD_NAME_SHAPES[kind];
-  return Boolean(
-    shape && labels.pod && shape(escapeRegExp(target.name)).test(labels.pod),
+  return labels.pod !== undefined && targetPods.has(labels.pod);
+}
+
+/** The label set places the instance in another namespace outright. */
+function labelsPlaceElsewhere(
+  target: InvestigationEvidenceTarget,
+  labels: Record<string, string>,
+): boolean {
+  return (
+    nonEmptyString(labels.namespace) && labels.namespace !== target.namespace
   );
 }
 
@@ -3588,11 +3644,12 @@ function alertRule(value: unknown):
     !candidate ||
     !nonEmptyString(candidate.group) ||
     !nonEmptyString(candidate.name) ||
-    !nonEmptyString(candidate.type)
+    !nonEmptyString(candidate.type) ||
+    typeof candidate.query !== "string"
   ) {
     return undefined;
   }
-  for (const field of ["state", "health", "query"] as const) {
+  for (const field of ["state", "health"] as const) {
     if (candidate[field] !== undefined && typeof candidate[field] !== "string")
       return undefined;
   }
@@ -3634,7 +3691,7 @@ function alertRule(value: unknown):
       type: candidate.type,
       state: candidate.state as string | undefined,
       health: candidate.health as string | undefined,
-      query: candidate.query as string | undefined,
+      query: candidate.query,
       labels,
     },
     instances,
@@ -3655,7 +3712,10 @@ function adaptPrometheusRules(
   if (
     !value ||
     !Array.isArray(value.rules) ||
-    typeof value.count !== "number"
+    typeof value.count !== "number" ||
+    value.count !== value.rules.length ||
+    (value.truncated !== undefined && typeof value.truncated !== "boolean") ||
+    (value.note !== undefined && typeof value.note !== "string")
   ) {
     invalidPayload(builder, source);
     return;
@@ -3674,7 +3734,8 @@ function adaptPrometheusRules(
   const typeFilter = nonEmptyString(args?.type)
     ? args.type.toLowerCase()
     : undefined;
-  if (value.truncated === true) {
+  const truncated = value.truncated === true;
+  if (truncated) {
     builder.limit(
       source,
       "Alert rules",
@@ -3683,24 +3744,51 @@ function adaptPrometheusRules(
     );
   }
   const identity = targetIdentity(builder.target);
+  const targetPods = producerEstablishedTargetPods(builder);
   let namesTarget = false;
   let healthGap = false;
   let alertingCount = 0;
+  let everyInstanceElsewhere = true;
   for (const { rule, instances: rawInstances, annotations } of rules) {
     // Recording rules carry no state and never describe a resource.
     if (rule.type.toLowerCase() !== "alerting") continue;
     alertingCount += 1;
     const instances = rawInstances.map((instance) => ({
       ...instance,
-      namesTarget: labelsNameTarget(builder.target, instance.labels),
+      namesTarget: labelsNameTarget(
+        builder.target,
+        instance.labels,
+        targetPods,
+      ),
     }));
+    if (
+      instances.length === 0 ||
+      instances.some(
+        (instance) => !labelsPlaceElsewhere(builder.target, instance.labels),
+      )
+    ) {
+      everyInstanceElsewhere = false;
+    }
+    // Rule names are not unique within a group; the expression and static
+    // labels are what make one rule the same rule across reads.
+    const ruleIdentity = `alerts:${rule.group}:${rule.name}:${stableHash(
+      JSON.stringify([rule.query, Object.entries(rule.labels).sort()]),
+    )}`;
+    const previousRelevance = builder.latestRelevance("alerts", ruleIdentity);
     const relevance: InvestigationEvidenceRelevance = instances.some(
       (instance) => instance.namesTarget,
     )
       ? "target"
-      : labelsNameTarget(builder.target, rule.labels)
+      : labelsNameTarget(builder.target, rule.labels, targetPods)
         ? "producer-related"
-        : "broader";
+        : // The same rule read again with no instances left has resolved for
+          // the target it named before; keep that provenance so the
+          // resolution stays visible instead of the stale firing card.
+          instances.length === 0 &&
+            previousRelevance !== undefined &&
+            previousRelevance !== "broader"
+          ? previousRelevance
+          : "broader";
     if (relevance !== "broader") namesTarget = true;
     const state = (rule.state ?? "").toLowerCase();
     const active = state === "firing" || state === "pending";
@@ -3708,7 +3796,7 @@ function adaptPrometheusRules(
     const targetInstances = instances.filter(
       (instance) => instance.namesTarget,
     ).length;
-    builder.observe(`alerts:${rule.group}:${rule.name}`, "alerts", source, {
+    builder.observe(ruleIdentity, "alerts", source, {
       tier: evidenceTierForRelevance(
         active ? "supporting" : "context",
         relevance,
@@ -3752,39 +3840,39 @@ function adaptPrometheusRules(
       );
     }
   }
-  // A negative is only as strong as the query: it needs an active-state
-  // filter on alerting rules, a complete list, and every rule evaluated.
+  // A negative is only as strong as the query: an active-state filter over
+  // every alerting rule (a name or group filter never looked at the rest), a
+  // complete list, every rule evaluated, and every returned instance placed
+  // in another namespace outright. An instance this projection merely fails
+  // to recognize is not evidence of absence.
   if (
     source.confirmedSuccess &&
-    value.truncated !== true &&
+    !truncated &&
     !namesTarget &&
     !healthGap &&
     typeFilter !== "record" &&
-    (stateFilter === "firing" || stateFilter === "pending")
+    !nonEmptyString(args?.name) &&
+    !nonEmptyString(args?.group) &&
+    (stateFilter === "firing" || stateFilter === "pending") &&
+    (alertingCount === 0 || everyInstanceElsewhere)
   ) {
-    const filters = [
-      `state=${stateFilter}`,
-      ...(nonEmptyString(args?.name) ? [`name~${args.name}`] : []),
-      ...(nonEmptyString(args?.group) ? [`group~${args.group}`] : []),
-    ].join(", ");
-    builder.observe(
-      `alerts:receipt:${source.args ?? filters}`,
-      "receipt",
-      source,
-      {
-        tier: "checked",
-        relevance: "target",
-        tone: "neutral",
-        title: `No ${stateFilter} alert rules name this ${displayKind(builder.target.kind)}`,
-        summary: identity,
-        data: {
-          type: "receipt",
-          checked: "alerts",
-          scope: identity,
-          message: `${alertingCount} alerting rule${alertingCount === 1 ? "" : "s"} returned (filter: ${filters}); none names ${identity}.`,
-        },
+    const filter = `state=${stateFilter}`;
+    builder.observe(`alerts:receipt:${filter}`, "receipt", source, {
+      tier: "checked",
+      relevance: "target",
+      tone: "neutral",
+      title: `No ${stateFilter} alert rules name this ${displayKind(builder.target.kind)}`,
+      summary: identity,
+      data: {
+        type: "receipt",
+        checked: "alerts",
+        scope: identity,
+        message:
+          alertingCount === 0
+            ? `0 alerting rules returned (filter: ${filter}).`
+            : `${alertingCount} alerting rule${alertingCount === 1 ? "" : "s"} returned (filter: ${filter}), every instance in another namespace; none names ${identity}.`,
       },
-    );
+    });
   }
 }
 
@@ -3852,6 +3940,7 @@ function adaptHelmRelease(
   for (const field of [
     "appVersion",
     "description",
+    "storageNamespace",
     "resourceHealth",
     "healthIssue",
     "healthSummary",
@@ -3895,6 +3984,9 @@ function adaptHelmRelease(
     revision: value.revision,
     updated: value.updated,
     description: value.description as string | undefined,
+    ...(nonEmptyString(value.storageNamespace)
+      ? { storageNamespace: value.storageNamespace }
+      : {}),
     resourceHealth: value.resourceHealth as string | undefined,
     healthIssue: value.healthIssue as string | undefined,
     healthSummary: value.healthSummary as string | undefined,
@@ -3905,15 +3997,17 @@ function adaptHelmRelease(
   };
   // The release manages the target when the target is among the resources
   // Helm rendered for it; a release is never the investigated object itself.
-  const relevance: InvestigationEvidenceRelevance = resources.some((owned) =>
-    resourceMatchesTarget(builder.target, {
-      kind: owned.kind,
-      group: owned.apiVersion
-        ? apiVersionToGroup(owned.apiVersion)
-        : builder.target.group,
-      namespace: owned.namespace || undefined,
-      name: owned.name,
-    }),
+  // Without an API version the owned row cannot tell colliding kinds apart
+  // (CNPG vs CAPI Cluster), so it establishes nothing.
+  const relevance: InvestigationEvidenceRelevance = resources.some(
+    (owned) =>
+      owned.apiVersion !== undefined &&
+      resourceMatchesTarget(builder.target, {
+        kind: owned.kind,
+        group: apiVersionToGroup(owned.apiVersion),
+        namespace: owned.namespace || undefined,
+        name: owned.name,
+      }),
   )
     ? "producer-related"
     : "broader";
@@ -3924,24 +4018,32 @@ function adaptHelmRelease(
   const adverse =
     status !== "deployed" || Boolean(release.healthIssue) || operationFailed;
   const chartLabel = `${release.chart}${release.chartVersion ? ` ${release.chartVersion}` : ""}`;
-  builder.observe(`helm:${release.namespace}:${release.name}`, "helm", source, {
-    tier: evidenceTierForRelevance(
-      adverse ? "supporting" : "context",
+  // Helm keys a release by where its metadata is stored; two releases with
+  // one name and namespace can live in different storage namespaces.
+  const storage = release.storageNamespace ?? release.namespace;
+  builder.observe(
+    `helm:${storage}:${release.namespace}:${release.name}`,
+    "helm",
+    source,
+    {
+      tier: evidenceTierForRelevance(
+        adverse ? "supporting" : "context",
+        relevance,
+      ),
       relevance,
-    ),
-    relevance,
-    tone:
-      status.includes("failed") || lastOperation?.status === "failed"
-        ? "error"
-        : adverse
-          ? "warning"
-          : "info",
-    title: `Helm release ${release.namespace}/${release.name}`,
-    summary: release.healthIssue
-      ? `${release.status} · ${release.healthIssue}`
-      : `${chartLabel} · ${release.status} · revision ${release.revision}`,
-    data: { type: "helm", release },
-  });
+      tone:
+        status.includes("failed") || lastOperation?.status === "failed"
+          ? "error"
+          : adverse
+            ? "warning"
+            : "info",
+      title: `Helm release ${release.namespace}/${release.name}`,
+      summary: release.healthIssue
+        ? `${release.status} · ${release.healthIssue}`
+        : `${chartLabel} · ${release.status} · revision ${release.revision}`,
+      data: { type: "helm", release },
+    },
+  );
   if (nonEmptyString(value.valuesError)) {
     builder.limit(source, "Helm values", value.valuesError, "error");
   }
@@ -4044,23 +4146,26 @@ function targetServiceAccountName(
   builder: ProjectionBuilder,
   source: InvestigationEvidenceSource,
 ): string | undefined {
+  let newest: InvestigationEvidenceObservation | undefined;
   for (const group of builder.groups) {
     if (group.kind !== "resource") continue;
     for (const observation of group.observations) {
       if (
         observation.source.turnIndex !== source.turnIndex ||
         observation.relevance !== "target" ||
-        observation.data.type !== "resource"
+        observation.data.type !== "resource" ||
+        (newest && observation.source.order < newest.source.order)
       ) {
         continue;
       }
-      const name =
-        observation.data.resourceContext?.uses?.serviceAccount?.name ??
-        podSpecServiceAccount(observation.data.resource);
-      if (name) return name;
+      newest = observation;
     }
   }
-  return undefined;
+  if (!newest || newest.data.type !== "resource") return undefined;
+  return (
+    newest.data.resourceContext?.uses?.serviceAccount?.name ??
+    podSpecServiceAccount(newest.data.resource)
+  );
 }
 
 function adaptSubjectPermissions(
@@ -4074,13 +4179,15 @@ function adaptSubjectPermissions(
     invalidPayload(builder, source);
     return;
   }
+  // Only a captured resource can tie a principal to the target. Any other
+  // subject the agent chose to check is context, however adverse the answer.
   const relevance: InvestigationEvidenceRelevance =
     subject.kind === "ServiceAccount" &&
     subject.namespace !== undefined &&
     subject.namespace === builder.target.namespace &&
     targetServiceAccountName(builder, source) === subject.name
       ? "target"
-      : "producer-related";
+      : "broader";
   const subjectLabel = `${displayKind(subject.kind)} ${subject.namespace ? `${subject.namespace}/` : ""}${subject.name}`;
   const subjectKey = `${subject.kind}:${subject.namespace ?? ""}:${subject.name}`;
 
@@ -4132,6 +4239,7 @@ function adaptSubjectPermissions(
   if (
     bindings.length !== bindingsRaw.length ||
     !Array.isArray(value.flatRules) ||
+    !value.flatRules.every((rule) => stringArray(record(rule)?.verbs)) ||
     (value.truncated !== undefined && typeof value.truncated !== "boolean") ||
     (value.podsTotal !== undefined && !nonNegativeInteger(value.podsTotal)) ||
     (value.usedByPods !== undefined && !stringArray(value.usedByPods))

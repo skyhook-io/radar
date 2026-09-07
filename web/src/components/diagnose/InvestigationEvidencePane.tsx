@@ -2305,6 +2305,12 @@ function HelmBody({ data }: { data: EvidenceDataOf<"helm"> }) {
           {release.description}
         </p>
       ) : null}
+      {release.storageNamespace &&
+      release.storageNamespace !== release.namespace ? (
+        <p className="text-xs text-theme-text-tertiary">
+          Release metadata stored in namespace {release.storageNamespace}
+        </p>
+      ) : null}
       {release.managedByFluxHelmRelease ? (
         <p className="text-xs text-theme-text-tertiary">
           Managed by Flux HelmRelease {release.managedByFluxHelmRelease}
@@ -2415,7 +2421,7 @@ function PermissionsBody({ data }: { data: EvidenceDataOf<"permissions"> }) {
           </p>
         ) : null}
         {accessCheck.evaluationError ? (
-          <p className="text-xs leading-relaxed text-red-400">
+          <p className="text-xs leading-relaxed text-semantic-error">
             {accessCheck.evaluationError}
           </p>
         ) : null}
