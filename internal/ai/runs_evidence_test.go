@@ -52,6 +52,27 @@ func bindEvidenceWithIssued(
 	return diagnosis.RootCauseEvidence
 }
 
+func TestBindRootCauseEvidenceLinksUpgradeReadinessAlongsideResource(t *testing.T) {
+	scope := strings.Repeat("a", 26)
+	resourceRef := "ev_" + scope + "_" + strings.Repeat("b", 26)
+	upgradeRef := "ev_" + scope + "_" + strings.Repeat("c", 26)
+	events := []RunEvent{
+		{Event: StreamEvent{Type: "turn"}},
+		evidenceStep(resourceRef, nil),
+		evidenceStep(upgradeRef, func(step *StepInfo) {
+			step.ID = "upgrade-call"
+			step.Tool = "get_cluster_upgrade_readiness"
+			step.Result = `{"verdict":"blocked"}`
+		}),
+	}
+	got := bindEvidence(events, evidenceReferenceRequest{
+		present: true, refs: []string{resourceRef, upgradeRef},
+	}, scope)
+	if got == nil || got.Status != EvidenceLinked || len(got.Refs) != 2 {
+		t.Fatalf("registered read tool must not invalidate the citation set: %+v", got)
+	}
+}
+
 func TestBindRootCauseEvidenceRequiresExactPrivateTransportIssuance(t *testing.T) {
 	scope := strings.Repeat("a", 26)
 	ref := "ev_" + scope + "_" + strings.Repeat("b", 26)
