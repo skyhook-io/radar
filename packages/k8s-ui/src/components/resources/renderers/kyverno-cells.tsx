@@ -88,7 +88,7 @@ export function KyvernoPolicyCell({ resource, column }: { resource: any; column:
           blocks
             ? 'status-red'
             : discrepancy
-              ? 'status-orange'
+              ? 'status-alert'
               : 'status-amber',
         )}>
           {label}

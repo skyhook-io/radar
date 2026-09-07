@@ -34,10 +34,13 @@ const resultColorMap: Record<string, string> = {
   skip: 'status-blue',
 }
 
+// A severity gradient, not a set of categories: critical/high/medium are the
+// three tiers the theme defines for exactly this (see the alert tier in
+// DESIGN.md). low and info sit below the gradient and take a plain accent.
 const severityColorMap: Record<string, string> = {
-  critical: 'status-red',
-  high: 'status-orange',
-  medium: 'status-amber',
+  critical: 'status-unhealthy',
+  high: 'status-alert',
+  medium: 'status-degraded',
   low: 'status-blue',
   info: 'bg-theme-hover text-theme-text-tertiary',
 }
