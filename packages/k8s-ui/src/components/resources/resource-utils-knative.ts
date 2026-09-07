@@ -62,14 +62,14 @@ export function getRevisionStatus(resource: any): StatusBadge {
   if (ready?.status === 'True' && active?.status === 'False') {
     const reason = active.reason || ''
     if (reason === 'NoTraffic') {
-      return { text: 'Scaled to Zero', color: 'bg-blue-500/20 text-blue-400', level: 'healthy' }
+      return { text: 'Scaled to Zero', color: 'status-blue', level: 'healthy' }
     }
-    return { text: reason || 'Inactive', color: 'bg-yellow-500/20 text-yellow-400', level: 'degraded' }
+    return { text: reason || 'Inactive', color: 'status-amber', level: 'degraded' }
   }
 
   // Check for activating: Active condition is Unknown (scaling up)
   if (ready?.status === 'True' && active?.status === 'Unknown') {
-    return { text: 'Activating', color: 'bg-blue-500/20 text-blue-400', level: 'healthy' }
+    return { text: 'Activating', color: 'status-blue', level: 'healthy' }
   }
 
   return getKnativeConditionStatus(resource)

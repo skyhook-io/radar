@@ -178,7 +178,7 @@ export function ArgoApplicationRenderer({ data, onTerminate, isTerminating }: Ar
               <button
                 onClick={() => onTerminate({ namespace, name })}
                 disabled={isTerminating}
-                className="flex items-center gap-1.5 px-2 py-1 rounded text-xs status-unhealthy hover:opacity-80 transition-colors disabled:opacity-50"
+                className="flex items-center gap-1.5 px-2 py-1 rounded text-xs status-red hover:opacity-80 transition-colors disabled:opacity-50"
                 title="Terminate sync"
               >
                 <XCircle className="w-3.5 h-3.5" />
@@ -237,7 +237,7 @@ export function ArgoApplicationRenderer({ data, onTerminate, isTerminating }: Ar
               <span
                 className={clsx(
                   'badge',
-                  syncPolicy.automated ? 'status-healthy' : BADGE_INACTIVE
+                  syncPolicy.automated ? 'status-green' : BADGE_INACTIVE
                 )}
               >
                 {syncPolicy.automated ? 'Enabled' : 'Disabled'}
@@ -281,11 +281,11 @@ export function ArgoApplicationRenderer({ data, onTerminate, isTerminating }: Ar
                   className={clsx(
                     'badge',
                     operationState.phase === 'Succeeded'
-                      ? 'status-healthy'
+                      ? 'status-green'
                       : operationState.phase === 'Running'
                       ? 'status-blue'
                       : operationState.phase === 'Failed' || operationState.phase === 'Error'
-                      ? 'status-unhealthy'
+                      ? 'status-red'
                       : BADGE_INACTIVE
                   )}
                 >

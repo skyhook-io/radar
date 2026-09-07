@@ -131,9 +131,9 @@ export function GatewayRenderer({ data, onNavigate }: GatewayRendererProps) {
                       <span className={clsx(
                         'w-4 h-4 rounded-full flex items-center justify-center text-xs shrink-0',
                         isListenerAccepted
-                          ? 'status-healthy'
+                          ? 'status-green'
                           : isListenerNotAccepted
-                            ? 'status-unhealthy'
+                            ? 'status-red'
                             : BADGE_INACTIVE
                       )}>
                         {isListenerAccepted ? '\u2713' : isListenerNotAccepted ? '\u2717' : '?'}

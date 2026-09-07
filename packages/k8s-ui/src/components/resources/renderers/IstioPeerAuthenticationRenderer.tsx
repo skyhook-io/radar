@@ -9,9 +9,9 @@ import {
 import { BADGE_INACTIVE } from '../../../utils/badge-colors'
 
 const modeColors: Record<string, string> = {
-  STRICT: 'status-healthy',
-  PERMISSIVE: 'status-degraded',
-  DISABLE: 'status-unhealthy',
+  STRICT: 'status-green',
+  PERMISSIVE: 'status-amber',
+  DISABLE: 'status-red',
   UNSET: BADGE_INACTIVE,
 }
 

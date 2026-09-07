@@ -24,7 +24,7 @@ export function IngressClassRenderer({ data }: IngressClassRendererProps) {
               <span className={clsx(
                 'badge',
                 isDefault
-                  ? 'status-healthy'
+                  ? 'status-green'
                   : BADGE_INACTIVE
               )}>
                 {isDefault ? 'Yes' : 'No'}

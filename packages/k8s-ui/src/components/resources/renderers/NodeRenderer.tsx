@@ -301,8 +301,8 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
               <div key={`${taint.key}-${taint.effect}-${i}`} className="text-sm">
                 <span className={clsx(
                   'badge',
-                  taint.effect === 'NoSchedule' ? 'status-degraded' :
-                  taint.effect === 'NoExecute' ? 'status-unhealthy' :
+                  taint.effect === 'NoSchedule' ? 'status-amber' :
+                  taint.effect === 'NoExecute' ? 'status-red' :
                   'status-blue'
                 )}>
                   {taint.key}{taint.value ? `=${taint.value}` : ''}:{taint.effect}

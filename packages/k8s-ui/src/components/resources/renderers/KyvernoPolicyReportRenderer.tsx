@@ -27,17 +27,17 @@ interface PolicyReportRendererProps {
 }
 
 const resultColorMap: Record<string, string> = {
-  pass: 'status-healthy',
-  fail: 'status-unhealthy',
-  warn: 'status-degraded',
-  error: 'status-unhealthy',
+  pass: 'status-green',
+  fail: 'status-red',
+  warn: 'status-amber',
+  error: 'status-red',
   skip: 'status-blue',
 }
 
 const severityColorMap: Record<string, string> = {
-  critical: 'status-unhealthy',
+  critical: 'status-red',
   high: 'status-orange',
-  medium: 'status-degraded',
+  medium: 'status-amber',
   low: 'status-blue',
   info: 'bg-theme-hover text-theme-text-tertiary',
 }
@@ -239,7 +239,7 @@ interface KyvernoPolicyRendererProps {
 const ruleTypeColorMap: Record<string, string> = {
   validate: 'status-blue',
   mutate: 'status-purple',
-  generate: 'status-healthy',
+  generate: 'status-green',
   verifyImages: 'status-orange',
 }
 
@@ -273,10 +273,10 @@ export function KyvernoPolicyRenderer({ data, coverage, queued }: KyvernoPolicyR
             <span className={clsx(
               'badge',
               enforcement.blocks
-                ? 'status-unhealthy'
+                ? 'status-red'
                 : enforcement.discrepancy
                   ? 'status-orange'
-                  : 'status-degraded',
+                  : 'status-amber',
             )}>
               {enforcement.label}
             </span>
@@ -308,7 +308,7 @@ export function KyvernoPolicyRenderer({ data, coverage, queued }: KyvernoPolicyR
             </span>
           )}
           {ruleCountByType.generate > 0 && (
-            <span className="px-2 py-0.5 rounded text-[10px] font-medium status-healthy">
+            <span className="px-2 py-0.5 rounded text-[10px] font-medium status-green">
               {ruleCountByType.generate} generate
             </span>
           )}

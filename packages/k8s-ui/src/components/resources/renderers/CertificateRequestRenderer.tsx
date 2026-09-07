@@ -54,8 +54,8 @@ export function CertificateRequestRenderer({ data }: CertificateRequestRendererP
               <span className={clsx(
                 'badge',
                 isReady
-                  ? 'status-healthy'
-                  : 'status-unhealthy'
+                  ? 'status-green'
+                  : 'status-red'
               )}>
                 {isReady ? 'Ready' : 'Not Ready'}
               </span>
@@ -67,10 +67,10 @@ export function CertificateRequestRenderer({ data }: CertificateRequestRendererP
               <span className={clsx(
                 'badge',
                 isApproved
-                  ? 'status-healthy'
+                  ? 'status-green'
                   : isDenied
-                    ? 'status-unhealthy'
-                    : 'status-degraded'
+                    ? 'status-red'
+                    : 'status-amber'
               )}>
                 {isApproved ? 'Yes' : isDenied ? 'No' : 'Pending'}
               </span>

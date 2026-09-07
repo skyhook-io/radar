@@ -609,7 +609,7 @@ export function RolloutRenderer({ data, onNavigate, capabilities, onAction, pend
                   <span
                     className={clsx(
                       'w-5 h-5 rounded-full flex items-center justify-center text-xs shrink-0',
-                      isCompleted && 'status-healthy',
+                      isCompleted && 'status-green',
                       isCurrent && 'status-blue',
                       isPending && BADGE_INACTIVE
                     )}

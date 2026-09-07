@@ -384,7 +384,7 @@ export function ServerlessServiceCell({ resource, column }: { resource: any; col
       return (
         <span className={clsx(
           'badge',
-          mode === 'Proxy' ? 'status-degraded' : 'status-healthy'
+          mode === 'Proxy' ? 'status-amber' : 'status-green'
         )}>
           {mode}
         </span>

@@ -8,17 +8,17 @@ interface WebhookConfigRendererProps {
 }
 
 function getOperationColor(op: string): string {
-  if (op === 'CREATE') return 'status-healthy'
-  if (op === 'UPDATE') return 'status-degraded'
-  if (op === 'DELETE') return 'status-unhealthy'
-  if (op === '*') return 'status-unhealthy'
+  if (op === 'CREATE') return 'status-green'
+  if (op === 'UPDATE') return 'status-amber'
+  if (op === 'DELETE') return 'status-red'
+  if (op === '*') return 'status-red'
   if (op === 'CONNECT') return 'status-blue'
   return 'bg-theme-elevated text-theme-text-secondary'
 }
 
 function getSideEffectsColor(se: string): string {
-  if (se === 'None' || se === 'NoneOnDryRun') return 'status-healthy'
-  return 'status-degraded'
+  if (se === 'None' || se === 'NoneOnDryRun') return 'status-green'
+  return 'status-amber'
 }
 
 export function WebhookConfigRenderer({ data, isMutating }: WebhookConfigRendererProps) {
@@ -75,7 +75,7 @@ export function WebhookConfigRenderer({ data, isMutating }: WebhookConfigRendere
 
                 {/* Policy badges */}
                 <div className="flex flex-wrap gap-1.5 mt-2">
-                  <span className={clsx('badge-sm', wh.failurePolicy === 'Fail' ? 'status-unhealthy' : 'bg-theme-elevated text-theme-text-secondary')}>
+                  <span className={clsx('badge-sm', wh.failurePolicy === 'Fail' ? 'status-red' : 'bg-theme-elevated text-theme-text-secondary')}>
                     {wh.failurePolicy || 'Fail'}
                   </span>
                   {wh.sideEffects && (

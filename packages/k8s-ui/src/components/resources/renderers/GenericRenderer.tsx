@@ -364,7 +364,7 @@ function GenericConditionsSection({ conditions }: { conditions: any[] }) {
                   <span className="text-theme-text-primary font-medium">{cond.type}</span>
                   <span className={clsx(
                     'badge-sm',
-                    isTrue ? 'bg-theme-elevated text-theme-text-secondary' : 'status-unhealthy'
+                    isTrue ? 'bg-theme-elevated text-theme-text-secondary' : 'status-red'
                   )}>
                     {cond.status}
                   </span>

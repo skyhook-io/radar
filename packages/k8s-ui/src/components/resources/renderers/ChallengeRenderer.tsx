@@ -7,19 +7,19 @@ import { BADGE_INACTIVE } from '../../../utils/badge-colors'
 function getChallengeStateBadge(state: string): { color: string; text: string } {
   switch (state?.toLowerCase()) {
     case 'valid':
-      return { text: 'Valid', color: 'status-healthy' }
+      return { text: 'Valid', color: 'status-green' }
     case 'ready':
       return { text: 'Ready', color: 'status-blue' }
     case 'pending':
-      return { text: 'Pending', color: 'status-degraded' }
+      return { text: 'Pending', color: 'status-amber' }
     case 'processing':
-      return { text: 'Processing', color: 'status-degraded' }
+      return { text: 'Processing', color: 'status-amber' }
     case 'invalid':
-      return { text: 'Invalid', color: 'status-unhealthy' }
+      return { text: 'Invalid', color: 'status-red' }
     case 'expired':
-      return { text: 'Expired', color: 'status-unhealthy' }
+      return { text: 'Expired', color: 'status-red' }
     case 'errored':
-      return { text: 'Errored', color: 'status-unhealthy' }
+      return { text: 'Errored', color: 'status-red' }
     default:
       return { text: state || 'Unknown', color: BADGE_INACTIVE }
   }

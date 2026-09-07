@@ -287,7 +287,7 @@ export function CNPGClusterRenderer({ data, onNavigate, declared}: CNPGClusterRe
           )}
           {data.spec?.enableSuperuserAccess !== undefined && (
             <Property label="Superuser Access" value={
-              <span className={`badge-sm ${data.spec.enableSuperuserAccess ? 'status-healthy' : 'bg-theme-hover text-theme-text-secondary'}`}>
+              <span className={`badge-sm ${data.spec.enableSuperuserAccess ? 'status-green' : 'bg-theme-hover text-theme-text-secondary'}`}>
                 {data.spec.enableSuperuserAccess ? 'Enabled' : 'Disabled'}
               </span>
             } />

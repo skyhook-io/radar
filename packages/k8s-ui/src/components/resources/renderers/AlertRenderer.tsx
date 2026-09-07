@@ -92,8 +92,8 @@ export function AlertRenderer({ data }: AlertRendererProps) {
             value={
               <span className={clsx(
                 'badge',
-                eventSeverity === 'error' ? 'status-unhealthy' :
-                eventSeverity === 'warning' ? 'status-degraded' :
+                eventSeverity === 'error' ? 'status-red' :
+                eventSeverity === 'warning' ? 'status-amber' :
                 'status-blue'
               )}>
                 {eventSeverity}

@@ -120,8 +120,8 @@ export function CertificateRenderer({ data }: CertificateRendererProps) {
                 <span className={clsx(
                   'badge',
                   isReady
-                    ? 'status-healthy'
-                    : 'status-unhealthy'
+                    ? 'status-green'
+                    : 'status-red'
                 )}>
                   {isReady ? 'Ready' : 'Not Ready'}
                 </span>
