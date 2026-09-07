@@ -322,3 +322,52 @@ func BuildHPAReplicasQueries(namespace, name string) (current, desired string) {
 	desired = fmt.Sprintf(`kube_horizontalpodautoscaler_status_desired_replicas{namespace="%s",horizontalpodautoscaler="%s"}`, ns, n)
 	return current, desired
 }
+
+// BuildPodSetQuery aggregates one category over an explicit pod set: the
+// pods a caller has already resolved through the workload's selector, so a
+// Deployment named api never picks up api-worker pods the way the
+// "<name>-.*" workload pattern does. Pods match as pod=~'^(a|b|c)$' inside
+// namespace; the result is a single sum series. Empty when pods is empty or
+// the category has no expression.
+func BuildPodSetQuery(namespace string, pods []string, category MetricCategory) string {
+	return buildPodSetQueryInner(namespace, pods, category, true)
+}
+
+// BuildPodSetQueryNoContainerFilter is BuildPodSetQuery without the
+// container!=” filter, for clusters whose cAdvisor metrics lack the label.
+func BuildPodSetQueryNoContainerFilter(namespace string, pods []string, category MetricCategory) string {
+	return buildPodSetQueryInner(namespace, pods, category, false)
+}
+
+func buildPodSetQueryInner(namespace string, pods []string, category MetricCategory, filterContainer bool) string {
+	if len(pods) == 0 {
+		return ""
+	}
+	ns := SanitizeLabelValue(namespace)
+	names := make([]string, 0, len(pods))
+	for _, pod := range pods {
+		names = append(names, EscapeRegexMeta(SanitizeLabelValue(pod)))
+	}
+	podPattern := "^(" + strings.Join(names, "|") + ")$"
+	cf := ""
+	if filterContainer {
+		cf = "container!='',"
+	}
+
+	switch category {
+	case CategoryRestarts:
+		return fmt.Sprintf(
+			`sum(changes(kube_pod_container_status_restarts_total{namespace='%s',pod=~'%s'}[1h]))`,
+			ns, podPattern)
+	case CategoryCPU:
+		return fmt.Sprintf(
+			`sum(rate(container_cpu_usage_seconds_total{%snamespace='%s',pod=~'%s'}[5m]))`,
+			cf, ns, podPattern)
+	case CategoryMemory:
+		return fmt.Sprintf(
+			`sum(max by (pod,namespace,container) (container_memory_working_set_bytes{%snamespace='%s',pod=~'%s'}))`,
+			cf, ns, podPattern)
+	default:
+		return ""
+	}
+}
